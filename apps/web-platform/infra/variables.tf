@@ -421,28 +421,20 @@ variable "doppler_token" {
   type        = string
   sensitive   = true
 
-  # #7095 — SHAPE GATE. This value is rendered into /etc/default/soleur-doppler-token as a
-  # systemd EnvironmentFile and sourced by webhook/vector/cron units on a host that cannot be
-  # replaced (cx33, orderable in 0 of 3 EU DCs) and has no operator SSH runbook. A malformed
-  # render bricks the very channel the fix is delivered over, so this must fail at
-  # `terraform plan` — before a byte reaches the host. Every other layer (installer shape
-  # rejection, systemd-analyze verify) is refuse-to-install; only this one is never-attempt.
+  # #7095 — THE SHAPE GATE DELIBERATELY DOES NOT LIVE HERE. It is a
+  # lifecycle { precondition } on terraform_data.deploy_pipeline_fix (server.tf).
   #
-  # Each clause is load-bearing, and the empty case is the sharpest:
-  #   - dp.st. prefix          : a service token, not a personal/CLI token.
-  #   - no whitespace/CR/#/=   : any of these terminates or comments the KEY=VALUE line, so the
-  #                              file parses as valid-but-wrong and DOPPLER_TOKEN silently
-  #                              becomes empty or truncated.
-  #   - non-empty after prefix : EnvironmentFile=- tolerates ABSENT and UNREADABLE but NOT
-  #                              empty-valued. A bare `DOPPLER_TOKEN=` wins by systemd
-  #                              later-wins and silently BLANKS a working credential on every
-  #                              consumer — strictly worse than not delivering the file at all.
-  # Measured 2026-07-30 against the live prd_terraform value: len=53, matches, and no CR, '#',
-  # space, tab or newline present.
-  validation {
-    condition     = can(regex("^dp\\.st\\.[A-Za-z0-9._-]+$", var.doppler_token))
-    error_message = "doppler_token must be a Doppler service token matching ^dp.st.[A-Za-z0-9._-]+$ with no whitespace, CR, '#' or '=' — it is rendered into a systemd EnvironmentFile on a host that cannot be replaced, and a malformed value bricks the deploy channel (#7095)."
-  }
+  # A `validation` block on a variable ECHOES THE OFFENDING VALUE into the diagnostic even when
+  # the variable is `sensitive = true`. Measured on this repo's pinned Terraform, in a public
+  # Actions log: `var.doppler_token is "dummy"`. The gate fires exactly when the token is
+  # malformed — and a malformed token is still a LIVE credential (a rotated value with a trailing
+  # newline, a dp.ct. personal token pasted under incident pressure). Both apply workflows run
+  # `terraform plan` under `doppler run --name-transformer tf-var`, which does not ::add-mask::
+  # the value, so the credential would be printed unmasked. A guard that discloses the secret it
+  # guards is worse than no guard.
+  #
+  # A `precondition` emits ONLY its error_message, never the value, and still fails at plan time —
+  # so the never-attempt property that made this worth having is preserved.
 }
 
 variable "sentry_dsn" {

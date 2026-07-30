@@ -65,6 +65,18 @@ locals {
   # drift and no test needed to police it. It is also load-bearing for verification:
   # infra_config_content_assert byte-compares the delivered dest against the sha256 of THIS
   # string, so an independently-shaped boot copy would be content_mismatch by definition.
+  # #7095 — shape gate for the credential, evaluated here rather than as a variable validation
+  # (see variables.tf for why: a variable validation echoes the value even when sensitive).
+  # nonsensitive() is safe and necessary: it is applied to the BOOLEAN result of can(regex(...)),
+  # never to the token, so no secret is de-marked — only the yes/no answer.
+  #
+  # Accepts every credential family Doppler actually issues (st = service, sa = service-account,
+  # pt = personal, ct = CLI). Pinning st-only would fail the plan for an operator who re-mints
+  # under incident pressure with a different token type — closing the sole no-SSH remediation
+  # channel with the guard that exists to protect it. The load-bearing part is the character
+  # class: no whitespace, CR, '#' or '=' can reach a systemd EnvironmentFile line.
+  doppler_token_shape_ok = nonsensitive(can(regex("^dp\\.(st|sa|pt|ct)\\.[A-Za-z0-9._-]+$", var.doppler_token)))
+
   webhook_doppler_token_env = templatefile("${path.module}/soleur-doppler-token.tmpl", {
     doppler_token        = var.doppler_token
     sentry_ingest_domain = local.sentry_dsn_parts.host
@@ -1309,6 +1321,16 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
 # Both paths must stay in sync — a change here without updating cloud-init.yml
 # means new servers provisioned from scratch will miss the change.
 resource "terraform_data" "deploy_pipeline_fix" {
+  lifecycle {
+    # #7095 — fails at `terraform plan`, before a byte reaches the host, and without echoing the
+    # token (unlike a variable validation). This is the only never-attempt layer; the installer's
+    # envfile_shape rejection and systemd-analyze verify are refuse-to-install, downstream.
+    precondition {
+      condition     = local.doppler_token_shape_ok
+      error_message = "doppler_token must be a Doppler token matching ^dp.(st|sa|pt|ct).[A-Za-z0-9._-]+$ with no whitespace, CR, '#' or '=' — it is rendered into a systemd EnvironmentFile on a host that cannot be replaced, and a malformed value bricks the deploy channel (#7095). The offending value is deliberately NOT shown: it is a live credential."
+    }
+  }
+
   # AppArmor profile must be loaded before ci-deploy.sh references it (#1570).
   #
   # #5515 — DO depend on the infra_config_handler_bootstrap bridge. Both are

@@ -76,7 +76,7 @@ variables {
   cf_api_token_zone_settings   = "0123456789012345678901234567890123456789"
   cf_notification_email        = "ops@example.com"
   cf_zone_id                   = "0123456789abcdef0123456789abcdef"
-  doppler_token                = "dummy"
+  doppler_token                = "dp.st.prd.testdummy" # #7095: must satisfy the shape precondition
   doppler_token_tf             = "dummy"
   github_app_id                = "12345"
   github_app_private_key       = "dummy"
