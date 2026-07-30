@@ -283,6 +283,20 @@ resource "hcloud_server" "web" {
     # stronger doppler_token, so this adds no new trust boundary. See cloud-init.yml ghcr_login.
     ghcr_read_user  = var.ghcr_read_user
     ghcr_read_token = var.ghcr_read_token
+
+    # #7095 — fresh-host parity for the re-deliverable credential. The SAME rendered string the
+    # webhook channel delivers (local.webhook_doppler_token_env), injected rather than
+    # hand-written a second time, so the boot copy and the delivered copy cannot drift (R8). The
+    # existing webhook-deploy pair is the cautionary precedent: it is written by a separate
+    # printf here and ends up 600 deploy:deploy against the delivery path's 640 root:deploy.
+    #
+    # base64'd for transport, for the same reason hooks.json is: the value is multi-line and
+    # secret-bearing, and cloud-init interpolates it inside a single-quoted shell argument. A raw
+    # multi-line render there would break the runcmd line; base64 keeps it one token, and
+    # cloud-init.yml decodes it with `printf '%s' ... | base64 -d` into a file that install(1)
+    # has already created at the final 640 root:deploy, so the redirect never opens a
+    # world-readable window.
+    soleur_doppler_token_env_b64 = base64encode(local.webhook_doppler_token_env)
     # Fresh-host parity for the CI SSH keypair generated in
     # ci-ssh-key.tf. local.ci_ssh_pubkey is trimspaced — see locals{}
     # block in ci-ssh-key.tf for the rationale.
