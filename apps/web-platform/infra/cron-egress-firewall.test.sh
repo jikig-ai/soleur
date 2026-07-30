@@ -56,6 +56,41 @@ assert_not_grep() {
   fi
 }
 
+# ORDER-SENSITIVE EnvironmentFile assertion (#7095).
+#
+# systemd applies EnvironmentFile= directives in the order they appear and LATER
+# WINS, so /etc/default/soleur-doppler-token must come AFTER
+# /etc/default/inngest-server — the override is the entire mechanism by which the
+# re-deliverable credential displaces the dead token copied into
+# /etc/default/inngest-server (pinned forever by inngest-bootstrap.sh:567-568, so it
+# never self-heals). A "both lines are present" check would stay GREEN if a future
+# edit reversed them, silently restoring the 2026-07-30 outage. Assert the ORDER.
+#
+# Compares the LAST occurrence of each: with later-wins semantics it is the final
+# directive that decides DOPPLER_TOKEN, so a duplicated base line reintroduced
+# below the override must also fail.
+assert_envfile_override_order() {
+  local description="$1" unit="$2" base_line="$3" override_line="$4"
+  local base_ln override_ln
+  # -x -F: exact full-line literal, so the prose in the surrounding comment block
+  # (which quotes both paths) can never satisfy this assertion.
+  base_ln="$(grep -nxF -- "$base_line" "$unit" | tail -1 | cut -d: -f1)"
+  override_ln="$(grep -nxF -- "$override_line" "$unit" | tail -1 | cut -d: -f1)"
+  if [[ -z "$base_ln" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (missing from $(basename "$unit"): $base_line)"
+  elif [[ -z "$override_ln" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (missing from $(basename "$unit"): $override_line)"
+  elif ((base_ln < override_ln)); then
+    PASS=$((PASS + 1))
+    echo "  PASS: $description (base line $base_ln precedes override line $override_ln)"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description — later-wins ORDER INVERTED in $(basename "$unit"): '$override_line' is at line $override_ln but must come AFTER '$base_line' at line $base_ln; as written the dead token from the inngest-server copy wins again and #7095 silently returns"
+  fi
+}
+
 assert_cmd() {
   local description="$1"
   shift
@@ -465,6 +500,19 @@ assert_grep "firewall unit re-asserts every boot" 'WantedBy=multi-user\.target' 
 assert_grep "timer survives reboots (Persistent)" 'Persistent=true' "$SCRIPT_DIR/cron-egress-resolve.timer"
 assert_grep "resolve runs doppler-wrapped (env for Sentry + dynamic hosts)" 'run --project soleur --config prd' "$SCRIPT_DIR/cron-egress-resolve.service"
 assert_grep "resolve unit sources the doppler token env file" 'EnvironmentFile=-/etc/default/inngest-server' "$SCRIPT_DIR/cron-egress-resolve.service"
+# #7095 — ADDED alongside the assertion above, never replacing it: both files must be
+# sourced, and in this order. See assert_envfile_override_order's header for why the
+# order (not mere presence) is the property under test.
+assert_envfile_override_order \
+  "resolve unit sources the re-deliverable credential AFTER inngest-server (systemd later-wins)" \
+  "$SCRIPT_DIR/cron-egress-resolve.service" \
+  'EnvironmentFile=-/etc/default/inngest-server' \
+  'EnvironmentFile=-/etc/default/soleur-doppler-token'
+assert_envfile_override_order \
+  "alarm unit sources the re-deliverable credential AFTER inngest-server (systemd later-wins)" \
+  "$SCRIPT_DIR/cron-egress-alarm@.service" \
+  'EnvironmentFile=-/etc/default/inngest-server' \
+  'EnvironmentFile=-/etc/default/soleur-doppler-token'
 assert_grep "resolve unit sets HOME (doppler os.UserHomeDir requirement)" 'Environment=HOME=/root' "$SCRIPT_DIR/cron-egress-resolve.service"
 assert_grep "resolve unit bounded (no infinite activating hang)" 'TimeoutStartSec=' "$SCRIPT_DIR/cron-egress-resolve.service"
 # Grace-window retention store must persist across reboots (a tmpfs /run would
