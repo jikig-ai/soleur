@@ -71,6 +71,29 @@ which is why eight red releases read as one known incident.
 3. `cloud-init.yml` fresh-host parity — must consume the ALREADY-RENDERED string (R8: render once,
    inject) and report the one-line `server.tf` change needed.
 
+### Exit gates — BOTH runners, against a clean committed tree
+
+| gate | rc | result |
+|---|---|---|
+| `scripts/test-all.sh` | 0 | 239/239 suites |
+| `apps/web-platform/infra/run-registered-suites.sh` | 0 | 87/87 suites, zero orphans |
+
+Both required: `test-all.sh` does NOT cover `apps/web-platform/infra/` and says so in its preamble.
+An earlier `test-all.sh` run was KILLED rather than interpreted — files were edited while it was
+in flight, which makes its output a mid-refactor snapshot of the author's own making.
+
+### Follow-ups filed (net flow: 0 closed, 2 filed, +2 — stated deliberately)
+
+- **#7103** — consolidated PR-B tracker (telemetry off the box, credential liveness, staleness
+  alerting, the 19-of-19 web-1 pinning, ADR-154 + PIRs).
+- **#7104** — the R22 residual, kept SEPARATE as a discovered defect in a different subsystem:
+  the apply-verify step re-polls but never re-POSTs, so it cannot recover from the documented
+  nonce-1 webhook-restart race.
+
+#7095 itself stays OPEN and was re-titled — its original title named the falsified premise
+(`ZOT_PULL_*`/private NIC), which actively misleads anyone triaging a live P1. A correcting
+comment carries the E1–E5 evidence; the original body is left intact for the record.
+
 ### Remaining after those land
 
 - Apply the `server.tf` `user_data` key the cloud-init slice reports.
