@@ -19,11 +19,29 @@ plan_revision: v2 (post 7-agent review)
 
 **Run `supabase stop` right now. Do not wait for this plan.**
 
-The exposure is live and has been for **three weeks** (`supabase_db_web-platform` uptime, measured).
-Stopping the stack closes 100% of it in seconds at zero cost, because **nothing depends on it**:
-normal local development runs against the *hosted* dev project
-(`apps/web-platform/README.md` §"Running locally"), and CI starts its own disposable stack. Three
-weeks of idling is itself the evidence that nothing needs it running.
+The exposure is live **right now**. Stopping the stack closes 100% of it in seconds at zero cost,
+because **nothing depends on it**: normal local development runs against the *hosted* dev project
+(`apps/web-platform/README.md` §"Running locally"), and CI starts its own disposable stack. The
+stack idles for long stretches, which is itself the evidence that nothing needs it running.
+
+**Corrected during deepen (a `single-user incident` plan must not carry an unverified number).**
+An earlier revision said "three weeks continuously", from a container-uptime reading. That is
+wrong, and the correction is more damning than the claim:
+
+```text
+supabase_db_web-platform StartedAt : 2026-07-30T09:47:44Z
+host boot (uptime -s, UTC)         : 2026-07-30T09:47:26Z
+dockerd ActiveEnterTimestamp (UTC) : 2026-07-30T09:47:45Z
+RestartPolicy                      : unless-stopped     (all 11 containers)
+```
+
+Container uptime tracks **the last boot**, not weeks. The stack came back **18 seconds after the
+host booted this morning**, bound to `0.0.0.0` and `[::]`, with **nobody typing `supabase start`**.
+So the honest statement is not "it has been up for three weeks" but the worse one: **the exposure
+re-arms itself on every single boot**, and has done so across an unknown number of boots. This is
+the `restart: unless-stopped` republish path demonstrating itself mid-session — direct evidence
+for probe P2 and for why the wrapper alone cannot be the whole answer. `/work` must re-measure and
+record real values (AC10), never reuse a number from this document.
 
 Record the stop timestamp in the PR body as the exposure-close time. Everything below makes the
 *next* start safe — it is no longer a race, which is what lets this plan keep its RED-before-GREEN
@@ -115,24 +133,73 @@ The brief contains `firewall`, tripping the network-outage gate
 `hr-ssh-diagnosis-verify-firewall`). Applied inverted — the symptom is over-reachability — but the
 L3→L7 ordering stands: establish which layer admits the packet before fixing higher.
 
-1. **L3 — host packet filter.** **Verified: none in play.** No ufw/nftables/firewalld ruleset for
-   these ports; **no `/etc/docker/daemon.json` exists** (measured); the repo's only firewall
-   artifacts (`apps/web-platform/infra/firewall-9000-deny.test.sh`, `cloud-init-*.yml`) govern
-   Hetzner production hosts. Docker's `DOCKER` DNAT chain is traversed *before* `INPUT`, so a naive
-   host deny would not have applied anyway. **Nothing at L3 was ever expected to block this.**
-2. **L3/L4 — the DNAT + socket bind. The actual layer.** **Verified as the cause.** Docker
-   publishes with no `HostIP`, so bindings inherit the network's default host-binding IP.
-   `docker network inspect supabase_network_web-platform --format '{{json .Options}}'` → `{}`, so
-   Docker falls back to the daemon default (`docker network inspect bridge` shows
+1. **L3 — host packet filter.** **Verified: none in play.** `firewalld` is not installed;
+   `nftables.service` is inactive and disabled; `nft list tables` shows only iptables-nft compat
+   tables with **no `inet filter` table** (which is what ufw/firewalld would create); `iptables -S`
+   and `ip6tables -S` both show `-P INPUT ACCEPT` with **zero INPUT rules**. **No
+   `/etc/docker/daemon.json` exists** (`/etc/docker/` is empty — greenfield, which is also
+   alternative C's "no merge surface" evidence). The repo's only firewall artifacts
+   (`apps/web-platform/infra/firewall-9000-deny.test.sh`, `cloud-init-*.yml`) govern Hetzner
+   production hosts. **Nothing at L3 was ever expected to block this.** *(Caveat: `ufw` is installed
+   and its unit is active+enabled, held inert only by `ENABLED=no` — see §Limits #9.)*
+2. **L3/L4 — the DNAT + socket bind. The actual layer, and it is NOT the same mechanism for IPv4
+   and IPv6.** **Verified as the cause, with the measured rules.**
+
+   *IPv4 — netfilter DNAT.* The live rule carries **no `-d` match**, and that absence *is* the
+   exposure:
+
+   ```text
+   -A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER
+   -A DOCKER ! -i br-9b10629b32ff -p tcp -m tcp --dport 54322 -j DNAT --to-destination 172.19.0.3:5432
+   ```
+
+   `PREROUTING` jumps to `DOCKER` for *any* LOCAL destination and the rule constrains only
+   `--dport`, so every address the host owns is a valid destination. With the fix the rule instead
+   reads `-d 127.0.0.1/32 … -j DNAT`, and the LAN address falls through with no DNAT and no
+   listener. This path is rewritten in `PREROUTING` and routed to `FORWARD`, so it **never
+   traverses `INPUT`** — an `INPUT`-scoped deny is structurally unreachable against it.
+
+   *IPv6 — no DNAT at all.* The `ip6tables` nat `DOCKER` chain is **empty**. Every IPv6 listener
+   (`[::]:54321-54324,54327`) is served purely by userland `docker-proxy` host processes, which
+   name the binding literally:
+
+   ```text
+   /usr/bin/docker-proxy -proto tcp -host-ip 0.0.0.0 -host-port 54322 -container-ip 172.19.0.3 -container-port 5432
+   /usr/bin/docker-proxy -proto tcp -host-ip ::      -host-port 54322 -container-ip 172.19.0.3 -container-port 5432
+   ```
+
+   Those are ordinary host sockets, so IPv6 packets **do** traverse `INPUT`. **Consequence that
+   matters:** the IPv6 half of this fix rests entirely on that `-host-ip` argument changing, with
+   **no netfilter rule to corroborate it**. That is precisely why the IPv6 assertion is permanent
+   in CI (§Limits #5) rather than a one-off check — it is the only observer of that half.
+
+   Chain of custody for the `0.0.0.0` confirmed: the project network's `Options` is `{}`, so it
+   inherits the daemon default (`docker network inspect bridge` →
    `"com.docker.network.bridge.host_binding_ipv4":"0.0.0.0"`). **This is the layer the fix targets.**
 3. **L7 — service authentication.** **Verified: no help.** Studio ships no auth in local mode; the
    CLI's own banner states "Studio, pgMeta (/pg/\*), and analytics have no authentication".
-   Postgres uses the published default `postgres:postgres`. **No L7 fix exists.**
+   Postgres uses the published default `postgres:postgres`. **No L7 fix exists.** *Checklist L7
+   application-layer artifact:* measured on the live DB — `log_connections=off`,
+   `logging_collector=off`, `listen_addresses=*` (PG 17.6). Per the checklist, the **absence of any
+   journal entry is itself the signal**: connections to `:54322` across every boot since the stack
+   was created left no record, so access is unauditable (carried into §User-Brand Impact).
+
+**Provenance of the L3 packet-filter evidence — read before relying on it.** The `iptables -S`,
+`ip6tables -S`, and `ip6tables -t nat -S DOCKER` outputs quoted in items 1–2 were produced by a
+deepen-plan research agent with root. **The plan author could not independently re-verify them**
+(`sudo -n` is non-interactive here and those commands require root). What *was* independently
+re-verified, without root: `/etc/docker/` is empty; `firewalld` is not installed (`dpkg -l` → `un`);
+`nftables.service` is `inactive`+`disabled`; `ufw.conf` carries `ENABLED=no` while the unit is
+active+enabled; and — the load-bearing one — **both `docker-proxy` processes exist with the exact
+`-host-ip 0.0.0.0` and `-host-ip ::` arguments quoted above**, which corroborates the IPv4/IPv6
+asymmetry directly from a non-root source. Treat the raw netfilter dumps as **strong but
+single-sourced**; `/work` should re-run them with root and paste real output before any AC cites
+them. This plan does not permit an unverified number to stand as measured fact.
 
 **Opt-outs with artifacts.** *DNS/routing*: probes used literal IPs from `ip -o addr show`, so no
-resolver participates. *TLS/proxy*: `[api.tls] enabled = false`; plaintext listeners, no CDN.
-*Service journal*: the question is not whether packets arrived (handshakes completed) but whether
-they should have been able to.
+resolver participates; and the threat model is **on-link** (an attacker on the same L2 segment), so
+there is no routed path to trace. *TLS/proxy*: `[api.tls] enabled = false` (`config.toml:20-22`);
+plaintext listeners, no CDN or intermediary to misconfigure.
 
 ## Mechanism — why `config.toml` cannot do this, and what can
 
@@ -143,11 +210,14 @@ they should have been able to.
    `host_ip` at any level — only `port` keys, plus `realtime.ip_version`, which selects IPv4-vs-IPv6
    **protocol**, not a bind address.
 2. **The repo's config**, read in full. Every section carries `port` and no listener host key.
-   *Precision (review correction):* there are **three** `127.0.0.1` strings — `[studio] api_url`,
-   `[auth] site_url`, `[auth] additional_redirect_urls` — all **client-side URLs**. And a literal
-   grep does find one `host` key: `# host = "smtp.sendgrid.net"` (commented, `[auth.email.smtp]`),
-   an **outbound SMTP relay**, not a listener bind. The conclusion holds; stating it absolutely
-   did not.
+   *Precision (corrected twice — at review, then again at deepen):* there are **three `127.0.0.1`
+   config values** — `[studio] api_url` (:93), `[auth] site_url` (:154),
+   `[auth] additional_redirect_urls` (:156) — all **client-side URLs**. A literal
+   `grep -c '127.0.0.1'` returns **4**, not 3: the fourth (:159) sits inside a comment describing
+   the JWT-issuer default. State it as "three config values (a fourth occurrence is in a comment)"
+   so the claim survives literal reproduction. And a literal grep does find one `host` key —
+   `# host = "smtp.sendgrid.net"` (commented, `[auth.email.smtp]`, :222) — an **outbound SMTP
+   relay**, not a listener bind. The conclusion holds; stating it absolutely did not.
 3. **The installed binary's help.** `supabase start --help` (v2.84.2) lists only `-x/--exclude`,
    `-h/--help`, `--ignore-health-check`. The relevant global flag is
    `--network-id string  use the specified docker network instead of a generated one`.
@@ -345,7 +415,14 @@ Required by the brief ("document the chosen alternative and its limits").
 6. **Does not harden other Docker containers.** Deferred with C/D.
 7. **Not a substitute for keeping real data out of the local stack** — synthesized fixtures only
    (`cq-test-fixtures-synthesized-only`), verified true today (§User-Brand Impact).
-8. **The wrapper is version-coupled to a CLI that is mid-rewrite; the gate is not.** The repo became
+8. **`ufw` is installed and its unit is active+enabled, but inert — and "just enable ufw" is a
+   trap.** It is held off only by `ENABLED=no` in `ufw.conf`, with rules on disk dated **May 2022**.
+   Anyone reflex-running `ufw enable` as a hardening step would load four-year-old rules and, per
+   §Hypotheses item 1, would filter the **IPv6** path (ordinary host sockets that traverse `INPUT`)
+   while leaving the **IPv4** path completely open (netfilter DNAT in `PREROUTING`, which never
+   reaches `INPUT`). The result is a partial mitigation that looks and feels like a fix — the exact
+   false-green shape this plan is built to prevent. The README says so.
+9. **The wrapper is version-coupled to a CLI that is mid-rewrite; the gate is not.** The repo became
    a monorepo after 2.84.2 and a **new TypeScript CLI at `apps/cli/` now serves `start`/`stop`/
    `status`**. It reproduces the same publishing behaviour today (`formatPortBindingFlag` emits
    `${hostPort}:${containerPort}` with no host IP), so nothing is broken — but **whether the TS path
