@@ -297,7 +297,15 @@ p_tripwire_edge() {
   src="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1")"
   printf '%s\n' "$src" | grep -qE '^data "hcloud_server_type" "git_data"' || { echo 0; return; }
   printf '%s\n' "$src" | grep -qE '^[[:space:]]*precondition[[:space:]]*\{' || { echo 0; return; }
-  cond="$(printf '%s\n' "$src" | grep -A 3 -E '^[[:space:]]*condition[[:space:]]*=' | head -4)"
+  # THREE LINES, NOT FOUR. The 4th line of this window is `error_message`, which interpolates
+  # `data.hcloud_server_type.git_data.architecture` — so the clause below was satisfiable by the
+  # MESSAGE. Measured (#7066 review): re-pointing the CONDITION to
+  # `data.hcloud_server_type.registry.architecture` (a real data source, declared in
+  # zot-registry.tf in this same root, so the HCL stays valid and fmt-clean) left the suite
+  # 101/0 — the tripwire silently reading another host's architecture. This file closed
+  # prose-satisfaction for COMMENTS throughout; `error_message` is prose the comment-stripper
+  # cannot see.
+  cond="$(printf '%s\n' "$src" | grep -A 2 -E '^[[:space:]]*condition[[:space:]]*=' | head -3)"
   printf '%s' "$cond" | grep -qF 'data.hcloud_server_type.git_data.architecture' || { echo 0; return; }
   # The enums MUST be mapped, never compared: hcloud emits x86/arm, the derived token is
   # amd64/arm64, so a direct compare is false on every plan forever and wedges the root.
@@ -341,7 +349,15 @@ p_arch_derivation() {
   # The arm64 class had cardinality 1 (cax11 alone) — a claim quantified over the ARM
   # line but sampled once. Hetzner's ARM lineup is cax11/21/31/41; all four are replayed
   # so a truncated prefix (e.g. "ca") cannot pass on a single lucky member.
+  # `ca99` PINS THE PREFIX LENGTH. Measured (#7066 review): the comment above claimed four
+  # cax members stop a truncated "ca" from passing, and it was false — cax11/21/31/41 all start
+  # with "ca" and cpx/cx/ccx start with none of it, so widening the prefix to "ca" kept the
+  # suite 101/0. Cardinality is not discrimination: four members of one shape are one member.
+  # A synthesized type that starts with "ca" but is NOT Ampere is the only input that separates
+  # the two prefixes, and synthesized is the convention here (cq-test-fixtures-synthesized-only)
+  # — this pins the DERIVATION, not today's Hetzner stock.
   for pair in "cax11:arm64" "cax21:arm64" "cax31:arm64" "cax41:arm64" \
+              "ca99:amd64" \
               "cpx22:amd64" "cx23:amd64" "ccx13:amd64"; do
     t="${pair%%:*}"; exp="${pair##*:}"
     case "$t" in "$pfx"*) got="$tval" ;; *) got="$fval" ;; esac
