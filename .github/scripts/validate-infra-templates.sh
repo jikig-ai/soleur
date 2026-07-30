@@ -90,10 +90,56 @@ trap 'rm -rf "$TMP" "$TFDIR"' EXIT
 # PROSE COMMENTS — ci-ssh-key.tf's comment literally reads "`templatefile()`
 # interpolation map so `cloud-init.yml`'s" — which yields an empty key map and a
 # failed render. \Q..\E literal-quotes the filename so dots are not metachars.
-tf_call_pattern() { printf 'templatefile\\(\\s*"\\$\\{path\\.module\\}/\\Q%s\\E"' "$1"; }
+# (#7025) The optional `(?:\.\./)*` run is what lets a member be attributed to a call site in
+# a MODULE. Members are keyed relative to ROOT, but a module two levels down necessarily
+# writes `${path.module}/../../<name>` — without this the git-data template is discovered,
+# has template syntax, and matches no call site, which is exit 4 on a correct corpus. Kept as
+# a bounded prefix rather than a `.*`: the referent still has to END at the member's exact
+# name, so a same-named file elsewhere cannot be attributed here.
+tf_call_pattern() { printf 'templatefile\\(\\s*"\\$\\{path\\.module\\}/(?:\\.\\./)*\\Q%s\\E"' "$1"; }
+
+# (#7025) Lexical path resolution in pure bash — no `realpath`, no `readlink`, no subprocess.
+# See the call site for why the dependency mattered: this runs before the fail-closed tooling
+# check, and two fixtures exercise this script under a restricted PATH.
+#
+# LEXICAL, not filesystem-resolving. `..` past the root collapses to `/`, which then fails
+# the containment prefix test — the refusal path, not an escape.
+#
+# WHAT LEXICAL RESOLUTION DOES NOT COVER, corrected after review: a SYMLINK. An earlier
+# version of this comment claimed "a symlink inside the infra root does not change which
+# file it renders". That is true of terraform's own path arithmetic and FALSE of this
+# script, whose `[[ -f ]]` and `templatefile()` both follow links — so containment passed
+# on an in-root path while the read went out of root. The `[[ -L ]]` guard at the read site
+# is what actually closes it; this resolver is not the right layer for it.
+_resolve_under() {  # $1 = absolute base dir, $2 = relative referent -> absolute normalized
+  local _p="$1/$2" _seg _out=()
+  local IFS='/'
+  read -ra _segs <<<"$_p"
+  for _seg in "${_segs[@]}"; do
+    case "$_seg" in
+      ''|.) ;;
+      ..) [[ ${#_out[@]} -gt 0 ]] && unset '_out[-1]' ;;
+      *) _out+=("$_seg") ;;
+    esac
+  done
+  if [[ ${#_out[@]} -eq 0 ]]; then printf '/'; else printf '/%s' "${_out[@]}"; fi
+}
 
 shopt -s nullglob
-TF_FILES=("$ROOT"/*.tf)
+# (#7025) MODULE SUBDIRS ARE SCANNED TOO. `templatefile()` call sites are no longer all at
+# the root: apps/web-platform/infra/modules/git-data-userdata/main.tf owns the git-data
+# render, so BOTH the production root and the rung-2 rehearsal root call one map instead of
+# duplicating it (a duplicate would hash identically while rendering differently, defeating
+# the rung-2 evidence binding).
+#
+# Without this, cloud-init-git-data.yml is discovered by (B) but has no discoverable call
+# site, and the gate exits 4 with "has template syntax but NO templatefile() call site" —
+# which is the gate working correctly on an incomplete scan, and is exactly what it did.
+#
+# One level of `modules/*/` only, deliberately: it is where this repo puts modules, and an
+# unbounded `find` would pull in `.terraform/modules/**` (vendored provider/module caches),
+# re-reading third-party HCL as if it were ours.
+TF_FILES=("$ROOT"/*.tf "$ROOT"/modules/*/*.tf)
 MEMBERS=()
 
 # (A) templatefile() referents.
@@ -110,11 +156,45 @@ MEMBERS=()
 # the corpus, the count drops 5/5 -> 4/4, and BOTH numbers stay self-consistent so
 # the counter below cannot see it. That is #6454's own class: green having checked
 # less. `-z` + a `\s*` that may span newlines makes the match line-independent.
+#
+# (#7025) EXTRACTED PER SOURCE FILE, not from all of them at once. `${path.module}` is the
+# directory of the .tf that WRITES the call, so a referent from modules/<m>/main.tf means
+# something different from the same string in a root .tf. Resolving them in one undifferentiated
+# batch would either reject every module referent (they must begin `../../`) or accept a real
+# traversal — the containment check below can only be honest if it knows which file it is
+# resolving against.
 if [[ ${#TF_FILES[@]} -gt 0 ]]; then
-  while IFS= read -r ref; do
-    [[ -n "$ref" ]] && MEMBERS+=("$ref")
-  done < <(grep -hozP 'templatefile\(\s*"\$\{path\.module\}/\K[^"]+' "${TF_FILES[@]}" 2>/dev/null \
-             | tr '\0' '\n' | sort -u)
+  for _tf in "${TF_FILES[@]}"; do
+    _tfdir="$(cd "$(dirname "$_tf")" && pwd)"
+    while IFS= read -r ref; do
+      [[ -z "$ref" ]] && continue
+      # Resolve against the CALLER's directory, exactly as terraform would.
+      #
+      # PURE BASH, NOT `realpath`. Discovery runs BEFORE the fail-closed tooling check
+      # further down, and two fixtures (F8, F16) invoke this script with a deliberately
+      # restricted PATH to prove it fails closed on missing tooling. A `realpath` here is
+      # absent under those PATHs, so every referent resolved to the empty string and the
+      # containment check refused a plain `cloud-init.yml` — turning an exit-6/exit-3 fixture
+      # into exit 4. Caught by the fixture suite; recorded because "resolve a path" reads like
+      # a step that cannot have a dependency.
+      _abs="$(_resolve_under "$_tfdir" "$ref")"
+      # CONTAINMENT, now expressed on the RESOLVED path rather than on the referent's
+      # spelling. `[^"]+` will happily capture `../../../../etc/passwd`, which would then be
+      # read, classified "raw" and COUNTED AS VALIDATED — manufacturing a green N/N out of
+      # files that are not templates at all. A prefix test on the realpath refuses that while
+      # still permitting `../../<name>` from a module one or two levels down, which is the
+      # legitimate shape this repo now has.
+      if [[ -z "$_abs" || "$_abs" != "$ROOT"/* ]]; then
+        echo "ERROR: templatefile() referent '$ref' in $(basename "$_tfdir")/$(basename "$_tf") resolves outside $ROOT" >&2
+        echo "  Refusing to read outside the infra root." >&2
+        exit 4
+      fi
+      # Members are keyed by path RELATIVE TO ROOT, so the same template referenced from two
+      # roots dedupes to one entry rather than being validated (and counted) twice.
+      MEMBERS+=("${_abs#"$ROOT"/}")
+    done < <(grep -hozP 'templatefile\(\s*"\$\{path\.module\}/\K[^"]+' "$_tf" 2>/dev/null \
+               | tr '\0' '\n' | sort -u)
+  done
 fi
 
 # (B) cloud-init*.yml present
@@ -128,13 +208,17 @@ if [[ ${#MEMBERS[@]} -gt 0 ]]; then
   mapfile -t MEMBERS < <(printf '%s\n' "${MEMBERS[@]}" | sort -u)
 fi
 
-# Containment: a referent must be a plain basename inside ROOT. `[^"]+` above will
-# happily capture `../../../../etc/passwd`, which then gets read, classified "raw",
-# and COUNTED AS VALIDATED — manufacturing a green N/N out of files that are not
-# templates at all. Reject anything with a path separator or a leading dot.
+# Containment, second pass. The templatefile() referents were already resolved and
+# prefix-checked against ROOT above (#7025), where the caller's directory was still known.
+# This loop now covers the (B) cloud-init*.yml members, which are plain basenames by
+# construction, and re-asserts the invariant on the merged set — cheap, and it means a future
+# member SOURCE added without its own containment check cannot slip through.
+#
+# Members are ROOT-relative, so a subdirectory component is legal (a template living under
+# modules/ would be `modules/<m>/<file>`); what is refused is escaping ROOT or a backslash.
 for m in "${MEMBERS[@]}"; do
-  if [[ "$m" == */* || "$m" == .* || "$m" == *\\* ]]; then
-    echo "ERROR: templatefile() referent '$m' is not a plain basename within $ROOT" >&2
+  if [[ "$m" == /* || "$m" == .* || "$m" == *..* || "$m" == *\\* ]]; then
+    echo "ERROR: templatefile() referent '$m' is not contained within $ROOT" >&2
     echo "  Refusing to read outside the infra root." >&2
     exit 4
   fi
@@ -243,6 +327,34 @@ TOTAL_BOOLS=0
 
 for base in "${MEMBERS[@]}"; do
   path="$ROOT/$base"
+
+  # SYMLINKS ARE REFUSED. The containment check above is LEXICAL; the read is not.
+  # `[[ -f ]]` and `templatefile()` both FOLLOW symlinks, so a committed
+  # `cloud-init-leak.yml -> /etc/passwd` (or any out-of-root target) passed containment on
+  # the resolved in-root path and then had its first line echoed verbatim into the CI log
+  # by the cloud-init schema error. This job runs on `pull_request` and is
+  # credential-free, so it runs for fork PRs from anyone.
+  #
+  # Caught in review, which also corrected the comment at the resolver that claimed "a
+  # symlink inside the infra root does not change which file it renders" — true of
+  # terraform's path handling, false of this script's read.
+  # EVERY COMPONENT, not just the final one. The first version tested `[[ -L "$path" ]]`,
+  # which a symlinked DIRECTORY component walks straight past: `ln -s /var/tmp/x <root>/vendored`
+  # plus `templatefile("${path.module}/vendored/leak.yml")` passed lexical containment AND the
+  # final-component test, rendered the out-of-root file, and echoed its first line verbatim
+  # into the CI log. Measured. This job runs on `pull_request` and is credential-free, so it
+  # runs for fork PRs from anyone.
+  _walk="$ROOT"
+  _rest="$base"
+  while [[ -n "$_rest" ]]; do
+    _seg="${_rest%%/*}"
+    _walk="${_walk}/${_seg}"
+    if [[ -L "$_walk" ]]; then
+      echo "ERROR [$base]: path component '${_seg}' is a symlink. Refusing to read outside the infra root — containment is checked LEXICALLY and the read follows links, so a linked directory escapes the prefix test." >&2
+      exit 4
+    fi
+    [[ "$_rest" == */* ]] && _rest="${_rest#*/}" || _rest=""
+  done
 
   if [[ ! -f "$path" || ! -r "$path" ]]; then
     # Do NOT increment. The counter assertion below turns this into exit 5 —
@@ -432,7 +544,11 @@ for base in "${MEMBERS[@]}"; do
     label=""
     [[ "$arm" != "noop" ]] && label=" (bools=$arm)"
 
+    # `mkdir -p` the parent: a member name can carry a subdirectory component now that
+    # module referents resolve to ROOT-relative paths, and without this the redirect fails
+    # with "No such file or directory" on the first nested member.
     rendered="$TMP/rendered-$base-$arm"
+    mkdir -p "$(dirname "$rendered")"
     # jsonencode + double-decode. The prior art's `<<EOT` first/last-line strip
     # is broken two ways: terraform console emits a QUOTED STRING (not a
     # heredoc) for a short template, so the strip yields `"x=hi"` with quotes

@@ -148,11 +148,25 @@ function b64len(bytes: number): number {
   return 4 * Math.ceil(bytes / 3); // terraform base64encode: padded, no line breaks — exact.
 }
 
+// (#7025, R7) The git-data render moved out of git-data.tf and into
+// modules/git-data-userdata/main.tf, which BOTH the production root and the rung-2 rehearsal
+// root call. From two levels down, its template reference is
+// `templatefile("${path.module}/../../cloud-init-git-data.yml", {` — so the anchor must
+// tolerate a `../` prefix run.
+//
+// Matched with a REGEX carrying an explicit `(?:\.\./)*` rather than by loosening the string
+// search to an `indexOf` on the basename: a substring match on `cloud-init-git-data.yml", {`
+// would also hit any OTHER templatefile call naming the same file, and silently parse the
+// wrong map. Callers keep passing the INFRA-relative basename; the prefix is a property of
+// where the caller's .tf sits, not of which template it renders.
 function extractTemplatefileMap(tfSrc: string, cloudInitFile: string): string {
-  const anchor = `templatefile("\${path.module}/${cloudInitFile}", {`;
-  const start = tfSrc.indexOf(anchor);
-  if (start === -1) throw new Error(`templatefile anchor for ${cloudInitFile} not found`);
-  let i = start + anchor.length;
+  const anchorRe = new RegExp(
+    `templatefile\\("\\$\\{path\\.module\\}/(?:\\.\\./)*${cloudInitFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}",\\s*\\{`,
+  );
+  const m = anchorRe.exec(tfSrc);
+  if (m === null) throw new Error(`templatefile anchor for ${cloudInitFile} not found`);
+  const start = m.index;
+  let i = start + m[0].length;
   let depth = 1;
   const bodyStart = i;
   for (; i < tfSrc.length && depth > 0; i++) {
@@ -254,7 +268,14 @@ function renderedGzipB64Len(cloudInitFile: string, tfSrc: string): number {
 }
 
 const serverTf = readFileSync(join(INFRA, "server.tf"), "utf8");
-const gitDataTf = readFileSync(join(INFRA, "git-data.tf"), "utf8");
+// (#7025, R7) The git-data templatefile map lives in the shared module both roots call, not
+// in git-data.tf. Read it from there — git-data.tf now holds only the `module` block, so
+// pointing this at the old path throws "templatefile anchor not found" rather than silently
+// measuring nothing.
+const gitDataTf = readFileSync(
+  join(INFRA, "modules", "git-data-userdata", "main.tf"),
+  "utf8",
+);
 const cloudInit = readFileSync(join(INFRA, "cloud-init.yml"), "utf8");
 const bootstrap = readFileSync(join(INFRA, "soleur-host-bootstrap.sh"), "utf8");
 const dockerfile = readFileSync(DOCKERFILE, "utf8");

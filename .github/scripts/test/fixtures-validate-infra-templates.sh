@@ -627,6 +627,13 @@ assert_rc "F18b-prose-mentions-do-not-red" 0
 # without a containment guard the gate reads an out-of-root file, classifies it
 # "raw", and COUNTS IT AS VALIDATED — manufacturing a green N/N out of a file that
 # is not a template at all.
+#
+# (#7025) The RULE changed but the REFUSAL did not. Containment used to be "the referent must
+# be a plain basename"; module call sites two levels down must write `../../<name>`, so it is
+# now "the referent, resolved against the .tf that writes it, must land inside ROOT". The
+# assertion below is re-pinned onto the refusal sentence rather than onto the old rule's
+# phrasing — the sentence is the contract; "plain basename" was an implementation detail that
+# is no longer true of a correct corpus.
 D=$(newdir f19)
 cat > "$D/main.tf" <<'EOF'
 locals {
@@ -635,7 +642,40 @@ locals {
 EOF
 run_check "$D"
 assert_rc "F19-traversal-referent-reds" 4
-assert_out "F19-names-containment" "plain basename"
+assert_out "F19-names-containment" "Refusing to read outside the infra root"
+
+# F19b — the same escape attempted from a MODULE subdir, which is the position that made the
+# rule change necessary. A module referent legitimately BEGINS with `../../`, so the guard can
+# no longer refuse on spelling; this pins that it still refuses on the RESOLVED path.
+D=$(newdir f19b)
+mkdir -p "$D/modules/evil"
+cat > "$D/modules/evil/main.tf" <<'EOF'
+locals {
+  ud = templatefile("${path.module}/../../../../../../../etc/passwd", { x = var.x })
+}
+EOF
+run_check "$D"
+assert_rc "F19b-module-traversal-reds" 4
+assert_out "F19b-names-containment" "Refusing to read outside the infra root"
+
+# F19c — the LEGITIMATE module shape must be accepted and ATTRIBUTED, not merely tolerated.
+# Without this, F19/F19b are satisfied by a guard that refuses every module referent, which
+# would red the real corpus. This is the arm that distinguishes "contained" from "forbidden".
+D=$(newdir f19c)
+mkdir -p "$D/modules/ud"
+printf '#cloud-config
+write_files:
+  - path: /tmp/x
+    content: ${greeting}
+' > "$D/cloud-init.yml"
+cat > "$D/modules/ud/main.tf" <<'EOF'
+locals {
+  ud = templatefile("${path.module}/../../cloud-init.yml", { greeting = "hi" })
+}
+EOF
+run_check "$D"
+assert_rc "F19c-module-referent-accepted" 0
+assert_out "F19c-counted-the-template" "rendered+validated 1/1"
 
 # F20 — a brace inside a STRING VALUE is not structural. Counting it truncates the
 # map early and silently drops a real key -> exit 2 on a correct .tf.

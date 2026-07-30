@@ -37,10 +37,20 @@ CLOUD_INIT="${DIR}/cloud-init-git-data.yml"
 LUKS_TF="${DIR}/git-data-luks.tf"
 CUTOVER="${DIR}/git-data-cutover.sh"
 PRERECEIVE="${DIR}/git-data-pre-receive.sh"
-# #6570 dual-arch derivation (A14-A17). git-data.tf carries the derivation + the
-# per-arch checksum pair; inngest-host.tf / zot-registry.tf are the CANON the pair
-# is derived from (never a second hardcoded literal); variables.tf holds the default.
+# #6570 dual-arch derivation (A14-A17). inngest-host.tf / zot-registry.tf are the CANON
+# the checksum pair is derived from (never a second hardcoded literal); variables.tf holds
+# the default.
+#
+# (#7025, R7) The derivation that selects WHICH BINARY is downloaded, and the checksum pair
+# that verifies it, moved OUT of git-data.tf and into modules/git-data-userdata/main.tf —
+# the single render both the production root and the rung-2 rehearsal root call. A15/A16/A18
+# therefore read the MODULE, not the caller: pointed at git-data.tf they would assert
+# against a file that no longer wires anything, and (for A15) against literals no consumer
+# reads. git-data.tf declares NO arch of its own — the phantom-type precondition reads the
+# module's derivation back as `module.git_data_userdata.arch` — so A16b asserts THAT WIRE,
+# and the absence of a second derivation, where it once compared two ternaries as text.
 GIT_DATA_TF="${DIR}/git-data.tf"
+GIT_DATA_MODULE_TF="${DIR}/modules/git-data-userdata/main.tf"
 INNGEST_HOST_TF="${DIR}/inngest-host.tf"
 ZOT_TF="${DIR}/zot-registry.tf"
 VARIABLES_TF="${DIR}/variables.tf"
@@ -54,7 +64,7 @@ fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 [ -f "$LUKS_TF" ]      || { echo "FAIL: git-data-luks.tf not found at $LUKS_TF" >&2; exit 1; }
 [ -f "$CUTOVER" ]      || { echo "FAIL: git-data-cutover.sh not found at $CUTOVER" >&2; exit 1; }
 [ -f "$PRERECEIVE" ]   || { echo "FAIL: git-data-pre-receive.sh not found at $PRERECEIVE" >&2; exit 1; }
-for f in "$GIT_DATA_TF" "$INNGEST_HOST_TF" "$ZOT_TF" "$VARIABLES_TF"; do
+for f in "$GIT_DATA_TF" "$GIT_DATA_MODULE_TF" "$INNGEST_HOST_TF" "$ZOT_TF" "$VARIABLES_TF"; do
   [ -f "$f" ] || { echo "FAIL: required file not found: $f" >&2; exit 1; }
 done
 
@@ -287,13 +297,27 @@ p_tripwire_edge() {
   src="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1")"
   printf '%s\n' "$src" | grep -qE '^data "hcloud_server_type" "git_data"' || { echo 0; return; }
   printf '%s\n' "$src" | grep -qE '^[[:space:]]*precondition[[:space:]]*\{' || { echo 0; return; }
-  cond="$(printf '%s\n' "$src" | grep -A 3 -E '^[[:space:]]*condition[[:space:]]*=' | head -4)"
+  # THREE LINES, NOT FOUR. The 4th line of this window is `error_message`, which interpolates
+  # `data.hcloud_server_type.git_data.architecture` — so the clause below was satisfiable by the
+  # MESSAGE. Measured (#7066 review): re-pointing the CONDITION to
+  # `data.hcloud_server_type.registry.architecture` (a real data source, declared in
+  # zot-registry.tf in this same root, so the HCL stays valid and fmt-clean) left the suite
+  # 101/0 — the tripwire silently reading another host's architecture. This file closed
+  # prose-satisfaction for COMMENTS throughout; `error_message` is prose the comment-stripper
+  # cannot see.
+  cond="$(printf '%s\n' "$src" | grep -A 2 -E '^[[:space:]]*condition[[:space:]]*=' | head -3)"
   printf '%s' "$cond" | grep -qF 'data.hcloud_server_type.git_data.architecture' || { echo 0; return; }
-  # The enums MUST be mapped, never compared: hcloud emits x86/arm, the local is
+  # The enums MUST be mapped, never compared: hcloud emits x86/arm, the derived token is
   # amd64/arm64, so a direct compare is false on every plan forever and wedges the root.
   printf '%s' "$cond" | grep -qF '"arm"' || { echo 0; return; }
   printf '%s' "$cond" | grep -qF '"x86"' || { echo 0; return; }
-  printf '%s' "$cond" | grep -qE 'architecture[[:space:]]*==[[:space:]]*local\.git_data_arch' && { echo 0; return; }
+  # Re-pointed at the module output with the R7 follow-through. This clause names the thing
+  # the condition may not be compared against directly, so it goes VACUOUS the moment that
+  # thing is renamed: while it still said `local.git_data_arch` — a reference git-data.tf no
+  # longer contains — it was unmatchable, and would have reported clean against the very
+  # regression it exists for. A negative assertion fails OPEN, so it is only ever as live as
+  # its anchor; the mutation arm on A19 below now pins that.
+  printf '%s' "$cond" | grep -qE 'architecture[[:space:]]*==[[:space:]]*module\.git_data_userdata\.arch' && { echo 0; return; }
   echo 1
 }
 
@@ -304,10 +328,15 @@ p_tripwire_edge() {
 # values, then replay the decision over the real type space.
 p_arch_derivation() {
   local expr pfx tval fval pair t exp got
-  # Anchored on the ASSIGNMENT at line-start. A bare `git_data_arch[[:space:]]*=` also
-  # matches the precondition's `local.git_data_arch == "arm64" ? "arm" : "x86"`, so the
-  # extraction was order-coupled — correct today only because `locals` precedes the
-  # resource in the file.
+  # Anchored on the ASSIGNMENT at line-start, which distinguishes a DECLARATION from a
+  # reference. Written when the caller still held a second copy, where a bare
+  # `git_data_arch[[:space:]]*=` also matched its precondition's
+  # `local.git_data_arch == "arm64" ? "arm" : "x86"` and made the extraction order-coupled.
+  # That copy is gone and this predicate now only reads the module — but the anchor is also
+  # what p_precondition_arch_source reuses as a NEGATIVE on the caller, and there the
+  # distinction is the whole assertion: `[[:space:]]*=` matches the first `=` of an `==`, so
+  # an unanchored form would read any future `x = local.git_data_arch == …` REFERENCE as a
+  # re-declared duplicate and fail on a correct file.
   expr="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" | grep -E '^[[:space:]]*git_data_arch[[:space:]]*=' | head -1)"
   [ -n "$expr" ] || { echo 0; return; }
   pfx="$(printf '%s' "$expr" | grep -oE 'startswith\(var\.git_data_server_type,[[:space:]]*"[a-z]+"\)' | grep -oE '"[a-z]+"' | tr -d '"')"
@@ -320,7 +349,15 @@ p_arch_derivation() {
   # The arm64 class had cardinality 1 (cax11 alone) — a claim quantified over the ARM
   # line but sampled once. Hetzner's ARM lineup is cax11/21/31/41; all four are replayed
   # so a truncated prefix (e.g. "ca") cannot pass on a single lucky member.
+  # `ca99` PINS THE PREFIX LENGTH. Measured (#7066 review): the comment above claimed four
+  # cax members stop a truncated "ca" from passing, and it was false — cax11/21/31/41 all start
+  # with "ca" and cpx/cx/ccx start with none of it, so widening the prefix to "ca" kept the
+  # suite 101/0. Cardinality is not discrimination: four members of one shape are one member.
+  # A synthesized type that starts with "ca" but is NOT Ampere is the only input that separates
+  # the two prefixes, and synthesized is the convention here (cq-test-fixtures-synthesized-only)
+  # — this pins the DERIVATION, not today's Hetzner stock.
   for pair in "cax11:arm64" "cax21:arm64" "cax31:arm64" "cax41:arm64" \
+              "ca99:amd64" \
               "cpx22:amd64" "cx23:amd64" "ccx13:amd64"; do
     t="${pair%%:*}"; exp="${pair##*:}"
     case "$t" in "$pfx"*) got="$tval" ;; *) got="$fval" ;; esac
@@ -337,7 +374,18 @@ p_arch_derivation() {
 # UNMODIFIED tree because inngest_server_type already defaults to cpx22.
 p_default_not_cax() {
   local d
-  d="$(awk '/^variable "git_data_server_type"/{i=1} i&&/^[[:space:]]*default[[:space:]]*=/{gsub(/[",]/,"");print $NF;exit} i&&/^}/{exit}' "$1")"
+  # COMMENT-STRIPPED, AND THE VALUE TAKEN FROM THE ASSIGNMENT — never `$NF`. After
+  # `gsub(/[",]/,"")`, `$NF` on `default = "cpx22" # regressed from cax11` is the COMMENT's
+  # last word. Measured: `default = "cax11" # regressed from cpx22` made this predicate
+  # return 1 on a file pinning an unbornable type (#6570: cax had stock in 0 of 3 EU DCs).
+  # `_var_default` in git-data-rung2-rehearsal.test.sh already had this right; this is the
+  # same extraction.
+  d="$(sed 's/[[:space:]]#.*$//' "$1" \
+       | awk '/^variable "git_data_server_type"/{i=1}
+              i&&/^[[:space:]]*default[[:space:]]*=/{
+                sub(/^[^=]*=[[:space:]]*/, ""); gsub(/[",[:space:]]/, ""); print; exit
+              }
+              i&&/^}/{exit}')"
   [ -n "$d" ] || { echo 0; return; }
   case "$d" in cax*) echo 0 ;; *) echo 1 ;; esac
 }
@@ -355,13 +403,28 @@ p_default_not_cax() {
 # LUKS heredoc, so its `set -euo pipefail` ran zero times, luksOpen never ran, and the
 # host booted dark with sshd up. A6 above asserts only that the STRING `doppler run`
 # survives — it is blind to the scope, which is why this arm exists.
+#
+# (#7025, R1) THE TEMPLATE NO LONGER CARRIES THE CONFIG NAME AS A LITERAL. The rung-2
+# rehearsal boots this same template against a SCRATCH Doppler config, and a token scoped
+# to that config exits 1 against a hardcoded `prd_git_data` — the identical W0 failure, in
+# the rehearsal instead of the birth. So the config name became `${doppler_config_name}`, a
+# templatefile var, and this guard splits in two:
+#
+#   A20  (here)  — every `doppler run` in the TEMPLATE names the same interpolation, so the
+#                  two invocations can never disagree with each other. A hardcoded `prd`
+#                  still fails, which is the regression this arm was built for.
+#   A20b (below) — the PRODUCTION caller binds that var to the config the service token is
+#                  actually scoped to. Without A20b, A20 alone would be satisfied by a
+#                  template that consistently names a variable pointing anywhere.
+#
+# The siblings keep the literal: they are plain scripts/units, never rendered.
 p_doppler_config_scope() {
   local n_run n_scoped
   # Anchor on the COMMAND at line start. A bare 'doppler run' also matches the prose
   # comment above the bootstrap invocation, which made this 3-vs-2 and the guard
   # permanently red (cq-assert-anchor-not-bare-token).
   n_run=$(grep -Ec '^[[:space:]]*doppler run ' "$1" || true)
-  n_scoped=$(grep -Ec '^[[:space:]]*doppler run --project soleur --config prd_git_data ' "$1" || true)
+  n_scoped=$(grep -Ec '^[[:space:]]*doppler run --project soleur --config \$\{doppler_config_name\} ' "$1" || true)
   # Guard the SIBLINGS too. Scoping this to cloud-init alone let the identical W0 defect
   # survive in git-data-cutover.sh — a file that runs ON this host under the same
   # single-config token — because the guard structurally could not see it.
@@ -372,6 +435,40 @@ p_doppler_config_scope() {
     n_scoped=$(( n_scoped + $(grep -Ec 'doppler run --project soleur --config prd_git_data ' "$_sib" || true) ))
   done
   if [ "$n_run" -ge 2 ] && [ "$n_run" -eq "$n_scoped" ]; then echo 1; else echo 0; fi
+}
+
+# A20b (#7025, R1): the PRODUCTION render binds ${doppler_config_name} to the config the
+# boot service token is actually scoped to.
+#
+# This is the half A20 structurally cannot see. Once the config name is a variable, the
+# template is internally consistent no matter WHAT the caller passes — so the binding is
+# where the W0 failure now lives. Both sides are extracted by shape from their own files
+# rather than compared against a hardcoded "prd_git_data": a literal here would pass while
+# the token moved, which is the drift this whole arm exists to catch.
+#
+# $1 = git-data.tf (the caller). The token's config is read from git-data-luks.tf, which
+# declares doppler_config.git_data_prd and points doppler_service_token.git_data at it.
+p_doppler_config_binding() {
+  local bound declared
+  bound="$(grep -oE '^[[:space:]]*doppler_config_name[[:space:]]*=[[:space:]]*"[^"]+"' "$1" \
+           | head -1 | sed 's/.*"\([^"]*\)"$/\1/')"
+  # Same extraction as A17 and `_var_default`, for the same reason: `$NF` after
+  # `gsub(/[",]/,"")` reads a TRAILING COMMENT's last word. Measured: regressing the config to
+  # `name = "prd" # the boot service token is scoped to prd_git_data` made `declared` read
+  # back as `prd_git_data` and the whole suite reported 101/0 — while the host would run
+  # `doppler run --config prd` under a token scoped to `prd_git_data`, exit 1, never reach
+  # `cryptsetup luksOpen`, and boot dark with sshd up. That is #6982 W0 verbatim.
+  declared="$(sed 's/[[:space:]]#.*$//' "$DIR/git-data-luks.tf" \
+              | awk '/^resource "doppler_config" "git_data_prd"/{i=1}
+                     i&&/^[[:space:]]*name[[:space:]]*=/{
+                       sub(/^[^=]*=[[:space:]]*/, ""); gsub(/[",[:space:]]/, ""); print; exit
+                     }
+                     i&&/^}/{exit}')"
+  if [ -n "$bound" ] && [ -n "$declared" ] && [ "$bound" = "$declared" ]; then
+    echo 1
+  else
+    echo 0
+  fi
 }
 
 # A21: the boot emitter exists, is delivered as an executable file, and the FATAL channel
@@ -571,18 +668,84 @@ assert_mutation "A14 doppler-arch-url (silent \$\$ escape)" p_doppler_arch_url "
   's;DOPPLER_SHA256="\$\{;DOPPLER_SHA256="$$\{;'
 
 # A15: checksum pair byte-equals the two canon sites, in arm64-then-amd64 order.
-assert_holds    "A15 doppler-checksum-parity" p_doppler_checksum_parity "$GIT_DATA_TF"
+# Read from the MODULE: since #7025 R7 that is the only place the pair exists, and it is
+# the copy the download actually verifies against.
+assert_holds    "A15 doppler-checksum-parity" p_doppler_checksum_parity "$GIT_DATA_MODULE_TF"
 # Mutation: collapse the arm64 arm onto the amd64 checksum (models a pairing swap /
 # copy-paste of one literal over both arms) -> the pair no longer equals canon.
-assert_mutation "A15 doppler-checksum-parity" p_doppler_checksum_parity "$GIT_DATA_TF" \
+assert_mutation "A15 doppler-checksum-parity" p_doppler_checksum_parity "$GIT_DATA_MODULE_TF" \
   's/f1954f3717fe4c5b65e906a3c6dfe0d20e97b032af35e43db41250931302e143/9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db/'
 
-# A16: derivation orientation (the inverted-ternary catcher).
-assert_holds    "A16 arch-derivation" p_arch_derivation "$GIT_DATA_TF"
-# Mutation: invert the ternary. This ships cpx22 -> arm64 and is the precise defect the
-# assertion exists for; every "the local is declared" grep stays green against it.
-assert_mutation "A16 arch-derivation" p_arch_derivation "$GIT_DATA_TF" \
+# A16: derivation orientation (the inverted-ternary catcher), on the SINGLE derivation.
+#
+# Since the R7 follow-through there is exactly one, in modules/git-data-userdata/main.tf —
+# the render both roots call. It picks the binary AND, through the module's `arch` output,
+# the arch the phantom-type precondition validates. So an inversion here is #6570 itself:
+# `startswith(..., "cax") ? "amd64" : "arm64"` ships cpx22 -> arm64, `sha256sum -c -` fails
+# at boot, and every "the local is declared" grep stays green. A bare declaration grep
+# cannot see it — extract the prefix and both branch values, replay the real type space.
+assert_holds    "A16 arch-derivation (module)" p_arch_derivation "$GIT_DATA_MODULE_TF"
+assert_mutation "A16 arch-derivation (module)" p_arch_derivation "$GIT_DATA_MODULE_TF" \
   's/\? "arm64" : "amd64"/? "amd64" : "arm64"/'
+
+# A16b: the precondition CONSUMES that derivation, and the caller declares no second one.
+#
+# An earlier revision of R7 kept a byte-equal copy of the ternary in git-data.tf to feed the
+# phantom/wrong-arch precondition, and held the two copies equal with four arms comparing
+# them as text. The caller now reads `module.git_data_userdata.arch`, which makes "the arch
+# you validate differs from the arch you download" UNEXPRESSIBLE rather than policed: there
+# is one ternary, and A16 covers inverting it.
+#
+# That retires the parity comparison, not the coverage. The refactor MOVES the drift class
+# onto the WIRE — re-introduce a local and point the condition at it, or drop a literal in
+# its place, and the precondition is once again validating an arch the render never
+# selected, with A16 green because the module's ternary is untouched. Same relationship A18
+# guards between the derivation and the templatefile map, and the same reason A15/A16/A18
+# read the module: the assertion has to sit where the value actually flows.
+p_precondition_arch_source() {
+  local src cond
+  src="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1")"
+  # Scoped to the CONDITION, spanning exactly the three lines it occupies. A 4-line window
+  # would swallow `error_message`, which interpolates the SAME reference — and the M1
+  # mutation below leaves that message intact, so the wider window would read a re-pointed
+  # condition as clean. Comment-stripped for the same reason: the resource's own prose names
+  # `module.git_data_userdata.arch` three times (cq-assert-anchor-not-bare-token).
+  cond="$(printf '%s\n' "$src" | grep -A 2 -E '^[[:space:]]*condition[[:space:]]*=' | head -3)"
+  # Non-vacuity: a missing or truncated extraction must fail loudly, never assert on nothing.
+  printf '%s\n' "$cond" | grep -qE '^[[:space:]]*condition[[:space:]]*=' || { echo 0; return; }
+  printf '%s\n' "$cond" | grep -qF 'module.git_data_userdata.arch' || { echo 0; return; }
+  # Negative space: NO second derivation in the caller. Anchored on the ASSIGNMENT at
+  # line-start, so neither the module reference above nor the locals block's explanation of
+  # why the local is absent can satisfy it.
+  printf '%s\n' "$src" | grep -qE '^[[:space:]]*git_data_arch[[:space:]]*=' && { echo 0; return; }
+  echo 1
+}
+# AND THIS ARM IS WHAT KEEPS A19'S NEGATIVE CLAUSE ALIVE — the coupling is load-bearing and
+# was undocumented. A19's direct-compare check is a NEGATIVE, so it fails OPEN the moment its
+# anchor stops matching anything: that is exactly how it went vacuous when the refactor deleted
+# `local.git_data_arch` while the clause still named it. Re-pointing it at
+# `module.git_data_userdata.arch` fixed the instance; what stops it recurring is that A16b
+# asserts the SAME reference POSITIVELY. Rename the module and A16b reddens immediately, so the
+# negative can never again be left silently naming something that does not exist.
+assert_holds    "A16b precondition-arch-source" p_precondition_arch_source "$GIT_DATA_TF"
+# Mutation 1: re-point the condition at a caller-side local, leaving `error_message` reading
+# the module output. Visible ONLY to the condition-scoped extraction — a whole-file grep for
+# `module.git_data_userdata.arch` is satisfied by the untouched message.
+assert_mutation "A16b precondition-arch-source (condition re-pointed)" \
+  p_precondition_arch_source "$GIT_DATA_TF" \
+  's/module\.git_data_userdata\.arch == "arm64"/local.git_data_arch == "arm64"/'
+# Mutation 2: the duplicate ternary returns to the caller's locals while the condition still
+# reads the module output — the exact half-migrated state the R7 follow-through removed, and
+# the one the two copies used to drift apart from. Visible ONLY to the negative-space clause.
+#
+# Anchored on the `trimspace(` binding, not a bare `git_remove_pubkey`: that name also
+# appears as a module ARGUMENT further down, and the loose anchor injected a `locals`
+# declaration into the middle of the module block too. Both insertions trip the clause, so
+# the arm passed either way — but a mutation should model the drift it is named for, not
+# also produce HCL nobody would write.
+assert_mutation "A16b precondition-arch-source (duplicate local restored)" \
+  p_precondition_arch_source "$GIT_DATA_TF" \
+  's;^([[:space:]]*)git_remove_pubkey([[:space:]]*)= trimspace\((.*)$;\1git_remove_pubkey\2= trimspace(\3\n\1git_data_arch = startswith(var.git_data_server_type, "cax") ? "arm64" : "amd64";'
 
 # A17: the git_data_server_type default is not an (unorderable) cax* type.
 assert_holds    "A17 default-not-cax" p_default_not_cax "$VARIABLES_TF"
@@ -591,9 +754,11 @@ assert_mutation "A17 default-not-cax" p_default_not_cax "$VARIABLES_TF" \
   's/default([[:space:]]*)=[[:space:]]*"cpx22"/default\1= "cax11"/'
 
 # A18: the templatefile map wires BOTH derived locals through to the cloud-init.
-assert_holds    "A18 templatefile-wiring" p_templatefile_wiring "$GIT_DATA_TF"
+# The map moved into the module with the render it belongs to (#7025 R7); asserted there,
+# because git-data.tf no longer contains a templatefile call to wire anything through.
+assert_holds    "A18 templatefile-wiring" p_templatefile_wiring "$GIT_DATA_MODULE_TF"
 # Mutation: the #6570 regression, relocated from the cloud-init to the var map.
-assert_mutation "A18 templatefile-wiring" p_templatefile_wiring "$GIT_DATA_TF" \
+assert_mutation "A18 templatefile-wiring" p_templatefile_wiring "$GIT_DATA_MODULE_TF" \
   's;^([[:space:]]*)doppler_arch([[:space:]]*)=[[:space:]]*local\.git_data_arch[[:space:]]*$;\1doppler_arch\2= "arm64";'
 
 # A19: the tripwire's referencing edge survives, and the enums stay MAPPED not compared.
@@ -602,14 +767,33 @@ assert_holds    "A19 tripwire-edge" p_tripwire_edge "$GIT_DATA_TF"
 # phantom-type guard fires on zero production paths, silently.
 assert_mutation "A19 tripwire-edge" p_tripwire_edge "$GIT_DATA_TF" \
   's;^([[:space:]]*)precondition([[:space:]]*)\{;\1notaprecondition\2{;'
+# Mutation: compare the enums DIRECTLY instead of mapping them. `"amd64" == "x86"` is false
+# on every plan forever, so this wedges the whole root including unrelated applies. Detected
+# by the direct-compare clause ALONE — the "arm"/"x86" greps still match the orphaned
+# mapping line below it — which is the point: that clause is a negative, so it fails OPEN,
+# and until the R7 follow-through re-pointed it at the module output it named a reference
+# git-data.tf no longer contains and could not have fired on this at all.
+assert_mutation "A19 tripwire-edge (enums compared, not mapped)" p_tripwire_edge "$GIT_DATA_TF" \
+  's;architecture == \($;architecture == module.git_data_userdata.arch;'
 
 # --- #6982 assertions ---------------------------------------------------------------
 
 # A20: the W0 config-scope regression guard.
 assert_holds    "A20 doppler-config-scope" p_doppler_config_scope "$CLOUD_INIT"
 # Mutation: revert to the pre-#6982 `--config prd`, the exact form measured to boot dark.
+# Targets the #7025 interpolation, because that is what the template carries now — the old
+# `s/--config prd_git_data/…/` expression would match NOTHING here and assert_mutation would
+# report the predicate as un-flippable rather than the guard as absent.
 assert_mutation "A20 doppler-config-scope" p_doppler_config_scope "$CLOUD_INIT" \
-  's/--config prd_git_data/--config prd/g'
+  's/--config \$\{doppler_config_name\}/--config prd/g'
+
+# A20b (#7025, R1): the production caller binds that interpolation to the token's own config.
+assert_holds    "A20b doppler-config-binding" p_doppler_config_binding "$GIT_DATA_TF"
+# Mutation: bind the render to `prd` — the full-prd config the boot token cannot read. This
+# is the #6982 W0 failure relocated from the template to the caller, and it is invisible to
+# A20, which would stay green because the template is still internally consistent.
+assert_mutation "A20b doppler-config-binding" p_doppler_config_binding "$GIT_DATA_TF" \
+  's/doppler_config_name([[:space:]]*)=([[:space:]]*)"prd_git_data"/doppler_config_name\1=\2"prd"/'
 
 # A21: the emitter exists and reads the BAKED DSN.
 assert_holds    "A21 emitter-present" p_emitter_present "$CLOUD_INIT"
@@ -706,8 +890,16 @@ p_no_shell_tracing() {
 # four traps ship verbatim with `_devalue` unarmed. That is precisely the failure this pair of
 # guards exists to prevent.
 #
-# The file list is DERIVED from git-data.tf's file() bindings rather than hardcoded, so a new
-# injected script is covered the day it is added rather than the day someone remembers.
+# The file list is DERIVED from the render module's file() bindings rather than hardcoded, so
+# a new injected script is covered the day it is added rather than the day someone remembers.
+#
+# (#7025, R7) The bindings moved from git-data.tf to modules/git-data-userdata/main.tf, and
+# `${path.module}` there resolves TWO LEVELS DOWN — so each extracted path is `../../<name>`
+# and must be resolved against the MODULE directory, not $DIR. Resolving against the old base
+# yields apps/web-platform/<name>, which does not exist, so every payload would silently drop
+# out of the quantifier and leave A28a/A28b asserting the property over the template alone —
+# the exact gap the floor below exists to catch, which is why the floor is not optional.
+GIT_DATA_USERDATA_MODULE="$DIR/modules/git-data-userdata"
 boot_path_files() {
   printf '%s\n' "$CLOUD_INIT"
   # git-data-cutover.sh is NOT file()-bound into user_data (it ships via the deploy pipeline),
@@ -716,8 +908,8 @@ boot_path_files() {
   # PASSPHRASE, not about user_data membership, so the quantifier has to include it explicitly.
   [ -f "$CUTOVER" ] && printf '%s\n' "$CUTOVER"
   sed -nE 's/^[[:space:]]*[a-z_]+[[:space:]]*=[[:space:]]*(replace\()?file\("\$\{path\.module\}\/([^"]+)".*/\2/p' \
-    "$DIR/git-data.tf" | sort -u | while read -r f; do
-      [ -n "$f" ] && [ -f "$DIR/$f" ] && printf '%s\n' "$DIR/$f"
+    "$GIT_DATA_USERDATA_MODULE/main.tf" | sort -u | while read -r f; do
+      [ -n "$f" ] && [ -f "$GIT_DATA_USERDATA_MODULE/$f" ] && printf '%s\n' "$GIT_DATA_USERDATA_MODULE/$f"
     done
 }
 
@@ -827,9 +1019,25 @@ assert_mutation "B16 mkfs-quota-project (drop -O entirely)" p_mkfs_quota_project
   's/ -O quota,project//'
 
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
+#
+# RAISED 95 -> 101 WITH THE ARMS THAT MADE IT NECESSARY (#7025 R7). A floor whose slack
+# equals the size of the change it was added for detects nothing about that change: at 95,
+# deleting every assertion the R7 commit added to this suite left it at 97 and EXIT 0 —
+# measured. The floor must move with the suite or it only ever guards the work that
+# predates it.
+#
+# It stays at 101 across the R7 follow-through because that change re-pointed arms rather
+# than dropping them: the two caller-side derivation arms and the two parity arms went away
+# with the caller-side ternary they read, and A16b's three arms plus A19's direct-compare
+# mutation replaced them one for one. Deleting the follow-through's coverage outright still
+# lands under the floor.
+#
+# A floor (`-lt`), never an equality: the count is developer-incremented, so `-eq` would
+# redden the suite on every legitimate new arm and teach the next author to edit the guard
+# instead of trusting it.
 total=$((passes + fails))
-if [ "$total" -lt 95 ]; then
-  echo "FAIL: ran only ${total} assertions (<95) — suite did not execute fully" >&2
+if [ "$total" -lt 101 ]; then
+  echo "FAIL: ran only ${total} assertions (<101) — suite did not execute fully" >&2
   exit 1
 fi
 
