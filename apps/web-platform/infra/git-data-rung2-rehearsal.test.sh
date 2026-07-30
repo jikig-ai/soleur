@@ -388,6 +388,39 @@ else
     "the module would derive an arch the caller's phantom-arch precondition never validates — #6570 with the tripwire green"
 fi
 
+# LEG 3: THE SERVER'S OWN `server_type`. The arm above pins var -> MODULE; the phantom-arch
+# precondition pins var -> DATA SOURCE. Both legs key on `var.git_data_server_type`, and
+# NEITHER says anything about the type the server is actually CREATED with — a third,
+# independent reference to the same var.
+#
+# Measured on a sandbox: pinning `server_type = "cax11"` on hcloud_server.git_data while the
+# var stayed cpx22 kept git-data-luks.test.sh at 101/0. The data source still reads the var
+# (cpx22 -> x86), the module still derives amd64, so the precondition compares x86 == x86 and
+# passes; the host is ARM and downloads the amd64 tarball, which verifies against the amd64
+# checksum the same wrong derivation selected. #6570 verbatim, every guard green — the
+# identical class the arm above closed, through the leg it did not cover.
+#
+# `^[[:space:]]*server_type` cannot match the module-input line, which starts with
+# `git_data_server_type`. Scoped to the hcloud_server block so a match elsewhere in the root
+# cannot satisfy it, and comment-stripped (trailing form included) so prose cannot either.
+_srv_drift=""
+for _pair in "$DIR/git-data.tf:git_data" "$REH/rehearsal.tf:rehearsal"; do
+  _f="${_pair%%:*}"; _res="${_pair##*:}"
+  _blk="$(sed 's/[[:space:]]#.*$//; s/^[[:space:]]*#.*$//' "$_f" \
+          | awk -v r="$_res" '$0 ~ "^resource \"hcloud_server\" \""r"\"" {i=1} i; i&&/^}/{exit}')"
+  if [[ -z "$_blk" ]]; then
+    _srv_drift="${_srv_drift} $(basename "$_f")(no hcloud_server.${_res} block)"
+  elif ! printf '%s\n' "$_blk" | grep -qE '^[[:space:]]*server_type[[:space:]]*=[[:space:]]*var\.git_data_server_type[[:space:]]*$'; then
+    _srv_drift="${_srv_drift} $(basename "$_f")"
+  fi
+done
+if [[ -z "$_srv_drift" ]]; then
+  pass "both roots create the server with server_type = var.git_data_server_type (the arch validated IS the arch the host is born on)"
+else
+  fail "a root pins its server_type independently of its own var:${_srv_drift}" \
+    "the host would be born on a type the precondition never validated — #6570 with every guard green"
+fi
+
 _derived=""
 _common=0
 _exempted_keys=""
@@ -727,11 +760,11 @@ fi
 # not move with the suite only ever guards the work that predates it, and the deletion it
 # most needs to catch is the one that removes the arms someone just argued for.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 39 ]]; then
+if [[ "$_ran" -lt 40 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 39. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 40. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 39)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 40)\n' "$_ran"
 fi
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"
