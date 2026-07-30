@@ -25,7 +25,19 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"; docker rm -f soleur-plugin-seed-test >/dev/null 2>&1 || true; docker rmi -f soleur-plugin-seed-test:fixture >/dev/null 2>&1 || true' EXIT
+
+# $$-scope the docker identifiers, matching the convention the sibling
+# workspaces-luks-loopback.test.sh header states ("backing files are $$-scoped so two
+# concurrent runs cannot collide"). Load-bearing as of #7068: registering this suite put
+# it in run-registered-suites.sh's local `xargs -P 6` execute set, and parallel worktrees
+# are this repo's normal workflow — so with fixed names one run's EXIT trap would
+# `docker rm -f` / `rmi -f` another run's container and image mid-test, producing a
+# non-reproducible RED on whichever suite lost the race. Scoping is what keeps the
+# newly-widened gate from becoming a flake generator.
+CTR="soleur-plugin-seed-test-$$"
+IMG="soleur-plugin-seed-test-$$:fixture"
+
+trap 'rm -rf "$TMP"; docker rm -f "$CTR" >/dev/null 2>&1 || true; docker rmi -f "$IMG" >/dev/null 2>&1 || true' EXIT
 
 # Build a tiny fixture image with a synthetic plugin tree.
 cat > "$TMP/Dockerfile" <<'EOF'
@@ -35,7 +47,7 @@ RUN mkdir -p /opt/soleur/plugin/.claude-plugin && \
     mkdir -p /opt/soleur/plugin/skills/test && \
     echo "stub" > /opt/soleur/plugin/skills/test/SKILL.md
 EOF
-docker build -t soleur-plugin-seed-test:fixture "$TMP" >/dev/null
+docker build -t "$IMG" "$TMP" >/dev/null
 
 # Pre-populate the bind-mount target with stale content (regular file + dotfile +
 # stale dotdir) to verify cleanup removes both visible and hidden entries.
@@ -50,11 +62,16 @@ touch "$TARGET/.stale-dir/keep"
 # cloud-init.yml (dash) so this test exercises the production form on both
 # paths. Sentinel `.seed-complete` is written LAST so partial-copy detection
 # in `verifyPluginMountOnce` works; the test asserts both are present.
-docker rm -f soleur-plugin-seed-test >/dev/null 2>&1 || true
-docker create --name soleur-plugin-seed-test soleur-plugin-seed-test:fixture >/dev/null
+# Kept after the $$-scoping, on a narrower rationale than it originally had. With a FIXED
+# name this cleared a container a crashed prior run had left behind; $$-scoping plus the EXIT
+# trap removes that path. What survives is PID reuse combined with a trap bypass (SIGKILL,
+# power loss) leaving a same-PID container behind — rare, but the failure it prevents is a
+# confusing `docker create` name conflict rather than anything this suite asserts.
+docker rm -f "$CTR" >/dev/null 2>&1 || true
+docker create --name "$CTR" "$IMG" >/dev/null
 find "$TARGET" -mindepth 1 -delete 2>/dev/null || true
-docker cp soleur-plugin-seed-test:/opt/soleur/plugin/. "$TARGET/"
-docker rm soleur-plugin-seed-test >/dev/null
+docker cp "$CTR":/opt/soleur/plugin/. "$TARGET/"
+docker rm "$CTR" >/dev/null
 printf '%s\n' "seeded $(date -u +%Y-%m-%dT%H:%M:%SZ) tag=test-fixture" \
   > "$TARGET/.seed-complete"
 
