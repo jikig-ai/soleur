@@ -664,6 +664,287 @@ PY
   [[ -z "$(_wf UNPINNED)" ]] \
     && pass "every action is SHA-pinned" \
     || fail "unpinned action(s): $(_wf UNPINNED)"
+
+  # ── 13. THE CAPTURE POLL ACTUALLY POLLS (behavioural — this arm EXECUTES the step) ──
+  #
+  # THE 43 ASSERTIONS THAT PRECEDED THIS ARM WERE ALL GREEN AGAINST A POLL THAT COULD NOT
+  # POLL. Measured (production run 30560266736, dry_run=false): the capture step printed
+  # exactly one `--- capture attempt 1/20 ---` and exited 2 FOUR SECONDS after it started.
+  # GitHub invokes a bare `run:` as `bash -e {0}`, and the step's own `set -uo pipefail` does
+  # NOT clear that inherited -e — omitting a flag from `set` cannot unset what the invocation
+  # already applied. With pipefail on, the TRANSIENT rc=2 that this poll EXISTS to retry
+  # killed the step on attempt 1. Everything after the pipeline was dead code on that path:
+  # the PIPESTATUS read, the doppler-auth-vs-boot sentinel, attempts 2..20, the deadline
+  # break, capture_rc, the whole summary block, and `exit "$rc"`. Confirmed downstream — the
+  # upload step evaluated `steps.capture.outputs.capture_rc == '0'` against an EMPTY string.
+  #
+  # A TEXT GUARD CANNOT SEE THIS. Measured: grep counts for `seq 1 N`, `PIPESTATUS` and
+  # `capture_rc` are IDENTICAL (1/1/1) in the fixed body and the broken one. Which is why
+  # this arm executes the REAL extracted body under the shell GitHub really uses, and why
+  # 13b/13c/13e mutate it and require a RED.
+  #
+  # KEYED ON `id: capture`, NOT THE STEP NAME. The name is free text with zero consumers, so
+  # keying on it would make this guard one cosmetic rename away from a spurious red. The id
+  # is load-bearing: the upload step gates on `steps.capture.outputs.capture_rc`, so renaming
+  # it breaks the workflow visibly and independently of this suite.
+  #
+  # THESE ARMS SHARE THE BODY'S HARDCODED /tmp/rung2 and therefore CANNOT RUN CONCURRENTLY
+  # with each other or with a real dispatch on the same runner. Each clears it first.
+  _cap_body="$(mktemp -t gdr2cap.XXXXXXXX)" || exit 2
+  _cap_env="$(mktemp -t gdr2env.XXXXXXXX)" || exit 2
+  python3 - "$WF" "$_cap_body" "$_cap_env" <<'PY'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+j = d["jobs"]["rehearse"]
+step = next((s for s in j["steps"] if s.get("id") == "capture"), None)
+if step is None or not step.get("run"):
+    sys.exit(3)
+open(sys.argv[2], "w").write(step["run"])
+# The env is DERIVED from workflow|job|step scope rather than hardcoded: the seven values the
+# body reads come from three different places (REHEARSAL_DIVERGENCE is workflow-level,
+# REHEARSAL_HOST is step-level, the GITHUB_* are runner-provided), so a single added `env:`
+# reference would otherwise fail the arm under `set -u` pointing at the wrong thing.
+env = {}
+for scope in (d.get("env") or {}, j.get("env") or {}, step.get("env") or {}):
+    env.update(scope)
+with open(sys.argv[3], "w") as fh:
+    for k, v in sorted(env.items()):
+        v = str(v)
+        if "${{" in v:            # a runner-substituted expression -> fixture placeholder
+            v = "fixture-" + k.lower()
+        fh.write("%s='%s'\n" % (k, v.replace("'", "'\\''")))
+PY
+  _cap_extract_rc=$?
+
+  if [[ "$_cap_extract_rc" -ne 0 || ! -s "$_cap_body" ]]; then
+    fail "could not extract the capture step body keyed on 'id: capture'" \
+      "an empty extraction must FAIL, never silently skip — the upload step gates on steps.capture.outputs.capture_rc, so that id is load-bearing"
+  else
+    # Executes the extracted body under `bash -e` (what GitHub actually uses) with `doppler`
+    # and `sleep` stubbed on PATH. EXECUTED, never sourced: `deadline=$(( SECONDS + 16*60 ))`
+    # reads the shell's own SECONDS, and sourcing would leak this suite's elapsed time and
+    # could fire the deadline immediately.
+    # Echoes: "<exit>|<attempt-count>|<stub-invocations>|<outdir>".
+    _run_capture() {
+      local body="$1" mode="$2" outdir rc attempts invocations
+      outdir="$(mktemp -d -t gdr2run.XXXXXXXX)" || return 2
+      mkdir -p "$outdir/bin"
+      {
+        printf '%s\n' '#!/usr/bin/env bash'
+        printf '%s\n' 'n=$(( $(cat "$STUB_COUNT" 2>/dev/null || echo 0) + 1 )); printf "%s" "$n" > "$STUB_COUNT"'
+        printf '%s\n' 'case "$STUB_MODE" in'
+        # TRANSIENT twice, then PASS — so a body that stops early can never reach the PASS.
+        printf '%s\n' '  pass_on_3) if [ "$n" -lt 3 ]; then echo "RUNG2_CAPTURE_VERDICT=2"; exit 2; fi'
+        printf '%s\n' '             echo "RUNG2_CAPTURE_VERDICT=0"; exit 0 ;;'
+        # A wrapper auth failure: rc=1 and NO verdict sentinel, which is exactly how the
+        # step's own comment says doppler reports a bad token.
+        printf '%s\n' '  wrapper_auth) echo "doppler: unable to authenticate"; exit 1 ;;'
+        printf '%s\n' 'esac'
+      } > "$outdir/bin/doppler"
+      printf '%s\n%s\n' '#!/usr/bin/env bash' 'exit 0' > "$outdir/bin/sleep"
+      chmod +x "$outdir/bin/doppler" "$outdir/bin/sleep"
+      : > "$outdir/count"
+      rm -rf /tmp/rung2
+      (
+        cd "$ROOT" || exit 2
+        export PATH="$outdir/bin:$PATH"
+        export STUB_COUNT="$outdir/count" STUB_MODE="$mode"
+        export GITHUB_OUTPUT="$outdir/gh_output" GITHUB_STEP_SUMMARY="$outdir/gh_summary"
+        export GITHUB_SERVER_URL="https://github.com"
+        export GITHUB_REPOSITORY="jikig-ai/soleur"
+        export GITHUB_RUN_ID="30560266736"
+        set -a; . "$_cap_env"; set +a
+        bash -e "$body"
+      ) > "$outdir/stdout" 2>&1
+      rc=$?
+      attempts=$(grep -c -- '--- capture attempt' "$outdir/stdout" || true)
+      invocations=$(cat "$outdir/count" 2>/dev/null || echo 0)
+      printf '%s|%s|%s|%s\n' "$rc" "$attempts" "${invocations:-0}" "$outdir"
+      return 0
+    }
+
+    # `sleep` must genuinely resolve to the stub: the real body sleeps 30 s between attempts,
+    # so an un-stubbed sleep turns arm 13 into a 60-second test that still PASSES and nobody
+    # notices until CI wall-time drifts.
+    _probe_dir="$(mktemp -d -t gdr2probe.XXXXXXXX)" || exit 2
+    mkdir -p "$_probe_dir/bin"
+    printf '%s\n%s\n' '#!/usr/bin/env bash' 'exit 0' > "$_probe_dir/bin/sleep"
+    chmod +x "$_probe_dir/bin/sleep"
+    if [[ "$(PATH="$_probe_dir/bin:$PATH" command -v sleep)" == "$_probe_dir/bin/sleep" ]]; then
+      pass "the sleep stub shadows the real sleep (an un-stubbed sleep makes arm 13 a 60s test that still passes)"
+    else
+      fail "the sleep stub does not shadow the real sleep — arm 13 would really sleep 30s per attempt"
+    fi
+    rm -rf "$_probe_dir"
+
+    # ── Arm 13 — the poll polls, and reaches the terminal PASS on attempt 3. ──────────
+    _r13="$(_run_capture "$_cap_body" pass_on_3)"
+    _rc13="${_r13%%|*}"; _rest13="${_r13#*|}"
+    _att13="${_rest13%%|*}"; _rest13="${_rest13#*|}"
+    _inv13="${_rest13%%|*}"; _out13="${_rest13#*|}"
+
+    if grep -q -- '--- capture attempt 2/20' "$_out13/stdout"; then
+      pass "the capture poll REACHES ATTEMPT 2 (the whole defect: production stopped at 1/20)"
+    else
+      fail "the capture poll never reached attempt 2/20 (ran ${_att13} attempt(s))" \
+        "GitHub runs this step as \`bash -e {0}\`; without an explicit \`set +e\` the TRANSIENT rc=2 this poll exists to retry kills it on attempt 1"
+    fi
+
+    [[ "$_rc13" -eq 0 ]] \
+      && pass "a terminal PASS exits 0 (the poll ran to a real verdict instead of dying on a retryable one)" \
+      || fail "the capture body exited ${_rc13} on a stub that PASSes on attempt 3"
+
+    if grep -q '^capture_rc=0$' "$_out13/gh_output" 2>/dev/null; then
+      pass "capture_rc=0 is written to \$GITHUB_OUTPUT (the upload step's gate reads exactly this)"
+    else
+      fail "capture_rc was not written as 0 to \$GITHUB_OUTPUT" \
+        "in production it was never written at all, so the upload gate compared against an empty string"
+    fi
+
+    if grep -q 'Rung-2 rehearsal: PASS' "$_out13/gh_summary" 2>/dev/null; then
+      pass "the PASS verdict reaches \$GITHUB_STEP_SUMMARY"
+    else
+      fail "no PASS line reached \$GITHUB_STEP_SUMMARY"
+    fi
+
+    # Without this, a future edit that drops `doppler run` entirely leaves the stub unused and
+    # the arm passes for reasons that have nothing to do with the poll.
+    [[ "${_inv13:-0}" -gt 0 ]] \
+      && pass "the doppler stub was actually invoked (${_inv13}x) — the arm is exercising the real call, not an empty loop" \
+      || fail "the doppler stub was never invoked — arm 13 passed without executing the capture call"
+
+    # ── Arm 13b — MUTATION: strip `set +e`. Must collapse to the production failure. ──
+    # Discharges "first prove the check can fail; then care that it didn't".
+    _mut_b="$(mktemp -t gdr2mutb.XXXXXXXX)" || exit 2
+    grep -v '^[[:space:]]*set +e[[:space:]]*$' "$_cap_body" > "$_mut_b"
+    _rb="$(_run_capture "$_mut_b" pass_on_3)"
+    _rcb="${_rb%%|*}"; _restb="${_rb#*|}"; _attb="${_restb%%|*}"; _outb="${_restb#*|}"; _outb="${_outb#*|}"
+    if [[ "$_attb" -eq 1 && "$_rcb" -ne 0 ]]; then
+      pass "MUTATION 13b (set +e stripped): collapses to 1 attempt and exits ${_rcb} — the guard can go RED"
+    else
+      fail "MUTATION 13b did NOT reproduce the bug: ${_attb} attempt(s), exit ${_rcb}" \
+        "a guard that cannot fail is not a guard; this mutation IS the production defect"
+    fi
+    rm -f "$_mut_b"
+
+    # ── Arm 13c — MUTATION: re-arm `set -e` BEFORE the PIPESTATUS read. ──────────────
+    # THE SINGLE MOST DANGEROUS EDIT ANYONE CAN MAKE TO THE FIXED STEP, and it fails silently
+    # toward PASS. `set -e` is a builtin — therefore a pipeline — so bash RESETS PIPESTATUS
+    # after it. Re-arming before the read makes rc always 0: exit 0, one attempt,
+    # capture_rc=0, a green PASS summary, on a host that never booted. Strictly worse than
+    # the bug being fixed, which at least fails loudly.
+    _mut_c="$(mktemp -t gdr2mutc.XXXXXXXX)" || exit 2
+    python3 - "$_cap_body" "$_mut_c" <<'PY'
+import re, sys
+src = open(sys.argv[1]).read()
+# Swap the adjacent `rc=${PIPESTATUS[0]}` / `set -e` pair so the re-arm precedes the read.
+pat = re.compile(r'^([ \t]*)(rc=\$\{PIPESTATUS\[0\]\})[ \t]*\n([ \t]*)(set -e)[ \t]*$', re.M)
+out, n = pat.subn(lambda m: "%s%s\n%s%s" % (m.group(3), m.group(4), m.group(1), m.group(2)), src)
+open(sys.argv[2], "w").write(out)
+sys.exit(0 if n == 1 else 4)
+PY
+    _mut_c_rc=$?
+    if [[ "$_mut_c_rc" -ne 0 ]]; then
+      fail "could not construct mutation 13c (no adjacent 'rc=\${PIPESTATUS[0]}' + 'set -e' pair found)" \
+        "the ordering this arm protects is not present in the extracted body — the fix is missing or was reshaped"
+    else
+      _rcc_all="$(_run_capture "$_mut_c" pass_on_3)"
+      _rcc="${_rcc_all%%|*}"; _restc="${_rcc_all#*|}"; _attc="${_restc%%|*}"; _restc="${_restc#*|}"; _outc="${_restc#*|}"
+      if [[ "$_attc" -eq 1 && "$_rcc" -eq 0 ]] || grep -q 'Rung-2 rehearsal: PASS' "$_outc/gh_summary" 2>/dev/null; then
+        pass "MUTATION 13c (set -e before the read): produces the SILENT FALSE PASS — ${_attc} attempt(s), exit ${_rcc}; the ordering is load-bearing and pinned"
+      else
+        fail "MUTATION 13c did not reproduce the false-PASS shape (${_attc} attempt(s), exit ${_rcc})" \
+          "if this stops reproducing, the ordering guarantee this arm exists to pin has moved — re-derive it before deleting the arm"
+      fi
+    fi
+    rm -f "$_mut_c"
+
+    # ── Arm 13e — a WRAPPER auth failure stops fast instead of burning a paid host. ──
+    # The sentinel correctly detects a doppler auth failure (rc=1, no verdict) and downgrades
+    # it to 2 so it is not mis-blamed on the host — but 2 means "retry", and an auth failure
+    # is not transient. Measured against the patched body without this fast-fail: ALL 20
+    # ATTEMPTS BURNED, ~16 minutes on a paid Hetzner host, reporting the least actionable of
+    # the verdicts. Pre-fix a bad token died in 4 seconds.
+    _re="$(_run_capture "$_cap_body" wrapper_auth)"
+    _rce="${_re%%|*}"; _reste="${_re#*|}"; _atte="${_reste%%|*}"; _reste="${_reste#*|}"; _oute="${_reste#*|}"
+    if [[ "$_atte" -le 2 ]]; then
+      pass "a no-sentinel rc=1 (wrapper auth failure) stops after ${_atte} attempt(s), not 20 — no 16-minute burn on a paid host"
+    else
+      fail "a wrapper auth failure burned ${_atte} attempts" \
+        "retrying cannot fix a bad credential; this spends ~16 minutes on a paid Hetzner host to report the least actionable verdict"
+    fi
+    if grep -q 'WRAPPER FAILURE' "$_oute/gh_summary" 2>/dev/null; then
+      pass "the wrapper failure gets its own summary class, naming the credential rather than the host"
+    else
+      fail "no WRAPPER FAILURE summary class — a bad doppler token reports as TRANSIENT" \
+        "whose own text says 'This is NOT evidence the host booted dark', sending the operator to the one place the answer is not"
+    fi
+
+    rm -rf /tmp/rung2
+  fi
+  rm -f "$_cap_body" "$_cap_env"
+
+  # ── 13d. IN-WORKFLOW ERREXIT POSTURE (text-level, THIS workflow only) ─────────────
+  #
+  # Scoped deliberately. A standalone repo-wide lint was measured over 631 `run:` bodies and
+  # cut: its rule matches exactly ONE body — this bug — and none of the three sibling bugs
+  # this PR fixes. It also CERTIFIES the false-PASS shape (set +e -> pipeline -> set -e ->
+  # read satisfies "contains set +e before the read" while being exactly arm 13c's mutation),
+  # which is why this arm keys on the NEAREST PRECEDING TOGGLE, not on mere presence.
+  _posture="$(python3 - "$WF" <<'PY'
+import re, sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+scanned = violations = 0
+for jn, j in (d.get("jobs") or {}).items():
+    for s in j.get("steps") or []:
+        body = s.get("run")
+        if not body:
+            continue
+        scanned += 1
+        lines = body.splitlines()
+        for i, ln in enumerate(lines):
+            if "PIPESTATUS[" not in ln:
+                continue
+            toggle = None
+            for prev in reversed(lines[:i]):
+                m = re.match(r'^[ \t]*set ([-+]e)[ \t]*$', prev)
+                if m:
+                    toggle = m.group(1)
+                    break
+            if toggle != "+e":
+                violations += 1
+                print("VIOLATION=%s/%s: nearest toggle before a PIPESTATUS read is %r"
+                      % (jn, s.get("id") or s.get("name"), toggle), file=sys.stderr)
+                continue
+            # Nothing may sit between the pipeline and the read.
+            prev_cmd = lines[i - 1].strip() if i else ""
+            if prev_cmd.startswith("set ") or not prev_cmd:
+                violations += 1
+                print("VIOLATION=%s/%s: %r sits between the pipeline and the PIPESTATUS read"
+                      % (jn, s.get("id") or s.get("name"), prev_cmd), file=sys.stderr)
+print("SCANNED=%d VIOLATIONS=%d" % (scanned, violations))
+PY
+)"
+  _scanned="$(printf '%s' "$_posture" | sed -n 's/.*SCANNED=\([0-9]*\).*/\1/p')"
+  _violations="$(printf '%s' "$_posture" | sed -n 's/.*VIOLATIONS=\([0-9]*\).*/\1/p')"
+  # A zero-scan pass is vacuous — it would report clean against a workflow with no steps.
+  [[ "${_scanned:-0}" -gt 0 ]] \
+    && pass "the errexit-posture scan read ${_scanned} run: bodies in this workflow (non-vacuous)" \
+    || fail "the errexit-posture scan read ZERO run: bodies — a vacuous pass"
+  [[ "${_violations:-1}" -eq 0 ]] \
+    && pass "every PIPESTATUS read in this workflow sits under \`set +e\` with nothing between the pipeline and the read" \
+    || fail "${_violations} run: body/bodies read PIPESTATUS under the wrong errexit posture" \
+         "$(printf '%s' "$_posture" | grep VIOLATION= | head -3)"
+
+  # THE COUPLING THAT ACTUALLY FAILED IN PRODUCTION: the upload gates on capture_rc, and
+  # capture_rc is written by the step this suite's arm 13 executes. Retained from the review's
+  # cut of a speculative continue-on-error assertion — this one is measured, not hypothesised.
+  if grep -qE "steps\.capture\.outputs\.capture_rc == '0'" "$WF"; then
+    pass "the evidence upload still gates on steps.capture.outputs.capture_rc == '0'"
+  else
+    fail "the evidence upload no longer gates on steps.capture.outputs.capture_rc == '0'" \
+      "in production that comparison ran against an empty string because the step died before writing it"
+  fi
 else
   fail "python3 absent — the workflow-contract arms did NOT run" \
     "a gate that cannot run must not report success"
@@ -814,18 +1095,19 @@ fi
 # legitimately added arm and train the next person to bump it unread. Counts passes+fails so
 # a genuine failure reports as a failure rather than as an empty suite.
 #
-# RAISED 28 -> 39 WITH THE ARMS THAT MADE IT NECESSARY (#7025 R7). At 28 the slack had grown
+# RAISED 28 -> 39 -> 43 -> 56 WITH THE ARMS THAT MADE IT NECESSARY (#7025 R7; the 43 -> 56
+# step is the behavioural capture-poll block, arms 13/13b/13c/13d/13e). At 28 the slack had grown
 # to exceed the work it was guarding: deleting arms 6, 7, 7b, 7c and 7d — every arm that
 # compares the two roots, i.e. the suite's entire reason for existing — landed on exactly 28
 # and printed `ok anti-vacuity floor: 28 assertions ran`, exit 0. Measured. A floor that does
 # not move with the suite only ever guards the work that predates it, and the deletion it
 # most needs to catch is the one that removes the arms someone just argued for.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 43 ]]; then
+if [[ "$_ran" -lt 56 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 43. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 56. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 43)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 56)\n' "$_ran"
 fi
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"
