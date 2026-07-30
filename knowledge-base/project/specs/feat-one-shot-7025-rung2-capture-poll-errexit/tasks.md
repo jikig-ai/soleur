@@ -29,6 +29,11 @@ Phase order is load-bearing: the contract change (1) ships before its consumer (
       not line number — `cq-cite-content-anchor-not-line-number`).
 - [ ] 1.4 Do NOT touch the `tee`, the deadline, the attempt cap, the sentinel block, the
       three-way summary, or `exit "$rc"`.
+      **SUPERSEDED AT IMPLEMENTATION by task 1.5 on the next line:** the summary is now
+      FIVE-way (PASS / FAIL / WRAPPER FAILURE / UNEXPECTED EXIT / TRANSIENT). Obeying the
+      "do not touch the three-way summary" clause literally would revert the wrapper
+      fast-fail and restore the ~16-minute paid-host burn its guard arm exists to prevent.
+      `exit "$rc"` is unchanged and must stay.
 - [ ] 1.5 **Wrapper-auth fast-fail.** Track consecutive no-sentinel `rc=1` attempts; break
       after 2. Add a fourth summary class
       `### Rung-2 rehearsal: WRAPPER FAILURE (doppler auth/config)` naming the credential as
@@ -90,7 +95,7 @@ existing `if command -v python3` block (outside it they silently skip). Follow t
 - [ ] 3.5 Re-derive **every** touched comment from the guarded code — fixing one site and
       "correcting" the comment only produces a new false statement.
 - [ ] 3.6 File the tracking issue (labels `code-review`, `domain/engineering`). Body carries
-      the measured counts (631 bodies; 56 / 16 / 1), names the ~10 `Terraform plan` steps whose
+      the measured counts (637 bodies; 56 in the audited class, 13 of them reading a numeric rc), names the 9 `Terraform plan` steps whose
       comments assert the opposite of their code, names the deferred repo-wide lint, and
       records the `capture_only` recovery input from DC-4. **Do NOT bulk-flip `-uo` → `-euo`.**
 

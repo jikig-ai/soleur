@@ -304,7 +304,9 @@ jobs:
             # PIPESTATUS after it. Re-arming before the read makes rc always 0 -- a SILENT
             # FALSE PASS on a host that never booted (measured; strictly worse than the bug
             # this replaced, which at least failed loudly). Nothing -- not even `set -e` --
-            # may sit between the pipeline and the read. Pinned by test arm 13c.
+            # may sit between the pipeline and the read. Pinned by the mutation arm in
+            # apps/web-platform/infra/git-data-rung2-rehearsal.test.sh that moves `set -e`
+            # above the read and requires the suite to go RED.
             #
             # `|| true` and `|| rc=$?` are both DISQUALIFIED here: `true` runs as its own
             # pipeline and resets PIPESTATUS (every TRANSIENT would read as PASS), and under
@@ -327,7 +329,7 @@ jobs:
             # not. A sentinel the script prints on its LAST line disambiguates: no sentinel
             # means the script never got to speak.
             if [[ "$rc" -eq 1 ]] && ! grep -q 'RUNG2_CAPTURE_VERDICT=' /tmp/rung2/capture.log 2>/dev/null; then
-              echo "::error::doppler run exited 1 without the capture script producing a verdict — this is an auth/config failure of the wrapper, NOT a boot failure of the rehearsal host."
+              echo "::warning::doppler run exited 1 without the capture script producing a verdict — an auth/config failure of the WRAPPER, not a boot failure of the rehearsal host. Retrying once; a second consecutive one stops the poll."
               rc=2
               # ...but 2 means RETRY, and a bad credential is not transient — retrying cannot
               # change it. Before this fast-fail, restoring the poll turned a 4-second failure
@@ -336,6 +338,11 @@ jobs:
               # Two consecutive wrapper failures is enough: one could be a network blip.
               wrapper_fails=$(( wrapper_fails + 1 ))
               if [[ "$wrapper_fails" -ge 2 ]]; then
+                # The ::error:: lives HERE, on the terminal verdict, and carries the thing to
+                # check. `gh run view --log-failed` does not render step summaries, so an
+                # agent triaging from the CLI sees annotations only -- a remediation that
+                # exists solely in the summary reaches the human and not the automation.
+                echo "::error::doppler run failed twice with no capture verdict — check the DOPPLER_TOKEN secret and its access to project 'soleur', config 'prd_terraform'. This says NOTHING about the rehearsal host; it never got to speak."
                 rc=3
                 break
               fi
@@ -380,9 +387,20 @@ jobs:
             echo "\`doppler run\` exited 1 twice without the capture script ever producing a verdict, so the poll stopped early rather than burning ~16 minutes on a paid host. **This says nothing about the rehearsal host** — it never got to speak." >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "**Next:** check the \`DOPPLER_TOKEN\` secret and its access to \`soleur\`/\`prd_terraform\` — not the host. Then re-dispatch. See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$rc" -gt 3 ]]; then
+            # THE CAPTURE SCRIPT CAN EXIT 64 (its own usage/argument error), and doppler can
+            # exit 126/127. Those are neither transient nor a host verdict, but they used to
+            # fall into the TRANSIENT `else` below — whose text says "NOT evidence the host
+            # booted dark" and sends the operator to the Better Stack anchor. That is the
+            # same confidently-wrong mis-blame the sentinel above exists to prevent, one
+            # class over: the poll did not expire, and the anchor is not the suspect.
+            echo "### Rung-2 rehearsal: UNEXPECTED EXIT (rc=${rc})" >> "$GITHUB_STEP_SUMMARY"
+            echo "The capture wrapper exited \`${rc}\`, which is not one of the three verdicts (0 PASS / 1 FAIL / 2 TRANSIENT) nor the wrapper-failure class. \`64\` is the capture script's own usage error; \`126\`/\`127\` mean \`doppler\` or the script was not executable or not found. **This is a toolchain fault, not a statement about the host.**" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "**Next:** download the \`git-data-rung2-capture-log\` artifact and read the invocation error. See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "### Rung-2 rehearsal: TRANSIENT (no verdict)" >> "$GITHUB_STEP_SUMMARY"
-            echo "The poll expired without a terminal answer. This is NOT evidence the host booted dark — read the capture output above to see whether the log source itself was answering." >> "$GITHUB_STEP_SUMMARY"
+            echo "The poll expired without a terminal answer (last rc=\`${rc}\`). This is NOT evidence the host booted dark — read the capture output above to see whether the log source itself was answering." >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "**Next:** download the \`git-data-rung2-capture-log\` artifact and check whether the Better Stack source-liveness anchor answered. If it did, the host booted but never emitted \`stage:boot_complete\`; if it did not, the query path is the suspect. Re-dispatch either way. **#7025 stays open and the DO-NOT-DISPATCH banner stays up.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -400,20 +418,72 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
+      # REDACT BEFORE UPLOADING. THIS REPO IS PUBLIC, so an Actions artifact is downloadable
+      # by any authenticated GitHub user for its whole retention. `::add-mask::` scrubs the
+      # LOG STREAM, not bytes on disk — `tee` writes the raw stream before Actions sees it —
+      # so a masked run log and an unmasked artifact are the normal outcome, not an edge case.
+      #
+      # Two of the three Better Stack ClickHouse credential elements are reachable in that
+      # stream today, on exactly the failure the upload exists to serve: curl names the host
+      # on a DNS/connect error (`Could not resolve host: <host>`), and `--fail-with-body`
+      # prints ClickHouse's 401 body, which begins with the username. The password is not
+      # reachable (it goes in the Authorization header, never echoed) but it is redacted here
+      # anyway rather than relying on that staying true.
+      #
+      # Literal replacement under python, not `sed`: these values are opaque and may contain
+      # regex or delimiter metacharacters. Runs under `doppler run` because that is the only
+      # scope the values exist in. `|| true` on the whole step is deliberate — a redaction
+      # failure must not mask the capture verdict, and the upload below is gated on the
+      # REDACTED file existing, so a failed scrub yields no artifact rather than a raw one.
+      - name: Redact the capture log before it becomes a public artifact
+        id: redact
+        if: ${{ always() && !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc != '0' }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -s /tmp/rung2/capture.log ]] || { echo "no capture.log to redact (the step died before its first tee)"; exit 0; }
+          doppler run -p soleur -c prd_terraform -- python3 - <<'PY'
+          import os
+          src, dst = "/tmp/rung2/capture.log", "/tmp/rung2/capture.redacted.log"
+          text = open(src, encoding="utf-8", errors="replace").read()
+          for var in ("BETTERSTACK_QUERY_HOST", "BETTERSTACK_QUERY_USERNAME", "BETTERSTACK_QUERY_PASSWORD"):
+              val = os.environ.get(var, "")
+              if len(val) >= 4:                      # a 1-3 char value would carpet the file
+                  text = text.replace(val, "<redacted:%s>" % var)
+          open(dst, "w", encoding="utf-8").write(text)
+          print("redacted capture log written (%d bytes)" % len(text))
+          PY
+
       # THE DIAGNOSTIC, ON THE PATHS THAT NEED IT. The evidence upload above is gated on
       # capture_rc == '0', so capture.log — the one artifact that says WHICH assertion went
-      # false or whether the log source was even answering — was being discarded on exactly
-      # the FAIL/TRANSIENT/WRAPPER paths where diagnosis is the whole job. `if-no-files-found:
-      # ignore` because a step that died before its first `tee` legitimately has no log, and a
-      # red upload on top of a red capture only obscures the real verdict.
+      # false or whether the log source was even answering — was discarded on exactly the
+      # FAIL/TRANSIENT/WRAPPER paths where diagnosis is the whole job.
+      #
+      # `always() &&` IS LOAD-BEARING, and its absence is why the first version of this step
+      # could never run. A step `if:` containing no status-check function has `success()`
+      # implicitly ANDed by GitHub. The capture step ends `exit "$rc"`, so every path where
+      # `capture_rc != '0'` is a path where the capture step FAILED — making
+      # `success() && capture_rc != '0'` a contradiction. The step was skipped on 100% of the
+      # runs it was written for, while the job summary and the runbook both told the operator
+      # to download it. The sibling evidence upload above works only because its `== '0'`
+      # gate coincides with a green capture step.
+      #
+      # `always()` rather than `!cancelled()`: a cancelled run has still usually produced the
+      # log, and that is the run an operator most wants to read. `if-no-files-found: warn`
+      # rather than `ignore` — `warn` does not fail the step, and it is the only thing that
+      # distinguishes "no log because the step died before its first tee" from "no log
+      # because the upload silently did nothing". Retention is 7 days, not the evidence
+      # artifact's 90: a "which assertion went false" diagnostic has no 90-day value, and on
+      # a public repo the retention window is the exposure window.
       - name: Upload the capture log on a non-PASS
-        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc != '0' }}
+        if: ${{ always() && !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc != '0' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: git-data-rung2-capture-log
-          path: /tmp/rung2/capture.log
-          retention-days: 90
-          if-no-files-found: ignore
+          path: /tmp/rung2/capture.redacted.log
+          retention-days: 7
+          if-no-files-found: warn
 
       # ── TEARDOWN ───────────────────────────────────────────────────────────────────
       #

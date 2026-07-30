@@ -36,7 +36,9 @@ its question is unreproducible.
 
 ## Reading the outcome
 
-The capture script is three-state, and the distinction is the point:
+The capture **step** reports five states; the capture **script** is three-state (0/1/2).
+States 3 and >3 are synthesized by the workflow, because they describe failures of the
+*wrapper* that the script has no knowledge of — it never ran. The distinction is the point:
 
 - **PASS (0)** — evidence written, uploaded as an artifact. See **After a PASS** below;
   merging that PR is what releases the birth interlock.
@@ -50,9 +52,15 @@ The capture script is three-state, and the distinction is the point:
   The poll stops here rather than retrying, because a bad credential is not transient and
   retrying it spends ~16 minutes on a paid host to report the least actionable verdict.
 
-On **FAIL**, **TRANSIENT** and **WRAPPER FAILURE** the run also uploads a
-`git-data-rung2-capture-log` artifact — that is the diagnostic; download it before
-re-dispatching.
+- **UNEXPECTED EXIT (>3)** — the wrapper exited a code that is not a verdict at all: `64`
+  is the capture script's own usage error, `126`/`127` mean `doppler` or the script was not
+  found or not executable. A toolchain fault, not a statement about the host.
+
+On every non-PASS the run also uploads a `git-data-rung2-capture-log` artifact — that is the
+diagnostic; download it before re-dispatching. **It is redacted**: the Better Stack host and
+username are replaced with `<redacted:VAR>` placeholders, because this repo is public and an
+Actions artifact is downloadable by any authenticated GitHub user. If the redaction step
+itself fails there is no artifact rather than a raw one.
 
 If the poll expires without a terminal answer, check **Sentry** before concluding anything:
 everything before `doppler run` reaches Sentry only, because the emitter's Better Stack block

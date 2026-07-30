@@ -18,7 +18,7 @@ exists (fail-closed to `cross-domain`); `deploy-docs.yml` initially miscounted a
 - The regression guard executes rather than greps. Fixed and buggy bodies have identical grep counts (1/1/1)
   for `seq 1 N`, `PIPESTATUS`, `capture_rc`, proving a text guard is blind here. Arms 13/13b/13c/13e extract
   the real step body by `id: capture` and run it under `bash -e` with stubs; three mutation arms must go RED.
-- A standalone repo-wide lint was cut (4 of 6 reviewers agreed). Over 631 `run:` bodies the drafted rule
+- A standalone repo-wide lint was cut (4 of 6 reviewers agreed). Over 637 `run:` bodies the drafted rule
   matches 1 — the bug itself — and 0 of the 3 sibling bugs. Scoped to arm 13d instead; recorded as a
   User-Challenge since it trims operator-requested scope.
 - Two items moved inline rather than deferred: the birth-job poll (same defect, would be hit on the very next
@@ -30,7 +30,7 @@ exists (fail-closed to `cross-domain`); `deploy-docs.yml` initially miscounted a
 - Agents: `Explore` x2 (guard-suite mapping, interlock mapping); review panel `dhh-rails-reviewer`,
   `kieran-rails-reviewer`, `code-simplicity-reviewer`, `architecture-strategist`, `spec-flow-analyzer`, `cto`
 - Verification: local reproduction under `bash -e` against the extracted workflow body; `gh issue/pr view`;
-  `shellcheck` probe; python/`yaml.safe_load` sweeps over 631 `run:` bodies; deepen-plan gates 4.5-4.10
+  `shellcheck` probe; python/`yaml.safe_load` sweeps over 637 `run:` bodies; deepen-plan gates 4.5-4.10
 
 ## Upstream context
 Produced while resuming the git-data host birth (ADR-149). Rung 1 (dry run) PASSED — `plan is clean:

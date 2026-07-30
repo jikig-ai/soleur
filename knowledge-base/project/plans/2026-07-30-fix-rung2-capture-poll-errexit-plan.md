@@ -33,7 +33,7 @@ architecture-strategist, spec-flow-analyzer, cto (6-agent panel) + deepen-plan g
    failure would burn **all 20 attempts / ~16 min on a paid host** and report the least
    actionable verdict, where pre-fix it died in 4 s. Phase 1.5 adds a wrapper-auth fast-fail
    and a fourth summary class; arm 13e guards it.
-3. **A standalone repo-wide lint was cut** (4 of 6 reviewers). Measured over **631** `run:`
+3. **A standalone repo-wide lint was cut** (4 of 6 reviewers). Measured over **637** `run:`
    bodies: the drafted rule matches **1** — the bug itself — and **0 of 3** sibling bugs. The
    operator's ask is met instead by arm 13d, scoped to this workflow, in an already-registered
    suite. Recorded as a User-Challenge in `decision-challenges.md`.
@@ -224,7 +224,9 @@ a non-zero inside the poll) was right; only the mechanism was wrong.
             set -e
 ```
 
-3. Change nothing else in the step. The `tee` stays — `capture.log` is load-bearing for the
+3. Change nothing else in the step *as part of the bracket*. (Phases 1.4-1.6 below then add
+   the wrapper fast-fail, the non-PASS diagnostic upload and the per-verdict next actions —
+   this clause scopes the BRACKET, not the phase.) The `tee` stays — `capture.log` is load-bearing for the
    sentinel disambiguation.
 
 > **Scope of the `|| true` ban.** It applies to **any pipeline whose status is later read via
@@ -391,17 +393,17 @@ would produce a *new* false statement. AC requires each **named site** guarded a
    hosts, which is exactly when they reach for `teardown_only=true`. One-line `if:` change
    (`always() && (inputs.teardown_only || !inputs.dry_run)`).
 
-**File a tracking issue** for the remaining `set`-omits-`-e` audit. Measured over **631**
+**File a tracking issue** for the remaining `set`-omits-`-e` audit. Measured over **637**
 `run:` bodies in `.github/workflows/`: the `set`-omits-`-e`-with-no-`set +e` rule matches
 **56**; a `PIPESTATUS`-or-bare-`var=$?` rule matches **16**; the `PIPESTATUS`-only rule
 matches **1**. *(An earlier draft cited "17" — that was a third, narrower rule and the number
 was not comparable. Corrected here so the deferral rests on the real figures.)* Many of the 56
 are safe by construction (`until` conditions are errexit-exempt).
 
-The issue must explicitly name: (a) the **~10 `Terraform plan` steps** across the `apply-*`
+The issue must explicitly name: (a) the **9 `Terraform plan` steps in the audited class** across the `apply-*`
 family — e.g. `apply-github-infra.yml` carries a comment reading *"`-e` is intentionally
 omitted so we can capture terraform plan's exit code in `$rc`"* directly above code where
-`rc=$?` and its `::error::terraform plan failed` branch are both unreachable. Ten copies of a
+`rc=$?` and its `::error::terraform plan failed` branch are both unreachable. Three files carrying a copy of that
 comment asserting the opposite of the code is the strongest available evidence that comments
 are not a working control here; and (b) the standalone repo-wide lint deferred from this PR.
 Labels `code-review` + `domain/engineering` (both verified to exist).
@@ -548,13 +550,13 @@ arms 13b and 13c.
 
 ```yaml
 liveness_signal:
-  what: "The `--- capture attempt N/20` progression and the three-way $GITHUB_STEP_SUMMARY verdict (PASS / FAIL / TRANSIENT)."
+  what: "The `--- capture attempt N/20` progression and the five-way $GITHUB_STEP_SUMMARY verdict (PASS / FAIL / WRAPPER FAILURE / UNEXPECTED EXIT / TRANSIENT)."
   cadence: "Per manual dispatch (workflow_dispatch only)."
   alert_target: "The dispatching operator, via the Actions run page and job summary."
   configured_in: ".github/workflows/git-data-rung2-rehearsal.yml, step 'Capture rung-2 evidence (bounded poll)'."
 
 error_reporting:
-  destination: "Actions run log + $GITHUB_STEP_SUMMARY; ::error:: annotations for the doppler-auth-vs-boot disambiguation; capture.log uploaded as an artifact on non-PASS (added by this PR)."
+  destination: "Actions run log + $GITHUB_STEP_SUMMARY; ::error:: annotations for the doppler-auth-vs-boot disambiguation and the wrapper fast-fail; a REDACTED capture.log uploaded as an artifact on every non-PASS (added by this PR; the upload carries always() because a step if: with no status function is implicitly ANDed with success(), and every non-PASS path is a failed capture step)."
   fail_loud: true
 
 failure_modes:
@@ -636,7 +638,7 @@ recorded rather than silently applied. `ship` renders these into the PR body and
    no `run:` step in this workflow relies on an errexit posture its own `set` line
    contradicts."* It was considered and measured, and four of six reviewers rejected the
    standalone-lint form:
-   - Measured over **631** `run:` bodies: its rule matches **1** — the bug itself. **0 of the
+   - Measured over **637** `run:` bodies: its rule matches **1** — the bug itself. **0 of the
      3** sibling bugs this PR fixes read `PIPESTATUS` at all, so it would have caught none of
      them. A `PIPESTATUS`-or-`var=$?` rule matches 16; the `set`-omits-`-e` rule matches 56.
    - As specified it **certifies the false-PASS shape** (Kieran P0): `set +e` → pipeline →
@@ -654,7 +656,7 @@ recorded rather than silently applied. `ship` renders these into the PR body and
      remediation project, tracked in #7042; correctly out of scope here.)
    **Instead:** arm 13d pins exactly what was asked — *this workflow*, in an already-registered
    suite, ~15 lines, zero waivers — and the repo-wide lint is deferred to the tracking issue,
-   to be shaped *after* the 17-step audit determines the real rule.
+   to be shaped *after* the audit in #7098 determines the real rule.
 2. **Operator-journey scope was added** beyond the stated ask: the `## After a PASS` runbook
    procedure and the non-PASS `capture.log` upload (Phase 1.4/4.1). Rationale: spec-flow found
    the artifact→PR path is otherwise a dead end for a non-technical operator

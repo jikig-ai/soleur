@@ -188,7 +188,16 @@ jobs:
           set -uo pipefail
           # This job runs in the Playwright container as root, so bare apt-get
           # (no sudo, unlike apply-sentry-infra.yml's VM runner) is correct.
-          which jq >/dev/null 2>&1 || { apt-get update && apt-get install -y jq; }
+          # Also warn-and-exit-0, so the step-header claim above holds on EVERY path rather
+          # than only on the four guarded assignments. An apt failure here would otherwise
+          # kill the step and skip Setup Pages / Upload / Deploy — blocking the docs deploy
+          # on a monitor-pause helper, which is the opposite of best-effort.
+          if ! which jq >/dev/null 2>&1; then
+            if ! { apt-get update && apt-get install -y jq; }; then
+              echo "::warning::could not install jq; skipping the monitor pause (deploy continues)."
+              exit 0
+            fi
+          fi
           # Uptime monitors are Sentry "detectors", NOT Crons monitors — they are
           # served by /detectors/, not /organizations/{org}/monitors/ (#4591).
           detectors=$(curl -sS --max-time 20 \
@@ -204,11 +213,19 @@ jobs:
           # on "uptime" is resilient to the exact discriminator string and is
           # fail-safe: no match → empty id → pause skipped with a warning,
           # never a wrong-detector mutation.
-          # `|| id=""` — jq exits non-zero on malformed input, which killed the step
-          # before the not-found warning below could run.
-          id=$(jq -r '[.[] | select(.name == "soleur-ai-www" and ((.type // "") | test("uptime")))] | .[0].id // empty' <<<"$detectors" 2>/dev/null) || id=""
+          # TWO DISTINCT CAUSES, TWO DISTINCT MESSAGES. `curl -sS` above has no `-f`, so a
+          # 401/403/500 returns an ERROR BODY with exit 0 — jq then fails to parse it. Routing
+          # that into the "detector not found" warning would send an operator hunting in
+          # Sentry for a renamed detector when the real fault is an expired
+          # SENTRY_IAC_AUTH_TOKEN, and would make the credential-expiry condition permanently
+          # unsurfaceable on this route. Both paths still exit 0 — a docs deploy must not
+          # block on the monitor — but they say different things.
+          if ! id=$(jq -r '[.[] | select(.name == "soleur-ai-www" and ((.type // "") | test("uptime")))] | .[0].id // empty' <<<"$detectors" 2>/dev/null); then
+            echo "::warning::Sentry detector list was not valid JSON — most likely an API or auth error rather than a missing detector. Check SENTRY_IAC_AUTH_TOKEN. Skipping pause (deploy continues). First 200 bytes: ${detectors:0:200}"
+            exit 0
+          fi
           if [[ -z "$id" ]]; then
-            echo "::warning::soleur-ai-www detector not found; skipping pause (deploy continues)."
+            echo "::warning::soleur-ai-www detector not found in a well-formed response; skipping pause (deploy continues)."
             exit 0
           fi
           # Toggle via a bare partial PUT {"enabled": false} (verified 200).
@@ -235,7 +252,7 @@ jobs:
           # (resume PUT enabled=true is idempotent if the pause never took effect).
           echo "monitor_id=${id}" >> "$GITHUB_OUTPUT"
           if [[ "$status" != "200" ]]; then
-            echo "::warning::Pause PUT returned ${status} (expected 200); monitor may not be paused. Deploy continues; resume still runs."
+            echo "::warning::Pause PUT returned ${status} (expected 200); monitor may not be paused. Deploy continues; resume still runs. (\"000\" is curl's no-response sentinel — the runner got no HTTP response at all: network, DNS or timeout — not a Sentry rejection.)"
           else
             echo "Paused soleur-ai-www detector ${id}."
           fi
@@ -282,7 +299,7 @@ jobs:
           if [[ "$confirmed" -eq 1 ]]; then
             echo "www→apex 301 confirmed."
           else
-            echo "::warning::www did not return 301 within probe cap; resuming monitor anyway."
+            echo "::warning::www did not return 301 within probe cap (last observed code: ${code}); resuming monitor anyway. A last code of \"000\" means every probe failed to get any response — that is a runner/network fault, NOT a www→apex redirect regression; any other code is the redirect actually being wrong."
           fi
           # Resume only if the pause step captured an id (it skips on not-found).
           if [[ -z "${MONITOR_ID}" ]]; then
@@ -304,7 +321,7 @@ jobs:
           # message written for exactly this situation was unreachable in it.
           echo "resume PUT status: ${http}"
           if [[ "$http" != "200" ]]; then
-            echo "::error::Failed to resume soleur-ai-www monitor (HTTP ${http}). It may remain paused until manually re-enabled or a deploy-docs.yml re-run (the next apply-sentry-infra.yml run is NOT a guaranteed self-heal — enabled:null null-handling is unverified)."
+            echo "::error::Failed to resume soleur-ai-www monitor (HTTP ${http}; \"000\" = curl got no response at all, a network/DNS/timeout fault rather than a Sentry rejection). It may remain paused until manually re-enabled or a deploy-docs.yml re-run (the next apply-sentry-infra.yml run is NOT a guaranteed self-heal — enabled:null null-handling is unverified)."
             exit 1
           fi
           echo "Resumed soleur-ai-www detector ${MONITOR_ID}."

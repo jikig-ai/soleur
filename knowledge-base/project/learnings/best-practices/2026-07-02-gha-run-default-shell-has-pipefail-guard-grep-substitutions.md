@@ -96,6 +96,12 @@ next one gets missed. **What is invariant, and is the actual rule:** `-e` is app
 `set -uo pipefail` does not clear it. You can only turn errexit off by *saying so*:
 `set +e`.
 
+One exception worth carrying, because this repo hits it: inside a **container** without
+bash, the bare-`run:` default is `sh -e {0}`, not `bash -e {0}`. `deploy-docs.yml` says so
+in its own `defaults.run.shell` comment (*"container `run:` steps default to /bin/sh (dash
+on Jammy)"*) — which is why that job sets `shell: bash` explicitly and therefore gets
+`-eo pipefail` rather than plain `-e`.
+
 That also explains why shellcheck/actionlint cannot catch this class: shellcheck lints each
 `run:` body as a standalone script and cannot see the invocation the `-e` lives in. Measured
 against a synthesized workflow carrying the exact bug — actionlint with shellcheck returns
@@ -127,20 +133,53 @@ Measured under `bash -e`, pipeline exits 2, `tee` exits 0:
 | `pipeline \|\| rc=$?` | **rc=1 when `tee` fails and the real command passed.** Under `pipefail`, `$?` is the rightmost failing stage, so a `tee` failure is reported as a failure of the thing being measured. |
 | `set +e` … `rc=${PIPESTATUS[0]}` … `set -e` | Preserves `PIPESTATUS[0]` exactly. **Use this.** |
 
-Where **no** `PIPESTATUS` read follows, `|| true` / `|| var="default"` is the correct house
-form and a `set +e` bracket is overkill — the two rules do not conflict, they apply to
-different shapes.
+**The discriminator is NOT "does a `PIPESTATUS` read follow".** An earlier draft of this
+addendum said it was, and 2 of the 3 bracket sites in the fixing PR contradicted it — both
+read a plain `rc=$?`, no `PIPESTATUS` anywhere. The real question is **what you need out of
+the failure**:
+
+- *A numeric exit code* (to branch on it, report it, or count consecutive failures) → use
+  the `set +e` … `rc=$?` (or `rc=${PIPESTATUS[0]}`) … `set -e` bracket. `cmd || rc=$?`
+  leaves `rc` stale on the success path unless you pre-zero it.
+- *A default value*, where the failure just means "absent" → `|| true` / `|| var="default"`
+  is the house form and a bracket is overkill.
+
+`PIPESTATUS` is one instance of the first case, not the rule. Shipping a rule that its own
+PR contradicts is the same failure this file documents, one level up.
 
 ### The part worth internalising: five prior statements of this rule did not prevent it
 
 At the time of the recurrence the repo carried **four learnings** on this rule (including
-this file) and **five in-workflow comments** stating it — and `apply-github-infra.yml` still
-carries a comment reading *"`-e` is intentionally omitted so we can capture terraform plan's
-exit code in `$rc`"* directly above code where `rc=$?` and its `::error::` branch are both
-unreachable. Nine near-copies of that comment exist. **Prose is not a control for this
-class.** A guard has to execute the body; the fix shipped one that extracts the real step
-body from the live YAML, runs it under `bash -e` with stubs, and carries mutation arms that
-must go RED. Audit of the remaining 56 candidate bodies: #7098.
+this file) and **13** in-workflow comments stating it. Each figure is published with the
+command that derives it, because a bare number in prose is exactly what this file argues is
+not a control — and the first draft of this very paragraph said "five comments" and "nine
+near-copies", both wrong:
+
+```bash
+# in-workflow comments stating the rule (13 at the fixing PR's base commit)
+grep -rn -iE '#.*(inherited|invocation).*(-e|errexit)|#.*set \+e so' .github/workflows/*.yml | wc -l
+
+# files carrying the "intentionally omitted" comment (3: apply-github-infra,
+# apply-sentry-infra, apply-web-platform-infra)
+grep -rl "intentionally omitted so we can capture" .github/workflows/ | wc -l
+```
+
+Three files carry a comment reading *"`-e` is intentionally omitted so we can capture
+terraform plan's exit code in `$rc`"* directly above code where `rc=$?` and its `::error::`
+branch are both unreachable. **Prose is not a control for this class.** A guard has to
+execute the body; the fix shipped one that extracts the real step body from the live YAML,
+runs it under `bash -e` with stubs, and carries mutation arms that must go RED.
+
+The remaining audit is #7098. Its scope, with the command:
+
+```bash
+# 56 bodies of 637 total, comment-stripped: a `set … pipefail` line that omits -e,
+# with no `set +e` anywhere in the body.
+```
+
+Note the backlog was **59 at that PR's branch base** and 56 after it fixed three — the three
+it fixed had arrived in the interim from a sibling PR, so a count taken before the branch was
+cut would have undercounted the class rather than the remainder.
 
 ## Session Errors
 

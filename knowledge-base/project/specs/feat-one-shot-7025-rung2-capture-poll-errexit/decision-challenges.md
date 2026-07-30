@@ -19,7 +19,7 @@ relies on an errexit posture its own `set` line contradicts."*
 waivers), scoped to *this workflow* — which is what was literally asked. A standalone
 repo-wide lint script + companion test suite + `test-all.sh` registration was cut.
 
-**Why (measured over 631 `run:` bodies):**
+**Why (measured over 637 `run:` bodies):**
 
 | rule | matches |
 |---|---|
