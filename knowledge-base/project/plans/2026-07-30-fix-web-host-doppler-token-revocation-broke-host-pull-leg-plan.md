@@ -626,6 +626,49 @@ worse than the race it would fix. Tracked as a follow-up; the existing documente
 via `workflow_dispatch`, which re-fires the bridge) remains available and is now named in the R34
 message below.
 
+### Phase 1.3b's sentinel is UNREACHABLE as literally worded. Restructured, same control flow.
+
+1.3b prescribes requiring "genuinely-unset `ZOT_REGISTRY_URL` **and** `DOPPLER_TOKEN` also unset"
+as the positive sentinel for the dark branch. That condition **cannot be evaluated at `:1361`**,
+because `:1357` (`[[ -n "${DOPPLER_TOKEN:-}" ]] || return 0`) has already returned whenever
+`DOPPLER_TOKEN` is empty. The two halves of the conjunction are never both in scope at the same
+point.
+
+Implemented instead: the doppler/token guard **is** the sentinel branch and logs there. Same
+control flow, `return 0` on both arms, no new abort path. The plan text should be corrected rather
+than re-attempted as written.
+
+### R25's "keys on rc" needed sharpening, and a pre-existing test is what forced it.
+
+The first GREEN attempt retried on *every* failed read. That added a sleep to the default deploy
+path and red `T-6665-CAP` (which pins exactly 3 sleeps) — a pre-existing test catching a real
+over-reach, not a fixture that needed updating.
+
+The correct reading: retry only when `rc != 0`, the transient shape a retry can actually fix. An
+`rc = 0` read that returned nothing is **not** transient — the server answered, cleanly, with
+nothing — so retrying it only spends deploy wall-clock to learn the same fact twice. The GHCR
+prelude opts back into the empty-retry explicitly, because #6090's cold boot depends on exactly
+that case. Carry this into the follow-up PR that adds the terminal reason.
+
+### The `"dark, pre-provisioning"` wording will become rare in prod. Checked: nothing keys on it.
+
+With zot provisioned in prd (E4), an empty `ZOT_REGISTRY_URL` read while the token is live is now
+reported as a read failure rather than as pre-provisioning. That is the intended 1.3b behaviour,
+but it changes what a genuinely-dark fleet's journald looks like.
+
+Verified before shipping it: `git grep 'dark, pre-provisioning'` outside this plan, the test suite
+and session-state returns **nothing**, and **no** `.tf` / `.toml` / `.yml` / `.ts` file references
+`ZOT_GATE` at all. No monitor, alert or dashboard keys on either string, so the wording change
+breaks no consumer. Recorded because "no alert keys on this" is exactly the kind of claim that is
+cheap to verify now and expensive to assume later.
+
+### `ZOT_GATE_STATUS` is set but not yet read — deliberately.
+
+It is the "distinct status" the diagnostics slice was asked for, implemented as a global rather
+than a return code: `zot_gate_and_login` is a bare statement under `set -e`, so a non-zero return
+would BE the new abort path this PR must not add. Its intended consumer is the follow-up PR that
+adds the terminal `doppler_read_failed` reason.
+
 ### R34 implemented, and its premise CONFIRMED.
 
 The status endpoint dies with the webhook unit, so before this change a bricked listener produced
