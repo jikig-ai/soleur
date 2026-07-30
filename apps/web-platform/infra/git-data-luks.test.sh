@@ -358,7 +358,18 @@ p_arch_derivation() {
 # UNMODIFIED tree because inngest_server_type already defaults to cpx22.
 p_default_not_cax() {
   local d
-  d="$(awk '/^variable "git_data_server_type"/{i=1} i&&/^[[:space:]]*default[[:space:]]*=/{gsub(/[",]/,"");print $NF;exit} i&&/^}/{exit}' "$1")"
+  # COMMENT-STRIPPED, AND THE VALUE TAKEN FROM THE ASSIGNMENT — never `$NF`. After
+  # `gsub(/[",]/,"")`, `$NF` on `default = "cpx22" # regressed from cax11` is the COMMENT's
+  # last word. Measured: `default = "cax11" # regressed from cpx22` made this predicate
+  # return 1 on a file pinning an unbornable type (#6570: cax had stock in 0 of 3 EU DCs).
+  # `_var_default` in git-data-rung2-rehearsal.test.sh already had this right; this is the
+  # same extraction.
+  d="$(sed 's/[[:space:]]#.*$//' "$1" \
+       | awk '/^variable "git_data_server_type"/{i=1}
+              i&&/^[[:space:]]*default[[:space:]]*=/{
+                sub(/^[^=]*=[[:space:]]*/, ""); gsub(/[",[:space:]]/, ""); print; exit
+              }
+              i&&/^}/{exit}')"
   [ -n "$d" ] || { echo 0; return; }
   case "$d" in cax*) echo 0 ;; *) echo 1 ;; esac
 }
@@ -425,9 +436,18 @@ p_doppler_config_binding() {
   local bound declared
   bound="$(grep -oE '^[[:space:]]*doppler_config_name[[:space:]]*=[[:space:]]*"[^"]+"' "$1" \
            | head -1 | sed 's/.*"\([^"]*\)"$/\1/')"
-  declared="$(awk '/^resource "doppler_config" "git_data_prd"/{i=1}
-                   i&&/^[[:space:]]*name[[:space:]]*=/{gsub(/[",]/,"");print $NF;exit}
-                   i&&/^}/{exit}' "$DIR/git-data-luks.tf")"
+  # Same extraction as A17 and `_var_default`, for the same reason: `$NF` after
+  # `gsub(/[",]/,"")` reads a TRAILING COMMENT's last word. Measured: regressing the config to
+  # `name = "prd" # the boot service token is scoped to prd_git_data` made `declared` read
+  # back as `prd_git_data` and the whole suite reported 101/0 — while the host would run
+  # `doppler run --config prd` under a token scoped to `prd_git_data`, exit 1, never reach
+  # `cryptsetup luksOpen`, and boot dark with sshd up. That is #6982 W0 verbatim.
+  declared="$(sed 's/[[:space:]]#.*$//' "$DIR/git-data-luks.tf" \
+              | awk '/^resource "doppler_config" "git_data_prd"/{i=1}
+                     i&&/^[[:space:]]*name[[:space:]]*=/{
+                       sub(/^[^=]*=[[:space:]]*/, ""); gsub(/[",[:space:]]/, ""); print; exit
+                     }
+                     i&&/^}/{exit}')"
   if [ -n "$bound" ] && [ -n "$declared" ] && [ "$bound" = "$declared" ]; then
     echo 1
   else
