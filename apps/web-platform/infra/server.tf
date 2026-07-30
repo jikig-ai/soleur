@@ -20,11 +20,51 @@ locals {
     { key = "", host = "", project = "" }
   )
 
-  # Rendered ONCE here and injected everywhere it is needed (#7095 R8). The earlier draft
-  # rendered this .tmpl for the webhook path AND hand-wrote "the same" content with a printf in
-  # cloud-init.yml, with nothing comparing the two — the existing webhook-deploy pair already
-  # demonstrates exactly that drift (600 deploy:deploy on one side, 640 root:deploy on the
-  # other). One render, injected, means zero drift and no test needed to police it.
+  # --- local.webhook_doppler_token_env — the full rationale for soleur-doppler-token.tmpl ---
+  #
+  # THE PROSE LIVES HERE, NOT IN THE .tmpl, AND THAT IS DELIBERATE. The rendered file is injected
+  # verbatim into cloud-init `user_data`, which is base64gzip'd against a hard 32,768-byte Hetzner
+  # cap. A comment in the template is therefore not free — the first draft carried ~3.8 KB of
+  # header and cost +4,840 B of real `user_data`, blowing WEB_GZIP_BUDGET by 292 B for a payload
+  # whose functional content is ~200 B. Terraform comments cost nothing. Same move as #6425/#6594.
+  #
+  # WHY THIS FILE EXISTS. web-1's boot-baked Doppler service token in /etc/default/webhook-deploy
+  # was revoked 2026-07-30T11:19:30.614Z. That file is written EXACTLY ONCE at first boot from
+  # var.doppler_token, with no Terraform resource, no replace_triggered_by and no drift detector,
+  # on a host that cannot be replaced (cx33, orderable in 0 of 3 EU DCs) and has no operator SSH
+  # runbook. Measured blast radius: container-restart-monitor +18.17s after the mint,
+  # inngest-heartbeat and cron-egress-resolve +26.14s, zero failures in the preceding 53h.
+  #
+  # ADDITIVE, NEVER A REWRITE. Consumers pick this up by systemd later-wins (an EnvironmentFile=
+  # line placed AFTER the original) or an explicit guarded shell source. webhook-deploy and
+  # inngest-server stay in place: inngest-bootstrap.sh:616-617 fail-closes the host if
+  # DOPPLER_PROJECT goes missing from the latter.
+  #
+  # NO DOPPLER_CONFIG_DIR HERE (#6536) — webhook-deploy carries it, and importing it into units
+  # running as a different user re-opens the ownership-clash surface.
+  #
+  # THE SENTRY PARAMS ARE BAKED ON PURPOSE (R3). ci-deploy.sh hydrates them FROM Doppler with the
+  # very token that is dead, and every emitter is guarded on all three being non-empty, so under a
+  # revoked token the host emits ZERO Sentry events — which is why 341 unit failures over 5.7h
+  # produced no page. They are public DSN components (already in the client bundle), so baking
+  # them adds no exposure class. Precedent: BETTERSTACK_INGEST_URL baked into
+  # /etc/default/web-private-nic-guard for the same reason.
+  #
+  # SHAPE IS ENFORCED IN THREE PLACES, because a malformed render bricks the channel the fix is
+  # delivered over: (1) the validation on var.doppler_token — fails at `terraform plan`, the only
+  # never-attempt layer; (2) infra-config-install.sh rejects a non-KEY=VALUE /etc/default/*
+  # payload (reject "envfile_shape"); (3) systemd-analyze verify before the self-restart. Note
+  # EnvironmentFile=- tolerates ABSENT and UNREADABLE but NOT empty-valued: a bare
+  # `DOPPLER_TOKEN=` wins by later-wins and silently blanks a good credential, which is what (1)
+  # exists to stop.
+  #
+  # RENDERED ONCE AND INJECTED (R8). The earlier draft rendered this .tmpl for the webhook path
+  # AND hand-wrote "the same" content with a printf in cloud-init.yml, with nothing comparing the
+  # two — the existing webhook-deploy pair already demonstrates exactly that drift (600
+  # deploy:deploy on one side, 640 root:deploy on the other). One render, injected, means zero
+  # drift and no test needed to police it. It is also load-bearing for verification:
+  # infra_config_content_assert byte-compares the delivered dest against the sha256 of THIS
+  # string, so an independently-shaped boot copy would be content_mismatch by definition.
   webhook_doppler_token_env = templatefile("${path.module}/soleur-doppler-token.tmpl", {
     doppler_token        = var.doppler_token
     sentry_ingest_domain = local.sentry_dsn_parts.host

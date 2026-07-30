@@ -116,7 +116,31 @@ const HETZNER_CAP = 32_768;
 // still trips it) and stays ~9.1 KB below HETZNER_CAP. When this climbs further, prefer a
 // base64gzip-is-already-applied render audit before raising again (headroom to the hard cap is ample;
 // the sub-cap budget is the re-inlining tripwire, not a capacity limit).
-const WEB_GZIP_BUDGET = 23_700;
+// #7095: on top of the 23,700 baseline, +~690 B for the re-deliverable Doppler credential's
+// irreducibly-inline boot write. The host-side BULK is not in user_data at all — the credential is
+// normally delivered by the infra-config webhook channel (0 user_data). What CANNOT be baked is
+// the FRESH-HOST write: a host born before the first webhook push would otherwise carry units
+// pointing at a credential file that does not exist, and the value spliced here
+// ('${soleur_doppler_token_env_b64}') is a templatefile value evaluated at RENDER time from
+// local.webhook_doppler_token_env — a baked helper cannot carry a per-host TF secret. Same
+// irreducibly-inline class as the ghcr_login baked-cred and the webhook-deploy printf above.
+//
+// TRIMMED FIRST, and this is most of the story: the first draft cost +5,116 B because
+// soleur-doppler-token.tmpl carried a ~3.8 KB prose header, and that file is injected VERBATIM
+// into user_data. Moving the rationale into server.tf (free) and cutting the cloud-init comment
+// block to 3 lines took it to +692 B — an 87% reduction — leaving only the 2 runcmd items, a
+// 3-line comment and the base64 of a ~200 B env file. Prose in a .tmpl that rides in user_data is
+// NOT free; prose in .tf is. Same move as #6425/#6594.
+//
+// This raise also fixed a hole that made the guard blind to exactly this addition: modeledLen had
+// a fail-loud arm for base64encode(file(...)) but none for base64encode(local....), so the new
+// local fell through to DEFAULT_REF_LEN and a 5,352-byte blob was scored as 80 bytes. The budget
+// was not "passing" before — it was not measuring. A class guard now throws on any unmodeled
+// base64encode(local....).
+//
+// Measured render 24,320; 24,500 keeps the KB-scale re-inlining tripwire (a ~1.5 KB blob → ~25.8 KB
+// still trips it) and stays ~8.3 KB below HETZNER_CAP.
+const WEB_GZIP_BUDGET = 24_500;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
@@ -187,6 +211,28 @@ function parseVarMap(mapBody: string): Record<string, string> {
   return out;
 }
 
+// #7095 — render soleur-doppler-token.tmpl the way terraform does, with modeled values. The
+// file is small but NOT negligible: it rides in user_data verbatim, and modeling it as an
+// 80-byte DEFAULT_REF_LEN scored a multi-KB blob as 80 bytes — the exact silent under-count
+// the base64encode(file()) guard above exists to prevent, reached through a different shape.
+function renderDopplerTokenEnv(): string {
+  const tmpl = readFileSync(join(INFRA, "soleur-doppler-token.tmpl"), "utf8");
+  const vals: Record<string, number> = {
+    doppler_token: SECRET_LENGTHS.doppler_token,
+    // Sentry DSN components: host, numeric project id, 32-hex public key. Fixed modeled widths —
+    // their exact bytes are unknown at test time and they total ~60 B, well under the noise floor.
+    sentry_ingest_domain: 40,
+    sentry_project_id: 8,
+    sentry_public_key: 32,
+  };
+  return tmpl.replace(/\$\{([a-zA-Z0-9_]+)\}/g, (_w, n: string) => {
+    if (!(n in vals)) {
+      throw new Error(`soleur-doppler-token.tmpl references unmodeled var \${${n}}`);
+    }
+    return "x".repeat(vals[n]);
+  });
+}
+
 function modeledLen(name: string, expr: string): number {
   const fileMatch = /^base64encode\(file\("\$\{path\.module\}\/([^"]+)"\)\)$/.exec(expr);
   if (fileMatch) return b64len(readFileSync(join(INFRA, fileMatch[1])).byteLength);
@@ -202,6 +248,17 @@ function modeledLen(name: string, expr: string): number {
       JSON.stringify("x".repeat(SECRET_LENGTHS.webhook_deploy_secret)),
     );
     return b64len(Buffer.byteLength(rendered, "utf8"));
+  }
+  if (/^base64encode\(local\.webhook_doppler_token_env\)$/.test(expr)) {
+    return b64len(Buffer.byteLength(renderDopplerTokenEnv(), "utf8"));
+  }
+  // #7095 — CLASS guard, not just an instance. The base64encode(file(...)) shape above has had a
+  // fail-loud arm since #5927; base64encode(local....) did not, so a new local fell through to
+  // DEFAULT_REF_LEN and was scored at 80 bytes regardless of its real size. Any local-backed
+  // blob must be modeled explicitly or fail here — silently under-counting is what masks a
+  // re-inlining regression, and it is worse than a red test because it reads as headroom.
+  if (/base64encode\(local\./.test(expr)) {
+    throw new Error(`unmodeled base64encode(local....) for ${name}: ${expr} — add an explicit branch; DEFAULT_REF_LEN would under-count it`);
   }
   if (/^sha256\(/.test(expr)) return 64;
   if (name in SECRET_LENGTHS) return SECRET_LENGTHS[name];
@@ -243,6 +300,12 @@ function modeledValue(name: string, expr: string): string {
   if (fileMatch) return readFileSync(join(INFRA, fileMatch[1])).toString("base64");
   if (/base64encode\(file\(/.test(expr)) {
     throw new Error(`unrecognized base64encode(file()) for ${name}: ${expr}`);
+  }
+  // #7095 — the ACTUAL base64 of the rendered env file, not an x-run. x-runs compress ~1000:1,
+  // so an x-run stand-in here would make the base64gzip budget non-discriminating for this arg
+  // — the same reason the file() branch above substitutes real bytes.
+  if (/^base64encode\(local\.webhook_doppler_token_env\)$/.test(expr)) {
+    return Buffer.from(renderDopplerTokenEnv(), "utf8").toString("base64");
   }
   return "x".repeat(modeledLen(name, expr));
 }
