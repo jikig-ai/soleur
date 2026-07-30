@@ -60,9 +60,23 @@ JSON_OUT=0
 # newly-added token in the matched family is still picked up. A hardcoded key list is how
 # CF_API_TOKEN_AUDIT was missed during the incident that motivated this script.
 ONLY_MATCH=""
+# --json-file <PATH> writes the machine-readable verdict to PATH while STILL printing the
+# human report to stdout. It exists because the two consumers want different things from
+# ONE scan: the run log needs the prose (which remediation applies, and specifically the
+# "fix the DETECTOR, not the credential" warning for unverifiable rows), while the caller
+# needs counts it can branch on to pick an email body. Running the script twice was the
+# obvious alternative and is wrong — it doubles the Cloudflare probes, which the calling
+# workflow's own comment forbids for exactly that reason.
+JSON_FILE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --json) JSON_OUT=1; shift ;;
+    --json-file)
+      # Same arity guard, and for the same reason, as --only below: a bare `shift 2` with
+      # $#==1 shifts nothing, returns non-zero, and (with no `set -e`) spins the loop
+      # forever with no output.
+      [[ $# -ge 2 && -n "${2:-}" ]] || { echo "ERROR: --json-file requires a non-empty path" >&2; exit 2; }
+      JSON_FILE="$2"; shift 2 ;;
     --only)
       # `shift 2` with $#==1 shifts NOTHING and returns non-zero. There is no `set -e`
       # here, so the failure is ignored and `while [[ $# -gt 0 ]]` spins forever with no
@@ -314,7 +328,10 @@ done
 # detector should not be the one place that still conflates them.
 UNVERIFIABLE_N=${#UNVERIFIABLE_ROWS[@]}
 
-if [[ "$JSON_OUT" -eq 1 ]]; then
+# Extracted so --json (stdout) and --json-file (file, alongside the human report) render
+# from ONE code path. Two renderers would be a second unsynchronized pin on the same
+# schema, which is how the two sides drift apart silently.
+emit_json() {
   # `split("|", 1)` — maxsplit 1, so a diagnostic containing a pipe cannot shift fields.
   # Unverifiable rows get their own key rather than riding in "stale" with the diagnostic
   # sentence mis-rendered into the "config" field.
@@ -337,6 +354,10 @@ print(json.dumps({
     "unverifiable_keys": rows(rest[sep + 1:], "reason"),
 }, indent=2))
 PY
+}
+
+if [[ "$JSON_OUT" -eq 1 ]]; then
+  emit_json
 else
   echo "Cloudflare token drift check — project '$PROJECT'"
   echo "  configs scanned: ${#CONFIGS[@]}   API-token keys: ${#KEYSET[@]}   Access service tokens: ${#ACCESS_BASESET[@]}"
@@ -360,6 +381,14 @@ else
     echo "Fix the DETECTOR, not the credential: add a hostname mapping to"
     echo "access_hostname_for(). Do NOT rotate these tokens on the strength of this run."
   fi
+fi
+
+# --json-file is written AFTER the report above so both consumers see the same scan.
+# A write failure is exit 2, not a warning: the caller branches its operator email on
+# this file, and a missing file would silently take the "could not determine" arm and
+# report a wrong cause — the defect class this whole script exists to prevent.
+if [[ -n "$JSON_FILE" ]]; then
+  emit_json > "$JSON_FILE" || { echo "ERROR: could not write --json-file '$JSON_FILE'" >&2; exit 2; }
 fi
 
 # Either condition is non-zero: a dead token is a live outage waiting, and an unverifiable

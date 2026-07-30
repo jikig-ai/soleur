@@ -354,6 +354,38 @@ else
   fail "the API-token verdict must track Cloudflare's success field in BOTH directions"
 fi
 
+# T14 — --json-file exists so ONE scan can serve two consumers: the run log needs the
+# human report (which remediation applies), the caller needs counts it can branch an
+# operator email on. The caller branches three ways on this file, and the wrong branch
+# sends an operator to rotate a healthy credential — so the file's presence, its
+# parseability, and the coexistence with stdout are all load-bearing.
+echo "T14: --json-file writes the verdict AND still prints the human report"
+JF="$TMP/t14.json"
+run_sut t14 403 "$ACCESS_FIXTURE" prd "--json-file $JF"
+# The human report is what distinguishes --json-file from --json. Without this assertion,
+# an implementation that silently behaved like --json (JSON on stdout, no report) would
+# pass every other check here.
+if grep -qF 'Cloudflare token drift check' "$OUT"; then
+  pass "--json-file still prints the human report to stdout"
+else
+  fail "--json-file must NOT suppress the human report (that is what --json is for)"
+fi
+if [[ -s "$JF" ]] && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d["dead"] >= 1 else 1)' "$JF"; then
+  pass "--json-file wrote a parseable verdict carrying the DEAD count"
+else
+  fail "--json-file must write parseable JSON with the dead count (got: $(head -c 120 "$JF" 2>/dev/null || echo '<no file>'))"
+fi
+# Fail-closed on an unwritable path. A missing verdict file makes the caller take its
+# could-not-determine arm, so a silent write failure would report a wrong cause rather
+# than no cause — the defect class this script exists to prevent.
+echo "T14b: --json-file on an unwritable path exits 2 rather than continuing silently"
+run_sut t14b 200 "$ACCESS_FIXTURE" prd "--json-file $TMP/no-such-dir/x.json"
+if [[ "$RC" == "2" ]]; then
+  pass "unwritable --json-file path exits 2"
+else
+  fail "unwritable --json-file path must exit 2, got rc=$RC"
+fi
+
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Without it, deleting every assertion call yields

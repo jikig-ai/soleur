@@ -493,8 +493,17 @@ jobs:
           DOPPLER_PROJECT: soleur
         run: |
           set -uo pipefail
-          bash scripts/check-cloudflare-token-drift.sh --only REGISTRY_PUSH_ACCESS_TOKEN
-          rc=$?
+          # `|| rc=$?` is LOAD-BEARING, not style. `set -uo pipefail` does NOT clear
+          # `-e`, and Actions runs a `run:` block with no `shell:` key under
+          # `bash --noprofile --norc -eo pipefail {0}` — so a bare invocation of a
+          # script that exits non-zero ABORTS the step at that line, and `rc=$?`
+          # plus the entire `case` below never execute. Measured: the step printed
+          # NOTHING and exited 1, so the only reachable branch was rc=0, and
+          # `continue-on-error: true` then hid the abort. That made this step
+          # silent on exactly the two paths it exists for — the
+          # naming-an-unmeasured-cause defect it was written to prevent.
+          rc=0
+          bash scripts/check-cloudflare-token-drift.sh --only REGISTRY_PUSH_ACCESS_TOKEN || rc=$?
           # THREE-valued, because the script is: 0 live / 1 dead / 2 could-not-check.
           # Collapsing 2 into 1 is what turns "nothing was checked" into a confident
           # accusation — the naming-an-unmeasured-cause defect this PR exists to drain.
@@ -1214,8 +1223,20 @@ jobs:
           COMPONENT_DISPLAY: ${{ inputs.component_display }}
           RELEASE_NOTES_FILE: ${{ steps.tmpfiles.outputs.release_notes }}
           # #6274: surface a degraded zot mirror on the release message. Empty on the
-          # happy path. Read as OUTPUT, never `outcome` (the step always exits 0, so
-          # outcome is always 'success').
+          # happy path. Read as OUTPUT, never `outcome`.
+          #
+          # CORRECTED 2026-07-30: the original reason given here — "the step always
+          # exits 0, so outcome is always 'success'" — is no longer true. `degraded()`
+          # now exits 1 and `continue-on-error` is gone, so on a mirror failure the
+          # step's outcome IS 'failure' and this Slack step does not run at all (it
+          # carries a plain-expression `if:`, hence an implicit `success()`). Reading
+          # the OUTPUT is still correct, for a different reason: the output is set on
+          # every path including the override, whereas `outcome` now conflates
+          # "mirror degraded" with "the whole release is blocked".
+          #
+          # This comment existed in two places; the sibling copy was deleted when the
+          # gate became blocking and this one was missed, leaving a stale reason
+          # attached to a still-correct instruction.
           #
           # #6416: this used to also be empty when the mirror step was SKIPPED because the
           # bridge failed — which meant the one case most worth reporting was the one case
