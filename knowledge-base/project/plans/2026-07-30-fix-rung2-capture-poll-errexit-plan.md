@@ -17,10 +17,48 @@ requires_cpo_signoff: false
 > never `Closes`/`Fixes`. #7025 closes only when a rehearsal actually PASSES and the
 > banner is cleared, which is explicitly out of scope here (see **Scope Limits**).
 
-**Revised after a 6-agent plan review.** Phase 3 (a standalone lint) was **cut** — see
-*Decision Challenges*. Kieran's P0 (a `set -e`/`PIPESTATUS` ordering hazard that produces a
-silent false PASS) and architecture's P1-B (the ADR citation named the wrong poll) are folded
-in below.
+## Enhancement Summary
+
+**Deepened on:** 2026-07-30 · **Reviewers:** dhh, kieran, code-simplicity,
+architecture-strategist, spec-flow-analyzer, cto (6-agent panel) + deepen-plan gate sweep.
+
+### Key improvements
+
+1. **A silent-false-PASS hazard was found and guarded (Kieran P0).** `set -e` is a builtin —
+   therefore a pipeline — so it **resets `PIPESTATUS`**. Re-arming before the read makes `rc`
+   always 0. Measured against the real step body: exit 0, **1 attempt**, `capture_rc=0`, green
+   `PASS` summary — on a host that never booted. Strictly worse than the bug being fixed.
+   Now pinned by the Phase 1 ordering rule, AC2, and mutation arm 13c.
+2. **The fix as first drafted introduced a regression (CTO P1-3, measured).** A `doppler` auth
+   failure would burn **all 20 attempts / ~16 min on a paid host** and report the least
+   actionable verdict, where pre-fix it died in 4 s. Phase 1.5 adds a wrapper-auth fast-fail
+   and a fourth summary class; arm 13e guards it.
+3. **A standalone repo-wide lint was cut** (4 of 6 reviewers). Measured over **631** `run:`
+   bodies: the drafted rule matches **1** — the bug itself — and **0 of 3** sibling bugs. The
+   operator's ask is met instead by arm 13d, scoped to this workflow, in an already-registered
+   suite. Recorded as a User-Challenge in `decision-challenges.md`.
+4. **The ADR citation was wrong (architecture P1-B).** ADR-149 item 4's poll is the
+   **birth-job** poll, not this one — and that poll carries the same defect on the highest-stakes
+   path. It is now **fixed inline** rather than deferred, because the operator hits it on the
+   very next dispatch after rung 2 passes.
+5. **The `|| true` consequence was overstated and is now accurate.** Two downstream layers
+   (`if-no-files-found: error`, and the gate's independent hash re-derivation) mean the harm is
+   a misleading green summary plus a red upload — not a released interlock. Ban retained.
+6. **Operator-journey gaps closed** (spec-flow): the artifact→PR path had no `gh run download`
+   command anywhere in the repo, and `capture.log` was discarded on exactly the FAIL/TRANSIENT
+   paths where diagnosis is needed.
+
+### Verified during the deepen sweep
+
+- All 4 cited AGENTS rule IDs **active**, none retired.
+- All 4 cited issues resolve with matching semantics (#7025 OPEN, #7066 MERGED, #7042 OPEN
+  confirms the actionlint backlog claim, #2965 OPEN).
+- `deploy-docs.yml` unguarded sites **measured as 4** (`id`, `status`, `code`, `http`);
+  `detectors` is already guarded — an earlier read miscounted it as a fifth.
+- Gates 4.6/4.7/4.8/4.9/4.10 pass; 4.5 and 4.55 evaluated and recorded as not-applicable with
+  reasons (see *Skipped Gates*).
+
+---
 
 ## Problem
 
@@ -306,12 +344,27 @@ Measured and load-bearing; each fails toward silence. Per `rf-review-finding-def
    catch** — so the reopen path never runs. Correct fix here is `|| true` / `|| echo ""`,
    **not** a `set +e` bracket (no `PIPESTATUS` read).
 3. **`deploy-docs.yml`** — **four** unguarded sites across two steps, not one (architecture
-   P1-A). The job sets `defaults.run.shell: bash`, so `-e` *and* `pipefail` are both active:
-   the `jq -r` detector read and the pause `PUT` (which can leave the monitor **paused and
-   unrecorded**, so the resume step reads an empty id and exits 0 — the stranded-paged-off
-   outcome), the `curl` probe the plan originally named, and the **resume `PUT`**, whose
-   `::error::… may remain paused` fail-loud is unreachable on transport failure. Guard all
-   four; the house form here is `|| status="000"` since both steps already branch on the code.
+   P1-A). The job sets `defaults.run.shell: bash`, so the body runs as
+   `bash --noprofile --norc -eo pipefail {0}` — `-e` *and* `pipefail` both active (verified).
+
+   **Measured, guard exactly these four** (named by variable, per
+   `cq-cite-content-anchor-not-line-number`):
+
+   | assignment | step | consequence if it fails |
+   |---|---|---|
+   | `id=$(jq -r … <<<"$detectors" …)` | pause | step dies before the monitor id is recorded |
+   | `status=$(curl … -X PUT …)` | pause | monitor **paused and unrecorded** → the resume step reads an empty id and exits 0 "nothing to resume" — the stranded-paged-off outcome |
+   | `code=$(curl … '%{http_code}' …)` | probe | resume block below never runs |
+   | `http=$(curl … -X PUT …)` | **resume** | the `::error::… may remain paused` fail-loud is itself unreachable |
+
+   **`detectors=$(curl …)` is ALREADY guarded — do not touch it.** (Verified by balancing
+   parens across the multi-line substitutions and checking each for a `||` guard; an earlier
+   read of this plan miscounted it as a fifth site.)
+
+   House form here is `|| status="000"` — both steps already branch on the code — not a
+   `set +e` bracket. Both steps' comments currently assert best-effort semantics
+   (*"a transient Sentry API blip must NEVER block a docs deploy"*, *"the resume runs
+   regardless"*) that errexit falsifies; re-derive both.
 
 **Comment correctness (architecture P1-A).** Fixing one site and "correcting the comment"
 would produce a *new* false statement. AC requires each **named site** guarded and the comment
@@ -462,10 +515,26 @@ each attempt spends a real Hetzner host for ~4 seconds of useful work.
 reduces: a rehearsal that dies at attempt 1 still provisions and tears down a paid host.
 
 **Brand-survival threshold:** `none` — no user-facing surface, no regulated data, no persistent
-store. *Reason despite the diff touching `.github/workflows/`: the changed rehearsal workflow
-is `workflow_dispatch`-only behind an approving environment, creates only prefix-scoped
-throwaway resources in a separate Terraform root, and its teardown is verified independently
-against the Hetzner API.*
+store.
+
+- `threshold: none, reason: the diff changes only shell-flag posture inside existing `run:`
+  blocks — it adds no resource, no secret, no route, and no data path, so the three
+  sensitive-path files it touches (`deploy-docs.yml`, `apply-web-platform-infra.yml`,
+  `apps/web-platform/infra/git-data-rung2-rehearsal.test.sh`) gain guards rather than
+  capabilities.`
+
+Sensitive-path scope-out detail, per file:
+
+- **`git-data-rung2-rehearsal.yml`** — `workflow_dispatch`-only behind an approving
+  environment; creates only prefix-scoped throwaway resources in a separate Terraform root;
+  teardown verified independently against the Hetzner API.
+- **`apply-web-platform-infra.yml`** — the edit is confined to a `run:` body in the
+  birth job's boot-signal poll. **No Terraform resource, `-target=` list, or destroy-guard
+  input changes**, so the merge-triggered apply's plan is unaffected.
+- **`deploy-docs.yml`** — the only `push: main` file in the diff. The edit adds failure
+  guards to two Sentry-monitor steps; it changes no deploy step and no Pages output. Net
+  effect is *fewer* aborted deploys, not more.
+- **`git-data-rung2-rehearsal.test.sh`** — test-only; adds assertions.
 
 **The genuine hazard is inside this plan**, which is why the ordering rule and the `|| true`
 ban carry measurements: a fix that let `PIPESTATUS` read 0 on a TRANSIENT would print a green
@@ -518,6 +587,21 @@ actor↔surface access relationship. A shell-flag fix inside an existing step mo
 and no edge.
 
 ## Skipped Gates
+
+- **Network-Outage Deep-Dive (deepen-plan 4.5) — evaluated, not applicable.** The keyword scan
+  fires on `unreachable` (×5) and `firewall` (×1), but both are false positives: `unreachable`
+  is used throughout in the **code-reachability** sense (*"`rc=0` is unreachable on attempt 1"*,
+  *"the `::error::` branch is unreachable"*), and the single `firewall` hit is the IaC line
+  below stating the plan introduces **no** firewall rule. There is no connectivity symptom
+  here — the root cause was measured and reproduced locally, not inferred from a failed
+  connection — and the rehearsal Terraform root contains no `provisioner "file"`,
+  `provisioner "remote-exec"`, or `connection { type = "ssh" }` block (verified), so the
+  resource-shape trigger does not fire either. No `hr-ssh-diagnosis-verify-firewall`
+  telemetry is emitted: recording this as an application of that rule would misreport a
+  keyword collision as a real SSH triage.
+- **Downtime & Cutover (deepen-plan 4.55)** — no reboot/replace class (no Terraform resource
+  changes at all), no database-lock class (no migrations), no deploy/router class. The
+  `deploy-docs.yml` change makes deploys *less* likely to abort, not more.
 
 - **Encryption Posture** — no `.tf`, no `supabase/migrations/*.sql`, no `cloud-init*.yml`, no
   `docker-compose*.yml`; no persistent store, no new cross-component connection.
