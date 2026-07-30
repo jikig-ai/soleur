@@ -380,6 +380,14 @@ else
   pass "carved-out fixture value quiet at its own path"
 fi
 
+# NOT covered by these rows, deliberately and with the measurement recorded at the entry in
+# .gitleaks.toml: the DELIMITER dimension. `FIX_SECRET="<fixture>.<other>"` at the exempt
+# path is still silenced, because the rule's secret class is `[A-Za-z0-9_\-]` so the capture
+# ends at the `.` and the anchored value matches exactly. A must-FIRE row for it was written
+# and then removed — not because the case is uninteresting, but because the only fix
+# (regexTarget = "line") no-ops in `gitleaks git` diff mode and would disable the carve-out
+# in the exact scan CI runs on a PR. Pinning a gap as if it were closed is worse than
+# recording it; the structural fix is to stop needing the carve-out at all.
 for row in \
   "different-value-same-path|${DRIFT_PATH}|${OTHER_VAL}" \
   "same-value-sibling-path|scripts/check-some-other-thing.test.sh|${DRIFT_VAL}" \
@@ -529,12 +537,19 @@ if [[ "$gak_regexes_count" == "1" && "$gak_regexes_runs" == "2" ]]; then
 else
   fail "expected 1 regexes line holding 1 entry in the generic-api-key rule; got lines=${gak_regexes_count} quote_runs=${gak_regexes_runs} (2 == one entry)"
 fi
-# Allowlist `regexes` match the SECRET. Unanchored, this value as a PREFIX of a
-# longer real credential would silence it — the same defect class as #6723.
+# Allowlist `regexes` match the captured SECRET. Unanchored, this value as a prefix of a
+# longer CAPTURED TOKEN would silence it.
+#
+# Note the measured LIMIT of this anchor, spelled out at the entry in .gitleaks.toml: it
+# bounds the captured token, not the credential on the line, so material appended after a
+# non-[A-Za-z0-9_-] delimiter is still silenced. That residual is documented rather than
+# guarded because the only mechanism that closes it — regexTarget = "line" — no-ops in
+# `gitleaks git` diff mode (Line is null there), which is the mode CI's BASE..HEAD range
+# scan runs, so adopting it would disable the carve-out entirely and redden the scan.
 if grep -qE "^  regexes = \['''\^[a-f0-9]{64}\\\$'''\]$" <<<"$gak_regexes_line"; then
   pass "carve-out regex entry is a fully-anchored ^<64 hex>\$ literal"
 else
-  fail "carve-out regex entry must be a fully-anchored '^<64 hex>\$' literal — unanchored or widened, it silences any credential containing the fixture value (#6723 class)"
+  fail "carve-out regex entry must be a fully-anchored '^<64 hex>\$' literal — unanchored or widened, it silences any credential carrying the fixture value as a captured-token prefix (#6723 class)"
 fi
 
 echo ""

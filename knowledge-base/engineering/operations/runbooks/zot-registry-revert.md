@@ -39,8 +39,17 @@ private-GHCR path — which, per the banner above, is now a path that fails.
 **Historical note (what this paragraph used to say).** It described revert as a safe
 Doppler flag flip because "GHCR remains dual-pushed + break-glass through the entire soak
 (the interim classic PAT stays live until Phase 5.5)". Both halves have since changed:
-Phase 5.5 happened, and the PAT was revoked. The *dual-push* is still live, so GHCR still
-receives every image — but receiving is not serving, and nothing can read them back.
+**the PAT was revoked OUT-OF-BAND — Phase 5.5 has NOT run.** The *dual-push* is still live,
+so GHCR still receives every image — but receiving is not serving, and nothing can read
+them back.
+
+**Corrected 2026-07-30.** This paragraph previously said "Phase 5.5 happened". It did not,
+and saying so told a future reader the retirement completed and its guards discharged.
+ADR-096 at HEAD still says the cutover has not happened, that the soak "remains necessary
+but not sufficient to authorize 5.3–5.5", and that the ADR stays *Adopting*; #6122 and
+#6500 are both still OPEN, and the `zot-soak-6122` follow-through explicitly refuses to
+exit 0 while #6500 is open. The credential was lost, not retired — which is worse, because
+nothing that gates the retirement was satisfied.
 
 ## What to do instead when zot is unreachable
 
@@ -68,13 +77,25 @@ route around it:
 3. **Is the zot host itself healthy?** Disk-full is the recurring cause — see
    `SOLEUR_ZOT_DISK` / the Better Stack `registry_disk_prd` source.
 4. **If an image is missing from zot but present in GHCR**, backfill it rather than
-   reverting. This works because it pushes *to* zot with the CI credential, and does not
-   depend on GHCR being readable by hosts:
+   reverting. This does not depend on GHCR being readable **by the production hosts** —
+   but it DOES need GHCR readable by whoever runs `crane`, because GHCR is the copy's
+   *source*. The revoked `GHCR_READ_TOKEN` cannot do this. Run it from a context that
+   already holds a working GHCR read credential — in practice a CI job, whose
+   `${{ github.token }}` can read the org's own packages — or re-run the release, which
+   performs the same copy as part of the mirror step.
+
+   Bring up the bridge first, on the port the probe section above uses. `127.0.0.1:5000`
+   is the port the CI action binds inside its own runner; a local bridge is `15000`:
 
    ```bash
-   crane copy ghcr.io/jikig-ai/soleur-web-platform:vX.Y.Z 127.0.0.1:5000/jikig-ai/soleur-web-platform:vX.Y.Z
-   cosign sign --yes 127.0.0.1:5000/jikig-ai/soleur-web-platform@sha256:<digest>
+   cloudflared access tcp --hostname registry.soleur.ai --url 127.0.0.1:15000 &
+   crane copy ghcr.io/jikig-ai/soleur-web-platform:vX.Y.Z 127.0.0.1:15000/jikig-ai/soleur-web-platform:vX.Y.Z
+   cosign sign --yes 127.0.0.1:15000/jikig-ai/soleur-web-platform@sha256:<digest>
    ```
+
+   (Corrected 2026-07-30: this block previously claimed independence from GHCR
+   readability while sourcing from GHCR, and used `:5000` two paragraphs after the probe
+   section established `:15000` for a local bridge.)
 
    The `cosign sign` is not optional: a bare `crane copy` does not write the signature
    referrer, and the host hard-fails verification on an unsigned image.

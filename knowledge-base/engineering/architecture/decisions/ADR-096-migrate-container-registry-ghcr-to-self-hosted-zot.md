@@ -47,8 +47,22 @@ no crane and no zot login, and would have reported "CI regression, not a registr
 reversible by the next reader who disagrees. ADR-088 arm-b established that a GitHub App
 installation token can `docker login` to GHCR but is **DENIED** `docker pull` of a private
 repo-linked package. There is consequently **no zero-touch GHCR pull credential that can
-exist** — only a personal one (a classic PAT tied to a human account), which is what was
-just revoked and is not an acceptable production dependency.
+exist** — only a **user-account** PAT, which is what was just revoked and is not an
+acceptable production dependency.
+
+**Corrected 2026-07-30:** this clause originally said "a classic PAT tied to a *human*
+account". That is wrong on the repo's own facts, and the error mattered because it
+inflated the claim: `variables.tf` describes `GHCR_READ_TOKEN` as a *fine-grained*
+read:packages PAT **on a machine account**, and this PR's own ADR-088 edit calls it the
+"machine-account PAT". So the revoked credential was already non-personal in the
+machine-vs-human sense. What is actually structural is narrower: no GHCR pull credential
+can be minted **without a browser** — a fine-grained PAT has no creation API, and the App
+installation token is DENIED the pull (ADR-088 arm-b). Read (d)(1) below against that
+narrower claim: "a non-personal credential works" was already satisfied, so the open bar
+is zero-touch *minting*, not non-personal *ownership*. (ADR-088 is itself internally
+inconsistent on classic-vs-fine-grained — line 22 says classic, line 58 says
+fine-grained; `variables.tf` is the provisioning source of truth and says fine-grained.
+Not resolved here, because the revoked token can no longer be inspected.)
 
 **(d) Relaxation condition (testable, not a matter of taste).** Revert the mirror to
 non-blocking when **either** holds, verified by probe rather than by assertion:
@@ -86,10 +100,20 @@ not claim more than the mechanism supports.
 
 **(g) This is a mitigation, not a resolution — open architectural debt.** Fail-closed makes
 a single-pull-path architecture *safe*, not *redundant*. The debt is: **production has one
-registry and no fallback.** Restoration paths are a working non-personal GHCR pull
-credential or a second mirror (see (d)); tracked with #6031 / #6023. Stated explicitly so
-a future reader inherits "one registry, no fallback" as a **constraint we are living
-under**, not as a decision we made and endorsed.
+registry and no fallback.** Restoration paths are a zero-touch-mintable GHCR pull
+credential or a second mirror (see (d)).
+
+**This debt has NO dedicated tracker (corrected 2026-07-30).** This clause originally said
+"tracked with #6031 / #6023". Both were **CLOSED as NOT_PLANNED on 2026-07-06** — and
+#6023 ("WARN→ENFORCE flip for cosign image-verify") never covered a pull credential at
+all. So the sentence recorded untracked debt as tracked, which is the precise failure
+clause (g) exists to prevent: a future reader would have followed two closed links and
+concluded the debt was owned. The live umbrella is **#6122** (the migration epic), which
+does not enumerate either restoration path as a deliverable. Treat "one registry, no
+fallback" as an **unowned constraint** until something is filed for it.
+
+Stated explicitly so a future reader inherits "one registry, no fallback" as a
+**constraint we are living under**, not as a decision we made and endorsed.
 
 **(h) Scope.** This amendment governs **web-platform's** mirror only. The inngest image's
 mirror stays non-blocking, and `cloud-init-inngest.yml` hard-pins a `ghcr.io` ref with no
@@ -158,7 +182,11 @@ managed registry. Then:
    `trusted_root.json`, same GitHub-Actions-OIDC identity regexp. Registry-agnostic (Phase-0
    proved a read-only user fetches a zot-stored `.sig` and gc does not reap it).
 4. **Cutover (Phase 5):** dual-push → validate zot pull E2E → flip (dark) → soak → retire GHCR
-   push + egress + the interim PAT. GHCR stays break-glass warm through the entire soak.
+   push + egress + the interim PAT. ~~GHCR stays break-glass warm through the entire soak.~~
+   **FALSE as of 2026-07-30:** the PAT was revoked out-of-band, mid-soak, before the Phase-5
+   retirement step that was supposed to revoke it deliberately. GHCR has not been break-glass
+   warm since. The two §Decision bullets above ((2) Pull and this one) are retained as the
+   ORIGINAL design record — they describe what was designed, not what is live.
 
 ### Registry-choice alternatives (7)
 
@@ -235,9 +263,18 @@ host. Read the amendment before relying on any bullet below:
     annotation is now `::error::`, not `::warning::`, and the Slack ⚠️ line is reachable
     ONLY on an operator override — the Slack step carries an implicit `success()`, so on a
     blocked release it does not run at all. For `build-inngest-bootstrap-image.yml` the
-    original text still holds, since clause (h) scopes that workflow out. The rest of this
-    bullet (the fallback-rate alarm and its threshold history) is unaffected and remains
-    current. Original wording, retained for the alarm detail:
+    original text still holds, since clause (h) scopes that workflow out.
+    **The blanket "the rest of this bullet is unaffected and remains current" sentence that
+    stood here has been REMOVED (2026-07-30, same-day correction).** It recertified ~110
+    lines as current on the strength of having checked two of them — which is the orphaned-
+    tail defect this very paragraph warns about, committed one sentence later. At least
+    four items below it are now false or stale and are marked individually where they sit:
+    the §5.3 revoke-then-fresh-boot conditional (its antecedent is ALREADY true — see the
+    marker at that line), the "expected page" via `app_ghcr_served` (that emit is now
+    unreachable, so the page cannot fire), the `ci-deploy.sh` line citations (rotted; the
+    real emit sites are name-anchored, per this ADR's own rule 15 lines further on), and
+    "bypass the atomic GHCR fallback" (there is no longer a fallback to bypass).
+    Original wording, retained for the alarm detail:
     A persistent miss is loud via a CI-level
     degraded signal: `mirror_status=degraded` → `::warning::` + step summary (both workflows) + a
     ⚠️ line on the Slack release message (`reusable-release.yml`; #6278 added the same ⚠️ to
@@ -407,7 +444,12 @@ list + the terraform-target-parity SSH set (condition #1 the other way).
   (`zot_oom_kills`, survives the 4/min point-sampling race) + `exit_code=137` + the journald
   `oom_kills_5m` backstop — not the page-cache-confounded host `mem_used` nor a point-sampled anon
   gauge. Applied via the guarded `registry-host-replace` dispatch (server_type is `ForceNew`; the
-  60 GB store volume is preserved + re-attached). The GHCR atomic fallback masks the brief replace outage.
+  60 GB store volume is preserved + re-attached). ~~The GHCR atomic fallback masks the brief replace outage.~~
+  **RETRACTED 2026-07-30 — the replace outage is now USER-VISIBLE.** There is no GHCR fallback
+  to mask it: the read PAT is revoked (401) and the minter is disabled (403 DENIED). Any pull
+  during the replace window now fails outright. The store volume is still preserved, so this is
+  an availability cost for the duration, not data loss — but it is no longer masked, and it must
+  not be scheduled as though it were invisible.
 
 ### Credential isolation (amendment 2026-07-07, #6122)
 
@@ -597,8 +639,15 @@ to the isolated `soleur-registry/prd` Doppler config and read at boot via the ex
 token (no new token). The store mounts from `/dev/mapper/registry` at `/var/lib/zot`; a boot-time
 oneshot (`registry-luks-open.service`) reopens the mapper after a reboot (the host self-`reboot`s via
 the private-NIC guard). The ledger row flips `plaintext-exception → luks`. This is **defense-in-depth
-on a disposable mirror** — the store holds only OCI blobs + cosign signatures (our own images),
-re-fills from GHCR, and carries no user/repo data.
+on a disposable mirror** — the store holds only OCI blobs + cosign signatures (our own images)
+and carries no user/repo data. ~~re-fills from GHCR~~
+
+**THE "DISPOSABLE" PREMISE NO LONGER HOLDS (2026-07-30).** The store's disposability rested
+entirely on "re-fills from GHCR". GHCR is no longer readable, so an emptied store re-fills only
+from a **fresh CI dual-push**, and until one lands there is NO registry any host can pull from.
+The blobs are still reproducible, which is why this is a recoverability property and not a
+data-loss one — but "disposable" invited treating the destroy as free, and it is not. Read every
+recut/replace step below as taking production's only pull path offline until CI re-pushes.
 
 <!-- lint-infra-ignore start -->
 <!-- Deferred-orchestrator prose: this describes a SANCTIONED, gated operator recut that runs OUTSIDE
@@ -608,7 +657,9 @@ re-fills from GHCR, and carries no user/repo data.
 
 **Recut vehicle (the operator step, OUTSIDE the landing PR).** Encrypting the *live* volume is a
 destroy+recreate: a scoped **`terraform apply -replace` of the volume + its attachment + the host,
-all three together** (a fresh raw volume ⇒ cloud-init luksFormats it ⇒ zot re-fills from GHCR).
+all three together** (a fresh raw volume ⇒ cloud-init luksFormats it ⇒ zot re-fills ~~from GHCR~~
+**from the next CI dual-push — NOT from GHCR, which is no longer readable. Between the recut and
+that push there is no registry production can pull from.**).
 
 **SHIPPED (amendment 2026-07-25).** The vehicle is now the guarded, typed-confirm
 `registry-luks-recut` `workflow_dispatch` in `apply-web-platform-infra.yml`, mirroring

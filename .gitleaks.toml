@@ -421,9 +421,40 @@ tags = ["key", "API", "generic"]
   # Both anchors are load-bearing, on both entries. gitleaks matches `paths` as
   # a SEARCH against the scan-root-relative path, so unanchored, any parent
   # directory (`evil/scripts/check-cloudflare-token-drift.test.sh`) launders a
-  # real key; `regexes` match the SECRET, so unanchored there, this value as a
-  # PREFIX of a longer real credential would silence it. Both directions are
-  # pinned by plugins/soleur/test/gitleaks-rules.test.sh T11.
+  # real key.
+  #
+  # KNOWN RESIDUAL GAP, measured 2026-07-30 — state it rather than imply it away.
+  # The `$` on the value entry does NOT bound "the credential on the line"; it
+  # bounds THE TOKEN GITLEAKS CAPTURED. This rule's secret class is
+  # `[A-Za-z0-9_\-]`, so the capture ends at the first character outside it, and
+  # `FIX_SECRET="<fixture>.<real-credential>"` is reported with Secret == the
+  # fixture exactly — the anchored regex matches, and the material after the `.`
+  # gets no finding of its own. Reproduced on 8.24.2 for
+  # `. : / + = @ ~ % ! , ; | ( # *`, space and `"`. Same string-vs-credential
+  # divergence as #6706/#6723; the earlier wording here asserted the opposite.
+  #
+  # `regexTarget = "line"` DOES close it — and was rejected after measurement,
+  # because it closes it only for `gitleaks dir`. In `gitleaks git` (the diff
+  # mode CI's PR job uses for the BASE..HEAD range scan) the `Line` field is
+  # null, so a line-targeted allowlist never matches, the carve-out stops
+  # applying entirely, and the range scan reddens. A guard that works in one scan
+  # mode and silently no-ops in the other is worse than the gap it closes.
+  #
+  # Residual risk, honestly: reaching this needs someone to write real credential
+  # material glued directly onto this exact invented literal inside this one
+  # file. It is contrived, not impossible, and it is NOT mitigated in depth here
+  # — GitHub push protection and `lint-fixture-content` scan independently, but
+  # neither is looking for this shape. The structural fix is to stop needing the
+  # carve-out at all (remove the contiguous literal from the file, which forces a
+  # branch history rewrite because the range scan reads the historical blob);
+  # that is deliberately not done here.
+  #
+  # Pinned by plugins/soleur/test/gitleaks-rules.test.sh — T11 covers the path,
+  # value and laundered-parent directions behaviourally; T11b pins the arity and
+  # both anchors as config text. The regex-anchor direction has NO behavioural
+  # row (T11's rows do not vary value length), so T11b is the only guard there
+  # and it is a SHAPE pin, not a behaviour pin. Said plainly because an earlier
+  # version of this comment claimed "both directions are pinned by T11".
   [[rules.allowlists]]
   description = "Synthesized Cloudflare Access service-token secret in scripts/check-cloudflare-token-drift.test.sh — scoped to that value AND that path"
   condition = "AND"

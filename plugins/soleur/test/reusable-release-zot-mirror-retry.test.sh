@@ -1,17 +1,28 @@
 #!/usr/bin/env bash
-# Verifies the non-blocking + bounded-retry + degraded-signal behavior of the
-# "Mirror image GHCR→zot" step in .github/workflows/reusable-release.yml (#6274).
+# Verifies the RELEASE-BLOCKING + bounded-retry + degraded-signal behavior of the
+# "Mirror image GHCR→zot" step in .github/workflows/reusable-release.yml
+# (#6274 originally; rewritten by #7071).
 #
-# Background: the zot mirror is a SECONDARY/shadow registry copy during the
-# ADR-096 soak (GHCR stays primary + break-glass; the pull side does an atomic
-# GHCR fallback on any zot miss). A single `connection reset by peer` mid
-# blob-upload over the multi-hop CF-tunnel bridge was failing the whole
-# `release / release` job even though the deploy already succeeded. The fix
-# makes the mirror step non-release-blocking: `continue-on-error: true` (belt) +
-# an inner `set -uo pipefail` shell whose every failure path exits 0
-# (suspenders), wraps the network ops in a bounded `retry` (self-heal transient
-# resets), and emits a `mirror_status` output + `::warning::` + step summary +
-# Slack line so a persistent miss is loud, never silently swallowed.
+# HEADER CORRECTED 2026-07-30 (#7071). Everything below described the pre-#7071
+# design and was left untouched while the body of this file was rewritten around
+# it — the diff started ~80 lines down, so the header was never opened. It
+# asserted four things that are now false: that the mirror is a SECONDARY/shadow
+# copy, that GHCR stays primary + break-glass with an atomic pull-side fallback,
+# that the step is non-blocking via `continue-on-error` plus an inner shell whose
+# every failure path exits 0, and that a persistent miss surfaces as
+# `::warning::`. See the comment block at the `degraded()` assertions below for
+# what replaced each.
+#
+# Current design: GHCR is DEAD as a read path (PAT revoked -> 401, minter
+# disabled -> 403 DENIED), so zot is the SOLE registry production can pull from
+# and a release that does not land in zot must not publish. `continue-on-error`
+# is gone, `degraded()` exits non-zero (except under an explicit dispatch
+# override, and never for a digest MISMATCH), a positive post-copy `crane digest`
+# assertion proves the manifest is present AT THE EXPECTED DIGEST before
+# `mirror_status=ok`, and a persistent miss is `::error::` + a blocked release.
+# The bounded `retry` around the network ops survives unchanged — it self-heals
+# the transient `connection reset by peer` mid blob-upload over the multi-hop
+# CF-tunnel bridge that motivated the original change.
 #
 # This test removes crane/cosign/curl/the network from the assertion path by
 # executing the REAL mirror `run:` block (extracted verbatim from the workflow)
