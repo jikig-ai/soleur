@@ -593,10 +593,18 @@ jobs:
       # budget. A cold-pull stall must fail naming THIS step rather than let the job ceiling
       # cancel at whatever unrelated step the clock reached.
       #
-      # The multiple IS statable, from CI rather than from the warm local cache: API-measured
-      # across 7 runs on this branch this step costs 0-4s. 60s is therefore ~15-30x, which is
-      # more generous in ratio terms than the ci-deploy.sh tests ceiling above (3min against an
+      # The multiple IS statable, from CI rather than from the warm local cache. API-measured on
+      # this step: 0-4s across the 7 runs that preceded this ceiling, and **6s** on run
+      # 30539863151 — the first run to actually execute under the 60s ceiling. So 60s is ~10x the
+      # observed worst case, comparable to the ci-deploy.sh tests ceiling above (3min against an
       # API-measured 25s, ~7.2x).
+      #
+      # The superseded figure is named rather than quietly overwritten, because the correction is
+      # the point. #7072 set this ceiling and wrote "~15-30x" from the 7-run sample; the very next
+      # run measured 6s and made that false. A multiple quoted from an N-run sample is a claim
+      # with a shelf life — re-derive it (not extrapolate) whenever the fixture image or the
+      # runner class changes. #7072 was the PR about comments that assert untrue things, and it
+      # shipped one; this is the fix.
       #
       # 60s, not the 180s an earlier revision carried, because at 180s the ceiling DEFEATS the
       # attribution it exists to provide. Whole-job is API-measured 242-270s over those same 7
