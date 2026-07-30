@@ -255,7 +255,16 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    **Tier B: Subagent Fan-Out** (fire-and-gather, moderate cost)
 
-   **Read `plugins/soleur/skills/work/references/work-subagent-fanout.md` now** for the full Subagent Fan-Out protocol (offer, group/spawn, collect/integrate). If declined, fall through to Tier C.
+   **Read `plugins/soleur/skills/work/references/work-subagent-fanout.md` now** for the full Subagent Fan-Out protocol (offer, group/spawn, collect/integrate). If declined **or failed**, fall through to Tier C.
+
+   The `or failed` is load-bearing and was missing: Tier 0 and Tier A both read "If
+   declined **or failed**, fall through", so a spawn FAILURE at those tiers has a defined
+   next step. Tier B said only "If declined" — leaving a spawn failure (agent tool
+   withheld, `529 Overloaded`, headless run with no agent surface) with no prescribed
+   behavior at the LAST tier that can degrade. Tier C is always available because it is
+   sequential execution in the main context, so the fall-through costs nothing and closes
+   the gap. When it fires, say so: "Tier B fan-out unavailable (<reason>) — executing
+   sequentially" rather than silently running Tier C as though it were the chosen tier.
 
    ---
 
