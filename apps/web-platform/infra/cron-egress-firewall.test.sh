@@ -503,16 +503,78 @@ assert_grep "resolve unit sources the doppler token env file" 'EnvironmentFile=-
 # #7095 — ADDED alongside the assertion above, never replacing it: both files must be
 # sourced, and in this order. See assert_envfile_override_order's header for why the
 # order (not mere presence) is the property under test.
-assert_envfile_override_order \
-  "resolve unit sources the re-deliverable credential AFTER inngest-server (systemd later-wins)" \
-  "$SCRIPT_DIR/cron-egress-resolve.service" \
-  'EnvironmentFile=-/etc/default/inngest-server' \
-  'EnvironmentFile=-/etc/default/soleur-doppler-token'
-assert_envfile_override_order \
-  "alarm unit sources the re-deliverable credential AFTER inngest-server (systemd later-wins)" \
-  "$SCRIPT_DIR/cron-egress-alarm@.service" \
-  'EnvironmentFile=-/etc/default/inngest-server' \
-  'EnvironmentFile=-/etc/default/soleur-doppler-token'
+#
+# COVERAGE IS DERIVED, NOT HAND-LISTED. The set under test is discovered from the
+# units themselves: every *.service here that OPTIONALLY sources
+# /etc/default/inngest-server — the file holding the COPY of the web-host Doppler
+# token, grep-extracted out of /etc/default/webhook-deploy by
+# inngest-bootstrap.sh:586 and then PINNED forever at :567-568, so a dead-but-well-
+# formed value never self-heals. Every such unit must ALSO source the re-deliverable
+# credential, AFTER it.
+#
+# Why derived: this guard was first written with two hand-picked call sites while a
+# FOURTH consumer (cron-egress-firewall.service) sat uncovered. It showed zero
+# failures — not because it was healthy, but because it is a boot-time oneshot that
+# has not run since the revocation, while cron-egress-resolve, which takes the
+# doppler arm on the SAME `[ -n "$DOPPLER_TOKEN" ]` condition, failed 522 times. A
+# latent instance is precisely what a hand-written list cannot see, and "three
+# literal call sites" is the same shape that under-covered in the first place.
+# Discovery closes the class: a fifth consumer is covered the moment it sources the
+# copy, with no edit here.
+#
+# SCOPE — the `-` prefix is the discriminator, deliberately. inngest-redis.service
+# and inngest-cutover-flip.service source the same path in the REQUIRED form (no
+# `-`) and are correctly OUT of scope: they run on soleur-inngest-prd, whose own
+# inngest-bootstrap writes that host's live token, and a fleet-wide Better Stack
+# sweep grouped by host confirms soleur-inngest-prd took no part in the 07-30
+# failure cluster. That exclusion is a decision, not an oversight — if a unit ever
+# needs the required form AND the override, widen this pattern consciously.
+DOPPLER_COPY_LINE='EnvironmentFile=-/etc/default/inngest-server'
+DOPPLER_REDELIVER_LINE='EnvironmentFile=-/etc/default/soleur-doppler-token'
+# Discovery is by EXACT FULL LINE (-l -x -F) for the same reason the assertion is:
+# these units quote both paths in their comment prose, so a substring match would
+# sweep in units that only TALK about the copy without sourcing it.
+mapfile -t DOPPLER_COPY_UNITS < <(
+  grep -lxF -- "$DOPPLER_COPY_LINE" "$SCRIPT_DIR"/*.service 2>/dev/null | sort
+)
+for unit in "${DOPPLER_COPY_UNITS[@]}"; do
+  assert_envfile_override_order \
+    "$(basename "$unit") sources the re-deliverable credential AFTER the inngest-server copy (systemd later-wins)" \
+    "$unit" "$DOPPLER_COPY_LINE" "$DOPPLER_REDELIVER_LINE"
+done
+
+# Non-vacuity floor. A derived sweep that discovers nothing passes vacuously and
+# certifies an empty set, so assert BOTH a minimum cardinality AND that every unit
+# already known to source the copy is in the discovered set (a glob typo, a rename,
+# or a wrong-directory run all collapse to zero and must red).
+#
+# This is a FLOOR, not an exact count: a fifth consumer RAISES coverage with no edit
+# here, which is the entire point. It only needs touching when coverage legitimately
+# SHRINKS — a unit that stops sourcing the copy altogether — and that is a deliberate
+# architectural change which SHOULD cost an acknowledging edit rather than silently
+# thinning the guard. The asymmetry is the design: growth is free, shrinkage is loud.
+DOPPLER_COPY_KNOWN=(
+  container-restart-monitor.service
+  cron-egress-alarm@.service
+  cron-egress-firewall.service
+  cron-egress-resolve.service
+)
+if ((${#DOPPLER_COPY_UNITS[@]} >= ${#DOPPLER_COPY_KNOWN[@]})); then
+  PASS=$((PASS + 1))
+  echo "  PASS: doppler-copy sweep is non-vacuous (${#DOPPLER_COPY_UNITS[@]} units discovered, floor ${#DOPPLER_COPY_KNOWN[@]})"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: doppler-copy sweep discovered only ${#DOPPLER_COPY_UNITS[@]} unit(s), below the floor of ${#DOPPLER_COPY_KNOWN[@]} — the sweep is under-covering or matched nothing at all"
+fi
+for known in "${DOPPLER_COPY_KNOWN[@]}"; do
+  if printf '%s\n' "${DOPPLER_COPY_UNITS[@]}" | grep -qxF -- "$SCRIPT_DIR/$known"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: known doppler-copy consumer is in the derived sweep: $known"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: known doppler-copy consumer $known dropped OUT of the derived sweep — it no longer carries '$DOPPLER_COPY_LINE'. If that is intentional, remove it from DOPPLER_COPY_KNOWN in the same commit; otherwise the guard just went blind on it"
+  fi
+done
 assert_grep "resolve unit sets HOME (doppler os.UserHomeDir requirement)" 'Environment=HOME=/root' "$SCRIPT_DIR/cron-egress-resolve.service"
 assert_grep "resolve unit bounded (no infinite activating hang)" 'TimeoutStartSec=' "$SCRIPT_DIR/cron-egress-resolve.service"
 # Grace-window retention store must persist across reboots (a tmpfs /run would
