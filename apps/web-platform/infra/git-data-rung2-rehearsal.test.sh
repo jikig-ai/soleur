@@ -180,10 +180,16 @@ else
   fail "no allowlisted divergence var found in the rehearsal's module block — the extraction drifted"
 fi
 
-# The MUST-MATCH set is the sharp one: doppler_arch/doppler_sha256 select which binary is
-# downloaded and which checksum verifies it, so a divergence there rehearses a different
-# boot-brick surface than production has (#6570).
-for _pin in doppler_arch doppler_sha256 sentry_dsn betterstack_ingest_url; do
+# The MUST-MATCH set is the sharp one: these change WHAT the host does, not WHICH host it is.
+# `git_data_server_type` heads the list because the module derives the Doppler download arch
+# AND its checksum from it (#7025 R7) — a divergence there rehearses a different boot-brick
+# surface than production has (#6570).
+#
+# doppler_arch/doppler_sha256 are deliberately ABSENT: R7 removed them from the module's
+# variable surface entirely, so pinning them here would assert that two names which can no
+# longer exist are not on an allowlist — two arms that pass and can never meaningfully fail.
+# 7d pins their absence structurally; this loop pins the inputs that DO exist.
+for _pin in git_data_server_type sentry_dsn betterstack_ingest_url; do
   case " $GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST " in
     *" $_pin "*) fail "${_pin} is on the divergence allowlist — it changes WHAT the host does, not WHICH host it is" ;;
     *) pass "${_pin} is NOT permitted to diverge" ;;
@@ -257,11 +263,30 @@ if [[ "$_mm_checked" -lt 2 ]]; then
   fail "MUST-MATCH default extraction found only ${_mm_checked} of 2 variables" \
     "the awk extraction drifted; an empty comparison is vacuous"
 elif [[ -z "$_mm_drift" ]]; then
-  _value_proven="${_value_proven} location git_data_server_type"
+  # DELIBERATELY NOT added to _value_proven. This arm compares variables.tf DEFAULTS; 7c
+  # compares module BINDINGS. Granting a binding-level exemption on the strength of a
+  # default-level proof is a category error, and `git_data_server_type` became a module
+  # binding in this very change — so adding it here (which an earlier revision did, for
+  # "consistency") put the one var that selects the download arch into 7c's exemption shadow.
   pass "location and git_data_server_type defaults match production byte-for-byte"
 else
   fail "a MUST-MATCH default DIVERGED from production:${_mm_drift}" \
     "the rehearsal would boot on different hardware/DC than the host it attests for"
+fi
+
+# sentry_dsn IS COMPARED TOO. It is the fourth MUST-MATCH member and, until this arm, the one
+# nothing checked: 7c sees `var.sentry_dsn` on both sides and calls that agreement, while a
+# `default` on the rehearsal root's variable would silently point the fatal channel — the very
+# channel the rehearsal exists to prove — at a different Sentry project. Both roots must leave
+# it defaulted to the same value (prod's is ""), so the workflow's injected var is the only
+# source. The suite header's own thesis applies: a description is not a guard.
+_reh_dsn="$(_var_default "$REH/variables.tf" sentry_dsn)"
+_prod_dsn="$(_var_default "$DIR/variables.tf" sentry_dsn)"
+if [[ "$_reh_dsn" == "$_prod_dsn" ]]; then
+  pass "sentry_dsn defaults agree between the two roots (the fatal channel cannot be silently re-pointed)"
+else
+  fail "the rehearsal's sentry_dsn default DIVERGED from production's" \
+    "rehearsal='${_reh_dsn}' prod='${_prod_dsn}' — the rehearsal would prove a fatal channel production does not use"
 fi
 
 # ── 7c. THE DECLARED DIVERGENCE SET MATCHES WHAT ACTUALLY DIVERGES ─────────────────
@@ -295,41 +320,125 @@ fi
 #     `= local.betterstack_logs_ingest_url` is an expression divergence that is NOT a value
 #     divergence. Arm 7 compares the two VALUES; the exemption is granted by that arm passing
 #     (see _value_proven), so a drift in the value fails arm 7 AND unexempts the var here.
+# CONTINUATION-JOINED, because the tokenizer IS the membership rule. The first version read
+# one physical line per binding, so any binding split across lines was invisible to the
+# comparison — not flagged, not counted, silently exempt. Measured: writing
+# `sentry_dsn = coalesce(` + a differing second line in the rehearsal root only left this arm
+# reporting "the declared divergence set equals what actually diverges (11 vars compared)"
+# while the two roots rendered DIFFERENT Sentry DSNs — a var the module's own variables.tf
+# labels MUST MATCH PROD BYTE-FOR-BYTE. The same divergence written on one line was caught.
+# The blindness was the tokenizer, not the arm's logic, which is the whole point: a claim
+# about "every binding" enforced over "every binding I can lex" is a claim about my lexer.
+#
+# Bracket depth is tracked so a multi-line call/object collapses into its single logical
+# binding, and an unbalanced tail fails the arm loudly rather than emitting a phantom key.
 _module_binds() {  # $1 = .tf containing a `module "git_data_userdata"` block -> "key=expr" lines
   sed 's/[[:space:]]#.*$//' "$1" \
-    | awk '/^module "git_data_userdata"/{i=1; next}
-           i && /^}/{exit}
-           i && /^[[:space:]]*[a-z_]+[[:space:]]*=/{
-             k=$1; sub(/^[^=]*=[[:space:]]*/,""); gsub(/[[:space:]]+$/,"");
-             print k "=" $0
-           }' | sort
+    | awk '
+        /^module "git_data_userdata"/{i=1; next}
+        # `k=""` before exit is load-bearing: awk RUNS THE END BLOCK on `exit`, so printing
+        # here and again in END emitted the final binding TWICE — which then double-counted
+        # it downstream (measured: the exemption set read betterstack,betterstack).
+        i && /^}/{ if (k != "") print k "=" e; k=""; exit }
+        i {
+          line=$0
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+          if (line == "") next
+          if (d == 0 && line ~ /^[a-z_]+[[:space:]]*=/) {
+            if (k != "") print k "=" e
+            k=line; sub(/[[:space:]]*=.*$/, "", k)
+            e=line; sub(/^[^=]*=[[:space:]]*/, "", e)
+          } else if (k != "") {
+            e = e " " line
+          }
+          n=gsub(/[({[]/, "&", line); m=gsub(/[)}\]]/, "&", line)
+          d += n - m
+          if (d < 0) d = 0
+        }
+        END { if (k != "") print k "=" e }' | sort
 }
 _reh_binds="$(_module_binds "$REH/rehearsal.tf")"
 _prod_binds="$(_module_binds "$DIR/git-data.tf")"
+
+# THE CALLER→MODULE BINDING IS PINNED SEPARATELY, and this is the assertion whose absence was
+# the sharpest finding of the #7025 R7 review. A16b (git-data-luks.test.sh) compares the two
+# arch ternaries as TEXT — and both sides literally spell `var.git_data_server_type`, in
+# DIFFERENT SCOPES. Text equality of the expressions says nothing about equality of their
+# inputs, so nothing observed what each root actually BINDS into the module.
+#
+# Measured on a sandbox: changing only `git_data_server_type = "cax11"` at the two call sites,
+# with the roots' own `server_type` left at cpx22, kept BOTH suites fully green (luks 101/0,
+# rung2 38/0) while the module derived arm64, downloaded the arm64 Doppler tarball, and
+# verified it against the CORRECT arm64 checksum. The phantom-arch precondition passed too —
+# it reads the root local, which was still amd64. The result is an arm64 ELF on an x86 host:
+# `doppler` never execs, so the `doppler run` heredoc holding `cryptsetup luksFormat` runs
+# zero times and the host boots dark. That is #6570 verbatim, through the one seam the R7
+# module extraction opened: A18 used to pin `doppler_arch = local.git_data_arch` IN git-data.tf
+# and thereby guarded this edge incidentally; moving it into the module left the edge bare.
+_bind_drift=""
+for _f in "$DIR/git-data.tf" "$REH/rehearsal.tf"; do
+  grep -qE '^[[:space:]]*git_data_server_type[[:space:]]*=[[:space:]]*var\.git_data_server_type[[:space:]]*$' \
+    <(sed 's/[[:space:]]#.*$//' "$_f") \
+    || _bind_drift="${_bind_drift} $(basename "$_f")"
+done
+if [[ -z "$_bind_drift" ]]; then
+  pass "both roots bind git_data_server_type = var.git_data_server_type into the module (the arch the precondition validates IS the arch the module derives)"
+else
+  fail "a root does not bind git_data_server_type from its own var:${_bind_drift}" \
+    "the module would derive an arch the caller's phantom-arch precondition never validates — #6570 with the tripwire green"
+fi
+
 _derived=""
 _common=0
-_exempted=0
+_exempted_keys=""
+_onesided=""
 while IFS= read -r _line; do
   [[ -z "$_line" ]] && continue
   _k="${_line%%=*}"; _rexpr="${_line#*=}"
+  # `source` is a module META-ARGUMENT, not a templatefile argument, and both roots' values
+  # are asserted BY NAME in arm 5 — a stricter check than "these two strings differ".
   [[ "$_k" == "source" ]] && continue
   _pexpr="$(printf '%s\n' "$_prod_binds" | grep -E "^${_k}=" | head -1 | sed "s/^${_k}=//")"
-  [[ -z "$_pexpr" ]] && continue
+  # A ONE-SIDED binding is a divergence, not a skip. The original `continue` meant any input
+  # the rehearsal overrides and production does not (or vice versa) never entered _derived,
+  # never entered _common, and so could never reach REHEARSAL_DIVERGENCE for R6 to refuse.
+  if [[ -z "$_pexpr" ]]; then
+    _onesided="${_onesided} ${_k}"
+    _derived="${_derived}${_derived:+,}${_k}"
+    continue
+  fi
   _common=$((_common + 1))
   if [[ "$_rexpr" != "$_pexpr" ]]; then
     case " $_value_proven " in
-      *" $_k "*) _exempted=$((_exempted + 1)) ;;
+      *" $_k "*) _exempted_keys="${_exempted_keys} ${_k}" ;;
       *) _derived="${_derived}${_derived:+,}${_k}" ;;
     esac
   fi
 done <<< "$_reh_binds"
-# Non-vacuity on the exemption itself: if _value_proven were empty (arm 7 regressed to
-# always-fail, or the accumulator was dropped in a refactor) every expression divergence
-# would flow into _derived and this arm would fail loudly — but the inverse, an exemption
-# list that silently swallowed a REAL divergence, is the dangerous direction. Pin the count.
-if [[ "$_exempted" -ne 1 ]]; then
-  fail "expected exactly 1 value-proven exemption in the divergence derivation, got ${_exempted}" \
-    "value-proven='${_value_proven# }' — an exemption set that grew is an exemption set that can hide a real divergence"
+# Production-side one-sided bindings too — the loop above only walks the rehearsal's keys.
+while IFS= read -r _line; do
+  [[ -z "$_line" ]] && continue
+  _k="${_line%%=*}"
+  [[ "$_k" == "source" ]] && continue
+  printf '%s\n' "$_reh_binds" | grep -qE "^${_k}=" && continue
+  _onesided="${_onesided} ${_k}"
+  _derived="${_derived}${_derived:+,}${_k}"
+done <<< "$_prod_binds"
+# PIN THE EXEMPTION SET, NOT ITS CARDINALITY. A count catches the set GROWING; it does not
+# catch the slot being REASSIGNED. Measured: making the rehearsal's betterstack binding
+# byte-identical to production's (so it stops being divergent and frees the slot) while
+# diverging git_data_server_type left `_exempted == 1` and the whole suite green, with the
+# rehearsal deriving arm64 and production amd64 — the exemption transferred to a var whose
+# value-parity proof (arm 7b, over variables.tf DEFAULTS) says nothing about a BINDING that
+# references neither default.
+_exempted_sorted="$(printf '%s' "${_exempted_keys# }" | tr ' ' '\n' | sort | paste -sd, - )"
+if [[ "$_exempted_sorted" != "betterstack_ingest_url" && -n "$_exempted_sorted" ]]; then
+  fail "the value-proven exemption was consumed by an unexpected var: ${_exempted_sorted}" \
+    "only betterstack_ingest_url's exemption is justified (arm 7 compares its VALUES); every other var must diverge into the declared set"
+fi
+if [[ -n "$_onesided" ]]; then
+  fail "module input(s) bound by only ONE root:${_onesided}" \
+    "a one-sided binding is a render divergence; counted into the derived set so R6 must refuse it rather than never seeing it"
 fi
 _declared="$(grep -oE '^[[:space:]]*REHEARSAL_DIVERGENCE:[[:space:]]*\S+' "$WF" | head -1 | awk '{print $2}')"
 # Sort both sides: the derived set comes out of `sort`, the declared literal is hand-ordered.
@@ -362,29 +471,58 @@ fi
 # cannot reintroduce the divergence even by trying, and it can never appear in
 # RUNG2_VAR_DIVERGENCE. An equality check between two copies would still pass the day
 # someone adds a third.
-_shas() { grep -oE '[0-9a-f]{64}' "$1" | sort -u; }
-_n_mod="$(_shas "$MOD/main.tf" | grep -c . || true)"
-_n_reh="$(_shas "$REH/rehearsal.tf" | grep -c . || true)"
-_n_prod="$(_shas "$DIR/git-data.tf" | grep -c . || true)"
+# GLOBBED, NOT ENUMERATED, and COMMENT-STRIPPED. Both were live holes. The first version read
+# exactly three named files, so appending a `locals` block holding a divergent 64-hex to
+# rung2-rehearsal/main.tf — or a 64-hex output to the module's outputs.tf — satisfied it at
+# 38/0; and it did not strip comments, contradicting this file's own header, so gutting the
+# real derivation while leaving both literals in a trailing comment also passed. A claim
+# quantified over "anywhere in either root" cannot be enforced over three filenames.
+_shas() { sed 's/[[:space:]]#.*$//' "$@" 2>/dev/null | grep -oE '[0-9a-f]{64}' | sort -u; }
+_n_mod="$(_shas "$MOD"/*.tf | grep -c . || true)"
+_n_reh="$(_shas "$REH"/*.tf | grep -c . || true)"
+_n_prod="$(_shas "$DIR"/git-data.tf | grep -c . || true)"
 if [[ "$_n_mod" -ne 2 ]]; then
-  fail "the shared module carries ${_n_mod} distinct sha256 literal(s); the per-arch Doppler pair is exactly 2" \
+  fail "the shared module carries ${_n_mod} distinct sha256 literal(s) across its *.tf; the per-arch Doppler pair is exactly 2" \
     "either the derivation left the module (each caller is then an uncompared copy) or a third literal joined it"
 elif [[ "$_n_reh" -ne 0 || "$_n_prod" -ne 0 ]]; then
   fail "a caller root carries a sha256 literal (rehearsal=${_n_reh} prod=${_n_prod}); both must be 0" \
     "a per-root literal is a copy nothing compares — the exact shape that let a version bump land on one root only"
 else
-  pass "the Doppler checksum pair exists exactly once, in the shared module, and in neither caller root"
+  pass "the Doppler checksum pair exists exactly once, in the shared module's *.tf, and nowhere in either caller root"
 fi
-# And it is not re-openable through the module's front door: a `doppler_sha256`/`doppler_arch`
-# VARIABLE would let either caller pass its own pair back in, restoring the divergence while
-# this arm still counted 2 literals in the module.
-_mod_vars="$(sed 's/[[:space:]]#.*$//' "$MOD/main.tf" "$MOD/variables.tf" 2>/dev/null \
-  | grep -cE '^variable "(doppler_arch|doppler_sha256)"' || true)"
-if [[ "$_mod_vars" -eq 0 ]]; then
-  pass "neither doppler_arch nor doppler_sha256 is a module INPUT — the divergence is unexpressible, not just absent"
+# THE MODULE'S INPUT SURFACE IS PINNED WHOLE, not screened against two forbidden names.
+#
+# The first version grepped for `variable "doppler_arch"|"doppler_sha256"` — a two-name
+# DENY-LIST behind a claim of unexpressibility. Measured: adding `variable "doppler_sha256_pin"`
+# and threading it through a nested ternary in the module reopened the exact divergence at
+# 38/0, because a deny-list only ever refuses the names someone already thought of. A deny
+# list cannot make anything unexpressible; only a closed input surface can. Any NEW module
+# input is now RED until it is added here deliberately — which is the point at which someone
+# has to argue that it may diverge, in front of R6's identity-only allowlist.
+# `[A-Za-z0-9_-]`, NOT `[a-z_]`. The first version's character class had no DIGITS, so the
+# very mutation this arm exists to catch — `variable "doppler_sha256_pin"` — did not match the
+# extraction at all and the arm reported "exactly the pinned 11" against a 12-input module.
+# Measured. Terraform identifiers admit digits, hyphens and capitals; a pin whose pattern is
+# narrower than the namespace it pins is a pin over the names I happened to imagine, which is
+# the same defect one level down as the two-name deny-list this arm replaced.
+#
+# The trailing count check is the non-vacuity control: an extraction that silently matched
+# NOTHING would compare "" against the expected list and fail loudly, but an extraction that
+# matched a SUBSET is exactly what the digit hole produced, so the count is asserted too.
+_mod_var_names="$(sed 's/[[:space:]]#.*$//' "$MOD"/*.tf 2>/dev/null \
+  | grep -oE '^variable "[A-Za-z0-9_-]+"' | sed -E 's/^variable "//; s/"$//' | sort | paste -sd, -)"
+_mod_var_declared="$(sed 's/[[:space:]]#.*$//' "$MOD"/*.tf 2>/dev/null | grep -cE '^variable "' || true)"
+_mod_var_extracted="$(printf '%s' "$_mod_var_names" | tr ',' '\n' | grep -c . || true)"
+if [[ "$_mod_var_declared" -ne "$_mod_var_extracted" ]]; then
+  fail "the module-input extraction saw ${_mod_var_extracted} of ${_mod_var_declared} declared variable blocks" \
+    "the name pattern is narrower than the identifiers actually in use; the set comparison below would be over a subset"
+fi
+_mod_var_expected="betterstack_ingest_url,doppler_config_name,doppler_token,git_data_luks_volume_id,git_data_server_type,git_data_volume_id,git_provision_pubkey,git_remove_pubkey,git_transport_pubkey,host_name,sentry_dsn"
+if [[ "$_mod_var_names" == "$_mod_var_expected" ]]; then
+  pass "the module's input surface is exactly the pinned 11 — no doppler arch/checksum input exists, and no new input can appear unreviewed"
 else
-  fail "the module still exposes ${_mod_vars} doppler arch/checksum variable(s)" \
-    "a caller can pass its own pair, which is the divergence this consolidation removed"
+  fail "the module's input surface drifted from the pinned set" \
+    "expected=${_mod_var_expected} actual=${_mod_var_names}"
 fi
 
 # ── 8. THE WORKFLOW CONTRACT ───────────────────────────────────────────────────────
@@ -581,12 +719,19 @@ fi
 # A floor, not an equality: developer-incremented, so `-eq` would redden the suite on every
 # legitimately added arm and train the next person to bump it unread. Counts passes+fails so
 # a genuine failure reports as a failure rather than as an empty suite.
+#
+# RAISED 28 -> 39 WITH THE ARMS THAT MADE IT NECESSARY (#7025 R7). At 28 the slack had grown
+# to exceed the work it was guarding: deleting arms 6, 7, 7b, 7c and 7d — every arm that
+# compares the two roots, i.e. the suite's entire reason for existing — landed on exactly 28
+# and printed `ok anti-vacuity floor: 28 assertions ran`, exit 0. Measured. A floor that does
+# not move with the suite only ever guards the work that predates it, and the deletion it
+# most needs to catch is the one that removes the arms someone just argued for.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 28 ]]; then
+if [[ "$_ran" -lt 39 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 28. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 39. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 28)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 39)\n' "$_ran"
 fi
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"

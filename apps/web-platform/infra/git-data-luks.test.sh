@@ -954,9 +954,19 @@ assert_mutation "B16 mkfs-quota-project (drop -O entirely)" p_mkfs_quota_project
   's/ -O quota,project//'
 
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
+#
+# RAISED 95 -> 101 WITH THE ARMS THAT MADE IT NECESSARY (#7025 R7). A floor whose slack
+# equals the size of the change it was added for detects nothing about that change: at 95,
+# deleting every assertion the R7 commit added to this suite (the four A16b arms and their
+# predicate) left it at 97 and EXIT 0 — measured. The floor must move with the suite or it
+# only ever guards the work that predates it.
+#
+# A floor (`-lt`), never an equality: the count is developer-incremented, so `-eq` would
+# redden the suite on every legitimate new arm and teach the next author to edit the guard
+# instead of trusting it.
 total=$((passes + fails))
-if [ "$total" -lt 95 ]; then
-  echo "FAIL: ran only ${total} assertions (<95) — suite did not execute fully" >&2
+if [ "$total" -lt 101 ]; then
+  echo "FAIL: ran only ${total} assertions (<101) — suite did not execute fully" >&2
   exit 1
 fi
 

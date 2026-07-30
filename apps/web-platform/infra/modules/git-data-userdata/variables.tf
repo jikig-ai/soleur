@@ -15,12 +15,23 @@
 #     doppler_config_name, git_transport_pubkey, git_provision_pubkey, git_remove_pubkey
 #
 #   MUST MATCH PROD BYTE-FOR-BYTE (they change WHAT the host does):
-#     doppler_arch, doppler_sha256  — select which binary is downloaded and which checksum
-#                                     verifies it; divergence rehearses a different
-#                                     boot-brick surface than prod has (#6570)
+#     git_data_server_type          — the Doppler download arch AND its checksum are DERIVED
+#                                     from this inside this module (#7025 R7), so a divergence
+#                                     here rehearses a different boot-brick surface than prod
+#                                     has (#6570). git-data-rung2-rehearsal.test.sh pins that
+#                                     both roots bind it from their own var, because text
+#                                     equality of the two derivations says nothing about
+#                                     equality of their inputs.
 #     sentry_dsn                    — the fatal channel under test; a rehearsal against a
 #                                     different DSN proves a channel prod does not use
 #     betterstack_ingest_url        — same, for the stage-marker channel
+#
+#   NOT INPUTS AT ALL — doppler_arch and doppler_sha256 were module variables until #7025 R7
+#   and are now derived internally from git_data_server_type. They are listed here only to
+#   say they are gone: a caller cannot pass its own pair, so that divergence is unexpressible
+#   rather than merely refused, and it can never appear in RUNG2_VAR_DIVERGENCE. The rung-2
+#   suite pins the module's COMPLETE input surface, so re-adding either name (or any other
+#   input) is RED until declared here.
 #
 # NO `default` ON ANY SECRET-BEARING VARIABLE (hr-tf-variable-no-operator-mint-default).
 # doppler_config_name carries a default because it is a config NAME, not a credential, and
