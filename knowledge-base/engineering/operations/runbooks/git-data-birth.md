@@ -30,7 +30,11 @@
 > - `.github/workflows/git-data-rung2-rehearsal.yml` — `workflow_dispatch` only, confirm
 >   token `REHEARSE-GIT-DATA`, `dry_run` defaulting to **true**.
 > - `apps/web-platform/infra/rung2-rehearsal/` — a **separate Terraform root** with its own
->   R2 state key, so a rehearsal apply structurally cannot address a production resource.
+>   R2 state key, so a rehearsal apply cannot address a production resource through
+>   Terraform's managed-resource lifecycle. That boundary is narrower than it sounds and
+>   ADR-149 DC-6 spells out what it does NOT cover: the Hetzner credential, the Doppler
+>   project, Sentry, the parent root's push trigger, and teardown garbage collection are all
+>   shared. State separation bounds the LIFECYCLE, not the AUTHORITY.
 > - `scripts/followthroughs/git-data-rung2-evidence-capture.sh` — captures the evidence
 >   off-box and writes the file **only** on PASS.
 >

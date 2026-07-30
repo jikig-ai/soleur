@@ -862,6 +862,15 @@ jobs:
       # -backend=false: this must not touch R2 or need credentials.
       - name: Terraform validate the rung-2 rehearsal root
         working-directory: apps/web-platform/infra/rung2-rehearsal
+        env:
+          # OUT OF THE REPO TREE. `terraform init` writes ~77 MB of providers to
+          # ./.terraform, and credential-persist-home-guard.test.sh later in this SAME job
+          # makes 25 sandbox copies of the infra tree — its GLOBIGNORE excludes only the
+          # TOP-LEVEL .terraform, so a nested one is copied and then pruned 25 times
+          # (~1.9 GB of writeback against 5 MB of real content). The guard's comment reasons
+          # about the top-level cache, which on a CI runner does not exist; the nested cache
+          # this step creates is the only one there.
+          TF_DATA_DIR: ${{ runner.temp }}/rung2-tf
         run: |
           terraform init -backend=false -input=false
           terraform validate

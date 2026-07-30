@@ -21,12 +21,15 @@ output "rendered" {
 #
 # Exported so the caller's phantom/wrong-arch precondition validates the arch that was
 # ACTUALLY used to pick the binary, rather than a SECOND ternary the caller keeps equal to
-# this one by convention. R7's own rationale (main.tf, "THE DOPPLER ARCH PAIR IS DERIVED
-# HERE") argues that a divergence should be made UNEXPRESSIBLE rather than merely tested;
-# the caller-side copy was the one place that argument had not been applied, and it was
-# introduced by R7 itself — `modules/` does not exist on origin/main. Policing it needed
-# four bash arms comparing two ternaries as text, which is exactly "a declaration the gate
-# had to police".
+# this one by convention. That copy was introduced by R7 itself — `modules/` does not exist on
+# origin/main — and policing it needed four bash arms comparing two ternaries as text.
+#
+# BUT NOT BECAUSE "ONE TERNARY CANNOT DIVERGE FROM ITSELF". No suite reads THIS FILE: A16 and
+# A18 read main.tf, A16b reads the caller. A second ternary here is expressible today. What
+# makes a wrong value non-viable is the caller's precondition, which compares this output
+# against `data.hcloud_server_type.git_data.architecture` — the live Hetzner catalog for the
+# same var — so a wrong derivation wedges the plan instead of booting. The honest claim is
+# "self-validating against ground truth", not "structurally unique".
 #
 # This is NOT the `user_data_sha256` case rejected above. That output would have named a
 # DIFFERENT quantity from an existing same-shaped hash; `arch` names the SAME quantity the

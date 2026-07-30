@@ -704,6 +704,13 @@ p_precondition_arch_source() {
   printf '%s\n' "$src" | grep -qE '^[[:space:]]*git_data_arch[[:space:]]*=' && { echo 0; return; }
   echo 1
 }
+# AND THIS ARM IS WHAT KEEPS A19'S NEGATIVE CLAUSE ALIVE — the coupling is load-bearing and
+# was undocumented. A19's direct-compare check is a NEGATIVE, so it fails OPEN the moment its
+# anchor stops matching anything: that is exactly how it went vacuous when the refactor deleted
+# `local.git_data_arch` while the clause still named it. Re-pointing it at
+# `module.git_data_userdata.arch` fixed the instance; what stops it recurring is that A16b
+# asserts the SAME reference POSITIVELY. Rename the module and A16b reddens immediately, so the
+# negative can never again be left silently naming something that does not exist.
 assert_holds    "A16b precondition-arch-source" p_precondition_arch_source "$GIT_DATA_TF"
 # Mutation 1: re-point the condition at a caller-side local, leaving `error_message` reading
 # the module output. Visible ONLY to the condition-scoped extraction — a whole-file grep for

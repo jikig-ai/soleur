@@ -21,11 +21,15 @@
 #     authorized against the same account that holds web-1, the registry and inngest)
 #   - the Doppler PROJECT (soleur; only the CONFIG is scratch)
 #   - the Sentry project (deliberately: the rehearsal must exercise the REAL fatal channel)
-#   - the parent root's push-triggered apply (mitigated by a `paths-ignore` on this subdir in
-#     apply-web-platform-infra.yml, which is a workflow property and not a state one)
-#   - teardown garbage collection: nothing outside this root's own `if: always()` destroy and
-#     the drift sweeper's orphan probe reclaims a host this state file has forgotten. That is
-#     a NAMED RESIDUAL, not a solved problem.
+#   - the parent root's push-triggered apply (mitigated by a NEGATED path glob for this
+#     subdir in apply-web-platform-infra.yml — that workflow has no `paths-ignore` key at all,
+#     and its own comment says so; either way it is a workflow property, not a state one)
+#   - teardown garbage collection: for a resource this state file has FORGOTTEN, neither
+#     mechanism reclaims anything — `terraform destroy` and the `teardown_only` arm both act
+#     only on state, and the drift sweeper DETECTS and files an issue rather than deleting.
+#     The sweep now covers servers, volumes, ssh keys, firewalls and the scratch Doppler
+#     config, and the issue it files carries the exact API calls; reclamation is still not
+#     automatic. That is a NAMED RESIDUAL, not a solved problem.
 #
 # NO NETWORK ATTACHMENT (R2). An earlier draft attached the rehearsal host to the prod
 # 10.0.1.0/24 behind a deny-all firewall. Dropping the attachment removes the leak vector

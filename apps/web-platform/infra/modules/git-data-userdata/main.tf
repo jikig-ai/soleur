@@ -110,8 +110,9 @@ locals {
     # Prod passes "prd_git_data"; the rehearsal passes its scratch config, which is the ONE
     # reason this is a variable rather than the literal it was until #7025.
     doppler_config_name = var.doppler_config_name
-    # Dual-arch Doppler CLI download (#6570). BOTH are derived by the CALLER from
-    # var.git_data_server_type — the cloud-init hardcoded the arm64 build and its checksum,
+    # Dual-arch Doppler CLI download (#6570). BOTH are derived HERE, ten lines above, from
+    # var.git_data_server_type — by the caller until #7025 R7 moved the derivation into this
+    # module so both roots render through one copy — the cloud-init hardcoded the arm64 build and its checksum,
     # which boot-bricks the moment the type moves to an x86 arm. `${doppler_arch}` is a
     # TERRAFORM interpolation (single-$) in the template; `$${DOPPLER_VERSION}` beside it is
     # a SHELL variable (double-$) that must pass through literally.

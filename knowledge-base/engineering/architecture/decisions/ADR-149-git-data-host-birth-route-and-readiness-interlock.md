@@ -241,7 +241,7 @@ push-triggered apply (mitigated by a `paths` negation, which is a workflow prope
 state one).
 
 **Named residual — teardown garbage collection.** Nothing outside the workflow's
-`if: always()` destroy and the new orphan sweep reclaims a host the rehearsal state has
+`if: always()` destroy and the new orphan sweep DETECTS a resource the rehearsal state has
 forgotten. `terraform plan` reports on resources *in state*, so a host lost from state is
 invisible to every plan in this repository, forever. The sweep therefore asks the Hetzner API
 directly and fails closed on an unreachable API. An earlier draft claimed the existing

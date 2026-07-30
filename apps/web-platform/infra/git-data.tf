@@ -100,11 +100,25 @@ locals {
   # police" — and the duplicate was introduced by R7 itself (`modules/` does not exist on
   # origin/main), so keeping it was not preserving anything.
   #
-  # Reading the module output makes the drift class UNEXPRESSIBLE rather than tested: there is
-  # one ternary, so a precondition validating a different arch than the one downloaded cannot
-  # be written. It also moves the failure earlier and louder — a wrong output fails at PLAN
-  # time, where the previous shape's failure was a silent wrong-arch boot whose only guard was
-  # byte-equality of two ternaries in two files (#6570 with the tripwire green).
+  # WHAT ACTUALLY MAKES THE DIVERGENCE NON-VIABLE — stated precisely, because the obvious
+  # argument is wrong and a reader who checks will find the counterexample. It is NOT "there is
+  # only one ternary, so a second cannot be written": `modules/git-data-userdata/outputs.tf` is
+  # read by no suite, so a second ternary there is expressible today.
+  #
+  # The property that holds is stronger and comes from the precondition itself. It compares the
+  # module's arch against `data.hcloud_server_type.git_data.architecture` — GROUND TRUTH from
+  # the live Hetzner catalog for the same `var.git_data_server_type`. So an `arch` output that
+  # is not the correct derivation of that var either wedges the plan or is correct; a
+  # wrong-and-passing output does not exist. The output is self-validating against the catalog,
+  # which never required it to be the only derivation.
+  #
+  # It also moves the failure earlier and louder — a wrong output fails at PLAN time, where the
+  # previous shape's failure was a silent wrong-arch boot whose only guard was byte-equality of
+  # two ternaries in two files (#6570 with the tripwire green).
+  #
+  # The third leg — the type the server is CREATED with — is pinned separately, in
+  # git-data-rung2-rehearsal.test.sh, because neither this precondition nor the module binding
+  # says anything about it.
 }
 
 # The git-data host's server type, read from the live Hetzner catalog. Read-only; creates
