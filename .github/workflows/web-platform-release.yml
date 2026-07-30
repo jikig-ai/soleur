@@ -1173,3 +1173,204 @@ jobs:
           else
             echo "::warning::Deploy-gated Slack notification failed (HTTP $HTTP_CODE)"
           fi
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # TERMINAL release-outcome notifier (#7095).
+  #
+  # WHY THIS EXISTS: eight consecutive runs of this workflow went red across
+  # v0.244.3, v0.245.0, v0.246.0 and v0.246.1 while prod kept serving v0.244.0
+  # for over a day, and NOTHING paged. A red release run was never itself a
+  # monitored condition, so each red was read as "the known incident" instead of
+  # as a distinct live fault. The only two push notifications in this file hang
+  # off `deploy` (the in-job email above) and off `await-ci` (`notify-gated`) —
+  # and THREE of those eight runs never reached `deploy` at all, so the
+  # deploy-scoped email was structurally silent for them.
+  #
+  # WHY `needs:` LISTS EVERY OTHER JOB IN THIS FILE: a job whose `needs` failed
+  # is SKIPPED, and a skipped job cannot notify. Depending on the complete job
+  # set (plus `if: always()`, which discards skip-on-failed-needs) is exactly
+  # what makes this fire on the FIRST failing job wherever it sits in the graph.
+  # This one job would have caught all eight. If a job is ever added to this
+  # workflow, add it here too — an omission fails SILENTLY, which is the same
+  # class of fault as the outage this closes.
+  #
+  # WHY IT IS NOT ROUTED THROUGH THE HOST'S SENTRY: the fault class this covers
+  # (a revoked host DOPPLER_TOKEN) also kills the host's own SENTRY_* parameters,
+  # which are read from that same dead Doppler token — which is why 341 unit
+  # failures over 5.7h produced no page. This job runs on a GitHub runner and
+  # reads only GitHub-side secrets, so it does not inherit that blind spot. Do
+  # not move any part of it onto the host.
+  #
+  # INLINE curl, NOT `uses: ./.github/actions/notify-ops-email` — same reason as
+  # the deploy-failure email above (this job has no `actions/checkout`, and a
+  # LOCAL composite action cannot resolve without the repo on disk), plus the
+  # composite treats a non-2xx Resend response as a `::warning::` and has no
+  # fallback when the API key is missing. Both are silent-alert-failure shapes,
+  # and the ONE job whose entire purpose is "the failure must not be silent" is
+  # the wrong place to accept them: here a non-delivery emits a Sentry event and
+  # fails this job loudly.
+  release-outcome:
+    needs:
+      - release
+      - await-ci
+      - migrate
+      - verify-migrations
+      - verify-doppler-secrets
+      - deploy
+      - live-verify
+      - notify-gated
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - name: Classify the run outcome
+        id: outcome
+        env:
+          # `needs.<job>.result` is a closed enum (success | failure | cancelled
+          # | skipped) written by GitHub, never by a contributor — safe to expand
+          # in shell. Injected via env (not inline `${{ }}`) per the same
+          # convention the rest of this file uses.
+          R_RELEASE: ${{ needs.release.result }}
+          R_AWAIT_CI: ${{ needs.await-ci.result }}
+          R_MIGRATE: ${{ needs.migrate.result }}
+          R_VERIFY_MIGRATIONS: ${{ needs.verify-migrations.result }}
+          R_VERIFY_DOPPLER: ${{ needs.verify-doppler-secrets.result }}
+          R_DEPLOY: ${{ needs.deploy.result }}
+          R_LIVE_VERIFY: ${{ needs.live-verify.result }}
+          R_NOTIFY_GATED: ${{ needs.notify-gated.result }}
+        run: |
+          set -uo pipefail
+          # `skipped` is NOT a fault: most releases legitimately skip
+          # migrate/verify-migrations/live-verify/notify-gated. Only `failure`
+          # and `cancelled` mean "this release did not reach production".
+          FAILED=""
+          FAILED_HTML=""
+          classify() {
+            job_id="$1"; result="$2"; plain="$3"
+            case "$result" in
+              failure|cancelled) ;;
+              *) return 0 ;;
+            esac
+            FAILED="${FAILED:+${FAILED}, }${job_id}=${result}"
+            FAILED_HTML="${FAILED_HTML}<li><strong>${plain}</strong> — ${result} (step named <code>${job_id}</code> in the run)</li>"
+          }
+          # Plain-language labels: the recipient is a non-technical founder, so
+          # the job id is the SECONDARY identifier, not the headline.
+          classify release "${R_RELEASE}" "Building and publishing the new version"
+          classify await-ci "${R_AWAIT_CI}" "Waiting for the automated tests to go green"
+          classify migrate "${R_MIGRATE}" "Applying the database changes"
+          classify verify-migrations "${R_VERIFY_MIGRATIONS}" "Double-checking the database changes"
+          classify verify-doppler-secrets "${R_VERIFY_DOPPLER}" "Checking production has the credentials it needs"
+          classify deploy "${R_DEPLOY}" "Rolling the new version out to the production server"
+          classify live-verify "${R_LIVE_VERIFY}" "Checking the live site after the rollout"
+          classify notify-gated "${R_NOTIFY_GATED}" "Sending the deploy-blocked notification"
+          if [ -z "$FAILED" ]; then
+            echo "release-outcome: every upstream job succeeded or was skipped — no alert." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "release-outcome: FAILED jobs → ${FAILED}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          {
+            echo "failed=${FAILED}"
+            echo "failed_html=${FAILED_HTML}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Email the operator (release did NOT reach production)
+        id: email
+        if: steps.outcome.outputs.failed != ''
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          VERSION: ${{ needs.release.outputs.version }}
+          TAG: ${{ needs.release.outputs.tag }}
+          FAILED: ${{ steps.outcome.outputs.failed }}
+          FAILED_HTML: ${{ steps.outcome.outputs.failed_html }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          # Always exits 0 and reports delivery through `delivered`; the
+          # hard-fail decision belongs to the next step, which also owns the
+          # Sentry fallback. Keeping them apart means a missing API key and a
+          # dead Resend take the SAME path — neither can end in silence.
+          if [[ -z "${RESEND_API_KEY:-}" ]]; then
+            echo "::error::RESEND_API_KEY is not set — the release-failure email could NOT be sent. Nobody has been told that this release did not reach production."
+            echo "delivered=0" >> "$GITHUB_OUTPUT"
+            echo "reason=resend_api_key_unset" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # VERSION is empty when the release job never minted a tag this run
+          # (e.g. it failed first) — say so rather than printing "v".
+          VER_LABEL="${VERSION:-unknown}"
+          TAG_LABEL="${TAG:-no tag was created}"
+          BODY="<p><strong>The Soleur web platform did not finish releasing. Production is still running the OLDER build — the changes that were just merged are not live.</strong></p>"
+          BODY="${BODY}<p>Attempted version: <code>${VER_LABEL}</code> (tag: <code>${TAG_LABEL}</code>). Production is serving whatever was deployed before this run, which is now behind that tag.</p>"
+          BODY="${BODY}<p><strong>What stopped:</strong></p><ul>${FAILED_HTML}</ul>"
+          BODY="${BODY}<p><a href=\"${RUN_URL}\">Open the failed run</a> — the red entry named above is the one to look at.</p>"
+          BODY="${BODY}<p><strong>What this means for you:</strong> until this is fixed, every further change you merge will also stay unreleased — the site keeps serving old code and looks healthy while doing it. This is not something that clears on its own.</p>"
+          BODY="${BODY}<p><strong>What to do:</strong> you do not need to fix this yourself. Send the run link above to your engineer, or paste it into Claude Code and ask it to fix the failing release. Treat it as urgent: nothing reaches production until it is resolved.</p>"
+          PAYLOAD=$(jq -n \
+            --arg from "Soleur Ops <noreply@soleur.ai>" \
+            --arg subject "[RELEASE FAILED] Soleur Web Platform v${VER_LABEL} — production was NOT updated" \
+            --arg html "$BODY" \
+            '{from: $from, to: ["ops@jikigai.com"], subject: $subject, html: $html}')
+          # --max-time + `|| echo 000`: an unreachable Resend must neither stall
+          # the job nor (under set -e semantics) kill the step before the
+          # non-delivery is recorded.
+          HTTP_CODE=$(curl -s -o "${RUNNER_TEMP}/resend-release-outcome.txt" -w "%{http_code}" \
+            -X POST "https://api.resend.com/emails" --max-time 15 \
+            -H "Authorization: Bearer ${RESEND_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" || echo "000")
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Release-failure email sent to ops@jikigai.com (HTTP ${HTTP_CODE}) for: ${FAILED}"
+            echo "delivered=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Release-failure email FAILED (HTTP ${HTTP_CODE}) — nobody was notified that this release did not reach production (${FAILED})."
+            echo "delivered=0" >> "$GITHUB_OUTPUT"
+            echo "reason=resend_http_${HTTP_CODE}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The alert channel failing is itself a P1: it recreates the exact silence
+      # #7095 is about. Mirror it to Sentry (a DIFFERENT vendor, read from a
+      # GitHub-side secret so it does not share Resend's failure) and fail this
+      # job so the non-delivery is at least visible in the run.
+      - name: Mirror non-delivery to Sentry and fail loudly
+        if: steps.outcome.outputs.failed != '' && steps.email.outputs.delivered != '1'
+        env:
+          NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
+          FAILED: ${{ steps.outcome.outputs.failed }}
+          REASON: ${{ steps.email.outputs.reason }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          # Same DSN parse as the live-verify emit step above: the POST host MUST
+          # carry the DSN's own region segment, never a defaulted cluster.
+          DSN="${NEXT_PUBLIC_SENTRY_DSN:-}"
+          if [ -n "$DSN" ]; then
+            PUBLIC_KEY=$(printf '%s' "$DSN" | sed -E 's#^https?://([^@:]+)(:[^@]*)?@.*#\1#')
+            HOST=$(printf '%s' "$DSN" | sed -E 's#^https?://[^@]+@([^/]+)/.*#\1#')
+            PROJECT_ID=$(printf '%s' "$DSN" | sed -E 's#.*/([0-9]+)/?$#\1#')
+            if [ -n "$PUBLIC_KEY" ] && [ -n "$HOST" ] && [ -n "$PROJECT_ID" ]; then
+              PAYLOAD=$(jq -nc \
+                --arg msg "release-outcome: release FAILED and the operator email was NOT delivered (${REASON:-unknown})" \
+                --arg failed "${FAILED}" --arg reason "${REASON:-unknown}" \
+                --arg run_url "${RUN_URL}" --arg sha "${GITHUB_SHA:-}" \
+                '{message:$msg, level:"error", platform:"other",
+                  tags:{gate:"release-outcome", component:"web-platform", op:"release-alert-undelivered"},
+                  extra:{failed_jobs:$failed, reason:$reason, run_url:$run_url, sha:$sha}}')
+              code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+                -X POST "https://${HOST}/api/${PROJECT_ID}/store/" \
+                -H "Content-Type: application/json" \
+                -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_client=release-outcome-gha/1.0, sentry_key=${PUBLIC_KEY}" \
+                --data "$PAYLOAD" 2>/dev/null || echo "000")
+              echo "release-outcome: Sentry non-delivery event POST → HTTP ${code}"
+            else
+              echo "::error::release-outcome: NEXT_PUBLIC_SENTRY_DSN unparseable — the non-delivery could not be mirrored to Sentry."
+            fi
+          else
+            echo "::error::release-outcome: NEXT_PUBLIC_SENTRY_DSN unset — the non-delivery could not be mirrored to Sentry."
+          fi
+          echo "release-outcome: release FAILED (${FAILED}) and the operator email was NOT delivered (${REASON:-unknown})." >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::release-outcome: the release-failure alert could not be delivered. Fix the notification channel — a failing release is currently silent."
+          exit 1
