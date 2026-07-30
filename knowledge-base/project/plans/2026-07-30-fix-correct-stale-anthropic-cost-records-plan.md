@@ -169,7 +169,18 @@ again, and its `gh`/`jq`-only, no-dashboard discipline is worth preserving.
 
 ### Pre-merge (PR)
 
-- **AC1** — `grep -c 'scheduled-ux-audit\.yml' knowledge-base/` returns **0**. No record cites the deleted workflow.
+- **AC1** *(scope corrected at /work — see note)* — no **live record** cites the deleted workflow:
+  `grep -c 'scheduled-ux-audit\.yml' knowledge-base/operations/expenses.md knowledge-base/finance/cost-model.md knowledge-base/engineering/operations/runbooks/api-spend-reconciliation.md`
+  returns **0** for all three.
+
+  > **Why this AC was narrowed.** As originally written it asserted zero hits across all of
+  > `knowledge-base/`, which returns **~40 files**. Every one is a point-in-time record —
+  > historical plans, specs, brainstorms, and learnings that describe what was true when the
+  > workflow existed, plus two `INDEX.md` entries that are merely the *titles* of those
+  > documents. Rewriting them would falsify the historical record, and it is the documented
+  > own-migration-artifact carve-out (`2026-06-03-path-rename-sweep-exclude-own-migration-artifacts.md`).
+  > The defect this plan fixes is a **live claim about a current mechanism**, and exactly three
+  > files made one. The AC now asserts that, which is the property that was actually broken.
 - **AC2** — Neither `expenses.md` nor `cost-model.md` names `claude-code-review.yml` or `test-pretooluse-hooks.yml` as an *active* metered source. Verify by reading both rows in full; a mention that explicitly labels them dormant is permitted and expected.
 - **AC3** — The ux-audit row names `cron-ux-audit` and the `_cron-claude-eval-substrate` fleet. `grep -c 'cron-ux-audit' knowledge-base/operations/expenses.md` ≥ 1.
 - **AC4** — Any amount not derivable from a source this repo can read carries an `<!-- estimate verify_by=… owner=… source="…" -->` marker. Verify each Anthropic row either has the marker or a figure with cited provenance.

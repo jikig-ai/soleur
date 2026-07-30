@@ -155,7 +155,7 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 | GitHub Copilot (Business) | 10.00 [expenses.md@2026-04-19] | `expenses.md` |
 | Claude Code Max 20x — seat 1 | 200.00 [expenses.md@2026-04-19] | `expenses.md` |
 | Claude Code Max 20x — seat 2 | 200.00 [expenses.md@2026-04-19] | `expenses.md` |
-| Anthropic API (CI claude-code-action) | 0.00 (accruing) [expenses.md@2026-06-11] | `expenses.md` |
+| Anthropic API (CI) | 0.00 (unmetered) [expenses.md@2026-07-30] | `expenses.md` |
 | Hetzner CX33 (grok-dogfood, operator dogfood host) | 9.17 [expenses.md@2026-07-16] | `expenses.md` |
 | Hetzner Primary IPv4 (grok-dogfood) | 0.54 [expenses.md@2026-07-16] | `expenses.md` |
 | xAI API (Grok 4.5 dogfood) | 0.14 (accruing) [expenses.md@2026-07-16] | `expenses.md` (metered — see note) |
@@ -172,13 +172,31 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 > column while a sibling metered row books the draw is the same two-ways-priced defect this
 > cycle fixed for cx33; tracked in #6584.)*
 
-> **CI claude-code-action line (#5086, ADR-056):** metered `ANTHROPIC_API_KEY`
-> spend from the two CI review jobs — R&D, not COGS (engineering accelerator, same
-> basis as the Max seats). Seeded `0.00`/`accruing`; subtotal unchanged until the
-> first monthly reconciliation (`knowledge-base/finance/api-spend-ledger.jsonl` →
-> the `expenses.md` line). Local Max-subscription loops carry **$0 marginal** and
+> **Anthropic API (CI) line (#5086, ADR-056):** `ANTHROPIC_API_KEY` draw from CI —
+> R&D, not COGS (engineering accelerator, same basis as the Max seats). Seeded
+> `0.00`/**`unmetered`** — corrected 2026-07-30 from `accruing`, which asserted a
+> measurement in progress. The two capture sources this line was seeded against are
+> dormant (`claude-code-review.yml` is `disabled_manually`;
+> `test-pretooluse-hooks.yml` is `workflow_dispatch`-only), so
+> `knowledge-base/finance/api-spend-ledger.jsonl` holds **0 records** and the "first
+> monthly reconciliation" has no input. Local Max-subscription loops carry **$0 marginal** and
 > are deliberately not ledgered — per-loop dollars would manufacture a false
 > billing surprise.
+>
+> **Metering gap (recorded 2026-07-30).** The api-spend apparatus is pointed at
+> surfaces that do not spend, while the surfaces that DO spend are unmetered: the
+> ~21 claude-eval Inngest crons on the prod host (the dominant draw, `claude-opus-5`
+> for audits), `ci.yml`'s `plugin-root-propagation-gate` + `sandbox-canary-capture-gate`,
+> and `fix-constraints-stage-a`'s agent step. **No org-total figure is obtainable from
+> this repo:** the Anthropic Admin Cost & Usage API requires a team organization and
+> this org is an individual account, so `ANTHROPIC_ADMIN_KEY` cannot be minted and
+> `cron-anthropic-cost-report` self-reports `key-missing` indefinitely (#6297).
+> Exhaustion is consequently detected AT the wall by the hourly
+> `cron-anthropic-credit-probe` canary, never predicted ahead of it — the
+> pre-exhaustion spend-vs-budget alert is #5692. Until both land, read every
+> Anthropic API line above as a floor, not a measurement. Note this gap does not
+> touch the two `$0` claims that matter most to the model: per-user inference is
+> BYOK-funded (below), and local Max loops are subscription-funded (above).
 
 ### Product COGS
 
@@ -196,7 +214,7 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 | Supabase Pro + Custom Domain | 35.00 [expenses.md@2026-04-19] | `expenses.md` |
 | Supabase Inngest project (`soleur-inngest-prd`, Micro compute) | 10.00 [expenses.md@2026-07-16] | `expenses.md` |
 | Plausible Analytics (Growth) | 9.00 [expenses.md@2026-04-19] | `expenses.md` (EUR 9) |
-| Anthropic API (ux-audit cron) | 15.00 [expenses.md@2026-04-19] | `expenses.md` |
+| Anthropic API (claude-eval cron fleet) | 15.00 [expenses.md@2026-07-30] | `expenses.md` (understated — ux-audit-only figure; see note) |
 | Cloudflare `soleur.ai` domain (amortized $70/yr ÷ 12) | 5.83 [expenses.md@2026-04-19] | `expenses.md` |
 | Sentry Team (error tracking + cron monitors, $29 base + $42.22 PAYG: 49 × $0.78 cron-monitor seats + 4 × $1.00 uptime monitors) | 71.22 [expenses.md@2026-07-17] | `expenses.md` (live-verified — see note) |
 | Resend Pro (outbound + transactional email, 50K emails/mo) | 20.00 [expenses.md@2026-06-16] | `expenses.md` (estimate — verify on next invoice) |

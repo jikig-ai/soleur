@@ -61,7 +61,9 @@ Branch: `feat-one-shot-anthropic-cost-records-correction` · PR: #7086
 
 ## Phase 5: Verify
 
-- [ ] 5.1 AC1 `grep -rc 'scheduled-ux-audit\.yml' knowledge-base/` → 0
+- [x] 5.1 AC1 (scope corrected — live records only, historical corpus carved out per the plan's
+      AC1 note): `grep -c 'scheduled-ux-audit\.yml'` over expenses.md + cost-model.md +
+      api-spend-reconciliation.md → **0/0/0** ✓
 - [ ] 5.2 AC3 `grep -c 'cron-ux-audit' knowledge-base/operations/expenses.md` → ≥ 1
 - [ ] 5.3 AC5 `grep -cE '#5692' knowledge-base/finance/cost-model.md` ≥ 1 AND
       `grep -cE '#6297' knowledge-base/finance/cost-model.md` ≥ 1

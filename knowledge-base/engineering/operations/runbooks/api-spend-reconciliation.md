@@ -3,10 +3,30 @@
 **Owner:** ops-advisor (agent-run) · **Cadence:** monthly · **Issue:** #5086 · **ADR:** ADR-056
 **Automation status:** manual agent-run bridge; scheduled automation tracked by #5173.
 
+> ## ⚠️ STATUS 2026-07-30 — this runbook's inputs are dormant; it will find nothing
+>
+> Both artifact producers named below are inactive: `claude-code-review.yml` is
+> `disabled_manually` (0 runs since 2026-07-01) and `test-pretooluse-hooks.yml` is
+> `workflow_dispatch`-only (3 runs lifetime). No `api-spend-*` artifact exists in the
+> repo, and `knowledge-base/finance/api-spend-ledger.jsonl` holds **0 records**. A run
+> of this procedure today returns an empty set — that is the expected result, not a
+> failed run.
+>
+> **Do not delete this runbook.** Its `gh`/`jq`-only, no-dashboard discipline is
+> correct and it becomes accurate again the moment either workflow is re-enabled.
+>
+> **Successor mechanism:** #6297 wires `cron-anthropic-cost-report` to the Anthropic
+> Admin Cost & Usage API for an authoritative org-total, superseding per-run artifact
+> capture. It is blocked on an un-mintable `ANTHROPIC_ADMIN_KEY` (the Admin API
+> requires a team organization; this org is an individual account). Meanwhile the
+> surfaces that actually draw the key — the claude-eval Inngest cron fleet, `ci.yml`'s
+> two in-image Claude probes, and `fix-constraints-stage-a`'s agent step — are
+> unmetered by any procedure, this one included.
+
 Rolls per-run CI `claude-code-action` cost (captured as `api-spend-<run_id>`
 artifacts by `claude-code-review.yml` + `test-pretooluse-hooks.yml`) into the
 committed sidecar `knowledge-base/finance/api-spend-ledger.jsonl` and the single
-"Anthropic API (CI claude-code-action)" line in `knowledge-base/operations/expenses.md`.
+"Anthropic API (CI)" line in `knowledge-base/operations/expenses.md`.
 No SSH, no dashboard — all `gh`/`jq` (`hr-no-dashboard-eyeball-pull-data-yourself`).
 
 > **90-day window:** GitHub Actions artifacts expire after 90 days. Run monthly so
