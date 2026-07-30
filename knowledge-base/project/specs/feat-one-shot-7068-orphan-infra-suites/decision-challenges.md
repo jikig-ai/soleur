@@ -139,3 +139,73 @@ same 6-way-parallel runner from another worktree — the documented contention/f
 Re-measured on a quiet machine; see the PR body for the disposition. Either way it is not
 attributable to this diff, and per `wg-when-tests-fail-and-are-confirmed-pre` it is documented
 rather than folded in.
+
+---
+
+## Review findings (2026-07-30)
+
+Cost-of-filing pass applied to every candidate: all were ≤100 lines / ≤4 files with no
+independent technical dissent, so **all fixed inline. Filed as scope-out: 0.**
+
+### RF-1 (P2, pr-introduced, fixed) — the gate false-failed a legitimate trailing comment
+
+The gate anchored on `[[:space:]]*$`, rejecting `run: bash <path>  # note`. But the runner
+derives with an unanchored `grep -oE`, so it DOES pick that line up — the suite genuinely runs
+in CI and locally. A required, merge-queue-gating check would have red-failed every PR in the
+repo on an ordinary comment, while its message asserted the runner "cannot derive it", which is
+false. Now permits an optional trailing `#` comment; message corrected. Deliberately not widened
+to `&& cmd` / `| cmd` — the runner tolerates those, but they make CI diverge from the local run.
+
+### RF-2 (P2, pr-introduced, fixed) — fail-open in the exclusion arm, introduced by the exclusion
+
+The exclusion waived ANY registration requirement rather than just the shape, so deleting the
+excluded suite's invocation outright stopped it running in CI with the gate still green
+(measured: rc=0). An excluded suite must now still be invoked in some shape.
+
+### RF-3 (fixed) — a projected job duration my own CI run contradicted
+
+The re-derivation comment projected ~204s; three runs measure 252-270s. The 8 added steps cost
+**8s** (API-measured), so the increment was fine — the error was adding it to the comment's
+inherited 184-189s baseline, taken from a different branch at a different job composition
+(~70s of unrelated growth since). I applied "re-derive, don't extrapolate" to the suite timings
+and then failed to apply it to the number I inherited.
+
+### RF-4 (P2, pre-existing-adjacent, fixed) — orphan-reporter misattribution
+
+Header read "#7025 surfaced them", which reads as though #7025 built the detector. The reporter
+landed in `2f46570c1` (#6730); #7025 is where the seven were noticed and filed. Surfaced by
+`git-history-analyzer`. A false attribution in the file whose subject is untrue comments would
+be self-undermining.
+
+### RF-5 (deferred to #7076 by comment, not a new filing) — the runner already derives comments
+
+#7076's Finding 4 called the comment-derivation hazard "a future hazard, not a present one".
+Measured: the runner's regex is not line-anchored, so `# run: bash <path>` matches TODAY and
+would flow into the executor. Zero such lines exist, so no live gap — but the fix repairs a
+latent defect rather than pre-empting a future one. Commented on #7076 with the measurement.
+
+### Method note (the transferable part)
+
+The first equivalence run was **void and looked fine**: the sandbox was not a git repo, the
+runner does `cd "$(git rev-parse --show-toplevel)"`, so it exited immediately and every row read
+"no derivation" — including the canonical control. A control row that cannot succeed makes every
+other row meaningless. Re-ran with `git init` and required the control to derive before believing
+any row. RF-1 and RF-2 are both invisible without that.
+
+Also: my own 6/6 mutation battery reported the gate healthy through RF-1 and RF-2. It measured
+the mutations I imagined, not the gate.
+
+### Review coverage, stated honestly
+
+A persistent API overload (529) killed **12 of 13** agent attempts (9 initial + 3 retries).
+`git-history-analyzer` completed and produced RF-4. The adversarial-construction and
+gate-vacuity lenses were run INLINE, which is where RF-1/RF-2/RF-3 came from; destructive-op and
+parallel-safety claims were verified directly (cutover-flip mocks in a `mktemp -d` with
+`redis-cli` absent from PATH; the flip-guard non-vacuity guard confirmed stronger than claimed —
+an `EXPECTED_START_SITES=2` count latch plus an explicit `grep -qx 'flushed'`). shellcheck clean
+at `-S style` on all three bash files; semgrep deliberately substituted out (its bash parser
+matches ~0 rules, so a clean result would be vacuous).
+
+Lenses NOT covered by an agent: pattern-recognition, performance (measured inline instead),
+observability (verified inline: the gate's non-zero exit reaches a red check via run-all.sh),
+agent-native, simplicity. Recorded rather than implied-complete.
