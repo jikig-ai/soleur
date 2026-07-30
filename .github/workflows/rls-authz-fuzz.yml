@@ -19,6 +19,7 @@ on:
       - "apps/web-platform/supabase/migrations/**"
       - "apps/web-platform/test/rls-fuzz/**"
       - "apps/web-platform/scripts/rls-parity-check.ts"
+      - "apps/web-platform/scripts/supabase-local.sh"
       - "apps/web-platform/package.json"
       - ".github/workflows/rls-authz-fuzz.yml"
   workflow_dispatch: {}
@@ -52,9 +53,19 @@ jobs:
         with:
           version: 2.84.2
 
-      - name: Start local Supabase stack
+      # Started via the wrapper, NOT bare `supabase start`. The CLI has no
+      # bind-address setting (supabase/cli#4613 closed unmerged on policy), so a
+      # bare start publishes every service on 0.0.0.0 + ::. The wrapper applies a
+      # loopback-bound Docker network. See ADR-153.
+      - name: Start local Supabase stack (loopback-bound)
         working-directory: apps/web-platform
-        run: supabase start
+        run: ./scripts/supabase-local.sh start
+
+      # Fail the job if the stack is reachable off-loopback. Runs BEFORE the
+      # bootstrap step so a mis-bound runner never gets seeded with fixture data.
+      - name: Assert loopback-only binding
+        working-directory: apps/web-platform
+        run: ./scripts/supabase-local.sh assert --require-stack
 
       - name: Install psql client
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
