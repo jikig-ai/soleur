@@ -85,3 +85,19 @@ These were reviewer findings that were **verified and applied**, not judgment ca
    (kieran P2). Both corrected, since the "no new class of dependency" argument rests on them.
 7. **An instruction the plan was about to violate.** The job's timeout comment says "Re-derive this
    if steps are added to the job" (architecture P1-5, spec-flow P1-8). Now in Files to Edit.
+
+---
+
+## Resolutions (operator, 2026-07-30)
+
+- **DC-1 — RESOLVED: include Phase 3.** The operator elected the strengthen branch of criterion 3
+  over the "unchanged" branch. Rationale accepted as stated: additive, starts green, lands in an
+  existing required auto-glob (no new required-check name, no `ruleset-ci-required.tf` /
+  `scripts/required-checks.txt` edit, no apt), and it fixes the class rather than the instance —
+  the human habit the 2026-06-16 learning records has now failed three times. Plan already
+  includes Phase 3 + AC7; no plan edit required.
+- **DC-2 — RESOLVED as an explicit policy choice, not inherited from the plan.** The operator
+  accepted the asymmetry: **infra-suite registration is blocking** and merge-queue-gating for every
+  PR in the repo, while the suites' own **verdicts remain advisory** (that promotion stays with the
+  pre-existing open issue on advisory→blocking, tracked as D2). Recorded here so the policy is
+  attributable to a decision rather than to a plan default.
