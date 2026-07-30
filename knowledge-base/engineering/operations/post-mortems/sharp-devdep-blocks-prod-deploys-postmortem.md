@@ -45,7 +45,7 @@ alternative.
 ## Status
 
 `ongoing` — the fix is in this PR and not yet merged. Flip to `resolved` once a release run on the
-merge commit reaches `deploy: success` and `/api/health` serves the new version.
+merge commit reaches `deploy: success` and `/health` serves the new version.
 
 ## Symptom
 
@@ -125,6 +125,20 @@ Rejected alternatives, recorded so the next person does not re-litigate:
 
 ## Recovery verification
 
+**Baseline measured from prod, not inferred.** At 2026-07-30T~16:20Z, `GET https://app.soleur.ai/health`
+returned 200 with:
+
+```json
+{"status":"ok","version":"0.244.0","build_sha":"34654d7ab11b2c28ed08f559ac5af1ef59042cb3","supabase":"connected","sentry":"configured","uptime":60619,"memory":348}
+```
+
+`build_sha` is exactly `34654d7ab` — the last release that reached `deploy: success` — and `uptime`
+60619s ≈ **16.8h**. That is the outage stated as a measurement rather than an inference, and it gives
+the recovery test a precise form: after this PR deploys, `/health`'s `build_sha` must equal the merge
+commit. Note `/api/health` is NOT the surface — it 307-redirects to `/login`; an earlier draft of
+this PIR cited it, which would have sent the next reader to a redirect.
+
+
 Verified pre-merge by reproducing the failing assertion rather than reasoning about it. In a clean
 temp dir containing only the new `package.json` + `package-lock.json`:
 
@@ -140,7 +154,7 @@ with **0** dev-only; `bun install --frozen-lockfile` reports no changes; `npm ci
 `sharp` still resolves in the full (dev-inclusive) install so dev tooling is unaffected.
 
 Post-merge, recovery is confirmed by the release run on the merge commit reaching
-`deploy: success` and `/api/health` serving the new version.
+`deploy: success` and `/health` serving the new version.
 
 ## Root Cause(s) — 5-Whys
 
