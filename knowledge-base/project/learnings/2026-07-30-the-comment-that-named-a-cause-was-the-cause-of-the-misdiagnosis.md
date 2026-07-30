@@ -91,8 +91,9 @@ bullets, and principle registers — none of which any compiler or test suite re
 ## The structural lesson: a fallback nobody exercises is not a fallback
 
 GHCR was still dual-pushed, so every dashboard showed images arriving. **Receiving is not
-serving.** The read path had been dead since the Phase-5 PAT revocation and nothing
-noticed, because nothing read from GHCR while zot was healthy — a fallback is by
+serving.** The read path had been dead since the PAT was revoked — **out-of-band, NOT as
+the Phase-5 retirement step; Phase 5.5 has not run and #6122/#6500 are still open** — and
+nothing noticed, because nothing read from GHCR while zot was healthy — a fallback is by
 definition only exercised when the primary fails, which is exactly when you find out it
 was dead.
 
