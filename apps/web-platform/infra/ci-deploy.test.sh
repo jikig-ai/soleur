@@ -181,6 +181,29 @@ create_mock_doppler() {
   cat > "$1/doppler" << 'MOCK'
 #!/bin/bash
 if [[ "${1:-}" == "secrets" && "${2:-}" == "get" ]]; then
+  # #7095: record every `secrets get <NAME>` so a test can COUNT attempts. The count is the
+  # only observation channel for R25's "retry-then-degrade" — a log-CONTENT assertion cannot
+  # tell one attempt from three, so without this the retry is mutable while green.
+  if [[ -n "${MOCK_DOPPLER_GET_LOG:-}" ]]; then printf '%s\n' "${3:-}" >> "$MOCK_DOPPLER_GET_LOG"; fi
+  # #7095 MOCK_DOPPLER_GET_FAIL — the fixture the 2026-07-30 outage needs, and the one the
+  # pre-existing MOCK_DOPPLER_FAIL structurally CANNOT provide (R26): that one fails
+  # `secrets download` too, so resolve_env_file aborts the deploy long before
+  # zot_gate_and_login is ever reached. Here `secrets download` still SUCCEEDS and only
+  # `secrets get` fails — exactly the live shape, where the host's boot-baked service token
+  # was revoked but the deploy kept running all the way to the GHCR pull.
+  #   empty -> rc=0 with EMPTY stdout. The MORE LIKELY real shape and, before this change,
+  #            entirely unmeasured: the web host's vector.service runs `doppler run` off the
+  #            SAME dead EnvironmentFile and kept shipping rows throughout the incident, so
+  #            this credential evidently still EXECS. A fixture that only asserts a non-zero
+  #            exit asserts a scenario that may not be this outage.
+  #   rc    -> non-zero exit with stderr on the error channel (MOCK_DOPPLER_GET_FAIL_STDERR).
+  case "${MOCK_DOPPLER_GET_FAIL:-}" in
+    empty) exit 0 ;;
+    rc)
+      printf '%s\n' "${MOCK_DOPPLER_GET_FAIL_STDERR:-Doppler Error: you must provide a token}" >&2
+      exit "${MOCK_DOPPLER_GET_FAIL_RC:-1}"
+      ;;
+  esac
   # #6005 ghcr_prelude_and_login: `secrets get <NAME> --plain` → bare per-name value.
   # A non-empty distinguishable value so the prelude exports (SENTRY_*, GHCR_*) are
   # observably set. MOCK_DOPPLER_GET_EMPTY simulates the pre-provisioning state
@@ -5256,6 +5279,283 @@ else
   printf "%b\n" "$T21_BAD"
 fi
 rm -f "$T21_LIB"
+
+# =============================================================================================
+# #7095 — a failed Doppler READ must say so, instead of being renamed "pre-provisioning"
+# =============================================================================================
+# The 2026-07-30 P1: web-1's boot-baked Doppler service token was revoked. `ci-deploy.sh` still
+# presented it, so `doppler secrets get ZOT_REGISTRY_URL` returned nothing, the zot gate read
+# that EMPTY as the dark-launch/pre-provisioning state, never contacted zot at all, and fell
+# through to an unauthenticated GHCR pull of a PRIVATE package → auth_denied →
+# image_pull_failed. Eight consecutive releases failed this way and every one read as "the known
+# incident", because they all shared that one reason string.
+#
+# The generalisable rule (plan 1.3b): ABSENCE OF A VALUE MUST NEVER SILENTLY SELECT A CODE PATH.
+# `dark, pre-provisioning` now requires an explicit positive sentinel — there is genuinely no
+# credential to ask WITH. Empty-when-a-token-was-present is reported as the read failure it is.
+#
+# Scope note (R25): this section is OBSERVABILITY ONLY. `zot_gate_and_login` is documented
+# "Fail-open: never aborts the deploy" and cloud-init bakes /etc/default/soleur-ghcr-read
+# SPECIFICALLY so a cold-boot deploy proceeds when Doppler answers empty. T-7095-6 pins that
+# contract: same control flow, but it now says why.
+echo ""
+echo "--- #7095: a failed Doppler read is self-reporting (not 'pre-provisioning') ---"
+
+# Runs a full deploy with the journald sink captured. $2 is eval'd AFTER DOPPLER_TOKEN is
+# exported, so a fixture may `unset DOPPLER_TOKEN` (T-7095-5 needs exactly that). Returns the
+# deploy's own exit code — T-7095-6's whole assertion is that it is still 0.
+run_deploy_cred_capture() {
+  local logger_file="$1" extra="${2:-}"
+  (
+    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+    MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT
+    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
+    export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
+    export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
+    export MOCK_LOGGER_CAPTURE_FILE="$logger_file"
+    # Default: NO baked GHCR cred file, so the prelude's "baked file absent + doppler
+    # empty/unavailable" branch is the one under test. T-7095-6 overrides this.
+    export SOLEUR_GHCR_READ_FILE="$MOCK_DIR/no-such-baked-cred-file"
+    create_base_mocks "$MOCK_DIR"
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
+    eval "$extra"
+    bash "$DEPLOY_SCRIPT" >/dev/null 2>&1
+  )
+}
+
+# Shared shape assertion. EVERY negative here is paired with a positive control on the SAME
+# capture (R26): "must NOT emit `dark, pre-provisioning`" is satisfied by any fixture that
+# aborts early — INCLUDING unmodified ci-deploy.sh — so on its own it can pass on a broken
+# system. The positive half is what makes the absence mean something.
+assert_cred_fail_shape() {
+  local label="$1" fixture="$2" want_rc="$3" want_empty="$4"
+  TOTAL=$((TOTAL + 1))
+  local d f bad=""
+  d=$(mktemp -d); f="$d/logger.txt"; : > "$f"
+  run_deploy_cred_capture "$f" "$fixture" || true
+  local cred_line gate_line
+  cred_line="$(grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$f" 2>/dev/null | grep -F 'secret=ZOT_REGISTRY_URL' | head -1)"
+  gate_line="$(grep -F 'ZOT_GATE: doppler read FAILED' "$f" 2>/dev/null | head -1)"
+  # POSITIVE 1 — the observation marker exists and carries BOTH measured fields.
+  [[ -n "$cred_line" ]] || bad="${bad}\n    no SOLEUR_DEPLOY_CRED_FAIL line for secret=ZOT_REGISTRY_URL"
+  case "$cred_line" in
+    *"rc=${want_rc} empty=${want_empty}"*) : ;;
+    *) bad="${bad}\n    expected 'rc=${want_rc} empty=${want_empty}' on the cred line; got: '${cred_line:-<absent>}'" ;;
+  esac
+  # POSITIVE 2 — the gate says the host cannot read its own credential source. This is the
+  # line whose absence made eight consecutive failures unreadable.
+  [[ -n "$gate_line" ]] || bad="${bad}\n    no 'ZOT_GATE: doppler read FAILED' line"
+  case "$gate_line" in
+    *"rc=${want_rc} empty=${want_empty}"*) : ;;
+    *) bad="${bad}\n    expected 'rc=${want_rc} empty=${want_empty}' on the gate line; got: '${gate_line:-<absent>}'" ;;
+  esac
+  case "$gate_line" in
+    *"NOT pre-provisioning"*) : ;;
+    *) bad="${bad}\n    gate line must say NOT pre-provisioning; got: '${gate_line:-<absent>}'" ;;
+  esac
+  # NEGATIVE (paired with both positives above) — the lie is gone.
+  if grep -qF 'dark, pre-provisioning' "$f" 2>/dev/null; then
+    bad="${bad}\n    still claims 'dark, pre-provisioning' while a DOPPLER_TOKEN was present"
+  fi
+  if [[ -z "$bad" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: ${label} → SOLEUR_DEPLOY_CRED_FAIL rc=${want_rc} empty=${want_empty} + gate says NOT pre-provisioning"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: ${label}"
+    printf "%b\n" "$bad"
+    echo "        journald:"; grep -E 'ZOT_GATE|PRELUDE|SOLEUR_DEPLOY_CRED_FAIL' "$f" 2>/dev/null | sed 's/^/          /' | head -10
+  fi
+  rm -rf "$d"
+}
+
+# T-7095-1 — rc=0 with EMPTY stdout, asserted FIRST because it is the MORE LIKELY real shape
+# and was entirely unmeasured. Evidence it may be this incident: the host's vector.service runs
+# `doppler run … -- vector` off the SAME dead EnvironmentFile and Better Stack kept receiving
+# rows throughout, so `doppler run` still EXECS on this credential. A test that only asserted a
+# non-zero exit would be asserting a scenario that may not be the outage at all.
+assert_cred_fail_shape "rc=0 + empty stdout (the unmeasured shape)" \
+  'export MOCK_DOPPLER_GET_FAIL=empty' 0 1
+
+# T-7095-2 — the non-zero shape, with stderr on the error channel.
+assert_cred_fail_shape "non-zero exit with stderr" \
+  'export MOCK_DOPPLER_GET_FAIL=rc; export MOCK_DOPPLER_GET_FAIL_STDERR="Doppler Error: Invalid Auth token"' 1 1
+
+# T-7095-2b — the stderr CONTENT reaches journald. `2>/dev/null || true` threw this away at the
+# read site, which is the whole reason the eight failures carried no cause.
+TOTAL=$((TOTAL + 1))
+T2B_D=$(mktemp -d); T2B_F="$T2B_D/logger.txt"; : > "$T2B_F"
+run_deploy_cred_capture "$T2B_F" \
+  'export MOCK_DOPPLER_GET_FAIL=rc; export MOCK_DOPPLER_GET_FAIL_STDERR="Doppler Error: Invalid Auth token"' || true
+if grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$T2B_F" 2>/dev/null | grep -qF 'Invalid Auth token'; then
+  PASS=$((PASS + 1)); echo "  PASS: the doppler stderr tail rides the marker (it is no longer discarded)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: the doppler stderr tail never reached journald"
+  grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$T2B_F" 2>/dev/null | sed 's/^/          /' | head -4
+fi
+rm -rf "$T2B_D"
+
+# T-7095-3 — the err tail's THREE bounds, which are the entire secret-safety story: ≤200 bytes,
+# control-characters stripped, and any `dp.st.`-prefixed substring redacted. journald tag
+# `ci-deploy` is shipped off-box to Better Stack UNSCRUBBED (vector.toml allowlist), so this is
+# a real credential boundary, exactly like the Sentry POST that T-5B-8 guards.
+#
+# The canary sits near the END of the stderr on purpose: if it sat at the front, TRUNCATION
+# alone would drop it and the redaction assertion would pass while measuring nothing.
+echo "--- #7095 T-7095-3: the err tail is bounded, control-stripped and dp.st.-redacted ---"
+TOTAL=$((TOTAL + 1))
+T3_CANARY="dp.st.prd.CANARY""SECRETVALUE7095"
+T3_FILLER="$(printf 'F%.0s' {1..400})"
+T3_STDERR="Doppler Error: ${T3_FILLER}${T3_CANARY}"$'\t'$'\a'" TAILSENTINEL7095"
+T3_D=$(mktemp -d); T3_F="$T3_D/logger.txt"; : > "$T3_F"
+run_deploy_cred_capture "$T3_F" \
+  "export MOCK_DOPPLER_GET_FAIL=rc; export MOCK_DOPPLER_GET_FAIL_STDERR=\"\$T3_STDERR\"" || true
+T3_LINE="$(grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$T3_F" 2>/dev/null | grep -F 'secret=ZOT_REGISTRY_URL' | head -1)"
+# `err="…"` is the LAST field on the line precisely so the payload is extractable without a parser.
+T3_PAY="${T3_LINE#*err=\"}"; T3_PAY="${T3_PAY%\"}"
+T3_BAD=""
+# *** POSITIVE CONTROL. Without it every check below is vacuous: an EMPTY payload has no canary,
+# no control characters and length 0, so a broken emitter that logged err="" would score a
+# perfect pass on the three negatives. The sentinel is the LAST thing in the stderr, so its
+# presence proves BOTH that the field is populated AND that the bound took the TAIL (a `head`-
+# style bound would keep the filler and drop the sentinel).
+case "$T3_LINE" in
+  *'err="'*) : ;;
+  *) T3_BAD="${T3_BAD}\n    no err=\"…\" field on the marker; got: '${T3_LINE:-<absent>}'" ;;
+esac
+case "$T3_PAY" in
+  *TAILSENTINEL7095*) : ;;
+  *) T3_BAD="${T3_BAD}\n    the payload is not the TAIL of the stderr (TAILSENTINEL7095 missing); got: '${T3_PAY}'" ;;
+esac
+# NEGATIVE 1 — the bound.
+if (( ${#T3_PAY} > 200 )); then
+  T3_BAD="${T3_BAD}\n    err payload is ${#T3_PAY} bytes, bound is 200"
+fi
+# NEGATIVE 2 — no control characters anywhere in the payload (TAB and BEL were both injected).
+if printf '%s' "$T3_PAY" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+  T3_BAD="${T3_BAD}\n    err payload still carries control characters"
+fi
+# NEGATIVE 3 — the dp.st. secret is redacted, checked against the WHOLE sink and not just the
+# one line (the scope half of the sanitized-marker-alongside-raw-sibling learning).
+if grep -qF 'CANARY''SECRETVALUE7095' "$T3_F" 2>/dev/null; then
+  T3_BAD="${T3_BAD}\n    LEAK: a dp.st.-prefixed token reached journald unredacted"
+fi
+if [[ -z "$T3_BAD" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: err tail ≤200B, control-stripped, dp.st.-redacted — and populated (${#T3_PAY}B)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: err tail hygiene:"; printf "%b\n" "$T3_BAD"
+fi
+rm -rf "$T3_D"
+
+# T-7095-4 — the SAME treatment at the third site: ghcr_prelude_and_login's "baked file absent +
+# doppler empty/unavailable" message. That line named two possible causes and measured neither,
+# and it is the line the live host printed on all eight failed releases.
+echo "--- #7095 T-7095-4: the prelude's GHCR read is self-reporting too ---"
+TOTAL=$((TOTAL + 1))
+T4_D=$(mktemp -d); T4_F="$T4_D/logger.txt"; : > "$T4_F"
+run_deploy_cred_capture "$T4_F" 'export MOCK_DOPPLER_GET_FAIL=empty' || true
+T4_BAD=""
+# POSITIVE — the marker names the GHCR secret that could not be read.
+grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$T4_F" 2>/dev/null | grep -qF 'secret=GHCR_READ_TOKEN' \
+  || T4_BAD="${T4_BAD}\n    no SOLEUR_DEPLOY_CRED_FAIL for secret=GHCR_READ_TOKEN"
+# POSITIVE — the pre-existing PRELUDE line is still emitted (this slice ADDS observation; it
+# does not move the control flow, and a test that let that line vanish would hide a regression).
+grep -qF 'PRELUDE: GHCR_READ_{USER,TOKEN} not both present' "$T4_F" 2>/dev/null \
+  || T4_BAD="${T4_BAD}\n    the pre-existing PRELUDE skip line disappeared"
+if [[ -z "$T4_BAD" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: the prelude names the unreadable GHCR secret alongside its skip line"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: prelude cred reporting:"; printf "%b\n" "$T4_BAD"
+  grep -E 'PRELUDE|SOLEUR_DEPLOY_CRED_FAIL' "$T4_F" 2>/dev/null | sed 's/^/          /' | head -8
+fi
+rm -rf "$T4_D"
+
+# T-7095-5 — the GENUINE pre-provisioning state keeps its wording. This is the other half of
+# 1.3b: the fix must not simply delete the dark branch, it must make it require a positive
+# sentinel. Here there is genuinely nothing to ask WITH (no DOPPLER_TOKEN) and no URL in the
+# env, which is the one state that may still claim pre-provisioning.
+# Green before AND after this change by construction — it is a regression guard on wording, not
+# a RED-first test, and it is recorded as such rather than counted as evidence of the fix.
+echo "--- #7095 T-7095-5: genuine pre-provisioning still reads as pre-provisioning ---"
+TOTAL=$((TOTAL + 1))
+T5_D=$(mktemp -d); T5_F="$T5_D/logger.txt"; : > "$T5_F"
+run_deploy_cred_capture "$T5_F" 'unset DOPPLER_TOKEN' || true
+T5_BAD=""
+grep -qF 'dark, pre-provisioning' "$T5_F" 2>/dev/null \
+  || T5_BAD="${T5_BAD}\n    the genuine unset-credential state lost its 'dark, pre-provisioning' wording"
+if grep -qF 'ZOT_GATE: doppler read FAILED' "$T5_F" 2>/dev/null; then
+  T5_BAD="${T5_BAD}\n    reported a READ FAILURE when there was no credential to read WITH"
+fi
+if [[ -z "$T5_BAD" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: no token + no URL → pre-provisioning; never mislabelled a read failure"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: pre-provisioning sentinel:"; printf "%b\n" "$T5_BAD"
+  grep -E 'ZOT_GATE' "$T5_F" 2>/dev/null | sed 's/^/          /' | head -6
+fi
+rm -rf "$T5_D"
+
+# T-7095-6 (R25) — THE FAIL-OPEN CONTRACT, pinned. `zot_gate_and_login` is annotated
+# "Fail-open: never aborts the deploy", and cloud-init bakes /etc/default/soleur-ghcr-read
+# SPECIFICALLY so a cold-boot deploy proceeds when Doppler answers empty. Making a failed read
+# terminal for every shape would hard-abort every deploy on a transient Doppler blip AND make
+# that documented cold-boot path unreachable. So: a network-shaped read failure must still
+# complete the deploy on the baked GHCR creds — loudly, but completely.
+echo "--- #7095 T-7095-6 (R25): a network-shaped read failure still completes the deploy ---"
+TOTAL=$((TOTAL + 1))
+T6_D=$(mktemp -d); T6_F="$T6_D/logger.txt"; : > "$T6_F"
+printf 'GHCR_READ_USER=baked-cold-boot-user\nGHCR_READ_TOKEN=BAKED_COLD_BOOT_TOKEN\n' > "$T6_D/soleur-ghcr-read"
+T6_RC=0
+run_deploy_cred_capture "$T6_F" \
+  "export MOCK_DOPPLER_GET_FAIL=rc
+   export MOCK_DOPPLER_GET_FAIL_STDERR='Post \"https://api.doppler.com/v3/configs/config/secret\": dial tcp 34.117.0.1:443: i/o timeout'
+   export SOLEUR_GHCR_READ_FILE=\"\$T6_D/soleur-ghcr-read\"" || T6_RC=$?
+T6_BAD=""
+# THE contract: the deploy still finishes. This is the assertion that would go RED the moment
+# somebody makes a doppler read terminal in this slice.
+[[ "$T6_RC" -eq 0 ]] || T6_BAD="${T6_BAD}\n    the deploy ABORTED (exit=$T6_RC) — the documented fail-open contract is broken"
+# …and it was loud about it, not silent. Both halves are required: "still exits 0" alone is
+# satisfied by unmodified ci-deploy.sh, which is precisely the broken system.
+grep -qF 'SOLEUR_DEPLOY_CRED_FAIL' "$T6_F" 2>/dev/null \
+  || T6_BAD="${T6_BAD}\n    degraded SILENTLY — no SOLEUR_DEPLOY_CRED_FAIL marker"
+grep -qF 'PRELUDE: docker login ghcr.io ok' "$T6_F" 2>/dev/null \
+  || T6_BAD="${T6_BAD}\n    the baked cold-boot GHCR creds were not used for the login"
+if [[ -z "$T6_BAD" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: network-shaped read failure → loud marker, baked-cred login, deploy completes (exit 0)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: fail-open scoping:"; printf "%b\n" "$T6_BAD"
+  grep -E 'ZOT_GATE|PRELUDE|SOLEUR_DEPLOY_CRED_FAIL' "$T6_F" 2>/dev/null | sed 's/^/          /' | head -10
+fi
+rm -rf "$T6_D"
+
+# T-7095-7 (R25) — retry-then-degrade, measured by COUNT. A log-content assertion cannot tell
+# one attempt from three, so the attempt log is the only channel that pins this. Both arms are
+# required: the failing arm proves the retry happens, and the HEALTHY arm is the positive
+# control that proves the retry is CONDITIONAL — without it, `tries=3` unconditionally would
+# score green while tripling the Doppler call rate of every healthy deploy.
+echo "--- #7095 T-7095-7 (R25): a failed read is retried; a healthy read is not ---"
+TOTAL=$((TOTAL + 1))
+T7_D=$(mktemp -d); T7_F="$T7_D/logger.txt"
+: > "$T7_F"; : > "$T7_D/fail.log"
+run_deploy_cred_capture "$T7_F" \
+  "export MOCK_DOPPLER_GET_FAIL=rc; export MOCK_DOPPLER_GET_LOG=\"\$T7_D/fail.log\"" || true
+: > "$T7_F"; : > "$T7_D/ok.log"
+# MOCK_ZOT_CONFIGURED=1 is what makes this arm HEALTHY: the read returns a value. Leaving it
+# off would make the "healthy" control an empty-read — i.e. a failure under the new sentinel —
+# and the control would measure nothing.
+run_deploy_cred_capture "$T7_F" \
+  "export MOCK_ZOT_CONFIGURED=1; export MOCK_DOPPLER_GET_LOG=\"\$T7_D/ok.log\"" || true
+T7_FAIL_N=$(grep -cx 'ZOT_REGISTRY_URL' "$T7_D/fail.log" 2>/dev/null); T7_FAIL_N="${T7_FAIL_N:-0}"
+T7_OK_N=$(grep -cx 'ZOT_REGISTRY_URL' "$T7_D/ok.log" 2>/dev/null); T7_OK_N="${T7_OK_N:-0}"
+if [[ "$T7_FAIL_N" -ge 2 && "$T7_OK_N" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: failed read retried (${T7_FAIL_N} attempts); healthy read read once (${T7_OK_N})"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: retry-then-degrade — expected >=2 attempts on failure and exactly 1 when healthy"
+  echo "        failing-fixture attempts=${T7_FAIL_N}  healthy-fixture attempts=${T7_OK_N}"
+fi
+rm -rf "$T7_D"
 
 # Restore strict mode for the summary/exit.
 set -e -o pipefail

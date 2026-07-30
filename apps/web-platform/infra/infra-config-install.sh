@@ -3,7 +3,7 @@
 # /hooks/infra-config webhook handler (#4827, Ref #4804).
 #
 # WHY THIS EXISTS: infra-config-apply.sh runs as User=deploy (webhook.service).
-# Its 15 managed files live in root:root 0755 destination directories
+# Its 18 managed files live in root:root 0755 destination directories
 # (/usr/local/bin, /etc/systemd/system, /etc/webhook). The deploy user cannot
 # mktemp inside those dirs — EACCES — so the handler could never land a single
 # file (the #4827 bug: every push wrote 0 files). systemd ReadWritePaths elevates
@@ -13,7 +13,7 @@
 # wildcard-free sudoers grant
 # (Cmnd_Alias INFRA_CONFIG_INSTALL = /usr/local/bin/infra-config-install). sudo
 # permits the bare command with ANY arguments — so the SECURITY BOUNDARY is here,
-# not in sudoers: the helper hardcodes the 15 allowlisted destinations and refuses
+# not in sudoers: the helper hardcodes the 18 allowlisted destinations and refuses
 # anything else. Because the helper runs as root it has no EACCES problem in the
 # dest dirs: it mktemps in the destination directory itself and does a
 # same-filesystem atomic rename.
@@ -75,6 +75,11 @@ declare -rA DEST_SPEC=(
   # #7095 — see the FILE_MAP note in infra-config-apply.sh for why this is 640 root:deploy
   # and not the 600 deploy:deploy of the existing /etc/default/webhook-deploy.
   ["/etc/default/soleur-doppler-token"]="640 root:deploy"
+  # #7095 — drop-in dests. 644 root:root (systemd reads these as root; no group needs them).
+  # These are the dests the guarded mkdir -p below exists for: a *.service.d/ directory does
+  # not exist on the host until first written, and mktemp writes INTO it.
+  ["/etc/systemd/system/vector.service.d/10-vector-doppler-token.conf"]="644 root:root"
+  ["/etc/systemd/system/inngest-heartbeat.service.d/10-inngest-heartbeat-doppler-token.conf"]="644 root:root"
 )
 
 # TEST_DESTDIR redirects writes to a sandbox and skips chown (no root needed),

@@ -1383,6 +1383,11 @@ resource "terraform_data" "deploy_pipeline_fix" {
     # re-push the same stale value. Closing that is a follow-up (a schedule: on this workflow
     # plus a liveness probe); do not read this line as more than it is.
     local.webhook_doppler_token_env,
+    # #7095 — the two drop-ins re-pointing the generated units (vector, inngest-heartbeat) at
+    # the credential above. Plain repo files, so file()-hashed normally; registering them here
+    # is what makes a body-only edit re-fire the push and actually reach the host.
+    file("${path.module}/10-vector-doppler-token.conf"),
+    file("${path.module}/10-inngest-heartbeat-doppler-token.conf"),
   ]))
 
   # #3756 — replaced SSH provisioners (connection + file + remote-exec) with

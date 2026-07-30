@@ -90,7 +90,9 @@ cat > "$PAYLOAD_FILE" <<PAYLOAD
   "git_lock_chardevice_sweep_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/git-lock-chardevice-sweep.sh")",
   "inngest_registry_probe_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-registry-probe.sh")",
   "inngest_doublefire_probe_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-doublefire-probe.sh")",
-  "soleur_doppler_token_b64": "${SOLEUR_DOPPLER_TOKEN_B64}"
+  "soleur_doppler_token_b64": "${SOLEUR_DOPPLER_TOKEN_B64}",
+  "vector_doppler_token_conf_b64": "$(base64 -w0 < "${INFRA_DIR}/10-vector-doppler-token.conf")",
+  "inngest_heartbeat_doppler_token_conf_b64": "$(base64 -w0 < "${INFRA_DIR}/10-inngest-heartbeat-doppler-token.conf")"
 }
 PAYLOAD
 
