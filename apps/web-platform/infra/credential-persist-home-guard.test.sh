@@ -118,6 +118,21 @@ trap 'rm -rf "$TMPROOT"' EXIT INT TERM HUP
 # cred-bearing units — leaves 5 and the scanner reports a healthy census, rc=0). errexit is the
 # only thing standing between that and a vacuous PASS, and errexit is silently suppressed in any
 # `if copy_scan_tree …` / `copy_scan_tree … || true` / `set +e` context a future edit might add.
+#
+# (#7025) THE NESTED CASE IS NOW LIVE, AND IS HANDLED BY A POST-COPY PRUNE. The tripwire below
+# fired for real: `apps/web-platform/infra/rung2-rehearsal/` is a third terraform root, and the
+# moment anyone runs `terraform init` there the glob-based exclusion above — which by
+# construction reaches only the top level — lets its provider cache into every sandbox.
+#
+# The remedy is the one that tripwire prescribed verbatim ("prune it after the copy"), and the
+# split is deliberate rather than redundant. GLOBIGNORE avoids COPYING the ~162 MB top-level
+# cache at all, which is where essentially the whole cost is; the prune then removes whatever
+# nested caches `cp -r` recursed into on its own. Replacing the glob with a copy-everything-
+# then-prune would restore the full 162 MB copy 24 times over.
+#
+# The prune's exit status is deliberately NOT checked: `find -delete` on a tree that contains
+# no `.terraform` is a no-op success, and the ASSERTION that the sandbox ends up clean lives in
+# the pin block below, where it is stated as a requirement rather than inferred from an rc.
 copy_scan_tree() {
   local rc=0
   ( GLOBIGNORE="$1/.terraform"; cp -r "$1"/* "$2"/; ) || rc=$?
@@ -125,6 +140,7 @@ copy_scan_tree() {
     echo "FATAL: sandbox copy failed (rc=$rc) — refusing to scan a truncated tree: $1 -> $2" >&2
     exit 1
   }
+  find "$2" -mindepth 1 -type d -name .terraform -prune -exec rm -rf {} + 2>/dev/null || true
 }
 
 # SINGLE SOURCE of the exclusion for the comparison side. Both consumers (the copy/diff pair pin
@@ -709,18 +725,24 @@ else
   pass "copy_scan_tree excluded .terraform from the sandbox (footprint bound is live)"
 fi
 
-# Nested-terraform-root tripwire. copy_scan_tree's exclusion is top-level-only and CANNOT be
-# extended to nested roots (see its comment). `infra/sentry/` is a real second terraform root, so
-# the day someone runs `terraform init` there, every sandbox silently regains a provider cache and
-# the footprint bound this suite exists to hold quietly stops holding — with both diffs and the
-# scanner walk still reporting clean, because they exclude/prune `.terraform` at EVERY depth.
-# Fail loudly with the remedy instead.
+# Nested-terraform-root coverage. This was a TRIPWIRE that asserted no nested root existed,
+# because copy_scan_tree's glob-based exclusion reaches only the top level. It FIRED FOR REAL in
+# #7025, which added `rung2-rehearsal/` as a third terraform root — so the assertion has been
+# converted from "no nested root exists" into the property that actually matters: whatever
+# nested roots exist, none of their provider caches reach a sandbox.
+#
+# The old form would now be permanently RED on any developer machine where the rehearsal root
+# has been init'd, which is a countdown timer rather than a guard. The new form goes RED if the
+# post-copy prune in copy_scan_tree is deleted, and is EXERCISED (not vacuous) exactly when a
+# nested root has been init'd — reported either way so a cold machine does not read as coverage.
 _nested_tf="$(find "$REAL_ROOT" -mindepth 2 -type d -name .terraform -print -quit 2>/dev/null || true)"
 if [[ -z "$_nested_tf" ]]; then
-  pass "no nested .terraform root (copy_scan_tree's top-level-only exclusion is sufficient)"
+  pass "nested-root prune NOT exercised: no nested .terraform in the source (cold shape)"
+elif [[ -n "$(find "$PIN_SBX" -mindepth 2 -type d -name .terraform -print -quit 2>/dev/null)" ]]; then
+  fail "a NESTED .terraform reached the sandbox — copy_scan_tree's post-copy prune is not working" \
+    "source has ${_nested_tf}; the per-sandbox footprint bound is silently broken"
 else
-  fail "nested .terraform found — copy_scan_tree's top-level exclusion does NOT cover it" \
-    "$_nested_tf — the per-sandbox footprint bound is silently broken; prune it after the copy"
+  pass "nested .terraform pruned from the sandbox (source has ${_nested_tf#"$REAL_ROOT"/})"
 fi
 rm -rf "$PIN_SBX"
 
