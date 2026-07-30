@@ -812,14 +812,61 @@ jobs:
       # version is spent, the tag exists and the notes are out — so the message says so
       # rather than reusing the release job's "nothing was half-shipped" reassurance,
       # which would be a lie here.
+      # FR-A6 — the deploy half. INLINE curl, NOT `uses: ./.github/actions/notify-ops-email`.
+      #
+      # This job has no `actions/checkout` step (it drives the deploy entirely over the
+      # webhook), and a LOCAL composite action cannot resolve without the repo on disk —
+      # the runner fails at action-resolution with "Can't find 'action.yml'". Paired with
+      # `continue-on-error: true` that failure renders as `conclusion: success`, so the
+      # step would have been a SILENT no-op on 100% of deploy failures: the exact silence
+      # this step exists to remove, reintroduced by the step removing it.
+      #
+      # `notify-gated` below already solved this the same way and says so — it inlines the
+      # Slack curl "because it has no checkout". Adding a checkout to this job instead
+      # would work, but it would also pull ~1.5k files onto the runner that holds the
+      # web-1-swap lock, purely to send an email.
+      #
+      # Mirrors .github/actions/notify-ops-email/action.yml (same Resend endpoint, same
+      # jq --arg encoding so the body cannot break the payload, same --max-time + `|| echo
+      # 000` so an unreachable Resend cannot stall or kill the step).
       - name: Email notification (deploy FAILED)
         if: failure()
         continue-on-error: true
-        uses: ./.github/actions/notify-ops-email
-        with:
-          subject: '[DEPLOY FAILED] Soleur Web Platform v${{ needs.release.outputs.version }} — prod is still on the previous build'
-          body: '<p><strong>The deploy for v${{ needs.release.outputs.version }} failed. Production is still serving the PREVIOUS build.</strong></p><p>zot mirror verified for this release: <code>${{ needs.release.outputs.mirror_verified }}</code>. If that says <code>false</code>, the image was never confirmed to be in zot and this is almost certainly an <code>image_pull_failed</code>.</p><p>Unlike a blocked release, this version IS spent — the tag and release notes are already published, so recovery is a new release rather than a re-run. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> — the failing step names the cause.</p>'
-          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          VERSION: ${{ needs.release.outputs.version }}
+          MIRROR_VERIFIED: ${{ needs.release.outputs.mirror_verified }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          if [[ -z "${RESEND_API_KEY:-}" ]]; then
+            echo "::error::RESEND_API_KEY not set — deploy-failure email cannot be sent. This is the only push notification for a failed deploy."
+            exit 0
+          fi
+          # The schema note is load-bearing and deliberately NOT the release job's
+          # "nothing was half-shipped" reassurance: by this point the version IS spent,
+          # the tag exists, the notes are published, and migrations for this version have
+          # already applied (migrate gates on the same needs.release.result). Telling the
+          # operator otherwise would be false in the direction that matters.
+          BODY="<p><strong>The deploy for v${VERSION} failed. Production is still serving the PREVIOUS build.</strong></p>"
+          BODY="${BODY}<p>zot mirror verified for this release: <code>${MIRROR_VERIFIED}</code>. If that says <code>false</code>, the image was never confirmed present in zot and this is almost certainly an <code>image_pull_failed</code>.</p>"
+          BODY="${BODY}<p><strong>Migrations for this version have already applied</strong> — prod is on the NEW schema running the PREVIOUS build's code. Unlike a blocked release, this version is spent (tag and notes are published), so recovery is a new release, not a re-run.</p>"
+          BODY="${BODY}<p><a href=\"${RUN_URL}\">Open the run</a> — the failing step names the cause.</p>"
+          PAYLOAD=$(jq -n \
+            --arg from "Soleur Ops <noreply@soleur.ai>" \
+            --arg subject "[DEPLOY FAILED] Soleur Web Platform v${VERSION} — prod is still on the previous build" \
+            --arg html "$BODY" \
+            '{from: $from, to: ["ops@jikigai.com"], subject: $subject, html: $html}')
+          HTTP_CODE=$(curl -s -o "${RUNNER_TEMP}/resend-deploy-fail.txt" -w "%{http_code}" \
+            -X POST "https://api.resend.com/emails" --max-time 15 \
+            -H "Authorization: Bearer ${RESEND_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" || echo "000")
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Deploy-failure email sent to ops@jikigai.com (HTTP ${HTTP_CODE})"
+          else
+            echo "::error::Deploy-failure email FAILED (HTTP ${HTTP_CODE}) — nobody was notified that the deploy for v${VERSION} failed."
+          fi
 
   # ───────────────────────────────────────────────────────────────────────────
   # BLOCKING live-verify gate (#5463 — flipped from report-only 2026-06-18 after

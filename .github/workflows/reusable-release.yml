@@ -467,22 +467,42 @@ jobs:
       # explicit that the gate must not acquire spurious failure modes. If the token really
       # is dead the mirror step blocks the release anyway, with this step's output sitting
       # right above it in the log saying why.
+      # The Doppler CLI is NOT preinstalled on GitHub-hosted runners, and this workflow
+      # installs it nowhere else — the bridge composite installs its own, ~250 lines and
+      # several minutes later. Without this step the preflight below cannot run at all:
+      # `command -v doppler` fails, the script exits 2, and the advisory prints a specific
+      # false cause on every release. That is the #6122 failure verbatim, and the bridge
+      # action's header already records it ("Omitting this was the #6122 zot bridge
+      # failure"). Same SHA pin the scheduled-drift workflow uses.
+      - name: Install Doppler CLI (for the token preflight)
+        if: steps.version.outputs.next != '' && inputs.docker_image != ''
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
       - name: Preflight — registry-push Access token is still live (advisory)
         id: token_preflight
         if: steps.version.outputs.next != '' && inputs.docker_image != ''
         continue-on-error: true
         env:
-          # prd_terraform, matching the detector's documented invocation and the scheduled
-          # arm. Available here via the caller's `secrets: inherit`.
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          # DOPPLER_TOKEN_PRD, not the generic DOPPLER_TOKEN. REGISTRY_PUSH_ACCESS_TOKEN_*
+          # lives in the `prd` ROOT config (tunnel.tf), and this same file documents 250
+          # lines below that DOPPLER_TOKEN is scoped to the prd_terraform BRANCH and
+          # "cannot read the prd root". A Doppler service token also reads exactly ONE
+          # config and ignores DOPPLER_CONFIG, so the wrong token cannot even enumerate —
+          # it would exit 2 and take the false-STALE branch.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
           DOPPLER_PROJECT: soleur
-          DOPPLER_CONFIG: prd_terraform
         run: |
-          if bash scripts/check-cloudflare-token-drift.sh --only REGISTRY_PUSH_ACCESS_TOKEN; then
-            echo "Registry-push Access service token verified live — the zot bridge should authenticate."
-          else
-            echo "::warning::The registry-push CF Access service token looks STALE in at least one Doppler config. The zot mirror step later in this job will very likely fail with mirror_reason=bridge. Fix now to save the round trip: set the live REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET on the 'prd' ROOT config. This step is advisory and is not failing the release."
-          fi
+          set -uo pipefail
+          bash scripts/check-cloudflare-token-drift.sh --only REGISTRY_PUSH_ACCESS_TOKEN
+          rc=$?
+          # THREE-valued, because the script is: 0 live / 1 dead / 2 could-not-check.
+          # Collapsing 2 into 1 is what turns "nothing was checked" into a confident
+          # accusation — the naming-an-unmeasured-cause defect this PR exists to drain.
+          case "$rc" in
+            0) echo "Registry-push Access service token verified live — the zot bridge should authenticate." ;;
+            1) echo "::warning::The registry-push CF Access service token is STALE in at least one Doppler config. The zot mirror step later in this job will very likely fail with mirror_reason=bridge. Fix now to save the round trip: set the live REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET on the 'prd' ROOT config. This step is advisory and is not failing the release." ;;
+            *) echo "::warning::Token preflight could NOT run (exit ${rc}: preconditions missing or nothing enumerated). No conclusion drawn about the registry-push token — this is not a claim that it is stale." ;;
+          esac
 
       - name: Docker login
         id: docker_login
@@ -871,7 +891,23 @@ jobs:
           # Every message carries $SAFE_TO_RERUN. A blocked release is the SAFEST failure
           # this pipeline has (nothing was half-shipped) and an operator who does not know
           # that will reach for something more dangerous than re-running.
-          SAFE_TO_RERUN="Nothing was half-shipped: the release is still an UNPUBLISHED DRAFT with no git tag, no version consumed and no notes sent, so re-running this workflow is non-destructive. If you must ship past this gate, apply-deploy-pipeline-fix.yml is the pipeline-bypass hatch."
+          # Two corrections a review measured, both in the sentence an operator reads first.
+          #
+          # (1) "re-running this workflow" was ambiguous in the dangerous direction. Use
+          #     GitHub's RE-RUN FAILED JOBS: it preserves the push event, so `Find merged PR`
+          #     still reads the merge PR's semver label and recomputes the SAME version.
+          #     A fresh "Run workflow" dispatch does NOT — it short-circuits to
+          #     labels="" and the bump_type picker defaults to `patch`, so a semver:minor
+          #     release silently recomputes as a patch, losing the minor bump and orphaning
+          #     the original draft permanently (no later run can recompute that tag).
+          # (2) apply-deploy-pipeline-fix.yml is NOT a way to ship past this gate. It
+          #     resolves its target tag from the RUNNING container's /health version and
+          #     redeploys that same image; it hard-errors with "Trigger a normal
+          #     web-platform release, then re-run this apply" when there is no released
+          #     semver. Naming it here sent an operator on a ~70-minute prod apply that
+          #     ends where it started. The real escape hatch is this workflow's own
+          #     dispatch-only allow_unmirrored_reason input.
+          SAFE_TO_RERUN="Nothing was half-shipped: the release is still an UNPUBLISHED DRAFT with no git tag, no version consumed and no notes sent. Recover with GitHub's 'Re-run failed jobs' on THIS run — do NOT start a fresh 'Run workflow' dispatch, which recomputes the version from a default bump_type and can strand this draft. If the gate itself is misfiring, re-dispatch web-platform-release.yml with allow_unmirrored_reason=<why> to publish anyway (it does not make the image pullable)."
           degraded() {
             local reason="$1" rc="$2"
             local detail="${3:-zot did not receive this image; backfill via 'crane copy GHCR→zot && cosign sign --yes <zot>@<digest>', then re-run.}"
@@ -887,17 +923,42 @@ jobs:
               echo ""
               echo "${SAFE_TO_RERUN}"
             } >> "$GITHUB_STEP_SUMMARY"
+            # A digest MISMATCH is NOT overridable, and this is enforced rather than asked.
+            # The detail above literally says "Do NOT override this" — an instruction the
+            # code used to permit anyone to ignore. Every other stage answers "did the copy
+            # land"; this one answers "is the thing in zot the thing this release built",
+            # and it is never a misfire. Overriding it publishes a release whose image is
+            # not the one in its own notes. The override exists for a gate that MISFIRES;
+            # by construction this one cannot.
+            if [[ "$reason" == "verify" && "$rc" == "mismatch" ]]; then
+              echo "::error::Refusing the override: a digest MISMATCH is not an overridable condition. zot holds different bits than this release built, so publishing would ship an image that does not match these release notes."
+              exit 1
+            fi
+            # Whitespace-stripped. `-n` alone accepted a single space, which defeated the
+            # "the reason IS the switch, so 'enabled but blank' is unrepresentable"
+            # invariant asserted twice in this file — a dispatch with one space bypassed
+            # the gate and left whitespace as the only record of why.
+            _ovr="${MIRROR_OVERRIDE_REASON:-}"
+            _ovr="$(printf '%s' "$_ovr" | tr -d '\000-\037\177' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
             # The override records the failure and continues; it never launders it. Both
             # mirror_status and mirror_reason keep their failure values above, so
             # mirror_verified stays false and an override-published release is
             # distinguishable from a verified one forever after. If this exited with
             # status=ok, FR-A9's legibility output would report a verification that never
             # happened — which is the exact class of lie this PR exists to remove.
-            if [[ -n "${MIRROR_OVERRIDE_REASON:-}" ]]; then
-              echo "::warning::OVERRIDE: publishing an UNMIRRORED release on purpose. Reason given: ${MIRROR_OVERRIDE_REASON}. The image is NOT verified present in zot, so the deploy will very likely fail image_pull_failed — this override does not make the image pullable, it only stops this gate from blocking."
+            if [[ -n "$_ovr" ]]; then
+              # $_ovr is operator-supplied via workflow_dispatch and reaches a workflow-command
+              # sink and a markdown sink. Control bytes (stripped above) would otherwise let a
+              # newline forge `::error::`/`::add-mask::` lines — including one that masks an
+              # arbitrary substring of the rest of the log, or overwrites the very output whose
+              # "distinguishable forever after" property is promised two comments up. Repo write
+              # is required to dispatch, so this bounds a trusted-but-auditable actor, not an
+              # attacker; the string is the AUDIT RECORD for a deliberately unsafe action, which
+              # is exactly why it must not be able to rewrite its own context.
+              echo "::warning::OVERRIDE: publishing an UNMIRRORED release on purpose. Reason given: ${_ovr}. The image is NOT verified present in zot, so the deploy will very likely fail image_pull_failed — this override does not make the image pullable, it only stops this gate from blocking."
               {
                 echo ""
-                echo "> ⚠️ **Published via operator override.** Reason: ${MIRROR_OVERRIDE_REASON}"
+                echo "> ⚠️ **Published via operator override.** Reason: ${_ovr}"
               } >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
@@ -1015,9 +1076,35 @@ jobs:
           # a bare comparison that treats an error as a mismatch it can explain — the two
           # cases print differently below precisely so the operator is not told the wrong
           # thing about which one happened.
-          ZOT_DIGEST="$(crane digest "${ZOT}:v${VERSION}" 2>/dev/null || true)"
+          # RETRIED, like every other network call in this step. This read crosses the same
+          # loopback → cloudflared → CF edge → connector → zot path whose single transient
+          # TCP reset is the entire reason retry() exists (#6274) — and the step no longer
+          # carries continue-on-error, so an un-retried blip here would block a release
+          # whose image was copied AND signed at that digest one line above. The copies got
+          # three attempts; the read that decides the release must not get one.
+          #
+          # stderr is CAPTURED, not discarded. `2>/dev/null` collapsed 404 (tag absent),
+          # 401 (credential can push but not read manifests) and connection-reset into one
+          # undifferentiated "unresolvable" with the evidence destroyed — the same defect
+          # FR-C1 fixes in ci-deploy.sh in this very PR. Bounded and newline-collapsed with
+          # the identical idiom, so the detail stays one readable line.
+          # The digest goes to a FILE, not through `$(retry ...)`. retry() announces each
+          # failed attempt with `echo "::notice::zot mirror attempt N/3 failed..."` on
+          # STDOUT, so capturing the wrapper's stdout captures those notices too: the first
+          # transient blip would have made ZOT_DIGEST a retry notice, which is non-empty and
+          # unequal to $DIGEST, so the step would take the MISMATCH branch and accuse zot of
+          # holding a different image. (Caught by T7 — the assertion that distinguishes
+          # "unresolvable" from "mismatch" is precisely what makes that visible.)
+          # Moving the notices off stdout instead would silently disable those annotations
+          # for every other retried call in this step.
+          _cd_out="$(mktemp)"; _cd_err="$(mktemp)"
+          zot_digest_read() { crane digest "${ZOT}:v${VERSION}" >"$_cd_out" 2>"$_cd_err"; }
+          retry zot_digest_read || true
+          ZOT_DIGEST="$(tr -d '[:space:]' < "$_cd_out" 2>/dev/null || true)"
+          CD_ERR_TAIL="$(tail -c 400 "$_cd_err" 2>/dev/null | tr -d '\r' | tr '\n' '|' | tr -dc '[:print:]|' || true)"
+          rm -f "$_cd_out" "$_cd_err"
           if [[ -z "$ZOT_DIGEST" ]]; then
-            degraded verify "unresolvable" "zot has no readable manifest for v${VERSION}: 'crane digest ${ZOT}:v${VERSION}' returned nothing, even though the copy step reported success. The image the host would pull is NOT there. Backfill: 'crane copy ${IMAGE}:v${VERSION} ${ZOT}:v${VERSION} && cosign sign --yes ${ZOT}@${DIGEST}', then re-run."
+            degraded verify "unresolvable" "zot has no readable manifest for v${VERSION} after ${MIRROR_RETRY_MAX:-3} attempts: 'crane digest ${ZOT}:v${VERSION}' returned nothing, even though the copy step reported success. crane said: ${CD_ERR_TAIL:-<no stderr captured>}. A 404 means the image is genuinely absent; a 401 means the push credential cannot READ manifests; a connection error means the bridge died after the copy. Backfill: 'crane copy ${IMAGE}:v${VERSION} ${ZOT}:v${VERSION} && cosign sign --yes ${ZOT}@${DIGEST}', then re-run."
           elif [[ "$ZOT_DIGEST" != "$DIGEST" ]]; then
             degraded verify "mismatch" "zot holds a DIFFERENT image at v${VERSION} than this release built. zot has ${ZOT_DIGEST}; this build is ${DIGEST}. Deploying would ship bits that are not the ones in these release notes. Do NOT override this. Re-run the release; if it repeats, something else is writing to ${ZOT}:v${VERSION}."
           fi

@@ -51,6 +51,12 @@ FIX_SECRET="fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
 # without rewriting the stub:
 #   $MOCK_CONFIGS  — one config name per line
 #   $MOCK_SECRETS  — "<config>|<KEY>|<value>" per line
+# NOTE ON FIXTURE CARDINALITY (the axis a mutation battery cannot see):
+# this script exists because "5 of 7 configs stale after a dashboard roll". A suite whose
+# every fixture holds ONE config cannot observe that requirement at all — measured:
+# rewriting `for cfg in "${CONFIGS[@]}"` to `"${CONFIGS[0]}"` at any of the three loops
+# left an 8/8 green suite while destroying the script's entire purpose. T9 below is the
+# two-config case that kills all three of those mutants.
 cat > "$STUB_DIR/doppler" <<'STUB'
 #!/usr/bin/env bash
 case "${1:-}" in
@@ -74,7 +80,7 @@ case "${1:-}" in
       for ((i=1; i<=$#; i++)); do
         [[ "${!i}" == "-c" ]] && { j=$((i+1)); _cfg="${!j}"; }
       done
-      _v=$(grep -F "${_cfg}|${_key}|" "$MOCK_SECRETS" 2>/dev/null | head -1 | cut -d'|' -f3-)
+      _v=$(grep -E "^${_cfg}\|${_key}\|" "$MOCK_SECRETS" 2>/dev/null | head -1 | cut -d'|' -f3-)
       [[ -n "$_v" ]] && printf '%s\n' "$_v"
       exit 0
     fi
@@ -82,7 +88,10 @@ case "${1:-}" in
     for ((i=1; i<=$#; i++)); do
       [[ "${!i}" == "-c" ]] && { j=$((i+1)); _cfg="${!j}"; }
     done
-    grep -F "${_cfg}|" "$MOCK_SECRETS" 2>/dev/null | cut -d'|' -f2
+    # Anchored: an unanchored `grep -F "prd|"` also matches `prd_terraform|…`, which would
+    # silently bleed one config's keys into another the moment cardinality exceeds 1 —
+    # exactly when the two-config cases below need it to be exact.
+    grep -E "^${_cfg}\|" "$MOCK_SECRETS" 2>/dev/null | cut -d'|' -f2
     ;;
 esac
 exit 0
@@ -93,10 +102,40 @@ chmod +x "$STUB_DIR/doppler"
 # assert HOW the token was presented, not merely what verdict came back — a verdict-only
 # assertion would pass against an implementation that kept using the wrong endpoint and
 # happened to get the right answer. $MOCK_HTTP_CODE drives the response.
+# `curl` stub. Records argv to $MOCK_CURL_LOG so the tests can assert HOW a token was
+# presented, not merely what verdict came back.
+#
+# It MODELS THE FLAGS, which the first version did not — and that omission was the
+# suite's single largest blind spot. Measured: deleting `-o /dev/null -w '%{http_code}'`
+# from the SUT left 8/8 green, while in production it makes `code` the response BODY,
+# which for the tcp:// registry ingress is EMPTY — so `case "" in 200)` falls through and
+# EVERY Access token reports DEAD on every release preflight. A stub whose correctness
+# depends on a flag it ignores cannot see the flag being removed.
+#
+# Two response channels, because the two arms parse differently: the Access arm reads the
+# `-w` status code, the API arm parses a JSON BODY. A stub that returned the status code
+# as the body made the API arm's json.load() raise on every call, so it always printed
+# DEAD — which meant a mutation forcing every API token to LIVE was invisible.
 cat > "$STUB_DIR/curl" <<'STUB'
 #!/usr/bin/env bash
 [[ -n "${MOCK_CURL_LOG:-}" ]] && printf '%s\n' "$*" >> "$MOCK_CURL_LOG"
-printf '%s' "${MOCK_HTTP_CODE:-200}"
+_want_code=0
+_outfile=""
+for ((i=1; i<=$#; i++)); do
+  case "${!i}" in
+    -w) j=$((i+1)); [[ "${!j}" == *'%{http_code}'* ]] && _want_code=1 ;;
+    -o) j=$((i+1)); _outfile="${!j}" ;;
+  esac
+done
+# Body first (the API arm reads stdout when there is no -o; with -o it goes to the file).
+_body="${MOCK_HTTP_BODY:-}"
+if [[ -n "$_outfile" ]]; then
+  printf '%s' "$_body" > "$_outfile" 2>/dev/null || true
+else
+  printf '%s' "$_body"
+fi
+# Only emit the status code when -w actually asked for it.
+[[ "$_want_code" == 1 ]] && printf '%s' "${MOCK_HTTP_CODE:-200}"
 exit 0
 STUB
 chmod +x "$STUB_DIR/curl"
@@ -117,17 +156,19 @@ RC=""
 OUT=""
 CURL_LOG=""
 run_sut() {
-  local label="$1" http_code="$2" secrets_body="$3" configs_body="${4:-prd}"
+  local label="$1" http_code="$2" secrets_body="$3" configs_body="${4:-prd}" only_arg="${5:-}"
   local cfgs="$TMP/$label.configs" secs="$TMP/$label.secrets"
   OUT="$TMP/$label.out"; CURL_LOG="$TMP/$label.curl"
   printf '%s\n' "$configs_body" > "$cfgs" || { echo "FATAL: fixture write failed"; exit 2; }
   printf '%s\n' "$secrets_body" > "$secs" || { echo "FATAL: fixture write failed"; exit 2; }
   : > "$CURL_LOG"
+  # shellcheck disable=SC2086
   MOCK_CONFIGS="$cfgs" MOCK_SECRETS="$secs" \
   MOCK_HTTP_CODE="$http_code" MOCK_CURL_LOG="$CURL_LOG" \
+  MOCK_HTTP_BODY="${MOCK_HTTP_BODY:-}" \
   APP_DOMAIN_BASE="soleur.ai" \
   PATH="$STUB_DIR:$PATH" \
-    bash "$SUT" > "$OUT" 2>&1
+    bash "$SUT" $only_arg > "$OUT" 2>&1
   RC=$?
 }
 
@@ -213,10 +254,75 @@ fi
 echo "T7: an enumerated token with no hostname mapping fails closed, not silently LIVE"
 run_sut t7 200 "prd|SOMETHING_NEW_ACCESS_TOKEN_ID|${FIX_ID}
 prd|SOMETHING_NEW_ACCESS_TOKEN_SECRET|${FIX_SECRET}"
-if [[ "$RC" == "1" ]] && grep -qF 'no hostname mapping' "$OUT"; then
-  pass "unmappable token surfaced as a coverage gap, exit 1"
+_t7=1
+[[ "$RC" == "1" ]] || _t7=0
+grep -qF 'UNVERIFIABLE' "$OUT" || _t7=0
+grep -qF 'add a hostname mapping' "$OUT" || _t7=0
+# The half with teeth: an unverifiable key must NOT be reported as a stale credential.
+# Doing so sends an operator to rotate a healthy token — a different false claim, and the
+# same name-an-unmeasured-cause defect this PR exists to drain. Measured before the fix:
+# the row printed under "STALE — these configs hold a token value Cloudflare no longer
+# accepts" with "set the live value on the prd ROOT config" as its remedy.
+grep -qE 'STALE.*\n?.*SOMETHING_NEW' "$OUT" && _t7=0
+awk '/^STALE/{s=1} /^UNVERIFIABLE/{s=0} s && /SOMETHING_NEW/{found=1} END{exit !found}' "$OUT" && _t7=0
+if [[ "$_t7" == "1" ]]; then
+  pass "unmappable token reported as UNVERIFIABLE with a detector-side remedy, never as STALE"
 else
-  fail "an unmappable Access token must fail closed and say why (rc=$RC)"
+  fail "an unmappable Access token must exit 1, print under UNVERIFIABLE, and never appear under STALE (rc=$RC)"
+fi
+
+# T9 — the cardinality case. Every fixture above holds ONE config, which cannot observe
+# the requirement this script exists for ("5 of 7 configs stale after a dashboard roll").
+# Measured: with only single-config fixtures, rewriting any of the three `for cfg in
+# "${CONFIGS[@]}"` loops to `"${CONFIGS[0]}"` left the suite 8/8 green.
+echo "T9: a token stale in ONE config of TWO is found, and the report names that config"
+run_sut t9 403 "prd|REGISTRY_PUSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd|REGISTRY_PUSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}
+prd_terraform|REGISTRY_PUSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd_terraform|REGISTRY_PUSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}" $'prd\nprd_terraform'
+if [[ "$RC" == "1" ]] && grep -qE 'configs scanned: 2' "$OUT" && grep -qE 'dead entries: 2' "$OUT"; then
+  pass "both configs scanned and both dead entries reported (single-config loops would report 1)"
+else
+  fail "a two-config fleet must be scanned in full (rc=$RC): $(grep -E 'configs scanned|dead entries' "$OUT" | tr '\n' ' ')"
+fi
+
+# T10 — the non-Cloudflare lookalike. This is the live defect: the enumeration matched
+# X_ACCESS_TOKEN_SECRET (an X/Twitter OAuth secret in 11 of 13 real configs), derived base
+# X_ACCESS_TOKEN, and rendered a FABRICATED X_ACCESS_TOKEN_ID/_SECRET row — a credential
+# that has never existed — into a twice-daily ops email. The pair requirement is what
+# discriminates: no `_ID` half anywhere in the fleet means it is not an Access pair.
+echo "T10: a *_ACCESS_TOKEN_SECRET with no _ID half is NOT treated as a Cloudflare pair"
+run_sut t10 200 "prd|X_ACCESS_TOKEN_SECRET|${FIX_SECRET}
+prd|REGISTRY_PUSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd|REGISTRY_PUSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}"
+if [[ "$RC" == "0" ]] && ! grep -qF 'X_ACCESS_TOKEN' "$OUT"; then
+  pass "secret-only vendor key ignored; no fabricated _ID/_SECRET row, exit 0"
+else
+  fail "a *_ACCESS_TOKEN_SECRET with no _ID must be ignored, not reported (rc=$RC): $(grep -F 'X_ACCESS_TOKEN' "$OUT" | head -1)"
+fi
+
+# T11 — `--only` is the release preflight's only argument and had zero coverage.
+# A filter matching nothing must NOT exit 0: the caller prints "verified live" on 0, so a
+# renamed key would produce a clean bill of health for a question never asked. This suite's
+# own header calls that indistinguishability "the bug".
+echo "T11: --only matching no key is a coverage gap (exit 2), not a clean bill of health"
+run_sut t11 200 "prd|REGISTRY_PUSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd|REGISTRY_PUSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}" prd "--only NOSUCHFAMILY"
+if [[ "$RC" == "2" ]] && grep -qF 'COVERAGE GAP' "$OUT"; then
+  pass "--only matching nothing exits 2 and says nothing was checked"
+else
+  fail "--only with no matches must exit 2, not report clean (rc=$RC)"
+fi
+
+# T12 — and the positive direction: --only must actually scope, not silently no-op.
+echo "T12: --only scopes the scan to the named family"
+run_sut t12 200 "prd|REGISTRY_PUSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd|REGISTRY_PUSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}
+prd|CF_API_TOKEN_DNS_EDIT|synthetic-not-real" prd "--only REGISTRY_PUSH_ACCESS_TOKEN"
+if grep -qF 'CF-Access-Client-Id' "$CURL_LOG" && ! grep -qF 'user/tokens/verify' "$CURL_LOG"; then
+  pass "--only probed the Access pair and did NOT probe the excluded API token"
+else
+  fail "--only must scope the scan: expected the Access probe and no API-token probe"
 fi
 
 # T8 — the pre-existing API-token family still works. The Access arm is additive; a
@@ -229,6 +335,33 @@ else
   fail "the CF_API_TOKEN* arm must still use the Bearer /user/tokens/verify endpoint"
 fi
 
+# T13 — the API-token family's VERDICT, not just its request shape. T8 asserts the Bearer
+# endpoint is used; nothing asserted what the answer means. With the old stub returning the
+# status code as the response BODY, the arm's json.load() raised on every call and always
+# printed DEAD — so a mutation hardcoding LIVE for every Cloudflare API token was
+# invisible, in the family the script already claimed to cover.
+echo "T13: CF_API_TOKEN* verdict follows Cloudflare's answer (success true/false)"
+MOCK_HTTP_BODY='{"success":true}' run_sut t13a 200 "prd|CF_API_TOKEN_DNS_EDIT|synthetic-not-real"
+_t13=1
+[[ "$RC" == "0" ]] || _t13=0
+grep -qE 'live entries: 1' "$OUT" || _t13=0
+MOCK_HTTP_BODY='{"success":false}' run_sut t13b 200 "prd|CF_API_TOKEN_DNS_EDIT|synthetic-not-real"
+[[ "$RC" == "1" ]] || _t13=0
+grep -qE 'dead entries: 1' "$OUT" || _t13=0
+if [[ "$_t13" == "1" ]]; then
+  pass "success:true -> LIVE exit 0; success:false -> DEAD exit 1"
+else
+  fail "the API-token verdict must track Cloudflare's success field in BOTH directions"
+fi
+
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
+# ANTI-VACUITY FLOOR. Without it, deleting every assertion call yields
+# "0/0 passed, 0 failed" and exit 0 — measured — and test-all.sh reads only the exit code,
+# so a suite that ran NOTHING is indistinguishable from one where everything passed. A
+# FLOOR, not equality: adding a case must not require editing this line.
+if [[ "$((PASS + FAIL))" -lt 13 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 13. The suite did not execute what it claims to." >&2
+  exit 1
+fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

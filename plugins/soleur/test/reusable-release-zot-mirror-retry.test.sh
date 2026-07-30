@@ -87,13 +87,29 @@ fi
 # ---------------------------------------------------------------------------
 STUB_DIR="$TMP/bin"
 mkdir -p "$STUB_DIR"
-for c in curl sha256sum sudo tar sleep cosign; do
+for c in sha256sum sudo tar sleep; do
   cat > "$STUB_DIR/$c" <<'STUB'
 #!/usr/bin/env bash
 exit 0
 STUB
   chmod +x "$STUB_DIR/$c"
 done
+# `curl` and `cosign` are mode-aware so the crane-INSTALL arm and the cosign-SIGN arm can
+# be driven. Both had zero fixtures: each was individually deletable from the workflow with
+# the whole suite green, and the sign arm is the only stage whose message may legitimately
+# name Sigstore — the negative T8 asserts on the copy arm had no positive anywhere.
+cat > "$STUB_DIR/curl" <<'STUB'
+#!/usr/bin/env bash
+[[ "${MOCK_CRANE_MODE:-}" == "install_fail" ]] && exit 22
+exit 0
+STUB
+chmod +x "$STUB_DIR/curl"
+cat > "$STUB_DIR/cosign" <<'STUB'
+#!/usr/bin/env bash
+[[ "${MOCK_CRANE_MODE:-}" == "sign_fail" && "${1:-}" == "sign" ]] && exit 1
+exit 0
+STUB
+chmod +x "$STUB_DIR/cosign"
 cat > "$STUB_DIR/crane" <<'STUB'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "copy" ]]; then
@@ -109,6 +125,8 @@ if [[ "${1:-}" == "copy" ]]; then
     # moment the retry bound changes. This drives the "a later copy arm fails, so the
     # loop aborts before cosign sign" case.
     fail_sha_tag) [[ "$*" == *"${MOCK_SHA_TAG:-abc123def}"* ]] && exit 1 || exit 0 ;;
+    # The THIRD copy arm, matched on the ref for the same reason as fail_sha_tag.
+    fail_latest_tag) [[ "$*" == *":latest"* ]] && exit 1 || exit 0 ;;
     *)           exit 0 ;;
   esac
 fi
@@ -176,8 +194,9 @@ run_mirror() {
   echo "$rc ${status:-<unset>} $warn ${copies:-0} ${reason:-<unset>}"
 }
 
-# The step summary and log of the LAST run_mirror call, for message-content assertions.
+# The log / $GITHUB_OUTPUT of the LAST run_mirror call, for content assertions.
 last_log() { ls -t "$TMP"/log.* 2>/dev/null | head -1; }
+last_out() { ls -t "$TMP"/ghout.* 2>/dev/null | head -1; }
 
 echo "=== reusable-release zot-mirror non-blocking + retry tests ==="
 echo ""
@@ -303,18 +322,64 @@ fi
 # name the bypass hatch. A blocked release is the safest failure this pipeline has, and
 # an operator who does not know that will reach for something more dangerous than
 # re-running. Asserted on the bridge arm, the one a human is most likely to meet.
-echo "T9: the failure message states the release is an unpublished draft + names the hatch"
+echo "T9: the failure message states the release is an unpublished draft + names a REAL remedy"
 run_mirror always_ok failure >/dev/null
 _t9_log="$(last_log)"
 _t9_ok=1
 grep -qF 'UNPUBLISHED DRAFT' "$_t9_log" || _t9_ok=0
-grep -qF 'apply-deploy-pipeline-fix.yml' "$_t9_log" || _t9_ok=0
 grep -qF 'check-cloudflare-token-drift.sh' "$_t9_log" || _t9_ok=0
+# The recovery verb must be the one that preserves the version. "Re-run failed jobs" keeps
+# the push event so the merge PR's semver label is re-read; a fresh dispatch defaults the
+# bump_type and can strand the draft permanently.
+grep -qF 'Re-run failed jobs' "$_t9_log" || _t9_ok=0
+# NEGATIVE, and the half with teeth: apply-deploy-pipeline-fix.yml must NOT be offered as a
+# way to ship past this gate. It redeploys the CURRENTLY RUNNING version (it resolves its
+# tag from web-1's /health) and hard-errors without a released semver, so an operator
+# following it during an incident spends ~70 minutes to arrive where they started. This
+# assertion previously pinned that false claim — a test protecting a lie.
+grep -qF 'apply-deploy-pipeline-fix.yml' "$_t9_log" && _t9_ok=0
 if [[ "$_t9_ok" == "1" ]]; then
-  pass "bridge message: unpublished-draft reassurance + bypass hatch + the drift detector to run"
+  pass "bridge message: unpublished-draft reassurance + the version-preserving re-run verb + the drift detector, and no false bypass hatch"
 else
-  fail "bridge message must state the release is an unpublished draft, name apply-deploy-pipeline-fix.yml, and name check-cloudflare-token-drift.sh"
+  fail "bridge message must name 'Re-run failed jobs' and check-cloudflare-token-drift.sh, and must NOT name apply-deploy-pipeline-fix.yml as a ship path"
 fi
+
+# T11-T14 close arms the earlier battery never mutated: it mutated the branch the PR
+# WROTE, so crane_install, the cosign-sign arm, copy_latest and mirror_verified all had
+# zero fixtures and were individually deletable with the suite fully green.
+echo "T11: the crane-install arm fires with its own reason"
+assert_eq "crane_install" "$(run_mirror install_fail)" "1 degraded loud 0 crane_install"
+
+echo "T12: the cosign-sign arm fires, and it is the ONE stage allowed to name Sigstore"
+_t12_out="$(run_mirror sign_fail)"
+_t12_log="$(last_log)"
+assert_eq "sign reason" "$(echo "$_t12_out" | cut -d' ' -f1,2,5)" "1 degraded sign"
+if grep -qiF 'sigstore' "$_t12_log"; then
+  pass "sign-arm message names Sigstore as a plausible cause (the positive T8's negative needs)"
+else
+  fail "the sign arm is the one stage where a third-party outage is plausible — its message should say so"
+fi
+
+echo "T13: the third copy arm carries its own label (not copy_v)"
+assert_eq "copy_latest" "$(run_mirror fail_latest_tag)" "1 degraded loud 5 copy_latest"
+
+echo "T14: mirror_verified is emitted true ONLY on the verified path"
+_t14_ok=1
+run_mirror always_ok >/dev/null; grep -qF 'mirror_verified=true' "$(last_out)" || _t14_ok=0
+run_mirror always_ok success mismatch >/dev/null; grep -qF 'mirror_verified=true' "$(last_out)" && _t14_ok=0
+run_mirror always_fail success match 'override for a flaky bridge' >/dev/null
+grep -qF 'mirror_verified=true' "$(last_out)" && _t14_ok=0
+if [[ "$_t14_ok" == "1" ]]; then
+  pass "mirror_verified=true on the clean path only — absent on mismatch and on override"
+else
+  fail "mirror_verified must be emitted true exactly on the verified path (FR-A9/AC8 was untested)"
+fi
+
+echo "T15: a whitespace-only override reason does NOT activate the override"
+assert_eq "blank override blocked" "$(run_mirror always_fail success match '   ')" "1 degraded loud 3 copy_v"
+
+echo "T16: a digest MISMATCH is not overridable, whatever reason is supplied"
+assert_eq "mismatch not overridable" "$(run_mirror always_ok success mismatch 'shipping past a flaky mirror')" "1 degraded loud 3 verify"
 
 # T10 — the dispatch-only override. INERT without a reason (T1 already proves the same
 # failure blocks when MIRROR_OVERRIDE_REASON is empty), and when a reason IS supplied the
@@ -327,4 +392,13 @@ assert_eq "override active" "$(run_mirror always_fail success match 'zot host do
 
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
+# ANTI-VACUITY FLOOR. Measured: replacing every assert_eq/pass/fail CALL with `:` yields
+# "0/0 passed, 0 failed" and exit 0, and test-all.sh reads only the exit code — so a suite
+# that executed no assertion at all is indistinguishable from one where everything passed.
+# The `[[ ! -s "$MIRROR_BLOCK" ]]` guard above protects EXTRACTION, not assertion count.
+# A FLOOR, not equality, so adding a case never requires editing this line.
+if [[ "$((PASS + FAIL))" -lt 20 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 20. The suite did not execute what it claims to." >&2
+  exit 1
+fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
