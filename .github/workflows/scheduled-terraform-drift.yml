@@ -131,9 +131,11 @@ jobs:
       # THIS workflow rather than a new one, for four reasons that are all already true
       # here: it fires twice daily, it already sets DOPPLER_CONFIG: prd_terraform (the
       # script's own documented invocation), it already carries notify-ops-email, and it
-      # is the workflow that CAUSES the drift — `terraform apply` replacing a token it can
-      # never propagate, because every doppler_secret carrying one declares
-      # lifecycle { ignore_changes = [value] }. A new GHA `schedule:` would also be
+      # is the workflow that DETECTS the terraform-side drift this class travels with. (It
+      # does not itself cause it: this job runs `terraform plan -detailed-exitcode` only
+      # and never applies. The drift originates in an operator apply that replaces a token
+      # it can never propagate, because every doppler_secret carrying one declares
+      # lifecycle { ignore_changes = [value] }.) A new GHA `schedule:` would also be
       # off-pattern: this file's own header records Inngest as the single scheduling
       # substrate (ADR-033).
       #
@@ -162,12 +164,6 @@ jobs:
           subject: '[TOKEN DRIFT] A Cloudflare token rotation did not propagate to Doppler'
           body: '<p><strong>At least one Cloudflare token value in Doppler is no longer accepted by Cloudflare.</strong></p><p>Terraform will NOT fix this on its own: the <code>doppler_secret</code> resources carry <code>lifecycle.ignore_changes = [value]</code>, so <code>terraform apply</code> reports "No changes" while the stale value keeps being served. Set the live value on the <code>prd</code> ROOT config — branch configs inherit it.</p><p>This matters for releases: the registry-push Access service token is what lets CI reach the zot registry, and zot is the only registry production can pull from. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> to see which key in which config is stale.</p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
-
-      - name: Enforce token-drift result
-        if: steps.token_drift.outcome == 'failure'
-        run: |
-          echo "::error::Cloudflare token drift detected — see the 'Cloudflare token drift' step above for the stale key/config pairs."
-          exit 1
 
       - name: Ensure infra-drift label exists
         if: steps.plan.outputs.exit_code == '2'
@@ -308,6 +304,22 @@ jobs:
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
+
+      # LAST step in the job, deliberately. Placed where it originally sat — immediately
+      # after the token-drift check — its `exit 1` skipped every step below it, because all
+      # four carry a plain-expression `if:` and therefore an implicit `success()`: the
+      # infra-drift label, the drift ISSUE, the drift email body, and the drift email
+      # itself. So on a day with BOTH a stale token and real Terraform drift, the terraform
+      # drift would have gone unreported — this step would have darkened the very channel
+      # it was added to. Combined with the enumeration defect that made it fire on every
+      # run, that blinding would have been permanent.
+      #
+      # `always()` so it still fails the job when an earlier step already did.
+      - name: Enforce token-drift result
+        if: always() && steps.token_drift.outcome == 'failure'
+        run: |
+          echo "::error::Cloudflare token drift detected — see the 'Cloudflare token drift' step above for the affected key/config pairs, and note that UNVERIFIABLE keys are a detector coverage gap, not stale credentials."
+          exit 1
 
   # Source-vs-live Better Stack heartbeat reconcile (#6549 item 2). The static
   # heartbeat-reprovision-parity.test.ts proves a feeder exists in SOURCE, but

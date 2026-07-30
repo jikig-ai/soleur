@@ -59,7 +59,11 @@ non-blocking when **either** holds, verified by probe rather than by assertion:
 2. A **second mirror** exists that hosts can pull from independently of zot.
 
 Until one of those is demonstrated, the four-axis mitigation in the Cold-boot-dependency
-statement has three surviving axes and they are all *detection*, not *availability*.
+statement has **two** surviving axes — one *detection* (the loud no-SSH fallback signal)
+and one *recoverability* (durability = reproducibility). **Neither is availability.**
+Axis 1 was the only availability axis, and it is gone; clause (e) below strikes it and
+"Instant revert" in place, which is the same two, counted the same way. The §Cold-boot
+head's "mitigated on four independent axes" is corrected there too.
 
 **(e) The ADR's own dead escape hatches.** Two bullets in this document recommended the
 now-broken GHCR fall-through as mitigation — Cold-boot-dependency axis 1 ("a zot outage
@@ -168,8 +172,10 @@ managed registry. Then:
 ### Cold-boot-dependency statement
 
 zot becomes a **boot-path dependency**: a fresh host (or a rolling deploy) that must pull an
-image now depends on zot being reachable. This is a deliberately-accepted SPOF, mitigated on four
-independent axes so it never silently gates a host:
+image now depends on zot being reachable. This is a deliberately-accepted SPOF, ~~mitigated on four
+independent axes so it never silently gates a host~~ — **as of the 2026-07-30 amendment, TWO of
+the four axes are struck and neither survivor provides availability**, so a zot outage DOES gate a
+host. Read the amendment before relying on any bullet below:
 
 - **Automatic degrade:** ~~the dark-launch gate falls through to the still-dual-pushed GHCR path on
   any zot miss (probe fail / login fail / pull fail) — a zot outage degrades latency, not
@@ -217,7 +223,17 @@ independent axes so it never silently gates a host:
     CF-tunnel reset) — a mirror failure degrades zot redundancy, never the release/build verdict~~
     **AMENDED 2026-07-30 for web-platform: the mirror step is now RELEASE-BLOCKING.** The
     non-blocking design was correct on its own reasoning — it rested on GHCR redundancy — and that
-    premise is false. See the amendment below. The bounded retry survives unchanged. A persistent miss is loud via a CI-level
+    premise is false. See the amendment below. The bounded retry survives unchanged.
+    **The signal description that followed this sentence is also amended, not merely
+    orphaned by the strike above it** (striking a claim's head and leaving its tail is how
+    a retraction turns into a new false statement): for `reusable-release.yml` the
+    annotation is now `::error::`, not `::warning::`, and the Slack ⚠️ line is reachable
+    ONLY on an operator override — the Slack step carries an implicit `success()`, so on a
+    blocked release it does not run at all. For `build-inngest-bootstrap-image.yml` the
+    original text still holds, since clause (h) scopes that workflow out. The rest of this
+    bullet (the fallback-rate alarm and its threshold history) is unaffected and remains
+    current. Original wording, retained for the alarm detail:
+    A persistent miss is loud via a CI-level
     degraded signal: `mirror_status=degraded` → `::warning::` + step summary (both workflows) + a
     ⚠️ line on the Slack release message (`reusable-release.yml`; #6278 added the same ⚠️ to
     `build-inngest-bootstrap-image.yml`). The *live* fallback-rate Sentry alarm the bullet above
