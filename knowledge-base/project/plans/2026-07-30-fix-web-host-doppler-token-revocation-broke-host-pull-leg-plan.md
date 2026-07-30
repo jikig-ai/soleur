@@ -28,6 +28,86 @@ status: draft
   Both are cited as constraints on the design, not prescribed as operator actions.
 -->
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-30 · **Reviewers:** architecture-strategist, spec-flow-analyzer,
+code-simplicity-reviewer, cto (devex lens), scoped strong-model consult · **Revisions produced:**
+R1–R38
+
+### Key improvements
+
+1. **Three P0s found that would have made the merge run fail with the credential still
+   undelivered** — R21 (the template filename reds `infra-config-gate.sh` and blocks the whole
+   apply), R22 (the first apply is *guaranteed* to fail on a stale `hooks.json`, and nothing
+   re-applies), R23 (the release and the apply race on the same push, so the deploy leg runs
+   before the credential exists).
+2. **A P0 that would have shipped a false green** — R1: four of the five broken consumers read
+   `/etc/default/inngest-server`, which holds a *copy* of the same token pinned forever by
+   `inngest-bootstrap.sh:567`. The draft would have recovered ci-deploy, gone green on AC25, and
+   left them failing.
+3. **A latent catastrophic risk the draft missed entirely** — R2/H7c: the log shipper runs on the
+   dead credential and survives only on in-memory secrets. Any reboot is a total telemetry
+   blackout on web-1, and every post-merge AC reads through that channel.
+4. **A strictly-safer remediation shape** — R3: put the override in `ci-deploy-wrapper.sh` so the
+   webhook unit is never modified and the self-restart *cannot* fail to start.
+5. **The plan's central self-heal claim was false** — R4: no `schedule:` on the apply workflow, so
+   nothing ever evaluates the rotation hash.
+6. **~60% scope reduction on the P1 path** via R0's PR-A/PR-B split and R17's reuse of the
+   existing probe instead of building a new one.
+
+### New considerations discovered
+
+- The failing/healthy split is exactly the **re-deliverable vs boot-baked** split (E9) — a much
+  stronger, more general finding than "one token died".
+- `web-2` is not "missing `vector.toml`"; **19 of 19** host installers are pinned to web-1 (R9).
+- The Sentry alert route is **dead for this incident class** — its DSN params come from the same
+  dead Doppler token (R5). With Better Stack at 3-day retention, that is the difference between
+  diagnosable-in-six-months and not (R19).
+
+### Deepen-plan gate results
+
+| Gate | Result |
+|---|---|
+| 4.5 Network-outage deep-dive | **Fired.** See below — L3→L7 verified in order, with artifacts. |
+| 4.6 User-Brand Impact | **Pass** — threshold `single-user incident`, concrete artifact + vector. |
+| 4.7 Observability | **Pass** — all 5 fields present, non-placeholder; `discoverability_test.command` contains no `ssh`. |
+| 4.8 PAT-shaped variable | **Matched, determined NOT-APPLICABLE — recorded, not silently skipped.** The regex `var\.[a-z_]*_(pat\|token)` matches `var.doppler_token` at 4 sites. `hr-github-app-auth-not-pat` governs **GitHub** write auth; this is a *Doppler* service token, pre-existing (`variables.tf:11-13`), and this plan introduces no new variable. GitHub App auth is not a substitute for a Doppler credential. No halt. |
+| 4.9 UI-wireframe | **Skip** — the single glob match is prose inside the Product/UX Gate stating the plan contains no such path. No UI-surface file in Files to Edit/Create. |
+| 4.10 Encryption Posture | **Pass** — `at_rest` / `in_transit` / `exception` complete; `does_not_defend` non-empty; exception carries `tracking_issue` + `expires_on`. |
+| 4.55 Downtime & Cutover | **HALTED — section was missing.** Now added above. The gate was right: the plan restarts the sole `deploy.soleur.ai` listener and had no zero-downtime evaluation. |
+
+### Citation verification (all resolved live, none from memory)
+
+- **Every** cited AGENTS rule ID (`hr-*`/`wg-*`/`cq-*`) resolves to an active `[id: …]` — zero
+  fabricated or retired citations.
+- ADR ordinal re-derived from **freshly-fetched `origin/main`** (not the branch base): highest is
+  `ADR-153`, so `ADR-154` is the correct provisional pick. Still provisional per `/ship`'s
+  collision gate.
+- Issue/PR states verified with `gh`: #7095 OPEN, #7071 MERGED, #7096 MERGED, #7072 MERGED,
+  #6536 CLOSED, #6537 CLOSED, #6594 CLOSED, #6460 OPEN — every title matches the claim made of it.
+- `ops/prod-stale` label does **not** exist → R35f makes the watcher create it idempotently rather
+  than leaving an operator step.
+
+### Network-Outage Deep-Dive (Phase 4.5)
+
+Triggered by `unreachable` in the body **and** by the resource-shape rule: the plan drives
+`terraform apply` on `terraform_data` resources carrying `connection { type = "ssh" }`
+(`infra_config_handler_bootstrap`), which makes SSH an apply-time dependency the prose scan alone
+would miss.
+
+| Layer | Status | Artifact |
+|---|---|---|
+| L3 firewall allow-list | **Verified (opt-out with artifact)** | An *authenticated HTTP 200* traversed the contested path inside the incident window (E5) — strictly stronger than a config read. |
+| L3 DNS / routing | **Verified — N/A by construction** | The registry is addressed by literal IPv4; no resolver is on the path. |
+| L7 TLS / proxy | **Verified** | `mirror_verified=true` on run `30561788389`; the CF Tunnel leg is healthy. The pull leg does not traverse it. |
+| L7 application | **Verified** | Journal lines for the exact incident window pulled from Better Stack (E1, E2) — the deciding evidence, not an absence. |
+
+**Gap closed by the deep-dive:** the apply's *own* SSH dependency was unverified. R34/Phase 0.2b
+now requires confirming the last green run of `apply-deploy-pipeline-fix.yml` before relying on
+it, and routes an SSH-leg failure to the designated-but-never-wired `server.tf:564/615` fallback.
+
+---
+
 ## Overview
 
 Production has not deployed since 2026-07-29. Eight consecutive `Web Platform Release` runs
@@ -639,6 +719,86 @@ live). `betteruptime_policy` is **not** — every existing policy carries
 The new heartbeat must therefore rely on `email = true` (the `web-probe.tf:26-46` shape), **not**
 on a policy. Sentry is the independent second paging vendor and carries no tier gate for issue
 alerts or cron monitors. No new recurring vendor expense.
+
+---
+
+## Downtime & Cutover
+
+*Added by deepen-plan Phase 4.55, which **halted** the pass: the plan takes a serving surface
+offline (a restart of the sole `deploy.soleur.ai` webhook listener — the deploy/router trigger
+class) and had no zero-downtime evaluation. Recorded here rather than treating the restart as the
+baseline.*
+
+### The offline-inducing operations, named
+
+| # | Operation | Surface | Duration |
+|---|---|---|---|
+| D1 | `infra-config-apply.sh:259-270` schedules a delayed self-restart of the webhook listener after writing a new `hooks.json` | `deploy.soleur.ai` — the **management plane** | ~3–8s |
+| D2 | Restart of the log shipper to pick up its new `EnvironmentFile` (R2) | web-1 telemetry ingestion | seconds |
+| D3 | Restart of the four cron/monitor timers to pick up theirs (R1) | already failing every 60s — a restart is strictly an improvement | n/a |
+
+### Zero-downtime evaluation (the default, per the gate)
+
+**D1 — user-facing downtime is ZERO by construction, and this is verified, not assumed.**
+`app.soleur.ai` does **not** traverse the tunnel; it is a direct CF-proxied A record (`dns.tf`,
+`model.c4:178`). The webhook listener serves only `/hooks/deploy`, `/hooks/deploy-status`,
+`/hooks/infra-config` — the management plane. No user request is dropped by D1 at any point. The
+residual is **control-plane** availability, which matters here only because the control plane *is*
+the remediation channel (Sharp Edge 1b).
+
+Zero-downtime paths considered for D1:
+- **Avoid the restart entirely** — the strongest option, and R3 gets most of the way there by
+  moving the credential override into `ci-deploy-wrapper.sh` so the *unit definition* never
+  changes. **But it does not fully eliminate D1**: `hooks.json` must change in PR-A to carry the
+  new payload key, and a changed `hooks.json` is precisely what the handler's self-restart exists
+  to load. D1 is therefore **irreducible for PR-A**. Named, not wished away.
+- **Drain-then-act** — rejected as unnecessary: the listener holds no long-lived connections, and
+  D1 is scheduled by `systemd-run --on-active` *after* the HTTP 202 is returned, so no request is
+  cut mid-flight.
+- **Blue-green a second listener** — rejected as disproportionate: a second port, a tunnel ingress
+  change and a router cutover, to remove a 3–8s management-plane blip that costs no user request.
+
+**Accepted residual for D1: ~3–8s of `deploy.soleur.ai` unavailability; no maintenance window and
+no operator sign-off required** — the affected surface is the management plane, not a user-serving
+one, and the blip is self-recovering (`Restart=on-failure`). What is **not** accepted is the
+restart *failing*, which is a different risk with its own mitigations (R3.1–R3.4: plan-time regex
+validation on the TF variable, installer-side env-file shape rejection, `systemd-analyze verify`
+before scheduling, and a dead-man revert armed beforehand).
+
+**D2 — stage it after D1, never with it.** Restarting the log shipper is the one operation that
+blinds the instrument the rest of the cutover is verified through. Sequence: land the credential
+file → verify via the status endpoint (which does not depend on the shipper) → *then* restart the
+shipper → assert rows resume (A5.4's positive control). This restart is **not** optional deferral:
+per H7c the shipper is already one restart away from a crash-loop, so a *controlled* restart under
+observation is strictly safer than the uncontrolled one a reboot would cause.
+
+**D3 — no cutover concern.** Those units fail every 60s already; a restart cannot make the surface
+worse.
+
+### Cutover ordering (the part that actually bites)
+
+**R23 is a cutover-ordering defect, not merely an AC problem.** The merge fires
+`web-platform-release.yml` and `apply-deploy-pipeline-fix.yml` **concurrently** — the
+`terraform-apply-web-platform-host` concurrency group serializes the apply against
+`apply-web-platform-infra.yml` only, **not** against the release. Without ordering, the deploy leg
+runs before the credential exists and produces a ninth consecutive failure *caused by the fix
+merge itself*. Required ordering:
+
+1. Apply lands the credential file (payload 1) → verify via `/hooks/infra-config-status`.
+2. Apply lands the `hooks.json`/unit change (payload 2) → `systemd-analyze verify` → self-restart.
+3. **The apply's own post-apply redeploy** (`apply-deploy-pipeline-fix.yml:526`, gated on
+   `reason ∈ {ok, ok_peer_fanout_degraded}`) is the cutover proof — **not** "the next release".
+4. Only then is the concurrent release run's outcome meaningful. A failure before step 3 is
+   *expected* and must not be read as a regression — nor counted by the new watcher (R30).
+
+### Rollback
+
+Per-stage, and genuinely available: the credential file is additive (removing it returns the host
+to exactly today's broken-but-stable state), the wrapper change is a single guarded `source` line,
+and every unit change is a drop-in that can be deleted. **Irreversible-operation count: zero.** No
+migration, no data transformation, no host replace — the last not merely avoided but *impossible*
+(Sharp Edge 7: `cx33`, orderable in 0 of 3 EU DCs), which is precisely why every operation above
+had to be in-place and reversible.
 
 ---
 
