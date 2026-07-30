@@ -374,7 +374,12 @@ if [[ "${1:-}" == "pull" ]]; then
   _pref="${2:-}"
   [[ -n "${MOCK_PULL_ARGS_FILE:-}" ]] && printf 'PULL:%s\n' "$_pref" >> "$MOCK_PULL_ARGS_FILE"
   if [[ "${MOCK_ZOT_PULL_FAIL:-}" == "1" && "$_pref" == 10.0.1.30:5000/* ]]; then
-    echo "manifest unknown" >&2
+    # FR-C1: caller-suppliable stderr, mirroring the zot/ghcr LOGIN arms' symmetry above. The
+    # historic hardcoded `manifest unknown` is a SINGLE short line, so it cannot drive either
+    # property the zot arm's reason= tail has to hold (newline collapse, 400-byte bound) —
+    # every fixture that exercises those has to be multi-line and over-long. Default unchanged
+    # so the existing zot-fallback cases keep their exact stderr.
+    printf '%s\n' "${MOCK_ZOT_PULL_FAIL_STDERR:-manifest unknown}" >&2
     exit 1
   fi
   # #6400: simulate a login-ok/pull-DENY GHCR credential so the pull-site recovery
@@ -3679,6 +3684,48 @@ else
 fi
 unset MOCK_ZOT_CONFIGURED MOCK_ZOT_PULL_FAIL MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
 rm -rf "$T6400"
+
+echo ""
+echo "--- FR-C1: the zot-pull-failure log line carries a bounded, single-line stderr tail ---"
+# The zot arm captured $perr and then threw it away: it logged only the bare
+# `IMAGE_PULL: zot pull failed for <ref> — falling back to GHCR`, so the one operator-visible
+# record of WHY zot missed said nothing. On 2026-07-29 (v0.244.1) that silence is what sent the
+# diagnosis at the tunnel instead of the registry. The GHCR arm already routes $perr through
+# pull_failure_event's `tail -c 400`; this asserts the zot arm does the same.
+#
+# The fixture is deliberately MULTI-LINE and OVER-LONG because those are the two properties
+# under test, and neither is reachable with a short single-line stderr:
+#   - collapse: journald records are newline-delimited and Vector parses per line, so an
+#     UNCOLLAPSED tail splits the record — MID/TAIL would land on a different line than the
+#     marker. Requiring all three on ONE line is what discriminates collapse from no-collapse.
+#   - bound: HEAD sits >400 bytes from the end, so `tail -c 400` must drop it.
+# The HEAD assertion is a negative and would pass vacuously against today's no-reason code —
+# it is only meaningful BECAUSE the MID/TAIL assertion proves content is present at all. Read
+# the three together; individually the third proves nothing.
+TFRC1=$(mktemp -d)
+export MOCK_ZOT_CONFIGURED=1 MOCK_ZOT_PULL_FAIL=1
+export MOCK_ZOT_PULL_FAIL_STDERR="ZOTSENTINELHEAD $(printf 'x%.0s' $(seq 1 500))
+ZOTSENTINELMID failed to resolve reference
+ZOTSENTINELTAIL manifest unknown"
+export MOCK_LOGGER_CAPTURE_FILE="$TFRC1/logger.txt"; : > "$MOCK_LOGGER_CAPTURE_FILE"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 || true
+TOTAL=$((TOTAL + 1))
+_frc1_marker='IMAGE_PULL: zot pull failed for'
+_frc1_hits=$(grep -cF "$_frc1_marker" "$MOCK_LOGGER_CAPTURE_FILE" || true)
+_frc1_line=$(grep -F "$_frc1_marker" "$MOCK_LOGGER_CAPTURE_FILE" | head -1)
+if [[ "$_frc1_hits" == "1" ]] \
+   && [[ "$_frc1_line" == *"ZOTSENTINELMID"* ]] \
+   && [[ "$_frc1_line" == *"ZOTSENTINELTAIL"* ]] \
+   && [[ "$_frc1_line" != *"ZOTSENTINELHEAD"* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: zot-arm log carries reason=<bounded, newline-collapsed stderr tail> on ONE line"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: FR-C1 — marker lines=$_frc1_hits (want 1); the marker line must contain"
+  echo "        ZOTSENTINELMID + ZOTSENTINELTAIL (collapse) and NOT ZOTSENTINELHEAD (400-byte bound)"
+  echo "        journald capture:"; sed 's/^/          /' "$MOCK_LOGGER_CAPTURE_FILE"
+fi
+unset MOCK_ZOT_CONFIGURED MOCK_ZOT_PULL_FAIL MOCK_ZOT_PULL_FAIL_STDERR MOCK_LOGGER_CAPTURE_FILE
+rm -rf "$TFRC1"
 
 echo ""
 echo "--- #6512 local-cache reload tier (both registries fail → reuse the RUNNING image) ---"

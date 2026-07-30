@@ -3,19 +3,134 @@ title: Revert the zot pull-site flip to GHCR-primary
 issue: "#6122"
 adr: ADR-096
 severity: P1 (deploy/boot path)
-last_reviewed: 2026-07-07
+last_reviewed: 2026-07-30
 ---
 
 # Revert the zot pull-site flip → GHCR-primary (#6122 / ADR-096)
 
+> ## 🛑 STOP — this revert no longer works (verified 2026-07-30)
+>
+> **Do not run the procedure below to escape a zot outage. It will make the outage worse.**
+>
+> This runbook was written when GHCR was a warm break-glass registry, and the whole revert
+> rests on that. It no longer is. GHCR's read credential is a **revoked** classic PAT
+> (`GET api.github.com/user` → **401**) and the pull-token minter is **disabled**
+> (`GHCR_MINTER_DISABLED=true`; minting → **403 `DENIED`**). Unsetting `ZOT_REGISTRY_URL`
+> today does not move hosts onto a working fallback — it moves them onto a registry that
+> **cannot authenticate at all**, turning "zot is degraded" into "nothing can pull".
+>
+> ADR-088 arm-b explains why this is structural rather than a lapsed chore: a GitHub App
+> installation token can `docker login` to GHCR but is **DENIED** `docker pull` of a
+> private repo-linked package, so there is no zero-touch GHCR pull credential to restore —
+> only a personal one.
+>
+> **If zot is down, the failure is a zot/registry-host problem and must be fixed as one.**
+> See "What to do instead" below. This document is kept, rather than deleted, because the
+> revert becomes correct again the moment a working non-personal GHCR pull credential or a
+> second mirror exists — and because a reader who remembers this procedure needs to find
+> the retraction, not a 404.
+
 The Phase-3 pull-site migration is **dark-launch gated**: every pull site (ci-deploy.sh
 rolling deploy, soleur-host-bootstrap.sh + cloud-init.yml fresh boot) prefers the
 self-hosted zot registry **only when `ZOT_REGISTRY_URL` is present in Doppler `prd` AND a
-fast `/v2/` probe answers AND the pull login succeeds**. Any miss falls straight through to
-the unchanged private-GHCR path. **This makes revert a Doppler flag flip — no code deploy,
-no SSH, no host mutation.** GHCR remains dual-pushed + break-glass through the entire soak
-(the interim classic PAT stays live until Phase 5.5), so the fallback registry is always
-warm and current.
+fast `/v2/` probe answers AND the pull login succeeds**. Any miss falls back to the
+private-GHCR path — which, per the banner above, is now a path that fails.
+
+**Historical note (what this paragraph used to say).** It described revert as a safe
+Doppler flag flip because "GHCR remains dual-pushed + break-glass through the entire soak
+(the interim classic PAT stays live until Phase 5.5)". Both halves have since changed:
+**the PAT was revoked OUT-OF-BAND — Phase 5.5 has NOT run.** The *dual-push* is still live,
+so GHCR still receives every image — but receiving is not serving, and nothing can read
+them back.
+
+**Corrected 2026-07-30.** This paragraph previously said "Phase 5.5 happened". It did not,
+and saying so told a future reader the retirement completed and its guards discharged.
+ADR-096 at HEAD still says the cutover has not happened, that the soak "remains necessary
+but not sufficient to authorize 5.3–5.5", and that the ADR stays *Adopting*; #6122 and
+#6500 are both still OPEN, and the `zot-soak-6122` follow-through explicitly refuses to
+exit 0 while #6500 is open. The credential was lost, not retired — which is worse, because
+nothing that gates the retirement was satisfied.
+
+## What to do instead when zot is unreachable
+
+The pull path has no second source, so the fix is always to restore zot rather than to
+route around it:
+
+1. **Is it the CI-side bridge or the host-side path?** They are different transports and
+   different credentials, and only the second one affects running production.
+   - CI → zot goes over the CF Tunnel with the `REGISTRY_PUSH_ACCESS_TOKEN_*` Access
+     service token. Symptom: releases fail at the zot mirror step.
+   - Host → zot goes over the private NIC (10.0.1.10 → 10.0.1.30:5000) with `ZOT_PULL_*`
+     and no tunnel at all. Symptom: deploys fail `image_pull_failed`.
+2. **Check for a rotation that did not propagate** — the measured cause of the 2026-07-29
+   outage, and the single most likely explanation:
+
+   ```bash
+   doppler run -p soleur -c prd_terraform -- bash scripts/check-cloudflare-token-drift.sh
+   ```
+
+   Any `DEAD` row means a token was rotated and the new value never reached Doppler.
+   Terraform will not fix it — the `doppler_secret` resources carry
+   `lifecycle { ignore_changes = [value] }`, so `terraform apply` reports "No changes"
+   while the stale value keeps being served. Set the live value on the **`prd` ROOT**
+   config; branch configs inherit it.
+3. **Is the zot host itself healthy?** Disk-full is the recurring cause — see
+   `SOLEUR_ZOT_DISK` / the Better Stack `registry_disk_prd` source.
+4. **If an image is missing from zot but present in GHCR**, backfill it rather than
+   reverting. This does not depend on GHCR being readable **by the production hosts** —
+   but it DOES need GHCR readable by whoever runs `crane`, because GHCR is the copy's
+   *source*. The revoked `GHCR_READ_TOKEN` cannot do this. Run it from a context that
+   already holds a working GHCR read credential — in practice a CI job, whose
+   `${{ github.token }}` can read the org's own packages — or re-run the release, which
+   performs the same copy as part of the mirror step.
+
+   Bring up the bridge first, on the port the probe section above uses. `127.0.0.1:5000`
+   is the port the CI action binds inside its own runner; a local bridge is `15000`:
+
+   ```bash
+   cloudflared access tcp --hostname registry.soleur.ai --url 127.0.0.1:15000 &
+   crane copy ghcr.io/jikig-ai/soleur-web-platform:vX.Y.Z 127.0.0.1:15000/jikig-ai/soleur-web-platform:vX.Y.Z
+   cosign sign --yes 127.0.0.1:15000/jikig-ai/soleur-web-platform@sha256:<digest>
+   ```
+
+   (Corrected 2026-07-30: this block previously claimed independence from GHCR
+   readability while sourcing from GHCR, and used `:5000` two paragraphs after the probe
+   section established `:15000` for a local bridge.)
+
+   The `cosign sign` is not optional: a bare `crane copy` does not write the signature
+   referrer, and the host hard-fails verification on an unsigned image.
+5. **To ship past a broken release pipeline entirely**, use `apply-deploy-pipeline-fix.yml`.
+
+## Probing `registry.soleur.ai` — the trap that cost an incident
+
+A plain HTTPS `GET https://registry.soleur.ai/v2/` returns **HTTP 200 with an empty body**
+when it is working correctly. **That is not a health check and its 200 does not mean the
+registry is up.**
+
+The tunnel ingress for that hostname is `service: tcp://10.0.1.30:5000` — a **TCP-mode**
+ingress, consumable only via `cloudflared access tcp`. A plain GET is not the WebSocket
+upgrade that stream requires, so nothing is ever proxied to the origin and Cloudflare
+answers by itself. The response says exactly one thing: whether **CF Access accepted your
+credentials** (200 = accepted, 403 = refused). It says nothing whatsoever about zot.
+
+On 2026-07-29 that empty 200 was read as "Cloudflare is answering without a working
+origin", which sent the investigation to look for a missing private-net route — a
+hypothesis later refuted — and consumed the incident's entire diagnostic budget while the
+actual cause (a CF Access service token rotated 3 minutes before the release, never
+propagated to Doppler) sat unexamined.
+
+**The correct origin probe** bridges the stream first, then speaks HTTP over it:
+
+```bash
+cloudflared access tcp --hostname registry.soleur.ai --url 127.0.0.1:15000 &
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:15000/v2/
+# 401 (or 200) = zot itself answered — the origin is UP.
+# Anything else, or a 'websocket: bad handshake' from cloudflared = the EDGE rejected you,
+# which is the stale-Access-token shape, not an origin problem.
+```
+
+A `401` here is a **healthy** result: it is zot's own auth challenge
+(`Www-Authenticate: Basic realm=…`), which proves the request reached the origin.
 
 ## When to revert
 
@@ -61,6 +176,16 @@ revoke; a per-issue mute cannot pre-suppress it because `ghcr-fallback` mints a 
 deploy). The real fix for `probe_unreachable` is the zot host, not the alarm.
 
 ## Immediate revert (≈30 s, no deploy) — unset the gate
+
+> 🛑 **Superseded 2026-07-30 — do not run this to escape an outage.** See the banner at the
+> top. The mechanism below still works exactly as described; what changed is the
+> destination. It short-circuits pulls to GHCR, and GHCR can no longer serve them, so
+> running this during a zot outage converts a degraded pull path into no pull path.
+>
+> It remains valid for one thing: **deliberately standing the zot pull path down** when
+> GHCR has been given a working pull credential again (see ADR-096's amendment for the
+> testable condition). Confirm that first — `docker pull` a private tag with the host's
+> GHCR credential and see it succeed — then use this.
 
 Removing `ZOT_REGISTRY_URL` from Doppler `prd` makes `zot_gate_and_login` /
 the cloud-init + bootstrap gates short-circuit to GHCR on the **next** pull:

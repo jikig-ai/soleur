@@ -39,6 +39,20 @@ on:
         description: "Vendor plugins/soleur into <docker_context>/_plugin-vendored before docker build (#3045)"
         type: boolean
         default: false
+      allow_unmirrored_reason:
+        # FR-A10. Non-empty = publish even if the zot mirror gate fails, recording this
+        # reason. The reason IS the switch — no companion boolean exists to drift out of
+        # sync with it, so "override enabled but no reason given" is unrepresentable.
+        #
+        # DEFAULTED, so version-bump-and-release.yml (the other caller of this reusable
+        # workflow) needs no change and never overrides anything. The caller is expected to
+        # forward this only on workflow_dispatch; the step ALSO re-checks
+        # github.event_name == 'workflow_dispatch' rather than trusting the caller, because
+        # a wired-wrong caller must not be able to make a push-triggered release
+        # self-override.
+        description: "Operator reason for publishing a release whose zot mirror failed (workflow_dispatch escape hatch; empty = gate blocks)"
+        type: string
+        default: ""
     outputs:
       version:
         description: "Computed version without prefix (e.g., 0.1.1)"
@@ -52,6 +66,13 @@ on:
       docker_pushed:
         description: "Whether Docker image was built and pushed (true/false)"
         value: ${{ jobs.release.outputs.docker_pushed }}
+      mirror_verified:
+        # FR-A9 — legibility, deliberately NOT a blocking conjunct. Making the deploy gate
+        # on this too would defeat the override's only legitimate purpose. It exists so
+        # postmerge / the operator digest can tell a verified release from one an operator
+        # published over a failed mirror, long after the run log has aged out.
+        description: "Whether the zot mirror was verified to hold this build's digest (true/false)"
+        value: ${{ jobs.release.outputs.mirror_verified }}
 
 concurrency:
   group: release-${{ inputs.component }}
@@ -73,6 +94,10 @@ jobs:
       # yields false (no new tag). Refs #4902.
       released: ${{ steps.create_release.outputs.released == 'true' || steps.idempotency.outputs.draft_exists == 'true' }}
       docker_pushed: ${{ steps.docker_pushed.outputs.pushed || 'false' }}
+      # Defaults to 'false' when the mirror step failed, was skipped (no docker_image), or
+      # published via override — every one of which is a release whose zot copy was NOT
+      # confirmed. Absence must read as unverified, never as verified.
+      mirror_verified: ${{ steps.zot_mirror.outputs.mirror_verified || 'false' }}
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -422,6 +447,72 @@ jobs:
           printf 'agent_count=%s\n' "$AGENT_COUNT" >> "$GITHUB_OUTPUT"
           echo "Counted $AGENT_COUNT agents"
 
+      # FR-B4 (preflight arm) — check the ONE credential this release will hang on, before
+      # the build spends its minutes.
+      #
+      # The scheduled detector runs twice daily, so it can be hours stale relative to the
+      # release that trips over the token. This turns a release that would otherwise fail
+      # ~15 minutes later at the mirror step, with the cause one inference away, into one
+      # that names the cause up front — and it runs BEFORE the docker build so a doomed
+      # release does not pay for an image nothing can pull.
+      #
+      # --only REGISTRY_PUSH_ACCESS_TOKEN, not a fleet-wide sweep: a full scan is one curl
+      # per distinct token value across every config, which does not belong on the critical
+      # path of every release. The scheduled arm keeps the fleet-wide coverage.
+      #
+      # ADVISORY (continue-on-error), deliberately. Its job is DIAGNOSIS; the mirror step
+      # is the gate. Making it blocking would add a second, independent way for a healthy
+      # release to be refused — including on a transient network failure, since the
+      # detector correctly fails closed on an unreachable probe — and R4 of the plan is
+      # explicit that the gate must not acquire spurious failure modes. If the token really
+      # is dead the mirror step blocks the release anyway, with this step's output sitting
+      # right above it in the log saying why.
+      # The Doppler CLI is NOT preinstalled on GitHub-hosted runners, and this workflow
+      # installs it nowhere else — the bridge composite installs its own, ~250 lines and
+      # several minutes later. Without this step the preflight below cannot run at all:
+      # `command -v doppler` fails, the script exits 2, and the advisory prints a specific
+      # false cause on every release. That is the #6122 failure verbatim, and the bridge
+      # action's header already records it ("Omitting this was the #6122 zot bridge
+      # failure"). Same SHA pin the scheduled-drift workflow uses.
+      - name: Install Doppler CLI (for the token preflight)
+        if: steps.version.outputs.next != '' && inputs.docker_image != ''
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Preflight — registry-push Access token is still live (advisory)
+        id: token_preflight
+        if: steps.version.outputs.next != '' && inputs.docker_image != ''
+        continue-on-error: true
+        env:
+          # DOPPLER_TOKEN_PRD, not the generic DOPPLER_TOKEN. REGISTRY_PUSH_ACCESS_TOKEN_*
+          # lives in the `prd` ROOT config (tunnel.tf), and this same file documents 250
+          # lines below that DOPPLER_TOKEN is scoped to the prd_terraform BRANCH and
+          # "cannot read the prd root". A Doppler service token also reads exactly ONE
+          # config and ignores DOPPLER_CONFIG, so the wrong token cannot even enumerate —
+          # it would exit 2 and take the false-STALE branch.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
+          DOPPLER_PROJECT: soleur
+        run: |
+          set -uo pipefail
+          # `|| rc=$?` is LOAD-BEARING, not style. `set -uo pipefail` does NOT clear
+          # `-e`, and Actions runs a `run:` block with no `shell:` key under
+          # `bash --noprofile --norc -eo pipefail {0}` — so a bare invocation of a
+          # script that exits non-zero ABORTS the step at that line, and `rc=$?`
+          # plus the entire `case` below never execute. Measured: the step printed
+          # NOTHING and exited 1, so the only reachable branch was rc=0, and
+          # `continue-on-error: true` then hid the abort. That made this step
+          # silent on exactly the two paths it exists for — the
+          # naming-an-unmeasured-cause defect it was written to prevent.
+          rc=0
+          bash scripts/check-cloudflare-token-drift.sh --only REGISTRY_PUSH_ACCESS_TOKEN || rc=$?
+          # THREE-valued, because the script is: 0 live / 1 dead / 2 could-not-check.
+          # Collapsing 2 into 1 is what turns "nothing was checked" into a confident
+          # accusation — the naming-an-unmeasured-cause defect this PR exists to drain.
+          case "$rc" in
+            0) echo "Registry-push Access service token verified live — the zot bridge should authenticate." ;;
+            1) echo "::warning::The registry-push CF Access service token is STALE in at least one Doppler config. The zot mirror step later in this job will very likely fail with mirror_reason=bridge. Fix now to save the round trip: set the live REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET on the 'prd' ROOT config. This step is advisory and is not failing the release." ;;
+            *) echo "::warning::Token preflight could NOT run (exit ${rc}: preconditions missing or nothing enumerated). No conclusion drawn about the registry-push token — this is not a claim that it is stale." ;;
+          esac
+
       - name: Docker login
         id: docker_login
         if: steps.version.outputs.next != '' && inputs.docker_image != ''
@@ -645,10 +736,13 @@ jobs:
       # GHCR→zot with `crane` RUNNER-SIDE (the buildx container driver cannot reach the
       # runner's 127.0.0.1 bridge listener, so adding a zot tag to build-push would not
       # work); crane preserves the digest, so the same cosign identity chain the host
-      # offline-verifies holds. GHCR push stays live (break-glass through the Phase-5 soak).
+      # offline-verifies holds. The GHCR push stays live, but it is NO LONGER a pull path:
+      # its read credential is revoked and the pull-token minter is disabled, so GHCR is a
+      # write-only archive today (see the assertion's comment block below).
       # crane + cosign auto-treat loopback (127.0.0.1) as an insecure registry → plain-HTTP
       # zot over the raw-TCP forward needs no extra flag (Phase-0 spike evidence). This block
-      # is additive: a zot/bridge failure must not fail the GHCR release (the whole block is
+      # is NOT additive any more: zot is the only registry production can pull from, so a
+      # mirror miss is a release that cannot deploy, and this step blocks it.
         # (#6416) Gated on `docker_build.outcome`; the BRIDGE outcome is branched on
         # INTERNALLY below, so a bridge failure reaches degraded() instead of skipping into
         # silence. Do NOT re-gate this step on zot_bridge — that was the #6416 defect.
@@ -688,13 +782,52 @@ jobs:
         # release that never intended to mirror anything. docker_build success is exactly
         # the precondition that guarantees IMAGE and DIGEST are populated.
         if: steps.docker_build.outcome == 'success'
-        # The continue-on-error marker below is BELT: the zot mirror is a SECONDARY/shadow
-        # copy during the ADR-096 soak (GHCR stays primary + break-glass; the pull
-        # side does an atomic GHCR fallback on any zot miss), so a mirror failure
-        # must NEVER red a successful release. #6274: a single `connection reset by
-        # peer` mid blob-upload over the multi-hop CF-tunnel bridge was failing the
-        # whole `release / release` job after a green deploy.
-        continue-on-error: true
+        # ── WHY THIS STEP IS RELEASE-BLOCKING (four clauses; ADR-096 amended) ──────────
+        #
+        # (i) GHCR COUPLING — this gate is correct ONLY while GHCR is not a usable pull
+        #     fallback, and that condition is TESTABLE rather than a matter of taste.
+        #     GHCR_READ_TOKEN is a revoked classic PAT (GET /user → 401) and the
+        #     pull-token minter is off (403 DENIED). The structural finding is ADR-088
+        #     arm-b: a GitHub App installation token CAN docker login to GHCR but is
+        #     DENIED docker pull of a private repo-linked package — so there is no
+        #     zero-touch GHCR pull credential to restore, only a personal one. If a
+        #     working non-personal GHCR pull credential (or a second mirror) ever exists,
+        #     re-read this clause before relaxing the gate. This step previously carried
+        #     continue-on-error, correct while a mirror miss cost only redundancy.
+        #
+        # (ii) CF ACCESS COUPLING — the bridge is now effectively release-blocking, which
+        #     promotes the registry_push CF Access service token to a release-blocking
+        #     credential. Its propagation after a rotation is DELIBERATELY only detected,
+        #     never automated: the doppler_secret resources carry
+        #     lifecycle { ignore_changes = [value] }, and removing that would trade a
+        #     silent-staleness bug for a refresh-churn bug already hit once. Detection
+        #     lives in scripts/check-cloudflare-token-drift.sh.
+        #
+        # (iii) WHY THE GATE LIVES HERE AND NOT AT DEPLOY — the load-bearing sub-value is
+        #     publish-ordering / version-space integrity, NOT availability. A release
+        #     blocked HERE consumes no semver, materializes no git tag and publishes no
+        #     notes (`next` derives from `git tag --list`, and a draft materializes no tag
+        #     until published). A deploy-side check cannot have that property: it would
+        #     let the release publish first and only then refuse, which IS the v0.244.1
+        #     shape. Without this clause a future reader prunes this step as redundant
+        #     with ci-deploy.sh's pull_image_with_fallback. It is not redundant — that
+        #     check runs after the version is spent.
+        #
+        # (iv) OUTCOME, NEVER CONCLUSION — read steps.zot_bridge.outcome. continue-on-error
+        #     forces `conclusion` to 'success' while `outcome` keeps the true result, and
+        #     that masking is what made the broken bridge invisible in #6416, on this exact
+        #     step.
+        #
+        # ── WHAT THIS GATE DOES NOT PROVE (state this wherever the gate is described) ──
+        # It asserts the manifest is in zot AND readable by the PUSH credential over the
+        # tunnel. It does NOT prove the host can pull. The host uses a different transport
+        # (private NIC, no tunnel, no CF Access) and a different credential (ZOT_PULL_*),
+        # so all of these remain uncovered here: the private-net 10.0.1.10→10.0.1.30:5000
+        # path being down; ZOT_PULL_* being stale (the SAME rotation-staleness class, one
+        # credential over); and zot accessControl granting push-read but not pull-read. No
+        # cheap CI-side assertion closes that gap — it is on the other side of the network.
+        # web-zot-consumer-probe.sh is the correct non-redundant complement, and this
+        # sentence exists so nobody retires it believing this gate subsumes it.
         env:
           IMAGE: ${{ inputs.docker_image }}
           DIGEST: ${{ steps.docker_build.outputs.digest }}
@@ -705,14 +838,26 @@ jobs:
           # outcome keeps the TRUE result. That masking is precisely what made the
           # broken bridge invisible.
           BRIDGE_OUTCOME: ${{ steps.zot_bridge.outcome }}
+          # FR-A10 — the dispatch-only, reason-required override. Non-empty ⇒ a failed
+          # mirror is recorded but does not block. The reason IS the switch: there is no
+          # separate boolean to get out of sync with it, so "enabled but blank" cannot
+          # exist. Empty on every push, because `inputs.allow_unmirrored_reason` is only
+          # reachable on a workflow_dispatch — a defaulted workflow_call input keeps
+          # version-bump-and-release.yml (the other consumer of this reusable workflow)
+          # completely unaffected.
+          #
+          # An override buys NOTHING when the gate is right: an image that is not in zot
+          # cannot be pulled, so overriding just publishes a still-undeployable release.
+          # It exists for when the gate MISFIRES, where it is the difference between a
+          # 30-second unblock and editing a workflow on main under incident pressure.
+          MIRROR_OVERRIDE_REASON: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_unmirrored_reason || '' }}
         run: |
-          # No `set -e` — every failure path exits 0 so the release job stays green
-          # (SUSPENDERS to the continue-on-error belt, mirroring the Sentry-audit
-          # step above). A persistent miss is NOT silently swallowed: it surfaces as
-          # mirror_status=degraded → ::warning:: + step summary + the Slack release
-          # line (consumed by the "Post to Slack (release)" step). Because this step
-          # always exits 0, `steps.zot_mirror.outcome` is always 'success' —
-          # downstream gating MUST read the explicit `mirror_status` OUTPUT.
+          # No `set -e`: the failure paths route through degraded(), which decides the exit
+          # code itself. That decision is now REAL — degraded() exits non-zero and this step
+          # no longer carries continue-on-error, so a mirror miss fails the release job and
+          # `steps.zot_mirror.outcome` finally carries the true result. Downstream consumers
+          # may still read the `mirror_status`/`mirror_reason` OUTPUTS for detail, but the
+          # job result is now the load-bearing signal.
           set -uo pipefail
 
           # Bounded retry to self-heal a transient mid-blob TCP reset over the
@@ -731,22 +876,102 @@ jobs:
             done
           }
 
-          # On any failure: record the degraded signal (output + ::warning:: + step
-          # summary) and exit 0. The release job stays green; the operator sees a
-          # loud, no-SSH signal (ADR-096 "latency, not availability").
-          # $2 = remediation detail. The failure modes are NOT equivalent: a
-          # crane-copy/install miss leaves the image ABSENT → the host's atomic GHCR
-          # fallback covers it cleanly; a cosign-sign failure leaves it PRESENT-BUT-
-          # UNSIGNED, which post-cutover DEFEATS that fallback (see the cosign call
-          # site). EVERY backfill must re-sign — a bare 'crane copy' does NOT write
-          # the signature referrer — so the default remediation includes cosign sign.
+          # On any failure: record WHICH stage failed, say something an operator can act
+          # on, and stop the release.
+          #
+          # SIGNATURE: degraded <reason> <rc> [detail].
+          #
+          # $1 = reason — one label per call site, mirrored to $GITHUB_OUTPUT as
+          # `mirror_reason`. Load-bearing, because `mirror_status` ALONE cannot name a
+          # cause: the state "the copy landed but mirror_status != ok" has at least two
+          # of them, and the COMMON one is the copy arm — degraded() is a first-failure
+          # abort, so a failure on the ${COMMIT_SHA} or `latest` tag kills the loop
+          # BEFORE `cosign sign` ever runs. An earlier draft of this change labelled that
+          # state `signing_failed` and told the operator "likely a Sigstore outage: wait
+          # and re-run" — advice that is wrong for the very case it fires on most. Naming
+          # an unmeasured cause is the defect this whole PR exists to drain, so the label
+          # is emitted by the call site that knows, never inferred downstream.
+          #
+          # $3 = remediation detail. The failure modes are NOT equivalent: a copy/install
+          # miss leaves the image ABSENT from zot; a cosign-sign failure leaves it
+          # PRESENT-BUT-UNSIGNED, which the host's verify hard-blocks on. EVERY backfill
+          # must re-sign — a bare `crane copy` does NOT write the signature referrer.
+          #
+          # Every message carries $SAFE_TO_RERUN. A blocked release is the SAFEST failure
+          # this pipeline has (nothing was half-shipped) and an operator who does not know
+          # that will reach for something more dangerous than re-running.
+          # Two corrections a review measured, both in the sentence an operator reads first.
+          #
+          # (1) "re-running this workflow" was ambiguous in the dangerous direction. Use
+          #     GitHub's RE-RUN FAILED JOBS: it preserves the push event, so `Find merged PR`
+          #     still reads the merge PR's semver label and recomputes the SAME version.
+          #     A fresh "Run workflow" dispatch does NOT — it short-circuits to
+          #     labels="" and the bump_type picker defaults to `patch`, so a semver:minor
+          #     release silently recomputes as a patch, losing the minor bump and orphaning
+          #     the original draft permanently (no later run can recompute that tag).
+          # (2) apply-deploy-pipeline-fix.yml is NOT a way to ship past this gate. It
+          #     resolves its target tag from the RUNNING container's /health version and
+          #     redeploys that same image; it hard-errors with "Trigger a normal
+          #     web-platform release, then re-run this apply" when there is no released
+          #     semver. Naming it here sent an operator on a ~70-minute prod apply that
+          #     ends where it started. The real escape hatch is this workflow's own
+          #     dispatch-only allow_unmirrored_reason input.
+          SAFE_TO_RERUN="Nothing was half-shipped: the release is still an UNPUBLISHED DRAFT with no git tag, no version consumed and no notes sent. Recover with GitHub's 'Re-run failed jobs' on THIS run — do NOT start a fresh 'Run workflow' dispatch, which recomputes the version from a default bump_type and can strand this draft. If the gate itself is misfiring, re-dispatch web-platform-release.yml with allow_unmirrored_reason=<why> to publish anyway (it does not make the image pullable)."
           degraded() {
-            local rc="$1"
-            local detail="${2:-zot redundancy reduced; backfill via 'crane copy GHCR→zot && cosign sign --yes <zot>@<digest>'.}"
+            local reason="$1" rc="$2"
+            local detail="${3:-zot did not receive this image; backfill via 'crane copy GHCR→zot && cosign sign --yes <zot>@<digest>', then re-run.}"
             echo "mirror_status=degraded" >> "$GITHUB_OUTPUT"
-            echo "::warning::zot mirror degraded for ${ZOT:-<image>} (rc=${rc}) — release UNAFFECTED (GHCR primary/break-glass). ${detail} If disk-full: see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
-            echo "⚠️ zot mirror degraded (rc=${rc}) — release OK (GHCR primary). ${detail}" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            echo "mirror_reason=${reason}" >> "$GITHUB_OUTPUT"
+            echo "::error::zot mirror FAILED at stage '${reason}' for ${ZOT:-<image>} (rc=${rc}) — this release is BLOCKED and will not deploy. ${detail} ${SAFE_TO_RERUN} If disk-full: see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
+            {
+              echo "### ❌ zot mirror failed — release blocked"
+              echo ""
+              echo "**Stage:** \`${reason}\` (rc=${rc})"
+              echo ""
+              echo "${detail}"
+              echo ""
+              echo "${SAFE_TO_RERUN}"
+            } >> "$GITHUB_STEP_SUMMARY"
+            # A digest MISMATCH is NOT overridable, and this is enforced rather than asked.
+            # The detail above literally says "Do NOT override this" — an instruction the
+            # code used to permit anyone to ignore. Every other stage answers "did the copy
+            # land"; this one answers "is the thing in zot the thing this release built",
+            # and it is never a misfire. Overriding it publishes a release whose image is
+            # not the one in its own notes. The override exists for a gate that MISFIRES;
+            # by construction this one cannot.
+            if [[ "$reason" == "verify" && "$rc" == "mismatch" ]]; then
+              echo "::error::Refusing the override: a digest MISMATCH is not an overridable condition. zot holds different bits than this release built, so publishing would ship an image that does not match these release notes."
+              exit 1
+            fi
+            # Whitespace-stripped. `-n` alone accepted a single space, which defeated the
+            # "the reason IS the switch, so 'enabled but blank' is unrepresentable"
+            # invariant asserted twice in this file — a dispatch with one space bypassed
+            # the gate and left whitespace as the only record of why.
+            _ovr="${MIRROR_OVERRIDE_REASON:-}"
+            _ovr="$(printf '%s' "$_ovr" | tr -d '\000-\037\177' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+            # The override records the failure and continues; it never launders it. Both
+            # mirror_status and mirror_reason keep their failure values above, so
+            # mirror_verified stays false and an override-published release is
+            # distinguishable from a verified one forever after. If this exited with
+            # status=ok, FR-A9's legibility output would report a verification that never
+            # happened — which is the exact class of lie this PR exists to remove.
+            if [[ -n "$_ovr" ]]; then
+              # $_ovr is operator-supplied via workflow_dispatch and reaches a workflow-command
+              # sink and a markdown sink. Control bytes (stripped above) would otherwise let a
+              # newline forge `::error::`/`::add-mask::` lines — including one that masks an
+              # arbitrary substring of the rest of the log, or overwrites the very output whose
+              # "distinguishable forever after" property is promised two comments up. Repo write
+              # is required to dispatch, so this bounds a trusted-but-auditable actor, not an
+              # attacker; the string is the AUDIT RECORD for a deliberately unsafe action, which
+              # is exactly why it must not be able to rewrite its own context.
+              echo "::warning::OVERRIDE: publishing an UNMIRRORED release on purpose. Reason given: ${_ovr}. The image is NOT verified present in zot, so the deploy will very likely fail image_pull_failed — this override does not make the image pullable, it only stops this gate from blocking."
+              {
+                echo ""
+                echo "> ⚠️ **Published via operator override.** Reason: ${_ovr}"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            exit 1
           }
 
           # Preserve the FULL org namespace (jikig-ai/…). The pull side
@@ -779,7 +1004,26 @@ jobs:
           # degrades to the pre-#6416 path (attempt the mirror; crane fails; degraded fires
           # with a less specific message) — never to silence.
           if [[ "${BRIDGE_OUTCOME:-}" == "failure" ]]; then
-            degraded "bridge" "the CF-tunnel registry bridge to zot FAILED, so NOTHING was mirrored for this release (not a partial copy). zot is now missing this version entirely; the host's atomic GHCR fallback covers the pull. Backfill: re-run the bridge, then 'crane copy ${IMAGE}:v${VERSION} ${ZOT}:v${VERSION} && cosign sign --yes ${ZOT}@${DIGEST}'. If the bridge keeps failing, the tunnel connector serving registry.soleur.ai may lack a private-net route to 10.0.1.30:5000 (#6416)."
+            # The message this replaces made two claims that are now known to be false, and
+            # they are NOT restated here even to quote them — a false claim is searchable
+            # from wherever it is written, and this step is exactly where a future reader
+            # goes looking for a diagnosis. The retracted wording lives in the PR and the
+            # learning; what belongs here is only what is true:
+            #   1. GHCR reassured the reader it would cover the pull. It cannot.
+            #      GHCR_READ_TOKEN is a revoked classic PAT (GET /user → 401) and the
+            #      pull-token minter is off (403 DENIED, GHCR_MINTER_DISABLED=true), so a
+            #      release absent from zot cannot deploy at all.
+            #   2. It predicted a missing tunnel-connector route as the likely cause.
+            #      REFUTED: web-2 was retired 2026-07-17 (#6538) so a single connector
+            #      serves the tunnel, the ingress is present, and a bridged GET /v2/
+            #      answers 401 from zot itself. Reading that prediction as a finding is
+            #      what sent the 2026-07-29 investigation to the wrong network layer and
+            #      consumed its entire diagnostic budget.
+            # The MEASURED cause class is a CF Access service-token rotation that never
+            # propagated to Doppler: lifecycle { ignore_changes = [value] } means Terraform
+            # replaces the token and then reports "No changes" while the stale value is
+            # still being served.
+            degraded bridge "n/a" "The CF-tunnel bridge to zot failed, so NOTHING was mirrored for this release (not a partial copy) and this version is absent from zot. GHCR is NOT a fallback — its pull credential is revoked — so this release could not have deployed. Most likely cause: a Cloudflare Access service token was rotated and the new value never reached Doppler. Check it with: doppler run -p soleur -c prd_terraform -- bash scripts/check-cloudflare-token-drift.sh — if it reports REGISTRY_PUSH_ACCESS_TOKEN_* DEAD, set the live value on the 'prd' ROOT config and re-run this workflow."
           fi
 
           # Install crane (SHA-pinned; supply-chain discipline, same as cloudflared).
@@ -791,14 +1035,22 @@ jobs:
               && echo "${CRANE_SHA256}  /tmp/crane.tgz" | sha256sum -c - \
               && sudo tar -xzf /tmp/crane.tgz -C /usr/local/bin crane
           }
-          retry install_crane || degraded "$?"
+          retry install_crane || degraded crane_install "$?" "crane could not be installed on the runner, so no image could be copied to zot. This is a RUNNER/network problem, not a registry one — nothing is wrong with zot or the image. Re-run the workflow."
           rm -f /tmp/crane.tgz
 
           # crane reads ~/.docker/config.json for BOTH ghcr.io (Docker login step) and
           # 127.0.0.1:5000 (cf-tunnel-registry-bridge docker login). Copy every tag the GHCR
           # build-push wrote (digest preserved → zot manifest byte-identical).
-          for TAG in "v${VERSION}" "${COMMIT_SHA}" "latest"; do
-            retry crane copy "${IMAGE}:${TAG}" "${ZOT}:${TAG}" || degraded "$?"
+          # Each tag carries its OWN reason label. degraded() is a first-failure abort, so a
+          # failure on the ${COMMIT_SHA} or `latest` arm kills the loop before `cosign sign`
+          # ever runs — without per-arm labels every one of those reads downstream as the
+          # same undifferentiated "not ok", which is exactly how an earlier draft came to
+          # advertise a Sigstore outage on a copy failure.
+          for TAG_SPEC in "v${VERSION}:copy_v" "${COMMIT_SHA}:copy_sha" "latest:copy_latest"; do
+            TAG="${TAG_SPEC%:*}"
+            COPY_REASON="${TAG_SPEC##*:}"
+            retry crane copy "${IMAGE}:${TAG}" "${ZOT}:${TAG}" \
+              || degraded "$COPY_REASON" "$?" "zot did not receive the '${TAG}' tag of this image, so the host has nothing to pull and GHCR is not a fallback. Backfill: 'crane copy ${IMAGE}:${TAG} ${ZOT}:${TAG} && cosign sign --yes ${ZOT}@${DIGEST}', then re-run. A bare 'crane copy' is NOT enough on its own — it does not write the signature the host verifies."
           done
           # Sign the zot digest (same digest; writes a sig referrer into zot so the host's
           # offline verify — same COSIGN_IDENTITY_REGEXP — passes against the zot copy).
@@ -810,10 +1062,65 @@ jobs:
           # zot-entry-gate/soak-gate catch a missing/unsigned copy before the flip. The
           # remediation MUST re-sign, not just re-copy — hence the distinct $2 detail.
           retry cosign sign --yes "${ZOT}@${DIGEST}" \
-            || degraded "$?" "the zot copy is PRESENT BUT UNSIGNED (not a clean miss) — re-sign to clear: 'crane copy ${IMAGE}:v${VERSION} ${ZOT}:v${VERSION} && cosign sign --yes ${ZOT}@${DIGEST}'. Post-cutover an unsigned copy would block the host boot (verify hard-fail)."
+            || degraded sign "$?" "The image IS in zot at the correct digest — the copy succeeded. What is missing is its SIGNATURE, which the host verifies before it will run the image, so the boot would hard-fail. This is the one failure mode where a third-party outage is a plausible cause: if Sigstore/Fulcio is down, waiting and re-running is the fix. Otherwise re-sign directly: 'cosign sign --yes ${ZOT}@${DIGEST}'."
+
+          # ── FR-A2: the positive post-copy assertion ────────────────────────────────
+          # Everything above reports only that no COMMAND failed. That is not the same as
+          # "zot holds this release": crane can exit 0 having written to a repo nothing
+          # reads (the #6122 namespace bug did exactly that), and a tag can resolve to some
+          # earlier build entirely. So read it back and compare.
+          #
+          # ${DIGEST} — what the build pushed — is the authoritative statement of "the bits
+          # this release built", and its addressability in zot is already proven by the
+          # adjacent `cosign sign --yes "${ZOT}@${DIGEST}"` that just succeeded.
+          #
+          # ONE crane call, and DELIBERATELY no GHCR-side read: adding one would put GHCR
+          # back on the release critical path of an ADR whose purpose is removing it (a
+          # GHCR outage is not a reason production cannot pull), and `crane digest` against
+          # GHCR is a deviation this repo already rejected in favour of
+          # `docker buildx imagetools inspect` (apply-web-platform-infra.yml).
+          #
+          # Fails CLOSED on an unresolvable read: `crane digest` exiting non-zero leaves
+          # ZOT_DIGEST empty, and empty never equals ${DIGEST}. Do not "simplify" this into
+          # a bare comparison that treats an error as a mismatch it can explain — the two
+          # cases print differently below precisely so the operator is not told the wrong
+          # thing about which one happened.
+          # RETRIED, like every other network call in this step. This read crosses the same
+          # loopback → cloudflared → CF edge → connector → zot path whose single transient
+          # TCP reset is the entire reason retry() exists (#6274) — and the step no longer
+          # carries continue-on-error, so an un-retried blip here would block a release
+          # whose image was copied AND signed at that digest one line above. The copies got
+          # three attempts; the read that decides the release must not get one.
+          #
+          # stderr is CAPTURED, not discarded. `2>/dev/null` collapsed 404 (tag absent),
+          # 401 (credential can push but not read manifests) and connection-reset into one
+          # undifferentiated "unresolvable" with the evidence destroyed — the same defect
+          # FR-C1 fixes in ci-deploy.sh in this very PR. Bounded and newline-collapsed with
+          # the identical idiom, so the detail stays one readable line.
+          # The digest goes to a FILE, not through `$(retry ...)`. retry() announces each
+          # failed attempt with `echo "::notice::zot mirror attempt N/3 failed..."` on
+          # STDOUT, so capturing the wrapper's stdout captures those notices too: the first
+          # transient blip would have made ZOT_DIGEST a retry notice, which is non-empty and
+          # unequal to $DIGEST, so the step would take the MISMATCH branch and accuse zot of
+          # holding a different image. (Caught by T7 — the assertion that distinguishes
+          # "unresolvable" from "mismatch" is precisely what makes that visible.)
+          # Moving the notices off stdout instead would silently disable those annotations
+          # for every other retried call in this step.
+          _cd_out="$(mktemp)"; _cd_err="$(mktemp)"
+          zot_digest_read() { crane digest "${ZOT}:v${VERSION}" >"$_cd_out" 2>"$_cd_err"; }
+          retry zot_digest_read || true
+          ZOT_DIGEST="$(tr -d '[:space:]' < "$_cd_out" 2>/dev/null || true)"
+          CD_ERR_TAIL="$(tail -c 400 "$_cd_err" 2>/dev/null | tr -d '\r' | tr '\n' '|' | tr -dc '[:print:]|' || true)"
+          rm -f "$_cd_out" "$_cd_err"
+          if [[ -z "$ZOT_DIGEST" ]]; then
+            degraded verify "unresolvable" "zot has no readable manifest for v${VERSION} after ${MIRROR_RETRY_MAX:-3} attempts: 'crane digest ${ZOT}:v${VERSION}' returned nothing, even though the copy step reported success. crane said: ${CD_ERR_TAIL:-<no stderr captured>}. A 404 means the image is genuinely absent; a 401 means the push credential cannot READ manifests; a connection error means the bridge died after the copy. Backfill: 'crane copy ${IMAGE}:v${VERSION} ${ZOT}:v${VERSION} && cosign sign --yes ${ZOT}@${DIGEST}', then re-run."
+          elif [[ "$ZOT_DIGEST" != "$DIGEST" ]]; then
+            degraded verify "mismatch" "zot holds a DIFFERENT image at v${VERSION} than this release built. zot has ${ZOT_DIGEST}; this build is ${DIGEST}. Deploying would ship bits that are not the ones in these release notes. Do NOT override this. Re-run the release; if it repeats, something else is writing to ${ZOT}:v${VERSION}."
+          fi
 
           echo "mirror_status=ok" >> "$GITHUB_OUTPUT"
-          echo "zot mirror ok: copied v${VERSION}, ${COMMIT_SHA}, latest to ${ZOT} and signed ${ZOT}@${DIGEST}."
+          echo "mirror_verified=true" >> "$GITHUB_OUTPUT"
+          echo "zot mirror ok: copied v${VERSION}, ${COMMIT_SHA}, latest to ${ZOT}, signed ${ZOT}@${DIGEST}, and VERIFIED that ${ZOT}:v${VERSION} resolves to ${ZOT_DIGEST}."
 
       - name: Tear down cloudflared registry bridge
         if: always()
@@ -872,6 +1179,33 @@ jobs:
           body: '<p><strong>${{ inputs.component_display }} v${{ steps.version.outputs.next }} released!</strong></p><p><a href="${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}">View release notes</a></p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
+      # FR-A6 — a blocked release has to reach a human.
+      #
+      # Every notify step above gates on create_release.released || draft_exists with NO
+      # status function, so each carries an implicit success() and NONE of them fires when
+      # the job fails. Before this step the only remaining signal on a blocked release was
+      # GitHub's failed-workflow email, routed to the triggering actor — which for a
+      # push-triggered release is frequently a GitHub App identity, i.e. nobody. Making the
+      # mirror release-blocking without this step would have traded a silent bad release
+      # for a silent blocked one.
+      #
+      # if: failure() + notify-ops-email is the established idiom here (7 workflows).
+      # The body carries mirror_reason and ONE remedy sentence, never a checklist
+      # (hr-ship-message-no-operator-checklist) — the run log holds the full detail.
+      #
+      # TWO CONSUMERS: this lives in the shared reusable workflow, so plugin releases via
+      # version-bump-and-release.yml also start emailing ops on a failed release job. That
+      # is a deliberate widening, disclosed in the PR body, and it is the correct default —
+      # a silently failed plugin release was never a good outcome either.
+      - name: Email notification (release FAILED)
+        if: failure()
+        continue-on-error: true
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[BLOCKED] ${{ inputs.component_display }} release failed — nothing was shipped'
+          body: '<p><strong>The ${{ inputs.component_display }} release job failed, so no release was published and no deploy ran.</strong></p><p>zot mirror stage: <code>${{ steps.zot_mirror.outputs.mirror_reason || ''n/a — the job failed before or outside the mirror step'' }}</code></p><p>Nothing was half-shipped: no version was consumed, no git tag was created and no release notes were sent, so re-running this workflow is safe. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> — the failing step names the cause and the one command that fixes it.</p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+
       # Inline step required: GITHUB_TOKEN-created releases don't fire
       # 'release: published' events, so a separate workflow cannot trigger.
       # Inline shell (not a composite action) per plan-review: single
@@ -889,8 +1223,20 @@ jobs:
           COMPONENT_DISPLAY: ${{ inputs.component_display }}
           RELEASE_NOTES_FILE: ${{ steps.tmpfiles.outputs.release_notes }}
           # #6274: surface a degraded zot mirror on the release message. Empty on the
-          # happy path. Read as OUTPUT, never `outcome` (the step always exits 0, so
-          # outcome is always 'success').
+          # happy path. Read as OUTPUT, never `outcome`.
+          #
+          # CORRECTED 2026-07-30: the original reason given here — "the step always
+          # exits 0, so outcome is always 'success'" — is no longer true. `degraded()`
+          # now exits 1 and `continue-on-error` is gone, so on a mirror failure the
+          # step's outcome IS 'failure' and this Slack step does not run at all (it
+          # carries a plain-expression `if:`, hence an implicit `success()`). Reading
+          # the OUTPUT is still correct, for a different reason: the output is set on
+          # every path including the override, whereas `outcome` now conflates
+          # "mirror degraded" with "the whole release is blocked".
+          #
+          # This comment existed in two places; the sibling copy was deleted when the
+          # gate became blocking and this one was missed, leaving a stale reason
+          # attached to a still-correct instruction.
           #
           # #6416: this used to also be empty when the mirror step was SKIPPED because the
           # bridge failed — which meant the one case most worth reporting was the one case
@@ -940,12 +1286,19 @@ jobs:
           MESSAGE=$(printf '*%s v%s released!*\n\n%s\n\nFull release notes: %s' \
             "$COMPONENT_DISPLAY" "$VERSION" "$BODY" "$RELEASE_URL")
 
-          # #6274: append a loud degraded-mirror line when the zot mirror step
-          # reported degraded. Additive only — the release itself is unaffected
-          # (GHCR primary + break-glass during the ADR-096 soak). ok/empty → no line.
+          # #6274: append a loud line when the zot mirror step reported a failure.
+          #
+          # This branch now means something NARROWER than it used to, and the old wording
+          # (that the release was fine because GHCR remained primary) is retired with it.
+          # A failed mirror normally fails the release job, and this Slack step carries no
+          # status function — so its implicit success() means it does not run at all on a
+          # blocked release. Do NOT read the absence of this line as "the mirror was fine":
+          # the reachable path here is an operator override, i.e. a release that PUBLISHED
+          # with an image zot is not confirmed to hold. That is worth shouting about
+          # precisely because everything else about the message looks normal.
           if [ "${MIRROR_STATUS:-}" = "degraded" ]; then
             MESSAGE=$(printf '%s\n\n%s' "$MESSAGE" \
-              "⚠️ zot mirror degraded — release OK (GHCR primary), zot redundancy reduced; backfill needed.")
+              "⚠️ Published WITHOUT a verified zot mirror (operator override). zot is the only registry production can pull from, so this deploy is expected to fail image_pull_failed until the image is backfilled.")
           fi
 
           PAYLOAD=$(jq -n \

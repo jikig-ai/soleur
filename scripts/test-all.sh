@@ -316,6 +316,12 @@ if want_scripts; then
   run_suite "scripts/skill-freshness-aggregate" bash scripts/skill-freshness-aggregate.test.sh
   run_suite "scripts/compound-promote" bash scripts/compound-promote.test.sh
   run_suite "scripts/lint-trap-tempfile-ownership" bash scripts/lint-trap-tempfile-ownership.test.sh
+  # The Cloudflare token-drift detector's Access-service-token arm. Registered explicitly
+  # for the same reason as its neighbours — scripts/*.test.sh is NOT auto-globbed — and
+  # the omission would be especially apt here: the defect this suite pins is a detector
+  # that reported a clean bill of health for a family it never enumerated, and an
+  # unregistered suite is the same failure one level up.
+  run_suite "scripts/check-cloudflare-token-drift" bash scripts/check-cloudflare-token-drift.test.sh
   # #6789: arms for the contention instrumentation + advisory queue that this
   # runner itself now uses. Registered explicitly — scripts/*.test.sh is NOT in
   # the auto-glob below, so an unregistered suite is an ORPHAN that gates

@@ -1,4 +1,29 @@
 #!/usr/bin/env bash
+# ⚠️ SUPERSEDED / UNWIRED — dated note 2026-07-30 (#7071). Read this before trusting
+# anything below.
+#
+#  1. NOTHING INVOKES THIS SCRIPT. Measured: the only non-comment reference in the repo is
+#     `bash apps/web-platform/infra/zot-entry-gate.test.sh` in infra-validation.yml — its
+#     TEST is CI-registered, the script itself is called by nobody. So the test proves this
+#     file's behaviour and gates precisely nothing about the system.
+#
+#  2. THE CONTRACT BELOW IS STALE. It describes blocking a pull-site flip that "trails
+#     dual-push by >= 1 release" and advises backfilling "before flipping". That phase is
+#     long past — the flip happened, and as of 2026-07-30 zot is the SOLE pull path (GHCR's
+#     read credential is revoked; ADR-096 amendment 2026-07-30). An operator who found this
+#     file and followed it would be preparing for a decision that was already made.
+#
+#  3. ITS REACHABILITY PROBE IS A FALSE GATE, in the same family as the one that made the
+#     v0.244.1 bridge look healthy. `curl -s -o /dev/null` exits 0 on ANY HTTP response, so
+#     a 500 (or an empty 200) passes a check whose own comment says it is testing for
+#     "200 (open) or 401 (auth)". Not fixed here deliberately: repairing a probe inside a
+#     script nothing calls buys no runtime correctness, and the honest options are to wire
+#     it or delete it — a decision, not a patch. Tracked with the other deferred items of
+#     #7071.
+#
+# Kept rather than deleted so the reasoning survives for whoever makes that call. Everything
+# below is the ORIGINAL header, preserved for that purpose and NOT current guidance.
+#
 # Phase-3 entry gate (#6122/ADR-096): assert that BOTH platform images' currently-deployed
 # tags resolve in the self-hosted zot registry BEFORE the pull-site flip is relied on. This
 # is the RUNTIME expression of the dark-launch gate — it can only PASS once the operator has

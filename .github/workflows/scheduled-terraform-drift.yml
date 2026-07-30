@@ -122,14 +122,143 @@ jobs:
             echo "::error::Terraform plan failed in $STACK_NAME (exit $EXIT_CODE)"
           fi
 
+      # FR-B4 — actually invoke the token-drift detector.
+      #
+      # Before this step, `grep -rln check-cloudflare-token-drift` matched only the script
+      # itself: it was written during the 2026-07-29 incident response, committed, and
+      # never wired to anything. A detector nothing runs detects nothing.
+      #
+      # THIS workflow rather than a new one, for four reasons that are all already true
+      # here: it fires twice daily, it already sets DOPPLER_CONFIG: prd_terraform (the
+      # script's own documented invocation), it already carries notify-ops-email, and it
+      # is the workflow that DETECTS the terraform-side drift this class travels with. (It
+      # does not itself cause it: this job runs `terraform plan -detailed-exitcode` only
+      # and never applies. The drift originates in an operator apply that replaces a token
+      # it can never propagate, because every doppler_secret carrying one declares
+      # lifecycle { ignore_changes = [value] }.) A new GHA `schedule:` would also be
+      # off-pattern: this file's own header records Inngest as the single scheduling
+      # substrate (ADR-033).
+      #
+      # Runs ONCE, not once per matrix leg: the scan is fleet-wide over Doppler and has
+      # nothing to do with which terraform directory this leg is planning, so running it
+      # twice would double the Cloudflare probes and file duplicate findings.
+      #
+      # continue-on-error + an explicit enforce step below, rather than a bare failure:
+      # the job must still reach its notification and Sentry check-in steps, which is the
+      # whole point of detecting this at all.
+      - name: Cloudflare token drift (API tokens + Access service tokens)
+        id: token_drift
+        if: matrix.directory == 'apps/web-platform/infra'
+        continue-on-error: true
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -uo pipefail
+          # `|| rc=$?` is load-bearing: `set -uo pipefail` does NOT clear `-e`, and Actions
+          # runs this under `bash -eo pipefail {0}`, so a bare invocation would abort the
+          # step here and every line below would be unreachable.
+          rc=0
+          bash scripts/check-cloudflare-token-drift.sh --json-file "$RUNNER_TEMP/token-drift.json" || rc=$?
+          # ONE verdict, derived once. Exit 1 covers BOTH "a token is dead" and "a token
+          # could not be verified", and exit 2 means nothing was checked at all — three
+          # states calling for three different operator actions, which is why collapsing
+          # them let the old single email assert a cause the detector never claimed.
+          #
+          # Derived HERE and emitted as a single string, rather than exporting raw counts
+          # and re-deriving: the first version of this exported rc/dead/unverifiable and
+          # every consumer re-implemented the same ladder (three `if:` expressions plus a
+          # shell block). Four copies of one decision is four places to be wrong, and it
+          # leaked the -1 parse-failure sentinel into the step's public interface.
+          # ONE python invocation, kept to ONE LINE on purpose: a `python3 - <<'PY'` heredoc
+          # inside a YAML block scalar puts its body at column 0, which ends the scalar and
+          # makes the whole workflow unparseable. (Measured — the first version of this did
+          # exactly that.) Parsing stays in python; the DECISION stays in bash, below.
+          read -r dead unver < <(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["dead"], d["unverifiable"])' "$RUNNER_TEMP/token-drift.json" 2>/dev/null || echo "-1 -1")
+          # Anything unreadable or unparseable is "unavailable", never "clean". A missing or
+          # corrupt verdict file means the scan's result is UNKNOWN, and the one arm it must
+          # never take is the one saying every token is live.
+          if [[ "$rc" == "2" || "$dead" == "-1" ]]; then
+            verdict=unavailable
+          elif [[ "$dead" -gt 0 ]]; then
+            verdict=dead
+          elif [[ "$unver" -gt 0 ]]; then
+            verdict=unverifiable
+          else
+            verdict=clean
+          fi
+          # Belt for the belt: if the derivation itself produced nothing (python missing,
+          # heredoc mangled), an empty string would match no consumer condition and the run
+          # would report nothing at all. Empty is unavailable.
+          [[ -n "$verdict" ]] || verdict=unavailable
+          {
+            echo "rc=${rc}"
+            echo "verdict=${verdict}"
+          } >> "$GITHUB_OUTPUT"
+          echo "token-drift verdict: ${verdict} (detector exit ${rc})"
+          # Re-raise the detector's exit code AFTER the outputs are written. Capturing rc
+          # with `|| rc=$?` makes this block succeed, which would have flipped this step's
+          # `outcome` to 'success' permanently and silently disarmed the enforce step at
+          # the end of the job — the gate would have read as present and never fired.
+          # Outputs written to $GITHUB_OUTPUT are still visible to later steps when the
+          # step's outcome is 'failure'; `continue-on-error: true` above keeps the job
+          # walking to its reporting steps.
+          exit "$rc"
+
+      # Three bodies, because the detector reports three states and the operator action
+      # differs for each. The single static body this replaced said "At least one
+      # Cloudflare token value in Doppler is no longer accepted by Cloudflare" and told the
+      # operator to set a live value on the prd root config — false, and the wrong action,
+      # for both the unverifiable-only run and every could-not-run run. The script's own
+      # report is emphatic that an unverifiable row means "fix the DETECTOR, not the
+      # credential"; sending an operator to rotate a healthy credential is the exact defect
+      # it guards against, re-committed one layer up in the workflow.
+      - name: Email notification (token drift — DEAD credential)
+        if: always() && steps.token_drift.outputs.verdict == 'dead'
+        continue-on-error: true
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[TOKEN DRIFT] A Cloudflare token rotation did not propagate to Doppler'
+          body: '<p><strong>At least one Cloudflare token value in Doppler is no longer accepted by Cloudflare.</strong></p><p>Terraform will NOT fix this on its own: the <code>doppler_secret</code> resources carry <code>lifecycle.ignore_changes = [value]</code>, so <code>terraform apply</code> reports "No changes" while the stale value keeps being served. Set the live value on the <code>prd</code> ROOT config — branch configs inherit it.</p><p>This matters for releases: the registry-push Access service token is what lets CI reach the zot registry, and zot is the only registry production can pull from. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> to see which key in which config is stale.</p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+
+      - name: Email notification (token drift — UNVERIFIABLE only)
+        if: always() && steps.token_drift.outputs.verdict == 'unverifiable'
+        continue-on-error: true
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[TOKEN DRIFT] Detector coverage gap — no conclusion drawn about your tokens'
+          body: '<p><strong>No token was found stale, but at least one enumerated token could not be verified at all</strong>, so this run cannot claim the fleet is clean — and it is NOT claiming anything is broken.</p><p><strong>Do not rotate anything on the strength of this email.</strong> The fix is to the DETECTOR: add a hostname mapping to <code>access_hostname_for()</code> in <code>scripts/check-cloudflare-token-drift.sh</code> so the key family becomes verifiable. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> for the exact keys and the reason each was skipped.</p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+
+      - name: Email notification (token drift — detector could not run)
+        if: always() && steps.token_drift.outputs.verdict == 'unavailable'
+        continue-on-error: true
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[TOKEN DRIFT] The Cloudflare token detector could not run'
+          body: '<p><strong>The token-drift detector did not complete, so no conclusion was drawn about any credential.</strong> This is not a claim that anything is stale.</p><p>Likely causes: a missing prerequisite on the runner (doppler CLI, curl, python3), a Doppler token that cannot enumerate the project, or a filter that matched no keys. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> — the detector prints the specific precondition it failed on.</p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+
+      # The four reporting steps below are INDEPENDENT emitters, not a pipeline. Moving the
+      # enforce step to the end of the job stopped it from skipping them, but they were
+      # still shadowing each OTHER: neither issue-filer carried `continue-on-error`, so a
+      # renamed/closed milestone, an API 5xx or a secondary rate limit on `gh issue create`
+      # skipped the drift email below via implicit `success()` — the same mechanism, one
+      # step over, losing the same channel. `continue-on-error` on the filers plus
+      # `always() &&` on the email pair makes the first stumble cost one emitter instead of
+      # all of them.
       - name: Ensure infra-drift label exists
-        if: steps.plan.outputs.exit_code == '2'
+        if: always() && steps.plan.outputs.exit_code == '2'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh label create "infra-drift" --description "Terraform detected infrastructure drift" --color "D93F0B" 2>/dev/null || true
 
       - name: Create or update drift issue
-        if: steps.plan.outputs.exit_code == '2'
+        if: always() && steps.plan.outputs.exit_code == '2'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           STACK_NAME: ${{ steps.plan.outputs.stack_name }}
@@ -198,7 +327,7 @@ jobs:
 
       - name: Prepare email content
         id: email
-        if: steps.plan.outputs.exit_code != '0'
+        if: always() && steps.plan.outputs.exit_code != '0'
         env:
           EXIT_CODE: ${{ steps.plan.outputs.exit_code }}
           STACK_NAME: ${{ steps.plan.outputs.stack_name }}
@@ -233,7 +362,7 @@ jobs:
           { echo "body<<EOFBODY"; cat /tmp/email-body.html; echo "EOFBODY"; } >> "$GITHUB_OUTPUT"
 
       - name: Email notification (drift/error)
-        if: steps.plan.outputs.exit_code != '0'
+        if: always() && steps.plan.outputs.exit_code != '0'
         uses: ./.github/actions/notify-ops-email
         with:
           subject: ${{ steps.email.outputs.subject }}
@@ -247,6 +376,10 @@ jobs:
       #   exit 2 = drift detected (success path -- downstream filer handles
       #            the issue/email)             -> ?status=ok
       #   exit 1 = real error (init/plan failure) -> ?status=error
+      # A token-drift finding is NOT folded in here: it is a real, actionable finding with
+      # its own email, and reporting it as a monitor `error` would conflate "this job could
+      # not run" with "this job ran and found something", which is the distinction the
+      # drift/error split above already exists to preserve.
       - name: Sentry check-in (final)
         if: always()
         continue-on-error: true
@@ -257,6 +390,40 @@ jobs:
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
+
+      # LAST step in the job, deliberately. Placed where it originally sat — immediately
+      # after the token-drift check — its `exit 1` skipped every step below it, because all
+      # four carry a plain-expression `if:` and therefore an implicit `success()`: the
+      # infra-drift label, the drift ISSUE, the drift email body, and the drift email
+      # itself. So on a day with BOTH a stale token and real Terraform drift, the terraform
+      # drift would have gone unreported — this step would have darkened the very channel
+      # it was added to. Combined with the enumeration defect that made it fire on every
+      # run, that blinding would have been permanent.
+      #
+      # `always()` so it still fails the job when an earlier step already did.
+      - name: Enforce token-drift result
+        if: always() && steps.token_drift.outcome == 'failure'
+        env:
+          VERDICT: ${{ steps.token_drift.outputs.verdict }}
+          RC: ${{ steps.token_drift.outputs.rc }}
+        run: |
+          # The annotation names THIS run's verdict, from the SAME string the email steps
+          # branch on. It used to append "UNVERIFIABLE keys are a detector coverage gap,
+          # not stale credentials" unconditionally — including on a genuine dead-credential
+          # run, where it invites the operator to discount a real finding. A hedge that
+          # fires when there is nothing to hedge makes a true alarm look uncertain.
+          case "${VERDICT}" in
+            dead)
+              echo "::error::Cloudflare token drift: at least one DEAD credential. See the 'Cloudflare token drift' step above for the key/config pairs. Set the live value on the 'prd' ROOT config." ;;
+            unverifiable)
+              echo "::error::Cloudflare token detector coverage gap: enumerated token(s) could not be verified, so this run cannot claim the fleet is clean. Nothing is known to be stale — fix access_hostname_for(), do NOT rotate." ;;
+            *)
+              # Also the fallback for an unexpected/empty verdict, deliberately: an
+              # unrecognised value means the derivation itself misbehaved, which is a
+              # could-not-determine, never a clean bill of health.
+              echo "::error::The Cloudflare token detector could not run or its verdict was unreadable (verdict='${VERDICT}', exit ${RC}). NO conclusion was drawn about any credential — this is not a claim that one is stale. See the 'Cloudflare token drift' step for the precondition it failed on." ;;
+          esac
+          exit 1
 
   # Source-vs-live Better Stack heartbeat reconcile (#6549 item 2). The static
   # heartbeat-reprovision-parity.test.ts proves a feeder exists in SOURCE, but
@@ -320,15 +487,21 @@ jobs:
             echo "::warning::Better Stack unreachable after retries — reconcile skipped this run (no page)"
           fi
 
+      # Same independent-emitters fix as the drift-check job above. Without
+      # `continue-on-error` here, a label-API failure skips the issue-filer via implicit
+      # `success()`, which in turn leaves `reconcile_issue.outputs.created` unset — and the
+      # email steps below read that output, so the rc=2 mismatch email is lost silently.
       - name: Ensure heartbeat-reconcile-mismatch label exists
         if: steps.reconcile.outputs.rc == '2'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh label create "heartbeat-reconcile-mismatch" --description "Better Stack heartbeat live-reconcile mismatch (source vs live)" --color "5319E7" 2>/dev/null || true
 
       - name: Create or update reconcile issue
         id: reconcile_issue
-        if: steps.reconcile.outputs.rc == '2'
+        continue-on-error: true
+        if: always() && steps.reconcile.outputs.rc == '2'
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_NUMBER: ${{ github.run_number }}
@@ -418,7 +591,7 @@ jobs:
         id: reconcile_email
         # Creation-only for a mismatch (avoid twice-daily spam while a heartbeat awaits
         # disposition); always on a hard error (rc=1).
-        if: steps.reconcile.outputs.rc == '1' || steps.reconcile_issue.outputs.created == 'true' || steps.reconcile_issue.outputs.escalate == 'true'
+        if: always() && (steps.reconcile.outputs.rc == '1' || steps.reconcile_issue.outputs.created == 'true' || steps.reconcile_issue.outputs.escalate == 'true')
         env:
           RC: ${{ steps.reconcile.outputs.rc }}
         run: |
@@ -442,7 +615,7 @@ jobs:
           { echo "body<<EOFBODY"; cat /tmp/reconcile-email.html; echo "EOFBODY"; } >> "$GITHUB_OUTPUT"
 
       - name: Email notification (reconcile)
-        if: steps.reconcile.outputs.rc == '1' || steps.reconcile_issue.outputs.created == 'true' || steps.reconcile_issue.outputs.escalate == 'true'
+        if: always() && (steps.reconcile.outputs.rc == '1' || steps.reconcile_issue.outputs.created == 'true' || steps.reconcile_issue.outputs.escalate == 'true')
         uses: ./.github/actions/notify-ops-email
         with:
           subject: ${{ steps.reconcile_email.outputs.subject }}
