@@ -26,6 +26,35 @@ set -m
 
 readonly LOG_TAG="ci-deploy"
 
+# --- #7095: pick up the re-deliverable Doppler credential -----------------------------
+# webhook.service's EnvironmentFile is /etc/default/webhook-deploy, whose DOPPLER_TOKEN was
+# revoked 2026-07-30T11:19:30.614Z with no re-delivery path (written once at first boot from
+# var.doppler_token; no Terraform resource, no replace_triggered_by, no drift detector). This
+# sources the re-deliverable sibling, so the value this deploy actually runs on can be refreshed
+# by a terraform apply. Later-wins: it overrides what the unit exported.
+#
+# WHY HERE AND NOT IN THE UNIT, OR IN ci-deploy-wrapper.sh:
+#   - Not webhook.service: the remediation apply would then have to restart the webhook to take
+#     effect, and the webhook IS the channel delivering the remediation, on a host with no
+#     operator SSH runbook and no orderable replacement. A unit that fails to start after that
+#     restart is unrecoverable. Leaving the unit untouched means the worst case is a failed
+#     deploy with the remediation channel still alive.
+#   - Not the wrapper: it is inert by construction — exactly one non-comment line, asserted by
+#     ci-deploy-wrapper.test.sh — so it can never become a hang surface AHEAD of `timeout`.
+#     Sourcing here instead puts the read UNDER the 4800s wall-clock cap, which is strictly
+#     safer than doing it before `timeout` is even applied.
+#
+# `[ -r ]`-guarded, written as an `if` rather than `[ -r … ] && . …`: the latter is a bare
+# trailing command whose exit status is 1 when the file is absent, which under this script's
+# `set -e` would abort the deploy outright. The `if` form is status-neutral, so a host that has
+# not yet received the file simply keeps its current behaviour. The file's shape is enforced
+# before it ever lands (terraform plan validation on var.doppler_token, the installer's
+# envfile_shape rejection), so a malformed value cannot reach this source.
+# shellcheck disable=SC1091  # host-side file, absent at lint time
+if [ -r /etc/default/soleur-doppler-token ]; then
+  . /etc/default/soleur-doppler-token
+fi
+
 # Image signature verification (#5933 Item 4; #6005 private-GHCR + offline rework).
 # The running host pulls the app image by semver tag (ALLOWED_IMAGES); this
 # cosign-verifies its signature and runs the VERIFIED DIGEST (not the tag → closes
