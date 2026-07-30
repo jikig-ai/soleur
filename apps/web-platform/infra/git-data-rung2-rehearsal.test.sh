@@ -1235,12 +1235,44 @@ else
   fail "the orphan sweep does not query the Hetzner API"
 fi
 
+# ── 14. THIS SUITE RUNS WHEN THE WORKFLOWS IT GUARDS ARE EDITED ────────────────────
+#
+# infra-validation.yml is `paths:`-filtered. Every assertion above reads one of three
+# workflows, and NONE of the three was in that filter until #7025 -- so a PR editing only
+# `git-data-rung2-rehearsal.yml` did not run the suite whose entire job is protecting it.
+# PR #7094 ran it only incidentally, because it also touched apps/web-platform/infra/.
+#
+# That is the same defect the #6454 and #6178 comments in infra-validation.yml already
+# describe ("the job that proves the gate works would be skipped by the very PR changing the
+# gate") -- patched three times for other workflows and still open for this one. Derived from
+# the SUITE's own variables rather than a hardcoded list, so adding a fourth workflow to this
+# file reds here until its path is registered.
+INFRA_VALIDATION_WF="${ROOT}/.github/workflows/infra-validation.yml"
+if [[ ! -f "$INFRA_VALIDATION_WF" ]]; then
+  fail "infra-validation.yml is missing — cannot verify this suite is registered against the workflows it reads"
+else
+  _unregistered=""
+  _checked_paths=0
+  for _guarded in "$WF" "$APPLY_WF" "$DRIFT_WF"; do
+    _rel=".github/workflows/$(basename "$_guarded")"
+    _checked_paths=$((_checked_paths + 1))
+    grep -qF ""${_rel}"" "$INFRA_VALIDATION_WF" || _unregistered="${_unregistered} ${_rel}"
+  done
+  if [[ "$_checked_paths" -lt 3 ]]; then
+    fail "path-coverage arm derived only ${_checked_paths} guarded workflow(s), expected 3"       "the WF/APPLY_WF/DRIFT_WF variables drifted; this arm is comparing against an incomplete set"
+  elif [[ -z "$_unregistered" ]]; then
+    pass "all ${_checked_paths} workflows this suite reads are in infra-validation.yml's paths filter (editing one runs this suite)"
+  else
+    fail "workflow(s) this suite guards are NOT in infra-validation.yml's paths filter:${_unregistered}"       "a PR editing only that workflow would skip this suite entirely — the guard would not run on the change it exists to catch"
+  fi
+fi
+
 # ── Minimum-cardinality floor ──────────────────────────────────────────────────────
 # A floor, not an equality: developer-incremented, so `-eq` would redden the suite on every
 # legitimately added arm and train the next person to bump it unread. Counts passes+fails so
 # a genuine failure reports as a failure rather than as an empty suite.
 #
-# RAISED 28 -> 39 -> 43 -> 64 WITH THE ARMS THAT MADE IT NECESSARY (#7025 R7; the 43 -> 56
+# RAISED 28 -> 39 -> 43 -> 65 WITH THE ARMS THAT MADE IT NECESSARY (#7025 R7; the 43 -> 56
 # step is the behavioural capture-poll block, arms 13/13b/13c/13d/13e). At 28 the slack had grown
 # to exceed the work it was guarding: deleting arms 6, 7, 7b, 7c and 7d — every arm that
 # compares the two roots, i.e. the suite's entire reason for existing — landed on exactly 28
@@ -1248,11 +1280,11 @@ fi
 # not move with the suite only ever guards the work that predates it, and the deletion it
 # most needs to catch is the one that removes the arms someone just argued for.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 64 ]]; then
+if [[ "$_ran" -lt 65 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 64. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 65. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 64)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 65)\n' "$_ran"
 fi
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"
