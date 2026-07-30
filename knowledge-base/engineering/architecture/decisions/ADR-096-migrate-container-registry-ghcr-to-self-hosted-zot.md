@@ -61,9 +61,12 @@ non-blocking when **either** holds, verified by probe rather than by assertion:
 Until one of those is demonstrated, the four-axis mitigation in the Cold-boot-dependency
 statement has **two** surviving axes — one *detection* (the loud no-SSH fallback signal)
 and one *recoverability* (durability = reproducibility). **Neither is availability.**
-Axis 1 was the only availability axis, and it is gone; clause (e) below strikes it and
-"Instant revert" in place, which is the same two, counted the same way. The §Cold-boot
-head's "mitigated on four independent axes" is corrected there too.
+Both struck axes were availability-shaped, and both pointed at the **same** dead GHCR
+fall-through — so they fail together, not independently, and the "four *independent* axes"
+framing was counting one premise twice. Axis 1 ("Automatic degrade") was the only axis that
+kept a zot outage off the boot path *without operator intervention*; axis 3 ("Instant
+revert") was the manual lever to the same destination. Clause (e) below strikes both in
+place, and the §Cold-boot head's "mitigated on four independent axes" is corrected there too.
 
 **(e) The ADR's own dead escape hatches.** Two bullets in this document recommended the
 now-broken GHCR fall-through as mitigation — Cold-boot-dependency axis 1 ("a zot outage
@@ -184,7 +187,9 @@ host. Read the amendment before relying on any bullet below:
   destination no longer serves: GHCR's read PAT is revoked (401) and the minter is disabled (403
   `DENIED`). A zot outage now degrades **availability**, not latency. This axis is gone, which is
   why the CI mirror had to become blocking — of the four axes listed here, this was the only one
-  that actually kept a zot outage off the boot path.
+  that kept a zot outage off the boot path *without operator intervention*. "Instant revert" below
+  was the manual lever, and it pointed at the same dead destination, so the two were never
+  independent.
 - **Loud, no-SSH signal:** every fallback emits a Sentry `registry:"ghcr-fallback"` /
   `stage:"inngest_ghcr_fallback"` event (the fallback-rate alarm pages on the first one).
   **Correction (#6285):** zot liveness was assigned here to a `betteruptime_heartbeat.registry_prd`
