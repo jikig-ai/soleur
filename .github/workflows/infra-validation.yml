@@ -327,17 +327,35 @@ jobs:
     #
     # #7068 RE-DERIVATION (this paragraph exists because the instruction below says to
     # do it, and this PR is the case it was written for). #7068 adds EIGHT steps: the
-    # seven previously-orphan suites plus one `docker info` assertion. Measured locally,
-    # serially, warm: 3.78s total across the seven — cutover-flip 1295ms, plugin-seed
-    # 1057ms, bwrap-uid 587ms, mu1-cleanup 408ms, flip-guard 272ms, config-state 117ms,
-    # live-verify 42ms. Adding per-step Actions overhead (~1s x 8) the increment is
-    # ~12s, so the worst projected job moves ~192s -> ~204s and the ceiling goes from
-    # ~2.5x to ~2.35x that projection. NOT bumped: 480s still absorbs the same runner
-    # variance, and the increment is an order of magnitude below the margin.
+    # seven previously-orphan suites plus one `docker info` assertion.
     #
-    # One caveat stated rather than buried: plugin-seed's 1057ms was against an
-    # ALREADY-WARM docker cache. It is the one added step that builds an image, which is
-    # why it carries its own `timeout-minutes: 3` for attribution — a cold-pull stall
+    # Increment, measured FROM THE API on this branch (not projected): the eight added
+    # steps cost **8s** in aggregate — plugin-seed 3s, mu1-cleanup 2s, the docker assert
+    # 2s, cutover-flip 1s, and bwrap-uid / config-state / flip-guard / live-verify 0s
+    # each at second resolution. (Locally, serially and warm, the seven sum to 3.78s.)
+    #
+    # Whole job, measured on this branch across 3 runs — 30527194838, 30529482622,
+    # 30529614313 — **252-270s**, all `success`. Stated as a range on a named run set,
+    # per the convention above.
+    #
+    # Read that against the 184-189s figure recorded above and note what it means: the
+    # job has grown ~70s since that set was measured on a DIFFERENT branch, from steps
+    # unrelated to #7068 (the git-data runcmd rehearsal alone is 50s, the web-host
+    # parity mutation battery 39s, the LUKS G4 battery 20s). An earlier draft of this
+    # paragraph projected "~192s -> ~204s" by adding this PR's increment to that older
+    # baseline; the projection was wrong by ~60s because the baseline was stale, and
+    # the measurement above replaces it. The lesson is the one the instruction below
+    # already states — re-derive, do not extrapolate from an inherited number.
+    #
+    # Ceiling NOT bumped. 480s is ~1.8x the observed 270s max. That is tighter than the
+    # ~2.5x recorded above, and the reason is the ~70s of unrelated growth, not this
+    # PR's 8s. Flagged rather than silently absorbed: if a future run set exceeds ~320s
+    # (~1.5x), re-derive and consider bumping — and attribute the growth to the steps
+    # that caused it rather than to whatever step the cancel happens to land on.
+    #
+    # One caveat stated rather than buried: plugin-seed's local measurement was against
+    # an ALREADY-WARM docker cache. It is the one added step that builds an image, which
+    # is why it carries its own `timeout-minutes: 3` for attribution — a cold-pull stall
     # names that step instead of cancelling the job at an unrelated one.
     #
     # Re-derive this if steps are added to the job — the numbers above are a property
