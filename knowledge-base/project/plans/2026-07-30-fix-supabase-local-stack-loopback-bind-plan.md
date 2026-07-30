@@ -763,6 +763,14 @@ consistently" requirement, and the §Step 0 exposure-close timestamp.
 | T14 | `scripts/test-all.sh` on a machine with no Docker | new suite passes (fixtures only) |
 
 ## Risks & Mitigations
+<!-- lint-infra-ignore start -->
+<!-- Risk-ANALYSIS prose, not a runbook: these rows describe failure MODES
+     (a daemon restart republishing wildcard) and the probes that falsify them.
+     No step here instructs anyone to run infra by hand — the probes are the
+     plan's own Phase 0, and the shipped remediation is `npm run db:stop &&
+     npm run db:start`. The linter pairs the actor noun with the adjacent
+     `reboot`/`restart` imperatives, which is the false positive this region
+     exists for (hr-no-ssh-fallback-in-runbooks). -->
 
 | Risk | Mitigation |
 |---|---|
@@ -777,6 +785,7 @@ consistently" requirement, and the §Step 0 exposure-close timestamp.
 | Transient shadow DB (54320) is unverifiable | §Limits #4; the wrapper's general passthrough keeps `db diff`/`db lint` on the safe network, which is what protects it. |
 | Doc drift: bare `supabase start` remains in historical learnings and specs | Deliberately not rewritten — learnings are point-in-time records. The README and ADR-153 are the current-truth surfaces. |
 
+<!-- lint-infra-ignore end -->
 ## Deferred
 
 Per `wg-when-deferring-a-capability-create-a`, each gets a tracking issue in this cycle.
