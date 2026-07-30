@@ -675,7 +675,7 @@ recorded rather than silently applied. `ship` renders these into the PR body and
 | **`set -e` re-armed before the read → silent false PASS** (measured: exit 0, 1 attempt, `capture_rc=0`, green PASS summary). | The ordering rule is stated in the Phase 1 comment, AC2, and arm 13c, which requires the suite to go RED on the mutation. |
 | `\|\| true` regression → TRANSIENT reads as PASS. | Banned with the measurement; AC2 greps the extracted body; the arm-13 stub only PASSes on attempt 3. |
 | Restoring `-e` breaks something else in the step. | Measured exempt: `[[ … ]] && break` (non-final `&&`), `(( … ))` and `grep -q` (if-conditions). Arm 13 executes the whole body, so collateral breakage is a red arm, not a production dispatch. |
-| The guard tests a drifting copy. | Extraction is by step **name** from the live YAML; a rename yields nothing and fails the arm. |
+| The guard tests a drifting copy. | Extraction is by **`id: capture`** from the live YAML (NOT the step name — see Phase 2 arm 13.1; this row said "name" in an earlier draft and was corrected at implementation); a missing id yields nothing and FAILs the arm with a message naming it. |
 | Arms 13/13b/13c interfere via hardcoded `/tmp/rung2`. | `rm -rf /tmp/rung2` before each arm; header notes they cannot run concurrently. |
 | Arm silently skipped when python3 is absent. | Arms placed **inside** the existing `if command -v python3` block, whose `else` already fails. |
 | `deploy-docs.yml` is the only production-path file in the diff (`push: main`, mutates live Sentry monitor state). | All four named sites guarded; each already branches on an HTTP code, so `\|\| status="000"` is the house form and preserves existing control flow. |

@@ -901,7 +901,16 @@ for jn, j in (d.get("jobs") or {}).items():
         if not body:
             continue
         scanned += 1
-        lines = body.splitlines()
+        # COMMENT-STRIPPED, like every other assertion in this file. Measured while writing
+        # it: an audit script over the whole workflow directory reported this exact rule
+        # matching a body in follow-through-closure-guard.yml whose ONLY `PIPESTATUS[` was
+        # inside a comment explaining why that site deliberately uses `|| true` instead of a
+        # bracket. The fix for this class documents the class, and a bare-token scan then
+        # reports the documentation as the violation (cq-assert-anchor-not-bare-token).
+        # DROPPED, not blanked: a comment or a blank line between the pipeline and the read
+        # is harmless at runtime, so adjacency is computed over real COMMANDS only.
+        lines = [ln for ln in body.splitlines()
+                 if ln.strip() and not re.match(r'^[ \t]*#', ln)]
         for i, ln in enumerate(lines):
             if "PIPESTATUS[" not in ln:
                 continue

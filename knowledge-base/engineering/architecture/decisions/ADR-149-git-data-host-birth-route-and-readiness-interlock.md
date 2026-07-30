@@ -215,6 +215,37 @@ harness clears at the same instant as the never-executed harness it is supposed 
 downstream of. The evidence file is deliberately not committed, both interlocks still hold,
 and the banner stays up.
 
+**CORRECTION (2026-07-30, first dispatch).** The route as merged **shipped unable to produce
+evidence at all**, so item 8's precondition stayed unproducible rather than merely unmet.
+Measured on the first real dispatch (run 30560266736, `dry_run=false`): the capture step's
+bounded poll executed **one of its twenty attempts** and exited 2 four seconds after
+`terraform apply` returned. GitHub invokes a bare `run:` as `bash -e {0}`, and the step's
+`set -uo pipefail` does not clear that inherited `-e` — omitting a flag from `set` cannot
+unset what the invocation already applied — so under `pipefail` the TRANSIENT rc=2 that the
+poll exists to retry killed the step. Since attempt 1 fires minutes before cloud-init can
+emit `stage:boot_complete`, rc=0 was unreachable, PASS was unreachable, and no dispatch could
+have released `git_data_rung2_rehearsal_gate`. Teardown and the Hetzner survivor assertion
+both ran, so the failure cost a host for four seconds and left nothing behind.
+
+This is the same shape as the vehicle-shipped-unfired argument above, one level down: the
+harness merged, and the thing that could only be learned by *running* it was that it could
+not run. Fixed under `Ref #7025` (`set +e` / pipeline / `rc=${PIPESTATUS[0]}` / `set -e`,
+in that order — `set -e` is a builtin, therefore a pipeline, therefore it resets
+`PIPESTATUS`), together with a behavioural guard that executes the extracted step body,
+because the 43-assertion drift suite was fully green against the broken poll.
+
+Nothing in `## Decision`, the interlock's contract, or the alternatives table changes.
+
+**A second correction, to this ADR's own item 4.** Item 4's *"poll that reads it"* is the
+**birth-job** poll (`apply-web-platform-infra.yml`, step *"Poll for the git-data
+boot-completion signal"*), **not** the rung-2 capture poll — the latter did not exist when
+item 4 was written. That birth poll carried the same defect on the higher-stakes path: its
+`out=$(bash scripts/betterstack-query.sh …); rc=$?` made the whole `rc != 0` arm unreachable,
+so one transient Better Stack error would have killed the birth job mid-poll with no
+annotation instead of retrying. Its empty-result path is rc=0, which is why the common path
+polled fine and hid it. Fixed inline in the same change: the operator reaches it on the very
+next dispatch after rung 2 passes.
+
 #### DC-6 — the rehearsal runs in a SEPARATE Terraform root
 
 `-target` is **transitive on dependencies**. A rehearsal address referencing any prod

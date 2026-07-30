@@ -75,6 +75,73 @@ exits 1 by design, a no-match grep), disable BOTH (`set +e +o pipefail`) AND
 guard each substitution with `|| var=""`. A pipeline ending in `| head` is NOT
 self-protecting under `pipefail`.
 
+## Addendum — 2026-07-30 (#7025): a correction to this file, and the ordering trap
+
+This file's rule held; two of its details were wrong, and the class recurred anyway. It cost
+a production dispatch on the git-data rung-2 rehearsal route, whose capture step ran **one of
+twenty** poll attempts and exited four seconds in, making the birth interlock unreleasable by
+any dispatch.
+
+### Correction: the default `run:` shell is `bash -e {0}`, not `-eo pipefail`
+
+The Session Errors entry below says to treat *"GHA `run:` default shell is `-eo pipefail`"* as
+a fixed fact. That is the expansion of an **explicit `shell: bash`**. A bare `run:` with no
+`shell:` key runs as **`bash -e {0}`** — measured directly in the run log of
+`git-data-rung2-rehearsal.yml`, which declares zero `shell:` overrides.
+
+The distinction rarely changes the outcome (a step that sets its own `pipefail` gets it
+either way) but it changes the *diagnosis*, and diagnosing from the wrong default is how the
+next one gets missed. **What is invariant, and is the actual rule:** `-e` is applied by the
+**invocation**, so it is outside the artifact your `set` line can address. Writing
+`set -uo pipefail` does not clear it. You can only turn errexit off by *saying so*:
+`set +e`.
+
+That also explains why shellcheck/actionlint cannot catch this class: shellcheck lints each
+`run:` body as a standalone script and cannot see the invocation the `-e` lives in. Measured
+against a synthesized workflow carrying the exact bug — actionlint with shellcheck returns
+only `SC2034 … appears unused`. Nothing about errexit, `PIPESTATUS`, or the dead retry. So
+this is not a "just turn the linter on" gap; it needs a bespoke rule.
+
+### The ordering trap: `set -e` RESETS `PIPESTATUS`
+
+The obvious fix is a `set +e` bracket. Its obvious phrasing is silently wrong:
+
+```bash
+set +e; ( exit 2 ) | cat; rc=${PIPESTATUS[0]}; set -e   # rc=2  <- CORRECT
+set +e; ( exit 2 ) | cat; set -e; rc=${PIPESTATUS[0]}   # rc=0  <- SILENT FALSE PASS
+```
+
+`set -e` is a **builtin**, therefore a pipeline, and bash resets `PIPESTATUS` after every
+pipeline. Run against the real step body, the reordered form yields exit 0, one attempt,
+`capture_rc=0`, and a green `PASS` summary — **on a host that never booted.** That is
+strictly worse than the bug being fixed, which at least failed loudly. `rc=${PIPESTATUS[0]}`
+must be the first command after its pipeline, with nothing between them.
+
+### Two alternatives that look fine and are disqualified
+
+Measured under `bash -e`, pipeline exits 2, `tee` exits 0:
+
+| form | result |
+|---|---|
+| `pipeline \|\| true` then `rc=${PIPESTATUS[0]}` | **rc=0.** `true` runs as its own pipeline and resets `PIPESTATUS`. Every retryable outcome reads as success. |
+| `pipeline \|\| rc=$?` | **rc=1 when `tee` fails and the real command passed.** Under `pipefail`, `$?` is the rightmost failing stage, so a `tee` failure is reported as a failure of the thing being measured. |
+| `set +e` … `rc=${PIPESTATUS[0]}` … `set -e` | Preserves `PIPESTATUS[0]` exactly. **Use this.** |
+
+Where **no** `PIPESTATUS` read follows, `|| true` / `|| var="default"` is the correct house
+form and a `set +e` bracket is overkill — the two rules do not conflict, they apply to
+different shapes.
+
+### The part worth internalising: five prior statements of this rule did not prevent it
+
+At the time of the recurrence the repo carried **four learnings** on this rule (including
+this file) and **five in-workflow comments** stating it — and `apply-github-infra.yml` still
+carries a comment reading *"`-e` is intentionally omitted so we can capture terraform plan's
+exit code in `$rc`"* directly above code where `rc=$?` and its `::error::` branch are both
+unreachable. Nine near-copies of that comment exist. **Prose is not a control for this
+class.** A guard has to execute the body; the fix shipped one that extracts the real step
+body from the live YAML, runs it under `bash -e` with stubs, and carries mutation arms that
+must go RED. Audit of the remaining 56 candidate bodies: #7098.
+
 ## Session Errors
 
 1. **`pipefail` parse-abort (P2, pr-introduced).** Authored the parse under a
@@ -82,6 +149,10 @@ self-protecting under `pipefail`.
    Recovery: `set +e +o pipefail` + `|| var=""` guards. **Prevention:** this
    learning + the guard idiom; treat "GHA `run:` default shell is `-eo pipefail`"
    as a fixed fact when authoring workflow bash.
+   **CORRECTED 2026-07-30 — see the addendum above:** `-eo pipefail` is what an
+   explicit `shell: bash` expands to; a bare `run:` is `bash -e {0}`. The
+   invariant to carry is that `-e` comes from the INVOCATION and only `set +e`
+   clears it.
 2. **7 new SC2086 warnings.** Switched `/tmp/*.md` literals to `$RUNNER_TEMP/*.md`
    unquoted. Caught by re-running `actionlint`. Recovery: quoted them.
    **Prevention:** run `actionlint` (with shellcheck) after any workflow bash

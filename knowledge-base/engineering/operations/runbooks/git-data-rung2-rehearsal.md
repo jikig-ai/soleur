@@ -38,16 +38,59 @@ its question is unreproducible.
 
 The capture script is three-state, and the distinction is the point:
 
-- **PASS (0)** — evidence written, uploaded as an artifact. Open a PR with it yourself;
+- **PASS (0)** — evidence written, uploaded as an artifact. See **After a PASS** below;
   merging that PR is what releases the birth interlock.
 - **FAIL (1)** — a fatal, or a false assertion. This is the failure class the whole route
   exists to find: it would have looked green from the `terraform apply`. No evidence written.
 - **TRANSIENT (2)** — no verdict. **Not** evidence the host booted dark. Read the step output
   to see whether the anchor answered.
+- **WRAPPER FAILURE (3)** — `doppler run` exited 1 **twice** without the capture script ever
+  producing its `RUNG2_CAPTURE_VERDICT=` sentinel. This says nothing about the host; it never
+  got to speak. Check the `DOPPLER_TOKEN` secret and its access to `soleur`/`prd_terraform`.
+  The poll stops here rather than retrying, because a bad credential is not transient and
+  retrying it spends ~16 minutes on a paid host to report the least actionable verdict.
+
+On **FAIL**, **TRANSIENT** and **WRAPPER FAILURE** the run also uploads a
+`git-data-rung2-capture-log` artifact — that is the diagnostic; download it before
+re-dispatching.
 
 If the poll expires without a terminal answer, check **Sentry** before concluding anything:
 everything before `doppler run` reaches Sentry only, because the emitter's Better Stack block
 is gated on `BETTERSTACK_LOGS_TOKEN`, which exists only inside `doppler run`.
+
+## After a PASS
+
+The workflow is `permissions: contents: read` and **cannot commit its own evidence**. That is
+the interlock, not a gap: a route that writes its own gate-releasing file turns a
+two-human-gate birth into a one-dispatch birth, where approving "run a rehearsal" would
+release the interlock as a side effect. So you land it yourself.
+
+The job summary on a PASS prints this same sequence, so you can work from where you already
+are. Substitute the run id of the rehearsal that passed:
+
+```bash
+gh run download <run-id> -n git-data-rung2-boot-evidence
+mv git-data-rung2-boot-evidence.env apps/web-platform/infra/
+
+# Validate BEFORE committing — the gate tells you what it would refuse and why.
+source tests/scripts/lib/git-data-birth-readiness-gate.sh
+git_data_rung2_rehearsal_gate \
+  apps/web-platform/infra/cloud-init-git-data.yml \
+  apps/web-platform/infra/git-data-rung2-boot-evidence.env
+
+git checkout -b evidence-git-data-rung2
+git add apps/web-platform/infra/git-data-rung2-boot-evidence.env
+gh pr create
+```
+
+`RELEASED` means the birth may proceed once that PR merges. `HOLD` names the refusal — read
+it rather than re-dispatching, because a HOLD on fresh evidence usually means the template
+moved, not that the rehearsal was bad.
+
+**Open the PR promptly.** The evidence carries a sha256 of `cloud-init-git-data.yml` and its
+nine `file()`-bound payloads, so *any* merge touching those between the rehearsal and this PR
+invalidates it. `infra-validation.yml` catches that on the PR, but the remedy is a full
+re-rehearsal — another paid host and another approval.
 
 ## If teardown fails
 
