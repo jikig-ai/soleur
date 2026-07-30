@@ -11,9 +11,11 @@ Derived from plan **v2** (post 7-reviewer consolidation). Phase order is depende
 contract changes land before their consumers. Read the plan's Premise Validation first — two of the
 three original Deliverable-B premises were falsified, and one "Confirmed" premise (P0-A) was retracted.
 
-**Before starting, read `decision-challenges.md`** — three scope decisions (UC-1 bridge probe, UC-2
-detector placement, UC-3 two-PR split) are OPEN and awaiting the operator. Tasks below assume the
-full scope; UC-1's probe is already excluded.
+**Scope decisions — all three RESOLVED 2026-07-30** (see `decision-challenges.md` for reasoning):
+**UC-1** keep the bridge `/v2/` probe **cut** (already excluded below; the `nc -z` false gate folds
+into the 8.2 tracker). **UC-2** **full scope** — 5.1 through 5.4 including the release-preflight arm.
+**UC-3** **single PR** — so 6.1's runbook correction ships alongside Phase 3's gate, satisfying the
+ordering constraint by construction.
 
 ## Phase 0 — Preconditions (no writes)
 

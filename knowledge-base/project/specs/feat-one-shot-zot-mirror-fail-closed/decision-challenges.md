@@ -4,6 +4,12 @@ Persisted headless per ADR-084 / the plan-review classifier: these are **Taste /
 decisions that touch scope the operator asked for. They were **not** auto-applied. `ship` Phase 6
 renders this into the PR body and files an `action-required` issue.
 
+> **All three RESOLVED by the operator on 2026-07-30, at the start of `/work`** — before any
+> implementation, since UC-1 and UC-2 change what Phases 2 and 5 build. Outcome: **UC-1 keep the probe
+> cut**, **UC-2 full scope 5.1–5.4** (broader than the recommendation), **UC-3 single PR**. Each
+> section's `Status:` records the decision and the reasoning that carried it. `ship` Phase 6 should
+> render these as *decided*, not as open questions — no `action-required` issue is owed for them.
+
 ---
 
 ## UC-1 — Drop the new bridge `/v2/` probe from this PR?
@@ -39,7 +45,10 @@ bridge keeps mis-reporting for at least one more cycle.
 `build-inngest-bootstrap-image.yml` #6416 fix, once a real release has given runner-side evidence of
 the probe shape.
 
-**Status:** OPEN — awaiting operator.
+**Status:** RESOLVED 2026-07-30 — operator elected **keep it cut** (the recommendation). The probe is
+not in this PR; the `nc -z` false gate is folded into the Phase 8 tracker that also carries the live
+`build-inngest-bootstrap-image.yml` #6416 defect (Deferred item 1) and the two sibling false `/v2/`
+gates (Deferred item 2).
 
 ---
 
@@ -67,7 +76,13 @@ FR-A4's "run the drift detector" remedy real; move FR-B4's **release-preflight**
 if the PR is getting large, but keep the `scheduled-terraform-drift.yml` step (a ~12-line addition to
 an existing workflow).
 
-**Status:** OPEN — awaiting operator.
+**Status:** RESOLVED 2026-07-30 — operator elected **full scope (tasks 5.1–5.4)**, i.e. *more* than the
+recommendation: FR-B3's regex + Access-service-token verify arm, its unit test, the
+`scheduled-terraform-drift.yml` step, **and** the release-preflight arm. The reasoning that carried it
+is the one the recommendation itself conceded: a twice-daily detector can be hours stale relative to
+the release that trips over it, and FR-A7(ii) makes that credential release-blocking — so the
+preflight is what turns a blocked release into a correctly-diagnosed one before the build spends its
+minutes. DHH's "finish #7067" framing is recorded as the rejected alternative.
 
 ---
 
@@ -91,7 +106,11 @@ now fails `image_pull_failed`.
 
 **Recommendation:** decide at ship time. If UC-1 is accepted (probe cut), a single PR is defensible.
 
-**Status:** OPEN — awaiting operator.
+**Status:** RESOLVED 2026-07-30 — operator elected a **single PR**. UC-1 resolved as "cut", which is
+the precondition the recommendation named: the remaining gating change is a read-side `crane digest`
+over a path already proven to work plus a `needs.release.result` conjunct, both low-variance. The
+hard constraint is satisfied by construction — FR-B1(2)'s `zot-registry-revert.md` correction ships
+in the same PR as the gate.
 
 ---
 
