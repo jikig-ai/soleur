@@ -135,6 +135,21 @@ triage; implement it.
       - **AC8** PR body — per-suite decision table present for all 7 suites, `Closes #7068` in the
         **body** (title carries none), `#7076` linked, flip-guard textual-coupling tripwire noted.
 
+      **Re-verified after the round-2 review fixes** (the tick above predates them). `/soleur:review`
+      ran the five lenses a 529 storm had killed in round 1 (pattern-recognition, performance,
+      observability, agent-native, simplicity) — see `decision-challenges.md` §"Review findings —
+      round 2". It found a **P1** (the gate accepted a `/`, so a new subdirectory suite registered
+      green and never ran locally — the failure mode the gate's own header names) plus five false
+      comments, all fixed inline; 0 filed, 4 detector-side findings recorded on #7076 by comment.
+      Post-fix re-run of every AC's literal command: AC1 orphan NOTEs `0`; AC2 no `MISSING`;
+      AC3(a) `continue-on-error=0 if=0`; AC4 `0`; AC5 `11 passed, 0 failed`; AC6 lint exit 0;
+      AC7 `run-all.sh` exit 0 with the new `test-infra-suite-registration-mutations.sh` at
+      **14 passed, 0 failed (14 assertions)**. Plus the mandated infra exit gate:
+      `run-registered-suites.sh` **exit 0, 86/86, 329s** (slower than 4.2's 195s purely from load
+      16.3 vs 5.9; zero banners, zero RED). Also green: `infra-validation-detect.test.sh` exit 0,
+      `terraform-target-parity` 98/0, shellcheck clean on all five changed shell files.
+      AC3(b)'s CI probe re-runs against the new HEAD before merge.
+
 ## Do NOT do
 
 - ❌ Delete any of the seven suites — all 7 subjects verified live on `origin/main`.

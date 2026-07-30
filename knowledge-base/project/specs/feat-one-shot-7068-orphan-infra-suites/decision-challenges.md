@@ -212,6 +212,149 @@ an `EXPECTED_START_SITES=2` count latch plus an explicit `grep -qx 'flushed'`). 
 at `-S style` on all three bash files; semgrep deliberately substituted out (its bash parser
 matches ~0 rules, so a clean result would be vacuous).
 
-Lenses NOT covered by an agent: pattern-recognition, performance (measured inline instead),
-observability (verified inline: the gate's non-zero exit reaches a red check via run-all.sh),
-agent-native, simplicity. Recorded rather than implied-complete.
+Lenses NOT covered by an agent in that round: pattern-recognition, performance (measured inline
+instead), observability (verified inline: the gate's non-zero exit reaches a red check via
+run-all.sh), agent-native, simplicity. Recorded rather than implied-complete — **and
+subsequently closed; see round 2 below.**
+
+---
+
+## Review findings — round 2 (2026-07-30, the five lenses the 529 storm had killed)
+
+The operator elected to spawn exactly those five rather than ship on the round-1 record or
+re-run the whole panel. All five completed. Cost-of-filing applied to every finding: all were
+≤100 lines / ≤4 files with no independent technical dissent, so **all fixed inline. Filed as
+scope-out: 0.** Four findings belonged to the detector rather than to this PR and were recorded
+on #7076 by comment.
+
+### RF-6 (P1, pr-introduced, fixed) — the gate green-lit the failure mode its own header names
+
+The gate built a per-suite regex from the filename and matched the path verbatim, so it accepted
+a `/`. `run-registered-suites.sh` derives with a character class that excludes one. So a NEW
+suite in a subdirectory, registered perfectly, passed the gate and then **never ran through the
+local runner that both work and ship mandate** — failure mode #2 verbatim from the gate's own
+header, with the gate printing an affirmative all-clear.
+
+Measured, sandboxed: adding `apps/web-platform/infra/newdir/zzz-parity.test.sh` plus a correct
+single-line step gave `rc=0  all 95 suites registered`, and the runner derived it zero times.
+
+The header disclosed the gap but framed it as a **closed set of seven**. It is a predicate on
+paths, so an 8th arrives green with no signal — the same accretion that produced the seven
+orphans this PR cleans up (#7000 left seven → surfaced at #7025 → #7068). Fixed with a
+`KNOWN_UNDERIVABLE` pin plus a stale-entry check, so the list must shrink as #7076 closes rather
+than quietly licensing a gap that is no longer real. Mutation row M8.
+
+### RF-7 (P2 ×5, all pr-introduced, all fixed) — five comments that asserted untrue things
+
+In a PR whose entire subject is comments that assert untrue things. Every one is mine:
+
+1. **"self-skips (visible SKIP, exit 0)"** — the runner executes each suite as
+   `bash "{}" >/dev/null 2>&1` and prints `PASS`. The skip is invisible in the one file where it
+   matters, so a docker-less laptop reports PASS for a suite asserting nothing.
+2. **"Exactly ONE registered suite needs a real docker daemon"** — two.
+   `git-data-runcmd-rehearsal.test.sh` guards on `command -v docker` + `docker info`, makes three
+   `docker run --rm` calls, is in the derived set, and at 48-61s is the most expensive step in
+   the job. The silent-skip surface was ~15x what the comment described.
+3. **"Every other registered suite needs only what a stock checkout has (bash, jq, node,
+   grep)"** — measured across all 86 derived suites by their own `command -v` preconditions:
+   terraform 5, python3 5, cloud-init 1, jq 3. Replaced with the enumeration plus the command to
+   re-derive it. (The sibling claim "no derived suite invokes sudo" measured 0 and survives.)
+4. **"Advisory, not a failure"** on `report_orphans` — written before this PR's gate existed.
+   Every line that block can print is now a hard failure of a REQUIRED, merge_group-triggered,
+   path-filter-free check, so the comment told the reader registration is optional when it is
+   merge-blocking. Also the worst available path: the local surface affirmatively contradicted
+   the CI outcome.
+5. **A whole-job `184-189s`** in the plugin-seed step comment, contradicted by `252-270s` 260
+   lines earlier **in the same file**. Commit `97600294b` — titled "replace a projected job
+   duration with the measured one" — fixed the top block and missed this one.
+
+### RF-8 (P2, pr-introduced, fixed) — a step ceiling that defeated its own stated purpose
+
+`timeout-minutes: 3` on plugin-seed, justified as ATTRIBUTION ("a cold-pull stall must fail
+naming THIS step rather than let the job ceiling cancel at whatever unrelated step the clock
+reached"). API-measured across all 7 runs on this branch: the step costs 0-4s, the job 242-270s.
+So `270 - 4 + 180 = 446s` against the 480s job ceiling leaves **34s** — less than the branch's
+own 28s job spread. The job ceiling cancels first, at whichever step the clock reached: exactly
+the red herring the step ceiling exists to prevent. Now 1 minute (~15-30x measured;
+`270 - 4 + 60 = 326s`, a 154s/32% margin), with the cold-pull flake trade-off stated in place.
+
+### RF-9 (P2, pr-introduced, fixed) — messages that asserted more than the gate could see
+
+`WF_CODE` was the whole file, so the gate was job-agnostic while its errors named
+`deploy-script-tests` and said "it runs in no CI job". Measured: relocating a suite's step into
+the `plan` job (itself gated on a Doppler token) left the gate GREEN. Now sliced to the
+`deploy-script-tests` job — verified safe, since that job spans lines 294-1018 and so contains
+both the excluded loopback's invocation and all eight subdirectory steps — plus an assertion
+that the job carries no `continue-on-error:`/`if:`. Mutation rows M5, M7.
+
+Three further message defects, same class: the summary line labelled every failure
+"unregistered", and the fix that mislabel implies (ADD a step) leaves a malformed `run: |` in
+place, runs the suite twice, and returns rc=0 — measured. The success line claimed
+`all 94 suites registered` when only 86 are locally runnable. The exclusion remediation named
+neither the file nor the format, so an operator working from `grep '^ERROR'` could not execute
+it. All three corrected.
+
+### RF-10 (P2, pr-introduced, fixed) — a `mutation-proved` comment with nothing behind it
+
+The gate carried "It is mutation-proved inline … and that proof is recorded in the #7068 PR
+body" — the perishable-evidence anti-pattern recorded in
+`2026-07-15-ad-hoc-verification-evidence-is-as-perishable-as-uncommitted-code.md`, which
+`review/SKILL.md` requires committing a harness for. The stated justification ("a companion
+suite would reproduce the orphan problem in miniature") was self-refuting: a harness in
+`.github/scripts/test/` is auto-globbed by `run-all.sh` and therefore cannot be orphaned, as the
+gate's own next paragraph says in as many words.
+
+Now `test-infra-suite-registration-mutations.sh`: a positive control, 10 RED arms each
+landing-checked against a pristine copy, 2 GREEN arms (RED-only evidence cannot distinguish a
+real guard from one that fires on everything), and an assertion floor. 14/14, ~4s, never touches
+a tracked file. The floor was itself mutation-verified: neutering all 25 `ok()`/`bad()` call
+sites gives `0 passed, 1 failed (0 assertions)`, rc=1.
+
+### RF-11 (P3, pre-existing-adjacent, fixed) — `run-all.sh` could be silently de-existed
+
+Delete or rename a suite out of the `test-*.sh` glob and `run-all.sh` printed
+`ALL FIXTURE TESTS PASS` over a smaller set, with nothing asserting membership. The new gate
+applied exactly this discipline to its own input while its runner had none for itself. Added
+`MIN_SUITES` — a floor, not equality, since the count is developer-incremented.
+
+### RF-12 (P3, pr-introduced, fixed) — smaller items
+
+Per-suite regex escaping covered only `.`, so a legitimately-registered `foo+bar.test.sh`
+produced a false message telling the author to add a step that was already there (fail-closed,
+but a lie) — removed structurally by one-pass extraction into associative arrays, which also
+made the gate ~7x faster and linear rather than quadratic. `find` → `git ls-files`, so a stray
+untracked fixture cannot red a required check. The exclusion's `#[0-9]+` accepted a placeholder
+`#0`. The stale `docker rm -f` rationale that `$$`-scoping had invalidated. Draft-narration trim
+in the job comment, keeping the measured ~70s attribution.
+
+### Deferred to #7076 by comment, not filed
+
+Four detector-side findings, with measurements, at
+`https://github.com/jikig-ai/soleur/issues/7076#issuecomment-5130115292`: `T2b` is a tautology
+(it re-derives with the SUT's own character class, so it asserts the regex equals itself —
+proven by an 8th subdirectory suite leaving it 11/11 green); orphan-report lines are
+indistinguishable from derived lines by prefix; the runner derives from the raw file while the
+gate strips comments, so it over-derives; and `run-registered-suites.test.sh` writes a fixture
+into the tracked tree with no trap covering it. All are changes to `run-registered-suites.sh` or
+its own test, which this PR's Phase 2 deliberately scoped to comment-only.
+
+### Method notes
+
+**A void A/B nearly shipped a number.** Comparing old and new gate, I copied the old one to
+`/tmp`, which broke its `BASH_SOURCE`-relative `REPO_ROOT`; it hit its own cardinality guard and
+exited 1 in ~20ms — which reads exactly like a fast pass. I had redirected rc to `/dev/null`.
+The real comparison, both arms at rc=0, is ~950ms → ~135ms. Requiring both arms to succeed is
+what caught it.
+
+**The instrument was the finding, twice.** In this session `grep` is a shim shell function: the
+gate measured ~15s under it and 136ms with the real binary. Round 1's performance figure
+(1.2-1.9s for the per-suite form, and its "12x fork-free win") is the same artifact — ~94 shim
+invocations. Every timing here is from `env -i PATH=/usr/bin:/bin`.
+
+**The harness caught a bug in itself.** M6 mutates the gate, not the workflow, so the
+workflow-scoped landing check correctly refused to score it. And the first optimisation of the
+stub loop used `${!arr[@]/#/pfx}`, which bash parses as indirect expansion — caught at once
+because the setup path fails loud rather than continuing.
+
+**Contention remains the thing to control for.** The final full runner was 329s at load 16.3
+versus 195s at load 5.9 — same 86/86, same exit 0. Consistent with IC-2's diagnosis.
