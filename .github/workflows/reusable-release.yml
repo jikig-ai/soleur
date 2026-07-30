@@ -447,6 +447,43 @@ jobs:
           printf 'agent_count=%s\n' "$AGENT_COUNT" >> "$GITHUB_OUTPUT"
           echo "Counted $AGENT_COUNT agents"
 
+      # FR-B4 (preflight arm) — check the ONE credential this release will hang on, before
+      # the build spends its minutes.
+      #
+      # The scheduled detector runs twice daily, so it can be hours stale relative to the
+      # release that trips over the token. This turns a release that would otherwise fail
+      # ~15 minutes later at the mirror step, with the cause one inference away, into one
+      # that names the cause up front — and it runs BEFORE the docker build so a doomed
+      # release does not pay for an image nothing can pull.
+      #
+      # --only REGISTRY_PUSH_ACCESS_TOKEN, not a fleet-wide sweep: a full scan is one curl
+      # per distinct token value across every config, which does not belong on the critical
+      # path of every release. The scheduled arm keeps the fleet-wide coverage.
+      #
+      # ADVISORY (continue-on-error), deliberately. Its job is DIAGNOSIS; the mirror step
+      # is the gate. Making it blocking would add a second, independent way for a healthy
+      # release to be refused — including on a transient network failure, since the
+      # detector correctly fails closed on an unreachable probe — and R4 of the plan is
+      # explicit that the gate must not acquire spurious failure modes. If the token really
+      # is dead the mirror step blocks the release anyway, with this step's output sitting
+      # right above it in the log saying why.
+      - name: Preflight — registry-push Access token is still live (advisory)
+        id: token_preflight
+        if: steps.version.outputs.next != '' && inputs.docker_image != ''
+        continue-on-error: true
+        env:
+          # prd_terraform, matching the detector's documented invocation and the scheduled
+          # arm. Available here via the caller's `secrets: inherit`.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          if bash scripts/check-cloudflare-token-drift.sh --only REGISTRY_PUSH_ACCESS_TOKEN; then
+            echo "Registry-push Access service token verified live — the zot bridge should authenticate."
+          else
+            echo "::warning::The registry-push CF Access service token looks STALE in at least one Doppler config. The zot mirror step later in this job will very likely fail with mirror_reason=bridge. Fix now to save the round trip: set the live REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET on the 'prd' ROOT config. This step is advisory and is not failing the release."
+          fi
+
       - name: Docker login
         id: docker_login
         if: steps.version.outputs.next != '' && inputs.docker_image != ''
