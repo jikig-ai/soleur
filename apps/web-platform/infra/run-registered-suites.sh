@@ -16,6 +16,20 @@
 # Serial execution is not viable — 70 suites take well over ten minutes end to
 # end. Parallelism is the difference between a gate people run and one they skip.
 #
+# TOOLING DEPENDENCY, recorded here because this is the auto-glob site (#7068).
+# Exactly ONE registered suite needs a real docker daemon: cloud-init-plugin-seed.
+# It builds a small busybox fixture image, and it self-skips (visible SKIP, exit 0)
+# when docker is missing or unreachable — so a docker-less laptop gets a green run
+# with that one suite silently not asserting anything. That is deliberate for local
+# DX, and it is why CI does NOT rely on the skip: infra-validation.yml puts a
+# separate `docker info` assertion step immediately before it, so the daemon being
+# absent reds CI there rather than passing vacuously. If you are debugging why a
+# plugin-seed regression reproduced in CI but not locally, this is the reason.
+#
+# Every other registered suite needs only what a stock checkout has (bash, jq,
+# node, grep). No suite here invokes sudo — see the derive-but-do-not-execute
+# discussion in the follow-up tracked from #7068 for why that matters.
+#
 # Usage:
 #   bash apps/web-platform/infra/run-registered-suites.sh          # all suites
 #   JOBS=12 bash apps/web-platform/infra/run-registered-suites.sh  # override width
