@@ -161,22 +161,42 @@ jobs:
           # step here and every line below would be unreachable.
           rc=0
           bash scripts/check-cloudflare-token-drift.sh --json-file "$RUNNER_TEMP/token-drift.json" || rc=$?
-          # The verdict, not just the fact of failure. Exit 1 covers BOTH "a token is dead"
-          # and "a token could not be verified", and exit 2 means nothing was checked at
-          # all — three states that call for three different operator actions. Collapsing
-          # them is what let the email below assert a cause the detector never claimed.
-          dead=0; unver=0
-          if [[ -s "$RUNNER_TEMP/token-drift.json" ]]; then
-            dead=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dead"])' "$RUNNER_TEMP/token-drift.json" 2>/dev/null || echo -1)
-            unver=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["unverifiable"])' "$RUNNER_TEMP/token-drift.json" 2>/dev/null || echo -1)
+          # ONE verdict, derived once. Exit 1 covers BOTH "a token is dead" and "a token
+          # could not be verified", and exit 2 means nothing was checked at all — three
+          # states calling for three different operator actions, which is why collapsing
+          # them let the old single email assert a cause the detector never claimed.
+          #
+          # Derived HERE and emitted as a single string, rather than exporting raw counts
+          # and re-deriving: the first version of this exported rc/dead/unverifiable and
+          # every consumer re-implemented the same ladder (three `if:` expressions plus a
+          # shell block). Four copies of one decision is four places to be wrong, and it
+          # leaked the -1 parse-failure sentinel into the step's public interface.
+          # ONE python invocation, kept to ONE LINE on purpose: a `python3 - <<'PY'` heredoc
+          # inside a YAML block scalar puts its body at column 0, which ends the scalar and
+          # makes the whole workflow unparseable. (Measured — the first version of this did
+          # exactly that.) Parsing stays in python; the DECISION stays in bash, below.
+          read -r dead unver < <(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["dead"], d["unverifiable"])' "$RUNNER_TEMP/token-drift.json" 2>/dev/null || echo "-1 -1")
+          # Anything unreadable or unparseable is "unavailable", never "clean". A missing or
+          # corrupt verdict file means the scan's result is UNKNOWN, and the one arm it must
+          # never take is the one saying every token is live.
+          if [[ "$rc" == "2" || "$dead" == "-1" ]]; then
+            verdict=unavailable
+          elif [[ "$dead" -gt 0 ]]; then
+            verdict=dead
+          elif [[ "$unver" -gt 0 ]]; then
+            verdict=unverifiable
+          else
+            verdict=clean
           fi
-          # -1 means the verdict file was unreadable/unparseable. That is NOT "clean" — it
-          # takes the could-not-determine arm below, never the all-live arm.
+          # Belt for the belt: if the derivation itself produced nothing (python missing,
+          # heredoc mangled), an empty string would match no consumer condition and the run
+          # would report nothing at all. Empty is unavailable.
+          [[ -n "$verdict" ]] || verdict=unavailable
           {
             echo "rc=${rc}"
-            echo "dead=${dead}"
-            echo "unverifiable=${unver}"
+            echo "verdict=${verdict}"
           } >> "$GITHUB_OUTPUT"
+          echo "token-drift verdict: ${verdict} (detector exit ${rc})"
           # Re-raise the detector's exit code AFTER the outputs are written. Capturing rc
           # with `|| rc=$?` makes this block succeed, which would have flipped this step's
           # `outcome` to 'success' permanently and silently disarmed the enforce step at
@@ -195,25 +215,25 @@ jobs:
       # credential"; sending an operator to rotate a healthy credential is the exact defect
       # it guards against, re-committed one layer up in the workflow.
       - name: Email notification (token drift — DEAD credential)
-        if: always() && steps.token_drift.outputs.dead != '0' && steps.token_drift.outputs.dead != '-1'
+        if: always() && steps.token_drift.outputs.verdict == 'dead'
         continue-on-error: true
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[TOKEN DRIFT] A Cloudflare token rotation did not propagate to Doppler'
-          body: '<p><strong>${{ steps.token_drift.outputs.dead }} Cloudflare token value(s) in Doppler are no longer accepted by Cloudflare.</strong></p><p>Terraform will NOT fix this on its own: the <code>doppler_secret</code> resources carry <code>lifecycle.ignore_changes = [value]</code>, so <code>terraform apply</code> reports "No changes" while the stale value keeps being served. Set the live value on the <code>prd</code> ROOT config — branch configs inherit it.</p><p>This matters for releases: the registry-push Access service token is what lets CI reach the zot registry, and zot is the only registry production can pull from. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> to see which key in which config is stale.</p>'
+          body: '<p><strong>At least one Cloudflare token value in Doppler is no longer accepted by Cloudflare.</strong></p><p>Terraform will NOT fix this on its own: the <code>doppler_secret</code> resources carry <code>lifecycle.ignore_changes = [value]</code>, so <code>terraform apply</code> reports "No changes" while the stale value keeps being served. Set the live value on the <code>prd</code> ROOT config — branch configs inherit it.</p><p>This matters for releases: the registry-push Access service token is what lets CI reach the zot registry, and zot is the only registry production can pull from. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> to see which key in which config is stale.</p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       - name: Email notification (token drift — UNVERIFIABLE only)
-        if: always() && steps.token_drift.outputs.dead == '0' && steps.token_drift.outputs.unverifiable != '0' && steps.token_drift.outputs.unverifiable != '-1'
+        if: always() && steps.token_drift.outputs.verdict == 'unverifiable'
         continue-on-error: true
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[TOKEN DRIFT] Detector coverage gap — no conclusion drawn about your tokens'
-          body: '<p><strong>No token was found stale. ${{ steps.token_drift.outputs.unverifiable }} enumerated token(s) could not be verified at all</strong>, so this run cannot claim the fleet is clean — and it is NOT claiming anything is broken.</p><p><strong>Do not rotate anything on the strength of this email.</strong> The fix is to the DETECTOR: add a hostname mapping to <code>access_hostname_for()</code> in <code>scripts/check-cloudflare-token-drift.sh</code> so the key family becomes verifiable. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> for the exact keys and the reason each was skipped.</p>'
+          body: '<p><strong>No token was found stale, but at least one enumerated token could not be verified at all</strong>, so this run cannot claim the fleet is clean — and it is NOT claiming anything is broken.</p><p><strong>Do not rotate anything on the strength of this email.</strong> The fix is to the DETECTOR: add a hostname mapping to <code>access_hostname_for()</code> in <code>scripts/check-cloudflare-token-drift.sh</code> so the key family becomes verifiable. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> for the exact keys and the reason each was skipped.</p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       - name: Email notification (token drift — detector could not run)
-        if: always() && (steps.token_drift.outputs.rc == '2' || steps.token_drift.outputs.dead == '-1')
+        if: always() && steps.token_drift.outputs.verdict == 'unavailable'
         continue-on-error: true
         uses: ./.github/actions/notify-ops-email
         with:
@@ -230,14 +250,14 @@ jobs:
       # `always() &&` on the email pair makes the first stumble cost one emitter instead of
       # all of them.
       - name: Ensure infra-drift label exists
-        if: steps.plan.outputs.exit_code == '2'
+        if: always() && steps.plan.outputs.exit_code == '2'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh label create "infra-drift" --description "Terraform detected infrastructure drift" --color "D93F0B" 2>/dev/null || true
 
       - name: Create or update drift issue
-        if: steps.plan.outputs.exit_code == '2'
+        if: always() && steps.plan.outputs.exit_code == '2'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -384,22 +404,25 @@ jobs:
       - name: Enforce token-drift result
         if: always() && steps.token_drift.outcome == 'failure'
         env:
-          DEAD: ${{ steps.token_drift.outputs.dead }}
-          UNVER: ${{ steps.token_drift.outputs.unverifiable }}
+          VERDICT: ${{ steps.token_drift.outputs.verdict }}
           RC: ${{ steps.token_drift.outputs.rc }}
         run: |
-          # The annotation names THIS run's verdict. It used to append "UNVERIFIABLE keys
-          # are a detector coverage gap, not stale credentials" unconditionally — including
-          # on a genuine dead-credential run, where it invites the operator to discount a
-          # real finding. A hedge that fires when there is nothing to hedge is a way of
-          # making a true alarm look uncertain.
-          if [ "${RC}" = "2" ] || [ "${DEAD}" = "-1" ]; then
-            echo "::error::The Cloudflare token detector could not run (exit ${RC}). NO conclusion was drawn about any credential — this is not a claim that one is stale. See the 'Cloudflare token drift' step for the precondition it failed on."
-          elif [ "${DEAD}" != "0" ]; then
-            echo "::error::Cloudflare token drift: ${DEAD} DEAD credential(s). See the 'Cloudflare token drift' step above for the key/config pairs. Set the live value on the 'prd' ROOT config."
-          else
-            echo "::error::Cloudflare token detector coverage gap: ${UNVER} enumerated token(s) could not be verified, so this run cannot claim the fleet is clean. Nothing is known to be stale — fix access_hostname_for(), do NOT rotate."
-          fi
+          # The annotation names THIS run's verdict, from the SAME string the email steps
+          # branch on. It used to append "UNVERIFIABLE keys are a detector coverage gap,
+          # not stale credentials" unconditionally — including on a genuine dead-credential
+          # run, where it invites the operator to discount a real finding. A hedge that
+          # fires when there is nothing to hedge makes a true alarm look uncertain.
+          case "${VERDICT}" in
+            dead)
+              echo "::error::Cloudflare token drift: at least one DEAD credential. See the 'Cloudflare token drift' step above for the key/config pairs. Set the live value on the 'prd' ROOT config." ;;
+            unverifiable)
+              echo "::error::Cloudflare token detector coverage gap: enumerated token(s) could not be verified, so this run cannot claim the fleet is clean. Nothing is known to be stale — fix access_hostname_for(), do NOT rotate." ;;
+            *)
+              # Also the fallback for an unexpected/empty verdict, deliberately: an
+              # unrecognised value means the derivation itself misbehaved, which is a
+              # could-not-determine, never a clean bill of health.
+              echo "::error::The Cloudflare token detector could not run or its verdict was unreadable (verdict='${VERDICT}', exit ${RC}). NO conclusion was drawn about any credential — this is not a claim that one is stale. See the 'Cloudflare token drift' step for the precondition it failed on." ;;
+          esac
           exit 1
 
   # Source-vs-live Better Stack heartbeat reconcile (#6549 item 2). The static

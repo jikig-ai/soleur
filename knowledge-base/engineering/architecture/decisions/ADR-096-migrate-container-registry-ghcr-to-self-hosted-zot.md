@@ -266,14 +266,14 @@ host. Read the amendment before relying on any bullet below:
     original text still holds, since clause (h) scopes that workflow out.
     **The blanket "the rest of this bullet is unaffected and remains current" sentence that
     stood here has been REMOVED (2026-07-30, same-day correction).** It recertified ~110
-    lines as current on the strength of having checked two of them — which is the orphaned-
-    tail defect this very paragraph warns about, committed one sentence later. At least
-    four items below it are now false or stale and are marked individually where they sit:
-    the §5.3 revoke-then-fresh-boot conditional (its antecedent is ALREADY true — see the
-    marker at that line), the "expected page" via `app_ghcr_served` (that emit is now
-    unreachable, so the page cannot fire), the `ci-deploy.sh` line citations (rotted; the
-    real emit sites are name-anchored, per this ADR's own rule 15 lines further on), and
-    "bypass the atomic GHCR fallback" (there is no longer a fallback to bypass).
+    lines as current on the strength of having checked two of them — the orphaned-tail
+    defect this very paragraph warns about, committed one sentence later. Nothing replaces
+    it: individual items below carry their own dated markers where they are false, and this
+    bullet makes no claim about the ones that do not. (An earlier draft of this correction
+    replaced the blanket sentence with a four-item INDEX of what was marked — and three of
+    those markers did not exist while the fourth described a phrase found nowhere in the
+    repo. A hand-maintained index of corrections is a second thing to keep true, and it was
+    already false on the day it was written. Same defect, one layer up.)
     Original wording, retained for the alarm detail:
     A persistent miss is loud via a CI-level
     degraded signal: `mirror_status=degraded` → `::warning::` + step summary (both workflows) + a
@@ -338,9 +338,16 @@ host. Read the amendment before relying on any bullet below:
     `sentry` with a single inbound edge would assert a falsehood (that the webapp does not report
     to Sentry) where silence asserts nothing.
 
-    *Expected pages between merge and cutover:* a web-host recreate that misses the `/v2/` probe
+    ⚠ **FALSE as of 2026-07-30 (#7071) — this page CANNOT fire, and the outcome is worse than
+    a page.** `app_ghcr_served` is emitted only AFTER a successful GHCR pull, and the GHCR read
+    credential is revoked (401) with the minter disabled (403 DENIED). So a web-host recreate
+    that misses the `/v2/` probe does not fire this alert and does not fall back — it retries a
+    revoked credential and the host dies at `stage=pull`, which matches no alert rule at all.
+    Telling an operator to expect (and ignore) a page that cannot arrive is worse than saying
+    nothing. Retained struck, because it was relied on:
+    ~~*Expected pages between merge and cutover:* a web-host recreate that misses the `/v2/` probe
     now fires `zot_mirror_fallback_rate` via `app_ghcr_served`. That is **expected** and shares a
-    root cause with #6416 / #6288 — do not investigate it separately. ⚠ But do **not** mute the
+    root cause with #6416 / #6288 — do not investigate it separately.~~ ⚠ But do **not** mute the
     `app_ghcr_served` issue to quiet it: unlike `ghcr-fallback` (which regroups per deploy, so a
     mute self-expires) it is stable-grouped on a static message, so a mute is permanent and would
     blind the dominant GHCR-served path — the exact hole #6462 closes. See the mute-safety
@@ -353,7 +360,17 @@ host. Read the amendment before relying on any bullet below:
     cutover has not happened (`registry:"zot"` = 0 events/30d) and the soak's `START` is an unpinned
     placeholder, so enrolling early would emit a daily TRANSIENT that never converges. **Enrolling the
     soak — label + directive + a pinned `START` — is a precondition of Phase 5 that 5.3 must not
-    proceed without.** Until then the gate's verdict is not merely insufficient; it is absent. **Window — opens at task 1.8, for 3 of the 4 signals:**
+    proceed without.** Until then the gate's verdict is not merely insufficient; it is absent.
+
+    ⚠ **The `ci-deploy.sh:NNN` citations in the paragraph below have ROTTED (marked 2026-07-30,
+    #7071) — do not follow them.** Spot-checked: `:790/799/807`, `:857` and `:707,776-777` now
+    land on unrelated text. The real emit sites are name-anchored, which is what this ADR itself
+    requires 15 lines further on (`cq-cite-content-anchor-not-line-number`) and what
+    `ci-deploy.sh` already did for itself after `#6447`: grep `zot_gate_degraded_event` and
+    `registry_pull_event` rather than any line number. Left in place rather than renumbered,
+    because renumbering re-creates the same rot on the next edit.
+
+    **Window — opens at task 1.8, for 3 of the 4 signals:**
     `zot-gate-degraded` fires precisely where `ZOT_ACTIVE` stays 0 (probe_unreachable /
     creds_absent / login_failed, `ci-deploy.sh:790/799/807`), and the two cloud-init fresh-boot
     signals gate on `ZURL` + a `/v2/` probe with **no** `ZOT_ACTIVE` at all (`ZOT_ACTIVE` does not

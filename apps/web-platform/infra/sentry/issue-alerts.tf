@@ -1673,6 +1673,26 @@ resource "sentry_issue_alert" "web_terminal_boot_fatal" {
         value = "docker_run"
       }
     },
+    # `pull` added 2026-07-30 (#7071). Before this, a fresh host that missed the zot `/v2/`
+    # probe fell through to GHCR — degraded, not dead — so `pull` never needed to page. GHCR
+    # is now unreadable (PAT revoked -> 401, minter disabled -> 403 DENIED), so that same
+    # probe miss retries a revoked credential five times and the host dies at `stage=pull`
+    # (cloud-init.yml sets STAGE=pull before the pull loop; `on_err` emits it as fatal).
+    # `stage=pull` matched NO rule in this file, so the dead host paged nobody while ADR-096
+    # told the operator to expect a page there.
+    #
+    # `value = 1` above is a STRICT `>`, and it works here for the same reason the file's
+    # comment at the top of this rule gives: these events land in the shared, always-hot
+    # `soleur-boot-emit` group, so the group is never at zero and `>1` fires on the first
+    # new event. Do NOT copy `value = 1` to a rule whose group is fresh-per-deploy — the
+    # sibling git-data rule needed `value = 0` for exactly that reason.
+    {
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "pull"
+      }
+    },
   ]
   # N=1 accepted risk (mirrors every sibling apply-created rule): IssueOwners has no ownership rule
   # on this project → falls through to ActiveMembers, paging the solo founder. Events carry

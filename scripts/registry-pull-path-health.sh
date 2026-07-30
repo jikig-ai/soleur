@@ -221,6 +221,30 @@ EOF
   exit 1
 fi
 
-echo "registry-pull-path-health: PASS — zero degraded pull events in ${SINCE_HOURS}h."
-echo "registry-pull-path-health: NOTE — this PASS describes zot's own pull health ONLY. It is NOT a claim that anything covers the empty-store window: GHCR is no longer readable (PAT revoked, minter disabled), so a recut takes production's only pull path offline until the next CI dual-push. See this script's header (#7071)."
-exit 0
+echo "registry-pull-path-health: zero degraded pull events in ${SINCE_HOURS}h."
+
+# FAIL CLOSED (2026-07-30, #7071). Everything above still runs — the counts are real and
+# worth printing — but a clean count no longer answers the question this gate was built to
+# answer, so it must not return 0 as though it did.
+#
+# The gate authorized destroying the zot store on the strength of "GHCR covers the
+# empty-store window". That premise is retracted, and the operand that measured it
+# (`ghcr-fallback`) can no longer fire at all, so a PASS here is now a statement about
+# zot's own health that reads as authorization to destroy the only thing serving pulls.
+# ADR-096, about this exact class: "A gate that cannot fail is worse than no gate, because
+# it is read as evidence."
+#
+# Emitting a PASS plus a warning was tried first and rejected: a green exit is what the
+# calling workflow branches on, and a NOTE nobody re-reads is not a gate. Reversing this is
+# one line, deliberately — destroying production's only pull path should cost an explicit
+# edit by someone who has re-derived the authorization condition, not a default-open path.
+cat >&2 <<'EOF'
+::error::registry-pull-path-health: REFUSING — this gate's premise is retracted and it has no valid PASS condition (#7071).
+
+The recut destroys the zot store. That was acceptable only while GHCR covered the empty-store window. GHCR is no longer readable (read PAT revoked -> 401; minter disabled -> 403 DENIED), so the window is now a TOTAL pull outage until the next CI dual-push re-fills zot. Separately, this gate's most direct operand is dark: `ghcr-fallback` is emitted only inside the SUCCESS branch of a GHCR pull, so it can never fire and can never abort anything.
+
+The counts printed above are real, and they describe ZOT's health. They do not describe cover for zot's absence, because there is none.
+
+TO PROCEED you must re-derive what should authorize a recut and encode it here. Candidates, none of them chosen: gate on a successful CI dual-push within N hours; pre-stage the live digests outside the destroyed volume and gate on a rehearsed restore; require a second mirror to exist; or refuse until a GHCR pull credential is restored. See this script's header and ADR-096 clause (g), which records that the restoration paths have no tracker.
+EOF
+exit 1
