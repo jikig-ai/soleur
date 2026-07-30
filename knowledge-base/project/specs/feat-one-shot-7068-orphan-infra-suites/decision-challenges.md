@@ -101,3 +101,41 @@ These were reviewer findings that were **verified and applied**, not judgment ca
   PR in the repo, while the suites' own **verdicts remain advisory** (that promotion stays with the
   pre-existing open issue on advisory→blocking, tracked as D2). Recorded here so the policy is
   attributable to a decision rather than to a plan default.
+
+---
+
+## Implementation-time corrections (not plan defects)
+
+### IC-1 — my own Phase 3 gate shipped the hole it existed to close
+
+The first version of `test-infra-suite-registration.sh` anchored on `(sudo )?bash <path>` appearing
+anywhere in a non-comment line. That accepts a **multi-line `run: |` block** — so converting a
+registered step to that form passed the gate while silently de-registering the suite from
+`run-registered-suites.sh`, whose derivation is single-line-only. Since that runner is where the
+plan's own two-consumer table locates the teeth, the gate would have blessed exactly the
+regression it was built to prevent.
+
+Reading the gate did not reveal this. The **mutation battery** did, on mutation M5. Corrected to
+assert the single-line `^[[:space:]]*run: bash <path>$` shape, with the two failure modes reported
+distinctly (not-registered vs registered-but-not-derivable) because they have different fixes.
+
+Recorded because the plan's Phase 3 spec said "assert a real invocation step exists", and the
+literal reading of that spec is what produced the hole. The spec was not wrong; it was
+underspecified, and only mutation testing distinguished the two readings.
+
+### IC-2 — `ci-deploy.test.sh` RED in the parallel infra run is not this diff's
+
+The first full `run-registered-suites.sh` run reported `RED ci-deploy.test.sh` (85 PASS / 1 RED of
+86). Provenance established mechanically rather than by re-running until green:
+
+- `git diff origin/main...HEAD` shows this branch modifies **neither** `ci-deploy.test.sh` nor its
+  subject `ci-deploy.sh`.
+- `ci-deploy.test.sh` reads **none** of this branch's four changed files. Its single
+  `infra-validation.yml` mention is prose in a comment at line 3129, not a file read.
+
+So the suite and its subject are byte-identical to `main` and it reads nothing changed here. The
+run also happened under a measured load of **28 on 16 cores**, with a sibling session running the
+same 6-way-parallel runner from another worktree — the documented contention/false-RED condition.
+Re-measured on a quiet machine; see the PR body for the disposition. Either way it is not
+attributable to this diff, and per `wg-when-tests-fail-and-are-confirmed-pre` it is documented
+rather than folded in.
