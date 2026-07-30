@@ -63,7 +63,27 @@ trap 'rm -f "$REH_CODE"' EXIT
 sed 's/^[[:space:]]*#.*$//' "$REH"/*.tf > "$REH_CODE"
 
 # ── 1. ROOT PURITY ─────────────────────────────────────────────────────────────────
-n_prod=$(grep -cE 'hcloud_(server|volume|firewall)\.git_data\b|terraform_remote_state' "$REH_CODE" || true)
+#
+# THE ALLOWLIST COVERS DECLARATIONS; `data`/`import`/`moved` REACH PRODUCTION WITHOUT ONE.
+# Measured (#7066 review): appending
+#   data "doppler_secrets" "prod_git_data" { project = "soleur"  config = "prd_git_data" }
+# to rehearsal.tf left this suite 39/0 green while pulling production's GIT_DATA_LUKS_KEY
+# into the rehearsal tfstate. `data` blocks resolve cross-root; managed `resource` references
+# do not, which is why this is the live half. `import`/`moved` adopt production state into
+# this root and carry no address the allowlist can score, so they are refused outright.
+_adopt=$(grep -cE '^[[:space:]]*(import|moved)[[:space:]]*\{' "$REH_CODE" || true)
+if [[ "$_adopt" -eq 0 ]]; then
+  pass "the rehearsal root declares no import/moved block (it cannot adopt production state)"
+else
+  fail "the rehearsal root declares ${_adopt} import/moved block(s)" \
+    "these adopt existing state into this root and are invisible to the address allowlist"
+fi
+# NO `\b` AFTER `git_data`. In an ERE `\b` is a word BOUNDARY and `_` is a word
+# character, so `git_data\b` does not match `git_data_luks` — the production LUKS volume,
+# which lines 87-89 of rehearsal.tf specifically name as an address this guard must catch.
+# Dropping the anchor is safe here because every legitimate address in this root is
+# `rehearsal`-scoped, so there is nothing beginning `git_data` that belongs.
+n_prod=$(grep -cE 'hcloud_(server|volume|firewall)\.git_data|terraform_remote_state' "$REH_CODE" || true)
 if [[ "$n_prod" -eq 0 ]]; then
   pass "the rehearsal root references NO production git-data address (comments stripped)"
 else
@@ -94,8 +114,8 @@ while IFS= read -r addr; do
     rehearsal|rehearsal_*) ;;
     *) _bad_addr="${_bad_addr} ${addr}" ;;
   esac
-done < <(grep -oE '^resource "(hcloud|doppler)_[a-z_]+" "[a-z0-9_]+"' "$REH_CODE" \
-         | sed -E 's/.*" "([a-z0-9_]+)"$/\1/')
+done < <(grep -oE '^[[:space:]]*(resource|data)[[:space:]]+"(hcloud|doppler)_[a-z_]+"[[:space:]]+"[a-z0-9_]+"' "$REH_CODE" \
+         | sed -E 's/.*" *"([a-z0-9_]+)"$/\1/')
 if [[ -z "$_bad_addr" ]]; then
   pass "every hcloud_*/doppler_* address in the rehearsal root is rehearsal-scoped"
 else
@@ -571,8 +591,17 @@ print("TEARDOWN_PRESENT=%s" % ("dry_run" in ins and "teardown_only" in ins))
 print("FAULT_INJECTION=%s" % ("fault_injection" in ins))
 print("GROUP=%s" % d.get("concurrency", {}).get("group"))
 print("CANCEL=%s" % d.get("concurrency", {}).get("cancel-in-progress"))
-perms = d.get("permissions") or {}
+# JOB-LEVEL permissions OVERRIDE workflow-level, and EVERY job counts. Measured (#7066
+# review): adding `permissions: {contents: write}` to the rehearse job, and separately
+# appending a whole second job that git-commits the evidence, each left this suite 39/0 green
+# while it printed "structurally CANNOT commit its own evidence". Merge the workflow-level map
+# with every job-level map so any write scope anywhere is visible.
+perms = dict(d.get("permissions") or {})
+for _jn, _j in (d.get("jobs") or {}).items():
+    for _k, _v in (_j.get("permissions") or {}).items():
+        perms["%s@%s" % (_k, _jn)] = _v
 print("PERMS=%s" % ",".join("%s:%s" % kv for kv in sorted(perms.items())))
+print("JOBS=%s" % ",".join(sorted((d.get("jobs") or {}).keys())))
 j = d["jobs"]["rehearse"]
 print("ENVIRONMENT=%s" % j.get("environment"))
 unpinned = [s["uses"] for s in j["steps"]
@@ -614,9 +643,19 @@ PY
 
   # THE STRUCTURAL NO-AUTO-COMMIT GUARANTEE. Evidence is the release artifact for the birth
   # interlock; a workflow that could push it to main would be self-approving.
+  # The map now merges workflow-level with EVERY job-level block, so a job-scoped
+  # `contents: write` shows up as `contents@<job>:write` and breaks this exact-match.
   [[ "$(_wf PERMS)" == "contents:read" ]] \
     && pass "permissions are contents:read ONLY — the workflow structurally CANNOT commit its own evidence" \
     || fail "workflow permissions are '$(_wf PERMS)', not exactly contents:read — it may be able to commit the file that releases the birth interlock"
+  # AND THE JOB SET IS PINNED. Every job-scoped arm below reads d["jobs"]["rehearse"], so an
+  # APPENDED job is unexamined by all of them: measured, a second job carrying contents:write,
+  # an unpinned checkout, no environment, and `git commit && git push` left this suite green.
+  # A new job is a deliberate change; it should have to come here and say so.
+  [[ "$(_wf JOBS)" == "rehearse" ]] \
+    && pass "the workflow declares exactly one job (rehearse) — no unexamined sibling job" \
+    || fail "the workflow declares jobs '$(_wf JOBS)', expected exactly 'rehearse'" \
+         "every job-scoped assertion in this suite reads the rehearse job only, so a sibling job is unexamined"
 
   [[ "$(_wf ENVIRONMENT)" == "web-platform-infra-apply" ]] \
     && pass "the job declares the reviewed environment (DP-11 F8: a zero-reviewer environment auto-approves)" \
@@ -664,6 +703,18 @@ if [[ "$_pfx_wf" == "soleur-git-data-rehearsal-" && "$_pfx_drift" == "soleur-git
   pass "the rehearsal prefix agrees in the dispatch workflow and the orphan sweep"
 else
   fail "rehearsal prefix DRIFTED: workflow='${_pfx_wf}' drift-sweep='${_pfx_drift}'"
+fi
+# THE TERRAFORM COPY IS THE ONE THAT NAMES THE HOST, and it was shape-checked but never
+# COMPARED to the two literals the sweeps match against. Measured (#7066 review): renaming
+# rehearsal.tf's host to `soleur-gitdata-r2-rehearsal-${var.rehearsal_run_id}` kept this suite
+# 39/0 while BOTH sweeps went on matching `soleur-git-data-rehearsal-` — against zero servers,
+# each printing "teardown verified / no survivors" while a paying host with a LUKS volume ran
+# on. A shape check cannot see a prefix change; only a comparison can.
+if [[ "$_pfx_tf" == "${_pfx_wf}"* ]]; then
+  pass "the Terraform host name starts with the prefix both sweeps match on (${_pfx_wf})"
+else
+  fail "the Terraform host name '${_pfx_tf}' does not start with the sweeps' prefix '${_pfx_wf}'" \
+    "both orphan sweeps would match zero servers and report success while a rehearsal host runs"
 fi
 for _p in "$_pfx_wf" "$_pfx_drift"; do
   case "$_p" in
@@ -760,11 +811,11 @@ fi
 # not move with the suite only ever guards the work that predates it, and the deletion it
 # most needs to catch is the one that removes the arms someone just argued for.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 40 ]]; then
+if [[ "$_ran" -lt 43 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 40. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 43. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 40)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 43)\n' "$_ran"
 fi
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"
