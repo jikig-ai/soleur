@@ -150,9 +150,23 @@ _bs_source="(SELECT dt, raw FROM remote(\$BS_TABLE)
 # asked. They exist so the test suite's stub can answer BY QUERY SHAPE rather than by call
 # ordinal — a counter-based stub bakes this script's current call ORDER into the fixture, and
 # a stub that returns the right rows in the wrong order makes a broken script look correct.
+#
+# THE KEYWORD COMES FIRST, AHEAD OF THE COMMENT. betterstack-query.sh admits Mode 1 on
+# `^[[:space:]]*(SELECT|WITH|SHOW)[[:space:]]`: `[[:space:]]*` eats the newline and indent and
+# then requires the keyword, so a LEADING `/* … */` fails the match, the SQL falls through to
+# the Mode 2 flag parser, and it exits 64 `unknown flag` on the FIRST query. That is rc!=0 ->
+# this script exits 2 TRANSIENT -> the poll burns all 20 attempts -> RUNG2_BOOT_REHEARSAL=PASS
+# is unreachable and the interlock can never be released by this route.
+#
+# The comment above already warned about this exit-64-for-a-USAGE-reason trap in its `--since`
+# form, and this shape walked into it anyway — the tell that a prose warning is not a guard.
+# Every arm of the test suite stubs betterstack-query.sh and dispatches on `__ANCHOR__`, the
+# token INSIDE the comment that broke the real transport, so 28 green assertions certified a
+# route that could not run. The admissibility arm in that suite runs the REAL script and is
+# what actually holds this line in place.
 ANCHOR_SQL="
-  /* __ANCHOR__ source-liveness: is this log source answering AT ALL? */
-  SELECT dt, JSONExtractString(raw,'host_name') AS host
+  SELECT /* __ANCHOR__ source-liveness: is this log source answering AT ALL? */
+         dt, JSONExtractString(raw,'host_name') AS host
   FROM ${_bs_source}
   WHERE dt > now() - INTERVAL ${WINDOW}
     AND JSONExtractString(raw,'host_name') != ''
@@ -160,8 +174,8 @@ ANCHOR_SQL="
   ORDER BY dt DESC LIMIT 5 FORMAT JSONEachRow"
 
 HOST_SQL="
-  /* __HOSTROWS__ every stage this rehearsal host reported */
-  SELECT dt,
+  SELECT /* __HOSTROWS__ every stage this rehearsal host reported */
+         dt,
          JSONExtractString(raw,'stage')         AS stage,
          JSONExtractString(raw,'level')         AS level,
          JSONExtractString(raw,'host_name')     AS host,

@@ -316,16 +316,75 @@ else
   fail "the capture script declares divergence the gate refuses:${_bad}" "n/a" "$_div"
 fi
 
+# ── Mode 1 admissibility, against the REAL transport ──────────────────────────────
+#
+# THE ONE ARM THAT DOES NOT STUB betterstack-query.sh, and the reason it exists: every other
+# arm does, and the stub dispatches on `__ANCHOR__`/`__HOSTROWS__` — tokens that live INSIDE
+# the SQL comment. So the stub was satisfied by exactly the construct that made the real
+# transport reject, and 28 green assertions certified a route that could not execute.
+#
+# The queries are RECORDED from a live run rather than re-parsed out of the SUT's source: a
+# re-parsed copy is a second pin on the same value, and a second pin goes stale silently and
+# fails GREEN — the defect class this arm exists to close.
+_real_q="${ROOT}/scripts/betterstack-query.sh"
+_seen="$TMP/sql-seen"; mkdir -p "$_seen"
+_adm_rows="$TMP/rows-adm.jsonl"
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes > "$_adm_rows"
+cat > "$TMP/bs-record.sh" <<RECSTUB
+#!/usr/bin/env bash
+printf '%s' "\$1" > "${_seen}/\$(date +%s%N)-\$\$.sql"
+if printf '%s' "\$1" | grep -q '__ANCHOR__'; then cat "$ANCHOR_LIVE"; else cat "$_adm_rows"; fi
+RECSTUB
+chmod +x "$TMP/bs-record.sh"
+BETTERSTACK_QUERY_SH="$TMP/bs-record.sh" BETTERSTACK_QUERY_HOST=stub \
+  BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+  bash "$SUT" --host-name "$HOST" --evidence-url "$URL" --divergence "$DIVERGENCE" \
+    --cloud-init "$FIX/cloud-init-git-data.yml" --out "$TMP/evidence-adm.env" >/dev/null 2>&1
+
+_nq="$(find "$_seen" -name '*.sql' 2>/dev/null | wc -l)"
+if [[ ! -r "$_real_q" ]]; then
+  fail "the real betterstack-query.sh is unreadable at ${_real_q}" "n/a" "admissibility arm could not run"
+elif [[ "$_nq" -lt 2 ]]; then
+  # Positive-work floor: zero recorded queries would make the check below vacuously clean.
+  fail "recorded only ${_nq} queries from the SUT (expected >=2) — this arm asserted on nothing" "n/a" ""
+else
+  _rejected=""
+  for _q in "$_seen"/*.sql; do
+    # `timeout` because an ADMITTED query proceeds to curl; rejection is decided before any
+    # connection, so 64 still arrives instantly. rc 124 means admitted-then-timed-out, not 64.
+    timeout 20 env BETTERSTACK_QUERY_HOST=127.0.0.1 BETTERSTACK_QUERY_USERNAME=u \
+      BETTERSTACK_QUERY_PASSWORD=p bash "$_real_q" "$(cat "$_q")" >/dev/null 2>&1
+    [[ $? -eq 64 ]] && _rejected="${_rejected} $(head -c 50 "$_q" | tr '\n' ' ')"
+  done
+  if [[ -z "$_rejected" ]]; then
+    pass "all ${_nq} queries the SUT builds are admitted as Mode 1 SQL by the real transport"
+  else
+    fail "a query the SUT builds is REJECTED by betterstack-query.sh (exit 64) — the route cannot run" \
+      "64" "$_rejected"
+  fi
+  # Verify-the-verifier: the same check MUST reject the leading-comment shape, or the arm above
+  # would pass against any implementation and pin nothing.
+  timeout 20 env BETTERSTACK_QUERY_HOST=127.0.0.1 BETTERSTACK_QUERY_USERNAME=u \
+    BETTERSTACK_QUERY_PASSWORD=p bash "$_real_q" "
+  /* __ANCHOR__ leading-comment shape */
+  SELECT 1" >/dev/null 2>&1
+  if [[ $? -eq 64 ]]; then
+    pass "the leading-comment shape IS rejected (64) — this arm can tell the two apart"
+  else
+    fail "the leading-comment shape was NOT rejected — this arm cannot fail and pins nothing" "n/a" ""
+  fi
+fi
+
 # ── Minimum-cardinality floor ─────────────────────────────────────────────────────
 # Developer-incremented, and a FLOOR rather than an equality so a legitimately added arm does
 # not redden the suite and train the next person to bump it unread. Counts passes+fails, so a
 # genuine failure still reports as a failure rather than as an empty suite.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 28 ]]; then
+if [[ "$_ran" -lt 30 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 28. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 30. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 28)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 30)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
