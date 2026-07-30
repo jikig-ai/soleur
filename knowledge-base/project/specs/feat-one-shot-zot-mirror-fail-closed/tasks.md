@@ -124,11 +124,11 @@ ordering constraint by construction.
 
 ## Phase 7 — Exit gate
 
-- [ ] 7.1 `bash plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh`
-- [ ] 7.2 `bash apps/web-platform/infra/ci-deploy.test.sh`
-- [ ] 7.3 `actionlint` on `reusable-release.yml` **and** `web-platform-release.yml`; `bash -c` on
+- [x] 7.1 `bash plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh`
+- [x] 7.2 `bash apps/web-platform/infra/ci-deploy.test.sh`
+- [x] 7.3 `actionlint` on `reusable-release.yml` **and** `web-platform-release.yml`; `bash -c` on
       extracted `run:` snippets (never `bash -n` on the YAML).
-- [ ] 7.4 Walk AC1–AC18. Every AC is presence-first with `-F` and a missing-anchor guard — do not
+- [x] 7.4 Walk AC1–AC18. Every AC is presence-first with `-F` and a missing-anchor guard — do not
       accept an absence-only result as a pass.
 
 ## Phase 8 — Trackers (`wg-when-deferring-a-capability-create-a`)
