@@ -59,7 +59,7 @@ done
 
 # Comment-stripped HCL for every content assertion below.
 REH_CODE="$(mktemp -t gdr2code.XXXXXXXX)" || exit 2
-trap 'rm -f "$REH_CODE"' EXIT
+trap 'rm -f "$REH_CODE" "${DRIFT_CODE:-}"' EXIT
 sed 's/^[[:space:]]*#.*$//' "$REH"/*.tf > "$REH_CODE"
 
 # ── 1. ROOT PURITY ─────────────────────────────────────────────────────────────────
@@ -788,12 +788,22 @@ fi
 # ── 12. THE ORPHAN SWEEP EXISTS AND FAILS CLOSED ───────────────────────────────────
 # `terraform plan` reports on resources IN STATE, so a host the rehearsal state has forgotten
 # is invisible to every plan in this repository. Only Hetzner can see it.
-if grep -q 'rung2-rehearsal-orphan-sweep' "$DRIFT_WF"; then
+#
+# COMMENT-STRIPPED, like every other assertion in this file. Measured (#7066 review): these
+# were the only two greps that read $DRIFT_WF raw, so replacing the whole sweep job body with
+# `run: echo "noop"` while leaving a comment that named the job and the URL kept this suite
+# 39/0 green — the guard was satisfied by prose describing the thing it had just lost.
+DRIFT_CODE="$(mktemp -t gdr2drift.XXXXXXXX)" || exit 2
+sed 's/^[[:space:]]*#.*$//; s/[[:space:]]#.*$//' "$DRIFT_WF" > "$DRIFT_CODE"
+if grep -q 'rung2-rehearsal-orphan-sweep' "$DRIFT_CODE"; then
   pass "the scheduled drift workflow carries a rung-2 orphan sweep"
 else
   fail "no rung-2 orphan sweep — a leaked rehearsal host would be invisible to every terraform plan"
 fi
-if grep -q 'api.hetzner.cloud/v1/servers' "$DRIFT_WF"; then
+# Anchored on the CALL, not on a bare URL: the sweep now iterates resource kinds
+# (servers/volumes/ssh_keys/firewalls) because a partial teardown strands volumes and the
+# scratch Doppler config far more often than it strands the box.
+if grep -qE 'api\.hetzner\.cloud/v1/\$\{_kind\}' "$DRIFT_CODE"; then
   pass "the sweep asks HETZNER, not terraform state (state cannot see what it has forgotten)"
 else
   fail "the orphan sweep does not query the Hetzner API"

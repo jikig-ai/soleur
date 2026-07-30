@@ -60,6 +60,14 @@
 #       [--out <path>] [--cloud-init <path>] [--window '30 DAY'] [--verify-only]
 set -uo pipefail
 
+# A TERMINAL SENTINEL, PRINTED ON EVERY EXIT PATH. The workflow wraps this script in
+# `doppler run`, which exits 1 on ITS OWN failures (measured: a bad token, and a bad
+# project/config, both give rc=1) — the same code this script uses for FAIL. Without a
+# sentinel the wrapper cannot tell "the rehearsal host reported a fatal" from "the capture
+# script never ran a line", and it reported the former, sending the operator to diagnose a
+# boot that was fine. The trap fires on the real exit code whatever path produced it.
+trap 'printf "RUNG2_CAPTURE_VERDICT=%s\n" "$?"' EXIT
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # Env override is the TEST SEAM, and the only one: the suite stubs the query transport rather
 # than the decision function, so every arm exercises the real branching.

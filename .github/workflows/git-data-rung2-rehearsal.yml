@@ -211,11 +211,17 @@ jobs:
             echo "::error::could not parse the plan JSON — refusing to read an unparseable plan as a clean one."
             exit 1
           fi
-          destroys=$(jq '[.resource_changes[]? | select(.change.actions | index("delete"))] | length' /tmp/plan.json)
+          # DENY-LIST THE INERT VERBS, never allow-list the destructive ones. Measured
+          # (#7066 review): `["forget"]` scored 0 destroys and PASSED, so a `removed {}` block
+          # forgetting hcloud_volume.rehearsal_luks sailed through -- and the forgotten
+          # resource is then unreachable by the `if: always()` destroy AND invisible to both
+          # orphan sweeps. Terraform has grown this vocabulary before; anything added next is
+          # now refused by default rather than silently treated as harmless.
+          destroys=$(jq '[.resource_changes[]? | select(.change.actions | map(select(. != "create" and . != "read" and . != "no-op")) | length > 0)] | length' /tmp/plan.json)
           creates=$(jq -r '[.resource_changes[]? | select(.change.actions | index("create")) | .address] | .[]' /tmp/plan.json)
           if [[ "$destroys" -ne 0 ]]; then
-            echo "::error::the rehearsal plan contains ${destroys} destroy(s). This root is additive-only; a destroy here means state drifted or an address was renamed."
-            jq -r '.resource_changes[]? | select(.change.actions | index("delete")) | .address' /tmp/plan.json
+            echo "::error::the rehearsal plan contains ${destroys} non-additive change(s) (delete/replace/forget/...). This root is additive-only; anything but create/read/no-op means state drifted or an address was renamed or dropped."
+            jq -r '.resource_changes[]? | select(.change.actions | map(select(. != "create" and . != "read" and . != "no-op")) | length > 0) | "\(.address) \(.change.actions | join(","))"' /tmp/plan.json
             exit 1
           fi
           # Every created address must be rehearsal-scoped. `-target` is transitive, so this
@@ -272,15 +278,36 @@ jobs:
           mkdir -p /tmp/rung2
           url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           rc=2
+          # DEADLINE, NOT AN ATTEMPT COUNT. Each attempt is up to 2 x `curl --max-time 60`
+          # plus a 30 s sleep = 150 s, so 20 attempts is up to ~50 min against a 30-minute job
+          # ceiling -- and the worst case is the DARK BOOT, i.e. exactly the failure this route
+          # exists to detect. Blowing the job ceiling inside this step means the TRANSIENT
+          # summary below is never written and the `if: always()` teardown gets only the
+          # runner's cancellation grace to destroy a server, two volumes and a Doppler config.
+          deadline=$(( SECONDS + 16 * 60 ))
           for attempt in $(seq 1 20); do
+            if (( SECONDS >= deadline )); then
+              echo "--- capture deadline reached after $((attempt - 1)) attempt(s); stopping so teardown keeps its budget ---"
+              break
+            fi
             echo "--- capture attempt ${attempt}/20 ---"
             doppler run -p soleur -c prd_terraform -- \
               bash scripts/followthroughs/git-data-rung2-evidence-capture.sh \
                 --host-name "$REHEARSAL_HOST" \
                 --evidence-url "$url" \
                 --divergence "$REHEARSAL_DIVERGENCE" \
-                --out /tmp/rung2/git-data-rung2-boot-evidence.env
-            rc=$?
+                --out /tmp/rung2/git-data-rung2-boot-evidence.env 2>&1 | tee /tmp/rung2/capture.log
+            rc=${PIPESTATUS[0]}
+            # `doppler run` EXITS 1 ON ITS OWN FAILURES (measured: a bad token, a bad
+            # project/config both give rc=1), which is the same code the capture script uses
+            # for FAIL. Reporting that as "the rehearsal host reported a fatal" blames the host
+            # for a credential problem and sends the operator to the one place the answer is
+            # not. A sentinel the script prints on its LAST line disambiguates: no sentinel
+            # means the script never got to speak.
+            if [[ "$rc" -eq 1 ]] && ! grep -q 'RUNG2_CAPTURE_VERDICT=' /tmp/rung2/capture.log 2>/dev/null; then
+              echo "::error::doppler run exited 1 without the capture script producing a verdict — this is an auth/config failure of the wrapper, NOT a boot failure of the rehearsal host."
+              rc=2
+            fi
             # 0 PASS and 1 FAIL are both TERMINAL. Only 2 (nothing known yet) is retried —
             # retrying a FAIL would turn a real finding into a timeout.
             [[ "$rc" -ne 2 ]] && break
@@ -317,7 +344,7 @@ jobs:
       # paying box running the git transport wrappers with a LUKS volume attached, and nothing
       # outside this step and the drift sweeper's orphan probe would ever reclaim it.
       - name: Teardown (always)
-        if: ${{ always() && !inputs.teardown_only && !inputs.dry_run }}
+        if: ${{ always() && !inputs.dry_run }}
         working-directory: ${{ env.REHEARSAL_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -332,7 +359,7 @@ jobs:
       # Hetzner directly, which is the only source that can distinguish "destroyed" from
       # "forgotten by state".
       - name: Assert no rehearsal host survives (Hetzner API)
-        if: ${{ always() && !inputs.teardown_only && !inputs.dry_run }}
+        if: ${{ always() && !inputs.dry_run }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
