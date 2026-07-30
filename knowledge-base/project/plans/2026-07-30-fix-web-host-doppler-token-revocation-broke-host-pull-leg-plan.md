@@ -469,6 +469,120 @@ Contrast the two mechanisms that already work and are the fix vehicles:
 
 ---
 
+---
+
+## Phase 0 Results (/work, 2026-07-30) — measured, not inherited
+
+*All probes run from the worktree; no operator was asked for anything
+(`hr-no-dashboard-eyeball-pull-data-yourself`).*
+
+### 0.0 — E9/H7b contradiction RESOLVED to branch (a). R1 confirmed; the tf comment is stale.
+
+`web-probe-read-token.tf:5-6` asserts *"web-1 has no `/etc/default/inngest-server` —
+`web_colocate_inngest` defaults false"*. **That parenthetical is stale.** Two independent proofs:
+
+1. **`inngest-heartbeat.service` carries a NON-optional `EnvironmentFile=/etc/default/inngest-server`**
+   (`inngest-bootstrap.sh:315` — no `-` prefix). systemd fails a unit outright when a non-optional
+   `EnvironmentFile` is absent. It ran healthy until 11:19:56 on 2026-07-30, so **the file exists on
+   web-1**. This proof is independent of the token's validity.
+
+2. **The failure onset is the revocation instant.** Better Stack ClickHouse, 60h window,
+   `host_name = soleur-web-platform`, grouped by unit (`… : Failed with result`):
+
+   | unit | first_seen | last_seen | n |
+   |---|---|---|---|
+   | `inngest-server.service` | 2026-07-29 06:45:44.189299 | 2026-07-29 06:45:45.317983 | 2 |
+   | `inngest-redis.service` | 2026-07-29 06:45:44.289786 | 2026-07-29 06:45:44.289786 | 1 |
+   | `vector.service` | 2026-07-29 06:45:44.445406 | 2026-07-29 06:45:44.445406 | 1 |
+   | **`container-restart-monitor.service`** | **2026-07-30 11:19:48.786126** | 2026-07-30 17:50:48.197840 | 78 |
+   | **`inngest-heartbeat.service`** | **2026-07-30 11:19:56.753297** | 2026-07-30 17:53:51.818576 | 389 |
+   | **`cron-egress-resolve.service`** | **2026-07-30 11:19:56.753297** | 2026-07-30 17:53:51.818576 | 389 |
+
+   `terraform-prd-20260730` was minted **2026-07-30T11:19:30.614Z**. `container-restart-monitor`
+   fails **+18.17s** later; the other two **+26.14s**. Zero failures for these units in the
+   preceding 53 hours.
+
+**Why the onset time is the discriminator.** `cron-egress-resolve.service`'s `ExecStart` is
+`… if [ -n "$D" ] && [ -n "$DOPPLER_TOKEN" ]; then exec "$D" run … ; else exec …sh; fi`. Had
+`DOPPLER_TOKEN` been *empty* (the "file absent" world), the unit would have taken the `else`
+branch and its behaviour would be **invariant across the revocation** — always working or always
+failing, never flipping. It flipped, at +26s. Therefore `DOPPLER_TOKEN` was non-empty and became
+*invalid* — i.e. the file holds the dead **copy** made at `inngest-bootstrap.sh:586`, exactly as
+R1 states. **H7b: CONFIRMED (upgraded from UNKNOWN on evidence, not on the tidy story).**
+
+Consequence for the fix: R1's remedy is correct **and** the plan's own 0.0-branch-(a) note ("Phase 2
+does not fix those three units") is superseded by R1 — adding
+`EnvironmentFile=-/etc/default/soleur-doppler-token` *after* the `inngest-server` line fixes them by
+systemd later-wins. Both statements are in the plan; **R1 wins.**
+
+### 0.0c / R2 — `vector.service` has NOT failed since 2026-07-29 06:45. The risk is live, not realised.
+
+Its absence from the 07-30 cluster is the positive evidence for R2's mechanism: it holds
+its fetched secrets in memory from a pre-revocation start. One restart = telemetry blackout.
+The `vector.service.d` drop-in stays highest-priority in PR-A.
+
+### 0.2 / 0.2b — the fix channel is alive (both legs)
+
+- `infra-config-apply`, 2026-07-30 16:32:48.481302: **`complete: 15/15 files written, 0 failed`**,
+  `_SYSTEMD_UNIT=webhook.service`. The webhook leg works.
+- `apply-deploy-pipeline-fix.yml` run **30561787757 → success, 2026-07-30T16:30:44Z**. This proves
+  the co-targeted root-SSH `infra_config_handler_bootstrap` leg is alive (R34's precondition).
+
+### 0.3 — token state has not moved since 11:19:30Z
+
+`doppler configs tokens --project soleur --config prd`: `terraform-prd-20260730` present, created
+`2026-07-30T11:19:30.614Z`. No new `prd` token since. Situation is unchanged; the evidence stands.
+
+### 0.4 / R35e — **the delivered value is ALIVE, and its shape cannot brick the unit**
+
+`--name-transformer tf-var` maps prd_terraform's `DOPPLER_TOKEN` → `TF_VAR_doppler_token`
+(`apply-deploy-pipeline-fix.yml:271,323`), so that secret **is** `var.doppler_token`.
+
+| check | result |
+|---|---|
+| `^DOPPLER_TOKEN=dp\.st\.[A-Za-z0-9._-]+$` on the rendered line | **pass** |
+| length | 53 |
+| contains CR / `#` / space / tab / newline | **no / no / no / no** |
+| `GET api.doppler.com/v3/configs/config/secrets/names?project=soleur&config=prd` with it | **HTTP 200** |
+
+**This is the precondition the whole remediation rests on** — Terraform's copy authenticates *right
+now*, so re-delivering it genuinely repairs the host. Had it been dead, the fix would have shipped a
+second dead token. Sharp Edge 1's open question (newline/`#`) is **closed by measurement**; the R3.1
+`terraform plan` validation stays as the regression guard for the next rotation.
+
+### 0.6 — Phase 1 is not chicken-and-egg (re-asserted, not inherited)
+
+`ci-deploy.sh` is entry **#1** of `FILE_MAP` (`infra-config-apply.sh`) and of `DEST_SPEC`
+(`infra-config-install.sh`), delivered by the webhook channel proven alive at 16:32:48 — **not** by
+the container deploy that is broken. Diagnostics can land independently of the pull path.
+
+### 0.7 / R36 — web-2 decision input, and prod's actual staleness
+
+- `https://app.soleur.ai/health` → `{"status":"ok","version":"0.244.0","build_sha":"34654d7a…","uptime":73562}`.
+  **Prod is serving v0.244.0** against a latest tag of v0.246.1 — the stale-code claim is confirmed
+  from prod's own mouth, and uptime ~20.4h brackets the window.
+- `https://web-1.app.soleur.ai/health` and `https://web-2.app.soleur.ai/health` → **`000`** (name
+  does not resolve). The per-host origin probes R33 wants for PR-B's condition B **do not exist as
+  DNS today**; `model.c4:287` describes them aspirationally. Recorded so PR-B does not inherit the
+  assumption — this is a real gap, not a transient failure.
+
+### 0.5 — consumer sweep
+
+`git grep -n 'webhook-deploy' -- apps/ .github/ scripts/` → 38 hits; `DOPPLER_TOKEN` under
+`apps/web-platform/infra/` → 40 hits. Enumerated into §Files to Edit; the shell-`source` sites
+(`soleur-host-bootstrap.sh:43,211`, `cron-egress-enforce-probe.sh:49`, `cloud-init.yml:329,486,786`)
+remain on the OLD file by design (Design T), and are covered because the old file keeps working for
+everything except the revoked value — the new file is additive and later-wins where it is wired.
+
+### Still open (carried into implementation, not assumed away)
+
+- **0.0b — whether `doppler` exits non-zero or `rc=0` with empty output on a revoked token is
+  still UNMEASURED.** `ci-deploy.sh:1359` discards stderr, so nobody has ever seen it. The marker
+  must therefore carry `empty=<0|1>` *alongside* `rc=<n>`, and the RED fixture must cover
+  `rc=0 empty=1` first. Do not let a test assert a shape that may not be this incident.
+
+---
+
 ## Hypotheses
 
 Triggered by `hr-ssh-diagnosis-verify-firewall` / the network-outage checklist (the description
