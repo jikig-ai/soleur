@@ -524,6 +524,35 @@ failure_modes:
     detection: .github/scripts/test/test-infra-suite-registration.sh exits non-zero
     alert_route: guard-script-fixture-tests — REQUIRED, merge_group-triggered, path-filter-free. Fail-closed as of this PR; previously only an advisory NOTE from the local runner.
 
+  # Added at review: the section originally listed ONLY the mode this PR fixes, and omitted the
+  # mode this PR creates the possibility of. Registering seven suites means seven new ways for
+  # CI to go red, and their verdicts land on an advisory surface.
+  - mode: one of the seven newly-registered guards goes RED on a real regression in the script it guards
+    detection: the suite's own step fails in deploy-script-tests
+    alert_route: >
+      ADVISORY ONLY — no push alert today, stated plainly rather than implied.
+      deploy-script-tests is not a required context; no workflow_run notifier watches it; and
+      ship's poll loop intersects `gh pr checks` failures with the REQUIRED-check name set
+      (plugins/soleur/skills/ship/SKILL.md), so an advisory red produces no exit and no message.
+      The real teeth are apps/web-platform/infra/run-registered-suites.sh, which ends in
+      `(( RED == 0 ))` and is mandated as an infra exit gate by both the work and ship skills —
+      genuine, but human-run and therefore discipline-dependent.
+      Worked example of the gap: widening inngest-server-flip-guard.sh's ALLOW set past the
+      FSM's start_server states reds inngest-server-flip-guard.test.sh, auto-merge proceeds,
+      nothing notifies, and the ADR-100 lockstep protecting a destructive Redis FLUSHALL merges
+      broken unless a human ran the local runner.
+      Promotion of the verdict to blocking is #6480 (D2), deliberately not this PR.
+
+  - mode: a new infra suite is added inside a SUBDIRECTORY, registered correctly, and silently never runs locally
+    detection: test-infra-suite-registration.sh exits non-zero (KNOWN_UNDERIVABLE pin)
+    alert_route: >
+      guard-script-fixture-tests (required). Added at review after this was measured GREEN:
+      run-registered-suites.sh's derivation character class excludes `/`, so a correctly
+      registered subdirectory suite runs in CI and NEVER through the mandated local runner.
+      The seven that exist today are pinned; an eighth now reds rather than accreting silently,
+      which is the same accretion that produced the seven orphans #7068 is cleaning up.
+      Fixing the derivation itself is #7076.
+
 logs:
   where: GitHub Actions run logs for infra-validation.yml and pr-quality-guards.yml
   retention: GitHub default (90 days)

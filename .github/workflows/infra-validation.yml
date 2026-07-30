@@ -334,18 +334,15 @@ jobs:
     # 2s, cutover-flip 1s, and bwrap-uid / config-state / flip-guard / live-verify 0s
     # each at second resolution. (Locally, serially and warm, the seven sum to 3.78s.)
     #
-    # Whole job, measured on this branch across 3 runs — 30527194838, 30529482622,
-    # 30529614313 — **252-270s**, all `success`. Stated as a range on a named run set,
-    # per the convention above.
+    # Whole job, measured on this branch across all 7 runs — **242-270s**, max 270s, all
+    # `success`. Stated as a range on a measured run set, per the convention above.
     #
-    # Read that against the 184-189s figure recorded above and note what it means: the
-    # job has grown ~70s since that set was measured on a DIFFERENT branch, from steps
-    # unrelated to #7068 (the git-data runcmd rehearsal alone is 50s, the web-host
-    # parity mutation battery 39s, the LUKS G4 battery 20s). An earlier draft of this
-    # paragraph projected "~192s -> ~204s" by adding this PR's increment to that older
-    # baseline; the projection was wrong by ~60s because the baseline was stale, and
-    # the measurement above replaces it. The lesson is the one the instruction below
-    # already states — re-derive, do not extrapolate from an inherited number.
+    # Read that against the 184-189s figure recorded above: the job has grown ~70s since that
+    # set was measured, on a DIFFERENT branch, from steps unrelated to #7068 (the git-data
+    # runcmd rehearsal alone is 50s, the web-host parity mutation battery 39s, the LUKS G4
+    # battery 20s). Re-derive, do not extrapolate from an inherited number — the instruction
+    # below already says so, and the plugin-seed step comment further down is where ignoring
+    # it actually cost something.
     #
     # Ceiling NOT bumped. 480s is ~1.8x the observed 270s max. That is tighter than the
     # ~2.5x recorded above, and the reason is the ~70s of unrelated growth, not this
@@ -596,12 +593,30 @@ jobs:
       # budget. A cold-pull stall must fail naming THIS step rather than let the job ceiling
       # cancel at whatever unrelated step the clock reached.
       #
-      # Stated honestly: the local measurement was <1s against an ALREADY-WARM docker cache, so
-      # it is not a sound base for a "Nx" multiple. 3 minutes is a cold-pull allowance, not a
-      # measured margin. Job headroom is ample either way — ceiling 8min/480s against a measured
-      # whole-job 184-189s. Re-derive from the API if this step ever approaches it.
+      # The multiple IS statable, from CI rather than from the warm local cache: API-measured
+      # across 7 runs on this branch this step costs 0-4s. 60s is therefore ~15-30x, which is
+      # more generous in ratio terms than the ci-deploy.sh tests ceiling above (3min against an
+      # API-measured 25s, ~7.2x).
+      #
+      # 60s, not the 180s an earlier revision carried, because at 180s the ceiling DEFEATS the
+      # attribution it exists to provide. Whole-job is API-measured 242-270s over those same 7
+      # runs (NOT the 184-189s figure this comment used to quote — that was inherited from a
+      # different branch at a different job composition, and is the same stale-rationale defect
+      # #7068 is about; the top-of-job comment re-derived it and this one was missed):
+      #
+      #   270s job max - 4s this step + 180s full-ceiling hang = 446s vs the 480s job ceiling
+      #     -> 34s margin, which is LESS than this branch's own 28s job spread. The JOB ceiling
+      #        cancels first, at whatever step the clock reached — the exact red herring a
+      #        step-level ceiling exists to prevent.
+      #   270s - 4s + 60s = 326s -> 154s margin (32%). The step ceiling fires first.
+      #
+      # Trade-off stated rather than buried: 60s is a real cold-pull allowance for a ~4 MB
+      # busybox image, but it is tighter than 180s, so a pathologically slow registry could
+      # flake this step. That is the intended direction — a step that names itself beats a job
+      # that cancels anonymously. Re-derive both numbers from the API if the job composition
+      # changes.
       - name: Run cloud-init-plugin-seed guard (#7068 adopting an unregistered suite)
-        timeout-minutes: 3
+        timeout-minutes: 1
         run: bash apps/web-platform/infra/cloud-init-plugin-seed.test.sh
 
       # LOAD-BEARING registration (explicit, no glob — an unregistered suite is silent ZERO

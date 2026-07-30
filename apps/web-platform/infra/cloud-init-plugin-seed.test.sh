@@ -62,6 +62,11 @@ touch "$TARGET/.stale-dir/keep"
 # cloud-init.yml (dash) so this test exercises the production form on both
 # paths. Sentinel `.seed-complete` is written LAST so partial-copy detection
 # in `verifyPluginMountOnce` works; the test asserts both are present.
+# Kept after the $$-scoping, on a narrower rationale than it originally had. With a FIXED
+# name this cleared a container a crashed prior run had left behind; $$-scoping plus the EXIT
+# trap removes that path. What survives is PID reuse combined with a trap bypass (SIGKILL,
+# power loss) leaving a same-PID container behind — rare, but the failure it prevents is a
+# confusing `docker create` name conflict rather than anything this suite asserts.
 docker rm -f "$CTR" >/dev/null 2>&1 || true
 docker create --name "$CTR" "$IMG" >/dev/null
 find "$TARGET" -mindepth 1 -delete 2>/dev/null || true
