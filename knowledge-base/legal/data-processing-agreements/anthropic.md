@@ -70,6 +70,21 @@ Until signed: the dashboard surfaces a one-time banner to that effect
 - Pre-PR-B Jikigai-keyed surfaces (out of scope of this register file's
   PA-22 framing; see Vendor Mapping Notes column): `claude-code-action`
   CI + compound-promotion-loop #2720.
+- **Enumeration corrected 2026-07-30 (#7086).** The list above was
+  non-exhaustive: the **claude-eval Inngest cron fleet** (15 crons on
+  `_cron-claude-eval-substrate`, plus `cron-compound-promote` and
+  `cron-weekly-release-digest` over HTTP) is the *dominant* Jikigai-keyed
+  Anthropic surface and was never named, while `claude-code-action` — named
+  first — is `disabled_manually` and emits nothing. Several fleet members
+  (`cron-legal-audit`, `cron-community-monitor`, `cron-daily-triage`,
+  `cron-content-generator`, `cron-campaign-calendar`,
+  `cron-competitive-analysis`, `cron-growth-*`) can route third-party or
+  personal data to Anthropic. **Coverage is unaffected** — the DPA
+  auto-incorporates via Commercial Terms § C and does not depend on this
+  enumeration — but the Art. 30 framing for the fleet is not yet assessed to
+  the PA-27 standard (which required an activity entry, a DPA scope
+  amendment, an LIA and a DPIA screening for a *single* summarizer call).
+  Tracked for that assessment; do not read this list as exhaustive.
 
 ## TOMs relied on (Art. 32)
 
