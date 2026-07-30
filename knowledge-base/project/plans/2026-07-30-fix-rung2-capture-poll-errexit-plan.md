@@ -516,8 +516,8 @@ each attempt spends a real Hetzner host for ~4 seconds of useful work.
 `DOPPLER_TOKEN` handling is unchanged. The one money-shaped risk is the *existing* one this
 reduces: a rehearsal that dies at attempt 1 still provisions and tears down a paid host.
 
-**Brand-survival threshold:** `none` — no user-facing surface, no regulated data, no persistent
-store.
+- **Brand-survival threshold:** `none` — no user-facing surface, no regulated data, no
+  persistent store.
 
 - `threshold: none, reason: the diff changes only shell-flag posture inside existing `run:`
   blocks — it adds no resource, no secret, no route, and no data path, so the three
@@ -572,8 +572,18 @@ logs:
   retention: "90 days."
 
 discoverability_test:
-  command: "gh run list --workflow=git-data-rung2-rehearsal.yml --limit 5 --json databaseId,conclusion && gh run view <id> --log | grep -c -- '--- capture attempt'"
-  expected_output: "A count > 1 proves the poll polled. A count of exactly 1 alongside a failed conclusion is this bug's signature."
+  # Runnable locally, no credentials, no network: the behavioural arms EXECUTE the real
+  # capture-step body extracted from the live YAML, so a green run IS the proof that the
+  # poll polls. An earlier draft named a `gh run list … && gh run view <id> --log | grep`
+  # pipeline, which was not a discoverability test at all -- it carried a `<id>`
+  # placeholder (unrunnable as written), invoked a credentialed CLI, and chained with
+  # `&&`/`|`. Preflight Check 10 refuses all three, correctly.
+  command: bash apps/web-platform/infra/git-data-rung2-rehearsal.test.sh
+  expected_output: "64 passed, 0 failed"
+  # Post-dispatch, the LIVE signal is the attempt progression in the run log: a count of
+  # exactly 1 `--- capture attempt` alongside a failed conclusion is this bug's signature;
+  # >1 proves the poll polled. That needs `gh` and so is documented here rather than run
+  # as the discoverability command.
 ```
 
 ## Architecture Decision (ADR/C4)
