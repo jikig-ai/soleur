@@ -32,6 +32,17 @@ FAIL=0
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 
+# ONE owning tempdir for the whole suite, with a single owning trap (ADR-129).
+# Per-case dirs are created underneath it, so an abnormal exit anywhere — a
+# die between allocation and cleanup, a SIGINT, a set -e abort — still removes
+# every artifact. Allocating per-case and rm-ing at the end of the case leaks
+# on exactly the paths that matter, and this repo has a documented history of
+# count-shaped /tmp exhaustion from precisely that pattern.
+WORKROOT="$(mktemp -d -t supabase-local-test.XXXXXXXX)" || {
+  echo "SETUP FAILURE: cannot allocate a work dir" >&2; exit 2; }
+trap 'rm -rf "$WORKROOT"' EXIT INT TERM HUP
+CASE_N=0
+
 # ---------------------------------------------------------------------------
 # Fake `docker`. Behaviour is keyed on the subcommand:
 #   ps      -> prints $DOCKER_PS_OUT   (one container id per line; may be empty)
@@ -79,7 +90,10 @@ reset_fixture() {
 # Echoes "<exit-code>|<output>" so callers can assert on both.
 run_assert() {
   local d out rc
-  d="$(mktemp -d -t supabase-local-test.XXXXXXXX)" || { echo "SETUP FAILURE: mktemp" >&2; exit 2; }
+  # Under the suite-level WORKROOT, so the single EXIT trap owns cleanup.
+  CASE_N=$((CASE_N + 1))
+  d="${WORKROOT}/case-${CASE_N}"
+  mkdir -p "$d" || { echo "SETUP FAILURE: mkdir $d" >&2; exit 2; }
   make_fake_docker "$d"
   set +e
   out=$(env -i PATH="$d:/usr/bin:/bin" HOME="$HOME" TMPDIR="$TMPDIR" \
@@ -89,7 +103,6 @@ run_assert() {
           bash "$SCRIPT" assert 2>&1)
   rc=$?
   set -e
-  rm -rf "$d"
   printf '%s|%s' "$rc" "$out"
 }
 
