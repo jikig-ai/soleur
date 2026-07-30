@@ -30,6 +30,21 @@ supersedes: "ADR-087 D1 (credential-provisioning choice only; ADR-087 Design B�
 > not only a login failure) is homed in **[ADR-096](./ADR-096-migrate-container-registry-ghcr-to-self-hosted-zot.md)**
 > (which owns the interim GHCR break-glass path); this ADR stays `superseded` and carries only
 > the factual "why," not a current-governing MUST.
+>
+> **Dated correction 2026-07-30 (#7071).** Every "interim GHCR break-glass" phrasing above is
+> now historical. The interim machine-account PAT has been **revoked** (`GET api.github.com/user`
+> → 401) and the minter is disabled (`GHCR_MINTER_DISABLED=true`; minting → 403 `DENIED`), so
+> **there is no GHCR break-glass pull path** — GHCR still receives dual-pushed images but nothing
+> can read them back. The instruction "do NOT revoke early" was written for a window that has
+> closed; do not read it as a statement that the PAT is still live.
+>
+> This ADR's arm-b finding is now **load-bearing in the opposite direction**. It is cited by the
+> ADR-096 amendment (2026-07-30) as the *structural* reason the CI zot mirror had to become
+> release-blocking: because an App installation token can `docker login` but is DENIED
+> `docker pull` on a private repo-linked package, **no zero-touch GHCR pull credential can
+> exist** — only a personal one. That turns "restore a GHCR credential and keep the mirror
+> warn-only" from a reversible preference into a structurally unavailable option, which is
+> exactly the distinction a future reader needs in order not to re-open it.
 
 ## Context
 
