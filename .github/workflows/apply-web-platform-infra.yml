@@ -1951,10 +1951,29 @@ jobs:
         if: steps.posture.outputs.probe_result != 'absent'
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        # The recut destroys the store. That is only acceptable because GHCR covers the
+        # !!! PREMISE RETRACTED 2026-07-30 (#7071) — THE GATE BELOW NOW FAILS CLOSED. !!!
+        #
+        # ~~The recut destroys the store. That is only acceptable because GHCR covers the
         # empty-store window — so refuse to destroy it while the covering path is ITSELF
         # degraded (that would create the #6400 total-deploy outage rather than tolerate a
-        # window). Zero-tolerance: a healthy fleet emits ONLY registry=zot.
+        # window). Zero-tolerance: a healthy fleet emits ONLY registry=zot.~~
+        #
+        # GHCR covers nothing now: the read PAT is revoked (401) and the minter is disabled
+        # (403 DENIED). The empty-store window is a TOTAL pull outage until the next CI
+        # dual-push. And the gate's most direct operand went dark with it — `ghcr-fallback`
+        # is emitted only inside the SUCCESS branch of a GHCR pull, so it can never fire
+        # again and can never abort anything.
+        #
+        # This comment is marked here, and not only in the script, because THIS is the
+        # surface an operator reads before firing the typed-confirm dispatch. Marking the
+        # script alone left the retracted premise stated, unmarked, on the page where the
+        # decision is actually made — the same orphaned-tail defect the rest of this change
+        # exists to drain.
+        #
+        # The gate itself now exits non-zero with that explanation until a replacement
+        # authorization condition is derived (see the script header). Reversing it is one
+        # line, deliberately: destroying production's only pull path should cost an explicit
+        # edit, not a green PASS nobody re-read.
         #
         # WHY IT MUST NOT RUN WHEN THE STORE IS ALREADY GONE. A mid-apply failure leaves the
         # store destroyed and the registry dark; every deploy in that window then emits

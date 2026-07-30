@@ -15,6 +15,115 @@ the Phase-5 soak (`zot-soak-6122.sh`: ≥7 days, zero fallback events across all
 signals, sufficient zot sample — necessary but not sufficient; see the alarm-parity note below)
 and GHCR-push retirement (5.3–5.5).
 
+## Amendment 2026-07-30 — the CI mirror is release-blocking for web-platform
+
+*No new ordinal is claimed; this amends ADR-096 in place. Trigger: the v0.244.1 incident
+(#7071) — a release that built, pushed and published green, then died `image_pull_failed`
+and left production undeployable for ~5h.*
+
+**(a) The falsified premise.** `## Decision` states the CI mirror is "explicitly
+non-blocking … a mirror failure degrades zot **redundancy**, never the release/build
+verdict". That is sound **only while GHCR is a working fallback**, and it is not:
+
+| Probe | Result |
+|---|---|
+| `GET api.github.com/user` with `GHCR_READ_TOKEN` | **401** — the classic PAT is revoked |
+| Mint a GHCR registry pull token | **403 `{"errors":[{"code":"DENIED"}]}`** |
+| `GHCR_MINTER_DISABLED` | **`true`** |
+
+GHCR still *receives* every image (dual-push is live) but nothing can *read* it back.
+Receiving is not serving. zot is therefore not redundant — it is the **sole pull path**,
+and a mirror miss is a release that cannot deploy.
+
+**(b) The change.** For **web-platform**, the mirror step drops `continue-on-error`, its
+`degraded()` exits non-zero, and it carries a **positive post-copy assertion**: read the
+tag back with `crane digest` and require it to equal the digest this build pushed. The
+assertion lives *inside* the mirror step rather than in a sibling, because on the very
+incident it targets `degraded()` exits before `install_crane` — a sibling step would find
+no crane and no zot login, and would have reported "CI regression, not a registry problem".
+
+**(c) Rejected: restore a GHCR pull credential and keep warn-only.** Rejected
+**structurally**, not as a preference — the distinction matters, because a preference is
+reversible by the next reader who disagrees. ADR-088 arm-b established that a GitHub App
+installation token can `docker login` to GHCR but is **DENIED** `docker pull` of a private
+repo-linked package. There is consequently **no zero-touch GHCR pull credential that can
+exist** — only a **user-account** PAT, which is what was just revoked and is not an
+acceptable production dependency.
+
+**Corrected 2026-07-30:** this clause originally said "a classic PAT tied to a *human*
+account". That is wrong on the repo's own facts, and the error mattered because it
+inflated the claim: `variables.tf` describes `GHCR_READ_TOKEN` as a *fine-grained*
+read:packages PAT **on a machine account**, and this PR's own ADR-088 edit calls it the
+"machine-account PAT". So the revoked credential was already non-personal in the
+machine-vs-human sense. What is actually structural is narrower: no GHCR pull credential
+can be minted **without a browser** — a fine-grained PAT has no creation API, and the App
+installation token is DENIED the pull (ADR-088 arm-b). Read (d)(1) below against that
+narrower claim: "a non-personal credential works" was already satisfied, so the open bar
+is zero-touch *minting*, not non-personal *ownership*. (ADR-088 is itself internally
+inconsistent on classic-vs-fine-grained — line 22 says classic, line 58 says
+fine-grained; `variables.tf` is the provisioning source of truth and says fine-grained.
+Not resolved here, because the revoked token can no longer be inspected.)
+
+**(d) Relaxation condition (testable, not a matter of taste).** Revert the mirror to
+non-blocking when **either** holds, verified by probe rather than by assertion:
+
+1. A **non-personal** GHCR pull credential works: minting a registry pull token returns
+   200 and `docker pull` of a private repo-linked package succeeds with it. (This requires
+   a GitHub platform change, given (c).)
+2. A **second mirror** exists that hosts can pull from independently of zot.
+
+Until one of those is demonstrated, the four-axis mitigation in the Cold-boot-dependency
+statement has **two** surviving axes — one *detection* (the loud no-SSH fallback signal)
+and one *recoverability* (durability = reproducibility). **Neither is availability.**
+Both struck axes were availability-shaped, and both pointed at the **same** dead GHCR
+fall-through — so they fail together, not independently, and the "four *independent* axes"
+framing was counting one premise twice. Axis 1 ("Automatic degrade") was the only axis that
+kept a zot outage off the boot path *without operator intervention*; axis 3 ("Instant
+revert") was the manual lever to the same destination. Clause (e) below strikes both in
+place, and the §Cold-boot head's "mitigated on four independent axes" is corrected there too.
+
+**(e) The ADR's own dead escape hatches.** Two bullets in this document recommended the
+now-broken GHCR fall-through as mitigation — Cold-boot-dependency axis 1 ("a zot outage
+degrades latency, not availability") and "Instant revert". Both are struck through in
+place above. Leaving them would have been the sharper failure: they are the two things a
+reader reaches for *during* an outage, when there is no time to notice they are stale.
+
+**(f) What the gate does NOT prove.** It asserts the manifest is in zot **and readable by
+the PUSH credential over the CF Tunnel**. It does **not** prove the host can pull. The
+host uses a different transport (private NIC, no tunnel, no CF Access) and a different
+credential (`ZOT_PULL_*`), so these remain uncovered: the private-net
+10.0.1.10→10.0.1.30:5000 path being down; `ZOT_PULL_*` going stale (the same
+rotation-staleness class, one credential over); and zot `accessControl` granting push-read
+but not pull-read. `web-zot-consumer-probe.sh` is the correct non-redundant complement and
+**must not be retired** on the strength of this gate. Recorded here so the amendment does
+not claim more than the mechanism supports.
+
+**(g) This is a mitigation, not a resolution — open architectural debt.** Fail-closed makes
+a single-pull-path architecture *safe*, not *redundant*. The debt is: **production has one
+registry and no fallback.** Restoration paths are a zero-touch-mintable GHCR pull
+credential or a second mirror (see (d)).
+
+**This debt has NO dedicated tracker (corrected 2026-07-30).** This clause originally said
+"tracked with #6031 / #6023". Both were **CLOSED as NOT_PLANNED on 2026-07-06** — and
+#6023 ("WARN→ENFORCE flip for cosign image-verify") never covered a pull credential at
+all. So the sentence recorded untracked debt as tracked, which is the precise failure
+clause (g) exists to prevent: a future reader would have followed two closed links and
+concluded the debt was owned. The live umbrella is **#6122** (the migration epic), which
+does not enumerate either restoration path as a deliverable. Treat "one registry, no
+fallback" as an **unowned constraint** until something is filed for it.
+
+Stated explicitly so a future reader inherits "one registry, no fallback" as a
+**constraint we are living under**, not as a decision we made and endorsed.
+
+**(h) Scope.** This amendment governs **web-platform's** mirror only. The inngest image's
+mirror stays non-blocking, and `cloud-init-inngest.yml` hard-pins a `ghcr.io` ref with no
+zot path at all — so after this change the fail-closed invariant holds for one of the two
+platform images. `build-inngest-bootstrap-image.yml` additionally still carries the live
+#6416 defect (its mirror is gated `if: steps.zot_bridge.outcome == 'success'`, so a bridge
+failure *skips* it, leaving `mirror_status` unset and its Slack line inert). Tracked
+separately; deliberately not fixed here, because making that bridge gate stricter without
+first fixing the skip would make that path *more* silent, not less.
+
 ## Context
 
 Hetzner hosts must `docker pull` the private platform images (`soleur-web-platform`,
@@ -73,7 +182,11 @@ managed registry. Then:
    `trusted_root.json`, same GitHub-Actions-OIDC identity regexp. Registry-agnostic (Phase-0
    proved a read-only user fetches a zot-stored `.sig` and gc does not reap it).
 4. **Cutover (Phase 5):** dual-push → validate zot pull E2E → flip (dark) → soak → retire GHCR
-   push + egress + the interim PAT. GHCR stays break-glass warm through the entire soak.
+   push + egress + the interim PAT. ~~GHCR stays break-glass warm through the entire soak.~~
+   **FALSE as of 2026-07-30:** the PAT was revoked out-of-band, mid-soak, before the Phase-5
+   retirement step that was supposed to revoke it deliberately. GHCR has not been break-glass
+   warm since. The two §Decision bullets above ((2) Pull and this one) are retained as the
+   ORIGINAL design record — they describe what was designed, not what is live.
 
 ### Registry-choice alternatives (7)
 
@@ -90,12 +203,21 @@ managed registry. Then:
 ### Cold-boot-dependency statement
 
 zot becomes a **boot-path dependency**: a fresh host (or a rolling deploy) that must pull an
-image now depends on zot being reachable. This is a deliberately-accepted SPOF, mitigated on four
-independent axes so it never silently gates a host:
+image now depends on zot being reachable. This is a deliberately-accepted SPOF, ~~mitigated on four
+independent axes so it never silently gates a host~~ — **as of the 2026-07-30 amendment, TWO of
+the four axes are struck and neither survivor provides availability**, so a zot outage DOES gate a
+host. Read the amendment before relying on any bullet below:
 
-- **Automatic degrade:** the dark-launch gate falls through to the still-dual-pushed GHCR path on
+- **Automatic degrade:** ~~the dark-launch gate falls through to the still-dual-pushed GHCR path on
   any zot miss (probe fail / login fail / pull fail) — a zot outage degrades latency, not
-  availability, for the entire soak + break-glass period.
+  availability, for the entire soak + break-glass period.~~
+  **RETRACTED 2026-07-30 (see the amendment below).** The fall-through code still runs, but its
+  destination no longer serves: GHCR's read PAT is revoked (401) and the minter is disabled (403
+  `DENIED`). A zot outage now degrades **availability**, not latency. This axis is gone, which is
+  why the CI mirror had to become blocking — of the four axes listed here, this was the only one
+  that kept a zot outage off the boot path *without operator intervention*. "Instant revert" below
+  was the manual lever, and it pointed at the same dead destination, so the two were never
+  independent.
 - **Loud, no-SSH signal:** every fallback emits a Sentry `registry:"ghcr-fallback"` /
   `stage:"inngest_ghcr_fallback"` event (the fallback-rate alarm pages on the first one).
   **Correction (#6285):** zot liveness was assigned here to a `betteruptime_heartbeat.registry_prd`
@@ -129,10 +251,31 @@ independent axes so it never silently gates a host:
   with zot dead; and the **consumer-perspective** probe (can a client reach zot over the private
   net?) is still unbuilt — it remains #6438 §1. The on-host beat closes "zot dead, host alive", and
   nothing more.
-  - *CI push side (#6274):* the CI dual-push mirror step is **explicitly non-blocking**
+  - *CI push side (#6274):* ~~the CI dual-push mirror step is **explicitly non-blocking**
     (`continue-on-error: true` + an `exit 0` inner shell + a bounded retry to self-heal a transient
-    CF-tunnel reset) — a mirror failure degrades zot redundancy, never the release/build verdict
-    (consistent with "latency, not availability" above). A persistent miss is loud via a CI-level
+    CF-tunnel reset) — a mirror failure degrades zot redundancy, never the release/build verdict~~
+    **AMENDED 2026-07-30 for web-platform: the mirror step is now RELEASE-BLOCKING.** The
+    non-blocking design was correct on its own reasoning — it rested on GHCR redundancy — and that
+    premise is false. See the amendment below. The bounded retry survives unchanged.
+    **The signal description that followed this sentence is also amended, not merely
+    orphaned by the strike above it** (striking a claim's head and leaving its tail is how
+    a retraction turns into a new false statement): for `reusable-release.yml` the
+    annotation is now `::error::`, not `::warning::`, and the Slack ⚠️ line is reachable
+    ONLY on an operator override — the Slack step carries an implicit `success()`, so on a
+    blocked release it does not run at all. For `build-inngest-bootstrap-image.yml` the
+    original text still holds, since clause (h) scopes that workflow out.
+    **The blanket "the rest of this bullet is unaffected and remains current" sentence that
+    stood here has been REMOVED (2026-07-30, same-day correction).** It recertified ~110
+    lines as current on the strength of having checked two of them — the orphaned-tail
+    defect this very paragraph warns about, committed one sentence later. Nothing replaces
+    it: individual items below carry their own dated markers where they are false, and this
+    bullet makes no claim about the ones that do not. (An earlier draft of this correction
+    replaced the blanket sentence with a four-item INDEX of what was marked — and three of
+    those markers did not exist while the fourth described a phrase found nowhere in the
+    repo. A hand-maintained index of corrections is a second thing to keep true, and it was
+    already false on the day it was written. Same defect, one layer up.)
+    Original wording, retained for the alarm detail:
+    A persistent miss is loud via a CI-level
     degraded signal: `mirror_status=degraded` → `::warning::` + step summary (both workflows) + a
     ⚠️ line on the Slack release message (`reusable-release.yml`; #6278 added the same ⚠️ to
     `build-inngest-bootstrap-image.yml`). The *live* fallback-rate Sentry alarm the bullet above
@@ -195,9 +338,16 @@ independent axes so it never silently gates a host:
     `sentry` with a single inbound edge would assert a falsehood (that the webapp does not report
     to Sentry) where silence asserts nothing.
 
-    *Expected pages between merge and cutover:* a web-host recreate that misses the `/v2/` probe
+    ⚠ **FALSE as of 2026-07-30 (#7071) — this page CANNOT fire, and the outcome is worse than
+    a page.** `app_ghcr_served` is emitted only AFTER a successful GHCR pull, and the GHCR read
+    credential is revoked (401) with the minter disabled (403 DENIED). So a web-host recreate
+    that misses the `/v2/` probe does not fire this alert and does not fall back — it retries a
+    revoked credential and the host dies at `stage=pull`, which matches no alert rule at all.
+    Telling an operator to expect (and ignore) a page that cannot arrive is worse than saying
+    nothing. Retained struck, because it was relied on:
+    ~~*Expected pages between merge and cutover:* a web-host recreate that misses the `/v2/` probe
     now fires `zot_mirror_fallback_rate` via `app_ghcr_served`. That is **expected** and shares a
-    root cause with #6416 / #6288 — do not investigate it separately. ⚠ But do **not** mute the
+    root cause with #6416 / #6288 — do not investigate it separately.~~ ⚠ But do **not** mute the
     `app_ghcr_served` issue to quiet it: unlike `ghcr-fallback` (which regroups per deploy, so a
     mute self-expires) it is stable-grouped on a static message, so a mute is permanent and would
     blind the dominant GHCR-served path — the exact hole #6462 closes. See the mute-safety
@@ -210,7 +360,17 @@ independent axes so it never silently gates a host:
     cutover has not happened (`registry:"zot"` = 0 events/30d) and the soak's `START` is an unpinned
     placeholder, so enrolling early would emit a daily TRANSIENT that never converges. **Enrolling the
     soak — label + directive + a pinned `START` — is a precondition of Phase 5 that 5.3 must not
-    proceed without.** Until then the gate's verdict is not merely insufficient; it is absent. **Window — opens at task 1.8, for 3 of the 4 signals:**
+    proceed without.** Until then the gate's verdict is not merely insufficient; it is absent.
+
+    ⚠ **The `ci-deploy.sh:NNN` citations in the paragraph below have ROTTED (marked 2026-07-30,
+    #7071) — do not follow them.** Spot-checked: `:790/799/807`, `:857` and `:707,776-777` now
+    land on unrelated text. The real emit sites are name-anchored, which is what this ADR itself
+    requires 15 lines further on (`cq-cite-content-anchor-not-line-number`) and what
+    `ci-deploy.sh` already did for itself after `#6447`: grep `zot_gate_degraded_event` and
+    `registry_pull_event` rather than any line number. Left in place rather than renumbered,
+    because renumbering re-creates the same rot on the next edit.
+
+    **Window — opens at task 1.8, for 3 of the 4 signals:**
     `zot-gate-degraded` fires precisely where `ZOT_ACTIVE` stays 0 (probe_unreachable /
     creds_absent / login_failed, `ci-deploy.sh:790/799/807`), and the two cloud-init fresh-boot
     signals gate on `ZURL` + a `/v2/` probe with **no** `ZOT_ACTIVE` at all (`ZOT_ACTIVE` does not
@@ -243,8 +403,13 @@ independent axes so it never silently gates a host:
     fallback, then hard-fail signature verify. During soak `ZOT_ACTIVE=0`, so both are latent and the
     pre-flip zot-entry-gate/soak-gate catch them; the mirror step's cosign-failure path emits a
     re-sign-specific remediation (a bare `crane copy` backfill does not re-sign).
-- **Instant revert:** unset `ZOT_REGISTRY_URL` in Doppler `prd` → all sites revert to GHCR-primary
-  with no deploy, no SSH (`zot-registry-revert.md`).
+- **Instant revert:** ~~unset `ZOT_REGISTRY_URL` in Doppler `prd` → all sites revert to GHCR-primary
+  with no deploy, no SSH (`zot-registry-revert.md`).~~
+  **RETRACTED 2026-07-30 (see the amendment below).** The flag flip still works mechanically; what
+  it reverts *to* does not. Running it during a zot outage moves every host onto a registry that
+  cannot authenticate, converting a degraded pull path into no pull path. `zot-registry-revert.md`
+  now opens with a stop banner and a "what to do instead" section. This escape hatch returns the
+  moment the relaxation condition below is met.
 - **Durability = reproducibility:** zot's content is 100% rebuildable (CI re-pushes) + re-backfillable
   (`crane copy` GHCR→zot); a lost volume is a re-run, not data loss — which is why a host-side
   snapshot cron (1.5) was deferred rather than expanding the host's blast radius with an hcloud token.
@@ -296,7 +461,12 @@ list + the terraform-target-parity SSH set (condition #1 the other way).
   (`zot_oom_kills`, survives the 4/min point-sampling race) + `exit_code=137` + the journald
   `oom_kills_5m` backstop — not the page-cache-confounded host `mem_used` nor a point-sampled anon
   gauge. Applied via the guarded `registry-host-replace` dispatch (server_type is `ForceNew`; the
-  60 GB store volume is preserved + re-attached). The GHCR atomic fallback masks the brief replace outage.
+  60 GB store volume is preserved + re-attached). ~~The GHCR atomic fallback masks the brief replace outage.~~
+  **RETRACTED 2026-07-30 — the replace outage is now USER-VISIBLE.** There is no GHCR fallback
+  to mask it: the read PAT is revoked (401) and the minter is disabled (403 DENIED). Any pull
+  during the replace window now fails outright. The store volume is still preserved, so this is
+  an availability cost for the duration, not data loss — but it is no longer masked, and it must
+  not be scheduled as though it were invisible.
 
 ### Credential isolation (amendment 2026-07-07, #6122)
 
@@ -486,8 +656,15 @@ to the isolated `soleur-registry/prd` Doppler config and read at boot via the ex
 token (no new token). The store mounts from `/dev/mapper/registry` at `/var/lib/zot`; a boot-time
 oneshot (`registry-luks-open.service`) reopens the mapper after a reboot (the host self-`reboot`s via
 the private-NIC guard). The ledger row flips `plaintext-exception → luks`. This is **defense-in-depth
-on a disposable mirror** — the store holds only OCI blobs + cosign signatures (our own images),
-re-fills from GHCR, and carries no user/repo data.
+on a disposable mirror** — the store holds only OCI blobs + cosign signatures (our own images)
+and carries no user/repo data. ~~re-fills from GHCR~~
+
+**THE "DISPOSABLE" PREMISE NO LONGER HOLDS (2026-07-30).** The store's disposability rested
+entirely on "re-fills from GHCR". GHCR is no longer readable, so an emptied store re-fills only
+from a **fresh CI dual-push**, and until one lands there is NO registry any host can pull from.
+The blobs are still reproducible, which is why this is a recoverability property and not a
+data-loss one — but "disposable" invited treating the destroy as free, and it is not. Read every
+recut/replace step below as taking production's only pull path offline until CI re-pushes.
 
 <!-- lint-infra-ignore start -->
 <!-- Deferred-orchestrator prose: this describes a SANCTIONED, gated operator recut that runs OUTSIDE
@@ -497,7 +674,9 @@ re-fills from GHCR, and carries no user/repo data.
 
 **Recut vehicle (the operator step, OUTSIDE the landing PR).** Encrypting the *live* volume is a
 destroy+recreate: a scoped **`terraform apply -replace` of the volume + its attachment + the host,
-all three together** (a fresh raw volume ⇒ cloud-init luksFormats it ⇒ zot re-fills from GHCR).
+all three together** (a fresh raw volume ⇒ cloud-init luksFormats it ⇒ zot re-fills ~~from GHCR~~
+**from the next CI dual-push — NOT from GHCR, which is no longer readable. Between the recut and
+that push there is no registry production can pull from.**).
 
 **SHIPPED (amendment 2026-07-25).** The vehicle is now the guarded, typed-confirm
 `registry-luks-recut` `workflow_dispatch` in `apply-web-platform-infra.yml`, mirroring

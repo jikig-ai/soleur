@@ -1586,7 +1586,22 @@ pull_image_with_fallback() {
     # the same slice (#6427). NOTE the soak's FAIL set is now FOUR entries, not two
     # ([rolling] [gate] [freshboot] [appboot], #6435); anchor on the array keys, not on line
     # numbers, and expect its parity test to go RED until the soak and the alarm agree again.
-    logger -t "$LOG_TAG" "IMAGE_PULL: zot pull failed for ${zot_ref}:${TAG} — falling back to GHCR"
+    # FR-C1: $perr was captured for this pull and then DISCARDED on the zot arm — this
+    # line said only "zot pull failed", so the one operator-visible record of the miss
+    # never said WHY. On 2026-07-29 (v0.244.1) that silence is what sent the diagnosis
+    # at the tunnel instead of the registry. The GHCR arms below already route $perr
+    # through pull_failure_event's `tail -c 400`; this makes the zot arm symmetric.
+    #
+    # Collapsed to ONE line (tr '\n' '|') and stripped of control bytes, mirroring the
+    # inngest-bootstrap stderr_tail idiom: journald records are newline-delimited and
+    # Vector parses per line, so an uncollapsed tail would SPLIT this record — the
+    # reason would land on a line that no longer carries the IMAGE_PULL marker the
+    # Better Stack query greps for, which is a worse failure than saying nothing.
+    # Bounded at 400 bytes for the same reason every sibling is: a docker pull can emit
+    # kilobytes of retry noise, and journald truncates long records unpredictably.
+    local zot_perr_tail
+    zot_perr_tail=$(tail -c 400 "$perr" 2>/dev/null | tr -d '\r' | tr '\n' '|' | tr -dc '[:print:]|' || true)
+    logger -t "$LOG_TAG" "IMAGE_PULL: zot pull failed for ${zot_ref}:${TAG} reason=${zot_perr_tail:-<no stderr captured>} — falling back to GHCR"
     # #6400: GHCR fallback leg now recovers on a login-ok/pull-deny cred (retry once).
     if _ghcr_pull_or_recover "$perr"; then
       registry_pull_event ghcr-fallback "$image_kind" "$TAG"
