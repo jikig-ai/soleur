@@ -171,4 +171,23 @@ runs:
           exit 1
         fi
         printf '::add-mask::%s\n' "$ZOT_PUSH_TOKEN"
-        printf '%s' "$ZOT_PUSH_TOKEN" | docker login 127.0.0.1:5000 -u "$ZOT_PUSH_USER" --password-stdin
+        # FR-B2: dump the cloudflared log HERE, at the step that actually fails.
+        #
+        # On 2026-07-29 the bridge step's own probe PASSED and this step is where the
+        # failure surfaced — as 'connection reset by peer' with no log dump at all. The
+        # probe is a local-listener check: cloudflared binds 127.0.0.1:5000 as soon as it
+        # starts, before and regardless of whether the tunnelled stream reaches zot, so it
+        # cannot distinguish a working bridge from a dead one. Only the previous step's
+        # TIMEOUT path dumped the log, and that path is precisely the one that did not run.
+        #
+        # The four 'websocket: bad handshake' lines naming the real cause survived only
+        # incidentally, in the caller's if:always() teardown a step away from the error —
+        # far enough that the investigation never connected them and spent its budget on a
+        # refuted missing-route hypothesis instead.
+        if ! printf '%s' "$ZOT_PUSH_TOKEN" | docker login 127.0.0.1:5000 -u "$ZOT_PUSH_USER" --password-stdin; then
+          echo "::error::docker login to zot (127.0.0.1:5000) failed over the CF-tunnel bridge. Read the cloudflared log below, NOT the listener probe above — the probe only proves cloudflared bound the local port. A 'websocket: bad handshake' line means Cloudflare Access refused the upgrade, which is the stale-service-token shape: run 'doppler run -p soleur -c prd_terraform -- bash scripts/check-cloudflare-token-drift.sh' and set any DEAD REGISTRY_PUSH_ACCESS_TOKEN_* on the prd ROOT config."
+          echo "::group::cloudflared registry bridge log (tail 200)"
+          tail -n 200 /tmp/cloudflared-registry.log 2>/dev/null || echo "(no /tmp/cloudflared-registry.log — cloudflared may not have started)"
+          echo "::endgroup::"
+          exit 1
+        fi

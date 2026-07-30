@@ -31,6 +31,26 @@ on:
         required: false
         type: boolean
         default: false
+      # FR-A10 — the zot mirror gate's escape hatch, dispatch-only BY CONSTRUCTION:
+      # workflow_dispatch inputs do not exist on a push, so a push-triggered release can
+      # never carry one. reusable-release.yml cannot read a caller's dispatch inputs, so
+      # the value has to be declared here and forwarded via `with:` below — it also
+      # re-checks github.event_name itself rather than trusting this caller.
+      #
+      # The reason IS the switch: leaving it blank leaves the gate blocking, so there is
+      # no separate boolean that can drift out of sync with it and no "override enabled
+      # but nobody said why" state.
+      #
+      # Know before using it: an override buys NOTHING when the gate is right — an image
+      # absent from zot cannot be pulled, so this publishes a still-undeployable release.
+      # It is for a MISFIRING gate. It also bypasses await-ci (a push-only job), and
+      # self-healing the resulting draft on a later run requires the SAME bump_type, or
+      # the draft is orphaned permanently.
+      allow_unmirrored_reason:
+        description: "ONLY for a misfiring zot mirror gate: reason for publishing an unmirrored release (blank = gate blocks, which is what you want)"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -62,6 +82,9 @@ jobs:
       vendor_plugin: true
       bump_type: ${{ inputs.bump_type || '' }}
       force_run: ${{ github.event_name == 'workflow_dispatch' }}
+      # FR-A10. Empty on every push (the input does not exist there), so the mirror gate
+      # blocks by default and only an operator running this by hand can pass a reason.
+      allow_unmirrored_reason: ${{ inputs.allow_unmirrored_reason || '' }}
     secrets: inherit
 
   # Gate the prod cutover (deploy job) on CI's `test` aggregator for THIS
@@ -240,8 +263,27 @@ jobs:
     # closed): a migrate that applies without a following deploy can still occur on
     # a verify-doppler-secrets failure, leaving NEW schema with OLD prod code —
     # acceptable under expand/contract forward-migration discipline.
+    #
+    # FR-A5 — `needs.release.result == 'success'` is what actually makes the zot mirror
+    # gate load-bearing, and it is NOT redundant with the `needs:` list above.
+    #
+    # It is easy to read `needs: [release, …]` and conclude a failed release already
+    # blocks this job. It does not: this `if:` leads with `always() &&`, which is exactly
+    # what DISCARDS GitHub's implicit skip-on-failed-needs. Absent this conjunct the only
+    # release-side condition here is `outputs.version != ''` — an OUTPUT, not a result —
+    # so whether a blocked release stops the migration would rest on an undocumented
+    # GitHub semantic: whether a called workflow's workflow_call.outputs propagate when
+    # the called job concludes `failure`. If they do, migrations apply for a release that
+    # was deliberately blocked and (deploy being gated the same way) prod is left on NEW
+    # SCHEMA + OLD CODE — strictly worse than the v0.244.1 baseline this change exists to
+    # fix. This conjunct settles it deterministically either way, so no one has to know
+    # which semantic is true.
+    #
+    # The tell was already inside this expression: await-ci and verify-doppler-secrets
+    # were gated on `.result`, while `release` alone was gated only on an output.
     if: >-
       always() &&
+      needs.release.result == 'success' &&
       needs.release.outputs.version != '' &&
       (needs.await-ci.result == 'success' ||
        (github.event_name == 'workflow_dispatch' && needs.await-ci.result == 'skipped')) &&
@@ -426,8 +468,16 @@ jobs:
     # await-ci gates the prod cutover on CI's `test` for this SHA: on push it must
     # succeed (fail-closed); on workflow_dispatch it is skipped (push-only job) and
     # tolerated, mirroring the skip_deploy operator escape hatch.
+    # FR-A5 — same conjunct, same reason as `migrate` above, and this is the job it
+    # matters most for. `always() &&` discards skip-on-failed-needs, and the only
+    # release-side condition below is `outputs.docker_pushed` — an output written by the
+    # `Set docker_pushed output` step, which runs TEN STEPS BEFORE the zot mirror
+    # assertion. So a release blocked by the mirror gate would still show
+    # docker_pushed == 'true', and without this line the deploy would proceed to pull an
+    # image zot is not confirmed to hold. The mirror gate would have protected nothing.
     if: >-
       always() &&
+      needs.release.result == 'success' &&
       needs.release.outputs.docker_pushed == 'true' &&
       (needs.migrate.result == 'success' || needs.migrate.result == 'skipped') &&
       (needs.verify-migrations.result == 'success' || needs.verify-migrations.result == 'skipped') &&
@@ -487,6 +537,36 @@ jobs:
       # (kill fires before workflow times out).
       IN_FLIGHT_CEILING_S: 4800
     steps:
+      # FR-A9 — record whether the image this deploy is about to pull was actually
+      # verified present in zot. DELIBERATELY NOT a blocking conjunct: gating the deploy
+      # on it too would defeat the override's only legitimate purpose (unblocking a
+      # MISFIRING gate), and the release job already blocked the non-override case.
+      #
+      # What this buys is legibility after the fact. `postmerge` and the operator digest
+      # read the step summary long after the run log has aged out, and "the release was
+      # green" is not the same statement as "the image was verified mirrored". Without
+      # this line an override-published release is indistinguishable from a clean one at
+      # exactly the moment someone is trying to work out why prod is serving old bits.
+      - name: Record zot mirror verification status
+        env:
+          MIRROR_VERIFIED: ${{ needs.release.outputs.mirror_verified }}
+        run: |
+          set -euo pipefail
+          if [[ "${MIRROR_VERIFIED:-}" == "true" ]]; then
+            echo "zot mirror VERIFIED for this release — the image is confirmed present in zot at this build's digest."
+            echo "✅ zot mirror verified — image confirmed in zot at this build's digest." >> "$GITHUB_STEP_SUMMARY"
+          else
+            # Reached when an operator overrode the gate, or when the mirror step never
+            # ran. Both mean the same thing for this deploy: nothing confirmed the image
+            # is in zot, and zot is the only registry this host can pull from.
+            echo "::warning::Deploying a release whose zot mirror was NOT verified (mirror_verified='${MIRROR_VERIFIED:-<unset>}'). zot is the only registry this host can pull from, so expect image_pull_failed unless the image was backfilled by hand."
+            {
+              echo "⚠️ **zot mirror NOT verified** for this release (\`mirror_verified=${MIRROR_VERIFIED:-<unset>}\`)."
+              echo ""
+              echo "This deploy was allowed to proceed anyway — either via the operator override or because the mirror step did not run. If it fails with \`image_pull_failed\`, that is why."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Pre-rerun lock probe
         # #3408: short-circuit if the prior deploy is still in flight, so a
         # `gh run rerun --failed` doesn't cascade into a flock-rejected POST
@@ -719,6 +799,74 @@ jobs:
           done
           echo "::error::Deploy verification failed after $((HEALTH_POLL_MAX_ATTEMPTS * HEALTH_POLL_INTERVAL_S))s — expected version $VERSION with supabase connected"
           exit 1
+
+      # FR-A6 — the deploy half of "the failure has to reach a human".
+      #
+      # This is the job that died image_pull_failed on 2026-07-29 and left prod
+      # undeployable for ~5h. Nothing in this workflow emailed anyone about it: the
+      # release job's notify steps had already fired GREEN (the release genuinely
+      # published), and this job had no failure notification at all. The only signal was
+      # GitHub's failed-workflow email to the triggering actor.
+      #
+      # Unlike the release-side failure, a failed deploy IS a half-shipped state — the
+      # version is spent, the tag exists and the notes are out — so the message says so
+      # rather than reusing the release job's "nothing was half-shipped" reassurance,
+      # which would be a lie here.
+      # FR-A6 — the deploy half. INLINE curl, NOT `uses: ./.github/actions/notify-ops-email`.
+      #
+      # This job has no `actions/checkout` step (it drives the deploy entirely over the
+      # webhook), and a LOCAL composite action cannot resolve without the repo on disk —
+      # the runner fails at action-resolution with "Can't find 'action.yml'". Paired with
+      # `continue-on-error: true` that failure renders as `conclusion: success`, so the
+      # step would have been a SILENT no-op on 100% of deploy failures: the exact silence
+      # this step exists to remove, reintroduced by the step removing it.
+      #
+      # `notify-gated` below already solved this the same way and says so — it inlines the
+      # Slack curl "because it has no checkout". Adding a checkout to this job instead
+      # would work, but it would also pull ~1.5k files onto the runner that holds the
+      # web-1-swap lock, purely to send an email.
+      #
+      # Mirrors .github/actions/notify-ops-email/action.yml (same Resend endpoint, same
+      # jq --arg encoding so the body cannot break the payload, same --max-time + `|| echo
+      # 000` so an unreachable Resend cannot stall or kill the step).
+      - name: Email notification (deploy FAILED)
+        if: failure()
+        continue-on-error: true
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          VERSION: ${{ needs.release.outputs.version }}
+          MIRROR_VERIFIED: ${{ needs.release.outputs.mirror_verified }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          if [[ -z "${RESEND_API_KEY:-}" ]]; then
+            echo "::error::RESEND_API_KEY not set — deploy-failure email cannot be sent. This is the only push notification for a failed deploy."
+            exit 0
+          fi
+          # The schema note is load-bearing and deliberately NOT the release job's
+          # "nothing was half-shipped" reassurance: by this point the version IS spent,
+          # the tag exists, the notes are published, and migrations for this version have
+          # already applied (migrate gates on the same needs.release.result). Telling the
+          # operator otherwise would be false in the direction that matters.
+          BODY="<p><strong>The deploy for v${VERSION} failed. Production is still serving the PREVIOUS build.</strong></p>"
+          BODY="${BODY}<p>zot mirror verified for this release: <code>${MIRROR_VERIFIED}</code>. If that says <code>false</code>, the image was never confirmed present in zot and this is almost certainly an <code>image_pull_failed</code>.</p>"
+          BODY="${BODY}<p><strong>Migrations for this version have already applied</strong> — prod is on the NEW schema running the PREVIOUS build's code. Unlike a blocked release, this version is spent (tag and notes are published), so recovery is a new release, not a re-run.</p>"
+          BODY="${BODY}<p><a href=\"${RUN_URL}\">Open the run</a> — the failing step names the cause.</p>"
+          PAYLOAD=$(jq -n \
+            --arg from "Soleur Ops <noreply@soleur.ai>" \
+            --arg subject "[DEPLOY FAILED] Soleur Web Platform v${VERSION} — prod is still on the previous build" \
+            --arg html "$BODY" \
+            '{from: $from, to: ["ops@jikigai.com"], subject: $subject, html: $html}')
+          HTTP_CODE=$(curl -s -o "${RUNNER_TEMP}/resend-deploy-fail.txt" -w "%{http_code}" \
+            -X POST "https://api.resend.com/emails" --max-time 15 \
+            -H "Authorization: Bearer ${RESEND_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" || echo "000")
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Deploy-failure email sent to ops@jikigai.com (HTTP ${HTTP_CODE})"
+          else
+            echo "::error::Deploy-failure email FAILED (HTTP ${HTTP_CODE}) — nobody was notified that the deploy for v${VERSION} failed."
+          fi
 
   # ───────────────────────────────────────────────────────────────────────────
   # BLOCKING live-verify gate (#5463 — flipped from report-only 2026-06-18 after

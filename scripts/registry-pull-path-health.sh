@@ -1,11 +1,35 @@
 #!/usr/bin/env bash
 # D10 — PRE-DESTROY pull-path health gate for the registry-luks-recut dispatch (#6929).
 #
-# WHY: the recut destroys the zot store. That is only an acceptable trade because the store is a
-# DISPOSABLE GHCR MIRROR — pulls fall through to GHCR while it re-fills. If the GHCR fallback
-# path is ALREADY degraded when the recut fires, that assumption is false and the dispatch would
-# create the #6400 total-deploy-outage rather than merely tolerating an empty-store window.
-# So: refuse to destroy the store while the very path that covers its absence is unhealthy.
+# !!! THIS GATE'S PREMISE IS RETRACTED — 2026-07-30 (#7071). READ BEFORE RELYING ON A PASS. !!!
+#
+# The paragraph below is retained as the ORIGINAL rationale. Its central assumption is now false,
+# and the consequence is that a PASS here no longer means what it says.
+#
+#   ~~WHY: the recut destroys the zot store. That is only an acceptable trade because the store
+#   is a DISPOSABLE GHCR MIRROR — pulls fall through to GHCR while it re-fills. If the GHCR
+#   fallback path is ALREADY degraded when the recut fires, that assumption is false and the
+#   dispatch would create the #6400 total-deploy-outage rather than merely tolerating an empty-
+#   store window. So: refuse to destroy the store while the very path that covers its absence is
+#   unhealthy.~~
+#
+# WHAT CHANGED. There is no GHCR fallback to be healthy or degraded: the read PAT is revoked
+# (GET api.github.com/user -> 401) and the minter is disabled (pull-token mint -> 403 DENIED).
+# So the empty-store window is NOT covered by anything — it is a total pull outage until the next
+# CI dual-push re-fills zot. The trade this gate was written to protect no longer exists.
+#
+# AND ONE OF ITS OWN ABORT OPERANDS IS NOW STRUCTURALLY DARK. `ghcr-fallback` is emitted at
+# ci-deploy.sh only INSIDE the success branch of `_ghcr_pull_or_recover` — i.e. only when a GHCR
+# pull SUCCEEDED. With the credential revoked that event can never fire again, so the operand
+# that most directly measured "is the fallback healthy" is permanently 0. The gate is not fully
+# vacuous — `zot-gate-degraded`, `local-cache` and the non-vacuity floor still fire — but a PASS
+# is now evidence about zot's own health only, never about cover for its absence.
+#
+# ADR-096 states the principle this violates, and states it about this class: "A gate that cannot
+# fail is worse than no gate, because it is read as evidence."
+#
+# DO NOT read a PASS here as authorization to destroy the store. Re-derive the authorization
+# condition before the next recut; this file has not been re-scoped, only marked.
 #
 # ZERO-TOLERANCE THRESHOLD. A healthy fleet emits ONLY `registry=zot`
 # (apps/web-platform/infra/ci-deploy.sh registry_pull_event); `ghcr-fallback` and `local-cache`
@@ -197,5 +221,30 @@ EOF
   exit 1
 fi
 
-echo "registry-pull-path-health: PASS — zero degraded pull events in ${SINCE_HOURS}h; the GHCR fallback path can cover the empty-store window."
-exit 0
+echo "registry-pull-path-health: zero degraded pull events in ${SINCE_HOURS}h."
+
+# FAIL CLOSED (2026-07-30, #7071). Everything above still runs — the counts are real and
+# worth printing — but a clean count no longer answers the question this gate was built to
+# answer, so it must not return 0 as though it did.
+#
+# The gate authorized destroying the zot store on the strength of "GHCR covers the
+# empty-store window". That premise is retracted, and the operand that measured it
+# (`ghcr-fallback`) can no longer fire at all, so a PASS here is now a statement about
+# zot's own health that reads as authorization to destroy the only thing serving pulls.
+# ADR-096, about this exact class: "A gate that cannot fail is worse than no gate, because
+# it is read as evidence."
+#
+# Emitting a PASS plus a warning was tried first and rejected: a green exit is what the
+# calling workflow branches on, and a NOTE nobody re-reads is not a gate. Reversing this is
+# one line, deliberately — destroying production's only pull path should cost an explicit
+# edit by someone who has re-derived the authorization condition, not a default-open path.
+cat >&2 <<'EOF'
+::error::registry-pull-path-health: REFUSING — this gate's premise is retracted and it has no valid PASS condition (#7071).
+
+The recut destroys the zot store. That was acceptable only while GHCR covered the empty-store window. GHCR is no longer readable (read PAT revoked -> 401; minter disabled -> 403 DENIED), so the window is now a TOTAL pull outage until the next CI dual-push re-fills zot. Separately, this gate's most direct operand is dark: `ghcr-fallback` is emitted only inside the SUCCESS branch of a GHCR pull, so it can never fire and can never abort anything.
+
+The counts printed above are real, and they describe ZOT's health. They do not describe cover for zot's absence, because there is none.
+
+TO PROCEED you must re-derive what should authorize a recut and encode it here. Candidates, none of them chosen: gate on a successful CI dual-push within N hours; pre-stage the live digests outside the destroyed volume and gate on a rehearsed restore; require a second mirror to exist; or refuse until a GHCR pull credential is restored. See this script's header and ADR-096 clause (g), which records that the restoration paths have no tracker.
+EOF
+exit 1

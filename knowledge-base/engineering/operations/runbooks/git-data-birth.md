@@ -18,6 +18,31 @@
 > `cloud-init-git-data.yml`, so it self-invalidates the moment that file is edited again).
 > That file does not exist. **A dispatch today exits 1 before planning anything.**
 >
+> ### What changed in #7025: the route to produce that evidence now EXISTS
+>
+> Until #7025 there was no automation that could produce
+> `git-data-rung2-boot-evidence.env` at all — `rung2` appeared only in the apply workflow
+> and the gate itself. Nothing booted a throwaway host; nothing captured the artifacts. The
+> gate was waiting on something no one could do without a hand-run laptop procedure.
+>
+> #7025 shipped the **route, not the run**:
+>
+> - `.github/workflows/git-data-rung2-rehearsal.yml` — `workflow_dispatch` only, confirm
+>   token `REHEARSE-GIT-DATA`, `dry_run` defaulting to **true**.
+> - `apps/web-platform/infra/rung2-rehearsal/` — a **separate Terraform root** with its own
+>   R2 state key, so a rehearsal apply cannot address a production resource through
+>   Terraform's managed-resource lifecycle. That boundary is narrower than it sounds and
+>   ADR-149 DC-6 spells out what it does NOT cover: the Hetzner credential, the Doppler
+>   project, Sentry, the parent root's push trigger, and teardown garbage collection are all
+>   shared. State separation bounds the LIFECYCLE, not the AUTHORITY.
+> - `scripts/followthroughs/git-data-rung2-evidence-capture.sh` — captures the evidence
+>   off-box and writes the file **only** on PASS.
+>
+> It shipped **unfired**, and the banner stayed up, for a reason worth internalising: a PR
+> merges **atomically**, so evidence committed in the same PR that builds the harness would
+> be evidence from a rehearsal that never ran. The harness has to exist, merge, and then
+> *run*. Producing evidence is now one gated dispatch, not a procedure.
+>
 > **RELEASE CONDITION — clear this banner only when the rehearsal evidence exists.**
 > Every gate #6982 ships is STATIC, and the failure class it defends against
 > (*green apply, dark host*) is only observable at RUNTIME. Mutation arms prove the code
@@ -25,10 +50,28 @@
 > condition is not "the code merged" — it is:
 >
 > 1. the rendered template booted **once on a throwaway host** outside the
->    `hcloud_server.git_data` address, and
-> 2. all three artifacts were **observed off-box**: a Sentry event from the fatal channel,
->    a Better Stack stage marker, and one `stage:boot_complete` row carrying its four
->    assertion booleans — each with the query that retrieved it.
+>    `hcloud_server.git_data` address (dispatch the rehearsal workflow with
+>    `dry_run=false`), and
+> 2. the artifacts were **observed off-box**, each recorded with the query that retrieved
+>    it: a Better Stack **source-liveness anchor**, one `stage:boot_complete` row carrying
+>    its four assertion booleans, and **no `level:fatal`** from that host.
+>
+> **A CORRECTION TO AN EARLIER VERSION OF THIS LIST**, because it asked for something
+> unsatisfiable. It previously demanded *"a Sentry event from the fatal channel"* from a
+> successful rehearsal. The fatal channel fires **only on failure** — a clean boot emits
+> `info`, never `fatal` — so that clause could be met only by a rehearsal that failed, or
+> by fabricating it. The fatal channel is proven at **rung 1** instead, by
+> `git-data-runcmd-rehearsal.test.sh`, which shows the trap firing and emitting `fatal`.
+> Rung 2's job is the real-host facts rung 1 structurally cannot reach: TLS egress from a
+> real Hetzner host, a real `doppler run`, and a real `cryptsetup luksOpen`.
+>
+> Related measurement, since it shaped the capture script: `stage:bootcmd_start` reaches
+> **Sentry only**. It is a bare `curl` inside `bootcmd`, which runs before `write_files`,
+> so `/usr/local/bin/git-data-emit` does not exist yet — and the emitter's Better Stack
+> block is gated on `BETTERSTACK_LOGS_TOKEN`, which is present only under `doppler run`. On
+> a *successful* boot the only Better Stack row a git-data host ever produces is
+> `boot_complete` itself. Do not anchor a Better Stack query on anything earlier; it will
+> return zero rows on a perfect rehearsal.
 >
 > If only the container-harness rung was reached, that is **not** sufficient: the harness
 > cannot exercise `doppler run` against real Doppler, `luksOpen` against a real volume, the

@@ -100,7 +100,7 @@ PY
 #   3. DUPLICATE BASENAMES could satisfy the count twice while a real member went missing.
 #
 # So the expected set is derived from the AUTHORITATIVE producer — the `indent(6, <var>)`
-# call sites in the template, resolved through git-data.tf's `<var> = file(".../<name>")`
+# call sites in the template, resolved through the render module's `<var> = file(".../<name>")`
 # bindings — and compared as a set against what was actually delivered. Every inline payload
 # is named in an explicit allowlist; an unrecognised path is a FAILURE, not a skip.
 _b1_out="$(python3 - "$TMP/rendered.yml" "$DIR" <<'PY'
@@ -122,7 +122,8 @@ INLINE_ALLOWLIST = {
 # delivered set — so deleting a payload shrank BOTH sides and the equality held. Measured:
 # deleting the git-data-gc.timer block reported "OK: 8 payloads". That was a net REGRESSION
 # against the `checked >= 9` floor it replaced, in the arm whose comment claimed to have
-# fixed a measured fail-open. The roster authority is git-data.tf; the floor is absolute.
+# fixed a measured fail-open. The roster authority is modules/git-data-userdata/main.tf (it
+# moved there in #7025/R7 so both roots render from one map); the floor is absolute.
 MIN_PAYLOADS = 9
 
 # THE DESTINATION CONTRACT, OWNED BY THIS TEST. Deriving the expected path from the template
@@ -146,7 +147,13 @@ EXPECTED_PATHS = {
     "git_data_pre_receive_placeholder": "/tmp/git-data-pre-receive-placeholder.sh",
 }
 
-tf = open(os.path.join(srcdir, "git-data.tf")).read()
+# (#7025, R7) The templatefile map and the strip expression moved out of git-data.tf and into
+# modules/git-data-userdata/main.tf, which BOTH the production root and the rung-2 rehearsal
+# root call. `${path.module}` there is the MODULE dir, so every binding reads `../../<name>`
+# and must be resolved against moduledir — resolving against srcdir lands two levels too high
+# and every payload would fail to open.
+moduledir = os.path.join(srcdir, "modules", "git-data-userdata")
+tf = open(os.path.join(moduledir, "main.tf")).read()
 tpl = open(os.path.join(srcdir, "cloud-init-git-data.yml")).read()
 
 # The payloads are delivered with whole-line `#` comments stripped at render time (ADR-152),
@@ -156,7 +163,7 @@ tpl = open(os.path.join(srcdir, "cloud-init-git-data.yml")).read()
 # the wrong bytes while still reporting byte-identity.
 m = re.search(r'git_data_rationale_strip\s*=\s*"(.*)"', tf)
 if not m:
-    print("B1 FAIL: no git_data_rationale_strip in git-data.tf — cannot mirror the render-time strip")
+    print("B1 FAIL: no git_data_rationale_strip in modules/git-data-userdata/main.tf — cannot mirror the render-time strip")
     sys.exit(1)
 _expr = m.group(1)
 if not (_expr.startswith("/") and _expr.endswith("/")):
@@ -168,11 +175,12 @@ if not STRIP.search("#!/bin/sh\n# a comment\n"):
           "would make every payload trivially 'identical'")
     sys.exit(1)
 
-# ROSTER AUTHORITY: git-data.tf's file() bindings. var -> source filename.
+# ROSTER AUTHORITY: the render module's file() bindings. var -> source path, RELATIVE TO
+# THE MODULE DIR (it is written `../../<name>`; see the moduledir note above).
 bindings = dict(re.findall(
     r'^\s*([a-z_]+)\s*=\s*(?:replace\()?file\("\$\{path\.module\}/([^"]+)"\)', tf, re.M))
 if len(bindings) < MIN_PAYLOADS:
-    print("B1 FAIL: git-data.tf binds only %d payload file()s (<%d) — the roster extraction "
+    print("B1 FAIL: the render module binds only %d payload file()s (<%d) — the roster extraction "
           "drifted, and a shrunken roster would make every check below vacuous"
           % (len(bindings), MIN_PAYLOADS))
     sys.exit(1)
@@ -185,10 +193,10 @@ delivery = dict((v, pth) for pth, v in re.findall(
 
 undelivered = sorted(v for v in bindings if v not in delivery)
 if undelivered:
-    print("B1 FAIL: %d payload(s) bound by file() in git-data.tf are NOT delivered by any "
+    print("B1 FAIL: %d payload(s) bound by file() in the render module are NOT delivered by any "
           "indent(6, …) block in cloud-init-git-data.yml: %s"
           % (len(undelivered), ", ".join(undelivered)))
-    print("  A payload that git-data.tf reads but the template never writes is a file the "
+    print("  A payload the render module reads but the template never writes is a file the "
           "host will not have. If it is genuinely retired, remove its file() binding too.")
     sys.exit(1)
 
@@ -247,7 +255,7 @@ if len(delivered) < MIN_PAYLOADS:
     sys.exit(1)
 
 for path in sorted(delivered):
-    want = STRIP.sub("", open(os.path.join(srcdir, expected[path])).read()).encode()
+    want = STRIP.sub("", open(os.path.join(moduledir, expected[path])).read()).encode()
     got = delivered[path]
     if hashlib.sha256(got).hexdigest() != hashlib.sha256(want).hexdigest():
         bad.append("%s: rendered sha=%s (%d B) != stripped source sha=%s (%d B)" % (

@@ -83,11 +83,32 @@ make_stub "$TMP/many.sh" 3 2 0 5
 check "5 degraded events => ABORT naming the incident-vs-recut exit" \
   1 "INCIDENT path" "$TMP/many.sh"
 
-# ── The healthy fleet passes. ────────────────────────────────────────────────────────────────
+# ── THE GATE NO LONGER HAS A PASS CONDITION (2026-07-30, #7071). ─────────────────────────────
+# These three rows asserted `rc=0` on a healthy fleet, which was the correct contract while the
+# gate's premise held: "zero degraded pull events" meant the GHCR fallback could cover the
+# empty-store window the recut opens.
+#
+# That premise is retracted. GHCR is unreadable (read PAT revoked -> 401, minter disabled ->
+# 403 DENIED), so nothing covers the window; and the gate's most direct operand went dark with
+# it, because `ghcr-fallback` is emitted ONLY inside the success branch of a GHCR pull and can
+# therefore never fire again. A clean count is now a statement about zot's own health that
+# reads as authorization to destroy the only thing serving pulls.
+#
+# So the contract is now: still count, still print (the counts are real and worth having), and
+# REFUSE. The rows below assert exactly that — the counters survive, the exit does not.
 make_stub "$TMP/clean.sh" 0 0 0 5
-check "zero degraded events => PASS" 0 "PASS — zero degraded pull events" "$TMP/clean.sh"
-check "zero degraded events => counter line is machine-readable" 0 "total=0 threshold=0" "$TMP/clean.sh"
-check "the counter line reports the denominator it passed on" 0 "zot_served=5" "$TMP/clean.sh"
+check "zero degraded events => REFUSE (the gate has no valid PASS condition)" \
+  1 "REFUSING" "$TMP/clean.sh"
+check "the refusal names the retracted premise rather than a generic failure" \
+  1 "no longer readable" "$TMP/clean.sh"
+check "the refusal names the dark operand, so the reader knows the gate cannot self-correct" \
+  1 "never fire" "$TMP/clean.sh"
+check "the refusal routes to re-deriving an authorization condition" \
+  1 "TO PROCEED" "$TMP/clean.sh"
+# The counting half must keep working: a refusal that stopped measuring would hide the very
+# signal a future authorization condition will be built from.
+check "zero degraded events => counter line is still machine-readable" 1 "total=0 threshold=0" "$TMP/clean.sh"
+check "the counter line still reports the denominator" 1 "zot_served=5" "$TMP/clean.sh"
 
 # ── THE DENOMINATOR: zero degraded events is only evidence if something was served. ──────────
 # Without this arm, states 2/3/4 from the script header (quiet window, ZOT_ACTIVE=0, dark
@@ -127,7 +148,9 @@ check "empty response => fail-closed, never a counted zero" \
 
 # ── Argument validation. ─────────────────────────────────────────────────────────────────────
 make_stub "$TMP/ok.sh" 0 0 0 5
-check "--since-hours accepts a positive integer" 0 "(12h)" "$TMP/ok.sh" --since-hours 12
+# rc is 1 on every healthy-fleet row now (the gate refuses unconditionally, #7071) — what this
+# row asserts is the WINDOW, which is unchanged.
+check "--since-hours accepts a positive integer" 1 "(12h)" "$TMP/ok.sh" --since-hours 12
 check "--since-hours rejects zero" 1 "positive integer" "$TMP/ok.sh" --since-hours 0
 check "--since-hours rejects non-numeric" 1 "positive integer" "$TMP/ok.sh" --since-hours abc
 check "unknown argument rejected" 1 "unknown argument" "$TMP/ok.sh" --nope
@@ -137,7 +160,12 @@ check "unknown argument rejected" 1 "unknown argument" "$TMP/ok.sh" --nope
 # fallback arm returns UNEXPECTED_QUERY, which is non-numeric => fail-closed.
 make_stub "$TMP/strict.sh" 0 0 0 5
 out="$(REGISTRY_PULL_HEALTH_QUERY_CMD="$TMP/strict.sh" bash "$GATE" 2>&1)"; rc=$?
-if [[ "$rc" -eq 0 && "$out" != *"UNEXPECTED_QUERY"* ]]; then
+# The subject here is the QUERY SHAPE, not the verdict. Since #7071 the gate refuses on every
+# path, so rc is 1 even when every signal was queried correctly — the discriminator is the
+# absence of UNEXPECTED_QUERY (the stub's fallback arm for a query it did not recognise), plus
+# the presence of the counter line proving the responses were actually parsed. Asserting rc
+# here would only re-assert the refusal, which four rows above already pin.
+if [[ "$out" != *"UNEXPECTED_QUERY"* && "$out" == *"total=0 threshold=0"* ]]; then
   pass "all three watched signals + the denominator queried with their expected tag strings"
 else
   fail "the gate must query all declared signals with the ci-deploy.sh tag shape" "$rc" "$out"

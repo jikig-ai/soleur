@@ -2,84 +2,130 @@
   "schema_version": 1,
   "live_coverage_floor": 1,
   "store_classes": {
-    "hcloud_volume": { "kind": "guest-luks-volume", "mechanisms": ["luks", "plaintext-exception"] },
-    "cloudflare_r2_bucket": { "kind": "provider-bucket", "mechanisms": ["provider-managed", "plaintext-exception"] }
+    "hcloud_volume": {
+      "kind": "guest-luks-volume",
+      "mechanisms": [
+        "luks",
+        "plaintext-exception"
+      ]
+    },
+    "cloudflare_r2_bucket": {
+      "kind": "provider-bucket",
+      "mechanisms": [
+        "provider-managed",
+        "plaintext-exception"
+      ]
+    }
   },
   "non_store_types": [
-    "betteruptime_heartbeat", "betteruptime_monitor", "betteruptime_policy", "betteruptime_team_member",
-    "cloudflare_api_token", "cloudflare_bot_management", "cloudflare_list", "cloudflare_notification_policy",
-    "cloudflare_record", "cloudflare_ruleset", "cloudflare_zero_trust_access_application",
-    "cloudflare_zero_trust_access_policy", "cloudflare_zero_trust_access_service_token",
-    "cloudflare_zero_trust_tunnel_cloudflared", "cloudflare_zero_trust_tunnel_cloudflared_config",
-    "cloudflare_zone_dnssec", "cloudflare_zone_settings_override", "doppler_config", "doppler_environment", "doppler_project",
-    "doppler_secret", "doppler_service_token", "github_actions_secret", "github_repository_environment",
+    "betteruptime_heartbeat",
+    "betteruptime_monitor",
+    "betteruptime_policy",
+    "betteruptime_team_member",
+    "cloudflare_api_token",
+    "cloudflare_bot_management",
+    "cloudflare_list",
+    "cloudflare_notification_policy",
+    "cloudflare_record",
+    "cloudflare_ruleset",
+    "cloudflare_zero_trust_access_application",
+    "cloudflare_zero_trust_access_policy",
+    "cloudflare_zero_trust_access_service_token",
+    "cloudflare_zero_trust_tunnel_cloudflared",
+    "cloudflare_zero_trust_tunnel_cloudflared_config",
+    "cloudflare_zone_dnssec",
+    "cloudflare_zone_settings_override",
+    "doppler_config",
+    "doppler_environment",
+    "doppler_project",
+    "doppler_secret",
+    "doppler_service_token",
+    "github_actions_secret",
+    "github_repository_environment",
     "github_repository_environment_deployment_policy",
-    "github_repository_ruleset", "hcloud_firewall", "hcloud_firewall_attachment", "hcloud_network",
-    "hcloud_network_subnet", "hcloud_placement_group", "hcloud_server", "hcloud_server_network",
-    "hcloud_ssh_key", "hcloud_volume_attachment", "null_resource", "random_id", "random_password",
-    "sentry_cron_monitor", "sentry_issue_alert", "sentry_uptime_monitor", "terraform_data",
-    "tls_private_key", "tls_self_signed_cert"
+    "github_repository_ruleset",
+    "hcloud_firewall",
+    "hcloud_firewall_attachment",
+    "hcloud_network",
+    "hcloud_network_subnet",
+    "hcloud_placement_group",
+    "hcloud_server",
+    "hcloud_server_network",
+    "hcloud_ssh_key",
+    "hcloud_volume_attachment",
+    "null_resource",
+    "random_id",
+    "random_password",
+    "sentry_cron_monitor",
+    "sentry_issue_alert",
+    "sentry_uptime_monitor",
+    "terraform_data",
+    "tls_private_key",
+    "tls_self_signed_cert"
   ],
   "non_iac_stores": [
-    "supabase.prd", "supabase.inngest", "doppler.secrets", "betterstack.logs",
-    "r2.terraform_state_backend", "redis.session_store"
+    "supabase.prd",
+    "supabase.inngest",
+    "doppler.secrets",
+    "betterstack.logs",
+    "r2.terraform_state_backend",
+    "redis.session_store"
   ],
   "stores": [
     {
-      "store": "hcloud_volume.workspaces_luks",
-      "kind": "guest-luks-volume",
-      "device_binding": {
-        "volume": "hcloud_volume.workspaces_luks",
-        "attachment": "hcloud_volume_attachment.workspaces_luks",
-        "mapper": "workspaces"
-      },
+      "store": "betterstack.logs",
+      "kind": "log-sink",
       "at_rest": {
-        "mechanism": "luks",
-        "evidence": "apps/web-platform/infra/workspaces-cutover.sh:2030,2041 (cryptsetup luksFormat/luksOpen, MAPPER_NAME=${WORKSPACES_MAPPER_NAME:-workspaces}); key: random_password.workspaces_luks + doppler_secret.workspaces_luks_key (workspaces-luks.tf); mount gate: soleur-host-bootstrap.sh:759-760",
-        "defends_against": "a seized/RMA'd or snapshot-imaged Hetzner block volume: contents are unreadable without the Doppler-held LUKS passphrase",
-        "does_not_defend": "a leaked service-role credential, an RLS bypass, an SSRF reaching the store, or any read on the live host where the mapper is already unlocked",
-        "disclosed_as": "docs/legal/privacy-policy.md:519",
-        "live_verification": "available"
+        "mechanism": "provider-managed:betterstack-encrypted-at-rest",
+        "evidence": "Better Stack Logs encrypts stored log data at rest (Better Stack security documentation); source 2457081",
+        "attestation_url": "https://betterstack.com/security",
+        "retrieved_on": "2026-07-24",
+        "defends_against": "physical-media compromise of the log store",
+        "does_not_defend": "a leaked Better Stack API token; note log sanitization at the emitter is the primary control against sensitive data reaching the sink",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:named SOC 2 attestation formalization pending; tracked #6911"
       }
     },
     {
-      "store": "hcloud_volume.git_data_luks",
-      "kind": "guest-luks-volume",
-      "device_binding": {
-        "volume": "hcloud_volume.git_data_luks",
-        "attachment": "hcloud_volume_attachment.git_data_luks",
-        "mapper": "git-data"
-      },
+      "store": "cloudflare_r2_bucket.cla_evidence",
+      "kind": "provider-bucket",
       "at_rest": {
-        "mechanism": "luks",
-        "evidence": "apps/web-platform/infra/cloud-init-git-data.yml, anchored on content not line numbers (cq-cite-content-anchor-not-line-number): the `cryptsetup luksFormat --batch-mode --type luks2 --key-file -` and `cryptsetup luksOpen --key-file - \"$DEV\" git-data` calls, and the `/dev/mapper/git-data /mnt/git-data-luks ext4` fstab line. Key: random_password.git_data_luks + doppler_secret.git_data_luks_key (git-data-luks.tf)",
-        "defends_against": "a seized/RMA'd or snapshot-imaged git-data block volume: unreadable without the Doppler-held passphrase",
-        "does_not_defend": "a leaked credential, an app-layer read on the unlocked host, or exfiltration via a compromised git-data process",
+        "mechanism": "provider-managed:Cloudflare-R2-SOC2-Type-II",
+        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public; holds CLA (Contributor License Agreement) signing evidence records.",
+        "attestation_url": "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/",
+        "retrieved_on": "2026-07-24",
+        "defends_against": "Cloudflare-managed at-rest encryption of stored objects against physical-media compromise in Cloudflare's infrastructure",
+        "does_not_defend": "a leaked R2 API token, an application-layer read, or any access via the credentials that legitimately reach the bucket; a provider-managed key is not a customer-held key",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:no per-volume host posture probe on the git-data host yet; tracked #6897"
+        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated — public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
       }
     },
     {
-      "store": "hcloud_volume.workspaces",
-      "kind": "guest-luks-volume",
-      "device_binding": {
-        "volume": "hcloud_volume.workspaces",
-        "attachment": "hcloud_volume_attachment.workspaces",
-        "mapper": "workspaces-plain"
-      },
+      "store": "cloudflare_r2_bucket.workspaces_luks_header",
+      "kind": "provider-bucket",
       "at_rest": {
-        "mechanism": "plaintext-exception",
-        "evidence": "apps/web-platform/infra/server.tf:1569 (format = \"ext4\", no LUKS apparatus)",
-        "defends_against": "nothing at the volume layer; superseded on web-1 by hcloud_volume.workspaces_luks (cutover certified 2026-07-23, verify run 30040444418)",
-        "does_not_defend": "a seized/snapshot disk exposes any workspace data still resident on this volume",
+        "mechanism": "provider-managed:Cloudflare-R2-SOC2-Type-II",
+        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public; holds LUKS-header escrow, itself useless without the separately-held passphrase",
+        "attestation_url": "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/",
+        "retrieved_on": "2026-07-24",
+        "defends_against": "physical-media compromise of the escrowed LUKS headers in Cloudflare's infrastructure",
+        "does_not_defend": "a leaked R2 token; note a LUKS header alone cannot decrypt a volume without the passphrase held in a separate Doppler config",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:host attachment state not pulled in the code-sourced audit; tracked #6897",
-        "exception": {
-          "justification": "superseded plaintext resource retained as the pre-cutover rollback backstop; web-1 /mnt/data now runs on the LUKS workspaces_luks mapper",
-          "tracking_issue": "#6897",
-          "reevaluate_when": "the workspaces_luks cutover is confirmed irreversible and the plaintext volume can be detached and destroyed",
-          "expires_on": "2026-10-22"
-        }
+        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated — public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
+      }
+    },
+    {
+      "store": "doppler.secrets",
+      "kind": "secret-store",
+      "at_rest": {
+        "mechanism": "provider-managed:doppler-aes256-gcm",
+        "evidence": "Doppler encrypts secrets at rest with AES-256-GCM (Doppler security documentation)",
+        "attestation_url": "https://www.doppler.com/security",
+        "retrieved_on": "2026-07-24",
+        "defends_against": "physical-media compromise of Doppler's secret storage",
+        "does_not_defend": "a leaked Doppler service token or a compromised host with a live token; the LUKS passphrases themselves live here, so a Doppler compromise is a key-custody compromise",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:named SOC 2 attestation formalization pending; tracked #6911"
       }
     },
     {
@@ -103,6 +149,23 @@
           "reevaluate_when": "the git_data_luks cutover is confirmed and the DL-2 wipe of the plaintext volume runs",
           "expires_on": "2026-10-22"
         }
+      }
+    },
+    {
+      "store": "hcloud_volume.git_data_luks",
+      "kind": "guest-luks-volume",
+      "device_binding": {
+        "volume": "hcloud_volume.git_data_luks",
+        "attachment": "hcloud_volume_attachment.git_data_luks",
+        "mapper": "git-data"
+      },
+      "at_rest": {
+        "mechanism": "luks",
+        "evidence": "apps/web-platform/infra/cloud-init-git-data.yml, anchored on content not line numbers (cq-cite-content-anchor-not-line-number): the `cryptsetup luksFormat --batch-mode --type luks2 --key-file -` and `cryptsetup luksOpen --key-file - \"$DEV\" git-data` calls, and the `/dev/mapper/git-data /mnt/git-data-luks ext4` fstab line. Key: random_password.git_data_luks + doppler_secret.git_data_luks_key (git-data-luks.tf)",
+        "defends_against": "a seized/RMA'd or snapshot-imaged git-data block volume: unreadable without the Doppler-held passphrase",
+        "does_not_defend": "a leaked credential, an app-layer read on the unlocked host, or exfiltration via a compromised git-data process",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:no per-volume host posture probe on the git-data host yet; tracked #6897"
       }
     },
     {
@@ -146,87 +209,83 @@
       }
     },
     {
-      "store": "cloudflare_r2_bucket.cla_evidence",
-      "kind": "provider-bucket",
+      "store": "hcloud_volume.rehearsal",
+      "kind": "guest-luks-volume",
+      "device_binding": {
+        "volume": "hcloud_volume.rehearsal",
+        "attachment": "hcloud_volume_attachment.rehearsal",
+        "mapper": "git-data-plain"
+      },
       "at_rest": {
-        "mechanism": "provider-managed:Cloudflare-R2-SOC2-Type-II",
-        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public; holds CLA (Contributor License Agreement) signing evidence records.",
-        "attestation_url": "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/",
-        "retrieved_on": "2026-07-24",
-        "defends_against": "Cloudflare-managed at-rest encryption of stored objects against physical-media compromise in Cloudflare's infrastructure",
-        "does_not_defend": "a leaked R2 API token, an application-layer read, or any access via the credentials that legitimately reach the bucket; a provider-managed key is not a customer-held key",
+        "mechanism": "plaintext-exception",
+        "evidence": "apps/web-platform/infra/rung2-rehearsal/rehearsal.tf, resource \"hcloud_volume\" \"rehearsal\" (format = \"ext4\", no LUKS apparatus) — a deliberate byte-for-byte mirror of hcloud_volume.git_data's declaration",
+        "defends_against": "nothing at the volume layer",
+        "does_not_defend": "at-rest recovery of the detached device — which is acceptable here only because the volume is created empty and destroyed empty",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated — public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
+        "live_verification": "unavailable:n/a by construction — NO user data ever reaches a rehearsal host. The volume is created empty for one boot and destroyed empty by the workflow's if:always() teardown, with a post-teardown Hetzner API assertion that no rehearsal-prefixed server survives (#7025).",
+        "exception": {
+          "justification": "It mirrors the PROD plaintext store BY DESIGN. Making the rehearsal volume LUKS while hcloud_volume.git_data is plaintext would rehearse a boot that does not exist — the rung-2 rehearsal's entire value is that it boots what production would boot, so its dual-volume shape has to match production's, including the part that is currently unencrypted.",
+          "tracking_issue": "#6897",
+          "reevaluate_when": "hcloud_volume.git_data becomes the LUKS volume (the GIT_DATA_STORE_ENABLED cutover) — at which point this mirror must move with it, or the rehearsal stops rehearsing production",
+          "expires_on": "2026-12-31"
+        }
       }
     },
     {
-      "store": "cloudflare_r2_bucket.workspaces_luks_header",
-      "kind": "provider-bucket",
+      "store": "hcloud_volume.rehearsal_luks",
+      "kind": "guest-luks-volume",
+      "device_binding": {
+        "volume": "hcloud_volume.rehearsal_luks",
+        "attachment": "hcloud_volume_attachment.rehearsal_luks",
+        "mapper": "git-data"
+      },
       "at_rest": {
-        "mechanism": "provider-managed:Cloudflare-R2-SOC2-Type-II",
-        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public; holds LUKS-header escrow, itself useless without the separately-held passphrase",
-        "attestation_url": "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/",
-        "retrieved_on": "2026-07-24",
-        "defends_against": "physical-media compromise of the escrowed LUKS headers in Cloudflare's infrastructure",
-        "does_not_defend": "a leaked R2 token; note a LUKS header alone cannot decrypt a volume without the passphrase held in a separate Doppler config",
+        "mechanism": "luks",
+        "evidence": "apps/web-platform/infra/cloud-init-git-data.yml, anchored on content not line numbers (cq-cite-content-anchor-not-line-number): the SAME `cryptsetup luksFormat --batch-mode --type luks2 --key-file -` and `cryptsetup luksOpen --key-file - \"$DEV\" git-data` calls the production host runs, because the rehearsal renders from modules/git-data-userdata and boots the identical template. Key: random_password.rehearsal_luks + doppler_secret.rehearsal_luks_key (rung2-rehearsal/rehearsal.tf), written into a SCRATCH Doppler config, never prd_git_data.",
+        "defends_against": "a seized/RMA'd or snapshot-imaged rehearsal block volume between creation and teardown: unreadable without the throwaway Doppler-held passphrase",
+        "does_not_defend": "anything readable while the rehearsal host is up and the mapper is open; and the passphrase in the rehearsal root's terraform.tfstate (distinct R2 key, so it is not prod material)",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated — public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
+        "live_verification": "unavailable:no rehearsal has been dispatched yet — #7025 ships the ROUTE unfired. The rehearsal IS the live verification when it runs: scripts/followthroughs/git-data-rung2-evidence-capture.sh requires stage:boot_complete with luks_mounted=yes before writing evidence, and writes nothing otherwise. Recorded as unavailable rather than available because a capability that has never executed is not an observation."
       }
     },
     {
-      "store": "supabase.prd",
-      "kind": "provider-db",
+      "store": "hcloud_volume.workspaces",
+      "kind": "guest-luks-volume",
+      "device_binding": {
+        "volume": "hcloud_volume.workspaces",
+        "attachment": "hcloud_volume_attachment.workspaces",
+        "mapper": "workspaces-plain"
+      },
       "at_rest": {
-        "mechanism": "provider-managed:supabase-postgres-aes256",
-        "evidence": "Supabase encrypts Postgres data at rest with AES-256 (Supabase security documentation)",
-        "attestation_url": "https://supabase.com/docs/guides/security",
-        "retrieved_on": "2026-07-24",
-        "defends_against": "physical-media compromise of the managed Postgres storage",
-        "does_not_defend": "a leaked service-role key, an RLS bypass, or any query via a legitimate connection; the encryption key is provider-managed",
+        "mechanism": "plaintext-exception",
+        "evidence": "apps/web-platform/infra/server.tf:1569 (format = \"ext4\", no LUKS apparatus)",
+        "defends_against": "nothing at the volume layer; superseded on web-1 by hcloud_volume.workspaces_luks (cutover certified 2026-07-23, verify run 30040444418)",
+        "does_not_defend": "a seized/snapshot disk exposes any workspace data still resident on this volume",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:named SOC 2 attestation formalization pending; tracked #6911"
+        "live_verification": "unavailable:host attachment state not pulled in the code-sourced audit; tracked #6897",
+        "exception": {
+          "justification": "superseded plaintext resource retained as the pre-cutover rollback backstop; web-1 /mnt/data now runs on the LUKS workspaces_luks mapper",
+          "tracking_issue": "#6897",
+          "reevaluate_when": "the workspaces_luks cutover is confirmed irreversible and the plaintext volume can be detached and destroyed",
+          "expires_on": "2026-10-22"
+        }
       }
     },
     {
-      "store": "supabase.inngest",
-      "kind": "provider-db",
+      "store": "hcloud_volume.workspaces_luks",
+      "kind": "guest-luks-volume",
+      "device_binding": {
+        "volume": "hcloud_volume.workspaces_luks",
+        "attachment": "hcloud_volume_attachment.workspaces_luks",
+        "mapper": "workspaces"
+      },
       "at_rest": {
-        "mechanism": "provider-managed:supabase-postgres-aes256",
-        "evidence": "Supabase Postgres AES-256 at-rest encryption (Supabase security documentation); the Inngest metadata Postgres project",
-        "attestation_url": "https://supabase.com/docs/guides/security",
-        "retrieved_on": "2026-07-24",
-        "defends_against": "physical-media compromise of the managed Postgres storage",
-        "does_not_defend": "a leaked credential or an application-layer read",
-        "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:named SOC 2 attestation formalization pending; tracked #6911"
-      }
-    },
-    {
-      "store": "doppler.secrets",
-      "kind": "secret-store",
-      "at_rest": {
-        "mechanism": "provider-managed:doppler-aes256-gcm",
-        "evidence": "Doppler encrypts secrets at rest with AES-256-GCM (Doppler security documentation)",
-        "attestation_url": "https://www.doppler.com/security",
-        "retrieved_on": "2026-07-24",
-        "defends_against": "physical-media compromise of Doppler's secret storage",
-        "does_not_defend": "a leaked Doppler service token or a compromised host with a live token; the LUKS passphrases themselves live here, so a Doppler compromise is a key-custody compromise",
-        "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:named SOC 2 attestation formalization pending; tracked #6911"
-      }
-    },
-    {
-      "store": "betterstack.logs",
-      "kind": "log-sink",
-      "at_rest": {
-        "mechanism": "provider-managed:betterstack-encrypted-at-rest",
-        "evidence": "Better Stack Logs encrypts stored log data at rest (Better Stack security documentation); source 2457081",
-        "attestation_url": "https://betterstack.com/security",
-        "retrieved_on": "2026-07-24",
-        "defends_against": "physical-media compromise of the log store",
-        "does_not_defend": "a leaked Better Stack API token; note log sanitization at the emitter is the primary control against sensitive data reaching the sink",
-        "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:named SOC 2 attestation formalization pending; tracked #6911"
+        "mechanism": "luks",
+        "evidence": "apps/web-platform/infra/workspaces-cutover.sh:2030,2041 (cryptsetup luksFormat/luksOpen, MAPPER_NAME=${WORKSPACES_MAPPER_NAME:-workspaces}); key: random_password.workspaces_luks + doppler_secret.workspaces_luks_key (workspaces-luks.tf); mount gate: soleur-host-bootstrap.sh:759-760",
+        "defends_against": "a seized/RMA'd or snapshot-imaged Hetzner block volume: contents are unreadable without the Doppler-held LUKS passphrase",
+        "does_not_defend": "a leaked service-role credential, an RLS bypass, an SSRF reaching the store, or any read on the live host where the mapper is already unlocked",
+        "disclosed_as": "docs/legal/privacy-policy.md:519",
+        "live_verification": "available"
       }
     },
     {
@@ -259,6 +318,34 @@
           "reevaluate_when": "the session-store host at-rest posture is measured (or LUKS applied)",
           "expires_on": "2026-10-22"
         }
+      }
+    },
+    {
+      "store": "supabase.inngest",
+      "kind": "provider-db",
+      "at_rest": {
+        "mechanism": "provider-managed:supabase-postgres-aes256",
+        "evidence": "Supabase Postgres AES-256 at-rest encryption (Supabase security documentation); the Inngest metadata Postgres project",
+        "attestation_url": "https://supabase.com/docs/guides/security",
+        "retrieved_on": "2026-07-24",
+        "defends_against": "physical-media compromise of the managed Postgres storage",
+        "does_not_defend": "a leaked credential or an application-layer read",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:named SOC 2 attestation formalization pending; tracked #6911"
+      }
+    },
+    {
+      "store": "supabase.prd",
+      "kind": "provider-db",
+      "at_rest": {
+        "mechanism": "provider-managed:supabase-postgres-aes256",
+        "evidence": "Supabase encrypts Postgres data at rest with AES-256 (Supabase security documentation)",
+        "attestation_url": "https://supabase.com/docs/guides/security",
+        "retrieved_on": "2026-07-24",
+        "defends_against": "physical-media compromise of the managed Postgres storage",
+        "does_not_defend": "a leaked service-role key, an RLS bypass, or any query via a legitimate connection; the encryption key is provider-managed",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:named SOC 2 attestation formalization pending; tracked #6911"
       }
     }
   ],

@@ -1928,6 +1928,29 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
       ).toBeGreaterThan(0);
     }
   });
+
+  // (#7025) The rung-2 rehearsal dispatch is the THIRD consumer of web-platform-infra-apply,
+  // and it inherits its reviewer set from the loop above rather than declaring its own.
+  //
+  // The assertion lives HERE, beside the guard that makes the environment meaningful, rather
+  // than only in the infra suite: F8 proves the environment HAS reviewers, and this proves
+  // the rehearsal actually ROUTES THROUGH it. Either fact alone is satisfiable while the
+  // rehearsal dispatches unreviewed — a job with no `environment:` never meets a reviewer no
+  // matter how well-populated that reviewer set is.
+  test("the rung-2 rehearsal dispatch routes through the reviewed environment", () => {
+    const wf = readFileSync(
+      resolve(REPO_ROOT, ".github/workflows/git-data-rung2-rehearsal.yml"),
+      "utf8",
+    );
+    expect(wf).toMatch(/^\s{4}environment:\s*web-platform-infra-apply\s*$/m);
+
+    // It must NOT be able to commit its own evidence. That file releases the birth
+    // interlock, so a workflow with `contents: write` would be approving the birth as a side
+    // effect of a dispatch whose prompt said "rehearsal" — the environment reviewer would be
+    // authorizing one thing and getting another.
+    expect(wf).toMatch(/^permissions:\n\s{2}contents:\s*read\s*$/m);
+    expect(wf).not.toMatch(/contents:\s*write/);
+  });
 });
 
 /**
@@ -2445,12 +2468,24 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     // The gate's whole argument is "wiring the sentinel IS the work, because templatefile
     // fails on an unsupplied variable" — which holds only if the template it inspects is
     // the one being rendered. Bind them.
-    const tfSrc = readFileSync(resolve(REPO_ROOT, "apps/web-platform/infra/git-data.tf"), "utf8");
-    const rendered = /templatefile\("\$\{path\.module\}\/([^"]+)"/.exec(tfSrc);
+    // (#7025, R7) The render moved to modules/git-data-userdata/main.tf, which BOTH the
+    // production root and the rung-2 rehearsal root call. Read the map from there — and
+    // strip the `../../` that a module two levels down must write, so the comparison is
+    // still between two names of the SAME file rather than between two spellings of a path.
+    const tfSrc = readFileSync(
+      resolve(REPO_ROOT, "apps/web-platform/infra/modules/git-data-userdata/main.tf"),
+      "utf8",
+    );
+    const rendered = /templatefile\("\$\{path\.module\}\/((?:\.\.\/)*)([^"]+)"/.exec(tfSrc);
     expect(rendered).not.toBeNull();
+    // The prefix must be exactly the two levels that reach apps/web-platform/infra/. A
+    // deeper or shallower run means the module moved and the payload paths silently now
+    // resolve somewhere else — which the rung-2 gate would report as a floor ABORT, but
+    // only at dispatch time.
+    expect(rendered![1]).toBe("../../");
     const inspected = /git_data_birth_readiness_gate "\$\{GITHUB_WORKSPACE\}\/apps\/web-platform\/infra\/([^"]+)"/.exec(jobBlock);
     expect(inspected).not.toBeNull();
-    expect(inspected![1]).toBe(rendered![1]);
+    expect(inspected![1]).toBe(rendered![2]);
   });
 
   test("the replicated literals are bound, not merely commented", () => {

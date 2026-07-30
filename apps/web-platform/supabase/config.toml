@@ -4,6 +4,20 @@
 # working directory name when running `supabase init`.
 project_id = "web-platform"
 
+# BIND ADDRESS IS NOT CONFIGURABLE HERE.
+#
+# Every `port` key below sets the HOST PORT only. The Supabase CLI provides no
+# bind-address / listen-address / host key at any level — it sets Docker
+# PortBindings with no HostIP, so Docker's 0.0.0.0 (+ ::) default always applies
+# and the whole stack is published to every interface, including the LAN.
+#
+# Upstream implemented a bind option and CLOSED IT UNMERGED on policy
+# (supabase/cli#4613, 2025-12-23), prescribing a dedicated Docker network
+# instead. Adding a `bind_address`-looking line here would silently do nothing.
+#
+# Start the stack via `npm run db:start` (scripts/supabase-local.sh), which
+# applies a loopback-bound Docker network. Verify with `npm run db:assert-loopback`.
+# See ADR-153.
 [api]
 enabled = true
 # Port to use for the API URL.

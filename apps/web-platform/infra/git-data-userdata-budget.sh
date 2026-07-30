@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 #
-# (#6982) Render cloud-init-git-data.yml exactly as git-data.tf does, and measure the
-# STORED user_data the way Hetzner measures it.
+# (#6982) Render cloud-init-git-data.yml exactly as modules/git-data-userdata does, and
+# measure the STORED user_data the way Hetzner measures it.
+#
+# (#7025, R7) The render moved OUT of git-data.tf and into modules/git-data-userdata/main.tf
+# so the rung-2 rehearsal root can call the same one. This script still hand-mirrors that
+# map rather than calling the module, and that is deliberate: calling it would require
+# `terraform init` in the scratch dir, where today an EMPTY dir with no providers, no
+# backend and no credentials is enough. git-data-render-strip-parity.test.sh is retargeted
+# at the module and is what keeps this copy equal to it.
 #
 # WHY THIS IS A COMMITTED SCRIPT rather than a one-off command. Hetzner's user_data cap
 # (32,768 bytes) is a HARD gate on `hcloud_server.git_data`, and every byte of the
@@ -64,6 +71,7 @@ locals {
     # still applies — this keeps the shape and length, which is all a size check needs,
     # without putting a matchable literal in the file).
     doppler_token                    = join(".", ["dp", "st", "prd_git_data", "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTU"])
+    doppler_config_name              = "prd_git_data"
     doppler_arch                     = "amd64"
     doppler_sha256                   = "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
     sentry_dsn                       = "https://stubkey0000000000000000000000@o1234567.ingest.de.sentry.io/7654321"

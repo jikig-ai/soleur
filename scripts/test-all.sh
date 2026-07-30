@@ -316,6 +316,12 @@ if want_scripts; then
   run_suite "scripts/skill-freshness-aggregate" bash scripts/skill-freshness-aggregate.test.sh
   run_suite "scripts/compound-promote" bash scripts/compound-promote.test.sh
   run_suite "scripts/lint-trap-tempfile-ownership" bash scripts/lint-trap-tempfile-ownership.test.sh
+  # The Cloudflare token-drift detector's Access-service-token arm. Registered explicitly
+  # for the same reason as its neighbours — scripts/*.test.sh is NOT auto-globbed — and
+  # the omission would be especially apt here: the defect this suite pins is a detector
+  # that reported a clean bill of health for a family it never enumerated, and an
+  # unregistered suite is the same failure one level up.
+  run_suite "scripts/check-cloudflare-token-drift" bash scripts/check-cloudflare-token-drift.test.sh
   # #6789: arms for the contention instrumentation + advisory queue that this
   # runner itself now uses. Registered explicitly — scripts/*.test.sh is NOT in
   # the auto-glob below, so an unregistered suite is an ORPHAN that gates
@@ -406,6 +412,12 @@ if want_scripts; then
   run_suite "tests/scripts/plan-gate-preamble" bash tests/scripts/test-plan-gate-preamble.sh
   run_suite "tests/scripts/git-data-host-birth-gate" bash tests/scripts/test-git-data-host-birth-gate.sh
   run_suite "tests/scripts/git-data-birth-readiness-gate" bash tests/scripts/test-git-data-birth-readiness-gate.sh
+  # (#7025) The rung-2 evidence-capture decision function. Registered HERE for the same
+  # reason as every line around it: nothing auto-discovers tests/scripts/. This script is
+  # what decides whether the file that RELEASES the birth interlock gets written, so an
+  # unregistered — and therefore silent AND green — suite would leave that decision unproven
+  # on every PR.
+  run_suite "tests/scripts/git-data-rung2-evidence-capture" bash tests/scripts/test-git-data-rung2-evidence-capture.sh
   # Supabase advisor RLS gate (#3366). Registered HERE for the same reason as the
   # line above: nothing auto-discovers tests/scripts/. This is the harness that
   # proves the gate cannot silently pass (a 401 must not parse to a clean 0);
