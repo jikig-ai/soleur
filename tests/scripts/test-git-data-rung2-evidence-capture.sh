@@ -110,7 +110,12 @@ run_sut() {  # remaining args appended
 STUB="$TMP/bs-stub.sh"
 ANCHOR_LIVE="$TMP/anchor-live.jsonl"
 ANCHOR_DEAD="$TMP/anchor-dead.jsonl"
-printf '{"dt":"2026-07-29 11:59:00","host_name":"soleur-web-1"}\n' > "$ANCHOR_LIVE"
+# THE REAL ROW SHAPE. ANCHOR_SQL selects `JSONExtractString(raw,'host_name') AS host`, so
+# FORMAT JSONEachRow emits `host`, never `host_name`. The fixture modelled a shape the query
+# cannot produce, which only stopped mattering because the liveness check was a bare
+# `grep -q 'host'` that `host_name` happened to satisfy — a fixture and a predicate agreeing
+# with each other while both disagreed with production.
+printf '{"dt":"2026-07-29 11:59:00","host":"soleur-web-1"}\n' > "$ANCHOR_LIVE"
 : > "$ANCHOR_DEAD"
 
 # ── ARM 1: the PASS path ──────────────────────────────────────────────────────────

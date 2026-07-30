@@ -110,9 +110,17 @@ git_data_birth_readiness_gate() {
   # A comment-only back-reference pointing at #6982 is explicitly PERMITTED and desirable
   # in either form — it must not release the interlock.
   #
-  # `#[^"'"'"']*$` deliberately does not strip a `#` inside a quoted string: a sentinel
-  # written inside a quoted YAML scalar is real template text that terraform interpolates.
-  strip_comments='s/^[[:space:]]*#.*$//; s/[[:space:]]#[^"'"'"']*$//'
+  # THE QUOTE-FREE-TAIL FORM FAILED OPEN. `s/[[:space:]]#[^"'"'"']*$//` strips a trailing
+  # comment only when its tail contains no quote character, so any comment that happens to
+  # carry one survives — and a surviving comment can satisfy the sentinel. Measured (#7066
+  # review): `# TODO emit to ${sentry_dsn} for the host'"'"'s boot` passes the strip and
+  # SATISFIES the sentinel, re-entering the exact defect this block was written to close.
+  #
+  # The intent was to protect a `#` INSIDE a quoted scalar, which is real template text. That
+  # is a claim about whether the `#` is quoted, not about what follows it — so test the
+  # PREFIX: strip a trailing comment only when the part of the line before the `#` has an
+  # even number of quote characters, i.e. the `#` is not inside an open quote.
+  strip_comments='s/^[[:space:]]*#.*$//; :a; s/^\(\([^"'"'"'#]*\("[^"]*"\|'"'"'[^'"'"']*'"'"'\)\)*[^"'"'"'#]*\)[[:space:]]#.*$/\1/; ta'
 
   # Matches the terraform interpolation while refusing the escaped literal
   # `$${sentry_dsn}`, which terraform renders as text and substitutes nothing. The
@@ -285,6 +293,15 @@ git_data_rung2_user_data_sha256() {
   # move fixed the two-copies variant and created the one-copy-edited variant: one file, still
   # unhashed. Hashing it closes both.
   _inputs+=("$module_tf")
+  # AND ITS SIBLING .tf FILES. main.tf was added because it holds the strip expression and so
+  # materially decides what boots; that argument does not stop at one file. variables.tf
+  # carries render-var DEFAULTS (doppler_config_name defaults to prd_git_data), so a future
+  # default would decide what boots for any caller that stops passing it explicitly, and
+  # outputs.tf is where a second arch derivation could be written unseen. Binding the
+  # directory costs one glob and is free only while no evidence file exists yet.
+  for _f in "${module_dir}"/*.tf; do
+    [[ -r "$_f" && "$_f" != "$module_tf" ]] && _inputs+=("$_f")
+  done
   # Payload paths are written relative to the MODULE (`${path.module}/../../<name>`), so they
   # resolve against module_dir — not against tf_dir, which would land two levels too high and
   # drop every payload out of the set.
@@ -345,9 +362,23 @@ git_data_rung2_user_data_sha256() {
   fi
 
   local _line _digest
-  _line="$( { for _f in "${_inputs[@]}"; do
-                printf '%s  %s\n' "$(sha256sum "$_f" | cut -d' ' -f1)" "$(basename "$_f")"
-              done; } | LC_ALL=C sort | sha256sum | cut -d' ' -f1)"
+  # THE PER-FILE rc IS CHECKED. Measured (#7066 review) by shadowing sha256sum to fail on one
+  # payload: the inner substitution yielded an EMPTY digest field, the outer sha256sum hashed
+  # the resulting line just fine, and the ^[0-9a-f]{64}$ guard below could not see it — rc=0
+  # with a well-formed hash of the wrong thing. Deterministic causes make both sides agree on
+  # that wrong value, which is worse than disagreeing.
+  local _tmp_h _d
+  _tmp_h="$(mktemp -t gdr2hash.XXXXXXXX)" || return 1
+  for _f in "${_inputs[@]}"; do
+    _d="$(sha256sum "$_f")" || {
+      rm -f "$_tmp_h"
+      echo "git_data_rung2_user_data_sha256: ABORT — could not hash ${_f}. A skipped input would produce a well-formed digest of an incomplete set. Fail-closed."
+      return 1
+    }
+    printf '%s  %s\n' "${_d%% *}" "${_f##*/}" >> "$_tmp_h"
+  done
+  _line="$(LC_ALL=C sort "$_tmp_h" | sha256sum | cut -d' ' -f1)"
+  rm -f "$_tmp_h"
   if [[ ! "$_line" =~ ^[0-9a-f]{64}$ ]]; then
     echo "git_data_rung2_user_data_sha256: ABORT — could not hash the ${#_inputs[@]} user_data inputs. Fail-closed."
     return 1

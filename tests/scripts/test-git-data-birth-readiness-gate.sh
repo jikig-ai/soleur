@@ -125,6 +125,32 @@ runcmd:
 YML
 check "a TRAILING comment mentioning the sentinel => still HOLD" 1 "HOLD" "$TMP/trailing-comment.yml"
 
+# (#7066 review, P2) A TRAILING COMMENT CONTAINING A QUOTE CHARACTER. The strip was
+# `s/[[:space:]]#[^"'"'"']*$//` — it removed a trailing comment only when the tail was
+# quote-free, so any comment carrying an apostrophe survived and SATISFIED the sentinel,
+# re-entering the defect the arms above exist to close. The intent was to protect a `#` inside
+# a QUOTED SCALAR (real template text), which is a claim about whether the `#` is quoted, not
+# about what follows it — so the predicate now tests the prefix's quote parity.
+cat > "$TMP/quoted-trailing-comment.yml" <<'YML'
+#cloud-config
+packages:
+  - util-linux # TODO emit to ${sentry_dsn} for the host's boot
+runcmd:
+  - [ bash, -c, "true" ]
+YML
+check "a trailing comment CONTAINING A QUOTE mentioning the sentinel => still HOLD" 1 "HOLD" \
+  "$TMP/quoted-trailing-comment.yml"
+
+# ...and the protection it was written for still holds: a `#` INSIDE a quoted scalar is real
+# template text and must NOT be stripped, or a legitimate emitter becomes unreleasable.
+cat > "$TMP/hash-in-quoted-scalar.yml" <<'YML'
+#cloud-config
+runcmd:
+  - [ bash, -c, "curl -sf --data 'tag=#boot' ${sentry_dsn}" ]
+YML
+check "a '#' inside a quoted scalar is NOT stripped => RELEASED" 0 "RELEASED" \
+  "$TMP/hash-in-quoted-scalar.yml"
+
 # A trailing comment must not eat REAL template text earlier on the same line.
 cat > "$TMP/code-then-comment.yml" <<'YML'
 #cloud-config
@@ -615,11 +641,11 @@ r2check "trailing comments on valid evidence => still RELEASED" 0 "RELEASED" "$R
 # passes+fails, so a genuine failure still counts as HAVING RUN and reports as a failure
 # rather than masquerading as an empty suite.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 56 ]]; then
+if [[ "$_ran" -lt 58 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 56. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 58. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 56)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 58)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"

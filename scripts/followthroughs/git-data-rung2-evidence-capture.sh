@@ -216,7 +216,12 @@ fi
 # it — so the match reads as a miss (#6649). A herestring has no pipe and no producer to
 # kill. The bodies here are usually small, which is exactly what makes this the kind of bug
 # that ships and then surfaces on the one run with a verbose `detail` field.
-if ! grep -q 'host' <<<"$anchor_out"; then
+# ANCHORED ON THE FIELD, not the bare word. `_run_query` merges stderr, so any transport
+# chatter containing the substring `host` (a hostname in a curl error, for one) satisfied a
+# bare `grep -q 'host'` and reported the source LIVE. The rows are FORMAT JSONEachRow with the
+# column aliased `host`, so the field shape is available and strictly tighter — and this is
+# the one predicate the whole live-vs-silent distinction rests on.
+if ! grep -qE '"host":"[^"]+"' <<<"$anchor_out"; then
   echo "TRANSIENT: the source-liveness anchor returned ZERO rows from ANY other host in the last ${WINDOW}."
   echo "That is a statement about the INSTRUMENT, not about ${HOST_NAME}: a live source with a"
   echo "silent host and a dead source look identical from this host's rows alone, so this run"
