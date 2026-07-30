@@ -87,8 +87,13 @@ jobs:
 
           # Field 2: workflow run-URL. Match the actions/runs/<id> shape
           # AND verify conclusion=success via gh run view.
+          # `|| true` -- NOT a `set +e` bracket, because no ${PIPESTATUS[...]} read follows
+          # and the empty string is the meaningful result. `grep` exits 1 when the comment
+          # carries no run URL, which is THE EXACT CASE THIS GUARD EXISTS TO CATCH, and under
+          # the inherited `bash -e {0}` that non-zero killed the step before `run_ok` was ever
+          # evaluated -- so an incompletely-closed issue was never reopened.
           run_id=$(grep -oE 'actions/runs/[0-9]+' <<<"$comment_body" \
-            | head -1 | sed 's|actions/runs/||')
+            | head -1 | sed 's|actions/runs/||' || true)
           run_ok="no"
           if [[ -n "$run_id" ]]; then
             conclusion=$(gh run view "$run_id" --repo "$GH_REPO" \

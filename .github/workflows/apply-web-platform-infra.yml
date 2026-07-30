@@ -4251,6 +4251,14 @@ jobs:
             # marker falls out of it immediately. NOTE remote() takes NO `primary` argument —
             # only s3Cluster does; the `remote(primary, …)` form needs a NAMED COLLECTION
             # grant this credential does not have (measured: HTTP 500 ACCESS_DENIED).
+            # set +e so the `rc=$?` capture below actually runs. GitHub invokes `run:` as
+            # `bash -e {0}` and `set -uo pipefail` above does NOT clear that inherited -e, so
+            # ANY non-zero from betterstack-query.sh (its own `exit 64` on a usage error, a
+            # rate limit, a 5xx, a credential blip) killed the whole BIRTH JOB mid-poll with
+            # no annotation, instead of retrying. The empty-result path is rc=0, so the common
+            # path polled fine and hid this. `rc=$?` must be the first command after the
+            # assignment; `set -e` is re-armed immediately after the read.
+            set +e
             out=$(bash scripts/betterstack-query.sh "
               SELECT dt,
                      JSONExtractString(raw,'stage')        AS stage,
@@ -4264,7 +4272,9 @@ jobs:
               WHERE dt > now() - INTERVAL 2 HOUR
                 AND JSONExtractString(raw,'stage') = 'boot_complete'
                 AND JSONExtractString(raw,'host_name') = 'soleur-git-data'
-              ORDER BY dt DESC LIMIT 5 FORMAT JSONEachRow" 2>/dev/null); rc=$?
+              ORDER BY dt DESC LIMIT 5 FORMAT JSONEachRow" 2>/dev/null)
+            rc=$?
+            set -e
             # Match the PARSED field, not free text. A row is a JSON object carrying
             # "stage":"boot_complete"; the query text never appears on stdout.
             if [[ $rc -eq 0 ]] && printf '%s' "$out" | grep -q '"stage":"boot_complete"'; then

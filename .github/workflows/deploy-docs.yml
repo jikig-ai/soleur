@@ -178,6 +178,13 @@ jobs:
           # Best-effort: a transient Sentry API blip must NEVER block a docs
           # deploy. Every failure path warns + exits 0; only a successful pause
           # records monitor_id so the resume step knows to re-enable.
+          #
+          # THAT CLAIM WAS FALSE UNTIL THE `||` GUARDS BELOW. This job sets
+          # `defaults.run.shell: bash`, i.e. `bash --noprofile --norc -eo pipefail {0}`,
+          # so -e is active and `set -uo pipefail` does not clear it. An unguarded
+          # `x=$(curl …)` / `x=$(jq …)` died AT THE ASSIGNMENT, so the warn-and-exit-0
+          # path underneath it never ran. Each assignment now carries its own default so
+          # the existing HTTP-code branches remain the only control flow.
           set -uo pipefail
           # This job runs in the Playwright container as root, so bare apt-get
           # (no sudo, unlike apply-sentry-infra.yml's VM runner) is correct.
@@ -197,7 +204,9 @@ jobs:
           # on "uptime" is resilient to the exact discriminator string and is
           # fail-safe: no match → empty id → pause skipped with a warning,
           # never a wrong-detector mutation.
-          id=$(jq -r '[.[] | select(.name == "soleur-ai-www" and ((.type // "") | test("uptime")))] | .[0].id // empty' <<<"$detectors" 2>/dev/null)
+          # `|| id=""` — jq exits non-zero on malformed input, which killed the step
+          # before the not-found warning below could run.
+          id=$(jq -r '[.[] | select(.name == "soleur-ai-www" and ((.type // "") | test("uptime")))] | .[0].id // empty' <<<"$detectors" 2>/dev/null) || id=""
           if [[ -z "$id" ]]; then
             echo "::warning::soleur-ai-www detector not found; skipping pause (deploy continues)."
             exit 0
@@ -214,7 +223,13 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{"enabled":false}' \
             "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/${id}/" \
-            -o /dev/null -w '%{http_code}')
+            -o /dev/null -w '%{http_code}') || status="000"
+          # THE WORST OUTCOME THIS GUARD PREVENTS: unguarded, a curl timeout killed the
+          # step here — AFTER the PUT may have landed but BEFORE `monitor_id` was
+          # recorded. The resume step then read an empty id and exited 0 "nothing to
+          # resume", leaving the monitor PAUSED AND UNRECORDED, i.e. paged-off with
+          # nothing left to re-enable it. "000" is curl's own no-response convention and
+          # falls through to the existing non-200 branch.
           echo "pause PUT status: ${status}"
           # Record id regardless of pause-PUT outcome so resume always re-enables
           # (resume PUT enabled=true is idempotent if the pause never took effect).
@@ -257,7 +272,10 @@ jobs:
           # regardless, so the cap never strands the monitor.
           confirmed=0
           for attempt in $(seq 1 30); do
-            code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "https://www.soleur.ai/")
+            # `|| code="000"` — an unguarded curl failure killed this step, which made
+            # the "the resume runs regardless" claim above false: the resume block sits
+            # BELOW this loop and never ran.
+            code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "https://www.soleur.ai/") || code="000"
             if [[ "$code" == "301" ]]; then confirmed=1; break; fi
             if [[ "$attempt" -lt 30 ]]; then sleep 10; fi  # no trailing sleep after the last probe
           done
@@ -280,7 +298,10 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{"enabled":true}' \
             "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/${MONITOR_ID}/" \
-            -o /dev/null -w '%{http_code}')
+            -o /dev/null -w '%{http_code}') || http="000"
+          # `|| http="000"` — without it, a curl failure killed the step and took the
+          # fail-loud `::error::… may remain paused` branch below with it. The one
+          # message written for exactly this situation was unreachable in it.
           echo "resume PUT status: ${http}"
           if [[ "$http" != "200" ]]; then
             echo "::error::Failed to resume soleur-ai-www monitor (HTTP ${http}). It may remain paused until manually re-enabled or a deploy-docs.yml re-run (the next apply-sentry-infra.yml run is NOT a guaranteed self-heal — enabled:null null-handling is unverified)."

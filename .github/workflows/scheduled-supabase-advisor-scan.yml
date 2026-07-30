@@ -85,8 +85,20 @@ jobs:
           for pair in "${REFS[@]}"; do
             ref="${pair%%:*}"; name="${pair##*:}"
             echo "::group::${name} (${ref})"
+            # set +e so the `rc=$?` capture below actually runs, and so a non-zero from ONE
+            # ref does not abort the loop -- which is what this step's own comment already
+            # promised. GitHub invokes `run:` as `bash -e {0}`, and the `set -uo pipefail`
+            # above does NOT clear that inherited -e.
+            #
+            # THE HARM WAS MISCLASSIFICATION, NOT JUST AN ABORTED LOOP: dying here means
+            # `issue_class` is never written, so the `if: failure()` filer falls back to
+            # `|| 'B'` -- and a GENUINE RLS VIOLATION (class A, type/security, p1-high) got
+            # filed as class B, "the scan itself could not be trusted". The louder finding
+            # was reported as the quieter one.
+            set +e
             out="$(REF="$ref" PROJECT_NAME="$name" bash scripts/supabase-advisor-scan.sh 2>&1)"
             rc=$?
+            set -e
             printf '%s\n' "$out"
             echo "::endgroup::"
 
