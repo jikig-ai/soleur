@@ -658,8 +658,14 @@ p_arch_derivation_parity() {
   # `terraform fmt`-aligned independently and the alignment is not the claim.
   a="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" | grep -E '^[[:space:]]*git_data_arch[[:space:]]*=' | head -1 | sed -E 's/^[[:space:]]*git_data_arch[[:space:]]*=[[:space:]]*//; s/[[:space:]]+/ /g; s/[[:space:]]*$//')"
   b="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$2" | grep -E '^[[:space:]]*git_data_arch[[:space:]]*=' | head -1 | sed -E 's/^[[:space:]]*git_data_arch[[:space:]]*=[[:space:]]*//; s/[[:space:]]+/ /g; s/[[:space:]]*$//')"
-  # Non-vacuity: an empty extraction on both sides would compare "" == "" and fake parity.
-  printf '%s' "$a" | grep -qE '^startswith\(var\.git_data_server_type, "[a-z]+"\) \? "[a-z0-9]+" : "[a-z0-9]+"$' || { echo 0; return; }
+  # THREE-STATE, not two. A malformed extraction and a genuine mismatch are different
+  # facts, and collapsing them onto "0" makes the MUTATION arm below pass vacuously: if the
+  # process substitution ever delivered nothing, `b` would be empty, `b != a`, and "the
+  # mutation was detected" would be reported by a harness that read no bytes. `2` = a side
+  # did not yield a well-formed ternary, which fails the holds arm AND the mutation arm.
+  local shape='^startswith\(var\.git_data_server_type, "[a-z]+"\) \? "[a-z0-9]+" : "[a-z0-9]+"$'
+  printf '%s' "$a" | grep -qE "$shape" || { echo 2; return; }
+  printf '%s' "$b" | grep -qE "$shape" || { echo 2; return; }
   [ "$a" = "$b" ] && echo 1 || echo 0
 }
 # Called directly rather than through assert_holds, which passes exactly one file.
@@ -671,15 +677,18 @@ fi
 # Mutation: widen the module's prefix to "ca". Both expressions stay individually
 # well-formed and A16/A16b both still pass (cax11/21/31/41 all still start with "ca"), so
 # this drift is visible ONLY to the parity comparison.
-_gdluks_mut="$(mktemp "${TMPDIR:-/tmp}/gdluks-mut.XXXXXX")"
-sed -E 's/startswith\(var\.git_data_server_type, "cax"\)/startswith(var.git_data_server_type, "ca")/' \
-  "$GIT_DATA_MODULE_TF" > "$_gdluks_mut"
-if [ "$(p_arch_derivation_parity "$GIT_DATA_TF" "$_gdluks_mut")" = "0" ]; then
+#
+# Delivered by PROCESS SUBSTITUTION rather than a tempfile. The predicate reads its second
+# argument exactly once, which is the whole precondition for a /dev/fd path, and this file
+# registers no owning `trap ... EXIT` — so a `mktemp` here would be an allocation nothing
+# reclaims if the suite dies mid-run (scripts/lint-trap-tempfile-ownership.py rule (c),
+# ADR-129). Not allocating is a better answer than annotating the leak as accepted.
+if [ "$(p_arch_derivation_parity "$GIT_DATA_TF" \
+        <(sed -E 's/startswith\(var\.git_data_server_type, "cax"\)/startswith(var.git_data_server_type, "ca")/' "$GIT_DATA_MODULE_TF"))" = "0" ]; then
   pass
 else
   fail "A16b arch-derivation parity: MUTATION did not flip the check to failing"
 fi
-rm -f "$_gdluks_mut"
 
 # A17: the git_data_server_type default is not an (unorderable) cax* type.
 assert_holds    "A17 default-not-cax" p_default_not_cax "$VARIABLES_TF"
