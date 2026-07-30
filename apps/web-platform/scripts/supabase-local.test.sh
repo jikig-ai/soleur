@@ -366,7 +366,22 @@ if [[ "$grc" == "2" ]]; then pass "grep failure -> UNKNOWN (rc=2)"; else fail "e
 # the cause, so that is what the test pins.
 if grep -Eq 'HostIp parse failed' <<<"$gout"; then pass "names grep failure specifically (not the generic floor message)"; else fail "no grep-specific diagnostic: $gout"; fi
 
-MIN_ASSERTIONS=34
+echo "T16: --require-stack turns zero containers into an error (plan T3)"
+reset_fixture
+d="$(new_case_dir)"
+set +e
+rs_out=$(env -i PATH="$d:/usr/bin:/bin" HOME="$HOME" TMPDIR="$TMPDIR" DOCKER_PS_OUT="" \
+        bash "$SCRIPT" assert --require-stack 2>&1)
+rs_rc=$?
+set -e
+if [[ "$rs_rc" == "2" ]]; then pass "--require-stack: no containers -> 2"; else fail "expected 2, got $rs_rc ($rs_out)"; fi
+if grep -Eq 'NO_CONTAINERS' <<<"$rs_out"; then pass "names NO_CONTAINERS"; else fail "no NO_CONTAINERS marker: $rs_out"; fi
+# ...and the DEFAULT stays silent-0, so the SessionStart hook cannot nag.
+reset_fixture
+DOCKER_PS_OUT="" res=$(run_assert)
+if [[ "${res%%|*}" == "0" ]]; then pass "default (hook) path still 0"; else fail "default changed: ${res%%|*}"; fi
+
+MIN_ASSERTIONS=37
 echo ""
 echo "supabase-local.test.sh: $PASS passed, $FAIL failed"
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then

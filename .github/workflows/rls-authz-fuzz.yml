@@ -65,7 +65,7 @@ jobs:
       # bootstrap step so a mis-bound runner never gets seeded with fixture data.
       - name: Assert loopback-only binding
         working-directory: apps/web-platform
-        run: ./scripts/supabase-local.sh assert
+        run: ./scripts/supabase-local.sh assert --require-stack
 
       - name: Install psql client
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client

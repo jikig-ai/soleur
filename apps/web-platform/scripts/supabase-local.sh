@@ -43,6 +43,7 @@ LOOPBACK_IPV6="::1"
 # Marks networks THIS script created, so it never deletes one it does not own.
 OWNER_LABEL="com.soleur.supabase-local"
 CLI_PROJECT_LABEL="com.supabase.cli.project"
+REQUIRE_STACK=0
 # Single-sourced: a typo in either the read or the write site alone would
 # silently degrade every invocation into a recreate-then-create loop.
 HOST_BINDING_KEY="com.docker.network.bridge.host_binding_ipv4"
@@ -79,9 +80,11 @@ usage() {
   cat <<'EOF'
 supabase-local.sh — loopback-bound wrapper for the local Supabase stack (ADR-153)
 
-  supabase-local.sh assert
+  supabase-local.sh assert [--require-stack]
       Verify every published port of every running Supabase container is bound
-      to loopback. Exit 0 = OK or no stack, 1 = EXPOSED, 2 = docker unreachable.
+      to loopback. Exit 0 = OK or no stack, 1 = EXPOSED, 2 = could not verify.
+      --require-stack makes "no containers" an error (2) instead of a pass —
+      use it in CI, where a stopped stack means `start` silently did nothing.
 
   supabase-local.sh start|stop|status|db ...|migration ...|gen ...
       Passthrough to the Supabase CLI with --network-id applied, so containers
@@ -123,8 +126,21 @@ cmd_assert() {
   fi
 
   if [[ -z "${ids//[[:space:]]/}" ]]; then
-    # No stack running. Nothing to assert — stay silent so the SessionStart
-    # hook does not nag on every session.
+    # No stack running.
+    #
+    # The two callers want OPPOSITE things here, so this is a flag, not a
+    # default. The SessionStart hook fires on every session and a stopped stack
+    # is the normal case, so silence + 0 is correct there. CI runs `assert`
+    # immediately after `start`, where zero containers means the start silently
+    # produced nothing — a pass would be a false all-clear on the gate that
+    # authorises seeding the runner. Plan T3 specified the CI reading; the hook
+    # reading was added at implementation time and the divergence is resolved
+    # here rather than left as an undocumented contradiction.
+    if [[ "$REQUIRE_STACK" == "1" ]]; then
+      echo "supabase-local: NO_CONTAINERS — --require-stack was set but no" >&2
+      echo "supabase-local: ${CLI_PROJECT_LABEL} containers are running." >&2
+      return 2
+    fi
     return 0
   fi
 
@@ -290,6 +306,7 @@ main() {
       return 0
       ;;
     assert)
+      [[ "${2:-}" == "--require-stack" ]] && REQUIRE_STACK=1
       cmd_assert
       ;;
     *)
