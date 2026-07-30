@@ -369,8 +369,18 @@ absence grep passed on the unmodified runbook.
 - **AC4.** The three operator messages each name a cause, a remedy, the "unpublished draft — re-running
   is safe" line, and `apply-deploy-pipeline-fix.yml`. No message contains the token `Sigstore` on the
   copy-arm path.
-- **AC5.** `grep -cF 'needs.release.result' .github/workflows/web-platform-release.yml` == **2**
-  (measured baseline: **0**), once in `migrate` and once in `deploy`.
+- **AC5.** `grep -cE "^ +needs\.release\.result == 'success' &&" .github/workflows/web-platform-release.yml`
+  == **2** — once in `migrate`, once in `deploy`. (Measured baseline for the bare token:
+  **0**.)
+  **Amended at /work.** As drafted this was `grep -cF 'needs.release.result' … == 2`, a
+  bare-token count. The implementation carries a comment explaining *why* the conjunct is
+  not redundant with `needs:` — the single most misreadable thing in this PR, and the
+  misreading that caused P0-A — so the literal legitimately appears three times and the
+  AC as written failed against a correct file. Anchoring on the conjunct's SYNTAX fixes it
+  properly rather than by deleting the documentation: a comment line cannot match `^ +needs\.`
+  (it starts with `#`), so the amended form still goes RED if either conjunct is removed,
+  while no longer counting prose. This is `cq-assert-anchor-not-bare-token` applied to the
+  plan's own AC; the same defect was caught once more in this PR at AC10.
 - **AC6.** `if: failure()` + `notify-ops-email` present in both the release job and the `deploy` job.
 - **AC7.** FR-A7's comment block contains all four clauses and FR-A8's "does not prove" sentence;
   assert on distinctive anchors (`ADR-088`, `publish-ordering`, `outcome`, `ZOT_PULL_`).
@@ -396,8 +406,23 @@ absence grep passed on the unmodified runbook.
   synthesized fixtures (`cq-test-fixtures-synthesized-only`).
 - **AC15.** `grep -rln 'check-cloudflare-token-drift' .github/workflows/` returns ≥1 **inside a `run:`
   step** (baseline: 0 files under `.github`), and the release-preflight arm exists.
-- **AC16.** Mirror harness passes; its diff contains no line matching `^[+-].*(assert_eq|\[\[ )`
-  other than the two expected-rc literals.
+- **AC16.** Mirror harness passes, and no PRE-EXISTING case (T1–T5) is weakened: each still
+  asserts the same property it asserted before, with only the two expected-rc literals
+  changed (`"0 degraded warn 3"`→`"1 …"`, `"0 degraded warn 0"`→`"1 …"`).
+  **Amended at /work.** As drafted this was a mechanical "the diff contains no line matching
+  `^[+-].*(assert_eq|\[\[ )` other than the two literals". That encoded the right *intent* —
+  do not rewrite the harness to fit the change, which would be a test protecting the bug —
+  but it also forbade the coverage the plan's own Test Scenarios 2/3/4/6 require, since the
+  post-copy assertion did not exist before and no existing case can observe it. Enforcing it
+  literally would have shipped a new fail-closed gate with zero tests. New cases T6–T10 were
+  therefore added; T1–T5 keep their assertions, and the three literals that did change
+  (`warn`→`loud` for the annotation-severity field, plus the two rc values) are the change
+  itself. Non-vacuity is established by mutation instead of by diff shape, which is the
+  stronger check the diff-shape rule was standing in for: baseline 13/13 green, and five
+  mutants — mismatch branch disabled, unresolvable branch disabled, `degraded()` exiting 0,
+  the override ignoring its reason, and the assertion removed entirely — each go RED. That
+  battery earned its keep: its first run showed T7 surviving the disabled-unresolvable-branch
+  mutant, i.e. genuinely vacuous, and T7 was strengthened to pin the message.
 - **AC17.** `actionlint` clean on `reusable-release.yml` **and** `web-platform-release.yml`.
 - **AC18.** Every `knowledge-base/` path cited in this plan resolves
   (`grep -oE 'knowledge-base/[A-Za-z0-9/_.-]+\.(md|c4)'` → all exist).
