@@ -43,11 +43,12 @@ PRERECEIVE="${DIR}/git-data-pre-receive.sh"
 #
 # (#7025, R7) The derivation that selects WHICH BINARY is downloaded, and the checksum pair
 # that verifies it, moved OUT of git-data.tf and into modules/git-data-userdata/main.tf —
-# the single render both the production root and the rung-2 rehearsal root call. A15/A18
+# the single render both the production root and the rung-2 rehearsal root call. A15/A16/A18
 # therefore read the MODULE, not the caller: pointed at git-data.tf they would assert
 # against a file that no longer wires anything, and (for A15) against literals no consumer
-# reads. git-data.tf retains local.git_data_arch for the phantom-type precondition ONLY,
-# which is why A16 still reads it and A16b pins the two derivations to each other.
+# reads. git-data.tf declares NO arch of its own — the phantom-type precondition reads the
+# module's derivation back as `module.git_data_userdata.arch` — so A16b asserts THAT WIRE,
+# and the absence of a second derivation, where it once compared two ternaries as text.
 GIT_DATA_TF="${DIR}/git-data.tf"
 GIT_DATA_MODULE_TF="${DIR}/modules/git-data-userdata/main.tf"
 INNGEST_HOST_TF="${DIR}/inngest-host.tf"
@@ -298,11 +299,17 @@ p_tripwire_edge() {
   printf '%s\n' "$src" | grep -qE '^[[:space:]]*precondition[[:space:]]*\{' || { echo 0; return; }
   cond="$(printf '%s\n' "$src" | grep -A 3 -E '^[[:space:]]*condition[[:space:]]*=' | head -4)"
   printf '%s' "$cond" | grep -qF 'data.hcloud_server_type.git_data.architecture' || { echo 0; return; }
-  # The enums MUST be mapped, never compared: hcloud emits x86/arm, the local is
+  # The enums MUST be mapped, never compared: hcloud emits x86/arm, the derived token is
   # amd64/arm64, so a direct compare is false on every plan forever and wedges the root.
   printf '%s' "$cond" | grep -qF '"arm"' || { echo 0; return; }
   printf '%s' "$cond" | grep -qF '"x86"' || { echo 0; return; }
-  printf '%s' "$cond" | grep -qE 'architecture[[:space:]]*==[[:space:]]*local\.git_data_arch' && { echo 0; return; }
+  # Re-pointed at the module output with the R7 follow-through. This clause names the thing
+  # the condition may not be compared against directly, so it goes VACUOUS the moment that
+  # thing is renamed: while it still said `local.git_data_arch` — a reference git-data.tf no
+  # longer contains — it was unmatchable, and would have reported clean against the very
+  # regression it exists for. A negative assertion fails OPEN, so it is only ever as live as
+  # its anchor; the mutation arm on A19 below now pins that.
+  printf '%s' "$cond" | grep -qE 'architecture[[:space:]]*==[[:space:]]*module\.git_data_userdata\.arch' && { echo 0; return; }
   echo 1
 }
 
@@ -313,10 +320,15 @@ p_tripwire_edge() {
 # values, then replay the decision over the real type space.
 p_arch_derivation() {
   local expr pfx tval fval pair t exp got
-  # Anchored on the ASSIGNMENT at line-start. A bare `git_data_arch[[:space:]]*=` also
-  # matches the precondition's `local.git_data_arch == "arm64" ? "arm" : "x86"`, so the
-  # extraction was order-coupled — correct today only because `locals` precedes the
-  # resource in the file.
+  # Anchored on the ASSIGNMENT at line-start, which distinguishes a DECLARATION from a
+  # reference. Written when the caller still held a second copy, where a bare
+  # `git_data_arch[[:space:]]*=` also matched its precondition's
+  # `local.git_data_arch == "arm64" ? "arm" : "x86"` and made the extraction order-coupled.
+  # That copy is gone and this predicate now only reads the module — but the anchor is also
+  # what p_precondition_arch_source reuses as a NEGATIVE on the caller, and there the
+  # distinction is the whole assertion: `[[:space:]]*=` matches the first `=` of an `==`, so
+  # an unanchored form would read any future `x = local.git_data_arch == …` REFERENCE as a
+  # re-declared duplicate and fail on a correct file.
   expr="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" | grep -E '^[[:space:]]*git_data_arch[[:space:]]*=' | head -1)"
   [ -n "$expr" ] || { echo 0; return; }
   pfx="$(printf '%s' "$expr" | grep -oE 'startswith\(var\.git_data_server_type,[[:space:]]*"[a-z]+"\)' | grep -oE '"[a-z]+"' | tr -d '"')"
@@ -628,67 +640,69 @@ assert_holds    "A15 doppler-checksum-parity" p_doppler_checksum_parity "$GIT_DA
 assert_mutation "A15 doppler-checksum-parity" p_doppler_checksum_parity "$GIT_DATA_MODULE_TF" \
   's/f1954f3717fe4c5b65e906a3c6dfe0d20e97b032af35e43db41250931302e143/9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db/'
 
-# A16: derivation orientation (the inverted-ternary catcher), on the PRECONDITION-side local.
-assert_holds    "A16 arch-derivation" p_arch_derivation "$GIT_DATA_TF"
-# Mutation: invert the ternary. This ships cpx22 -> arm64 and is the precise defect the
-# assertion exists for; every "the local is declared" grep stays green against it.
-assert_mutation "A16 arch-derivation" p_arch_derivation "$GIT_DATA_TF" \
-  's/\? "arm64" : "amd64"/? "amd64" : "arm64"/'
-
-# A16b: the DOWNLOAD-side derivation, and its agreement with the precondition-side one.
+# A16: derivation orientation (the inverted-ternary catcher), on the SINGLE derivation.
 #
-# R7 left two copies of this ternary: git-data.tf's feeds the phantom/wrong-arch
-# precondition, the module's selects the binary. A16 alone now proves only that the
-# TRIPWIRE is oriented correctly — inverting the module's ternary ships an arm64 binary to
-# an x86 host with A16, A19 and every existing grep still green, which is #6570 exactly.
-# So the module's derivation is replayed against the same synthesized type matrix, and the
-# two expressions are then compared to each other: a drift that leaves both individually
-# well-formed (a widened prefix on one side, a new arm on one side) is invisible to both
-# orientation arms and is precisely what "validating a different arch than you download"
-# looks like.
-assert_holds    "A16b arch-derivation (module)" p_arch_derivation "$GIT_DATA_MODULE_TF"
-assert_mutation "A16b arch-derivation (module)" p_arch_derivation "$GIT_DATA_MODULE_TF" \
+# Since the R7 follow-through there is exactly one, in modules/git-data-userdata/main.tf —
+# the render both roots call. It picks the binary AND, through the module's `arch` output,
+# the arch the phantom-type precondition validates. So an inversion here is #6570 itself:
+# `startswith(..., "cax") ? "amd64" : "arm64"` ships cpx22 -> arm64, `sha256sum -c -` fails
+# at boot, and every "the local is declared" grep stays green. A bare declaration grep
+# cannot see it — extract the prefix and both branch values, replay the real type space.
+assert_holds    "A16 arch-derivation (module)" p_arch_derivation "$GIT_DATA_MODULE_TF"
+assert_mutation "A16 arch-derivation (module)" p_arch_derivation "$GIT_DATA_MODULE_TF" \
   's/\? "arm64" : "amd64"/? "amd64" : "arm64"/'
 
-p_arch_derivation_parity() {
-  local a b
-  # Both sides extracted BY SHAPE from their own file, comment-stripped, anchored on the
-  # assignment at line-start (the precondition's `local.git_data_arch == ...` would
-  # otherwise match on the caller side). Whitespace-normalized because the two files are
-  # `terraform fmt`-aligned independently and the alignment is not the claim.
-  a="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" | grep -E '^[[:space:]]*git_data_arch[[:space:]]*=' | head -1 | sed -E 's/^[[:space:]]*git_data_arch[[:space:]]*=[[:space:]]*//; s/[[:space:]]+/ /g; s/[[:space:]]*$//')"
-  b="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$2" | grep -E '^[[:space:]]*git_data_arch[[:space:]]*=' | head -1 | sed -E 's/^[[:space:]]*git_data_arch[[:space:]]*=[[:space:]]*//; s/[[:space:]]+/ /g; s/[[:space:]]*$//')"
-  # THREE-STATE, not two. A malformed extraction and a genuine mismatch are different
-  # facts, and collapsing them onto "0" makes the MUTATION arm below pass vacuously: if the
-  # process substitution ever delivered nothing, `b` would be empty, `b != a`, and "the
-  # mutation was detected" would be reported by a harness that read no bytes. `2` = a side
-  # did not yield a well-formed ternary, which fails the holds arm AND the mutation arm.
-  local shape='^startswith\(var\.git_data_server_type, "[a-z]+"\) \? "[a-z0-9]+" : "[a-z0-9]+"$'
-  printf '%s' "$a" | grep -qE "$shape" || { echo 2; return; }
-  printf '%s' "$b" | grep -qE "$shape" || { echo 2; return; }
-  [ "$a" = "$b" ] && echo 1 || echo 0
+# A16b: the precondition CONSUMES that derivation, and the caller declares no second one.
+#
+# An earlier revision of R7 kept a byte-equal copy of the ternary in git-data.tf to feed the
+# phantom/wrong-arch precondition, and held the two copies equal with four arms comparing
+# them as text. The caller now reads `module.git_data_userdata.arch`, which makes "the arch
+# you validate differs from the arch you download" UNEXPRESSIBLE rather than policed: there
+# is one ternary, and A16 covers inverting it.
+#
+# That retires the parity comparison, not the coverage. The refactor MOVES the drift class
+# onto the WIRE — re-introduce a local and point the condition at it, or drop a literal in
+# its place, and the precondition is once again validating an arch the render never
+# selected, with A16 green because the module's ternary is untouched. Same relationship A18
+# guards between the derivation and the templatefile map, and the same reason A15/A16/A18
+# read the module: the assertion has to sit where the value actually flows.
+p_precondition_arch_source() {
+  local src cond
+  src="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1")"
+  # Scoped to the CONDITION, spanning exactly the three lines it occupies. A 4-line window
+  # would swallow `error_message`, which interpolates the SAME reference — and the M1
+  # mutation below leaves that message intact, so the wider window would read a re-pointed
+  # condition as clean. Comment-stripped for the same reason: the resource's own prose names
+  # `module.git_data_userdata.arch` three times (cq-assert-anchor-not-bare-token).
+  cond="$(printf '%s\n' "$src" | grep -A 2 -E '^[[:space:]]*condition[[:space:]]*=' | head -3)"
+  # Non-vacuity: a missing or truncated extraction must fail loudly, never assert on nothing.
+  printf '%s\n' "$cond" | grep -qE '^[[:space:]]*condition[[:space:]]*=' || { echo 0; return; }
+  printf '%s\n' "$cond" | grep -qF 'module.git_data_userdata.arch' || { echo 0; return; }
+  # Negative space: NO second derivation in the caller. Anchored on the ASSIGNMENT at
+  # line-start, so neither the module reference above nor the locals block's explanation of
+  # why the local is absent can satisfy it.
+  printf '%s\n' "$src" | grep -qE '^[[:space:]]*git_data_arch[[:space:]]*=' && { echo 0; return; }
+  echo 1
 }
-# Called directly rather than through assert_holds, which passes exactly one file.
-if [ "$(p_arch_derivation_parity "$GIT_DATA_TF" "$GIT_DATA_MODULE_TF")" = "1" ]; then
-  pass
-else
-  fail "A16b arch-derivation parity: the caller-side and module-side ternaries differ"
-fi
-# Mutation: widen the module's prefix to "ca". Both expressions stay individually
-# well-formed and A16/A16b both still pass (cax11/21/31/41 all still start with "ca"), so
-# this drift is visible ONLY to the parity comparison.
+assert_holds    "A16b precondition-arch-source" p_precondition_arch_source "$GIT_DATA_TF"
+# Mutation 1: re-point the condition at a caller-side local, leaving `error_message` reading
+# the module output. Visible ONLY to the condition-scoped extraction — a whole-file grep for
+# `module.git_data_userdata.arch` is satisfied by the untouched message.
+assert_mutation "A16b precondition-arch-source (condition re-pointed)" \
+  p_precondition_arch_source "$GIT_DATA_TF" \
+  's/module\.git_data_userdata\.arch == "arm64"/local.git_data_arch == "arm64"/'
+# Mutation 2: the duplicate ternary returns to the caller's locals while the condition still
+# reads the module output — the exact half-migrated state the R7 follow-through removed, and
+# the one the two copies used to drift apart from. Visible ONLY to the negative-space clause.
 #
-# Delivered by PROCESS SUBSTITUTION rather than a tempfile. The predicate reads its second
-# argument exactly once, which is the whole precondition for a /dev/fd path, and this file
-# registers no owning `trap ... EXIT` — so a `mktemp` here would be an allocation nothing
-# reclaims if the suite dies mid-run (scripts/lint-trap-tempfile-ownership.py rule (c),
-# ADR-129). Not allocating is a better answer than annotating the leak as accepted.
-if [ "$(p_arch_derivation_parity "$GIT_DATA_TF" \
-        <(sed -E 's/startswith\(var\.git_data_server_type, "cax"\)/startswith(var.git_data_server_type, "ca")/' "$GIT_DATA_MODULE_TF"))" = "0" ]; then
-  pass
-else
-  fail "A16b arch-derivation parity: MUTATION did not flip the check to failing"
-fi
+# Anchored on the `trimspace(` binding, not a bare `git_remove_pubkey`: that name also
+# appears as a module ARGUMENT further down, and the loose anchor injected a `locals`
+# declaration into the middle of the module block too. Both insertions trip the clause, so
+# the arm passed either way — but a mutation should model the drift it is named for, not
+# also produce HCL nobody would write.
+assert_mutation "A16b precondition-arch-source (duplicate local restored)" \
+  p_precondition_arch_source "$GIT_DATA_TF" \
+  's;^([[:space:]]*)git_remove_pubkey([[:space:]]*)= trimspace\((.*)$;\1git_remove_pubkey\2= trimspace(\3\n\1git_data_arch = startswith(var.git_data_server_type, "cax") ? "arm64" : "amd64";'
 
 # A17: the git_data_server_type default is not an (unorderable) cax* type.
 assert_holds    "A17 default-not-cax" p_default_not_cax "$VARIABLES_TF"
@@ -710,6 +724,14 @@ assert_holds    "A19 tripwire-edge" p_tripwire_edge "$GIT_DATA_TF"
 # phantom-type guard fires on zero production paths, silently.
 assert_mutation "A19 tripwire-edge" p_tripwire_edge "$GIT_DATA_TF" \
   's;^([[:space:]]*)precondition([[:space:]]*)\{;\1notaprecondition\2{;'
+# Mutation: compare the enums DIRECTLY instead of mapping them. `"amd64" == "x86"` is false
+# on every plan forever, so this wedges the whole root including unrelated applies. Detected
+# by the direct-compare clause ALONE — the "arm"/"x86" greps still match the orphaned
+# mapping line below it — which is the point: that clause is a negative, so it fails OPEN,
+# and until the R7 follow-through re-pointed it at the module output it named a reference
+# git-data.tf no longer contains and could not have fired on this at all.
+assert_mutation "A19 tripwire-edge (enums compared, not mapped)" p_tripwire_edge "$GIT_DATA_TF" \
+  's;architecture == \($;architecture == module.git_data_userdata.arch;'
 
 # --- #6982 assertions ---------------------------------------------------------------
 
@@ -957,9 +979,15 @@ assert_mutation "B16 mkfs-quota-project (drop -O entirely)" p_mkfs_quota_project
 #
 # RAISED 95 -> 101 WITH THE ARMS THAT MADE IT NECESSARY (#7025 R7). A floor whose slack
 # equals the size of the change it was added for detects nothing about that change: at 95,
-# deleting every assertion the R7 commit added to this suite (the four A16b arms and their
-# predicate) left it at 97 and EXIT 0 — measured. The floor must move with the suite or it
-# only ever guards the work that predates it.
+# deleting every assertion the R7 commit added to this suite left it at 97 and EXIT 0 —
+# measured. The floor must move with the suite or it only ever guards the work that
+# predates it.
+#
+# It stays at 101 across the R7 follow-through because that change re-pointed arms rather
+# than dropping them: the two caller-side derivation arms and the two parity arms went away
+# with the caller-side ternary they read, and A16b's three arms plus A19's direct-compare
+# mutation replaced them one for one. Deleting the follow-through's coverage outright still
+# lands under the floor.
 #
 # A floor (`-lt`), never an equality: the count is developer-incremented, so `-eq` would
 # redden the suite on every legitimate new arm and teach the next author to edit the guard

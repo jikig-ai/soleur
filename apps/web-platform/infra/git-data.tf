@@ -90,21 +90,21 @@ locals {
   git_provision_pubkey = trimspace(tls_private_key.git_provision.public_key_openssh)
   git_remove_pubkey    = trimspace(tls_private_key.git_remove.public_key_openssh)
 
-  # Arch DERIVED from var.git_data_server_type (mirrors zot-registry.tf local.registry_arch
-  # and inngest-host.tf local.inngest_arch): `cax*` (Ampere) → arm64, anything else
-  # (`cpx*`/`cx*`/`ccx*`) → amd64. #6570: the host was pinned to cax11, orderable in 0 of 3
-  # EU datacenters, so it could never be born on its declared type; deriving the arch is what
-  # makes the repin to an x86 type safe rather than a boot-brick (the old cloud-init
-  # hardcoded the arm64 build + its checksum).
+  # NO `git_data_arch` LOCAL HERE, deliberately (#7025 R7 follow-through).
   #
-  # SCOPE, since #7025 R7: this local now feeds ONLY the phantom/wrong-arch precondition
-  # below. The arch that selects WHICH BINARY cloud-init downloads is derived inside
-  # modules/git-data-userdata (which both roots render through), because a derivation that
-  # lived in each caller existed once per root and was compared by nothing. The two
-  # derivations must still agree — a precondition validating a different arch than the one
-  # downloaded is the #6570 boot-brick with the tripwire green — so git-data-luks.test.sh
-  # A16b asserts the two ternaries are byte-identical.
-  git_data_arch = startswith(var.git_data_server_type, "cax") ? "arm64" : "amd64"
+  # The arch is derived exactly once, inside modules/git-data-userdata, and this root reads it
+  # back as `module.git_data_userdata.arch` in the phantom/wrong-arch precondition below. An
+  # earlier revision of R7 kept a second, byte-equal ternary here for the precondition and
+  # added four bash arms to hold the two copies equal. That is the shape R7's own rationale
+  # argues against — "a structural guarantee in place of a declaration the gate had to
+  # police" — and the duplicate was introduced by R7 itself (`modules/` does not exist on
+  # origin/main), so keeping it was not preserving anything.
+  #
+  # Reading the module output makes the drift class UNEXPRESSIBLE rather than tested: there is
+  # one ternary, so a precondition validating a different arch than the one downloaded cannot
+  # be written. It also moves the failure earlier and louder — a wrong output fails at PLAN
+  # time, where the previous shape's failure was a silent wrong-arch boot whose only guard was
+  # byte-equality of two ternaries in two files (#6570 with the tripwire green).
 }
 
 # The git-data host's server type, read from the live Hetzner catalog. Read-only; creates
@@ -294,7 +294,8 @@ module "git_data_userdata" {
 
 resource "hcloud_server" "git_data" {
   name = "soleur-git-data"
-  # Arch is DERIVED from this value (local.git_data_arch), never assumed — see the local.
+  # Arch is DERIVED from this value inside modules/git-data-userdata (module output `arch`),
+  # never assumed.
   # Default cpx22 (amd64): the cax line was orderable in 0 of 3 EU DCs, so the previous
   # cax11 pin made this host unbornable (#6570).
   server_type = var.git_data_server_type
@@ -338,7 +339,7 @@ resource "hcloud_server" "git_data" {
   #      phantom-type guard would fire on zero production paths (every git-data dispatch is
   #      -targeted). Deleting this precondition silently disarms the data source above.
   #   2. It catches a MIS-DERIVED arch at plan time, and NOTHING DOWNSTREAM CAN — including
-  #      after #6982. The checksum is selected BY local.git_data_arch, so a wrong derivation
+  #      after #6982. The checksum is selected BY the module's arch derivation, so a wrong one
   #      verifies the tarball it just chose and `sha256sum -c -` passes. That is a property
   #      of the selection, not of error handling, so no amount of failing closed reaches it.
   #      This precondition remains the only guard that fires on that case.
@@ -354,7 +355,7 @@ resource "hcloud_server" "git_data" {
   #      rather than only into on-host /var/log/cloud-init-output.log.
   #
   # The enums are DELIBERATELY mapped, not compared. hcloud reports architecture as
-  # `x86`/`arm`, while local.git_data_arch is the download token `amd64`/`arm64`. Comparing
+  # `x86`/`arm`, while module.git_data_userdata.arch is the token `amd64`/`arm64`. Comparing
   # them directly is `"amd64" == "x86"` → false on EVERY plan forever, which would wedge
   # this whole root including unrelated applies.
   #
@@ -365,9 +366,9 @@ resource "hcloud_server" "git_data" {
   lifecycle {
     precondition {
       condition = data.hcloud_server_type.git_data.architecture == (
-        local.git_data_arch == "arm64" ? "arm" : "x86"
+        module.git_data_userdata.arch == "arm64" ? "arm" : "x86"
       )
-      error_message = "git_data_server_type=${var.git_data_server_type} derives ${local.git_data_arch}, but Hetzner reports architecture=${data.hcloud_server_type.git_data.architecture} (enum: x86|arm). The Doppler CLI download would be wrong-arch."
+      error_message = "git_data_server_type=${var.git_data_server_type} derives ${module.git_data_userdata.arch}, but Hetzner reports architecture=${data.hcloud_server_type.git_data.architecture} (enum: x86|arm). The Doppler CLI download would be wrong-arch."
     }
 
     # `ssh_keys` is a CREATE-TIME attribute (Hetzner injects it at first boot and never

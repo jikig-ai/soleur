@@ -16,3 +16,26 @@ output "rendered" {
   value       = local.rendered
   sensitive   = true
 }
+
+# (#7025, R7 follow-through) The arch token this render selected.
+#
+# Exported so the caller's phantom/wrong-arch precondition validates the arch that was
+# ACTUALLY used to pick the binary, rather than a SECOND ternary the caller keeps equal to
+# this one by convention. R7's own rationale (main.tf, "THE DOPPLER ARCH PAIR IS DERIVED
+# HERE") argues that a divergence should be made UNEXPRESSIBLE rather than merely tested;
+# the caller-side copy was the one place that argument had not been applied, and it was
+# introduced by R7 itself — `modules/` does not exist on origin/main. Policing it needed
+# four bash arms comparing two ternaries as text, which is exactly "a declaration the gate
+# had to police".
+#
+# This is NOT the `user_data_sha256` case rejected above. That output would have named a
+# DIFFERENT quantity from an existing same-shaped hash; `arch` names the SAME quantity the
+# caller was recomputing, which is the inverse — it removes a near-duplicate rather than
+# adding one.
+#
+# Not sensitive: it is `amd64` or `arm64`, and the precondition's error_message already
+# prints it.
+output "arch" {
+  description = "The Doppler CLI download arch token (amd64|arm64) derived from var.git_data_server_type. The caller's wrong-arch precondition reads THIS, so the arch it validates and the arch the render downloads cannot diverge."
+  value       = local.git_data_arch
+}
