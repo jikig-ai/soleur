@@ -6,6 +6,32 @@ locals {
     webhook_deploy_secret = var.webhook_deploy_secret
   })
 
+  # --- #7095: re-deliverable web-host Doppler credential ---
+  #
+  # Sentry DSN components, decomposed from the single baked DSN so the host can emit WITHOUT
+  # reading Doppler. A Sentry DSN is https://<public_key>@<ingest_domain>/<project_id>.
+  # var.sentry_dsn defaults to "" so a bare `terraform validate` keeps working, hence try():
+  # an unparseable/empty DSN yields empty components, which ci-deploy.sh's
+  # `[[ -n ... && -n ... && -n ... ]]` guards already treat as "no Sentry" — the SAME degraded
+  # behaviour as today, never a crash. It cannot be worse than the status quo, and when the DSN
+  # is present it is strictly better: the emitters keep working through a dead Doppler token.
+  sentry_dsn_parts = try(
+    regex("^https://(?P<key>[^@/]+)@(?P<host>[^/]+)/(?P<project>[^/?#]+)$", var.sentry_dsn),
+    { key = "", host = "", project = "" }
+  )
+
+  # Rendered ONCE here and injected everywhere it is needed (#7095 R8). The earlier draft
+  # rendered this .tmpl for the webhook path AND hand-wrote "the same" content with a printf in
+  # cloud-init.yml, with nothing comparing the two — the existing webhook-deploy pair already
+  # demonstrates exactly that drift (600 deploy:deploy on one side, 640 root:deploy on the
+  # other). One render, injected, means zero drift and no test needed to police it.
+  webhook_doppler_token_env = templatefile("${path.module}/soleur-doppler-token.tmpl", {
+    doppler_token        = var.doppler_token
+    sentry_ingest_domain = local.sentry_dsn_parts.host
+    sentry_project_id    = local.sentry_dsn_parts.project
+    sentry_public_key    = local.sentry_dsn_parts.key
+  })
+
   # Fresh-host bootstrap assets baked into var.image_name and extracted by cloud-init.yml
   # at first boot (#5921). These 22 scripts + hooks.json.tmpl were REMOVED from cloud-init
   # write_files: — as base64 blobs they pushed the rendered Hetzner user_data to ~282 KB,
@@ -1342,6 +1368,21 @@ resource "terraform_data" "deploy_pipeline_fix" {
     # DEPLOY_PIPELINE_FIX_TRIGGERS array + DPF_REGEX + the gate test.
     file("${path.module}/git-lock-chardevice-sweep.sh"),
     local.hooks_json,
+    # #7095 — the re-deliverable Doppler credential. Hashed as the RENDERED content, not as
+    # file("soleur-doppler-token.tmpl"): the template's bytes never change when the SECRET
+    # rotates, so hashing the .tmpl would leave the exact rot this file exists to fix
+    # undetectable. The rendered string embeds var.doppler_token, so it is a strict superset
+    # of hashing the token separately.
+    #
+    # HONEST SCOPE OF THE SELF-HEAL THIS BUYS (#7095 R6): triggers_replace is consulted ONLY
+    # when Terraform runs, and apply-deploy-pipeline-fix.yml is `on: push` + paths + dispatch,
+    # with no schedule. A Doppler-only rotation changes zero repo paths, so nothing evaluates
+    # this hash on its own. It self-heals on the next apply for ANY reason — and only for
+    # rotations that write back to soleur/prd_terraform. An out-of-band rotation (exactly what
+    # happened at 11:19:30.614Z) does not update prd_terraform, so even a scheduled apply would
+    # re-push the same stale value. Closing that is a follow-up (a schedule: on this workflow
+    # plus a liveness probe); do not read this line as more than it is.
+    local.webhook_doppler_token_env,
   ]))
 
   # #3756 — replaced SSH provisioners (connection + file + remote-exec) with
@@ -1362,6 +1403,12 @@ resource "terraform_data" "deploy_pipeline_fix" {
       APP_DOMAIN_BASE  = var.app_domain_base
       INFRA_DIR        = path.module
       HOOKS_JSON_B64   = base64encode(local.hooks_json)
+      # #7095 — passed pre-encoded for the same reason as HOOKS_JSON_B64: the on-disk file is
+      # the unrendered TEMPLATE, so push-infra-config.sh cannot base64 it from INFRA_DIR the
+      # way it does for the plain script payloads. base64 also keeps the secret off any argv
+      # and out of the command string (Terraform refuses to interpolate a sensitive value
+      # into `command` at all, which is why environment {} is the only route).
+      SOLEUR_DOPPLER_TOKEN_B64 = base64encode(local.webhook_doppler_token_env)
     }
   }
 }

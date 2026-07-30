@@ -1,0 +1,55 @@
+# /etc/default/soleur-doppler-token — re-deliverable web-host credential (#7095)
+#
+# THE FILENAME IS LOAD-BEARING. infra_config_classify_files (infra-config-gate.sh:46-62)
+# derives a dest's class from basename(dest): for dest /etc/default/soleur-doppler-token it
+# looks for <infra_dir>/soleur-doppler-token or <infra_dir>/soleur-doppler-token.tmpl.
+# Renaming this file to anything else classes the dest `missing` =>
+# content_gate_repo_file_missing => rc=1 => the whole apply reds and the token never lands.
+#
+# WHY THIS FILE EXISTS (#7095, 2026-07-30). web-1's boot-baked Doppler service token in
+# /etc/default/webhook-deploy was revoked at 11:19:30.614Z. That file is written EXACTLY ONCE,
+# at first boot, by cloud-init.yml (`printf ... > /etc/default/webhook-deploy`) from
+# var.doppler_token. It has no Terraform resource, no replace_triggered_by, and no drift
+# detector — so a rotation silently bricks the deploy path plus five other units, with a host
+# replace impossible (cx33, orderable in 0 of 3 EU DCs). Measured onset: container-restart-monitor
+# +18.17s after the mint, inngest-heartbeat and cron-egress-resolve +26.14s, zero failures in the
+# preceding 53h.
+#
+# This file is the RE-DELIVERABLE sibling: it rides the infra-config webhook channel
+# (push-infra-config.sh -> /hooks/infra-config -> infra-config-apply.sh FILE_MAP ->
+# infra-config-install.sh DEST_SPEC), the same path that delivers ci-deploy.sh, and it is
+# registered in deploy_pipeline_fix's triggers_replace hash. A change to the rendered content
+# therefore re-fires the push on the next apply.
+#
+# ADDITIVE, NEVER A REWRITE OF THE ORIGINAL. Consumers pick this up by systemd later-wins
+# (an EnvironmentFile= line placed AFTER the original) or by an explicit guarded shell source.
+# /etc/default/webhook-deploy and /etc/default/inngest-server are deliberately left in place:
+# inngest-bootstrap.sh:616-617 fail-closes the host if DOPPLER_PROJECT goes missing from the
+# latter, and per Sharp Edge 7 a host replace is not available as a recovery.
+#
+# NO DOPPLER_CONFIG_DIR HERE, DELIBERATELY (#6536). /etc/default/webhook-deploy carries
+# DOPPLER_CONFIG_DIR=/tmp/.doppler; importing it into units that run as a different user
+# re-opens the ownership-clash surface. Units that need it still get it from the original file.
+#
+# SHAPE IS ENFORCED IN THREE PLACES, because a malformed render here bricks every unit that
+# sources it and the remediation channel is one of them:
+#   1. variable "doppler_token" validation (variables.tf) — fails at `terraform plan`, before a
+#      byte reaches the host. This is the only layer that is provably non-bricking.
+#   2. infra-config-install.sh rejects an /etc/default/* payload whose non-blank lines are not
+#      all KEY=VALUE (reject "envfile_shape") — refuse-to-install beats install-and-brick.
+#   3. systemd-analyze verify runs before infra-config-apply.sh schedules its self-restart.
+# Note EnvironmentFile=- covers ABSENT and UNREADABLE, but NOT empty-valued: a bare
+# `DOPPLER_TOKEN=` would win by later-wins and silently blank a good credential. Layer 1 is
+# what closes that.
+DOPPLER_TOKEN=${doppler_token}
+# Sentry ingest parameters, baked (#7095 R3). ci-deploy.sh hydrates these FROM DOPPLER using
+# the very token that is dead in this failure mode, and every Sentry emitter is guarded on all
+# three being non-empty — so under a revoked token the host emits ZERO Sentry events. That is
+# why 341 unit failures over 5.7h produced no page, and it silently collapsed the two-vendor
+# independence story to one vendor. Baking them here makes the paging route survive exactly the
+# fault class it exists to report. These are public DSN components (already shipped in the
+# client bundle), so this adds no new exposure class. Exact precedent: server.tf bakes
+# BETTERSTACK_INGEST_URL into /etc/default/web-private-nic-guard for the same reason.
+SENTRY_INGEST_DOMAIN=${sentry_ingest_domain}
+SENTRY_PROJECT_ID=${sentry_project_id}
+SENTRY_PUBLIC_KEY=${sentry_public_key}

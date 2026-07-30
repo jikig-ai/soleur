@@ -420,6 +420,29 @@ variable "doppler_token" {
   description = "Doppler service token for production secrets injection"
   type        = string
   sensitive   = true
+
+  # #7095 — SHAPE GATE. This value is rendered into /etc/default/soleur-doppler-token as a
+  # systemd EnvironmentFile and sourced by webhook/vector/cron units on a host that cannot be
+  # replaced (cx33, orderable in 0 of 3 EU DCs) and has no operator SSH runbook. A malformed
+  # render bricks the very channel the fix is delivered over, so this must fail at
+  # `terraform plan` — before a byte reaches the host. Every other layer (installer shape
+  # rejection, systemd-analyze verify) is refuse-to-install; only this one is never-attempt.
+  #
+  # Each clause is load-bearing, and the empty case is the sharpest:
+  #   - dp.st. prefix          : a service token, not a personal/CLI token.
+  #   - no whitespace/CR/#/=   : any of these terminates or comments the KEY=VALUE line, so the
+  #                              file parses as valid-but-wrong and DOPPLER_TOKEN silently
+  #                              becomes empty or truncated.
+  #   - non-empty after prefix : EnvironmentFile=- tolerates ABSENT and UNREADABLE but NOT
+  #                              empty-valued. A bare `DOPPLER_TOKEN=` wins by systemd
+  #                              later-wins and silently BLANKS a working credential on every
+  #                              consumer — strictly worse than not delivering the file at all.
+  # Measured 2026-07-30 against the live prd_terraform value: len=53, matches, and no CR, '#',
+  # space, tab or newline present.
+  validation {
+    condition     = can(regex("^dp\\.st\\.[A-Za-z0-9._-]+$", var.doppler_token))
+    error_message = "doppler_token must be a Doppler service token matching ^dp.st.[A-Za-z0-9._-]+$ with no whitespace, CR, '#' or '=' — it is rendered into a systemd EnvironmentFile on a host that cannot be replaced, and a malformed value bricks the deploy channel (#7095)."
+  }
 }
 
 variable "sentry_dsn" {

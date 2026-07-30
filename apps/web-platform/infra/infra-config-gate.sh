@@ -34,15 +34,17 @@ infra_config_expected_count() {
 #   comparable — repo ships <infra_dir>/<basename>; the bytes the host received are
 #                that file, so its delivered sha256 must equal the repo file's.
 #   template   — repo ships <basename>.tmpl and the delivered file is Terraform-
-#                rendered with secrets interpolated (hooks.json ← hooks.json.tmpl),
-#                so its content is NOT comparable. Excluded from the content assert.
+#                rendered with secrets interpolated (hooks.json ← hooks.json.tmpl;
+#                /etc/default/soleur-doppler-token ← soleur-doppler-token.tmpl, #7095),
+#                so its bytes are NOT repo-comparable. Excluded from the BYTE compare, but
+#                still required to have an ok per-dest delivery entry (see #7095 R7 below).
 #   missing    — neither present; a repo/FILE_MAP drift the gate must fail loud on.
 # The exclusion MEMBERSHIP is DERIVED from the .tmpl property, never hardcoded (no dest
 # path is named in code). The expected CARDINALITY is pinned: infra_config_content_assert
-# asserts exactly ONE template dest (hooks.json today). That pin is fail-loud on purpose —
-# a NEW template-backed FILE_MAP dest (or hooks.json.tmpl renamed) reds the gate until the
-# count is deliberately updated, rather than silently widening the set of files skipped
-# from the content check. Membership auto-tracks; cardinality is a reviewed constant.
+# asserts exactly TWO template dests (hooks.json + soleur-doppler-token, #7095). That pin is
+# fail-loud on purpose — a NEW template-backed FILE_MAP dest (or either .tmpl renamed) reds the
+# gate until the count is deliberately updated, rather than silently widening the set of files
+# skipped from the content check. Membership auto-tracks; cardinality is a reviewed constant.
 infra_config_classify_files() {
   local apply_script="$1" infra_dir="$2"
   local dest base
@@ -86,17 +88,47 @@ infra_config_count_invariant() {
 # The Phase-3 CONTENT assert. For each comparable FILE_MAP dest, compare the host's
 # reported sha256 (status JSON files[]) against sha256 of the repo file the apply ran
 # from. Emits ::error::content_mismatch:<dest> and returns 1 on the first mismatch,
-# a missing/failed delivery entry, or a repo/FILE_MAP drift. Also asserts exactly ONE
-# template exclusion — if that derivation drifts, fail loud rather than silently skip
-# content checks. Keyed off FILE_MAP, NOT the status JSON files[] (the handler appends
+# a missing/failed delivery entry, or a repo/FILE_MAP drift. Also asserts the pinned
+# template-exclusion CARDINALITY — if that derivation drifts, fail loud rather than silently
+# skip content checks. Keyed off FILE_MAP, NOT the status JSON files[] (the handler appends
 # orphan_hook_command entries to files[] that have no repo counterpart).
 infra_config_content_assert() {
   local status_json="$1" infra_dir="$2" apply_script="$3"
   local rc=0 template_count=0 dest base class repo_sha host_sha host_status
+  local local_var_name expected_rendered_sha
   while IFS=$'\t' read -r dest base class; do
     case "$class" in
       template)
         template_count=$((template_count + 1))
+        # #7095 (R7) — a template dest is excluded from the BYTE comparison because the repo
+        # ships the unrendered .tmpl, but it must NOT thereby fall out of content checking
+        # altogether. Before this, adding a template-backed dest silently moved it into the
+        # "verified only by files_written == files_total" bucket — which is precisely the
+        # latched false-green of #6594, where a stale host reported a clean 15/15 while the
+        # instrument that was supposed to have been delivered never arrived.
+        #
+        # Two tiers, so the assert is never weaker than what the caller can actually prove:
+        #   1. ALWAYS: this dest has its own ok entry with a non-empty sha256 in the status
+        #      JSON. Per-dest, so a stale status that simply omits the new file fails loudly
+        #      instead of passing on an aggregate count.
+        #   2. WHEN AVAILABLE: full byte comparison against the digest of the rendered payload
+        #      the caller holds, exported as INFRA_CONFIG_RENDERED_SHA_<DEST_WITH_NON_ALNUM_AS_
+        #      UNDERSCORES_UPPERCASED>. The rendering needs the secret, so only the apply
+        #      workflow (which already runs under `doppler run`) can supply it; a caller
+        #      without it still gets tier 1 rather than nothing.
+        host_status=$(jq -r --arg d "$dest" 'first(.files[]? | select(.file==$d) | .status) // ""' "$status_json" 2>/dev/null)
+        host_sha=$(jq -r --arg d "$dest" 'first(.files[]? | select(.file==$d) | .sha256) // ""' "$status_json" 2>/dev/null)
+        if [[ -z "$host_sha" || "$host_status" != "ok" ]]; then
+          echo "::error::content_mismatch:$dest — template-backed dest has no ok delivery entry in the status JSON (status='${host_status:-none}'). The apply did not report a clean write for this file; a Terraform-rendered dest is still required to be DELIVERED even though its bytes are not repo-comparable."
+          rc=1
+        else
+          local_var_name="INFRA_CONFIG_RENDERED_SHA_$(printf '%s' "$dest" | tr -c '[:alnum:]' '_' | tr '[:lower:]' '[:upper:]')"
+          expected_rendered_sha="${!local_var_name:-}"
+          if [[ -n "$expected_rendered_sha" && "$host_sha" != "$expected_rendered_sha" ]]; then
+            echo "::error::content_mismatch:$dest — host sha256=$host_sha but the rendered payload this apply pushed digests to $expected_rendered_sha. The status did not originate from an apply of THIS render (stale or mis-delivered apply, #6594/#7095)."
+            rc=1
+          fi
+        fi
         ;;
       missing)
         echo "::error::content_gate_repo_file_missing:$dest — no repo file $infra_dir/$base (nor ${base}.tmpl). FILE_MAP/repo drift; refusing to certify an un-checkable delivery."
@@ -123,8 +155,8 @@ infra_config_content_assert() {
     esac
   done < <(infra_config_classify_files "$apply_script" "$infra_dir")
 
-  if [[ "$template_count" -ne 1 ]]; then
-    echo "::error::content_gate_template_exclusion_drift — expected exactly 1 Terraform-rendered FILE_MAP dest (hooks.json ← hooks.json.tmpl), found $template_count. The .tmpl-derived content-exclusion invariant drifted; refusing to skip content checks blindly."
+  if [[ "$template_count" -ne 2 ]]; then
+    echo "::error::content_gate_template_exclusion_drift — expected exactly 2 Terraform-rendered FILE_MAP dests (hooks.json ← hooks.json.tmpl, /etc/default/soleur-doppler-token ← soleur-doppler-token.tmpl, #7095), found $template_count. The .tmpl-derived content-exclusion invariant drifted; refusing to skip content checks blindly."
     rc=1
   fi
   return "$rc"

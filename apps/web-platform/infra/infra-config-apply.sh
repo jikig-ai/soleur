@@ -46,6 +46,11 @@ FILE_MAP=(
   "GIT_LOCK_CHARDEVICE_SWEEP_SH_B64|/usr/local/bin/git-lock-chardevice-sweep.sh|755|root:root"
   "INNGEST_REGISTRY_PROBE_SH_B64|/usr/local/bin/inngest-registry-probe.sh|755|root:root"
   "INNGEST_DOUBLEFIRE_PROBE_SH_B64|/usr/local/bin/inngest-doublefire-probe.sh|755|root:root"
+  # #7095 — 640 root:deploy, DELIBERATELY different from the existing
+  # /etc/default/webhook-deploy (600 deploy:deploy). webhook.service runs as User=deploy and
+  # vector.service reads the same file, so the credential needs GROUP read; root ownership
+  # keeps the deploy user from rewriting its own credential source. Not a copy-paste slip.
+  "SOLEUR_DOPPLER_TOKEN_B64|/etc/default/soleur-doppler-token|640|root:deploy"
 )
 
 # TEST_DESTDIR allows tests to redirect writes to a sandbox
