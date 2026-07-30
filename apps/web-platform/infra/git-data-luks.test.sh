@@ -37,10 +37,19 @@ CLOUD_INIT="${DIR}/cloud-init-git-data.yml"
 LUKS_TF="${DIR}/git-data-luks.tf"
 CUTOVER="${DIR}/git-data-cutover.sh"
 PRERECEIVE="${DIR}/git-data-pre-receive.sh"
-# #6570 dual-arch derivation (A14-A17). git-data.tf carries the derivation + the
-# per-arch checksum pair; inngest-host.tf / zot-registry.tf are the CANON the pair
-# is derived from (never a second hardcoded literal); variables.tf holds the default.
+# #6570 dual-arch derivation (A14-A17). inngest-host.tf / zot-registry.tf are the CANON
+# the checksum pair is derived from (never a second hardcoded literal); variables.tf holds
+# the default.
+#
+# (#7025, R7) The derivation that selects WHICH BINARY is downloaded, and the checksum pair
+# that verifies it, moved OUT of git-data.tf and into modules/git-data-userdata/main.tf —
+# the single render both the production root and the rung-2 rehearsal root call. A15/A18
+# therefore read the MODULE, not the caller: pointed at git-data.tf they would assert
+# against a file that no longer wires anything, and (for A15) against literals no consumer
+# reads. git-data.tf retains local.git_data_arch for the phantom-type precondition ONLY,
+# which is why A16 still reads it and A16b pins the two derivations to each other.
 GIT_DATA_TF="${DIR}/git-data.tf"
+GIT_DATA_MODULE_TF="${DIR}/modules/git-data-userdata/main.tf"
 INNGEST_HOST_TF="${DIR}/inngest-host.tf"
 ZOT_TF="${DIR}/zot-registry.tf"
 VARIABLES_TF="${DIR}/variables.tf"
@@ -54,7 +63,7 @@ fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 [ -f "$LUKS_TF" ]      || { echo "FAIL: git-data-luks.tf not found at $LUKS_TF" >&2; exit 1; }
 [ -f "$CUTOVER" ]      || { echo "FAIL: git-data-cutover.sh not found at $CUTOVER" >&2; exit 1; }
 [ -f "$PRERECEIVE" ]   || { echo "FAIL: git-data-pre-receive.sh not found at $PRERECEIVE" >&2; exit 1; }
-for f in "$GIT_DATA_TF" "$INNGEST_HOST_TF" "$ZOT_TF" "$VARIABLES_TF"; do
+for f in "$GIT_DATA_TF" "$GIT_DATA_MODULE_TF" "$INNGEST_HOST_TF" "$ZOT_TF" "$VARIABLES_TF"; do
   [ -f "$f" ] || { echo "FAIL: required file not found: $f" >&2; exit 1; }
 done
 
@@ -611,18 +620,66 @@ assert_mutation "A14 doppler-arch-url (silent \$\$ escape)" p_doppler_arch_url "
   's;DOPPLER_SHA256="\$\{;DOPPLER_SHA256="$$\{;'
 
 # A15: checksum pair byte-equals the two canon sites, in arm64-then-amd64 order.
-assert_holds    "A15 doppler-checksum-parity" p_doppler_checksum_parity "$GIT_DATA_TF"
+# Read from the MODULE: since #7025 R7 that is the only place the pair exists, and it is
+# the copy the download actually verifies against.
+assert_holds    "A15 doppler-checksum-parity" p_doppler_checksum_parity "$GIT_DATA_MODULE_TF"
 # Mutation: collapse the arm64 arm onto the amd64 checksum (models a pairing swap /
 # copy-paste of one literal over both arms) -> the pair no longer equals canon.
-assert_mutation "A15 doppler-checksum-parity" p_doppler_checksum_parity "$GIT_DATA_TF" \
+assert_mutation "A15 doppler-checksum-parity" p_doppler_checksum_parity "$GIT_DATA_MODULE_TF" \
   's/f1954f3717fe4c5b65e906a3c6dfe0d20e97b032af35e43db41250931302e143/9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db/'
 
-# A16: derivation orientation (the inverted-ternary catcher).
+# A16: derivation orientation (the inverted-ternary catcher), on the PRECONDITION-side local.
 assert_holds    "A16 arch-derivation" p_arch_derivation "$GIT_DATA_TF"
 # Mutation: invert the ternary. This ships cpx22 -> arm64 and is the precise defect the
 # assertion exists for; every "the local is declared" grep stays green against it.
 assert_mutation "A16 arch-derivation" p_arch_derivation "$GIT_DATA_TF" \
   's/\? "arm64" : "amd64"/? "amd64" : "arm64"/'
+
+# A16b: the DOWNLOAD-side derivation, and its agreement with the precondition-side one.
+#
+# R7 left two copies of this ternary: git-data.tf's feeds the phantom/wrong-arch
+# precondition, the module's selects the binary. A16 alone now proves only that the
+# TRIPWIRE is oriented correctly — inverting the module's ternary ships an arm64 binary to
+# an x86 host with A16, A19 and every existing grep still green, which is #6570 exactly.
+# So the module's derivation is replayed against the same synthesized type matrix, and the
+# two expressions are then compared to each other: a drift that leaves both individually
+# well-formed (a widened prefix on one side, a new arm on one side) is invisible to both
+# orientation arms and is precisely what "validating a different arch than you download"
+# looks like.
+assert_holds    "A16b arch-derivation (module)" p_arch_derivation "$GIT_DATA_MODULE_TF"
+assert_mutation "A16b arch-derivation (module)" p_arch_derivation "$GIT_DATA_MODULE_TF" \
+  's/\? "arm64" : "amd64"/? "amd64" : "arm64"/'
+
+p_arch_derivation_parity() {
+  local a b
+  # Both sides extracted BY SHAPE from their own file, comment-stripped, anchored on the
+  # assignment at line-start (the precondition's `local.git_data_arch == ...` would
+  # otherwise match on the caller side). Whitespace-normalized because the two files are
+  # `terraform fmt`-aligned independently and the alignment is not the claim.
+  a="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" | grep -E '^[[:space:]]*git_data_arch[[:space:]]*=' | head -1 | sed -E 's/^[[:space:]]*git_data_arch[[:space:]]*=[[:space:]]*//; s/[[:space:]]+/ /g; s/[[:space:]]*$//')"
+  b="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$2" | grep -E '^[[:space:]]*git_data_arch[[:space:]]*=' | head -1 | sed -E 's/^[[:space:]]*git_data_arch[[:space:]]*=[[:space:]]*//; s/[[:space:]]+/ /g; s/[[:space:]]*$//')"
+  # Non-vacuity: an empty extraction on both sides would compare "" == "" and fake parity.
+  printf '%s' "$a" | grep -qE '^startswith\(var\.git_data_server_type, "[a-z]+"\) \? "[a-z0-9]+" : "[a-z0-9]+"$' || { echo 0; return; }
+  [ "$a" = "$b" ] && echo 1 || echo 0
+}
+# Called directly rather than through assert_holds, which passes exactly one file.
+if [ "$(p_arch_derivation_parity "$GIT_DATA_TF" "$GIT_DATA_MODULE_TF")" = "1" ]; then
+  pass
+else
+  fail "A16b arch-derivation parity: the caller-side and module-side ternaries differ"
+fi
+# Mutation: widen the module's prefix to "ca". Both expressions stay individually
+# well-formed and A16/A16b both still pass (cax11/21/31/41 all still start with "ca"), so
+# this drift is visible ONLY to the parity comparison.
+_gdluks_mut="$(mktemp "${TMPDIR:-/tmp}/gdluks-mut.XXXXXX")"
+sed -E 's/startswith\(var\.git_data_server_type, "cax"\)/startswith(var.git_data_server_type, "ca")/' \
+  "$GIT_DATA_MODULE_TF" > "$_gdluks_mut"
+if [ "$(p_arch_derivation_parity "$GIT_DATA_TF" "$_gdluks_mut")" = "0" ]; then
+  pass
+else
+  fail "A16b arch-derivation parity: MUTATION did not flip the check to failing"
+fi
+rm -f "$_gdluks_mut"
 
 # A17: the git_data_server_type default is not an (unorderable) cax* type.
 assert_holds    "A17 default-not-cax" p_default_not_cax "$VARIABLES_TF"
@@ -631,9 +688,11 @@ assert_mutation "A17 default-not-cax" p_default_not_cax "$VARIABLES_TF" \
   's/default([[:space:]]*)=[[:space:]]*"cpx22"/default\1= "cax11"/'
 
 # A18: the templatefile map wires BOTH derived locals through to the cloud-init.
-assert_holds    "A18 templatefile-wiring" p_templatefile_wiring "$GIT_DATA_TF"
+# The map moved into the module with the render it belongs to (#7025 R7); asserted there,
+# because git-data.tf no longer contains a templatefile call to wire anything through.
+assert_holds    "A18 templatefile-wiring" p_templatefile_wiring "$GIT_DATA_MODULE_TF"
 # Mutation: the #6570 regression, relocated from the cloud-init to the var map.
-assert_mutation "A18 templatefile-wiring" p_templatefile_wiring "$GIT_DATA_TF" \
+assert_mutation "A18 templatefile-wiring" p_templatefile_wiring "$GIT_DATA_MODULE_TF" \
   's;^([[:space:]]*)doppler_arch([[:space:]]*)=[[:space:]]*local\.git_data_arch[[:space:]]*$;\1doppler_arch\2= "arm64";'
 
 # A19: the tripwire's referencing edge survives, and the enums stay MAPPED not compared.

@@ -381,9 +381,11 @@ runcmd:
   # metadata API/console) and NEVER an argv positional. It is delivered ONLY as the
   # Doppler-injected env GIT_DATA_LUKS_KEY at boot.
   # Both the build and its checksum are DERIVED from var.git_data_server_type
-  # (git-data.tf local.git_data_arch / local.git_data_doppler_sha256): cax* → arm64,
-  # cpx*/cx*/ccx* → amd64. They were hardcoded to arm64 while the host was pinned to
-  # cax11 — a type orderable in 0 of 3 EU DCs, so it could never boot at all (#6570).
+  # (modules/git-data-userdata/main.tf local.git_data_arch / local.git_data_doppler_sha256):
+  # cax* → arm64, cpx*/cx*/ccx* → amd64. Derived INSIDE the module — which both the
+  # production root and the rung-2 rehearsal root render through — so the pair exists once
+  # rather than once per caller (#7025 R7). They were hardcoded to arm64 while the host was
+  # pinned to cax11 — a type orderable in 0 of 3 EU DCs, so it could never boot at all (#6570).
   # Egress (github release download) is open — git-data.tf denies only PUBLIC ingress.
   #
   # ESCAPING: $${DOPPLER_VERSION} is a SHELL variable (double-$, passed through

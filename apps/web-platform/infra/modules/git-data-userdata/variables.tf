@@ -54,13 +54,8 @@ variable "doppler_config_name" {
   default     = "prd_git_data"
 }
 
-variable "doppler_arch" {
-  description = "Doppler CLI download arch token (amd64|arm64), DERIVED by the caller from the server type — never assumed (#6570)."
-  type        = string
-}
-
-variable "doppler_sha256" {
-  description = "Checksum for the doppler_arch build. Selected BY doppler_arch, so a mis-derived arch verifies the tarball it just chose — which is why the caller carries a plan-time precondition on the Hetzner-reported architecture."
+variable "git_data_server_type" {
+  description = "Hetzner server type. The Doppler CLI arch token and its checksum are DERIVED FROM THIS, inside this module, so the pair exists exactly once for both roots. Callers pass the type, never the derived pair."
   type        = string
 }
 

@@ -49,6 +49,24 @@ locals {
   git_data_rationale_strip = "/(?m)^[ \t]*#([^!\n][^\n]*)?\n/"
 }
 
+# THE DOPPLER ARCH PAIR IS DERIVED HERE, and that location is the point.
+#
+# Both roots previously received `doppler_arch` and `doppler_sha256` as module INPUTS, each
+# computing them with its own ternary — so the checksum literals existed in git-data.tf AND in
+# rung2-rehearsal/rehearsal.tf, uncompared. Measured: applying a Doppler version bump to
+# git-data.tf only left EVERY suite green (54/0, 28/0, 35/0, 97/0, 129/0) while the rehearsal
+# downloaded and verified a DIFFERENT binary than production — the #6570 boot-brick class, in
+# the rehearsal that exists to rule it out.
+#
+# Deriving inside the module makes that divergence UNEXPRESSIBLE rather than merely tested:
+# there is one ternary, one pair of literals, and callers pass a server type. It also removes
+# the pair from the module's variable surface, so it cannot appear in RUNG2_VAR_DIVERGENCE at
+# all — a structural guarantee in place of a declaration the gate had to police.
+locals {
+  git_data_arch           = startswith(var.git_data_server_type, "cax") ? "arm64" : "amd64"
+  git_data_doppler_sha256 = local.git_data_arch == "arm64" ? "f1954f3717fe4c5b65e906a3c6dfe0d20e97b032af35e43db41250931302e143" : "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
+}
+
 locals {
   rendered = templatefile("${path.module}/../../cloud-init-git-data.yml", {
     git_data_bootstrap               = replace(file("${path.module}/../../git-data-bootstrap.sh"), local.git_data_rationale_strip, "")
@@ -102,8 +120,8 @@ locals {
     # WHICH BINARY is downloaded and WHICH CHECKSUM verifies it, so a rehearsal that
     # diverged here would rehearse a boot-brick class (#6570) the production boot does not
     # have, or miss the one it does.
-    doppler_arch   = var.doppler_arch
-    doppler_sha256 = var.doppler_sha256
+    doppler_arch   = local.git_data_arch
+    doppler_sha256 = local.git_data_doppler_sha256
     # (#6982, W1) The off-host emitter's three inputs.
     #
     # sentry_dsn is BAKED, and that is the point: it is the ONE channel that still works

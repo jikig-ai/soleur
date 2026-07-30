@@ -338,10 +338,23 @@ for base in "${MEMBERS[@]}"; do
   # Caught in review, which also corrected the comment at the resolver that claimed "a
   # symlink inside the infra root does not change which file it renders" — true of
   # terraform's path handling, false of this script's read.
-  if [[ -L "$path" ]]; then
-    echo "ERROR [$base]: is a symlink. Refusing to read outside the infra root — containment is checked lexically and the read follows links." >&2
-    exit 4
-  fi
+  # EVERY COMPONENT, not just the final one. The first version tested `[[ -L "$path" ]]`,
+  # which a symlinked DIRECTORY component walks straight past: `ln -s /var/tmp/x <root>/vendored`
+  # plus `templatefile("${path.module}/vendored/leak.yml")` passed lexical containment AND the
+  # final-component test, rendered the out-of-root file, and echoed its first line verbatim
+  # into the CI log. Measured. This job runs on `pull_request` and is credential-free, so it
+  # runs for fork PRs from anyone.
+  _walk="$ROOT"
+  _rest="$base"
+  while [[ -n "$_rest" ]]; do
+    _seg="${_rest%%/*}"
+    _walk="${_walk}/${_seg}"
+    if [[ -L "$_walk" ]]; then
+      echo "ERROR [$base]: path component '${_seg}' is a symlink. Refusing to read outside the infra root — containment is checked LEXICALLY and the read follows links, so a linked directory escapes the prefix test." >&2
+      exit 4
+    fi
+    [[ "$_rest" == */* ]] && _rest="${_rest#*/}" || _rest=""
+  done
 
   if [[ ! -f "$path" || ! -r "$path" ]]; then
     # Do NOT increment. The counter assertion below turns this into exit 5 —
@@ -531,7 +544,11 @@ for base in "${MEMBERS[@]}"; do
     label=""
     [[ "$arm" != "noop" ]] && label=" (bools=$arm)"
 
+    # `mkdir -p` the parent: a member name can carry a subdirectory component now that
+    # module referents resolve to ROOT-relative paths, and without this the redirect fails
+    # with "No such file or directory" on the first nested member.
     rendered="$TMP/rendered-$base-$arm"
+    mkdir -p "$(dirname "$rendered")"
     # jsonencode + double-decode. The prior art's `<<EOT` first/last-line strip
     # is broken two ways: terraform console emits a QUOTED STRING (not a
     # heredoc) for a short template, so the strip yields `"x=hi"` with quotes

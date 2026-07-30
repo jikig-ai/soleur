@@ -92,18 +92,19 @@ locals {
 
   # Arch DERIVED from var.git_data_server_type (mirrors zot-registry.tf local.registry_arch
   # and inngest-host.tf local.inngest_arch): `cax*` (Ampere) → arm64, anything else
-  # (`cpx*`/`cx*`/`ccx*`) → amd64. Every arch-coupled download in cloud-init-git-data.yml
-  # is selected off this local, so the host boots correctly on EITHER arm. #6570: the host
-  # was pinned to cax11, orderable in 0 of 3 EU datacenters, so it could never be born on
-  # its declared type; deriving the arch is what makes the repin to an x86 type safe rather
-  # than a boot-brick (the old cloud-init hardcoded the arm64 build + its checksum).
+  # (`cpx*`/`cx*`/`ccx*`) → amd64. #6570: the host was pinned to cax11, orderable in 0 of 3
+  # EU datacenters, so it could never be born on its declared type; deriving the arch is what
+  # makes the repin to an x86 type safe rather than a boot-brick (the old cloud-init
+  # hardcoded the arm64 build + its checksum).
+  #
+  # SCOPE, since #7025 R7: this local now feeds ONLY the phantom/wrong-arch precondition
+  # below. The arch that selects WHICH BINARY cloud-init downloads is derived inside
+  # modules/git-data-userdata (which both roots render through), because a derivation that
+  # lived in each caller existed once per root and was compared by nothing. The two
+  # derivations must still agree — a precondition validating a different arch than the one
+  # downloaded is the #6570 boot-brick with the tripwire green — so git-data-luks.test.sh
+  # A16b asserts the two ternaries are byte-identical.
   git_data_arch = startswith(var.git_data_server_type, "cax") ? "arm64" : "amd64"
-
-  # Doppler CLI (v3.75.3, pinned in cloud-init-git-data.yml) per-arch download checksum —
-  # byte-identical to inngest-host.tf local.inngest_doppler_sha256 and zot-registry.tf
-  # local.doppler_sha256 (same version, same values). git-data-luks.test.sh A15 asserts
-  # that parity against BOTH canon sites so a version bump cannot land on two of three.
-  git_data_doppler_sha256 = local.git_data_arch == "arm64" ? "f1954f3717fe4c5b65e906a3c6dfe0d20e97b032af35e43db41250931302e143" : "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
 }
 
 # The git-data host's server type, read from the live Hetzner catalog. Read-only; creates
@@ -283,8 +284,7 @@ module "git_data_userdata" {
   # (#7025, R1) The literal this template carried until #7025, now passed explicitly. It
   # MUST name the config doppler_service_token.git_data is scoped to.
   doppler_config_name    = "prd_git_data"
-  doppler_arch           = local.git_data_arch
-  doppler_sha256         = local.git_data_doppler_sha256
+  git_data_server_type   = var.git_data_server_type
   sentry_dsn             = var.sentry_dsn
   betterstack_ingest_url = local.betterstack_logs_ingest_url
   git_transport_pubkey   = local.git_transport_pubkey

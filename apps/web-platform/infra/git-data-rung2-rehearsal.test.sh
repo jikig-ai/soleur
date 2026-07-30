@@ -190,6 +190,15 @@ for _pin in doppler_arch doppler_sha256 sentry_dsn betterstack_ingest_url; do
   esac
 done
 
+# VARS WHOSE VALUE-PARITY IS PROVEN BELOW, accumulated BY THE PASSING ARM rather than
+# declared. 7c compares the two roots' module bindings as TEXT, and two separate Terraform
+# roots cannot reach a shared value by the same expression — the rehearsal reads `var.X`
+# where production reads `local.Y`. Those are expression divergences that are not value
+# divergences, and the arms below are what establish the difference. Granting the exemption
+# from the proof (not from a literal) keeps it fail-closed: if arm 7 fails, betterstack is
+# NOT exempt and 7c fails too, rather than one arm quietly excusing the other.
+_value_proven=""
+
 # ── 7. THE BETTER STACK INGEST URL IS THE PRODUCTION ONE ───────────────────────────
 #
 # A SECOND COPY of a literal, so it is guarded rather than trusted. Both sides extracted BY
@@ -201,6 +210,7 @@ prod_ingest="$(sed 's/^[[:space:]]*#.*$//' "$DIR/zot-registry.tf" \
   | grep -oE 'betterstack_logs_ingest_url[[:space:]]*=[[:space:]]*"[^"]+"' | head -1 \
   | sed 's/.*"\([^"]*\)"$/\1/')"
 if [[ -n "$reh_ingest" && -n "$prod_ingest" && "$reh_ingest" == "$prod_ingest" ]]; then
+  _value_proven="${_value_proven} betterstack_ingest_url"
   pass "the rehearsal's betterstack_ingest_url default matches production's literal"
 else
   fail "betterstack ingest URL DRIFTED between the rehearsal default and prod's local" \
@@ -216,11 +226,24 @@ fi
 #
 # Both sides extracted BY SHAPE from their own variables.tf — a hardcoded expectation here
 # would pass while production moved.
+# COMMENTS STRIPPED, BLOCK HEADER ANCHORED, and the value taken from the ASSIGNMENT rather
+# than from `$NF`. All three were live defects in the first version of this helper:
+#
+#   default = "fsn1" # must equal production hel1
+#
+# made `$NF` (after `gsub(/[",]/,"")`) evaluate to `hel1` — the comment's last word — so the
+# guard reported "match production byte-for-byte" while the rehearsal was pinned to fsn1.
+# Measured: 35/0 green with the divergence live. That is the exact defect this arm was added
+# to catch, re-enabled by the single most likely accompanying edit (documenting the intended
+# value). `index($0,v)` was also unanchored, so `variable "location_extra"` would match.
 _var_default() {  # $1=file $2=variable name
-  awk -v v="variable \"$2\"" '
-    index($0,v){i=1; next}
-    i && /^[[:space:]]*default[[:space:]]*=/{gsub(/[",]/,""); print $NF; exit}
-    i && /^}/{exit}' "$1"
+  sed 's/[[:space:]]#.*$//' "$1" \
+    | awk -v v="^variable \"$2\" \\{" '
+        $0 ~ v {i=1; next}
+        i && /^[[:space:]]*default[[:space:]]*=/{
+          sub(/^[^=]*=[[:space:]]*/, ""); gsub(/[",[:space:]]/, ""); print; exit
+        }
+        i && /^}/{exit}'
 }
 _mm_drift=""; _mm_checked=0
 for _v in location git_data_server_type; do
@@ -234,10 +257,134 @@ if [[ "$_mm_checked" -lt 2 ]]; then
   fail "MUST-MATCH default extraction found only ${_mm_checked} of 2 variables" \
     "the awk extraction drifted; an empty comparison is vacuous"
 elif [[ -z "$_mm_drift" ]]; then
+  _value_proven="${_value_proven} location git_data_server_type"
   pass "location and git_data_server_type defaults match production byte-for-byte"
 else
   fail "a MUST-MATCH default DIVERGED from production:${_mm_drift}" \
     "the rehearsal would boot on different hardware/DC than the host it attests for"
+fi
+
+# ── 7c. THE DECLARED DIVERGENCE SET MATCHES WHAT ACTUALLY DIVERGES ─────────────────
+#
+# THE TAUTOLOGY, THIRD ATTEMPT. R6 refuses declared-divergence outside an identity-only
+# allowlist. That is only meaningful if the DECLARED set tracks reality: the capture script
+# originally echoed the allowlist back (allowlist ⊆ allowlist), the fix moved the literal
+# into the workflow, and the workflow literal was then set byte-identical to the whole
+# allowlist — so the tautology moved rather than closed. Measured both times.
+#
+# This arm DERIVES the divergence set: for every var the two roots' module blocks both
+# bind, compare the bound expressions; the vars whose expressions differ ARE the
+# divergence. Then assert the workflow's declared set equals it. A new divergence on a
+# non-identity var (sentry_dsn, git_data_server_type) now changes the derived set, this arm
+# fails, and the author must declare it — at which point R6 refuses it. The loop is closed by
+# comparison against the artifacts, not by a literal anyone can edit to agree with itself.
+#
+# TWO KEYS ARE EXCLUDED, and neither exclusion is a hole — each is pinned harder elsewhere,
+# which is the only reason it may be dropped here:
+#
+#   source — a module META-ARGUMENT, not a templatefile argument. The divergence set records
+#     which ARGUMENTS the rehearsal diverged on (the axis the evidence hash does not bind);
+#     `source` selects the module itself, and both roots' values are asserted by NAME above
+#     (`../modules/git-data-userdata` and `./modules/git-data-userdata`), which is a stricter
+#     check than "these two strings differ". Left in, it would sit in the derived set forever
+#     and could only be silenced by declaring it — putting a non-identity key on the
+#     allowlist R6 exists to keep closed.
+#
+#   value-proven vars — a second Terraform root cannot reference the parent root's `local`,
+#     so `betterstack_ingest_url = var.betterstack_ingest_url` against
+#     `= local.betterstack_logs_ingest_url` is an expression divergence that is NOT a value
+#     divergence. Arm 7 compares the two VALUES; the exemption is granted by that arm passing
+#     (see _value_proven), so a drift in the value fails arm 7 AND unexempts the var here.
+_module_binds() {  # $1 = .tf containing a `module "git_data_userdata"` block -> "key=expr" lines
+  sed 's/[[:space:]]#.*$//' "$1" \
+    | awk '/^module "git_data_userdata"/{i=1; next}
+           i && /^}/{exit}
+           i && /^[[:space:]]*[a-z_]+[[:space:]]*=/{
+             k=$1; sub(/^[^=]*=[[:space:]]*/,""); gsub(/[[:space:]]+$/,"");
+             print k "=" $0
+           }' | sort
+}
+_reh_binds="$(_module_binds "$REH/rehearsal.tf")"
+_prod_binds="$(_module_binds "$DIR/git-data.tf")"
+_derived=""
+_common=0
+_exempted=0
+while IFS= read -r _line; do
+  [[ -z "$_line" ]] && continue
+  _k="${_line%%=*}"; _rexpr="${_line#*=}"
+  [[ "$_k" == "source" ]] && continue
+  _pexpr="$(printf '%s\n' "$_prod_binds" | grep -E "^${_k}=" | head -1 | sed "s/^${_k}=//")"
+  [[ -z "$_pexpr" ]] && continue
+  _common=$((_common + 1))
+  if [[ "$_rexpr" != "$_pexpr" ]]; then
+    case " $_value_proven " in
+      *" $_k "*) _exempted=$((_exempted + 1)) ;;
+      *) _derived="${_derived}${_derived:+,}${_k}" ;;
+    esac
+  fi
+done <<< "$_reh_binds"
+# Non-vacuity on the exemption itself: if _value_proven were empty (arm 7 regressed to
+# always-fail, or the accumulator was dropped in a refactor) every expression divergence
+# would flow into _derived and this arm would fail loudly — but the inverse, an exemption
+# list that silently swallowed a REAL divergence, is the dangerous direction. Pin the count.
+if [[ "$_exempted" -ne 1 ]]; then
+  fail "expected exactly 1 value-proven exemption in the divergence derivation, got ${_exempted}" \
+    "value-proven='${_value_proven# }' — an exemption set that grew is an exemption set that can hide a real divergence"
+fi
+_declared="$(grep -oE '^[[:space:]]*REHEARSAL_DIVERGENCE:[[:space:]]*\S+' "$WF" | head -1 | awk '{print $2}')"
+# Sort both sides: the derived set comes out of `sort`, the declared literal is hand-ordered.
+_derived_sorted="$(printf '%s' "$_derived" | tr ',' '\n' | sort | paste -sd, -)"
+_declared_sorted="$(printf '%s' "$_declared" | tr ',' '\n' | sort | paste -sd, -)"
+if [[ "$_common" -lt 8 ]]; then
+  fail "module-binding comparison found only ${_common} shared var(s) (<8)" \
+    "the awk extraction drifted; an empty comparison makes this arm vacuous"
+elif [[ "$_derived_sorted" == "$_declared_sorted" ]]; then
+  pass "the workflow's declared divergence set equals what actually diverges (${_common} vars compared)"
+else
+  fail "REHEARSAL_DIVERGENCE does not match the actual divergence between the two module blocks" \
+    "declared=${_declared_sorted} derived=${_derived_sorted}"
+fi
+
+# ── 7d. THE DOPPLER CHECKSUM PAIR IS UNEXPRESSIBLE PER-ROOT, NOT MERELY EQUAL ──────
+#
+# The defect: each root derived doppler_arch/doppler_sha256 with its OWN ternary and passed
+# the result in, so the checksum literals existed in git-data.tf AND in rehearsal.tf,
+# compared by nothing. The existing A15 parity predicate reads the canon sites
+# (inngest-host.tf, zot-registry.tf) — never this root. Measured: a Doppler version bump
+# applied to git-data.tf alone left EVERY suite green (54/0, 28/0, 35/0, 97/0, 129/0) while
+# the rehearsal downloaded and verified a DIFFERENT binary than production. That is the
+# #6570 boot-brick class, in the rehearsal that exists to rule it out, and R6 cannot see it
+# either because doppler_sha256 is not a divergence anyone declares.
+#
+# The fix DERIVES the pair inside the shared module, so this arm asserts the STRUCTURAL
+# property rather than an equality between two copies: the literals live in the module and
+# in neither caller, and the pair is not on the module's variable surface — so a caller
+# cannot reintroduce the divergence even by trying, and it can never appear in
+# RUNG2_VAR_DIVERGENCE. An equality check between two copies would still pass the day
+# someone adds a third.
+_shas() { grep -oE '[0-9a-f]{64}' "$1" | sort -u; }
+_n_mod="$(_shas "$MOD/main.tf" | grep -c . || true)"
+_n_reh="$(_shas "$REH/rehearsal.tf" | grep -c . || true)"
+_n_prod="$(_shas "$DIR/git-data.tf" | grep -c . || true)"
+if [[ "$_n_mod" -ne 2 ]]; then
+  fail "the shared module carries ${_n_mod} distinct sha256 literal(s); the per-arch Doppler pair is exactly 2" \
+    "either the derivation left the module (each caller is then an uncompared copy) or a third literal joined it"
+elif [[ "$_n_reh" -ne 0 || "$_n_prod" -ne 0 ]]; then
+  fail "a caller root carries a sha256 literal (rehearsal=${_n_reh} prod=${_n_prod}); both must be 0" \
+    "a per-root literal is a copy nothing compares — the exact shape that let a version bump land on one root only"
+else
+  pass "the Doppler checksum pair exists exactly once, in the shared module, and in neither caller root"
+fi
+# And it is not re-openable through the module's front door: a `doppler_sha256`/`doppler_arch`
+# VARIABLE would let either caller pass its own pair back in, restoring the divergence while
+# this arm still counted 2 literals in the module.
+_mod_vars="$(sed 's/[[:space:]]#.*$//' "$MOD/main.tf" "$MOD/variables.tf" 2>/dev/null \
+  | grep -cE '^variable "(doppler_arch|doppler_sha256)"' || true)"
+if [[ "$_mod_vars" -eq 0 ]]; then
+  pass "neither doppler_arch nor doppler_sha256 is a module INPUT — the divergence is unexpressible, not just absent"
+else
+  fail "the module still exposes ${_mod_vars} doppler arch/checksum variable(s)" \
+    "a caller can pass its own pair, which is the divergence this consolidation removed"
 fi
 
 # ── 8. THE WORKFLOW CONTRACT ───────────────────────────────────────────────────────

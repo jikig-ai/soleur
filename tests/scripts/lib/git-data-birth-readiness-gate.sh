@@ -298,10 +298,15 @@ git_data_rung2_user_data_sha256() {
   # `base64encode(file(…))` all resolve, because the previous key-anchored form silently
   # skipped any binding whose wrapper or key shape it did not anticipate, and a skipped payload
   # renders into user_data while edits to it leave the evidence hash unchanged.
+  # THE WHOLE `file`-FAMILY, not just `file(`. `filebase64(` was invisible to BOTH sides of
+  # the referenced-vs-resolved check below (9 refs, 9 resolved, floor satisfied at 11), so a
+  # tenth payload bound that way rendered into user_data while edits to it left the hash
+  # unchanged — measured. The count check could never catch it, because its blind spot WAS
+  # this regex's blind spot; widening the regex is the only fix that closes both sides.
   _payload_refs() {
     sed 's/^[[:space:]]*#.*$//' "$module_tf" \
-      | grep -oE '(^|[^A-Za-z])file\("\$\{path\.module\}/[^"]+"' \
-      | sed -E 's/.*file\("\$\{path\.module\}\///; s/"$//'
+      | grep -oE '(^|[^A-Za-z])file(base64|sha256|sha512|md5)?\("\$\{path\.module\}/[^"]+"' \
+      | sed -E 's/.*\("\$\{path\.module\}\///; s/"$//'
   }
   while IFS= read -r _f; do
     [[ -n "$_f" && -r "${module_dir}/${_f}" ]] && _inputs+=("${module_dir}/${_f}")
@@ -434,7 +439,14 @@ HOLD
   # never inferred from silence.
   local _k _n
   for _k in RUNG2_BOOT_REHEARSAL RUNG2_EVIDENCE_URL RUNG2_TEMPLATE_SHA256 RUNG2_VAR_DIVERGENCE; do
-    _n="$(grep -cE "^[[:space:]]*${_k}[[:space:]]*=" <<<"$body" || true)"
+    # `(export[[:space:]]+)?` is load-bearing. Measured: an evidence file carrying
+    #   RUNG2_BOOT_REHEARSAL=PASS
+    #   export RUNG2_BOOT_REHEARSAL=FAIL
+    # counted as ONE occurrence and RELEASED, while a shell that `source`s the same file
+    # sees FAIL — reinstating verbatim the divergence-of-meaning this loop's own error
+    # message describes. `export` is the one dotenv decoration a human is most likely to
+    # write, and it was the only one of five tested shapes that got through.
+    _n="$(grep -cE "^[[:space:]]*(export[[:space:]]+)?${_k}[[:space:]]*=" <<<"$body" || true)"
     if [[ "$_n" -ne 1 ]]; then
       echo "git_data_rung2_rehearsal_gate: HOLD — ${evidence} carries ${_n} '${_k}' line(s); exactly 1 is required. Fail-closed: this gate reads first-wins while dotenv semantics are last-wins, so a duplicated key means the file's meaning differs between this gate and every other reader of it. An ABSENT key is equally refused — 'nothing diverged' must be declared, not inferred from silence."
       return 1

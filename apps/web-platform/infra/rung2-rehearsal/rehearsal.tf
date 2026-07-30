@@ -154,11 +154,12 @@ module "git_data_userdata" {
   git_remove_pubkey       = trimspace(tls_private_key.rehearsal.public_key_openssh)
 
   # MUST MATCH PROD — these change WHAT the host does, not WHICH host it is.
-  # doppler_arch/doppler_sha256 are DERIVED from the server type exactly as git-data.tf
-  # derives them, rather than passed in: a hand-supplied pair could silently disagree with
-  # the type actually being booted, which is the #6570 boot-brick with an extra step.
-  doppler_arch           = startswith(var.git_data_server_type, "cax") ? "arm64" : "amd64"
-  doppler_sha256         = startswith(var.git_data_server_type, "cax") ? "f1954f3717fe4c5b65e906a3c6dfe0d20e97b032af35e43db41250931302e143" : "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
+  # The Doppler arch token and its checksum are NOT passed: the module derives both from the
+  # server type, so the pair exists once for both roots and cannot diverge. It used to be a
+  # local ternary here, i.e. a fourth uncompared copy of the checksum literals — a version bump
+  # applied to git-data.tf alone left every suite green while this root verified a different
+  # binary (#6570 class).
+  git_data_server_type   = var.git_data_server_type
   sentry_dsn             = var.sentry_dsn
   betterstack_ingest_url = var.betterstack_ingest_url
 }
