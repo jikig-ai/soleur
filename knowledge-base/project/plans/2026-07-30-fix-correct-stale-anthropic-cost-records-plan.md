@@ -3,7 +3,8 @@ title: "fix: correct the stale Anthropic API cost records"
 date: 2026-07-30
 type: fix
 lane: cross-domain
-brand_survival_threshold: none
+brand_survival_threshold: single-user incident
+requires_cpo_signoff: true
 branch: feat-one-shot-anthropic-cost-records-correction
 pr: 7086
 ---
@@ -12,6 +13,32 @@ pr: 7086
 
 > `lane:` — no `spec.md` exists for this branch (direct one-shot entry, no brainstorm),
 > so `lane` is defaulted to `cross-domain` fail-closed per the plan skill's TR2 rule.
+
+> ## ⚠️ CORRECTED AT REVIEW (8-agent panel, 2026-07-30) — read this before the body
+>
+> The body below was written pre-review and contains **two claims the panel falsified**. They
+> are left in place as the point-in-time record; the corrections are authoritative.
+>
+> 1. **"No fleet-wide figure exists and none is derivable"** — FALSE. ADR-108 emits a per-run
+>    `SOLEUR_CLAUDE_COST` marker on every substrate exit (`cost_usd`, `source: cron:<name>`),
+>    queryable from Better Stack with **no** `ANTHROPIC_ADMIN_KEY`; the SQL is committed in
+>    `betterstack-log-query.md`. Only the **org-total** is blocked on #6297. The plan confused
+>    it with `SOLEUR_CLAUDE_COST_DAILY` (a different marker, 47 lines away in the same file) —
+>    the exact defect class this plan exists to remove, reproduced inside the fix.
+> 2. **"21 Inngest crons"** — a raw file count. The correct figure is **15** claude-spawning
+>    crons; the other 6 hits are a shared module, an event handler, two one-shots, a
+>    comment-only match, and a workspace-helper-only importer. Separately,
+>    `cron-compound-promote` and `cron-weekly-release-digest` spend on the same key over HTTP
+>    *without* the substrate, so substrate-membership over- and under-counts simultaneously.
+>
+> Two further corrections: **`fix-constraints-stage-a` IS metered** (active, wires
+> `Capture API spend`; its agent step is gate-red-only, so it is a zero-yield meter, not a
+> missing one), and the **threshold was raised to `single-user incident`** because
+> `expenses.md` feeds the operator digest's run-rate and is therefore a user-facing surface.
+>
+> **Resulting design change:** the row is SPLIT — `cron-ux-audit` stays in Product COGS at
+> its narrow `15.00`; the 14-cron fleet becomes a new **R&D** row booking `UNMEASURED`
+> (not a guessed number), which makes every containing subtotal a floor.
 
 ## Overview
 
@@ -212,10 +239,16 @@ CI surface that spends almost nothing.
 containing no credentials, no personal data, and no customer records. It names key
 *variables* (`ANTHROPIC_API_KEY`, `ANTHROPIC_ADMIN_KEY`) but no key values.
 
-**Brand-survival threshold:** `none`
-**Reason:** documentation-only correction to internal financial records; no user-facing
-surface, no persistent store, no regulated data, and no credential material. The diff touches
-no path in the sensitive-path set.
+**Brand-survival threshold:** `single-user incident` *(raised at review — the original `none` rested on a factual error)*
+**Reason:** the original reason claimed "no user-facing surface". That is wrong:
+`plugins/soleur/skills/operator-digest/SKILL.md` READS `expenses.md` and sums the Recurring
+table's Amount for `active` rows into the founder's weekly comprehension digest. A wrong
+amount here propagates directly to a founder-facing artifact, and the failure it feeds has
+already fired twice against this operator (2026-06-29 credit exhaustion, and the CI failure
+that triggered this PR). That is one user, their money, their workflow — the definition of the
+threshold. This is why the fleet row books `UNMEASURED` rather than a known-wrong number:
+`unmetered` keeps it out of the digest's `active`-only allowlist, so the digest under-reports
+rather than mis-reports.
 
 ## Domain Review
 
@@ -291,7 +324,7 @@ gate skip condition applies.
 | Also wire `api-spend` capture to the surfaces that actually spend | That is a capability change, not a records correction, and it is already tracked by #6297 (whose Admin-API org-total supersedes per-run artifact capture). Doing it here would mix a records fix with a metering build. |
 | File a new tracking issue for the metering gap | Both halves are already open (#5692, #6297). A third issue fragments the tracking — the exact `wg-defer-only-after-inline-triage` failure mode. |
 | Delete the ux-audit row entirely (mechanism gone) | The spend did not stop; the mechanism moved. Deleting the row would remove a real cost line from the burn model. |
-| Re-derive the amount from Better Stack `SOLEUR_CLAUDE_COST_DAILY` markers | That marker only emits once `ANTHROPIC_ADMIN_KEY` exists; today `cron-anthropic-cost-report` self-reports `key-missing` indefinitely. There is nothing to query. |
+| Re-derive the amount from Better Stack `SOLEUR_CLAUDE_COST_DAILY` markers | ~~That marker only emits once `ANTHROPIC_ADMIN_KEY` exists; there is nothing to query.~~ **TRUE of `_DAILY`, but this row caused a FALSE generalization — corrected at review.** There are TWO markers, defined 47 lines apart in `claude-cost-marker.ts`: `SOLEUR_CLAUDE_COST_DAILY` (org-total, Admin-API, genuinely blocked on #6297) and **`SOLEUR_CLAUDE_COST` (per-run, emitted by the substrate on every exit with `cost_usd` + `source: cron:<name>`, needing NO admin key)**. This plan evaluated the first and wrote off the second, which hardened into the records asserting the fleet was unmeasurable — the exact defect class the plan exists to remove. The fleet IS derivable today; only the org-total is blocked. |
 | Cut CI jobs to reduce spend (the original request) | Measured and rejected on evidence: CI is not the spender. Documented in the PR body so the question is not re-asked from the same wrong premise. |
 
 ## Test Scenarios
