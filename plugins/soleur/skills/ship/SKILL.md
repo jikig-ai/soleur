@@ -70,7 +70,7 @@ pwd
 # The real signal is neither position nor shape: it is whether the key is
 # one a downstream consumer actually reads. Prose keys are not. Extend this
 # list when a new machine-read trailer is introduced.
-KNOWN_TRAILER_KEYS='Co-Authored-By|Signed-off-by|Allowlist-Widened-By|Reviewed-by|Reviewed-By-Soleur|Acked-by|Tested-by|Cc'
+KNOWN_TRAILER_KEYS='Co-Authored-By|Signed-off-by|Allowlist-Widened-By|Reviewed-by|Reviewed-By-Soleur|Reviewed-Coverage|Acked-by|Tested-by|Cc'
 RC=0
 for sha in $(git rev-list origin/main..HEAD); do
   BODY=$(git log -1 --format=%B "$sha")

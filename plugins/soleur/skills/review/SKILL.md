@@ -324,12 +324,59 @@ Use `gdpr-gate` for deterministic Art. 9 / RoPA / lawful-basis pattern checks; u
 
 <decision_gate>
 
+**Gate 2a — CAN agents be spawned at all? (evaluate BEFORE the spawn, not after.)**
+
+Gate 2b below is defined over agents that **completed**. That makes it structurally blind
+to the state where agents were never spawned: a harness that withholds the Agent tool, a
+headless run with no agent surface, or a session-level constraint requiring explicit user
+opt-in (`wg-zero-agents-until-user-confirms`). Nothing ever completes, so no branch fires,
+and the reviewer improvises — historically by skipping review while the pipeline continues
+as though it ran.
+
+If agent spawning is unavailable or unauthorized:
+
+1. Do the inline review described in 2b. It is the sanctioned degraded path, not a failure.
+2. **Say so in the first line of the summary.** "Reviewed with 0 of N agents (spawning
+   unavailable: <reason>)" — never a bare "Review complete".
+3. Pass the coverage to the evidence trailer (Step 6): `--agents-ran 0 --agents-expected
+   <N> --mode inline-fallback`. A degraded review that emits a full-strength trailer is
+   worse than no trailer, because `/ship` reads that boolean and merges on it.
+4. Do NOT mark the PR ready on a `single-user incident` brand-survival threshold with zero
+   agents. Surface the choice to the operator: degraded review is adequate evidence for a
+   docs PR and is not adequate for an irreversible-blast-radius surface.
+
+**Gate 2b — did the agents that WERE spawned return?**
+
 After all parallel and conditional agents complete, check their outputs:
 
 - **If ALL agents returned empty output or rate-limit errors** (e.g., "out of extra usage", "rate limit exceeded", zero findings across every agent): perform an inline review in the main context covering all four core dimensions — security, architecture, performance, and simplicity. This is expected fallback behavior during high-usage periods, not an error condition.
 - **If ANY agent returned substantive output**: proceed normally with available results. No fallback needed — partial coverage from real agents is better than duplicating their work inline.
 
-This is a binary gate: all-failed triggers the fallback; any-succeeded means continue.
+This is a binary gate for the FALLBACK decision: all-failed triggers the inline pass;
+any-succeeded means continue.
+
+**It is NOT a binary gate for what you REPORT.** Partial coverage is the common case under
+load, and the two states are not interchangeable:
+
+- **Retry agents that died on a transient error before accepting partial coverage.** A
+  `529 Overloaded` is server-side and usually clears. Resume in small batches (3–4) with
+  backoff between batches — re-spawning ten at once is what caused the cascade in the first
+  place. Accept partial coverage only once retries stop helping.
+- **Name the missing agents** in the summary and pass them to the trailer
+  (`--agents-missing security-sentinel,test-design-reviewer`). The agents that die are not
+  correlated with the ones you needed least: losing `security-sentinel` on a
+  credential-handling diff, or `test-design-reviewer` on a diff whose central claim is
+  "the guards are mutation-proven", changes what the review is worth.
+- **The reviewer's own prior verification does not substitute.** This skill's defect-class
+  catalogue is a list of things that passed a green suite and the author's own self-review.
+  An agent that did not run did not check them.
+
+**Why this exists (measured, not hypothetical):** 2026-07-29 on PR #7066 — 7 of 9 review
+agents terminated early on `529 Overloaded`, including `security-sentinel`,
+`test-design-reviewer` and `architecture-strategist`. Gate 2b's "if ANY agent returned
+substantive output, proceed normally" was satisfied by the one that survived, and nothing
+in the repo recorded which were missing. The trailer `/ship` consumes would have been
+byte-identical to a full-coverage review's.
 
 </decision_gate>
 
@@ -925,8 +972,18 @@ After emitting the marker, the calling skill's continuation gate takes over — 
    [emit-review-trailer.sh](./scripts/emit-review-trailer.sh).
 
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/review/scripts/emit-review-trailer.sh" --findings <n>
+   bash "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/review/scripts/emit-review-trailer.sh" \
+     --findings <n> \
+     --agents-ran <how many returned substantive output> \
+     --agents-expected <how many the classification gate called for> \
+     --agents-missing <comma-separated names, omit if none>
    ```
+
+   **The coverage flags are not optional decoration.** Without them the trailer records
+   `Reviewed-Coverage: unknown`, which is honest but leaves nothing downstream able to
+   distinguish a full review from one where the agents that mattered never ran (Gate 2a/2b
+   above). The script DERIVES `--mode` from the two counts, so a caller cannot label a
+   2-of-10 review `full`.
 
    This is a script invocation rather than a described `git commit` line because
    the described form has measured zero compliance on exactly the branches that

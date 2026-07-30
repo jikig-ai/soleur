@@ -4,6 +4,7 @@ status: accepted
 date: 2026-07-20
 issue: 6724
 supersedes: null
+amended_by: "#7066 follow-up (Reviewed-Coverage, 2026-07-29)"
 ---
 
 # ADR-127: the review-evidence trailer is a boolean, not a content attestation
@@ -46,6 +47,47 @@ Consequences of that split are stated in the script header and in
 corrected: the gate went from *structurally incapable of denying* to *capable of
 denying*, which is the whole of what #6724 required. It did not become
 unfalsifiable, and nothing shipping says it did.
+
+## Amendment — `Reviewed-Coverage:` (2026-07-29, PR #7066 follow-up)
+
+**A second field, on a DIFFERENT axis, and this decision is unchanged.** ADR-127 settled
+whether the trailer binds to a tree (it does not, and content-binding was rejected).
+`Reviewed-Coverage:` records HOW MUCH review ran. Both questions were previously
+unanswerable from the trailer; this amendment answers only the second.
+
+The gap was measured, not anticipated. `review/SKILL.md`'s Rate Limit Fallback gate reads
+"if ANY agent returned substantive output: proceed normally with available results" — the
+right call, and silent about which agents did not. So a 9-agent review where every agent
+concurred and a review where 7 of 9 died on `529 Overloaded` — losing `security-sentinel`,
+`test-design-reviewer` and `architecture-strategist` — emitted a **byte-identical** trailer,
+and `/ship` merges on that boolean. Observed 2026-07-29 during the review of PR #7066: 7 of
+9 agents terminated early on 529s and nothing in the repo recorded it.
+
+The worse shape the same amendment covers: a review that could not spawn agents AT ALL. That
+gate is defined over agents which *completed*, so it cannot see the state where none ever
+started (a harness withholding the Agent tool, a headless run, `wg-zero-agents-until-user-confirms`
+before the operator has opted in). The reviewer then either does an inline pass or skips
+review, and both emitted the full-strength trailer.
+
+**Emitted with no consumer, by this ADR's own argument for `Reviewed-Commit:`** — adding a
+field once the key is in `main`'s permanent history and read by three consumers is the
+expensive part; recording it now is cheap.
+
+Two properties make it non-decorative:
+
+- An absent measurement records `unknown`, **never `full`**. Every legacy call site omits the
+  flags, so defaulting to the strongest value would make the field meaningless on exactly the
+  calls that predate it.
+- The mode is **derived from the counts**, so a caller passing `--mode full` alongside
+  `--agents-ran 2 --agents-expected 10` gets `degraded`. The field cannot overclaim by
+  accident.
+
+It is **not** a quality score. Ten agents returning nothing useful outranks two that found a
+P1 on every axis this field measures. It answers one narrow question: how many of the intended
+reviewers actually ran.
+
+Pinned by `plugins/soleur/skills/review/test/emit-review-trailer.test.sh` (12 assertions,
+5 mutations verified load-bearing against a green baseline).
 
 ## Rejected alternatives
 
