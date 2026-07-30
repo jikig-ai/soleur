@@ -665,12 +665,44 @@ if grep -qF '/etc/default/soleur-ghcr-read' "$CD"; then
 else
   no "AC20: ci-deploy ghcr_prelude_and_login must prefer the baked /etc/default/soleur-ghcr-read"
 fi
-# (4) the Doppler fallback in ci-deploy is HARDENED (timeout 45 + retry) for both GHCR creds
-if grep -qE 'until ghcr_user="?\$\(timeout 45 doppler[^)]*GHCR_READ_USER' "$CD" \
-   && grep -qE 'until ghcr_token="?\$\(timeout 45 doppler[^)]*GHCR_READ_TOKEN' "$CD"; then
-  ok "AC20: ci-deploy doppler fallback hardened — timeout 45 + until-retry for GHCR_READ_USER and GHCR_READ_TOKEN"
+# (4) the Doppler fallback in ci-deploy is HARDENED (bounded timeout + retry) for both GHCR creds
+#
+# #7095 RE-ANCHOR. This clause used to grep the INLINE shape
+# (`until ghcr_user="$(timeout 45 doppler … GHCR_READ_USER`). #7095 extracted those two
+# hand-rolled `until` loops into the shared `_doppler_get_or_report` helper — which is EXACTLY
+# the kind of change this clause exists to survive, so it is re-anchored on the INVARIANT rather
+# than on the call shape. (Extraction into a shared helper is also why the clause went red with
+# the property fully intact: a guard that only recognises one spelling of a property does not
+# guard the property.)
+#
+# Two invariants, both of them #6090's, and BOTH anchored on syntax a COMMENT CANNOT PRODUCE
+# (`cq-assert-anchor-not-bare-token`). That matters here more than usual: the prose in this very
+# file quotes `timeout 45` and `GHCR_READ_USER`, so a bare-token whole-file grep would pass
+# vacuously off the explanatory text after the code beneath it had been gutted.
+#   (a) a BOUNDED PER-ATTEMPT TIMEOUT on `doppler secrets get`. Both halves are required: the
+#       `timeout "$DOPPLER_GET_TIMEOUT"` construct INSIDE `_doppler_get_observed` (scoped to that
+#       function body, so a sibling call site cannot satisfy it), AND the 45-second default
+#       itself. An edit that kept the construct but emptied the default would render
+#       `timeout "" doppler …` — which is not a shorter timeout, it is an error, and on any shell
+#       that tolerated it, no timeout at all. The default is the half a construct-only grep loses.
+#   (b) both GHCR creds go through the RETRYING helper WITH THE EMPTY-RETRY ENABLED (5th
+#       positional arg = 1), asserted POSITIONALLY inside `ghcr_prelude_and_login`'s own body.
+#       That flag IS #6090's cold-boot property — Doppler answers EMPTY at the boot instant and
+#       the retry is what recovers it — and #7095 made empty-retry opt-in (a non-zero rc retries
+#       by default; an empty read does not). So a call site that silently dropped the argument
+#       would keep matching a looser "calls the helper" grep while losing the whole behaviour.
+CD_GET_FN="$(awk '/^_doppler_get_observed\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$CD" || true)"
+CD_PRELUDE_FN="$(awk '/^ghcr_prelude_and_login\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$CD" || true)"
+# `^[[:space:]]*[^#[:space:]][^#]*` = the line's first non-blank character is not `#`, and no `#`
+# precedes the match — i.e. this cannot be satisfied by a comment that merely quotes the call.
+AC20_TMO_USE=$(printf '%s\n' "$CD_GET_FN" | grep -cE '^[[:space:]]*[^#[:space:]][^#]*timeout "\$DOPPLER_GET_TIMEOUT" doppler secrets get ' || true)
+AC20_TMO_DEF=$(grep -cE '^readonly DOPPLER_GET_TIMEOUT="\$\{DOPPLER_GET_TIMEOUT:-45\}"' "$CD" || true)
+AC20_RETRY_U=$(printf '%s\n' "$CD_PRELUDE_FN" | grep -cE '^[[:space:]]*_doppler_get_or_report[[:space:]]+GHCR_READ_USER[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+[0-9]+[[:space:]]+[0-9]+[[:space:]]+1([[:space:]]|$)' || true)
+AC20_RETRY_T=$(printf '%s\n' "$CD_PRELUDE_FN" | grep -cE '^[[:space:]]*_doppler_get_or_report[[:space:]]+GHCR_READ_TOKEN[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+[0-9]+[[:space:]]+[0-9]+[[:space:]]+1([[:space:]]|$)' || true)
+if [[ "$AC20_TMO_USE" -ge 1 && "$AC20_TMO_DEF" -ge 1 && "$AC20_RETRY_U" -ge 1 && "$AC20_RETRY_T" -ge 1 ]]; then
+  ok "AC20: ci-deploy doppler fallback hardened — bounded timeout (default 45) in _doppler_get_observed + empty-retry helper for GHCR_READ_USER and GHCR_READ_TOKEN"
 else
-  no "AC20: ci-deploy ghcr_prelude_and_login must harden the doppler fallback (timeout 45 + until-retry) for both GHCR creds"
+  no "AC20: ci-deploy ghcr_prelude_and_login must harden the doppler fallback — a bounded per-attempt timeout with a 45s default, and BOTH GHCR creds read via the retrying helper with the empty-retry argument enabled (timeout_in_fn=$AC20_TMO_USE timeout_default_45=$AC20_TMO_DEF user_empty_retry=$AC20_RETRY_U token_empty_retry=$AC20_RETRY_T)"
 fi
 # (5) token hygiene: baked file is deploy-owned + ci-deploy unsets the token from its env/children
 if grep -qE 'chown deploy:deploy /etc/default/soleur-ghcr-read' "$CI" \
