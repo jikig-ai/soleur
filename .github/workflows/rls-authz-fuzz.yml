@@ -20,7 +20,6 @@ on:
       - "apps/web-platform/test/rls-fuzz/**"
       - "apps/web-platform/scripts/rls-parity-check.ts"
       - "apps/web-platform/scripts/supabase-local.sh"
-      - "apps/web-platform/scripts/supabase-local.test.sh"
       - "apps/web-platform/package.json"
       - ".github/workflows/rls-authz-fuzz.yml"
   workflow_dispatch: {}

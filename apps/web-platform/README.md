@@ -66,8 +66,9 @@ npm run db:assert-loopback    # verify the binding; exit 1 = exposed
 npm run db:cli -- db diff     # passthrough: db diff / db reset / migration / gen types
 ```
 
-**Why the wrapper.** The Supabase CLI has **no bind-address setting** — `config.toml` has only
-`port` keys, and the CLI sets Docker `PortBindings` with no `HostIP`, so a bare `supabase start`
+**Why the wrapper.** The Supabase CLI has **no bind-address setting** — `config.toml` declares
+no *listener* host key at any level (the one `host =` it contains is a commented outbound SMTP
+relay), and the CLI sets Docker `PortBindings` with no `HostIP`, so a bare `supabase start`
 publishes *every* service on `0.0.0.0` **and** `::`. That puts Postgres (54322) and the
 **unauthenticated Studio admin UI** (54323) on whatever network your laptop is attached to. Upstream
 implemented a bind option and closed it unmerged on policy (`supabase/cli#4613`), prescribing a
@@ -78,8 +79,11 @@ See [ADR-153](../../knowledge-base/engineering/architecture/decisions/ADR-153-lo
 surface.
 
 **Caveat:** the `host_binding_ipv4` bridge option is a rootful-Linux-Docker feature. On Docker
-Desktop or rootless setups the binding may differ — `npm run db:assert-loopback` reports the real
-state regardless of how the stack was started, so trust the gate over the platform.
+Desktop or rootless setups the binding may differ. `npm run db:assert-loopback` reports what the
+Docker API recorded for every labelled container, regardless of how the stack was started — note
+that on Desktop that record lives inside the VM, so it is authoritative about the declared
+binding, not about a host socket. Exit codes: 0 = loopback-only or no stack, 1 = exposed,
+2 = could not verify (never read 2 as safe).
 
 **Fixtures are synthesized only.** Never seed this stack from production data.
 

@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-30
-- **Issue:** #7081
+- **PR:** #7081 (no separate tracking issue; found during the 2026-07-28 incident response)
 - **Related:** [ADR-111](./ADR-111-runtime-authz-rls-fuzz-harness.md) (the RLS-fuzz harness whose
   disposable local stack this binds), `apps/web-platform/scripts/supabase-local.sh` (the wrapper),
   `apps/web-platform/supabase/config.toml` (where a reader will look first, and find only a pointer)
@@ -45,11 +45,18 @@ Three layers:
    `"$@"` so subcommands using `--` passthrough still parse. Exposed via `npm run db:start` etc.
 2. **CI (detection).** `rls-authz-fuzz.yml` starts via the wrapper and runs
    `supabase-local.sh assert` **before** the bootstrap step, so a mis-bound runner is never seeded
-   with fixture data. Both script paths were added to the workflow's `paths:` filter — without
-   that, a PR editing them would have run nothing.
-3. **SessionStart hook (tripwire).** `.claude/hooks/supabase-loopback-warn.sh` warns loudly if a
-   stack is up and off-loopback — catching the case where someone bypassed the wrapper with a bare
-   `supabase start`. Advisory only; it exits 0 unconditionally and never blocks a session.
+   with fixture data. `supabase-local.sh` was added to the workflow's `paths:` filter. The test
+   suite deliberately is NOT: `scripts/test-all.sh` already globs
+   `apps/web-platform/scripts/*.test.sh`, so editing it runs the suite, and adding it here would
+   trigger a ~25-minute Docker-stack job that never executes the changed file.
+3. **SessionStart hook (tripwire).** `.claude/hooks/supabase-loopback-warn.sh` warns if a stack is
+   up and off-loopback — catching the case where someone bypassed the wrapper with a bare
+   `supabase start`. It emits a **`systemMessage` on stdout**, which is the operator-visible
+   channel for an exit-0 hook; plain stderr is DISCARDED there, so the first revision's "loud"
+   stderr banner was silent. Never blocks a session: it exits 0, or 1 in the jq-absent fallback
+   (exit 1 surfaces stderr as a non-blocking notice). The docker probe is wrapped in `timeout`
+   when available — hardcoding `timeout` made the hook exit 127 and go dark on macOS, which has
+   none in the base system.
 
 ## Why not `config.toml`
 
@@ -114,11 +121,20 @@ A single loopback socket — no `0.0.0.0`, and decisively no `[::]`. Docker Engi
 - **Rootful Linux Docker only.** The `host_binding_ipv4` bridge option is a bridge-driver feature;
   Docker Desktop and rootless setups differ. The gate is the safety net there: it reports the real
   binding regardless of how the stack was started.
+- **The gate reads what the Docker API RECORDED, not a host socket.** On Docker Desktop or
+  rootless setups that record lives inside the VM, so the gate is authoritative about the
+  declared binding and not about a host listener. A socket-level cross-check would close that
+  gap and is deliberately out of scope here.
 - **The gate reads `NetworkSettings.Ports`, never `HostConfig.PortBindings`.** `PortBindings`
   reports an **empty** `HostIp` for *both* the wildcard and the loopback-bound state, so a gate
   reading it cannot distinguish a fixed stack from a broken one. This is a real trap: the
   implementation initially treated an empty `HostIp` as "publishes nothing" and silently skipped
   the exact state the gate exists to catch. Pinned by a regression test.
+- **Absence of parsed evidence is UNKNOWN, not OK.** If containers are found but nothing
+  parsable comes back, the gate returns 2. Without that floor, five real payload shapes (a
+  space after the JSON colon, differing key case, a truncated value, empty output, literal
+  `null`) each returned OK over a `0.0.0.0` stack — the same root cause as the empty-`HostIp`
+  bug, which had been patched one instance at a time.
 - **`assert` has three exits, not two:** `0` ok-or-no-stack, `1` exposed, `2` docker unreachable.
   An unreachable daemon is **UNKNOWN**, never conflated with safe — an empty query is not evidence
   of absence.
