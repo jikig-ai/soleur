@@ -583,6 +583,59 @@ everything except the revoked value — the new file is additive and later-wins 
 
 ---
 
+## Implementation Findings (/work) — two review revisions did not survive contact
+
+### R22 is FALSIFIED. The guard it asks for already exists.
+
+R22 asserts: *"the FIRST apply is guaranteed to fail … the host's `hooks.json` is stale and
+therefore cannot pass the new `soleur_doppler_token_b64` key, so the handler records `missing_env`
+… AC22 and Phase 7.1 cannot pass on the merge run"*, and prescribes a second `terraform apply` +
+verify pass in the same job.
+
+Verified against the code, not the prose:
+
+| claim | reality |
+|---|---|
+| the push runs against a stale `hooks.json` | **No.** `terraform_data.deploy_pipeline_fix` carries `depends_on = [terraform_data.apparmor_bwrap_profile, terraform_data.infra_config_handler_bootstrap]` (`server.tf:1306`). |
+| nothing delivers the new `hooks.json` first | **No.** The bridge writes it (`server.tf:1204`, `base64 -d > /etc/webhook/hooks.json`) and restarts the listener (`server.tf:1219`). |
+| ordering is not guaranteed | **No.** Terraform orders by the declared dependency graph, and the edge is declared. |
+
+That edge was added by #5515 **for precisely this scenario** — its own comment describes "a merge
+that BOTH adds a new webhook-written FILE_MAP file (a new entry in `infra-config-apply.sh`'s
+FILE_MAP + a new env key in `hooks.json`) AND fires this push", which is exactly this PR. So the
+`missing_env` first-apply failure R22 predicts **does not occur by that mechanism**, and a second
+apply pass would be dead code guarding an impossible state.
+
+**A second `terraform apply` would not even do what R22 wants.** After the first apply,
+`deploy_pipeline_fix` exists at the new trigger hash, so a plain re-apply is a NO-OP — it would
+have to be `-replace=terraform_data.deploy_pipeline_fix` to re-push at all. R22 does not say this,
+which is a second sign the mechanism was not traced.
+
+**The residual R22 half-saw, restated correctly.** The real hazard is the documented nonce-1 RACE
+(`push-infra-config.sh:25-31`): the bridge's `systemctl restart webhook` returned ~10 ms BEFORE the
+push fired, so the push hit a still-restarting listener — HTTP 202 accepted, async handler exec
+disrupted, no files written. R22's genuinely correct observation is that the verify step
+(`apply-deploy-pipeline-fix.yml:401-520`) only **re-polls the same state and never re-POSTs**, so
+it cannot recover from that race on its own.
+
+That is a real gap, and it is **NOT fixed in this PR** — deliberately. Closing it means putting
+`continue-on-error` on the fail-closed verification gate and adjudicating afterwards, i.e.
+restructuring the exact gate whose latched false-green (#6594) let this class of outage hide in the
+first place. Getting that wrong converts a fail-closed gate into a fail-open one, which is strictly
+worse than the race it would fix. Tracked as a follow-up; the existing documented recovery (re-run
+via `workflow_dispatch`, which re-fires the bridge) remains available and is now named in the R34
+message below.
+
+### R34 implemented, and its premise CONFIRMED.
+
+The status endpoint dies with the webhook unit, so before this change a bricked listener produced
+the **404** branch's message — which points at first bootstrap and whose suggested
+`allow_missing_status_endpoint=true` would have **suppressed the very failure**. `000`/`502`/`503`
+now get their own terminal branch naming the listener as down, explicitly warning against that
+flag, and naming the root-SSH provisioner (`server.tf:564/615`) as the route back.
+
+---
+
 ## Hypotheses
 
 Triggered by `hr-ssh-diagnosis-verify-firewall` / the network-outage checklist (the description

@@ -94,6 +94,20 @@ on:
       # TRIGGER_FILES by ship-deploy-pipeline-fix-gate.test.ts.
       - "apps/web-platform/infra/inngest-registry-probe.sh"
       - "apps/web-platform/infra/inngest-doublefire-probe.sh"
+      # #7095 — the re-deliverable web-host Doppler credential and the two systemd drop-ins
+      # that re-point the generated units (vector, inngest-heartbeat) at it. All three are
+      # host-delivered over the webhook channel AND registered in server.tf's
+      # deploy_pipeline_fix triggers_replace, so a body-only edit to any of them must fire
+      # this apply or the change never reaches the host.
+      #
+      # server.tf is DELIBERATELY ABSENT from this list and must stay absent (R13). Adding it
+      # would make EVERY server.tf edit auto-write production — a far larger blast radius than
+      # this workflow is scoped for. The filter covers host-delivered ARTIFACTS only. The
+      # consequence is explicit and accepted: a change to the RENDERED credential that touches
+      # no file in this list (a Doppler-only rotation) does not fire this workflow on its own.
+      - "apps/web-platform/infra/soleur-doppler-token.tmpl"
+      - "apps/web-platform/infra/10-vector-doppler-token.conf"
+      - "apps/web-platform/infra/10-inngest-heartbeat-doppler-token.conf"
       # #5873 — the container seccomp profile is delivered by the
       # docker_seccomp_config SSH provisioner (server.tf), whose triggers_replace
       # hashes this file. A profile-only edit must fire this apply so the new
@@ -517,6 +531,19 @@ jobs:
               exit 1
             fi
             echo "Infra-config apply verified: count invariant + per-file content match (#6594 PR-B)."
+          elif [[ "$HTTP_CODE" == "000" || "$HTTP_CODE" == "502" || "$HTTP_CODE" == "503" ]]; then
+            # #7095 R34 — DISTINCT from the 404 branch above, and the distinction is the whole
+            # point. 404 means "the endpoint is not there" (a genuinely old hooks.json), and its
+            # message correctly points at first-bootstrap. 000/502/503 mean the webhook LISTENER
+            # ITSELF IS DOWN — the status endpoint dies WITH the unit, so a bricked webhook
+            # produced the 404 message before this branch existed: it pointed the engineer at
+            # first-bootstrap, and its suggested allow_missing_status_endpoint=true flag would
+            # have SUPPRESSED the very failure. Naming this shape separately is what stops a
+            # bricked remediation channel reading as a stale-host cosmetic.
+            echo "::error::infra-config-status is UNREACHABLE (HTTP $HTTP_CODE) after 3 attempts — this is the webhook listener being DOWN, not a missing endpoint. Do NOT re-run with allow_missing_status_endpoint=true: that flag suppresses exactly this failure."
+            echo "::error::RECOVERY — the webhook unit is delivered by the root-SSH provisioners in server.tf (terraform_data.infra_config_handler_bootstrap, see server.tf:564/615), which do NOT depend on the webhook being alive. Re-running this workflow via workflow_dispatch re-fires that bridge and is the designated route back. The webhook is the ONLY no-SSH remediation channel on this host and the host cannot be replaced (cx33, orderable in 0 of 3 EU DCs), so treat a persistent unreachable state as a P1."
+            cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+            exit 1
           else
             echo "::error::infra-config-status did not respond with HTTP 200 after 3 attempts (last HTTP $HTTP_CODE). The handler is async behind a 202 trigger-and-forget, so a non-responding status endpoint cannot be treated as success."
             cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
