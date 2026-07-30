@@ -395,6 +395,40 @@ tags = ["key", "API", "generic"]
   [[rules.allowlists]]
   description = "Synthesized fixtures, test files, plan/spec/skill-reference docs"
   paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/lib/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''', '''plugins/soleur/skills/.*/test/fixtures/.*\.md$''']
+  # Cloudflare Access service-token secret fixture in the token-drift harness.
+  #
+  # `condition = "AND"` is the whole point: it requires the path AND the secret
+  # to match, so this silences exactly ONE invented 64-hex literal in exactly
+  # ONE file. Measured against gitleaks 8.24.2, not assumed: the same value at
+  # any other path still FIRES, and any other secret-shaped value in this same
+  # file still FIRES. Neither the file nor the value is blinded on its own,
+  # which is what separates this from every other entry above it.
+  #
+  # Why a config predicate and not a line-level `# gitleaks:allow`: the finding
+  # is frozen in this branch's history, and the scan reads the historical blob,
+  # which carries no waiver — so a waiver added in a later commit cannot clear
+  # it. Path/regex predicates match identically across history. Same reasoning,
+  # and the same remedy, as the review-SKILL.md carve-out on
+  # database-url-with-password above.
+  #
+  # Why not the obvious `scripts/.*\.test\.sh$` (the shape of the sibling
+  # `apps/web-platform/infra/.*\.test\.sh$` entry): that blinds every current
+  # and future repo-root script harness to this rule for the sake of one
+  # fixture. And weakening the fixture was not an option either — its 64-hex
+  # shape is deliberate under cq-test-fixtures-synthesized-only so that a
+  # future format check exercises the real Access-secret shape.
+  #
+  # Both anchors are load-bearing, on both entries. gitleaks matches `paths` as
+  # a SEARCH against the scan-root-relative path, so unanchored, any parent
+  # directory (`evil/scripts/check-cloudflare-token-drift.test.sh`) launders a
+  # real key; `regexes` match the SECRET, so unanchored there, this value as a
+  # PREFIX of a longer real credential would silence it. Both directions are
+  # pinned by plugins/soleur/test/gitleaks-rules.test.sh T11.
+  [[rules.allowlists]]
+  description = "Synthesized Cloudflare Access service-token secret in scripts/check-cloudflare-token-drift.test.sh — scoped to that value AND that path"
+  condition = "AND"
+  paths = ['''^scripts/check-cloudflare-token-drift\.test\.sh$''']
+  regexes = ['''^fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210$''']
 
 [[rules]]
 id = "private-key"
