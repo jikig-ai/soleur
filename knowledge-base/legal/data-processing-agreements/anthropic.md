@@ -1,8 +1,8 @@
 ---
 vendor: Anthropic PBC
-role: independent controller/processor under operator BYOK; processor for the Jikigai-keyed email-triage summarizer (PA-27)
-status_snapshot_date: 2026-06-11
-register_activity_refs: [PA-22, PA-27]
+role: independent controller/processor under operator BYOK; processor for the Jikigai-keyed email-triage summarizer (PA-27) AND for the claude-eval Inngest cron fleet + the active claude-code-action CI surface (both un-registered — see the 2026-07-30 enumeration correction below)
+status_snapshot_date: 2026-07-30
+register_activity_refs: [PA-22, PA-27]  # INCOMPLETE: no PA covers the claude-eval cron fleet or fix-constraints-stage-a (Art. 30(1) gap, 2026-07-30)
 zero_retention_amendment: unsigned
 ---
 
@@ -74,8 +74,14 @@ Until signed: the dashboard surfaces a one-time banner to that effect
   non-exhaustive: the **claude-eval Inngest cron fleet** (15 crons on
   `_cron-claude-eval-substrate`, plus `cron-compound-promote` and
   `cron-weekly-release-digest` over HTTP) is the *dominant* Jikigai-keyed
-  Anthropic surface and was never named, while `claude-code-action` — named
-  first — is `disabled_manually` and emits nothing. Several fleet members
+  Anthropic surface and was never named. **The `claude-code-action` entry is also
+  mis-stated in the opposite direction:** only `claude-code-review.yml` is
+  `disabled_manually`. `fix-constraints-stage-a.yml` uses the SAME
+  `anthropics/claude-code-action` with `secrets.ANTHROPIC_API_KEY`, is workflow-state
+  **active**, triggers on `pull_request`, and last ran 2026-07-29. It checks out the PR
+  head SHA, so **contributor-authored source reaches Anthropic** on same-repo PRs (forks
+  are excluded — no secrets, so the preflight skips). That is a live egress surface, not
+  a dormant one. Several fleet members
   (`cron-legal-audit`, `cron-community-monitor`, `cron-daily-triage`,
   `cron-content-generator`, `cron-campaign-calendar`,
   `cron-competitive-analysis`, `cron-growth-*`) can route third-party or
@@ -84,7 +90,11 @@ Until signed: the dashboard surfaces a one-time banner to that effect
   enumeration — but the Art. 30 framing for the fleet is not yet assessed to
   the PA-27 standard (which required an activity entry, a DPA scope
   amendment, an LIA and a DPIA screening for a *single* summarizer call).
-  Tracked for that assessment; do not read this list as exhaustive.
+  **Retention:** the zero-retention amendment is `unsigned` (frontmatter), so the
+  standard Anthropic 30-day retention window applies to ALL fleet egress described
+  above — not only to the PA-27 surface it was previously reasoned about.
+  Tracked as **#7100** (Art. 30 entry + Art. 6(1)(f) LIA + Art. 14 assessment + DPIA
+  screening, per the PA-27 precedent). Do not read this list as exhaustive.
 
 ## TOMs relied on (Art. 32)
 
