@@ -53,6 +53,36 @@ After setup, `npm run dev` shows the panel above the OTP form. Click "Sign in as
 
 **Vercel preview note:** Vercel previews default `NODE_ENV` to `production`, so the panel will not render in preview deployments even if `FLAG_DEV_SIGNIN` were ever set there. Verify via `vercel env ls preview` that `NODE_ENV` is unset and `FLAG_DEV_SIGNIN` is absent before merging any change to this surface.
 
+## Local Supabase stack (RLS-fuzz substrate)
+
+The disposable local stack backing the ADR-111 RLS-fuzz harness. **Always start it through the
+wrapper, never with bare `supabase start`:**
+
+```bash
+npm run db:start              # start, bound to 127.0.0.1
+npm run db:stop               # stop it when you are not using it
+npm run db:status
+npm run db:assert-loopback    # verify the binding; exit 1 = exposed
+npm run db:cli -- db diff     # passthrough: db diff / db reset / migration / gen types
+```
+
+**Why the wrapper.** The Supabase CLI has **no bind-address setting** — `config.toml` has only
+`port` keys, and the CLI sets Docker `PortBindings` with no `HostIP`, so a bare `supabase start`
+publishes *every* service on `0.0.0.0` **and** `::`. That puts Postgres (54322) and the
+**unauthenticated Studio admin UI** (54323) on whatever network your laptop is attached to. Upstream
+implemented a bind option and closed it unmerged on policy (`supabase/cli#4613`), prescribing a
+Docker network instead — so the wrapper is the permanent, vendor-documented fix, not a stopgap.
+See [ADR-153](../../knowledge-base/engineering/architecture/decisions/ADR-153-local-supabase-loopback-binding-via-docker-network.md).
+
+**Stop it when not in use.** Loopback binding reduces blast radius; it does not eliminate the local
+surface.
+
+**Caveat:** the `host_binding_ipv4` bridge option is a rootful-Linux-Docker feature. On Docker
+Desktop or rootless setups the binding may differ — `npm run db:assert-loopback` reports the real
+state regardless of how the stack was started, so trust the gate over the platform.
+
+**Fixtures are synthesized only.** Never seed this stack from production data.
+
 ## Testing
 
 ```bash
