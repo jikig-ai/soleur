@@ -68,6 +68,21 @@ on:
     branches: [main]
     paths:
       - "apps/web-platform/infra/**"
+      # (#7025, R10) NEGATED, not `paths-ignore`. GitHub rejects a workflow that uses both
+      # `paths` and `paths-ignore` for the same event, so the exclusion has to live inside
+      # `paths` as a `!` pattern — and it must sit AFTER the glob it narrows, because later
+      # patterns override earlier ones.
+      #
+      # WHY IT IS NEEDED. The rung-2 rehearsal is a SEPARATE Terraform root with its own
+      # state key, dispatched by its own workflow. It lives under apps/web-platform/infra/
+      # for proximity to the payloads it renders, so the glob above would fire a PRODUCTION
+      # apply of the PARENT root on a rehearsal-only edit — an apply of one root triggered by
+      # a file no expression in that root reads.
+      #
+      # This narrows the TRIGGER, never the apply's scope: the parent root's -target sets are
+      # untouched, and modules/git-data-userdata/ is deliberately NOT excluded, because the
+      # production host really does render from it.
+      - "!apps/web-platform/infra/rung2-rehearsal/**"
       - ".github/workflows/apply-web-platform-infra.yml"
       # Defense-in-depth: re-fire on filter mutations so a PR that mutates
       # the destroy-guard filter without touching infra still runs the
