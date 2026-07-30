@@ -9,10 +9,14 @@
 # reds. That is strictly worse than having no suite at all, because the file reads as
 # coverage to anyone grepping for a guard on the thing it names.
 #
-# #7000 left seven such orphans, #7025 surfaced them, #7068 cleaned them up. The prevention
-# recorded in 2026-06-16-infra-test-orphan-suites-and-node-options-env-file-clobber.md is a
-# HUMAN HABIT ("grep the enumerator and add yourself"), and that habit has now failed three
-# times. This is the mechanical version.
+# The orphan REPORTER that names these suites landed in 2f46570c1 (#6730); #7000 left the seven
+# unadopted; they were surfaced and filed while working on #7025; #7068 cleaned them up. Spelled
+# out because "#7025 surfaced them" alone reads as though #7025 built the detector, and it did
+# not -- a false attribution in the file whose whole subject is comments that assert untrue
+# things would be self-undermining. The prevention recorded in
+# 2026-06-16-infra-test-orphan-suites-and-node-options-env-file-clobber.md is a HUMAN HABIT
+# ("grep the enumerator and add yourself"), and that habit has failed repeatedly. This is the
+# mechanical version.
 #
 # WHAT IT ASSERTS, precisely: every infra *.test.sh on disk is invoked by a SINGLE-LINE
 # `run: bash <path>` step in infra-validation.yml, or carries an exclusion with a reason and a
@@ -113,6 +117,21 @@ for f in "${SUITES[@]}"; do
     if [[ -z "${excluded// /}" ]] || ! grep -qE '#[0-9]+' <<< "$excluded"; then
       echo "ERROR: exclusion for $base has no reason or no tracking issue" >&2
       fails=$((fails + 1))
+    # An exclusion waives the SHAPE requirement, never EXISTENCE. Without this arm the
+    # exclusion is a blanket exemption: deleting the excluded suite's invocation outright
+    # stops it running in CI and this gate stays green -- a fail-open, narrow but real, and
+    # one introduced by the exclusion itself. Measured: with only the reason/issue check
+    # above, removing loopback's `sudo bash` line left the gate at rc=0.
+    #
+    # So an excluded suite must still be invoked in SOME shape. Deliberately permissive
+    # here (optional `sudo`, any surrounding position) because the whole point of the
+    # exclusion is that this suite cannot carry the single-line form.
+    elif ! grep -qE "(^|[[:space:]])(sudo[[:space:]]+)?bash[[:space:]]+${rel//./\\.}([[:space:]]|$)" <<< "$WF_CODE"; then
+      echo "ERROR: ${rel} is EXCLUDED from the single-line shape requirement, but it is not" >&2
+      echo "       invoked in infra-validation.yml at all -- so it runs in no CI job." >&2
+      echo "       An exclusion waives the shape, never the registration. Either restore its" >&2
+      echo "       invocation, or delete both the suite and its exclusion entry." >&2
+      fails=$((fails + 1))
     else
       echo "note: $base excluded -- $excluded"
       excluded_n=$((excluded_n + 1))
@@ -131,17 +150,32 @@ for f in "${SUITES[@]}"; do
   # a mandated ship gate), so a shape CI still runs but the runner cannot see is exactly the
   # regression worth blocking. 93 of 94 suites already carry this shape; the one that cannot is
   # excluded above for cause.
+  #
+  # A TRAILING `#` COMMENT IS ALLOWED, and that tolerance is measured, not assumed. The runner
+  # derives with `grep -oE 'run: bash <path>'` and does NOT anchor at end-of-line, so it happily
+  # derives `run: bash <path>  # note` -- the suite really does run, both in CI and locally. An
+  # earlier version of this gate anchored on `[[:space:]]*$` and therefore REJECTED that line,
+  # which would have red-failed a required, merge-queue-gating check on a legitimate comment
+  # while telling the author the runner "cannot derive it" -- a false statement, since it can.
+  # Verified by running both this gate and the runner over each YAML shape and requiring them to
+  # agree; the trailing-comment row was the one disagreement.
+  #
+  # Deliberately NOT widened further. The runner's extraction also tolerates trailing `&& cmd`
+  # or `| cmd`, but those change what actually executes and make CI diverge from the local run,
+  # so this gate still refuses them. Matching the runner exactly is the goal only where the
+  # runner is right.
   esc="${rel//./\\.}"
-  if ! grep -qE "^[[:space:]]*run: bash ${esc}[[:space:]]*$" <<< "$WF_CODE"; then
+  if ! grep -qE "^[[:space:]]*run: bash ${esc}[[:space:]]*(#.*)?$" <<< "$WF_CODE"; then
     # Distinguish the two failure modes -- they have different fixes.
     if grep -qE "(^|[[:space:]])(sudo[[:space:]]+)?bash[[:space:]]+${esc}([[:space:]]|$)" <<< "$WF_CODE"; then
-      echo "ERROR: ${rel} IS invoked in infra-validation.yml, but not as a single-line" >&2
-      echo "       \`run: bash <path>\` step -- so run-registered-suites.sh cannot derive it and" >&2
-      echo "       will never run it locally, even though CI does." >&2
-      echo "       Nothing may sit between \`run: bash\` and the path: an inline env prefix or a" >&2
-      echo "       multi-line \`run: |\` de-registers the suite from that runner. Step-level" >&2
-      echo "       \`env:\` is safe. If the shape is unavoidable (it needs sudo), add a reasoned" >&2
-      echo "       exclusion citing a tracking issue." >&2
+      echo "ERROR: ${rel} IS invoked in infra-validation.yml, but not in the single-line" >&2
+      echo "       \`run: bash <path>\` form this gate requires." >&2
+      echo "       Most such shapes -- an inline env prefix, a quoted scalar, a \`./\` prefix, a" >&2
+      echo "       multi-line \`run: |\` -- also de-register the suite from" >&2
+      echo "       run-registered-suites.sh, which derives single-line only, so it would never" >&2
+      echo "       run locally even though CI does. Step-level \`env:\` is safe, and so is a" >&2
+      echo "       trailing \`# comment\`. If the shape is unavoidable (it needs sudo), add a" >&2
+      echo "       reasoned exclusion citing a tracking issue." >&2
     else
       echo "ERROR: ${rel} is registered in NO infra-validation.yml step -- it runs in no CI job," >&2
       echo "       and scripts/test-all.sh does not cover apps/web-platform/infra/ either." >&2
