@@ -559,7 +559,16 @@ logs:
 
 discoverability_test:
   command: bash apps/web-platform/infra/run-registered-suites.sh --list
-  expected_output: "no 'referenced by NO workflow or script' block; the seven appear in the derived list"
+  # expected_output must be a SUBSTRING of the command's stdout — preflight Check 10 executes the
+  # command and substring-matches. An earlier value here was prose ("no 'referenced by NO workflow
+  # or script' block; the seven appear in the derived list"), which describes a NEGATIVE and is not
+  # a substring of anything the command prints, so Check 10 would have FAILed on output-mismatch
+  # against a perfectly healthy command. Measured stdout line 1:
+  #   Derived 86 registered infra suite(s) from .github/workflows/infra-validation.yml:
+  # The token below is deliberately count-free: pinning "86" would rot the moment a suite is added
+  # (and #7076's closure moves it to 94), which is the stale-number class this PR exists to fix.
+  # The orphan-absence negative is asserted separately and properly by AC1.
+  expected_output: "registered infra suite(s) from"
 ```
 
 No `ssh` in any verification path.
@@ -587,10 +596,27 @@ and `mu1-cleanup-guard` (wrong-project deletion) unguarded on some *later* PR th
 **If this leaks:** no new exposure vector. Nothing reads, writes, or logs user data; no secret is
 added or moved; the suites are hermetic (mocks, fixtures, a locally-built busybox image).
 
-**Brand-survival threshold:** `aggregate pattern` — harm requires a later regression passing
-through a falsely-green gate, so no single user is at risk from this diff. No CPO sign-off at this
-threshold. The diff touches no preflight-Check-6 sensitive path (no schema, migration, auth flow,
-API route, or `.sql`), so no `threshold: none` scope-out bullet is needed.
+- **Brand-survival threshold:** `aggregate pattern` — harm requires a later regression passing
+  through a falsely-green gate, so no single user is at risk from this diff. No CPO sign-off at
+  this threshold.
+
+Two corrections to this section, made at ship time when preflight actually ran:
+
+1. **The threshold is now a canonical bullet.** It was a bare `**Brand-survival threshold:**`
+   paragraph, and preflight Check 6 requires the bullet form
+   (`^[[:space:]]*[-*][[:space:]]+\*\*Brand-survival threshold:\*\*`) precisely so that a
+   free-text sentence containing the words cannot satisfy the gate. The value was always correct;
+   only the shape failed.
+2. **The claim "the diff touches no preflight-Check-6 sensitive path" was FALSE** and is deleted.
+   Measured against Check 6's own `SENSITIVE_PATH_RE`, this diff matches three paths — the
+   `apps/[^/]+/infra/` alternative catches
+   `apps/web-platform/infra/cloud-init-plugin-seed.test.sh` and
+   `apps/web-platform/infra/run-registered-suites.sh`, and the workflow alternative catches
+   `.github/workflows/infra-validation.yml` via its `infra-validation` token. The original
+   enumeration ("no schema, migration, auth flow, API route, or `.sql`") checked a narrower set
+   than the regex actually encodes. So Check 6 DOES apply; it is satisfied by the
+   `aggregate pattern` threshold above, not by exemption. No `threshold: none` scope-out is
+   needed because the threshold is not `none`.
 
 ## Domain Review
 
