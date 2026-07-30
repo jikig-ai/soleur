@@ -360,12 +360,30 @@ absence grep passed on the unmodified runbook.
 ### Pre-merge
 
 - **AC1.** `zot_mirror` no longer carries `continue-on-error`, and `degraded()` exits non-zero.
-  `awk '/^      - name: Mirror image GHCR→zot/{f=1;seen=1;next} f&&/^      - name: /{f=0} f&&/continue-on-error/{bad=1} END{if(!seen){print "ABSENT";exit 1} if(bad){print "FOUND";exit 1}}'`
-  succeeds; and `grep -cF 'exit 1' ` within the `degraded()` body is ≥1.
+  `awk '/^      - name: Mirror image GHCR→zot/{f=1;seen=1;next} f&&/^      - name: /{f=0} f&&/^        continue-on-error:/{bad=1} END{if(!seen){print "ABSENT";exit 1} if(bad){print "FOUND";exit 1}}'`
+  succeeds; and `grep -cF 'exit 1'` within the `degraded()` body is ≥1.
+  **Amended at /work.** The drafted matcher was a bare `/continue-on-error/`, which sees
+  COMMENTS. It reported FOUND against a step whose actual key count is **0**, because FR-A7's
+  comment block necessarily *discusses* `continue-on-error` — clause (i) records that the step
+  used to carry it, and clause (iv) explains that it is what forces `conclusion` to `success`.
+  That discussion is the most valuable prose in the step and deleting it to satisfy a grep would
+  be the tail wagging the dog. Anchored instead on the YAML key at its exact indent, which a
+  comment line cannot produce (it starts with `#`). Third instance of
+  `cq-assert-anchor-not-bare-token` in this PR's own ACs, after AC5 and AC10.
 - **AC2.** The assertion exists **before** `mirror_status=ok`: `crane digest` appears in the step, and
   its line number is less than the `mirror_status=ok` line. It compares against `${DIGEST}` and makes
   **no** `crane digest ghcr.io/` call (`grep -cF 'crane digest ghcr.io/'` == 0).
-- **AC3.** `degraded()` writes `mirror_reason=` (`grep -cF 'mirror_reason=' ` ≥ 6 — one per call site).
+- **AC3.** `degraded()` writes `mirror_reason=`, and the full label set is reachable: the seven
+  values `bridge`, `crane_install`, `copy_v`, `copy_sha`, `copy_latest`, `sign`, `verify` each
+  appear as a reason argument (the three `copy_*` via the `TAG_SPEC` loop's `"<tag>:<label>"`
+  pairs). Harness cases T1/T4/T6/T7/T8 pin `bridge`, `copy_v`, `copy_sha` and `verify` behaviourally.
+  **Amended at /work.** The drafted form counted the literal `mirror_reason=` and required ≥6,
+  "one per call site" — which silently assumed the emit would be inlined at each call site. The
+  implementation emits it ONCE inside `degraded()` and passes the label as a parameter, so the
+  literal appears twice while all seven labels are reachable. The single-emitter shape is the
+  better one (a per-site echo is six chances to forget one, and the label and the message would
+  drift apart), so the AC was re-expressed as the property it was standing in for — the label SET
+  — rather than the implementation shape it happened to describe.
 - **AC4.** The three operator messages each name a cause, a remedy, the "unpublished draft — re-running
   is safe" line, and `apply-deploy-pipeline-fix.yml`. No message contains the token `Sigstore` on the
   copy-arm path.
@@ -668,21 +686,23 @@ land later than FR-A. Recorded in `decision-challenges.md`.
 
 ## Deferred (tracking issues — Phase 8)
 
-Each needs a GitHub issue per `wg-when-deferring-a-capability-create-a`:
+**Filed 2026-07-30.** Net issue flow for this PR: **closing 0, filing 3, net +3.** Each
+filing carries its own justification below, per the filing-site net-flow gate. The plan
+listed five deferrals; they resolved to three issues plus one inline fix plus one comment
+on an already-open issue:
 
-1. **The inngest image's mirror stays non-blocking**, and `cloud-init-inngest.yml` hard-pins a
-   `ghcr.io` ref with **no zot path** and a fail-closed pull — so after this change the invariant holds
-   for one of two platform images. `build-inngest-bootstrap-image.yml` also still carries the **live
-   #6416 defect** (its mirror is gated `if: steps.zot_bridge.outcome == 'success'`, so a bridge failure
-   *skips* it and leaves `mirror_status` unset and the Slack line inert).
-2. **Two more instances of the same false `/v2/` gate** — `zot-entry-gate.sh:40` and
-   `cloud-init.yml:527` use `curl -s -o /dev/null` with no `-w '%{http_code}'`, so a 500 or an empty
-   200 passes. Fix the script inline if cheap; cloud-init needs a host reprovision.
-3. **`zot-entry-gate.sh` is unwired and asserts a stale contract** (advises backfilling "before
-   flipping" a phase already flipped). Add a dated header note recording it is superseded, or delete
-   it with its test.
-4. **AC-P1** (first-release verification) as a follow-through.
-5. **The orphan-draft / stale-notes leak** (FR-A11).
+| Plan item | Disposition |
+|---|---|
+| 1. inngest mirror non-blocking + live #6416 defect | **#7077**, and a status comment on the still-OPEN **#6416** rather than a duplicate. Also absorbs UC-1's deferred `nc -z` probe fix, which the panel explicitly wanted done *together with* the #6416 fix. |
+| 2. Two more false `/v2/` gates | Folded into **#7079**. Measured correction to the plan: `cloud-init.yml` has **two** occurrences (`:527` and `:733`), not the one the plan cited. Cannot be inlined — `hcloud_server.web` carries `ignore_changes = [user_data]`, so a cloud-init edit is unverifiable without a host reprovision. |
+| 3. `zot-entry-gate.sh` unwired + stale contract | **Half done inline** (a dated header note recording that nothing invokes it, that its contract is stale, and that its probe is a false gate). The remaining wire-or-delete decision is in **#7079**. Its probe was deliberately NOT repaired: fixing a check inside a script nothing calls buys no runtime correctness. |
+| 4. AC-P1 first-release verification | **#7078** — required as a tracked follow-through by `wg-block-pr-ready-on-undeferred-operator-steps`; genuinely un-automatable pre-merge (the faithful test is a production release). |
+| 5. Orphan-draft / stale-notes leak (FR-A11) | Folded into **#7079**. Deferred rather than reaped because a reaper is a new scheduled object with its own failure modes, against a leak that is confusing rather than dangerous. |
+
+Why net +3 was not reducible further: #7077 and #7078 are different classes (a discovered
+defect in another subsystem, and an operator follow-through) and the rule is explicit that
+discovered bugs stay separate from consolidated trackers. #7079 is the consolidation — it
+absorbs three of the five plan items.
 
 ## Test Scenarios
 
