@@ -136,9 +136,15 @@ The first full `run-registered-suites.sh` run reported `RED ci-deploy.test.sh` (
 So the suite and its subject are byte-identical to `main` and it reads nothing changed here. The
 run also happened under a measured load of **28 on 16 cores**, with a sibling session running the
 same 6-way-parallel runner from another worktree — the documented contention/false-RED condition.
-Re-measured on a quiet machine; see the PR body for the disposition. Either way it is not
-attributable to this diff, and per `wg-when-tests-fail-and-are-confirmed-pre` it is documented
-rather than folded in.
+
+**Re-measured 2026-07-30 on a quiet machine — CLOSED as contention.** 1-min load 5.85 on 16
+cores, `/tmp` 1% used, no sibling runner in `ps`, tree clean at the launch point and untouched for
+the duration of the run: `EXIT=0`, `86 passed, 0 failed (of 86)`, wall-clock **195s**, zero
+contention banners. `ci-deploy.test.sh` **PASSED**. So the mechanical provenance argument above
+(byte-identical subject, reads none of the four changed files) and the empirical re-run now agree,
+which is the standard the contention guidance asks for — confirm three ways rather than accepting
+"flake" from one green re-run. The disposition is recorded here rather than only in the PR body,
+because a claim about a *retracted* RED belongs next to the analysis that retracted it.
 
 ---
 

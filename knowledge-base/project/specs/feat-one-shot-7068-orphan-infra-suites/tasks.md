@@ -90,8 +90,15 @@ triage; implement it.
 ## Phase 4: Verify + ship prep
 
 - [x] 4.1 Re-run all 7 suites individually; capture results for the PR-body table.
-- [ ] 4.2 `bash apps/web-platform/infra/run-registered-suites.sh` (full run) → exit 0; record the
+- [x] 4.2 `bash apps/web-platform/infra/run-registered-suites.sh` (full run) → exit 0; record the
       measured wall-clock, not just that the count rose.
+      **Measured 2026-07-30 on a quiet machine** (1-min load 5.85 on 16 cores, `/tmp` 1% used, no
+      sibling runner in `ps`): `EXIT=0`, `=== registered infra suites: 86 passed, 0 failed (of 86) ===`,
+      **wall-clock 195s**. Zero `NOTE: … referenced by NO workflow or script` blocks and zero
+      contention banners (`SIBLING_RUN_DETECTED` / `LOW_TMP_HEADROOM` / `LOCK_CONTENDED`).
+      **This resolves IC-2:** `ci-deploy.test.sh` PASSED in this run, confirming the earlier
+      `RED ci-deploy.test.sh` (85/1 of 86, under load 28 with a sibling 6-way run) was the
+      documented contention false-RED and not attributable to this diff.
 - [x] 4.3 File the **D1** follow-up issue for the detector derivation gap. Carry verbatim: the
       79-vs-87 measurement, the `T2b`/`T2d`/`DERIVED`-char-class coupling, the loopback `EXIT=2`
       blast radius (sole offender; other 7 pass unprivileged), the comment-derivation hazard, the
@@ -100,8 +107,33 @@ triage; implement it.
 - [x] 4.4 PR body: per-suite decision table with local result + liveness evidence per suite;
       `Closes #7068` in the **body** (not the title); link the D1 issue; note the
       `inngest-server-flip-guard` textual-coupling tripwire is deliberate.
-- [ ] 4.5 After CI: run AC3's `gh api` step-conclusion probe → exactly 7 lines, all `success`.
-- [ ] 4.6 Confirm all 8 ACs, then `/soleur:review` → `/soleur:ship`.
+- [x] 4.5 After CI: run AC3's `gh api` step-conclusion probe → exactly 7 lines, all `success`.
+      Run against `6b8fdcd6138d78be95b95f0f1e2016e010677048` (run `30531882496`, job
+      `90835870673`): **7 lines, 7 `success`, 0 non-success.** Every step name carries its exact
+      suite basename, which is what makes the AC3 alternation match (the amendment recorded above).
+- [x] 4.6 Confirm all 8 ACs, then `/soleur:review` → `/soleur:ship`.
+      **All 8 confirmed 2026-07-30 by running each AC's literal command** (a normalized variant
+      verifies a weaker claim):
+      - **AC1** zero orphans — `--list` orphan-NOTE count `0`.
+      - **AC2** real step in the RIGHT job — job-scoped grep emits no `MISSING STEP` line.
+      - **AC3** green and not masked — (a) `continue-on-error:` `0`, `if:` `0` in the
+        `deploy-script-tests` slice; (b) the 7/7 `success` probe in 4.5.
+      - **AC4** `#7000` block no longer enumerates the seven — count `0`.
+      - **AC5** detector not loosened — `run-registered-suites.test.sh` exit 0,
+        `11 passed, 0 failed` (T3a and T5a/T5b included).
+      - **AC6** workflow lints — `scripts/lint-workflows.sh` exit 0 (wrapper exits 0 on findings,
+        non-zero only on the #7002 hang; its internal `rc=1` is the 93 pre-existing findings).
+      - **AC7** gate fail-closed AND wired — `.github/scripts/test/run-all.sh` exit 0 with
+        `test-infra-suite-registration.sh` auto-globbed; plus a **5-row mutation battery on a
+        94-suite scratch copy with a positive control and `diff -q` landed-mutation proof**:
+        control GREEN (`all 94 suites registered (1 excluded)`); M1 deleted `run:` line → rc=1
+        "registered in NO … step"; M2 single-line→multi-line `run: |` (the IC-1 class) → rc=1
+        "not in the single-line"; M3 deleted the *excluded* suite's invocation (the RF-2 class) →
+        rc=1 "invoked in infra-validation.yml at all"; M4 commented-out registration → rc=1;
+        M5 negative control (legitimate trailing `# comment`, the RF-1 regression) → **stays
+        rc=0**. 5/5 as expected.
+      - **AC8** PR body — per-suite decision table present for all 7 suites, `Closes #7068` in the
+        **body** (title carries none), `#7076` linked, flip-guard textual-coupling tripwire noted.
 
 ## Do NOT do
 
