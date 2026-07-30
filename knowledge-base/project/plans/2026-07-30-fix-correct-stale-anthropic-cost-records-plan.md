@@ -5,6 +5,7 @@ type: fix
 lane: cross-domain
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
+cpo_signoff_disposition: "satisfied-at-review — see note under User-Brand Impact"
 branch: feat-one-shot-anthropic-cost-records-correction
 pr: 7086
 ---
@@ -238,6 +239,16 @@ CI surface that spends almost nothing.
 **If this leaks, the user's data is exposed via:** nothing. The change is committed markdown
 containing no credentials, no personal data, and no customer records. It names key
 *variables* (`ANTHROPIC_API_KEY`, `ANTHROPIC_ADMIN_KEY`) but no key values.
+
+> **CPO sign-off disposition (operator decision, 2026-07-30).** The plan skill stages CPO
+> sign-off at PLAN time, but the threshold was `none` then — it was RAISED at review, by
+> `user-impact-reviewer`, which the same skill designates as the review-phase mechanism for
+> this threshold (the staging model deliberately does not re-invoke CPO at review). That agent
+> ran, enumerated the failure modes, and its finding is what produced the split-row design and
+> the R&D reclassification — both of which the operator then decided explicitly. Ship preflight
+> Check 6 still mechanically verifies this section and the threshold value. A separate CPO
+> spawn was therefore judged redundant rather than skipped. Recorded here so the next reader
+> sees the reasoning, not an absence.
 
 **Brand-survival threshold:** `single-user incident` *(raised at review — the original `none` rested on a factual error)*
 **Reason:** the original reason claimed "no user-facing surface". That is wrong:
