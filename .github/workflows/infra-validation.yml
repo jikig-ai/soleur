@@ -523,19 +523,19 @@ jobs:
 
       # audit-bwrap-uid.sh is live on main and is named by the MU1 runbook as its AC-4
       # verification. Mocks docker, so no daemon is needed here.
-      - name: Run bwrap UID audit guard (#7068 adopting an unregistered suite)
+      - name: Run audit-bwrap-uid guard (#7068 adopting an unregistered suite)
         run: bash apps/web-platform/infra/audit-bwrap-uid.test.sh
 
       # cat-infra-config-state.sh is delivered by server.tf and invoked by hooks.json.tmpl as
       # /usr/local/bin/cat-infra-config-state.sh. Needs jq, which this ubuntu-24.04 job has.
-      - name: Run infra config-state reader guard (#7068 adopting an unregistered suite)
+      - name: Run cat-infra-config-state guard (#7068 adopting an unregistered suite)
         run: bash apps/web-platform/infra/cat-infra-config-state.test.sh
 
       # Highest-stakes of the seven: inngest-cutover-flip.sh is installed by inngest-bootstrap.sh
       # and enabled as a live systemd timer, and this suite pins an 8-state FSM gating a
       # DESTRUCTIVE Redis FLUSHALL (#6178 / ADR-100). It mocks systemctl + redis inside a
       # mktemp -d, so no real Redis is reached and no FLUSHALL is executed. Needs jq.
-      - name: Run inngest cutover-flip FSM guard (#7068 adopting an unregistered suite)
+      - name: Run inngest-cutover-flip FSM guard (#7068 adopting an unregistered suite)
         run: bash apps/web-platform/infra/inngest-cutover-flip.test.sh
 
       # inngest-server-flip-guard.sh is the live ExecStartPre guard, in documented lockstep with
@@ -545,7 +545,7 @@ jobs:
       # allowlist, so a legitimate FSM refactor WILL red it with a "derivation broken" message.
       # That is the intended behaviour, not a brittle test — it is a live prod script's textual
       # shape becoming CI-load-bearing.
-      - name: Run inngest server flip-guard lockstep (#7068 adopting an unregistered suite)
+      - name: Run inngest-server-flip-guard lockstep (#7068 adopting an unregistered suite)
         run: bash apps/web-platform/infra/inngest-server-flip-guard.test.sh
 
       # live-verify.tf is a hard [[ -f ]] precondition of bootstrap-live-verify.sh. The suite
@@ -557,7 +557,7 @@ jobs:
       # mu1-cleanup-guard.mjs is imported by the MU1 runbook and named in ADR-023 as the
       # destructive-cleanup gate; its cases include a credential-exfiltration bypass class
       # (<ref>.supabase.co.evil.com must be rejected). Needs node, which this job has.
-      - name: Run MU1 runbook cleanup guard (#7068 adopting an unregistered suite)
+      - name: Run mu1-runbook-cleanup guard (#7068 adopting an unregistered suite)
         run: bash apps/web-platform/infra/mu1-runbook-cleanup.test.sh
 
       # The plugin-seed suite is the ONLY one of the seven needing a real docker daemon, and it
@@ -582,7 +582,7 @@ jobs:
       # it is not a sound base for a "Nx" multiple. 3 minutes is a cold-pull allowance, not a
       # measured margin. Job headroom is ample either way — ceiling 8min/480s against a measured
       # whole-job 184-189s. Re-derive from the API if this step ever approaches it.
-      - name: Run cloud-init plugin-seed guard (#7068 adopting an unregistered suite)
+      - name: Run cloud-init-plugin-seed guard (#7068 adopting an unregistered suite)
         timeout-minutes: 3
         run: bash apps/web-platform/infra/cloud-init-plugin-seed.test.sh
 

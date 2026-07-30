@@ -357,9 +357,32 @@ identical to the derived list's; the detector's own test documents that exact tr
    job=$(gh api "repos/{owner}/{repo}/actions/runs/$run/jobs" \
           -q '.jobs[]|select(.name=="deploy-script-tests")|.id')
    gh api "repos/{owner}/{repo}/actions/jobs/$job" \
-     -q '.steps[]|select(.name|test("audit-bwrap-uid|cat-infra-config-state|plugin seed|cutover-flip|flip-guard|live-verify|mu1-runbook"))|"\(.conclusion) \(.name)"'
+     -q '.steps[]|select(.name|test("^Run (audit-bwrap-uid|cat-infra-config-state|cloud-init-plugin-seed|inngest-cutover-flip|inngest-server-flip-guard|live-verify\\.tf|mu1-runbook-cleanup) "))|"\(.conclusion) \(.name)"'
    # → exactly 7 lines, every conclusion == "success"
    ```
+
+   **AMENDED at implementation time (2026-07-30), deliberately and not to make it pass.** The
+   original alternation was `audit-bwrap-uid|cat-infra-config-state|plugin seed|cutover-flip|
+   flip-guard|live-verify|mu1-runbook`, matched against step names. Run literally against the
+   first implementation it returned **3, not 7** — four tokens matched zero step names, because
+   the separators were inconsistent with the names actually written (`plugin seed` with a space
+   vs `plugin-seed`; `mu1-runbook` vs `MU1 runbook`) and two steps had been named descriptively
+   rather than after their suite.
+
+   Both sides were fixed rather than the assertion loosened:
+
+   1. **The artifact.** All seven steps were renamed to carry their exact suite basename
+      (`Run audit-bwrap-uid guard …`, `Run mu1-runbook-cleanup guard …`). This is independently
+      right: the `## Observability` section below claims "one step per suite, so a failure names
+      the suite exactly", and the descriptive names did not deliver that.
+   2. **The AC.** One token per suite, each the literal basename, anchored `^Run …` with a
+      trailing space. The anchor is load-bearing: the `Assert docker is available
+      (cloud-init-plugin-seed needs a real daemon)` step also contains a basename, so an
+      unanchored alternation returns **8** and the "exactly 7" claim becomes unfalsifiable in the
+      other direction.
+
+   Recorded per `cq-assert-anchor-not-bare-token` and the rule that an AC is verified by running
+   its LITERAL command — a normalized variant verifies a different, weaker claim.
    Per `cq-assert-anchor-not-bare-token` the claim is the job's **own** result, not a local
    reconstruction of its input set. Preconditions verified: `deploy-script-tests` has no
    `needs:`/`if:`, and the workflow's `paths:` covers both `apps/*/infra/**` and
