@@ -1,7 +1,7 @@
 ---
 title: "A Dependabot sharp bump moved sharp dev-only and blocked every prod deploy for ~21h"
 date: 2026-07-30
-incident_pr: 7089
+incident_pr: 7092
 incident_window: "2026-07-30T11:07:51Z — 2026-07-30T14:20:00Z (deploy-blocking); prod last updated 2026-07-29T15:18:56Z"
 recovery_at: "pending — this PR"
 suspected_change: "PR #7082 (chore(deps): consolidate the open Dependabot backlog into one bump) raised apps/web-platform devDependency sharp ^0.34.5 -> ^0.35.0"
