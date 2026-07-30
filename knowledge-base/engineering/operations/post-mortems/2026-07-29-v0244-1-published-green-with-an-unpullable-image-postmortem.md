@@ -1,12 +1,12 @@
 ---
-title: "Postmortem: v0.244.1 published GREEN with an image production could not pull — prod undeployable ~5h"
+title: "Postmortem: v0.244.1 published GREEN with an image production could not pull — prod STILL undeployable"
 date: 2026-07-29
 incident_pr: 7071
-incident_window: "2026-07-29 ~16:01 UTC (release v0.244.1 published green; deploy died image_pull_failed) → ~21:00 UTC (operator remediated the CF Access service token out-of-band). The underlying GHCR-read death predates the window and was undetected."
-recovery_at: "2026-07-29 ~21:00 UTC — the stale REGISTRY_PUSH_ACCESS_TOKEN_* value was replaced on the Doppler `prd` ROOT config, restoring the CF-tunnel bridge to zot."
+incident_window: "2026-07-29 ~16:01 UTC (release v0.244.1 published green; deploy died image_pull_failed) → ONGOING at time of writing. The operator's ~21:00 token fix restored the PUSH/bridge leg only; the HOST-pull leg is still failing, and every release since has failed image_pull_failed (v0.244.3, v0.245.0, v0.246.0, v0.246.1). The underlying GHCR-read death predates the window and was undetected."
+recovery_at: "n/a — NOT recovered. The ~21:00 token fix restored only the push-side bridge. Production is serving stale code and no release has deployed since 2026-07-29."
 suspected_change: "No single change. A CF Access service-token rotation did not propagate to Doppler (the doppler_secret resources carry lifecycle.ignore_changes = [value], so terraform apply reports 'No changes' while the stale value keeps being served). The bridge failed, the zot mirror step was warn-only by design, and the release published anyway — a design that was correct ONLY while GHCR was a working break-glass read path. GHCR's read PAT had been revoked out-of-band, so that premise was already false."
 brand_survival_threshold: single-user incident
-status: resolved
+status: ongoing
 triggers:
   - image_pull_failed
   - release published green with no pullable image
@@ -36,7 +36,9 @@ That premise was no longer true, and nothing in the pipeline knew.
 | ~16:01 | The zot mirror step degrades, emits `mirror_status=degraded`, `exit 0`, and is `continue-on-error: true`. The release publishes **green**. |
 | ~16:0x | Job 90634334826: `ci-deploy.sh exited 1 (reason=image_pull_failed, tag=v0.244.1)`. zot has no image; the GHCR fall-through hits a revoked PAT. |
 | ~16:0x → ~21:00 | Production undeployable. The annotation, the step summary, the Slack message and two ADRs all state that GHCR covers this. None of that is true. |
-| ~21:00 | Operator sets the live Access service-token value on the Doppler `prd` ROOT config. Bridge recovers. |
+| ~21:00 | Operator sets the live Access service-token value on the Doppler `prd` ROOT config. **The bridge recovers — the PUSH leg only.** |
+| 2026-07-29 21:54 → 2026-07-30 16:30 | **Eight consecutive `Web Platform Release` runs fail**, every one at `image_pull_failed`: v0.244.3, v0.245.0, v0.246.0, v0.246.1. Production keeps serving stale code. No alert names this; the release run goes red and the failure is read each time as "the known incident". |
+| 2026-07-30 16:43 | PR #7071 merges. Its new gate reports `mirror_verified=true` — the image **is** in zot at this build's digest — and the deploy **still** fails `image_pull_failed`. This is the first run that isolates the fault: push-side proven good, host-side broken. |
 
 ## Root cause
 
@@ -68,9 +70,41 @@ exactly when you discover it was dead.
   only via `cloudflared access tcp`, and a plain HTTPS GET is not a WebSocket upgrade for that
   stream. The repo already documented this in the bridge action's own header.
 
-## Resolution
+## NOT resolved — corrected 2026-07-30
 
-Remediation was the token value. The durable fix is PR #7071:
+**This report originally said `status: resolved` with `recovery_at: 2026-07-29 ~21:00`. That was
+wrong, and it was wrong in the direction that matters: it recorded an ongoing production outage as
+closed.** The error was made while shipping the PR whose entire subject is removing false claims
+from this pipeline, which is the sharpest possible demonstration of the failure class — an incident
+report is a claim like any other, and "the operator fixed the token" was inferred from the
+remediation rather than measured against the deploy.
+
+What the measurement shows: **eight consecutive release runs have failed at `image_pull_failed`
+since 2026-07-29**, spanning v0.244.3 → v0.246.1. Production is serving stale code right now.
+
+The token fix restored **one of two legs**. The evidence that separates them arrived with #7071's
+own instrumentation:
+
+| Leg | Credential / transport | Status |
+|---|---|---|
+| CI **push** → zot | `REGISTRY_PUSH_ACCESS_TOKEN_*` over the CF Tunnel + CF Access | **healthy** — `mirror_verified=true`, image confirmed at the build's digest |
+| Host **pull** ← zot | `ZOT_PULL_*` over the private NIC, no tunnel, no CF Access | **BROKEN** — `image_pull_failed` |
+
+This is exactly the residual ADR-096 clause (f) names and #7071 deliberately did **not** close:
+"It asserts the manifest is in zot AND readable by the PUSH credential over the CF Tunnel. It does
+NOT prove the host can pull." The three candidate causes it enumerates are the live suspect list:
+the private-net `10.0.1.10 → 10.0.1.30:5000` path being down; `ZOT_PULL_*` gone stale (the *same*
+rotation-staleness class as the original trigger, one credential over); or zot `accessControl`
+granting push-read but not pull-read. `web-zot-consumer-probe.sh` is the built-for-this probe.
+
+One thing #7071 did buy, and it is the reason this was diagnosable at all: before it, a failed
+mirror and a failed host-pull produced the same undifferentiated red. `mirror_verified=true`
+alongside `image_pull_failed` is a *new* signal, and it collapses the search space from "the whole
+registry path" to one leg.
+
+## Partial remediation (the push leg)
+
+Remediation of the push leg was the token value. The durable fix for that half is PR #7071:
 
 - The mirror is **release-blocking**: `continue-on-error` removed, `degraded()` exits non-zero, and
   a positive post-copy `crane digest` assertion proves the manifest is in zot **at the expected
@@ -100,6 +134,8 @@ premise, and premises need detectors too*. Concretely:
 
 | Issue | Item | Owner |
 |---|---|---|
+| #7095 | **THE LIVE ONE — production has not deployed since 2026-07-29.** The host-pull leg (`ZOT_PULL_*` over the private NIC) is broken while the push leg is proven healthy. Highest-prior suspect is `ZOT_PULL_*` staleness: the *same* rotation-invisibility class as the original trigger, one credential over. Run `web-zot-consumer-probe.sh` first. **P1.** | `agent` |
+| #7095 | Nothing alerts on "N consecutive release-deploy failures". Eight went red over a day and each was read as "the known incident" rather than a distinct live fault. The release run failing is not itself a monitored condition. | `agent` |
 | #7077 | Extend the fail-closed mirror invariant to the inngest image, and fix the live #6416 skip. `cloud-init-inngest.yml` hard-pins GHCR with no zot path, so its dedicated host is un-bootable now. | `agent` |
 | #7078 | Verify the new gate on the first real release. Genuinely un-automatable pre-merge — the faithful test is a production release. Enrolled as a follow-through. | `agent` |
 | #7079 | Residual items: the two sibling false `/v2/` gates in `cloud-init.yml` (`curl -s -o /dev/null` with no `-w '%{http_code}'`, so a 500 or empty 200 passes), `zot-entry-gate.sh` wire-or-delete, and the orphan-draft / stale-release-notes leak. | `agent` |
