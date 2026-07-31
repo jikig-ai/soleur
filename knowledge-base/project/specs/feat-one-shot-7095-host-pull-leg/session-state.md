@@ -104,7 +104,11 @@ comment carries the E1–E5 evidence; the original body is left intact for the r
 
 ---
 
-## STOP — DO NOT MERGE AS-IS. Test-design review found the guards do not hold.
+## Round-3 findings — the three merge-blocking ones are FIXED and mutation-proven
+
+Original heading was "STOP — DO NOT MERGE AS-IS". The three gaps that could silently ship a
+broken credential are closed; F13/F14/F16 remain open and are P2 (see the disposition at the
+bottom of this section).
 
 Round-3 review executed **11 mutations that each violate a property this PR claims, while
 leaving the suites fully green**. The PR's two headline claims — "mutation-proven" and "counts
@@ -165,3 +169,56 @@ carries no information. The valid evidence is the isolated runs plus the solo ga
 **Recommendation: fix the drop-in content guard and F11/F12 before merge.** Prod is stable on
 stale v0.244.0; that is a cheap state. A bad fix in the sole no-SSH remediation channel on an
 unreplaceable host is not.
+
+
+---
+
+## Round-3 disposition (2026-07-31)
+
+### Fixed and mutation-proven in both directions
+
+| gap | mutation that was GREEN | now |
+|---|---|---|
+| `.conf` drop-in content guard | gut a drop-in to bare `[Service]` | **FAIL** |
+| | re-point a drop-in at `/etc/default/inngest-server` (the dead file) | **FAIL** (both assertions) |
+| | delete a drop-in entirely | **FAIL** (floor + membership) |
+| F12 retry upper bound | `_tries` default 2 → 8 (printed "retried (8 attempts)") | **FAIL** |
+| F11 `empty=` one-valued | hardcode `empty=1` in the emitter | **FAIL** |
+
+Every mutation restored byte-identical against a pristine backup (`diff -q`), baseline green
+before and after. `cron-egress-firewall` 216/216 (was 206); `ci-deploy` 197/197 (was 196).
+
+The `.conf` gap was STRUCTURAL, not an oversight: the doppler-copy sweep globs `*.service`, so a
+`.conf` is invisible to it by construction — and widening that glob would be wrong, because its
+order assertion is meaningless for a drop-in (systemd merges drop-ins after the main unit, so
+later-wins is structural rather than line-ordered). A separate sweep was the right shape.
+
+### Still open — P2, deliberately deferred to #7103
+
+- **F13** — "an `rc=0` empty read is NOT retried" is argued at length in the code and tested
+  nowhere; deleting the break line leaves all the new tests green.
+- **F14** — "REDACTION MUST PRECEDE TRUNCATION" is unobservable as fixtured: the canary sits
+  inside the 200-byte window, so truncate-first still passes. Needs a canary straddling the
+  boundary.
+- **F16** — the credential-CONSUMPTION path has zero coverage (0 references to
+  `soleur-doppler-token` in either ci-deploy suite). Nothing pins that a hostile file cannot
+  execute, that the token is actually overridden, or that an absent file is a no-op under `set -e`.
+  NOTE: the code itself is now a keyed parse loop (not `source`), so the execution class is closed
+  by construction; what is missing is the regression guard, not the fix.
+
+Rationale for deferring these three and not the first three: none of them can silently ship a
+BROKEN CREDENTIAL. F13/F14 are properties of the diagnostic's shape; F16 is a missing regression
+guard on code that is already correct by construction. The three fixed ones could each have left
+a consumer pointing at the dead token with every suite green.
+
+### Gates at this point — both green, clean tree
+
+| gate | rc | result |
+|---|---|---|
+| `apps/web-platform/infra/run-registered-suites.sh` (solo) | 0 | **87/87** |
+| `scripts/test-all.sh` | 0 | **239/239** |
+
+`test-all`'s run predates the last two commits, but those touched ONLY
+`apps/web-platform/infra/**`, which `test-all` explicitly does not cover (it says so in its own
+preamble) — verified with `git diff --name-only`. Its result still describes the current
+non-infra tree.
