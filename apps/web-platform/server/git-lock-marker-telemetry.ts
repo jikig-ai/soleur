@@ -60,8 +60,14 @@ const log = createChildLogger("git-lock-marker-telemetry");
 // The optional leading `(?:\[[a-z]+\] )?` prefix tolerates the `[error] ` / `[warn] ` prefix that
 // headless_or_stderr stamps onto a marker when it reaches stderr instead of a bare stdout echo
 // (D1c) — so the existing `[error] worktree wedge:` give-up finally matches.
+//   - SOLEUR_ORPHAN_UNREMOVABLE       — benign-but-persistent (#7102): cleanup_orphan_worktree_dirs
+//     could not `rm -rf` an orphan directory (root-owned Supabase bind-mount residue is the
+//     recurring cause, errno=EACCES). Mirrored, NOT paged: the reaper still returns 0 and the
+//     rest of cleanup proceeds, so nothing is wedged — but it recurs on EVERY subsequent run
+//     until the residue is cleared, which would make it pure alert noise. Querying it is the
+//     point: reason=rm-partial means the survivor is a partially-deleted hollow shell.
 const MARKER_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_UNREMOVABLE\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
 
 // A wedge (vs. a benign DIAG) is any marker that indicates git operations could not
 // proceed: an unremovable/masked lock, a temp-wedge, a config-TARGET-masked give-up, an

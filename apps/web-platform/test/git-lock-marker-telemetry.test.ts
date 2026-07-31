@@ -69,6 +69,18 @@ describe("extractGitLockMarkers", () => {
     expect(extractGitLockMarkers(identityDiag)[0]?.wedged).toBe(false);
   });
 
+  test("mirrors SOLEUR_ORPHAN_UNREMOVABLE but does NOT classify it as a wedge (#7102)", () => {
+    const orphan =
+      'SOLEUR_ORPHAN_UNREMOVABLE dir=/repo/.worktrees/feat-x errno=EACCES reason=rm-partial hint="partially-deleted orphan survives; see git-worktree SKILL.md §Sharp Edges"';
+    // Mirrored: the whole point of the sentinel is that the failure is queryable
+    // rather than being swallowed by a counter that claimed success.
+    expect(extractGitLockMarkers(orphan).length).toBe(1);
+    // But NOT paged. The reaper returns 0 and the rest of cleanup proceeds, so
+    // nothing is wedged — and the condition recurs on every run until the
+    // root-owned residue is cleared, so paging it would be pure noise.
+    expect(extractGitLockMarkers(orphan)[0]?.wedged).toBe(false);
+  });
+
   test("matches the #5934 config-target-masked family and classifies it as wedged", () => {
     expect(extractGitLockMarkers(CONFIG_TARGET_MASKED)[0]?.wedged).toBe(true);
     expect(extractGitLockMarkers(CONFIG_TARGET_MASKED_REMEDY)[0]?.wedged).toBe(true);
