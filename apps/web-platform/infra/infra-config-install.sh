@@ -80,6 +80,7 @@ declare -rA DEST_SPEC=(
   # not exist on the host until first written, and mktemp writes INTO it.
   ["/etc/systemd/system/vector.service.d/10-vector-doppler-token.conf"]="644 root:root"
   ["/etc/systemd/system/inngest-heartbeat.service.d/10-inngest-heartbeat-doppler-token.conf"]="644 root:root"
+  ["/etc/systemd/system/inngest-server.service.d/10-inngest-server-doppler-token.conf"]="644 root:root"
 )
 
 # TEST_DESTDIR redirects writes to a sandbox and skips chown (no root needed),

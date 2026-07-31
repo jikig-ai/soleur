@@ -773,6 +773,7 @@ fi
 - `apps/web-platform/infra/soleur-doppler-token.tmpl` (#7095 — re-deliverable web-host Doppler credential; folded in as `local.webhook_doppler_token_env`, i.e. the RENDERED content, so a secret rotation alone changes the hash)
 - `apps/web-platform/infra/10-vector-doppler-token.conf` (#7095 — systemd drop-in re-pointing the generated `vector.service` at the credential above)
 - `apps/web-platform/infra/10-inngest-heartbeat-doppler-token.conf` (#7095 — systemd drop-in re-pointing the generated `inngest-heartbeat.service` at the credential above)
+- `apps/web-platform/infra/10-inngest-server-doppler-token.conf` (#7095 — systemd drop-in re-pointing the generated `inngest-server.service` at the credential above; it runs `doppler run` UNCONDITIONALLY and is restarted on every co-located deploy)
 
 **Detection:**
 
@@ -802,8 +803,9 @@ DEPLOY_PIPELINE_FIX_TRIGGERS=(
   "apps/web-platform/infra/soleur-doppler-token.tmpl"
   "apps/web-platform/infra/10-vector-doppler-token.conf"
   "apps/web-platform/infra/10-inngest-heartbeat-doppler-token.conf"
+  "apps/web-platform/infra/10-inngest-server-doppler-token.conf"
 )
-DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh|inngest-enumerate-reminders\.sh|inngest-rearm-reminders\.sh|inngest-wiped-volume-verify\.sh|cat-inngest-verify-state\.sh|inngest-inventory\.sh|git-lock-chardevice-sweep\.sh|inngest-registry-probe\.sh|inngest-doublefire-probe\.sh|soleur-doppler-token\.tmpl|10-vector-doppler-token\.conf|10-inngest-heartbeat-doppler-token\.conf)$'
+DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh|inngest-enumerate-reminders\.sh|inngest-rearm-reminders\.sh|inngest-wiped-volume-verify\.sh|cat-inngest-verify-state\.sh|inngest-inventory\.sh|git-lock-chardevice-sweep\.sh|inngest-registry-probe\.sh|inngest-doublefire-probe\.sh|soleur-doppler-token\.tmpl|10-vector-doppler-token\.conf|10-inngest-heartbeat-doppler-token\.conf|10-inngest-server-doppler-token\.conf)$'
 
 git diff --name-only origin/main...HEAD | grep -E "$DPF_REGEX"
 ```

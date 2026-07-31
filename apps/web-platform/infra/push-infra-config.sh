@@ -92,7 +92,8 @@ cat > "$PAYLOAD_FILE" <<PAYLOAD
   "inngest_doublefire_probe_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-doublefire-probe.sh")",
   "soleur_doppler_token_b64": "${SOLEUR_DOPPLER_TOKEN_B64}",
   "vector_doppler_token_conf_b64": "$(base64 -w0 < "${INFRA_DIR}/10-vector-doppler-token.conf")",
-  "inngest_heartbeat_doppler_token_conf_b64": "$(base64 -w0 < "${INFRA_DIR}/10-inngest-heartbeat-doppler-token.conf")"
+  "inngest_heartbeat_doppler_token_conf_b64": "$(base64 -w0 < "${INFRA_DIR}/10-inngest-heartbeat-doppler-token.conf")",
+  "inngest_server_doppler_token_conf_b64": "$(base64 -w0 < "${INFRA_DIR}/10-inngest-server-doppler-token.conf")"
 }
 PAYLOAD
 

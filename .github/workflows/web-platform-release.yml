@@ -1302,15 +1302,32 @@ jobs:
           # (e.g. it failed first) — say so rather than printing "v".
           VER_LABEL="${VERSION:-unknown}"
           TAG_LABEL="${TAG:-no tag was created}"
-          BODY="<p><strong>The Soleur web platform did not finish releasing. Production is still running the OLDER build — the changes that were just merged are not live.</strong></p>"
+          # #7095 review — BRANCH THE HEADLINE ON WHETHER THE DEPLOY ACTUALLY SUCCEEDED.
+          # live-verify runs only under `needs.deploy.result == 'success'` (see its `if:` above),
+          # so live-verify == failure IMPLIES production IS on the new build. The unconditional
+          # wording asserted the opposite: "production is still running the OLDER build", "every
+          # further change you merge will also stay unreleased", "nothing reaches production".
+          # All three are false in that branch, and the subject said "production was NOT updated".
+          # For an operator who cannot check the claim, one wrong urgent page is exactly what
+          # teaches them to stop reading the next one — and alert fatigue is the failure mode that
+          # let this incident run 26 hours. Getting this wrong would recreate the very thing the
+          # job exists to prevent.
+          if [[ "${R_DEPLOY}" == "success" ]]; then
+            SUBJ_TAIL="production WAS updated, but a post-release check failed"
+            BODY="<p><strong>The new version DID reach production — but a check that runs afterwards failed, so we cannot confirm the site is fully healthy.</strong></p>"
+            BODY="${BODY}<p><strong>What this means for you:</strong> the code you merged is live. Something about verifying it afterwards did not pass, which may mean a real problem with the running site or may mean the check itself is faulty. Worth looking at soon; it is not the same as a release being stuck.</p>"
+          else
+            SUBJ_TAIL="production was NOT updated"
+            BODY="<p><strong>The Soleur web platform did not finish releasing. Production is still running the OLDER build — the changes that were just merged are not live.</strong></p>"
           BODY="${BODY}<p>Attempted version: <code>${VER_LABEL}</code> (tag: <code>${TAG_LABEL}</code>). Production is serving whatever was deployed before this run, which is now behind that tag.</p>"
           BODY="${BODY}<p><strong>What stopped:</strong></p><ul>${FAILED_HTML}</ul>"
           BODY="${BODY}<p><a href=\"${RUN_URL}\">Open the failed run</a> — the red entry named above is the one to look at.</p>"
-          BODY="${BODY}<p><strong>What this means for you:</strong> until this is fixed, every further change you merge will also stay unreleased — the site keeps serving old code and looks healthy while doing it. This is not something that clears on its own.</p>"
+            BODY="${BODY}<p><strong>What this means for you:</strong> until this is fixed, every further change you merge will also stay unreleased — the site keeps serving old code and looks healthy while doing it. This is not something that clears on its own.</p>"
+          fi
           BODY="${BODY}<p><strong>What to do:</strong> you do not need to fix this yourself. Send the run link above to your engineer, or paste it into Claude Code and ask it to fix the failing release. Treat it as urgent: nothing reaches production until it is resolved.</p>"
           PAYLOAD=$(jq -n \
             --arg from "Soleur Ops <noreply@soleur.ai>" \
-            --arg subject "[RELEASE FAILED] Soleur Web Platform v${VER_LABEL} — production was NOT updated" \
+            --arg subject "[RELEASE FAILED] Soleur Web Platform v${VER_LABEL} — ${SUBJ_TAIL}" \
             --arg html "$BODY" \
             '{from: $from, to: ["ops@jikigai.com"], subject: $subject, html: $html}')
           # --max-time + `|| echo 000`: an unreachable Resend must neither stall

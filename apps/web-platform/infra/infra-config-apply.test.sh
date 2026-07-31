@@ -88,6 +88,7 @@ export_valid_env_vars() {
   export SOLEUR_DOPPLER_TOKEN_B64=$(_payload_file "DOPPLER_TOKEN=dp.st.test-fixture")
   export VECTOR_DOPPLER_TOKEN_CONF_B64=$(_payload_file "[Service]")
   export INNGEST_HEARTBEAT_DOPPLER_TOKEN_CONF_B64=$(_payload_file "[Service]")
+  export INNGEST_SERVER_DOPPLER_TOKEN_CONF_B64=$(_payload_file "[Service]")
 }
 
 assert_eq() {

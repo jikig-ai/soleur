@@ -50,10 +50,18 @@ locals {
   # them adds no exposure class. Precedent: BETTERSTACK_INGEST_URL baked into
   # /etc/default/web-private-nic-guard for the same reason.
   #
-  # SHAPE IS ENFORCED IN THREE PLACES, because a malformed render bricks the channel the fix is
-  # delivered over: (1) the validation on var.doppler_token — fails at `terraform plan`, the only
-  # never-attempt layer; (2) infra-config-install.sh rejects a non-KEY=VALUE /etc/default/*
-  # payload (reject "envfile_shape"); (3) systemd-analyze verify before the self-restart. Note
+  # SHAPE IS ENFORCED IN TWO PLACES, NOT THREE — and only for the /etc/default file.
+  # (1) the doppler_token_shape_ok precondition — fails at `terraform plan`, the only
+  #     never-attempt layer; (2) infra-config-install.sh rejects a non-KEY=VALUE /etc/default/*
+  #     payload (reject "envfile_shape").
+  # An earlier revision of this comment claimed a third layer, "systemd-analyze verify before the
+  # self-restart". THAT DOES NOT EXIST on this path: the only invocation in the repo is a
+  # pre-merge CI job (infra-validation.yml) hard-filtered to the three git-data-gc units, and
+  # infra-config-apply.sh goes straight from writing files to `systemctl daemon-reload`.
+  # RESIDUAL, STATED PLAINLY: the two systemd drop-ins have NO shape gate — envfile_shape is
+  # scoped to /etc/default/*, so it never sees /etc/systemd/system/*.service.d/*.conf. Their
+  # safety rests entirely on each carrying a single literal `EnvironmentFile=-` directive, and
+  # `daemon-reload` is exactly when a malformed drop-in would take vector.service down. Note
   # EnvironmentFile=- tolerates ABSENT and UNREADABLE but NOT empty-valued: a bare
   # `DOPPLER_TOKEN=` wins by later-wins and silently blanks a good credential, which is what (1)
   # exists to stop.
@@ -75,6 +83,14 @@ locals {
   # under incident pressure with a different token type — closing the sole no-SSH remediation
   # channel with the guard that exists to protect it. The load-bearing part is the character
   # class: no whitespace, CR, '#' or '=' can reach a systemd EnvironmentFile line.
+  # #7095 review — the Sentry components had NO gate at all, while doppler_token got one. The
+  # try() below falls back to three empty strings on any parse miss (a trailing slash alone
+  # defeats the project capture), the installer's shape check ACCEPTS a bare `KEY=`, and nothing
+  # upstream sets these — so an unparseable DSN renders the paging route inert, silently, which
+  # is the 26-hour-silence condition this PR exists to close. Empty DSN stays allowed (the
+  # documented `terraform validate` path); a NON-empty one must parse.
+  sentry_dsn_shape_ok = nonsensitive(var.sentry_dsn == "" || can(regex("^https://[^@/]+@[^/]+/[^/?#]+$", var.sentry_dsn)))
+
   doppler_token_shape_ok = nonsensitive(can(regex("^dp\\.(st|sa|pt|ct)\\.[A-Za-z0-9._-]+$", var.doppler_token)))
 
   webhook_doppler_token_env = templatefile("${path.module}/soleur-doppler-token.tmpl", {
@@ -1324,7 +1340,11 @@ resource "terraform_data" "deploy_pipeline_fix" {
   lifecycle {
     # #7095 — fails at `terraform plan`, before a byte reaches the host, and without echoing the
     # token (unlike a variable validation). This is the only never-attempt layer; the installer's
-    # envfile_shape rejection and systemd-analyze verify are refuse-to-install, downstream.
+    # envfile_shape rejection is refuse-to-install, downstream — and covers /etc/default/* only.
+    precondition {
+      condition     = local.sentry_dsn_shape_ok
+      error_message = "sentry_dsn is set but does not parse as https://<key>@<host>/<project> — the host-side Sentry components would render EMPTY and the paging route would be silently inert (#7095). Fix the DSN in Doppler prd_terraform, or clear it deliberately. The value is not shown: treat it as a credential."
+    }
     precondition {
       condition     = local.doppler_token_shape_ok
       error_message = "doppler_token must be a Doppler token matching ^dp.(st|sa|pt|ct).[A-Za-z0-9._-]+$ with no whitespace, CR, '#' or '=' — it is rendered into a systemd EnvironmentFile on a host that cannot be replaced, and a malformed value bricks the deploy channel (#7095). The offending value is deliberately NOT shown: it is a live credential."
@@ -1464,6 +1484,7 @@ resource "terraform_data" "deploy_pipeline_fix" {
     # is what makes a body-only edit re-fire the push and actually reach the host.
     file("${path.module}/10-vector-doppler-token.conf"),
     file("${path.module}/10-inngest-heartbeat-doppler-token.conf"),
+    file("${path.module}/10-inngest-server-doppler-token.conf"),
   ]))
 
   # #3756 — replaced SSH provisioners (connection + file + remote-exec) with

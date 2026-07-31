@@ -176,13 +176,36 @@ test_all_managed_dests_accepted() {
   local specs=()
   while IFS= read -r line; do
     specs+=("$line")
-  done < <(sed -n 's/^[[:space:]]*\["\(\/[^"]*\)"\]="\([0-7]\{3\}\) \([^"]*\)"[[:space:]]*$/\1|\2|\3/p' "$HELPER")
+  # #7095 review — DERIVED FROM FILE_MAP (the OTHER file), NOT from DEST_SPEC.
+  #
+  # The first version of this derivation read DEST_SPEC out of $HELPER and fed each row back to
+  # $HELPER, which validates against DEST_SPEC — i.e. S == S. Mutation-proven vacuous: changing
+  # one DEST_SPEC mode from 755 to 700 (FILE_MAP untouched) left the suite 31 passed / 0 failed.
+  # That is strictly WEAKER than the hardcoded 15-entry literal it replaced, because the literal
+  # was an independent second source of truth. Deriving from FILE_MAP keeps the auto-ratcheting
+  # property AND restores the real invariant: FILE_MAP's dest/mode/owner must equal DEST_SPEC's,
+  # which is exactly what dest_not_allowlisted / mode_mismatch / owner_mismatch police at install
+  # time — on a host with no SSH runbook, mid-remediation.
+  #
+  # `[0-7]{3}` deliberately does NOT match a 4-digit mode: a `4755` setuid typo must not be
+  # silently dropped from the work-list, so the count assertion below catches its absence.
+  done < <(sed -n 's/^[[:space:]]*"[A-Z0-9_]*|\(\/[^|]*\)|\([0-7]\{3\}\)|\([^"]*\)"[[:space:]]*$/\1|\2|\3/p' "$HANDLER")
   local total="${#specs[@]}"
   # Non-vacuity floor: a broken sed would yield 0 specs and the loop below would then
   # "pass" having asserted nothing. 15 is the pre-#7095 size, so this can only ratchet up.
+  # Cardinality cross-check: every FILE_MAP row must have parsed. A row the sed cannot match
+  # (4-digit mode, malformed quoting) would otherwise vanish from the work-list while `total`
+  # still cleared the floor — a member the extraction cannot see is silently exempt.
+  filemap_rows=$(grep -cE '^[[:space:]]*"[A-Z0-9_]+\|' "$HANDLER")
+  if [[ "$total" -ne "$filemap_rows" ]]; then
+    echo "  FAIL: parsed $total of $filemap_rows FILE_MAP rows — an unparsed row would be silently exempt from this test"
+    FAIL=$((FAIL + 1))
+    teardown
+    return
+  fi
   if [[ "$total" -lt 15 ]]; then
     echo "  FAIL: derived only $total DEST_SPEC entries from $HELPER — parse is broken, this test would be vacuous"
-    FAILURES=$((FAILURES + 1))
+    FAIL=$((FAIL + 1))
     teardown
     return
   fi
@@ -223,7 +246,7 @@ test_envfile_shape_guard() {
     echo "  PASS: rejected payload left no file on disk (refuse-to-install, not install-then-fail)"
   else
     echo "  FAIL: rejected payload still landed at ${TEST_DESTDIR}${d}"
-    FAILURES=$((FAILURES + 1))
+    FAIL=$((FAIL + 1))
   fi
 
   # (b) POSITIVE CONTROL: the real shape — assignments, blanks and # comments — is ACCEPTED.
@@ -259,7 +282,7 @@ test_dropin_dir_created() {
     echo "  PASS: drop-in file present at ${d}"
   else
     echo "  FAIL: drop-in file missing at ${TEST_DESTDIR}${d}"
-    FAILURES=$((FAILURES + 1))
+    FAIL=$((FAIL + 1))
   fi
   teardown
 }
@@ -329,7 +352,7 @@ test_dest_spec_filemap_lockstep() {
   # invariant below plus a non-vacuity floor, both of which ratchet automatically.
   if [[ "$filemap_count" -lt 15 || "$dest_spec_count" -lt 15 ]]; then
     echo "  FAIL: implausible counts (FILE_MAP=$filemap_count DEST_SPEC=$dest_spec_count) — a grep returning ~0 would make the equality below vacuously true"
-    FAILURES=$((FAILURES + 1))
+    FAIL=$((FAIL + 1))
   else
     echo "  PASS: counts are plausible (FILE_MAP=$filemap_count DEST_SPEC=$dest_spec_count)"
   fi

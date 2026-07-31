@@ -69,6 +69,7 @@ const TRIGGER_FILES = [
   "apps/web-platform/infra/soleur-doppler-token.tmpl",
   "apps/web-platform/infra/10-vector-doppler-token.conf",
   "apps/web-platform/infra/10-inngest-heartbeat-doppler-token.conf",
+  "apps/web-platform/infra/10-inngest-server-doppler-token.conf",
 ];
 
 function buildTriggerRegex(files: string[]): RegExp {

@@ -60,6 +60,10 @@ FILE_MAP=(
   # drop-ins both named 10-doppler-token.conf would collide on one repo file.
   "VECTOR_DOPPLER_TOKEN_CONF_B64|/etc/systemd/system/vector.service.d/10-vector-doppler-token.conf|644|root:root"
   "INNGEST_HEARTBEAT_DOPPLER_TOKEN_CONF_B64|/etc/systemd/system/inngest-heartbeat.service.d/10-inngest-heartbeat-doppler-token.conf|644|root:root"
+  # #7095 review — inngest-server runs `doppler run` UNCONDITIONALLY (no [ -n $DOPPLER_TOKEN ]
+  # gate) with Restart=on-failure, and inngest-bootstrap.sh restarts it on EVERY co-located
+  # ci-deploy. Without this it crash-loops on the next deploy after the fix lands.
+  "INNGEST_SERVER_DOPPLER_TOKEN_CONF_B64|/etc/systemd/system/inngest-server.service.d/10-inngest-server-doppler-token.conf|644|root:root"
 )
 
 # TEST_DESTDIR allows tests to redirect writes to a sandbox
