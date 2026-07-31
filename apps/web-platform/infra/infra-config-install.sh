@@ -3,7 +3,7 @@
 # /hooks/infra-config webhook handler (#4827, Ref #4804).
 #
 # WHY THIS EXISTS: infra-config-apply.sh runs as User=deploy (webhook.service).
-# Its 15 managed files live in root:root 0755 destination directories
+# Its 18 managed files live in root:root 0755 destination directories
 # (/usr/local/bin, /etc/systemd/system, /etc/webhook). The deploy user cannot
 # mktemp inside those dirs — EACCES — so the handler could never land a single
 # file (the #4827 bug: every push wrote 0 files). systemd ReadWritePaths elevates
@@ -13,7 +13,7 @@
 # wildcard-free sudoers grant
 # (Cmnd_Alias INFRA_CONFIG_INSTALL = /usr/local/bin/infra-config-install). sudo
 # permits the bare command with ANY arguments — so the SECURITY BOUNDARY is here,
-# not in sudoers: the helper hardcodes the 15 allowlisted destinations and refuses
+# not in sudoers: the helper hardcodes the 18 allowlisted destinations and refuses
 # anything else. Because the helper runs as root it has no EACCES problem in the
 # dest dirs: it mktemps in the destination directory itself and does a
 # same-filesystem atomic rename.
@@ -72,6 +72,15 @@ declare -rA DEST_SPEC=(
   ["/usr/local/bin/git-lock-chardevice-sweep.sh"]="755 root:root"
   ["/usr/local/bin/inngest-registry-probe.sh"]="755 root:root"
   ["/usr/local/bin/inngest-doublefire-probe.sh"]="755 root:root"
+  # #7095 — see the FILE_MAP note in infra-config-apply.sh for why this is 640 root:deploy
+  # and not the 600 deploy:deploy of the existing /etc/default/webhook-deploy.
+  ["/etc/default/soleur-doppler-token"]="640 root:deploy"
+  # #7095 — drop-in dests. 644 root:root (systemd reads these as root; no group needs them).
+  # These are the dests the guarded mkdir -p below exists for: a *.service.d/ directory does
+  # not exist on the host until first written, and mktemp writes INTO it.
+  ["/etc/systemd/system/vector.service.d/10-vector-doppler-token.conf"]="644 root:root"
+  ["/etc/systemd/system/inngest-heartbeat.service.d/10-inngest-heartbeat-doppler-token.conf"]="644 root:root"
+  ["/etc/systemd/system/inngest-server.service.d/10-inngest-server-doppler-token.conf"]="644 root:root"
 )
 
 # TEST_DESTDIR redirects writes to a sandbox and skips chown (no root needed),
@@ -123,10 +132,38 @@ install_fail() {
   exit 1
 }
 
+# #7095 — create the destination DIRECTORY if absent. mktemp below writes INTO $dest_dir, so a
+# dest whose parent does not yet exist fails at mktemp with a bare "mktemp" reason that reads
+# like a disk problem. This is safe precisely BECAUSE it sits after the DEST_SPEC allowlist
+# check above: $dest_canonical is a reviewed constant from the table, never caller-controlled,
+# so this cannot be steered at an arbitrary path. It is required for systemd drop-in dests of
+# the form /etc/systemd/system/<unit>.d/, which do not exist on a host until first written.
+mkdir -p "$dest_dir" 2>/dev/null || install_fail "mkdir_dest_dir"
+
 tmp="$(mktemp "${dest_dir}/tmp.infra-config-install.XXXXXX" 2>/dev/null)" || install_fail "mktemp"
 trap 'rm -f "$tmp"' EXIT
 
 cat > "$tmp" || install_fail "write"
+
+# #7095 — SHAPE GATE for env-file dests. REFUSE-TO-INSTALL BEATS INSTALL-AND-BRICK.
+#
+# An /etc/default/* payload is consumed as a systemd EnvironmentFile by units including the
+# webhook that delivers this very file. systemd refuses to start a unit whose EnvironmentFile
+# has a malformed line, so a bad render here takes down the remediation channel on a host with
+# no operator SSH runbook and no orderable replacement (#7095 Sharp Edge 1b). Validating one
+# line at the door is cheap; recovering a bricked webhook is not.
+#
+# Accepts KEY=VALUE, blank lines, and # comments — the exact grammar systemd parses. Note this
+# is the LAST of three layers and the only one that runs on the host: the authoritative gate is
+# the `terraform plan` validation on var.doppler_token, which never lets a bad value leave CI.
+if [[ "$dest_canonical" == /etc/default/* ]]; then
+  # grep -c reads ALL input (no early close), so this cannot SIGPIPE the producer the way
+  # `| grep -q` would under `set -o pipefail`. Count lines that are NOT blank, NOT a comment,
+  # and NOT a well-formed assignment; anything > 0 is a malformed env file.
+  bad_lines="$(grep -cvE '^[[:space:]]*($|#|[A-Za-z_][A-Za-z0-9_]*=)' "$tmp" || true)"
+  [[ "$bad_lines" == "0" ]] || reject "envfile_shape:bad_lines=$bad_lines"
+fi
+
 chmod "$mode" "$tmp" || install_fail "chmod"
 # chown only works as root; skip in sandbox/test mode (mirrors the handler).
 if [[ -z "$DESTDIR" ]]; then

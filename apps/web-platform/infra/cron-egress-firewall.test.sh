@@ -56,6 +56,41 @@ assert_not_grep() {
   fi
 }
 
+# ORDER-SENSITIVE EnvironmentFile assertion (#7095).
+#
+# systemd applies EnvironmentFile= directives in the order they appear and LATER
+# WINS, so /etc/default/soleur-doppler-token must come AFTER
+# /etc/default/inngest-server — the override is the entire mechanism by which the
+# re-deliverable credential displaces the dead token copied into
+# /etc/default/inngest-server (pinned forever by inngest-bootstrap.sh:567-568, so it
+# never self-heals). A "both lines are present" check would stay GREEN if a future
+# edit reversed them, silently restoring the 2026-07-30 outage. Assert the ORDER.
+#
+# Compares the LAST occurrence of each: with later-wins semantics it is the final
+# directive that decides DOPPLER_TOKEN, so a duplicated base line reintroduced
+# below the override must also fail.
+assert_envfile_override_order() {
+  local description="$1" unit="$2" base_line="$3" override_line="$4"
+  local base_ln override_ln
+  # -x -F: exact full-line literal, so the prose in the surrounding comment block
+  # (which quotes both paths) can never satisfy this assertion.
+  base_ln="$(grep -nxF -- "$base_line" "$unit" | tail -1 | cut -d: -f1)"
+  override_ln="$(grep -nxF -- "$override_line" "$unit" | tail -1 | cut -d: -f1)"
+  if [[ -z "$base_ln" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (missing from $(basename "$unit"): $base_line)"
+  elif [[ -z "$override_ln" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (missing from $(basename "$unit"): $override_line)"
+  elif ((base_ln < override_ln)); then
+    PASS=$((PASS + 1))
+    echo "  PASS: $description (base line $base_ln precedes override line $override_ln)"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description — later-wins ORDER INVERTED in $(basename "$unit"): '$override_line' is at line $override_ln but must come AFTER '$base_line' at line $base_ln; as written the dead token from the inngest-server copy wins again and #7095 silently returns"
+  fi
+}
+
 assert_cmd() {
   local description="$1"
   shift
@@ -465,6 +500,141 @@ assert_grep "firewall unit re-asserts every boot" 'WantedBy=multi-user\.target' 
 assert_grep "timer survives reboots (Persistent)" 'Persistent=true' "$SCRIPT_DIR/cron-egress-resolve.timer"
 assert_grep "resolve runs doppler-wrapped (env for Sentry + dynamic hosts)" 'run --project soleur --config prd' "$SCRIPT_DIR/cron-egress-resolve.service"
 assert_grep "resolve unit sources the doppler token env file" 'EnvironmentFile=-/etc/default/inngest-server' "$SCRIPT_DIR/cron-egress-resolve.service"
+# #7095 — ADDED alongside the assertion above, never replacing it: both files must be
+# sourced, and in this order. See assert_envfile_override_order's header for why the
+# order (not mere presence) is the property under test.
+#
+# COVERAGE IS DERIVED, NOT HAND-LISTED. The set under test is discovered from the
+# units themselves: every *.service here that OPTIONALLY sources
+# /etc/default/inngest-server — the file holding the COPY of the web-host Doppler
+# token, grep-extracted out of /etc/default/webhook-deploy by
+# inngest-bootstrap.sh:586 and then PINNED forever at :567-568, so a dead-but-well-
+# formed value never self-heals. Every such unit must ALSO source the re-deliverable
+# credential, AFTER it.
+#
+# Why derived: this guard was first written with two hand-picked call sites while a
+# FOURTH consumer (cron-egress-firewall.service) sat uncovered. It showed zero
+# failures — not because it was healthy, but because it is a boot-time oneshot that
+# has not run since the revocation, while cron-egress-resolve, which takes the
+# doppler arm on the SAME `[ -n "$DOPPLER_TOKEN" ]` condition, failed 522 times. A
+# latent instance is precisely what a hand-written list cannot see, and "three
+# literal call sites" is the same shape that under-covered in the first place.
+# Discovery closes the class: a fifth consumer is covered the moment it sources the
+# copy, with no edit here.
+#
+# SCOPE — the `-` prefix is the discriminator, deliberately. inngest-redis.service
+# and inngest-cutover-flip.service source the same path in the REQUIRED form (no
+# `-`) and are correctly OUT of scope: they run on soleur-inngest-prd, whose own
+# inngest-bootstrap writes that host's live token, and a fleet-wide Better Stack
+# sweep grouped by host confirms soleur-inngest-prd took no part in the 07-30
+# failure cluster. That exclusion is a decision, not an oversight — if a unit ever
+# needs the required form AND the override, widen this pattern consciously.
+DOPPLER_COPY_LINE='EnvironmentFile=-/etc/default/inngest-server'
+DOPPLER_REDELIVER_LINE='EnvironmentFile=-/etc/default/soleur-doppler-token'
+# Discovery is by EXACT FULL LINE (-l -x -F) for the same reason the assertion is:
+# these units quote both paths in their comment prose, so a substring match would
+# sweep in units that only TALK about the copy without sourcing it.
+mapfile -t DOPPLER_COPY_UNITS < <(
+  grep -lxF -- "$DOPPLER_COPY_LINE" "$SCRIPT_DIR"/*.service 2>/dev/null | sort
+)
+for unit in "${DOPPLER_COPY_UNITS[@]}"; do
+  assert_envfile_override_order \
+    "$(basename "$unit") sources the re-deliverable credential AFTER the inngest-server copy (systemd later-wins)" \
+    "$unit" "$DOPPLER_COPY_LINE" "$DOPPLER_REDELIVER_LINE"
+done
+
+# Non-vacuity floor. A derived sweep that discovers nothing passes vacuously and
+# certifies an empty set, so assert BOTH a minimum cardinality AND that every unit
+# already known to source the copy is in the discovered set (a glob typo, a rename,
+# or a wrong-directory run all collapse to zero and must red).
+#
+# This is a FLOOR, not an exact count: a fifth consumer RAISES coverage with no edit
+# here, which is the entire point. It only needs touching when coverage legitimately
+# SHRINKS — a unit that stops sourcing the copy altogether — and that is a deliberate
+# architectural change which SHOULD cost an acknowledging edit rather than silently
+# thinning the guard. The asymmetry is the design: growth is free, shrinkage is loud.
+DOPPLER_COPY_KNOWN=(
+  container-restart-monitor.service
+  cron-egress-alarm@.service
+  cron-egress-firewall.service
+  cron-egress-resolve.service
+)
+if ((${#DOPPLER_COPY_UNITS[@]} >= ${#DOPPLER_COPY_KNOWN[@]})); then
+  PASS=$((PASS + 1))
+  echo "  PASS: doppler-copy sweep is non-vacuous (${#DOPPLER_COPY_UNITS[@]} units discovered, floor ${#DOPPLER_COPY_KNOWN[@]})"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: doppler-copy sweep discovered only ${#DOPPLER_COPY_UNITS[@]} unit(s), below the floor of ${#DOPPLER_COPY_KNOWN[@]} — the sweep is under-covering or matched nothing at all"
+fi
+for known in "${DOPPLER_COPY_KNOWN[@]}"; do
+  if printf '%s\n' "${DOPPLER_COPY_UNITS[@]}" | grep -qxF -- "$SCRIPT_DIR/$known"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: known doppler-copy consumer is in the derived sweep: $known"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: known doppler-copy consumer $known dropped OUT of the derived sweep — it no longer carries '$DOPPLER_COPY_LINE'. If that is intentional, remove it from DOPPLER_COPY_KNOWN in the same commit; otherwise the guard just went blind on it"
+  fi
+done
+# --- #7095 R3: the .conf DROP-INS, which the *.service sweep above CANNOT see -------------
+#
+# The sweep above globs "$SCRIPT_DIR"/*.service. A drop-in is a .conf, so it is invisible to it
+# BY CONSTRUCTION — not by oversight, and no widening of that glob would be correct either, since
+# the order assertion it performs is meaningless for a drop-in (systemd merges drop-ins after the
+# main unit, so later-wins is structural rather than line-ordered).
+#
+# That blind spot mattered: with the drop-ins unasserted, a review pass demonstrated that gutting
+# BOTH .conf files to a bare [Service] line, and separately re-pointing the heartbeat drop-in at
+# /etc/default/inngest-server — THE DEAD FILE THAT CAUSED THIS OUTAGE — each left every suite in
+# this repo green. The drop-ins carry the credential to vector.service (the instrument every
+# post-apply check is read through), inngest-heartbeat.service, and inngest-server.service (which
+# runs doppler run unconditionally and is restarted on every deploy), i.e. the three consumers
+# with the worst failure modes were the three with no content assertion at all.
+#
+# Same asymmetry as the sweep above: growth is free (a new 10-*-doppler-token.conf is picked up
+# automatically), shrinkage is loud (a KNOWN entry that disappears must be removed deliberately).
+DROPIN_LINE='EnvironmentFile=-/etc/default/soleur-doppler-token'
+DROPIN_KNOWN=(
+  10-vector-doppler-token.conf
+  10-inngest-heartbeat-doppler-token.conf
+  10-inngest-server-doppler-token.conf
+)
+DROPIN_FOUND=()
+while IFS= read -r f; do [[ -n "$f" ]] && DROPIN_FOUND+=("$f"); done < <(
+  ls -1 "$SCRIPT_DIR"/10-*-doppler-token.conf 2>/dev/null | sort
+)
+if ((${#DROPIN_FOUND[@]} >= ${#DROPIN_KNOWN[@]})); then
+  PASS=$((PASS + 1))
+  echo "  PASS: drop-in sweep is non-vacuous (${#DROPIN_FOUND[@]} found, floor ${#DROPIN_KNOWN[@]})"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: drop-in sweep found only ${#DROPIN_FOUND[@]} 10-*-doppler-token.conf file(s), below the floor of ${#DROPIN_KNOWN[@]} — the glob matched nothing or a drop-in was deleted"
+fi
+for known in "${DROPIN_KNOWN[@]}"; do
+  if [[ -f "$SCRIPT_DIR/$known" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: known drop-in present: $known"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: known drop-in $known is GONE — if that is intentional, remove it from DROPIN_KNOWN in the same commit; otherwise a consumer just lost the credential silently"
+  fi
+done
+# The content assertion itself. -x -F (exact full line, literal) so the file's own explanatory
+# prose — which quotes this very path several times — can never satisfy it; that is the
+# cq-assert-anchor-not-bare-token trap, and these files are comment-heavy by design.
+for f in "${DROPIN_FOUND[@]}"; do
+  b="$(basename "$f")"
+  if grep -qxF -- "$DROPIN_LINE" "$f"; then
+    PASS=$((PASS + 1)); echo "  PASS: drop-in carries the override verbatim: $b"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $b does NOT contain the exact line '$DROPIN_LINE' — the drop-in is inert and its unit silently keeps the dead token (#7095)"
+  fi
+  # A drop-in that points at ANY OTHER /etc/default file is the re-pointing mutation that went
+  # green: it still looks like a wired drop-in and still delivers the revoked credential.
+  if stray="$(grep -oE '^EnvironmentFile=-?/etc/default/[A-Za-z0-9._-]+' "$f" | grep -vxF -- "$DROPIN_LINE" | head -1)"; [[ -n "$stray" ]]; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: $b also carries '$stray' — a drop-in must point ONLY at the re-deliverable credential; anything else re-introduces the dead-token path"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: drop-in points at no other /etc/default file: $b"
+  fi
+done
+
 assert_grep "resolve unit sets HOME (doppler os.UserHomeDir requirement)" 'Environment=HOME=/root' "$SCRIPT_DIR/cron-egress-resolve.service"
 assert_grep "resolve unit bounded (no infinite activating hang)" 'TimeoutStartSec=' "$SCRIPT_DIR/cron-egress-resolve.service"
 # Grace-window retention store must persist across reboots (a tmpfs /run would

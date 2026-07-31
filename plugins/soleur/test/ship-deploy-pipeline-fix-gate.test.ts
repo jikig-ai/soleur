@@ -31,8 +31,12 @@ const APPLY_WEBPLAT_WORKFLOW = resolve(
 const GATE_HEADING = "### Deploy Pipeline Fix Drift Gate";
 const NEXT_HEADING = "### Retroactive Gate Application";
 
-// The 5 trigger files MUST match apps/web-platform/infra/server.tf
+// The trigger files MUST match apps/web-platform/infra/server.tf
 // `terraform_data.deploy_pipeline_fix.triggers_replace.sha256(join(",",...))`.
+// (The count is deliberately NOT stated here: a literal cardinality in the
+// comment above the list it describes is drift bait — the list itself and the
+// "every basename hashed by triggers_replace appears in TRIGGER_FILES" test
+// below are the authority.)
 // If a future infra refactor changes the basenames, this fixture, the gate's
 // bash array, and the gate's regex must update together. The
 // "server.tf is in sync with TRIGGER_FILES" describe block below auto-detects
@@ -57,6 +61,15 @@ const TRIGGER_FILES = [
   "apps/web-platform/infra/git-lock-chardevice-sweep.sh",
   "apps/web-platform/infra/inngest-registry-probe.sh",
   "apps/web-platform/infra/inngest-doublefire-probe.sh",
+  // #7095 — the re-deliverable web-host Doppler credential and the two systemd
+  // drop-ins that re-point the GENERATED units (vector, inngest-heartbeat) at it.
+  // The .tmpl is folded in as local.webhook_doppler_token_env (the RENDERED
+  // content, so a secret rotation alone changes the hash); the two .conf files are
+  // plain file() hashes.
+  "apps/web-platform/infra/soleur-doppler-token.tmpl",
+  "apps/web-platform/infra/10-vector-doppler-token.conf",
+  "apps/web-platform/infra/10-inngest-heartbeat-doppler-token.conf",
+  "apps/web-platform/infra/10-inngest-server-doppler-token.conf",
 ];
 
 function buildTriggerRegex(files: string[]): RegExp {

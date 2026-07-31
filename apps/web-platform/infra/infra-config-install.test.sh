@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for infra-config-install.sh — the pinned root-run escalation helper that
-# infra-config-apply.sh invokes via sudo to write the 15 managed files into their
+# infra-config-apply.sh invokes via sudo to write the managed files into their
 # root-owned destination directories (#4827).
 #
 # The helper is the security boundary for the wildcard-free sudoers grant
@@ -160,38 +160,130 @@ test_reject_dest_symlink() {
   teardown
 }
 
-# --- Test 5: All 15 managed dests are accepted with their authoritative spec ---
+# --- Test 5: EVERY managed dest is accepted with its authoritative spec ---
 # Each entry is "dest|mode|owner" — mode/owner MUST match the helper's internal
 # table (caller-supplied values that disagree are rejected, #4827 hardening).
 # The sudoers dest is intentionally absent (root-managed, not helper-writable).
+#
+# #7095 — the spec list is DERIVED from the helper's own DEST_SPEC rather than hand-copied.
+# A hand-maintained duplicate silently under-tests the moment a dest is added: the loop still
+# reports "all N accepted" for the stale N while the new dest is never exercised at all. The
+# cardinality floor below keeps that derivation non-vacuous (an empty parse would otherwise
+# make this test pass by testing nothing).
 test_all_managed_dests_accepted() {
-  echo "TEST: install — every FILE_MAP dest is allowlisted (15, sudoers excluded)"
+  echo "TEST: install — every DEST_SPEC dest is allowlisted and accepted (sudoers excluded)"
   setup
-  local specs=(
-    "/usr/local/bin/ci-deploy.sh|755|root:root"
-    "/usr/local/bin/ci-deploy-wrapper.sh|755|root:root"
-    "/etc/systemd/system/webhook.service|644|root:root"
-    "/usr/local/bin/cat-deploy-state.sh|755|root:root"
-    "/usr/local/bin/canary-bundle-claim-check.sh|755|root:root"
-    "/etc/webhook/hooks.json|640|root:deploy"
-    "/usr/local/bin/cat-infra-config-state.sh|755|root:root"
-    "/usr/local/bin/inngest-enumerate-reminders.sh|755|root:root"
-    "/usr/local/bin/inngest-rearm-reminders.sh|755|root:root"
-    "/usr/local/bin/inngest-wiped-volume-verify.sh|755|root:root"
-    "/usr/local/bin/cat-inngest-verify-state.sh|755|root:root"
-    "/usr/local/bin/inngest-inventory.sh|755|root:root"
-    "/usr/local/bin/git-lock-chardevice-sweep.sh|755|root:root"
-    "/usr/local/bin/inngest-registry-probe.sh|755|root:root"
-    "/usr/local/bin/inngest-doublefire-probe.sh|755|root:root"
-  )
-  local accepted=0 entry d mode owner rc
+  local specs=()
+  while IFS= read -r line; do
+    specs+=("$line")
+  # #7095 review — DERIVED FROM FILE_MAP (the OTHER file), NOT from DEST_SPEC.
+  #
+  # The first version of this derivation read DEST_SPEC out of $HELPER and fed each row back to
+  # $HELPER, which validates against DEST_SPEC — i.e. S == S. Mutation-proven vacuous: changing
+  # one DEST_SPEC mode from 755 to 700 (FILE_MAP untouched) left the suite 31 passed / 0 failed.
+  # That is strictly WEAKER than the hardcoded 15-entry literal it replaced, because the literal
+  # was an independent second source of truth. Deriving from FILE_MAP keeps the auto-ratcheting
+  # property AND restores the real invariant: FILE_MAP's dest/mode/owner must equal DEST_SPEC's,
+  # which is exactly what dest_not_allowlisted / mode_mismatch / owner_mismatch police at install
+  # time — on a host with no SSH runbook, mid-remediation.
+  #
+  # `[0-7]{3}` deliberately does NOT match a 4-digit mode: a `4755` setuid typo must not be
+  # silently dropped from the work-list, so the count assertion below catches its absence.
+  done < <(sed -n 's/^[[:space:]]*"[A-Z0-9_]*|\(\/[^|]*\)|\([0-7]\{3\}\)|\([^"]*\)"[[:space:]]*$/\1|\2|\3/p' "$HANDLER")
+  local total="${#specs[@]}"
+  # Non-vacuity floor: a broken sed would yield 0 specs and the loop below would then
+  # "pass" having asserted nothing. 15 is the pre-#7095 size, so this can only ratchet up.
+  # Cardinality cross-check: every FILE_MAP row must have parsed. A row the sed cannot match
+  # (4-digit mode, malformed quoting) would otherwise vanish from the work-list while `total`
+  # still cleared the floor — a member the extraction cannot see is silently exempt.
+  filemap_rows=$(grep -cE '^[[:space:]]*"[A-Z0-9_]+\|' "$HANDLER")
+  if [[ "$total" -ne "$filemap_rows" ]]; then
+    echo "  FAIL: parsed $total of $filemap_rows FILE_MAP rows — an unparsed row would be silently exempt from this test"
+    FAIL=$((FAIL + 1))
+    teardown
+    return
+  fi
+  if [[ "$total" -lt 15 ]]; then
+    echo "  FAIL: derived only $total DEST_SPEC entries from $HELPER — parse is broken, this test would be vacuous"
+    FAIL=$((FAIL + 1))
+    teardown
+    return
+  fi
+  local accepted=0 entry d mode owner rc payload
   for entry in "${specs[@]}"; do
     IFS='|' read -r d mode owner <<< "$entry"
     rc=0
-    printf 'payload-%s' "$(basename "$d")" | bash "$HELPER" "$d" "$mode" "$owner" 2>/dev/null || rc=$?
+    # #7095 — the payload must be SHAPE-APPROPRIATE for the dest. /etc/default/* dests are
+    # systemd EnvironmentFiles and the helper now refuses anything that is not KEY=VALUE, so
+    # feeding them the generic 'payload-<base>' blob would fail for a reason that has nothing
+    # to do with the allowlist this test is about.
+    case "$d" in
+      /etc/default/*) payload="KEY_FOR_$(basename "$d" | tr -c '[:alnum:]' '_')=value" ;;
+      *)              payload="payload-$(basename "$d")" ;;
+    esac
+    printf '%s' "$payload" | bash "$HELPER" "$d" "$mode" "$owner" 2>/dev/null || rc=$?
     [[ "$rc" == "$RC_OK" ]] && accepted=$((accepted + 1))
   done
-  assert_eq "all 15 managed dests accepted" "15" "$accepted"
+  assert_eq "every managed dest accepted (derived, n=$total)" "$total" "$accepted"
+  teardown
+}
+
+# --- #7095: envfile_shape guard (both directions — a one-way guard proves nothing) ---
+# The helper refuses an /etc/default/* payload that is not a valid systemd EnvironmentFile.
+# Rationale: such a file is consumed by units INCLUDING the webhook that delivers it, on a host
+# with no operator SSH runbook and no orderable replacement, and systemd refuses to start a unit
+# whose EnvironmentFile has a malformed line. Refuse-to-install beats install-and-brick.
+test_envfile_shape_guard() {
+  echo "TEST: install — /etc/default/* payload shape is enforced"
+  setup
+  local d="/etc/default/soleur-doppler-token" mode="640" owner="root:deploy" rc
+
+  # (a) NEGATIVE: prose / a stray shell line must be REJECTED (rc=3), not installed.
+  rc=0
+  printf 'this is not an env file\n' | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1 || rc=$?
+  assert_eq "malformed env payload is rejected" "$RC_REJECTED" "$rc"
+  if [[ ! -e "${TEST_DESTDIR}${d}" ]]; then
+    echo "  PASS: rejected payload left no file on disk (refuse-to-install, not install-then-fail)"
+  else
+    echo "  FAIL: rejected payload still landed at ${TEST_DESTDIR}${d}"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # (b) POSITIVE CONTROL: the real shape — assignments, blanks and # comments — is ACCEPTED.
+  # Without this the guard could be a blanket "reject every /etc/default write" and (a) would
+  # still pass, which would brick the very delivery this incident needs.
+  rc=0
+  printf '# comment\n\nDOPPLER_TOKEN=dp.st.example\nSENTRY_PROJECT_ID=123\n' \
+    | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1 || rc=$?
+  assert_eq "well-formed env payload is accepted" "$RC_OK" "$rc"
+
+  # (c) The empty-VALUE case is deliberately ACCEPTED here: `KEY=` is valid systemd syntax, so
+  # the installer is the wrong layer to reject it. It is caught earlier, by the terraform plan
+  # validation on var.doppler_token — recorded so a future reader does not "fix" it here.
+  rc=0
+  printf 'DOPPLER_TOKEN=\n' | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1 || rc=$?
+  assert_eq "empty-valued assignment is valid env syntax (guarded at terraform plan, not here)" "$RC_OK" "$rc"
+  teardown
+}
+
+# --- #7095: drop-in dests land even though their parent directory does not pre-exist ---
+# mktemp writes INTO the dest dir, so without the guarded mkdir -p a *.service.d/ dest fails
+# with a bare "mktemp" reason that reads like a disk fault.
+test_dropin_dir_created() {
+  echo "TEST: install — a drop-in dest whose parent dir is absent is created, not failed"
+  setup
+  local d="/etc/systemd/system/vector.service.d/10-vector-doppler-token.conf" rc=0
+  [[ -d "${TEST_DESTDIR}/etc/systemd/system/vector.service.d" ]] \
+    && echo "  WARN: parent dir pre-existed; this test is weaker than intended"
+  printf '[Service]\nEnvironmentFile=-/etc/default/soleur-doppler-token\n' \
+    | bash "$HELPER" "$d" "644" "root:root" >/dev/null 2>&1 || rc=$?
+  assert_eq "drop-in installs into a not-yet-existing .d directory" "$RC_OK" "$rc"
+  if [[ -f "${TEST_DESTDIR}${d}" ]]; then
+    echo "  PASS: drop-in file present at ${d}"
+  else
+    echo "  FAIL: drop-in file missing at ${TEST_DESTDIR}${d}"
+    FAIL=$((FAIL + 1))
+  fi
   teardown
 }
 
@@ -254,8 +346,16 @@ test_dest_spec_filemap_lockstep() {
   filemap_count=$(grep -cE '^\s*"[A-Z_]+_B64\|/' "$HANDLER")
   # DEST_SPEC keys look like: ["/dest/path"]="mode owner"
   dest_spec_count=$(grep -cE '^\s*\["/' "$HELPER")
-  assert_eq "FILE_MAP has 15 managed dests" "15" "$filemap_count"
-  assert_eq "DEST_SPEC has 15 managed dests" "15" "$dest_spec_count"
+  # #7095 — the literal pin ("must be exactly 15") was removed. It was a THIRD source of truth
+  # that went stale on every FILE_MAP addition and had to be edited in lockstep with the two it
+  # was policing, which is the drift it existed to prevent. What matters is the CROSS-FILE
+  # invariant below plus a non-vacuity floor, both of which ratchet automatically.
+  if [[ "$filemap_count" -lt 15 || "$dest_spec_count" -lt 15 ]]; then
+    echo "  FAIL: implausible counts (FILE_MAP=$filemap_count DEST_SPEC=$dest_spec_count) — a grep returning ~0 would make the equality below vacuously true"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: counts are plausible (FILE_MAP=$filemap_count DEST_SPEC=$dest_spec_count)"
+  fi
   assert_eq "DEST_SPEC and FILE_MAP cardinality match" "$filemap_count" "$dest_spec_count"
   # The sudoers dest must be in NEITHER (root-managed).
   if grep -q '/etc/sudoers.d/deploy-inngest-bootstrap' "$HELPER"; then
@@ -274,6 +374,8 @@ test_reject_nonallowlisted_dest
 test_reject_traversal
 test_reject_dest_symlink
 test_all_managed_dests_accepted
+test_envfile_shape_guard
+test_dropin_dir_created
 test_reject_sudoers_dest
 test_reject_setuid_mode
 test_reject_owner_seize

@@ -6,6 +6,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HANDLER="${SCRIPT_DIR}/infra-config-apply.sh"
 
+# #7095 — managed-file cardinality, DERIVED from the handler's own FILE_MAP rather than pinned
+# as a literal. The previous hardcoded 15 had to be edited in lockstep with every FILE_MAP
+# addition, which is the drift these counts exist to detect; a stale literal turns a real
+# regression and a routine addition into the same red. MANAGED_N ratchets automatically.
+MANAGED_N=$(sed -n '/^FILE_MAP=(/,/^)/p' "$HANDLER" | grep -cE '^[[:space:]]*"[A-Z0-9_]+\|')
+if [[ "${MANAGED_N:-0}" -lt 15 ]]; then
+  echo "FATAL: derived MANAGED_N=$MANAGED_N from $HANDLER FILE_MAP — parse is broken; every count assertion below would be vacuous" >&2
+  exit 2
+fi
+MANAGED_MINUS_1=$((MANAGED_N - 1))
+
 PASS=0
 FAIL=0
 TMPDIR_ROOT=""
@@ -70,6 +81,14 @@ export_valid_env_vars() {
   export GIT_LOCK_CHARDEVICE_SWEEP_SH_B64=$(_payload_file "#!/bin/bash")
   export INNGEST_REGISTRY_PROBE_SH_B64=$(_payload_file "#!/bin/bash")
   export INNGEST_DOUBLEFIRE_PROBE_SH_B64=$(_payload_file "#!/bin/bash")
+  # #7095 — the re-deliverable Doppler credential + the two drop-ins re-pointing the
+  # generated units (vector, inngest-heartbeat) at it. The credential payload MUST be valid
+  # KEY=VALUE: infra-config-install.sh rejects a malformed /etc/default/* payload outright
+  # (envfile_shape), which is the guard that stops a bad render bricking the delivery channel.
+  export SOLEUR_DOPPLER_TOKEN_B64=$(_payload_file "DOPPLER_TOKEN=dp.st.test-fixture")
+  export VECTOR_DOPPLER_TOKEN_CONF_B64=$(_payload_file "[Service]")
+  export INNGEST_HEARTBEAT_DOPPLER_TOKEN_CONF_B64=$(_payload_file "[Service]")
+  export INNGEST_SERVER_DOPPLER_TOKEN_CONF_B64=$(_payload_file "[Service]")
 }
 
 assert_eq() {
@@ -235,9 +254,9 @@ test_state_file_happy_path() {
   local files_total
   files_total=$(jq -r '.files_total' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   assert_eq "exit_code is 0" "0" "$exit_code"
-  assert_eq "files_written is 15" "15" "$files_written"
+  assert_eq "files_written is MANAGED_N ($MANAGED_N)" "$MANAGED_N" "$files_written"
   assert_eq "files_failed is 0" "0" "$files_failed"
-  assert_eq "files_total is 15" "15" "$files_total"
+  assert_eq "files_total is MANAGED_N ($MANAGED_N)" "$MANAGED_N" "$files_total"
 
   local first_file_status first_file_sha
   first_file_status=$(jq -r '.files[0].status' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
@@ -409,7 +428,7 @@ test_exit_trap_unhandled() {
 # the env mapping), instead of the former upfront all-or-nothing exit 1 that
 # wrote nothing and froze every file.
 test_missing_env_partial_write() {
-  echo "TEST: one missing env var — other 14 files still written (#4804)"
+  echo "TEST: one missing env var — the other MANAGED_N-1 files still written (#4804)"
   setup
   export_valid_env_vars
   unset CAT_INFRA_CONFIG_STATE_SH_B64  # simulate host hooks.json drift on the newest key
@@ -435,14 +454,14 @@ test_missing_env_partial_write() {
     PASS=$((PASS + 1))
   fi
 
-  # State JSON counts: 14 written, 1 failed, 15 total (one env var deliberately missing)
+  # State JSON counts: MANAGED_N-1 written, 1 failed, MANAGED_N total (one env var deliberately missing)
   local files_written files_failed files_total
   files_written=$(jq -r '.files_written' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   files_failed=$(jq -r '.files_failed' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   files_total=$(jq -r '.files_total' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
-  assert_eq "files_written is 14" "14" "$files_written"
+  assert_eq "files_written is MANAGED_N-1 ($MANAGED_MINUS_1)" "$MANAGED_MINUS_1" "$files_written"
   assert_eq "files_failed is 1" "1" "$files_failed"
-  assert_eq "files_total is 15" "15" "$files_total"
+  assert_eq "files_total is MANAGED_N ($MANAGED_N)" "$MANAGED_N" "$files_total"
 
   # The missing file's entry records status:failed, reason:missing_env
   local mstatus mreason
@@ -508,7 +527,7 @@ test_prod_mode_escalated_move() {
   # root-managed and not in FILE_MAP, #4827 security review).
   local calls
   calls=$([[ -f "$helper_log" ]] && wc -l < "$helper_log" | tr -d ' ' || echo 0)
-  assert_eq "escalation helper invoked once per file (15)" "15" "$calls"
+  assert_eq "escalation helper invoked once per file ($MANAGED_N)" "$MANAGED_N" "$calls"
 
   # The handler exiting 0 proves it staged in INFRA_CONFIG_STAGING_DIR rather than
   # mktemp-ing in a root-owned dest dir (which would EACCES as non-root) — the
@@ -531,7 +550,7 @@ test_prod_mode_escalated_move() {
   local files_written exit_code
   files_written=$(jq -r '.files_written' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   exit_code=$(jq -r '.exit_code' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
-  assert_eq "prod-mode files_written is 15" "15" "$files_written"
+  assert_eq "prod-mode files_written is MANAGED_N ($MANAGED_N)" "$MANAGED_N" "$files_written"
   assert_eq "prod-mode exit_code is 0" "0" "$exit_code"
 
   teardown

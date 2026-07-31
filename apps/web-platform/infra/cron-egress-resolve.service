@@ -17,5 +17,16 @@ TimeoutStartSec=120
 StateDirectory=cron-egress-resolve
 # Doppler env wiring — see cron-egress-firewall.service for the rationale.
 EnvironmentFile=-/etc/default/inngest-server
+# #7095 — the re-deliverable Doppler credential. MUST stay AFTER the inngest-server line:
+# systemd applies EnvironmentFile= in order and later-wins, so this overrides the DOPPLER_TOKEN
+# inherited from /etc/default/inngest-server. That file holds a COPY of the web-host token,
+# extracted out of /etc/default/webhook-deploy by inngest-bootstrap.sh:586 and then PINNED
+# forever by :567-568 (which preserves it whenever the value still matches ^DOPPLER_TOKEN=dp.),
+# so a dead-but-well-formed token never self-heals there. That copy is why one revocation at
+# 11:19:30.614Z killed this unit too: measured onset +18.17s to +26.14s, with zero failures in
+# the preceding 53h. Do NOT rewrite /etc/default/inngest-server instead — inngest-bootstrap.sh:616-617
+# fail-closes the host if DOPPLER_PROJECT goes missing from it, and a host replace is not available.
+# The '-' prefix keeps this a no-op on a host that has not received the file yet.
+EnvironmentFile=-/etc/default/soleur-doppler-token
 Environment=HOME=/root
 ExecStart=/bin/sh -c 'D="$(command -v doppler || true)"; if [ -n "$D" ] && [ -n "$DOPPLER_TOKEN" ]; then exec "$D" run --project soleur --config prd -- /usr/local/bin/cron-egress-resolve.sh; else exec /usr/local/bin/cron-egress-resolve.sh; fi'

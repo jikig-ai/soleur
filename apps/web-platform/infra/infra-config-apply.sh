@@ -46,12 +46,30 @@ FILE_MAP=(
   "GIT_LOCK_CHARDEVICE_SWEEP_SH_B64|/usr/local/bin/git-lock-chardevice-sweep.sh|755|root:root"
   "INNGEST_REGISTRY_PROBE_SH_B64|/usr/local/bin/inngest-registry-probe.sh|755|root:root"
   "INNGEST_DOUBLEFIRE_PROBE_SH_B64|/usr/local/bin/inngest-doublefire-probe.sh|755|root:root"
+  # #7095 — 640 root:deploy, DELIBERATELY different from the existing
+  # /etc/default/webhook-deploy (600 deploy:deploy). webhook.service runs as User=deploy and
+  # vector.service reads the same file, so the credential needs GROUP read; root ownership
+  # keeps the deploy user from rewriting its own credential source. Not a copy-paste slip.
+  "SOLEUR_DOPPLER_TOKEN_B64|/etc/default/soleur-doppler-token|640|root:deploy"
+  # #7095 — systemd drop-ins re-pointing the two GENERATED units (vector.service from
+  # soleur-host-bootstrap.sh:721-738, inngest-heartbeat.service from inngest-bootstrap.sh:315)
+  # at the re-deliverable credential. Their unit bodies are heredocs baked into the image, so
+  # nothing re-renders them on a running host; a drop-in is the only delivery path, and systemd
+  # merges drop-ins AFTER the main unit so EnvironmentFile later-wins applies. Distinct basenames
+  # are REQUIRED: infra_config_classify_files keys the repo lookup on basename(dest), so two
+  # drop-ins both named 10-doppler-token.conf would collide on one repo file.
+  "VECTOR_DOPPLER_TOKEN_CONF_B64|/etc/systemd/system/vector.service.d/10-vector-doppler-token.conf|644|root:root"
+  "INNGEST_HEARTBEAT_DOPPLER_TOKEN_CONF_B64|/etc/systemd/system/inngest-heartbeat.service.d/10-inngest-heartbeat-doppler-token.conf|644|root:root"
+  # #7095 review — inngest-server runs `doppler run` UNCONDITIONALLY (no [ -n $DOPPLER_TOKEN ]
+  # gate) with Restart=on-failure, and inngest-bootstrap.sh restarts it on EVERY co-located
+  # ci-deploy. Without this it crash-loops on the next deploy after the fix lands.
+  "INNGEST_SERVER_DOPPLER_TOKEN_CONF_B64|/etc/systemd/system/inngest-server.service.d/10-inngest-server-doppler-token.conf|644|root:root"
 )
 
 # TEST_DESTDIR allows tests to redirect writes to a sandbox
 DESTDIR="${TEST_DESTDIR:-}"
 
-# Prod-mode escalation (#4827): the handler runs as User=deploy but the 15 managed
+# Prod-mode escalation (#4827): the handler runs as User=deploy but the managed
 # files live in root:root 0755 dirs the deploy user cannot mktemp into (EACCES).
 # In prod mode (DESTDIR empty) we stage each decoded payload in a deploy-writable
 # dir, then escalate the atomic install to root via the pinned sudoers helper
@@ -127,6 +145,12 @@ for entry in "${FILE_MAP[@]}"; do
   #    rename there, so the deploy user never has to write a root-owned dir (#4827).
   if [[ -n "$DESTDIR" ]]; then
     stage_dir=$(dirname "$dest")
+    # #7095 — sandbox mode stages directly INTO the dest dir, so a dest whose parent does not
+    # exist yet (a systemd drop-in .d/ directory) fails at mktemp below. Prod mode does not need
+    # this: it stages in $STAGING_DIR (which exists) and the root helper creates the real dest
+    # dir itself. Mirroring it here keeps the sandbox path faithful to prod rather than making
+    # drop-in dests untestable.
+    mkdir -p "$stage_dir" 2>/dev/null || true
   else
     stage_dir="$STAGING_DIR"
   fi

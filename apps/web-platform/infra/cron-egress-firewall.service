@@ -20,6 +20,17 @@ TimeoutStartSec=300
 # firewall must install regardless; the scripts skip Sentry/dynamic-host
 # work with WARNs when the env is missing.
 EnvironmentFile=-/etc/default/inngest-server
+# #7095 — the re-deliverable Doppler credential. MUST stay AFTER the inngest-server line:
+# systemd applies EnvironmentFile= in order and later-wins, so this overrides the DOPPLER_TOKEN
+# inherited from /etc/default/inngest-server, which holds a COPY of the web-host token that
+# inngest-bootstrap.sh:586 greps out of /etc/default/webhook-deploy and :567-568 then pins
+# forever. This unit is a boot-time oneshot, so unlike its cron-egress-resolve sibling it has
+# NOT been observed failing since the 2026-07-30T11:19:30.614Z revocation — it simply has not
+# run. That makes it a LATENT instance of the same fault, not a non-instance: its ExecStart
+# gates on [ -n "$DOPPLER_TOKEN" ] exactly as the failing siblings do, so it would take the
+# doppler arm with a dead credential on the next boot. Fixing it here is what stops the next
+# reboot re-opening this as an egress-firewall failure.
+EnvironmentFile=-/etc/default/soleur-doppler-token
 Environment=HOME=/root
 ExecStart=/bin/sh -c 'D="$(command -v doppler || true)"; if [ -n "$D" ] && [ -n "$DOPPLER_TOKEN" ]; then exec "$D" run --project soleur --config prd -- /usr/local/bin/cron-egress-nftables.sh; else exec /usr/local/bin/cron-egress-nftables.sh; fi'
 

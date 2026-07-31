@@ -1,0 +1,6 @@
+# /etc/default/soleur-doppler-token (#7095). Rationale: server.tf local.webhook_doppler_token_env.
+# Byte-budgeted: this file is injected verbatim into cloud-init user_data. Keep prose in server.tf.
+DOPPLER_TOKEN=${doppler_token}
+SENTRY_INGEST_DOMAIN=${sentry_ingest_domain}
+SENTRY_PROJECT_ID=${sentry_project_id}
+SENTRY_PUBLIC_KEY=${sentry_public_key}

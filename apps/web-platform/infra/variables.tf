@@ -420,6 +420,21 @@ variable "doppler_token" {
   description = "Doppler service token for production secrets injection"
   type        = string
   sensitive   = true
+
+  # #7095 — THE SHAPE GATE DELIBERATELY DOES NOT LIVE HERE. It is a
+  # lifecycle { precondition } on terraform_data.deploy_pipeline_fix (server.tf).
+  #
+  # A `validation` block on a variable ECHOES THE OFFENDING VALUE into the diagnostic even when
+  # the variable is `sensitive = true`. Measured on this repo's pinned Terraform, in a public
+  # Actions log: `var.doppler_token is "dummy"`. The gate fires exactly when the token is
+  # malformed — and a malformed token is still a LIVE credential (a rotated value with a trailing
+  # newline, a dp.ct. personal token pasted under incident pressure). Both apply workflows run
+  # `terraform plan` under `doppler run --name-transformer tf-var`, which does not ::add-mask::
+  # the value, so the credential would be printed unmasked. A guard that discloses the secret it
+  # guards is worse than no guard.
+  #
+  # A `precondition` emits ONLY its error_message, never the value, and still fails at plan time —
+  # so the never-attempt property that made this worth having is preserved.
 }
 
 variable "sentry_dsn" {

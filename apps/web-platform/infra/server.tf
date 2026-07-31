@@ -6,6 +6,100 @@ locals {
     webhook_deploy_secret = var.webhook_deploy_secret
   })
 
+  # --- #7095: re-deliverable web-host Doppler credential ---
+  #
+  # Sentry DSN components, decomposed from the single baked DSN so the host can emit WITHOUT
+  # reading Doppler. A Sentry DSN is https://<public_key>@<ingest_domain>/<project_id>.
+  # var.sentry_dsn defaults to "" so a bare `terraform validate` keeps working, hence try():
+  # an unparseable/empty DSN yields empty components, which ci-deploy.sh's
+  # `[[ -n ... && -n ... && -n ... ]]` guards already treat as "no Sentry" — the SAME degraded
+  # behaviour as today, never a crash. It cannot be worse than the status quo, and when the DSN
+  # is present it is strictly better: the emitters keep working through a dead Doppler token.
+  sentry_dsn_parts = try(
+    regex("^https://(?P<key>[^@/]+)@(?P<host>[^/]+)/(?P<project>[^/?#]+)$", var.sentry_dsn),
+    { key = "", host = "", project = "" }
+  )
+
+  # --- local.webhook_doppler_token_env — the full rationale for soleur-doppler-token.tmpl ---
+  #
+  # THE PROSE LIVES HERE, NOT IN THE .tmpl, AND THAT IS DELIBERATE. The rendered file is injected
+  # verbatim into cloud-init `user_data`, which is base64gzip'd against a hard 32,768-byte Hetzner
+  # cap. A comment in the template is therefore not free — the first draft carried ~3.8 KB of
+  # header and cost +4,840 B of real `user_data`, blowing WEB_GZIP_BUDGET by 292 B for a payload
+  # whose functional content is ~200 B. Terraform comments cost nothing. Same move as #6425/#6594.
+  #
+  # WHY THIS FILE EXISTS. web-1's boot-baked Doppler service token in /etc/default/webhook-deploy
+  # was revoked 2026-07-30T11:19:30.614Z. That file is written EXACTLY ONCE at first boot from
+  # var.doppler_token, with no Terraform resource, no replace_triggered_by and no drift detector,
+  # on a host that cannot be replaced (cx33, orderable in 0 of 3 EU DCs) and has no operator SSH
+  # runbook. Measured blast radius: container-restart-monitor +18.17s after the mint,
+  # inngest-heartbeat and cron-egress-resolve +26.14s, zero failures in the preceding 53h.
+  #
+  # ADDITIVE, NEVER A REWRITE. Consumers pick this up by systemd later-wins (an EnvironmentFile=
+  # line placed AFTER the original) or an explicit guarded shell source. webhook-deploy and
+  # inngest-server stay in place: inngest-bootstrap.sh:616-617 fail-closes the host if
+  # DOPPLER_PROJECT goes missing from the latter.
+  #
+  # NO DOPPLER_CONFIG_DIR HERE (#6536) — webhook-deploy carries it, and importing it into units
+  # running as a different user re-opens the ownership-clash surface.
+  #
+  # THE SENTRY PARAMS ARE BAKED ON PURPOSE (R3). ci-deploy.sh hydrates them FROM Doppler with the
+  # very token that is dead, and every emitter is guarded on all three being non-empty, so under a
+  # revoked token the host emits ZERO Sentry events — which is why 341 unit failures over 5.7h
+  # produced no page. They are public DSN components (already in the client bundle), so baking
+  # them adds no exposure class. Precedent: BETTERSTACK_INGEST_URL baked into
+  # /etc/default/web-private-nic-guard for the same reason.
+  #
+  # SHAPE IS ENFORCED IN TWO PLACES, NOT THREE — and only for the /etc/default file.
+  # (1) the doppler_token_shape_ok precondition — fails at `terraform plan`, the only
+  #     never-attempt layer; (2) infra-config-install.sh rejects a non-KEY=VALUE /etc/default/*
+  #     payload (reject "envfile_shape").
+  # An earlier revision of this comment claimed a third layer, "systemd-analyze verify before the
+  # self-restart". THAT DOES NOT EXIST on this path: the only invocation in the repo is a
+  # pre-merge CI job (infra-validation.yml) hard-filtered to the three git-data-gc units, and
+  # infra-config-apply.sh goes straight from writing files to `systemctl daemon-reload`.
+  # RESIDUAL, STATED PLAINLY: the two systemd drop-ins have NO shape gate — envfile_shape is
+  # scoped to /etc/default/*, so it never sees /etc/systemd/system/*.service.d/*.conf. Their
+  # safety rests entirely on each carrying a single literal `EnvironmentFile=-` directive, and
+  # `daemon-reload` is exactly when a malformed drop-in would take vector.service down. Note
+  # EnvironmentFile=- tolerates ABSENT and UNREADABLE but NOT empty-valued: a bare
+  # `DOPPLER_TOKEN=` wins by later-wins and silently blanks a good credential, which is what (1)
+  # exists to stop.
+  #
+  # RENDERED ONCE AND INJECTED (R8). The earlier draft rendered this .tmpl for the webhook path
+  # AND hand-wrote "the same" content with a printf in cloud-init.yml, with nothing comparing the
+  # two — the existing webhook-deploy pair already demonstrates exactly that drift (600
+  # deploy:deploy on one side, 640 root:deploy on the other). One render, injected, means zero
+  # drift and no test needed to police it. It is also load-bearing for verification:
+  # infra_config_content_assert byte-compares the delivered dest against the sha256 of THIS
+  # string, so an independently-shaped boot copy would be content_mismatch by definition.
+  # #7095 — shape gate for the credential, evaluated here rather than as a variable validation
+  # (see variables.tf for why: a variable validation echoes the value even when sensitive).
+  # nonsensitive() is safe and necessary: it is applied to the BOOLEAN result of can(regex(...)),
+  # never to the token, so no secret is de-marked — only the yes/no answer.
+  #
+  # Accepts every credential family Doppler actually issues (st = service, sa = service-account,
+  # pt = personal, ct = CLI). Pinning st-only would fail the plan for an operator who re-mints
+  # under incident pressure with a different token type — closing the sole no-SSH remediation
+  # channel with the guard that exists to protect it. The load-bearing part is the character
+  # class: no whitespace, CR, '#' or '=' can reach a systemd EnvironmentFile line.
+  # #7095 review — the Sentry components had NO gate at all, while doppler_token got one. The
+  # try() below falls back to three empty strings on any parse miss (a trailing slash alone
+  # defeats the project capture), the installer's shape check ACCEPTS a bare `KEY=`, and nothing
+  # upstream sets these — so an unparseable DSN renders the paging route inert, silently, which
+  # is the 26-hour-silence condition this PR exists to close. Empty DSN stays allowed (the
+  # documented `terraform validate` path); a NON-empty one must parse.
+  sentry_dsn_shape_ok = nonsensitive(var.sentry_dsn == "" || can(regex("^https://[^@/]+@[^/]+/[^/?#]+$", var.sentry_dsn)))
+
+  doppler_token_shape_ok = nonsensitive(can(regex("^dp\\.(st|sa|pt|ct)\\.[A-Za-z0-9._-]+$", var.doppler_token)))
+
+  webhook_doppler_token_env = templatefile("${path.module}/soleur-doppler-token.tmpl", {
+    doppler_token        = var.doppler_token
+    sentry_ingest_domain = local.sentry_dsn_parts.host
+    sentry_project_id    = local.sentry_dsn_parts.project
+    sentry_public_key    = local.sentry_dsn_parts.key
+  })
+
   # Fresh-host bootstrap assets baked into var.image_name and extracted by cloud-init.yml
   # at first boot (#5921). These 22 scripts + hooks.json.tmpl were REMOVED from cloud-init
   # write_files: — as base64 blobs they pushed the rendered Hetzner user_data to ~282 KB,
@@ -257,6 +351,20 @@ resource "hcloud_server" "web" {
     # stronger doppler_token, so this adds no new trust boundary. See cloud-init.yml ghcr_login.
     ghcr_read_user  = var.ghcr_read_user
     ghcr_read_token = var.ghcr_read_token
+
+    # #7095 — fresh-host parity for the re-deliverable credential. The SAME rendered string the
+    # webhook channel delivers (local.webhook_doppler_token_env), injected rather than
+    # hand-written a second time, so the boot copy and the delivered copy cannot drift (R8). The
+    # existing webhook-deploy pair is the cautionary precedent: it is written by a separate
+    # printf here and ends up 600 deploy:deploy against the delivery path's 640 root:deploy.
+    #
+    # base64'd for transport, for the same reason hooks.json is: the value is multi-line and
+    # secret-bearing, and cloud-init interpolates it inside a single-quoted shell argument. A raw
+    # multi-line render there would break the runcmd line; base64 keeps it one token, and
+    # cloud-init.yml decodes it with `printf '%s' ... | base64 -d` into a file that install(1)
+    # has already created at the final 640 root:deploy, so the redirect never opens a
+    # world-readable window.
+    soleur_doppler_token_env_b64 = base64encode(local.webhook_doppler_token_env)
     # Fresh-host parity for the CI SSH keypair generated in
     # ci-ssh-key.tf. local.ci_ssh_pubkey is trimspaced — see locals{}
     # block in ci-ssh-key.tf for the rationale.
@@ -1229,6 +1337,20 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
 # Both paths must stay in sync — a change here without updating cloud-init.yml
 # means new servers provisioned from scratch will miss the change.
 resource "terraform_data" "deploy_pipeline_fix" {
+  lifecycle {
+    # #7095 — fails at `terraform plan`, before a byte reaches the host, and without echoing the
+    # token (unlike a variable validation). This is the only never-attempt layer; the installer's
+    # envfile_shape rejection is refuse-to-install, downstream — and covers /etc/default/* only.
+    precondition {
+      condition     = local.sentry_dsn_shape_ok
+      error_message = "sentry_dsn is set but does not parse as https://<key>@<host>/<project> — the host-side Sentry components would render EMPTY and the paging route would be silently inert (#7095). Fix the DSN in Doppler prd_terraform, or clear it deliberately. The value is not shown: treat it as a credential."
+    }
+    precondition {
+      condition     = local.doppler_token_shape_ok
+      error_message = "doppler_token must be a Doppler token matching ^dp.(st|sa|pt|ct).[A-Za-z0-9._-]+$ with no whitespace, CR, '#' or '=' — it is rendered into a systemd EnvironmentFile on a host that cannot be replaced, and a malformed value bricks the deploy channel (#7095). The offending value is deliberately NOT shown: it is a live credential."
+    }
+  }
+
   # AppArmor profile must be loaded before ci-deploy.sh references it (#1570).
   #
   # #5515 — DO depend on the infra_config_handler_bootstrap bridge. Both are
@@ -1342,6 +1464,27 @@ resource "terraform_data" "deploy_pipeline_fix" {
     # DEPLOY_PIPELINE_FIX_TRIGGERS array + DPF_REGEX + the gate test.
     file("${path.module}/git-lock-chardevice-sweep.sh"),
     local.hooks_json,
+    # #7095 — the re-deliverable Doppler credential. Hashed as the RENDERED content, not as
+    # file("soleur-doppler-token.tmpl"): the template's bytes never change when the SECRET
+    # rotates, so hashing the .tmpl would leave the exact rot this file exists to fix
+    # undetectable. The rendered string embeds var.doppler_token, so it is a strict superset
+    # of hashing the token separately.
+    #
+    # HONEST SCOPE OF THE SELF-HEAL THIS BUYS (#7095 R6): triggers_replace is consulted ONLY
+    # when Terraform runs, and apply-deploy-pipeline-fix.yml is `on: push` + paths + dispatch,
+    # with no schedule. A Doppler-only rotation changes zero repo paths, so nothing evaluates
+    # this hash on its own. It self-heals on the next apply for ANY reason — and only for
+    # rotations that write back to soleur/prd_terraform. An out-of-band rotation (exactly what
+    # happened at 11:19:30.614Z) does not update prd_terraform, so even a scheduled apply would
+    # re-push the same stale value. Closing that is a follow-up (a schedule: on this workflow
+    # plus a liveness probe); do not read this line as more than it is.
+    local.webhook_doppler_token_env,
+    # #7095 — the two drop-ins re-pointing the generated units (vector, inngest-heartbeat) at
+    # the credential above. Plain repo files, so file()-hashed normally; registering them here
+    # is what makes a body-only edit re-fire the push and actually reach the host.
+    file("${path.module}/10-vector-doppler-token.conf"),
+    file("${path.module}/10-inngest-heartbeat-doppler-token.conf"),
+    file("${path.module}/10-inngest-server-doppler-token.conf"),
   ]))
 
   # #3756 — replaced SSH provisioners (connection + file + remote-exec) with
@@ -1362,6 +1505,12 @@ resource "terraform_data" "deploy_pipeline_fix" {
       APP_DOMAIN_BASE  = var.app_domain_base
       INFRA_DIR        = path.module
       HOOKS_JSON_B64   = base64encode(local.hooks_json)
+      # #7095 — passed pre-encoded for the same reason as HOOKS_JSON_B64: the on-disk file is
+      # the unrendered TEMPLATE, so push-infra-config.sh cannot base64 it from INFRA_DIR the
+      # way it does for the plain script payloads. base64 also keeps the secret off any argv
+      # and out of the command string (Terraform refuses to interpolate a sensitive value
+      # into `command` at all, which is why environment {} is the only route).
+      SOLEUR_DOPPLER_TOKEN_B64 = base64encode(local.webhook_doppler_token_env)
     }
   }
 }

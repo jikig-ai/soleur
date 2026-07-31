@@ -12,6 +12,7 @@ triggers:
   - release published green with no pullable image
   - websocket bad handshake on the registry bridge
   - GHCR read PAT revoked (401) / minter disabled (403 DENIED)
+  - web-1 boot-baked Doppler service token revoked (2026-07-30T11:19:30.614Z) — empty ZOT_REGISTRY_URL sends the zot gate down its "dark, pre-provisioning" branch
 art_33_triggered: false
 art_34_triggered: false
 art_33_deadline: "n/a — availability incident. No personal data was accessed, exfiltrated, altered or lost: the failure is a container image that could not be pulled. No database, storage bucket, or user-facing data path was involved."
@@ -92,15 +93,47 @@ own instrumentation:
 
 This is exactly the residual ADR-096 clause (f) names and #7071 deliberately did **not** close:
 "It asserts the manifest is in zot AND readable by the PUSH credential over the CF Tunnel. It does
-NOT prove the host can pull." The three candidate causes it enumerates are the live suspect list:
-the private-net `10.0.1.10 → 10.0.1.30:5000` path being down; `ZOT_PULL_*` gone stale (the *same*
-rotation-staleness class as the original trigger, one credential over); or zot `accessControl`
-granting push-read but not pull-read. `web-zot-consumer-probe.sh` is the built-for-this probe.
+NOT prove the host can pull."
 
 One thing #7071 did buy, and it is the reason this was diagnosable at all: before it, a failed
 mirror and a failed host-pull produced the same undifferentiated red. `mirror_verified=true`
 alongside `image_pull_failed` is a *new* signal, and it collapses the search space from "the whole
 registry path" to one leg.
+
+## The host-pull suspect list was wrong — measured 2026-07-30 (#7095)
+
+The three candidates clause (f) enumerates — the private `10.0.1.10 → 10.0.1.30:5000` NIC path
+being down, `ZOT_PULL_*` gone stale, and zot `accessControl` granting push-read but not pull-read —
+were treated above as "the live suspect list". **All three were measured and all three are
+healthy.** Recording them here as suspects, unqualified, sent the next reader at a dead end.
+
+The actual fault is **one credential level up, and it is a second, distinct incident**: web-1's
+boot-baked full-`prd` Doppler **service token** in `/etc/default/webhook-deploy` was revoked at
+**2026-07-30T11:19:30.614Z**. With it dead, `doppler secrets get` returns empty, `ZOT_REGISTRY_URL`
+is empty, and the zot gate takes its `"dark, pre-provisioning"` branch — so it never contacts zot
+at all and falls through to an unauthenticated GHCR pull of a private package → `auth_denied` →
+`image_pull_failed`.
+
+The two incidents share only that reason string. That is the whole reason eight red releases read
+as one known incident: **`image_pull_failed` is emitted by both a dead mirror and a dead
+credential**, and nothing downstream distinguished them.
+
+The evidence that separates them:
+
+| # | Measurement | Result |
+|---|---|---|
+| E1 | Unit-failure onset is +18.17s / +26.14s after the revocation mint, with zero failures in the preceding 53h | the revocation is the trigger, not a coincidence |
+| E2 | `inngest-heartbeat.service` carries a **non-optional** `EnvironmentFile` for `/etc/default/inngest-server` and ran healthy until 11:19:56 | the file exists; the `web-probe-read-token.tf` parenthetical claiming otherwise is stale |
+| E3 | `ExecStart` branches on `[ -n "$DOPPLER_TOKEN" ]`, so an *always*-empty token would make behaviour invariant across the revocation — it flipped | the token was live, then was not |
+| E4 | Terraform's own copy of the token is **alive (HTTP 200)**, and its rendered env line carries no CR / `#` / space / newline | the remediation has a working credential to deliver |
+| E5 | Push leg healthy (`mirror_verified=true`) throughout | confirms the fault is host-side, not registry-side |
+
+E4 is the precondition the entire remediation rests on: the fix delivers Terraform's live token to
+the host over the existing no-SSH config channel, rather than minting a new one.
+
+**Generalizable:** a suspect list published in an incident report is a *claim*, and an unmeasured
+claim in a post-mortem is worse than no claim — it is read as diagnosis. Suspects belong in a
+report only with their measurement state attached.
 
 ## Partial remediation (the push leg)
 
@@ -134,8 +167,9 @@ premise, and premises need detectors too*. Concretely:
 
 | Issue | Item | Owner |
 |---|---|---|
-| #7095 | **THE LIVE ONE — production has not deployed since 2026-07-29.** The host-pull leg (`ZOT_PULL_*` over the private NIC) is broken while the push leg is proven healthy. Highest-prior suspect is `ZOT_PULL_*` staleness: the *same* rotation-invisibility class as the original trigger, one credential over. Run `web-zot-consumer-probe.sh` first. **P1.** | `agent` |
-| #7095 | Nothing alerts on "N consecutive release-deploy failures". Eight went red over a day and each was read as "the known incident" rather than a distinct live fault. The release run failing is not itself a monitored condition. | `agent` |
+| #7095 | **THE LIVE ONE — production has not deployed since 2026-07-29.** Root cause measured 2026-07-30 (see the section above): web-1's boot-baked full-`prd` Doppler **service token** was revoked at 11:19:30.614Z, so the zot gate goes dark and the pull falls through to an unauthenticated GHCR fetch. NOT `ZOT_PULL_*` — all three clause (f) suspects measured healthy. Remediation delivers Terraform's live token over the no-SSH config channel. **P1.** Stays open until the alerting in #7103 lands. | `agent` |
+| #7103 | Nothing alerts on "N consecutive release-deploy failures". Eight went red over a day and each was read as "the known incident" rather than a distinct live fault. The release run failing is not itself a monitored condition. Also carries: credential-liveness telemetry off the box, and the fleet-wide 19-of-19 web-1 installer pinning. | `agent` |
+| #7104 | `apply-deploy-pipeline-fix`'s verify step re-polls but never re-POSTs, so it cannot recover from the documented nonce-1 webhook-restart race. Deliberately NOT fixed under outage pressure: the fix puts `continue-on-error` on a fail-closed gate, and that gate's latched false-green (#6594) is what let this outage class hide. | `agent` |
 | #7077 | Extend the fail-closed mirror invariant to the inngest image, and fix the live #6416 skip. `cloud-init-inngest.yml` hard-pins GHCR with no zot path, so its dedicated host is un-bootable now. | `agent` |
 | #7078 | Verify the new gate on the first real release. Genuinely un-automatable pre-merge — the faithful test is a production release. Enrolled as a follow-through. | `agent` |
 | #7079 | Residual items: the two sibling false `/v2/` gates in `cloud-init.yml` (`curl -s -o /dev/null` with no `-w '%{http_code}'`, so a 500 or empty 200 passes), `zot-entry-gate.sh` wire-or-delete, and the orphan-draft / stale-release-notes leak. | `agent` |

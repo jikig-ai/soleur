@@ -76,11 +76,15 @@ build_status_json() {
     [[ "$dest" == "$override_dest" ]] && sha="$override_sha"
     files_entries+=("$(printf '{"file":"%s","sha256":"%s","status":"ok"}' "$dest" "$sha")")
   done
-  # The one template dest (hooks.json) — delivered "ok" with a rendered-content sha
-  # the gate must not compare.
+  # EVERY template dest (hooks.json, /etc/default/soleur-doppler-token) — delivered "ok" with
+  # a rendered-content sha the gate must not BYTE-compare, but which it DOES require to be
+  # present per-dest (#7095 R7). Emitting only the first template dest here would make the
+  # fixture, not the gate, decide the outcome the moment a second one is added.
   local tmpl_dest
-  tmpl_dest=$(infra_config_classify_files "$REAL_APPLY" "$REAL_INFRA" | awk -F'\t' '$3=="template"{print $1; exit}')
-  files_entries+=("$(printf '{"file":"%s","sha256":"deadbeefrendered","status":"ok"}' "$tmpl_dest")")
+  while read -r tmpl_dest; do
+    [[ -n "$tmpl_dest" ]] || continue
+    files_entries+=("$(printf '{"file":"%s","sha256":"deadbeefrendered","status":"ok"}' "$tmpl_dest")")
+  done < <(infra_config_classify_files "$REAL_APPLY" "$REAL_INFRA" | awk -F'\t' '$3=="template"{print $1}')
   local joined
   joined=$(IFS=,; echo "${files_entries[*]}")
   printf '{"start_ts":1784233325,"end_ts":1784233340,"exit_code":0,"files_written":%d,"files_failed":0,"files_total":%d,"files":[%s]}\n' \
@@ -138,12 +142,16 @@ else
   fail "adjudicator should fail the sentinel naming exit_code=-2 (rc=$rc); got: $OUT"
 fi
 
-# --- exactly-ONE template exclusion (derived, not hardcoded) -------------------------
+# --- exactly-TWO template exclusions (derived, not hardcoded) ------------------------
+# hooks.json ← hooks.json.tmpl, and /etc/default/soleur-doppler-token ←
+# soleur-doppler-token.tmpl (#7095). The count is a reviewed constant on purpose: a THIRD
+# template dest must red this until someone deliberately widens the set of files excluded
+# from the byte compare.
 tmpl_n=$(infra_config_classify_files "$REAL_APPLY" "$REAL_INFRA" | awk -F'\t' '$3=="template"' | wc -l | tr -d ' ')
-if [[ "$tmpl_n" == "1" ]]; then
-  pass "exactly one template-backed FILE_MAP dest (hooks.json ← .tmpl), derived (AC-2d)"
+if [[ "$tmpl_n" == "2" ]]; then
+  pass "exactly two template-backed FILE_MAP dests (hooks.json, soleur-doppler-token), derived (AC-2d)"
 else
-  fail "expected exactly 1 template-backed dest, found $tmpl_n"
+  fail "expected exactly 2 template-backed dests, found $tmpl_n"
 fi
 
 # ===================================================================================
@@ -174,18 +182,19 @@ else
   fail "mutation M2: adjudicator should fail on the missing ci-deploy.sh entry (rc=$rc); got: $OUT"
 fi
 
-# M3 — template-exclusion invariant is live: a synthetic dir with a SECOND template
-# file makes the exclusion count 2, which must fail loud rather than silently skip.
+# M3 — template-exclusion invariant is live: a synthetic dir with one MORE template
+# file makes the exclusion count 3 (baseline is 2 since #7095), which must fail loud
+# rather than silently skip.
 M3DIR="$TMP/infra-2tmpl"
 mkdir -p "$M3DIR"
 cp -r "$SYNTH"/. "$M3DIR"/
-# turn a comparable file into a second template-backed dest
+# turn a comparable file into one more template-backed dest
 rm -f "$M3DIR/webhook.service"; : > "$M3DIR/webhook.service.tmpl"
 OUT="$(infra_config_content_assert "$FRESH" "$M3DIR" "$M3DIR/infra-config-apply.sh" 2>&1)"; rc=$?
 if [[ "$rc" -ne 0 ]] && grep -qF 'content_gate_template_exclusion_drift' <<<"$OUT"; then
-  pass "mutation M3: a second template-backed dest trips the exclusion-drift guard"
+  pass "mutation M3: an extra template-backed dest trips the exclusion-drift guard"
 else
-  fail "mutation M3: expected template_exclusion_drift with 2 template dests (rc=$rc); got: $OUT"
+  fail "mutation M3: expected template_exclusion_drift with 3 template dests (rc=$rc); got: $OUT"
 fi
 
 # M4 — the `missing` class arm (repo/FILE_MAP drift) is live. A FILE_MAP dest whose repo
@@ -215,6 +224,45 @@ if [[ "$rc" -ne 0 ]] && grep -qF 'content_mismatch:/usr/local/bin/ci-deploy.sh' 
   pass "mutation M5: a present, sha-matching, status:failed delivery fails (status guard live)"
 else
   fail "mutation M5: expected content_mismatch for the status:failed entry (rc=$rc); got: $OUT"
+fi
+
+# M6 (#7095 R7) — TIER 1 of the template assert is live: a template-backed dest whose
+# delivery entry is ABSENT must fail. Before #7095 a template dest was skipped entirely, so
+# a status JSON that simply never mentioned it passed on aggregate count alone — the exact
+# latched false-green shape of #6594, and the one that would have hidden a non-delivered
+# credential. Deleting the entry must now be caught and NAMED.
+M6="$TMP/mut-template-missing.json"
+TMPL_DEST_CRED="/etc/default/soleur-doppler-token"
+jq --arg d "$TMPL_DEST_CRED" 'del(.files[] | select(.file==$d))' "$FRESH" > "$M6"
+OUT="$(adjudicate_infra_config "$M6" "$SYNTH" "$SYNTH/infra-config-apply.sh" 2>&1)"; rc=$?
+if [[ "$rc" -ne 0 ]] && grep -qF "content_mismatch:$TMPL_DEST_CRED" <<<"$OUT"; then
+  pass "mutation M6: a template-backed dest with no delivery entry fails and is named (tier-1 live)"
+else
+  fail "mutation M6: expected content_mismatch for the absent $TMPL_DEST_CRED entry (rc=$rc); got: $OUT"
+fi
+
+# M7 (#7095 R7) — TIER 2 is live AND is genuinely opt-in. Two halves, because a guard that
+# only ever runs one way proves nothing:
+#   (a) with the rendered-digest env var set to a value that does NOT match the fixture's
+#       "deadbeefrendered", the assert must FAIL — otherwise the byte compare is decorative;
+#   (b) with the env var UNSET, the same fixture must PASS — otherwise every caller that
+#       cannot render the secret (i.e. everything except the apply workflow) is broken.
+M7VAR="INFRA_CONFIG_RENDERED_SHA_$(printf '%s' "$TMPL_DEST_CRED" | tr -c '[:alnum:]' '_' | tr '[:lower:]' '[:upper:]')"
+OUT="$(env "$M7VAR=0000000000000000000000000000000000000000000000000000000000000000" \
+  bash -c 'source "$1"; infra_config_content_assert "$2" "$3" "$4"' _ \
+  "$REAL_INFRA/infra-config-gate.sh" "$FRESH" "$SYNTH" "$SYNTH/infra-config-apply.sh" 2>&1)"; rc=$?
+if [[ "$rc" -ne 0 ]] && grep -qF "content_mismatch:$TMPL_DEST_CRED" <<<"$OUT"; then
+  pass "mutation M7a: a rendered-sha mismatch on a template dest fails (tier-2 byte compare live)"
+else
+  fail "mutation M7a: expected content_mismatch for the rendered-sha mismatch (rc=$rc); got: $OUT"
+fi
+OUT="$(env -u "$M7VAR" \
+  bash -c 'source "$1"; infra_config_content_assert "$2" "$3" "$4"' _ \
+  "$REAL_INFRA/infra-config-gate.sh" "$FRESH" "$SYNTH" "$SYNTH/infra-config-apply.sh" 2>&1)"; rc=$?
+if [[ "$rc" -eq 0 ]]; then
+  pass "mutation M7b: with no rendered-sha supplied the same fixture PASSES (tier-2 is opt-in, not a hard dependency)"
+else
+  fail "mutation M7b: content assert must pass without the rendered-sha env var (rc=$rc); got: $OUT"
 fi
 
 # ===================================================================================

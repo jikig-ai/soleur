@@ -18,4 +18,11 @@
 # wrapper would SIGKILL ci-deploy.sh mid-drain (killing the very cron it protects).
 # A fixed literal — NOT a $((…)) expression — so it can never evaluate to an
 # empty/short value across the `exec` boundary (P1-wrapper trap).
+
+# #7095 — the re-deliverable Doppler credential is sourced by ci-deploy.sh itself, NOT here.
+# This wrapper is inert by construction (exactly one non-comment line, asserted by
+# ci-deploy-wrapper.test.sh) so it can never become a hang surface AHEAD of `timeout`.
+# Sourcing inside ci-deploy.sh also puts the read UNDER the wall-clock cap rather than
+# before it, which is strictly safer. webhook.service is still never modified — that,
+# not the wrapper specifically, was the property worth protecting.
 exec timeout --signal=TERM --kill-after=20s 4800s /usr/local/bin/ci-deploy.sh

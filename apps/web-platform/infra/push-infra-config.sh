@@ -13,6 +13,10 @@
 #                      from local.hooks_json — the template has secrets
 #                      interpolated at plan time, so the on-disk .tmpl file
 #                      is NOT the right source)
+#   SOLEUR_DOPPLER_TOKEN_B64 — Pre-rendered /etc/default/soleur-doppler-token
+#                      (base64 of local.webhook_doppler_token_env). Same reason as
+#                      HOOKS_JSON_B64: the on-disk soleur-doppler-token.tmpl is the
+#                      UNRENDERED template, so it cannot be read from INFRA_DIR. #7095.
 set -euo pipefail
 
 # REDEPLOY NONCE (#6178, 2026-07-10). deploy_pipeline_fix.triggers_replace hashes
@@ -45,7 +49,7 @@ set -euo pipefail
 # SSH. Gated on PR-A (the tunnel origin-relative pin), which was applied and verified
 # on prod 2026-07-17 before this landed.
 #   redeploy-nonce: 6594-content-assert-recovery-3
-for var in WEBHOOK_SECRET CF_ACCESS_ID CF_ACCESS_SECRET APP_DOMAIN_BASE INFRA_DIR HOOKS_JSON_B64; do
+for var in WEBHOOK_SECRET CF_ACCESS_ID CF_ACCESS_SECRET APP_DOMAIN_BASE INFRA_DIR HOOKS_JSON_B64 SOLEUR_DOPPLER_TOKEN_B64; do
   if [[ -z "${!var:-}" ]]; then
     echo "ERROR: required env var $var is missing or empty" >&2
     exit 1
@@ -85,7 +89,11 @@ cat > "$PAYLOAD_FILE" <<PAYLOAD
   "inngest_inventory_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-inventory.sh")",
   "git_lock_chardevice_sweep_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/git-lock-chardevice-sweep.sh")",
   "inngest_registry_probe_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-registry-probe.sh")",
-  "inngest_doublefire_probe_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-doublefire-probe.sh")"
+  "inngest_doublefire_probe_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-doublefire-probe.sh")",
+  "soleur_doppler_token_b64": "${SOLEUR_DOPPLER_TOKEN_B64}",
+  "vector_doppler_token_conf_b64": "$(base64 -w0 < "${INFRA_DIR}/10-vector-doppler-token.conf")",
+  "inngest_heartbeat_doppler_token_conf_b64": "$(base64 -w0 < "${INFRA_DIR}/10-inngest-heartbeat-doppler-token.conf")",
+  "inngest_server_doppler_token_conf_b64": "$(base64 -w0 < "${INFRA_DIR}/10-inngest-server-doppler-token.conf")"
 }
 PAYLOAD
 
