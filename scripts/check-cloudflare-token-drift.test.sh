@@ -437,6 +437,30 @@ else
   fail "000 must render UNVERIFIABLE — 'did not learn' must never read as LIVE, and must not read as DEAD either (rc=$RC)"
 fi
 
+# T18-T19 — the FALSE-LIVE guard. LIVE must be a POSITIVE admission proof (5xx from the
+# tunnel layer behind Access), never "did not look like a rejection".
+#
+# 403 is not Access's only rejection shape. Give this app an identity policy and an
+# unauthenticated request answers 302 to the IdP login page; challenges (429) and 401s are
+# rejections too. Under an absence-based rule every one of those grades LIVE — a DEAD
+# credential certified healthy, which is worse than the DEAD-forever bug being fixed here,
+# because it fails silently instead of loudly. These two cases pin the direction.
+echo "T18: a 302 Access login redirect must NOT grade LIVE (false-LIVE guard)"
+run_sut t18 302 "$CI_SSH_FIXTURE"
+if [[ "$RC" != "0" ]] && ! grep -qE 'live entries: 1' "$OUT"; then
+  pass "302 does not certify the pair — unrecognised answers render UNVERIFIABLE"
+else
+  fail "302 (an Access login redirect) graded LIVE — LIVE must be positive 5xx admission proof, not absence-of-403 (rc=$RC)"
+fi
+
+echo "T19: 530 (tunnel-layer error, behind Access) grades LIVE"
+run_sut t19 530 "$CI_SSH_FIXTURE"
+if [[ "$RC" == "0" ]] && grep -qE 'live entries: 1' "$OUT"; then
+  pass "530 proves the request got past Access to the tunnel layer"
+else
+  fail "530 must grade LIVE — it is an origin/tunnel error, reachable only after Access admitted (rc=$RC)"
+fi
+
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Without it, deleting every assertion call yields
