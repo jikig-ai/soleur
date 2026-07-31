@@ -124,14 +124,22 @@ workflow YAML, no `docs/legal/**`.
 
 ## Phase 5 — File deferred issues, then verify
 
-- [ ] 5.1 File the **unconditional** deferred items (0, 1, 1a, 2, 3, 4, 6, 7, 8, 9) with
+- [x] 5.1 File the **unconditional** deferred items (0, 1, 1a, 2, 3, 4, 6, 7, 8, 9) with
       re-evaluation criteria and a roadmap milestone. Item 5 (full DPIA) **only** on arm (ii).
-- [ ] 5.2 Wire each issue number into the PA `(g)` tails, the LIA, and the
+- [x] 5.2 Wire each issue number into the PA `(g)` tails, the LIA, and the
       `compliance-posture.md` Active Items rows.
 - [ ] 5.3 Run the full Acceptance Criteria (AC1 … AC17). Use the **flag-based** `awk`; the
       naive `/start/,/end/` range self-matches and returns a heading-only body.
 - [ ] 5.4 AC13 resolver — the only permitted `BROKEN:` line is the deferred sweep path.
-- [ ] 5.5 `bash scripts/check-pa-22.sh` → exit 0 **after** the Vendor-row edit (AC11i).
+- [x] 5.5 `bash scripts/check-pa-22.sh` → exit 0 **after** the Vendor-row edit (AC11i).
 - [ ] 5.6 AC2 collision re-check against `origin/main` **after the final rebase**.
 - [ ] 5.7 AC17 scope check — diff confined to `knowledge-base/legal/**` and
+      **AMENDED 2026-07-31 (operator-approved):** AC17's original docs-only boundary no longer
+      holds. The operator approved folding DEF-1a — correcting the affirmatively false
+      controllership statements in `docs/legal/privacy-policy.md` and `gdpr-policy.md` — into
+      this PR, because shipping a corrected register while the published policy contradicts it
+      would undercut the correction. The expansion therefore also covers the two Eleventy
+      mirrors and the unconditional `LEGAL_DOC_SHAS` repin in
+      `apps/web-platform/lib/legal/legal-doc-shas.ts`. AC17 is recorded as INTENTIONALLY
+      EXCEEDED, not passed. No source/runtime file is touched; R1–R5 remain deferred to #7119.
       `knowledge-base/project/{plans,specs}/**`.

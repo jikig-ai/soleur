@@ -323,7 +323,7 @@ collector boundary — emitting `{author_id_hash, channel, timestamp, length}` p
 rather than the raw message object — would materially reduce what reaches Anthropic while
 preserving the operator's awareness of activity level and location. That measure does not
 exist today. It is a genuine Art. 25(1) data-protection-by-design gap and is tracked as
-deferred item **DEF-3** (input-side minimization for the community collectors; body drafted
+deferred item **DEF-3** (#7124; input-side minimization for the community collectors; body drafted
 at `knowledge-base/project/specs/feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`,
 GitHub issue number wired at filing).
 
@@ -457,7 +457,7 @@ remediation" — and that is what PA-32 records.**
 
 **Conditions under which this conclusion would change.** The remediation set is small, and
 CLO's estimate for it is about a day. It is source work and is therefore outside this
-docs-only PR's scope; it is tracked as deferred item **DEF-0** (body drafted at
+docs-only PR's scope; it is tracked as deferred item **DEF-0** (#7119; body drafted at
 `knowledge-base/project/specs/feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`,
 GitHub issue number wired at filing):
 
@@ -579,7 +579,7 @@ data "is not controlled by Soleur", and `docs/legal/gdpr-policy.md` §2.2 descri
 requests as using "the user's own API key". Both statements are **false for this fleet**:
 Jikigai ingests that data under its own key, transmits it to Anthropic, and republishes part
 of it. Correcting them is source-side work outside this record's scope and is tracked as
-deferred item **DEF-1a**. Until it lands, the internal register authored under #7100 is
+deferred item **DEF-1a** (resolved in this PR). Until it lands, the internal register authored under #7100 is
 contradicted by the published policy — and the published policy is what a data subject or a
 supervisory authority reads first.
 
@@ -592,9 +592,9 @@ supervisory authority reads first.
   so a DSAR from a Discord member or a GitHub commenter is **not answerable by the existing
   machinery** — it would require a manual `git grep` across the repository and a manual search
   of issue bodies, with no completeness guarantee. Recorded honestly in PA-31 §(h) and PA-32
-  §(h) and tracked as deferred item **DEF-8**.
+  §(h) and tracked as deferred item **DEF-8** (#7126).
 - **Art. 21(1).** Any Art. 6(1)(f) processing must offer an objection route. None of the nine
-  legal documents mentions one for this population. Tracked as deferred item **DEF-9**.
+  legal documents mentions one for this population. Tracked as deferred item **DEF-9** (#7126).
 - **Art. 22.** **Negative determination for all three activities.** No decision producing
   legal or similarly significant effects on a natural person is taken by automated means. The
   fleet classifies *issues, code and community activity*, not people. `cron-daily-triage`

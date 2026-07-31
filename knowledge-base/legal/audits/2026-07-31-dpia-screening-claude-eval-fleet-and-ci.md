@@ -127,7 +127,7 @@ earliest committed digest is `knowledge-base/support/community/2026-02-19-digest
 assessment is **overdue by approximately five months**, and the public-issue-comment limb
 continues to run. This is recorded as a compliance finding, not as a plan.
 
-The full DPIA is tracked as deferred item **DEF-5** (body drafted at
+The full DPIA is tracked as deferred item **DEF-5** (#7121; body drafted at
 `knowledge-base/project/specs/feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`;
 GitHub issue number wired at filing). PA-32 §(g) records `DPIA status: full DPIA required —
 overdue since ~2026-02-19; scoped in DEF-5`.
@@ -186,7 +186,7 @@ equivalent residual with "no tools + a closed `MAIL_CLASS_ALLOWLIST`"; **here ne
 exists and a publication tool does.** This is a genuine Art. 32(1)(b) integrity finding, not
 merely a quality risk: the blast radius is not a misleading summary but attacker-chosen text
 on a public surface under Jikigai's bot identity. *Accepted only as an interim posture*,
-because it overlaps R4 and is separately tracked as deferred item **DEF-7**. *Re-screening
+because it overlaps R4 and is separately tracked as deferred item **DEF-7** (#7122). *Re-screening
 trigger:* first observed injected content reaching a published artefact — or immediately, if
 counsel assesses the absence of a human gate as unacceptable at any volume.
 
@@ -196,7 +196,7 @@ No remediation reaches this: R1–R4 govern future runs only. *There is no recov
 honest options are a documented finding that erasure is impossible and a decision on whether
 the corpus is left in place, or a repository-history rewrite that breaks downstream clones and
 still does not reach the forks or GitHub's retained issue-edit history. Posed, not answered,
-as R5 / deferred item **DEF-4**, and as outstanding counsel-review item 2 in the LIA.
+as R5 / deferred item **DEF-4** (#7119), and as outstanding counsel-review item 2 in the LIA.
 
 **(d) Two of the fifteen CLI members run with no containment hook.** `cron-daily-triage` and
 `cron-follow-through-monitor` never call `setupEphemeralWorkspace`, so they get no
@@ -206,7 +206,7 @@ does **not** fail-close. Their sole compensating control is the Tier-2 nftables 
 firewall, which is enforced outside the agent's process tree but is destination-only and
 content-blind. Whether those two run under the CLI's own sandbox is **not determinable from
 source**, and this memo asserts it in neither direction. *Accepted as an interim posture*;
-tracked as deferred item **DEF-6**. *Re-screening trigger:* a third member losing its hook, or
+tracked as deferred item **DEF-6** (#7123). *Re-screening trigger:* a third member losing its hook, or
 either of these two gaining a new write path.
 
 **(e) The register snapshot decays with no mechanical guard.** PA-31's 21-member snapshot and
@@ -214,7 +214,7 @@ PA-33's 5-member snapshot are dated statements of fact with nothing asserting th
 repository already contains the counter-example: `scripts/check-pa-22.sh` was written to guard
 the PA-22 entry and is wired into no workflow (`git grep check-pa-22 .github/` returns zero
 hits). *Accepted only because the fix is out of this record's scope*; tracked as deferred item
-**DEF-2**, which folds `check-pa-22.sh`'s single assertion into the same sweep. *Re-screening
+**DEF-2** (#7125), which folds `check-pa-22.sh`'s single assertion into the same sweep. *Re-screening
 trigger:* before the next new Anthropic-egressing function lands.
 
 ---
