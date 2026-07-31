@@ -1250,20 +1250,82 @@ fi
 INFRA_VALIDATION_WF="${ROOT}/.github/workflows/infra-validation.yml"
 if [[ ! -f "$INFRA_VALIDATION_WF" ]]; then
   fail "infra-validation.yml is missing — cannot verify this suite is registered against the workflows it reads"
+elif ! command -v python3 >/dev/null 2>&1; then
+  fail "python3 absent — the path-registration arm did NOT run" \
+    "a gate that cannot run must not report success"
 else
-  _unregistered=""
-  _checked_paths=0
-  for _guarded in "$WF" "$APPLY_WF" "$DRIFT_WF"; do
-    _rel=".github/workflows/$(basename "$_guarded")"
-    _checked_paths=$((_checked_paths + 1))
-    grep -qF ""${_rel}"" "$INFRA_VALIDATION_WF" || _unregistered="${_unregistered} ${_rel}"
-  done
-  if [[ "$_checked_paths" -lt 3 ]]; then
-    fail "path-coverage arm derived only ${_checked_paths} guarded workflow(s), expected 3"       "the WF/APPLY_WF/DRIFT_WF variables drifted; this arm is comparing against an incomplete set"
-  elif [[ -z "$_unregistered" ]]; then
-    pass "all ${_checked_paths} workflows this suite reads are in infra-validation.yml's paths filter (editing one runs this suite)"
+  # ASK THE OPERATIONAL QUESTION, not a textual one: "would a PR editing ONLY this file
+  # trigger this workflow?" Ten mutations defeated the textual form and every one is
+  # realistic: the path in a COMMENT (this file is dense with comments naming paths, so
+  # deleting an entry while leaving its rationale comment read as registered); the path in
+  # a `run:` body; `- "!<path>"`, GitHub's EXCLUSION idiom used two files away in
+  # apply-web-platform-infra.yml, which makes the entry never fire while the substring is
+  # still present; `paths:` renamed to `paths-ignore:`, inverting the filter for the WHOLE
+  # workflow; and the three entries moved to a `push:` block, so the suite runs only after
+  # merge — when the route is already broken.
+  #
+  # Matching against the PARSED pull_request filter with fnmatch closes all of them by
+  # construction, and mirrors the in-repo instrument infra-validation.yml's own comment
+  # block cites: apply-inngest-rls-dev-workflow.test.sh's `routes()`.
+  #
+  # The guarded set is DERIVED by grepping this file's own `*_WF=` assignments — not a
+  # restated triple. An earlier version hardcoded three variable NAMES while its comment
+  # claimed derivation; adding a fourth `*_WF` left it reporting "all 3" and silently
+  # uncovered, and pointing two vars at one file left it counting 3 distinct when there
+  # were 2.
+  _paths_probe="$(python3 - "$INFRA_VALIDATION_WF" "$0" <<'PY'
+import fnmatch, os, re, sys, yaml
+
+wf_file, suite_file = sys.argv[1], sys.argv[2]
+d = yaml.safe_load(open(wf_file))
+on = d.get(True) or d.get("on") or {}
+pr = on.get("pull_request") or {}
+declared = [str(x) for x in (pr.get("paths") or [])]
+
+def routes(path):
+    """Would a PR whose ONLY changed file is `path` trigger this workflow?"""
+    if any(fnmatch.fnmatch(path, p[1:]) for p in declared if p.startswith("!")):
+        return False                      # an explicit `!` exclusion wins
+    return any(fnmatch.fnmatch(path, p) for p in declared if not p.startswith("!"))
+
+# Derive the guarded workflows from the suite's OWN assignments.
+src = open(suite_file).read()
+guarded = set()
+for m in re.finditer(r'^[A-Z_]*WF="\$\{ROOT\}/(\.github/workflows/[^"]+)"', src, re.M):
+    guarded.add(m.group(1))
+
+print("DECLARED=%d" % len(declared))
+print("GUARDED=%d" % len(guarded))
+for g in sorted(guarded):
+    if not os.path.isfile(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(wf_file))), g)):
+        print("NOFILE=%s" % g)
+    elif not routes(g):
+        print("MISSING=%s" % g)
+# NEGATIVE CONTROL: a path that must NOT route, so a filter that matched everything
+# (paths-ignore, a stray "**") cannot satisfy this arm vacuously.
+print("CONTROL_ROUTES=%d" % (1 if routes("README.md") else 0))
+PY
+)" || _paths_probe="PROBE_FAILED=1"
+  _pguarded="$(printf '%s\n' "$_paths_probe" | sed -n 's/^GUARDED=//p')"
+  _pmissing="$(printf '%s\n' "$_paths_probe" | sed -n 's/^MISSING=//p' | tr '\n' ' ')"
+  _pnofile="$(printf '%s\n' "$_paths_probe" | sed -n 's/^NOFILE=//p' | tr '\n' ' ')"
+  _pcontrol="$(printf '%s\n' "$_paths_probe" | sed -n 's/^CONTROL_ROUTES=//p')"
+  if printf '%s' "$_paths_probe" | grep -q 'PROBE_FAILED=1'; then
+    fail "could not parse infra-validation.yml's pull_request filter — refusing to read an unparseable filter as coverage"
+  elif [[ "${_pguarded:-0}" -lt 3 ]]; then
+    fail "derived only ${_pguarded:-0} guarded workflow(s) from this suite's own *_WF= assignments (expected >= 3)" \
+      "the extraction drifted; this arm is comparing against an incomplete set and would pass over an unregistered workflow"
+  elif [[ "${_pcontrol:-1}" -ne 0 ]]; then
+    fail "NEGATIVE CONTROL FAILED: a PR touching only README.md would trigger infra-validation" \
+      "the filter matches everything (paths-ignore, or a stray '**'), so this arm's pass would be vacuous"
+  elif [[ -n "$_pnofile" ]]; then
+    fail "a *_WF= assignment names a file that does not exist: ${_pnofile}" \
+      "cannot verify registration for a workflow that is not on disk"
+  elif [[ -z "$_pmissing" ]]; then
+    pass "a PR editing ONLY any of the ${_pguarded} workflows this suite reads WOULD trigger infra-validation (parsed filter, negative control held)"
   else
-    fail "workflow(s) this suite guards are NOT in infra-validation.yml's paths filter:${_unregistered}"       "a PR editing only that workflow would skip this suite entirely — the guard would not run on the change it exists to catch"
+    fail "editing ONLY these workflow(s) would NOT trigger infra-validation: ${_pmissing}" \
+      "this suite guards them, so a PR changing one would skip the guard entirely — check for a missing entry, a '!' exclusion, paths-ignore, or a push-only block"
   fi
 fi
 
