@@ -101,3 +101,58 @@ comment carries the E1–E5 evidence; the original body is left intact for the r
   (the diff touches `apps/web-platform/infra/`, which `test-all.sh` does NOT cover).
 - `/review` → `/qa` → `/compound` → `/ship`.
 - Post-mortem stays `status: ongoing` until prod genuinely deploys again.
+
+---
+
+## STOP — DO NOT MERGE AS-IS. Test-design review found the guards do not hold.
+
+Round-3 review executed **11 mutations that each violate a property this PR claims, while
+leaving the suites fully green**. The PR's two headline claims — "mutation-proven" and "counts
+are derived, not hardcoded" — do not survive. Test Quality Score 6.9/10 (C), down from 7.25.
+
+### The single highest-value gap: the `.conf` drop-in mechanism has ZERO content assertions
+
+It carries the credential to the two units this PR itself calls most critical (`vector.service`,
+`inngest-heartbeat.service`) — now three, with `inngest-server.service`. It is **structurally
+invisible** to the `cron-egress-firewall.test.sh` sweep, which globs `*.service` and so cannot
+see a `.conf` by construction. Mutations that stayed GREEN:
+
+- gut both `.conf` files to a bare `[Service]` line (drop-in does nothing)
+- re-point the heartbeat drop-in at `/etc/default/inngest-server` — **the dead file that caused
+  this outage**
+- invert tier-2 into a guard that rejects every correct apply
+
+Fix: assert per `10-*-doppler-token.conf` that it contains exactly
+`EnvironmentFile=-/etc/default/soleur-doppler-token`, with a floor of 3 and a KNOWN list
+mirroring `DOPPLER_COPY_KNOWN` (growth free, shrinkage loud).
+
+### Remaining findings, all verified by executed mutation
+
+| # | Sev | Finding |
+|---|---|---|
+| F11 | P1 | `empty=` is a ONE-valued constant. Mutating `empty=${CRED_EMPTY}` → `empty=1` stays 196/196. Both fixtures report `empty=1`, so the field whose whole purpose is distinguishing the `rc=0 empty=1` shape carries no checkable information. |
+| F12 | P1 | The retry UPPER bound is unpinned. Default `_tries` 2 → 8 passes, printing "retried (8 attempts)". `-ge 2` pins that retry happens, never that it stops. Use `-eq`. |
+| F13 | P2 | "an rc=0 empty read is NOT retried" is argued at length in the code and tested nowhere — deleting the break line leaves all 8 new tests green. |
+| F14 | P2 | "REDACTION MUST PRECEDE TRUNCATION" is untestable as fixtured — the canary sits inside the 200-byte window, so truncate-first still passes. Needs a canary straddling the boundary. |
+| F15 | P2 | The P1 credential-leak fix that landed mid-review (`dp\.st\.` → `dp\.[a-z]{2,}\.`) is UNTESTED — reverting to the narrow pattern still passes. No `dp.sa.` / `dp.pt.` fixture. |
+| F16 | P2 | The credential-CONSUMPTION path has zero coverage: **0** references to `soleur-doppler-token` in either ci-deploy suite. Nothing pins that a hostile file cannot execute, that the token is actually overridden, or that an absent file is a no-op under `set -e`. |
+| meta | P1 | `cdf6197e3` changed `ci-deploy.sh` by 83 lines — a source→parse code-execution fix and a credential-disclosure fix, both self-described P1 — with ZERO test changes, suite 196/196 before and after. |
+
+### Diagnosis of the pattern
+
+**Fixture DIRECTION.** Nearly every gap is one missing fixture on the other side of a transform.
+Confirmed non-findings (do not re-hunt): the `| tail`/pipefail/SIGPIPE class is genuinely handled
+(`set +e +o pipefail` around the block); `cq-assert-anchor-not-bare-token` is satisfied (assertions
+grep the runtime capture, not the source); T-7095-3's control-char and length bounds have real
+teeth; T-7095-5/6 are properly paired with positive controls.
+
+### Gate status at handoff
+
+`test-all.sh` rc=0 239/239 (clean tree, no contention banners). `run-registered-suites.sh` showed
+`ci-deploy.test.sh` RED under `-P 6` + concurrent `test-all`; **three isolated runs were rc=0
+196/196** (one timed at 291s) and a solo gate run was in flight at handoff. Environmental is the
+strong hypothesis; it was NOT confirmed. Do not record it as a flake without the solo result.
+
+**Recommendation: fix the drop-in content guard and F11/F12 before merge.** Prod is stable on
+stale v0.244.0; that is a cheap state. A bad fix in the sole no-SSH remediation channel on an
+unreplaceable host is not.
