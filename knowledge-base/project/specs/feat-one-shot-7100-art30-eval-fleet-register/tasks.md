@@ -78,37 +78,37 @@ workflow YAML, no `docs/legal/**`.
 
 ## Phase 3 — Author PA-31 / PA-32 / PA-33 and amend PA-17
 
-- [ ] 3.1 Insert the three entries between PA-30's closing `---` and `## Register Maintenance`.
+- [x] 3.1 Insert the three entries between PA-30's closing `---` and `## Register Maintenance`.
       Current-generation 10-row schema in canonical order; `(h) DSAR` row required on all three.
-- [ ] 3.2 **PA-31** — egress predicate + dated 21-member snapshot; tiered `(b)`; the
+- [x] 3.2 **PA-31** — egress predicate + dated 21-member snapshot; tiered `(b)`; the
       input-vs-output distinction with verbatim directives **and** counter-directives; `(d)`
       naming Anthropic, GitHub Inc and **Sentry** (bounded tail, unscrubbed for handles);
       `(f)` naming the Anthropic 30-day default under the unsigned Zero-Retention amendment
       **and** the self-hosted Inngest store's no-automatic-deletion posture.
-- [ ] 3.3 **PA-31 `(g)` — the accuracy traps.** Scope the allowlist TOM to the 13 hooked
+- [x] 3.3 **PA-31 `(g)` — the accuracy traps.** Scope the allowlist TOM to the 13 hooked
       members; name `cron-daily-triage` + `cron-follow-through-monitor` as unhooked with the
       Tier-2 egress firewall as sole compensating control; assert affirmatively that **no PII
       scrub exists** on Anthropic-bound content (do **not** inherit PA-22's
       `sanitizePromptString` TOM); frame the grandchild-process gap as two measures at two
       layers; describe teardown as fail-open; give the env-var range (4–6, one member 18);
       never present a prompt directive as a technical measure.
-- [ ] 3.4 **PA-32** — the republication entry. `Lawful basis` records the Art. 6(1)(f)
+- [x] 3.4 **PA-32** — the republication entry. `Lawful basis` records the Art. 6(1)(f)
       unavailability (AC2a). Plus the CLO Q5 limbs: "the general public" + GitHub Inc as
       recipients (inverting PA-17); the *Lindqvist* C-101/01 note that publication is **not** a
       Chapter V transfer; `(f)` as an Art. 5(1)(e) finding; Art. 22 negative determination;
       Art. 5(1)(b)/6(4) purpose compatibility; Art. 15/20 and Art. 21(1) cross-refs; the
       Discord Developer Policy limb; the non-EU threshold line. Cite the `.[:120]` vs
       "under 100 chars" discrepancy as two distinct mechanisms.
-- [ ] 3.5 **PA-33** — membership by `secrets.ANTHROPIC_API_KEY` (5 files), each with trigger
+- [x] 3.5 **PA-33** — membership by `secrets.ANTHROPIC_API_KEY` (5 files), each with trigger
       class and workflow state; `claude-code-review.yml` flagged as `disabled_manually` **and**
       as GitHub API state invisible to source inspection, with date + method. Record that
       `ci.yml` also fires on `push:[main]` and `merge_group`, so PA-33 is not PR-only.
-- [ ] 3.6 **Amend PA-17** — (a) dated trigger-fired note pointing at PA-32; (b) correct the
+- [x] 3.6 **Amend PA-17** — (a) dated trigger-fired note pointing at PA-32; (b) correct the
       `(c)` "display-only" carve-out; (c) narrow the `(g)` render-time-redaction claim.
-- [ ] 3.7 Extend the **Anthropic PBC** Vendor Mapping row, **preserving the
+- [x] 3.7 Extend the **Anthropic PBC** Vendor Mapping row, **preserving the
       `Anthropic.*PA-22.*autonomous` token order**; replace the prose gestures
       (`claude-code-action` CI, compound-promotion-loop #2720) with PA references.
-- [ ] 3.8 Bump `last_reviewed`; add a `## Register Maintenance` counsel item if Phase 2 lands
+- [x] 3.8 Bump `last_reviewed`; add a `## Register Maintenance` counsel item if Phase 2 lands
       on the full-DPIA arm.
 
 ## Phase 4 — Reconcile the downstream records
