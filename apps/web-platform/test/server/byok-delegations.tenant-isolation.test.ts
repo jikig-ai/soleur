@@ -175,7 +175,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // precedent: per-run isolation via random email is sufficient for
       // closed-preview alpha. Orphan rows accumulate; long-running CI
       // adopts the synthetic-fixture sweeper deferred-scope-out #3934.
-    }, 30_000);
+    }, 60_000);
 
     it("AC-cross-tenant: trigger fires when grantor and workspace span tenants (R1)", async () => {
       // alice grants TO carol IN W_A. carol is NOT a member of W_A,

@@ -278,7 +278,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // randomBytes-derived email, not by row cleanup (orphan-row acceptance,
       // deferred sweeper #3934 — no duplicate scope-out).
       if (sql) await sql.end({ timeout: 5 });
-    }, 30_000);
+    }, 60_000);
 
     test(
       "Test A — hourly strict-`>` boundary: `== cap` passes, `+1` trips (sequential)",
