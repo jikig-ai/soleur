@@ -62,11 +62,6 @@ for wf in d["write_files"]:
     # directives rather than against a stock sshd_config that would exercise nothing.
     if wf["path"] == "/etc/ssh/sshd_config.d/01-hardening.conf":
         open(f"{out}/01-hardening.conf", "w").write(wf["content"])
-# (#7025, S1) The sshd_config stage. Extracted from the render for the same reason every
-# other block here is: a hand-written copy would keep passing after the shipped one drifted.
-sshd = [c for c in d["runcmd"] if isinstance(c, str) and "STAGE=sshd_config" in c]
-assert len(sshd) == 1, f"expected exactly 1 sshd_config runcmd block, found {len(sshd)}"
-open(f"{out}/sshd-stage.sh", "w").write(sshd[0])
 # The runcmd entry carrying the checksum block — the supply-chain fix (issue item 3).
 blocks = [c for c in d["runcmd"] if isinstance(c, str) and "sha256sum -c -" in c]
 assert len(blocks) == 1, f"expected exactly 1 checksum runcmd block, found {len(blocks)}"
@@ -75,6 +70,15 @@ open(f"{out}/doppler-dl.sh", "w").write(blocks[0])
 pre = [c for c in d["runcmd"] if isinstance(c, str) and "trap on_err EXIT" in c]
 assert len(pre) == 1, f"expected exactly 1 trap-arming block, found {len(pre)}"
 open(f"{out}/preamble.sh", "w").write(pre[0])
+# (#7025, S1) The sshd_config stage. Extracted from the render for the same reason every
+# other block here is: a hand-written copy would keep passing after the shipped one drifted.
+# DELIBERATELY LAST of the per-block extractions. Placed above, its assert would abort python
+# before doppler-dl.sh was written, and the failure would surface as the `[ -s doppler-dl.sh ]`
+# guard's "could not extract the checksum block" — naming an artifact that was fine. That is
+# the same misattribution the cloud-init half of this PR is fixing.
+sshd = [c for c in d["runcmd"] if isinstance(c, str) and "STAGE=sshd_config" in c]
+assert len(sshd) == 1, f"expected exactly 1 sshd_config runcmd block, found {len(sshd)}"
+open(f"{out}/sshd-stage.sh", "w").write(sshd[0])
 # The WHOLE runcmd, concatenated the way cloud-init actually runs it. B2 compares against
 # THIS, not against the trap-arming entry alone: `trap on_err EXIT` and the `set -e` that
 # arms abort-on-error live in DIFFERENT runcmd entries, and it is precisely because
@@ -597,21 +601,45 @@ S1DRV
     S1_CAP="$TMP/s1out/sshd-capture.log"
   }
 
+  # ERREXIT ORDERING IS S1's LOAD-BEARING PRECONDITION, so assert it rather than assume it.
+  # S1 models the stage as a CHILD `sh`, which gets errexit OFF for free. That is faithful only
+  # while the chain arms `set -e` AFTER this stage. If a later edit moved the arming earlier,
+  # production would abort at `sshd -t` BEFORE `_sshd_t_rc=$?` — the stage would never emit its
+  # own fatal — while S1 kept modelling the old world and stayed green through the divergence.
+  _s1_stage_ln=$(grep -n '^[[:space:]]*STAGE=sshd_config[[:space:]]*$' "$TMP/runcmd-all.sh" | head -1 | cut -d: -f1)
+  _s1_sete_ln=$(grep -n '^[[:space:]]*set -e[[:space:]]*$' "$TMP/runcmd-all.sh" | head -1 | cut -d: -f1)
+  if [ -n "$_s1_stage_ln" ] && [ -n "$_s1_sete_ln" ] && [ "$_s1_stage_ln" -lt "$_s1_sete_ln" ]; then pass; else
+    fail "S1: the shipped chain arms 'set -e' at or before the sshd stage (stage=${_s1_stage_ln:-?}, set -e=${_s1_sete_ln:-?})" \
+         "S1's child-sh model runs with errexit OFF and now tests the opposite of what ships."; fi
+
   _s1_run "$TMP/sshd-stage.sh"
   if [ "${S1_RC:-none}" = "0" ]; then pass; else
     fail "S1: the sshd_config stage exited ${S1_RC:-<no marker>} on a fresh 24.04 — this is the boot abort" \
          "$(tail -5 "$TMP/s1out/stdout" 2>/dev/null)"; fi
-  if grep -q '|sshd_config|fatal' "$S1_CAP" 2>/dev/null; then
-    fail "S1: the stage emitted a sshd_config fatal on a healthy boot" "$(head -3 "$S1_CAP")"
+  # EMPTY, not "no fatal". A substring test for `|sshd_config|fatal` is satisfied by the 126/127
+  # branch, which emits `sshd_config_warn`/`warning`, forces `_sshd_t_rc=0` and exits 0 — so a
+  # container where /usr/sbin/sshd was missing entirely would pass both asserts while the fix
+  # under test was never exercised. Measured: a healthy stage emits ZERO bytes (the systemctl
+  # stub keeps the restart quiet), so `-s` is strictly stronger and cannot flake. It is also
+  # what makes the systemctl stub load-bearing rather than decorative.
+  if [ -s "$S1_CAP" ]; then
+    fail "S1: a healthy sshd stage emitted $(wc -l < "$S1_CAP") event(s) — a warn here means sshd -t did not actually run (126/127 branch), so the privsep fix was never exercised" \
+         "$(head -3 "$S1_CAP" 2>/dev/null)"
   else pass; fi
 
-  # MUTATION — remove the mkdir and prove S1 reproduces the MEASURED production failure, not
-  # merely "some" failure. Without this the two asserts above would also pass on a stage that
-  # never ran sshd -t at all.
-  sed '/^[[:space:]]*mkdir -p \/run\/sshd[[:space:]]*$/d' "$TMP/sshd-stage.sh" > "$TMP/sshd-stage.nomkdir.sh"
-  if diff -q "$TMP/sshd-stage.sh" "$TMP/sshd-stage.nomkdir.sh" >/dev/null; then
-    fail "S1 MUTATION did not land: no 'mkdir -p /run/sshd' line in the shipped sshd stage" \
-         "The fix this arm guards is absent — S1's green above certifies nothing."
+  # MUTATION — strip the WHOLE privsep preamble so the mutant is the pre-fix stage, and prove
+  # S1 reproduces the MEASURED production failure rather than merely "some" failure. Leaving
+  # the chmod behind would still fail, but on a `chmod: cannot access` the real boot never had.
+  sed -e '/^[[:space:]]*mkdir -p \/run\/sshd[[:space:]]*$/d' \
+      -e '/^[[:space:]]*chmod 0755 \/run\/sshd[[:space:]]*$/d' \
+      "$TMP/sshd-stage.sh" > "$TMP/sshd-stage.nomkdir.sh"
+  # Assert WHAT CHANGED, not merely that something did: an inequality would also be satisfied
+  # by a sed that deleted some other line.
+  _s1_before=$(grep -c 'mkdir -p /run/sshd' "$TMP/sshd-stage.sh" || true)
+  _s1_after=$(grep -c 'mkdir -p /run/sshd' "$TMP/sshd-stage.nomkdir.sh" || true)
+  if [ "$_s1_before" != "1" ] || [ "$_s1_after" != "0" ]; then
+    fail "S1 MUTATION did not land: 'mkdir -p /run/sshd' count went ${_s1_before} -> ${_s1_after}, expected 1 -> 0" \
+         "The fix this arm guards is absent or unrecognised — S1's green above certifies nothing."
     fail "S1 MUTATION: skipped (mutation did not land)"
     fail "S1 MUTATION: skipped (mutation did not land)"
     fail "S1 MUTATION: skipped (mutation did not land)"
@@ -630,18 +658,22 @@ S1DRV
            "$(head -5 "$S1_CAP" 2>/dev/null)"; fi
   fi
 else
+  # SEVEN, matching S1's assertion count on every other path, so a failed extraction cannot
+  # satisfy the anti-vacuity floor by emitting fewer.
   fail "S1: could not extract the sshd stage and/or the hardening drop-in from the render"
   fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
   fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
-  fail "S1: skipped (extraction failed)"
+  fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
 fi
 
 total=$((passes + fails))
-# Floor = the ACTUAL assertion count (D1: 2, T5: 4 + 1 mutation, T17: 2 + 1 mutation,
-# S1: 2 + 4 mutation). Its job is to catch a silently-empty harness — an early `exit 0` from
-# a skip guard, or a docker run that never produced output — not to be an aspirational target.
-if [ "$total" -lt 18 ]; then
-  echo "FAIL: ran only ${total} assertions (<18) — harness did not execute fully" >&2
+# Floor = the ACTUAL assertion count (B1: 1, B2: 1, D1: 2, T5: 4 + 1 mutation, T17: 2 + 1
+# mutation, S1: 3 + 4 mutation). Its job is to catch a silently-empty harness — an early
+# `exit 0` from a skip guard, or a docker run that never produced output — not to be an
+# aspirational target. S1 emits exactly 7 on ALL THREE of its paths (healthy, mutation-did-
+# not-land, extraction-failed) so no short-circuit can satisfy the floor.
+if [ "$total" -lt 19 ]; then
+  echo "FAIL: ran only ${total} assertions (<19) — harness did not execute fully" >&2
   exit 1
 fi
 echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed (${total} assertions)"

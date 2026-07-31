@@ -346,6 +346,14 @@ runcmd:
     # so this neither races nor leaks. Measured on rehearsal hosts -rehearsal-30560266736 and
     # -30581408745: both aborted here, before LUKS, having emitted a fatal that named the
     # drop-in. Reproduced in the pinned image and guarded by git-data-runcmd-rehearsal.test.sh S1.
+    # A SYMLINK HERE IS ANOMALOUS BY CONSTRUCTION, so refuse to write through one. Measured in
+    # the pinned image: `mkdir -p` FOLLOWS an existing symlink (rc=0, the link survives), the
+    # `chmod` below then applies to its TARGET, and `sshd -t` accepts the result — together an
+    # arbitrary-chmod primitive keyed on whatever a planted link points at. Planting it needs
+    # pre-runcmd root, which already owns the host, so this is defence in depth and not a live
+    # hole. `rm -f` deletes a LINK and refuses a real directory, so a genuine one (systemd got
+    # here first) is left exactly as it was.
+    if [ -L /run/sshd ]; then rm -f /run/sshd; fi
     mkdir -p /run/sshd
     chmod 0755 /run/sshd
     # ABSOLUTE PATH + 126/127 branch: sshd is in /usr/sbin and nothing pins a PATH, so a bare
