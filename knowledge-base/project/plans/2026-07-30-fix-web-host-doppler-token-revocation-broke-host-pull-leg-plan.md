@@ -775,7 +775,7 @@ into a GitHub Actions log by an unmasked `terraform output` or a `set -x`; (b) t
 readable); (d) the token written world-readable in `/etc/default/`; (e) the token in the pushed
 JSON payload persisted to a temp file that is never removed.
 
-**Brand-survival threshold:** `single-user incident`
+- **Brand-survival threshold:** `single-user incident`
 
 Consequences of that threshold, per the plan skill: `requires_cpo_signoff: true` is set in
 frontmatter; `user-impact-reviewer` is invoked at review time; plan-review escalates to include
@@ -1103,7 +1103,17 @@ logs:
     why the evidence above is transcribed verbatim into this plan rather than cited by query.
 
 discoverability_test:
-  command: |
+  # ONE unauthenticated command, executable by preflight Check 10 with no credentials.
+  # The credentialed Better Stack queries moved to `deeper_diagnostics` below: Check 10
+  # refuses to execute a command that invokes a credentialed CLI, and that refusal is
+  # correct — it runs with the operator's ambient file-backed auth reachable ($HOME is
+  # preserved, so `env -i` does not scrub the on-disk Doppler token). A probe that the
+  # gate must refuse is a probe the gate cannot verify.
+  command: curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/health
+  expected_output: "200"
+  # Run these by hand when the probe above says prod is reachable but stale. They need
+  # Doppler `prd_terraform`; they are diagnostics, not the discoverability gate.
+  deeper_diagnostics: |
     # 1. Is the deploy credential alive on every web host? (no ssh)
     doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
       --since 1h --grep SOLEUR_DEPLOY_CRED --limit 50
@@ -1112,7 +1122,7 @@ discoverability_test:
       --since 24h --grep ZOT_GATE --grep IMAGE_PULL --limit 50
     # 3. Is prod on the latest release?
     curl -s https://app.soleur.ai/health | jq -r '.version, .build_sha, .uptime'
-  expected_output: |
+  deeper_diagnostics_expected: |
     1. >= 12 rows/hour/host of `SOLEUR_DEPLOY_CRED ok=1 host=<...>`; ZERO rows with ok=0.
        Rows present for BOTH host_name=soleur-web-platform AND host_name=soleur-web-2.
     2. `ZOT_GATE: active — docker login 10.0.1.30:5000 ok (zot-primary)` followed by
