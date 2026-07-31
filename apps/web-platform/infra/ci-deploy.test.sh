@@ -5393,6 +5393,103 @@ assert_cred_fail_shape "rc=0 + empty stdout (the unmeasured shape)" \
 assert_cred_fail_shape "non-zero exit with stderr" \
   'export MOCK_DOPPLER_GET_FAIL=rc; export MOCK_DOPPLER_GET_FAIL_STDERR="Doppler Error: Invalid Auth token"' 1 1
 
+# --- #7095 R3 (F16): the credential-CONSUMPTION path -------------------------------------
+# Zero coverage before this: the suite had 0 references to soleur-doppler-token, so nothing
+# pinned that a hostile credential file cannot EXECUTE, that the token is actually overridden,
+# or that an absent file is a no-op under `set -e`.
+#
+# The block is EXTRACTED FROM THE SHIPPED SOURCE and executed, rather than reached via a new
+# env-var override in ci-deploy.sh. An override that redirects which credential file is read is
+# a production surface, and adding one to test the code that reads a credential is the wrong
+# trade. The path literal is asserted separately below, so the split is: this pins the LOGIC,
+# that pins the PATH.
+TOTAL=$((TOTAL + 1))
+F16_D=$(mktemp -d)
+# Extract verbatim, then rewrite ONLY the two path literals to the fixture.
+sed -n '/^if \[ -r \/etc\/default\/soleur-doppler-token \]; then$/,/^fi$/p' "$DEPLOY_SCRIPT" \
+  > "$F16_D/block.sh"
+F16_LINES=$(grep -c . "$F16_D/block.sh" || echo 0)
+if [[ "$F16_LINES" -lt 8 ]]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: F16 could not extract the credential parse block from ci-deploy.sh (got $F16_LINES lines) — this test would be vacuous"
+else
+  sed -i "s#/etc/default/soleur-doppler-token#$F16_D/cred#g" "$F16_D/block.sh"
+  # (a) HOSTILE FILE MUST NOT EXECUTE. `.`-sourcing would run this; the parse loop must not.
+  cat > "$F16_D/cred" <<'F16EOF'
+DOPPLER_TOKEN=dp.st.prd.fromfile
+SENTRY_PROJECT_ID=$(touch F16_PWNED)
+SENTRY_PUBLIC_KEY=`touch F16_BACKTICK`
+IGNORED_KEY=whatever
+F16EOF
+  F16_OUT=$( cd "$F16_D" && bash -c '
+    set -euo pipefail
+    DOPPLER_TOKEN=inherited-and-should-be-overridden
+    SENTRY_PROJECT_ID=baked-value
+    source ./block.sh
+    printf "tok=%s proj=%s ignored=%s\n" "$DOPPLER_TOKEN" "$SENTRY_PROJECT_ID" "${IGNORED_KEY:-<unset>}"
+  ' 2>&1 ) || F16_OUT="RC_FAIL: $F16_OUT"
+  F16_BAD=""
+  [[ -e "$F16_D/F16_PWNED"    ]] && F16_BAD="${F16_BAD}\n    CODE EXECUTION: \$(...) in the credential file RAN (F16_PWNED created)"
+  [[ -e "$F16_D/F16_BACKTICK" ]] && F16_BAD="${F16_BAD}\n    CODE EXECUTION: backtick substitution in the credential file RAN"
+  grep -qF 'proj=$(touch F16_PWNED)' <<<"$F16_OUT" \
+    || F16_BAD="${F16_BAD}\n    the \$(...) value was not retained as a LITERAL (got: $F16_OUT)"
+  # (b) the token must actually override what the unit exported — the whole point of the file.
+  grep -qF 'tok=dp.st.prd.fromfile' <<<"$F16_OUT" \
+    || F16_BAD="${F16_BAD}\n    DOPPLER_TOKEN was NOT overridden from the credential file (got: $F16_OUT)"
+  # (c) an unrecognised key must not be imported (the case arm is an allowlist, not a filter).
+  grep -qF 'ignored=<unset>' <<<"$F16_OUT" \
+    || F16_BAD="${F16_BAD}\n    a non-allowlisted key was imported (got: $F16_OUT)"
+  if [[ -z "$F16_BAD" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: credential file is PARSED not sourced — \$(...) and backticks stay literal, token overrides, stray keys ignored"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: credential consumption (F16):"; printf '%b\n' "$F16_BAD"
+  fi
+fi
+# (d) absent file is a no-op under `set -e` — the guard is an `if`, not `[ -r … ] && …`, whose
+#     exit status would abort the deploy. This is the regression that the exit gate caught once.
+TOTAL=$((TOTAL + 1))
+rm -f "$F16_D/cred"
+if ( cd "$F16_D" && bash -c 'set -euo pipefail; source ./block.sh; exit 0' >/dev/null 2>&1 ); then
+  PASS=$((PASS + 1)); echo "  PASS: absent credential file is a no-op under set -e (does not abort the deploy)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: absent credential file made the block exit non-zero under set -e — this aborts every deploy on a host that has not received the file yet"
+fi
+# (e) the PATH literal itself, since (a)-(d) run against a rewritten copy.
+TOTAL=$((TOTAL + 1))
+if grep -qxF 'if [ -r /etc/default/soleur-doppler-token ]; then' "$DEPLOY_SCRIPT" \
+   && grep -qxF '  done < /etc/default/soleur-doppler-token' "$DEPLOY_SCRIPT"; then
+  PASS=$((PASS + 1)); echo "  PASS: the shipped block reads /etc/default/soleur-doppler-token (path literal pinned)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: ci-deploy.sh no longer reads /etc/default/soleur-doppler-token at the expected literal — F16(a)-(d) are testing a path production does not use"
+fi
+rm -rf "$F16_D"
+
+# --- #7095 R3 (F14): redaction MUST precede truncation, and it must be OBSERVABLE ---------
+# The existing canary sits ~50 bytes from the end, i.e. wholly inside the 200-byte tail window,
+# so truncate-first still hands the redactor a complete match and BOTH orderings pass. The
+# property was argued in a comment and unobservable in the fixture.
+#
+# This canary STRADDLES the boundary: the `dp.st.` prefix sits >200 bytes from the end while the
+# secret tail lands inside the window. Truncate-first would cut the prefix off, the redaction
+# regex would no longer match, and the secret tail would survive into the emitted marker.
+TOTAL=$((TOTAL + 1))
+F14_TOKEN="dp.st.prd.$(printf 'S%.0s' $(seq 1 60))TAILMARKER"
+F14_INPUT="$(printf 'A%.0s' $(seq 1 100))${F14_TOKEN}$(printf 'B%.0s' $(seq 1 160))"
+F14_OUT=$(
+  # shellcheck disable=SC1090
+  source /dev/stdin <<F14EOF
+$(sed -n '/^_cred_err_tail()/,/^}/p' "$DEPLOY_SCRIPT")
+F14EOF
+  _cred_err_tail "$F14_INPUT"
+)
+if [[ -n "$F14_OUT" ]] && ! grep -qF 'TAILMARKER' <<<"$F14_OUT"; then
+  PASS=$((PASS + 1)); echo "  PASS: a boundary-straddling token is fully redacted — redaction provably precedes truncation"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: a token straddling the 200-byte boundary LEAKED its tail (TAILMARKER survived) — truncation ran before redaction, so a credential split by the window reaches journald"
+  echo "        got: $F14_OUT"
+fi
+
 # T-7095-2c (#7095 R3, F11) — THE OTHER SIDE OF THE empty= TRANSFORM: non-zero rc WITH stdout.
 # Until this case existed, every fixture that reached the marker reported empty=1 (`empty` gives
 # rc=0/empty=1, `rc` gives rc=1/empty=1), so CRED_EMPTY was a one-valued constant and a hardcoded
@@ -5571,11 +5668,22 @@ T7_OK_N=$(grep -cx 'ZOT_REGISTRY_URL' "$T7_D/ok.log" 2>/dev/null); T7_OK_N="${T7
 # it STOPS. Mutating the helper's `_tries` default from 2 to 8 passed while printing
 # "retried (8 attempts)" — an outage-waiting loop on the deploy path, which the helper's own
 # comment says it must not be. 2 is a reviewed constant (one retry), so pin it exactly.
-if [[ "$T7_FAIL_N" -eq 2 && "$T7_OK_N" -eq 1 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: failed read retried exactly twice (${T7_FAIL_N}); healthy read read once (${T7_OK_N})"
+# #7095 R3 (F13) — THE THIRD ARM: an rc=0 EMPTY read must NOT be retried.
+# The code argues this at length (the server answered cleanly with nothing, so a retry only
+# spends deploy wall-clock to learn the same fact twice) and nothing tested it: deleting the
+# break line — i.e. retrying every failure, including the non-transient one — left all the new
+# tests green. Without this arm the suite pins "transient IS retried" and says nothing about
+# "non-transient is NOT", which is the half that bounds the deploy path.
+: > "$T7_D/empty.log"
+run_deploy_cred_capture "$T7_F" \
+  "export MOCK_DOPPLER_GET_FAIL=empty; export MOCK_DOPPLER_GET_LOG=\"\$T7_D/empty.log\"" || true
+T7_EMPTY_N=$(grep -cx 'ZOT_REGISTRY_URL' "$T7_D/empty.log" 2>/dev/null); T7_EMPTY_N="${T7_EMPTY_N:-0}"
+if [[ "$T7_FAIL_N" -eq 2 && "$T7_OK_N" -eq 1 && "$T7_EMPTY_N" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: transient (rc!=0) retried exactly twice (${T7_FAIL_N}); healthy read once (${T7_OK_N}); rc=0-empty NOT retried (${T7_EMPTY_N})"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: retry-then-degrade — expected EXACTLY 2 attempts on failure (bounded, not an outage-waiting loop) and exactly 1 when healthy"
+  echo "  FAIL: retry-then-degrade — expected EXACTLY 2 attempts on a transient (rc!=0) failure (bounded, not an outage-waiting loop), exactly 1 when healthy, and exactly 1 on an rc=0 EMPTY read (not transient: retrying it only burns deploy wall-clock)"
+  echo "        rc=0-empty attempts=${T7_EMPTY_N:-?}"
   echo "        failing-fixture attempts=${T7_FAIL_N}  healthy-fixture attempts=${T7_OK_N}"
 fi
 rm -rf "$T7_D"
