@@ -128,11 +128,11 @@ workflow YAML, no `docs/legal/**`.
       re-evaluation criteria and a roadmap milestone. Item 5 (full DPIA) **only** on arm (ii).
 - [x] 5.2 Wire each issue number into the PA `(g)` tails, the LIA, and the
       `compliance-posture.md` Active Items rows.
-- [ ] 5.3 Run the full Acceptance Criteria (AC1 … AC17). Use the **flag-based** `awk`; the
+- [x] 5.3 Run the full Acceptance Criteria (AC1 … AC17). Use the **flag-based** `awk`; the
       naive `/start/,/end/` range self-matches and returns a heading-only body.
-- [ ] 5.4 AC13 resolver — the only permitted `BROKEN:` line is the deferred sweep path.
+- [x] 5.4 AC13 resolver — the only permitted `BROKEN:` line is the deferred sweep path.
 - [x] 5.5 `bash scripts/check-pa-22.sh` → exit 0 **after** the Vendor-row edit (AC11i).
-- [ ] 5.6 AC2 collision re-check against `origin/main` **after the final rebase**.
+- [x] 5.6 AC2 collision re-check against `origin/main` **after the final rebase**.
 - [ ] 5.7 AC17 scope check — diff confined to `knowledge-base/legal/**` and
       **AMENDED 2026-07-31 (operator-approved):** AC17's original docs-only boundary no longer
       holds. The operator approved folding DEF-1a — correcting the affirmatively false

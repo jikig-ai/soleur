@@ -774,9 +774,30 @@ silently returns a heading-only body.
   their sole compensating control. The entry contains **no** unqualified claim that every
   member runs under a deny-by-default command allowlist, and makes **no** assertion either way
   about the CLI's own sandbox for those two (not determinable from source).
-- **AC11e — no inherited PII-scrub claim (D8).** PA-31 `(g)` contains **no** reference to
-  `sanitizePromptString` or to prompt-assembly email scrubbing, and states affirmatively that
+- **AC11e — no inherited PII-scrub claim (D8).** ~~PA-31 `(g)` contains **no** reference to
+  `sanitizePromptString` or to prompt-assembly email scrubbing~~, and states affirmatively that
   no PII scrub is applied to Anthropic-bound content on this path.
+
+  **AMENDED 2026-07-31 at verification time — the original absence-grep was defective.** Run
+  literally, `grep -c 'sanitizePromptString'` over PA-31 `(g)` returns `1` and the AC FAILS —
+  but the artifact is correct and the criterion is wrong. The single occurrence reads:
+  *"**NO PII SCRUB EXISTS on Anthropic-bound content on this path.** PA-22 records
+  `sanitizePromptString` plus email scrubbing at prompt assembly as its Art. 32 measure;
+  **that measure does not exist here**, and on the CLI path it structurally could not…"* —
+  i.e. it names the measure precisely in order to **disclaim** it, which is strictly more
+  informative to a supervisory authority than omitting the name.
+
+  This is the failure mode **AC6 already warns about** in this same plan ("not by an
+  absence-grep, which would false-fail on the very sentences that state the distinction"), and
+  AC11e reproduced it. Replaced with positive assertions:
+
+  1. `awk`-extracted PA-31 `(g)` contains `NO PII SCRUB EXISTS` → **PASS**
+  2. it contains `that measure does not exist here` → **PASS**
+  3. every occurrence of `sanitizePromptString` in PA-31 is within a disclaiming sentence —
+     verified by reading, not by counting.
+
+  Recorded as an amendment rather than silently satisfying a looser command, per the
+  "verify an AC by running its LITERAL command" rule.
 - **AC11f — exclusions are named (D8).** PA-31 names `agent-on-spawn-requested` (→ PA-22),
   `cron-anthropic-cost-report` (`ANTHROPIC_ADMIN_KEY`), `cron-skill-freshness`, and the CI
   workflows (→ PA-33) as deliberate exclusions, each with its reason.
