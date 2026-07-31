@@ -1617,7 +1617,11 @@ cleanup_orphan_worktree_dirs() {
   # deletes the entire tree. Refuse to reap rather than reap everything.
   local -A registered_paths
   local wt_list
-  if ! wt_list=$(git worktree list --porcelain 2>&1); then
+  # Capture stdout ONLY (`2>/dev/null`, not `2>&1`): the parsed value is an
+  # allowlist that decides what survives `rm -rf`, so folding git's stderr into
+  # it would let a diagnostic line be parsed as registry content. Errors are
+  # signalled by the exit status, which is what the fail-closed branch reads.
+  if ! wt_list=$(git worktree list --porcelain 2>/dev/null); then
     echo "SOLEUR_ORPHAN_REGISTRY_UNAVAILABLE reason=git-worktree-list-failed errno=OTHER hint=\"refusing to reap; every dir would read as unregistered — see git-worktree SKILL.md §Sharp Edges\""
     headless_or_stderr warn "cleanup_orphan_worktree_dirs: 'git worktree list' failed; skipping orphan reap (fail-closed)"
     return 0
@@ -1642,6 +1646,16 @@ cleanup_orphan_worktree_dirs() {
     # explicitly rather than relying on that side effect.
     if [[ -L "$dir" ]]; then
       [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) orphan $(basename "$dir") - symlink, not reaping${NC}"
+      continue
+    fi
+    # A BARE repository has no `.git` entry at all — it IS the git directory —
+    # so every `.git`-based test reads it as "definitely orphaned" and reaps it,
+    # taking its refs and objects with it (verified: a bare repo parked here is
+    # destroyed by the `-e` test alone). Detect the bare layout positively and
+    # never reap it. This repo is itself bare, so a parked bare clone under
+    # .worktrees/ is a plausible thing for an operator or tool to create.
+    if [[ -f "$dir/HEAD" && -d "$dir/objects" && -d "$dir/refs" ]]; then
+      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) orphan $(basename "$dir") - bare repository, not reaping${NC}"
       continue
     fi
     if [[ -z "${registered_paths[$dir]:-}" ]]; then

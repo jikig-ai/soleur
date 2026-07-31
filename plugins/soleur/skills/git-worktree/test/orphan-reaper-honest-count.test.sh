@@ -37,7 +37,7 @@ pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 # SKIP exits 77 (autotools convention) BEFORE this point, so a skip is
 # distinguishable from a pass; reaching the end with fewer passes than this
 # means assertions were silently dropped, which must not read as coverage.
-MIN_PASS=38
+MIN_PASS=39
 
 # Case 2 leaves a `chmod 500` directory behind, which defeats a plain
 # `rm -rf "$TMP"` cleanup exactly as it defeats the reaper. Restore write
@@ -107,6 +107,11 @@ mkdir -p "$WORKTREE_DIR/has-git-file"; echo "gitdir: /nowhere" > "$WORKTREE_DIR/
 # destruction, which is worse than the silent version.
 git clone "$UPSTREAM" "$WORKTREE_DIR/nested-clone" >/dev/null 2>&1
 : > "$WORKTREE_DIR/nested-clone/uncommitted-work.txt"
+# A BARE repo has NO `.git` entry at all -- it IS the git dir -- so every
+# `.git`-based test (including `-e`) reads it as orphaned and reaps its refs
+# and objects. Verified destroyed before the positive bare-layout guard landed.
+git init --bare -b main "$WORKTREE_DIR/parked-bare.git" >/dev/null 2>&1
+: > "$WORKTREE_DIR/parked-bare.git/PRECIOUS-REFS"
 
 out1=$(cleanup_orphan_worktree_dirs true 2>&1 | strip_ansi)
 
@@ -125,6 +130,9 @@ out1=$(cleanup_orphan_worktree_dirs true 2>&1 | strip_ansi)
 [[ -f "$WORKTREE_DIR/nested-clone/uncommitted-work.txt" ]] \
   && pass "nested clone (.git DIRECTORY) preserved with its uncommitted work" \
   || fail "nested clone was DESTROYED — a .git directory must not read as orphaned"
+[[ -f "$WORKTREE_DIR/parked-bare.git/PRECIOUS-REFS" ]] \
+  && pass "bare repository preserved (no .git entry is not the same as orphaned)" \
+  || fail "bare repository was DESTROYED — its refs and objects are unrecoverable"
 
 # ---------------------------------------------------------------------------
 # Case 2 — an UNREMOVABLE orphan must not be counted or announced.
