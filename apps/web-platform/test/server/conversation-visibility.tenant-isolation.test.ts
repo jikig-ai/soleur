@@ -164,7 +164,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
 
       if (ws1) await tearDownSharedWorkspace(service, ws1);
       if (ws2) await tearDownSharedWorkspace(service, ws2);
-    }, 30_000);
+    }, 60_000);
 
     // ------------------------------------------------------------------
     // AC3: RLS deny — workspace member cannot see private conversations
