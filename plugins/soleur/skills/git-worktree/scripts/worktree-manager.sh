@@ -1609,27 +1609,91 @@ cleanup_orphan_worktree_dirs() {
   local verbose="${1:-false}"
   [[ ! -d "$WORKTREE_DIR" ]] && return 0
 
-  # Build set of registered worktree paths
+  # Build set of registered worktree paths. FAIL CLOSED: this list is the ONLY
+  # thing standing between a live worktree and `rm -rf`. `git worktree list` can
+  # fail wholesale under the sandbox's masked-config wedge (the same condition
+  # sweep_stale_git_locks exists for), and a swallowed failure yields an EMPTY
+  # registry — under which every directory reads as unregistered and the reaper
+  # deletes the entire tree. Refuse to reap rather than reap everything.
   local -A registered_paths
+  local wt_list
+  # Capture stdout ONLY (`2>/dev/null`, not `2>&1`): the parsed value is an
+  # allowlist that decides what survives `rm -rf`, so folding git's stderr into
+  # it would let a diagnostic line be parsed as registry content. Errors are
+  # signalled by the exit status, which is what the fail-closed branch reads.
+  if ! wt_list=$(git worktree list --porcelain 2>/dev/null); then
+    echo "SOLEUR_ORPHAN_REGISTRY_UNAVAILABLE reason=git-worktree-list-failed errno=OTHER hint=\"refusing to reap; every dir would read as unregistered — see git-worktree SKILL.md §Sharp Edges\""
+    headless_or_stderr warn "cleanup_orphan_worktree_dirs: 'git worktree list' failed; skipping orphan reap (fail-closed)"
+    return 0
+  fi
   while IFS= read -r line; do
     if [[ "$line" == "worktree "* ]]; then
       registered_paths["${line#worktree }"]=1
     fi
-  done < <(git worktree list --porcelain 2>/dev/null)
+  done <<<"$wt_list"
 
   local orphans_cleaned=0
+  local -a orphans_failed=()
+  local -a orphans_failed_errno=()
   for dir in "$WORKTREE_DIR"/*/; do
     [[ ! -d "$dir" ]] && continue
-    # Normalize path (remove trailing slash)
+    # Normalize path (remove trailing slash). Load-bearing beyond cosmetics: it
+    # is what makes `rm -rf -- "$dir"` unlink a SYMLINK rather than descend into
+    # its target and delete out-of-tree content.
     dir="${dir%/}"
+    # A symlink into the tree is never ours to reap — unlink-only is the safe
+    # behaviour the trailing-slash strip happens to give us, but pin it
+    # explicitly rather than relying on that side effect.
+    if [[ -L "$dir" ]]; then
+      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) orphan $(basename "$dir") - symlink, not reaping${NC}"
+      continue
+    fi
+    # A BARE repository has no `.git` entry at all — it IS the git directory —
+    # so every `.git`-based test reads it as "definitely orphaned" and reaps it,
+    # taking its refs and objects with it (verified: a bare repo parked here is
+    # destroyed by the `-e` test alone). Detect the bare layout positively and
+    # never reap it. This repo is itself bare, so a parked bare clone under
+    # .worktrees/ is a plausible thing for an operator or tool to create.
+    if [[ -f "$dir/HEAD" && -d "$dir/objects" && -d "$dir/refs" ]]; then
+      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) orphan $(basename "$dir") - bare repository, not reaping${NC}"
+      continue
+    fi
     if [[ -z "${registered_paths[$dir]:-}" ]]; then
-      # Not a registered worktree — check if it's safe to remove (no .git file = definitely orphaned)
-      if [[ ! -f "$dir/.git" ]]; then
-        rm -rf "$dir"
-        orphans_cleaned=$((orphans_cleaned + 1))
-        [[ "$verbose" == "true" ]] && echo -e "${BLUE}Removed orphan directory: $(basename "$dir")${NC}"
+      # Not a registered worktree — reap only when there is NO `.git` entry of
+      # any kind. `-e`, not `-f`: a linked worktree has a `.git` FILE, but a
+      # nested full `git clone` has a `.git` DIRECTORY, and `-f` reads that as
+      # "definitely orphaned" and destroys the clone (with any uncommitted work
+      # in it). The honest-reporting fix below would then faithfully announce
+      # the destruction, which is worse, not better.
+      if [[ ! -e "$dir/.git" ]]; then
+        # #7102 — the exit status is the whole point: a `rm -rf` that fails
+        # (root-owned Supabase bind-mount residue is the recurring cause) used
+        # to increment the counter anyway, so the summary announced removals
+        # for directories still on disk. Redirection order is load-bearing:
+        # `2>&1 >/dev/null` sends stderr to the capture and THEN stdout to
+        # /dev/null, so rm_err holds only the error text. LC_ALL=C pins
+        # strerror to English so _rm_errno maps the label reliably.
+        # --one-file-system is defence-in-depth against a CROSS-DEVICE mount
+        # appearing under a worktree: the flag skips any directory whose st_dev
+        # differs from the command-line argument's. It does NOT protect against
+        # a same-device bind mount, which shares st_dev and is descended into
+        # normally — so do not read this as a general bind-mount guard. No such
+        # mount exists under .worktrees/ today (`findmnt -T` shows one plain
+        # ext4 device); the flag is cheap insurance, not a fix for an observed
+        # case. GNU-only, like this script's existing `stat -c` / strerror
+        # mapping — a BSD `rm` would reject it.
+        local rm_err
+        if rm_err=$(LC_ALL=C rm -rf --one-file-system -- "$dir" 2>&1 >/dev/null); then
+          # Assignment form, never `(( orphans_cleaned++ ))` — that returns 1
+          # at the old value 0 and aborts the caller under `set -e`.
+          orphans_cleaned=$((orphans_cleaned + 1))
+          [[ "$verbose" == "true" ]] && echo -e "${BLUE}Removed orphan directory: $(basename "$dir")${NC}"
+        else
+          orphans_failed+=("$dir")
+          orphans_failed_errno+=("$(_rm_errno "$rm_err")")
+        fi
       else
-        [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) orphan $(basename "$dir") - has .git file, run 'git worktree prune' first${NC}"
+        [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) orphan $(basename "$dir") - has a .git entry (linked worktree or nested clone), not reaping${NC}"
       fi
     fi
   done
@@ -1637,6 +1701,74 @@ cleanup_orphan_worktree_dirs() {
   if [[ $orphans_cleaned -gt 0 ]]; then
     [[ "$verbose" == "true" ]] && echo -e "${GREEN}Cleaned $orphans_cleaned orphan directory(ies)${NC}"
   fi
+
+  # Unconditional — unlike the success summary. The default verbose=false path
+  # is the one session-start, work Phase 0 and ship Phase 7 Step 4 actually run,
+  # and a failure nobody is told about repeats silently on every later run.
+  if [[ ${#orphans_failed[@]} -gt 0 ]]; then
+    # ONE aggregate marker per invocation, never one per directory. The marker
+    # extractor keeps the FIRST N markers per tool_response and stops at the
+    # cap. Note the creation path cannot actually be starved here — it is a
+    # separate invocation — and the markers that DO co-occur (ensure_bare_config
+    # inside cleanup_merged_worktrees) are emitted before this reaper runs, so
+    # first-N ordering already protects them. Aggregate anyway: an unbounded
+    # per-directory producer is a log-volume and marker-length problem in its
+    # own right, and the budget is a shared resource worth not spending. Every
+    # failure is still named individually on stderr below.
+    #
+    # The names are sanitized because this loop is the ONLY one that handles
+    # arbitrarily-named, UNREGISTERED directories: git refnames forbid control
+    # characters, so the creation path cannot produce them, but any process can
+    # `mkdir` a directory whose name embeds a newline. Interpolated raw into a
+    # line-oriented sink, `$'x\nworktree wedge: forged'` emits a SECOND line
+    # that matches the wedge pattern and forges a false platform-integrity page.
+    # Collapse CR/LF/TAB and the quote/space characters that would also break
+    # the key=value shape, and emit the basename only — the full path adds a
+    # user-derived branch name to an off-box sink for no diagnostic gain.
+    local failed_dir failed_names=""
+    for failed_dir in "${orphans_failed[@]}"; do
+      # Positive ALLOWLIST, not a denylist: a denylist of the characters that
+      # broke the line format ("\n\r\t and space) still admits \v, \f, ESC and
+      # U+2028/U+2029, the last of which splits lines in JSON log viewers even
+      # though bash's own `.split("\n")` does not (cq-regex-unicode-separators).
+      # Closed sets are the only ones that stay closed as sinks change.
+      local safe_name="${failed_dir##*/}"
+      safe_name="${safe_name//[^A-Za-z0-9._-]/_}"
+      failed_names+="${failed_names:+,}${safe_name:0:64}"
+    done
+    # `cleaned=` is carried here, not only in the verbose-gated success summary,
+    # so the success counter is OBSERVABLE on the default verbose=false path —
+    # the one session-start, work Phase 0 and ship Phase 7 actually run. Without
+    # it the counter has no reader at that verbosity, so a miscount there is
+    # both undetectable and untestable, and only becomes visible later when
+    # someone makes the summary unconditional. `${x[0]:-OTHER}` because a
+    # desynced errno array must degrade to a label, never abort under `set -u`.
+    echo "SOLEUR_ORPHAN_UNREMOVABLE count=${#orphans_failed[@]} cleaned=${orphans_cleaned} errno=${orphans_failed_errno[0]:-OTHER} names=$failed_names reason=rm-partial hint=\"partially-deleted orphans survive; see git-worktree SKILL.md §Sharp Edges\""
+
+    echo -e "${YELLOW}Could not remove ${#orphans_failed[@]} orphan directory(ies):${NC}" >&2
+    # Index over the array itself rather than a hand-maintained counter: the
+    # errno read is then symmetric with the `:-OTHER` guard above, and a
+    # desynced pair degrades to a label instead of aborting under `set -u`
+    # (an unset array element is fatal regardless of `set -e`).
+    local idx
+    for idx in "${!orphans_failed[@]}"; do
+      echo -e "${YELLOW}  - ${orphans_failed[idx]} (${orphans_failed_errno[idx]:-OTHER})${NC}" >&2
+    done
+    echo -e "${YELLOW}  Remediation: git-worktree SKILL.md §Sharp Edges${NC}" >&2
+  fi
+
+  # #7102 defect 3 — the function used to END on `[[ … ]] && echo`, so a
+  # SUCCESSFUL clean at the default verbose=false returned 1. Both call sites
+  # are bare inside cleanup_merged_worktrees under `set -e`, so that aborted
+  # the caller mid-flight and silently skipped the tmp reapers after it.
+  #
+  # Belt-and-braces: the failure-summary block above already ends the function
+  # on a zero-returning construct, so deleting this line does NOT currently
+  # reintroduce the bug (measured — the suite stays green). It is here so the
+  # invariant survives a future edit that appends another `[[ … ]] && echo`
+  # tail. What the suite actually pins is the CONTRACT (rc=0 on every path),
+  # not the presence of this statement.
+  return 0
 }
 
 # Clean up worktrees for merged branches (detects [gone] and merged-to-main)
