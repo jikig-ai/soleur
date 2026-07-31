@@ -35,9 +35,12 @@ pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 
 # Every assertion below must run for the suite to mean anything. A preflight
 # SKIP exits 77 (autotools convention) BEFORE this point, so a skip is
-# distinguishable from a pass; reaching the end with fewer passes than this
-# means assertions were silently dropped, which must not read as coverage.
-MIN_PASS=39
+# distinguishable from a pass. EXACT equality, not a floor: a floor with slack
+# only fires once that many assertions vanish, and it drifts by hand anyway
+# (each added assertion bumps it), so it costs the same maintenance for strictly
+# less power. Counting PASS+FAIL rather than PASS means a FAILING assertion
+# still counts as coverage, so this gate and the pass/fail gate stay orthogonal.
+EXPECTED_ASSERTIONS=41
 
 # Case 2 leaves a `chmod 500` directory behind, which defeats a plain
 # `rm -rf "$TMP"` cleanup exactly as it defeats the reaper. Restore write
@@ -200,8 +203,10 @@ mkdir -p "$WORKTREE_DIR/gone-a" "$WORKTREE_DIR/gone-b"
 mk_stuck "$WORKTREE_DIR/stuck3a"; mk_stuck "$WORKTREE_DIR/stuck3b"
 
 before3=$(count_dirs "$WORKTREE_DIR")
-out3=$(cleanup_orphan_worktree_dirs true 2>/dev/null | strip_ansi)
-err3=$(cleanup_orphan_worktree_dirs true 2>&1 >/dev/null | strip_ansi)
+# One invocation, both streams: a second call would run against the leftovers
+# (gone-a/gone-b already reaped) and report cleaned=0.
+cleanup_orphan_worktree_dirs true >"$TMP/o3.raw" 2>"$TMP/e3.raw"
+out3=$(strip_ansi <"$TMP/o3.raw"); err3=$(strip_ansi <"$TMP/e3.raw")
 after3=$(count_dirs "$WORKTREE_DIR")
 delta3=$(( before3 - after3 ))
 claim3=$(claimed_count "$out3")
@@ -269,8 +274,11 @@ cleanup_orphan_worktree_dirs false >/dev/null 2>&1; rc4d=$?
 echo "Case 5: silent on a fully clean run (no false failure surfaces)"
 for v in false true; do
   WORKTREE_DIR="$TMP/wt5-$v"; mkdir -p "$WORKTREE_DIR"/{ok-a,ok-b,ok-c}
-  o5=$(cleanup_orphan_worktree_dirs "$v" 2>/dev/null | strip_ansi)
-  e5=$(cleanup_orphan_worktree_dirs "$v" 2>&1 >/dev/null | strip_ansi)
+  # ONE invocation, both streams captured. The reaper is destructive: a second
+  # call runs against an already-emptied directory, so it would assert the
+  # nothing-to-do path while claiming to cover the reaped-three path.
+  cleanup_orphan_worktree_dirs "$v" >"$TMP/o5.raw" 2>"$TMP/e5.raw"; rc5=$?
+  o5=$(strip_ansi <"$TMP/o5.raw"); e5=$(strip_ansi <"$TMP/e5.raw")
   grep -q 'SOLEUR_ORPHAN_UNREMOVABLE' <<<"$o5" \
     && fail "verbose=$v: emitted an UNREMOVABLE sentinel on a clean run" \
     || pass "verbose=$v: no UNREMOVABLE sentinel on a clean run"
@@ -278,9 +286,8 @@ for v in false true; do
     && fail "verbose=$v: printed a failure summary on a clean run" \
     || pass "verbose=$v: no failure summary on a clean run"
   # A crash produces silence too, and silence would satisfy both greps above.
-  # Pin rc so an abort (e.g. an unbound array read under `set -u`) is not
-  # mistaken for a clean, quiet run.
-  cleanup_orphan_worktree_dirs "$v" >/dev/null 2>&1; rc5=$?
+  # Pin rc from the SAME invocation so an abort (e.g. an unbound array read
+  # under `set -u`) is not mistaken for a clean, quiet run.
   [[ "$rc5" -eq 0 ]] \
     && pass "verbose=$v: clean run returns 0 (silence is not a crash)" \
     || fail "verbose=$v: clean run returned rc=$rc5"
@@ -346,8 +353,9 @@ echo "PASS=$PASS FAIL=$FAIL"
 
 # Anti-vacuity parity: a preflight SKIP exits 77 above; reaching here with a
 # short PASS count means assertions were silently dropped.
-if [[ "$FAIL" -eq 0 && "$PASS" -lt "$MIN_PASS" ]]; then
-  echo "FAIL: only $PASS assertions ran, expected >= $MIN_PASS (coverage regressed)"
+RAN=$(( PASS + FAIL ))
+if [[ "$RAN" -ne "$EXPECTED_ASSERTIONS" ]]; then
+  echo "FAIL: $RAN assertions ran, expected exactly $EXPECTED_ASSERTIONS (coverage drifted)"
   exit 1
 fi
 

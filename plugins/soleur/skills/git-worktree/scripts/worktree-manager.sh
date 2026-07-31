@@ -1673,10 +1673,15 @@ cleanup_orphan_worktree_dirs() {
         # `2>&1 >/dev/null` sends stderr to the capture and THEN stdout to
         # /dev/null, so rm_err holds only the error text. LC_ALL=C pins
         # strerror to English so _rm_errno maps the label reliably.
-        # --one-file-system: the local Supabase stack bind-mounts INTO the
-        # worktree, and without this `rm -rf` would descend through such a mount
-        # and delete the bind-mount SOURCE outside the tree. Latent while the
-        # residue is root-owned (EACCES stops it), live the moment it is not.
+        # --one-file-system is defence-in-depth against a CROSS-DEVICE mount
+        # appearing under a worktree: the flag skips any directory whose st_dev
+        # differs from the command-line argument's. It does NOT protect against
+        # a same-device bind mount, which shares st_dev and is descended into
+        # normally — so do not read this as a general bind-mount guard. No such
+        # mount exists under .worktrees/ today (`findmnt -T` shows one plain
+        # ext4 device); the flag is cheap insurance, not a fix for an observed
+        # case. GNU-only, like this script's existing `stat -c` / strerror
+        # mapping — a BSD `rm` would reject it.
         local rm_err
         if rm_err=$(LC_ALL=C rm -rf --one-file-system -- "$dir" 2>&1 >/dev/null); then
           # Assignment form, never `(( orphans_cleaned++ ))` — that returns 1
@@ -1688,7 +1693,7 @@ cleanup_orphan_worktree_dirs() {
           orphans_failed_errno+=("$(_rm_errno "$rm_err")")
         fi
       else
-        [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) orphan $(basename "$dir") - has .git file, run 'git worktree prune' first${NC}"
+        [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) orphan $(basename "$dir") - has a .git entry (linked worktree or nested clone), not reaping${NC}"
       fi
     fi
   done
@@ -1702,11 +1707,14 @@ cleanup_orphan_worktree_dirs() {
   # and a failure nobody is told about repeats silently on every later run.
   if [[ ${#orphans_failed[@]} -gt 0 ]]; then
     # ONE aggregate marker per invocation, never one per directory. The marker
-    # extractor keeps a fixed budget of the first N markers per tool_response
-    # and STOPS at the cap, so an unbounded per-directory producer would crowd
-    # out the genuinely-paging wedge markers emitted by the creation path — a
-    # non-paging marker starving a paging one. Every failure is still named
-    # individually on stderr below; only the machine-readable line is folded.
+    # extractor keeps the FIRST N markers per tool_response and stops at the
+    # cap. Note the creation path cannot actually be starved here — it is a
+    # separate invocation — and the markers that DO co-occur (ensure_bare_config
+    # inside cleanup_merged_worktrees) are emitted before this reaper runs, so
+    # first-N ordering already protects them. Aggregate anyway: an unbounded
+    # per-directory producer is a log-volume and marker-length problem in its
+    # own right, and the budget is a shared resource worth not spending. Every
+    # failure is still named individually on stderr below.
     #
     # The names are sanitized because this loop is the ONLY one that handles
     # arbitrarily-named, UNREGISTERED directories: git refnames forbid control
@@ -1717,10 +1725,15 @@ cleanup_orphan_worktree_dirs() {
     # Collapse CR/LF/TAB and the quote/space characters that would also break
     # the key=value shape, and emit the basename only — the full path adds a
     # user-derived branch name to an off-box sink for no diagnostic gain.
-    local failed_dir failed_names="" i=0
+    local failed_dir failed_names=""
     for failed_dir in "${orphans_failed[@]}"; do
+      # Positive ALLOWLIST, not a denylist: a denylist of the characters that
+      # broke the line format ("\n\r\t and space) still admits \v, \f, ESC and
+      # U+2028/U+2029, the last of which splits lines in JSON log viewers even
+      # though bash's own `.split("\n")` does not (cq-regex-unicode-separators).
+      # Closed sets are the only ones that stay closed as sinks change.
       local safe_name="${failed_dir##*/}"
-      safe_name="${safe_name//[$'\n\r\t "']/_}"
+      safe_name="${safe_name//[^A-Za-z0-9._-]/_}"
       failed_names+="${failed_names:+,}${safe_name:0:64}"
     done
     # `cleaned=` is carried here, not only in the verbose-gated success summary,
@@ -1733,9 +1746,13 @@ cleanup_orphan_worktree_dirs() {
     echo "SOLEUR_ORPHAN_UNREMOVABLE count=${#orphans_failed[@]} cleaned=${orphans_cleaned} errno=${orphans_failed_errno[0]:-OTHER} names=$failed_names reason=rm-partial hint=\"partially-deleted orphans survive; see git-worktree SKILL.md §Sharp Edges\""
 
     echo -e "${YELLOW}Could not remove ${#orphans_failed[@]} orphan directory(ies):${NC}" >&2
-    for failed_dir in "${orphans_failed[@]}"; do
-      echo -e "${YELLOW}  - $failed_dir (${orphans_failed_errno[$i]})${NC}" >&2
-      i=$((i + 1))
+    # Index over the array itself rather than a hand-maintained counter: the
+    # errno read is then symmetric with the `:-OTHER` guard above, and a
+    # desynced pair degrades to a label instead of aborting under `set -u`
+    # (an unset array element is fatal regardless of `set -e`).
+    local idx
+    for idx in "${!orphans_failed[@]}"; do
+      echo -e "${YELLOW}  - ${orphans_failed[idx]} (${orphans_failed_errno[idx]:-OTHER})${NC}" >&2
     done
     echo -e "${YELLOW}  Remediation: git-worktree SKILL.md §Sharp Edges${NC}" >&2
   fi
