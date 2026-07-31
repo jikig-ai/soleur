@@ -58,7 +58,10 @@ if [ -r /etc/default/soleur-doppler-token ]; then
         # Skip an empty value rather than blanking a working one. `EnvironmentFile=-` tolerates
         # ABSENT and UNREADABLE but NOT empty-valued, and the installer's shape check accepts a
         # bare `KEY=` (measured), so this is the layer that actually holds that line.
-        [ -n "$_cred_v" ] && printf -v "$_cred_k" '%s' "$_cred_v"
+        # `if`, not `[ … ] && …`: the latter is a trailing command whose exit status is 1 when
+        # the value is empty, which under this script's `set -e` aborts the deploy. Exactly the
+        # trap already fixed in ci-deploy-wrapper.sh — and reintroduced here on the first pass.
+        if [ -n "$_cred_v" ]; then printf -v "$_cred_k" '%s' "$_cred_v"; fi
         ;;
     esac
   done < /etc/default/soleur-doppler-token
@@ -1448,7 +1451,7 @@ ghcr_prelude_and_login() {
       # `secrets get <NAME> --plain` returns the bare value on stdout (never argv).
       _sentry_v=""
       _doppler_get_or_report "$k" _sentry_v 2 2 0 || true
-      [[ -n "$_sentry_v" ]] && printf -v "$k" '%s' "$_sentry_v"
+      if [[ -n "$_sentry_v" ]]; then printf -v "$k" '%s' "$_sentry_v"; fi
       export "$k"
     done
     unset _sentry_v
