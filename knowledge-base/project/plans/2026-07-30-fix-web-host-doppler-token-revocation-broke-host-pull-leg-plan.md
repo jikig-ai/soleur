@@ -11,6 +11,10 @@ status: draft
 ---
 
 <!-- iac-routing-ack: plan-phase-2-8-reviewed -->
+<!-- lint-infra-ignore start — this block ASSERTS zero operator steps and enumerates the
+     scanner-flagged tokens in order to explain why each is a description, not a prescription.
+     lint-infra-no-human-steps keys on actor+terraform/SSH co-occurrence and cannot tell a
+     rejection from an instruction, so the acknowledgement itself trips it. -->
 <!--
   Phase 2.8 (Infrastructure-as-Code Routing Gate) was reviewed and the ## Infrastructure (IaC)
   section below is complete. This plan contains ZERO operator-driven steps: the merge fires
@@ -27,6 +31,7 @@ status: draft
       destination class in infra-config-install.sh's DEST_SPEC.
   Both are cited as constraints on the design, not prescribed as operator actions.
 -->
+<!-- lint-infra-ignore end -->
 
 ## Enhancement Summary
 
@@ -1131,6 +1136,9 @@ discoverability_test:
     3. .version equals the newest `web-v*` tag; .uptime is small (recent swap).
 ```
 
+<!-- lint-infra-ignore start — states that the surface is NOT operator-inspectable without SSH,
+     as the reason the marker is emitted from inside the namespace. The linter reads the
+     actor+SSH co-occurrence as a prescription; it is the opposite. -->
 **Affected-surface note (§2.9.2).** `ci-deploy.sh` runs inside the webhook service's mount
 namespace (`ProtectSystem=strict`, `PrivateTmp=true`) — an execution surface the operator cannot
 inspect without SSH, and one where host-side reasoning is provably wrong (E6). The
@@ -1138,6 +1146,7 @@ inspect without SSH, and one where host-side reasoning is provably wrong (E6). T
 (`ok`, `rc`, `class`, `home`, `config_dir`, `host_id`) discriminates **all** the competing
 hypotheses (H7 auth vs H8 config-dir vs network) **in a single event**, rather than being a
 boolean that fires for only one shape.
+<!-- lint-infra-ignore end -->
 
 ---
 
@@ -1465,6 +1474,9 @@ commit at the same instant. The ordering argument is an argument *for* two PRs.
   `.tmpl`). Update Phase 2.1, AC7, §Files to Create, §Infrastructure. *This is the single
   highest-value catch in the entire review: the plan as drafted could not have worked.*
 
+<!-- lint-infra-ignore start — R22 quotes a `workflow_dispatch` re-run in order to CONDEMN it
+     ("an operator step, in a plan that asserts zero"). The finding was later falsified; both
+     the original and the falsification are prose about an operator step, never a prescription. -->
 - **R22 — the FIRST apply is guaranteed to fail, and nothing re-applies (#4804 recurrence).**
   The host's `hooks.json` is stale and therefore cannot pass the new `soleur_doppler_token_b64`
   key, so the handler records `missing_env` for the new dest (`infra-config-apply.sh:105-115`) →
@@ -1474,6 +1486,7 @@ commit at the same instant. The ordering argument is an argument *for* two PRs.
   **Fix:** run a second `terraform apply` + verify pass inside the same job (the new `hooks.json`
   is active by then), record the first pass's `missing_env` as **expected**, and restate AC22
   against the second pass.
+<!-- lint-infra-ignore end -->
 
 - **R23 — the merge fires the release and the apply concurrently, and the release loses.**
   This PR touches `apps/web-platform/**`, which is `web-platform-release.yml`'s push path filter,
@@ -1789,10 +1802,13 @@ Two designs are viable and they have very different blast radii. Which one is co
 measured (locally, in a container that reproduces the unit's protections) before any Terraform is
 written:
 
+<!-- lint-infra-ignore start — an empirical RESEARCH QUESTION about systemd `ReadOnlyPaths`
+     semantics, measured locally in a container. It prescribes no host action. -->
 > Does `rename(2)` a new inode **over** `/etc/default/webhook-deploy` succeed from inside a mount
 > namespace where that path is listed in `ReadOnlyPaths`? (systemd implements a file-level
 > `ReadOnlyPaths` as a read-only **bind mount**; you cannot rename over a bind-mount target — but
 > confirm, do not assume.)
+<!-- lint-infra-ignore end -->
 
 - **Design S (single file) — PREFERRED if the probe succeeds.** Atomically replace
   `/etc/default/webhook-deploy` in place. **Zero unit edits.** Every consumer — unit-inheritance
@@ -2338,6 +2354,10 @@ where the regulated-surface regex actually applies. This is a recorded deferral,
 
 ## Alternatives Considered
 
+<!-- lint-infra-ignore start — a REJECTED-alternatives table. Row 1 names the operator-run
+     option precisely to rule it out ("violates the non-technical-founder constraint"). Every
+     row here is an option NOT taken. -->
+
 | Alternative | Why not |
 |---|---|
 | **Operator re-mints the token and pastes it into Doppler** | Violates the non-technical-founder constraint and `hr-never-label-any-step-as-manual-without`, and fixes the value without fixing the invisibility — the next rotation reproduces the outage exactly. |
@@ -2350,6 +2370,8 @@ where the regulated-surface regex actually applies. This is a recorded deferral,
 | **Scope the deploy token down from full-`prd` to least-privilege** (the `web_probes` pattern) | Correct long-term, and the honest answer to §Encryption Posture's exception. Deliberately **out of scope** for a P1 outage fix: it changes what `ci-deploy.sh` can read, has a wide blast radius across six consumers, and would delay restoring production. Tracking issue filed at /work with re-evaluation criteria. |
 | **Delete the GHCR fall-through now** | See Sharp Edge 8 — it darkens a live Sentry alert signal and belongs to ADR-096 task 5.3. |
 | **Just flip the post-mortem to `resolved` when prod deploys** | Would record two distinct incidents as one, which is the exact confusion that let eight red releases accumulate. §Phase 6 splits them. |
+
+<!-- lint-infra-ignore end -->
 
 ---
 
