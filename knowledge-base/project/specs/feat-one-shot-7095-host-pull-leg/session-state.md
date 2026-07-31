@@ -148,10 +148,19 @@ teeth; T-7095-5/6 are properly paired with positive controls.
 
 ### Gate status at handoff
 
-`test-all.sh` rc=0 239/239 (clean tree, no contention banners). `run-registered-suites.sh` showed
-`ci-deploy.test.sh` RED under `-P 6` + concurrent `test-all`; **three isolated runs were rc=0
-196/196** (one timed at 291s) and a solo gate run was in flight at handoff. Environmental is the
-strong hypothesis; it was NOT confirmed. Do not record it as a flake without the solo result.
+BOTH GATES GREEN against the clean tree:
+
+| gate | rc | result |
+|---|---|---|
+| `scripts/test-all.sh` | 0 | 239/239 suites, no contention banners |
+| `apps/web-platform/infra/run-registered-suites.sh` (solo) | 0 | **87/87 suites** |
+
+The `ci-deploy.test.sh` RED seen earlier is **CONFIRMED contention**, not a defect — it failed
+only under `-P 6` with a concurrent `test-all`, passed `rc=0 196/196` on three isolated runs (one
+timed at 291s), and the solo gate run is 87/87. Recorded as confirmed rather than assumed: an
+earlier discriminator in this session ("no `FAIL:` line means it aborted") was WRONG — the runner
+prints only PASS/RED per suite and captures no per-suite output, so absence of a `FAIL:` line
+carries no information. The valid evidence is the isolated runs plus the solo gate.
 
 **Recommendation: fix the drop-in content guard and F11/F12 before merge.** Prod is stable on
 stale v0.244.0; that is a cheap state. A bad fix in the sole no-SSH remediation channel on an
