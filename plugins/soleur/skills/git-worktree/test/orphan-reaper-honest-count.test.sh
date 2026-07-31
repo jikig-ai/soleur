@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # #7102 — the orphan reaper must not report a cleanup it did not perform.
 #
-# `cleanup_orphan_worktree_dirs` ran `rm -rf "$dir"` without checking the exit
+# `cleanup_orphan_worktree_dirs` ran `rm -rf` without checking the exit
 # status and incremented `orphans_cleaned` unconditionally, so a directory it
 # could not remove was still counted, still announced per-directory, and still
 # folded into the "Cleaned N orphan directory(ies)" summary. The trigger is
@@ -10,9 +10,15 @@
 # `rm` cannot unlink. The class recurs for any worktree that ever started it.
 #
 # A third defect sits one line below the reported one: the function's last
-# statement is `[[ "$verbose" == "true" ]] && echo …`, so a SUCCESSFUL clean at
-# the default verbose=false returns rc=1 — and both call sites are bare inside
+# statement was `[[ "$verbose" == "true" ]] && echo …`, so a SUCCESSFUL clean at
+# the default verbose=false returned rc=1 — and both call sites are bare inside
 # `cleanup_merged_worktrees` under `set -e`, silently skipping the tmp reapers.
+#
+# Review additionally surfaced three destructive/observability defects covered
+# here: a `.git` DIRECTORY (a nested full clone) read as "definitely orphaned"
+# and destroyed; a swallowed `git worktree list` failure emptying the registry
+# so every directory reads as unregistered; and an unsanitized directory name
+# interpolated into a line-oriented telemetry sink.
 #
 # Plan: knowledge-base/project/plans/2026-07-31-fix-honest-failure-reporting-hook-timeout-and-orphan-reaper-plan.md
 #
@@ -28,9 +34,10 @@ fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 
 # Every assertion below must run for the suite to mean anything. A preflight
-# SKIP exits 0 BEFORE this point; reaching the end with fewer passes than this
-# means assertions were silently skipped, which must not read as coverage.
-MIN_PASS=20
+# SKIP exits 77 (autotools convention) BEFORE this point, so a skip is
+# distinguishable from a pass; reaching the end with fewer passes than this
+# means assertions were silently dropped, which must not read as coverage.
+MIN_PASS=38
 
 # Case 2 leaves a `chmod 500` directory behind, which defeats a plain
 # `rm -rf "$TMP"` cleanup exactly as it defeats the reaper. Restore write
@@ -39,10 +46,11 @@ TMP=$(mktemp -d)
 trap 'chmod -R u+rwX "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
 
 # --- Preflight: root ignores permission bits, so the unremovable fixture
-# cannot be constructed and case 2 would vacuously "pass". ---
+# cannot be constructed and the failure cases would pass vacuously. Exit 77,
+# not 0 — a skip that exits 0 is indistinguishable from a full green run. ---
 if [[ $EUID -eq 0 ]]; then
   echo "SKIP: running as root — the chmod 500 unremovable fixture cannot be built"
-  exit 0
+  exit 77
 fi
 
 # --- Preflight: the sentinel maps GNU `rm` strerror text to an errno label.
@@ -53,7 +61,7 @@ probe_err=$(LC_ALL=C rm -rf -- "$probe" 2>&1 >/dev/null)
 chmod -R u+rwX "$probe" 2>/dev/null; rm -rf "$probe"
 if [[ "$probe_err" != *"Permission denied"* ]]; then
   echo "SKIP: non-GNU \`rm\` strerror (got: ${probe_err:-<empty>}) — errno mapping not assertable"
-  exit 0
+  exit 77
 fi
 
 # --- Stand up a real repo so `git worktree list --porcelain` returns a real
@@ -70,31 +78,35 @@ LOCAL="$TMP/local.git"
 git init --bare -b main "$LOCAL" >/dev/null
 ( cd "$LOCAL" && git remote add origin "$UPSTREAM" && git fetch origin main:main >/dev/null 2>&1 )
 
-cd "$LOCAL"
+cd "$LOCAL" || exit 1
 # shellcheck source=/dev/null
 source "$WM"
 set +e
 
 strip_ansi() { sed -e 's/\x1b\[[0-9;]*m//g'; }
-
-# Count directories directly under a WORKTREE_DIR (the reaper's own unit).
 count_dirs() { find "$1" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' '; }
 
-# Parse the reaper's own summary. Returns the integer it CLAIMS to have cleaned,
-# or "none" when no summary was printed.
+# Parse the reaper's own success summary. Returns the integer it CLAIMS to have
+# cleaned, or "none" when no summary was printed. Only meaningful at
+# verbose=true — the success summary is verbose-gated by design.
 claimed_count() { grep -oE 'Cleaned [0-9]+ orphan' <<<"$1" | grep -oE '[0-9]+' || echo "none"; }
+
+mk_stuck() { mkdir -p "$1/inner"; : > "$1/inner/f"; chmod 500 "$1/inner"; }
 
 # ---------------------------------------------------------------------------
 # Case 1 — the happy path still discriminates correctly.
-#   plain-orphan     : no .git file, removable        -> reaped
-#   registered       : a real registered worktree     -> preserved
-#   has-git-file     : unregistered but has .git      -> preserved (needs prune)
 # ---------------------------------------------------------------------------
 echo "Case 1: discriminates orphan vs registered vs has-.git"
 WORKTREE_DIR="$TMP/wt1"; mkdir -p "$WORKTREE_DIR"
 mkdir -p "$WORKTREE_DIR/plain-orphan/nested"; : > "$WORKTREE_DIR/plain-orphan/nested/f"
 git -C "$LOCAL" worktree add "$WORKTREE_DIR/registered" -b c1 main >/dev/null 2>&1
 mkdir -p "$WORKTREE_DIR/has-git-file"; echo "gitdir: /nowhere" > "$WORKTREE_DIR/has-git-file/.git"
+# A nested FULL clone has a `.git` DIRECTORY, not a file. A `-f` test reads that
+# as "definitely orphaned" and destroys the clone along with any uncommitted
+# work in it — and the honest-reporting fix would then faithfully announce the
+# destruction, which is worse than the silent version.
+git clone "$UPSTREAM" "$WORKTREE_DIR/nested-clone" >/dev/null 2>&1
+: > "$WORKTREE_DIR/nested-clone/uncommitted-work.txt"
 
 out1=$(cleanup_orphan_worktree_dirs true 2>&1 | strip_ansi)
 
@@ -110,27 +122,31 @@ out1=$(cleanup_orphan_worktree_dirs true 2>&1 | strip_ansi)
 [[ -d "$WORKTREE_DIR/has-git-file" ]] \
   && pass "orphan with .git file preserved" \
   || fail "orphan with .git file was destroyed"
+[[ -f "$WORKTREE_DIR/nested-clone/uncommitted-work.txt" ]] \
+  && pass "nested clone (.git DIRECTORY) preserved with its uncommitted work" \
+  || fail "nested clone was DESTROYED — a .git directory must not read as orphaned"
 
 # ---------------------------------------------------------------------------
-# Case 2 (RED) — an UNREMOVABLE orphan must not be counted or announced.
-# `chmod 500` on an inner dir leaves it readable/traversable but not writable,
-# so its entries cannot be unlinked and `rm -rf` fails EACCES.
+# Case 2 — an UNREMOVABLE orphan must not be counted or announced.
 # ---------------------------------------------------------------------------
 echo "Case 2: unremovable orphan is reported honestly"
-WORKTREE_DIR="$TMP/wt2"; mkdir -p "$WORKTREE_DIR"
-mkdir -p "$WORKTREE_DIR/stuck/inner"; : > "$WORKTREE_DIR/stuck/inner/f"
-chmod 500 "$WORKTREE_DIR/stuck/inner"
+WORKTREE_DIR="$TMP/wt2"; mkdir -p "$WORKTREE_DIR"; mk_stuck "$WORKTREE_DIR/stuck"
 
-# stdout only — the sentinel is specified to land on stdout (the stream agents grep).
 out2=$(cleanup_orphan_worktree_dirs false 2>/dev/null | strip_ansi)
-rc2=$?
+err2=$(cleanup_orphan_worktree_dirs false 2>&1 >/dev/null | strip_ansi)
+# The success summary is verbose-gated, so a verbose=FALSE capture can never
+# contain it — asserting "does not claim" against that stream is unconditionally
+# true and pins nothing. Capture at verbose=TRUE, where the summary WOULD print
+# if the counter were wrong, and assert the value rather than negating one of
+# many possible wrong values.
+outv=$(cleanup_orphan_worktree_dirs true 2>/dev/null | strip_ansi)
 
 [[ -d "$WORKTREE_DIR/stuck" ]] \
   && pass "unremovable dir survives (fixture is valid)" \
   || fail "fixture invalid — dir was removed, cannot test the failure path"
-[[ "$(claimed_count "$out2")" != "1" ]] \
-  && pass "does not claim a cleanup it did not perform" \
-  || fail "claimed 1 cleaned while the directory is still on disk"
+[[ "$(claimed_count "$outv")" == "none" ]] \
+  && pass "prints no success summary at verbose=true when nothing was cleaned" \
+  || fail "claimed $(claimed_count "$outv") cleaned while the directory is still on disk"
 grep -q 'SOLEUR_ORPHAN_UNREMOVABLE' <<<"$out2" \
   && pass "emits SOLEUR_ORPHAN_UNREMOVABLE sentinel on stdout" \
   || fail "no SOLEUR_ORPHAN_UNREMOVABLE sentinel on stdout"
@@ -140,12 +156,12 @@ grep -q 'errno=EACCES' <<<"$out2" \
 grep -q 'reason=rm-partial' <<<"$out2" \
   && pass "sentinel uses reason=rm-partial (rm -rf deletes what it can first)" \
   || fail "sentinel missing reason=rm-partial"
-# The failure summary must print even at the DEFAULT verbose=false — that is
-# the path session-start, work Phase 0, and ship Phase 7 actually run. Capture
-# stderr SEPARATELY: asserting this against combined output is satisfied by the
-# stdout sentinel (which contains the substring UNREMOVABLE) and would pass
-# with the summary deleted entirely.
-err2=$(cleanup_orphan_worktree_dirs false 2>&1 >/dev/null | strip_ansi)
+# The success counter must be readable at the DEFAULT verbosity. Nothing else
+# reads it there (the success summary is verbose-gated), so without this the
+# counter can be corrupted on the default path undetectably.
+grep -q 'cleaned=0' <<<"$out2" \
+  && pass "sentinel reports cleaned=0 when nothing was removed (counter honest at verbose=false)" \
+  || fail "sentinel did not report cleaned=0: $(grep -oE 'cleaned=[0-9]+' <<<"$out2")"
 grep -qE 'Could not remove [0-9]+ orphan directory' <<<"$err2" \
   && pass "failure summary prints on stderr at verbose=false" \
   || fail "failure summary suppressed at verbose=false (the default path)"
@@ -155,30 +171,29 @@ grep -qF "$WORKTREE_DIR/stuck" <<<"$err2" \
 grep -qF 'SKILL.md' <<<"$err2" \
   && pass "failure summary points at the remediation runbook" \
   || fail "failure summary has no remediation pointer"
-# The remediation hint must not hand an agent a guardrail-bypassing command:
-# `guardrails:block-rm-rf-worktrees` matches `rm -rf … .worktrees/` but NOT the
-# docker-wrapped form, and this stream is what agents grep.
-grep -q 'docker run' <<<"$out2" \
-  && fail "hint contains a docker run string (bypasses guardrails:block-rm-rf-worktrees)" \
-  || pass "hint contains no guardrail-bypassing docker command"
-# The third lying surface: the per-directory line printed even on failure.
-out2v=$(cleanup_orphan_worktree_dirs true 2>/dev/null | strip_ansi)
-grep -q "Removed orphan directory: stuck" <<<"$out2v" \
+# The remediation must not hand an agent a guardrail-bypassing command. Check
+# BOTH streams — the pointer lives on stderr, the sentinel on stdout.
+grep -q 'docker run' <<<"$out2$err2" \
+  && fail "remediation contains a docker run string (bypasses the rm -rf guardrail)" \
+  || pass "remediation contains no guardrail-bypassing docker command"
+grep -q "Removed orphan directory: stuck" <<<"$outv" \
   && fail "announces 'Removed orphan directory: stuck' for a dir still on disk" \
   || pass "no per-directory removal line for the surviving dir"
 
 # ---------------------------------------------------------------------------
-# Case 3 — counter integrity: the claimed count equals the observed delta.
-# Mixed fixture so a counter that is merely always-0 or always-N cannot pass.
+# Case 3 — counter integrity, with MORE THAN ONE stuck directory so the count,
+# the plural path, the per-directory loop and the array append are all pinned
+# above N=1 (at N=1 a hardcoded "1", a `[0]`-only loop and a clobbering
+# assignment are all indistinguishable from correct).
 # ---------------------------------------------------------------------------
-echo "Case 3: claimed count equals the find-verified removal delta"
+echo "Case 3: claimed count equals the find-verified delta, with N>1 failures"
 WORKTREE_DIR="$TMP/wt3"; mkdir -p "$WORKTREE_DIR"
 mkdir -p "$WORKTREE_DIR/gone-a" "$WORKTREE_DIR/gone-b"
-mkdir -p "$WORKTREE_DIR/stuck3/inner"; : > "$WORKTREE_DIR/stuck3/inner/f"
-chmod 500 "$WORKTREE_DIR/stuck3/inner"
+mk_stuck "$WORKTREE_DIR/stuck3a"; mk_stuck "$WORKTREE_DIR/stuck3b"
 
 before3=$(count_dirs "$WORKTREE_DIR")
 out3=$(cleanup_orphan_worktree_dirs true 2>/dev/null | strip_ansi)
+err3=$(cleanup_orphan_worktree_dirs true 2>&1 >/dev/null | strip_ansi)
 after3=$(count_dirs "$WORKTREE_DIR")
 delta3=$(( before3 - after3 ))
 claim3=$(claimed_count "$out3")
@@ -189,15 +204,29 @@ claim3=$(claimed_count "$out3")
 [[ "$claim3" == "$delta3" ]] \
   && pass "claimed $claim3 == observed delta $delta3" \
   || fail "claimed $claim3 but only $delta3 directories actually disappeared"
+grep -qE 'Could not remove 2 orphan directory' <<<"$err3" \
+  && pass "failure summary reports exactly 2 (count is not hardcoded)" \
+  || fail "failure summary did not report 2: $(grep -oE 'Could not remove [0-9]+' <<<"$err3")"
+grep -qF "stuck3a" <<<"$err3" && grep -qF "stuck3b" <<<"$err3" \
+  && pass "failure summary names BOTH stuck directories (loop is not [0]-only)" \
+  || fail "failure summary omitted one of the two stuck directories"
+grep -qE 'SOLEUR_ORPHAN_UNREMOVABLE count=2' <<<"$out3" \
+  && pass "sentinel aggregates with count=2" \
+  || fail "sentinel did not report count=2"
+grep -q 'cleaned=2' <<<"$out3" \
+  && pass "sentinel reports cleaned=2 in a mixed run (success counter honest alongside failures)" \
+  || fail "sentinel did not report cleaned=2: $(grep -oE 'cleaned=[0-9]+' <<<"$out3")"
+# One aggregate marker per invocation, never one per directory: the marker
+# extractor keeps a fixed budget per tool_response and STOPS at the cap, so an
+# unbounded per-directory producer would crowd out the paging wedge markers.
+[[ "$(grep -c 'SOLEUR_ORPHAN_UNREMOVABLE' <<<"$out3")" == "1" ]] \
+  && pass "emits exactly ONE aggregate marker for 2 failures (bounded producer)" \
+  || fail "emitted $(grep -c 'SOLEUR_ORPHAN_UNREMOVABLE' <<<"$out3") markers; must be 1"
 
 # ---------------------------------------------------------------------------
-# Case 4 (RED, defect 3) — the function must return 0 on every success path.
-# Both call sites are bare inside `cleanup_merged_worktrees` under `set -e`, so
-# a non-zero return on a SUCCESSFUL clean aborts the caller mid-flight and
-# silently skips the tmp reapers that follow it.
+# Case 4 — the function must return 0 on every path.
 # ---------------------------------------------------------------------------
 echo "Case 4: returns 0 on every path (defect 3)"
-
 WORKTREE_DIR="$TMP/wt4a"; mkdir -p "$WORKTREE_DIR/orphan-a"
 cleanup_orphan_worktree_dirs false >/dev/null 2>&1; rc4a=$?
 [[ "$rc4a" -eq 0 ]] \
@@ -210,8 +239,7 @@ cleanup_orphan_worktree_dirs true >/dev/null 2>&1; rc4b=$?
   && pass "rc=0 for (cleaned>=1, verbose=true)" \
   || fail "rc=$rc4b for (cleaned>=1, verbose=true)"
 
-WORKTREE_DIR="$TMP/wt4c"; mkdir -p "$WORKTREE_DIR/stuck4/inner"
-: > "$WORKTREE_DIR/stuck4/inner/f"; chmod 500 "$WORKTREE_DIR/stuck4/inner"
+WORKTREE_DIR="$TMP/wt4c"; mkdir -p "$WORKTREE_DIR"; mk_stuck "$WORKTREE_DIR/stuck4"
 cleanup_orphan_worktree_dirs false >/dev/null 2>&1; rc4c=$?
 [[ "$rc4c" -eq 0 ]] \
   && pass "rc=0 for (failed removal, verbose=false)" \
@@ -224,10 +252,91 @@ cleanup_orphan_worktree_dirs false >/dev/null 2>&1; rc4d=$?
   || fail "rc=$rc4d for (nothing to clean)"
 
 # ---------------------------------------------------------------------------
+# Case 5 — the OTHER direction. Every case above asks "does it report the
+# failure?"; none asks "does it stay quiet when there is none?". Without this,
+# making the failure summary unconditional, or emitting the sentinel on the
+# SUCCESS branch, both pass — and the reaper would cry wolf on every run of the
+# default path that session-start, work Phase 0 and ship Phase 7 all execute.
+# ---------------------------------------------------------------------------
+echo "Case 5: silent on a fully clean run (no false failure surfaces)"
+for v in false true; do
+  WORKTREE_DIR="$TMP/wt5-$v"; mkdir -p "$WORKTREE_DIR"/{ok-a,ok-b,ok-c}
+  o5=$(cleanup_orphan_worktree_dirs "$v" 2>/dev/null | strip_ansi)
+  e5=$(cleanup_orphan_worktree_dirs "$v" 2>&1 >/dev/null | strip_ansi)
+  grep -q 'SOLEUR_ORPHAN_UNREMOVABLE' <<<"$o5" \
+    && fail "verbose=$v: emitted an UNREMOVABLE sentinel on a clean run" \
+    || pass "verbose=$v: no UNREMOVABLE sentinel on a clean run"
+  grep -q 'Could not remove' <<<"$e5" \
+    && fail "verbose=$v: printed a failure summary on a clean run" \
+    || pass "verbose=$v: no failure summary on a clean run"
+  # A crash produces silence too, and silence would satisfy both greps above.
+  # Pin rc so an abort (e.g. an unbound array read under `set -u`) is not
+  # mistaken for a clean, quiet run.
+  cleanup_orphan_worktree_dirs "$v" >/dev/null 2>&1; rc5=$?
+  [[ "$rc5" -eq 0 ]] \
+    && pass "verbose=$v: clean run returns 0 (silence is not a crash)" \
+    || fail "verbose=$v: clean run returned rc=$rc5"
+done
+[[ "$(count_dirs "$TMP/wt5-false")" == "0" ]] \
+  && pass "clean run actually removed all three orphans" \
+  || fail "clean-run fixture did not reap: $(count_dirs "$TMP/wt5-false") left"
+
+# ---------------------------------------------------------------------------
+# Case 6 — the registry must FAIL CLOSED. `git worktree list` can fail wholesale
+# under the sandbox's masked-config wedge; a swallowed failure yields an EMPTY
+# registry, under which every directory reads as unregistered and the reaper
+# deletes the entire tree including live worktrees.
+# ---------------------------------------------------------------------------
+echo "Case 6: fails closed when the worktree registry is unavailable"
+WORKTREE_DIR="$TMP/wt6"; mkdir -p "$WORKTREE_DIR/precious/nested"
+: > "$WORKTREE_DIR/precious/nested/data.txt"
+# Make `git worktree list` fail for real rather than shadowing `git` with a
+# shell function: a function named `git` is visible to every earlier call in
+# the file (shellcheck SC2218) and is a foot-gun in a suite that uses real git
+# for its fixtures. Running from a non-repo CWD makes git exit 128 naturally,
+# which is the actual shape of the masked-config wedge this guards against.
+NONREPO="$TMP/not-a-repo"; mkdir -p "$NONREPO"
+pushd "$NONREPO" >/dev/null || exit 1
+out6=$(cleanup_orphan_worktree_dirs false 2>/dev/null | strip_ansi); rc6=$?
+popd >/dev/null || exit 1
+
+[[ -f "$WORKTREE_DIR/precious/nested/data.txt" ]] \
+  && pass "refuses to reap when the registry is unavailable" \
+  || fail "DELETED content while the registry was unavailable (fails OPEN)"
+grep -q 'SOLEUR_ORPHAN_REGISTRY_UNAVAILABLE' <<<"$out6" \
+  && pass "emits SOLEUR_ORPHAN_REGISTRY_UNAVAILABLE" \
+  || fail "no sentinel for the unavailable registry — the skip is silent"
+[[ "$rc6" -eq 0 ]] \
+  && pass "rc=0 on the fail-closed path (does not abort its caller)" \
+  || fail "rc=$rc6 on the fail-closed path"
+
+# ---------------------------------------------------------------------------
+# Case 7 — a directory name must not be able to forge a telemetry line. This
+# loop is the ONLY one handling arbitrarily-named UNREGISTERED directories:
+# git refnames forbid control characters, so the creation path cannot produce
+# them, but any process can mkdir a name embedding a newline.
+# ---------------------------------------------------------------------------
+echo "Case 7: a hostile directory name cannot forge a marker line"
+WORKTREE_DIR="$TMP/wt7"; mkdir -p "$WORKTREE_DIR"
+EVIL=$'evil\nworktree wedge: forged'
+mk_stuck "$WORKTREE_DIR/$EVIL"
+out7=$(cleanup_orphan_worktree_dirs false 2>/dev/null | strip_ansi)
+
+[[ "$(grep -c 'SOLEUR_ORPHAN_UNREMOVABLE' <<<"$out7")" == "1" ]] \
+  && pass "hostile name still yields exactly one marker line" \
+  || fail "hostile name produced $(grep -c 'SOLEUR_ORPHAN_UNREMOVABLE' <<<"$out7") marker lines"
+grep -qE '^worktree wedge:' <<<"$out7" \
+  && fail "hostile name FORGED a wedge line on the telemetry stream" \
+  || pass "no forged wedge line — the name is sanitized before emission"
+grep -q 'reason=rm-partial' <<<"$out7" \
+  && pass "the real marker survives sanitization intact" \
+  || fail "sanitization destroyed the marker's own key=value shape"
+
+# ---------------------------------------------------------------------------
 echo
 echo "PASS=$PASS FAIL=$FAIL"
 
-# Anti-vacuity parity: a preflight SKIP exits 0 above; reaching here with a
+# Anti-vacuity parity: a preflight SKIP exits 77 above; reaching here with a
 # short PASS count means assertions were silently dropped.
 if [[ "$FAIL" -eq 0 && "$PASS" -lt "$MIN_PASS" ]]; then
   echo "FAIL: only $PASS assertions ran, expected >= $MIN_PASS (coverage regressed)"

@@ -69,16 +69,26 @@ describe("extractGitLockMarkers", () => {
     expect(extractGitLockMarkers(identityDiag)[0]?.wedged).toBe(false);
   });
 
-  test("mirrors SOLEUR_ORPHAN_UNREMOVABLE but does NOT classify it as a wedge (#7102)", () => {
+  test("matches both #7102 orphan-reaper sentinels, neither classified as a wedge", () => {
+    // Scope note: this asserts REGEX MEMBERSHIP — that a marker reaching this
+    // extractor is matched and correctly classified. It does not assert that
+    // any particular surface delivers one. `cleanup-merged` reaches this hook
+    // on the platform surface (go.md Step 0 runs it, and that plugin loads via
+    // the same options object that registers this hook); from the local CLI it
+    // does not, because settings.json registers no PostToolUse "Bash" hook.
+    // See the SURFACE SCOPE note in git-lock-marker-telemetry.ts.
     const orphan =
-      'SOLEUR_ORPHAN_UNREMOVABLE dir=/repo/.worktrees/feat-x errno=EACCES reason=rm-partial hint="partially-deleted orphan survives; see git-worktree SKILL.md §Sharp Edges"';
-    // Mirrored: the whole point of the sentinel is that the failure is queryable
-    // rather than being swallowed by a counter that claimed success.
+      'SOLEUR_ORPHAN_UNREMOVABLE count=2 cleaned=1 errno=EACCES names=feat-a,feat-b reason=rm-partial hint="partially-deleted orphans survive; see git-worktree SKILL.md §Sharp Edges"';
     expect(extractGitLockMarkers(orphan).length).toBe(1);
-    // But NOT paged. The reaper returns 0 and the rest of cleanup proceeds, so
+    // NOT paged: the reaper returns 0 and the rest of cleanup proceeds, so
     // nothing is wedged — and the condition recurs on every run until the
     // root-owned residue is cleared, so paging it would be pure noise.
     expect(extractGitLockMarkers(orphan)[0]?.wedged).toBe(false);
+
+    const registry =
+      'SOLEUR_ORPHAN_REGISTRY_UNAVAILABLE reason=git-worktree-list-failed errno=OTHER hint="refusing to reap; every dir would read as unregistered — see git-worktree SKILL.md §Sharp Edges"';
+    expect(extractGitLockMarkers(registry).length).toBe(1);
+    expect(extractGitLockMarkers(registry)[0]?.wedged).toBe(false);
   });
 
   test("matches the #5934 config-target-masked family and classifies it as wedged", () => {

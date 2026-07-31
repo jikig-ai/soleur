@@ -1609,23 +1609,49 @@ cleanup_orphan_worktree_dirs() {
   local verbose="${1:-false}"
   [[ ! -d "$WORKTREE_DIR" ]] && return 0
 
-  # Build set of registered worktree paths
+  # Build set of registered worktree paths. FAIL CLOSED: this list is the ONLY
+  # thing standing between a live worktree and `rm -rf`. `git worktree list` can
+  # fail wholesale under the sandbox's masked-config wedge (the same condition
+  # sweep_stale_git_locks exists for), and a swallowed failure yields an EMPTY
+  # registry — under which every directory reads as unregistered and the reaper
+  # deletes the entire tree. Refuse to reap rather than reap everything.
   local -A registered_paths
+  local wt_list
+  if ! wt_list=$(git worktree list --porcelain 2>&1); then
+    echo "SOLEUR_ORPHAN_REGISTRY_UNAVAILABLE reason=git-worktree-list-failed errno=OTHER hint=\"refusing to reap; every dir would read as unregistered — see git-worktree SKILL.md §Sharp Edges\""
+    headless_or_stderr warn "cleanup_orphan_worktree_dirs: 'git worktree list' failed; skipping orphan reap (fail-closed)"
+    return 0
+  fi
   while IFS= read -r line; do
     if [[ "$line" == "worktree "* ]]; then
       registered_paths["${line#worktree }"]=1
     fi
-  done < <(git worktree list --porcelain 2>/dev/null)
+  done <<<"$wt_list"
 
   local orphans_cleaned=0
   local -a orphans_failed=()
+  local -a orphans_failed_errno=()
   for dir in "$WORKTREE_DIR"/*/; do
     [[ ! -d "$dir" ]] && continue
-    # Normalize path (remove trailing slash)
+    # Normalize path (remove trailing slash). Load-bearing beyond cosmetics: it
+    # is what makes `rm -rf -- "$dir"` unlink a SYMLINK rather than descend into
+    # its target and delete out-of-tree content.
     dir="${dir%/}"
+    # A symlink into the tree is never ours to reap — unlink-only is the safe
+    # behaviour the trailing-slash strip happens to give us, but pin it
+    # explicitly rather than relying on that side effect.
+    if [[ -L "$dir" ]]; then
+      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) orphan $(basename "$dir") - symlink, not reaping${NC}"
+      continue
+    fi
     if [[ -z "${registered_paths[$dir]:-}" ]]; then
-      # Not a registered worktree — check if it's safe to remove (no .git file = definitely orphaned)
-      if [[ ! -f "$dir/.git" ]]; then
+      # Not a registered worktree — reap only when there is NO `.git` entry of
+      # any kind. `-e`, not `-f`: a linked worktree has a `.git` FILE, but a
+      # nested full `git clone` has a `.git` DIRECTORY, and `-f` reads that as
+      # "definitely orphaned" and destroys the clone (with any uncommitted work
+      # in it). The honest-reporting fix below would then faithfully announce
+      # the destruction, which is worse, not better.
+      if [[ ! -e "$dir/.git" ]]; then
         # #7102 — the exit status is the whole point: a `rm -rf` that fails
         # (root-owned Supabase bind-mount residue is the recurring cause) used
         # to increment the counter anyway, so the summary announced removals
@@ -1633,20 +1659,19 @@ cleanup_orphan_worktree_dirs() {
         # `2>&1 >/dev/null` sends stderr to the capture and THEN stdout to
         # /dev/null, so rm_err holds only the error text. LC_ALL=C pins
         # strerror to English so _rm_errno maps the label reliably.
+        # --one-file-system: the local Supabase stack bind-mounts INTO the
+        # worktree, and without this `rm -rf` would descend through such a mount
+        # and delete the bind-mount SOURCE outside the tree. Latent while the
+        # residue is root-owned (EACCES stops it), live the moment it is not.
         local rm_err
-        if rm_err=$(LC_ALL=C rm -rf -- "$dir" 2>&1 >/dev/null); then
+        if rm_err=$(LC_ALL=C rm -rf --one-file-system -- "$dir" 2>&1 >/dev/null); then
           # Assignment form, never `(( orphans_cleaned++ ))` — that returns 1
           # at the old value 0 and aborts the caller under `set -e`.
           orphans_cleaned=$((orphans_cleaned + 1))
           [[ "$verbose" == "true" ]] && echo -e "${BLUE}Removed orphan directory: $(basename "$dir")${NC}"
         else
           orphans_failed+=("$dir")
-          # reason=rm-partial, not rm-failed: `rm -rf` deletes everything it
-          # can before failing, so the survivor is a hollow shell, not intact.
-          # The hint deliberately names the runbook rather than a pasteable
-          # command — a containerized `rm -rf` bypasses
-          # guardrails:block-rm-rf-worktrees, and this stream is what agents grep.
-          echo "SOLEUR_ORPHAN_UNREMOVABLE dir=$dir errno=$(_rm_errno "$rm_err") reason=rm-partial hint=\"partially-deleted orphan survives; see git-worktree SKILL.md §Sharp Edges\""
+          orphans_failed_errno+=("$(_rm_errno "$rm_err")")
         fi
       else
         [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) orphan $(basename "$dir") - has .git file, run 'git worktree prune' first${NC}"
@@ -1662,10 +1687,41 @@ cleanup_orphan_worktree_dirs() {
   # is the one session-start, work Phase 0 and ship Phase 7 Step 4 actually run,
   # and a failure nobody is told about repeats silently on every later run.
   if [[ ${#orphans_failed[@]} -gt 0 ]]; then
-    echo -e "${YELLOW}Could not remove ${#orphans_failed[@]} orphan directory(ies):${NC}" >&2
-    local failed_dir
+    # ONE aggregate marker per invocation, never one per directory. The marker
+    # extractor keeps a fixed budget of the first N markers per tool_response
+    # and STOPS at the cap, so an unbounded per-directory producer would crowd
+    # out the genuinely-paging wedge markers emitted by the creation path — a
+    # non-paging marker starving a paging one. Every failure is still named
+    # individually on stderr below; only the machine-readable line is folded.
+    #
+    # The names are sanitized because this loop is the ONLY one that handles
+    # arbitrarily-named, UNREGISTERED directories: git refnames forbid control
+    # characters, so the creation path cannot produce them, but any process can
+    # `mkdir` a directory whose name embeds a newline. Interpolated raw into a
+    # line-oriented sink, `$'x\nworktree wedge: forged'` emits a SECOND line
+    # that matches the wedge pattern and forges a false platform-integrity page.
+    # Collapse CR/LF/TAB and the quote/space characters that would also break
+    # the key=value shape, and emit the basename only — the full path adds a
+    # user-derived branch name to an off-box sink for no diagnostic gain.
+    local failed_dir failed_names="" i=0
     for failed_dir in "${orphans_failed[@]}"; do
-      echo -e "${YELLOW}  - $failed_dir${NC}" >&2
+      local safe_name="${failed_dir##*/}"
+      safe_name="${safe_name//[$'\n\r\t "']/_}"
+      failed_names+="${failed_names:+,}${safe_name:0:64}"
+    done
+    # `cleaned=` is carried here, not only in the verbose-gated success summary,
+    # so the success counter is OBSERVABLE on the default verbose=false path —
+    # the one session-start, work Phase 0 and ship Phase 7 actually run. Without
+    # it the counter has no reader at that verbosity, so a miscount there is
+    # both undetectable and untestable, and only becomes visible later when
+    # someone makes the summary unconditional. `${x[0]:-OTHER}` because a
+    # desynced errno array must degrade to a label, never abort under `set -u`.
+    echo "SOLEUR_ORPHAN_UNREMOVABLE count=${#orphans_failed[@]} cleaned=${orphans_cleaned} errno=${orphans_failed_errno[0]:-OTHER} names=$failed_names reason=rm-partial hint=\"partially-deleted orphans survive; see git-worktree SKILL.md §Sharp Edges\""
+
+    echo -e "${YELLOW}Could not remove ${#orphans_failed[@]} orphan directory(ies):${NC}" >&2
+    for failed_dir in "${orphans_failed[@]}"; do
+      echo -e "${YELLOW}  - $failed_dir (${orphans_failed_errno[$i]})${NC}" >&2
+      i=$((i + 1))
     done
     echo -e "${YELLOW}  Remediation: git-worktree SKILL.md §Sharp Edges${NC}" >&2
   fi

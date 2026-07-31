@@ -62,12 +62,35 @@ const log = createChildLogger("git-lock-marker-telemetry");
 // (D1c) — so the existing `[error] worktree wedge:` give-up finally matches.
 //   - SOLEUR_ORPHAN_UNREMOVABLE       — benign-but-persistent (#7102): cleanup_orphan_worktree_dirs
 //     could not `rm -rf` an orphan directory (root-owned Supabase bind-mount residue is the
-//     recurring cause, errno=EACCES). Mirrored, NOT paged: the reaper still returns 0 and the
-//     rest of cleanup proceeds, so nothing is wedged — but it recurs on EVERY subsequent run
-//     until the residue is cleared, which would make it pure alert noise. Querying it is the
-//     point: reason=rm-partial means the survivor is a partially-deleted hollow shell.
+//     recurring cause, errno=EACCES). reason=rm-partial means the survivor is a
+//     partially-deleted hollow shell, not the intact worktree it looks like.
+//     NOT paged (absent from WEDGE_RE): the reaper still returns 0 and the rest of cleanup
+//     proceeds, so nothing is wedged — and it recurs on EVERY run until the residue is
+//     cleared, which would make paging pure noise.
+//     SURFACE SCOPE — mirrored on the platform surface, unmirrored from the local CLI.
+//     `cleanup_orphan_worktree_dirs` is reached only via `cleanup-merged`, which the
+//     platform-deployed `plugins/soleur/commands/go.md` Step 0 runs verbatim as its
+//     session-start preamble; that plugin is loaded by the SAME options object that
+//     registers this hook (agent-runner-query-options.ts — `plugins: [{type:"local"}]`
+//     alongside `PostToolUse` matcher "Bash"), so the sentinel CAN reach this extractor
+//     there. Note `safe-bash.ts`'s "write verbs … never here" is about the exact-literal
+//     AUTO-APPROVE carve-out, not about session reachability — `cleanup-merged` simply
+//     takes the normal permission path rather than being auto-approved.
+//     What is NOT established is that a session has in FACT executed it (go.md's preamble
+//     is allowed to "skip silently on first error"), so treat this as reachable-not-proven.
+//     From the LOCAL CLI it is unmirrored — .claude/settings.json registers no PostToolUse
+//     "Bash" hook — but that is a property of the CLI surface shared by every marker in
+//     this list, not something specific to this one. On that surface the operative consumer
+//     is the agent reading the tool result (stdout), plus the unconditional failure summary
+//     on stderr — see git-worktree/SKILL.md §Sharp Edges.
+//   - SOLEUR_ORPHAN_REGISTRY_UNAVAILABLE — the orphan reaper's fail-closed refusal (#7102):
+//     `git worktree list` failed, so the registered-worktree allowlist would be EMPTY and
+//     every directory would read as unregistered. The reaper declines to run rather than
+//     delete the whole tree. Same surface scope as the marker above. NOT paged — the
+//     refusal is the safe outcome; genuine git breakage surfaces as a wedge via the
+//     creation path's own SOLEUR_GIT_LOCK_*/SOLEUR_GIT_CONFIG_* markers.
 const MARKER_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_UNREMOVABLE\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
 
 // A wedge (vs. a benign DIAG) is any marker that indicates git operations could not
 // proceed: an unremovable/masked lock, a temp-wedge, a config-TARGET-masked give-up, an

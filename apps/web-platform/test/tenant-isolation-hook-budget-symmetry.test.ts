@@ -110,6 +110,43 @@ export function pairHooks(hooks: ParsedHook[]): HookPair[] {
   return pairs;
 }
 
+/**
+ * The rule itself, exported so fixtures can drive it directly.
+ *
+ * This MUST NOT live inline in the `it.each` arm. Its only input there is the
+ * real corpus, which is symmetric-by-construction once the fix has landed — so
+ * a clean corpus can prove "zero violations today" but can never prove the rule
+ * still DISCRIMINATES. Measured: with the rule inline, changing the `afterAll`
+ * fallback to `?? Infinity` kept the whole suite green while no longer
+ * detecting the original #7101 regression at all. The corpus cannot contain the
+ * shapes the rule exists to reject, so the rule needs synthetic ones.
+ */
+export function violationsFor(
+  pairs: HookPair[],
+  globalTimeout: number,
+): string[] {
+  return pairs
+    .map(({ before, after }) => {
+      // A scope with setup but NO teardown hook has no teardown budget to get
+      // wrong — there is no `afterAll` that can time out. Flagging it would be
+      // a false positive against a legitimate shape (heavy remote setup,
+      // nothing to tear down), so it is out of scope for this guard.
+      if (!after) return null;
+      // Primary rule — needs no global value when both are explicit: an
+      // explicit setup override obliges an explicit teardown override at least
+      // as large. The global only fills in for an INHERITED budget.
+      const beforeBudget = before.budget ?? globalTimeout;
+      const afterBudget = after.budget ?? globalTimeout;
+      if (afterBudget >= beforeBudget) return null;
+      return (
+        `beforeAll (line ${before.line}) has ${beforeBudget}ms but ` +
+        `afterAll (line ${after.line}) has ` +
+        `${after.budget === null ? `the ${globalTimeout}ms global` : `${afterBudget}ms`}`
+      );
+    })
+    .filter((v): v is string => v !== null);
+}
+
 const GLOBAL_HOOK_TIMEOUT = vitestConfig.test?.hookTimeout;
 
 const suiteFiles = readdirSync(SERVER_TEST_DIR)
@@ -196,28 +233,100 @@ describe("tenant-isolation hook budget symmetry (#7101)", () => {
     expect(pairs[0].after?.budget).toBeNull();
   });
 
+  // ---------------------------------------------------------------------
+  // Drive the RULE directly. The clean corpus is symmetric-by-construction,
+  // so it can only ever prove "zero violations today" — never that the rule
+  // still discriminates. These fixtures cover the four shapes the corpus
+  // cannot contain. Fixture bodies are MULTI-LINE on purpose: `parseHooks`
+  // pairs a hook to a closer on its own line at matching indentation, so a
+  // one-liner `beforeAll(async () => {}, 60_000);` has no closer and is
+  // dropped entirely — a fixture written that way silently tests nothing.
+  // ---------------------------------------------------------------------
+  const scope = (beforeTail: string, afterTail: string | null): string =>
+    [
+      'describe("synthetic", () => {',
+      "  beforeAll(async () => {",
+      "    await setup();",
+      `  }${beforeTail});`,
+      ...(afterTail === null
+        ? []
+        : ["", "  afterAll(async () => {", "    await teardown();", `  }${afterTail});`]),
+      "});",
+      "",
+    ].join("\n");
+
+  const G = 20_000;
+
+  it("FLAGS the original #7101 shape: explicit setup override, inherited teardown", () => {
+    // The exact regression this guard exists for. A rule whose afterAll
+    // fallback is widened (e.g. `?? Infinity`) stays green on the real corpus
+    // while silently no longer detecting this — so it must be pinned here.
+    const v = violationsFor(pairHooks(parseHooks(scope(", 60_000", ""))), G);
+    expect(v).toHaveLength(1);
+    expect(v[0]).toContain("60000ms");
+    expect(v[0]).toContain("global");
+  });
+
+  it("FLAGS an explicit teardown budget smaller than an explicit setup budget", () => {
+    const v = violationsFor(pairHooks(parseHooks(scope(", 60_000", ", 30_000"))), G);
+    expect(v).toHaveLength(1);
+    expect(v[0]).toContain("30000ms");
+  });
+
+  it("does NOT flag equal explicit budgets", () => {
+    expect(violationsFor(pairHooks(parseHooks(scope(", 60_000", ", 60_000"))), G)).toEqual([]);
+  });
+
+  it("does NOT flag a teardown budget larger than setup", () => {
+    expect(violationsFor(pairHooks(parseHooks(scope(", 60_000", ", 90_000"))), G)).toEqual([]);
+  });
+
+  it("does NOT flag an inherited setup with an explicit teardown override", () => {
+    // beforeAll inherits the global; an explicit larger teardown is fine.
+    expect(violationsFor(pairHooks(parseHooks(scope("", ", 30_000"))), G)).toEqual([]);
+  });
+
+  it("does NOT flag setup-with-no-teardown (no afterAll = no budget to get wrong)", () => {
+    const pairs = pairHooks(parseHooks(scope(", 60_000", null)));
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].after).toBeNull();
+    expect(violationsFor(pairs, G)).toEqual([]);
+  });
+
+  it("pairs each describe's hooks independently when a file has several scopes", () => {
+    // Sibling describes at the same indentation must not marry A's beforeAll
+    // to B's afterAll.
+    const fixture = [
+      scope(", 60_000", ", 60_000").trimEnd(),
+      scope(", 30_000", ", 30_000").trimEnd(),
+      "",
+    ].join("\n");
+    const pairs = pairHooks(parseHooks(fixture));
+    expect(pairs).toHaveLength(2);
+    expect(pairs[0].before.budget).toBe(60_000);
+    expect(pairs[1].before.budget).toBe(30_000);
+    expect(violationsFor(pairs, G)).toEqual([]);
+  });
+
   it.each(suiteFiles)(
     "%s — afterAll budget is >= beforeAll budget in every scope",
     (file) => {
       const source = readFileSync(path.join(SERVER_TEST_DIR, file), "utf8");
-      const pairs = pairHooks(parseHooks(source));
+      const hooks = parseHooks(source);
 
-      const violations = pairs
-        .map(({ before, after }) => {
-          // Primary rule — needs no global value: an explicit setup override
-          // obliges an explicit teardown override at least as large.
-          const beforeBudget = before.budget ?? GLOBAL_HOOK_TIMEOUT!;
-          const afterBudget = after?.budget ?? GLOBAL_HOOK_TIMEOUT!;
-          if (afterBudget >= beforeBudget) return null;
-          return (
-            `beforeAll (line ${before.line}) has ${beforeBudget}ms but ` +
-            `afterAll (${after ? `line ${after.line}` : "absent"}) has ` +
-            `${after?.budget === undefined || after?.budget === null ? `the ${GLOBAL_HOOK_TIMEOUT}ms global` : `${afterBudget}ms`}`
-          );
-        })
-        .filter((v): v is string => v !== null);
+      // Parse completeness. `parseHooks` scans forward for a closer at matching
+      // indentation with no stop at the hook's OWN closing line, so a closer it
+      // cannot parse (e.g. `}, SLOW_SETUP_MS);` — a named constant rather than a
+      // numeric literal) makes it latch onto the NEXT hook's closer instead.
+      // Both hooks then resolve to the same line and the asymmetry between them
+      // is silently unflagged. Neither anti-vacuity floor catches that: one
+      // requires >=1 pair per file, the other is a sum. Assert every declared
+      // hook was parsed, and that no two share a closer.
+      const declared = (source.match(/^\s*(beforeAll|afterAll)\(/gm) ?? []).length;
+      expect(hooks.length).toBe(declared);
+      expect(new Set(hooks.map((h) => h.line)).size).toBe(hooks.length);
 
-      expect(violations).toEqual([]);
+      expect(violationsFor(pairHooks(hooks), GLOBAL_HOOK_TIMEOUT!)).toEqual([]);
     },
   );
 });
