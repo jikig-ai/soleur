@@ -575,6 +575,66 @@ for known in "${DOPPLER_COPY_KNOWN[@]}"; do
     echo "  FAIL: known doppler-copy consumer $known dropped OUT of the derived sweep — it no longer carries '$DOPPLER_COPY_LINE'. If that is intentional, remove it from DOPPLER_COPY_KNOWN in the same commit; otherwise the guard just went blind on it"
   fi
 done
+# --- #7095 R3: the .conf DROP-INS, which the *.service sweep above CANNOT see -------------
+#
+# The sweep above globs "$SCRIPT_DIR"/*.service. A drop-in is a .conf, so it is invisible to it
+# BY CONSTRUCTION — not by oversight, and no widening of that glob would be correct either, since
+# the order assertion it performs is meaningless for a drop-in (systemd merges drop-ins after the
+# main unit, so later-wins is structural rather than line-ordered).
+#
+# That blind spot mattered: with the drop-ins unasserted, a review pass demonstrated that gutting
+# BOTH .conf files to a bare [Service] line, and separately re-pointing the heartbeat drop-in at
+# /etc/default/inngest-server — THE DEAD FILE THAT CAUSED THIS OUTAGE — each left every suite in
+# this repo green. The drop-ins carry the credential to vector.service (the instrument every
+# post-apply check is read through), inngest-heartbeat.service, and inngest-server.service (which
+# runs doppler run unconditionally and is restarted on every deploy), i.e. the three consumers
+# with the worst failure modes were the three with no content assertion at all.
+#
+# Same asymmetry as the sweep above: growth is free (a new 10-*-doppler-token.conf is picked up
+# automatically), shrinkage is loud (a KNOWN entry that disappears must be removed deliberately).
+DROPIN_LINE='EnvironmentFile=-/etc/default/soleur-doppler-token'
+DROPIN_KNOWN=(
+  10-vector-doppler-token.conf
+  10-inngest-heartbeat-doppler-token.conf
+  10-inngest-server-doppler-token.conf
+)
+DROPIN_FOUND=()
+while IFS= read -r f; do [[ -n "$f" ]] && DROPIN_FOUND+=("$f"); done < <(
+  ls -1 "$SCRIPT_DIR"/10-*-doppler-token.conf 2>/dev/null | sort
+)
+if ((${#DROPIN_FOUND[@]} >= ${#DROPIN_KNOWN[@]})); then
+  PASS=$((PASS + 1))
+  echo "  PASS: drop-in sweep is non-vacuous (${#DROPIN_FOUND[@]} found, floor ${#DROPIN_KNOWN[@]})"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: drop-in sweep found only ${#DROPIN_FOUND[@]} 10-*-doppler-token.conf file(s), below the floor of ${#DROPIN_KNOWN[@]} — the glob matched nothing or a drop-in was deleted"
+fi
+for known in "${DROPIN_KNOWN[@]}"; do
+  if [[ -f "$SCRIPT_DIR/$known" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: known drop-in present: $known"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: known drop-in $known is GONE — if that is intentional, remove it from DROPIN_KNOWN in the same commit; otherwise a consumer just lost the credential silently"
+  fi
+done
+# The content assertion itself. -x -F (exact full line, literal) so the file's own explanatory
+# prose — which quotes this very path several times — can never satisfy it; that is the
+# cq-assert-anchor-not-bare-token trap, and these files are comment-heavy by design.
+for f in "${DROPIN_FOUND[@]}"; do
+  b="$(basename "$f")"
+  if grep -qxF -- "$DROPIN_LINE" "$f"; then
+    PASS=$((PASS + 1)); echo "  PASS: drop-in carries the override verbatim: $b"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $b does NOT contain the exact line '$DROPIN_LINE' — the drop-in is inert and its unit silently keeps the dead token (#7095)"
+  fi
+  # A drop-in that points at ANY OTHER /etc/default file is the re-pointing mutation that went
+  # green: it still looks like a wired drop-in and still delivers the revoked credential.
+  if stray="$(grep -oE '^EnvironmentFile=-?/etc/default/[A-Za-z0-9._-]+' "$f" | grep -vxF -- "$DROPIN_LINE" | head -1)"; [[ -n "$stray" ]]; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: $b also carries '$stray' — a drop-in must point ONLY at the re-deliverable credential; anything else re-introduces the dead-token path"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: drop-in points at no other /etc/default file: $b"
+  fi
+done
+
 assert_grep "resolve unit sets HOME (doppler os.UserHomeDir requirement)" 'Environment=HOME=/root' "$SCRIPT_DIR/cron-egress-resolve.service"
 assert_grep "resolve unit bounded (no infinite activating hang)" 'TimeoutStartSec=' "$SCRIPT_DIR/cron-egress-resolve.service"
 # Grace-window retention store must persist across reboots (a tmpfs /run would

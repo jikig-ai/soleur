@@ -199,6 +199,16 @@ if [[ "${1:-}" == "secrets" && "${2:-}" == "get" ]]; then
   #   rc    -> non-zero exit with stderr on the error channel (MOCK_DOPPLER_GET_FAIL_STDERR).
   case "${MOCK_DOPPLER_GET_FAIL:-}" in
     empty) exit 0 ;;
+    # #7095 R3 (F11) — rc_nonempty: non-zero exit WITH output on stdout. Without this mode
+    # CRED_EMPTY is a ONE-VALUED CONSTANT across the whole suite: both `empty` and `rc` yield
+    # empty=1, so mutating the marker's `empty=${CRED_EMPTY}` to a hardcoded `empty=1` passed
+    # 196/196. The field whose entire purpose is distinguishing the rc=0/empty=1 shape carried
+    # no checkable information. This is the other side of that transform.
+    rc_nonempty)
+      printf '%s' "${MOCK_DOPPLER_GET_NONEMPTY_VALUE:-partial-output}"
+      printf '%s\n' "${MOCK_DOPPLER_GET_FAIL_STDERR:-Doppler Error: partial failure}" >&2
+      exit "${MOCK_DOPPLER_GET_FAIL_RC:-1}"
+      ;;
     rc)
       printf '%s\n' "${MOCK_DOPPLER_GET_FAIL_STDERR:-Doppler Error: you must provide a token}" >&2
       exit "${MOCK_DOPPLER_GET_FAIL_RC:-1}"
@@ -5383,6 +5393,15 @@ assert_cred_fail_shape "rc=0 + empty stdout (the unmeasured shape)" \
 assert_cred_fail_shape "non-zero exit with stderr" \
   'export MOCK_DOPPLER_GET_FAIL=rc; export MOCK_DOPPLER_GET_FAIL_STDERR="Doppler Error: Invalid Auth token"' 1 1
 
+# T-7095-2c (#7095 R3, F11) — THE OTHER SIDE OF THE empty= TRANSFORM: non-zero rc WITH stdout.
+# Until this case existed, every fixture that reached the marker reported empty=1 (`empty` gives
+# rc=0/empty=1, `rc` gives rc=1/empty=1), so CRED_EMPTY was a one-valued constant and a hardcoded
+# `empty=1` in the emitter passed the entire suite. rc and empty are INDEPENDENT axes — the whole
+# point of emitting both is that rc=0/empty=1 is a different failure from rc=1/empty=0 — so the
+# fixture set has to instantiate more than one member of the empty axis or the field is decorative.
+assert_cred_fail_shape "non-zero exit WITH partial stdout (empty=0)" \
+  'export MOCK_DOPPLER_GET_FAIL=rc_nonempty' 1 0
+
 # T-7095-2b — the stderr CONTENT reaches journald. `2>/dev/null || true` threw this away at the
 # read site, which is the whole reason the eight failures carried no cause.
 TOTAL=$((TOTAL + 1))
@@ -5548,11 +5567,15 @@ run_deploy_cred_capture "$T7_F" \
   "export MOCK_ZOT_CONFIGURED=1; export MOCK_DOPPLER_GET_LOG=\"\$T7_D/ok.log\"" || true
 T7_FAIL_N=$(grep -cx 'ZOT_REGISTRY_URL' "$T7_D/fail.log" 2>/dev/null); T7_FAIL_N="${T7_FAIL_N:-0}"
 T7_OK_N=$(grep -cx 'ZOT_REGISTRY_URL' "$T7_D/ok.log" 2>/dev/null); T7_OK_N="${T7_OK_N:-0}"
-if [[ "$T7_FAIL_N" -ge 2 && "$T7_OK_N" -eq 1 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: failed read retried (${T7_FAIL_N} attempts); healthy read read once (${T7_OK_N})"
+# #7095 R3 (F12) — `-eq 2`, NOT `-ge 2`. The lower bound proves a retry HAPPENS; nothing proved
+# it STOPS. Mutating the helper's `_tries` default from 2 to 8 passed while printing
+# "retried (8 attempts)" — an outage-waiting loop on the deploy path, which the helper's own
+# comment says it must not be. 2 is a reviewed constant (one retry), so pin it exactly.
+if [[ "$T7_FAIL_N" -eq 2 && "$T7_OK_N" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: failed read retried exactly twice (${T7_FAIL_N}); healthy read read once (${T7_OK_N})"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: retry-then-degrade — expected >=2 attempts on failure and exactly 1 when healthy"
+  echo "  FAIL: retry-then-degrade — expected EXACTLY 2 attempts on failure (bounded, not an outage-waiting loop) and exactly 1 when healthy"
   echo "        failing-fixture attempts=${T7_FAIL_N}  healthy-fixture attempts=${T7_OK_N}"
 fi
 rm -rf "$T7_D"
