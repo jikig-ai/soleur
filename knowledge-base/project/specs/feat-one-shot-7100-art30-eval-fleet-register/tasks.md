@@ -62,19 +62,19 @@ workflow YAML, no `docs/legal/**`.
 
 `knowledge-base/legal/audits/2026-07-31-dpia-screening-claude-eval-fleet-and-ci.md`
 
-- [ ] 2.1 Frontmatter (`type: dpia-screening-memo`) + DRAFT blockquote.
-- [ ] 2.2 `| Criterion | Finding |` table over Art. 35(3)(a)–(c) + the WP248 rev.01 nine
+- [x] 2.1 Frontmatter (`type: dpia-screening-memo`) + DRAFT blockquote.
+- [x] 2.2 `| Criterion | Finding |` table over Art. 35(3)(a)–(c) + the WP248 rev.01 nine
       criteria + a CNIL-list check (France is the supervisory jurisdiction).
-- [ ] 2.3 **Do not prejudge.** PA-27 engaged 2 criteria; this activity plausibly engages 5+
+- [x] 2.3 **Do not prejudge.** PA-27 engaged 2 criteria; this activity plausibly engages 5+
       (systematic monitoring; matching/combining across 6 platforms; data of a highly personal
       nature — private-guild messages; involuntary subjects with no relationship at all;
       innovative technology; arguably "prevents exercise of a right" via the Art. 17
       impossibility). "Large scale" is the one clear miss — reason it honestly rather than
       adopting the source-count framing, which is not the WP243 test.
-- [ ] 2.4 If the honest run concludes a **full DPIA is required**, say so, record that Art.
+- [x] 2.4 If the honest run concludes a **full DPIA is required**, say so, record that Art.
       35(1) requires it *prior to* processing (so it is overdue), and file deferred item 5.
       Note that R1–R4 collapse several criteria at once — remediation may be the better path.
-- [ ] 2.5 Named accepted residuals + pinned re-screening triggers.
+- [x] 2.5 Named accepted residuals + pinned re-screening triggers.
 
 ## Phase 3 — Author PA-31 / PA-32 / PA-33 and amend PA-17
 
