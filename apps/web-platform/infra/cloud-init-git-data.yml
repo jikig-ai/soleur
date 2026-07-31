@@ -336,6 +336,26 @@ runcmd:
   # the store; sshd keeps its previous config and the warn emit shows it).
   - |
     STAGE=sshd_config
+    # (#7025) `sshd -t` CHECKS THE PRIVSEP DIRECTORY, AND ON 24.04 NOTHING HAS CREATED IT YET.
+    # ubuntu-24.04 ships ssh SOCKET-ACTIVATED, so /run/sshd — which ssh.service declares via
+    # `RuntimeDirectory=sshd` — is not created until that service first starts, which is on the
+    # first inbound connection. runcmd runs before any of that, so the check below exits 255
+    # with "Missing privilege separation directory: /run/sshd" on EVERY fresh boot. Not a
+    # config error: the drop-in is fine and `sshd -t` says so once the directory exists.
+    # mkdir is idempotent and systemd re-creates the directory itself when ssh.service starts,
+    # so this neither races nor leaks. Measured on rehearsal hosts -rehearsal-30560266736 and
+    # -30581408745: both aborted here, before LUKS, having emitted a fatal that named the
+    # drop-in. Reproduced in the pinned image and guarded by git-data-runcmd-rehearsal.test.sh S1.
+    # A SYMLINK HERE IS ANOMALOUS BY CONSTRUCTION, so refuse to write through one. Measured in
+    # the pinned image: `mkdir -p` FOLLOWS an existing symlink (rc=0, the link survives), the
+    # `chmod` below then applies to its TARGET, and `sshd -t` accepts the result — together an
+    # arbitrary-chmod primitive keyed on whatever a planted link points at. Planting it needs
+    # pre-runcmd root, which already owns the host, so this is defence in depth and not a live
+    # hole. `rm -f` deletes a LINK and refuses a real directory, so a genuine one (systemd got
+    # here first) is left exactly as it was.
+    if [ -L /run/sshd ]; then rm -f /run/sshd; fi
+    mkdir -p /run/sshd
+    chmod 0755 /run/sshd
     # ABSOLUTE PATH + 126/127 branch: sshd is in /usr/sbin and nothing pins a PATH, so a bare
     # `sshd` can exit 127 — which a blanket `if !` reads as "malformed" and answers with a
     # permanent boot abort. Never treat "could not measure" as "measurement is false".
@@ -348,9 +368,19 @@ runcmd:
       _sshd_t_rc=0
     fi
     if [ "$_sshd_t_rc" -ne 0 ]; then
-      /usr/local/bin/git-data-emit "git-data sshd config INVALID" sshd_config fatal \
+      # (#7025) Title says what was MEASURED. It read "git-data sshd config INVALID"; the one
+      # time it fired the config was valid, so the Sentry issue title asserted a wrong cause
+      # and the real reason was only in the DETAIL. Retitling regroups it in Sentry — intended:
+      # WEB-PLATFORM-64 stays the record of the privsep-dir defect this PR fixes.
+      /usr/local/bin/git-data-emit "git-data sshd -t REJECTED the config" sshd_config fatal \
         /run/git-data-sshd-t.err || true
-      echo "[git-data] FATAL: sshd -t rejected the hardening drop-in" >&2
+      # (#7025) NAME WHAT WAS MEASURED, NOT A GUESSED CAUSE. This read "sshd -t rejected the
+      # hardening drop-in" — an attribution `sshd -t` never makes. When it actually fired, the
+      # cause was a missing /run/sshd and the drop-in was valid, so the one console line a
+      # dark host leaves behind pointed at the wrong file. The stderr the emitter ships is the
+      # only thing that knows why; say that, and print it here too for the serial console.
+      echo "[git-data] FATAL: sshd -t rejected the config (rc=$_sshd_t_rc). Its stderr:" >&2
+      if [ -r /run/git-data-sshd-t.err ]; then cat /run/git-data-sshd-t.err >&2; fi
       exit 1
     fi
     systemctl restart sshd || {
