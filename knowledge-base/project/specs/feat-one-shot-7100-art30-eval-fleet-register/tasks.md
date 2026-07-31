@@ -113,11 +113,11 @@ workflow YAML, no `docs/legal/**`.
 
 ## Phase 4 — Reconcile the downstream records
 
-- [ ] 4.1 `anthropic.md` — `register_activity_refs: [PA-22, PA-27, PA-31, PA-32, PA-33]`;
+- [x] 4.1 `anthropic.md` — `register_activity_refs: [PA-22, PA-27, PA-31, PA-32, PA-33]`;
       remove the `INCOMPLETE` marker; correct `role:`; **correct the stale enumeration** in the
       2026-07-30 bullet (13 not 15 `spawnClaudeEval`; 20 importers; 3 HTTP callers; 5 CI files);
       add a dated resolution note.
-- [ ] 4.2 `compliance-posture.md` — changelog comment at the top of the reverse-chron block;
+- [x] 4.2 `compliance-posture.md` — changelog comment at the top of the reverse-chron block;
       rewrite the `#7100` parenthetical in the Anthropic row; Active Items rows for the open
       residuals (Art. 14 overdue, R1–R5, drift guard, hook gap); bump the Art. 30 register row's
       Last Updated in `## Legal Documents`; bump `last_updated` frontmatter.
