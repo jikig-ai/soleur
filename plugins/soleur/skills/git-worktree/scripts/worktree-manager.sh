@@ -1618,6 +1618,7 @@ cleanup_orphan_worktree_dirs() {
   done < <(git worktree list --porcelain 2>/dev/null)
 
   local orphans_cleaned=0
+  local -a orphans_failed=()
   for dir in "$WORKTREE_DIR"/*/; do
     [[ ! -d "$dir" ]] && continue
     # Normalize path (remove trailing slash)
@@ -1625,9 +1626,28 @@ cleanup_orphan_worktree_dirs() {
     if [[ -z "${registered_paths[$dir]:-}" ]]; then
       # Not a registered worktree — check if it's safe to remove (no .git file = definitely orphaned)
       if [[ ! -f "$dir/.git" ]]; then
-        rm -rf "$dir"
-        orphans_cleaned=$((orphans_cleaned + 1))
-        [[ "$verbose" == "true" ]] && echo -e "${BLUE}Removed orphan directory: $(basename "$dir")${NC}"
+        # #7102 — the exit status is the whole point: a `rm -rf` that fails
+        # (root-owned Supabase bind-mount residue is the recurring cause) used
+        # to increment the counter anyway, so the summary announced removals
+        # for directories still on disk. Redirection order is load-bearing:
+        # `2>&1 >/dev/null` sends stderr to the capture and THEN stdout to
+        # /dev/null, so rm_err holds only the error text. LC_ALL=C pins
+        # strerror to English so _rm_errno maps the label reliably.
+        local rm_err
+        if rm_err=$(LC_ALL=C rm -rf -- "$dir" 2>&1 >/dev/null); then
+          # Assignment form, never `(( orphans_cleaned++ ))` — that returns 1
+          # at the old value 0 and aborts the caller under `set -e`.
+          orphans_cleaned=$((orphans_cleaned + 1))
+          [[ "$verbose" == "true" ]] && echo -e "${BLUE}Removed orphan directory: $(basename "$dir")${NC}"
+        else
+          orphans_failed+=("$dir")
+          # reason=rm-partial, not rm-failed: `rm -rf` deletes everything it
+          # can before failing, so the survivor is a hollow shell, not intact.
+          # The hint deliberately names the runbook rather than a pasteable
+          # command — a containerized `rm -rf` bypasses
+          # guardrails:block-rm-rf-worktrees, and this stream is what agents grep.
+          echo "SOLEUR_ORPHAN_UNREMOVABLE dir=$dir errno=$(_rm_errno "$rm_err") reason=rm-partial hint=\"partially-deleted orphan survives; see git-worktree SKILL.md §Sharp Edges\""
+        fi
       else
         [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) orphan $(basename "$dir") - has .git file, run 'git worktree prune' first${NC}"
       fi
@@ -1637,6 +1657,31 @@ cleanup_orphan_worktree_dirs() {
   if [[ $orphans_cleaned -gt 0 ]]; then
     [[ "$verbose" == "true" ]] && echo -e "${GREEN}Cleaned $orphans_cleaned orphan directory(ies)${NC}"
   fi
+
+  # Unconditional — unlike the success summary. The default verbose=false path
+  # is the one session-start, work Phase 0 and ship Phase 7 Step 4 actually run,
+  # and a failure nobody is told about repeats silently on every later run.
+  if [[ ${#orphans_failed[@]} -gt 0 ]]; then
+    echo -e "${YELLOW}Could not remove ${#orphans_failed[@]} orphan directory(ies):${NC}" >&2
+    local failed_dir
+    for failed_dir in "${orphans_failed[@]}"; do
+      echo -e "${YELLOW}  - $failed_dir${NC}" >&2
+    done
+    echo -e "${YELLOW}  Remediation: git-worktree SKILL.md §Sharp Edges${NC}" >&2
+  fi
+
+  # #7102 defect 3 — the function used to END on `[[ … ]] && echo`, so a
+  # SUCCESSFUL clean at the default verbose=false returned 1. Both call sites
+  # are bare inside cleanup_merged_worktrees under `set -e`, so that aborted
+  # the caller mid-flight and silently skipped the tmp reapers after it.
+  #
+  # Belt-and-braces: the failure-summary block above already ends the function
+  # on a zero-returning construct, so deleting this line does NOT currently
+  # reintroduce the bug (measured — the suite stays green). It is here so the
+  # invariant survives a future edit that appends another `[[ … ]] && echo`
+  # tail. What the suite actually pins is the CONTRACT (rc=0 on every path),
+  # not the presence of this statement.
+  return 0
 }
 
 # Clean up worktrees for merged branches (detects [gone] and merged-to-main)

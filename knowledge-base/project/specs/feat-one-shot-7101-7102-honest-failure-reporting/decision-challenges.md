@@ -71,10 +71,19 @@ failure summary whose hint points at `git-worktree SKILL.md §Sharp Edges` rathe
 pasteable root command. Both issues' stated defects close with this alone — v1's own ADR
 text conceded "the escalation is the convenience, the honesty is the fix."
 
-The escalation is **deferred with its safe design fully recorded** (tracking issue 1 in
-the plan): opt-in default, code-enforced surface predicate, positive object-class
-predicate, exec-form `docker run` with no `sh -c`, digest pin, mount-the-target-not-the-
-parent, `timeout 5 docker info`, local-socket assertion, and the ADR the gate will demand.
+The escalation is **deferred with its safe design fully recorded** in **#7112**: opt-in
+default, code-enforced surface predicate, positive object-class predicate, exec-form
+`docker run` with no `sh -c`, digest pin, mount-the-target-not-the-parent, `timeout 5
+docker info`, local-socket assertion, and the ADR the gate will demand. The guardrail
+matcher gap is **#7113** (pre-existing; not widened here) and the producer-side Supabase
+root-residue fix is **#7114**.
+
+**Framing correction (recorded during /work).** This entry originally described the
+Docker fallback as "stated operator direction". It was not: the operator's input was
+`7101 7102`. The `docker run` form came from the **body of issue #7102**, and was relayed
+into the task arguments by the routing step — so dropping it is an ordinary engineering
+call on a suggestion, not a departure from an instruction. The verification that
+falsified it stands either way; only the escalation class changes.
 
 ### Your options
 
