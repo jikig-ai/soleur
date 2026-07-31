@@ -430,12 +430,18 @@ jobs:
         # header comment). `scheduled-terraform-drift.yml` is the 12h backstop
         # if you forget — drift surfaces in the next cron run.
         run: |
-          # `-e` is intentionally omitted so we can capture terraform plan's
-          # exit code in $rc — plan exits non-zero on legitimate failures we
-          # want to surface, not abort silently. Re-enabled with `set -e`
-          # after the rc-capture window per
-          # `2026-05-16-adr-amendment-required-when-reversing-and-destroy-guard-empty-string-bypass.md`.
-          set -uo pipefail
+          # We capture terraform plan's exit code in $rc so a legitimate failure surfaces
+          # with the ::error:: below instead of aborting silently.
+          #
+          # THIS COMMENT USED TO SAY "`-e` is intentionally omitted", AND THAT NEVER WORKED.
+          # GitHub invokes a bare `run:` as `bash -e {0}`; omitting -e from the `set` line
+          # cannot clear what the invocation already applied, so on a plan failure the step
+          # died AT the doppler line and both the `rc=$?` capture and the `::error::` branch
+          # below it were unreachable. The explicit `set +e` bracket is what delivers the
+          # property the comment claimed. Two sibling copies of the old comment remain in
+          # apply-github-infra.yml and apply-sentry-infra.yml — audited under #7098.
+          set -euo pipefail
+          set +e
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -var="ssh_key_path=${CI_SSH_PUB}" \
@@ -4244,6 +4250,11 @@ jobs:
           # which is precisely the green-light-over-a-dark-host this interlock exists to
           # prevent. stdout only; rc checked separately; the match is on a PARSED FIELD.
           found=""
+          # Consecutive transport failures, so the terminal message can tell "the host never
+          # reported" apart from "we could never ask". Without it a revoked credential or a
+          # sustained 5xx burns all 20 polls and then prints the boot-dark ::error::, sending
+          # the operator to diagnose a boot when the fault is the query path.
+          query_fails=0
           for i in $(seq 1 20); do
             # Field-isolated raw SQL: a bare-substring --grep would match the shared source's
             # inngest rows quoting issue bodies. The s3Cluster arm is REQUIRED, not
@@ -4251,6 +4262,14 @@ jobs:
             # marker falls out of it immediately. NOTE remote() takes NO `primary` argument —
             # only s3Cluster does; the `remote(primary, …)` form needs a NAMED COLLECTION
             # grant this credential does not have (measured: HTTP 500 ACCESS_DENIED).
+            # set +e so the `rc=$?` capture below actually runs. GitHub invokes `run:` as
+            # `bash -e {0}` and `set -uo pipefail` above does NOT clear that inherited -e, so
+            # ANY non-zero from betterstack-query.sh (its own `exit 64` on a usage error, a
+            # rate limit, a 5xx, a credential blip) killed the whole BIRTH JOB mid-poll with
+            # no annotation, instead of retrying. The empty-result path is rc=0, so the common
+            # path polled fine and hid this. `rc=$?` must be the first command after the
+            # assignment; `set -e` is re-armed immediately after the read.
+            set +e
             out=$(bash scripts/betterstack-query.sh "
               SELECT dt,
                      JSONExtractString(raw,'stage')        AS stage,
@@ -4264,18 +4283,32 @@ jobs:
               WHERE dt > now() - INTERVAL 2 HOUR
                 AND JSONExtractString(raw,'stage') = 'boot_complete'
                 AND JSONExtractString(raw,'host_name') = 'soleur-git-data'
-              ORDER BY dt DESC LIMIT 5 FORMAT JSONEachRow" 2>/dev/null); rc=$?
+              ORDER BY dt DESC LIMIT 5 FORMAT JSONEachRow" 2>/dev/null)
+            rc=$?
+            set -e
             # Match the PARSED field, not free text. A row is a JSON object carrying
             # "stage":"boot_complete"; the query text never appears on stdout.
-            if [[ $rc -eq 0 ]] && printf '%s' "$out" | grep -q '"stage":"boot_complete"'; then
-              found="$out"; break
+            if [[ $rc -eq 0 ]]; then
+              query_fails=0
+              if printf '%s' "$out" | grep -q '"stage":"boot_complete"'; then
+                found="$out"; break
+              fi
+            else
+              query_fails=$(( query_fails + 1 ))
             fi
             echo "poll ${i}/20: rc=${rc}, no boot_complete row yet"
             sleep 30
           done
 
+          if [[ -z "$found" && "$query_fails" -ge 20 ]]; then
+            # EVERY poll failed to reach Better Stack, so this run learned NOTHING about the
+            # host. Saying "the host booted dark" here would be a confident mis-blame of the
+            # same shape the rung-2 capture step's wrapper-failure class exists to prevent.
+            echo "::error::Could not read the boot signal at all: all 20 polls failed to query Better Stack (last rc=${rc}). This says NOTHING about whether soleur-git-data booted — check BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform and the source's availability, NOT the host. The birth is UNVERIFIED; re-dispatch once the query path works."
+            exit 1
+          fi
           if [[ -z "$found" ]]; then
-            echo "::error::No stage:boot_complete from soleur-git-data within 10 minutes. The apply may be green while the host booted DARK — that is precisely the state this interlock exists to catch. Do NOT treat this birth as complete: check Sentry for a git-data fatal (stage=runcmd_early/sshd_config/volume_mount/doppler_dl/doppler_run/luks_open/bootstrap), and see the runbook's partial-birth decision tree."
+            echo "::error::No stage:boot_complete from soleur-git-data within 10 minutes (the query path answered, so this IS a statement about the host). The apply may be green while the host booted DARK — that is precisely the state this interlock exists to catch. Do NOT treat this birth as complete: check Sentry for a git-data fatal (stage=runcmd_early/sshd_config/volume_mount/doppler_dl/doppler_run/luks_open/bootstrap), and see the runbook's partial-birth decision tree."
             exit 1
           fi
 

@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-07-17
+last_updated: 2026-07-30
 last_reviewed: 2026-06-02
 review_cadence: monthly
 owner: cfo
@@ -61,6 +61,24 @@ Derived view over the authoritative expense ledger at `knowledge-base/operations
 > is unchanged** (⌈619.96 ÷ 49⌉ = ⌈619.96 ÷ 48⌉ = 13; all-in margin 74.70% / 74.17%) —
 > the tabling is for completeness, not because it moves the model. Product COGS unchanged
 > at $200.11. Re-derive when the first real monthly xAI draw lands.
+
+> **[2026-07-30 Review note]** Out-of-cycle correction (#7086). **Ledger-accuracy, no new
+> spend, no amount changed.** Two Anthropic rows described mechanisms that no longer exist:
+> the ux-audit row cited `.github/workflows/scheduled-ux-audit.yml` (deleted in `5d3a1e11a`
+> when ux-audit moved to an Inngest handler), and the CI row claimed `accruing` spend metered
+> by two workflows that are dormant (`claude-code-review.yml` `disabled_manually`;
+> `test-pretooluse-hooks.yml` dispatch-only) into a ledger holding 0 records.
+> **Row split:** the ux-audit row is narrowed to that ONE cron and stays in **Product COGS**;
+> the other 14 claude-spawning crons are tabled as a new **R&D** row (`claude-eval cron fleet`)
+> — engineering/marketing automation, not per-paying-user delivery, same basis as the Max seats
+> and the #6538 `grok-dogfood` precedent. **The fleet row books `UNMEASURED`, not a number.**
+> A figure IS derivable (ADR-108 `SOLEUR_CLAUDE_COST` markers, no admin key) but retention is
+> 3 days, so a monthly total is an extrapolation; ADR-108 §Context records ~$430/mo on the
+> *shared* key, a broader scope than this row. Booking a known-wrong `15.00` fleet-wide was
+> rejected — `expenses.md` feeds the operator digest's run-rate, so a wrong number propagates
+> to a founder-facing artifact. **Consequence: R&D and all-in totals are now FLOORS** (`>=`)
+> while the fleet row is unmeasured; Product COGS is unchanged at $223.39 and every break-even
+> and margin below is unchanged, because no amount moved. Re-derive when the fleet figure lands.
 
 > **[2026-07-17 Review note]** Out-of-cycle correction against `expenses.md@2026-07-17`
 > (#6589, PR #6582). **Ledger-accuracy, not new spend** — same class as #6538, and the
@@ -155,30 +173,53 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 | GitHub Copilot (Business) | 10.00 [expenses.md@2026-04-19] | `expenses.md` |
 | Claude Code Max 20x — seat 1 | 200.00 [expenses.md@2026-04-19] | `expenses.md` |
 | Claude Code Max 20x — seat 2 | 200.00 [expenses.md@2026-04-19] | `expenses.md` |
-| Anthropic API (CI claude-code-action) | 0.00 (accruing) [expenses.md@2026-06-11] | `expenses.md` |
+| Anthropic API (CI) | 0.00 (unmetered) [expenses.md@2026-07-30] | `expenses.md` |
+| Anthropic API (claude-eval cron fleet) | 0.00 (UNMEASURED — floor) [expenses.md@2026-07-30] | `expenses.md` (15 crons; derivable via ADR-108 markers — see note) |
 | Hetzner CX33 (grok-dogfood, operator dogfood host) | 9.17 [expenses.md@2026-07-16] | `expenses.md` |
 | Hetzner Primary IPv4 (grok-dogfood) | 0.54 [expenses.md@2026-07-16] | `expenses.md` |
 | xAI API (Grok 4.5 dogfood) | 0.14 (accruing) [expenses.md@2026-07-16] | `expenses.md` (metered — see note) |
-| **Subtotal R&D / Dev Tooling** | **419.85 [expenses.md@2026-07-16]** | |
+| **Subtotal R&D / Dev Tooling** | **>= 419.85 [expenses.md@2026-07-30]** | floor — contains an UNMEASURED row (claude-eval cron fleet) |
 
 > **xAI API line (#6545, tabled 2026-07-16 on merge of #6554):** `expenses.md` books this
 > row's amount as **100.00**, which is its **soft-ceiling kill-switch**, not a draw — the
 > same row records the first billable batch at **≈ $0.14** (2026-07-16). Tabled here at the
-> **actual draw**, mirroring the `Anthropic API (CI claude-code-action)` line below
-> (`0.00 (accruing)`), because this document models **burn**, not authorization. Booking the
+> **actual draw** because this document models **burn**, not authorization. (This sentence
+> previously justified that by "mirroring the `Anthropic API (CI claude-code-action)` line
+> below (`0.00 (accruing)`)" — that row is now `Anthropic API (CI)` at `0.00 (unmetered)`,
+> which books *no measurement at all* and is therefore no longer an actual-draw precedent.
+> The burn-not-authorization rule stands on its own; corrected 2026-07-30.) Booking the
 > ceiling would overstate all-in burn by ~$100/mo (+16%) and move the all-in break-even
 > **13 → 15 users** on money that has not been spent. Re-derive when the first real monthly
 > draw lands — VERIFY on the xAI console. *(The ledger booking a ceiling in the amount
 > column while a sibling metered row books the draw is the same two-ways-priced defect this
 > cycle fixed for cx33; tracked in #6584.)*
 
-> **CI claude-code-action line (#5086, ADR-056):** metered `ANTHROPIC_API_KEY`
-> spend from the two CI review jobs — R&D, not COGS (engineering accelerator, same
-> basis as the Max seats). Seeded `0.00`/`accruing`; subtotal unchanged until the
-> first monthly reconciliation (`knowledge-base/finance/api-spend-ledger.jsonl` →
-> the `expenses.md` line). Local Max-subscription loops carry **$0 marginal** and
+> **Anthropic API (CI) line (#5086, ADR-056):** `ANTHROPIC_API_KEY` draw from CI —
+> R&D, not COGS (engineering accelerator, same basis as the Max seats). Seeded
+> `0.00`/**`unmetered`** — corrected 2026-07-30 from `accruing`, which asserted a
+> measurement in progress. The two capture sources this line was seeded against are
+> dormant (`claude-code-review.yml` is `disabled_manually`;
+> `test-pretooluse-hooks.yml` is `workflow_dispatch`-only), so
+> `knowledge-base/finance/api-spend-ledger.jsonl` holds **0 records** and the "first
+> monthly reconciliation" has no input. Local Max-subscription loops carry **$0 marginal** and
 > are deliberately not ledgered — per-loop dollars would manufacture a false
 > billing surprise.
+>
+> **Metering gap (recorded 2026-07-30, corrected at review).** Two things were conflated
+> and must not be again. **(a) The claude-eval cron fleet IS metered today.** ADR-108 emits a
+> per-run `SOLEUR_CLAUDE_COST` marker on every substrate exit carrying the CLI's own
+> `total_cost_usd` and `source: cron:<name>`; the ClickHouse query is committed in
+> `betterstack-log-query.md`. It needs **no** `ANTHROPIC_ADMIN_KEY`. What #6297 blocks is only
+> the **authoritative org-total**. Retention is 3 days, so a monthly figure is a
+> cadence-weighted extrapolation, not a direct read — which is why the fleet row books
+> `UNMEASURED` rather than a guess, and why any subtotal containing it is a **floor**.
+> **(b) CI is partly metered.** `fix-constraints-stage-a.yml` is active and wires
+> `Capture API spend`, but its agent step fires only on a red gate — a zero-yield meter, not a
+> missing one. Genuinely unmetered: `ci.yml`'s `plugin-root-propagation-gate` and
+> `sandbox-canary-capture-gate`. The pre-exhaustion spend-vs-budget alert is #5692;
+> exhaustion is detected AT the wall by the hourly credit probe, never ahead of it.
+> This gap does not touch the two `$0` claims that matter most to the model: per-user
+> inference is BYOK-funded (below), and local Max loops are subscription-funded (above).
 
 ### Product COGS
 
@@ -196,7 +237,7 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 | Supabase Pro + Custom Domain | 35.00 [expenses.md@2026-04-19] | `expenses.md` |
 | Supabase Inngest project (`soleur-inngest-prd`, Micro compute) | 10.00 [expenses.md@2026-07-16] | `expenses.md` |
 | Plausible Analytics (Growth) | 9.00 [expenses.md@2026-04-19] | `expenses.md` (EUR 9) |
-| Anthropic API (ux-audit cron) | 15.00 [expenses.md@2026-04-19] | `expenses.md` |
+| Anthropic API (cron-ux-audit) | 15.00 [expenses.md@2026-07-30] | `expenses.md` (one cron; figure unverified since 2026-04-19 — see the Anthropic note below this table) |
 | Cloudflare `soleur.ai` domain (amortized $70/yr ÷ 12) | 5.83 [expenses.md@2026-04-19] | `expenses.md` |
 | Sentry Team (error tracking + cron monitors, $29 base + $42.22 PAYG: 49 × $0.78 cron-monitor seats + 4 × $1.00 uptime monitors) | 71.22 [expenses.md@2026-07-17] | `expenses.md` (live-verified — see note) |
 | Resend Pro (outbound + transactional email, 50K emails/mo) | 20.00 [expenses.md@2026-06-16] | `expenses.md` (estimate — verify on next invoice) |

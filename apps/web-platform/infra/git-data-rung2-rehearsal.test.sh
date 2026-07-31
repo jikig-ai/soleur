@@ -664,6 +664,432 @@ PY
   [[ -z "$(_wf UNPINNED)" ]] \
     && pass "every action is SHA-pinned" \
     || fail "unpinned action(s): $(_wf UNPINNED)"
+
+  # ── 13. THE CAPTURE POLL ACTUALLY POLLS (behavioural — this arm EXECUTES the step) ──
+  #
+  # THE 43 ASSERTIONS THAT PRECEDED THIS ARM WERE ALL GREEN AGAINST A POLL THAT COULD NOT
+  # POLL. Measured (production run 30560266736, dry_run=false): the capture step printed
+  # exactly one `--- capture attempt 1/20 ---` and exited 2 FOUR SECONDS after it started.
+  # GitHub invokes a bare `run:` as `bash -e {0}`, and the step's own `set -uo pipefail` does
+  # NOT clear that inherited -e — omitting a flag from `set` cannot unset what the invocation
+  # already applied. With pipefail on, the TRANSIENT rc=2 that this poll EXISTS to retry
+  # killed the step on attempt 1. Everything after the pipeline was dead code on that path:
+  # the PIPESTATUS read, the doppler-auth-vs-boot sentinel, attempts 2..20, the deadline
+  # break, capture_rc, the whole summary block, and `exit "$rc"`. Confirmed downstream — the
+  # upload step evaluated `steps.capture.outputs.capture_rc == '0'` against an EMPTY string.
+  #
+  # A NAIVE TEXT GUARD CANNOT SEE THIS. Measured: grep counts for `seq 1 N`, `PIPESTATUS`
+  # and `capture_rc` are IDENTICAL (1/1/1) in the fixed body and the broken one. A CAREFUL
+  # text guard can — arm 13d, below, catches both known shapes statically. What only an
+  # EXECUTING guard catches is an arbitrary NEW errexit landmine anywhere in this body, and
+  # given this rule has now recurred despite four learnings and eight in-workflow comments,
+  # the next instance will not be a PIPESTATUS-adjacency violation.
+  #
+  # KEYED ON `id: capture`, NOT THE STEP NAME. The name is free text with zero consumers, so
+  # keying on it would make this guard one cosmetic rename away from a spurious red. The id
+  # is load-bearing: the upload step gates on `steps.capture.outputs.capture_rc`, so renaming
+  # it breaks the workflow visibly and independently of this suite.
+  #
+  # THESE ARMS SHARE THE BODY'S HARDCODED /tmp/rung2 and therefore CANNOT RUN CONCURRENTLY
+  # with each other or with a real dispatch on the same runner. Each clears it first.
+  _CAP_RUNROOT="$(mktemp -d -t gdr2runs.XXXXXXXX)" || exit 2
+  trap 'rm -f "$REH_CODE" "${DRIFT_CODE:-}"; rm -rf "${_CAP_RUNROOT:-}"' EXIT
+  _cap_body="$(mktemp -t gdr2cap.XXXXXXXX)" || exit 2
+  _cap_env="$(mktemp -t gdr2env.XXXXXXXX)" || exit 2
+  python3 - "$WF" "$_cap_body" "$_cap_env" <<'PY'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+j = d["jobs"]["rehearse"]
+step = next((s for s in j["steps"] if s.get("id") == "capture"), None)
+if step is None or not step.get("run"):
+    sys.exit(3)
+open(sys.argv[2], "w").write(step["run"])
+# The env is DERIVED from workflow|job|step scope rather than hardcoded: the seven values the
+# body reads come from three different places (REHEARSAL_DIVERGENCE is workflow-level,
+# REHEARSAL_HOST is step-level, the GITHUB_* are runner-provided), so a single added `env:`
+# reference would otherwise fail the arm under `set -u` pointing at the wrong thing.
+env = {}
+for scope in (d.get("env") or {}, j.get("env") or {}, step.get("env") or {}):
+    env.update(scope)
+with open(sys.argv[3], "w") as fh:
+    for k, v in sorted(env.items()):
+        v = str(v)
+        if "${{" in v:            # a runner-substituted expression -> fixture placeholder
+            v = "fixture-" + k.lower()
+        fh.write("%s='%s'\n" % (k, v.replace("'", "'\\''")))
+PY
+  _cap_extract_rc=$?
+
+  if [[ "$_cap_extract_rc" -ne 0 || ! -s "$_cap_body" ]]; then
+    fail "could not extract the capture step body keyed on 'id: capture'" \
+      "an empty extraction must FAIL, never silently skip — the upload step gates on steps.capture.outputs.capture_rc, so that id is load-bearing"
+  else
+    # Executes the extracted body under `bash -e` (what GitHub actually uses) with `doppler`
+    # and `sleep` stubbed on PATH. EXECUTED, never sourced: `deadline=$(( SECONDS + 16*60 ))`
+    # reads the shell's own SECONDS, and sourcing would leak this suite's elapsed time and
+    # could fire the deadline immediately.
+    # Echoes: "<exit>|<attempt-count>|<stub-invocations>|<outdir>".
+    _run_capture() {
+      local body="$1" mode="$2" outdir rc attempts invocations
+      # Under ONE reaped root. An un-removed `mktemp -d` per call leaked ~6 dirs per suite
+      # run into TMPDIR, and this suite runs on every infra-validation.
+      outdir="$(mktemp -d -p "$_CAP_RUNROOT" run.XXXXXXXX)" || return 2
+      mkdir -p "$outdir/bin"
+      {
+        printf '%s\n' '#!/usr/bin/env bash'
+        printf '%s\n' 'n=$(( $(cat "$STUB_COUNT" 2>/dev/null || echo 0) + 1 )); printf "%s" "$n" > "$STUB_COUNT"'
+        printf '%s\n' 'case "$STUB_MODE" in'
+        # TRANSIENT twice, then PASS — so a body that stops early can never reach the PASS.
+        printf '%s\n' '  pass_on_3) if [ "$n" -lt 3 ]; then echo "RUNG2_CAPTURE_VERDICT=2"; exit 2; fi'
+        printf '%s\n' '             echo "RUNG2_CAPTURE_VERDICT=0"; exit 0 ;;'
+        # A wrapper auth failure: rc=1 and NO verdict sentinel, which is exactly how the
+        # step's own comment says doppler reports a bad token.
+        printf '%s\n' '  wrapper_auth) echo "doppler: unable to authenticate"; exit 1 ;;'
+        # A GENUINE HOST FAIL: rc=1 WITH the sentinel. It differs from wrapper_auth by exactly
+        # the byte the sentinel block keys on, which is why the FAIL branch needs its own
+        # fixture: without one, deleting the sentinel test reports a real host failure as a
+        # credential problem and nothing reds.
+        printf '%s\n' '  host_fail) echo "RUNG2_CAPTURE_VERDICT=1"; exit 1 ;;'
+        # ONE wrapper blip, then a real verdict. The far-side-of-the-fast-fail fixture: the
+        # only shape that can show the fast-fail is not TOO aggressive.
+        printf '%s\n' '  blip_then_pass) if [ "$n" -eq 1 ]; then echo "doppler: transient"; exit 1; fi'
+        printf '%s\n' '                  if [ "$n" -eq 2 ]; then echo "RUNG2_CAPTURE_VERDICT=2"; exit 2; fi'
+        printf '%s\n' '                  echo "RUNG2_CAPTURE_VERDICT=0"; exit 0 ;;'
+        printf '%s\n' 'esac'
+      } > "$outdir/bin/doppler"
+      printf '%s\n%s\n' '#!/usr/bin/env bash' 'exit 0' > "$outdir/bin/sleep"
+      chmod +x "$outdir/bin/doppler" "$outdir/bin/sleep"
+      : > "$outdir/count"
+      rm -rf /tmp/rung2
+      (
+        cd "$ROOT" || exit 2
+        export PATH="$outdir/bin:$PATH"
+        export STUB_COUNT="$outdir/count" STUB_MODE="$mode"
+        export GITHUB_OUTPUT="$outdir/gh_output" GITHUB_STEP_SUMMARY="$outdir/gh_summary"
+        export GITHUB_SERVER_URL="https://github.com"
+        export GITHUB_REPOSITORY="jikig-ai/soleur"
+        export GITHUB_RUN_ID="30560266736"
+        set -a; . "$_cap_env"; set +a
+        bash -e "$body"
+      ) > "$outdir/stdout" 2>&1
+      rc=$?
+      attempts=$(grep -c -- '--- capture attempt' "$outdir/stdout" || true)
+      invocations=$(cat "$outdir/count" 2>/dev/null || echo 0)
+      printf '%s|%s|%s|%s\n' "$rc" "$attempts" "${invocations:-0}" "$outdir"
+      return 0
+    }
+
+    # Every field is DEFAULTED. `[[ "" -eq 0 ]]` and `[[ "" -le 2 ]]` are both TRUE in bash
+    # arithmetic, so an aborted `_run_capture` (a failed mktemp returns with no stdout) made
+    # two assertions pass VACUOUSLY on a total harness failure — verified by injecting an
+    # early return. A sentinel that cannot be mistaken for a real rc closes that.
+    _cap_field() { local v="${1:-}"; printf '%s' "${v:-99999}"; }
+
+    # ── Arm 13 — the poll polls, and reaches the terminal PASS on attempt 3. ──────────
+    _cap_t0=$SECONDS
+    _r13="$(_run_capture "$_cap_body" pass_on_3)"
+    _rc13="$(_cap_field "${_r13%%|*}")"; _rest13="${_r13#*|}"
+    _att13="$(_cap_field "${_rest13%%|*}")"; _rest13="${_rest13#*|}"
+    _inv13="$(_cap_field "${_rest13%%|*}")"; _out13="${_rest13#*|}"
+    _cap_elapsed=$(( SECONDS - _cap_t0 ))
+
+    # THE SLEEP STUB, ASSERTED BY WALL CLOCK rather than by `command -v`. The previous form
+    # built a throwaway dir, put a `sleep` in it, and checked that PATH lookup found it —
+    # a property of bash, constant-true, and it never touched the dir `_run_capture` uses.
+    # The real body sleeps 30 s between attempts, so three attempts unstubbed is 60 s+.
+    [[ "$_cap_elapsed" -lt 10 ]] \
+      && pass "arm 13's three attempts completed in ${_cap_elapsed}s — the sleep stub is genuinely shadowing (unstubbed would be 60s+)" \
+      || fail "arm 13 took ${_cap_elapsed}s — the sleep stub is NOT shadowing, so this arm is silently a minute-long test"
+
+    if grep -q -- '--- capture attempt 2/20' "$_out13/stdout"; then
+      pass "the capture poll REACHES ATTEMPT 2 (the whole defect: production stopped at 1/20)"
+    else
+      fail "the capture poll never reached attempt 2/20 (ran ${_att13} attempt(s))" \
+        "GitHub runs this step as \`bash -e {0}\`; without an explicit \`set +e\` the TRANSIENT rc=2 this poll exists to retry kills it on attempt 1"
+    fi
+
+    [[ "$_rc13" -eq 0 ]] \
+      && pass "a terminal PASS exits 0 (the poll ran to a real verdict instead of dying on a retryable one)" \
+      || fail "the capture body exited ${_rc13} on a stub that PASSes on attempt 3"
+
+    if grep -q '^capture_rc=0$' "$_out13/gh_output" 2>/dev/null; then
+      pass "capture_rc=0 is written to \$GITHUB_OUTPUT (the upload step's gate reads exactly this)"
+    else
+      fail "capture_rc was not written as 0 to \$GITHUB_OUTPUT" \
+        "in production it was never written at all, so the upload gate compared against an empty string"
+    fi
+
+    if grep -q 'Rung-2 rehearsal: PASS' "$_out13/gh_summary" 2>/dev/null; then
+      pass "the PASS verdict reaches \$GITHUB_STEP_SUMMARY"
+    else
+      fail "no PASS line reached \$GITHUB_STEP_SUMMARY"
+    fi
+
+    # Without this, a future edit that drops `doppler run` entirely leaves the stub unused and
+    # the arm passes for reasons that have nothing to do with the poll.
+    [[ "${_inv13:-0}" -gt 0 ]] \
+      && pass "the doppler stub was actually invoked (${_inv13}x) — the arm is exercising the real call, not an empty loop" \
+      || fail "the doppler stub was never invoked — arm 13 passed without executing the capture call"
+
+    # ── Arm 13b — MUTATION: strip `set +e`. Must collapse to the production failure. ──
+    # Discharges "first prove the check can fail; then care that it didn't".
+    _mut_b="$(mktemp -t gdr2mutb.XXXXXXXX)" || exit 2
+    grep -v '^[[:space:]]*set +e[[:space:]]*$' "$_cap_body" > "$_mut_b"
+    _rb="$(_run_capture "$_mut_b" pass_on_3)"
+    _rcb="${_rb%%|*}"; _restb="${_rb#*|}"; _attb="${_restb%%|*}"; _outb="${_restb#*|}"; _outb="${_outb#*|}"
+    if [[ "$_attb" -eq 1 && "$_rcb" -ne 0 ]]; then
+      pass "MUTATION 13b (set +e stripped): collapses to 1 attempt and exits ${_rcb} — the guard can go RED"
+    else
+      fail "MUTATION 13b did NOT reproduce the bug: ${_attb} attempt(s), exit ${_rcb}" \
+        "a guard that cannot fail is not a guard; this mutation IS the production defect"
+    fi
+    rm -f "$_mut_b"
+
+    # ── Arm 13c — MUTATION: re-arm `set -e` BEFORE the PIPESTATUS read. ──────────────
+    # THE SINGLE MOST DANGEROUS EDIT ANYONE CAN MAKE TO THE FIXED STEP, and it fails silently
+    # toward PASS. `set -e` is a builtin — therefore a pipeline — so bash RESETS PIPESTATUS
+    # after it. Re-arming before the read makes rc always 0: exit 0, one attempt,
+    # capture_rc=0, a green PASS summary, on a host that never booted. Strictly worse than
+    # the bug being fixed, which at least fails loudly.
+    _mut_c="$(mktemp -t gdr2mutc.XXXXXXXX)" || exit 2
+    python3 - "$_cap_body" "$_mut_c" <<'PY'
+import re, sys
+src = open(sys.argv[1]).read()
+# Swap the adjacent `rc=${PIPESTATUS[0]}` / `set -e` pair so the re-arm precedes the read.
+pat = re.compile(r'^([ \t]*)(rc=\$\{PIPESTATUS\[0\]\})[ \t]*\n([ \t]*)(set -e)[ \t]*$', re.M)
+out, n = pat.subn(lambda m: "%s%s\n%s%s" % (m.group(3), m.group(4), m.group(1), m.group(2)), src)
+open(sys.argv[2], "w").write(out)
+sys.exit(0 if n == 1 else 4)
+PY
+    _mut_c_rc=$?
+    if [[ "$_mut_c_rc" -ne 0 ]]; then
+      fail "could not construct mutation 13c (no adjacent 'rc=\${PIPESTATUS[0]}' + 'set -e' pair found)" \
+        "the ordering this arm protects is not present in the extracted body — the fix is missing or was reshaped"
+    else
+      _rcc_all="$(_run_capture "$_mut_c" pass_on_3)"
+      _rcc="${_rcc_all%%|*}"; _restc="${_rcc_all#*|}"; _attc="${_restc%%|*}"; _restc="${_restc#*|}"; _outc="${_restc#*|}"
+      if [[ "$_attc" -eq 1 && "$_rcc" -eq 0 ]] || grep -q 'Rung-2 rehearsal: PASS' "$_outc/gh_summary" 2>/dev/null; then
+        pass "MUTATION 13c (set -e before the read): produces the SILENT FALSE PASS — ${_attc} attempt(s), exit ${_rcc}; the ordering is load-bearing and pinned"
+      else
+        fail "MUTATION 13c did not reproduce the false-PASS shape (${_attc} attempt(s), exit ${_rcc})" \
+          "if this stops reproducing, the ordering guarantee this arm exists to pin has moved — re-derive it before deleting the arm"
+      fi
+    fi
+    rm -f "$_mut_c"
+
+    # ── Arm 13e — a WRAPPER auth failure stops fast instead of burning a paid host. ──
+    # The sentinel correctly detects a doppler auth failure (rc=1, no verdict) and downgrades
+    # it to 2 so it is not mis-blamed on the host — but 2 means "retry", and an auth failure
+    # is not transient. Measured against the patched body without this fast-fail: ALL 20
+    # ATTEMPTS BURNED, ~16 minutes on a paid Hetzner host, reporting the least actionable of
+    # the verdicts. Pre-fix a bad token died in 4 seconds.
+    _re="$(_run_capture "$_cap_body" wrapper_auth)"
+    _rce="$(_cap_field "${_re%%|*}")"; _reste="${_re#*|}"
+    _atte="$(_cap_field "${_reste%%|*}")"; _reste="${_reste#*|}"; _oute="${_reste#*|}"
+    # `-eq 2`, NOT `-le 2`: the loose form also passes at ONE attempt, which is the original
+    # errexit bug's signature — so arm 13e would have stayed green if that bug returned.
+    if [[ "$_atte" -eq 2 ]]; then
+      pass "a no-sentinel rc=1 (wrapper auth failure) stops after exactly 2 attempts, not 20 — no 16-minute burn on a paid host"
+    else
+      fail "a wrapper auth failure ran ${_atte} attempt(s), expected exactly 2" \
+        "more means retrying a bad credential for ~16 minutes on a paid Hetzner host; ONE means the errexit bug is back"
+    fi
+    # The NUMERIC contract of the new class, not just its display prose: a copy edit to the
+    # summary should not be the only thing this arm can detect.
+    [[ "$_rce" -eq 3 ]] \
+      && pass "the wrapper-failure class exits 3 (distinct from 1 FAIL and 2 TRANSIENT)" \
+      || fail "the wrapper-failure path exited ${_rce}, expected 3"
+    if grep -q '^capture_rc=3$' "$_oute/gh_output" 2>/dev/null; then
+      pass "capture_rc=3 is written to \$GITHUB_OUTPUT"
+    else
+      fail "capture_rc=3 was not written to \$GITHUB_OUTPUT"
+    fi
+    if grep -q 'WRAPPER FAILURE' "$_oute/gh_summary" 2>/dev/null; then
+      pass "the wrapper failure gets its own summary class, naming the credential rather than the host"
+    else
+      fail "no WRAPPER FAILURE summary class — a bad doppler token reports as TRANSIENT" \
+        "whose own text says 'This is NOT evidence the host booted dark', sending the operator to the one place the answer is not"
+    fi
+
+    # ── Arm 13f — a GENUINE host FAIL is terminal, exits 1, and says FAIL. ───────────
+    # Without this fixture the whole FAIL branch was unexercised, and three single-token
+    # mutations survived: deleting the `! grep -q RUNG2_CAPTURE_VERDICT=` sentinel (a real
+    # host failure then reports as WRAPPER FAILURE, sending the operator to check a
+    # credential while the template is broken), renaming the `elif [[ "$rc" -eq 1 ]]` branch
+    # so FAIL falls through to TRANSIENT, and — worst — `exit "$rc"` -> `exit 0`, which makes
+    # the JOB GO GREEN on a host that booted dark. That last one is the exact outcome this
+    # whole interlock exists to prevent, and nothing in the suite could see it.
+    _rf="$(_run_capture "$_cap_body" host_fail)"
+    _rcf="$(_cap_field "${_rf%%|*}")"; _restf="${_rf#*|}"
+    _attf="$(_cap_field "${_restf%%|*}")"; _restf="${_restf#*|}"; _outf="${_restf#*|}"
+    [[ "$_rcf" -eq 1 ]] \
+      && pass "a host FAIL (rc=1 WITH the verdict sentinel) exits 1 — the step goes red, so the job cannot report success over a dark boot" \
+      || fail "a host FAIL exited ${_rcf}, expected 1" \
+           "if this is 0 the job goes GREEN on a host that booted dark — the failure the interlock exists to catch"
+    [[ "$_attf" -eq 1 ]] \
+      && pass "a host FAIL is TERMINAL — it is not retried (retrying a real finding would turn it into a timeout)" \
+      || fail "a host FAIL ran ${_attf} attempts; a terminal verdict must not be retried"
+    if grep -q 'Rung-2 rehearsal: FAIL' "$_outf/gh_summary" 2>/dev/null; then
+      pass "a host FAIL reports the FAIL class, not TRANSIENT or WRAPPER FAILURE"
+    else
+      fail "a host FAIL did not print the FAIL summary class" \
+        "it is being reported as some other class — the sentinel or the rc branch has drifted"
+    fi
+
+    # ── Arm 13g — ONE wrapper blip must NOT stop the poll. ──────────────────────────
+    # The far side of the fast-fail. Every other arm asserts "stop" or "keep going" from one
+    # direction only, so nothing could show the fast-fail was not TOO aggressive: deleting
+    # the `else wrapper_fails=0` reset (making the counter cumulative rather than
+    # consecutive) and tightening `-ge 2` to `-ge 1` BOTH left the suite fully green, and
+    # either would abort a live paid rehearsal on a single transient blip.
+    _rg="$(_run_capture "$_cap_body" blip_then_pass)"
+    _rcg="$(_cap_field "${_rg%%|*}")"; _restg="${_rg#*|}"
+    _attg="$(_cap_field "${_restg%%|*}")"; _restg="${_restg#*|}"; _outg="${_restg#*|}"
+    [[ "$_rcg" -eq 0 ]] \
+      && pass "a single wrapper blip followed by a real verdict still reaches PASS (the fast-fail is consecutive, not cumulative)" \
+      || fail "one wrapper blip aborted the run (exit ${_rcg}) — the fast-fail is too aggressive" \
+           "a transient doppler failure on attempt 1 would end a rehearsal that has already spent a paid host"
+    [[ "$_attg" -ge 3 ]] \
+      && pass "the poll continued past the blip (${_attg} attempts) instead of treating it as terminal" \
+      || fail "the poll stopped after ${_attg} attempt(s) on a single blip"
+
+    rm -rf /tmp/rung2
+  fi
+  rm -f "$_cap_body" "$_cap_env"
+
+  # ── 13d. IN-WORKFLOW ERREXIT POSTURE (text-level, THIS workflow only) ─────────────
+  #
+  # Scoped deliberately. A standalone repo-wide lint was measured over 631 `run:` bodies and
+  # cut: its rule matches exactly ONE body — this bug — and none of the three sibling bugs
+  # this PR fixes. It also CERTIFIES the false-PASS shape (set +e -> pipeline -> set -e ->
+  # read satisfies "contains set +e before the read" while being exactly arm 13c's mutation),
+  # which is why this arm keys on the NEAREST PRECEDING TOGGLE, not on mere presence.
+  _posture="$(python3 - "$WF" <<'PY'
+import re, sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+scanned = violations = matched = 0
+for jn, j in (d.get("jobs") or {}).items():
+    for s in j.get("steps") or []:
+        body = s.get("run")
+        if not body:
+            continue
+        scanned += 1
+        # COMMENT-STRIPPED, like every other assertion in this file. Measured while writing
+        # it: an audit script over the whole workflow directory reported this exact rule
+        # matching a body in follow-through-closure-guard.yml whose ONLY `PIPESTATUS[` was
+        # inside a comment explaining why that site deliberately uses `|| true` instead of a
+        # bracket. The fix for this class documents the class, and a bare-token scan then
+        # reports the documentation as the violation (cq-assert-anchor-not-bare-token).
+        # DROPPED, not blanked: a comment or a blank line between the pipeline and the read
+        # is harmless at runtime, so adjacency is computed over real COMMANDS only.
+        lines = [ln for ln in body.splitlines()
+                 if ln.strip() and not re.match(r'^[ \t]*#', ln)]
+        for i, ln in enumerate(lines):
+            if "PIPESTATUS[" not in ln:
+                continue
+            matched += 1
+            # ANY `set` line that changes errexit counts, not just a bare `set +e`/`set -e`.
+            # An earlier version matched only the bare forms, so `set +e` ... `set -euo
+            # pipefail` ... PIPESTATUS resolved to `+e` and PASSED -- the false-PASS
+            # direction -- because the re-arming line was invisible to it.
+            toggle = None
+            for prev in reversed(lines[:i]):
+                m = re.match(r'^[ \t]*set\s+([-+])([a-uw-z]*e[a-uw-z]*)(\s|$)', prev)
+                if m:
+                    toggle = m.group(1) + "e"
+                    break
+                m = re.match(r'^[ \t]*set\s+([-+])o\s+errexit(\s|$)', prev)
+                if m:
+                    toggle = m.group(1) + "e"
+                    break
+            if toggle != "+e":
+                violations += 1
+                print("VIOLATION=%s/%s: nearest toggle before a PIPESTATUS read is %r"
+                      % (jn, s.get("id") or s.get("name"), toggle))
+                continue
+            # NOTHING may sit between the pipeline and the read -- and "nothing" means NO
+            # COMMAND AT ALL, not merely no `set`. EVERY simple command resets PIPESTATUS,
+            # which is the same fact arm 13c pins. Measured:
+            #   bash -c 'set +e; (exit 7) | cat; echo marker; echo "${PIPESTATUS[*]}"'  -> 0
+            #   ...without the echo                                                     -> 7 0
+            # An earlier version of this check tested `prev_cmd.startswith("set ")`, which
+            # reported VIOLATIONS=0 against a body with `echo` between the pipeline and the
+            # read -- a clean pass on the exact silent-false-PASS shape, from an assertion
+            # whose message said "with nothing between". So require the previous command to
+            # BE the pipeline: an unquoted `|` outside quotes.
+            prev_cmd = lines[i - 1].strip() if i else ""
+            depth = {"'": False, '"': False}
+            piped = False
+            for ch in prev_cmd:
+                if ch == "'" and not depth['"']:
+                    depth["'"] = not depth["'"]
+                elif ch == '"' and not depth["'"]:
+                    depth['"'] = not depth['"']
+                elif ch == "|" and not depth["'"] and not depth['"']:
+                    piped = True
+            if not piped:
+                violations += 1
+                print("VIOLATION=%s/%s: the command before the PIPESTATUS read is not the "
+                      "pipeline (%r) -- it resets PIPESTATUS"
+                      % (jn, s.get("id") or s.get("name"), prev_cmd))
+print("SCANNED=%d VIOLATIONS=%d MATCHED=%d" % (scanned, violations, matched))
+PY
+)"
+  _scanned="$(printf '%s' "$_posture" | sed -n 's/.*SCANNED=\([0-9]*\).*/\1/p')"
+  _violations="$(printf '%s' "$_posture" | sed -n 's/.*VIOLATIONS=\([0-9]*\).*/\1/p')"
+  _matched="$(printf '%s' "$_posture" | sed -n 's/.*MATCHED=\([0-9]*\).*/\1/p')"
+  # SCANNED alone is the WRONG denominator: it counts `run:` bodies, and this workflow has 12
+  # of them while exactly ONE reads PIPESTATUS. So "SCANNED=12, VIOLATIONS=0" is satisfied by
+  # a workflow containing ZERO PIPESTATUS reads -- the rule would fire zero times and still
+  # report clean. MATCHED counts the reads actually examined, which is what the rule
+  # quantifies over.
+  [[ "${_matched:-0}" -ge 1 ]] \
+    && pass "the errexit-posture rule examined ${_matched} PIPESTATUS read(s) across ${_scanned} run: bodies (non-vacuous)" \
+    || fail "the errexit-posture rule examined ZERO PIPESTATUS reads (scanned ${_scanned:-0} bodies) — a vacuous pass" \
+         "the capture step must read \${PIPESTATUS[0]}; if it no longer does, this arm is guarding nothing"
+  [[ "${_violations:-1}" -eq 0 ]] \
+    && pass "every PIPESTATUS read in this workflow sits under \`set +e\` with nothing between the pipeline and the read" \
+    || fail "${_violations} run: body/bodies read PIPESTATUS under the wrong errexit posture" \
+         "$(printf '%s' "$_posture" | grep VIOLATION= | head -3)"
+
+  # ── 13h. EVERY NON-PASS-GATED STEP CARRIES A STATUS FUNCTION ─────────────────────
+  #
+  # A step `if:` containing no status-check function (`always()`, `failure()`,
+  # `!cancelled()`) has `success()` implicitly ANDed by GitHub. The capture step ends
+  # `exit "$rc"`, so EVERY path where `capture_rc != '0'` is a path where that step FAILED —
+  # making `success() && capture_rc != '0'` a contradiction. Shipped that way, the capture-log
+  # upload and its redaction step were skipped on 100% of the runs they exist for, while the
+  # job summary and the runbook both told the operator to download the artifact.
+  #
+  # The sibling evidence upload needs no status function: its `== '0'` gate coincides with a
+  # green capture step, which is exactly why THAT one worked and hid the class.
+  _statusfn_bad=""
+  while IFS=$'\t' read -r _sname _sif; do
+    [[ "$_sif" == *"capture_rc != '0'"* ]] || continue
+    [[ "$_sif" == *"always()"* || "$_sif" == *"failure()"* || "$_sif" == *"cancelled()"* ]] \
+      || _statusfn_bad="${_statusfn_bad} ${_sname}"
+  done < <(python3 - "$WF" <<'PY'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+for s in d["jobs"]["rehearse"]["steps"]:
+    if s.get("if"):
+        print("%s\t%s" % (s.get("name") or s.get("id"), " ".join(str(s["if"]).split())))
+PY
+)
+  [[ -z "$_statusfn_bad" ]] \
+    && pass "every step gated on a NON-PASS capture_rc carries a status function — none is silently ANDed with success()" \
+    || fail "step(s) gated on capture_rc != '0' with no status function:${_statusfn_bad}" \
+         "GitHub ANDs an implicit success(); the capture step exits non-zero on exactly those paths, so the gate is a contradiction and the step never runs"
+
+  # THE COUPLING THAT ACTUALLY FAILED IN PRODUCTION: the upload gates on capture_rc, and
+  # capture_rc is written by the step this suite's arm 13 executes. Retained from the review's
+  # cut of a speculative continue-on-error assertion — this one is measured, not hypothesised.
+  if grep -qE "steps\.capture\.outputs\.capture_rc == '0'" "$WF"; then
+    pass "the evidence upload still gates on steps.capture.outputs.capture_rc == '0'"
+  else
+    fail "the evidence upload no longer gates on steps.capture.outputs.capture_rc == '0'" \
+      "in production that comparison ran against an empty string because the step died before writing it"
+  fi
 else
   fail "python3 absent — the workflow-contract arms did NOT run" \
     "a gate that cannot run must not report success"
@@ -809,23 +1235,118 @@ else
   fail "the orphan sweep does not query the Hetzner API"
 fi
 
+# ── 14. THIS SUITE RUNS WHEN THE WORKFLOWS IT GUARDS ARE EDITED ────────────────────
+#
+# infra-validation.yml is `paths:`-filtered. Every assertion above reads one of three
+# workflows, and NONE of the three was in that filter until #7025 -- so a PR editing only
+# `git-data-rung2-rehearsal.yml` did not run the suite whose entire job is protecting it.
+# PR #7094 ran it only incidentally, because it also touched apps/web-platform/infra/.
+#
+# That is the same defect the #6454 and #6178 comments in infra-validation.yml already
+# describe ("the job that proves the gate works would be skipped by the very PR changing the
+# gate") -- patched three times for other workflows and still open for this one. Derived from
+# the SUITE's own variables rather than a hardcoded list, so adding a fourth workflow to this
+# file reds here until its path is registered.
+INFRA_VALIDATION_WF="${ROOT}/.github/workflows/infra-validation.yml"
+if [[ ! -f "$INFRA_VALIDATION_WF" ]]; then
+  fail "infra-validation.yml is missing — cannot verify this suite is registered against the workflows it reads"
+elif ! command -v python3 >/dev/null 2>&1; then
+  fail "python3 absent — the path-registration arm did NOT run" \
+    "a gate that cannot run must not report success"
+else
+  # ASK THE OPERATIONAL QUESTION, not a textual one: "would a PR editing ONLY this file
+  # trigger this workflow?" Ten mutations defeated the textual form and every one is
+  # realistic: the path in a COMMENT (this file is dense with comments naming paths, so
+  # deleting an entry while leaving its rationale comment read as registered); the path in
+  # a `run:` body; `- "!<path>"`, GitHub's EXCLUSION idiom used two files away in
+  # apply-web-platform-infra.yml, which makes the entry never fire while the substring is
+  # still present; `paths:` renamed to `paths-ignore:`, inverting the filter for the WHOLE
+  # workflow; and the three entries moved to a `push:` block, so the suite runs only after
+  # merge — when the route is already broken.
+  #
+  # Matching against the PARSED pull_request filter with fnmatch closes all of them by
+  # construction, and mirrors the in-repo instrument infra-validation.yml's own comment
+  # block cites: apply-inngest-rls-dev-workflow.test.sh's `routes()`.
+  #
+  # The guarded set is DERIVED by grepping this file's own `*_WF=` assignments — not a
+  # restated triple. An earlier version hardcoded three variable NAMES while its comment
+  # claimed derivation; adding a fourth `*_WF` left it reporting "all 3" and silently
+  # uncovered, and pointing two vars at one file left it counting 3 distinct when there
+  # were 2.
+  _paths_probe="$(python3 - "$INFRA_VALIDATION_WF" "$0" <<'PY'
+import fnmatch, os, re, sys, yaml
+
+wf_file, suite_file = sys.argv[1], sys.argv[2]
+d = yaml.safe_load(open(wf_file))
+on = d.get(True) or d.get("on") or {}
+pr = on.get("pull_request") or {}
+declared = [str(x) for x in (pr.get("paths") or [])]
+
+def routes(path):
+    """Would a PR whose ONLY changed file is `path` trigger this workflow?"""
+    if any(fnmatch.fnmatch(path, p[1:]) for p in declared if p.startswith("!")):
+        return False                      # an explicit `!` exclusion wins
+    return any(fnmatch.fnmatch(path, p) for p in declared if not p.startswith("!"))
+
+# Derive the guarded workflows from the suite's OWN assignments.
+src = open(suite_file).read()
+guarded = set()
+for m in re.finditer(r'^[A-Z_]*WF="\$\{ROOT\}/(\.github/workflows/[^"]+)"', src, re.M):
+    guarded.add(m.group(1))
+
+print("DECLARED=%d" % len(declared))
+print("GUARDED=%d" % len(guarded))
+for g in sorted(guarded):
+    if not os.path.isfile(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(wf_file))), g)):
+        print("NOFILE=%s" % g)
+    elif not routes(g):
+        print("MISSING=%s" % g)
+# NEGATIVE CONTROL: a path that must NOT route, so a filter that matched everything
+# (paths-ignore, a stray "**") cannot satisfy this arm vacuously.
+print("CONTROL_ROUTES=%d" % (1 if routes("README.md") else 0))
+PY
+)" || _paths_probe="PROBE_FAILED=1"
+  _pguarded="$(printf '%s\n' "$_paths_probe" | sed -n 's/^GUARDED=//p')"
+  _pmissing="$(printf '%s\n' "$_paths_probe" | sed -n 's/^MISSING=//p' | tr '\n' ' ')"
+  _pnofile="$(printf '%s\n' "$_paths_probe" | sed -n 's/^NOFILE=//p' | tr '\n' ' ')"
+  _pcontrol="$(printf '%s\n' "$_paths_probe" | sed -n 's/^CONTROL_ROUTES=//p')"
+  if printf '%s' "$_paths_probe" | grep -q 'PROBE_FAILED=1'; then
+    fail "could not parse infra-validation.yml's pull_request filter — refusing to read an unparseable filter as coverage"
+  elif [[ "${_pguarded:-0}" -lt 3 ]]; then
+    fail "derived only ${_pguarded:-0} guarded workflow(s) from this suite's own *_WF= assignments (expected >= 3)" \
+      "the extraction drifted; this arm is comparing against an incomplete set and would pass over an unregistered workflow"
+  elif [[ "${_pcontrol:-1}" -ne 0 ]]; then
+    fail "NEGATIVE CONTROL FAILED: a PR touching only README.md would trigger infra-validation" \
+      "the filter matches everything (paths-ignore, or a stray '**'), so this arm's pass would be vacuous"
+  elif [[ -n "$_pnofile" ]]; then
+    fail "a *_WF= assignment names a file that does not exist: ${_pnofile}" \
+      "cannot verify registration for a workflow that is not on disk"
+  elif [[ -z "$_pmissing" ]]; then
+    pass "a PR editing ONLY any of the ${_pguarded} workflows this suite reads WOULD trigger infra-validation (parsed filter, negative control held)"
+  else
+    fail "editing ONLY these workflow(s) would NOT trigger infra-validation: ${_pmissing}" \
+      "this suite guards them, so a PR changing one would skip the guard entirely — check for a missing entry, a '!' exclusion, paths-ignore, or a push-only block"
+  fi
+fi
+
 # ── Minimum-cardinality floor ──────────────────────────────────────────────────────
 # A floor, not an equality: developer-incremented, so `-eq` would redden the suite on every
 # legitimately added arm and train the next person to bump it unread. Counts passes+fails so
 # a genuine failure reports as a failure rather than as an empty suite.
 #
-# RAISED 28 -> 39 WITH THE ARMS THAT MADE IT NECESSARY (#7025 R7). At 28 the slack had grown
+# RAISED 28 -> 39 -> 43 -> 65 WITH THE ARMS THAT MADE IT NECESSARY (#7025 R7; the 43 -> 56
+# step is the behavioural capture-poll block, arms 13/13b/13c/13d/13e). At 28 the slack had grown
 # to exceed the work it was guarding: deleting arms 6, 7, 7b, 7c and 7d — every arm that
 # compares the two roots, i.e. the suite's entire reason for existing — landed on exactly 28
 # and printed `ok anti-vacuity floor: 28 assertions ran`, exit 0. Measured. A floor that does
 # not move with the suite only ever guards the work that predates it, and the deletion it
 # most needs to catch is the one that removes the arms someone just argued for.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 43 ]]; then
+if [[ "$_ran" -lt 65 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 43. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 65. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 43)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 65)\n' "$_ran"
 fi
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"

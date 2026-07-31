@@ -53,10 +53,16 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
-          # No `set -e`: a non-zero from one ref must NOT abort the loop. An
-          # identity failure on the first ref would otherwise leave both prod
-          # refs unscanned while the issue body read like a full scan.
-          set -uo pipefail
+          # A non-zero from one ref must NOT abort the loop: an identity failure on the
+          # first ref would otherwise leave both prod refs unscanned while the issue body
+          # read like a full scan.
+          #
+          # THIS COMMENT USED TO SAY "No `set -e`", AND THAT NEVER DELIVERED THE PROPERTY.
+          # GitHub invokes a bare `run:` as `bash -e {0}`, so omitting -e from the `set`
+          # line below could not clear it -- errexit was active the whole time and the loop
+          # aborted on the first failing ref anyway. The property is delivered by the
+          # explicit `set +e` brackets below, not by what this `set` line omits.
+          set -euo pipefail
 
           # ref -> expected project name. The pairing is the guard: a rotated or
           # mis-pinned ref resolves to the wrong name and fails closed.
@@ -85,13 +91,36 @@ jobs:
           for pair in "${REFS[@]}"; do
             ref="${pair%%:*}"; name="${pair##*:}"
             echo "::group::${name} (${ref})"
+            # set +e so the `rc=$?` capture below actually runs, and so a non-zero from ONE
+            # ref does not abort the loop. This bracket is what delivers that property; the
+            # step's `set` line cannot, because GitHub applies -e at the INVOCATION
+            # (`bash -e {0}`) and no `set` line can un-omit what it never set.
+            #
+            # THE HARM IS MISCLASSIFICATION, NOT JUST AN ABORTED LOOP: dying here means
+            # `issue_class` is never written, so the `if: failure()` filer falls back to
+            # `|| 'B'` -- and a genuine RLS violation (class A, type/security, p1-high)
+            # would be filed as class B, "the scan itself could not be trusted", reporting
+            # the louder finding as the quieter one. Not observed in a past run (every
+            # nightly since this workflow shipped has exited 0); this is the reachable
+            # consequence the bracket removes, not an incident being described.
+            set +e
             out="$(REF="$ref" PROJECT_NAME="$name" bash scripts/supabase-advisor-scan.sh 2>&1)"
             rc=$?
+            set -e
             printf '%s\n' "$out"
             echo "::endgroup::"
 
-            mode="$(printf '%s' "$out" | grep -m1 '^fail_mode=' | cut -d= -f2-)"
-            detail="$(printf '%s' "$out" | grep -m1 '^fail_detail=' | cut -d= -f2-)"
+            # `|| true` on BOTH: `grep -m1` exits 1 when the marker is absent, pipefail
+            # makes the pipeline 1, and a `var=$(pipeline)` simple command inherits that
+            # status -- so under the re-armed errexit these two lines killed the step, two
+            # lines below the bracket that was supposed to stop exactly that. The absent
+            # marker is not an error condition: it is the CATASTROPHIC-abort case, and the
+            # `[[ -z "$mode" ]] && mode="unknown_error"` fallback eleven lines down exists
+            # for it. Without these guards that fallback was unreachable, the remaining refs
+            # (including production) went unscanned, and the honest `not_scanned` rendering
+            # never reached the issue body.
+            mode="$(printf '%s' "$out" | grep -m1 '^fail_mode=' | cut -d= -f2- || true)"
+            detail="$(printf '%s' "$out" | grep -m1 '^fail_detail=' | cut -d= -f2- || true)"
 
             if [[ "$rc" -eq 0 ]]; then
               if printf '%s' "$out" | grep -qF 'warn=stale_advisor'; then
