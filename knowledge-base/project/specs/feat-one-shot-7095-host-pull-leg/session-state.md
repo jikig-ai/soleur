@@ -193,7 +193,22 @@ The `.conf` gap was STRUCTURAL, not an oversight: the doppler-copy sweep globs `
 order assertion is meaningless for a drop-in (systemd merges drop-ins after the main unit, so
 later-wins is structural rather than line-ordered). A separate sweep was the right shape.
 
-### Still open — P2, deliberately deferred to #7103
+### ALL SIX round-3 findings are now CLOSED and mutation-proven (2026-07-31)
+
+| gap | mutation | verdict |
+|---|---|---|
+| F13 no-retry-on-empty | delete the break line (retry everything) | **RED**, `rc=0-empty attempts=2` |
+| F14 redact-before-truncate | truncate-first ordering | **RED**, `TAILMARKER` leaks |
+| F16 consumption path | source-instead-of-parse | **RED**, mutant executes the file |
+
+F16's block is EXTRACTED FROM THE SHIPPED SOURCE and executed rather than reached via a new env
+override — an override redirecting which credential file is read is a production surface, and
+adding one to test credential-reading code is the wrong trade. Path literal pinned separately:
+(a)-(d) pin the LOGIC, (e) pins the PATH, plus a non-vacuity guard on the extraction.
+
+`ci-deploy` 201/201 (was 196 at round-3 start).
+
+### Superseded — the original deferral rationale, kept for the record
 
 - **F13** — "an `rc=0` empty read is NOT retried" is argued at length in the code and tested
   nowhere; deleting the break line leaves all the new tests green.
