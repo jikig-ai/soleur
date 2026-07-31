@@ -15,21 +15,21 @@ workflow YAML, no `docs/legal/**`.
 
 ## Phase 0 — Preconditions (no writing until all pass)
 
-- [ ] 0.1 Re-derive the fleet enumeration with the plan's canonical probe block. Record the
+- [x] 0.1 Re-derive the fleet enumeration with the plan's canonical probe block. Record the
       measured values in the LIA provenance section.
       **Expected:** 15 CLI crons · 13 `spawnClaudeEval` · 2 direct `resolveClaudeBin` ·
       20 substrate importers · 3 HTTP callers · **21-member union, with the two independent
       predicates identical (`diff /tmp/setA /tmp/setB` clean)**.
-- [ ] 0.2 **On any mismatch, the measurement wins** — stop authoring, rebuild the snapshot from
+- [x] 0.2 **On any mismatch, the measurement wins** — stop authoring, rebuild the snapshot from
       the measurement, note the divergence in the LIA. Never reconcile by editing the plan.
-- [ ] 0.3 Confirm the next free PA number against `origin/main` (not the worktree):
+- [x] 0.3 Confirm the next free PA number against `origin/main` (not the worktree):
       `git fetch origin main && git show origin/main:knowledge-base/legal/article-30-register.md | grep -nE '^## Processing Activity [0-9]+ — ' | tail -3`
-- [ ] 0.4 Re-verify workflow states: `gh workflow list --all | grep -iE 'fix-constraints|claude|pretooluse'`,
+- [x] 0.4 Re-verify workflow states: `gh workflow list --all | grep -iE 'fix-constraints|claude|pretooluse'`,
       and re-run `grep -rl 'secrets.ANTHROPIC_API_KEY' .github/` (expect **5** files).
-- [ ] 0.5 Re-verify the materialised-exposure figures (80 / 45 / 65 / 0 deletions / public / 2 forks).
+- [x] 0.5 Re-verify the materialised-exposure figures (80 / 45 / 65 / 0 deletions / public / 2 forks).
       **Re-verify the file-write limb's live state** — #7075 links a digest that does not exist.
-- [ ] 0.6 Baseline `bash scripts/check-pa-22.sh` → exit 0 **before** any edit (AC11i).
-- [ ] 0.7 Read for house style: PA-17, PA-22, PA-27, PA-30; the PA-27 LIA and DPIA memo;
+- [x] 0.6 Baseline `bash scripts/check-pa-22.sh` → exit 0 **before** any edit (AC11i).
+- [x] 0.7 Read for house style: PA-17, PA-22, PA-27, PA-30; the PA-27 LIA and DPIA memo;
       `2026-07-07-beta-crm-lia.md` (Art. 14 section **and** its git-committed-PII rejection —
       the decisive precedent for D9); counsel review `2026-07-counsel-review-7086.md`.
 
@@ -37,22 +37,22 @@ workflow YAML, no `docs/legal/**`.
 
 `knowledge-base/legal/legitimate-interest-assessments/2026-07-31-claude-eval-fleet-and-ci-lia.md`
 
-- [ ] 1.1 Frontmatter per the LIA class + the DRAFT blockquote.
-- [ ] 1.2 Provenance section carrying every Phase 0 measurement with its command.
-- [ ] 1.3 **Arm A** — repo/engineering population (PA-22 reasonable-expectation precedent).
-- [ ] 1.4 **Arm B1** — community collection + Anthropic egress.
-- [ ] 1.5 **Arm B2** — republication. Must conclude **legitimate interest does not prevail as
+- [x] 1.1 Frontmatter per the LIA class + the DRAFT blockquote.
+- [x] 1.2 Provenance section carrying every Phase 0 measurement with its command.
+- [x] 1.3 **Arm A** — repo/engineering population (PA-22 reasonable-expectation precedent).
+- [x] 1.4 **Arm B1** — community collection + Anthropic egress.
+- [x] 1.5 **Arm B2** — republication. Must conclude **legitimate interest does not prevail as
       implemented**: necessity fails (C-13/16 *Rīgas satiksme*; EDPB Guidelines 1/2024), the
       Discord arm fails Recital 47 expectations, Art. 17 is not implementable against git
       history + 2 forks, and PA-30's LIA already rejected git-committed PII. Name R1–R5 as the
       conditions under which the conclusion would change.
-- [ ] 1.6 **Arm C** — CI contributors; include the CLA-coverage question (cross-ref PA-7).
-- [ ] 1.7 **Art. 14 section, per arm.** Overdue since ~2026-03-19. No Art. 14(5) exemption
+- [x] 1.6 **Arm C** — CI contributors; include the CLA-coverage question (cross-ref PA-7).
+- [x] 1.7 **Art. 14 section, per arm.** Overdue since ~2026-03-19. No Art. 14(5) exemption
       claimed; 14(5)(b) fails for Discord (Jikigai operates the guild) and GitHub commenters
       (reachable via README/CONTRIBUTING/issue templates); arguable only for HN + stargazers.
-- [ ] 1.8 **PA-17 trigger discharge** — state that the #4558 trigger fired ~5 months ago and
+- [x] 1.8 **PA-17 trigger discharge** — state that the #4558 trigger fired ~5 months ago and
       was not honoured; cite `knowledge-base/legal/audits/2026-05-counsel-review-4558.md`.
-- [ ] 1.9 **External-authority rule.** WebFetch-verify every citation, record the verification
+- [x] 1.9 **External-authority rule.** WebFetch-verify every citation, record the verification
       date inline, drop anything unverifiable. EDPB **Guidelines 03/2026** = adopted 8 July
       2026 **for public consultation, open until 30 October 2026** — a draft, whose subject is
       scraping in the *generative-AI* context (collection limb analogous; training limb not).
