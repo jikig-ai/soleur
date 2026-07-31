@@ -15,6 +15,40 @@ revision: v3 (post 4-agent plan-review)
 > **Lane note.** No `spec.md` exists for this branch, so `lane:` could not be carried
 > forward. Defaulted to `cross-domain` per the TR2 fail-closed rule.
 
+## Enhancement Summary
+
+**Deepened:** 2026-07-31 · **Rounds:** plan-review (4 agents) → deepen-plan (gates +
+verify-the-negative + live reproduction)
+
+**Gates:** 4.6 User-Brand Impact **PASS** (threshold `none`, 0 sensitive-path matches) ·
+4.7 Observability **PASS** (5/5 fields, no placeholders, no empty keys, no ssh) · 4.8
+PAT-shaped variable **PASS** · 4.9 UI wireframe **skip** (no UI surface) · 4.10 Encryption
+posture **skip** (no store/connection) · 4.55 Downtime **skip** · 4.5 Network-outage
+**not applicable** ("timeout" here is a test-runner hook budget, not reachability).
+
+**Citations verified:** 4/4 AGENTS rule IDs ACTIVE (none fabricated or retired) · issues
+#7101/#7102/#4254/#3272 all OPEN with matching titles · ADR-081 present · all learning
+paths resolve in this worktree.
+
+### Key changes from v1
+
+1. **Docker-as-root escalation deferred** — v1's premise ("operator's own machine") is
+   falsified; the script runs inside the agent sandbox. Logged as a User-Challenge.
+2. **A third defect found and fixed** — the reaper returns `rc=1` on the default path
+   after a *successful* clean, aborting its caller under `set -e`.
+3. **A fourth lying surface found** — the per-directory `Removed orphan directory:` line
+   prints on failure too (proven live).
+4. **Two unrunnable ACs removed**, arithmetic corrected, 17 ACs → 9.
+
+### Verified by execution, not assertion
+
+- The `chmod 500` fixture yields `EACCES`, rc=1, dir survives, as EUID 1001 — no root.
+- The reaper reproduces **both** defects live (output quoted in Work Target 2).
+- Sourcing the script in a temp repo resolves `WORKTREE_DIR` correctly and defines the
+  functions — the sibling suite's harness pattern is viable.
+- `guardrails:block-rm-rf-worktrees`: plain form MATCHES, docker-wrapped form BYPASSES.
+- `grep -c` exits 1 on a zero count; `Number("60_000")` is `NaN`.
+
 ## Overview
 
 Two open dev-infra bugs, one PR. Both are the same defect: **a step that reports a
@@ -208,11 +242,24 @@ trade this PR exists to undo.
 - Collected by the **`unit`** project (`vitest.config.ts:44` includes
   `test/**/*.test.ts`, env `node`) — runs on every CI run, **not** gated on
   `INTEGRATION_ENABLED` or Supabase credentials.
-- Reads the global default by **importing** `vitest.config.ts` (a side-effect-free
-  `export default defineConfig({…})`) and reading `config.test.hookTimeout`. v1 planned
-  to *parse* it — a second parser with its own vacuity risk, and a loose regex would
-  have matched the comment at `:33`, which contains the literal text `20_000ms
-  hookTimeout`. An import has neither problem.
+- **Primary rule is structural and needs no global value:** *if `beforeAll` carries an
+  explicit override, `afterAll` MUST carry an explicit override ≥ it.* All four of
+  today's violations are caught by this rule alone, and it cannot be wrong about what
+  the runner's default is. This is the load-bearing assertion.
+- The global default is needed only for the residual case (`beforeAll` absent,
+  `afterAll` explicit). Read it by **importing** `vitest.config.ts` and reading
+  `config.test.hookTimeout`. v1 planned to *parse* it — a second parser with its own
+  vacuity risk, and a loose regex would have matched the comment at `:33`, which
+  contains the literal text `20_000ms hookTimeout`.
+  > **Correction (deepen-plan).** v1/v2 called that module "side-effect-free." **It is
+  > not:** `vitest.config.ts:14-15` performs a top-level
+  > `process.env.WEBPLAT_TEST_USE_THREADS` read at module-evaluation time. Importing is
+  > still safe — it is a *read*, not a mutation, and the `unit` project pins
+  > `isolate: true` (`:46-53`) precisely so module-init env reads cannot leak between
+  > files sharing a worker. But the justification was wrong, and the import also pulls
+  > in `vitest/config` (and thus vite) transitively. If that import proves heavy or
+  > brittle at /work time, fall back to a hardcoded `20_000` **plus** a parity assertion
+  > against the config — never silently hardcode.
 - **Fails against current code with 4 violations.**
 
 ### Required guard mechanics
@@ -245,6 +292,33 @@ self-defeating):
 ---
 
 # Work Target 2 — #7102: the reaper must not count what it did not do
+
+## Live reproduction (executed during planning)
+
+Sourced `worktree-manager.sh` inside a throwaway git repo (the sibling suite's pattern —
+`cd` into the temp repo *then* `source`, which resolves `GIT_ROOT`/`WORKTREE_DIR` to it),
+planted one removable orphan and one made unremovable by `chmod 500` on an inner dir, and
+called the reaper. Verbatim output:
+
+```
+Removed orphan directory: plain-orphan
+rm: cannot remove '…/.worktrees/stuck-orphan/apps/supabase/snippets/deep': Permission denied
+Removed orphan directory: stuck-orphan          <-- FALSE
+Cleaned 2 orphan directory(ies)                 <-- FALSE (1 was removed)
+rc=0
+stuck-orphan still on disk? YES
+```
+
+Then, after a *successful* clean on the default path:
+
+```
+cleaned>=1, verbose=false -> rc=1               <-- aborts the caller under set -e
+```
+
+This confirms the fixture design works unprivileged, and surfaces a **third** lying
+surface the issue did not name: the per-directory `Removed orphan directory: <name>` line
+prints on failure too. The fix moves it inside the success branch, so all three lying
+surfaces (per-dir line, counter, summary) are corrected together.
 
 ## Three defects, not one
 
@@ -367,6 +441,11 @@ asserted explicitly.
 one: "exits 0 with no `FAIL:`" is satisfied by a skip-everything run. The suite must
 therefore assert a **minimum PASS count** before exiting 0, so a preflight `SKIP` cannot
 masquerade as coverage.
+
+**Harness self-cleanup.** Case 2 leaves a `chmod 500` directory behind, which defeats the
+sibling suites' `trap 'rm -rf "$TMP"' EXIT` idiom — the suite would litter `/tmp` on every
+run with directories it cannot remove, reproducing this PR's own bug in its test harness.
+`chmod -R u+rwX "$TMP"` before (or at the top of) the trap.
 
 ---
 
@@ -493,11 +572,16 @@ Per `wg-when-deferring-a-capability-create-a`, none is left as prose:
    pre-existing blind spot this investigation surfaced (verified: plain MATCH,
    docker-wrapped NO MATCH). Not widened by this PR — v3 ships no docker form — so fixing
    it here would be unrelated scope.
-3. **Producer-side fix.** The residue exists because the local Supabase stack bind-mounts
-   as root and has no teardown (verified: no `supabase stop` path under
-   `apps/web-platform/`). The component with the privilege is the one that made the mess;
-   cleaning up there kills the class and needs no escalation anywhere. Absent from v1
-   entirely.
+3. **Producer-side fix — the strongest option, and more tractable than v2 claimed.** The
+   residue exists because the local Supabase stack bind-mounts as root. v2 asserted "no
+   `supabase stop` path exists under `apps/web-platform/`"; **that is false.**
+   `apps/web-platform/package.json:25` defines `"db:stop": "./scripts/supabase-local.sh
+   stop"`, which reaches `supabase-local.sh` (`exec supabase … stop`). So a teardown hook
+   **already exists** — it simply does no residue cleanup (grep for `snippets` / `rm -rf`
+   in that script returns nothing). The fix is therefore an addition to an existing stop
+   path, not a new lifecycle: remove the root-owned `supabase/snippets` residue while the
+   stack's own privileged context is still available. That kills the class at the
+   component that owns the artifact and needs no escalation anywhere.
 
 ## Observability
 
@@ -640,3 +724,9 @@ registry could supply; bash + vitest fully covered.
   `worktree-manager.sh` "runs on the operator's own machine" and built an entire
   privileged mechanism on it; `git-lock-marker-telemetry.ts:3` says it runs inside the
   agent sandbox. One grep would have collapsed the design before it was written.
+- **"Side-effect-free" and "no teardown exists" are negative claims — grep them.** v2
+  asserted `vitest.config.ts` was side-effect-free (it reads `process.env` at module
+  scope, `:14-15`) and that no `supabase stop` path existed (it does,
+  `apps/web-platform/package.json:25`). Both were caught only by a dedicated
+  verify-the-negative sweep. A negative claim in a plan is the cheapest thing to check
+  and the easiest to assert from memory.

@@ -29,9 +29,17 @@ must be observed **RED** before its fix.
 ## Phase 1 — RED for #7101 (guard before fix)
 
 - [ ] **1.1** Create `apps/web-platform/test/tenant-isolation-hook-budget-symmetry.test.ts`.
-- [ ] **1.2** Read the global default by **importing** `vitest.config.ts` and reading
-      `config.test.hookTimeout` — do NOT parse the file (a loose regex matches the
-      comment containing the literal text `20_000ms hookTimeout`).
+- [ ] **1.2** Primary rule (needs no global value): *if `beforeAll` has an explicit
+      override, `afterAll` MUST have an explicit override ≥ it.* All 4 of today's
+      violations are caught by this alone — make it the load-bearing assertion.
+- [ ] **1.2b** For the residual case only (`beforeAll` absent, `afterAll` explicit), read
+      the global by **importing** `vitest.config.ts` and reading `config.test.hookTimeout`
+      — do NOT parse the file (a loose regex matches the comment containing the literal
+      text `20_000ms hookTimeout`). NOTE: that module is **not** side-effect-free — it
+      does a top-level `process.env.WEBPLAT_TEST_USE_THREADS` read (`:14-15`). Importing
+      is safe (a read, and `unit` pins `isolate: true`), but if the transitive
+      `vitest/config` import proves heavy or brittle, fall back to a hardcoded `20_000`
+      **plus** a parity assertion — never silently hardcode.
 - [ ] **1.3** Pair `beforeAll`/`afterAll` to their closing `}, <n>);` **structurally**
       (matching indentation), never by grepping the literal — per-test timeouts share the
       `}, 60_000);` form.
@@ -73,8 +81,13 @@ must be observed **RED** before its fix.
       orphan-with-`.git`}; one invocation; assert `orphans_cleaned == 1` and the other two
       survive.
 - [ ] **3.5** Case 2 (**RED**) — unremovable orphan via `chmod 500` on an inner dir;
-      assert `orphans_cleaned == 0`, sentinel on **stdout**, dir survives, and the failure
-      summary prints at `verbose=false`.
+      assert `orphans_cleaned == 0`, sentinel on **stdout**, dir survives, the failure
+      summary prints at `verbose=false`, **and no `Removed orphan directory: <name>` line
+      is emitted for the surviving dir** (the third lying surface — verified live today
+      to print falsely).
+- [ ] **3.5b** Harness cleanup: case 2 leaves a `chmod 500` directory, which defeats the
+      `trap 'rm -rf "$TMP"' EXIT` cleanup. `chmod -R u+rwX "$TMP"` before the trap fires
+      (or at the top of the trap) or the suite litters `/tmp` on every run.
 - [ ] **3.6** Case 3 — counter integrity: `orphans_cleaned` equals a `find`-verified
       removal delta.
 - [ ] **3.7** Case 4 (**RED — defect 3**) — assert `rc == 0` for all of:
@@ -91,6 +104,10 @@ must be observed **RED** before its fix.
       copying the explanatory comment (redirection order + locale pin), not just the idiom.
 - [ ] **4.2** Increment with the assignment form `orphans_cleaned=$(( orphans_cleaned + 1 ))`
       — never `(( orphans_cleaned++ ))` (rc 1 at old value 0 → `set -e` abort).
+- [ ] **4.2b** Move the per-directory `Removed orphan directory: <name>` line **inside the
+      success branch**. Verified live: it currently prints for a directory the `rm`
+      failed to remove, so it is a **third** lying surface alongside the counter and the
+      summary. All three must be corrected together.
 - [ ] **4.3** Collect failures into `orphans_failed=()`.
 - [ ] **4.4** Emit `SOLEUR_ORPHAN_UNREMOVABLE dir=… errno=… reason=rm-partial hint="…"`
       on **stdout**. Use `reason=rm-partial` (not `rm-failed`) — `rm -rf` deletes what it
