@@ -42,10 +42,12 @@
 #
 # EXIT CODES
 #   0  every token value resolves LIVE, and every enumerated token was verifiable
-#   1  at least one DEAD token value found (rotation did not propagate), OR an Access
-#      service token was enumerated that this script has no hostname mapping for and
-#      therefore could not verify. Unverified never renders as LIVE.
-#   2  preconditions missing (doppler CLI, curl, python3)
+#   1  at least one DEAD token value found (rotation did not propagate), OR at least one
+#      token could not be verified. UNVERIFIABLE has several disjoint causes with
+#      different remedies — a missing hostname mapping is only one of them; see the
+#      `cause` field in the report and in --json. Unverified never renders as LIVE.
+#   2  preconditions missing (doppler CLI, curl, python3), OR the run drew NO conclusion
+#      at all (nothing was measured, so a clean fleet cannot be claimed)
 
 set -uo pipefail
 
@@ -308,12 +310,25 @@ UNVERIFIABLE_ROWS=()
 # run_sut; it was never applied to the code under test.
 PROBE_CODE=''
 PROBE_STAMPED=''              # 1 = response carries Cloudflare Access's own denial stamp
+PROBE_MITIGATED=''            # 1 = Cloudflare stamped it as its OWN block/challenge
+PROBE_ACCESS_REDIRECT=''      # 1 = 302 to the Access IdP login (an Access refusal too)
+PROBE_SETUP_FAILED=''         # 1 = the probe could not be SET UP; not a network fact
 
 # One HTTPS GET. With no id/secret this is the CONTROL probe.
+#
+# Deliberately NOT following redirects: there is no -L/--location, and T27 asserts its
+# absence. curl APPENDS each response's headers into one -D file, so under -L the stamp
+# grep (an OR across the whole file) would see an early block's stamp while %{http_code}
+# reports the FINAL response — the two halves of the verdict would come from different
+# responses, and an admitted-after-redirect would grade DEAD, the destructive direction.
 access_probe() {
   local host="$1" id="${2:-}" secret="${3:-}"
   local hdr rc=0
-  hdr=$(mktemp) || { PROBE_CODE=000; PROBE_STAMPED=0; return 0; }
+  PROBE_SETUP_FAILED=0
+  # A local disk failure is NOT a network fact. Funnelling it into the same 000 the caller
+  # maps to "unreachable" sends the operator to investigate Cloudflare DNS when the real
+  # cause is a full runner disk.
+  hdr=$(mktemp) || { PROBE_CODE=000; PROBE_STAMPED=0; PROBE_MITIGATED=0; PROBE_ACCESS_REDIRECT=0; PROBE_SETUP_FAILED=1; return 0; }
   local -a args=(-s -o /dev/null -D "$hdr" -w '%{http_code}' --max-time 20)
   [[ -n "$id" ]] && args+=(-H "CF-Access-Client-Id: $id" -H "CF-Access-Client-Secret: $secret")
   # Assigned then normalised, NOT `$(curl ... || printf '000')`. curl prints its -w output
@@ -324,12 +339,25 @@ access_probe() {
   (( rc != 0 )) && PROBE_CODE=000
   [[ "$PROBE_CODE" =~ ^[0-9]{3}$ ]] || PROBE_CODE=000
   if grep -qiE '^cf-access-(aud|domain):' "$hdr" 2>/dev/null; then PROBE_STAMPED=1; else PROBE_STAMPED=0; fi
+  # Cloudflare stamps its OWN blocks and challenges with cf-mitigated. That is a positive
+  # discriminator for the whole class the stamp alone is blind to — a rate-limit 429, a
+  # managed-challenge 503, a WAF rule with a custom response status. Without it those are
+  # unstamped non-refusals and would read as admission.
+  if grep -qiE '^cf-mitigated:' "$hdr" 2>/dev/null; then PROBE_MITIGATED=1; else PROBE_MITIGATED=0; fi
+  # An Access app with an IDENTITY policy refuses by redirecting to the IdP login rather
+  # than 403-ing, and a plain 302 carries no cf-access-* header. Treating that as "no gate"
+  # would report a fully-gated host as exposed. The Location host is the discriminator.
+  if [[ "$PROBE_CODE" == 30? ]] && grep -qiE '^location:.*(cloudflareaccess\.com|/cdn-cgi/access/)' "$hdr" 2>/dev/null; then
+    PROBE_ACCESS_REDIRECT=1
+  else
+    PROBE_ACCESS_REDIRECT=0
+  fi
   rm -f "$hdr"
   PROBES_MADE=$((PROBES_MADE + 1))
 }
 
-declare -A PAIR_VERDICT=()   # host|id|secret -> LIVE | DEAD:<code> | UNVERIFIABLE:<cause>
-declare -A HOST_GATE=()      # host -> stamped | unstamped | unreachable
+declare -A PAIR_VERDICT=()   # host\x1fid\x1fsecret -> LIVE | DEAD:<code> | UNVERIFIABLE:<cause>
+declare -A HOST_GATE=()      # host -> gated | ungated | blocked | indeterminate | unreachable | setup-failed
 
 # Sets REPLY. Call directly; see the PROBE_CODE comment for why not `$( )`.
 verify_access_pair() {
@@ -349,44 +377,78 @@ verify_access_pair() {
   # like an admitted one. LIVE is the only verdict this script emits with no email and no
   # annotation, so that false-LIVE rides the silent channel: the gate protecting host shell
   # access disappears and the detector reports a clean fleet.
+  #
+  # Classifying the control answer POSITIVELY matters as much here as it does for the
+  # credential. "Unstamped" alone is not evidence of a missing gate: an Access app with an
+  # IDENTITY policy refuses by 302-ing to the IdP (no stamp), a WAF/rate-limit rule refuses
+  # in FRONT of Access (no stamp), and a 530 means the tunnel is down. Calling any of those
+  # "nothing is gating this host" puts a fabricated SECURITY claim in an operator email —
+  # the same naming-an-unmeasured-cause defect this script exists to drain, aimed at the
+  # gate instead of the credential. Only an anonymous request that actually SUCCEEDS is
+  # evidence that nothing refused it.
   if [[ -z "${HOST_GATE[$host]:-}" ]]; then
     access_probe "$host"
-    if [[ "$PROBE_CODE" == 000 ]]; then HOST_GATE[$host]=unreachable
-    elif [[ "$PROBE_STAMPED" == 1 ]]; then HOST_GATE[$host]=stamped
-    else HOST_GATE[$host]=unstamped
+    if [[ "$PROBE_SETUP_FAILED" == 1 ]]; then HOST_GATE[$host]=setup-failed
+    elif [[ "$PROBE_CODE" == 000 ]]; then HOST_GATE[$host]=unreachable
+    elif [[ "$PROBE_STAMPED" == 1 || "$PROBE_ACCESS_REDIRECT" == 1 ]]; then HOST_GATE[$host]=gated
+    elif [[ "$PROBE_MITIGATED" == 1 ]]; then HOST_GATE[$host]=blocked
+    elif [[ "$PROBE_CODE" == 2?? ]]; then HOST_GATE[$host]=ungated
+    else HOST_GATE[$host]=indeterminate
     fi
   fi
 
   case "${HOST_GATE[$host]}" in
+    setup-failed)
+      # LOCAL fault (mktemp). Not a network fact, and must not be reported as one: telling
+      # the operator the host is unreachable sends them to Cloudflare/DNS when the runner
+      # disk is full. Zero requests were sent.
+      PAIR_VERDICT[$cache_key]="UNVERIFIABLE:detector-env" ;;
     unreachable)
       PAIR_VERDICT[$cache_key]="UNVERIFIABLE:host-unreachable" ;;
-    unstamped)
-      # No Access denial stamp on an UNCREDENTIALED request => nothing is gating this
-      # hostname. Refuse to grade the credential at all; the finding is the missing gate.
+    blocked)
+      PAIR_VERDICT[$cache_key]="UNVERIFIABLE:control-blocked" ;;
+    indeterminate)
+      PAIR_VERDICT[$cache_key]="UNVERIFIABLE:gate-indeterminate" ;;
+    ungated)
+      # An anonymous request SUCCEEDED (2xx, no stamp, no mitigation, no Access redirect).
+      # Only that is evidence nothing refused it. Refuse to grade the credential; the
+      # finding is the missing gate.
       PAIR_VERDICT[$cache_key]="UNVERIFIABLE:gate-absent" ;;
-    stamped)
+    gated)
       access_probe "$host" "$id" "$secret"
-      if [[ "$PROBE_CODE" == 000 ]]; then
+      if [[ "$PROBE_SETUP_FAILED" == 1 ]]; then
+        PAIR_VERDICT[$cache_key]="UNVERIFIABLE:detector-env"
+      elif [[ "$PROBE_CODE" == 000 ]]; then
         PAIR_VERDICT[$cache_key]="UNVERIFIABLE:probe-failed"
       elif [[ "$PROBE_STAMPED" == 1 ]]; then
-        # Still Access's own page WITH credentials attached => Access did not accept them.
-        # This is why the stamp beats the status code: a WAF/bot-fight 403 in FRONT of
-        # Access carries no stamp and no longer renders as a stale credential, which is
-        # what previously sent the operator to overwrite a healthy secret.
-        PAIR_VERDICT[$cache_key]="DEAD:${PROBE_CODE}"
-      elif [[ "$PROBE_CODE" == 401 || "$PROBE_CODE" == 403 ]]; then
-        # Stamp gone, but the answer is still an authorisation refusal. On a host whose
-        # CONTROL probe was stamped, that combination is unexplained: it is not Access
-        # (no stamp) and it is not an admitted origin response either. "Stamp absent"
-        # alone would grade this LIVE, which would certify a credential against a refusal
-        # — so the absence rule is narrowed here rather than trusted. Fail closed.
+        # Access's own page WITH credentials attached. DEAD is the destructive verdict —
+        # its remedy overwrites the prd ROOT secret every branch config inherits — so it
+        # requires the answer to actually BE a refusal, not merely to carry the stamp. A
+        # stamped 200 is not a rejection whatever else it is; calling it one would print
+        # "HTTP 200 ... rejected by Access" and order an overwrite on the strength of it.
+        if [[ "$PROBE_CODE" == 401 || "$PROBE_CODE" == 403 ]]; then
+          PAIR_VERDICT[$cache_key]="DEAD:${PROBE_CODE}"
+        else
+          PAIR_VERDICT[$cache_key]="UNVERIFIABLE:stamped-non-refusal"
+        fi
+      elif [[ "$PROBE_MITIGATED" == 1 || "$PROBE_ACCESS_REDIRECT" == 1 ]]; then
+        # Cloudflare's own block/challenge, or an Access IdP redirect. Both are refusals
+        # that carry no cf-access-* stamp.
         PAIR_VERDICT[$cache_key]="UNVERIFIABLE:refused-unstamped"
-      else
-        # Same host, same request, stamp GONE once credentials were attached, and the
-        # answer is not a refusal. Only admission removes the stamp. Positive proof, and
-        # independent of what the origin says — which is the whole point, because the
-        # origin here is a raw-TCP stream that never speaks HTTP at all.
+      elif [[ "$PROBE_CODE" == 2?? ]]; then
+        # Stamp GONE and the request actually SUCCEEDED. Only admission does that, and this
+        # is the MEASURED admitted shape (200, zero-byte body, no cf-access-*).
+        #
+        # This is an ALLOWLIST, and the first revision of this rewrite got it wrong: it
+        # asserted LIVE as the catch-all `else` and narrowed only 401/403 out of it, which
+        # certified a rate-limit 429, a challenge 503, an identity-policy 302 and a tunnel
+        # 530 as healthy — measured, all rc=0, on the one verdict that emails nobody. That
+        # is the absence-based reasoning this whole file rejects, and enumerating refusals
+        # cannot work when the refusing layer's status is operator-configurable. LIVE now
+        # requires positive evidence of success; everything unrecognised is loud.
         PAIR_VERDICT[$cache_key]="LIVE"
+      else
+        PAIR_VERDICT[$cache_key]="UNVERIFIABLE:unexpected-status"
       fi ;;
   esac
   REPLY="${PAIR_VERDICT[$cache_key]}"
@@ -441,6 +503,16 @@ for base in $(printf '%s\n' "${!ACCESS_BASESET[@]}" | sort); do
           UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|gate-absent|${host} answered an UNCREDENTIALED request WITHOUT a Cloudflare Access denial — nothing is gating it, so this credential could not be graded and the host may be exposed. Check the Access application for ${host}. Do NOT rotate; rotating changes nothing while the gate is missing. (seen in ${cfg})") ;;
         host-unreachable)
           UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|host-unreachable|the control probe to ${host} got no answer at all (timeout / DNS / TLS), so nothing is known about the credential. Do NOT rotate on the strength of this row; re-run once ${host} is reachable. (seen in ${cfg})") ;;
+        detector-env)
+          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|detector-env|the detector could not allocate a temp file on this runner, so NOTHING was sent to ${host}. This is a LOCAL fault (full or read-only TMPDIR), not a network or credential one. Do NOT rotate. (seen in ${cfg})") ;;
+        gate-indeterminate)
+          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|gate-indeterminate|${host} answered an uncredentialed request with HTTP ${PROBE_CODE} and no Cloudflare Access stamp, which characterises neither a gate nor its absence — a tunnel outage (530) looks like this. Nothing is known about the credential. Do NOT rotate; re-run. (seen in ${cfg})") ;;
+        control-blocked)
+          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|control-blocked|Cloudflare itself blocked or challenged the uncredentialed probe to ${host} (cf-mitigated), so the request never reached Access and the credential could not be graded. Check the WAF / rate-limit / bot-fight rules for ${host}. Do NOT rotate. (seen in ${cfg})") ;;
+        stamped-non-refusal)
+          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|stamped-non-refusal|${host} returned HTTP ${PROBE_CODE} carrying a Cloudflare Access stamp — a stamp on something that is not a refusal. This is not evidence the credential was rejected, so it is deliberately NOT reported as stale. Do NOT rotate; investigate the Access application for ${host}. (seen in ${cfg})") ;;
+        unexpected-status)
+          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|unexpected-status|${host} returned HTTP ${PROBE_CODE} with no Access stamp and no success. LIVE requires positive evidence of admission (a 2xx), so this is NOT certified — and it is not evidence of a stale credential either. Do NOT rotate; re-run and investigate the edge. (seen in ${cfg})") ;;
         refused-unstamped)
           UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|refused-unstamped|${host} refused the credentialed request WITHOUT a Cloudflare Access stamp, while the uncredentialed control WAS stamped. Something other than Access is refusing (WAF rule, IP access rule, bot-fight), so the credential could not be graded. Do NOT rotate; investigate the rule set for ${host}. (seen in ${cfg})") ;;
         *)
@@ -471,10 +543,10 @@ emit_json() {
   # `split("|", 1)` — maxsplit 1, so a diagnostic containing a pipe cannot shift fields.
   # Unverifiable rows get their own key rather than riding in "stale" with the diagnostic
   # sentence mis-rendered into the "config" field.
-  python3 - "$LIVE_N" "$DEAD_N" "$UNVERIFIABLE_N" "${DEAD_ROWS[@]:-}" "--" "${UNVERIFIABLE_ROWS[@]:-}" <<'PY'
+  python3 - "$LIVE_N" "$DEAD_N" "$UNVERIFIABLE_N" "$PROBES_MADE" "${DEAD_ROWS[@]:-}" "--" "${UNVERIFIABLE_ROWS[@]:-}" <<'PY'
 import json, sys
-live, dead, unver = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
-rest = sys.argv[4:]
+live, dead, unver, probes = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+rest = sys.argv[5:]
 sep = rest.index("--")
 def rows(xs, second):
     out = []
@@ -497,7 +569,7 @@ def unver_rows(xs):
         out.append({"key": k, "cause": cause, "reason": reason})
     return out
 print(json.dumps({
-    "live": live, "dead": dead, "unverifiable": unver,
+    "live": live, "dead": dead, "unverifiable": unver, "probes": probes,
     "stale": rows(rest[:sep], "config"),
     "unverifiable_keys": unver_rows(rest[sep + 1:]),
 }, indent=2))
@@ -509,7 +581,10 @@ if [[ "$JSON_OUT" -eq 1 ]]; then
 else
   echo "Cloudflare token drift check — project '$PROJECT'"
   echo "  configs scanned: ${#CONFIGS[@]}   API-token keys: ${#KEYSET[@]}   Access service tokens: ${#ACCESS_BASESET[@]}"
-  echo "  live entries: $LIVE_N   dead entries: $DEAD_N   unverifiable: $UNVERIFIABLE_N"
+  # `network probes` is reported, not just computed. It is the one number that separates
+  # "conclusions drawn from something measured" from "conclusions drawn from Doppler reads
+  # alone", and a consumer that has it does not have to re-derive this class.
+  echo "  live entries: $LIVE_N   dead entries: $DEAD_N   unverifiable: $UNVERIFIABLE_N   network probes: $PROBES_MADE"
   if [[ "$DEAD_N" -gt 0 ]]; then
     echo
     echo "STALE — these configs hold a token value Cloudflare no longer accepts:"
@@ -545,9 +620,20 @@ else
       echo "  host-unreachable / probe-failed: the probe measured nothing. Re-run. Do NOT"
       echo "    rotate — an overwrite here destroys a credential no one has shown to be bad."
     fi
-    if printf '%s\n' "${UNVERIFIABLE_ROWS[@]}" | grep -q '|refused-unstamped|'; then
-      echo "  refused-unstamped: something in FRONT of Cloudflare Access refused the probe."
-      echo "    Check the WAF / IP access rules for the host, not the credential."
+    if printf '%s\n' "${UNVERIFIABLE_ROWS[@]}" | grep -qE '\|(refused-unstamped|control-blocked)\|'; then
+      echo "  refused-unstamped / control-blocked: something in FRONT of Cloudflare Access"
+      echo "    refused the probe. Check the WAF / rate-limit / IP rules for the host, not"
+      echo "    the credential."
+    fi
+    if printf '%s\n' "${UNVERIFIABLE_ROWS[@]}" | grep -qE '\|(unexpected-status|stamped-non-refusal|gate-indeterminate)\|'; then
+      echo "  unexpected-status / stamped-non-refusal / gate-indeterminate: the edge gave an"
+      echo "    answer this probe cannot classify. LIVE requires positive proof of admission"
+      echo "    and DEAD requires positive proof of refusal, so neither was claimed. Do NOT"
+      echo "    rotate on the strength of these rows."
+    fi
+    if printf '%s\n' "${UNVERIFIABLE_ROWS[@]}" | grep -q '|detector-env|'; then
+      echo "  detector-env: a LOCAL fault on the runner (could not allocate a temp file)."
+      echo "    No request was sent. Nothing about the credential or the host is implied."
     fi
   fi
 fi

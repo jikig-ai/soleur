@@ -154,28 +154,56 @@ done
 # Without this a single MOCK_HTTP_CODE governs every host, which makes a fixture carrying
 # two bases structurally unable to express "this host admits, that one rejects" — the axis
 # the previous suite could not test at all.
-_c_code=""; _c_stamp=""; _r_code=""; _r_stamp=""
+# Field order: host|c_code|c_stamp|r_code|r_stamp|r_mitigated|c_access_redirect
+# The last two model the two refusal shapes that carry NO cf-access-* header and are
+# therefore invisible to the stamp alone: Cloudflare's own block/challenge (cf-mitigated)
+# and an Access identity-policy redirect to the IdP login (Location).
+_c_code=""; _c_stamp=""; _r_code=""; _r_stamp=""; _r_mitig=""; _c_redir=""
 if [[ -n "${MOCK_HOSTS:-}" && -f "${MOCK_HOSTS}" && -n "$_host" ]]; then
   _line=$(grep -E "^${_host}\|" "$MOCK_HOSTS" 2>/dev/null | head -1)
   if [[ -n "$_line" ]]; then
-    IFS='|' read -r _ _c_code _c_stamp _r_code _r_stamp <<< "$_line"
+    IFS='|' read -r _ _c_code _c_stamp _r_code _r_stamp _r_mitig _c_redir <<< "$_line"
   fi
 fi
+: "${_r_mitig:=0}"
+: "${_c_redir:=0}"
 : "${_c_code:=${MOCK_CONTROL_CODE:-403}}"
 : "${_c_stamp:=${MOCK_CONTROL_STAMPED:-1}}"
 : "${_r_code:=${MOCK_HTTP_CODE:-200}}"
-# Default the credentialed stamp from the code: 403 is a rejection (stamped), anything
-# else is an admitted response (unstamped). Cases that need the pathological combinations
-# — a stamped 200, an unstamped 403 (WAF in front of Access) — set it explicitly.
-if [[ -z "$_r_stamp" ]]; then
-  if [[ -n "${MOCK_CRED_STAMPED:-}" ]]; then _r_stamp="$MOCK_CRED_STAMPED"
-  elif [[ "$_r_code" == 403 ]]; then _r_stamp=1
-  else _r_stamp=0
-  fi
-fi
+# The credentialed stamp is NEVER inferred from the status code. It used to default
+# `403 -> stamped, else -> unstamped`, and that inference made the suite tautological: a
+# case setting only MOCK_HTTP_CODE produced the same verdict under a STAMP rule and under
+# a STATUS rule, so six cases could not tell the two apart. Measured — inserting
+# `elif [[ "$PROBE_CODE" == 200 ]]; then LIVE` ahead of the stamp test, i.e. restoring the
+# exact instrument this PR exists to remove, passed 27/27.
+#
+# Default is now UNSTAMPED, and any case asserting a rejection must say so explicitly.
+# That makes the stamp an INPUT the case controls rather than a shadow of the code.
+: "${_r_stamp:=${MOCK_CRED_STAMPED:-0}}"
 
 if [[ "$_credentialed" == 1 ]]; then _code="$_r_code"; _stamped="$_r_stamp"
 else _code="$_c_code"; _stamped="$_c_stamp"
+fi
+
+# Per-CREDENTIAL override: "<client-id>|<code>|<stamped>". Without this the stub keys on
+# HOST only, so every config in a fixture necessarily gets the same answer — and the suite
+# was structurally unable to express the incident that motivated this script ("5 of 7
+# configs stale after a dashboard roll"). Measured: dropping the id/secret from the memo
+# cache key passed 27/27, while under a credential-aware fixture it turned
+# `live: 1 dead: 1` into `live: 2 dead: 0` — a clean bill of health on the exact failure.
+if [[ "$_credentialed" == 1 && -n "${MOCK_CREDS:-}" && -f "${MOCK_CREDS}" ]]; then
+  _cid=""
+  for ((i=1; i<=$#; i++)); do
+    [[ "${!i}" == CF-Access-Client-Id:* ]] && _cid="${!i#CF-Access-Client-Id: }"
+  done
+  _cline=$(grep -F "${_cid}|" "$MOCK_CREDS" 2>/dev/null | head -1)
+  if [[ -n "$_cline" ]]; then
+    IFS='|' read -r _ _code _stamped <<< "$_cline"
+  fi
+fi
+
+if [[ "$_credentialed" == 1 ]]; then _mitig="$_r_mitig"; _redir=0
+else _mitig=0; _redir="$_c_redir"
 fi
 
 if [[ -n "$_hdrfile" ]]; then
@@ -186,6 +214,8 @@ if [[ -n "$_hdrfile" ]]; then
       printf 'cf-access-domain: %s\r\n' "$_host"
       printf 'cf-access-aud: 0000000000000000000000000000000000000000000000000000000000000000\r\n'
     fi
+    [[ "$_mitig" == 1 ]] && printf 'cf-mitigated: challenge\r\n'
+    [[ "$_redir" == 1 ]] && printf 'location: https://example.cloudflareaccess.com/cdn-cgi/access/login/%s\r\n' "$_host"
     printf '\r\n'
   } > "$_hdrfile" 2>/dev/null || true
 fi
@@ -201,6 +231,16 @@ fi
 exit "${MOCK_CURL_EXIT:-0}"
 STUB
 chmod +x "$STUB_DIR/curl"
+
+# `mktemp` stub. Only fails when a case asks it to, otherwise delegates to the real one.
+# Without this the `detector-env` branch is UNREACHABLE from the suite, and mapping a
+# local disk failure back onto "the host is unreachable" passed the whole battery.
+cat > "$STUB_DIR/mktemp" <<'STUB'
+#!/usr/bin/env bash
+[[ "${MOCK_MKTEMP_FAIL:-0}" == 1 ]] && exit 1
+exec /usr/bin/mktemp "$@"
+STUB
+chmod +x "$STUB_DIR/mktemp"
 
 # Run the SUT against a fixture world.
 #
@@ -235,6 +275,8 @@ run_sut() {
   MOCK_CRED_STAMPED="${MOCK_CRED_STAMPED:-}" \
   MOCK_CURL_EXIT="${MOCK_CURL_EXIT:-0}" \
   MOCK_HOSTS="${MOCK_HOSTS:-}" \
+  MOCK_CREDS="${MOCK_CREDS:-}" \
+  MOCK_MKTEMP_FAIL="${MOCK_MKTEMP_FAIL:-0}" \
   MOCK_DOPPLER_LOG="$DOPPLER_LOG" \
   APP_DOMAIN_BASE="soleur.ai" \
   PATH="$STUB_DIR:$PATH" \
@@ -245,8 +287,15 @@ run_sut() {
 # Count credentialed vs control probes from the recorded argv. The cache promise ("verify
 # each distinct pair once") had no instrument at all before this, which is why both memo
 # caches could be dead code through every green run.
-cred_probes()    { grep -c 'CF-Access-Client-Id' "$CURL_LOG" 2>/dev/null || printf '0'; }
-control_probes() { grep -c 'https://' "$CURL_LOG" 2>/dev/null || printf '0'; }
+# `|| true`, NOT `|| printf '0'`: grep -c PRINTS 0 and EXITS 1 on no match, so the printf
+# form concatenates to "00" and every `== "0"` comparison fails. That is the same
+# print-and-fail shape as curl's `-w` output that this suite pins in the SUT (T20) —
+# reproduced here in the helper written to measure it.
+cred_probes()    { grep -c 'CF-Access-Client-Id' "$CURL_LOG" 2>/dev/null || true; }
+# CONTROL probes are the ones WITHOUT credentials. The first version of this counted
+# `grep -c 'https://'` — every probe of either kind — so it could not have measured what
+# its name claimed even if a case had called it. It was also defined and never called.
+control_probes() { grep -cv 'CF-Access-Client-Id' "$CURL_LOG" 2>/dev/null || true; }
 
 echo "=== check-cloudflare-token-drift: Access service-token arm ==="
 echo ""
@@ -277,7 +326,7 @@ fi
 
 # T3 — DEAD verdict: 403 is Access refusing the pair, which is the stale-rotation shape.
 echo "T3: 403 from the Access-protected hostname -> DEAD, exit 1"
-run_sut t3 403 "$ACCESS_FIXTURE"
+MOCK_CRED_STAMPED=1 run_sut t3 403 "$ACCESS_FIXTURE"
 if [[ "$RC" == "1" ]] && grep -qE 'dead entries: [1-9]' "$OUT" && grep -qF 'REGISTRY_PUSH_ACCESS_TOKEN' "$OUT"; then
   pass "403 -> DEAD, exit 1, and the report names the key"
 else
@@ -364,7 +413,7 @@ fi
 # Measured: with only single-config fixtures, rewriting any of the three `for cfg in
 # "${CONFIGS[@]}"` loops to `"${CONFIGS[0]}"` left the suite 8/8 green.
 echo "T9: a token stale in ONE config of TWO is found, and the report names that config"
-run_sut t9 403 "prd|REGISTRY_PUSH_ACCESS_TOKEN_ID|${FIX_ID}
+MOCK_CRED_STAMPED=1 run_sut t9 403 "prd|REGISTRY_PUSH_ACCESS_TOKEN_ID|${FIX_ID}
 prd|REGISTRY_PUSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}
 prd_terraform|REGISTRY_PUSH_ACCESS_TOKEN_ID|${FIX_ID}
 prd_terraform|REGISTRY_PUSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}" $'prd\nprd_terraform'
@@ -449,7 +498,7 @@ fi
 # parseability, and the coexistence with stdout are all load-bearing.
 echo "T14: --json-file writes the verdict AND still prints the human report"
 JF="$TMP/t14.json"
-run_sut t14 403 "$ACCESS_FIXTURE" prd "--json-file $JF"
+MOCK_CRED_STAMPED=1 run_sut t14 403 "$ACCESS_FIXTURE" prd "--json-file $JF"
 # The human report is what distinguishes --json-file from --json. Without this assertion,
 # an implementation that silently behaved like --json (JSON on stdout, no report) would
 # pass every other check here.
@@ -501,7 +550,7 @@ else
 fi
 
 echo "T16: credentials still met Access's denial page -> DEAD"
-run_sut t16 403 "$CI_SSH_FIXTURE"
+MOCK_CRED_STAMPED=1 run_sut t16 403 "$CI_SSH_FIXTURE"
 if [[ "$RC" == "1" ]] && grep -qE 'dead entries: 1' "$OUT"; then
   pass "a stamped response with credentials attached grades DEAD"
 else
@@ -628,6 +677,175 @@ else
   fail "expected 2 --only-names reads for 2 configs, got $_n — a second read is a second chance to return empty silently, and an empty enumeration renders as a clean fleet"
 fi
 
+# ---------------------------------------------------------------------------
+# T26-T36 — the mutants that survived the first battery. Each case below exists
+# because a specific edit passed 27/27, and the pass-count is recorded with it.
+# ---------------------------------------------------------------------------
+
+echo "T26: a STAMPED 200 is not admission — the stamp decides, not the status"
+MOCK_CRED_STAMPED=1 run_sut t26 200 "$CI_SSH_FIXTURE"
+_t26=1
+grep -qE 'live entries: 0' "$OUT" || _t26=0
+grep -q 'stamped-non-refusal' "$OUT" || _t26=0
+[[ "$RC" == "1" ]] || _t26=0
+if [[ "$_t26" == "1" ]]; then
+  pass "a stamped 200 does not grade LIVE, and is not called a rejection either"
+else
+  fail "this is THE case that separates a stamp rule from a status rule; without it, inserting \`elif [[ \$PROBE_CODE == 200 ]]; then LIVE\` ahead of the stamp test — restoring the instrument this PR removes — passed 27/27 (rc=$RC)"
+fi
+
+echo "T27: an unstamped 5xx is NOT certified — LIVE requires positive 2xx success"
+run_sut t27 502 "$CI_SSH_FIXTURE"
+_t27=1
+grep -qE 'live entries: 0' "$OUT" || _t27=0
+grep -q 'unexpected-status' "$OUT" || _t27=0
+[[ "$RC" == "1" ]] || _t27=0
+if [[ "$_t27" == "1" ]]; then
+  pass "an unstamped 502 renders unexpected-status, never LIVE"
+else
+  fail "the first revision made LIVE the catch-all \`else\` and narrowed only 401/403 out of it — measured, a rate-limit 429, a challenge 503, an identity 302 and a tunnel 530 ALL graded LIVE at rc=0, on the one verdict that emails nobody (rc=$RC)"
+fi
+
+echo "T28: an unstamped 401 is a refusal, not admission"
+run_sut t28 401 "$CI_SSH_FIXTURE"
+if [[ "$RC" == "1" ]] && ! grep -qE 'live entries: 1' "$OUT"; then
+  pass "401 unstamped does not certify the credential"
+else
+  fail "narrowing the refusal set from {401,403} to {403} left an unstamped 401 grading LIVE at 27/27 (rc=$RC)"
+fi
+
+echo "T29: a Cloudflare-mitigated answer (rate limit / challenge) is a refusal"
+printf 'ssh.soleur.ai|403|1|429|0|1\n' > "$TMP/t29.hosts"
+MOCK_HOSTS="$TMP/t29.hosts" run_sut t29 429 "$CI_SSH_FIXTURE"
+_t29=1
+grep -qE 'live entries: 0' "$OUT" || _t29=0
+grep -q 'refused-unstamped' "$OUT" || _t29=0
+if [[ "$_t29" == "1" ]]; then
+  pass "cf-mitigated is read as Cloudflare's own block, not as admission"
+else
+  fail "a 429 rate-limit carries no cf-access-* stamp; without reading cf-mitigated it is indistinguishable from an admitted response and grades LIVE (rc=$RC)"
+fi
+
+echo "T30: refused-unstamped is labelled as ITSELF, not as an unreachable host"
+printf 'ssh.soleur.ai|403|1|429|0|1\n' > "$TMP/t30.hosts"
+MOCK_HOSTS="$TMP/t30.hosts" run_sut t30 429 "$CI_SSH_FIXTURE"
+if grep -q '\[refused-unstamped\]' "$OUT" && ! grep -q 'host-unreachable' "$OUT"; then
+  pass "the cause label names the WAF/challenge case specifically"
+else
+  fail "relabelling refused-unstamped to host-unreachable passed 27/27 — the two have opposite remedies ('check your WAF' vs 're-run, nothing was measured') and the workflow branches its email on this exact token"
+fi
+
+echo "T31: a credentialed probe that got no answer is UNVERIFIABLE, never LIVE"
+printf 'ssh.soleur.ai|403|1|000|0|0\n' > "$TMP/t31.hosts"
+MOCK_HOSTS="$TMP/t31.hosts" run_sut t31 000 "$CI_SSH_FIXTURE"
+_t31=1
+grep -qE 'live entries: 0' "$OUT" || _t31=0
+grep -q 'probe-failed' "$OUT" || _t31=0
+[[ "$RC" == "1" ]] || _t31=0
+if [[ "$_t31" == "1" ]]; then
+  pass "control succeeds, credentialed probe fails -> probe-failed"
+else
+  fail "this branch was UNREACHABLE in the suite: every 000 case failed the CONTROL probe too, so the credentialed arm was never entered and \`probe-failed -> LIVE\` passed 27/27 (rc=$RC)"
+fi
+
+echo "T32: an identity-policy redirect to the IdP is a GATE, not a missing gate"
+printf 'ssh.soleur.ai|302|0|200|0|0|1\n' > "$TMP/t32.hosts"
+MOCK_HOSTS="$TMP/t32.hosts" run_sut t32 200 "$CI_SSH_FIXTURE"
+if grep -qE 'live entries: 1' "$OUT" && [[ "$RC" == "0" ]]; then
+  pass "a 302 to the Access login page is recognised as Access answering, and the credential is then graded"
+else
+  fail "an Access app with an identity policy 302s anonymous requests and carries no cf-access-* header; calling that 'nothing is gating this host' puts a fabricated SECURITY claim in an operator email (rc=$RC)"
+fi
+
+echo "T33: gate-absent requires an anonymous request to actually SUCCEED"
+printf 'ssh.soleur.ai|530|0|200|0|0|0\n' > "$TMP/t33.hosts"
+MOCK_HOSTS="$TMP/t33.hosts" run_sut t33 200 "$CI_SSH_FIXTURE"
+if grep -q 'gate-indeterminate' "$OUT" && ! grep -q 'gate-absent' "$OUT"; then
+  pass "a 530 tunnel outage is not reported as a removed Access gate"
+else
+  fail "only a 2xx to an anonymous request is evidence nothing refused it; a 530/429/302 unstamped control graded gate-absent and emailed 'the host may be exposed' (rc=$RC)"
+fi
+
+echo "T34: a stale pair and a rotated pair in TWO configs are graded separately"
+printf '%s|200|0\n%s|403|1\n' "$FIX_ID" "${FIX_ID%.access}.stale" > "$TMP/t34.creds"
+MOCK_CREDS="$TMP/t34.creds" run_sut t34 200 "prd|CI_SSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd|CI_SSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}
+prd_terraform|CI_SSH_ACCESS_TOKEN_ID|${FIX_ID%.access}.stale
+prd_terraform|CI_SSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}" "prd
+prd_terraform"
+_t34=1
+grep -qE 'live entries: 1' "$OUT" || _t34=0
+grep -qE 'dead entries: 1' "$OUT" || _t34=0
+grep -q 'prd_terraform' "$OUT" || _t34=0
+if [[ "$_t34" == "1" ]]; then
+  pass "one rotated, one stale -> 1 live 1 dead, and the report names the stale config"
+else
+  fail "this is the incident the script exists to catch ('5 of 7 configs stale after a dashboard roll'). Dropping the credential from the memo cache key passed 27/27 because EVERY fixture wrote identical bytes to every config; under this fixture it reports 'live: 2 dead: 0' — a clean bill of health on the real failure (rc=$RC)"
+fi
+
+echo "T35: the CONTROL probe is cached per host, not repeated per credential"
+printf '%s|200|0\n%s|403|1\n' "$FIX_ID" "${FIX_ID%.access}.stale" > "$TMP/t35.creds"
+MOCK_CREDS="$TMP/t35.creds" run_sut t35 200 "prd|CI_SSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd|CI_SSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}
+prd_terraform|CI_SSH_ACCESS_TOKEN_ID|${FIX_ID%.access}.stale
+prd_terraform|CI_SSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}" "prd
+prd_terraform"
+_c=$(control_probes); _r=$(cred_probes)
+if [[ "$_c" == "1" && "$_r" == "2" ]]; then
+  pass "two distinct credentials on one host: 1 control probe, 2 credentialed"
+else
+  fail "expected 1 control + 2 credentialed, got control=$_c cred=$_r — the control probe doubles the request volume against the Access edge, which is what makes a rate-limit response reachable in the first place"
+fi
+
+echo "T36: the API-token memo cache is real too"
+run_sut t36 200 "prd|CF_API_TOKEN_X|tokenvalue
+prd_a|CF_API_TOKEN_X|tokenvalue
+prd_b|CF_API_TOKEN_X|tokenvalue" "prd
+prd_a
+prd_b"
+_n=$(grep -c 'tokens/verify' "$CURL_LOG" 2>/dev/null || printf '0')
+if [[ "$_n" == "1" ]]; then
+  pass "three configs, one identical API token, one verify call"
+else
+  fail "expected 1 /user/tokens/verify call for 3 configs holding one value, got $_n — the SUT comment says the subshell bug hit 'every memoised helper in this file', but only the Access cache had an instrument, so neutering this one passed 27/27"
+fi
+
+echo "T37: the probe does NOT follow redirects"
+run_sut t37 200 "$CI_SSH_FIXTURE"
+if ! grep -qE '(^| )(-L|--location)( |$)' "$CURL_LOG"; then
+  pass "no -L: header blocks cannot come from a different response than %{http_code}"
+else
+  fail "curl APPENDS each response's headers into one -D file, so under -L the stamp grep (an OR over the whole file) can see an early block's stamp while %{http_code} reports the final response — an admitted-after-redirect would grade DEAD, the destructive direction"
+fi
+
+echo "T38: a STAMPED 401 is a refusal and must stay DEAD"
+MOCK_CRED_STAMPED=1 run_sut t38 401 "$CI_SSH_FIXTURE"
+if [[ "$RC" == "1" ]] && grep -qE 'dead entries: 1' "$OUT"; then
+  pass "401 with the Access stamp grades DEAD, same as 403"
+else
+  fail "narrowing the DEAD refusal set from {401,403} to {403} passed 39/39 — a stamped 401 is Access refusing the credential and must not be downgraded to 'could not verify' (rc=$RC)"
+fi
+
+echo "T39: the report states how many network probes were actually made"
+run_sut t39 200 "$CI_SSH_FIXTURE"
+if grep -qE 'network probes: [1-9]' "$OUT"; then
+  pass "the summary line carries a non-zero probe count"
+else
+  fail "deleting the probe counter's increment passed 39/39: the one number separating 'measured something' from 'concluded from Doppler reads alone' was computed and never reported"
+fi
+
+echo "T40: a local mktemp failure is NOT reported as an unreachable host"
+MOCK_MKTEMP_FAIL=1 run_sut t40 200 "$CI_SSH_FIXTURE"
+_t40=1
+grep -q 'detector-env' "$OUT" || _t40=0
+grep -q 'host-unreachable' "$OUT" && _t40=0
+[[ "$(cred_probes)" == "0" ]] || _t40=0
+if [[ "$_t40" == "1" ]]; then
+  pass "a full/read-only TMPDIR renders detector-env, with zero requests sent"
+else
+  fail "mapping a local disk fault onto 'the host got no answer (timeout / DNS / TLS)' sends the operator to investigate Cloudflare while the runner disk is full — and zero requests were sent (rc=$RC)"
+fi
+
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Without it, deleting every assertion call yields
@@ -641,8 +859,8 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # below the real count cannot distinguish "the feature's tests were removed" from "they
 # passed". Still a floor, not equality, so adding a case does not require editing it — but
 # it is now close enough to the count that deleting a feature's cases trips it.
-if [[ "$((PASS + FAIL))" -lt 24 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 24. The suite did not execute what it claims to." >&2
+if [[ "$((PASS + FAIL))" -lt 40 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 40. The suite did not execute what it claims to." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
