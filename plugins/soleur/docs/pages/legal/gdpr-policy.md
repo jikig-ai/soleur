@@ -233,6 +233,7 @@ The following data may be processed by third-party services when users interact 
 |---|---|---|
 | IP address, browser metadata | GitHub (via GitHub Pages) | Hosting documentation site |
 | Prompts, code context | Anthropic (via Claude API) | Powering AI agent responses (user authenticates with own credentials) |
+| Repository, Discord, Hacker News, X and Bluesky activity; repository source; PR and issue content | Anthropic PBC (via Claude API), as **Jikigai's processor** under a **Jikigai-held** key | Automated community-awareness summaries (PA-31, PA-32) and continuous-integration checks (PA-33). Distinct from the row above, which covers the locally-installed plugin under **your own** credentials. *(Row added 2026-07-31, ref #7100: this table previously described Anthropic egress as user-authenticated only.)* |
 | GitHub account data | GitHub (via repository) | Issue tracking, contributions |
 | Name, email, inquiry content | Proton AG (via Proton Mail) | Handling legal and GDPR inquiries (<legal@jikigai.com>) |
 | GitHub username, signature timestamp, PR reference | GitHub (via CLA Assistant) | Recording CLA signature for contributor IP license grants |
