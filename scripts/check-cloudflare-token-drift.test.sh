@@ -59,6 +59,7 @@ FIX_SECRET="fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
 # two-config case that kills all three of those mutants.
 cat > "$STUB_DIR/doppler" <<'STUB'
 #!/usr/bin/env bash
+[[ -n "${MOCK_DOPPLER_LOG:-}" ]] && printf '%s\n' "$*" >> "$MOCK_DOPPLER_LOG"
 case "${1:-}" in
   configs)
     printf '['
@@ -116,29 +117,130 @@ chmod +x "$STUB_DIR/doppler"
 # `-w` status code, the API arm parses a JSON BODY. A stub that returned the status code
 # as the body made the API arm's json.load() raise on every call, so it always printed
 # DEAD — which meant a mutation forcing every API token to LIVE was invisible.
+#
+# It also MODELS THE ACCESS STAMP and `-D`, because the verdict is now drawn from the
+# response HEADERS, not the status code. A stub that emitted no headers would make every
+# response indistinguishable from an ungated one, so every case would grade `gate-absent`
+# — the stub would decide the verdict instead of observing it.
+#
+# Shapes are the MEASURED ones (2026-08-01, real hosts):
+#   uncredentialed -> 403 + cf-access-aud + cf-access-domain   (Access denial page)
+#   admitted       -> 200, zero-byte body, NO cf-access-*       (edge answered)
+# so the stub's defaults reproduce production rather than a convenient invention.
+#
+# And it MODELS curl's EXIT STATUS. The old stub ended `exit 0` unconditionally, which is
+# how `code=$(curl ... || printf '000')` shipped: real curl prints its -w output AND exits
+# non-zero on a transport failure, concatenating to `000000` / `200000`. A stub that
+# cannot exit non-zero cannot see that.
 cat > "$STUB_DIR/curl" <<'STUB'
 #!/usr/bin/env bash
 [[ -n "${MOCK_CURL_LOG:-}" ]] && printf '%s\n' "$*" >> "$MOCK_CURL_LOG"
 _want_code=0
 _outfile=""
+_hdrfile=""
+_credentialed=0
+_host=""
 for ((i=1; i<=$#; i++)); do
   case "${!i}" in
     -w) j=$((i+1)); [[ "${!j}" == *'%{http_code}'* ]] && _want_code=1 ;;
     -o) j=$((i+1)); _outfile="${!j}" ;;
+    -D) j=$((i+1)); _hdrfile="${!j}" ;;
+    -H) j=$((i+1)); [[ "${!j}" == CF-Access-Client-Id:* ]] && _credentialed=1 ;;
+    https://*) _host="${!i}"; _host="${_host#https://}"; _host="${_host%%/*}" ;;
   esac
 done
-# Body first (the API arm reads stdout when there is no -o; with -o it goes to the file).
+
+# Per-host override file: "<host>|<control_code>|<control_stamped>|<cred_code>|<cred_stamped>".
+# Without this a single MOCK_HTTP_CODE governs every host, which makes a fixture carrying
+# two bases structurally unable to express "this host admits, that one rejects" — the axis
+# the previous suite could not test at all.
+# Field order: host|c_code|c_stamp|r_code|r_stamp|r_mitigated|c_access_redirect
+# The last two model the two refusal shapes that carry NO cf-access-* header and are
+# therefore invisible to the stamp alone: Cloudflare's own block/challenge (cf-mitigated)
+# and an Access identity-policy redirect to the IdP login (Location).
+_c_code=""; _c_stamp=""; _r_code=""; _r_stamp=""; _r_mitig=""; _c_redir=""
+if [[ -n "${MOCK_HOSTS:-}" && -f "${MOCK_HOSTS}" && -n "$_host" ]]; then
+  _line=$(grep -E "^${_host}\|" "$MOCK_HOSTS" 2>/dev/null | head -1)
+  if [[ -n "$_line" ]]; then
+    IFS='|' read -r _ _c_code _c_stamp _r_code _r_stamp _r_mitig _c_redir <<< "$_line"
+  fi
+fi
+: "${_r_mitig:=0}"
+: "${_c_redir:=0}"
+: "${_c_code:=${MOCK_CONTROL_CODE:-403}}"
+: "${_c_stamp:=${MOCK_CONTROL_STAMPED:-1}}"
+: "${_r_code:=${MOCK_HTTP_CODE:-200}}"
+# The credentialed stamp is NEVER inferred from the status code. It used to default
+# `403 -> stamped, else -> unstamped`, and that inference made the suite tautological: a
+# case setting only MOCK_HTTP_CODE produced the same verdict under a STAMP rule and under
+# a STATUS rule, so six cases could not tell the two apart. Measured — inserting
+# `elif [[ "$PROBE_CODE" == 200 ]]; then LIVE` ahead of the stamp test, i.e. restoring the
+# exact instrument this PR exists to remove, passed 27/27.
+#
+# Default is now UNSTAMPED, and any case asserting a rejection must say so explicitly.
+# That makes the stamp an INPUT the case controls rather than a shadow of the code.
+: "${_r_stamp:=${MOCK_CRED_STAMPED:-0}}"
+
+if [[ "$_credentialed" == 1 ]]; then _code="$_r_code"; _stamped="$_r_stamp"
+else _code="$_c_code"; _stamped="$_c_stamp"
+fi
+
+# Per-CREDENTIAL override: "<client-id>|<code>|<stamped>". Without this the stub keys on
+# HOST only, so every config in a fixture necessarily gets the same answer — and the suite
+# was structurally unable to express the incident that motivated this script ("5 of 7
+# configs stale after a dashboard roll"). Measured: dropping the id/secret from the memo
+# cache key passed 27/27, while under a credential-aware fixture it turned
+# `live: 1 dead: 1` into `live: 2 dead: 0` — a clean bill of health on the exact failure.
+if [[ "$_credentialed" == 1 && -n "${MOCK_CREDS:-}" && -f "${MOCK_CREDS}" ]]; then
+  _cid=""
+  for ((i=1; i<=$#; i++)); do
+    [[ "${!i}" == CF-Access-Client-Id:* ]] && _cid="${!i#CF-Access-Client-Id: }"
+  done
+  _cline=$(grep -F "${_cid}|" "$MOCK_CREDS" 2>/dev/null | head -1)
+  if [[ -n "$_cline" ]]; then
+    IFS='|' read -r _ _code _stamped <<< "$_cline"
+  fi
+fi
+
+if [[ "$_credentialed" == 1 ]]; then _mitig="$_r_mitig"; _redir=0
+else _mitig=0; _redir="$_c_redir"
+fi
+
+if [[ -n "$_hdrfile" ]]; then
+  {
+    printf 'HTTP/2 %s \r\n' "$_code"
+    printf 'server: cloudflare\r\n'
+    if [[ "$_stamped" == 1 ]]; then
+      printf 'cf-access-domain: %s\r\n' "$_host"
+      printf 'cf-access-aud: 0000000000000000000000000000000000000000000000000000000000000000\r\n'
+    fi
+    [[ "$_mitig" == 1 ]] && printf 'cf-mitigated: challenge\r\n'
+    [[ "$_redir" == 1 ]] && printf 'location: https://example.cloudflareaccess.com/cdn-cgi/access/login/%s\r\n' "$_host"
+    printf '\r\n'
+  } > "$_hdrfile" 2>/dev/null || true
+fi
+
 _body="${MOCK_HTTP_BODY:-}"
 if [[ -n "$_outfile" ]]; then
   printf '%s' "$_body" > "$_outfile" 2>/dev/null || true
 else
   printf '%s' "$_body"
 fi
-# Only emit the status code when -w actually asked for it.
-[[ "$_want_code" == 1 ]] && printf '%s' "${MOCK_HTTP_CODE:-200}"
-exit 0
+[[ "$_want_code" == 1 ]] && printf '%s' "$_code"
+# Transport failure: curl still emits -w, then exits non-zero. Both halves matter.
+exit "${MOCK_CURL_EXIT:-0}"
 STUB
 chmod +x "$STUB_DIR/curl"
+
+# `mktemp` stub. Only fails when a case asks it to, otherwise delegates to the real one.
+# Without this the `detector-env` branch is UNREACHABLE from the suite, and mapping a
+# local disk failure back onto "the host is unreachable" passed the whole battery.
+cat > "$STUB_DIR/mktemp" <<'STUB'
+#!/usr/bin/env bash
+[[ "${MOCK_MKTEMP_FAIL:-0}" == 1 ]] && exit 1
+exec /usr/bin/mktemp "$@"
+STUB
+chmod +x "$STUB_DIR/mktemp"
 
 # Run the SUT against a fixture world.
 #
@@ -155,10 +257,12 @@ chmod +x "$STUB_DIR/curl"
 RC=""
 OUT=""
 CURL_LOG=""
+DOPPLER_LOG=""
 run_sut() {
   local label="$1" http_code="$2" secrets_body="$3" configs_body="${4:-prd}" only_arg="${5:-}"
   local cfgs="$TMP/$label.configs" secs="$TMP/$label.secrets"
-  OUT="$TMP/$label.out"; CURL_LOG="$TMP/$label.curl"
+  OUT="$TMP/$label.out"; CURL_LOG="$TMP/$label.curl"; DOPPLER_LOG="$TMP/$label.doppler"
+  : > "$DOPPLER_LOG"
   printf '%s\n' "$configs_body" > "$cfgs" || { echo "FATAL: fixture write failed"; exit 2; }
   printf '%s\n' "$secrets_body" > "$secs" || { echo "FATAL: fixture write failed"; exit 2; }
   : > "$CURL_LOG"
@@ -166,11 +270,32 @@ run_sut() {
   MOCK_CONFIGS="$cfgs" MOCK_SECRETS="$secs" \
   MOCK_HTTP_CODE="$http_code" MOCK_CURL_LOG="$CURL_LOG" \
   MOCK_HTTP_BODY="${MOCK_HTTP_BODY:-}" \
+  MOCK_CONTROL_CODE="${MOCK_CONTROL_CODE:-403}" \
+  MOCK_CONTROL_STAMPED="${MOCK_CONTROL_STAMPED:-1}" \
+  MOCK_CRED_STAMPED="${MOCK_CRED_STAMPED:-}" \
+  MOCK_CURL_EXIT="${MOCK_CURL_EXIT:-0}" \
+  MOCK_HOSTS="${MOCK_HOSTS:-}" \
+  MOCK_CREDS="${MOCK_CREDS:-}" \
+  MOCK_MKTEMP_FAIL="${MOCK_MKTEMP_FAIL:-0}" \
+  MOCK_DOPPLER_LOG="$DOPPLER_LOG" \
   APP_DOMAIN_BASE="soleur.ai" \
   PATH="$STUB_DIR:$PATH" \
     bash "$SUT" $only_arg > "$OUT" 2>&1
   RC=$?
 }
+
+# Count credentialed vs control probes from the recorded argv. The cache promise ("verify
+# each distinct pair once") had no instrument at all before this, which is why both memo
+# caches could be dead code through every green run.
+# `|| true`, NOT `|| printf '0'`: grep -c PRINTS 0 and EXITS 1 on no match, so the printf
+# form concatenates to "00" and every `== "0"` comparison fails. That is the same
+# print-and-fail shape as curl's `-w` output that this suite pins in the SUT (T20) —
+# reproduced here in the helper written to measure it.
+cred_probes()    { grep -c 'CF-Access-Client-Id' "$CURL_LOG" 2>/dev/null || true; }
+# CONTROL probes are the ones WITHOUT credentials. The first version of this counted
+# `grep -c 'https://'` — every probe of either kind — so it could not have measured what
+# its name claimed even if a case had called it. It was also defined and never called.
+control_probes() { grep -cv 'CF-Access-Client-Id' "$CURL_LOG" 2>/dev/null || true; }
 
 echo "=== check-cloudflare-token-drift: Access service-token arm ==="
 echo ""
@@ -201,7 +326,7 @@ fi
 
 # T3 — DEAD verdict: 403 is Access refusing the pair, which is the stale-rotation shape.
 echo "T3: 403 from the Access-protected hostname -> DEAD, exit 1"
-run_sut t3 403 "$ACCESS_FIXTURE"
+MOCK_CRED_STAMPED=1 run_sut t3 403 "$ACCESS_FIXTURE"
 if [[ "$RC" == "1" ]] && grep -qE 'dead entries: [1-9]' "$OUT" && grep -qF 'REGISTRY_PUSH_ACCESS_TOKEN' "$OUT"; then
   pass "403 -> DEAD, exit 1, and the report names the key"
 else
@@ -229,12 +354,24 @@ fi
 # T5 — fail CLOSED on a non-200/403 response. A timeout or 5xx means this script did not
 # LEARN the token is good, and "did not learn" must never render as LIVE. Every
 # silent-green bug in this area has that same shape.
-echo "T5: a 000/5xx response is NOT treated as live (fail closed)"
-run_sut t5 000 "$ACCESS_FIXTURE"
-if [[ "$RC" == "1" ]] && grep -qE 'dead entries: [1-9]' "$OUT"; then
-  pass "unreachable -> DEAD, exit 1 (never silently LIVE)"
+# T5 — fail-closed on a probe that measured nothing. The ASSERTION CHANGED with the
+# Access-stamp rewrite and the change is the point: this used to require `dead entries:
+# >= 1`, i.e. an unreachable host rendered the credential STALE. That is a cause nothing
+# measured, and the DEAD section's remedy is "set the live value on the prd ROOT config"
+# — so a DNS blip instructed the operator to overwrite a healthy credential across every
+# config that inherits it. Fail-closed is preserved (exit 1, never LIVE); what changed is
+# that it now fails closed to UNVERIFIABLE, which carries a "do NOT rotate" remedy.
+echo "T5: a probe that got no answer is NOT live and NOT stale (fail closed, no false cause)"
+MOCK_CURL_EXIT=7 run_sut t5 000 "$ACCESS_FIXTURE"
+_t5=1
+[[ "$RC" == "1" ]] || _t5=0
+grep -qE 'live entries: 0' "$OUT" || _t5=0
+grep -qE 'unverifiable: [1-9]' "$OUT" || _t5=0
+grep -q 'STALE' "$OUT" && _t5=0
+if [[ "$_t5" == "1" ]]; then
+  pass "unreachable -> UNVERIFIABLE, exit 1, and never under the STALE heading"
 else
-  fail "an unreachable probe must fail closed, got rc=$RC"
+  fail "an unreachable probe must fail closed WITHOUT claiming the credential is stale — the STALE remedy overwrites the ROOT config every branch inherits (rc=$RC)"
 fi
 
 # T6 — a half-propagated rotation. One half present authenticates as nothing, and is a
@@ -276,7 +413,7 @@ fi
 # Measured: with only single-config fixtures, rewriting any of the three `for cfg in
 # "${CONFIGS[@]}"` loops to `"${CONFIGS[0]}"` left the suite 8/8 green.
 echo "T9: a token stale in ONE config of TWO is found, and the report names that config"
-run_sut t9 403 "prd|REGISTRY_PUSH_ACCESS_TOKEN_ID|${FIX_ID}
+MOCK_CRED_STAMPED=1 run_sut t9 403 "prd|REGISTRY_PUSH_ACCESS_TOKEN_ID|${FIX_ID}
 prd|REGISTRY_PUSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}
 prd_terraform|REGISTRY_PUSH_ACCESS_TOKEN_ID|${FIX_ID}
 prd_terraform|REGISTRY_PUSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}" $'prd\nprd_terraform'
@@ -361,7 +498,7 @@ fi
 # parseability, and the coexistence with stdout are all load-bearing.
 echo "T14: --json-file writes the verdict AND still prints the human report"
 JF="$TMP/t14.json"
-run_sut t14 403 "$ACCESS_FIXTURE" prd "--json-file $JF"
+MOCK_CRED_STAMPED=1 run_sut t14 403 "$ACCESS_FIXTURE" prd "--json-file $JF"
 # The human report is what distinguishes --json-file from --json. Without this assertion,
 # an implementation that silently behaved like --json (JSON on stdout, no report) would
 # pass every other check here.
@@ -386,14 +523,344 @@ else
   fail "unwritable --json-file path must exit 2, got rc=$RC"
 fi
 
+# ---------------------------------------------------------------------------
+# T15-T24 — the ACCESS-STAMP arm (replaces the status-code arm removed with #7127).
+#
+# What is being pinned: the verdict comes from whether Cloudflare Access's own denial
+# stamp (cf-access-aud / cf-access-domain) is still on the response once credentials are
+# attached — NOT from the status code.
+#
+# The predecessor graded 5xx as LIVE on the theory that an admitted request reaches
+# cloudflared, which then fails to speak HTTP to sshd. MEASURED 2026-08-01 against
+# registry.soleur.ai with a live credential: the admitted response is HTTP 200, zero-byte
+# body, no cf-access-* header. tunnel.tf records that ssh:// and tcp:// are the same
+# raw-TCP service type, so ssh.<base> answers the same way — the 5xx arm could never fire
+# and 200 fell to the catch-all, trading DEAD-forever for UNVERIFIABLE-forever. T15 is
+# that case, and it is the one the previous suite had no test for.
+# ---------------------------------------------------------------------------
+CI_SSH_FIXTURE="prd|CI_SSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd|CI_SSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}"
+
+echo "T15: admitted probe answers 200 with NO Access stamp -> LIVE"
+run_sut t15 200 "$CI_SSH_FIXTURE"
+if [[ "$RC" == "0" ]] && grep -qE 'live entries: 1' "$OUT" && grep -qE 'dead entries: 0' "$OUT"; then
+  pass "an empty 200 with the stamp gone grades LIVE — the measured admitted shape"
+else
+  fail "the MEASURED admitted response (200, no cf-access-*) must grade LIVE; a rule that cannot accept it reports a healthy token unverifiable forever (rc=$RC)"
+fi
+
+echo "T16: credentials still met Access's denial page -> DEAD"
+MOCK_CRED_STAMPED=1 run_sut t16 403 "$CI_SSH_FIXTURE"
+if [[ "$RC" == "1" ]] && grep -qE 'dead entries: 1' "$OUT"; then
+  pass "a stamped response with credentials attached grades DEAD"
+else
+  fail "a stamped 403 WITH credentials means Access refused them — must stay DEAD (rc=$RC)"
+fi
+
+echo "T17: an unstamped 403 (WAF/bot-fight in FRONT of Access) is NOT a stale credential"
+MOCK_CRED_STAMPED=0 run_sut t17 403 "$CI_SSH_FIXTURE"
+if [[ "$RC" != "0" ]] && ! grep -qE 'dead entries: 1' "$OUT"; then
+  pass "a 403 without the Access stamp does not render as a stale credential"
+else
+  fail "an unstamped 403 comes from in FRONT of Access (WAF, bot-fight, IP rule); grading it DEAD sends the operator to overwrite a healthy secret (rc=$RC)"
+fi
+
+echo "T18: control probe unrefused -> gate-absent, never LIVE"
+MOCK_CONTROL_STAMPED=0 MOCK_CONTROL_CODE=200 run_sut t18 200 "$CI_SSH_FIXTURE"
+_t18=1
+grep -qE 'live entries: 0' "$OUT" || _t18=0
+grep -q 'gate-absent' "$OUT" || _t18=0
+[[ "$RC" == "1" ]] || _t18=0
+if [[ "$_t18" == "1" ]]; then
+  pass "an ungated host renders gate-absent and never certifies the credential"
+else
+  fail "if an UNCREDENTIALED request is not refused, nothing is gating the host — grading the credential LIVE there is a false-LIVE on the one verdict that emails nobody (rc=$RC)"
+fi
+
+# The anchor here is `access_hostname_for`, NOT the sentence "add a hostname mapping":
+# the report wraps that phrase across two echo lines, so a grep for it matches nothing on
+# ANY output and the assertion passed for the wrong reason. Caught by mutation M8, which
+# forced the no-probe-configured footer to print unconditionally and still left the suite
+# 26/26. Anchor on a token that survives line-wrapping.
+echo "T19: gate-absent names the GATE, not a hostname mapping"
+MOCK_CONTROL_STAMPED=0 MOCK_CONTROL_CODE=200 run_sut t19 200 "$CI_SSH_FIXTURE"
+if grep -q 'gate-absent' "$OUT" && ! grep -q 'access_hostname_for' "$OUT"; then
+  pass "the gate-absent remedy does not tell the operator to add a mapping that exists"
+else
+  fail "gate-absent must not print the no-probe-configured remedy — CI_SSH_ACCESS_TOKEN already HAS a mapping, so 'add a hostname mapping' is unperformable and the state never clears"
+fi
+
+echo "T20: a transport failure renders UNVERIFIABLE and never fabricates a status"
+MOCK_CURL_EXIT=7 run_sut t20 000 "$CI_SSH_FIXTURE"
+_t20=1
+grep -qE 'live entries: 0' "$OUT" || _t20=0
+grep -qE 'unverifiable: 1' "$OUT" || _t20=0
+grep -q '000000' "$OUT" && _t20=0
+[[ "$RC" == "1" ]] || _t20=0
+if [[ "$_t20" == "1" ]]; then
+  pass "curl exiting non-zero yields UNVERIFIABLE with no concatenated status"
+else
+  fail "real curl prints its -w output AND exits non-zero; \`\$(curl ... || printf '000')\` concatenates to 000000/200000, and 'did not learn' must never read as LIVE (rc=$RC)"
+fi
+
+echo "T21: a transport failure must NOT print the mapping remedy either"
+MOCK_CURL_EXIT=7 run_sut t21 000 "$CI_SSH_FIXTURE"
+if ! grep -q 'add a hostname mapping' "$OUT" && grep -qE 'host-unreachable|probe-failed' "$OUT"; then
+  pass "an unreachable host is reported as unreachable, not as a detector coverage gap"
+else
+  fail "a DNS/TLS blip must not email the operator 'add a hostname mapping to access_hostname_for()' for a key that has one — that is naming a cause nothing measured"
+fi
+
+echo "T22: the pair verdict is cached — N configs holding one pair cost ONE credentialed probe"
+run_sut t22 200 "prd|CI_SSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd|CI_SSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}
+prd_a|CI_SSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd_a|CI_SSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}
+prd_b|CI_SSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd_b|CI_SSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}" "prd
+prd_a
+prd_b"
+_n=$(cred_probes)
+if [[ "$_n" == "1" ]]; then
+  pass "three configs, one identical pair, one credentialed probe"
+else
+  fail "expected 1 credentialed probe for 3 configs holding identical bytes, got $_n — the memo cache is dead (command substitution runs it in a subshell), so one transient blip grades the SAME BYTES live in two configs and dead in the third, and the DEAD remedy overwrites the ROOT config all three inherit"
+fi
+
+echo "T23: per-base dispatch — one admitting host and one rejecting host in ONE run"
+printf 'ssh.soleur.ai|403|1|200|0\nregistry.soleur.ai|403|1|403|1\n' > "$TMP/t23.hosts"
+MOCK_HOSTS="$TMP/t23.hosts" run_sut t23 200 "prd|CI_SSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd|CI_SSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}
+prd|REGISTRY_PUSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd|REGISTRY_PUSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}"
+if grep -qE 'live entries: 1' "$OUT" && grep -qE 'dead entries: 1' "$OUT"; then
+  pass "each base is graded against its OWN host's answer"
+else
+  fail "a fixture carrying two bases must grade each against its own host; every previous fixture held one base, so a sticky/first-base-wins dispatch was invisible (rc=$RC)"
+fi
+
+# Both halves are NAMED but hold no value — the shape a Doppler token scoped to read
+# secret names but not values produces, and the shape of a read that fails mid-scan. Every
+# `doppler secrets get` returns empty, every loop `continue`s, and nothing is measured.
+echo "T24: a run that concludes NOTHING is not a clean fleet"
+run_sut t24 200 "prd|CI_SSH_ACCESS_TOKEN_ID|
+prd|CI_SSH_ACCESS_TOKEN_SECRET|"
+_t24=1
+[[ "$RC" == "2" ]] || _t24=0
+grep -q 'PROBED ZERO' "$OUT" || _t24=0
+if [[ "$_t24" == "1" ]]; then
+  pass "zero probes exits 2 rather than reporting a clean fleet"
+else
+  fail "a Doppler token that reads NAMES but not VALUES makes every read empty and every loop continue; falling through to exit 0 reports 'clean' with nothing measured and the alarm goes dark (rc=$RC)"
+fi
+
+# T25 — the enumeration is read ONCE per config, and its exit status is checked.
+#
+# The file's own comment promised "ONE --only-names read per config", and the code did two:
+# the second was `doppler ... 2>/dev/null || true`, the exact shape the comment three lines
+# below it condemns as "how a scope-denied token renders as a clean fleet". Measured on the
+# unfixed code with the second read failing: a genuinely stale credential reported
+# `live entries: 1  dead entries: 0`, exit 0.
+#
+# Nothing pinned it — mutation M10 restored the second read and the suite stayed 26/26 —
+# because no test had ever counted a Doppler call. This is that instrument.
+echo "T25: secret NAMES are enumerated once per config, not twice"
+run_sut t25 200 "prd|CI_SSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd|CI_SSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}
+prd_a|CI_SSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd_a|CI_SSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}" "prd
+prd_a"
+_n=$(grep -c -- '--only-names' "$DOPPLER_LOG" 2>/dev/null || printf '0')
+if [[ "$_n" == "2" ]]; then
+  pass "two configs, two --only-names reads (one each)"
+else
+  fail "expected 2 --only-names reads for 2 configs, got $_n — a second read is a second chance to return empty silently, and an empty enumeration renders as a clean fleet"
+fi
+
+# ---------------------------------------------------------------------------
+# T26-T36 — the mutants that survived the first battery. Each case below exists
+# because a specific edit passed 27/27, and the pass-count is recorded with it.
+# ---------------------------------------------------------------------------
+
+echo "T26: a STAMPED 200 is not admission — the stamp decides, not the status"
+MOCK_CRED_STAMPED=1 run_sut t26 200 "$CI_SSH_FIXTURE"
+_t26=1
+grep -qE 'live entries: 0' "$OUT" || _t26=0
+grep -q 'stamped-non-refusal' "$OUT" || _t26=0
+[[ "$RC" == "1" ]] || _t26=0
+if [[ "$_t26" == "1" ]]; then
+  pass "a stamped 200 does not grade LIVE, and is not called a rejection either"
+else
+  fail "this is THE case that separates a stamp rule from a status rule; without it, inserting \`elif [[ \$PROBE_CODE == 200 ]]; then LIVE\` ahead of the stamp test — restoring the instrument this PR removes — passed 27/27 (rc=$RC)"
+fi
+
+echo "T27: an unstamped 5xx is NOT certified — LIVE requires positive 2xx success"
+run_sut t27 502 "$CI_SSH_FIXTURE"
+_t27=1
+grep -qE 'live entries: 0' "$OUT" || _t27=0
+grep -q 'unexpected-status' "$OUT" || _t27=0
+[[ "$RC" == "1" ]] || _t27=0
+if [[ "$_t27" == "1" ]]; then
+  pass "an unstamped 502 renders unexpected-status, never LIVE"
+else
+  fail "the first revision made LIVE the catch-all \`else\` and narrowed only 401/403 out of it — measured, a rate-limit 429, a challenge 503, an identity 302 and a tunnel 530 ALL graded LIVE at rc=0, on the one verdict that emails nobody (rc=$RC)"
+fi
+
+echo "T28: an unstamped 401 is a refusal, not admission"
+run_sut t28 401 "$CI_SSH_FIXTURE"
+if [[ "$RC" == "1" ]] && ! grep -qE 'live entries: 1' "$OUT"; then
+  pass "401 unstamped does not certify the credential"
+else
+  fail "narrowing the refusal set from {401,403} to {403} left an unstamped 401 grading LIVE at 27/27 (rc=$RC)"
+fi
+
+echo "T29: a Cloudflare-mitigated answer (rate limit / challenge) is a refusal"
+printf 'ssh.soleur.ai|403|1|429|0|1\n' > "$TMP/t29.hosts"
+MOCK_HOSTS="$TMP/t29.hosts" run_sut t29 429 "$CI_SSH_FIXTURE"
+_t29=1
+grep -qE 'live entries: 0' "$OUT" || _t29=0
+grep -q 'refused-unstamped' "$OUT" || _t29=0
+if [[ "$_t29" == "1" ]]; then
+  pass "cf-mitigated is read as Cloudflare's own block, not as admission"
+else
+  fail "a 429 rate-limit carries no cf-access-* stamp; without reading cf-mitigated it is indistinguishable from an admitted response and grades LIVE (rc=$RC)"
+fi
+
+echo "T30: refused-unstamped is labelled as ITSELF, not as an unreachable host"
+printf 'ssh.soleur.ai|403|1|429|0|1\n' > "$TMP/t30.hosts"
+MOCK_HOSTS="$TMP/t30.hosts" run_sut t30 429 "$CI_SSH_FIXTURE"
+if grep -q '\[refused-unstamped\]' "$OUT" && ! grep -q 'host-unreachable' "$OUT"; then
+  pass "the cause label names the WAF/challenge case specifically"
+else
+  fail "relabelling refused-unstamped to host-unreachable passed 27/27 — the two have opposite remedies ('check your WAF' vs 're-run, nothing was measured') and the workflow branches its email on this exact token"
+fi
+
+echo "T31: a credentialed probe that got no answer is UNVERIFIABLE, never LIVE"
+printf 'ssh.soleur.ai|403|1|000|0|0\n' > "$TMP/t31.hosts"
+MOCK_HOSTS="$TMP/t31.hosts" run_sut t31 000 "$CI_SSH_FIXTURE"
+_t31=1
+grep -qE 'live entries: 0' "$OUT" || _t31=0
+grep -q 'probe-failed' "$OUT" || _t31=0
+[[ "$RC" == "1" ]] || _t31=0
+if [[ "$_t31" == "1" ]]; then
+  pass "control succeeds, credentialed probe fails -> probe-failed"
+else
+  fail "this branch was UNREACHABLE in the suite: every 000 case failed the CONTROL probe too, so the credentialed arm was never entered and \`probe-failed -> LIVE\` passed 27/27 (rc=$RC)"
+fi
+
+echo "T32: an identity-policy redirect to the IdP is a GATE, not a missing gate"
+printf 'ssh.soleur.ai|302|0|200|0|0|1\n' > "$TMP/t32.hosts"
+MOCK_HOSTS="$TMP/t32.hosts" run_sut t32 200 "$CI_SSH_FIXTURE"
+if grep -qE 'live entries: 1' "$OUT" && [[ "$RC" == "0" ]]; then
+  pass "a 302 to the Access login page is recognised as Access answering, and the credential is then graded"
+else
+  fail "an Access app with an identity policy 302s anonymous requests and carries no cf-access-* header; calling that 'nothing is gating this host' puts a fabricated SECURITY claim in an operator email (rc=$RC)"
+fi
+
+echo "T33: gate-absent requires an anonymous request to actually SUCCEED"
+printf 'ssh.soleur.ai|530|0|200|0|0|0\n' > "$TMP/t33.hosts"
+MOCK_HOSTS="$TMP/t33.hosts" run_sut t33 200 "$CI_SSH_FIXTURE"
+if grep -q 'gate-indeterminate' "$OUT" && ! grep -q 'gate-absent' "$OUT"; then
+  pass "a 530 tunnel outage is not reported as a removed Access gate"
+else
+  fail "only a 2xx to an anonymous request is evidence nothing refused it; a 530/429/302 unstamped control graded gate-absent and emailed 'the host may be exposed' (rc=$RC)"
+fi
+
+echo "T34: a stale pair and a rotated pair in TWO configs are graded separately"
+printf '%s|200|0\n%s|403|1\n' "$FIX_ID" "${FIX_ID%.access}.stale" > "$TMP/t34.creds"
+MOCK_CREDS="$TMP/t34.creds" run_sut t34 200 "prd|CI_SSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd|CI_SSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}
+prd_terraform|CI_SSH_ACCESS_TOKEN_ID|${FIX_ID%.access}.stale
+prd_terraform|CI_SSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}" "prd
+prd_terraform"
+_t34=1
+grep -qE 'live entries: 1' "$OUT" || _t34=0
+grep -qE 'dead entries: 1' "$OUT" || _t34=0
+grep -q 'prd_terraform' "$OUT" || _t34=0
+if [[ "$_t34" == "1" ]]; then
+  pass "one rotated, one stale -> 1 live 1 dead, and the report names the stale config"
+else
+  fail "this is the incident the script exists to catch ('5 of 7 configs stale after a dashboard roll'). Dropping the credential from the memo cache key passed 27/27 because EVERY fixture wrote identical bytes to every config; under this fixture it reports 'live: 2 dead: 0' — a clean bill of health on the real failure (rc=$RC)"
+fi
+
+echo "T35: the CONTROL probe is cached per host, not repeated per credential"
+printf '%s|200|0\n%s|403|1\n' "$FIX_ID" "${FIX_ID%.access}.stale" > "$TMP/t35.creds"
+MOCK_CREDS="$TMP/t35.creds" run_sut t35 200 "prd|CI_SSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd|CI_SSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}
+prd_terraform|CI_SSH_ACCESS_TOKEN_ID|${FIX_ID%.access}.stale
+prd_terraform|CI_SSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}" "prd
+prd_terraform"
+_c=$(control_probes); _r=$(cred_probes)
+if [[ "$_c" == "1" && "$_r" == "2" ]]; then
+  pass "two distinct credentials on one host: 1 control probe, 2 credentialed"
+else
+  fail "expected 1 control + 2 credentialed, got control=$_c cred=$_r — the control probe doubles the request volume against the Access edge, which is what makes a rate-limit response reachable in the first place"
+fi
+
+echo "T36: the API-token memo cache is real too"
+run_sut t36 200 "prd|CF_API_TOKEN_X|tokenvalue
+prd_a|CF_API_TOKEN_X|tokenvalue
+prd_b|CF_API_TOKEN_X|tokenvalue" "prd
+prd_a
+prd_b"
+_n=$(grep -c 'tokens/verify' "$CURL_LOG" 2>/dev/null || printf '0')
+if [[ "$_n" == "1" ]]; then
+  pass "three configs, one identical API token, one verify call"
+else
+  fail "expected 1 /user/tokens/verify call for 3 configs holding one value, got $_n — the SUT comment says the subshell bug hit 'every memoised helper in this file', but only the Access cache had an instrument, so neutering this one passed 27/27"
+fi
+
+echo "T37: the probe does NOT follow redirects"
+run_sut t37 200 "$CI_SSH_FIXTURE"
+if ! grep -qE '(^| )(-L|--location)( |$)' "$CURL_LOG"; then
+  pass "no -L: header blocks cannot come from a different response than %{http_code}"
+else
+  fail "curl APPENDS each response's headers into one -D file, so under -L the stamp grep (an OR over the whole file) can see an early block's stamp while %{http_code} reports the final response — an admitted-after-redirect would grade DEAD, the destructive direction"
+fi
+
+echo "T38: a STAMPED 401 is a refusal and must stay DEAD"
+MOCK_CRED_STAMPED=1 run_sut t38 401 "$CI_SSH_FIXTURE"
+if [[ "$RC" == "1" ]] && grep -qE 'dead entries: 1' "$OUT"; then
+  pass "401 with the Access stamp grades DEAD, same as 403"
+else
+  fail "narrowing the DEAD refusal set from {401,403} to {403} passed 39/39 — a stamped 401 is Access refusing the credential and must not be downgraded to 'could not verify' (rc=$RC)"
+fi
+
+echo "T39: the report states how many network probes were actually made"
+run_sut t39 200 "$CI_SSH_FIXTURE"
+if grep -qE 'network probes: [1-9]' "$OUT"; then
+  pass "the summary line carries a non-zero probe count"
+else
+  fail "deleting the probe counter's increment passed 39/39: the one number separating 'measured something' from 'concluded from Doppler reads alone' was computed and never reported"
+fi
+
+echo "T40: a local mktemp failure is NOT reported as an unreachable host"
+MOCK_MKTEMP_FAIL=1 run_sut t40 200 "$CI_SSH_FIXTURE"
+_t40=1
+grep -q 'detector-env' "$OUT" || _t40=0
+grep -q 'host-unreachable' "$OUT" && _t40=0
+[[ "$(cred_probes)" == "0" ]] || _t40=0
+if [[ "$_t40" == "1" ]]; then
+  pass "a full/read-only TMPDIR renders detector-env, with zero requests sent"
+else
+  fail "mapping a local disk fault onto 'the host got no answer (timeout / DNS / TLS)' sends the operator to investigate Cloudflare while the runner disk is full — and zero requests were sent (rc=$RC)"
+fi
+
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Without it, deleting every assertion call yields
 # "0/0 passed, 0 failed" and exit 0 — measured — and test-all.sh reads only the exit code,
 # so a suite that ran NOTHING is indistinguishable from one where everything passed. A
 # FLOOR, not equality: adding a case must not require editing this line.
-if [[ "$((PASS + FAIL))" -lt 13 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 13. The suite did not execute what it claims to." >&2
+#
+# Raised 13 -> 24 with the Access-stamp rewrite. At 13 against 26 running assertions the
+# floor had 13 assertions of slack — measured: deleting T14 through T19, i.e. the ENTIRE
+# arm the suite exists to cover, still reported "13/13 passed" and exit 0. A floor that far
+# below the real count cannot distinguish "the feature's tests were removed" from "they
+# passed". Still a floor, not equality, so adding a case does not require editing it — but
+# it is now close enough to the count that deleting a feature's cases trips it.
+if [[ "$((PASS + FAIL))" -lt 40 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 40. The suite did not execute what it claims to." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
