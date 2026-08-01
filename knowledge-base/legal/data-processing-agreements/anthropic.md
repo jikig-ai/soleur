@@ -84,7 +84,9 @@ Until signed: the dashboard surfaces a one-time banner to that effect
   |---|---|---|
   | 15 crons call `spawnClaudeEval` | **13** call `spawnClaudeEval`; **2** more (`cron-daily-triage`, `cron-follow-through-monitor`) call `resolveClaudeBin()` and spawn the CLI directly | "15 crons egress via the CLI" is correct; the *mechanism* was not. PA-31 is therefore scoped by an egress predicate, never by helper name. |
   | 17 modules import the substrate, 2 for types only | **20** modules carry a real import | 1 is type-only (`_cron-shared.ts`); 1 imports only workspace helpers and invokes no Claude (`cron-skill-freshness.ts`); `cron-workspace-gc.ts` names the substrate in a comment and is not an importer. |
-  | 2 HTTP crons on `postAnthropicMessage` | **3** — `cron-compound-promote`, `cron-weekly-release-digest`, and `cron-anthropic-credit-probe` | The credit probe sends a `maxTokens: 1` literal `"ping"` and carries **nil personal data**. It is named anyway: the defect being corrected is non-exhaustive enumeration, so a nil-PII member is still enumerated. | **The `claude-code-action` entry is also
+  | 2 HTTP crons on `postAnthropicMessage` | **3** — `cron-compound-promote`, `cron-weekly-release-digest`, and `cron-anthropic-credit-probe` | The credit probe sends a `maxTokens: 1` literal `"ping"` and carries **nil personal data**. It is named anyway: the defect being corrected is non-exhaustive enumeration, so a nil-PII member is still enumerated. |
+
+  **The `claude-code-action` entry is also
   mis-stated in the opposite direction:** only `claude-code-review.yml` is
   `disabled_manually`. `fix-constraints-stage-a.yml` uses the SAME
   `anthropics/claude-code-action` with `secrets.ANTHROPIC_API_KEY`, is workflow-state
@@ -97,9 +99,20 @@ Until signed: the dashboard surfaces a one-time banner to that effect
   `cron-competitive-analysis`, `cron-growth-*`) can route third-party or
   personal data to Anthropic. **Coverage is unaffected** — the DPA
   auto-incorporates via Commercial Terms § C and does not depend on this
-  enumeration — but the Art. 30 framing for the fleet is not yet assessed to
+  enumeration. ~~The Art. 30 framing for the fleet is not yet assessed to
   the PA-27 standard (which required an activity entry, a DPA scope
-  amendment, an LIA and a DPIA screening for a *single* summarizer call).
+  amendment, an LIA and a DPIA screening for a *single* summarizer call).~~
+  **[2026-07-31 RESOLVED (#7100).** All four artifacts the struck sentence
+  called outstanding landed in this change: the activity entries (PA-31 /
+  PA-32 / PA-33), the `register_activity_refs` frontmatter amendment above,
+  the Art. 6(1)(f) LIA
+  (`knowledge-base/legal/legitimate-interest-assessments/2026-07-31-claude-eval-fleet-and-ci-lia.md`)
+  and the DPIA screening memo
+  (`knowledge-base/legal/audits/2026-07-31-dpia-screening-claude-eval-fleet-and-ci.md`).
+  Struck rather than deleted because the frontmatter now asserts the gap is
+  closed, and a body still asserting the opposite is exactly the
+  frontmatter-contradicts-body drift counsel review #7086 raised against this
+  file. **]**
   **Retention:** the zero-retention amendment is `unsigned` (frontmatter), so the
   standard Anthropic 30-day retention window applies to ALL fleet egress described
   above — not only to the PA-27 surface it was previously reasoned about.
