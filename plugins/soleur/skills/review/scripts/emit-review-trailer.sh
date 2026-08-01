@@ -99,6 +99,13 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage: emit-review-trailer.sh [--findings <n>] [--summary <text>]
+                             [--agents-ran <n>] [--agents-expected <n>]
+                             [--agents-missing <comma-separated-names>]
+                             [--mode full|degraded|inline-fallback]
+
+Pass --agents-ran AND --agents-expected or the trailer records
+`Reviewed-Coverage: unknown`, and nothing downstream can distinguish a
+full review from one where the agents that mattered never ran.
 
 Commits an empty commit carrying the Reviewed-By-Soleur: trailer, the
 machine-readable proof that soleur:review ran on this branch (#6724).
