@@ -156,7 +156,23 @@ timestamp — never webhook-processing time.
    Art. 15+20, `user_id` owner; sender-keyed requests are fulfilled manually
    via the service role); **accountless ex-member** → runbook
    `knowledge-base/legal/runbooks/dsar-accountless-ex-member.md` (Art. 12(6)
-   identity verification).
+   identity verification); **community / repository third party** (Discord
+   guild member, GitHub commenter or stargazer, Hacker News poster, X or
+   Bluesky poster, contributor) → **PA-31 §(h) / PA-32 §(h)** in
+   `knowledge-base/legal/article-30-register.md`. Manual route only: a
+   `git grep` of the repository for the requester's handle plus a manual
+   search of issue bodies, **with no completeness guarantee**, and **no
+   Art. 17 path** for anything already in Git history or in a fork. The
+   Art. 21(1) objection right is available immediately and does not depend
+   on the erasure limitation. Public-facing statement of this route:
+   Privacy Policy §8.1 "Community-digest content carve-out". Defining what a
+   truthful Art. 15 response says here is tracked at **#7126**.
+   **[Added 2026-07-31 (#7100): this catalog is the document an operator
+   opens on the day a request arrives, and it enumerated three requester
+   classes while PA-31/32/33 introduced a fourth. A Discord member's Art. 15
+   request arriving through an intake channel the accountless-ex-member
+   runbook already lists would have routed to no branch at all, with the
+   Art. 12(3) one-month clock running.]**
 4. For erasure requests from involuntary senders: deletion runs through the
    GUC-gated RPC path (see the LIA's Art. 17 section); statutory-evidence rows
    may be retained under Art. 17(3)(b) — document the override if invoked.
