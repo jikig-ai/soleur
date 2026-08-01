@@ -157,8 +157,7 @@ for cfg in "${CONFIGS[@]}"; do
     # never be assembled. Each key ends in exactly one of the two, so chaining is exact.
     _base="${k%_ID}"; _base="${_base%_SECRET}"
     ACCESS_BASESET["$_base"]=1
-  done < <(doppler secrets -p "$PROJECT" -c "$cfg" --only-names 2>/dev/null |
-    grep -oE '[A-Z0-9_]*ACCESS_TOKEN_(ID|SECRET)' || true)
+  done < <(printf '%s\n' "$_names" | grep -oE '[A-Z0-9_]*ACCESS_TOKEN_(ID|SECRET)' || true)
 done
 
 # ── NON-VACUITY GATE ────────────────────────────────────────────────────────
@@ -185,7 +184,14 @@ declare -A VERDICT=()   # token value -> LIVE|DEAD  (verify each distinct value 
 DEAD_ROWS=()
 LIVE_N=0
 DEAD_N=0
+# Positive-work counter, incremented at every real probe. Declared here, beside the other
+# counters, because verify_value below already touches it and `set -u` makes a later
+# declaration a fatal ordering bug rather than a silent zero.
+PROBES_MADE=0
 
+# Sets REPLY, for the same subshell reason as verify_access_pair below: called as
+# `state=$(verify_value ...)` the VERDICT writes never reached the parent, so the
+# "verify each distinct value once" promise in the --only rationale was not being kept.
 verify_value() {
   local v="$1"
   if [[ -z "${VERDICT[$v]:-}" ]]; then
@@ -196,15 +202,16 @@ verify_value() {
 try: print("LIVE" if json.load(sys.stdin).get("success") else "DEAD")
 except Exception: print("DEAD")' 2>/dev/null)
     VERDICT[$v]="${ok:-DEAD}"
+    PROBES_MADE=$((PROBES_MADE + 1))
   fi
-  printf '%s' "${VERDICT[$v]}"
+  REPLY="${VERDICT[$v]}"
 }
 
 for key in $(printf '%s\n' "${!KEYSET[@]}" | sort); do
   for cfg in "${CONFIGS[@]}"; do
     val=$(doppler secrets get "$key" -p "$PROJECT" -c "$cfg" --plain 2>/dev/null)
     [[ -z "$val" ]] && continue
-    state=$(verify_value "$val")
+    verify_value "$val"; state="$REPLY"
     if [[ "$state" == "DEAD" ]]; then
       DEAD_N=$((DEAD_N + 1)); DEAD_ROWS+=("$key|$cfg")
     else
@@ -221,7 +228,11 @@ done
 # returns would be read as DEAD for a perfectly live token. The pair is verified the way
 # it is actually used: presented to an Access-protected hostname.
 #
-# 200 => LIVE, 403 => DEAD.
+# The verdict is drawn from the presence of Cloudflare Access's own denial stamp
+# (`cf-access-aud` / `cf-access-domain`), NOT from the status code — see the block above
+# verify_access_pair() for the measurement that settled this and why the status code is
+# the wrong instrument. Stamp present with credentials attached => DEAD; stamp gone => the
+# credentials were accepted => LIVE.
 #
 # The 200 here is EMPTY, and that is correct, not suspicious. registry.<domain> is a
 # `tcp://` tunnel ingress consumable only via `cloudflared access tcp`, so a plain HTTPS
@@ -247,28 +258,32 @@ access_hostname_for() {
   esac
 }
 
-# What the mapped hostname's Cloudflare Tunnel ingress speaks, which decides what a
-# HEALTHY probe looks like. Both values are read off `ingress_rule.service` in
-# apps/web-platform/infra/tunnel.tf:
+# NOTE ON WHY THERE IS NO ORIGIN-PROTOCOL TABLE HERE.
 #
-#   registry.<base> -> tcp://10.0.1.30:5000   zot answers HTTP over the raw TCP forward
-#   ssh.<base>      -> ssh://<web-1-ip>:22    sshd answers an SSH banner, never HTTP
+# An earlier revision (#7127) graded non-HTTP origins on the status code, mapping 5xx to
+# LIVE on the theory that an ADMITTED request reaches cloudflared, which then fails to
+# speak HTTP to sshd. That theory is false, and the file already said so ~25 lines above:
+# a plain GET to a raw-TCP ingress is not the WebSocket upgrade the stream needs, so
+# nothing is proxied and Cloudflare answers on its own.
 #
-# The distinction is load-bearing and was previously absent: the 200-only rule below fits
-# the first origin and CANNOT be satisfied by the second, so CI_SSH_ACCESS_TOKEN graded
-# DEAD on every run regardless of the credential's real state. That is a false positive
-# in the direction that matters — it fired the twice-daily "[TOKEN DRIFT] rotation did not
-# propagate" email whose remediation is to overwrite a healthy secret.
+# MEASURED 2026-08-01 against registry.soleur.ai with a LIVE credential — the admitted
+# response is `HTTP/2 200`, zero-byte body, and NO cf-access-* header:
 #
-# A new mapping MUST declare its kind here. `http` is the default only for hosts whose
-# origin genuinely serves HTTP; an unfamiliar origin belongs in `opaque`, which certifies
-# strictly less (Access admission) rather than guessing.
-access_origin_kind_for() {
-  case "$1" in
-    CI_SSH_ACCESS_TOKEN) printf 'opaque' ;;
-    *)                   printf 'http' ;;
-  esac
-}
+#   admitted   -> 200, 0 bytes, no Access stamp        (edge answered; origin untouched)
+#   rejected   -> 403, ~39 kB, cf-access-aud + -domain (Access's own denial page)
+#
+# tunnel.tf's own comment records that `ssh://` and `tcp://` are the SAME raw-TCP service
+# type, so ssh.<base> answers the same way. A 5xx-means-LIVE rule can therefore never
+# fire, and 200 would fall to the catch-all — trading DEAD-forever for UNVERIFIABLE-
+# forever. Grading on the status code is the wrong instrument regardless of which codes
+# it maps, because the status is a property of the ORIGIN and the question is about the
+# GATE.
+#
+# So the discriminator is the Access stamp, not the status. Cloudflare Access marks its
+# own rejections with `cf-access-aud` / `cf-access-domain`; an admitted request is
+# answered by the edge or the origin and carries neither. That is a DIFFERENTIAL proof and
+# it holds for every origin protocol, which is why the http/opaque taxonomy is gone rather
+# than corrected — there is nothing left for it to decide.
 # A one-line hint per unmapped base, so the report can say what to DO. Without this the
 # remediation printed for an unverifiable row is the DEAD-token one ("set the live value
 # on the prd ROOT config"), which is wrong twice over: nothing is stale, and no Doppler
@@ -279,66 +294,102 @@ access_config_hint() {
 }
 
 UNVERIFIABLE_ROWS=()
-declare -A PAIR_VERDICT=()   # "host|id|secret" -> LIVE|DEAD (verify each distinct pair once)
 
+# Probe results. Set as GLOBALS and read by the caller, never returned on stdout.
+#
+# Every memoised helper in this file used to be invoked as `state=$(verify_...)`. Command
+# substitution runs the body in a SUBSHELL, so each `CACHE[key]=...` write was discarded
+# before the parent could see it and the caches never held anything: measured 3 curl calls
+# for 3 configs holding one byte-identical pair, against a comment promising one. That is
+# not merely wasted requests — with no cache each config re-probes independently, so one
+# transient blip inside a single run grades the SAME BYTES live in four configs and dead in
+# the fifth, and the DEAD remediation then tells the operator to overwrite the ROOT config
+# that all five inherit. The suite's own harness comment documents this exact trap for
+# run_sut; it was never applied to the code under test.
+PROBE_CODE=''
+PROBE_STAMPED=''              # 1 = response carries Cloudflare Access's own denial stamp
+
+# One HTTPS GET. With no id/secret this is the CONTROL probe.
+access_probe() {
+  local host="$1" id="${2:-}" secret="${3:-}"
+  local hdr rc=0
+  hdr=$(mktemp) || { PROBE_CODE=000; PROBE_STAMPED=0; return 0; }
+  local -a args=(-s -o /dev/null -D "$hdr" -w '%{http_code}' --max-time 20)
+  [[ -n "$id" ]] && args+=(-H "CF-Access-Client-Id: $id" -H "CF-Access-Client-Secret: $secret")
+  # Assigned then normalised, NOT `$(curl ... || printf '000')`. curl prints its -w output
+  # AND exits non-zero on a transport failure, so the `||` form CONCATENATES: measured
+  # `000000` on a DNS failure, and `200000` when a healthy 200 hits a post-header timeout —
+  # which the old three-character `200)` arm then graded DEAD.
+  PROBE_CODE=$(curl "${args[@]}" "https://${host}/" 2>/dev/null) || rc=$?
+  (( rc != 0 )) && PROBE_CODE=000
+  [[ "$PROBE_CODE" =~ ^[0-9]{3}$ ]] || PROBE_CODE=000
+  if grep -qiE '^cf-access-(aud|domain):' "$hdr" 2>/dev/null; then PROBE_STAMPED=1; else PROBE_STAMPED=0; fi
+  rm -f "$hdr"
+  PROBES_MADE=$((PROBES_MADE + 1))
+}
+
+declare -A PAIR_VERDICT=()   # host|id|secret -> LIVE | DEAD:<code> | UNVERIFIABLE:<cause>
+declare -A HOST_GATE=()      # host -> stamped | unstamped | unreachable
+
+# Sets REPLY. Call directly; see the PROBE_CODE comment for why not `$( )`.
 verify_access_pair() {
-  # `kind` is part of the cache key: the same (host,id,secret) triple graded under two
-  # different origin kinds is two different questions with two different answers, and
-  # omitting it would let whichever base was scanned first (bases are iterated in `sort`
-  # order) silently decide the verdict for the other. No two bases map to one host today —
-  # this keeps that from becoming a silent miscarriage the day one does.
-  local host="$1" id="$2" secret="$3" kind="${4:-http}"
-  local cache_key="$1|$2|$3|$kind"
-  if [[ -z "${PAIR_VERDICT[$cache_key]:-}" ]]; then
-    local code
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
-      -H "CF-Access-Client-Id: $id" \
-      -H "CF-Access-Client-Secret: $secret" \
-      "https://${host}/" 2>/dev/null || printf '000')
-    if [[ "$kind" == "opaque" ]]; then
-      # NON-HTTP origin (ssh://). 200 is unreachable here even for a perfect credential,
-      # so the 200-only rule below would report DEAD forever. What this probe CAN certify
-      # is Access ADMISSION, and that discrimination is sound precisely because Access
-      # runs at the EDGE, before the origin is consulted:
-      #
-      #   5xx  Cloudflare reached the TUNNEL/ORIGIN layer, which sits BEHIND Access, and
-      #        cloudflared then failed to speak HTTP to sshd. Only an ADMITTED request
-      #        gets that far, so this is a POSITIVE proof of admission. Healthy.
-      #   403  Access rejected. Sound here because an ssh origin emits no HTTP status at
-      #        all, so a 403 on this host cannot have come from behind Access.
-      #   000  curl never got a definite answer (timeout / DNS / TLS). Learned NOTHING.
-      #
-      # LIVE is asserted POSITIVELY (5xx), never as "not a rejection". The absence form —
-      # `403|000 -> not-LIVE, everything else -> LIVE` — was the first shape written here
-      # and it is unsafe: Access does not promise 403 as its only rejection. Add an
-      # identity policy to this app and an unauthenticated request becomes a 302 to the
-      # IdP login page; a 429 challenge, a 401, or an interstitial are all rejections too.
-      # Every one of them would have graded LIVE — a dead credential certified healthy,
-      # which is strictly worse than the DEAD-forever bug this function is fixing.
-      # Anything unrecognised therefore renders UNVERIFIABLE (loud, non-zero) rather than
-      # being guessed in either direction.
-      #
-      # Fail-closed is preserved rather than traded away: UNVERIFIABLE is kept separate
-      # from DEAD by the caller and still exits non-zero. Certifying "admitted" is weaker
-      # than certifying "200" — and it is the strongest claim TRUE of this origin, which
-      # is the point.
-      case "$code" in
-        5??) PAIR_VERDICT[$cache_key]="LIVE" ;;
-        403) PAIR_VERDICT[$cache_key]="DEAD:${code}" ;;
-        *)   PAIR_VERDICT[$cache_key]="UNVERIFIABLE:${code}" ;;
-      esac
-    else
-      # HTTP origin. Fail CLOSED on anything that is not an explicit 200. A timeout, a DNS
-      # failure or a 5xx means this script did not learn the token is good, and "did not
-      # learn" must never render as LIVE — that is the shape of every silent-green bug in
-      # this area.
-      case "$code" in
-        200) PAIR_VERDICT[$cache_key]="LIVE" ;;
-        *)   PAIR_VERDICT[$cache_key]="DEAD:${code}" ;;
-      esac
+  local host="$1" id="$2" secret="$3"
+  # Unit separator, not `|`: `id="a", secret="b|c"` and `id="a|b", secret="c"` collide
+  # under a pipe join. Unreachable with real Access credentials (<32hex>.access / 64 hex),
+  # but a key that can collide at all is the wrong key for a verdict that authorises an
+  # overwrite of production secrets.
+  local cache_key="${host}"$'\x1f'"${id}"$'\x1f'"${secret}"
+  if [[ -n "${PAIR_VERDICT[$cache_key]:-}" ]]; then
+    REPLY="${PAIR_VERDICT[$cache_key]}"; return 0
+  fi
+
+  # CONTROL PROBE (no credentials), once per host. Without it, "the origin is broken" and
+  # "the Access application is GONE" are the same observation — and the second one grades
+  # LIVE under any status-code rule, because an ungated request reaches the origin exactly
+  # like an admitted one. LIVE is the only verdict this script emits with no email and no
+  # annotation, so that false-LIVE rides the silent channel: the gate protecting host shell
+  # access disappears and the detector reports a clean fleet.
+  if [[ -z "${HOST_GATE[$host]:-}" ]]; then
+    access_probe "$host"
+    if [[ "$PROBE_CODE" == 000 ]]; then HOST_GATE[$host]=unreachable
+    elif [[ "$PROBE_STAMPED" == 1 ]]; then HOST_GATE[$host]=stamped
+    else HOST_GATE[$host]=unstamped
     fi
   fi
-  printf '%s' "${PAIR_VERDICT[$cache_key]}"
+
+  case "${HOST_GATE[$host]}" in
+    unreachable)
+      PAIR_VERDICT[$cache_key]="UNVERIFIABLE:host-unreachable" ;;
+    unstamped)
+      # No Access denial stamp on an UNCREDENTIALED request => nothing is gating this
+      # hostname. Refuse to grade the credential at all; the finding is the missing gate.
+      PAIR_VERDICT[$cache_key]="UNVERIFIABLE:gate-absent" ;;
+    stamped)
+      access_probe "$host" "$id" "$secret"
+      if [[ "$PROBE_CODE" == 000 ]]; then
+        PAIR_VERDICT[$cache_key]="UNVERIFIABLE:probe-failed"
+      elif [[ "$PROBE_STAMPED" == 1 ]]; then
+        # Still Access's own page WITH credentials attached => Access did not accept them.
+        # This is why the stamp beats the status code: a WAF/bot-fight 403 in FRONT of
+        # Access carries no stamp and no longer renders as a stale credential, which is
+        # what previously sent the operator to overwrite a healthy secret.
+        PAIR_VERDICT[$cache_key]="DEAD:${PROBE_CODE}"
+      elif [[ "$PROBE_CODE" == 401 || "$PROBE_CODE" == 403 ]]; then
+        # Stamp gone, but the answer is still an authorisation refusal. On a host whose
+        # CONTROL probe was stamped, that combination is unexplained: it is not Access
+        # (no stamp) and it is not an admitted origin response either. "Stamp absent"
+        # alone would grade this LIVE, which would certify a credential against a refusal
+        # — so the absence rule is narrowed here rather than trusted. Fail closed.
+        PAIR_VERDICT[$cache_key]="UNVERIFIABLE:refused-unstamped"
+      else
+        # Same host, same request, stamp GONE once credentials were attached, and the
+        # answer is not a refusal. Only admission removes the stamp. Positive proof, and
+        # independent of what the origin says — which is the whole point, because the
+        # origin here is a raw-TCP stream that never speaks HTTP at all.
+        PAIR_VERDICT[$cache_key]="LIVE"
+      fi ;;
+  esac
+  REPLY="${PAIR_VERDICT[$cache_key]}"
 }
 
 for base in $(printf '%s\n' "${!ACCESS_BASESET[@]}" | sort); do
@@ -357,7 +408,7 @@ for base in $(printf '%s\n' "${!ACCESS_BASESET[@]}" | sort); do
   fi
   host=$(access_hostname_for "$base")
   if [[ -z "$host" ]]; then
-    UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|$(access_config_hint "$base")")
+    UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|no-probe-configured|$(access_config_hint "$base")")
     continue
   fi
   for cfg in "${CONFIGS[@]}"; do
@@ -371,17 +422,32 @@ for base in $(printf '%s\n' "${!ACCESS_BASESET[@]}" | sort); do
       DEAD_N=$((DEAD_N + 1)); DEAD_ROWS+=("${base}_ID/_SECRET (only one half present)|$cfg")
       continue
     fi
-    state=$(verify_access_pair "$host" "$tid" "$tsec" "$(access_origin_kind_for "$base")")
+    verify_access_pair "$host" "$tid" "$tsec"; state="$REPLY"
     if [[ "$state" == LIVE ]]; then
       LIVE_N=$((LIVE_N + 1))
     elif [[ "$state" == UNVERIFIABLE:* ]]; then
-      # Kept OUT of DEAD_ROWS deliberately. "curl got no answer" and "Cloudflare rejected
-      # this pair" are different facts with opposite remedies, and the DEAD heading tells
-      # the operator to overwrite the secret — which, on a probe that measured nothing,
-      # destroys a working credential to fix a problem that was never observed.
-      UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|probe inconclusive (HTTP ${state#UNVERIFIABLE:} from ${host} in ${cfg}) — no answer reached this script, so nothing is known about the credential. Do NOT rotate on the strength of this row; re-run once ${host} is reachable.")
+      # Kept OUT of DEAD_ROWS deliberately. "the probe measured nothing" and "Cloudflare
+      # rejected this pair" are different facts with opposite remedies, and the DEAD
+      # heading tells the operator to overwrite the secret — which, on a probe that
+      # measured nothing, destroys a working credential to fix an unobserved problem.
+      #
+      # The CAUSE is a structured field, not prose. UNVERIFIABLE now has four disjoint
+      # causes with four different remedies, and the previous revision routed all of them
+      # into a section headed "this script has no probe for these keys" whose footer said
+      # "add a hostname mapping to access_hostname_for()" — false for every cause except
+      # the unmapped one, and reproduced verbatim in the operator's email.
+      case "${state#UNVERIFIABLE:}" in
+        gate-absent)
+          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|gate-absent|${host} answered an UNCREDENTIALED request WITHOUT a Cloudflare Access denial — nothing is gating it, so this credential could not be graded and the host may be exposed. Check the Access application for ${host}. Do NOT rotate; rotating changes nothing while the gate is missing. (seen in ${cfg})") ;;
+        host-unreachable)
+          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|host-unreachable|the control probe to ${host} got no answer at all (timeout / DNS / TLS), so nothing is known about the credential. Do NOT rotate on the strength of this row; re-run once ${host} is reachable. (seen in ${cfg})") ;;
+        refused-unstamped)
+          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|refused-unstamped|${host} refused the credentialed request WITHOUT a Cloudflare Access stamp, while the uncredentialed control WAS stamped. Something other than Access is refusing (WAF rule, IP access rule, bot-fight), so the credential could not be graded. Do NOT rotate; investigate the rule set for ${host}. (seen in ${cfg})") ;;
+        *)
+          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|probe-failed|${host} is reachable and gated, but the credentialed probe got no answer, so nothing is known about the credential. Do NOT rotate on the strength of this row; re-run. (seen in ${cfg})") ;;
+      esac
     else
-      DEAD_N=$((DEAD_N + 1)); DEAD_ROWS+=("${base}_ID/_SECRET (HTTP ${state#DEAD:} from ${host})|$cfg")
+      DEAD_N=$((DEAD_N + 1)); DEAD_ROWS+=("${base}_ID/_SECRET (HTTP ${state#DEAD:} from ${host}, rejected by Access)|$cfg")
     fi
   done
 done
@@ -418,10 +484,22 @@ def rows(xs, second):
         k, _, v = r.partition("|")
         out.append({"key": k, second: v})
     return out
+def unver_rows(xs):
+    # Three fields: key|cause|reason. `cause` is a closed vocabulary the workflow can
+    # branch on — the previous shape forced any consumer to pattern-match English prose,
+    # so it sent one static remedy for four disjoint causes.
+    out = []
+    for r in xs:
+        if not r:
+            continue
+        k, _, tail = r.partition("|")
+        cause, _, reason = tail.partition("|")
+        out.append({"key": k, "cause": cause, "reason": reason})
+    return out
 print(json.dumps({
     "live": live, "dead": dead, "unverifiable": unver,
     "stale": rows(rest[:sep], "config"),
-    "unverifiable_keys": rows(rest[sep + 1:], "reason"),
+    "unverifiable_keys": unver_rows(rest[sep + 1:]),
 }, indent=2))
 PY
 }
@@ -444,12 +522,33 @@ else
   fi
   if [[ "$UNVERIFIABLE_N" -gt 0 ]]; then
     echo
-    echo "UNVERIFIABLE — this script has no probe for these keys, so it drew NO conclusion."
+    echo "UNVERIFIABLE — no conclusion was drawn about these keys."
     echo "Nothing below is known to be stale; nothing below is known to be live."
-    for r in "${UNVERIFIABLE_ROWS[@]}"; do echo "  ${r%%|*}  —  ${r#*|}"; done
+    # Rendered per CAUSE. A single static footer is what previously told the operator to
+    # "add a hostname mapping" for a key that already had one — naming a cause nothing
+    # measured, which is the failure this whole section exists to avoid.
+    for r in "${UNVERIFIABLE_ROWS[@]}"; do
+      _k="${r%%|*}"; _rest="${r#*|}"; _cause="${_rest%%|*}"; _why="${_rest#*|}"
+      echo "  [${_cause}] ${_k}  —  ${_why}"
+    done
     echo
-    echo "Fix the DETECTOR, not the credential: add a hostname mapping to"
-    echo "access_hostname_for(). Do NOT rotate these tokens on the strength of this run."
+    if printf '%s\n' "${UNVERIFIABLE_ROWS[@]}" | grep -q '|no-probe-configured|'; then
+      echo "  no-probe-configured: fix the DETECTOR, not the credential — add a hostname"
+      echo "    mapping to access_hostname_for(). Do NOT rotate these tokens."
+    fi
+    if printf '%s\n' "${UNVERIFIABLE_ROWS[@]}" | grep -q '|gate-absent|'; then
+      echo "  gate-absent: an UNCREDENTIALED request was not refused by Cloudflare Access."
+      echo "    This is a GATE finding, not a credential finding — check the Access"
+      echo "    application and policy for the host. Rotating the token changes nothing."
+    fi
+    if printf '%s\n' "${UNVERIFIABLE_ROWS[@]}" | grep -qE '\|(host-unreachable|probe-failed)\|'; then
+      echo "  host-unreachable / probe-failed: the probe measured nothing. Re-run. Do NOT"
+      echo "    rotate — an overwrite here destroys a credential no one has shown to be bad."
+    fi
+    if printf '%s\n' "${UNVERIFIABLE_ROWS[@]}" | grep -q '|refused-unstamped|'; then
+      echo "  refused-unstamped: something in FRONT of Cloudflare Access refused the probe."
+      echo "    Check the WAF / IP access rules for the host, not the credential."
+    fi
   fi
 fi
 
@@ -459,6 +558,27 @@ fi
 # report a wrong cause — the defect class this whole script exists to prevent.
 if [[ -n "$JSON_FILE" ]]; then
   emit_json > "$JSON_FILE" || { echo "ERROR: could not write --json-file '$JSON_FILE'" >&2; exit 2; }
+fi
+
+# POSITIVE-WORK FLOOR. The non-vacuity gate above counts enumerated key NAMES, which is a
+# different question from whether anything was ever measured. Every value read is
+# `doppler secrets get ... 2>/dev/null` followed by a skip-on-empty, so a token scoped to
+# read names but not VALUES — or a Doppler 5xx mid-scan — makes every read empty, every
+# loop `continue`, and the script fall through to exit 0 with `live: 0  dead: 0`. The
+# caller's ladder reads that as `clean`: no email, no annotation, green job, and the
+# heartbeat checks in OK. Reproduced: 0 curl invocations, exit 0.
+#
+# Exit 2 routes to the existing `unavailable` arm, whose email already says the right
+# thing ("the detector could not run"); that channel was simply unreachable from here.
+# Keyed on CONCLUSIONS DRAWN, not probes made. A half-propagated pair and an unmappable
+# base are real findings reached without any probe, and gating on PROBES_MADE alone turned
+# both into exit 2 "the detector could not run" — replacing a true finding with a false
+# claim of coverage failure, which is the same class of lie in the other direction.
+if (( LIVE_N + DEAD_N + UNVERIFIABLE_N == 0 )); then
+  echo "ERROR: enumerated ${#KEYSET[@]} API key(s) and ${#ACCESS_BASESET[@]} Access base(s) but PROBED ZERO values." >&2
+  echo "       Nothing was measured, so this run cannot report a clean fleet. Most likely the" >&2
+  echo "       Doppler token can read secret NAMES but not VALUES, or a read failed mid-scan." >&2
+  exit 2
 fi
 
 # Either condition is non-zero: a dead token is a live outage waiting, and an unverifiable
