@@ -29,7 +29,7 @@ Every remote write path to `web-1` authenticates with that credential. The conse
 |---|---|
 | `app.soleur.ai/health` | `v0.244.0`, uptime 228095s (~63h) |
 | `main` | `v0.247.1` |
-| Consecutive failed `Web Platform Release` runs | 15 (last success `30465249534`, 2026-07-29T15:18Z) |
+| Consecutive failed `Web Platform Release` runs | **every release since `30465249534`** (2026-07-29T15:18Z) — 15 at the time of writing, 16 hours later. Anchored on the last success rather than an integer: while the channel is dark this count grows, so a number stated here rots by construction. |
 | Host `ci-deploy` log | `ZOT_GATE: ZOT_REGISTRY_URL unset — GHCR path (dark, pre-provisioning)` → `PRELUDE: GHCR_READ_{USER,TOKEN} not both present` → `IMAGE_PULL_FAIL: result=auth_denied` |
 | `Doppler Error: Invalid Auth token` on the inngest heartbeat | 55 events |
 | The same token value read directly from Doppler | **HTTP 200 — valid** |
