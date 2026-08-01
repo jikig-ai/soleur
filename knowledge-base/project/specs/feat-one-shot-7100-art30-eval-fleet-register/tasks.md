@@ -183,3 +183,17 @@ rationale in task 5.7 below.
       `apps/web-platform/server/**`, no `.github/workflows/**`, no `scripts/**`. R1–R5 remain
       deferred to #7119. AC17 stays recorded as INTENTIONALLY EXCEEDED, now over 7 files
       outside `knowledge-base/**` rather than 5.
+
+      **RE-MEASURED 2026-08-01 at ship — final.** 23 files. The four added since the
+      post-review measurement are the ship-phase CLO attestation's blocking condition and
+      its residues, all inside the same operator-approved DEF-1a rationale:
+      `knowledge-base/legal/audits/2026-08-counsel-review-7100.md` (the attestation itself),
+      and corrections to `data-protection-disclosure.md` + its mirror. **Still zero source
+      or runtime files beyond the SHA constants table** — the only paths outside
+      `knowledge-base/**` are the three published policies, their three Eleventy mirrors,
+      `apps/web-platform/lib/legal/legal-doc-shas.ts`, and two bounded edits to
+      `plugins/soleur/skills/review/` from compound's route-to-definition step. AC17 remains
+      INTENTIONALLY EXCEEDED, now over 9 such paths.
+
+      The scope was re-measured three times (5.7 close, post-review, ship) rather than
+      re-baselined silently. Each expansion is named with the finding that caused it.
