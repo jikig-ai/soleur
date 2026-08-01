@@ -519,7 +519,7 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/c4-model.md` 
 | Supabase PostgreSQL | Implemented | Supabase | Database encrypted at rest by default |
 | Agent Runtime | Implemented | BYOK | User API keys: AES-256-GCM + HKDF per-user (ADR-004) |
 | git-data volume | Adopting | LUKS (cryptsetup) | Fresh LUKS-encrypted git-data volume, guest-side (Doppler-env key at boot, never argv; idempotent `cryptsetup isLuks` guard; mount `/dev/mapper/git-data`). Lands 3.D; realized + verified at GA cutover (soak-gated) — flips to Implemented after LUKS-at-rest verified in prod |
-| Compute | Not Implemented | — | Hetzner web/workspaces server volumes not encrypted at disk level (only the git-data volume is LUKS-encrypted, 3.D) |
+| Compute | Implemented | LUKS (cryptsetup) | The web host's `/mnt/data` workspaces volume runs on the guest-side LUKS mapper `hcloud_volume.workspaces_luks` (ADR-119, #6588); cutover certified 2026-07-23, re-asserted 2026-07-24 (`workspaces-luks-verify` run 30130277489). The superseded pre-cutover plaintext volume is retained attached-unmounted as the rollback backstop pending a soak blocked on #6808 (ledgered `plaintext-exception`, #6897) |
 
 ### NFR-028: Geo Distribution
 
