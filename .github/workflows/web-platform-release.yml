@@ -1227,6 +1227,13 @@ jobs:
     steps:
       - name: Classify the run outcome
         id: outcome
+        # #7138 — a STEP-level timeout, not just the job-level one. A hung classify used
+        # to consume the job's entire 5-minute budget, so the email and mirror steps were
+        # never scheduled and the run died silent. Bounded here, a hang becomes a step
+        # `failure`, which is exactly the state the widened conditions below now catch.
+        # This body is sub-second shell over eight closed-enum env vars; 2 minutes is a
+        # ~100x margin, and the failure direction is toward the alarm.
+        timeout-minutes: 2
         # #7138 — DO NOT add `continue-on-error:` to this step. `steps.outcome.conclusion`
         # is the POST-continue-on-error value; setting it here flips the value to `success`
         # and silently disarms the classifier-death guard in BOTH steps below, with nothing
@@ -1332,47 +1339,56 @@ jobs:
           # unset value must take the `else` ("production was NOT updated") branch: that
           # over-warns, where the other direction would tell the operator their code is
           # live when it is not. A rename that breaks this must degrade toward the alarm.
-          # #7138 — A THIRD HEADLINE. The classifier can die before working out which jobs
-          # failed; in that case we do not know whether the release reached production, and
-          # the `else` branch below would assert that it did NOT. On the dominant sub-case
-          # (classifier dies while every other job succeeded) that is a false urgent page —
-          # precisely the harm the comment block above exists to prevent.
-          # Gated on `R_DEPLOY != 'failure'` so a classifier death that coincides with a
-          # REAL failed deploy still takes the definite branch: degrade toward the alarm.
-          if [[ "${CLASSIFIER:-}" == "failure" && "${R_DEPLOY:-}" != "failure" ]]; then
+          # #7138 — A THIRD HEADLINE, gated POSITIVELY on `R_DEPLOY == 'success'`.
+          # `needs.deploy.result` is written by GitHub and is NOT affected by the
+          # classifier dying, so "did production update?" is always knowable even when
+          # "which jobs failed?" is not. Gating this branch on `R_DEPLOY != 'failure'`
+          # (the first draft) swept in `skipped` and `cancelled`: `deploy` needs five
+          # upstream jobs, so `skipped` — NOT `failure` — is the dominant failed-release
+          # state, and that draft told the operator "we could not tell whether this
+          # release reached production" about a release that demonstrably never rolled
+          # out. An unset value now falls through to the `else` too, which is the
+          # direction the comment block above requires: over-warn, never falsely reassure.
+          if [[ "${CLASSIFIER:-}" == "failure" && "${R_DEPLOY:-}" == "success" ]]; then
             SUBJ_PREFIX="RELEASE STATUS UNKNOWN"
-            SUBJ_TAIL="we could not tell whether this release reached production"
-            BODY="<p><strong>The check that works out whether a release succeeded failed itself, so we cannot tell you whether your changes are live.</strong></p>"
-            BODY="${BODY}<p>Attempted version: <code>${VER_LABEL}</code> (tag: <code>${TAG_LABEL}</code>).</p>"
-            BODY="${BODY}<p><strong>What this means for you:</strong> the release may have worked, or may not have. Nothing here says it failed — only that the check that would tell you could not answer. Open the run below to see which parts finished.</p>"
-            RUN_HINT="it shows which parts of the release finished and which did not."
-            URGENCY="Treat it as urgent — not because your changes are definitely stuck, but because the alarm that tells you when a release fails is currently broken."
+            SUBJ_TAIL="your changes are live, but the release check itself failed"
+            BODY="<p><strong>Your changes DID reach production. The check that works out whether the rest of the release succeeded failed itself, so we cannot tell you whether everything after the rollout went well.</strong></p>"
+            BODY="${BODY}<p>Released version: <code>${VER_LABEL}</code> (tag: <code>${TAG_LABEL}</code>).</p>"
+            BODY="${BODY}<p><strong>What this means for you:</strong> the site is serving your new code, so nothing is stuck. What is unknown is whether the checks that run after the rollout passed — the step that reports on them died before it could answer. Open the run below to see which parts finished.</p>"
+            URGENCY="Treat it as urgent — not because your changes are stuck (they are live), but because the alarm that tells you when a release fails is currently broken."
           elif [[ "${R_DEPLOY:-}" == "success" ]]; then
             SUBJ_PREFIX="RELEASE FAILED"
             SUBJ_TAIL="production WAS updated, but a post-release check failed"
             BODY="<p><strong>The new version DID reach production — but a check that runs afterwards failed, so we cannot confirm the site is fully healthy.</strong></p>"
             BODY="${BODY}<p>Released version: <code>${VER_LABEL}</code> (tag: <code>${TAG_LABEL}</code>).</p>"
             BODY="${BODY}<p><strong>What this means for you:</strong> the code you merged is live. Something about verifying it afterwards did not pass, which may mean a real problem with the running site or may mean the check itself is faulty. Worth looking at soon; it is not the same as a release being stuck.</p>"
-            RUN_HINT="the red entry named above is the one to look at."
-            URGENCY="Treat it as urgent: nothing reaches production until it is resolved."
+            # #7138 — this branch's own body says the code IS live, so the previously
+            # UNCONDITIONAL closing line ("nothing reaches production until it is
+            # resolved") contradicted it two paragraphs later. The #7095 comment block
+            # above already lists that exact phrase as one of three claims false here.
+            URGENCY="Worth looking at soon: your changes are live, so nothing is stuck — but the check that runs after the rollout did not pass."
           else
             SUBJ_PREFIX="RELEASE FAILED"
             SUBJ_TAIL="production was NOT updated"
             BODY="<p><strong>The Soleur web platform did not finish releasing. Production is still running the OLDER build — the changes that were just merged are not live.</strong></p>"
             BODY="${BODY}<p>Attempted version: <code>${VER_LABEL}</code> (tag: <code>${TAG_LABEL}</code>). Production is serving whatever was deployed before this run, which is now behind that tag.</p>"
             BODY="${BODY}<p><strong>What this means for you:</strong> until this is fixed, every further change you merge will also stay unreleased — the site keeps serving old code and looks healthy while doing it. This is not something that clears on its own.</p>"
-            RUN_HINT="the red entry named above is the one to look at."
             URGENCY="Treat it as urgent: nothing reaches production until it is resolved."
           fi
           # SHARED TAIL, both branches (#7136). These were indented inside the `else` above,
           # so the success branch carried NO run link and NO failed-job list — while the
           # closing paragraph tells the operator to "send the run link above" to their
           # engineer. That branch had never executed, because the step always died first.
-          # #7138 — GUARDED. On the classifier-death branch FAILED_HTML is empty, and a
-          # heading that promises content above an empty <ul></ul> is the #7136 shape again:
-          # prose pointing at an artefact the branch does not carry.
+          # #7138 — GUARDED, and RUN_HINT is derived from the SAME predicate. An empty
+          # <ul></ul> under a heading promising content is the #7136 shape; so is the run
+          # link's "the red entry named above" pointing at a list this branch suppressed.
+          # The first draft branched the list on FAILED_HTML and the hint on the HEADLINE,
+          # so (classifier died, deploy failed) rendered the dangling reference.
           if [[ -n "${FAILED_HTML:-}" ]]; then
             BODY="${BODY}<p><strong>What stopped:</strong></p><ul>${FAILED_HTML}</ul>"
+            RUN_HINT="the red entry named above is the one to look at."
+          else
+            RUN_HINT="it shows which parts of the release finished and which did not."
           fi
           BODY="${BODY}<p><a href=\"${RUN_URL}\">Open the failed run</a> — ${RUN_HINT}</p>"
           # #7138 — the closing urgency line was UNCONDITIONAL and is FALSE on the
@@ -1438,17 +1454,33 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
         run: |
           set -uo pipefail
-          # #7138 — an empty FAILED does NOT mean the release was fine. It means the step
-          # that works that out never finished, so the release status is UNKNOWN and the
-          # ALERTING job is the fault, not the release. Saying "release FAILED" here would
-          # send the operator to the wrong place. One branch, three call sites below.
+          # #7138 — TWO INDEPENDENT QUESTIONS, answered by two independent fields.
+          #
+          #   "did the classifier die?"      -> the `classifier` tag, from CLASSIFIER
+          #                                     (steps.outcome.conclusion, written by GitHub)
+          #   "do we know WHICH jobs failed?" -> the message/label, from FAILED's emptiness
+          #
+          # The first draft keyed BOTH on CLASSIFIER, which threw away a job list the step
+          # was holding: a classifier that dies AFTER writing $GITHUB_OUTPUT has
+          # conclusion == 'failure' AND a populated list, so the event asserted "the
+          # classifier died before it could record which jobs failed" about a run where it
+          # demonstrably had — in exactly the state this step's env comment names as its
+          # own justification. Deriving them separately keeps both answers true.
+          #
+          # LEAD deliberately interpolates NOTHING: this is a stacktrace-less
+          # platform:"other" store event, so Sentry groups it on the message. Embedding the
+          # comma-joined job list would mint a new issue group per distinct failure set.
+          # The detail rides in extra.failed_jobs and the step summary, neither of which
+          # affects grouping.
+          if [ -n "${FAILED:-}" ]; then
+            LEAD="release FAILED"
+          else
+            LEAD="the run-outcome classifier FAILED, so the failing jobs are UNKNOWN"
+          fi
+          FAILED_LABEL="${FAILED:-UNKNOWN (the classifier died before it could record which jobs failed)}"
           if [ "${CLASSIFIER:-}" = "failure" ]; then
-            LEAD="the run-outcome classifier FAILED, so the release status is UNKNOWN"
-            FAILED_LABEL="UNKNOWN (the classifier died before it could record which jobs failed)"
             CLASSIFIER_TAG="failed"
           else
-            LEAD="release FAILED (${FAILED:-})"
-            FAILED_LABEL="${FAILED:-}"
             CLASSIFIER_TAG="ok"
           fi
           # Same DSN parse as the live-verify emit step above: the POST host MUST
@@ -1479,6 +1511,6 @@ jobs:
           else
             echo "::error::release-outcome: NEXT_PUBLIC_SENTRY_DSN unset — the non-delivery could not be mirrored to Sentry."
           fi
-          echo "release-outcome: ${LEAD} and the operator email was NOT delivered (${REASON:-unknown})." >> "$GITHUB_STEP_SUMMARY"
+          echo "release-outcome: ${LEAD} (${FAILED_LABEL}) and the operator email was NOT delivered (${REASON:-unknown})." >> "$GITHUB_STEP_SUMMARY"
           echo "::error::release-outcome: the release-failure alert could not be delivered. Fix the notification channel — a failing release is currently silent."
           exit 1
