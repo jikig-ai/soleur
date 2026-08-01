@@ -151,6 +151,53 @@ Remediation of the push leg was the token value. The durable fix for that half i
 - The false GHCR-fallback claims are retracted wherever they were written down: `reusable-release.yml`,
   `zot-registry-revert.md`, ADR-096, ADR-088, the principles register, and `model.c4`.
 
+## Why the remediation never arrived — measured 2026-08-01 (#7095, PR #7133)
+
+The root cause above is correct and unchanged: web-1's boot-baked Doppler token is revoked, the zot
+gate goes dark, and the pull falls through to an unauthenticated GHCR fetch. **What it did not
+explain is why a merged fix did not land.** PR #7097 shipped the correct infra code on 2026-07-31.
+Production stayed down. Every release since has failed identically.
+
+There is a **second dead credential, one layer up**, and it is the one that blocks delivery:
+
+- On 2026-07-28 the `ci_ssh` **Cloudflare Access service token** was rotated out-of-band during
+  incident response. Cloudflare returns a service token's `client_secret` **only at create**, so
+  Terraform state and Doppler both went stale invisibly and `terraform plan` stayed clean — there is
+  nothing in the plan graph that can observe a credential the provider will not read back. Same
+  write-once-invisible shape as the `REGISTRY_PUSH_ACCESS_TOKEN_*` rotation in the original window,
+  one route over (`ssh.` instead of `registry.`).
+- #7097's SSH-free `local-exec` delivery leg (`terraform_data.deploy_pipeline_fix`) carries
+  `depends_on` `terraform_data.infra_config_handler_bootstrap`, which is **root-SSH-provisioned**.
+  Run `30650564509` destroyed both resources, then failed on
+  `ssh: handshake failed: connection reset by peer`. State was left emptier than reality and the
+  payload never shipped.
+- Its precondition was *"confirm the last green run of `apply-deploy-pipeline-fix.yml`"* — a citation
+  of a past state, not a probe of the present one. The last green run was 2026-07-30T16:30Z; the
+  channel died the following day.
+
+**The detector was not the gap, and this is the sharpest lesson in the incident.**
+`check-cloudflare-token-drift.sh` runs twice daily and reported `verdict: dead` on runs
+`30608371251`, `30653453432` and `30686984837` — naming the credential, the symptom
+(`HTTP 403 from ssh.soleur.ai`) and the remedy, three times, with `notify-ops-email` firing every
+time. Production stayed down regardless. The verdict **blocked nothing** and **reached a channel
+nobody acts on**. `operator-digest` harvests `action-required` *issues*; it cannot see an email.
+
+Two corrections to earlier framing, both re-derived rather than restated:
+
+- The consecutive-failure count is **every release since `30465249534`** (2026-07-29T15:18Z) — 15 at
+  the time of writing and still climbing. The "eight" in the #7103 row above was a point-in-time
+  count that rots while the channel is dark.
+- The `cx33` host **cannot be replaced**: `available=false` AND `available_for_migration=false` in
+  all six Hetzner datacenters, verified live. `-replace` destroys before it creates, so
+  `hr-prod-host-config-change-immutable-redeploy`'s own precondition fails and the remedy is
+  unavailable, not merely inadvisable. A fresh host would also need 16 SSH installers over the same
+  dead channel. Recorded as ADR-154.
+
+**Still ONGOING at the time of this update.** PR #7133 ships the mechanism (a liveness gate on the
+shared SSH bridge, an in-band `ci-ssh-token-replace` arm, and `action-required` escalation), not the
+recovery. Production is `v0.244.0`; the recovery dispatches run post-merge under per-command
+operator authorization.
+
 ## Prevention
 
 The generalizable lesson is **not** "make the mirror blocking". It is that a *fallback's health is a
@@ -167,7 +214,7 @@ premise, and premises need detectors too*. Concretely:
 
 | Issue | Item | Owner |
 |---|---|---|
-| #7095 | **THE LIVE ONE — production has not deployed since 2026-07-29.** Root cause measured 2026-07-30 (see the section above): web-1's boot-baked full-`prd` Doppler **service token** was revoked at 11:19:30.614Z, so the zot gate goes dark and the pull falls through to an unauthenticated GHCR fetch. NOT `ZOT_PULL_*` — all three clause (f) suspects measured healthy. Remediation delivers Terraform's live token over the no-SSH config channel. **P1.** Stays open until the alerting in #7103 lands. | `agent` |
+| #7095 | **THE LIVE ONE — production has not deployed since 2026-07-29.** Root cause measured 2026-07-30 (see the section above): web-1's boot-baked full-`prd` Doppler **service token** was revoked at 11:19:30.614Z, so the zot gate goes dark and the pull falls through to an unauthenticated GHCR fetch. NOT `ZOT_PULL_*` — all three clause (f) suspects measured healthy. Remediation delivers Terraform's live token over the no-SSH config channel. **UPDATED 2026-08-01 (PR #7133):** that diagnosis is correct and was not sufficient — the merged #7097 fix never ARRIVED, because the `ci_ssh` **Cloudflare Access** token that the delivery channel authenticates with is also dead (rotated out-of-band 2026-07-28). See §"Why the remediation never arrived". PR #7133 ships the repair mechanism; the recovery dispatches run post-merge. **P1.** Stays open until `/health` serves ≥ v0.247.0 with a reset uptime. | `agent` |
 | #7103 | Nothing alerts on "N consecutive release-deploy failures". Eight went red over a day and each was read as "the known incident" rather than a distinct live fault. The release run failing is not itself a monitored condition. Also carries: credential-liveness telemetry off the box, and the fleet-wide 19-of-19 web-1 installer pinning. | `agent` |
 | #7104 | `apply-deploy-pipeline-fix`'s verify step re-polls but never re-POSTs, so it cannot recover from the documented nonce-1 webhook-restart race. Deliberately NOT fixed under outage pressure: the fix puts `continue-on-error` on a fail-closed gate, and that gate's latched false-green (#6594) is what let this outage class hide. | `agent` |
 | #7077 | Extend the fail-closed mirror invariant to the inngest image, and fix the live #6416 skip. `cloud-init-inngest.yml` hard-pins GHCR with no zot path, so its dedicated host is un-bootable now. | `agent` |
