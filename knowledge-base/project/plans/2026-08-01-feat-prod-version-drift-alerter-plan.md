@@ -806,6 +806,37 @@ evidence** rather than deferred to.
 
 ---
 
+## Verification Ledger (deepen-plan pass, 2026-08-01)
+
+Every absolute/negative claim in this plan was re-verified mechanically by command execution — not
+by re-reading prose. **16/16 confirmed, 0 contradicted, 0 unverifiable.** Spot-check any of them
+with the command in the right-hand column.
+
+| Claim | Verdict | Command |
+| --- | --- | --- |
+| `/api/health` → 307 `/login` | confirms | `curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' https://app.soleur.ai/api/health` |
+| `/health` public, no auth, has `build_sha` + `version` | confirms | `curl -sS https://app.soleur.ai/health` |
+| No existing workflow polls `/health` + compares `build_sha` on a schedule | confirms | `grep -rn build_sha .github/workflows/` (only the release job's own post-deploy gate) |
+| `uptime-monitors.tf` has no `app.soleur.ai` monitor | confirms | all four `url` values are `soleur.ai`/`www.soleur.ai` |
+| `scripts/*.test.sh` is not auto-globbed by `test-all.sh` | confirms | `test-all.sh` comment: *"`scripts/*.test.sh` is NOT covered by any glob here"* |
+| `lint-orphan-test-suites.sh` fails CI on an unregistered suite | confirms | its loop + `exit 1` when `fails > 0` |
+| `gh issue create --label <undefined>` hard-fails | confirms | `seccomp-unenforced-alert.sh`: *"HARD-FAILS on an unknown label"* |
+| 3 labels exist; `ci/prod-version-drift` does not | confirms | `gh label list --limit 300` |
+| `release` job declares no `timeout-minutes` | confirms | job block lines carry none (the 60 belongs to `await-ci`) |
+| `.github/**` outside the release **push** path filter | confirms | `on.push.paths` lists only `apps/web-platform/**` + `plugins/soleur/**` |
+| `jq -r .build_sha` → literal `null` for `{}` and `{"build_sha":null}` | confirms | both return `null`, exit 0 |
+| 35 merge commits on `main`; `allow_merge_commit: true` | confirms | `git rev-list --merges --count origin/main`; `gh api repos/jikig-ai/soleur` |
+| `cron-monitors.tf` declares 51 monitors | confirms | `grep -c 'resource "sentry_cron_monitor"'` |
+| parity test auto-discovers workflows via `readdirSync` | confirms | `sentry-monitor-iac-parity.test.ts` `workflowHeartbeatSlugs()` |
+| All 3 gate-override precedents carry the marker, none has an ADR | confirms | marker at line 1 of all three; zero ADR matches |
+| bad-revision `git` returns 128; piped returns 0 | confirms | direct `rc=128`, `| head` `rc=0` |
+
+Scoping note carried forward: the `.github/**` finding is about the **push** trigger only —
+`workflow_dispatch` remains available on that workflow regardless of paths, which is exactly why the
+`force_run` case in Decision 1 exists.
+
+---
+
 ## Sharp Edges
 
 - **A plan whose `## User-Brand Impact` section is empty or omits the threshold will fail
