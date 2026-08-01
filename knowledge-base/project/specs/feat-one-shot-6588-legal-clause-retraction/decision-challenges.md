@@ -123,3 +123,60 @@ a soak clock that cannot start.
 
 The Path-2 wording preserved for whoever writes it after #6808 clears is quoted in the plan
 (§3b) **for that future edit only**. Pasting it into a legal document in this PR violates AC4.
+
+## DC-2 — Retract vs re-scope: the premise expired before the PR merged
+
+**Date:** 2026-08-01 (rebase onto main, 60 commits later)
+**Classification:** User-Challenge (ADR-084) — **raised and resolved AGAINST this PR's
+original position.** This is a reversal record.
+**Status:** RESOLVED — retraction narrowed to re-scoping. Flagged for CLO at merge.
+
+> **Why this record exists.** This PR was opened to delete claims about infrastructure that
+> could not exist. Between opening and merging, the blocker was removed. Deleting the claims
+> anyway would have been the correct action executed against facts that had stopped being
+> true — and it would have shipped under a PR body arguing, at length, that shipping untrue
+> statements is the defect.
+
+**What changed.** #6570 — *"git-data is pinned to cax11 — orderable in 0 of 3 EU DCs, so it
+can never be born"* — is **CLOSED**; the host was repinned `cax11` → `cpx22`. Separately, a
+second web host was re-added 2026-07-27 (#6919 / ADR-143). Verified against the live Hetzner
+account 2026-08-01T20:47Z: 4 servers, `soleur-web-2` **running**, `soleur-git-data` **absent**.
+
+**Decision.** Art. 32 items PA-1 (14)-(16) and PA-2 (18)-(20) are re-scoped to
+`DRAFTED / NOT-YET-ACTIVE` rather than deleted:
+
+- The host is **unborn**, not **impossible**. "Never realised" is now the inaccurate
+  statement; "not yet realised" is the true one.
+- Deleting them would **under-claim** — the mirror-image of the over-claim this PR targets,
+  and the same defect class.
+- #6982 had already applied exactly this treatment to their sibling items (13)/(17) on main.
+  Converging on the house remedy beats inventing a second one.
+- Hedging preserves the Art. 13(3) advance notice; deletion destroys it.
+
+**Rejected alternative:** delete as originally drafted, and let the register be re-amended
+when the host is born. Rejected because it spends a statutory-record amendment to make the
+record *less* accurate for the interim, and the interim has no defined end.
+
+## DC-3 — Banner head date: left chronological, not silently re-dated
+
+**Date:** 2026-08-01
+**Classification:** Taste (user-legible) — **deferred to CLO, not decided here.**
+**Status:** OPEN — carried into the merge-time attestation review.
+
+Main published a newer banner head (July 31, #7100) while this branch sat. This branch's
+entry is demoted to `Previous: July 24, 2026`, so the published "Last Updated" reads
+**July 31**.
+
+**The honest problem:** the documents are in fact being changed again at merge time, so
+neither July 24 nor July 31 is the true publication date of this retraction. A reader sees a
+"Last Updated" that predates the amendment they are reading.
+
+**Why it was not fixed here.** Re-dating the head to the merge date would rewrite the entry
+text the CLO attested to, inside a conflict resolution, to solve a problem that is a
+legal-disclosure question rather than a merge question. The chronological placement is the
+least-invasive resolution that loses no content from either side, and it is mechanically the
+same demotion both sides had already applied to July 16.
+
+**What the CLO is being asked:** whether a material correction to a published statutory record
+must carry a "Last Updated" equal to its publication date, and if so whether that is a bump of
+this branch's entry or a new head. Recorded rather than silently chosen.
