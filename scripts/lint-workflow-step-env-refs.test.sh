@@ -239,6 +239,46 @@ YAML
 )"
 expect_exit "A10 workflow-level and job-level env count as declared" 0 "$f"
 
+# A10b -- `mapfile`/`readarray` targets count as assigned. Regression guard for the ReDoS
+# rewrite: the option-grammar regex this replaced was exponentially backtrackable
+# (CodeQL py/redos), so the whole-line identifier harvest must still cover the array name.
+f="$(mkwf <<'YAML'
+name: t
+on: push
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - name: mapfile
+        run: |
+          mapfile -t HOSTS < /tmp/hosts
+          readarray -t -d '' PATHS < /tmp/paths
+          echo "${HOSTS[0]} ${PATHS[0]}"
+YAML
+)"
+expect_exit "A10b mapfile/readarray targets count as assigned" 0 "$f"
+
+# A10c -- the pathological input for the replaced regex must return promptly, not hang.
+f="$(mkwf <<'YAML'
+name: t
+on: push
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - name: redos-shape
+        run: |
+          mapfile -0 -0 -0 -0 -0 -0 -0 -0 -0 -0 -0 -0 -0 -0 -0 -0 -0 -0 -0 -0 -0 -0 X
+YAML
+)"
+START_S=$SECONDS
+expect_exit "A10c pathological mapfile line does not backtrack" 0 "$f"
+if [[ $((SECONDS - START_S)) -lt 10 ]]; then
+  pass "A10d pathological input completes in under 10s"
+else
+  fail "A10d pathological input completes in under 10s" "took $((SECONDS - START_S))s"
+fi
+
 # A11 -- unparseable YAML fails closed rather than reporting clean.
 printf 'name: t\non: push\njobs:\n  j:\n   steps: [ unclosed\n' > "$TMP/bad.yml"
 expect_exit "A11 unparseable workflow fails closed" 1 "$TMP/bad.yml"

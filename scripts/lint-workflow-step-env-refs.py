@@ -71,7 +71,14 @@ ASSIGNMENT = re.compile(r"(?<![\w$.-])([A-Za-z_][A-Za-z0-9_]*)\s*(?:\+?=|\[)")
 FOR_LOOP_VAR = re.compile(r"\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\b")
 READ_VARS = re.compile(r"\bread\s+(?:-\w+\s+)*([A-Za-z_][A-Za-z0-9_ ]*)")
 PRINTF_VAR = re.compile(r"\bprintf\s+-v\s+([A-Za-z_][A-Za-z0-9_]*)")
-MAPFILE_VAR = re.compile(r"\b(?:mapfile|readarray)\s+(?:-\w+\s+\S*\s*)*([A-Za-z_][A-Za-z0-9_]*)")
+# `mapfile -t -d '' ARR < …`: take the whole line and harvest every identifier on it, rather
+# than modelling the option grammar. A pattern like `(?:-\w+\s+\S*\s*)*` for the flags is
+# exponentially backtrackable (CodeQL py/redos, flagged on this file's first revision) —
+# `\S*` can consume the next `-flag`, so each option is parseable two ways. Since counting a
+# non-assignment as assigned only SUPPRESSES a finding, the over-broad linear scan is both
+# safer and simpler than a precise ambiguous one.
+MAPFILE_LINE = re.compile(r"\b(?:mapfile|readarray)\b([^\n]*)")
+IDENTIFIER = re.compile(r"(?<![\w$-])([A-Za-z_][A-Za-z0-9_]*)")
 
 ENV_STYLE_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
 # `${X:-}`, `${X-}`, `${X:+}`, `${X:=}`, `${X:?}` all mean "the author considered unset".
@@ -136,10 +143,12 @@ def env_keys(*scopes) -> set[str]:
 
 def assigned_names(body: str) -> set[str]:
     names: set[str] = set()
-    for rx in (ASSIGNMENT, FOR_LOOP_VAR, PRINTF_VAR, MAPFILE_VAR):
+    for rx in (ASSIGNMENT, FOR_LOOP_VAR, PRINTF_VAR):
         names |= set(rx.findall(body))
     for group in READ_VARS.findall(body):
         names |= set(group.split())
+    for tail in MAPFILE_LINE.findall(body):
+        names |= set(IDENTIFIER.findall(tail))
     return names
 
 
