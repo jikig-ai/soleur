@@ -52,11 +52,16 @@ rc=$?     # captured DIRECTLY — see the pipe trap below
 #   rc == 0 and non-empty            -> prod is behind; the LAST line's %ct is the staleness clock
 ```
 
-**Use `git log --format`, not `git rev-list --format`.** Measured: `rev-list --format` interleaves a
-bare `commit <sha>` header line before every entry, so a naive `tail -1` reads a header, not a
-record. `git log --format` emits one clean `%H %ct` line per commit; `tail -1` is the oldest entry.
-(Use `git rev-list --count` if only a count is wanted — but the clock needs the oldest record, so
-one `git log` call serves both.)
+**Use `git log --format`, not a bare `git rev-list --format`.** Measured: `rev-list --format`
+interleaves a bare `commit <sha>` header line before every entry, so a naive `tail -1` reads a
+header, not a record. `git log --format` emits one clean `%H %ct` line per commit. (`git rev-list
+--no-commit-header --format=…` is the equivalent — verified at git 2.53.0 — if `rev-list` is
+preferred; `--no-commit-header` needs git ≥ 2.33, which `ubuntu-24.04` far exceeds. Either is fine;
+what must not ship is the header-bearing form.)
+
+**Take the oldest entry as the numeric minimum `%ct`, not `tail -1`.** Reverse-chronological output
+is git's default, not a documented contract, and `--topo-order` or a future default change would
+silently break a positional read. Use `awk '{print $2}' | sort -n | head -1`.
 
 **Capture `rc` directly from `git`, never through a pipe.** Measured on a bad revision:
 
@@ -213,8 +218,13 @@ scope note additionally sanctions GHA for credential-light infra crons.)
 
 Three layers, reusing `scheduled-zot-restart-loop.yml`'s idiom verbatim:
 
-1. **Resend email** to `ops@jikigai.com` via `./.github/actions/notify-ops-email`, **gated to
-   first-detection only** (see below).
+1. **Resend email** to `ops@jikigai.com` — an **inlined `curl` to the Resend API**, `id: notify`,
+   **gated to first-detection only** (see below). **Do NOT use `./.github/actions/notify-ops-email`
+   here.** That composite declares inputs `[subject, body, resend-api-key]` and **no `outputs:`
+   block at all**, so `steps.notify.outputs.delivered` is unreachable through it — and the delivery
+   conjunct below is the whole point. The precedent to copy is `web-platform-release.yml`'s own
+   `id: email` step, which inlines the curl, writes `delivered=0|1` to `$GITHUB_OUTPUT`, and is
+   consumed downstream as `steps.email.outputs.delivered != '1'`.
 2. **Durable deduped GitHub issue** — title-search create-or-comment. Load-bearing, not redundant:
    #7095 showed an email-only alert fire three times across three days while prod stayed down.
    `action-required` is what `operator-digest` harvests.
@@ -795,6 +805,9 @@ evidence** rather than deferred to.
 | R17 | Kieran P1-2 | Live-prod assertion removed from the pre-merge ACs (flaky by construction); moved to post-merge, where AC21 now exercises the alert path end-to-end. |
 | R18 | Kieran/architecture P2 | Monitor count corrected **53 → 51**; failed-run count corrected **14 → 17 of 20**. |
 | R19 | DHH + code-simplicity (**both panels, same scope → prefer delete**) | **7 verdict states → 3**; mutation axes refocused on sabotage no unit fixture can see; the separate `merge-base` call eliminated entirely by the range query. |
+| R20 | **deepen-plan (P0)** | **The email must be an inlined `curl`, not `./.github/actions/notify-ops-email`.** Verified: that composite declares inputs `[subject, body, resend-api-key]` and **no `outputs:` block**, so the `delivered == '1'` conjunct R11 added would have been permanently empty — forcing the heartbeat to `error` on every real alert. v2/v3 prescribed both, which was unbuildable. Precedent: `web-platform-release.yml` `id: email`. |
+| R21 | deepen-plan | `git log --format` (or `rev-list --no-commit-header`) instead of a bare `rev-list --format`, which interleaves `commit <sha>` header lines; and oldest-commit read as numeric `min(%ct)` rather than `tail -1`, since row order is a default not a contract. |
+| R22 | deepen-plan | Shell traps pinned in Sharp Edges: `local rc=$(cmd)` destroys the exit code (SC2155); `grep -c` exits 1 on a zero count. |
 
 **Rejected, with evidence:**
 
@@ -858,9 +871,19 @@ Scoping note carried forward: the `.github/**` finding is about the **push** tri
   double-page and conflate "prod is stale" with "the checker is broken".
 - **Capture `rc` directly from `git`/`curl`, never through a pipe.** Measured: `git log <bad>..main`
   returns **128**; the same command piped to `tail -1` returns **0** — a broken check reads as CLEAN.
-- **Use `git log --format`, not `git rev-list --format`.** `rev-list --format` interleaves a bare
-  `commit <sha>` line before every record, so `tail -1` returns a header rather than the oldest
-  commit — the staleness clock would silently parse garbage. `rev-list --count` is fine for counting.
+- **Use `git log --format` (or `rev-list --no-commit-header`), never a bare `rev-list --format`.**
+  It interleaves a `commit <sha>` line before every record, so `tail -1` returns a header rather
+  than a commit — the staleness clock would silently parse garbage.
+- **Read the oldest commit as `sort -n | head -1` on `%ct`, not `tail -1`.** Row order is a default,
+  not a contract.
+- **`./.github/actions/notify-ops-email` has NO `outputs:` block.** Calling it via `uses:` makes
+  `steps.notify.outputs.delivered` permanently empty, which silently forces the heartbeat's drift
+  arm to `error` on every real alert. Inline the Resend `curl` instead — the `web-platform-release.yml`
+  `id: email` precedent.
+- **`local rc=$(cmd)` destroys the exit code** (ShellCheck SC2155) — `local` succeeds, so `$?` is
+  `local`'s status. Use `cmd; local rc=$?` on separate statements.
+- **`grep -c` exits 1 when the count is 0.** Under a future `set -e` that reads as failure, not as
+  "zero matches". Guard with `|| true` and treat the count as data.
 - **`fetch-depth: 0` is not optional.** `origin/main` HEAD is frequently not a path-matching commit.
 - **`scripts/*.test.sh` is not auto-discovered** by `test-all.sh`. Registration is mandatory.
 - **`jq -r .build_sha` prints the literal string `null`** for both `{}` and `{"build_sha":null}`.

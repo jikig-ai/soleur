@@ -49,10 +49,13 @@ review findings are encoded in the workflow's step conditions.
       oldest_epoch, revlist_rc, now_epoch)`, outputs verdict + reason + exit code. No network, no git.
 - [ ] 2.3 Implement `main()` I/O only: curl `/health` with `--max-time` and **3× backoff retry**;
       then `git log --first-parent --format='%H %ct' "$prod_sha..origin/main" -- $PATHSPEC`.
-      Use `git log`, **not** `git rev-list --format` — the latter interleaves bare `commit <sha>`
-      header lines, so `tail -1` reads a header instead of the oldest record.
+      Use `git log` (or `rev-list --no-commit-header`), **not** a bare `git rev-list --format` —
+      the latter interleaves `commit <sha>` header lines that a positional read mistakes for a record.
       **Capture `rc` directly from git/curl — never through a pipe** (measured: `rc=128` direct
-      vs `rc=0` piped, which reads as CLEAN). The oldest missing commit is `tail -1`.
+      vs `rc=0` piped, which reads as CLEAN). Take the oldest missing commit as the numeric
+      minimum `%ct` (`awk '{print $2}' | sort -n | head -1`), not `tail -1` — row order is a
+      default, not a contract. Beware `local rc=$(cmd)` (SC2155 destroys `$?`) and `grep -c`
+      exiting 1 on a zero count.
 - [ ] 2.4 Validate `build_sha` to 40-hex, rejecting the literal string `null`, empty, and non-JSON.
 - [ ] 2.5 Emit `DRIFT_VERDICT=`, `DRIFT_REASON=`, `DRIFT_DETAIL=`, `DRIFT_MISSING_COUNT=` lines.
 - [ ] 2.6 Header comment documenting the `skip_deploy` true-positive case and the `--first-parent`
@@ -76,6 +79,10 @@ review findings are encoded in the workflow's step conditions.
 - [ ] 3.7 Drift steps gated `!cancelled() && steps.check.outputs.exit_code == '1'` — issue
       create-or-comment (dedupe by title search), emitting `first_detection`; email
       (`id: notify`, emitting `delivered`) additionally gated on `first_detection == 'true'`.
+      **The email MUST be an inlined `curl` to the Resend API, NOT
+      `./.github/actions/notify-ops-email`** — that composite has no `outputs:` block, so
+      `steps.notify.outputs.delivered` would be permanently empty and force the heartbeat
+      to `error` on every real alert. Copy `web-platform-release.yml`'s `id: email` step.
 - [ ] 3.8 Check-error steps gated `!cancelled() && steps.check.outputs.exit_code == '2'` — separate
       issue class + email.
 - [ ] 3.9 Close-on-recovery step gated `!cancelled() && steps.check.outputs.exit_code == '0'` —
