@@ -5,82 +5,86 @@ Plan: [`knowledge-base/project/plans/2026-08-01-fix-ship-soak-gate-matches-token
 Lane: `cross-domain` (spec.md absent — TR2 fail-closed default)
 Brand-survival threshold: `none`
 
+> **Read §Plan Review Revisions first.** The plan's first draft proposed a very different
+> matcher (claim-shaped alternatives + a gate-name strip). It was measured to silence 28
+> of 50 real enrolments and is **rejected**. If any instinct during implementation is to
+> "shape the claim" or "strip the gate's name", that path has been tried and measured.
+
 ---
 
 ## Phase 0 — Preconditions (no edits)
 
-- [ ] **0.1** Baseline the existing suite: `bun test plugins/soleur/test/ship-soak-followthrough-enrollment-gate.test.ts` → record pass/fail counts (expected 14 pass / 0 fail).
-- [ ] **0.2** Baseline the precedent suite: `bun test plugins/soleur/test/ship-incident-pir-gate.test.ts` → green.
-- [ ] **0.3** Read `scripts/ship-incident-pir-gate.sh` end to end. Note three things to mirror: `set -uo pipefail`, herestring-not-pipe for `grep -q` (a pipe under `pipefail` can SIGPIPE on early match and invert the result), and the exit-code contract (0 = signal + stdout marker, 1 = clean no-signal).
-- [ ] **0.4** Confirm the hook resolves the repo root as `$(dirname "${BASH_SOURCE[0]}")/../..` (it already uses `$(dirname …)/lib/incidents.sh` for `incidents.sh`).
-- [ ] **0.5** Re-run the planning measurement to confirm the starting numbers still hold on current `main`: current `SOAK_RE` fires on 20/40 most-recent plans.
+- [ ] **0.1** Baseline both suites green: `bun test plugins/soleur/test/ship-soak-followthrough-enrollment-gate.test.ts` (expect 14 pass / 0 fail) and `bun test plugins/soleur/test/ship-incident-pir-gate.test.ts`.
+- [ ] **0.2** **Re-measure the two baselines every AC is relative to.** Recall of the shipped regex over the ground-truth enrolled set `grep -rlE 'scripts/followthroughs/[a-z0-9-]+\.sh' knowledge-base/project/plans/*.md` (plan time: **42/50**) and its FP count over the 40 most recent plans (plan time: **21/40**). Record both — AC1 and AC2 are relative, not absolute.
+- [ ] **0.3** Read `scripts/ship-incident-pir-gate.sh` end to end. Mirror `set -uo pipefail`, herestring-not-pipe for `grep -q`, and its exit discipline. Do **NOT** mirror (a) its fence awk — it has no `END` check and fails *open* on an unbalanced fence; (b) its `${CLAUDE_PLUGIN_ROOT:-.}/../../scripts/` path — it resolves to the main checkout from a worktree and to two levels above the repo from a plain root.
 
-## Phase 1 — RED: fixtures and failing tests first
+## Phase 1 — RED: fixtures, harness, and the measurement runner first
 
-`cq-write-failing-tests-before`. Fixtures and harness land **before** the script exists.
+`cq-write-failing-tests-before`.
 
-- [ ] **1.1** Create `plugins/soleur/test/fixtures/ship-soak-followthrough-gate/`.
-- [ ] **1.2** Author 11 **synthesized** plan-shaped fixtures (`cq-test-fixtures-synthesized-only` — no real emails, no prod-shape UUIDs, no tokens; never copy #7034's or #7072's real plan):
-  - [ ] `real-soak-declaration.md` — **FIRE** (numeric-window claim)
-  - [ ] `soak-disposition-not-applicable.md` — **QUIET** (#7056 required pair, negative)
-  - [ ] `soak-filename-only.md` — **QUIET** (#7087; include both backticked and bare forms)
+- [ ] **1.1** Create `plugins/soleur/test/fixtures/ship-soak-signal-gate/` (named after the **script**, per the PIR precedent).
+- [ ] **1.2** Author 12 **synthesized** plan-shaped fixtures (`cq-test-fixtures-synthesized-only`; no real emails, prod-shape UUIDs, or tokens; never copy #7034's or #7072's real plan):
+  - [ ] `real-soak-declaration.md` — **FIRE**
+  - [ ] `soak-disposition-not-applicable.md` — **QUIET** (#7056 pair)
+  - [ ] `soak-filename-backticked.md` — **QUIET** (inline-code strip)
+  - [ ] `soak-filename-bare.md` — **QUIET** (the structural delimiter; #7087's real fix)
   - [ ] `negated-criterion-soak.md` — **QUIET** (`no post-deploy soak`, `no 7-day soak`)
+  - [ ] `negation-span-not-line.md` — **FIRE** (`Soak enrollment: none yet — the 14-day soak begins at deploy.`)
   - [ ] `negation-adjacent-real-soak.md` — **FIRE** (`no P0 incidents during the 7-day soak`)
-  - [ ] `prose-soak-no-numeric-window.md` — **FIRE** (`One-week soak`, `after a prod soak`, `when the soak holds`)
-  - [ ] `gate-name-and-fenced-regex.md` — **QUIET** (names the gate; quotes `SOAK_RE` in a fence)
-  - [ ] `adopting-accepted-arrow.md` — **FIRE** (multibyte `→` is the only signal)
-  - [ ] `prose-about-soaks.md` — **QUIET** (weak-preposition bound: `a recall survey of ~70 prose soak declarations`, `the soak gate fired`)
-  - [ ] `unbalanced-fence-real-soak.md` — **FIRE** (opening ``` never closed, real soak after it; pins the fail-closed fallback)
-  - [ ] `indented-fence-quoted-soak.md` — **QUIET** (fenced block indented inside a list item; pins the indent-tolerant fence anchor)
-- [ ] **1.3** Add the `spawnSync` harness to `plugins/soleur/test/ship-soak-followthrough-enrollment-gate.test.ts`, modelled on `ship-incident-pir-gate.test.ts`'s `signals()`:
-  - FIRE ⇒ assert `status === 0` **and** stdout contains `SOAK-SIGNAL: yes`
-  - QUIET ⇒ assert `status === 1` (exactly 1, never merely non-zero) **and** stdout empty
-  - Feed each fixture independently via stdin — never concatenate fixtures.
-- [ ] **1.4** Re-derive and re-measure both regexes against the fixtures **and** the 40-most-recent-plans corpus. Do not paste the plan's literals unverified. Record the measured numbers for the PR body.
-- [ ] **1.5** Confirm RED (suite fails because the script does not exist yet).
+  - [ ] `enrollment-heading-fires.md` — **FIRE** (`### Soak follow-through enrollment (Phase 2.9.1)`)
+  - [ ] `fenced-claim-quiet.md` — **QUIET**
+  - [ ] `unbalanced-fence-real-soak.md` — **FIRE** (fail-closed fallback)
+  - [ ] `binary-corpus-real-soak.md` — **FIRE** (NUL byte; pins `grep -a`)
+  - [ ] `backticked-declaration-known-bypass.md` — **QUIET** (named, accepted residual)
+- [ ] **1.3** Add the `spawnSync` harness: FIRE ⇒ `status === 0` and stdout contains `SOAK-SIGNAL: yes`; QUIET ⇒ `status === 1` **exactly** (never merely non-zero); assert empty stderr both directions. Feed each fixture independently via stdin.
+- [ ] **1.4** Add the **measurement runner** for AC1/AC2 — scores any candidate matcher against the ground-truth enrolled set and the FP window in one pass. Must exist **before** any regex is written; it is what makes the recall floor executable.
+- [ ] **1.5** Confirm RED.
 
-## Phase 2 — GREEN: extract the scan into a script that owns the regex
+## Phase 2 — GREEN: the script owns the regex AND every strip
 
-**Ordering is load-bearing** — the contract producer must exist before Phase 3 rewires its consumers.
+**Ordering is load-bearing** — the contract producer precedes its consumers.
 
-- [ ] **2.1** Create `scripts/ship-soak-signal-gate.sh` with a header comment covering: what it is, the #7056/#7087 false positives it retires, the exit contract, and *why each strip stage exists* (so a later editor cannot delete a stage without reading its reason).
-- [ ] **2.2** Implement the strip pipeline in order: fenced code blocks → inline `` `code` `` spans → `GATENAME_RE` → `NEGATION_RE`.
-- [ ] **2.2a** **Fence handling — take one half from EACH existing gate; copy neither verbatim.** Use the PIR gate's indent-tolerant anchor `/^[[:space:]]*```/` **and** the soak hook's `END { if (in_fence) exit 2 }` fail-closed fallback to the unstripped body. Verified during planning: the PIR awk alone fails *open* on an unbalanced fence (swallows the tail); the soak awk alone misses indented fences. Pinned by tasks 1.2's last two fixtures.
-- [ ] **2.3** Implement the dual-locale match, preserved from the hook: once under `LC_ALL=C.UTF-8`, once without (the regex carries the multibyte `→`).
-- [ ] **2.4** Exit contract: on a hit, `echo "SOAK-SIGNAL: yes"` **plus the line-numbered matched lines** (`grep -niE … | head -5`), then `exit 0`; otherwise bare `exit 1` with no stdout. Never exit 2, never crash on empty input. Do **not** reduce to exit-code-only — the hit list is the evidence the operator reads to judge whether a fire is legitimate (it is what made #7056/#7087 adjudicable).
-- [ ] **2.5** `chmod +x scripts/ship-soak-signal-gate.sh`.
-- [ ] **2.6** Confirm GREEN on all 11 fixtures.
-- [ ] **2.7** Mutation-test each fixture: delete the corresponding regex alternative or strip stage and confirm at least one test turns RED. Record the mutation matrix for the PR body (AC8).
+- [ ] **2.1** Create `scripts/ship-soak-signal-gate.sh`. Header comment: what it is, the #7056/#7087 false positives it retires, the three-valued exit contract, the accepted backtick-bypass residual, the "an unenrolled prose soak has no other mechanical detector in the repo" consequence, and why each strip stage exists.
+- [ ] **2.2** `SOAK_RE` — **one alternative changed** from what ships today: the bare noun gains a structural left-delimiter `(^|[^[:alnum:]_-])soak`. Everything else byte-identical. No claim-shaping.
+- [ ] **2.3** Strip pipeline, all owned here: fences (indent-tolerant `/^[[:space:]]*```/` **with** `END { if (f) exit 2 }` and a fail-closed fallback to the unstripped body) → inline `` `code` `` spans (**single-quoted** `sed`, carry the `# shellcheck disable=SC2016` note) → `NEGATION_RE` **span** removal. No gate-name strip.
+- [ ] **2.4** `NEGATION_RE` applied via `sed -E "s@…@@g"` — **span, not line**. Delimiter must be `@` (the regex contains `n/a`, so `s/…/…/` is a syntax error). Inline the case classes (`[Ss]oak`) — `sed` has no `-i`.
+- [ ] **2.5** Match with `grep -aiE` under `LC_ALL=C.UTF-8`, then again under `LC_ALL=C`. `-a` on **every** grep in the script.
+- [ ] **2.6** Exit contract: **0** = signal → `SOAK-SIGNAL: yes` plus the matched lines; **1** = clean no-signal, empty stdout; **2** = harness fault. Check each stage's status — do not infer fault from an empty haystack.
+- [ ] **2.7** `chmod +x`. Confirm GREEN on all 12 fixtures.
+- [ ] **2.8** Run the AC18 mutation matrix; commit the table (`mutant-id | operator | target | expected-killer-fixture`). Every fixture must appear as an expected killer at least once, or be deleted. Operators must include `widen-bound` and `swap-span-for-line`, not just deletion.
+- [ ] **2.9** Run the measurement runner: AC1 recall `>= baseline - 1`, AC2 `new < old && new >= 1`.
 
 ## Phase 3 — Wire the two consumers
 
-- [ ] **3.1** `.claude/hooks/ship-soak-followthrough-gate.sh`: replace the inline `SOAK_RE` + dual `grep -qiE` with a pipe of `"$CORPUS"` into the script; branch on its exit inside an `if` so `set -eo pipefail` never sees the clean `exit 1`. Capture the script's stdout and fold the matched lines into the deny text.
-- [ ] **3.2** Same file: fail-open (`exit 0`) if the script is absent or unreadable, consistent with the hook's other fail-open arms.
-- [ ] **3.3** `plugins/soleur/skills/ship/SKILL.md`: replace the §Detection `SOAK_RE=` / `SOAK_HIT=` block with the script invocation, mirroring the call shape used at §"Incident-signal scan". Keep the `COMBINED` corpus build (plan-file resolution stays the skill's job).
-- [ ] **3.4** Same file: add the `**Why:**` sentence citing #7056 + #7087 and the measured corpus rate.
+- [ ] **3.1** Hook: resolve the script via `"$(git rev-parse --show-toplevel)/scripts/ship-soak-signal-gate.sh"`.
+- [ ] **3.2** Hook: **delete the local fence-strip awk** from the `CORPUS` build — the script owns it. Keep only body fetch + plan resolution + append. Guard the plan path: `[[ "$PLAN" == *..* ]] && PLAN=""`.
+- [ ] **3.3** Hook: branch on exit in a `case` — 0 → enrollment check; 1 → exit 0; ≥2 → stderr + `emit_incident … fault` → exit 0. Missing/unreadable script → stderr + `emit_incident` → exit 0. Never let `set -eo pipefail` see the clean `exit 1`.
+- [ ] **3.4** Hook: fold the script's stdout hit-lines into the deny `REASON`. Decide and state whether line numbers refer to the stripped haystack (blank stripped lines to keep offsets true) or whether to emit matched text without numbers. Silently wrong numbers are worse than none.
+- [ ] **3.5** Hook: move the override check **after** the strips and anchor it to a standalone line — `grep -qE '^[[:space:]]*<!--[[:space:]]*gate-override:[[:space:]]*soak-followthrough-enrollment[[:space:]]*-->[[:space:]]*$'` — and `emit_incident … override` when it fires. Today it is an unanchored substring grep on the **raw** body, so any PR quoting the token self-bypasses the whole gate.
+- [ ] **3.6** Hook: fix the truncated `emit_incident` reason string (currently `"PRs adding operator-only routes, cross-origin form-POST, c"` — belongs to a different rule, cut mid-word).
+- [ ] **3.7** `plugins/soleur/skills/ship/SKILL.md`: same invocation, same anchored override check (the twins currently disagree — the SKILL has no mechanical override or env check at all). Keep `COMBINED` assembly minus the fence awk. Add the `**Why:**` sentence citing #7056 + #7087 and the measured recall/FP numbers.
 
-## Phase 4 — Docs, retroactive application, full suite
+## Phase 4 — Docs, seam test, retroactive application
 
-- [ ] **4.1** `.claude/hooks/README.md`: rewrite the `SOAK_RE is kept **byte-identical**…` bullet to describe single ownership; add the false-positive history and the `SOAK-SIGNAL` exit contract.
-- [ ] **4.2** Delete the `soakRe()` scraper and the byte-identity parity test from the test file; re-anchor the two prose assertions that referenced `SOAK_RE=`.
-- [ ] **4.3** **Retroactive gate application** (`wg-when-fixing-a-workflow-gates-detection`): run the shipped script against `knowledge-base/project/plans/2026-07-28-chore-collapse-agents-change-class-sidecars-plan.md` (#7034) and #7072's linked plan; both must exit 1. Record in the PR body. Read-only — do not copy either into `fixtures/`.
-- [ ] **4.4** Self-check (AC10): pipe the PR body concatenated with this feature's plan file into the shipped script; must exit 1.
-- [ ] **4.5** Measure the corpus rate over the 40 most recent plans; must be ≤ 6 (baseline 20). Record the number.
-- [ ] **4.6** Full suite: `bash scripts/test-all.sh`.
+- [ ] **4.1** `.claude/hooks/README.md`: replace the byte-identity bullet with single-ownership, the three-valued exit contract, the named backtick-bypass residual, and the "no other mechanical detector" consequence.
+- [ ] **4.2** Delete the `soakRe()` scraper and the byte-identity parity test. Replace the two prose assertions with anchors a comment cannot satisfy (`ship-soak-signal-gate.sh` **and** `SOAK-SIGNAL` in `gateSection`); add both to the mutation matrix.
+- [ ] **4.3** Add `.claude/hooks/ship-soak-followthrough-gate.test.sh` driving the **hook** end-to-end with a `gh` stub on `PATH` (precedent: `.claude/hooks/ship-unpushed-commits-gate.test.sh`). Cover: quoted-override-does-not-bypass, missing scanner → fail-open + stderr + telemetry, scanner exit 2 → fault arm, signal + unenrolled → deny JSON containing hit lines, signal + enrolled → allow. Register in `scripts/test-all.sh`.
+- [ ] **4.4** Retroactive application (AC21): `knowledge-base/project/plans/2026-07-28-chore-collapse-agents-change-class-sidecars-plan.md` (#7034) and `knowledge-base/project/plans/2026-07-29-chore-triage-seven-orphan-infra-suites-plan.md` (#7072) each exit 1. Read-only — do not copy into `fixtures/`.
+- [ ] **4.5** Full suite: `bash scripts/test-all.sh`.
 
 ## Phase 5 — Ship
 
-- [ ] **5.1** Verify all 21 Acceptance Criteria in the plan.
+- [ ] **5.1** Verify all 22 Acceptance Criteria.
 - [ ] **5.2** PR body carries `Closes #7056` and `Closes #7087` (body, not title — `wg-use-closes-n-in-pr-body-not-title-to`).
-- [ ] **5.3** PR body records: the measured corpus rate (before → after), the mutation matrix, and the retroactive-application result for #7034 and #7072.
-- [ ] **5.4** Remove the `deferred-scope-out` label from #7087 at merge — its recorded re-evaluation trigger is satisfied by this PR.
+- [ ] **5.3** PR body records: measured recall (before → after) over the ground-truth set, FP count (before → after), the mutation matrix, and the AC21 result. Note #7034/#7072 are **PRs**, not issues.
+- [ ] **5.4** Remove the `deferred-scope-out` label from #7087 at merge.
 - [ ] **5.5** Post-merge operator steps: **none**.
 
 ---
 
 ## Notes for the implementer
 
-- The plan's regex literals are a **verified starting point**, not a frozen contract. Task 1.4 re-derives them. The fixture matrix is the contract.
-- Every regex literal in the plan lives inside a fenced code block on purpose. If a literal moves into prose, the PR blocks itself and it will look like a gate bug rather than a formatting slip.
-- Do not add a second drift guard for the regex — the whole point is that there is now one copy, so parity is unrepresentable rather than asserted.
-- This gate's precision bias is deliberately the **opposite** of `ship-incident-pir-gate.sh`'s fail-toward-PIR posture. Do not harmonize them; the rationale is in the plan's Domain Review.
+- **Recall is the primary axis.** Draft 1 scored the best false-positive number in the whole comparison and was the worst design in it. Run the measurement runner (task 1.4) before believing any matcher change.
+- The plan's regex literals are a **verified starting point**, not a frozen contract. Task 2.9 re-measures. The fixture matrix plus AC1/AC2 are the contract.
+- Do not add a second drift guard for the regex — the point is one copy, so parity is unrepresentable rather than asserted. Equally, do not describe the enrollment-triad duplication as closed: it is out of scope and stated as such.
+- This gate's precision bias is deliberately the **opposite** of `ship-incident-pir-gate.sh`'s fail-toward-PIR posture. The rationale — and the correction of the false "four backstops" argument — is in the plan's §Domain Review. Do not harmonize them.
