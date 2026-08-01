@@ -51,6 +51,19 @@ readonly LOG_TAG="ci-deploy"
 # `[ -r ]`-guarded and written as an `if` rather than `[ -r … ] && …`: the latter is a bare
 # trailing command whose exit status is 1 when the file is absent, which under this script's
 # `set -e` would abort the deploy outright rather than no-op.
+#
+# #7103 R1 — CRED_FILE_STATE records WHY this block did or did not run, for the
+# SOLEUR_DEPLOY_INVOCATION marker emitted before the flock below. On 2026-08-01 two ci-deploy
+# invocations ran 73s apart on one host with different credential environments, and nothing in
+# the log said which invocation path either was. The `else` arms break that silence.
+#
+# absent vs unreadable are DIFFERENT diagnoses and must not share a value: absent means the
+# credential was never delivered (a delivery-path defect); unreadable means it is on disk but
+# this process cannot read it (a DAC/mount-namespace defect — e.g. the 640 root:deploy mode
+# drifted, or webhook.service's ProtectSystem view differs from the delivering context). Those
+# route to different fixes, so collapsing them into one "no credential" value would discard the
+# discriminator at exactly the moment it is needed.
+CRED_FILE_STATE=present
 if [ -r /etc/default/soleur-doppler-token ]; then
   while IFS='=' read -r _cred_k _cred_v; do
     case "$_cred_k" in
@@ -67,6 +80,11 @@ if [ -r /etc/default/soleur-doppler-token ]; then
   done < /etc/default/soleur-doppler-token
   export DOPPLER_TOKEN SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY
   unset _cred_k _cred_v
+elif [ -e /etc/default/soleur-doppler-token ]; then
+  # On disk but not readable by this process. NOT a delivery failure.
+  CRED_FILE_STATE=unreadable
+else
+  CRED_FILE_STATE=absent
 fi
 
 # Image signature verification (#5933 Item 4; #6005 private-GHCR + offline rework).
@@ -1278,8 +1296,20 @@ _doppler_get_or_report() {
 # registry=ghcr-fallback pull event (the pull path never attempts zot, so pull_image_with_
 # fallback takes its dark branch). Without this, a post-cutover zot pull-cred degradation
 # (host up + heartbeat green, but pull login failing) is journald-only and the fallback-rate
-# alarm is blind (hr-no-ssh-fallback-in-runbooks). SILENT during dark-launch — only fires
-# when ZOT_REGISTRY_URL is set. reason ∈ {probe_unreachable, creds_absent, login_failed}.
+# alarm is blind (hr-no-ssh-fallback-in-runbooks). Silent during dark-launch for every reason
+# that presupposes a configured registry — those fire only when ZOT_REGISTRY_URL is set.
+# reason ∈ {probe_unreachable, creds_absent, login_failed, cred_read_failed,
+#           no_credential_source}.
+#
+# #7103 R1 half (b) — `no_credential_source` is the ONE reason that deliberately fires with
+# ZOT_REGISTRY_URL UNSET. That combination is precisely the dark fall-through: no credential to
+# read a registry URL with, so the gate goes dark and the pull drops to a GHCR path whose read
+# PAT is documented-revoked. Treating it as "nothing to report because nothing was configured"
+# is what made the 2026-08-01 second invocation indistinguishable from healthy pre-provisioning.
+# It rides the same Sentry store transport, which is credential-INDEPENDENT here by
+# construction: SENTRY_INGEST_DOMAIN/PROJECT_ID/PUBLIC_KEY come from the boot-baked
+# /etc/default/webhook-deploy EnvironmentFile, not from the re-deliverable token file whose
+# absence triggers this reason — so this is the one transport that survives this exact failure.
 # Fail-open, same Sentry store transport as pull_failure_event.
 zot_gate_degraded_event() {
   local reason="$1" login_class="${2:-}" login_http="${3:-}" login_hatch="${4:-}"
@@ -1572,6 +1602,19 @@ zot_gate_and_login() {
   if ! command -v doppler >/dev/null 2>&1 || [[ -z "${DOPPLER_TOKEN:-}" ]]; then
     if [[ -z "$ZOT_REGISTRY_URL" ]]; then
       logger -t "$LOG_TAG" "ZOT_GATE: ZOT_REGISTRY_URL unset and no Doppler credential to read one with — GHCR path (dark, pre-provisioning)"
+      # #7103 R1 half (b) — FAIL LOUDLY instead of falling through silently to a registry known
+      # to be dead. This was the ONLY gate arm with no degraded event: cred_read_failed,
+      # probe_unreachable, creds_absent and login_failed all emit one, and this arm — the one the
+      # 2026-08-01 second invocation actually took — emitted a journald line and returned 0.
+      # Journald alone was not enough: the unit's own channel runs through vector, so "no errors"
+      # was indistinguishable from "not shipping". The Sentry beacon is the transport that does
+      # not depend on the credential that is missing.
+      #
+      # Control flow is UNCHANGED — still `return 0`, still fail-open. Converting this to a
+      # terminal abort is #7103 B1 and is deliberately out of scope: a new abort path here would
+      # break the #6090 baked-credential cold-boot route, i.e. it would turn a silent degradation
+      # into a boot outage on the one host that has no replacement path.
+      zot_gate_degraded_event no_credential_source
     fi
     return 0
   fi
@@ -2355,6 +2398,39 @@ fi
 # See #3398 for the cascading-rerun pattern this serialization produces
 # when the upstream poll ceiling is shorter than the realistic deploy
 # window.
+# --- #7103 R1: make the invocation say who it is ---------------------------------------
+# On the 2026-08-01 recovery the SAME host emitted, 73 seconds apart, both tagged ci-deploy
+# under webhook.service:
+#   18:45:26  ZOT_GATE: active — docker login 10.0.1.30:5000 ok (zot-primary)   ← deployed
+#   18:46:39  ZOT_GATE: ZOT_REGISTRY_URL unset — GHCR path (dark, pre-provisioning)
+#   18:47:03  IMAGE_PULL_FAIL: ref=ghcr.io/…:v0.247.5 result=auth_denied recovery_stage=refetch_unavailable
+# Two invocation paths on ONE host with DIFFERENT environments, and nothing in the record said
+# which path either invocation came from. It was harmless only by coincidence — prod already
+# held that tag and the fall-through target was an already-revoked GHCR read PAT.
+#
+# Emitted AFTER the credential-read block and BEFORE the flock, so it reports credential state
+# at the point of USE rather than at parse time. Four fields, deliberately not six: `peers` is
+# derivable from hook= and constant at single-host, and `ppid_unit` is webhook.service for both
+# hooks — neither discriminates the hypotheses, and an unused field is a maintenance cost that
+# reads like evidence.
+#
+# CLOSED VOCABULARY ONLY. This line rides journald → Vector Source 4 → Better Stack, so it must
+# never carry a token byte, a credential-file line, or any unbounded value. cred_file and
+# doppler_token are independent on purpose: readable-but-empty is a real third state and shows
+# up here as cred_file=present doppler_token=absent.
+_ci_deploy_script_sha=unknown
+if [ -r "${BASH_SOURCE[0]:-/nonexistent}" ]; then
+  _sha_out="$(sha256sum "${BASH_SOURCE[0]}" 2>/dev/null | cut -c1-12)" || _sha_out=""
+  if [ -n "$_sha_out" ]; then _ci_deploy_script_sha="$_sha_out"; fi
+fi
+# `if`, never `[ -n … ] && var=…`: as a bare trailing command the latter exits 1 when the test
+# is false, which under this script's `set -e` aborts the deploy. That exact trap is documented
+# twice in the credential block above; this is the third site it would have fired at.
+_dt_state=absent
+if [ -n "${DOPPLER_TOKEN:-}" ]; then _dt_state=present; fi
+logger -t "$LOG_TAG" "SOLEUR_DEPLOY_INVOCATION: hook=${SOLEUR_DEPLOY_HOOK_ID:-unset} script_sha=${_ci_deploy_script_sha} cred_file=${CRED_FILE_STATE} doppler_token=${_dt_state}" 2>/dev/null || true
+unset _sha_out _dt_state _ci_deploy_script_sha
+
 LOCK_FILE="${CI_DEPLOY_LOCK:-/var/lock/ci-deploy.lock}"
 exec 200>"$LOCK_FILE"
 flock -n 200 || {
