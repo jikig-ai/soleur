@@ -461,14 +461,143 @@ else
   fail "530 must grade LIVE — it is an origin/tunnel error, reachable only after Access admitted (rc=$RC)"
 fi
 
+# ===========================================================================
+# W1-W9 — CONSUMER WIRING (#7095).
+#
+# The detector above is only half the story. During the 2026-07-29 outage it produced the
+# right answer three times over three days — naming the credential, the symptom, and the
+# remedy — and production stayed down, because nothing CONSUMED the verdict. The gap was
+# never detection; it was that the verdict blocked nothing and reached no one.
+#
+# These cases pin the wiring, not the detector: the gate that must fail the SSH bridge on a
+# dead credential, and the escalation that must reach a human. They are static assertions
+# over `.github/**` because that is where the wiring lives; there is no runtime seam to
+# drive without dispatching a real workflow against production.
+#
+# ANCHORING DISCIPLINE (cq-assert-anchor-not-bare-token): every grep below anchors on a
+# construct a COMMENT cannot produce — a `uses:` key, a `-replace=` flag, an `if:` guard —
+# never on a bare word that the surrounding prose also names. These files are dense with
+# explanatory comments that mention every token in play, so a bare-token grep here is
+# guaranteed to false-pass.
+# ---------------------------------------------------------------------------
+GH_DIR="$REPO_ROOT/.github"
+BRIDGE_ACTION="$GH_DIR/actions/cf-tunnel-ssh-bridge/action.yml"
+DRIFT_WF="$GH_DIR/workflows/scheduled-terraform-drift.yml"
+INFRA_WF="$GH_DIR/workflows/apply-web-platform-infra.yml"
+
+# Fixture-precondition self-check. If a path moves, every assertion below would report a
+# clean PASS on a file that does not exist — the exact vacuity shape this suite exists to
+# prevent. Fail as a FIXTURE error, loudly, rather than as a silent green.
+for _f in "$BRIDGE_ACTION" "$DRIFT_WF" "$INFRA_WF"; do
+  [[ -f "$_f" ]] || { echo "FATAL: fixture precondition failed — $_f does not exist" >&2; exit 2; }
+done
+
+echo "W1: the bridge's liveness gate is defined exactly once, inside the shared composite"
+# AC5d. `--only` is part of the anchor: a fleet-wide sweep inside the bridge would be a
+# different (and much slower) thing than the scoped check this gate contracts for.
+W1_N=$(grep -Ec -- 'check-cloudflare-token-drift\.sh --only CI_SSH_ACCESS_TOKEN' "$BRIDGE_ACTION" 2>/dev/null || echo 0)
+if [[ "$W1_N" == "1" ]]; then
+  pass "one definition in the composite — six callers inherit it"
+else
+  fail "expected exactly 1 scoped invocation in the composite action, found $W1_N (0 = gate absent or line-wrapped out of grep's reach; >1 = redundant)"
+fi
+
+echo "W2: the scoped check is not duplicated per bridge caller"
+# The intent behind AC5d is that no CALLER re-implements the bridge gate. There are
+# exactly two legitimate call sites repo-wide and they are different consumers:
+#   1. the composite    — gates the SSH bridge before any terraform destroy
+#   2. the replace arm  — the AC10 halt gate, asserting a freshly minted credential is
+#                         admitted BEFORE the operator is told the re-mint worked
+# A third is per-caller duplication, which is what R2 rejected. Pin the total, and pin
+# that the second one sits in the workflow that owns the re-mint.
+W2_TOTAL=$(grep -rEc -- 'check-cloudflare-token-drift\.sh --only CI_SSH_ACCESS_TOKEN' "$GH_DIR" 2>/dev/null | awk -F: '{s+=$NF} END {print s+0}')
+W2_IN_INFRA=$(grep -Ec -- 'check-cloudflare-token-drift\.sh --only CI_SSH_ACCESS_TOKEN' "$INFRA_WF" 2>/dev/null || echo 0)
+if [[ "$W2_TOTAL" == "2" && "$W2_IN_INFRA" == "1" ]]; then
+  pass "two call sites: the shared composite gate + the re-mint halt gate"
+else
+  fail "expected exactly 2 scoped call sites across .github/ (composite + re-mint halt gate), found $W2_TOTAL with $W2_IN_INFRA in apply-web-platform-infra.yml — a third means a caller re-implemented the bridge gate"
+fi
+
+echo "W3: a DEAD verdict fails the bridge with the terminal reason ci_ssh_access_denied"
+if grep -qE 'ci_ssh_access_denied' "$BRIDGE_ACTION"; then
+  pass "dead credential produces a named terminal reason"
+else
+  fail "the gate must fail with reason ci_ssh_access_denied — 'connection reset by peer' is what it exists to replace"
+fi
+
+echo "W4: DEAD and UNVERIFIABLE do not collapse into one reason"
+# The detector exits 1 for BOTH "Cloudflare rejected this" and "nothing answered, so I
+# learned nothing" — and #7127 exists precisely because conflating them sends an operator
+# to overwrite a healthy secret. A gate that branches on the bare exit code re-imports the
+# defect one layer up. It must read the structured verdict and emit distinct reasons.
+if grep -qE 'ci_ssh_liveness_unverifiable' "$BRIDGE_ACTION" &&
+   grep -qE -- '--json-file' "$BRIDGE_ACTION"; then
+  pass "gate discriminates via --json-file; unverifiable gets its own reason"
+else
+  fail "gate must branch on the JSON verdict (dead vs unverifiable), not on the bare exit code — exit 1 covers both and their remedies are opposite"
+fi
+
+echo "W5: the gate is the FINAL step of the composite"
+# The ordering AC (AC4) asks that the gate precede every SSH terraform apply. Because the
+# composite is consumed as ONE `uses:` step and GitHub guarantees step order, that reduces
+# to: nothing inside the composite runs after the gate. Assert it positionally.
+W5_GATE_LINE=$(grep -nE -- 'check-cloudflare-token-drift\.sh --only CI_SSH_ACCESS_TOKEN' "$BRIDGE_ACTION" | head -1 | cut -d: -f1)
+W5_LAST_STEP=$(grep -nE '^    - name: ' "$BRIDGE_ACTION" | tail -1 | cut -d: -f1)
+W5_GATE_STEP=$(awk -v g="${W5_GATE_LINE:-0}" 'NR<=g && /^    - name: /{n=NR} END{print n+0}' "$BRIDGE_ACTION")
+if [[ -n "$W5_GATE_LINE" && "$W5_GATE_STEP" == "$W5_LAST_STEP" && "$W5_LAST_STEP" != "0" ]]; then
+  pass "gate is the last step — the bridge cannot report ready without having gated"
+else
+  fail "the gate must be the composite's final step (gate step starts at line ${W5_GATE_STEP:-none}, last step starts at line ${W5_LAST_STEP:-none})"
+fi
+
+echo "W6: all six bridge call sites still inherit the composite"
+W6_N=$(grep -rEc '^\s+uses: \./\.github/actions/cf-tunnel-ssh-bridge\s*$' "$GH_DIR/workflows" 2>/dev/null | awk -F: '{s+=$NF} END {print s+0}')
+if [[ "$W6_N" == "6" ]]; then
+  pass "six callers (apply-web-platform-infra, apply-deploy-pipeline-fix, git-data-cutover, workspaces-luks-cutover x2, workspaces-luks-verify)"
+else
+  fail "expected 6 'uses: ./.github/actions/cf-tunnel-ssh-bridge' call sites, found $W6_N — a caller that stopped using the composite silently lost the gate"
+fi
+
+echo "W7: no -replace target names the .deploy service token"
+# AC3 / Test Scenario 5. `.deploy` is the ONLY remaining remote write path to web-1, and
+# web-1 cannot be replaced (cx33 stock 0/6). Replacing it on any failure between destroy
+# and Doppler republish strands the host with no reachable channel at all.
+W7_HITS=$(grep -rEn -- '-replace=[^ ]*access_service_token\.deploy' "$GH_DIR" 2>/dev/null || true)
+if [[ -z "$W7_HITS" ]]; then
+  pass "the working .deploy token is never a replace target"
+else
+  fail "a -replace target names the .deploy service token — this can strand an unreplaceable host: $W7_HITS"
+fi
+
+echo "W8: the ci-ssh-token-replace arm exists and is typo-guarded"
+# Phase 1.1. Without an executable arm, Phase 1 is an operator-local `terraform apply` —
+# i.e. exactly the hand-run infra step this plan claims not to contain.
+if grep -qE '^\s+- ci-ssh-token-replace\s*$' "$INFRA_WF" &&
+   grep -qE -- '-replace=cloudflare_zero_trust_access_service_token\.ci_ssh' "$INFRA_WF" &&
+   grep -qE 'REPLACE-CI-SSH-TOKEN' "$INFRA_WF"; then
+  pass "narrow arm present with a distinct confirm token"
+else
+  fail "apply-web-platform-infra.yml needs a ci-ssh-token-replace enum option, a -replace= on the ci_ssh token, and a REPLACE-CI-SSH-TOKEN typo-guard"
+fi
+
+echo "W9: a DEAD verdict escalates to an action-required issue, not only to email"
+# AC5e. Email fired three times across three days and produced no action. operator-digest
+# harvests action-required-labelled ISSUES, not emails.
+if grep -qE "^\s+if: .*token_drift\.outputs\.verdict == 'dead'" "$DRIFT_WF" &&
+   grep -qE '^\s+--label action-required' "$DRIFT_WF"; then
+  pass "dead verdict opens/updates an action-required issue"
+else
+  fail "scheduled-terraform-drift.yml must create or update an action-required issue on verdict == 'dead' (email alone is demonstrably insufficient)"
+fi
+
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Without it, deleting every assertion call yields
 # "0/0 passed, 0 failed" and exit 0 — measured — and test-all.sh reads only the exit code,
 # so a suite that ran NOTHING is indistinguishable from one where everything passed. A
 # FLOOR, not equality: adding a case must not require editing this line.
-if [[ "$((PASS + FAIL))" -lt 13 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 13. The suite did not execute what it claims to." >&2
+if [[ "$((PASS + FAIL))" -lt 22 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 22. The suite did not execute what it claims to." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

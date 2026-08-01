@@ -223,6 +223,94 @@ jobs:
           body: '<p><strong>At least one Cloudflare token value in Doppler is no longer accepted by Cloudflare.</strong></p><p>Terraform will NOT fix this on its own: the <code>doppler_secret</code> resources carry <code>lifecycle.ignore_changes = [value]</code>, so <code>terraform apply</code> reports "No changes" while the stale value keeps being served. Set the live value on the <code>prd</code> ROOT config — branch configs inherit it.</p><p>This matters for releases: the registry-push Access service token is what lets CI reach the zot registry, and zot is the only registry production can pull from. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> to see which key in which config is stale.</p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
+      # ── ESCALATION BEYOND EMAIL (#7095) ──────────────────────────────────
+      # The email above is necessary and was not sufficient. During the 2026-07-29
+      # outage this exact step fired on runs 30608371251, 30653453432 and 30686984837
+      # — three times across three days — naming the credential (CI_SSH_ACCESS_TOKEN),
+      # the symptom (HTTP 403 from ssh.soleur.ai) and the remedy. Production stayed
+      # down the whole time. The detector was never the gap; the CHANNEL was.
+      #
+      # `action-required` is the label `operator-digest` harvests, and it harvests
+      # ISSUES — an email is invisible to it. The sibling filer in
+      # scheduled-cron-artifact-age.yml deliberately declines this label because that
+      # queue is deep and its own finding is a staleness nag with a measured 0%
+      # response rate; the reasoning is sound there and does not transfer here. A dead
+      # CI-SSH credential is not a nag: it dark-fails every remote write path to the
+      # production host, and it is the reason this workflow exists.
+      #
+      # Deduped on the dedicated label so three fires produce one issue with three
+      # comments, not three issues. `continue-on-error` matches every sibling emitter
+      # in this job — a rate-limited filer must not shadow the email below it.
+      - name: Open or update an action-required issue (token drift — DEAD credential)
+        if: always() && steps.token_drift.outputs.verdict == 'dead'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          LABEL="token-drift-dead"
+          TITLE="[TOKEN DRIFT] A Cloudflare credential is dead — remote write paths are down"
+          TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
+          RUN_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+
+          gh label create "$LABEL" \
+            --description "check-cloudflare-token-drift.sh graded at least one credential DEAD" \
+            --color "B60205" 2>/dev/null || true
+
+          # The detector's OWN remedy text, not a paraphrase. The whole failure mode
+          # this step addresses was a correct diagnosis that never reached a human, so
+          # re-wording it here would be the one place to reintroduce the loss.
+          {
+            echo "**At least one Cloudflare credential in Doppler is no longer accepted by Cloudflare.**"
+            echo ""
+            echo "Detected: ${TIMESTAMP}"
+            echo "Run: ${RUN_URL}"
+            echo ""
+            echo "\`\`\`"
+            # Read the key/config pairs from the SAME verdict file the `dead` branch was
+            # derived from, so the issue body cannot disagree with the verdict that filed
+            # it. The detector's human report goes to the step log, not to a file — using
+            # the JSON is what makes this quotable rather than a paraphrase.
+            # Kept to ONE physical line: this sits inside a YAML block scalar, so a
+            # continuation line at column 0 would terminate the scalar and break the
+            # workflow parse rather than the script.
+            python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); [print("  {}  in  {}".format(r.get("key","?"), r.get("config","?"))) for r in d.get("stale", [])]' \
+              "${RUNNER_TEMP}/token-drift.json" 2>/dev/null \
+              || echo "  (verdict file unreadable — open the run for the key/config pairs)"
+            echo "\`\`\`"
+            echo ""
+            echo "### Remedy"
+            echo ""
+            echo "Terraform will **not** fix this on its own: the \`doppler_secret\` resources carry"
+            echo "\`lifecycle.ignore_changes = [value]\`, so \`terraform apply\` reports \"No changes\""
+            echo "while the stale value keeps being served."
+            echo ""
+            echo "- Set the live value on the \`prd\` **ROOT** config; branch configs inherit it."
+            echo "- For \`CI_SSH_ACCESS_TOKEN_*\` specifically, re-mint in-band:"
+            echo "  \`gh workflow run apply-web-platform-infra.yml -f apply_target=ci-ssh-token-replace -f confirm=REPLACE-CI-SSH-TOKEN -f reason=<why>\`"
+            echo ""
+            echo "_Auto-filed by [scheduled-terraform-drift](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-terraform-drift.yml). Close it when the detector reports \`verdict: clean\`._"
+          } > "${RUNNER_TEMP}/token-drift-issue.md"
+
+          EXISTING=$(gh issue list --label "$LABEL" --state open --limit 100 \
+            --json number,title --jq ".[] | select(.title == \"${TITLE}\") | .number" | head -1)
+
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --body-file "${RUNNER_TEMP}/token-drift-issue.md"
+            echo "Updated existing action-required issue #${EXISTING}"
+          else
+            gh issue create \
+              --title "$TITLE" \
+              --label action-required \
+              --label "$LABEL" \
+              --milestone "Phase 4: Validate + Scale" \
+              --body-file "${RUNNER_TEMP}/token-drift-issue.md"
+            echo "Filed a new action-required issue for the dead credential."
+          fi
+
       - name: Email notification (token drift — UNVERIFIABLE only)
         if: always() && steps.token_drift.outputs.verdict == 'unverifiable'
         continue-on-error: true
