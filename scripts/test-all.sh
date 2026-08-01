@@ -292,6 +292,11 @@ if want_scripts; then
   run_suite "scripts/lint-agents-compound-sync-unit" bash scripts/lint-agents-compound-sync.test.sh
   run_suite "scripts/lint-infra-no-human-steps" bash scripts/lint-infra-no-human-steps.test.sh
   run_suite "scripts/lint-credential-path-literals" bash scripts/lint-credential-path-literals.test.sh
+  # #7136: a `run:` step reading a variable declared only on ANOTHER step. Part B of this
+  # suite EXECUTES the shipped release-failure email body under both deploy branches — the
+  # alert path that had never once delivered, because `set -u` killed it before the curl.
+  run_suite "scripts/lint-workflow-step-env-refs" bash scripts/lint-workflow-step-env-refs.test.sh
+  run_suite "scripts/lint-workflow-step-env-refs-live" python3 scripts/lint-workflow-step-env-refs.py
   # ADR-140: Layer A encryption-posture detector (the mechanical resolver behind
   # the "encryption at rest + in transit" design-time gate). TS-1..8,15..17 +
   # the MB-1..MB-12 mutation battery (fixture-isolated, not suite-pass-count).

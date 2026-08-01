@@ -1286,6 +1286,12 @@ jobs:
           FAILED: ${{ steps.outcome.outputs.failed }}
           FAILED_HTML: ${{ steps.outcome.outputs.failed_html }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # #7136 — DECLARED HERE, NOT INHERITED. Step-level `env:` does not cross step
+          # boundaries: this was declared only on the `outcome` step above, so under
+          # `set -u` the expansion below killed this step BEFORE the curl, on every
+          # failed release since #7097 introduced the branch. Nobody was ever told.
+          # scripts/lint-workflow-step-env-refs.py now fails CI on this shape.
+          R_DEPLOY: ${{ needs.deploy.result }}
         run: |
           set -uo pipefail
           # Always exits 0 and reports delivery through `delivered`; the
@@ -1312,18 +1318,27 @@ jobs:
           # teaches them to stop reading the next one — and alert fatigue is the failure mode that
           # let this incident run 26 hours. Getting this wrong would recreate the very thing the
           # job exists to prevent.
-          if [[ "${R_DEPLOY}" == "success" ]]; then
+          # `${R_DEPLOY:-}` — GUARDED, matching every sibling expansion in this step. An
+          # unset value must take the `else` ("production was NOT updated") branch: that
+          # over-warns, where the other direction would tell the operator their code is
+          # live when it is not. A rename that breaks this must degrade toward the alarm.
+          if [[ "${R_DEPLOY:-}" == "success" ]]; then
             SUBJ_TAIL="production WAS updated, but a post-release check failed"
             BODY="<p><strong>The new version DID reach production — but a check that runs afterwards failed, so we cannot confirm the site is fully healthy.</strong></p>"
+            BODY="${BODY}<p>Released version: <code>${VER_LABEL}</code> (tag: <code>${TAG_LABEL}</code>).</p>"
             BODY="${BODY}<p><strong>What this means for you:</strong> the code you merged is live. Something about verifying it afterwards did not pass, which may mean a real problem with the running site or may mean the check itself is faulty. Worth looking at soon; it is not the same as a release being stuck.</p>"
           else
             SUBJ_TAIL="production was NOT updated"
             BODY="<p><strong>The Soleur web platform did not finish releasing. Production is still running the OLDER build — the changes that were just merged are not live.</strong></p>"
-          BODY="${BODY}<p>Attempted version: <code>${VER_LABEL}</code> (tag: <code>${TAG_LABEL}</code>). Production is serving whatever was deployed before this run, which is now behind that tag.</p>"
-          BODY="${BODY}<p><strong>What stopped:</strong></p><ul>${FAILED_HTML}</ul>"
-          BODY="${BODY}<p><a href=\"${RUN_URL}\">Open the failed run</a> — the red entry named above is the one to look at.</p>"
+            BODY="${BODY}<p>Attempted version: <code>${VER_LABEL}</code> (tag: <code>${TAG_LABEL}</code>). Production is serving whatever was deployed before this run, which is now behind that tag.</p>"
             BODY="${BODY}<p><strong>What this means for you:</strong> until this is fixed, every further change you merge will also stay unreleased — the site keeps serving old code and looks healthy while doing it. This is not something that clears on its own.</p>"
           fi
+          # SHARED TAIL, both branches (#7136). These were indented inside the `else` above,
+          # so the success branch carried NO run link and NO failed-job list — while the
+          # closing paragraph tells the operator to "send the run link above" to their
+          # engineer. That branch had never executed, because the step always died first.
+          BODY="${BODY}<p><strong>What stopped:</strong></p><ul>${FAILED_HTML}</ul>"
+          BODY="${BODY}<p><a href=\"${RUN_URL}\">Open the failed run</a> — the red entry named above is the one to look at.</p>"
           BODY="${BODY}<p><strong>What to do:</strong> you do not need to fix this yourself. Send the run link above to your engineer, or paste it into Claude Code and ask it to fix the failing release. Treat it as urgent: nothing reaches production until it is resolved.</p>"
           PAYLOAD=$(jq -n \
             --arg from "Soleur Ops <noreply@soleur.ai>" \
@@ -1351,8 +1366,16 @@ jobs:
       # #7095 is about. Mirror it to Sentry (a DIFFERENT vendor, read from a
       # GitHub-side secret so it does not share Resend's failure) and fail this
       # job so the non-delivery is at least visible in the run.
+      #
+      # `!cancelled()` is load-bearing (#7136). Without it this step inherits the implicit
+      # `success()` guard, so when the email step FAILS outright — which is exactly what
+      # `R_DEPLOY: unbound variable` did on every failed release since #7097 — this step is
+      # SKIPPED rather than run. Verified on run 30703438860: email=failure, mirror=skipped.
+      # The compensating channel was disarmed by the same crash it exists to compensate for,
+      # so a step that "cannot end in silence" ended in silence. A guard that only fires when
+      # its subject succeeded cannot be a fallback for that subject failing.
       - name: Mirror non-delivery to Sentry and fail loudly
-        if: steps.outcome.outputs.failed != '' && steps.email.outputs.delivered != '1'
+        if: ${{ !cancelled() && steps.outcome.outputs.failed != '' && steps.email.outputs.delivered != '1' }}
         env:
           NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
           FAILED: ${{ steps.outcome.outputs.failed }}
