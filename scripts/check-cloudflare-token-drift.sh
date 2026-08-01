@@ -321,14 +321,34 @@ PROBE_SETUP_FAILED=''         # 1 = the probe could not be SET UP; not a network
 # grep (an OR across the whole file) would see an early block's stamp while %{http_code}
 # reports the FINAL response — the two halves of the verdict would come from different
 # responses, and an admitted-after-redirect would grade DEAD, the destructive direction.
+PROBE_HDR=""
+# ONE owning trap for the whole run (ADR-129 / lint-trap-tempfile-ownership rule (c)).
+# One reused file rather than one per probe: a per-call mktemp+rm leaks on any signal
+# between allocation and cleanup, and there is no other trap in this script to hang the
+# cleanup off.
+# shellcheck disable=SC2317  # invoked by the EXIT trap below, which shellcheck cannot see
+_probe_hdr_cleanup() { [[ -n "$PROBE_HDR" ]] && rm -f "$PROBE_HDR"; }
+trap _probe_hdr_cleanup EXIT
+
 access_probe() {
   local host="$1" id="${2:-}" secret="${3:-}"
-  local hdr rc=0
+  local rc=0
   PROBE_SETUP_FAILED=0
   # A local disk failure is NOT a network fact. Funnelling it into the same 000 the caller
   # maps to "unreachable" sends the operator to investigate Cloudflare DNS when the real
   # cause is a full runner disk.
-  hdr=$(mktemp) || { PROBE_CODE=000; PROBE_STAMPED=0; PROBE_MITIGATED=0; PROBE_ACCESS_REDIRECT=0; PROBE_SETUP_FAILED=1; return 0; }
+  if [[ -z "$PROBE_HDR" ]]; then
+    PROBE_HDR=$(mktemp) || { PROBE_CODE=000; PROBE_STAMPED=0; PROBE_MITIGATED=0; PROBE_ACCESS_REDIRECT=0; PROBE_SETUP_FAILED=1; return 0; }
+  fi
+  # Truncate before every probe. This is belt-and-braces, NOT a live fix, and the
+  # distinction is worth recording because the reuse above is what makes the question
+  # arise: measured 2026-08-01, curl opens the -D dump in truncating mode unconditionally
+  # — a DNS failure left the file at 0 bytes, wiping a planted `cf-access-aud`. So no
+  # stale stamp can survive into the next probe today, and the `PROBE_CODE == 000` arm
+  # short-circuits ahead of the stamp read in any case. The line costs nothing and keeps
+  # the file's reuse obviously safe if either of those ever changes.
+  : > "$PROBE_HDR" || { PROBE_CODE=000; PROBE_STAMPED=0; PROBE_MITIGATED=0; PROBE_ACCESS_REDIRECT=0; PROBE_SETUP_FAILED=1; return 0; }
+  local hdr="$PROBE_HDR"
   local -a args=(-s -o /dev/null -D "$hdr" -w '%{http_code}' --max-time 20)
   [[ -n "$id" ]] && args+=(-H "CF-Access-Client-Id: $id" -H "CF-Access-Client-Secret: $secret")
   # Assigned then normalised, NOT `$(curl ... || printf '000')`. curl prints its -w output
@@ -352,7 +372,6 @@ access_probe() {
   else
     PROBE_ACCESS_REDIRECT=0
   fi
-  rm -f "$hdr"
   PROBES_MADE=$((PROBES_MADE + 1))
 }
 
