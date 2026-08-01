@@ -8,8 +8,17 @@ defaulted fail-closed** per the plan skill's TR2 rule.
 **Before anything else, read `## Decision Challenges` in the plan** (UC-1…UC-4). Two challenge
 the docs-only scope; one records that PA-32 will state a live limb has no lawful basis.
 
-**Scope (hard):** `knowledge-base/legal/**` plus this spec directory. No source file, no
+**Scope (hard, as planned):** `knowledge-base/legal/**` plus this spec directory. No source file, no
 workflow YAML, no `docs/legal/**`.
+
+**Scope (as shipped) — DELIBERATELY EXCEEDED, operator-approved.** The `docs/legal/**` exclusion
+above no longer holds. DEF-1a was folded in: three published legal documents
+(`privacy-policy.md`, `gdpr-policy.md`, `data-protection-disclosure.md`), their three Eleventy
+mirrors, and the `LEGAL_DOC_SHAS` repin that the `tc-document-sha-guard` CI job requires as
+lockstep. Shipping a corrected register while the *published* policies contradict it would have
+left the public-facing misstatement standing as the only document a data subject can read. Still
+no source/runtime file beyond the SHA constants table, and no workflow YAML. Full measurement and
+rationale in task 5.7 below.
 
 ---
 
@@ -153,3 +162,24 @@ workflow YAML, no `docs/legal/**`.
       `check-tc-document-sha.sh` green (exit 0). **R1–R5 remain deferred to #7119**: no
       `apps/web-platform/server/**`, `.github/workflows/**` or `scripts/**` path is in the diff.
       Plan AC17 amended in the same commit.
+
+      **RE-MEASURED 2026-08-01 after the review pass — the scope grew again, and it is
+      recorded rather than quietly re-baselined.** The diff is now **19 files** (was 15).
+      Four are new, all added to fix defects the 10-agent review found, and all inside the
+      DEF-1a rationale the operator already approved — correcting published legal documents
+      that contradict the register this PR ships:
+
+      - `docs/legal/data-protection-disclosure.md` + its Eleventy mirror — a **third**
+        published legal document carrying the same falsified controllership framing. No DEF
+        item had named it; review found it. It is SHA-pinned, so it joined the repin set.
+      - `knowledge-base/legal/statutory-response-catalog.md` — the operator's DSAR
+        first-response checklist enumerated three requester classes while this PR introduces
+        a fourth, so a Discord member's Art. 15 request routed to no branch.
+      - `knowledge-base/legal/audits/2026-07-counsel-review-7086.md` — three enumerations sat
+        under `## Claims verified as ACCURATE` and are wrong; supersede banner added, figures
+        left in place per the no-retro-edit convention for dated attestations.
+
+      Still **zero** source/runtime files beyond the SHA constants table: no
+      `apps/web-platform/server/**`, no `.github/workflows/**`, no `scripts/**`. R1–R5 remain
+      deferred to #7119. AC17 stays recorded as INTENTIONALLY EXCEEDED, now over 7 files
+      outside `knowledge-base/**` rather than 5.
