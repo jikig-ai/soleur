@@ -26,7 +26,7 @@ approval of Phase 1 does not extend to Phase 2.
 
 ## Phase 0 — Preconditions (read-only; no writes)
 
-- [ ] 0.1 Pull `https://app.soleur.ai/health`; record `version`, `build_sha`, `uptime`, `supabase`.
+- [x] 0.1 Pull `https://app.soleur.ai/health`; record `version`, `build_sha`, `uptime`, `supabase`.
       **Stop** if `version` ≥ `0.247.0` — prod recovered by another path and this plan is stale.
 - [ ] 0.2 Re-run the H6 control triad (probe A ssh + ci_ssh creds; probe B ssh + bogus secret;
       probe C deploy + deploy creds). All three outcomes must reproduce.
@@ -36,19 +36,19 @@ approval of Phase 1 does not extend to Phase 2.
 - [ ] 0.4 Run `scripts/check-cloudflare-token-drift.sh --only CI_SSH_ACCESS_TOKEN` locally and
       record the verdict. This is the same check Phase 4.1 wires into the bridge — confirm its
       three-valued exit contract (0/1/2) before depending on it.
-- [ ] 0.5 Read the last 6 `scheduled-terraform-drift.yml` runs and confirm the `dead` verdict history
+- [x] 0.5 Read the last 6 `scheduled-terraform-drift.yml` runs and confirm the `dead` verdict history
       (runs `30686984837`, `30653453432`, `30608371251` are the cited evidence). Attach to the PR body.
 - [ ] 0.6 Confirm `secrets.DOPPLER_TOKEN_WRITE` is present and `doppler_write_check.skip_sync != 'true'`,
       or the existing sync step — the sole republish path after R1 — silently no-ops.
 - [ ] 0.7 Determine which Doppler config the sync step writes (`prd` root vs `prd_terraform` branch).
       The detector's remedy line says *"Set the live value on the 'prd' ROOT config; branch configs
       inherit it."* Resolve this before Phase 1, not after.
-- [ ] 0.8 Confirm no bridge-consuming workflow is mid-run (`git-data-cutover`,
+- [x] 0.8 Confirm no bridge-consuming workflow is mid-run (`git-data-cutover`,
       `workspaces-luks-cutover`, `workspaces-luks-verify`) — they share the `ci_ssh` credential.
 
 ## Phase 1 — Re-mint the `ci_ssh` Access token
 
-- [ ] 1.1 **Resolve the open P0 first:** no workflow arm can run an arbitrary `-replace`. Add a narrow
+- [x] 1.1 **Resolve the open P0 first:** no workflow arm can run an arbitrary `-replace`. Add a narrow
       `ci-ssh-token-replace` arm to `apply-web-platform-infra.yml`'s `apply_target` enum, with a
       typo-guard `confirm` token, reusing the existing non-SSH `-target` allow-list plus
       `-replace=cloudflare_zero_trust_access_service_token.ci_ssh`. Do **not** add a general
@@ -81,17 +81,17 @@ approval of Phase 1 does not extend to Phase 2.
 
 ## Phase 4 — Make the existing verdict block, and reach a human
 
-- [ ] 4.1 Add one step to `.github/actions/cf-tunnel-ssh-bridge/action.yml` (after the forward opens,
+- [x] 4.1 Add one step to `.github/actions/cf-tunnel-ssh-bridge/action.yml` (after the forward opens,
       after `::add-mask::`): `bash scripts/check-cloudflare-token-drift.sh --only CI_SSH_ACCESS_TOKEN`.
       Fail with terminal reason `ci_ssh_access_denied` on exit 1. One edit, six callers (AC5d).
-- [ ] 4.2 Add `action-required` issue creation/update on verdict `dead` to
+- [x] 4.2 Add `action-required` issue creation/update on verdict `dead` to
       `scheduled-terraform-drift.yml`, alongside the existing email, carrying the detector's remedy
       line (AC5e). Email alone failed three times over three days.
 - [ ] 4.3 Leave `apply-web-platform-infra.yml`'s existing presence gate intact — its `absent → skip`
       arm is a correct first-bootstrap accommodation.
-- [ ] 4.4 Probe hygiene: creds via `env:` never argv; no `-v`/`-i`/`--trace*`/`set -x`;
+- [x] 4.4 Probe hygiene: creds via `env:` never argv; no `-v`/`-i`/`--trace*`/`set -x`;
       `--max-redirs 0`; annotations carry the enum + status code only, never the response body.
-- [ ] 4.5 Extend the **existing** `scripts/check-cloudflare-token-drift.test.sh` (already registered
+- [x] 4.5 Extend the **existing** `scripts/check-cloudflare-token-drift.test.sh` (already registered
       in `scripts/test-all.sh`). Do **not** create a new suite. Fixtures synthesized, never captured
       live (`cq-test-fixtures-synthesized-only`).
 
@@ -125,16 +125,23 @@ approval of Phase 1 does not extend to Phase 2.
 
 ## Phase 6 — Records
 
-- [ ] 6.1 Write ADR-154 (ordinal verified free on freshly-fetched `origin/main`; `/ship` re-verifies).
+- [x] 6.1 Write ADR-154 (ordinal verified free on freshly-fetched `origin/main`; `/ship` re-verifies).
       Three propositions only — zero-stock ⟹ `-replace` unavailable; a detector firing into an unread
       channel has not detected anything; probe the transport before the destroy. The draft's
       propositions on the "copy invariant" and `ignore_changes` are **cut** (see plan §ADR).
-- [ ] 6.2 C4: read all three `.c4` files in full before concluding impact. Enumerate external actors,
+- [x] 6.2 C4: read all three `.c4` files in full before concluding impact. Enumerate external actors,
       external systems (is **Cloudflare Access** modelled distinctly from Cloudflare Tunnel? this
       incident turned on their separability), data stores, and changed access relationships.
       A bare "no C4 impact" is a reject condition.
-- [ ] 6.3 File the two deferrals as issues with re-evaluation criteria: `deploy-web-image.yml`, and
+- [x] 6.3 File the two deferrals as issues with re-evaluation criteria: `deploy-web-image.yml`, and
       the `cpx`-family host-type migration for the `cx33` stock constraint.
+      **Done as a consolidated comment on #7103, not as two new issues.** #7103 is literally the
+      "#7095 follow-ups" tracker, so two fresh issues would be net +2 backlog for one incident
+      against a tracker that already exists for it (the `/work` net-issue-flow gate). The comment
+      adds them as B6 and B7 with re-evaluation criteria, plus two addenda (B2 is host-side only
+      and would not have caught this CI-side credential; `.deploy` is a live landmine in state),
+      and reconciles an ordinal collision — #7103's B5 had reserved ADR-154 for the copy
+      invariant, which plan review cut from this ADR.
 - [ ] 6.4 Capture the learning: *a plan's diagnosis of "why nobody noticed" deserves the same
       evidentiary standard as its diagnosis of "what broke" — this draft measured the outage
       correctly and asserted the monitoring gap from imagination, and the remedy built on that

@@ -518,7 +518,7 @@ resource has to exist first.
 
 | Step | Action | Why here |
 |---|---|---|
-| 1 | **Merge the PR** (workflow + composite-action edits only) | After R1 the PR touches only `.github/**`, so it triggers **neither** `web-platform-release.yml` (paths: `apps/web-platform/**`) **nor** `apply-web-platform-infra.yml` (paths: `apps/web-platform/infra/**`). The merge is inert — deliberately, so nothing races the recovery. |
+| 1 | **Merge the PR** (workflow + composite-action edits only) | **CORRECTED AT `/work` — the merge is NOT inert.** See R6 below. It does not trigger `web-platform-release.yml` (paths: `apps/web-platform/**`, `plugins/soleur/**` — this PR touches neither), but it **does** trigger `apply-web-platform-infra.yml`, whose `paths:` list includes `.github/workflows/apply-web-platform-infra.yml` itself. That run is expected to go **red**, and its red IS AC5b. |
 | 2 | **Phase 1** — dispatch the new `ci-ssh-token-replace` arm | Mints a fresh token; the existing sync step writes `CI_SSH_ACCESS_TOKEN_ID/_SECRET` to Doppler in the same run. This leg touches no SSH resource. |
 | 3 | **Phase 1.3 / AC10** — assert Access **admits** the new credential (`verdict: clean`) | **Halt here on anything but a positive result.** A 502 or timeout is not a pass. |
 | 4 | **Phase 2** — re-dispatch `apply-deploy-pipeline-fix.yml` | The channel is live; both `terraform_data` resources are absent from state, so both are created and the #7097 payload lands. |
@@ -526,6 +526,22 @@ resource has to exist first.
 | 6 | **Phase 5** — dispatch the release, then poll `/health` for AC14's full predicate | DoD. |
 
 **Two sequencing notes that must not be lost:**
+
+- **R6 (applied at `/work`): step 1 is NOT inert, and the plan asserted the opposite.** The claim was
+  checked rather than assumed, per the instruction below, and it is false. `apply-web-platform-infra.yml`
+  lists **`.github/workflows/apply-web-platform-infra.yml`** in its own `push.paths`, so a PR that edits
+  that workflow — which this one must, to add the `ci-ssh-token-replace` arm — fires a production apply
+  on the merge commit. The plan contradicted itself: AC5b already predicted exactly this run and made
+  its red the acceptance evidence.
+
+  **The red run is expected, and it is safe.** Leg (a) (the ~100-target non-SSH apply) is a no-op
+  because no `apps/web-platform/infra/*.tf` changed. The job then reaches `Check CI-SSH token presence`,
+  which passes (the ID is present — presence was never the problem), enters the bridge, and fails at the
+  new liveness gate with `ci_ssh_access_denied`. **This is strictly safer than the pre-merge behaviour:**
+  before this PR the same run would have proceeded into leg (b) and failed at `connection reset by peer`
+  *after* terraform had begun destroying `terraform_data` resources — which is precisely how run
+  30650564509 emptied state on 2026-07-31.
+  Do **not** reach for `[skip-web-platform-apply]` to suppress it: the run is the AC.
 
 - **Step 1 being inert is a property to verify, not assume.** If `/work` finds itself editing anything
   under `apps/web-platform/**`, both auto-applies fire on merge and will race the recovery. Both
