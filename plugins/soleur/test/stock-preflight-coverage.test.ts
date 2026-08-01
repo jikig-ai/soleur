@@ -105,6 +105,28 @@ const EXCLUSION_ALLOWLIST = new Map<string, string>([
     // hcloud_server) is out-of-scope and there is no destroy-then-fail surface to guard.
     "read-only CF-rulesets audit; no terraform apply (GETs + issue comment only), so nothing is created or destroyed and stock-preflight is out-of-scope",
   ],
+  [
+    "ci-ssh-token-replace",
+    // #7095 re-mint of the CF Access ci_ssh service token (job `ci_ssh_token_replace`). Its
+    // `-target` set is TWO Cloudflare addresses (the service token + its policy) and its one
+    // `-replace` is the token — NO hcloud_server, no volume, no host of any kind. So
+    // stock-preflight-gate.sh (which `select(.type == "hcloud_server")`) hits its
+    // legitimate-empty out-of-scope branch and cannot fire. Same class as
+    // workspaces-luks-recut: a scoped `-replace` on a non-server resource.
+    //
+    // It does not merely SKIP the server plane, it FORBIDS it: the job's own blast-radius
+    // gate re-reads `terraform show -json` and fails on any address matching hcloud_*,
+    // terraform_data.* or tls_private_key.*, because `-target` is transitive on
+    // dependencies and the written flags are a request rather than a proof.
+    //
+    // Worth stating plainly, because this arm exists BECAUSE of a stock constraint and the
+    // adjacency invites the wrong conclusion: `cx33` was available=false in all 6 datacenters
+    // on 2026-08-01, which is precisely why the repair had to be a credential replace and not
+    // a host replace (ADR-154). Gating this arm on server stock would make the ONE remedy
+    // that works while the fleet cannot be rebuilt fail-closed on the very condition that
+    // forced its existence — a gate that always fails is an outage, not a tripwire.
+    "scoped -replace of a Cloudflare Access service token (no server → stock-preflight is a no-op); its own blast-radius gate FORBIDS every hcloud_*/terraform_data/tls_private_key address, and gating it on server stock would fail-close the one remedy available when stock is zero (ADR-154)",
+  ],
 ]);
 
 // NON-VACUITY FLOOR ONLY. This exists to catch the options parser silently collapsing to

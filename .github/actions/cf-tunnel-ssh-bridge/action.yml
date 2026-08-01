@@ -13,6 +13,16 @@
 # lines 182-309) so both that workflow and apply-web-platform-infra.yml share
 # one mechanism (#4844). SETUP ONLY — see the teardown contract below.
 #
+# ── THIS ACTION CAN FAIL ON A DEAD CREDENTIAL (#7095) ──────────────────────
+# Its final step asserts that Cloudflare Access still ADMITS the ci_ssh service
+# token, and fails with a named reason if not (`ci_ssh_access_denied`,
+# `ci_ssh_liveness_unverifiable`, `ci_ssh_liveness_unavailable`). Callers get
+# this for free and MUST NOT treat a bridge failure as skippable: the whole
+# point is to stop BEFORE a terraform destroy runs against a channel that
+# cannot carry the subsequent SSH. The `if: always()` teardown contract below
+# already covers this path — its `-n` guards handle a bridge that failed after
+# exporting SERVER_IP/CLOUDFLARED_PID.
+#
 # ── SHA-RECOMPUTE DISCIPLINE ───────────────────────────────────────────────
 # `cloudflared-sha256` MUST be computed against the REAL released binary at the
 # pinned `cloudflared-version` (curl the release asset, `sha256sum` it). NEVER
@@ -265,3 +275,92 @@ runs:
           echo "::error::iptables NAT redirect SERVER_IP:22 → 127.0.0.1:2222 failed — terraform's Go SSH client cannot reach the host via the tunnel."
           exit 1
         fi
+
+    # ── LIVENESS GATE (#7095) — MUST REMAIN THE FINAL STEP ────────────────────
+    # Everything above proves the bridge was BUILT. Nothing above proves Cloudflare
+    # Access will still ADMIT the credential it was built with, and those are different
+    # facts: a local TCP listener opens whether or not the edge accepts the service
+    # token, so `nc -z 127.0.0.1:2222` succeeds on a dead credential.
+    #
+    # That gap is not hypothetical. On 2026-07-31 run 30650564509 built this bridge
+    # cleanly, terraform then DESTROYED both `terraform_data` resources, and only THEN
+    # discovered the channel was dead — failing at `ssh: handshake failed: connection
+    # reset by peer`, a message that names neither the credential nor the remedy. State
+    # was left emptier than reality and production stayed dark for three more days.
+    #
+    # Position is the contract: this is the composite's last step, so a caller that has
+    # `uses:` this action has necessarily passed the gate before any of its own later
+    # steps run — including its terraform plan/apply (AC4). Adding a step after this one
+    # silently reopens the destroy-before-verify window. `check-cloudflare-token-drift.test.sh`
+    # asserts the position (W5), not merely the presence.
+    - name: Gate — CF Access must still admit the ci_ssh credential
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        DOPPLER_TOKEN: ${{ inputs.doppler-token }}
+        DOPPLER_PROJECT: soleur
+        DOPPLER_CONFIG: prd_terraform
+      # Probe hygiene (plan 4.4): credentials reach THIS STEP via `env:` only, never argv.
+      # Scoped precisely, because the earlier wording claimed more than the mechanism
+      # delivers: the detector itself then passes the pair to curl as `-H` arguments, so
+      # the values ARE on a child process's argv. That is acceptable on an ephemeral
+      # GitHub-hosted runner and is pre-existing behaviour of the detector, but this
+      # comment must not read as an end-to-end guarantee it does not provide. No `-v`/`-i`/`--trace*`/`set -x`
+      # anywhere in this step. The detector's own report names KEYS and CONFIGS and never
+      # echoes a credential value, so printing it is safe and is the remedy text the
+      # operator needs; the ::error:: annotations below carry the reason enum and the
+      # verdict counts ONLY, never a response body.
+      run: |
+        set -uo pipefail
+        # `|| rc=$?` is load-bearing: `set -uo pipefail` does NOT clear `-e`, and Actions
+        # runs this under `bash -eo pipefail {0}`, so a bare invocation would abort the
+        # step at this line and every branch below would be unreachable — the step would
+        # fail with no named reason, which is the defect this gate exists to remove.
+        rc=0
+        # Kept on ONE physical line: `check-cloudflare-token-drift.test.sh` counts this
+        # invocation to prove the gate is defined once and shared, and a wrapped command
+        # is invisible to a line-oriented grep — the guard would pass while pointing at
+        # a different call site entirely.
+        bash scripts/check-cloudflare-token-drift.sh --only CI_SSH_ACCESS_TOKEN --json-file "$RUNNER_TEMP/ci-ssh-liveness.json" || rc=$?
+
+        # The detector's exit 1 covers BOTH "Cloudflare rejected this credential" and
+        # "nothing answered, so I learned nothing". Branching on the bare exit code would
+        # collapse them — and #7127 exists precisely because that conflation sends an
+        # operator to overwrite a HEALTHY secret. Read the structured verdict instead.
+        # A `-1` sentinel means the file is missing or unparseable: that is "the scan's
+        # result is UNKNOWN", never "the scan was clean".
+        # `live` is read too, and it is the difference between "measured clean" and
+        # "measured nothing". The detector reaches `exit 0` with live=dead=unverifiable=0
+        # whenever the key NAMES enumerate but every `doppler secrets get --plain` read
+        # comes back empty — that read's exit status is discarded upstream, so a Doppler
+        # blip, or the present-but-empty state a half-failed re-mint leaves, renders as a
+        # clean fleet. Without this the gate would certify zero pairs and let terraform
+        # proceed to destroy.
+        read -r live dead unver < <(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["live"], d["dead"], d["unverifiable"])' \
+          "$RUNNER_TEMP/ci-ssh-liveness.json" 2>/dev/null || echo "-1 -1 -1")
+
+        if [[ "$rc" == "2" || "$dead" == "-1" ]]; then
+          echo "::error::ci_ssh_liveness_unavailable — the liveness detector could not run or its verdict was unreadable (exit ${rc}). NO conclusion was drawn about the credential; this is not a claim that it is stale. Fail-closed: the SSH apply must not proceed on an unmeasured channel."
+          exit 1
+        fi
+        if [[ "$dead" -gt 0 ]]; then
+          echo "::error::ci_ssh_access_denied — Cloudflare Access REJECTED the CI_SSH_ACCESS_TOKEN pair (${dead} dead). The bridge is built but the channel is dead; SSH would fail as 'connection reset by peer' after terraform had already destroyed resources. Remedy: gh workflow run apply-web-platform-infra.yml -f apply_target=ci-ssh-token-replace -f confirm=REPLACE-CI-SSH-TOKEN -f reason=\"ci_ssh dead, see this run\" — then re-run this workflow. Runbook: knowledge-base/engineering/operations/runbooks/ci-ssh-token-replace.md"
+          exit 1
+        fi
+        if [[ "$unver" -gt 0 ]]; then
+          echo "::error::ci_ssh_liveness_unverifiable — the probe drew no conclusion for ${unver} of them (no definite answer reached it: timeout/DNS/TLS). Nothing is known about the credential, so do NOT rotate it on the strength of this run. Fail-closed: re-run once the probe host is reachable."
+          exit 1
+        fi
+        # POSITIVE assertion, not fall-through. Reaching here by exhausting three negative
+        # branches would report "clean" when the counts are empty strings (a short read, a
+        # partially-written verdict file) — `[[ "" -gt 0 ]]` is false, so every branch
+        # declines and the gate certifies a measurement it never made. The sibling ladder
+        # this was copied from carries the same belt (`[[ -n "$verdict" ]] || verdict=unavailable`
+        # in scheduled-terraform-drift.yml); the copy dropped it. AC10 requires this check
+        # be asserted positively for exactly this reason.
+        if [[ "$live" -gt 0 && "$dead" == "0" && "$unver" == "0" ]]; then
+          echo "CF Access admits the ci_ssh credential (verdict: clean, ${live} verified) — SSH apply may proceed."
+          exit 0
+        fi
+        echo "::error::ci_ssh_liveness_unavailable — the scan returned live='${live}' dead='${dead}' unverifiable='${unver}', which is not a clean verdict over at least one credential. A zero live-count means the probe enumerated the key names but measured no pair. Fail-closed."
+        exit 1

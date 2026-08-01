@@ -189,9 +189,16 @@ on:
           Which apply path? manual-rerun (default) | inngest-host | inngest-host-replace |
           registry-host-replace | registry-region-migrate | registry-luks-recut |
           git-data-host-replace | git-data-host-create | workspaces-luks-cutover |
-          workspaces-luks-recut | web-host-create | web-host-replace | entrypoint-audit.
+          workspaces-luks-recut | web-host-create | web-host-replace | ci-ssh-token-replace |
+          entrypoint-audit.
           DESTRUCTIVE targets need `confirm` and an id-pin — see the runbook for the
           target you are firing.
+          ci-ssh-token-replace RE-MINTS the CF Access ci_ssh service token when Cloudflare
+          has stopped accepting it (symptom: every SSH-bridged workflow fails at
+          "connection reset by peer", and the twice-daily drift detector reports
+          verdict: dead). Needs `confirm=REPLACE-CI-SSH-TOKEN`. It reaches no host and no
+          volume, and it is the one arm that still works while the SSH bridge is down.
+          IRREVERSIBLE: Cloudflare will not re-issue the old secret.
           registry-luks-recut DESTROYS the zot store (a disposable GHCR mirror); do NOT use
           registry-host-replace for that — it preserves the volume and darks the registry.
           web-host-create BIRTHS a declared-but-absent web host; it is additive-only and
@@ -245,6 +252,12 @@ on:
           # LIVE phase entrypoint (no terraform apply; own concurrency group;
           # issues:write App auth; posts findings to #6767). See the
           # entrypoint_audit job below.
+          # #7095 — re-mints the CF Access ci_ssh service token when Cloudflare has
+          # stopped accepting it. Narrow by construction: a two-resource -target set
+          # plus one -replace, reaching NO host, NO volume, and NO terraform_data.
+          # It is the ONE arm that can run while the SSH bridge is dead, because it
+          # repairs the credential the bridge authenticates with.
+          - ci-ssh-token-replace
           - entrypoint-audit
 
 concurrency:
@@ -838,9 +851,9 @@ jobs:
           # original #4195 failure was masked by a `>/dev/null 2>&1`
           # redirect on these two lines).
           printf '%s' "$CLIENT_ID" \
-            | doppler secrets set CI_SSH_ACCESS_TOKEN_ID --silent --no-interactive -p soleur -c prd_terraform
+            | doppler secrets set CI_SSH_ACCESS_TOKEN_ID --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1
           printf '%s' "$CLIENT_SECRET" \
-            | doppler secrets set CI_SSH_ACCESS_TOKEN_SECRET --silent --no-interactive -p soleur -c prd_terraform
+            | doppler secrets set CI_SSH_ACCESS_TOKEN_SECRET --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1
           unset CLIENT_ID CLIENT_SECRET
           echo "Synced CI_SSH_ACCESS_TOKEN_ID/_SECRET to Doppler prd_terraform."
 
@@ -943,7 +956,17 @@ jobs:
       # return "unavailable"). Never gated on the provisioner's exit code (P0-1). Runs only when the
       # SSH provisioners actually installed the timers this run.
       - name: Arm web-host probe heartbeats (unpause→verify-status→rollback, fail-loud)
-        if: steps.ssh_token_gate.outputs.ssh_apply_skip != 'true'
+        # `always() &&` added for #7095. This is documented elsewhere in this file as the
+        # ONLY unpause path for the web-host heartbeats. It sits AFTER the CF Tunnel SSH
+        # bridge, which can now fail on a liveness verdict — so without always(), a
+        # transient `ci_ssh_liveness_unverifiable` on an otherwise-green apply that
+        # followed a web-host-create/replace would skip arming and leave production
+        # uptime alerting silently paused. The founder would then learn that
+        # app.soleur.ai is down from a user rather than from a page — which is the
+        # failure shape this whole PR exists to remove, displaced by one step.
+        # The ssh_apply_skip condition is preserved: on a genuine first bootstrap there
+        # is nothing to arm.
+        if: always() && steps.ssh_token_gate.outputs.ssh_apply_skip != 'true'
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN_WEB_ARM: ${{ secrets.DOPPLER_TOKEN_WEB_ARM }}
@@ -4361,6 +4384,367 @@ jobs:
             echo ""
             echo "Next: knowledge-base/engineering/operations/runbooks/git-data-birth.md"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── #7095: re-mint the CF Access ci_ssh service token ──────────────────────
+  #
+  # WHY THIS ARM EXISTS. On 2026-07-28 the ci_ssh Access service token was rotated
+  # out-of-band during incident response. Cloudflare never returns `client_secret`
+  # after creation, so `terraform plan` stayed clean while the credential was dead —
+  # and every remote write path to web-1 runs over the SSH bridge that authenticates
+  # with it. Production could not be redeployed for three days.
+  #
+  # The repair is `terraform apply -replace=` on ONE resource. Before this arm, no
+  # workflow could run a `-replace`, so the documented recovery was an operator-local
+  # `terraform apply` — i.e. exactly the hand-run infra step this repo's rules forbid
+  # (hr-all-infrastructure-provisioning-servers). This is the in-band replacement.
+  #
+  # WHY IT IS NARROW, not a general `-replace` input. A free-text `-replace` would let
+  # a typo destroy an hcloud_server, and the dispatch-input budget is near its 10-input
+  # cap. The -target set below is TWO addresses and is enumerated in full; the gate
+  # then re-reads the PLAN and refuses anything outside it. Membership is asserted
+  # against the plan, not against the flag list — a `-target` is transitive on
+  # dependencies, so the written flags are a request, never a proof of blast radius.
+  #
+  # WHY `.deploy` IS ABSENT AND MUST STAY ABSENT. The sibling
+  # `cloudflare_zero_trust_access_service_token.deploy` is the only OTHER remote write
+  # path to web-1. web-1 sits on a cx33, which has been out of stock in all six Hetzner
+  # datacenters — so the host cannot be replaced if it is stranded. Replacing both
+  # tokens in one apply means any failure between destroy and Doppler republish leaves
+  # an unreachable, unreplaceable host. `check-cloudflare-token-drift.test.sh` (W7)
+  # asserts no `-replace` in this repo ever names `.deploy`.
+  #
+  # NO `environment:` REVIEWER GATE, deliberately. This arm's purpose is to restore a
+  # DEAD control plane; gating recovery behind a reviewer click is how a three-day
+  # outage becomes a four-day one. It matches the `apply` job's posture (PR #4220
+  # removed that gate for the same reason). The authorization is the dispatch itself
+  # plus the typo-guard below, per hr-menu-option-ack-not-prod-write-auth. The
+  # workflow-level `concurrency:` group still serializes it against every other
+  # terraform apply, which is the property the lockless R2 backend actually needs.
+  ci_ssh_token_replace:
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'ci-ssh-token-replace'
+    runs-on: ubuntu-24.04
+    # 15, matching the `apply` job. The halt gate at the end performs a fleet-wide Doppler
+    # enumeration and is the LAST thing in the budget, after init+plan+apply+publish — a
+    # timeout there would red the job on a successful, irreversible re-mint.
+    timeout-minutes: 15
+    # THE WORKFLOW-LEVEL GROUP IS NOT SUFFICIENT HERE, and the first draft said it was.
+    # That group (terraform-apply-web-platform-host) serializes against other terraform
+    # applies, which is what the lockless R2 backend needs — but this job's distinct
+    # hazard is destroying the credential that OTHER workflows' live SSH bridges are
+    # authenticated with. Three of the six bridge callers sit in different groups:
+    # workspaces-luks-cutover (web-1-swap), workspaces-luks-verify, git-data-cutover.
+    #
+    # Concretely: a LUKS cutover is mid-run against the sole-copy /mnt/data; an operator
+    # dispatches this arm on the strength of a stale drift issue; create_before_destroy
+    # mints the new token and destroys the old; the cutover's cloudflared re-authenticates
+    # with the destroyed pair on its next edge reconnect and 403s — leaving a half-finished
+    # cutover on user data. Both sibling arms that touch web-1 take this same mutex on top
+    # of the workflow-level one, for this same reason.
+    # DO NOT RENAME — GitHub does not error on divergent group strings, they simply fail
+    # to serialize.
+    concurrency:
+      group: web-1-swap
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Typo-guard
+        env:
+          # Operator-supplied. Routed through env: and compared as data — never
+          # interpolated into the shell, per the workflow-injection guidance in this
+          # file's header.
+          CONFIRM_RAW: ${{ inputs.confirm }}
+          REASON_RAW: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          # Deliberately distinct from every other token in this file. A string typed
+          # for a host birth or a host replace must not authorize a credential destroy,
+          # and vice versa.
+          if [[ "$CONFIRM_RAW" != "REPLACE-CI-SSH-TOKEN" ]]; then
+            echo "::error::confirm must be exactly 'REPLACE-CI-SSH-TOKEN'. This destroys the current CF Access ci_ssh service token; Cloudflare will NOT re-issue the old secret, so there is no way back."
+            exit 1
+          fi
+          if [[ -z "${REASON_RAW// /}" ]]; then
+            echo "::error::reason is required — it is the audit trail for an irreversible credential replacement."
+            exit 1
+          fi
+          # The audit trail has to LAND somewhere, or requiring it is theatre. Every
+          # sibling arm echoes its reason to the step summary; this one now does too.
+          {
+            echo "### ci-ssh-token-replace dispatch"
+            echo ""
+            echo "- Reason: ${REASON_RAW}"
+            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify the publish channel BEFORE the irreversible apply
+        # THIS STEP'S POSITION IS THE POINT, and it is the same principle the rest of this
+        # PR is built on: assert the channel works BEFORE the destructive step, never
+        # after. The first draft checked DOPPLER_TOKEN_WRITE inside the sync step — i.e.
+        # AFTER `terraform apply` had already destroyed the old token. A missing or
+        # unauthorized write token there leaves the only live copy of the new credential
+        # in Terraform state, with Doppler still serving the dead one and every
+        # SSH-bridged workflow red. That is the exact destroy-then-discover ordering
+        # ADR-154's third proposition forbids, reproduced inside the arm that exists to
+        # end it.
+        #
+        # An emptiness check is not sufficient either: the token is minted by
+        # `doppler_service_token.write`, which is itself in leg (a)'s target set, so it
+        # ROTATES. A present-but-stale token passes `-z` and fails at write time. This
+        # does an authenticated round-trip instead.
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_WRITE }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${DOPPLER_TOKEN:-}" ]]; then
+            echo "::error::DOPPLER_TOKEN_WRITE is not configured. Refusing to mint a credential that cannot be published — the old token would be destroyed and the channel would stay dark. Nothing has been changed."
+            exit 1
+          fi
+          # A read the token can only satisfy if it is valid AND scoped to prd_terraform.
+          # `--only-names` avoids pulling any value into the runner.
+          if ! doppler secrets -p soleur -c prd_terraform --only-names >/dev/null 2>&1; then
+            echo "::error::DOPPLER_TOKEN_WRITE is present but cannot read soleur/prd_terraform — it is expired, revoked, or wrongly scoped. Refusing to mint: the publish would fail AFTER the old token was destroyed. Nothing has been changed. Re-run apply_target=manual-rerun to re-sync the write token, then retry."
+            exit 1
+          fi
+          echo "Publish channel verified — the new secret will have somewhere to land."
+
+      - name: Generate ephemeral SSH public key for var.ssh_key_path
+        # HCL evaluates file() at plan time regardless of -target= filtering, so this
+        # dummy key only satisfies parsing. hcloud_ssh_key.default is not in the target
+        # set and is never consumed. Mirrors the `apply` job.
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Terraform plan (ci_ssh token replace — two targets, one replace)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The policy is targeted alongside the token because its
+          # `include.service_token` references the token's id, which changes on
+          # replace. Omitting it would leave the Access policy pointing at a token
+          # that no longer exists — the channel would stay dark after a "successful"
+          # apply.
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -var="ssh_key_path=${CI_SSH_PUB}" \
+              -target=cloudflare_zero_trust_access_service_token.ci_ssh \
+              -target=cloudflare_zero_trust_access_policy.ci_ssh_service_token \
+              -replace=cloudflare_zero_trust_access_service_token.ci_ssh
+
+      - name: Blast-radius gate (reads the PLAN, not the flags)
+        working-directory: ${{ env.INFRA_DIR }}
+        run: |
+          set -euo pipefail
+          terraform show -json tfplan > "$RUNNER_TEMP/ci-ssh-plan.json"
+          # Enumerate what the plan will actually CHANGE. `-target` is transitive on
+          # dependencies, so the flag list above is a request; this is the proof.
+          # A no-op resource carries actions == ["no-op"] and is not a change.
+          # The heredoc body is indented INTO the YAML block scalar on purpose. YAML
+          # strips the block's common indentation before bash ever sees it, so the
+          # `PY` terminator lands at column 0 as an unindented heredoc requires. A
+          # body written flush-left here would instead END the block scalar and break
+          # the workflow's YAML parse — a failure that looks nothing like its cause.
+          python3 - "$RUNNER_TEMP/ci-ssh-plan.json" <<'PY'
+          import json, sys
+
+          plan = json.load(open(sys.argv[1]))
+          # `["read"]` is a deferred DATA-SOURCE read, not a mutation. Filtering only
+          # no-op would fail this gate on a plan that merely resolves a data source —
+          # bricking the ONE in-band recovery arm at the moment it is needed. The root
+          # has data sources (git-data.tf, zot-registry.tf) that -target prunes today,
+          # so this is one `data` block away from mattering.
+          changes = [
+              (c["address"], c["change"]["actions"])
+              for c in plan.get("resource_changes", [])
+              if c["change"]["actions"] not in (["no-op"], ["read"])
+          ]
+
+          REPLACE_TARGET = "cloudflare_zero_trust_access_service_token.ci_ssh"
+          # A WHITELIST, deliberately — and it is the whole reason the -target set has to
+          # stay fixed. A general -replace input would force this down to a blacklist,
+          # which is the weaker construct: a prefix list misses `module.x.hcloud_server.web`
+          # (it does not start with "hcloud_"), while an allowlist catches every address
+          # it does not name, module-nested or otherwise. The earlier draft carried BOTH
+          # an allowlist and a FORBIDDEN_PREFIXES list; the prefix list was strictly
+          # subsumed — every address it caught, the allowlist caught too — so it bought a
+          # different error string and an illusion of depth. Removed.
+          #
+          # `access_application.ssh` is here because -target is transitive on
+          # DEPENDENCIES: the policy's include references the application's id
+          # (tunnel.tf), so any drift on it (a dashboard edit to session_duration — and
+          # note this credential was itself rotated by hand in that dashboard) puts it in
+          # the plan. Omitting it made the gate fail CLOSED on the remedy, which is the
+          # "a gate that always fails is an outage, not a tripwire" shape.
+          ALLOWED = {
+              REPLACE_TARGET,
+              "cloudflare_zero_trust_access_policy.ci_ssh_service_token",
+              "cloudflare_zero_trust_access_application.ssh",
+          }
+
+          failed = False
+          for addr, actions in changes:
+              print("  plan: {} -> {}".format(addr, ",".join(actions)))
+              if addr not in ALLOWED:
+                  print("::error::blast-radius gate: {} is in the plan. This arm touches no "
+                        "host, volume, SSH-provisioned resource, keypair or other credential "
+                        "(allowed: {}).".format(addr, ", ".join(sorted(ALLOWED))))
+                  failed = True
+              elif addr != REPLACE_TARGET and "delete" in actions:
+                  # The allowlist says WHICH addresses may appear; this says only the token
+                  # may be destroyed. Without it an allowlisted address could be deleted.
+                  print("::error::blast-radius gate: {} would be DESTROYED ({}). Only the "
+                        "ci_ssh token may be replaced.".format(addr, ",".join(actions)))
+                  failed = True
+
+          # The token must actually be replaced. A plan with zero replaces means the
+          # -replace silently did nothing — applying it would report success and repair
+          # nothing, which is the failure shape this whole issue is about.
+          token = "cloudflare_zero_trust_access_service_token.ci_ssh"
+          token_actions = [a for addr, a in changes if addr == token]
+          if not token_actions:
+              print("::error::blast-radius gate: {} is absent from the plan — nothing would "
+                    "be re-minted. Is it in state?".format(token))
+              failed = True
+          elif sorted(token_actions[0]) != ["create", "delete"]:
+              # sorted() normalizes both orders: create_before_destroy = true yields
+              # ["create","delete"], a plain replace yields ["delete","create"]. Either is
+              # a replace; anything else (a bare update, a lone create) is not.
+              print("::error::blast-radius gate: expected the token to be replaced "
+                    "(create+delete), got {}.".format(token_actions[0]))
+              failed = True
+
+          if failed:
+              sys.exit(1)
+          print("Blast-radius gate passed: {} changed resource(s), no host/volume/SSH "
+                "plane.".format(len(changes)))
+          PY
+
+      - name: Terraform apply
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false -auto-approve tfplan
+
+      - name: Sync the new CI-SSH service token to Doppler
+        # WITHOUT THIS THE ARM IS A NO-OP THAT LOOKS LIKE A FIX: the freshly minted
+        # secret exists only in Cloudflare and in terraform state until it is
+        # published to Doppler, which is where every consumer reads it from. Mirrors
+        # the `apply` job's sync step, but is NOT allowed to `exit 0` on empty output
+        # the way that one does — there the warning covers a legitimate -target run
+        # that skipped these resources; here they are the entire point, so empty
+        # outputs mean the replace did not produce a credential and the operator must
+        # not be told it succeeded.
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_WRITE }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${DOPPLER_TOKEN:-}" ]]; then
+            echo "::error::DOPPLER_TOKEN_WRITE is not configured — the new secret cannot be published and the channel would stay dark."
+            exit 1
+          fi
+          CLIENT_ID=$(terraform output -raw ci_ssh_access_service_token_client_id 2>/dev/null || true)
+          CLIENT_SECRET=$(terraform output -raw ci_ssh_access_service_token_client_secret 2>/dev/null || true)
+          if [[ -z "$CLIENT_ID" || -z "$CLIENT_SECRET" ]]; then
+            echo "::error::ci_ssh_access_service_token outputs are empty after the replace. Cloudflare returns client_secret ONLY at create, so a plain re-apply cannot re-derive it — re-dispatch this arm to mint again."
+            exit 1
+          fi
+          # RECOVERY NOTE for a failure BELOW this point (the two publish calls): the new
+          # secret is already in Terraform state, so the cheap fix is to re-run the publish
+          # — `apply_target=manual-rerun` re-syncs the same value via the `apply` job's own
+          # sync step. Do NOT re-dispatch this arm: that destroys a working credential to
+          # recover from a failed write. The earlier draft's message said the opposite.
+          printf '::add-mask::%s\n' "$CLIENT_ID"
+          printf '::add-mask::%s\n' "$CLIENT_SECRET"
+          printf '%s' "$CLIENT_ID" \
+            | doppler secrets set CI_SSH_ACCESS_TOKEN_ID --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1
+          printf '%s' "$CLIENT_SECRET" \
+            | doppler secrets set CI_SSH_ACCESS_TOKEN_SECRET --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1
+          unset CLIENT_ID CLIENT_SECRET
+          echo "Published CI_SSH_ACCESS_TOKEN_ID/_SECRET to Doppler prd_terraform."
+
+      - name: Halt gate — Access must ADMIT the new credential
+        # The plan's AC10, and the reason this job does not simply end at "apply
+        # succeeded". A green apply proves Cloudflare accepted the API call; it proves
+        # nothing about whether the edge will admit the pair that is now in Doppler.
+        # Asserted POSITIVELY: "no longer returns the denial body" is satisfied by a
+        # 502, a timeout and a DNS failure, all of which leave the channel dead.
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -uo pipefail
+          rc=0
+          bash scripts/check-cloudflare-token-drift.sh --only CI_SSH_ACCESS_TOKEN --json-file "$RUNNER_TEMP/ci-ssh-remint.json" || rc=$?
+
+          # SAME three-way ladder as the bridge gate, for the same reason and with more at
+          # stake. The first draft branched on the bare exit code here — which is exactly
+          # the conflation the bridge gate 4000 lines up goes to lengths to avoid, and
+          # which #7127 exists because of. It is worse at THIS site: it runs immediately
+          # after an irreversible destroy, so a transient probe timeout would have told the
+          # operator "the re-minted credential is still not admitted … re-diagnose",
+          # impugning a repair that in fact worked and pointing at the only lever available
+          # — re-dispatching this arm, destroying a healthy credential.
+          read -r live dead unver < <(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["live"], d["dead"], d["unverifiable"])' \
+            "$RUNNER_TEMP/ci-ssh-remint.json" 2>/dev/null || echo "-1 -1 -1")
+
+          if [[ "$rc" == "2" || "$dead" == "-1" ]]; then
+            echo "::error::ci_ssh_liveness_unavailable — the verifier could not run (exit ${rc}). The re-mint itself SUCCEEDED and the new credential is published; nothing here says otherwise. Do NOT re-dispatch this arm. Re-run the drift detector once the probe is reachable."
+            exit 1
+          fi
+          if [[ "$dead" -gt 0 ]]; then
+            echo "::error::ci_ssh_access_denied — Cloudflare Access still REJECTS the pair after a successful re-mint (${dead} dead). This falsifies the premise that the credential was the fault. STOP — do not dispatch apply-deploy-pipeline-fix.yml, and do not re-mint again; re-diagnose. Check whether a stale copy of CI_SSH_ACCESS_TOKEN_* exists in a Doppler config other than prd_terraform (this arm publishes to prd_terraform only)."
+            exit 1
+          fi
+          if [[ "$unver" -gt 0 ]]; then
+            echo "::error::ci_ssh_liveness_unverifiable — the probe drew no conclusion for ${unver} (timeout/DNS/TLS). NOTHING was measured, so this is not a claim the re-mint failed. The new credential is already published. Do NOT re-dispatch this arm; re-run the drift detector."
+            exit 1
+          fi
+          if [[ "$live" -gt 0 && "$dead" == "0" && "$unver" == "0" ]]; then
+            echo "verdict: clean (${live} verified) — CF Access admits the re-minted ci_ssh credential. The SSH bridge is usable again."
+            exit 0
+          fi
+          echo "::error::ci_ssh_liveness_unavailable — scan returned live='${live}' dead='${dead}' unverifiable='${unver}', which certifies nothing. A zero live-count means no pair was measured. The re-mint is NOT known to have failed; do not re-dispatch."
+          exit 1
 
   entrypoint_audit:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'entrypoint-audit'
