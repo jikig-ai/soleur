@@ -1007,7 +1007,14 @@ echo "W10: the DEAD verdict's escalation is bound to the DEAD verdict"
 # escalation step's `if:` to verdict == 'unverifiable' left the previous form green, which
 # restores the literal 2026-07-29 failure (dead credential → email only → nobody acts).
 # Extract the step that files the issue and require ITS OWN guard to name 'dead'.
-W10_STEP_START=$(awk '/^      - name: /{n=NR} /--label action-required/{print n; exit}' "$DRIFT_WF")
+# Target the DEAD filer BY NAME, not by "first step containing --label
+# action-required". The first-match form was correct while that was the only
+# action-required filer in the job; the coverage filer added alongside the
+# `coverage` output is a second one, and it sorts ABOVE the DEAD step — so
+# first-match silently retargeted this assertion onto the wrong step and reported
+# the DEAD guard missing when it was intact. Naming the step keeps the assertion
+# pinned to the thing it is about, however many filers the job grows.
+W10_STEP_START=$(awk '/^      - name: Open or update an action-required issue \(token drift — DEAD credential\)/{print NR; exit}' "$DRIFT_WF")
 W10_GUARD=$(awk -v s="${W10_STEP_START:-0}" 'NR>s && NR<=s+3 && /^        if: /{print; exit}' "$DRIFT_WF")
 if [[ -n "$W10_STEP_START" ]] && grep -qE "verdict == 'dead'" <<<"$W10_GUARD" && grep -qE '^\s+--label priority/p0-critical' "$DRIFT_WF"; then
   pass "the action-required filer is guarded on verdict == 'dead' and carries a priority label"
