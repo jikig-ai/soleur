@@ -553,7 +553,7 @@ in_transit:
                      response is treated as untrusted input, validated to 40-hex, and log-injection-stripped
     disclosed_as: public unauthenticated endpoint; carries no personal data
   - connection: GitHub Actions runner -> api.resend.com
-    tls: HTTPS via ./.github/actions/notify-ops-email
+    tls: HTTPS — an inlined curl to api.resend.com (NOT the notify-ops-email composite; see Decision 5)
     cert_verification: on
     does_not_defend: does not defend against Resend-side compromise; alert content carries no personal data
     disclosed_as: already-disclosed Resend processing
