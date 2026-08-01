@@ -266,14 +266,22 @@ jobs:
 
       # Single end-of-job heartbeat check-in via the shared
       # ./.github/actions/sentry-heartbeat composite action. Status branch:
-      # empty probe failure_mode (probe green) -> ok, any failure_mode -> error.
+      # probe RAN and reported no failure_mode -> ok; anything else -> error.
+      #
+      # #7138 -- THE PRODUCER'S OWN OUTCOME IS THE FIRST CONJUNCT. Keying on
+      # `failure_mode == ''` alone made a DEAD probe check in `ok`: the step never wrote
+      # the output, `'' == ''` was true, and this monitor asserted realtime was healthy
+      # while nothing had measured it. That is strictly worse than the #7138 shape it
+      # shares -- there a run still went red somewhere; here the operator's dashboard
+      # actively reports green. `scheduled-supabase-advisor-scan.yml` already uses this
+      # producer-status-first form.
       - name: Sentry check-in (final)
         if: always()
         continue-on-error: true
         uses: ./.github/actions/sentry-heartbeat
         with:
           monitor-slug: scheduled-realtime-probe
-          status: ${{ steps.probe.outputs.failure_mode == '' && 'ok' || 'error' }}
+          status: ${{ (steps.probe.outcome == 'success' && steps.probe.outputs.failure_mode == '') && 'ok' || 'error' }}
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

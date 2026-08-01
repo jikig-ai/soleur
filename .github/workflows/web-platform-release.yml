@@ -1227,6 +1227,17 @@ jobs:
     steps:
       - name: Classify the run outcome
         id: outcome
+        # #7138 — a STEP-level timeout, not just the job-level one. A hung classify used
+        # to consume the job's entire 5-minute budget, so the email and mirror steps were
+        # never scheduled and the run died silent. Bounded here, a hang becomes a step
+        # `failure`, which is exactly the state the widened conditions below now catch.
+        # This body is sub-second shell over eight closed-enum env vars; 2 minutes is a
+        # ~100x margin, and the failure direction is toward the alarm.
+        timeout-minutes: 2
+        # #7138 — DO NOT add `continue-on-error:` to this step. `steps.outcome.conclusion`
+        # is the POST-continue-on-error value; setting it here flips the value to `success`
+        # and silently disarms the classifier-death guard in BOTH steps below, with nothing
+        # else failing. Asserted by scripts/lint-workflow-step-env-refs.test.sh (B1e).
         env:
           # `needs.<job>.result` is a closed enum (success | failure | cancelled
           # | skipped) written by GitHub, never by a contributor — safe to expand
@@ -1278,7 +1289,12 @@ jobs:
 
       - name: Email the operator (release did NOT reach production)
         id: email
-        if: steps.outcome.outputs.failed != ''
+        # #7138 — widened in lockstep with the mirror below, on the same predicate. The
+        # mirror alone satisfies the issue's literal floor, but its Sentry event reaches
+        # the operator only through an un-codified Sentry-default rule (tracked as #7142 —
+        # named by number, because a pointer to "the plan" rots when the plan is archived);
+        # this is the channel that speaks the operator's language.
+        if: ${{ !cancelled() && (steps.outcome.conclusion == 'failure' || steps.outcome.outputs.failed != '') }}
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           VERSION: ${{ needs.release.outputs.version }}
@@ -1292,6 +1308,8 @@ jobs:
           # failed release since #7097 introduced the branch. Nobody was ever told.
           # scripts/lint-workflow-step-env-refs.py now fails CI on this shape.
           R_DEPLOY: ${{ needs.deploy.result }}
+          # #7138 — DECLARED HERE, NOT INHERITED, for the same reason R_DEPLOY is.
+          CLASSIFIER: ${{ steps.outcome.conclusion }}
         run: |
           set -uo pipefail
           # Always exits 0 and reports delivery through `delivered`; the
@@ -1322,27 +1340,66 @@ jobs:
           # unset value must take the `else` ("production was NOT updated") branch: that
           # over-warns, where the other direction would tell the operator their code is
           # live when it is not. A rename that breaks this must degrade toward the alarm.
-          if [[ "${R_DEPLOY:-}" == "success" ]]; then
+          # #7138 — A THIRD HEADLINE, gated POSITIVELY on `R_DEPLOY == 'success'`.
+          # `needs.deploy.result` is written by GitHub and is NOT affected by the
+          # classifier dying, so "did production update?" is always knowable even when
+          # "which jobs failed?" is not. Gating this branch on `R_DEPLOY != 'failure'`
+          # (the first draft) swept in `skipped` and `cancelled`: `deploy` needs five
+          # upstream jobs, so `skipped` — NOT `failure` — is the dominant failed-release
+          # state, and that draft told the operator "we could not tell whether this
+          # release reached production" about a release that demonstrably never rolled
+          # out. An unset value now falls through to the `else` too, which is the
+          # direction the comment block above requires: over-warn, never falsely reassure.
+          if [[ "${CLASSIFIER:-}" == "failure" && "${R_DEPLOY:-}" == "success" ]]; then
+            SUBJ_PREFIX="RELEASE STATUS UNKNOWN"
+            SUBJ_TAIL="your changes are live, but the release check itself failed"
+            BODY="<p><strong>Your changes DID reach production. The check that works out whether the rest of the release succeeded failed itself, so we cannot tell you whether everything after the rollout went well.</strong></p>"
+            BODY="${BODY}<p>Released version: <code>${VER_LABEL}</code> (tag: <code>${TAG_LABEL}</code>).</p>"
+            BODY="${BODY}<p><strong>What this means for you:</strong> the site is serving your new code, so nothing is stuck. What is unknown is whether the checks that run after the rollout passed — the step that reports on them died before it could answer. Open the run below to see which parts finished.</p>"
+            URGENCY="Treat it as urgent — not because your changes are stuck (they are live), but because the alarm that tells you when a release fails is currently broken."
+          elif [[ "${R_DEPLOY:-}" == "success" ]]; then
+            SUBJ_PREFIX="RELEASE FAILED"
             SUBJ_TAIL="production WAS updated, but a post-release check failed"
             BODY="<p><strong>The new version DID reach production — but a check that runs afterwards failed, so we cannot confirm the site is fully healthy.</strong></p>"
             BODY="${BODY}<p>Released version: <code>${VER_LABEL}</code> (tag: <code>${TAG_LABEL}</code>).</p>"
             BODY="${BODY}<p><strong>What this means for you:</strong> the code you merged is live. Something about verifying it afterwards did not pass, which may mean a real problem with the running site or may mean the check itself is faulty. Worth looking at soon; it is not the same as a release being stuck.</p>"
+            # #7138 — this branch's own body says the code IS live, so the previously
+            # UNCONDITIONAL closing line ("nothing reaches production until it is
+            # resolved") contradicted it two paragraphs later. The #7095 comment block
+            # above already lists that exact phrase as one of three claims false here.
+            URGENCY="Worth looking at soon: your changes are live, so nothing is stuck — but the check that runs after the rollout did not pass."
           else
+            SUBJ_PREFIX="RELEASE FAILED"
             SUBJ_TAIL="production was NOT updated"
             BODY="<p><strong>The Soleur web platform did not finish releasing. Production is still running the OLDER build — the changes that were just merged are not live.</strong></p>"
             BODY="${BODY}<p>Attempted version: <code>${VER_LABEL}</code> (tag: <code>${TAG_LABEL}</code>). Production is serving whatever was deployed before this run, which is now behind that tag.</p>"
             BODY="${BODY}<p><strong>What this means for you:</strong> until this is fixed, every further change you merge will also stay unreleased — the site keeps serving old code and looks healthy while doing it. This is not something that clears on its own.</p>"
+            URGENCY="Treat it as urgent: nothing reaches production until it is resolved."
           fi
           # SHARED TAIL, both branches (#7136). These were indented inside the `else` above,
           # so the success branch carried NO run link and NO failed-job list — while the
           # closing paragraph tells the operator to "send the run link above" to their
           # engineer. That branch had never executed, because the step always died first.
-          BODY="${BODY}<p><strong>What stopped:</strong></p><ul>${FAILED_HTML}</ul>"
-          BODY="${BODY}<p><a href=\"${RUN_URL}\">Open the failed run</a> — the red entry named above is the one to look at.</p>"
-          BODY="${BODY}<p><strong>What to do:</strong> you do not need to fix this yourself. Send the run link above to your engineer, or paste it into Claude Code and ask it to fix the failing release. Treat it as urgent: nothing reaches production until it is resolved.</p>"
+          # #7138 — GUARDED, and RUN_HINT is derived from the SAME predicate. An empty
+          # <ul></ul> under a heading promising content is the #7136 shape; so is the run
+          # link's "the red entry named above" pointing at a list this branch suppressed.
+          # The first draft branched the list on FAILED_HTML and the hint on the HEADLINE,
+          # so (classifier died, deploy failed) rendered the dangling reference.
+          if [[ -n "${FAILED_HTML:-}" ]]; then
+            BODY="${BODY}<p><strong>What stopped:</strong></p><ul>${FAILED_HTML}</ul>"
+            RUN_HINT="the red entry named above is the one to look at."
+          else
+            RUN_HINT="it shows which parts of the release finished and which did not."
+          fi
+          BODY="${BODY}<p><a href=\"${RUN_URL}\">Open the failed run</a> — ${RUN_HINT}</p>"
+          # #7138 — the closing urgency line was UNCONDITIONAL and is FALSE on the
+          # classifier-death branch: there, the release may well have reached production,
+          # so "nothing reaches production until it is resolved" contradicts this email's
+          # own opening two paragraphs earlier.
+          BODY="${BODY}<p><strong>What to do:</strong> you do not need to fix this yourself. Send the run link above to your engineer, or paste it into Claude Code and ask it to fix the failing release. ${URGENCY}</p>"
           PAYLOAD=$(jq -n \
             --arg from "Soleur Ops <noreply@soleur.ai>" \
-            --arg subject "[RELEASE FAILED] Soleur Web Platform v${VER_LABEL} — ${SUBJ_TAIL}" \
+            --arg subject "[${SUBJ_PREFIX}] Soleur Web Platform v${VER_LABEL} — ${SUBJ_TAIL}" \
             --arg html "$BODY" \
             '{from: $from, to: ["ops@jikigai.com"], subject: $subject, html: $html}')
           # --max-time + `|| echo 000`: an unreachable Resend must neither stall
@@ -1354,10 +1411,10 @@ jobs:
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" || echo "000")
           if [[ "$HTTP_CODE" =~ ^2 ]]; then
-            echo "Release-failure email sent to ops@jikigai.com (HTTP ${HTTP_CODE}) for: ${FAILED}"
+            echo "Release-failure email sent to ops@jikigai.com (HTTP ${HTTP_CODE}) for: ${FAILED:-<classifier failed; jobs unknown>}"
             echo "delivered=1" >> "$GITHUB_OUTPUT"
           else
-            echo "::error::Release-failure email FAILED (HTTP ${HTTP_CODE}) — nobody was notified that this release did not reach production (${FAILED})."
+            echo "::error::Release-failure email FAILED (HTTP ${HTTP_CODE}) — nobody was notified about this release (${FAILED:-<classifier failed; jobs unknown>})."
             echo "delivered=0" >> "$GITHUB_OUTPUT"
             echo "reason=resend_http_${HTTP_CODE}" >> "$GITHUB_OUTPUT"
           fi
@@ -1374,16 +1431,59 @@ jobs:
       # The compensating channel was disarmed by the same crash it exists to compensate for,
       # so a step that "cannot end in silence" ended in silence. A guard that only fires when
       # its subject succeeded cannot be a fallback for that subject failing.
+      # #7138 — `steps.outcome.outputs.failed != ''` alone made this step depend on the
+      # classify step having SUCCEEDED. A classify step that dies before its terminal
+      # `>> "$GITHUB_OUTPUT"` write leaves `failed` empty, so this conjunct was false and
+      # the step SKIPPED — the compensating channel disarmed by a failure one step further
+      # up than the one #7136 fixed. `steps.outcome.conclusion == 'failure'` catches the
+      # death itself; the original disjunct still catches a classifier that ran fine and
+      # reported real failures. Neither subsumes the other, so both are kept.
       - name: Mirror non-delivery to Sentry and fail loudly
-        if: ${{ !cancelled() && steps.outcome.outputs.failed != '' && steps.email.outputs.delivered != '1' }}
+        id: mirror
+        if: ${{ !cancelled() && (steps.outcome.conclusion == 'failure' || steps.outcome.outputs.failed != '') && steps.email.outputs.delivered != '1' }}
         env:
           NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
           FAILED: ${{ steps.outcome.outputs.failed }}
+          # The SAME discriminator the email step branches on. Keying this step on
+          # `-z FAILED` instead would disagree with the email in a reachable state: a
+          # classifier that dies AFTER writing its output has BOTH conclusion == 'failure'
+          # and failed != '', so the two steps would tell different stories about one
+          # incident.
+          CLASSIFIER: ${{ steps.outcome.conclusion }}
           REASON: ${{ steps.email.outputs.reason }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           GITHUB_SHA: ${{ github.sha }}
         run: |
           set -uo pipefail
+          # #7138 — TWO INDEPENDENT QUESTIONS, answered by two independent fields.
+          #
+          #   "did the classifier die?"      -> the `classifier` tag, from CLASSIFIER
+          #                                     (steps.outcome.conclusion, written by GitHub)
+          #   "do we know WHICH jobs failed?" -> the message/label, from FAILED's emptiness
+          #
+          # The first draft keyed BOTH on CLASSIFIER, which threw away a job list the step
+          # was holding: a classifier that dies AFTER writing $GITHUB_OUTPUT has
+          # conclusion == 'failure' AND a populated list, so the event asserted "the
+          # classifier died before it could record which jobs failed" about a run where it
+          # demonstrably had — in exactly the state this step's env comment names as its
+          # own justification. Deriving them separately keeps both answers true.
+          #
+          # LEAD deliberately interpolates NOTHING: this is a stacktrace-less
+          # platform:"other" store event, so Sentry groups it on the message. Embedding the
+          # comma-joined job list would mint a new issue group per distinct failure set.
+          # The detail rides in extra.failed_jobs and the step summary, neither of which
+          # affects grouping.
+          if [ -n "${FAILED:-}" ]; then
+            LEAD="release FAILED"
+          else
+            LEAD="the run-outcome classifier FAILED, so the failing jobs are UNKNOWN"
+          fi
+          FAILED_LABEL="${FAILED:-UNKNOWN (the classifier died before it could record which jobs failed)}"
+          if [ "${CLASSIFIER:-}" = "failure" ]; then
+            CLASSIFIER_TAG="failed"
+          else
+            CLASSIFIER_TAG="ok"
+          fi
           # Same DSN parse as the live-verify emit step above: the POST host MUST
           # carry the DSN's own region segment, never a defaulted cluster.
           DSN="${NEXT_PUBLIC_SENTRY_DSN:-}"
@@ -1393,11 +1493,12 @@ jobs:
             PROJECT_ID=$(printf '%s' "$DSN" | sed -E 's#.*/([0-9]+)/?$#\1#')
             if [ -n "$PUBLIC_KEY" ] && [ -n "$HOST" ] && [ -n "$PROJECT_ID" ]; then
               PAYLOAD=$(jq -nc \
-                --arg msg "release-outcome: release FAILED and the operator email was NOT delivered (${REASON:-unknown})" \
-                --arg failed "${FAILED}" --arg reason "${REASON:-unknown}" \
+                --arg msg "release-outcome: ${LEAD} and the operator email was NOT delivered (${REASON:-unknown})" \
+                --arg failed "${FAILED_LABEL}" --arg reason "${REASON:-unknown}" \
+                --arg classifier "${CLASSIFIER_TAG}" \
                 --arg run_url "${RUN_URL}" --arg sha "${GITHUB_SHA:-}" \
                 '{message:$msg, level:"error", platform:"other",
-                  tags:{gate:"release-outcome", component:"web-platform", op:"release-alert-undelivered"},
+                  tags:{gate:"release-outcome", component:"web-platform", op:"release-alert-undelivered", classifier:$classifier},
                   extra:{failed_jobs:$failed, reason:$reason, run_url:$run_url, sha:$sha}}')
               code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
                 -X POST "https://${HOST}/api/${PROJECT_ID}/store/" \
@@ -1411,6 +1512,6 @@ jobs:
           else
             echo "::error::release-outcome: NEXT_PUBLIC_SENTRY_DSN unset — the non-delivery could not be mirrored to Sentry."
           fi
-          echo "release-outcome: release FAILED (${FAILED}) and the operator email was NOT delivered (${REASON:-unknown})." >> "$GITHUB_STEP_SUMMARY"
+          echo "release-outcome: ${LEAD} (${FAILED_LABEL}) and the operator email was NOT delivered (${REASON:-unknown})." >> "$GITHUB_STEP_SUMMARY"
           echo "::error::release-outcome: the release-failure alert could not be delivered. Fix the notification channel — a failing release is currently silent."
           exit 1
