@@ -333,11 +333,11 @@ runs:
           exit 1
         fi
         if [[ "$dead" -gt 0 ]]; then
-          echo "::error::ci_ssh_access_denied — Cloudflare Access REJECTED the CI_SSH_ACCESS_TOKEN pair (${dead} dead entr(y|ies)). The bridge is built but the channel is dead; SSH would fail as 'connection reset by peer' after terraform had already destroyed resources. Remedy: re-mint via apply-web-platform-infra.yml apply_target=ci-ssh-token-replace, then re-run."
+          echo "::error::ci_ssh_access_denied — Cloudflare Access REJECTED the CI_SSH_ACCESS_TOKEN pair (${dead} dead). The bridge is built but the channel is dead; SSH would fail as 'connection reset by peer' after terraform had already destroyed resources. Remedy: re-mint via apply-web-platform-infra.yml apply_target=ci-ssh-token-replace, then re-run."
           exit 1
         fi
         if [[ "$unver" -gt 0 ]]; then
-          echo "::error::ci_ssh_liveness_unverifiable — the probe drew no conclusion for ${unver} entr(y|ies) (no definite answer reached it: timeout/DNS/TLS). Nothing is known about the credential, so do NOT rotate it on the strength of this run. Fail-closed: re-run once the probe host is reachable."
+          echo "::error::ci_ssh_liveness_unverifiable — the probe drew no conclusion for ${unver} of them (no definite answer reached it: timeout/DNS/TLS). Nothing is known about the credential, so do NOT rotate it on the strength of this run. Fail-closed: re-run once the probe host is reachable."
           exit 1
         fi
         echo "CF Access admits the ci_ssh credential (verdict: clean) — SSH apply may proceed."
