@@ -493,111 +493,150 @@ for _f in "$BRIDGE_ACTION" "$DRIFT_WF" "$INFRA_WF"; do
 done
 
 echo "W1: the bridge's liveness gate is defined exactly once, inside the shared composite"
-# AC5d. `--only` is part of the anchor: a fleet-wide sweep inside the bridge would be a
-# different (and much slower) thing than the scoped check this gate contracts for.
-W1_N=$(grep -Ec -- 'check-cloudflare-token-drift\.sh --only CI_SSH_ACCESS_TOKEN' "$BRIDGE_ACTION" 2>/dev/null || echo 0)
+# AC5d. Anchored at COMMAND POSITION (`^\s*bash `), not on the substring. The first
+# version grepped the bare invocation, which the header comment describing the gate also
+# satisfies — so a doc-only edit reddened it and a code-only deletion did not.
+W1_N=$(grep -Ec '^\s*bash scripts/check-cloudflare-token-drift\.sh --only CI_SSH_ACCESS_TOKEN' "$BRIDGE_ACTION" 2>/dev/null || true)
 if [[ "$W1_N" == "1" ]]; then
   pass "one definition in the composite — six callers inherit it"
 else
-  fail "expected exactly 1 scoped invocation in the composite action, found $W1_N (0 = gate absent or line-wrapped out of grep's reach; >1 = redundant)"
+  fail "expected exactly 1 scoped invocation at command position in the composite, found $W1_N (0 = gate absent or line-wrapped out of grep's reach; >1 = redundant)"
 fi
 
 echo "W2: the scoped check is not duplicated per bridge caller"
-# The intent behind AC5d is that no CALLER re-implements the bridge gate. There are
-# exactly two legitimate call sites repo-wide and they are different consumers:
+# There are exactly two legitimate call sites repo-wide and they are different consumers:
 #   1. the composite    — gates the SSH bridge before any terraform destroy
 #   2. the replace arm  — the AC10 halt gate, asserting a freshly minted credential is
 #                         admitted BEFORE the operator is told the re-mint worked
-# A third is per-caller duplication, which is what R2 rejected. Pin the total, and pin
-# that the second one sits in the workflow that owns the re-mint.
-W2_TOTAL=$(grep -rEc -- 'check-cloudflare-token-drift\.sh --only CI_SSH_ACCESS_TOKEN' "$GH_DIR" 2>/dev/null | awk -F: '{s+=$NF} END {print s+0}')
-W2_IN_INFRA=$(grep -Ec -- 'check-cloudflare-token-drift\.sh --only CI_SSH_ACCESS_TOKEN' "$INFRA_WF" 2>/dev/null || echo 0)
+# A third is per-caller duplication, which R2 rejected.
+W2_TOTAL=$(grep -rEc '^\s*bash scripts/check-cloudflare-token-drift\.sh --only CI_SSH_ACCESS_TOKEN' "$GH_DIR" 2>/dev/null | awk -F: '{s+=$NF} END {print s+0}')
+W2_IN_INFRA=$(grep -Ec '^\s*bash scripts/check-cloudflare-token-drift\.sh --only CI_SSH_ACCESS_TOKEN' "$INFRA_WF" 2>/dev/null || true)
 if [[ "$W2_TOTAL" == "2" && "$W2_IN_INFRA" == "1" ]]; then
   pass "two call sites: the shared composite gate + the re-mint halt gate"
 else
   fail "expected exactly 2 scoped call sites across .github/ (composite + re-mint halt gate), found $W2_TOTAL with $W2_IN_INFRA in apply-web-platform-infra.yml — a third means a caller re-implemented the bridge gate"
 fi
 
+# W3-W5 anchor on `echo "::error::<enum>` — an EMISSION, which a comment cannot produce.
+# MEASURED: the previous bare-token form (`grep -qE 'ci_ssh_access_denied'`) was satisfied
+# by this action's own header comment, which lists all three enums. Deleting the entire
+# gate step left the suite fully green. That is the exact class this file's preamble
+# claims to avoid, committed by the assertions immediately below it.
 echo "W3: a DEAD verdict fails the bridge with the terminal reason ci_ssh_access_denied"
-if grep -qE 'ci_ssh_access_denied' "$BRIDGE_ACTION"; then
-  pass "dead credential produces a named terminal reason"
+if grep -qE '^\s*echo "::error::ci_ssh_access_denied' "$BRIDGE_ACTION"; then
+  pass "dead credential emits a named terminal reason"
 else
-  fail "the gate must fail with reason ci_ssh_access_denied — 'connection reset by peer' is what it exists to replace"
+  fail "the gate must EMIT ci_ssh_access_denied (echo \"::error::…\") — a header comment naming the enum is not the gate"
 fi
 
 echo "W4: DEAD and UNVERIFIABLE do not collapse into one reason"
-# The detector exits 1 for BOTH "Cloudflare rejected this" and "nothing answered, so I
-# learned nothing" — and #7127 exists precisely because conflating them sends an operator
-# to overwrite a healthy secret. A gate that branches on the bare exit code re-imports the
-# defect one layer up. It must read the structured verdict and emit distinct reasons.
-if grep -qE 'ci_ssh_liveness_unverifiable' "$BRIDGE_ACTION" &&
-   grep -qE -- '--json-file' "$BRIDGE_ACTION"; then
-  pass "gate discriminates via --json-file; unverifiable gets its own reason"
+# The detector exits 1 for BOTH "Cloudflare rejected this" and "nothing answered". Their
+# remedies are opposite — #7127 exists because conflating them sends an operator to
+# overwrite a healthy secret. Both consumers must branch on the structured verdict.
+W4_OK=1
+for _f in "$BRIDGE_ACTION" "$INFRA_WF"; do
+  grep -qE '^\s*echo "::error::ci_ssh_liveness_unverifiable' "$_f" || W4_OK=0
+  grep -qE '^\s*bash scripts/check-cloudflare-token-drift\.sh --only CI_SSH_ACCESS_TOKEN --json-file' "$_f" || W4_OK=0
+done
+if [[ "$W4_OK" == "1" ]]; then
+  pass "both consumers branch on --json-file; unverifiable gets its own reason"
 else
-  fail "gate must branch on the JSON verdict (dead vs unverifiable), not on the bare exit code — exit 1 covers both and their remedies are opposite"
+  fail "EVERY consumer must branch on the JSON verdict (dead vs unverifiable), not the bare exit code — exit 1 covers both. Missing in the composite and/or the re-mint halt gate."
 fi
 
-echo "W5: the gate is the FINAL step of the composite"
-# The ordering AC (AC4) asks that the gate precede every SSH terraform apply. Because the
-# composite is consumed as ONE `uses:` step and GitHub guarantees step order, that reduces
-# to: nothing inside the composite runs after the gate. Assert it positionally.
-W5_GATE_LINE=$(grep -nE -- 'check-cloudflare-token-drift\.sh --only CI_SSH_ACCESS_TOKEN' "$BRIDGE_ACTION" | head -1 | cut -d: -f1)
-W5_LAST_STEP=$(grep -nE '^    - name: ' "$BRIDGE_ACTION" | tail -1 | cut -d: -f1)
-W5_GATE_STEP=$(awk -v g="${W5_GATE_LINE:-0}" 'NR<=g && /^    - name: /{n=NR} END{print n+0}' "$BRIDGE_ACTION")
-if [[ -n "$W5_GATE_LINE" && "$W5_GATE_STEP" == "$W5_LAST_STEP" && "$W5_LAST_STEP" != "0" ]]; then
+echo "W5: an unmeasured scan cannot be reported as clean"
+# The detector reaches exit 0 with live=dead=unverifiable=0 when the key NAMES enumerate
+# but every value read comes back empty (that read's status is discarded upstream). A gate
+# that only checks dead/unverifiable then certifies ZERO pairs and lets terraform destroy.
+W5_OK=1
+for _f in "$BRIDGE_ACTION" "$INFRA_WF"; do
+  grep -qE '^\s*if \[\[ "\$live" -gt 0 ' "$_f" || W5_OK=0
+done
+if [[ "$W5_OK" == "1" ]]; then
+  pass "both consumers require a positive live count before reporting clean"
+else
+  fail "a clean verdict must be asserted POSITIVELY on live>0 — reaching success by exhausting negative branches reports clean on a scan that measured nothing"
+fi
+
+echo "W6: the gate is the FINAL step of the composite"
+# Position IS the contract: the composite is consumed as one `uses:` step and GitHub
+# guarantees step order, so "last step" ⇒ "before every caller step that follows".
+# The step-boundary regex must match steps with NO `name:` key — `name:` is optional in a
+# composite, so a `- uses:`/`- shell:` step appended after the gate would otherwise be
+# invisible and W6 would pass while a step ran after the gate. MEASURED: appending a bare
+# `- shell: bash / run:` step passed the previous `^    - name: `-only form.
+W6_GATE_LINE=$(grep -nE '^\s*bash scripts/check-cloudflare-token-drift\.sh --only CI_SSH_ACCESS_TOKEN --json-file' "$BRIDGE_ACTION" | head -1 | cut -d: -f1)
+W6_LAST_STEP=$(grep -nE '^    - (name|uses|shell|run|id|if|with|env):' "$BRIDGE_ACTION" | tail -1 | cut -d: -f1)
+W6_GATE_STEP=$(awk -v g="${W6_GATE_LINE:-0}" 'NR<=g && /^    - (name|uses|shell|run|id|if|with|env):/{n=NR} END{print n+0}' "$BRIDGE_ACTION")
+if [[ -n "$W6_GATE_LINE" && "$W6_GATE_STEP" == "$W6_LAST_STEP" && "$W6_LAST_STEP" != "0" ]]; then
   pass "gate is the last step — the bridge cannot report ready without having gated"
 else
-  fail "the gate must be the composite's final step (gate step starts at line ${W5_GATE_STEP:-none}, last step starts at line ${W5_LAST_STEP:-none})"
+  fail "the gate must be the composite's final step (gate step starts at line ${W6_GATE_STEP:-none}, last step starts at line ${W6_LAST_STEP:-none})"
 fi
 
-echo "W6: all six bridge call sites still inherit the composite"
-W6_N=$(grep -rEc '^\s+uses: \./\.github/actions/cf-tunnel-ssh-bridge\s*$' "$GH_DIR/workflows" 2>/dev/null | awk -F: '{s+=$NF} END {print s+0}')
-if [[ "$W6_N" == "6" ]]; then
-  pass "six callers (apply-web-platform-infra, apply-deploy-pipeline-fix, git-data-cutover, workspaces-luks-cutover x2, workspaces-luks-verify)"
+echo "W7: the six bridge call sites are the expected six, by NAME"
+# MEMBERSHIP, not cardinality. A count is invariant under substitution: MEASURED, pointing
+# one caller at a different action and adding a spare `uses:` elsewhere kept the total at 6
+# while a workflow that SSHes to a host silently lost the gate — and the failure string
+# would have described exactly that, having never printed. Deriving the sorted filename
+# list also makes a legitimate NEW adopter produce a diff that names the file, instead of
+# a count mismatch blaming duplication.
+W7_ACTUAL=$(grep -rlE '^\s+uses: \./\.github/actions/cf-tunnel-ssh-bridge\s*$' "$GH_DIR/workflows" 2>/dev/null | xargs -r -n1 basename | sort -u | paste -sd, -)
+W7_EXPECTED="apply-deploy-pipeline-fix.yml,apply-web-platform-infra.yml,git-data-cutover.yml,workspaces-luks-cutover.yml,workspaces-luks-verify.yml"
+W7_N=$(grep -rEc '^\s+uses: \./\.github/actions/cf-tunnel-ssh-bridge\s*$' "$GH_DIR/workflows" 2>/dev/null | awk -F: '{s+=$NF} END {print s+0}')
+if [[ "$W7_ACTUAL" == "$W7_EXPECTED" && "$W7_N" == "6" ]]; then
+  pass "5 workflows / 6 call sites (workspaces-luks-cutover uses it twice)"
 else
-  fail "expected 6 'uses: ./.github/actions/cf-tunnel-ssh-bridge' call sites, found $W6_N — a caller that stopped using the composite silently lost the gate"
+  fail "bridge callers drifted. Expected files [$W7_EXPECTED] with 6 call sites; got [$W7_ACTUAL] with $W7_N. If you ADDED a caller, add it to W7_EXPECTED and bump the count; if a file disappeared from the list, that workflow silently lost the liveness gate."
 fi
 
-echo "W7: no -replace target names the .deploy service token"
-# AC3 / Test Scenario 5. `.deploy` is the ONLY remaining remote write path to web-1, and
-# web-1 cannot be replaced (cx33 stock 0/6). Replacing it on any failure between destroy
-# and Doppler republish strands the host with no reachable channel at all.
-W7_HITS=$(grep -rEn -- '-replace=[^ ]*access_service_token\.deploy' "$GH_DIR" 2>/dev/null || true)
-if [[ -z "$W7_HITS" ]]; then
+echo "W8: no -replace target names the .deploy service token"
+# AC3. `.deploy` is the ONLY other remote write path to web-1, and web-1 cannot be
+# replaced (cx33 stock 0/6). Replacing it on any failure between destroy and Doppler
+# republish strands the host with no reachable channel at all.
+# `[= ]` because terraform's flag parser accepts `-replace ADDRESS` as well as `-replace=`.
+W8_HITS=$(grep -rEn -- '-replace[= ]+["'"'"']?[^ ]*access_service_token\.deploy' "$GH_DIR" 2>/dev/null || true)
+if [[ -z "$W8_HITS" ]]; then
   pass "the working .deploy token is never a replace target"
 else
-  fail "a -replace target names the .deploy service token — this can strand an unreplaceable host: $W7_HITS"
+  fail "a -replace target names the .deploy service token — this can strand an unreplaceable host: $W8_HITS"
 fi
 
-echo "W8: the ci-ssh-token-replace arm exists and is typo-guarded"
-# Phase 1.1. Without an executable arm, Phase 1 is an operator-local `terraform apply` —
-# i.e. exactly the hand-run infra step this plan claims not to contain.
-if grep -qE '^\s+- ci-ssh-token-replace\s*$' "$INFRA_WF" &&
-   grep -qE -- '-replace=cloudflare_zero_trust_access_service_token\.ci_ssh' "$INFRA_WF" &&
-   grep -qE 'REPLACE-CI-SSH-TOKEN' "$INFRA_WF"; then
-  pass "narrow arm present with a distinct confirm token"
+echo "W9: the ci-ssh-token-replace arm exists, is typo-guarded, and replaces the token"
+# Anchored on the SHELL COMPARISON, not the token string: the confirm literal also appears
+# in the dispatch-input DESCRIPTION prose, so a bare grep passed with the entire typo-guard
+# step deleted. Likewise `-replace=` is anchored at flag position — MEASURED, commenting
+# out the real flag left the previous form green while the arm planned nothing.
+W9_OK=1
+grep -qE '^\s+- ci-ssh-token-replace\s*$' "$INFRA_WF" || W9_OK=0
+grep -qE '^\s*-replace=cloudflare_zero_trust_access_service_token\.ci_ssh' "$INFRA_WF" || W9_OK=0
+grep -qE '"\$CONFIRM_RAW" != "REPLACE-CI-SSH-TOKEN"' "$INFRA_WF" || W9_OK=0
+if [[ "$W9_OK" == "1" ]]; then
+  pass "enum option, flag-position -replace, and an enforced typo-guard"
 else
-  fail "apply-web-platform-infra.yml needs a ci-ssh-token-replace enum option, a -replace= on the ci_ssh token, and a REPLACE-CI-SSH-TOKEN typo-guard"
+  fail "apply-web-platform-infra.yml needs the ci-ssh-token-replace enum option, a -replace= at flag position on the ci_ssh token, and a CONFIRM_RAW comparison against REPLACE-CI-SSH-TOKEN"
 fi
 
-echo "W9: a DEAD verdict escalates to an action-required issue, not only to email"
-# AC5e. Email fired three times across three days and produced no action. operator-digest
-# harvests action-required-labelled ISSUES, not emails.
-if grep -qE "^\s+if: .*token_drift\.outputs\.verdict == 'dead'" "$DRIFT_WF" &&
-   grep -qE '^\s+--label action-required' "$DRIFT_WF"; then
-  pass "dead verdict opens/updates an action-required issue"
+echo "W10: the DEAD verdict's escalation is bound to the DEAD verdict"
+# Two independent file-wide greps do not make an assertion: MEASURED, retargeting the
+# escalation step's `if:` to verdict == 'unverifiable' left the previous form green, which
+# restores the literal 2026-07-29 failure (dead credential → email only → nobody acts).
+# Extract the step that files the issue and require ITS OWN guard to name 'dead'.
+W10_STEP_START=$(awk '/^      - name: /{n=NR} /--label action-required/{print n; exit}' "$DRIFT_WF")
+W10_GUARD=$(awk -v s="${W10_STEP_START:-0}" 'NR>s && NR<=s+3 && /^        if: /{print; exit}' "$DRIFT_WF")
+if [[ -n "$W10_STEP_START" ]] && grep -qE "verdict == 'dead'" <<<"$W10_GUARD" && grep -qE '^\s+--label priority/p0-critical' "$DRIFT_WF"; then
+  pass "the action-required filer is guarded on verdict == 'dead' and carries a priority label"
 else
-  fail "scheduled-terraform-drift.yml must create or update an action-required issue on verdict == 'dead' (email alone is demonstrably insufficient)"
+  fail "the step filing the action-required issue must itself be guarded on verdict == 'dead' (found guard: '${W10_GUARD:-none}') and must carry --label priority/p0-critical (operator-digest sorts on priority and caps the list, so an unprioritised issue is filed and still unseen)"
 fi
-
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Without it, deleting every assertion call yields
 # "0/0 passed, 0 failed" and exit 0 — measured — and test-all.sh reads only the exit code,
 # so a suite that ran NOTHING is indistinguishable from one where everything passed. A
 # FLOOR, not equality: adding a case must not require editing this line.
-if [[ "$((PASS + FAIL))" -lt 22 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 22. The suite did not execute what it claims to." >&2
+if [[ "$((PASS + FAIL))" -lt 31 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 31. The suite did not execute what it claims to." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

@@ -289,8 +289,15 @@ jobs:
             echo "while the stale value keeps being served."
             echo ""
             echo "- Set the live value on the \`prd\` **ROOT** config; branch configs inherit it."
-            echo "- For \`CI_SSH_ACCESS_TOKEN_*\` specifically, re-mint in-band:"
-            echo "  \`gh workflow run apply-web-platform-infra.yml -f apply_target=ci-ssh-token-replace -f confirm=REPLACE-CI-SSH-TOKEN -f reason=<why>\`"
+            echo "- For \`CI_SSH_ACCESS_TOKEN_*\` specifically, re-mint in-band (copy-paste as-is):"
+            echo "  \`\`\`"
+            echo "  gh workflow run apply-web-platform-infra.yml \\"
+            echo "    -f apply_target=ci-ssh-token-replace \\"
+            echo "    -f confirm=REPLACE-CI-SSH-TOKEN \\"
+            echo "    -f reason=\"ci_ssh credential graded dead — see ${RUN_URL}\""
+            echo "  \`\`\`"
+            echo "  Note this publishes to \`prd_terraform\` only. If the detector reports a stale"
+            echo "  copy in any OTHER config, re-minting will not clear it — fix that copy directly."
             echo ""
             echo "_Auto-filed by [scheduled-terraform-drift](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-terraform-drift.yml). Close it when the detector reports \`verdict: clean\`._"
           } > "${RUNNER_TEMP}/token-drift-issue.md"
@@ -299,16 +306,41 @@ jobs:
             --json number,title --jq ".[] | select(.title == \"${TITLE}\") | .number" | head -1)
 
           if [[ -n "$EXISTING" ]]; then
-            gh issue comment "$EXISTING" --body-file "${RUNNER_TEMP}/token-drift-issue.md"
-            echo "Updated existing action-required issue #${EXISTING}"
+            # Re-assert the labels before commenting. If `action-required` is ever stripped
+            # by triage, every later fire would comment onto an issue operator-digest no
+            # longer harvests — and the create path can never re-fire, because this issue
+            # is still open. Silent, permanent loss of the channel.
+            gh issue edit "$EXISTING" --add-label action-required --add-label priority/p0-critical --add-label "$LABEL" >/dev/null 2>&1 || true
+            if gh issue comment "$EXISTING" --body-file "${RUNNER_TEMP}/token-drift-issue.md"; then
+              echo "Updated existing action-required issue #${EXISTING}"
+            else
+              echo "::error::token_drift_escalation_failed — could not comment on #${EXISTING}. The DEAD verdict reached the email channel only."
+            fi
           else
-            gh issue create \
+            # `priority/p0-critical` is load-bearing, not decoration: operator-digest sorts
+            # action-required issues p0>p1>p2>p3>none and CAPS the rendered list. An
+            # unprioritised issue sorts last and is folded into a "+N more" line — filed,
+            # labelled, and still unseen, which is this incident's whole failure mode.
+            #
+            # Milestone is "Post-MVP / Later" to match the 8 sibling auto-filers, NOT a
+            # phase milestone. Phase milestones are closed as a routine act, and
+            # `gh issue create` hard-fails on a closed milestone — which under
+            # continue-on-error would silently stop the verdict reaching a human the day
+            # the phase closed.
+            if gh issue create \
               --title "$TITLE" \
               --label action-required \
+              --label priority/p0-critical \
               --label "$LABEL" \
-              --milestone "Phase 4: Validate + Scale" \
-              --body-file "${RUNNER_TEMP}/token-drift-issue.md"
-            echo "Filed a new action-required issue for the dead credential."
+              --milestone "Post-MVP / Later" \
+              --body-file "${RUNNER_TEMP}/token-drift-issue.md"; then
+              echo "Filed a new action-required issue for the dead credential."
+            else
+              # Never echo success unconditionally: the step opens `set -uo pipefail` (no
+              # -e) under continue-on-error, so a failed create would otherwise fall
+              # through to a log line asserting an issue exists when none does.
+              echo "::error::token_drift_escalation_failed — gh issue create did not succeed. The DEAD verdict reached the email channel only; no action-required issue exists."
+            fi
           fi
 
       - name: Email notification (token drift — UNVERIFIABLE only)

@@ -473,10 +473,13 @@ supposed to confirm it keeps running on borrowed, soon-to-expire state.
 ### Phase 5 — Prove production actually recovered
 
 5.1 **Deploy the already-built image. This needs a named mechanism, and the obvious one is wrong.**
-    `web-platform-release.yml` fires on `push: main` with `paths: apps/web-platform/**`. After
-    Revision R1 this PR touches **only** `.github/workflows/**`, so **the merge does not trigger a
-    release at all** — the original Phase 5.1 ("the merge is itself a release trigger") was false
-    both before and after the cut, for opposite reasons. Nor does
+    **CORRECTED AT `/work` (R6) — both premises below were wrong; the conclusion survives.**
+    `web-platform-release.yml`'s paths are `apps/web-platform/**` AND `plugins/soleur/**`, with
+    `!plugins/soleur/docs/**` and `!plugins/soleur/test/**` negated — not `apps/web-platform/**`
+    alone. And this PR does NOT touch only `.github/workflows/**`: it touches `.github/actions/`,
+    `scripts/`, `plugins/soleur/test/` and `knowledge-base/`. **The merge still does not trigger a
+    release**, but only because the one `plugins/soleur/` file it adds is under the negated
+    `test/**` — see R6 for the consequence of adding a non-test file to this branch. Nor does
     `apply-deploy-pipeline-fix.yml`'s `Redeploy to load applied profile` step help: it is
     conditional-by-construction and no-ops unless the container's loaded profile hash differs.
     There is **no web-platform equivalent of `deploy-inngest-image.yml`** (whose dispatch input is
@@ -518,7 +521,7 @@ resource has to exist first.
 
 | Step | Action | Why here |
 |---|---|---|
-| 1 | **Merge the PR** (workflow + composite-action edits only) | **CORRECTED AT `/work` — the merge is NOT inert.** See R6 below. It does not trigger `web-platform-release.yml` (paths: `apps/web-platform/**`, `plugins/soleur/**` — this PR touches neither), but it **does** trigger `apply-web-platform-infra.yml`, whose `paths:` list includes `.github/workflows/apply-web-platform-infra.yml` itself. That run is expected to go **red**, and its red IS AC5b. |
+| 1 | **Merge the PR** (workflow + composite-action edits only) | **CORRECTED AT `/work` — the merge is NOT inert.** See R6 below. It does not trigger `web-platform-release.yml`, but NOT for the reason an earlier draft gave: that workflow's paths are `apps/web-platform/**` AND `plugins/soleur/**`, and this PR *does* touch `plugins/soleur/test/stock-preflight-coverage.test.ts`. It is saved only by the negated pattern `!plugins/soleur/test/**`. **Consequence: adding any non-test file under `plugins/soleur/` to this branch before merge WOULD cut a release into the dead channel** — a 16th failed run and a version bump to re-cut after recovery. It **does** trigger `apply-web-platform-infra.yml`, whose `paths:` list includes `.github/workflows/apply-web-platform-infra.yml` itself. That run is expected to go **red**, and its red IS AC5b. |
 | 2 | **Phase 1** — dispatch the new `ci-ssh-token-replace` arm | Mints a fresh token; the existing sync step writes `CI_SSH_ACCESS_TOKEN_ID/_SECRET` to Doppler in the same run. This leg touches no SSH resource. |
 | 3 | **Phase 1.3 / AC10** — assert Access **admits** the new credential (`verdict: clean`) | **Halt here on anything but a positive result.** A 502 or timeout is not a pass. |
 | 4 | **Phase 2** — re-dispatch `apply-deploy-pipeline-fix.yml` | The channel is live; both `terraform_data` resources are absent from state, so both are created and the #7097 payload lands. |
@@ -562,8 +565,11 @@ resource has to exist first.
 no migration. The deploy/router class fires **narrowly** — the `-replace` briefly invalidates one
 Cloudflare Access service token.
 
-**Serving surfaces are untouched.** `app.soleur.ai` is served over `:443` through the tunnel and does
-not authenticate against the `ci_ssh` Access application at all. It continues serving v0.244.0
+**Serving surfaces are untouched** — and for a STRONGER reason than this plan originally gave. The
+claim "served over `:443` through the tunnel" is **false**: `tunnel.tf` declares exactly three
+ingress hostnames (`deploy.`, `registry.`, `ssh.`) plus a 404 catch-all. `app.soleur.ai` is a
+CF-proxied **A record straight to web-1's public IPv4** (`dns.tf`) and is covered by no Access
+application, so it touches neither the tunnel nor Access. It continues serving v0.244.0
 uninterrupted throughout Phases 1–4, and is only *replaced* in Phase 5 by the normal container swap
 the release pipeline already performs. No user-visible request is dropped by anything in this plan.
 
@@ -953,7 +959,9 @@ returned zero matches.
 
 ## Files to Edit
 
-After Revision R1, **no Terraform file is edited at all.** The surface is three files:
+After Revision R1, **no Terraform file is edited at all.** The CODE surface is five files (three
+under `.github/`, two test files) — an earlier draft said three, before the wiring suite and the
+stock-preflight allowlist entry were added:
 
 - `.github/actions/cf-tunnel-ssh-bridge/action.yml` — one step invoking
   `scripts/check-cloudflare-token-drift.sh --only CI_SSH_ACCESS_TOKEN` after the forward opens and

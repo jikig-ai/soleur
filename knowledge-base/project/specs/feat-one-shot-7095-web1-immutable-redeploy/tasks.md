@@ -87,10 +87,15 @@ approval of Phase 1 does not extend to Phase 2.
 - [x] 4.2 Add `action-required` issue creation/update on verdict `dead` to
       `scheduled-terraform-drift.yml`, alongside the existing email, carrying the detector's remedy
       line (AC5e). Email alone failed three times over three days.
-- [ ] 4.3 Leave `apply-web-platform-infra.yml`'s existing presence gate intact — its `absent → skip`
-      arm is a correct first-bootstrap accommodation.
-- [x] 4.4 Probe hygiene: creds via `env:` never argv; no `-v`/`-i`/`--trace*`/`set -x`;
-      `--max-redirs 0`; annotations carry the enum + status code only, never the response body.
+- [x] 4.3 Leave `apply-web-platform-infra.yml`'s existing presence gate intact — its `absent → skip`
+      arm is a correct first-bootstrap accommodation. (Verified untouched; it was done-but-unchecked.)
+- [x] 4.4 Probe hygiene: creds via `env:` at the gate step (NOT end-to-end — the detector
+      passes them to curl as `-H` argv; comment corrected to say so); no `-v`/`-i`/`--trace*`/
+      `set -x`; annotations carry the enum + counts only, never the response body.
+      **`--max-redirs 0` is NOT present** and was claimed here in error — the detector's two
+      curl calls carry only `--max-time 20`. The intent holds by construction (curl does not
+      follow redirects without `-L`, and T18 pins that a 302 does not grade LIVE), so this is
+      a corrected claim, not new work.
 - [x] 4.5 Extend the **existing** `scripts/check-cloudflare-token-drift.test.sh` (already registered
       in `scripts/test-all.sh`). Do **not** create a new suite. Fixtures synthesized, never captured
       live (`cq-test-fixtures-synthesized-only`).
