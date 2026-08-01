@@ -18,18 +18,20 @@ changed_artifact:
   - plugins/soleur/docs/pages/legal/gdpr-policy.md
   - plugins/soleur/docs/pages/legal/data-protection-disclosure.md
   - apps/web-platform/lib/legal/legal-doc-shas.ts
-status: "BLOCKED — one blocking in-PR condition (C1); discharges automatically on C1 landing"
-signed_off_at: null
-reviewed_by: "clo agent (Soleur legal domain leader) — reviewing authority for v1 per the agent-native company model; external counsel re-review reserved for the re-evaluation triggers below"
+status: "SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)"
+signed_off_at: 2026-08-01
+signed_off_by: "clo agent (Soleur legal domain leader) — reviewing authority for v1 per the agent-native company model; external counsel re-review reserved for the re-evaluation triggers below"
+review_history: "2026-08-01 first pass — BLOCKED on C1 (docs/legal/privacy-policy.md §6 limbs (c) and (d)). 2026-08-01 second pass — C1 verified landed at commit 980622faa in the canonical document, the Eleventy mirror and the LEGAL_DOC_SHAS pin; disposition inverted to DISCHARGED. C7 and C8 verified PARTIALLY applied; the residue is carried to §Follow-up as F1–F5, all non-blocking."
 brand_survival_threshold: single-user incident
 re_evaluation_triggers: "The first arms-length (non-founder) user of the Soleur Web Platform; any EEA-out transfer not covered by the disclosed DPF/SCCs; the CJEU ruling in C-703/25 P (Latombe appeal) on the adequacy of the EU-US DPF; publication of the final (non-consultation) version of EDPB Guidelines 1/2024 on Art. 6(1)(f), on which the D9 necessity-first conclusion partly rests; publication of the final version of EDPB Guidelines 03/2026 on web scraping, on which the Art. 14(5)(b) narrow reading partly rests; the Anthropic Zero-Retention amendment remaining unsigned 90 days from 2026-07-30 while the fleet continues to egress third-party content; PA-32's republication limb continuing unremediated past the #7119 remediation window; the full DPIA for PA-32 (#7121) remaining outstanding; any fleet member gaining authority to block, ban, restrict or rank a natural person (re-opens the Art. 22 negative determination); any fleet member being pointed at a repository, Discord guild or social account other than jikig-ai/soleur and Jikigai's own properties; the arrival of a first non-founder contributor whose source is transmitted to Anthropic under PA-33 (re-opens the CLA-scope question at LIA outstanding item 3)."
 ---
 
 # Counsel review audit — PR #7100 (Art. 30(1) closure for the Anthropic-egressing fleet, the CI surface, and community republication)
 
-> **STATUS: BLOCKED — on one condition (C1), which is a single paragraph in one
-> file the PR is already editing and already SHA-repinning.** Seven non-blocking
-> conditions (C2–C8) are recorded.
+> **STATUS: DISCHARGED.** The gate was **BLOCKED** on first pass on one condition
+> (C1); C1 landed at commit `980622faa` and is verified below. Seven further
+> conditions (C2–C8) were recorded as non-blocking; C7 and C8 were partially
+> applied and their residue is carried to §Follow-up as **F1–F5**, none blocking.
 > Reviewed by the `clo` agent on 2026-08-01. The `clo` agent is the reviewing
 > authority for the v1 Soleur-as-tenant-zero posture — this is an agent-native
 > company; legal review is a CLO-agent function, not a task for the non-lawyer
@@ -39,16 +41,19 @@ re_evaluation_triggers: "The first arms-length (non-founder) user of the Soleur 
 > implementing source, the workflow YAML, the live GitHub API, and the published
 > documents themselves — not against the PR's own summary of them.
 
-## Why this is BLOCKED and not "DISCHARGED subject to C1"
+## Disposition history — why this was BLOCKED, and why it is now DISCHARGED
 
 The #7086 audit used the status "DISCHARGED WITH ONE BLOCKING IN-PR CONDITION".
-That form is unavailable here because this gate returns a binary that decides
+That form was unavailable here because this gate returns a binary that decides
 whether the PR may merge. A statement that must be corrected *before* merge and a
-disposition that *permits* merge cannot both be returned. The accurate binary is
-**BLOCKED**, and it inverts to DISCHARGED the moment C1 lands. Nothing else in
-this change is held back by it.
+disposition that *permits* merge cannot both be returned. The accurate binary on
+first pass was therefore **BLOCKED**, held open solely by C1.
 
-This is not a judgement on the change's quality. On the substance the work is the
+**C1 landed at commit `980622faa` and is verified.** Section 6 below records the
+verification. Nothing else in this change was ever held back by it, and the
+disposition is now **DISCHARGED**.
+
+This was never a judgement on the change's quality. On the substance the work is the
 strongest legal record in this repository: it closes a real Art. 30(1) gap, and it
 does so by recording three findings against the controller's own interest —
 **no available lawful basis** for a live limb, an **overdue** Art. 14 obligation,
@@ -399,9 +404,11 @@ correctly and completely disclosed.**
 
 ---
 
-## 6 — BLOCKING (C1): Privacy Policy §6 still tells data subjects they can withdraw by deleting their contributions, and that the processing is necessary. Both are false, both favour the controller, and this PR republishes them.
+## 6 — C1 (was BLOCKING, now RESOLVED): Privacy Policy §6 told data subjects they could withdraw by deleting their contributions, and that the processing was necessary. Both were false, both favoured the controller, and this PR was republishing them.
 
-This is the only blocking finding.
+This was the only blocking finding. **It is resolved — verification at the end of
+this section.** The finding is retained in full because a dated attestation must
+record what was found, not only what survived.
 
 `docs/legal/privacy-policy.md` § 6 ("Legal Basis for Processing") — and its Eleventy
 mirror at `plugins/soleur/docs/pages/legal/privacy-policy.md` — carries, unamended:
@@ -472,10 +479,27 @@ requires the basis to be given (the GDPR Policy states it at § 3.3 ¶75; the Pr
 Policy states it nowhere). Then re-run the SHA repin for `privacy-policy` in
 `apps/web-platform/lib/legal/legal-doc-shas.ts`.
 
-On C1 landing, and on my verification of the mirror and the SHA, this audit's
-disposition inverts to **DISCHARGED** and its `status` becomes
-`SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)`. No other condition need
-land first.
+### C1 — verification, 2026-08-01 (commit `980622faa`)
+
+Verified against the files, not against the change summary:
+
+| Check | Result |
+|---|---|
+| Limb **(d)** withdrawn for republished content | **PASS** — the correction block states that deleting a GitHub contribution "does **not** remove a copy that has already been committed to our public repository's Git history or propagated to a fork", cross-references § 4.4 and the retention section, and names the defect in the right direction: "it did so in our favour, by suggesting you hold a self-help remedy you do not have." |
+| Limb **(c)** qualified for the publication step | **PASS** — carries the D9 conclusion in full: "Article 6(1)(f) is not available for republication as implemented, and no other Article 6 basis is available for it either — the assessment fails at the necessity limb and does not reach balancing." Consistent with LIA Arm B2, PA-32 §Lawful basis and `gdpr-policy.md` § 3.3. |
+| Art. 13/14(1)(c) basis for the collection-and-egress limb, previously omitted | **PASS** — "relies on **Article 6(1)(f) legitimate interest** for the awareness purpose described in Section 4.4 — stated here because Article 14(1)(c) requires the lawful basis to be given, and the paragraph above described only the community-participation limb." The reason for the addition is stated, which is the right form for a correction block. |
+| Eleventy mirror parity | **PASS** — all three correction paragraphs present exactly once in both `docs/legal/privacy-policy.md` and `plugins/soleur/docs/pages/legal/privacy-policy.md`. |
+| `LEGAL_DOC_SHAS` repin | **PASS** — recomputed `sha256(docs/legal/privacy-policy.md)` = `dfdb035503c323f4073576620eea141d886c048c62f95749d8aef767ab9ee31b`, identical to the pinned value. |
+
+The correction is placed immediately after the (a)–(d) paragraph rather than
+replacing its limbs, which is the same form used at `gdpr-policy.md` § 3.3 and is the
+better one for a published policy: the superseded text remains legible to a reader
+comparing versions, and the correction is dated and attributed to #7100.
+
+**C1 is DISCHARGED.** No published legal document now contains a statement about this
+processing that is false, misleading, or more favourable to the controller than the
+internal record supports, other than the column-completeness gap at F1 below, which is
+a gap rather than a false statement.
 
 ---
 
@@ -550,7 +574,7 @@ carry the corrections; all three SHA pins verified against the files.
 
 | # | Condition | Blocking? |
 |---|---|---|
-| **C1** | **Correct `docs/legal/privacy-policy.md` § 6** (and its Eleventy mirror, then repin the SHA): withdraw limb (d)'s false withdrawal remedy; qualify limb (c)'s necessity assertion against § 4.4; and state the Art. 6(1)(f) basis for the collection-and-egress limb, which § 6 currently omits. Use the correction-block form already applied at `gdpr-policy.md` § 3.3. | **YES — must land before merge** |
+| **C1** | **Correct `docs/legal/privacy-policy.md` § 6** (and its Eleventy mirror, then repin the SHA): withdraw limb (d)'s false withdrawal remedy; qualify limb (c)'s necessity assertion against § 4.4; and state the Art. 6(1)(f) basis for the collection-and-egress limb, which § 6 currently omits. Use the correction-block form already applied at `gdpr-policy.md` § 3.3. | **WAS BLOCKING — LANDED at `980622faa` and VERIFIED 2026-08-01. DISCHARGED.** |
 | **C2** | Add **C-708/18 *TK v Asociaţia de Proprietari*** [47] (and optionally C-252/21 *Meta Platforms* / C-621/22 *KNLTB*) alongside *Rīgas satiksme* in LIA Arm B2, PA-32 §Lawful basis and the LIA External-authorities table, as the direct authority for the "no less intrusive means that achieves the objective just as effectively" formulation. *Rīgas satiksme* supports strict necessity; *TK* is where the less-intrusive-means test is stated in terms. Strengthens D9; does not change it. | No |
 | **C3** | Record that **Art. 14(3)(b)** also engages for the `cron-daily-triage` public-comment limb — information due *at the latest at the time of the first communication with the data subject*, a stricter deadline than 14(3)(a), breached at every such comment and continuing on the live limb. Add to LIA §Art. 14, PA-32 §(b), and #7120's scope. | No |
 | **C4** | Replace "substantially discharged by context" / "materially satisfied by context" for Arms A and C (LIA §Art. 14 table, PA-31 §(b)(i), PA-33 §(b)) with the GDPR-recognised disposition: notice **due and undischarged**, no Art. 14(5) exemption claimed, low-cost remediation at #7120. "Context" is a reason the fix is cheap, not a discharge. | No |
@@ -564,6 +588,28 @@ cell and did not propagate to the cells that quote it. That pattern is precisely
 deferred item **DEF-2 (#7125)** exists to guard against, and it is worth noting that the
 drift guard is being built while the same drift is being introduced. None of them is
 controller-favourable except C6, and none misleads a data subject.
+
+## Follow-up — open at sign-off, none blocking
+
+C7 and C8 were partially applied at commit `980622faa`: the register's Vendor /
+Sub-Processor Mapping PA-33 figure and PA-32 §(h)'s Art. 21(1) claim were corrected,
+and the cells quoting them were not. **That is the same "authoritative cell corrected,
+quoting cells not" pattern the conditions were written to close, recurring inside the
+fix for it** — which is worth recording plainly, because it is now the fourth
+observation of this class in one PR and it is the strongest available argument for
+DEF-2 (#7125) being a CI assertion rather than a review habit.
+
+None of the following is blocking. All should be folded into **#7125** (drift guard) or
+**#7126** (rights routes) so they are tracked rather than lost.
+
+| # | Open item | Origin | Where |
+|---|---|---|---|
+| **F1** | `data-protection-disclosure.md` § 2.3 Anthropic sub-processor row: *Purpose* column names PA-31/32/33; *Data categories* and *Lawful basis* columns still describe the email-triage call alone and cite only `2026-06-11-operator-inbox-triage-lia.md`. The row therefore represents a legitimate-interest basis for all three, which is unsupported for PA-31/PA-33 and **false for PA-32's republication limb**. Non-blocking only because § 2.2(b) of the same document states the correct position expressly, and the Privacy Policy and GDPR Policy both state it correctly. **Fix this first — it is the only remaining published-document defect, and it is one table cell.** | C6 | `docs/legal/data-protection-disclosure.md` § 2.3 + mirror + SHA repin |
+| **F2** | Register Vendor / Sub-Processor Mapping, Anthropic row still reads "21 Inngest modules, of which **15** reach Anthropic through the Claude Code CLI and **3** by direct HTTPS" — 15 + 3 = 18, not 21. PA-31 §(a) was corrected to **18 CLI (16 `spawnClaudeEval` + 2 inline) + 3 HTTPS = 21**, and its own correction block names "correcting a scope-mismatched figure with another scope-mismatched figure" as the failure it exists to end. The PA-33 half of C7 was fixed here; this half was not. | C7(i), unapplied | `knowledge-base/legal/article-30-register.md` line 437 |
+| **F3** | DPIA screening memo still reads "PA-33 — Jikigai-keyed CI surface (**5 `.github/` members**)", superseded by PA-33 §(d)'s 6 files / 7 job-level surfaces and the widened predicate that reaches member (7) outside `.github/`. The screening conclusion (one criterion, no full DPIA) is unaffected. | C7(ii), unapplied | `…/audits/2026-07-31-dpia-screening-claude-eval-fleet-and-ci.md` line 41 |
+| **F4** | Three sites still assert that **no** legal document provides an Art. 21(1) objection route for this population, after `privacy-policy.md` § 8.1 provided one and `statutory-response-catalog.md` pointed to it by name. PA-32 §(h) was corrected; PA-31 §(h), the DPIA memo's criterion-7 rationale, and the DPIA memo's dependent reasoning were not. Narrow each to the PA-32 §(h) wording: the route exists at § 8.1; what remains open at #7126 is a truthful and complete Art. 15 response and whether an objection can be honoured in substance. DPIA criterion 7 remains ENGAGED regardless (no relationship, no notice, no erasure route). | C8, partially unapplied | register line 606; DPIA memo line 77 |
+| **F5** | LIA § Art. 14, paragraph beginning "A separate and more urgent defect in the outward-facing record", still reads in the present tense ("**currently** tells the public"), still says correction is "outside this record's scope", still carries the self-cancelling "DEF-1a (**resolved in this PR**)" / "**Until it lands**", and names only **two** of the three corrected documents. PA-32 §(b) repaired this exact three-tenses defect in the register; the LIA copy was never swept. Rewrite in the past tense naming all three documents and their mirrors. | C8, unapplied | `…/2026-07-31-claude-eval-fleet-and-ci-lia.md` lines 576–584 |
+| **F6** | C2 (add C-708/18 *TK* [47] as the citation home for the less-intrusive-means test), C3 (Art. 14(3)(b) engaging for the `cron-daily-triage` comment limb — fold into #7120), C4 ("satisfied by context" is not a GDPR disposition for Arms A/C), C5 (WP248 criterion 9 marked arguable). | C2–C5 | LIA, register, DPIA memo |
 
 ## Attestation
 
@@ -593,28 +639,32 @@ authority), WP248 rev.01's criteria and its two-criteria presumption, Art. 14(3)
 35(3), and the OPEN state of issues **#7119–#7126** via `gh issue list` (all eight
 confirmed OPEN).
 
-The `clo` agent **BLOCKS** the Counsel-Review CLO-Attestation gate for PR #7100 on
-condition **C1**, and records C2–C8 as non-blocking. On C1 landing and verification,
-this attestation converts to **DISCHARGED** with `status: SIGNED-OFF
-(CLO-agent-attested, Soleur-as-tenant-zero v1)`.
+On first pass the `clo` agent **BLOCKED** the gate on condition **C1** and recorded
+C2–C8 as non-blocking. **C1 landed at commit `980622faa` and has been verified** — in
+the canonical document, in the Eleventy mirror, and in the recomputed
+`LEGAL_DOC_SHAS` pin (§ 6, C1 verification table).
+
+The `clo` agent therefore **DISCHARGES** the Counsel-Review CLO-Attestation gate for
+PR #7100. **PR #7100 is cleared to merge.** F1–F6 remain open and are non-blocking;
+F1 should be taken first, being the only remaining published-document defect.
 
 Per-artifact verdict:
 
 | Artifact | Verdict |
 |---|---|
-| `knowledge-base/legal/article-30-register.md` (PA-31) | **APPROVED** — C7 non-blocking (Vendor-mapping figures) |
-| `knowledge-base/legal/article-30-register.md` (PA-32) | **APPROVED** — the D9 no-lawful-basis finding is affirmed without qualification; C5, C8 non-blocking |
-| `knowledge-base/legal/article-30-register.md` (PA-33) | **APPROVED** — C7, C8 non-blocking |
+| `knowledge-base/legal/article-30-register.md` (PA-31) | **APPROVED** — F2, F4 open non-blocking |
+| `knowledge-base/legal/article-30-register.md` (PA-32) | **APPROVED** — the D9 no-lawful-basis finding is affirmed without qualification; §(h)'s Art. 21(1) claim correctly narrowed at `980622faa`; F5 open non-blocking |
+| `knowledge-base/legal/article-30-register.md` (PA-33) | **APPROVED** — Vendor-mapping figure corrected at `980622faa`; F3, F4 open non-blocking |
 | `knowledge-base/legal/article-30-register.md` (PA-17 amendment) | **APPROVED** — the #4558 trigger is properly discharged; withdrawing the "display-only" and "load-bearing Art. 14 gate" over-claims is correct |
-| `…/legitimate-interest-assessments/2026-07-31-claude-eval-fleet-and-ci-lia.md` | **APPROVED** — C2, C3, C4, C8 non-blocking |
-| `…/audits/2026-07-31-dpia-screening-claude-eval-fleet-and-ci.md` | **APPROVED** — C5, C7 non-blocking |
+| `…/legitimate-interest-assessments/2026-07-31-claude-eval-fleet-and-ci-lia.md` | **APPROVED** — F5, F6 open non-blocking |
+| `…/audits/2026-07-31-dpia-screening-claude-eval-fleet-and-ci.md` | **APPROVED** — F3, F4, F6 open non-blocking |
 | `knowledge-base/legal/data-processing-agreements/anthropic.md` | **APPROVED** — discharges #7086 C1–C4 in substance |
-| `knowledge-base/legal/compliance-posture.md` | **APPROVED** — C8 non-blocking |
+| `knowledge-base/legal/compliance-posture.md` | **APPROVED** — Art. 21(1) claim corrected at `980622faa` |
 | `knowledge-base/legal/statutory-response-catalog.md` | **APPROVED** — the fourth requester class is correctly added; no condition |
 | `docs/legal/gdpr-policy.md` + mirror | **APPROVED** — §§ 2.2, 3.3, 9 accurate and complete |
-| `docs/legal/data-protection-disclosure.md` + mirror | **APPROVED subject to C6** (sub-processor-row columns) — non-blocking |
-| `docs/legal/privacy-policy.md` + mirror | **REJECTED pending C1** — § 6 limbs (c) and (d) are false and controller-favourable, contradicted by §§ 4.4, 7 and 8.1 of the same file as amended by this PR |
-| `apps/web-platform/lib/legal/legal-doc-shas.ts` | **APPROVED as computed** — all three pins verified; the `privacy-policy` pin must be recomputed after C1 |
+| `docs/legal/data-protection-disclosure.md` + mirror | **APPROVED** — § 2.2(b), § 2.3 table row and the Anthropic sub-processor row's *Purpose* column are accurate; F1 (that row's *Data categories* and *Lawful basis* columns) open non-blocking |
+| `docs/legal/privacy-policy.md` + mirror | **APPROVED** — was REJECTED pending C1; § 6 corrected at `980622faa`, mirror parity and SHA verified |
+| `apps/web-platform/lib/legal/legal-doc-shas.ts` | **APPROVED** — all three pins recomputed and verified against the files, including the post-C1 `privacy-policy` pin `dfdb0355…` |
 
 This attestation is the v1 **internal** sign-off. All output remains draft material;
 **external** counsel re-review is reserved for the frontmatter re-evaluation triggers —

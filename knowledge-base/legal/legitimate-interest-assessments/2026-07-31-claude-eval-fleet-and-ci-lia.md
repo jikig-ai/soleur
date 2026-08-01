@@ -573,15 +573,25 @@ Privacy Policy §4.15 following the §4.13/§4.14 pattern, mirrored to
 `apps/web-platform/lib/legal/legal-doc-shas.ts`. **Item (c) alone does not discharge the
 obligation** for (a) and (b)'s populations.
 
-**A separate and more urgent defect in the outward-facing record.**
-`docs/legal/privacy-policy.md` §4.4 currently tells the public that repository interaction
-data "is not controlled by Soleur", and `docs/legal/gdpr-policy.md` §2.2 describes Anthropic
-requests as using "the user's own API key". Both statements are **false for this fleet**:
-Jikigai ingests that data under its own key, transmits it to Anthropic, and republishes part
-of it. Correcting them is source-side work outside this record's scope and is tracked as
-deferred item **DEF-1a** (resolved in this PR). Until it lands, the internal register authored under #7100 is
-contradicted by the published policy — and the published policy is what a data subject or a
-supervisory authority reads first.
+**A separate and more urgent defect in the outward-facing record — RESOLVED in this change.**
+`docs/legal/privacy-policy.md` §4.4 told the public that repository interaction data "is not
+controlled by Soleur", and `docs/legal/gdpr-policy.md` §2.2 described Anthropic requests as
+using "the user's own API key". Both statements were **false for this fleet**: Jikigai ingests
+that data under its own key, transmits it to Anthropic, and republishes part of it.
+
+**[2026-08-01 CORRECTION at ship.** This paragraph previously read "Correcting them is
+source-side work **outside this record's scope** and is tracked as deferred item **DEF-1a**
+(resolved in this PR). **Until it lands**, the internal register authored under #7100 is
+contradicted by the published policy" — three mutually exclusive tenses in one sentence, in a
+record whose subject is a false statement. It also named only **two** of the three affected
+documents.
+
+Final position: `privacy-policy.md` §4.4 and §6, `gdpr-policy.md` §2.2 and §9, and
+`data-protection-disclosure.md` §2.2(b) are all corrected in this change, together with their
+three Eleventy mirrors, and `LEGAL_DOC_SHAS` is repinned for all three canonicals. The third
+document was named by no deferred item and was found at review; §6's limb (d) — which told a
+data subject they could withdraw by deleting their GitHub contribution — was found by the CLO
+attestation at ship. **No published policy now contradicts this assessment.** **]**
 
 ---
 
