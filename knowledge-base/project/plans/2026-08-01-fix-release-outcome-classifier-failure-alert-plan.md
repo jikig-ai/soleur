@@ -147,7 +147,7 @@ customer record is added to any payload. The email recipient (`ops@jikigai.com`)
 call, and the Sentry DSN are all unchanged; only *when* they fire changes. The one new content
 field is a step name and a run URL.
 
-**Brand-survival threshold:** `single-user incident`. There is exactly one operator on this
+- **Brand-survival threshold:** `single-user incident`. There is exactly one operator on this
 alert path; a missed alert is a total loss of the signal, not a degraded one — the same
 threshold the #7136 plan carried for the same job.
 
