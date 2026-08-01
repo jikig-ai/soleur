@@ -16,7 +16,7 @@ asserting a fixed state that does not exist is not.
 |---|---|---|---|
 | DEF-0 | Minimise or cease the PA-32 republication limb (R1–R5), incl. erasure posture | #7119 | BLOCKING |
 | DEF-1 | Art. 14 notice to the PA-32 third-party population (overdue since ~2026-03-19) | #7120 | Statutory |
-| DEF-1a | Correct the false controllership statements in the public policies | **resolved in this PR** | Done |
+| DEF-1a | Correct the false controllership statements in the public policies | **resolved in this PR — both statements, plus a third document found at review** | Done |
 | DEF-2 | Register-vs-code drift guard for the PA-31 membership predicate | #7125 | Tooling |
 | DEF-3 | Collector-side input minimisation before Anthropic egress (PA-31 / arm B1) | #7124 | Open |
 | DEF-4 | Erasure posture for already-published digests | _folded into DEF-0_ | Open |
@@ -215,4 +215,13 @@ Justification per filing — none could be inlined under the ≤100-line / ≤4-
 | DEF-8+9 | Data-subject-rights plumbing with no existing route; consolidated from two tokens into one issue. |
 
 DEF-1a was **resolved inline in this PR** rather than filed, and DEF-4 was folded into DEF-0,
+**[2026-07-31 CORRECTION, applied at review.** DEF-1a is plural — "statement**s**" — and the
+first pass corrected only one of the two the register names. `docs/legal/gdpr-policy.md` §2.2's
+Anthropic bullet ("the user's own API key" / "Soleur does not intermediate") survived verbatim in
+both the canonical and the Eleventy mirror while this table already read `Done`. Review also found
+a **third** published document carrying the same falsified framing that no DEF item had named at
+all — `docs/legal/data-protection-disclosure.md` §2.2(b), plus its mirror. All three are corrected
+now, and `LEGAL_DOC_SHAS` is repinned for all three. Recording the miss rather than quietly
+widening the row: a status column that said Done while the named sentence was still live is the
+same defect class this PR exists to fix, committed against this PR's own tracking record.**]**
 which is why the net is +7 rather than +9.

@@ -36,7 +36,7 @@ facts and **does not** land where PA-27 landed.
 
 | Activity | Criteria engaged | Outcome |
 |---|---|---|
-| **PA-31** — internal egress to Anthropic (21 members) | 2 (innovative technology; vulnerable/involuntary subjects, partially) | **Full DPIA not required.** Screening + LIA + the register entry are the proportionate Art. 24/25 record. Three named accepted residuals below. |
+| **PA-31** — internal egress to Anthropic (21 members) | 2 (innovative technology; vulnerable/involuntary subjects, partially) | **Full DPIA not required.** Screening + LIA + the register entry are the proportionate Art. 24/25 record. Five named accepted residuals below, (a)-(e). [2026-07-31 CORRECTION (#7100), applied at review: this read "Three", a count inherited from the PA-27 precedent memo, which genuinely has three. This memo enumerates five.] |
 | **PA-32** — community observation **and republication** | **6** (systematic monitoring; data of a highly personal nature; matching/combining; involuntary subjects; innovative technology; processing that forecloses a right) | **A FULL DPIA IS REQUIRED under Art. 35(1)** — and, because Art. 35(1) requires it *prior to* the processing and the processing began on 2026-02-19, it is **overdue by approximately five months**. |
 | **PA-33** — Jikigai-keyed CI surface (5 `.github/` members) | 1 (innovative technology) | **Full DPIA not required.** |
 
@@ -129,8 +129,14 @@ continues to run. This is recorded as a compliance finding, not as a plan.
 
 The full DPIA is tracked as deferred item **DEF-5** (#7121; body drafted at
 `knowledge-base/project/specs/feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`;
-GitHub issue number wired at filing). PA-32 §(g) records `DPIA status: full DPIA required —
-overdue since ~2026-02-19; scoped in DEF-5`.
+#7121). PA-32 §(g) records **DPIA status: FULL DPIA REQUIRED — and overdue**, with the
+~2026-02-19 date and the DEF-5 scoping in the sentences that follow it. **[2026-07-31
+CORRECTION (#7100), applied at review: the preceding sentence previously presented a
+paraphrase inside backticks as a verbatim quotation of PA-32 §(g). The register contains no
+such string. The substance was equivalent, but in a record whose stated method is quoting its
+sources exactly, a fabricated self-quote is the one error class that undermines the rest. Also
+dropped the trailing "GitHub issue number wired at filing" clause, which sat immediately after
+the number it said was pending.]**
 
 ### 2.3 Remediation is very likely the better path, and the memo says so
 
@@ -198,7 +204,7 @@ the corpus is left in place, or a repository-history rewrite that breaks downstr
 still does not reach the forks or GitHub's retained issue-edit history. Posed, not answered,
 as R5 / deferred item **DEF-4** (#7119), and as outstanding counsel-review item 2 in the LIA.
 
-**(d) Two of the fifteen CLI members run with no containment hook.** `cron-daily-triage` and
+**(d) Two of the eighteen CLI members run with no containment hook.** `cron-daily-triage` and
 `cron-follow-through-monitor` never call `setupEphemeralWorkspace`, so they get no
 `PreToolUse` hook, no `CRON_BASH_ALLOWLISTS` entry, no `runHookSelfTest` and no ephemeral
 workspace; the substrate's own committed probe evidence records that `--allowedTools` alone
