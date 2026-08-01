@@ -1,0 +1,153 @@
+name: release-outcome condition harness
+
+# TEMPORARY — THIS FILE IS DELETED BEFORE THIS PR MERGES. Do not depend on it.
+#
+# Issue #7138 requires its fix to be "verified by EXECUTING the condition, not by reading
+# the YAML". A GitHub `if:` expression cannot be evaluated off-platform, so this workflow
+# runs the SHIPPED condition strings on GitHub's own expression evaluator against stand-in
+# steps that reproduce the classifier-death state.
+#
+# Why not the alternatives:
+#   - `act` is absent from this repo and this machine, and is a REIMPLEMENTATION of the
+#     evaluator. A green `act` run proves act's semantics, not GitHub's.
+#   - A scratch `workflow_dispatch` workflow cannot be dispatched from a feature branch
+#     (HTTP 404: workflow not found on the default branch). Hence `pull_request`, with this
+#     file's own path in the filter so it self-bootstraps on the PR that adds it — the shape
+#     `.github/workflows/gdpr-gate-self-test.yml` already uses.
+#   - A job inside ci.yml would redden the required `test` aggregator, because one arm must
+#     genuinely fail a step.
+#
+# WHY IT IS DELETED RATHER THAN KEPT: a permanent, deliberately-red, NON-REQUIRED check is
+# the exact shape of the bug bf4816455 fixed on main ("the drift verdict blocked nothing").
+# The RUN is immutable evidence and its URL is recorded in the spec's verification-evidence
+# file; the DURABLE guard is B1c/B1d/B1e inside the required `test` check.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/web-platform-release.yml"
+      - ".github/workflows/release-outcome-condition-harness.yml"
+      - "scripts/lint-workflow-step-env-refs.test.sh"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    # Arms A and B deliberately fail their first step, which reddens the JOB. Job-level
+    # continue-on-error keeps the RUN green so the `verdict` job below is the only pass/fail
+    # signal. NOT step-level continue-on-error: that would flip steps.outcome.conclusion to
+    # `success` and the harness would then be testing a predicate the shipped workflow does
+    # not use.
+    name: probe-${{ matrix.arm }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        # A — classifier dies, email delivers      => mirror must STAND DOWN (skipped)
+        # B — classifier dies, email does NOT      => mirror must FIRE      (the #7138 fix)
+        # C — healthy release, failed=''           => BOTH must stay silent (negative control)
+        arm: [A, B, C]
+    steps:
+      - name: classify
+        id: outcome
+        env:
+          ARM: ${{ matrix.arm }}
+        run: |
+          set -uo pipefail
+          case "$ARM" in
+            A|B) echo "forcing the classifier to die before it writes GITHUB_OUTPUT"; exit 1 ;;
+            C)   echo "failed=" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: email
+        id: email
+        # VERBATIM COPY of the shipped email step's `if:` in web-platform-release.yml.
+        if: ${{ !cancelled() && (steps.outcome.conclusion == 'failure' || steps.outcome.outputs.failed != '') }}
+        env:
+          ARM: ${{ matrix.arm }}
+        run: |
+          set -uo pipefail
+          case "$ARM" in
+            A) echo "delivered=1" >> "$GITHUB_OUTPUT" ;;
+            *) echo "delivered=0" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: mirror
+        id: mirror
+        # VERBATIM COPY of the shipped mirror step's `if:` in web-platform-release.yml.
+        if: ${{ !cancelled() && (steps.outcome.conclusion == 'failure' || steps.outcome.outputs.failed != '') && steps.email.outputs.delivered != '1' }}
+        env:
+          # Declared exactly as the shipped step declares it: on arms A and B the classify
+          # step never wrote this output, so this records EMPIRICALLY whether GitHub sets a
+          # declared env key whose expression resolves empty (set-and-empty vs unset). The
+          # plan asserted set-and-empty; this is the measurement, not the assertion.
+          FAILED: ${{ steps.outcome.outputs.failed }}
+        run: |
+          set -uo pipefail
+          if [ -v FAILED ]; then echo "FAILED_IS=SET value='${FAILED}'"; else echo "FAILED_IS=UNSET"; fi
+
+  verdict:
+    name: verdict
+    needs: [probe]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Assert the observed step conclusions match the expected truth table
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          GH_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          # shellcheck disable=SC2016  # `\(...)` below is jq string interpolation, not shell.
+          gh api "repos/${GH_REPO}/actions/runs/${GH_RUN_ID}/jobs" --paginate \
+            --jq '.jobs[] | select(.name | startswith("probe-")) as $j
+                  | $j.steps[]
+                  | select(.name == "classify" or .name == "email" or .name == "mirror")
+                  | "\($j.name)\t\(.name)\t\(.conclusion)"' \
+            | sort > observed.tsv
+
+          # The expected table. Arm C is what makes this harness non-vacuous: a lazy
+          # `if: always()` "fix" passes A and B and FAILS C, because an always() condition
+          # cannot produce a `skipped` row. printf, not a heredoc: a quoted heredoc
+          # terminator cannot be indented, and this block is nested two levels deep.
+          printf '%b\n' \
+            "probe-A	classify	failure" \
+            "probe-A	email	success" \
+            "probe-A	mirror	skipped" \
+            "probe-B	classify	failure" \
+            "probe-B	email	success" \
+            "probe-B	mirror	success" \
+            "probe-C	classify	success" \
+            "probe-C	email	skipped" \
+            "probe-C	mirror	skipped" \
+            | sort > expected.tsv
+
+          # A sweep that silently returned fewer arms than expected must not read as green.
+          ARMS=$(cut -f1 observed.tsv | sort -u | wc -l)
+          if [ "$ARMS" -ne 3 ]; then
+            echo "::error::expected 3 probe arms, observed ${ARMS} — the sweep is incomplete, not clean."
+            echo "--- observed ---"; cat observed.tsv
+            exit 1
+          fi
+
+          if diff -u expected.tsv observed.tsv; then
+            echo "verdict: all 3 arms match the expected truth table."
+            {
+              echo "### release-outcome condition harness — PASS"
+              echo
+              echo '```'
+              cat observed.tsv
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::observed step conclusions do NOT match the expected truth table (see diff above)."
+            exit 1
+          fi
