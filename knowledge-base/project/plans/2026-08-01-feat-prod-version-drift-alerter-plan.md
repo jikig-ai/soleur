@@ -45,11 +45,27 @@ merged (#7137 bound `R_DEPLOY`; #7139 widened the email + Sentry-mirror `if:` co
 PATHSPEC=(apps/web-platform/ plugins/soleur/
           ':(exclude)plugins/soleur/docs/' ':(exclude)plugins/soleur/test/')
 
-missing=$(git rev-list --first-parent --format='%H %ct' "${prod_sha}..origin/main" -- "${PATHSPEC[@]}")
-#   count == 0                       -> CLEAN
-#   count  > 0                       -> prod is behind; the OLDEST entry's %ct is the staleness clock
-#   git fails (unknown/absent SHA)   -> CHECK_ERROR
+missing=$(git log --first-parent --format='%H %ct' "${prod_sha}..origin/main" -- "${PATHSPEC[@]}")
+rc=$?     # captured DIRECTLY — see the pipe trap below
+#   rc != 0                          -> CHECK_ERROR (unknown/absent SHA, shallow clone)
+#   rc == 0 and $missing empty       -> CLEAN
+#   rc == 0 and non-empty            -> prod is behind; the LAST line's %ct is the staleness clock
 ```
+
+**Use `git log --format`, not `git rev-list --format`.** Measured: `rev-list --format` interleaves a
+bare `commit <sha>` header line before every entry, so a naive `tail -1` reads a header, not a
+record. `git log --format` emits one clean `%H %ct` line per commit; `tail -1` is the oldest entry.
+(Use `git rev-list --count` if only a count is wanted — but the clock needs the oldest record, so
+one `git log` call serves both.)
+
+**Capture `rc` directly from `git`, never through a pipe.** Measured on a bad revision:
+
+```text
+git log … deadbeef…..origin/main            -> rc=128   (correct)
+git log … deadbeef…..origin/main | tail -1  -> rc=0     (masked — reads as CLEAN)
+```
+
+The piped form is how a broken checker silently reports "no drift".
 
 This one query replaces the three separate mechanisms v1/v2 used (equality test, `merge-base
 --is-ancestor` ancestry guard, and a newest-commit age clock), and is correct on every case each of
@@ -301,9 +317,10 @@ triple to mirror.
 **Phase 2 — GREEN: the checker.** `PATHSPEC` and `DRIFT_SUSTAINED_THRESHOLD_MIN=195` as documented
 constants. `classify_drift()` pure: `(prod_json, curl_rc, missing_count, oldest_epoch, revlist_rc,
 now_epoch)` → verdict + reason + exit code. `main()` does I/O only: curl with `--max-time` and 3×
-backoff, then `git rev-list --first-parent --format='%H %ct' "$prod_sha..origin/main" -- $PATHSPEC`
-with `rc` captured directly (no pipe). Emits `DRIFT_VERDICT=`, `DRIFT_REASON=`, `DRIFT_DETAIL=`,
-`DRIFT_MISSING_COUNT=` for the workflow to parse.
+backoff, then `git log --first-parent --format='%H %ct' "$prod_sha..origin/main" -- $PATHSPEC`
+(**`log`, not `rev-list --format`** — the latter interleaves `commit <sha>` header lines) with `rc`
+captured directly, **never through a pipe** (measured: `rc=128` direct vs `rc=0` piped). Emits
+`DRIFT_VERDICT=`, `DRIFT_REASON=`, `DRIFT_DETAIL=`, `DRIFT_MISSING_COUNT=` for the workflow to parse.
 
 **Phase 3 — The workflow.** Sibling conventions: gate-override marker at line 1 with the Decision 4
 justification; `schedule` + bare `workflow_dispatch: {}`; `permissions: {contents: read, issues:
@@ -504,15 +521,19 @@ The Phase 2.11 detector fires because `## Files to Edit` includes a `\.tf$` path
 
 ```yaml
 at_rest:
-  - store: none introduced
-    mechanism: n/a — this plan introduces no persistent data store
+  - store: no-store-introduced (the workflow is stateless between runs)
+    mechanism: not-applicable-no-store — the checker holds no state; every run re-derives its verdict
+               from a live HTTP read plus git history, and writes no file, table, bucket, volume, or cache
     evidence: the only .tf change adds a sentry_cron_monitor (schedule metadata only, no data plane);
               the resource TYPE already exists 51x in the same file, so lint-encryption-posture.py's
               R7 three-way resource-type partition is unchanged
-    defends_against: n/a
-    does_not_defend: n/a — no data at rest is created, read, or persisted
-    disclosed_as: n/a
-    live_verification: n/a
+    defends_against: nothing at rest, because nothing is written at rest
+    does_not_defend: this row provides NO at-rest protection of any kind — if a future revision adds
+                     caching of /health responses, a state file, or a results artifact, that store needs
+                     its own posture row and this row must stop claiming statelessness
+    disclosed_as: no disclosure required — no personal data and no persisted artifact exist to disclose
+    live_verification: available — `gh run list --workflow=scheduled-prod-version-drift.yml` plus the
+                       run log shows the full input/output surface; there is no store to introspect
 
 in_transit:
   - connection: GitHub Actions runner -> https://app.soleur.ai/health
@@ -534,8 +555,11 @@ in_transit:
   - connection: GitHub Actions runner -> GitHub API (label bootstrap, issue dedupe/create/comment/close)
     tls: HTTPS via gh CLI with the job's scoped GITHUB_TOKEN (issues: write)
     cert_verification: on
-    does_not_defend: n/a — first-party control plane
-    disclosed_as: n/a
+    does_not_defend: does not defend against a compromised GITHUB_TOKEN, which could file or close
+                     issues in this repo; scope is limited to issues:write and contents:read, so it
+                     cannot push code or read secrets
+    disclosed_as: first-party GitHub control plane, already covered by the repo's existing GitHub
+                  processing; issue bodies carry only SHAs, counts, and run URLs — no personal data
 ```
 
 No `plaintext-exception` and no `cert_verification: off`, so no `exception` block is required.
@@ -801,8 +825,11 @@ evidence** rather than deferred to.
 - **The heartbeat's `ok` means "the monitor worked", not "prod is healthy".** `DRIFT_SUSTAINED`
   checks in `ok` *provided the email delivered*; marking it `error` unconditionally would
   double-page and conflate "prod is stale" with "the checker is broken".
-- **Capture `rc` directly from `git`/`curl`, never through a pipe.** `git rev-list <bad>..main |
-  head` reports `head`'s status, not git's — a broken check would read as CLEAN.
+- **Capture `rc` directly from `git`/`curl`, never through a pipe.** Measured: `git log <bad>..main`
+  returns **128**; the same command piped to `tail -1` returns **0** — a broken check reads as CLEAN.
+- **Use `git log --format`, not `git rev-list --format`.** `rev-list --format` interleaves a bare
+  `commit <sha>` line before every record, so `tail -1` returns a header rather than the oldest
+  commit — the staleness clock would silently parse garbage. `rev-list --count` is fine for counting.
 - **`fetch-depth: 0` is not optional.** `origin/main` HEAD is frequently not a path-matching commit.
 - **`scripts/*.test.sh` is not auto-discovered** by `test-all.sh`. Registration is mandatory.
 - **`jq -r .build_sha` prints the literal string `null`** for both `{}` and `{"build_sha":null}`.

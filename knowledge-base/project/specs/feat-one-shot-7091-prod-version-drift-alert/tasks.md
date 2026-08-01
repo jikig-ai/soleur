@@ -48,8 +48,11 @@ review findings are encoded in the workflow's step conditions.
 - [ ] 2.2 Implement pure `classify_drift()` — inputs `(prod_json, curl_rc, missing_count,
       oldest_epoch, revlist_rc, now_epoch)`, outputs verdict + reason + exit code. No network, no git.
 - [ ] 2.3 Implement `main()` I/O only: curl `/health` with `--max-time` and **3× backoff retry**;
-      then `git rev-list --first-parent --format='%H %ct' "$prod_sha..origin/main" -- $PATHSPEC`.
-      **Capture `rc` directly from git/curl — never through a pipe** (see plan Sharp Edges).
+      then `git log --first-parent --format='%H %ct' "$prod_sha..origin/main" -- $PATHSPEC`.
+      Use `git log`, **not** `git rev-list --format` — the latter interleaves bare `commit <sha>`
+      header lines, so `tail -1` reads a header instead of the oldest record.
+      **Capture `rc` directly from git/curl — never through a pipe** (measured: `rc=128` direct
+      vs `rc=0` piped, which reads as CLEAN). The oldest missing commit is `tail -1`.
 - [ ] 2.4 Validate `build_sha` to 40-hex, rejecting the literal string `null`, empty, and non-JSON.
 - [ ] 2.5 Emit `DRIFT_VERDICT=`, `DRIFT_REASON=`, `DRIFT_DETAIL=`, `DRIFT_MISSING_COUNT=` lines.
 - [ ] 2.6 Header comment documenting the `skip_deploy` true-positive case and the `--first-parent`
