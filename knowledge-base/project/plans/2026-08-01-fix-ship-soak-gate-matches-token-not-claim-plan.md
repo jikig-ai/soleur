@@ -332,7 +332,7 @@ measured during planning:
 | Path | Purpose |
 |---|---|
 | `scripts/ship-soak-signal-gate.sh` | The scan. stdin → exit 0 + `SOAK-SIGNAL: yes` when a soak is CLAIMED; exit 1 silently otherwise. **Owns** `SOAK_RE` + the strips. Sibling of `scripts/ship-incident-pir-gate.sh`; distinct basename from the hook so the two are never confused. |
-| `plugins/soleur/test/fixtures/ship-soak-followthrough-gate/*.md` | 9 synthesized both-direction fixtures (enumerated in Test Scenarios). |
+| `plugins/soleur/test/fixtures/ship-soak-followthrough-gate/*.md` | 11 synthesized both-direction fixtures (enumerated in Test Scenarios). |
 
 ## Files to Edit
 
@@ -340,7 +340,7 @@ measured during planning:
 |---|---|
 | `.claude/hooks/ship-soak-followthrough-gate.sh` | Replace the inline `SOAK_RE` + dual `grep -qiE` with a pipe of `"$CORPUS"` into the extracted script; branch on its exit. Preserve the dual-locale invocation **inside the script**. Fail-open if the script is missing/unreadable. |
 | `plugins/soleur/skills/ship/SKILL.md` | Replace the §Detection `SOAK_RE=` + `SOAK_HIT=` block with the script invocation, mirroring the Incident-PIR call shape at §"Incident-signal scan". Add a `**Why:**` sentence citing #7056 + #7087. |
-| `plugins/soleur/test/ship-soak-followthrough-enrollment-gate.test.ts` | Delete the `soakRe()` scraper and the byte-identity parity test (the second copy is gone — parity is unrepresentable, not asserted). Add a `spawnSync` harness over the shipped script + the 9 fixtures. Re-anchor the two prose assertions that referenced `SOAK_RE=`. |
+| `plugins/soleur/test/ship-soak-followthrough-enrollment-gate.test.ts` | Delete the `soakRe()` scraper and the byte-identity parity test (the second copy is gone — parity is unrepresentable, not asserted). Add a `spawnSync` harness over the shipped script + the 11 fixtures. Re-anchor the two prose assertions that referenced `SOAK_RE=`. |
 | `.claude/hooks/README.md` | Rewrite the `SOAK_RE is kept **byte-identical**…` bullet to describe single ownership; add the false-positive history + the `SOAK-SIGNAL` exit contract. |
 
 ---
@@ -359,11 +359,11 @@ measured during planning:
 
 ### Phase 1 — RED: fixtures + failing tests first
 
-Per `cq-write-failing-tests-before`. Write the 9 fixtures and the `spawnSync` harness
+Per `cq-write-failing-tests-before`. Write the 11 fixtures and the `spawnSync` harness
 **before** the script exists; the suite must fail for the right reason (script absent),
 then fail on the *old* behaviour once a stub lands.
 
-1. Author the 9 fixtures under `plugins/soleur/test/fixtures/ship-soak-followthrough-gate/`.
+1. Author the 11 fixtures under `plugins/soleur/test/fixtures/ship-soak-followthrough-gate/`.
    **Synthesized only** (`cq-test-fixtures-synthesized-only`) — plan-shaped prose written
    for the test, never copied from `#7034`'s or `#7072`'s real plan. No real emails, no
    prod-shape UUIDs, no tokens.
@@ -385,9 +385,31 @@ Create `scripts/ship-soak-signal-gate.sh`:
   discipline so the next editor cannot delete a stage without reading its reason.
 - Strip order: fences → inline `` `code` `` spans → the gate's own name → negation /
   disposition lines.
+- **Fence handling must take the better half from EACH gate — do not copy either
+  verbatim.** Measured during planning:
+
+  | Behaviour | soak hook (today) | PIR gate | required |
+  |---|---|---|---|
+  | Unbalanced fence (opened, never closed) | **fail-closed** — `END { if (in_fence) exit 2 }` makes the caller fall back to the *unstripped* body | **fail-open** — no `END` check, so the entire tail after the opening fence is silently swallowed | **fail-closed** (keep the soak hook's `END`) |
+  | Indented fence (inside a list item) | **missed** — anchors `/^```/` at column 0, so the fenced body is scanned as prose | **stripped** — anchors `/^[[:space:]]*```/` | **stripped** (take the PIR anchor) |
+
+  Copying `ship-incident-pir-gate.sh`'s awk verbatim would convert this gate's
+  fail-closed unbalanced-fence handling into fail-open — a silent gate-darkening
+  regression introduced *by following the precedent*. This is the copy-adaptation drift
+  class from `2026-07-17-a-copy-adapted-gate-drifted-in-the-half-i-did-not-parity-pin.md`,
+  arriving through the front door.
 - Then the dual-locale match, **preserved** from the hook: once under
   `LC_ALL=C.UTF-8`, once without (the regex carries `→`).
-- `echo "SOAK-SIGNAL: yes"; exit 0` on a hit; bare `exit 1` otherwise.
+- `echo "SOAK-SIGNAL: yes"` **plus the line-numbered matched lines** (`grep -niE … | head -5`),
+  then `exit 0`; bare `exit 1` with no stdout otherwise.
+
+  **Do not reduce this to an exit code alone.** The SKILL gate today captures
+  `SOAK_HIT=$(grep -niE "$SOAK_RE" "$COMBINED" | head -5)` — the `-n` and the `head -5`
+  exist so the operator can see *which* lines tripped it. Both #7056 and #7087 were
+  adjudicated precisely by reading that list and finding the only hit was a disclaimer
+  or a filename. An exit-code-only contract would delete the evidence the operator needs
+  to judge a fire, on the exact gate whose problem is unjustified fires. The PIR gate
+  prints only its marker; this one must print the marker **and** the hits.
 - `chmod +x`.
 
 Rationale for the extraction over a second parity guard, in the repo's own words
@@ -484,6 +506,17 @@ PR merges atomically.
   while `in the first 24h of soak` still exits 0 — proving `of` is pinned to zero
   intervening tokens and the strong temporal prepositions are not. Mutation: widening
   `of` to the ≤3-token arm must turn this RED.
+- **AC19** — **Unbalanced fence stays fail-closed.** `unbalanced-fence-real-soak.md`
+  (an opening ``` with no closing fence, a real soak declaration after it) exits **0**.
+  Mutation: dropping the `END { if (in_fence) exit 2 }` fallback must turn this RED —
+  without it the tail is swallowed and the gate goes dark.
+- **AC20** — **Indented fences are stripped.** `indented-fence-quoted-soak.md` (a fenced
+  block indented inside a list item, containing a soak declaration and nothing else)
+  exits **1**. Mutation: reverting the anchor to `/^```/` must turn this RED.
+- **AC21** — **Diagnosability.** When the script signals, it emits the matched lines
+  (line-numbered, capped) so the operator can see *why* it fired. Piping
+  `real-soak-declaration.md` through it yields at least one `N:` line-numbered match
+  alongside `SOAK-SIGNAL: yes`. The hook and SKILL surface those lines in the deny text.
 
 ### Post-merge (operator)
 
@@ -508,6 +541,8 @@ are **synthesized** plan-shaped prose (`cq-test-fixtures-synthesized-only`).
 | `gate-name-and-fenced-regex.md` | QUIET | gate-name strip + fence strip | the #6665 class, and AC10 (self-block) |
 | `adopting-accepted-arrow.md` | **FIRE** | the multibyte `→` alternative under both locales | AC13 |
 | `prose-about-soaks.md` | QUIET | the weak-preposition bound (`a recall survey of ~70 prose soak declarations`, `the soak gate fired`, `CUT the soak follow-through probe`) | prose *about* soaks reading as a declaration |
+| `unbalanced-fence-real-soak.md` | **FIRE** | fail-closed fallback on an unclosed fence (`END { if (in_fence) exit 2 }`) | the fail-open regression a verbatim PIR-awk copy would introduce |
+| `indented-fence-quoted-soak.md` | QUIET | the indent-tolerant fence anchor `/^[[:space:]]*```/` | fenced-as-data content inside a list item scanned as prose |
 
 Harness contract (mirrors `ship-incident-pir-gate.test.ts`): FIRE ⇒ `status === 0` **and**
 stdout contains `SOAK-SIGNAL: yes`; QUIET ⇒ `status === 1` **and** stdout empty. Asserting
@@ -554,6 +589,16 @@ stdout contains `SOAK-SIGNAL: yes`; QUIET ⇒ `status === 1` **and** stdout empt
   tokens, which still catches the real declaration `in the first 24h of soak`. If a
   future editor adds a preposition to the ≤3-token arm, they must re-run the AC10
   self-check — a weak preposition there silently re-opens the whole class.
+- **Neither existing gate's fence handling is correct on its own — take one half from
+  each.** The soak hook is fail-closed on an unbalanced fence but blind to indented
+  fences; the PIR gate strips indented fences but fails *open* on an unbalanced one.
+  Copying either verbatim ships a defect. Both directions are pinned by
+  `unbalanced-fence-real-soak.md` (AC19) and `indented-fence-quoted-soak.md` (AC20);
+  measured during planning, not assumed.
+- **The scan must print the matched lines, not just an exit code.** The evidence the
+  operator reads to decide whether a fire is legitimate is exactly the `grep -n` hit
+  list. Reducing the contract to exit-code-only would, on this gate specifically, remove
+  the diagnosability that made #7056 and #7087 adjudicable at all.
 - **Residual, accepted:** a PR whose *subject* is this gate still discusses soaks in
   prose and can signal — the same fail-toward-gate residual `ship-incident-pir-gate.sh`
   documents for itself (*"a plan whose SUBJECT is incident detection still discusses
@@ -609,7 +654,7 @@ by this PR.
 | Rule | How this plan complies |
 |---|---|
 | `cq-write-failing-tests-before` | Phase 1 authors fixtures + harness and confirms RED before Phase 2 writes the script. |
-| `cq-test-fixtures-synthesized-only` | All 9 fixtures are synthesized plan-shaped prose. Real plans (#7034, #7072) are used **only** as read-only retroactive verification in AC11, never copied into `fixtures/`. |
+| `cq-test-fixtures-synthesized-only` | All 11 fixtures are synthesized plan-shaped prose. Real plans (#7034, #7072) are used **only** as read-only retroactive verification in AC11, never copied into `fixtures/`. |
 | `cq-cite-content-anchor-not-line-number` | Every citation in the new script/test/README anchors on a symbol or content anchor (`ship/SKILL.md` §"Incident-signal scan", `SOAK_RE=`), never `<file>:NNN`. |
 | `cq-assert-anchor-not-bare-token` | AC1 anchors on `^\s*SOAK_RE=`, not the bare token. AC8 mandates mutation-testing every new assertion. |
 | `wg-when-fixing-a-workflow-gates-detection` | Phase 4 step 2 + AC11 retroactively apply the fixed gate to #7034 and #7072. |

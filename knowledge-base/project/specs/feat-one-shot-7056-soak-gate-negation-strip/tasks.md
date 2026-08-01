@@ -20,7 +20,7 @@ Brand-survival threshold: `none`
 `cq-write-failing-tests-before`. Fixtures and harness land **before** the script exists.
 
 - [ ] **1.1** Create `plugins/soleur/test/fixtures/ship-soak-followthrough-gate/`.
-- [ ] **1.2** Author 9 **synthesized** plan-shaped fixtures (`cq-test-fixtures-synthesized-only` — no real emails, no prod-shape UUIDs, no tokens; never copy #7034's or #7072's real plan):
+- [ ] **1.2** Author 11 **synthesized** plan-shaped fixtures (`cq-test-fixtures-synthesized-only` — no real emails, no prod-shape UUIDs, no tokens; never copy #7034's or #7072's real plan):
   - [ ] `real-soak-declaration.md` — **FIRE** (numeric-window claim)
   - [ ] `soak-disposition-not-applicable.md` — **QUIET** (#7056 required pair, negative)
   - [ ] `soak-filename-only.md` — **QUIET** (#7087; include both backticked and bare forms)
@@ -30,6 +30,8 @@ Brand-survival threshold: `none`
   - [ ] `gate-name-and-fenced-regex.md` — **QUIET** (names the gate; quotes `SOAK_RE` in a fence)
   - [ ] `adopting-accepted-arrow.md` — **FIRE** (multibyte `→` is the only signal)
   - [ ] `prose-about-soaks.md` — **QUIET** (weak-preposition bound: `a recall survey of ~70 prose soak declarations`, `the soak gate fired`)
+  - [ ] `unbalanced-fence-real-soak.md` — **FIRE** (opening ``` never closed, real soak after it; pins the fail-closed fallback)
+  - [ ] `indented-fence-quoted-soak.md` — **QUIET** (fenced block indented inside a list item; pins the indent-tolerant fence anchor)
 - [ ] **1.3** Add the `spawnSync` harness to `plugins/soleur/test/ship-soak-followthrough-enrollment-gate.test.ts`, modelled on `ship-incident-pir-gate.test.ts`'s `signals()`:
   - FIRE ⇒ assert `status === 0` **and** stdout contains `SOAK-SIGNAL: yes`
   - QUIET ⇒ assert `status === 1` (exactly 1, never merely non-zero) **and** stdout empty
@@ -43,15 +45,16 @@ Brand-survival threshold: `none`
 
 - [ ] **2.1** Create `scripts/ship-soak-signal-gate.sh` with a header comment covering: what it is, the #7056/#7087 false positives it retires, the exit contract, and *why each strip stage exists* (so a later editor cannot delete a stage without reading its reason).
 - [ ] **2.2** Implement the strip pipeline in order: fenced code blocks → inline `` `code` `` spans → `GATENAME_RE` → `NEGATION_RE`.
+- [ ] **2.2a** **Fence handling — take one half from EACH existing gate; copy neither verbatim.** Use the PIR gate's indent-tolerant anchor `/^[[:space:]]*```/` **and** the soak hook's `END { if (in_fence) exit 2 }` fail-closed fallback to the unstripped body. Verified during planning: the PIR awk alone fails *open* on an unbalanced fence (swallows the tail); the soak awk alone misses indented fences. Pinned by tasks 1.2's last two fixtures.
 - [ ] **2.3** Implement the dual-locale match, preserved from the hook: once under `LC_ALL=C.UTF-8`, once without (the regex carries the multibyte `→`).
-- [ ] **2.4** Exit contract: `echo "SOAK-SIGNAL: yes"; exit 0` on a hit; bare `exit 1` otherwise. Never exit 2, never crash on empty input.
+- [ ] **2.4** Exit contract: on a hit, `echo "SOAK-SIGNAL: yes"` **plus the line-numbered matched lines** (`grep -niE … | head -5`), then `exit 0`; otherwise bare `exit 1` with no stdout. Never exit 2, never crash on empty input. Do **not** reduce to exit-code-only — the hit list is the evidence the operator reads to judge whether a fire is legitimate (it is what made #7056/#7087 adjudicable).
 - [ ] **2.5** `chmod +x scripts/ship-soak-signal-gate.sh`.
-- [ ] **2.6** Confirm GREEN on all 9 fixtures.
+- [ ] **2.6** Confirm GREEN on all 11 fixtures.
 - [ ] **2.7** Mutation-test each fixture: delete the corresponding regex alternative or strip stage and confirm at least one test turns RED. Record the mutation matrix for the PR body (AC8).
 
 ## Phase 3 — Wire the two consumers
 
-- [ ] **3.1** `.claude/hooks/ship-soak-followthrough-gate.sh`: replace the inline `SOAK_RE` + dual `grep -qiE` with a pipe of `"$CORPUS"` into the script; branch on its exit inside an `if` so `set -eo pipefail` never sees the clean `exit 1`.
+- [ ] **3.1** `.claude/hooks/ship-soak-followthrough-gate.sh`: replace the inline `SOAK_RE` + dual `grep -qiE` with a pipe of `"$CORPUS"` into the script; branch on its exit inside an `if` so `set -eo pipefail` never sees the clean `exit 1`. Capture the script's stdout and fold the matched lines into the deny text.
 - [ ] **3.2** Same file: fail-open (`exit 0`) if the script is absent or unreadable, consistent with the hook's other fail-open arms.
 - [ ] **3.3** `plugins/soleur/skills/ship/SKILL.md`: replace the §Detection `SOAK_RE=` / `SOAK_HIT=` block with the script invocation, mirroring the call shape used at §"Incident-signal scan". Keep the `COMBINED` corpus build (plan-file resolution stays the skill's job).
 - [ ] **3.4** Same file: add the `**Why:**` sentence citing #7056 + #7087 and the measured corpus rate.
@@ -67,7 +70,7 @@ Brand-survival threshold: `none`
 
 ## Phase 5 — Ship
 
-- [ ] **5.1** Verify all 18 Acceptance Criteria in the plan.
+- [ ] **5.1** Verify all 21 Acceptance Criteria in the plan.
 - [ ] **5.2** PR body carries `Closes #7056` and `Closes #7087` (body, not title — `wg-use-closes-n-in-pr-body-not-title-to`).
 - [ ] **5.3** PR body records: the measured corpus rate (before → after), the mutation matrix, and the retroactive-application result for #7034 and #7072.
 - [ ] **5.4** Remove the `deferred-scope-out` label from #7087 at merge — its recorded re-evaluation trigger is satisfied by this PR.
