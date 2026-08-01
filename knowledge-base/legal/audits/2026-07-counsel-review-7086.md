@@ -203,6 +203,25 @@ to "record and forget". This is C2.
 
 ## Claims verified as ACCURATE
 
+> **[SUPERSEDED IN PART — 2026-07-31 (#7100).** Three enumerations in this section were
+> re-measured during #7100 and are **wrong**. They are left in place because this file is a
+> dated, point-in-time attestation and the house convention is not to retro-edit those — but a
+> reader arriving here via search would otherwise take them as verified, which is exactly what
+> the heading above invites. The corrections, all measured on the #7100 branch:
+>
+> | Claim below | Stated | Measured (2026-07-31) |
+> |---|---|---|
+> | `cron-*.ts` files calling `spawnClaudeEval` | 15 (list includes `daily-triage`, `follow-through-monitor`) | **13** — those two call `resolveClaudeBin()` and spawn the CLI directly, bypassing the helper. Fleet-wide over all 21 members: **16** |
+> | `cron-*.ts` files importing the substrate | 17, "two for types only" | **16** cron-scoped; **20** module-scoped over `{cron,oneshot,event}-*.ts` |
+> | HTTP callers | "15 CLI crons plus 2 HTTP crons" | **3** HTTP callers of `postAnthropicMessage` |
+> | CI surface | "1 CI action" | **6 files / 7 job-level surfaces** carry `secrets.ANTHROPIC_API_KEY` (PA-33) |
+>
+> Authoritative current figures: **PA-31 §(a)** and **PA-33 §(a)** in
+> `knowledge-base/legal/article-30-register.md`, and the provenance section of
+> `knowledge-base/legal/legitimate-interest-assessments/2026-07-31-claude-eval-fleet-and-ci-lia.md`,
+> which records each command with its output. Finding 4's *substance* — that the surface was
+> described as dead when it is live — was correct and is what PA-33 exists to record. **]**
+
 Recorded so a later reader knows these were checked, not assumed:
 
 - **"15 crons on `_cron-claude-eval-substrate`"** — exact. Precisely 15 `cron-*.ts`

@@ -2,14 +2,14 @@
 vendor: Anthropic PBC
 role: independent controller/processor under operator BYOK; processor for the Jikigai-keyed email-triage summarizer (PA-27), for the Anthropic-egressing Inngest function fleet (PA-31), for the community observation and republication activity's collection limb (PA-32), and for the Jikigai-keyed Anthropic API surface in GitHub Actions CI (PA-33)
 status_snapshot_date: 2026-07-31
-register_activity_refs: [PA-22, PA-27, PA-31, PA-32, PA-33]  # Art. 30(1) gap closed 2026-07-31 (#7100); the 2026-07-30 INCOMPLETE marker is retired
+register_activity_refs: [PA-22, PA-27, PA-31, PA-32, PA-33]  # Art. 30(1) gap for the in-repo fleet + CI surface closed 2026-07-31 (#7100); the 2026-07-30 INCOMPLETE marker is retired. 2026-08-01 at review: PA-33's predicate widened repo-wide after a Jikigai-keyed egress in the sibling repo jikig-ai/operator-digest was found outside it; now PA-33 member (7), registered from committed source with asset-vs-deployed drift named as a residual
 zero_retention_amendment: unsigned
 ---
 
 # Anthropic PBC — DPA snapshot
 
 Cross-reference to the Article 30 Vendor Mapping row in
-`knowledge-base/legal/article-30-register.md` (line ~412) and to
+`knowledge-base/legal/article-30-register.md` (§ "Vendor / Sub-Processor Mapping") and to
 Processing Activity 22 (autonomous AI leader-prompt runtime under
 operator BYOK).
 
@@ -77,12 +77,14 @@ Until signed: the dashboard surfaces a one-time banner to that effect
   a dated 21-module snapshot.
 
   The 2026-07-30 figures were themselves inaccurate and are corrected here rather
-  than restated. Measured on `main` 2026-07-31, with the commands recorded in the
-  PA-31 LIA's provenance section:
+  than restated. Measured on branch `feat-one-shot-7100-art30-eval-fleet-register` 2026-07-31, with the commands
+  recorded in the PA-31 LIA's provenance section *(tree corrected 2026-07-31 at review: this read
+  "on `main`", while the provenance section it cites states the measurements were run on the branch —
+  the vendor record named a tree its own cited evidence disclaims)*:
 
   | 2026-07-30 claim | Measured | Note |
   |---|---|---|
-  | 15 crons call `spawnClaudeEval` | **13** call `spawnClaudeEval`; **2** more (`cron-daily-triage`, `cron-follow-through-monitor`) call `resolveClaudeBin()` and spawn the CLI directly | "15 crons egress via the CLI" is correct; the *mechanism* was not. PA-31 is therefore scoped by an egress predicate, never by helper name. |
+  | 15 crons call `spawnClaudeEval` | **13** of the 18 **crons** call `spawnClaudeEval`; **2** more (`cron-daily-triage`, `cron-follow-through-monitor`) call `resolveClaudeBin()` and spawn the CLI directly. Fleet-wide over all 21 members the figures are **16** and **2** — the 13/15 pair is cron-scoped, and the register's §(a) was corrected at review after it presented these cron-scoped counts against a 21-module antecedent (15 + 3 = 18 ≠ 21) | "15 crons egress via the CLI" is correct; the *mechanism* was not. PA-31 is therefore scoped by an egress predicate, never by helper name. |
   | 17 modules import the substrate, 2 for types only | **20** modules carry a real import | 1 is type-only (`_cron-shared.ts`); 1 imports only workspace helpers and invokes no Claude (`cron-skill-freshness.ts`); `cron-workspace-gc.ts` names the substrate in a comment and is not an importer. |
   | 2 HTTP crons on `postAnthropicMessage` | **3** — `cron-compound-promote`, `cron-weekly-release-digest`, and `cron-anthropic-credit-probe` | The credit probe sends a `maxTokens: 1` literal `"ping"` and carries **nil personal data**. It is named anyway: the defect being corrected is non-exhaustive enumeration, so a nil-PII member is still enumerated. |
 
@@ -116,7 +118,7 @@ Until signed: the dashboard surfaces a one-time banner to that effect
   **Retention:** the zero-retention amendment is `unsigned` (frontmatter), so the
   standard Anthropic 30-day retention window applies to ALL fleet egress described
   above — not only to the PA-27 surface it was previously reasoned about.
-  Tracked as **#7100** (Art. 30 entry + Art. 6(1)(f) LIA + Art. 14 assessment + DPIA
+  Delivered by **#7100** (Art. 30 entries PA-31/32/33 + Art. 6(1)(f) LIA + Art. 14 assessment + DPIA
   screening, per the PA-27 precedent). Do not read this list as exhaustive.
 
 ## TOMs relied on (Art. 32)
