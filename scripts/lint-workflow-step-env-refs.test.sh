@@ -332,6 +332,24 @@ else
   fail "B1 shipped step declares R_DEPLOY in its own env:" "not found in step env keys"
 fi
 
+# B1b -- the mirror step must NOT inherit the implicit success() guard. Without
+# `!cancelled()` it is SKIPPED whenever the email step FAILS -- verified on run 30703438860
+# (email=failure, mirror=skipped), which is how both alert channels died together. A static
+# assertion because a GitHub `if:` expression cannot be evaluated locally.
+MIRROR_IF="$(python3 - "$RELEASE_WF" <<'PY'
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+steps = doc["jobs"]["release-outcome"]["steps"]
+step = next(s for s in steps if str(s.get("name", "")).startswith("Mirror non-delivery"))
+print(step.get("if", ""))
+PY
+)"
+if [[ "$MIRROR_IF" == *'!cancelled()'* ]]; then
+  pass "B1b Sentry mirror survives an email-step crash (!cancelled)"
+else
+  fail "B1b Sentry mirror survives an email-step crash (!cancelled)" "if: $MIRROR_IF"
+fi
+
 # Stubs. curl records the JSON payload it was handed and reports HTTP 200.
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/curl" <<'STUB'
