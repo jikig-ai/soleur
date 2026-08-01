@@ -325,7 +325,7 @@ preserving the operator's awareness of activity level and location. That measure
 exist today. It is a genuine Art. 25(1) data-protection-by-design gap and is tracked as
 deferred item **DEF-3** (#7124; input-side minimization for the community collectors; body drafted
 at `knowledge-base/project/specs/feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`,
-GitHub issue number wired at filing).
+).
 
 Necessity is nevertheless **satisfied for the collection-and-egress limb as scoped**, because
 the operator's purpose does require reading the substance of what was said (a hashed activity
@@ -392,7 +392,7 @@ affiliation, including a verbatim quoted private-guild message attributed to a h
 deletions ever; a public repository with two forks. The digests were committed by
 `claude[bot]` and `soleur-ai[bot]` under auto-merge, with **no human gate**. The
 public-issue-comment limb is live now; the file-write limb appears not to have produced a
-digest since 2026-06-08 and its live state should be re-verified at merge — that reduces
+digest since 2026-06-08. The limb is nonetheless **live and scheduled** — `cron-community-monitor` is registered on a daily `0 8 * * *` schedule with its write path unchanged — so the absence of recent output is a persistence observation, not dormancy, and the cause is not established *(stated flatly 2026-07-31 at review; this previously read "its live state should be re-verified at merge", which deferred a determinable fact and embedded an unperformed operator step)* — that reduces
 nothing legally, because the 80 published digests remain published.
 
 **The prompt does not merely permit this — it mandates it.** Alongside the minimization
@@ -459,7 +459,7 @@ remediation" — and that is what PA-32 records.**
 CLO's estimate for it is about a day. It is source work and is therefore outside this
 docs-only PR's scope; it is tracked as deferred item **DEF-0** (#7119; body drafted at
 `knowledge-base/project/specs/feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`,
-GitHub issue number wired at filing):
+):
 
 | | Remediation | Effect on this conclusion |
 |---|---|---|
@@ -563,10 +563,10 @@ rests on a notice which does not exist would be a fresh instance of the exact de
 counsel review #7086 found: a record claiming a compliance state the system does not have.
 
 **Remediation is multi-channel, not one Privacy Policy section**, precisely because
-14(5)(b) fails for two of the three sub-populations. Tracked as deferred item **DEF-1**
+14(5)(b) fails for two of the three sub-populations. Tracked as deferred item **DEF-1 (#7120)**
 (body drafted at
 `knowledge-base/project/specs/feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`,
-GitHub issue number wired at filing): (a) a pinned notice or server-description line in the
+): (a) a pinned notice or server-description line in the
 Discord guild; (b) a line in the repository's README / CONTRIBUTING / issue templates; (c) a
 Privacy Policy §4.15 following the §4.13/§4.14 pattern, mirrored to
 `plugins/soleur/docs/pages/legal/privacy-policy.md` with the pinned SHA refreshed in

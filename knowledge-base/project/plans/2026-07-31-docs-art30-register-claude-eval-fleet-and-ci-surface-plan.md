@@ -766,6 +766,10 @@ silently returns a heading-only body.
 - **AC10 — DPIA memo exists and both PAs cite it** from their `(g)` tails, with a `DPIA status:` sub-label. The memo's `conclusion` frontmatter is non-empty and matches its body.
 - **AC11 — retention is honest.** PA-31 `(f)` names the Anthropic 30-day default, the unsigned Zero-Retention amendment, the permanent public digest with no erasure routine, **and** the self-hosted Inngest event/run store's no-automatic-deletion posture.
 - **AC11a — all recipients are named (D7).** PA-31 `(d)` names **Anthropic PBC**, **GitHub Inc** (host of the published digest and issues) and **Sentry** (bounded stdout/stderr tail), and `(e)` records GitHub's DPF + SCCs Module 2 transfer. The entry contains **no** claim that Sentry is not a recipient of content.
+
+  **AMENDED 2026-07-31 at review — this is the AC11e defect class again.** Run literally, this criterion is an ABSENCE-GREP that FALSE-FAILS against a correct artifact, for the same reason AC11e did: the artifact names the thing precisely in order to DISCLAIM or CORRECT it, which is strictly more informative to a supervisory authority than omitting the name. Measured on the branch: `grep -c 'NOT recipients of content'` over the register returns **3**, every one inside a sentence stating that PA-27's disclaimer is FALSE for this activity. Replaced with the positive assertion below. Recorded as an amendment rather than quietly re-running a looser command that would have passed — and noted here because this is the THIRD absence-grep in this plan to false-fail, which makes it a defect in the criterion-writing habit, not three unlucky ACs.
+
+  **Positive form:** PA-31 `(d)` affirmatively enumerates Anthropic PBC, GitHub Inc, Sentry, **Better Stack** and **Discord Inc**, and states expressly that PA-27's "Sentry/Better Stack are NOT recipients of content" does not hold here. Assert the presence of each recipient name and of the disclaimer, not the absence of the quoted string.
 - **AC11b — Art. 9 is reasoned, not denied (D7).** The `Special categories (Art. 9 / 10)` cell follows PA-27's "may arrive unsolicited" treatment with a named residual; it does not read "None by design", and it does not describe Discord membership or contributor identity as special categories.
 - **AC11c — the operator population has a stated basis (D7).** PA-31 and PA-32 `(b)` name the operator as a data subject and `Lawful basis` states the basis for that population distinctly from the third-party limb.
 - **AC11d — the allowlist TOM is scoped, not universal (D8).** PA-31 `(g)` names
@@ -829,6 +833,10 @@ silently returns a heading-only body.
   `bash scripts/check-pa-22.sh` exits 0 — the row must retain a single line matching
   `Anthropic.*PA-22.*autonomous` in that token order.
 - **AC12 — downstream records reconciled.** `anthropic.md` frontmatter carries `PA-31`, `PA-32` and `PA-33` and contains **no** `INCOMPLETE` token; `compliance-posture.md` contains no remaining `tracked as #7100` phrasing in the Anthropic row, and its `last_updated` equals the PR date.
+
+  **AMENDED 2026-07-31 at review — this is the AC11e defect class again.** Run literally, this criterion is an ABSENCE-GREP that FALSE-FAILS against a correct artifact, for the same reason AC11e did: the artifact names the thing precisely in order to DISCLAIM or CORRECT it, which is strictly more informative to a supervisory authority than omitting the name. Measured on the branch: `grep -c INCOMPLETE` over `anthropic.md` returns **1**, in the frontmatter sentence that RETIRES the marker. Replaced with the positive assertion below. Recorded as an amendment rather than quietly re-running a looser command that would have passed — and noted here because this is the THIRD absence-grep in this plan to false-fail, which makes it a defect in the criterion-writing habit, not three unlucky ACs.
+
+  **Positive form:** `anthropic.md` frontmatter carries `PA-31`, `PA-32` and `PA-33`, and the `INCOMPLETE` token appears only within a sentence that retires it. Assert `register_activity_refs` contains the three PAs and that no bare `# INCOMPLETE` status marker survives.
 - **AC13 — every internal citation resolves.** Run the resolver over the five artifacts and
   assert no output:
 
