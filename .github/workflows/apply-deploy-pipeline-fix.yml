@@ -438,9 +438,37 @@ jobs:
           # and an explicit ::warning:: naming exactly what is disabled, so a silently-weaker
           # gate is never mistaken for a passing one.
           set -uo pipefail
-          sha="$(doppler run --name-transformer tf-var -- \
-            terraform console -var="ssh_key_path=${CI_SSH_PUB}" <<<'base64encode(local.webhook_doppler_token_env)' 2>/dev/null \
-            | tr -d '"' | base64 -d 2>/dev/null | sha256sum | awk '{print $1}')" || true
+          # `nonsensitive()` is LOAD-BEARING, not a style choice. var.doppler_token is
+          # `sensitive = true`, and sensitivity propagates through the local and through
+          # base64encode(), so `terraform console` prints the literal string
+          # `(sensitive value)` — never the base64. Measured 2026-08-01 against prd.
+          #
+          # WHY THAT WAS INVISIBLE, and why the guard below is shaped the way it is:
+          # `(sensitive value)` fed to `base64 -d` fails, the failure was swallowed by
+          # `2>/dev/null`, the empty result reached `sha256sum`, and
+          # sha256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+          # — a PERFECTLY WELL-FORMED 64-hex string. So the old `[[ =~ ^[0-9a-f]{64}$ ]]`
+          # shape check passed, the step announced "tier-2 byte compare ACTIVE", and it
+          # armed the gate with a digest that can never match ANY real file. The gate then
+          # reported content_mismatch and blamed the delivery. First real execution of this
+          # step was run 30708795115 (#7095); it failed a delivery that was byte-correct.
+          #
+          # A shape check cannot distinguish "hashed the payload" from "hashed nothing".
+          # So guard on CONTENT: require the decode to succeed AND to yield the template's
+          # own marker line. sha256sum is reached only through that gate.
+          b64=""; console_rc=0
+          b64="$(doppler run --name-transformer tf-var -- \
+            terraform console -var="ssh_key_path=${CI_SSH_PUB}" \
+            <<<'nonsensitive(base64encode(local.webhook_doppler_token_env))' 2>/dev/null)" || console_rc=$?
+          b64="${b64//\"/}"
+          sha=""
+          # The hash pipeline stays byte-identical to the original (`base64 -d | sha256sum`,
+          # no command substitution on the decoded bytes) so a trailing newline in the
+          # rendered file is preserved — $(...) would strip it and shift the digest.
+          if [[ "$console_rc" -eq 0 && -n "$b64" ]] \
+             && printf '%s' "$b64" | base64 -d 2>/dev/null | grep -q '^DOPPLER_TOKEN='; then
+            sha="$(printf '%s' "$b64" | base64 -d 2>/dev/null | sha256sum | awk '{print $1}')"
+          fi
           if [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; then
             echo "INFRA_CONFIG_RENDERED_SHA__ETC_DEFAULT_SOLEUR_DOPPLER_TOKEN=${sha}" >> "$GITHUB_ENV"
             echo "rendered credential digest exported — tier-2 byte compare ACTIVE"
