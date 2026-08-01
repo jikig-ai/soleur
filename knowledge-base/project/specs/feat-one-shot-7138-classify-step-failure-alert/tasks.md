@@ -200,7 +200,29 @@ that was not executed and observed.
       ship. Reconciled to B1a..B1f + the immutable run URL.
 - [x] **#7143 enumeration corrected** — a false-GREEN heartbeat variant (a dead probe checks
       in `ok`), a wrong detection criterion, and ~10 further sites. Filed as a comment.
+- [x] **CONCUR gate run retroactively on both scope-out filings** (it should have run
+      BEFORE they were filed — sequencing defect, recorded below). #7142 co-signed. #7143
+      **DISSENTed** and split: the two false-GREEN heartbeats came inline, because they live
+      at `with.status` and the `if:`-scoped linter rule they were deferred to could never
+      have covered them. `#7143`'s trigger was self-referential ("when the linter rule
+      lands") and is replaced with one that fires without anyone acting on the issue.
+- [x] **Two false-GREEN heartbeats fixed inline** (`scheduled-realtime-probe.yml`,
+      `scheduled-inngest-health.yml`): a dead producer left `failure_mode` empty, `'' == ''`
+      was true, and the monitor checked in `ok`. Strictly worse than #7138 — that lost an
+      alert while something still went red; this reported the ADR-033 cron substrate healthy
+      with nothing red anywhere. Both now gate on the producer's `outcome` first. No new
+      actionlint findings versus `main`.
+- [x] The email step's comment now names **#7142** by number rather than "the Phase 7 issue",
+      which would rot when the plan file is archived.
 - [ ] Deferred, contested-design: restore the harness `workflow_dispatch`-only + a
       harness↔shipped byte-equality assertion (architecture-strategist P1-1 vs plan R10,
       which two reviewers used to cut it). Not a correctness gap — B1c/B1d pin the strings;
       the trade is re-executability vs. a file that never fires unbidden.
+
+### Sequencing defect worth fixing in the workflow, not just here
+
+Both scope-out issues were filed during Phase 7 (work), and the CONCUR gate only ran at
+review. That inverts the gate's purpose: it becomes ratification rather than admission
+control, because closing an already-filed issue costs more friction than declining to file
+one. The gate caught a real DISSENT anyway, but it had to argue against a published artefact
+to do it. The plan prescribed Phase 7 filings without prescribing the gate that governs them.

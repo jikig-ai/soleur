@@ -699,7 +699,13 @@ jobs:
           # not a page). Reads the effmode SOURCE OF TRUTH: a SUSTAINED degraded state is
           # reclassified to inngest_down there → falls through to `error` here (the escalation
           # DOES page). Without this arm the soft mode would false-page every */15.
-          status: ${{ (steps.effmode.outputs.failure_mode == '' || steps.effmode.outputs.failure_mode == 'probe_unavailable' || steps.effmode.outputs.failure_mode == 'functions_query_degraded') && 'ok' || 'error' }}
+          # #7138 -- `steps.effmode.outcome == 'success'` is a REQUIRED first conjunct.
+          # The soft-mode arms below deliberately resolve to `ok`, and an empty
+          # `failure_mode` is one of them -- so a dead effmode step (which writes no output
+          # at all) checked in `ok` and this monitor reported the Inngest scheduler that
+          # dispatches every ADR-033 cron as healthy while its probe was dead. The soft
+          # arms are unchanged; they now only apply when the step actually ran.
+          status: ${{ (steps.effmode.outcome == 'success' && (steps.effmode.outputs.failure_mode == '' || steps.effmode.outputs.failure_mode == 'probe_unavailable' || steps.effmode.outputs.failure_mode == 'functions_query_degraded')) && 'ok' || 'error' }}
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

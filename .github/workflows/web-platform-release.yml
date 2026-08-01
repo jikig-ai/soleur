@@ -1291,7 +1291,8 @@ jobs:
         id: email
         # #7138 — widened in lockstep with the mirror below, on the same predicate. The
         # mirror alone satisfies the issue's literal floor, but its Sentry event reaches
-        # the operator only through an un-codified default rule (see the Phase 7 issue);
+        # the operator only through an un-codified Sentry-default rule (tracked as #7142 —
+        # named by number, because a pointer to "the plan" rots when the plan is archived);
         # this is the channel that speaks the operator's language.
         if: ${{ !cancelled() && (steps.outcome.conclusion == 'failure' || steps.outcome.outputs.failed != '') }}
         env:
