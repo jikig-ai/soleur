@@ -12,11 +12,12 @@ that was not executed and observed.
 
 - [x] T0.1 `command -v act` → **exit 1, absent.** Not used either way: it reimplements the
       expression evaluator, so a green `act` run proves act's semantics, not GitHub's.
-- [x] T0.2 `actionlint` present at `~/.local/bin/actionlint`. Asserted **per-file** on the two
-      touched workflows, not repo-wide — `scripts/lint-workflows.sh` exits 0 on findings too,
+- [x] T0.2 `actionlint` present at `~/.local/bin/actionlint`. Asserted **per-file** on the touched
+      workflow, not repo-wide — `scripts/lint-workflows.sh` exits 0 on findings too,
       so a repo-wide "clean" claim is unfalsifiable (R38a).
-- [x] T0.3 `python3 scripts/lint-workflow-step-env-refs.py` → baseline `0 findings across 70
-      workflow file(s)`; after the change, `0 findings across 71`.
+- [x] T0.3 `python3 scripts/lint-workflow-step-env-refs.py` → baseline and post-change both
+      `0 findings across 70 workflow file(s)` (the harness that briefly made it 71 is
+      deleted — see R10).
 - [x] T0.4 Read `.github/workflows/gdpr-gate-self-test.yml` — the self-bootstrapping
       `pull_request` + `paths:` precedent. Confirmed it declares **no** job-level
       `permissions`, so "copy its permissions conventions" copied nothing (R37).
@@ -46,9 +47,9 @@ that was not executed and observed.
 
 - [x] T2.1 `if:` replaced with the shared predicate.
 - [x] T2.2 `CLASSIFIER` declared in the step's **own** `env:`, never inherited.
-- [x] T2.3 Third headline branch. **Changed**: gated on
-      `CLASSIFIER == failure && R_DEPLOY != 'failure'` so a classifier death coinciding with a
-      real failed deploy still takes the definite branch — degrade toward the alarm (R6).
+- [x] T2.3 Third headline branch. **Superseded at review**: R6's negative gate
+      (`R_DEPLOY != 'failure'`) swept in `skipped`/`cancelled` and reassured on releases that
+      never rolled out. Now gated positively on `== 'success'` — see Post-review below.
 - [x] T2.4 `What stopped` list guarded — no empty `<ul></ul>` under a heading promising content.
 - [x] T2.5 Subject prefix. **Changed** to `[RELEASE STATUS UNKNOWN]`, not
       `[RELEASE CHECK FAILED]`: the latter differs from `[RELEASE FAILED]` by one word
@@ -56,7 +57,8 @@ that was not executed and observed.
 - [x] **T-R1 (P0)** — the email's two bare `${FAILED}` guarded. The first sits *between* the
       successful `curl` and the `delivered=1` write.
 - [x] **T-R4 (P0)** — the unconditional closing urgency line branched; it was false on the new
-      branch, contradicting the email's own opening two paragraphs earlier. Asserted by B6b.
+      branch, contradicting the email's own opening two paragraphs earlier. Asserted by B6c
+      (and B3c for the sibling deploy-success branch, which review found still carried it).
 
 ## Phase 3 — Execution harness (issue AC2)
 
@@ -74,7 +76,7 @@ that was not executed and observed.
 - [x] T3.7 `actionlint` and the env-ref linter clean with the harness present.
 - [x] **R10 — harness DELETED before merge.** A permanent, deliberately-red, non-required
       check is the shape of the bug `bf4816455` fixed on main four commits earlier. The run is
-      immutable evidence; the durable guard is B1c/B1d/B1e in the required `test` check.
+      immutable evidence; the durable guard is B1a..B1f in the required `test` check.
 
 ## Phase 4 — Static assertions (issue AC3)
 
@@ -85,8 +87,8 @@ that was not executed and observed.
       `outputs.failed != ''` disjunct is deleted.
 - [x] T4.3 B1d — same, for the email step.
 - [x] T4.4 B1e — the `outcome` step declares no `continue-on-error`.
-- [x] ~~T4.5 B1f harness↔shipped byte-equality~~ — **cut with R10** (no permanent harness to
-      compare against).
+- [x] ~~T4.5 harness↔shipped byte-equality~~ — **cut with R10** (no permanent harness to
+      compare against). `B1f` was later reused at review for the classify-step timeout.
 - [x] ~~T4.6 B1g harness exists + `on: pull_request`~~ — **cut with R10**. This also retires
       R28's PyYAML `on:`→`True` trap, since nothing now parses a workflow's triggers.
 
@@ -105,17 +107,19 @@ that was not executed and observed.
       `NEXT_PUBLIC_SENTRY_DSN`, `RUN_URL`, `GITHUB_SHA`, `PAYLOAD_CAPTURE`. Omitting the first
       aborts with the exact `unbound variable` string M1a asserts must be absent. Proven by
       mutation 10.
-- [x] T5.2 Email third-branch arm (B6a–B6f).
+- [x] T5.2 Email third-branch arm (B6a–B6i at review, sweeping every `R_DEPLOY` value).
 - [x] T5.3 `github -> resend` edge added. **Changed**: label trimmed to one clause and
-      rewritten per R40a — "the only push exit that fires regardless of which job failed", not
-      "the ONLY push exit for a failed release", which R35 showed is false.
+      rewritten per R40a, and rescoped at review to characterise the EDGE (nine Resend emitters
+      under `.github/`) rather than narrating its one notable caller.
 - [x] T5.4 `github -> sentry` amended: the `paths:`-filter falsehood corrected (R40b) and the
       release-outcome store POST named. `sentry -> founder` stale counts corrected
-      (21/22 → 29 IaC rules, 1 → 2 `NoOne`) and the un-codified 30th rule recorded (R40c).
+      (21/22 → 29 IaC rules; `NoOne` 1 → **1**, not 2 — my first correction miscounted a
+      comment, see Post-review) and the un-codified 30th rule recorded (R40c).
 
 ## Phase 6 — Verify
 
-- [x] T6.1 `bash scripts/lint-workflow-step-env-refs.test.sh` → `All tests passed`, 48/48.
+- [x] T6.1 `bash scripts/lint-workflow-step-env-refs.test.sh` → `All tests passed`, **69/69**
+      after review (48/48 as first written).
 - [x] ~~T6.2~~ — **cut with R14**, subsumed by T6.4 (test-all runs A13, which lints tree-wide).
 - [x] T6.3 `actionlint` per-file on both workflows (see T0.2 for why not repo-wide).
 - [x] T6.4 `bash scripts/test-all.sh` — the gate's own invocation.
@@ -124,7 +128,8 @@ that was not executed and observed.
       `model.c4`**, so the planned AC was vacuous. The real gate is
       `scripts/regenerate-c4-model.sh` (run: 65 elements, 124 relations, 67 views) backstopped
       by `c4-model-freshness.test.sh`.
-- [x] T6.6 Mutation proof — **10 mutations, 10 RED, zero survivors**, each recorded in
+- [x] T6.6 Mutation proof — round 1 was 10/10 RED and **was not sufficient**; round 2 adds
+      11 mutations on the axes it could not express. Both recorded in
       `verification-evidence.md` §3.
 - [x] T6.7 Harness run URL + observed jobs JSON captured.
 - [x] ~~T6.8 harness `always()` mutation on a scratch branch~~ — **cut with R11** (three
@@ -156,3 +161,46 @@ that was not executed and observed.
 - **R31** (rename step id `outcome` → `classify`) — declined. It would retire B1e at the cost
   of churning five references plus every selector, in the same PR that is fixing an alerting
   outage. B1e closes the same hole explicitly and is CI-enforced.
+
+## Post-review (8 agents; findings fixed inline)
+
+- [x] **P1 — the third headline reassured on releases that never rolled out.** Gate was
+      `R_DEPLOY != 'failure'`; `deploy` has five upstream `needs:`, so `skipped` is the
+      dominant failed-release state. Now gated positively on `== 'success'`. Four agents
+      reproduced it independently. B6h/B6i sweep every `R_DEPLOY` value.
+- [x] **P1 — the harness fabricated its own environment.** `run_step`/`run_mirror` injected
+      `CLASSIFIER`, so deleting either declaration reverted the fix at 48/48 green (#7136's
+      class, new variable). Both now derive from the step's `env:`; B1a-email/B1a-mirror
+      assert the declarations. Fixing it exposed a trailing-newline drop in the derivation
+      itself — fixed at both ends.
+- [x] **P1 — fixtures sampled one diagonal of a 2×2.** Added the (classifier died, list
+      populated) cell on both sides (B6f/B6g, M3/M3a); the mirror now answers "did it die?"
+      and "do we have the list?" with independent fields.
+- [x] **P2 — no anti-vacuity floor.** Deleting B1c/B1d/B1e left the suite exiting 0.
+      `MIN_ASSERTIONS` floor added (a floor, not equality).
+- [x] **P2 — `RUN_HINT` branched on the headline** while the list it points at branched on
+      `FAILED_HTML` → dangling "the red entry named above". Both now derive from the list.
+- [x] **P2 — deploy-success branch reasserted "nothing reaches production"** two paragraphs
+      after saying the code is live. Branched; pinned by B3c.
+- [x] **P2 — classify hang was closable after all.** The only `timeout-minutes` was
+      job-level, so a hang burned the budget and neither alert step was scheduled. Step-level
+      timeout added; pinned by B1f.
+- [x] **P2 — mirror Sentry `message` interpolated the job list**, minting a new issue group
+      per failure set on a message-grouped event. Detail moved to `extra`/step summary.
+- [x] **P2 — non-2xx email path never executed** (stub returned 200 unconditionally). Stub
+      parameterised; B7/B7a/B8/B8a cover both directions of the `delivered` contract.
+- [x] **P2 — my own `NoOne` correction was wrong.** `awk` matched the bare token inside a
+      comment; actual is 28 `ActiveMembers` / 1 `NoOne`. Corrected in `model.c4`, evidence
+      and here.
+- [x] **P2 — DC-1 led with a non-sequitur.** "Only channel that fires regardless of which
+      job failed" is about the JOB; both steps live in it. Struck.
+- [x] **P2 — Sentry rule overstated.** New/Existing conditions are first-seen and
+      escalated-to, so a repeat is silent on that route. Corrected everywhere; added to #7142.
+- [x] **P2 — plan `## Observability` named a deleted harness** and assertions that do not
+      ship. Reconciled to B1a..B1f + the immutable run URL.
+- [x] **#7143 enumeration corrected** — a false-GREEN heartbeat variant (a dead probe checks
+      in `ok`), a wrong detection criterion, and ~10 further sites. Filed as a comment.
+- [ ] Deferred, contested-design: restore the harness `workflow_dispatch`-only + a
+      harness↔shipped byte-equality assertion (architecture-strategist P1-1 vs plan R10,
+      which two reviewers used to cut it). Not a correctness gap — B1c/B1d pin the strings;
+      the trade is re-executability vs. a file that never fires unbidden.

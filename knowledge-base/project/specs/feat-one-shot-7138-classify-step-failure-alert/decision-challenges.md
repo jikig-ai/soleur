@@ -32,16 +32,18 @@ issue's literal AC1 was satisfiable by the mirror-only change. Full evidence in
 
 ### Why Phase 2 still shipped
 
-Two arguments that survive the correction, both substantiated from the repo:
+**The channel speaks the operator's language.** On a classifier death the mirror-only fix
+produces a Sentry issue titled *"release-outcome: the run-outcome classifier FAILED…"*. You
+are explicitly non-technical; that is not an artefact you can act on. The email's UNKNOWN
+branch says your changes are live, says the alarm itself is broken, and links the run. That
+difference is the whole justification, and it is the one I should have led with.
 
-1. **Job scope (plan revision R35).** `release-outcome` is the only alert channel that fires
-   *regardless of which job in the release graph failed*. The three other push channels —
-   `deploy`'s inline email, `reusable-release.yml`'s `notify-ops-email`, and the
-   `notify-gated` Slack post — are all job-scoped and structurally silent for a failure
-   outside their own job. This argument is independent of the Sentry routing question.
-2. **The channel speaks the operator's language.** A raw Sentry high-priority notification is
-   not the plain-language email this job exists to send. The email is the one that says which
-   part of the release stopped and what it means for you.
+**An argument I withdrew at review.** An earlier draft led with *"`release-outcome` is the
+only channel that fires regardless of which job failed"*. That is true of the **job**, and
+the email and the mirror are both **steps inside that same job** — so it argues equally for
+the mirror-only fix and distinguishes nothing. `architecture-strategist` caught it. It is
+struck rather than demoted, because you read this document to decide whether to cut Phase 2
+and a non-sequitur in that position is worse than no argument at all.
 
 The CPO panel approved the deviation as *"not scope creep — the minimum scope that satisfies
 the issue's own AC1"*, but did so **before** the premise was falsified. You should know the

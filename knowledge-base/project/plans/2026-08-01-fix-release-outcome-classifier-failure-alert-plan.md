@@ -259,18 +259,21 @@ error_reporting:
 failure_modes:
   - mode: the classify step itself fails, so `failed` is empty and both channels skip (#7138)
     detection: `steps.outcome.conclusion == 'failure'` in BOTH the email and mirror `if:`,
-               executed on GitHub's own evaluator by
-               .github/workflows/release-outcome-condition-harness.yml arms A/B/F
+               executed on GitHub's own evaluator in run 30710703476 (arms A/B/C; the
+               harness workflow was deleted before merge per R10 — the run is the
+               evidence), and pinned thereafter by B1c/B1d in the required `test` check
     alert_route: operator email (classifier-death headline) + red run; Sentry mirror if the
                  email does not deliver
   - mode: someone adds `continue-on-error: true` to the classify step, flipping `conclusion`
           to `success` and silently disarming the guard above
     detection: static assertion B1e in scripts/lint-workflow-step-env-refs.test.sh
     alert_route: the required `test` check reds on the PR that introduces it
-  - mode: the harness's `if:` strings drift from the shipped ones, so the execution evidence
-          stops applying to the shipped workflow
-    detection: static assertion B1f — normalized byte-equality, shipped vs harness
-    alert_route: the required `test` check reds on the PR that introduces the drift
+  - mode: a classify HANG (or a run cancelled mid-classify) produces neither a `failure`
+          conclusion nor a written output, so no widening of the two conditions can reach it
+    detection: a step-level `timeout-minutes` on the classify step turns a hang into a
+               `failure` conclusion, which B1c/B1d then fire on; the timeout itself is
+               pinned by static assertion B1f
+    alert_route: both channels, via the widened conditions
   - mode: the mirror step crashes on an empty `${FAILED}` under `set -u` — i.e. #7136
           reproduced inside the step that exists to compensate for it
     detection: Part B execution arm M1 runs the SHIPPED mirror body with `FAILED=""`;
@@ -279,8 +282,9 @@ failure_modes:
   - mode: the Sentry mirror fires but pages nobody, because no `sentry_issue_alert` rule
           matches `gate:release-outcome` (PRE-EXISTING, scoped out — tracking issue in Phase 7)
     detection: none today; the event is visible only by pulling the Sentry issue stream
-    alert_route: NONE — this is the gap the tracking issue records. The operator email
-                 (Phase 2) is why this is not the last line of defence
+    alert_route: the Sentry-default rule `Send a notification for high priority issues`
+                 (empty filters, ActiveMembers fallthrough) — UI-managed, absent from IaC,
+                 and silent on a REPEAT of an identical event. Tracked as #7142
 logs:
   where: GitHub Actions run log + job summary for the run; Sentry issue stream (pull)
   retention: GitHub default (90 days)
@@ -288,7 +292,7 @@ discoverability_test:
   command: bash scripts/lint-workflow-step-env-refs.test.sh
   expected_output: "All tests passed" — Part A fixtures, Part B execution of the shipped
                    email AND mirror bodies (including the newly-reachable empty-FAILED
-                   input), and the static condition/drift assertions B1b..B1g
+                   input), and the static assertions B1a..B1f
 ```
 
 Every command in the verification path runs locally or on a GitHub runner; none reaches a host.
