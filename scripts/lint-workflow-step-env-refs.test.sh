@@ -319,6 +319,25 @@ open(f"{tmp}/env_{mode}.txt", "w", encoding="utf-8").write("\n".join(keys))
 PY
 }
 
+# extract_body <step-id> <outfile> -- writes that step's `run` body verbatim. Selected by
+# id with an exactly-one precondition for the same reason the condition selectors are
+# (#7138): a rename must break this loudly, never silently extract nothing.
+extract_body() {
+  python3 - "$RELEASE_WF" "$1" "$2" <<'PY'
+import sys, yaml
+wf, step_id, out = sys.argv[1], sys.argv[2], sys.argv[3]
+doc = yaml.safe_load(open(wf, encoding="utf-8"))
+steps = doc["jobs"]["release-outcome"]["steps"]
+hits = [s for s in steps if s.get("id") == step_id]
+if len(hits) != 1:
+    raise SystemExit(
+        "expected exactly 1 step with id=%r in job release-outcome, found %d"
+        % (step_id, len(hits))
+    )
+open(out, "w", encoding="utf-8").write(hits[0]["run"])
+PY
+}
+
 if ! extract_step fixed || ! extract_step prefix; then
   fail "B0 extract the email step from the shipped workflow" "python/yaml extraction failed"
 else
@@ -332,32 +351,131 @@ else
   fail "B1 shipped step declares R_DEPLOY in its own env:" "not found in step env keys"
 fi
 
-# B1b -- the mirror step must NOT inherit the implicit success() guard. Without
-# `!cancelled()` it is SKIPPED whenever the email step FAILS -- verified on run 30703438860
-# (email=failure, mirror=skipped), which is how both alert channels died together. A static
-# assertion because a GitHub `if:` expression cannot be evaluated locally.
-MIRROR_IF="$(python3 - "$RELEASE_WF" <<'PY'
+# B1b..B1e -- the notification conditions, asserted statically because a GitHub `if:`
+# expression cannot be evaluated locally. #7136 gave us B1b; #7138 adds B1c/B1d/B1e.
+#
+# WHY EXACTLY-ONE CARDINALITY IS ASSERTED FOR EVERY SELECTOR (#7138): B1e is a NEGATIVE
+# assertion ("the classify step declares no continue-on-error"). Selected loosely, renaming
+# the step id would match nothing, "not found" would read as PASS, and -- because BOTH
+# widened conditions key on `steps.outcome.*` -- that rename would silently restore #7138
+# with every test green. A clean sweep of nothing must never read as success. The old B1b
+# selected the mirror by `name.startswith(...)` for want of an id; the step now carries
+# `id: mirror`, so all three selectors key on the id.
+#
+# The two `if:` strings are compared as WHOLE normalized strings, not by substring anchor.
+# A substring anchor on `steps.outcome.conclusion == 'failure'` alone would stay green if
+# the `steps.outcome.outputs.failed != ''` disjunct were deleted -- which would silently
+# revert every pre-#7138 alerting path. Whitespace is collapsed before comparison, so a
+# folded (`>-`) and a plain one-line scalar are equivalent here.
+if ! COND_REPORT="$(python3 - "$RELEASE_WF" 2>&1 <<'PY'
 import sys, yaml
+
+# The shipped conditions, verbatim. Update BOTH sides deliberately or not at all.
+EXPECTED = {
+    "email": "${{ !cancelled() && (steps.outcome.conclusion == 'failure'"
+             " || steps.outcome.outputs.failed != '') }}",
+    "mirror": "${{ !cancelled() && (steps.outcome.conclusion == 'failure'"
+              " || steps.outcome.outputs.failed != '')"
+              " && steps.email.outputs.delivered != '1' }}",
+}
+
+
+def norm(value):
+    return " ".join(str(value).split())
+
+
 doc = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
 steps = doc["jobs"]["release-outcome"]["steps"]
-step = next(s for s in steps if str(s.get("name", "")).startswith("Mirror non-delivery"))
-print(step.get("if", ""))
+
+
+def exactly_one(step_id):
+    hits = [s for s in steps if s.get("id") == step_id]
+    if len(hits) != 1:
+        raise SystemExit(
+            "CARDINALITY: expected exactly 1 step with id=%r in job release-outcome, found %d"
+            % (step_id, len(hits))
+        )
+    return hits[0]
+
+
+rows = []
+for step_id, want in EXPECTED.items():
+    got = norm(exactly_one(step_id).get("if", ""))
+    rows.append("%s\t%s\t%s" % (step_id, "OK" if got == norm(want) else "MISMATCH", got))
+
+classify = exactly_one("outcome")
+rows.append(
+    "outcome-coe\t%s\t%s"
+    % (
+        "ABSENT" if "continue-on-error" not in classify else "PRESENT",
+        classify.get("continue-on-error", ""),
+    )
+)
+print("\n".join(rows))
 PY
-)"
-if [[ "$MIRROR_IF" == *'!cancelled()'* ]]; then
+)"; then
+  fail "B1b..B1e step selectors resolve to exactly one step each" "$COND_REPORT"
+  COND_REPORT=""
+fi
+
+# Field readers over the tab-separated report. A herestring, never a pipe into `grep -q`:
+# under `pipefail` an early match makes the producer take SIGPIPE and the pipeline reports
+# non-zero even though it matched.
+cond_verdict() { awk -v k="$1" -F'\t' '$1 == k { print $2 }' <<< "$COND_REPORT"; }
+cond_actual() { awk -v k="$1" -F'\t' '$1 == k { print $3 }' <<< "$COND_REPORT"; }
+
+# B1b (#7136) -- the mirror must NOT inherit the implicit success() guard. Without
+# `!cancelled()` it is SKIPPED whenever the email step FAILS -- verified on run 30703438860
+# (email=failure, mirror=skipped), which is how both alert channels died together.
+if [[ "$(cond_actual mirror)" == *'!cancelled()'* ]]; then
   pass "B1b Sentry mirror survives an email-step crash (!cancelled)"
 else
-  fail "B1b Sentry mirror survives an email-step crash (!cancelled)" "if: $MIRROR_IF"
+  fail "B1b Sentry mirror survives an email-step crash (!cancelled)" "if: $(cond_actual mirror)"
+fi
+
+# B1c (#7138) -- the mirror fires when the CLASSIFIER dies, not only when it reports a
+# failure. Before the fix its `if:` read the classifier's OUTPUT alone, so a classify step
+# that died before writing $GITHUB_OUTPUT left `failed` empty and skipped this step.
+if [[ "$(cond_verdict mirror)" == "OK" ]]; then
+  pass "B1c mirror fires on classifier death (whole-condition match)"
+else
+  fail "B1c mirror fires on classifier death (whole-condition match)" "if: $(cond_actual mirror)"
+fi
+
+# B1d (#7138) -- same widening on the EMAIL step. The mirror alone satisfies the issue's
+# literal floor, but the email is the plain-language channel the operator actually reads.
+if [[ "$(cond_verdict email)" == "OK" ]]; then
+  pass "B1d operator email fires on classifier death (whole-condition match)"
+else
+  fail "B1d operator email fires on classifier death (whole-condition match)" "if: $(cond_actual email)"
+fi
+
+# B1e (#7138) -- `steps.outcome.conclusion` is the POST-continue-on-error value. Adding
+# `continue-on-error:` to the classify step would flip it to `success` and silently disarm
+# the guard in BOTH steps above, with no other test failing.
+if [[ "$(cond_verdict outcome-coe)" == "ABSENT" ]]; then
+  pass "B1e classify step declares no continue-on-error (keeps .conclusion trustworthy)"
+else
+  fail "B1e classify step declares no continue-on-error (keeps .conclusion trustworthy)" \
+    "continue-on-error: $(cond_actual outcome-coe)"
 fi
 
 # Stubs. curl records the JSON payload it was handed and reports HTTP 200.
+#
+# #7138 -- `--data` AND `--data-raw`, not just `-d`. The email step posts with `-d`, but the
+# Sentry mirror step posts with `--data`. Scanning for `-d` alone left $PAYLOAD_CAPTURE empty
+# for every mirror arm, which would make each payload assertion below fail for the wrong
+# reason -- and would make any "no payload was captured" assertion pass VACUOUSLY, for every
+# arm, forever.
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 payload=""
 prev=""
 for a in "$@"; do
-  [[ "$prev" == "-d" ]] && payload="$a"
+  case "$prev" in
+    -d|--data|--data-raw) payload="$a" ;;
+  esac
   prev="$a"
 done
 printf '%s' "$payload" > "$PAYLOAD_CAPTURE"
@@ -365,10 +483,16 @@ printf '200'
 STUB
 chmod +x "$TMP/bin/curl"
 
-# run_step <name> <mode> <expect_rc> <r_deploy_mode> -- r_deploy_mode: value | unset
+# run_step <name> <mode> <expect_rc> <r_deploy_mode> [classifier] [failed] [failed_html]
+#   r_deploy_mode: value | unset
+#   classifier:    the value of CLASSIFIER (steps.outcome.conclusion). Omit to leave it
+#                  unset, which is the pre-#7138 environment.
 run_step() {
   local name="$1" mode="$2" expect_rc="$3" rdep="$4"
-  local capture="$TMP/payload_${mode}_${rdep}.json"
+  local classifier="${5:-}" failed="${6-deploy=failure}"
+  local failed_html="${7-<li>Rolling the new version out</li>}"
+  local tag="${mode}_${rdep}_${classifier:-none}"
+  local capture="$TMP/payload_${tag}.json"
   local rc out
   : > "$capture"
   local -a envargs=(
@@ -377,14 +501,15 @@ run_step() {
     "RESEND_API_KEY=test-key"
     "VERSION=0.247.3"
     "TAG=v0.247.3"
-    "FAILED=deploy=failure"
-    "FAILED_HTML=<li>Rolling the new version out</li>"
+    "FAILED=$failed"
+    "FAILED_HTML=$failed_html"
     "RUN_URL=https://github.com/jikig-ai/soleur/actions/runs/30703438860"
-    "GITHUB_OUTPUT=$TMP/gh_output_${mode}_${rdep}"
+    "GITHUB_OUTPUT=$TMP/gh_output_${tag}"
     "RUNNER_TEMP=$TMP"
   )
   [[ "$rdep" != "unset" ]] && envargs+=("R_DEPLOY=$rdep")
-  : > "$TMP/gh_output_${mode}_${rdep}"
+  [[ -n "$classifier" ]] && envargs+=("CLASSIFIER=$classifier")
+  : > "$TMP/gh_output_${tag}"
   out="$(env -i "${envargs[@]}" bash "$TMP/step_${mode}.sh" 2>&1)"
   rc=$?
   LAST_OUT="$out"
@@ -454,6 +579,140 @@ else
     pass "B5b pre-fix body never reaches the send (no payload captured)"
   else
     fail "B5b pre-fix body never reaches the send (no payload captured)" "$(cat "$LAST_PAYLOAD")"
+  fi
+
+  # -------------------------------------------------------------------------
+  # B6 (#7138) -- the EMAIL step's third headline: the classifier died, so we do not
+  # know whether the release reached production. FAILED/FAILED_HTML are empty because
+  # the classify step never got as far as writing them.
+  # -------------------------------------------------------------------------
+  run_step "B6 classifier-death branch sends without dying" fixed 0 unset failure "" ""
+  if payload_has "$LAST_PAYLOAD" "[RELEASE STATUS UNKNOWN]"; then
+    pass "B6a classifier-death subject differs at the FIRST token, not mid-bracket"
+  else
+    fail "B6a classifier-death subject differs at the FIRST token, not mid-bracket" "$(cat "$LAST_PAYLOAD")"
+  fi
+  # R4 -- the closing urgency line used to be unconditional. On this branch the release
+  # may well have reached production, so the old text contradicted the email's own
+  # opening two paragraphs earlier.
+  if ! payload_has "$LAST_PAYLOAD" "nothing reaches production"; then
+    pass "B6b classifier-death body does not claim nothing reached production"
+  else
+    fail "B6b classifier-death body does not claim nothing reached production" "$(cat "$LAST_PAYLOAD")"
+  fi
+  # An empty list under a heading that promises content is the #7136 shape again.
+  if ! payload_has "$LAST_PAYLOAD" "<ul></ul>"; then
+    pass "B6c classifier-death body renders no empty <ul></ul>"
+  else
+    fail "B6c classifier-death body renders no empty <ul></ul>" "$(cat "$LAST_PAYLOAD")"
+  fi
+  if payload_has "$LAST_PAYLOAD" "$RUN_URL_EXPECT"; then
+    pass "B6d classifier-death body carries the run link its own text refers to"
+  else
+    fail "B6d classifier-death body carries the run link its own text refers to" "$(cat "$LAST_PAYLOAD")"
+  fi
+  # The new branch must NOT preempt a genuine deploy failure: a classifier death that
+  # coincides with a real failed deploy still takes the definite branch. Degrade toward
+  # the alarm, never toward the reassuring wording.
+  run_step "B6e classifier death + real deploy failure still alarms" fixed 0 failure failure
+  if payload_has "$LAST_PAYLOAD" "production was NOT updated"; then
+    pass "B6f classifier death does not mask a real deploy failure"
+  else
+    fail "B6f classifier death does not mask a real deploy failure" "$(cat "$LAST_PAYLOAD")"
+  fi
+
+  # -------------------------------------------------------------------------
+  # PART B (mirror) -- #7138 makes the mirror step reachable with an EMPTY FAILED for
+  # the first time. A branch that has never executed is not a branch that works, so the
+  # newly-reachable input is EXECUTED here rather than reasoned about.
+  #
+  # `run_mirror`'s env list is exhaustive on purpose: the mirror body writes to
+  # $GITHUB_STEP_SUMMARY and reads $RUN_URL unguarded, so an env that omitted them would
+  # abort with "GITHUB_STEP_SUMMARY: unbound variable" -- literally the string M1 asserts
+  # must be absent, producing a false RED that looks exactly like the bug under test.
+  # -------------------------------------------------------------------------
+  if ! extract_body mirror "$TMP/mirror.sh"; then
+    fail "M0 extract the mirror step from the shipped workflow" "python/yaml extraction failed"
+  else
+    pass "M0 extract the mirror step from the shipped workflow"
+
+    # run_mirror <name> <classifier> <failed>
+    run_mirror() {
+      local name="$1" classifier="$2" failed="$3"
+      local capture="$TMP/payload_mirror_${classifier}.json"
+      local summary="$TMP/summary_mirror_${classifier}"
+      local rc out
+      : > "$capture"
+      : > "$summary"
+      out="$(env -i \
+        "PATH=$TMP/bin:$PATH" \
+        "PAYLOAD_CAPTURE=$capture" \
+        "NEXT_PUBLIC_SENTRY_DSN=https://deadbeef@de.sentry.io/12345" \
+        "FAILED=$failed" \
+        "CLASSIFIER=$classifier" \
+        "REASON=" \
+        "RUN_URL=$RUN_URL_EXPECT" \
+        "GITHUB_SHA=1111111111111111111111111111111111111111" \
+        "GITHUB_STEP_SUMMARY=$summary" \
+        bash "$TMP/mirror.sh" 2>&1)"
+      rc=$?
+      LAST_OUT="$out"
+      LAST_PAYLOAD="$capture"
+      LAST_SUMMARY="$summary"
+      # The step ends in `exit 1` BY DESIGN -- a non-delivered alert must redden the run.
+      if [[ "$rc" -eq 1 ]]; then
+        pass "$name"
+      else
+        fail "$name" "expected exit 1, got $rc — output: $out"
+      fi
+    }
+
+    # M1 -- THE NEWLY-REACHABLE INPUT. Before #7138 this step could not run with an empty
+    # FAILED, because the only condition that reached it required FAILED to be non-empty.
+    run_mirror "M1 mirror runs with an empty FAILED (the newly-reachable input)" failure ""
+    if ! grep -q "unbound variable" <<< "$LAST_OUT"; then
+      pass "M1a the fix does not move the crash into the compensating step"
+    else
+      fail "M1a the fix does not move the crash into the compensating step" "$LAST_OUT"
+    fi
+    if payload_has "$LAST_PAYLOAD" '"classifier":"failed"'; then
+      pass "M1b event carries the classifier discriminator as its own tag"
+    else
+      fail "M1b event carries the classifier discriminator as its own tag" "$(cat "$LAST_PAYLOAD")"
+    fi
+    # The alert text must not name the RELEASE as the fault when it was the CLASSIFIER
+    # that died -- that sends the operator to the wrong place.
+    if payload_has "$LAST_PAYLOAD" "the release status is UNKNOWN" \
+       && ! payload_has "$LAST_PAYLOAD" "release FAILED ("; then
+      pass "M1c event says the status is UNKNOWN, not that the release failed"
+    else
+      fail "M1c event says the status is UNKNOWN, not that the release failed" "$(cat "$LAST_PAYLOAD")"
+    fi
+    # `op` is the routing key. A discriminator belongs in a NEW tag key -- changing `op`
+    # would move the event to a value nothing routes on.
+    if payload_has "$LAST_PAYLOAD" '"op":"release-alert-undelivered"'; then
+      pass "M1d the routing key op= is unchanged"
+    else
+      fail "M1d the routing key op= is unchanged" "$(cat "$LAST_PAYLOAD")"
+    fi
+    if grep -qF "the release status is UNKNOWN" "$LAST_SUMMARY"; then
+      pass "M1e the run's step summary tells the same story as the event"
+    else
+      fail "M1e the run's step summary tells the same story as the event" "$(cat "$LAST_SUMMARY")"
+    fi
+
+    # M2 -- the OTHER arm of the branch M1 introduces. Retained against plan revision R13,
+    # which cut it as "duplicating the shipped path": that rationale does not survive the
+    # implementation, because the classifier discriminator makes this a genuinely NEW
+    # branch rather than the pre-existing straight-line body. Testing one arm of a
+    # two-way branch would leave the other unexecuted.
+    run_mirror "M2 mirror still reports a real release failure unchanged" success "deploy=failure"
+    if payload_has "$LAST_PAYLOAD" "release FAILED (deploy=failure)" \
+       && payload_has "$LAST_PAYLOAD" '"classifier":"ok"'; then
+      pass "M2a a genuine release failure is reported exactly as before"
+    else
+      fail "M2a a genuine release failure is reported exactly as before" "$(cat "$LAST_PAYLOAD")"
+    fi
   fi
 fi
 
