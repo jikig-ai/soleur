@@ -386,6 +386,81 @@ else
   fail "unwritable --json-file path must exit 2, got rc=$RC"
 fi
 
+# ---------------------------------------------------------------------------
+# T15-T17 — the ssh:// ORIGIN arm.
+#
+# `access_hostname_for()` maps CI_SSH_ACCESS_TOKEN to ssh.<base>, whose Cloudflare Tunnel
+# ingress is `ssh://<web-1-private-ip>:22` (apps/web-platform/infra/tunnel.tf). That origin
+# does not speak HTTP: a request that Access ADMITS is handed to sshd, which answers with
+# an SSH version banner, so cloudflared returns 5xx. HTTP 200 is therefore UNREACHABLE for
+# a perfectly healthy pair, and the 200-only rule graded this token family DEAD forever —
+# a permanent false positive that fired a twice-daily "[TOKEN DRIFT] rotation did not
+# propagate" email and told the operator to rotate a credential the script never measured.
+#
+# The discrimination that IS sound for a non-HTTP origin: Access runs at the EDGE, before
+# the origin is ever reached, so a 403 on this host can only come from Access (an ssh
+# origin cannot emit an HTTP status at all). 403 => rejected. Any definite non-403 HTTP
+# status => Access admitted, which is the only thing this probe can and should certify.
+#
+# The fail-closed principle is preserved, not traded away: a 000 (timeout / DNS / TLS
+# failure) still means the script did not LEARN anything, and must render UNVERIFIABLE —
+# never LIVE.
+# ---------------------------------------------------------------------------
+CI_SSH_FIXTURE="prd|CI_SSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd|CI_SSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}"
+
+echo "T15: 502 from an ssh:// origin -> LIVE (Access admitted; 200 is unreachable there)"
+run_sut t15 502 "$CI_SSH_FIXTURE"
+if [[ "$RC" == "0" ]] && grep -qE 'live entries: 1' "$OUT" && grep -qE 'dead entries: 0' "$OUT"; then
+  pass "a healthy ssh-origin pair grades LIVE on 502"
+else
+  fail "502 from an ssh:// origin must grade LIVE — 200 cannot occur there, so the 200-only rule reports a healthy token DEAD forever (rc=$RC)"
+fi
+
+echo "T16: 403 from an ssh:// origin -> DEAD (only Access can emit 403 on that host)"
+run_sut t16 403 "$CI_SSH_FIXTURE"
+if [[ "$RC" == "1" ]] && grep -qE 'dead entries: 1' "$OUT"; then
+  pass "403 still grades DEAD — the rejection signal is preserved"
+else
+  fail "403 on an ssh:// origin must remain DEAD; widening the arm must not blind it to a real rejection (rc=$RC)"
+fi
+
+echo "T17: 000 from an ssh:// origin -> UNVERIFIABLE, never LIVE (fail-closed preserved)"
+run_sut t17 000 "$CI_SSH_FIXTURE"
+_t17=1
+grep -qE 'live entries: 0' "$OUT" || _t17=0
+grep -qE 'unverifiable: 1' "$OUT" || _t17=0
+[[ "$RC" == "1" ]] || _t17=0
+if [[ "$_t17" == "1" ]]; then
+  pass "a timeout renders UNVERIFIABLE and exits non-zero, not LIVE"
+else
+  fail "000 must render UNVERIFIABLE — 'did not learn' must never read as LIVE, and must not read as DEAD either (rc=$RC)"
+fi
+
+# T18-T19 — the FALSE-LIVE guard. LIVE must be a POSITIVE admission proof (5xx from the
+# tunnel layer behind Access), never "did not look like a rejection".
+#
+# 403 is not Access's only rejection shape. Give this app an identity policy and an
+# unauthenticated request answers 302 to the IdP login page; challenges (429) and 401s are
+# rejections too. Under an absence-based rule every one of those grades LIVE — a DEAD
+# credential certified healthy, which is worse than the DEAD-forever bug being fixed here,
+# because it fails silently instead of loudly. These two cases pin the direction.
+echo "T18: a 302 Access login redirect must NOT grade LIVE (false-LIVE guard)"
+run_sut t18 302 "$CI_SSH_FIXTURE"
+if [[ "$RC" != "0" ]] && ! grep -qE 'live entries: 1' "$OUT"; then
+  pass "302 does not certify the pair — unrecognised answers render UNVERIFIABLE"
+else
+  fail "302 (an Access login redirect) graded LIVE — LIVE must be positive 5xx admission proof, not absence-of-403 (rc=$RC)"
+fi
+
+echo "T19: 530 (tunnel-layer error, behind Access) grades LIVE"
+run_sut t19 530 "$CI_SSH_FIXTURE"
+if [[ "$RC" == "0" ]] && grep -qE 'live entries: 1' "$OUT"; then
+  pass "530 proves the request got past Access to the tunnel layer"
+else
+  fail "530 must grade LIVE — it is an origin/tunnel error, reachable only after Access admitted (rc=$RC)"
+fi
+
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Without it, deleting every assertion call yields

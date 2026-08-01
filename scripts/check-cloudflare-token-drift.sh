@@ -246,6 +246,29 @@ access_hostname_for() {
     *) printf '' ;;
   esac
 }
+
+# What the mapped hostname's Cloudflare Tunnel ingress speaks, which decides what a
+# HEALTHY probe looks like. Both values are read off `ingress_rule.service` in
+# apps/web-platform/infra/tunnel.tf:
+#
+#   registry.<base> -> tcp://10.0.1.30:5000   zot answers HTTP over the raw TCP forward
+#   ssh.<base>      -> ssh://<web-1-ip>:22    sshd answers an SSH banner, never HTTP
+#
+# The distinction is load-bearing and was previously absent: the 200-only rule below fits
+# the first origin and CANNOT be satisfied by the second, so CI_SSH_ACCESS_TOKEN graded
+# DEAD on every run regardless of the credential's real state. That is a false positive
+# in the direction that matters — it fired the twice-daily "[TOKEN DRIFT] rotation did not
+# propagate" email whose remediation is to overwrite a healthy secret.
+#
+# A new mapping MUST declare its kind here. `http` is the default only for hosts whose
+# origin genuinely serves HTTP; an unfamiliar origin belongs in `opaque`, which certifies
+# strictly less (Access admission) rather than guessing.
+access_origin_kind_for() {
+  case "$1" in
+    CI_SSH_ACCESS_TOKEN) printf 'opaque' ;;
+    *)                   printf 'http' ;;
+  esac
+}
 # A one-line hint per unmapped base, so the report can say what to DO. Without this the
 # remediation printed for an unverifiable row is the DEAD-token one ("set the live value
 # on the prd ROOT config"), which is wrong twice over: nothing is stale, and no Doppler
@@ -259,20 +282,61 @@ UNVERIFIABLE_ROWS=()
 declare -A PAIR_VERDICT=()   # "host|id|secret" -> LIVE|DEAD (verify each distinct pair once)
 
 verify_access_pair() {
-  local host="$1" id="$2" secret="$3" cache_key="$1|$2|$3"
+  # `kind` is part of the cache key: the same (host,id,secret) triple graded under two
+  # different origin kinds is two different questions with two different answers, and
+  # omitting it would let whichever base was scanned first (bases are iterated in `sort`
+  # order) silently decide the verdict for the other. No two bases map to one host today —
+  # this keeps that from becoming a silent miscarriage the day one does.
+  local host="$1" id="$2" secret="$3" kind="${4:-http}"
+  local cache_key="$1|$2|$3|$kind"
   if [[ -z "${PAIR_VERDICT[$cache_key]:-}" ]]; then
     local code
     code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
       -H "CF-Access-Client-Id: $id" \
       -H "CF-Access-Client-Secret: $secret" \
       "https://${host}/" 2>/dev/null || printf '000')
-    # Fail CLOSED on anything that is not an explicit 200. A timeout, a DNS failure or a
-    # 5xx means this script did not learn the token is good, and "did not learn" must
-    # never render as LIVE — that is the shape of every silent-green bug in this area.
-    case "$code" in
-      200) PAIR_VERDICT[$cache_key]="LIVE" ;;
-      *)   PAIR_VERDICT[$cache_key]="DEAD:${code}" ;;
-    esac
+    if [[ "$kind" == "opaque" ]]; then
+      # NON-HTTP origin (ssh://). 200 is unreachable here even for a perfect credential,
+      # so the 200-only rule below would report DEAD forever. What this probe CAN certify
+      # is Access ADMISSION, and that discrimination is sound precisely because Access
+      # runs at the EDGE, before the origin is consulted:
+      #
+      #   5xx  Cloudflare reached the TUNNEL/ORIGIN layer, which sits BEHIND Access, and
+      #        cloudflared then failed to speak HTTP to sshd. Only an ADMITTED request
+      #        gets that far, so this is a POSITIVE proof of admission. Healthy.
+      #   403  Access rejected. Sound here because an ssh origin emits no HTTP status at
+      #        all, so a 403 on this host cannot have come from behind Access.
+      #   000  curl never got a definite answer (timeout / DNS / TLS). Learned NOTHING.
+      #
+      # LIVE is asserted POSITIVELY (5xx), never as "not a rejection". The absence form —
+      # `403|000 -> not-LIVE, everything else -> LIVE` — was the first shape written here
+      # and it is unsafe: Access does not promise 403 as its only rejection. Add an
+      # identity policy to this app and an unauthenticated request becomes a 302 to the
+      # IdP login page; a 429 challenge, a 401, or an interstitial are all rejections too.
+      # Every one of them would have graded LIVE — a dead credential certified healthy,
+      # which is strictly worse than the DEAD-forever bug this function is fixing.
+      # Anything unrecognised therefore renders UNVERIFIABLE (loud, non-zero) rather than
+      # being guessed in either direction.
+      #
+      # Fail-closed is preserved rather than traded away: UNVERIFIABLE is kept separate
+      # from DEAD by the caller and still exits non-zero. Certifying "admitted" is weaker
+      # than certifying "200" — and it is the strongest claim TRUE of this origin, which
+      # is the point.
+      case "$code" in
+        5??) PAIR_VERDICT[$cache_key]="LIVE" ;;
+        403) PAIR_VERDICT[$cache_key]="DEAD:${code}" ;;
+        *)   PAIR_VERDICT[$cache_key]="UNVERIFIABLE:${code}" ;;
+      esac
+    else
+      # HTTP origin. Fail CLOSED on anything that is not an explicit 200. A timeout, a DNS
+      # failure or a 5xx means this script did not learn the token is good, and "did not
+      # learn" must never render as LIVE — that is the shape of every silent-green bug in
+      # this area.
+      case "$code" in
+        200) PAIR_VERDICT[$cache_key]="LIVE" ;;
+        *)   PAIR_VERDICT[$cache_key]="DEAD:${code}" ;;
+      esac
+    fi
   fi
   printf '%s' "${PAIR_VERDICT[$cache_key]}"
 }
@@ -307,9 +371,15 @@ for base in $(printf '%s\n' "${!ACCESS_BASESET[@]}" | sort); do
       DEAD_N=$((DEAD_N + 1)); DEAD_ROWS+=("${base}_ID/_SECRET (only one half present)|$cfg")
       continue
     fi
-    state=$(verify_access_pair "$host" "$tid" "$tsec")
+    state=$(verify_access_pair "$host" "$tid" "$tsec" "$(access_origin_kind_for "$base")")
     if [[ "$state" == LIVE ]]; then
       LIVE_N=$((LIVE_N + 1))
+    elif [[ "$state" == UNVERIFIABLE:* ]]; then
+      # Kept OUT of DEAD_ROWS deliberately. "curl got no answer" and "Cloudflare rejected
+      # this pair" are different facts with opposite remedies, and the DEAD heading tells
+      # the operator to overwrite the secret — which, on a probe that measured nothing,
+      # destroys a working credential to fix a problem that was never observed.
+      UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|probe inconclusive (HTTP ${state#UNVERIFIABLE:} from ${host} in ${cfg}) — no answer reached this script, so nothing is known about the credential. Do NOT rotate on the strength of this row; re-run once ${host} is reachable.")
     else
       DEAD_N=$((DEAD_N + 1)); DEAD_ROWS+=("${base}_ID/_SECRET (HTTP ${state#DEAD:} from ${host})|$cfg")
     fi
