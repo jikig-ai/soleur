@@ -133,7 +133,9 @@ workflow YAML, no `docs/legal/**`.
 - [x] 5.4 AC13 resolver — the only permitted `BROKEN:` line is the deferred sweep path.
 - [x] 5.5 `bash scripts/check-pa-22.sh` → exit 0 **after** the Vendor-row edit (AC11i).
 - [x] 5.6 AC2 collision re-check against `origin/main` **after the final rebase**.
-- [ ] 5.7 AC17 scope check — diff confined to `knowledge-base/legal/**` and
+- [x] 5.7 AC17 scope check — diff confined to `knowledge-base/legal/**` and
+      `knowledge-base/project/{plans,specs}/**`, **plus the operator-approved DEF-1a expansion**.
+
       **AMENDED 2026-07-31 (operator-approved):** AC17's original docs-only boundary no longer
       holds. The operator approved folding DEF-1a — correcting the affirmatively false
       controllership statements in `docs/legal/privacy-policy.md` and `gdpr-policy.md` — into
@@ -141,5 +143,13 @@ workflow YAML, no `docs/legal/**`.
       would undercut the correction. The expansion therefore also covers the two Eleventy
       mirrors and the unconditional `LEGAL_DOC_SHAS` repin in
       `apps/web-platform/lib/legal/legal-doc-shas.ts`. AC17 is recorded as INTENTIONALLY
-      EXCEEDED, not passed. No source/runtime file is touched; R1–R5 remain deferred to #7119.
-      `knowledge-base/project/{plans,specs}/**`.
+      EXCEEDED, not passed.
+
+      **Measured 2026-07-31 post-rebase**, base `1e1634289` (`git merge-base HEAD origin/main`):
+      15 files changed. 10 inside the original scope; the 5 outside it are exactly the approved
+      expansion, **residual count 0**. **No behavioural source or runtime file is touched** —
+      the single `.ts` file is a constants table whose diff is two SHA-256 hex literals, both
+      verified equal to the real `sha256sum` of the edited canonicals, with
+      `check-tc-document-sha.sh` green (exit 0). **R1–R5 remain deferred to #7119**: no
+      `apps/web-platform/server/**`, `.github/workflows/**` or `scripts/**` path is in the diff.
+      Plan AC17 amended in the same commit.

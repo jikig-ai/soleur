@@ -853,11 +853,46 @@ silently returns a heading-only body.
   — item 5 (full DPIA) is filed **only if** D4 lands on arm (ii). Without this carve-out AC16
   would force filing a full-DPIA issue for a DPIA the assessment just concluded is not
   required, or fail. (Logic bug caught at plan review.)
-- **AC17 — scope held.** `git diff --name-only origin/main...HEAD` lists only paths under
-  `knowledge-base/legal/` and `knowledge-base/project/{plans,specs}/`. Both directories are
+- **AC17 — scope held.** ~~`git diff --name-only origin/main...HEAD` lists only paths under
+  `knowledge-base/legal/` and `knowledge-base/project/{plans,specs}/`.~~ Both directories are
   accounted for in `## Files to Create` / `## Files to Edit` — including
   `knowledge-base/project/specs/feat-one-shot-7100-art30-eval-fleet-register/decision-challenges.md`,
   so the scope AC and the file manifest agree.
+
+  **AMENDED 2026-07-31 at verification time — recorded as INTENTIONALLY EXCEEDED, not passed.**
+  The operator approved folding **DEF-1a** into this PR: correcting the affirmatively **false
+  controllership statement** in the published `docs/legal/privacy-policy.md` §4.4 and
+  `docs/legal/gdpr-policy.md`, which asserted that repository interaction data "is not
+  controlled by Soleur". Shipping a corrected Art. 30 register while the *published* policy
+  contradicts it would have left the public-facing misstatement standing as the only document a
+  data subject can actually read — the correction would have been internal-only, which is the
+  opposite of what an Art. 30 correction is for. That expansion necessarily carries two
+  mechanical companions: the two Eleventy mirrors under `plugins/soleur/docs/pages/legal/`, and
+  the `LEGAL_DOC_SHAS` repin in `apps/web-platform/lib/legal/legal-doc-shas.ts` (the
+  `tc-document-sha-guard` CI job fails closed on any unrepinned edit to `docs/legal/*.md`, so
+  the repin is not optional scope creep — it is the lockstep the gate mandates).
+
+  Measured at verification time against `git merge-base HEAD origin/main` (`1e1634289`), the
+  diff is **15 files**. Ten are inside the original AC17 scope. The **five** outside it are
+  exactly the approved expansion, with **zero residual**:
+
+  ```
+  docs/legal/privacy-policy.md
+  docs/legal/gdpr-policy.md
+  plugins/soleur/docs/pages/legal/privacy-policy.md
+  plugins/soleur/docs/pages/legal/gdpr-policy.md
+  apps/web-platform/lib/legal/legal-doc-shas.ts
+  ```
+
+  **No behavioural source or runtime file is touched.** The one `.ts` file in the diff is a
+  constants table; its change is two SHA-256 hex literals and nothing else, and both were
+  verified to equal the actual `sha256sum` of the edited canonicals rather than being
+  hand-written (`ae324e62…` gdpr, `eaa340e3…` privacy). `check-tc-document-sha.sh` exits **0**
+  locally. **R1–R5 remain deferred to #7119** — no `apps/web-platform/server/**`, no
+  `.github/workflows/**`, and no `scripts/**` path appears in the diff, so nothing in the
+  republication limb was silently remediated in place of being recorded as unlawful.
+
+  Recorded as an amendment rather than quietly widening the AC's glob until it passed.
 
 *(Cut at plan review: a full-suite AC. `AC17` proves the diff is markdown-only under
 `knowledge-base/`, which cannot change a vitest outcome; the realistic failure mode was a
