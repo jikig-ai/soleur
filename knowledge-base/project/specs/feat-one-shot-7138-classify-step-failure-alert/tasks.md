@@ -1,120 +1,158 @@
-# Tasks — #7138 release-outcome: a failing classify step silences every alert channel
+# Tasks — #7138 release-outcome: a failing classify step silenced every alert channel
 
 Plan: `knowledge-base/project/plans/2026-08-01-fix-release-outcome-classifier-failure-alert-plan.md`
-Branch: `feat-one-shot-7138-classify-step-failure-alert`
-Closes: #7138
+Evidence: `verification-evidence.md` · Decisions: `decision-challenges.md`
+Branch: `feat-one-shot-7138-classify-step-failure-alert` · Closes: #7138
 
-Phase order is load-bearing: the shipped `if:` strings (Phase 1/2) must exist before the
-harness copies them (Phase 3) and before the drift assertion compares them (Phase 4).
+Status is recorded per item as **done**, **cut** (with the revision that cut it), or
+**changed** (where implementation diverged from the plan and why). Nothing is marked done
+that was not executed and observed.
 
 ## Phase 0 — Preconditions
 
-- [ ] T0.1 `command -v act` — record the result; do not use it either way (reimplemented evaluator)
-- [ ] T0.2 `command -v actionlint` and `bash scripts/lint-workflows.sh` — record baseline clean
-- [ ] T0.3 `python3 scripts/lint-workflow-step-env-refs.py` — record exit 0 / `0 findings` baseline
-- [ ] T0.4 Read `.github/workflows/gdpr-gate-self-test.yml`; copy its `pull_request` + `paths` + permissions + timeout conventions
-- [ ] T0.5 Confirm `test-scripts` → synthetic `test` aggregator is the required check; confirm the harness will NOT be added to any ruleset
+- [x] T0.1 `command -v act` → **exit 1, absent.** Not used either way: it reimplements the
+      expression evaluator, so a green `act` run proves act's semantics, not GitHub's.
+- [x] T0.2 `actionlint` present at `~/.local/bin/actionlint`. Asserted **per-file** on the two
+      touched workflows, not repo-wide — `scripts/lint-workflows.sh` exits 0 on findings too,
+      so a repo-wide "clean" claim is unfalsifiable (R38a).
+- [x] T0.3 `python3 scripts/lint-workflow-step-env-refs.py` → baseline `0 findings across 70
+      workflow file(s)`; after the change, `0 findings across 71`.
+- [x] T0.4 Read `.github/workflows/gdpr-gate-self-test.yml` — the self-bootstrapping
+      `pull_request` + `paths:` precedent. Confirmed it declares **no** job-level
+      `permissions`, so "copy its permissions conventions" copied nothing (R37).
+- [x] T0.5 Required-check surface confirmed: `test` (ruleset `infra/github/`, repo root — NOT
+      `apps/web-platform/infra/github/`, which does not exist; R29). Harness deliberately not
+      added to any ruleset.
+- [x] **T-R34 (added by review, P0)** — re-verified "the mirror pages nobody" against the
+      **live** Sentry rules API before Phase 2 was written. **The premise is FALSE**: a 30th,
+      un-codified rule routes it. See `verification-evidence.md` §4 and `decision-challenges.md`
+      DC-1.
 
-## Phase 1 — Mirror step (the issue's stated scope)
+## Phase 1 — Mirror step
 
-- [ ] T1.1 `.github/workflows/web-platform-release.yml`: add `id: mirror` to the "Mirror non-delivery to Sentry and fail loudly" step
-- [ ] T1.2 Replace its `if:` with the one-line shared-predicate form (plan §1.2)
-- [ ] T1.3 Guard both `${FAILED}` expansions → `${FAILED:-}`
-- [ ] T1.4 Branch `MSG` + the `classifier` tag on whether `FAILED` is empty; keep `op: release-alert-undelivered` unchanged
-- [ ] T1.5 Branch the `$GITHUB_STEP_SUMMARY` and terminal `::error::` lines the same way; both keep `exit 1`
-- [ ] T1.6 Add the "DO NOT add continue-on-error" comment to the `outcome` step
+- [x] T1.1 `id: mirror` added; every test selector re-pointed from a name prefix to the id.
+- [x] T1.2 One-line shared-predicate `if:`.
+- [x] T1.3 Both `${FAILED}` → `${FAILED:-}`. **Reclassified**: measured as a *consistency*
+      change, not a crash fix — the harness proved GitHub sets a declared-but-empty key
+      (`FAILED_IS=SET value=''`), so `set -u` never fired (R2, confirmed by execution).
+- [x] T1.4 One branch setting `LEAD` / `FAILED_LABEL` / `CLASSIFIER_TAG`, consumed at three
+      call sites. **Changed from the plan**: keyed on `CLASSIFIER`, not `-z FAILED`, so the
+      mirror and the email cannot tell different stories about one incident (R5).
+- [x] T1.5 `classifier` added as its own tag key; `op: release-alert-undelivered` unchanged —
+      a discriminator never goes in the key something routes on. Step still `exit 1`.
+- [x] T1.6 The DO-NOT-add-`continue-on-error` comment, pinned by B1e.
 
-## Phase 2 — Email step (the push channel) — separable, cut-able as a unit
+## Phase 2 — Email step (shipped; separable and cut-able as a unit)
 
-- [ ] T2.1 Replace the email step's `if:` with the shared predicate in `${{ … }}` form
-- [ ] T2.2 Add `CLASSIFIER: ${{ steps.outcome.conclusion }}` to that step's **own** `env:`
-- [ ] T2.3 Add the third headline branch ahead of the `R_DEPLOY` branch (plan §2.3)
-- [ ] T2.4 Guard the "What stopped" list so an empty `FAILED_HTML` renders no empty `<ul></ul>`
-- [ ] T2.5 New subject: `[RELEASE CHECK FAILED] …` — deliberately not `[RELEASE FAILED]`
+- [x] T2.1 `if:` replaced with the shared predicate.
+- [x] T2.2 `CLASSIFIER` declared in the step's **own** `env:`, never inherited.
+- [x] T2.3 Third headline branch. **Changed**: gated on
+      `CLASSIFIER == failure && R_DEPLOY != 'failure'` so a classifier death coinciding with a
+      real failed deploy still takes the definite branch — degrade toward the alarm (R6).
+- [x] T2.4 `What stopped` list guarded — no empty `<ul></ul>` under a heading promising content.
+- [x] T2.5 Subject prefix. **Changed** to `[RELEASE STATUS UNKNOWN]`, not
+      `[RELEASE CHECK FAILED]`: the latter differs from `[RELEASE FAILED]` by one word
+      mid-bracket and collapses under lock-screen truncation (R22).
+- [x] **T-R1 (P0)** — the email's two bare `${FAILED}` guarded. The first sits *between* the
+      successful `curl` and the `delivered=1` write.
+- [x] **T-R4 (P0)** — the unconditional closing urgency line branched; it was false on the new
+      branch, contradicting the email's own opening two paragraphs earlier. Asserted by B6b.
 
-## Phase 3 — Execution harness (AC2)
+## Phase 3 — Execution harness (issue AC2)
 
-- [ ] T3.1 Create `.github/workflows/release-outcome-condition-harness.yml` with the self-bootstrapping `pull_request` `paths:` filter + `workflow_dispatch`
-- [ ] T3.2 One `probe` matrix job, arms A–F, `fail-fast: false`, job-level `continue-on-error: true`, explicit `name: probe ${{ matrix.arm }}`
-- [ ] T3.3 Copy the shipped `email` and `mirror` `if:` strings **verbatim** into the harness (each appears exactly once)
-- [ ] T3.4 `verdict` job (`needs: [probe]`, `if: always()`, `actions: read`) asserting the six-arm truth table via the jobs API
-- [ ] T3.5 Verdict also asserts six arms were observed (an empty sweep must not read as green)
-- [ ] T3.6 Record the three runtime facts from plan §3.6 in `verification-evidence.md`; adapt if observed behaviour differs
-- [ ] T3.7 `bash scripts/lint-workflows.sh` + `python3 scripts/lint-workflow-step-env-refs.py` clean with the new workflow present
+- [x] T3.1 `release-outcome-condition-harness.yml` created, `pull_request` + self-referencing
+      `paths:`.
+- [x] T3.2 **Changed to 3 arms (A/B/C), not 6** (R12): D and E duplicated A's and the shipped
+      path; F re-tested `!cancelled()`, already pinned by B1b in the required check.
+- [x] T3.3 Both shipped `if:` strings copied verbatim; verified byte-identical at merge time.
+- [x] T3.4 `verdict` job asserts the truth table via the jobs API. **Changed**: added
+      `GH_TOKEN`/`GH_REPO`/`GH_RUN_ID` (R9 — as planned it had no credentials), filtered out
+      the implicit `Set up job`/`Complete job` steps, and replaced a heredoc whose quoted
+      terminator cannot be indented with `printf '%b'`.
+- [x] T3.5 Verdict asserts 3 arms were observed — an incomplete sweep must not read as green.
+- [x] T3.6 All three runtime facts recorded, plus the one the plan omitted (R32/R37).
+- [x] T3.7 `actionlint` and the env-ref linter clean with the harness present.
+- [x] **R10 — harness DELETED before merge.** A permanent, deliberately-red, non-required
+      check is the shape of the bug `bf4816455` fixed on main four commits earlier. The run is
+      immutable evidence; the durable guard is B1c/B1d/B1e in the required `test` check.
 
-## Phase 4 — Static assertions (AC3)
+## Phase 4 — Static assertions (issue AC3)
 
-- [ ] T4.1 Refactor B1b's extractor into one helper keyed on step `id`
-- [ ] T4.2 B1c — mirror `if:` contains `steps.outcome.conclusion == 'failure'` (whole phrase, not a bare token)
-- [ ] T4.3 B1d — email `if:` contains both `!cancelled()` and the classifier predicate *(Phase 2 only)*
-- [ ] T4.4 B1e — the `outcome` step declares no `continue-on-error`
-- [ ] T4.5 B1f — harness↔shipped `if:` normalized byte-equality for `email` and `mirror`
-- [ ] T4.6 B1g — the harness workflow exists and declares `on: pull_request`
+- [x] T4.1 Selector refactored to one id-keyed helper with an **exactly-one cardinality**
+      precondition on every lookup (R7, P0).
+- [x] T4.2 B1c — **changed** from a substring anchor to whole normalized-string equality
+      (R8): an anchor on the `conclusion` phrase alone stays green if the
+      `outputs.failed != ''` disjunct is deleted.
+- [x] T4.3 B1d — same, for the email step.
+- [x] T4.4 B1e — the `outcome` step declares no `continue-on-error`.
+- [x] ~~T4.5 B1f harness↔shipped byte-equality~~ — **cut with R10** (no permanent harness to
+      compare against).
+- [x] ~~T4.6 B1g harness exists + `on: pull_request`~~ — **cut with R10**. This also retires
+      R28's PyYAML `on:`→`True` trap, since nothing now parses a workflow's triggers.
 
-## Phase 5 — Local execution of the shipped mirror body + C4
+## Phase 5 — Local execution + C4
 
-- [ ] T5.1 Part B: extract the `mirror` body by id; arms M1 (`FAILED=""`), M2 (populated), M3 (mutation proof — unguarded form must die with `unbound variable`)
-- [ ] T5.2 Part B: email arm for the new third branch *(Phase 2 only)*
-- [ ] T5.3 `model.c4`: add the `github -> resend` edge (plan §5.3)
-- [ ] T5.4 `model.c4`: amend the `github -> sentry` description to name the release-outcome mirror and its unrouted status
+- [x] T5.1 M1 (`FAILED=""`, the newly-reachable input) executed against the shipped mirror
+      body. **M2 retained against R13**: R13 cut it as duplicating the shipped path, which the
+      implementation makes untrue — the classifier discriminator turns this into a genuinely
+      new two-way branch, and testing one arm would leave the other unexecuted. **M3 cut** as
+      R13 directs: its blanket `sed` rewrites the branch test too, so the mutant dies before
+      reaching the expansion it exists to guard.
+- [x] **T-R26 (P0)** — curl stub extended to `-d|--data|--data-raw` **before** any mirror arm.
+      The mirror posts with `--data`; unfixed, four assertions would have been vacuous.
+      Proven load-bearing by mutation 9.
+- [x] **T-R27 (P0)** — `run_mirror` env enumerates `GITHUB_STEP_SUMMARY`,
+      `NEXT_PUBLIC_SENTRY_DSN`, `RUN_URL`, `GITHUB_SHA`, `PAYLOAD_CAPTURE`. Omitting the first
+      aborts with the exact `unbound variable` string M1a asserts must be absent. Proven by
+      mutation 10.
+- [x] T5.2 Email third-branch arm (B6a–B6f).
+- [x] T5.3 `github -> resend` edge added. **Changed**: label trimmed to one clause and
+      rewritten per R40a — "the only push exit that fires regardless of which job failed", not
+      "the ONLY push exit for a failed release", which R35 showed is false.
+- [x] T5.4 `github -> sentry` amended: the `paths:`-filter falsehood corrected (R40b) and the
+      release-outcome store POST named. `sentry -> founder` stale counts corrected
+      (21/22 → 29 IaC rules, 1 → 2 `NoOne`) and the un-codified 30th rule recorded (R40c).
 
 ## Phase 6 — Verify
 
-- [ ] T6.1 `bash scripts/lint-workflow-step-env-refs.test.sh` → `All tests passed`
-- [ ] T6.2 `python3 scripts/lint-workflow-step-env-refs.py` → exit 0
-- [ ] T6.3 `bash scripts/lint-workflows.sh` → clean
-- [ ] T6.4 `bash scripts/test-all.sh scripts` → green (the gate's own invocation)
-- [ ] T6.5 `cd apps/web-platform && ./node_modules/.bin/vitest run test/c4-code-syntax.test.ts test/c4-render.test.ts`
-- [ ] T6.6 Mutation-prove B1c/B1d/B1e/B1f/B1g individually RED; record each output
-- [ ] T6.7 Push; capture the harness run URL + `gh run view --json jobs` into `verification-evidence.md`
-- [ ] T6.8 Harness mutation proof on a scratch branch: `always()` → arms C and D flip to `success`, verdict reds; delete the branch
-- [ ] T6.9 `git grep -n "steps.outcome.outputs.failed" .github/workflows/web-platform-release.yml`
+- [x] T6.1 `bash scripts/lint-workflow-step-env-refs.test.sh` → `All tests passed`, 48/48.
+- [x] ~~T6.2~~ — **cut with R14**, subsumed by T6.4 (test-all runs A13, which lints tree-wide).
+- [x] T6.3 `actionlint` per-file on both workflows (see T0.2 for why not repo-wide).
+- [x] T6.4 `bash scripts/test-all.sh` — the gate's own invocation.
+- [x] T6.5 C4 validation. **Repointed per R38c**: `c4-code-syntax.test.ts` tests a
+      syntax-highlighting tokenizer and `c4-render.test.ts` mocks `spawn`; **neither reads
+      `model.c4`**, so the planned AC was vacuous. The real gate is
+      `scripts/regenerate-c4-model.sh` (run: 65 elements, 124 relations, 67 views) backstopped
+      by `c4-model-freshness.test.sh`.
+- [x] T6.6 Mutation proof — **10 mutations, 10 RED, zero survivors**, each recorded in
+      `verification-evidence.md` §3.
+- [x] T6.7 Harness run URL + observed jobs JSON captured.
+- [x] ~~T6.8 harness `always()` mutation on a scratch branch~~ — **cut with R11** (three
+      reviewers, independently): a scratch-branch push fires neither trigger, and the only
+      workable form opens a throwaway PR that spends a **paid** `claude-code-review.yml` run.
+      Arm C's recorded `skipped` already carries the discrimination — `always()` cannot
+      produce that row.
+- [x] ~~T6.9~~ — **cut with R14**: no stated pass criterion, and the string legitimately still
+      appears in both `if:` and two `env:` blocks after the fix, so the check always passes.
 
 ## Phase 7 — Tracked scope-out + close-out
 
-- [ ] T7.1 File the `op:release-alert-undelivered` routing-gap issue (labels `type/bug`, `deferred-scope-out`, `domain/engineering`, `priority/p2-medium`)
-- [ ] T7.2 `decision-challenges.md` records the Phase-2 scope deviation for `/ship`
-- [ ] T7.3 PR body contains `Closes #7138`; #7136 / #7137 / #7095 referenced as context only
-- [ ] T7.4 `/compound` — learning under `knowledge-base/project/learnings/workflow-patterns/` (directory + topic only; date chosen at write time)
+- [x] T7.1 Routing-gap issue filed as **#7142**. **Re-scoped** after T-R34: it no longer
+      claims the event reaches nobody, but that the only rule routing it is UI-managed and
+      absent from IaC — what ADR-031 and ADR-117 actually care about. Re-evaluation trigger
+      de-circularised (R17) and dated **2026-11-01**.
+- [x] T7.2 `decision-challenges.md` records the Phase-2 deviation **and** that its original
+      justification was falsified.
+- [x] **T-R16** — operator decision DC-2 defaulted to a tracking issue, filed as **#7143**.
+      The three live sites are unchanged.
+- [x] T7.3 PR body carries `Closes #7138`; #7136/#7137/#7095 are context only.
+- [ ] T7.4 `/compound` — learning capture (runs at the compound step, not here).
 
----
+## Not done, deliberately
 
-## Plan Review Revisions (R1–R42) — SUPERSEDE the phases above where they conflict
-
-Read `## Plan Review Revisions` in the plan before starting. 7-reviewer panel; the shape of
-the work changed materially. Highest-severity, in execution order:
-
-- [ ] T-R34 **Before writing Phase 2**: re-verify "the mirror pages nobody" against the LIVE
-      Sentry rules API. 4 of 29 rules are `ignore_changes` placeholders unreadable from the
-      `.tf`, and the repo documents a non-IaC paging path (built-in high-priority rule →
-      personal notification rule) that `level:"error"` feeds. The premise may be false.
-- [ ] T-R35 Rewrite the Overview / Scope decision / C4 label on the **job-scope** argument
-      (three other push channels exist; `release-outcome` is the only one that fires
-      regardless of which job fails). Delete "the only push channel".
-- [ ] T-R25 Remove the fabricated quotation (done in the plan body; verify none remain).
-- [ ] T-R1 Guard `${FAILED}` at `web-platform-release.yml:1357` and `:1360` — Phase 2 makes
-      them reachable; 1357 sits between the curl and the `delivered=1` write.
-- [ ] T-R4 Branch the unconditional closing paragraph (`:1342`); assert the classifier-death
-      body does NOT contain `nothing reaches production`.
-- [ ] T-R5/R6 One discriminator in both steps; do not preempt a genuine `R_DEPLOY` failure.
-- [ ] T-R7 Every `B1x` selector fails on zero matches (an `id` rename must not read as PASS).
-- [ ] T-R26/R27 Fix the `curl` stub (`-d|--data|--data-raw`) and `run_step`'s `env -i` list
-      (`GITHUB_STEP_SUMMARY`, `NEXT_PUBLIC_SENTRY_DSN`, `RUN_URL`, `GITHUB_SHA`) BEFORE any
-      mirror arm — otherwise M1 false-REDs and M3 passes vacuously.
-- [ ] T-R10/R11/R12 Harness: 3 arms (A/B/C), disposable (run → capture → delete before merge),
-      cut Phase 6.8 + AC2b. R36: the verdict job's red spawns a production agent via the
-      `workflow_run` → `engineering.ci_failed` webhook — enumerate in User-Brand Impact.
-- [ ] T-R38 Fix the three vacuous ACs (lint-workflows exits 0 on findings; `infra/github/` is
-      repo-root; the c4 vitest files never read `model.c4` — use `regenerate-c4-model.sh` +
-      `c4-model-freshness.test.sh`).
-- [ ] T-R8/R9/R13/R14/R15 Full-string B1c/B1d; verdict `env:` credentials; cut M2/M3, 6.2, 6.9;
-      ACs 12 → 5.
-- [ ] T-R40 C4: fix the `:528` `paths:` falsehood and the `:529` stale rule count (21/22 → 29);
-      add `model.likec4.json` to Files to Edit.
-- [ ] T-R17/R18/R19/R39 Phase 7: drop the circular trigger, state the Phase 2 coupling, name
-      the Resend-single-point residual and the classify-hang/timeout/cancellation residual.
-- [ ] T-R41 Cite ADR-117; re-argue the deferral on change-class blast radius.
-- [ ] T-R42 Workflow edits must go through Bash (`security_reminder_hook.py WORKFLOW_GLOBS`);
-      the "eight consecutive runs" figure is retracted to 15 by the 2026-07-29 post-mortem.
-- [ ] T-R16 **Operator decision** (`decision-challenges.md` DC-2): generalize the defect class
-      as a linter rule now, or file a tracking issue for the 3 other live instances.
+- **CHANGELOG.md** — the plan listed it under Files to Edit. **No root `CHANGELOG.md` exists**
+  in this repo; the changelog is generated from `plugins/soleur/docs/_data/changelog.js`. The
+  plan was authoritative for intent, not for paths.
+- **R31** (rename step id `outcome` → `classify`) — declined. It would retire B1e at the cost
+  of churning five references plus every selector, in the same PR that is fixing an alerting
+  outage. B1e closes the same hole explicitly and is CI-enforced.

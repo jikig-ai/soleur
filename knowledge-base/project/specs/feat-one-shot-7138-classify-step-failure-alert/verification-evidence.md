@@ -16,7 +16,20 @@ act's semantics, not GitHub's. The conditions were therefore executed on GitHub.
 - **Head SHA:** `8e5a052a98ddcd622da3f84f14cd0cb4dc54b8a9`
 - **Run conclusion:** `success`
 - **Workflow:** `.github/workflows/release-outcome-condition-harness.yml`, whose `email` and
-  `mirror` stand-in steps carry **verbatim copies** of the shipped `if:` strings.
+  `mirror` stand-in steps carried **verbatim copies** of the shipped `if:` strings.
+
+> **That workflow file is deleted in this branch and is NOT part of the merged diff.** It
+> existed for commits `8e5a052a9..1b9e62c16` so the run above could happen. A permanent,
+> deliberately-red, non-required check is the exact shape of the bug `bf4816455` fixed on main
+> four commits before this one, so keeping it would have re-introduced that shape — and its
+> two by-design-failing arms rendered as red PR checks for exactly as long as it existed. The
+> **run** is immutable and remains readable at the URL above; the **durable** guard is
+> B1c/B1d/B1e inside the required `test` check.
+>
+> `git diff 8e5a052a9 -- .github/workflows/web-platform-release.yml` is **empty**, so the
+> strings the harness executed are byte-for-byte the strings being merged. That check is what
+> makes this evidence transferable; without it the run would attest to a string that no longer
+> ships.
 
 ### Observed step conclusions — `gh run view 30710703476 --json jobs`
 
