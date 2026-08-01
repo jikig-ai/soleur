@@ -26,5 +26,5 @@ export const LEGAL_DOC_SHAS: Readonly<Record<string, string>> = {
   "individual-cla":
     "8d773e4331fd82e4b27a506eac2f968ad319adcef624d8f6115c0b71deb5e538",
   "privacy-policy":
-    "8b9d66da5c2b699faf764f0734e1e66f9274fd6eab7a896dca64a690dcecb9e5",
+    "dfdb035503c323f4073576620eea141d886c048c62f95749d8aef767ab9ee31b",
 };
