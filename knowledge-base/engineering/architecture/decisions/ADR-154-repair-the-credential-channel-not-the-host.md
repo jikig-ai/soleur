@@ -140,10 +140,14 @@ credential. That is precisely how run 30650564509 got as far as destroying resou
 
 ## Consequences
 
+<!-- lint-infra-ignore start: the sentence below DESCRIBES the hand-run step this ADR
+     ELIMINATES; it does not prescribe one. The whole positive consequence is that the
+     operator-local apply is gone, replaced by a workflow_dispatch arm. -->
 **Positive.** The recovery is in-band: a new narrow `ci-ssh-token-replace` arm on
 `apply-web-platform-infra.yml` re-mints the token via `workflow_dispatch`, where previously the
 documented repair was an operator-local `terraform apply` — the hand-run infra step
-`hr-all-infrastructure-provisioning-servers` forbids. A future occurrence of this failure fails
+`hr-all-infrastructure-provisioning-servers` forbids.
+<!-- lint-infra-ignore end --> A future occurrence of this failure fails
 *loudly and early*, with a reason string that names the remedy, instead of at
 `connection reset by peer` after a destroy.
 

@@ -34,7 +34,7 @@
 # Invariants asserted:
 #   - each named member carries a job-level `concurrency.group: web-1-swap` with
 #     `cancel-in-progress: false` (a killed in-progress swap would widen a 521 window);
-#   - the TOTAL count of `group: web-1-swap` across the three workflows == 6
+#   - the TOTAL count of `group: web-1-swap` across the three workflows == 7
 #     (allow-list length — NOT head -1, NOT >= 3: a dropped OR an unlisted member fails);
 #   - the workflow-level `terraform-apply-web-platform-host` R2 serializer literal is
 #     still present in BOTH apply-web-platform-infra.yml AND apply-deploy-pipeline-fix.yml
@@ -103,7 +103,7 @@ assert_member() {
   fi
 }
 
-# --- The six named members (allow-list) ---
+# --- The seven named members (allow-list) ---
 assert_member "$RELEASE_WF"      "deploy"                  "release-deploy"
 assert_member "$PIPELINE_FIX_WF" "apply"                   "pipeline-fix-apply"
 assert_member "$APPLY_INFRA_WF"  "workspaces_luks_cutover" "workspaces-luks-cutover"
@@ -124,6 +124,17 @@ assert_member "$APPLY_INFRA_WF"  "web_host_create"         "web-host-create"
 # to serialize. This guard caught the new member at /work rather than in review — the
 # allow-list length assertion is what makes an unenrolled mutation surface fail loud.
 assert_member "$APPLY_INFRA_WF"  "web_host_replace"        "web-host-replace"
+# #7095: the ci-ssh-token-replace job destroys and re-mints the CF Access ci_ssh service
+# token. It reaches NO host — its -target set is two Cloudflare addresses and a blast-radius
+# gate refuses every hcloud_*/terraform_data/tls_private_key address — so it is NOT a web-1
+# mutation surface in the sense the other six are. It rides this group for the INVERSE
+# reason: three of the six cf-tunnel-ssh-bridge callers (workspaces-luks-cutover,
+# workspaces-luks-verify, git-data-cutover) hold LIVE SSH sessions authenticated with the
+# credential this job destroys. A mid-cutover re-mint 403s the cutover cloudflared on its
+# next edge reconnect, leaving a half-finished LUKS cutover on sole-copy user data. So this
+# group serializes it against the workflows whose CREDENTIAL it invalidates, not against
+# workflows that mutate the same resource.
+assert_member "$APPLY_INFRA_WF"  "ci_ssh_token_replace"    "ci-ssh-token-replace"
 
 # --- The #6604 freeze workflow (workspaces-luks-cutover.yml) carries web-1-swap at
 # WORKFLOW scope (it is a dedicated dispatch, not a job in a shared workflow), so it
@@ -159,10 +170,10 @@ fi
 # way — both halves edited together, so the count still means what it says. ---
 web1_count=$(grep -rhE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$' \
   "$RELEASE_WF" "$APPLY_INFRA_WF" "$PIPELINE_FIX_WF" | grep -c .)
-if [ "$web1_count" -eq 6 ]; then
+if [ "$web1_count" -eq 7 ]; then
   pass
 else
-  fail "expected exactly 6 'group: web-1-swap' occurrences (allow-list length), found $web1_count"
+  fail "expected exactly 7 'group: web-1-swap' occurrences (allow-list length), found $web1_count"
 fi
 
 # --- Workflow-level R2 serializer preserved in BOTH apply workflows (coexists

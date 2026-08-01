@@ -976,6 +976,9 @@ stock-preflight allowlist entry were added:
   (see the P0 below). No other change: its existing `-target` allow-list already covers the token,
   the policy, and the ssh application, and its existing presence gate stays as-is.
 
+<!-- lint-infra-ignore start: the paragraph below DESCRIBES the operator-local apply that
+     the ci-ssh-token-replace arm was created to REPLACE — it is the statement of the P0,
+     not a prescribed step. -->
 **Open P0 for `/work` to resolve first:** *there is currently no workflow arm that can run an
 arbitrary `terraform apply -replace=`.* `apply_target`'s enum is
 `manual-rerun | inngest-host | inngest-host-replace | registry-host-replace | registry-region-migrate |
@@ -983,7 +986,8 @@ registry-luks-recut | git-data-host-replace | git-data-host-create | workspaces-
 workspaces-luks-recut | web-host-create | web-host-replace | entrypoint-audit` — none of them fits,
 and the file notes the dispatch-input budget is near its 10-input cap. Phase 1 as originally written
 was therefore an operator-local `terraform apply`, i.e. exactly the hand-run infra step this plan
-claims not to contain. Add a narrow `ci-ssh-token-replace` arm (typo-guard `confirm` token, reusing
+claims not to contain.
+<!-- lint-infra-ignore end --> Add a narrow `ci-ssh-token-replace` arm (typo-guard `confirm` token, reusing
 the existing non-SSH `-target` list plus `-replace`) rather than a general `-replace` input.
 
 **Not edited, deliberately:** all of `apps/web-platform/infra/**` — including `tunnel.tf`,
