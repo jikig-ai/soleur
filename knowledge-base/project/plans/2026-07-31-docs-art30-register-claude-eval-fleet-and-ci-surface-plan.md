@@ -103,7 +103,7 @@ messages, GitHub comment bodies and full HN comment text reaching Anthropic unde
 (ii) third-party handles plus comment snippets published to a permanent public git history
 with **no erasure routine**.
 
-**Brand-survival threshold:** `single-user incident`. One community member, one complaint,
+- **Brand-survival threshold:** `single-user incident` — one community member, one complaint,
 one CNIL contact. Accordingly `requires_cpo_signoff: true`, and `user-impact-reviewer`
 runs at review time.
 
@@ -913,11 +913,38 @@ None. Every step is automatable in-session and is executed by `/work` or `/ship`
 
 ## Observability
 
-Not applicable — pure-docs change. No file under `apps/*/server/`, `apps/*/src/`,
-`apps/*/infra/` or `plugins/*/scripts/` is touched, and no infrastructure surface is
-introduced, so the Phase 2.9 gate skips by its own stated criteria. The compliance-item
-rows added to `compliance-posture.md` are the operator-visible tracking surface for the
-residuals this record names.
+**[2026-08-01 CORRECTION (#7100), applied at ship.** This block previously read "Not
+applicable — pure-docs change. No file under `apps/*/server/`, `apps/*/src/`, `apps/*/infra/`
+or `plugins/*/scripts/` is touched". That was true when the plan was written and is **false
+of the shipped diff**: the operator-approved DEF-1a expansion pulled in
+`apps/web-platform/lib/legal/legal-doc-shas.ts`, and preflight Check 10's canonical
+sensitive-path regex covers `apps/web-platform/lib/(legal|auth)/` — a wider set than the four
+prefixes this block enumerated. The plan's own stated criteria were narrower than the gate's,
+so the block asserted a premise the gate disproves. Corrected rather than left standing: a
+plan that says "no observability needed" because of a path set that no longer describes the
+change is the same defect class this PR exists to fix. **]**
+
+The changed runtime-adjacent surface is a **SHA constants table** consumed by CI
+(`tc-document-sha-guard` → `apps/web-platform/scripts/check-tc-document-sha.sh`) and by
+`legal-doc-shas-guard.test.ts`. It has no server code path and emits no telemetry, so there
+is no Sentry/Better Stack layer to cite. What IS externally observable is the **published
+legal documents** whose corrections this PR ships — that is the surface a data subject
+actually reaches, and it is verifiable by an unauthenticated operator-runnable probe with no
+SSH.
+
+```yaml
+discoverability_test:
+  command: curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 https://soleur.ai/legal/gdpr-policy/
+  expected_output: "200"
+```
+
+Measured 2026-08-01: `200`. The sibling `https://soleur.ai/legal/privacy-policy/` also serves
+`200`. A non-200 means the Eleventy docs deploy did not publish the corrected policies, which
+is the failure mode that matters here — the internal register would be corrected while the
+public document a data subject reads was not.
+
+The compliance-item rows added to `compliance-posture.md` remain the operator-visible tracking
+surface for the residuals this record names.
 
 ## Architecture Decision (ADR/C4)
 
