@@ -343,6 +343,36 @@ report=$(jq -n \
             | map(select(.bypass_count > 0))
             | length),
           orphan_rule_ids: $orphan_ids,
+          # Gate-exemption readout (ADR-155). The net-issue-flow mandated-filing
+          # exemption is justified by ATTRIBUTION — being able to see which rule
+          # is being cited, how often, and whether the citing PRs look like
+          # genuine mandates or a new reflex. That justification is only true if
+          # the numbers are actually readable somewhere, and before this block
+          # they were not: `net-issue-flow*` is filtered out of $orphan_rule_ids
+          # a few lines up (correctly — those ids are tier-gated out of
+          # AGENTS.md), and $enriched is built from AGENTS.md ids only, so the
+          # rows reached this file NOWHERE. Shipping the framing without the
+          # readout is the one thing this must not do.
+          #
+          # Keyed off the rule_id, not .kind: the emitter encodes the mandating
+          # rule as `net-issue-flow-mandated-filing--<rule-id>` precisely so the
+          # attribution is structured rather than buried in the free-text
+          # rule_text_prefix that nothing parses.
+          gate_exemptions: (
+            [ $counts | to_entries[]
+              | select(.key | startswith("net-issue-flow-mandated-filing--")) ]
+            | map({
+                rule: (.key | ltrimstr("net-issue-flow-mandated-filing--")),
+                bypass_count: (.value.bypass_count // 0)
+              })
+            | sort_by(.rule)
+          ),
+          # The blanket override, counted separately. The comparison is the
+          # signal worth watching: exemptions rising while overrides fall is the
+          # intended effect; BOTH rising means the gate is being routed around
+          # rather than satisfied.
+          gate_override_count: (($counts["net-issue-flow"].bypass_count // 0)),
+          gate_timeout_warn_count: (($counts["net-issue-flow"].warn_count // 0)),
           # Telemetry-drop sentinel counts (issue #3509). Per-class counts
           # default to 0 when the class has no occurrences. emit_incident
           # has no `flock_timeout` site (indefinite flock per plan-review),

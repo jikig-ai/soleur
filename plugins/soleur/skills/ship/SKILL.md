@@ -510,8 +510,9 @@ bash plugins/soleur/skills/ship/scripts/net-issue-flow.sh "$PR_NUMBER"
 ```
 
 [`net-issue-flow.sh`](./scripts/net-issue-flow.sh) emits the
-CLOSING / FILED / NET block (enumerating the actual issue numbers behind each
-count), exits **1** when `NET > 0` with no override, and **0** otherwise.
+MANDATING-RULES / CLOSING / FILED / EXEMPT / REJECTED / NET block (enumerating
+the actual issue numbers behind each count), exits **1** when `NET > 0` with no
+override or exemption, and **0** otherwise.
 
 The FILED query deliberately does **not** use `--search`, does **not** filter by
 `--label deferred-scope-out`, uses `--state all`, passes `--limit 500`, and
@@ -524,12 +525,15 @@ blocking gate silently always-pass** — strictly worse than the advisory surfac
 it replaces, because it also carries the authority of having passed. Do not
 "simplify" the query without re-running
 [`plugins/soleur/test/net-issue-flow.test.sh`](../../test/net-issue-flow.test.sh);
-its 18 assertions pin all four, and the mutation battery in
-`specs/<branch>/mutation-evidence.md` proves each can fail.
+its assertions pin all four, and the mutation battery at
+`specs/<branch>/run-mutations.sh` proves each can fail (29 mutations, all
+killed). Re-run BOTH before touching the query.
 
-**Override (deliberate, not default).** Legitimate architectural-pivot
-deferrals can be net-positive and correct. To proceed net-positive, add to the
-PR body:
+**Override (deliberate, not default).** A PR can be legitimately net-positive
+for several unrelated reasons: an architectural pivot, a discovered defect in
+another subsystem that must stay its own issue, or a filing forced by a SKILL.md
+phase mandate that carries no rule id. The override covers all of them. To
+proceed net-positive, add to the PR body:
 
 ```text
 <!-- gate-override: net-issue-flow -->
@@ -540,9 +544,54 @@ plus **a one-line justification per filed issue**, or run with
 recorded as telemetry — an override is a decision on the record, not a silent
 bypass.
 
+Describe the *actual* reason. This was previously documented as an
+architectural-pivot-only hatch, which meant every other legitimate use had to be
+mis-described to fit — and a hatch that must be mis-described to be used gets
+reached for without being read.
+
+**Mandated-filing exemption (narrow, corpus-derived).** One case is resolved
+without the blanket hatch: an issue this repo's own rules REQUIRED you to file.
+`wg-block-pr-ready-on-undeferred-operator-steps` mandates a tracking issue before
+`gh pr ready`, so obeying it forced a violation here, and neither documented exit
+applied — "fix inline" is a SIZE test while the blocker was AUTHORITY, and
+"close something" needs a superseded issue, which a mandated tracker never is.
+
+Such an issue is subtracted from `NET` when **all** of these hold:
+
+1. the ISSUE body carries `Mandated-By: <rule-id>` on a line of its own,
+2. `<rule-id>` carries `[mandates-filing]` in the **merge-base** `AGENTS.rules.md`,
+3. the issue is **OPEN**, and
+4. the PR body carries a `Tracks #<issue>` / `Refs #<issue>` companion.
+
+Every condition fails **closed**. The qualifying set is derived from the corpus,
+never listed in the script — a restated list is a second pin, and the copy that
+drifts is the one that runs. Adding the marker is a human-gated ADR-092 corpus
+edit, so an agent can name one of N already-blessed rules but cannot invent a
+reason. The gate prints the qualifying ids in its BLOCKED output, so an agent
+whose rule is not tagged is told so explicitly rather than guessing.
+
+It is **not** unforgeable — this gate runs in a process the claimant controls and
+`SOLEUR_SKIP_NET_ISSUE_FLOW_GATE=1` sits a few lines above it in the same script.
+What it buys is a closed vocabulary and per-rule attribution. Do not describe it
+as tamper-evidence. See ADR-155.
+
+The report stays honest: `Filing:` keeps its true count, exemptions appear on
+their own `Exempt:` line naming the mandating rule, and every non-exempt filing
+gets a `Rejected:` line naming its cause. An exemption that silently reduced the
+count would be worse than the override, which at least leaves a marker behind.
+
+Rollout note: the corpus is read at the merge-base, so a PR that ADDS a tag
+cannot use it (that is the point — otherwise a PR could grant itself the
+exemption in the same diff), and branches opened before the tag landed report
+`Mandating rules: 0` until rebased. Both are correct behaviour, not a fault.
+
 **Fail-open, not fail-silent.** A `gh`/API error exits 0 so an outage cannot
-wedge every merge, but each fail-open emits an `emit_incident … transient` row.
-A gate that fails open silently is indistinguishable from one that passes.
+wedge every merge, but each fail-open emits an `emit_incident … warn` row —
+`warn`, not `transient`, because `rule-metrics-aggregate.sh` counts only
+deny/bypass/applied/warn and a `transient` row would increment nothing, leaving
+"never fired" indistinguishable from "fail-opened every run". The hook's own
+`timeout` now emits the same way: it previously translated a timed-out gate to a
+silent pass, and the gate measures 5-8 s against what was an 8 s ceiling.
 
 **Reachability (stated honestly).** The blocking enforcement is a PreToolUse
 hook on `gh pr ready` / `gh pr merge`. It therefore covers agent-driven merges
@@ -1093,7 +1142,33 @@ done
 
 **If triggered (`${#UNDEFERRED[@]}` > 0):** Halt and present the structured prompt (3-option choice). The operator chooses one:
 
-1. **File deferred-automation issues now.** For each undeferred match, the skill prompts for an issue title + 1-paragraph re-evaluation criterion, then `gh issue create --label type/chore --title <...> --body "<...>\n\nThis is a deferred-automation backlog item per wg-block-pr-ready-on-undeferred-operator-steps. Re-evaluate when: <...>"`. Update the PR body with `Tracks #NNNN` companions. Re-run detection. **Attempt-evidence precondition:** a browser/portal step may be filed `deferred-automation` ONLY if the issue body carries a `playwright-attempt:` line (per work Phase 4 Playwright-First Audit) proving a real attempt reached a true human gate (CAPTCHA / OTP / TOTP / passkey / push-MFA / payment-card / hardware-token). An a-priori "MFA-gated", "dashboard-only", or "no API path" assertion — or an `api-probe-403` from a narrowly-scoped token — does NOT satisfy this; if no attempt was made, STOP and run the Playwright attempt first. If the attempt reached an automatable gate that the tool could not complete (browser crash, MCP down), it is `attempted-blocked-on-tool`, NOT operator-only: file a `tooling`/`flaky` `type/chore` issue with the resume recipe instead, and remove the bullet from the operator section.
+1. **File deferred-automation issues now.** For each undeferred match, the skill prompts for an issue title + 1-paragraph re-evaluation criterion, then files with **`--body-file`, never `--body "…\n…"`**:
+
+   ```bash
+   # Double-quoted "\n" is a LITERAL backslash-n, not a newline. The
+   # Mandated-By: line must be a line of its own or the net-issue-flow
+   # exemption's anchored match cannot see it — and the filing this rule
+   # MANDATES would then be blocked by that gate with no exit but the
+   # blanket override. Write the body to a file; do not inline it.
+   BODY_FILE="$(mktemp -t deferred-automation.XXXXXXXX.md)"
+   cat > "$BODY_FILE" <<EOF
+   ${DESCRIPTION}
+
+   This is a deferred-automation backlog item per
+   wg-block-pr-ready-on-undeferred-operator-steps.
+   Re-evaluate when: ${CRITERION}
+   playwright-attempt: ${ATTEMPT_EVIDENCE}
+
+   Mandated-By: wg-block-pr-ready-on-undeferred-operator-steps
+   EOF
+   gh issue create --label type/chore --label deferred-automation \
+     --title "$TITLE" --body-file "$BODY_FILE"
+   ```
+
+   Keep BOTH `type/chore` and `deferred-automation` — this rule's own re-run
+   check looks for an OPEN `deferred-automation` issue, so dropping the label
+   leaves the agent blocked by two gates at once with no exit. Update the PR
+   body with `Tracks #NNNN` companions. Re-run detection. **Attempt-evidence precondition:** a browser/portal step may be filed `deferred-automation` ONLY if the issue body carries a `playwright-attempt:` line (per work Phase 4 Playwright-First Audit) proving a real attempt reached a true human gate (CAPTCHA / OTP / TOTP / passkey / push-MFA / payment-card / hardware-token). An a-priori "MFA-gated", "dashboard-only", or "no API path" assertion — or an `api-probe-403` from a narrowly-scoped token — does NOT satisfy this; if no attempt was made, STOP and run the Playwright attempt first. If the attempt reached an automatable gate that the tool could not complete (browser crash, MCP down), it is `attempted-blocked-on-tool`, NOT operator-only: file a `tooling`/`flaky` `type/chore` issue with the resume recipe instead, and remove the bullet from the operator section.
 2. **Cite an existing OPEN issue.** Operator pastes `#NNNN` per undeferred match. Skill verifies state/labels/sentinel and updates the PR body with `Tracks #NNNN`.
 3. **Override with operator-attestation.** Operator pastes a 1-paragraph justification (rare; e.g., first non-Soleur tenant onboarding triggers a one-off K-bis upload). Skill appends a `<!-- gate-override: wg-block-pr-ready-on-undeferred-operator-steps -->` HTML comment followed by the attestation text to the PR body, then proceeds.
 
@@ -1341,6 +1416,31 @@ Replace `BRANCH_NAME` with the actual branch name.
    If `ISSUE_NUMBER` was detected, include the `Closes #N` line. If multiple issues, list each (`Closes #N, Closes #M`). If no issue was detected, omit the `Closes` line entirely.
 
    Do not quote flag names -- write `--title` not `"--title"`.
+
+   **Carry forward every gate marker the OLD body carried (load-bearing).** This
+   step **full-replaces** the body, and two blocking gates read markers that live
+   only there — both of them run at `gh pr ready` / `gh pr merge`, i.e. AFTER
+   this replacement. Silently dropping a marker here re-blocks a PR that had
+   already satisfied the gate, with no trace of why:
+
+   | Marker in the old body | Read by | Consequence if dropped |
+   |---|---|---|
+   | `Tracks #N` / `Refs #N` | `ship-operator-step-gate.sh` AND the net-issue-flow mandated-filing exemption | the operator-step gate re-blocks, and a mandated filing loses its exemption and re-counts against NET |
+   | `<!-- gate-override: net-issue-flow -->` + justifications | `net-issue-flow.sh` | a deliberate, recorded override is erased and the PR blocks again |
+   | `<!-- gate-override: wg-block-pr-ready-on-undeferred-operator-steps -->` + attestation | `ship-operator-step-gate.sh` | an operator attestation is erased |
+
+   Read the existing body FIRST and re-emit those lines verbatim in the new one:
+
+   ```bash
+   OLD_BODY="$(gh pr view PR_NUMBER --json body --jq .body)"
+   # Preserved verbatim: companions and override markers + their justification lines.
+   printf '%s\n' "$OLD_BODY" | grep -nE '^\s*(Tracks|Refs) #[0-9]+|<!-- gate-override:'
+   ```
+
+   Anything that grep prints belongs in the replacement body. **Why:** the
+   companion is written in Phase 5.5, this step erases it, and the only
+   invocation that BLOCKS runs after — so the happy path for a mandated filing
+   does not work at all without this carry-forward.
 
    **The `--title` is mandatory, not optional.** The draft PR created in `/ship` Phase 6's "no PR" fallback OR by `worktree-manager.sh draft-pr` (Step 0c of `/one-shot`) is titled `WIP: <branch-name>`. A squash merge uses the **PR title** as the commit subject on `main`, so an un-updated `WIP:` title lands a `WIP: feat-… (#N)` commit in permanent history (and trips `feature-tweet` eligibility, which requires a `feat(` prefix). Editing only `--body` (e.g. `gh pr edit N --body-file …`) is the recurring miss — always pass BOTH `--title` and `--body`.
 

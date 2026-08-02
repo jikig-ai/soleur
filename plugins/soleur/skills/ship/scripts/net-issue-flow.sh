@@ -95,6 +95,20 @@ _emit() {
   fi
 }
 
+# Same, but with an explicit rule_id. The exemption's per-rule attribution MUST
+# ride in the STRUCTURED rule_id field, not in the free-text prefix: the
+# aggregator keys every counter on rule_id and never parses rule_text_prefix, so
+# an attribution written into the prefix is unreadable by construction — and
+# attribution is the entire argument for preferring this over "just reword the
+# help text". Consumed by summary.gate_exemptions in rule-metrics-aggregate.sh.
+# Every id used here keeps the `net-issue-flow` prefix, which that aggregator
+# already exempts from the orphan gate (ids here are tier-gated out of AGENTS.md).
+_emit_as() {
+  if declare -F emit_incident >/dev/null 2>&1; then
+    emit_incident "$1" "$2" "$3" || true
+  fi
+}
+
 _fail_open() {
   printf '\n'
   printf 'net-issue-flow: TRANSIENT — could not compute net flow (%s).\n' "$1"
@@ -160,12 +174,12 @@ CORPUS_NOTE=""
 MB="$(git merge-base origin/main HEAD 2>/dev/null || true)"
 if [[ ! "$MB" =~ ^[0-9a-f]{7,40}$ ]]; then
   CORPUS_NOTE="corpus unreadable: merge-base did not resolve — exemption unavailable"
-  _emit warn "net-issue-flow-mandated-filing-corpus-unreadable pr=${PR_NUMBER} reason=merge-base"
+  _emit_as net-issue-flow-mandated-filing-corpus-unreadable warn "merge-base did not resolve pr=${PR_NUMBER}"
 else
   CORPUS_TEXT="$(git show "${MB}:AGENTS.rules.md" 2>/dev/null || true)"
   if [[ -z "$CORPUS_TEXT" ]]; then
     CORPUS_NOTE="corpus unreadable: AGENTS.rules.md absent at merge-base — exemption unavailable"
-    _emit warn "net-issue-flow-mandated-filing-corpus-unreadable pr=${PR_NUMBER} reason=show"
+    _emit_as net-issue-flow-mandated-filing-corpus-unreadable warn "AGENTS.rules.md absent at merge-base pr=${PR_NUMBER}"
   else
     MANDATING_IDS="$(printf '%s\n' "$CORPUS_TEXT" \
       | grep -F -- '[mandates-filing]' \
@@ -174,7 +188,7 @@ else
       | sort -u || true)"
     if [[ -z "$MANDATING_IDS" ]]; then
       CORPUS_NOTE="corpus read OK, zero rules tagged — exemption inactive"
-      _emit warn "net-issue-flow-mandated-filing-zero-tagged pr=${PR_NUMBER} base=${MB:0:12}"
+      _emit_as net-issue-flow-mandated-filing-zero-tagged warn "zero rules tagged at base=${MB:0:12} pr=${PR_NUMBER}"
     fi
   fi
 fi
@@ -263,7 +277,7 @@ while IFS=$'\t' read -r _num _verdict _detail; do
     # Per-rule attribution lives in the STRUCTURED rule_id, not the free-text
     # prefix field, so `summary.gate_exemptions` can group by rule without
     # parsing prose. Still covered by the aggregator's net-issue-flow* prefix.
-    _emit bypass "net-issue-flow-mandated-filing--${_detail} pr=${PR_NUMBER} issue=${_num}"
+    _emit_as "net-issue-flow-mandated-filing--${_detail}" bypass "exempt pr=${PR_NUMBER} issue=${_num}"
   else
     REJECTED_DETAIL+="#${_num} (${_detail}); "
   fi

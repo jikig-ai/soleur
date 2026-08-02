@@ -81,7 +81,11 @@ fi
 echo "FAIL: the blocking gate has not flattened the queue on the measured window."
 echo "  Do NOT close #6769 on this result. Either the gate is being overridden"
 echo "  routinely (check bypass counts via scripts/rule-metrics-aggregate.sh for"
-echo "  rule_id net-issue-flow), or filings are arriving through a merge surface"
+echo "  EVERY rule_id with the net-issue-flow PREFIX -- an exact-match lookup on"
+echo "  'net-issue-flow' misses the blanket-override rows AND every"
+echo "  net-issue-flow-mandated-filing--<rule-id> exemption row, so it would"
+echo "  under-report exactly the bypasses this FAIL is asking you to look for),"
+echo "  or filings are arriving through a merge surface"
 echo "  the PreToolUse hook does not cover (web UI, native auto-merge, CI merges"
 echo "  -- enumerated in ship/SKILL.md 'Reachability')."
 exit 1

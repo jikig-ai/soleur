@@ -566,6 +566,18 @@ than asserted — see the blocking net-issue-flow gate in
 [`ship/SKILL.md`](../ship/SKILL.md) and
 [`net-issue-flow.sh`](../ship/scripts/net-issue-flow.sh).
 
+Two exits keep that from being a trap rather than a rule, and neither is a
+loophole for ordinary review findings. A PR may legitimately exceed the
+threshold via the `<!-- gate-override: net-issue-flow -->` marker (an
+architectural pivot, a discovered defect in another subsystem, a filing forced
+by a SKILL.md phase mandate with no rule id), or — for a filing another repo
+rule REQUIRED — via the corpus-derived mandated-filing exemption, which
+subtracts the issue from `NET` while still showing it in the report. So the
+arithmetic is `NET = FILED - EXEMPT - CLOSING`, and "opens more issues than it
+closes" is the *default* failure, not an invariant. Review findings are covered
+by neither exit: the disposition for those is fix-inline (below), and reaching
+for an override instead is the behaviour both gates exist to stop.
+
 **Mechanical pre-CONCUR auto-flip:**
 
 Before invoking `code-simplicity-reviewer`, self-assess fix size. If ≤100 lines AND ≤4 files, BYPASS the CONCUR gate — the disposition is auto-flipped to fix-inline. Apply the fix; do not file.
