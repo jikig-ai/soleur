@@ -147,6 +147,115 @@ printf '{"tool_input":{"command":"gh pr ready"},"cwd":"/nonexistent-%s"}\n' "$$"
 if is_deny; then fail "bad .cwd must not produce a deny"
 else pass "nonexistent .cwd falls back without denying"; fi
 
+# ---------------------------------------------------------------------------
+# FR0 — the timeout budget. Measured on the unmodified gate: 5.7-8.1 s wall
+# clock against a `timeout 8` ceiling, with 1 of 3 plan-phase runs returning
+# rc=124. Because the hook translates any RC != 1 to `exit 0`, a timeout is a
+# SILENT always-pass: no deny, no telemetry, indistinguishable from a real
+# pass. All three cases below are BEHAVIORAL — they drive the hook and read
+# its decision, never grep its source — so each one names a mutation that
+# satisfies a source-grep while violating the property.
+# ---------------------------------------------------------------------------
+
+# Stub project whose gate sleeps, so the hook's own ceiling is what decides.
+mk_slow_project() { # $1=sleep seconds, $2=exit code
+  local secs="$1" rc="$2"
+  local d="$WORK/proj-slow-$secs-$rc"
+  mkdir -p "$d/plugins/soleur/skills/ship/scripts"
+  cat > "$d/plugins/soleur/skills/ship/scripts/net-issue-flow.sh" <<STUB
+#!/usr/bin/env bash
+sleep $secs
+echo "  Net:     +3  (positive = backlog growth)"
+exit $rc
+STUB
+  chmod +x "$d/plugins/soleur/skills/ship/scripts/net-issue-flow.sh"
+  printf '%s' "$d"
+}
+
+# --- FR0b: a timed-out delegation must EMIT TELEMETRY, not vanish -----------
+# Seam: a stub exiting 124 is indistinguishable at the hook's decision point
+# from `timeout` killing a real gate — timeout propagates its own 124, and the
+# hook branches on `$?` either way.
+# Mutation that satisfies a source-grep but violates the property: emitting the
+# row AFTER `[[ "$RC" -eq 1 ]] || exit 0` — the line is present in the file and
+# never reached. This case reads the incident file, so it reds on that mutation.
+PROJ_124="$(mk_project 124)"
+INC_ROOT="$WORK/inc-124"; mkdir -p "$INC_ROOT"
+printf '{"tool_input":{"command":"gh pr ready"},"cwd":"/tmp"}\n' \
+  | ( export CLAUDE_PROJECT_DIR="$PROJ_124" INCIDENTS_REPO_ROOT="$INC_ROOT"; bash "$HOOK" ) \
+    > "$WORK/out" 2>/dev/null
+if is_deny; then fail "RC=124 must fail OPEN (a timeout is not a policy verdict)"
+else pass "RC=124 fails open (no deny)"; fi
+
+inc_file="$INC_ROOT/.claude/.rule-incidents.jsonl"
+warn_rows=0
+if [[ -r "$inc_file" ]]; then
+  warn_rows="$(jq -sr '[.[] | select(.rule_id == "net-issue-flow" and .event_type == "warn")] | length' \
+    < "$inc_file" 2>/dev/null || echo 0)"
+fi
+if [[ "$warn_rows" -ge 1 ]]; then pass "RC=124 emits a counted warn row (not a silent pass)"
+else fail "RC=124 must emit rule_id=net-issue-flow event_type=warn; got $warn_rows rows"; fi
+
+# A NON-timeout pass (RC=0) must NOT emit a timeout warn — otherwise the row
+# above is vacuous (it would fire on every invocation and prove nothing).
+INC_ROOT_OK="$WORK/inc-ok"; mkdir -p "$INC_ROOT_OK"
+printf '{"tool_input":{"command":"gh pr ready"},"cwd":"/tmp"}\n' \
+  | ( export CLAUDE_PROJECT_DIR="$PROJ_PASS" INCIDENTS_REPO_ROOT="$INC_ROOT_OK"; bash "$HOOK" ) \
+    > /dev/null 2>&1
+ok_warns=0
+if [[ -r "$INC_ROOT_OK/.claude/.rule-incidents.jsonl" ]]; then
+  ok_warns="$(jq -sr '[.[] | select(.rule_id == "net-issue-flow" and .event_type == "warn")] | length' \
+    < "$INC_ROOT_OK/.claude/.rule-incidents.jsonl" 2>/dev/null || echo 0)"
+fi
+if [[ "$ok_warns" -eq 0 ]]; then pass "a clean pass emits NO timeout warn (the 124 row is discriminating)"
+else fail "RC=0 must not emit a timeout warn; got $ok_warns"; fi
+
+# --- FR0a(i): the ceiling must clear the gate's real cost -------------------
+# The unmodified gate measures 5.7-8.1 s. A 9 s stub exceeds the old `timeout 8`
+# and clears a 25 s one, so this case alone distinguishes the two ceilings.
+# Mutation that a source-grep would miss: reverting the literal to `timeout 8`
+# while leaving the TO=() probe shape intact.
+PROJ_SLOW="$(mk_slow_project 9 1)"
+printf '{"tool_input":{"command":"gh pr ready"},"cwd":"/tmp"}\n' \
+  | ( export CLAUDE_PROJECT_DIR="$PROJ_SLOW"; bash "$HOOK" ) > "$WORK/out" 2>/dev/null
+if is_deny; then pass "a 9 s gate still DENIES (ceiling clears the measured cost)"
+else fail "9 s gate was killed by the ceiling -> silent always-pass (raise the timeout)"; fi
+
+# --- FR0a(ii): `timeout(1)` absent must not become a dark tripwire ----------
+# A hardcoded `timeout 25 bash "$GATE"` on a host without timeout(1) yields
+# RC=127, which the hook translates to `exit 0` — a blocking gate that never
+# blocks, with nothing in the output naming the cause. The repo's precedent
+# (supabase-loopback-warn.sh) probes with TO=() instead.
+# Mutation that satisfies a `grep -q 'timeout 25'` source assertion while
+# violating the property: keeping the hardcoded invocation. This case reds on it.
+# NOTE: `b="${f##*/}"`, never `basename "$f"` — the PATH mirror is ~7k entries
+# and a per-entry fork turns this case into a multi-minute hang (measured).
+NOTO="$WORK/noto-bin"; mkdir -p "$NOTO"
+for d in $(printf '%s\n' "${PATH//:/$'\n'}" | sort -u); do
+  [[ -d "$d" ]] || continue
+  for f in "$d"/*; do
+    [[ -e "$f" ]] || continue
+    b="${f##*/}"
+    [[ "$b" == "timeout" ]] && continue
+    [[ -e "$NOTO/$b" ]] || ln -s "$f" "$NOTO/$b" 2>/dev/null || true
+  done
+done
+# Precondition self-check: the fixture is only meaningful if `timeout` is
+# genuinely unreachable AND the interpreter is still reachable. A silently
+# broken mirror would make the assertion below pass for the wrong reason.
+if PATH="$NOTO" command -v timeout >/dev/null 2>&1; then
+  fail "FIXTURE BROKEN: timeout still resolvable on the stripped PATH"
+elif ! PATH="$NOTO" command -v bash >/dev/null 2>&1; then
+  fail "FIXTURE BROKEN: bash not resolvable on the stripped PATH"
+else
+  pass "fixture: PATH without timeout(1) built (bash reachable, timeout not)"
+  printf '{"tool_input":{"command":"gh pr ready"},"cwd":"/tmp"}\n' \
+    | ( export CLAUDE_PROJECT_DIR="$PROJ_DENY" PATH="$NOTO"; bash "$HOOK" ) \
+      > "$WORK/out" 2>/dev/null
+  if is_deny; then pass "no timeout(1) on PATH still DENIES (probe, not hardcode)"
+  else fail "missing timeout(1) produced rc=127 -> silent fail-open (use the TO=() probe)"; fi
+fi
+
 printf '\n'
 if [[ "$fails" -eq 0 ]]; then
   printf 'ship-net-issue-flow-gate.test.sh: ALL PASS\n'; exit 0

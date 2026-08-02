@@ -41,7 +41,9 @@
 # Fail-open conditions (exit 0 silently or with a note):
 #   - command is not `gh pr ready` / `gh pr merge`
 #   - SOLEUR_SKIP_NET_ISSUE_FLOW_GATE=1
-#   - gate script absent, not executable, or times out
+#   - gate script absent or not executable
+#   - gate script times out (RC=124) — fails open but NOT silently: it emits a
+#     `warn` row so "never fired" is distinguishable from "timed out every run"
 #   - gh unauthenticated / no PR yet (the script itself fails open)
 #
 # Fail-closed condition (deny + emit_incident):
@@ -89,8 +91,39 @@ if [[ "$WORK_DIR" == /* ]] && [[ -d "$WORK_DIR" ]]; then
   cd "$WORK_DIR" 2>/dev/null || exit 0
 fi
 
-OUT="$(timeout 8 bash "$GATE" 2>&1)"
+# Budget. The gate's dominant cost is `gh issue list --limit 500` (~4-5 s over 5
+# sequential paginated REST calls) plus two `gh pr view` calls; measured wall
+# clock on the unmodified gate is 5.7-8.1 s. Against the previous `timeout 8`
+# that is a coin flip: a timed-out run returns 124, which the `-eq 1` test below
+# translates to `exit 0` — no deny, no telemetry, indistinguishable from a pass.
+# A BLOCKING gate that intermittently always-passes is strictly worse than the
+# advisory surface it replaced, because it also carries the authority of having
+# passed. 25 s leaves headroom for the exemption pass (~1 s) and API jitter.
+#
+# The probe, not a hardcoded `timeout`: `timeout(1)` is not universally present,
+# and hardcoding it makes a host without coreutils return 127 — which this
+# hook's `-eq 1` test also translates to a silent `exit 0`. Precedent:
+# .claude/hooks/supabase-loopback-warn.sh, which documents exactly that rc-127
+# dark tripwire. With TO=() empty, the gate simply runs unbounded — slow beats
+# silently absent.
+TO=()
+command -v timeout >/dev/null 2>&1 && TO=(timeout 25)
+
+OUT="$("${TO[@]}" bash "$GATE" 2>&1)"
 RC=$?
+
+# A timeout is not a policy verdict, so it still fails OPEN — but it must not
+# fail SILENT. This emit is deliberately ABOVE the `-eq 1` early exit: below it,
+# the line would be present in the file and never reached, which is precisely
+# the mutation the hook suite's incident-file assertion exists to catch.
+#
+# `warn`, not `transient`: rule-metrics-aggregate.sh counts only
+# deny/bypass/applied/warn, so a `transient` row would increment nothing and the
+# operator could not distinguish "gate never fired" from "gate timed out on
+# every invocation" — the same defect class this gate's own header condemns.
+if [[ "$RC" -eq 124 ]]; then
+  emit_incident net-issue-flow warn "net-issue-flow gate timed out after 25s — failed open" 2>/dev/null || true
+fi
 
 [[ "$RC" -eq 1 ]] || exit 0
 
