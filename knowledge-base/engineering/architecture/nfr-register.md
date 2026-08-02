@@ -512,14 +512,14 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/c4-model.md` 
 
 ### NFR-027: Encryption At-Rest
 
-**Category:** Security | **Scope:** Container | **System-Level Status:** Not Implemented
+**Category:** Security | **Scope:** Container | **System-Level Status:** Partially Implemented (3 of 4 rows Implemented — Supabase PostgreSQL, Agent Runtime, Compute; `git-data volume` remains Adopting pending the 3.D GA cutover)
 
 | Container/Link | Status | Enforced By | Evidence |
 |----------------|--------|-------------|----------|
 | Supabase PostgreSQL | Implemented | Supabase | Database encrypted at rest by default |
 | Agent Runtime | Implemented | BYOK | User API keys: AES-256-GCM + HKDF per-user (ADR-004) |
 | git-data volume | Adopting | LUKS (cryptsetup) | Fresh LUKS-encrypted git-data volume, guest-side (Doppler-env key at boot, never argv; idempotent `cryptsetup isLuks` guard; mount `/dev/mapper/git-data`). Lands 3.D; realized + verified at GA cutover (soak-gated) — flips to Implemented after LUKS-at-rest verified in prod |
-| Compute | Implemented | LUKS (cryptsetup) | The web host's `/mnt/data` workspaces volume runs on the guest-side LUKS mapper `hcloud_volume.workspaces_luks` (ADR-119, #6588); cutover certified 2026-07-23, re-asserted 2026-07-24 (`workspaces-luks-verify` run 30130277489). The superseded pre-cutover plaintext volume is retained attached-unmounted as the rollback backstop pending a soak blocked on #6808 (ledgered `plaintext-exception`, #6897) |
+| Compute | Implemented (web-1) | LUKS (cryptsetup) | The **web-1** host's `/mnt/data` workspaces volume runs on the guest-side LUKS mapper `/dev/mapper/workspaces`, backed by the Terraform volume `hcloud_volume.workspaces_luks` (ADR-119, #6588) — the volume resource is a plain block device; the encryption is guest-side, per the `git-data-luks.tf` sharp-edge note. Cutover certified 2026-07-23, re-asserted 2026-07-24 (`workspaces-luks-verify` run 30130277489). **Scope is web-1 only:** web-2's workspaces volume is knowingly left plaintext-but-empty pre-flip — a recorded, gate-enforced deviation from #6588's "every `var.web_hosts` member" AC, tracked #6931. The superseded pre-cutover plaintext volume is retained attached-unmounted as the rollback backstop pending a soak blocked on #6808 (ledgered `plaintext-exception`, #6897) |
 
 ### NFR-028: Geo Distribution
 
