@@ -8,12 +8,14 @@ plan: knowledge-base/project/plans/2026-07-24-fix-6588-legal-clause-retraction-p
 decision_record: knowledge-base/project/specs/feat-one-shot-6588-legal-clause-retraction/decision-challenges.md
 site_dispositions: knowledge-base/project/specs/feat-one-shot-6588-legal-clause-retraction/site-dispositions.md
 adr: knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md
-status: "SIGNED-OFF WITH ACCEPTED RESIDUAL, SUBJECT TO ONE PRE-MERGE EVIDENTIARY CONDITION (E-1) — re-attested against HEAD c9747f0aa by Amendment No. 2 (2026-08-02). All five A–E defects raised by Amendment No. 1 are CURED and independently verified. The DC-1 retained-plaintext residual is carried forward unamended. DO NOT MERGE until condition E-1 (§A2.6) is discharged."
-superseded_by: "§Amendment No. 2 — re-attestation against HEAD c9747f0aa, 2026-08-02 (supersedes §Amendment No. 1, which supersedes the 2026-07-24 review)"
+status: "SIGNED-OFF WITH ACCEPTED RESIDUAL — final. Re-attested against HEAD c9747f0aa; pre-merge condition E-1 DISCHARGED 2026-08-02 by `workspaces-luks-verify` run 30749271370 (verified independently, §A3). All five A–E defects are CURED. The DC-1 retained-plaintext residual is carried forward unamended and is ACCEPTED, not cured. CLEAR TO MERGE."
+ship_gate_disposition: "DISCHARGED — the ship Phase 5.5 Counsel-Review CLO-Attestation gate is satisfied. No outstanding pre-merge condition."
+superseded_by: "§Amendment No. 3 — E-1 discharge and final disposition, 2026-08-02 (supersedes §Amendment No. 2 → §Amendment No. 1 → the 2026-07-24 review)"
 signed_off_at: 2026-08-02
 signed_off_at_withdrawn: 2026-07-24
 amended_at: 2026-08-02
-pre_merge_condition: "E-1 — the published head asserts, in the present tense, that the LUKS mount 'is verified live'. The newest `workspaces-luks-verify` evidence is run 30130277489 of 2026-07-24T22:13:06Z (nine days stale), and #6808 is OPEN so the continuous monitor pushes nothing. Discharge by EITHER (a) a fresh `workspaces-luks-verify` run on merge day, recorded here, OR (b) re-tensing the published clause to a dated past verification per §A2.6. Not discretionary; see §A2.6 for why."
+pre_merge_condition: "E-1 — DISCHARGED 2026-08-02. Satisfied by Door 1: `workspaces-luks-verify` run 30749271370 (2026-08-02T13:07:46Z, workflow_dispatch on main @ b5871b9f6d, conclusion success) — `device_type=crypto_LUKS`, `mount_source=/dev/mapper/workspaces`, escrow ok, header readable, `workspace_count=8 expected=8`, `/health=200`, readyz ready=true. Verified independently against the GitHub API and the raw run log, not from a report. See §A3.1."
+claim_decay_trigger: "While #6808 is OPEN, `workspaces-luks-verify` is workflow_dispatch-only and no automatic verification of any kind exists. The published clause asserts present-tense live verification. If no successful run lands within any trailing 30-day window while that clause stands, the clause MUST be re-tensed to a dated past verification (Amendment No. 2, Door 2) or withdrawn. See §A3.4."
 amended_by: "clo agent (Soleur legal domain leader) — Amendment No. 1 re-attested HEAD 25e5de36e on 2026-08-02 after the 2026-08-01 rebase (DC-2) materially reversed the PR's own position; Amendment No. 2 re-attested HEAD c9747f0aa the same day after the A–E rulings were applied. Evidence recomputed from the working tree, hashed against `main`, and pulled live from the GitHub API at each pass; nothing carried over on trust from any earlier pass."
 signed_off_by: "WITHDRAWN. The 2026-07-24 attribution is preserved below for the record: 'clo agent (Soleur legal domain leader) — reviewing authority for v1 per the agent-native company model; review performed 2026-07-24T22:43Z (00:43 CEST on 2026-07-25 local), same session as the PR; dated 2026-07-24 to match the PR, the corrections banner, and the sibling spec artifacts. External counsel re-review reserved for the re-evaluation triggers below.' That review is superseded, not deleted — see §Amendment No. 1 for what it got wrong and why."
 tier_classification: "Tier 1 (material) per `knowledge-base/legal/tc-version-bump-policy.md` — retraction of published Article 32 TOM claims plus re-scoping of a surviving one. NO `TC_VERSION` bump: that constant governs `docs/legal/terms-and-conditions.md` exclusively (`apps/web-platform/lib/legal/tc-version.ts:14,17,26-27`); the three documents amended here are notice/disclosure documents with no re-acceptance gate."
@@ -26,11 +28,16 @@ re_evaluation_triggers: "(1) **#6808 clears** — `WORKSPACES_LUKS_HEARTBEAT_URL
 
 > ## 📍 CURRENT DISPOSITION — read this first
 >
-> **The controlling section of this document is `§Amendment No. 2` (at the end).** It re-attests
-> against HEAD `c9747f0aa` and issues **SIGNED-OFF WITH ACCEPTED RESIDUAL, subject to one
-> pre-merge evidentiary condition (E-1, §A2.6)**. Everything before it is superseded history,
-> preserved deliberately. Read order: this notice → `§Amendment No. 2` → the rest only if you
-> need to know how the position got here.
+> **The controlling section of this document is `§Amendment No. 3` (at the end).**
+>
+> **Disposition: SIGNED-OFF WITH ACCEPTED RESIDUAL. The ship Phase 5.5 Counsel-Review
+> CLO-Attestation gate is DISCHARGED. Clear to merge. No outstanding pre-merge condition.**
+>
+> The accepted residual is the DC-1 retained-plaintext volume — **accepted and undisclosed, not
+> cured**. See `§A3.5`.
+>
+> Everything before `§Amendment No. 3` is superseded history, preserved deliberately. Read order:
+> this notice → `§Amendment No. 3` → the rest only if you need to know how the position got here.
 
 ---
 
@@ -795,3 +802,180 @@ This is the **v1 internal CLO-agent sign-off** under the Soleur-as-tenant-zero p
 operator retains an optional veto. **External** counsel re-review remains reserved for the
 frontmatter re-evaluation triggers. All output in this PR and in this audit remains **draft
 material requiring professional legal review**.
+
+*(End of Amendment No. 2. Its condition E-1 is discharged by Amendment No. 3 below.)*
+
+---
+---
+
+# Amendment No. 3 — E-1 discharged; final disposition
+
+**Date:** 2026-08-02
+**Amending authority:** `clo` agent (Soleur legal domain leader), v1 counsel-review attestation
+authority under the Soleur-as-tenant-zero posture.
+**Effect:** condition **E-1 is DISCHARGED**. This audit's disposition is **final**.
+
+## A3.1 — E-1 discharged, verified rather than accepted
+
+Door 1 was taken. The operator authorised the dispatch and the run landed. I verified it against
+the GitHub API and the raw run log rather than from the report I was handed — the whole reason
+Amendments 1 and 2 exist is that a prior attestation certified a summary.
+
+**Run 30749271370** — `workflow_dispatch`, branch `main` @ `b5871b9f6d`, created
+**2026-08-02T13:07:46Z**, completed `13:08:24Z`, conclusion **`success`**. Confirmed to be the
+**newest** run of `workspaces-luks-verify.yml`, ahead of 30130277489 (2026-07-24).
+
+Extracted from the run log verbatim, not quoted from the change report:
+
+```
+[luks-monitor] OK: /mnt/data is LUKS-backed (device_type=crypto_LUKS mount_source=/dev/mapper/workspaces escrow=ok header=readable)
+[luks-monitor] SOLEUR_WORKSPACES_READYZ ready=true writable=true populated=true workspace_count=8 expected=8 capacity=use=6%,mount=rw
+[luks-monitor] WARN: WORKSPACES_LUKS_HEARTBEAT_URL absent — heartbeat not pushed (operator wires it at cutover)
+app /health=200
+workspaces-luks re-assert PASSED (blkid=crypto_LUKS, mapper mount, escrow ok, /health 200, readyz ready=true, workspace inventory >= baseline).
+```
+
+Two integrity checks I ran that were not asked for, because a matching log excerpt is not the
+same as a sound measurement:
+
+1. **The probe that ran is the probe this PR reviewed.** The run was dispatched on `main`, not on
+   the feature branch. That is *correct* — the probe measures the live host, not the branch — but
+   it is only equivalent if the branch has not modified the probe. `git diff main...HEAD` over
+   `apps/web-platform/infra/luks-monitor.sh` and `.github/workflows/workspaces-luks-verify.yml`
+   is **empty**. The measurement is therefore valid for this branch.
+2. **The green is non-vacuous, and I confirmed the mechanism rather than the claim.**
+   `workspace_count=8 expected=8` means the fail-closed inventory comparison had a real operand
+   on both sides; the workflow's own `seed_workspace_count` documentation warns that a missing
+   baseline leaves that comparison with nothing to compare, which is not what happened. The run
+   was dispatched with `SEED_WORKSPACE_COUNT` empty, i.e. the read-only path — the workflow header
+   documents this step as read-only and device-opening-free.
+
+**The evidence matches ruling A exactly, and this is the point of ruling A:** the log reports
+`device_type=crypto_LUKS` and `mount_source=/dev/mapper/workspaces` as **two separate fields**.
+`device_type` is measured by `blkid` on the *backing* device resolved from `cryptsetup status`;
+`/dev/mapper/workspaces` is the *decrypted mount source*. The withdrawn banner collapsed these
+into one compound that was false of either device read alone. The published wording now mirrors
+the instrument.
+
+**E-1 is DISCHARGED.** The published present-tense clause is supported by same-day evidence.
+
+## A3.2 — The run corroborated the reasoning that required it
+
+`[luks-monitor] WARN: WORKSPACES_LUKS_HEARTBEAT_URL absent — heartbeat not pushed` confirms
+**#6808 is live from inside the probe itself**. This is worth recording as a methodological point,
+not just a fact: the merge-day gate was required on the argument that between dispatches nothing
+is watching and a #6812-class silent revert would go unpaged. The run did not merely satisfy the
+gate — it independently re-evidenced the premise that made the gate necessary. Had this been
+waived as ceremony, the waiver would have rested on the assumption the run itself disproves.
+
+## A3.3 — Ruling C is retrospectively validated on grounds I had not identified
+
+Recording this because it strengthens a ruling by an argument I did not make at the time, and
+because the next person to revisit ruling C should see it.
+
+The NFR-027 register entry records, alongside the run: *"**Scope is web-1 only:** web-2's
+workspaces volume is knowingly left plaintext-but-empty pre-flip — a recorded, gate-enforced
+deviation from #6588's 'every `var.web_hosts` member' AC, tracked **#6931**."* This follows from
+the Terraform: `hcloud_volume.workspaces` is created `for_each = var.web_hosts` with
+`format = "ext4"`, while `workspaces_luks` covers **web-1 only**.
+
+The pre-ruling wording — *"Stored workspace git data sits on a LUKS-encrypted volume … on the
+Hetzner host in the EU region that serves the Web Platform"* — would have been false as to
+**web-2's** plaintext volume as well, a **second** over-claim independent of the DC-1 retained
+backstop, and one I did not identify when issuing ruling C. The narrowed referent
+(*"the volume from which … workspace git data is served"*) excludes it correctly and for the right
+reason: web-2 sits at serving-weight 0 and serves no workspace git data. **Ruling C was necessary
+on two independent grounds, not one.**
+
+## A3.4 — On strengthening #6808: no, and here is the better fix
+
+**Do not escalate #6808 beyond `priority/p1-high` + `type/security`. Keep it where this PR put
+it.** Three reasons:
+
+- **Today produced no new fact.** The dead heartbeat is *why* #6808 exists. The run corroborated
+  it; it did not discover it. Re-triaging on re-confirmation of a known fact makes priority a
+  record of how recently something was looked at rather than of how bad it is.
+- **`p0-critical` means "drop everything,"** which contradicts the disposition I am signing in the
+  same document. A label that contradicts its own attestation degrades the label system for every
+  future reader.
+- **The bounding fact is unchanged** — zero arms-length data subjects (#3723 OPEN, verified).
+
+**But the existing escalation is not sufficient either, for a reason today's run exposed.**
+`workspaces-luks-verify.yml` is **`workflow_dispatch`-only** — its own header says so, and all
+four runs in its history are manual dispatches. So while #6808 is open there is **no automatic
+verification of any kind**: the heartbeat is the only continuous control and it is dead. Before
+this PR that was an internal operations gap. It is now the thing standing behind a **published,
+present-tense** Article 32 verification claim. The gap changed in **kind**, not in degree — and a
+priority label is the wrong instrument for a change in kind.
+
+**Recommended instead — a compensating control, not a label bump:**
+
+1. **Add a `schedule:` trigger to `workspaces-luks-verify.yml` while #6808 is open.** Cheap,
+   automatic, and — unlike the heartbeat — it needs no operator secret-wiring, which is precisely
+   what #6808 is blocked on. This bounds the decay of the published claim without depending on the
+   thing that is broken. File as a sub-task of #6808 or a linked **P2**.
+2. **#6808 should not be closeable until either the heartbeat is wired *or* the schedule
+   exists.** Record that on the issue, so closing the narrow secret-wiring task cannot silently
+   retire the broader guarantee.
+3. **Correct the #6808 comment.** The 2026-07-24 comment says it gates *"a live published
+   over-claim."* Ruling C removed that over-claim, so the framing is now obsolete and overstated.
+   What #6808 gates today is the **continued truth of a published present-tense verification
+   claim** — accurate, still serious, and materially different. Leaving the stale framing invites
+   a future reader to conclude the issue was mis-triaged and quietly downgrade it.
+
+**New re-evaluation trigger, recorded now so it is not re-derived: claim decay.** While #6808 is
+open, if no successful `workspaces-luks-verify` run lands within any **trailing 30-day window**
+while the published *"is verified live"* clause stands, the clause **must** be re-tensed to a
+dated past verification (Amendment No. 2, Door 2) or withdrawn. A present-tense verification claim
+with nothing verifying it decays into exactly the defect class #6588 exists to close, and it
+decays silently — which is the property that makes it dangerous.
+
+## A3.5 — The residual, carried forward unchanged and unsoftened
+
+**Nothing in this amendment cures the DC-1 residual, and nothing in the merge-day green touches
+it.** A full un-wiped plaintext copy of every workspace remains on `hcloud_volume.workspaces`,
+attached, un-wiped, and **undisclosed to users**. The CLO recommendation to disclose was
+**OVERRIDDEN by the operator** and reaffirmed; it stands as an **accepted, undisclosed residual**,
+tracked on **#6808**, ledgered as `plaintext-exception` (#6897, `expires_on: 2026-10-22`, internal
+only), and named in the Article 30 register at PA-1(g) and PA-2(g).
+
+Ruling C stopped the published wording from **aggravating** the residual. That is all it did.
+
+**What bounds it is unchanged: zero arms-length data subjects (#3723 OPEN).** The escalation
+trigger stands in full — **if any route onboards a first arms-length user while #6808 is open,
+this becomes p0, the hold must be re-raised, and the published wording must be qualified *before*
+that user is onboarded, not after.** The bounding fact disappears at the moment of onboarding, not
+at the moment anyone notices.
+
+Separately tracked and not part of this residual: **#6931** (web-2's plaintext-but-empty volume),
+now correctly outside the published claim per §A3.3.
+
+## A3.6 — Final disposition
+
+**SIGNED-OFF WITH ACCEPTED RESIDUAL.**
+
+**The ship Phase 5.5 Counsel-Review CLO-Attestation gate is DISCHARGED. There is no outstanding
+pre-merge condition. Clear to merge.**
+
+For `/soleur:ship` and any downstream gate, unambiguously:
+
+- **Gate status:** DISCHARGED.
+- **Blocking items:** none.
+- **Accepted residual:** one — the DC-1 retained plaintext volume, accepted and undisclosed, not
+  cured, tracked #6808 / #6897, bounded by zero arms-length data subjects.
+- **Follow-ups, none merge-blocking:** the `schedule:` compensating control and the #6808 comment
+  correction (§A3.4); the canonical/mirror banner divergence issue (§A2.7); the two P2
+  internal-record items (§A2.9); #6931 (§A3.3).
+
+I reach this on the merits. Across three passes this audit went from certifying a diff that was
+never shipped, to blocking on five defects, to signing a diff I verified line by line against the
+tree, the infrastructure, the register, the code, and a same-day live probe. **No surviving
+published sentence misstates the infrastructure, and no published sentence is stronger than the
+Article 30 register in either direction.** That is the standard #6588 was opened to restore, and
+it is met.
+
+This remains the **v1 internal CLO-agent sign-off** under the Soleur-as-tenant-zero posture. The
+operator retains an optional veto. **External** counsel re-review remains reserved for the
+frontmatter re-evaluation triggers — unchanged, live, and now joined by the claim-decay trigger
+in §A3.4. All output in this PR and in this audit remains **draft material requiring professional
+legal review**.
