@@ -132,9 +132,10 @@ The justification in (a)(ii) was, when first written, **false**. `rule-metrics-a
 counts reached `rule-metrics.json` **nowhere**; `operator-digest` never reads that file; and
 `.claude/.rule-incidents*` is gitignored and worktree-scoped, so it dies with `clean_gone`.
 
-Shipping the framing without the readout was the one outcome to avoid, so this PR adds
-`summary.gate_exemptions` (per-rule bypass counts), `summary.gate_override_count`, and
-`summary.gate_timeout_warn_count` to Stage C. The emitter was also corrected: the per-rule id rides
+Shipping the framing without the readout was the one outcome to avoid, so this PR adds five keys to Stage C: `summary.gate_exemptions` (per-rule bypass
+counts), `gate_override_count`, `gate_timeout_warn_count`,
+`gate_failopen_warn_count`, plus — added at review, after they were found to be
+write-only — `gate_corpus_unreadable_warn_count` and `gate_zero_tagged_warn_count`. The emitter was also corrected: the per-rule id rides
 in the **structured `rule_id`** (`net-issue-flow-mandated-filing--<rule-id>`), not in
 `rule_text_prefix`, which nothing parses. The signal worth watching is the **comparison**: exemptions
 rising while overrides fall is the intended effect; both rising means the gate is being routed
@@ -151,10 +152,26 @@ This is why the override is left working and unchanged, and why its help text wa
 describe several legitimate uses rather than one. The exemption does **not** generalize, and reading
 it as "the principled replacement for the override" would be a mistake.
 
-### (d) A PR that adds a tag cannot use it
+### (d) A PR that adds a tag cannot use it — and revocation is not retroactive
+
+**Merge-base is a convenience anchor, not a trust anchor.** `origin/main` is a
+local remote-tracking ref and `git update-ref` is unprivileged, so this collapses
+into the already-conceded "runs in a process the claimant controls" — it is not
+an independent guarantee, and §Merge-base above should not be read as claiming
+one. What it does buy is that the honest path cannot self-grant by accident.
+
+Revocation has the asymmetry worth stating: because the read is bounded to an
+ancestor of `origin/main`, a branch cannot forge a NEWER corpus, but it can sit
+on an OLDER one. `git rebase --onto <commit-before-the-untag>` — or simply
+branching from an older main — restores a marker that has since been removed.
+So DC-1's "untagging is a one-line corpus edit under this same gate" is true of
+`main` and does NOT bind any open branch whose merge-base predates the untag,
+and nothing forces a rebase. Not exploitable while both rules stay tagged; it
+becomes live the first time a tag is dropped.
 
 Because the corpus is read at the merge-base, the exemption does not work on the PR that introduces a
-tag — including this one, which therefore carries the blanket override and says so. Branches open
+tag — including this one, which therefore must carry the blanket override, with a
+justification per filed issue, when `/ship` writes the final PR body. Branches open
 when this merges will report `Mandating rules: 0` until rebased. Both are correct behaviour and
 routine noise, not faults; the report distinguishes "read failed" from "read OK, zero tagged" and
 gives each its own telemetry id so the two are never confused.

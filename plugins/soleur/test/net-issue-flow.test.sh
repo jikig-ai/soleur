@@ -50,9 +50,14 @@ if [[ "${GH_FAIL:-0}" == "1" ]]; then
   echo "stub gh: simulated API failure" >&2
   exit 1
 fi
+# The PR number is validated, not just the flags: dropping "$PR_NUMBER" from
+# the `gh pr view` calls would otherwise resolve whatever PR the cwd points at
+# while jq's bare-#N match still used the passed number -- a silent desync.
 case "$*" in
-  *"pr view"*"--json body"*)      cat "$PR_BODY_FILE" ;;
-  *"pr view"*"--json createdAt"*) printf '%s\n' "${PR_CREATED_AT_FIXTURE}" ;;
+  *"pr view 999"*"--json body"*)      cat "$PR_BODY_FILE" ;;
+  *"pr view 999"*"--json createdAt"*) printf '%s\n' "${PR_CREATED_AT_FIXTURE}" ;;
+  *"pr view"*"--json body"*|*"pr view"*"--json createdAt"*)
+    echo "stub gh: pr view without the expected PR number: $*" >&2; exit 64 ;;
   *"issue list"*)                 cat "$ISSUE_LIST_FILE" ;;
   *) echo "stub gh: unhandled argv: $*" >&2; exit 64 ;;
 esac
@@ -80,6 +85,15 @@ cat > "$WORK/bin/git" <<STUB
 printf '%s\n' "\$*" >> "\${GIT_CALLS:-/dev/null}"
 case "\$*" in
   "merge-base"*)
+    # EXACT argv, not a prefix. A prefix-matching stub answers identically for
+    # any refs, so `merge-base HEAD HEAD` -- which in production resolves to
+    # HEAD and lets a PR tag a rule and exempt ITSELF in the same diff -- would
+    # be indistinguishable from the correct call. That is the feature's central
+    # claim, so the stub has to be able to reject.
+    if [[ "\$*" != "merge-base origin/main HEAD" ]]; then
+      echo "stub git: unexpected merge-base argv: \$*" >&2
+      exit 64
+    fi
     if [[ "\${MB_FAIL:-0}" == "1" ]]; then
       echo "stub git: simulated merge-base failure" >&2
       exit 128
@@ -87,13 +101,14 @@ case "\$*" in
     printf '%s\n' "\${MB_SHA_FIXTURE:-abc1234def5678}"
     ;;
   "show "*":AGENTS.rules.md")
-    # A bare ':AGENTS.rules.md' (no ref) is the index read. Serve it a DISTINCT,
-    # fully-tagged corpus so that if the gate ever falls back to it the
-    # exemption would WRONGLY succeed -- making the fail-open detectable as a
-    # behaviour change, not just as a missing file.
+    # Serve the merge-base SHA the honest path resolves. EVERY other ref --
+    # a bare ':path' (staged index) or a direct HEAD read -- gets a DISTINCT,
+    # fully-tagged corpus, so a gate reading the wrong ref does not merely fail
+    # to find a file: it SUCCEEDS with a wider set, flipping a BLOCKED case to
+    # exempt. The fail-open becomes a behaviour change, not a missing file.
     case "\$*" in
-      "show :AGENTS.rules.md") cat "\${INDEX_CORPUS_FILE:-/dev/null}" ;;
-      *)                       cat "\${CORPUS_FILE:-/dev/null}" ;;
+      "show \${MB_SHA_FIXTURE:-abc1234def5678}:AGENTS.rules.md") cat "\${CORPUS_FILE:-/dev/null}" ;;
+      *)                                                        cat "\${INDEX_CORPUS_FILE:-/dev/null}" ;;
     esac
     ;;
   *) exec "$REAL_GIT" "\$@" ;;
@@ -136,6 +151,52 @@ run_gate() {
     "$GATE" 999 ) > "$WORK/out" 2>&1
   CASE_RC=$?
 }
+
+# Corpus fixtures. These are parsed by scripts/lint-rule-bodies.py's own
+# parse_bodies (the gate shells out to it), so they must be REAL corpora:
+# a gated `## SECTION` heading with `- ` body lines at column 0.
+#
+# The last two entries under Workflow Gates are the load-bearing negatives.
+# A shell `grep -F '[mandates-filing]'` -- the gate's original derivation --
+# honoured BOTH, because it enforced only the id-prefix conjunct while
+# parse_bodies enforces four (section, `- ` at column 0, not pointer-shaped,
+# prefix). Measured on the shipped corpus, the grep form derived 4 ids to
+# parse_bodies' 2: an indented sub-bullet or a plain prose line carrying the
+# marker is invisible to the ADR-092 ack gate, the hash manifest and
+# lint-rule-ids.py, but visible to grep -- a silent, permanent, repo-wide
+# self-grant needing no ack. Keep both shapes here.
+cat > "$WORK/corpus-default" <<'CORPUS'
+## Hard Rules
+
+- Investigate any non-zero exit [id: hr-when-a-command-exits-non-zero-or-prints]. Never treat a failed step as success.
+
+## Workflow Gates
+
+- When deferring a capability, default to documenting it in-place [id: wg-when-deferring-a-capability-create-a] [mandates-filing]. File an issue ONLY when the triple test passes.
+- `/ship` Phase 5.5 blocks PR-ready without `Tracks #NNNN` companions [id: wg-block-pr-ready-on-undeferred-operator-steps] [mandates-filing] [skill-enforced: ship Phase 5.5 Undeferred Operator-Step Gate]. **Why:** #4066.
+- Defer only after inline triage [id: wg-defer-only-after-inline-triage]. This rule RESTRICTS filing; it must never be exempt.
+- An id that exists ONLY in this fixture, never in the shipped corpus [id: wg-fixture-only-mandating-rule] [mandates-filing].
+  - INDENTED sub-bullet: not a body line, so the ack gate cannot see it [id: wg-indented-subbullet-must-not-derive] [mandates-filing].
+
+Prose line, no bullet: also invisible to the ack gate [id: wg-prose-line-must-not-derive] [mandates-filing].
+
+## Code Quality
+
+- A cq rule that carries the marker on an ACK-UNGATED prefix [id: cq-tagged-but-ungated-prefix] [mandates-filing]. Must not be derived.
+CORPUS
+
+# The staged-index / wrong-ref corpus. Distinct on purpose: it tags the id used
+# by the merge-base-unresolvable case, so a fallback to the index -- or a read of
+# any ref other than the resolved merge-base -- flips that case from BLOCKED to
+# exempt and is caught as a behaviour change rather than a missing file.
+cat > "$WORK/corpus-index" <<'CORPUS'
+## Workflow Gates
+
+- Anything the author staged [id: wg-block-pr-ready-on-undeferred-operator-steps] [mandates-filing].
+- Anything at all [id: wg-self-granted-by-the-index] [mandates-filing].
+CORPUS
+
+MANDATED="wg-block-pr-ready-on-undeferred-operator-steps"
 
 # ---------------------------------------------------------------------------
 # Case 1 (THE mandatory one): NET = +3, no override -> MUST exit 1.
@@ -354,35 +415,6 @@ fi
 # that is too permissive, which is the failure mode that matters for a gate.
 # ===========================================================================
 
-# Realistic corpus: two tagged gated rules, one tagged UNGATED-prefix rule
-# (cq-*, which the ADR-092 ack gate does not cover, so the exemption must not
-# honour it), and one untagged rule that genuinely restricts filing.
-cat > "$WORK/corpus-default" <<'CORPUS'
-## Hard Rules
-
-- Investigate any non-zero exit [id: hr-when-a-command-exits-non-zero-or-prints]. Never treat a failed step as success.
-
-## Workflow Gates
-
-- When deferring a capability, default to documenting it in-place [id: wg-when-deferring-a-capability-create-a] [mandates-filing]. File an issue ONLY when the triple test passes.
-- `/ship` Phase 5.5 blocks PR-ready without `Tracks #NNNN` companions [id: wg-block-pr-ready-on-undeferred-operator-steps] [mandates-filing] [skill-enforced: ship Phase 5.5 Undeferred Operator-Step Gate]. **Why:** #4066.
-- Defer only after inline triage [id: wg-defer-only-after-inline-triage]. This rule RESTRICTS filing; it must never be exempt.
-- An id that exists ONLY in this fixture, never in the shipped corpus [id: wg-fixture-only-mandating-rule] [mandates-filing].
-
-## Code Quality
-
-- A cq rule that carries the marker on an ACK-UNGATED prefix [id: cq-tagged-but-ungated-prefix] [mandates-filing]. Must not be derived.
-CORPUS
-
-# The staged-index corpus. Distinct on purpose: it tags the id used by the
-# merge-base-unresolvable case, so a fallback to `git show :path` would flip
-# that case from BLOCKED to exempt and the assertion below would catch it.
-cat > "$WORK/corpus-index" <<'CORPUS'
-- Anything the author staged [id: wg-block-pr-ready-on-undeferred-operator-steps] [mandates-filing].
-- Anything at all [id: wg-self-granted-by-the-index] [mandates-filing].
-CORPUS
-
-MANDATED="wg-block-pr-ready-on-undeferred-operator-steps"
 
 # One issue referencing PR #999, with a controllable body/state.
 mk_issue() { # $1=number  $2=body  $3=state (omit key entirely if literal ABSENT)
@@ -422,7 +454,8 @@ if grep -qE "^  Exempt:[[:space:]]+1\b.*#7001.*$MANDATED" "$WORK/out"; then pass
 else fail "Exempt: line must name #7001 and $MANDATED; got: $(tr '\n' '|' < "$WORK/out")"; fi
 if grep -qE '^  Net:[[:space:]]+\+0\b' "$WORK/out"; then pass "Net: +0 after exemption (1 filed, 1 exempt, 0 closing)"
 else fail "expected 'Net: +0'; got: $(tr '\n' '|' < "$WORK/out")"; fi
-if grep -qE "^  Mandating rules:[[:space:]]+3[[:space:]]+\(.*$MANDATED.*merge-base abc1234" "$WORK/out"; then
+if grep -qE "^  Mandating rules:[[:space:]]+3[[:space:]]+\(.*$MANDATED.*merge-base abc1234" "$WORK/out" \
+   && ! grep -qE 'Mandating rules:.*(indented-subbullet|prose-line|ungated-prefix)' "$WORK/out"; then
   pass "report prints the derived ids AND the merge-base (not just a count)"
 else fail "must print 'Mandating rules: 3 (<ids>, merge-base <sha>)'; got: $(tr '\n' '|' < "$WORK/out")"; fi
 
@@ -483,6 +516,16 @@ neg "bare #N mention is not a companion" "$(mk_issue 7001 "$(claim_body "$MANDAT
 neg "companion inside a fenced block"    "$(mk_issue 7001 "$(claim_body "$MANDATED")" OPEN)" "$PRB_FENCED"
 neg "Tracks #70010 does not satisfy #7001" "$(mk_issue 7001 "$(claim_body "$MANDATED")" OPEN)" "$PRB_LONGER"
 
+# LEFT boundary. Without `(^|[^A-Za-z])` the match is a bare substring, so
+# `BackRefs`/`ReTracks`/`XRefs` all satisfy the companion — a word that merely
+# ENDS in Refs/Tracks is not a companion keyword.
+PRB_GLUED="$WORK/prb-glued"; printf 'Deferred.\n\nBackRefs #7001\n' > "$PRB_GLUED"
+neg "BackRefs #7001 is not a Refs companion (left boundary)" \
+    "$(mk_issue 7001 "$(claim_body "$MANDATED")" OPEN)" "$PRB_GLUED"
+PRB_GLUED2="$WORK/prb-glued2"; printf 'Deferred.\n\nReTracks #7001\n' > "$PRB_GLUED2"
+neg "ReTracks #7001 is not a Tracks companion (left boundary)" \
+    "$(mk_issue 7001 "$(claim_body "$MANDATED")" OPEN)" "$PRB_GLUED2"
+
 # --- FR4: an UNBALANCED fence must fail CLOSED ------------------------------
 # The two sibling ship gates end their fence-stripper with
 # `END { if (in_fence) exit 2 }`; this gate's had no such arm, so an unbalanced
@@ -533,6 +576,159 @@ run_gate
 if grep -qE '^  Rejected:.*#7002.*wg-defer-only-after-inline-triage' "$WORK/out"; then
   pass "Rejected: line names the issue and the offending claim"
 else fail "expected a Rejected: line naming #7002; got: $(tr '\n' '|' < "$WORK/out")"; fi
+
+
+# --- The derivation uses the ACK GATE'S OWN PARSER, not a second grep --------
+# Four conjuncts (gated section, `- ` at column 0, not pointer-shaped, prefix),
+# not one. A shell grep enforced only the prefix, so an indented sub-bullet or a
+# prose line carrying the marker was honoured while being invisible to ADR-092,
+# the hash manifest and lint-rule-ids.py -- a permanent repo-wide self-grant
+# needing no ack. Measured: the grep form derived 4 ids where parse_bodies sees 2.
+PRB_SHAPE="$WORK/prb-shape"; printf 'Deferred.\n\nTracks #7010\nTracks #7011\n' > "$PRB_SHAPE"
+PR_BODY_FILE="$PRB_SHAPE"; export PR_BODY_FILE
+set_issues "$(mk_issue 7010 "$(claim_body wg-indented-subbullet-must-not-derive)" OPEN)"
+run_gate
+if [[ "$CASE_RC" -eq 1 ]]; then pass "INDENTED sub-bullet carrying the marker is NOT derived"
+else fail "indented sub-bullet self-granted the exemption; exit $CASE_RC"; fi
+set_issues "$(mk_issue 7011 "$(claim_body wg-prose-line-must-not-derive)" OPEN)"
+run_gate
+if [[ "$CASE_RC" -eq 1 ]]; then pass "PROSE line carrying the marker is NOT derived"
+else fail "prose line self-granted the exemption; exit $CASE_RC"; fi
+
+# --- Cardinality: EXEMPT must subtract exactly, not zero out ----------------
+# Every other exemption fixture is a single issue, under which `NET=0 if EXEMPT>0`
+# is indistinguishable from `FILED - EXEMPT - CLOSING`. 1-of-1 is all-of-1.
+PRB_MULTI="$WORK/prb-multi"; printf 'Deferred.\n\nTracks #7001\n' > "$PRB_MULTI"
+PR_BODY_FILE="$PRB_MULTI"; export PR_BODY_FILE
+{
+  mk_issue 7001 "$(claim_body "$MANDATED")" OPEN
+  mk_issue 7002 "Follow-up from #999, no claim." OPEN
+  mk_issue 7003 "Another from #999, no claim." OPEN
+  mk_issue 7004 "A third from #999, no claim." OPEN
+} | jq -s '.' > "$WORK/issues-multi"
+ISSUE_LIST_FILE="$WORK/issues-multi"; export ISSUE_LIST_FILE
+run_gate
+if [[ "$CASE_RC" -eq 1 ]]; then pass "1 exempt of 4 filed still BLOCKS (exemption subtracts, not zeroes)"
+else fail "4 filed / 1 exempt must block; got exit $CASE_RC"; fi
+if grep -qE '^  Filing:[[:space:]]+4\b' "$WORK/out" \
+   && grep -qE '^  Exempt:[[:space:]]+1\b' "$WORK/out" \
+   && grep -qE '^  Net:[[:space:]]+\+3\b' "$WORK/out"; then
+  pass "Filing: 4 / Exempt: 1 / Net: +3 (arithmetic, not a boolean)"
+else fail "expected Filing: 4, Exempt: 1, Net: +3; got: $(tr '\n' '|' < "$WORK/out")"; fi
+
+# Two exempt in one run — pins the pair formatter, never exercised past one entry.
+PRB_TWO="$WORK/prb-two"; printf 'Deferred.\n\nTracks #7001\nRefs #7005\n' > "$PRB_TWO"
+PR_BODY_FILE="$PRB_TWO"; export PR_BODY_FILE
+{
+  mk_issue 7001 "$(claim_body "$MANDATED")" OPEN
+  mk_issue 7005 "$(claim_body wg-when-deferring-a-capability-create-a)" OPEN
+} | jq -s '.' > "$WORK/issues-two"
+ISSUE_LIST_FILE="$WORK/issues-two"; export ISSUE_LIST_FILE
+run_gate
+if grep -qE '^  Exempt:[[:space:]]+2\b.*#7001.*#7005' "$WORK/out"; then
+  pass "two exemptions render as a joined pair list"
+else fail "expected both #7001 and #7005 on the Exempt: line; got: $(tr '\n' '|' < "$WORK/out")"; fi
+
+# --- A fenced close-keyword must NOT buy NET credit -------------------------
+# CLOSING read the RAW body while the marker, claim and companion matches all
+# read the stripped one. A quoted commit message or issue body -- routine in this
+# repo's PR descriptions -- therefore bought a free unit of NET.
+PRB_FENCED_CLOSE="$WORK/prb-fenced-close"
+printf 'Quoting an issue body for context:\n\n```\nCloses #4242\n```\n\nNothing actually closed.\n' > "$PRB_FENCED_CLOSE"
+PR_BODY_FILE="$PRB_FENCED_CLOSE"; export PR_BODY_FILE
+set_issues "$(mk_issue 7001 "Follow-up from #999." OPEN)"
+run_gate
+if grep -qE '^  Closing:[[:space:]]+0\b' "$WORK/out"; then pass "fenced 'Closes #N' does NOT count toward CLOSING"
+else fail "fenced close-keyword inflated CLOSING; got: $(tr '\n' '|' < "$WORK/out")"; fi
+if [[ "$CASE_RC" -eq 1 ]]; then pass "fenced close-keyword still BLOCKS (no free NET credit)"
+else fail "fenced 'Closes' bought a pass; exit $CASE_RC"; fi
+
+# --- Rejection causes are DISTINCT, not one collapsed string ----------------
+# Sampling one cause of six cannot detect them all collapsing to "rejected".
+PRB_CAUSES="$WORK/prb-causes"; printf 'Deferred.\n\nTracks #7001\nTracks #7002\nTracks #7003\n' > "$PRB_CAUSES"
+PR_BODY_FILE="$PRB_CAUSES"; export PR_BODY_FILE
+{
+  mk_issue 7001 "Follow-up from #999, no claim at all." OPEN
+  mk_issue 7002 "$(printf 'From #999.\n\nMandated-By: %s\nMandated-By: wg-bogus\n' "$MANDATED")" OPEN
+  mk_issue 7003 "$(claim_body "$MANDATED")" CLOSED
+} | jq -s '.' > "$WORK/issues-causes"
+ISSUE_LIST_FILE="$WORK/issues-causes"; export ISSUE_LIST_FILE
+run_gate
+distinct=0
+grep -qE '^  Rejected:.*#7001 \(no Mandated-By' "$WORK/out" && distinct=$((distinct + 1))
+grep -qE '#7002 \(multiple Mandated-By' "$WORK/out" && distinct=$((distinct + 1))
+grep -qE '#7003 \(issue is not OPEN' "$WORK/out" && distinct=$((distinct + 1))
+if [[ "$distinct" -eq 3 ]]; then pass "three rejection causes render DISTINCTLY (not one collapsed string)"
+else fail "expected 3 distinct causes, matched $distinct; got: $(tr '\n' '|' < "$WORK/out")"; fi
+
+# --- Telemetry: the gate's own rows, read from the incident file ------------
+# A source grep for `_emit warn` is satisfied by a body replaced with `:`.
+# The attribution rule_id is the feature's stated justification and had no test.
+INC="$INCIDENTS_REPO_ROOT/.claude/.rule-incidents.jsonl"
+rm -f "$INC"
+PR_BODY_FILE="$PRB_OK"; export PR_BODY_FILE
+set_issues "$(mk_issue 7001 "$(claim_body "$MANDATED")" OPEN)"
+run_gate
+attr=0
+if [[ -r "$INC" ]]; then
+  attr="$(jq -sr --arg r "net-issue-flow-mandated-filing--$MANDATED" \
+    '[.[] | select(.rule_id == $r and .event_type == "bypass")] | length' < "$INC" 2>/dev/null || echo 0)"
+fi
+if [[ "$attr" -ge 1 ]]; then pass "exempt emits per-rule attribution in the STRUCTURED rule_id"
+else fail "expected a bypass row under net-issue-flow-mandated-filing--<rule>; got $attr"; fi
+
+# A rejected (non-exempt) run must NOT emit an attribution row — otherwise the
+# assertion above passes on every invocation and proves nothing.
+rm -f "$INC"
+set_issues "$(mk_issue 7001 "$(claim_body wg-does-not-exist-anywhere)" OPEN)"
+run_gate
+attr_neg=0
+if [[ -r "$INC" ]]; then
+  attr_neg="$(jq -sr '[.[] | select(.rule_id | startswith("net-issue-flow-mandated-filing--"))] | length' < "$INC" 2>/dev/null || echo 0)"
+fi
+if [[ "$attr_neg" -eq 0 ]]; then pass "a rejected claim emits NO attribution row (the row is discriminating)"
+else fail "non-exempt run emitted $attr_neg attribution row(s)"; fi
+
+# corpus-unreadable and zero-tagged must be DISTINCT ids, not one.
+rm -f "$INC"
+MB_FAIL=1; export MB_FAIL
+run_gate
+MB_FAIL=0; export MB_FAIL
+unreadable=0
+if [[ -r "$INC" ]]; then
+  unreadable="$(jq -sr '[.[] | select(.rule_id == "net-issue-flow-mandated-filing-corpus-unreadable")] | length' < "$INC" 2>/dev/null || echo 0)"
+fi
+if [[ "$unreadable" -ge 1 ]]; then pass "corpus-unreadable emits its own rule_id"
+else fail "expected a corpus-unreadable row; got $unreadable"; fi
+
+# A corpus that reads OK but tags NOTHING is a different condition and must say so.
+rm -f "$INC"
+: > "$WORK/corpus-empty"
+printf '## Workflow Gates\n\n- A rule with no marker at all [id: wg-untagged-fixture-rule].\n' > "$WORK/corpus-empty"
+CORPUS_FILE="$WORK/corpus-empty"; export CORPUS_FILE
+run_gate
+zero=0
+if [[ -r "$INC" ]]; then
+  zero="$(jq -sr '[.[] | select(.rule_id == "net-issue-flow-mandated-filing-zero-tagged")] | length' < "$INC" 2>/dev/null || echo 0)"
+fi
+if [[ "$zero" -ge 1 ]]; then pass "read-OK-but-zero-tagged emits a DISTINCT rule_id from unreadable"
+else fail "expected a zero-tagged row; got $zero"; fi
+if grep -qiE 'zero rules tagged' "$WORK/out"; then pass "zero-tagged corpus is announced in the report"
+else fail "zero-tagged must be visible; got: $(tr '\n' '|' < "$WORK/out")"; fi
+CORPUS_FILE="$WORK/corpus-default"; export CORPUS_FILE
+
+# --- Cross-file parity: the emitted id prefix and the aggregator's reader ----
+# Two literal copies of one string in two languages. If the emitter changes,
+# summary.gate_exemptions silently becomes [] and the orphan gate cannot see it
+# (it exempts everything startswith("net-issue-flow")). The PR's own thesis.
+for pair in "net-issue-flow-mandated-filing--:$GATE" \
+            "net-issue-flow-mandated-filing--:$AGG" \
+            "net-issue-flow-timeout:$REPO_ROOT/.claude/hooks/ship-net-issue-flow-gate.sh" \
+            "net-issue-flow-timeout:$AGG"; do
+  lit="${pair%%:*}"; f="${pair#*:}"
+  if grep -qF -- "$lit" "$f"; then pass "parity: '$lit' present in ${f##*/}"
+  else fail "parity broken: '$lit' missing from ${f##*/} — readout would go silently empty"; fi
+done
 
 # --- The blanket override is untouched (FR7) --------------------------------
 # It must keep working unchanged for the cases the exemption cannot cover --
@@ -603,7 +799,7 @@ printf '\n'
 # deleting a case changed nothing observable. Baseline before the exemption
 # work was 23.
 # ---------------------------------------------------------------------------
-MIN_ASSERTIONS=64
+MIN_ASSERTIONS=83
 if [[ "$passes" -lt "$MIN_ASSERTIONS" ]]; then
   printf '  FAIL anti-vacuity floor: %d assertions ran, expected >= %d\n' "$passes" "$MIN_ASSERTIONS"
   fails=$((fails + 1))

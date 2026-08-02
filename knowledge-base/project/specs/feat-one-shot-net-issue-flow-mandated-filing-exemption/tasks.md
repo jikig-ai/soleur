@@ -56,7 +56,7 @@ challenges: knowledge-base/project/specs/feat-one-shot-net-issue-flow-mandated-f
 - [ ] 3.6 FR6: `_emit bypass` under `net-issue-flow-mandated-filing--<rule-id>` with `flipped=true|false`
 - [ ] 3.7 Re-run both suites and **re-measure wall clock** against the ≤6 s budget
 
-## Phase 4 — Mutation battery (record in `mutation-evidence.md`)
+## Phase 4 — Mutation battery (shipped as the executable `run-mutations.sh` + `mutations.py`, NOT a point-in-time `mutation-evidence.md` — an evidence markdown cannot be re-run)
 
 - [ ] 4.1 Delete the exemption block entirely (headline mutation) → suite reds
 - [ ] 4.2 Drop the `^(hr|wg)-` restriction → `cq-*` case reds
@@ -94,3 +94,44 @@ challenges: knowledge-base/project/specs/feat-one-shot-net-issue-flow-mandated-f
 - [ ] 7.4 **Re-measure wall clock** (final AC11 check)
 - [ ] 7.5 Enrol the automated follow-through: assert the merge-base derivation returns 2 once merged (unverifiable pre-merge by construction)
 - [ ] 7.6 PR body: state that **this PR carries the blanket override** (its own decision-challenge issue makes it net-positive), and argue the ADR-131 position honestly per D5
+
+---
+
+## Completion record (2026-08-02)
+
+The checkboxes above are left **unchecked deliberately**. Bulk-toggling them would
+convert unverified work into work that reads as verified — the defect class this
+repo already documents. What was actually run, with the measured result, is
+recorded here and in the commit messages; each figure below came from executing
+the command, not from restating the plan.
+
+**Where measurement contradicted the plan (the plan is authoritative for intent,
+never for facts):**
+
+- 0.1 baseline was **23** assertions as predicted; the counting trap was real
+  (`grep -cE '(^|[; ])pass '` returns 24). Suite now at **83**, floor at 83.
+- 0.3 `B_ALWAYS` was **42547** at plan time, **42583** after the two markers, and
+  **43351** after the review-added tag legend. Cap 46000, still `[OK]`.
+- 0.5 wall clock measured **5.7–6.3 s** on this host, not the plan's 7.7–8.1 s.
+  The spread across hosts IS the hazard the timeout fix addresses; both ranges
+  are now recorded in the hook and its suite rather than one being picked.
+- Phase 4 shipped as an executable harness (`run-mutations.sh` + `mutations.py`,
+  37 mutations) instead of the plan's point-in-time `mutation-evidence.md` — an
+  evidence markdown cannot be re-run, and `ship/SKILL.md` now names the harness.
+- FR6's readout required a defect fix the plan did not anticipate: `_emit`
+  hardcoded `rule_id="net-issue-flow"`, so per-rule attribution was landing in
+  the free-text prefix and `summary.gate_exemptions` would have been empty
+  forever.
+- The plan's FR10 premise ("`lint-agents-enforcement-tags.py` validates the ship
+  anchor") is **false** — it defaults to `AGENTS.md`, which ADR-151 made
+  pointer-only, so it lints 0 of 42 tags. Filed as #7172; the FR10 instruction
+  still holds, its stated reason did not.
+- `tasks.md` 3.6 specified a `flipped=` telemetry field. Not implemented: the
+  emit already distinguishes exempt rows by rule_id and the aggregator counts
+  them, so a boolean would have been a second unread pin.
+
+**Found at review, not at plan or implementation time** (all fixed, see the
+review commit): a corpus-shape self-grant that bypassed the ADR-092 ack gate
+entirely; the `(d)` remedy unpinned in the hook payload; a fenced `Closes #N`
+inflating CLOSING; the hook suite writing ~116 fake rows into real telemetry;
+and cases 1–14 running against an empty corpus.

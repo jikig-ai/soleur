@@ -531,7 +531,8 @@ not applied.
 
 ## Files to Create
 
-`ADR-155-*.md`; `specs/<branch>/mutation-evidence.md`; `specs/<branch>/tasks.md`;
+`ADR-155-*.md`; `specs/<branch>/run-mutations.sh` + `mutations.py` (shipped in place of a
+point-in-time `mutation-evidence.md`, which cannot be re-run); `specs/<branch>/tasks.md`;
 `specs/<branch>/decision-challenges.md` (already written).
 
 **Not edited (checked):** `plugins/soleur/commands/go.md` (verified **0** net-issue-flow references;

@@ -93,7 +93,9 @@ fi
 
 # Budget. The gate's dominant cost is `gh issue list --limit 500` (~4-5 s over 5
 # sequential paginated REST calls) plus two `gh pr view` calls; measured wall
-# clock on the unmodified gate is 5.7-8.1 s. Against the previous `timeout 8`
+# clock on the unmodified gate spans 5.7-8.1 s across hosts (7.7-8.1 s measured
+# at plan time, 5.7-6.3 s re-measured at implementation time on a second host --
+# the spread IS the hazard). Against the previous `timeout 8`
 # that is a coin flip: a timed-out run returns 124, which the `-eq 1` test below
 # translates to `exit 0` — no deny, no telemetry, indistinguishable from a pass.
 # A BLOCKING gate that intermittently always-passes is strictly worse than the
@@ -109,7 +111,7 @@ fi
 TO=()
 command -v timeout >/dev/null 2>&1 && TO=(timeout 25)
 
-OUT="$("${TO[@]}" bash "$GATE" 2>&1)"
+OUT="$("${TO[@]+"${TO[@]}"}" bash "$GATE" 2>&1)"
 RC=$?
 
 # A timeout is not a policy verdict, so it still fails OPEN — but it must not
@@ -130,7 +132,9 @@ RC=$?
 # real local telemetry before the split: 8 warns, none of them separable.
 # Still `net-issue-flow*`-prefixed, so the aggregator's orphan exemption covers it.
 if [[ "$RC" -eq 124 ]]; then
-  emit_incident net-issue-flow-timeout warn "gate exceeded the 25s ceiling — failed open" 2>/dev/null || true
+  if declare -F emit_incident >/dev/null 2>&1; then
+    emit_incident net-issue-flow-timeout warn "gate exceeded the 25s ceiling — failed open" 2>/dev/null || true
+  fi
 fi
 
 [[ "$RC" -eq 1 ]] || exit 0

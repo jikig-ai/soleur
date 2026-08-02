@@ -5,6 +5,17 @@ owner: founder
 ---
 # AGENTS Rules — the whole corpus, loaded every session
 
+> **Tag legend.** `[hook-enforced: …]`, `[skill-enforced: …]`, `[scanner-enforced: …]`
+> and `[compliance-tier]` are descriptive — they say how THAT rule is enforced.
+> `[mandates-filing]` is not: it grants the rule's filings an exemption from the
+> **net-issue-flow** gate, so adding or dropping it changes what a *different*
+> gate lets through, and editing it is not a local change. See
+> [ADR-155](knowledge-base/engineering/architecture/decisions/ADR-155-cross-gate-exemption-markers-in-the-rule-corpus.md).
+> The marker is only honoured on a real body line (`- ` at column 0, under a
+> gated `## SECTION`) — the gate derives it via this repo's own
+> `scripts/lint-rule-bodies.py`, so an indented sub-bullet or prose line carrying
+> it grants nothing.
+
 ## Hard Rules
 
 - Never `git stash` in worktrees [id: hr-never-git-stash-in-worktrees] [hook-enforced: guardrails.sh guardrails:block-stash-in-worktrees]. Commit WIP first; `git show <commit>:<path>` inspects old code without touching the working tree.

@@ -31,10 +31,19 @@ MUTATIONS: dict[str, tuple[str, str, str, str]] = {
         TEST,
     ),
     # --- derivation (FR1) ---------------------------------------------------
-    "M1 drop the ^(hr|wg)- prefix restriction": (
+    # The derivation now shells out to the ack gate's OWN parser, so the
+    # prefix/section/line-shape conjuncts are all enforced in one place. The
+    # mutation that matters is reverting to a second, looser parser here.
+    "M1 revert to a shell grep (a SECOND, looser parser)": (
         GATE,
-        r"'\[id: (hr|wg)-[a-z0-9-]+\]'",
-        r"'\[id: [a-z0-9-]+\]'",
+        '| python3 "$REPO_ROOT/scripts/lint-rule-bodies.py" --emit-mandating-ids 2>/dev/null \\\n      || true)"',
+        "| grep -F -- '[mandates-filing]' | grep -oE '\\[id: (hr|wg)-[a-z0-9-]+\\]' | sed -E 's/^\\[id: (.*)\\]$/\\1/' | sort -u || true)\"",
+        TEST,
+    ),
+    "M1b drop the line-shape conjuncts in parse_bodies": (
+        "scripts/lint-rule-bodies.py",
+        'if not in_section or not line.startswith("- ") or POINTER_LINE_RE.match(line):',
+        "if False:",
         TEST,
     ),
     "M2 drop the merge-base SHA guard": (
@@ -49,16 +58,25 @@ MUTATIONS: dict[str, tuple[str, str, str, str]] = {
         'CORPUS_TEXT="$(cat AGENTS.rules.md 2>/dev/null || true)"',
         TEST,
     ),
+    # In production `merge-base HEAD HEAD` == HEAD, letting a PR tag a rule and
+    # exempt ITSELF in the same diff — the feature's central claim. A stub that
+    # prefix-matched `merge-base*` could not tell this from the honest call.
+    "M3c resolve merge-base against HEAD HEAD (same-PR self-grant)": (
+        GATE,
+        'MB="$(git merge-base origin/main HEAD 2>/dev/null || true)"',
+        'MB="$(git merge-base HEAD HEAD 2>/dev/null || true)"',
+        TEST,
+    ),
     "M3b read the STAGED INDEX (bare :path)": (
         GATE,
         'CORPUS_TEXT="$(git show "${MB}:AGENTS.rules.md" 2>/dev/null || true)"',
         'CORPUS_TEXT="$(git show ":AGENTS.rules.md" 2>/dev/null || true)"',
         TEST,
     ),
-    "M4 per-line match -> whole-corpus match": (
-        GATE,
-        "| grep -F -- '[mandates-filing]' \\\n      ",
-        "| ",
+    "M4 parser ignores the gated-SECTION conjunct": (
+        "scripts/lint-rule-bodies.py",
+        'if not in_section or not line.startswith("- ") or POINTER_LINE_RE.match(line):',
+        'if not line.startswith("- ") or POINTER_LINE_RE.match(line):',
         TEST,
     ),
     # --- predicate (FR3) ----------------------------------------------------
@@ -82,14 +100,32 @@ MUTATIONS: dict[str, tuple[str, str, str, str]] = {
     ),
     "M8 drop the companion requirement": (
         GATE,
-        'elif (($pb | test("(Tracks|Refs)[ \\t]+#" + ($i.number | tostring) + "([^0-9]|$)")) | not)',
+        'elif (($pb | test("(^|[^A-Za-z])(Tracks|Refs)[ \\t]+#" + ($i.number | tostring) + "([^0-9]|$)")) | not)',
         "elif false",
+        TEST,
+    ),
+    "M8b CLOSING reads the RAW body again (fenced Closes buys NET credit)": (
+        GATE,
+        'CLOSING_NUMS="$(printf \'%s\\n\' "$PR_BODY_SCAN" \\',
+        'CLOSING_NUMS="$(printf \'%s\\n\' "$PR_BODY" \\',
+        TEST,
+    ),
+    "M8c exemption zeroes NET instead of subtracting": (
+        GATE,
+        "NET=$(( FILED - EXEMPT - CLOSING ))",
+        'if [[ "$EXEMPT" -gt 0 ]]; then NET=0; else NET=$(( FILED - CLOSING )); fi',
         TEST,
     ),
     "M9 drop the companion right-boundary": (
         GATE,
-        '"(Tracks|Refs)[ \\t]+#" + ($i.number | tostring) + "([^0-9]|$)"',
-        '"(Tracks|Refs)[ \\t]+#" + ($i.number | tostring)',
+        '"(^|[^A-Za-z])(Tracks|Refs)[ \\t]+#" + ($i.number | tostring) + "([^0-9]|$)"',
+        '"(^|[^A-Za-z])(Tracks|Refs)[ \\t]+#" + ($i.number | tostring)',
+        TEST,
+    ),
+    "M9b drop the companion LEFT boundary (BackRefs/ReTracks satisfy it)": (
+        GATE,
+        '"(^|[^A-Za-z])(Tracks|Refs)[ \\t]+#"',
+        '"(Tracks|Refs)[ \\t]+#"',
         TEST,
     ),
     "M10 anchor the claim loosely (matches mid-prose)": (
@@ -142,6 +178,27 @@ MUTATIONS: dict[str, tuple[str, str, str, str]] = {
         'REJECTED_DETAIL+="#${_num} (rejected); "',
         TEST,
     ),
+    # Telemetry had NO axis in the first battery: silencing every emit left the
+    # suite byte-identical, including the per-rule attribution that is the
+    # feature's whole justification.
+    "M16b silence ALL gate telemetry": (
+        GATE,
+        "_emit_as() {\n  if declare -F emit_incident >/dev/null 2>&1; then",
+        "_emit_as() {\n  if false; then",
+        TEST,
+    ),
+    "M16c attribution rides in the free-text prefix, not the rule_id": (
+        GATE,
+        '_emit_as "net-issue-flow-mandated-filing--${_detail}" bypass "exempt pr=${PR_NUMBER} issue=${_num}"',
+        '_emit bypass "exempt rule=${_detail} pr=${PR_NUMBER} issue=${_num}"',
+        TEST,
+    ),
+    "M16d collapse corpus-unreadable and zero-tagged into one id": (
+        GATE,
+        "_emit_as net-issue-flow-mandated-filing-zero-tagged warn",
+        "_emit_as net-issue-flow-mandated-filing-corpus-unreadable warn",
+        TEST,
+    ),
     "M17 Mandating rules: count without the ids": (
         GATE,
         """printf '  Mandating rules: %s  (%s, merge-base %s)\\n' \\""",
@@ -190,14 +247,18 @@ MUTATIONS: dict[str, tuple[str, str, str, str]] = {
     "M22 timeout telemetry moved BELOW the early exit": (
         HOOK,
         """if [[ "$RC" -eq 124 ]]; then
-  emit_incident net-issue-flow-timeout warn "gate exceeded the 25s ceiling — failed open" 2>/dev/null || true
+  if declare -F emit_incident >/dev/null 2>&1; then
+    emit_incident net-issue-flow-timeout warn "gate exceeded the 25s ceiling — failed open" 2>/dev/null || true
+  fi
 fi
 
 [[ "$RC" -eq 1 ]] || exit 0""",
         """[[ "$RC" -eq 1 ]] || exit 0
 
 if [[ "$RC" -eq 124 ]]; then
-  emit_incident net-issue-flow-timeout warn "gate exceeded the 25s ceiling — failed open" 2>/dev/null || true
+  if declare -F emit_incident >/dev/null 2>&1; then
+    emit_incident net-issue-flow-timeout warn "gate exceeded the 25s ceiling — failed open" 2>/dev/null || true
+  fi
 fi""",
         HOOK_TEST,
     ),
@@ -212,7 +273,7 @@ fi""",
         """TO=()
 command -v timeout >/dev/null 2>&1 && TO=(timeout 25)
 
-OUT="$("${TO[@]}" bash "$GATE" 2>&1)\"""",
+OUT="$("${TO[@]+"${TO[@]}"}" bash "$GATE" 2>&1)\"""",
         """OUT="$(timeout 25 bash "$GATE" 2>&1)\"""",
         HOOK_TEST,
     ),

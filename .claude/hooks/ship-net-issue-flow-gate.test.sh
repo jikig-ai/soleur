@@ -15,13 +15,26 @@ export LC_ALL=C
 HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ship-net-issue-flow-gate.sh"
 
 fails=0
-pass() { printf '  ok   %s\n' "$1"; }
+# Counter exists for the anti-vacuity floor at the bottom. This PR added ~120
+# lines of cases to this file and a floor to the sibling suite while leaving
+# this one unable to notice a deleted case — the same defect, one file over.
+passes=0
+pass() { printf '  ok   %s\n' "$1"; passes=$((passes + 1)); }
 fail() { printf '  FAIL %s\n' "$1"; fails=$((fails + 1)); }
 
 [[ -x "$HOOK" ]] || { printf 'FAIL: hook missing/not executable: %s\n' "$HOOK" >&2; exit 1; }
 
 WORK="$(mktemp -d -t net-flow-hook.XXXXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
+
+# Redirect telemetry for the WHOLE suite, not per-case. Every gated command in
+# the deny loop makes the hook emit a real `net-issue-flow|deny` row; scoping the
+# redirect to two cases wrote ~116 fake rows into the operator's own
+# .rule-incidents.jsonl in one afternoon, against 11 genuine rows in 12 days.
+# Those rows feed rule-metrics-aggregate.sh and the soak probe THIS PR edits, so
+# the suite was poisoning the very metrics the feature adds.
+export INCIDENTS_REPO_ROOT="$WORK/incidents-root"
+mkdir -p "$INCIDENTS_REPO_ROOT"
 
 # Fake project dir holding a stub gate script whose exit code we control.
 mk_project() {
@@ -105,10 +118,19 @@ if jq -e '.hookSpecificOutput.hookEventName == "PreToolUse"' < "$WORK/out" >/dev
   pass "deny payload carries hookEventName=PreToolUse"
 else fail "deny payload missing hookEventName"; fi
 reason="$(jq -r '.hookSpecificOutput.permissionDecisionReason // ""' < "$WORK/out")"
-for needle in "Fix inline" "Close something" "Override" "gate-override: net-issue-flow"; do
+# The hook payload is what an agent actually reads at `gh pr ready` — it does
+# not see the gate's stdout except as the embedded ${OUT}. Deleting the entire
+# (d) block left both suites green before these four assertions existed.
+for needle in "Fix inline" "Close something" "Override" "gate-override: net-issue-flow" \
+              "(d) Mandated filing" "Mandated-By: <rule-id>" "[mandates-filing]" \
+              "if yours is not listed"; do
   if [[ "$reason" == *"$needle"* ]]; then pass "deny reason offers remedy: $needle"
   else fail "deny reason missing remedy: $needle"; fi
 done
+# And the reframe must hold in the payload, not just in the file.
+if [[ "$reason" != *"architectural-pivot deferral"* ]]; then
+  pass "deny reason does not frame the override as architectural-pivot-only"
+else fail "deny reason still calls the override an 'architectural-pivot deferral'"; fi
 if [[ "$reason" == *"Net:     +3"* ]]; then pass "deny reason embeds the delegated script's output"
 else fail "deny reason must embed delegated output"; fi
 
@@ -148,9 +170,10 @@ if is_deny; then fail "bad .cwd must not produce a deny"
 else pass "nonexistent .cwd falls back without denying"; fi
 
 # ---------------------------------------------------------------------------
-# FR0 — the timeout budget. Measured on the unmodified gate: 5.7-8.1 s wall
-# clock against a `timeout 8` ceiling, with 1 of 3 plan-phase runs returning
-# rc=124. Because the hook translates any RC != 1 to `exit 0`, a timeout is a
+# FR0 — the timeout budget. Measured on the unmodified gate: 7.7-8.1 s on the
+# plan-phase host (1 of 3 runs returned rc=124) and 5.7-6.3 s on the
+# implementation host — 5.7-8.1 s across both. The SPREAD is the hazard: the
+# same gate straddles an 8 s ceiling depending on where it runs. Because the hook translates any RC != 1 to `exit 0`, a timeout is a
 # SILENT always-pass: no deny, no telemetry, indistinguishable from a real
 # pass. All three cases below are BEHAVIORAL — they drive the hook and read
 # its decision, never grep its source — so each one names a mutation that
@@ -268,8 +291,18 @@ else
 fi
 
 printf '\n'
-if [[ "$fails" -eq 0 ]]; then
-  printf 'ship-net-issue-flow-gate.test.sh: ALL PASS\n'; exit 0
+
+# ANTI-VACUITY FLOOR. Set AT the running count, never below: a floor with slack
+# silently absorbs a deleted case, which is the one thing it exists to stop.
+# `-lt` (a floor, not equality) so the suite grows without churn.
+MIN_ASSERTIONS=35
+if [[ "$passes" -lt "$MIN_ASSERTIONS" ]]; then
+  printf '  FAIL anti-vacuity floor: %d assertions ran, expected >= %d\n' "$passes" "$MIN_ASSERTIONS"
+  fails=$((fails + 1))
 fi
-printf 'ship-net-issue-flow-gate.test.sh: %d FAILED\n' "$fails"
+
+if [[ "$fails" -eq 0 ]]; then
+  printf 'ship-net-issue-flow-gate.test.sh: ALL PASS (%d assertions)\n' "$passes"; exit 0
+fi
+printf 'ship-net-issue-flow-gate.test.sh: %d FAILED (%d passed)\n' "$fails" "$passes"
 exit 1

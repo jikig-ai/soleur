@@ -89,25 +89,18 @@ if [[ -r "$_incidents" ]]; then
   # shellcheck disable=SC1090
   source "$_incidents" 2>/dev/null || true
 fi
-_emit() {
-  if declare -F emit_incident >/dev/null 2>&1; then
-    emit_incident "net-issue-flow" "$1" "$2" || true
-  fi
-}
-
-# Same, but with an explicit rule_id. The exemption's per-rule attribution MUST
-# ride in the STRUCTURED rule_id field, not in the free-text prefix: the
-# aggregator keys every counter on rule_id and never parses rule_text_prefix, so
-# an attribution written into the prefix is unreadable by construction — and
-# attribution is the entire argument for preferring this over "just reword the
-# help text". Consumed by summary.gate_exemptions in rule-metrics-aggregate.sh.
-# Every id used here keeps the `net-issue-flow` prefix, which that aggregator
-# already exempts from the orphan gate (ids here are tier-gated out of AGENTS.md).
+# Emit under an explicit rule_id. Per-rule attribution MUST ride in the
+# STRUCTURED rule_id, never the free-text prefix — the aggregator keys every
+# counter on rule_id and does not parse rule_text_prefix, so an attribution
+# written into the prefix is unreadable by construction. See ADR-155 (b).
+# Every id here keeps the `net-issue-flow` prefix, which rule-metrics-aggregate.sh
+# already exempts from the orphan gate.
 _emit_as() {
   if declare -F emit_incident >/dev/null 2>&1; then
     emit_incident "$1" "$2" "$3" || true
   fi
 }
+_emit() { _emit_as "net-issue-flow" "$@"; }
 
 _fail_open() {
   printf '\n'
@@ -138,8 +131,26 @@ PR_CREATED_AT="$(gh pr view "$PR_NUMBER" --json createdAt --jq .createdAt 2>/dev
   || _fail_open "could not read PR #${PR_NUMBER} createdAt"
 [[ -n "$PR_CREATED_AT" ]] || _fail_open "PR #${PR_NUMBER} createdAt was empty"
 
+# --- Fence-strip the PR body ONCE, before anything reads it ------------------
+# Every consumer of the PR body must see the stripped form. Computing this
+# lazily next to the override check (where it used to live) left CLOSING reading
+# the RAW body, so a fenced `Closes #4242` — a quoted commit message, diff, or
+# issue body, which is routine in this repo's PR descriptions — bought a unit of
+# NET credit against a BLOCKING gate. Measured: raw body yields CLOSING=1 on a
+# fenced keyword, stripped yields 0. Same self-override class the marker match
+# already guards, reached through the CLOSING path instead.
+# `END { if (in_fence) exit 2 }` mirrors ship-operator-step-gate.sh and
+# ship-soak-followthrough-gate.sh. Without it an unbalanced fence degrades to
+# "strip nothing after the opener" — and the jq stripper in this same file
+# already fails closed, so the two halves disagreed.
+PR_BODY_SCAN="$(printf '%s\n' "$PR_BODY" | awk '
+  /^[[:space:]]*```/ { in_fence = !in_fence; next }
+  !in_fence { print }
+  END { if (in_fence) exit 2 }
+')" || PR_BODY_SCAN=""
+
 # --- CLOSING: issues this PR closes via close-keywords in its body -----------
-CLOSING_NUMS="$(printf '%s\n' "$PR_BODY" \
+CLOSING_NUMS="$(printf '%s\n' "$PR_BODY_SCAN" \
   | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+' \
   | grep -oE '[0-9]+' \
   | sort -un || true)"
@@ -181,11 +192,18 @@ else
     CORPUS_NOTE="corpus unreadable: AGENTS.rules.md absent at merge-base — exemption unavailable"
     _emit_as net-issue-flow-mandated-filing-corpus-unreadable warn "AGENTS.rules.md absent at merge-base pr=${PR_NUMBER}"
   else
+    # Derived by the ADR-092 gate's OWN parser, not by a second grep here.
+    # `parse_bodies` requires four conjuncts (gated `## SECTION`, `- ` at column
+    # 0, not pointer-shaped, `^(hr|wg)-`); a shell grep enforces only the last,
+    # so it is a strict SUPERSET along the line-shape axis — an indented
+    # sub-bullet or a prose line carrying the marker would be honoured here
+    # while being invisible to the ack gate, the manifest and lint-rule-ids.py.
+    # Measured on the shipped corpus: the grep form derived 4 ids to
+    # parse_bodies' 2. Fails CLOSED on any error (missing python3, parse
+    # failure, non-zero exit) — an empty set means the exemption is unavailable.
     MANDATING_IDS="$(printf '%s\n' "$CORPUS_TEXT" \
-      | grep -F -- '[mandates-filing]' \
-      | grep -oE '\[id: (hr|wg)-[a-z0-9-]+\]' \
-      | sed -E 's/^\[id: (.*)\]$/\1/' \
-      | sort -u || true)"
+      | python3 "$REPO_ROOT/scripts/lint-rule-bodies.py" --emit-mandating-ids 2>/dev/null \
+      || true)"
     if [[ -z "$MANDATING_IDS" ]]; then
       CORPUS_NOTE="corpus read OK, zero rules tagged — exemption inactive"
       _emit_as net-issue-flow-mandated-filing-zero-tagged warn "zero rules tagged at base=${MB:0:12} pr=${PR_NUMBER}"
@@ -230,7 +248,9 @@ GATE_ROWS="$(printf '%s' "$ISSUES_JSON" | jq -r \
 
   # A claim is a WHOLE LINE. `\r` is mandatory: GitHub returns CRLF bodies for
   # web-authored text, and a [ \t]-only anchor fails closed on a correct claim.
-  # Case-insensitive then downcased, so `Mandated-By: WG-...` still resolves.
+  # The KEY tolerates only `Mandated-By:`/`mandated-by:` case variants on its
+  # first letters (NOT `MANDATED-BY:`); the ID is matched case-insensitively and
+  # downcased, so `Mandated-By: WG-BLOCK-...` resolves.
   def claims:
     sf | split("\n")
     | map(select(test("^[ \t\r]*[Mm]andated-[Bb]y:[ \t\r]*[A-Za-z0-9-]+[ \t\r]*$")))
@@ -246,11 +266,18 @@ GATE_ROWS="$(printf '%s' "$ISSUES_JSON" | jq -r \
       . as $i
       | ($i.body | claims) as $c
       | (
-          if   ($c | length) == 0 then "no Mandated-By: claim"
+          # This rung FIRST: with an empty set every claim would otherwise be
+          # reported as "names a rule that does not carry [mandates-filing]",
+          # which is false and actively misleading during rollout — the rule
+          # usually DOES carry it, the corpus just was not readable at this
+          # merge-base. Telling an agent its correct claim is wrong sends it to
+          # guess another id, which the help text explicitly warns against.
+          if   ($ok | length) == 0 then "exemption inactive here (no qualifying rules at this merge-base)"
+          elif ($c | length) == 0 then "no Mandated-By: claim"
           elif ($c | length) > 1  then "multiple Mandated-By: claims"
           elif ($ok | index($c[0])) == null then "claim names a rule that does not carry [mandates-filing]: " + $c[0]
           elif ($i.state // "") != "OPEN" then "issue is not OPEN: " + ($i.state // "<absent>")
-          elif (($pb | test("(Tracks|Refs)[ \t]+#" + ($i.number | tostring) + "([^0-9]|$)")) | not)
+          elif (($pb | test("(^|[^A-Za-z])(Tracks|Refs)[ \t]+#" + ($i.number | tostring) + "([^0-9]|$)")) | not)
             then "PR body has no Tracks/Refs #" + ($i.number | tostring) + " companion"
           else "" end
         ) as $why
@@ -277,6 +304,9 @@ while IFS=$'\t' read -r _num _verdict _detail; do
     # Per-rule attribution lives in the STRUCTURED rule_id, not the free-text
     # prefix field, so `summary.gate_exemptions` can group by rule without
     # parsing prose. Still covered by the aggregator's net-issue-flow* prefix.
+    # Safe to interpolate: on the exempt path $_detail is a corpus-derived id,
+    # constrained to [a-z0-9-] by parse_bodies. Rejected rows carry free text and
+    # never reach here.
     _emit_as "net-issue-flow-mandated-filing--${_detail}" bypass "exempt pr=${PR_NUMBER} issue=${_num}"
   else
     REJECTED_DETAIL+="#${_num} (${_detail}); "
@@ -315,18 +345,12 @@ if [[ "$NET" -le 0 ]]; then
 fi
 
 # --- NET > 0: override or block ---------------------------------------------
-# Strip fenced code blocks before the marker match, mirroring the soak gate's
-# corpus handling. The BLOCKED message below PRINTS the literal marker, so an
-# agent that pastes a gate failure into the PR description as context would
-# otherwise smuggle in its own override — reported as OVERRIDDEN with a bypass
-# event, while nothing in the body reads as a deliberate decision. Same
-# self-override class the hook header guards against for spec files, via a
-# different corpus path.
-PR_BODY_SCAN="$(printf '%s\n' "$PR_BODY" | awk '
-  /^[[:space:]]*```/ { in_fence = !in_fence; next }
-  !in_fence { print }
-')"
-
+# $PR_BODY_SCAN is the fence-stripped body, computed once near the top. The
+# BLOCKED message below PRINTS the literal marker, so an agent that pastes a
+# gate failure into the PR description as context would otherwise smuggle in its
+# own override — reported as OVERRIDDEN with a bypass event, while nothing in
+# the body reads as a deliberate decision. Same self-override class the hook
+# header guards against for spec files, via a different corpus path.
 if printf '%s' "$PR_BODY_SCAN" | grep -qF -- "$MARKER"; then
   printf '\nnet-issue-flow: OVERRIDDEN via the gate-override marker in the PR body.\n'
   printf '  Net is +%d; the override is recorded as a deliberate decision.\n' "$NET"
@@ -346,7 +370,9 @@ printf '      auto-flip (<=100 lines AND <=4 files) already covers most of it.\n
 printf '      NOTE this is a SIZE test. If the blocker is AUTHORITY (an\n'
 printf '      operator-only credential or production decision), (a) does not\n'
 printf '      apply no matter how small the diff would be — see (d).\n'
-printf '  (b) Close something — if a filed issue supersedes an open one, close it.\n'
+printf '  (b) Close something — if a filed issue supersedes an open one, close it\n'
+printf '      AND add the `Closes #N` keyword to the PR body. CLOSING is parsed\n'
+printf '      from the body only; closing on GitHub alone changes nothing here.\n'
 printf '  (c) Override — add to the PR body:\n'
 printf '        %s\n' "$MARKER"
 printf '      plus a one-line justification per filed issue, or run with\n'

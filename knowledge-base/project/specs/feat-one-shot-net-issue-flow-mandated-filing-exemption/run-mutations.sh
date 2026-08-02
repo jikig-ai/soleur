@@ -94,5 +94,5 @@ else
 fi
 
 printf '=== %d mutations: killed=%d survived=%d broken=%d ===\n' "$n" "$killed" "$surv" "$broken"
-[[ "$n" -ge 25 ]] || { echo "FATAL: mutation list truncated (expected >=25)" >&2; exit 2; }
+[[ "$n" -ge 37 ]] || { echo "FATAL: mutation list truncated (expected >=37)" >&2; exit 2; }
 [[ "$surv" -eq 0 && "$broken" -eq 0 ]] || exit 1

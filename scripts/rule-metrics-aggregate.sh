@@ -379,6 +379,19 @@ report=$(jq -n \
           # — measured at 8 inseparable warns before the split.
           gate_timeout_warn_count: (($counts["net-issue-flow-timeout"].warn_count // 0)),
           gate_failopen_warn_count: (($counts["net-issue-flow"].warn_count // 0)),
+          # These two were write-only until now: the single-dash ids that
+          # correctly keep them OUT of gate_exemptions (which matches the
+          # double-dash prefix) also kept them out of every other key, while
+          # orphan_rule_ids filters the whole net-issue-flow prefix. So they
+          # reached this file NOWHERE — consequence (b) of ADR-155 reproduced
+          # one level down, in the PR that diagnosed it. They are distinct
+          # conditions: "could not read the corpus" vs "read it, nothing tagged".
+          # The second is expected rollout noise and should decay to 0; the
+          # first should always be 0.
+          gate_corpus_unreadable_warn_count:
+            (($counts["net-issue-flow-mandated-filing-corpus-unreadable"].warn_count // 0)),
+          gate_zero_tagged_warn_count:
+            (($counts["net-issue-flow-mandated-filing-zero-tagged"].warn_count // 0)),
           # Telemetry-drop sentinel counts (issue #3509). Per-class counts
           # default to 0 when the class has no occurrences. emit_incident
           # has no `flock_timeout` site (indefinite flock per plan-review),

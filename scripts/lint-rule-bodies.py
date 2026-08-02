@@ -535,11 +535,32 @@ def cmd_check(
                 )
 
     # New security-tagged rule (additive) → loud annotation, NOT a block (AC5).
+    #
+    # EXCEPT `[mandates-filing]`, which is blocked. The other three markers only
+    # DESCRIBE how their own rule is enforced, so a new rule carrying one grants
+    # nothing. `[mandates-filing]` grants cross-gate exemption authority over
+    # net-issue-flow the moment it merges — and AP-017's additive-new-rule lane
+    # takes no ack, so without this it would arrive on a CI warning nobody is
+    # required to read. That is the widest door into the exemption, and it is the
+    # one an author reaches for precisely BECAUSE adding a rule is the sanctioned
+    # safe primitive. Requiring the ack here closes it without touching AP-017's
+    # general lane. See ADR-155 §(e).
     for rid, raw in head_bodies.items():
         if rid not in base_bodies and _has_security_tag(raw):
+            if "[mandates-filing]" in raw:
+                if head_hashes[rid] not in new_acks(rid):
+                    errors.append(
+                        f"::error::rule-body-lint: {rid} is a NEW rule carrying "
+                        "[mandates-filing], which grants it exemption authority over the "
+                        "net-issue-flow gate. Additive rules are normally ack-free, but "
+                        "this marker is not descriptive — it changes what another gate "
+                        f"lets through. Add `{rid}|{head_hashes[rid]}|<date>|{pr_ref}|<reason>` "
+                        f"to {ACKS_REL}. See ADR-155."
+                    )
+                continue
             print(
                 f"::warning::rule-body-lint: {rid} is a NEW security-tagged rule "
-                "([compliance-tier]/[hook-enforced]/[skill-enforced]/[mandates-filing]) — "
+                "([compliance-tier]/[hook-enforced]/[skill-enforced]) — "
                 "mandatory-human-review that it is not a toothless control.",
             )
 
@@ -561,6 +582,12 @@ def main() -> int:
         help="Emit `<sha256>  <id>` for EVERY rule body (ignores the hr/wg gate). "
              "Migration-proof helper; defaults to AGENTS.rules.md.",
     )
+    parser.add_argument(
+        "--emit-mandating-ids",
+        action="store_true",
+        help="Read a corpus on STDIN and print the ids of gated bodies carrying "
+             "[mandates-filing], one per line. Consumed by net-issue-flow.sh.",
+    )
     parser.add_argument("--check", action="store_true", help="Run the CI gate.")
     parser.add_argument("--base", default=None, help="Base git ref for --check (merge-base).")
     parser.add_argument("--root", type=Path, default=None, help="Repo root (default: script parent's parent).")
@@ -570,6 +597,35 @@ def main() -> int:
     root = (args.root or Path(__file__).resolve().parents[1]).resolve()
     manifest_path = root / MANIFEST_REL
     acks_path = root / ACKS_REL
+
+    # `--emit-mandating-ids` is a read-only reporter over STDIN, checked before
+    # the write/check XOR so it composes with neither.
+    #
+    # It exists so net-issue-flow.sh does not carry a SECOND parser for this
+    # file. A shell `grep -F '[mandates-filing]' | grep -oE '\[id: (hr|wg)-…\]'`
+    # enforces only the prefix conjunct, while `parse_bodies` enforces four:
+    # under a gated `## SECTION`, `line.startswith("- ")` at column 0, not
+    # pointer-shaped, and the prefix. The shell form is therefore a strict
+    # SUPERSET along the line-shape axis, and the gap is a silent self-grant:
+    # an INDENTED sub-bullet or a plain prose line carrying the marker plus an
+    # `[id: …]` is invisible to this gate, to SECURITY_TAG_MARKERS, to the hash
+    # manifest and to lint-rule-ids.py — but visible to grep. Measured on this
+    # corpus: the shell form derived 4 ids where parse_bodies sees 2.
+    # One parser, one predicate. See ADR-155.
+    if args.emit_mandating_ids:
+        if args.write or args.check or args.snapshot_all is not None:
+            print(
+                "ERROR: --emit-mandating-ids does not combine with other modes",
+                file=sys.stderr,
+            )
+            return 2
+        text = sys.stdin.read()
+        bodies = parse_bodies(text, SECTIONS)
+        for rid in sorted(
+            rid for rid, line in bodies.items() if "[mandates-filing]" in line
+        ):
+            print(rid)
+        return 0
 
     # `--snapshot-all` is a read-only reporter, not a mode of the gate: it is
     # checked before the write/check XOR so it composes with neither.

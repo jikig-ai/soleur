@@ -510,7 +510,7 @@ bash plugins/soleur/skills/ship/scripts/net-issue-flow.sh "$PR_NUMBER"
 ```
 
 [`net-issue-flow.sh`](./scripts/net-issue-flow.sh) emits the
-MANDATING-RULES / CLOSING / FILED / EXEMPT / REJECTED / NET block (enumerating
+`Mandating rules:` / `Closing:` / `Filing:` / `Exempt:` / `Rejected:` / `Net:` block (enumerating
 the actual issue numbers behind each count), exits **1** when `NET > 0` with no
 override or exemption, and **0** otherwise.
 
@@ -525,9 +525,11 @@ blocking gate silently always-pass** — strictly worse than the advisory surfac
 it replaces, because it also carries the authority of having passed. Do not
 "simplify" the query without re-running
 [`plugins/soleur/test/net-issue-flow.test.sh`](../../test/net-issue-flow.test.sh);
-its assertions pin all four, and the mutation battery at
-`specs/<branch>/run-mutations.sh` proves each can fail (29 mutations, all
-killed). Re-run BOTH before touching the query.
+its call-shape assertions pin all four. The mutation battery at
+`specs/<branch>/run-mutations.sh` is a SEPARATE artifact covering the exemption,
+the report and the timeout — it does not touch the FILED-query properties, so it
+is not evidence for them. Re-run the suite before touching the query, and the
+battery before touching the exemption.
 
 **Override (deliberate, not default).** A PR can be legitimately net-positive
 for several unrelated reasons: an architectural pivot, a discovered defect in
@@ -563,6 +565,13 @@ Such an issue is subtracted from `NET` when **all** of these hold:
 3. the issue is **OPEN**, and
 4. the PR body carries a `Tracks #<issue>` / `Refs #<issue>` companion.
 
+Three further conditions are enforced and easy to miss when reading the list
+above as exhaustive: the claimed id must match `^(hr|wg)-` (so the set stays
+inside the ADR-092 ack gate's coverage), the issue body must carry **exactly
+one** claim line (two valid-looking lines is not a valid claim — otherwise a
+good id launders a bad one), and both bodies are fence-stripped before matching,
+failing closed on an unbalanced fence.
+
 Every condition fails **closed**. The qualifying set is derived from the corpus,
 never listed in the script — a restated list is a second pin, and the copy that
 drifts is the one that runs. Adding the marker is a human-gated ADR-092 corpus
@@ -576,8 +585,8 @@ What it buys is a closed vocabulary and per-rule attribution. Do not describe it
 as tamper-evidence. See ADR-155.
 
 The report stays honest: `Filing:` keeps its true count, exemptions appear on
-their own `Exempt:` line naming the mandating rule, and every non-exempt filing
-gets a `Rejected:` line naming its cause. An exemption that silently reduced the
+their own `Exempt:` line naming the mandating rule, and a single `Rejected:`
+line names every non-exempt filing together with its cause. An exemption that silently reduced the
 count would be worse than the override, which at least leaves a marker behind.
 
 Rollout note: the corpus is read at the merge-base, so a PR that ADDS a tag
@@ -589,9 +598,12 @@ exemption in the same diff), and branches opened before the tag landed report
 wedge every merge, but each fail-open emits an `emit_incident … warn` row —
 `warn`, not `transient`, because `rule-metrics-aggregate.sh` counts only
 deny/bypass/applied/warn and a `transient` row would increment nothing, leaving
-"never fired" indistinguishable from "fail-opened every run". The hook's own
-`timeout` now emits the same way: it previously translated a timed-out gate to a
-silent pass, and the gate measures 5-8 s against what was an 8 s ceiling.
+"never fired" indistinguishable from "fail-opened every run". The hook's own `timeout` now
+emits too — as `warn`, but under its OWN rule_id `net-issue-flow-timeout`, not
+the shared one, so "the API was down" and "the gate was killed for running too
+long" stay separable (they have different fixes). It previously translated a
+timed-out gate to a silent pass, and the gate measures 5-8 s against what was an
+8 s ceiling.
 
 **Reachability (stated honestly).** The blocking enforcement is a PreToolUse
 hook on `gh pr ready` / `gh pr merge`. It therefore covers agent-driven merges
@@ -1151,24 +1163,27 @@ done
    # MANDATES would then be blocked by that gate with no exit but the
    # blanket override. Write the body to a file; do not inline it.
    BODY_FILE="$(mktemp -t deferred-automation.XXXXXXXX.md)"
-   cat > "$BODY_FILE" <<EOF
-   ${DESCRIPTION}
-
-   This is a deferred-automation backlog item per
-   wg-block-pr-ready-on-undeferred-operator-steps.
-   Re-evaluate when: ${CRITERION}
-   playwright-attempt: ${ATTEMPT_EVIDENCE}
-
-   Mandated-By: wg-block-pr-ready-on-undeferred-operator-steps
-   EOF
+   # printf, not a heredoc: this snippet is indented inside a nested list, and
+   # an indented terminator never closes a `<<EOF` (only `<<-EOF` strips, and
+   # only TABS). Copy-pasting the heredoc form hangs the shell.
+   {
+     printf '%s\n\n' "$DESCRIPTION"
+     printf 'This is a deferred-automation backlog item per\n'
+     printf 'wg-block-pr-ready-on-undeferred-operator-steps.\n'
+     printf 'Re-evaluate when: %s\n' "$CRITERION"
+     printf 'playwright-attempt: %s\n\n' "$ATTEMPT_EVIDENCE"
+     printf 'Mandated-By: wg-block-pr-ready-on-undeferred-operator-steps\n'
+   } > "$BODY_FILE"
    gh issue create --label type/chore --label deferred-automation \
      --title "$TITLE" --body-file "$BODY_FILE"
    ```
 
-   Keep BOTH `type/chore` and `deferred-automation` — this rule's own re-run
-   check looks for an OPEN `deferred-automation` issue, so dropping the label
-   leaves the agent blocked by two gates at once with no exit. Update the PR
-   body with `Tracks #NNNN` companions. Re-run detection. **Attempt-evidence precondition:** a browser/portal step may be filed `deferred-automation` ONLY if the issue body carries a `playwright-attempt:` line (per work Phase 4 Playwright-First Audit) proving a real attempt reached a true human gate (CAPTCHA / OTP / TOTP / passkey / push-MFA / payment-card / hardware-token). An a-priori "MFA-gated", "dashboard-only", or "no API path" assertion — or an `api-probe-403` from a narrowly-scoped token — does NOT satisfy this; if no attempt was made, STOP and run the Playwright attempt first. If the attempt reached an automatable gate that the tool could not complete (browser crash, MCP down), it is `attempted-blocked-on-tool`, NOT operator-only: file a `tooling`/`flaky` `type/chore` issue with the resume recipe instead, and remove the bullet from the operator section.
+   The load-bearing part is the literal `deferred-automation` string in the
+   BODY: `ship-operator-step-gate.sh` greps the issue body for it, and reads
+   `type/chore` from the labels. The `deferred-automation` LABEL is read by
+   nothing today — it is kept for human triage, not for the gate. Do not drop
+   the body sentence on the theory that the label covers it. Update the PR body
+   with `Tracks #NNNN` companions. Re-run detection. **Attempt-evidence precondition:** a browser/portal step may be filed `deferred-automation` ONLY if the issue body carries a `playwright-attempt:` line (per work Phase 4 Playwright-First Audit) proving a real attempt reached a true human gate (CAPTCHA / OTP / TOTP / passkey / push-MFA / payment-card / hardware-token). An a-priori "MFA-gated", "dashboard-only", or "no API path" assertion — or an `api-probe-403` from a narrowly-scoped token — does NOT satisfy this; if no attempt was made, STOP and run the Playwright attempt first. If the attempt reached an automatable gate that the tool could not complete (browser crash, MCP down), it is `attempted-blocked-on-tool`, NOT operator-only: file a `tooling`/`flaky` `type/chore` issue with the resume recipe instead, and remove the bullet from the operator section.
 2. **Cite an existing OPEN issue.** Operator pastes `#NNNN` per undeferred match. Skill verifies state/labels/sentinel and updates the PR body with `Tracks #NNNN`.
 3. **Override with operator-attestation.** Operator pastes a 1-paragraph justification (rare; e.g., first non-Soleur tenant onboarding triggers a one-off K-bis upload). Skill appends a `<!-- gate-override: wg-block-pr-ready-on-undeferred-operator-steps -->` HTML comment followed by the attestation text to the PR body, then proceeds.
 
@@ -1427,14 +1442,19 @@ Replace `BRANCH_NAME` with the actual branch name.
    |---|---|---|
    | `Tracks #N` / `Refs #N` | `ship-operator-step-gate.sh` AND the net-issue-flow mandated-filing exemption | the operator-step gate re-blocks, and a mandated filing loses its exemption and re-counts against NET |
    | `<!-- gate-override: net-issue-flow -->` + justifications | `net-issue-flow.sh` | a deliberate, recorded override is erased and the PR blocks again |
-   | `<!-- gate-override: wg-block-pr-ready-on-undeferred-operator-steps -->` + attestation | `ship-operator-step-gate.sh` | an operator attestation is erased |
+   | (none — `ship-operator-step-gate.sh` strips every HTML comment before matching, so no marker survives for it; its only override is `SOLEUR_SKIP_OPERATOR_STEP_GATE=1`) | — | — |
 
    Read the existing body FIRST and re-emit those lines verbatim in the new one:
 
    ```bash
    OLD_BODY="$(gh pr view PR_NUMBER --json body --jq .body)"
    # Preserved verbatim: companions and override markers + their justification lines.
-   printf '%s\n' "$OLD_BODY" | grep -nE '^\s*(Tracks|Refs) #[0-9]+|<!-- gate-override:'
+   # UNANCHORED, matching both readers (net-issue-flow.sh and
+   # ship-operator-step-gate.sh both grep without a line anchor). An `^\s*`
+   # form silently drops the trailing same-line shape
+   # `- Operator runs X (Tracks #123)`, which is exactly a companion this step
+   # promises to carry forward.
+   printf '%s\n' "$OLD_BODY" | grep -nE '(Tracks|Refs)[[:space:]]+#[0-9]+|<!-- gate-override:'
    ```
 
    Anything that grep prints belongs in the replacement body. **Why:** the
