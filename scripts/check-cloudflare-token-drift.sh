@@ -171,7 +171,16 @@ done
 #
 # It matters most at the two call sites wired in the same PR as this guard: the release
 # preflight prints "verified live" on exit 0, and the twice-daily scheduled arm is the only
-# continuous fleet-wide coverage there is.
+# CONTINUOUS coverage there is.
+#
+# Not "fleet-wide", though the line said so until #7152 measured it. The scheduled arm's
+# `DOPPLER_TOKEN` is a service token scoped to `prd_terraform`, so `doppler configs`
+# returns ONE config and the twice-daily run inspects 1 of 13 — the same "clean bill of
+# health for a question never asked" shape as the paragraph above, one layer up at the
+# scheduling layer. The run now publishes `configs`/`coverage` so the gap is loud, and
+# files an action-required issue while it persists; widening the token scope is an
+# operator decision and is tracked there. Until it lands, read a scheduled `clean` as
+# "clean in prd_terraform", never as a fleet claim.
 if (( ${#KEYSET[@]} + ${#ACCESS_BASESET[@]} == 0 )); then
   {
     echo "ERROR: enumerated 0 token-shaped keys across ${#CONFIGS[@]} config(s)${ONLY_MATCH:+ under --only '$ONLY_MATCH'}."
@@ -562,10 +571,10 @@ emit_json() {
   # `split("|", 1)` — maxsplit 1, so a diagnostic containing a pipe cannot shift fields.
   # Unverifiable rows get their own key rather than riding in "stale" with the diagnostic
   # sentence mis-rendered into the "config" field.
-  python3 - "$LIVE_N" "$DEAD_N" "$UNVERIFIABLE_N" "$PROBES_MADE" "${DEAD_ROWS[@]:-}" "--" "${UNVERIFIABLE_ROWS[@]:-}" <<'PY'
+  python3 - "$LIVE_N" "$DEAD_N" "$UNVERIFIABLE_N" "$PROBES_MADE" "${#CONFIGS[@]}" "${DEAD_ROWS[@]:-}" "--" "${UNVERIFIABLE_ROWS[@]:-}" <<'PY'
 import json, sys
-live, dead, unver, probes = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
-rest = sys.argv[5:]
+live, dead, unver, probes, configs = (int(sys.argv[i]) for i in range(1, 6))
+rest = sys.argv[6:]
 sep = rest.index("--")
 def rows(xs, second):
     out = []
@@ -588,7 +597,12 @@ def unver_rows(xs):
         out.append({"key": k, "cause": cause, "reason": reason})
     return out
 print(json.dumps({
-    "live": live, "dead": dead, "unverifiable": unver, "probes": probes,
+    # `configs` is emitted so a CONSUMER can tell a fleet-wide clean from a
+    # single-config clean. The detector exists to catch fan-out drift ("5 of 7
+    # configs stale after a dashboard roll"); a scan that saw ONE config cannot
+    # answer that question, and without this field the caller's `clean` verdict
+    # is indistinguishable from one earned across the whole fleet.
+    "live": live, "dead": dead, "unverifiable": unver, "probes": probes, "configs": configs,
     "stale": rows(rest[:sep], "config"),
     "unverifiable_keys": unver_rows(rest[sep + 1:]),
 }, indent=2))
