@@ -39,12 +39,30 @@ set -eo pipefail
 # shellcheck source=lib/incidents.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
 
+# shellcheck source=lib/hook-input.sh
+# FAIL-HARD (no `|| true`): a fail-soft source leaves hook_parse_input
+# undefined, the hook dies at the call under `set -e`, prints nothing, exits
+# non-zero, and the tool proceeds — defect 2 of #7164, reintroduced one line
+# above where every test points.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/hook-input.sh"
+
 INPUT=$(cat)
-# Single jq fork via @sh-escaped eval. Pattern from guardrails.sh — halves
-# hot-path overhead vs. two forks. @sh shell-escapes every value so any
-# attacker-controlled bytes in .tool_input.command / .cwd land as quoted
-# strings (no command injection through this surface).
-eval "$(echo "$INPUT" | jq -r '@sh "CMD=\(.tool_input.command // "") WORK_DIR=\(.cwd // "")"' 2>/dev/null || echo 'CMD="" WORK_DIR=""')"
+# Single jq fork, and NO shell evaluation of hook input. Halves hot-path
+# overhead vs. two forks. The previous comment claimed `@sh` quoting blocked
+# command injection through this surface; that held only for a STRING value —
+# an ARRAY .tool_input.command became a command eval ran (#7164).
+# Parse hook stdin WITHOUT shell evaluation (ADR-155: stdin is
+# model-controlled and untrusted). A non-string field is surfaced, never
+# coerced — coercion closes the RCE and leaves the guards evaded (#7164).
+# ADR-156: a hook that cannot fully parse its input asks. The exit lives
+# HERE, at the call site, not inside the library.
+if ! hook_parse_input "$INPUT"; then
+  hook_input_report "ship-unpushed-commits-gate"
+  hook_input_should_ask && { hook_input_emit_ask "ship-unpushed-commits-gate"; exit 0; }
+  exit 0
+fi
+CMD="$HOOK_CMD"
+WORK_DIR="$HOOK_CWD"
 : "${CMD:=}"
 : "${WORK_DIR:=}"
 

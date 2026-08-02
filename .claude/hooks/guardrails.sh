@@ -31,13 +31,33 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
 # freeze branch itself is additionally gated on `declare -f freeze_active_prefix`.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/freeze-lock.sh" 2>/dev/null || true
 
+# shellcheck source=lib/hook-input.sh
+# FAIL-HARD (no `|| true`): a fail-soft source leaves hook_parse_input
+# undefined, the hook dies at the call under `set -e`, prints nothing, exits
+# non-zero, and the tool proceeds — defect 2 of #7164, reintroduced one line
+# above where every test points.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/hook-input.sh"
+
 INPUT=$(cat)
-# Single jq fork: @sh shell-escapes each field so eval is safe for embedded
-# quotes, newlines ($'\n' ANSI-C form), and shell metacharacters. Previously
-# two jq forks ran on every Bash tool invocation; collapsing to one halves
-# the hook's hot-path overhead. FILE_PATH is extracted here too so the freeze
-# edit-lock branch (Write/Edit) shares the same single fork.
-eval "$(echo "$INPUT" | jq -r '@sh "COMMAND=\(.tool_input.command // "") TOOL_NAME=\(.tool_name // "") FILE_PATH=\(.tool_input.file_path // .tool_input.notebook_path // "")"' 2>/dev/null || echo 'COMMAND="" TOOL_NAME="" FILE_PATH=""')"
+# Single jq fork, and NO shell evaluation of hook input. The previous comment
+# here claimed `@sh` made `eval` safe. That held only for a STRING: `@sh`
+# quotes each element of an ARRAY as a separate word, so an array
+# .tool_input.command produced an assignment followed by a COMMAND, which eval
+# ran (#7164). FILE_PATH is extracted here too so the freeze edit-lock branch
+# (Write/Edit) shares the same single fork.
+# Parse hook stdin WITHOUT shell evaluation (ADR-155: stdin is
+# model-controlled and untrusted). A non-string field is surfaced, never
+# coerced — coercion closes the RCE and leaves the guards evaded (#7164).
+# ADR-156: a hook that cannot fully parse its input asks. The exit lives
+# HERE, at the call site, not inside the library.
+if ! hook_parse_input "$INPUT"; then
+  hook_input_report "guardrails"
+  hook_input_should_ask && { hook_input_emit_ask "guardrails"; exit 0; }
+  exit 0
+fi
+COMMAND="$HOOK_CMD"
+TOOL_NAME="$HOOK_TOOL_NAME"
+FILE_PATH="$HOOK_FILE_PATH"
 # Belt-and-braces against set -u: a partial eval (jq succeeded on one
 # field, failed on another) could leave a variable undefined.
 : "${COMMAND:=}"

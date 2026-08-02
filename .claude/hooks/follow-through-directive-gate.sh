@@ -37,8 +37,26 @@ set -eo pipefail
 # shellcheck source=lib/incidents.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
 
+# shellcheck source=lib/hook-input.sh
+# FAIL-HARD (no `|| true`): a fail-soft source leaves hook_parse_input
+# undefined, the hook dies at the call under `set -e`, prints nothing, exits
+# non-zero, and the tool proceeds — defect 2 of #7164, reintroduced one line
+# above where every test points.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/hook-input.sh"
+
 INPUT=$(cat)
-eval "$(echo "$INPUT" | jq -r '@sh "CMD=\(.tool_input.command // "") WORK_DIR=\(.cwd // "")"' 2>/dev/null || echo 'CMD="" WORK_DIR=""')"
+# Parse hook stdin WITHOUT shell evaluation (ADR-155: stdin is
+# model-controlled and untrusted). A non-string field is surfaced, never
+# coerced — coercion closes the RCE and leaves the guards evaded (#7164).
+# ADR-156: a hook that cannot fully parse its input asks. The exit lives
+# HERE, at the call site, not inside the library.
+if ! hook_parse_input "$INPUT"; then
+  hook_input_report "follow-through-directive-gate"
+  hook_input_should_ask && { hook_input_emit_ask "follow-through-directive-gate"; exit 0; }
+  exit 0
+fi
+CMD="$HOOK_CMD"
+WORK_DIR="$HOOK_CWD"
 : "${CMD:=}"
 : "${WORK_DIR:=}"
 
@@ -77,7 +95,7 @@ if [[ -z "$BODY_FILE" ]]; then
   # --body "<string>" or --body '<string>' or --body $'<string>'. Pull
   # everything after --body that's quoted; bash's word-splitting in the
   # caller's shell has already collapsed whitespace, so we work with the
-  # exact bytes the hook received from jq @sh.
+  # exact bytes the hook received from the jq extractor.
   # Use perl for greedy regex; sed -E can't do non-greedy across newlines.
   BODY_INLINE=$(echo "$CMD" | perl -0777 -ne 'if (/--body[[:space:]]+(["'"'"'])(.+?)(?<!\\)\1/s) { print $2; }' || true)
 fi

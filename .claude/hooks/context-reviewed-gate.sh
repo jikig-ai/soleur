@@ -45,8 +45,25 @@ set -eo pipefail
 # shellcheck source=lib/incidents.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
 
+# shellcheck source=lib/hook-input.sh
+# FAIL-HARD (no `|| true`): a fail-soft source leaves hook_parse_input
+# undefined, the hook dies at the call under `set -e`, prints nothing, exits
+# non-zero, and the tool proceeds — defect 2 of #7164, reintroduced one line
+# above where every test points.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/hook-input.sh"
+
 INPUT=$(cat)
-eval "$(echo "$INPUT" | jq -r '@sh "CMD=\(.tool_input.command // "")"' 2>/dev/null || echo 'CMD=""')"
+# Parse hook stdin WITHOUT shell evaluation (ADR-155: stdin is
+# model-controlled and untrusted). A non-string field is surfaced, never
+# coerced — coercion closes the RCE and leaves the guards evaded (#7164).
+# ADR-156: a hook that cannot fully parse its input asks. The exit lives
+# HERE, at the call site, not inside the library.
+if ! hook_parse_input "$INPUT"; then
+  hook_input_report "context-reviewed-gate"
+  hook_input_should_ask && { hook_input_emit_ask "context-reviewed-gate"; exit 0; }
+  exit 0
+fi
+CMD="$HOOK_CMD"
 : "${CMD:=}"
 
 # 1. Trigger only on a real `git commit`. Strip commit bodies/heredocs so a

@@ -160,9 +160,27 @@ append_approval_log() {
   ( flock -x 9; printf '%s\n' "$line" >&9 ) 9>>"$file" 2>/dev/null || true
 }
 
-# --- Read + parse hook stdin (single jq @sh-escape, sibling-hook pattern) -
+# --- Read + parse hook stdin (single jq fork, no eval — sibling-hook pattern) -
+# shellcheck source=lib/hook-input.sh
+# FAIL-HARD (no `|| true`): a fail-soft source leaves hook_parse_input
+# undefined, the hook dies at the call under `set -e`, prints nothing, exits
+# non-zero, and the tool proceeds — defect 2 of #7164, reintroduced one line
+# above where every test points.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/hook-input.sh"
+
 INPUT=$(cat)
-eval "$(echo "$INPUT" | jq -r '@sh "CMD=\(.tool_input.command // "") SESSION_ID=\(.session_id // "")"' 2>/dev/null || echo 'CMD="" SESSION_ID=""')"
+# Parse hook stdin WITHOUT shell evaluation (ADR-155: stdin is
+# model-controlled and untrusted). A non-string field is surfaced, never
+# coerced — coercion closes the RCE and leaves the guards evaded (#7164).
+# ADR-156: a hook that cannot fully parse its input asks. The exit lives
+# HERE, at the call site, not inside the library.
+if ! hook_parse_input "$INPUT"; then
+  hook_input_report "prod-write-defer-gate"
+  hook_input_should_ask && { hook_input_emit_ask "prod-write-defer-gate"; exit 0; }
+  exit 0
+fi
+CMD="$HOOK_CMD"
+SESSION_ID="$HOOK_SESSION_ID"
 : "${CMD:=}"
 : "${SESSION_ID:=}"
 
