@@ -284,7 +284,7 @@
         "evidence": "apps/web-platform/infra/workspaces-cutover.sh:2030,2041 (cryptsetup luksFormat/luksOpen, MAPPER_NAME=${WORKSPACES_MAPPER_NAME:-workspaces}); key: random_password.workspaces_luks + doppler_secret.workspaces_luks_key (workspaces-luks.tf); mount gate: soleur-host-bootstrap.sh:759-760",
         "defends_against": "a seized/RMA'd or snapshot-imaged Hetzner block volume: contents are unreadable without the Doppler-held LUKS passphrase",
         "does_not_defend": "a leaked service-role credential, an RLS bypass, an SSRF reaching the store, or any read on the live host where the mapper is already unlocked",
-        "disclosed_as": "docs/legal/privacy-policy.md:519",
+        "disclosed_as": "docs/legal/privacy-policy.md:Encrypted workspace storage",
         "live_verification": "available"
       }
     },
@@ -357,7 +357,7 @@
         "tls": "https (Supabase REST) / TLS 1.2+",
         "cert_verification": "on",
         "does_not_defend": "a leaked anon/service key; TLS protects the channel, not the credential",
-        "disclosed_as": "docs/legal/data-protection-disclosure.md:316"
+        "disclosed_as": "docs/legal/data-protection-disclosure.md:TLS for data in transit"
       }
     },
     {
