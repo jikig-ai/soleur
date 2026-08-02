@@ -8,12 +8,13 @@ plan: knowledge-base/project/plans/2026-07-24-fix-6588-legal-clause-retraction-p
 decision_record: knowledge-base/project/specs/feat-one-shot-6588-legal-clause-retraction/decision-challenges.md
 site_dispositions: knowledge-base/project/specs/feat-one-shot-6588-legal-clause-retraction/site-dispositions.md
 adr: knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md
-status: "BLOCKED — the 2026-07-24 sign-off is WITHDRAWN by Amendment No. 1 (2026-08-02). It attested a diff that is not the diff at HEAD 25e5de36e. Five rows were false; four merge-blocking defects are open. See §Amendment No. 1."
-superseded_by: "§Amendment No. 1 — re-attestation against HEAD 25e5de36e, 2026-08-02"
-signed_off_at: null
+status: "SIGNED-OFF WITH ACCEPTED RESIDUAL, SUBJECT TO ONE PRE-MERGE EVIDENTIARY CONDITION (E-1) — re-attested against HEAD c9747f0aa by Amendment No. 2 (2026-08-02). All five A–E defects raised by Amendment No. 1 are CURED and independently verified. The DC-1 retained-plaintext residual is carried forward unamended. DO NOT MERGE until condition E-1 (§A2.6) is discharged."
+superseded_by: "§Amendment No. 2 — re-attestation against HEAD c9747f0aa, 2026-08-02 (supersedes §Amendment No. 1, which supersedes the 2026-07-24 review)"
+signed_off_at: 2026-08-02
 signed_off_at_withdrawn: 2026-07-24
 amended_at: 2026-08-02
-amended_by: "clo agent (Soleur legal domain leader) — re-attestation against HEAD 25e5de36e performed 2026-08-02, after the 2026-08-01 rebase (DC-2) materially reversed the PR's own position and after the 2026-08-01/02 register+attestation fix commits. Evidence recomputed from the working tree and pulled live from the GitHub API; nothing carried over on trust from the 2026-07-24 pass."
+pre_merge_condition: "E-1 — the published head asserts, in the present tense, that the LUKS mount 'is verified live'. The newest `workspaces-luks-verify` evidence is run 30130277489 of 2026-07-24T22:13:06Z (nine days stale), and #6808 is OPEN so the continuous monitor pushes nothing. Discharge by EITHER (a) a fresh `workspaces-luks-verify` run on merge day, recorded here, OR (b) re-tensing the published clause to a dated past verification per §A2.6. Not discretionary; see §A2.6 for why."
+amended_by: "clo agent (Soleur legal domain leader) — Amendment No. 1 re-attested HEAD 25e5de36e on 2026-08-02 after the 2026-08-01 rebase (DC-2) materially reversed the PR's own position; Amendment No. 2 re-attested HEAD c9747f0aa the same day after the A–E rulings were applied. Evidence recomputed from the working tree, hashed against `main`, and pulled live from the GitHub API at each pass; nothing carried over on trust from any earlier pass."
 signed_off_by: "WITHDRAWN. The 2026-07-24 attribution is preserved below for the record: 'clo agent (Soleur legal domain leader) — reviewing authority for v1 per the agent-native company model; review performed 2026-07-24T22:43Z (00:43 CEST on 2026-07-25 local), same session as the PR; dated 2026-07-24 to match the PR, the corrections banner, and the sibling spec artifacts. External counsel re-review reserved for the re-evaluation triggers below.' That review is superseded, not deleted — see §Amendment No. 1 for what it got wrong and why."
 tier_classification: "Tier 1 (material) per `knowledge-base/legal/tc-version-bump-policy.md` — retraction of published Article 32 TOM claims plus re-scoping of a surviving one. NO `TC_VERSION` bump: that constant governs `docs/legal/terms-and-conditions.md` exclusively (`apps/web-platform/lib/legal/tc-version.ts:14,17,26-27`); the three documents amended here are notice/disclosure documents with no re-acceptance gate."
 brand_survival_threshold: single-user incident
@@ -23,10 +24,22 @@ re_evaluation_triggers: "(1) **#6808 clears** — `WORKSPACES_LUKS_HEARTBEAT_URL
 
 # Counsel review audit — #6588 (Article 32 TOM retraction + LUKS re-scope)
 
-> ## ⛔ WITHDRAWAL NOTICE — read before anything below this line
+> ## 📍 CURRENT DISPOSITION — read this first
 >
-> **The 2026-07-24 sign-off recorded in this document is WITHDRAWN as of 2026-08-02.
-> The current disposition of this gate is BLOCKED.**
+> **The controlling section of this document is `§Amendment No. 2` (at the end).** It re-attests
+> against HEAD `c9747f0aa` and issues **SIGNED-OFF WITH ACCEPTED RESIDUAL, subject to one
+> pre-merge evidentiary condition (E-1, §A2.6)**. Everything before it is superseded history,
+> preserved deliberately. Read order: this notice → `§Amendment No. 2` → the rest only if you
+> need to know how the position got here.
+
+---
+
+> ## ⛔ WITHDRAWAL NOTICE (2026-08-02) — superseded by Amendment No. 2, retained as record
+>
+> **The 2026-07-24 sign-off recorded in this document is WITHDRAWN as of 2026-08-02.**
+> *(At the time this notice was written the disposition was BLOCKED. The five defects it refers
+> to were subsequently cured and verified — see `§Amendment No. 2`. This notice is retained
+> unamended because the withdrawal itself stands: the 2026-07-24 review is not reinstated.)*
 >
 > The review below was performed against the branch **before** the 2026-08-01 rebase onto
 > `main` (60 commits) and before the 2026-08-01/02 register and attestation fix commits. That
@@ -581,3 +594,204 @@ for the frontmatter re-evaluation triggers.
 
 All output in this PR and in this audit remains **draft material requiring professional legal
 review**.
+
+*(End of Amendment No. 1. Its BLOCKED disposition is discharged by Amendment No. 2 below. It is
+preserved unamended: the defects it found were real, and an audit trail that deletes its own
+findings once they are fixed cannot be used to show that they were ever fixed.)*
+
+---
+---
+
+# Amendment No. 2 — re-attestation against HEAD `c9747f0aa`, and lifting of the block
+
+**Date:** 2026-08-02
+**Amending authority:** `clo` agent (Soleur legal domain leader), v1 counsel-review attestation
+authority under the Soleur-as-tenant-zero posture.
+**Effect on Amendment No. 1:** its **BLOCKED** disposition is **DISCHARGED**. Its withdrawal of
+the 2026-07-24 sign-off **stands** — that review is not reinstated.
+**Disposition: SIGNED-OFF WITH ACCEPTED RESIDUAL, subject to one pre-merge evidentiary
+condition (E-1, §A2.6).**
+
+## A2.1 — Standard of verification applied
+
+Amendment No. 1 exists because the 2026-07-24 attestation certified a summary rather than a tree.
+This amendment therefore verifies **the tree**, not the change report it was handed. Every
+assertion below was recomputed at HEAD `c9747f0aa` from the working copy, hashed where a hash was
+available, and pulled live from the GitHub API where the fact was remote. Where a claim could be
+checked against `main` rather than against a description, it was.
+
+## A2.2 — Per-ruling verdicts
+
+| Ruling | Verification performed | Verdict |
+|---|---|---|
+| **A** — falsifiable evidence citation | The impossible compound `device_type crypto_LUKS on /dev/mapper/workspaces` returns **0 occurrences across all six** files. The replacement — *"verified live by the `workspaces-luks-verify` check, which confirms that the device backing the `/dev/mapper/workspaces` mount is a `crypto_LUKS` container"* — is present exactly once in each of the six, byte-identically. This is now consistent with `luks-monitor.sh:159-165`, which resolves `real_dev` from `cryptsetup status` and runs `blkid` on the **backing** device. The claim is no longer disprovable by inspection. | **CURED** as to content. Tense condition E-1 remains — §A2.6. |
+| **B** — present-tense authz the register disclaims | `access-controlled per workspace`: **0 across all six**. The three body sites carry my exact replacement wording and are **byte-identical canonical↔mirror** (pp `318/317`, pp `549/530`, gdpr `45/54`). The published documents no longer assert a control that `git-data-client.ts:197` short-circuits before reaching. **The DPD, privacy policy and GDPR policy now agree**, which they did not at HEAD `25e5de36e`. | **CURED.** |
+| **C** — universal claim vs narrowed referent | The narrowed referent is applied at **all five** sites (pp:318, pp:549, gdpr:45, dpd:189, dpd:276) plus mirrors, each byte-identical to its counterpart. No sentence about the retained plaintext volume was added anywhere — I checked the diff for additions, not just for the presence of my wording. `scripts/encryption-posture-ledger.json` still records `hcloud_volume.workspaces` as `"disclosed_as": "not-publicly-claimed"`, and that assertion is **now true of the published text**, which it was not before. | **CURED. The DC-1 hold is intact and was not circumvented.** |
+| **D** — "never" vs the register's "not yet" | `never realised` and `for two of them, never did`: **0 across all six**. The head now retracts **four** measures *"as statements about the platform as it runs today"*, states *"retracted as statements about today, not abandoned as plans … recorded internally as designed and not yet in force"*, names limb (i) correctly as the **web-host ↔ git-data-host** proxy (matching register items (14)/(18)), adds the July-27 `hel1` standby, and re-dates the July-2 annotation to August 2. | **CURED.** |
+| **E** — banner head date / change-signal | Head is `**Last Updated:** August 2, 2026 (Ref #6588`, byte-identical across all six at **2468 characters**. Exactly **one** #6588 entry per file — no duplicate left in the `Previous:` chain. Chain reads **August 2 → July 31 (#7100, verbatim) → July 16 → July 5 → July 2 → June 30**. The three Eleventy mirror subtitles read `Last Updated August 2, 2026`. The `#7119` live-status sentence is present. `July 24, 2026` as a current-state marker: **0 remaining** — the in-body markers at pp:318 and gdpr:45 both moved to August 2. | **CURED.** A returning data subject now receives a change signal. |
+
+## A2.3 — Block B2: fully cured
+
+Amendment No. 1 re-graded B2 as *cured as to the register, re-opened as to public/internal
+agreement*. Both re-opened limbs are closed at HEAD:
+
+- **(a) The "never" contradiction is gone.** The published head and the Article 30 register now
+  make the same statement about the same three measures: designed, recorded, not yet in force.
+- **(b) The authorization asymmetry is gone.** No published document now asserts a measure that
+  register items (15)/(19) disclaim.
+
+**B2 — CURED.** B3 and B4 continue to stand (see §A2.4). **All four plan-time CLO blocks are now
+either cured (B2, B3, B4) or recorded as an accepted operator override (B1).**
+
+## A2.4 — B3 re-verified cryptographically, not by inspection
+
+The 2026-07-24 review asserted B3 satisfied by measuring the July-2 segment's length. That is a
+weaker test than it sounds — a compensating edit preserves length. I hashed the segment against
+`main` instead:
+
+| Document | `main` July-2 segment | HEAD July-2 body (pre-annotation) | |
+|---|---|---|---|
+| `privacy-policy.md` | `00af6c6c25221149…`, 818 ch | `00af6c6c25221149…`, 818 ch | **identical** |
+| `gdpr-policy.md` | `5ef046eec512d08e…`, 827 ch | `5ef046eec512d08e…`, 827 ch | **identical** |
+| `data-protection-disclosure.md` | `6164442cc9e1628c…`, 823 ch | `6164442cc9e1628c…`, 823 ch | **identical** |
+
+**B3 — CURED, on a hash rather than a length.** Only the appended annotation differs, and it is
+byte-identical across all six surfaces.
+
+**Ruling on the surviving `authorized per workspace` occurrences.** They remain **only** inside
+the preserved `Previous: July 2, 2026 (Ref #5274)` entry. **That is correct and they must not be
+touched.** That entry is the record of what was published; the July-2 annotation — which this PR
+amended precisely to name that fourth measure — is what retracts it. Editing the historical entry
+to remove a claim Soleur actually made would breach B3 and would convert the corrections banner
+into the thing it exists to prevent: a record that silently agrees with the present. **The
+coordinator was right not to touch it.**
+
+## A2.5 — Mechanical gates, run rather than reported
+
+| Gate | Result |
+|---|---|
+| `sha256sum` × 3 canonical vs `LEGAL_DOC_SHAS` | `data-protection-disclosure` `7d40e3a1…`, `gdpr-policy` `1e85dce4…`, `privacy-policy` `cc4fee45…` — **all three match byte-for-byte** |
+| `terms-and-conditions.md` | `f3640a38…`, **unchanged** — no `TC_VERSION` bump engaged; Tier 1 (material) classification unchanged |
+| `apps/web-platform/scripts/check-tc-document-sha.sh` | **rc=0** |
+| `scripts/lint-encryption-posture.py` | **PASS** — 16 stores, 3 connections, 0 unledgered, **0 failing checks**, rc=0 |
+| Ledger anchor after the (B) re-label | `docs/legal/privacy-policy.md:Encrypted workspace storage` — resolves; the TS-18 fail-closed path is not triggered |
+| `legal-doc-consistency.test.ts` + `legal-doc-shas-guard.test.ts` | **19/19 passed** |
+
+## A2.6 — Condition E-1: the one thing still outstanding, and how to discharge it
+
+**The published head asserts, in the present tense, that the LUKS mount "is verified live."** The
+newest `workspaces-luks-verify` evidence is still run **30130277489, 2026-07-24T22:13:06Z** — nine
+days old at merge — and **#6808 remains OPEN** (`priority/p1-high`, `type/security`, verified live
+2026-08-02), so `WORKSPACES_LUKS_HEARTBEAT_URL` is unwired and the continuous monitor runs,
+succeeds and pushes nothing. On this exact surface the documented failure mode (#6812) is a
+**silent revert within ~27 minutes**.
+
+I wrote the word *"confirms"* into that sentence in ruling A. I will not attest a present-tense
+verification claim on evidence I know to be stale with the monitor confirmed silent — that is
+precisely the failure the withdrawn 2026-07-24 review committed after setting the standard itself.
+
+**Two doors. Either discharges E-1; both are legally sound.**
+
+- **Door 1 (preferred) — dispatch a fresh `workspaces-luks-verify` run on merge day** and record
+  the run ID in this section. Minutes of work, requires operator authorization for the
+  `workflow_dispatch`, keeps the stronger claim, and touches no files. **If it fails, do not
+  merge** — merging would publish a fresh false Article 32 claim, the #6588 defect exactly.
+- **Door 2 (fallback, if dispatch is unavailable or declined) — date the evidence instead of
+  present-tensing it.** Replace, in all six files:
+  *"and it is verified live by the `workspaces-luks-verify` check, which confirms that the device
+  backing the `/dev/mapper/workspaces` mount is a `crypto_LUKS` container"*
+  with
+  *"and it was verified by the `workspaces-luks-verify` check on July 24, 2026, which confirmed
+  that the device backing the `/dev/mapper/workspaces` mount was a `crypto_LUKS` container"*.
+  This converts an unsupported present-tense claim into a supported dated one. It is **not free**:
+  it re-touches all six files and requires re-pinning all three SHAs and re-running §A2.5.
+
+**What is not acceptable is merging as-is with the present-tense claim on nine-day-old evidence.**
+Weighed honestly against the cost of delay: the currently-published text on `main` is the *worse*
+record — it carries the un-retracted over-claims this PR removes — so delay has a real cost to
+data subjects and I do not treat E-1 as a reason to sit on the merge. That is why E-1 is scoped to
+minutes and has a no-authorization fallback, rather than being an open-ended hold.
+
+## A2.7 — Canonical/mirror banner divergence: out of scope, but track it
+
+Measured at HEAD: canonical banners carry **13** `Previous:` entries, mirrors **10**; the
+canonical-only entries are **May 25, 2026** and **May 22, 2026**, and the mirrors condense several
+older BYOK/DSAR/workspace-member entries. Delta is **9,369 / 7,360 / 6,578** characters for
+privacy-policy / gdpr-policy / DPD respectively.
+
+**Out of scope for #6588 — confirmed, and the coordinator was right to leave it.** It predates
+this PR by roughly two months, this PR touched none of it, and the *current* head plus every
+substantive body sentence is byte-identical across both surfaces (verified above). Repairing it
+inside a retraction PR would mean rewriting thousands of characters of historical published
+banner text — the operation B3 exists to forbid — for no gain in the accuracy of the retraction.
+
+**It does warrant its own tracked issue, and an incidental remark inside a disclosure is not a
+tracking mechanism.** Two published surfaces carrying different correction histories is an
+**Article 12(1) accessibility** question in its own right: a reader on the docs site sees a
+shorter record of corrections than a reader of the repository, and the gap widens with every
+correction. Recommended: **P2**, `domain/legal` + `type/compliance`, scoped to deciding whether
+the mirror is intended as a *full* record or a *deliberately condensed* one — and if condensed,
+publishing a link from the mirror banner to the canonical full history. That link is the actual
+Art. 12(1) fix and is cheap; back-filling 9 kB of history into the mirror probably is not the
+right answer.
+
+## A2.8 — The residual, carried forward unamended
+
+**§B1 is unchanged and is not reopened by this amendment.** A full un-wiped plaintext copy of
+every workspace remains on `hcloud_volume.workspaces` (`format = "ext4"`, attached via
+`hcloud_volume_attachment.workspaces` to `hcloud_server.web[each.key]`), retained as the ADR-119
+rollback backstop, **and users are not told**. The CLO recommendation to disclose was
+**OVERRIDDEN by the operator** on 2026-07-24 and reaffirmed; it is an **accepted, undisclosed
+residual**, tracked on **#6808**, ledgered as `plaintext-exception` (#6897, `expires_on:
+2026-10-22`, internal only), and named in the Article 30 register at PA-1(g) and PA-2(g).
+
+Ruling C **narrowed the published referent so the residual is no longer aggravated by the
+published wording**, which is what Amendment No. 1 required. It did **not** cure the residual, and
+nothing here should be read as doing so. What bounds it is unchanged: **zero arms-length data
+subjects** (#3723 OPEN, verified 2026-08-02). **The escalation trigger stands: if any route
+onboards a first arms-length user while #6808 is open, this becomes p0, the hold must be
+re-raised, and the published wording must be qualified *before* that user is onboarded, not
+after.**
+
+The frontmatter re-evaluation triggers are unchanged and remain live. Trigger (5) has **not**
+fired — the second host added 2026-07-27 is in `hel1`.
+
+## A2.9 — Non-blocking items still open
+
+Both were logged in §A1.8 and are **not** cured at HEAD. Neither blocks merge; both should be
+picked up with the #6897 legal-doc reconcile:
+
+- **`knowledge-base/legal/compliance-posture.md`**, Hetzner row, **Data Region** column reads
+  `hel1 (Finland) + fsn1 (Germany)` while the Article 30 register's vendor row reads `hel1` only.
+  Over-statement of the live compute footprint in an internal record; both DCs EU, one AVV. **P2.**
+- **`scripts/encryption-posture-ledger.json`**, store `hcloud_volume.workspaces`, `evidence` field
+  still cites `apps/web-platform/infra/server.tf:1569`; the resource is at line **1779** and 1569
+  is an unrelated sysctl comment. Violates `cq-cite-content-anchor-not-line-number` — the same rule
+  this PR applied to `disclosed_as` but not to `evidence`. **P2.**
+
+## A2.10 — Disposition
+
+**SIGNED-OFF WITH ACCEPTED RESIDUAL — subject to pre-merge condition E-1 (§A2.6).**
+
+I reach this on the merits, not by deference and not by relief that the corrections landed. The
+diff at HEAD `c9747f0aa` does the hard thing correctly: it retracts four published Article 32
+measures as a whole family across six surfaces, it re-scopes the one surviving measure onto a
+referent narrow enough that the internal ledger's own `not-publicly-claimed` assertion is true of
+the published text, it stops the published record from being stronger than the statutory register
+in either direction, it preserves the historical entries byte-identically while annotating them
+additively, and it gives a returning data subject an honest change signal on the day the change is
+published. **No surviving published sentence misstates the infrastructure**, and — unlike the
+state Amendment No. 1 found — no published sentence is stronger than the Article 30 register.
+
+Two things this sign-off does **not** say. It does not say the retained-plaintext residual is
+cured; it is accepted, undisclosed, and bounded only by the absence of arms-length data subjects.
+And it does not say the merge may proceed today unconditionally: **E-1 must be discharged first**,
+by either door.
+
+Re-attestation is required only if the diff changes again. If Door 2 is taken, §A2.5 must be
+re-run in full — the three SHA pins expire on that edit.
+
+This is the **v1 internal CLO-agent sign-off** under the Soleur-as-tenant-zero posture. The
+operator retains an optional veto. **External** counsel re-review remains reserved for the
+frontmatter re-evaluation triggers. All output in this PR and in this audit remains **draft
+material requiring professional legal review**.
