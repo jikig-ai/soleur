@@ -41,23 +41,51 @@ That is wrong **on both sides**:
 | `.{0,80}cannot[^.]{0,120}` | **no** | blowup — killed at cap |
 | `.{0,8}(NEVER\|MUST NOT)` | **yes** | 8.8 MB / 0.1 s |
 
-Alternation is nearly irrelevant. The driver is **two or more BOUNDED repeats**,
-with cost scaling as the product of their upper bounds:
+Alternation is nearly irrelevant. Had the prescribed heuristic shipped, it would
+have blocked the cheap case and allowed the one that froze the desktop — a guard
+that is worse than nothing, because it *reads* as protection.
 
-| Pattern | ∏(upper) | Peak RSS |
-|---|---|---|
-| `.{0,10}(6-alt)[^.]{0,10}` | 100 | 12 MB |
-| `.{0,20}(6-alt)[^.]{0,20}` | 400 | 44 MB |
-| `.{0,25}(6-alt)[^.]{0,25}` | 625 | 162 MB |
-| `.{0,30}(6-alt)[^.]{0,30}` | 900 | 672 MB |
-| `.{0,35}(6-alt)[^.]{0,35}` | 1225 | killed at cap |
-| `.{0,80}(6-alt)[^.]{0,120}` (the reproducer) | 9600 | killed at cap |
+### …and the replacement cost model was ALSO wrong (caught at review)
+
+The plan replaced that heuristic with "two or more BOUNDED repeats, cost =
+∏(upper+1), deny at ≥ 500". **That model is wrong in both directions**, which is
+the more interesting finding, because it was itself derived from measurement and
+therefore felt settled.
+
+**Width of the repeated class is the discriminator — not the bound product.**
+Re-measured 2026-08-02, hard-capped (`ulimit -v 2000000` + `timeout`), against a
+31 kB fixture:
+
+| Pattern | ∏(upper+1) | Peak RSS | Plan's verdict |
+|---|---|---|---|
+| `[0-9]{0,80}x[0-9]{0,120}` | 9801 | **7.5 MB** | deny ❌ |
+| `[0-9a-f]{8}-…-[0-9a-f]{12}` (UUID) | 14625 | **7.5 MB** | deny ❌ |
+| `[0-9]{4}-[0-9]{2}-[0-9]{2}T…` (ISO ts) | 1215 | **7.5 MB** | deny ❌ |
+| `^\+(<{7}\|={7}\|>{7})` | 512 | **7.4 MB** | deny ❌ |
+| `.{0,16}q[^.]{0,16}` | 289 | **BLOWUP** | allow ❌ |
+| `.{0,20}(a\|b\|c\|d\|e\|f)[^.]{0,20}` | 441 | **BLOWUP** | allow ❌ |
+
+A **narrow** class (`[0-9]`, `[0-9a-f]`, a literal) stays cheap even at a product
+of 9801, because DFA state count scales with the SIZE of the repeated set. Only
+`.` and a negated class `[^…]` are wide enough to explode. The wide-class ladder,
+one literal between two repeats:
+
+| ∏(upper+1) | 25 | 49 | 81 | 121 | 169 | 289 |
+|---|---|---|---|---|---|---|
+| Peak RSS | 7.7 MB | 8.3 MB | 12 MB | 30 MB | 103 MB | **BLOWUP** |
+
+Note the last row: **the plan's own "highest observed-safe product 441 (44 MB)"
+datapoint does not reproduce** — that exact pattern blows up. So the planned
+threshold of 500 sat *above* the real danger point (~150), and would have shipped
+a guard that misses genuine blowups while denying **22 benign call sites in this
+repo** — including the conflict-marker regex inside `guardrails.sh` itself.
 
 A **single** bounded repeat is always cheap, however large: `.{0,10000}cannot` =
-60 MB / 0.6 s. GNU grep runs the reproducer in 7 MB / 0.1 s. Had the prescribed
-heuristic shipped, it would have blocked the cheap case and allowed the one that
-froze the desktop — a guard that is worse than nothing, because it *reads* as
-protection.
+60 MB / 0.6 s. GNU grep runs the reproducer in 7 MB / 0.1 s.
+
+The shipped model: count only bounded repeats over a WIDE atom (`.`, `[^…]`, or a
+group close, counted conservatively); fewer than two → allow; else deny at
+∏(upper+1) ≥ **150**.
 
 ### 2. `ulimit -v` is categorically incompatible with this toolchain
 

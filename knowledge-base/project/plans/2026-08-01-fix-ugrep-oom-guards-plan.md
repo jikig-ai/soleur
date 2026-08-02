@@ -65,6 +65,33 @@ and ignore). If fewer than two are bounded → allow. Otherwise cost = ∏(upper
 cost ≥ **500**. Calibration: highest observed-safe product is 441 (44 MB); lowest clearly-bad
 is 961 (672 MB). 500 sits between, on the safe side.
 
+> **SUPERSEDED at review (2026-08-02). The model above is wrong in BOTH
+> directions and was NOT shipped.** Re-measured hard-capped (`ulimit -v
+> 2000000` + `timeout`), the bound product is not predictive — the **width of
+> the repeated class** is:
+>
+> | Pattern | ∏(upper+1) | Peak RSS | Model above says |
+> |---|---|---|---|
+> | `[0-9]{0,80}x[0-9]{0,120}` | 9801 | 7.5 MB | deny ❌ |
+> | `[0-9a-f]{8}-…-[0-9a-f]{12}` (UUID) | 14625 | 7.5 MB | deny ❌ |
+> | `[0-9]{4}-[0-9]{2}-[0-9]{2}T…` (ISO ts) | 1215 | 7.5 MB | deny ❌ |
+> | `^\+(<{7}\|={7}\|>{7})` | 512 | 7.4 MB | deny ❌ |
+> | `.{0,16}q[^.]{0,16}` | 289 | **BLOWUP** | allow ❌ |
+> | `.{0,20}(a\|b\|c\|d\|e\|f)[^.]{0,20}` | 441 | **BLOWUP** | allow ❌ |
+>
+> The last row is this table's own "highest observed-safe" datapoint, and it
+> **does not reproduce** — so the 500 threshold sat ABOVE the real danger point
+> and would have shipped a guard that misses genuine blowups while denying **22
+> benign call sites in this repo**, including the conflict-marker regex inside
+> `guardrails.sh` itself.
+>
+> **Shipped model:** count only bounded repeats over a WIDE atom (`.`, a negated
+> class `[^…]`, or a group close, counted conservatively). Fewer than two →
+> allow; else deny at ∏(upper+1) ≥ **150**. Wide-class ladder: 25→7.7 MB,
+> 49→8.3 MB, 81→12 MB, 121→30 MB, 169→103 MB, 289→BLOWUP; 150 sits between the
+> 121 knee and the 169 elbow. Pinned by fixtures G9/G10/G17–G24 and by mutations
+> M11 (revert to bound-product) and M12 (global backslash strip).
+
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** a false block on a legitimate `grep`, costing

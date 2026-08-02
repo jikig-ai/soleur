@@ -387,10 +387,12 @@ fi
 # has both and costs 8.8 MB / 0.1 s. The driver is >= 2 BOUNDED repeats, with
 # cost scaling as the product of their upper bounds. A SINGLE bounded repeat is
 # always cheap regardless of size (`.{0,10000}cannot` = 60 MB / 0.6 s).
-#   cost = product of (upper + 1) over all bounded quantifiers; deny at >= 500.
-# Calibration: highest observed-safe product 441 (44 MB); lowest clearly-bad
-# 961 (672 MB). 500 sits between, on the safe side. Common multi-bound patterns
-# stay well under it — an IPv4 regex (four `[0-9]{1,3}`) costs 256.
+#   cost = product of (upper + 1) over bounded quantifiers repeating a WIDE
+#   atom (`.` or a negated class); deny at >= 150.
+# WIDTH is the discriminator, not the bound: a narrow class stays cheap at a
+# product of 9801, while a wide one blows up at 289. See the measured ladder on
+# _grep_repeat_cost below. An IPv4 regex (four `[0-9]{1,3}`) has zero wide
+# repeats and is never counted.
 #
 # Load-bearing implementation notes:
 #  - Scans $COMMAND, NOT $SCAN. A grep pattern is ALWAYS inside quotes, and
@@ -411,29 +413,60 @@ fi
 #  - This guard's own detection regex uses only `*` and `?`, never a bounded
 #    repeat, so it can never trip the class it detects.
 if grep -qF 'grep' <<<"$COMMAND"; then
-  # Product of (upper + 1) over every BOUNDED quantifier in a pattern token.
-  # Echoes 0 when fewer than two are bounded (cheap by measurement).
+  # Product of (upper + 1) over every bounded quantifier whose repeated atom is
+  # a WIDE character class. Echoes 0 when fewer than two such repeats exist.
+  #
+  # WIDTH, NOT BOUND, IS THE DISCRIMINATOR (measured 2026-08-02, hard-capped).
+  # The bound product alone is not predictive, in BOTH directions:
+  #
+  #   [0-9]{0,80}x[0-9]{0,120}        product 9801  ->   7.5 MB   cheap
+  #   [0-9a-f]{8}-...-[0-9a-f]{12}    product 14625 ->   7.5 MB   cheap (UUID)
+  #   [0-9]{4}-[0-9]{2}-[0-9]{2}T...  product 1215  ->   7.5 MB   cheap (ISO ts)
+  #   ^\+(<{7}|={7}|>{7})             product 512   ->   7.4 MB   cheap
+  #   .{0,16}q[^.]{0,16}              product 289   ->   BLOWUP
+  #   .{0,20}(a|b|c|d|e|f)[^.]{0,20}  product 441   ->   BLOWUP
+  #
+  # A narrow class ([0-9], [0-9a-f], a literal) stays cheap even at a product of
+  # 9801, because the DFA state count scales with the SIZE of the repeated set.
+  # Only `.` and a negated class `[^...]` are wide enough to explode. Counting
+  # bare bound products would deny UUIDs, ISO timestamps, SHA-256 pairs and the
+  # conflict-marker regex in this very file (22 real call sites in this repo)
+  # while still ALLOWING a real blowup at product 289.
+  #
+  # Wide-class ladder (dot + negated, one literal between), same fixture:
+  #   product 25 -> 7.7 MB | 49 -> 8.3 MB | 81 -> 12 MB | 121 -> 30 MB
+  #            169 -> 103 MB | 289 -> BLOWUP
+  # Threshold 150 sits above the 121 knee and below the 169 elbow. NOTE this is
+  # under a third of the originally planned 500: the plan's "highest
+  # observed-safe product 441 (44 MB)" datapoint does NOT reproduce — that exact
+  # pattern blows up here — so 500 would have shipped a guard that misses real
+  # blowups while denying the benign ones above.
   _grep_repeat_cost() {
-    local pat="$1" q up n=0 cost=1
-    # Normalize BRE escapes so `\{0,80\}` is seen identically to ERE `{0,80}`.
-    # `xargs` preserves backslashes INSIDE double quotes (measured), so a BRE
-    # pattern really does arrive here still escaped. Stripping every backslash
-    # is safe for this purpose: a quantifier needs digits between braces, and
-    # an escaped literal (`\.`, `\$`) cannot become one by losing its escape.
-    pat="${pat//\\/}"
-    while IFS= read -r q; do
-      [[ -z "$q" ]] && continue
-      q="${q#\{}"; q="${q%\}}"
+    local pat="$1" m q up n=0 cost=1
+    # Normalize BRE `\{0,80\}` to ERE `{0,80}`. Deliberately targeted, NOT a
+    # global backslash strip: stripping every backslash would turn an ESCAPED
+    # dot (`\.{0,80}`, a narrow literal) into a wide `.`, and would turn a
+    # Unicode escape (`\x{2028}`) into a bogus 2028-bound quantifier.
+    pat="${pat//\\\{/\{}"
+    pat="${pat//\\\}/\}}"
+    # Match a bounded quantifier ONLY when it repeats a wide atom: an
+    # unescaped `.`, a negated class `[^...]`, or a group close `)` (a group
+    # may contain a wide atom, so it is counted conservatively). A leading
+    # space sentinel lets the unescaped-dot alternative match at index 0.
+    while IFS= read -r m; do
+      [[ -z "$m" ]] && continue
+      q="${m##*\{}"; q="${q%\}}"     # keep only the quantifier body
       case "$q" in
-        *,)  continue ;;         # {n,} — open-ended, NOT bounded; ignore
-        *,*) up="${q#*,}" ;;     # {n,m} and {,m}
-        *)   up="$q" ;;          # {n}
+        *,)  continue ;;              # {n,} — open-ended, NOT bounded; ignore
+        *,*) up="${q#*,}" ;;          # {n,m} and {,m}
+        *)   up="$q" ;;               # {n}
       esac
       [[ "$up" =~ ^[0-9]+$ ]] || continue
       n=$((n + 1))
       cost=$((cost * (up + 1)))
       if (( cost > 1000000 )); then cost=1000000; fi   # saturate; no overflow
-    done < <(grep -oE '\{[0-9]*,?[0-9]*\}' <<<"$pat" 2>/dev/null || true)
+    done < <(grep -oE '[^\]\.\{[0-9]*,?[0-9]*\}|\[\^[^]]*\]\{[0-9]*,?[0-9]*\}|\)\{[0-9]*,?[0-9]*\}' \
+               <<<" $pat" 2>/dev/null || true)
     if (( n < 2 )); then echo 0; else echo "$cost"; fi
   }
 
@@ -468,12 +501,12 @@ if grep -qF 'grep' <<<"$COMMAND"; then
     fi
     if [[ "$_in_grep" == 1 ]]; then
       _gcost=$(_grep_repeat_cost "$_gt")
-      if (( _gcost >= 500 )); then
+      if (( _gcost >= 150 )); then
         emit_incident "guardrails-block-catastrophic-grep-repeat" "deny" "Never pass >=2 bounded repeats to the shimmed grep" "$COMMAND"
         jq -n --arg c "$_gcost" '{
           hookSpecificOutput: {
             hookEventName: "PreToolUse",            permissionDecision: "deny",
-            permissionDecisionReason: ("BLOCKED: this pattern has two or more bounded repeats (DFA cost " + $c + ", limit 500). The `grep` in this shell is a function that re-execs ugrep, whose DFA construction allocates without bound on this shape — a measured run reached 9.5 GB RSS in 171 s against a 21 kB file and froze the desktop. Re-run it with `command grep` (GNU grep 3.12 handles the same pattern in 7 MB / 0.1 s), or use the Grep tool.")
+            permissionDecisionReason: ("BLOCKED: this pattern has two or more bounded repeats (DFA cost " + $c + ", limit 150). The `grep` in this shell is a function that re-execs ugrep, whose DFA construction allocates without bound on this shape — a measured run reached 9.5 GB RSS in 171 s against a 21 kB file and froze the desktop. Re-run it with `command grep` (GNU grep 3.12 handles the same pattern in 7 MB / 0.1 s), or use the Grep tool.")
           }
         }'
         exit 0

@@ -392,13 +392,49 @@ assert "G8 commit message quoting the reproducer allows (no FP)" "<none>" \
 
 # --- Non-vacuity + boundary coverage (beyond the plan\'s eight) -------------
 
-# The threshold sits BETWEEN the highest observed-safe product (441) and the
-# lowest clearly-bad (961). Both sides are asserted so a future retune that
-# collapses the band goes RED rather than silently widening the guard.
-assert "G9 highest observed-SAFE product (441) allows" "<none>" \
-  'grep -noE ".{0,20}(a|b)[^.]{0,20}" AGENTS.md'
-assert "G10 lowest clearly-BAD product (961) denies" "deny" \
-  'grep -noE ".{0,30}(a|b)[^.]{0,30}" AGENTS.md'
+# --- The measured band, WIDE-class only (re-measured 2026-08-02) -------------
+# Threshold 150 sits above the 121 knee (30 MB) and below the 169 elbow
+# (103 MB). Both sides are asserted so a retune that collapses the band goes
+# RED rather than silently widening the guard.
+assert "G9 wide product 121 (30 MB) allows" "<none>" \
+  'grep -noE ".{0,10}q[^.]{0,10}" AGENTS.md'
+assert "G10 wide product 289 (BLOWUP) denies" "deny" \
+  'grep -noE ".{0,16}q[^.]{0,16}" AGENTS.md'
+
+# The plan's recorded "highest observed-safe product 441 / 44 MB" datapoint does
+# NOT reproduce: this exact pattern was re-measured on 2026-08-02 as a BLOWUP
+# (timed out at a 2 GB cap). The originally planned threshold of 500 would have
+# ALLOWED it. This fixture pins the correction.
+assert "G17 plan's 'safe 441' pattern actually denies (blowup)" "deny" \
+  'grep -noE ".{0,20}(a|b|c|d|e|f)[^.]{0,20}" AGENTS.md'
+
+# --- WIDTH is the discriminator, not the bound product ----------------------
+# All four below carry bound products of 512-14625 -- far above the reproducer's
+# threshold -- yet every one measured ~7 MB, indistinguishable from a plain
+# literal, because the repeated class is NARROW. A bound-product model denied
+# all of them; 22 such call sites exist in this repo.
+assert "G18 UUID regex allows (7.5 MB; product 14625)" "<none>" \
+  'grep -noE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" f.log'
+assert "G19 ISO timestamp allows (7.5 MB; product 1215)" "<none>" \
+  'grep -noE "[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}:[0-9]{2}" f.log'
+assert "G20 conflict-marker regex allows (7.4 MB; product 512)" "<none>" \
+  'grep -noE "^\+(<{7}|={7}|>{7})" f.diff'
+assert "G21 narrow class at product 9801 allows (7.5 MB)" "<none>" \
+  'grep -noE "[0-9]{0,80}x[0-9]{0,120}" f.log'
+
+# An ESCAPED dot is a narrow literal, not a wide class. A global backslash
+# strip would misread it as `.` and deny.
+assert "G22 escaped dot is narrow, allows" "<none>" \
+  'grep -noE "\.{0,80}q\.{0,120}" f.log'
+
+# A Unicode codepoint escape is not a quantifier. Under a global backslash
+# strip, `\x{2028}` parses as a 2028-bound repeat and denies.
+assert "G23 unicode escapes are not quantifiers, allows" "<none>" \
+  'grep -noE "[\x{200b}\x{200c}]{1,3}[\x{2028}]{1,3}" f.log'
+
+# A negated class is wide even without a literal dot present.
+assert "G24 negated classes are wide, denies" "deny" \
+  'grep -noE "[^x]{0,80}q[^y]{0,120}" AGENTS.md'
 
 # An open-ended `{n,}` is unbounded — it is NOT a bounded repeat and must not
 # count toward the product (two of them are cheap, not a blowup).
