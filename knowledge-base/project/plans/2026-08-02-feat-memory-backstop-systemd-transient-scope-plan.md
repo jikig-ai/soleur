@@ -115,6 +115,7 @@ swap = `/swapfile` **1.9 GiB, 1.8 GiB used (~94 %) at rest**. All probes ran **w
 | G18 | **MCP race** | `playwright-mcp` PID 3068389 has `PPid` = a `claude` PID and sits in `app-gnome-dev.warp.Warp-3591813.scope` — i.e. **outside** any scope the hook would create for its own PID alone. |
 | G19 | #7151 residue | `…/app.slice/soleur-agent-139954` — a raw-mkdir cgroup dir, no `.scope` suffix, unknown to systemd, **under the wrong parent**. Removed during probing. |
 | G20 | Attribution readings | On a live scope, `memory.events` reads `low high max oom oom_kill oom_group_kill sock_throttled` (**cumulative counters**) and `memory.peak` is present. The slice's own `memory.current` is non-zero with a scope inside it — so AC4's two-session assertion is readable. |
+| G21 | **Re-entry re-sweep — a blocking gap, found and closed at plan review** | `AttachProcessesToUnit` (the only sanctioned way to move a live PID into an **existing** unit) **fails** on a default transient scope: `Call failed: Process migration not available on non-delegated units.` (rc=1, PID unmoved). Adding **`Delegate=true`** to the `StartTransientUnit` property list fixes it: `attach rc=0`, the PID moves into the scope, `Delegate=yes`, and `MemoryMax` still enforces at the kernel (`memory.max=7516192768`). Without this, [D6](#d6--adopt-the-tree-not-just-the-pid)'s and [D9](#d9--idempotency-re-entry-and-kill-attribution)'s promised re-sweep is **unimplementable** — `StartTransientUnit` refuses an existing unit (G9) and a raw `cgroup.procs` write is #7151's single-writer violation. |
 
 Figures carried from the incident learning
 (`knowledge-base/project/learnings/2026-08-02-ps-named-it-2-1-220-so-a-grep-that-ate-the-box-read-as-a-claude-leak.md`):
@@ -166,6 +167,21 @@ Figures carried from the incident learning
   guaranteed**. This is why the fleet control is `MemoryHigh` (non-lethal) and the per-session
   `MemoryMax` is the intended killer. Both the engineering and product reviews converged
   independently on this ordering.
+
+> **Rejected at plan review: "drop the fleet slice's memory properties entirely."** The simplicity
+> review argued the fleet caps are unreachable in practice (three simultaneous runaways), admittedly
+> weak on first merge ([D11](#d11--pre-existing-uncapped-sessions-self-only-adoption)), and the
+> source of the oomd exposure — and that cutting them would remove ~1/3 of the acceptance surface.
+> The engineering trade is real, but **the aggregate bound is a hard requirement, not an
+> optimisation**: "no aggregate bound" is *defect #4 of five* in the issue's own indictment of
+> #7151 ("per-pid keying means N sessions × 12 GB on a 31 GB box; two honest 11 GB sessions pass and
+> reproduce the freeze"), and issue **AC4** requires a fleet-wide bound *asserted with more than one
+> session*. Cutting it would ship the exact defect this issue exists to fix, and would fail AC4 on
+> its face. The oomd half of the argument is separately answered in [D7](#d7--systemd-oomd): the
+> exposure comes from the slice's existence, not its caps.
+>
+> What *was* taken from that review: the fleet's working control is the non-lethal `MemoryHigh`,
+> `MemoryMax` is an explicit last resort, and AC15's vacuous `oomctl` clause is cut.
 
 ### D2 — `MemoryHigh` vs `MemoryMax`
 
@@ -252,6 +268,20 @@ stragglers.
 Bound the descendant scan (max 256 PIDs, single `/proc` pass) so a pathological tree cannot stall
 SessionStart.
 
+**The re-sweep needs `Delegate=true` — this was a blocking gap (G21).** On re-entry the scope already
+exists, so `StartTransientUnit` refuses it (G9) and new descendants must be moved with
+`AttachProcessesToUnit`. That call **fails on a non-delegated unit**
+(`Process migration not available on non-delegated units`), which made the re-sweep that both this
+decision and [D9](#d9--idempotency-re-entry-and-kill-attribution) promise **unimplementable as
+originally specified** — and the only other route, writing `cgroup.procs` directly, is exactly
+#7151's single-writer violation. Adding `Delegate=true` to the `StartTransientUnit` property list
+makes `AttachProcessesToUnit` succeed while the kernel still enforces `MemoryMax` (measured).
+
+This matters beyond tidiness: the re-sweep is what [D11](#d11--pre-existing-uncapped-sessions-self-only-adoption)
+relies on for convergence and what this decision relies on to close the MCP race on `resume|clear|compact`.
+A mutant that drops the re-sweep would otherwise survive the entire battery, because AC10's three
+back-to-back runs use a **static** tree — see M8 in the revised battery.
+
 ### D7 — `systemd-oomd`
 
 **The most consequential finding of plan-time probing, and absent from the issue entirely.**
@@ -273,9 +303,24 @@ Mitigation (verified, G17): set **`ManagedOOMPreference=avoid` on `soleur-agents
 per-session scopes at the default — oomd then prefers killing one session over the fleet. `oomctl`
 before/after is a required verification step (Phase 0.8, AC15).
 
-Honest caveat: `oomctl` currently lists **zero** monitored cgroups, so the policy is armed at unit
-level but inert at runtime. What flips it on was not determined. **That uncertainty is the reason to
-set `avoid`, not a reason to skip it.**
+**Not circular — the exposure comes from the slice's *existence*, not from its caps.** Plan review
+proposed dropping the slice's memory properties on the grounds that they are "the sole cause of the
+plan's most dangerous finding". That reasoning does not survive: the per-session scopes must live in
+*some* cgroup, and placing them under `soleur-agents.slice` is what makes the documented
+`systemctl --user stop soleur.slice` kill path work and keeps them out of `app.slice` (where #7151's
+residue was found, G19). The slice therefore exists either way, and oomd's candidate set is the same
+either way. The caps only *worsen* the exposure marginally, via the PSI that `MemorySwapMax=0`
+raises. So `ManagedOOMPreference=avoid` is required **regardless** of whether caps are set — it is
+not an unverifiable mitigation for a self-inflicted risk.
+
+**Honest caveat, carried into the ADR rather than papered over:** `oomctl` currently lists **zero**
+monitored cgroups, so the policy is armed at unit level but inert at runtime, and what flips it on
+was not determined. **The `avoid` property readback therefore proves a string was transmitted, not
+that behaviour changed** — by this plan's own G15 standard that is a partially un-run instrument.
+That uncertainty is the reason to set `avoid`, not a reason to skip it, but the limitation must be
+stated plainly in ADR-155 and **must not be dressed up as a verified mitigation.** Accordingly the
+`oomctl`-before/after PR-body clause is cut from AC15: with zero monitored cgroups it returns the
+same result on every arm.
 
 ### D8 — PID discovery
 
@@ -326,8 +371,20 @@ scope (G20): `memory.events` exposes `low high max oom oom_kill oom_group_kill s
 
 | Reading | Message |
 |---|---|
-| `oom_kill > 0` | **Kill attribution.** Plain-language `systemMessage`: what was stopped, that uncommitted work in that command may be lost, the cap that was hit, `memory.peak`, and the **exact one-line command to raise the cap** plus the full-disable variable. |
-| `high > 0`, `oom_kill == 0` | **Near-miss.** "This session crossed its 6 GiB brake N times (peak X GiB) but was not killed" — turns cap-tuning into an evidence-driven change and warns *before* a first kill. |
+| `oom_kill` **increased** since the last recorded value | **Kill attribution.** Plain-language `systemMessage`: what was stopped, that uncommitted work in that command may be lost, the cap that was hit, `memory.peak`, and the remedies in R9 order (narrow first). |
+| `high` **increased**, `oom_kill` unchanged | **Near-miss.** "This session crossed its 6 GiB brake N times (peak X GiB) but was not killed" — turns cap-tuning into an evidence-driven change and warns *before* a first kill. |
+
+**On *increase*, not on non-zero — these counters never reset.** `oom_kill` and `high` are
+**monotonic** for the life of the cgroup. A non-zero test would re-emit the *same* post-mortem on
+every subsequent SessionStart forever, for a kill the operator already saw — flatly contradicting the
+Observability block's `EDGE-TRIGGERED only … Never per-session`. Persist the last-seen counts in the
+jsonl line and compare. T17 pins this by running re-entry twice against an unchanged counter and
+asserting **exactly one** message.
+
+**The attribution message must not claim causation.** At slice `MemoryMax` (R3's bystander case) the
+victim can sit in *another* session's scope, so a message may be delivered to a session that did not
+cause the kill. One sentence in the PR body, and message wording that says what happened, not who
+did it.
 
 Without kill attribution, an OOM kill presents as *the very symptom the hook exists to prevent* — a
 process vanishing mid-work — now caused by us.
@@ -341,18 +398,40 @@ process vanishing mid-work — now caused by us.
 > post-scope-*exit* genuinely is impossible (the cgroup is gone); reading it on re-entry, which is
 > the case that matters, is free.
 
-### D10 — Test seams and two-sided cap validation
+### D10 — No test seams at all; two-sided cap validation
 
-**One master gate.** `SOLEUR_MEMORY_BACKSTOP_TEST_MODE=1`. Every other injection variable is read
-**only inside that branch**, so with the flag unset `SOLEUR_MEMORY_BACKSTOP_TARGET_PID` cannot skip
-the identity check and `…_BYTES=0` cannot be a one-token session kill (both #7151 defects).
+**Revised at plan review.** An earlier draft gated six test-injection variables behind a
+`SOLEUR_MEMORY_BACKSTOP_TEST_MODE=1` master flag, and then needed **three artifacts** (an AC, a test
+scenario and a mutant) to prove the master gate held. That defends against #7151's
+`SOLEUR_MEMORY_CAP_PID` defect; it does not eliminate it.
 
-| Variable | Read only when `TEST_MODE=1` |
-|---|---|
-| `SOLEUR_MEMORY_BACKSTOP_TARGET_PID` | yes |
-| `…_SCOPE_HIGH_BYTES` / `…_SCOPE_MAX_BYTES` | yes |
-| `…_SLICE` | yes — **defaults to `soleurtest-agents.slice`** so tests never touch the production slice |
-| `…_SLICE_HIGH_BYTES` / `…_SLICE_MAX_BYTES` | yes |
+**Adopted instead: the hook has no production-reachable injection path whatsoever.** Split the file
+into functions plus a `main`, guarded by the standard idiom:
+
+```sh
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"
+```
+
+Tests **source** the hook and call `validate_caps`, `discover_claude_pid`, `collect_descendants`
+directly with ordinary arguments. Production **execs** it, so `main` runs and nothing is injectable —
+`TARGET_PID` and `BYTES=0` become **unrepresentable rather than defended-against**. `set -uo pipefail`
+moves inside `main` so sourcing does not leak shell options into the test harness.
+
+This **strengthens** issue AC6 rather than skipping it: "test-injection seams are gated behind an
+explicit test-mode flag" is satisfied *a fortiori* by having no seams to gate. Cap floor-validation
+(below) is unchanged and is now directly unit-testable by calling `validate_caps` with out-of-range
+arguments — no environment manipulation at all.
+
+**The one env var that remains** is `SOLEUR_DISABLE_MEMORY_BACKSTOP=1` — a user-facing kill switch
+matching four sibling hooks ([D12](#d12--blast-radius-a-documented-disagreement)), not a test seam.
+
+**Test split:** source-and-call for every pure-function assertion (cap validation, PPid walk,
+identity guards, stdout hygiene); **one** end-to-end exec through the reconstructed `settings.json`
+command string for AC2/AC11. Neither path needs an injection variable.
+
+*(This also resolved a live contradiction the review surfaced: AC4 asserted the **production** slice
+byte constants while the seam design routed tests to `soleurtest-agents.slice` with **injected**
+values — AC4 was unsatisfiable alongside the seam. See AC4's revised split.)*
 
 **Two-sided range validation, enforced in BOTH modes** (a floor alone does not encode "below the harm
 point"):
@@ -663,6 +742,35 @@ tracking issue ([§ Non-Goals](#non-goals--out-of-scope)).
 
 ---
 
+## Plan Review Revisions (R1–R12) — binding on `/work`
+
+The findings below came from the plan-review panel and are **requirements, not commentary**. The
+larger ones are already folded into the sections they affect (G21, D6, D7, D9, D10, D1, Phase 4,
+AC1/AC2/AC4/AC6/AC11/AC12/AC15/AC17/AC18, T14/T16–T19, M1–M7). These are the remainder, each with the
+reachable state or defect that motivates it.
+
+| # | Requirement | Motivating defect |
+|---|---|---|
+| **R1** | **`Delegate=true` on the per-session scope.** | Without it `AttachProcessesToUnit` refuses and the re-entry re-sweep is unimplementable (G21). **Blocking.** |
+| **R2** | **Take a per-PID `flock` around discover→apply→log**, non-blocking with a short timeout; on failure log reason `concurrent_apply` and `exit 0`. | No mutual exclusion exists. `startup` then a fast `/clear`, or overlapping `resume`+`compact`, has both invocations reach `SetUnitProperties`, re-sweep different trees, and possibly double-emit the first-apply message; the stamp write is itself racy. Precedent: `.claude/hooks/skill-invocation-logger.sh` appends under `flock` for exactly this reason. |
+| **R3** | **D9 row 2 must verify the existing scope is *ours*** before refreshing: its `cgroup.procs` contains our PID **and** its `BindsTo` matches the terminal scope just discovered. Key the scope name on **PID + start time**. | Scopes self-clean only when the **last** process exits (G11), so one orphaned MCP grandchild keeps a stale scope alive; a new `claude` on the recycled PID then refreshes caps on — and adopts its tree into — a dead session's scope, `BindsTo`-bound to the wrong window. |
+| **R4** | **Reading start time: split `/proc/<pid>/stat` on the *last* `)` and index from there.** `comm` is the only field that can contain the delimiter. | [D8](#d8--pid-discovery)'s rule "never `awk '{print $4}'` over `stat`" reads as "never touch `stat`" and will otherwise push the implementer to a worse key. |
+| **R5** | **New D9 row — stale-but-present `BindsTo`.** On re-entry, if the preserved `BindsTo` target is `not-found` or `inactive`, do **not** preserve it. Prefer the `terminal_scope` recorded in the jsonl at first apply, validated as still-loaded. | `claude` can outlive its terminal scope (tty close, tmux, `nohup`); cgroup membership does not change on re-parenting, so `/proc/<pid>/cgroup` still names the dead scope. Preserving that `BindsTo` with `After=` makes the scope liable to be stopped. |
+| **R6** | **New D9 row — unit exists ∧ our PID is not in it.** Re-adopt via `AttachProcessesToUnit`; never merely refresh. | Distinct from R3. Reachable when another worktree's copy of this hook, or an agent's own `systemd-run`, moves the PID. Falling to the refresh branch reports `outcome=applied` while **nothing is capped** — the silent-no-op class this feature exists to eliminate. |
+| **R7** | **Log `slice_high_before` / `slice_max_before`** alongside the written values. | **14 active worktrees** on this box, `.claude/hooks/` is per-checkout, and [D5](#d5--fleet-bound-persistence) re-applies slice properties every SessionStart. The moment caps are tuned, old- and new-version sessions flap the **shared** slice. Today the log records only what was written, making the flap invisible. |
+| **R8** | **Reconcile the `jq`-absent path with the sibling hook.** Add `no_jq` as a named fail-open reason, and either mirror `supabase-loopback-warn.sh`'s deliberate `exit 1` or emit the JSON via `printf` with manual escaping. | That sibling `exit 1`s when `jq` is absent *precisely because* "stderr is DISCARDED on an exit-0 hook". This plan mandates `exit 0` unconditionally and omits `jq` from AC9's reasons — so on a host without `jq` the OOM post-mortem (the CPO's blocking requirement) is written to a documented-dead sink while the hook reports success. |
+| **R9** | **Message ordering: narrow remedy first, fleet-wide last, consequence stated.** The per-session escape is `systemctl --user stop soleur-agent-<pid>.scope`; the raise path is `systemctl --user set-property --runtime soleur-agent-<pid>.scope MemoryHigh=infinity MemoryMax=infinity`. **`--runtime` is mandatory.** | `systemctl --user stop soleur.slice` — named in D3, the first-apply message and the README — **kills every agent session on the box**. A non-technical operator with one bad session runs the documented remedy and loses all twelve. And omitting `--runtime` on the raise path commits the exact persistent-config mutation [D5](#d5--fleet-bound-persistence) rejects (G6). |
+| **R10** | **Refusal message must name the variable, the value, the accepted band, and `git checkout -- .claude/hooks/memory-backstop.sh`.** Refusal **always** messages. | The caps are `readonly` constants in a tracked file, so `cap_out_of_range` can essentially only fire after an operator edit. The Observability stamp is keyed on the *limit-set*, so an operator who just changed it gets a **new key with no prior-success stamp** → the regression channel reads false → **silent refusal on exactly the recovery path.** Resolve the contradiction in favour of always-message, and key the regression channel on `last_outcome != applied` from the jsonl, not on a limit-set-inclusive stamp. |
+| **R11** | **Add a fourth edge-trigger: never-worked.** On the first SessionStart where the hook is present, a **user bus exists**, and the outcome is `skipped` — emit one message. | The regression channel is defined as "previously succeeded and now fails", so on a machine where it **never** succeeded there is no "previously" and it never fires. A non-standard install (npm-global → `exe` = `/usr/bin/node`) logs `skipped` forever while the operator believes they are protected. The detector is structurally blind to #7151's own class. |
+| **R12** | **`SOLEUR_DISABLE_MEMORY_BACKSTOP` must be rendered by the `discoverability_test`,** and the README row must state literally: *if set, you are unprotected and nothing will tell you.* | "No bus" is an environment fact; "disabled" is a decision that ages out of memory. Set once in a shell profile, it leaves the operator permanently unprotected with nothing ever saying so. (This is also the strongest argument for reconsidering the deferred operator-digest proof-of-life line.) |
+
+Two smaller items folded directly: **AC1 also asserts `test -x` on every derived path** (the index and
+the on-disk mode diverge under `core.fileMode=false`, on a `noexec` mount, or when a fix lands in the
+index but not on disk — and the runtime execs the **on-disk** file); and **AC12 splits into 12a (CI:
+green **and** `[live: SKIPPED]` **and** the skipped-count equals the number of live tests, so a
+deleted live test is distinguishable from a skipped one) and 12b (operator box: green with
+`[live: yes]`, pasted verbatim)**.
+
 ## Implementation Phases
 
 Ordering is load-bearing: the **class gate ships before the file it gates**, and the **contract (the
@@ -679,21 +787,21 @@ signal, not something to work around.
 - [ ] 0.2 `StartTransientUnit` adopting a throwaway `sleep` PID → `rc=0` (G1). **Never probe with a
       real `claude` PID.** Capture probe PIDs with `$!`, **never `pgrep -f <pattern>`** — the pattern
       matches this shell's own command line and produces false results (the G15 false negative).
-- [ ] 0.3 `OOMPolicy` default on a transient scope reads `stop` (G8). If it reads `continue` on the
-      host, the explicit override is still correct but the rationale comment must be **corrected**,
-      not deleted.
-- [ ] 0.4 `SetUnitProperties(runtime=true)` writes only `/run/user/<uid>/systemd/user.control/` and
-      leaves `~/.config/systemd/user.control/` untouched (G6). Remove stale `soleur*` drop-ins first.
-- [ ] 0.5 `BindsTo=` reap behaviour in a synthetic parent/child pair (G3).
-- [ ] 0.6 **Multi-PID adoption** moves every PID passed (G15).
-- [ ] 0.7 Record `free -m` and the `claude` fleet RSS total into the PR body — the
-      [D1](#d1--cap-values) arithmetic is only defensible against a stated baseline.
-- [ ] 0.8 **`oomctl`** — record monitored-cgroup lists and swap-used %, and confirm
-      `ManagedOOMPreference=avoid` is accepted on a `--user` transient scope (G16, G17).
-- [ ] 0.9 AC1 surface still clean: every hook path named in `settings.json` is `100755` (G14). If a
-      non-`100755` hook has landed on `main` since, **fix it in this PR** rather than weakening the gate.
-- [ ] 0.10 Sweep for orphaned raw cgroup dirs under `app.slice` (G19) and `rmdir` any found — a leaked
-      dir makes the AC7 sweep read dirty.
+- [ ] 0.3 Record `free -m` and the `claude` fleet RSS total into the PR body — the
+      [D1](#d1--cap-values) arithmetic is only defensible against a stated baseline (this is what
+      R13 guards).
+- [ ] 0.4 Sweep for orphaned raw cgroup dirs under `app.slice` (G19) and `rmdir` any found — a leaked
+      dir makes the AC7 sweep read dirty, so this is a genuine precondition, not a re-measurement.
+
+> **Phase 0 was collapsed from ten probes to four at plan review, and the reason matters.** The
+> dropped items (`OOMPolicy` default, `runtime=true` write location, `BindsTo` reap, multi-PID
+> adoption, `oomctl`, the AC1 surface audit) each re-verify a G-number measured **the same day on the
+> same box**, and each is then verified a *third* time by the live test arm — through the real hook,
+> which is strictly better evidence. Re-probing them by hand invites the precise #7151 error of
+> **treating a green probe as evidence the hook works**. What survives is only what the live arm
+> cannot supply: an environment gate (0.1), a smoke test that the whole approach is viable before
+> ~200 lines are written (0.2), the baseline numbers D1's arithmetic depends on (0.3), and a clean
+> tree for the AC7 sweep (0.4).
 
 **Cleanup contract for every probe:** stop each probe unit and remove any `soleur*` drop-in it created
 under both `~/.config/systemd/user.control/` and `/run/user/<uid>/systemd/user.control/`.
@@ -774,17 +882,35 @@ under both `~/.config/systemd/user.control/` and `/run/user/<uid>/systemd/user.c
       `.claude/hooks/**` files are legitimately `100644`). Verify `git ls-files -s` → `100755`.
 - [ ] 3.14 `shellcheck` clean.
 
-### Phase 4 — Wire the consumer
+### Phase 4 — Wire the consumer — **EXECUTES LAST, after Phase 7** (kept here for diff-ordering readability)
 
-> **Self-hosting hazard — read before starting this phase.** Wiring `settings.json` arms the hook on
-> the `/work` session's **own** next SessionStart. A defect here does not fail a test; it degrades
-> the session doing the work, and on `clear`/`compact` it re-fires. Mitigations, all required:
-> (a) do **not** start Phase 4 until 3.14 is green and 4.3's manual exercise has passed;
-> (b) `export SOLEUR_DISABLE_MEMORY_BACKSTOP=1` in the `/work` shell for the remainder of the
-> session, so the agent's own sessions are unaffected until Phase 7 is green;
-> (c) the fail-open design (`exit 0` everywhere, no `set -e`) means the worst case is *no
-> protection*, never a blocked session — that property is what makes this phase safe to attempt at
-> all, and it is why 3.1 and 3.3 are not optional.
+> **Self-hosting hazard — this phase MOVES to after Phase 7. Read why.**
+>
+> Wiring `settings.json` arms the hook on the `/work` session's **own** next SessionStart, and
+> `compact` is **not operator-initiated** — it fires automatically when context fills, which on a
+> long `/work` run is near-certain. So the hook self-arms mid-implementation without anyone choosing
+> to, against **real** `claude` PIDs with **production** caps, in the window before the AC7 sweep
+> (5.1), the mutation battery (5.2) and full verification (7.1) have run. A defect in D8's identity
+> walk in that window adopts `warp-terminal` or the login shell under a 7 GiB cap bound to itself —
+> the precise catastrophe D8 exists to prevent. It is also self-concealing: if the armed hook kills
+> the `/work` session's own tree, **the session that dies is the one holding the uncommitted
+> implementation.**
+>
+> **Resolution: execute this phase after Phase 7.1.** Checked the dependency — 4.2 is the only step
+> that needs `settings.json` wired, and it is a **pure static check** (`git ls-files -s` over a
+> parsed list) that never arms anything. Nothing forces 4.1 early, so moving it closes the window at
+> **zero cost**. Run 4.3 immediately after the moved 4.1.
+>
+> **A mitigation that does NOT work, recorded so it is not re-attempted:** an earlier draft said
+> "`export SOLEUR_DISABLE_MEMORY_BACKSTOP=1` in the `/work` shell". **That is a no-op.** Hooks
+> inherit the *Claude Code process* environment, not a Bash-tool subshell's — an `export` from a tool
+> call never reaches the hook. If a kill switch is wanted during the window, the only working
+> mechanism is the **`env` block already present in `.claude/settings.json`**
+> (`{"CLAUDE_CODE_EFFORT_LEVEL": "high"}`), set in the same edit as 4.1 and removed in 7.2.
+>
+> Also required regardless: **commit Phases 1–3 before arming**, so a self-inflicted session death
+> costs nothing. The fail-open design (`exit 0` everywhere, no `set -e`) bounds the worst case to
+> *no protection* rather than a blocked session — that is why 3.1 and 3.3 are not optional.
 
 - [ ] 4.1 Add to the existing `SessionStart` block in `.claude/settings.json` (matcher
       `startup|resume|clear|compact`) using the **exact sibling shape**:
@@ -798,10 +924,10 @@ under both `~/.config/systemd/user.control/` and `/run/user/<uid>/systemd/user.c
 
 ### Phase 5 — AC7 sweep + mutation battery
 
-- [ ] 5.1 Implement the before/after sweep (T7): snapshot `memory.{high,max,swap.max,low,min}` for
+- [ ] 5.1 Implement the before/after sweep (T10): snapshot `memory.{high,max,swap.max,low,min}` for
       **every** cgroup under `/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/`
       recursively, plus a directory inventory, plus a checksum of `~/.config/systemd/user.control/`.
-- [ ] 5.2 Run the mutation battery M1–M9; **every mutant killed by a named assertion**, recorded per
+- [ ] 5.2 Run the mutation battery M1–M7; **every mutant killed by a named assertion**, recorded per
       mutant. A surviving mutant means the assertion is decorative.
 - [ ] 5.3 Explicitly verify the mutant the issue names: **capping the parent slice**
       (`SetUnitProperties("app.slice"…)` / `…("user@<uid>.service"…)`) must fail the sweep. This is
@@ -873,27 +999,43 @@ touching it changes the blast radius, see [D12](#d12--blast-radius-a-documented-
 
 - [ ] **AC1** `git ls-files -s .claude/hooks/memory-backstop.sh` reports **`100755`**, and
       `settings-hook-exec-bit.test.sh` asserts index mode `100755` for **every** hook path parsed out
-      of `.claude/settings.json` across all hook events (**34** after this PR), with an empty-listing
-      guard and a cardinality floor of 25. Proven non-vacuous by flipping one hook to `100644` in a
-      scratch copy and observing RED.
+      of `.claude/settings.json` across all hook events. **Cardinality is asserted three ways, not by
+      a loose floor** — a floor of 25 against 34 paths would still pass a `jq` filter that silently
+      dropped an entire hook event: (a) the listing is non-empty; (b) **every** top-level key under
+      `.hooks` contributes ≥ 1 path (so dropping `PostToolUse` fails); (c) the derived count equals
+      the count of `"type": "command"` entries in the file — a **self-consistent** check that needs no
+      hand-maintained magic number.
 - [ ] **AC2** The suite invokes the hook through the **command string reconstructed from
       `settings.json`** (`$CLAUDE_PROJECT_DIR` substituted, bare path, direct exec) — **not**
-      `bash <hook>`. A test asserts that running the hook with the executable bit cleared in a scratch
-      copy **fails**, proving the invocation honours the mode bit.
+      `bash <hook>`. A second assertion clears the executable bit on a scratch copy and confirms that
+      same invocation **fails**. *This guards the test, not the kernel*: `execve` on a `0644` file
+      returning `EACCES` is a POSIX guarantee, but a test harness that silently fell back to
+      `bash <hook>` would swallow it — and that fallback is precisely how #7151's 26 green assertions
+      sat on a hook that could not run.
 - [ ] **AC3** (a) `systemctl --user show soleur-agent-<pid>.scope -p BindsTo` equals the terminal
       scope discovered from `/proc/<claude-pid>/cgroup`; **and** (b) in a synthetic parent/child pair,
       stopping the parent leaves the child's PID **dead** and the child unit **absent**. Both
       required — (a) alone would not have caught #7151's escape.
-- [ ] **AC4** A fleet-wide bound exists on `soleur-agents.slice` (`MemoryHigh=17179869184`,
-      `MemoryMax=21474836480`, `MemorySwapMax=0`), read back from the **kernel files** not only
-      `systemctl show`, and asserted with **two concurrent synthetic sessions**: with both scopes
-      live, the slice's `memory.current` reflects both and its caps are unchanged by the second
-      adoption.
-- [ ] **AC5** `MemorySwapMax=0` read back from `memory.swap.max` on **both** the scope and the slice.
-- [ ] **AC6** With `SOLEUR_MEMORY_BACKSTOP_TEST_MODE` **unset**, setting
-      `SOLEUR_MEMORY_BACKSTOP_TARGET_PID` and `…_SCOPE_MAX_BYTES=0` has **no effect** (identity check
-      still runs, cap unchanged). With the flag set, values outside the validated bands are
-      **refused** — nothing applied, `outcome=refused reason=cap_out_of_range` logged.
+- [ ] **AC4** A fleet-wide bound exists on `soleur-agents.slice`, asserted in **two separate arms**
+      because one arm cannot carry both claims (a contradiction plan review caught in the earlier
+      draft):
+      **(a) values** — from the single end-to-end exec of the real hook, the **production** slice
+      reads `MemoryHigh=17179869184`, `MemoryMax=21474836480`, `MemorySwapMax=0` from the **kernel
+      files**, not only `systemctl show`;
+      **(b) more than one session** — in the namespaced test slice, two concurrent synthetic scopes
+      **each allocate a deterministic fixed amount** before the assertion (never a timing-dependent
+      read, since `memory.current` starts at 0 after adoption and only grows with new allocations),
+      and the assertion is the **relationship**: the slice's `memory.current` ≥ the sum of both
+      allocations, and its caps are unchanged by the second adoption.
+- [ ] **AC5** *(merged — `MemorySwapMax=0` is asserted on the slice by AC4(a) and on the scope by
+      AC8's readback loop. Retained as a number so downstream references do not shift.)*
+- [ ] **AC6** The hook has **no production-reachable injection path at all**
+      ([D10](#d10--no-test-seams-at-all-two-sided-cap-validation)): a grep asserts the only
+      environment variable it reads is `SOLEUR_DISABLE_MEMORY_BACKSTOP`, and the `main` guard means
+      sourcing exposes functions while exec runs `main`. Cap validation is asserted by calling
+      `validate_caps` directly with out-of-range arguments — each of the four values rejected below
+      floor and above ceiling, accepted inside, and a refusal applying **nothing** with
+      `outcome=refused reason=cap_out_of_range` logged.
 - [ ] **AC7** A before/after **filesystem sweep** over every cgroup under
       `/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/` shows
       `memory.{high,max,swap.max,low,min}` changes **only** on the hook's own scope and its own slice
@@ -908,22 +1050,54 @@ touching it changes the blast radius, see [D12](#d12--blast-radius-a-documented-
 - [ ] **AC10** Idempotency: three runs for the same PID yield exactly one `soleur-agent-<pid>.scope`
       with caps **refreshed not duplicated**, and the `BindsTo` target **unchanged** on re-entry —
       proving the hook does not re-derive the terminal scope from its own scope.
-- [ ] **AC11** **Observable effect, not exit 0:** after adoption, **every** PID in the collected tree
-      — including a live MCP child — has `/proc/<pid>/cgroup` equal to the new scope. A mutant that
-      adopts only `claude`'s own PID is killed by this.
-- [ ] **AC12** `bash scripts/test-all.sh` fully green, its log showing both new suites ran. This runs
-      the **suite's own invocation**, not a hand-enumerated subset.
-- [ ] **AC13** Mutation battery M1–M9 run, **every mutant killed**, killing assertion named per mutant
-      in the PR body.
-- [ ] **AC14** `ADR-155-…` exists with `## Decision` and an `## Alternatives Considered` naming
-      raw-cgroup writes, `ulimit -v`, `memory.high`-only, `oom_score_adj`, **the `soleur-claude`
-      wrapper**, and the static slice unit file — each with the measurement that refuted it. The five
-      `.c4` edits applied; `c4-code-syntax.test.ts` + `c4-render.test.ts` pass.
-- [ ] **AC15** `ManagedOOMPreference` reads back **`avoid`** on `soleur-agents.slice`, and `oomctl`
-      output before/after is recorded in the PR body showing no soleur cgroup as a kill candidate.
-- [ ] **AC16** The PR body records: live-arm evidence (7.2), the measured baseline the cap arithmetic
-      rests on, the residual (~45 s of 100 % CPU), the D11 denominator gap, and the D3
-      `active (abandoned)` hole. `Closes #7166`.
+- [ ] **AC11** **Observable effect, not exit 0** — and **not self-referential.** An earlier draft
+      asserted "every PID *in the collected tree* is in the scope", where the collection and the
+      assertion shared one source of truth: a mutant that collects a *smaller* tree (depth-1 only, or
+      an early return at 8 PIDs) satisfies it trivially, so **a partial-collection mutant would have
+      survived the whole battery.** Revised: after adoption the test **re-walks `/proc`
+      independently** for descendants of the claude PID and asserts (a) that set ⊆ the scope's
+      `cgroup.procs`, **and** (b) `|cgroup.procs| == |independently-derived tree|`.
+      The test must also **spawn a synthetic grandchild** (`sleep` under `bash` under the target) so
+      tree size ≥ 3 **by construction** — the earlier "including a live MCP child" wording made the
+      whole D6/G18 headline risk contingent on `playwright-mcp` happening to be running, and passed
+      on a tree of size 1 when it was not.
+- [ ] **AC12** `scripts/test-all.sh`'s **own log** shows both new suites ran by name
+      (`.claude/hooks/memory-backstop.test.sh`, `.claude/hooks/settings-hook-exec-bit.test.sh`).
+      Scoped to the **registration** claim — that the `.claude/hooks/*.test.sh` glob actually reaches
+      them and neither is an orphan. "Full suite green" is the repo's standing merge gate, not an
+      acceptance criterion of this feature.
+- [ ] **AC13** *(cut at plan review — a meta-AC asserting that other ACs were asserted. Every mutant
+      already names its killing AC in the battery table; that table is the artifact.)*
+- [ ] **AC14** `ADR-155-…` exists at the resolved ordinal with `## Decision` and
+      `## Alternatives Considered` sections, and the five `.c4` edits are applied with
+      `c4-code-syntax.test.ts` + `c4-render.test.ts` passing. *(The six-alternative table with its
+      refuting measurements is an authoring instruction in Phase 6.1.1 — no command can check "each
+      with the measurement that refuted it", so it is not an AC.)*
+- [ ] **AC15** `ManagedOOMPreference` reads back **`avoid`** on `soleur-agents.slice`. *(The
+      `oomctl`-before/after clause is **cut**: with zero monitored cgroups it returns the same result
+      on every arm — an un-run instrument by this plan's own G15 standard. The limitation is recorded
+      in ADR-155 instead; see [D7](#d7--systemd-oomd).)*
+- [ ] **AC16** *(cut at plan review — a verbatim restatement of Phase 7.4, checkable by no command.
+      The PR-body content requirement lives at 7.4 where it belongs, and 7.4 now requires the
+      live-arm evidence be pasted **verbatim as command-plus-output**, not summarised.)*
+- [ ] **AC17** **The real Claude Code runtime invoked the hook — not the test harness, not a hand-run.**
+      After the (moved) Phase 4.1 wiring, trigger a genuine SessionStart (fresh `claude` launch, or
+      `/clear` in a live session) and assert a **new** line in `.claude/.memory-backstop.jsonl` whose
+      `pid` is a `claude` PID **not spawned by the test harness or by Phase 4.3**, with `ts`
+      postdating the wiring commit.
+      **Why this AC exists and why it is the most important one here:** AC1, AC2, AC12 and the
+      Phase 7.2 live-arm evidence are *jointly satisfiable in a world where the SessionStart runtime
+      never invoked the hook once* — AC2 proves the **test harness's** executor honours the mode bit,
+      Phase 4.3 *reconstructs* the command string and runs it **by hand**, and 7.2's
+      `systemctl --user list-units` output is produced by whichever exec created the scope, including
+      that hand-run. That is #7151 verbatim, one layer up: every green light, and the runtime never
+      ran it. AC17 is the only check in the plan that reads the actual invariant.
+- [ ] **AC18** **Re-entry re-sweep works** ([D6](#d6--adopt-the-tree-not-just-the-pid), G21). Spawn a
+      child **after** first adoption, re-run the hook, and assert the new child's
+      `/proc/<pid>/cgroup` equals the scope — proving `Delegate=true` +
+      `AttachProcessesToUnit` are wired. AC10's three back-to-back runs use a **static** tree and
+      pass against a hook that never re-sweeps, so without AC18 the re-sweep is entirely untested
+      while `resume|clear|compact` convergence depends on it.
 
 ### Post-merge (operator)
 
@@ -939,7 +1113,7 @@ touching it changes the blast radius, see [D12](#d12--blast-radius-a-documented-
 |---|---|---|
 | T1 | `settings.json` parse | 34 paths derived; all tracked; all `100755`; empty-listing guard fires on a mangled filter; floor 25 |
 | T2 | Cap range validation | each of four values rejected below floor and above ceiling; accepted inside; refusal applies nothing |
-| T3 | Test-mode gating | with the master flag unset, every injection variable is inert (AC6) |
+| T3 | **No injection path** | grep asserts `SOLEUR_DISABLE_MEMORY_BACKSTOP` is the only env var the hook reads; sourcing exposes functions without executing `main` (AC6) |
 | T4 | PPid walk | a synthetic `/proc` fixture whose ancestor `comm` contains a space parses correctly; the `stat`-field-4 form fails the same fixture |
 | T5 | Identity guards | empty `exe` readlink ⇒ **no adoption** (not "keep walking"); PID 1 / PID 0 / self rejected; the matching identity signal is logged |
 | T6 | Fail-open branches | five distinct `reason` enums; `exit 0`; no `systemMessage` (AC9) |
@@ -955,23 +1129,33 @@ touching it changes the blast radius, see [D12](#d12--blast-radius-a-documented-
 | T11 | Kill switch | synthetic parent + `BindsTo`-bound child; `stop` parent ⇒ child PID dead, child unit gone (AC3) |
 | T12 | Fleet bound, **two sessions** | two synthetic scopes in `soleurtest-agents.slice`; slice caps intact; `memory.current` reflects both (AC4) |
 | T13 | `ManagedOOMPreference` | reads back `avoid` on the slice (AC15) |
-| T14 | Kill mechanism | a **256 MB** scope; bounded allocator inside; `memory.events` `oom_kill ≥ 1`; the *scope* survives (`OOMPolicy=continue`) while the allocator dies. **Never at the real cap.** |
+| T14 | Kill mechanism — **rewritten; the original was self-defeating** | Scope at `MemoryHigh=200MB, MemoryMax=256MB, MemorySwapMax=0`. Put a **sentinel `sleep` in the scope first** (standing in for `claude`), *then* the bounded allocator. Assert the **triple**: allocator PID **dead**, sentinel PID **alive**, `oom_kill ≥ 1` read from the **still-live** cgroup. *Why the sentinel:* with the allocator alone the scope empties on its death and **self-cleans (G11)** — the cgroup is gone before `memory.events` can be read, so the original spec could never pass. *Why swap 0:* without it the allocator swaps instead of OOMing. *Why high≠max:* exercises the high→max transition ([D2](#d2--memoryhigh-vs-memorymax)) for free. **This is the only place [D4](#d4--oom-victim-selection)'s behaviour is tested** — AC8 reads properties only. **Never at the real cap.** |
 | T15 | Idempotency | three runs ⇒ one scope, refreshed caps, unchanged `BindsTo` (AC10) |
-| T16 | Kill attribution | seed a non-zero `oom_kill` on a synthetic scope; assert the re-entry `systemMessage` names the cap and the raise-command |
+| T16 | Kill attribution — **re-scoped; the original was impossible** | `memory.events` is a **read-only kernel file** and `oom_kill` is a kernel-maintained counter, so "seed a non-zero `oom_kill`" cannot be done. Two arms instead: **(a) live** — chain onto T14, which has already produced a real `oom_kill ≥ 1` with a surviving sentinel; re-run the hook against that scope and assert the `systemMessage`. **(b) fixture (runs in CI)** — the attribution function takes the `memory.events` **path as a function argument**, so a sourced test points it at a temp file containing `oom_kill 3`. *(A path argument, deliberately **not** an env var — [D10](#d10--no-test-seams-at-all-two-sided-cap-validation) removed the injection surface and this must not re-introduce it.)* |
+| T17 | **Attribution fires on increase, not on non-zero** | Run re-entry **twice** against an unchanged counter; assert **exactly one** message. `oom_kill` is monotonic and never resets, so a non-zero test re-emits the same post-mortem on every SessionStart forever — contradicting the Observability block's `EDGE-TRIGGERED only … Never per-session`. |
+| T18 | **The documented kill path actually reaps** | `systemctl --user stop soleurtest-agents.slice`; assert every scope beneath it is gone and its PIDs dead. Without this the one command a non-technical operator is told to use is untested — and if a scope lands off the expected slice chain it silently does nothing. |
+| T19 | **`systemMessage` is well-formed** | On the message path, `jq -e .systemMessage` succeeds against the hook's **stdout**; on the non-message path stdout is **zero bytes**. A malformed message is operationally indistinguishable from "no OOM happened". |
 
 **Mutation battery**
+
+Restructured at plan review. The earlier M2/M3/M9 were **three instances of one mutant shape** —
+"a property string was omitted from an array passed to a D-Bus call, and a readback fires" — killed
+by the same instrument. They collapse into a single parameterised mutant, and the freed slot goes to
+a genuinely uncovered defect (the self-binding bug), which nothing previously mutated.
 
 | # | Mutation | Must be killed by |
 |---|---|---|
 | M1 | Commit the hook `100644` | T1 / AC1 index-mode assertion |
-| M2 | Drop `OOMPolicy=continue` | T8 / AC8 |
-| M3 | Drop `MemorySwapMax` | T8 / AC5 |
-| M4 | Drop `BindsTo`/`After` | T11 **behavioural** arm (the unit-level check alone must NOT suffice) |
-| M5 | `SetUnitProperties("app.slice", …)` — **cap the parent slice** | T10 sweep (the mutant that defeated #7151's check) |
-| M6 | Drop `runtime=true` (persistent drop-in) | T10 `user.control` byte-identical check |
-| M7 | Read `…_TARGET_PID` outside the test-mode branch | T3 / AC6 |
-| M8 | Adopt only `claude`'s own PID (drop the tree) | T9 / AC11 |
-| M9 | Drop `ManagedOOMPreference=avoid` | T13 / AC15 |
+| M2 | **Omit one declared property** from either D-Bus array — run once per property over `{OOMPolicy, MemorySwapMax, ManagedOOMPreference, MemoryHigh, MemoryMax}` | one readback loop over every declared property: T8 / T13 / AC8, AC4(a), AC15 |
+| M3 | Drop `BindsTo`/`After` | T11 **behavioural** arm (the unit-level check alone must NOT suffice) |
+| M4 | `SetUnitProperties("app.slice", …)` — **cap the parent slice** | T10 sweep (the mutant that defeated #7151's check) |
+| M5 | Drop `runtime=true` (persistent drop-in) | T10 `user.control` byte-identical check — a *different instrument* from M4's subtree-delta check |
+| M6 | Adopt only `claude`'s own PID (drop the tree) | T9 / AC11 |
+| M7 | **Re-derive the terminal scope on re-entry** (the [D9](#d9--idempotency-re-entry-and-kill-attribution) self-binding bug: the scope binds to *itself*, silently destroying the kill switch) | T15 / AC10 `BindsTo`-unchanged assertion |
+
+*(The former M7 — "read `…_TARGET_PID` outside the test-mode branch" — is **deleted, not moved**:
+under [D10](#d10--no-test-seams-at-all-two-sided-cap-validation) there is no test-mode branch and no
+injection variable to leak, so the mutant is unrepresentable.)*
 
 ---
 
