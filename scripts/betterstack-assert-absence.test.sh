@@ -124,6 +124,23 @@ RC=0; OUT=$(BETTERSTACK_QUERY_SCRIPT="$TMP/stub.sh" bash "$SUT" \
   --host soleur-web-1 --absence X --since 1h 2>&1) || RC=$?
 eq "exactly 1h is accepted (boundary, not off-by-one)" "0" "$RC"
 
+# --- malformed --since must be a USAGE error, never an outcome ---
+# Found in review. The original implementation fed the flag straight to `$(( ))`; an arithmetic
+# EXPANSION error is fatal at expansion time, so the `|| echo -1` guarding it never ran, `set -e`
+# killed the script, and it exited **1** with empty output — and 1 is `present` in this script's
+# own table. The follow-through probe maps `present` to FAIL, so a typo'd window would have
+# reported "the credential channel has regressed" with no way to tell it was a usage error.
+for badwin in '1;evil h' 'abc' '$(id) h' '1 h' 'h' '-5h'; do
+  RC=0; OUT=$(BETTERSTACK_QUERY_SCRIPT="$TMP/stub.sh" bash "$SUT" \
+    --host soleur-web-1 --absence X --since "$badwin" 2>&1) || RC=$?
+  eq "malformed --since '$badwin' is a usage error (64), never an outcome code" "64" "$RC"
+  if [[ -n "$OUT" ]]; then
+    ok "  and it says why (non-empty diagnostic)"
+  else
+    bad "malformed --since '$badwin' exited silently — undiagnosable"
+  fi
+done
+
 # --- required flags ---
 RC=0; OUT=$(BETTERSTACK_QUERY_SCRIPT="$TMP/stub.sh" bash "$SUT" --absence X 2>&1) || RC=$?
 eq "--host is required (an unscoped read is refused)" "64" "$RC"

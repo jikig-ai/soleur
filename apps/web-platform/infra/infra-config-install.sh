@@ -186,6 +186,21 @@ fi
 # is safe in the only direction that matters: a continuation can merge permitted lines into one
 # directive, never synthesise a directive whose first physical line this loop did not inspect.
 #
+# WHAT THIS GATE DOES NOT DEFEND AGAINST, stated plainly so nobody has to re-derive it:
+# `Environment=` is permitted, and it can set process-influencing variables — `LD_PRELOAD` being
+# the obvious one. Verified adversarially: that payload IS accepted.
+#
+# It is acceptable HERE, and the reason is specific rather than general. Both units the
+# DROPIN_TRY_RESTART grant covers run `User=deploy Group=deploy` (checked, not assumed:
+# inngest-bootstrap.sh's heartbeat heredoc and soleur-host-bootstrap.sh's vector heredoc), and
+# the handler writing these drop-ins ALREADY runs as deploy. So an env-var injection buys the
+# deploy user influence over a process the deploy user already owns — lateral, not escalation.
+# `User=` is on the forbidden list precisely so that stays true: without it a drop-in could
+# re-point either unit at root and the argument above would collapse.
+#
+# If a future unit running as root is ever added to RESTART_MAP, this gate is no longer
+# sufficient and `Environment=` must be narrowed to an explicit key allowlist.
+#
 # `grep -c` reads ALL input (no early close), so this cannot SIGPIPE the producer the way
 # `| grep -q` would under `set -o pipefail` — same reason as the env-file gate above.
 if [[ "$dest_canonical" == /etc/systemd/system/*.service.d/*.conf ]]; then

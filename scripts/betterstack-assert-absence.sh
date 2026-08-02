@@ -87,15 +87,31 @@ done
 # ZERO canaries on a perfectly healthy host — which this helper would report as `unshipping`.
 # A false `unshipping` is worse than no check: it teaches the operator to ignore the signal.
 # Rejected by name rather than evaluated.
+# SHAPE-VALIDATE BEFORE ARITHMETIC. An arithmetic *expansion* error is fatal at expansion time
+# in a non-interactive shell, so a trailing `|| echo -1` — even inside the command substitution —
+# never runs: the subshell dies mid-expansion, `set -e` kills the caller, and the script exits 1
+# with NO message. In this script's own outcome table 1 means `present`, so a malformed --since
+# would have reported "the events are still there" for what is actually a usage error, and the
+# follow-through probe would have told the operator the credential channel had regressed.
+# Measured: `--since '1;evil h'` exited 1 with empty output.
+#
+# So the regex is the gate and `$(( ))` only ever sees digits.
 since_secs() {
-  case "$1" in
-    *h) echo $(( ${1%h} * 3600 )) ;;
-    *d) echo $(( ${1%d} * 86400 )) ;;
-    *m) echo $(( ${1%m} * 60 )) ;;
-    *)  echo -1 ;;
+  local v="$1" n u
+  [[ "$v" =~ ^([0-9]+)([hdm])$ ]] || { echo -1; return 0; }
+  n="${BASH_REMATCH[1]}"; u="${BASH_REMATCH[2]}"
+  case "$u" in
+    h) echo $(( n * 3600 )) ;;
+    d) echo $(( n * 86400 )) ;;
+    m) echo $(( n * 60 )) ;;
   esac
 }
-SINCE_SECS=$(since_secs "$SINCE" 2>/dev/null || echo -1)
+SINCE_SECS=$(since_secs "$SINCE")
+# Belt-and-braces: nothing below may interpolate a non-integer into the SQL's INTERVAL.
+if ! [[ "$SINCE_SECS" =~ ^-?[0-9]+$ ]]; then
+  echo "betterstack-assert-absence: --since '$SINCE' did not resolve to an integer number of seconds." >&2
+  exit 64
+fi
 if [[ "$SINCE_SECS" -lt 3600 ]]; then
   echo "betterstack-assert-absence: --since '$SINCE' is below the 1h minimum. The positive control is rate-limited to 1800s, so a shorter window can hold zero canaries on a healthy host and would report a false 'unshipping'." >&2
   exit 64
