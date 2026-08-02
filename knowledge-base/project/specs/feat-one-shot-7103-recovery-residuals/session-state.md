@@ -215,11 +215,52 @@ of the rest of the file. It surfaced as a reported syntax error at line 984 that
 disagreed with — the tell that the LINTER's parse was failing, not the script's. Fixed; the file
 now reports only pre-existing advisories.
 
+### Review phase (inline, DEGRADED — read this before trusting the coverage)
+
+**Reviewed with 0 of ~10 agents.** Agent spawning is disabled for this session, so the
+multi-agent panel did NOT run. This was the sanctioned Gate 2a inline fallback, not a full
+review. What that costs: the panel's independent lenses (security-sentinel, test-design-reviewer,
+architecture-strategist in particular) are exactly the ones that historically catch what a
+self-review misses on this class of diff — and the author of the code is the reviewer here.
+Treat the findings below as a floor, not a clearance.
+
+**3 findings, all pr-introduced, all fixed inline (0 filed).**
+
+1. **P1 — the PR body would have auto-closed #7103.** Caught by task 8.5's own check. The opening
+   line read "Closes #7103's R1–R5"; GitHub's close-keyword parser is word-boundary based, so it
+   would have closed the tracker on merge with B1–B7 and R1's half (a) still open — precisely the
+   outcome 8.5 and the tracker's exit gate exist to prevent. The sentence that violated the rule
+   was the sentence *explaining* the rule. Rewritten; re-verified 0 adjacencies in BOTH the PR
+   body and the commit bodies that will be squashed.
+2. **P2 — `betterstack-assert-absence.sh` reported a usage error as an OUTCOME.** `since_secs()`
+   fed the flag straight to `$(( ))`; an arithmetic EXPANSION error is fatal at expansion time, so
+   the `|| echo -1` never ran, `set -e` killed the script, and it exited **1** — which is
+   `present` in its own table. The follow-through probe maps `present` to FAIL, so a typo'd window
+   would have told the operator the credential channel had regressed. Measured: `--since
+   '1;evil h'` exited 1 silently. Now shape-validated by regex (so `$(( ))` only sees digits) plus
+   an integer assert before the SQL interpolation; 6 malformed shapes pinned.
+3. **P3 — the drop-in gate's residual surface was undocumented.** `Environment=` is permitted and
+   accepts `LD_PRELOAD` (verified adversarially). Acceptable here for a SPECIFIC reason now
+   recorded in the file: both granted units run `User=deploy` and the handler already runs as
+   deploy, so it is lateral rather than escalation — and `User=` is forbidden precisely so that
+   stays true. Noted with the condition that would invalidate it (a future root unit in
+   RESTART_MAP).
+
+**Adversarial testing of the drop-in shape gate** (the security precondition) — 9 payloads:
+continuation-smuggling `ExecStart`, comment-continuation swallowing, CRLF, UTF-8 BOM, trailing
+comment on `[Service]`, leading-whitespace `ExecStart`, `[Unit]`, `LD_PRELOAD`, positive control.
+Every escalation attempt rejected; the two accepts are correct-by-design and now documented.
+
 ### Resume point
 **All implementation phases are DONE (0 through 8).** The only open task is **8.5** — use
 `Ref #7103` in the PR body, never `Closes` — which belongs to `/ship`.
 
-Remaining: /review -> /compound -> /ship. (/qa does not apply: the diff touches no
+Remaining: **/compound -> /ship**. Review is done (inline, degraded — see above).
+
+`/ship` still owes: `gh pr ready`, the Phase 5.5 review-findings exit gate, and auto-merge. The
+PR body is already written and safe (8.5 verified on both surfaces). If the panel can be run in a
+later session, run `/review` again BEFORE shipping — this diff grants a root restart on a host
+with no replacement path, and a 0-agent review is thin evidence for that blast radius. (/qa does not apply: the diff touches no
 `apps/web-platform/app/(dashboard)/**`, `components/dashboard/**` or any `layout.tsx`.)
 
 A PR body is drafted and ready for /ship, carrying 5.7's required-check gating decision verbatim,
