@@ -196,9 +196,16 @@ logs:
   where: incident ledger + hook stderr (local, operator machine)
   retention: as per existing ledger rotation
 discoverability_test:
+  # CORRECTED at /work. The originally planned probe used a single-quoted
+  # `printf` whose `\"` sequences printf itself unescapes, emitting INVALID
+  # JSON. guardrails.sh's jq extraction then fails and falls back to
+  # COMMAND="" — so every guard no-ops and the probe returns empty. As
+  # written it could never have produced a deny, for ANY rule: a fail-open
+  # verification. Build the payload with jq so the quoting is machine-made.
   command: >-
-    printf '{"tool_name":"Bash","tool_input":{"command":"grep -noE
-    \".{0,80}(a|b)[^.]{0,120}\" f.md"}}' | bash .claude/hooks/guardrails.sh
+    jq -nc --arg c 'grep -noE ".{0,80}(a|b)[^.]{0,120}" f.md'
+    '{tool_name:"Bash",tool_input:{command:$c}}'
+    | bash .claude/hooks/guardrails.sh
   expected_output: JSON with permissionDecision "deny"
 ```
 
