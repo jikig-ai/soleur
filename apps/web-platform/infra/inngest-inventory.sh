@@ -120,11 +120,52 @@ resolve_host_id() {
   return 1
 }
 
-GQL_URL="${INNGEST_GQL_URL:-http://127.0.0.1:8288/v0/gql}"
+# --- Probe target derivation (#7144) -------------------------------------------------
+# The watchdog MUST probe whatever the app actually dispatches to, not a fixed loopback.
+#
+# This defaulted to 127.0.0.1:8288 unconditionally. When ADR-100's cutover repointed the
+# app at the dedicated host (10.0.1.40) on 2026-07-24 but left this probe on loopback,
+# the two silently disagreed: the dedicated host never bound :8288, every inngest.send()
+# got ECONNREFUSED for ~3 days, and scheduled-inngest-health.yml reported SUCCESS every
+# ~1-2h throughout — because it was certifying the SURVIVING co-located server while the
+# app's real dependency was dead. The vendor (Resend) detected the outage before we did.
+#
+# A hardcoded target can only be correct while the app agrees with it, and is only WRONG
+# in exactly the window where the alarm matters. So derive it from the app container's own
+# env, which is the source of truth for where inngest.send() goes.
+#
+# Container-vs-host view: the container reaches the co-located server through
+# `host.docker.internal` (a --add-host host-gateway alias that does NOT resolve on the
+# host). From the host that same server IS loopback, so map it. Any other host (an IP
+# like 10.0.1.40) is on the private network and is probed literally — which is precisely
+# the case this function exists to stop hiding.
+INNGEST_APP_CONTAINER="${INNGEST_APP_CONTAINER:-soleur-web-platform}"
+
+derive_dispatch_base() {
+  local base host_part
+  base=$(docker inspect "$INNGEST_APP_CONTAINER" \
+           --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+         | sed -n 's#^INNGEST_BASE_URL=##p' | head -1)
+  base="${base%/}"
+  [ -n "$base" ] || return 1
+  host_part="${base#http://}"; host_part="${host_part#https://}"
+  case "$host_part" in
+    host.docker.internal|host.docker.internal:*)
+      # Container-side alias for the co-located server; loopback from the host.
+      printf 'http://127.0.0.1:%s' "${host_part##*:}" ;;
+    *) printf '%s' "$base" ;;
+  esac
+}
+
+# Explicit env override always wins (tests + ad-hoc probes). Otherwise follow the app.
+# Loopback remains the last resort ONLY when the container env cannot be read at all.
+INNGEST_PROBE_BASE="${INNGEST_PROBE_BASE:-$(derive_dispatch_base || printf 'http://127.0.0.1:8288')}"
+
+GQL_URL="${INNGEST_GQL_URL:-${INNGEST_PROBE_BASE}/v0/gql}"
 # #6407 Defect A — loopback /health endpoint used to CORROBORATE a functions-query failure
 # in LIVENESS_ONLY mode before declaring a hard down. Same loopback server + same /health
 # path that ci-deploy.sh verify_inngest_health gates on (ci-deploy.sh:1002).
-INNGEST_HEALTH_URL="${INNGEST_HEALTH_URL:-http://127.0.0.1:8288/health}"
+INNGEST_HEALTH_URL="${INNGEST_HEALTH_URL:-${INNGEST_PROBE_BASE}/health}"
 # Cost lever (#6258 Deepen Finding 3): raise PAGE_SIZE (lossless round-trip cut) — the ONLY
 # completeness-preserving lever. Never narrow FROM_TS. Env-overridable for tests.
 PAGE_SIZE="${INNGEST_GQL_PAGE_SIZE:-500}"

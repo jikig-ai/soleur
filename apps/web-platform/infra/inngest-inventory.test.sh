@@ -920,5 +920,103 @@ test_no_argv_accumulation
 test_fatal_cleans_spool_tempfile
 test_argv_ceiling_final_emit_armed
 
+# --- #7144: the probe target must FOLLOW the app's dispatch target -------------------
+# Regression guard for the 3-day silent outage. ci-deploy.sh repointed the app at the
+# dedicated host (10.0.1.40) while this script kept probing loopback, so the watchdog
+# certified a DIFFERENT, surviving server and reported success throughout. A hardcoded
+# target is only wrong in exactly the window where the alarm matters.
+#
+# Drives the REAL function out of the REAL file (extracted, not re-declared) so a revert
+# to a hardcoded default fails this suite instead of quietly passing.
+test_probe_target_follows_app() {
+  echo "Test: probe target derives from the app container (#7144)"
+
+  # Extract INNGEST_APP_CONTAINER default + derive_dispatch_base from the source file.
+  local fn
+  fn=$(sed -n '/^INNGEST_APP_CONTAINER=/,/^}$/p' "$TARGET")
+  if [[ -z "$fn" || "$fn" != *"derive_dispatch_base()"* ]]; then
+    echo "  FAIL: could not extract derive_dispatch_base from $TARGET (hardcoded default reintroduced?)"
+    FAIL=$((FAIL + 1)); return
+  fi
+
+  local d bindir
+  d=$(mktemp -d) || { echo "  FAIL: mktemp"; FAIL=$((FAIL + 1)); return; }
+  bindir="$d/bin"; mkdir -p "$bindir" || { echo "  FAIL: mkdir"; FAIL=$((FAIL + 1)); rm -rf "$d"; return; }
+
+  # docker stub: emits the container env from a fixture file. Fails loudly (64) if the
+  # SUT does not ask for the container by name — a stub that answers regardless of argv
+  # cannot detect the SUT querying the wrong thing.
+  cat > "$bindir/docker" <<'STUB'
+#!/usr/bin/env bash
+[[ "$1" == "inspect" ]] || exit 64
+[[ "$*" == *"soleur-web-platform"* ]] || exit 64
+[[ -s "$DOCKER_ENV_FIXTURE" ]] || exit 1
+cat "$DOCKER_ENV_FIXTURE"
+STUB
+  chmod +x "$bindir/docker"
+
+  run_derive() {
+    local fixture="$1"
+    ( export PATH="$bindir:$PATH" DOCKER_ENV_FIXTURE="$fixture"
+      unset INNGEST_PROBE_BASE INNGEST_GQL_URL INNGEST_HEALTH_URL
+      eval "$fn"
+      derive_dispatch_base || printf 'http://127.0.0.1:8288' )
+  }
+
+  # (1) Co-located: the container-side alias maps to loopback from the host.
+  printf 'PATH=/usr/bin\nINNGEST_BASE_URL=http://host.docker.internal:8288\nNODE_ENV=production\n' > "$d/colocated"
+  assert_eq "host.docker.internal maps to host loopback" \
+    "http://127.0.0.1:8288" "$(run_derive "$d/colocated")"
+
+  # (2) THE REGRESSION: a dedicated-host repoint must be FOLLOWED, not silently ignored.
+  # Under the old hardcoded default this returned loopback and the watchdog went green
+  # against the wrong server for three days.
+  printf 'INNGEST_BASE_URL=http://10.0.1.40:8288\n' > "$d/dedicated"
+  assert_eq "dedicated-host repoint is followed (the #7144 blind spot)" \
+    "http://10.0.1.40:8288" "$(run_derive "$d/dedicated")"
+
+  # (3) Trailing slash normalised.
+  printf 'INNGEST_BASE_URL=http://10.0.1.40:8288/\n' > "$d/trailing"
+  assert_eq "trailing slash normalised" \
+    "http://10.0.1.40:8288" "$(run_derive "$d/trailing")"
+
+  # (4) Unreadable container env degrades to loopback rather than probing nothing.
+  : > "$d/empty"
+  assert_eq "unreadable container env falls back to loopback" \
+    "http://127.0.0.1:8288" "$(run_derive "$d/empty")"
+
+  # (5) PARITY with ci-deploy.sh, mirroring the cron-inngest-cron-watchdog guard: the
+  # value the deploy script actually injects must be one this function can resolve.
+  local ci_deploy ci_val derived
+  ci_deploy="$(dirname "$TARGET")/ci-deploy.sh"
+  if [[ -r "$ci_deploy" ]]; then
+    ci_val=$(grep -oE 'INNGEST_BASE_URL=http://[^[:space:]\\]+' "$ci_deploy" | head -1 | sed 's#^INNGEST_BASE_URL=##')
+    if [[ -z "$ci_val" ]]; then
+      echo "  FAIL: no INNGEST_BASE_URL found in ci-deploy.sh"; FAIL=$((FAIL + 1))
+    else
+      printf 'INNGEST_BASE_URL=%s\n' "$ci_val" > "$d/parity"
+      derived=$(run_derive "$d/parity")
+      if [[ "$derived" == http://*:8288 ]]; then
+        echo "  PASS: ci-deploy.sh target ($ci_val) resolves to a probe target ($derived)"
+        PASS=$((PASS + 1))
+      else
+        echo "  FAIL: ci-deploy.sh target ($ci_val) resolved to '$derived'"; FAIL=$((FAIL + 1))
+      fi
+    fi
+  fi
+
+  # (6) Every ci-deploy.sh dispatch site must agree — a per-site divergence would make
+  # canary and prod dispatch to different servers.
+  if [[ -r "$ci_deploy" ]]; then
+    local uniq_n
+    uniq_n=$(grep -oE 'INNGEST_BASE_URL=http://[^[:space:]\\]+' "$ci_deploy" | sort -u | wc -l | tr -d ' ')
+    assert_eq "all ci-deploy.sh INNGEST_BASE_URL sites agree" "1" "$uniq_n"
+  fi
+
+  rm -rf "$d"
+}
+
+test_probe_target_follows_app
+
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]
