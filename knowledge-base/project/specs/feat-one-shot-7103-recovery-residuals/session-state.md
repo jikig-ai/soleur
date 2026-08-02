@@ -129,13 +129,73 @@ the very R3 defect this tracker records (`betterstack-query.sh` has no `--host` 
 terms OR-combine). This is issue B4, outside R1-R5 — evidence filed as a tracker comment, scope
 NOT widened.
 
+---
+
+## Work Phase — session 3 (2026-08-02)
+
+**Verify these against the artifacts before trusting them.** Everything below was measured this
+session. Past tense means done, not intended.
+
+### Phases complete
+- **Phase 3 (R2) — DONE.** 3.1–3.11, in the mandated order (shape gate before grant).
+- **Phase 4 (R3) — DONE.** 4.1–4.8.
+- Phase 0 preconditions executed this session: 0.6 (FILE_MAP = **19**), 0.9, 0.10, 0.11, 0.12.
+  Still unrun: **0.1, 0.3, 0.4, 0.5, 0.7, 0.8** — 0.4/0.5/0.7/0.8 gate Phase 5, so run them first.
+
+### Findings that changed the work (not just executed it)
+- **A mutation battery found a real gap rather than confirming the work.** 8 mutations, 7 killed
+  immediately. The survivor: deleting the mtime-preservation `touch -r` in
+  `infra-config-install.sh` left `infra-config-apply.test.sh` green at **106/106** — every install
+  in that suite runs in SANDBOX mode (direct `mv`), while in prod the helper writes its own temp
+  in the dest dir and discards whatever the caller preserved. The production path had zero
+  coverage. Now asserted against the helper directly, both directions; mutation killed.
+- **The reconciliation loop was unreachable when first written.** The suite was 70/70 green while
+  every unit resolved to `unit_inactive` on any dev box or CI runner, so the whole staleness and
+  grading path never executed. Fixed with stateful, argv-validating (`exit 64`) stubs through the
+  `INFRA_CONFIG_SYSTEMCTL*` seams.
+- **`touch -r` in the caller alone was wrong.** Traced to the real producer: in prod the write
+  goes through the root helper, so the caller-side preservation is discarded before the rename.
+  The fix had to land in `infra-config-install.sh`.
+
+### Deliberate deviations from the plan (each with its reason)
+- **3.8 `active != active`.** Plan called for a hard fail on any unit not active. Every case where
+  the handler *acted* and the restart did not take is already covered by the three failure enums,
+  which fire regardless of resulting state. Extending it to SKIPPED units would permanently red
+  the gate on a host where the unit legitimately does not run (`inngest-heartbeat.service` is
+  created by `inngest-bootstrap.sh`, so it is co-location dependent). Those now `::warning::` by
+  name. "Is vector actually shipping?" is R3's question, answered at the sink.
+- **3.2 sudoers formatting.** One line with two commands (the `INNGEST_QUIESCE` precedent in the
+  same file), not the plan's line-continuation — so 3.10's argv lockstep extracts it without
+  reassembling continuations. `visudo` parses it.
+- **3.9 stale counts.** A grep sweep found **6** stale counts, not the 2 the plan named. Fixed the
+  3 live ones (install.sh ×2 said 18, sudoers said 11, actual 19) **count-free** rather than
+  re-pinned to 19 — `infra-config-install.test.sh` already records why a literal pin is a third
+  source of truth that goes stale on every FILE_MAP addition. The 2 in `push-infra-config.sh` were
+  LEFT ALONE: they sit inside dated nonce rationale describing what the host held at a past
+  moment, so correcting them would falsify the record.
+
+### Components / gates
+- Filed **#7170** (AC12 soak) + cross-link comment on #7103 — **verified present** by re-reading
+  the issue, not recorded on the strength of intending it.
+- Filing gate: Closing 0 / Filing 1 / **Net +1**, justified inline (a post-apply soak cannot be
+  inlined; a dedicated issue is required because the sweeper closes on PASS).
+- `code-simplicity-reviewer` CONCUR gate NOT run — agent spawning is disabled this session. The
+  cost-of-filing test was applied inline instead.
+
+### Verified at this checkpoint
+`run-registered-suites.sh` **87/87**. infra-config-install 44/44, infra-config-apply 106/106,
+infra-config-gate 29/29, infra-config-handler-bootstrap 36/36, journald-config 79/79,
+betterstack-assert-absence 23/23, web-zot-consumer-probe green. `terraform fmt -check` clean.
+`visudo -cf` parses. All shellcheck findings on touched files are pre-existing or annotated.
+
 ### Resume point
-**Phase 3 (R2) is next, and it is atomic with Phase 4 (R3)** — the plan makes R2->R3 a hard
-dependent pair and forbids landing R2 without R3. Do not start Phase 3 without headroom for both.
-Phase 3 is security-critical: it grants `deploy` a root `systemctl try-restart` on the host with
-no replacement path, so 3.1's drop-in content gate MUST land before 3.2's sudoers grant.
+**Phase 5 (R4) is next.** Run preconditions 0.4/0.5/0.7/0.8 first — 0.4 decides Phase 5's home.
 
-Remaining: Phase 3 (R2, 11 tasks) -> Phase 4 (R3, 8) -> Phase 5 (R4, 6) -> Phase 6 (R5(b)) ->
-Phase 7 (Records), then /review -> /qa -> /compound -> /ship.
+Remaining: Phase 5 (R4, 6 tasks) -> Phase 6 (R5(b), 3) -> Phase 7 (Records, 4) ->
+Phase 8 (Exit gate, 5), then /review -> /qa -> /compound -> /ship.
 
-CI at this checkpoint: 72 SUCCESS / 4 SKIPPED / 0 failures. PR 7146 still draft, MERGEABLE.
+Note for Phase 8: `scripts/test-all.sh` does NOT cover `apps/web-platform/infra/` — both runners
+are required, and `betterstack-assert-absence.test.sh` was newly registered in test-all.sh, so the
+baseline is **+1** there beyond the pre-existing delta.
+
+PR 7146 still draft, MERGEABLE. Branch pushed through Phase 4.
