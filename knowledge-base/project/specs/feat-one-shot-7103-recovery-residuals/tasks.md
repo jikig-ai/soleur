@@ -127,11 +127,11 @@ recurrence risk), R2 → R3 a hard dependent pair.
 
 ## Phase 7 — Records
 
-- [ ] 7.1 Write ADR-155 (provisional ordinal; re-derive at `/ship`).
-- [ ] 7.2 Add the one `model.c4` element-description sentence naming the shape gate as the
+- [x] 7.1 Write ADR-155 (provisional ordinal; re-derive at `/ship`).
+- [x] 7.2 Add the one `model.c4` element-description sentence naming the shape gate as the
       delivery↔activation boundary; run the two C4 tests.
-- [ ] 7.3 Append the missing Session Error to the 2026-08-01 learning.
-- [ ] 7.4 Do **not** touch CHANGELOG.
+- [x] 7.3 Append the missing Session Error to the 2026-08-01 learning.
+- [x] 7.4 Do **not** touch CHANGELOG.
 
 ## Phase 8 — Exit gate
 

@@ -171,6 +171,19 @@ which does not move.
     pre-existing Doppler credential read as a GitHub PAT; a gate matched its own glob list.
 14. **IaC-routing guard blocked the initial plan Write** (forwarded) — triggered by a
     rejected-alternative row mentioning hand-editing. Behaved as designed.
+15. **The gate this PR shipped was verified as delivered and never as ACTIVE** (appended
+    2026-08-02 while implementing #7103 R2; the omission this list originally had). The session
+    confirmed the corrected drop-ins landed with the right bytes on `web-1` and treated that as the
+    fix being in effect. systemd reads a drop-in only when its unit is (re)started, and nothing
+    restarted `vector.service` or `inngest-heartbeat.service` — so both kept running the revoked
+    credential while every signal the session had said the repair was complete. It is the same
+    defect class as the entries above (an assertion that cannot observe the thing it claims), one
+    layer out: the assertions were about FILES, and the claim was about PROCESSES.
+    Recovery: #7146 folds unit reconciliation into the handler, grades it on effect rather than
+    exit code, and reports a per-unit verdict the CI gate adjudicates (ADR-155).
+    **Prevention:** when a change's stated outcome is a running process behaving differently, no
+    file-level assertion discharges it — assert the process (`ExecMainStartTimestamp` advanced,
+    `ActiveState` active), or say plainly that activation is unverified.
 
 ## Placement note
 
