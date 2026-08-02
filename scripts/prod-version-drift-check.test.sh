@@ -237,6 +237,28 @@ run_part_a() {
   _classify "$OK_JSON" 0 "not-a-number" "" 0 "$NOW"
   assert_eq "A15b unparseable missing_count -> exit 2" "2" "$rc"
 
+  # --- A15c/A15d: the ONE path that echoes unvalidated input back at a human -------------
+  # DRIFT_DETAIL is interpolated into a GitHub issue body AND into an HTML email body inside
+  # <code>...</code>. The workflow's strip_log_injection removes CONTROL characters only and
+  # does NOT escape markup, so without a charset restriction at the source a hostile or MITM'd
+  # /health could inject markup into the alert that exists to say /health is untrustworthy.
+  _classify '{"build_sha":"<img src=x onerror=alert(1)>"}' 0 0 "" 0 "$NOW"
+  assert_eq "A15c markup build_sha -> still exit 2" "2" "$rc"
+  assert_not_contains "A15c-b DRIFT_DETAIL never echoes raw markup back into issue/email bodies" \
+    "[<>]" "$DRIFT_DETAIL"
+
+  # Unbounded echo is the same class: a megabyte of junk in build_sha must not become a
+  # megabyte of issue body. 64 chars is comfortably above the 40 a real SHA needs.
+  local LONG_SHA
+  LONG_SHA="$(printf 'a%.0s' $(seq 1 500))"
+  _classify "{\"build_sha\":\"${LONG_SHA}\"}" 0 0 "" 0 "$NOW"
+  assert_eq "A15d overlong build_sha -> exit 2" "2" "$rc"
+  if [[ "${#DRIFT_DETAIL}" -le 200 ]]; then
+    pass "A15d-b DRIFT_DETAIL stays bounded (${#DRIFT_DETAIL} chars) on an overlong build_sha"
+  else
+    fail "A15d-b DRIFT_DETAIL stays bounded" "<= 200 chars" "${#DRIFT_DETAIL}"
+  fi
+
   # --- A16/A17: build_sha vs version DISAGREE ---------------------------------
   # The plan argues "compare build_sha, not version", because version only advances when the
   # release job tags -- on a skipped deploy it can look plausible while the image is stale.

@@ -119,9 +119,18 @@ classify_drift() {
   if [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
     DRIFT_DETAIL="prod build_sha ${sha}"
   else
+    # ECHOING BACK UNTRUSTED INPUT: this is the ONE path where a value we did not validate is
+    # quoted into an operator-visible surface. DRIFT_DETAIL reaches a GitHub issue body AND an
+    # HTML email body (inside <code>...</code>), and the workflow's strip_log_injection removes
+    # CONTROL characters only -- it does not escape `<`, `>` or `&`. A hostile or MITM'd /health
+    # could therefore inject markup into the very alert that says it is untrustworthy. Bound the
+    # length and restrict the charset here, at the source, so every downstream consumer is
+    # covered rather than each having to remember.
+    local sha_display
+    sha_display="$(printf '%s' "$sha" | LC_ALL=C tr -cd '[:alnum:]._:/-' | cut -c1-64)"
     DRIFT_VERDICT="CHECK_ERROR"
     DRIFT_REASON="malformed_build_sha"
-    DRIFT_DETAIL="/health did not yield a 40-hex build_sha (got: ${sha:-<empty or unparseable>})"
+    DRIFT_DETAIL="/health did not yield a 40-hex build_sha (got: ${sha_display:-[empty or unparseable]})"
     return 2
   fi
 
