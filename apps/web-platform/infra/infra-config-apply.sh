@@ -106,7 +106,7 @@ fi; rm -f "${TMPFILES[@]}" "${STATE_FILE}.final"' EXIT
 # hooks.json env-passing atomically, the host's stale hooks.json could not pass
 # the new key, leaving its env var empty — and the upfront gate then aborted the
 # ENTIRE write, including the new hooks.json that would have re-aligned the
-# mapping. Per-file accounting lets the 15 good files (crucially the new
+# mapping. Per-file accounting lets the remaining good files (crucially the new
 # hooks.json) land while the absent one is recorded as a failure and surfaces a
 # loud exit_code=1 to the CI verify gate.
 

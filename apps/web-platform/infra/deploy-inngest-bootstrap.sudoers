@@ -72,7 +72,7 @@ Cmnd_Alias INNGEST_ENABLE = /usr/bin/systemctl enable inngest-server.service
 deploy ALL=(root) NOPASSWD: INNGEST_ENABLE
 
 # #4827 — permits infra-config-apply.sh (the /hooks/infra-config handler, running
-# as the deploy user) to escalate the atomic install of its 11 managed files into
+# as the deploy user) to escalate the atomic install of its managed files into
 # their root:root 0755 destination dirs, which the deploy user cannot mktemp into
 # (EACCES). The command is pinned to a fixed helper path with NO argument
 # wildcards (sudo-rs safe); the helper itself hardcodes the dest allowlist and

