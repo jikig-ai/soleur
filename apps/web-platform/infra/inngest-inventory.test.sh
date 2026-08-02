@@ -985,7 +985,27 @@ STUB
   assert_eq "unreadable container env falls back to loopback" \
     "http://127.0.0.1:8288" "$(run_derive "$d/empty")"
 
-  # (5) PARITY with ci-deploy.sh, mirroring the cron-inngest-cron-watchdog guard: the
+  # (5)+(6) FIXTURE SHAPE, not code path: `Config.Env` legitimately carries
+  # INNGEST_BASE_URL TWICE — once from `--env-file` (Doppler) and once from the `-e`
+  # override — and docker lists the `--env-file` entry FIRST. `printenv` inside the
+  # container resolves to the LAST one, so the `-e` override is what the app process
+  # actually dispatches to. Verified empirically on Docker 29.4.3.
+  #
+  # Every fixture above is single-entry, so the derivation's positional selector was
+  # unpinned: `head -1` passed all four while reading the value the app does NOT use.
+  # The duplicate-key condition holds in prod TODAY (phase-0 §Split-brain: ci-deploy.sh's
+  # `-e` overrides a Doppler value that still reads host.docker.internal) and is masked
+  # only while the two agree. Both orderings are fixtured because a one-directional
+  # fixture is satisfied by the weaker implementation in exactly one of them.
+  printf 'PATH=/usr/bin\nINNGEST_BASE_URL=http://host.docker.internal:8288\nINNGEST_BASE_URL=http://10.0.1.40:8288\nNODE_ENV=production\n' > "$d/dup-dash-e-dedicated"
+  assert_eq "duplicate key: the -e override (listed LAST) wins over --env-file" \
+    "http://10.0.1.40:8288" "$(run_derive "$d/dup-dash-e-dedicated")"
+
+  printf 'PATH=/usr/bin\nINNGEST_BASE_URL=http://10.0.1.40:8288\nINNGEST_BASE_URL=http://host.docker.internal:8288\nNODE_ENV=production\n' > "$d/dup-dash-e-colocated"
+  assert_eq "duplicate key: reversed order — still the LAST entry, mapped to loopback" \
+    "http://127.0.0.1:8288" "$(run_derive "$d/dup-dash-e-colocated")"
+
+  # (7) PARITY with ci-deploy.sh, mirroring the cron-inngest-cron-watchdog guard: the
   # value the deploy script actually injects must be one this function can resolve.
   local ci_deploy ci_val derived
   ci_deploy="$(dirname "$TARGET")/ci-deploy.sh"
@@ -1005,7 +1025,7 @@ STUB
     fi
   fi
 
-  # (6) Every ci-deploy.sh dispatch site must agree — a per-site divergence would make
+  # (8) Every ci-deploy.sh dispatch site must agree — a per-site divergence would make
   # canary and prod dispatch to different servers.
   if [[ -r "$ci_deploy" ]]; then
     local uniq_n

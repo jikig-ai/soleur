@@ -143,9 +143,17 @@ INNGEST_APP_CONTAINER="${INNGEST_APP_CONTAINER:-soleur-web-platform}"
 
 derive_dispatch_base() {
   local base host_part
+  # `tail -1`, NOT `head -1`: Config.Env legitimately carries INNGEST_BASE_URL twice —
+  # docker lists the `--env-file` (Doppler) entry FIRST and the `-e` override SECOND, and
+  # the container process resolves to the LAST one. Reading the first returns the value
+  # the app does NOT dispatch to, which is #7144 rebuilt by the code written to prevent
+  # it: with Doppler still on host.docker.internal, a `-e …10.0.1.40` repoint would map to
+  # loopback and certify the surviving co-located server. Masked today only because the
+  # two duplicates agree. Verified on Docker 29.4.3; fixtured both orderings in
+  # inngest-inventory.test.sh test_probe_target_follows_app (5)+(6).
   base=$(docker inspect "$INNGEST_APP_CONTAINER" \
            --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
-         | sed -n 's#^INNGEST_BASE_URL=##p' | head -1)
+         | sed -n 's#^INNGEST_BASE_URL=##p' | tail -1)
   base="${base%/}"
   [ -n "$base" ] || return 1
   host_part="${base#http://}"; host_part="${host_part#https://}"
