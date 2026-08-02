@@ -114,13 +114,19 @@ emitting `msg:"received event"` as recently as 2026-08-02 10:47, with
 `soleur-web-platform` app-container rows). So an Inngest process is healthy and
 listening — while the app's connect to `10.0.1.40:8288` is refused.
 
-**B8 — an unresolved contradiction.** Doppler `soleur/prd` holds
-`INNGEST_BASE_URL=http://host.docker.internal:8288`, and `ci-deploy.sh` runs the
-container with `--add-host host.docker.internal:host-gateway`. Neither should resolve to
-`10.0.1.40`. `inngest-host.tf` pins `inngest_private_ip = "10.0.1.40"` (the dedicated
-cax11 host). **Why the running container connects to 10.0.1.40 is NOT established.**
-This is Phase 0's job to measure. It is not a detail — it decides whether the fix is
-"restart a service", "repoint a variable", or "open a firewall".
+**B8 — the apparent contradiction, RESOLVED (CTO review, 2026-08-02).** Doppler
+`soleur/prd` holds `INNGEST_BASE_URL=http://host.docker.internal:8288`, which looked
+irreconcilable with an observed connect to `10.0.1.40`. It is not:
+**`apps/web-platform/infra/ci-deploy.sh` hardcodes `-e INNGEST_BASE_URL=http://10.0.1.40:8288`
+at both the canary and prod `docker run` sites, placed AFTER `--env-file "$ENV_FILE"`,
+so it overrides whatever Doppler renders.** Landed in `b02870e1d` (#6348, 2026-07-24 —
+the ADR-100 cutover step 2.4); `server/inngest/client.ts`'s header states the same
+intent, and `test/server/inngest/cron-inngest-cron-watchdog.test.ts` greps `ci-deploy.sh`
+for that exact literal as a parity guard.
+
+**Dialing `10.0.1.40:8288` is correct behaviour, not a mystery.** Any "fix" that
+repoints `INNGEST_BASE_URL` at its Doppler/Terraform source would undo the ADR-100
+cutover and break that parity guard.
 
 **B9 — the Sentry blind spot.**
 
@@ -146,25 +152,24 @@ error-level pino lines to Sentry tagged `feature: "pino-mirror"` (pinned by
 `tags: { feature: "pino-mirror" }`), and it captures only when an `err` field is
 present.
 
-The route therefore emits **two** Sentry events per dispatch failure from the same
-`err`: the mirror (via `logger.error({ err, … })`) and its own
-`Sentry.captureException(err, { tags: { op: "inngest-send" } })`. Both carry an
-identical stacktrace. **Leading candidate: `@sentry/nextjs`'s default `Dedupe`
-integration drops the second as a duplicate**, and the survivor is the mirror — which
-has already overwritten `feature` and carries no `op`. That would explain `op:inngest-send`
-→ 0 issues exactly.
+The route therefore emits **two** Sentry events per dispatch failure from the same `err`:
+the mirror (via `logger.error({ err, … })`) and, immediately after, its own
+`Sentry.captureException(err, { tags: { op: "inngest-send" } })`. Same `Error` instance,
+same undici `TypeError: fetch failed` stack.
 
-Corroborating (code-read, 2026-08-02): `apps/web-platform/sentry.server.config.ts`
-customises `integrations` with
-`(defaults) => defaults.filter(i => i.name !== "OnUncaughtException" && i.name !== "OnUnhandledRejection")`
-— it removes only the two global handlers, so **the default `Dedupe` integration is
-retained**. The candidate is therefore consistent with the configuration as committed,
-not merely with the SDK's generic defaults.
+**Mechanism (CTO review): GROUPING, not a drop.** Two events, one default fingerprint →
+one issue; the issue-level `feature` tag last-writes to `pino-mirror`. That is exactly
+the shape B9 measured — issue `128795570`, culprit `POST /api/webhooks/github`,
+`feature=pino-mirror`. My earlier `Dedupe`-drop candidate is superseded: it is not needed
+to explain the observation, and grouping does.
 
-This nonetheless remains **UNVERIFIED**. Phase 0.5 measures it. Do not implement against
-the candidate before the measurement — if the real mechanism is grouping rather than
-dedupe, the fix is different, and `Dedupe` is load-bearing elsewhere so removing it is
-not a free move.
+**The fix must be contained, and the obvious file is the wrong one.** The mirror lives in
+`apps/web-platform/server/logger.ts` (not `sentry.server.config.ts`) and is pinned by
+`test/server/logger-sentry-mirror.test.ts`. Editing it changes **every server error path
+in the app** — not a live-incident change. Contained alternative, two lines in the route:
+set an explicit `fingerprint` on the route's own `captureException`, and stop the
+double-capture by not handing the raw `Error` to `logger.error` (log `String(err)`), or
+wrap as `new Error(msg, { cause: err })` so the stack is route-distinct.
 
 **B10 — live Terraform drift already names the firewall that carries this path.**
 Open issue **#7144** (`infra: drift detected in web-platform`, opened 2026-08-01 18:01
@@ -180,18 +185,36 @@ and among them:
 
 `apps/web-platform/infra/cron-egress-firewall.test.sh` documents that this is the
 ruleset under which the web host is *"allowed to reach the dedicated host
-10.0.1.40:8288"*. **Tainted means its last apply failed** — the egress ruleset is in an
-unknown state, on the exact path that is now refusing. This materially raises H1 above
-the other three. It is corroboration, **not** confirmation: #7144 does not show the
-ruleset's *live* content, and Phase 0.2 must still read it.
+10.0.1.40:8288"*. Tainted means its last apply failed. **This is worth applying, but it
+is NOT this incident's cause — see B10a, which reverses the reading I first gave it.**
 
-**B10a — a cheap discriminator nobody has run.** `ECONNREFUSED` is a TCP **RST**, not a
-timeout. A firewall in `REJECT` mode produces RST; a firewall in `DROP` mode, and a
-host that is simply dark, typically produce a **timeout**. So the symptom's *shape*
-already argues for "something actively refused the connection" over "the packet went
-nowhere". Phase 0 must record RST-vs-timeout explicitly for each probe — it separates
-H1(REJECT) from H3(dark host) in one observation, and no probe run so far has captured
-it.
+**B10a — the errno is decisive, and it points AWAY from the firewall.**
+`ECONNREFUSED` is a TCP **RST**. **Every filtering layer on the web→inngest path DROPs,
+and a drop yields `ETIMEDOUT`, never `ECONNREFUSED`:**
+
+- `apps/web-platform/infra/cron-egress-nftables.sh` — default `counter drop`, and it
+  carries an **explicit accept**:
+  `ip daddr 10.0.1.40 tcp dport 8288 accept comment "soleur-egress: dedicated inngest host (#6178)"`,
+  asserted post-apply by `cron-egress-postapply-assert.sh`.
+- `apps/web-platform/infra/cloud-init-inngest.yml` (host-local, SEC-H2) —
+  `tcp dport { 8288, 8289 } ip saddr { ${web_host_private_ips} } accept` then a `drop`.
+  `web_host_private_ips = "10.0.1.10,10.0.1.11"`; web-1 is `.10`, so it is allowed.
+- `hcloud_firewall.inngest` (`inngest-host.tf`) has **zero rules by design** — its header
+  records that intra-`10.0.1.0/24` traffic needs no allow rule and a scoping rule would
+  be a no-op (SEC-H1). **There is nothing there to drift.**
+
+So `ECONNREFUSED` = **a reachable host with nothing bound on `:8288`**. That exact
+failure has documented prior art *on this host*, in `cloud-init-inngest.yml`: *"every
+unit died with systemd status=203/EXEC and inngest never bound :8288"* — the doppler
+`/usr/bin` vs `/usr/local/bin` `ExecStart` mismatch. It fits B7 (a healthy inngest on the
+**web** host's machine id — #6617's suspected double-scheduler) and the
+`SOLEUR_INNGEST_SERVER_PROBE` rows stopping after 2026-07-30.
+
+**Correction to my own first reading.** I initially cited B10 as raising H1. That was
+wrong in direction: because every layer DROPs rather than REJECTs, the RST is evidence
+*against* a filtering cause and *for* "nothing listening". Recording the reversal rather
+than quietly editing it, because the tainted-firewall row is exactly the kind of
+plausible-adjacent artifact that attracts a wrong verdict.
 
 ## Hypotheses
 
@@ -201,17 +224,22 @@ service-layer fix may be prescribed before the layers above it are measured.
 
 | # | Layer | Hypothesis | Status |
 | --- | --- | --- | --- |
-| H1 | L3 firewall | The private-net firewall / `hcloud_firewall` rule permitting web-host → `10.0.1.40:8288` has drifted or was replaced. `cron-egress-firewall.test.sh` documents this exact allow. Related in-flight work: #6415/#6438 private-NIC convergence. | **UNVERIFIED** — probe: `hcloud firewall describe` for the inngest host + the applied `cron-egress-firewall` ruleset, diffed against the committed rule. |
-| H2 | L3 routing / address | The container's `host.docker.internal` → `host-gateway` mapping, or a stale container env, resolves to `10.0.1.40` when Doppler says otherwise (B8). | **UNVERIFIED** — probe: read the *running container's* effective `INNGEST_BASE_URL` and the resolved address, without SSH, via the infra-config/deploy-status webhook surface. |
-| H3 | L3 host liveness | The dedicated Inngest host (cax11, `10.0.1.40`) is dark or was never (re)provisioned; #6617 already asks "the dedicated inngest host may be DARK — needs on-host confirmation". | **UNVERIFIED** — probe: `hcloud server describe` + the host's own vector/heartbeat stream. Note `SOLEUR_INNGEST_SERVER_PROBE` rows **stopped after 2026-07-30** (5 rows on 07-30, 0 since) and the `inngest-heartbeat` marker channel last emitted 2026-07-30 15:11 — consistent with H3 but **not decisive**, because absence proves nothing here by that marker's own design. |
-| H4 | L7 service | `inngest-server.service` on the dedicated host is not listening on `:8288` even though the host is up. | **UNVERIFIED, and must not be assumed** — B7 shows an inngest process healthy on the *web* host's machine id. Whether a second one exists on the dedicated host is exactly what H3's probe answers. |
-| H5 | L7 application | The route, its secret, its Supabase dedup, or its module-load guards are at fault. | **REFUTED** — B1 (0 secret/signature rows, 1 dedup row in 4 days) and B5 (live 401, which is ordered after the secret guard). |
-| H6 | change correlation | A deploy or merge landing just before 2026-07-31 18:23 UTC introduced this. | **REFUTED** — `route.ts` has exactly one commit in its history (`b00289339`, #5125), nothing in the window; and B1 shows identical failures at the retention floor 2026-07-30 16:14, ≥26 h *before* the reported onset. The reported time is when **Resend** decided to alert, not when the failure began. |
+| H1 | L3 firewall | A filtering layer between web-1 and `10.0.1.40:8288` drifted. | **NEAR-REFUTED** (B10a). Every layer on the path DROPs, not REJECTs, so none can produce the observed RST; `cron-egress-nftables.sh` carries an explicit accept for this exact destination, and `hcloud_firewall.inngest` has zero rules by design. Downgraded from a gate to a 5-minute `hcloud firewall describe` confirmation. #6415 is **CLOSED**; the live convergence work is #6438. |
+| H2 | L3 routing / address | The container dials `10.0.1.40` when Doppler says `host.docker.internal`. | **REFUTED** (B8). `ci-deploy.sh` hardcodes `-e INNGEST_BASE_URL=http://10.0.1.40:8288` after `--env-file`, deliberately, per ADR-100 (#6348). Repointing it would undo the cutover and break a parity guard. **No remediation branch for H2.** |
+| H3 | L3 host liveness | The dedicated Inngest host (cax11, `10.0.1.40`) is dark or was never re-provisioned. #6617 already asks exactly this. | **UNVERIFIED — this is the real probe.** `hcloud server describe` + the host's own boot phone-home (`inngest-boot-phone-home.sh`) / vector stream. Note the RST in B10a implies the host *is* reachable, which argues H3-dark is unlikely and H4 likely — but a describe is cheap and settles it. |
+| H4 | L7 service | The host is up, but `inngest-server.service` is not bound on `:8288`. | **NEAR-CONFIRMED** — the only hypothesis consistent with an RST (B10a), and with documented prior art on this same host: `cloud-init-inngest.yml` records *"every unit died with systemd status=203/EXEC and inngest never bound :8288"* (doppler `/usr/bin` vs `/usr/local/bin` `ExecStart`). Corroborated by the `SOLEUR_INNGEST_SERVER_PROBE` gap after 2026-07-30 and by B7's healthy inngest on the **web** host (#6617's double-scheduler). |
+| H5 | L7 application | The route, its secret, its dedup, or its module-load guards are at fault. | **REFUTED** — B1 (0 secret/signature rows, 1 dedup row in 4 days) and B5 (live 401, ordered *after* the secret guard). |
+| H6 | change correlation | A deploy/merge just before 2026-07-31 18:23 UTC introduced this. | **REFUTED** — `route.ts` has one commit ever (`b00289339`, #5125), nothing in the window; B1 shows identical failures at the retention floor, ≥26 h before the reported time. That time is when **Resend** alerted, not when the failure began. |
 
-**Explicit non-conclusion.** H1–H4 are all UNVERIFIED. The true onset is **UNKNOWN**:
-Better Stack retention (B4) starts after the failures were already in progress, and the
-Sentry channel that would have longer retention is exactly the one that is blind (B9).
-No verdict may be written into any of H1–H4 from reasoning about the others.
+**Where this leaves the diagnosis.** H2 and H5/H6 are refuted from committed code. H1 is
+near-refuted by the errno. **H3/H4 is the live question, and it is one probe wide:** is
+the host up with a dead unit (H4), or dark (H3)? Both have the same first remediation
+step and differ only in blast radius (see §Infrastructure — H4's cloud-init path is a
+host *replace*).
+
+**The true onset remains UNKNOWN.** Better Stack retention (B4) begins after the failures
+were already running, and the Sentry channel that would carry longer history is the one
+that is blind (B9). Do not backfill a verdict onto the onset from the remediation.
 
 ## Research Reconciliation — brief vs. codebase
 
@@ -226,16 +254,34 @@ No verdict may be written into any of H1–H4 from reasoning about the others.
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** statutory and operational mail sent to
-the operator address (vendors, regulators, counsel — the `emailSender` actor in
-`model.c4`) never appears in the operator inbox. There is no error surface for them: the
-inbox is simply, silently, missing a letter from a regulator.
+**If this lands broken, the user experiences:** a letter from a regulator that reached
+their mailbox and was **never surfaced for triage** — no `email_triage_items` row, no
+statutory clock stated, no nav badge, no push. What is lost is the **delegation**, not
+the correspondence: ADR-055's Sieve rule is **forward-and-keep**, so the Proton
+`ops@soleur.ai` mailbox remains the durable original throughout (Phase 1.0 verifies this
+actually held). Saying "you may be missing mail" would be both false and alarming.
 
-**If this leaks, the user's data is exposed via:** the durable outbox introduced in
-Phase 2 persists Resend `email.received` **metadata** (svix id, resend email id,
-message-id, sender, subject, attachment filenames) at rest in Postgres. Subject and
-sender are personal data; an over-broad RLS policy or an un-pruned table widens the
-Art. 30 PA-27 processing footprint beyond the 90-day `processed_resend_events` window.
+**The precise failure vector is silence-shaped.** This feature's only liveness cue is
+**positive-signal-only**: a nav badge and a `notifyOfflineUser` push that fire when a
+triage row appears. During the outage no event fires, so there is no badge and no push —
+and that is **indistinguishable from a genuinely quiet week**. `operator-digest` does not
+read ingest health either, so a dead ingress renders as an empty inbox. The operator
+cannot tell "nothing arrived" from "everything was dropped".
+
+**This change introduces its own artifact.** Phase 2 makes the route answer **2xx**,
+which permanently releases the svix retry. If the durable write succeeds but the drain
+stalls or dead-letters, the mail is acknowledged-to-vendor, stranded in a table no user
+surface reads, **with the vendor retry gone** — strictly worse than today's 500. The
+write-failure path is tested (2.1) and keeps the 500; the **drain**-failure path must not
+be engineer-facing only (Sentry alert 3.3), which is why 3.5 routes it to the operator.
+
+**If this leaks, the user's data is exposed via:** the extended
+`processed_resend_events` persists inbound **metadata** (resend email id, message-id,
+sender, subject, attachment filenames). Sender and subject are personal data — subject
+especially is content-bearing, which is why PA-27's statutory fast-path keys on it, and
+PA-27 concedes Art. 9 data may arrive unsolicited on an open address. RLS enabled with
+zero policies + REVOKE is the control; an over-broad policy, an un-pruned backstop, or a
+raw `last_error` string echoing the request body each widen the PA-27 footprint.
 
 **Brand-survival threshold:** `single-user incident`.
 
@@ -254,9 +300,10 @@ bodies against each planned path (`app/api/webhooks/resend-inbound/route.ts`,
 Adjacent open issues (not `code-review`-labelled, disposition recorded):
 
 - **#6617** *the dedicated inngest host may be DARK — possible double-scheduler; needs
-  on-host confirmation* — **Fold in.** This is the same question as H3/H4. Phase 0's
-  probe answers it; `Ref #6617` in the PR body and close it only if the probe is
-  decisive.
+  on-host confirmation* — **BLOCKING DEPENDENCY**, upgraded from "fold in" at CTO review.
+  It asks the same host question as H3/H4 and its answer *gates Phase 1's shape* (and, if
+  the double-scheduler is real, forces the ADR-100 fork). `Ref #6617`; close only if
+  Phase 0 is decisive.
 - **#6185** *Inngest failover HA (primary/standby pair) — deferred from #6178* —
   **Acknowledge.** Phase 2's outbox reduces the blast radius of Inngest downtime but is
   not HA. #6185 stays open; add a note that this plan raises its priority.
@@ -277,15 +324,53 @@ Adjacent open issues (not `code-review`-labelled, disposition recorded):
   discriminate *transient-and-buffered* from *unexpected*.
 - `apps/web-platform/test/server/resend-inbound-route.test.ts` — failing-first regression
   tests (Phase 2 RED).
-- `apps/web-platform/sentry.server.config.ts` — Phase 3, only if the probe shows the pino
-  mirror is overwriting `feature`/dropping the explicit capture.
+- **NOT** `apps/web-platform/sentry.server.config.ts` — the mirror is in
+  `apps/web-platform/server/logger.ts`, pinned by
+  `test/server/logger-sentry-mirror.test.ts`, and editing it changes every server error
+  path in the app. Phase 3.1 uses the contained in-route fix instead.
+- `apps/web-platform/server/inngest/send-with-retry.ts` — its comment still says
+  "loopback to 127.0.0.1:8288", false since ADR-100.
+- `knowledge-base/engineering/operations/runbooks/inbound-email-ingress-dead.md` — the
+  existing L3→L7 no-SSH runbook for this exact chain. Its topology still says
+  *"HOP D: inngest.send (127.0.0.1:8288, self-hosted, ADR-030) [loopback, NOT egress]"*
+  and asserts the egress firewall cannot reach that hop. Post-ADR-100 that is **false**;
+  HOP D is a private-net egress hop. Leaving it stale is how the next responder repeats
+  this incident.
+- `apps/web-platform/server/dsar-export-allowlist.ts` — the extended table needs an
+  explicit `DSAR_TABLE_EXCLUSIONS` entry with a written reason. **`test/dsar-allowlist-completeness.test.ts`
+  is structurally blind here**: it enforces classification only for tables with an FK to
+  `public.users`/`auth.users`, and this table has none — so the lint passes while the gap
+  is real.
+- `docs/legal/privacy-policy.md`, `docs/legal/gdpr-policy.md`,
+  `docs/legal/data-protection-disclosure.md` — lockstep per the #6781 precedent (which
+  did this for a table carrying *no* PII; a new PII-at-rest surface cannot do less). The
+  GDPR Policy is the one most often missed.
+- `apps/web-platform/lib/legal/legal-doc-shas.ts` — repin `LEGAL_DOC_SHAS`, else
+  `test/legal-doc-shas-guard.test.ts` fails.
+- `knowledge-base/legal/compliance-posture.md` — lockstep comment + PA-27 Active Items.
+- `knowledge-base/legal/legitimate-interest-assessments/2026-06-11-operator-inbox-triage-lia.md`
+  — necessity-limb **addendum**. No re-run is triggered, but the LIA's necessity limb is
+  premised on minimisation and would otherwise describe a system that no longer exists.
+  The balancing actually *improves*: a dropped DSAR is worse for the involuntary data
+  subject than a short-lived buffer. Say so.
 - `knowledge-base/engineering/architecture/decisions/ADR-055-resend-inbound-as-third-multi-source-ingress.md`
   — amend `## Decision` + `## Alternatives Considered` (Phase 2).
 - `knowledge-base/engineering/architecture/diagrams/model.c4` and `views.c4` — see
   §Architecture Decision.
-- `knowledge-base/legal/article-30-register.md` — PA-27 footprint change if the outbox
-  lands (verify the next free PA ordinal with
-  `grep "^## Processing Activity" knowledge-base/legal/article-30-register.md | tail`).
+- `knowledge-base/legal/article-30-register.md` — **extend PA-27, do NOT mint a new PA.**
+  PA-27 is confirmed as the Resend-inbound entry, and the `statutory_repin_send`
+  precedent (migration 135, #6781) folded a sub-table in with the explicit finding "NO
+  new Article 30 Processing Activity". A separate PA would fragment one activity.
+  Limbs (c) sub-table + no-body statement, (d) — the limb currently calls the Inngest
+  event store "**the third PII surface**", which this change falsifies — (f) retention +
+  Art. 17 path, (g) new TOM entry, and **(g) TOM (11)**, whose "pages within ~25.5h worst
+  case" claim this incident falsified: the failure ran ≥26 h and was surfaced by
+  **Resend**, not by our monitor. A control that fires and is never actioned is not an
+  Art. 32 measure — restate it or fix the routing; leaving it overstated is worse under
+  Art. 5(2).
+  **Ordinal derivation:** do NOT use `… | tail` — the register is **not in ordinal
+  order** (PA-17 precedes PA-16 in the file), so `tail` is right today only by luck. Use
+  a numeric sort. (Next free is PA-34; it is not needed.)
 
 ## Files to Create
 
@@ -307,43 +392,80 @@ Migration ordinal is provisional; re-derive it against `origin/main` at /work ti
 
 ## Implementation Phases
 
-### Phase 0 — Probe first. Ships alone, before any fix.
+### Phase 0 — Probe before fixing. Runs before the fix PR; produces NO merge.
 
-Non-negotiable per the plan skill's probe-first rule: H1–H4 are unverified and the
-apparatus that would discriminate them does not exist yet. Do not write a fix in this
-PR.
+Probe-*before-fix* is non-negotiable. Probe-*as-its-own-shipped-PR* is not, and is
+dropped: steps 0.2–0.4 are **read-only** API/CLI calls that author nothing, so a
+probe-only PR would buy a full CI+review+merge+deploy cycle whose only payload is
+measurements pasted into a PR body — during a live incident. The ordering discipline the
+rule exists to protect is fully preserved.
 
-0.1 File the tracking issue; `Ref #6617`.
-0.2 Answer H1: pull the applied firewall state for the inngest host and diff against
-    the committed `cron-egress-firewall` rule.
-0.3 Answer H3: `hcloud server describe` the dedicated host; correlate with the
-    `SOLEUR_INNGEST_SERVER_PROBE` gap after 2026-07-30.
-0.4 Answer H2/B8: read the **running container's** effective `INNGEST_BASE_URL` and its
-    resolved peer address via the deploy-status / infra-config webhook surface
-    (`deploy.soleur.ai/hooks/deploy-status`, HMAC + CF Access from Doppler
-    `prd_terraform`). **No SSH.** If no existing surface returns it, that absence is
-    itself a Phase 3 deliverable — do not fall back to SSH.
-0.5 Answer B9's mechanism: determine whether the route's `captureException` is *grouped*
-    into `128795570` or *dropped*. If no available token can list issue events, mint or
-    request the scope as part of this phase — an unreadable Sentry is an observability
-    defect, not an acceptable constraint.
-0.6 Attempt onset recovery: Inngest run history and the Resend delivery log for the
-    webhook id from B6. If neither yields a pre-2026-07-30 boundary, record the onset as
-    **UNKNOWN** in the PR body. Do not adopt the vendor's alert time as the onset.
+Phase 0 shrank after review resolved H2 and H1 from committed code:
 
-**Exit gate:** the causal chain **route → observed connect target → refusal** is
-confirmed end-to-end, with an artifact for each link, pasted into the PR body.
+0.1 File the tracking issue. `Ref #6617` — **it is a blocking dependency, not a
+    fold-in**: it asks the same host question and its answer gates Phase 1's shape.
+0.2 **H3/H4 — the one real probe.** `hcloud server describe` the dedicated host, plus
+    its own boot phone-home (`inngest-boot-phone-home.sh`) / vector stream. Correlate
+    with the `SOLEUR_INNGEST_SERVER_PROBE` gap after 2026-07-30.
+0.3 **H1 — confirmation only, not a gate** (~5 min): `hcloud firewall describe`. Expect
+    zero rules on `hcloud_firewall.inngest` by design.
+0.4 **Was the ingress probe's monitor RED across the window?** Cheap, and it decides
+    whether Phase 3 is even aimed correctly. Both branches are damning:
+    - **Red** → detection worked, and
+      `knowledge-base/engineering/operations/runbooks/inbound-email-ingress-dead.md`
+      already exists with exactly this entry condition. Two days elapsed anyway → this is
+      a **response** failure, and adding more Sentry signal (3.1/3.3) to a channel that
+      already produced no response does not fix it. Phase 3 must then add an
+      operator-reaching channel (3.5).
+    - **Not red** → the designed end-to-end probe misses its own dominant failure mode,
+      which is a larger finding than anything else in this plan.
+0.5 Onset recovery, **non-blocking**: Inngest run history + the Resend delivery log for
+    webhook `e0b3ba09-7a13-4f59-ba95-1ef1222bbdf8`. If no pre-2026-07-30 boundary is
+    recoverable, write `onset: UNKNOWN`.
 
-Deliberately *not* "exactly one of H1–H4 is confirmed": H1–H3 are **not mutually
-exclusive**, and the B8 contradiction makes a compound cause likely rather than
-exceptional — a stale baked-in container env (H2) pointing at a host that was
-deprovisioned (H3) behind a ruleset whose last apply failed (H1, per B10) is jointly
-true and internally consistent. A single-winner gate would either stall or force a
-premature pick and a wrong Phase 1 fix.
+Dropped from Phase 0: the container-env read (H2 answered by `ci-deploy.sh`) and the
+Sentry-grouping probe (answered by `server/logger.ts`; see B9 revision). **Minting a
+Sentry token must not gate outage remediation** — that moves to Phase 3.
 
-### Phase 1 — Restore dispatch
+**Exit gate:** the **first failing hop on the dispatch path is identified with an
+artifact, and a remediation is written for it.** Hard time-box **≤4 h**, after which
+Phase 1 proceeds on the best-supported hypothesis with a stated rollback.
 
-Shape is decided by Phase 0's verdict, so it is deliberately not pre-written here.
+Deliberately *not* "exactly one of H1–H4 confirmed". That shape is unsatisfiable in the
+most likely world — H3 and H4 are nested, and the probable truth is compound (host up +
+`inngest-server.service` dead + a stale co-located inngest still running on web-1,
+per #6617). It also has no time-box, which makes it a stop-the-world clause on a
+brand-survival incident with a vendor auto-disable clock running. Gate on the remediable
+fact, not on hypothesis identity.
+
+### Phase 1 — Restore dispatch, and discharge the statutory clock
+
+**1.0 — Statutory reconciliation of the outage window. Runs before or with the
+remediation; it may NOT ride behind Phase 2.** PA-27's primary purpose is deterministic
+detection and escalation of statutory-clock mail. For the whole outage window that
+function did not run. Any DSAR (Art. 12(3), one calendar month), service of process,
+regulator correspondence, or inbound **processor breach notification** (Art. 33, 72 h
+from awareness) that arrived in the window was never escalated — and a 72-hour clock may
+already be consumed. Phase 2's durable claim prevents recurrence; it does **not**
+discharge a clock already running, and AC14 does not cover mail dropped before the
+durable claim existed.
+
+- Review the Proton `ops@soleur.ai` keep-copy for every message received from
+  **2026-07-30 16:14 UTC** (the evidentiary floor, not the vendor's alert time) through
+  dispatch restoration, against the four rules in
+  `apps/web-platform/lib/email-triage/statutory-rules.ts` (`breach-art33`,
+  `service-of-process`, `dsar-art15`, `regulator-contact`).
+- **Also confirm the keep-copy actually held**, reconciled against at least the 15 known
+  svix ids (B3). ADR-055's Sieve rule is forward-**and-keep**, so the original mail
+  should be intact — but the plan currently verifies *Resend's* 30-day vendor retention,
+  which is a vendor copy, not our record. Until the keep-copy is confirmed, "no data was
+  lost" is an inference, not a finding, and Art. 4(12) includes accidental **loss** —
+  an availability-only breach can still be notifiable.
+- Any missed statutory item is recorded against the DPIA residuals and the PA-27 Active
+  Items row in `knowledge-base/legal/compliance-posture.md`.
+
+Shape of the remediation itself is decided by Phase 0's verdict, so it is deliberately
+not pre-written here.
 Whatever it is, it MUST be Terraform / IaC per `hr-all-infrastructure-provisioning-servers`
 (see §Infrastructure), never an operator SSH step. Immediately after: re-run the B1
 query and assert `send_failed = 0` in a fresh window.
@@ -369,11 +491,25 @@ rejected; recording them here so /work does not re-litigate:
   double-send is idempotent. The route no longer calls `inngest.send()` inline, so
   ingress latency drops rather than rises.
 
+**Why the single-table shape is load-bearing, not just tidier.** Two tables would mean
+two unrelated PostgREST writes with no transaction, and this interleaving:
+
+> claim succeeds → process dies before the outbox insert → svix retries →
+> `claimDelivery` hits 23505 → route returns `200 {duplicate: true}` →
+> **permanent silent loss of that email.**
+
+That window exists today, but today it is bounded by one `releaseDelivery` and fails
+loudly. Two tables would widen it and make the outcome silent. With one table the hazard
+**disappears by construction**, and a 23505 on redelivery unambiguously means "already
+buffered" — which is correct to answer 200 to.
+
 2.1 **RED.** Add failing tests to `resend-inbound-route.test.ts`:
     - well-formed `email.received` → **200**, row persisted with `status='pending'` and
-      the full event payload, **no inline `inngest.send` call at all**;
-    - the persist itself failing → **500** (fail loud: nowhere durable to put it, so we
-      must keep the vendor's retry). This is the sole remaining 500 path;
+      the typed event fields, **no inline `inngest.send` call at all**;
+    - the persist itself failing → **release + 500**, asserted as *both*. The release is
+      not optional: without it the svix retry short-circuits as a duplicate and the
+      fail-closed fallback silently becomes a data-loss path. This is the sole remaining
+      500;
     - duplicate `svix_id` → 200, no second row, no re-dispatch;
     - malformed body → still 400, nothing claimed, nothing persisted;
     - reconciler dispatches a pending row exactly once, marks it `sent`, and is
@@ -381,19 +517,74 @@ rejected; recording them here so /work does not re-litigate:
     - reconciler with Inngest unreachable leaves the row `pending` and increments
       `attempts` without dropping it.
     Confirm all fail before writing the implementation.
-2.2 Migration: extend `processed_resend_events` (`payload jsonb`, `status`, `attempts`,
-    `last_error`), RLS-locked to the service role. Retention is a **legal** decision —
-    see §Domain Review → Legal; do not default to the existing 90 days without that
-    answer, because the table now holds sender + subject rather than an id alone.
+2.2 Migration: extend `processed_resend_events`. **Columns are TYPED, not an open
+    `payload jsonb`** — `resend_email_id`, `message_id`, `sender`, `subject`,
+    `attachment_filenames`, `received_at`, `received_at_source`, `status`, `attempts`,
+    `last_error_code`. Rationale is load-bearing, not stylistic: ADR-055's
+    parse-and-discard guarantee is enforced by the **schema** ("no body column exists"),
+    so an untyped jsonb would be the first store on this path where the discard reverts
+    to behavioural. Mirror migration 102's `email_triage_items` shape. If jsonb is kept
+    for any reason, it needs a CHECK pinning the permitted top-level key set and
+    rejecting `body`/`html`/`text`.
+    **`last_error_code`, not `last_error`** — a raw `inngest.send` error string can echo
+    the request body (sender, subject) into a Postgres column that the observability
+    scrub does not reach. Apply the PA-28 precedent: store a bounded code, or
+    scrub-and-truncate at the write boundary.
+    RLS **enabled with zero policies** + table REVOKE from `anon`/`authenticated`
+    (migration 102 §7 shape) — not a hand-rolled "service role" policy.
+    **Retention: delete-on-drain is the primary control** — the row's purpose is
+    discharged the instant dispatch succeeds, so it is deleted (or its identifying
+    fields nulled) in the same transaction that confirms dispatch. The calendar sweep is
+    only a backstop for the failure tail, at **≤30 days (7 preferred)**, anchored to the
+    Resend 30-day source window and the 72-hour shortest statutory clock. **Do NOT copy
+    the dedup table's 90 days**: that figure is a vendor-redelivery horizon for a table
+    holding `(svix_id, received_at)` and no PII, and its justification does not transfer
+    to a table holding sender + subject. 90-day parity would also let a synthetic probe
+    row outlive its own 7-day triage row by 83 days inside one processing activity.
 2.3 Route: signature-verify → insert-with-payload → 200. Remove the inline dispatch.
-2.4 `outbox-drain.ts` reconciler, scheduled, oldest-first, bounded attempt budget,
+2.4a **Substrate circularity — the drain must not sit on the thing that breaks.** Every
+    cron here is Inngest-fired (`server/inngest/cron-manifest.ts`), so an Inngest-fired
+    drain **cannot run during the exact outage the durable claim exists to survive**.
+    Tolerable for *draining* (it catches up on recovery); **fatal for alerting**. The
+    drain-stall signal MUST live off that substrate — a GHA `schedule:` poller (the
+    `scheduled-*.yml` + `betterstack-query.sh` pattern already used for the zot
+    restart-loop alarm), or a Sentry cron monitor keyed on *missed* check-ins.
+
+2.4b **Cadence / WAL.** Payload volume is negligible (~100 deliveries/day × ~2 KB), but
+    cadence is not: a per-minute `pg_cron` drain adds ~1,440 `cron.job_run_details`
+    rows/day and re-opens #5738 (that table reached ~4.7 % of prod WAL; see
+    `115_prune_cron_job_run_details.sql` and `123_tame_autovacuum_on_tiny_hot_tables.sql`,
+    which records the dedup fix cutting WAL from ~12 GB/day to ~17 MB/day). Follow the
+    `dsar_export_jobs` precedent (`041_dsar_export_jobs.sql`): external poller for the
+    drain; `pg_cron` for retention **only**, daily — as migration 094's header requires
+    ("ONCE daily at 04:00 UTC… NOT per-minute"). Copy 102's
+    `WHEN undefined_table THEN RAISE WARNING` handler so pg_cron-less local/CI DBs do not
+    abort.
+
+2.4 `outbox-drain.ts` reconciler, oldest-first, bounded attempt budget,
     dead-letter threshold that pages.
 2.5 **Recover the already-exhausted deliveries.** 106 deliveries exhausted their retries
     and are NOT recovered by anything above; the plan would otherwise "not lose mail"
     only prospectively. After Phase 1 restores dispatch, re-drive those svix message ids
-    via the Resend/svix redelivery API, falling back to a backfill from
-    `GET https://api.resend.com/emails` (verified 200 with `RESEND_RECEIVING_API_KEY`)
-    for any the vendor will no longer redeliver.
+    via the Resend/svix redelivery API.
+
+2.5b **Backfill the untriaged window — UNCONDITIONALLY, not "if any delivery is
+    exhausted".** AC14 covers only the *buffered* backlog, which by construction starts
+    at deploy; everything dropped before the durable claim existed is covered by nothing.
+    Enumerate Resend `GET /emails` over `[onset|2026-07-30, deploy]`, diff against
+    `email_triage_items` + `processed_resend_events`, and replay the difference. This is
+    fully recoverable inside the vendor's 30-day window — the oldest affected message
+    (2026-07-30) expires ~**2026-08-29**, so there is real but finite headroom.
+
+    **Hard constraint on the fallback (ADR-055 violation risk).**
+    `GET https://api.resend.com/emails` returns **body, html and attachments** — the
+    exact object ADR-055 confines to a single fused Inngest step that is never
+    checkpointed. A backfill that writes that response into the durable claim, or
+    checkpoints it as a step return, violates parse-and-discard outright, defeats
+    migration 102's no-body-column guarantee, and re-opens the DPIA residual for Art. 9
+    content in persisted data. **Any backfill MUST enter the pipeline at the same
+    fused-step boundary as a live delivery, never through the durable claim.** This is
+    an acceptance criterion, not a note.
 2.6 Amend ADR-055 (`## Decision` + `## Alternatives Considered`): the release+500
     contract held only while retries were free; a vendor that auto-disables makes
     ingress-liveness coupling a data-loss risk.
@@ -409,9 +600,33 @@ rejected; recording them here so /work does not re-litigate:
 3.2 Add a regression test asserting the route's dispatch-failure capture carries
     `feature=resend-inbound-webhook` and `op=inngest-send` and a route-distinct
     fingerprint.
-3.3 Add a Sentry alert on the outbox depth / drain-failure signal, wired in
-    `apps/web-platform/infra/sentry/`.
+3.3 Alert on drain stall. **"Depth > N" is not implementable as written** —
+    `apps/web-platform/infra/sentry/` carries only `sentry_cron_monitor`,
+    `sentry_issue_alert` and `sentry_uptime_monitor`; there is **no `sentry_metric_alert`**
+    (its migration is explicitly deferred, `versions.tf` / ADR-031 amendment
+    2026-07-17), and depth is a gauge. Pick a realizable shape: the drain emits a Sentry
+    **event** on stall (→ `sentry_issue_alert`), or the drain check-ins as a cron (→
+    `sentry_cron_monitor` firing on a **miss**). In-repo precedent for a DB-derived
+    metric: `server/inngest/functions/cron-supabase-disk-io.ts` + migration
+    `095_disk_io_pressure_signal.sql`. Per 2.4a the alarm must not ride the Inngest
+    substrate.
 3.4 Comment the B4 retention measurement onto #5697.
+3.5 **Reach the operator, not just the engineer.** Gated on Phase 0.4: if the ingress
+    probe's monitor was already RED and nobody acted, more Sentry signal fixes nothing.
+    Make `cron-email-ingress-probe` an **`action-required` issue emitter** — the
+    precedented path used by five sibling crons (`cron-supabase-disk-io`,
+    `event-cf-token-expiry-check`, `cron-gh-pages-cert-state`,
+    `cron-linkedin-token-check`, `cron-content-publisher`) — so `operator-digest` surfaces
+    it in plain language. Plus a one-time issue for this incident's window.
+
+    **Wording constraint (load-bearing).** The notice must say: *"Agent triage of
+    ops@soleur.ai was down from `<onset|≥2026-07-30>` to `<fix>`. Your Proton mailbox has
+    every original. N messages were re-triaged; M could not be."* It must **NOT** say
+    "you may be missing mail" — that is false (forward-and-keep) and alarming.
+
+    Deliberately **not** an in-app "ingest degraded" banner: routing through the
+    issue/digest path keeps the Product/UX gate at Tier NONE, so no wireframe is required
+    mid-incident. File the durable in-app ingest-health surface as a follow-up issue.
 
 ### Phase 4 — Post-merge live verification
 
@@ -460,7 +675,22 @@ Green CI is not proof. See §Acceptance Criteria → Post-merge.
 13. Sentry: a deliberately-triggered dispatch failure produces an issue findable by
     `op:inngest-send` — i.e. the B9 query returns ≥1 issue where it previously returned 0.
 14. Pending backlog drained to zero, asserted by query, not by dashboard.
-15. **Recovery of the 106 exhausted deliveries is accounted for, per message id**, with
+15. **Phase 1.0 statutory reconciliation is complete and recorded** — the Proton
+    keep-copy reviewed for the window `2026-07-30 16:14 UTC → dispatch restoration`
+    against the four rules in `lib/email-triage/statutory-rules.ts`, with the keep-copy's
+    integrity reconciled against at least the 15 known svix ids. Any missed statutory
+    item is recorded against the DPIA residuals and the PA-27 Active Items row.
+16. **The untriaged window is fully accounted for** (Phase 2.5b): every inbound message
+    in `[onset|2026-07-30, deploy]` is either re-triaged or explicitly unrecoverable.
+17. **No backfill path writes a Resend `/emails` response into the durable claim or
+    checkpoints it as a step return** — asserted by test. `GET /emails` returns body and
+    attachments; routing it through the claim would violate ADR-055's parse-and-discard.
+18. `DSAR_TABLE_EXCLUSIONS` entry present with a written reason. Note
+    `test/dsar-allowlist-completeness.test.ts` cannot catch its absence here (no FK to
+    users) — so this AC is the only gate.
+19. Operator notification (3.5) exists and uses the mandated wording; it does **not**
+    contain the string "missing mail".
+20. **Recovery of the 106 exhausted deliveries is accounted for, per message id**, with
     each classified as `redelivered` / `backfilled-from-/emails` / `unrecoverable
     (reason)`. A count alone is not sufficient — an aggregate that says "106 handled"
     can be true while a specific regulator's letter is in the unrecoverable bucket
@@ -474,15 +704,28 @@ B6 shows `status: enabled`. The threat is live but unrealised. AC12 re-checks at
 post-merge and automates the re-enable if it has flipped; it is never handed to the
 operator.
 
-**Were inbound events lost?** **Yes — 106 deliveries have exhausted their retries and
-are dropped as of now. They are recoverable, and Phase 2.5 recovers them.** No loss is
-yet *permanent*. Reasoning, with its limits stated:
+**Were inbound events lost?** **The triage delegation was lost; the correspondence
+almost certainly was not — and nothing is yet permanently lost.** Precisely:
 
-- 106 deliveries exhausted `sendInngestWithRetry` (B1). Every one of those returned 500
-  to Resend. Whether Resend/svix has also exhausted *its* redelivery schedule for a
-  given message is per-message and is Phase 0.6's question — but "the endpoint 500'd and
-  the retry budget ran out" is exactly the loss condition, so this must not be reported
-  as "nothing was lost".
+- **Lost:** triage. 106 deliveries exhausted `sendInngestWithRetry` (B1), each returning
+  500 to Resend; ≥15 distinct emails (B3) produced no `email_triage_items` row, no
+  statutory clock, no badge, no push. For a product whose value *is* the delegation,
+  that is the real loss.
+- **Not lost (pending verification):** the mail itself. ADR-055's Sieve rule is
+  **forward-and-keep**, so the Proton `ops@soleur.ai` mailbox is the durable original
+  throughout. Phase 1.0 verifies this actually held against the 15 known svix ids —
+  until then it is a well-founded inference, not a finding, and the plan holds its legal
+  conclusions to the same evidentiary bar as its technical ones.
+- **Recoverable:** Resend retains content 30 days and `GET /emails` responds 200 with
+  `RESEND_RECEIVING_API_KEY`. The oldest affected message (2026-07-30) expires
+  **~2026-08-29** — real but finite headroom. Phase 2.5b backfills the window
+  unconditionally.
+- **Unknown:** the true count. 15 is a floor, not a measurement — retention (B4) starts
+  after the failures began. Every statement of "~2 days" or "15 emails" is a lower bound.
+- **The live legal exposure is a clock, not a byte.** A statutory item that arrived in
+  the window sat unescalated: Art. 12(3) DSAR (one month), service of process, or an
+  inbound processor breach notice whose Art. 33 72-hour clock may already be consumed.
+  Phase 1.0 discharges this and it may not wait for Phase 2.
 
 - The route **releases** the dedup row on dispatch failure, so nothing is permanently
   claimed — a later successful retry processes normally.
@@ -569,25 +812,47 @@ Phase 1's remediation is infrastructure and therefore routes through Terraform.
 
 ### Terraform changes
 
-Scope depends on Phase 0's verdict, and exactly one of:
+H2 has no branch (refuted). H1's branch is **not** a Hetzner firewall change:
+`hcloud_firewall.inngest` has zero rules and a scoping rule is a documented no-op
+(SEC-H1); port scoping is host-local nftables rendered into `cloud-init-inngest.yml`.
+So the live branches are:
 
-- **H1 confirmed** → firewall rule in the inngest host's `hcloud_firewall` /
-  `cron-egress-firewall` set.
-- **H2 confirmed** → `INNGEST_BASE_URL` corrected at its Doppler/Terraform source, then
-  redeployed. Note `hr-prod-host-config-change-immutable-redeploy`.
-- **H3 confirmed** → `apps/web-platform/infra/inngest-host.tf`; a re-provision must go
-  through `terraform apply`, honouring `hr-fresh-host-provisioning-reachable-from-terraform-apply`.
-- **H4 confirmed** → the unit definition in `inngest.tf` + the idempotent bootstrap
-  script, applied via the existing bootstrap path.
+- **H3 (host dark)** → `apps/web-platform/infra/inngest-host.tf`; re-provision through
+  `terraform apply` per `hr-fresh-host-provisioning-reachable-from-terraform-apply`.
+- **H4 (unit not bound)** → the unit definition + bootstrap. **Name which of the two
+  paths is used — they have very different blast radii:**
+  1. **cloud-init edit = host REPLACE.** `hcloud_server.inngest` carries
+     `lifecycle { ignore_changes = [ssh_keys] }` and, per its own comment, *deliberately
+     NO* `ignore_changes = [user_data]`, "that force-replace is the intended
+     replace-to-reprovision path". And `hcloud_firewall_attachment.inngest` warns the
+     replacement **boots with no hcloud firewall until the next full/drift apply**.
+  2. **Signed config-refresh bundle** (`infra-config-install.sh` / `INNGEST_CONFIG_DIGEST`,
+     ADR-136/ADR-128) — the in-place path that avoids the replace.
+  Prefer (2) unless Phase 0 shows the host cannot be repaired in place. The plan's
+  earlier "existing bootstrap path" was ambiguous between these; that ambiguity is the
+  defect.
 
 ### Apply path
 
-Default: cloud-init + idempotent bootstrap script (existing infra). `-replace` only if
-Phase 0 shows the host cannot be repaired in place. **Blast-radius warning:** the
-inngest host is excluded from `apply-web-platform-infra.yml`'s `-target=` set. A new
-resource that references it can transitively drag it into a routine merge-apply. Any new
-`for_each`/reference must be gated on the same existence predicate its siblings use, and
-an AC must assert `terraform plan` shows **no create** of the excluded resource.
+**Blast-radius, correctly aimed.** The inngest host resources appear only in the
+`inngest_host` dispatch job's target list in `.github/workflows/apply-web-platform-infra.yml`,
+and `stripDispatchJobs()` in `plugins/soleur/test/terraform-target-parity.test.ts` strips
+that job from the per-merge coverage anchor. `-target` **is** transitive, so the
+mechanism is real — but the destructive outcomes are **already tripwired**: `host_creates
+> 0` HALTs, explicitly naming `hcloud_server.inngest`, and is **not** bypassable by
+`[ack-destroy]`; `reboot_updates` / `resource_deletes` / `nested_deletes` cover the rest
+(`tests/scripts/lib/destroy-guard-filter-web-platform.jq`).
+
+So an AC asserting "no create of the excluded resource" merely **restates a guard that
+already exists**. The residual gap it should assert instead: a **pure in-place update**
+to `hcloud_firewall.inngest` (adding a rule) is invisible to all four counters — not a
+create, not a delete, not a nested removal, not a reboot-forcing update. That is exactly
+H1's remediation shape, and the one thing that could silently ride a routine merge-apply.
+**Restated AC:** any new `.tf` resource is either added to the exclusion set in
+`terraform-target-parity.test.ts` or added to the per-merge `-target` list with an
+explicit statement that it has no dependency edge to any `hcloud_*.inngest` resource.
+That test already fails the build for a resource with neither — it is the real gate, and
+it is stronger than the AC originally written here.
 
 ### Distinctness / drift safeguards
 
@@ -637,9 +902,27 @@ So: **C4 impact is real, and concentrated on the new store plus one falsified
 description.** Run the C4 validation suites after editing — a `view include` naming an
 undefined element fails there, not at `tsc`.
 
+### A second decision the plan must not swallow
+
+If Phase 0 confirms H4 **and** a live co-located inngest still running on web-1 (#6617's
+double-scheduler, consistent with B7's shared machine id), then the choice between
+*repair the dedicated host* and *roll `INNGEST_BASE_URL` back to the co-located server*
+is a real architectural fork — with **ADR-100's cutover half-executed**. That is its own
+record: `/soleur:architecture create 'Complete or roll back the ADR-100 dedicated-Inngest
+cutover'`. Do not let a one-line remediation silently pick a side of it.
+
 ### Sequencing
 
 The ADR is authored in the Phase-2 PR describing the target state. It is not deferred.
+
+### Explicitly scoped out
+
+Phase 2 covers the **webhook → Inngest dispatch** hop only. A run that dies after
+`claim-insert` but before finalize still leaves an unfinalized stub, and both queries in
+`apps/web-platform/server/inbox-sources.ts` filter those out
+(`mail_class IS NULL AND statutory_class IS NULL`) — so that message stays invisible to
+the operator. **This plan does not fix that class.** Naming it, rather than implying
+"mail always appears" has been achieved.
 
 ## Encryption Posture
 
@@ -673,8 +956,10 @@ in_transit:
     cert_verification: n/a
     does_not_defend: an attacker with a foothold on the 10.0.1.0/24 private network can
                      read event payloads, including inbound-email metadata
-    disclosed_as: pre-existing posture of `api -> inngest` (ADR-030/ADR-100); this plan
-                  does not change it, but Phase 2 increases what transits it
+    disclosed_as: pre-existing posture of `api -> inngest` (ADR-030/ADR-100). This plan
+                  does NOT change it and does NOT increase what transits it — the drain
+                  replays exactly the payload the original send would have carried.
+                  (Corrects an earlier overstatement in this section.)
 exception:
   - subject: api → inngest plaintext private-net transport
     justification: pre-existing; changing it is out of scope for a live-incident fix
@@ -690,26 +975,57 @@ exception:
 
 ### Engineering (CTO)
 
-**Status:** to be reviewed inline (Phase 2.5 spawn).
-**Assessment focus:** the ADR-055 reversal; whether an outbox is the right primitive
-versus fixing Inngest HA (#6185); the blast-radius rule on `-target`-excluded resources.
+**Status:** reviewed. **Verdict: diagnosis sound, Phase 0 over-scoped, Phase 2 right
+direction / wrong shape** — all applied above.
+Findings folded in: H2 refuted from `ci-deploy.sh` (A1); H1 near-refuted and H4
+near-confirmed from the errno (A2); B9 mechanism is grouping, derivable without a Sentry
+token (A3); Phase 3.1's file was wrong and its blast radius large (A4); migration
+citations + mandatory `.down.sql` + 102's `undefined_table` handler (A5); Phase 3.3 not
+implementable — no `sentry_metric_alert` in the provider (A6); the stale
+`inbound-email-ingress-dead.md` runbook and `send-with-retry.ts` comment (A7); the
+claim-then-crash silent-loss window and the missing **release**+500 (C); drain substrate
+circularity and the #5738 WAL cadence precedent (C); the `-target` AC restating an
+existing guard, with the real residual being an in-place `hcloud_firewall.inngest` update
+(E); H4's cloud-init path being a host **replace** (E); and the second ADR fork on
+ADR-100 (F).
+**Note:** the outbox is **hardening**, not the incident fix — if H4 confirms, this
+incident is one host's boot bug. Label it that way. **#6185 (Inngest HA) remains the more
+load-bearing fix** and the durable claim does not substitute for it.
+**Review-time agents named:** `observability-coverage-reviewer` and
+`data-integrity-guardian` (the latter specifically on the migration and the claim/release
+interleaving).
 
 ### Legal (CLO / GDPR gate)
 
-**Status:** gate fires — the change adds a Supabase migration, an API route change, and
-persists personal data (sender, subject) in a new store.
-**Assessment focus:** PA-27 footprint extension, retention parity with the 90-day
-`processed_resend_events` policy, and whether buffering email metadata for longer than
-the current window needs a distinct lawful-basis note.
+**Status:** reviewed. **Verdict: BLOCKED for Phase 2 merge** on seven items, all folded
+in above. Summary: extend PA-27 (do not mint PA-34); **90-day parity is the wrong
+retention anchor** — delete-on-drain primary, ≤30-day (7 preferred) backstop; typed
+columns, not open `payload jsonb`, because ADR-055's discard guarantee is
+**schema**-enforced; the Resend `/emails` backfill must never enter via the claim;
+`last_error` is an unscrubbed PII sink (apply the PA-28 synthetic-error precedent); DSAR
+exclusion entry with the completeness lint blind here; and PA-27 TOM (11)'s "~25.5h"
+liveness claim is falsified by this incident and must be restated.
+**Art. 33:** probably not notifiable — Art. 4(12) covers accidental *loss*, but
+forward-and-keep means the originals are intact — **conditional on Phase 1.0 verifying
+the keep-copy actually held.** ADR-055's parse-and-discard is **not** violated by the
+durable claim as scoped (it sits upstream of the body fetch), but that is a *different
+clause* from the release+500 one being amended; state both in the ADR edit.
+**No LIA re-run, no DPIA re-screening triggered**; a necessity-limb addendum is required.
 
 ### Product (CPO)
 
 **Tier:** NONE for the UX gate — no file in §Files to Edit or §Files to Create matches a
-UI-surface path (no `components/**/*.tsx`, no `app/**/page.tsx`, no `app/**/layout.tsx`).
-No wireframe is required.
-**But CPO sign-off IS required** independently, because
-`brand_survival_threshold: single-user incident` (§2.6 Step 3). That sign-off is about
-the dropped-regulator-email blast radius, not about page design.
+UI-surface path (no `components/**/*.tsx`, no `app/**/page.tsx`, no `app/**/layout.tsx`),
+and 3.5 deliberately routes operator notice through the issue/digest path rather than a
+new banner, keeping it NONE. No wireframe required.
+**CPO sign-off: APPROVE-WITH-CHANGES** — all five blocking changes applied (C1 impact
+framing incl. the Proton mitigant, the badge-absence vector, and the 2xx-acked-then-
+stranded artifact; C2 Phase 0 produces no merge; C3 the probe-monitor question; C4 the
+unconditional backfill; C5 the operator notification with its wording constraint).
+Threshold `single-user incident` stands; `user-impact-reviewer` re-checks at review.
+**Non-blocking follow-ups:** add a roadmap row for #5103 (the capability has none);
+refresh `roadmap.md` `Current State` (stale — says 56/179, milestone API says 74/192);
+file the in-app ingest-health surface as its own issue.
 
 **Brainstorm-recommended specialists:** none — no brainstorm preceded this plan
 (one-shot path).
