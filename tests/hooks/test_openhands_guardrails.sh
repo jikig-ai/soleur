@@ -64,6 +64,76 @@ FREEZE_LOCK_REPO_ROOT="$FZ" bash "$FREEZE_HELPER" set "$FZ/apps" >/dev/null 2>&1
 check "freeze: edit outside prefix denies" "2:deny"   "$(run "$(mk_edit "$FZ/other/x.ts")" "$FZ" "$HOME" "$FZ")"
 check "freeze: edit inside prefix allows"  "0:<none>" "$(run "$(mk_edit "$FZ/apps/x.ts")" "$FZ" "$HOME" "$FZ")"
 
+# --- #7164: the non-string envelope guard (ADR-156, mirror) -----------------
+# This port never calls eval, so it never had the code-execution half of #7164.
+# It DID have the evasion half: `jq -r` renders an array across lines, matching
+# none of the anchored guards, so the payload below exited 0 on origin/main —
+# the mirror allowed the very command its stash/commit gates exist to stop.
+mk_term_array() { jq -nc --arg d "$1" '{tool_input:{command:["git","stash"]}, working_dir:$d}'; }
+check "envelope: ARRAY tool_input.command denies" "2:deny" \
+  "$(run "$(mk_term_array "$AD/repo")" "$AD/repo")"
+
+# Positive control in the same run: the STRING form of a benign command still
+# allows, so the assertion above cannot be passing because the hook broke.
+check "envelope: control — string command still allows" "0:<none>" \
+  "$(run "$(mk_term 'ls -la' "$AD/repo")" "$AD/repo")"
+
+# The guard is scoped to a PARSED document with a bad type. A malformed
+# document keeps its pre-existing behaviour (jq fails under `set -e`), so this
+# change cannot have altered what happens on a transport hiccup.
+mk_edit_array() { jq -nc '{tool_input:{path:["/a","/b"]}}'; }
+check "envelope: ARRAY tool_input.path denies" "2:deny" \
+  "$(run "$(mk_edit_array)" "$AD/repo")"
+
+# --- #7164: the THIRD wired blocking mirror -------------------------------
+# .openhands/hooks.json wires worktree-write-guard.sh on the file_editor
+# matcher, and it denies with exit 2. It was missed when this PR's scope was
+# written as "the two mirrors". Measured before the fix: a string path into the
+# main checkout denied, the SAME target as a one-element ARRAY exited 0 and the
+# write sailed through. Asserted here with a string positive control in the same
+# run so neither arm can pass because the hook broke outright.
+WWG="$REPO_ROOT/.openhands/hooks/worktree-write-guard.sh"
+# SELF-CONTAINED fixture. The guard only denies when worktrees EXIST, so an
+# earlier version of this block reused $REPO_ROOT and depended on the ambient
+# checkout: it passed on a developer machine (which has .worktrees/) and FAILED
+# in CI, whose clone has none — the guard correctly allowed, and the control
+# assertion read that as a regression. Same class as #5192. The fixture now
+# supplies the precondition itself: a throwaway repo with a non-empty
+# .worktrees/ directory, which is all the guard's check requires.
+WWG_TMP="$(mktemp -d)"
+# ADR-129 rule (c): one owning trap. The suite runs under `set -uo pipefail`
+# and a failure between allocation and the rm below would otherwise leak the
+# fixture repo into /tmp, a machine-global tmpfs shared with sibling worktrees.
+trap 'rm -rf "$WWG_TMP"' EXIT
+WWG_REPO="$WWG_TMP/repo"
+git init -q "$WWG_REPO"
+git -C "$WWG_REPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+mkdir -p "$WWG_REPO/.worktrees/feat-fixture"
+
+run_wwg() {
+  local payload="$1" rc=0
+  # Run FROM the fixture repo: the guard resolves its repo root via
+  # `git rev-parse --git-common-dir` against its own CWD, not working_dir.
+  ( cd "$WWG_REPO" && printf '%s' "$payload" | bash "$WWG" ) >/dev/null 2>&1 || rc=$?
+  echo "$rc"
+}
+
+# Precondition self-check: if the fixture cannot make the guard deny a plain
+# string path, every assertion below is vacuous and must not be reported green.
+if [[ "$(run_wwg "$(jq -nc --arg p "$WWG_REPO/somefile.md" --arg w "$WWG_REPO" '{tool_input:{path:$p}, working_dir:$w}')")" != "2" ]]; then
+  fail=$((fail+1)); echo "[FAIL] wwg: FIXTURE BROKEN — guard does not deny a string path in the fixture repo" >&2
+else
+  check "wwg: control — string path to main checkout denies" "2" \
+    "$(run_wwg "$(jq -nc --arg p "$WWG_REPO/somefile.md" --arg w "$WWG_REPO" '{tool_input:{path:$p}, working_dir:$w}')")"
+  check "wwg: ARRAY path to the same target denies (was a live bypass)" "2" \
+    "$(run_wwg "$(jq -nc --arg p "$WWG_REPO/somefile.md" --arg w "$WWG_REPO" '{tool_input:{path:[$p]}, working_dir:$w}')")"
+  check "wwg: object path denies" "2" \
+    "$(run_wwg "$(jq -nc --arg w "$WWG_REPO" '{tool_input:{path:{a:"b"}}, working_dir:$w}')")"
+  check "wwg: string path INSIDE a worktree still allows" "0" \
+    "$(run_wwg "$(jq -nc --arg p "$WWG_REPO/.worktrees/feat-fixture/x.md" --arg w "$WWG_REPO" '{tool_input:{path:$p}, working_dir:$w}')")"
+fi
+rm -rf "$WWG_TMP"
+
 rm -rf "$AD" "$ADHOME" "$FZ"
 
 echo

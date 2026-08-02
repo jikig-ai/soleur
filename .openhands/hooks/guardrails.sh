@@ -33,6 +33,36 @@ deny() {
   exit 2
 }
 
+# --- ADR-156 (mirror): the HookEvent envelope is MODEL-CONTROLLED ------------
+# This port never calls eval, so it is not vulnerable to the #7164 code
+# execution. It is still EVADABLE by the same payload: `jq -r` renders a
+# non-string field across multiple lines, which matches none of the anchored
+# guards below, so an array .tool_input.command would slip every gate in this
+# file while looking like an ordinary empty command.
+#
+# Scoped deliberately NARROW — it fires only when the document PARSES and a
+# contracted field is the wrong TYPE. A transport failure keeps the pre-existing
+# behaviour, so this change cannot alter what happens on a jq hiccup.
+#
+# The OpenHands protocol has no `ask` (ADR-157's posture in .claude/hooks/), so
+# the anomalous shape DENIES. No legitimate caller sends a non-string here, and
+# a deny is recoverable where a silent bypass is not. Converging the two
+# harnesses on one extractor is a tracked follow-up.
+GR_ENVELOPE_SHAPE=$(printf '%s' "$INPUT" | jq -r '
+  # NB the // operator is deliberately absent: in jq it is a FALSY-alternative,
+  # so a JSON false would be rewritten to "" and pass the type check below
+  # (measured on the .claude side before this was fixed). Only null defaults.
+  if (type == "object")
+     and ((.tool_input? | type) as $t | $t == null or $t == "object")
+     and ((.tool_input.command? | if . == null then "" else . end) | type == "string")
+     and ((.working_dir? | if . == null then "" else . end) | type == "string")
+     and ((if (.tool_input | has("path")) and (.tool_input.path != null) then .tool_input.path else .tool_input.file_path end | if . == null then "" else . end) | type == "string")
+  then "ok" else "nonstring" end' 2>/dev/null) || GR_ENVELOPE_SHAPE="unparseable"
+if [[ "$GR_ENVELOPE_SHAPE" == "nonstring" ]]; then
+  deny "BLOCKED: the tool-call envelope carries a non-string field (e.g. an ARRAY tool_input.command). Hook stdin is model-controlled and untrusted (ADR-156); a non-string is never coerced, because the coerced value matches no guard and would bypass every gate in this hook. Re-send the command as a string."
+fi
+
+
 # guardrails:freeze-edit-lock — directory-scoped edit-lock for file_editor.
 # Gated on BOTH file_path present AND command empty: a terminal payload carries
 # .tool_input.command and no path, so this is skipped for terminal calls and
