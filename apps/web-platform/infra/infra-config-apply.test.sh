@@ -995,8 +995,9 @@ test_sudoers_caller_argv_lockstep() {
 
   # The caller's resolved argv: the seam default, plus the verb and unit from RESTART_MAP.
   local seam_default
-  # shellcheck disable=SC2016 -- the single quotes hold a sed SCRIPT; the ${...} inside is the
-  # literal text being matched in the handler's source, not an expansion we want performed here.
+  # The single quotes below hold a sed SCRIPT; the ${...} inside is literal text being matched in
+  # the handler's source, not an expansion we want performed here.
+  # shellcheck disable=SC2016
   seam_default=$(sed -n 's/^SYSTEMCTL_RESTART="\${INFRA_CONFIG_SYSTEMCTL:-\(.*\)}"$/\1/p' "$HANDLER")
   assert_eq "the restart seam defaults to a sudo-prefixed absolute systemctl" \
     "sudo /usr/bin/systemctl" "$seam_default"

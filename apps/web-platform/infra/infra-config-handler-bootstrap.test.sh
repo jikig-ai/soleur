@@ -192,6 +192,7 @@ DPF_BLOCK=$(awk '
 assert "deploy_pipeline_fix block is non-empty" "[[ -n \"\$DPF_BLOCK\" ]]"
 # Anchored on the depends_on ASSIGNMENT, not a bare mention of the name: the identifier also
 # appears in prose comments in this file, and a bare grep would pass against a deleted edge.
+# shellcheck disable=SC2034  # consumed via `eval "$condition"` in assert()
 DPF_DEPENDS=$(printf '%s\n' "$DPF_BLOCK" \
   | awk '/^[[:space:]]*depends_on[[:space:]]*=[[:space:]]*\[/{f=1} f{print} f && /\]/{exit}')
 assert "deploy_pipeline_fix declares a depends_on list" "[[ -n \"\$DPF_DEPENDS\" ]]"
