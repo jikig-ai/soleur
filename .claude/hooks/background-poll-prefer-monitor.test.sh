@@ -144,7 +144,12 @@ assert_decision "(n) empty stdin: no decision emitted (fault recorded, tool not 
 # "no output" would pass equally well against a hook that disarmed and said
 # nothing, which is defect 2 of #7164.
 TOTAL=$((TOTAL + 1))
+# ADR-129 rule (c): one owning trap for the tempdir. The suite runs under
+# `set -euo pipefail`, so a failure between allocation and the rm below would
+# otherwise leak it into /tmp — a machine-global tmpfs shared with sibling
+# worktrees.
 _bpm_root="$(mktemp -d)"
+trap 'rm -rf "$_bpm_root"' EXIT
 printf 'not json{' | INCIDENTS_REPO_ROOT="$_bpm_root" bash "$HOOK" >/dev/null 2>&1 || true
 if [[ -f "$_bpm_root/.claude/.rule-incidents.jsonl" ]] \
    && grep -q 'hook-input-' "$_bpm_root/.claude/.rule-incidents.jsonl" 2>/dev/null; then
