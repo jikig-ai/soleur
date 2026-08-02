@@ -1083,5 +1083,134 @@ STUB
 
 test_probe_target_follows_app
 
+# --- P1-a: the WIRING, end-to-end through the REAL file ------------------------------
+# test_probe_target_follows_app extracts derive_dispatch_base with a sed range that stops
+# at the function's closing brace, so it tests the function and nothing downstream of it.
+# The behaviour that actually reaches curl lives in the assignments BELOW that brace —
+# INNGEST_PROBE_BASE, GQL_URL, INNGEST_HEALTH_URL — and those were sourced by nothing,
+# executed by nothing, and asserted by nothing but one indirect grep.
+#
+# Three measured mutations stayed GREEN across the whole suite because of that gap:
+#   M1  the caller disconnected (probe base hardcoded to loopback, function left intact)
+#   M2  GQL_URL hardcoded — the PRIMARY probe, the query that decides the verdict
+#   M11 the port passthrough deleted (hardcoded :8288)
+#
+# So this case SOURCES the real file and drives its own wiring. Nothing is re-declared
+# and nothing is extracted: a revert of any of the three assignments fails here. The
+# non-default port in case (2) is what makes M11 detectable — every earlier fixture used
+# 8288, so a hardcoded port was indistinguishable from a correct passthrough.
+test_probe_targets_end_to_end() {
+  echo "Test: GQL_URL + INNGEST_HEALTH_URL derive end-to-end from the real file (P1-a)"
+
+  local d bindir
+  d=$(mktemp -d) || { echo "  FAIL: mktemp"; FAIL=$((FAIL + 1)); return; }
+  bindir="$d/bin"; mkdir -p "$bindir" || { echo "  FAIL: mkdir"; FAIL=$((FAIL + 1)); rm -rf "$d"; return; }
+
+  # Same argv-fidelity contract as the sibling stub (exit 64 on an unexpected call), plus
+  # a call log so source-time purity is measurable rather than asserted.
+  cat > "$bindir/docker" <<'STUB'
+#!/usr/bin/env bash
+echo "docker $*" >> "$DOCKER_CALL_LOG"
+[[ "$1" == "inspect" ]] || exit 64
+[[ "$*" == *"soleur-web-platform"* ]] || exit 64
+[[ -s "$DOCKER_ENV_FIXTURE" ]] || exit 1
+cat "$DOCKER_ENV_FIXTURE"
+STUB
+  chmod +x "$bindir/docker"
+
+  # Every probe runs in a FRESH bash process, never a `( … )` subshell. This suite marks
+  # NOW_MS readonly as a fixture constant and the real file assigns NOW_MS at load; a
+  # subshell inherits the readonly ATTRIBUTE, so the assignment fails and the file's own
+  # `set -euo pipefail` aborts the source partway through — silently, since the source is
+  # redirected. A new process inherits exported VALUES but not readonly attributes, and it
+  # is also closer to how the webhook actually invokes this script.
+  #
+  # Sources the real file, invokes its real wiring, emits <probe_base>|<gql>|<health>.
+  run_e2e() {
+    local fixture="$1"
+    env -u INNGEST_PROBE_BASE -u INNGEST_GQL_URL -u INNGEST_HEALTH_URL \
+        PATH="$bindir:$PATH" DOCKER_ENV_FIXTURE="$fixture" DOCKER_CALL_LOG="$d/calls.log" \
+      bash -c '
+        # shellcheck disable=SC1090
+        source "$1" >/dev/null 2>&1
+        init_probe_targets
+        printf "%s|%s|%s" "$INNGEST_PROBE_BASE" "$GQL_URL" "$INNGEST_HEALTH_URL"
+      ' _ "$TARGET" 2>/dev/null || true
+  }
+
+  assert_e2e() {
+    local desc="$1" fixture="$2" want_base="$3" want_gql="$4" want_health="$5"
+    local triple pb gql health
+    triple=$(run_e2e "$fixture" || true)
+    IFS='|' read -r pb gql health <<< "$triple" || true
+    assert_eq "$desc — probe base" "$want_base" "$pb"
+    assert_eq "$desc — GQL_URL (the PRIMARY probe)" "$want_gql" "$gql"
+    assert_eq "$desc — INNGEST_HEALTH_URL" "$want_health" "$health"
+  }
+
+  # (1) SOURCE-TIME PURITY. The file states this invariant itself ("sourcing must NOT hit
+  # the network"; HOST_ID resolves inside the BASH_SOURCE guard for exactly that reason),
+  # and the probe-target derivation violated it: a bare `source` fired docker inspect,
+  # with no timeout, on every consumer — including the two that override both targets and
+  # need none of it. Measured, not predicted.
+  printf 'INNGEST_BASE_URL=http://host.docker.internal:8288\n' > "$d/purity"
+  local src_calls after_calls
+  : > "$d/calls.log"
+  env -u INNGEST_PROBE_BASE -u INNGEST_GQL_URL -u INNGEST_HEALTH_URL \
+      PATH="$bindir:$PATH" DOCKER_ENV_FIXTURE="$d/purity" DOCKER_CALL_LOG="$d/calls.log" \
+    bash -c 'source "$1" >/dev/null 2>&1' _ "$TARGET" 2>/dev/null || true
+  src_calls=$(wc -l < "$d/calls.log" | tr -d ' ')
+  assert_eq "sourcing the file invokes docker ZERO times (its own :624-629 invariant)" \
+    "0" "$src_calls"
+
+  # POSITIVE CONTROL for (1): the stub must be reachable, or the zero above is vacuous —
+  # it would read as purity when it is really a broken PATH.
+  : > "$d/calls.log"
+  run_e2e "$d/purity" > /dev/null || true
+  after_calls=$( { grep -c 'docker inspect' "$d/calls.log" || true; } | tr -d ' ')
+  if [[ "$after_calls" -ge 1 ]]; then
+    echo "  PASS: control — the derivation DOES reach the stub when invoked ($after_calls call(s))"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: control — the stub was never reached, so the source-time zero proves nothing"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # (2) Co-located on a NON-DEFAULT port. Kills M11: every other fixture uses 8288, where
+  # a hardcoded port and a correct passthrough are indistinguishable.
+  printf 'PATH=/usr/bin\nINNGEST_BASE_URL=http://host.docker.internal:9288\n' > "$d/e2e-alt-port"
+  assert_e2e "co-located, non-default port" "$d/e2e-alt-port" \
+    "http://127.0.0.1:9288" "http://127.0.0.1:9288/v0/gql" "http://127.0.0.1:9288/health"
+
+  # (3) A dedicated-host repoint must reach BOTH URLs — the outage shape.
+  printf 'INNGEST_BASE_URL=http://10.0.1.40:8288\n' > "$d/e2e-dedicated"
+  assert_e2e "dedicated-host repoint" "$d/e2e-dedicated" \
+    "http://10.0.1.40:8288" "http://10.0.1.40:8288/v0/gql" "http://10.0.1.40:8288/health"
+
+  # (4) Finding 8, carried all the way to the URLs the probes actually use: the `-e`
+  # override (listed LAST) is what the app dispatches to, so it must be what we probe.
+  printf 'INNGEST_BASE_URL=http://host.docker.internal:8288\nINNGEST_BASE_URL=http://10.0.1.40:9288\n' > "$d/e2e-dup"
+  assert_e2e "duplicate key: the -e override reaches GQL_URL and HEALTH_URL" "$d/e2e-dup" \
+    "http://10.0.1.40:9288" "http://10.0.1.40:9288/v0/gql" "http://10.0.1.40:9288/health"
+
+  # (5) The documented env seams still win over derivation (tests + ad-hoc probes).
+  local ov_gql
+  ov_gql=$(env -u INNGEST_PROBE_BASE -u INNGEST_HEALTH_URL \
+               PATH="$bindir:$PATH" DOCKER_ENV_FIXTURE="$d/e2e-dedicated" \
+               DOCKER_CALL_LOG="$d/calls.log" INNGEST_GQL_URL="http://override.invalid/gql" \
+             bash -c '
+               # shellcheck disable=SC1090
+               source "$1" >/dev/null 2>&1
+               init_probe_targets
+               printf "%s" "$GQL_URL"
+             ' _ "$TARGET" 2>/dev/null || true)
+  assert_eq "explicit INNGEST_GQL_URL still overrides the derivation" \
+    "http://override.invalid/gql" "$ov_gql"
+
+  rm -rf "$d"
+}
+
+test_probe_targets_end_to_end
+
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

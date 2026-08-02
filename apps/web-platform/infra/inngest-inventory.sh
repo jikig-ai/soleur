@@ -167,13 +167,28 @@ derive_dispatch_base() {
 
 # Explicit env override always wins (tests + ad-hoc probes). Otherwise follow the app.
 # Loopback remains the last resort ONLY when the container env cannot be read at all.
-INNGEST_PROBE_BASE="${INNGEST_PROBE_BASE:-$(derive_dispatch_base || printf 'http://127.0.0.1:8288')}"
+#
+# A FUNCTION, not three top-level assignments, for the same reason HOST_ID resolves inside
+# the BASH_SOURCE guard at the foot of this file: sourcing must NOT hit the network. As
+# top-level assignments these fired `docker inspect` on every `source` — measured — and
+# they were worse than the pattern they violated, because resolve_host_id at least bounds
+# itself at `curl --max-time 3` while `docker inspect` has no timeout at all, and it fired
+# even for consumers that override both URLs and need none of it.
+#
+# Keeping the wiring in a named function is also what makes it testable end-to-end: as
+# bare top-level lines they were sourced by nothing and asserted by nothing, so measured
+# mutations that hardcoded the probe base (M1), hardcoded GQL_URL — the PRIMARY probe
+# (M2), or deleted the port passthrough (M11) all left the suite fully green. See
+# inngest-inventory.test.sh test_probe_targets_end_to_end.
+init_probe_targets() {
+  INNGEST_PROBE_BASE="${INNGEST_PROBE_BASE:-$(derive_dispatch_base || printf 'http://127.0.0.1:8288')}"
 
-GQL_URL="${INNGEST_GQL_URL:-${INNGEST_PROBE_BASE}/v0/gql}"
-# #6407 Defect A — loopback /health endpoint used to CORROBORATE a functions-query failure
-# in LIVENESS_ONLY mode before declaring a hard down. Same loopback server + same /health
-# path that ci-deploy.sh verify_inngest_health gates on (ci-deploy.sh:1002).
-INNGEST_HEALTH_URL="${INNGEST_HEALTH_URL:-${INNGEST_PROBE_BASE}/health}"
+  GQL_URL="${INNGEST_GQL_URL:-${INNGEST_PROBE_BASE}/v0/gql}"
+  # #6407 Defect A — loopback /health endpoint used to CORROBORATE a functions-query failure
+  # in LIVENESS_ONLY mode before declaring a hard down. Same loopback server + same /health
+  # path that ci-deploy.sh verify_inngest_health gates on (ci-deploy.sh:1002).
+  INNGEST_HEALTH_URL="${INNGEST_HEALTH_URL:-${INNGEST_PROBE_BASE}/health}"
+}
 # Cost lever (#6258 Deepen Finding 3): raise PAGE_SIZE (lossless round-trip cut) — the ONLY
 # completeness-preserving lever. Never narrow FROM_TS. Env-overridable for tests.
 PAGE_SIZE="${INNGEST_GQL_PAGE_SIZE:-500}"
@@ -635,8 +650,13 @@ run_inventory() {
 # under `set -euo pipefail` — resolve_host_id return-1s when metadata is unreachable AND
 # /etc/machine-id is unreadable, and a bare assignment would abort the hook into a non-200,
 # losing the whole liveness verdict to protect one field.
+#
+# init_probe_targets is here for the same reason: its `docker inspect` is an off-process
+# call, and unlike resolve_host_id's curl it carries no timeout. Callers that source this
+# file invoke it themselves once they have arranged their own environment.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   HOST_ID="$(resolve_host_id || true)"
   readonly HOST_ID
+  init_probe_targets
   run_inventory
 fi
