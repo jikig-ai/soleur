@@ -807,14 +807,8 @@ runcmd:
     # from /tmp — if future hardening flips it on, grep for other
     # exec-from-/tmp call sites first.
     stage=docker_run
-    # INNGEST_BASE_URL below is the THIRD dispatch write site. b02870e1d (#6348, ADR-100
-    # step 2.4) moved this and both ci-deploy.sh sites to the dedicated host in lockstep;
-    # ADR-155's rollback moved only ci-deploy.sh, leaving this one pointed at a host that
-    # never bound :8288. It sits OUTSIDE the web_colocate_inngest gate above, so it fires
-    # on every fresh boot regardless of the toggle, and every guard added alongside the
-    # rollback was scoped to ci-deploy.sh and structurally could not see it. Kept in
-    # lockstep by inngest-inventory.test.sh test_probe_target_follows_app case (9), which
-    # asserts the VALUE — mutual agreement alone is satisfied by reverting all three.
+    # INNGEST_BASE_URL below is the THIRD dispatch write site (ADR-155). Value-pinned to
+    # the other two by inngest-inventory.test.sh test_probe_target_follows_app case (9).
     docker run -d \
       --name soleur-web-platform \
       --log-driver journald \
