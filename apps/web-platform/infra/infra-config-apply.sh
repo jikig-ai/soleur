@@ -82,12 +82,94 @@ DESTDIR="${TEST_DESTDIR:-}"
 STAGING_DIR="${INFRA_CONFIG_STAGING_DIR:-/var/lock}"
 INSTALL_HELPER="${INFRA_CONFIG_INSTALL_HELPER:-/usr/local/bin/infra-config-install}"
 
+# --- Unit reconciliation (#7103 R2) -------------------------------------------------------
+# DELIVERY IS NOT ACTIVATION. The drop-ins below re-point their units at the re-deliverable
+# credential, but systemd only reads a drop-in when the unit is (re)started. Before this, the
+# handler wrote them, reported ok, and the running processes kept the environment they were
+# started with — a channel reporting a state it had not established.
+#
+# Ordering is load-bearing: vector.service is LAST because restarting it blinks the log stream
+# every post-apply assertion is read through.
+#
+# inngest-server.service also carries a drop-in but is deliberately ABSENT here: inngest-bootstrap
+# restarts it on every co-located ci-deploy, so it already re-reads its environment on a schedule
+# this handler does not need to duplicate. Its omission is a decision, not an oversight — and the
+# sudoers grant covers exactly the two units below, so adding a third here without widening the
+# grant would produce denied restarts rather than coverage.
+RESTART_MAP=(
+  "inngest-heartbeat.service|/etc/systemd/system/inngest-heartbeat.service.d/10-inngest-heartbeat-doppler-token.conf"
+  "vector.service|/etc/systemd/system/vector.service.d/10-vector-doppler-token.conf"
+)
+
+# The credential every unit above depends on. A rotation of THIS file makes a unit stale just as
+# surely as a change to its own drop-in, which is why the predicate takes the max of both — it
+# also heals a rotation that predates this code.
+CRED_FILE="/etc/default/soleur-doppler-token"
+
+# Test seams (#7103 R2 3.10). Two, not one, because they are different privilege domains:
+#   READ  — `systemctl show` needs no root, and routing it through sudo would be DENIED (the
+#           DROPIN_TRY_RESTART grant pins `try-restart` only), turning every read into a failure.
+#   WRITE — must expand to the exact argv the sudoers alias grants. sudo matches the full
+#           resolved command, so a stray flag here is a denial, not a widening.
+# The seam exists so the predicate, the grading and the ordering all run UNGUARDED in sandbox
+# mode. Gating them behind INFRA_CONFIG_TEST_MODE instead would mean the assertions covering
+# this logic assert behaviour that never executes in the test run.
+SYSTEMCTL_SHOW="${INFRA_CONFIG_SYSTEMCTL_SHOW:-/usr/bin/systemctl}"
+SYSTEMCTL_RESTART="${INFRA_CONFIG_SYSTEMCTL:-sudo /usr/bin/systemctl}"
+
+# Seconds to wait before grading a restart by effect. try-restart returns as soon as the unit is
+# forked, so reading ActiveState immediately would grade a process that has not yet lived long
+# enough to fail. Overridable so the suite does not pay it.
+RESTART_SETTLE_SECS="${INFRA_CONFIG_RESTART_SETTLE_SECS:-2}"
+
+# mtime in epoch seconds, or 0. GUARDED: `stat` on an absent dest exits 1, and under this
+# script's `set -euo pipefail` that would kill the handler MID-LOOP — the EXIT trap would then
+# overwrite the state with files_total:0/"unhandled" and the post-write daemon-reload and webhook
+# self-restart would never run, freshly-delivered hooks.json written but never activated. That is
+# the #4804 chicken-and-egg freeze re-entered, and it would be deterministic rather than rare.
+dest_mtime() {
+  local p="$1" m=""
+  m=$(stat -c %Y "$p" 2>/dev/null) || m=""
+  [[ "$m" =~ ^[0-9]+$ ]] || m=0
+  printf '%s' "$m"
+}
+
+# One systemd property, or empty on any failure (unit absent, systemctl missing, no bus).
+unit_prop() {
+  local unit="$1" prop="$2" v=""
+  v=$($SYSTEMCTL_SHOW show "$unit" -p "$prop" --value 2>/dev/null) || v=""
+  printf '%s' "$v"
+}
+
+# ExecMainStartTimestamp -> epoch seconds.
+#   ""          -> ""   (no timestamp; an inactive unit has none — the caller has already
+#                        short-circuited on ActiveState, so this is belt-and-braces)
+#   unparseable -> "x"  (a NON-EMPTY value date cannot read; a distinct, reportable fault)
+# Treating empty as "unparseable ⇒ stale" would build a loop that never self-disarms while
+# reporting success, which is why the two are kept apart.
+ts_epoch() {
+  local raw="$1" e=""
+  [[ -n "$raw" ]] || { printf ''; return 0; }
+  e=$(date -d "$raw" +%s 2>/dev/null) || e=""
+  [[ "$e" =~ ^[0-9]+$ ]] || { printf 'x'; return 0; }
+  printf '%s' "$e"
+}
+
 # State file for observability (#4554). Queryable via /hooks/infra-config-status.
 STATE_FILE="${INFRA_CONFIG_STATE:-/var/lock/infra-config-apply.state}"
 START_TS=$(date +%s)
 
 # Clear stale sentinel from prior run (same pattern as ci-deploy.sh:105)
 rm -f "${STATE_FILE}.final"
+# #7103 R2 3.3 — and the STATE FILE itself, so an apply that dies before writing one reads as
+# "no_prior_apply" rather than serving the PREVIOUS apply's frame as if it were current.
+#
+# Not cosmetic. The gate's poll window is ~18s while two synchronous try-restarts can exceed it,
+# and on a handler-only apply (the handler is not in FILE_MAP) no payload byte changes — so a
+# stale frame would satisfy both the count and the content invariants and certify a `restarts`
+# array produced by an earlier run. That is #6594's latched false-green reproduced inside the
+# very mechanism built to end it.
+rm -f "$STATE_FILE"
 
 # EXIT trap: on non-zero exit without a .final sentinel, write "unhandled" state.
 # Also cleans up temp files and the sentinel. files_total:0 is a "no-accounting"
@@ -95,8 +177,13 @@ rm -f "${STATE_FILE}.final"
 # TOTAL_COUNT is set); it pairs with files_written:0/files_failed:0 and is
 # harmless to the CI gate, which fails on the non-zero exit_code first.
 TMPFILES=()
+# #7103 R2 3.3 — the trap payload carries schema_version:2 and an EMPTY restarts array. An
+# unhandled abort must report itself as UNHANDLED, not trip the gate's restarts contract check:
+# the gate fails on a schema_version>=2 frame whose array does not cover every RESTART_MAP unit,
+# and an abort frame legitimately covers none. exit_code is non-zero here, which is what the
+# gate adjudicates on first.
 trap 'rc=$?; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then
-  printf "{\"start_ts\":%d,\"end_ts\":%d,\"exit_code\":%d,\"reason\":\"unhandled\",\"files_written\":0,\"files_failed\":0,\"files_total\":0,\"files\":[]}\n" \
+  printf "{\"schema_version\":2,\"start_ts\":%d,\"end_ts\":%d,\"exit_code\":%d,\"reason\":\"unhandled\",\"files_written\":0,\"files_failed\":0,\"files_total\":0,\"files\":[],\"restarts\":[]}\n" \
     "$START_TS" "$(date +%s)" "$rc" > "$STATE_FILE" 2>/dev/null || true
 fi; rm -f "${TMPFILES[@]}" "${STATE_FILE}.final"' EXIT
 
@@ -185,6 +272,34 @@ for entry in "${FILE_MAP[@]}"; do
   # root-owned dest the deploy user may not be able to stat.
   local_sha=$(sha256sum "$tmpfile" | awk '{print $1}')
 
+  # #7103 R2 3.4 — derive `changed`; the WRITE ITSELF STAYS UNCONDITIONAL.
+  #
+  # Making the write content-conditional would silently drop the per-apply re-assertion of
+  # 640 root:deploy on the credential: a dest whose DAC drifted (world-readable, or root:root
+  # breaking vector's group read) still matches on CONTENT, so it would be skipped, reported
+  # changed:false — and the state JSON would still say ok. The one channel able to repair it
+  # would have stopped repairing it. So every entry is installed on every apply exactly as
+  # before, and `changed` is a derived observation, never a gate.
+  #
+  # Its one behavioural use is the mtime preservation below: a content-identical rewrite that
+  # bumped mtime would make the staleness predicate fire on every apply forever, restarting
+  # units that are not stale — clause-equivalent over-firing.
+  #
+  # sha256sum ONLY. Never diff/cmp -l/od on a FILE_MAP dest: a diff of
+  # /etc/default/soleur-doppler-token prints the prd token into journald, which vector ships to
+  # Better Stack. The comparison must not be able to echo the bytes it compares.
+  changed="true"
+  if [[ -L "$dest" ]]; then
+    # lstat guard: a symlinked dest is treated as changed and never followed or read through.
+    changed="true"
+  elif [[ -f "$dest" ]]; then
+    existing_sha=$(sha256sum "$dest" 2>/dev/null | awk '{print $1}') || existing_sha=""
+    if [[ -n "$existing_sha" && "$existing_sha" == "$local_sha" ]]; then
+      changed="false"
+      touch -r "$dest" "$tmpfile" 2>/dev/null || true
+    fi
+  fi
+
   if [[ -n "$DESTDIR" ]]; then
     # Test/sandbox mode: chown skipped (not root), atomic same-fs rename.
     mv -f "$tmpfile" "$dest"
@@ -218,7 +333,7 @@ for entry in "${FILE_MAP[@]}"; do
 
   logger -t "$LOG_TAG" "wrote: $dest_path sha256=$local_sha"
   [[ -n "$FILES_JSON" ]] && FILES_JSON+=","
-  FILES_JSON+="{\"file\":\"$dest_path\",\"sha256\":\"$local_sha\",\"status\":\"ok\"}"
+  FILES_JSON+="{\"file\":\"$dest_path\",\"sha256\":\"$local_sha\",\"status\":\"ok\",\"changed\":$changed}"
   WRITTEN_COUNT=$((WRITTEN_COUNT + 1))
 done
 
@@ -250,6 +365,97 @@ if [[ -f "$hooks_dest" ]] && command -v jq >/dev/null 2>&1; then
   done < <(jq -r '.[]."execute-command" // empty' "$hooks_dest" 2>/dev/null || true)
 fi
 
+# --- Activate what was delivered (#7103 R2 3.3/3.5/3.6/3.7) --------------------------------
+# ORDER: this whole block runs BEFORE the state write, because reconciliation must happen after
+# daemon-reload but be REPORTED in the state JSON. Previously the state was written first and
+# sync/daemon-reload ran afterwards; a restart decided after the frame was published could never
+# appear in it.
+#
+# sync + daemon-reload stay behind INFRA_CONFIG_TEST_MODE (they need a real host). The
+# reconciliation loop does NOT — it runs through the seams in sandbox mode so the predicate,
+# the grading and the ordering are actually exercised by the suite rather than gated out of it.
+if [[ -z "${INFRA_CONFIG_TEST_MODE:-}" ]]; then
+  sync
+  systemctl daemon-reload
+fi
+
+RESTARTS_JSON=""
+for restart_entry in "${RESTART_MAP[@]}"; do
+  IFS='|' read -r r_unit r_dropin <<< "$restart_entry"
+  r_action="skipped"; r_reason=""; r_rc=0
+  r_ts_before=0; r_ts_after=0; r_nrestarts=0; r_active=""
+
+  # --- ActiveState FIRST. An inactive unit is skipped with NO attempt made. ---
+  # ExecMainStartTimestamp is empty for an inactive unit, so treating empty as
+  # "unparseable ⇒ stale" would build a loop that restarts forever while reporting success.
+  # try-restart is also a deliberate no-op on an inactive unit, so attempting it would produce
+  # rc=0 and grade as a successful restart that never happened.
+  r_active=$(unit_prop "$r_unit" ActiveState)
+  if [[ "$r_active" != "active" ]]; then
+    r_action="skipped"; r_reason="unit_inactive"
+  else
+    r_raw_before=$(unit_prop "$r_unit" ExecMainStartTimestamp)
+    r_e_before=$(ts_epoch "$r_raw_before")
+    if [[ -z "$r_e_before" || "$r_e_before" == "x" ]]; then
+      # Reserved for a NON-EMPTY value date could not read. Reported, never guessed at.
+      r_action="skipped"; r_reason="timestamp_unparseable"
+    else
+      r_ts_before="$r_e_before"
+      # --- The single staleness predicate ---
+      #   stale := the running process started BEFORE the newest input it depends on.
+      # One clause subsuming what were three OR'd ones, and strictly more correct: it also
+      # heals a credential rotation that predates this code.
+      r_m_dropin=$(dest_mtime "${DESTDIR}${r_dropin}")
+      r_m_cred=$(dest_mtime "${DESTDIR}${CRED_FILE}")
+      r_newest="$r_m_dropin"
+      [[ "$r_m_cred" -gt "$r_newest" ]] && r_newest="$r_m_cred"
+
+      if [[ "$r_ts_before" -ge "$r_newest" ]]; then
+        r_action="skipped"; r_reason="not_stale"; r_ts_after="$r_ts_before"
+      else
+        r_reason="stale_config"
+        $SYSTEMCTL_RESTART try-restart "$r_unit" >/dev/null 2>&1 || r_rc=$?
+        if [[ "$r_rc" -ne 0 ]]; then
+          # A denial is a PROVISIONING defect and gets its own enum — it must never share one
+          # with unit_inactive or noop_not_active, which are states of the unit rather than of
+          # the grant. #5934: a swallowed sudo denial is how a remediation becomes a silent
+          # no-op that nobody notices until the next incident.
+          r_action="failed"; r_reason="sudo_denied"
+          r_active=$(unit_prop "$r_unit" ActiveState)
+        else
+          # --- GRADE ON EFFECT, NOT ON EXIT CODE ---
+          # try-restart exits 0 on a FAILED unit (it is defined as a no-op there), and on a
+          # Type=simple unit a 0 means "forked", not "running". So re-read and require both
+          # active AND an advanced start timestamp before calling this a restart.
+          # DropInPaths is deliberately NOT an input: daemon-reload refreshes systemd's
+          # in-memory view, so it lists the new drop-in even though the process never re-exec'd.
+          [[ "$RESTART_SETTLE_SECS" == "0" ]] || sleep "$RESTART_SETTLE_SECS"
+          r_active=$(unit_prop "$r_unit" ActiveState)
+          r_raw_after=$(unit_prop "$r_unit" ExecMainStartTimestamp)
+          r_e_after=$(ts_epoch "$r_raw_after")
+          [[ "$r_e_after" =~ ^[0-9]+$ ]] && r_ts_after="$r_e_after"
+          r_n=$(unit_prop "$r_unit" NRestarts)
+          [[ "$r_n" =~ ^[0-9]+$ ]] && r_nrestarts="$r_n"
+
+          if [[ "$r_active" != "active" ]]; then
+            r_action="failed"; r_reason="noop_not_active"
+          elif [[ "$r_ts_after" -le "$r_ts_before" ]]; then
+            r_action="failed"; r_reason="restart_did_not_advance"
+          else
+            r_action="restarted"; r_reason="stale_config"
+          fi
+        fi
+      fi
+    fi
+  fi
+
+  # Closed vocabulary, epoch seconds, no host paths. exec_main_start_ts_* is both what the
+  # grading above needs and what the post-apply follow-through probe reads.
+  logger -t "$LOG_TAG" "SOLEUR_INFRA_CONFIG_RESTART: unit=$r_unit action=$r_action reason=$r_reason rc=$r_rc active=$r_active"
+  [[ -n "$RESTARTS_JSON" ]] && RESTARTS_JSON+=","
+  RESTARTS_JSON+="{\"unit\":\"$r_unit\",\"action\":\"$r_action\",\"reason\":\"$r_reason\",\"rc\":$r_rc,\"active\":\"$r_active\",\"nrestarts\":$r_nrestarts,\"exec_main_start_ts_before\":$r_ts_before,\"exec_main_start_ts_after\":$r_ts_after}"
+done
+
 # --- Write state file (before self-restart) ---
 END_TS=$(date +%s)
 EXIT_CODE=0
@@ -263,8 +469,8 @@ state_tmp=$(mktemp "${STATE_FILE}.XXXXXX" 2>/dev/null) || {
   state_tmp=""
 }
 if [[ -n "${state_tmp:-}" ]]; then
-  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"files_written":%d,"files_failed":%d,"files_total":%d,"files":[%s]}\n' \
-    "$START_TS" "$END_TS" "$EXIT_CODE" "$WRITTEN_COUNT" "$FAIL_COUNT" "$TOTAL_COUNT" "$FILES_JSON" \
+  printf '{"schema_version":2,"start_ts":%d,"end_ts":%d,"exit_code":%d,"files_written":%d,"files_failed":%d,"files_total":%d,"files":[%s],"restarts":[%s]}\n' \
+    "$START_TS" "$END_TS" "$EXIT_CODE" "$WRITTEN_COUNT" "$FAIL_COUNT" "$TOTAL_COUNT" "$FILES_JSON" "$RESTARTS_JSON" \
     > "$state_tmp" 2>/dev/null || {
     logger -t "$LOG_TAG" "write_state: printf/redirect failed"
     rm -f "$state_tmp"
@@ -278,16 +484,19 @@ if [[ -n "${state_tmp:-}" ]]; then
   }
 fi
 
-# --- Post-write commands (skip in test mode) ---
-# Intentionally UNCONDITIONAL on FAIL_COUNT: a partial apply must still
-# daemon-reload + self-restart so a freshly-written hooks.json (the chicken-and-egg
-# self-heal, #4804) activates and re-aligns the host env-mapping for the next
-# apply. A missing_env on a NON-hooks.json file can transiently leave the router
-# pointing at a stale/absent target until the next clean apply; the CI verify gate
-# catches the partial (files_written != files_total) and the next apply self-heals.
+# --- Post-write self-restart (skip in test mode) ---
+# Only the DELAYED webhook self-restart lives after the state write now; sync, daemon-reload and
+# unit reconciliation moved above it (#7103 R2 3.3) so their outcome can appear in the frame.
+#
+# Intentionally UNCONDITIONAL on FAIL_COUNT: a partial apply must still self-restart so a
+# freshly-written hooks.json (the chicken-and-egg self-heal, #4804) activates and re-aligns the
+# host env-mapping for the next apply. A missing_env on a NON-hooks.json file can transiently
+# leave the router pointing at a stale/absent target until the next clean apply; the CI verify
+# gate catches the partial (files_written != files_total) and the next apply self-heals.
+#
+# It stays LAST because it kills the process serving this request: anything sequenced after it
+# is not guaranteed to run.
 if [[ -z "${INFRA_CONFIG_TEST_MODE:-}" ]]; then
-  sync
-  systemctl daemon-reload
   logger -t "$LOG_TAG" "scheduling self-restart in 3s"
   # Self-restart: schedule a delayed restart so the HTTP 202 response
   # completes before the webhook binary is killed.

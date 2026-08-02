@@ -193,6 +193,26 @@ if [[ "$dest_canonical" == /etc/systemd/system/*.service.d/*.conf ]]; then
   [[ "$dropin_bad_lines" == "0" ]] || reject "dropin_shape:bad_lines=$dropin_bad_lines"
 fi
 
+# #7103 R2 3.4 — preserve mtime on a content-identical install.
+#
+# This MUST live here and not only in the caller. In prod the caller stages into a
+# deploy-writable dir and this helper writes its own fresh temp in the destination directory,
+# so any mtime the caller preserved on ITS temp is discarded before the rename ever happens.
+# The reconciliation predicate keys on mtime, so without this a content-identical re-delivery
+# would look newer than the running process on EVERY apply and restart units that are not
+# stale — forever, and most visibly on vector, whose restart blinks the very log stream the
+# post-apply assertions are read through.
+#
+# sha256sum, never diff/cmp -l/od: one of these dests is the Doppler credential, and a
+# comparison that can echo its input prints the prd token into journald.
+if [[ -f "$dest" && ! -L "$dest" ]]; then
+  new_sha="$(sha256sum "$tmp" 2>/dev/null | awk '{print $1}')" || new_sha=""
+  old_sha="$(sha256sum "$dest" 2>/dev/null | awk '{print $1}')" || old_sha=""
+  if [[ -n "$new_sha" && "$new_sha" == "$old_sha" ]]; then
+    touch -r "$dest" "$tmp" 2>/dev/null || true
+  fi
+fi
+
 chmod "$mode" "$tmp" || install_fail "chmod"
 # chown only works as root; skip in sandbox/test mode (mirrors the handler).
 if [[ -z "$DESTDIR" ]]; then

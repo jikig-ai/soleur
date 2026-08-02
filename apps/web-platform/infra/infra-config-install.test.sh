@@ -371,6 +371,56 @@ test_dropin_shape_guard() {
   teardown
 }
 
+# --- #7103 R2 3.4: mtime is preserved on a content-identical install ---
+# This has to be asserted HERE, against the helper, not only through the handler. In prod the
+# handler stages into a deploy-writable dir and THIS helper writes its own fresh temp in the
+# destination directory, so any mtime the handler preserved on its own temp is discarded before
+# the rename. The handler's sandbox path (direct mv) exercises the handler's copy of this logic
+# and cannot see the helper's at all.
+#
+# Mutation-proven necessary: deleting the helper's `touch -r` left the whole
+# infra-config-apply.test.sh suite green at 106/106, because every one of its installs runs in
+# sandbox mode. The production path had no coverage.
+#
+# Consequence if it regresses: the reconciliation predicate keys on mtime, so a content-identical
+# re-delivery looks newer than the running process on EVERY apply and restarts units that are not
+# stale — most damagingly vector, whose restart blinks the log stream the post-apply assertions
+# are read through.
+test_install_preserves_mtime_on_identical_content() {
+  echo "TEST: install — identical content preserves mtime; changed content does not"
+  setup
+  local d="/usr/local/bin/ci-deploy.sh" mode="755" owner="root:root"
+  local abs="${TEST_DESTDIR}${d}"
+  local payload='#!/bin/bash'$'\n''echo one'
+
+  printf '%s' "$payload" | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1
+  # Age the installed file so a preserved mtime is visibly distinct from "now".
+  touch -d '2020-01-02 03:04:05' "$abs"
+  local m_before m_after m_changed
+  m_before=$(stat -c %Y "$abs")
+
+  # (a) Byte-identical re-install: mtime must survive.
+  printf '%s' "$payload" | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1
+  m_after=$(stat -c %Y "$abs")
+  assert_eq "identical payload preserved the dest mtime" "$m_before" "$m_after"
+
+  # (b) THE OTHER DIRECTION — without this, an implementation that simply never touches mtime
+  # (or one that stopped installing at all) would satisfy (a). A real content change MUST be
+  # visible to the predicate, or a genuinely stale unit is never restarted.
+  printf '%s' '#!/bin/bash'$'\n''echo two' | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1
+  m_changed=$(stat -c %Y "$abs")
+  if [[ "$m_changed" -gt "$m_before" ]]; then
+    echo "  PASS: changed payload advanced the dest mtime"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: changed payload left mtime at $m_changed (expected > $m_before)"
+    FAIL=$((FAIL + 1))
+  fi
+  # And the new content actually landed — a preserved mtime must never mean a skipped write.
+  assert_contains "changed payload was installed" "$(cat "$abs")" "echo two"
+  teardown
+}
+
 # --- Test 6: Sudoers dest is rejected (root-managed, #4827 security review) ---
 # A deploy user invoking the helper directly must NOT be able to write the
 # grant-definition file (it could install `NOPASSWD: ALL`).
@@ -461,6 +511,7 @@ test_all_managed_dests_accepted
 test_envfile_shape_guard
 test_dropin_dir_created
 test_dropin_shape_guard
+test_install_preserves_mtime_on_identical_content
 test_reject_sudoers_dest
 test_reject_setuid_mode
 test_reject_owner_seize

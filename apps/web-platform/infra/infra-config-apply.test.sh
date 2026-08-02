@@ -688,9 +688,353 @@ test_dropin_restart_grant() {
   done
 }
 
+# --- #7103 R2 3.10/3.11: unit reconciliation ------------------------------------------------
+# These drive the predicate through the INFRA_CONFIG_SYSTEMCTL* seams. Without them every unit
+# resolves to unit_inactive on a dev box or CI runner — the loop runs, reports, and exercises
+# none of the logic worth testing. Measured before these existed: the suite was 70/70 green
+# while the entire staleness/grading path was unreachable.
+#
+# The stubs are STATEFUL and argv-VALIDATING, both deliberately:
+#   - stateful, because the contract under test is a TRANSITION (a timestamp that advances). A
+#     stub returning one fixed answer cannot tell a restart that worked from one that did not,
+#     so the grading arms would pass against an implementation that never re-read anything.
+#   - argv-validating (exit 64), because a stub answering regardless of its arguments puts the
+#     fixture seam ABOVE the code under test: the handler could query the wrong property, or
+#     invoke the wrong verb, and every assertion would still be green.
+
+# Write the two stubs into $1. Fixture state lives in $STUB_STATE as <unit>.<Property> files;
+# arming <unit>.after.<Property> makes the restart stub apply that value, which is how a
+# restart's EFFECT is scripted independently of its exit code.
+make_restart_stubs() {
+  local bindir="$1"
+  cat > "$bindir/sc-show" <<'STUB'
+#!/usr/bin/env bash
+# Contract: show <unit> -p <Property> --value. Anything else is a caller defect, not a miss.
+[[ "$1" == "show"   ]] || { echo "stub: expected 'show', got '$1'" >&2; exit 64; }
+[[ "$3" == "-p"     ]] || { echo "stub: expected '-p', got '$3'" >&2; exit 64; }
+[[ "$5" == "--value" ]] || { echo "stub: expected '--value', got '$5'" >&2; exit 64; }
+f="$STUB_STATE/$2.$4"
+[[ -f "$f" ]] && cat "$f"
+exit 0
+STUB
+  cat > "$bindir/sc-restart" <<'STUB'
+#!/usr/bin/env bash
+# Records the FULL argv so ordering and sudoers lockstep are both checkable.
+printf '%s\n' "$*" >> "$STUB_CALLS"
+[[ "$1" == "try-restart" ]] || { echo "stub: expected 'try-restart', got '$1'" >&2; exit 64; }
+unit="$2"
+[[ -f "$STUB_STATE/$unit.deny" ]] && exit 1
+for p in ActiveState ExecMainStartTimestamp NRestarts; do
+  [[ -f "$STUB_STATE/$unit.after.$p" ]] && cp "$STUB_STATE/$unit.after.$p" "$STUB_STATE/$unit.$p"
+done
+exit 0
+STUB
+  chmod +x "$bindir/sc-show" "$bindir/sc-restart"
+}
+
+# systemd's own rendering of a timestamp, so `date -d` in the handler parses exactly the shape
+# it will meet in production rather than a convenient ISO string.
+sd_ts() { date -u -d "@$1" '+%a %Y-%m-%d %H:%M:%S UTC'; }
+
+# Arm a unit's pre-restart state, and optionally the state a successful restart lands it in.
+arm_unit() {
+  local unit="$1" active="$2" ts_epoch="$3"
+  printf '%s' "$active" > "$STUB_STATE/$unit.ActiveState"
+  if [[ -n "$ts_epoch" ]]; then printf '%s' "$(sd_ts "$ts_epoch")" > "$STUB_STATE/$unit.ExecMainStartTimestamp"
+  else : > "$STUB_STATE/$unit.ExecMainStartTimestamp"; fi
+  printf '0' > "$STUB_STATE/$unit.NRestarts"
+}
+arm_after() {
+  local unit="$1" active="$2" ts_epoch="$3"
+  printf '%s' "$active" > "$STUB_STATE/$unit.after.ActiveState"
+  [[ -n "$ts_epoch" ]] && printf '%s' "$(sd_ts "$ts_epoch")" > "$STUB_STATE/$unit.after.ExecMainStartTimestamp"
+  printf '1' > "$STUB_STATE/$unit.after.NRestarts"
+}
+
+restart_setup() {
+  setup
+  export_valid_env_vars
+  make_restart_stubs "$TMPDIR_ROOT/bin"
+  export STUB_STATE="$TMPDIR_ROOT/stubstate"; mkdir -p "$STUB_STATE"
+  export STUB_CALLS="$TMPDIR_ROOT/calls.log"; : > "$STUB_CALLS"
+  export INFRA_CONFIG_SYSTEMCTL_SHOW="$TMPDIR_ROOT/bin/sc-show"
+  export INFRA_CONFIG_SYSTEMCTL="$TMPDIR_ROOT/bin/sc-restart"
+  # The settle sleep is a real 2s in prod; the suite must not pay it. Pinned to 0 explicitly
+  # rather than left to a stubbed sleep, so the handler's own default stays observable.
+  export INFRA_CONFIG_RESTART_SETTLE_SECS=0
+}
+restart_teardown() {
+  unset STUB_STATE STUB_CALLS INFRA_CONFIG_SYSTEMCTL_SHOW INFRA_CONFIG_SYSTEMCTL \
+        INFRA_CONFIG_RESTART_SETTLE_SECS
+  teardown
+}
+
+# Read one field out of the restarts array for a unit.
+restart_field() {
+  jq -r --arg u "$1" --arg f "$2" '.restarts[] | select(.unit == $u) | .[$f]' \
+    "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING"
+}
+
+test_reconcile_stale_fires_and_disarms() {
+  echo "TEST: reconcile — a stale unit is restarted, and a second apply does NOT restart it"
+  restart_setup
+  # Started an hour before the files it depends on ⇒ stale. The restart lands it in the future,
+  # so the SAME fixtures on a second apply must now read as not_stale: the predicate has to
+  # self-disarm, or the handler restarts vector on every apply forever.
+  arm_unit  vector.service            active "$(( $(date +%s) - 3600 ))"
+  arm_after vector.service            active "$(( $(date +%s) + 3600 ))"
+  arm_unit  inngest-heartbeat.service inactive ""
+  bash "$HANDLER" >/dev/null 2>&1 || true
+
+  assert_eq "stale unit action is restarted"     "restarted"    "$(restart_field vector.service action)"
+  assert_eq "stale unit reason is stale_config"  "stale_config" "$(restart_field vector.service reason)"
+  # Non-vacuity: the stub must actually have been invoked. Without this the arms above could
+  # all be satisfied by a handler that never called anything.
+  if grep -qxF "try-restart vector.service" "$STUB_CALLS"; then
+    echo "  PASS: the restart seam was invoked with the expected argv"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: restart seam never invoked (calls: $(tr '\n' ';' < "$STUB_CALLS"))"; FAIL=$((FAIL + 1))
+  fi
+  # The advanced timestamp must be REPORTED, not just used internally — it is what the
+  # post-apply follow-through probe reads.
+  local tb ta
+  tb=$(restart_field vector.service exec_main_start_ts_before)
+  ta=$(restart_field vector.service exec_main_start_ts_after)
+  if [[ "$ta" -gt "$tb" ]]; then
+    echo "  PASS: exec_main_start_ts advanced in the report ($tb -> $ta)"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: reported timestamps did not advance ($tb -> $ta)"; FAIL=$((FAIL + 1))
+  fi
+
+  # --- second apply, same fixtures: must self-disarm ---
+  : > "$STUB_CALLS"
+  bash "$HANDLER" >/dev/null 2>&1 || true
+  assert_eq "second apply skips the now-current unit" "not_stale" "$(restart_field vector.service reason)"
+  if [[ -s "$STUB_CALLS" ]]; then
+    echo "  FAIL: predicate did not self-disarm — restarted again ($(tr '\n' ';' < "$STUB_CALLS"))"; FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: predicate self-disarmed (no restart attempted on the second apply)"; PASS=$((PASS + 1))
+  fi
+  restart_teardown
+}
+
+test_reconcile_inactive_short_circuits() {
+  echo "TEST: reconcile — an inactive unit is skipped with NO restart attempted"
+  restart_setup
+  arm_unit vector.service            inactive ""
+  arm_unit inngest-heartbeat.service inactive ""
+  bash "$HANDLER" >/dev/null 2>&1 || true
+  assert_eq "inactive unit action" "skipped"       "$(restart_field vector.service action)"
+  assert_eq "inactive unit reason" "unit_inactive" "$(restart_field vector.service reason)"
+  # try-restart is a deliberate no-op on an inactive unit and STILL EXITS 0, so an attempt here
+  # would grade as a successful restart that never happened. Assert no attempt was made at all.
+  if [[ -s "$STUB_CALLS" ]]; then
+    echo "  FAIL: attempted a restart on an inactive unit ($(tr '\n' ';' < "$STUB_CALLS"))"; FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: no restart attempted on an inactive unit"; PASS=$((PASS + 1))
+  fi
+  restart_teardown
+}
+
+test_reconcile_noop_not_active() {
+  echo "TEST: reconcile — a unit that dies right after fork grades as noop_not_active"
+  restart_setup
+  # try-restart returns 0 the moment the unit forks. On a Type=simple unit that 0 means
+  # "forked", not "running" — so the exit code alone would certify a unit that immediately died.
+  arm_unit  vector.service            active "$(( $(date +%s) - 3600 ))"
+  arm_after vector.service            failed "$(( $(date +%s) + 3600 ))"
+  arm_unit  inngest-heartbeat.service inactive ""
+  bash "$HANDLER" >/dev/null 2>&1 || true
+  assert_eq "post-fork death action" "failed"          "$(restart_field vector.service action)"
+  assert_eq "post-fork death reason" "noop_not_active" "$(restart_field vector.service reason)"
+  assert_eq "reported active state is the observed one" "failed" "$(restart_field vector.service active)"
+  restart_teardown
+}
+
+test_reconcile_did_not_advance() {
+  echo "TEST: reconcile — rc=0 with an unchanged start timestamp is restart_did_not_advance"
+  restart_setup
+  # Active afterwards AND exit 0, but the process never re-exec'd. Graded on effect, this is a
+  # failure; graded on exit code it would be a success.
+  arm_unit vector.service            active "$(( $(date +%s) - 3600 ))"
+  arm_after vector.service           active ""   # no timestamp change armed
+  arm_unit inngest-heartbeat.service inactive ""
+  bash "$HANDLER" >/dev/null 2>&1 || true
+  assert_eq "unchanged timestamp action" "failed"                  "$(restart_field vector.service action)"
+  assert_eq "unchanged timestamp reason" "restart_did_not_advance" "$(restart_field vector.service reason)"
+  restart_teardown
+}
+
+test_reconcile_sudo_denied() {
+  echo "TEST: reconcile — a denied sudo gets its own enum, never a unit-state one"
+  restart_setup
+  arm_unit vector.service            active "$(( $(date +%s) - 3600 ))"
+  touch "$STUB_STATE/vector.service.deny"
+  arm_unit inngest-heartbeat.service inactive ""
+  bash "$HANDLER" >/dev/null 2>&1 || true
+  assert_eq "denial action" "failed"      "$(restart_field vector.service action)"
+  # A provisioning defect must not be reported as a property of the unit — #5934 is the case
+  # where a swallowed denial became a silent no-op nobody noticed until the next incident.
+  assert_eq "denial reason" "sudo_denied" "$(restart_field vector.service reason)"
+  assert_eq "denial records the non-zero rc" "1" "$(restart_field vector.service rc)"
+  restart_teardown
+}
+
+test_reconcile_timestamp_unparseable() {
+  echo "TEST: reconcile — a non-empty unreadable timestamp is reported, not guessed at"
+  restart_setup
+  arm_unit vector.service active 0
+  printf 'not-a-timestamp' > "$STUB_STATE/vector.service.ExecMainStartTimestamp"
+  arm_unit inngest-heartbeat.service inactive ""
+  bash "$HANDLER" >/dev/null 2>&1 || true
+  assert_eq "unparseable action" "skipped"                "$(restart_field vector.service action)"
+  assert_eq "unparseable reason" "timestamp_unparseable"  "$(restart_field vector.service reason)"
+  # Treating unparseable as stale would restart on every apply while reporting success.
+  if [[ -s "$STUB_CALLS" ]]; then
+    echo "  FAIL: attempted a restart on an unreadable timestamp"; FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: no restart attempted on an unreadable timestamp"; PASS=$((PASS + 1))
+  fi
+  restart_teardown
+}
+
+test_reconcile_vector_ordered_last() {
+  echo "TEST: reconcile — vector is restarted LAST (asserted on emitted order)"
+  restart_setup
+  # Both stale, so both are attempted and the ORDER is observable. Asserted on the order the
+  # calls actually happened in, not on the order of the declarations that produced them.
+  arm_unit  vector.service            active "$(( $(date +%s) - 3600 ))"
+  arm_after vector.service            active "$(( $(date +%s) + 3600 ))"
+  arm_unit  inngest-heartbeat.service active "$(( $(date +%s) - 3600 ))"
+  arm_after inngest-heartbeat.service active "$(( $(date +%s) + 3600 ))"
+  bash "$HANDLER" >/dev/null 2>&1 || true
+  local n_calls last_call
+  n_calls=$(grep -c 'try-restart' "$STUB_CALLS" || true)
+  last_call=$(grep 'try-restart' "$STUB_CALLS" | tail -1)
+  assert_eq "both stale units were attempted" "2" "$n_calls"
+  # Restarting vector blinks the log stream every post-apply assertion is read through, so it
+  # must be the last thing this handler disturbs.
+  assert_eq "vector.service is the final restart" "try-restart vector.service" "$last_call"
+  # And the marker order matches, since that is what an operator reads.
+  local last_marker
+  last_marker=$(grep 'SOLEUR_INFRA_CONFIG_RESTART' "$LOGGER_LOG" | tail -1)
+  if [[ "$last_marker" == *"unit=vector.service"* ]]; then
+    echo "  PASS: vector is also last in the emitted markers"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: last marker was not vector: $last_marker"; FAIL=$((FAIL + 1))
+  fi
+  restart_teardown
+}
+
+test_reconcile_survives_missing_inputs() {
+  echo "TEST: reconcile — absent dests and a broken show still reach the post-write block"
+  restart_setup
+  # stat on an absent dest exits 1 and systemctl show can fail outright. Under set -euo pipefail
+  # an unguarded read would kill the handler MID-LOOP: the EXIT trap would overwrite the state
+  # with files_total:0/"unhandled" and the webhook self-restart would never run — a delivered
+  # hooks.json written but never activated (#4804's freeze, made deterministic).
+  cat > "$TMPDIR_ROOT/bin/sc-show" <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+  chmod +x "$TMPDIR_ROOT/bin/sc-show"
+  rm -f "${TEST_DESTDIR}/etc/default/soleur-doppler-token"
+  bash "$HANDLER" >/dev/null 2>&1 || true
+
+  local total written
+  total=$(jq -r '.files_total'   "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  written=$(jq -r '.files_written' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  assert_eq "delivery accounting is intact despite the failing reads" "$total" "$written"
+  assert_eq "files_total is the full managed set" "$MANAGED_N" "$total"
+  # The array must still be emitted, in EVERY outcome — an absent key is indistinguishable from
+  # a handler too old to have one, and the gate treats those differently.
+  assert_eq "restarts array still covers every unit" "2" \
+    "$(jq -r '.restarts | length' "$INFRA_CONFIG_STATE" 2>/dev/null || echo MISSING)"
+  assert_eq "state reports the v2 contract" "2" \
+    "$(jq -r '.schema_version' "$INFRA_CONFIG_STATE" 2>/dev/null || echo MISSING)"
+  restart_teardown
+}
+
+test_reconcile_unchanged_content_preserves_mtime() {
+  echo "TEST: reconcile — a content-identical re-delivery does not re-trigger the predicate"
+  restart_setup
+  arm_unit vector.service            active "$(( $(date +%s) + 3600 ))"
+  arm_unit inngest-heartbeat.service inactive ""
+  bash "$HANDLER" >/dev/null 2>&1 || true
+  local dropin="${TEST_DESTDIR}/etc/systemd/system/vector.service.d/10-vector-doppler-token.conf"
+  local m1 m2
+  m1=$(stat -c %Y "$dropin" 2>/dev/null || echo 0)
+  # Second apply, byte-identical payload. If the write bumped mtime, the drop-in would look
+  # newer than the running process on every apply and restart a unit that is not stale.
+  sleep 1
+  bash "$HANDLER" >/dev/null 2>&1 || true
+  m2=$(stat -c %Y "$dropin" 2>/dev/null || echo 0)
+  assert_eq "identical re-delivery preserved the drop-in mtime" "$m1" "$m2"
+  assert_eq "and reports it as unchanged" "false" \
+    "$(jq -r --arg f /etc/systemd/system/vector.service.d/10-vector-doppler-token.conf \
+        '.files[] | select(.file == $f) | .changed' "$INFRA_CONFIG_STATE" 2>/dev/null || echo MISSING)"
+  # But the WRITE still happened — status ok, sha present. Skipping the write would drop the
+  # per-apply re-assertion of mode/owner that repairs a drifted credential.
+  assert_eq "the write itself is still unconditional" "ok" \
+    "$(jq -r --arg f /etc/systemd/system/vector.service.d/10-vector-doppler-token.conf \
+        '.files[] | select(.file == $f) | .status' "$INFRA_CONFIG_STATE" 2>/dev/null || echo MISSING)"
+  restart_teardown
+}
+
+test_sudoers_caller_argv_lockstep() {
+  echo "TEST: lockstep — the argv the handler sends is the argv sudoers grants"
+  # Sudoers matching is EXACT. A drift between the grant and the caller does not widen anything;
+  # it DENIES, and a denied restart is a silent no-op unless something pins the two together.
+  local sudoers="${SCRIPT_DIR}/deploy-inngest-bootstrap.sudoers"
+  local cloud_init="${SCRIPT_DIR}/cloud-init.yml"
+  # Extract the granted commands from each provisioning path, one per line.
+  local granted_sudoers granted_cloudinit
+  granted_sudoers=$(sed -n 's/^Cmnd_Alias DROPIN_TRY_RESTART = //p' "$sudoers" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  granted_cloudinit=$(sed -n 's/^[[:space:]]*Cmnd_Alias DROPIN_TRY_RESTART = //p' "$cloud_init" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  assert_eq "both provisioning paths grant the same argv" "$granted_sudoers" "$granted_cloudinit"
+
+  # The caller's resolved argv: the seam default, plus the verb and unit from RESTART_MAP.
+  local seam_default
+  # shellcheck disable=SC2016 -- the single quotes hold a sed SCRIPT; the ${...} inside is the
+  # literal text being matched in the handler's source, not an expansion we want performed here.
+  seam_default=$(sed -n 's/^SYSTEMCTL_RESTART="\${INFRA_CONFIG_SYSTEMCTL:-\(.*\)}"$/\1/p' "$HANDLER")
+  assert_eq "the restart seam defaults to a sudo-prefixed absolute systemctl" \
+    "sudo /usr/bin/systemctl" "$seam_default"
+
+  local unit expected n_matched=0
+  while IFS='|' read -r unit _; do
+    [[ -n "$unit" ]] || continue
+    # Strip the sudo prefix: sudoers grants the command sudo will RUN, not the sudo call itself.
+    expected="${seam_default#sudo } try-restart $unit"
+    if grep -qxF "$expected" <<<"$granted_sudoers"; then
+      echo "  PASS: sudoers grants exactly what the handler sends for $unit"; PASS=$((PASS + 1))
+    else
+      echo "  FAIL: handler would send '$expected' — not granted. Granted: $(tr '\n' ';' <<<"$granted_sudoers")"
+      FAIL=$((FAIL + 1))
+    fi
+    n_matched=$((n_matched + 1))
+  done < <(sed -n '/^RESTART_MAP=(/,/^)/p' "$HANDLER" | sed -n 's/^[[:space:]]*"\([^|]*\)|\(.*\)"$/\1|\2/p')
+
+  # Non-vacuity: a broken extraction would yield an empty work-list and "pass" having compared
+  # nothing. Also pins that the grant has no members the map does not drive, in both directions.
+  assert_eq "every RESTART_MAP unit was checked" "2" "$n_matched"
+  assert_eq "the grant has no units the handler never restarts" "$n_matched" \
+    "$(grep -c . <<<"$granted_sudoers")"
+}
+
 # --- Run all tests ---
 echo "=== infra-config-apply.sh test suite ==="
 test_dropin_restart_grant
+test_reconcile_stale_fires_and_disarms
+test_reconcile_inactive_short_circuits
+test_reconcile_noop_not_active
+test_reconcile_did_not_advance
+test_reconcile_sudo_denied
+test_reconcile_timestamp_unparseable
+test_reconcile_vector_ordered_last
+test_reconcile_survives_missing_inputs
+test_reconcile_unchanged_content_preserves_mtime
+test_sudoers_caller_argv_lockstep
 test_happy_path
 test_missing_env_var
 test_empty_env_var
