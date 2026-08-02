@@ -93,29 +93,42 @@ check "envelope: ARRAY tool_input.path denies" "2:deny" \
 # write sailed through. Asserted here with a string positive control in the same
 # run so neither arm can pass because the hook broke outright.
 WWG="$REPO_ROOT/.openhands/hooks/worktree-write-guard.sh"
-# The guard's target is the MAIN checkout, resolved the same way the guard
-# itself resolves it. $REPO_ROOT is the WORKTREE when these tests run from one,
-# and the guard deliberately ALLOWS worktree paths — using it here made the
-# control pass vacuously (exit 0) while the array arms denied on type alone,
-# proving nothing about the path logic they are supposed to reach.
-WWG_MAIN=$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's|/\.git$||')
+# SELF-CONTAINED fixture. The guard only denies when worktrees EXIST, so an
+# earlier version of this block reused $REPO_ROOT and depended on the ambient
+# checkout: it passed on a developer machine (which has .worktrees/) and FAILED
+# in CI, whose clone has none — the guard correctly allowed, and the control
+# assertion read that as a regression. Same class as #5192. The fixture now
+# supplies the precondition itself: a throwaway repo with a non-empty
+# .worktrees/ directory, which is all the guard's check requires.
+WWG_TMP="$(mktemp -d)"
+WWG_REPO="$WWG_TMP/repo"
+git init -q "$WWG_REPO"
+git -C "$WWG_REPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+mkdir -p "$WWG_REPO/.worktrees/feat-fixture"
+
 run_wwg() {
   local payload="$1" rc=0
-  printf '%s' "$payload" | bash "$WWG" >/dev/null 2>&1 || rc=$?
+  # Run FROM the fixture repo: the guard resolves its repo root via
+  # `git rev-parse --git-common-dir` against its own CWD, not working_dir.
+  ( cd "$WWG_REPO" && printf '%s' "$payload" | bash "$WWG" ) >/dev/null 2>&1 || rc=$?
   echo "$rc"
 }
-if [[ -n "$WWG_MAIN" && -d "$WWG_MAIN" ]]; then
-  check "wwg: control — string path to main checkout denies" "2" \
-    "$(run_wwg "$(jq -nc --arg p "$WWG_MAIN/somefile.md" --arg w "$WWG_MAIN" '{tool_input:{path:$p}, working_dir:$w}')")"
-  check "wwg: ARRAY path to the same target denies (was a live bypass)" "2" \
-    "$(run_wwg "$(jq -nc --arg p "$WWG_MAIN/somefile.md" --arg w "$WWG_MAIN" '{tool_input:{path:[$p]}, working_dir:$w}')")"
-  check "wwg: object path denies" "2" \
-    "$(run_wwg "$(jq -nc --arg w "$WWG_MAIN" '{tool_input:{path:{a:"b"}}, working_dir:$w}')")"
-  check "wwg: string path INSIDE a worktree still allows" "0" \
-    "$(run_wwg "$(jq -nc --arg p "$REPO_ROOT/x.md" --arg w "$REPO_ROOT" '{tool_input:{path:$p}, working_dir:$w}')")"
+
+# Precondition self-check: if the fixture cannot make the guard deny a plain
+# string path, every assertion below is vacuous and must not be reported green.
+if [[ "$(run_wwg "$(jq -nc --arg p "$WWG_REPO/somefile.md" --arg w "$WWG_REPO" '{tool_input:{path:$p}, working_dir:$w}')")" != "2" ]]; then
+  fail=$((fail+1)); echo "[FAIL] wwg: FIXTURE BROKEN — guard does not deny a string path in the fixture repo" >&2
 else
-  echo "SKIP: could not resolve the main checkout for worktree-write-guard"
+  check "wwg: control — string path to main checkout denies" "2" \
+    "$(run_wwg "$(jq -nc --arg p "$WWG_REPO/somefile.md" --arg w "$WWG_REPO" '{tool_input:{path:$p}, working_dir:$w}')")"
+  check "wwg: ARRAY path to the same target denies (was a live bypass)" "2" \
+    "$(run_wwg "$(jq -nc --arg p "$WWG_REPO/somefile.md" --arg w "$WWG_REPO" '{tool_input:{path:[$p]}, working_dir:$w}')")"
+  check "wwg: object path denies" "2" \
+    "$(run_wwg "$(jq -nc --arg w "$WWG_REPO" '{tool_input:{path:{a:"b"}}, working_dir:$w}')")"
+  check "wwg: string path INSIDE a worktree still allows" "0" \
+    "$(run_wwg "$(jq -nc --arg p "$WWG_REPO/.worktrees/feat-fixture/x.md" --arg w "$WWG_REPO" '{tool_input:{path:$p}, working_dir:$w}')")"
 fi
+rm -rf "$WWG_TMP"
 
 rm -rf "$AD" "$ADHOME" "$FZ"
 
