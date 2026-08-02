@@ -615,8 +615,82 @@ test_orphan_hook_selfcheck() {
   teardown
 }
 
+# --- #7103 R2 3.2: the DROPIN_TRY_RESTART grant, all three halves ---
+# v1 of this work added only the Cmnd_Alias. An alias with no paired User_Spec grants NOTHING:
+# every restart would be denied at runtime while a shape-only assertion on the alias stayed
+# green — the exact silent-no-op the GIT_LOCK_CHARDEVICE_SWEEP header records ("sudo denies the
+# sweep ... and the durable remediation is a SILENT no-op", #5934). Every other alias in the file
+# is paired; this asserts the new one is too, in BOTH provisioning paths.
+#
+# The two argv are pinned here as data and reused by the lockstep assertion, so the units and
+# their exact invocation form have ONE definition in this suite rather than three copies.
+DROPIN_RESTART_ARGV=(
+  "/usr/bin/systemctl try-restart inngest-heartbeat.service"
+  "/usr/bin/systemctl try-restart vector.service"
+)
+test_dropin_restart_grant() {
+  echo "TEST: sudoers — DROPIN_TRY_RESTART alias, User_Spec, and cloud-init mirror"
+  local sudoers="${SCRIPT_DIR}/deploy-inngest-bootstrap.sudoers"
+  local cloud_init="${SCRIPT_DIR}/cloud-init.yml"
+  local server_tf="${SCRIPT_DIR}/server.tf"
+  local expected_alias="Cmnd_Alias DROPIN_TRY_RESTART = ${DROPIN_RESTART_ARGV[0]}, ${DROPIN_RESTART_ARGV[1]}"
+
+  # (a) The alias, with byte-exact argv. sudo matches the FULL resolved command, so an absolute
+  # path or a stray flag here is a denial at runtime, not a widening.
+  if grep -qxF "$expected_alias" "$sudoers"; then
+    echo "  PASS: sudoers declares the alias with the exact argv"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: sudoers missing exact alias line: $expected_alias"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # (b) The User_Spec that actually activates it. This is the half v1 omitted.
+  if grep -qxF "deploy ALL=(root) NOPASSWD: DROPIN_TRY_RESTART" "$sudoers"; then
+    echo "  PASS: sudoers pairs the alias with a deploy User_Spec"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: sudoers declares DROPIN_TRY_RESTART but never grants it to deploy"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # (c) Both halves mirrored into cloud-init (fresh hosts). Indented there, so match on the
+  # config-line shape rather than requiring a whole-line equality.
+  local ci_alias ci_spec
+  ci_alias=$(grep -cE "^[[:space:]]*Cmnd_Alias DROPIN_TRY_RESTART = " "$cloud_init" || true)
+  ci_spec=$(grep -cE "^[[:space:]]*deploy ALL=\(root\) NOPASSWD: DROPIN_TRY_RESTART[[:space:]]*$" "$cloud_init" || true)
+  assert_eq "cloud-init mirrors the alias" "1" "$ci_alias"
+  assert_eq "cloud-init mirrors the User_Spec" "1" "$ci_spec"
+
+  # (d) The post-write assertion on the SSH bootstrap leg, mirroring the two that already guard
+  # INFRA_CONFIG_INSTALL and GIT_LOCK_CHARDEVICE_SWEEP. Without it a sudoers that silently failed
+  # to install would surface only as denied restarts much later.
+  if grep -qE '"grep -q DROPIN_TRY_RESTART /etc/sudoers\.d/deploy-inngest-bootstrap"' "$server_tf"; then
+    echo "  PASS: server.tf remote-exec asserts the grant landed"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: server.tf bootstrap leg does not assert DROPIN_TRY_RESTART landed"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # (e) NON-VACUITY: the units named in the grant must be the units the RESTART_MAP drives.
+  # A grant for units the script never restarts, or a script restarting units the grant omits,
+  # both read as "green" on (a)-(d) alone.
+  local unit
+  for unit in inngest-heartbeat.service vector.service; do
+    if grep -qE "^[[:space:]]*\"?${unit}\"?" <(sed -n '/^RESTART_MAP=(/,/^)/p' "$HANDLER"); then
+      echo "  PASS: RESTART_MAP drives $unit"
+      PASS=$((PASS + 1))
+    else
+      echo "  FAIL: $unit is granted in sudoers but absent from the handler's RESTART_MAP"
+      FAIL=$((FAIL + 1))
+    fi
+  done
+}
+
 # --- Run all tests ---
 echo "=== infra-config-apply.sh test suite ==="
+test_dropin_restart_grant
 test_happy_path
 test_missing_env_var
 test_empty_env_var

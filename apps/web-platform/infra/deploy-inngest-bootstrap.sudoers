@@ -94,3 +94,26 @@ deploy ALL=(root) NOPASSWD: INFRA_CONFIG_INSTALL
 # change in lockstep (git-lock-chardevice-sweep.test.sh asserts consistency).
 Cmnd_Alias GIT_LOCK_CHARDEVICE_SWEEP = /usr/bin/timeout 60 /usr/local/bin/git-lock-chardevice-sweep.sh
 deploy ALL=(root) NOPASSWD: GIT_LOCK_CHARDEVICE_SWEEP
+
+# #7103 R2 — permits infra-config-apply.sh (the /hooks/infra-config handler, running as the
+# deploy user) to restart the two units whose systemd drop-ins it delivers. Delivery is not
+# activation: a drop-in re-pointing vector.service and inngest-heartbeat.service at the
+# re-deliverable credential lands on disk, and the running process keeps its old configuration
+# until something restarts it. Nothing did — so the credential channel reported success while
+# the units it exists to repair carried on with the stale environment.
+#
+# `try-restart` and not `restart`: an inactive unit must stay inactive. Starting a unit the
+# operator (or a failure) stopped is a decision this handler has no standing to make.
+#
+# PRECONDITION, NOT A DETAIL: /usr/local/bin/infra-config-install validates drop-in content
+# against a permitted-directive whitelist before any of this can activate it. Granting a root
+# restart of a unit whose configuration can be written without validation converts a delivery
+# capability into an execution capability — vector.service runs User=deploy, and systemd merges
+# drop-ins after the unit body. The gate ships first for that reason; do not reorder them.
+#
+# One line, two commands — the INNGEST_QUIESCE form above, not a continuation. Sudoers argument
+# matching is EXACT, so `try-restart vector.service --no-block` is denied rather than silently
+# widened: the failure mode of a drift here is denial, which infra-config-apply.test.sh's
+# sudoers-to-caller argv lockstep pins in both directions.
+Cmnd_Alias DROPIN_TRY_RESTART = /usr/bin/systemctl try-restart inngest-heartbeat.service, /usr/bin/systemctl try-restart vector.service
+deploy ALL=(root) NOPASSWD: DROPIN_TRY_RESTART

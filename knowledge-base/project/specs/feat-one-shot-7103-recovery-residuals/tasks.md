@@ -26,14 +26,14 @@ recurrence risk), R2 → R3 a hard dependent pair.
 - [ ] 0.3 Run `.github/scripts/test/run-all.sh`; record `RAN` (expect 10, `MIN_SUITES=10`).
 - [ ] 0.4 Verify `python3` + `yaml` in the job that will run the R4 harness. **Decides Phase 5's home.**
 - [ ] 0.5 Confirm the liveness gate is still the final step of `cf-tunnel-ssh-bridge/action.yml`.
-- [ ] 0.6 Count `FILE_MAP` entries (expect 19); note the two stale "18 destinations" comments.
+- [x] 0.6 Count `FILE_MAP` entries (expect 19); note the two stale "18 destinations" comments.
 - [ ] 0.7 Confirm `"source": "string"` is an accepted hook source.
 - [ ] 0.8 Re-derive the required-check list from the live ruleset.
-- [ ] 0.9 Enumerate every consumer of `cat-infra-config-state.sh` output.
-- [ ] 0.10 Read `infra-config-apply.sh`'s tail: state-write block, `.final` sentinel, post-write region.
-- [ ] 0.11 Read the sudoers file; record every alias's paired `User_Spec` line **and** its `server.tf`
+- [x] 0.9 Enumerate every consumer of `cat-infra-config-state.sh` output.
+- [x] 0.10 Read `infra-config-apply.sh`'s tail: state-write block, `.final` sentinel, post-write region.
+- [x] 0.11 Read the sudoers file; record every alias's paired `User_Spec` line **and** its `server.tf`
       `remote-exec` grep assertion.
-- [ ] 0.12 Read `infra-config-install.sh`'s content gate and confirm its `/etc/default/*` scope.
+- [x] 0.12 Read `infra-config-install.sh`'s content gate and confirm its `/etc/default/*` scope.
       **Security precondition — do not start 3.2 without this.**
 - [x] 0.13 Confirm repo visibility is PUBLIC (context for the 5.1 `::add-mask::`).
 
@@ -67,7 +67,7 @@ recurrence risk), R2 → R3 a hard dependent pair.
 
 ## Phase 3 — R2: reconcile the units whose drop-ins were delivered
 
-- [ ] 3.1 **SECURITY PRECONDITION.** Extend `infra-config-install.sh`'s content gate to
+- [x] 3.1 **SECURITY PRECONDITION.** Extend `infra-config-install.sh`'s content gate to
       `*.service.d/*.conf` dests with a permitted-directive whitelist; reject `ExecStart=`, `User=`,
       `AmbientCapabilities=`, `NoNewPrivileges=` with named reasons.
 - [ ] 3.2 Add the `DROPIN_TRY_RESTART` alias **and** its `deploy ALL=(root) NOPASSWD:` User_Spec to
