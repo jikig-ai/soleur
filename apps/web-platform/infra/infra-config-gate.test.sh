@@ -306,6 +306,138 @@ else
   fi
 fi
 
+# ===================================================================================
+# #7103 R2 3.8 — the activation contract, staged.
+# ===================================================================================
+# Build a v2 frame: the FRESH files payload plus a caller-supplied restarts array and
+# schema_version. `changed` is set on every file entry so the "all unchanged" case below is a
+# realistic frame rather than a hand-trimmed one.
+build_status_json_v2() {
+  local out="$1" schema="$2" restarts="$3" changed="${4:-true}"
+  local files
+  files=$(jq -c --argjson c "$changed" '[.files[] | . + {changed: $c}]' "$FRESH")
+  jq -n --argjson sv "$schema" --argjson f "$files" --argjson r "$restarts" \
+        --argjson n "$EXPECTED_COUNT" \
+    '{schema_version:$sv, start_ts:1784233325, end_ts:1784233340, exit_code:0,
+      files_written:$n, files_failed:0, files_total:$n, files:$f, restarts:$r}' > "$out"
+}
+
+# Every unit the handler declares, verdict-complete and healthy.
+RESTARTS_OK='[]'
+UNITS_ALL=$(infra_config_expected_restart_units "$SYNTH/infra-config-apply.sh")
+RESTARTS_OK=$(jq -n --arg units "$UNITS_ALL" \
+  '[$units | split("\n") | .[] | select(length>0) |
+    {unit:., action:"restarted", reason:"stale_config", rc:0, active:"active",
+     nrestarts:1, exec_main_start_ts_before:100, exec_main_start_ts_after:200}]')
+N_UNITS=$(jq 'length' <<<"$RESTARTS_OK")
+
+if [[ "$N_UNITS" -ge 1 ]]; then
+  pass "activation fixture non-vacuity: derived $N_UNITS unit(s) from the handler's RESTART_MAP"
+else
+  fail "derived ZERO units from RESTART_MAP — every activation assertion below would be vacuous"
+fi
+
+# (a) STAGED: a handler predating the contract must WARN and PASS. Failing here would red
+# adjudicate_infra_config, skipping the if:success()-gated redeploy — so files land and
+# activation never happens, with the only repair route being the leg that may be dead.
+V1="$TMP/v1-no-schema.json"
+build_status_json_v2 "$V1" 0 '[]'
+jq 'del(.schema_version) | del(.restarts)' "$V1" > "$V1.tmp" && mv "$V1.tmp" "$V1"
+if out=$(adjudicate_infra_config "$V1" "$SYNTH" "$SYNTH/infra-config-apply.sh" 2>&1); then
+  if grep -q 'infra_config_handler_predates_restarts' <<<"$out"; then
+    pass "schema_version absent: warns by name and PASSES (staged rollout)"
+  else
+    fail "schema_version absent passed but emitted no named warning: $out"
+  fi
+else
+  fail "schema_version absent must PASS (warn-only) — it failed: $out"
+fi
+
+# (b) A complete, healthy v2 frame passes.
+V2OK="$TMP/v2-ok.json"
+build_status_json_v2 "$V2OK" 2 "$RESTARTS_OK"
+if adjudicate_infra_config "$V2OK" "$SYNTH" "$SYNTH/infra-config-apply.sh" >/dev/null 2>&1; then
+  pass "v2 frame with every unit restarted and active PASSES"
+else
+  fail "a healthy v2 frame must pass: $(adjudicate_infra_config "$V2OK" "$SYNTH" "$SYNTH/infra-config-apply.sh" 2>&1)"
+fi
+
+# (c) Each activation failure enum must RED the gate. One arm per enum — they are distinct
+# defects (a unit that died after fork, one that never re-exec'd, a missing grant) and a
+# single representative case would let two of the three regress unnoticed.
+for bad_reason in noop_not_active restart_did_not_advance sudo_denied; do
+  VBAD="$TMP/v2-$bad_reason.json"
+  bad_restarts=$(jq --arg r "$bad_reason" \
+    '(.[0].action) = "failed" | (.[0].reason) = $r' <<<"$RESTARTS_OK")
+  build_status_json_v2 "$VBAD" 2 "$bad_restarts"
+  if adjudicate_infra_config "$VBAD" "$SYNTH" "$SYNTH/infra-config-apply.sh" >/dev/null 2>&1; then
+    fail "activation reason=$bad_reason must FAIL the gate — it passed"
+  else
+    pass "activation reason=$bad_reason REDS the gate (delivered but not running)"
+  fi
+done
+
+# (d) A non-zero rc reds the gate even when the reason looks benign.
+VRC="$TMP/v2-rc.json"
+build_status_json_v2 "$VRC" 2 "$(jq '(.[0].rc) = 1' <<<"$RESTARTS_OK")"
+if adjudicate_infra_config "$VRC" "$SYNTH" "$SYNTH/infra-config-apply.sh" >/dev/null 2>&1; then
+  fail "a non-zero activation rc must FAIL the gate — it passed"
+else
+  pass "non-zero activation rc REDS the gate"
+fi
+
+# (e) A v2 frame MISSING a unit's verdict reds the gate. An absent entry is indistinguishable
+# from a unit that was never considered, so silence must not read as success.
+VMISS="$TMP/v2-missing.json"
+build_status_json_v2 "$VMISS" 2 '[]'
+if adjudicate_infra_config "$VMISS" "$SYNTH" "$SYNTH/infra-config-apply.sh" >/dev/null 2>&1; then
+  fail "a v2 frame with no verdicts must FAIL the gate — it passed"
+else
+  pass "v2 frame missing unit verdicts REDS the gate"
+fi
+
+# (f) A SKIPPED, inactive unit WARNS but passes. Deliberate narrowing of the plan's
+# "fail on active != active": every case where we acted and it did not take is already covered
+# by (c). Failing on a unit we never attempted would permanently red the gate on a host where
+# that unit legitimately does not run (inngest-heartbeat is co-location dependent). Whether a
+# unit should be shipping is R3's question, answered at the sink.
+VSKIP="$TMP/v2-skipped.json"
+build_status_json_v2 "$VSKIP" 2 \
+  "$(jq '(.[0].action) = "skipped" | (.[0].reason) = "unit_inactive" | (.[0].active) = "inactive"' <<<"$RESTARTS_OK")"
+if out=$(adjudicate_infra_config "$VSKIP" "$SYNTH" "$SYNTH/infra-config-apply.sh" 2>&1); then
+  if grep -q 'infra_config_unit_not_active' <<<"$out"; then
+    pass "a skipped inactive unit warns by name and PASSES (topology, not a delivery defect)"
+  else
+    fail "skipped inactive unit passed with no named warning: $out"
+  fi
+else
+  fail "a skipped inactive unit must not red the gate: $out"
+fi
+
+# (g) An apply that changed NOTHING still passes. After the mtime-preservation fix a steady-state
+# re-delivery reports every file changed:false and every unit not_stale; if that combination did
+# not pass, the gate would red on every apply that correctly had no work to do.
+VNOOP="$TMP/v2-allunchanged.json"
+build_status_json_v2 "$VNOOP" 2 \
+  "$(jq '[.[] | .action = "skipped" | .reason = "not_stale" | .active = "active"]' <<<"$RESTARTS_OK")" \
+  false
+if adjudicate_infra_config "$VNOOP" "$SYNTH" "$SYNTH/infra-config-apply.sh" >/dev/null 2>&1; then
+  pass "steady state (all files changed:false, all units not_stale) PASSES"
+else
+  fail "steady state must pass: $(adjudicate_infra_config "$VNOOP" "$SYNTH" "$SYNTH/infra-config-apply.sh" 2>&1)"
+fi
+
+# (h) The contract is TERMINAL-ONLY. Adding it to the poll break-condition would burn all three
+# attempts on a slow-but-succeeding reconciliation and turn a retryable wait into a terminal red.
+if grep -n 'schema_version' "$REAL_INFRA/infra-config-gate.sh" \
+   | awk -F: -v s="$(grep -n '^infra_config_count_invariant()' "$REAL_INFRA/infra-config-gate.sh" | cut -d: -f1)" \
+             -v e="$(grep -n '^infra_config_content_assert()'  "$REAL_INFRA/infra-config-gate.sh" | cut -d: -f1)" \
+             '$1>s && $1<e' | grep -q .; then
+  fail "the activation contract leaked into infra_config_count_invariant — the poll break-condition must stay timing-independent"
+else
+  pass "activation contract is absent from the poll break-condition (terminal only)"
+fi
+
 # --- non-vacuity floor: the synthetic FILE_MAP produced a real, non-empty set --------
 if [[ "$EXPECTED_COUNT" -ge 2 && "${#COMPARABLE_DESTS[@]}" -ge 1 ]]; then
   pass "fixture non-vacuity: EXPECTED_COUNT=$EXPECTED_COUNT, ${#COMPARABLE_DESTS[@]} comparable dests"

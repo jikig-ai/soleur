@@ -70,26 +70,26 @@ recurrence risk), R2 → R3 a hard dependent pair.
 - [x] 3.1 **SECURITY PRECONDITION.** Extend `infra-config-install.sh`'s content gate to
       `*.service.d/*.conf` dests with a permitted-directive whitelist; reject `ExecStart=`, `User=`,
       `AmbientCapabilities=`, `NoNewPrivileges=` with named reasons.
-- [ ] 3.2 Add the `DROPIN_TRY_RESTART` alias **and** its `deploy ALL=(root) NOPASSWD:` User_Spec to
+- [x] 3.2 Add the `DROPIN_TRY_RESTART` alias **and** its `deploy ALL=(root) NOPASSWD:` User_Spec to
       the sudoers file **and** the `cloud-init.yml` mirror, **and** the `server.tf` `remote-exec`
       grep assertion.
-- [ ] 3.3 Restructure the script tail: move `sync`/`daemon-reload`/reconcile above the state write;
+- [x] 3.3 Restructure the script tail: move `sync`/`daemon-reload`/reconcile above the state write;
       add `"restarts":[]` + `"schema_version":2` to the EXIT trap; `rm -f "$STATE_FILE"` at start.
-- [ ] 3.4 Keep `FILE_MAP` writes **unconditional**; derive `changed` from a `sha256sum` compare used
+- [x] 3.4 Keep `FILE_MAP` writes **unconditional**; derive `changed` from a `sha256sum` compare used
       only by the predicate; preserve mtime on identical content; `sha256sum` only (never `diff`);
       `lstat`-guard the pre-write read.
-- [ ] 3.5 Implement the single staleness predicate with `ActiveState` first, activation grading
+- [x] 3.5 Implement the single staleness predicate with `ActiveState` first, activation grading
       (`is-active` + timestamp advance), the `noop_not_active` / `restart_did_not_advance` /
       `sudo_denied` / `unit_inactive` / `timestamp_unparseable` enums, and `vector` last.
-- [ ] 3.6 Guard every new fallible read with the file's existing idiom + a per-item reason enum.
-- [ ] 3.7 Emit `SOLEUR_INFRA_CONFIG_RESTART` and the `restarts` array with `active`, `nrestarts`,
+- [x] 3.6 Guard every new fallible read with the file's existing idiom + a per-item reason enum.
+- [x] 3.7 Emit `SOLEUR_INFRA_CONFIG_RESTART` and the `restarts` array with `active`, `nrestarts`,
       `exec_main_start_ts_before/after`.
-- [ ] 3.8 Add the staged gate assertion to `adjudicate_infra_config` **only** — warn+pass on
+- [x] 3.8 Add the staged gate assertion to `adjudicate_infra_config` **only** — warn+pass on
       `schema_version < 2`, fail on malformed / `rc != 0` / `active != active` / the failure enums.
-- [ ] 3.9 Assert the `depends_on` edge and `triggers_replace` coverage as tasks; fix the two stale
+- [x] 3.9 Assert the `depends_on` edge and `triggers_replace` coverage as tasks; fix the two stale
       "18 destinations" comments.
-- [ ] 3.10 Add the `SYSTEMCTL` test seam and the sudoers↔caller argv lockstep assertion.
-- [ ] 3.11 Extend `infra-config-apply.test.sh` per the plan's eleven-item list.
+- [x] 3.10 Add the `SYSTEMCTL` test seam and the sudoers↔caller argv lockstep assertion.
+- [x] 3.11 Extend `infra-config-apply.test.sh` per the plan's eleven-item list.
 
 ## Phase 4 — R3: an absence assertion that cannot pass while the channel is dark
 
