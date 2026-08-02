@@ -1,0 +1,331 @@
+# <!-- gate-override: new-scheduled-cron-prefer-inngest -->
+# Override justification (#7091). ADR-033 prefers Inngest for new crons; this one MUST run on
+# GitHub Actions, and the reason is structural rather than stylistic:
+#
+#   (i) SUBSTRATE INDEPENDENCE IS THE WHOLE POINT. Inngest cron functions execute as code baked
+#       into whatever image is CURRENTLY RUNNING on the host. A staleness check dispatched from
+#       Inngest would therefore judge prod's staleness using the stale build's own logic — the
+#       monitor goes stale in lockstep with the thing it monitors, which is the one failure mode
+#       this alarm exists to eliminate. Every other cron in this repo watches something EXTERNAL
+#       to its own deployment; this one watches its own deployment.
+#   (ii) It needs an independent view of `origin/main`. `actions/checkout` with fetch-depth: 0 on
+#       an ephemeral runner gives fresh git history; the app container has no git history at all.
+#   (iii) ADR-033's own scope note sanctions GHA for credential-light infra crons, which this is
+#       (a public unauthenticated GET plus git metadata).
+#
+# WHAT THIS WATCHES. A red `Web Platform Release` run whose `deploy` job is SKIPPED is a silent
+# production outage: there is no failed step to classify, so the release-outcome notifier has
+# nothing to report — THE ABSENCE IS THE SIGNAL — while /health returns 200 the entire time. On
+# 2026-07-30 that left prod ~21h stale, found only incidentally by an unrelated PR's post-merge
+# check. This workflow keys on the OUTCOME ("prod is missing commits it should have") rather than
+# on one mechanism of becoming stale, so it also catches any future silent no-op path.
+#
+# Security: the /health response is UNTRUSTED INPUT. It is validated to 40-hex in the checker and
+# passed through strip_log_injection before any echo into ::error::, $GITHUB_OUTPUT, or an issue
+# body. No github.event.* input is consumed. The checker's exit code travels as DATA into
+# $GITHUB_OUTPUT — the step never `exit 1`s, so a drift verdict can never self-dark the final
+# Sentry check-in that reports whether the monitor ran at all.
+#
+# Closes #7091.
+
+name: "Scheduled: Production Version-Drift Alerter"
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+# cancel-in-progress: false SERIALIZES overlapping ticks rather than racing them — two runs
+# racing would file duplicate issues. Paired with a job timeout well under the tick interval so
+# a wedged run cannot queue every subsequent tick behind it.
+concurrency:
+  group: scheduled-prod-version-drift
+  cancel-in-progress: false
+
+jobs:
+  drift-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # NOT COSMETIC. origin/main's HEAD is frequently NOT a path-matching commit (it is
+          # docs-only right now), so the range query needs full history on the COMMON path. A
+          # shallow checkout puts the checker in permanent CHECK_ERROR — which alerts, but on
+          # the wrong thing, forever.
+          fetch-depth: 0
+
+      - name: Check production version drift
+        id: check
+        run: |
+          set -uo pipefail
+
+          strip_log_injection() {
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+          }
+
+          # The checker's exit code is DATA, not a job failure. Letting it `exit 1` the step
+          # would make the terminal heartbeat's `steps.check.outcome` read `failure` on every
+          # real drift, conflating "prod is stale" with "the monitor is broken".
+          out="$(bash scripts/prod-version-drift-check.sh 2>&1)"; rc=$?
+
+          echo "$out"
+
+          verdict="$(printf '%s\n' "$out" | sed -n 's/^DRIFT_VERDICT=//p' | tail -1)"
+          reason="$(printf '%s\n' "$out" | sed -n 's/^DRIFT_REASON=//p' | tail -1)"
+          detail="$(printf '%s\n' "$out" | sed -n 's/^DRIFT_DETAIL=//p' | tail -1)"
+          count="$(printf '%s\n' "$out" | sed -n 's/^DRIFT_MISSING_COUNT=//p' | tail -1)"
+
+          verdict_safe="$(strip_log_injection "$verdict")"
+          reason_safe="$(strip_log_injection "$reason")"
+          detail_safe="$(strip_log_injection "$detail")"
+          count_safe="$(strip_log_injection "$count")"
+
+          {
+            echo "exit_code=${rc}"
+            echo "verdict=${verdict_safe}"
+            echo "reason=${reason_safe}"
+            echo "detail=${detail_safe}"
+            echo "missing_count=${count_safe}"
+          } >> "$GITHUB_OUTPUT"
+
+          if [[ "$rc" == "1" ]]; then
+            echo "::error::Production is serving a stale build: ${detail_safe}"
+          elif [[ "$rc" == "2" ]]; then
+            echo "::error::Version-drift check could NOT be evaluated (${reason_safe}): ${detail_safe}"
+          fi
+
+          # Always succeed: the verdict is carried by the outputs above.
+          exit 0
+
+      - name: File or update the drift issue
+        id: issue
+        if: ${{ !cancelled() && steps.check.outputs.exit_code == '1' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          DETAIL: ${{ steps.check.outputs.detail }}
+          MISSING_COUNT: ${{ steps.check.outputs.missing_count }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+
+          TITLE="[ci/prod-version-drift] Production is serving a stale build"
+
+          # BOOTSTRAP THE LABEL FIRST, ALWAYS. Filing an issue with an undefined `--label`
+          # HARD-FAILS, and ci/prod-version-drift does not exist yet. This repo has already
+          # shipped that exact failure twice (seccomp-unenforced-alert.sh,
+          # scheduled-terraform-drift.yml) — in both cases the verdict reached the email channel
+          # only and no action-required issue was ever filed.
+          #
+          # The ordering is asserted at CI time by Part B (B5), which greps this step body. That
+          # grep cannot distinguish code from prose, so this comment deliberately avoids writing
+          # the literal command names in a misleading order.
+          gh label create "ci/prod-version-drift" --repo "$GH_REPO" \
+            --description "Standing alarm: production is serving a stale image" --color "B60205" 2>/dev/null || true
+
+          EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "ci/prod-version-drift" \
+            --search "in:title $TITLE" --json number --jq '.[0].number' 2>/dev/null || true)"
+
+          BODY="$(printf '%s\n\n%s\n\n%s\n' \
+            "Production is missing ${MISSING_COUNT} commit(s) that should have been deployed." \
+            "Detail: ${DETAIL}" \
+            "Run: ${RUN_URL}")"
+
+          if [[ -n "$EXISTING" && "$EXISTING" != "null" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$BODY"
+            echo "first_detection=false" >> "$GITHUB_OUTPUT"
+            echo "issue_number=${EXISTING}" >> "$GITHUB_OUTPUT"
+          else
+            gh issue create --repo "$GH_REPO" --title "$TITLE" --body "$BODY" \
+              --label "ci/prod-version-drift" --label "action-required" --label "observability"
+            echo "first_detection=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Email ops on first detection
+        id: notify
+        if: ${{ !cancelled() && steps.check.outputs.exit_code == '1' && steps.issue.outputs.first_detection == 'true' }}
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          DETAIL: ${{ steps.check.outputs.detail }}
+          MISSING_COUNT: ${{ steps.check.outputs.missing_count }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+
+          # INLINED curl, deliberately NOT ./.github/actions/notify-ops-email. That composite
+          # declares no `outputs:` block at all, so steps.notify.outputs.delivered would be
+          # permanently EMPTY — and the heartbeat's drift arm requires delivered == '1', so
+          # using it would force the monitor to `error` on every real alert. Precedent for this
+          # shape is web-platform-release.yml's own `id: email` step.
+          if [[ -z "${RESEND_API_KEY:-}" ]]; then
+            echo "::error::RESEND_API_KEY is not set — nobody has been emailed that production is stale."
+            echo "delivered=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          BODY="<p><strong>Production is running an old build. Changes that were merged are not live.</strong></p>"
+          BODY="${BODY}<p>${MISSING_COUNT} change(s) that should have been released have not reached the site. Detail: <code>${DETAIL}</code></p>"
+          BODY="${BODY}<p><strong>What this means for you:</strong> the site looks healthy and keeps working, but it is serving older code. Anything you merged recently — including fixes — is not yet reaching your users, and this does not clear on its own.</p>"
+          BODY="${BODY}<p><a href=\"${RUN_URL}\">Open the run</a> that detected this.</p>"
+          BODY="${BODY}<p><strong>What to do:</strong> you do not need to fix this yourself. Send the run link above to your engineer, or paste it into Claude Code and ask it to get production back in sync. A tracking issue has been opened and will close automatically once production catches up.</p>"
+
+          PAYLOAD=$(jq -n \
+            --arg from "Soleur Ops <noreply@soleur.ai>" \
+            --arg subject "[PRODUCTION STALE] Soleur is serving an old build — merged changes are not live" \
+            --arg html "$BODY" \
+            '{from: $from, to: ["ops@jikigai.com"], subject: $subject, html: $html}')
+
+          HTTP_CODE=$(curl -s -o "${RUNNER_TEMP}/resend-drift.txt" -w "%{http_code}" \
+            -X POST "https://api.resend.com/emails" --max-time 15 \
+            -H "Authorization: Bearer ${RESEND_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" || echo "000")
+
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Drift email sent to ops@jikigai.com (HTTP ${HTTP_CODE})"
+            echo "delivered=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Drift email FAILED (HTTP ${HTTP_CODE}) — nobody was told production is stale."
+            echo "delivered=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: File or update the check-error issue
+        if: ${{ !cancelled() && steps.check.outputs.exit_code == '2' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          REASON: ${{ steps.check.outputs.reason }}
+          DETAIL: ${{ steps.check.outputs.detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+
+          # A DURABLE issue for CHECK_ERROR, deliberately unlike scheduled-zot-restart-loop.yml's
+          # TRANSIENT class (which files none). An inability to evaluate means the drift signal is
+          # UNOBSERVABLE — copy-pasting the transient treatment would make a misconfiguration
+          # permanently silent, which is this issue's own defect class one layer up. The checker's
+          # 3x curl retry is what keeps this from being noisy.
+          TITLE="[ci/prod-version-drift] Version-drift check could not evaluate"
+
+          gh label create "ci/prod-version-drift" --repo "$GH_REPO" \
+            --description "Standing alarm: production is serving a stale image" --color "B60205" 2>/dev/null || true
+
+          EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "ci/prod-version-drift" \
+            --search "in:title $TITLE" --json number --jq '.[0].number' 2>/dev/null || true)"
+
+          BODY="$(printf '%s\n\n%s\n\n%s\n' \
+            "The production version-drift check could not determine whether production is stale (${REASON})." \
+            "Detail: ${DETAIL}" \
+            "Run: ${RUN_URL}")"
+
+          if [[ -n "$EXISTING" && "$EXISTING" != "null" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$BODY"
+          else
+            gh issue create --repo "$GH_REPO" --title "$TITLE" --body "$BODY" \
+              --label "ci/prod-version-drift" --label "action-required" --label "observability"
+          fi
+
+      - name: Email ops when the check cannot evaluate
+        id: notify_error
+        if: ${{ !cancelled() && steps.check.outputs.exit_code == '2' }}
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          REASON: ${{ steps.check.outputs.reason }}
+          DETAIL: ${{ steps.check.outputs.detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+
+          if [[ -z "${RESEND_API_KEY:-}" ]]; then
+            echo "::error::RESEND_API_KEY is not set — nobody has been emailed that the drift check is broken."
+            echo "delivered=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          BODY="<p><strong>The check that tells you whether production is up to date is not working.</strong></p>"
+          BODY="${BODY}<p>Reason: <code>${REASON}</code>. Detail: <code>${DETAIL}</code></p>"
+          BODY="${BODY}<p><strong>What this means for you:</strong> production may or may not be up to date — right now we cannot tell. This is not itself an outage, but while it lasts you would not be warned if one happened.</p>"
+          BODY="${BODY}<p><a href=\"${RUN_URL}\">Open the run</a>.</p>"
+          BODY="${BODY}<p><strong>What to do:</strong> send the run link above to your engineer, or paste it into Claude Code and ask it to repair the drift check.</p>"
+
+          PAYLOAD=$(jq -n \
+            --arg from "Soleur Ops <noreply@soleur.ai>" \
+            --arg subject "[DRIFT CHECK BROKEN] Soleur cannot tell whether production is up to date" \
+            --arg html "$BODY" \
+            '{from: $from, to: ["ops@jikigai.com"], subject: $subject, html: $html}')
+
+          HTTP_CODE=$(curl -s -o "${RUNNER_TEMP}/resend-drift-error.txt" -w "%{http_code}" \
+            -X POST "https://api.resend.com/emails" --max-time 15 \
+            -H "Authorization: Bearer ${RESEND_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" || echo "000")
+
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Check-error email sent to ops@jikigai.com (HTTP ${HTTP_CODE})"
+            echo "delivered=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Check-error email FAILED (HTTP ${HTTP_CODE})."
+            echo "delivered=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Close the tracking issue on recovery
+        if: ${{ !cancelled() && steps.check.outputs.exit_code == '0' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERDICT: ${{ steps.check.outputs.verdict }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+
+          # WITHOUT THIS STEP the "one issue per episode" property is fiction: the issue would
+          # never close, the standing signal would become permanent noise, and the operator
+          # would learn to ignore the label. Note this closes WITH an inline `--comment` flag
+          # rather than issuing a separate commenting call: a separate call would make this a
+          # step that can notify a human on a CLEAN tick, which is exactly what the anti-spam
+          # pin (B4) forbids — and B4 greps this body, so the prose must not name that command
+          # either.
+          #
+          # Deliberate: if an operator closes the issue without fixing the drift, the next tick
+          # finds no open issue and files a NEW one. The condition is still true, so it should
+          # still be visible.
+          open_issues="$(gh issue list --repo "$GH_REPO" --state open --label "ci/prod-version-drift" \
+            --json number --jq '.[].number' 2>/dev/null || true)"
+
+          if [[ -z "$open_issues" ]]; then
+            echo "No open ci/prod-version-drift issue — nothing to close (verdict: ${VERDICT})."
+            exit 0
+          fi
+
+          printf '%s\n' "$open_issues" | while read -r n; do
+            [[ -z "$n" ]] && continue
+            gh issue close "$n" --repo "$GH_REPO" \
+              --comment "Recovered: production is no longer missing any commit matching the release path filter (verdict: ${VERDICT}). Closed automatically by ${RUN_URL}."
+          done
+
+      - uses: ./.github/actions/sentry-heartbeat
+        if: always()
+        with:
+          monitor-slug: scheduled-prod-version-drift
+          # ok means "THE MONITOR WORKED", not "prod is healthy" — a detected drift is a
+          # SUCCESSFUL evaluation whose surface is the issue and the email. But an alert that
+          # was required and did not deliver IS a monitor failure, hence the delivered conjunct.
+          #
+          # ALLOWLIST, not denylist, and the FIRST conjunct is steps.check.OUTCOME (#7138's
+          # lesson): a step that dies before writing its output leaves that output empty, and an
+          # output-only test reads emptiness as a value rather than as a death. Anything not
+          # explicitly enumerated here — including exit 2 and an absent output — fails to error.
+          status: >-
+            ${{ steps.check.outcome == 'success'
+                && (steps.check.outputs.exit_code == '0'
+                    || (steps.check.outputs.exit_code == '1' && steps.notify.outputs.delivered == '1'))
+                && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

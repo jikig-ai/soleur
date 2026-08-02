@@ -472,9 +472,16 @@ run_part_b() {
       "${X_RELEASE_PATH_FILTER:-<missing>}" "$sut_pathspec"
     # --first-parent is a no-op on today's linear history and load-bearing the moment a merge
     # commit lands -- 35 already have, and allow_merge_commit is on.
+    #
+    # ANCHOR ON THE INVOCATION, NOT A BARE TOKEN. A plain `grep -c -- --first-parent` counts
+    # COMMENT mentions too, and this checker documents the flag at length in its header -- so
+    # the bare-token form stayed green with the flag deleted from the git call, which is the
+    # assertion passing for a reason unrelated to what it claims. Anchoring to the command
+    # shape is something a comment cannot satisfy (a comment line starts with `#`, which
+    # `^[^#]*` cannot cross).
     local fp
-    fp="$(grep -cE -- '--first-parent' "$SUT" || true)"
-    assert_contains "B8b the checker's git invocation uses --first-parent" "^[1-9]" "$fp"
+    fp="$(grep -cE '^[^#]*git (log|rev-list)[^|]*--first-parent' "$SUT" || true)"
+    assert_contains "B8b the checker's git invocation itself carries --first-parent" "^[1-9]" "$fp"
     # ...and never through a pipe: measured, `git log <bad>..main | tail -1` returns rc=0
     # while git itself returns 128, which is exactly how a broken check reads as CLEAN.
     local piped
@@ -641,19 +648,31 @@ s=re.sub(r"PATHSPEC=\([^)]*\)", "PATHSPEC=()", s, count=1)
 open(p,"w").write(s)'
 
   # Axis 3 -- drop --first-parent. A no-op today, load-bearing the moment a merge lands.
+  #
+  # MUTATES CODE ONLY, NEVER PROSE. A naive `s.replace(tok, "", 1)` rewrites the FIRST
+  # occurrence in the file, and both of these tokens are DOCUMENTED in the checker header
+  # above the code that uses them -- so the sabotage landed in a comment, the real invocation
+  # was untouched, and the axis reported SURVIVED while the artifact was in fact correct. A
+  # mutation that cannot reach the property is not evidence about the property.
   mutate_and_assert_red "axis3-drop-first-parent" "$SH" '
 import sys
-p=sys.argv[1]; s=open(p).read()
-s=s.replace("--first-parent ","",1)
-open(p,"w").write(s)'
+p=sys.argv[1]; ls=open(p).read().split("\n")
+for i,l in enumerate(ls):
+    if l.lstrip().startswith("#"): continue
+    if "--first-parent " in l:
+        ls[i]=l.replace("--first-parent ","",1); break
+open(p,"w").write("\n".join(ls))'
 
   # Axis 4 -- anchor the staleness clock to the NEWEST missing commit. Under a steady commit
-  # stream this resets forever and never escalates while prod rots.
+  # stream this resets forever and never escalates while prod rots. Code-only, per axis 3.
   mutate_and_assert_red "axis4-newest-not-oldest" "$SH" '
 import sys
-p=sys.argv[1]; s=open(p).read()
-s=s.replace("sort -n | head -1","sort -n | tail -1",1)
-open(p,"w").write(s)'
+p=sys.argv[1]; ls=open(p).read().split("\n")
+for i,l in enumerate(ls):
+    if l.lstrip().startswith("#"): continue
+    if "sort -n | head -1" in l:
+        ls[i]=l.replace("sort -n | head -1","sort -n | tail -1",1); break
+open(p,"w").write("\n".join(ls))'
 
   # Axis 5 -- replace an alert condition with a bare !cancelled(). True on success too, so
   # this emails on every healthy tick.
@@ -690,12 +709,17 @@ s=s.replace("steps.check.outcome == \x27success\x27","steps.check.outputs.exit_c
 open(p,"w").write(s)'
 
   # Axis 9 -- shallow checkout. Puts the checker in permanent CHECK_ERROR on the COMMON path,
-  # because origin/main HEAD is frequently not a path-matching commit.
+  # because origin/main HEAD is frequently not a path-matching commit. Code-only, per axis 3:
+  # the workflow header explains WHY fetch-depth is 0, so a first-occurrence replace mutated
+  # the justification comment and left the actual `with:` block intact.
   mutate_and_assert_red "axis9-fetch-depth-1" "$WF" '
 import sys
-p=sys.argv[1]; s=open(p).read()
-s=s.replace("fetch-depth: 0","fetch-depth: 1",1)
-open(p,"w").write(s)'
+p=sys.argv[1]; ls=open(p).read().split("\n")
+for i,l in enumerate(ls):
+    if l.lstrip().startswith("#"): continue
+    if "fetch-depth: 0" in l:
+        ls[i]=l.replace("fetch-depth: 0","fetch-depth: 1",1); break
+open(p,"w").write("\n".join(ls))'
 
   # Axis 10 -- neuter the 40-hex validation so the literal string "null" flows through as a
   # SHA. jq -r prints "null" for both {} and {"build_sha":null}, exit 0 either way.

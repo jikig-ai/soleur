@@ -1079,3 +1079,28 @@ resource "sentry_cron_monitor" "scheduled_heartbeat_reconcile" {
 # no-ops under Doppler `GHCR_MINTER_DISABLED=true`, so there is nothing to monitor.
 # Its slug is carried in KNOWN_UNMONITORED_SLUGS (function-registry-count.test.ts).
 # Restore this block when the cron is re-enabled.
+
+# Liveness for the production version-drift alerter (#7091):
+# .github/workflows/scheduled-prod-version-drift.yml. This is the watch-the-watcher layer —
+# the workflow's own email + GitHub issue carry the drift verdict, so this monitor answers
+# only "did the checker run at all". Without it, a disabled workflow or a dropped schedule
+# would be indistinguishable from a permanently CLEAN production.
+#
+# checkin_margin_minutes = 30 == the tick interval, following the live high-frequency
+# GHA-`schedule:`-fired precedent in this file (scheduled_inngest_health */15 -> 15,
+# zot_restart_loop_alarm */30 -> 30) and its rationale: margin == interval MAXIMIZES jitter
+# tolerance (a run up to one full interval late still checks in, so ordinary GHA dispatch
+# drift cannot false-page) while a genuinely dark alarm still pages once the window closes.
+# The 480-minute figure from #4772 governed the TWICE-DAILY cohort and is marked superseded
+# in this file; it does not apply to a */30 schedule.
+resource "sentry_cron_monitor" "scheduled_prod_version_drift" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-prod-version-drift"
+  schedule                = { crontab = "*/30 * * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
