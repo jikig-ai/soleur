@@ -8,9 +8,13 @@ plan: knowledge-base/project/plans/2026-07-24-fix-6588-legal-clause-retraction-p
 decision_record: knowledge-base/project/specs/feat-one-shot-6588-legal-clause-retraction/decision-challenges.md
 site_dispositions: knowledge-base/project/specs/feat-one-shot-6588-legal-clause-retraction/site-dispositions.md
 adr: knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md
-status: "SIGNED-OFF WITH ACCEPTED RESIDUAL (CLO-agent-attested, Soleur-as-tenant-zero v1)"
-signed_off_at: 2026-07-24
-signed_off_by: "clo agent (Soleur legal domain leader) — reviewing authority for v1 per the agent-native company model; review performed 2026-07-24T22:43Z (00:43 CEST on 2026-07-25 local), same session as the PR; dated 2026-07-24 to match the PR, the corrections banner, and the sibling spec artifacts. External counsel re-review reserved for the re-evaluation triggers below."
+status: "BLOCKED — the 2026-07-24 sign-off is WITHDRAWN by Amendment No. 1 (2026-08-02). It attested a diff that is not the diff at HEAD 25e5de36e. Five rows were false; four merge-blocking defects are open. See §Amendment No. 1."
+superseded_by: "§Amendment No. 1 — re-attestation against HEAD 25e5de36e, 2026-08-02"
+signed_off_at: null
+signed_off_at_withdrawn: 2026-07-24
+amended_at: 2026-08-02
+amended_by: "clo agent (Soleur legal domain leader) — re-attestation against HEAD 25e5de36e performed 2026-08-02, after the 2026-08-01 rebase (DC-2) materially reversed the PR's own position and after the 2026-08-01/02 register+attestation fix commits. Evidence recomputed from the working tree and pulled live from the GitHub API; nothing carried over on trust from the 2026-07-24 pass."
+signed_off_by: "WITHDRAWN. The 2026-07-24 attribution is preserved below for the record: 'clo agent (Soleur legal domain leader) — reviewing authority for v1 per the agent-native company model; review performed 2026-07-24T22:43Z (00:43 CEST on 2026-07-25 local), same session as the PR; dated 2026-07-24 to match the PR, the corrections banner, and the sibling spec artifacts. External counsel re-review reserved for the re-evaluation triggers below.' That review is superseded, not deleted — see §Amendment No. 1 for what it got wrong and why."
 tier_classification: "Tier 1 (material) per `knowledge-base/legal/tc-version-bump-policy.md` — retraction of published Article 32 TOM claims plus re-scoping of a surviving one. NO `TC_VERSION` bump: that constant governs `docs/legal/terms-and-conditions.md` exclusively (`apps/web-platform/lib/legal/tc-version.ts:14,17,26-27`); the three documents amended here are notice/disclosure documents with no re-acceptance gate."
 brand_survival_threshold: single-user incident
 accepted_residual: "The re-scoped LUKS clause ships while a full un-wiped plaintext copy of every workspace remains on the superseded pre-cutover volume `hcloud_volume.workspaces` (`format = \"ext4\"`, `apps/web-platform/infra/server.tf`), retained attached-unmounted as the ADR-119 rollback backstop. Users are not told. CLO block B1 recommended an accompanying retained-plaintext disclosure sentence; the operator reaffirmed the UC-3 hold on 2026-07-24 and B1 was OVERRIDDEN. Tracking issue: #6808 (escalated by this PR to priority/p1-high + type/security). Ledgered internally as `plaintext-exception` (`tracking_issue: \"#6897\"`, `expires_on: 2026-10-22` — an INTERNAL commitment, never published) and named in the Article 30 register PA-1(g) and PA-2(g)."
@@ -19,7 +23,34 @@ re_evaluation_triggers: "(1) **#6808 clears** — `WORKSPACES_LUKS_HEARTBEAT_URL
 
 # Counsel review audit — #6588 (Article 32 TOM retraction + LUKS re-scope)
 
-> **STATUS: DISCHARGED WITH ONE ACCEPTED, OPERATOR-OVERRIDDEN RESIDUAL — reviewed and
+> ## ⛔ WITHDRAWAL NOTICE — read before anything below this line
+>
+> **The 2026-07-24 sign-off recorded in this document is WITHDRAWN as of 2026-08-02.
+> The current disposition of this gate is BLOCKED.**
+>
+> The review below was performed against the branch **before** the 2026-08-01 rebase onto
+> `main` (60 commits) and before the 2026-08-01/02 register and attestation fix commits. That
+> rebase **materially reversed this PR's own position** (DC-2: the git-data register items were
+> re-scoped to `DRAFTED / NOT-YET-ACTIVE` instead of deleted, because #6570 closed and the host
+> became orderable), and `main` published a **newer banner head** (#7100, July 31) while this
+> branch sat. **The attestation was never re-run.** Five of its rows are false against
+> HEAD `25e5de36e` — including three SHA digests that match no file and no commit on this
+> branch, a banner structure this PR does not produce, and an issue state that flipped.
+>
+> Everything between this notice and `§Amendment No. 1` is **preserved verbatim as the record of
+> what was attested on 2026-07-24**. It is *not* a current statement of the legal position and
+> must not be cited as one. Read `§Amendment No. 1` at the end of this file for the
+> re-attestation against HEAD, the corrected rows, the re-graded block B2, and the four
+> merge-blocking defects.
+>
+> This preservation-plus-amendment shape is deliberate and is the same standard this PR applies
+> to the `Previous: July 2, 2026` banner entry: **a corrections regime that rewrites what it
+> previously said is not a corrections regime.** An attestation that quietly edits its own false
+> rows out of existence is worth less than one that shows them.
+
+---
+
+> **STATUS [SUPERSEDED 2026-08-02 — see the Withdrawal Notice above]: DISCHARGED WITH ONE ACCEPTED, OPERATOR-OVERRIDDEN RESIDUAL — reviewed and
 > attested by the `clo` agent on 2026-07-24.**
 > The `clo` agent (Soleur legal domain leader) is the reviewing authority for the v1
 > Soleur-as-tenant-zero posture — this is an agent-native company; legal review is a
@@ -287,3 +318,266 @@ review**. This attestation is the **v1 internal CLO-agent sign-off** under the
 Soleur-as-tenant-zero posture — the operator retains an optional veto, and **external** counsel
 re-review is reserved for the frontmatter re-evaluation triggers, the first of which
 (#6808 clearing / the plaintext wipe completing) is the one that retires this audit's residual.
+
+*(End of the 2026-07-24 review, preserved verbatim. It is superseded from here.)*
+
+---
+---
+
+# Amendment No. 1 — re-attestation against HEAD `25e5de36e`
+
+**Date:** 2026-08-02
+**Amending authority:** `clo` agent (Soleur legal domain leader), v1 counsel-review attestation
+authority per the Soleur-as-tenant-zero posture.
+**Effect on the 2026-07-24 sign-off:** **WITHDRAWN.**
+**Disposition of the ship Phase 5.5 Counsel-Review CLO-Attestation gate: BLOCKED.**
+
+## A1.1 — Why this amendment exists
+
+The 2026-07-24 attestation certified a diff that was not shipped. Two things happened after it
+was written and neither triggered a re-review:
+
+1. **The 2026-08-01 rebase onto `main`** (60 commits) carried DC-2, which reversed the PR's own
+   position on the git-data Article 32 items — from *delete as never realised* to *retain as
+   `DRAFTED / NOT-YET-ACTIVE`* — because #6570 closed and the host was repinned `cax11` →
+   `cpx22`. Block **B2** had been graded `CURED` **on the deletion**.
+2. **`main` published a newer banner head** (#7100, July 31, 2026) while this branch sat, so this
+   PR's own entry is demoted to `Previous:` and the head it was attested as prepending does not
+   exist.
+
+An attestation is load-bearing evidence for a gate. Once the thing it describes changes, it stops
+being evidence and starts being a false record — and a false counsel-review record is a worse
+artifact than none, because the gate reads as discharged. That is the defect this amendment
+closes.
+
+## A1.2 — The false rows, corrected
+
+Each row below was re-verified independently at HEAD `25e5de36e` on 2026-08-02. Methods are in
+§A1.9.
+
+| # | What the 2026-07-24 audit asserted | What is true at HEAD | Correction |
+|---|---|---|---|
+| **1** | Per-artifact verdict on `apps/web-platform/lib/legal/legal-doc-shas.ts`: *"CONFIRMED — recomputed independently … matches its pin byte-for-byte (`data-protection-disclosure` `e6b00414…`, `gdpr-policy` `dabb5105…`, `privacy-policy` `85373780…`)"* | The pins at HEAD are `data-protection-disclosure` **`656f7a59…`**, `gdpr-policy` **`10bceac9…`**, `privacy-policy` **`44d7aaaa…`**. The three quoted prefixes match **no file and no commit on this branch**. | The *conclusion* is true at HEAD — I recomputed `sha256sum` over the three canonical files and all three match their pins byte-for-byte — but the *evidence quoted for it was not*. The quoted digests are **struck**. `docs/legal/terms-and-conditions.md` is untouched (`f3640a38…`), so `tc-document-sha-guard` passes and no `TC_VERSION` bump is engaged. **This recomputation expires the moment any of rulings A–E lands**: every one of them edits all three canonical files, so all three pins must be regenerated and this row re-verified before the next sign-off. |
+| **2** | *"A **new July 24, 2026 head** is prepended … Byte-identical across all six files (head length **1426** in each)"* and *"The **July 16, 2026 entry is demoted** to `Previous:` intact."* | The published head is **July 31, 2026 (Ref #7100)**. This PR's #6588 entry sits at **`Previous: July 24, 2026`**. The July-16 entry was demoted by #7100, not by this PR. | The audit's Article 12(1) analysis — *"the reader must be able to see both the claim and its withdrawal"* — was performed on a banner structure **this PR does not produce**. Re-analysed at **ruling E**, where it fails. The byte-identity finding survives: I re-verified the #6588 entry and the `workspaces-luks-verify` clause are byte-identical across all six files. |
+| **3** | Block **B2 CURED**, on the ground that the register *"**delete**[s] register items 14/15 and 18/19 (the host↔host TLS proxy and the membership-gated fetch authorization) **as never realised**"* | Items **(14)/(15)/(16)** in PA-1(g) and **(18)/(19)/(20)** in PA-2(g) are **retained** as `DRAFTED / NOT-YET-ACTIVE`, each expressly stating *"asserts NO present-tense measure"*, with a dated 2026-08-01 correction note in each TOM cell. | The graded fact is gone. **B2 is re-graded on the merits in §A1.3** — partly cured, partly re-opened. |
+| **4** | *"**#6570 OPEN**, pulled live — 'git-data is pinned to cax11 — orderable in 0 of 3 EU DCs, **so it can never be born**'"*, cited as the evidence that retraction limb (c) describes the impossible | **#6570 is CLOSED** (verified live 2026-08-02). The host was repinned `cax11` → `cpx22` and is orderable. | The impossibility premise is **withdrawn**. `soleur-git-data` is **unprovisioned**, not unprovisionable — verified absent from the live Hetzner account 2026-08-01 (4 servers: `soleur-web-platform`, `soleur-web-2`, `soleur-registry`, `soleur-inngest`). Retraction of limb (c) as a *present-tense* claim remains correct; retraction of it as a claim that *could never* be true does not. Consequence at **ruling D**. |
+| **5** | Per-artifact verdict on `knowledge-base/legal/compliance-posture.md`: *"Data-location narrowed to `hel1` only; both the retired standby and the **never-ordered CAX11** removed from DPA scope"* | Neither happened. The Hetzner row's **Data Region** cell still reads **`hel1 (Finland) + fsn1 (Germany)`**, and the git-data host is **retained in DPA scope** as CPX22 with a *"DECLARED in IaC but NOT YET PROVISIONED"* qualifier added 2026-08-01. | The audit conflated two different rows in two different files: the **Art. 30 register's** Vendor/Sub-Processor row *did* narrow to `hel1` only; the **compliance-posture** DPA row did not. Verdict re-issued as **PARTIALLY CONFIRMED**: the not-yet-provisioned qualifier is the right treatment and is correct on the facts; the Data Region column is now an internal inconsistency (register says `hel1`, posture says `hel1 + fsn1`). Non-blocking — it over-states rather than under-states the footprint, both DCs are EU under one AVV, and it is an internal record. Logged at §A1.8. |
+
+## A1.3 — Block B2, re-graded on the merits
+
+B2 was: *no public retraction without the Article 30 register + `compliance-posture.md` corrections
+in the **same** PR.* Its purpose was to stop the **internal record over-claiming relative to the
+public one**. The DC-2 reversal changed the fact it was graded on, so it is re-graded here, on
+the retain-as-`DRAFTED` disposition, on its merits.
+
+### (i) The retain-as-DRAFTED disposition is correct. I endorse it.
+
+The DC-2 reversal was the right call and I would have reached it independently:
+
+- **A `DRAFTED / NOT-YET-ACTIVE` item that says "asserts NO present-tense measure" over-claims
+  nothing.** B2 was aimed at over-claiming. This disposition does not over-claim; it timestamps.
+- **Deleting would have been *under*-claiming** — the mirror-image defect and the same class.
+  Article 30(1)(g) asks for a general description of the technical and organisational measures;
+  a designed measure recorded as not-in-force, with its activation condition named, is a more
+  accurate record than silence. Deletion also destroys the Article 13(3) advance-notice value the
+  register is relying on for the whole #5274 Phase-3 plane.
+- **It converges on the house remedy.** #6982 had already applied exactly this treatment to the
+  sibling items (13)/(17) on `main`. Inventing a second remedy for the same situation, in the same
+  register, would have made the register harder to read than the problem it solved.
+- **The premise for deletion is factually dead** (row 4 above). "Never realised" is not a true
+  statement about `soleur-git-data`; "not yet realised" is.
+
+### (ii) But B2 is **re-opened in the direction the reversal created**
+
+B2 required the internal and public records to **agree**. DC-2 moved the register and **did not
+move the public documents**. Two disagreements now exist, and both run in the worse direction —
+the published text is **stronger** than the Article 30 register:
+
+**(a) The retraction banner still says "never".** Register items (14)-(16)/(18)-(20) say the
+measures are designed and not yet in force. The published July-24 banner entry says they
+*"describe infrastructure that does not exist and, for two of them, **never did**"*, and the
+July-2 retraction annotation says they *"were **never realised** in the live platform"*. The
+statutory register and the published correction now assert contradictory things about the same
+three measures. Cure: **ruling D**.
+
+**(b) The per-workspace git-data authorization is asserted publicly and disclaimed internally.**
+Register (15)/(19): *"Per-workspace membership-gated git-data fetch authorization — DRAFTED /
+NOT-YET-ACTIVE … asserts NO present-tense measure."* Published, in the present tense, at
+`docs/legal/privacy-policy.md:318`, `:549` and `docs/legal/gdpr-policy.md:45` plus three mirrors.
+The code agrees with the register, not with the documents: `fetchFromGitData` returns at
+`apps/web-platform/server/git-data-client.ts:197` on `!isGitDataStoreEnabled()` **before**
+reaching `authorizeGitDataAccess(...)` at `:201`; the write path has the identical shape at
+`git-data-replication.ts:335-338`; and the flag is `process.env.GIT_DATA_STORE_ENABLED === "true"`
+(`workspace-resolver.ts:56-58`), default false. Cure: **ruling B**.
+
+### (iii) B2 verdict
+
+**B2 — CURED as to the register's own internal accuracy; RE-OPENED as to public/internal
+agreement.** The re-opened half is **merge-blocking**, and it is blocking for exactly B2's
+original reason: this PR exists because a published Article 32 claim outran the infrastructure,
+and it would ship two more instances of that.
+
+## A1.4 — What survives the amendment unamended
+
+Re-verified at HEAD, still good:
+
+- **The claim-family analysis and the whole-family removal method** for (a)/(b)/(c). This remains
+  the substantive strength of the PR and the reason the 2026-07-16 defect is not repeated.
+- **B3 — CURED.** The `Previous: July 2, 2026` entry body is unchanged; only an appended
+  annotation is new. Note for ruling D: **that annotation has itself never been published** (this
+  branch never merged; `main` published July 31 from #7100), so editing the *annotation* text
+  before it ships is not an in-place edit of the historical record and does not engage B3. The
+  July-2 entry body must still not be touched.
+- **B4 — STANDS, trivially satisfied.** Nothing about the plaintext volume is published, so no
+  wipe date can be.
+- **§B1 and the accepted residual — carried forward unamended.** The operator's DC-1 hold is
+  **not reopened** by this amendment. It is reaffirmed, twice, and it is not mine to reverse. But
+  see §A1.5: the residual it bounds is now **larger** than the 2026-07-24 record describes, for a
+  reason the 2026-07-24 review did not analyse.
+- **Tier 1 (material), no `TC_VERSION` bump.** Unchanged and correct.
+- **Re-evaluation trigger (5)** ("any change of Hetzner locative away from `hel1` only") has
+  **not** fired: the second web host re-added 2026-07-27 (#6919 / ADR-143) is in `hel1`.
+
+## A1.5 — The residual grew, and the 2026-07-24 review recorded the growth as a narrowing
+
+This is the most consequential finding in the amendment, so it is stated separately from the
+false-row table.
+
+The 2026-07-24 audit characterised the LUKS clause change as a **re-scope onto the live
+topology** — a narrowing — and its §B1 residual was framed as *"the plain reading is broader than
+the infrastructure earns."* Measured against the diff, the change is a **strengthening**:
+
+- **Before:** *"**Where the Web Platform spans more than one Hetzner host in the EU region**,
+  stored workspace git data sits on a LUKS-encrypted volume…"* — a conditional whose antecedent
+  was false, and which therefore **asserted nothing**.
+- **After** (`docs/legal/privacy-policy.md:549`): *"Stored workspace git data sits on a
+  LUKS-encrypted volume (encryption at rest) on the Hetzner host in the EU region that serves the
+  Web Platform"* — **universal and unhedged**, and expressly located on the serving host.
+
+Meanwhile `hcloud_volume.workspaces` (`format = "ext4"`, resource `hcloud_volume.workspaces` in
+`apps/web-platform/infra/server.tf`) is created `for_each = var.web_hosts` and attached by
+`hcloud_volume_attachment.workspaces` to `hcloud_server.web[each.key]` — so the un-wiped plaintext
+copy is attached to **the very host the new sentence names**. The new locative does not distance
+the claim from the residual; it points at it.
+
+Two consequences the 2026-07-24 review did not draw:
+
+1. **The PR removed a scoping antecedent, making the sentence strictly stronger in the exact
+   dimension #6588 is about.** DC-1 asked the operator *"may we add a disclosure?"* and was
+   answered no, twice. It never asked *"may we strengthen the claim?"* — and the strengthening is
+   what shipped.
+2. **`scripts/encryption-posture-ledger.json` records that store as
+   `"disclosed_as": "not-publicly-claimed"`.** The published universal is broad enough to be read
+   as a claim covering data resident on it, so the ledger's own assertion is not true of the
+   published text as it stands. The ledger is machine-linted and fails closed on unresolvable
+   anchors (`scripts/lint-encryption-posture.py`, `resolve_disclosed_as`, test cases TS-17/TS-18)
+   — but no linter can catch prose that is broader than the store it names.
+
+Cure: **ruling C** — a referent narrowing that discloses nothing, adds no sentence, states no fact
+about any other volume, and restores the ledger's own `not-publicly-claimed` assertion to truth.
+**It does not breach the DC-1 hold** and it is not a re-litigation of it; the analysis is in the
+ruling.
+
+## A1.6 — Fresh defect, not present in the 2026-07-24 review
+
+The published evidence citation for the one retained Article 32 claim is **falsifiable by one
+command**, and its tense is unsupported. All six files carry, byte-identically:
+
+> *"it is verified live (`workspaces-luks-verify`, device_type crypto_LUKS on /dev/mapper/workspaces)"*
+
+- **Falsifiable.** `apps/web-platform/infra/luks-monitor.sh` derives `real_dev` from
+  `cryptsetup status` and runs `blkid -s TYPE -o value "$real_dev"` on that **backing** device.
+  `/dev/mapper/workspaces` is the **decrypted** device; `blkid` on it returns `ext4`. Both internal
+  artifacts state this correctly as two fields (`device_type=crypto_LUKS`,
+  `mount_source=/dev/mapper/workspaces`); the published prose compressed them into one false
+  compound. A reader who checks — and a corrections banner invites checking — reaches the opposite
+  of the intended conclusion about the only Article 32 claim this PR retains.
+- **Tense unsupported.** The latest `workspaces-luks-verify` run is **30130277489,
+  2026-07-24T22:13:06Z** — **nine days** before merge. On this exact surface the documented failure
+  mode (#6812) is a **silent revert within ~27 minutes**, and the continuous monitor that would
+  catch one is confirmed non-reporting: **#6808 is OPEN** (verified live 2026-08-02),
+  `WORKSPACES_LUKS_HEARTBEAT_URL` unwired, so `luks-monitor.sh` runs, succeeds and pushes nothing.
+  The 2026-07-24 review itself set the standard — *"a stale green is the documented failure mode
+  here"* and *"I would have flagged a code-only assertion"* — and a nine-day-old green is a stale
+  green by that standard.
+
+Cure: **ruling A**, plus the merge-day gate in §A1.7.
+
+## A1.7 — Revised disposition
+
+**BLOCKED. Not signed off. Do not treat the ship Phase 5.5 Counsel-Review CLO-Attestation gate as
+discharged.**
+
+Four merge-blocking defects, each with exact replacement wording issued to the operator in the
+same review:
+
+| Ref | Defect | Why blocking |
+|---|---|---|
+| **A** | Falsifiable + stale-tense evidence citation for the retained Article 32 claim, in all six published files | A corrections notice whose own evidence citation is disprovable by one command destroys the credibility of the correction. Compounded by nine-day-old evidence with the monitor down (#6808). |
+| **B** | Present-tense per-workspace git-data authorization published in three documents that this PR's own Article 30 register marks `DRAFTED / NOT-YET-ACTIVE`, and that the code does not execute | Published record stronger than the statutory register — the #6588 defect class exactly. Also an unresolved three-way disagreement among the published documents (the DPD dropped the claim; two others kept it). |
+| **C** | Removal of the scoping antecedent converted an inoperative conditional into a universal encryption-at-rest claim, on the same host that carries the un-wiped plaintext copy | A **net-new** over-claim of the #6588 class, introduced by #6588's own PR, never put to the operator. |
+| **D** | Banner and July-2 annotation still say "never" where the register now says "not yet"; banner limb (i) mis-names its own subject; the web-2 retirement sentence is stale | Direct public/internal contradiction on a statutory record. Half of B2's cure has been undone by the reversal that came after the sign-off. |
+
+Plus **E** (banner head date / change-signal), which I rule untenable — see the ruling.
+
+**Merge-day gate, required in addition to the wording fixes:** re-run `workspaces-luks-verify`
+and record the fresh run ID **on the day the PR merges**. This is not belt-and-braces; it is the
+evidentiary standard the 2026-07-24 review itself set for this surface, and #6808 being open means
+nothing else is watching.
+
+**Re-attestation required** once A–E land. It must, at minimum: recompute the three SHA pins
+(row 1 above expires on those edits), re-verify canonical/mirror byte-identity at every changed
+site, re-verify the banner head date against the actual merge date, and confirm no ledger
+`disclosed_as` anchor was orphaned by the bullet-label change in ruling C
+(`scripts/lint-encryption-posture.py` fails closed on an unresolvable anchor — TS-18).
+
+## A1.8 — Non-blocking internal-record items opened by this amendment
+
+- **`knowledge-base/legal/compliance-posture.md`, Hetzner row, Data Region column** reads
+  `hel1 (Finland) + fsn1 (Germany)` while the Article 30 register's Vendor/Sub-Processor row now
+  reads `hel1` only. The Notes cell legitimately retains `fsn1` as audit trail; the **Data Region
+  column** is the machine-read field and over-states the live Hetzner compute footprint. P2 —
+  over-, not under-statement, both DCs EU under one AVV, internal record only.
+- **`scripts/encryption-posture-ledger.json`**, store `hcloud_volume.workspaces`, `evidence`
+  field still cites `apps/web-platform/infra/server.tf:1569`. At HEAD line 1569 is an unrelated
+  sysctl comment; the resource is `resource "hcloud_volume" "workspaces"` (line 1779). Stale
+  line-number citation — violates `cq-cite-content-anchor-not-line-number`, the same rule this PR
+  applied to the two `disclosed_as` fields but did not apply to `evidence`. P2.
+- **`plugins/soleur/docs/pages/legal/*.md` Eleventy subtitles** (`<p>Effective … | Last Updated
+  July 31, 2026</p>`) must move in lockstep with whatever ruling E produces. Mechanical, but it is
+  a third surface beyond canonical and mirror body text and is easy to miss.
+
+## A1.9 — Method
+
+Everything in this amendment was pulled at HEAD `25e5de36e` on 2026-08-02. Nothing was carried
+over on trust from the 2026-07-24 pass.
+
+- **SHA pins:** `sha256sum` over the three amended canonical files plus
+  `docs/legal/terms-and-conditions.md`, compared against
+  `apps/web-platform/lib/legal/legal-doc-shas.ts`.
+- **Issue states:** `gh issue view` for #6570, #6808, #3723, #6538, #6897, #7100, #7119.
+- **Banner structure:** direct extraction of the head and the `Previous:` chain from all six
+  published files, plus a byte-identity comparison of the #6588 entry and the
+  `workspaces-luks-verify` clause across canonical and mirror.
+- **Register:** items (13)-(17) in PA-1(g) and (17)-(21) in PA-2(g) extracted in full from
+  `knowledge-base/legal/article-30-register.md`, plus the diff of that file against `main`.
+- **Code:** `apps/web-platform/server/git-data-client.ts` (`:79` `authorizeGitDataAccess`, `:197`
+  the flag early-return, `:201` the authz call), `git-data-replication.ts:335-338`,
+  `workspace-resolver.ts:56-58` (flag default) and the live `workspace_members` /
+  `is_workspace_member` gates at `workspace-resolver.ts:124-193`, `:394-415`, `:755-793`.
+- **Infrastructure:** `apps/web-platform/infra/server.tf` (`hcloud_volume.workspaces` and
+  `hcloud_volume_attachment.workspaces`), `apps/web-platform/infra/luks-monitor.sh:150-172`.
+- **Evidence freshness:** `gh run list` for `workspaces-luks-verify`.
+- **Ledger:** `scripts/encryption-posture-ledger.json` plaintext-exception entries and
+  `scripts/lint-encryption-posture.py` `resolve_disclosed_as`.
+
+## A1.10 — Standing of this amendment
+
+This amendment is the **v1 internal CLO-agent attestation** under the Soleur-as-tenant-zero
+posture. It is a **BLOCKED** disposition, not a sign-off, and it is issued on the merits rather
+than deferred to the operator — the operator is a non-lawyer founder and this review is a CLO
+function. The operator retains an optional veto. **External** counsel re-review remains reserved
+for the frontmatter re-evaluation triggers.
+
+All output in this PR and in this audit remains **draft material requiring professional legal
+review**.
