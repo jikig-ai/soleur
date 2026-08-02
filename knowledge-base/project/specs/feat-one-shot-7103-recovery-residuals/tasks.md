@@ -93,19 +93,19 @@ recurrence risk), R2 → R3 a hard dependent pair.
 
 ## Phase 4 — R3: an absence assertion that cannot pass while the channel is dark
 
-- [ ] 4.1 Create `scripts/betterstack-assert-absence.sh` with four outcomes
+- [x] 4.1 Create `scripts/betterstack-assert-absence.sh` with four outcomes
       (`unknown`/`unshipping`/`present`/`clean` → 3/2/1/0), `unknown` evaluated first.
-- [ ] 4.2 Read the control in raw-SQL mode with an explicit `host_name` predicate on both the hot and
+- [x] 4.2 Read the control in raw-SQL mode with an explicit `host_name` predicate on both the hot and
       archive arms — never via OR-combined `--grep`.
-- [ ] 4.3 Hoist the canary emit out of the `doppler run` wrapper so the control survives a dead token.
-- [ ] 4.4 Reject a `--since` shorter than 1 h with a named error.
-- [ ] 4.5 Add the four positive-control wiring assertions to `journald-config.test.sh`, including that
+- [x] 4.3 Hoist the canary emit out of the `doppler run` wrapper so the control survives a dead token.
+- [x] 4.4 Reject a `--since` shorter than 1 h with a named error.
+- [x] 4.5 Add the four positive-control wiring assertions to `journald-config.test.sh`, including that
       the emit site is outside the wrapper.
-- [ ] 4.6 Repoint the AC12/AC13 discoverability command in the 2026-08-01 plan at the helper.
-- [ ] 4.7 File the **dedicated soak issue**, cross-link from #7103, add the directive with literal
+- [x] 4.6 Repoint the AC12/AC13 discoverability command in the 2026-08-01 plan at the helper.
+- [x] 4.7 File the **dedicated soak issue**, cross-link from #7103, add the directive with literal
       secret names and a concrete `earliest`; write the probe with its elapsed-time self-guard,
       ≥3-invocation requirement, and `unshipping`/`unknown` → exit 1.
-- [ ] 4.8 Write `scripts/betterstack-assert-absence.test.sh` and register it.
+- [x] 4.8 Write `scripts/betterstack-assert-absence.test.sh` and register it.
 
 ## Phase 5 — R4: commit the digest-oracle regression harness
 
