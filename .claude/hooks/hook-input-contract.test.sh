@@ -72,6 +72,7 @@ ARRAY_STASH="$(jq -nc '{tool_name:"Bash", tool_input:{command:["git","stash"]}}'
 # "eval" in prose and a body-grep sees comments too (cq-assert-anchor-not-
 # bare-token). Allow-list is BY EXACT STRING — `eval "exec ${fd}>&-"` is the
 # only portable way to close a dynamic fd in bash.
+# shellcheck disable=SC2016  # a literal to match, never a string to expand
 EVAL_ALLOW='eval "exec ${fd}>&-" 2>/dev/null || true'
 
 a1_idiom_ban() {
@@ -152,12 +153,20 @@ STUB
   fi
 
   # --- A12 stray artifacts: the trailing words must reach nothing -----------
-  local strays
-  strays="$(cd "$run" && ls -A1 | grep -vE '^(vulnerable-stub\.sh|CONTROL-MARKER|\.claude)$' || true)"
-  if [[ -z "$strays" ]]; then
+  # `find -mindepth 1 -maxdepth 1` rather than `ls | grep`: a filename produced
+  # by an attacker-shaped payload is exactly where a non-alphanumeric name would
+  # show up, and that is the case `ls` output cannot represent unambiguously.
+  local strays=() entry
+  while IFS= read -r -d '' entry; do
+    case "${entry##*/}" in
+      vulnerable-stub.sh|CONTROL-MARKER|.claude) continue ;;
+    esac
+    strays+=("${entry##*/}")
+  done < <(find "$run" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+  if (( ${#strays[@]} == 0 )); then
     ok "A12 no stray artifacts (no TOOL_NAME=/WORK_DIR=/FILE_PATH= files created)"
   else
-    bad "A12 stray artifacts created by the payload's trailing words" $strays
+    bad "A12 stray artifacts created by the payload's trailing words" "${strays[@]}"
   fi
   rm -rf "$run"
 }
@@ -308,8 +317,11 @@ EOF
 # the tool RUNS. hookeventname-coverage.test.sh is a per-file COUNT and cannot
 # catch a decision emitted without its pairing.
 a8_envelope_pairing() {
+  # Only the designated responder emits an envelope, so this list has one entry
+  # today. Kept as an array so adding a second responder needs no restructuring.
   local tmp out unpaired=0 hook
-  for hook in guardrails; do
+  local -a responders=(guardrails)
+  for hook in "${responders[@]}"; do
     tmp="$(mktemp -d -t hicep.XXXXXXXX)"
     out="$(cd "$tmp" && printf '%s' "$ARRAY_STASH" \
           | INCIDENTS_REPO_ROOT="$tmp" bash "$SCRIPT_DIR/$hook.sh" 2>/dev/null)"
@@ -507,6 +519,7 @@ a15_shell_state_hygiene() {
   local drift=0 pay before_ifs before_dash
   for pay in '{"tool_input":{"command":"x"}}' 'garbage {{' '{"tool_input":{"command":["a"]}}' ''; do
     before_ifs="${IFS-}"; before_dash="$-"
+    # shellcheck source=lib/hook-input.sh
     ( source "$helper"; hook_parse_input "$pay" ) >/dev/null 2>&1 || true
     [[ "${IFS-}" == "$before_ifs" && "$-" == "$before_dash" ]] || drift=$((drift + 1))
   done

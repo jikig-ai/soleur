@@ -75,9 +75,11 @@ if ! hook_parse_input "$__HI_RAW"; then
   exit 0
 fi
 
-# `|| true`: jq exits non-zero on malformed/empty stdin under pipefail; degrade
-# to "" (no detection → clean allow) rather than aborting.
 CMD="$HOOK_CMD"
+# strip_command_bodies reads stdin when called with no args (see lib/incidents.sh);
+# the `||` fallback keeps the RAW command on perl failure so the scan
+# OVER-detects rather than silently bypassing.
+# shellcheck disable=SC2119  # stdin form is the intended call shape, not $1
 SCAN=$(printf '%s' "$CMD" | strip_command_bodies || printf '%s' "$CMD")
 
 # Only intercept `gh pr merge` (incl. the `… -- gh pr merge` wrapped form).

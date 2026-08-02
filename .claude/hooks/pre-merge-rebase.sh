@@ -95,7 +95,6 @@ fi
 # uncommitted-changes check, or the origin/main auto-sync.
 
 # Determine working directory from hook input (.cwd is authoritative).
-# `|| true` for the same fail-open reason as the CMD read above (#4600).
 WORK_DIR="$HOOK_CWD"
 if [[ -z "$WORK_DIR" ]] || [[ ! -d "$WORK_DIR" ]]; then
   exit 0
