@@ -73,18 +73,34 @@ deny() {
 
 command -v jq >/dev/null 2>&1 || allow
 
+# shellcheck source=lib/hook-input.sh
+# FAIL-HARD (no `|| true`): a fail-soft source leaves hook_parse_input undefined
+# and the hook dies at the call, letting the tool proceed (#7164 defect 2).
+source "$(dirname "${BASH_SOURCE[0]}")/lib/hook-input.sh"
+
 payload="$(cat)"
+__HI_RAW="$payload"
+# ADR-155: hook stdin is model-controlled. A non-string field is surfaced,
+# never coerced — this hook never ran eval, but `jq -r` renders an array
+# across lines, which matches none of its guards, so the payload would have
+# slipped every gate below (#7164). ADR-156: it asks instead.
+if ! hook_parse_input "$__HI_RAW"; then
+  hook_input_report "background-poll-prefer-monitor"
+  hook_input_should_ask && { hook_input_emit_ask "background-poll-prefer-monitor"; exit 0; }
+  exit 0
+fi
+
 # `|| true` on every jq pipeline: under `set -euo pipefail`, jq exits 5 on
 # malformed/empty stdin and would otherwise abort the script before any
 # allow/deny JSON is emitted — breaking the "exit 0 always / fail-open"
 # invariant in the header. Degrade to empty → allow instead.
-tool_name="$(echo "$payload" | jq -r '.tool_name // empty' 2>/dev/null || true)"
+tool_name="$HOOK_TOOL_NAME"
 [ "$tool_name" = "Bash" ] || allow
 
 bg="$(echo "$payload" | jq -r '.tool_input.run_in_background // false' 2>/dev/null || true)"
 [ "$bg" = "true" ] || allow
 
-cmd="$(echo "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
+cmd="$HOOK_CMD"
 [ -n "$cmd" ] || allow
 
 # Override-marker escape hatch — must appear literally in the command.

@@ -58,10 +58,26 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
+# shellcheck source=lib/hook-input.sh
+# FAIL-HARD (no `|| true`): a fail-soft source leaves hook_parse_input undefined
+# and the hook dies at the call, letting the tool proceed (#7164 defect 2).
+source "$(dirname "${BASH_SOURCE[0]}")/lib/hook-input.sh"
+
 INPUT=$(cat)
+__HI_RAW="$INPUT"
+# ADR-155: hook stdin is model-controlled. A non-string field is surfaced,
+# never coerced — this hook never ran eval, but `jq -r` renders an array
+# across lines, which matches none of its guards, so the payload would have
+# slipped every gate below (#7164). ADR-156: it asks instead.
+if ! hook_parse_input "$__HI_RAW"; then
+  hook_input_report "pre-merge-auto-close-scan"
+  hook_input_should_ask && { hook_input_emit_ask "pre-merge-auto-close-scan"; exit 0; }
+  exit 0
+fi
+
 # `|| true`: jq exits non-zero on malformed/empty stdin under pipefail; degrade
 # to "" (no detection → clean allow) rather than aborting.
-CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""' || true)
+CMD="$HOOK_CMD"
 SCAN=$(printf '%s' "$CMD" | strip_command_bodies || printf '%s' "$CMD")
 
 # Only intercept `gh pr merge` (incl. the `… -- gh pr merge` wrapped form).
@@ -90,7 +106,7 @@ allow_exit() {
   exit 0
 }
 
-WORK_DIR=$(echo "$INPUT" | jq -r '.cwd // ""' || true)
+WORK_DIR="$HOOK_CWD"
 if [[ -z "$WORK_DIR" || ! -d "$WORK_DIR" ]]; then
   notice "SKIPPED — no usable cwd in the hook payload"
   allow_exit

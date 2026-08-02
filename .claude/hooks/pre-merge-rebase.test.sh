@@ -444,9 +444,22 @@ git push && gh pr merge 8 --squash')
   rm -rf "$tmp"
 }
 
-# --- T-MJ1: malformed-JSON stdin must fail open (exit 0, no deny) -----------
-# Before the fix, jq exits 5 under `set -eo pipefail` and the hook aborts with
-# no JSON. After the fix (`|| true`), CMD="" ⇒ no merge detected ⇒ exit 0.
+# --- T-MJ1: malformed-JSON stdin fails open, but NO LONGER SILENTLY ---------
+# Expectation REFRESHED for #7164 (ADR-156), not relaxed.
+#
+# Originally this asserted exit 0, no deny, AND no incident row. The first two
+# clauses are the fail-open contract and still hold: a PreToolUse hook that
+# blocks every command on a jq hiccup bricks the session, because the repair is
+# itself a Bash call.
+#
+# The third clause was the bug. "No incident row" is exactly defect 2 of #7164:
+# the hook disarmed every guard it owns and left no trace, so nothing downstream
+# could ever know the gate had not run. The row is now REQUIRED. Asserting its
+# absence would re-pin the silent disarm this PR exists to remove.
+#
+# This hook is not the designated `ask` responder (guardrails.sh is), so it still
+# emits no JSON of its own — the operator-visible prompt comes from that hook on
+# the same tool call.
 t_mj1_malformed_json_failopen() {
   local tmp; tmp=$(mktemp -d)
   local incidents="$tmp/incidents"
@@ -455,7 +468,28 @@ t_mj1_malformed_json_failopen() {
   local out exit_code=0
   out=$(printf 'not json' | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
   exit_code=${exit_code:-0}
-  assert_no_intercept "T-MJ1 malformed JSON fails open" "$incidents" "$out" "$exit_code"
+
+  local jsonl="$incidents/.claude/.rule-incidents.jsonl"
+  local ok=1 detail=""
+  [[ "$exit_code" -ne 0 ]] && { ok=0; detail+=" exit=$exit_code(want 0)"; }
+  [[ -n "$out" ]] && { ok=0; detail+=" stdout=$out(want empty)"; }
+  if [[ ! -f "$jsonl" ]]; then
+    ok=0; detail+=" no incident row (want one — a silent disarm is defect 2)"
+  else
+    local rid
+    rid=$(jq -r 'select(.kind=="hook_self_fault") | .rule_id' < "$jsonl" 2>/dev/null | head -1)
+    [[ "$rid" == hook-input-* ]] || { ok=0; detail+=" rule_id=${rid:-<none>}(want hook-input-*)"; }
+  fi
+
+  if [[ "$ok" -eq 1 ]]; then
+    echo "PASS: T-MJ1 malformed JSON fails open AND records the disarm"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL: T-MJ1 malformed JSON fails open AND records the disarm"
+    echo " $detail"
+    FAIL=$((FAIL + 1))
+  fi
+  TOTAL=$((TOTAL + 1))
   rm -rf "$tmp"
 }
 

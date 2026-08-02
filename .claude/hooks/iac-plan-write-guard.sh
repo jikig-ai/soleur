@@ -52,9 +52,25 @@ deny() {
   exit 0
 }
 
+# shellcheck source=lib/hook-input.sh
+# FAIL-HARD (no `|| true`): a fail-soft source leaves hook_parse_input undefined
+# and the hook dies at the call, letting the tool proceed (#7164 defect 2).
+source "$(dirname "${BASH_SOURCE[0]}")/lib/hook-input.sh"
+
 payload="$(cat)"
-tool_name="$(echo "$payload" | jq -r '.tool_name // empty' 2>/dev/null)"
-file_path="$(echo "$payload" | jq -r '.tool_input.file_path // empty' 2>/dev/null)"
+__HI_RAW="$payload"
+# ADR-155: hook stdin is model-controlled. A non-string field is surfaced,
+# never coerced — this hook never ran eval, but `jq -r` renders an array
+# across lines, which matches none of its guards, so the payload would have
+# slipped every gate below (#7164). ADR-156: it asks instead.
+if ! hook_parse_input "$__HI_RAW"; then
+  hook_input_report "iac-plan-write-guard"
+  hook_input_should_ask && { hook_input_emit_ask "iac-plan-write-guard"; exit 0; }
+  exit 0
+fi
+
+tool_name="$HOOK_TOOL_NAME"
+file_path="$HOOK_FILE_PATH"
 
 # Only fire on Write/Edit/MultiEdit to plan/spec markdown.
 # MultiEdit was absent until #6992: the matcher in .claude/settings.json and
