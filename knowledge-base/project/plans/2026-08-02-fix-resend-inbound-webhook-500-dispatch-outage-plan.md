@@ -249,7 +249,7 @@ invisible to layers below.
 
 | Layer | Status | Verification artifact |
 | --- | --- | --- |
-| **L3 — firewall allow-list** | **VERIFIED from code; live confirm in Phase 0.3** | `cron-egress-nftables.sh` carries `ip daddr 10.0.1.40 tcp dport 8288 accept`, asserted post-apply by `cron-egress-postapply-assert.sh`; `cloud-init-inngest.yml` accepts `tcp dport {8288,8289}` from `web_host_private_ips = "10.0.1.10,10.0.1.11"` (web-1 is `.10`); `hcloud_firewall.inngest` has zero rules by design (SEC-H1). **Decisive point: every one of these DROPs, and a drop yields `ETIMEDOUT`. The observed errno is `ECONNREFUSED` (RST), which no DROP rule can produce.** |
+| **L3 — firewall allow-list** | **VERIFIED from code; live confirm in Phase 0.3** | `cron-egress-nftables.sh:155` carries `ip daddr 10.0.1.40 tcp dport 8288 accept comment "soleur-egress: dedicated inngest host (#6178)"`, with `:159` the default `counter drop`; asserted post-apply by `cron-egress-postapply-assert.sh`. `cloud-init-inngest.yml` accepts `tcp dport {8288,8289}` from `web_host_private_ips = "10.0.1.10,10.0.1.11"` (web-1 is `.10`). `hcloud_firewall.inngest` has zero rules by design (SEC-H1). **Decisive point: every one of these DROPs, and a drop yields `ETIMEDOUT`. The observed errno is `ECONNREFUSED` (RST), which no DROP rule can produce.** |
 | **L3 — DNS / routing** | **NOT APPLICABLE — no name resolution on this hop** | The target is a literal private IPv4 (`10.0.1.40`) baked into `ci-deploy.sh` by #6348 (MERGED — "repoint INNGEST_BASE_URL to dedicated host 10.0.1.40"). There is no DNS step to poison or misroute. Routing reachability is positively evidenced by the RST itself: a packet reached a host and was refused. |
 | **L7 — TLS / proxy (HTTPS path)** | **VERIFIED** | B5: `curl -X POST https://app.soleur.ai/api/webhooks/resend-inbound` returns **401 `Missing svix headers`** from the application. A response body authored by our own route handler proves the entire edge chain — DNS, Cloudflare, TLS, origin routing, container — is intact. The 500s are therefore *inside* the handler, not at the edge. |
 | **L7 — application** | **VERIFIED, and it is the failing hop** | B1: 321/321 of the route's WARN+ rows are `ECONNREFUSED 10.0.1.40:8288` from `sendInngestWithRetry`; 0 secret rows, 0 signature rows. B7: an `inngest-server.service` is healthy on the *web* host, so the binary works — the dedicated host's listener is what is absent. |
@@ -257,6 +257,16 @@ invisible to layers below.
 **Ordering discipline honoured:** the two L3 layers and the L7 edge were cleared before
 any service-layer hypothesis was written, and the service-layer hypothesis (H4) is
 supported by the errno rather than assumed from the symptom.
+
+**One precision, so Phase 0.3 is not mis-scoped.** `cron-egress-nftables.sh:19-22`
+says the `:8288` accept is *"belt-and-braces, not load-bearing"* — but that sentence is
+about **container→HOST** traffic (the host-gateway accept at `:150`), which traverses
+`INPUT`. The path in this incident is container→**a different host** (`10.0.1.40`), which
+is container→external and *does* traverse `FORWARD`/`DOCKER-USER` → `SOLEUR-EGRESS` (the
+chain carries exactly one jump: `iifname "docker0" jump SOLEUR-EGRESS`). So the `:155`
+accept **is** load-bearing for this path. Do not read the comment as "the firewall layer
+is irrelevant here". The DROP-vs-RST argument is what refutes H1, not the comment — and
+it holds either way, because the default rule at `:159` is `counter drop`.
 
 ## Research Reconciliation — brief vs. codebase
 
