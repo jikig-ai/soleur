@@ -160,6 +160,9 @@ decide blind.** Running this query before Phase 1 is recommended regardless of t
 - **(b) Ship with `wg-block-pr-ready-on-undeferred-operator-steps` only** — narrower, fully
   falsifiable, and it has a writer. The blanket override still covers deferral conflicts. Note this
   leaves a one-element derived set, which weakens D1's argument against a hardcoded list.
-- **(c) Keep both and add a writer** (FR10b in `work/SKILL.md`, gated on the triple test having
-  actually passed).
+- **(c) Keep both and add a writer** — **now defined as FR10b** in the plan (`work/SKILL.md`). Note
+  this option got substantially cheaper after the deepen pass: FR10b is now required *regardless* of
+  how DC-1 resolves, because `work/SKILL.md` was found to be a live writer for the
+  `wg-block-pr-ready-…` path too, carrying the same double-quoted-`\n` defect. Choosing (c) means
+  additionally gating that writer on the triple test having actually passed.
 - **(d) Measure first**, then decide.

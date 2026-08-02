@@ -12,7 +12,7 @@ challenges: knowledge-base/project/specs/feat-one-shot-net-issue-flow-mandated-f
 
 ## Phase 0 — Preconditions (verify, never assume)
 
-- [ ] 0.1 `bash plugins/soleur/test/net-issue-flow.test.sh` → record assertion count (expect **23**, ALL PASS)
+- [ ] 0.1 `bash plugins/soleur/test/net-issue-flow.test.sh` → record assertion count (expect **23**, ALL PASS). **Do NOT measure with `grep -cE '(^|[; ])pass '` — measured, it returns 24**, because the `fail` message on the `--limit 500` case contains the words *"must pass"*. Use `grep -cE '(^|[;[:space:]])pass "'`. A floor pinned at 24 reds the suite immediately.
 - [ ] 0.2 `bash .claude/hooks/ship-net-issue-flow-gate.test.sh` → ALL PASS
 - [ ] 0.3 `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md` → record `B_ALWAYS` (expect `[OK] 42547`)
 - [ ] 0.4 Measure both target rule bodies against the 600 B `PER_RULE_CAP` (expect 313 B / 364 B → 331 B / 382 B)
@@ -74,6 +74,8 @@ challenges: knowledge-base/project/specs/feat-one-shot-net-issue-flow-mandated-f
 
 - [ ] 5.1 FR8: reframe **both** remedy blocks (the hook's `REASON` heredoc **and** `net-issue-flow.sh`'s own `(a)/(b)/(c)`). Drop "architectural-pivot deferral"; add `(d)` mandated-filing; placeholder-only `<rule-id>`; add the **untagged-rule dead-end message**. Preserve all four hook-suite needles
 - [ ] 5.2 FR10: ship/SKILL.md remedy template → `--body-file` so `Mandated-By:` lands on its own line. **Additive only** — keep `deferred-automation` and `type/chore`. Do **not** rename the `[skill-enforced: ship Phase 5.5 Undeferred Operator-Step Gate]` anchor
+- [ ] 5.2b **FR10b: `work/SKILL.md` gets the same treatment.** Its `gh issue create --label type/chore --body "deferred-automation backlog item; re-evaluate when: …; playwright-attempt: …"` block is a **live writer** with the identical double-quoted-`\n` defect, and it is the site that files most mandated issues. Skipping it ships a reader with no writer
+- [ ] 5.2c **FR12: `review/SKILL.md`** — its prose *"a PR that opens more issues than it closes is a workflow failure"* is falsified by `NET = FILED - EXEMPT - CLOSING`. Reword to name the exemption
 - [ ] 5.3 FR11: ship Phase 6 body template must preserve every `(Tracks|Refs) #N` line and every `gate-override` marker
 - [ ] 5.4 FR6 readout: add `summary.gate_exemptions` to Stage C of `scripts/rule-metrics-aggregate.sh`. **If this is cut, strike the attribution framing from the ADR and PR body**
 - [ ] 5.5 Fix the `rule_id net-issue-flow` lookup instruction in `scripts/followthroughs/filed-per-pr-soak-6769.sh` (it will miss both new ids)
