@@ -8,7 +8,8 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 labels: [priority/p0-critical, type/security]
 milestone: "Phase 4: Validate + Scale"
-adr: ADR-155
+adr: [ADR-155, ADR-156]
+revision: "v3 — post deepen-plan (6 review passes; 6 of v1's own properties falsified by measurement)"
 ---
 
 # fix(security): `eval` over `jq @sh` output in 10 PreToolUse hooks executes attacker-named commands
@@ -18,464 +19,517 @@ adr: ADR-155
 
 ## Overview
 
-Every blocking `PreToolUse` hook in `.claude/hooks/` extracts its input fields with one line:
+Every blocking `PreToolUse` hook in `.claude/hooks/` extracts its input with one line:
 
 ```bash
 eval "$(echo "$INPUT" | jq -r '@sh "COMMAND=\(.tool_input.command // "") TOOL_NAME=\(.tool_name // "")"' 2>/dev/null || echo 'COMMAND="" TOOL_NAME=""')"
 ```
 
-`jq`'s `@sh` shell-quotes **each element of an array as a separate word**. A `tool_input.command`
-that is an array renders as `COMMAND='x' 'touch' '/tmp/PWNED' TOOL_NAME='Bash'` — bash reads word 1
-as an environment assignment and **words 2 and onward as a command**, which `eval` executes. This
-runs on every matching tool call, **before the permission prompt**, with full operator privileges.
+`jq @sh` shell-quotes **each array element as a separate word**, so an array `tool_input.command`
+renders as `COMMAND='x' 'touch' '/tmp/PWNED' TOOL_NAME='Bash'` — word 1 is an assignment, **words 2+
+are a command**, and `eval` runs them before the permission prompt with operator privileges.
+Reproduced on all 10 hooks.
 
-A **second, independent defect** sits in the same line: `|| echo 'COMMAND=""'` means a `jq` parse
-failure empties every field, so every guard in that file no-ops with `exit 0` and **no incident is
-emitted**. Fail-open is the right *direction* for a blocking gate — one that denies on a `jq` hiccup
-bricks the session with no in-band recovery (editing the hook is itself gated by `guardrails.sh` on
-`Write|Edit`) — but the *invisibility* of the disarm is the defect.
+**Second defect, same line:** `|| echo 'COMMAND=""'` empties every field on a parse failure, so every
+guard no-ops with `exit 0` and **no incident**.
 
-**A third defect, found during this plan's design review, is the one that decides the shape of the
-fix:** the remedy the issue proposes first — coercing non-strings with `tojson` — closes the RCE and
-**leaves the guards evaded**. `["git","stash"]` becomes the string `["git","stash"]`, which
-`grep -qE '(^|[;&|]|\s)git\s+stash(\s|$)'` does not match. Ship that and #7164 closes while
-`hr-never-git-stash-in-worktrees`, the commit-to-main guard, and the `gh pr merge` gates all remain
-bypassable by the identical one-line payload — a false-negative security close. The same payload
-*already* evades the 8 sibling hooks that read `.tool_input.command` with plain command
-substitution, because `jq -r` pretty-prints an array across multiple lines.
+**Third defect, found while planning:** the remedy the issue proposes first — coercing non-strings
+with `tojson` — closes the RCE and **leaves the guards evaded**. `["git","stash"]` does not match
+`grep -qE '(^|[;&|]|\s)git\s+stash(\s|$)'`. Ship that and #7164 closes while the same one-line
+payload still bypasses `hr-never-git-stash-in-worktrees`, the commit-to-main guard, and the merge
+gates — a false-negative security close. The 8 sibling hooks that read `.tool_input.command` via
+`$( )` are *already* evaded this way, because `jq -r` pretty-prints an array across lines.
 
-So the fix is not "stop using `eval`". It is a **posture**, recorded in ADR-155:
+### The decision (ADR-156): there is no silent disarm, anywhere
 
-| Input condition | Posture | Rationale |
+v1 built an eight-cell posture table with a fail-open branch, a size cap, a surrogate-recovery path,
+and a per-session counter to bound the resulting oracle. Six review passes falsified most of it. The
+design that survives is much smaller because **one choice removes the need for the rest**:
+
+> A hook that cannot fully parse its input emits `permissionDecision: "ask"`. It never continues
+> silently, and it never denies.
+
+`ask` is not `deny`: the operator can approve and proceed, so nothing bricks — which is what made
+fail-open necessary in the first place. Once `ask` covers every failure, the counter has no oracle
+to bound, the surrogate scrub has no disarm to prevent, the size cap has no DoS to mitigate, and the
+three-status protocol collapses to two outcomes:
+
+| Input | Outcome |
+|---|---|
+| parses **and** every contracted field is a string | run the guards, values byte-exact |
+| anything else — non-string field, non-object `tool_input` or root, separator in a value, unparseable document, lone surrogate, oversize, `jq` missing, our own jq program broken | **`ask`**, with a `reason` classifier, plus an incident row |
+
+`ask` is available and precedented — **measured, not assumed**:
+`.claude/hooks/DEFER-DECISION-PAYLOAD-SHAPE.md` records a CC-2.1.142 probe showing `ask` +
+`hookEventName` blocks execution and surfaces a message, and `kb-domain-allowlist-guard.sh` ships it
+in production today.
+
+### What the review passes changed
+
+| v1 said | Measured | v3 |
 |---|---|---|
-| parses, every contracted field is a string | run the guards normally | the happy path, and it must get *faster*, not slower |
-| parses, a contracted field is **not** a string | **`permissionDecision: "ask"`** + incident | a non-string `command` has no legitimate caller; this is the attack signature itself, and must never reach a regex guard as a JSON blob |
-| does not parse (malformed, truncated, lone surrogate) | fail **open** + incident + stderr | no adjudicable payload exists; denying bricks the session |
-| repeated parse failure in one session (> 3) | escalate to `ask` for the session | bounds the disarm oracle |
-| `jq` not executable | **`ask`** immediately | a missing interpreter is categorically different from malformed input and must not silently disarm 18 gates |
+| Coerce non-strings with `tojson` | `["git","stash"]` matches no anchored guard | **Type-assert.** Non-string ⇒ `ask` |
+| Strip separators with `explode` | 10 MB: **8.55 s / 180 MB** vs 0.70 s / 43 MB for the code being replaced, ×18 parallel hooks | **`contains`-guard** (0.15 s / 23 MB) — then removed entirely (below) |
+| Read fields with `read -d` / `mapfile -d` | 200 KB: **14348 ms** vs 5643 ms baseline (bash reads a delimited record byte-at-a-time from a pipe) | **`$( )` capture + `IFS` split** (4880 ms) |
+| Scrub a lone surrogate and run the guards **armed** | `git ␦ stash` **does not match** the stash guard — the `tojson` trap, re-committed | **Cut.** Surrogate ⇒ `ask` |
+| Cap at 256 KB, oversize ⇒ fail-open | `rm -rf / # <300 KB padding>` is **300,011 bytes, one line**; and `guardrails.sh` also sees `Write` payloads where `.tool_input.content` is a whole file (this repo tracks an 806 KB lockfile) | **Cut.** Any ceiling ⇒ `ask`, never fail-open |
+| Bound the oracle with a per-session counter (escalate after 3) | `session-state.sh` is **repo**-scoped; `.session_id` is unreadable on exactly the path that increments; 18 parallel hooks cross a threshold of 3 on the **first** payload | **Cut.** No oracle left to bound |
+| Emit an incident and let the aggregator surface it | Phase 1's own orphan-gate exclusion **deletes the only surface** (`$enriched` left-joins over AGENTS.md ids), and compound Phase 3.5 filters `warn` rows out by construction | **Add a real consumer** + make the in-band `ask` the primary channel |
+| Per-field `ok`/`anom`/`err` tags, RS scrub, `tojson` rendering | a single leading `all(type=="string")` token computed **before** any value is emitted cannot be forged by a value, and empty values on the bad path need no scrub and no rendering | **One status token, N+1 slots.** Also resolves v1's GDPR self-contradiction: no `tojson` is ever produced |
+| `printf '%s'` replaces `echo` — "a second, previously unreported bug" | `echo "$IN"` and `printf '%s' "$IN"` are **byte-identical** for a JSON payload (bash's builtin `echo` does not interpret backslashes without `-e`, and the leading `{` stops the option scan) | **Claim dropped.** Keep `printf` as hygiene. Publishing an unverifiable security claim inside a PR that exists to correct one is the anti-pattern being fixed |
 
 **Closes #7164.**
 
 ### Blast radius
 
 `.claude/settings.json` registers **18** `PreToolUse` hooks on the `Bash` matcher — 10 with the
-`eval`, 8 reading `.tool_input.command` via `$( )`. One crafted array payload detonates the `eval`
-in 10 processes *and* evades the anchored guards in all 18. `guardrails.sh` is registered a second
-time on `Write|Edit|MultiEdit|NotebookEdit`, so the freeze edit-lock is on the same payload's path.
+`eval`, 8 reading `.tool_input.command` via `$( )`. One array payload detonates the `eval` in 10
+processes *and* evades the anchored guards in all 18. `guardrails.sh` is registered a second time on
+`Write|Edit|MultiEdit|NotebookEdit`.
+
+---
+
+## Do Not Skim
+
+Ten constraints whose violation is **invisible** — no test points at them unless the test below
+exists. Each is an AC. Everything else in this document is evidence.
+
+1. **Every `ask` envelope carries `hookEventName: "PreToolUse"` in the same object.** Without it CC
+   silently ignores the envelope and the tool runs — measured in `DEFER-DECISION-PAYLOAD-SHAPE.md`.
+   A naive test asserting `permissionDecision == "ask"` on the emitted JSON passes while production
+   is wide open. `hookeventname-coverage.test.sh` is a per-file **count**, not a pairing check, and
+   cannot catch this.
+2. **The `ask` envelope is a `printf` of a constant string — never `jq -n`.** One of its trigger
+   conditions is "jq is missing." Every existing envelope in these hooks uses `jq -n`; `emit_incident`
+   builds its row with `jq -nc`, so on that path the telemetry is unrecordable and the `ask` reason
+   string is the only surviving channel.
+3. **`raw=$(… ; printf 'X'); raw=${raw%X}` — keep the sentinel *and* the trailing separator.** They
+   are redundant with each other and load-bearing as a pair: removing either alone is invisible;
+   removing both silently truncates trailing newlines from the last field, on the **happy path**.
+4. **Catch to a distinguished value (`catch {}`), never `catch ""`.** `catch ""` makes
+   `{"tool_input":"oops"}` read as a clean parse of an empty command — rc 0, guards no-op, no
+   incident. v1 had exactly this bug.
+5. **Source the helper fail-hard — no `|| true`, no `|| :`, no `2>/dev/null` on the `source` line.**
+   A fail-soft source leaves `hook_parse_input` undefined; under `set -euo pipefail` the hook dies at
+   the call, prints nothing, exits non-zero, and the tool proceeds. Defect 2, one line above where
+   every test points.
+6. **The slot count is the parse-failure detector, not jq's exit code.** Empty stdin gives jq rc 0
+   with zero output. `if ! jq …; then` ships a hook that treats empty input as a successful parse.
+7. **`local o=${IFS-}`, never `local o=$IFS`.** Measured: with `IFS` unset under `set -u` the latter
+   kills the shell, printing nothing — silent fail-open in the one line whose job is safety. Restore
+   with `unset IFS` when it was unset.
+8. **Restore globbing conditionally** — `case "$-" in *f*)` before `set -f`. An unconditional
+   `set +f` *enables* globbing for a caller that had it off.
+9. **`guardrails.sh` is the designated `ask` responder**, so a `settings.json` assertion is
+   load-bearing: every `PreToolUse` matcher containing any migrated hook must also contain
+   `guardrails.sh`. True today (both registrations); nothing enforces it.
+10. **`INCIDENTS_REPO_ROOT` must be honoured by the new emitter** or the tests pollute the working
+    tree and the "loud disarm" AC reads the wrong file.
 
 ---
 
 ## Premise Validation
 
-Every claim was re-verified by execution in this worktree on 2026-08-02. Nothing was taken on
-paraphrase, including my own.
+Every claim re-verified by execution on 2026-08-02, including my own. An independent sweep re-checked
+20 repository facts: **20 CONFIRMS, 0 CONTRADICTS.**
 
 | # | Premise | Verification | Result |
 |---|---|---|---|
-| P1 | `git grep -lE 'eval "\$\(echo "\$INPUT" \| jq -r .@sh' .claude/hooks/*.sh` returns 10 | ran verbatim | **HOLDS** — exactly the issue's 10 files |
-| P2 | `jq @sh` splits an array into separate shell words | ran the issue's jq line | **HOLDS** — `COMMAND='x' 'touch' '/tmp/P'` |
-| P3 | The reproducer creates a marker file | ran it against **all 10** hooks, `INCIDENTS_REPO_ROOT` redirected | **HOLDS** — `RCE CONFIRMED` ×10 (third independent confirmation) |
-| P4 | Issue #7164 open, unfixed on `main` | `gh issue view 7164` | **HOLDS** — `OPEN`, `priority/p0-critical`, `type/security` |
-| P5 | The `eval` exists to preserve a one-fork hot path | `git log -S'@sh' -- .claude/hooks/guardrails.sh` → `8a8b22360` (#2573), closing #2253 | **HOLDS** — the motivation is **one jq fork**, not the `eval`. Fork count must be preserved; the idiom need not be |
-| P6 | "force a scalar with `tojson`" is a sufficient fix | ran the coerced value against the real guard regexes | **FALSIFIED** — closes the RCE, leaves the guard evaded. Drives the whole design (see Overview) |
-| P7 | "read NUL-delimited fields via `mapfile -d ''`" | `jq -j '"a","\u0000","b"'` → `ab` | **FALSIFIED as written** — jq **silently drops `\u0000`** from string literals *and* from input string values. NUL is reachable only via `jq --raw-output0` (jq ≥ 1.7); `mapfile -d` also needs bash ≥ 4.4. `\u001e` (U+001E, RS) **is** emitted literally and works on old jq and bash 3.2 |
-| P8 | The proposed extractor is not slower than the `eval` | benchmarked 4 read mechanisms × 4 payload sizes × 100 iters, plus a 10 MB single-shot | **CONDITIONAL — see the table below.** Two of the four candidate designs are severe regressions. Only one beats the baseline |
-| P9 | `shellcheck` is clean on the candidate helper | `shellcheck -s bash` | **FALSIFIED** — `SC2034: n appears unused`. Fixed in the design below |
-| P10 | Phase 4 is "~16 files" (my first draft) / "5 files" (CTO review) | `git grep -l 'tool_input\.command'` over every non-test hook, minus the eval-10 | **BOTH WRONG.** It is **8** in `.claude/hooks/` (`background-poll-prefer-monitor`, `brand-hex-commit-gate`, `doppler-secrets-delete-redirect`, `git-commit-secret-scan`, `kb-domain-allowlist-guard`, `no-memory-write`, `pre-merge-auto-close-scan`, `pre-merge-rebase`) plus **2** in `.openhands/hooks/`. 10 eval + 8 = the 18 Bash-matcher hooks |
-| P11 | `permissionDecision: "ask"` is honored by the harness | `.claude/hooks/DEFER-DECISION-PAYLOAD-SHAPE.md` › probed comparison table (CC 2.1.142): `ask` + `hookEventName` → **bash NOT executed**, agent-visible message. `kb-domain-allowlist-guard.sh` ships it in production today | **HOLDS — no new probe needed.** Re-probe trigger is a CC major bump, per that document |
-| P12 | `bats` is available / `shellcheck` gates `.sh` in CI | `command -v bats`; read `.github/workflows/ci.yml` | **BOTH FALSE.** No bats, zero `.bats` files. `shellcheck` runs in CI only via `actionlint` on workflow `run:` bodies — repo `.sh` files are **not** gated. The de-facto syntax gate is a per-test `bash -n` |
-| P13 | `.claude/hooks/*.test.sh` is auto-discovered | read `scripts/test-all.sh` › the `want_scripts` suite loop | **HOLDS** — the glob list includes `.claude/hooks/*.test.sh`; zero registration needed. It runs in the `test-scripts` CI shard, which has **no bun and no node** |
-| P14 | There is room for a new AGENTS.md rule | `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md` → `[OK] B_ALWAYS=42547` vs the 46000 cap | **HOLDS** (~3.4 kB headroom) — the plan still declines it, see Alternatives |
-| P15 | ADR-131's gate moratorium blocks a new CI gate | read `ADR-131` frontmatter + preamble | **FALSE** — `status: proposed`, and its own preamble says "This ADR decides nothing." |
-| P16 | Next free ADR ordinal | highest is `ADR-154-repair-the-credential-channel-not-the-host.md` | **155 free — PROVISIONAL.** `/ship`'s ADR-Ordinal Collision Gate re-verifies against `origin/main`; a renumber must sweep this plan, `tasks.md`, and every AC naming it |
+| P1 | 10 files carry the `eval` | `git grep -lE 'eval "\$\(echo "\$INPUT" \| jq -r .@sh' .claude/hooks/*.sh` | **HOLDS** |
+| P2 | `jq @sh` splits an array into shell words | ran the issue's jq line | **HOLDS** |
+| P3 | The reproducer creates a marker | ran it against **all 10** | **HOLDS** — third independent confirmation |
+| P4 | #7164 open on `main` | `gh issue view 7164` | **HOLDS** |
+| P5 | The `eval` exists for a one-fork hot path | `git log -S'@sh'` → `8a8b22360` (#2573), closing #2253 | **HOLDS** — preserve fork count, not the idiom |
+| P6 | `tojson` coercion suffices | ran the coerced value against the real guard regexes | **FALSIFIED** |
+| P7 | `mapfile -d ''` on NUL | `jq -j '"a","\u0000","b"'` → `ab` | **FALSIFIED** — jq drops NUL from literals *and* input values; `--raw-output0` needs jq ≥ 1.7, `mapfile -d` needs bash ≥ 4.4. `\u001e` (RS) is emitted literally and works on jq 1.5 / bash 3.2 |
+| P8 | The extractor is not slower | 4 mechanisms × 4 sizes × 100 iters, micro **and** in-situ | **CONDITIONAL** — below |
+| P9 | The helper is shellcheck-clean | `shellcheck -s bash` on the prototype | **HOLDS with two justified disables** — `SC2206` (deliberate word-split), `SC2034` (published globals). Without the directives AC15 fails |
+| P10 | Sibling scope | authoritative grep minus the eval-10 | **8** in `.claude/hooks/` + **2** in `.openhands/hooks/`. (v1 guessed ~16; a review pass guessed 5) |
+| P11 | `ask` is honored | `DEFER-DECISION-PAYLOAD-SHAPE.md` probe table + production use | **HOLDS** — re-probe only on a CC major bump |
+| P12 | `bats` / `shellcheck` gate `.sh` in CI | `command -v bats`; read `ci.yml` | **BOTH FALSE** |
+| P13 | `.claude/hooks/*.test.sh` auto-discovered | `scripts/test-all.sh` › `want_scripts` glob | **HOLDS** — zero registration; the `test-scripts` shard has **no bun and no node** |
+| P14 | AGENTS budget headroom | `lint-agents-rule-budget.py` → `[OK] B_ALWAYS=42547` / 46000 | **HOLDS** — the plan still declines a rule |
+| P15 | ADR-131's moratorium blocks a gate | read its frontmatter | **FALSE** — `status: proposed`, "This ADR decides nothing" |
+| P16 | Next free ordinals | `git fetch origin main`; highest is ADR-154 | **155/156 free — PROVISIONAL** |
+| P17 | The surrogate scrub recovers an armed guard | ran the stash regex against `git ␦ stash` | **FALSIFIED** — no match; control matches |
+| P18 | `local o=$IFS` is `set -u`-safe | `bash -c 'set -u; unset IFS; f(){ local o=$IFS; }; f'` | **FALSIFIED** — shell dies |
+| P19 | Oversize is exotic | `len('rm -rf / # ' + 'x'*300000)` | **FALSIFIED** — 300,011 bytes |
+| P20 | The aggregator surfaces a counts-only `rule_id` | read `rule-metrics-aggregate.sh` | **FALSIFIED** — only `orphan_rule_ids`, which Phase 1 removes. Correct precedent: `drops_jq_fail_count` + the stderr line the script already prints |
+| P21 | compound surfaces the fault | `compound/SKILL.md` § 3.5 | **FALSIFIED** — filters to `event_type ∈ {deny,bypass}` |
+| P22 | `echo` mangles the payload | ran both forms on a JSON payload with `\\` and `-e -n` | **FALSIFIED** — byte-identical. Claim dropped |
+| P23 | 16 of 18 hooks already have a `.test.sh` sibling asserting their characteristic decision | directory listing | **HOLDS** — so a fresh 18-fixture canary largely duplicates ~4,600 existing lines. Only `ship-soak-followthrough-gate.sh` and `doppler-secrets-delete-redirect.sh` lack one |
+| P24 | All 18 hooks can produce a decision from a bare stdin payload | probed all 18 empirically | **FALSIFIED** — only **7** can. 8 need a local git fixture, 3 need a `gh` stub. Reshapes AC2 |
 
-### P8 in full — the hot-path measurement that reshaped the design
+### P8 — the measurements that reshaped the design
 
-100 iterations per cell, ms, `bash 5.3.9` / `jq 1.8.1`, interleaved to control for machine load.
-"legacy" is the `eval` form being replaced.
+Micro-benchmark, 100 iterations, ms, bash 5.3.9 / jq 1.8.1, interleaved:
 
-| payload | legacy `eval` | `read -d` loop | `mapfile -d` | **`$( )` capture + IFS** | `explode` strip |
+| payload | legacy `eval` | `read -d` | `mapfile -d` | **`$( )` + IFS** | `explode` |
 |---|---|---|---|---|---|
 | 100 B | 858 | 910 | 969 | **932** | 922 |
 | 2 KB | 859 | 992 | 909 | **908** | 1278 |
 | 20 KB | 1621 | 2585 | 2237 | **1278** | 4159 |
 | 200 KB | 5643 | 14348 | 14620 | **4880** | 33091 |
 
-Single 10 MB `command`, one shot, `/usr/bin/time`:
+**The micro-benchmark is not the shipped cost.** Spliced into a real hook and run as a full process,
+80 iterations, interleaved:
 
-| jq program | wall | maxRSS |
-|---|---|---|
-| `contains`-guarded strip (**chosen**) | **0.15 s** | **23 MB** |
-| legacy `@sh` | 0.70 s | 43 MB |
-| `explode \| map(select(...)) \| implode` | 8.55 s | 180 MB |
+| payload | orig | orig + a no-op `source` | new | source cost | parse cost |
+|---|---|---|---|---|---|
+| small | 80.7 ms | 88.4 ms | 91.1 ms | **+9.1 ms** | +2.7 ms |
+| 200 KB | 254.4 ms | 273.8 ms | 313.5 ms | **+20.8 ms** | +39.7 ms |
 
-Two conclusions, both load-bearing:
-
-1. **`explode` is out.** It materializes a boxed integer per codepoint. At 10 MB × 18 parallel
-   hooks that is minutes of CPU and gigabytes of RSS from one model-emitted tool call — a
-   self-inflicted session hang the *current vulnerable code does not have*. The plan's first draft
-   contained it; the security review measured it; it is deleted.
-2. **`read -d` on a pipe is out.** Bash reads a delimited record from a non-seekable fd
-   byte-at-a-time; at 200 KB it is a 2.5× regression. `mapfile -d` is no better. The `$( )` capture
-   + `IFS`-splitting form (with globbing disabled) is the **only** mechanism that beats the baseline
-   at every size, and it works on bash 3.2.
-
-The resulting hook is therefore **faster and leaner than the code it replaces**, not merely
-not-slower.
+The jq program is faster; the extra `source` dominates and the whole hook lands ~8-16% slower per
+invocation. AC8 is written against **these** numbers. A separately-measured simplified variant hit
+the same envelope with a third of the code — the complexity was not buying the speed, which is the
+finding that governs the cuts above.
 
 ---
 
 ## Research Reconciliation — Spec vs. Codebase
 
-| Issue / prior-art claim | Codebase reality | Plan response |
+| Claim | Reality | Response |
 |---|---|---|
-| Fix by forcing a scalar with `tojson` | Closes RCE, **leaves the guard evaded** (P6) | Type-**assert**, do not coerce. Non-string ⇒ `ask` + incident |
-| Fix by `mapfile -d ''` on NUL | jq cannot emit NUL without `--raw-output0` (jq ≥ 1.7); `mapfile -d` needs bash ≥ 4.4; `read -d` on a pipe is a 2.5× regression (P7, P8) | RS (`\u001e`) delimiter + `$( )` capture + `IFS` split |
-| `emit_incident "guardrails-input-parse-failure"` | `scripts/rule-metrics-aggregate.sh` › orphan-gate **hard-`ERROR`s** on any `rule_id` absent from AGENTS.md unless its prefix is allow-listed (`te-`, `gdpr-gate-`, `context-reviewed-`, `net-issue-flow`, `cost-of-filing-`) | One repo-wide prefix `hook-input-*`; extend the exclusion **and its test** in the same PR, ordered **before** the first emit |
-| "a startup canary fed a known-deny fixture" | A canary in the `PreToolUse` hot path re-runs a full hook on every tool call — the exact cost #2253 removed | Canary lands as a **suite** gate, not a runtime probe. Runtime signal is the incident, O(0) on the happy path |
-| Issue scopes the defect to 10 files | 8 more hooks read `.tool_input.command` via `$( )` and are evaded by the same payload; total Bash-matcher surface is 18 (P10) | Sweep all 18 in one PR, as two commits (eval sites, then `$( )` sites) so review and bisect stay clean |
-| The fallback is justified by learning `2026-03-18-stop-hook-jq-invalid-json-guard.md` ("the parse-error exit code must be explicitly absorbed with `\|\| true`") | Correct about *absorbing*, silent about *announcing* | ADR-155 must explicitly supersede that reading, or the next author reinstates the silent disarm |
-| `.openhands/hooks/guardrails.sh` mirrors `guardrails.sh` | Reads a **different envelope** (`.working_dir`, `.tool_input.path`) and a different deny shape (`{"decision":"deny"}`). Not RCE-vulnerable; **is** evadable. Parity guards: `tests/hooks/test_openhands_guardrails.sh`, `.claude/hooks/pre-merge-rebase-parity.test.sh` | Do **not** converge the mirror on the helper under P0 time pressure — making `hook_parse_input` envelope-agnostic is real abstraction bought with security urgency. Apply a minimal in-place non-string guard to the 2 mirror files + extend the parity test. Convergence is a follow-up |
-| `security_reminder_hook.py` is the Python sibling | `json.loads` + `.get()`, and `isinstance(new_string, str)` — the **only** pre-existing explicit type-check on model-controlled input in the repo | Not vulnerable; **state that in the PR body** so the sweep reads as complete rather than partial. Cite it in the ADR as the precedent bash is converging on |
-| — | **A knowledge-base learning records the false claim as confirmed:** `knowledge-base/project/learnings/2026-05-15-deterministic-permissions-empirical-probes-and-review-gaps.md` › "security-sentinel — confirmed jq @sh-escape neutralizes stdin command injection" | Institutional memory that will re-authorize this idiom. Append a dated correction pointing at #7164/ADR-155 — do not rewrite the historical finding, and do not let the correction overstate ("no shell evaluation of hook input", never "input is now safe") |
-| — | `ship-soak-followthrough-gate.sh` is the one hook of the 10 with **no** `.test.sh` sibling | Covered by the new matrix test; a dedicated sibling is out of scope |
-| — | `grep-q-pipe-guard.test.sh` sweeps `.claude/hooks/*.sh` **and** `.claude/hooks/lib/*.sh` for `\| grep -q`, asserting **zero** | The new `lib/hook-input.sh` will be swept — it must contain no pipe-into-`grep -q` |
+| Fix with `tojson` | closes RCE, leaves the guard evaded (P6) | type-assert ⇒ `ask` |
+| Fix with `mapfile -d ''` on NUL | jq drops NUL; `read -d` is a 2.5× regression (P7, P8) | RS + `$( )` capture + `IFS` split |
+| `emit_incident "guardrails-input-parse-failure"` | the orphan gate hard-`ERROR`s on unknown ids **and** Phase 1's exclusion deletes the only surface (P20, P21) | one `hook-input-*` prefix; exclusion **plus** a first-class summary counter **plus** a widened compound filter — and the in-band `ask` as the primary channel |
+| "a startup canary fed a known-deny fixture" | a hot-path canary re-pays the cost #2253 removed; and 16 hooks already ship sibling suites doing exactly this (P23) | **run the 16 existing sibling suites**; write the 2 missing ones. Same assurance, ~90% less new fixture code |
+| Issue scopes to 10 files | 8 more `.tool_input.command` readers are evaded by the same payload; 12 more read `.tool_input.file_path`/`.skill`, of which 2 (`worktree-write-guard.sh`, `iac-plan-write-guard.sh`) are **blocking write guards** and `pencil-open-guard.sh` sits on an `mcp__*` matcher — exactly the reachability argument the issue makes | sweep 10 + 8 + the 2 write guards; **explicitly exempt** the 10 advisory/PostToolUse hooks with a listed reason and a follow-up issue |
+| Learning `2026-03-18-stop-hook-jq-invalid-json-guard.md` justified the `\|\| true` absorb | correct about absorbing, silent about announcing | ADR-156 supersedes that reading |
+| `.openhands/hooks/*` mirrors | different envelope (`.working_dir`, `.tool_input.path`) and deny shape; not RCE-vulnerable, is evadable. `pre-merge-rebase-parity.test.sh`'s own header records that silent divergence has happened twice on that host | minimal in-place guard + parity test. Convergence is a follow-up |
+| `security_reminder_hook.py` | `json.loads` + `isinstance(new_string, str)` — the only pre-existing type-check on model-controlled input | not vulnerable; say so in the PR body so the sweep reads complete. Cite as the precedent bash converges on |
+| — | `2026-05-15-deterministic-permissions-empirical-probes-and-review-gaps.md` records "security-sentinel — confirmed jq @sh-escape neutralizes stdin command injection" | append a **dated correction** citing #7164; do not rewrite the historical finding; never write "input is now safe" |
+| — | `grep-q-pipe-guard.test.sh` sweeps `lib/*.sh` for `\| grep -q`, asserting zero | the helper must contain none |
+| — | `guardrails.test.sh` documents that CI-on-`main` masks gates (#5192) and ships a non-git-CWD isolation idiom | reuse it verbatim in every git-fixture canary; never reinvent it |
 
 ---
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** every `Bash` tool call either aborts with a bash
-error printed into the transcript, or hangs — the `explode` design the first draft carried would
-have burned minutes of CPU and gigabytes of RSS across 18 parallel hooks on a single large command.
-Or, worse because it is silent, their session runs ungoverned: `guardrails.sh` stops blocking
-`git commit` on `main`, `rm -rf` on a worktree root, `$HOME`, or `/`, and the freeze edit-lock stops
-holding. The concrete artifact is a destroyed worktree or an unauthorised commit to `main` that the
-operator has no record of refusing.
+**If this lands broken, the user experiences:** every `Bash` call aborts with a shell error, or hangs
+(v1's `explode` would have burned minutes of CPU and gigabytes of RSS across 18 parallel hooks), or —
+worst because silent — their session runs ungoverned: no block on `git commit` to `main`, `rm -rf` on
+a worktree root, `$HOME`, or `/`, and no freeze edit-lock. The artifact is a destroyed worktree or an
+unauthorised commit the operator has no record of refusing.
 
-**If this leaks, the user's workflow and machine are exposed via:** the defect itself — any
-`tool_input.command` that is an array (crafted by prompt injection reaching the model, or emitted by
-a harness/MCP tool whose `tool_input` shape differs from `Bash`'s) runs attacker-named commands as
-the operator, before any permission prompt, on their own laptop, with their SSH keys, Doppler
-session, and `gh` credentials in reach. Secondarily, the new parse-failure telemetry writes to
-`.claude/.rule-incidents.jsonl`; the design logs **no payload content**, only a fault classifier, so
-a malformed command carrying a credential is never persisted.
+**If this leaks, the user's workflow and machine are exposed via:** the defect itself — an array
+`tool_input.command` runs attacker-named commands as the operator, before any prompt, with their SSH
+keys, Doppler session, and `gh` credentials in reach. Secondarily the fault telemetry: **v1
+contradicted itself here** (its Observability block logged a `tojson` rendering while its GDPR
+section claimed no payload content was persisted, so `["curl","-H","Authorization: Bearer sk-…"]`
+would have hit disk). v3 emits **empty values on the failure path by construction** — no rendering
+exists to log — and the row carries field name, JSON type, and length only.
 
 **Brand-survival threshold:** `single-user incident`.
 
-One operator, one crafted payload, one destroyed machine or leaked credential set ends a product
-whose whole pitch is "the agent is safe to leave running." Hence `requires_cpo_signoff: true` and
-`user-impact-reviewer` at review time.
-
 **Reachability stays open, deliberately.** Whether the harness type-validates `tool_input` before
-dispatching `PreToolUse` could not be established from inside the repo. The PR body must neither
-upgrade this to "confirmed exploitable" nor downgrade it to "theoretical." The issue's own framing
-is correct and is also the ADR's core rationale: *a hook must not depend on an upstream invariant it
-cannot verify*, and `PreToolUse` also receives MCP and other tool shapes.
+dispatch could not be established from inside the repo. The PR body must neither upgrade this to
+"confirmed exploitable" nor downgrade it to "theoretical." The issue's framing is correct and is
+ADR-155's rationale: *a hook must not depend on an upstream invariant it cannot verify*, and
+`PreToolUse` also receives MCP and other tool shapes.
 
 ---
 
 ## Implementation Phases
 
-Ordered by dependency direction — the telemetry exclusion before the first emit, the failing lint
-before the migration it gates, the contract before its consumers.
-
 ### Phase 0 — Preconditions (measure; write no product code)
 
-0.1 Re-run the reproducer against all 10 hooks with `INCIDENTS_REPO_ROOT` redirected. **Run from a
-`mktemp -d`, never the worktree root** — the payload's trailing words are handed to `touch`, which
-litters `TOOL_NAME=Bash` / `FILE_PATH=` / `SESSION_ID=` files into the CWD. (This happened during
-planning; the strays were removed. AC13 exists to catch it.)
+0.1 Re-run the reproducer against all 10 hooks from a `mktemp -d` CWD with `INCIDENTS_REPO_ROOT`
+redirected. **Never from the worktree root** — the payload's trailing words go to `touch`. Use a
+fresh per-run temp dir; stale `PWNED*` markers either false-fail or self-satisfy (the planning run
+left ten).
 
-0.2 Confirm the delimiter on the installed jq: `printf '{}' | jq -j '"a","\u001e","b"' | od -c` **must**
-show `a 036 b`. If RS is not emitted literally, stop — the design is wrong for that jq.
+0.2 `printf '{}' | jq -j '"a","\u001e","b"' | od -c` must show `a 036 b`. If not, stop.
 
-0.3 Reproduce the P8 benchmark table on the target machine. The chosen mechanism must beat the
-legacy form at 100 B, 2 KB, 20 KB, and 200 KB. Record the numbers; they become AC6.
+0.3 Reproduce both P8 tables. AC8 is written against the **in-situ** one.
 
-0.4 `bash -n` all 18 hooks pre-change, so a post-change failure is attributable.
+0.4 `bash -n` all 20 hooks pre-change.
 
-0.5 Confirm `permissionDecision: "ask"` is still honored: re-read
-`.claude/hooks/DEFER-DECISION-PAYLOAD-SHAPE.md` › comparison table and confirm the running CC major
-version has not bumped past the probe's `2.1.142`. If it has, re-probe per that document's
-"Re-probe trigger conditions" **before** designing around `ask`.
+0.5 Confirm the running CC major version has not passed `2.1.142`; re-probe `ask` if it has.
 
-### Phase 1 — Telemetry first (so the first emit cannot break the aggregator)
+0.6 A validated prototype (23-case matrix, shellcheck-clean, in-situ splice) is in the planning
+scratchpad. **Port it; do not re-derive it.**
 
-Extend `scripts/rule-metrics-aggregate.sh` › the `$orphan_ids` pipeline with
-`map(select(startswith("hook-input-") | not))`, commented in the shape of the existing
-`context-reviewed-` block, and add the paired cases to `scripts/rule-metrics-aggregate.test.sh`.
+### Phase 1 — A telemetry surface a human actually reads
 
-`scripts/rule-metrics-aggregate.sh` hard-`ERROR`s on an unrecognised `rule_id`. If the emit shipped
-first, the first parse failure would turn the aggregator red for an unrelated reason.
+The exclusion alone **deletes** the only place a counts-only `rule_id` appears. All four, in order,
+before any emit:
 
-### Phase 2 — The failing lint (RED against `main` before anything is fixed)
+1.1 `scripts/rule-metrics-aggregate.sh` — add `map(select(startswith("hook-input-") | not))` to the
+`$orphan_ids` pipeline, commented like the existing `context-reviewed-` block.
+1.2 **Same file** — add `summary.hook_input_fault_count` + per-`reason` counts mirroring
+`drops_jq_fail_count` / `drops_rotation_fail_count`, and print a non-zero count to stderr the way the
+script already does for drop sentinels. **This is the replacement surface**; without it 1.1 makes the
+fault invisible.
+1.3 `plugins/soleur/skills/compound/SKILL.md` § 3.5 — widen the filter to also admit
+`kind == "hook_self_fault"`; add the paired test assertion.
+1.4 `scripts/rule-metrics-aggregate.test.sh` — cases for 1.1 and 1.2.
 
-Add the idiom-ban assertion to a new `.claude/hooks/hook-input-contract.test.sh` and **observe it
-fail on `main`** (`cq-write-failing-tests-before`). Landing it after the migration means it is
-written against already-clean code and has never been seen to fail — the `stub-argv-fidelity`
-failure mode the hooks README already documents.
+### Phase 2 — Both failing tests, RED against `main`
 
-The ban: for every non-`*.test.sh` file under `.claude/hooks/` and `.openhands/hooks/`,
-`grep -vE '^[[:space:]]*#' "$f" | grep -cE 'eval[[:space:]]+"\$\('` must be 0. Allow-list the two
-`eval "exec ${fd}>&-"` calls in `lib/session-state.sh` **by exact string**, not by file — they act
-on a numeric fd, never on hook input.
+Create `.claude/hooks/hook-input-contract.test.sh` with **two** assertions and observe both fail
+(`cq-write-failing-tests-before`).
 
-### Phase 3 — The extractor (contract)
+2.1 **Idiom ban.** For every non-`*.test.sh` file under `.claude/hooks/` and `.openhands/hooks/`,
+**any** `eval` is banned — not just the one spelling being deleted (`eval $(…)` unquoted,
+`V=$(…); eval "$V"`, and `eval "${x}"` all evade a `eval[[:space:]]+"\$\(` pattern). Allow-list the
+two `eval "exec ${fd}>&-"` lines in `lib/session-state.sh` **by exact string**.
 
-Create `.claude/hooks/lib/hook-input.sh`. Two public functions, no `eval`, one jq fork.
+2.2 **Guard-still-armed.** An array payload encoding a guarded command must yield `ask`. This is the
+assertion that catches a coerce-and-continue fix, and it is **RED on `main` today** (the array
+payload currently runs the `eval`, sets `COMMAND='x'`, and the guards allow). v1 authored it after
+both migrations, where it could never be seen fail — the `stub-argv-fidelity` failure mode the hooks
+README documents. **This is the highest-value ordering change in the review.**
 
-```bash
-# hook_parse_input <json> <VARNAME> <jq-expr> [<VARNAME> <jq-expr>]...
-#   0 = every field parsed and every field is a string
-#   1 = transport fault (unparseable / jq missing / field unreadable)
-#   2 = anomalous shape (parsed, but a contracted field is not a string)
-# On 1 and 2 every named variable is assigned (empty on 1; the sanitized
-# tojson rendering on 2, for telemetry only — never for guard matching).
-# Sets HOOK_INPUT_STATUS to ok|transport|anomalous and HOOK_INPUT_REASON to a
-# classifier: jq_missing | surrogate | structural | oversize | nonstring | argc.
-hook_parse_input() { ... }
+### Phase 3 — The ADRs (before anything cites them)
 
-# hook_input_fault_respond <hook-basename>
-#   Reads HOOK_INPUT_STATUS/REASON, emits the incident + stderr line, and for
-#   the anomalous / jq-missing / escalated cases prints the `ask` envelope and
-#   exits 0. Returns 0 (caller continues fail-open) otherwise.
-hook_input_fault_respond() { ... }
-```
+Re-derive both ordinals from a freshly-fetched `origin/main` immediately before writing.
 
-The jq program (measured shape — `contains`-guarded, never `explode`):
+- **ADR-155 — the trust boundary.** *Hook stdin is model-controlled and untrusted; a hook must not
+  depend on an upstream invariant it cannot verify.* Durable, repo-wide, binds ~30 hooks and both
+  harnesses. Encoded by the new `claude -> hooks` C4 edge. Must never be superseded.
+- **ADR-156 — the response posture.** *A hook that cannot fully parse its input asks; it never
+  continues silently and never denies.* Operational and tunable. Cites 155. Owns the Alternatives
+  table. Must supersede the silent-absorb reading of `2026-03-18-stop-hook-jq-invalid-json-guard.md`
+  and cite ADR-070 as the only prior fail-open sanction — an *additive advisory* hook, the complement
+  of this case. Records the surrogate finding (scrubbing changes the bytes the guard matches) as a
+  known limitation, and the designated-responder invariant.
+
+Splitting keeps the mechanism (`hook_parse_input`, the `eval` ban, one fork) out of ADR scope — it
+lives in the README + the lint — so a future helper refactor cannot supersede the trust boundary
+along with it. Add an `AP-NNN` to `principles-register.md` (which has no principle covering untrusted
+input) linked to ADR-155.
+
+### Phase 4 — The extractor
+
+Create `.claude/hooks/lib/hook-input.sh`. **Fixed accessors over one constant jq program** — not a
+variadic `<VAR> <jq-expr>` API. That alone deletes four of v1's failure modes: no program
+interpolation (structurally literal, not literal-by-comment), no odd-argument-count path, no
+caller-supplied variable names, no `printf -v`.
 
 ```jq
-[ (try ( <expr1> ) catch {__e:true}),
-  (try ( <expr2> ) catch {__e:true}) ]
-| map(
-    if type == "object" and has("__e") then ["err", ""]
-    elif type == "string" then
-      (if contains("\u001e") then ["anom", (split("\u001e") | join(""))] else ["ok", .] end)
-    else ["anom", (tojson | split("\u001e") | join(""))]
-    end)
-| .[] | .[0], "\u001e", .[1], "\u001e"
+# One CONSTANT program. Field order is the contract.
+#   1 .tool_input.command   2 .tool_name   3 .cwd   4 .session_id
+#   5 .tool_input.file_path // .tool_input.notebook_path
+# The status token is computed BEFORE any value is emitted, so no value can forge it.
+# Values on the "bad" path are emitted EMPTY — nothing is coerced, nothing is rendered,
+# nothing needs a separator scrub, and no payload content can reach telemetry.
+[ (try (.tool_input.command // "") catch {}),
+  (try (.tool_name        // "") catch {}),
+  (try (.cwd              // "") catch {}),
+  (try (.session_id       // "") catch {}),
+  (try (.tool_input.file_path // .tool_input.notebook_path // "") catch {}) ]
+| (if all(type == "string") then "ok" else "bad" end), "\u001e",
+  (.[] | (if type == "string" then . else "" end), "\u001e")
 ```
-
-The bash side (measured shape — `$( )` capture, never `read -d`):
 
 ```bash
-raw=$(printf '%s' "$input" | jq -j "$prog" 2>/dev/null; printf 'X'); raw=${raw%X}
-local oldifs=$IFS
-set -f; IFS=$'\x1e'; local -a slots=($raw); set +f; IFS=$oldifs
+raw=$(printf '%s' "$input" | jq -j "$_HOOK_INPUT_JQ" 2>/dev/null; printf 'X'); raw=${raw%X}
+oldifs=${IFS-}; case "$-" in *f*) hadf=1;; *) hadf=0;; esac
+set -f; IFS=$'\x1e'
+# shellcheck disable=SC2206  # deliberate IFS word-split on RS; globbing disabled above
+slots=($raw)
+if [[ -n "${oldifs+set}" ]]; then IFS=$oldifs; else unset IFS; fi
+(( hadf )) || set +f
+(( ${#slots[@]} == 6 )) || return 1        # slot count, NOT jq's exit code
+[[ ${slots[0]} == ok ]] || return 1
 ```
 
-Design properties, each measured during planning:
+Publishes `HOOK_CMD`, `HOOK_TOOL_NAME`, `HOOK_CWD`, `HOOK_SESSION_ID`, `HOOK_FILE_PATH` and
+`HOOK_INPUT_REASON`. **The return code is normative**; the reason is diagnostic. All are initialised
+at source time (`set -u`) and reset at the top of every call (a stale `HOOK_INPUT_REASON` inherited
+from the environment must not survive).
 
-| Property | Mechanism | Evidence |
-|---|---|---|
-| no `eval` | values assigned with `printf -v` | a quoting bug can no longer become code execution |
-| non-string is **surfaced**, not normalized | per-field `ok`/`anom`/`err` tag; `anom` ⇒ rc 2 ⇒ `ask` | the P6 falsification: coercion alone leaves every anchored guard evaded |
-| the jq program is **total** | `try (<expr>) catch {__e:true}` → `err` tag | a non-object `tool_input` yields rc 1 (unreadable ≈ unparseable), **not** a normal-looking empty value. My first draft's `catch ""` made `{"tool_input":"oops"}` read as a clean parse — caught by probe |
-| a value cannot forge a field boundary | RS stripped **only** on the `anom` branch, before the join | verified: `{"command":"AAA\u001eevil\u001eZZZ"}` → one field, count unchanged. Desync is structurally unreachable — the program emits exactly 2N records unconditionally, so a smuggled separator raises the count and trips the mismatch branch |
-| the happy path is **byte-exact** | `ok` values are passed through untouched — no `gsub`, no strip | verified against tabs, newlines, backticks, `$( )`, quotes, backslash, `*`, emoji, CJK |
-| the happy path is **faster than the baseline** | `contains` (substring search) not `explode`; `$( )` capture not `read -d` | P8 tables |
-| NUL needs no handling | jq drops `\u0000` from string values on input and refuses to emit it | measured twice. The `. != 0` filter my first draft carried was dead code |
-| trailing/empty fields survive | `printf 'X'` sentinel + `${raw%X}`; exactly one trailing RS | verified for the all-empty case `{"command":"","cwd":""}` → 4 slots, the case that would silently lose a field |
-| safe under `set -e` | `if ! hook_parse_input ...; then` | 7 of the 10 run `set -eo pipefail`, 2 `set -uo pipefail`, `guardrails.sh` `set -euo pipefail` |
-| **odd argument count is an error** | `(( $# % 2 == 0 )) \|\| { zero_all; return 1; }` | measured: `while (( $# >= 2 ))` silently drops a trailing odd arg and returns **success**, leaving that variable at its **inherited environment value**. Every call site is hand-edited in this PR, so a dropped expr is a one-character failure |
-| **every early return zeroes the names** | zero before each `return` | measured: the bad-variable-name reject path returned 1 **without** assigning, contradicting the docblock and aborting under `set -u` |
-| dangerous variable names refused | `^[A-Za-z_][A-Za-z0-9_]*$` **plus** a denylist: `IFS PATH PS4 BASH_ENV SHELLOPTS BASHOPTS CDPATH GLOBIGNORE LD_PRELOAD PROMPT_COMMAND` | measured: all of those pass the regex and get assigned; clobbering `PATH` makes every later hook fail-open |
-| oversize input is refused before the fork | `(( ${#input} > 262144 ))` ⇒ `reason=oversize` | nothing legitimate sends a 256 KB `command`; the size is itself the anomaly, and the cap bounds the DoS surface irrespective of jq's constant factors |
-| `printf '%s'` replaces `echo "$INPUT"` | — | `echo` interprets backslashes and `-n`/`-e` on some shells. This is a **second, previously unreported input-mangling bug present in all 18 hooks**; call it out in the PR body |
-| no `\| grep -q` | by construction | `grep-q-pipe-guard.test.sh` sweeps `lib/*.sh` and asserts zero |
-| does **not** source `incidents.sh` | — | the 10 hooks source it independently, and `incidents.sh` conditionally defines a `headless_or_stderr` fallback only if one is not already defined — source ordering is load-bearing |
-| sourced **fail-hard** | no `\|\| true` on the `source` line | if the helper were sourced fail-soft, a missing file leaves `hook_parse_input` undefined → the hook dies at the call → **exit non-zero → fail-open, silently**: defect 2 reintroduced one line higher, where no test looks |
-| `shellcheck -s bash` clean | drop the unused `n` local | measured `SC2034` on the first draft |
-| jq-expr interpolation is literal-only | comment marking exprs as source literals; conservative charset check | `prog+="(try ( $e ) catch ...)"` interpolates unescaped. Not live — every call site passes a literal — but unguarded against future drift |
+Properties, each measured:
 
-### Phase 4 — Lone-surrogate handling
-
-A **lone high surrogate makes jq reject the entire document**, disarming all 18 gates. This is not
-exotic — it is routine, and it comes from the harness's own serializer:
-
-```
-$ node -e 'console.log(JSON.stringify({tool_input:{command:"git \ud800 stash"}}))'
-{"tool_input":{"command":"git \ud800 stash"}}
-$ ... | jq .
-jq: parse error: Invalid \uXXXX\uXXXX surrogate pair escape
-```
-
-JS strings permit unpaired surrogates and `JSON.stringify` escapes them faithfully. A truncated
-emoji or mangled UTF-16 in pasted content is enough. (Asymmetric: a lone *low* surrogate parses and
-becomes U+FFFD; only lone *high* surrogates are fatal.) This affects the current code identically —
-it is not a regression — but it is the highest-probability real-world disarm trigger and this PR is
-the moment to handle it.
-
-On the **failure path only** (never the hot path), classify and retry once with lone high surrogates
-replaced by U+FFFD, using `perl` (already a hook dependency via `strip_command_bodies`):
-
-```bash
-perl -pe 's/\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F])/\\ufffd/g'
-```
-
-Verified end-to-end during planning: the scrub-and-retry recovers `git � stash` from the exact
-`JSON.stringify` output above. If the retry succeeds, set `HOOK_INPUT_REASON=surrogate` and proceed
-with the guards armed — a recovered parse is strictly better than a disarm. If it still fails, the
-transport-fault path runs with `reason=structural`.
-
-### Phase 5 — Migrate the 10 `eval` hooks (commit 1)
-
-Replace the `eval` with a `hook_parse_input` call carrying that file's exact field set, plus the
-fault responder. **Keep** the `: "${VAR:=}"` belt-and-braces defaults `guardrails.sh` already
-carries and add them where absent — the helper's contract now guarantees assignment, but the
-defaults cost nothing and the contract has already been wrong once.
-
-| Hook | Fields |
+| Property | Mechanism |
 |---|---|
-| `guardrails.sh` | `COMMAND=.tool_input.command`, `TOOL_NAME=.tool_name`, `FILE_PATH=.tool_input.file_path // .tool_input.notebook_path` |
-| `cla-signed-author-gate.sh` | `CMD`, `WORK_DIR=.cwd` |
-| `context-reviewed-gate.sh` | `CMD` |
-| `follow-through-directive-gate.sh` | `CMD`, `WORK_DIR` |
-| `prod-write-defer-gate.sh` | `CMD`, `SESSION_ID=.session_id` |
-| `ship-net-issue-flow-gate.sh` | `CMD`, `WORK_DIR` |
-| `ship-operator-step-gate.sh` | `CMD`, `WORK_DIR` |
-| `ship-runbook-ssh-gate.sh` | `CMD`, `WORK_DIR` |
-| `ship-soak-followthrough-gate.sh` | `CMD`, `WORK_DIR` |
-| `ship-unpushed-commits-gate.sh` | `CMD`, `WORK_DIR` |
+| no `eval` | values read over a pipe, assigned by direct expansion |
+| non-string is surfaced, never coerced | leading `all(type=="string")` token ⇒ rc 1 ⇒ `ask` |
+| non-object `tool_input` or root ⇒ `ask` | `catch {}` yields an object — non-string — so the same check handles it. No `err` tag, no `has("__e")` branch. **v1 routed this to fail-open: a cheaper payload getting a weaker posture** |
+| a value cannot forge a boundary | the program emits exactly 6 records unconditionally; a smuggled separator raises the count and trips the mismatch. Desync is structurally unreachable |
+| happy path is byte-exact | `ok` values pass through untouched — no `gsub`, no strip |
+| no payload content anywhere | bad-path values are empty by construction |
+| NUL needs no handling | jq drops NUL from string values on input and refuses to emit it |
+| trailing/empty fields survive | sentinel + trailing separator, as a pair (see Do Not Skim §3) |
+| `jq` missing needs no branch | the slot-count check catches it for free; classify by capturing jq's rc |
+| `set -u` / glob safety | `${IFS-}`, conditional `set -f` restore, window is exactly two lines with no `return` inside |
+| `emit_incident` reachable | source `lib/incidents.sh` **idempotently** from the helper; if still undefined, fall through to `ask` — never continue. v1 deliberately did not source it, so a wrong order made the fault path `command not found` (rc 127) which kills the hook and lets the tool proceed |
+| shellcheck clean | `SC2206` + `SC2034` disables, each justified |
+| bash 3.2 / jq 1.5 compatible | no `mapfile`, no `declare -n`, no `--raw-output0` |
 
-**The false safety claim is written into the source in four places and into the knowledge base in
-one; all five must be corrected in this commit** — leaving them is how the idiom returns:
+**Classifiers** (`HOOK_INPUT_REASON`): `nonstring` · `unparseable` · `separator` · `jq_missing` ·
+`internal` (our own program broken, or jq present but failing — carry ≤120 bytes of jq stderr, our
+bug, no attacker content). Capture jq's exit code for this; discarding it collapses "we shipped a
+broken hook" into "the model sent junk".
 
-- `guardrails.sh` › extraction comment — "*`@sh` shell-escapes each field so eval is safe…*"
-- `ship-unpushed-commits-gate.sh` › extraction comment — "*`@sh` shell-escapes every value so any…*"
-- `cla-signed-author-gate.sh` › extraction comment — "*Single jq fork via `@sh`-escaped eval…*"
-- `prod-write-defer-gate.sh` › extraction comment — "*single jq `@sh`-escape, sibling-hook pattern*"
-- `knowledge-base/project/learnings/2026-05-15-deterministic-permissions-empirical-probes-and-review-gaps.md`
-  › "*security-sentinel — confirmed jq @sh-escape neutralizes stdin command injection*" — **append a
-  dated correction** citing #7164 and ADR-155. Do not delete the historical finding; do not let the
-  correction overstate ("no shell evaluation of hook input", not "input is now safe").
+### Phase 5 — The response
 
-The archived `2026-04-18-refactor-drain-pr2213-review-backlog-plan.md` and its spec — which contain
-the risk analysis that missed this bug ("*Mitigation: `@sh` already shell-escapes*", a register that
-modelled **string** payloads only) — are point-in-time records. **Cite them in the ADR; do not edit
-them.**
+```bash
+if ! hook_parse_input "$INPUT"; then
+  hook_input_report "<hook-basename>"     # pure; emits incident + stderr; always returns
+  hook_input_should_ask && { hook_input_emit_ask "<hook-basename>"; exit 0; }
+  exit 0
+fi
+```
 
-### Phase 6 — Migrate the 8 `$( )` sibling hooks (commit 2)
+- Three small functions, none of which calls `exit`. The `exit` lives at the call site: explicit,
+  greppable, lintable, uniform. v1's single responder sometimes returned and sometimes exited — a
+  sourced library terminating its caller invisibly at 20 sites, untestable without a subshell, and
+  silently ineffective inside `$( )` or a pipeline. The contract test asserts none of the three is
+  ever invoked in a subshell or pipeline.
+- **`guardrails.sh` is the designated responder**: it emits the `ask`; the other 17 report and exit 0.
+  All-emit turns a persistent condition (`jq_missing`) into an unrecoverable loop — fixing `PATH` is
+  itself a Bash call that would ask 18 times. Designated-responder makes `guardrails.sh` load-bearing
+  for 17 others, so Do Not Skim §9's `settings.json` assertion is mandatory, not optional.
+- **Kill switch:** `SOLEUR_DISABLE_HOOK_INPUT_ASK=1` disables escalation only, never parsing —
+  precedent `SOLEUR_DISABLE_SESSION_STATE`. Without it there is no in-band recovery. Document in
+  ADR-156 and the README; assert in the suite.
+- Telemetry payload: field name, JSON type, length. Nothing else.
 
-`background-poll-prefer-monitor.sh`, `brand-hex-commit-gate.sh`, `doppler-secrets-delete-redirect.sh`,
-`git-commit-secret-scan.sh`, `kb-domain-allowlist-guard.sh`, `no-memory-write.sh`,
-`pre-merge-auto-close-scan.sh`, `pre-merge-rebase.sh`.
+### Phase 6 — Migrate the 10 `eval` hooks (commit 1)
 
-These are simpler than the `eval` sites — no shell-quoting semantics to preserve — and they close
-the evasion half of the defect. Note `kb-domain-allowlist-guard.sh` and `no-memory-write.sh` read
-`.tool_input.command` inside a larger `//` fallback chain; read each expression before porting it,
-do not pattern-match on the others.
+`guardrails.sh`, `cla-signed-author-gate.sh`, `context-reviewed-gate.sh`,
+`follow-through-directive-gate.sh`, `prod-write-defer-gate.sh`, `ship-net-issue-flow-gate.sh`,
+`ship-operator-step-gate.sh`, `ship-runbook-ssh-gate.sh`, `ship-soak-followthrough-gate.sh`,
+`ship-unpushed-commits-gate.sh`.
 
-Separately, the two `.openhands/hooks/` files (`guardrails.sh`, `pre-merge-rebase.sh`) get a
-**minimal in-place non-string guard only** — a few lines, no helper — because their envelope differs
-(`.working_dir`, `.tool_input.path`) and their deny shape is `{"decision":"deny"}`. Extend
-`tests/hooks/test_openhands_guardrails.sh` with the array-payload case. File helper convergence as a
-follow-up issue (`domain/engineering`, `type/security`, `priority/p3-low`).
+Each maps its locals off the fixed globals, sources the helper fail-hard, keeps `: "${VAR:=}"`.
 
-### Phase 7 — The gate (behavioural assertions)
+**Correct the false safety claim in all five places** — the extraction comments in `guardrails.sh`,
+`ship-unpushed-commits-gate.sh`, `cla-signed-author-gate.sh`, `prod-write-defer-gate.sh`, and a dated
+correction appended to `2026-05-15-deterministic-permissions-empirical-probes-and-review-gaps.md`.
+Say "no shell evaluation of hook input" — never "input is now safe".
 
-Complete `.claude/hooks/hook-input-contract.test.sh` (started RED in Phase 2). Pure bash + `jq`, with
-the repo's standard `command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }` preflight
-— the `test-scripts` CI shard has no bun and no node.
+Do **not** edit `2026-04-18-refactor-drain-pr2213-review-backlog-plan.md` or its archived spec —
+point-in-time records holding the risk analysis that missed this bug (it modelled string payloads
+only). Cite them in ADR-156.
 
-1. **Idiom ban** (from Phase 2).
-2. **RCE regression, all 10.** From a `mktemp -d` CWD with `INCIDENTS_REPO_ROOT` redirected, the
-   array payload leaves no marker file and creates no `TOOL_NAME=Bash` / `FILE_PATH=` /
-   `SESSION_ID=` stray.
-3. **Guard-still-armed** (the assertion that would have caught the `tojson` trap): for each of the
-   18 hooks, an array payload whose flattened form encodes a command the hook *does* guard produces
-   the anomalous-shape `ask` — **not** an allow. A bare "no marker file" assertion passes happily on
-   the evaded design.
-4. **Loud disarm.** `not-json-at-all` produces a `.rule-incidents.jsonl` line with
-   `rule_id == "hook-input-parse-failure"`, `event_type == "warn"`, `schema == 1`,
-   `kind == "hook_self_fault"`, a `reason=` classifier, and `command_snippet` **not** containing the
-   payload body.
-5. **Lone surrogate recovers.** The `JSON.stringify`-shaped payload parses after the scrub-and-retry
-   and the guards run armed; `reason=surrogate` is recorded.
-6. **`jq` missing ⇒ `ask`.** With `PATH=/nonexistent`, the hook emits the `ask` envelope, not an
-   allow.
-7. **Known-deny canary, per hook.** One fixture per hook asserting its characteristic
-   `permissionDecision`. This is the issue's "startup canary fed a known-deny fixture", relocated
-   from the hot path to the suite — and it is what discharges the "one helper bug disarms all 18"
-   objection: a helper regression would have to pass 18 canaries.
-8. **Helper unit matrix.** T1-T15 below.
-9. **Perf floor.** Assert the chosen mechanism is not slower than the legacy form at 200 KB (guards
-   against a future "small cleanup" reintroducing `explode` or `read -d`).
+### Phase 7 — The sibling readers (commit 2)
 
-Prescribed **mutation checks**, run and recorded as a transcript, not merely asserted:
-(a) `sed` the type-assert out of the helper → suite RED; (b) restore the `eval` in `guardrails.sh` →
-suite RED; (c) **delete `lib/hook-input.sh` entirely** → suite RED (this is the check that proves
-the helper is sourced fail-hard); (d) `git checkout` → suite green.
+The 8 `.tool_input.command` readers: `background-poll-prefer-monitor.sh`, `brand-hex-commit-gate.sh`,
+`doppler-secrets-delete-redirect.sh`, `git-commit-secret-scan.sh`, `kb-domain-allowlist-guard.sh`,
+`no-memory-write.sh`, `pre-merge-auto-close-scan.sh`, `pre-merge-rebase.sh` (the last two read it
+inside larger `//` chains — read each before porting), plus the 2 blocking write guards
+`worktree-write-guard.sh` and `iac-plan-write-guard.sh`.
 
-### Phase 8 — Record the decision
+**Explicitly exempt, with the reason in the README and a follow-up issue:** the 10 advisory/PostToolUse
+hooks reading `.tool_input.file_path` / `.skill` / `.model`. **Scope the README's "mandatory" claim to
+Bash-matcher and blocking write hooks** — shipping it unqualified alongside 10 unlisted exemptions is
+a claim the lint cannot enforce.
 
-- **ADR-155** (provisional ordinal), titled for the **posture**, not the parser — e.g.
-  *"Blocking hooks fail open on transport fault and ask on anomalous input shape."* The decision
-  worth recording is the asymmetry, not "we stopped using eval": without it, the next contributor
-  who reads `emit_incident … warn; exit 0` calls it a bug and "fixes" it into a deny, and bricks
-  sessions. Must record the alternatives (fail-closed, coerce-and-continue, per-field `jq -r`,
-  `--raw-output0`), must supersede the `2026-03-18` learning's silent-absorb reading, and must cite
-  ADR-070 as the repo's only prior fail-open sanction — which covers an *additive advisory* hook,
-  the complement of this case.
-- **`.claude/hooks/README.md`** — the file documents the hook contract and the incident API and says
-  **nothing** about input parsing. Add a "Parsing hook input" section making `hook_parse_input`
-  mandatory and naming the CI gate.
-- **C4** — next section.
+### Phase 8 — The OpenHands mirror (commit 3)
+
+`.openhands/hooks/{guardrails,pre-merge-rebase}.sh`: a minimal in-place non-string guard, **not** the
+helper. Extend `tests/hooks/test_openhands_guardrails.sh` with the array payload. File the
+convergence follow-up (`domain/engineering`, `type/security`, `priority/p3-low`, `--milestone`).
+Separate commit — bisect cleanliness is the plan's own stated reason for splitting.
+
+### Phase 9 — Complete the gate
+
+Finish `hook-input-contract.test.sh` (2.1 and 2.2 already landed RED). Pure bash + `jq`, with the
+standard `command -v jq || { echo "SKIP: jq missing"; exit 0; }` preflight.
+
+**Fixtures.** Build **one shared factory** — `git init` + a local bare `origin` + one commit + a
+feature branch — reused across the 8 constructible hooks, and prepend a stub-`gh` directory to `PATH`
+for all of them (the repo already has the stub convention). This converts the 3 `gh`-gated hooks from
+un-canaryable to canaryable and keeps `git fetch origin main` / `gh pr view` / `net-issue-flow.sh`
+off the network in the `test-scripts` shard. Every git fixture sets its branch explicitly and runs
+from its own CWD — `guardrails.test.sh` documents that CI-on-`main` masks gates (#5192).
+
+Assertions:
+
+1. Idiom ban (any `eval`, two allow-listed exact strings).
+2. **Guard-still-armed**, per hook, with the honest coverage split from P24: **7** hooks assert
+   end-to-end from a bare payload today; **8** after the git fixture; **3** with the `gh` stub. Do
+   not silently degrade the other 11 to "fail-open, as expected".
+3. **RCE regression, all 10** — with a **positive control in the same run**: the marker *is* created
+   against a pinned vulnerable stub. A bare absence assertion passes if the payload was malformed, the
+   path wrong, or stdin never arrived.
+4. `permissionDecisionReason` discriminates where normal and anomalous decisions collide —
+   `kb-domain-allowlist-guard.sh`'s normal decision is *already* `ask`.
+5. Non-object `tool_input`, non-object root, non-string `cwd`, separator-in-value ⇒ `ask`.
+6. Lone surrogate ⇒ `ask`. Assert it does **not** silently arm a guard against a scrubbed value.
+7. `jq` unusable ⇒ `ask` with **no jq fork** — test by prepending a shim dir with a non-executable
+   `jq`, leaving the rest of `PATH` intact (`PATH=/nonexistent` also removes `grep`, `git`, `mktemp`,
+   `flock`, so the hook cannot meaningfully run).
+8. **Loud disarm, end to end** — the incident row **and** a non-zero `summary.hook_input_fault_count`
+   from the aggregator **and** pickup by compound's widened filter. Asserting a line landed in a file
+   tests that a write happened, not that anyone is told. Also assert the row honours
+   `INCIDENTS_REPO_ROOT` and the worktree ledger is unchanged.
+9. No payload content in `command_snippet`.
+10. Envelope pairing — every new `permissionDecision` carries `hookEventName` **in the same object**,
+    asserted per envelope.
+11. `settings.json` designated-responder invariant (Do Not Skim §9).
+12. Shell-state hygiene — `IFS` and `$-` byte-identical after every rc path, including `IFS` unset
+    under `set -u`, and a `command` whose **entire value** is `*` executed from a temp dir containing
+    files (a value of `rm *` cannot catch a missing `set -f`; only a whole-value glob can).
+13. No subshell/pipeline invocation of the three response functions; no `$` in any jq expression.
+14. Kill switch.
+15. **Mechanism ban** (replaces a comparative wall-clock assertion): `lib/hook-input.sh` contains zero
+    `explode`, zero `read -d`, zero `mapfile -d`, and exactly one `jq`. Deterministic, milliseconds,
+    names the banned construct on failure. Keep the four-size table in the **PR body** — a 14% margin
+    does not belong in CI. One loose backstop only: median of 5 interleaved runs at 200 KB,
+    `new <= 2 × legacy`, which sits far above the noise and far below the 2.5× minimum regression.
+16. Stray-artifact assertion **inside** the test: after each reproducer invocation, the per-run temp
+    dir contains exactly the expected file set.
+17. Run the **16 existing sibling suites**; write the 2 missing ones
+    (`ship-soak-followthrough-gate`, `doppler-secrets-delete-redirect`). This replaces a fresh
+    18-fixture canary that would duplicate ~4,600 existing lines.
+
+**Mutation checks**, transcript recorded, each naming *which* protection it removed rather than just
+"the suite went RED": type-assert removed · any `eval` restored in a **randomly selected** hook (not
+always `guardrails.sh`) · `lib/hook-input.sh` deleted · `lib/incidents.sh` deleted · `catch {}` →
+`catch ""` · `${IFS-}` → `$IFS` (with `IFS` unset under `set -u`) · sentinel **and** trailing
+separator removed together · `slots=($raw)` → `slots=("$raw")` · `set -f` removed · then restore →
+green.
+
+Plus a **static per-file sweep**: each of the 20 hooks has exactly one `source .../hook-input.sh`,
+matching neither `|| true` nor `|| :` nor `2>/dev/null`.
+
+### Phase 10 — C4 and README
+
+C4 as below. `.claude/hooks/README.md` gains a "Parsing hook input" section naming
+`hook_parse_input`, the **scoped** mandate, the exemption list, the required source order, the
+designated responder, the kill switch, and the contract test.
 
 ---
 
 ## Architecture Decision (ADR/C4)
 
-This changes a **trust boundary**: it establishes that hook stdin is model-controlled and fixes the
-parse posture for 18 hooks across 2 harnesses. The ADR and the C4 edit are deliverables **of this
-plan** (`wg-architecture-decision-is-a-plan-deliverable`).
+### ADRs
 
-### ADR
-
-`ADR-155-blocking-hooks-fail-open-on-transport-fault-ask-on-anomalous-shape.md`, content per Phase 8.
+Two, split by lifetime — Phase 3. Plus `principles-register.md` `AP-NNN`.
 
 ### C4 views
 
-All three model files were **read** — `model.c4`, `views.c4`, `spec.c4`. A keyword `grep` would have
-been useless here: the gap is a missing *edge*, not a missing noun. Enumeration per the completeness
-mandate:
+All three model files were **read** — `model.c4`, `views.c4`, `spec.c4`. A keyword grep would have
+been useless: the gap is a missing *edge*, not a missing noun.
 
-- **External human actors** — `founder = actor "Founder / Operator"`, `emailSender`, `betaContact`,
-  `contributor`. The adversary is the model's own tool-call envelope, not a new human role.
-  **No new actor.**
-- **External systems** — `anthropic` is already modelled and is the ultimate origin of the envelope,
-  but the envelope is *delivered* by the runtime container, not by Anthropic directly.
-  **No new system.**
-- **Containers / data stores** — `platform.engine.hooks = container "Hook Engine"` and
-  `platform.engine.claude = container "Agent Runtime"`, both already modelled and both already in
-  the `containers` (L2) **and** `components` (L3) view include-lists.
-  `.claude/.rule-incidents.jsonl` is a pre-existing local file and is deliberately not modelled — no
-  other local telemetry file is either. **No new container or store.**
-- **Access relationships that change** — exactly one, and it is missing. `model.c4` contains
-  `hooks -> claude "Guards tool calls"` (the decision edge *out* of the hook) and **no relationship
-  into `hooks` at all**: the model does not represent that the Hook Engine *receives* a
-  model-controlled envelope. That is precisely the boundary this fix establishes, and the model
-  already reasons carefully about hook trust elsewhere (`connectedRepoPlugin -> skillloader` ›
-  "IGNORED by the loader (trust boundary)…"), so this fills a gap in an argument the model is
-  already making.
+- **External human actors** — `founder`, `emailSender`, `betaContact`, `contributor`. The adversary is
+  the model's own tool-call envelope, not a new human role. **No new actor.**
+- **External systems** — `anthropic` is modelled and is the envelope's origin, but the envelope is
+  *delivered* by the runtime container. **No new system.**
+- **Containers / stores** — `platform.engine.hooks` and `platform.engine.claude`, both modelled and
+  both already in the L2 `containers` and L3 `components` include-lists.
+  `.claude/.rule-incidents.jsonl` is a pre-existing local file, deliberately not modelled (no other
+  local telemetry file is). **No new container or store.**
+- **Access relationships that change** — exactly one, and it is missing: `model.c4` has
+  `hooks -> claude "Guards tool calls"` and **no relationship into `hooks` at all**. The model does
+  not represent that the Hook Engine *receives* a model-controlled envelope — the boundary this fix
+  establishes, and a gap in an argument the model already makes elsewhere
+  (`connectedRepoPlugin -> skillloader` › "IGNORED by the loader (trust boundary)…").
 
-In-scope edit (`model.c4` only — no `views.c4` `include` line is needed, because both endpoints are
-already in both views and LikeC4 renders an edge whose endpoints are present):
+Edit `model.c4` only — both endpoints are already in both views, so LikeC4 renders the edge with no
+`views.c4` change:
 
-1. Add `claude -> hooks "Tool-call envelope on stdin — MODEL-CONTROLLED, UNTRUSTED (ADR-155):
-   parsed without eval; a non-string contracted field is an anomaly that asks, never a value that is
-   coerced" { technology "stdin JSON" }`.
-2. Amend `platform.engine.hooks`'s `description`, which is falsified by omission — it says what
-   hooks *do* and never what they *consume*. Append the parse posture.
+1. Add `claude -> hooks "Tool-call envelope on stdin — MODEL-CONTROLLED, UNTRUSTED (ADR-155): parsed
+   without eval; input that cannot be fully parsed asks, never continues silently (ADR-156)"
+   { technology "stdin JSON" }`.
+2. Amend `platform.engine.hooks`'s `description`, falsified by omission — it says what hooks *do*,
+   never what they *consume*.
 
-Then run `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts` — a malformed
-relationship fails there, not at `tsc`.
-
-### Sequencing
-
-Nothing is soak-gated. ADR-155 is authored `status: accepted`: the decision is true the moment the
-helper merges.
+Then run `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts`.
 
 ---
 
@@ -483,39 +537,33 @@ helper merges.
 
 - `.claude/hooks/lib/hook-input.sh`
 - `.claude/hooks/hook-input-contract.test.sh`
-- `knowledge-base/engineering/architecture/decisions/ADR-155-blocking-hooks-fail-open-on-transport-fault-ask-on-anomalous-shape.md`
+- `.claude/hooks/ship-soak-followthrough-gate.test.sh`
+- `.claude/hooks/doppler-secrets-delete-redirect.test.sh`
+- `knowledge-base/engineering/architecture/decisions/ADR-155-hook-stdin-is-model-controlled-and-untrusted.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-156-a-hook-that-cannot-parse-its-input-asks.md`
 
 ## Files to Edit
 
-**Telemetry (Phase 1):** `scripts/rule-metrics-aggregate.sh`, `scripts/rule-metrics-aggregate.test.sh`.
+**Telemetry:** `scripts/rule-metrics-aggregate.sh`, `scripts/rule-metrics-aggregate.test.sh`,
+`plugins/soleur/skills/compound/SKILL.md` (+ its tests).
 
-**The 10 (Phase 5, commit 1):** `.claude/hooks/guardrails.sh`, `cla-signed-author-gate.sh`,
-`context-reviewed-gate.sh`, `follow-through-directive-gate.sh`, `prod-write-defer-gate.sh`,
-`ship-net-issue-flow-gate.sh`, `ship-operator-step-gate.sh`, `ship-runbook-ssh-gate.sh`,
-`ship-soak-followthrough-gate.sh`, `ship-unpushed-commits-gate.sh`.
+**Commit 1 — the 10:** `.claude/hooks/{guardrails,cla-signed-author-gate,context-reviewed-gate,follow-through-directive-gate,prod-write-defer-gate,ship-net-issue-flow-gate,ship-operator-step-gate,ship-runbook-ssh-gate,ship-soak-followthrough-gate,ship-unpushed-commits-gate}.sh`
 
-**The 8 siblings (Phase 6, commit 2):** `.claude/hooks/background-poll-prefer-monitor.sh`,
-`brand-hex-commit-gate.sh`, `doppler-secrets-delete-redirect.sh`, `git-commit-secret-scan.sh`,
-`kb-domain-allowlist-guard.sh`, `no-memory-write.sh`, `pre-merge-auto-close-scan.sh`,
-`pre-merge-rebase.sh`.
+**Commit 2 — the 8 + 2 write guards:** `.claude/hooks/{background-poll-prefer-monitor,brand-hex-commit-gate,doppler-secrets-delete-redirect,git-commit-secret-scan,kb-domain-allowlist-guard,no-memory-write,pre-merge-auto-close-scan,pre-merge-rebase,worktree-write-guard,iac-plan-write-guard}.sh`
 
-**OpenHands mirror (Phase 6):** `.openhands/hooks/guardrails.sh`, `.openhands/hooks/pre-merge-rebase.sh`,
-`tests/hooks/test_openhands_guardrails.sh`.
+**Commit 3 — mirror:** `.openhands/hooks/{guardrails,pre-merge-rebase}.sh`,
+`tests/hooks/test_openhands_guardrails.sh`
 
-**Docs / model / memory (Phases 5, 8):** `.claude/hooks/README.md`,
+**Docs / model / memory:** `.claude/hooks/README.md`,
 `knowledge-base/engineering/architecture/diagrams/model.c4`,
+`knowledge-base/engineering/architecture/principles-register.md`,
 `knowledge-base/project/learnings/2026-05-15-deterministic-permissions-empirical-probes-and-review-gaps.md`
-(dated correction only).
 
-**Existing tests to re-run, and update only if they genuinely break** (do not pre-emptively edit):
-`.claude/hooks/guardrails.test.sh` and the `.test.sh` sibling of each migrated hook;
-`hookeventname-coverage.test.sh` (per-file `count(hookEventName) >= count(permissionDecision)` — the
-new `ask` envelopes **add** `permissionDecision`s, so each must carry its paired `hookEventName` or
-this fails); `grep-q-pipe-guard.test.sh` (now sweeps the new `lib/hook-input.sh`);
-`stub-argv-fidelity.test.sh`; `tests/hooks/test_hook_emissions.sh` (asserts `schema == 1` on every
-captured line — the new row is schema-1 field-additive); `.claude/hooks/pre-merge-rebase-parity.test.sh`.
+**Re-run, edit only if genuinely broken:** the 16 existing hook sibling suites;
+`hookeventname-coverage.test.sh`; `grep-q-pipe-guard.test.sh`; `stub-argv-fidelity.test.sh`;
+`tests/hooks/test_hook_emissions.sh`; `.claude/hooks/pre-merge-rebase-parity.test.sh`.
 
-No `SKILL.md` `description:` is edited, so the skill-description budget check does not apply.
+No `SKILL.md` `description:` changes, so the skill-description budget check does not apply.
 
 ---
 
@@ -523,93 +571,77 @@ No `SKILL.md` `description:` is edited, so the skill-description budget check do
 
 ### Pre-merge (PR)
 
-1. **AC1 — RCE closed, all 10.** From a `mktemp -d` CWD, the array payload leaves the marker file
-   non-existent for every one of the 10 hooks. (Issue AC #1.)
-2. **AC2 — guards still armed** (the AC that fails on a coerce-and-continue fix). For every one of
-   the 18 Bash-matcher hooks, an array payload encoding a command that hook guards yields
-   `.hookSpecificOutput.permissionDecision == "ask"`, never an allow. Explicitly includes
-   `["git","stash"]` vs `guardrails.sh` and `["gh","pr","merge","--admin"]` vs the merge gates.
-3. **AC3 — no `eval` remains.**
-   `git grep -nE 'eval[[:space:]]+"\$\(' -- '.claude/hooks/*.sh' '.openhands/hooks/*.sh'` returns
-   only the two `eval "exec ${fd}>&-"` lines in `lib/session-state.sh`, matched by exact string.
-4. **AC4 — loud disarm.** `not-json-at-all` appends a line with
-   `.rule_id == "hook-input-parse-failure"`, `.event_type == "warn"`, `.schema == 1`,
-   `.kind == "hook_self_fault"`, a non-empty `reason=` classifier, and
-   `(.command_snippet | contains("not-json-at-all")) == false`. (Issue AC #2.)
-5. **AC5 — mutation turns the suite RED.** Transcript recorded for all four mutations in Phase 7:
-   type-assert removed → RED; `eval` restored → RED; **`lib/hook-input.sh` deleted → RED**;
-   restored → green. (Issue AC #3.)
-6. **AC6 — hot path not regressed.** The Phase 0.3 table is reproduced in the PR body and the
-   shipped mechanism beats the legacy `eval` at 100 B, 2 KB, 20 KB, **and** 200 KB. A 10 MB payload
-   completes in under 1 s with maxRSS under 64 MB.
-7. **AC7 — one jq fork.** Each migrated hook's extraction path contains exactly one `jq`
-   invocation (the helper's), asserted per file.
-8. **AC8 — surrogate recovery.** The `node -e 'JSON.stringify({tool_input:{command:"git \ud800 stash"}})'`
-   payload parses after the scrub-and-retry, the guards run **armed** (the `git stash` deny fires),
-   and `reason=surrogate` is recorded.
-9. **AC9 — `jq` missing ⇒ `ask`.** With `PATH=/nonexistent`, each of the 18 emits the `ask`
-   envelope, not an allow.
-10. **AC10 — orphan gate extended.** `bash scripts/rule-metrics-aggregate.test.sh` passes, and
-    running the aggregator over a fixture containing a `hook-input-parse-failure` row yields
-    `.summary.orphan_rule_ids | length == 0`.
-11. **AC11 — full suite green.** `bash scripts/test-all.sh` exits 0, prints `N/N suites passed`, and
-    `N` is **≥ the pre-change count + 1**, proving the new test file was discovered, not skipped.
-12. **AC12 — syntax + lint.** `bash -n` passes on every edited `.sh`; `shellcheck -s bash -x` is
-    clean (zero findings, including `SC2034`) on `lib/hook-input.sh` and on all 18 migrated hooks,
-    with output pasted into the PR body — CI does **not** gate `.sh` with shellcheck, so this is a
-    manual gate.
-13. **AC13 — no stray artifacts.**
-    `git ls-files --others --exclude-standard | grep -E '^(TOOL_NAME|FILE_PATH|SESSION_ID)='`
-    returns nothing, and `git status --short` shows only intended changes.
-14. **AC14 — false claims corrected.**
-    `git grep -nE '@sh (shell-)?escapes|eval is safe' -- '.claude/hooks/*.sh'` returns zero, and
-    `2026-05-15-deterministic-permissions-empirical-probes-and-review-gaps.md` contains a dated
-    correction citing #7164 that does **not** contain the string "input is now safe".
-15. **AC15 — C4 valid.** `model.c4` contains a `claude -> hooks` relationship naming ADR-155 and
-    "UNTRUSTED"; `cd apps/web-platform && ./node_modules/.bin/vitest run test/c4-code-syntax.test.ts test/c4-render.test.ts`
-    passes.
-16. **AC16 — ADR exists and no stale ordinal.** `ADR-155-*.md` exists with `status: accepted`, a
-    `## Decision`, and an `## Alternatives Considered` naming fail-closed, coerce-and-continue,
-    per-field `jq -r`, and `--raw-output0`; and
-    `grep -rn 'ADR-15[0-9]' knowledge-base/project/plans/2026-08-02-fix-hook-input-eval-jq-rce-plan.md knowledge-base/project/specs/feat-one-shot-7164-hook-eval-jq-rce/`
-    shows a single consistent ordinal after any renumber.
-17. **AC17 — README codified.** `.claude/hooks/README.md` has a "Parsing hook input" section naming
-    `hook_parse_input` and `hook-input-contract.test.sh`.
-18. **AC18 — `Closes #7164` in the PR body**, not the title
-    (`wg-use-closes-n-in-pr-body-not-title-to`). This is a code fix complete at merge, so `Closes`
-    is correct — not `Ref`.
+1. **AC1 — RCE closed, all 10**, with a positive control in the same run proving the harness can
+   observe a marker. *(Issue AC #1.)*
+2. **AC2 — guards still armed.** Array payloads encoding guarded commands yield `ask`, never an allow:
+   7 hooks from a bare payload, 8 more via the shared git fixture, 3 via the `gh` stub. Coverage is
+   stated per hook; none is silently degraded.
+3. **AC3 — the cheap variants also ask.** Non-object `tool_input`, non-object root, non-string `cwd`,
+   separator-in-value, lone surrogate, unusable `jq`.
+4. **AC4 — no `eval` remains.** Any `eval` under `.claude/hooks/**` and `.openhands/hooks/**` except
+   the two allow-listed exact strings.
+5. **AC5 — loud disarm, end to end.** Incident row **and** non-zero
+   `summary.hook_input_fault_count` **and** compound pickup **and** `INCIDENTS_REPO_ROOT` honoured.
+   *(Issue AC #2 — the extra conjuncts are what make it true.)*
+6. **AC6 — no payload content persisted.**
+7. **AC7 — every mutation in Phase 9 turns the suite RED with a message naming the removed
+   protection**, then green after restore. *(Issue AC #3.)*
+8. **AC8 — hot path within budget.** The in-situ table reproduced in the PR body; ≤ **+20%** per
+   invocation at 100 B / 2 KB / 20 KB / 200 KB. **No 10 MB clause** — v1's was derived from a jq-only
+   measurement and applied end-to-end, where neither the new design nor the code it replaces meets it.
+9. **AC9 — one jq fork on the happy path**, asserted as a runtime fork count (a grep over-counts:
+   `emit_incident` forks jq).
+10. **AC10 — the `ask` envelope is built by `printf`**, verified by an unusable-`jq` run.
+11. **AC11 — shell-state hygiene** across every rc path, including a whole-value glob and `IFS` unset
+    under `set -u`.
+12. **AC12 — kill switch** suppresses escalation and nothing else.
+13. **AC13 — envelope pairing**, asserted per envelope.
+14. **AC14 — designated-responder invariant** over `.claude/settings.json`.
+15. **AC15 — syntax + lint.** `bash -n` everywhere; `shellcheck -s bash -x` **zero findings** with
+    exactly the two justified `disable=` directives; output in the PR body (CI does not gate `.sh`).
+16. **AC16 — suite discovery + non-vacuous execution.** The run output contains the literal
+    `--- .claude/hooks/hook-input-contract.test.sh ---` line **and** the suite's own
+    `=== hook-input-contract: N/M pass ===` trailer with `M >= <expected>`. (A bare
+    `N >= pre-change + 1` count is satisfied by any new suite, is shard-dependent, and passes on a
+    jq-skipped or empty file.)
+17. **AC17 — no stray artifacts**, asserted inside the test per invocation.
+18. **AC18 — false claims corrected.** `git grep -nE '@sh (shell-)?escapes|eval is safe' -- '.claude/hooks/*.sh'`
+    is zero; the 2026-05-15 learning carries a dated correction citing #7164 and does not contain
+    "input is now safe"; **and the PR body makes no `echo`-vs-`printf` security claim** (P22).
+19. **AC19 — C4 valid.** `model.c4` has `claude -> hooks` naming ADR-155 and "UNTRUSTED";
+    `cd apps/web-platform && ./node_modules/.bin/vitest run test/c4-code-syntax.test.ts test/c4-render.test.ts` passes.
+20. **AC20 — both ADRs exist** with `status: accepted`, a `## Decision`, and ADR-156's
+    `## Alternatives Considered` naming fail-closed, coerce-and-continue, per-field `jq -r`,
+    `--raw-output0`, the per-session counter, the surrogate scrub, and the size cap.
+21. **AC21 — exemptions listed.** The README scopes the mandate and names the 10 exempt hooks and the
+    follow-up issue.
+22. **AC22 — full suite green.** `bash scripts/test-all.sh` exits 0.
+23. **AC23 — `Closes #7164`** in the PR body, not the title.
 
 ### Post-merge (operator)
 
-None. Every step is automatable in-session: the fix is repo-local shell, the tests run in the
-`test-scripts` CI shard, and there is no infrastructure, vendor mint, or migration. Post-merge
-verification is `bash scripts/test-all.sh scripts` on `main`, run by the agent.
+None as an operator action. Verification is `bash scripts/test-all.sh scripts` on `main`, run by the
+agent. The kill switch (AC12) is the documented in-band recovery path if the `ask` posture proves
+noisy — an escape hatch, not a scheduled step.
 
 ---
 
 ## Test Scenarios
 
-| # | Scenario | Expected |
-|---|---|---|
-| T1 | `command` is `["x","touch","$M"]` | no marker; status `anomalous`; `ask` emitted |
-| T2 | `command` is a string with `\n`, backticks, `$( )`, quotes, `\`, `*`, emoji, CJK | status `ok`; value **byte-identical**; nothing executes |
-| T3 | `command` is object / number / bool | status `anomalous`; `ask` |
-| T4 | `command` is `null` or absent | status `ok`, empty string, no incident, guards run |
-| T5 | `tool_input` is a string or an array | status `transport` (field unreadable), fail-open + incident — **not** a clean empty parse |
-| T6 | stdin is `not-json-at-all` | status `transport`, `reason=structural`, incident, stderr, guards skipped |
-| T7 | stdin is empty | status `transport` (slot count 0 — jq itself returns rc 0 here, so the **count** is the discriminator) |
-| T8 | `cwd` is an array | status `anomalous` — a non-string `cwd` silently defeats every worktree-prefix comparison |
-| T9 | `command` contains RS (`\u001e`) | RS stripped **on the anomalous branch only**; slot count unchanged; no boundary forged |
-| T10 | `command` contains `\u0000` | jq drops it on input; value arrives without the NUL; documented as a jq property, not a guarantee the helper provides |
-| T11 | Lone high surrogate from `JSON.stringify` | scrub-and-retry recovers; guards run **armed**; `reason=surrogate` |
-| T12 | `jq` absent from `PATH` | `ask`, `reason=jq_missing` |
-| T13 | 200 KB and 10 MB `command` | correct value; within the AC6 perf floor |
-| T14 | Input > 256 KB | `reason=oversize` before the jq fork |
-| T15 | Odd argument count / bad variable name / denylisted name (`PATH`, `IFS`) | rc 1, **every** name zeroed, `reason=argc` |
-| T16 | All fields empty (`{"command":"","cwd":""}`) | exactly 2N slots — the case where a trailing empty field can silently vanish |
-| T17 | > 3 parse failures in one session | escalates to `ask` for the remainder |
-| T18 | Known-deny canary × 18 | each hook's characteristic decision fires, proving it is armed |
-| T19 | Mutations (a)-(d) | suite RED / RED / RED / green |
+T1 normal string, byte-exact · T2 metachars/newline/backtick/`$( )`/quotes · T3 a value that is
+**exactly** `*` from a temp dir containing files · T4 a last field ending `\n\n` · T5 unicode ·
+T6 null/absent `command` (asserted at helper level: rc 0, empty, **no incident row**) · T7 `{}` ·
+T8 all-empty fields · T9 array `command` ⇒ ask · T10 object/number/bool ⇒ ask · T11 non-string `cwd`
+⇒ ask · T12 non-object `tool_input` ⇒ ask · T13 non-object root ⇒ ask · T14 escaped `\u001e` in a
+value ⇒ ask · T15 a **literal** RS byte (0x1e) (invalid JSON) ⇒ ask, distinct row · T16 lone high surrogate
+from `python3 json.dumps` carrying **also** a valid escaped pair ⇒ ask, emoji unharmed · T17
+unusable `jq` ⇒ ask, no fork · T18 broken jq program ⇒ `internal` ⇒ ask · T19 malformed / empty /
+truncated stdin ⇒ ask + incident · T20 200 KB value intact · T21 `IFS` unset under `set -u` · T22
+`IFS`/`$-` restored on every rc path · T23 inherited `HOOK_INPUT_REASON` does not survive a call ·
+T24 kill switch · T25 the 16 existing sibling suites still pass.
+
+No scenario is satisfied by "the hook exited 0 and printed nothing" — every one asserts a decision, a
+helper-level value, or an incident row.
 
 ---
 
@@ -617,121 +649,105 @@ verification is `bash scripts/test-all.sh scripts` on `main`, run by the agent.
 
 ```yaml
 liveness_signal:
-  what: "hook-input-* rows in .claude/.rule-incidents.jsonl; zero is the healthy state"
-  cadence: "per PreToolUse invocation, emitted only on fault (O(0) on the happy path)"
-  alert_target: "scripts/rule-metrics-aggregate.sh summary + the compound Phase 3.5 Deviation Analyst read"
-  configured_in: ".claude/hooks/lib/hook-input.sh (emitter); scripts/rule-metrics-aggregate.sh (counter)"
+  what: "summary.hook_input_fault_count and per-reason counts in the rule-metrics aggregate; zero is healthy"
+  cadence: "per PreToolUse fault only (O(0) on the happy path); aggregated by the local compound flow"
+  alert_target: "the in-band permissionDecision=ask (synchronous, operator-visible), backed by scripts/rule-metrics-aggregate.sh's stderr line and compound Phase 3.5"
+  configured_in: ".claude/hooks/lib/hook-input.sh (emitter); scripts/rule-metrics-aggregate.sh (counter + stderr); plugins/soleur/skills/compound/SKILL.md (Phase 3.5 filter)"
 error_reporting:
-  destination: ".claude/.rule-incidents.jsonl via emit_incident, plus headless_or_stderr warn"
-  fail_loud: true   # this IS the fix for defect 2 — the disarm is announced on both channels
+  destination: "in-band permissionDecision=ask — the only channel a PreToolUse hook provably owns — plus .claude/.rule-incidents.jsonl and headless_or_stderr warn"
+  fail_loud: true
 failure_modes:
-  - mode: "stdin JSON structurally malformed or truncated"
-    detection: "slot count != 2N -> rule_id=hook-input-parse-failure, kind=hook_self_fault, reason=structural"
-    alert_route: "rule-metrics summary; a non-zero count is a hook-layer fault, not a rule hit"
-  - mode: "lone high surrogate from the harness serializer"
-    detection: "same row, reason=surrogate; distinguished from structural because the scrub-and-retry succeeded"
-    alert_route: "same; a rising surrogate count means the harness is emitting unpaired UTF-16 and is worth an upstream report"
-  - mode: "jq missing or not executable"
-    detection: "reason=jq_missing; the hook emits `ask`, never an allow, so a dark gate cannot pass silently"
-    alert_route: "operator sees the ask prompt immediately; the row names the hook"
-  - mode: "contracted field is not a string (the attack signature)"
-    detection: "rule_id=hook-input-anomalous-shape, event_type=warn, reason=nonstring, with the field name and the sanitized tojson rendering"
-    alert_route: "operator sees the ask prompt; the row is the forensic record of what was attempted"
-  - mode: "payload exceeds the 256 KB cap"
-    detection: "reason=oversize, recorded before the jq fork"
-    alert_route: "same row; distinguishes a DoS attempt from a parse bug"
+  - mode: "a contracted field is not a string (the attack signature)"
+    detection: "reason=nonstring; ask whose reason names the hook and the field"
+    alert_route: "operator sees the prompt synchronously; the row is the forensic record"
+  - mode: "root or tool_input is not an object"
+    detection: "reason=nonstring via catch {}; ask"
+    alert_route: "same — this cell fail-opened in v1 and is the cheapest evasion to write"
+  - mode: "a value carries the field separator"
+    detection: "reason=separator (slot-count mismatch); ask"
+    alert_route: "same; distinguishes a boundary-forge attempt from a parse bug"
+  - mode: "document unparseable, truncated, or carrying a lone high surrogate"
+    detection: "reason=unparseable; ask. NOT scrubbed-and-armed: a scrubbed value no longer matches the guards (measured)"
+    alert_route: "a rising count means the harness emits unpaired UTF-16 — worth an upstream report"
+  - mode: "jq unusable"
+    detection: "reason=jq_missing; ask emitted by printf with NO jq fork — emit_incident itself needs jq, so the ask reason string is the surviving channel"
+    alert_route: "operator sees the prompt immediately; the reason names the hook"
+  - mode: "our own jq program is broken (a hook shipped with a bad expression)"
+    detection: "reason=internal carrying <=120 bytes of jq stderr (our bug, no attacker content); ask"
+    alert_route: "never collapses into 'the model sent junk' — a broken hook must not silently disarm"
   - mode: "the eval idiom is reintroduced by a future hook"
-    detection: "hook-input-contract.test.sh idiom ban, run in the test-scripts CI shard on every PR"
+    detection: "hook-input-contract.test.sh idiom ban (any eval), test-scripts CI shard, every PR"
     alert_route: "CI red on the PR that reintroduces it"
 logs:
-  where: ".claude/.rule-incidents.jsonl (flock-guarded, rotated by lib/log-rotation.sh); stderr routed through headless_or_stderr so `claude --bg` sessions capture it to a file"
+  where: ".claude/.rule-incidents.jsonl (flock-guarded, rotated by lib/log-rotation.sh); stderr via headless_or_stderr. NOTE: the headless branch writes to <git-common-dir>/soleur-session-state/logs/$PPID.log, which has NO reader and NO rotation — a forensic tail, not an alert channel. The alert channel is the in-band ask plus the aggregate counter."
   retention: "governed by the existing per-write rotator in .claude/hooks/lib/log-rotation.sh"
 discoverability_test:
-  command: "R=$(mktemp -d); printf 'not-json' | INCIDENTS_REPO_ROOT=\"$R\" bash .claude/hooks/guardrails.sh; jq -r 'select(.rule_id|startswith(\"hook-input-\"))' \"$R/.claude/.rule-incidents.jsonl\""
-  expected_output: "one JSON line: rule_id=hook-input-parse-failure, event_type=warn, kind=hook_self_fault, reason=structural, and no payload body in command_snippet"
+  command: "R=$(mktemp -d); printf 'not-json' | INCIDENTS_REPO_ROOT=\"$R\" bash .claude/hooks/guardrails.sh | jq -r '.hookSpecificOutput.permissionDecision'; INCIDENTS_REPO_ROOT=\"$R\" bash scripts/rule-metrics-aggregate.sh | jq '.summary.hook_input_fault_count'"
+  expected_output: "\"ask\" on the first line, then a non-zero count — proving the operator is told synchronously AND that the fault reaches the surface a human reads later"
 ```
 
-Per §2.9.2 (blind execution surfaces): a `PreToolUse` hook **is** operator-blind — its stdout is
-consumed by the harness and its stderr is usually swallowed. The fault row is therefore an
-**in-surface** probe emitted from inside the failing hook, and its fields discriminate every
-competing hypothesis in **one** event: `reason` separates structural / surrogate / jq_missing /
-oversize / nonstring / argc, and the hook basename in the prefix says *which* gate went dark. A
-single boolean would have separated none of them — which is exactly why six months of this defect
-produced no signal at all.
-
-Deliberately **not** logged: any payload content. If a later revision ever logs it, it must scrub
-`\x00-\x1f`, `\x7f`, `\u2028`, and `\u2029` per `cq-regex-unicode-separators-escape-only` — measured,
-U+2028/U+2029 survive the helper intact.
+Per §2.9.2 (blind execution surfaces): a `PreToolUse` hook is operator-blind — stdout is consumed by
+the harness, stderr is usually swallowed, and the headless log has no reader. The `ask` envelope is
+therefore the **in-surface, synchronous** probe and the `reason` classifier discriminates all seven
+hypotheses in one event. v1 routed everything to a fire-and-forget file write that, after its own
+orphan-gate exclusion, no consumer surfaced — which is why the discoverability test asserts the
+decision **and** the aggregate counter, never the log line alone.
 
 ---
 
 ## Domain Review
 
-**Domains relevant:** Engineering
+**Domains relevant:** Engineering. Product/UX Gate tier **NONE** — the mechanical UI-surface override
+does not fire. Marketing, Sales, Finance, Legal, Operations, Support: not relevant.
 
-### Engineering (CTO)
+Six passes ran: **CTO**, **security-sentinel**, **silent-failure-hunter**, **architecture-strategist**,
+**test-design-reviewer**, **code-simplicity-reviewer**, plus a 20-claim verify-the-negative sweep
+(20/20 CONFIRMS).
 
-**Status:** reviewed
-**Assessment:** Architecture risk of the shared helper rated **LOW — ship it**; the
-single-point-of-failure objection fails on its own terms because the 10 hooks are *already*
-centralized by byte-identical copy-paste, which is why one defect hit all 10 at once. The named
-discharge is the per-hook known-deny canary (Phase 7 assertion 7), which exercises each composed
-hook end-to-end rather than the helper in isolation. Findings folded into the plan: the helper must
-be sourced **fail-hard** (a `|| true` source reintroduces defect 2 one line higher); the aggregator
-exclusion must precede the first emit; the idiom-ban lint must land RED before the migration; the
-OpenHands mirror gets a parity **test**, not the helper; the ADR must be titled for the posture, not
-the parser. Its "P4 is 5 files" count was checked and corrected to 8 (P10).
-
-Domains assessed and **not** relevant: Product, Marketing, Sales, Finance, Legal, Operations,
-Support. Product/UX Gate tier **NONE** — the mechanical UI-surface override does not fire; no path
-in `Files to Create/Edit` matches `components/**/*.tsx`, `app/**/page.tsx`, or `app/**/layout.tsx`.
-
-### Security review (security-sentinel)
-
-**Status:** reviewed — **verdict on the first draft: do not merge as designed.** Four stated
-properties were falsified by measurement. All are resolved in this revision: P0-1 `explode` DoS
-(deleted; the shipped form is faster than the baseline), P0-2 `tojson` guard evasion (replaced with
-a type-assert + `ask`), P0-3 lone-surrogate disarm (scrub-and-retry, Phase 4), P1-1 odd-argc
-returning success with an inherited-environment value, P1-2 reject path not zeroing, P1-3 the false
-claim in institutional memory, P1-4 the two-tier posture + per-session counter + `jq`-missing ⇒
-`ask`, plus `SC2034`, the `printf -v` denylist, the jq-expr-literal-only note, and the 18-not-11
-blast radius. Its judgement that `bytes=` is not a meaningful oracle was accepted **and improved on**
-— the field now carries a fault classifier, which is more diagnostic and no more revealing.
-
-What it could **not** break, and which this revision must preserve: no code execution; no
-field-boundary forge; field-to-variable desync structurally unreachable (the program emits exactly
-2N records unconditionally, so a smuggled separator raises the count and trips the mismatch branch);
-truncated jq output fails safe; `JQ_COLORS`/`JQ_LIBRARY_PATH` are non-issues; 100k-deep nesting hits
-jq's own depth limit and returns a parse error rather than a crash.
+- **CTO** — shared-helper risk LOW; the single-point-of-failure objection fails because the hooks are
+  already centralized by byte-identical copy-paste. Folded: fail-hard source, telemetry-before-emit,
+  RED-lint-before-migration, mirror gets a parity test not the helper. Its "5 sibling files" count was
+  corrected to 8.
+- **security-sentinel** — v1 verdict **do not merge as designed**; four properties falsified. All
+  resolved. What it could not break and v3 preserves: no code execution, no boundary forge, desync
+  structurally unreachable, truncated jq output fails safe, deep nesting returns a parse error.
+- **silent-failure-hunter** — v1 verdict **"does not fix defect 2, it relabels it."** The decisive
+  finding (the orphan-gate exclusion deletes the only surface) is the reason Phase 1 now has four
+  steps and the `ask` is the primary channel.
+- **architecture-strategist** — three blocking findings (untraversable ⇒ ask, oversize ⇒ ask, cut the
+  counter), all applied, plus the ADR split, the kill switch, the responder split, and the exemption
+  list.
+- **test-design-reviewer** — scored v1's strategy **5.9/10 (D)**. Folded: assertion 2 must land RED in
+  Phase 2, the 18-hook canary was un-runnable for 11 hooks, six mutations were uncaught, AC1/T4/T7/T10
+  were vacuous, AC6's 10 MB clause was unreachable, AC11's suite count was weak, and the `echo` claim
+  did not reproduce.
+- **code-simplicity-reviewer** — measured a simplified alternative at the same performance envelope
+  with ~55% less new code. Its leading-status-token move and its "widen `ask` and the other cuts become
+  safe" argument are the spine of v3.
 
 ---
 
 ## GDPR / Compliance Gate
 
-The canonical regulated-surface regex does not match (no schema, migration, auth flow, API route, or
-`.sql`). The gate is invoked anyway because trigger (b) fires — the plan declares
-`brand-survival threshold: single-user incident`.
+Canonical regulated-surface regex does not match; invoked because trigger (b) fires
+(`single-user incident`).
 
-Assessment: the only data-movement change is one additional row type in the pre-existing local
-`.claude/.rule-incidents.jsonl`, which never leaves the operator's machine and is not a
-controller-to-processor transfer. The material control is that the design **excludes payload content
-by construction** — only a fault classifier and a length are written — so a malformed command
-carrying a credential is never persisted in cleartext. No new processing activity, no lawful-basis
-question, no Art. 30 entry. **Advisory only — not legal advice.**
+The only data movement is one row type in the pre-existing local `.claude/.rule-incidents.jsonl`,
+which never leaves the machine. The material control is structural: **failure-path values are emitted
+empty by the jq program**, so no rendering of attacker content exists to log. **This assessment is
+made against v3 specifically** — v1's Observability block logged a `tojson` rendering while its GDPR
+section claimed the opposite, so an array `["curl","-H","Authorization: Bearer sk-…"]` would have hit
+disk. That contradiction is resolved by construction, not by prose. No new processing activity, no
+lawful-basis question, no Art. 30 entry. **Advisory only — not legal advice.**
 
 ---
 
 ## Open Code-Review Overlap
 
-Ran `gh issue list --label code-review --state open --json number,title,body --limit 200` (62 open),
-then `jq --arg path <p> 'select(.body | contains($path))'` for each planned path.
-
-- `#2348: vitest: mock-factory export drift when mocked module gains new named export` — matched only
-  on `.claude/hooks/` appearing incidentally; it is a vitest mock-factory concern in
-  `apps/web-platform`. **Disposition: acknowledge.** Different concern, different runner, no shared
-  file. Stays open.
-
-No other open code-review issue names any file in `## Files to Create` or `## Files to Edit`.
+`gh issue list --label code-review --state open` (62 open), then a `contains($path)` scan per planned
+path. One incidental match — `#2348: vitest: mock-factory export drift…` — matched only because
+`.claude/hooks/` appears in its body. **Disposition: acknowledge**; different concern, different
+runner, no shared file. No other open code-review issue names any file in `Files to Create/Edit`.
 
 ---
 
@@ -739,16 +755,16 @@ No other open code-review issue names any file in `## Files to Create` or `## Fi
 
 | Risk | Mitigation |
 |---|---|
-| **Centralisation single point of failure** — a helper bug disarms all 18 at once | The current state is 18 copies of the same bug, so the copies bought nothing. Discharged by the per-hook known-deny canary (Phase 7 §7): a helper regression must pass 18 end-to-end canaries. Plus the mutation check that **deletes** the helper and requires RED |
-| **Fail-open remains reachable** — malformed JSON still disarms, now with a log line | Bounded, not eliminated: the per-session counter escalates to `ask` after 3 faults, turning an unlimited disarm oracle into a 3-shot one; `jq`-missing goes straight to `ask`; the surrogate class — the highest-probability real trigger — is *recovered* rather than tolerated. Recorded in ADR-155 |
-| **`ask` prompt storm** — an anomalous payload makes all 18 Bash hooks emit `ask` at once | **Open design question, routed to deepen-plan.** Default is all-emit (no ordering dependency, correct under any registration change). The alternative is a designated responder (`guardrails.sh` only, since it covers both matchers). /work must measure how CC renders 18 concurrent asks and fall back to designated-responder if unusable |
-| **Scope: 18 hooks + 2 mirrors in one P0 PR** | Two commits (eval sites, then `$( )` sites) keep review and bisect clean and allow the P0 half to be split if the suite destabilises. Shipping 10 alone is the higher-expected-cost mistake: it retires #7164 while the majority of Bash-path gates stay evadable by the payload the PR was written to stop |
-| **A future "cleanup" reintroduces `explode` or `read -d`** | AC6's 200 KB perf floor is asserted **in the suite**, not just in the PR body |
-| **jq version drift** | RS was chosen precisely to avoid the jq ≥ 1.7 `--raw-output0` dependency. Phase 0.2 measures RS emission on the installed jq as a hard precondition; T12 covers jq being absent |
-| **Parity guards trip** | `tests/hooks/test_openhands_guardrails.sh` and `pre-merge-rebase-parity.test.sh` are in the re-run list. Phase 6 touches the mirror deliberately, so the parity test is expected to need refreshed expectations — refreshed, never silenced |
-| **`hookeventname-coverage.test.sh` fails** — the new `ask` envelopes add `permissionDecision`s | Each must carry its paired `hookEventName: "PreToolUse"`, which is also a correctness requirement: `DEFER-DECISION-PAYLOAD-SHAPE.md` measured that without it CC **silently ignores the envelope and the tool runs** |
-| **Orphan gate fails on the first post-merge aggregation** | Phase 1 lands the exclusion first; AC10 asserts it against a fixture carrying the new row |
-| **Reintroduction** — nine commits copied this idiom into nine more hooks over four months | The idiom ban is the durable control. Prose did not stop copy-paste; a red CI check does |
+| **`ask` fatigue** | `ask` now fires only when the input cannot be fully parsed, which should be never in normal operation. The designated responder collapses 18 simultaneous asks to one. `SOLEUR_DISABLE_HOOK_INPUT_ASK=1` is the in-band escape hatch and disables escalation only |
+| **Designated responder is a hidden coupling** | Do Not Skim §9 + AC14: a `settings.json` assertion that every matcher containing a migrated hook also contains `guardrails.sh` |
+| **A helper bug disarms all 20** | The status quo is 20 copies of the same bug. Discharged by the 16 existing sibling suites plus the mutations that delete the helper *and* `incidents.sh` |
+| **Scope: 20 hooks + 2 mirrors across 3 commits** | Split by concern so the P0 half can ship alone. Shipping 10 retires #7164 while the majority of Bash-path gates stay evadable — a false-negative security close |
+| **The `source` cost (~9 ms × 18 per Bash call)** | Measured; AC8 pins +20%. The zero-extra-source option (append into the already-sourced `lib/incidents.sh`) is in Alternatives if the budget is missed |
+| **jq version drift** | RS avoids the jq ≥ 1.7 `--raw-output0` dependency; only jq ≥ 1.5 features are used. Phase 0.2 measures RS emission on the installed jq |
+| **CI wall-clock** | Every network collaborator is stubbed; the comparative perf assertion is replaced by a deterministic mechanism ban plus one loose 2× backstop |
+| **Parity guards trip** | Both are in the re-run list; commit 3 touches the mirror deliberately, so expectations are refreshed — never silenced |
+| **Aggregator red on the first post-merge run** | Phase 1 lands the exclusion *and* the replacement counter before any emit; AC5 asserts both |
+| **Reintroduction** — nine commits copied this idiom into nine hooks over four months | The idiom ban (any `eval`) is the durable control. Prose did not stop copy-paste; a red CI check does |
 
 ---
 
@@ -756,66 +772,81 @@ No other open code-review issue names any file in `## Files to Create` or `## Fi
 
 | Alternative | Verdict |
 |---|---|
-| **Keep `eval`, add `if type=="string" then . else tojson end`** (the issue's first suggestion) | **Rejected — falsified (P6).** Closes the RCE and leaves every anchored guard evaded by the same payload, with rc 0 and no incident. It would have retired #7164 on a false negative |
-| **NUL delimiter + `mapfile -d ''`** (the issue's second suggestion) | **Rejected as written (P7, P8).** jq drops `\u0000`; NUL needs `--raw-output0` (jq ≥ 1.7); `mapfile -d` needs bash ≥ 4.4; and both delimited-read mechanisms are 2.5× regressions at 200 KB. The *direction* — drop `eval` — is adopted |
-| **`explode`-based separator strip** (this plan's own first draft) | **Rejected — measured 8.55 s / 180 MB on a 10 MB payload vs 0.70 s / 43 MB for the code it replaces**, times 18 parallel hooks. A fix that hands the model a session-hang primitive is not a fix |
-| **`read -d` / `mapfile -d` on a process substitution** (this plan's own first draft) | **Rejected — measured.** Bash reads delimited records byte-at-a-time from a pipe: 14348 ms vs the baseline's 5643 ms at 200 KB |
-| **Per-field `VAR=$(… jq -r …)`** — the shape the OpenHands mirror uses | **Rejected.** Safe from RCE but N forks per hook per call, reverting #2253 across 18 hooks — and it still needs the type-assert, so it is strictly worse on both axes |
-| **Fail closed on parse failure** | **Rejected**, recorded in ADR-155. Denying on unparseable input turns any systematic malformation — and the surrogate class proves that is routine, not adversarial-only — into a bricked session with no in-band recovery, since editing the hook is itself gated by `guardrails.sh` on `Write\|Edit` |
-| **`permissionDecision: "ask"` for everything** | **Rejected.** Prompt fatigue on a transport fault the operator cannot act on. `ask` is reserved for the two conditions where the operator *can* act: an anomalous shape, and a missing `jq` |
-| **A runtime startup canary** (the issue's suggestion read literally) | **Rejected in the hot path, adopted in the suite.** Re-running a hook against a fixture on every tool call re-pays the cost #2253 removed; the same assurance at zero runtime cost is Phase 7 §7 |
-| **Converge the OpenHands mirror on the helper now** | **Rejected for this PR.** The mirror reads a different envelope and emits a different deny shape; making the helper envelope-agnostic is real abstraction bought with security urgency, on a file that is not RCE-vulnerable. It gets a minimal in-place guard + a parity test; convergence is a follow-up |
-| **A new AGENTS.md `cq-*` rule** | **Rejected.** It would fit (`B_ALWAYS=42547` of 46000), but a red CI check is fail-closed, costs zero always-loaded bytes, and prose did not stop nine copy-paste propagations. `hookeventname-coverage.test.sh` and `stub-argv-fidelity.test.sh` are the existing precedent for exactly this class |
-| **Fix only `guardrails.sh`** | **Rejected.** All 10 confirmed vulnerable by execution; 18 hooks fire per Bash call |
+| **Keep `eval` + `tojson` coercion** (issue suggestion 1) | **Rejected — falsified.** Closes the RCE, leaves every anchored guard evaded, rc 0, no incident |
+| **NUL + `mapfile -d ''`** (issue suggestion 2) | **Rejected as written.** jq drops NUL; `--raw-output0` needs jq ≥ 1.7; `mapfile -d` needs bash ≥ 4.4; both delimited-read forms are 2.5× regressions at 200 KB. The direction (drop `eval`) is adopted |
+| **`explode` separator strip** (v1) | **Rejected — 8.55 s / 180 MB on 10 MB**, ×18 parallel hooks |
+| **`read -d` / `mapfile -d`** (v1) | **Rejected — 14348 ms vs a 5643 ms baseline** at 200 KB |
+| **Variadic `<VAR> <jq-expr>` API** (v1) | **Rejected.** The fixed-accessor form is less code and structurally deletes program interpolation, odd argc, caller-supplied names, and `printf -v` failure |
+| **Per-field `ok`/`anom`/`err` tags** (v1) | **Rejected.** A leading `all(type=="string")` token computed before any value cannot be forged by a value, halves the slot count, and makes the RS scrub and the `tojson` rendering unnecessary — which also removes the GDPR contradiction |
+| **Scrub lone surrogates and run the guards armed** (v1) | **Rejected — measured.** `git ␦ stash` does not match the stash guard. Filed as a follow-up if surrogate rows actually appear |
+| **256 KB cap, oversize ⇒ fail-open** (v1) | **Rejected.** One-line padding disarm; fires on routine large `Write` payloads (this repo tracks an 806 KB lockfile); `${#input}` counts characters, not bytes |
+| **Per-session counter** (v1) | **Rejected — no session identity, circular key, falsified bound.** With no fail-open cell there is no oracle to bound |
+| **Fail closed on parse failure** | **Rejected**, recorded in ADR-156. Bricks the session with no in-band recovery |
+| **Fail open with a loud incident** (v1) | **Rejected.** Not loud: a `PreToolUse` hook is operator-blind, the incident is read by an aggregator later, and the operator whose gates just went dark learns nothing now |
+| **All-emit `ask`** | **Rejected.** Turns `jq_missing` into an unrecoverable loop — fixing `PATH` is itself a Bash call |
+| **Per-field `VAR=$(… jq -r …)`** — the mirror's shape | **Rejected.** N forks per hook per call, reverting #2253 across 20 hooks, and it still needs the type-assert |
+| **Runtime startup canary** (issue suggestion, read literally) | **Rejected in the hot path, adopted in the suite** — and largely already present: 16 hooks ship sibling suites asserting their characteristic decision |
+| **Append the helper into `lib/incidents.sh`** | **Not taken, recorded.** Removes the ~9 ms/invocation source cost at the price of coupling parsing to telemetry. Revisit only if AC8 is missed |
+| **Converge the OpenHands mirror now** | **Rejected for this PR.** Different envelope, different deny shape, not RCE-vulnerable |
+| **A new AGENTS.md `cq-*` rule** | **Rejected.** It would fit (`B_ALWAYS=42547` of 46000), but a red CI check is fail-closed and costs zero always-loaded bytes |
+| **Fix only `guardrails.sh`** | **Rejected.** All 10 confirmed vulnerable; 18 hooks fire per Bash call |
 
 ---
 
 ## Sharp Edges
 
-- **A plan whose `## User-Brand Impact` section is empty or placeholder fails `deepen-plan` Phase 4.6.**
-  Filled above.
-- **A fix that closes an RCE can open a guard evasion in the same line.** `tojson` makes an array
-  safe to `eval` and simultaneously makes it unmatchable by every anchored guard regex. When the
-  remedy for hostile input is *normalization*, always re-run the downstream matcher against the
-  normalized value — "it can no longer execute" is not "the guard still fires".
-- **Benchmark the hostile size, not the typical one.** The first draft's benchmark (small payloads,
-  200 iterations) said the design was *faster*; at 10 MB the same design was 12× slower and 4× fatter
-  than the code it replaced. Any hot-path claim in a security fix must be measured at the size an
-  attacker chooses, not the size a developer types.
-- **`read -d` on a pipe reads one byte per syscall.** Any "read NUL/RS-delimited fields" design is a
-  latent throughput regression; `$( )` capture + `IFS` word-splitting (with `set -f` and `IFS`
-  restored) is the fast form and works on bash 3.2.
-- **`jq` cannot emit `\u0000` from a string literal, and drops it from input string values.** Any
-  design reasoning "NUL is the natural delimiter because it cannot appear in the data" silently
-  produces one concatenated field unless it uses `--raw-output0`. Measured: `jq -j '"a","\u0000","b"'` → `ab`.
-- **`jq`'s exit code alone is not a parse-failure detector.** Empty stdin gives rc 0 with zero
-  output. The **field count** is the discriminator — and `try ... catch ""` is worse than useless
-  here, because it makes an unreadable field look like a clean empty parse. Catch to a *distinguished
-  value*, never to a value the happy path can produce.
-- **`while (( $# >= 2 ))` silently discards a trailing odd argument and returns success.** For a
-  variadic name/expr API this leaves a variable at its inherited environment value while reporting a
-  clean parse. Assert `$# % 2 == 0`.
-- **Every early `return 1` must zero the out-parameters** or the docblock lies and the caller aborts
-  under `set -u`. Keep `: "${VAR:=}"` at call sites even when the contract promises assignment — the
-  contract has already been wrong once.
-- **`printf -v` accepts `PATH`, `IFS`, `PS4`, `BASH_ENV`.** They pass any reasonable identifier regex.
-  A denylist is one line.
-- **`JSON.stringify` emits lone high surrogates and jq rejects the whole document.** A truncated
-  emoji anywhere in a payload disarms every hook that parses it. Lone *low* surrogates parse fine —
-  the asymmetry makes this easy to miss in testing.
-- **Do not run the reproducer from the repo root.** Its trailing words go to `touch`, creating
-  `TOOL_NAME=Bash` / `FILE_PATH=` / `SESSION_ID=` files in the CWD. AC13 catches it.
-- **`shellcheck` is not a CI gate for `.sh` in this repo**, and `bats` is not installed. Running
-  shellcheck is a manual step whose output belongs in the PR body; the test convention is a plain
-  bash script with hand-rolled counters.
-- **The `test-scripts` CI shard has no bun and no node.** The new contract test must be pure bash +
-  `jq` with the standard `command -v jq || SKIP` preflight.
-- **An absence-grep cannot prove a positive control is present.** "`eval` does not appear" passes
-  happily on a build where the type-assert was mutated out. AC2 (guard-still-armed) is the assertion
-  that actually fails.
-- **A `hookSpecificOutput` without `hookEventName` is silently ignored and the tool runs.** Every new
-  `ask` envelope must carry it — measured in `DEFER-DECISION-PAYLOAD-SHAPE.md`, and enforced by
-  `hookeventname-coverage.test.sh`.
-- **Source the helper fail-hard.** `source .../hook-input.sh || true` leaves `hook_parse_input`
-  undefined, the hook dies at the call, exits non-zero, and fails open — defect 2 reintroduced one
-  line higher, where no test looks. The mutation check that *deletes* the file is what proves this.
+- **A fix that closes an RCE can open a guard evasion in the same line.** Whenever the remedy for
+  hostile input is *normalization* — coercion, scrubbing, transliteration, case-folding — re-run the
+  downstream matcher against the normalized value. "It can no longer execute" is not "the guard still
+  fires". This plan committed the error twice (`tojson`, then the surrogate scrub) and caught it both
+  times only because a reviewer ran the real regex.
+- **Benchmark the hostile size, not the typical one** — and **a micro-benchmark is not the shipped
+  cost.** The design that won every micro cell was ~8-16% *slower* in situ, because an extra `source`
+  dominates a hook whose total is ~80 ms.
+- **A measurement that produces the same result with and without the mechanism is not evidence for
+  the mechanism.** v1 cited "all-empty case → 4 slots" as proof the sentinel was load-bearing; the
+  sentinel and the trailing separator are redundant *with each other*, so only removing both loses
+  data.
+- **A cheaper payload must not get a weaker posture.** v1 routed `{"tool_input":["a"]}` — one
+  character cheaper than the array — to fail-open while the array got `ask`.
+- **`read -d` on a pipe reads one byte per syscall.** `$( )` capture + `IFS` word-split is the fast
+  form and works on bash 3.2.
+- **`jq` cannot emit NUL from a string literal and drops it from input string values.**
+- **The field count, not jq's exit code, is the parse-failure detector** (empty stdin gives rc 0 with
+  no output) — but capture the code anyway, or "we shipped a broken hook" collapses into "the model
+  sent junk".
+- **`try … catch ""` makes an unreadable field indistinguishable from a clean empty one.** Catch to a
+  distinguished value.
+- **`local o=$IFS` kills the shell under `set -u` when `IFS` is unset** — silently, exiting non-zero,
+  so the tool proceeds. **`set +f` unconditionally *enables* globbing** for a caller that had it off.
+  And only a value that is **entirely** a glob (`*`) can catch a missing `set -f`; `rm *` cannot.
+- **A sourced library that calls `exit` terminates its caller invisibly**, is untestable without a
+  subshell, and silently no-ops inside `$( )` or a pipeline.
+- **A lower-layer helper must not call upward into functions it does not source** — `command not
+  found` under `set -euo pipefail` kills the hook and the tool proceeds.
+- **The emitter needs the very thing that is missing.** `emit_incident` builds its row with `jq -nc`,
+  so a `jq_missing` fault cannot be recorded through it, and its fallback sentinel carries no
+  `rule_id` — which every consumer is contractually required to discard.
+- **Adding an orphan-gate exclusion can delete the only surface a signal has.** The aggregator
+  left-joins over AGENTS.md ids. The correct precedent is `drops_jq_fail_count` — a first-class
+  summary counter with an stderr line. And **`event_type: warn` is invisible to compound**, which
+  filters to `deny|bypass`.
+- **A ban pinned to one spelling is not a ban.** `eval "$(` misses `eval $(…)`, `eval "$V"`, and
+  `eval "${x}"`.
+- **An absence assertion needs a positive control in the same run**, or it passes when the payload was
+  malformed, the path wrong, or stdin never arrived.
+- **"The suite went RED" is the least atomic mutation signal there is** — it cannot say which
+  protection was removed, and one loud failure masks a second silent one.
+- **Do not promote a 14% timing margin to a CI assertion.** Ban the mechanism deterministically; keep
+  the table in the PR body; use a 2× backstop if you want one.
+- **Most hooks cannot deny from a bare stdin payload** — 7 of 18 can; 8 need a git fixture, 3 need a
+  `gh` stub. A canary that skips the other 11 silently degrades to "fail-open, as expected".
+- **Where a hook's normal decision is already `ask`** (`kb-domain-allowlist-guard.sh`), assert
+  `permissionDecisionReason`, not the decision string.
+- **CI-on-`main` masks gates** (#5192) — every git fixture sets its branch explicitly and runs from
+  its own CWD.
+- **Do not run the reproducer from the repo root**, and use a fresh temp dir — stale markers either
+  false-fail or self-satisfy.
+- **`shellcheck` is not a CI gate for `.sh` here, `bats` is not installed, and the `test-scripts`
+  shard has no bun and no node.**
+- **Source the helper fail-hard.** The mutation that *deletes* the file is what proves it.
