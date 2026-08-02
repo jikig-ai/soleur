@@ -190,14 +190,14 @@ MUTATIONS: dict[str, tuple[str, str, str, str]] = {
     "M22 timeout telemetry moved BELOW the early exit": (
         HOOK,
         """if [[ "$RC" -eq 124 ]]; then
-  emit_incident net-issue-flow warn "net-issue-flow gate timed out after 25s — failed open" 2>/dev/null || true
+  emit_incident net-issue-flow-timeout warn "gate exceeded the 25s ceiling — failed open" 2>/dev/null || true
 fi
 
 [[ "$RC" -eq 1 ]] || exit 0""",
         """[[ "$RC" -eq 1 ]] || exit 0
 
 if [[ "$RC" -eq 124 ]]; then
-  emit_incident net-issue-flow warn "net-issue-flow gate timed out after 25s — failed open" 2>/dev/null || true
+  emit_incident net-issue-flow-timeout warn "gate exceeded the 25s ceiling — failed open" 2>/dev/null || true
 fi""",
         HOOK_TEST,
     ),
@@ -218,8 +218,8 @@ OUT="$("${TO[@]}" bash "$GATE" 2>&1)\"""",
     ),
     "M25 timeout warn uses an uncounted event_type": (
         HOOK,
-        'emit_incident net-issue-flow warn "net-issue-flow gate timed out',
-        'emit_incident net-issue-flow transient "net-issue-flow gate timed out',
+        'emit_incident net-issue-flow-timeout warn "gate exceeded',
+        'emit_incident net-issue-flow-timeout transient "gate exceeded',
         HOOK_TEST,
     ),
 }

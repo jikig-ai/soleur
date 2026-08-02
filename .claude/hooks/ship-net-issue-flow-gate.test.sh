@@ -190,11 +190,22 @@ else pass "RC=124 fails open (no deny)"; fi
 inc_file="$INC_ROOT/.claude/.rule-incidents.jsonl"
 warn_rows=0
 if [[ -r "$inc_file" ]]; then
-  warn_rows="$(jq -sr '[.[] | select(.rule_id == "net-issue-flow" and .event_type == "warn")] | length' \
+  warn_rows="$(jq -sr '[.[] | select(.rule_id == "net-issue-flow-timeout" and .event_type == "warn")] | length' \
     < "$inc_file" 2>/dev/null || echo 0)"
 fi
-if [[ "$warn_rows" -ge 1 ]]; then pass "RC=124 emits a counted warn row (not a silent pass)"
-else fail "RC=124 must emit rule_id=net-issue-flow event_type=warn; got $warn_rows rows"; fi
+if [[ "$warn_rows" -ge 1 ]]; then pass "RC=124 emits a counted warn row under its OWN rule_id"
+else fail "RC=124 must emit rule_id=net-issue-flow-timeout event_type=warn; got $warn_rows rows"; fi
+
+# The timeout must NOT reuse the shared `net-issue-flow` id: the gate script
+# emits that for every generic fail-open, so sharing it makes "API was down"
+# and "gate was killed" one indistinguishable number.
+shared_rows=0
+if [[ -r "$inc_file" ]]; then
+  shared_rows="$(jq -sr '[.[] | select(.rule_id == "net-issue-flow" and .event_type == "warn")] | length' \
+    < "$inc_file" 2>/dev/null || echo 0)"
+fi
+if [[ "$shared_rows" -eq 0 ]]; then pass "timeout warn does NOT reuse the shared net-issue-flow id"
+else fail "timeout must not emit under rule_id=net-issue-flow; got $shared_rows rows"; fi
 
 # A NON-timeout pass (RC=0) must NOT emit a timeout warn — otherwise the row
 # above is vacuous (it would fire on every invocation and prove nothing).
@@ -204,7 +215,7 @@ printf '{"tool_input":{"command":"gh pr ready"},"cwd":"/tmp"}\n' \
     > /dev/null 2>&1
 ok_warns=0
 if [[ -r "$INC_ROOT_OK/.claude/.rule-incidents.jsonl" ]]; then
-  ok_warns="$(jq -sr '[.[] | select(.rule_id == "net-issue-flow" and .event_type == "warn")] | length' \
+  ok_warns="$(jq -sr '[.[] | select(.rule_id == "net-issue-flow-timeout" and .event_type == "warn")] | length' \
     < "$INC_ROOT_OK/.claude/.rule-incidents.jsonl" 2>/dev/null || echo 0)"
 fi
 if [[ "$ok_warns" -eq 0 ]]; then pass "a clean pass emits NO timeout warn (the 124 row is discriminating)"

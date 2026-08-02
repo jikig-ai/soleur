@@ -121,8 +121,16 @@ RC=$?
 # deny/bypass/applied/warn, so a `transient` row would increment nothing and the
 # operator could not distinguish "gate never fired" from "gate timed out on
 # every invocation" — the same defect class this gate's own header condemns.
+# Its OWN rule_id, not the shared `net-issue-flow` one. The gate script already
+# emits `net-issue-flow` + warn for every generic fail-open (gh outage, empty
+# issue list), so sharing the id would conflate "the API was down" with "the
+# gate ran too long and was killed" — two conditions with different fixes,
+# collapsed into one number. That is the same "cannot tell never-fired from
+# fail-opened" defect this file's header condemns, one level down. Measured on
+# real local telemetry before the split: 8 warns, none of them separable.
+# Still `net-issue-flow*`-prefixed, so the aggregator's orphan exemption covers it.
 if [[ "$RC" -eq 124 ]]; then
-  emit_incident net-issue-flow warn "net-issue-flow gate timed out after 25s — failed open" 2>/dev/null || true
+  emit_incident net-issue-flow-timeout warn "gate exceeded the 25s ceiling — failed open" 2>/dev/null || true
 fi
 
 [[ "$RC" -eq 1 ]] || exit 0

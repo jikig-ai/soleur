@@ -7,7 +7,8 @@ Phase 4 net-flow filing gate has a work-list rather than a memory.
 
 ## DD-1 — `lint-agents-enforcement-tags.py` lints a file that no longer holds the tags
 
-**Status:** pre-existing, unrelated subsystem, NOT fixed in this PR → file at Phase 4.
+**Status:** pre-existing, unrelated subsystem, NOT fixed in this PR → **filed as #7172**
+(verified OPEN, `type/chore`, milestone `Post-MVP / Later`).
 
 The linter's argparse default is `["AGENTS.md"]`. ADR-151 made `AGENTS.md`
 pointer-only and moved every rule body — and therefore every `[skill-enforced:]`

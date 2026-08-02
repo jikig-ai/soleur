@@ -372,7 +372,13 @@ report=$(jq -n \
           # intended effect; BOTH rising means the gate is being routed around
           # rather than satisfied.
           gate_override_count: (($counts["net-issue-flow"].bypass_count // 0)),
-          gate_timeout_warn_count: (($counts["net-issue-flow"].warn_count // 0)),
+          # Distinct ids, deliberately. `net-issue-flow` + warn is the GENERIC
+          # fail-open (gh outage, empty issue list); the timeout has its own id.
+          # Sharing one id collapsed "the API was down" and "the gate was killed
+          # for running too long" into a single number with two different fixes
+          # — measured at 8 inseparable warns before the split.
+          gate_timeout_warn_count: (($counts["net-issue-flow-timeout"].warn_count // 0)),
+          gate_failopen_warn_count: (($counts["net-issue-flow"].warn_count // 0)),
           # Telemetry-drop sentinel counts (issue #3509). Per-class counts
           # default to 0 when the class has no occurrences. emit_incident
           # has no `flock_timeout` site (indefinite flock per plan-review),
