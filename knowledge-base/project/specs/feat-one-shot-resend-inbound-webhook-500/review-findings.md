@@ -275,3 +275,80 @@ review skill documents.
   pattern it violates — `resolve_host_id` bounds itself at 3s; `docker inspect` has no
   timeout (see the P2 timeout finding) and fires even when both consumers are overridden.
 
+
+---
+
+## test-design-reviewer (9th agent) — Test Quality Score 7.25/10, Grade C
+
+Every mutation below was run on a SANDBOX COPY (`cp -r` + a detached worktree); the live
+worktree was verified clean before and after. These are measured, not predicted.
+
+**The suite's dominant idiom is assert-on-source-TEXT** (`sed`-extract-and-`eval`,
+`grep -qF` an exact source string, `grep -oE` a value out of a sibling script). Text pins
+verify a string EXISTS, never that it is REACHABLE FROM THE ENTRY POINT. Five green
+mutations all left the pinned text intact while severing or reverting the behavior.
+
+### The structural cause
+The extractor at `inngest-inventory.test.sh:934` is
+`sed -n '/^INNGEST_APP_CONTAINER=/,/^}$/p'` — it **stops at the function's closing brace
+on line 158**. But the diff's behavior lands in three TOP-LEVEL assignments at `:162`
+(`INNGEST_PROBE_BASE`), `:164` (`GQL_URL`), `:168` (`INNGEST_HEALTH_URL`). Those lines are
+never sourced, never executed, and asserted by nothing except one indirect grep on `:168`.
+
+### Measured mutations that stayed GREEN
+
+| # | Mutation | Result |
+| --- | --- | --- |
+| **M1** | `:162` → hardcoded loopback (function kept, **caller disconnected**) | **120/0 + 181/181 GREEN** |
+| **M2** | `:164` `GQL_URL` → hardcoded loopback | **120/0 + 181/181 GREEN** |
+| **M6** | revert **BOTH** `ci-deploy.sh` sites to the outage value `10.0.1.40` | **120/0 + 181/181 GREEN** |
+| **M5** | add third/fourth sites as `https://…` and `"$LEGACY_INNGEST"` | **120/0 GREEN** |
+| **M11** | `:155` → port hardcoded 8288 (passthrough deleted) | **120/0 + 181/181 GREEN** |
+| **M7** | delete the bare CALL at `:1019` (function body kept) | **114 passed, 0 failed, EXIT=0** |
+| **T4** | diverge ONLY `ci-deploy.sh:2907` (prod), leave canary correct | **28/28 GREEN** |
+| **M8** | rename `ci-deploy.sh` away | cases 5+6 emit **ZERO** assertions, fail open |
+| M10 (control) | `:168` → hardcoded | **RED** ✓ |
+| M3 (control) | over-aggressive host mapping | **RED** ✓ (118/2) |
+| M4 (control) | literal third `-e …10.0.1.40` site | **RED** ✓ (119/1) |
+| T1/T2/T3 (controls) | each parity side alone, and lockstep | **RED** ✓ |
+
+**M2 is the sharpest:** `GQL_URL` is the PRIMARY probe (the functions query that decides
+the verdict); `/health` is only corroborating. The suite pins the secondary and leaves the
+primary unpinned.
+
+**M6 is the most alarming:** reverting the entire change under review leaves the shell
+suite green AND case 5 prints the reassuring line
+`PASS: ci-deploy.sh target (http://10.0.1.40:8288) resolves to a probe target (…)` —
+because `:999` asserts a port-shape glob `== http://*:8288`, not a value. The only thing
+pinning the correct value is a hardcoded string in a TypeScript file in a DIFFERENT
+workflow (`ci.yml` vs `infra-validation.yml`), a cross-language cross-workflow dependency
+no comment records.
+
+### My RED-first was run against the wrong mutant class
+I verified RED by DELETING the function. The three lines that actually carry the behavior
+never had a RED, and two of them survive reversion. Grade "First (TDD): 5/10" is correct.
+This is the documented trap — *a battery only covers what you mutate* — and my
+"mutation-proven" claim in commit `e95626825` is therefore overstated and must be
+corrected when the tests are fixed.
+
+### Required fixes
+- **P1-a** Add an end-to-end case that SOURCES the real file under the stub and asserts
+  `GQL_URL` + `INNGEST_HEALTH_URL`. Kills M1, M2 and M11 at once. (Interacts with the
+  P2 finding that the top-level invocation violates the file's own source-time invariant —
+  fix both together: move the derivation inside the `BASH_SOURCE` guard AND assert it.)
+- **P1-c** Replace the `== http://*:8288` glob at `:999` with a VALUE assertion.
+- **P2-a** Widen both greps to `INNGEST_BASE_URL=[^[:space:]\\]+` (drop the `http://`
+  anchor) so `https://`/`${VAR}`/quoted forms enter the population, and assert the match
+  COUNT is exactly the expected number, not just unique-count 1.
+- **P2-b** Add an assertion-count floor (`[[ "$PASS" -ge N ]]`) — this file has a stable
+  enumerable count of 120. Same for `inngest.test.sh`, which already computes `TOTAL` and
+  discards it.
+- **P2-c** `cron-inngest-cron-watchdog.test.ts:291` — use `matchAll` with `/g`, assert every
+  capture is identical, then compare to `resolveInngestHost(undefined)`.
+- **P3-a** Fixture `http://host.docker.internal:9288` (kills M11) and the portless case.
+- **P3-b** Add `else … FAIL` to the `[[ -r "$ci_deploy" ]]` wrappers at `:992` and `:1010`.
+
+### Kept as good
+The incident-anchored comments, the `docker` stub's `exit 64` on unexpected argv (right
+instinct, though security-sentinel proved the argv match itself is too loose), and
+`inngest.test.sh:588-591` documenting a MEASURED prior mutation escape.
