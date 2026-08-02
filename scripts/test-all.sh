@@ -588,6 +588,12 @@ if want_bun; then
   # so its strip.ts arm skip-gates there. Registering it here (bun guaranteed)
   # is what actually exercises strip.ts == strip.py == strip.sh in CI.
   run_suite "scripts/frontmatter-strip-parity" bash scripts/lib/frontmatter-strip.test.sh
+  # #7103 R3 — betterstack-assert-absence.test.sh lives in scripts/, which the scripts-shard
+  # glob below does NOT cover (that glob reaches scripts/lib/*.test.sh, not scripts/*.test.sh).
+  # Registered explicitly: nothing here auto-discovers it, and an unregistered gate is the
+  # #3366 class — a suite whose whole claim is "this cannot silently pass" running in zero
+  # runners.
+  run_suite "scripts/betterstack-assert-absence" bash scripts/betterstack-assert-absence.test.sh
 fi
 
 # Bash *.test.sh glob — scripts shard. (ci-deploy.test.sh runs in infra-validation.yml.)

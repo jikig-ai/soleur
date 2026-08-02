@@ -425,6 +425,50 @@ assert "R1-1.8b: ci-deploy.sh's LOG_TAG ('$CI_DEPLOY_TAG') IS in the Source 4 al
 assert "R1-1.8c: ci-deploy.sh emits via logger -t \"\\\$LOG_TAG\" (the allowlist entry is not dead)" \
   "grep -qE 'logger -t \"\\\$LOG_TAG\"' \"\$CI_DEPLOY_SH\""
 
+# --- #7103 R3 (4.5): the Source-4 POSITIVE CONTROL, tied to its wiring ---------------------
+#
+# betterstack-assert-absence.sh refuses to report `clean` unless it can read a canary back
+# through the sink for the host under test. That guarantee is only as good as the four links
+# below, and each one fails SILENTLY: a missing allowlist entry, a mismatched SyslogIdentifier,
+# a deleted emit, or an emit that runs inside the credential wrapper all produce the same
+# observable — no canary — which the helper then reports as `unshipping`. That is the correct
+# runtime behaviour, but it would be a permanent false alarm rather than a real signal, and the
+# operator would learn to ignore it (the review-fatigue class #6454 names).
+#
+# No new file and no mutation ceremony: these are one-line greps whose runtime backstop is
+# `unshipping` at the sink.
+ZOT_PROBE_SH="$SCRIPT_DIR/web-zot-consumer-probe.sh"
+ZOT_PROBE_UNIT="$SCRIPT_DIR/web-zot-consumer-probe.service"
+
+# (i) The probe's identifier is in Source 4's allowlist. include_matches.SYSLOG_IDENTIFIER is
+# exact-value equality, never a prefix match, so this is a byte-for-byte join.
+assert "R3-4.5a: web-zot-consumer-probe is in the Source 4 allowlist" \
+  "grep -qE '^[[:space:]]*\"web-zot-consumer-probe\",?\$' <<<\"\$HSJ\""
+
+# (ii) The unit sets that literal identifier. Derived from the unit rather than restated, so a
+# rename fails here instead of silently unshipping in prod.
+assert "R3-4.5b: the unit sets SyslogIdentifier=web-zot-consumer-probe (the join's other half)" \
+  "grep -qE '^SyslogIdentifier=web-zot-consumer-probe\$' \"\$ZOT_PROBE_UNIT\""
+
+# (iii) The probe still emits the marker the helper's control reads.
+assert "R3-4.5c: the probe emits SOLEUR_PROBE_CANARY (the allowlist entry is not dead)" \
+  "grep -q 'SOLEUR_PROBE_CANARY' \"\$ZOT_PROBE_SH\""
+
+# (iv) THE 4.3 INVARIANT. The emit site must be OUTSIDE the `doppler run` wrapper.
+#
+# The ExecStart runs the probe inside `doppler run --project soleur --config prd`, so on a dead
+# prd token doppler exits before the probe ever execs. A canary emitted only from there is
+# gated behind the exact credential whose failure it is used to rule out — and its absence then
+# reads as "vector is dead" rather than "the token is dead". That inversion is what made
+# #7095's telemetry unfalsifiable. One refactor collapsing ExecStartPre back into ExecStart
+# would silently restore it, so it is pinned here.
+assert "R3-4.5d: the canary is emitted from an ExecStartPre OUTSIDE the doppler wrapper" \
+  "grep -qE '^ExecStartPre=-?/usr/local/bin/web-zot-consumer-probe\.sh --canary-only\$' \"\$ZOT_PROBE_UNIT\""
+assert "R3-4.5e: that ExecStartPre line does NOT route through doppler run" \
+  "! grep -E '^ExecStartPre=' \"\$ZOT_PROBE_UNIT\" | grep -q 'doppler'"
+assert "R3-4.5f: the probe supports --canary-only before its credential FATAL guards" \
+  "[[ \"\$(grep -n -- '--canary-only' \"\$ZOT_PROBE_SH\" | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'ZOT_PULL_USER/ZOT_PULL_TOKEN unset' \"\$ZOT_PROBE_SH\" | head -1 | cut -d: -f1)\" ]]"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="
 if (( FAIL > 0 )); then
