@@ -48,7 +48,9 @@ starting -- those are requirements, not commentary.
   - [ ] 3.1.2 `set -uo pipefail` (NOT `-e`) inside `main`, so sourcing does not leak shell options into the harness
 - [ ] 3.2 Honour `SOLEUR_DISABLE_MEMORY_BACKSTOP=1` first; declare all four cap values in one `readonly` block
 - [ ] 3.3 Early silent exits with distinct logged reasons: no `busctl`; no bus socket (`[ -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus" ]`); bus probe fails; `no_jq` (R8)
-- [ ] 3.4 R2: take a per-PID `flock` around discover -> apply -> log, non-blocking with a short timeout; on failure log `concurrent_apply` and exit 0
+- [ ] 3.4 R2: take a per-PID `flock` around discover -> apply -> log, mirroring `.claude/hooks/agent-token-tee.sh` verbatim
+  - [ ] 3.4.1 `flock -w 5 -x <fd>`; on timeout log `concurrent_apply` and exit 0 (emit a drop sentinel -- a silent drop is the failure class this plan avoids everywhere else)
+  - [ ] 3.4.2 Canonicalize the repo root via `cd -P` + `pwd -P` before deriving the lock path -- a symlinked path otherwise yields TWO disjoint flock inodes and the lock silently does nothing (that hook's header records this)
 - [ ] 3.5 Discover the `claude` PID: label-anchored `PPid:` from `/proc/<pid>/status`, walk bounded to 8 hops
   - [ ] 3.5.1 Positive identity match (`$CLAUDE_CODE_EXECPATH` or `comm`); log which signal matched
   - [ ] 3.5.2 Treat an empty `readlink /proc/<pid>/exe` as no-match; adopt nothing on failure

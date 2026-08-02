@@ -21,6 +21,51 @@ type: feature
 > units are **transient**, created at runtime by the hook, and self-clean. See
 > [§ Infrastructure (IaC)](#infrastructure-iac). There are **zero operator steps**, pre- or post-merge.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-02
+**Panel:** `cto`, `cpo`, `code-simplicity-reviewer`, `spec-flow-analyzer`
+**Live-box probes run at plan time:** 21 (G1–G21), all on systemd 259, no sudo
+
+### Key improvements
+
+1. **A blocking gap was found and closed before `/work`:** `AttachProcessesToUnit` — the only
+   sanctioned way to move a live PID into an *existing* unit — **fails on a non-delegated scope**
+   (`Process migration not available on non-delegated units`). The re-entry re-sweep that D6 and D9
+   both promise was therefore **unimplementable as originally specified**, and the only other route
+   is #7151's single-writer violation. `Delegate=true` verified as the fix (G21).
+2. **A design-changing external interaction was found that the issue never mentions:**
+   `systemd-oomd` is active with `ManagedOOMMemoryPressure=kill`, swap is already at 94 %, and its
+   candidate set is the monitored cgroup's *direct children* — so creating `soleur.slice` would make
+   **the whole fleet a single oomd victim**. `ManagedOOMPreference=avoid` verified as accepted (G17),
+   with its runtime efficacy honestly recorded as **unvalidated** ([D7](#d7--systemd-oomd)).
+3. **A self-hosting hazard was closed:** `compact` fires *automatically*, so wiring `settings.json`
+   mid-implementation self-arms the hook against the `/work` session. Phase 4 now runs **last**, and
+   the previously-proposed mitigation is documented as a **no-op** (an `export` from a Bash tool call
+   never reaches a hook).
+4. **Caps were re-derived against measured concurrency** rather than idle RSS — per-session
+   4→6 GiB high / 6→7 GiB max, fleet 12→16 GiB high / 16→20 GiB max — after the engineering review
+   showed the originals sat *below* routine load (`claude` + `tsc` + `vitest` = 3.85 GiB in one scope).
+5. **The test-injection seam was deleted rather than defended.** A sourced-function + `main` guard
+   makes #7151's `TARGET_PID` defect **unrepresentable**, and removes an AC/scenario/mutant triple.
+6. **AC17 was added** — nothing in the plan asserted that the *real Claude Code runtime* ever invoked
+   the hook. AC1/AC2/AC12 and the live-arm evidence were jointly satisfiable with the runtime never
+   running it once: #7151 verbatim, one layer up.
+
+### New considerations discovered
+
+- `memory.events` counters are **cumulative and never reset**, so attribution must fire on *increase*
+  — a non-zero test re-emits the same post-mortem forever. It also makes the near-miss signal free,
+  which reversed an earlier deferral in this plan.
+- `T14` as first written was **self-defeating** (the scope self-cleans before `memory.events` can be
+  read) and `T16` was **impossible** (`memory.events` is read-only kernel state).
+- `AC11` was **self-referential** — collection and assertion shared one source of truth, so a
+  partial-collection mutant would have survived the entire battery.
+- 14 active worktrees on this box means mixed hook versions will **flap the shared slice** once caps
+  are tuned; the log must record `slice_*_before` for that to be detectable at all.
+
+---
+
 ## Overview
 
 On 2026-08-01 a one-line regex search against a single 21 kB markdown file reached **9.5 GB RSS in
@@ -739,6 +784,33 @@ the kill message itself, and a full-disable path. The threshold sizing correctio
 (*single-machine, multi-session*) is recorded in
 [§ User-Brand Impact](#user-brand-impact). The operator-digest proof-of-life line is scoped out with a
 tracking issue ([§ Non-Goals](#non-goals--out-of-scope)).
+
+---
+
+## Research Insights — Precedent Diff (deepen-plan Phase 4.4)
+
+Every pattern-bound behaviour this plan prescribes has an in-repo precedent. Each was `git grep`-ed
+and read; **none is novel**, which is the desired outcome — a novel pattern here would need
+scrutiny the plan does not budget for.
+
+| Prescribed behaviour | Canonical precedent | Adopt verbatim |
+|---|---|---|
+| **`flock` around the apply (R2)** | `.claude/hooks/agent-token-tee.sh` — `flock -w 5 -x 9` with an explicit **drop sentinel** on timeout (`_emit_drop_sentinel … "flock_timeout"`) and the comment *"never blocks tool dispatch"*. Its header also records that callers must canonicalize the repo root via `cd -P` + `pwd -P` so a symlinked path does not produce **two disjoint flock inodes**. | Yes — including the timeout value, the drop-sentinel-on-timeout shape (a silent drop is what the plan is trying to avoid everywhere else), and the `cd -P`/`pwd -P` canonicalization. This is a **stronger precedent than `skill-invocation-logger.sh`**, which appends under `flock` but has no timeout/drop path. |
+| **Operator-visible message channel** | `.claude/hooks/supabase-loopback-warn.sh` — `jq -n --arg m "$msg" '{systemMessage:$m}'` on **stdout**, with a header stating plain stderr is DISCARDED on an exit-0 hook. | Yes. |
+| **`jq`-absent fallback (R8)** | Same file — deliberately `exit 1` when `jq` is missing, *"because exiting 0 here would write the warning to the one sink documented not to work."* | Yes — this is the precedent that makes R8 a correction rather than a preference. |
+| **Log rotation** | `.claude/hooks/lib/log-rotation.sh` — `rotate_if_needed`, 5 MB / 30-day defaults, `LOG_ROTATION_DISABLE=1` kill switch, and **exit 0 for both no-op and successful rotation** (fire-and-forget safe). | Yes. |
+| **Portable `timeout` guard** | `.claude/hooks/supabase-loopback-warn.sh` — `TO=(); command -v timeout >/dev/null 2>&1 && TO=(timeout 10)`, with a header recording that hardcoding `timeout` made the hook exit 127 on macOS and go **silently dark**. | Yes, at 5 s. |
+| **Index-mode exec-bit gate** | `scripts/followthrough-exec-bit.test.sh` — `git ls-files -s`, empty-listing guard, cardinality floor. | Structure yes; **cardinality mechanism no** — replaced with the three-way check in AC1, because a floor cannot catch a filter that drops one hook event. |
+| **cgroup / OOM telemetry reads** | `scripts/followthroughs/zot-restart-plateau-6288.sh` reads `memory.max` and `memory.events`; `scripts/zot-restart-loop-alarm.sh` parses cgroup OOM signals. | Yes — `memory.events` as an OOM-attribution source is established practice in this repo. |
+
+**ADR ordinal re-derived from freshly-fetched `origin/main`** (not the branch base, which is the
+stale-pick failure mode): highest is **ADR-154**, so **ADR-155 is free**. Still provisional —
+`/ship`'s collision gate re-verifies at merge.
+
+**Verified live at deepen time:** every cited issue resolves and carries the state the plan claims
+(#7151 CLOSED, #7164/#7165/#7166 OPEN, #2348 OPEN); the single AGENTS rule ID cited
+(`hr-all-infrastructure-provisioning-servers`) is ACTIVE in `AGENTS.md`; all five `## Observability`
+fields are populated and no `discoverability_test.command` uses `ssh`.
 
 ---
 
