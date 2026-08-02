@@ -139,12 +139,25 @@ a queue growing +144/week.
 Resolve via one of:
   (a) Fix inline — fold the filed work into THIS PR. The cost-of-filing
       auto-flip (<=100 lines AND <=4 files) already covers most findings.
+      NOTE this is a SIZE test: if the blocker is AUTHORITY (an operator-only
+      credential or production decision), (a) does not apply however small the
+      diff would be. See (d).
   (b) Close something — if a filed issue supersedes an open one, close it and
       add the 'Closes #N' keyword to the PR body.
-  (c) Override (legitimate architectural-pivot deferral) — add
-      '<!-- gate-override: net-issue-flow -->' plus a one-line justification
-      per filed issue to the PR body, or run with
-      SOLEUR_SKIP_NET_ISSUE_FLOW_GATE=1.
+  (c) Override — add '<!-- gate-override: net-issue-flow -->' plus a one-line
+      justification per filed issue to the PR body, or run with
+      SOLEUR_SKIP_NET_ISSUE_FLOW_GATE=1. This is the GENERAL hatch, not an
+      architectural-pivot-only one: pivots qualify, and so do filings forced by
+      a SKILL.md phase mandate with no rule id, and discovered defects in
+      another subsystem that must stay separate. State the real reason — a
+      hatch that must be mis-described to be used gets used without being read.
+  (d) Mandated filing — the issue was REQUIRED by a rule carrying
+      [mandates-filing] in AGENTS.rules.md. Put 'Mandated-By: <rule-id>' on its
+      own line in the ISSUE body, a 'Tracks #<issue>' companion in the PR body,
+      and leave the issue OPEN. The gate output above lists the rules that
+      qualify; if yours is not listed, (d) is unavailable — use (c) and say so
+      rather than guessing an id. The exemption never reduces the Filing:
+      count; it is reported on its own line.
 
 See ship/SKILL.md section 'Net-Issue-Flow Gate (blocking)'."
 

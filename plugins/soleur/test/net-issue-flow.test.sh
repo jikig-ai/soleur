@@ -23,7 +23,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 GATE="$REPO_ROOT/plugins/soleur/skills/ship/scripts/net-issue-flow.sh"
 
 fails=0
-pass() { printf '  ok   %s\n' "$1"; }
+# `passes` exists for the anti-vacuity floor at the bottom. Before it, pass()
+# only printed, so there was no count to floor against and a deleted case was
+# indistinguishable from a case that never existed.
+passes=0
+pass() { printf '  ok   %s\n' "$1"; passes=$((passes + 1)); }
 fail() { printf '  FAIL %s\n' "$1"; fails=$((fails + 1)); }
 
 if [[ ! -x "$GATE" ]]; then
@@ -54,9 +58,57 @@ case "$*" in
 esac
 STUB
 chmod +x "$WORK/bin/gh"
+
+# ---------------------------------------------------------------------------
+# Stub git. The exemption derives its qualifying rule-id set from the MERGE-BASE
+# copy of the corpus, so `merge-base` and `show` are the seam.
+#
+# Shape follows .claude/hooks/session-rules-loader.test.sh, NOT the `gh` stub
+# above: REAL_GIT is resolved BEFORE the shim goes on PATH, the heredoc is
+# UNQUOTED so it interpolates, and every non-targeted subcommand delegates via
+# `exec`. The gh stub's quoted-heredoc shape cannot be copied here because the
+# gate still needs real git for `rev-parse --show-toplevel`.
+#
+# Every invocation is recorded so the "must never read the staged index"
+# assertion can be made positively: with a bare `:path`, `git show` reads the
+# AUTHOR'S OWN staged copy, which returns rc=0 and a full id list — a fail-open
+# that is non-empty, so no empty-set warning would ever fire.
+# ---------------------------------------------------------------------------
+REAL_GIT="$(command -v git)"
+cat > "$WORK/bin/git" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "\${GIT_CALLS:-/dev/null}"
+case "\$*" in
+  "merge-base"*)
+    if [[ "\${MB_FAIL:-0}" == "1" ]]; then
+      echo "stub git: simulated merge-base failure" >&2
+      exit 128
+    fi
+    printf '%s\n' "\${MB_SHA_FIXTURE:-abc1234def5678}"
+    ;;
+  "show "*":AGENTS.rules.md")
+    # A bare ':AGENTS.rules.md' (no ref) is the index read. Serve it a DISTINCT,
+    # fully-tagged corpus so that if the gate ever falls back to it the
+    # exemption would WRONGLY succeed -- making the fail-open detectable as a
+    # behaviour change, not just as a missing file.
+    case "\$*" in
+      "show :AGENTS.rules.md") cat "\${INDEX_CORPUS_FILE:-/dev/null}" ;;
+      *)                       cat "\${CORPUS_FILE:-/dev/null}" ;;
+    esac
+    ;;
+  *) exec "$REAL_GIT" "\$@" ;;
+esac
+STUB
+chmod +x "$WORK/bin/git"
+
 export PATH="$WORK/bin:$PATH"
 export GH_CALLS="$WORK/gh-calls"
+export GIT_CALLS="$WORK/git-calls"
 export PR_CREATED_AT_FIXTURE="2026-07-20T10:00:00Z"
+
+# Keep test telemetry out of the operator's real .claude/.rule-incidents.jsonl.
+export INCIDENTS_REPO_ROOT="$WORK/incidents-root"
+mkdir -p "$INCIDENTS_REPO_ROOT"
 
 # Build an issue-list fixture with N issues that bare-reference PR #999.
 mk_issues() {
@@ -68,9 +120,20 @@ mk_issues() {
   printf '%s]\n' "$out"
 }
 
+# Corpus defaults. Declared up-front (not just exported at call time) so `set -u`
+# never bites and every pre-exemption case runs against a REALISTIC corpus rather
+# than an empty one -- an empty corpus would make the original 14 cases pass for
+# the wrong reason once the exemption exists.
+export CORPUS_FILE="$WORK/corpus-default"
+export INDEX_CORPUS_FILE="$WORK/corpus-index"
+export MB_FAIL=0
+export MB_SHA_FIXTURE="abc1234def5678"
+
 run_gate() {
   : > "$GH_CALLS"
-  ( export PR_BODY_FILE ISSUE_LIST_FILE; "$GATE" 999 ) > "$WORK/out" 2>&1
+  : > "$GIT_CALLS"
+  ( export PR_BODY_FILE ISSUE_LIST_FILE CORPUS_FILE INDEX_CORPUS_FILE MB_FAIL MB_SHA_FIXTURE
+    "$GATE" 999 ) > "$WORK/out" 2>&1
   CASE_RC=$?
 }
 
@@ -274,10 +337,281 @@ else
   fail "cost-of-filing-* would be orphans -> aggregator exit 5"
 fi
 
+# ===========================================================================
+# Cases 15+ — the mandated-filing exemption.
+#
+# Two repo gates were in genuine conflict: wg-block-pr-ready-on-undeferred-
+# operator-steps REQUIRES a tracking issue for a bare operator action, and this
+# gate BLOCKED the PR for filing it. Neither documented exit applied ("fix
+# inline" is a SIZE test; "close something" needs a superseded issue), leaving
+# only the blanket override — whose help text called itself an
+# architectural-pivot deferral. An escape hatch that requires mis-describing the
+# escape gets taken reflexively, which is what makes the gate advisory.
+#
+# The exemption is deliberately NOT self-serve: the claim must name a rule id
+# that carries [mandates-filing] in the MERGE-BASE corpus. Everything below
+# tests BOTH directions — fixtures on one side only cannot see an exemption
+# that is too permissive, which is the failure mode that matters for a gate.
+# ===========================================================================
+
+# Realistic corpus: two tagged gated rules, one tagged UNGATED-prefix rule
+# (cq-*, which the ADR-092 ack gate does not cover, so the exemption must not
+# honour it), and one untagged rule that genuinely restricts filing.
+cat > "$WORK/corpus-default" <<'CORPUS'
+## Hard Rules
+
+- Investigate any non-zero exit [id: hr-when-a-command-exits-non-zero-or-prints]. Never treat a failed step as success.
+
+## Workflow Gates
+
+- When deferring a capability, default to documenting it in-place [id: wg-when-deferring-a-capability-create-a] [mandates-filing]. File an issue ONLY when the triple test passes.
+- `/ship` Phase 5.5 blocks PR-ready without `Tracks #NNNN` companions [id: wg-block-pr-ready-on-undeferred-operator-steps] [mandates-filing] [skill-enforced: ship Phase 5.5 Undeferred Operator-Step Gate]. **Why:** #4066.
+- Defer only after inline triage [id: wg-defer-only-after-inline-triage]. This rule RESTRICTS filing; it must never be exempt.
+- An id that exists ONLY in this fixture, never in the shipped corpus [id: wg-fixture-only-mandating-rule] [mandates-filing].
+
+## Code Quality
+
+- A cq rule that carries the marker on an ACK-UNGATED prefix [id: cq-tagged-but-ungated-prefix] [mandates-filing]. Must not be derived.
+CORPUS
+
+# The staged-index corpus. Distinct on purpose: it tags the id used by the
+# merge-base-unresolvable case, so a fallback to `git show :path` would flip
+# that case from BLOCKED to exempt and the assertion below would catch it.
+cat > "$WORK/corpus-index" <<'CORPUS'
+- Anything the author staged [id: wg-block-pr-ready-on-undeferred-operator-steps] [mandates-filing].
+- Anything at all [id: wg-self-granted-by-the-index] [mandates-filing].
+CORPUS
+
+MANDATED="wg-block-pr-ready-on-undeferred-operator-steps"
+
+# One issue referencing PR #999, with a controllable body/state.
+mk_issue() { # $1=number  $2=body  $3=state (omit key entirely if literal ABSENT)
+  local num="$1" body="$2" state="$3"
+  if [[ "$state" == "ABSENT" ]]; then
+    jq -nc --arg b "$body" --argjson n "$num" \
+      '{number:$n, body:$b, createdAt:"2026-07-20T12:00:00Z"}'
+  else
+    jq -nc --arg b "$body" --arg s "$state" --argjson n "$num" \
+      '{number:$n, body:$b, state:$s, createdAt:"2026-07-20T12:00:00Z"}'
+  fi
+}
+set_issues() { printf '%s\n' "$1" | jq -s '.' > "$WORK/issues-dyn"; ISSUE_LIST_FILE="$WORK/issues-dyn"; export ISSUE_LIST_FILE; }
+
+# Body of a well-formed mandated filing: the claim on its own line, plus the
+# bare `#999` back-reference that puts it in the FILED set at all.
+claim_body() { printf 'Follow-up from #999 work.\n\nMandated-By: %s\n' "$1"; }
+
+# PR body with the companion the mandating rule already requires.
+PRB_OK="$WORK/prb-ok"
+{ printf 'Operator step deferred.\n\n'; printf 'Tracks #7001\n'; } > "$PRB_OK"
+
+# --- Direction 1: a validly-mandated filing IS exempt -----------------------
+PR_BODY_FILE="$PRB_OK"; export PR_BODY_FILE
+set_issues "$(mk_issue 7001 "$(claim_body "$MANDATED")" OPEN)"
+run_gate
+if [[ "$CASE_RC" -eq 0 ]]; then pass "validly-mandated filing is EXEMPT (exit 0)"
+else fail "mandated filing should be exempt; exit $CASE_RC / $(tr '\n' '|' < "$WORK/out")"; fi
+
+# The report must stay honest: the filing is still COUNTED, and the exemption is
+# shown on its own line naming the rule. An exemption that silently reduces
+# `Filing:` is worse than the blanket override, because the override at least
+# leaves a marker in the PR body.
+if grep -qE '^  Filing:[[:space:]]+1\b' "$WORK/out"; then pass "Filing: keeps its true count (1), not reduced by the exemption"
+else fail "Filing: must remain 1; got: $(tr '\n' '|' < "$WORK/out")"; fi
+if grep -qE "^  Exempt:[[:space:]]+1\b.*#7001.*$MANDATED" "$WORK/out"; then pass "Exempt: line names the issue AND the mandating rule"
+else fail "Exempt: line must name #7001 and $MANDATED; got: $(tr '\n' '|' < "$WORK/out")"; fi
+if grep -qE '^  Net:[[:space:]]+\+0\b' "$WORK/out"; then pass "Net: +0 after exemption (1 filed, 1 exempt, 0 closing)"
+else fail "expected 'Net: +0'; got: $(tr '\n' '|' < "$WORK/out")"; fi
+if grep -qE "^  Mandating rules:[[:space:]]+3[[:space:]]+\(.*$MANDATED.*merge-base abc1234" "$WORK/out"; then
+  pass "report prints the derived ids AND the merge-base (not just a count)"
+else fail "must print 'Mandating rules: 3 (<ids>, merge-base <sha>)'; got: $(tr '\n' '|' < "$WORK/out")"; fi
+
+# The corpus MUST come from the merge-base, not the worktree. Without a fixture
+# id absent from the shipped corpus, a gate that read `AGENTS.rules.md` directly
+# would satisfy every other assertion here -- measured: that mutation SURVIVED
+# the first battery. This case is the only thing that distinguishes them, and it
+# also pins the same-PR self-grant: a PR cannot tag a rule and exempt itself,
+# because its own tag is not at the merge-base yet.
+PRB_FIXONLY="$WORK/prb-fixonly"; printf 'Deferred.\n\nTracks #7003\n' > "$PRB_FIXONLY"
+PR_BODY_FILE="$PRB_FIXONLY"; export PR_BODY_FILE
+set_issues "$(mk_issue 7003 "$(printf 'From #999.\n\nMandated-By: wg-fixture-only-mandating-rule\n')" OPEN)"
+run_gate
+if [[ "$CASE_RC" -eq 0 ]]; then pass "corpus is read from the MERGE-BASE, not the worktree"
+else fail "merge-base-only rule id was not honoured => gate is reading some other corpus; exit $CASE_RC"; fi
+PR_BODY_FILE="$PRB_OK"; export PR_BODY_FILE
+set_issues "$(mk_issue 7001 "$(claim_body "$MANDATED")" OPEN)"
+run_gate
+
+# CRLF regression pin. GitHub returns CRLF for web-authored bodies; a `[ \t]`-only
+# anchor fails closed on a CORRECT claim, silently and permanently.
+set_issues "$(mk_issue 7001 "$(printf 'Follow-up from #999.\r\n\r\nMandated-By: %s\r\n' "$MANDATED")" OPEN)"
+run_gate
+if [[ "$CASE_RC" -eq 0 ]]; then pass "CRLF-bodied claim is exempt (\\r tolerated)"
+else fail "CRLF body broke the claim match; exit $CASE_RC"; fi
+
+# --- Direction 2: everything else is NOT exempt -----------------------------
+# Each of these must BLOCK. Fixtures all on the positive side cannot detect an
+# exemption that is too permissive, which is the direction that matters here.
+neg() { # $1=label  $2=issue-json  [$3=pr-body-file]
+  local label="$1" issue="$2" prb="${3:-$PRB_OK}"
+  PR_BODY_FILE="$prb"; export PR_BODY_FILE
+  set_issues "$issue"
+  run_gate
+  if [[ "$CASE_RC" -eq 1 ]]; then pass "NOT exempt: $label"
+  else fail "NOT exempt expected (exit 1) for $label; got exit $CASE_RC / $(tr '\n' '|' < "$WORK/out")"; fi
+}
+
+neg "unknown rule id"            "$(mk_issue 7001 "$(claim_body wg-does-not-exist-anywhere)" OPEN)"
+neg "real but UNTAGGED rule id"  "$(mk_issue 7001 "$(claim_body wg-defer-only-after-inline-triage)" OPEN)"
+neg "tagged rule on an ack-UNGATED prefix (cq-*)" "$(mk_issue 7001 "$(claim_body cq-tagged-but-ungated-prefix)" OPEN)"
+neg "prefix-extension of a tagged id"  "$(mk_issue 7001 "$(claim_body "${MANDATED}-v2")" OPEN)"
+neg "malformed claim (no id)"    "$(mk_issue 7001 "$(printf 'Follow-up from #999.\n\nMandated-By:\n')" OPEN)"
+neg "two Mandated-By lines"      "$(mk_issue 7001 "$(printf 'Follow-up #999.\n\nMandated-By: %s\nMandated-By: wg-bogus\n' "$MANDATED")" OPEN)"
+neg "claim inside a fenced block" "$(mk_issue 7001 "$(printf 'Follow-up #999.\n\n```\nMandated-By: %s\n```\n' "$MANDATED")" OPEN)"
+neg "claim mentioned mid-prose"  "$(mk_issue 7001 "$(printf 'Follow-up #999. It is Mandated-By: %s per the rule.\n' "$MANDATED")" OPEN)"
+neg "CLOSED issue"               "$(mk_issue 7001 "$(claim_body "$MANDATED")" CLOSED)"
+neg "absent state field"         "$(mk_issue 7001 "$(claim_body "$MANDATED")" ABSENT)"
+
+# Companion-side negatives (valid claim, PR body is the defect).
+PRB_NONE="$WORK/prb-none"; printf 'No companion here.\n' > "$PRB_NONE"
+PRB_BARE="$WORK/prb-bare"; printf 'Mentions #7001 with no keyword.\n' > "$PRB_BARE"
+PRB_FENCED="$WORK/prb-fenced"; printf 'Quoting the gate:\n\n```\nTracks #7001\n```\n' > "$PRB_FENCED"
+PRB_LONGER="$WORK/prb-longer"; printf 'Tracks #70010\n' > "$PRB_LONGER"
+
+neg "no companion in the PR body"        "$(mk_issue 7001 "$(claim_body "$MANDATED")" OPEN)" "$PRB_NONE"
+neg "bare #N mention is not a companion" "$(mk_issue 7001 "$(claim_body "$MANDATED")" OPEN)" "$PRB_BARE"
+neg "companion inside a fenced block"    "$(mk_issue 7001 "$(claim_body "$MANDATED")" OPEN)" "$PRB_FENCED"
+neg "Tracks #70010 does not satisfy #7001" "$(mk_issue 7001 "$(claim_body "$MANDATED")" OPEN)" "$PRB_LONGER"
+
+# --- FR4: an UNBALANCED fence must fail CLOSED ------------------------------
+# The two sibling ship gates end their fence-stripper with
+# `END { if (in_fence) exit 2 }`; this gate's had no such arm, so an unbalanced
+# fence silently degraded to "strip nothing after the opener". Discriminating
+# fixture: the claim sits BEFORE the unclosed fence, so a fail-OPEN stripper
+# keeps it (exempt) and a fail-CLOSED one discards everything (blocked).
+PRB_UNBAL="$WORK/prb-unbal"; printf 'Deferred.\n\nTracks #7004\n' > "$PRB_UNBAL"
+PR_BODY_FILE="$PRB_UNBAL"; export PR_BODY_FILE
+set_issues "$(mk_issue 7004 "$(printf 'From #999.\n\nMandated-By: %s\n\n```\nunclosed fence\n' "$MANDATED")" OPEN)"
+run_gate
+if [[ "$CASE_RC" -eq 1 ]]; then pass "unbalanced fence in the ISSUE body fails CLOSED"
+else fail "unbalanced fence must fail closed; got exit $CASE_RC"; fi
+
+# Same property on the PR-body side, where the companion lives.
+PRB_UNBAL2="$WORK/prb-unbal2"; printf 'Tracks #7005\n\n```\nunclosed\n' > "$PRB_UNBAL2"
+PR_BODY_FILE="$PRB_UNBAL2"; export PR_BODY_FILE
+set_issues "$(mk_issue 7005 "$(claim_body "$MANDATED")" OPEN)"
+run_gate
+if [[ "$CASE_RC" -eq 1 ]]; then pass "unbalanced fence in the PR body fails CLOSED"
+else fail "unbalanced PR-body fence must fail closed; got exit $CASE_RC"; fi
+
+# --- The self-grant guard ---------------------------------------------------
+# With merge-base unresolvable, a bare `git show :AGENTS.rules.md` reads the
+# AUTHOR'S STAGED INDEX -- returning rc=0 and a full id list, so the read
+# "succeeds" and no empty-set warning fires. That is a fail-open that lets a PR
+# grant itself the exemption it is introducing. Two assertions, because the
+# behavioural one alone would also pass if the gate read the index and the index
+# happened not to match.
+PR_BODY_FILE="$PRB_OK"; export PR_BODY_FILE
+set_issues "$(mk_issue 7001 "$(claim_body "$MANDATED")" OPEN)"
+MB_FAIL=1; export MB_FAIL
+run_gate
+MB_FAIL=0; export MB_FAIL
+if [[ "$CASE_RC" -eq 1 ]]; then pass "unresolvable merge-base => NOT exempt (fails CLOSED)"
+else fail "merge-base failure must fail closed; got exit $CASE_RC"; fi
+if grep -qE '^show :AGENTS\.rules\.md$' "$GIT_CALLS"; then
+  fail "gate read the STAGED INDEX via a bare ':path' -- author-controlled self-grant"
+else pass "gate never issues a bare ':path' git show (index is not read)"
+fi
+if grep -qiE 'mandating rules: 0|corpus' "$WORK/out"; then pass "corpus-read failure is announced in the report"
+else fail "corpus read failure must be visible; got: $(tr '\n' '|' < "$WORK/out")"; fi
+
+# --- Rejection causes are named, not collapsed ------------------------------
+# Six distinct causes otherwise render identically as "Exempt: 0", which makes
+# the gate undebuggable exactly when an agent is blocked and guessing.
+set_issues "$(mk_issue 7002 "$(claim_body wg-defer-only-after-inline-triage)" OPEN)"
+run_gate
+if grep -qE '^  Rejected:.*#7002.*wg-defer-only-after-inline-triage' "$WORK/out"; then
+  pass "Rejected: line names the issue and the offending claim"
+else fail "expected a Rejected: line naming #7002; got: $(tr '\n' '|' < "$WORK/out")"; fi
+
+# --- The blanket override is untouched (FR7) --------------------------------
+# It must keep working unchanged for the cases the exemption cannot cover --
+# most filing sites are SKILL.md phase mandates with no rule id to tag.
+PR_BODY_FILE="$WORK/prb-override"; export PR_BODY_FILE
+{ printf 'Architectural pivot.\n'; printf '<!-- gate-override: net-issue-flow -->\n'; } > "$PR_BODY_FILE"
+set_issues "$(mk_issue 7001 "$(claim_body wg-does-not-exist-anywhere)" OPEN)"
+run_gate
+if [[ "$CASE_RC" -eq 0 ]]; then pass "blanket override still passes an unexemptable filing"
+else fail "blanket override must remain functional; got exit $CASE_RC"; fi
+
+# --- TR7a: the SHIPPED corpus derives exactly the two intended ids ----------
+# Runs against the real worktree AGENTS.rules.md, so it proves the tag actually
+# shipped. (The merge-base set is necessarily empty until this PR merges -- an
+# assertion against merge-base here would be unsatisfiable by construction.)
+derived="$(grep -F '[mandates-filing]' "$REPO_ROOT/AGENTS.rules.md" \
+  | grep -oE '\[id: (hr|wg)-[a-z0-9-]+\]' | sed -E 's/^\[id: (.*)\]$/\1/' | sort -u | tr '\n' ' ')"
+if [[ "$derived" == "wg-block-pr-ready-on-undeferred-operator-steps wg-when-deferring-a-capability-create-a " ]]; then
+  pass "worktree corpus derives exactly the 2 intended ids"
+else fail "worktree corpus derived: '$derived'"; fi
+
+# --- Help text (FR8) --------------------------------------------------------
+# Asserted against the gate's OWN BLOCKED OUTPUT, not against its source. A
+# source grep for 'Mandated-By:' also matches the jq predicate and the header
+# comments, so it stays green with the entire remedy block deleted -- measured:
+# that mutation SURVIVED the first battery.
+PR_BODY_FILE="$PRB_NONE"; export PR_BODY_FILE
+set_issues "$(mk_issue 7001 "$(claim_body "$MANDATED")" OPEN)"
+run_gate
+if [[ "$CASE_RC" -eq 1 ]]; then pass "remedy fixture actually blocks (positive control)"
+else fail "remedy fixture must block to print the remedy; got exit $CASE_RC"; fi
+if grep -qE '^  \(d\) Mandated filing' "$WORK/out"; then pass "BLOCKED output offers the (d) mandated-filing exit"
+else fail "blocked output must offer (d); got: $(tr '\n' '|' < "$WORK/out")"; fi
+if grep -qE '^        Mandated-By: <rule-id>' "$WORK/out"; then pass "BLOCKED output shows the literal claim form"
+else fail "blocked output must show 'Mandated-By: <rule-id>'"; fi
+if grep -qE '^      Rules that currently qualify:' "$WORK/out" \
+   && grep -qE "^        $MANDATED\$" "$WORK/out"; then
+  pass "BLOCKED output enumerates the qualifying rules (no guessing required)"
+else fail "blocked output must list the qualifying ids; got: $(tr '\n' '|' < "$WORK/out")"; fi
+if grep -qE 'NOT in that list.*unavailable|unavailable to you' "$WORK/out"; then
+  pass "BLOCKED output names the untagged-rule dead end"
+else fail "blocked output must tell an untagged-rule agent that (d) is unavailable"; fi
+if ! grep -qi 'architectural-pivot deferral' "$WORK/out"; then
+  pass "BLOCKED output no longer frames the override as architectural-pivot-only"
+else fail "blocked output still calls the override an 'architectural-pivot deferral'"; fi
+if ! grep -qi 'architectural-pivot deferral' "$GATE"; then
+  pass "gate source carries no 'architectural-pivot deferral' framing"
+else fail "gate still calls the override an 'architectural-pivot deferral'"; fi
+
+HOOK_GATE="$REPO_ROOT/.claude/hooks/ship-net-issue-flow-gate.sh"
+if ! grep -qi 'architectural-pivot deferral' "$HOOK_GATE"; then
+  pass "hook remedy text no longer frames the override as architectural-pivot-only"
+else fail "hook still calls the override an 'architectural-pivot deferral'"; fi
+for needle in "Fix inline" "Close something" "Override" "gate-override: net-issue-flow"; do
+  if grep -qF -- "$needle" "$HOOK_GATE"; then pass "hook remedy needle survives FR8: $needle"
+  else fail "FR8 removed a needle the hook suite pins: $needle"; fi
+done
+
 printf '\n'
+
+# ---------------------------------------------------------------------------
+# ANTI-VACUITY FLOOR. Set AT the running count, never below it: a floor with
+# slack silently absorbs a deleted case, which is the one thing it exists to
+# stop. `-lt` (a floor, not equality) so the suite can grow without churn --
+# lower it only deliberately.
+#
+# Motivating vacuity: before this run the suite had no pass COUNTER at all, so
+# deleting a case changed nothing observable. Baseline before the exemption
+# work was 23.
+# ---------------------------------------------------------------------------
+MIN_ASSERTIONS=64
+if [[ "$passes" -lt "$MIN_ASSERTIONS" ]]; then
+  printf '  FAIL anti-vacuity floor: %d assertions ran, expected >= %d\n' "$passes" "$MIN_ASSERTIONS"
+  fails=$((fails + 1))
+fi
+
 if [[ "$fails" -eq 0 ]]; then
-  printf 'net-issue-flow.test.sh: ALL PASS\n'
+  printf 'net-issue-flow.test.sh: ALL PASS (%d assertions)\n' "$passes"
   exit 0
 fi
-printf 'net-issue-flow.test.sh: %d FAILED\n' "$fails"
+printf 'net-issue-flow.test.sh: %d FAILED (%d passed)\n' "$fails" "$passes"
 exit 1
