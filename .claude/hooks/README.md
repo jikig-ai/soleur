@@ -83,18 +83,49 @@ the 20 hooks that can change whether a tool call proceeds:
 `kb-domain-allowlist-guard` · `no-memory-write` · `pre-merge-auto-close-scan` ·
 `pre-merge-rebase` · `worktree-write-guard` · `iac-plan-write-guard`
 
-**Exempt** — 10 advisory / `PostToolUse` hooks that gate nothing, so a
-mis-parsed field costs a hint rather than a guard. They are still bound by
-ADR-155 clause 1 (no `eval`), which the contract test enforces repo-wide:
+**Not yet migrated** — 10 hooks, in two groups. All remain bound by ADR-155
+clause 1 (no `eval`), which the contract test enforces repo-wide.
 
-`agent-token-tee` · `docs-cli-verification` · `durable-reminder-prefer-inngest` ·
-`new-scheduled-cron-prefer-inngest` · `pencil-collapse-guard` ·
-`pencil-open-guard` · `phase-surface-hint` · `skill-context-queries` ·
-`skill-invocation-logger` · `skill-security-scan-write`
+*Genuinely advisory* (6) — they emit no `permissionDecision` at all, so a
+mis-parsed field costs a hint rather than a guard:
 
-Migrating the exempt set is tracked as a follow-up; `pencil-open-guard` sits on
-an `mcp__*` matcher and is the most likely first candidate, since MCP envelopes
-are exactly the "other tool shapes" ADR-155 warns about.
+`agent-token-tee` · `docs-cli-verification` · `pencil-collapse-guard` ·
+`phase-surface-hint` · `skill-context-queries` · `skill-invocation-logger`
+
+*Gating, but deferred* (4) — **these DO decide whether a tool call proceeds** and
+are in ADR-155's binding scope. They are not exempt on principle; they are
+blocked on two concrete things, and they are the priority set in the follow-up:
+
+| Hook | Matcher | Emits |
+|---|---|---|
+| `durable-reminder-prefer-inngest` | `CronCreate` | `deny`, `allow` |
+| `new-scheduled-cron-prefer-inngest` | `Write\|Edit` | `deny`, `allow` |
+| `pencil-open-guard` | `mcp__pencil__open_document` | `deny` |
+| `skill-security-scan-write` | `Write` | `deny`, `ask`, `allow` |
+
+The two blockers, both real:
+
+1. **Every one needs a field the extractor does not publish** — `filePath`
+   (camelCase), `.tool_input.skill`, `.tool_input.content`, `.tool_input.new_string`,
+   and — for `durable-reminder-prefer-inngest` — `.durable` / `.recurring`, which
+   are legitimately **booleans**. `all(type == "string")` structurally cannot
+   express a boolean field, so migrating these widens the fixed-slot contract.
+   That is exactly what ADR-156 rejected a variadic API to avoid, so it is a
+   design decision, not a paste.
+2. **Three of their matchers have no designated responder.** `guardrails.sh` is
+   wired on `Bash` and `Write|Edit|MultiEdit|NotebookEdit` only, so `CronCreate`,
+   `Skill` and `mcp__*` payloads have nothing to emit the `ask`. Migrating them
+   fails the designated-responder invariant (AC14) until that is resolved.
+
+`skill-security-scan-write` is the sharpest of the four: it can emit an explicit
+`allow`, which skips the permission prompt outright, and an array
+`.tool_input.content` renders multi-line under `jq -r` so it matches no
+HIGH-RISK pattern. `pencil-open-guard` is the clearest ADR-155 case — an `mcp__*`
+matcher is precisely the "other tool shapes" whose envelope this repo does not
+define — but it is one of the *harder* migrations, not the easiest, because it
+needs the unpublished camelCase `filePath` **and** has no responder.
+
+Tracked in **#7173**.
 
 `.openhands/hooks/` mirrors carry a **minimal in-place** type assertion instead
 of this helper: a different envelope (`.working_dir`, `.tool_input.path`) and a

@@ -49,11 +49,14 @@ deny() {
 # a deny is recoverable where a silent bypass is not. Converging the two
 # harnesses on one extractor is a tracked follow-up.
 GR_ENVELOPE_SHAPE=$(printf '%s' "$INPUT" | jq -r '
+  # NB the // operator is deliberately absent: in jq it is a FALSY-alternative,
+  # so a JSON false would be rewritten to "" and pass the type check below
+  # (measured on the .claude side before this was fixed). Only null defaults.
   if (type == "object")
      and ((.tool_input? | type) as $t | $t == null or $t == "object")
-     and ((.tool_input.command? // "") | type == "string")
-     and ((.working_dir? // "") | type == "string")
-     and ((.tool_input.path? // .tool_input.file_path? // "") | type == "string")
+     and ((.tool_input.command? | if . == null then "" else . end) | type == "string")
+     and ((.working_dir? | if . == null then "" else . end) | type == "string")
+     and ((if (.tool_input | has("path")) and (.tool_input.path != null) then .tool_input.path else .tool_input.file_path end | if . == null then "" else . end) | type == "string")
   then "ok" else "nonstring" end' 2>/dev/null) || GR_ENVELOPE_SHAPE="unparseable"
 if [[ "$GR_ENVELOPE_SHAPE" == "nonstring" ]]; then
   deny "BLOCKED: the tool-call envelope carries a non-string field (e.g. an ARRAY tool_input.command). Hook stdin is model-controlled and untrusted (ADR-155); a non-string is never coerced, because the coerced value matches no guard and would bypass every gate in this hook. Re-send the command as a string."

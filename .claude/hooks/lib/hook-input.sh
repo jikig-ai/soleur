@@ -94,11 +94,20 @@ HOOK_INPUT_RESPONDER="guardrails"
 # input string values and cannot emit it from a literal (measured), so a
 # NUL-delimited design silently truncates.
 _HOOK_INPUT_JQ='
-[ (try (.tool_input.command // "") catch {}),
-  (try (.tool_name        // "") catch {}),
-  (try (.cwd              // "") catch {}),
-  (try (.session_id       // "") catch {}),
-  (try (.tool_input.file_path // .tool_input.notebook_path // "") catch {}) ]
+# d maps ONLY null (absent) to "". It must not use the // operator: in jq that
+# is a FALSY-alternative, so a JSON false would be rewritten to "" before the
+# type check below could see it - rc 0, empty value, no incident, no ask.
+# Measured. Writing "// null" is not a shortcut either; it maps false to null
+# and reopens the same hole. NB no apostrophes in this block: the program is a
+# single-quoted bash string and one would terminate it.
+def d(f): (try f catch {}) | if . == null then "" else . end;
+# file_path with a notebook_path fallback, preserving the same null-only rule.
+# has() on a non-object raises, which catch {} turns into an object - a
+# non-string - so the shared check still handles it.
+def fp: (try (if (.tool_input | has("file_path")) and (.tool_input.file_path != null)
+              then .tool_input.file_path else .tool_input.notebook_path end)
+         catch {}) | if . == null then "" else . end;
+[ d(.tool_input.command), d(.tool_name), d(.cwd), d(.session_id), fp ]
 | (if all(type == "string") then "ok" else "bad" end), "\u001e",
   (.[] | (if type == "string" then . else "" end), "\u001e")
 '

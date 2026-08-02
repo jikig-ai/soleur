@@ -44,6 +44,16 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
 # above where every test points.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/hook-input.sh"
 
+# The source above is fail-hard, but 12 of the 20 hooks run `set -uo pipefail`
+# WITHOUT -e. There a missing helper makes hook_parse_input return 127, `!`
+# inverts that to true, the response functions are 127 too, and the hook reaches
+# `exit 0` — a clean pass-through with no row and no prompt, which is defect 2
+# reintroduced by a broken deploy. Assert it explicitly instead of relying on -e.
+if ! declare -f hook_parse_input >/dev/null 2>&1; then
+  echo "[follow-through-directive-gate] hook-input helper missing — guards did NOT run for this call" >&2
+  exit 0
+fi
+
 INPUT=$(cat)
 # Parse hook stdin WITHOUT shell evaluation (ADR-155: stdin is
 # model-controlled and untrusted). A non-string field is surfaced, never

@@ -193,6 +193,37 @@ a4_cheap_variants() {
     "$(decision_for guardrails "$(jq -nc '"oops"')")"
   want "A4 non-string cwd asks" "ask" \
     "$(decision_for guardrails "$(jq -nc '{tool_input:{command:"a"}, cwd:["/w"]}')")"
+
+  # BOOLEANS. This corpus originally covered array/string/object only, and a
+  # JSON `false` sailed through: jq's `//` is a FALSY-alternative, so
+  # `.tool_input.command // ""` rewrote false to "" BEFORE the type check saw
+  # it — rc 0, empty value, no incident, no ask. Strictly stealthier than the
+  # array this PR was written against, and a violation of ADR-155's own
+  # "absence and empty are legitimate; a different JSON type is not".
+  # `true` was caught and `false` was not, which is the tell.
+  want "A4 boolean false command asks (the // falsy-default hole)" "ask" \
+    "$(decision_for guardrails "$(jq -nc '{tool_input:{command:false}}')")"
+  want "A4 boolean true command asks" "ask" \
+    "$(decision_for guardrails "$(jq -nc '{tool_input:{command:true}}')")"
+  want "A4 boolean false cwd asks" "ask" \
+    "$(decision_for guardrails "$(jq -nc '{tool_input:{command:"a"}, cwd:false}')")"
+  want "A4 boolean false tool_name asks" "ask" \
+    "$(decision_for guardrails "$(jq -nc '{tool_input:{command:"a"}, tool_name:false}')")"
+  want "A4 boolean false file_path asks" "ask" \
+    "$(decision_for guardrails "$(jq -nc '{tool_input:{file_path:false}}')")"
+
+  # The inverse: absence, null and empty are LEGITIMATE and must still pass, or
+  # the fix for the above would have broken every ordinary payload.
+  want "A4 control: null command still allows (absence is legitimate)" "<none>" \
+    "$(decision_for guardrails "$(jq -nc '{tool_input:{command:null}}')")"
+  want "A4 control: empty object still allows" "<none>" \
+    "$(decision_for guardrails "$(jq -nc '{}')")"
+
+  # The jq program lives in a single-quoted bash string, so one apostrophe in a
+  # comment inside it silently terminates the string and the helper stops
+  # parsing. Cheap structural guard.
+  want "A4 no apostrophe inside the jq program (would break the bash string)" "0" \
+    "$(sed -n "/^_HOOK_INPUT_JQ='/,/^'$/p" "$SCRIPT_DIR/lib/hook-input.sh" | grep -c "'" | awk '{print $1-2}')"
   want "A4 malformed document asks" "ask" \
     "$(decision_for guardrails 'garbage {{')"
   want "A4 empty stdin asks" "ask" \

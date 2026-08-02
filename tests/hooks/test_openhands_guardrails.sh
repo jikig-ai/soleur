@@ -85,6 +85,38 @@ mk_edit_array() { jq -nc '{tool_input:{path:["/a","/b"]}}'; }
 check "envelope: ARRAY tool_input.path denies" "2:deny" \
   "$(run "$(mk_edit_array)" "$AD/repo")"
 
+# --- #7164: the THIRD wired blocking mirror -------------------------------
+# .openhands/hooks.json wires worktree-write-guard.sh on the file_editor
+# matcher, and it denies with exit 2. It was missed when this PR's scope was
+# written as "the two mirrors". Measured before the fix: a string path into the
+# main checkout denied, the SAME target as a one-element ARRAY exited 0 and the
+# write sailed through. Asserted here with a string positive control in the same
+# run so neither arm can pass because the hook broke outright.
+WWG="$REPO_ROOT/.openhands/hooks/worktree-write-guard.sh"
+# The guard's target is the MAIN checkout, resolved the same way the guard
+# itself resolves it. $REPO_ROOT is the WORKTREE when these tests run from one,
+# and the guard deliberately ALLOWS worktree paths — using it here made the
+# control pass vacuously (exit 0) while the array arms denied on type alone,
+# proving nothing about the path logic they are supposed to reach.
+WWG_MAIN=$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's|/\.git$||')
+run_wwg() {
+  local payload="$1" rc=0
+  printf '%s' "$payload" | bash "$WWG" >/dev/null 2>&1 || rc=$?
+  echo "$rc"
+}
+if [[ -n "$WWG_MAIN" && -d "$WWG_MAIN" ]]; then
+  check "wwg: control — string path to main checkout denies" "2" \
+    "$(run_wwg "$(jq -nc --arg p "$WWG_MAIN/somefile.md" --arg w "$WWG_MAIN" '{tool_input:{path:$p}, working_dir:$w}')")"
+  check "wwg: ARRAY path to the same target denies (was a live bypass)" "2" \
+    "$(run_wwg "$(jq -nc --arg p "$WWG_MAIN/somefile.md" --arg w "$WWG_MAIN" '{tool_input:{path:[$p]}, working_dir:$w}')")"
+  check "wwg: object path denies" "2" \
+    "$(run_wwg "$(jq -nc --arg w "$WWG_MAIN" '{tool_input:{path:{a:"b"}}, working_dir:$w}')")"
+  check "wwg: string path INSIDE a worktree still allows" "0" \
+    "$(run_wwg "$(jq -nc --arg p "$REPO_ROOT/x.md" --arg w "$REPO_ROOT" '{tool_input:{path:$p}, working_dir:$w}')")"
+else
+  echo "SKIP: could not resolve the main checkout for worktree-write-guard"
+fi
+
 rm -rf "$AD" "$ADHOME" "$FZ"
 
 echo

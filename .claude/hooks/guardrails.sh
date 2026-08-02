@@ -38,6 +38,17 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/freeze-lock.sh" 2>/dev/null || true
 # above where every test points.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/hook-input.sh"
 
+# The source above is fail-hard, but 12 of the 20 hooks run `set -uo pipefail`
+# WITHOUT -e. There a missing helper makes hook_parse_input return 127, `!`
+# inverts that to true, the response functions are 127 too, and the hook reaches
+# `exit 0` — a clean pass-through with no row and no prompt, which is defect 2
+# reintroduced by a broken deploy. Assert it explicitly instead of relying on -e.
+if ! declare -f hook_parse_input >/dev/null 2>&1; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"SAFETY: .claude/hooks/lib/hook-input.sh is missing or unreadable, so PreToolUse guards did NOT run for this call. This is a broken deploy, not a transient fault \u2014 reinstall the hooks before continuing."}}'
+  echo "[guardrails] hook-input helper missing — guards did NOT run for this call" >&2
+  exit 0
+fi
+
 INPUT=$(cat)
 # Single jq fork, and NO shell evaluation of hook input. The previous comment
 # here claimed `@sh` made `eval` safe. That held only for a STRING: `@sh`

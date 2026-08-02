@@ -63,6 +63,16 @@ fi
 # and the hook dies at the call, letting the tool proceed (#7164 defect 2).
 source "$(dirname "${BASH_SOURCE[0]}")/lib/hook-input.sh"
 
+# The source above is fail-hard, but 12 of the 20 hooks run `set -uo pipefail`
+# WITHOUT -e. There a missing helper makes hook_parse_input return 127, `!`
+# inverts that to true, the response functions are 127 too, and the hook reaches
+# `exit 0` — a clean pass-through with no row and no prompt, which is defect 2
+# reintroduced by a broken deploy. Assert it explicitly instead of relying on -e.
+if ! declare -f hook_parse_input >/dev/null 2>&1; then
+  echo "[pre-merge-auto-close-scan] hook-input helper missing — guards did NOT run for this call" >&2
+  exit 0
+fi
+
 INPUT=$(cat)
 __HI_RAW="$INPUT"
 # ADR-155: hook stdin is model-controlled. A non-string field is surfaced,
