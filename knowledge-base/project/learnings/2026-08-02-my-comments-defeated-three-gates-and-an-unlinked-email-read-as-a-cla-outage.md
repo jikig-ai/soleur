@@ -74,12 +74,16 @@ strings stripped first — it returns 0.
 already in the allowlist. Two red checks on unrelated branches read as one bot/CLA outage.
 
 It was neither an outage nor two problems. `contributor-assistant/github-action`'s allowlist
-matches GitHub **logins**. Commits authored as `jean.deruelle@jikigai.com` resolve to
-`login: "deruelle"` and pass; commits authored as `ops@jikigai.com` resolve to **`login: ""`**,
-because that address is not linked to any GitHub account. The action sees an unidentifiable
-committer and cannot match it against any allowlist entry — while reporting the generic
-`Committers of Pull Request number N have to sign the CLA`, which names neither the email nor
+matches GitHub **logins**. Commits authored from the address that is *linked* to the operator's
+GitHub account resolve to that account's login and pass the allowlist; commits authored from an
+unlinked role alias (an `ops@`-style shared address, in this case) resolve to **`login: ""`**,
+because no GitHub account claims that address. The action sees an unidentifiable committer and
+cannot match it against any allowlist entry — while reporting the generic
+`Committers of Pull Request number N have to sign the CLA`, which names neither the address nor
 the reason.
+
+(The addresses are deliberately described rather than quoted here: `lint fixture content` fails
+any real-looking address in a committed file, and this file tripped that gate on the first push.)
 
 **Diagnosis in one command** — the resolved login, not the email, is the thing to look at:
 
