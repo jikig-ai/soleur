@@ -515,6 +515,38 @@ fi
 # Fail-closed on an unwritable path. A missing verdict file makes the caller take its
 # could-not-determine arm, so a silent write failure would report a wrong cause rather
 # than no cause — the defect class this script exists to prevent.
+                                                                                     # T14c
+# THE PRODUCER SIDE OF `configs`. The consumer suite
+# (plugins/soleur/test/token-drift-workflow-causes.test.sh) pins the workflow's parsing of
+# this field against hand-written JSON fixtures, which cannot observe what the DETECTOR
+# actually writes. Measured: replacing `"${#CONFIGS[@]}"` in emit_json with the literal
+# `"1"` — every scan forever reporting single-config, filing the coverage issue and
+# hedging every email — left BOTH suites fully green, as did deleting the `"configs":`
+# key outright. The field this PR exists to add was pinned by nothing.
+#
+# TWO fixture sizes, because a one-size fixture cannot distinguish a real count from a
+# hardcoded one: with a single 1-config case, the literal `"1"` mutation passes.
+echo "T14c: --json-file reports the NUMBER OF CONFIGS ENUMERATED, not a constant"
+T14C_OK=1
+for _n_cfg in 1 3; do
+  case "$_n_cfg" in
+    1) _cfg_body='prd' ;;
+    3) _cfg_body=$'prd\nprd_terraform\ndev' ;;
+  esac
+  JF3="$TMP/t14c-${_n_cfg}.json"
+  MOCK_CRED_STAMPED=1 run_sut "t14c${_n_cfg}" 403 "$ACCESS_FIXTURE" "$_cfg_body" "--json-file $JF3"
+  _got=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("configs","<absent>"))' "$JF3" 2>/dev/null || echo '<unparseable>')
+  if [[ "$_got" != "$_n_cfg" ]]; then
+    T14C_OK=0
+    echo "    ${_n_cfg} config(s) enumerated but the verdict reported configs=${_got}"
+  fi
+done
+if [[ "$T14C_OK" == "1" ]]; then
+  pass "configs tracks the enumerated config count across fixture sizes (1 and 3)"
+else
+  fail "the verdict's 'configs' field does not track the configs actually enumerated. Every consumer's coverage signal is derived from this number, so a constant here makes the whole fan-out-coverage ladder report a fiction — in the confident direction if the constant is >= 2"
+fi
+
 echo "T14b: --json-file on an unwritable path exits 2 rather than continuing silently"
 run_sut t14b 200 "$ACCESS_FIXTURE" prd "--json-file $TMP/no-such-dir/x.json"
 if [[ "$RC" == "2" ]]; then
@@ -1016,7 +1048,15 @@ echo "W10: the DEAD verdict's escalation is bound to the DEAD verdict"
 # pinned to the thing it is about, however many filers the job grows.
 W10_STEP_START=$(awk '/^      - name: Open or update an action-required issue \(token drift — DEAD credential\)/{print NR; exit}' "$DRIFT_WF")
 W10_GUARD=$(awk -v s="${W10_STEP_START:-0}" 'NR>s && NR<=s+3 && /^        if: /{print; exit}' "$DRIFT_WF")
-if [[ -n "$W10_STEP_START" ]] && grep -qE "verdict == 'dead'" <<<"$W10_GUARD" && grep -qE '^\s+--label priority/p0-critical' "$DRIFT_WF"; then
+# The priority-label conjunct needs the SAME step scoping as the guard above, and for the
+# same reason — the retarget fixed one half and left this one file-wide. The coverage
+# filer emits its own `--label priority/...` line, so a file-wide grep for a priority
+# label is satisfiable by the WRONG step: measured, moving `p0-critical` off the DEAD
+# filer and onto the coverage filer left this assertion PASS while the DEAD credential
+# issue lost the label operator-digest sorts on. Bound to the DEAD step's own body, which
+# runs to the next top-level `- name:`.
+W10_BODY=$(awk -v s="${W10_STEP_START:-0}" 'NR>s { if (/^      - name: /) exit; print }' "$DRIFT_WF")
+if [[ -n "$W10_STEP_START" ]] && grep -qE "verdict == 'dead'" <<<"$W10_GUARD" && grep -qE '^\s+--label priority/p0-critical' <<<"$W10_BODY"; then
   pass "the action-required filer is guarded on verdict == 'dead' and carries a priority label"
 else
   fail "the step filing the action-required issue must itself be guarded on verdict == 'dead' (found guard: '${W10_GUARD:-none}') and must carry --label priority/p0-critical (operator-digest sorts on priority and caps the list, so an unprioritised issue is filed and still unseen)"
@@ -1036,8 +1076,13 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # the real count cannot distinguish "the feature's tests were removed" from "they passed".
 # Still a floor, not equality, so adding a case does not require editing it — but it is now
 # close enough to the count that deleting a feature's cases trips it.
-if [[ "$((PASS + FAIL))" -lt 50 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 50. The suite did not execute what it claims to." >&2
+# Raised 50 -> 53 with T14c. The remaining 2-assertion slack was deliberate but is not
+# defensible: a floor below the count licenses deleting exactly the cases under review
+# (measured in the sibling consumer suite — 20 against 22 let the two tests carrying that
+# PR's only in-run deliverable be deleted at "20/20 passed", exit 0). Still a floor, so
+# ADDING a case needs no edit here; only a removal trips it, which is the point.
+if [[ "$((PASS + FAIL))" -lt 53 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 53. The suite did not execute what it claims to." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

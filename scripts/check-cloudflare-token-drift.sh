@@ -171,7 +171,16 @@ done
 #
 # It matters most at the two call sites wired in the same PR as this guard: the release
 # preflight prints "verified live" on exit 0, and the twice-daily scheduled arm is the only
-# continuous fleet-wide coverage there is.
+# CONTINUOUS coverage there is.
+#
+# Not "fleet-wide", though the line said so until #7152 measured it. The scheduled arm's
+# `DOPPLER_TOKEN` is a service token scoped to `prd_terraform`, so `doppler configs`
+# returns ONE config and the twice-daily run inspects 1 of 13 — the same "clean bill of
+# health for a question never asked" shape as the paragraph above, one layer up at the
+# scheduling layer. The run now publishes `configs`/`coverage` so the gap is loud, and
+# files an action-required issue while it persists; widening the token scope is an
+# operator decision and is tracked there. Until it lands, read a scheduled `clean` as
+# "clean in prd_terraform", never as a fleet claim.
 if (( ${#KEYSET[@]} + ${#ACCESS_BASESET[@]} == 0 )); then
   {
     echo "ERROR: enumerated 0 token-shaped keys across ${#CONFIGS[@]} config(s)${ONLY_MATCH:+ under --only '$ONLY_MATCH'}."

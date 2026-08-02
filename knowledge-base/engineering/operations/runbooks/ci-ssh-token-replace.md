@@ -5,7 +5,7 @@ Re-mint the `ci_ssh` Cloudflare Access service token when Cloudflare has stopped
 - **Dispatch target:** `apply-web-platform-infra.yml`, `apply_target=ci-ssh-token-replace`
 - **Confirm token:** `REPLACE-CI-SSH-TOKEN`
 - **Irreversible:** yes — Cloudflare will not re-issue the old secret
-- **First real use:** 2026-08-01, run `30708675183` (#7095). Worked; `verdict: clean (1 verified)`.
+- **First real use:** 2026-08-01, run `30708675183` (#7095). Worked; `verdict: clean (1 verified)` — scoped to `prd_terraform`, which is the only config that run could read (see the halt-gate note below).
 - **ADR:** [ADR-154](../../architecture/decisions/ADR-154-repair-the-credential-channel-not-the-host.md)
 
 ## When to fire this
@@ -82,7 +82,9 @@ All three inputs are required. `reason` is the audit trail and is echoed to the 
 gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun -f reason="re-sync ci_ssh after a failed publish"
 ```
 
-**At the halt gate with `ci_ssh_access_denied`** — the re-mint succeeded but Access still rejects the pair. This **falsifies the premise** that the credential was the fault. Stop and re-diagnose; do not re-mint again. Check whether a stale `CI_SSH_ACCESS_TOKEN_*` copy exists in a Doppler config other than `prd_terraform` — this arm publishes to `prd_terraform` only, so a sibling copy elsewhere would keep the fleet-wide verdict `dead` forever and no amount of re-minting clears it.
+**At the halt gate with `ci_ssh_access_denied`** — the re-mint succeeded but Access still rejects the pair. This **falsifies the premise** that the credential was the fault. Stop and re-diagnose; do not re-mint again. Check whether a stale `CI_SSH_ACCESS_TOKEN_*` copy exists in a Doppler config other than `prd_terraform` — this arm publishes to `prd_terraform` only, so a sibling copy elsewhere is never cleared by re-minting.
+
+> **Do not wait for a `dead` verdict to confirm that.** An earlier version of this step said a sibling copy "would keep the fleet-wide verdict `dead` forever", which is inverted: the scheduled scan's Doppler token is scoped to `prd_terraform`, so it never reads the other configs and a stale sibling is **invisible** to it — the verdict reads `clean`. Check the other configs directly with a workplace-scoped token (`doppler secrets get CI_SSH_ACCESS_TOKEN_ID -p soleur -c <cfg>`), and treat any scheduled `clean` here as scoped to `prd_terraform` unless the run also reports `coverage: multi-config`.
 
 **At the halt gate with `unverifiable` / `unavailable`** — nothing was measured. The re-mint is **not** known to have failed and the new credential is already published. Do not re-dispatch; re-run the detector.
 

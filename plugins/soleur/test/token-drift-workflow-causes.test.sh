@@ -93,7 +93,9 @@ run_step() {
   local out; out=$(mktemp)
   local body="${STEP_BODY//$DETECTOR_CALL/bash -c \"exit $det_rc\"}"
   local step_rc=0
-  STEP_STDOUT=$(mktemp)
+  # Under $TMP so the EXIT trap reclaims it. `mktemp` put one file per call in TMPDIR
+  # (exported to /var/tmp above) and never removed it — ~20 leaked strays per run.
+  STEP_STDOUT="$TMP/step-stdout.$$"
   RUNNER_TEMP="$dir" GITHUB_OUTPUT="$out" bash -eo pipefail -c "$body" >"$STEP_STDOUT" 2>&1 || step_rc=$?
   printf '%s|%s' "$step_rc" "$(tr '\n' ';' < "$out")"
   rm -f "$out"
@@ -101,6 +103,37 @@ run_step() {
 
 # Read one published output value from a run_step result.
 out_val() { printf '%s' "$1" | sed 's/^[0-9]*|//' | tr ';' '\n' | sed -n "s/^$2=//p" | head -1; }
+
+# step_field <step-name-prefix> <if|run> -> that step's parsed field, or exit 1.
+#
+# WHY THIS EXISTS. T12/T13/T14 originally grepped the WHOLE workflow for a literal, which
+# pins spelling, not behavior — and this PR simultaneously added a comment block quoting
+# those same literals, so a comment satisfies the assertion. All three were measured
+# green under mutations that reproduced the exact defect each one names:
+#   T13  `always()` -> `failure()` on the coverage arm   (step skipped on every clean run)
+#   T13  `if:` replaced, literal preserved in a comment  (cq-assert-anchor-not-bare-token)
+#   T14  `exit 0` deleted under the short-circuit        (~730 duplicate issues a year)
+#   T12  gate-absent re-gated onto the verdict ladder    (security finding pre-empted)
+# Extracting the step by NAME and asserting inside ITS OWN parsed field is the shape the
+# sibling detector suite's W10 adopted for the same reason. A comment cannot survive
+# yaml.safe_load, and a missing step is a hard failure rather than a silent zero-match.
+step_field() {
+  python3 - "$WF" "$1" "$2" <<'PYF'
+import sys, yaml
+wf, want, field = sys.argv[1], sys.argv[2], sys.argv[3]
+for job in yaml.safe_load(open(wf))["jobs"].values():
+    for st in job.get("steps", []) or []:
+        if str(st.get("name", "")).startswith(want):
+            v = st.get(field)
+            if v is None:
+                raise SystemExit(f"step '{want}' has no '{field}:'")
+            sys.stdout.write(str(v))
+            raise SystemExit(0)
+raise SystemExit(f"no step named '{want}'")
+PYF
+}
+
+COVERAGE_STEP="Open an action-required issue (token drift — narrow scan coverage)"
 
 # ---------------------------------------------------------------------------
 # T1-T5 — the parser's contract.
@@ -232,18 +265,50 @@ fi
 # T9-T11 — VOCABULARY PARITY. The cause set is derived from the detector source,
 # so a new cause reds this suite until the workflow email learns to render it.
 # ---------------------------------------------------------------------------
-mapfile -t CAUSES < <(grep -oE 'UNVERIFIABLE:[a-z-]+' "$DETECTOR" | sed 's/^UNVERIFIABLE://' | sort -u)
-# The unmapped-base row is pushed with a literal `|no-probe-configured|` field
-# rather than through a PAIR_VERDICT string, so the grep above cannot see it.
-grep -q '|no-probe-configured|' "$DETECTOR" && CAUSES+=("no-probe-configured")
+# DERIVE FROM THE EMITTED LITERAL, not from the internal state string. `UNVERIFIABLE:
+# <cause>` is the PAIR_VERDICT map VALUE; what actually reaches the JSON the workflow
+# parses is the second field of an `UNVERIFIABLE_ROWS+=(...)` push, produced by a `case`
+# that translates the first into the second. Deriving from PAIR_VERDICT pinned the wrong
+# side: renaming ONE row literal (`|probe-failed|` -> `|probe-timeout|`) while leaving
+# its PAIR_VERDICT string intact left this suite fully green while the detector emitted
+# a cause the email had no <li> for — the exact defect this file exists to catch.
+# Verified by mutation.
+mapfile -t CAUSES < <(grep -oE 'UNVERIFIABLE_ROWS\+=\("\$\{base\}_ID/_SECRET\|[a-z-]+\|' "$DETECTOR" \
+                      | grep -oE '\|[a-z-]+\|' | tr -d '|' | sort -u)
+# The two vocabularies must agree. They are separate literals in separate lines of the
+# detector, so either can drift alone: a PAIR_VERDICT state with no `case` arm emits
+# nothing (dead code), and an emitted cause with no PAIR_VERDICT state means the `case`
+# invented one. Cardinality is the cheap cross-check — a member either extraction cannot
+# see is otherwise silently exempt from every parity assertion below, and that exemption
+# is invisible on a green run.
+mapfile -t _PAIR_CAUSES < <(grep -oE 'UNVERIFIABLE:[a-z-]+' "$DETECTOR" | sed 's/^UNVERIFIABLE://' | sort -u)
+# The unmapped-base row is pushed with a literal `|no-probe-configured|` field and has no
+# PAIR_VERDICT state at all, so it is expected in CAUSES and not in _PAIR_CAUSES.
+echo "T9a: the emitted cause vocabulary and the internal PAIR_VERDICT vocabulary agree"
+_only_pair=()
+for c in "${_PAIR_CAUSES[@]}"; do
+  printf '%s\n' "${CAUSES[@]}" | grep -qx "$c" || _only_pair+=("$c")
+done
+if (( ${#_only_pair[@]} == 0 )); then
+  pass "every PAIR_VERDICT state has a matching emitted row literal (${#_PAIR_CAUSES[@]} states, ${#CAUSES[@]} emitted)"
+else
+  fail "PAIR_VERDICT states with no matching emitted row literal: ${_only_pair[*]} — the case translating state to row has drifted, so the detector either emits a cause name nothing derived or drops one entirely"
+fi
 # `unknown` originates in the WORKFLOW's parser (r.get("cause","unknown")), not in the
 # detector — so a detector-only derivation is blind to it, which is exactly where T3's
 # fixture lives. T3 pins it as contract; the email must therefore explain it.
 grep -qF 'r.get("cause","unknown")' "$WF" && CAUSES+=("unknown")
 mapfile -t CAUSES < <(printf '%s\n' "${CAUSES[@]}" | sort -u)
 
-echo "T9: the cause vocabulary is non-empty (guards a silently-broken extraction)"
-if (( ${#CAUSES[@]} >= 5 )); then
+# FLOOR AT THE CURRENT COUNT, not far below it. This was `>= 5` against 11 derived —
+# six free slots, and a floor that slack cannot distinguish "the extraction broke" from
+# "it worked". Measured: refactoring four detector cause literals behind a variable
+# (invisible to the extraction) AND deleting their four email remedies left this suite
+# 22/22 green, with T10 then checking 7 of 11 causes and the parity claim silently
+# covering less. A DROP below this number means the extraction drifted; raise it when
+# the detector legitimately grows a cause.
+echo "T9: the cause vocabulary is complete (guards a silently-broken extraction)"
+if (( ${#CAUSES[@]} >= 11 )); then
   pass "derived ${#CAUSES[@]} causes from the detector: ${CAUSES[*]}"
 else
   fail "derived only ${#CAUSES[@]} causes — the extraction regex has drifted from the detector, and every parity assertion below would pass vacuously over an empty set"
@@ -268,8 +333,19 @@ while IFS= read -r tok; do
   found=0
   for c in "${CAUSES[@]}"; do [[ "$tok" == "$c" ]] && { found=1; break; }; done
   (( found == 0 )) && stale_entries+=("$tok")
-done < <(printf '%s' "$UNVER_BODY" | grep -oE '<code>[a-z-]+</code>' | sed 's/<\/\?code>//g' | sort -u \
-         | grep -E "^($(IFS='|'; printf '%s' "${CAUSES[*]}")|unknown)$")
+# NO membership filter on the input. The first version piped through
+# `grep -E "^(${CAUSES[*]}|unknown)$"` — which keeps ONLY tokens already in CAUSES — and
+# then asked whether each survivor was in CAUSES. `found` was always 1 and this assertion
+# could not fail in either direction. Measured: injecting <code>bogus-orphan</code> into
+# the email body left the suite 22/22 green.
+#
+# Anchored on `<li><code>` rather than a bare `<code>`, because the same body legitimately
+# uses <code> for non-cause spans (access_hostname_for(), the script path, multi-config)
+# and those are not orphaned remedies. Cause entries are always at list-item position,
+# optionally as a `<code>a</code> / <code>b</code>` pair sharing one remedy.
+done < <(printf '%s' "$UNVER_BODY" \
+         | grep -oE '<li><code>[a-z-]+</code>( / <code>[a-z-]+</code>)?' \
+         | grep -oE '<code>[a-z-]+</code>' | sed 's/<\/\?code>//g' | sort -u)
 if (( ${#stale_entries[@]} == 0 )); then
   pass "no orphaned cause entries in the email"
 else
@@ -282,26 +358,77 @@ fi
 # verdict is dropped whenever any dead row co-occurs.
 # ---------------------------------------------------------------------------
 echo "T12: the gate-absent email arm keys on outputs.causes, independent of the verdict ladder"
-GATE_ARM=$(grep -F "contains(steps.token_drift.outputs.causes, 'gate-absent')" "$WF" | head -1)
-if [[ -n "$GATE_ARM" ]]; then
+GATE_IF=$(step_field "Email notification (token drift — ACCESS GATE MISSING)" if) || GATE_IF=""
+if grep -qF "contains(steps.token_drift.outputs.causes, 'gate-absent')" <<<"$GATE_IF" \
+   && ! grep -qE "outputs\.verdict *==" <<<"$GATE_IF"; then
   pass "gate-absent fires on causes, so a co-occurring dead row cannot pre-empt it"
 else
-  fail "the gate-absent arm does not key on outputs.causes — with a first-match ladder, a dead row anywhere in the same run silently drops the 'nothing is gating this host' finding"
+  fail "the gate-absent arm does not key on outputs.causes (its if: is '${GATE_IF}') — with a first-match ladder, a dead row anywhere in the same run silently drops the 'nothing is gating this host' finding"
 fi
 
 echo "T13: narrow coverage has a delivery channel that survives a GREEN clean run"
-ARM=$(grep -F "steps.token_drift.outputs.coverage != 'multi-config'" "$WF" | head -1)
-if [[ -n "$ARM" ]]; then
-  pass "an arm fires on coverage alone, independent of verdict/outcome"
+COV_IF=$(step_field "$COVERAGE_STEP" if) || COV_IF=""
+# Three properties, all load-bearing, asserted on the step's OWN parsed `if:`:
+#   always()          — a clean single-config run exits 0, so failure()/success()-implicit
+#                       would skip the step on exactly the runs it exists for
+#   single-config     — the state this channel's title, body and remedy describe
+#   NO bare `!=`      — `token_drift` is matrix-gated, so on the other leg every output is
+#                       '' and `'' != 'multi-config'` is TRUE; the step then fires from a
+#                       leg that never scanned, with a blank body, and create-only locks
+#                       it in. Positive polarity is what makes it skip-safe.
+if grep -qF 'always()' <<<"$COV_IF" \
+   && grep -qF "steps.token_drift.outputs.coverage == 'single-config'" <<<"$COV_IF" \
+   && ! grep -qF 'coverage !=' <<<"$COV_IF"; then
+  pass "an arm fires on coverage alone, positively, independent of verdict/outcome"
 else
-  fail "nothing fires on coverage alone. A single-config scan yields verdict=clean, rc=0, outcome=success — so NO email arm matches and the enforce step is skipped, leaving a ::warning:: on a green cron run as the only artifact. Nobody opens a green cron run (hr-no-dashboard-eyeball-pull-data-yourself)"
+  fail "the coverage arm's if: is '${COV_IF}' — it must be always() AND test coverage POSITIVELY. A single-config scan yields verdict=clean, rc=0, outcome=success, so no email arm matches and enforce is skipped; and a negative test also matches the empty output published by the matrix leg where the detector never ran"
+fi
+
+echo "T13b: the coverage arm also covers 'unknown', which no email arm reaches"
+if grep -qF "steps.token_drift.outputs.coverage == 'unknown'" <<<"$COV_IF"; then
+  pass "an unmeasurable coverage still reaches the issue channel"
+else
+  fail "coverage=unknown has no channel. It is reachable with a CLEAN verdict (well-formed JSON that simply lacks 'configs'), and no email arm fires on clean — the verdict=='unavailable' email only covers the crash path"
 fi
 
 echo "T14: that arm is CREATE-ONLY (the condition holds on every run until fixed)"
-if grep -q 'create-only, not commenting' "$WF" && grep -qF 'gh issue list --label "$LABEL" --state open' "$WF"; then
+COV_RUN=$(step_field "$COVERAGE_STEP" run) || COV_RUN=""
+# Assert the CONTROL FLOW, not the log sentence. `create-only, not commenting` is an echo
+# string: keeping it and deleting the `exit 0` beneath it left the suite green while the
+# step filed a fresh duplicate every run. And the dedup query literal is no longer unique
+# to this step — the DEAD filer contains it too (count went 1 -> 2 on this branch), so a
+# file-wide grep for it says nothing about this step at all.
+if grep -qF 'gh issue list --label "$LABEL" --state open' <<<"$COV_RUN" \
+   && grep -qE '^ *exit 0$' <<<"$COV_RUN" \
+   && ! grep -qF 'gh issue comment' <<<"$COV_RUN"; then
   pass "an existing open coverage issue short-circuits instead of re-commenting"
 else
-  fail "the coverage arm must not comment on an existing issue: coverage is single-config on EVERY scheduled run until the token scope is widened, so create-or-comment posts ~730 comments a year and trains the operator to filter the label"
+  fail "the coverage arm must query open issues, exit 0 on a hit, and never comment: coverage is single-config on EVERY scheduled run until the token scope is widened, so create-or-comment posts ~730 comments a year and trains the operator to filter the label"
+fi
+
+echo "T14b: a failed create is reported, not swallowed"
+if grep -qF '::error::token_drift_coverage_escalation_failed' <<<"$COV_RUN" \
+   && ! grep -qE 'gh issue create.*\| *tail' <<<"$COV_RUN"; then
+  pass "gh issue create's status is branched on and a failure annotates"
+else
+  fail "a failed 'gh issue create' leaves a GREEN step on a GREEN cron run with no issue and no annotation. Coverage has no email arm, so that is total loss of the only channel this step exists to be (hr-no-dashboard-eyeball-pull-data-yourself)"
+fi
+
+echo "T14c: a failed dedup QUERY fails closed, rather than filing a duplicate"
+if grep -qF 'token_drift_coverage_list_failed' <<<"$COV_RUN"; then
+  pass "an errored 'gh issue list' declines to create instead of reading empty as 'none open'"
+else
+  fail "the dedup query's failure is indistinguishable from 'no issue open', and create-only reads empty as 'file one' — so every transient API fault adds a permanent duplicate"
+fi
+
+echo "T14d: the issue is closed automatically when coverage recovers"
+CLOSE_IF=$(step_field "Close the coverage issue once the fan-out is restored" if) || CLOSE_IF=""
+CLOSE_RUN=$(step_field "Close the coverage issue once the fan-out is restored" run) || CLOSE_RUN=""
+if grep -qF "steps.token_drift.outputs.coverage == 'multi-config'" <<<"$CLOSE_IF" \
+   && grep -qF 'gh issue close' <<<"$CLOSE_RUN"; then
+  pass "coverage recovery closes the standing issue without an operator step"
+else
+  fail "nothing closes the coverage issue. Its stated closing condition is 'a scheduled run reports coverage: multi-config' — a fact observable only by opening a GREEN cron run's step log, which is the same problem the file arm exists to solve"
 fi
 
 echo "T15: a single-config scan EMITS the ::warning:: annotation"
@@ -320,14 +447,33 @@ else
   fail "the warning fired on a multi-config scan — an unconditional hedge is the defect the enforce step's own comment records removing ('a hedge that fires when there is nothing to hedge makes a true alarm look uncertain')"
 fi
 
-echo "T17: a 0-config scan is not the confident state"
+echo "T16b: an UNMEASURABLE coverage emits its own, differently-worded annotation"
+# The `unknown` branch of the ::warning:: was unpinned while its sibling was pinned —
+# measured: deleting the branch entirely, and widening the single-config branch's test to
+# `!= "multi-config"` (which makes an unreadable verdict file announce "scanned -1 Doppler
+# config(s)"), both left the suite green. That is T15's own defect one branch over.
+run_step "$TMP/corrupt" 0 >/dev/null
+if grep -q '::warning::.*could not measure its own coverage' "$STEP_STDOUT" \
+   && ! grep -q '::warning::.*scanned -1 Doppler' "$STEP_STDOUT"; then
+  pass "an unreadable verdict file says so, rather than reporting a narrow scan"
+else
+  fail "coverage=unknown did not emit its own annotation — a detector that could not run is being described to the operator as a narrow scan, whose remedy (widen the Doppler token) is unperformable on that path, so the state never clears"
+fi
+
+echo "T17: the coverage threshold is '< 2', not '== 1'"
 mkdir -p "$TMP/zero"
 printf '{"live":0,"dead":0,"unverifiable":0,"probes":0,"configs":0,"stale":[],"unverifiable_keys":[]}' > "$TMP/zero/token-drift.json"
 c=$(out_val "$(run_step "$TMP/zero" 0)" coverage)
+# NOTE ON REACHABILITY: configs=0 cannot arrive from today's detector — it exits 2 at
+# `if [[ ${#CONFIGS[@]} -eq 0 ]]` roughly 460 lines before emit_json, so a real 0-config
+# run publishes no verdict file at all and lands on the `-1` fallback, i.e. `unknown`
+# (T5 covers that path). This case pins the THRESHOLD SHAPE as defence-in-depth against a
+# future path that reaches emit_json with an empty CONFIGS; it is not evidence about a
+# reachable production state, and the pass message said otherwise.
 if [[ "$c" == "single-config" ]]; then
-  pass "configs=0 -> single-config (nothing read is not fleet-wide)"
+  pass "configs=0 -> single-config (pins '< 2'; not a reachable state today, see note)"
 else
-  fail "configs=0 derived '$c' — a threshold of '== 1' rather than '< 2' lets a scan that read NOTHING report the confident state, which is the silent direction"
+  fail "configs=0 derived '$c' — a threshold of '== 1' rather than '< 2' would let a future path that reaches emit_json with no configs report the confident state, which is the silent direction"
 fi
 
 echo "T18: unverifiable rows publish verdict=unverifiable (the ladder branch actually fires)"
@@ -348,6 +494,17 @@ for phrase in 'no longer accepted by Cloudflare' 'No token was found stale'; do
   line=$(grep -F "$phrase" "$WF" | grep -F 'body:' | head -1)
   printf '%s' "$line" | grep -q 'Scan coverage:' || { _t19=0; echo "    missing caveat in the body containing: $phrase"; }
 done
+# The caveat is the same sentence, in the same medium, for the same reader, in two email
+# bodies — and nothing pinned the copies to each other. A presence-only check stays green
+# while one is reworded and the other is not, leaving the DEAD and UNVERIFIABLE emails
+# disagreeing about what coverage means, in the one sentence whose entire job is to stop
+# `clean` being over-read. Same two-copies-one-pin shape as the #7134 defect this suite
+# exists for, so: assert the copies are byte-identical.
+mapfile -t _CAVEATS < <(grep -oP '<em>Scan coverage:.*?</em>' "$WF" | sort -u)
+if (( ${#_CAVEATS[@]} != 1 )); then
+  _t19=0
+  echo "    the coverage caveat has ${#_CAVEATS[@]} distinct wordings across the email bodies; expected exactly 1"
+fi
 if [[ "$_t19" == "1" ]]; then
   pass "the DEAD and UNVERIFIABLE bodies both render coverage"
 else
@@ -359,8 +516,14 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Deleting every assertion call yields "0/0 passed" and exit 0,
 # which test-all.sh (reading only the exit code) cannot distinguish from success.
 # A FLOOR, not equality: adding a case must not require editing this line.
-if [[ "$((PASS + FAIL))" -lt 20 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 20." >&2
+#
+# SET AT THE CURRENT COUNT, not below it. At 20 against 22 running there were two free
+# slots — measured: deleting the T15 AND T16 blocks, i.e. the PR's only in-run
+# deliverable, reported "20/20 passed" and exit 0. A floor with slack licenses the
+# deletion of exactly the assertions under review. Raise it when adding a case; that edit
+# is the point, because it is what makes a REMOVAL visible in the diff.
+if [[ "$((PASS + FAIL))" -lt 28 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 28." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
