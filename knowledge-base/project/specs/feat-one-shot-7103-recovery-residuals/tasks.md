@@ -120,10 +120,10 @@ recurrence risk), R2 → R3 a hard dependent pair.
 
 ## Phase 6 — R5(b): prove the liveness gate is non-deletable
 
-- [ ] 6.1 Write `scripts/cf-tunnel-liveness-gate-mutations.test.sh` on the sandbox-battery shape.
-- [ ] 6.2 Implement the seven arms (M1, M3, M4, M5, M6, control, anti-vacuity floor) with per-mutant
+- [x] 6.1 Write `scripts/cf-tunnel-liveness-gate-mutations.test.sh` on the sandbox-battery shape.
+- [x] 6.2 Implement the seven arms (M1, M3, M4, M5, M6, control, anti-vacuity floor) with per-mutant
       message assertions.
-- [ ] 6.3 Register with `run_suite`; assert `git status --porcelain` is empty after a run.
+- [x] 6.3 Register with `run_suite`; assert `git status --porcelain` is empty after a run.
 
 ## Phase 7 — Records
 

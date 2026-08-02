@@ -599,6 +599,10 @@ if want_bun; then
   # job lacks (python3 + PyYAML), and putting a regression guard in a runner nobody is blocked by
   # would reproduce, in the same PR, the defect R5 exists to fix.
   run_suite "scripts/digest-oracle-guard" bash scripts/digest-oracle-guard.test.sh
+  # #7103 R5(b) — proves the cf-tunnel liveness gate's W1-W10 assertions can actually fail.
+  # Sandbox-only: it copies scripts/ and .github/ into a mktemp -d, mutates the copies, and
+  # asserts the working tree is unchanged when it finishes.
+  run_suite "scripts/cf-tunnel-liveness-gate-mutations" bash scripts/cf-tunnel-liveness-gate-mutations.test.sh
 fi
 
 # Bash *.test.sh glob — scripts shard. (ci-deploy.test.sh runs in infra-validation.yml.)
