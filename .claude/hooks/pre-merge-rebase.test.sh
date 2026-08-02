@@ -445,7 +445,7 @@ git push && gh pr merge 8 --squash')
 }
 
 # --- T-MJ1: malformed-JSON stdin fails open, but NO LONGER SILENTLY ---------
-# Expectation REFRESHED for #7164 (ADR-156), not relaxed.
+# Expectation REFRESHED for #7164 (ADR-157), not relaxed.
 #
 # Originally this asserted exit 0, no deny, AND no incident row. The first two
 # clauses are the fail-open contract and still hold: a PreToolUse hook that

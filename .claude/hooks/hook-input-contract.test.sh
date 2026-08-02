@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Contract tests for the PreToolUse hook input boundary (issue #7164).
 #
-# ADR-155 — hook stdin is model-controlled and untrusted; a hook must not depend
+# ADR-156 — hook stdin is model-controlled and untrusted; a hook must not depend
 #           on an upstream invariant it cannot verify.
-# ADR-156 — a hook that cannot fully parse its input ASKS. It never continues
+# ADR-157 — a hook that cannot fully parse its input ASKS. It never continues
 #           silently and it never denies.
 #
 # A1 and A2 were authored and observed RED against the unmodified tree BEFORE
@@ -98,7 +98,7 @@ a1_idiom_ban() {
   if (( ${#offenders[@]} == 0 )); then
     ok "A1 no eval under .claude/hooks/** or .openhands/hooks/** (2 fd-close lines allow-listed)"
   else
-    bad "A1 eval found in ${#offenders[@]} place(s) — hook stdin is untrusted (ADR-155)" "${offenders[@]}"
+    bad "A1 eval found in ${#offenders[@]} place(s) — hook stdin is untrusted (ADR-156)" "${offenders[@]}"
   fi
 }
 
@@ -198,7 +198,7 @@ a4_cheap_variants() {
   # JSON `false` sailed through: jq's `//` is a FALSY-alternative, so
   # `.tool_input.command // ""` rewrote false to "" BEFORE the type check saw
   # it — rc 0, empty value, no incident, no ask. Strictly stealthier than the
-  # array this PR was written against, and a violation of ADR-155's own
+  # array this PR was written against, and a violation of ADR-156's own
   # "absence and empty are legitimate; a different JSON type is not".
   # `true` was caught and `false` was not, which is the tell.
   want "A4 boolean false command asks (the // falsy-default hole)" "ask" \

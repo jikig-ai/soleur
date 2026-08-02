@@ -40,10 +40,10 @@ fi
 
 INPUT=$(cat)
 
-# ADR-155: hook stdin is model-controlled. A non-string field is surfaced, never
+# ADR-156: hook stdin is model-controlled. A non-string field is surfaced, never
 # coerced — this hook never ran eval, but `jq -r` renders an array across lines,
 # which would not match the memory-path regex below, so the payload slipped the
-# guard entirely (#7164). ADR-156: it asks rather than continuing silently.
+# guard entirely (#7164). ADR-157: it asks rather than continuing silently.
 #
 # This REPLACES the previous fail-open-on-malformed-JSON branch. The posture is
 # unchanged in the direction that mattered — the hook still never blocks the

@@ -319,7 +319,7 @@ report=$(jq -n \
         | map(select(startswith("net-issue-flow") | not))
         | map(select(startswith("cost-of-filing-") | not))
         # hook-input-* reserved for .claude/hooks/lib/hook-input.sh self-fault
-        # telemetry (issue #7164, ADR-155/ADR-156). Same tier-gate rationale as
+        # telemetry (issue #7164, ADR-156/ADR-157). Same tier-gate rationale as
         # context-reviewed-*: the rule body lives in the helper header + the
         # hooks README, and the always-loaded B_ALWAYS budget has no room for a
         # new core tag. The reason rides IN the rule_id
@@ -361,7 +361,7 @@ report=$(jq -n \
             | map(select(.bypass_count > 0))
             | length),
           orphan_rule_ids: $orphan_ids,
-          # Gate-exemption readout (ADR-155). The net-issue-flow mandated-filing
+          # Gate-exemption readout (ADR-156). The net-issue-flow mandated-filing
           # exemption is justified by ATTRIBUTION — being able to see which rule
           # is being cited, how often, and whether the citing PRs look like
           # genuine mandates or a new reflex. That justification is only true if
@@ -401,7 +401,7 @@ report=$(jq -n \
           # correctly keep them OUT of gate_exemptions (which matches the
           # double-dash prefix) also kept them out of every other key, while
           # orphan_rule_ids filters the whole net-issue-flow prefix. So they
-          # reached this file NOWHERE — consequence (b) of ADR-155 reproduced
+          # reached this file NOWHERE — consequence (b) of ADR-156 reproduced
           # one level down, in the PR that diagnosed it. They are distinct
           # conditions: "could not read the corpus" vs "read it, nothing tagged".
           # The second is expected rollout noise and should decay to 0; the
@@ -454,7 +454,7 @@ hook_input_fault_count=$(echo "$report" | jq -r '.summary.hook_input_fault_count
 if [[ "${hook_input_fault_count:-0}" -gt 0 ]]; then
   hook_input_breakdown=$(echo "$report" \
     | jq -r '.summary.hook_input_fault_reasons | to_entries | map("\(.key)=\(.value)") | join(" ")' 2>/dev/null || echo "")
-  echo "WARNING: $hook_input_fault_count PreToolUse hook input-contract fault(s) — a hook could not parse its stdin and ran with guards disarmed [${hook_input_breakdown}]. See .claude/hooks/README.md 'Parsing hook input' (ADR-156)." >&2
+  echo "WARNING: $hook_input_fault_count PreToolUse hook input-contract fault(s) — a hook could not parse its stdin and ran with guards disarmed [${hook_input_breakdown}]. See .claude/hooks/README.md 'Parsing hook input' (ADR-157)." >&2
 fi
 
 if [[ "$DRY_RUN" == "1" ]]; then

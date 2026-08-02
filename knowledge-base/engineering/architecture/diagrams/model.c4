@@ -67,7 +67,7 @@ model {
       }
       hooks = container "Hook Engine" {
         technology "PreToolUse Guards + PostToolUse hints"
-        description "Guards tool calls (blocks commits to main, rm -rf, etc.) AND injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086). CONSUMES a MODEL-CONTROLLED tool-call envelope on stdin: that input is untrusted and is parsed without shell evaluation, with each contracted field type-asserted rather than coerced (ADR-155, #7164 — an array tool_input.command previously reached eval AND evaded every anchored guard). Prior description said only what hooks DO, never what they CONSUME."
+        description "Guards tool calls (blocks commits to main, rm -rf, etc.) AND injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086). CONSUMES a MODEL-CONTROLLED tool-call envelope on stdin: that input is untrusted and is parsed without shell evaluation, with each contracted field type-asserted rather than coerced (ADR-156, #7164 — an array tool_input.command previously reached eval AND evaded every anchored guard). Prior description said only what hooks DO, never what they CONSUME."
       }
     }
 
@@ -387,7 +387,7 @@ model {
   skillloader -> skills "Discovers" { technology "Directory scan" }
   skillloader -> agents "Discovers" { technology "Recursive scan" }
   hooks -> claude "Guards tool calls" { technology "Event hook" }
-  claude -> hooks "Tool-call envelope on stdin — MODEL-CONTROLLED, UNTRUSTED (ADR-155): parsed without eval; input that cannot be fully parsed asks, never continues silently (ADR-156)" { technology "stdin JSON" }
+  claude -> hooks "Tool-call envelope on stdin — MODEL-CONTROLLED, UNTRUSTED (ADR-156): parsed without eval; input that cannot be fully parsed asks, never continues silently (ADR-157)" { technology "stdin JSON" }
   hooks -> kb "Reads context_queries artifacts (skill-scoped injection)" { technology "File I/O" }
   api -> kb "Reads context_queries artifacts (skill-scoped injection, web in-process)" { technology "File I/O" }
   // #6750 — the ONLY inbound kb edge that is NOT an operator-attended session.

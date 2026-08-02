@@ -20,7 +20,7 @@ from this shape is treated as a pass-through.
 
 ## Parsing hook input
 
-**That stdin envelope is model-controlled and untrusted** ([ADR-155][adr155]).
+**That stdin envelope is model-controlled and untrusted** ([ADR-156][adr155]).
 It is assembled from the model's own tool-call output; nothing a hook can see
 validates it. Parse it with the shared extractor — never by hand, and never with
 `eval`:
@@ -56,7 +56,7 @@ Four rules, each of which was a real defect in #7164:
    and leaves every anchored guard evaded — `["git","stash"]` matches no guard
    regex. Same for scrubbing: a normalized value is a *different* value than the
    matcher was written against.
-4. **A hook that cannot parse its input asks** ([ADR-156][adr156]). It never
+4. **A hook that cannot parse its input asks** ([ADR-157][adr156]). It never
    continues silently and it never denies.
 
 `guardrails.sh` is the **designated responder**: it emits the `ask`, the other
@@ -108,7 +108,7 @@ the 20 hooks that can change whether a tool call proceeds:
 `kb-domain-allowlist-guard` · `no-memory-write` · `pre-merge-auto-close-scan` ·
 `pre-merge-rebase` · `worktree-write-guard` · `iac-plan-write-guard`
 
-**Not yet migrated** — 10 hooks, in two groups. All remain bound by ADR-155
+**Not yet migrated** — 10 hooks, in two groups. All remain bound by ADR-156
 clause 1 (no `eval`), which the contract test enforces repo-wide.
 
 *Genuinely advisory* (6) — they emit no `permissionDecision` at all, so a
@@ -118,7 +118,7 @@ mis-parsed field costs a hint rather than a guard:
 `phase-surface-hint` · `skill-context-queries` · `skill-invocation-logger`
 
 *Gating, but deferred* (4) — **these DO decide whether a tool call proceeds** and
-are in ADR-155's binding scope. They are not exempt on principle; they are
+are in ADR-156's binding scope. They are not exempt on principle; they are
 blocked on two concrete things, and they are the priority set in the follow-up:
 
 | Hook | Matcher | Emits |
@@ -135,7 +135,7 @@ The two blockers, both real:
    and — for `durable-reminder-prefer-inngest` — `.durable` / `.recurring`, which
    are legitimately **booleans**. `all(type == "string")` structurally cannot
    express a boolean field, so migrating these widens the fixed-slot contract.
-   That is exactly what ADR-156 rejected a variadic API to avoid, so it is a
+   That is exactly what ADR-157 rejected a variadic API to avoid, so it is a
    design decision, not a paste.
 2. **Three of their matchers have no designated responder.** `guardrails.sh` is
    wired on `Bash` and `Write|Edit|MultiEdit|NotebookEdit` only, so `CronCreate`,
@@ -145,7 +145,7 @@ The two blockers, both real:
 `skill-security-scan-write` is the sharpest of the four: it can emit an explicit
 `allow`, which skips the permission prompt outright, and an array
 `.tool_input.content` renders multi-line under `jq -r` so it matches no
-HIGH-RISK pattern. `pencil-open-guard` is the clearest ADR-155 case — an `mcp__*`
+HIGH-RISK pattern. `pencil-open-guard` is the clearest ADR-156 case — an `mcp__*`
 matcher is precisely the "other tool shapes" whose envelope this repo does not
 define — but it is one of the *harder* migrations, not the easiest, because it
 needs the unpublished camelCase `filePath` **and** has no responder.
@@ -157,8 +157,8 @@ of this helper: a different envelope (`.working_dir`, `.tool_input.path`) and a
 different protocol (`exit 2` + `{"decision":"deny"}`, with no `ask`).
 Convergence is a tracked follow-up.
 
-[adr155]: ../../knowledge-base/engineering/architecture/decisions/ADR-155-hook-stdin-is-model-controlled-and-untrusted.md
-[adr156]: ../../knowledge-base/engineering/architecture/decisions/ADR-156-a-hook-that-cannot-parse-its-input-asks.md
+[adr155]: ../../knowledge-base/engineering/architecture/decisions/ADR-156-hook-stdin-is-model-controlled-and-untrusted.md
+[adr156]: ../../knowledge-base/engineering/architecture/decisions/ADR-157-a-hook-that-cannot-parse-its-input-asks.md
 
 ## Incident telemetry (ADR-2)
 

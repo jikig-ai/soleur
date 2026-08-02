@@ -1,17 +1,18 @@
-# ADR-155 — Hook stdin is model-controlled and untrusted
+# ADR-156 — Hook stdin is model-controlled and untrusted
 
 - **Status:** Accepted
 - **Date:** 2026-08-02
 - **PR:** #7168
 - **Issue:** #7164 (`eval` over `jq @sh` in 10 PreToolUse hooks executes attacker-named commands)
-- **Related:** [ADR-156](./ADR-156-a-hook-that-cannot-parse-its-input-asks.md) (the response posture
+- **Related:** [ADR-157](./ADR-157-a-hook-that-cannot-parse-its-input-asks.md) (the response posture
   this boundary implies), `.claude/hooks/lib/hook-input.sh` (the mechanism),
   `.claude/hooks/security_reminder_hook.py` (the pre-existing Python precedent this converges on),
   `knowledge-base/engineering/architecture/diagrams/model.c4` (the `claude -> hooks` edge that
   encodes this boundary)
 
-> **Ordinal.** ADR-155 is the next free ordinal against a freshly fetched `origin/main` (highest
-> existing is ADR-154), verified at `/work` time. Provisional until `/ship` re-checks at merge.
+> **Ordinal.** Renumbered 155 -> 156 at `/ship` time: a sibling PR landed its own ADR-155
+> (cross-gate exemption markers) on `origin/main` during this pipeline, and `adr-ordinals` is not a
+> required check, so the collision would have surfaced as red CI on `main` post-squash.
 
 ## Context
 
@@ -65,7 +66,7 @@ Three consequences bind:
 
 This ADR governs the **boundary**. It deliberately says nothing about the mechanism that enforces it
 (the shared helper, the field set, the separator, the lint) or about what a hook should do when the
-check fails — those are [ADR-156](./ADR-156-a-hook-that-cannot-parse-its-input-asks.md) and the
+check fails — those are [ADR-157](./ADR-157-a-hook-that-cannot-parse-its-input-asks.md) and the
 hooks README. The split is intentional: a future refactor of the helper must not be able to
 supersede the trust boundary along with it.
 

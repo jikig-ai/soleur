@@ -98,13 +98,13 @@ guards, (3) the OpenHands mirror.
 ## 6. The ADRs (before anything cites them)
 
 - [x] 6.1 Re-derive both ordinals from a freshly-fetched `origin/main`.
-- [x] 6.2 **ADR-155** — the trust boundary (durable; cited by `model.c4`).
-- [x] 6.3 **ADR-156** — *a hook that cannot fully parse its input asks* (operational; cites 155; owns
+- [x] 6.2 **ADR-156** — the trust boundary (durable; cited by `model.c4`).
+- [x] 6.3 **ADR-157** — *a hook that cannot fully parse its input asks* (operational; cites 155; owns
       the Alternatives table; supersedes the silent-absorb reading of
       `2026-03-18-stop-hook-jq-invalid-json-guard.md`; cites ADR-070 as the only prior fail-open
       sanction — an additive advisory hook, the complement of this case; records the surrogate
       limitation and the designated-responder invariant).
-- [x] 6.4 `AP-NNN` in `principles-register.md` linked to ADR-155.
+- [x] 6.4 `AP-NNN` in `principles-register.md` linked to ADR-156.
 
 ## 7. Commit 1 — the 10 `eval` hooks
 
@@ -119,9 +119,9 @@ guards, (3) the OpenHands mirror.
       **never** "input is now safe".
 - [x] 7.14 Append a dated correction to
       `knowledge-base/project/learnings/2026-05-15-deterministic-permissions-empirical-probes-and-review-gaps.md`
-      citing #7164 + ADR-155. Do not delete the historical finding.
+      citing #7164 + ADR-156. Do not delete the historical finding.
 - [x] 7.15 Do **not** edit `2026-04-18-refactor-drain-pr2213-review-backlog-plan.md` or its archived
-      spec — point-in-time records, cited by ADR-156.
+      spec — point-in-time records, cited by ADR-157.
 
 ## 8. Commit 2 — sibling readers; Commit 3 — mirror
 
@@ -182,7 +182,7 @@ guards, (3) the OpenHands mirror.
 
 ## 10. C4, README, verify, ship
 
-- [x] 10.1 `model.c4`: add `claude -> hooks` (untrusted stdin envelope, naming ADR-155 and ADR-156)
+- [x] 10.1 `model.c4`: add `claude -> hooks` (untrusted stdin envelope, naming ADR-156 and ADR-157)
       and amend `platform.engine.hooks`'s description. No `views.c4` change needed.
 - [x] 10.2 `cd apps/web-platform && ./node_modules/.bin/vitest run test/c4-code-syntax.test.ts test/c4-render.test.ts`
 - [x] 10.3 `.claude/hooks/README.md` — "Parsing hook input": `hook_parse_input`, the **scoped**
@@ -200,7 +200,7 @@ guards, (3) the OpenHands mirror.
 
 - [x] Q1 **Non-object `tool_input` classification.** v3 routes it to `nonstring` ⇒ `ask` via
       `catch {}`. Confirm no legitimate MCP tool shape sends a non-object `tool_input`; if one does,
-      this is still right (it asks rather than denies), but record the finding in ADR-156.
+      this is still right (it asks rather than denies), but record the finding in ADR-157.
 - [x] Q2 **Exemption boundary.** The 10 advisory/PostToolUse hooks are exempt because they gate
       nothing. `pencil-open-guard.sh` sits on an `mcp__*` matcher, which is the issue's own
       reachability argument — re-check at /work whether it should move in-scope.

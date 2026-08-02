@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-02
 **Issue:** #7164 · **PR:** #7168
-**ADRs:** ADR-155 (trust boundary), ADR-156 (response posture)
+**ADRs:** ADR-156 (trust boundary), ADR-157 (response posture)
 
 ## The bug behind the bug
 

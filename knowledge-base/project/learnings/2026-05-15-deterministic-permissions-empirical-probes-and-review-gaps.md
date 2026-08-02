@@ -131,9 +131,9 @@ eight sibling hooks read the same field via `$( )`, never call `eval`, and were 
 payload because an array does not match any anchored guard regex. Fixing only the code execution
 would have closed #7164 while leaving most of the gates bypassable.
 
-The boundary is now written down as [ADR-155](../../engineering/architecture/decisions/ADR-155-hook-stdin-is-model-controlled-and-untrusted.md)
+The boundary is now written down as [ADR-156](../../engineering/architecture/decisions/ADR-156-hook-stdin-is-model-controlled-and-untrusted.md)
 (hook stdin is model-controlled; a hook must not depend on an invariant it cannot verify) with the
-response posture in [ADR-156](../../engineering/architecture/decisions/ADR-156-a-hook-that-cannot-parse-its-input-asks.md).
+response posture in [ADR-157](../../engineering/architecture/decisions/ADR-157-a-hook-that-cannot-parse-its-input-asks.md).
 Extraction now runs through `.claude/hooks/lib/hook-input.sh`, which performs **no shell evaluation
 of hook input** and asserts each contracted field's type. That is the accurate claim; "input is now
 safe" is not, and should not be written.

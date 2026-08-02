@@ -13,7 +13,7 @@ set -euo pipefail
 
 INPUT=$(cat)
 
-# --- ADR-155 (mirror): the HookEvent envelope is MODEL-CONTROLLED ------------
+# --- ADR-156 (mirror): the HookEvent envelope is MODEL-CONTROLLED ------------
 # This port never called eval, so it never had the #7164 code execution. It DID
 # have the evasion half, and this file is a WIRED BLOCKING guard
 # (.openhands/hooks.json, file_editor matcher). Measured on this branch before
@@ -41,7 +41,7 @@ WWG_ENVELOPE_SHAPE=$(printf '%s' "$INPUT" | jq -r '
      and ((.working_dir? | if . == null then "" else . end) | type == "string")
   then "ok" else "nonstring" end' 2>/dev/null) || WWG_ENVELOPE_SHAPE="unparseable"
 if [[ "$WWG_ENVELOPE_SHAPE" == "nonstring" ]]; then
-  jq -n '{"decision":"deny","reason":"BLOCKED: the tool-call envelope carries a non-string field (e.g. an ARRAY tool_input.path). Hook stdin is model-controlled and untrusted (ADR-155); a non-string is never coerced, because the coerced value matches no path test and would bypass this guard. Re-send the path as a string."}'
+  jq -n '{"decision":"deny","reason":"BLOCKED: the tool-call envelope carries a non-string field (e.g. an ARRAY tool_input.path). Hook stdin is model-controlled and untrusted (ADR-156); a non-string is never coerced, because the coerced value matches no path test and would bypass this guard. Re-send the path as a string."}'
   exit 2
 fi
 

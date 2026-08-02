@@ -24,7 +24,7 @@ deny() {
   jq -n --arg reason "$1" '{"decision":"deny","reason":$reason}'
   exit 2
 }
-# --- ADR-155 (mirror): the HookEvent envelope is MODEL-CONTROLLED ------------
+# --- ADR-156 (mirror): the HookEvent envelope is MODEL-CONTROLLED ------------
 # This port never calls eval, so it is not vulnerable to the #7164 code
 # execution. It is still EVADABLE by the same payload: `jq -r` renders a
 # non-string field across multiple lines, which matches none of the anchored
@@ -35,7 +35,7 @@ deny() {
 # contracted field is the wrong TYPE. A transport failure keeps the pre-existing
 # behaviour, so this change cannot alter what happens on a jq hiccup.
 #
-# The OpenHands protocol has no `ask` (ADR-156's posture in .claude/hooks/), so
+# The OpenHands protocol has no `ask` (ADR-157's posture in .claude/hooks/), so
 # the anomalous shape DENIES. No legitimate caller sends a non-string here, and
 # a deny is recoverable where a silent bypass is not. Converging the two
 # harnesses on one extractor is a tracked follow-up.
@@ -50,7 +50,7 @@ PMR_ENVELOPE_SHAPE=$(printf '%s' "$INPUT" | jq -r '
      and ((if (.tool_input | has("path")) and (.tool_input.path != null) then .tool_input.path else .tool_input.file_path end | if . == null then "" else . end) | type == "string")
   then "ok" else "nonstring" end' 2>/dev/null) || PMR_ENVELOPE_SHAPE="unparseable"
 if [[ "$PMR_ENVELOPE_SHAPE" == "nonstring" ]]; then
-  deny "BLOCKED: the tool-call envelope carries a non-string field (e.g. an ARRAY tool_input.command). Hook stdin is model-controlled and untrusted (ADR-155); a non-string is never coerced, because the coerced value matches no guard and would bypass every gate in this hook. Re-send the command as a string."
+  deny "BLOCKED: the tool-call envelope carries a non-string field (e.g. an ARRAY tool_input.command). Hook stdin is model-controlled and untrusted (ADR-156); a non-string is never coerced, because the coerced value matches no guard and would bypass every gate in this hook. Re-send the command as a string."
 fi
 
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""')

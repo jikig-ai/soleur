@@ -70,10 +70,10 @@ fi
 
 payload="$(cat)"
 __HI_RAW="$payload"
-# ADR-155: hook stdin is model-controlled. A non-string field is surfaced,
+# ADR-156: hook stdin is model-controlled. A non-string field is surfaced,
 # never coerced — this hook never ran eval, but `jq -r` renders an array
 # across lines, which matches none of its guards, so the payload would have
-# slipped every gate below (#7164). ADR-156: it asks instead.
+# slipped every gate below (#7164). ADR-157: it asks instead.
 if ! hook_parse_input "$__HI_RAW"; then
   hook_input_report "git-commit-secret-scan"
   hook_input_should_ask && { hook_input_emit_ask "git-commit-secret-scan"; exit 0; }

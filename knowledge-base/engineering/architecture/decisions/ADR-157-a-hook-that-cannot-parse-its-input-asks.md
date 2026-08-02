@@ -1,10 +1,10 @@
-# ADR-156 — A hook that cannot fully parse its input asks
+# ADR-157 — A hook that cannot fully parse its input asks
 
 - **Status:** Accepted
 - **Date:** 2026-08-02
 - **PR:** #7168
 - **Issue:** #7164
-- **Related:** [ADR-155](./ADR-155-hook-stdin-is-model-controlled-and-untrusted.md) (the trust
+- **Related:** [ADR-156](./ADR-156-hook-stdin-is-model-controlled-and-untrusted.md) (the trust
   boundary this implements), [ADR-070](./ADR-070-l3-phase-tool-scoping-two-tier-fail-open.md) (the
   only prior sanction of fail-open in a hook, and the complement of this case),
   `.claude/hooks/lib/hook-input.sh`, `.claude/hooks/README.md` ("Parsing hook input"),
@@ -12,12 +12,12 @@
 - **Supersedes:** the silent-absorb reading of
   `knowledge-base/project/learnings/2026-03-18-stop-hook-jq-invalid-json-guard.md` — see below
 
-> **Ordinal.** ADR-156 is the next free ordinal after ADR-155 against a freshly fetched `origin/main`,
-> verified at `/work` time. Provisional until `/ship` re-checks at merge.
+> **Ordinal.** Renumbered 156 -> 157 at `/ship` time, in lockstep with ADR-156 (was 155), after a
+> sibling PR claimed 155 on `origin/main` mid-pipeline.
 
 ## Context
 
-[ADR-155](./ADR-155-hook-stdin-is-model-controlled-and-untrusted.md) requires a hook to verify the
+[ADR-156](./ADR-156-hook-stdin-is-model-controlled-and-untrusted.md) requires a hook to verify the
 input invariants it depends on. It does not say what happens when verification fails, and that
 question turned out to carry the whole design.
 
@@ -97,7 +97,7 @@ commit, and stash guard on the call.
   have reported "handled" while allowing the command. Surrogates therefore ask. If surrogate rows
   actually appear in telemetry, the upstream emitter is the bug to file.
 - **Reachability of the original RCE stays open.** Whether the harness type-validates `tool_input`
-  before dispatch could not be established from inside this repo. That is precisely ADR-155's
+  before dispatch could not be established from inside this repo. That is precisely ADR-156's
   rationale and is not resolved here; it must be neither upgraded to "confirmed exploitable" nor
   downgraded to "theoretical."
 - **`ask` is honored** per a CC-2.1.142 probe recorded in `DEFER-DECISION-PAYLOAD-SHAPE.md`, and is

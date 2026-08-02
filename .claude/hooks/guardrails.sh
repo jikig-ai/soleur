@@ -56,10 +56,10 @@ INPUT=$(cat)
 # .tool_input.command produced an assignment followed by a COMMAND, which eval
 # ran (#7164). FILE_PATH is extracted here too so the freeze edit-lock branch
 # (Write/Edit) shares the same single fork.
-# Parse hook stdin WITHOUT shell evaluation (ADR-155: stdin is
+# Parse hook stdin WITHOUT shell evaluation (ADR-156: stdin is
 # model-controlled and untrusted). A non-string field is surfaced, never
 # coerced — coercion closes the RCE and leaves the guards evaded (#7164).
-# ADR-156: a hook that cannot fully parse its input asks. The exit lives
+# ADR-157: a hook that cannot fully parse its input asks. The exit lives
 # HERE, at the call site, not inside the library.
 if ! hook_parse_input "$INPUT"; then
   hook_input_report "guardrails"

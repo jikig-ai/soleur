@@ -123,7 +123,7 @@ assert_decision "(l) non-Bash tool allows" "allow" \
   "$(jq -nc '{tool_name: "Write", tool_input: {file_path: "x.md", content: "while gh run watch; do :; done"}}')"
 
 # --- Fail-open on malformed / empty stdin (P3 regression guard) ------------
-# EXPECTATION REFRESHED for #7164 (ADR-156), and deliberately TIGHTENED.
+# EXPECTATION REFRESHED for #7164 (ADR-157), and deliberately TIGHTENED.
 #
 # The fail-open contract is unchanged and still asserted by (o) below: the hook
 # exits 0 and never blocks the session on unparseable input.
@@ -135,7 +135,7 @@ assert_decision "(l) non-Bash tool allows" "allow" \
 # `ask` on the very same unparseable payload. A non-responder shouting an
 # explicit `allow` into that round is at best redundant and at worst overrides
 # the prompt, depending on Claude Code's multi-hook precedence — an upstream
-# invariant this repo cannot verify, which is exactly what ADR-155 refuses to
+# invariant this repo cannot verify, which is exactly what ADR-156 refuses to
 # depend on. Emitting nothing removes the question.
 assert_decision "(m) malformed JSON stdin: no decision emitted (fault recorded, tool not blocked)" "<none>" 'not json{'
 assert_decision "(n) empty stdin: no decision emitted (fault recorded, tool not blocked)" "<none>" ''

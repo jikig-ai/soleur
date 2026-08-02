@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Parse the PreToolUse tool-call envelope without shell evaluation.
 #
-# ADR-155 — hook stdin is MODEL-CONTROLLED and untrusted; a hook must not depend
+# ADR-156 — hook stdin is MODEL-CONTROLLED and untrusted; a hook must not depend
 #           on an invariant of that input which it cannot itself verify.
-# ADR-156 — a hook that cannot fully parse its input ASKS. It never continues
+# ADR-157 — a hook that cannot fully parse its input ASKS. It never continues
 #           silently and it never denies.
 #
 # Replaces, in 20 hooks:
@@ -55,7 +55,7 @@ HOOK_INPUT_HOOK=""
 # exit 0. All-emit would turn a persistent fault (jq missing) into an
 # unrecoverable loop: 18 hooks fire per Bash call and repairing PATH is itself a
 # Bash call, so the operator would face 18 prompts per repair attempt.
-# ADR-156; the contract test asserts every PreToolUse matcher carrying a
+# ADR-157; the contract test asserts every PreToolUse matcher carrying a
 # migrated hook also carries this one.
 HOOK_INPUT_RESPONDER="guardrails"
 
@@ -289,6 +289,6 @@ hook_input_should_ask() {
 hook_input_emit_ask() {
   local hook="${1:-unknown}"
   local reason="${HOOK_INPUT_REASON:-unknown}"
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"SAFETY: %s could not fully parse the tool-call envelope (reason: %s), so its guards did NOT run for this call. Hook stdin is model-controlled and is not trusted (ADR-155); a hook that cannot parse its input asks rather than continuing silently (ADR-156). Approve only if you are confident this command is safe. Set SOLEUR_DISABLE_HOOK_INPUT_ASK=1 to suppress this prompt."}}\n' \
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"SAFETY: %s could not fully parse the tool-call envelope (reason: %s), so its guards did NOT run for this call. Hook stdin is model-controlled and is not trusted (ADR-156); a hook that cannot parse its input asks rather than continuing silently (ADR-157). Approve only if you are confident this command is safe. Set SOLEUR_DISABLE_HOOK_INPUT_ASK=1 to suppress this prompt."}}\n' \
     "$hook" "$reason"
 }

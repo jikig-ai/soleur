@@ -8,7 +8,7 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 labels: [priority/p0-critical, type/security]
 milestone: "Phase 4: Validate + Scale"
-adr: [ADR-155, ADR-156]
+adr: [ADR-156, ADR-157]
 revision: "v3 — post deepen-plan (6 review passes; 6 of v1's own properties falsified by measurement)"
 ---
 
@@ -40,7 +40,7 @@ payload still bypasses `hr-never-git-stash-in-worktrees`, the commit-to-main gua
 gates — a false-negative security close. The 8 sibling hooks that read `.tool_input.command` via
 `$( )` are *already* evaded this way, because `jq -r` pretty-prints an array across lines.
 
-### The decision (ADR-156): there is no silent disarm, anywhere
+### The decision (ADR-157): there is no silent disarm, anywhere
 
 v1 built an eight-cell posture table with a fail-open branch, a size cap, a surrogate-recovery path,
 and a per-session counter to bound the resulting oracle. Six review passes falsified most of it. The
@@ -195,7 +195,7 @@ finding that governs the cuts above.
 | `emit_incident "guardrails-input-parse-failure"` | the orphan gate hard-`ERROR`s on unknown ids **and** Phase 1's exclusion deletes the only surface (P20, P21) | one `hook-input-*` prefix; exclusion **plus** a first-class summary counter **plus** a widened compound filter — and the in-band `ask` as the primary channel |
 | "a startup canary fed a known-deny fixture" | a hot-path canary re-pays the cost #2253 removed; and 16 hooks already ship sibling suites doing exactly this (P23) | **run the 16 existing sibling suites**; write the 2 missing ones. Same assurance, ~90% less new fixture code |
 | Issue scopes to 10 files | 8 more `.tool_input.command` readers are evaded by the same payload; 12 more read `.tool_input.file_path`/`.skill`, of which 2 (`worktree-write-guard.sh`, `iac-plan-write-guard.sh`) are **blocking write guards** and `pencil-open-guard.sh` sits on an `mcp__*` matcher — exactly the reachability argument the issue makes | sweep 10 + 8 + the 2 write guards; **explicitly exempt** the 10 advisory/PostToolUse hooks with a listed reason and a follow-up issue |
-| Learning `2026-03-18-stop-hook-jq-invalid-json-guard.md` justified the `\|\| true` absorb | correct about absorbing, silent about announcing | ADR-156 supersedes that reading |
+| Learning `2026-03-18-stop-hook-jq-invalid-json-guard.md` justified the `\|\| true` absorb | correct about absorbing, silent about announcing | ADR-157 supersedes that reading |
 | `.openhands/hooks/*` mirrors | different envelope (`.working_dir`, `.tool_input.path`) and deny shape; not RCE-vulnerable, is evadable. `pre-merge-rebase-parity.test.sh`'s own header records that silent divergence has happened twice on that host | minimal in-place guard + parity test. Convergence is a follow-up |
 | `security_reminder_hook.py` | `json.loads` + `isinstance(new_string, str)` — the only pre-existing type-check on model-controlled input | not vulnerable; say so in the PR body so the sweep reads complete. Cite as the precedent bash converges on |
 | — | `2026-05-15-deterministic-permissions-empirical-probes-and-review-gaps.md` records "security-sentinel — confirmed jq @sh-escape neutralizes stdin command injection" | append a **dated correction** citing #7164; do not rewrite the historical finding; never write "input is now safe" |
@@ -225,7 +225,7 @@ exists to log — and the row carries field name, JSON type, and length only.
 **Reachability stays open, deliberately.** Whether the harness type-validates `tool_input` before
 dispatch could not be established from inside the repo. The PR body must neither upgrade this to
 "confirmed exploitable" nor downgrade it to "theoretical." The issue's framing is correct and is
-ADR-155's rationale: *a hook must not depend on an upstream invariant it cannot verify*, and
+ADR-156's rationale: *a hook must not depend on an upstream invariant it cannot verify*, and
 `PreToolUse` also receives MCP and other tool shapes.
 
 ---
@@ -285,10 +285,10 @@ README documents. **This is the highest-value ordering change in the review.**
 
 Re-derive both ordinals from a freshly-fetched `origin/main` immediately before writing.
 
-- **ADR-155 — the trust boundary.** *Hook stdin is model-controlled and untrusted; a hook must not
+- **ADR-156 — the trust boundary.** *Hook stdin is model-controlled and untrusted; a hook must not
   depend on an upstream invariant it cannot verify.* Durable, repo-wide, binds ~30 hooks and both
   harnesses. Encoded by the new `claude -> hooks` C4 edge. Must never be superseded.
-- **ADR-156 — the response posture.** *A hook that cannot fully parse its input asks; it never
+- **ADR-157 — the response posture.** *A hook that cannot fully parse its input asks; it never
   continues silently and never denies.* Operational and tunable. Cites 155. Owns the Alternatives
   table. Must supersede the silent-absorb reading of `2026-03-18-stop-hook-jq-invalid-json-guard.md`
   and cite ADR-070 as the only prior fail-open sanction — an *additive advisory* hook, the complement
@@ -298,7 +298,7 @@ Re-derive both ordinals from a freshly-fetched `origin/main` immediately before 
 Splitting keeps the mechanism (`hook_parse_input`, the `eval` ban, one fork) out of ADR scope — it
 lives in the README + the lint — so a future helper refactor cannot supersede the trust boundary
 along with it. Add an `AP-NNN` to `principles-register.md` (which has no principle covering untrusted
-input) linked to ADR-155.
+input) linked to ADR-156.
 
 ### Phase 4 — The extractor
 
@@ -384,7 +384,7 @@ fi
   for 17 others, so Do Not Skim §9's `settings.json` assertion is mandatory, not optional.
 - **Kill switch:** `SOLEUR_DISABLE_HOOK_INPUT_ASK=1` disables escalation only, never parsing —
   precedent `SOLEUR_DISABLE_SESSION_STATE`. Without it there is no in-band recovery. Document in
-  ADR-156 and the README; assert in the suite.
+  ADR-157 and the README; assert in the suite.
 - Telemetry payload: field name, JSON type, length. Nothing else.
 
 ### Phase 6 — Migrate the 10 `eval` hooks (commit 1)
@@ -403,7 +403,7 @@ Say "no shell evaluation of hook input" — never "input is now safe".
 
 Do **not** edit `2026-04-18-refactor-drain-pr2213-review-backlog-plan.md` or its archived spec —
 point-in-time records holding the risk analysis that missed this bug (it modelled string payloads
-only). Cite them in ADR-156.
+only). Cite them in ADR-157.
 
 ### Phase 7 — The sibling readers (commit 2)
 
@@ -523,8 +523,8 @@ been useless: the gap is a missing *edge*, not a missing noun.
 Edit `model.c4` only — both endpoints are already in both views, so LikeC4 renders the edge with no
 `views.c4` change:
 
-1. Add `claude -> hooks "Tool-call envelope on stdin — MODEL-CONTROLLED, UNTRUSTED (ADR-155): parsed
-   without eval; input that cannot be fully parsed asks, never continues silently (ADR-156)"
+1. Add `claude -> hooks "Tool-call envelope on stdin — MODEL-CONTROLLED, UNTRUSTED (ADR-156): parsed
+   without eval; input that cannot be fully parsed asks, never continues silently (ADR-157)"
    { technology "stdin JSON" }`.
 2. Amend `platform.engine.hooks`'s `description`, falsified by omission — it says what hooks *do*,
    never what they *consume*.
@@ -539,8 +539,8 @@ Then run `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts`
 - `.claude/hooks/hook-input-contract.test.sh`
 - `.claude/hooks/ship-soak-followthrough-gate.test.sh`
 - `.claude/hooks/doppler-secrets-delete-redirect.test.sh`
-- `knowledge-base/engineering/architecture/decisions/ADR-155-hook-stdin-is-model-controlled-and-untrusted.md`
-- `knowledge-base/engineering/architecture/decisions/ADR-156-a-hook-that-cannot-parse-its-input-asks.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-156-hook-stdin-is-model-controlled-and-untrusted.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-157-a-hook-that-cannot-parse-its-input-asks.md`
 
 ## Files to Edit
 
@@ -608,9 +608,9 @@ No `SKILL.md` `description:` changes, so the skill-description budget check does
 18. **AC18 — false claims corrected.** `git grep -nE '@sh (shell-)?escapes|eval is safe' -- '.claude/hooks/*.sh'`
     is zero; the 2026-05-15 learning carries a dated correction citing #7164 and does not contain
     "input is now safe"; **and the PR body makes no `echo`-vs-`printf` security claim** (P22).
-19. **AC19 — C4 valid.** `model.c4` has `claude -> hooks` naming ADR-155 and "UNTRUSTED";
+19. **AC19 — C4 valid.** `model.c4` has `claude -> hooks` naming ADR-156 and "UNTRUSTED";
     `cd apps/web-platform && ./node_modules/.bin/vitest run test/c4-code-syntax.test.ts test/c4-render.test.ts` passes.
-20. **AC20 — both ADRs exist** with `status: accepted`, a `## Decision`, and ADR-156's
+20. **AC20 — both ADRs exist** with `status: accepted`, a `## Decision`, and ADR-157's
     `## Alternatives Considered` naming fail-closed, coerce-and-continue, per-field `jq -r`,
     `--raw-output0`, the per-session counter, the surrogate scrub, and the size cap.
 21. **AC21 — exemptions listed.** The README scopes the mandate and names the 10 exempt hooks and the
@@ -781,7 +781,7 @@ runner, no shared file. No other open code-review issue names any file in `Files
 | **Scrub lone surrogates and run the guards armed** (v1) | **Rejected — measured.** `git ␦ stash` does not match the stash guard. Filed as a follow-up if surrogate rows actually appear |
 | **256 KB cap, oversize ⇒ fail-open** (v1) | **Rejected.** One-line padding disarm; fires on routine large `Write` payloads (this repo tracks an 806 KB lockfile); `${#input}` counts characters, not bytes |
 | **Per-session counter** (v1) | **Rejected — no session identity, circular key, falsified bound.** With no fail-open cell there is no oracle to bound |
-| **Fail closed on parse failure** | **Rejected**, recorded in ADR-156. Bricks the session with no in-band recovery |
+| **Fail closed on parse failure** | **Rejected**, recorded in ADR-157. Bricks the session with no in-band recovery |
 | **Fail open with a loud incident** (v1) | **Rejected.** Not loud: a `PreToolUse` hook is operator-blind, the incident is read by an aggregator later, and the operator whose gates just went dark learns nothing now |
 | **All-emit `ask`** | **Rejected.** Turns `jq_missing` into an unrecoverable loop — fixing `PATH` is itself a Bash call |
 | **Per-field `VAR=$(… jq -r …)`** — the mirror's shape | **Rejected.** N forks per hook per call, reverting #2253 across 20 hooks, and it still needs the type-assert |

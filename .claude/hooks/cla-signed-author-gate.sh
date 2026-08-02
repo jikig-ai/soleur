@@ -52,10 +52,10 @@ INPUT=$(cat)
 # Single jq fork, and NO shell evaluation of hook input. The previous comment
 # here claimed `@sh` quoting meant attacker bytes could not inject. That was
 # true only for a STRING value; an ARRAY became a command (#7164).
-# Parse hook stdin WITHOUT shell evaluation (ADR-155: stdin is
+# Parse hook stdin WITHOUT shell evaluation (ADR-156: stdin is
 # model-controlled and untrusted). A non-string field is surfaced, never
 # coerced — coercion closes the RCE and leaves the guards evaded (#7164).
-# ADR-156: a hook that cannot fully parse its input asks. The exit lives
+# ADR-157: a hook that cannot fully parse its input asks. The exit lives
 # HERE, at the call site, not inside the library.
 if ! hook_parse_input "$INPUT"; then
   hook_input_report "cla-signed-author-gate"

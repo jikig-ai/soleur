@@ -67,8 +67,8 @@ fi
 
 INPUT=$(cat)
 
-# ADR-155: hook stdin is model-controlled. A non-string field is surfaced, never
-# coerced (#7164). ADR-156: it asks rather than continuing silently. This
+# ADR-156: hook stdin is model-controlled. A non-string field is surfaced, never
+# coerced (#7164). ADR-157: it asks rather than continuing silently. This
 # REPLACES the previous fail-open-on-malformed-JSON branch — the hook still
 # never blocks the session on a parse failure, but the disarm is no longer
 # silent.

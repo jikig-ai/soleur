@@ -64,7 +64,7 @@ FREEZE_LOCK_REPO_ROOT="$FZ" bash "$FREEZE_HELPER" set "$FZ/apps" >/dev/null 2>&1
 check "freeze: edit outside prefix denies" "2:deny"   "$(run "$(mk_edit "$FZ/other/x.ts")" "$FZ" "$HOME" "$FZ")"
 check "freeze: edit inside prefix allows"  "0:<none>" "$(run "$(mk_edit "$FZ/apps/x.ts")" "$FZ" "$HOME" "$FZ")"
 
-# --- #7164: the non-string envelope guard (ADR-155, mirror) -----------------
+# --- #7164: the non-string envelope guard (ADR-156, mirror) -----------------
 # This port never calls eval, so it never had the code-execution half of #7164.
 # It DID have the evasion half: `jq -r` renders an array across lines, matching
 # none of the anchored guards, so the payload below exited 0 on origin/main —
