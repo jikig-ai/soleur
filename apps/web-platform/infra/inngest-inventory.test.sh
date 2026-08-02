@@ -1033,6 +1033,51 @@ STUB
     assert_eq "all ci-deploy.sh INNGEST_BASE_URL sites agree" "1" "$uniq_n"
   fi
 
+  # (9) THE THIRD WRITE SITE (finding 1). The ADR-100 cutover commit b02870e1d changed
+  # ci-deploy.sh AND cloud-init.yml in LOCKSTEP; the rollback moved only ci-deploy.sh.
+  # cloud-init.yml's `-e INNGEST_BASE_URL` sits OUTSIDE the `%{ if web_colocate_inngest ~}`
+  # gate, so it fires on every fresh boot regardless of the toggle — and every guard in
+  # this PR was scoped to ci-deploy.sh and structurally could not see it. The one guard
+  # that does touch cloud-init's value (cloud-init-inngest-bootstrap.test.sh) is
+  # presence-only: it passes with 10.0.1.40 just as happily.
+  #
+  # Assertions are on the VALUE, not a port-shape glob. Mutual agreement ALONE is not
+  # enough: reverting all three sites in lockstep keeps them agreeing, which is measured
+  # mutation M6 — the one that leaves the whole change under review green. So the shared
+  # value is also pinned to the ADR-155 paused operating point, here, in the suite that
+  # infra-validation.yml runs, rather than only in a TypeScript file gated by a different
+  # workflow.
+  #
+  # The extraction deliberately drops the `http://` anchor the ci-deploy greps use, so
+  # `https://`, `${VAR}` and quoted forms enter the population instead of silently
+  # vanishing from it (measured mutation M5), and the match COUNT is asserted rather than
+  # assumed.
+  local paused_target ci_init ci_init_n ci_init_val ci_init_derived
+  paused_target="http://host.docker.internal:8288"
+  ci_init="$(dirname "$TARGET")/cloud-init.yml"
+  if [[ -r "$ci_init" ]]; then
+    ci_init_n=$( { grep -oE 'INNGEST_BASE_URL=[^[:space:]\\]+' "$ci_init" || true; } | wc -l | tr -d ' ')
+    assert_eq "cloud-init.yml has exactly one INNGEST_BASE_URL write site" "1" "$ci_init_n"
+
+    ci_init_val=$( { grep -oE 'INNGEST_BASE_URL=[^[:space:]\\]+' "$ci_init" || true; } \
+      | head -1 | sed 's#^INNGEST_BASE_URL=##')
+    assert_eq "cloud-init.yml agrees with ci-deploy.sh (the b02870e1d lockstep)" \
+      "$ci_val" "$ci_init_val"
+    assert_eq "cloud-init.yml carries the ADR-155 paused operating point (kills M6)" \
+      "$paused_target" "$ci_init_val"
+    assert_eq "ci-deploy.sh carries the ADR-155 paused operating point (kills M6)" \
+      "$paused_target" "$ci_val"
+
+    # And it must RESOLVE — a fresh-boot host derives its probe target from this value.
+    printf 'INNGEST_BASE_URL=%s\n' "$ci_init_val" > "$d/parity-cloud-init"
+    ci_init_derived=$(run_derive "$d/parity-cloud-init")
+    assert_eq "cloud-init.yml target resolves to the co-located probe target" \
+      "http://127.0.0.1:8288" "$ci_init_derived"
+  else
+    echo "  FAIL: cloud-init.yml unreadable at $ci_init — the third write site is unguarded"
+    FAIL=$((FAIL + 1))
+  fi
+
   rm -rf "$d"
 }
 

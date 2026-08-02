@@ -136,10 +136,31 @@ incident with nothing fixed — the monitoring blind spot wearing a different ha
 
 - Dispatch is restored in one deploy cycle, using the component that is demonstrably serving.
 - The `hcloud_server.inngest` replace hazard is not incurred: no Terraform, no `user_data` change.
-- The `INNGEST_HOST_FALLBACK` ↔ `ci-deploy.sh` parity invariant is preserved by moving both write
-  sites together; it is a parity guard between two sites, not a pin to `10.0.1.40`.
-- The dedicated host remains provisioned and dark. Every other `10.0.1.40` reference in the repo
-  legitimately describes it and is untouched.
+- The `INNGEST_HOST_FALLBACK` ↔ `ci-deploy.sh` parity invariant is preserved by moving the dispatch
+  write sites together; it is a parity guard across those sites, not a pin to `10.0.1.40`.
+
+  **Correction (this ADR originally said "both write sites" and was wrong).** There are **three**
+  dispatch write sites, not two: `ci-deploy.sh` canary, `ci-deploy.sh` prod, and `cloud-init.yml`'s
+  fresh-boot `docker run`. `b02870e1d` (#6348, ADR-100 step 2.4) moved all three in lockstep; the
+  first cut of this rollback moved only the two in `ci-deploy.sh`. Because the `cloud-init.yml` site
+  sits **outside** the `web_colocate_inngest` gate, it fired on every fresh boot regardless of the
+  toggle, and every parity guard shipped with the rollback was scoped to `ci-deploy.sh` and
+  structurally could not see it. All three now carry `host.docker.internal:8288`, and
+  `inngest-inventory.test.sh test_probe_target_follows_app` case (9) asserts the shared **value**
+  across all three — mutual agreement alone is satisfied by reverting them together.
+
+- The dedicated host remains provisioned and dark.
+
+  **Correction (this ADR originally claimed every other `10.0.1.40` reference "legitimately describes
+  it and is untouched").** That claim was not derived and was false: `cloud-init.yml`'s was a live
+  dispatch write site, not a description. The corrected, enumerated statement is narrower — the
+  remaining references live in the dark host's own provisioning, probe, firewall and telemetry
+  surfaces (`inngest-host.tf`, `inngest.tf`, `cloud-init-inngest.yml`, `cron-egress-*`,
+  `inngest-registry-probe.sh`, `inngest-doublefire-probe.sh`, `vector.toml`, the cutover workflow)
+  plus their tests and ADRs; those are untouched. `server/inngest/client.ts` additionally carries a
+  stale post-cutover **comment**, tracked separately. The general lesson is
+  `hr-verify-repo-capability-claim-before-assert`: a CTO ruling that listed `cloud-init.yml` in the
+  "must NOT be touched" set was taken on trust instead of re-derived.
 - **ADR-088 arm-b is refuted for this consumer**, not paused: App installation tokens cannot pull
   these packages, so a GHCR read credential cannot be held this way at all. The follow-up is to
   retire GHCR from the dedicated-Inngest cold-boot path (finish ADR-096 for
