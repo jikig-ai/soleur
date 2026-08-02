@@ -1112,7 +1112,22 @@ Source-4 allowlist, both directions; token-shaped redaction is a filed follow-up
   exists to close.
 - **AC-R5-2** Deleting either runner's `run_suite` line reds `lint-orphan-test-suites.sh` and the
   message names the missing runner. Sandbox output in the PR body.
-- **AC-R5-3** `grep -c 'This runner does NOT cover apps/web-platform/infra/' scripts/test-all.sh` = 0.
+- **AC-R5-3** No surviving claim that this runner does not cover the infra directory:
+
+  ```bash
+  grep -cE '(does NOT cover|NOT covered|is NOT covered)[^|]*apps/web-platform/infra|apps/web-platform/infra[^|]*(does NOT cover|NOT covered)' scripts/test-all.sh
+  ```
+
+  = 0. **The originally-drafted form of this AC was vacuous and was corrected here rather than
+  reported as passing.** It read `grep -c 'This runner does NOT cover apps/web-platform/infra/'`,
+  and that literal never appeared on any single line: the comment it targeted wraps after "does
+  NOT", so the command returned 0 against the UNMODIFIED file and would have certified Phase 2.4
+  as done before a byte was changed. Measured before the edit: the literal form returned **0**,
+  the shape above returned **5**. The AC must also stay scoped to the infra path — an unscoped
+  `does NOT cover` matches a still-TRUE and unrelated claim about `scripts/*.test.sh` globs
+  (`test-all.sh` line ~330), so the loose form fails on a correct tree. `cq-assert-anchor-not-bare-token`,
+  and the plan-quoted-command rule: verify by running the LITERAL command, then fix the command
+  when the literal is the thing that is broken.
 - **AC-R5-4** An irrelevance skip prints the exact re-run command; `SOLEUR_INCIDENT_SKIP=1` prints the
   same, and the measured wall-clock is in the PR body.
 

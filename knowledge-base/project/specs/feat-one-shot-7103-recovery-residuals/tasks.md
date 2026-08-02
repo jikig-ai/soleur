@@ -19,7 +19,7 @@ recurrence risk), R2 → R3 a hard dependent pair.
 ## Phase 0 — Preconditions (read-only)
 
 - [ ] 0.1 Run the full local suite on a clean tree; record the `N/N suites passed` baseline.
-- [ ] 0.2 List the registered infra suites with `… --list | grep -c '\.test\.sh$'` (expect 87 — **not**
+- [x] 0.2 List the registered infra suites with `… --list | grep -c '\.test\.sh$'` (expect 87 — **not**
       `| wc -l`, which returns 88 because the runner prints a header). Run them in full; record
       PASS/RED. Triage any pre-existing red under `wg-when-tests-fail-and-are-confirmed-pre` before
       Phase 2.
@@ -35,20 +35,20 @@ recurrence risk), R2 → R3 a hard dependent pair.
       `remote-exec` grep assertion.
 - [ ] 0.12 Read `infra-config-install.sh`'s content gate and confirm its `/etc/default/*` scope.
       **Security precondition — do not start 3.2 without this.**
-- [ ] 0.13 Confirm repo visibility is PUBLIC (context for the 5.1 `::add-mask::`).
+- [x] 0.13 Confirm repo visibility is PUBLIC (context for the 5.1 `::add-mask::`).
 
 ## Phase 1 — R1: make the invocation say who it is
 
-- [ ] 1.1 Add a per-hook `SOLEUR_DEPLOY_HOOK_ID` string source to `deploy` and `deploy-peer` in
+- [x] 1.1 Add a per-hook `SOLEUR_DEPLOY_HOOK_ID` string source to `deploy` and `deploy-peer` in
       `hooks.json.tmpl`.
-- [ ] 1.2 Emit the 4-field `SOLEUR_DEPLOY_INVOCATION` marker in `ci-deploy.sh`, after the credential
+- [x] 1.2 Emit the 4-field `SOLEUR_DEPLOY_INVOCATION` marker in `ci-deploy.sh`, after the credential
       read and before `flock`. Closed vocabulary; truncated `script_sha`; no token bytes.
-- [ ] 1.3 Add the `else` branch to the credential `if [ -r … ]` that feeds `cred_file`. Distinguish
+- [x] 1.3 Add the `else` branch to the credential `if [ -r … ]` that feeds `cred_file`. Distinguish
       absent from unreadable. **No second marker.**
-- [ ] 1.4 Add `zot_gate_degraded_event no_credential_source` to the one gate arm that lacks it.
+- [x] 1.4 Add `zot_gate_degraded_event no_credential_source` to the one gate arm that lacks it.
       **This is half (b).**
-- [ ] 1.5 Leave the fail-open control flow untouched; add no new deploy-state reason enum.
-- [ ] 1.6 Extend `ci-deploy.test.sh`: marker on every path, each `cred_file` value reachable,
+- [x] 1.5 Leave the fail-open control flow untouched; add no new deploy-state reason enum.
+- [x] 1.6 Extend `ci-deploy.test.sh`: marker on every path, each `cred_file` value reachable,
       degraded-event on absence, no fixture token in output, distinct hook IDs.
 - [ ] 1.7 **Re-file half (a) on #7103** with reproduction detail verbatim (both timestamps, both
       `ZOT_GATE` lines, the `IMAGE_PULL_FAIL` line, F1–F7, the marker as the naming mechanism).
@@ -57,13 +57,13 @@ recurrence risk), R2 → R3 a hard dependent pair.
 
 ## Phase 2 — R5(a): make the local suite invoke the uncovered runners
 
-- [ ] 2.1 Register both runners in `scripts/test-all.sh` via `run_suite`.
-- [ ] 2.2 Relevance-gate the infra runner; print a loud skip with the exact re-run command.
-- [ ] 2.3 Add the named `SOLEUR_INCIDENT_SKIP=1` bypass; record the 0.2 wall-clock in the PR body.
-- [ ] 2.4 Rewrite the `echo`-only mentions and the now-false coverage-boundary comment.
-- [ ] 2.5 Add `REQUIRED_RUNNERS` to `lint-orphan-test-suites.sh`, anchored on the `run_suite` **call
+- [x] 2.1 Register both runners in `scripts/test-all.sh` via `run_suite`.
+- [x] 2.2 Relevance-gate the infra runner; print a loud skip with the exact re-run command.
+- [x] 2.3 Add the named `SOLEUR_INCIDENT_SKIP=1` bypass; record the 0.2 wall-clock in the PR body.
+- [x] 2.4 Rewrite the `echo`-only mentions and the now-false coverage-boundary comment.
+- [x] 2.5 Add `REQUIRED_RUNNERS` to `lint-orphan-test-suites.sh`, anchored on the `run_suite` **call
       shape**, never the bare path.
-- [ ] 2.6 Mutation-test 2.5 in a sandbox; record the output.
+- [x] 2.6 Mutation-test 2.5 in a sandbox; record the output.
 
 ## Phase 3 — R2: reconcile the units whose drop-ins were delivered
 
