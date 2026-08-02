@@ -15,6 +15,39 @@ revision: v3 (after a four-agent plan-review panel; see "Plan Review Revisions")
 > **Lane note.** No `spec.md` existed for this branch when planning began, so `lane:` could
 > not be carried forward. Defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-02
+**Review passes:** plan-review panel (architecture-strategist, spec-flow-analyzer,
+code-simplicity-reviewer, kieran-rails-reviewer) → v2/v3; deepen-plan pass (security-sentinel,
+observability-coverage-reviewer) → this revision. 25 numbered revisions, R1–R25.
+
+### Key improvements
+
+1. **Union, not swap.** A live probe showed a `prd`-root credential enumerates exactly one
+   config and that the two configs' key sets overlap only partially — so the checklist's swap
+   would drop `CI_SSH_ACCESS_TOKEN` (the 2026-07-29 outage credential) and make its own
+   Done-when unreachable.
+2. **The denominator reports; it does not gate.** The first draft let a short inventory derive
+   the healthy state and close the channel — a fail-open in the direction it claimed to guard.
+   The gate now uses a floor exact by construction; the inventory only prints the ratio.
+3. **The credential's real reach is disclosed.** `access = "read"` is not a capability boundary
+   when `prd` root holds a read/write Doppler token for itself and the Terraform GitHub App
+   private key. Both disclosure sections now name the escalation hops — and the mitigation that
+   makes the trade-off acceptable.
+4. **Every failure mode now reaches a channel.** Five paths that previously ended in a green
+   run with an unread annotation (empty credential list, revoked credential, failed issue
+   update, unreachable issue channel, the rung-2 scratch-config sweep) were re-routed.
+
+### New considerations discovered
+
+- A revoked credential exited before `emit_json`, so the coverage outputs were never published.
+- The `--status success` filter in the discoverability probe returned the last *healthy* run.
+- The floor is self-referential and cannot detect its own shortening.
+- Ambient `DOPPLER_TOKEN` fallback was prevented by a test rather than by construction.
+- An orphaned state write on a secret-bearing create is invisible to `terraform plan`, and the
+  provider ships no data source that could find it.
+
 ## Overview
 
 Two deliverables, one change, per the decision comment on #7159 (2026-08-02).
@@ -177,9 +210,18 @@ the credential lands.
   `github_actions_secret.doppler_token_drift` (`repository = "soleur"`,
   `secret_name = "DOPPLER_TOKEN_DRIFT"`,
   `plaintext_value = doppler_service_token.token_drift.key`). No `lifecycle` block on either.
-  Header carries the BLAST RADIUS note (the credential reads the whole `prd` config — the
-  accepted trade-off), `autonomy-considered: provider-mint-applied`, the rotation recipe, and
-  the reason no `ignore_changes` is present.
+  Header carries `autonomy-considered: provider-mint-applied`, the rotation recipe, the reason
+  no `ignore_changes` is present, **and a BLAST RADIUS block written in the
+  `workspaces-luks.tf:77-89` shape** — stating plainly that this is not least privilege,
+  naming the two escalation hops (`ghcr_minter`'s read/write token and the GitHub App private
+  key, both resident in `prd` root), recording that `DOPPLER_TOKEN_PRD` already carries the
+  same scope so no new capability is added, and citing
+  `knowledge-base/project/learnings/security-issues/2026-07-07-doppler-branch-config-does-not-isolate-secrets.md`
+  and #6167 rather than inventing fresh prose. It also carries a one-line **emergency
+  revocation** path beside the rotation recipe — `doppler configs tokens revoke <slug> -p
+  soleur -c prd` — noting that a revocation performed outside Terraform leaves state stale and
+  surfaces on the next `plan`, which is the safe direction and must not be "fixed" by
+  suppressing the drift.
   *Templates:* `apps/web-platform/infra/web-arm-write-token.tf`,
   `apps/web-platform/infra/kb-drift.tf:92-113`.
 
@@ -210,6 +252,37 @@ the credential lands.
   - Build an exact config-to-credential map (each credential returns exactly one config) and
     route **all four** downstream reads through it by env prefix: `:138`
     (`doppler secrets --only-names`), `:223`, `:505`, `:506` (`doppler secrets get`).
+  - **`unset DOPPLER_TOKEN DOPPLER_CONFIG` once the named credentials are snapshotted into
+    the map.** The step keeps `DOPPLER_TOKEN` in its environment for the whole run, so a fifth
+    read site added later — or one of the four missed — silently binds the ambient
+    `prd_terraform` credential and grades the wrong config's bytes. Test P3 catches that at
+    review time only. Unsetting makes a missed site **fail loudly by construction**, which is
+    the standard this FR already sets for the call-site interface, and it closes the
+    empty-`--token`/ambient-rebind hazard at the source rather than per call site.
+  - **Register every distinct scanned value with `::add-mask::` under `GITHUB_ACTIONS=true`,
+    before the first probe.** Actions auto-masks only `secrets.*`-sourced values, so every
+    `CF_API_TOKEN*` value and every Access secret the detector pulls is currently unmasked in
+    the job log — in the same change that deliberately un-swallows stderr from that subsystem.
+    This is the control that actually covers the residual below.
+  - **Argv, stated accurately.** Env-prefix delivery defends against a *different-UID local
+    observer* (`/proc/<pid>/cmdline` is world-readable, `/proc/<pid>/environ` is 0400), not
+    against a compromised runner — on a GitHub-hosted runner every step shares one UID. It is
+    still the right default, and it is not the whole picture: the detector already places
+    credential values on curl's argv at `:210` (`-H "Authorization: Bearer $v"`) and
+    `:361-362` (the Access id/secret headers), and the union **widens** that by bringing
+    `REGISTRY_PUSH_ACCESS_TOKEN_SECRET` into scope. That is pre-existing and accepted on an
+    ephemeral runner; the plan says so rather than implying argv is clean. Bounding fact worth
+    keeping in the header: the detector reads only *token-shaped* keys (`:146`, `:152`,
+    `:162`), not the whole ~116-secret config, so "two configs means more secret material
+    transits the runner" is bounded to that family.
+  - **`emit_json` runs before every exit-2 return.** Today the enumeration guard (`:104-107`)
+    and the non-vacuity gate (`:184-192`) exit before `emit_json` (`:679`), so a revoked
+    credential produces no verdict file at all, the step parses `configs` as `-1`, and
+    coverage lands on `unknown` — whose issue Remedy reads "do not widen the Doppler token,
+    fix the verdict file first", which is unperformable for a revoked credential. Emitting
+    first keeps `configs`, `configs_floor` and `coverage` published on every path, so a
+    revoked credential surfaces as `degraded` (a credential the step was given did not do its
+    job) rather than blinding the whole scan. The exit codes themselves are unchanged.
 
 - **FR4 — the detector owns the ladder.** Add `--inventory <path>`; `emit_json` gains
   `config_names` (scanned, sorted), `configs_floor`, `configs_expected`, `configs_unread`
@@ -239,9 +312,25 @@ the credential lands.
      or new variables silently arrive empty on the fallback path.
   Also: `DOPPLER_CONFIG: prd_terraform` is **removed** from the step's `env:` (`:156`) — a
   Doppler service token ignores it, and with two credentials in play it reads as "which config
-  this scans". And the step **fails loudly if `DOPPLER_TOKEN_ENVS` is empty**: an unset list
-  silently falls back to a floor of 1, where a single-config scan reads as `at-floor` and
-  closes the issue — the same fail-open in a new place.
+  this scans".
+
+  **Two guards on the floor, and the order matters.** `configs_floor` counts the names the
+  step supplies, so it is exact — but it is *self-referential*, and therefore structurally
+  blind to its own shortening: reduce the list from two names to one and the scan reports
+  `floor=1, scanned=1 → at-floor`, the close arm fires, and coverage silently regresses to one
+  config. That is the same fail-open shape the gate/report split was introduced to remove, in
+  a new place. So:
+  1. The step asserts `configs_floor >= 2` — an assertion **external** to the floor, because a
+     self-referential number cannot catch its own reduction — and downgrades to `degraded`
+     when it fails. The consumer suite pins both credential names in `DOPPLER_TOKEN_ENVS`.
+  2. When `DOPPLER_TOKEN_ENVS` is empty the step **writes `coverage=unknown` and
+     `verdict=unavailable` to `$GITHUB_OUTPUT` first, and only then fails.** Failing before
+     the write leaves every output as the empty string, and every consumer arm in this job
+     tests positively (`== 'dead'`, `== 'degraded'`, `contains(...)`), so *nothing* matches:
+     no email, no issue, and the final Sentry check-in derives its status from
+     `steps.plan.outputs.exit_code` rather than from `token_drift`, so the monitor still
+     reports `ok`. Writing first routes the failure to the DETECTOR-UNAVAILABLE email and the
+     `unknown` issue arm.
 
 - **FR6 — every consumer moves.** In `.github/workflows/scheduled-terraform-drift.yml` unless
   noted:
@@ -272,7 +361,23 @@ the credential lands.
   12. **`knowledge-base/engineering/operations/runbooks/ci-ssh-token-replace.md:87`** — an
       operator runbook whose stated exit condition is `coverage: multi-config`. This change
       makes that token unreachable, so the runbook step becomes unperformable if left.
-  13. `apps/web-platform/infra/tunnel.tf:277` and
+  13. **The verdict echo line (`:251`).** Today it prints
+      `token-drift verdict: … (detector exit …, causes: …, configs: …, coverage: …)` — no
+      `floor:` and no `ratio:`. The `discoverability_test` and AC27 both assert those fields,
+      so this line is a consumer and must be listed as one; without it the grep prefix matches
+      while the asserted fields are absent.
+  14. **The filer's update path gets its own error slug.** `gh issue edit --body-file` branches
+      on its exit status and emits `token_drift_coverage_update_failed` on failure. The
+      existing label re-assert at `:420` is `… || true` and must stay a separate call, so the
+      body edit's status is not swallowed into it. A failed update freezes the issue at
+      whichever state filed first — the exact defect FR6.3 exists to remove.
+  15. **An ops-email fallback for a dead issue channel.** Each of the four filer/close paths
+      sets a step output on any named `::error::`; a `notify-ops-email` step gated on that
+      output carries the finding. Without it, a rate-limited or failed filer is a green cron
+      run whose only artifact is an annotation nobody opens — which is the shape the block at
+      `:324-330` exists to eliminate, and which `continue-on-error: true` plus `exit 0` at
+      `:415-416` makes reachable today.
+  16. `apps/web-platform/infra/tunnel.tf:277` and
       `apps/web-platform/infra/workspaces-luks.tf:78,114` reason about credential blast radius
       from the same falsified premise. Their *conclusions* may still hold; a one-line premise
       correction each is in scope, re-deriving their blast-radius arguments is not.
@@ -282,11 +387,16 @@ the credential lands.
   enclosing block opens `set -euo pipefail` (`:1085`), unlike the token-drift step's
   `set -uo pipefail`, so a bare removal would abort with no named annotation — the opposite of
   fail-loud. Because that job keeps only the `prd_terraform` credential and can never satisfy
-  its own `startswith("prd_git_data_rehearsal_")` predicate, it contributes a named line to the
-  **existing** `infra-drift` issue body (`:1130-1190`) recording that the scratch-config half of
-  the sweep was not performed. Routing it there rather than emitting a `::warning::` on a green
-  run is the point: a warning on a green cron is the shape this file's own header block
-  (`:324-330`) exists to eliminate.
+  its own `startswith("prd_git_data_rehearsal_")` predicate, it publishes its status as its
+  **own step output** and gets its **own filer** gated on that output.
+  It must **not** be folded into `steps.sweep.outputs.orphans`: that filer is gated
+  `orphans != '0'` (`:1131`) plus an implicit `success()`, so in the steady state — no Hetzner
+  orphans — it is skipped and the finding reaches nothing; and inflating `orphans` to force the
+  gate open would file a diagnostic line under a body (`:1141-1148`) asserting the listed items
+  are paying hosts running the git transport wrappers with LUKS volumes attached, which would
+  be untrue of a diagnostic. Its own title and lead keep both statements honest. Routing it to
+  an issue rather than a `::warning::` on a green run is the point: a warning on a green cron
+  is the shape this file's own header block (`:324-330`) exists to eliminate.
 
 - **FR8 — the inventory (report only).**
   `apps/web-platform/infra/doppler-config-inventory.txt`: a `# generated: <ISO-8601>` header,
@@ -360,16 +470,51 @@ vendor expense.
 ```yaml
 at_rest:
   - store: Doppler soleur/prd config (the secret set the new credential can read)
-    mechanism: vendor-managed encryption at rest (Doppler); identical posture to the five
-               sibling doppler_service_token resources in this root, notably
-               doppler_service_token.web_probes on the SAME config
-    evidence: ADR-007-doppler-secrets-management.md; apps/web-platform/infra/web-probe-read-token.tf
+    mechanism: vendor-managed encryption at rest (Doppler)
+    evidence: >
+      ADR-007-doppler-secrets-management.md. Doppler-side SCOPE evidence:
+      apps/web-platform/infra/web-probe-read-token.tf (same config, same access). SINK
+      evidence is a different comparator and must not be conflated — web_probes.key goes to a
+      host /etc/default file, never to a repo-wide Actions secret. The load-bearing sink
+      comparators are github_actions_secret.workspaces_luks_boot_token
+      (workspaces-luks.tf:131-148) and github_actions_secret.doppler_token_write
+      (doppler-write-token.tf:47-51).
     defends_against: disclosure from Doppler's storage layer
-    does_not_defend: anyone holding the token value — a Doppler service token is
-                     config-scoped, so this reads the WHOLE prd config; the trade-off the
-                     decision comment accepts
-    disclosed_as: BLAST RADIUS header block in token-drift-read-token.tf
-    live_verification: "doppler configs tokens -p soleur -c prd --json | grep token-drift-ci-tf"
+    does_not_defend: >
+      anyone holding the token value. "access = read" is NOT a capability boundary here, and
+      calling this a read-only credential would be false. A Doppler service token is
+      config-scoped, and soleur/prd root contains credentials that escalate past read:
+      (a) GHCR_MINTER_DOPPLER_TOKEN (ghcr-minter-doppler-token.tf:56-60) whose value is
+      doppler_service_token.ghcr_minter.key — declared access = "read/write" on config "prd"
+      at :45-50 — so a read credential on prd reads a WRITE credential for prd;
+      (b) GITHUB_APP_PRIVATE_KEY / GITHUB_APP_ID / GITHUB_APP_WEBHOOK_SECRET
+      (github-app.tf:40-78) for the same App the Terraform provider authenticates with
+      (main.tf:83-90), which kb-drift.tf:101-102 records as holding secrets:write — so it
+      yields an installation token that can rewrite every repository Actions secret,
+      including DOPPLER_TOKEN_DRIFT itself;
+      (c) SUPABASE_SERVICE_ROLE_KEY (bypass-RLS read of all user data), PROXY_TLS_KEY,
+      the three git transport/provision/remove SSH private keys, the zot push token, and the
+      Inngest signing/event/manual-trigger keys.
+      Materially: this credential is equivalent to Doppler WRITE on prd and to GitHub App
+      administration of the repository. That is the true shape of the trade-off the decision
+      comment accepts, and the plan states it rather than the softer "reads the whole prd
+      config".
+      MITIGATION, and the reason the trade-off is acceptable: DOPPLER_TOKEN_PRD already
+      exists as a repo secret with identical scope and six consumers. This adds NO new
+      capability — only a second, independently-rotatable copy. The operational consequence
+      is that an incident response must revoke BOTH, and only one of them is
+      Terraform-managed.
+    disclosed_as: >
+      BLAST RADIUS header block in token-drift-read-token.tf, written in the shape
+      workspaces-luks.tf:77-89 already uses for this exact class ("THIS IS NOT LEAST
+      PRIVILEGE, AND SAYING SO WOULD BE FALSE"), citing
+      knowledge-base/project/learnings/security-issues/2026-07-07-doppler-branch-config-does-not-isolate-secrets.md
+      and #6167 rather than inventing fresh prose.
+    live_verification: >
+      doppler configs tokens -p soleur -c prd --json | grep -c '"name": *"token-drift-ci-tf"'
+      returns exactly 1. Count-asserting, not a bare grep: a bare match passes on one token
+      and on five, so it cannot distinguish a clean state from a half-completed -replace= or
+      an accumulated orphan (cq-assert-anchor-not-bare-token).
   - store: terraform.tfstate in the R2 backend bucket soleur-terraform-state
     mechanism: Cloudflare R2 server-side encryption at rest (provider-default, always on),
                TLS-only access; same posture as every sibling token key already in state
@@ -420,40 +565,65 @@ liveness_signal:
 error_reporting:
   destination: GitHub Actions ::error:: annotations with named slugs
                (token_drift_coverage_list_failed, token_drift_coverage_escalation_failed,
-               token_drift_coverage_close_failed) plus the action-required issue channel
-  fail_loud: true — every arm that cannot reach its channel emits a named ::error::; the
-             detector exits 2 rather than reporting a clean fleet from a partial enumeration
+               token_drift_coverage_update_failed, token_drift_coverage_close_failed) plus
+               the action-required issue channel and, when the issue channel itself is
+               unreachable, the ops-email fallback described in mode 6
+  fail_loud: true — every arm that cannot reach its channel emits a named ::error:: AND
+             sets an output the email fallback gates on; the detector emits its JSON
+             BEFORE any exit-2 return, so a failure never blinds the coverage outputs
 failure_modes:
-  - mode: a configured credential is revoked, expires, or its Actions secret is absent
-    detection: scanned < floor yields coverage=degraded; the floor is exact because it counts
-               the credential NAMES the step supplies, not anything the credentials report
+  - mode: a configured credential's Actions secret is absent or empty (the merge-to-release
+          window, or a deleted secret)
+    detection: the name resolves to an empty value, so it counts toward configs_floor but not
+               configs; scanned < floor yields coverage=degraded
     alert_route: ::warning:: plus the coverage action-required issue, whose body is rewritten
                  on every state transition
     layer: GitHub Actions run annotations + the GitHub issue channel harvested by
            operator-digest
-  - mode: DOPPLER_TOKEN_ENVS is empty, so the floor silently collapses to 1 and a
-          single-config scan reads as healthy
-    detection: the step's own guard fails the step before the detector runs
-    alert_route: red step with a named ::error::
-    layer: GitHub Actions job status
-  - mode: a non-empty credential enumerates nothing (Doppler outage, scope revoked mid-flight)
-    detection: exit 2, verdict=unavailable — the enumeration stderr is no longer swallowed
-    alert_route: the DETECTOR-UNAVAILABLE ops email arm
-    layer: Resend ops email (notify-ops-email composite action)
+  - mode: a configured credential is REVOKED or EXPIRED — non-empty, but enumerates nothing
+    detection: that credential contributes 0 configs, so scanned < floor and coverage is
+               degraded. This is a DIFFERENT path from the absent-secret mode above and must
+               not be collapsed into it: the value is present, so the remedy is rotation, not
+               provisioning. If it is the ONLY credential, no conclusion was drawn and the
+               detector additionally exits 2 (verdict=unavailable) — but emit_json has
+               already run, so coverage/configs_floor are still published.
+    alert_route: the coverage issue for the degraded case; additionally the
+                 DETECTOR-UNAVAILABLE ops email when nothing at all was measured
+    layer: GitHub issue channel + Resend ops email (notify-ops-email composite action)
+  - mode: DOPPLER_TOKEN_ENVS is empty, or is shortened to one name, so the floor collapses
+          and a one-config scan would read as healthy
+    detection: the step writes coverage=unknown and verdict=unavailable to $GITHUB_OUTPUT and
+               THEN fails, and separately asserts configs_floor >= 2 — a self-referential
+               floor cannot catch its own shortening, so the assertion is external to it
+    alert_route: the DETECTOR-UNAVAILABLE ops email arm and the `unknown` coverage-issue arm,
+                 both reachable because the outputs were written before the failure
+    layer: Resend ops email + the GitHub issue channel
   - mode: the committed inventory goes short or stale, so the reported ratio overstates
           coverage
     detection: inventory_age_days exceeds 90, appended as a caveat wherever the ratio prints
-    alert_route: the same annotation and issue body that carry the ratio
-    layer: GitHub Actions run annotations + the GitHub issue channel
-    note: this can no longer silence anything — the inventory gates no state
-  - mode: the coverage signal is derived correctly but reaches nobody
-    detection: the consumer suite asserts the filer fires on every non-at-floor state, that an
-               existing issue is UPDATED rather than short-circuited, and that a failed create
-               or edit emits a named ::error::
-    layer: CI test suite pre-merge, then GitHub Actions annotations post-merge
+    alert_route: the step log only. At at-floor no warning arm fires, no issue is open, and
+                 neither ops email is sent — so on a healthy run this caveat reaches the run
+                 log and nothing else.
+    layer: GitHub Actions run log
+    note: deliberately un-escalated, and safe because the inventory gates no state. The ratio
+          is decorative; a wrong ratio cannot silence a channel or close an issue.
+  - mode: the coverage signal is derived correctly but the issue channel is unreachable
+          (gh list/create/edit/close fails, a rate limit, a stripped label)
+    detection: each path branches on its own exit status and emits its named slug, and sets a
+               step output flag
+    alert_route: an ops-email step gated on that flag — mirroring the DEAD filer's "reached
+                 the email channel only" fallback. Without it a failed filer is a green cron
+                 run whose only artifact is an annotation nobody opens, which is the exact
+                 shape scheduled-terraform-drift.yml:324-330 exists to eliminate.
+    layer: Resend ops email (notify-ops-email composite action)
   - mode: the scratch-config half of the rung-2 orphan sweep is not performed
-    detection: the captured status of the _cfgs= pipeline
-    alert_route: a named line in the existing infra-drift orphan issue body
+    detection: the captured status of the _cfgs= pipeline, published as its OWN step output
+    alert_route: its own filer gated on that output. It must NOT be folded into
+                 steps.sweep.outputs.orphans: that filer is gated `orphans != '0'` plus an
+                 implicit success(), so in the steady state it is skipped and the finding
+                 reaches nothing — and forcing the gate open by inflating `orphans` would put
+                 a diagnostic line under a body asserting the listed items are paying hosts
+                 with LUKS volumes attached.
     layer: the GitHub issue channel
 logs:
   where: GitHub Actions run logs for the Terraform Drift Detection workflow; the body of the
@@ -461,12 +631,18 @@ logs:
   retention: 90 days for run logs (GitHub default); issue bodies are permanent
 discoverability_test:
   command: >
-    gh run list --workflow=scheduled-terraform-drift.yml --status success -L 1 --json
-    databaseId -q '.[0].databaseId' | xargs -I{} gh run view {} --log | grep -E 'token-drift
-    verdict:'
+    gh run list --workflow=scheduled-terraform-drift.yml -L 1 --json
+    databaseId,conclusion,createdAt -q '.[0] | "\(.databaseId) \(.conclusion) \(.createdAt)"'
+    | tee /dev/stderr | cut -d' ' -f1 | xargs -I{} gh run view {} --log | grep -E
+    'token-drift verdict:'
   expected_output: >
-    a line of the form "token-drift verdict: clean (detector exit 0, causes: -, configs: 2,
-    floor: 2, coverage: at-floor, ratio: 2/13)"
+    the newest run's id, conclusion and timestamp, then a line of the form "token-drift
+    verdict: clean (detector exit 0, causes: -, configs: 2, floor: 2, coverage: at-floor,
+    ratio: 2/13)" once the credential has landed — or, in the merge-to-release window,
+    "configs: 1, floor: 2, coverage: degraded, ratio: 1/13". NOTE the command deliberately
+    does NOT filter --status success: that filter returns the last HEALTHY run and prints a
+    green verdict line while a newer run is failing, which is a clean bill of health for a
+    question never asked.
 ```
 
 No SSH anywhere in the verification path.
@@ -490,11 +666,26 @@ every dashboard read green. Implemented with a gating denominator, a short inven
 the channel entirely while the job stays green.
 
 **If this leaks, the user's data and workflow are exposed via:** the new `DOPPLER_TOKEN_DRIFT`
-value. A Doppler service token is config-scoped, so anything holding it reads the entire
-`soleur/prd` config — the production application's whole secret set, including database
-credentials. Vectors: the repository Actions secret (readable by any workflow in the repo), the
-Terraform state object in R2, and the runner process during the scan. FR3 keeps credential
-values out of argv so they are not additionally exposed to other processes on the runner.
+value — and the exposure is **larger than "read-only on prd"**. A Doppler service token is
+config-scoped, and `soleur/prd` root holds two credentials that escalate past read: the
+`ghcr_minter` **read/write** Doppler token for the same config
+(`ghcr-minter-doppler-token.tf:56-60` storing `doppler_service_token.ghcr_minter.key`, declared
+`access = "read/write"` at `:45-50`), and the Terraform GitHub App private key
+(`github-app.tf:55-59`) for an App with `secrets:write`, which can rewrite every repository
+Actions secret including this one. It also reads `SUPABASE_SERVICE_ROLE_KEY` — bypass-RLS
+access to all user data. So the honest statement is that this credential is materially
+equivalent to Doppler write on `prd` and to GitHub App administration of the repository.
+
+Vectors: the repository Actions secret (readable by any workflow in the repo — the governing
+control is who can merge under `.github/workflows/`, and `CODEOWNERS` pins that path to the
+operator while its own header records that the branch-protection rule enforcing CODEOWNERS
+review is still an unfinished follow-up, with no ruleset in IaC enforcing it), the Terraform
+state object in R2, and the runner process during the scan.
+
+**What makes the trade-off acceptable, and what it obliges:** `DOPPLER_TOKEN_PRD` already
+exists as a repository secret with identical scope and six consumers. This change adds **no new
+capability** — only a second, independently-rotatable copy. The obligation that follows is that
+an incident response must revoke **both**, and only the new one is Terraform-managed.
 
 **Brand-survival threshold:** `single-user incident`.
 
@@ -522,10 +713,19 @@ product surfaces.
 
 **Finance / COO:** no new recurring vendor expense.
 
-**Legal / GDPR:** the canonical regex does not match. Trigger (b) fires (`single-user
-incident`), so the gate was considered rather than skipped: the change processes zero personal
-data — the artifacts are credential material and Doppler config *names*. No new processing
-activity, no Article 30 row, nothing for `compliance-posture.md`.
+**Legal / GDPR:** the canonical regex does not match; trigger (b) fires (`single-user
+incident`), so the gate was run rather than skipped. The *artifacts* this change writes are
+credential material and Doppler config names — no personal data. But the gate must be scoped to
+the credential's **reach**, not the artifacts: `soleur/prd` root holds
+`SUPABASE_SERVICE_ROLE_KEY`, so the credential resolves bypass-RLS read of all user data, and
+this change publishes a second repository-level sink for it. That is a change to the
+access-control surface over regulated data, which is what
+`hr-gdpr-gate-on-regulated-data-surfaces` targets. Assessment: **no new processing activity and
+no new Article 30 row**, because `DOPPLER_TOKEN_PRD` already grants the identical reach to the
+same set of repository workflows — the surface is duplicated, not widened. The obligation that
+follows is the dual-revocation note in `## User-Brand Impact`, not a register entry. Recording
+the reasoning rather than the conclusion, because "the artifacts contain no personal data" is a
+false negative in the understating direction.
 
 ---
 
@@ -634,6 +834,22 @@ Every criterion is a command whose output decides it.
   run as that command, not as a hand-enumerated subset of the suites it discovers.
 - **AC23 — the doc lint is green over the gate's own scope.**
   `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` exits 0.
+- **AC29 — the floor cannot be silently shortened.** The `token_drift` step asserts
+  `configs_floor >= 2` and downgrades to `degraded` when it fails; the consumer suite pins both
+  credential names in the step's `DOPPLER_TOKEN_ENVS`. Verified by a consumer-suite case that
+  reduces the list to one name and asserts the state is **not** `at-floor`.
+- **AC30 — no credential value reaches a sink, and the escalating-reach disclosure is
+  present.** Producer test P11 passes across all six sinks; and the new `.tf` header contains
+  the literals `ghcr_minter`, `GITHUB_APP_PRIVATE_KEY` and `DOPPLER_TOKEN_PRD`, so the two
+  escalation hops and the no-new-capability mitigation are stated at the resource rather than
+  only in the plan.
+- **AC31 — scanned values are masked in the run log.** The detector emits one `::add-mask::`
+  line per distinct scanned value when `GITHUB_ACTIONS=true`, asserted by producer test P14.
+  Actions auto-masks only `secrets.*` values, so without this every `CF_API_TOKEN*` the
+  detector reads is unmasked in the job log.
+- **AC32 — the ambient credential cannot be reached after the map is built.**
+  `grep -cE '^\s*unset DOPPLER_TOKEN DOPPLER_CONFIG' scripts/check-cloudflare-token-drift.sh`
+  = 1, and producer test P15 passes.
 
 ### Post-merge
 
@@ -676,6 +892,11 @@ in the sense that they need no approval.
 | P8 | a missing or unparseable inventory → ratio absent with a caveat; `coverage` still derived from the floor |
 | P9 | credential values never appear in any child-process argv (the stub receives no `--token`) |
 | P10 | an unrecognised argument exits 2 with a named message |
+| P11 | **sentinel sweep across every sink.** Inject a sentinel credential value, run every mode (`--json`, `--json-file`, human report, empty-credential, revoked-credential, unknown-flag) and assert the sentinel appears in none of: stdout, stderr, the JSON payload, the `--json-file` on disk, `$GITHUB_OUTPUT`, or the rendered issue/email body fixtures. P9 covers one sink of six; this covers the rest, and the new emitted fields and un-swallowed stderr are exactly what makes it necessary |
+| P12 | a bogus credential's stderr does not contain the credential value (the `2>/dev/null` removal hands a CLI a bad secret and lets it speak) |
+| P13 | a failed-credential row records the credential's **name**, never its value |
+| P14 | under `GITHUB_ACTIONS=true` every distinct scanned value is emitted as `::add-mask::` before the first probe |
+| P15 | after the credential map is built, `DOPPLER_TOKEN` and `DOPPLER_CONFIG` are unset — a read site that forgets the map fails loudly instead of binding the ambient credential |
 
 ### Consumer suite — `plugins/soleur/test/token-drift-workflow-causes.test.sh`
 
@@ -740,6 +961,10 @@ No new `.test.sh`. (`plugins/soleur/test/*.test.sh` is auto-discovered by
 | The merge-to-release window reds the cron twice daily. | An absent secret is a configuration fault, not a detector fault: `degraded`, green job, one self-clearing issue. |
 | The standing issue's body freezes at whichever state filed first (dedup is label-scoped, not title-scoped). | FR6.3 makes the filer update the body; AC13, AC28. |
 | A short or stale inventory misleads. | It gates nothing (AC18, P7); `inventory_age_days` bounds staleness with no credential; the inventory is *expected* to drift as `prd_git_data` and rehearsal configs appear. |
+| `DOPPLER_TOKEN_ENVS` is later shortened from two names to one; the self-referential floor follows it down and `at-floor` closes the issue while coverage regresses. | An assertion external to the floor (`configs_floor >= 2`) plus a consumer-suite case pinning both names; AC29. |
+| A lost or clobbered state write on the **create** orphans a live full-prd credential in Doppler with no Terraform record — unrotatable by `-replace=`, and it accumulates on the next run. The R2 backend has no conditional writes and `use_lockfile = false`; the Actions concurrency group is the sole serializer. The plan's "dropped `-target=` surfaces as drift" safeguard does **not** cover this: an object absent from state is invisible to `plan`, and provider v1.21.2 ships no data source that could enumerate service tokens. | The count-asserting `live_verification` in `## Encryption Posture` (exactly one `token-drift-ci-tf`) is the detector for this mode, and the emergency-revocation line in the `.tf` header is the remedy. |
+| The credential is a repository-level secret on a public repo; the governing control is who can merge under `.github/workflows/`. `CODEOWNERS` pins that path to the operator, but its own header records the branch-protection rule enforcing CODEOWNERS review as an unfinished follow-up, and no ruleset in IaC enforces it. | Named rather than assumed. This is the same control that already governs `DOPPLER_TOKEN_PRD`, so the change does not alter it; the gap is pre-existing and is called out so a reviewer does not read "repository-scoped like every sibling" as a control. |
+| The issue body and the ops emails are API payloads, so GitHub's log masking does not reach them — and the repo is public, so the coverage issue body is world-readable. | AC30 pins that those bodies carry key/config **names** and counts only, never values. `configs_unread` is a list of Doppler config names, which the committed `.tf` files already disclose. |
 | ADR-155's ordinal is claimed by a sibling PR. | Provisional; the renumber sweep is named above. |
 
 ---
@@ -788,6 +1013,23 @@ No new `.test.sh`. (`plugins/soleur/test/*.test.sh` is auto-discovered by
 - The orphan-sweep block opens `set -euo pipefail`, unlike the token-drift step's
   `set -uo pipefail`. Removing `|| true` there without capturing the status aborts with no
   annotation.
+- The orphan-sweep's issue filer is gated `steps.sweep.outputs.orphans != '0'`, and a
+  plain-expression `if:` also carries an implicit `success()`. A finding routed into that
+  filer's body reaches nothing in the steady state.
+- `gh run list --status success` returns the last **healthy** run. A discoverability probe
+  carrying that filter prints a green verdict line while a newer run is failing — a clean bill
+  of health for a question never asked.
+- Actions auto-masks only `secrets.*`-sourced values. Anything the detector reads out of
+  Doppler is unmasked in the job log unless it emits `::add-mask::` itself. A future `set -x`
+  would additionally render an env-prefixed `DOPPLER_TOKEN=<value>` into the log.
+- `/proc/<pid>/cmdline` is world-readable; `/proc/<pid>/environ` is 0400. Env-prefix delivery
+  therefore defends against a different-UID observer, not against a compromised runner where
+  every step shares one UID. Do not overstate it.
+- The issue body and the ops emails are API payloads, not log output, so masking does not
+  reach them — and this repository is public.
+- `access = "read"` on a Doppler service token is not a capability boundary when the config it
+  reads contains other credentials. `soleur/prd` holds a read/write Doppler token for itself
+  and the Terraform GitHub App private key.
 - `plugins/soleur/test/terraform-drift-step-order.test.sh` matches step names on the literal
   `      - name: <text>`. Adding steps is safe; renaming the four pinned reporting steps is not.
 
@@ -845,6 +1087,57 @@ prose:
   different Doppler feature) to the per-config census. The `DOPPLER_TOKEN_PRD` consumer count was
   corrected from five to six, and the source-derivation rejection was restated so it is
   reproducible.
+
+A second deepen-plan pass (security-sentinel, observability-coverage-reviewer) then found:
+
+- **R15 (P0).** `access = "read"` was treated as a capability boundary. `soleur/prd` root
+  contains `GHCR_MINTER_DOPPLER_TOKEN` — the key of a `read/write` service token for the same
+  config — and the Terraform GitHub App private key for an App with `secrets:write`. The
+  credential is therefore materially equivalent to Doppler **write** on prd and to GitHub App
+  administration of the repository. Both disclosure sections now name the escalation hops, and
+  both name the mitigation that makes the trade-off acceptable: `DOPPLER_TOKEN_PRD` already
+  carries the identical scope, so this adds no new capability — only a second copy, which
+  obliges a dual revocation in incident response.
+- **R16 (P1).** A revoked or expired credential took a different path from an absent one:
+  non-empty, so it hit exit 2 *before* `emit_json`, publishing no coverage at all and landing
+  on `unknown`, whose remedy prose is unperformable for a revoked token. `emit_json` now runs
+  before every exit-2 return, and the two modes are separated.
+- **R17 (P1).** The empty-`DOPPLER_TOKEN_ENVS` guard failed the step before writing outputs,
+  so every consumer arm — all of which test positively — matched nothing, and the final Sentry
+  check-in derives its status from a different step and still reported `ok`. The guard now
+  writes `coverage=unknown` / `verdict=unavailable` first, then fails.
+- **R18 (P1).** The floor is self-referential and so is blind to its own shortening: a list cut
+  from two names to one yields `floor=1, scanned=1 → at-floor` and closes the issue while
+  coverage regresses. An external `configs_floor >= 2` assertion and a consumer-suite pin were
+  added (AC29).
+- **R19 (P1).** `gh issue edit --body-file` had no error slug and no AC asserting its status is
+  checked, so a failed update would freeze the issue at whichever state filed first — the very
+  defect R2 introduced the update path to remove. Added `token_drift_coverage_update_failed`
+  and an ops-email fallback for a dead issue channel.
+- **R20 (P1).** FR7's finding was routed into a filer gated `orphans != '0'` plus an implicit
+  `success()`, so in the steady state it reached nothing; and forcing that gate open would have
+  filed a diagnostic under a body claiming the listed items are paying hosts. It now has its
+  own step output, filer and lead.
+- **R21 (P1).** The `discoverability_test` filtered `--status success`, so it returned the last
+  healthy run and printed a green verdict line while a newer run was failing. Filter dropped;
+  conclusion and timestamp now print alongside.
+- **R22 (P1).** The argv-versus-env argument was mis-scoped: env-prefix defends against a
+  different-UID observer, not a compromised runner, and the same script already places
+  credential values on curl's argv — which the union widens by one. Stated accurately, and
+  `::add-mask::` registration was added as the control that actually covers the log sink.
+- **R23 (P1).** Ambient fallback was prevented by a test rather than by construction. The
+  detector now unsets `DOPPLER_TOKEN`/`DOPPLER_CONFIG` once the map is built, so a missed read
+  site fails loudly.
+- **R24 (P1).** Sink coverage: P9 asserted only that no credential reaches argv. P11–P15 now
+  sweep a sentinel across stdout, stderr, the JSON, the `--json-file`, `$GITHUB_OUTPUT` and the
+  rendered issue/email bodies.
+- **R25 (P1/P2).** The GDPR assessment was re-scoped from the artifacts to the credential's
+  reach (it resolves `SUPABASE_SERVICE_ROLE_KEY`); conclusion unchanged, reasoning recorded.
+  Failure mode 4's alert route was corrected to "step log only" rather than a channel that does
+  not fire at `at-floor`. `live_verification` became count-asserting. The Encryption Posture
+  evidence citation was split into scope-evidence and sink-evidence. An orphaned-state-write
+  risk row and a repository-secret control row were added. An emergency revocation path joined
+  the rotation recipe in the `.tf` header.
 
 ---
 

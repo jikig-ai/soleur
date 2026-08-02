@@ -47,9 +47,9 @@ meaning "more than one config" cannot distinguish 2-of-13 from 13-of-13.
 |---|---|---|
 | FR1 | A read-scoped `doppler_service_token` on `soleur`/`prd` named `token-drift-ci-tf`, published as `github_actions_secret` `DOPPLER_TOKEN_DRIFT`, with no `lifecycle.ignore_changes`. | AC1, AC2 |
 | FR2 | Both addresses in the default per-merge `-target=` allow-list, in no dispatch set, and in neither parity-test exclusion set. | AC3, AC4 |
-| FR3 | The detector reads credentials from `DOPPLER_TOKEN_ENVS` (names, not values), rejects unknown flags, treats an unset/empty name as a failed credential rather than an ambient fallback, delivers credentials by env prefix (never argv), and routes all four `doppler secrets` reads through the credential that enumerated that config. | AC5, AC6, AC10, AC16, P1–P5, P9, P10 |
+| FR3 | The detector reads credentials from `DOPPLER_TOKEN_ENVS` (names, not values), rejects unknown flags, treats an unset/empty name as a failed credential rather than an ambient fallback, delivers credentials by env prefix (never argv), routes all four `doppler secrets` reads through the credential that enumerated that config, `unset`s the ambient credential once the map is built, registers every scanned value with `::add-mask::`, and emits its JSON before every exit-2 return. | AC5, AC6, AC10, AC16, AC31, AC32, P1–P5, P9–P15 |
 | FR4 | The detector owns the ladder (`--inventory`), emitting `config_names`, `configs_floor`, `configs_expected`, `configs_unread`, `coverage`, `coverage_ratio`, `inventory_age_days`; the seven existing JSON keys are unchanged. | AC9, AC11, P6 |
-| FR5 | The step publishes and does not decide; `configs` stays last-and-greedy in `read -r`; every new field has a non-empty guard; the fallback arity moves in lockstep; `DOPPLER_CONFIG` is removed; an empty `DOPPLER_TOKEN_ENVS` fails the step. | AC5 |
+| FR5 | The step publishes and does not decide; `configs` stays last-and-greedy in `read -r`; every new field has a non-empty guard; the fallback arity moves in lockstep; `DOPPLER_CONFIG` is removed; an empty `DOPPLER_TOKEN_ENVS` writes `coverage=unknown`/`verdict=unavailable` **before** failing; an external `configs_floor >= 2` assertion guards the self-referential floor. | AC5, AC29 |
 | FR6 | All consumers move: the two `::warning::` arms, the filer `if:`/title/lead/remedy/closing, the close arm, both ops-email caveat spans, the DEAD email and DEAD issue bodies, the detector's own report line, the `ci-ssh-token-replace.md` runbook, and the two `.tf` premise comments. | AC7, AC8, AC12–AC15 |
 | FR7 | The rung-2 orphan sweep stops reporting a clean sweep it did not perform, captures status explicitly under `set -euo pipefail`, and routes the finding into the existing `infra-drift` issue channel. | AC17 |
 | FR8 | A committed, dated, generator-documented inventory that supplies the ratio and unread list and **gates no state**. | AC18, AC19, P7, P8 |
@@ -77,6 +77,16 @@ retired.
 4. **Zero-config detector invocation is unchanged** — three call sites depend on it.
 5. **The inventory gates nothing** — it is expected to drift (C7), so a state that depended on
    it would be a fail-open.
+6. **`access = "read"` is not a capability boundary.** `soleur/prd` root holds
+   `GHCR_MINTER_DOPPLER_TOKEN` (the key of a `read/write` service token for the same config,
+   `ghcr-minter-doppler-token.tf:45-60`), the Terraform GitHub App private key
+   (`github-app.tf:55-59`, an App with `secrets:write`), and `SUPABASE_SERVICE_ROLE_KEY`. The
+   credential is materially equivalent to Doppler write on `prd` and GitHub App administration
+   of the repository. `DOPPLER_TOKEN_PRD` already carries this scope, so the change adds no new
+   capability — but incident response must revoke both, and only one is Terraform-managed.
+7. **No credential value reaches any sink** — stdout, stderr, the JSON, the `--json-file`,
+   `$GITHUB_OUTPUT`, or the issue/email bodies. Masking is log-only and this repository is
+   public.
 
 ## State at plan time
 

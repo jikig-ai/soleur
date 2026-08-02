@@ -26,8 +26,15 @@ Derived from
       credential with no ambient fallback; non-empty credential enumerating nothing exits 2 with
       stderr visible; no credential value reaches child argv). RED.
 - [ ] 1.4 Implement `DOPPLER_TOKEN_ENVS` (names, whitespace-separated, default `DOPPLER_TOKEN`),
-      per-name unset/empty handling, env-prefix credential delivery, and removal of the
-      `2>/dev/null` on the enumeration. GREEN.
+      per-name unset/empty handling (record the NAME, never the value), env-prefix credential
+      delivery, and removal of the `2>/dev/null` on the enumeration. GREEN.
+- [ ] 1.4b Producer tests P11–P15 (sentinel absent from all six sinks; a bogus credential's
+      stderr does not echo it; `::add-mask::` emitted per distinct scanned value under
+      `GITHUB_ACTIONS=true`; `DOPPLER_TOKEN`/`DOPPLER_CONFIG` unset once the map is built).
+      RED, then implement.
+- [ ] 1.4c `unset DOPPLER_TOKEN DOPPLER_CONFIG` immediately after snapshotting the named
+      credentials into the map — a missed read site must fail loudly, not bind the ambient
+      credential.
 - [ ] 1.5 Producer test P3: every one of the four `doppler secrets` reads uses the credential
       that enumerated that config. Include the mutation check (swap the map, confirm RED). RED
       then GREEN.
@@ -44,6 +51,9 @@ Derived from
 - [ ] 2.3 Extend `emit_json` with the new fields. Give the third and fourth variable-length
       lists **distinct argv sentinels** — `rest.index("--")` cannot serve two — and re-index the
       five leading scalars.
+- [ ] 2.3b Move `emit_json` **before** every exit-2 return (the enumeration guard at `:104-107`
+      and the non-vacuity gate at `:184-192`), so a revoked credential still publishes
+      `configs`, `configs_floor` and `coverage`. Exit codes unchanged.
 - [ ] 2.4 Update the human report line (`configs scanned:`) to carry the enumerated names.
 - [ ] 2.5 Correct the falsified remedy at `scripts/check-cloudflare-token-drift.sh:629`.
 - [ ] 2.6 Raise the producer floor to 62.
@@ -65,9 +75,13 @@ Derived from
 - [ ] 4.1 Consumer-suite rewrites (T6, T7, T8, T8b, T13, T13b, T14, T14b, T14c, T14d, T16,
       T16b, T17, T19) plus the new cases. RED.
 - [ ] 4.2 `token_drift` step: publish the new outputs; remove `DOPPLER_CONFIG`; add
-      `DOPPLER_TOKEN_ENVS` and the guard that fails the step when it is empty. Keep `configs`
-      last-and-greedy in `read -r`, add non-empty guards on every new field, and move the
-      fallback arity in lockstep.
+      `DOPPLER_TOKEN_ENVS`. The empty-list guard **writes `coverage=unknown` and
+      `verdict=unavailable` to `$GITHUB_OUTPUT` first, then fails** — failing first leaves every
+      arm unmatched and the Sentry check-in still `ok`. Add the external `configs_floor >= 2`
+      assertion (downgrade to `degraded`). Keep `configs` last-and-greedy in `read -r`, add
+      non-empty guards on every new field, and move the fallback arity in lockstep.
+- [ ] 4.2b Update the verdict echo line (`:251`) to carry `floor:` and `ratio:` — the
+      discoverability test and AC27 both assert those fields.
 - [ ] 4.3 `::warning::` arms for `degraded` and `unknown`; delete the retired arms.
 - [ ] 4.4 Coverage filer: positive `if:` over `degraded`/`unknown`; per-class TITLE/LEAD;
       `degraded` body lists `configs_unread` and the ratio; **create-or-update-body** via
@@ -78,9 +92,16 @@ Derived from
       remedy and the closing condition.
 - [ ] 4.8 Both `<em>Scan coverage: …</em>` spans (`:280`, `:645`) — carry `coverage_ratio`,
       byte-identical to each other.
+- [ ] 4.4b Branch on `gh issue edit`'s exit status; emit
+      `token_drift_coverage_update_failed` on failure. Keep the label re-assert as a separate
+      `|| true` call so the body edit's status is not swallowed into it.
+- [ ] 4.4c Add an ops-email fallback step gated on a filer output flag set by any named
+      `::error::`, so a dead issue channel still reaches the operator.
 - [ ] 4.9 FR7: the `_cfgs=` pipeline (`:1115-1116`) — drop `2>/dev/null` and `|| true`,
-      capture status explicitly (the block is `set -euo pipefail`), and add the named line to
-      the existing `infra-drift` issue body.
+      capture status explicitly (the block is `set -euo pipefail`), publish it as its **own**
+      step output, and give it its **own** filer with its own title and lead. Do NOT fold it
+      into `steps.sweep.outputs.orphans` — that filer is gated `orphans != '0'` plus an
+      implicit `success()`, and its body claims the listed items are paying hosts.
 - [ ] 4.10 Raise the consumer floor to 34.
 
 ## Phase 5 — Consumers: docs and comments
@@ -95,7 +116,7 @@ Derived from
 
 ## Phase 6 — Verification
 
-- [ ] 6.1 Walk AC1–AC23 in order, running each command and recording its output.
+- [ ] 6.1 Walk AC1–AC23 and AC29–AC32 in order, running each command and recording its output.
 - [ ] 6.2 `bash scripts/test-all.sh` — the gate's own invocation, not a subset.
 - [ ] 6.3 `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main`.
 - [ ] 6.4 `bun test plugins/soleur/test/terraform-target-parity.test.ts` and confirm
