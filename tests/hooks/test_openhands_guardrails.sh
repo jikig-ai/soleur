@@ -101,6 +101,10 @@ WWG="$REPO_ROOT/.openhands/hooks/worktree-write-guard.sh"
 # supplies the precondition itself: a throwaway repo with a non-empty
 # .worktrees/ directory, which is all the guard's check requires.
 WWG_TMP="$(mktemp -d)"
+# ADR-129 rule (c): one owning trap. The suite runs under `set -uo pipefail`
+# and a failure between allocation and the rm below would otherwise leak the
+# fixture repo into /tmp, a machine-global tmpfs shared with sibling worktrees.
+trap 'rm -rf "$WWG_TMP"' EXIT
 WWG_REPO="$WWG_TMP/repo"
 git init -q "$WWG_REPO"
 git -C "$WWG_REPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
