@@ -594,6 +594,11 @@ if want_bun; then
   # #3366 class — a suite whose whole claim is "this cannot silently pass" running in zero
   # runners.
   run_suite "scripts/betterstack-assert-absence" bash scripts/betterstack-assert-absence.test.sh
+  # #7103 R4 — same registration reason as the line above (scripts/*.test.sh is not globbed
+  # anywhere). This one is DELIBERATELY on a required-check path: it needs no tooling the `test`
+  # job lacks (python3 + PyYAML), and putting a regression guard in a runner nobody is blocked by
+  # would reproduce, in the same PR, the defect R5 exists to fix.
+  run_suite "scripts/digest-oracle-guard" bash scripts/digest-oracle-guard.test.sh
 fi
 
 # Bash *.test.sh glob — scripts shard. (ci-deploy.test.sh runs in infra-validation.yml.)

@@ -24,11 +24,11 @@ recurrence risk), R2 → R3 a hard dependent pair.
       PASS/RED. Triage any pre-existing red under `wg-when-tests-fail-and-are-confirmed-pre` before
       Phase 2.
 - [ ] 0.3 Run `.github/scripts/test/run-all.sh`; record `RAN` (expect 10, `MIN_SUITES=10`).
-- [ ] 0.4 Verify `python3` + `yaml` in the job that will run the R4 harness. **Decides Phase 5's home.**
-- [ ] 0.5 Confirm the liveness gate is still the final step of `cf-tunnel-ssh-bridge/action.yml`.
+- [x] 0.4 Verify `python3` + `yaml` in the job that will run the R4 harness. **Decides Phase 5's home.**
+- [x] 0.5 Confirm the liveness gate is still the final step of `cf-tunnel-ssh-bridge/action.yml`.
 - [x] 0.6 Count `FILE_MAP` entries (expect 19); note the two stale "18 destinations" comments.
-- [ ] 0.7 Confirm `"source": "string"` is an accepted hook source.
-- [ ] 0.8 Re-derive the required-check list from the live ruleset.
+- [x] 0.7 Confirm `"source": "string"` is an accepted hook source.
+- [x] 0.8 Re-derive the required-check list from the live ruleset.
 - [x] 0.9 Enumerate every consumer of `cat-infra-config-state.sh` output.
 - [x] 0.10 Read `infra-config-apply.sh`'s tail: state-write block, `.final` sentinel, post-write region.
 - [x] 0.11 Read the sudoers file; record every alias's paired `User_Spec` line **and** its `server.tf`
@@ -109,13 +109,13 @@ recurrence risk), R2 → R3 a hard dependent pair.
 
 ## Phase 5 — R4: commit the digest-oracle regression harness
 
-- [ ] 5.1 Add the `::add-mask::` of `$b64` **and** `id: rendered_digest` to the workflow step.
-- [ ] 5.2 Correct (or make true) the step's "no `set -e`" comment — GitHub supplies `bash -e {0}`.
-- [ ] 5.3 Write `scripts/digest-oracle-guard.test.sh` with an `env -i` hermetic runner, stub-resolution
+- [x] 5.1 Add the `::add-mask::` of `$b64` **and** `id: rendered_digest` to the workflow step.
+- [x] 5.2 Correct (or make true) the step's "no `set -e`" comment — GitHub supplies `bash -e {0}`.
+- [x] 5.3 Write `scripts/digest-oracle-guard.test.sh` with an `env -i` hermetic runner, stub-resolution
       assertions, a per-arm `GITHUB_ENV` tempfile, and a `pull_request_target` refusal.
-- [ ] 5.4 Implement the three residual cases plus the marker-absent, empty-digest, and errexit arms.
-- [ ] 5.5 Add the `MIN_ASSERTS` floor and the no-interpolation assertion; synthesized fixtures only.
-- [ ] 5.6 Add the fixture-precondition self-check; register with `run_suite`.
+- [x] 5.4 Implement the three residual cases plus the marker-absent, empty-digest, and errexit arms.
+- [x] 5.5 Add the `MIN_ASSERTS` floor and the no-interpolation assertion; synthesized fixtures only.
+- [x] 5.6 Add the fixture-precondition self-check; register with `run_suite`.
 - [ ] 5.7 Record the required-check gating decision verbatim in the PR body.
 
 ## Phase 6 — R5(b): prove the liveness gate is non-deletable
