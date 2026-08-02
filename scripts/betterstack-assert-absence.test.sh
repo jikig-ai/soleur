@@ -130,6 +130,9 @@ eq "exactly 1h is accepted (boundary, not off-by-one)" "0" "$RC"
 # killed the script, and it exited **1** with empty output — and 1 is `present` in this script's
 # own table. The follow-through probe maps `present` to FAIL, so a typo'd window would have
 # reported "the credential channel has regressed" with no way to tell it was a usage error.
+# The $(id) entry is a LITERAL test input — it must reach the SUT unexpanded, which is the
+# whole point of the case.
+# shellcheck disable=SC2016
 for badwin in '1;evil h' 'abc' '$(id) h' '1 h' 'h' '-5h'; do
   RC=0; OUT=$(BETTERSTACK_QUERY_SCRIPT="$TMP/stub.sh" bash "$SUT" \
     --host soleur-web-1 --absence X --since "$badwin" 2>&1) || RC=$?
