@@ -69,6 +69,31 @@ tool triggering a migrated hook also triggers `guardrails.sh`.
 type assertion and the telemetry still run. It is the in-band escape hatch if
 the posture ever proves noisy.
 
+### Verifying the fault path end to end
+
+One command, no SSH, no dashboard. It proves both halves: the operator is told
+**synchronously** (the `ask`), and the fault reaches the surface a human reads
+**later** (the aggregate counter).
+
+```bash
+R=$(mktemp -d)
+cp AGENTS.md AGENTS.rules.md "$R/"          # the aggregator resolves rules from this root
+printf 'not-json' | INCIDENTS_REPO_ROOT="$R" bash .claude/hooks/guardrails.sh \
+  | jq -r '.hookSpecificOutput.permissionDecision'          # -> "ask"
+INCIDENTS_REPO_ROOT="$R" bash scripts/rule-metrics-aggregate.sh --dry-run \
+  | jq '.summary.hook_input_fault_count'                    # -> 1
+rm -rf "$R"
+```
+
+The `cp AGENTS.md AGENTS.rules.md` line is load-bearing and was **missing from
+the original plan's version of this probe**: `INCIDENTS_REPO_ROOT` is read by
+*both* the incident emitter (for the ledger path) and the aggregator (for the
+rule corpus), so a bare `mktemp -d` makes the aggregator exit 2 with
+`AGENTS.md not found` and the count comes back empty. The probe reported a
+failure that was its own, not the code's — the same "declared-verifiable but
+never executed" gap that #7164's `@sh`-is-safe comment belongs to. Corrected
+here after running it.
+
 ### Scope of the mandate
 
 **Mandatory** for hooks on the `Bash` matcher and for blocking write guards —
