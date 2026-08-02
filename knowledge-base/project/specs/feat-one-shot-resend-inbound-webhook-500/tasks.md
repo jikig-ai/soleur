@@ -22,7 +22,7 @@ by the errno; H4 (inngest not bound on :8288) is near-confirmed.** Do not re-ope
 
 ## Phase 0 — Probe before fixing. NO merge, time-boxed ≤4 h.
 
-- [ ] 0.0 **RUN FIRST.** `gh run list --workflow=scheduled-inngest-health.yml` + `gh issue
+- [x] 0.0 **RUN FIRST.** `gh run list --workflow=scheduled-inngest-health.yml` + `gh issue
       list` over 2026-07-28→now. This 15-min external watchdog auto-dispatches
       `restart-inngest-server.yml` and files P1 issues. Either it fired (→ response
       failure; reshapes Phase 3) or it did not (→ it cannot see "nothing bound on :8288",
@@ -31,21 +31,21 @@ by the errno; H4 (inngest not bound on :8288) is near-confirmed.** Do not re-ope
       dispatchable non-SSH restart. If the unit merely died, this is the fix in seconds.
 - [ ] 0.1 File the tracking issue (`type/incident`). `Ref #6617` (**blocking dependency**),
       `Ref #7144`, `Ref #5697`. Body carries §Evidence.
-- [ ] 0.2 **The one real probe (H3/H4).** `hcloud server describe` the dedicated host +
+- [x] 0.2 **The one real probe (H3/H4).** `hcloud server describe` the dedicated host +
       its boot phone-home (`inngest-boot-phone-home.sh`) / vector stream. Correlate with
       the `SOLEUR_INNGEST_SERVER_PROBE` gap after 2026-07-30. Prior art to check first:
       `cloud-init-inngest.yml`'s doppler `/usr/bin` vs `/usr/local/bin` `ExecStart`
       status=203/EXEC bug — "inngest never bound :8288".
 - [ ] 0.3 **H1 confirmation only (~5 min), not a gate.** `hcloud firewall describe`;
       expect zero rules on `hcloud_firewall.inngest` by design.
-- [ ] 0.4 **Was the ingress-probe Sentry monitor RED across the window?** Decides whether
+- [x] 0.4 **Was the ingress-probe Sentry monitor RED across the window?** Decides whether
       Phase 3 is aimed correctly. Red → this is a *response* failure and 3.5 is the real
       fix. Not red → the probe misses its own dominant failure mode (bigger finding).
-- [ ] 0.5 Onset recovery (**non-blocking**): Inngest run history + Resend delivery log for
+- [x] 0.5 Onset recovery (**non-blocking**): Inngest run history + Resend delivery log for
       webhook `e0b3ba09-7a13-4f59-ba95-1ef1222bbdf8`. Else write `onset: UNKNOWN`.
 - [ ] 0.6 Record `errno` (RST vs timeout) for every probe — the cheapest L3-vs-L7
       discriminator, and the one the original diagnosis discarded.
-- [ ] 0.7 **Exit gate:** first failing hop identified with an artifact + a remediation
+- [x] 0.7 **Exit gate:** first failing hop identified with an artifact + a remediation
       written for it. NOT "exactly one hypothesis". Time-box ≤4 h, then proceed on the
       best-supported hypothesis with a stated rollback.
 
@@ -54,7 +54,7 @@ by the errno; H4 (inngest not bound on :8288) is near-confirmed.** Do not re-ope
 
 ## Phase 1 — Restore dispatch + discharge the statutory clock
 
-- [ ] 1.0 **Statutory reconciliation — before or with the remediation, NOT behind Phase 2.**
+- [x] 1.0 **Statutory reconciliation — before or with the remediation, NOT behind Phase 2.**
       Review the Proton `ops@soleur.ai` keep-copy for `2026-07-30 16:14 UTC → restoration`
       against the four rules in `lib/email-triage/statutory-rules.ts` (`breach-art33`,
       `service-of-process`, `dsar-art15`, `regulator-contact`). **Also verify the keep-copy
