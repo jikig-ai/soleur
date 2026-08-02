@@ -42,12 +42,18 @@ Three properties of that window matter more than the credential itself:
    crons *into* the app, while all outbound sends pointed at the dead host. Probe mail kept being
    sent during an outage of the pipeline that probe exists to measure.
 
-So the state on 2026-08-02 is not "the new host went down". It is that the traffic moved to a host
-whose entire operational control plane never moved with it, and which had never served a single
-event.
+So the state on 2026-08-02 is not merely "the new host went down". A PREDECESSOR `soleur-inngest`
+host **was** serving — it emitted `inngest-server.service` journald rows until
+2026-07-30T15:12:37Z, 29 seconds before the current host was created — so the cutover did not ship
+against a host that had never worked. It worked from 2026-07-24 until the 07-30 replacement, and
+the replacement could not boot. The defect is therefore not "the target host is unviable"; it is
+that the traffic moved to a host whose entire operational control plane never moved with it, so a
+routine replacement failing became a silent multi-day outage instead of a paged one.
 
 Note also that ADR-100 has never been `Accepted`; it is `status: adopting`, held there until a
-Phase-4 soak verifies zero double-fire. That soak never ran, because the host never served traffic.
+Phase-4 soak verifies zero double-fire. That soak has not completed: the predecessor host served
+for ~6 days before being replaced, which is short of the 7-day soak, and the replacement never
+booted.
 
 ## Decision
 
@@ -100,8 +106,8 @@ installation token can `docker login` GHCR yet is denied `docker pull` on privat
 HTTP 403). The minter also writes to Doppler config `prd`, never `prd_terraform`, so it could not
 have supplied `TF_VAR_ghcr_read_token` even had it worked. What remained was a browser+2FA PAT mint
 (ADR-087 D1: no PAT-creation API) on the critical path of a vendor auto-disable clock, followed by
-an unverified first boot behind a maintenance-window host-replace dispatch. Its *goal* survives as
-the completion criteria above.
+another first boot of the same cloud-init path that has already failed once, behind a
+maintenance-window host-replace dispatch. Its *goal* survives as the completion criteria above.
 
 **B — Chosen.** See Decision.
 

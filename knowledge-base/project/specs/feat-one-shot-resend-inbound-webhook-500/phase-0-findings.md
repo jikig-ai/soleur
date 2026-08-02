@@ -63,6 +63,31 @@ dedicated host. That is why the daily `SOLEUR-PROBE` emails were still being sen
 throughout the outage while the webhook returned 500 — and it is the condition the plan's
 task 4.6 anticipated ("H4 confirmed + a live co-located inngest").
 
+## Which hosts have ever run `inngest-server` (added post-CTO-ruling)
+
+Grouping every `_SYSTEMD_UNIT = inngest-server.service` row by host:
+
+| host | machine id | rows | last seen |
+| --- | --- | --- | --- |
+| `soleur-web-platform` (web-1) | `3f07b655…` | 1488 | **2026-08-02 12:00:45** (alive) |
+| `soleur-inngest` | `1e717bf1…` | 385 | **2026-07-30 15:12:37** |
+
+Two consequences, both of which corrected an earlier draft of the record:
+
+1. **The dedicated host is not unviable.** A PREDECESSOR `soleur-inngest` was serving until
+   2026-07-30T15:12:37Z — **29 seconds before** the current host was created at 15:13:06Z. So the
+   cutover did not ship against a host that had never worked; it worked from 2026-07-24 until the
+   07-30 replacement, and the *replacement* could not boot. ADR-155's first draft asserted the host
+   "never served a single event", which is false and is corrected there. The defect is not the
+   target architecture — it is that a routine host replacement failing became a silent multi-day
+   outage instead of a paged one, because the monitoring and repair verbs never moved with the
+   traffic.
+2. **web-2 has never run Inngest** — zero rows, ever. This resolves the CTO's P2 pre-flight
+   (`CUTOVER_HOSTS` is `10.0.1.10,10.0.1.11`, and a rollback fans `enable inngest` across both): the
+   fan-out cannot create a double-fire on web-2 because there is no unit there to enable. Consistent
+   with `var.web_colocate_inngest` defaulting `false` and web-2 being created 2026-07-27, after that
+   default landed.
+
 ## Why nobody was paged (0.0 / 0.4)
 
 **0.0 — the watchdog is blind by construction.**
@@ -97,12 +122,29 @@ issue is indistinguishable from background.
 failures. The blind spot is real.
 
 **Method note (`hr-no-dashboard-eyeball-pull-data-yourself` + "empty is not absence"):**
-`SENTRY_API_TOKEN` returns `[]` for *every* endpoint including `/organizations/` — a
-scope-less token whose empty results are indistinguishable from genuine absence. The
-working credential is **`SENTRY_AUTH_TOKEN`**. Every figure above was re-derived with it,
-and it demonstrably returns 40+ other issues over the same window, so the `op:inngest-send`
-zero is a measured absence rather than an authentication artifact. Any future Sentry
-assertion in this repo must use `SENTRY_AUTH_TOKEN`.
+`SENTRY_API_TOKEN` is **org-scoped, not dead** — an earlier draft of this file said it
+"returns `[]` for every endpoint", which is wrong. Measured:
+
+| endpoint | `SENTRY_API_TOKEN` |
+| --- | --- |
+| `/organizations/jikigai-eu/` | **200** |
+| `/projects/jikigai-eu/web-platform/` | **200** |
+| `/organizations/` (enumerate) | **200 `[]`** |
+| `/projects/` (enumerate) | **401** |
+
+The trap is narrower and nastier than "the token is broken": the **enumeration** endpoints
+*degrade* instead of denying, so a listing query that returns empty is indistinguishable
+from "nothing happened" — which is exactly the shape that nearly inverted this finding.
+The working credential for anything that lists or searches is **`SENTRY_AUTH_TOKEN`**.
+Every figure above was re-derived with it, and it demonstrably returns 40+ other issues
+over the same window, so the `op:inngest-send` zero is a **measured absence** rather than
+an auth artifact. Neither token carries `event:read` (both 403 on `/issues/<id>/events/`),
+per `sentry-issue-read.md`.
+
+Do **not** delete `SENTRY_API_TOKEN`: `apps/web-platform/scripts/audit-sentry-extra-text-references.sh`
+explicitly prefers it (falling back to `SENTRY_AUTH_TOKEN`), and several runbooks call it
+directly. The fix is the caveat now recorded in
+`knowledge-base/engineering/operations/runbooks/inbound-email-ingress-dead.md`, not removal.
 
 ## Statutory reconciliation (1.0) — NO exposure
 

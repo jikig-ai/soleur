@@ -15,7 +15,8 @@ brand_survival_threshold: single-user incident
 > **PAUSED 2026-08-02 by [ADR-155](./ADR-155-pause-adr-100-inngest-cutover-at-pre-repoint-operating-point.md).**
 > Cutover step 2.4 (the app repoint to `10.0.1.40`) is reverted; the app dispatches to the
 > co-located `inngest-server` again. The dedicated host was replaced on 2026-07-30, its first
-> boot failed the GHCR pull on a dead PAT, and it never bound `:8288` — causing a ~3-day silent
+> boot failed the GHCR pull on a dead PAT, and it never bound `:8288` (its predecessor had been
+> serving until 29s before that replacement) — causing a ~3-day silent
 > dispatch outage (#7144) that our own watchdog could not see. The target architecture below
 > stands; ADR-155 records the four completion criteria that must hold before the repoint returns.
 > Do not treat this document as describing the live operating point.
