@@ -332,6 +332,104 @@ assert_run "freeze: NotebookEdit inside prefix allows" "<none>" \
   "$(mk_notebook_payload "$FZ2/apps/n.ipynb")" "$FZ2" "$FZ2"
 rm -rf "$FZ2"
 
+# ===========================================================================
+# #7151 — guardrails:block-catastrophic-grep-repeat
+#
+# Claude Code's shell snapshot installs a bash FUNCTION named `grep` that
+# re-execs the claude binary with argv[0]=ugrep. Two or more BOUNDED repeats
+# in one pattern make ugrep's DFA construction allocate without bound (measured
+# 2026-08-01: 9.5 GB RSS in 171 s at 99% CPU against a single 21 kB markdown
+# file, still climbing). The guard blocks the shape pre-flight.
+#
+# Cost model (measured, not intuited): parse every bounded quantifier; fewer
+# than two bounded => allow; otherwise cost = product of (upper + 1), block at
+# >= 500. Calibration: highest observed-safe product 441 (44 MB); lowest
+# clearly-bad 961 (672 MB).
+#
+# NOTE ON THESE FIXTURES: they are inert JSON payload data — the hook never
+# executes them, so no fixture can trigger the blowup it describes.
+# ===========================================================================
+
+# AC-G1 — the measured reproducer (two bounded repeats, product 81*121=9801).
+assert "G1 reproducer denies" "deny" \
+  'grep -noE ".{0,80}(NEVER|MUST NOT)[^.]{0,120}" AGENTS.md'
+
+# AC-G2 — NO alternation, still a blowup (81*121=9801). The originally
+# prescribed "bounded repeat AND alternation" heuristic would have MISSED this;
+# measurement showed alternation is nearly irrelevant.
+assert "G2 no-alternation blowup denies" "deny" \
+  'grep -noE ".{0,80}cannot[^.]{0,120}" AGENTS.md'
+
+# AC-G3 — bounded repeat AND alternation, but cheap (9*1=9; measured 8.8 MB /
+# 0.1 s). Proves the guard is NOT the noisy heuristic that was prescribed.
+assert "G3 bounded+alternation allows (not the noisy rule)" "<none>" \
+  'grep -noE ".{0,8}(NEVER|MUST NOT)" AGENTS.md'
+
+# AC-G4 — a SINGLE bounded repeat is always cheap regardless of size
+# (measured: .{0,10000}cannot = 60 MB / 0.6 s).
+assert "G4 single bound (huge) allows" "<none>" \
+  'grep -oE ".{0,10000}cannot" AGENTS.md'
+
+# AC-G5 — `command grep` bypasses the shim (verified: GNU grep 3.12) → allow.
+assert "G5 command grep + reproducer allows" "<none>" \
+  'command grep -noE ".{0,80}(NEVER|MUST NOT)[^.]{0,120}" AGENTS.md'
+
+# AC-G6 — path-qualified grep bypasses the shim → allow.
+assert "G6 /usr/bin/grep + reproducer allows" "<none>" \
+  '/usr/bin/grep -noE ".{0,80}(NEVER|MUST NOT)[^.]{0,120}" AGENTS.md'
+
+# AC-G7 — `\grep` does NOT bypass the shim. Backslash suppresses ALIAS
+# expansion, not FUNCTION lookup (verified: \foo still ran the function).
+# It must therefore still deny — it is not an escape hatch.
+assert "G7 backslash-grep + reproducer denies (not an escape hatch)" "deny" \
+  '\grep -noE ".{0,80}(NEVER|MUST NOT)[^.]{0,120}" AGENTS.md'
+
+# AC-G8 — a git commit whose MESSAGE quotes the reproducer must NOT be blocked.
+# xargs -n1 keeps the whole quoted message as ONE token whose command word is
+# `git`, so no bare `grep` token exists to trigger on.
+assert "G8 commit message quoting the reproducer allows (no FP)" "<none>" \
+  $'git commit -m "docs: the reproducer was grep -noE \'.{0,80}(a|b)[^.]{0,120}\' on a 21 kB file"'
+
+# --- Non-vacuity + boundary coverage (beyond the plan\'s eight) -------------
+
+# The threshold sits BETWEEN the highest observed-safe product (441) and the
+# lowest clearly-bad (961). Both sides are asserted so a future retune that
+# collapses the band goes RED rather than silently widening the guard.
+assert "G9 highest observed-SAFE product (441) allows" "<none>" \
+  'grep -noE ".{0,20}(a|b)[^.]{0,20}" AGENTS.md'
+assert "G10 lowest clearly-BAD product (961) denies" "deny" \
+  'grep -noE ".{0,30}(a|b)[^.]{0,30}" AGENTS.md'
+
+# An open-ended `{n,}` is unbounded — it is NOT a bounded repeat and must not
+# count toward the product (two of them are cheap, not a blowup).
+assert "G11 open-ended {n,} repeats are not bounded (allow)" "<none>" \
+  'grep -oE "a{2,}b{3,}" AGENTS.md'
+
+# BRE form: `grep` without -E spells the bounded repeat `\{n,m\}`. The guard
+# normalizes the escapes so BRE is covered identically to ERE.
+assert "G12 BRE escaped-brace bounded repeats deny" "deny" \
+  'grep -n ".\{0,80\}cannot[^.]\{0,120\}" AGENTS.md'
+
+# A shimmed grep with NO bounded repeat at all is the overwhelmingly common
+# case — the guard must be silent on it (this is the no-over-deny canary).
+assert "G13 ordinary grep allows (no over-deny)" "<none>" \
+  'grep -rn "resolve_command_cwd" .claude/hooks/'
+
+# egrep/fgrep are NOT shimmed in this snapshot (verified at implementation time
+# via `declare -f egrep fgrep` → empty; `type -t` → file). They run the real
+# binary, so the guard must NOT fire on them.
+assert "G14 egrep is not shimmed (allow)" "<none>" \
+  'egrep -no ".{0,80}cannot[^.]{0,120}" AGENTS.md'
+
+# A chain operator resets the grep context: a bad pattern appearing as an
+# argument to a LATER non-grep command must not be attributed to the grep.
+assert "G15 pattern after a chain boundary is not attributed to grep" "<none>" \
+  'grep -c foo AGENTS.md && echo ".{0,80}x[^.]{0,120}"'
+
+# ... but a real shimmed grep AFTER a chain boundary still denies.
+assert "G16 shimmed grep after a chain boundary still denies" "deny" \
+  'echo start && grep -noE ".{0,80}cannot[^.]{0,120}" AGENTS.md'
+
 echo
 echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"
 [[ $FAIL -eq 0 ]] || exit 1

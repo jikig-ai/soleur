@@ -17,6 +17,7 @@
 #   guardrails:block-conflict-markers — constitution.md "grep staged content for conflict markers"
 #   guardrails:require-milestone — constitution.md "GitHub Actions workflows and shell scripts that create issues must include --milestone"
 #   guardrails:block-stash-in-worktrees — AGENTS.md "Never git stash in worktrees"
+#   guardrails:block-catastrophic-grep-repeat — AGENTS.md "Never pass a pattern with two or more bounded repeats to the shimmed grep"
 
 set -euo pipefail
 
@@ -366,6 +367,120 @@ if grep -qE '(^|&&|\|\||;)\s*git\s+stash' <<<"$SCAN"; then
     }
   }'
   exit 0
+fi
+
+# guardrails:block-catastrophic-grep-repeat — Block regex shapes that make the
+# shimmed `grep` allocate without bound.
+#
+# Claude Code's shell snapshot installs a bash FUNCTION named `grep` that
+# transparently re-execs the claude binary with argv[0]=ugrep. Certain regex
+# shapes make ugrep's DFA construction allocate without bound. Measured
+# 2026-08-01: `.{0,80}(6-alt)[^.]{0,120}` against a single 21 kB markdown file
+# reached 9.5 GB RSS in 171 s at 99% CPU and was still climbing, driving a
+# 31 GB box to 691 MB free with swap at 88.5%. The process is invisible as a
+# cause — `ps` shows the claude version directory, not `ugrep` — which is why
+# it survived multiple desktop freezes un-root-caused.
+#
+# COST MODEL (measured, not intuited). The originally prescribed heuristic
+# ("bounded repeat AND alternation") was wrong on BOTH sides: `.{0,80}cannot
+# [^.]{0,120}` has no alternation and blows up, while `.{0,8}(NEVER|MUST NOT)`
+# has both and costs 8.8 MB / 0.1 s. The driver is >= 2 BOUNDED repeats, with
+# cost scaling as the product of their upper bounds. A SINGLE bounded repeat is
+# always cheap regardless of size (`.{0,10000}cannot` = 60 MB / 0.6 s).
+#   cost = product of (upper + 1) over all bounded quantifiers; deny at >= 500.
+# Calibration: highest observed-safe product 441 (44 MB); lowest clearly-bad
+# 961 (672 MB). 500 sits between, on the safe side. Common multi-bound patterns
+# stay well under it — an IPv4 regex (four `[0-9]{1,3}`) costs 256.
+#
+# Load-bearing implementation notes:
+#  - Scans $COMMAND, NOT $SCAN. A grep pattern is ALWAYS inside quotes, and
+#    strip_command_bodies blanks quoted bodies — a $SCAN-based version of this
+#    guard would see nothing and silently never fire.
+#  - Tokenizes with `xargs -n1` (the require-milestone / block-recursive-delete
+#    pattern). This strips quotes so the pattern arrives as one token, AND it
+#    removes the false-positive class that scanning raw $COMMAND would create:
+#    in `git commit -m "... grep -noE '.{0,80}(a|b)' ..."` the whole message is
+#    a single token whose command word is `git`, so no `grep` token exists.
+#  - Fires only on SHIMMED invocations. `command grep` and a path-qualified
+#    grep (/usr/bin/grep) reach GNU grep 3.12 and are skipped. `\grep` is NOT
+#    an escape hatch — backslash suppresses ALIAS expansion, not FUNCTION
+#    lookup (verified) — so it is normalized and still gated. `egrep`/`fgrep`
+#    are not shimmed in this snapshot (`declare -f egrep fgrep` is empty) and
+#    are skipped. Known minor false positive: `env grep` / `sudo grep` also
+#    reach the real binary but are still gated (unmeasured; costs one retry).
+#  - This guard's own detection regex uses only `*` and `?`, never a bounded
+#    repeat, so it can never trip the class it detects.
+if grep -qF 'grep' <<<"$COMMAND"; then
+  # Product of (upper + 1) over every BOUNDED quantifier in a pattern token.
+  # Echoes 0 when fewer than two are bounded (cheap by measurement).
+  _grep_repeat_cost() {
+    local pat="$1" q up n=0 cost=1
+    # Normalize BRE escapes so `\{0,80\}` is seen identically to ERE `{0,80}`.
+    # `xargs` preserves backslashes INSIDE double quotes (measured), so a BRE
+    # pattern really does arrive here still escaped. Stripping every backslash
+    # is safe for this purpose: a quantifier needs digits between braces, and
+    # an escaped literal (`\.`, `\$`) cannot become one by losing its escape.
+    pat="${pat//\\/}"
+    while IFS= read -r q; do
+      [[ -z "$q" ]] && continue
+      q="${q#\{}"; q="${q%\}}"
+      case "$q" in
+        *,)  continue ;;         # {n,} — open-ended, NOT bounded; ignore
+        *,*) up="${q#*,}" ;;     # {n,m} and {,m}
+        *)   up="$q" ;;          # {n}
+      esac
+      [[ "$up" =~ ^[0-9]+$ ]] || continue
+      n=$((n + 1))
+      cost=$((cost * (up + 1)))
+      if (( cost > 1000000 )); then cost=1000000; fi   # saturate; no overflow
+    done < <(grep -oE '\{[0-9]*,?[0-9]*\}' <<<"$pat" 2>/dev/null || true)
+    if (( n < 2 )); then echo 0; else echo "$cost"; fi
+  }
+
+  _gr_toks=()
+  mapfile -t _gr_toks < <(printf '%s\n' "$COMMAND" | xargs -n1 2>/dev/null) || true
+  _in_grep=0
+  _gr_prev=""
+  _gi=0
+  while (( _gi < ${#_gr_toks[@]} )); do
+    _gt="${_gr_toks[$_gi]}"
+    _gi=$((_gi + 1))
+    # `\grep` still resolves to the FUNCTION (backslash suppresses ALIAS
+    # expansion, not function lookup — verified). Belt-and-braces only: GNU
+    # xargs already strips a leading backslash outside quotes, so this is
+    # portability insurance against a tokenizer that does not. G7 pins the
+    # BEHAVIOUR (\grep + reproducer must deny) regardless of which layer
+    # delivers it.
+    _gn="${_gt#\\}"
+    case "$_gt" in
+      "&&"|"||"|";"|"|") _in_grep=0; _gr_prev="$_gt"; continue ;;
+    esac
+    # ARMING IS EXACT-TOKEN-ONLY. This one fact is what makes every non-shim
+    # form safe, so there is deliberately NO bypass list here: a path-qualified
+    # `/usr/bin/grep`, `egrep` and `fgrep` (none of them shimmed — verified via
+    # `declare -f egrep fgrep`, which is empty) simply never match, so they
+    # never arm the guard. An explicit bypass case for them would be
+    # unreachable code advertising a protection it does not provide.
+    if [[ "$_gn" == "grep" ]]; then
+      # `command grep` reaches the real binary (GNU grep 3.12) — not the shim.
+      if [[ "$_gr_prev" == "command" ]]; then _in_grep=0; else _in_grep=1; fi
+      _gr_prev="$_gt"; continue
+    fi
+    if [[ "$_in_grep" == 1 ]]; then
+      _gcost=$(_grep_repeat_cost "$_gt")
+      if (( _gcost >= 500 )); then
+        emit_incident "guardrails-block-catastrophic-grep-repeat" "deny" "Never pass >=2 bounded repeats to the shimmed grep" "$COMMAND"
+        jq -n --arg c "$_gcost" '{
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",            permissionDecision: "deny",
+            permissionDecisionReason: ("BLOCKED: this pattern has two or more bounded repeats (DFA cost " + $c + ", limit 500). The `grep` in this shell is a function that re-execs ugrep, whose DFA construction allocates without bound on this shape — a measured run reached 9.5 GB RSS in 171 s against a 21 kB file and froze the desktop. Re-run it with `command grep` (GNU grep 3.12 handles the same pattern in 7 MB / 0.1 s), or use the Grep tool.")
+          }
+        }'
+        exit 0
+      fi
+    fi
+    _gr_prev="$_gt"
+  done
 fi
 
 # All checks passed
