@@ -33,6 +33,33 @@ deny() {
   exit 2
 }
 
+# --- ADR-155 (mirror): the HookEvent envelope is MODEL-CONTROLLED ------------
+# This port never calls eval, so it is not vulnerable to the #7164 code
+# execution. It is still EVADABLE by the same payload: `jq -r` renders a
+# non-string field across multiple lines, which matches none of the anchored
+# guards below, so an array .tool_input.command would slip every gate in this
+# file while looking like an ordinary empty command.
+#
+# Scoped deliberately NARROW — it fires only when the document PARSES and a
+# contracted field is the wrong TYPE. A transport failure keeps the pre-existing
+# behaviour, so this change cannot alter what happens on a jq hiccup.
+#
+# The OpenHands protocol has no `ask` (ADR-156's posture in .claude/hooks/), so
+# the anomalous shape DENIES. No legitimate caller sends a non-string here, and
+# a deny is recoverable where a silent bypass is not. Converging the two
+# harnesses on one extractor is a tracked follow-up.
+GR_ENVELOPE_SHAPE=$(printf '%s' "$INPUT" | jq -r '
+  if (type == "object")
+     and ((.tool_input? | type) as $t | $t == null or $t == "object")
+     and ((.tool_input.command? // "") | type == "string")
+     and ((.working_dir? // "") | type == "string")
+     and ((.tool_input.path? // .tool_input.file_path? // "") | type == "string")
+  then "ok" else "nonstring" end' 2>/dev/null) || GR_ENVELOPE_SHAPE="unparseable"
+if [[ "$GR_ENVELOPE_SHAPE" == "nonstring" ]]; then
+  deny "BLOCKED: the tool-call envelope carries a non-string field (e.g. an ARRAY tool_input.command). Hook stdin is model-controlled and untrusted (ADR-155); a non-string is never coerced, because the coerced value matches no guard and would bypass every gate in this hook. Re-send the command as a string."
+fi
+
+
 # guardrails:freeze-edit-lock — directory-scoped edit-lock for file_editor.
 # Gated on BOTH file_path present AND command empty: a terminal payload carries
 # .tool_input.command and no path, so this is skipped for terminal calls and
