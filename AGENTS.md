@@ -28,6 +28,7 @@ Pointer index; bodies in `AGENTS.rules.md`, injected in full by the SessionStart
 - [id: hr-when-a-workflow-concludes-with-an]
 - [id: hr-before-asserting-github-issue-status]
 - [id: hr-never-run-commands-with-unbounded-output]
+- [id: hr-never-pass-two-bounded-repeats-to-shimmed-grep]
 - [id: hr-never-write-to-claude-code-memory-claude]
 - [id: hr-when-in-a-worktree-never-read-from-bare]
 - [id: hr-github-api-endpoints-with-enum]
