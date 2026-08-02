@@ -19,7 +19,7 @@ status: deepened
 > grant that permits it lives in `deploy-inngest-bootstrap.sudoers` + its `cloud-init.yml` mirror
 > (both Terraform-delivered), and the chain is applied by `apply-deploy-pipeline-fix.yml` on merge.
 > See `## Infrastructure (IaC)` — including the new `replace_target` dispatch input that replaces
-> the one operator-local `terraform apply` the existing recovery text still prescribes.
+> the one <!-- lint-infra-ignore start: negated mention — this clause records that the operator step is REPLACED by the replace_target dispatch input, it does not prescribe one -->operator-local `terraform apply` the existing recovery text still prescribes.<!-- lint-infra-ignore end -->
 
 # Close #7103's R1–R5
 
@@ -934,7 +934,7 @@ discoverability_test:
       --since 2h --grep SOLEUR_DEPLOY_INVOCATION --limit 20 &&
     curl -sS --max-time 20 https://app.soleur.ai/health
   expected_output: >-
-    suite count = baseline + 4; the absence helper prints `clean` and exits 0 (or `unshipping` /
+    suite count = baseline + 5; the absence helper prints `clean` and exits 0 (or `unshipping` /
     `unknown` and exits 2 / 3 — which is the point); at least one SOLEUR_DEPLOY_INVOCATION row whose
     script_sha matches the deployed commit's ci-deploy.sh; /health returns the deployed version.
   # Contains no remote-shell invocation.
@@ -1017,7 +1017,7 @@ riskier by committing a harness that re-executes that body, so the `::add-mask::
 step, and a stale state frame). The restart is now graded on `is-active` + timestamp advancement
 rather than on `try-restart`'s exit code, which is fork-success on a `Type=simple` unit and a silent
 no-op on a failed one. Remaining risk is the delivery-leg dependency, Risk 1, now with a CI lever
-instead of an operator-local `terraform apply`.
+<!-- lint-infra-ignore start: negated mention — "a CI lever INSTEAD OF" an operator step; no human step is prescribed -->instead of an operator-local `terraform apply`.<!-- lint-infra-ignore end -->
 
 ### Product/UX Gate
 
@@ -1103,8 +1103,13 @@ Source-4 allowlist, both directions; token-shaped redaction is a filed follow-up
 
 **R5(a)**
 
-- **AC-R5-1** `bash scripts/test-all.sh` reports the 0.1 baseline **+ 4**. A delta, never an absolute
-  literal.
+- **AC-R5-1** `bash scripts/test-all.sh` reports the 0.1 baseline **+ 5**. A delta, never an absolute
+  literal. The 5 are enumerated so the number is derived, not remembered: 2.1 registers TWO runners
+  (`run-registered-suites.sh`, `.github/scripts/test/run-all.sh`), and 4.8, 5.6 and 6.3 each register
+  one new suite. An earlier revision of this plan said **+ 4** while its own task list prescribed 5
+  registrations — left uncorrected, the exit gate fails on a CORRECT tree, and the cheapest way to
+  make a count-mismatch go green is to drop a registration, which is exactly the R5 defect this PR
+  exists to close.
 - **AC-R5-2** Deleting either runner's `run_suite` line reds `lint-orphan-test-suites.sh` and the
   message names the missing runner. Sandbox output in the PR body.
 - **AC-R5-3** `grep -c 'This runner does NOT cover apps/web-platform/infra/' scripts/test-all.sh` = 0.
@@ -1191,7 +1196,7 @@ Source-4 allowlist, both directions; token-shaped redaction is a filed follow-up
 
 **Cross-cutting**
 
-- **AC-X-1** `bash scripts/test-all.sh` green at baseline + 4 — the gate's own invocation, on the
+- **AC-X-1** `bash scripts/test-all.sh` green at baseline + 5 — the gate's own invocation, on the
   **final** tree. Expected output includes the nested runners' counts (`run-registered-suites.sh`
   0 RED; `run-all.sh` RAN ≥ 10). Also the re-verification of Phase 1 under the folded-in suite.
 - **AC-X-2** `actionlint` on the two edited workflows; `shellcheck` on every created/edited `.sh`.
@@ -1231,7 +1236,7 @@ Source-4 allowlist, both directions; token-shaped redaction is a filed follow-up
 
 | # | Risk | Mitigation |
 |---|---|---|
-| 1 | **The shape gate, the handler, and the sudoers all ride the handler-bootstrap leg** over the CF-Tunnel SSH bridge. If `ci_ssh` is dead at merge time, Phase 3 lands in the repo and never reaches the host. | ADR-154's transport probe is the **final** bridge step, so a dead credential fails early with a named reason (0.5 asserts it is still final). 3.8's warn-on-absent arm means a stale handler does **not** red the apply and does not skip the `if: success()` activation step. The remedy is now an in-CI `replace_target` dispatch input, not an operator-local `terraform apply`. |
+| 1 | **The shape gate, the handler, and the sudoers all ride the handler-bootstrap leg** over the CF-Tunnel SSH bridge. If `ci_ssh` is dead at merge time, Phase 3 lands in the repo and never reaches the host. | ADR-154's transport probe is the **final** bridge step, so a dead credential fails early with a named reason (0.5 asserts it is still final). 3.8's warn-on-absent arm means a stale handler does **not** red the apply and does not skip the `if: success()` activation step. <!-- lint-infra-ignore start: negated mention — the remedy is the in-CI dispatch; the operator step is what it replaces. Markers are inline so the table row is not split. -->The remedy is now an in-CI `replace_target` dispatch input, not an operator-local `terraform apply`.<!-- lint-infra-ignore end --> |
 | 2 | **The grant activates unvalidated unit configuration** — a `deploy` → root persistence chain. | 3.1 ships the drop-in shape gate **before** 3.2, with a per-directive rejection test (AC-R2-1). The C4 access row records the real delta rather than claiming none. |
 | 3 | **Public disclosure of the prd Doppler token via the Actions log.** | Three layers: `::add-mask::` in the step (5.1); `env -i` hermetic harness that cannot reach real `doppler` (5.3); a no-interpolation assertion over the harness's own output (5.5 / AC-R4-6). Plus a `pull_request_target` refusal, since the harness executes PR-head code. |
 | 4 | **New fallible reads abort the write loop under `set -euo pipefail`**, freezing delivery (#4804 class). | 3.6 requires the file's existing guarded idiom for every new read, with per-file reason enums; AC-R2-11 pins all three failure shapes. |
