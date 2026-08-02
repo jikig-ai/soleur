@@ -104,7 +104,20 @@ POINTER_LINE_RE = re.compile(r"^- \[id: [a-z0-9-]+\](?:\s+\[[^\]]+\])*\s*$")
 GATED_PREFIX_RE = re.compile(r"^(hr|wg)-")
 # Enforcement tags whose presence escalates a changed body to a louder
 # mandatory-human-review annotation (the ack is required regardless).
-SECURITY_TAG_MARKERS = ("[compliance-tier]", "[hook-enforced", "[skill-enforced")
+#
+# `[mandates-filing]` is not an enforcement tag like its siblings — it does not
+# describe how THIS rule is enforced. It grants the rule's filings an exemption
+# from a DIFFERENT gate (net-issue-flow), so adding or dropping it changes what
+# that gate will let through. Dropping it is the dangerous direction and is
+# silent otherwise: the exemption simply stops matching and the only visible
+# symptom is a `Mandating rules: N` count nobody is watching. Listing it here
+# makes both directions loud. See ADR-155.
+SECURITY_TAG_MARKERS = (
+    "[compliance-tier]",
+    "[hook-enforced",
+    "[skill-enforced",
+    "[mandates-filing]",
+)
 DELETED_TOKEN = "DELETED"
 
 
@@ -509,7 +522,7 @@ def cmd_check(
             if _has_security_tag(base_raw) or _has_security_tag(head_bodies[rid]):
                 print(
                     f"::error::rule-body-lint: {rid} is a security-tagged rule "
-                    "([compliance-tier]/[hook-enforced]/[skill-enforced]) being "
+                    "([compliance-tier]/[hook-enforced]/[skill-enforced]/[mandates-filing]) being "
                     "changed — mandatory-human-review.",
                     file=sys.stderr,
                 )
@@ -526,7 +539,7 @@ def cmd_check(
         if rid not in base_bodies and _has_security_tag(raw):
             print(
                 f"::warning::rule-body-lint: {rid} is a NEW security-tagged rule "
-                "([compliance-tier]/[hook-enforced]/[skill-enforced]) — "
+                "([compliance-tier]/[hook-enforced]/[skill-enforced]/[mandates-filing]) — "
                 "mandatory-human-review that it is not a toothless control.",
             )
 
