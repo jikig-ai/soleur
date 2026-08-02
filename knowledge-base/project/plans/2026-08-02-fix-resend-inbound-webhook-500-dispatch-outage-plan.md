@@ -924,6 +924,75 @@ Phase 2 covers the **webhook → Inngest dispatch** hop only. A run that dies af
 the operator. **This plan does not fix that class.** Naming it, rather than implying
 "mail always appears" has been achieved.
 
+## Downtime & Cutover
+
+Gate 4.55 fires on three distinct triggers in this plan. Soleur's serving surface is a
+live single-operator platform, so **zero-downtime is the default and downtime must be
+argued for, not assumed.**
+
+### Trigger 1 — infra reboot/replace (Phase 1, H4 path)
+
+**Offline-inducing operation:** editing `cloud-init-inngest.yml` forces
+`hcloud_server.inngest` to be **destroyed and re-created** — the resource deliberately
+carries no `ignore_changes = [user_data]` because "that force-replace is the intended
+replace-to-reprovision path". Worse, `hcloud_firewall_attachment.inngest` warns the
+replacement **boots with no hcloud firewall until the next full/drift apply**.
+**Surface affected:** all Inngest-dispatched work — every cron, the email-triage
+pipeline, and (post-Phase-2) the drain itself.
+
+**Zero-downtime path — CHOSEN.** The **signed config-refresh bundle**
+(`infra-config-install.sh` / `INNGEST_CONFIG_DIGEST`, ADR-136/ADR-128) applies the unit
+fix **in place**, with no destroy, no re-create, and no firewall gap. If Phase 0 shows
+the failure is the documented `status=203/EXEC` `ExecStart` path bug, this is a unit-file
+correction plus a restart — seconds, not a re-provision.
+**Residual downtime:** the `inngest-server.service` restart itself. Bounded to one
+service restart, and by then Phase 2's durable claim means the ingress keeps answering
+2xx across it.
+**Fallback (only if the host cannot be repaired in place):** blue-green — provision the
+replacement *first*, confirm it binds `:8288` and attaches its firewall, then cut
+`INNGEST_BASE_URL` over and retire the old host. A bare `-replace` that destroys before
+the replacement is proven is **not** an accepted path here.
+
+### Trigger 2 — database lock (Phase 2.2 migration)
+
+**Offline-inducing operation:** `ALTER TABLE processed_resend_events` on the live dedup
+table, which is on the **hot webhook path** — a lock here 500s the very endpoint this
+plan exists to fix.
+
+**Zero-downtime path — CHOSEN: expand-contract, all columns NULLable.**
+- Add every new column **nullable, with no `DEFAULT`**. On PG11+ a plain `ADD COLUMN`
+  taking only a brief `ACCESS EXCLUSIVE` is a catalog-only change; a `NOT NULL DEFAULT`
+  or a type change would rewrite the table and is **forbidden here**.
+- Backfill (if any) in bounded batches, never one long transaction.
+- Enforce constraints later as `ADD CONSTRAINT … NOT VALID` + a separate `VALIDATE`.
+- No `CREATE INDEX` without `CONCURRENTLY` — and since the Supabase runner wraps each
+  migration in a transaction, `CONCURRENTLY` is *also* unavailable, so any index must
+  ship in its own migration or be deferred. Say which at /work.
+- Set a short `lock_timeout` so the migration fails fast rather than queueing behind a
+  long read and stalling every inbound webhook.
+
+**Residual downtime:** none expected. The table is tiny (two columns today) and the
+operations are catalog-only.
+
+### Trigger 3 — deploy/router (every phase)
+
+**Offline-inducing operation:** the prod container swap in `ci-deploy.sh`.
+**Assessment:** pre-existing and unchanged by this plan — no new drop-in-flight
+behaviour is introduced. Explicitly **not** re-litigated here.
+**Note:** Phase 2 *improves* this. Once the ingress persists-then-200s without an inline
+dispatch, a webhook arriving mid-swap no longer depends on Inngest being reachable at
+that instant.
+
+### Verification and rollback per stage
+
+| Stage | Verify | Rollback |
+| --- | --- | --- |
+| Config-refresh bundle | `:8288` bound; B1 query `send_failed = 0` | Re-apply the previous signed digest |
+| Migration | Columns present and nullable; route still 2xx; `lock_timeout` did not fire | `136_*.down.sql` (mandatory sibling) |
+| Route cutover | Live signed probe → 2xx; unsigned control → 401 | Revert the route commit; the claim table is additive and harmless if unread |
+
+**Operator sign-off:** not required — no path above accepts a maintenance window.
+
 ## Encryption Posture
 
 Detection fires: Phase 2 adds a Supabase migration and a persistent store.
