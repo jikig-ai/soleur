@@ -18,12 +18,12 @@ recurrence risk), R2 → R3 a hard dependent pair.
 
 ## Phase 0 — Preconditions (read-only)
 
-- [ ] 0.1 Run the full local suite on a clean tree; record the `N/N suites passed` baseline.
+- [x] 0.1 Run the full local suite on a clean tree; record the `N/N suites passed` baseline.
 - [x] 0.2 List the registered infra suites with `… --list | grep -c '\.test\.sh$'` (expect 87 — **not**
       `| wc -l`, which returns 88 because the runner prints a header). Run them in full; record
       PASS/RED. Triage any pre-existing red under `wg-when-tests-fail-and-are-confirmed-pre` before
       Phase 2.
-- [ ] 0.3 Run `.github/scripts/test/run-all.sh`; record `RAN` (expect 10, `MIN_SUITES=10`).
+- [x] 0.3 Run `.github/scripts/test/run-all.sh`; record `RAN` (expect 10, `MIN_SUITES=10`).
 - [x] 0.4 Verify `python3` + `yaml` in the job that will run the R4 harness. **Decides Phase 5's home.**
 - [x] 0.5 Confirm the liveness gate is still the final step of `cf-tunnel-ssh-bridge/action.yml`.
 - [x] 0.6 Count `FILE_MAP` entries (expect 19); note the two stale "18 destinations" comments.
@@ -135,10 +135,10 @@ recurrence risk), R2 → R3 a hard dependent pair.
 
 ## Phase 8 — Exit gate
 
-- [ ] 8.1 Run the full local suite on the **final** tree; assert baseline + 4 and that the nested
+- [x] 8.1 Run the full local suite on the **final** tree; assert baseline + 4 and that the nested
       runners report 0 RED / RAN ≥ 10. This is also Phase 1's re-verification.
-- [ ] 8.2 `shellcheck` every created/edited `.sh`; `actionlint` the two edited workflows (never the
+- [x] 8.2 `shellcheck` every created/edited `.sh`; `actionlint` the two edited workflows (never the
       composite action).
-- [ ] 8.3 Assert the AGENTS byte budget is unchanged.
-- [ ] 8.4 Resolve every `knowledge-base/` citation in the plan, ADR, and this file.
+- [x] 8.3 Assert the AGENTS byte budget is unchanged.
+- [x] 8.4 Resolve every `knowledge-base/` citation in the plan, ADR, and this file.
 - [ ] 8.5 Use `Ref #7103` in the PR body — never `Closes`.

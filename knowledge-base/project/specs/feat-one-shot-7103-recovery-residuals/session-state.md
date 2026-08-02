@@ -188,11 +188,42 @@ infra-config-gate 29/29, infra-config-handler-bootstrap 36/36, journald-config 7
 betterstack-assert-absence 23/23, web-zot-consumer-probe green. `terraform fmt -check` clean.
 `visudo -cf` parses. All shellcheck findings on touched files are pre-existing or annotated.
 
-### Resume point
-**Phase 5 (R4) is next.** Run preconditions 0.4/0.5/0.7/0.8 first — 0.4 decides Phase 5's home.
+### Exit gate (Phase 8) — measured on the final clean tree
 
-Remaining: Phase 5 (R4, 6 tasks) -> Phase 6 (R5(b), 3) -> Phase 7 (Records, 4) ->
-Phase 8 (Exit gate, 5), then /review -> /qa -> /compound -> /ship.
+- `scripts/test-all.sh` → **rc=0, `=== 248/248 suites passed ===`** (terminal marker, not an
+  intermediate `Total:` line). Zero failures.
+- Both nested runners were invoked BY test-all.sh and both `[ok]`:
+  `run-registered-suites.sh` (268s, 87/87) and `.github/scripts/test/run-all.sh` (161s).
+  Phase 2's R5(a) registration is doing its job — the epilogue NOTE confirms
+  `apps/web-platform/infra/` IS covered via the nested runner.
+- Contention epilogue clean: 4% `/tmp` used, 3959MB avail, delta 26 entries. **No banner fired** —
+  the `LOW_TMP_HEADROOM` / `SIBLING_RUN_DETECTED` grep hits are the contention SUITE's own `[ok]`
+  assertion lines, exactly the false positive the runner's guidance warns about.
+- 8.2 `shellcheck` on all 20 changed shell files; `actionlint` 1.7.12 clean on the one edited
+  workflow (the plan said "two" — only `apply-deploy-pipeline-fix.yml` was touched).
+- 8.3 `AGENTS.md` (5290 B) and `AGENTS.rules.md` (37330 B) byte-identical to `origin/main`.
+- 8.4 every citation in ADR-155 / tasks.md / session-state resolves.
+
+**Plan arithmetic correction.** 8.1 says "baseline + 4"; the measured delta is **+5**. All five are
+plan-mandated — the two nested runners (2.1), `betterstack-assert-absence` (4.8),
+`digest-oracle-guard` (5.6), `cf-tunnel-liveness-gate-mutations` (6.3). The plan's own "+4"
+omitted 4.8's suite from its count. The delta is correct; the plan's arithmetic was not.
+
+**A shellcheck directive of mine was disabling checks for ~900 lines.** Written as
+`# shellcheck disable=SC2016 -- <prose>`, which does not parse (SC1072/SC1073) and ABORTS analysis
+of the rest of the file. It surfaced as a reported syntax error at line 984 that `bash -n`
+disagreed with — the tell that the LINTER's parse was failing, not the script's. Fixed; the file
+now reports only pre-existing advisories.
+
+### Resume point
+**All implementation phases are DONE (0 through 8).** The only open task is **8.5** — use
+`Ref #7103` in the PR body, never `Closes` — which belongs to `/ship`.
+
+Remaining: /review -> /compound -> /ship. (/qa does not apply: the diff touches no
+`apps/web-platform/app/(dashboard)/**`, `components/dashboard/**` or any `layout.tsx`.)
+
+A PR body is drafted and ready for /ship, carrying 5.7's required-check gating decision verbatim,
+the Net +1 issue-flow accounting, and a post-merge section with no operator steps.
 
 Note for Phase 8: `scripts/test-all.sh` does NOT cover `apps/web-platform/infra/` — both runners
 are required, and `betterstack-assert-absence.test.sh` was newly registered in test-all.sh, so the
