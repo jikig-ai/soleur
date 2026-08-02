@@ -189,7 +189,7 @@ guards, (3) the OpenHands mirror.
       mandate (Bash-matcher + blocking write hooks only), the 10 exempt hooks with the reason and the
       follow-up issue, the required source order, the designated responder, the kill switch, the test.
 - [x] 10.4 `bash -n` every edited `.sh`; `shellcheck -s bash -x` zero findings; paste into the PR body.
-- [ ] 10.5 `bash scripts/test-all.sh` → 0.
+- [x] 10.5 `bash scripts/test-all.sh` → 0 (246/246 suites, run 5 against the settled tree).
 - [x] 10.6 `git grep -nE '@sh (shell-)?escapes|eval is safe' -- '.claude/hooks/*.sh'` → zero.
 - [x] 10.7 `git ls-files --others --exclude-standard | grep -E '^(TOOL_NAME|FILE_PATH|SESSION_ID|PWNED)'` → nothing.
 - [x] 10.8 Walk AC1-AC23 and record evidence for each in the PR body. **The PR body must make no
