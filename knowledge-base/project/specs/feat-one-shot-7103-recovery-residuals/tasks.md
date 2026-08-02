@@ -50,9 +50,9 @@ recurrence risk), R2 → R3 a hard dependent pair.
 - [x] 1.5 Leave the fail-open control flow untouched; add no new deploy-state reason enum.
 - [x] 1.6 Extend `ci-deploy.test.sh`: marker on every path, each `cred_file` value reachable,
       degraded-event on absence, no fixture token in output, distinct hook IDs.
-- [ ] 1.7 **Re-file half (a) on #7103** with reproduction detail verbatim (both timestamps, both
+- [x] 1.7 **Re-file half (a) on #7103** with reproduction detail verbatim (both timestamps, both
       `ZOT_GATE` lines, the `IMAGE_PULL_FAIL` line, F1–F7, the marker as the naming mechanism).
-- [ ] 1.8 Assert (do not assume) that `ci-deploy` is in the vector Source-4 allowlist **and** that
+- [x] 1.8 Assert (do not assume) that `ci-deploy` is in the vector Source-4 allowlist **and** that
       `ci-deploy.sh` sets the matching literal `LOG_TAG` — both directions.
 
 ## Phase 2 — R5(a): make the local suite invoke the uncovered runners

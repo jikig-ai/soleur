@@ -396,6 +396,35 @@ assert "P1-SEC the DSN's @host:port diagnostic SURVIVES (userinfo redacted, not 
 assert "P1-SEC a credential-LESS internal URL passes through untouched (shape-based, not a '://' ban)" \
   "[[ \"\$BENIGN_SCRUBBED\" == \"\$BENIGN_FIXTURE\" ]]"
 
+
+# --- #7103 R1 (1.8): ci-deploy's journald channel, asserted in BOTH directions -----------
+#
+# During the 2026-08-01 recovery the deploy path's own stderr was the thing nobody could
+# read. `ci-deploy` IS in the Source 4 allowlist today -- but "is in the allowlist" and "is
+# actually shipped" are different claims, and the pair only holds if the allowlist entry and
+# the emitter's tag are the same string. An allowlist entry with no matching emitter is a
+# dead no-op, and an emitter whose tag is not allowlisted is silence that reads as health.
+# This file already guards that trap negatively for inngest-boot-phone-home (CF-4); this is
+# the positive case for the channel the incident actually needed.
+#
+# The tag is DERIVED from ci-deploy.sh, never restated. Two hardcoded copies of "ci-deploy"
+# would agree with each other while both disagreeing with the script -- a guard that passes
+# precisely when it is wrong. Deriving one side makes a rename fail here instead of in prod.
+CI_DEPLOY_SH="$SCRIPT_DIR/ci-deploy.sh"
+CI_DEPLOY_TAG="$(grep -oE '^readonly LOG_TAG="[^"]+"' "$CI_DEPLOY_SH" | head -1 | cut -d'"' -f2)"
+
+assert "R1-1.8a: ci-deploy.sh declares exactly ONE literal LOG_TAG (derivation is unambiguous)" \
+  "[[ -n \"\$CI_DEPLOY_TAG\" ]] && [[ \"\$(grep -cE '^readonly LOG_TAG=' \"\$CI_DEPLOY_SH\")\" == 1 ]]"
+
+assert "R1-1.8b: ci-deploy.sh's LOG_TAG ('$CI_DEPLOY_TAG') IS in the Source 4 allowlist" \
+  "grep -qE \"^[[:space:]]*\\\"\$CI_DEPLOY_TAG\\\",?\\\$\" <<<\"\$HSJ\""
+
+# Corroboration, mirroring CF-4's shape: the allowlist entry is only load-bearing if the
+# script actually routes through `logger -t "$LOG_TAG"`. Without this, deleting every
+# logger call would leave 1.8b green against a channel that emits nothing.
+assert "R1-1.8c: ci-deploy.sh emits via logger -t \"\\\$LOG_TAG\" (the allowlist entry is not dead)" \
+  "grep -qE 'logger -t \"\\\$LOG_TAG\"' \"\$CI_DEPLOY_SH\""
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="
 if (( FAIL > 0 )); then
