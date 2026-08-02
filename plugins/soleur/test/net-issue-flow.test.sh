@@ -183,6 +183,10 @@ Prose line, no bullet: also invisible to the ack gate [id: wg-prose-line-must-no
 ## Code Quality
 
 - A cq rule that carries the marker on an ACK-UNGATED prefix [id: cq-tagged-but-ungated-prefix] [mandates-filing]. Must not be derived.
+
+## Appendix
+
+- A well-formed body line with a gated PREFIX, under a heading NOT in SECTIONS [id: wg-ungated-section-must-not-derive] [mandates-filing].
 CORPUS
 
 # The staged-index / wrong-ref corpus. Distinct on purpose: it tags the id used
@@ -595,6 +599,17 @@ run_gate
 if [[ "$CASE_RC" -eq 1 ]]; then pass "PROSE line carrying the marker is NOT derived"
 else fail "prose line self-granted the exemption; exit $CASE_RC"; fi
 
+# The SECTION conjunct: a perfectly-formed body line with a gated prefix, under a
+# heading outside SECTIONS. Without `not in_section` this derives while the ack
+# gate still cannot see it -- measured, that mutation SURVIVED the first battery
+# because every other fixture line sat under a gated heading.
+PRB_SECT="$WORK/prb-sect"; printf 'Deferred.\n\nTracks #7012\n' > "$PRB_SECT"
+PR_BODY_FILE="$PRB_SECT"; export PR_BODY_FILE
+set_issues "$(mk_issue 7012 "$(claim_body wg-ungated-section-must-not-derive)" OPEN)"
+run_gate
+if [[ "$CASE_RC" -eq 1 ]]; then pass "body line under an UNGATED section is NOT derived"
+else fail "ungated-section rule self-granted the exemption; exit $CASE_RC"; fi
+
 # --- Cardinality: EXEMPT must subtract exactly, not zero out ----------------
 # Every other exemption fixture is a single issue, under which `NET=0 if EXEMPT>0`
 # is indistinguishable from `FILED - EXEMPT - CLOSING`. 1-of-1 is all-of-1.
@@ -799,7 +814,7 @@ printf '\n'
 # deleting a case changed nothing observable. Baseline before the exemption
 # work was 23.
 # ---------------------------------------------------------------------------
-MIN_ASSERTIONS=83
+MIN_ASSERTIONS=84
 if [[ "$passes" -lt "$MIN_ASSERTIONS" ]]; then
   printf '  FAIL anti-vacuity floor: %d assertions ran, expected >= %d\n' "$passes" "$MIN_ASSERTIONS"
   fails=$((fails + 1))
