@@ -1,5 +1,22 @@
 # Review findings — DO NOT MERGE AS-IS
 
+> **Status 2026-08-02 — three findings applied, the merge block STANDS.**
+>
+> Applied, each RED-proven before GREEN and mutation-verified on sandbox copies:
+> **finding 8** (`head -1` → `tail -1` + duplicate-key fixtures), **finding 1** (the
+> third write site at `cloud-init.yml`, + a value-based parity guard covering it, +
+> the two falsified ADR-155 claims), and **P1-a** (`init_probe_targets()` inside the
+> `BASH_SOURCE` guard + an end-to-end case that sources the real file — which also
+> discharges the P2 source-time-invariant finding).
+>
+> `inngest-inventory.test.sh` 120 → 139 assertions. Registered infra suites 87/87;
+> `scripts/test-all.sh` 242/242.
+>
+> **Still open and still blocking:** findings **2, 3, 4, 5, 6, 7** (all P1), the P2
+> and P3 lists, and **P2-b / M7** — deleting a test function call still exits 0,
+> because this suite has no assertion-count floor. M7 is the one that can silently
+> undo the P1-a work above.
+
 7 of 9 agents reported (test-design-reviewer, code-quality-analyst still running when this
 was written). Independent convergence on the top finding from 3 agents. Every measurement
 below was run by the reporting agent, not inferred.
@@ -15,7 +32,7 @@ inbound-email route only.
 
 ## P1 — blocks merge
 
-### 1. A third `INNGEST_BASE_URL` write site was never swept
+### 1. A third `INNGEST_BASE_URL` write site was never swept — **APPLIED**
 `apps/web-platform/infra/cloud-init.yml:819` still carries
 `-e INNGEST_BASE_URL=http://10.0.1.40:8288`. `git log -L 819,819` proves the original
 cutover commit `b02870e1d` (#6348, ADR-100 step 2.4) changed **two** write sites in
@@ -128,7 +145,7 @@ a `tagged_event` filter on `op:inngest-send` matches nothing today.
 
 ---
 
-### 8. `head -1` reads the WRONG duplicate — the derivation picks the value the app does NOT use
+### 8. `head -1` reads the WRONG duplicate — the derivation picks the value the app does NOT use — **APPLIED**
 `apps/web-platform/infra/inngest-inventory.sh:148`. `Config.Env` legitimately contains
 `INNGEST_BASE_URL` **twice**: once from `--env-file` (Doppler) and once from the `-e`
 override. Verified empirically on Docker 29.4.3:
@@ -332,10 +349,19 @@ This is the documented trap — *a battery only covers what you mutate* — and 
 corrected when the tests are fixed.
 
 ### Required fixes
-- **P1-a** Add an end-to-end case that SOURCES the real file under the stub and asserts
-  `GQL_URL` + `INNGEST_HEALTH_URL`. Kills M1, M2 and M11 at once. (Interacts with the
-  P2 finding that the top-level invocation violates the file's own source-time invariant —
-  fix both together: move the derivation inside the `BASH_SOURCE` guard AND assert it.)
+- **P1-a** — **APPLIED.** Add an end-to-end case that SOURCES the real file under the stub
+  and asserts `GQL_URL` + `INNGEST_HEALTH_URL`. Kills M1, M2 and M11 at once. (Interacts
+  with the P2 finding that the top-level invocation violates the file's own source-time
+  invariant — fix both together: move the derivation inside the `BASH_SOURCE` guard AND
+  assert it.)
+  Done as `init_probe_targets()` + `test_probe_targets_end_to_end`. Measured RED for each
+  target mutation: M1 129/10, M2 135/4, M11 136/3, derivation-back-to-top-level 138/1.
+  The M11 kill required a NON-8288 fixture port — every prior fixture used 8288, where a
+  hardcoded port and a correct passthrough are indistinguishable (the P3-a insight).
+  Source-time purity carries a positive control, so a zero call-count cannot pass by
+  virtue of a broken PATH. Probes run in a fresh `bash -c`, not a subshell: this suite
+  marks `NOW_MS` readonly and the real file assigns `NOW_MS` at load, so a subshell
+  inherits the readonly attribute and the file's own `set -e` aborts the source silently.
 - **P1-c** Replace the `== http://*:8288` glob at `:999` with a VALUE assertion.
 - **P2-a** Widen both greps to `INNGEST_BASE_URL=[^[:space:]\\]+` (drop the `http://`
   anchor) so `https://`/`${VAR}`/quoted forms enter the population, and assert the match
