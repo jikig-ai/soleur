@@ -45,12 +45,27 @@ mk_repo() {
 mk_gh_stub() {
   local d="$1" mode="${2:-nopr}"
   mkdir -p "$d/stub"
-  cat > "$d/stub/gh" <<STUB
+  # The stub VALIDATES argv rather than answering unconditionally. A fake that
+  # dispatches on nothing puts the fixture seam ABOVE the code under test: it
+  # cannot detect the gate querying the WRONG thing, so a change from `gh pr
+  # view` to some other subcommand would keep the suite green. `exit 64` on an
+  # unrecognised invocation makes a wrong query a loud failure.
+  # (.claude/hooks/stub-argv-fidelity.test.sh enforces this class repo-wide.)
+  cat > "$d/stub/gh" <<'STUB'
 #!/usr/bin/env bash
-case "\$MODE" in
-  nopr)   exit 1 ;;
-  nosoak) echo '{"body":"ordinary PR body with no soak signal"}' ;;
-  *)      exit 1 ;;
+ARGS="$*"
+case "$1" in
+  pr) ;;
+  *) echo "gh-stub: unexpected subcommand: $ARGS" >&2; exit 64 ;;
+esac
+case "$ARGS" in
+  *view*) ;;
+  *) echo "gh-stub: expected a 'pr view' read, got: $ARGS" >&2; exit 64 ;;
+esac
+case "${MODE:-nopr}" in
+  nopr)   exit 1 ;;                                            # no PR readable
+  nosoak) printf '%s\n' '{"body":"ordinary PR body with no soak signal"}' ;;
+  *)      echo "gh-stub: unknown MODE=${MODE:-}" >&2; exit 64 ;;
 esac
 STUB
   chmod +x "$d/stub/gh"
