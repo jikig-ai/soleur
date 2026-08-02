@@ -31,7 +31,8 @@ ops@soleur.ai (Proton mailbox, apex MX = protonmail.ch)
        └─ HOP B: Resend receiving MX (inbound-smtp.eu-west-1.amazonaws.com)
             └─ svix-signed POST → https://app.soleur.ai/api/webhooks/resend-inbound  [Cloudflare tunnel → host INPUT]
                  └─ HOP C: route.ts dedup claim → processed_resend_events  [Supabase egress]
-                      └─ HOP D: inngest.send (127.0.0.1:8288, self-hosted, ADR-030)  [loopback, NOT egress]
+                      └─ HOP D: inngest.send (host.docker.internal:8288 -> host gateway,
+                                 self-hosted, ADR-030; ADR-100 PAUSED by ADR-155)  [private hop, NOT egress]
                            └─ HOP E: email-on-received claim-insert → email_triage_items  [Supabase egress, SHARED probe+real]
                                 ├─ probe: probe_tokens lookup → mail_class='probe' (NO LLM)   [finalize AFTER the shared HOP E insert]
                                 └─ HOP F: real mail → fetch-sanitize-summarize (Resend body GET + Anthropic LLM)
@@ -122,6 +123,19 @@ an artifact.
   re-registers. If `probe_tokens` stops gaining rows → the cron scheduler /
   8288 listener is down, not ingress.
 - **Sentry monitor history (no SSH, Crons-scoped token):**
+
+  > **Token trap — an empty result here is NOT evidence of absence.** `SENTRY_API_TOKEN` is
+  > **org-scoped**, not dead: it returns 200 on `/organizations/jikigai-eu/` and
+  > `/projects/jikigai-eu/web-platform/`, but the **enumeration** endpoints degrade instead of
+  > denying — `/organizations/` returns `200 []` and `/projects/` returns `401`. So a listing
+  > query that comes back empty is indistinguishable from "nothing happened". Use
+  > **`SENTRY_AUTH_TOKEN`** for anything that lists or searches (`/organizations/<org>/issues/`),
+  > and before reading any empty Sentry result as an all-clear, confirm the same token returns
+  > non-empty for a control query you know should match. Neither token carries `event:read`
+  > (both 403 on `/issues/<id>/events/`) — see `sentry-issue-read.md`. **Why:** #7144, where the
+  > `op:inngest-send` "0 issues" finding was nearly attributed to a scope-less token rather than
+  > to a genuine instrumentation gap.
+
   ```bash
   T=$(doppler secrets get SENTRY_API_TOKEN -p soleur -c prd --plain)
   curl -sS -H "Authorization: Bearer $T" \

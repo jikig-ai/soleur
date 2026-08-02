@@ -27,8 +27,12 @@ by the errno; H4 (inngest not bound on :8288) is near-confirmed.** Do not re-ope
       `restart-inngest-server.yml` and files P1 issues. Either it fired (→ response
       failure; reshapes Phase 3) or it did not (→ it cannot see "nothing bound on :8288",
       a bigger finding than this plan).
-- [ ] 0.0b **Try the cheap fix before any IaC:** `restart-inngest-server.yml` is a
-      dispatchable non-SSH restart. If the unit merely died, this is the fix in seconds.
+- [x] 0.0b ~~**Try the cheap fix before any IaC:** `restart-inngest-server.yml`~~ **STRUCK
+      (CTO ruling, ADR-155 Alternative D).** It restarts the WEB host's already-healthy
+      co-located unit, never touches 10.0.1.40, and then confirms success via the same
+      loopback probe that was already reporting green. It would have returned success
+      having fixed nothing — the monitoring blind spot wearing a different hat. Do not
+      dispatch it for this failure mode.
 - [ ] 0.1 File the tracking issue (`type/incident`). `Ref #6617` (**blocking dependency**),
       `Ref #7144`, `Ref #5697`. Body carries §Evidence.
 - [x] 0.2 **The one real probe (H3/H4).** `hcloud server describe` the dedicated host +

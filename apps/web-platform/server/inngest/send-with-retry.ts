@@ -24,8 +24,14 @@ export function isTransientFetchError(err: unknown): boolean {
   return false;
 }
 
-// Retries inngest.send() on transient network failures (loopback to
-// 127.0.0.1:8288 can blip during deploy restarts).
+// Retries inngest.send() on transient network failures (the hop to the
+// co-located inngest-server via host.docker.internal:8288 can blip during
+// deploy restarts).
+//
+// NOTE: retries only help a TRANSIENT fault. When the dispatch target is
+// simply not listening, every attempt is refused and the caller's failure is
+// structural, not transient — see #7144, where the target host never bound
+// :8288 at all and this retried into a closed port for ~3 days.
 export async function sendInngestWithRetry(
   fn: () => Promise<unknown>,
   context: { feature: string; deliveryId?: string | null; eventId?: string },

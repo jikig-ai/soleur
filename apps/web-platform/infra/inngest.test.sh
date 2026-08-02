@@ -581,8 +581,17 @@ assert "A4 probe curls the fleet-standard loopback /health route" \
   "grep -qF 'http://127.0.0.1:8288/health' '$PROBE_BODY'"
 assert "A4 ci-deploy.sh gates on the SAME loopback /health route (probe is not a lone snowflake)" \
   "grep -qF 'curl -sf --max-time 5 http://127.0.0.1:8288/health' '$SCRIPT_DIR/ci-deploy.sh'"
-assert "A4 inngest-inventory.sh defaults INNGEST_HEALTH_URL to the same loopback /health route" \
-  "grep -qF 'INNGEST_HEALTH_URL:-http://127.0.0.1:8288/health' '$SCRIPT_DIR/inngest-inventory.sh'"
+# #7144: inngest-inventory.sh no longer hardcodes the loopback BASE — it derives the probe
+# target from the app container's INNGEST_BASE_URL, because a fixed base is only wrong in
+# exactly the window where the alarm matters (a repoint to a dead host read as healthy for
+# 3 days). What this A4 pin is actually about is the /health PATH being fleet-standard, so
+# a 404 route cannot hide; that invariant is unchanged and is what is asserted here. Base
+# derivation is separately guarded in inngest-inventory.test.sh (test_probe_target_follows_app).
+# The closing `}"` is load-bearing: without it this is an unanchored substring match and
+# `/health` is a PREFIX of `/healthz`, so a suffix-extending drift passes silently
+# (measured — the first form of this assertion did exactly that under mutation).
+assert "A4 inngest-inventory.sh defaults INNGEST_HEALTH_URL to the same fleet-standard /health route" \
+  "grep -qF 'INNGEST_HEALTH_URL:-\${INNGEST_PROBE_BASE}/health}\"' '$SCRIPT_DIR/inngest-inventory.sh'"
 
 assert "A4 probe script assigns LOG_TAG=\"inngest-server-probe\" (drift-fixture contract)" \
   "grep -qE '^LOG_TAG=\"inngest-server-probe\"$' '$PROBE_BODY'"
