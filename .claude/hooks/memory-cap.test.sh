@@ -15,6 +15,15 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/memory-cap.sh"
 
+# Single owning trap for every sandbox this suite allocates (ADR-129, rule (c)).
+# Each mk_tree call nests under this one root, so a mid-run death cannot leak a
+# tree — which matters here more than usual: /tmp is a machine-global 4 GiB
+# tmpfs shared with parallel worktrees, and resource exhaustion is the very
+# class this PR exists to fix. chmod first because the write-refused fixture
+# deliberately leaves a dir at mode 555, which plain rm -rf cannot descend.
+SANDBOX_ROOT="$(mktemp -d)" || { echo "SETUP FAIL: mktemp" >&2; exit 2; }
+trap 'chmod -R u+w "$SANDBOX_ROOT" 2>/dev/null || true; rm -rf "$SANDBOX_ROOT"' EXIT
+
 PASS=0; FAIL=0; TOTAL=0
 ok()  { PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1)); echo "PASS: $1"; }
 bad() { FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1)); echo "FAIL: $1"; echo "  $2"; }
@@ -30,7 +39,10 @@ check() { # check <label> <expected-substring> <actual>
 #   <root>/proc/<pid>/cgroup                      — unified 0:: line
 mk_tree() { # mk_tree <subtree_control> <pid> <pid-cgroup-path>
   local sc="$1" pid="$2" cgpath="$3" root
-  root="$(mktemp -d)" || { echo "SETUP FAIL: mktemp" >&2; exit 2; }
+  # -p keeps every sandbox under the trap-owned root above. NOTE: mk_tree is
+  # invoked as `R="$(mk_tree ...)"`, i.e. in a SUBSHELL, so it must communicate
+  # only via stdout — an array append here would be silently discarded.
+  root="$(mktemp -d -p "$SANDBOX_ROOT")" || { echo "SETUP FAIL: mktemp" >&2; exit 2; }
   mkdir -p "$root/cg/app.slice/warp.scope" "$root/proc/$pid" \
     || { echo "SETUP FAIL: mkdir" >&2; exit 2; }
   printf 'cpu memory pids\n' > "$root/cg/cgroup.controllers"
