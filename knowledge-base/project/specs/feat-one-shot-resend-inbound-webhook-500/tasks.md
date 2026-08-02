@@ -12,8 +12,23 @@ by the errno; H4 (inngest not bound on :8288) is near-confirmed.** Do not re-ope
 
 ---
 
+> **RECONCILED with the deepened plan 2026-08-02.** Read the plan's
+> **§Deepen-Plan Revisions** before starting — it lists blocking open items (schema
+> described three different ways, a dangling "Phase 0.6", recovery paths with two
+> idempotency keys, ACs pointing at deleted code paths). Also read §Enhancement Summary.
+> **Root cause is now measured:** `soleur-inngest` was re-created 2026-07-30T15:13:06Z
+> and its inngest has never bound `:8288` since. H3 refuted, H4 confirmed, onset
+> recovered.
+
 ## Phase 0 — Probe before fixing. NO merge, time-boxed ≤4 h.
 
+- [ ] 0.0 **RUN FIRST.** `gh run list --workflow=scheduled-inngest-health.yml` + `gh issue
+      list` over 2026-07-28→now. This 15-min external watchdog auto-dispatches
+      `restart-inngest-server.yml` and files P1 issues. Either it fired (→ response
+      failure; reshapes Phase 3) or it did not (→ it cannot see "nothing bound on :8288",
+      a bigger finding than this plan).
+- [ ] 0.0b **Try the cheap fix before any IaC:** `restart-inngest-server.yml` is a
+      dispatchable non-SSH restart. If the unit merely died, this is the fix in seconds.
 - [ ] 0.1 File the tracking issue (`type/incident`). `Ref #6617` (**blocking dependency**),
       `Ref #7144`, `Ref #5697`. Body carries §Evidence.
 - [ ] 0.2 **The one real probe (H3/H4).** `hcloud server describe` the dedicated host +
@@ -59,6 +74,20 @@ by the errno; H4 (inngest not bound on :8288) is near-confirmed.** Do not re-ope
 
 Shape is settled: **single table** (extend `processed_resend_events`), **unconditional**
 persist-then-200, reconciler as **sole** dispatcher. Do not re-litigate.
+
+> **HARD GATE — do not deploy the route cutover until AC11 (`send_failed = 0` from live,
+> Phase-1-restored dispatch) is green AND the drain trigger has been observed advancing a
+> row.** Otherwise the 200 releases the svix retry into a dispatcher that cannot dispatch.
+
+- [ ] 2.0 **Create the drain's TRIGGER** — `.github/workflows/scheduled-resend-outbox-drain.yml`,
+      modelled on `scheduled-zot-restart-loop.yml`, carrying
+      `gate-override: new-scheduled-cron-prefer-inngest`. **`outbox-drain.ts` is a module;
+      without this nothing calls it.** This was the plan's largest hole.
+- [ ] 2.0b Column names: **`email_received_at`, NOT `received_at`** (it already exists —
+      reusing it makes the drain replay insert-time as receive-time and corrupts a
+      statutory clock). Keep `attachments` jsonb with a key-set CHECK (don't drop
+      `contentType`). `status text NOT NULL DEFAULT 'legacy'`, `attempts int NOT NULL
+      DEFAULT 0` — nullable is the *unsafe* shape (CHECK passes on NULL).
 
 - [ ] 2.1 **RED** in `apps/web-platform/test/server/resend-inbound-route.test.ts`:
       well-formed → 200 + row persisted + **Inngest send mock NOT called**; persist fails

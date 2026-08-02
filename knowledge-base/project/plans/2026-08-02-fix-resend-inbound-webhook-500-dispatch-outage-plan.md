@@ -12,6 +12,40 @@ date: 2026-08-02
 
 > Spec lacks valid `lane:` (no `spec.md` exists for this branch) — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened:** 2026-08-02. **Reviewers:** CTO, CLO, CPO, Fable advisor consult,
+data-integrity-guardian, observability-coverage-reviewer, spec-flow-analyzer, plus a
+15-claim verify-the-negative sweep (**15/15 confirmed** — every factual claim in
+§Evidence is code-verified).
+
+**Key improvements, in order of how badly they were needed:**
+
+1. **The sole dispatcher had no trigger.** Phase 2 made the reconciler the only dispatch
+   path but created no poller — every email would have landed `pending` forever with the
+   svix retry already released. The trigger is now a first-class artifact.
+2. **Nothing ordered Phase 2 behind a working Phase 1.** A hard deploy gate now blocks
+   the route cutover until dispatch is verified live.
+3. **The root cause is measured, not hypothesised.** The Hetzner API showed
+   `soleur-inngest` re-created **2026-07-30T15:13:06Z**, two minutes after the heartbeat
+   markers stopped — H3 refuted, H4 confirmed, and the onset **recovered** from what the
+   plan had recorded as UNKNOWN.
+4. **The Sentry mechanism was wrong twice** (Dedupe, then grouping) before landing on
+   `checkOrSetAlreadyCaught`. The consequence was material: the proposed fingerprint fix
+   is a no-op, and the proposed `String(err)` would have destroyed the very
+   `ECONNREFUSED` detail this plan's evidence rests on.
+5. **A column-name collision would have corrupted a statutory clock** — `received_at`
+   already exists, and reusing it makes the drain replay insert-time as receive-time.
+6. **The health probe was tautologically green** after the change it verifies.
+7. **The cheapest remediation was foreclosed** — `restart-inngest-server.yml` already
+   exists as a non-SSH dispatchable restart.
+
+**New considerations discovered:** an existing 15-minute external Inngest watchdog the
+plan never consulted (now Phase 0.0); Inngest's event-id dedup window is FIXED at 24 h
+and this outage outran it; delete-on-drain would destroy the ADR-037 replay defense; and
+the statutory clock from the outage window is a live legal exposure that cannot wait for
+Phase 2.
+
 ## Overview
 
 Resend reports `https://app.soleur.ai/api/webhooks/resend-inbound` returning 500 since
@@ -157,19 +191,81 @@ the mirror (via `logger.error({ err, … })`) and, immediately after, its own
 `Sentry.captureException(err, { tags: { op: "inngest-send" } })`. Same `Error` instance,
 same undici `TypeError: fetch failed` stack.
 
-**Mechanism (CTO review): GROUPING, not a drop.** Two events, one default fingerprint →
-one issue; the issue-level `feature` tag last-writes to `pino-mirror`. That is exactly
-the shape B9 measured — issue `128795570`, culprit `POST /api/webhooks/github`,
-`feature=pino-mirror`. My earlier `Dedupe`-drop candidate is superseded: it is not needed
-to explain the observation, and grouping does.
+**Mechanism — third and final answer. Both earlier candidates were WRONG.**
+I proposed `Dedupe`-drop, then grouping. Neither survives:
 
-**The fix must be contained, and the obvious file is the wrong one.** The mirror lives in
-`apps/web-platform/server/logger.ts` (not `sentry.server.config.ts`) and is pinned by
-`test/server/logger-sentry-mirror.test.ts`. Editing it changes **every server error path
-in the app** — not a live-incident change. Contained alternative, two lines in the route:
-set an explicit `fingerprint` on the route's own `captureException`, and stop the
-double-capture by not handing the raw `Error` to `logger.error` (log `String(err)`), or
-wrap as `new Error(msg, { cause: err })` so the stack is route-distinct.
+- **Grouping cannot produce `0 issues`.** Sentry indexes tags per-event into the group's
+  tagstore, so an issue containing *any* event tagged `op:inngest-send` is returned by
+  that query. Zero results means **the tagged event never reached Sentry**.
+- **`Dedupe` is not even installed.** `@sentry/node-core/build/cjs/sdk/index.js:26-52`
+  `getDefaultIntegrations()` contains no `dedupeIntegration`.
+
+**The real mechanism is `checkOrSetAlreadyCaught`.**
+`@sentry/core/build/cjs/client.js:140-145`:
+
+```js
+captureException(exception, hint, scope) {
+  const eventId = misc.uuid4();
+  if (misc.checkOrSetAlreadyCaught(exception)) { ... return eventId; }   // ← returns WITHOUT sending
+```
+
+`utils/misc.js:103-112` sets a non-enumerable `__sentry_captured__` on the Error instance
+the first time. Trace the live code:
+
+1. `route.ts:303` — `logger.error({ err, … })` runs **first**.
+2. `server/logger.ts` `mirrorToSentry` → level 50 + `err instanceof Error` →
+   `Sentry.captureException(err, { tags: { feature: "pino-mirror" } })`. **This marks the
+   Error instance.**
+3. `route.ts:307` — the route's own `captureException(err, { tags: { op: "inngest-send" } })`
+   hits `checkOrSetAlreadyCaught` → **early return; the event is never constructed and
+   `beforeSend` never runs.**
+
+**Two consequences that change the fix:**
+
+- **An explicit `fingerprint` on the route's capture is a PURE NO-OP** — that capture
+  returns before any fingerprint, tag, or `beforeSend` hook is consulted. I had it as
+  half the fix; it contributes nothing.
+- **`String(err)` would be a diagnosability REGRESSION, not a fix.** pino's default `err`
+  serializer (`pino-std-serializers/lib/err.js:21-22`) applies `messageWithCauses` /
+  `stackWithCauses` — and that cause-flattening is **the sole reason
+  `connect ECONNREFUSED 10.0.1.40:8288` appears in the shipped JSON line**, i.e. the sole
+  reason B1's `econnrefused` column returns 321. `String(err)` yields only
+  `"TypeError: fetch failed"`. It would break this plan's own evidence query, and for a
+  **non-transient** failure (`send-with-retry.ts:38` gates its warn rows on
+  `isTransientFetchError`, so an Inngest 401 emits none) the route's row would be the
+  only record anywhere — saying nothing.
+
+**Mandated fix — keep both signals, lose neither.** Do not touch `logger.error`; give
+Sentry a *different instance* so the already-caught mark does not apply:
+
+```ts
+logger.error({ err, feature: FEATURE, svixId }, "…dispatch failed");
+Sentry.captureException(
+  new Error("resend-inbound dispatch failed", { cause: err }),
+  { tags: { feature: FEATURE, op: "inngest-send" },
+    fingerprint: ["resend-inbound-webhook", "inngest-send"],
+    extra: { svixId } },
+);
+```
+
+`linkedErrorsIntegration` (present in the node defaults) walks `cause`, so the undici
+chain still appears in Sentry; the route-distinct stack plus explicit fingerprint give it
+its own issue; and Better Stack keeps the full cause-flattened stack.
+
+**Do not edit `server/logger.ts`.** It is pinned by
+`test/server/logger-sentry-mirror.test.ts`, and editing it changes **every server error
+path in the app**. It also would not work: the mirror emits its *own* event with its own
+tags — it overwrites nothing — so preserving a call-site `feature` there would still
+leave `op:inngest-send` at zero, because the route's event is still discarded.
+
+**Phase 3.2's test must assert the precondition, not the tags.** The house pattern is
+`vi.mock("@sentry/nextjs")` with a bare `captureException: vi.fn()`
+(`test/server/logger-sentry-mirror.test.ts:10-14`). A mock has no
+`checkOrSetAlreadyCaught`, so a test asserting "the capture carries `feature` + `op`"
+**passes with the bug fully present**. Assert instead that the instance handed to Sentry
+is not the instance the mirror already marked. **AC13 (live triggered failure →
+`op:inngest-send` returns ≥1) is the only gate that truly discriminates — it may not be
+substituted by 3.2.**
 
 **B10 — live Terraform drift already names the firewall that carries this path.**
 Open issue **#7144** (`infra: drift detected in web-platform`, opened 2026-08-01 18:01
@@ -187,6 +283,39 @@ and among them:
 ruleset under which the web host is *"allowed to reach the dedicated host
 10.0.1.40:8288"*. Tainted means its last apply failed. **This is worth applying, but it
 is NOT this incident's cause — see B10a, which reverses the reading I first gave it.**
+
+**B11 — the Hetzner API settles H3/H4 and RECOVERS the onset.** Queried live
+2026-08-02 via `GET https://api.hetzner.cloud/v1/servers` (token from Doppler
+`prd_terraform`):
+
+| name | status | type | private IP | created |
+| --- | --- | --- | --- | --- |
+| soleur-web-platform | running | cx33 | 10.0.1.10 | 2026-03-17T06:37:09 |
+| soleur-registry | running | cx23 | 10.0.1.30 | 2026-07-16T16:36:39 |
+| soleur-web-2 | running | cpx22 | 10.0.1.11 | 2026-07-27T11:00:53 |
+| **soleur-inngest** | **running** | cpx22 | **10.0.1.40** | **2026-07-30T15:13:06** |
+
+Three conclusions, in descending confidence:
+
+1. **H3 is REFUTED.** The dedicated host exists and is `running`. It is not dark, not
+   deprovisioned. This is also consistent with the RST (B10a) — a live host refusing a
+   connection to a closed port.
+2. **The onset is RECOVERED: ~2026-07-30 15:13 UTC**, when the host was **re-created**.
+   The correlation is tight and three-way: the `inngest-heartbeat` marker channel last
+   emitted **15:11:42** (the old host going away), the replacement was created
+   **15:13:06**, `SOLEUR_INNGEST_SERVER_PROBE` emitted 5 rows on 07-30 and **zero ever
+   since**, and the first retained resend-inbound failure is **16:14:50**. Supersedes the
+   earlier `onset: UNKNOWN`. It is **~27 hours before** Resend's 18:23 UTC 07-31 alert —
+   confirming H6's reading that the vendor timestamp is an alert time, not an onset.
+3. **H4 is CONFIRMED by elimination**, with one residual check. A running host + an RST +
+   no `SOLEUR_INNGEST_SERVER_PROBE` row since the moment it was born = **the replacement
+   host has never bound `:8288`**. That is precisely the documented first-boot failure in
+   `cloud-init-inngest.yml:199-200` — *"cloud-init installs to /usr/local/bin — so every
+   unit died with systemd status=203/EXEC and inngest never bound :8288"*.
+   **Residual check for Phase 0.2, not to be skipped:** confirm the unit's actual state
+   on the host via its own phone-home/vector stream. I have inferred "not bound" from the
+   errno plus the marker gap; I have not *observed* the unit. That distinction is the
+   difference between a diagnosis and a guess.
 
 **B10a — the errno is decisive, and it points AWAY from the firewall.**
 `ECONNREFUSED` is a TCP **RST**. **Every filtering layer on the web→inngest path DROPs,
@@ -226,8 +355,8 @@ service-layer fix may be prescribed before the layers above it are measured.
 | --- | --- | --- | --- |
 | H1 | L3 firewall | A filtering layer between web-1 and `10.0.1.40:8288` drifted. | **NEAR-REFUTED** (B10a). Every layer on the path DROPs, not REJECTs, so none can produce the observed RST; `cron-egress-nftables.sh` carries an explicit accept for this exact destination, and `hcloud_firewall.inngest` has zero rules by design. Downgraded from a gate to a 5-minute `hcloud firewall describe` confirmation. #6415 is **CLOSED**; the live convergence work is #6438. |
 | H2 | L3 routing / address | The container dials `10.0.1.40` when Doppler says `host.docker.internal`. | **REFUTED** (B8). `ci-deploy.sh` hardcodes `-e INNGEST_BASE_URL=http://10.0.1.40:8288` after `--env-file`, deliberately, per ADR-100 (#6348). Repointing it would undo the cutover and break a parity guard. **No remediation branch for H2.** |
-| H3 | L3 host liveness | The dedicated Inngest host (cax11, `10.0.1.40`) is dark or was never re-provisioned. #6617 already asks exactly this. | **UNVERIFIED — this is the real probe.** `hcloud server describe` + the host's own boot phone-home (`inngest-boot-phone-home.sh`) / vector stream. Note the RST in B10a implies the host *is* reachable, which argues H3-dark is unlikely and H4 likely — but a describe is cheap and settles it. |
-| H4 | L7 service | The host is up, but `inngest-server.service` is not bound on `:8288`. | **NEAR-CONFIRMED** — the only hypothesis consistent with an RST (B10a), and with documented prior art on this same host: `cloud-init-inngest.yml` records *"every unit died with systemd status=203/EXEC and inngest never bound :8288"* (doppler `/usr/bin` vs `/usr/local/bin` `ExecStart`). Corroborated by the `SOLEUR_INNGEST_SERVER_PROBE` gap after 2026-07-30 and by B7's healthy inngest on the **web** host (#6617's double-scheduler). |
+| H3 | L3 host liveness | The dedicated Inngest host (`10.0.1.40`) is dark or was never re-provisioned. #6617 asks exactly this. | **REFUTED** (B11). The Hetzner API shows `soleur-inngest` `running` at `10.0.1.40`. Not dark. |
+| H4 | L7 service | The host is up, but `inngest-server.service` never bound `:8288`. | **CONFIRMED BY ELIMINATION** (B11) — running host + RST + **zero** `SOLEUR_INNGEST_SERVER_PROBE` rows since the host was re-created 2026-07-30T15:13:06Z. Matches the documented first-boot failure at `cloud-init-inngest.yml:199-200` (doppler `/usr/bin` vs `/usr/local/bin` → `status=203/EXEC`). **Residual:** the unit's state has been *inferred*, not *observed* — Phase 0.2 must confirm it on the host's own channel before the fix is written. |
 | H5 | L7 application | The route, its secret, its dedup, or its module-load guards are at fault. | **REFUTED** — B1 (0 secret/signature rows, 1 dedup row in 4 days) and B5 (live 401, ordered *after* the secret guard). |
 | H6 | change correlation | A deploy/merge just before 2026-07-31 18:23 UTC introduced this. | **REFUTED** — `route.ts` has one commit ever (`b00289339`, #5125), nothing in the window; B1 shows identical failures at the retention floor, ≥26 h before the reported time. That time is when **Resend** alerted, not when the failure began. |
 
@@ -412,7 +541,20 @@ Adjacent open issues (not `code-review`-labelled, disposition recorded):
   plus the retention change. **Read the two most recent sibling migrations first**: the
   Supabase runner wraps each file in a transaction, so `CREATE INDEX CONCURRENTLY`
   fails at deploy with SQLSTATE 25001.
-- `apps/web-platform/server/email-triage/outbox-drain.ts` — the reconciler.
+- `apps/web-platform/server/email-triage/outbox-drain.ts` — the reconciler **module**.
+- **`.github/workflows/scheduled-resend-outbox-drain.yml` — the reconciler's TRIGGER.**
+  **This was the single largest hole in the plan and it is now a first-class artifact.**
+  `outbox-drain.ts` is a module; something must call it. Phase 2.3 removes the inline
+  dispatch and makes the reconciler the *sole* dispatcher, 2.4a forbids the Inngest
+  substrate, and 2.4b prescribes "external poller" — but no step created the poller and
+  no AC asserted it runs. As previously written, **Phase 2 would have merged a route that
+  stops dispatching and a dispatcher nothing invokes**: every inbound email lands
+  `pending` permanently, with the svix retry already released by the 200. The only thing
+  that would have caught it is AC14 — a *post-merge* criterion, i.e. after the route is
+  live in prod. Model on `.github/workflows/scheduled-zot-restart-loop.yml`, and carry the
+  `gate-override: new-scheduled-cron-prefer-inngest` marker (the same justification
+  `scheduled-inngest-health.yml` uses: an Inngest cron cannot run when Inngest is down)
+  or the existing prefer-Inngest gate rejects it.
 - `scripts/followthroughs/resend-inbound-2xx-soak-<issue>.sh` — see §2.9.1.
 
 Migration ordinal is provisional; re-derive it against `origin/main` at /work time.
@@ -428,6 +570,21 @@ measurements pasted into a PR body — during a live incident. The ordering disc
 rule exists to protect is fully preserved.
 
 Phase 0 shrank after review resolved H2 and H1 from committed code:
+
+0.0 **RUN THIS FIRST — cheaper than 0.2 and decisive in both directions.**
+    `.github/workflows/scheduled-inngest-health.yml` already runs **every 15 minutes**,
+    is deliberately external to Inngest (`gate-override: new-scheduled-cron-prefer-inngest`,
+    justified "an Inngest cron cannot detect Inngest being down"), was built after the
+    #5542 3.5-hour silent crash-loop, and **on failure auto-dispatches
+    `restart-inngest-server.yml`, files a P1 issue, and reports a Sentry heartbeat.**
+    The plan did not consult it. `gh run list --workflow=scheduled-inngest-health.yml`
+    plus `gh issue list` over 2026-07-28 → now:
+    - **If it fired:** the P1 issue's creation timestamp is an independent witness for the
+      onset, the auto-restart path was already tried and failed, and this is unambiguously
+      a **response** failure — which reshapes Phase 3 away from "more Sentry signal".
+    - **If it did not fire across a ≥2-day outage:** a 15-minute external watchdog cannot
+      see "nothing bound on `10.0.1.40:8288`". That is a **larger finding than anything
+      else in this plan** and directly reshapes 2.4a and 3.3.
 
 0.1 File the tracking issue. `Ref #6617` — **it is a blocking dependency, not a
     fold-in**: it asks the same host question and its answer gates Phase 1's shape.
@@ -499,6 +656,21 @@ query and assert `send_failed = 0` in a fresh window.
 
 ### Phase 2 — Decouple ingress liveness from dispatch liveness (RED first)
 
+> **HARD ORDERING GATE — Phase 2's route cutover may NOT deploy until AC11
+> (`send_failed = 0` from a live, Phase-1-restored dispatch) is green, AND the drain
+> trigger has been observed advancing a row.**
+>
+> This gate was missing, and its absence was the plan's second-worst defect. Phase 0's
+> exit is time-boxed at ≤4 h, "after which Phase 1 proceeds on the best-supported
+> hypothesis" — but nothing gated Phase 2 on Phase 1 *succeeding*. If Inngest is still
+> unreachable when the route cutover lands: the route returns 200 (svix retry
+> **permanently released**) → the row stays `pending`, `attempts` increments → the budget
+> exhausts → dead-letter with no alarm, because 2.4a's off-substrate alarm is built in
+> **Phase 3, after Phase 2** → the backstop sweep deletes it. That is precisely the
+> "acknowledged-to-vendor, stranded, retry gone — strictly worse than today's 500"
+> artifact §User-Brand Impact names. If Phases 1 and 2 share a PR they must still be
+> **separate deploys**, with this gate between them.
+
 **Shape decided at plan time (advisor consult, ADR-083 gate).** Two alternatives were
 rejected; recording them here so /work does not re-litigate:
 
@@ -513,10 +685,35 @@ rejected; recording them here so /work does not re-litigate:
   never exercised by normal traffic. It also has a real duplicate-dispatch bug:
   `inngest.send()` can fail client-side (timeout) *after* the event server accepted the
   event, and the reconciler then re-sends. **Chosen instead: persist-then-200 is
-  UNCONDITIONAL and the reconciler is the SOLE dispatcher.** Safe because the route
-  already sends `id: resend-${svixId}` and Inngest natively dedups on event id, so any
-  double-send is idempotent. The route no longer calls `inngest.send()` inline, so
-  ingress latency drops rather than rises.
+  UNCONDITIONAL and the reconciler is the SOLE dispatcher.** The route no longer calls
+  `inngest.send()` inline, so ingress latency drops rather than rises.
+
+**The idempotency argument I first gave for this was FALSE, and this incident is the
+counterexample.** I wrote "Inngest natively dedups on event id, so any double-send is
+idempotent." But `route.ts:285-289` already qualifies it — "the Inngest **24h**
+`event.id` dedup window" — and ADR-037 is decisive: that window is **FIXED, not
+configurable**, which is precisely *why* the DB row is the load-bearing defense beyond
+it. **This outage ran ≥26 h.** A drain backlog that outlives 24 h — exactly the scenario
+the buffer exists for — falls **outside** the window I cited as its safety argument.
+Worse: §Downtime Trigger 1 may replace `hcloud_server.inngest`, and `inngestPostgres`
+lives on that host, so **a host replace destroys the event-id dedup memory entirely**
+while §2.5/§2.5b replay into a store with zero dedup history.
+
+**The actual terminal guard is `email_triage_items.claim_key text NOT NULL UNIQUE`**
+(`102:68`, `COALESCE(message_id, 'resend:' || resend_email_id)`) — a duplicate dispatch
+produces a second pipeline run that 23505s on insert. Genuine, but a *different mechanism
+at a different layer*, and §2.1's tests do not exercise it. Add the test: "the same
+`svix_id` dispatched twice **>24 h apart** yields exactly one `email_triage_items` row."
+
+**Single-flight is missing and must be added.** Nothing makes the drain exclusive — two
+overlapping ticks both see the same `pending` row and both send. Use the precedent this
+plan already cites for *cadence* but not for *shape*,
+`041_dsar_export_jobs.sql:230-256` `claim_next_dsar_export_job()`:
+`UPDATE … SET status='sending', attempts = attempts + 1 WHERE id = (SELECT … WHERE
+status='pending' ORDER BY … LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING …`.
+**Increment `attempts` BEFORE the send** — a send that kills the worker otherwise never
+increments and spins forever against the dead-letter threshold. Pair with a
+stale-`sending` reaper (age > N min → back to `pending`), bounded by the attempt budget.
 
 **Why the single-table shape is load-bearing, not just tidier.** Two tables would mean
 two unrelated PostgREST writes with no transaction, and this interleaving:
@@ -544,10 +741,33 @@ buffered" — which is correct to answer 200 to.
     - reconciler with Inngest unreachable leaves the row `pending` and increments
       `attempts` without dropping it.
     Confirm all fail before writing the implementation.
+**Three blockers found at data-integrity review — read before writing the migration.**
+
+- **B-D1 — `received_at` ALREADY EXISTS and must not be reused.**
+  `102_email_triage_items.sql:430-433` creates
+  `received_at timestamptz NOT NULL DEFAULT now()`. A bare `ADD COLUMN received_at`
+  aborts the migration (42701); `ADD COLUMN IF NOT EXISTS` silently no-ops and the drain
+  then replays **insert time** as the receive timestamp — the precise defect
+  `102:85-88` forbids ("*NEVER insert time… a 10-hour webhook retry must not eat an
+  Art. 12 clock*"). **A statutory clock computed from the wrong column is the
+  highest-severity outcome in this plan.** Use `email_received_at`.
+- **B-D2 — do NOT `ALTER … RENAME` the existing `received_at`.** `102:457-461` stores the
+  retention sweep as *SQL text* inside `cron.schedule`, re-parsed each run. A rename
+  leaves the job registered and failing nightly into `cron.job_run_details` with no
+  alert path.
+- **B-D3 — `attachment_filenames` silently drops `contentType`.**
+  `EmailInboundReceivedData.attachments` is `{filename, contentType}[]`
+  (`server/email-triage/events.ts`, built at `route.ts:246-253`). Once the drain is the
+  **sole** dispatcher, anything the claim does not store is permanently absent from every
+  dispatched event. Store `attachments jsonb` with the key-set CHECK below, or add
+  `attachment_content_types text[]`.
+
 2.2 Migration: extend `processed_resend_events`. **Columns are TYPED, not an open
     `payload jsonb`** — `resend_email_id`, `message_id`, `sender`, `subject`,
-    `attachment_filenames`, `received_at`, `received_at_source`, `status`, `attempts`,
-    `last_error_code`. Rationale is load-bearing, not stylistic: ADR-055's
+    `attachments` (jsonb, CHECK-pinned to `{filename, content_type}`),
+    **`email_received_at`** (NOT `received_at` — see B-D1), `received_at_source`,
+    `status`, `attempts`, `last_error_code`. Rationale is load-bearing, not stylistic:
+    ADR-055's
     parse-and-discard guarantee is enforced by the **schema** ("no body column exists"),
     so an untyped jsonb would be the first store on this path where the discard reverts
     to behavioural. Mirror migration 102's `email_triage_items` shape. If jsonb is kept
@@ -559,15 +779,50 @@ buffered" — which is correct to answer 200 to.
     scrub-and-truncate at the write boundary.
     RLS **enabled with zero policies** + table REVOKE from `anon`/`authenticated`
     (migration 102 §7 shape) — not a hand-rolled "service role" policy.
-    **Retention: delete-on-drain is the primary control** — the row's purpose is
-    discharged the instant dispatch succeeds, so it is deleted (or its identifying
-    fields nulled) in the same transaction that confirms dispatch. The calendar sweep is
-    only a backstop for the failure tail, at **≤30 days (7 preferred)**, anchored to the
-    Resend 30-day source window and the 72-hour shortest statutory clock. **Do NOT copy
-    the dedup table's 90 days**: that figure is a vendor-redelivery horizon for a table
-    holding `(svix_id, received_at)` and no PII, and its justification does not transfer
-    to a table holding sender + subject. 90-day parity would also let a synthetic probe
-    row outlive its own 7-day triage row by 83 days inside one processing activity.
+    **`NOT NULL DEFAULT` is REQUIRED here, not forbidden.** Since PG 11 an
+    `ADD COLUMN … NOT NULL DEFAULT <non-volatile>` is stored as `attmissingval` —
+    catalog-only, **no rewrite** (Supabase is ≥15). A nullable `status` is the *unsafe*
+    shape: `CHECK (status IN (…))` **passes on NULL**, so the enum silently admits an
+    undeclared state, and a backstop written `status <> 'pending'` evaluates NULL and
+    **never deletes**, making legacy rows immortal. The backfill value is derivable —
+    a surviving row today means dispatch succeeded (`route.ts:311` deletes otherwise) or
+    it was deliberately kept as unprocessable (`route.ts:196-212`); neither is `pending`.
+    So: `status text NOT NULL DEFAULT 'legacy'`, `attempts integer NOT NULL DEFAULT 0`.
+
+    **Retention — a terminal-state ALLOWLIST, never an age-only predicate.** An age-only
+    `DELETE … WHERE email_received_at < now() - interval '30 days'` would destroy a row
+    that was **acked 2xx to the vendor with the svix retry already surrendered** — the
+    single worst outcome this plan can produce, and exactly the artifact §User-Brand
+    Impact names. Required shape:
+
+    ```sql
+    DELETE FROM public.processed_resend_events
+     WHERE status IN ('sent', 'unprocessable', 'dead-lettered-acknowledged')
+       AND email_received_at < now() - interval '<vendor-ceiling>';
+    ```
+
+    `status <> 'pending'` is wrong twice (NULL-status rows never match; any future status
+    is swept by default). `pending` and un-acknowledged `dead-lettered` must be
+    unreachable by the sweep **by construction** — a dead-lettered row is the evidence
+    AC20 requires.
+
+    **Delete-on-drain would destroy the ADR-037 replay defense — split the two
+    lifetimes instead.** `processed_resend_events` *is* the svix replay defense
+    (`102:443-449`; ADR-037 calls the DB row "the load-bearing replay defense beyond the
+    Inngest window"). Deleting it seconds after dispatch means a later vendor replay finds
+    no row, `claimDelivery` succeeds, and the mail dispatches twice. So:
+    - **on drain success:** `UPDATE … SET status='sent', sender=NULL, subject=NULL,
+      message_id=NULL, attachments=NULL`. Minimisation satisfied; the surviving tombstone
+      `(svix_id, email_received_at, status)` is **not personal data**, so the GDPR
+      objection to a longer horizon does not apply to it;
+    - **tombstone horizon:** derive from the **vendor's replay ceiling** the way
+      `103_github_events_retention_7day.sql` did (it used GitHub's documented 3-day
+      delivery-log retention), not from a copied number. Resend's is 30 days.
+
+    This also dissolves the "a probe row would outlive its own 7-day triage row by 83
+    days" objection — the surviving row carries no subject. Keep 102's
+    `cron.unschedule`-then-`cron.schedule` idempotent shape and the daily `0 4 * * *`
+    cadence.
 2.3 Route: signature-verify → insert-with-payload → 200. Remove the inline dispatch.
 2.4a **Substrate circularity — the drain must not sit on the thing that breaks.** Every
     cron here is Inngest-fired (`server/inngest/cron-manifest.ts`), so an Inngest-fired
@@ -637,6 +892,22 @@ buffered" — which is correct to answer 200 to.
     metric: `server/inngest/functions/cron-supabase-disk-io.ts` + migration
     `095_disk_io_pressure_signal.sql`. Per 2.4a the alarm must not ride the Inngest
     substrate.
+
+    **Decided: `sentry_cron_monitor`, NOT `sentry_issue_alert`.** Every rule in
+    `issue-alerts.tf` is lifecycle-conditioned (`first_seen|regression|reappeared|
+    issue_resolved`, header lines 23-27), so a drain that stalls and keeps emitting the
+    same event fires **once** and then goes quiet for the whole outage — and if the drain
+    is *dead* rather than stalled it emits nothing at all, which an issue alert can never
+    distinguish from healthy. That is the #5542 shape. Ship instead:
+    `sentry_cron_monitor "cron_resend_outbox_drain_stall"` in
+    `infra/sentry/cron-monitors.tf` (`failure_issue_threshold = 1`, `checkin_margin_minutes`
+    ≈ 2× poll interval), with the check-in POSTed from the same
+    `scheduled-resend-outbox-drain.yml` that drives the drain — `error` on depth > 0,
+    `ok` on depth 0. In-repo precedent for a GHA-posted check-in is documented at
+    `cron-monitors.tf:113-118`. **`error` catches the stall; `missed` catches the alarm's
+    own death** — the case no issue alert can see. Carry the measured depth and
+    oldest-row age in the check-in body so the resulting issue is diagnosable without a
+    second query (§2.9.2 discriminating fields).
 3.4 Comment the B4 retention measurement onto #5697.
 3.5 **Reach the operator, not just the engineer.** Gated on Phase 0.4: if the ingress
     probe's monitor was already RED and nobody acted, more Sentry signal fixes nothing.
@@ -717,7 +988,13 @@ Green CI is not proof. See §Acceptance Criteria → Post-merge.
     users) — so this AC is the only gate.
 19. Operator notification (3.5) exists and uses the mandated wording; it does **not**
     contain the string "missing mail".
-20. **Recovery of the 106 exhausted deliveries is accounted for, per message id**, with
+20. **Recovery is accounted for per DISTINCT MESSAGE, not per delivery attempt.**
+    The unit matters: **106** is `countIf(raw LIKE '%inngest.send failed%')`, a count of
+    *retry-exhausted delivery attempts*; **15** is `uniqExact` of svix message ids (B3).
+    An implementer asked to enumerate 106 ids has no correct action, because only 15
+    exist in the retained window. The id set is therefore: **the 15 recoverable from
+    Better Stack, plus whatever the `GET /emails` diff surfaces** — and 15 is a floor,
+    not a measurement. Account for each distinct message, with
     each classified as `redelivered` / `backfilled-from-/emails` / `unrecoverable
     (reason)`. A count alone is not sufficient — an aggregate that says "106 handled"
     can be true while a specific regulator's letter is in the unrecoverable bucket
@@ -800,6 +1077,25 @@ logs:
   retention: Better Stack ~3 days (MEASURED, B4 — not the assumed window; this is
              why the onset is unknowable and why #5697 matters)
 discoverability_test:
+  # WARNING — the command below is the PRE-Phase-2 probe and becomes
+  # TAUTOLOGICALLY GREEN the moment Phase 2.3 lands. It greps
+  # '%inngest.send failed%', which is emitted ONLY by route.ts:305 — the branch
+  # Phase 2.3 deletes. After cutover `send_failed = 0` is true because the log
+  # line no longer exists, not because dispatch is healthy. AC11 and the §2.9.1
+  # soak script inherit the same defect and would be green-forever.
+  #
+  # POST-PHASE-2 REPLACEMENT (mandatory, /work must ship this):
+  #   - assert pending-row DEPTH and OLDEST-ROW AGE via PostgREST
+  #     (processed_resend_events?status=eq.pending&...), which is the failure mode
+  #     that actually loses mail after the cutover (stalled drain, retry already
+  #     released);
+  #   - carry a DENOMINATOR (count of rows for the feature in the window) so
+  #     0-of-0 is distinguishable from 0-of-N — otherwise "no mail arrived",
+  #     "Vector stopped" and "healthy" all read identically;
+  #   - anchor the window to `now() - INTERVAL 2 DAY`, NOT a `<deploy-time>`
+  #     placeholder: B4 pins Better Stack retention at ~3 days, so a query
+  #     anchored at deploy and run at the §2.9.1 `earliest=<deploy+3d>` finds its
+  #     own leading edge already expired and reports 0 from truncation.
   command: >
     doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh
     "SELECT countIf(raw LIKE '%inngest.send failed%') AS send_failed
@@ -838,6 +1134,15 @@ that made this take two days.
 Phase 1's remediation is infrastructure and therefore routes through Terraform.
 
 ### Terraform changes
+
+**Check the cheapest remediation FIRST — it may need no Terraform at all.**
+`.github/workflows/restart-inngest-server.yml` exists as a **dispatchable, non-SSH
+restart**, alongside `inngest-watchdog-restart-dispatch.yml`,
+`build-inngest-config-bundle.yml` and `inngest-config-drift.yml`. If H4 is "the unit died
+and never came back" rather than "the unit file is wrong", a `gh workflow run` is the fix
+in seconds. The earlier framing — "Phase 1's remediation is infrastructure and therefore
+routes through Terraform" — foreclosed this and pushed toward a host replace during a
+live incident. Try the dispatch first; escalate to IaC only if the unit will not stay up.
 
 H2 has no branch (refuted). H1's branch is **not** a Hetzner firewall change:
 `hcloud_firewall.inngest` has zero rules and a scoping rule is a documented no-op
@@ -1125,6 +1430,134 @@ file the in-app ingest-health surface as its own issue.
 
 **Brainstorm-recommended specialists:** none — no brainstorm preceded this plan
 (one-shot path).
+
+## Deepen-Plan Revisions — open items /work MUST close
+
+Deepened 2026-08-02 with CTO, CLO, CPO, a Fable advisor consult, data-integrity,
+observability-coverage, spec-flow, and a 15-claim verify-the-negative sweep (**15/15
+confirmed** — every factual claim in §Evidence is code-verified). The largest corrections
+are folded in above. These remain open and are **blocking for /work**, not optional:
+
+### Contradictions to resolve before writing code
+
+1. **Three sections describe three different schemas.** §Files to Create and §Encryption
+   Posture still say `payload jsonb … last_error`; §Phase 2.2 (correct, Legal-approved)
+   says typed columns + `last_error_code` + `email_received_at`. **§2.2 is the single
+   source — delete the other two descriptions**, do not rely on a reader reaching §2.2.
+2. **`status='sent'` vs delete-on-drain.** §2.1's test says "marks it `sent`"; §2.2 now
+   says null-the-PII-and-keep-a-tombstone. §2.2 wins (it preserves the ADR-037 replay
+   defense). Reconcile §2.1.
+3. **Migration 102's existing unconditional 90-day sweep is never retired.** It is
+   `DELETE … WHERE received_at < now() - interval '90 days'` with **no status predicate**.
+   If left in place beside the new allowlist sweep there are two sweeps on one table with
+   different anchors and no stated precedence. Retire or rewrite it explicitly.
+4. **§Downtime Trigger 1's justification assumes Phase 2 shipped first** ("by then
+   Phase 2's durable claim means the ingress keeps answering 2xx"), but the phases run
+   1→2. One of the two is wrong; as ordered, the restart window is inline-dispatch 500s
+   (survivable via svix, but the stated mitigation does not yet exist).
+
+### Dangling references (each will send /work the wrong way)
+
+- **"Phase 0.6" is cited by §Answers and §Risks but does not exist** — Phase 0 ends at
+  0.5. The content it names (pull the Resend delivery log to learn *whether svix has
+  already exhausted its retry schedule*) is a distinct question from onset recovery, and
+  it is the **precondition for §2.5's redrive being possible at all**. Create it.
+- §3.1 gates on "if 0.5 shows grouping…" — 0.5 is onset recovery, and the Sentry probe
+  was dropped from Phase 0.
+- §Risks still cites the retired "`terraform plan` shows no create" AC and "3.3 alerts on
+  depth", which 3.3 itself calls not implementable.
+- §Observability `failure_modes` still prescribes depth-based detection twice.
+- Phase-2 numbering runs 2.1, 2.2, 2.3, 2.4a, 2.4b, 2.4, 2.5, 2.5b, 2.6.
+
+### Missing ACs (enumerate before PR-ready)
+
+Drain **trigger** liveness (the #1 gap); retention model incl. retiring 102's job;
+RLS-enabled-zero-policies + REVOKE; typed columns / no `body` column; `last_error_code`
+scrubbing; off-substrate alarm; `.down.sql` sibling; the runbook HOP-D correction; the
+§Apply-path "Restated AC" that was written but never added to the list; and every Legal
+lockstep item the CLO verdict blocks on.
+
+### ACs that assert something no phase produces
+
+- **AC13/§3.2 target a deleted code path** — both say "the route's dispatch-failure
+  capture", but §2.3 removes the route's dispatch; failures now occur in `outbox-drain.ts`.
+  Re-point both at the drain.
+- **AC15 is filed "operator-free — all automated" but requires reading a Proton mailbox**
+  with no IMAP path or script named anywhere. Either name the mechanism or defer it with
+  a tracking issue — as written it blocks PR-ready under
+  `wg-block-pr-ready-on-undeferred-operator-steps`.
+- **AC19 asserts the operator notification unconditionally; §3.5 is conditional on 0.4.**
+  Pick one.
+- **AC6 mandates a C4 element for `resend_inbound_outbox`** — the table Phase 2
+  *rejected*. Model the extended `processed_resend_events` instead.
+- **AC9's post-merge signed probe writes a synthetic claim row every run**, as does the
+  daily `cron-email-ingress-probe`, with no cleanup and no exclusion from AC14/AC16.
+  `inbox-sources.ts` excludes `mail_class = 'probe'` downstream but nothing excludes them
+  from the claim table's accounting.
+
+### Recovery: 2.5 and 2.5b both double-count and leave a gap
+
+They have **different idempotency keys** and no stated ordering. §2.5 rides Inngest's
+`id: resend-${svixId}`; §2.5b is required by AC17 to bypass the claim entirely, and a
+`GET /emails` record carries a *Resend email id*, not necessarily the svix id — so the
+replayed event will not naturally carry that key. Concrete failure: **one regulator letter
+→ two `email_triage_items` rows → two statutory clocks**, in the table whose entire
+purpose is deterministic statutory-clock detection. Separately, §2.5b's floor of
+`2026-07-30` is **our log-retention artifact, not the onset** — Resend's window reaches
+back ~2026-07-03.
+
+**Recommended collapse (closes four problems at once):** run the
+`GET /emails` ↔ `email_triage_items` diff over the **full 30-day vendor window**; let the
+first contiguous run of missing messages **define the onset**; make §2.5b the single
+recovery mechanism with one idempotency key; demote §2.5 to an optimisation executed
+strictly *before* the diff is taken, or not at all.
+
+### Other correctness items
+
+- **`send-with-retry.ts` has FIVE production consumers, not two** — `webhooks/github`,
+  `webhooks/resend-inbound`, `webhooks/stripe`, `internal/schedule-reminder`,
+  `server/routines/run-routine.ts`, `server/index.ts`. Widening its return type is a
+  cross-consumer change under `hr-type-widening-cross-consumer-grep`; no step sweeps them.
+  Also: §Files to Edit justifies the widening "so **the route** can discriminate" — but
+  §2.3 deletes the route's call. Written-never-read as justified.
+- **The recovery burst maximally exercises the unfinalized-stub class** the plan scopes
+  out, and §2.5b's diff counts a stub as present — so AC16 would score an
+  operator-invisible stub as "re-triaged".
+- **The `data.email_id`-missing path silently drops mail** (`route.ts:196-212`, 200 + row
+  kept + Sentry warn, no triage) and is covered by no scope-out and no AC.
+- **`WHEN undefined_table` is the wrong handler** for a pg_cron-less DB: no `cron` schema
+  raises `3F000 invalid_schema_name`, not `42P01`. Use
+  `WHEN undefined_table OR invalid_schema_name`, or gate on `to_regclass('cron.job') IS NULL`.
+- **`CONCURRENTLY` is impossible in *any* migration** — `run-migrations.sh:404-411` pipes
+  every file through `psql --single-transaction`, so "ship the index in its own migration"
+  buys nothing. A plain `CREATE INDEX` is correct at this row count (precedents
+  `041:97-99`, `102:440-441`). Likewise `NOT VALID` + `VALIDATE` is unimplementable in one
+  file and would permanently exempt exactly the pre-existing rows you need covered.
+- **`ACCESS EXCLUSIVE` is held for the whole migration file**, not per statement. Set
+  `lock_timeout` as the first statement — and note the consequence: a lock_timeout abort
+  exits the runner non-zero (`run-migrations.sh:411-414`), **failing the deploy that
+  carries the route fix, during a live incident**.
+- **The `.down.sql` must refuse (or loudly enumerate) when `pending` rows exist** —
+  `DROP COLUMN` would destroy the buffered payload of rows already acked 2xx with the
+  vendor retry surrendered. It must also restore 102's cron block exactly, never drop
+  `received_at`, never drop the table, and **state the reversed deploy order: revert the
+  route deploy FIRST, then migrate down** (otherwise the still-deployed route's INSERT
+  fails 42703 → 500s → the original outage returns with the auto-disable clock running).
+- **Runbook `inbound-email-ingress-dead.md` has six stale items, and the worst is not the
+  one already named.** Its "First instinct trap" says the firewall "filters **egress
+  only** — it can drop HOP C/E but never the inbound POST", which was sound while HOP D
+  was loopback and is now **actively misleading**: post-ADR-100 HOP D is the hop *most*
+  exposed to egress drift. Its `H5 Inngest` row says "merge restarts the container (the
+  remediation)" — which cannot revive a dead unit on a *separate host*. And its fast
+  differential has **no HOP-D-dead row at all**, which is why this took two days.
+- **Better Stack's web-host Vector install is fail-open by design**
+  (`soleur-host-bootstrap.sh:668-673`) and is skipped entirely when an inngest-owned
+  `vector.service` is present (`:693-696`) — live on this host per B7's shared
+  `_MACHINE_ID`. "Better Stack is the channel that works" is true *today* and unasserted
+  going forward; give it the same `host_name` presence check the plan gives Sentry.
+- **AC12 (webhook still `enabled`) should run before and during Phase 0/1**, not only
+  post-merge. A mid-fix auto-disable is a live risk and the current mitigation is an
+  ordering statement, not a control. (Re-checked 2026-08-02 11:17Z: still `enabled`.)
 
 ## Risks & Mitigations
 
