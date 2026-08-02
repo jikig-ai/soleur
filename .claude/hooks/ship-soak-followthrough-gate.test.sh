@@ -25,10 +25,16 @@ PASS=0; FAIL=0
 command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
 command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
 
+# ADR-129 rule (c): ONE owning trap for every tempfile this suite allocates.
+# Per-case sandboxes are children of this root, so a case that dies mid-assertion
+# cannot leak — /tmp is a machine-global tmpfs shared with sibling worktrees.
+HIC_TMPROOT="$(mktemp -d -t ssfgroot.XXXXXXXX)"
+trap 'rm -rf "$HIC_TMPROOT"' EXIT
+
 # A git fixture with an explicit branch: CI-on-main masks branch-dependent
 # sibling gates (#5192), so the branch is set rather than inherited.
 mk_repo() {
-  local d; d="$(mktemp -d -t ssfg.XXXXXXXX)"
+  local d; d="$(mktemp -d -p "$HIC_TMPROOT")"
   git -C "$d" init -q -b feat-fixture
   git -C "$d" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
   echo "$d"

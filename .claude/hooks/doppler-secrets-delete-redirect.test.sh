@@ -18,10 +18,16 @@ HOOK="$SCRIPT_DIR/doppler-secrets-delete-redirect.sh"
 PASS=0; FAIL=0
 command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
 
+# ADR-129 rule (c): ONE owning trap for every tempfile this suite allocates.
+# Per-case sandboxes are children of this root, so a case that dies mid-assertion
+# cannot leak — /tmp is a machine-global tmpfs shared with sibling worktrees.
+HIC_TMPROOT="$(mktemp -d -t dsdrroot.XXXXXXXX)"
+trap 'rm -rf "$HIC_TMPROOT"' EXIT
+
 # Non-git temp CWD so branch-dependent sibling gates cannot mask this one (#5192).
 decision_of() {
   local payload="$1" tmp out
-  tmp="$(mktemp -d -t dsdr.XXXXXXXX)"
+  tmp="$(mktemp -d -p "$HIC_TMPROOT")"
   out="$(cd "$tmp" && printf '%s' "$payload" | INCIDENTS_REPO_ROOT="$tmp" bash "$HOOK" 2>/dev/null)"
   rm -rf "$tmp"
   [[ -z "${out//[[:space:]]/}" ]] && { echo "<none>"; return; }
@@ -61,7 +67,7 @@ check "unrelated command allows" "<none>" "$(decision_of "$(mk 'ls -la')")"
 check "ARRAY command: no decision emitted (non-responder)" "<none>" \
   "$(decision_of "$(jq -nc '{tool_name:"Bash", tool_input:{command:["doppler","secrets","delete","FOO"]}}')")"
 
-root="$(mktemp -d -t dsdr2.XXXXXXXX)"
+root="$(mktemp -d -p "$HIC_TMPROOT")"
 ( cd "$root" && jq -nc '{tool_name:"Bash", tool_input:{command:["doppler","secrets","delete","FOO"]}}' \
     | INCIDENTS_REPO_ROOT="$root" bash "$HOOK" >/dev/null 2>&1 )
 if [[ -f "$root/.claude/.rule-incidents.jsonl" ]] \

@@ -28,6 +28,12 @@ TOTAL=0
 
 command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
 
+# ADR-129 rule (c): ONE owning trap for every tempfile this suite allocates.
+# Per-case sandboxes are children of this root, so a case that dies mid-assertion
+# cannot leak — /tmp is a machine-global tmpfs shared with sibling worktrees.
+HIC_TMPROOT="$(mktemp -d -t hicroot.XXXXXXXX)"
+trap 'rm -rf "$HIC_TMPROOT"' EXIT
+
 ok()  { PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1)); echo "PASS: $1"; }
 bad() { FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1)); echo "FAIL: $1"; shift; local l; for l in "$@"; do echo "  $l"; done; }
 want(){ if [[ "$2" == "$3" ]]; then ok "$1 → $3"; else bad "$1" "want: $2" "got:  $3"; fi; }
@@ -54,7 +60,7 @@ INSCOPE20=( "${EVAL10[@]}" "${SIBLING8[@]}" "${WRITE2[@]}" )
 decision_for() { # <hook> <payload> [extra-env...]
   local hook="$1" payload="$2"; shift 2
   local tmp out
-  tmp="$(mktemp -d -t hic.XXXXXXXX)"
+  tmp="$(mktemp -d -p "$HIC_TMPROOT")"
   out="$(cd "$tmp" && printf '%s' "$payload" \
         | env INCIDENTS_REPO_ROOT="$tmp" "$@" bash "$SCRIPT_DIR/$hook.sh" 2>/dev/null)"
   rm -rf "$tmp"
@@ -116,7 +122,7 @@ a2_guard_still_armed() {
 # carrying the ORIGINAL idiom and proves the harness can observe a marker.
 a3_rce_regression() {
   local run stub marker hook payload pwned=()
-  run="$(mktemp -d -t hicrce.XXXXXXXX)"
+  run="$(mktemp -d -p "$HIC_TMPROOT")"
 
   # --- positive control: the harness CAN observe a marker -------------------
   stub="$run/vulnerable-stub.sh"
@@ -223,7 +229,7 @@ a5_jq_unusable() {
   # hook needs. PATH=/nonexistent would also remove grep, git, mktemp and flock,
   # so the hook could not run at all and the assertion would prove nothing.
   local shim tmp out dec reason b
-  shim="$(mktemp -d -t hicjq.XXXXXXXX)"
+  shim="$(mktemp -d -p "$HIC_TMPROOT")"
   for b in bash sh env grep sed awk tr cat cut head tail sort uniq wc date \
            mkdir rm ln ls mktemp dirname basename realpath xargs flock \
            git perl python3 touch chmod find printf; do
@@ -239,7 +245,7 @@ a5_jq_unusable() {
     rm -rf "$shim"; return
   fi
 
-  tmp="$(mktemp -d -t hicjq2.XXXXXXXX)"
+  tmp="$(mktemp -d -p "$HIC_TMPROOT")"
   out="$(cd "$tmp" && printf '%s' "$ARRAY_STASH" \
         | PATH="$shim" INCIDENTS_REPO_ROOT="$tmp" bash "$SCRIPT_DIR/guardrails.sh" 2>/dev/null)"
   # Parsed WITHOUT jq, deliberately: the envelope is a printf of a constant
@@ -259,7 +265,7 @@ a5_jq_unusable() {
 # is told. This walks the row all the way to the aggregate counter.
 a6_loud_disarm_end_to_end() {
   local root out
-  root="$(mktemp -d -t hicld.XXXXXXXX)"
+  root="$(mktemp -d -p "$HIC_TMPROOT")"
   mkdir -p "$root/.claude"
   cat > "$root/AGENTS.md" <<'EOF'
 # Agent Instructions
@@ -322,7 +328,7 @@ a8_envelope_pairing() {
   local tmp out unpaired=0 hook
   local -a responders=(guardrails)
   for hook in "${responders[@]}"; do
-    tmp="$(mktemp -d -t hicep.XXXXXXXX)"
+    tmp="$(mktemp -d -p "$HIC_TMPROOT")"
     out="$(cd "$tmp" && printf '%s' "$ARRAY_STASH" \
           | INCIDENTS_REPO_ROOT="$tmp" bash "$SCRIPT_DIR/$hook.sh" 2>/dev/null)"
     rm -rf "$tmp"
@@ -370,7 +376,7 @@ a10_kill_switch() {
     "$(decision_for guardrails "$ARRAY_STASH" SOLEUR_DISABLE_HOOK_INPUT_ASK=1)"
   # …but parsing and telemetry still run: the fault is still recorded.
   local root
-  root="$(mktemp -d -t hicks.XXXXXXXX)"
+  root="$(mktemp -d -p "$HIC_TMPROOT")"
   ( cd "$root" && printf '%s' "$ARRAY_STASH" \
       | SOLEUR_DISABLE_HOOK_INPUT_ASK=1 INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT_DIR/guardrails.sh" >/dev/null 2>&1 )
   if [[ -f "$root/.claude/.rule-incidents.jsonl" ]]; then
@@ -453,7 +459,7 @@ a14_bare_payload_coverage() {
   for hook in kb-domain-allowlist-guard no-memory-write worktree-write-guard iac-plan-write-guard; do
     d="$(decision_for "$hook" "$ARRAY_STASH")"
     [[ "$d" == "<none>" ]] || silent+=("$hook emitted '$d' (only the responder should)")
-    root="$(mktemp -d -t hica14.XXXXXXXX)"
+    root="$(mktemp -d -p "$HIC_TMPROOT")"
     ( cd "$root" && printf '%s' "$ARRAY_STASH" \
         | INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT_DIR/$hook.sh" >/dev/null 2>&1 )
     if [[ -f "$root/.claude/.rule-incidents.jsonl" ]] \
@@ -506,7 +512,7 @@ a15_shell_state_hygiene() {
   # M9: only a value that is ENTIRELY a glob can expand during the split.
   # `rm *` cannot catch a missing `set -f`; a bare `*` can.
   local g out
-  g="$(mktemp -d -t hicglob.XXXXXXXX)"
+  g="$(mktemp -d -p "$HIC_TMPROOT")"
   : > "$g/decoy-a"; : > "$g/decoy-b"; : > "$g/decoy-c"
   out="$(cd "$g" && bash -c '
       source "'"$helper"'"

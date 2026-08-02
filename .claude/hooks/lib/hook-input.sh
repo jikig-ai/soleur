@@ -126,13 +126,16 @@ hook_parse_input() {
   # trailing newlines from the last field on the HAPPY path. (Measured.)
   # ONE jq invocation, on one line — the contract test asserts exactly one `jq`
   # in this file (a mechanism ban is deterministic where a wall-clock comparison
-  # is not). The stderr sink is chosen into a variable rather than duplicating
-  # the call site, so `mktemp` being unavailable degrades the DIAGNOSTIC only,
-  # never the parse.
-  local raw jq_err jq_errsink=/dev/null jq_rc=0
-  jq_err="$(mktemp -t hookinput.XXXXXXXX 2>/dev/null)" || jq_err=""
-  [[ -n "$jq_err" ]] && jq_errsink="$jq_err"
-  raw="$(printf '%s' "$input" | jq -j "$_HOOK_INPUT_JQ" 2>"$jq_errsink"; printf 'X')"
+  # is not).
+  #
+  # NO TEMPFILE. An earlier draft captured jq's stderr to a `mktemp` file to
+  # carry <=120 bytes of diagnostic text. That cost an allocate+unlink pair on
+  # EVERY invocation — 18 hooks fire per Bash tool call — on the hot path, to
+  # carry garnish. jq's EXIT CODE already makes the only distinction that
+  # matters, and with exactly one constant program in this file there is no
+  # second program the stderr text could disambiguate between.
+  local raw jq_rc=0
+  raw="$(printf '%s' "$input" | jq -j "$_HOOK_INPUT_JQ" 2>/dev/null; printf 'X')"
   jq_rc=${PIPESTATUS[1]:-0}
   raw=${raw%X}
 
@@ -191,17 +194,8 @@ hook_parse_input() {
       # died mid-stream. Never blamed on the payload.
       HOOK_INPUT_REASON="internal"
     fi
-    if [[ "$HOOK_INPUT_REASON" == "internal" && -n "$jq_err" ]]; then
-      # <=120 bytes of OUR OWN diagnostic. jq's stderr on a compile error names
-      # our program, never attacker content.
-      local _hi_detail
-      _hi_detail="$(tr -d '\n' < "$jq_err" 2>/dev/null)"
-      HOOK_INPUT_REASON="internal:${_hi_detail:0:120}"
-    fi
-    [[ -n "$jq_err" ]] && rm -f "$jq_err" 2>/dev/null
     return 1
   fi
-  [[ -n "$jq_err" ]] && rm -f "$jq_err" 2>/dev/null
 
   if [[ ${_hi_s[0]} != "ok" ]]; then
     # A contracted field is not a string. This is the attack signature, and it
