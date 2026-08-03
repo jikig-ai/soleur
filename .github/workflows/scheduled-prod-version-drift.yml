@@ -62,27 +62,7 @@ name: "Scheduled: Production Version-Drift Alerter"
 on:
   schedule:
     - cron: "*/30 * * * *"
-  workflow_dispatch:
-    inputs:
-      # ALERT-PATH DRILL. #7091's own post-merge criteria require exercising the alert end to
-      # end — label bootstrapped, issue filed, email delivered, then closed by the next clean
-      # run — "WITHOUT waiting for a real outage". The workflow as first merged had no way to
-      # do that: the checker reads the live /health, so the only route to DRIFT_SUSTAINED was
-      # an actual production outage. An acceptance criterion that can only be met by the
-      # incident it exists to detect is not a criterion.
-      #
-      # This overrides ONLY the build_sha the checker compares against. Everything downstream —
-      # the range query, the clock, the ancestry guard, every alert gate — runs unmodified, so
-      # the drill exercises the real path rather than a mock of it.
-      #
-      # Safe by construction on a public repo: it takes a commit SHA (already public), grants
-      # no new permission, and cannot suppress a real alert — a drill that resolves to CLEAN
-      # simply files nothing. It can only ADD an alert, and that alert self-closes on the next
-      # scheduled tick, which is itself the second half of the drill.
-      simulate_prod_sha:
-        description: "Drill only: pretend prod serves this 40-hex SHA instead of reading /health"
-        required: false
-        type: string
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -112,59 +92,45 @@ jobs:
 
       - name: Check production version drift
         id: check
-        env:
-          SIMULATE_PROD_SHA: ${{ inputs.simulate_prod_sha }}
         run: |
           set -uo pipefail
 
           strip_log_injection() {
-            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
-              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\010\013\014\016-\037\177' \
+              | sed -E 's/##\[/#[#/g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
           }
 
           # The checker's exit code is DATA, not a job failure. Letting it `exit 1` the step
           # would make the terminal heartbeat's `steps.check.outcome` read `failure` on every
           # real drift, conflating "prod is stale" with "the monitor is broken".
-          # The drill input is threaded through the checker's EXISTING seam (PROD_HEALTH_URL)
-          # rather than a new code path, so the drilled run and a real run differ in exactly one
-          # value. Validated to 40-hex here as well as in the checker: this is a
-          # workflow_dispatch input, so it is untrusted, and it must never reach a file path or
-          # a shell word unchecked.
-          if [[ -n "${SIMULATE_PROD_SHA:-}" ]]; then
-            if [[ ! "$SIMULATE_PROD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "::error::simulate_prod_sha must be a 40-hex commit SHA; refusing to run the drill."
-              exit 1
-            fi
-            echo "::warning::DRILL MODE — pretending prod serves ${SIMULATE_PROD_SHA} instead of reading ${PROD_HEALTH_URL:-/health}. Any issue filed by this run is a drill artefact and self-closes on the next clean tick."
-            printf '{"status":"ok","version":"drill","build_sha":"%s"}' "$SIMULATE_PROD_SHA" \
-              > "${RUNNER_TEMP}/drill-health.json"
-            export PROD_HEALTH_URL="file://${RUNNER_TEMP}/drill-health.json"
-          fi
-
           out="$(bash scripts/prod-version-drift-check.sh 2>&1)"; rc=$?
 
           # Sanitised BEFORE echoing: $out carries untrusted-derived content, and a raw echo is a
-          # GitHub workflow-command injection surface (::add-mask::, ::stop-commands::). Do not
-          # rely on the source-side charset filter for this — `:` is inside its allowlist.
+          # GitHub workflow-command injection surface. Do not rely on the source-side charset
+          # filter for this — `:` is inside its allowlist.
           #
           # PER LINE, not on the whole blob. strip_log_injection deletes \000-\037, and \n is
           # \012 — so sanitising $out as a unit collapsed the checker's seven output lines into
-          # one unreadable string. Measured on the first production run: the log read
-          # `DRIFT_VERDICT=DRIFT_PENDINGDRIFT_REASON=release_in_flightDRIFT_DETAIL=...`. Parsing
-          # was unaffected (it reads the raw $out), but the run log is the diagnostic surface the
-          # issue body points an operator at, so a security fix had silently degraded the thing
-          # the alert exists to make legible.
+          # one unreadable string. Measured on the first production run:
+          #   DRIFT_VERDICT=DRIFT_PENDINGDRIFT_REASON=release_in_flightDRIFT_DETAIL=...
+          # Parsing was unaffected (it reads the raw $out), but the run log is the surface the
+          # issue body's own remediation block sends the operator to.
           #
-          # Splitting first keeps BOTH properties: control characters inside a line still die, and
-          # a line that could be read as a workflow command is indented so it cannot be one —
-          # GitHub only parses `::` at the very start of a line. An injected newline therefore
-          # buys an attacker a new line that is provably inert rather than a command.
+          # EVERY line gets a constant non-whitespace marker. An earlier draft INDENTED lines
+          # starting with `::` and claimed that made them inert. That is FALSE, verified against
+          # actions/runner ActionCommand.cs: it calls `message.TrimStart()` BEFORE testing
+          # `StartsWith("::")`, so the indent is removed before the check. The legacy parser is
+          # worse — it uses `message.IndexOf("##[")` with no position test at all, so `##[...]`
+          # anywhere in a line is parsed regardless of indentation. A leading non-whitespace
+          # marker survives TrimStart, which defeats the `::` form, and it is also more
+          # readable: every checker line is greppable as `drift|`.
+          #
+          # The `##[` form needs SEPARATE handling, because a leading marker cannot defeat an
+          # IndexOf scan — that matches at any offset. strip_log_injection therefore rewrites
+          # `##[` to `#[#`, which the legacy parser does not recognise. The checker only ever
+          # emits `KEY=value` lines, so no legitimate output carries that sequence.
           printf '%s\n' "$out" | while IFS= read -r _line; do
-            _safe="$(strip_log_injection "$_line")"
-            case "$_safe" in
-              ::*) printf '  %s\n' "$_safe" ;;
-              *)   printf '%s\n' "$_safe" ;;
-            esac
+            printf 'drift| %s\n' "$(strip_log_injection "$_line")"
           done
 
           verdict="$(printf '%s\n' "$out" | sed -n 's/^DRIFT_VERDICT=//p' | head -1)"

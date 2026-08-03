@@ -61,9 +61,9 @@ FAIL=0
 # the entire mutation battery -- the suite's own anti-vacuity mechanism -- and still exited 0.
 # A part-level floor makes that a loud "Part C shrank" instead of a silent pass, and gives a
 # better failure message than a total ever could.
-MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-114}"
+MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-113}"
 MIN_A="${DRIFT_MIN_A:-57}"
-MIN_B="${DRIFT_MIN_B:-46}"
+MIN_B="${DRIFT_MIN_B:-45}"
 MIN_C="${DRIFT_MIN_C:-11}"
 COUNT_A=0
 COUNT_B=0
@@ -436,7 +436,7 @@ STUB
 # Emits key=value lines the shell can read. Every step selector asserts exactly-one
 # cardinality, so a rename fails loudly instead of extracting nothing.
 PYEXTRACT='
-import sys, yaml, json, re
+import sys, os, yaml, json, re
 
 wf_path, rel_path = sys.argv[1], sys.argv[2]
 try:
@@ -581,37 +581,6 @@ try:
 except Exception as e:
     emit("RELEASE_PARSE_ERROR", str(e).replace("\n", " "))
 
-# --- B13: the log echo must be PER LINE ---------------------------------------
-# strip_log_injection deletes \000-\037 and \n is \012, so sanitising the checker output as one
-# blob collapsed seven lines into one unreadable string on the first production run. The run log
-# is the surface the issue body points an operator at, so this is a diagnosability contract, not
-# style. Assert the loop shape rather than the absence of the old call: the old form is a
-# SUBSTRING of nothing distinctive, whereas the loop is.
-if runs:
-    cb = code(runs[0][1])
-    emit("ECHO_IS_PER_LINE", int(bool(re.search(r"while IFS= read -r _line", cb))))
-    # ...and a line that could read as a workflow command must be indented so it cannot be one.
-    # chr(39) not a literal apostrophe: this whole program is a single-quoted bash string, so
-    # one quote here terminates it and the shell executes the remainder as commands.
-    emit("ECHO_NEUTRALISES_COMMANDS", int(bool(re.search(r"::\*\)\s*printf " + chr(39) + " +%s", cb))))
-    # The whole-blob form must be gone: it is the regression.
-    emit("ECHO_WHOLE_BLOB", int(bool(re.search(r"strip_log_injection \"\$out\"", cb))))
-
-# --- B14: the alert-path drill -------------------------------------------------
-on_ = wf.get("on", wf.get(True, {})) or {}
-wd = on_.get("workflow_dispatch") or {}
-drill = ((wd.get("inputs") or {}).get("simulate_prod_sha") or {})
-emit("DRILL_INPUT_PRESENT", int(bool(drill)))
-emit("DRILL_INPUT_REQUIRED", drill.get("required", "<unset>"))
-if runs:
-    cb = code(runs[0][1])
-    # Untrusted dispatch input: must be 40-hex-validated before it reaches a path or a word.
-    emit("DRILL_VALIDATES_HEX", int(bool(re.search(r"SIMULATE_PROD_SHA.*=~.*\[0-9a-f\]\{40\}", cb))))
-    # Threaded through the EXISTING seam, so a drilled run differs from a real one by one value.
-    emit("DRILL_USES_HEALTH_URL_SEAM", int(bool(re.search(r"export PROD_HEALTH_URL=", cb))))
-    # The operator must be told the run is a drill, or a drill artefact reads as a real outage.
-    emit("DRILL_ANNOUNCES_ITSELF", int(bool(re.search(r"::warning::DRILL MODE", cb))))
-
 # --- B11: step-id and env CLOSURE --------------------------------------------
 # Part B previously inspected only `if:` and `uses.with`, so an entire class was unmutated and
 # invisible: renaming `id: notify` (heartbeat then reads a permanently-empty output and reports
@@ -649,14 +618,14 @@ for (_, st) in steps:
     if not body:
         continue
     env_keys = set((st.get("env") or {}).keys())
-    # UNGUARDED expansions only. `${VAR:-default}` is safe under set -u by construction, and
-    # scripts/lint-workflow-step-env-refs.py says so in its own remediation text ("or guard the
-    # expansion as ${NAME:-} if being unset is legitimate"). Flagging the guarded form made this
-    # check stricter than the rule it enforces, and it fired on a legitimate guarded read.
-    for var in set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)\}", body)):
+    for var in set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)(?::-[^}]*)?\}", body)):
         if var in env_keys or var in RUNNER_PROVIDED:
             continue
-        # `export VAR=` is an in-body assignment too; the previous pattern missed it.
+        # `export VAR=` is an in-body assignment too. This exemption ALONE clears the
+        # false positive that prompted a wider change; narrowing the capture to unguarded
+        # ${VAR} as well was measured unnecessary and silently dropped two real detections
+        # (a deleted MISSING_SHAS or EXIT_CODE declaration degrades a diagnostic to a
+        # permanent placeholder without ever failing a step -- the QUIET half of the class).
         if re.search(r"^\s*(local\s+|export\s+)?%s=" % var, body, re.M):
             continue
         undeclared.append("%s:%s" % (st.get("id") or st.get("name") or "?", var))
@@ -672,6 +641,16 @@ if undeclared:
 if runs:
     emit("EXTRACTED_KEYS", ",".join(sorted(set(
         re.findall(r"sed -n .s/\^([A-Z_]+)=//p", code(runs[0][1]))))))
+
+# --- the check step body, for EXECUTION rather than grepping --------------------
+# Every other Part B pin is a regex over source, which is right for declarative YAML (if:
+# conditions, fetch-depth, permissions) and wrong for imperative shell. A grep cannot see
+# ordering, cannot see a redirect to /dev/null, and cannot see which variable a `case`
+# actually tests -- all three shipped as survivable mutations. Emit the body so a Part A
+# assertion can run it.
+if runs:
+    with open(os.environ.get("DRIFT_STEP_BODY_OUT", "/dev/null"), "w") as fh:
+        fh.write(runs[0][1].get("run") or "")
 
 # --- B10: schedule + job timeout ---------------------------------------------
 on = wf.get("on", wf.get(True, {})) or {}
@@ -697,6 +676,7 @@ run_part_b() {
   pass "B0 the workflow file exists"
 
   local EX="$TMP/extract.env"
+  export DRIFT_STEP_BODY_OUT="$TMP/check-body.sh"
   if ! python3 -c "$PYEXTRACT" "$WORKFLOW" "$RELEASE_WORKFLOW" > "$EX" 2>"$TMP/extract.err"; then
     fail "B0b PyYAML extraction succeeded" "rc=0" "$(cat "$TMP/extract.err")"
     return 0
@@ -853,22 +833,51 @@ run_part_b() {
     "$(grep -oE '^\s*echo "([A-Z_]+)=' "$SUT" | grep -oE '[A-Z_]+' | sort -u | paste -sd, -)" \
     "${X_EXTRACTED_KEYS:-<none>}"
 
-  # B13 -- the log echo. A collapsed log is a real regression: it shipped, and it degraded the
-  # exact surface the issue body's remediation block sends the operator to.
-  assert_eq "B13 the run log is echoed PER LINE, not as one sanitised blob" "1" "${X_ECHO_IS_PER_LINE:-0}"
-  assert_eq "B13b a line that could read as a workflow command is indented inert" "1" "${X_ECHO_NEUTRALISES_COMMANDS:-0}"
-  assert_eq "B13c the whole-blob form is gone" "0" "${X_ECHO_WHOLE_BLOB:-1}"
+  # B13 -- the run-log echo, EXECUTED rather than grepped.
+  #
+  # The three assertions this replaces pinned spelling, and review demonstrated three
+  # rewrites that satisfied all of them while breaking the property: redirecting the loop to
+  # /dev/null and re-adding the whole-blob form under a different quoting of the same
+  # variable; testing the `case` on the RAW line instead of the sanitised one (so a leading
+  # control byte escapes the marker); and duplicating the printf. All three left the suite
+  # green. A grep over shell cannot see a redirect, an ordering, or which variable is tested.
+  #
+  # So: run the shipped step's own sanitiser and loop against a hostile fixture and assert
+  # the OUTPUT. The fixture carries, on purpose, a control byte before a workflow command --
+  # the exact input that distinguishes sanitise-then-classify from classify-then-sanitise.
+  if [[ -s "$TMP/check-body.sh" ]]; then
+    local fnsrc loopsrc probe out13
+    fnsrc="$(awk "/strip_log_injection\(\) \{/,/^\}/" "$TMP/check-body.sh")"
+    loopsrc="$(awk '/^printf .*while IFS= read/,/^done/' "$TMP/check-body.sh")"
+    if [[ -n "$fnsrc" && -n "$loopsrc" ]]; then
+      probe="$TMP/echo-probe.sh"
+      {
+        printf '%s\n' "$fnsrc"
+        printf '%s\n' 'out="$(printf "A=1\n\001::stop-commands::PWNED\nfoo ##[stop-commands]y\nkeep\tTAB\nbell\007gone")"'
+        printf '%s\n' "$loopsrc"
+      } > "$probe"
+      out13="$(bash "$probe" 2>&1)"
 
-  # B14 -- the drill. #7091 requires exercising the alert path WITHOUT waiting for a real
-  # outage; as first merged there was no way to do that, so the criterion could only be met by
-  # the incident it exists to detect.
-  assert_eq "B14 a simulate_prod_sha dispatch input exists" "1" "${X_DRILL_INPUT_PRESENT:-0}"
-  assert_eq "B14b it is optional, so a normal dispatch is unchanged" "False" "${X_DRILL_INPUT_REQUIRED:-<unset>}"
-  assert_eq "B14c the untrusted input is 40-hex validated before use" "1" "${X_DRILL_VALIDATES_HEX:-0}"
-  assert_eq "B14d it drives the EXISTING PROD_HEALTH_URL seam, not a parallel code path" \
-    "1" "${X_DRILL_USES_HEALTH_URL_SEAM:-0}"
-  assert_eq "B14e a drilled run announces itself, so its artefacts are not read as a real outage" \
-    "1" "${X_DRILL_ANNOUNCES_ITSELF:-0}"
+      assert_eq "B13 the echo preserves every line (no whole-blob collapse)" \
+        "5" "$(printf '%s\n' "$out13" | grep -c .)"
+      assert_eq "B13b no line reaches column 0, so ::-form workflow commands cannot parse" \
+        "0" "$(printf '%s\n' "$out13" | grep -c '^::' || true)"
+      assert_eq "B13c the legacy ##[ form is broken even mid-line (IndexOf has no position test)" \
+        "0" "$(printf '%s\n' "$out13" | grep -cF '##[' || true)"
+      assert_contains "B13d a control byte BEFORE a command does not smuggle it past the marker" \
+        "^drift\| ::stop-commands::PWNED$" "$out13"
+      assert_contains "B13e TAB survives (it is \\011, inside the old strip range)" \
+        "keep	TAB" "$out13"
+      assert_not_contains "B13f other control bytes still die" "$(printf 'bell\007gone')" "$out13"
+      assert_eq "B13g each input line is emitted exactly once" \
+        "1" "$(printf '%s\n' "$out13" | grep -c 'A=1' || true)"
+    else
+      fail "B13 the check step exposes a sanitiser and a per-line loop" "both extractable" \
+        "fn=$([[ -n "$fnsrc" ]] && echo yes || echo no) loop=$([[ -n "$loopsrc" ]] && echo yes || echo no)"
+    fi
+  else
+    fail "B13 the check step body was extracted for execution" "a non-empty file" "absent"
+  fi
 
   # B10g -- monitor slug parity. A mismatched slug leaves the Sentry monitor permanently
   # green over a dead alarm: the worst shape available, since it looks like coverage.
