@@ -364,8 +364,15 @@ into one issue *per flap*, and the bridge has a documented flap class, `ci/tunne
 and a running-count line in the body (a read-modify-write against a mutable remote resource — the
 most fragile shell in the PR). Both existed only to mitigate a problem auto-close created.
 
-**Dropping the close step deletes all three.** With no close, an open issue always exists for
-dedupe-by-title to find, so no flap can produce a second issue; and a human closing an
+**Dropping the close step deletes all three.** *(Reasoning corrected 2026-08-03 during review: the
+original ran "with no close, an open issue always exists for dedupe-by-title to find, so no flap
+can produce a second issue" — which contradicts its own next clause. The dedupe query is
+`--state open`, and a human closing the issue is stated here as the INTENDED lifecycle, so an
+operator who closes an `unavailable` issue mid-flap gets a fresh one on the next run. The
+simplification still stands; the honest justification is the bound below, not an impossibility
+claim.)* The churn is BOUNDED at one issue per class per day by the cadence, and `unavailable`
+sends no ops email, so a re-file after an operator close is acceptable churn rather than a spam
+vector; and a human closing an
 `action-required` P1 after reading it is the correct lifecycle for every class here. It also removes
 the "green run certifies a prior data-loss finding" hazard for `drift` and `readiness` by
 construction — the same "certified green" shape the workflow's own downward-re-seed guard already
@@ -401,7 +408,9 @@ Two things the plan must not claim about this:
   such; and the alarm step appends the email step's outcome to the issue body, so a dropped page is
   visible in the artifact the operator does read.
 - **`unavailable` gets no direct ops-email** — but be honest that this does not mean "no email": its
-  Sentry `error` check-in routes through the sentry issue-alert plane to `ops@jikigai.com` anyway
+  Sentry `error` check-in reaches `ops@jikigai.com` through the issue-alert plane only from the
+  SECOND consecutive non-ok check-in (`failure_issue_threshold = 2`), so the first `unavailable`
+  night is carried by the GitHub issue alone
   (§Observability `alert_target`). The separation is one of *volume and framing*, not of channel;
   Sentry's own grouping dedupes it, which a per-run `notify-ops-email` would not.
 
@@ -409,6 +418,15 @@ Two things the plan must not claim about this:
 `github.event_name == 'schedule'`. Rationale: the alarm exists because a schedule removes the
 watcher; a dispatch has one by definition, and filing an issue on every operator experiment (or on a
 deliberately-rejected bad seed value) is noise. This also keeps the `workflow_dispatch` path byte-identical.
+
+> **AC1 AMENDED 2026-08-03 (review).** AC1's literal verification command read
+> `git diff origin/main -- .github/workflows/workspaces-luks-verify.yml` *shows no change inside
+> the `workflow_dispatch:` block*. That is unsatisfiable alongside §Decision 2, which mandates the
+> additive `alarm_selftest` input in that same block, so a future reader walking the ACs would hit
+> a command that cannot pass. The protected interest is the OPERATOR-FACING DISPATCH CONTRACT, not
+> the block's byte count: scope the byte-identity to `seed_workspace_count` (its description,
+> `required`, `type` and `default`), which the gate suite asserts structurally, and allow additive
+> sibling inputs that default to a no-op.
 It mirrors `scheduled-supabase-advisor-scan.yml`, which gates its heartbeat on the dispatch source
 "so a manual smoke test cannot forge liveness".
 
@@ -1291,7 +1309,9 @@ fidelity matters. Structure:
    - a `drift` body contains `first_observed_at` and the counsel trigger-(3) pointer
    - an empty `outcome_class` routes to `unavailable` (fail-closed)
    - a green scheduled run files nothing and closes nothing (there is no close step)
-   - a *recently-closed* `unavailable` issue is **reopened**, not re-created (flap-churn guard)
+   - **[SUPERSEDED by §Decision 2 — NOT IMPLEMENTED]** a *recently-closed* `unavailable` issue is **reopened**, not re-created
+     (flap-churn guard). Decision 2 deleted auto-close, and with it the reopen path: nothing in
+     the shipped workflow ever closes an issue, so there is no closed issue to reopen.
    - a repeat failure with an **unchanged** `reason` does not add a new comment
    - the ops-email step fires for `drift` and `readiness` and **not** for `unavailable`
 7. `MIN_ASSERTIONS` floor (≥ 40, matching the sibling suite's `WF_MIN_ASSERTIONS`) — fewer passes is
@@ -1315,7 +1335,9 @@ is testing nothing.
 2.6 Add `emit_class pass` before the final PASSED echo.
 2.7 Add the alarm step **after** the bridge-teardown steps (so the SSH key is shredded before `gh`
     runs), with the `case`-based class routing, idempotent `gh label create … || true`, label+title
-    dedupe, the reopen-not-recreate path for `unavailable`, and the comment-on-reason-change bound.
+    dedupe, ~~the reopen-not-recreate path for `unavailable`~~ (**SUPERSEDED by §Decision 2 —
+    do NOT build this**; it is a build instruction for a mechanism that was deliberately cut),
+    and the comment-on-reason-change bound.
 2.8 *(no green-close step — §Decision 2. A green run files nothing and closes nothing.)*
 2.9 Add the `notify-ops-email` step for `drift` and `readiness` only.
 2.10 Add the Sentry check-in step last (`always()`, `continue-on-error: true`,
@@ -1478,7 +1500,7 @@ Sentry monitor provides the standing verification a follow-through probe would h
 | **Post-deploy/post-reboot hook + weekly backstop** (the strongest counter — CTO steelman) | The at-rest state is boot-immutable, so an event-shaped signal would match the only real mutation source at 1/7 the SSH surface. Rejected because half the probe is **not** boot-immutable: the readyz + inventory dimension is GHA-only (`LUKS_MONITOR_ASSERT_READYZ` default-OFF on the host) and inventory can shrink at any time — and because while #6808 is open this workflow is the compensating channel for a *daily* push. Fully argued in §Decision 1 |
 | **Weekly cron (~4× margin)** | Only 4 attempts per 30-day window and 7-day detection latency on a false published Article 32 claim. GHA `schedule:` jitter is measured at up to 339 min in this repo, `cron-monitors.tf` records GitHub dropping a scheduled run entirely on 2026-05-26, and the CF Tunnel bridge has an outage class (`ci/tunnel-connector-drift`), so 3 consecutive misses is not remote. It also under-fires the daily channel it compensates for |
 | **Every 3 days (~10×)** | Satisfies neither the "matches `luks-monitor.timer`'s daily cadence" argument nor the max-attempts argument, and buys nothing measurable since runner minutes are free on a public repo |
-| **Inngest cron → `workflow_dispatch`** (ADR-033 Option C, `cron-terraform-drift.ts` shape) | Circular: Inngest runs on the fleet whose volume this monitors, so the scheduler dies in exactly the scenario the monitor exists to detect — the same reason `scheduled-inngest-health.yml` is GHA-native. Also collapses the `schedule`-only alarm gate and moves the read-only guarantee into the dispatcher, where `seed_workspace_count` becomes settable. #4116 is the concrete cost of that dependency. **This rejection is what the ADR-033 addendum records** |
+| **Inngest cron → `workflow_dispatch`** (ADR-033 Option C, `cron-terraform-drift.ts` shape) | Circular: Inngest **executes** functions on the fleet whose volume this monitors — a single `sdk_url` callback pinned to web-1 — so the **dispatching function never runs** in exactly the scenario the monitor exists to detect (the *scheduler* itself moved to its own host at the #6178 cutover, ADR-100; it is EXECUTION that is pinned) — the same reason `scheduled-inngest-health.yml` is GHA-native. Also collapses the `schedule`-only alarm gate and moves the read-only guarantee into the dispatcher, where `seed_workspace_count` becomes settable. #4116 is the concrete cost of that dependency. **This rejection is what the ADR-033 addendum records** |
 | **Cron now, alarm in a follow-up PR** | The explicit anti-goal. Ships a monitor whose failures land in a tab nobody opens, and is strictly worse than today because it makes people believe the surface is monitored |
 | **Two alarm classes (`finding` / `cannot_measure`)** | Lets an open readiness issue swallow the *first* at-rest drift issue — the one alarm that fires counsel re-evaluation trigger (3). CLO ruling; see §Decision 2 |
 | **Auto-close every class on green** | A green run after a data-loss finding does not prove the missing workspaces came back, and for `drift` it would close a legal re-evaluation no human discharged. Same "certified green" shape the downward-re-seed guard already refuses |
@@ -1500,7 +1522,7 @@ Sentry monitor provides the standing verification a follow-through probe would h
 | **The Sentry monitor — the absence-detection layer — can itself be silently deactivated.** `expenses.md` records: at renewal, if PAYG cannot cover all active monitors, *"every monitor deactivates at once and check-ins are silently dropped"* (#3958). Next cliff 2026-08-16, ~9 monitors of headroom | Named, not papered over. This is why §L1 makes the **vendor-free** `gh run list --event=schedule --status=success` query the primary durable-evidence path, with the Sentry history as the second source. Link #3958 from the `cron-monitors.tf` comment. Do not present the monitor as a complete answer |
 | **The guards this PR adds do not run on PRs that would break them** | CTO BLOCKER-1 — fixed by the `infra-validation.yml` `paths:` addition, and it is Phase 1 step 1.0 precisely because everything else depends on it |
 | A daily prod SSH increases exposure to the pre-existing host-key TOFU gap; 8 lifetime operator-initiated root sessions become ~365/yr unattended | Named in §Encryption Posture with a tracking issue and an `expires_on`, and as one line in the PR body. Frequency-only increase; the credential and path are unchanged and shared with three other workflows |
-| Alarm spam during a multi-day bridge outage, or a flapping tunnel producing an issue per flap | Dedupe by label + exact title; comment on the existing `unavailable` issue; **reopen** a recently-closed one rather than creating a new one; comment only when `reason` changes. No ops-email on `unavailable` |
+| Alarm spam during a multi-day bridge outage, or a flapping tunnel producing an issue per flap | Dedupe by label + exact title; comment on the existing `unavailable` issue; ~~**reopen** a recently-closed one~~ (**SUPERSEDED by §Decision 2** — auto-close was cut, so nothing is ever closed to reopen); comment only when `reason` changes. No ops-email on `unavailable` |
 | A readiness issue masks a later drift issue | Three independent dedupe keys; `drift` has its own label and title |
 | GHA cron jitter, or a GitHub-dropped run, causes a false Sentry page (the #4189 regression) | `checkin_margin_minutes = 420` covers measured jitter (339 min) with headroom, and `failure_issue_threshold = 2` absorbs a lone dropped run — the pair is what makes a sub-1440 margin safe (§Decision 3) |
 | The baseline is lost on a rebuilt host, making every run red | `workspace_count_baseline_missing` routes to `unavailable`, whose issue body must name the seed remedy (`workflow_dispatch` with `seed_workspace_count` from an independent proof). Loud and actionable, never a vacuous green |

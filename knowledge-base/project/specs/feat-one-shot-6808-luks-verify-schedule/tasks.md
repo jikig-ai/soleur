@@ -146,10 +146,40 @@ it, and the classification contract must exist before anything consumes it.
 - [ ] 5.5 PR body uses `Ref #6808`, never `Closes`; includes the one-line note that this converts 8
       lifetime operator-initiated root SSH sessions into ~365/yr unattended ones
 
-## Post-merge (`/soleur:postmerge`, automated)
+## Post-merge
 
-- [ ] P.1 `gh workflow run workspaces-luks-verify.yml -f alarm_selftest=true`; confirm the
-      `[ci/luks-verify] SELF-TEST — ignore` issue is filed; close it. This is the only execution of
-      the alarm path against real GHA expression evaluation before a genuine failure
-- [ ] P.2 After the next 04:41 UTC: `gh run list --workflow=workspaces-luks-verify.yml
-      --event=schedule --limit 3` shows `conclusion=success`, and the Sentry monitor shows a check-in
+**Not run by `/soleur:postmerge`.** The earlier heading said "(`/soleur:postmerge`, automated)";
+that skill does not read this file, so nothing would have executed either step. Both are fully
+AGENT-DOABLE — every command below is `gh`/`curl`, no SSH, no dashboard, no judgement call — so
+they are agent tasks awaiting a run, not operator-manual steps. Stated plainly rather than left
+under a heading that claimed an automation that does not exist.
+
+The monitor itself needs no step here: `apply-sentry-infra.yml` applies
+`sentry_cron_monitor.workspaces_luks_verify` automatically on push to main
+(`paths: apps/web-platform/infra/sentry/**`). P.2 verifies that apply landed rather than performing it.
+
+- [ ] P.1 **Rehearse the alarm against real GitHub expression evaluation.** The committed suite
+      evaluates OUR MODEL of GHA expressions; this evaluates GitHub's, and it is the only execution
+      of the operator-reaching path before a genuine incident.
+      ```bash
+      gh workflow run workspaces-luks-verify.yml -f alarm_selftest=true
+      gh run watch "$(gh run list --workflow=workspaces-luks-verify.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+      gh issue list --label ci/luks-verify --search 'SELF-TEST' --state open --json number,title
+      # then close it — nothing in this workflow ever auto-closes:
+      gh issue close <n> --comment 'alarm_selftest rehearsal complete; alarm path proven reachable.'
+      ```
+      NOTE: the rehearsal exercises the ISSUE-filing path only. The `selftest` class is neither
+      `drift` nor `readiness`, so the ops-email step does not fire — the email channel stays
+      unrehearsed by design, since a rehearsal must not page ops.
+- [ ] P.2 **Confirm the first scheduled run and the monitor check-in.** After the next 04:41 UTC:
+      ```bash
+      gh run list --workflow=workspaces-luks-verify.yml --event=schedule --limit 3 \
+        --json databaseId,conclusion,createdAt
+      # the monitor, pulled rather than eyeballed (hr-no-dashboard-eyeball-pull-data-yourself):
+      doppler run -p soleur -c prd_terraform -- curl -sS \
+        -H "Authorization: Bearer $SENTRY_IAC_AUTH_TOKEN" \
+        "https://eu.sentry.io/api/0/organizations/jikigai-eu/monitors/workspaces-luks-verify/checkins/?per_page=5" \
+        | jq '.[] | {status, dateCreated}'
+      ```
+      Until this passes, the Article 30 register's monitor limb and the runbook's "silence is
+      covered too" line are the CONDITIONAL claims their temporal qualifiers say they are.

@@ -901,6 +901,13 @@ it.** Three reasons:
 - **The bounding fact is unchanged** — zero arms-length data subjects (#3723 OPEN, verified).
 
 **But the existing escalation is not sufficient either, for a reason today's run exposed.**
+> **SUPERSEDED ON MERGE 2026-08-03 (#6808 schedule PR) — retained as the finding's premise, not
+> as a current statement of fact.** The two sentences below were true when this amendment was
+> written and are FALSE from the merge of that PR: the workflow now carries a daily
+> `schedule: 41 4 * * *`, so there IS automatic verification. The finding they support stands —
+> the heartbeat remains dead and the schedule is a compensating control, not a replacement (see
+> rec 2 below, which is a CONJUNCTION).
+
 `workspaces-luks-verify.yml` is **`workflow_dispatch`-only** — its own header says so, and all
 four runs in its history are manual dispatches. So while #6808 is open there is **no automatic
 verification of any kind**: the heartbeat is the only continuous control and it is dead. Before
@@ -921,9 +928,11 @@ priority label is the wrong instrument for a change in kind.
    > alarm (`drift` / `readiness` / `unavailable`, the first being this audit's re-evaluation trigger
    > (3)), an ops-email page for the first two, and a Sentry Crons monitor covering the mode the
    > in-run alarm structurally cannot see: the run that never fires at all.
-2. **#6808 should not be closeable until either the heartbeat is wired *or* the schedule
-   exists.** Record that on the issue, so closing the narrow secret-wiring task cannot silently
-   retire the broader guarantee.
+2. **#6808 must not be closeable until the heartbeat is wired *AND* the schedule exists.**
+   (Drafted as "either ... or"; corrected to a conjunction on 2026-08-03 — see the note below,
+   and note that the correction is recorded on the ISSUE itself, not only here.) Record that on
+   the issue, so closing the narrow secret-wiring task cannot silently retire the broader
+   guarantee.
    > **CORRECTED 2026-08-03 (#6808 schedule PR). Read the disjunction as a CONJUNCTION.** As
    > drafted, "either ... or" was harmless while neither limb existed. Now that the schedule limb is
    > satisfied it would license closing #6808 with the heartbeat still dead — retiring the broader

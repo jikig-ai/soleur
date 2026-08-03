@@ -603,8 +603,13 @@ jobs:
         # `unavailable` deliberately gets NO direct page. A CF-edge outage or an SSH drop is a
         # can't-measure, and a per-run email on a flapping tunnel is noise the operator learns to
         # ignore. That is a decision about VOLUME AND FRAMING, not about channel: an `unavailable`
-        # still posts a Sentry `error` check-in, which routes to ops@jikigai.com through the
-        # issue-alert plane, where Sentry's own grouping dedupes it as a per-run email would not.
+        # still posts a Sentry `error` check-in. Be precise about what that buys, because the
+        # earlier wording here overstated it: at `failure_issue_threshold = 2` a SINGLE error
+        # check-in opens no Sentry issue and therefore sends no email. So on the FIRST
+        # `unavailable` night the operator-reaching channel is the `ci/luks-verify` GitHub issue
+        # this step files, and Sentry only joins on a second consecutive non-ok check-in. That is
+        # the deliberate trade — a flapping tunnel must not page per run — not a claim that the
+        # page happens anyway by another route.
         #
         # always() is load-bearing: with no status function GitHub ANDs an implicit success() into
         # this `if:`, making it unreachable on exactly the failing runs it exists for.

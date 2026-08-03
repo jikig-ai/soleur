@@ -183,9 +183,30 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    | `rc=3` `workspace_count_baseline_missing` | `unavailable` | No baseline persisted (or a `0`/non-numeric one) | Seed it once (above). Fail-closed by design |
    | `rc=3` `workspace_count_unreadable` | `unavailable` | The workspaces root could not be listed | Permission/IO fault on the root. Not a shrink; fix perms and re-dispatch |
    | `rc=3` `readiness_helper_unavailable` | `unavailable` | `workspaces-luks-emit.sh` missing/stale on the host | The assert cannot run; this run proves nothing. Reinstall via the cutover channel |
+   | `rc=1` `not_mounted` | `drift` | `/mnt/data` is not a mountpoint at all | **Encryption is not in effect** — the volume never attached, or was unmounted. Read §Rollback before re-cutting |
+   | `rc=1` `mapper_absent` | `drift` | The mount source is the mapper path but `/dev/mapper/workspaces` does not exist | **Encryption is not in effect.** Same path as `mount_not_mapper` |
+   | `rc=1` `cryptsetup_status_missing` | `unavailable` | The mapper node exists and IS serving the mount, but `cryptsetup status` failed | **Tooling/parse fault, not plaintext.** Reached only after mountpoint, mount-source and mapper-node checks all passed, so at-rest encryption is in effect. Check `cryptsetup` on the host |
+   | `rc=1` `mapper_device_link_missing` | `unavailable` | `cryptsetup status` succeeded but its `device:` line did not parse | **Parse fault, not data loss.** Same reasoning as above |
+   | `rc=1` `doppler_unreachable` | `unavailable` | The host could not read `WORKSPACES_LUKS_KEY` from Doppler | Probe-integrity: the escrow assert never ran. Check the boot token's `prd_workspaces_luks` scope |
+   | `app_health_structural` | `readiness` | `/health` returned a structural code (307/401/403/404/405/525/526) after the full retry budget | **Routing/endpoint regression the operator can act on.** Not data loss. Check the custom server and the CF route |
+   | `app_health_unreachable` | `unavailable` | `/health` exhausted its retry budget on a retryable CF-edge code | Transport outage. Nothing proven about the volume — do **not** run a data-recovery procedure |
+   | `verdict_line_absent` | `unavailable` | rc=0 but the readiness/inventory verdict line never appeared | The assert did not run (`LUKS_MONITOR_ASSERT_READYZ` lost before reaching the host). Treat as FAILED, re-dispatch |
+   | `ssh_transport_failure` | `unavailable` | rc=255 — SSH/CF-tunnel drop | **Not** a finding. Check the bridge step, re-dispatch |
+   | `bundle_or_tooling_missing` | `unavailable` | rc=127 — bundle failed to land or the script was not where the run expected it | **Not** a finding. Check the bundle-ship step |
+   | `bridge_web_host_ssh_missing` | `unavailable` | The CF Tunnel bridge did not export `WEB_HOST_SSH` | The run never reached web-1. Check the bridge step logs |
+   | `boot_token_missing` | `unavailable` | `WORKSPACES_LUKS_BOOT_TOKEN` absent | The escrow assert cannot run. Check repo secrets |
+   | `remote_bundle_dir_failed` | `unavailable` | Could not create the remote bundle directory on web-1 | Disk or permission fault on `/var/lib/workspaces-luks` |
+   | `scheduled_seed_refused` | `unavailable` | A **scheduled** run carried a seed input | Refused by design — the scheduled path is read-only and must never mutate host state. No action beyond noting it |
+   | `seed_not_positive_integer` | `unavailable` | `seed_workspace_count` was empty, zero, zero-padded, non-numeric, or >9 digits | Re-dispatch with a positive integer from an INDEPENDENT inventory proof. Zero and over-wide values are refused because both make the shortfall comparison unable to fail |
+   | `seed_below_existing_baseline` | `unavailable` | The seed would LOWER the recorded baseline | **Refused by design.** A downward re-seed masks a real shortfall — treat a shortfall as a data-recovery incident, not a seed |
+   | `seed_baseline_unreadable` | `unavailable` | The existing baseline could not be read, or is not a usable integer | Refused rather than seeding blind: a seed written without reading the current baseline can silently lower it. Re-dispatch once the tunnel is healthy |
+   | `seed_write_failed` | `unavailable` | The baseline write to web-1 failed | No baseline was recorded. Re-dispatch |
 
-   **Cutover-only reason codes (emitted by `app_canary`, NOT the verify workflow — the verify's
-   runner-side `/health` loop prints an `::error::` line, no reason code):** `health_probe_structural`
+   **Cutover-only reason codes (emitted by `app_canary`).** NOTE: the verify workflow's runner-side
+   `/health` loop DOES now emit its own reason codes as of #6808 — `app_health_structural` and
+   `app_health_unreachable`, both in the table above. The former wording ("no reason code") described
+   the pre-#6808 loop and is retained here only to mark what changed. The cutover-only codes are:
+   `health_probe_structural`
    (`/health` returned a structural 307/401/403/404/405/525/526 — endpoint regression, retrying will
    not help) and `health_probe_deadline` (`/health` never reached 200 in budget — slow boot, no
    route, or DNS). Also emitted only by the cutover: `workspace_count_persist_failed` (the baseline

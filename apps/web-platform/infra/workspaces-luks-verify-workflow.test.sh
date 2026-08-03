@@ -467,6 +467,105 @@ except (FileNotFoundError, AttributeError) as exc:
     check("the classification allowlists are derivable from the workflow and luks-monitor.sh",
           False, repr(exc))
 
+# --- (M2) THE EXIT-SITE MAP, asserted rather than sampled ---------------------------------------
+# The header states "(2) Is every exit site classified?" as a governing property, and the workflow
+# repeats it ("EVERY exit below is preceded by emit_class"). Both were prose: the behavioural
+# battery drives 13 fixtures and happens to cover most exits, which is coverage-by-example, not the
+# invariant — a new `|| { echo "::error::…"; exit 1; }` added anywhere passed every assertion.
+#
+# AC4's replacement verification (set-equality over messages and exit codes) was ALSO a one-time
+# manual check with nothing committed, replacing an AC whose whole point was to hold across future
+# edits. This is the committed form, and it asserts the property AC4 actually protects: an exit that
+# emits no class is an outcome the alarm cannot distinguish from "the step never ran".
+_lines = ra.splitlines()
+_EXIT_RE = re.compile(r"(^|[;&|]|\bthen\s+|\{\s*)\s*exit\b")
+_exit_sites = [(_i, _ln) for _i, _ln in enumerate(_lines)
+               if _EXIT_RE.search(_ln) and not re.match(r"\s*#", _ln)]
+_unclassified = []
+for _i, _ln in enumerate(_lines):
+    if (_i, _ln) not in _exit_sites:
+        continue
+    # SCOPE THE LOOKBACK, or the check is satisfied by an unrelated emit_class further up. A fixed
+    # N-line window is exactly that mistake: stripping emit_class from an inline
+    # `|| { echo …; exit 1; }` left a 6-line window still reaching the PREVIOUS guard's emit_class,
+    # and the mutant survived. Two rules instead:
+    #   - inline `{ …; exit N; }` one-liner  -> emit_class must be on THAT line; there is no
+    #     preceding statement inside that block.
+    #   - multi-line block                    -> walk back, stopping at any boundary (another exit,
+    #     `fi`, `esac`, `;;`, `else`) so a sibling branch's emit_class cannot vouch for this one.
+    _inline_block = bool(re.search(r"\{[^}]*\bexit\b", _ln))
+    if _inline_block:
+        if "emit_class" in _ln:
+            continue
+    else:
+        if "emit_class" in _ln:
+            continue
+        _ok = False
+        _j = _i - 1
+        while _j >= 0 and _j > _i - 12:
+            _prev = _lines[_j]
+            if "emit_class" in _prev:
+                _ok = True
+                break
+            # An `fi` directly above is NOT a boundary — it is a whole if/else whose arms may each
+            # emit a class, which is the shape of the rc=3 and rc!=0 branches. Walk back to the
+            # matching `if` (depth-tracked) and require EVERY arm to emit, so a block where only one
+            # arm classifies still fails.
+            if re.match(r"\s*fi\b", _prev):
+                _depth, _k = 1, _j - 1
+                while _k >= 0 and _depth:
+                    if re.match(r"\s*fi\b", _lines[_k]):
+                        _depth += 1
+                    elif re.match(r"\s*if\b", _lines[_k]):
+                        _depth -= 1
+                    _k -= 1
+                _blk = _lines[_k + 1:_j]
+                _arms, _cur = [], []
+                for _b in _blk:
+                    if re.match(r"\s*(else|elif)\b", _b):
+                        _arms.append(_cur); _cur = []
+                    else:
+                        _cur.append(_b)
+                _arms.append(_cur)
+                if len(_arms) >= 2 and all(any("emit_class" in _x for _x in _a) for _a in _arms):
+                    _ok = True
+                break
+            if re.search(r"^\s*(esac|;;)\b|\bexit\b", _prev):
+                break
+            _j -= 1
+        if _ok:
+            continue
+    _unclassified.append(f"L{_i + 1}: {_ln.strip()[:70]}")
+check("EVERY exit site in the reassert body is preceded by an emit_class "
+      "(an unclassified exit is indistinguishable from a step that never ran)",
+      not _unclassified, _unclassified[:4])
+# Non-vacuity control for the walk above: if the scan finds no exits at all it would pass trivially.
+check("the exit-site scan actually found exit sites (a zero-exit parse would pass vacuously)",
+      sum(1 for _ln in _lines if re.search(r"(^|[;&|]|\bthen\s+|\{\s*)\s*exit\b", _ln)
+          and not re.match(r"\s*#", _ln)) >= 10,
+      sum(1 for _ln in _lines if re.search(r"(^|[;&|]|\bthen\s+|\{\s*)\s*exit\b", _ln)))
+
+# --- (N) the runbook triage table is the THIRD copy of the classifier, so gate it ---------------
+# Every filed issue ends with "the verdict triage table maps every rc and reason to an
+# outcome_class and an operator response, no SSH required." That was a UNIVERSAL claim over a
+# hand-transcribed table that nothing compared against the producer — 18 reachable reasons had no
+# row, four of which file the p0 type/security at-rest issue and sent the reader to a table whose
+# nearest match prescribed a destructive re-cut. A claim in an alarm body is a promise made at the
+# worst possible moment, so it gets a guard.
+try:
+    rb = open("knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md").read()
+    lm_all = open("apps/web-platform/infra/luks-monitor.sh").read()
+    emit_all = open("apps/web-platform/infra/workspaces-luks-emit.sh").read() if __import__("os").path.exists("apps/web-platform/infra/workspaces-luks-emit.sh") else ""
+    reasons = set(re.findall(r"emit_(?:and|readiness_and)_die\s+([a-z_]+)", lm_all + emit_all))
+    reasons |= set(re.findall(r"emit_class\s+\w+\s+([a-z_]+)", ra))
+    reasons -= {"unparsed", "verified", "alarm_selftest"}   # sentinels, not diagnosable conditions
+    absent = sorted(r for r in reasons if r not in rb)
+    check("every reason the producer or workflow can emit has a row in the runbook triage table "
+          "(the alarm body promises the table maps EVERY rc and reason)",
+          not absent, absent)
+except FileNotFoundError as exc:
+    check("the runbook triage table is readable", False, repr(exc))
+
 for v in verdicts:
     print("\t".join(v))
 PY
@@ -1023,7 +1122,7 @@ printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # Set from the green count with a small slack for ordinary additions. Raise it when you add
 # assertions; if this ever fires, the question is which block stopped running, not what number to
 # lower it to.
-WF_MIN_ASSERTIONS=114
+WF_MIN_ASSERTIONS=117
 if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
   echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — fewer verdicts than expected; a green run here would be vacuous"
   exit 1
