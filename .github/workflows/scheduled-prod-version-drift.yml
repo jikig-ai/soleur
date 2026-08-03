@@ -178,7 +178,7 @@ jobs:
           # routes to the create branch, so an API blip files a DUPLICATE issue and re-sends the
           # first-detection email on every subsequent tick — destroying the one-issue-per-episode
           # property the close step depends on. Capture rc and treat a failed query as unknown.
-          EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "ci/prod-version-drift" \
+          EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "ci/prod-version-drift" -L 100 \
             --search "in:title \"$TITLE\"" --json number --jq '.[0].number' 2>/dev/null)"
           list_rc=$?
 
@@ -316,7 +316,7 @@ jobs:
           gh label create "ci/prod-version-drift" --repo "$GH_REPO" \
             --description "Standing alarm: production is serving a stale image" --color "B60205" 2>/dev/null || true
 
-          EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "ci/prod-version-drift" \
+          EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "ci/prod-version-drift" -L 100 \
             --search "in:title \"$TITLE\"" --json number --jq '.[0].number' 2>/dev/null)"
           list_rc=$?
 
@@ -442,7 +442,7 @@ jobs:
           # Deliberate: if an operator closes the issue without fixing the drift, the next tick
           # finds none open and files a NEW one. The condition is still true, so it stays visible.
           TITLE="[ci/prod-version-drift] Production is serving a stale build"
-          open_issues="$(gh issue list --repo "$GH_REPO" --state open --label "ci/prod-version-drift" \
+          open_issues="$(gh issue list --repo "$GH_REPO" --state open --label "ci/prod-version-drift" -L 100 \
             --search "in:title \"$TITLE\"" --json number --jq '.[].number' 2>/dev/null)"
           list_rc=$?
 
@@ -472,11 +472,17 @@ jobs:
         run: |
           set -uo pipefail
 
+          # `-L 100`: `gh issue list --search` caps at 30 rows without it, and this call
+          # ENUMERATES (.[].number) rather than probing existence — a truncated page would leave
+          # resolved issues open with no signal, which is the standing-noise failure the close
+          # step exists to prevent. The lookup sites take it too: they narrow with .[0], and a
+          # truncated page can hide the very issue dedupe depends on finding.
+          #
           # Recovery here is "the checker reached a verdict", which is true on BOTH exit 0 and
           # exit 1 — a sustained drift is a successful evaluation, so a fixed misconfiguration
           # must be allowed to close even while prod is still stale.
           TITLE="[ci/prod-version-drift] Version-drift check could not evaluate"
-          open_issues="$(gh issue list --repo "$GH_REPO" --state open --label "ci/prod-version-drift" \
+          open_issues="$(gh issue list --repo "$GH_REPO" --state open --label "ci/prod-version-drift" -L 100 \
             --search "in:title \"$TITLE\"" --json number --jq '.[].number' 2>/dev/null)"
           list_rc=$?
 
