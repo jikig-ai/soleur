@@ -668,8 +668,12 @@ jobs:
             printf 'response, no SSH required.\n'
           } > "$body_file"
 
-          # Dedupe by LABEL + exact TITLE, never `gh issue list --search`: the search API can return
-          # empty under some token contexts, which would file a fresh duplicate every single night.
+          # Dedupe by LABEL + exact TITLE, never by the issue-search API: that API can return empty
+          # under some token contexts, which would file a fresh duplicate every single night. The
+          # flag that would reach it is deliberately absent from this file, comments included —
+          # AC10 greps for it without stripping comments, on the same reasoning as the header's
+          # note about the API-prefixed health spelling: a prose mention would make the guard
+          # unable to distinguish "we use it" from "we explain why we do not".
           # `gh --jq` does not forward `--arg`, so the title match is a standalone second-stage jq.
           existing="$(gh issue list --repo "$repo" --label "ci/luks-verify" --state open --limit 100 \
             --json number,title | jq -r --arg t "$title" 'map(select(.title == $t)) | .[0].number // empty')"
