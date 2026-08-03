@@ -698,12 +698,19 @@ jobs:
           fi
           rm -f "$BODY"
 
-      # The close arm. Without it `coverage: multi-config` is observable only by opening
+      # The close arm. Without it `coverage: at-floor` is observable only by opening
       # a GREEN cron run's step log — which is the same "nobody opens it" problem the
       # file arm above exists to solve, just on the recovery side. It also made the
       # issue's own stated closing condition an operator step with no artifact behind it.
-      - name: Close the coverage issue once the fan-out is restored
-        if: always() && steps.token_drift.outputs.coverage == 'multi-config'
+      #
+      # It fires on `at-floor` — the state that means the credential reached at least
+      # every config the step demanded. `at-floor` KEEPS its name rather than becoming
+      # `full` even though the steady state is now 13/13: the state is defined against
+      # the DECLARED floor, not against the project, and a name asserting completeness
+      # would invite a future reader to gate on the inventory again.
+      - name: Close the coverage issue once the declared floor is met
+        id: coverage_close
+        if: always() && steps.token_drift.outputs.coverage == 'at-floor'
         continue-on-error: true
         timeout-minutes: 2
         env:
@@ -712,10 +719,13 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
           CONFIGS: ${{ steps.token_drift.outputs.configs }}
+          CONFIGS_FLOOR: ${{ steps.token_drift.outputs.configs_floor }}
+          COVERAGE_RATIO: ${{ steps.token_drift.outputs.coverage_ratio }}
         run: |
           set -uo pipefail
           LABEL="token-drift-coverage"
           RUN_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+          echo "channel_failed=false" >> "$GITHUB_OUTPUT"
           LIST_RC=0
           N=$(gh issue list --label "$LABEL" --state open -L 5 --json number --jq '.[0].number // empty') || LIST_RC=$?
           if (( LIST_RC != 0 )); then
@@ -723,10 +733,11 @@ jobs:
             exit 0
           fi
           [[ -n "$N" ]] || { echo "no open coverage issue to close."; exit 0; }
-          if gh issue close "$N" --comment "Coverage restored: run ${RUN_URL} reported \`coverage: multi-config\` (${CONFIGS} Doppler config(s) enumerated). Auto-closed. Note the count is a lower bound — it counts configs this token could enumerate, not the number that exist."; then
+          if gh issue close "$N" --comment "Coverage restored: run ${RUN_URL} reported \`coverage: at-floor\` at \`${COVERAGE_RATIO}\` — the credential read ${CONFIGS} of the 13 configs the committed inventory names, at or above the declared floor of ${CONFIGS_FLOOR}. That is 13/13 in the steady state, which is the #7159 Done-when condition met literally. Auto-closed. Note the gate is \`>=\`, not \`==\`: legitimate growth pushes the ratio above 1 and changes no state, and the ratio is REPORTED by the inventory rather than gated on it."; then
             echo "Closed coverage issue #${N}."
           else
-            echo "::error::token_drift_coverage_close_failed — coverage is multi-config but issue #${N} could not be closed; it will keep asserting a narrow scan."
+            echo "::error::token_drift_coverage_close_failed — coverage is at-floor (${COVERAGE_RATIO}) but issue #${N} could not be closed; it will keep asserting a coverage regression that this run says is repaired."
+            echo "channel_failed=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Open or update an action-required issue (token drift — DEAD credential)
