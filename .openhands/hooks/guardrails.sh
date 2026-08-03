@@ -16,10 +16,44 @@
 set -euo pipefail
 
 INPUT=$(cat)
-COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
-HOOK_CWD=$(echo "$INPUT" | jq -r '.working_dir // ""')
+
+# deny() is HOISTED above the extractions below, which now depend on it. It
+# needs jq, which the availability gate immediately below has already proven.
+deny() {
+  jq -n --arg reason "$1" '{"decision":"deny","reason":$reason}'
+  exit 2
+}
+
+# --- reason-class split (ADR-158 D3) ----------------------------------------
+# jq MISSING fails OPEN, loudly. ADR-157:115 rejects fail-closed here because
+# the repair for a broken PATH or a missing jq is itself a tool call that would
+# also be denied — and that argument bites HARDER on this harness, which has no
+# `ask`, no operator-in-the-loop escalation and no kill switch. A deny on this
+# class blocks its own repair.
+if ! command -v jq >/dev/null 2>&1; then
+  echo "[guardrails] jq missing — envelope unparseable, guards did NOT run for this call" >&2
+  exit 0
+fi
+
+# A document jq REJECTS is a different class and it DENIES. Until now these
+# three extractions ran under `set -euo pipefail` with no failure branch, so any
+# document jq rejected killed the script at this line — rc 5, no deny, no
+# decision JSON, no incident row — BEFORE the ADR-156 shape check below ever
+# ran. A lone surrogate in a sibling field is enough to induce it while
+# .tool_input.command stays a clean `rm -rf $HOME`: OpenHands is Python,
+# json.dumps re-emits \ud800, and the document is valid to its parser and
+# invalid to jq. Whether that was a silent bypass or a loud abort depended
+# entirely on how the runtime treats a non-0/2 exit code — an invariant this
+# repo does not define, which is exactly what ADR-156 forbids depending on.
+# The deny is recoverable in-band: the reason string returns to the agent,
+# which can re-send a well-formed envelope.
+COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null) \
+  || deny "BLOCKED: the tool-call envelope did not parse (ADR-156/ADR-158 D3). Hook stdin is model-controlled and untrusted; a hook that cannot read its input does not run its guards, so the call is refused rather than silently permitted. Re-send a well-formed envelope."
+HOOK_CWD=$(printf '%s' "$INPUT" | jq -r '.working_dir // ""' 2>/dev/null) \
+  || deny "BLOCKED: the tool-call envelope did not parse (ADR-156/ADR-158 D3). Re-send a well-formed envelope."
 # OpenHands file_editor uses "path"; fall back to "file_path" for compatibility.
-FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.path // .tool_input.file_path // ""')
+FILE_PATH=$(printf '%s' "$INPUT" | jq -r '.tool_input.path // .tool_input.file_path // ""' 2>/dev/null) \
+  || deny "BLOCKED: the tool-call envelope did not parse (ADR-156/ADR-158 D3). Re-send a well-formed envelope."
 
 # Freeze reader — cross-tree to the shared helper. freeze-lock.sh resolves the
 # freeze state file from its OWN BASH_SOURCE (three dirs up from
@@ -28,11 +62,6 @@ FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.path // .tool_input.file_path // 
 # shellcheck source=/dev/null
 source "$(dirname "${BASH_SOURCE[0]}")/../../.claude/hooks/lib/freeze-lock.sh" 2>/dev/null || true
 
-deny() {
-  jq -n --arg reason "$1" '{"decision":"deny","reason":$reason}'
-  exit 2
-}
-
 # --- ADR-156 (mirror): the HookEvent envelope is MODEL-CONTROLLED ------------
 # This port never calls eval, so it is not vulnerable to the #7164 code
 # execution. It is still EVADABLE by the same payload: `jq -r` renders a
@@ -40,20 +69,35 @@ deny() {
 # guards below, so an array .tool_input.command would slip every gate in this
 # file while looking like an ordinary empty command.
 #
-# Scoped deliberately NARROW — it fires only when the document PARSES and a
-# contracted field is the wrong TYPE. A transport failure keeps the pre-existing
-# behaviour, so this change cannot alter what happens on a jq hiccup.
+# This check fires when the document PARSES and a contracted field is the wrong
+# TYPE. The case where the document does NOT parse is handled ABOVE, by the
+# extraction failure branches — it is no longer reachable here.
+#
+# An earlier revision of this comment claimed the guard was "scoped deliberately
+# NARROW" so that "a transport failure keeps the pre-existing behaviour". That
+# was measured false in both directions and is corrected here: a document jq
+# rejected did not fall through to any pre-existing behaviour, it ABORTED the
+# script at the first extraction with no decision at all; and the `unparseable`
+# branch below is unreachable in practice, since it requires this shape program
+# to fail on a document the three simpler extractions above already parsed.
 #
 # The OpenHands protocol has no `ask` (ADR-157's posture in .claude/hooks/), so
 # the anomalous shape DENIES. No legitimate caller sends a non-string here, and
-# a deny is recoverable where a silent bypass is not. Converging the two
-# harnesses on one extractor is a tracked follow-up.
+# a deny is recoverable where a silent bypass is not.
+#
+# The `.tool_input` conjunct below reads `$t == "null"`, NOT `$t == null`: jq's
+# `type` returns the STRING "null", so the latter is unsatisfiable. Written that
+# way, this guard denied EVERY payload with an absent or null tool_input — an
+# availability failure on a harness with no `ask` and no recovery path, where
+# the .claude side parses the same payloads cleanly. It also falsified the
+# sentence above, since those documents parse fine and carry no wrong-typed
+# field. Measured both ways before and after.
 GR_ENVELOPE_SHAPE=$(printf '%s' "$INPUT" | jq -r '
   # NB the // operator is deliberately absent: in jq it is a FALSY-alternative,
   # so a JSON false would be rewritten to "" and pass the type check below
   # (measured on the .claude side before this was fixed). Only null defaults.
   if (type == "object")
-     and ((.tool_input? | type) as $t | $t == null or $t == "object")
+     and ((.tool_input? | type) as $t | $t == "null" or $t == "object")
      and ((.tool_input.command? | if . == null then "" else . end) | type == "string")
      and ((.working_dir? | if . == null then "" else . end) | type == "string")
      and ((if (.tool_input | has("path")) and (.tool_input.path != null) then .tool_input.path else .tool_input.file_path end | if . == null then "" else . end) | type == "string")

@@ -192,6 +192,91 @@ for hook in "$CLAUDE_HOOK" "$OPENHANDS_HOOK"; do
   fi
 done
 
+
+# ===========================================================================
+# ENVELOPE PARITY — the trust boundary, not just the merge gate (#7173).
+# ===========================================================================
+# The three cases below make the two harnesses' ENVELOPE handling executable.
+# Until now the divergence was documented in prose and asserted nowhere, which
+# is the same structural blindness the merge-gate half of this file exists to
+# fix — this file's own header records that silent divergence has happened
+# twice already.
+#
+# The two protocols differ by design and the cases assert the DIFFERENCE, not a
+# false symmetry:
+#
+#   reason class      .claude                    .openhands
+#   ----------------  -------------------------  --------------------------
+#   nonstring         ask   (ADR-157)            deny  (no `ask` exists here)
+#   unparseable       ask                        deny
+#   jq_missing        ask, printf envelope       fail OPEN, loudly
+#   absent tool_input parses cleanly             parses cleanly
+#
+# The `unparseable` row is written against MEASURED behaviour. An earlier draft
+# of this case asserted the mirror "falls through" on an unparseable envelope
+# and would have PASSED while asserting the opposite of the truth: the mirror's
+# own `unparseable` branch is unreachable (it requires the shape program to fail
+# on a document the simpler extractions already parsed), and before #7173 a
+# malformed document did not fall through at all — it aborted the script at rc 5
+# with no decision. Asserting "no deny on stdout" would have been satisfied by
+# that abort. It is asserted as a deny because that is what the mirror now does.
+#
+# `envelope_verdict` deliberately does NOT normalise the two protocols the way
+# `denied` above does: which harness denies and which asks IS the property.
+envelope_verdict() { # <hook> <payload> -> deny|ask|none|<other>
+  local hook="$1" payload="$2" out
+  out=$(printf '%s' "$payload" | "$hook" 2>/dev/null) || true
+  jq -r '(.hookSpecificOutput.permissionDecision // .decision // "none")' 2>/dev/null <<<"$out" \
+    || echo "none"
+}
+
+CLAUDE_GUARD="$SCRIPT_DIR/guardrails.sh"
+OPENHANDS_GUARD="$REPO_ROOT/.openhands/hooks/guardrails.sh"
+
+# A lone high surrogate in a SIBLING field. The command itself stays a clean,
+# fully-armed `rm -rf $HOME` — so this is not a malformed-command case, it is a
+# case where the guard cannot read an envelope that carries a live command.
+# OpenHands is Python: json.dumps re-emits \ud800, so the document is valid to
+# its parser and invalid to jq.
+SURROGATE_PAYLOAD="$(python3 -c 'import sys; sys.stdout.write("{\"working_dir\":\"\\ud800\",\"cwd\":\"/tmp\",\"tool_input\":{\"command\":\"rm -rf $HOME\"}}")' 2>/dev/null)"
+
+if [[ -z "$SURROGATE_PAYLOAD" ]]; then
+  echo "  SKIP: python3 missing — unparseable-envelope parity case"
+else
+  v="$(envelope_verdict "$CLAUDE_GUARD" "$SURROGATE_PAYLOAD")"
+  [[ "$v" == "ask" ]] && pass "[.claude] unparseable envelope ASKS (ADR-157)" \
+                      || fail "[.claude] unparseable envelope: want ask, got $v"
+  v="$(envelope_verdict "$OPENHANDS_GUARD" "$SURROGATE_PAYLOAD")"
+  [[ "$v" == "deny" ]] && pass "[.openhands] unparseable envelope DENIES (no ask in this protocol)" \
+                       || fail "[.openhands] unparseable envelope: want deny, got $v — before #7173 this aborted at rc 5 with NO decision at all"
+fi
+
+# Non-string: the original ADR-156 signature. Both must refuse to coerce; they
+# refuse with different verbs.
+NONSTRING_PAYLOAD='{"working_dir":"/tmp","cwd":"/tmp","tool_input":{"command":["git","stash"]}}'
+v="$(envelope_verdict "$CLAUDE_GUARD" "$NONSTRING_PAYLOAD")"
+[[ "$v" == "ask" ]] && pass "[.claude] non-string command ASKS" \
+                    || fail "[.claude] non-string command: want ask, got $v"
+v="$(envelope_verdict "$OPENHANDS_GUARD" "$NONSTRING_PAYLOAD")"
+[[ "$v" == "deny" ]] && pass "[.openhands] non-string command DENIES" \
+                     || fail "[.openhands] non-string command: want deny, got $v"
+
+# Absent / null tool_input. This is the case NEITHER of the two divergence
+# classes above would catch, and the mirror got it wrong in the AVAILABILITY
+# direction: its type conjunct read `$t == null` where jq's `type` returns the
+# STRING "null", so the comparison was unsatisfiable and every payload with an
+# absent or null tool_input was DENIED — on a harness with no `ask` and no
+# recovery path, while .claude parsed the same payloads cleanly.
+for payload in '{"working_dir":"/tmp","cwd":"/tmp"}' '{"working_dir":"/tmp","cwd":"/tmp","tool_input":null}'; do
+  label="$([[ "$payload" == *tool_input* ]] && echo "null" || echo "absent")"
+  v="$(envelope_verdict "$CLAUDE_GUARD" "$payload")"
+  [[ "$v" != "deny" ]] && pass "[.claude] $label tool_input is not denied ($v)" \
+                       || fail "[.claude] $label tool_input was DENIED — absence is legitimate"
+  v="$(envelope_verdict "$OPENHANDS_GUARD" "$payload")"
+  [[ "$v" != "deny" ]] && pass "[.openhands] $label tool_input is not denied ($v)" \
+                       || fail "[.openhands] $label tool_input was DENIED — the unsatisfiable \$t == null conjunct is back"
+done
+
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]] || exit 1

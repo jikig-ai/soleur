@@ -12,6 +12,20 @@ set -eo pipefail
 
 INPUT=$(cat)
 
+# --- reason-class split (ADR-158 D3) ----------------------------------------
+# jq MISSING fails OPEN, loudly: ADR-157:115 rejects fail-closed because the
+# repair for a broken PATH or a missing jq is itself a tool call that would also
+# be denied, and that bites harder here — this harness has no `ask`, no operator
+# escalation and no kill switch. A document jq REJECTS is a different class and
+# DENIES via the extraction failure branches below. Before this split, any
+# document jq rejected killed the script under `set -euo pipefail` with no deny,
+# no decision JSON and no incident row, leaving the outcome to depend on how the
+# runtime treats a non-0/2 exit code — an invariant this repo does not define.
+if ! command -v jq >/dev/null 2>&1; then
+  echo "[pre-merge-rebase] jq missing — envelope unparseable, guards did NOT run for this call" >&2
+  exit 0
+fi
+
 # deny() and the envelope guard are hoisted ABOVE the early-exit gates below.
 # Placement is the whole point: the gates at `grep -qE ... gh pr merge` and
 # `[[ ! -d "$WORK_DIR" ]]` CONSUME the very fields the guard validates, and
@@ -44,7 +58,7 @@ PMR_ENVELOPE_SHAPE=$(printf '%s' "$INPUT" | jq -r '
   # so a JSON false would be rewritten to "" and pass the type check below
   # (measured on the .claude side before this was fixed). Only null defaults.
   if (type == "object")
-     and ((.tool_input? | type) as $t | $t == null or $t == "object")
+     and ((.tool_input? | type) as $t | $t == "null" or $t == "object")
      and ((.tool_input.command? | if . == null then "" else . end) | type == "string")
      and ((.working_dir? | if . == null then "" else . end) | type == "string")
      and ((if (.tool_input | has("path")) and (.tool_input.path != null) then .tool_input.path else .tool_input.file_path end | if . == null then "" else . end) | type == "string")
@@ -53,7 +67,8 @@ if [[ "$PMR_ENVELOPE_SHAPE" == "nonstring" ]]; then
   deny "BLOCKED: the tool-call envelope carries a non-string field (e.g. an ARRAY tool_input.command). Hook stdin is model-controlled and untrusted (ADR-156); a non-string is never coerced, because the coerced value matches no guard and would bypass every gate in this hook. Re-send the command as a string."
 fi
 
-CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
+CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null) \
+  || deny "BLOCKED: the tool-call envelope did not parse (ADR-156/ADR-158 D3). Hook stdin is model-controlled and untrusted; a hook that cannot read its input does not run its guards, so the call is refused rather than silently permitted. Re-send a well-formed envelope."
 
 # Early exit: only intercept gh pr merge commands.
 if ! echo "$CMD" | grep -qE '(^|&&|\|\||;|\s--\s)\s*gh\s+pr\s+merge(\s|$)'; then
@@ -61,7 +76,8 @@ if ! echo "$CMD" | grep -qE '(^|&&|\|\||;|\s--\s)\s*gh\s+pr\s+merge(\s|$)'; then
 fi
 
 # Determine working directory from hook input.
-WORK_DIR=$(echo "$INPUT" | jq -r '.working_dir // ""')
+WORK_DIR=$(printf '%s' "$INPUT" | jq -r '.working_dir // ""' 2>/dev/null) \
+  || deny "BLOCKED: the tool-call envelope did not parse (ADR-156/ADR-158 D3). Hook stdin is model-controlled and untrusted; a hook that cannot read its input does not run its guards, so the call is refused rather than silently permitted. Re-send a well-formed envelope."
 if [[ -z "$WORK_DIR" ]] || [[ ! -d "$WORK_DIR" ]]; then
   exit 0
 fi
