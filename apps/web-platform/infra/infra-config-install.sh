@@ -3,7 +3,7 @@
 # /hooks/infra-config webhook handler (#4827, Ref #4804).
 #
 # WHY THIS EXISTS: infra-config-apply.sh runs as User=deploy (webhook.service).
-# Its 18 managed files live in root:root 0755 destination directories
+# Its managed files live in root:root 0755 destination directories
 # (/usr/local/bin, /etc/systemd/system, /etc/webhook). The deploy user cannot
 # mktemp inside those dirs — EACCES — so the handler could never land a single
 # file (the #4827 bug: every push wrote 0 files). systemd ReadWritePaths elevates
@@ -13,8 +13,9 @@
 # wildcard-free sudoers grant
 # (Cmnd_Alias INFRA_CONFIG_INSTALL = /usr/local/bin/infra-config-install). sudo
 # permits the bare command with ANY arguments — so the SECURITY BOUNDARY is here,
-# not in sudoers: the helper hardcodes the 18 allowlisted destinations and refuses
-# anything else. Because the helper runs as root it has no EACCES problem in the
+# not in sudoers: the helper hardcodes the allowlisted destinations (the DEST_SPEC
+# table below is the authority; infra-config-install.test.sh pins it in lockstep
+# with infra-config-apply.sh's FILE_MAP) and refuses anything else. Because the helper runs as root it has no EACCES problem in the
 # dest dirs: it mktemps in the destination directory itself and does a
 # same-filesystem atomic rename.
 #
@@ -162,6 +163,69 @@ if [[ "$dest_canonical" == /etc/default/* ]]; then
   # and NOT a well-formed assignment; anything > 0 is a malformed env file.
   bad_lines="$(grep -cvE '^[[:space:]]*($|#|[A-Za-z_][A-Za-z0-9_]*=)' "$tmp" || true)"
   [[ "$bad_lines" == "0" ]] || reject "envfile_shape:bad_lines=$bad_lines"
+fi
+
+# #7103 R2 — SHAPE GATE for systemd drop-in dests. THE SECURITY PRECONDITION OF THE
+# RESTART GRANT.
+#
+# Until now the gate above was the ONLY content validation in this helper, and it is scoped to
+# /etc/default/*. The three *.service.d/*.conf dests got none. That was survivable only because
+# nothing on this host root-restarted those units, so an unvalidated drop-in sat inert on disk.
+# The DROPIN_TRY_RESTART grant added alongside this removes exactly that property.
+#
+# systemd merges drop-ins AFTER the unit body, so a drop-in is not a weaker write than the unit:
+# it can set User=root on vector.service (which runs User=deploy), clear-and-replace ExecStart=
+# via the empty-assignment idiom, or add AmbientCapabilities=. webhook.service does not set
+# NoNewPrivileges, so nothing downstream re-narrows what a drop-in widens — this gate is the
+# only boundary on that path, on the one host with no orderable replacement.
+#
+# The permitted grammar is deliberately the NARROWEST that admits the payload we actually ship:
+# blank, comment, a bare [Service] header, Environment= and EnvironmentFile=. A directive
+# outside it is rejected by name rather than silently dropped. Note this is a per-PHYSICAL-line
+# check while systemd parses LOGICAL lines (a trailing backslash continues), and that asymmetry
+# is safe in the only direction that matters: a continuation can merge permitted lines into one
+# directive, never synthesise a directive whose first physical line this loop did not inspect.
+#
+# WHAT THIS GATE DOES NOT DEFEND AGAINST, stated plainly so nobody has to re-derive it:
+# `Environment=` is permitted, and it can set process-influencing variables — `LD_PRELOAD` being
+# the obvious one. Verified adversarially: that payload IS accepted.
+#
+# It is acceptable HERE, and the reason is specific rather than general. Both units the
+# DROPIN_TRY_RESTART grant covers run `User=deploy Group=deploy` (checked, not assumed:
+# inngest-bootstrap.sh's heartbeat heredoc and soleur-host-bootstrap.sh's vector heredoc), and
+# the handler writing these drop-ins ALREADY runs as deploy. So an env-var injection buys the
+# deploy user influence over a process the deploy user already owns — lateral, not escalation.
+# `User=` is on the forbidden list precisely so that stays true: without it a drop-in could
+# re-point either unit at root and the argument above would collapse.
+#
+# If a future unit running as root is ever added to RESTART_MAP, this gate is no longer
+# sufficient and `Environment=` must be narrowed to an explicit key allowlist.
+#
+# `grep -c` reads ALL input (no early close), so this cannot SIGPIPE the producer the way
+# `| grep -q` would under `set -o pipefail` — same reason as the env-file gate above.
+if [[ "$dest_canonical" == /etc/systemd/system/*.service.d/*.conf ]]; then
+  dropin_bad_lines="$(grep -cvE '^[[:space:]]*($|#|;|\[Service\][[:space:]]*$|Environment=|EnvironmentFile=)' "$tmp" || true)"
+  [[ "$dropin_bad_lines" == "0" ]] || reject "dropin_shape:bad_lines=$dropin_bad_lines"
+fi
+
+# #7103 R2 3.4 — preserve mtime on a content-identical install.
+#
+# This MUST live here and not only in the caller. In prod the caller stages into a
+# deploy-writable dir and this helper writes its own fresh temp in the destination directory,
+# so any mtime the caller preserved on ITS temp is discarded before the rename ever happens.
+# The reconciliation predicate keys on mtime, so without this a content-identical re-delivery
+# would look newer than the running process on EVERY apply and restart units that are not
+# stale — forever, and most visibly on vector, whose restart blinks the very log stream the
+# post-apply assertions are read through.
+#
+# sha256sum, never diff/cmp -l/od: one of these dests is the Doppler credential, and a
+# comparison that can echo its input prints the prd token into journald.
+if [[ -f "$dest" && ! -L "$dest" ]]; then
+  new_sha="$(sha256sum "$tmp" 2>/dev/null | awk '{print $1}')" || new_sha=""
+  old_sha="$(sha256sum "$dest" 2>/dev/null | awk '{print $1}')" || old_sha=""
+  if [[ -n "$new_sha" && "$new_sha" == "$old_sha" ]]; then
+    touch -r "$dest" "$tmp" 2>/dev/null || true
+  fi
 fi
 
 chmod "$mode" "$tmp" || install_fail "chmod"

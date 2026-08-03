@@ -396,6 +396,94 @@ assert "P1-SEC the DSN's @host:port diagnostic SURVIVES (userinfo redacted, not 
 assert "P1-SEC a credential-LESS internal URL passes through untouched (shape-based, not a '://' ban)" \
   "[[ \"\$BENIGN_SCRUBBED\" == \"\$BENIGN_FIXTURE\" ]]"
 
+
+# --- #7103 R1 (1.8): ci-deploy's journald channel, asserted in BOTH directions -----------
+#
+# During the 2026-08-01 recovery the deploy path's own stderr was the thing nobody could
+# read. `ci-deploy` IS in the Source 4 allowlist today -- but "is in the allowlist" and "is
+# actually shipped" are different claims, and the pair only holds if the allowlist entry and
+# the emitter's tag are the same string. An allowlist entry with no matching emitter is a
+# dead no-op, and an emitter whose tag is not allowlisted is silence that reads as health.
+# This file already guards that trap negatively for inngest-boot-phone-home (CF-4); this is
+# the positive case for the channel the incident actually needed.
+#
+# The tag is DERIVED from ci-deploy.sh, never restated. Two hardcoded copies of "ci-deploy"
+# would agree with each other while both disagreeing with the script -- a guard that passes
+# precisely when it is wrong. Deriving one side makes a rename fail here instead of in prod.
+CI_DEPLOY_SH="$SCRIPT_DIR/ci-deploy.sh"
+# `|| true` is load-bearing under this file's `set -euo pipefail`. This derivation feeds R1-1.8a,
+# whose entire job is catching a LOG_TAG rename — and on a rename the grep matches nothing, the
+# capture returns non-zero, and the suite DIES here rather than reporting. Measured: renaming
+# `readonly LOG_TAG=` took the suite from "79/79 passed" to no summary line, no FAIL:, and all
+# nine later assertions (R1-1.8a/b/c, R3-4.5a–f) never executing. The guard fired by killing the
+# run that would have reported it. The emptiness check on the next line is the real assertion.
+CI_DEPLOY_TAG="$(grep -oE '^readonly LOG_TAG="[^"]+"' "$CI_DEPLOY_SH" | head -1 | cut -d'"' -f2 || true)"
+
+assert "R1-1.8a: ci-deploy.sh declares exactly ONE literal LOG_TAG (derivation is unambiguous)" \
+  "[[ -n \"\$CI_DEPLOY_TAG\" ]] && [[ \"\$(grep -cE '^readonly LOG_TAG=' \"\$CI_DEPLOY_SH\")\" == 1 ]]"
+
+assert "R1-1.8b: ci-deploy.sh's LOG_TAG ('$CI_DEPLOY_TAG') IS in the Source 4 allowlist" \
+  "grep -qE \"^[[:space:]]*\\\"\$CI_DEPLOY_TAG\\\",?\\\$\" <<<\"\$HSJ\""
+
+# Corroboration, mirroring CF-4's shape: the allowlist entry is only load-bearing if the
+# script actually routes through `logger -t "$LOG_TAG"`. Without this, deleting every
+# logger call would leave 1.8b green against a channel that emits nothing.
+assert "R1-1.8c: ci-deploy.sh emits via logger -t \"\\\$LOG_TAG\" (the allowlist entry is not dead)" \
+  "grep -qE 'logger -t \"\\\$LOG_TAG\"' \"\$CI_DEPLOY_SH\""
+
+# --- #7103 R3 (4.5): the Source-4 POSITIVE CONTROL, tied to its wiring ---------------------
+#
+# betterstack-assert-absence.sh refuses to report `clean` unless it can read a canary back
+# through the sink for the host under test. That guarantee is only as good as the four links
+# below, and each one fails SILENTLY: a missing allowlist entry, a mismatched SyslogIdentifier,
+# a deleted emit, or an emit that runs inside the credential wrapper all produce the same
+# observable — no canary — which the helper then reports as `unshipping`. That is the correct
+# runtime behaviour, but it would be a permanent false alarm rather than a real signal, and the
+# operator would learn to ignore it (the review-fatigue class #6454 names).
+#
+# No new file and no mutation ceremony: these are one-line greps whose runtime backstop is
+# `unshipping` at the sink.
+ZOT_PROBE_SH="$SCRIPT_DIR/web-zot-consumer-probe.sh"
+ZOT_PROBE_UNIT="$SCRIPT_DIR/web-zot-consumer-probe.service"
+
+# (i) The probe's identifier is in Source 4's allowlist. include_matches.SYSLOG_IDENTIFIER is
+# exact-value equality, never a prefix match, so this is a byte-for-byte join.
+assert "R3-4.5a: web-zot-consumer-probe is in the Source 4 allowlist" \
+  "grep -qE '^[[:space:]]*\"web-zot-consumer-probe\",?\$' <<<\"\$HSJ\""
+
+# (ii) The unit sets that literal identifier. Derived from the unit rather than restated, so a
+# rename fails here instead of silently unshipping in prod.
+assert "R3-4.5b: the unit sets SyslogIdentifier=web-zot-consumer-probe (the join's other half)" \
+  "grep -qE '^SyslogIdentifier=web-zot-consumer-probe\$' \"\$ZOT_PROBE_UNIT\""
+
+# (iii) The probe still emits the marker the helper's control reads.
+# ANCHORED ON THE EMISSION, not the bare token. `grep -q 'SOLEUR_PROBE_CANARY'` matched the
+# VARIABLE NAME (SOLEUR_PROBE_CANARY_MARKER, the rate-limit path) as well as the echo, so
+# deleting the emit line entirely left this arm green — mutation-verified. A marker that is
+# named but never emitted is exactly the dead-allowlist-entry this assertion exists to rule out.
+assert "R3-4.5c: the probe EMITS SOLEUR_PROBE_CANARY (the allowlist entry is not dead)" \
+  "grep -qE '^[[:space:]]*echo \"\\[zot-probe\\] SOLEUR_PROBE_CANARY ' \"\$ZOT_PROBE_SH\""
+
+# (iv) THE 4.3 INVARIANT. The emit site must be OUTSIDE the `doppler run` wrapper.
+#
+# The ExecStart runs the probe inside `doppler run --project soleur --config prd`, so on a dead
+# prd token doppler exits before the probe ever execs. A canary emitted only from there is
+# gated behind the exact credential whose failure it is used to rule out — and its absence then
+# reads as "vector is dead" rather than "the token is dead". That inversion is what made
+# #7095's telemetry unfalsifiable. One refactor collapsing ExecStartPre back into ExecStart
+# would silently restore it, so it is pinned here.
+assert "R3-4.5d: the canary is emitted from an ExecStartPre OUTSIDE the doppler wrapper" \
+  "grep -qE '^ExecStartPre=-?/usr/local/bin/web-zot-consumer-probe\.sh --canary-only\$' \"\$ZOT_PROBE_UNIT\""
+assert "R3-4.5e: that ExecStartPre line does NOT route through doppler run" \
+  "! grep -E '^ExecStartPre=' \"\$ZOT_PROBE_UNIT\" | grep -q 'doppler'"
+# ORDERING, anchored on the BRANCH rather than on any occurrence of the flag name. The previous
+# form took `grep -n -- '--canary-only' | head -1`, and the first occurrence in the probe is a
+# COMMENT (line 86) explaining the flag, twelve lines above the code that implements it (line
+# 100). So moving the real branch BELOW the credential FATAL guards — the precise regression
+# this arm names — left it green while the mutant FATALed instead of emitting. Mutation-verified.
+assert "R3-4.5f: the --canary-only BRANCH precedes the credential FATAL guards" \
+  "[[ \"\$(grep -nE '^if \\[ \"\\\$\\{1:-\\}\" = \"--canary-only\" \\]' \"\$ZOT_PROBE_SH\" | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'ZOT_PULL_USER/ZOT_PULL_TOKEN unset' \"\$ZOT_PROBE_SH\" | head -1 | cut -d: -f1)\" ]]"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="
 if (( FAIL > 0 )); then

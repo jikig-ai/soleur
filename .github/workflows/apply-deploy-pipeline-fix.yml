@@ -414,6 +414,7 @@ jobs:
           fi
 
       - name: Export rendered credential digest (activates the gate's byte compare)
+        id: rendered_digest
         # #7095 review — WITHOUT THIS STEP THE TIER-2 COMPARE IS DEAD CODE. infra-config-gate.sh
         # reads INFRA_CONFIG_RENDERED_SHA_<DEST> and, absent it, verifies a template-backed dest
         # only at tier 1 (an ok entry with a non-empty sha256) — which cannot distinguish THIS
@@ -434,9 +435,18 @@ jobs:
           # strictly better than main, which skipped template dests entirely. Failing the apply
           # because an OPTIONAL digest could not be computed would add a new failure mode to the
           # sole no-SSH remediation path during an outage — the same reason the #7104 re-POST
-          # residual was deferred rather than bolted onto the fail-closed gate. So: no `set -e`,
+          # residual was deferred rather than bolted onto the fail-closed gate. So: errexit OFF,
           # and an explicit ::warning:: naming exactly what is disabled, so a silently-weaker
           # gate is never mistaken for a passing one.
+          #
+          # #7103 R4 — `set +e` is REQUIRED, not redundant. GitHub runs `run:` blocks as
+          # `bash -e {0}`, so errexit is ON before the first line of this script executes. The
+          # previous comment claimed "no `set -e`" and the body only ever added `-u` and
+          # `pipefail`, neither of which turns `-e` OFF. So the step's stated invariant — degrade,
+          # never block — was not in force: any unguarded non-zero would have aborted the step
+          # and failed the apply, which is the new failure mode this step was explicitly designed
+          # not to introduce on the sole no-SSH remediation path.
+          set +e
           set -uo pipefail
           # `nonsensitive()` is LOAD-BEARING, not a style choice. var.doppler_token is
           # `sensitive = true`, and sensitivity propagates through the local and through
@@ -461,6 +471,19 @@ jobs:
             terraform console -var="ssh_key_path=${CI_SSH_PUB}" \
             <<<'nonsensitive(base64encode(local.webhook_doppler_token_env))' 2>/dev/null)" || console_rc=$?
           b64="${b64//\"/}"
+          # #7103 R4 — MASK IT. This repository is PUBLIC (verified: `gh repo view --json
+          # visibility` = PUBLIC), and `nonsensitive()` above deliberately strips Terraform's
+          # protection, so $b64 holds a base64 of the LIVE prd Doppler token in plaintext. Nothing
+          # here prints it today, but the value is one stray `echo`, `set -x`, or debugging line
+          # away from a public Actions log — and a token in a public log is disclosed the moment
+          # it is written, not when someone reads it.
+          #
+          # Emitted BEFORE the decode/hash pipeline below, because a mask registered after a leak
+          # does not retroactively redact it. Guarded on non-empty: `::add-mask::` with an empty
+          # value is a no-op that GitHub warns about, and on the failure path $b64 is empty.
+          if [[ -n "$b64" ]]; then
+            echo "::add-mask::$b64"
+          fi
           sha=""
           # The hash pipeline stays byte-identical to the original (`base64 -d | sha256sum`,
           # no command substitution on the decoded bytes) so a trailing newline in the
