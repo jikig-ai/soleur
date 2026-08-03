@@ -180,7 +180,7 @@ which does not move.
     defect class as the entries above (an assertion that cannot observe the thing it claims), one
     layer out: the assertions were about FILES, and the claim was about PROCESSES.
     Recovery: #7146 folds unit reconciliation into the handler, grades it on effect rather than
-    exit code, and reports a per-unit verdict the CI gate adjudicates (ADR-155).
+    exit code, and reports a per-unit verdict the CI gate adjudicates (ADR-158).
     **Prevention:** when a change's stated outcome is a running process behaving differently, no
     file-level assertion discharges it — assert the process (`ExecMainStartTimestamp` advanced,
     `ActiveState` active), or say plainly that activation is unverified.

@@ -202,7 +202,7 @@ betterstack-assert-absence 23/23, web-zot-consumer-probe green. `terraform fmt -
 - 8.2 `shellcheck` on all 20 changed shell files; `actionlint` 1.7.12 clean on the one edited
   workflow (the plan said "two" — only `apply-deploy-pipeline-fix.yml` was touched).
 - 8.3 `AGENTS.md` (5290 B) and `AGENTS.rules.md` (37330 B) byte-identical to `origin/main`.
-- 8.4 every citation in ADR-155 / tasks.md / session-state resolves.
+- 8.4 every citation in ADR-158 / tasks.md / session-state resolves.
 
 **Plan arithmetic correction.** 8.1 says "baseline + 4"; the measured delta is **+5**. All five are
 plan-mandated — the two nested runners (2.1), `betterstack-assert-absence` (4.8),

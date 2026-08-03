@@ -242,7 +242,7 @@ adjudicate_infra_config() {
 
       # HARD FAIL: a restart was attempted and did not take. No host topology makes any of
       # these legitimate — each means the handler tried to activate a delivered drop-in and
-      # could not. This is ADR-155 proposition 1's defect exactly.
+      # could not. This is ADR-158 proposition 1's defect exactly.
       case "$reason" in
         noop_not_active|restart_did_not_advance|sudo_denied)
           echo "::error::infra-config activation FAILED for $unit: action=$action reason=$reason rc=$r_rc active=$r_active. The drop-in was delivered but the unit is not running it."

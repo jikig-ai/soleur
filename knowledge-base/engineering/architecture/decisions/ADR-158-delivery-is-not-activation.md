@@ -1,4 +1,4 @@
-# ADR-155 — Delivery is not activation: a config channel must reconcile the units it configures
+# ADR-158 — Delivery is not activation: a config channel must reconcile the units it configures
 
 - **Status:** Accepted
 - **Date:** 2026-08-02
@@ -12,8 +12,12 @@
   `apps/web-platform/infra/infra-config-install.sh` (the shape gate that had to ship first),
   `scripts/betterstack-assert-absence.sh` (the absence assertion that refuses to guess)
 
-> **Ordinal.** ADR-155 is the next free ordinal against a freshly fetched `origin/main` (highest
-> existing is ADR-154), verified at `/work` time. Provisional until `/ship` re-checks at merge.
+> **Ordinal.** Renumbered 155 -> 158 at `/ship` time. Three sibling PRs landed ADR-155 (cross-gate
+> exemption markers), ADR-156 and ADR-157 on `origin/main` while this pipeline was open. The
+> collision was invisible on the un-rebased branch — `check-adr-ordinals.sh` sees only the local
+> tree, so it stayed green here and would have gone red on `main` post-squash. The `/work`-time note
+> this replaces called the ordinal provisional and named the re-check; the re-check is what caught
+> it, one rebase later.
 
 ## Context
 
