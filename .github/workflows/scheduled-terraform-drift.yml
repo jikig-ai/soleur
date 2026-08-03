@@ -1448,7 +1448,7 @@ jobs:
           #
           # KEEP IN LOCKSTEP WITH `DOPPLER_CONFIGS_FLOOR` in the token_drift step above and with
           # the committed inventory; see the ratchet note in
-          # `apps/web-platform/infra/doppler-config-inventory.txt` and ADR-160's Known
+          # `apps/web-platform/infra/doppler-config-inventory.txt` and ADR-163's Known
           # limitations. Three literals, one number.
           RUNG2_CONFIGS_FLOOR: 13
         run: |

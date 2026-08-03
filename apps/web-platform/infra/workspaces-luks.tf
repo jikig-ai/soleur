@@ -77,7 +77,7 @@ resource "random_password" "workspaces_luks" {
 # ⚠️ THIS IS NOT LEAST PRIVILEGE, AND SAYING SO WOULD BE FALSE.
 # The inverse does NOT hold — established EMPIRICALLY (the learning cited below), NOT from the
 # blanket "a branch config INHERITS the full root secret set" premise, which #7159's 2026-08-02
-# census FALSIFIED (ADR-160). The measured conclusion is retained unchanged and is deliberately
+# census FALSIFIED (ADR-163). The measured conclusion is retained unchanged and is deliberately
 # not re-derived here:
 # `doppler_service_token.workspaces_luks` below resolves ~116 `prd` secrets including
 # SUPABASE_SERVICE_ROLE_KEY. It is materially a full-prd token. The repo established
@@ -115,7 +115,7 @@ resource "doppler_secret" "workspaces_luks_key" {
 # The host resolves the passphrase at unlock time via this token. `access = "read"`
 # is real (it cannot WRITE secrets) — but it is NOT a narrower READ scope than the
 # host's existing full-prd token: this token reads all ~116 prd secrets too — MEASURED, not
-# inferred from the "branch configs inherit the root" premise that #7159 falsified (ADR-160,
+# inferred from the "branch configs inherit the root" premise that #7159 falsified (ADR-163,
 # 2026-08-02 census; see the escrow comment above, #6167). Do not describe it
 # as least-privilege.
 #
