@@ -111,3 +111,15 @@ will reach for when deciding whether to tag a third rule.
 - Registered in `scripts/test-all.sh` as `-live` + `-unit`, so it runs in CI rather than pre-commit only.
 - `scripts/lint-orphan-test-suites.sh` exclusion list is now **empty** — the goal state.
 - ADR-158 records the corpus-is-authoritative decision and the supported tag vocabulary.
+
+## Session Errors
+
+1. **AC3 asserted `12 hook + 32 skill` tags from a naive `grep -oE '\[hook-enforced:'` prefix count; the derived figure is `10 + 30`.** The naive count included the tag-legend blockquote and two empty-bodied `[hook-enforced:]` prose mentions the full-tag regex correctly ignores. — **Recovery:** reconciled exactly (full-regex 11/31, body-line 10/30, one excluded line) and rewrote the AC to publish the command beside the number. — **Prevention:** already covered by `cq-assert-anchor-not-bare-token` and the work-skill "counts must be derived from the as-written file" bullet; this was a one-off failure to apply a known rule, not a gap.
+
+2. **`tr -d '`- '` emitted `range-endpoints … in reverse collating sequence order`** in a path-extraction one-liner. — **Recovery:** re-extracted with `sed 's/^- `//; s/`.*//'`. — **Prevention:** one-off; a `-` inside a `tr` set must be first or last, or escaped.
+
+3. **Three `test-all.sh` runs were reaped mid-flight** (`status: killed`, then `exit 144`, then a `Monitor` script reaped on the same clock), and a fourth sat lock-queued behind five sibling worktrees at load 55 on 16 cores. Each reaped run was clean — 459-470 suites `[ok]`, zero `[FAIL]`. — **Recovery:** distinguished reap-vs-failure mechanically (no `[FAIL]`, no terminal marker, no rc file), then relaunched detached with `setsid nohup` and sharded via `TEST_GROUP=`. — **Prevention:** routed to `plugins/soleur/skills/work/SKILL.md` as a bullet on the full-suite exit gate, since the failure is domain-scoped to that gate and `AGENTS.rules.md` is at its per-rule cap.
+
+4. **A `Monitor` watching for the run's rc file was itself killed at 144**, reporting a monitor failure that reads like a suite failure. — **Recovery:** re-armed under a ~9-minute timeout so it exits on its own clock. — **Prevention:** same routed bullet as #3.
+
+5. **Edited `plugins/soleur/skills/work/SKILL.md` via the bare-repo path while worktrees existed; the PreToolUse guard denied the write.** — **Recovery:** re-applied against the worktree-absolute path and verified with `git status --short` that the file was listed as modified. — **Prevention:** already hook-enforced (the guard fired and named the correct path) and already documented in compound's Route-to-Definition step; no new rule warranted.
