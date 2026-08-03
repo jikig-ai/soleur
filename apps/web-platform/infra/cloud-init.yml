@@ -133,9 +133,6 @@ write_files:
       # deploy-inngest-bootstrap.sudoers; keep the two in sync). try-restart, not
       # restart: an inactive unit stays inactive. Gated on the drop-in shape check
       # in infra-config-install; exact argv, no wildcards (sudo-rs safe).
-      # ONE unit: inngest-heartbeat.service is a timer-driven Type=oneshot with no
-      # RemainAfterExit, so daemon-reload plus its next tick activates the drop-in
-      # and the grant bought nothing.
       Cmnd_Alias DROPIN_TRY_RESTART = /usr/bin/systemctl try-restart vector.service
       deploy ALL=(root) NOPASSWD: DROPIN_TRY_RESTART
     owner: root:root
