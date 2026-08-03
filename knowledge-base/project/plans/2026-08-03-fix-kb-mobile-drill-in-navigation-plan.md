@@ -11,12 +11,45 @@ adr: ADR-158 (provisional ordinal — re-verify at /ship)
 related_adrs: [ADR-047, ADR-049, ADR-067]
 related_prs: [4810, 4871, 4911, 4915, 6874, 6915, 6917]
 milestone: "Phase 4: Validate + Scale"
-plan_revision: v2 (post plan-review — see Plan Review Revisions)
+plan_revision: v3 (post deepen-plan — see Plan Review Revisions and Deepen-Plan Revisions)
 ---
 
 # fix(kb): mobile drill-in navigation for the Knowledge Base 🐛
 
 `Closes #7186`
+
+## Enhancement Summary
+
+**Deepened on:** 2026-08-03 · **Revision:** v3 · **Sections enhanced:** 12
+**Lenses applied (10):** CTO · CPO · spec-flow-analyzer · kieran-rails-reviewer ·
+code-simplicity-reviewer · scoped strong-model advisor *(v2)* — then learnings-researcher ·
+architecture-strategist · test-design-reviewer · framework-docs-researcher *(v3)*
+
+### Key improvements
+1. **A single derived `treeHost` value** replaces two conditions in two files that happened to
+   agree (D5). Exactly one host in every reachable cell, as a property of one value rather than of
+   an 8-cell test matrix.
+2. **A silent capability deletion caught and reversed.** v2's shape left the mobile document route
+   with no tree anywhere — removing the only in-KB escape from the two document states that render
+   no header at all, while the plan asserted "no capability change". D5 keeps the drawer tree there.
+3. **Two ACs that were false on a correct implementation, fixed** — AC2 demanded `=== 1` in a cell
+   whose correct count was 0, and AC6 was vacuous because the suite it named never renders `KbLayout`.
+4. **Host asserted by containment, not by a testid the component emits about itself** — the v2
+   form would have agreed with the bug it was written to catch.
+5. **All six framework claims verified against installed versions** (React 19.1, Next 15.5,
+   Playwright 1.58) — including the one the plan *rejects* acting on: no documented mechanism exists
+   for the stale-`useMediaQuery` class, confirming the decision to close it empirically instead.
+
+### New considerations discovered
+- The drawer can empty itself mid-fetch on the mobile landing when `treeHost` flips — which is the
+  concrete functional argument for the drawer row the operator is being asked about (DC2).
+- The search query has a better home than the 382-line layout hook: `useNavResume` already owns its
+  two siblings, and using it removes a `tsc`-only trap and a fixture edit.
+- The collapsed-rail state is localStorage-persisted and breakpoint-agnostic, so a desktop-collapsed
+  user opens the mobile drawer to a branch that renders neither the empty-tree CTA nor "Sync now" —
+  pre-existing, but this plan promotes that path to the named recovery valve.
+- `production` hydration does **not** reconcile className mismatches, so a mismatch introduced into
+  the `fullWidth` block would be invisible in prod and self-correcting in dev.
 
 ## Overview
 
@@ -42,7 +75,13 @@ computes:
 | `>= 768px` | any | rail secondary slot (portal) | **unchanged** |
 | `< 768px` | `fullWidth` (loading / 503 / 404 / unknown / empty) | rail slot — **unchanged, still in the drawer** | the existing `fullWidth` state bodies — **unchanged** |
 | `< 768px` | populated, at `/dashboard/kb` | **content column** — the browse view | the tree |
-| `< 768px` | populated, at `/dashboard/kb/<path>` | not mounted (a document is open) | the document |
+| `< 768px` | populated, at `/dashboard/kb/<path>` | rail slot — **unchanged, still in the drawer** | the document |
+
+**One derived value selects the host** (`treeHost`, D5). The table above is not enforced by two
+independent conditions that happen to agree — it is a single `"rail" | "content"` value computed
+once in `useKbLayoutState` and consumed by both call sites. The content column hosts the tree only
+on a mobile, populated, landing render; **every other cell hosts it in the rail**, including the
+mobile document route, so the drawer keeps the tree exactly as it does today.
 
 Three properties fall out of that table, and they are what make this change small and safe:
 
@@ -104,6 +143,42 @@ re-litigated at `/work`.
 Also corrected from v1's own text: the e2e `DESKTOP` viewport is `1280×900` (`:383`), not
 `1280×800`; the mobile `test.use` blocks are `:901` and `:912`; `KbSyncStatus` in the rail footer
 is `kb-sidebar-shell.tsx:160`; `deriveContextPathFromPathname` is `use-kb-layout-state.tsx:40-46`.
+
+## Deepen-Plan Revisions (v2 → v3)
+
+Deepened by learnings-researcher, architecture-strategist, test-design-reviewer, and
+framework-docs-researcher. All six framework claims v2 depends on were **verified against the
+installed versions** (React ^19.1.0, Next ^15.5.21, Playwright ^1.58.2) — see Framework
+Verification below. Seven findings changed the plan.
+
+| # | Finding | Source | Resolution |
+|---|---|---|---|
+| R7 | **AC2 was false on a correct implementation.** At `{mobile, populated, /dashboard/kb/<path>}` v2's portal condition (`isDesktop \|\| fullWidth`) was `false` and `KbMobileLayout` rendered the doc shell — **zero** trees. v2's own state table and Test Scenario 2 said so, while AC2 demanded `=== 1` across all eight cells. This is the R6 defect class recurring on the *count* axis after R6 fixed it on the *fixture* axis. | architecture P0-1 **and** test-design Q1 (independently) | **D5** — a single derived `treeHost` value. Cell 7 becomes rail-hosted, so exactly one host holds in **all** cells and AC2 is literally true. AC2 is also restated as a per-cell host table, not a scalar. |
+| R8 | **Cell 7 silently deleted a capability.** Today a mobile user on a document has the whole tree in the drawer — doc→doc is two taps, and it is the **only** in-KB escape from the two document states that render no header at all (`[...path]/page.tsx:130-140` loading, `:159-170` generic error; the `not-found` branch at `:142-157` *does* carry a back link, so v2's Non-Goals #6 was over-broad). v2 emptied that slot while asserting the diff was "two DOM positions" with no capability change. | architecture P0-2 | D5 restores the drawer tree on mobile document routes. Non-Goals #6 and the User-Brand Impact wording are corrected. |
+| R9 | **The single-host property was emergent, not structural** — split across `isDesktop \|\| fullWidth` in one file and an `isContentView` branch reachable only under `!fullWidth && !isDesktop` in another, with no shared term. An 8-cell test matrix stood in for a guarantee. ADR-047 Decision 3 exists because a duplicated drill predicate is how drill state diverges. | architecture P0-3 | **D5** — `treeHost` derived once in `useKbLayoutState`, consumed by both call sites. ~6 lines; makes the invariant a property of one value. |
+| R10 | **The search-query lift had a better home.** Widening `UseKbLayoutStateResult` (already a 382-line hook owning four unrelated concerns) breaks a typed literal at `tsc` time. But `useNavResume` already owns exactly this concern for the query's two siblings — `readExpanded`/`writeExpanded` and `readScrollTop`/`writeScrollTop`. | architecture P1-2 | Route the query through `useNavResume` instead. The `tsc` trap and the `kb-reconnect-banner.test.tsx` fixture edit both evaporate. |
+| R11 | **Host asserted by a testid the component emits about its own placement is tautological.** If the implementer passes `host="content"` at the rail portal by mistake, the node renders *inside the rail slot* carrying `data-testid="kb-browse-tree"` and every testid-based assertion reports "it is in the browse host" — the test agrees with the bug. Separately, `kb-rail-tree` is attached even when the tree is DOM-removed (`kb-sidebar-shell.tsx:107` puts it outside the `collapsed ?` ternary — the file's own comment says so, and `e2e:604` asserts it attached alongside `kbLongFile` count 0), so v2's AC7 was green on a rail with no tree. | test-design Q2, Q6 | Host is asserted by **containment** (`toContainElement` / `secondarySlot(page).getByRole(...)`), and every host assertion names the `role="navigation"` node, never a wrapper testid alone. |
+| R12 | **AC6 was vacuous.** `test/nav-rail-drill.test.tsx` renders `<DashboardLayout><div>content</div></DashboardLayout>` and never imports `KbLayout` — with no KB layout in the tree there is no portal source, so "the rail slot contains no KB tree" is true for *every* implementation, including one that mounts no tree at all. | test-design Q6 | Relocated to the browse test under `RailSlotHarness`, where a KB layout actually exists. |
+| R13 | **AC3 was not machine-checkable and forbade correct refactors.** "`git diff` shows no hunk inside it" has no command and needs a human to eyeball a line range. | test-design Q6 | Replaced with the behavioural invariant it was proxying: render the `fullWidth` block at both `mockIsDesktop` values and assert identical `innerHTML`. That pins "no JS-gated DOM in the `fullWidth` block" — what D1 reason 1 actually requires — and survives refactoring. |
+
+Four in-scope changes had **no** coverage in v2 and now do: the `host` guard against
+`RailCollapsedProvider` leaking desktop collapsed state into the content column, the
+`KbErrorBoundary` move, the stopgap deletion, and DD1's outcome. One phantom reconciliation was
+deleted: v2's Phase 3.2 claimed the `#4915` landing-header case changes under DD1(a), but that
+case uses `EMPTY_TREE_FETCH()` → `fullWidth` → a block DD1(a) is forbidden to touch, so the two
+cannot meet (test-design Q4d).
+
+### Framework Verification (installed versions, not memory)
+
+| Claim | Verdict | Evidence |
+|---|---|---|
+| `createPortal` children read context from the **React** tree, not the DOM tree | **CONFIRMED** | React ^19.1.0 — react.dev/reference/react-dom/createPortal; the codebase already relies on it (`kb/layout.tsx:51-56`) |
+| Passing a **different container** to `createPortal` recreates the portal content | **CONFIRMED** | React docs, verbatim: "Passing a different DOM node during an update will cause the portal content to be recreated." This is what makes the rejected portal-destination-swap design worthless |
+| Conditionally returning `null` instead of calling `createPortal` is the sanctioned SSR-safe pattern | **CONFIRMED** | React's own error text instructs "Render them conditionally so that they only appear on the client render" |
+| A ref-callback-filled container means the portal renders neither on the server nor on the hydration render | **CONFIRMED** | Ref callbacks fire after render; `railSlotEl` is `null` in both passes. D1 reason 2 holds |
+| Next App Router **preserves** a segment layout across `/dashboard/kb` ↔ `/dashboard/kb/<path>` | **CONFIRMED** | Next ^15.5.21 — "On navigation, layouts preserve state, remain interactive, and do not rerender." Remount requires the segment itself or its dynamic params to change. This is what preserves `expanded` (and, after R10, the search query) |
+| A documented React 19 mechanism by which `useState(() => matchMedia(q).matches)` + `useEffect` returns a **stale** client value | **NO EVIDENCE** | No upstream issue, changelog entry, or documented behaviour found. The 2026-06-03 learning's call site no longer exists. Confirms D1/R2: do not modify the hook; close the risk empirically via AC7 |
+| Playwright `toBeAttached()` / `not.toBeAttached()` / `toHaveCount(0)` | **CONFIRMED** | Playwright ^1.58.2; `toBeAttached` since 1.33 and already used at `e2e:604` |
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -175,10 +250,17 @@ reachable from the UI.
 **Create `ADR-158` — "The KB file tree mounts by breakpoint: nav rail on desktop, content column
 on mobile."** In-scope task of THIS plan (Phase 4), per `wg-architecture-decision-is-a-plan-deliverable`.
 
-**Decision (one clause).** The KB's single browse surface has exactly one host at any instant,
-selected by state the KB layout already computes (`isDesktop`, `fullWidth`, `isContentView`): the
-rail portal on desktop and in every mobile non-populated state, the content column on mobile at
-the KB landing with a populated tree. A CSS dual-render of the tree is prohibited.
+**Decision (one clause).** Written **without naming implementation variables** — an ADR that names
+a local `const` is falsified by the next refactor (architecture P1-4):
+
+> The KB's single browse surface has exactly one host at any instant. The rail slot hosts it,
+> except on a below-`md` viewport at the KB landing with a populated tree, where the content column
+> does. It is never mounted in both, and never CSS-hidden in one.
+
+Cite today's expression (`treeHost`, D5) in **Consequences** as *the current implementation of* the
+clause, alongside the two structural safety facts: no JS-gated DOM in the `fullWidth` block, and
+`RailSlotPortal` returns `null` until its ref callback fires (`rail-slot.tsx:58-62`,
+`layout.tsx:161`, `:624`).
 
 **Alternatives Considered** — the two that were seriously weighed: the CSS `hidden md:flex` /
 `md:hidden` dual-render (rejected — ADR-047 rejects it and #6874 proved the regression), and a
@@ -191,9 +273,22 @@ flat nav stays in the drawer" rule. It has one known instance and one known coun
 constraint someone designs around in 2027. Non-Goals #10 states the observed fact without
 elevating it to a rule.
 
-**Amend `ADR-047`:** Decision 2's "drilled sections lift their secondary nav into the rail via a
-React portal" holds **at `md+`**, and below `md` for a section whose tree is not the primary
-content. Add ADR-158 to `related_adrs`. Do not touch its rejected-alternatives table.
+**Amend `ADR-047` as a dated append-only `## Amendment` section** — following that file's own
+precedent (it already carries a 2026-06-22 amendment) — and **do not edit Decision 2's sentence in
+place**, or the record of what was decided in 2026-06 is erased. The v2 wording (`md+` qualifier)
+was also simply wrong: the portal is live *below* `md` in every non-populated state, so the
+breakpoint is not the discriminator. And "a section whose tree is not the primary content" was the
+very generalisation this plan declines to record, in a vaguer form. Write the narrow clause:
+
+> **Amendment 2026-08-03 (#7186):** Decision 2 stands unqualified as the default. One scoped
+> exception (ADR-158): the KB's browse surface may render in the content column instead of the rail
+> slot when — and only when — the content column has no document to display and the viewport is
+> below `md`. It is never mounted in both hosts and never CSS-hidden in one. ADR-158 is the sole
+> authority on that condition; this ADR does not restate it.
+
+Add ADR-158 to `related_adrs`. Do not touch the rejected-alternatives table — the CSS-hide
+rejection is exactly what this plan honours. Keeping the exception's definition in one place avoids
+the split-authority failure ADR-047's own Decision 3 exists to prevent.
 
 Ordinal caveat: 158 is provisional. If renumbered at `/ship`, **sweep the whole artifact set in
 one edit** — `grep -rn 'ADR-158' knowledge-base/project/{plans,specs}/feat-one-shot-7186-kb-mobile-drill-in-nav/`
@@ -349,17 +444,31 @@ other use for.
 ### D2 — One prop on `KbSidebarShell`, not a file extraction
 
 `KbSidebarShell` differs between the two hosts in exactly two ways: `data-testid="kb-rail-tree"`
-and `useRailCollapsed()`. That is a prop, not a new module:
+and `useRailCollapsed()`. That is a prop, not a new module. Take a **named host**, not a boolean —
+`inRail={false}` is boolean-blind at the call site, and a named host composes directly with D5's
+`treeHost` value:
 
 ```tsx
-export function KbSidebarShell({ inRail = true }: { inRail?: boolean }) {
-  // RailCollapsedProvider wraps <main> too (layout.tsx:295-735), so a content-column
-  // host would otherwise inherit the DESKTOP rail's collapsed value and render the
-  // icon-only column in the content pane. The `&& inRail` is load-bearing.
-  const collapsed = useRailCollapsed() && inRail;
+export function KbSidebarShell({ host = "rail" }: { host?: "rail" | "content" }) {
+  // The rail's collapse axis is meaningless in the content column — and this guard cannot
+  // be moved to the provider. RailCollapsedProvider wraps <main> as well as the rail
+  // (layout.tsx:295-735) and MUST, because the portaled shell reads context through the
+  // REACT tree — i.e. from kb/layout.tsx, which sits under <main> (rail-slot.tsx:36-45).
+  // Narrowing the provider to the <aside> subtree would break ADR-047 Decision 2's
+  // context-follows-the-React-tree guarantee. Consumer-side disambiguation is the only
+  // available remedy, so this is a fix, not a workaround.
+  const collapsed = useRailCollapsed() && host === "rail";
   …
-  <div data-testid={inRail ? "kb-rail-tree" : "kb-browse-tree"} data-tour-id="action:kb-tree" …>
+  <div data-testid={host === "rail" ? "kb-rail-tree" : "kb-browse-tree"}
+       data-tour-id="action:kb-tree" …>
 ```
+
+Note for the test author: `data-testid="kb-rail-tree"` sits on the **outer wrapper, outside** the
+`collapsed ?` ternary (`kb-sidebar-shell.tsx:107` — the file's own comment says the wrapper
+"always renders to anchor present/absent assertions", and `e2e:604` asserts it attached while
+`kbLongFile` count is 0). So *attached* ≠ *tree present*, and a testid the component emits about
+its own placement cannot detect mis-placement. Every host assertion therefore names the
+`role="navigation"` node and asserts **containment** (R11).
 
 Four things this buys over v1's `KbTreePanel` extraction: no ~90-line file move; `data-tour-id`
 never has to be "carried" anywhere, so the guided-tour anchor (`components/tour/tour-steps.ts:126`)
@@ -387,11 +496,57 @@ had just created.
 So: `{isDesktop || fullWidth ? <KbSidebarShell /> : null}` inside the one `RailSlotPortal`.
 `RAIL_CLOSE_EVENT`, `kb-rail-browse-link.tsx`, and the extra layout listener are all cut.
 
+**Known transition — the drawer can empty itself mid-fetch.** On mobile at `/dashboard/kb`,
+`treeHost` flips over the fetch lifetime: `loading` → `"rail"` (tree in the drawer) → data lands
+populated → `"content"` (tree in the content column, portal null). A user who opened the hamburger
+*during* the fetch — which the #6917 stopgap explicitly trained them to do, and which is the only
+nav on that screen — sees the drawer's tree vanish while the drawer is open, leaving the empty
+secondary slot. The drawer auto-closes only on `[pathname]` (`layout.tsx:232-234`) and the pathname
+did not change. On a warm `swrKeys.kbTree()` cache (ADR-067) the window is near-zero; on a cold
+mobile load it is the length of the tree fetch. This is not the R4 dead tap re-litigated — that was
+a self-created affordance; this is a state-transition reconciliation. It is named in Test Scenarios
+and asserted in the e2e round trip.
+
 **If the operator wants the wireframe's "Browse files" row** (frame 34 shows one), implement it in
 `app/(dashboard)/layout.tsx` itself, where `setDrawerOpen` is already in scope (`:138`) and
 `drill === "kb"` is already computed from `segmentToDrillLevel` (`:199`) — a static link with no
 `KbContext` dependency has no reason to be portaled, and no new event is needed because the setter
-is right there. That is a Phase 0.4 decision, not an implementation default.
+is right there. **The transition above is the concrete functional argument for that row**: it is
+what the drawer would show instead of an empty slot. That is a Phase 0.4 decision (DC2), not an
+implementation default.
+
+### D5 — One derived `treeHost` value, not two conditions that happen to agree
+
+v2 selected the host with two expressions in two files sharing no term: `isDesktop || fullWidth`
+at the portal, and an `isContentView` branch inside `KbMobileLayout` reachable only when
+`!fullWidth && !isDesktop`. Mutual exclusion held only by a conjunction the code never stated, and
+an 8-cell test matrix stood in for the guarantee. ADR-047's Decision 3 exists precisely because a
+duplicated drill predicate is how drill state diverges — and it is enforced by a build-failing
+guard. v2 reintroduced that shape one level down.
+
+All three inputs already originate in `useKbLayoutState`. Name the value once:
+
+```ts
+// hooks/use-kb-layout-state.tsx — `fullWidth` moves here from kb/layout.tsx:37
+const fullWidth = loading || !!error || !hasTreeContent;
+const treeHost: "rail" | "content" =
+  !isDesktop && !fullWidth && !isContentView ? "content" : "rail";
+```
+
+`kb/layout.tsx` renders `{treeHost === "rail" && <KbSidebarShell />}` inside the one
+`RailSlotPortal`; `KbMobileLayout` renders `{treeHost === "content" ? <KbSidebarShell host="content" /> : <KbDocShell …/>}`.
+
+Four consequences, all of which resolve findings rather than adding scope:
+1. **Exactly one host in all 8 cells** — the mobile document route reverts to the rail, so AC2's
+   `=== 1` becomes literally true instead of false at one cell (R7).
+2. **The drawer keeps its tree on mobile document routes**, so the doc→doc path and the only
+   in-KB escape from the two headerless document states survive untouched (R8).
+3. The invariant becomes a property of **one value**, not of a test matrix (R9).
+4. `fullWidth` — on which D1's entire hydration argument rests — is named in **one** place instead
+   of recomputed in a layout file.
+
+AC3 is unaffected: it pins the `fullWidth` **JSX block**, and the `const` moves out of that block
+into the hook.
 
 ### DD1 — Who owns "back" on the mobile browse view (design decision — operator gate)
 
@@ -471,56 +626,138 @@ module mock (`vi.mock("@/hooks/use-media-query", () => ({ useMediaQuery: () => m
 `test/kb-layout-panels.test.tsx:15-17`). Land the invariant test before writing any component.
 
 1.1 `test/kb-layout.test.tsx` — generalise the existing "does not render FileTree twice at root
-path" case into the full matrix: `getAllByRole("navigation", { name: /knowledge base file tree/i })`
-has length **exactly 1** across **{desktop, mobile} × {`/dashboard/kb`, `/dashboard/kb/<path>`} ×
-{populated, empty}**, and across a desktop↔mobile mock flip. Assert *which host* holds it per cell
-(inside `rail-secondary-slot` vs not) — the count alone is a proxy; the host is the invariant.
-*Note for the implementer:* a synchronous JS ternary commits atomically, so the flip case cannot
-observe a transient double mount — it is there to catch a **portal that fails to unmount**, which
-is a real failure mode. Do not restate v1's incorrect rationale.
+path" case into an `it.each` **host table**, not a scalar count. Columns:
+`(isDesktop, pathname, fixture, expectedHost)` with `expectedHost ∈ {"rail","content"}`. Under D5
+every cell is exactly one tree, so the count assertion is `toHaveLength(1)` everywhere — but the
+**host** is the invariant, and it is asserted by **containment**, never by a wrapper testid (R11):
+
+```tsx
+const nav = await screen.findByRole("navigation", { name: /knowledge base file tree/i });
+const slot = screen.getByTestId("rail-slot-harness");
+expectedHost === "rail" ? expect(slot).toContainElement(nav)
+                        : expect(slot).not.toContainElement(nav);
+```
+
+Six cells, not eight — `{desktop, doc, empty}` and `{mobile, doc, empty}` are redundant with their
+landing rows for the host invariant (the tree host does not depend on the route in a `fullWidth`
+state), and each cell costs a full `KbLayout` render plus an SWR settle. Keep `{desktop, doc,
+populated}` as a cheap content-column regression guard.
+
+Plus a **desktop↔mobile flip**. Two implementer notes, both load-bearing:
+- Drive the flip with RTL `rerender()` **on the same tree**. `unmount()` + a fresh `render()` makes
+  the case tautologically green — a fresh render cannot have a stale portal, which is the only
+  failure mode this case exists to catch.
+- There is **no in-repo precedent for the flip**: `test/kb-layout-panels.test.tsx:14,90` and
+  `test/kb-layout-chat-close-on-switch.test.tsx:27,102` both declare `mockIsDesktop` and reset it
+  to `true` in `beforeEach`, and **neither ever sets it to `false`**. The precedent proves
+  *injection*, not flipping. Write it deliberately, and reset `mockIsDesktop`/`mockPathname` in
+  `beforeEach`.
+- A synchronous ternary commits atomically, so the flip cannot observe a transient double mount —
+  it is there to catch a **portal that fails to unmount**. Do not restate v1's incorrect rationale.
+
+Before writing any assertion that depends on a branch firing, run the 30-second trace from
+`knowledge-base/project/learnings/2026-05-07-test-assertion-must-verify-mock-activates-branch.md`:
+confirm the mock value actually activates the target branch.
+
+1.1b `test/kb-sidebar-shell-host.test.tsx` (new, component-level) — the single highest-value
+addition from the test-design review, and the only RED for the `host` guard (whose v2 mitigation
+was a code comment against a Medium-rated risk). Renders `KbSidebarShell` directly under
+`RailSlotHarness`, three cases:
+- `host="content"` → wrapper is `kb-browse-tree`;
+- `host="content"` under `<RailSlotHarness collapsed>` → **still** renders `SearchOverlay` +
+  `FileTree`, and does **not** render `kb-rail-collapsed-expand` (this is the
+  `RailCollapsedProvider`-wraps-`<main>` leak: without the guard a user who collapsed the desktop
+  rail and then opens on a phone gets a 56px two-icon strip as their entire browse view);
+- default `host` → `kb-rail-tree`, collapse still honoured.
+
+It also bisects the layout suite: a red cell in 1.2 otherwise has ~5 candidate causes.
 
 1.2 `test/kb-mobile-browse.test.tsx` (new) — written against the **layout**
 (`app/(dashboard)/dashboard/kb/layout.tsx`) with the mobile mock, **not** against a
 not-yet-existing component, so it fails on a missing `kb-browse-tree` query rather than a module
-resolution error. Cases: mobile + populated + landing → tree in the content column and the rail
-slot empty; mobile + populated + doc route → document, no tree; mobile + empty tree → the
-unchanged `fullWidth` body and the tree still in the rail slot; the search query survives
-landing → doc → landing.
+resolution error. Cases:
+- mobile + populated + landing → tree in the content column, rail slot holds no
+  `role="navigation"` named /knowledge base file tree/ **(this is where AC6 lives — it is vacuous
+  in `test/nav-rail-drill.test.tsx`, which never renders `KbLayout`, R12)**;
+- mobile + populated + doc route → document in the content column, tree back in the rail slot;
+- mobile + empty tree → the unchanged `fullWidth` body, tree in the rail slot;
+- **the `fullWidth` block is viewport-invariant** — render it at `mockIsDesktop` true and false and
+  assert identical `innerHTML`. This is the behavioural form of AC3 and pins D1 reason 1 (R13);
+- **the deleted stopgap** — "Open a file to see it here" is absent, and `DesktopPlaceholder` still
+  renders on the desktop landing (grep-verified: the stopgap block has **zero** references in
+  `test/` or `e2e/` today, so deletion breaks nothing — and equally nothing asserts it is gone);
+- **`KbErrorBoundary` coverage** — mock `@/components/kb/file-tree` to throw and assert the
+  fallback renders at **both** hosts (symmetry is the stated justification for moving the boundary
+  inside the shell; note `test/kb-sidebar-collapse.test.tsx` mocks `KbErrorBoundary` as a
+  pass-through, so the existing suite is blind to this);
+- **the search query survives landing → doc → landing.** Drive it by mutating `mockPathname` +
+  `rerender()` on the **same** tree (a fresh `render()` is not what a client-side nav does and
+  would pass for the wrong reason); mock `/api/kb/search` explicitly (the overlay has a 300ms
+  debounce that re-arms on the restored query — an unmocked timer firing after teardown is exactly
+  the cross-file leak `isolate: true` exists for); and assert on `findByDisplayValue`, not on
+  results, or it becomes a network test;
+- **DD1's outcome**, if the operator picks option (a): the populated browse view renders exactly
+  one back affordance and it points at `/dashboard`.
 
 1.3 `e2e/nav-states-shell.e2e.ts` — extend the existing authenticated describe blocks (verified:
 `nav-states visual gate — desktop` at `:418` / `test.use({ viewport: DESKTOP })` at `:419`;
 `nav-states visual gate — mobile` at `:911` / `:912`; `DESKTOP = { width: 1280, height: 900 }` at
 `:383`, `MOBILE = { width: 390, height: 844 }` at `:384`; the `kbRailTree` locator at `:403` is
 already asserted `toBeAttached()` at `:604`):
-- 1280×900, populated: `kb-rail-tree` attached, `kb-browse-tree` **not** attached;
-- 390×844, populated: `kb-browse-tree` attached, `kb-rail-tree` **not** attached;
-- 390×844, **empty** tree (the fixture already used at `:948-953`): `kb-rail-tree` attached,
-  `kb-browse-tree` **not** attached — the unchanged path;
+Assert the host by **containment against the real slot**, using the `secondarySlot(page)` locator
+that already exists at `:400` — `kb-rail-tree` attached is NOT evidence the tree is present (the
+wrapper renders unconditionally; `:604` asserts it attached while `kbLongFile` count is 0, R11):
+
+```ts
+const kbTree = (p: Page) => p.getByRole("navigation", { name: /knowledge base file tree/i });
+```
+
+- 1280×900, populated: `secondarySlot(page).locator(kbTree)` visible; `kb-browse-tree` count 0;
+- 390×844, populated, landing: `kb-browse-tree` contains the tree; `secondarySlot` does not;
+- 390×844, populated, **document route**: tree is back in `secondarySlot`; `kb-browse-tree` count 0
+  (the D5 cell that keeps doc→doc working);
+- 390×844, **empty** tree (the fixture already at `:948-953`): tree in `secondarySlot` — unchanged;
 - 390×844 round trip: tap a file row → document → tap "Back to file tree" → browse view restored
-  with **no** full page load;
-- 768×1024, the switch point, per the operator's 0.2/DD1 outcome.
+  with **no** full page load. Use a **sentinel**, not a navigation-event listener:
+  `await page.evaluate(() => { window.__kbNoReload = true })` before tapping, assert it is still
+  `true` after tapping back. `page.on("framenavigated")` fires on same-document navigations in
+  Chromium and would go red on a *correct* SPA transition. Prefer a web-first assertion on the
+  row's interactivity over copying the `waitForTimeout(1500)` hydration sleep the neighbouring
+  mobile block uses at `:911`;
+- 390×844 **drawer-during-fetch**: open the hamburger while the tree is loading, let it resolve
+  populated, assert the drawer does not present an empty secondary slot (D3's named transition);
+- **768×1024 — UNCONDITIONAL.** v2 made this arm conditional on the DD1 outcome; that was wrong.
+  Because every unit test mocks `useMediaQuery`, **no unit test ever exercises the string
+  `(min-width: 768px)`** — a typo to `(min-width: 786px)` passes the entire matrix. This arm is the
+  only guard on the breakpoint literal. `(min-width: 768px)` matches at exactly 768, so the
+  expected result is the rail host, deterministically.
 
 Run all three; confirm each fails on an assertion, not an import.
 
 ### Phase 2 — GREEN
 
-2.1 `components/kb/kb-sidebar-shell.tsx` — add the optional `inRail` prop per D2: gate
-`useRailCollapsed()` with `&& inRail` (with the `RailCollapsedProvider`-wraps-`<main>` comment),
-switch the wrapper `data-testid`, keep `data-tour-id="action:kb-tree"` on that same wrapper, and
-move `KbErrorBoundary` inside so both hosts inherit it.
+2.0 `hooks/use-kb-layout-state.tsx` — derive `treeHost` per D5: move `fullWidth` in from
+`kb/layout.tsx:37`, compute `treeHost: "rail" | "content"`, and export both. This is the change
+that makes the single-host property structural.
+
+2.1 `components/kb/kb-sidebar-shell.tsx` — add the optional `host?: "rail" | "content"` prop per
+D2 (a named host, not a boolean): gate `useRailCollapsed()` with `&& host === "rail"` and carry the
+"the provider cannot be narrowed without breaking ADR-047 Decision 2" comment, switch the wrapper
+`data-testid`, keep `data-tour-id="action:kb-tree"` on that same wrapper, and move
+`KbErrorBoundary` inside so both hosts inherit it.
 
 2.2 `app/(dashboard)/dashboard/kb/layout.tsx` — the portal becomes a single condition on state the
 file already computes, with the D1-reason-2 comment attached:
 
 ```tsx
-<RailSlotPortal>{isDesktop || fullWidth ? <KbSidebarShell /> : null}</RailSlotPortal>
+<RailSlotPortal>{treeHost === "rail" ? <KbSidebarShell /> : null}</RailSlotPortal>
 ```
 
 **Nothing else in this file changes.** The `fullWidth` block keeps its existing `md:hidden` header
 and state bodies byte-for-byte — no sync footer, no back arrow, no JS-gated DOM (D1 reason 1, R1).
 
-2.3 `components/kb/kb-mobile-layout.tsx` — branch the content column:
-`isContentView ? <KbDocShell isContentView>{children}</KbDocShell> : <KbSidebarShell inRail={false} />`.
+2.3 `components/kb/kb-mobile-layout.tsx` — branch the content column on the same one value:
+`treeHost === "content" ? <KbSidebarShell host="content" /> : <KbDocShell isContentView>{children}</KbDocShell>`.
 Update the ADR-047 comment at `:30-33`, which currently asserts the opposite ("The doc always fills
 the content area here"). Apply the operator's DD1 outcome here — **populated view only**.
 
@@ -533,12 +770,21 @@ asserting a doc-view back-suppression the code does not perform. If the operator
 "Browse files" row, add it here (setter and `drill` are already in scope) — not as a portaled
 component.
 
-2.6 `components/kb/search-overlay.tsx` + `hooks/use-kb-layout-state.tsx` — lift the search query so
-it survives the drill-in (the one regression this diff would otherwise introduce). Per
-`hr-type-widening-cross-consumer-grep`, widening `UseKbLayoutStateResult` breaks the fully-typed
-literal `function makeState(): UseKbLayoutStateResult` at
-`test/components/kb/kb-reconnect-banner.test.tsx:51-75` — a **`tsc` failure, not a test failure**,
-so a vitest run would not surface it. Enumerate and update that consumer in the same commit.
+2.6 `hooks/use-nav-resume.ts` + `components/kb/search-overlay.tsx` — persist the search query so it
+survives the drill-in (the one regression this diff would otherwise introduce: the mobile host
+unmounts on navigation where the portal did not). **Route it through `useNavResume`, not
+`useKbLayoutState`** (R10): that hook already owns exactly this concern for the query's two
+siblings — `readExpanded`/`writeExpanded` and `readScrollTop`/`writeScrollTop` — so the query is
+the third member of an existing family rather than a fifth unrelated concern bolted onto a
+382-line hook. Add `readSearchQuery`/`writeSearchQuery`; `SearchOverlay` seeds its `useState` from
+it and writes on change.
+
+Two consequences of choosing `useNavResume`: `UseKbLayoutStateResult` is **not** widened, so the
+`tsc`-only trap at `test/components/kb/kb-reconnect-banner.test.tsx:51-75` and its fixture edit
+both evaporate; and seeding is one frame late because `useNavResume` gates reads on `workspaceId`
+— acceptable for a search input, and identical to how `expanded` already behaves. Reset the query
+on workspace change so it does not leak between workspaces
+(`knowledge-base/project/learnings/2026-04-17-kb-chat-stale-context-on-doc-switch.md`).
 
 2.7 Confirm the `RAIL_EXPAND_EVENT` census stays coherent after 2.4: remaining dispatchers are
 `kb-sidebar-shell.tsx` (collapsed rail, desktop-only) and `components/tour/tour-provider.tsx`; the
@@ -615,6 +861,7 @@ this host): desktop, **tablet at exactly 768px**, and mobile (constitution line 
 | Path | Purpose |
 |---|---|
 | `apps/web-platform/test/kb-mobile-browse.test.tsx` | Mobile browse-view coverage, written against the layout |
+| `apps/web-platform/test/kb-sidebar-shell-host.test.tsx` | Component-level `host` prop coverage — the RED for the `RailCollapsedProvider` leak, and the bisect for the layout suite |
 | `knowledge-base/engineering/architecture/decisions/ADR-158-kb-file-tree-mounts-by-breakpoint.md` | The decision record |
 | `knowledge-base/product/design/navigation/screenshots/37-*.png` | The 768px tablet frame (Phase 0.2) |
 
@@ -625,31 +872,34 @@ this host): desktop, **tablet at exactly 768px**, and mobile (constitution line 
 
 | Path | Change |
 |---|---|
-| `apps/web-platform/components/kb/kb-sidebar-shell.tsx` | Optional `inRail` prop; `useRailCollapsed() && inRail`; testid switch; `KbErrorBoundary` moved inside |
-| `apps/web-platform/app/(dashboard)/dashboard/kb/layout.tsx` | Portal condition `isDesktop \|\| fullWidth` + the D1-reason-2 comment. **Nothing else.** |
-| `apps/web-platform/components/kb/kb-mobile-layout.tsx` | Branch on `isContentView`; correct the ADR-047 comment (`:30-33`); DD1 header (populated view only) |
+| `apps/web-platform/hooks/use-kb-layout-state.tsx` | **D5** — own `fullWidth` (moved in from the layout) and derive `treeHost: "rail" \| "content"` |
+| `apps/web-platform/components/kb/kb-sidebar-shell.tsx` | Optional `host?: "rail" \| "content"`; `useRailCollapsed() && host === "rail"`; testid switch; `KbErrorBoundary` moved inside |
+| `apps/web-platform/app/(dashboard)/dashboard/kb/layout.tsx` | Portal condition `treeHost === "rail"` + the D1-reason-2 comment; `fullWidth` now read from the hook. **Nothing else.** |
+| `apps/web-platform/components/kb/kb-mobile-layout.tsx` | Branch on `treeHost`; correct the ADR-047 comment (`:30-33`); DD1 header (populated view only) |
+| `apps/web-platform/hooks/use-nav-resume.ts` | `readSearchQuery`/`writeSearchQuery` (2.6) |
 | `apps/web-platform/components/kb/kb-doc-shell.tsx` | Delete the unreachable `md:hidden` stopgap (`:32-48`) + its `RAIL_EXPAND_EVENT` import |
 | `apps/web-platform/app/(dashboard)/layout.tsx` | Remove the dead `inKbDocView` (`:229`) + its false comment; optional D3 row if the operator wants it |
-| `apps/web-platform/components/kb/search-overlay.tsx` | Read/write the lifted query |
-| `apps/web-platform/hooks/use-kb-layout-state.tsx` | Own the persisted search query (type widening — see 2.6) |
-| `apps/web-platform/test/kb-layout.test.tsx` | Full single-host matrix; DD1-dependent `#4915` correction |
+| `apps/web-platform/components/kb/search-overlay.tsx` | Seed from / write to `useNavResume`; reset on workspace change |
+| `apps/web-platform/test/kb-layout.test.tsx` | Six-cell host table + the `rerender()` flip (the `#4915` case needs **no** change — see Phase 3.2) |
 | `apps/web-platform/test/kb-sidebar-collapse.test.tsx` | Desktop (ADR-047 contract) + mobile-empty arms |
 | `apps/web-platform/test/kb-tree-scroll-resume.test.tsx` | Mobile arm |
-| `apps/web-platform/test/components/kb/kb-reconnect-banner.test.tsx` | `makeState()` literal + arm pinning |
+| `apps/web-platform/test/components/kb/kb-reconnect-banner.test.tsx` | `makeState()` literal gains `treeHost`/`fullWidth`; arm pinning |
 | `apps/web-platform/e2e/nav-states-shell.e2e.ts` | Both-viewport host assertions, empty-tree arm, 768px, drill-in round trip |
 | `knowledge-base/engineering/architecture/decisions/ADR-047-nav-context-band-outside-swap.md` | `md+` qualifier; `related_adrs` |
 
-**Not edited (deliberately):** `hooks/use-media-query.ts` (D1), `hooks/use-is-mobile.ts`,
-`components/dashboard/rail-slot.tsx` (D3 — no new event), `components/kb/file-tree.tsx`,
-`components/kb/kb-content-header.tsx` (its back chevron already does the right thing),
-`components/kb/kb-desktop-layout.tsx`, `components/kb/kb-sync-status.tsx`,
-`hooks/segment-to-drill-level.ts`.
+**Not edited (deliberately):** `hooks/use-media-query.ts` (D1 — the hook itself is untouched),
+`hooks/use-is-mobile.ts`, `components/dashboard/rail-slot.tsx` (D3 — no new event),
+`components/kb/file-tree.tsx`, `components/kb/kb-content-header.tsx` (its back chevron already does
+the right thing), `components/kb/kb-desktop-layout.tsx`, `components/kb/kb-sync-status.tsx`,
+`hooks/segment-to-drill-level.ts`, `components/kb/index.ts` (verified: it exports neither
+`FileTree` nor `KbSidebarShell`, and v3 creates no new component, so the barrel needs no change).
 
 ## Acceptance Criteria
 
-Nine pre-merge criteria, each a checkable post-condition on file state, command output, or observed
-behaviour. *(v1 had twenty; eleven were cut as ceremony — restating a phase instruction, asserting
-that a test asserts something, or naming a precondition for opening any PR at all.)*
+Eleven pre-merge criteria, each a checkable post-condition on file state, command output, or
+observed behaviour. *(v1 had twenty; eleven were cut as ceremony — restating a phase instruction,
+asserting that a test asserts something, or naming a precondition for opening any PR at all. v3
+then split AC5 into two atomic criteria and added AC7b for the four changes v2 left uncovered.)*
 
 ### Pre-merge (PR)
 
@@ -657,23 +907,52 @@ that a test asserts something, or naming a precondition for opening any PR at al
   content column (`kb-browse-tree` present, containing a `role="navigation"` named /knowledge base
   file tree/) and the rail secondary slot is empty. With an **empty** tree the same route is
   unchanged from today: the `fullWidth` body in the content column and `kb-rail-tree` in the rail.
-- **AC2** — **Exactly one** file-tree instance mounts, and in the expected host, across
-  **{desktop, mobile} × {`/dashboard/kb`, `/dashboard/kb/<path>`} × {populated, empty}** and across
-  a desktop↔mobile mock flip. Length **=== 1**, never `<= 1`.
-- **AC3** — Desktop KB behaviour is unchanged, and the `fullWidth` block in
-  `app/(dashboard)/dashboard/kb/layout.tsx` is **byte-for-byte unchanged** (`git diff` shows no hunk
-  inside it) — the structural guarantee behind D1 reason 1.
+- **AC2** — **Exactly one** file-tree instance mounts, **in the host named below**, in every cell.
+  Asserted by **containment** of the `role="navigation"` node, never by a wrapper `data-testid`
+  (`kb-rail-tree` renders even when the tree is DOM-removed):
+
+  | viewport | route | fixture | expected host |
+  |---|---|---|---|
+  | desktop | landing | populated | rail |
+  | desktop | doc | populated | rail |
+  | desktop | landing | empty | rail |
+  | mobile | landing | populated | **content** |
+  | mobile | doc | populated | rail |
+  | mobile | landing | empty | rail |
+
+  Count is `1` in every row (that is what D5 buys), plus the desktop↔mobile flip via `rerender()`
+  on the same tree. `{desktop, doc, empty}` and `{mobile, doc, empty}` are dropped as redundant
+  with their landing rows.
+- **AC3** — Desktop KB behaviour is unchanged, and the `fullWidth` block is **viewport-invariant**:
+  rendered at `mockIsDesktop` true and false it produces identical `innerHTML`. That is the
+  machine-checkable form of the D1-reason-1 guarantee ("no JS-gated DOM in the `fullWidth` block").
+  *(v2 asserted "`git diff` shows no hunk inside it" — not machine-checkable, and it would fail a
+  correct refactor. Keep the `git diff` read as a reviewer note, not an AC.)*
 - **AC4** — Back from a document returns to the browse view without a full reload (e2e round trip).
-- **AC5** — The search query survives browse → document → back on mobile, and
-  `./node_modules/.bin/tsc --noEmit` is clean (the type-widening gate for 2.6).
-- **AC6** — With a populated tree on mobile, the rail secondary slot contains no
-  `role="navigation"` named /knowledge base file tree/; asserted against the real
-  `app/(dashboard)/layout.tsx` in `test/nav-rail-drill.test.tsx`, which already renders it — **not**
-  under `RailSlotHarness`, which cannot see the drawer's switcher or "Back to menu".
-- **AC7** — The ADR-049 e2e gate asserts in real Chromium: 1280×900 populated → `kb-rail-tree`
-  attached, `kb-browse-tree` absent; 390×844 populated → the inverse; 390×844 **empty** →
-  `kb-rail-tree` attached, `kb-browse-tree` absent. Real assertions, not a screenshot diff. This is
-  the empirical closure of the stale-`isDesktop` risk.
+- **AC5a** — The search query survives browse → document → back on mobile (driven by mutating the
+  pathname and re-rendering the same tree, with `/api/kb/search` mocked, asserted on the input's
+  display value).
+- **AC5b** — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits 0 — the gate for
+  2.0's `UseKbLayoutStateResult` widening, which fails typecheck without failing any test.
+- **AC6** — On mobile with a populated tree, the rail secondary slot contains no `role="navigation"`
+  named /knowledge base file tree/ — asserted in `test/kb-mobile-browse.test.tsx` under
+  `RailSlotHarness`, where a `KbLayout` actually exists. *(v2 placed this in
+  `test/nav-rail-drill.test.tsx`, which renders `<DashboardLayout><div>content</div></DashboardLayout>`
+  and never imports `KbLayout` — with no portal source the assertion is vacuously true for every
+  implementation, including one that mounts no tree at all. R12.)*
+- **AC7** — The ADR-049 e2e gate asserts in real Chromium, by **containment in `secondarySlot`**
+  (not by `kb-rail-tree` attachment, which is true even when the tree is DOM-removed): 1280×900
+  populated → tree inside `secondarySlot`, `kb-browse-tree` count 0; 390×844 populated landing →
+  the inverse; 390×844 populated **document route** → tree back inside `secondarySlot`; 390×844
+  **empty** → tree inside `secondarySlot`; **768×1024 unconditionally** — the only test anywhere
+  that exercises the real `(min-width: 768px)` literal, since every unit test mocks the hook. Real
+  assertions, not a screenshot diff. This is the empirical closure of the stale-`isDesktop` risk.
+- **AC7b** — The four changes v2 left uncovered are covered: the `host` guard (content-column host
+  under a collapsed provider still renders the full tree, not the 56px icon strip), the
+  `KbErrorBoundary` move (a throwing `FileTree` renders the fallback at **both** hosts), the
+  stopgap deletion ("Open a file to see it here" absent, `DesktopPlaceholder` still rendering on
+  the desktop landing), and — if the operator picks DD1(a) — exactly one back affordance on the
+  populated browse view.
 - **AC8** — `ADR-158-*.md` exists and `ADR-047-*.md` carries the `md+` qualifier and the
   `related_adrs` entry. Swept if the ordinal is renumbered.
 - **AC9** — The PR body enumerates every existing test file changed in Phase 3 and, for each,
@@ -711,14 +990,25 @@ Each gets a tracking issue in the same session (`wg-when-deferring-a-capability-
    identical on desktop. File as `type/bug`.
 5. **Scroll restore is one-shot** (`restoredRef`), so a second breakpoint crossing does not restore
    tree scroll; focus is not re-homed across the swap either.
-6. **Document-route loading/error branches render no header, therefore no back**
-   (`[...path]/page.tsx:130`, `:161`), and `UnknownError` has no retry. A genuine dead end on a
-   phone, pre-existing, in a different component tree. **Highest-priority follow-up** — file at
-   `priority/p2-medium` or above and note in the PR body that this plan does not fix it.
+6. **Two document states render no header, therefore no in-page back** — the loading branch
+   (`[...path]/page.tsx:130-140`) and the generic `error` branch (`:159-170`), which also has no
+   retry. **Corrected from v2, which was over-broad:** the `not-found` branch (`:142-157`) *does*
+   carry a "Back to file tree" link, so it is not affected.
+   **This stays a genuine Non-Goal only because of D5.** Under v2's shape the mobile document route
+   had no tree anywhere, so this diff would have *deleted the mitigation* — the drawer tree is
+   today the only in-KB escape from those two states — converting a latent dead end into a reachable
+   one, and falsifying the "two DOM positions, no capability change" framing. D5 keeps the drawer
+   tree on mobile document routes, so the states are left exactly as they are today.
+   **Highest-priority follow-up** — file at `priority/p2-medium` or above and note in the PR body
+   that this plan does not fix it.
 7. **`isContentView` trailing-slash normalisation** — `use-kb-layout-state.tsx:217` is a strict
    `pathname !== "/dashboard/kb"` while `deriveContextPathFromPathname` (`:40-46`) normalises and
    `isKbDocView("/dashboard/kb/")` is `true`; three components disagree about which screen you are
-   on. Normalising changes desktop behaviour.
+   on. The **consequence changed class** under this plan — today a wrong `isContentView` at
+   `/dashboard/kb/` swaps one placeholder for another; now it decides which host holds the tree.
+   Risk stays low and the deferral stands **for a verified reason**: `next.config` sets no
+   `trailingSlash`, so Next's default 308 normalises the URL before the layout ever sees it.
+   Normalising the predicate itself would change desktop behaviour.
 8. **History-backed chat sheet / drawer** — neither pushes a history entry, so Android
    hardware-back from an open sheet navigates the route away. Pattern exists elsewhere
    (`crm-surface.tsx:46`, `workstream-board.tsx:134`).
@@ -734,7 +1024,25 @@ Each gets a tracking issue in the same session (`wg-when-deferring-a-capability-
     wire and the CPO argues it measures the roadmap's Phase-4 validation signal (return-to-artifact)
     better than a tree does. Real value, but an enhancement, not a coverage hole — search covers
     *find*.
-14. **Touch-target audit of destructive row actions.** `app/globals.css:261-263` forces
+14. **The collapsed drawer hides the recovery valve.** `collapsed` comes from
+    `useSidebarCollapse("soleur:sidebar.main.collapsed")` (`layout.tsx:145`), which is
+    **localStorage-persisted and breakpoint-agnostic** (`use-sidebar-collapse.ts:38-49`). A user who
+    collapsed the desktop rail and later opens on a phone gets the collapsed branch inside the
+    drawer (`kb-sidebar-shell.tsx:108-130`), which renders neither `RailEmptyState` nor
+    `KbSyncStatus` — both live in the expanded branch (`:142-161`). Pre-existing and genuinely
+    unchanged by this plan, so the R1 wording ("as reachable as they are today") is literally true —
+    **but this plan promotes that drawer path from a redundant copy to the named recovery valve**,
+    so it is worth an explicit check at Phase 5.5 / `/soleur:qa` (open prod mobile with
+    `soleur:sidebar.main.collapsed=1` set) and a `type/bug` filing if it reproduces.
+15. **The guided-tour anchor's reachability on mobile.** `tour-steps.ts:126-131` anchors
+    `action:kb-tree` at `route: "/dashboard/kb"`; `tour-provider.tsx:82-94` dispatches
+    `RAIL_EXPAND_EVENT` once at `startTour`, not per step, and the drawer auto-closes on the
+    subsequent route change — so on mobile the anchor is spotlit inside a closed, off-screen drawer
+    **today**. Under this plan the populated landing moves it into the content column (an
+    improvement); the empty-tree state stays unchanged-broken. Net neutral-to-positive; recorded
+    because D2's "the id never moves" is true of the attribute but says nothing about reachability,
+    which does move — favourably.
+16. **Touch-target audit of destructive row actions.** `app/globals.css:261-263` forces
     `.kb-tree-actions { opacity: 1 }` under `(hover: none)`; at full width, Delete sits closer to
     the row's navigate target than in a 224px rail, with no undo. Measure at the Phase-0.4 gate; any
     fix is a `file-tree.tsx` change and therefore its own issue.
@@ -743,12 +1051,14 @@ Each gets a tracking issue in the same session (`wg-when-deferring-a-capability-
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| Dual mount (the #6874 class) reaches `main` | Medium — it has happened, and review + compound both missed it | One condition on state the layout already computes + AC2's full 8-cell matrix + AC7 real-browser assertions + running `workstream-board.test.tsx` as the canary |
+| Dual mount (the #6874 class) reaches `main` | Medium — it has happened, and review + compound both missed it | **Structurally impossible under D5** — one derived value cannot select two hosts. Backed by AC2's host table + AC7 real-browser containment assertions + running `workstream-board.test.tsx` as the canary |
 | Implementation adds JS-gated DOM to the `fullWidth` block, reintroducing the v1 hydration mismatch | **Medium — the single most likely way to get v2 wrong** | AC3 requires the block byte-for-byte unchanged (`git diff` shows no hunk inside it); DD1's constraint puts the back arrow on the populated view only |
 | `isDesktop` wrong on a real desktop browser | Low, mechanism never established | Closed empirically by AC7, not by a code change (D1/R2) |
 | Scope re-creep at `/work` — the P1/P2 backlog surfaced by review is tempting and adjacent | **High** | Non-Goals #3, #4, #6 name the three most tempting with file:line and an explicit "file as `type/bug`". Only the search-query lift is in scope, and only because this diff breaks it |
-| `RailCollapsedProvider` leaks the desktop collapsed state into the content-column host | Medium | The `&& inRail` guard in D2, with the reason as a code comment |
-| The 2.6 type widening breaks `tsc` in a *test* file that no test run would surface | Medium | AC5 pairs the behaviour with `tsc --noEmit`; 2.6 names the consumer (`kb-reconnect-banner.test.tsx:51-75`) |
+| `RailCollapsedProvider` leaks the desktop collapsed state into the content-column host — the browse view becomes a 56px two-icon strip | Medium | The `&& host === "rail"` guard in D2, **plus a RED test** (`kb-sidebar-shell-host.test.tsx`, Phase 1.1b). v2 mitigated a Medium risk with a code comment; a comment is not a mitigation |
+| The 2.0 type widening breaks `tsc` in a *test* file that no test run would surface | Medium | AC5b pairs it with `tsc --noEmit`; Phase 3.4 names the consumer (`kb-reconnect-banner.test.tsx:51-75`). Smaller than v2's, since 2.6 no longer widens the interface |
+| The drawer empties itself mid-fetch on the mobile landing (`treeHost` flips rail→content when the tree resolves) | Medium | Named in D3, asserted in the e2e round trip, and the concrete functional argument for the DC2 "Browse files" row |
+| An AC that is false on a correct implementation (the R6/R7 class — it has now recurred twice, on the fixture axis and the count axis) | **Medium** | AC2 is a per-cell host table, not a scalar; D5 makes every cell single-host so the count is uniform; two independent lenses re-derive the table before it is written |
 | DD1 decided unilaterally against the operator's design intent | Medium | Phase 0.3/0.4 — DD1 and D3 are the headline sign-off questions |
 | A new class uses a nonexistent `soleur-*` token (silent no-op) | Low (little new markup in v2) | Grep `app/globals.css` before use; `light-theme-tokenization.test.tsx` |
 | ADR ordinal collision | Medium — twice in one pipeline before | `/ship` ordinal gate + the documented artifact-set sweep |
@@ -777,7 +1087,8 @@ there is nothing to prove faithful, so the commit protocol and its AC are gone. 
 **Tier:** blocking (UI-surface change to a primary product surface)
 **Decision:** reviewed
 **Agents invoked:** ux-design-lead, cpo, spec-flow-analyzer, kieran-rails-reviewer,
-code-simplicity-reviewer, scoped strong-model advisor
+code-simplicity-reviewer, scoped strong-model advisor, learnings-researcher,
+architecture-strategist, test-design-reviewer, framework-docs-researcher
 **Skipped specialists:** none — no domain leader recommended a copywriter (v2 adds no new copy at
 all; the "Browse files" row that would have carried the only new string is cut)
 **Pencil available:** yes
@@ -822,6 +1133,26 @@ all; the "Browse files" row that would have carried the only new string is cut)
   under v1's own phase order; that a v1 RED test could only ever fail as an import error; that the
   2.6 type widening breaks a typed test literal at `tsc` (not test) time; and that the
   `kb-sidebar-collapse` mock rationale was false. All folded in.
+- **`architecture-strategist`** (deepen) — enumerated the full 7-cell state space and found that
+  two hosts can never both evaluate true (the hazard the plan spends most of its risk budget on is
+  structurally impossible) but that **zero** hosts was reachable by design, which produced two P0s:
+  an AC false on a correct implementation, and a silently deleted capability on the mobile document
+  route. Its `treeHost` recommendation (D5) resolves both plus half of the drawer-transition
+  finding. Also redirected the ADR-047 amendment to a dated append-only section with a scoped
+  clause (the `md+` qualifier was falsified by the plan's own state table), stripped variable names
+  out of the ADR-158 clause, and rehomed the search query to `useNavResume`. Confirmed ADR-047,
+  principles-register, C4 and layering compliance.
+- **`test-design-reviewer`** (deepen) — scored the v2 strategy **6.8/10 (C)**: A-grade reasoning
+  (RED-before-GREEN with an explicit "fails on an assertion, not an import" gate; the role-based
+  tree query) dragged down by two provably-wrong ACs and four uncovered in-scope changes. It
+  independently re-derived the AC2 zero-tree cell, showed AC6 was vacuous, showed `kb-rail-tree`
+  attachment is not evidence of a tree, and showed a testid-based host assertion agrees with the
+  bug. Named three determinism vectors (the flip must `rerender()`, the "no full reload" predicate
+  needs a sentinel, the search test needs `/api/kb/search` mocked) and one dead phase (3.2 was a
+  phantom reconciliation).
+- **`framework-docs-researcher`** (deepen) — verified all six load-bearing framework claims against
+  installed versions; no refutations. See the Framework Verification table.
+- **`learnings-researcher`** (deepen) — surfaced 9 applicable learnings; see Research Insights.
 - **`code-simplicity-reviewer`** — measured the fix at ~60 lines of product code against ~400
   provisioned, and drove five cuts (extraction, drawer event, error rows, hook widening, blocking
   error frames) plus the AC reduction from 20 to 9. Its structural observations are recorded where
@@ -831,14 +1162,21 @@ all; the "Browse files" row that would have carried the only new string is cut)
 ## Test Scenarios
 
 1. Mobile, populated, landing — tree in the content column, rail slot empty, exactly one tree.
-2. Mobile, populated, document — document renders, no tree mounted, back chevron present.
+2. Mobile, populated, document — document renders, **tree back in the rail/drawer** (D5), back
+   chevron present. This is the cell that keeps doc→doc navigation and the only in-KB escape from
+   the two headerless document states working.
 3. Mobile round trip — landing → file → back, expanded folders + scroll + **search query**
    preserved, no full reload.
 4. Mobile, empty tree — unchanged: `fullWidth` body in the content column, tree in the rail, "Sync
    now" and the connect CTA reachable in one hamburger tap.
 5. Desktop, populated — tree in the rail slot, chat splitter intact, no `kb-browse-tree`.
 6. Desktop, collapsed rail — icon affordance, tree DOM-removed, `RAIL_EXPAND_EVENT` dispatched.
-7. The full 8-cell matrix plus the mock flip — exactly one tree, correct host.
+7. The six-cell host table plus the `rerender()` flip — exactly one tree, correct host, asserted
+   by containment.
+7b. Mobile landing, drawer opened **during** the tree fetch → tree resolves populated → the drawer
+   does not present an empty secondary slot (D3's named transition).
+7c. Content-column host under a collapsed provider → full tree, not the 56px icon strip.
+7d. A throwing `FileTree` → `KbErrorBoundary` fallback at **both** hosts.
 8. Real browser at 1280×900 / 768 / 390×844, populated and empty — host placement (AC7).
 9. Dual-mount canary — `workstream-board.test.tsx` green.
 
@@ -853,6 +1191,53 @@ all; the "Browse files" row that would have carried the only new string is cut)
   API says 77 / 193, and Post-MVP is 957 open against the roadmap's 710. Trust the API.
 - **Constitution line 272** — screenshots at desktop, tablet, mobile before shipping. **Tablet must
   be exactly 768px**, the switch point (Phase 0.2, Phase 5.5, AC10).
+
+## Research Insights
+
+Institutional learnings consulted at deepen time. Each either **confirms** a decision (recorded so
+it is not re-litigated) or **changes** one.
+
+**Confirms D2 (one prop, no extraction):**
+- `2026-06-22-collapsed-early-return-remounts-data-bearing-child-and-e2e-provenance-by-revert.md` —
+  *"Reconcile-by-position: a conditional element swap around a data-bearing child is an unmount, not
+  a re-render. To preserve a child's fetch/state across a UI-mode change, keep ONE instance at a
+  stable position and branch className, never the element tree."*
+- `ui-bugs/2026-04-16-react-effect-ordering-on-component-extraction.md` — *"Child effects fire
+  before parent effects."* Extraction into a `KbTreePanel` would have re-ordered the scroll-restore
+  and nav-resume effects relative to their parent; the prop route does not.
+- `best-practices/2026-06-08-likec4-diagram-fullscreen-via-portal-overlay.md` — *"Re-parenting a
+  single React subtree remounts it … React reconciles by tree position, not by element identity."*
+  Independently confirms why the portal-destination-swap alternative buys nothing.
+
+**Confirms D5 / the single-host gate:**
+- `best-practices/2026-04-29-duplicate-component-mount-across-layouts.md` — *"two mount sites, one
+  of them gated by composition condition. If a plan wants a component visible in two layouts,
+  exactly one of those layouts is the 'owner' and the other must condition its mount on UI state
+  plus segment."* D5 is that rule reduced to a single named value.
+
+**Confirms D1 reason 1 and raises the stakes on AC3:**
+- `ui-bugs/2026-05-06-react-18-production-hydration-skips-className-mismatches.md` — *"className
+  mismatches are NOT reconciled in production builds. React logs a dev-only `console.error` and
+  keeps the SSR DOM in place (no client re-render fires)."* A hydration mismatch introduced into
+  the `fullWidth` block would therefore be **invisible in production** and self-correcting in dev —
+  the worst possible signal profile, and precisely why AC3 pins viewport-invariance behaviourally.
+
+**Changes Phase 1.1 and Phase 2.6:**
+- `2026-05-07-test-assertion-must-verify-mock-activates-branch.md` — *"Before adding an assertion
+  that depends on a conditional render branch firing, do a 30-second trace … Confirm the mock
+  returns values that activate the target branch."* Folded into Phase 1.1 as an explicit step;
+  load-bearing here because eight suites mock this exact hook and none of them currently flips it.
+- `2026-04-17-kb-chat-stale-context-on-doc-switch.md` — *"When a feature is bound to a URL-derived
+  key, the cheapest correctness guarantee is to unmount on key change rather than propagating reset
+  logic through N layers of children."* The search query is bound to the **workspace**, not the
+  document — so it must survive the drill-in (2.6) *and* reset on workspace change. Both are now
+  specified.
+
+**Confirms AC7's necessity:**
+- `2026-07-15-silent-fallback-masked-a-dead-primary-for-14-days.md` — *"A silently-working fallback
+  masked a dead primary for 14 days … Degraded-but-working is the state that kills you later."*
+  A count-only assertion would stay green with the tree in the wrong host; only the host assertion
+  fires. This is the same argument the test-design review reaches from the other direction.
 
 ## Sharp Edges
 
@@ -886,6 +1271,17 @@ all; the "Browse files" row that would have carried the only new string is cut)
   `app/(dashboard)/layout.tsx:229` both describe a doc-view back-suppression the code does not
   perform (`inKbDocView` is dead). Two agents and one draft of this plan inherited that fiction from
   the comment. Verify wiring, not prose.
+- **A wrapper `data-testid` is not evidence the thing inside it rendered.** `kb-rail-tree` sits
+  outside the `collapsed ?` ternary by design (`kb-sidebar-shell.tsx:107` — "the stable wrapper
+  always renders to anchor present/absent assertions"), and `e2e:604` proves it by asserting the
+  wrapper attached while the file row's count is 0. Assert the `role="navigation"` node.
+- **An assertion can agree with the bug.** A testid the component emits to describe *its own
+  placement* cannot detect mis-placement — pass the wrong host prop at the rail and the node renders
+  inside the rail slot carrying the browse testid, and a testid-based host check reports success.
+  Only containment against the real slot node can fail there.
+- **A RED test driven by a module-level mock must be re-rendered, not re-mounted.** `unmount()` +
+  a fresh `render()` makes a transition case tautologically green: a fresh render cannot have a
+  stale portal, which is the only thing the case exists to catch.
 - **A safety argument that rests on "no other code does X" is only as strong as the phase that might
   do X.** v1's hydration argument was correct about the codebase and falsified by v1's own
   implementation phase. When a plan argues safety from a precondition, name the phase that could
