@@ -55,6 +55,34 @@ Introduce `[mandates-filing]`, a marker in `AGENTS.rules.md` rule bodies. An iss
 Every condition fails **closed**. Initially tagged: `wg-block-pr-ready-on-undeferred-operator-steps`
 and `wg-when-deferring-a-capability-create-a`.
 
+> **Amended 2026-08-03 (#7174).** The tagged set is now **one rule**:
+> `wg-block-pr-ready-on-undeferred-operator-steps`. The operator untagged
+> `wg-when-deferring-a-capability-create-a`, reversing the original "at
+> minimum these two" direction and siding with the three reviewers recorded in
+> DC-1. The deciding evidence was **not** that the gate would become advisory
+> — a 30-day measurement refuted that (of 256 merged PRs with closing-or-filing
+> activity, 138 block at NET>0; tagging both flips 8 (5.8%) to 32 (23.2%)
+> depending on classification strictness, versus 2 (1.4%) to 10 (7.2%) for the
+> first rule alone, so 77–94% of blocked PRs still block either way). The
+> deciding evidence was that **nothing writes the claim**: every writer emits
+> the first rule id literally, and no writer anywhere emits
+> `Mandated-By: wg-when-deferring-a-capability-create-a`, so an agent citing it
+> would be hand-authoring exactly the free-form reason this closed vocabulary
+> exists to prevent. The second design challenge in that issue — replacing the
+> corpus marker with a free-form `reason=` token — was **declined**; the
+> mechanism below stands unchanged.
+>
+> **Revocation is not retroactive — the caveat below is now LIVE.** The gate
+> reads the corpus at `git merge-base origin/main HEAD`, so every branch whose
+> merge-base predates this untag still sees `[mandates-filing]` on
+> `wg-when-deferring-a-capability-create-a` and can still claim the exemption
+> until it rebases. Nothing forces that rebase. The untag's decisive rationale
+> ("nothing writes the claim, so citing it would be hand-authored") does NOT
+> bind on such a branch — a hand-authoring agent is precisely the threat model.
+> Merge-base reading is still correct (it is what stops a PR granting itself an
+> exemption in the same diff); the residue is a bounded lag, recorded here
+> rather than left for the next reader to rediscover.
+
 ### The class boundary (what is actually new here)
 
 The corpus already carries `[compliance-tier]`, `[hook-enforced: …]`, `[skill-enforced: …]` and
