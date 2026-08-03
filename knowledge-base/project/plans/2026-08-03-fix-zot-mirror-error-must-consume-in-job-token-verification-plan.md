@@ -10,6 +10,71 @@ branch: feat-one-shot-7242-zot-mirror-error-misdiagnosis
 adr: ADR-166 (provisional ordinal — re-derive against origin/main before merge)
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-03
+**Review panel:** dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer,
+architecture-strategist, spec-flow-analyzer, cto (devex lens) — 6 agents, all findings consolidated.
+**Deepen agents:** learnings-researcher, Explore (precondition verification).
+**Gates passed:** 4.5 network-outage (telemetry emitted), 4.6 user-brand impact, 4.7 observability
+(5/5 fields, no SSH), 4.8 PAT-shaped (clean), 4.9 UI-wireframe (N/A), 4.10 encryption posture (N/A).
+
+### Key improvements
+
+1. **A2 deleted entirely.** The proposed Access probe *duplicated a probe the job already runs*
+   (`access_hostname_for()` maps `REGISTRY_PUSH_ACCESS_TOKEN` → `registry.soleur.ai`) and graded on
+   the **status code** — the exact instrument #7127 removed as wrong. The plan's own thesis,
+   violated in its primary deliverable. Both simplification reviewers converged; the cut dissolved
+   an entire class of downstream findings (the `EDGE_CODE` unset-value hole, three unreachable arms,
+   five ACs, two risk rows, two test scenarios).
+2. **The verdict became four-valued.** The first draft mapped `rc=1 → stale`, collapsing
+   *DEAD* and *UNVERIFIABLE* — so a transient network fault would print "the token is STALE, rotate
+   it" about a token nothing measured. The cited precedent condemns exactly this collapse inline
+   (`scheduled-terraform-drift.yml:235-238`). Now parsed from JSON: `live` / `stale` /
+   `unverifiable` / `unmeasured`.
+3. **Deliverable B was aimed at the wrong artifact.** The `serving is FINE` heading belongs to the
+   private-NIC boot-race advisory, not a zot-push advisory — the proposed replacement would have
+   written a *new* false claim. B1/B2/B3 cut; B4 (the cumulative `reboot_count` misread that
+   produced hypotheses H3 and H4) kept and promoted.
+4. **The alarm cannot fire at all** — measured, and the mechanism corrected mid-review. All seven
+   issue-filing steps use plain `if:` with no status-check function, so they inherit an implicit
+   `success()` and skip whenever the checker step fails, *including on the FIRE verdict they exist
+   to report*. Pulled in scope; the sibling detector already uses the fix.
+5. **Structural fix adopted (CTO):** the diagnosis text moves to a sourced
+   `scripts/zot-mirror-diagnosis.sh`, making "both messages tell the same story" true by
+   construction instead of by assertion — and per-arm tests direct function calls instead of
+   driving a 270-line extracted YAML block four times.
+6. **Deliverable E added:** `scripts/lint-diagnosis-claims.sh`. Two prior iterations were each
+   "fixed" by rewriting the message; neither generalized. Prose is not an enforcement mechanism.
+
+### New considerations discovered
+
+- **Three consumers, not one.** `cf-tunnel-registry-bridge` is called by `reusable-release.yml`,
+  `build-inngest-config-bundle.yml` and `build-inngest-bootstrap-image.yml`; the latter two have no
+  preflight and would pin the `unmeasured` arm. **The identical blast-radius miss for this identical
+  action is already on record** (`specs/feat-one-shot-zot-mirror-fail-closed/decision-challenges.md:32`).
+- **Deliverable E would land in an ADVISORY CI job.** `lint-bot-statuses` is absent from both
+  `required-checks.txt` and the Terraform ruleset, so a PR merges with it red. The lint must be
+  promoted (ruleset + required-checks move as a pair) or the plan must stop claiming enforcement.
+- **`model.c4:457` must be amended, not deleted** — it is a deliberate #7071 cause-class record that
+  prevents #6416 being re-derived. One reviewer recommended deletion; a second read the context and
+  showed deletion re-opens the failure mode. Two further sibling sites carry the same falsified claim.
+- **A sibling alarm shares the defect.** `scheduled-inngest-health.yml` gates eight issue-filing
+  steps on plain `if:` conditions too. Not fixed here — filed with the Phase 1 issues.
+- **`|| rc=$?` flips a step's `outcome` to `success`**, which would disarm the
+  `BRIDGE_OUTCOME == 'failure'` gate the mirror step depends on. Safe for `token_preflight`; a trap
+  for any future refactor of `zot_bridge`.
+- **AC17/AC19 were unsatisfiable** (three reviewers converged): both required the crash-loop to stop,
+  which this plan explicitly does not fix. Moved to the crash-loop issue as follow-throughs.
+
+### The live incident, still open
+
+zot has been crash-looping since ~17:08 UTC — **1032 restarts by 21:25**, ~4/min, `oom_kills=0`, a
+recurrence of the closed #6288. It is the active cause of the deploy blockage, it is **not** fixed by
+this plan, and the plan deliberately records its proximate cause as UNKNOWN rather than guessing.
+
+---
+
 ## Overview
 
 Every `Web Platform Release` since 17:11 UTC on 2026-08-03 fails at the zot-mirror bridge with
@@ -228,7 +293,7 @@ A2 proposed a curl to `https://registry.soleur.ai/v2/` with the service-token he
 **Therefore `verdict=live` already means "the token authenticates AND Cloudflare Access admitted
 it on `registry.soleur.ai`."** The `live`/`403` cell is unreachable by construction: an
 Access-rejected credential grades DEAD or UNVERIFIABLE and exits 1, which is `verdict=stale`.
-The 2×2 has one live column, so there is no matrix — only the three verdicts the preflight
+The 2×2 has one live column, so there is no matrix — only the verdicts the preflight
 already computes.
 
 The irony is the point, and it is why this section stays visible: **a plan whose thesis is "never
@@ -274,9 +339,11 @@ is otherwise destroyed. It replaces the one instruction the operator could not e
 answer they would have gone looking for. Fail-soft: if the query errors, say so — never convert a
 query failure into a claim about zot.
 
-### A3. Branch on the verdict — three arms, no matrix
+### A3. Branch on the verdict — four arms, no matrix
 
-`EDGE_CODE` is gone with A2, so the message keys on `verdict` alone. Four values, four arms:
+`EDGE_CODE` is gone with A2, so the message keys on `verdict` alone. Four values, four arms
+(the fourth, `unverifiable`, was added at review — collapsing it into `stale` was the plan's own
+thesis violated in its primary deliverable):
 
 | `verdict` | What the message says |
 |---|---|
@@ -416,6 +483,133 @@ is protected by nothing. New coverage is mandatory.
 
 ---
 
+## Research Insights (deepen-plan)
+
+All verified live against the repo during the deepen pass. These are implementation constraints,
+not suggestions — each one would have cost a mid-`/work` pivot.
+
+### R1 — The composite action CAN reach `scripts/`, and the path form matters
+
+**Precedent exists for *invoking*:** `.github/actions/bot-pr-with-synthetic-checks/action.yml:215,240`
+runs `node apps/web-platform/scripts/…` and `python3 scripts/lint-credential-path-literals.py` with
+**bare relative paths and no `working-directory` key anywhere in the file**. That confirms
+empirically that a composite action's `run:` executes with the *caller's* workspace as cwd. It is on
+the required-check path (ADR-139), so it is exercised on every bot PR — live evidence, not aspiration.
+
+**But `source` has no composite-action precedent** — it is exclusively a workflow-level pattern today
+(`scheduled-inngest-health.yml:88-90`, `restart-inngest-server.yml:90`, ~20 sites in
+`apply-web-platform-infra.yml`). The dominant form is absolute:
+
+```bash
+# shellcheck source=/dev/null
+source "$GITHUB_WORKSPACE/scripts/zot-mirror-diagnosis.sh"
+```
+
+**Use the absolute `$GITHUB_WORKSPACE` form**, not a bare relative path: it is robust if a caller ever
+sets `working-directory` on the job defaults, and it matches the 20+ existing `source` sites.
+
+**Mirror the one-line discipline.** `cf-tunnel-ssh-bridge/action.yml:319-324` keeps its
+`check-cloudflare-token-drift.sh` invocation on **one physical line** because a test greps for it to
+prove the gate is defined exactly once. If AC6 greps for the helper call, keep it on one line.
+
+### R2 — The classifier library must NOT set `-euo pipefail`
+
+Copying `scripts/inngest-liveness-classify.sh` exactly:
+
+- `#!/usr/bin/env bash`, **no `set -euo pipefail`**, and **no top-level executable code** — it is a
+  pure library. This is load-bearing: it is sourced into a step already running under
+  `bash -eo pipefail {0}`, so a `set -e` here would **leak into the caller** and change the failure
+  semantics of the very step it is diagnosing.
+- Header comment enumerating every token the function can echo (a **Modes:** table). Our four
+  verdicts go there.
+- Functions echo exactly one token to stdout and `return 0`; predicates return via exit status.
+- The argument contract is documented immediately above the function.
+
+Caller shape: `MODE=$(classify_liveness_mode "$CODE" "$BODY")` then `case "$MODE" in`.
+
+Test shape (`scripts/inngest-liveness-classify.test.sh`): `set -euo pipefail`, resolve via
+`SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`, **source** (never execute), then
+`assert_eq "desc" "expected" "$(fn args)"` per case, with a comment naming the defect each case
+regresses. Footer: `echo "=== Results: $PASS passed, $FAIL failed ==="` then `[[ "$FAIL" -eq 0 ]]`.
+
+**Registration is mandatory, not optional.** `scripts/lint-orphan-test-suites.sh` walks every
+`scripts/*.test.sh` and fails if it is not referenced by `test-all.sh`; its `EXCLUSIONS=()` is empty
+and documented as *"EMPTY IS THE GOAL STATE"*. It runs at `.github/workflows/ci.yml:178`. So
+`scripts/zot-mirror-diagnosis.test.sh` **must** get a `run_suite` line (pattern:
+`test-all.sh:445`) or CI reddens.
+
+### R3 — Deliverable E's lint would land in an ADVISORY job — this changes the deliverable
+
+**Only one lint in the repo uses a `.highwater` baseline**: `scripts/lint-trap-tempfile-ownership.py`.
+Its mechanism is the right template:
+
+- `HIGHWATER_FILE = Path(__file__).resolve().parent / "<name>.highwater"` — cwd-independent.
+- Comment-tolerant parse: `int(HIGHWATER_FILE.read_text().split("#")[0].strip())`.
+- Three modes: `--census` (count, exit 0), `--check-highwater` (compare), default (scan).
+- **A missing baseline is a hard error (`return 2`), never a pass.**
+- Regression (`live > allowed`) → exit 1 with a remedy-bearing message. Improvement
+  (`live < allowed`) → exit 0 with a `note:` to ratchet down. Blocking upward, advisory downward.
+- **Anti-vacuity positive control** (`lint-trap-tempfile-ownership.test.sh:152-160`): assert
+  `--census` returns a **non-zero** integer, because *"a high-water check whose census always
+  returned 0 would pass forever."* Copy this — our lint is exactly the shape that could count zero
+  and certify silence.
+
+**The caveat that changes the deliverable:** both highwater steps run in the `lint-bot-statuses` job
+(`ci.yml:122`), and `ci.yml:165-172` states that job is **ADVISORY — absent from both
+`scripts/required-checks.txt` and the Terraform ruleset**, so a PR can merge with it red. A lint that
+cannot block is a lint that will be ignored, and Deliverable E exists precisely because prose did not
+hold for two iterations.
+
+So Deliverable E must either (a) add the lint to `required-checks.txt` **and** the Terraform ruleset
+together (they must move as a pair), or (b) explicitly accept advisory-only status and say so, rather
+than claiming an enforcement it does not have. **Do not silently inherit the advisory job** — that
+would be this plan shipping its own thesis violation a fourth time.
+
+### R4 — Institutional learnings that bear directly on this plan
+
+**R4.1 — `|| rc=$?` makes the step SUCCEED, which can disarm a downstream `outcome == 'failure'` gate.**
+([`2026-07-30-the-step-that-could-not-report-and-the-guard-that-worked-in-one-scan-mode.md`](../learnings/2026-07-30-the-step-that-could-not-report-and-the-guard-that-worked-in-one-scan-mode.md))
+This is a live trap for A1. The mirror step branches on
+`BRIDGE_OUTCOME: ${{ steps.zot_bridge.outcome }} == 'failure'`. Any refactor that swallows a
+non-zero exit into `rc` flips that step's `outcome` to `success` and the `degraded bridge` arm
+**never fires** — re-entering the #6416 silent-mirror defect. `token_preflight` is safe (nothing
+gates on its outcome), but **do not** apply the same `|| rc=$?` idiom to `zot_bridge` without
+re-checking every `outcome`-reading consumer. Add this to Phase 0.
+
+**R4.2 — A guard that RESTATES the value it guards is a second unsynchronized pin.**
+([`2026-07-25-a-stale-presence-guard-fails-green-and-an-unknown-model-id-halves-max-tokens.md`](../learnings/2026-07-25-a-stale-presence-guard-fails-green-and-an-unknown-model-id-halves-max-tokens.md))
+`lint-diagnosis-claims.sh` (Deliverable E) is exactly this shape — its causal-phrase list restates
+prose that lives in the messages. A stale phrase list fails **green**, not red. Mitigate with a
+non-vacuity control arm: a fixture message that *must* trip the lint, plus one that *must not*.
+This is the same requirement as AC23 and the `--census`-returns-non-zero guard in R3.
+
+**R4.3 — A check that cannot report is indistinguishable from one that passed.**
+([`2026-07-27-a-check-that-cannot-report-is-indistinguishable-from-one-that-passed.md`](../learnings/2026-07-27-a-check-that-cannot-report-is-indistinguishable-from-one-that-passed.md))
+Eight recorded instances; instance 1 is a gate that is never *called*. Its prescriptions are AC6
+and AC23 verbatim: assert the **invocation**, not the definition, and prove the check *can* fail via
+mutation. This is also the precise shape of Deliverable B2 — seven steps that could never report.
+
+**R4.4 — Closing an issue that a code comment names by number obliges a `git grep` of that number.**
+([`2026-07-30-the-comment-that-named-a-cause-was-the-cause-of-the-misdiagnosis.md`](../learnings/2026-07-30-the-comment-that-named-a-cause-was-the-cause-of-the-misdiagnosis.md))
+This is the same repo, the same code path, and the direct ancestor of this issue: a comment
+speculating "the tunnel connector may lack a private-net route" outlived the issue's closure
+(2026-07-17) and became the default hypothesis months later. Deliverable D's sibling sweep is that
+obligation being discharged — extend it to `git grep -n '#6416\|#7071'` across workflows, actions,
+runbooks and `.c4`, and update or delete what each explains.
+
+**R4.5 — Measure the alarm's real jitter; never copy a margin from a sibling.**
+([`2026-08-02-my-alarm-could-go-silent-four-ways-and-a-fixture-pinned-one-of-them.md`](../learnings/2026-08-02-my-alarm-could-go-silent-four-ways-and-a-fixture-pinned-one-of-them.md))
+If Deliverable B2 touches the Sentry cron monitor's `checkin_margin_minutes`, derive it from
+`gh run list --workflow=scheduled-zot-restart-loop.yml --event=schedule --limit 60` (median, max,
+gaps) — a margin copied from a sibling that is *also* permanently missed is a silent alarm.
+
+**R4.6 — `::add-mask::` before any secret reaches `$GITHUB_ENV`.**
+([`2026-03-21-github-actions-heredoc-yaml-and-credential-masking.md`](../learnings/2026-03-21-github-actions-heredoc-yaml-and-credential-masking.md))
+Relevant to A2b only insofar as it must never echo credentials; the plan adds no new secret
+handling, and the Sharp Edge on `--loglevel debug` covers the one real exposure on this path.
+
+---
+
 ## Deliverable B — the alarm that cannot fire, and the one false claim in the advisory
 
 ### B1. **CUT** — the `serving is FINE` rewrite was aimed at the wrong advisory
@@ -458,6 +652,23 @@ produced no `[ci/zot-restart-loop]` issue.
 
 Fix: `if: always() && steps.alarm.outputs.… == '…'` on all seven. Pull **in scope** — it is
 smaller than anything else in this plan and it restores the operator's only recurrence detector.
+
+**Precedent — the sibling detector already does exactly this.**
+`scheduled-terraform-drift.yml:444` reads
+`if: always() && steps.token_drift.outputs.verdict == 'dead'`, and the `always() &&` form appears
+in **8** workflows (`infra-validation.yml:1213`, `apply-web-platform-infra.yml:973`,
+`web-platform-release.yml:918,1152`, `fix-constraints-stage-b.yml:281`,
+`scheduled-supabase-advisor-scan.yml:311`, `scheduled-terraform-drift.yml:444,458`). The zot alarm
+is the outlier, not the innovation.
+
+**The same latent defect exists in a sibling alarm — widen the lint to catch it.**
+`scheduled-inngest-health.yml` gates its issue-filing steps on plain conditions with no status
+function (`:354`, `:377`, `:388`, `:574`, `:624`, `:670`, `:815`, `:874`); only `:686` has
+`always()`. So any failure in its checker step silently skips its issue filing too. **Do not fix it
+in this PR** (different alarm, different blast radius) — but `scripts/lint-diagnosis-claims.sh`
+(Deliverable E) should grow a companion check, or a sibling lint should assert that *any step whose
+`if:` references `steps.<id>.outputs.*` for issue-filing carries a status-check function*. File it
+with the Phase 1 issues.
 
 **Defense-in-depth on the same file (one expression).** The Sentry status at `:383` keys on
 `exit_code` alone, so a checker that aborts *without* emitting a verdict is indistinguishable from
@@ -572,7 +783,8 @@ Note `.github/actions/**` is currently unlinted — `lint-workflows.sh:40-43` an
 `/work` files each as its own `action-required` issue **before merge**, not after (the first is the
 production blocker; deferring the filing makes the deferral invisible until the PR is already in):
 
-1. **zot is crash-looping** — 975 restarts by 21:10, ~4/min since ~17:08, `oom_kills=0`; a
+1. **zot is crash-looping — still, and unabated.** 1032 restarts by **21:25** (0 at 17:05,
+   950 at 21:05), a steady ~4/min for 4h20m with `oom_kills=0`; a
    recurrence of the closed #6288. The active cause of the deploy blockage. This plan does **not**
    guess why it restarts. One cheap probe first: check whether the container's exit status/stderr
    reaches Better Stack — if it does, the deciding datum is a query away and needs no SSH.
