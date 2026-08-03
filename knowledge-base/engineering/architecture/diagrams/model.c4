@@ -67,7 +67,7 @@ model {
       }
       hooks = container "Hook Engine" {
         technology "PreToolUse Guards + PostToolUse hints"
-        description "Guards tool calls (blocks commits to main, rm -rf, etc.) AND injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086). CONSUMES a MODEL-CONTROLLED tool-call envelope on stdin: that input is untrusted and is parsed without shell evaluation, with each contracted field type-asserted rather than coerced (ADR-156, #7164 — an array tool_input.command previously reached eval AND evaded every anchored guard). Prior description said only what hooks DO, never what they CONSUME. Additionally, in the repo-local `.claude/` hook surface only — never the shipped plugin surface — it enforces host resource control: at SessionStart it adopts the agent process tree into a memory-capped systemd transient scope (ADR-158). Where this container runs server-side there is no per-user systemd bus, so that path declines and does nothing."
+        description "Guards tool calls (blocks commits to main, rm -rf, etc.) AND injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086). CONSUMES a MODEL-CONTROLLED tool-call envelope on stdin: that input is untrusted and is parsed without shell evaluation, with each contracted field type-asserted rather than coerced (ADR-156, #7164 — an array tool_input.command previously reached eval AND evaded every anchored guard). Prior description said only what hooks DO, never what they CONSUME. Additionally, in the repo-local `.claude/` hook surface only — never the shipped plugin surface — it enforces host resource control: at SessionStart it adopts the agent process tree into a memory-capped systemd transient scope (ADR-159). Where this container runs server-side there is no per-user systemd bus, so that path declines and does nothing."
       }
     }
 
@@ -249,7 +249,7 @@ model {
   }
   systemdUser = system "systemd (per-user manager)" {
     #external
-    description "The operator's own per-user systemd manager, reached over the D-Bus socket at /run/user/<uid>/bus (SO_PEERCRED-authenticated, same uid only, no network). Owns the cgroup v2 hierarchy for the login session: the Hook Engine asks IT to create the memory-capped transient scope each agent session runs in, so systemd stays the SINGLE WRITER to that hierarchy and no component writes cgroup directories directly (ADR-158). Units are transient and self-clean when their last process exits, so nothing is provisioned and nothing persists across a reboot."
+    description "The operator's own per-user systemd manager, reached over the D-Bus socket at /run/user/<uid>/bus (SO_PEERCRED-authenticated, same uid only, no network). Owns the cgroup v2 hierarchy for the login session: the Hook Engine asks IT to create the memory-capped transient scope each agent session runs in, so systemd stays the SINGLE WRITER to that hierarchy and no component writes cgroup directories directly (ADR-159). Units are transient and self-clean when their last process exits, so nothing is provisioned and nothing persists across a reboot."
   }
   plausible = system "Plausible Analytics" {
     #external
@@ -325,9 +325,9 @@ model {
   // ---- C4 L1 (System Context) — 18 relationships -------------------------
   founder -> webapp "Interacts via browser" { technology "HTTPS" }
 
-  // Host resource control (ADR-158). The Hook Engine never writes a cgroup
+  // Host resource control (ADR-159). The Hook Engine never writes a cgroup
   // directory itself; it asks the user's systemd manager to create the scope.
-  platform.engine.hooks -> systemdUser "Adopts the live agent process tree into a memory-capped transient scope under soleur-agents.slice (StartTransientUnit over D-Bus); systemd is the single writer — no raw cgroup directory writes. Repo-local `.claude/` surface only; declines where there is no per-user bus (ADR-158)" {
+  platform.engine.hooks -> systemdUser "Adopts the live agent process tree into a memory-capped transient scope under soleur-agents.slice (StartTransientUnit over D-Bus); systemd is the single writer — no raw cgroup directory writes. Repo-local `.claude/` surface only; declines where there is no per-user bus (ADR-159)" {
     technology "D-Bus (busctl --user)"
   }
 
@@ -335,10 +335,10 @@ model {
   // backstop had to preserve: adoption moves claude out of the terminal's cgroup,
   // so the reap is re-established as a unit dependency rather than cgroup
   // co-membership.
-  founder -> systemdUser "Closes the terminal (stopping its scope), or runs `systemctl --user stop soleur.slice` as an explicit fallback — which stops EVERY agent session on the machine (ADR-158)" {
+  founder -> systemdUser "Closes the terminal (stopping its scope), or runs `systemctl --user stop soleur.slice` as an explicit fallback — which stops EVERY agent session on the machine (ADR-159)" {
     technology "Terminal / systemctl --user"
   }
-  systemdUser -> platform.engine.claude "Reaps the agent session by stopping its scope, via BindsTo= on the terminal's own scope — a UNIT dependency, because adoption moves the process out of the terminal's cgroup so co-membership can no longer do it (ADR-158)" {
+  systemdUser -> platform.engine.claude "Reaps the agent session by stopping its scope, via BindsTo= on the terminal's own scope — a UNIT dependency, because adoption moves the process out of the terminal's cgroup so co-membership can no longer do it (ADR-159)" {
     technology "systemd unit dependency"
   }
   webapp -> engine "Thin view/control layer" { technology "WebSocket" }

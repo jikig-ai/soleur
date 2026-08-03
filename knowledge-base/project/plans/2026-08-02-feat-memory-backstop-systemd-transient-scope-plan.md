@@ -363,7 +363,7 @@ monitored cgroups, so the policy is armed at unit level but inert at runtime, an
 was not determined. **The `avoid` property readback therefore proves a string was transmitted, not
 that behaviour changed** — by this plan's own G15 standard that is a partially un-run instrument.
 That uncertainty is the reason to set `avoid`, not a reason to skip it, but the limitation must be
-stated plainly in ADR-158 and **must not be dressed up as a verified mitigation.** Accordingly the
+stated plainly in ADR-159 and **must not be dressed up as a verified mitigation.** Accordingly the
 `oomctl`-before/after PR-body clause is cut from AC15: with zero monitored cgroups it returns the
 same result on every arm.
 
@@ -577,10 +577,10 @@ and C4 **would be misled** about how an agent session is bounded and reaped.
 
 ### ADR
 
-**Create `ADR-158-memory-backstop-via-systemd-transient-scopes.md`.** (Resolved at /work: the plan's provisional 155 was taken.) Highest existing ordinal at plan
+**Create `ADR-159-memory-backstop-via-systemd-transient-scopes.md`.** (Resolved at /work: the plan's provisional 155 was taken.) Highest existing ordinal at plan
 time is **ADR-154**, so **155 is provisional** — `/ship`'s ADR-Ordinal Collision Gate re-verifies
 against `origin/main`. **If it renumbers, sweep the whole feature artifact set in the same edit**
-(`grep -rn 'ADR-158' knowledge-base/project/{plans,specs}/`): the plan, `tasks.md`, and AC14 all name
+(`grep -rn 'ADR-159' knowledge-base/project/{plans,specs}/`): the plan, `tasks.md`, and AC14 all name
 the ordinal and would otherwise assert a nonexistent file.
 
 Record the decision *and* — per the engineering review — the **wrapper-vs-adopt choice**, the
@@ -613,8 +613,8 @@ In-scope `.c4` edits, committed in **this** feature's lifecycle (edited directly
 the `c4-edit` flag gates only the in-browser webapp editor and is not on this path):
 
 1. `model.c4` — add `systemdUser = system "systemd (user manager)" { #external; description "…" }`.
-2. `model.c4` — add `hooks -> systemdUser "Adopts the live agent process tree into a memory-capped transient scope under soleur-agents.slice (StartTransientUnit over D-Bus); systemd is the single writer — no raw cgroup directory writes (ADR-158)" { technology "D-Bus (busctl --user)" }`.
-3. `model.c4` — add `founder -> claude "Closes the terminal to reap a runaway session — preserved across the memory backstop by BindsTo= on the terminal's own scope; explicit fallback `systemctl --user stop soleur.slice` (ADR-158)"`.
+2. `model.c4` — add `hooks -> systemdUser "Adopts the live agent process tree into a memory-capped transient scope under soleur-agents.slice (StartTransientUnit over D-Bus); systemd is the single writer — no raw cgroup directory writes (ADR-159)" { technology "D-Bus (busctl --user)" }`.
+3. `model.c4` — add `founder -> claude "Closes the terminal to reap a runaway session — preserved across the memory backstop by BindsTo= on the terminal's own scope; explicit fallback `systemctl --user stop soleur.slice` (ADR-159)"`.
 4. `model.c4` — amend the `hooks` container description to include resource-control enforcement.
 5. `views.c4` — add `systemdUser` to the `include` list of **both** the `context` (L1) and `containers`
    (L2) views, matching every other external system. A `view … include` naming an undefined element
@@ -622,7 +622,7 @@ the `c4-edit` flag gates only the in-browser webapp editor and is not on this pa
 
 ### Sequencing
 
-Not soak-gated. ADR-158 ships `status: accepted` in this PR.
+Not soak-gated. ADR-159 ships `status: accepted` in this PR.
 
 ---
 
@@ -804,7 +804,7 @@ scrutiny the plan does not budget for.
 | **cgroup / OOM telemetry reads** | `scripts/followthroughs/zot-restart-plateau-6288.sh` reads `memory.max` and `memory.events`; `scripts/zot-restart-loop-alarm.sh` parses cgroup OOM signals. | Yes — `memory.events` as an OOM-attribution source is established practice in this repo. |
 
 **ADR ordinal re-derived from freshly-fetched `origin/main`** (not the branch base, which is the
-stale-pick failure mode): highest at plan time was **ADR-154**, so ADR-155 was provisional. At /work it was TAKEN (ADR-155/156/157 all landed on main), so the resolved ordinal is **ADR-158**. Still verified at ship —
+stale-pick failure mode): highest at plan time was **ADR-154**, so ADR-155 was provisional. At /work it was TAKEN (ADR-155/156/157 all landed on main), so the resolved ordinal is **ADR-159**. Still verified at ship —
 `/ship`'s collision gate re-verifies at merge.
 
 **Verified live at deepen time:** every cited issue resolves and carries the state the plan claims
@@ -1007,7 +1007,7 @@ under both `~/.config/systemd/user.control/` and `/run/user/<uid>/systemd/user.c
 
 ### Phase 6 — ADR + C4 + docs
 
-- [ ] 6.1 Write `ADR-158-…` per [§ Architecture Decision](#architecture-decision-adrc4), including the
+- [ ] 6.1 Write `ADR-159-…` per [§ Architecture Decision](#architecture-decision-adrc4), including the
       full Alternatives table.
 - [ ] 6.2 Apply the five `.c4` edits; run `apps/web-platform/test/c4-code-syntax.test.ts` and
       `c4-render.test.ts`.
@@ -1046,7 +1046,7 @@ under both `~/.config/systemd/user.control/` and `/run/user/<uid>/systemd/user.c
 | `.claude/hooks/memory-backstop.sh` | The hook. **Must be committed `100755`.** |
 | `.claude/hooks/memory-backstop.test.sh` | Behavioural suite + AC7 sweep + mutation battery. Auto-discovered. |
 | `.claude/hooks/settings-hook-exec-bit.test.sh` | AC1 class gate over every hook named in `settings.json`. Auto-discovered. |
-| `knowledge-base/engineering/architecture/decisions/ADR-158-memory-backstop-via-systemd-transient-scopes.md` | Ordinal provisional; see the collision-sweep note. |
+| `knowledge-base/engineering/architecture/decisions/ADR-159-memory-backstop-via-systemd-transient-scopes.md` | Ordinal provisional; see the collision-sweep note. |
 
 ### Files to Edit
 
@@ -1140,7 +1140,7 @@ touching it changes the blast radius, see [D12](#d12--blast-radius-a-documented-
       acceptance criterion of this feature.
 - [ ] **AC13** *(cut at plan review — a meta-AC asserting that other ACs were asserted. Every mutant
       already names its killing AC in the battery table; that table is the artifact.)*
-- [ ] **AC14** `ADR-158-…` exists at the resolved ordinal with `## Decision` and
+- [ ] **AC14** `ADR-159-…` exists at the resolved ordinal with `## Decision` and
       `## Alternatives Considered` sections, and the five `.c4` edits are applied with
       `c4-code-syntax.test.ts` + `c4-render.test.ts` passing. *(The six-alternative table with its
       refuting measurements is an authoring instruction in Phase 6.1.1 — no command can check "each
@@ -1148,7 +1148,7 @@ touching it changes the blast radius, see [D12](#d12--blast-radius-a-documented-
 - [ ] **AC15** `ManagedOOMPreference` reads back **`avoid`** on `soleur-agents.slice`. *(The
       `oomctl`-before/after clause is **cut**: with zero monitored cgroups it returns the same result
       on every arm — an un-run instrument by this plan's own G15 standard. The limitation is recorded
-      in ADR-158 instead; see [D7](#d7--systemd-oomd).)*
+      in ADR-159 instead; see [D7](#d7--systemd-oomd).)*
 - [ ] **AC16** *(cut at plan review — a verbatim restatement of Phase 7.4, checkable by no command.
       The PR-body content requirement lives at 7.4 where it belongs, and 7.4 now requires the
       live-arm evidence be pasted **verbatim as command-plus-output**, not summarised.)*
@@ -1246,7 +1246,7 @@ injection variable to leak, so the mutant is unrepresentable.)*
 | R9 | **CI cannot exercise the live arm**, so the assertions that matter most are SKIPPED there. | `RESULT: … [live: SKIPPED]` makes vacuity visible; AC16 requires live-arm evidence from the operator's box. |
 | R10 | **The hook itself becomes the incident.** | `exit 0` on every path; no `set -e`; `timeout` on every external call; stdout redirected; five named fail-open branches each with a test; a one-token full disable. It can decline to protect; it cannot block. |
 | R11 | **Contributors get caps they never asked for** (the blocking engineering objection). | [D12](#d12--blast-radius-a-documented-disagreement): `SOLEUR_DISABLE_MEMORY_BACKSTOP=1`, the repo's existing convention for four sibling hooks. Promotion to the shipped plugin surface is scoped out and flagged as requiring threshold revalidation. |
-| R12 | **ADR-158 ordinal collision** with a sibling PR. | `/ship`'s collision gate; the renumber sweep across plan + tasks + AC14 is named explicitly. |
+| R12 | **ADR-159 ordinal collision** with a sibling PR. | `/ship`'s collision gate; the renumber sweep across plan + tasks + AC14 is named explicitly. |
 | R13 | The cap arithmetic rests on a **one-moment** baseline. | Phase 0.7 re-measures and records it in the PR body; a materially different baseline is a replan signal. |
 
 ---
