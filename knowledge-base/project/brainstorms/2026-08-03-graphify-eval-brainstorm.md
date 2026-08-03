@@ -36,8 +36,10 @@ Probed directly from the repo API on 2026-08-03 — not README claims.
 - Runtime deps are local-only (networkx, numpy, rapidfuzz, ~28 tree-sitter grammars).
   No telemetry dependency declared.
 - Ships `benchmark.py` — "corpus vs subgraph token comparison".
-- **`llm.py` is 143 KB and `google_workspace.py` exists** → optional LLM/cloud paths
-  are architecturally present. "Zero LLM credits" is scoped to *graph build* only.
+- **`llm.py` is 143 KB and `google_workspace.py` exists** → LLM/cloud paths are present.
+  Per the vendor's own `skill.md`, "zero LLM credits" holds for **code only**: docs,
+  papers and images go through *semantic extraction* using **Gemini** when
+  `GEMINI_API_KEY`/`GOOGLE_API_KEY` is set, "otherwise the host agent itself is the LLM."
 - **PyPI distribution name is `graphifyy` (double-y), not `graphify`.**
 - `graphify/skill.md` is ~40 KB, with ~16 harness-specific variants of similar size.
 - Vendor BENCHMARKS.md (self-reported, vendor's own harness, judge Kimi K2.6):
@@ -93,9 +95,29 @@ at R@5(heavy) 0.2966 while searching *full text*. Graphify's deterministic path 
 a strict subset of that (headings + filenames + links). It cannot beat a superset of its
 own signal.
 
-**3. The prose-capable path reintroduces the thing that already failed.** Graphify's
-semantic route for documents runs through `llm.py`. Stage 2 already shipped an LLM
-paraphrase pre-pass and **regressed** heavy recall by −0.038 while adding cost.
+**3. The prose-capable path is LLM extraction — confirmed verbatim by the vendor, and it
+inverts the token-efficiency goal.** `graphify/skill.md` states:
+
+> "Code is extracted structurally (AST) with no LLM and no key at all — a code-only
+> corpus … skips semantic extraction entirely … **Semantic extraction (only for docs,
+> papers, and images) uses Gemini only if `GEMINI_API_KEY`/`GOOGLE_API_KEY` is already
+> set; otherwise the host agent itself is the LLM.**"
+
+Three consequences, all against adoption for the KB:
+
+- The "$0 / deterministic / no-vector-store" property that makes Graphify attractive
+  applies **only to code**. Our corpus is ~98.5% prose, so it sits entirely on the
+  semantic path.
+- **Token efficiency inverts.** With no Gemini key set, *the host agent is the LLM* —
+  indexing 2,084 prose learnings bills semantic extraction to Soleur's own agent tokens.
+  A tool adopted to reduce token cost would impose a large one-off, and recurring
+  per-update, cost on exactly the corpus in question.
+- **Egress becomes concrete, not hypothetical.** With a key set, the named third-party
+  recipient is **Google/Gemini** — by design, for precisely our file types. That sharpens
+  the CLO gate from "architecturally possible" to "documented default for this corpus".
+
+It also repeats a failed experiment: Stage 2 already shipped an LLM pre-pass and
+**regressed** heavy recall by −0.038 while adding cost.
 
 **4. Graphify does NOT re-open the "no embeddings" brand objection.** The 2026-04-07
 decision rejected RAG partly on the brand line "no vector DB, no embeddings". Graphify's
@@ -224,3 +246,19 @@ None blocking. One recorded for the code-axis probe:
    support". The extractor lives in `graphify/extractors/markdown.py`. Corrected before
    it reached the decision; recorded because the near-miss would have inverted Key
    Decision 4 (brand axis) into a wrong "no doc support at all" claim.
+   **Prevention:** in a modular codebase, list the `extractors/`-style handler directory
+   before concluding a per-type handler is absent from the monolithic dispatch file.
+4. **An unverified inference briefly reached the document.** Key Decision 3 initially
+   asserted the prose path "runs through `llm.py`" — an inference from a subagent finding
+   plus the file's existence, not something measured. A subagent-cited path
+   (`references/add-watch.md`) 404'd, so the quote it carried was never confirmed.
+   Re-probed `graphify/skill.md` directly and found the vendor's own verbatim statement,
+   which turned out to be **materially stronger and more specific** (Gemini, or the host
+   agent as LLM). Corrected in place.
+   **Prevention:** when a subagent's supporting citation fails to resolve, treat the
+   claim it carried as unverified and re-probe from a path you have listed yourself —
+   do not let the conclusion survive on the subagent's authority alone.
+5. **The `graphifyy` PyPI naming trap was nearly missed.** It surfaced only from reading
+   `pyproject.toml`'s `name =` field directly rather than the repo name or install docs.
+   **Prevention:** for any Python tool adoption, read `[project].name` in `pyproject.toml`
+   — the repo name is not the distribution name.
