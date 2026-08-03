@@ -612,7 +612,7 @@ t17_hook_input_prefix_not_orphan() {
   rm -rf "$root"
 }
 
-# --- T20: grep-rewrite-* is not an orphan (issue #7165, ADR-161) ------------
+# --- T20: grep-rewrite-* is not an orphan (issue #7165, ADR-162) ------------
 # .claude/hooks/grep-rewrite.sh emits `grep-rewrite-would-rewrite` (observe-only
 # soak) and `grep-rewrite-disarm` (envelope could not be built). Same tier-gate
 # rationale as T12/T17: the rule body lives in the hook header and the hooks

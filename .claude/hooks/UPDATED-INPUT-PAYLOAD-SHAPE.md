@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-03
 **CC version:** 2.1.220 (Claude Code)
-**Issue:** #7165 · **ADR:** [ADR-161](../../knowledge-base/engineering/architecture/decisions/ADR-161-pretooluse-hooks-may-rewrite-tool-input.md)
+**Issue:** #7165 · **ADR:** [ADR-162](../../knowledge-base/engineering/architecture/decisions/ADR-162-pretooluse-hooks-may-rewrite-tool-input.md)
 **Probe mechanism:** isolated `claude -p` with a throwaway `--settings` file in a temp dir (the live
 session's settings were never touched). A `PreToolUse(Bash)` hook logged its raw stdin and emitted
 `updatedInput`; a `PostToolUse(Bash)` hook logged its raw stdin. PostToolUse receives the
@@ -75,14 +75,14 @@ surfaces except a background job that mysteriously ran in the foreground.
 | Do permission rules match the original or the rewritten command? | **The original** |
 
 Re-entrancy being absent means an idempotency guard is defense in depth against a future runtime
-change, not a live requirement. It is still implemented (ADR-161 clause 4).
+change, not a live requirement. It is still implemented (ADR-162 clause 4).
 
 Permission matching on the original means a rewrite can neither dodge a deny rule nor satisfy an
 allow rule. Verified with an `allow: ["Bash(echo:*)"]`-only probe.
 
 ## Constraints on emitting it
 
-See [ADR-161](../../knowledge-base/engineering/architecture/decisions/ADR-161-pretooluse-hooks-may-rewrite-tool-input.md)
+See [ADR-162](../../knowledge-base/engineering/architecture/decisions/ADR-162-pretooluse-hooks-may-rewrite-tool-input.md)
 for the full clause list. The two that are easiest to get wrong:
 
 - **Never emit `permissionDecision` alongside `updatedInput`**, at any depth. An `allow` would

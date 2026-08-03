@@ -79,7 +79,7 @@ Bash resolves the name at execution time. Nothing is parsed, so nothing can be m
 
 An earlier design parsed the command and spliced `command grep` over each `grep` token. A 5-agent panel reproduced **seven** corruption failures in it, four of which break commands that work today. The prefix design dissolves all seven and additionally fixes the two forms the parser could not (`G=grep; $G …` and `eval "grep …"`), because those resolve the name through the shell too.
 
-Authority and its bounds: **ADR-161** (single rewriter, never `permissionDecision`, build from the whole `tool_input`, idempotent, fail-open at `exit 0`, permission matching on the original).
+Authority and its bounds: **ADR-162** (single rewriter, never `permissionDecision`, build from the whole `tool_input`, idempotent, fail-open at `exit 0`, permission matching on the original).
 
 ## What Went Well
 
@@ -123,5 +123,5 @@ above: it is done, and a closed issue in a follow-ups table reads as outstanding
 
 - #7163 — the diagnosis and the three refuted cost models (learning: `2026-08-02-ps-named-it-2-1-220-so-a-grep-that-ate-the-box-read-as-a-claude-leak.md`)
 - #7151 — an earlier attempt, closed unmerged
-- ADR-161 — PreToolUse hooks may rewrite tool input, under a single-rewriter invariant
+- ADR-162 — PreToolUse hooks may rewrite tool input, under a single-rewriter invariant
 - `.claude/hooks/UPDATED-INPUT-PAYLOAD-SHAPE.md` — the measured `updatedInput` contract

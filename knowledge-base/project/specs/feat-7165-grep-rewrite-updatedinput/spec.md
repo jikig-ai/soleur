@@ -77,7 +77,7 @@ not read. #7151 was closed unmerged. **The operator's exposure is unchanged.**
   unconditionally even in a repo that commits them. Nor is the second a free
   compensation for the first — measured end to end this is a ~2.25x SLOWDOWN versus
   the shim, dominated by the single-threaded-engine swap rather than by the
-  `.gitignore` loss. See ADR-161 §Accepted divergences.
+  `.gitignore` loss. See ADR-162 §Accepted divergences.
 - **FR5:** *(rewritten 2026-08-03 — the original stated the v1 lexer's contract and
   is contradicted by FR8 and by this feature's own fixtures; same missed sweep as
   FR2.)* The v2 design **does not inspect token position at all**. Every command
