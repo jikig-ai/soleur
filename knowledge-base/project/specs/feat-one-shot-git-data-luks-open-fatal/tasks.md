@@ -97,11 +97,11 @@ Threshold: `single-user incident` (`requires_cpo_signoff: true`)
 - [x] **6.3** Verify AC11's three greps return 0 (`.tf` diff, new `TF_VAR_*`, `web-git-data-probe` files).
 - [x] **6.4** Verify AC13's citation grep prints nothing (excluding the documented `spec.md` absence).
 - [x] **6.5** File the deferral tracking issues: (a) the `if ! cryptsetup isLuks` 126/127-swallowing hole; (b) project-quota enforcement, if deferred by the Phase-0 choice; (c) the emitter's 180-byte detail cap, if it still bites.
-- [ ] **6.6** PR body uses **`Ref #7204`**, not `Closes` — the issue closes when a rehearsal passes against the corrected template, which is a separate operator dispatch.
-- [ ] **6.7** **[R13]** PR body carries the dispatch command and **all three** verdict branches, not just PASS:
+- [x] **6.6** PR body uses **`Ref #7204`**, not `Closes` — the issue closes when a rehearsal passes against the corrected template, which is a separate operator dispatch.
+- [x] **6.7** **[R13]** PR body carries the dispatch command and **all three** verdict branches, not just PASS:
   - PASS → merge the evidence file (the workflow already prints the four commands at `git-data-rung2-rehearsal.yml:370-374`).
   - FAIL → **stop.** Read the now-selected `detail` column for the cause; open an issue. Do not re-dispatch.
   - TRANSIENT → **do not simply retry.** #7116 (OPEN) mis-reports TRANSIENT for exactly the early-boot fatals it could read from Sentry; attempt 1 of run 30649892865 was that mis-report. Confirm against Sentry (`host_name:soleur-git-data-rehearsal-<run-id>`, org `jikigai-eu`, project `web-platform`) first; a `level:fatal` row means treat it as FAIL.
   - **Hard cap: two `dry_run=false` dispatches per fix attempt.** Three paid hosts have already been spent on failures.
-- [ ] **6.7b** **[R1]** PR body states plainly that merging **does** run `apply-web-platform-infra.yml` (filter `apps/web-platform/infra/**`), why the apply is a no-op for scope reasons, and whether `[skip-web-platform-apply]` was used.
-- [ ] **6.8** **STOP.** Do not dispatch the rehearsal. Do not dispatch the birth.
+- [x] **6.7b** **[R1]** PR body states plainly that merging **does** run `apply-web-platform-infra.yml` (filter `apps/web-platform/infra/**`), why the apply is a no-op for scope reasons, and whether `[skip-web-platform-apply]` was used.
+- [x] **6.8** **STOP.** Do not dispatch the rehearsal. Do not dispatch the birth.
