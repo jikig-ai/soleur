@@ -9,6 +9,23 @@ approved.
 
 ---
 
+## RESOLVED — operator sign-off 2026-08-03 (Phase 0.4 gate CLOSED)
+
+| # | Resolution | Source |
+|---|---|---|
+| DC1 | **Option (a) — follow the wireframe.** Back arrow on the *populated* mobile browse view only; never in the shared `fullWidth` block. The `#4915` assertion is updated as a false-premise correction. | operator |
+| DC2 | **Default — empty secondary slot on mobile.** No "Browse files" row in the drawer. | operator |
+| DC3 | **Overflow menu, in this PR.** Mobile doc header keeps back + breadcrumb + Ask; Download, `KbSyncStatus`, and `SharePopover` move behind a `⋯` overflow. No capability dropped. Adds scope to `kb-content-header.tsx` (previously untouched by this plan). | operator |
+| DC4 | **Deferred — not this PR.** Brand-guide vs shipped-surface radius contradiction is a brand-guide edit; filed as its own issue at Phase 6. Wireframes keep 8–10px to match the shipped dashboard and the eight sibling wireframes. | pipeline, per DC4's own "not blocking this PR" |
+| DC5 | **Verified, not a choice — global bar is NOT suppressed on KB routes.** `app/(dashboard)/layout.tsx:320-334` renders the `md:hidden` top bar (hamburger-left, `MobilePaletteTrigger`-right) unconditionally for every dashboard route. The plan's assumption holds; the mobile ⌘K trigger survives on KB. | verified in code, no operator input needed |
+
+**Waived:** task 0.2 (a 9th `37-*` wireframe frame at the 768px switch point). The operator signed off
+on the eight committed frames, and the 768px switch is pinned behaviourally by the unconditional
+`768×1024` e2e arm in task 1.3 — which is stronger evidence than a static frame. Recorded here rather
+than silently dropped.
+
+---
+
 ## DC1 — Who owns "back" on the mobile KB browse view (taste, design)
 
 **Class:** taste — blocks Phase 1.

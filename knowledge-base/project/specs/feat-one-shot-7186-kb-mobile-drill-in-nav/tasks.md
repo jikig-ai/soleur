@@ -16,14 +16,15 @@ All paths below are relative to the repo root unless prefixed. Test/typecheck co
 No product code until 0.4 closes (`wg-ui-feature-requires-pen-wireframe`).
 
 - [x] 0.1 `.pen` + 8 frames (`29-`…`36-`) produced and committed (`15ac70b19`)
-- [ ] 0.2 Add the **768px tablet** frame (the switch point) as `37-*.png`, a direct child of
-      `knowledge-base/product/design/navigation/screenshots/`; verify with `git check-ignore -v`
-- [ ] 0.3 Surface the five open design questions — see
-      `knowledge-base/project/specs/feat-one-shot-7186-kb-mobile-drill-in-nav/decision-challenges.md`
-      (DC1 back-ownership, DC2 drawer row, DC3 doc-header budget, DC4 corner radius, DC5 ⌘K trigger)
-- [ ] 0.4 **Operator sign-off gate.** `xdg-open` the screenshots dir. Headless: record
-      `wireframes ready for async review at <dir>`, put DC1–DC5 in the PR body, and do **not** mark
-      the PR ready until the operator signs off. On approval run
+- [~] 0.2 ~~768px tablet frame as `37-*.png`~~ — **WAIVED** with reason recorded in
+      `decision-challenges.md`: operator signed off on the eight committed frames, and the 768px
+      switch point is pinned behaviourally by the unconditional `768×1024` e2e arm (task 1.3), which
+      is stronger than a static frame
+- [x] 0.3 Five design questions surfaced (DC1–DC5) in `decision-challenges.md`
+- [x] 0.4 **Operator sign-off gate — CLOSED 2026-08-03.** Screenshots dir opened via `xdg-open`;
+      operator answered DC1(a) / DC2 default / DC3 overflow-menu-this-PR. DC4 deferred to its own
+      issue; DC5 resolved by code verification (not a taste call). Resolutions table is in
+      `decision-challenges.md`. Still to run on this approval:
       `bash plugins/soleur/scripts/taste-profile-update.sh knowledge-base/product/design/taste-profile.md kb aesthetic-direction kb-mobile-drill-in "$(date -u +%F)"`
 - [ ] 0.5 `gh issue edit 7186 --milestone "Phase 4: Validate + Scale"`
 
@@ -61,7 +62,13 @@ No product code until 0.4 closes (`wg-ui-feature-requires-pen-wireframe`).
       `window.__kbNoReload` **sentinel** (NOT `page.on("framenavigated")`, which fires on correct
       SPA navs); **drawer-opened-during-fetch** (D3's transition); and **768×1024 UNCONDITIONALLY**
       — the only test anywhere that exercises the real `(min-width: 768px)` literal
-- [ ] 1.4 Run all four; confirm each fails on an **assertion**, not an import
+- [ ] 1.3b `apps/web-platform/test/kb-content-header.test.tsx` (new or extend if present) — RED for
+      DC3 (task 2.8). Mobile arm (`useIsMobile` → `true`): Download, sync status, and Share are NOT
+      in the header's own action row, ARE reachable after activating the `⋯` trigger, and exactly
+      ONE `kb-content-download` node exists in the tree (the single-mount assertion — a `md:hidden`
+      twin would make this two). Desktop arm: today's inline cluster, unchanged. Plus Escape and
+      outside-pointerdown both close the menu and restore focus to the trigger
+- [ ] 1.4 Run all five; confirm each fails on an **assertion**, not an import
 
 ## Phase 2 — GREEN
 
@@ -100,6 +107,25 @@ No product code until 0.4 closes (`wg-ui-feature-requires-pen-wireframe`).
 - [ ] 2.7 Re-check the `RAIL_EXPAND_EVENT` census after 2.4: dispatchers are `kb-sidebar-shell.tsx`
       (desktop collapsed rail) and `components/tour/tour-provider.tsx`; the sole listener stays
       `app/(dashboard)/layout.tsx:246-263`. Do **not** remove the event
+- [ ] 2.8 **DC3 — mobile doc-header overflow (operator-approved scope addition).**
+      `apps/web-platform/components/kb/kb-content-header.tsx` (`:64-109`): below `md`, the trailing
+      cluster becomes `KbChatTrigger` + a `⋯` overflow button whose menu holds **Download**
+      (`:65-103`), **`KbSyncStatus`** (`:104-106`), and **`SharePopover`** (`:107`). Desktop
+      (`md+`) renders today's inline cluster, byte-for-byte unchanged.
+      - **Operator chose an anchored overflow MENU, not a bottom sheet** — do not substitute
+        `ResponsiveModal`/`Sheet`.
+      - **Single-mount, same as the tree.** Gate on `hooks/use-is-mobile.ts` (SSR-safe `false` seed,
+        flips after mount) and render ONE cluster — never `hidden md:flex` / `md:hidden` twins of
+        `SharePopover` or `KbSyncStatus`, both of which own state and fetches.
+      - `SharePopover` is *moved into* the menu, not wrapped twice; its own popover
+        (`share-popover.tsx:174`, `absolute right-0 top-full`) must still be reachable and not clip
+        inside the overflow container.
+      - a11y: trigger is `aria-haspopup="menu"` + `aria-expanded`, ≥44px; menu dismisses on Escape
+        **and** outside-pointerdown with focus restored to the trigger (`SharePopover` currently
+        implements neither — do not copy that gap forward).
+- [ ] 2.9 Grep every `KbContentHeader` consumer before changing its render shape
+      (`hr-type-widening-cross-consumer-grep`): `grep -rn "KbContentHeader" apps/web-platform`.
+      Props are unchanged by 2.8, so this is a render-shape check, not a type check
 
 ## Phase 3 — Reconcile existing tests (each change enumerated in the PR body)
 
@@ -156,6 +182,10 @@ No product code until 0.4 closes (`wg-ui-feature-requires-pen-wireframe`).
       document route's loading/error branches render no back at all
       (`[...path]/page.tsx:130,:161`) — file #6 at `priority/p2-medium` or above
 - [ ] 6.2 Note in the PR body that Non-Goal #6 is a real mobile dead end this plan does not fix
+- [ ] 6.3 **DC4** — file a `domain/marketing` issue for the brand-guide contradiction: the guide says
+      "Sharp (0px border-radius)… No rounded corners" while the shipped dashboard surface and all
+      nine committed navigation wireframes use 8–10px. Resolution is a brand-guide edit (or a
+      surface change), owned by the CMO domain — not this PR
 
 ---
 
