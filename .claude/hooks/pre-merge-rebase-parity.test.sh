@@ -351,6 +351,52 @@ else
                          || fail "[.openhands] jq missing + repair command: want none|0, got $v"
 fi
 
+# SIGPIPE PADDING BYPASS (behavioural). grep-q-pipe-guard.test.sh forbids the
+# SHAPE textually; this asserts the CONSEQUENCE, which is what actually matters
+# and what no test covered. Under `set -o pipefail` a `producer | grep -q` whose
+# match is early leaves the producer with unwritten data, it takes SIGPIPE (141),
+# pipefail promotes that to the pipeline status, the `if` reads false and the
+# guard is skipped. Measured before the fix: rm -rf on HOME denied at 8 KB and
+# returned rc 0 with NO decision at 131 KB and 526 KB.
+#
+# The padding must exceed the 64 KiB pipe buffer or the race cannot occur at all
+# — a smaller fixture passes against the broken code and proves nothing.
+_pad_payload() { # <command> -> json with ~128 KB of trailing padding
+  python3 -c '
+import json,sys
+sys.stdout.write(json.dumps({"working_dir":"/tmp","cwd":"/tmp",
+  "tool_input":{"command":sys.argv[1]+"\n"+("#"*79+"\n")*1700}}))' "$1"
+}
+if ! command -v python3 >/dev/null 2>&1; then
+  skip "python3 missing — SIGPIPE padding-bypass parity case (1 assertion not run)"
+else
+  # `rm -rf $HOME` and not `git stash`: the stash guard only fires when the
+  # resolved dir is inside a worktree, so on a /tmp fixture it correctly allows
+  # and the case would pass for the wrong reason. The recursive-delete ownership
+  # proof denies unconditionally, which is what makes this a real pin — and it
+  # is the guard the measured bypass actually defeated.
+  want_env "[.openhands] a 128 KB-padded 'rm -rf \$HOME' still DENIES (SIGPIPE bypass)" "deny|2" \
+    "$OPENHANDS_GUARD" "$(_pad_payload 'rm -rf $HOME')"
+fi
+
+# `internal` — the shape program itself failing must be LOUD, not silent.
+# Before the fix the fallback assigned a value nothing branched on, so a broken
+# shape program disarmed every guard below it with no stdout, no stderr and no
+# record. Asserted behaviourally against a MUTATED COPY, because the class is
+# unreachable on a correct program by construction.
+_broken_shape_copy="$TMP/guardrails-broken-shape.sh"
+sed 's/if (type == "object")/if (typeXX == "object")/' "$OPENHANDS_GUARD" > "$_broken_shape_copy"
+if ! grep -q 'typeXX' "$_broken_shape_copy"; then
+  fail "[fixture] could not break the shape program — the internal-class case would be vacuous"
+else
+  _stderr="$(printf '%s' "$NONSTRING_PAYLOAD_EARLY" | bash "$_broken_shape_copy" 2>&1 >/dev/null || true)"
+  if [[ -n "${_stderr//[[:space:]]/}" ]]; then
+    pass "[.openhands] a broken shape program fails open LOUDLY (internal class)"
+  else
+    fail "[.openhands] a broken shape program failed open SILENTLY — no stdout, no stderr, guards disarmed"
+  fi
+fi
+
 # Non-string: the original ADR-156 signature. Both must refuse to coerce; they
 # refuse with different verbs.
 NONSTRING_PAYLOAD='{"working_dir":"/tmp","cwd":"/tmp","tool_input":{"command":["git","stash"]}}'
