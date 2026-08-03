@@ -25,8 +25,31 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PASS=0
 FAIL=0
 TOTAL=0
+SKIPPED=0
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
+# The summary line is the only thing an aggregate runner reads. Printing it on
+# EVERY exit path — including this precondition — is what stops a jq-less
+# machine from emitting no line at all while still exiting 0. A silent exit 0
+# and a "50/50 pass, 0 skipped" are indistinguishable to a caller that only
+# greps the summary, which is the accounting hole #7190 item 5 names.
+summary() { echo; echo "=== hook-input-contract: $PASS/$TOTAL pass, $SKIPPED skipped ==="; }
+
+# jq absent → SKIP, deliberately retained. #7190 item 5 asked us to consider a
+# hard failure here and justify either way. Rejected, four reasons:
+#   (a) CI has jq, so a hard-fail is unreachable there — dead code guarding a
+#       hypothetical image change;
+#   (b) if CI ever lost jq, this suite is struck along with everything else, so
+#       the hard-fail buys no earlier signal;
+#   (c) it turns a green test-all.sh red on a jq-less dev machine for an
+#       environment reason, not a defect;
+#   (d) it buys false comfort while 21 SIBLING suites still skip silently in
+#       exactly that scenario.
+# If aggregate skip-invisibility is the real concern the fix is skip-accounting
+# in test-all.sh — one place, all 22 suites — and that is not this change.
+# What IS fixed here: the skip is now COUNTED and PRINTED rather than invisible.
+command -v jq >/dev/null 2>&1 || {
+  SKIPPED=$((SKIPPED + 1)); echo "SKIP: jq missing — whole suite"; summary; exit 0
+}
 
 # ADR-129 rule (c): ONE owning trap for every tempfile this suite allocates.
 # Per-case sandboxes are children of this root, so a case that dies mid-assertion
@@ -37,6 +60,18 @@ trap 'rm -rf "$HIC_TMPROOT"' EXIT
 ok()  { PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1)); echo "PASS: $1"; }
 bad() { FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1)); echo "FAIL: $1"; shift; local l; for l in "$@"; do echo "  $l"; done; }
 want(){ if [[ "$2" == "$3" ]]; then ok "$1 → $3"; else bad "$1" "want: $2" "got:  $3"; fi; }
+# A skip is NOT a pass. It increments neither PASS nor TOTAL — inflating the
+# pass count with unrun assertions is the thing being fixed — but it is counted
+# and surfaced in the summary so "48 here, 49 there" is legible instead of
+# mysterious.
+skip(){ SKIPPED=$((SKIPPED + 1)); echo "SKIP: $1"; }
+
+# Size of a ledger in bytes, with ABSENT deliberately equal to 0 rather than an
+# error or an empty string. That equivalence is what lets the worktree-ledger
+# assertion run unconditionally: a fresh checkout (no file) and a populated
+# checkout (a file) are then both comparable across the same run, instead of the
+# assertion existing in one environment and silently vanishing in the other.
+_ledger_bytes() { [[ -f "$1" ]] && wc -c < "$1" | tr -d '[:space:]' || echo 0; }
 
 EVAL10=(
   cla-signed-author-gate context-reviewed-gate follow-through-directive-gate
@@ -53,6 +88,12 @@ SIBLING8=(
 WRITE2=( worktree-write-guard iac-plan-write-guard )
 INSCOPE20=( "${EVAL10[@]}" "${SIBLING8[@]}" "${WRITE2[@]}" )
 
+# The designated responder, as a NAMED constant rather than the literal
+# `guardrails` scattered across five assertions. Mirrors HOOK_INPUT_RESPONDER in
+# lib/hook-input.sh. Single source of truth here so the responder-set change
+# tracked by #7173 has exactly one place to touch in this file.
+HOOK_INPUT_RESPONDER_NAME="guardrails"
+
 # Run a hook from a NON-GIT temp CWD so the orthogonal, branch-dependent
 # block-commit-on-main gate resolves an empty branch and no-ops. Without this
 # these fixtures pass on a feature worktree and fail on main-CI (#5192).
@@ -68,7 +109,57 @@ decision_for() { # <hook> <payload> [extra-env...]
   echo "$out" | jq -r '.hookSpecificOutput.permissionDecision // "<none>"' 2>/dev/null || echo "<jq-fail>"
 }
 
+# rc_for — the SIBLING of decision_for that reports the hook's EXIT CODE.
+#
+# Deliberately a second function rather than a `bad` call inside decision_for.
+# decision_for is invoked exclusively inside `$( )` at ~25 call sites, so a
+# FAIL=$((FAIL+1)) there runs in a SUBSHELL and is discarded — measured
+# `FAIL_after=0`. Written to stderr instead, decision_for returns a clean
+# decision, the outer `want` passes, and the suite exits 0 having detected a
+# non-zero rc and thrown it away. That is precisely the A9 dead-gate class this
+# suite was repaired for, one layer down. The rc is therefore returned THROUGH
+# STDOUT and compared by `want` in the CALLER's shell, where the increment
+# survives.
+rc_for() { # <hook> <payload> [extra-env...]
+  local hook="$1" payload="$2"; shift 2
+  local tmp rc=0
+  tmp="$(mktemp -d -p "$HIC_TMPROOT")"
+  ( cd "$tmp" && printf '%s' "$payload" \
+      | env INCIDENTS_REPO_ROOT="$tmp" "$@" bash "$SCRIPT_DIR/$hook.sh" >/dev/null 2>&1 )
+  rc=$?
+  rm -rf "$tmp"
+  echo "$rc"
+}
+
+# Build a PATH that genuinely lacks jq but keeps everything else a hook needs.
+# PATH=/nonexistent would also remove grep, git, mktemp and flock, so the hook
+# could not meaningfully run and any assertion over it would prove nothing.
+# `chmod 000 jq` does NOT work either: `command -v` skips a non-executable file
+# and finds the real jq further along PATH, so the helper parses normally and
+# the fixture silently exercises the WRONG path.
+# Echoes the shim directory, or "" if jq is still reachable (broken fixture).
+make_jqless_path() {
+  local shim b src
+  shim="$(mktemp -d -p "$HIC_TMPROOT")"
+  for b in bash sh env grep sed awk tr cat cut head tail sort uniq wc date \
+           mkdir rm ln ls mktemp dirname basename realpath xargs flock \
+           git perl python3 touch chmod find printf; do
+    src="$(command -v "$b" 2>/dev/null)" || continue
+    [[ -n "$src" ]] && ln -sf "$src" "$shim/$b" 2>/dev/null
+  done
+  [[ -e "$shim/jq" ]] && rm -f "$shim/jq"
+  if PATH="$shim" command -v jq >/dev/null 2>&1; then echo ""; return; fi
+  echo "$shim"
+}
+
 ARRAY_STASH="$(jq -nc '{tool_name:"Bash", tool_input:{command:["git","stash"]}}')"
+# A benign, fully-parseable envelope: every contracted field a string, no guard
+# tripped. The HAPPY class for A16.
+HAPPY_PAYLOAD="$(jq -nc '{tool_name:"Bash", tool_input:{command:"echo hello"}, cwd:"/w", session_id:"s"}')"
+# A document jq rejects outright (n == 0 → reason `unparseable`), distinct from
+# the ARRAY_STASH `nonstring` class so A16 and the Phase-2 loop cover disjoint
+# ground rather than duplicating one class across 40 invocations.
+MALFORMED_PAYLOAD='garbage {{'
 
 # ===========================================================================
 # A1 — idiom ban: ANY eval, not one spelling.
@@ -121,10 +212,14 @@ a2_guard_still_armed() {
 # or stdin never arrived. The control pins a deliberately vulnerable stub
 # carrying the ORIGINAL idiom and proves the harness can observe a marker.
 a3_rce_regression() {
-  local run stub marker hook payload pwned=()
-  run="$(mktemp -d -p "$HIC_TMPROOT")"
+  local run stub marker hook payload
+  local pwned=() unrecorded=() nonzero=() noisy=() strays=() entry
 
-  # --- positive control: the harness CAN observe a marker -------------------
+  # --- positive control, in its OWN directory ------------------------------
+  # It gets a private directory because the per-hook sandboxes below are also
+  # per-hook INCIDENTS_REPO_ROOTs; the control must not share a tree whose
+  # contents the stray-artifact property is simultaneously asserting over.
+  run="$(mktemp -d -p "$HIC_TMPROOT")"
   stub="$run/vulnerable-stub.sh"
   cat > "$stub" <<'STUB'
 #!/usr/bin/env bash
@@ -143,38 +238,115 @@ STUB
     bad "A3 positive control FAILED — the harness cannot observe a marker" \
         "every absence assertion below is therefore vacuous"
   fi
+  rm -rf "$run"
 
-  # --- the real assertion, all 10 ------------------------------------------
-  for hook in "${EVAL10[@]}"; do
-    marker="$run/PWNED-$hook"
+  # --- one loop, all 20, five properties per hook --------------------------
+  # ABSENCE ALONE WAS NOT ENOUGH, and the reason is worth stating plainly.
+  # This assertion previously reported "no attacker-named command executed by
+  # any of the 10 migrated hooks" while proving only that the DETECTOR works —
+  # the positive control validates the harness, not the SUBJECTS. Inserting
+  # `exit 0` at line 3 of nine of the ten hooks, so that they never read stdin,
+  # never source the helper and never run a guard, left the message unchanged
+  # and the suite green. An absence assertion over a subject that was never
+  # reached is indistinguishable from an absence assertion over a subject that
+  # was reached and behaved.
+  #
+  # The fix is PAIRING: in the same loop, require positive evidence that each
+  # hook actually got as far as the parse gate. Property (ii) is that evidence,
+  # and it is why this loop also subsumes the old A14 — which asserted the same
+  # thing over a hardcoded FOUR hooks while claiming a property of nineteen.
+  #
+  # Cardinality note: (ii) and (iv) were each instantiated over 4 hooks against
+  # a claimed 19, and (i) over 10. All three now quantify over INSCOPE20, which
+  # is the set the properties are actually about. Measured before widening: all
+  # 19 non-responders are silent, record the fault, and exit 0 — so the loop is
+  # widened to the full set rather than trimmed back to a passing subset.
+  for hook in "${INSCOPE20[@]}"; do
+    local sandbox rc out
+    sandbox="$(mktemp -d -p "$HIC_TMPROOT")"
+    marker="$sandbox/PWNED-$hook"
     payload="$(jq -nc --arg m "$marker" '{tool_name:"Bash",tool_input:{command:["x","touch",$m]}}')"
-    ( cd "$run" && printf '%s' "$payload" \
-        | INCIDENTS_REPO_ROOT="$run" bash "$SCRIPT_DIR/$hook.sh" >/dev/null 2>&1 )
+
+    out="$(cd "$sandbox" && printf '%s' "$payload" \
+          | INCIDENTS_REPO_ROOT="$sandbox" bash "$SCRIPT_DIR/$hook.sh" 2>/dev/null)"
+    rc=$?
+
+    # (i) no attacker-named command ran.
     [[ -e "$marker" ]] && pwned+=("$hook")
+
+    # (ii) REACHABILITY: the hook got to the parse gate and recorded the fault.
+    # Reads rule_id and kind ONLY — never command_snippet. The bad path emits
+    # values empty by construction, so there is no payload content in existence
+    # to read, and this assertion must not become the thing that starts logging
+    # one (A7 asserts the same boundary from the other side).
+    #
+    # `grep -qE <<<"$rids"` and NOT `jq … | grep -q`: under `set -o pipefail` a
+    # `producer | grep -q` returns NON-ZERO when the match is early, because
+    # grep closes the pipe and the producer takes SIGPIPE (141). That reads as
+    # "no match" and would silently convert this presence check into a
+    # permanent false negative — a vacuity bug inside the assertion added to
+    # remove vacuity. A herestring has no pipe.
+    local jsonl="$sandbox/.claude/.rule-incidents.jsonl" rids=""
+    [[ -f "$jsonl" ]] && rids="$(jq -r 'select(.kind=="hook_self_fault") | .rule_id' < "$jsonl" 2>/dev/null || true)"
+    if [[ -n "$rids" ]] && grep -qE '^hook-input-' <<<"$rids"; then :
+    else unrecorded+=("$hook"); fi
+
+    # (iii) rc 0 on the fault path. A16 covers the unparseable, happy and
+    # jq_missing classes; this covers `nonstring` without a 21st invocation.
+    [[ "$rc" == "0" ]] || nonzero+=("$hook → rc $rc")
+
+    # (iv) stdout silence unless this hook is the designated responder — one
+    # prompt per tool call, not 20. NOTE this is a FAULT-PATH contract: four of
+    # these hooks legitimately emit an explicit `allow` on a HAPPY envelope,
+    # which is why this loop is driven by the fault class and not the happy one.
+    if [[ "$hook" == "$HOOK_INPUT_RESPONDER_NAME" ]]; then
+      [[ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // ""' 2>/dev/null)" == "ask" ]] \
+        || noisy+=("$hook (responder did NOT ask)")
+    else
+      [[ -z "${out//[[:space:]]/}" ]] || noisy+=("$hook emitted output (only the responder should)")
+    fi
+
+    # (v) A12 stray artifacts, now PER HOOK. This property previously depended
+    # on the single shared `$run` that per-hook sandboxes dissolve, so it would
+    # have been silently lost in this merge. `.claude` is allow-listed because
+    # each sandbox is now also an INCIDENTS_REPO_ROOT.
+    # `find -mindepth 1 -maxdepth 1 -print0` rather than `ls | grep`: a filename
+    # produced by an attacker-shaped payload is exactly where a non-alphanumeric
+    # name shows up, and that is what `ls` output cannot represent unambiguously.
+    while IFS= read -r -d '' entry; do
+      case "${entry##*/}" in .claude) continue ;; esac
+      strays+=("$hook:${entry##*/}")
+    done < <(find "$sandbox" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+
+    rm -rf "$sandbox"
   done
+
   if (( ${#pwned[@]} == 0 )); then
-    ok "A3 no attacker-named command executed by any of the ${#EVAL10[@]} migrated hooks"
+    ok "A3 no attacker-named command executed by any of the ${#INSCOPE20[@]} in-scope hooks"
   else
     bad "A3 RCE still reachable in ${#pwned[@]} hook(s)" "${pwned[@]}"
   fi
-
-  # --- A12 stray artifacts: the trailing words must reach nothing -----------
-  # `find -mindepth 1 -maxdepth 1` rather than `ls | grep`: a filename produced
-  # by an attacker-shaped payload is exactly where a non-alphanumeric name would
-  # show up, and that is the case `ls` output cannot represent unambiguously.
-  local strays=() entry
-  while IFS= read -r -d '' entry; do
-    case "${entry##*/}" in
-      vulnerable-stub.sh|CONTROL-MARKER|.claude) continue ;;
-    esac
-    strays+=("${entry##*/}")
-  done < <(find "$run" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+  if (( ${#unrecorded[@]} == 0 )); then
+    ok "A3 REACHABILITY: all ${#INSCOPE20[@]} hooks reached the parse gate and recorded the fault"
+  else
+    bad "A3 hook(s) never reached the parse gate — the absence assertion above is vacuous for them" \
+        "a silent exit 0 with no record IS defect 2" "${unrecorded[@]}"
+  fi
+  if (( ${#nonzero[@]} == 0 )); then
+    ok "A3 all ${#INSCOPE20[@]} hooks exit 0 on a NONSTRING envelope"
+  else
+    bad "A3 hook(s) exited non-zero on a nonstring envelope — stdout JSON is discarded" "${nonzero[@]}"
+  fi
+  if (( ${#noisy[@]} == 0 )); then
+    ok "A14 exactly one prompt per tool call: only ${HOOK_INPUT_RESPONDER_NAME} emits, all others silent"
+  else
+    bad "A14 stdout discipline broken on the fault path" "${noisy[@]}"
+  fi
   if (( ${#strays[@]} == 0 )); then
-    ok "A12 no stray artifacts (no TOOL_NAME=/WORK_DIR=/FILE_PATH= files created)"
+    ok "A12 no stray artifacts in any of the ${#INSCOPE20[@]} sandboxes"
   else
     bad "A12 stray artifacts created by the payload's trailing words" "${strays[@]}"
   fi
-  rm -rf "$run"
 }
 
 # ===========================================================================
@@ -240,7 +412,7 @@ a4_cheap_variants() {
     py="$(python3 -c 'import sys; sys.stdout.write("{\"tool_input\":{\"command\":\"git \\ud800 stash \\ud83d\\udd25\"}}")')"
     want "A4 lone surrogate asks (not scrubbed-and-armed)" "ask" "$(decision_for guardrails "$py")"
   else
-    echo "SKIP: python3 missing — separator/surrogate fixtures"
+    skip "python3 missing — separator/surrogate fixtures (2 assertions not run)"
   fi
 }
 
@@ -251,29 +423,15 @@ a4_cheap_variants() {
 # PATH=/nonexistent would also remove grep, git, mktemp and flock, so the hook
 # could not meaningfully run and the assertion would prove nothing.
 a5_jq_unusable() {
-  # `chmod 000 jq` does NOT work: `command -v` skips a non-executable file and
-  # finds the real jq further along PATH, so the helper parses normally and the
-  # test silently exercises the WRONG path (it reported `ask` for reason
-  # `nonstring`, not `jq_missing`).
-  #
-  # Instead build a PATH that genuinely lacks jq but keeps everything else the
-  # hook needs. PATH=/nonexistent would also remove grep, git, mktemp and flock,
-  # so the hook could not run at all and the assertion would prove nothing.
-  local shim tmp out dec reason b
-  shim="$(mktemp -d -p "$HIC_TMPROOT")"
-  for b in bash sh env grep sed awk tr cat cut head tail sort uniq wc date \
-           mkdir rm ln ls mktemp dirname basename realpath xargs flock \
-           git perl python3 touch chmod find printf; do
-    local src; src="$(command -v "$b" 2>/dev/null)" || continue
-    [[ -n "$src" ]] && ln -sf "$src" "$shim/$b" 2>/dev/null
-  done
-  if [[ -e "$shim/jq" ]]; then rm -f "$shim/jq"; fi
-
-  # Precondition self-check: if jq is still reachable the fixture is broken and
-  # a pass below would be meaningless.
-  if PATH="$shim" command -v jq >/dev/null 2>&1; then
+  # The shim-PATH construction, its rationale and its precondition self-check
+  # now live in make_jqless_path — A16's `jq_missing` class needs the identical
+  # fixture, and two copies of a fixture whose failure mode is "silently
+  # exercises the wrong path" is exactly the drift this suite polices.
+  local shim tmp out dec reason
+  shim="$(make_jqless_path)"
+  if [[ -z "$shim" ]]; then
     bad "A5 FIXTURE BROKEN — jq still reachable on the shim PATH" "assertion would be vacuous"
-    rm -rf "$shim"; return
+    return
   fi
 
   tmp="$(mktemp -d -p "$HIC_TMPROOT")"
@@ -324,18 +482,53 @@ EOF
     bad "A6 no incident row written — the disarm is silent (defect 2)"
   fi
 
-  # The worktree ledger must be untouched.
-  if [[ -f "$REPO_ROOT/.claude/.rule-incidents.jsonl" ]]; then
-    local before after
-    before="$(wc -c < "$REPO_ROOT/.claude/.rule-incidents.jsonl")"
-    ( cd "$root" && printf '%s' "$ARRAY_STASH" | INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT_DIR/guardrails.sh" >/dev/null 2>&1 )
-    after="$(wc -c < "$REPO_ROOT/.claude/.rule-incidents.jsonl")"
-    want "A6 INCIDENTS_REPO_ROOT honoured (worktree ledger unchanged)" "$before" "$after"
-  fi
+  # --- INCIDENTS_REPO_ROOT is honoured, asserted UNCONDITIONALLY -----------
+  # This was gated on `[[ -f $REPO_ROOT/.claude/.rule-incidents.jsonl ]]`. That
+  # file is gitignored, so it does NOT exist on a fresh checkout: the assertion
+  # ran locally and silently vanished in CI, with no SKIP printed and the pass
+  # count differing by one between the two environments for no visible reason.
+  # An assertion that disappears based on an untracked file is worse than one
+  # that fails — it makes the count itself untrustworthy.
+  #
+  # It is made unconditional WITHOUT synthesizing a git repo. _incidents_repo_root
+  # (lib/incidents.sh:36-42) falls back to `dirname(BASH_SOURCE)/../../..` —
+  # HELPER-relative, not cwd- or git-relative — so a synthesized sandbox repo is
+  # a location the fallback can never resolve to, and "the synthesized repo's
+  # ledger is untouched" could not fail under any mutation. That would have been
+  # a vacuous assertion added by the very change removing vacuity. (A `git init`
+  # would also re-couple this suite to the branch-dependent gate that the
+  # non-git CWD at :56-58 deliberately avoids — #5192.)
+  #
+  # Instead: assert the PAIR. The sandbox ledger must GROW and the worktree
+  # ledger must be BYTE-IDENTICAL, with absent treated as size 0 on both sides.
+  # Deleting the INCIDENTS_REPO_ROOT branch from _incidents_repo_root makes both
+  # halves RED, and both run on every checkout.
+  local wt_ledger="$REPO_ROOT/.claude/.rule-incidents.jsonl"
+  local sb_before sb_after wt_before wt_after
+  sb_before="$(_ledger_bytes "$jsonl")"
+  wt_before="$(_ledger_bytes "$wt_ledger")"
+  ( cd "$root" && printf '%s' "$ARRAY_STASH" | INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT_DIR/guardrails.sh" >/dev/null 2>&1 )
+  sb_after="$(_ledger_bytes "$jsonl")"
+  wt_after="$(_ledger_bytes "$wt_ledger")"
 
-  # …and all the way to the surface a human reads.
+  if (( sb_after > sb_before )); then
+    ok "A6 INCIDENTS_REPO_ROOT honoured: the sandbox ledger grew ($sb_before → $sb_after bytes)"
+  else
+    bad "A6 the sandbox ledger did NOT grow ($sb_before → $sb_after bytes)" \
+        "the row went somewhere else, or nowhere — the redirect is not being honoured"
+  fi
+  want "A6 …and the worktree ledger is byte-identical (absent counts as 0)" "$wt_before" "$wt_after"
+
+  # --- …and all the way to the surface a human reads -----------------------
+  # The `[[ -x $agg || -f $agg ]]` gate is removed. The aggregator is a
+  # COMMITTED repo file; its absence is a broken checkout, not a legitimate
+  # skip, and silently skipping the end-to-end walk is how the walk stops being
+  # end-to-end.
   local agg="$REPO_ROOT/scripts/rule-metrics-aggregate.sh"
-  if [[ -x "$agg" || -f "$agg" ]]; then
+  if [[ ! -f "$agg" ]]; then
+    bad "A6 rule-metrics-aggregate.sh is MISSING at scripts/rule-metrics-aggregate.sh" \
+        "it is a committed repo file — this is a broken checkout, not a skippable condition"
+  else
     out="$(INCIDENTS_REPO_ROOT="$root" bash "$agg" --dry-run 2>/dev/null || true)"
     local n; n="$(printf '%s' "$out" | jq -r '.summary.hook_input_fault_count // 0' 2>/dev/null || echo 0)"
     if [[ "${n:-0}" -gt 0 ]]; then
@@ -464,32 +657,178 @@ a11_mechanism_ban() {
     local n; n="$(printf '%s\n' "$code" | grep -cE -- "$m" || true)"
     want "A11 helper contains no '$m'" "0" "$n"
   done
-  # `command -v jq` + exactly one invocation.
-  want "A11 helper forks jq exactly once" "1" \
-    "$(printf '%s\n' "$code" | grep -cE '\| jq ' || true)"
-  # No `$` in the jq program text: nothing is interpolated into it.
-  local prog
+  # A TOKEN COUNT, not a pipe-spelling grep.
+  #
+  # This was `grep -cE '\| jq '`, which pins an INCIDENTAL SPELLING: it is
+  # evaded outright by `$(jq …)`, `< <(jq …)`, `jq … < file` and backticks. It
+  # also counted LINES rather than occurrences, so a second `jq` appended to an
+  # existing line passed. Counting the bare token closes both without starting a
+  # regex arms race over invocation syntax.
+  #
+  # Comment-stripping is load-bearing: the raw file mentions `jq` 28 times in
+  # prose. Stripped, exactly two remain — `command -v jq` and the invocation.
+  #
+  # Deliberately NOT called a fork count. Relocating the single invocation into
+  # a loop keeps the token count at 2 while multiplying the forks; this asserts
+  # that no SECOND jq call site has been introduced, which is the drift that
+  # actually happens. The one-fork property is a design invariant recorded in
+  # the helper's own header and in ADR-157.
+  want "A11 helper names the jq token exactly twice (command -v + one invocation)" "2" \
+    "$(printf '%s\n' "$code" | grep -oE '\bjq\b' | grep -c . || true)"
+
+  # --- non-vacuity preconditions -------------------------------------------
+  # AN EXTRACTED RANGE THAT YIELDS EMPTY PASSES EVERY CONTENT ASSERTION.
+  # `grep -cF '$'` over an empty range returns 0, and 0 is exactly what the
+  # assertion below wants — so renaming `_HOOK_INPUT_JQ` made the range empty
+  # and the check reported success having read nothing. This is the same class
+  # as the A9 dead gate repaired in 68996d3ed, and the fix is the same: assert
+  # the range is non-empty BEFORE asserting anything about its contents.
+  local prog report_range
   prog="$(sed -n "/^_HOOK_INPUT_JQ='/,/^'$/p" "$helper")"
-  want "A11 the jq program interpolates nothing (no \$ in program text)" "0" \
-    "$(printf '%s\n' "$prog" | grep -cF '$' || true)"
+  if [[ -n "${prog//[[:space:]]/}" ]]; then
+    ok "A11 non-vacuity: the _HOOK_INPUT_JQ range is non-empty ($(printf '%s\n' "$prog" | grep -c . || true) lines)"
+    # No `$` in the jq program text: nothing is interpolated into it.
+    want "A11 the jq program interpolates nothing (no \$ in program text)" "0" \
+      "$(printf '%s\n' "$prog" | grep -cF '$' || true)"
+  else
+    bad "A11 the _HOOK_INPUT_JQ range extracted EMPTY — the anchor no longer matches" \
+        "every content assertion over it would pass vacuously (renamed constant?)"
+  fi
+
   # The response functions must never call exit — a sourced library that exits
   # terminates its caller invisibly and silently no-ops inside $( ) or a pipe.
-  want "A11 no response function calls exit" "0" \
-    "$(printf '%s\n' "$code" | sed -n '/^hook_input_report()/,$p' | grep -cE '^\s*exit ' || true)"
+  # Same non-vacuity treatment: the range is anchored on a FUNCTION NAME, so a
+  # rename empties it and the ban reports clean forever.
+  report_range="$(printf '%s\n' "$code" | sed -n '/^hook_input_report()/,$p')"
+  if [[ -n "${report_range//[[:space:]]/}" ]]; then
+    ok "A11 non-vacuity: the hook_input_report..EOF range is non-empty"
+    want "A11 no response function calls exit" "0" \
+      "$(printf '%s\n' "$report_range" | grep -cE '^\s*exit ' || true)"
+  else
+    bad "A11 the hook_input_report..EOF range extracted EMPTY — the anchor no longer matches" \
+        "the no-exit ban would pass vacuously (renamed function?)"
+  fi
+}
+
+# ===========================================================================
+# A16 — exit code 0 is the PRECONDITION for the entire ADR-157 posture.
+# ===========================================================================
+# The whole suite inspected stdout JSON and discarded `$?`. That is not a
+# cosmetic gap: per the Claude Code hooks reference, the exit code decides
+# whether the stdout channel is READ AT ALL.
+#
+#   exit 0   stdout JSON is parsed; permissionDecision is honored.
+#   exit 2   BLOCKING error. Tool prevented, stdout JSON IGNORED ENTIRELY,
+#            stderr becomes the block reason.
+#   exit 1   non-blocking error. stdout JSON IGNORED, and the tool PROCEEDS.
+#
+#   "You must choose one approach per hook, not both … Claude Code only
+#    processes JSON on exit 0. If you exit 2, any JSON is ignored."
+#
+# So a non-zero exit does not degrade the posture, it DELETES it:
+#   * `exit 2` in guardrails after emitting the ask → the ask is discarded and
+#     the call is DENIED. ADR-157 says this hook never denies.
+#   * `exit 2` in any of the 19 non-responders → that hook becomes a denier.
+#   * `exit 1` anywhere → the JSON channel is voided and the tool PROCEEDS,
+#     which is defect 2 restored verbatim.
+#
+# SCOPE OF THE CLAIM — read this before "fixing" a hook that seems to violate
+# it. This asserts rc 0 on the four payload classes probed below, NOT on every
+# branch a hook can reach. `pre-merge-auto-close-scan.sh` carries a deliberate
+# commented `exit 2` on a branch none of these payloads reach; it is not a
+# contract violation and must not be deleted as one.
+a16_exit_codes() {
+  local hook shim rc offenders=()
+
+  # --- class 1: unparseable (jq rejects the document; n == 0) ---------------
+  offenders=()
+  for hook in "${INSCOPE20[@]}"; do
+    rc="$(rc_for "$hook" "$MALFORMED_PAYLOAD")"
+    [[ "$rc" == "0" ]] || offenders+=("$hook → rc $rc")
+  done
+  if (( ${#offenders[@]} == 0 )); then
+    ok "A16 all ${#INSCOPE20[@]} in-scope hooks exit 0 on an UNPARSEABLE envelope"
+  else
+    bad "A16 hook(s) exited non-zero on an unparseable envelope — stdout JSON is discarded" "${offenders[@]}"
+  fi
+
+  # --- class 2: happy (every contracted field a string) --------------------
+  offenders=()
+  for hook in "${INSCOPE20[@]}"; do
+    rc="$(rc_for "$hook" "$HAPPY_PAYLOAD")"
+    [[ "$rc" == "0" ]] || offenders+=("$hook → rc $rc")
+  done
+  if (( ${#offenders[@]} == 0 )); then
+    ok "A16 all ${#INSCOPE20[@]} in-scope hooks exit 0 on a HAPPY envelope"
+  else
+    bad "A16 hook(s) exited non-zero on a happy envelope" "${offenders[@]}"
+  fi
+
+  # --- class 3: jq_missing -------------------------------------------------
+  # The class that most needs the assertion and is easiest to omit. Here
+  # hook_input_emit_ask's printf envelope is the ONLY surviving channel:
+  # emit_incident builds its row with `jq -nc`, so telemetry is unrecordable.
+  # A non-zero exit on this path voids the ask WITH ZERO TELEMETRY — the one
+  # combination that is both silent and unguarded. Without this class the
+  # mutation `[[ "$HOOK_INPUT_REASON" == jq_missing ]] && exit 1` survives A16.
+  shim="$(make_jqless_path)"
+  if [[ -z "$shim" ]]; then
+    bad "A16 FIXTURE BROKEN — jq still reachable on the shim PATH" "the jq_missing class would be vacuous"
+  else
+    offenders=()
+    for hook in "${INSCOPE20[@]}"; do
+      rc="$(rc_for "$hook" "$ARRAY_STASH" "PATH=$shim")"
+      [[ "$rc" == "0" ]] || offenders+=("$hook → rc $rc")
+    done
+    if (( ${#offenders[@]} == 0 )); then
+      ok "A16 all ${#INSCOPE20[@]} in-scope hooks exit 0 with jq MISSING (printf ask is the only channel)"
+    else
+      bad "A16 hook(s) exited non-zero with jq missing — the ask is voided with no telemetry" "${offenders[@]}"
+    fi
+  fi
+
+  # --- class 4: the responder's DENY path ----------------------------------
+  # Asserted conjoined with the decision, never in isolation: rc 0 alone is
+  # satisfied by a hook that stopped denying altogether. The idiom is borrowed
+  # from pre-merge-rebase.test.sh:84-101.
+  local deny_payload
+  deny_payload="$(jq -nc '{tool_name:"Bash", tool_input:{command:"git stash"}}')"
+  want "A16 the responder still DENIES on the deny path" "deny" \
+    "$(decision_for "$HOOK_INPUT_RESPONDER_NAME" "$deny_payload")"
+  want "A16 …and exits 0 while doing so (rc 2 would discard that very decision)" "0" \
+    "$(rc_for "$HOOK_INPUT_RESPONDER_NAME" "$deny_payload")"
+  want "A16 the responder ASKS on the fault path" "ask" \
+    "$(decision_for "$HOOK_INPUT_RESPONDER_NAME" "$ARRAY_STASH")"
+  want "A16 …and exits 0 while doing so" "0" \
+    "$(rc_for "$HOOK_INPUT_RESPONDER_NAME" "$ARRAY_STASH")"
 }
 
 # ===========================================================================
 # A13 — per-file source hygiene across all 20 in-scope hooks.
 # ===========================================================================
 a13_source_hygiene() {
-  local hook f n bad_src=() missing=() missing_call=()
+  local hook f n src_lines bad_src=() missing=() missing_call=()
   for hook in "${INSCOPE20[@]}"; do
     f="$SCRIPT_DIR/$hook.sh"
     n="$(grep -cE 'source .*lib/hook-input\.sh' "$f" || true)"
     [[ "$n" == "1" ]] || missing+=("$hook (found $n)")
     # Fail-soft source is defect 2 one line above where every test points.
-    grep -E 'source .*lib/hook-input\.sh' "$f" | grep -qE '\|\|[[:space:]]*(true|:)|2>/dev/null' \
-      && bad_src+=("$hook")
+    #
+    # Captured into a variable and matched with a HERESTRING rather than
+    # `grep … "$f" | grep -q …`. Under `set -o pipefail` a `producer | grep -q`
+    # returns non-zero when the match is early — grep closes the pipe, the
+    # producer takes SIGPIPE (141) — so the `&& bad_src+=(…)` never fires and
+    # the ban reports clean. That failure direction is FAIL-OPEN: a hook could
+    # regain a `|| true` on its helper source and this assertion would not
+    # notice. The producer here emits one short line, well under the 64 KiB
+    # pipe buffer, so it does not trip today — but the shape is banned for
+    # policy-gate hooks by grep-q-pipe-guard.test.sh, and a latent fail-open in
+    # the assertion that guards fail-hard sourcing is not worth keeping.
+    src_lines="$(grep -E 'source .*lib/hook-input\.sh' "$f" || true)"
+    if [[ -n "$src_lines" ]] \
+       && grep -qE '\|\|[[:space:]]*(true|:)|2>/dev/null' <<<"$src_lines"; then
+      bad_src+=("$hook")
+    fi
     # The `source` line alone is NOT the contract. A mutation battery showed
     # that DELETING the entire `if ! hook_parse_input … fi` block from a hook
     # left this suite fully green while the hook exited 0, wrote no incident
@@ -521,47 +860,20 @@ a13_source_hygiene() {
 }
 
 # ===========================================================================
-# A14 — guard-still-armed for the hooks that can decide from a bare payload.
+# A14 — MERGED INTO a3_rce_regression. See properties (ii) and (iv) there.
 # ===========================================================================
-# Honest coverage: only a subset of the 20 can produce a decision from stdin
-# alone; the rest need a git fixture or a `gh` stub. Those are NOT silently
-# degraded to "fail-open, as expected" — they are listed.
-a14_bare_payload_coverage() {
-  # The designated-responder design means only guardrails.sh EMITS the ask; the
-  # other 19 report and exit 0, so the operator sees ONE prompt per tool call
-  # rather than 19. An earlier draft of this assertion expected every hook to
-  # ask and was simply wrong about the contract.
-  #
-  # What must hold for a NON-responder is therefore: it does not proceed to a
-  # guard decision on an unparseable envelope, and it RECORDS the fault. Exiting
-  # 0 with no record is defect 2 — that is the thing being tested.
-  local hook silent=() unrecorded=() root d
-  for hook in kb-domain-allowlist-guard no-memory-write worktree-write-guard iac-plan-write-guard; do
-    d="$(decision_for "$hook" "$ARRAY_STASH")"
-    [[ "$d" == "<none>" ]] || silent+=("$hook emitted '$d' (only the responder should)")
-    root="$(mktemp -d -p "$HIC_TMPROOT")"
-    ( cd "$root" && printf '%s' "$ARRAY_STASH" \
-        | INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT_DIR/$hook.sh" >/dev/null 2>&1 )
-    if [[ -f "$root/.claude/.rule-incidents.jsonl" ]] \
-       && grep -q 'hook-input-' "$root/.claude/.rule-incidents.jsonl" 2>/dev/null; then :
-    else unrecorded+=("$hook"); fi
-    rm -rf "$root"
-  done
-
-  if (( ${#silent[@]} == 0 )); then
-    ok "A14 non-responder hooks stay silent on stdout (one prompt per call, not 18)"
-  else
-    bad "A14 a non-responder emitted a decision" "${silent[@]}"
-  fi
-  if (( ${#unrecorded[@]} == 0 )); then
-    ok "A14 every non-responder RECORDS the fault (a silent exit 0 is defect 2)"
-  else
-    bad "A14 hook(s) disarmed with no record" "${unrecorded[@]}"
-  fi
-  # …and the responder is the one that actually prompts, on the same payload.
-  want "A14 the designated responder emits the ask" "ask" \
-    "$(decision_for guardrails "$ARRAY_STASH")"
-}
+# This assertion asserted two properties — "non-responders stay silent" and
+# "every non-responder RECORDS the fault" — over a HARDCODED LIST OF FOUR
+# hooks, while its own message claimed a property of all nineteen. The fixture
+# was the whole of the gap: the reviewer probed all 19 with this exact payload
+# and every one was silent, recorded and rc 0, so widening the loop was a
+# one-line change that had simply never been made.
+#
+# It is merged rather than widened in place because it drove the SAME payload
+# class through the SAME hooks as A3's loop, one sandbox each — two overlapping
+# loops asserting overlapping properties, with A3 needing exactly the presence
+# evidence A14 was already collecting. One loop over INSCOPE20 now carries all
+# five properties, and the responder's own ask is asserted there and in A16.
 
 # ===========================================================================
 # A15 — shell-state hygiene. ADDED because the mutation battery caught nothing.
@@ -612,6 +924,57 @@ a15_shell_state_hygiene() {
   want "A15 IFS and \$- unchanged across every rc path" "0" "$drift"
 }
 
+# ===========================================================================
+# A17 — HAPPY-PATH VALUE FIDELITY. Nothing observed the values themselves.
+# ===========================================================================
+# Every assertion in this suite watched the DECISION. Not one watched what the
+# helper actually hands the guards on the path where it succeeds. Measured:
+# whitespace-trimming HOOK_CMD passed all five suites in this repo — and a
+# trimmed value silently no-ops every anchored guard regex, which is the same
+# end state as the disarm this file exists to prevent, reached by a different
+# road.
+#
+# The trailing-newline case is asserted on HOOK_FILE_PATH, and the slot choice
+# is load-bearing rather than arbitrary. Command substitution strips trailing
+# newlines, so the helper protects them with a REDUNDANT PAIR — the program's
+# trailing separator and a `printf 'X'` sentinel. Only the LAST emitted record
+# sits at the end of `raw`, so only slot 5 is actually shielded by that pair.
+# Measured against a scratch mutation dropping both: slots 1-4 keep their
+# trailing newline regardless, and only HOOK_FILE_PATH flips. Asserting this on
+# any other slot would let the mutation the assertion exists for pass GREEN.
+#
+# HOOK_CMD carries the properties that are slot-independent: leading spaces,
+# trailing spaces and an embedded newline.
+a17_value_fidelity() {
+  local helper="$SCRIPT_DIR/lib/hook-input.sh" payload verdict
+
+  # Built with jq so the JSON escaping is not hand-rolled. The expectations
+  # inside the probe use $'...' ANSI-C quoting rather than $( ), because $( )
+  # strips the very trailing newline this assertion exists to observe.
+  payload="$(jq -nc '{tool_name:"Bash",
+                      tool_input:{command:"  git \n stash  ", file_path:"/tmp/f\n"},
+                      cwd:"/w", session_id:"s"}')"
+
+  verdict="$(bash -c '
+      source "'"$helper"'"
+      hook_parse_input "$1" || { printf "PARSE_FAIL"; exit 0; }
+      exp_cmd=$'"'"'  git \n stash  '"'"'
+      exp_fp=$'"'"'/tmp/f\n'"'"'
+      v=0
+      [[ "$HOOK_CMD"       == "$exp_cmd" ]] || v=$((v+1))
+      (( ${#HOOK_CMD}      == ${#exp_cmd} )) || v=$((v+2))
+      [[ "$HOOK_FILE_PATH" == "$exp_fp"  ]] || v=$((v+4))
+      (( ${#HOOK_FILE_PATH} == ${#exp_fp} )) || v=$((v+8))
+      printf "%s" "$v"' _ "$payload" 2>/dev/null)"
+
+  # Content AND length are both compared. A trailing-newline loss is invisible
+  # to a content-only `[[ "$a" == "$b" ]]` evaluated inside $( ), which is how
+  # this class survives a test that looks like it checks it.
+  # Verdict bits: 1 cmd content · 2 cmd length · 4 file_path content · 8 file_path length.
+  want "A17 byte-exact round-trip of leading/trailing spaces, embedded and TRAILING newline" \
+    "0" "${verdict:-<no-output>}"
+}
+
 a1_idiom_ban
 a2_guard_still_armed
 a3_rce_regression
@@ -623,9 +986,9 @@ a9_designated_responder
 a10_kill_switch
 a11_mechanism_ban
 a13_source_hygiene
-a14_bare_payload_coverage
 a15_shell_state_hygiene
+a16_exit_codes
+a17_value_fidelity
 
-echo
-echo "=== hook-input-contract: $PASS/$TOTAL pass ==="
+summary
 [[ "$FAIL" -eq 0 ]] || exit 1
