@@ -88,6 +88,10 @@ identical to the probe host. Nothing to re-run.)*
       `DOPPLER_TOKEN_MAP` must land in the "neither" arm so the merge→apply window reads
       `degraded 0/13`, not `unknown`. Map-shape validation (C-b) before any network call. **Unset
       `DOPPLER_TOKEN_MAP` after the parse**, mirroring the discipline the replaced block states.
+- [ ] **2.5b** Update the "neither" arm's message at `:440-449` — it currently reads *"ERROR:
+      DOPPLER_TOKEN is unset or empty…"*, and that path is now the **merge→apply window's**
+      normal shape (empty `DOPPLER_TOKEN_MAP`). Name both variables. Do **not** change its
+      behaviour: it must keep publishing `degraded` at 0 configs before `exit 2`.
 - [ ] **2.6 GREEN** Single-credential mode (FR5b): 1-entry map from the existing
       `doppler configs -p soleur --json` (`:479-480`) restricted to exactly-one-result. Byte-for-byte
       today's behaviour; must NOT depend on the new self-identification surface.
@@ -123,15 +127,22 @@ identical to the probe host. Nothing to re-run.)*
       **This lands before 3.2** so no intermediate commit has new prose over an old credential.
 - [ ] **3.2** Rewrite the `env:` comment block (`:154-197`) from the interim narration to the map
       shape, keeping the "three places move together" floor note in substance.
-- [ ] **3.3 — the stale-prose sweep. Start from the grep, not from this list:**
-      `git grep -n 'doppler_service_account' .github/workflows/scheduled-terraform-drift.yml`
-      returns **6** lines.
+- [ ] **3.3 — the stale-prose sweep. RUN THE GREP; this list is a reading aid, not the
+      authority.** `git grep -n 'doppler_service_account' .github/workflows/scheduled-terraform-drift.yml`
+      returns **8** lines (`155, 422, 681, 695, 696, 739, 1791, 1795`). The count in the plan has
+      been wrong twice; trust the live output. **And the grep is not sufficient** — task 3.3.2
+      covers a site that carries credential-shape prose while naming no resource.
   - [ ] **3.3.1** **`:422`** — the `degraded`-path `::warning::` in the token_drift step's own
         `run:` body. It fires on **every degraded run** and says the credential *"is a
         `doppler_service_account` holding a viewer membership … nothing left to widen"*. Both
         clauses become false. **This is the site the first sweep missed.**
-  - [ ] **3.3.2** **`:660-667`** — the **`unknown`** branch of the coverage-issue body: *"a
-        DETECTOR fault, not a credential fault … Do not touch the Doppler identity."* Rewrite.
+  - [ ] **3.3.2** **`:597` AND `:660-667`** — the `unknown` branch, in two places that must agree.
+        **`:597`** is the `LEAD=` assignment carrying *"This is a DETECTOR fault, not a credential
+        fault: touching the Doppler identity will not clear it"* — it names no resource, so the
+        3.3 grep does **not** find it and no Remedy-scoped assertion can see it. **`:660-667`** is
+        the Remedy paragraph (*"Do not touch the Doppler identity… check for a truncated write in
+        `emit_json`"*). FR7b routes malformed-map faults to `unknown`, and those **are**
+        credential faults. Rewrite both.
   - [ ] **3.3.3** **`:668-692`** — the `CONFIGS == 1` interim branch: **delete**.
   - [ ] **3.3.4** **`:693-748`** — the `else` branch. Replace `N1`/`N2`/`N3` with plan §D5's rows.
         The service-account paragraph (`:694-702`), the `environments` paragraph (`:724-726`), the

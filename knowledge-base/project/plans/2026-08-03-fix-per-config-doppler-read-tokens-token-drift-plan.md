@@ -424,6 +424,12 @@ No `exception` block: no `plaintext-exception`, no `cert_verification: off`.
   validation (control C-b) runs before any network call. `DOPPLER_TOKEN_MAP` is **unset after
   the parse**, mirroring the existing discipline the block it replaces states verbatim
   (*"Unsetting makes that failure loud BY CONSTRUCTION"*).
+  **The "neither" arm's operator-facing message must be updated.** Verified at `:440-449`: it
+  reads *"ERROR: DOPPLER_TOKEN is unset or empty…"* and then correctly publishes `degraded` at
+  0 configs before `exit 2`. That path is now the **merge→apply window's** normal shape, reached
+  via an empty `DOPPLER_TOKEN_MAP`, so the message must name both variables — otherwise the one
+  error an operator is guaranteed to see during a correct rollout points at a variable the
+  workflow no longer sets. The `degraded`/`exit 2`/publish-before-exit behaviour is unchanged.
 - **FR5b** — single-credential mode is byte-for-byte today's behaviour: its 1-entry map comes
   from the existing `doppler configs -p soleur --json` at `:479-480` restricted to
   exactly-one-result, and its existing error path is unchanged. It must **not** depend on the
@@ -472,16 +478,27 @@ No `exception` block: no `plaintext-exception`, no `cert_verification: off`.
   "three places move together" floor note in substance.
 - **FR9 — the stale-prose sweep, and the enumeration IS the checklist.** Every site below is
   rewritten or deleted in this PR. `git grep -n 'doppler_service_account' .github/workflows/scheduled-terraform-drift.yml`
-  returns 6 lines and **v1 of this plan missed the highest-traffic one**:
+  returns **8** lines — `155, 422, 681, 695, 696, 739, 1791, 1795` — and **this plan's own count
+  has now been wrong twice** (v1 said "~14 prose sites", v2 said 6). Re-run the grep at /work
+  time and treat its output as the checklist; the anchors below are a reading aid, not the
+  authority. The credential-shape prose is additionally NOT confined to lines naming that
+  resource — see the `:597` bullet, which names no resource at all and is the one an operator
+  reads first:
   - **`:422`** — the `degraded`-path `::warning::` in the token_drift step's own `run:` body,
     which fires on **every degraded run** and says the credential *"is a `doppler_service_account`
     holding a viewer membership on the whole soleur project, so there is nothing left to widen"*.
     Both clauses become false. This is outside every anchor v1 listed and outside any
     Remedy-scoped assertion.
-  - **`:660-667`** — the **`unknown`** branch of the coverage-issue body: *"This is a DETECTOR
-    fault, not a credential fault… Do not touch the Doppler identity… check for a truncated
-    write in `emit_json`."* FR7b routes malformed-map faults here, which **are** credential
-    faults. Rewritten. (v1 rewrote only the `else` branch and would have shipped this.)
+  - **`:597`** — the `unknown` branch's **LEAD** assignment: *"This is a **DETECTOR fault, not a
+    credential fault**: touching the Doppler identity will not clear it."* This sentence lives in
+    the `LEAD=` variable, **not** in the Remedy block, and the line names no resource — so it is
+    invisible to both a `doppler_service_account` grep and any Remedy-scoped assertion. FR7b
+    routes malformed-map faults to `unknown`, and those **are** credential faults, so the lead is
+    wrong for the new shape's most likely `unknown` producer. **v2 of this plan scoped its
+    rewrite to `:660-667` and would have shipped this sentence untouched.**
+  - **`:660-667`** — the same `unknown` branch's Remedy paragraph: *"Do not touch the Doppler
+    identity on the strength of this issue… check for a truncated write in `emit_json`."*
+    Rewritten alongside `:597`; the two must agree. (v1 rewrote only the `else` branch.)
   - **`:668-692`** — the `CONFIGS == 1` interim branch: **deleted**. It exists only to explain
     the interim 1/13 and would otherwise suppress the correct diagnosis of a real collapse.
   - **`:693-748`** — the `else` branch. `N1`/`N2`/`N3` are replaced by §D5's rows. The
@@ -710,6 +727,11 @@ Every command below is written so a no-match `grep` cannot read as a failure und
       `git diff origin/main...HEAD -- plugins/soleur/test/token-drift-workflow-causes.test.sh .github/workflows/scheduled-terraform-drift.yml | grep -E '^-.*(FLOOR_MINIMUM=13|cfg_floor.*< 13|RUNG2_CONFIGS_FLOOR:[[:space:]]*13)' ; test $? -eq 1`
       (`grep` exits 1 on no match, which is the pass).
 - [ ] **AC-C2** Both anti-vacuity floors are strictly higher than on `origin/main`.
+- [ ] **AC-C3a** The `unknown` branch's **lead** no longer calls a credential fault a detector
+      fault: the workflow contains no occurrence of `DETECTOR fault, not a credential fault`.
+      Separate from AC-C3 because that sentence lives in a `LEAD=` assignment at `:597`, outside
+      any Remedy-anchored extraction, and names no resource — so neither AC-C3 nor a
+      `doppler_service_account` grep can reach it.
 - [ ] **AC-C3** The stale-prose sweep is complete, asserted over the **source region this plan
       edits**, with an explicit terminator and a non-vacuity check:
       `awk '/^ *echo "### Remedy"/{f=1;next} /^ *- name: /{f=0} f' .github/workflows/scheduled-terraform-drift.yml`
@@ -880,8 +902,12 @@ it is directly comparable to `grep … | sort -u`.
 `doppler_service_token.kb_drift` — scoped to `prd_kb_drift_walker`, a **branch** config —
 `doppler configs list` *"returns a list silently scoped to the caller (one entry, `success:
 true`, no error)"*. P0.3 q3 confirms rather than discovers. `doppler me --json` exists in the
-pinned CLI v3.75.3 (alias `whoami`) but appears **nowhere** in this repository, which is exactly
-why C-c is conditional on measurement.
+pinned CLI v3.75.3 (alias `whoami`) and **is used in this repository** — as a literal runbook
+command at `knowledge-base/engineering/operations/runbooks/tenant-provisioning.md:151` and in a
+workflow example at `:292`. (An earlier revision of this plan claimed it appears "nowhere"; that
+was false, and the correction matters because it means the command's shape can be read from a
+committed artifact rather than discovered.) What is still **unmeasured** is which of its fields
+carries a *config-scoped* token's bound config — which is why C-c stays conditional on P0.3.
 
 **R6 — `[ack-destroy]` is read from the merge commit, and this repo builds that from BRANCH
 COMMIT MESSAGES.** Measured: `squash_merge_commit_message: COMMIT_MESSAGES`,
@@ -898,9 +924,13 @@ the breakage is via the interim pin (`token-drift-workflow-causes.test.sh:1164-1
 parity guard. The slug `0519109d-…` appears **nowhere** in the repo. The sweep's first pass
 undercounted twice and both corrections are folded into FR9/FR10: `scheduled-terraform-drift.yml:422`
 (the degraded `::warning::`, the highest-traffic site) and the fifth detector invocation form
-(`doppler run … -- check-cloudflare-token-drift.sh` in two operator-facing remedy strings).
+(`doppler run … -- check-cloudflare-token-drift.sh` in two remedy strings).
 `git grep -n 'doppler_service_account' .github/workflows/scheduled-terraform-drift.yml` returns
-**6** lines — use that, not a memory of "~14 prose sites".
+**8** lines (`155, 422, 681, 695, 696, 739, 1791, 1795`) — **run the grep, do not trust a count
+written in a plan.** This number has been wrong in two consecutive revisions ("~14 prose sites",
+then "6"), which is itself the argument for FR9's instruction to treat the live grep as the
+checklist. And the grep is necessary but not sufficient: `:597` carries credential-shape prose
+while naming no resource, so it is invisible to this grep entirely.
 
 **R8 — learnings that bear directly** (paths verified):
 `learnings/2026-03-29-doppler-service-token-config-scope-mismatch.md` (a service token is scoped
@@ -991,6 +1021,9 @@ The 5-agent panel + CTO + advisor found 4 P0s and 12 P1s against v1. Audit trail
 | **P2** `discoverability_test` errors on an in-progress run; `grep -m1` SIGPIPEs `gh` | kieran | `--status success` + `tail -1` |
 | **P2** the follow-through asserts a reviewer gate removed by PR #4220 | spec-flow | FR16 |
 | **P2** `DOPPLER_TOKEN_MAP` should be unset after the parse, per the discipline of the block it replaces | architecture | FR5 |
+| **P1 (deepen)** the `unknown` branch's LEAD at `:597` — *"a DETECTOR fault, not a credential fault"* — lives outside the Remedy block and names no resource, so **v2's own rewrite scope (`:660-667`) and its `doppler_service_account` grep both missed it**, while FR7b routes credential faults straight to `unknown` | verify-the-negative pass | FR9's `:597` bullet; AC-C3a; tasks 3.3.2 |
+| **P2 (deepen)** the `doppler_service_account` grep count was stated as 6; it is **8** (`155, 422, 681, 695, 696, 739, 1791, 1795`) — wrong in two consecutive revisions | verify-the-negative pass | FR9 and R7 now instruct running the grep and name the count as a reading aid only |
+| **P2 (deepen)** "`doppler me` appears nowhere in this repository" was **false** — it is a literal runbook command at `tenant-provisioning.md:151,292` | verify-the-negative pass | R5 corrected; the unmeasured part is narrowed to *which field* carries a config-scoped token's binding |
 | **taste** the plan was ~1,300 lines of scaffolding around a loop; the `Test Scenarios` table duplicated the ACs 1:1; CI-green ACs, six restating-NFRs, and four self-referential Sharp Edges were ceremony | DHH + code-simplicity | table deleted, ACs consolidated 35→22, FRs merged, Risks cut to the 6 no FR encodes, Alternatives reduced to an index pointing at the ADR |
 
 Two panel recommendations were **declined**, with reasons, per `rf-when-a-reviewer-or-user-says-to-keep-a`:
