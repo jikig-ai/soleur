@@ -73,11 +73,14 @@
 # prd_workspaces_luks boot token, neither of which may be parked on the long-lived app host.
 #
 # ANTI-CIRCULARITY COROLLARY (the reason this is a native `schedule:` and not an Inngest dispatch).
-# The Inngest dispatcher runs ON web-1 — the very host whose volume this workflow verifies. A
-# verifier dispatched by the host it verifies cannot report the failure mode "that host is gone":
-# the dispatch dies with the subject. A native GHA `schedule:` has no dependency on web-1, which is
-# exactly the independence the check requires. This corollary is recorded in ADR-033 alongside the
-# scope note.
+# Note the SCHEDULER is not the issue: since the #5450 durable-backend cutover Inngest runs on its
+# own host (hcloud_server.inngest, 10.0.1.40). EXECUTION is. Inngest reaches the functions over a
+# single stable callback --sdk-url http://10.0.1.10:3000/api/inngest (inngest-host.tf), i.e. the
+# app on WEB-1 — the very host whose volume this workflow verifies — with no failover to web-2
+# (serving-weight 0, ADR-143 D2). So a cron-*.ts that dispatched this verifier would itself execute
+# on the subject: if web-1 is gone the callback never lands, the function never runs, no dispatch is
+# issued, and the check reports SILENCE — read as health — in exactly the failure it exists to
+# catch. A native GHA `schedule:` has no dependency on web-1. Recorded in ADR-033 by the scope note.
 #
 # always(), NOT !cancelled(), on the alarm. A run cancelled while PENDING by concurrency
 # supersession executes no steps at all, so !cancelled() buys nothing there — while being the

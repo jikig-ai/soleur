@@ -557,10 +557,17 @@ EOS
     *) no "the selftest title ('$s_title') is not marked SELF-TEST — a rehearsal could be read as a real alarm" ;;
   esac
 
+  # FAIL-CLOSED, asserted by TITLE IDENTITY rather than by grepping the argv for the word
+  # "unavailable". An empty class is what a Re-assert step that never ran leaves behind, and the
+  # property that matters is that it lands on the SAME issue the unavailable class does — which a
+  # substring match anywhere in the argv (a label, a temp-file name) would claim without proving.
   CLASS="" RSN=none alarm_drive
-  grep -qi 'unavailable' "$LAST_GH" 2>/dev/null \
-    && ok "an EMPTY outcome_class fails closed to unavailable" \
-    || no "an empty outcome_class produced no unavailable routing — the fail-closed default is missing"
+  e_title=$(title_of "$LAST_GH")
+  if [[ -n "$u_title" && "$e_title" == "$u_title" ]]; then
+    ok "an EMPTY outcome_class fails closed to the same issue as unavailable"
+  else
+    no "an empty outcome_class filed '${e_title:-<nothing>}' but unavailable files '${u_title:-<nothing>}' — the fail-closed default is missing or routes elsewhere"
+  fi
 
   # DEDUPE IS BY EXACT TITLE, so the fixture must carry the exact title the drift class files. An
   # arbitrary open issue (the earlier fixture used title "x") would leave the alarm correctly
