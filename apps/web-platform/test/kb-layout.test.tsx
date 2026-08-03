@@ -317,9 +317,15 @@ describe("#7186 — file-tree host table (exactly one tree, in the named host)",
 
       if (fixture === "empty") {
         // An empty tree renders RailEmptyState in place of FileTree, so the
-        // correct nav count here is ZERO — asserting 1 would demand a tree that
-        // must not exist. The invariant that still holds: the shell stays in
-        // the rail and the content column never grows a browse host.
+        // correct nav count here is ZERO. Be precise about what that buys: a
+        // `toHaveLength(0)` on the nav is a TAUTOLOGY over this fixture — it is
+        // true for every possible implementation, because FileTree is the sole
+        // emitter of that role and it is not rendered at all. It is kept only as
+        // documentation of the expected count, and `expectedHost` is likewise
+        // decorative on these two rows (the branch returns before the
+        // containment check). The assertion that actually discriminates here is
+        // the `kb-browse-tree` absence below: mounting the shell into the
+        // content column inside the fullWidth block reds it.
         await within(slot).findByTestId("kb-rail-empty");
         expect(within(slot).getByTestId("kb-rail-tree")).toBeInTheDocument();
         expect(

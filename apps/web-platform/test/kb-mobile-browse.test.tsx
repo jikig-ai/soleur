@@ -72,6 +72,11 @@ const POPULATED = {
 const EMPTY = { tree: { name: "root", type: "directory", path: "", children: [] } };
 
 let treeFixture: typeof POPULATED | typeof EMPTY = POPULATED;
+// The five members of the `fullWidth` set. AC3's viewport-invariance claim
+// quantifies over ALL of them; pinning only "empty" let a `loading && !isDesktop`
+// leak survive the whole suite (found by mutation, not by reading).
+type FullWidthState = "loading" | "workspace-not-ready" | "not-found" | "unknown" | "empty";
+let treeStatus: number | "pending" = 200;
 const searchResults: { path: string; kind: string; matches: [] }[] = [];
 
 const originalFetch = globalThis.fetch;
@@ -81,10 +86,21 @@ beforeEach(() => {
   mockIsDesktop = false;
   fileTreeThrows = false;
   treeFixture = POPULATED;
+  treeStatus = 200;
   sessionStorage.clear();
   globalThis.fetch = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
     if (url.startsWith("/api/kb/tree")) {
+      // "pending" models the FIRST paint: loading === true, which is the state
+      // the D1 hydration argument rests on and which nothing asserted.
+      if (treeStatus === "pending") return new Promise(() => {});
+      if (treeStatus !== 200) {
+        return Promise.resolve({
+          ok: false,
+          status: treeStatus,
+          json: () => Promise.resolve({}),
+        });
+      }
       return Promise.resolve({
         ok: true,
         status: 200,
@@ -175,24 +191,59 @@ describe("#7186 — mobile KB drill-in", () => {
   });
 
   // AC3, behavioural form: no viewport-derived value may reach the fullWidth
-  // block. If a JS gate leaks in there, these two strings diverge.
-  it("the fullWidth block is viewport-invariant (AC3)", async () => {
-    treeFixture = EMPTY;
+  // block. Parameterised over ALL FIVE fullWidth sub-states — pinning only
+  // `empty` (as the first draft did) let a `loading && !isDesktop` leak survive
+  // every one of the 49 tests.
+  const FULL_WIDTH_STATES: { name: FullWidthState; arrange: () => void }[] = [
+    { name: "loading", arrange: () => { treeStatus = "pending"; } },
+    { name: "workspace-not-ready", arrange: () => { treeStatus = 503; } },
+    { name: "not-found", arrange: () => { treeStatus = 404; } },
+    { name: "unknown", arrange: () => { treeStatus = 500; } },
+    { name: "empty", arrange: () => { treeFixture = EMPTY; } },
+  ];
 
-    mockIsDesktop = true;
-    const desktop = await renderLayout();
-    const desktopHtml = (
-      await screen.findByTestId("kb-page-mobile-header")
-    ).parentElement!.innerHTML;
-    desktop.unmount();
+  it.each(FULL_WIDTH_STATES)(
+    "the fullWidth block is viewport-invariant in the $name sub-state (AC3)",
+    async ({ arrange }) => {
+      arrange();
+      const arranged = { treeStatus, treeFixture };
 
-    mockIsDesktop = false;
-    await renderLayout();
-    const mobileHtml = (
-      await screen.findByTestId("kb-page-mobile-header")
-    ).parentElement!.innerHTML;
+      mockIsDesktop = true;
+      const desktop = await renderLayout();
+      const desktopHtml = (
+        await screen.findByTestId("kb-page-mobile-header")
+      ).parentElement!.innerHTML;
+      desktop.unmount();
 
-    expect(mobileHtml).toBe(desktopHtml);
+      // beforeEach does not re-run between the two halves of one case.
+      treeStatus = arranged.treeStatus;
+      treeFixture = arranged.treeFixture;
+      mockIsDesktop = false;
+      await renderLayout();
+      const mobileHtml = (
+        await screen.findByTestId("kb-page-mobile-header")
+      ).parentElement!.innerHTML;
+
+      expect(mobileHtml).toBe(desktopHtml);
+    },
+  );
+
+  // The `loading` term of `fullWidth` had NO assertion behind it: mutating it to
+  // `loading ? false : (...)` left all 49 tests green, while on a real phone it
+  // renders the browse view — a viewport-derived branch at first paint, which is
+  // exactly the hydration class D1 exists to exclude.
+  it("holds the fullWidth block while the tree fetch is pending, at BOTH viewports (D1 reason 1)", async () => {
+    for (const isDesktop of [true, false]) {
+      treeStatus = "pending";
+      mockIsDesktop = isDesktop;
+      const r = await renderLayout();
+      expect(
+        await screen.findByTestId("kb-page-mobile-header"),
+      ).toBeInTheDocument();
+      expect(screen.queryByTestId("kb-browse-tree")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("doc-content")).not.toBeInTheDocument();
+      r.unmount();
+    }
   });
 
   it("the #6917 stopgap is gone from the mobile landing (AC7b)", async () => {

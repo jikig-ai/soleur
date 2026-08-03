@@ -160,6 +160,36 @@ describe("KbContentHeader — mobile overflow (DC3)", () => {
     expect(screen.queryByTestId("kb-header-overflow-menu")).toBeNull();
   });
 
+  // The viewport-reset effect had NO test: every case set mockIsMobile BEFORE a
+  // single render(), so nothing ever flipped the viewport under a mounted
+  // component and deleting the effect left the whole suite green. A rotation to
+  // landscape is a real way to reach it.
+  it("mobile→desktop under an OPEN menu drops the menu instead of stranding it", () => {
+    mockIsMobile = true;
+    const tree = () => <KbContentHeader {...props} />;
+    const { rerender } = render(tree());
+
+    fireEvent.click(screen.getByTestId("kb-header-overflow-trigger"));
+    expect(screen.getByTestId("kb-header-overflow-menu")).toBeInTheDocument();
+
+    mockIsMobile = false;
+    rerender(tree());
+
+    expect(screen.queryByTestId("kb-header-overflow-menu")).toBeNull();
+    expect(screen.queryByTestId("kb-header-overflow-trigger")).toBeNull();
+    // The capability is not lost — the desktop cluster owns it again.
+    expect(screen.getByTestId("kb-content-download")).toBeInTheDocument();
+    expect(screen.getByTestId("share-popover")).toBeInTheDocument();
+
+    // And flipping back must not resurrect the stale open state.
+    mockIsMobile = true;
+    rerender(tree());
+    expect(screen.queryByTestId("kb-header-overflow-menu")).toBeNull();
+    expect(
+      screen.getByTestId("kb-header-overflow-trigger"),
+    ).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("mobile: a document with no download still gets a usable menu (Share + sync)", () => {
     mockIsMobile = true;
     render(
