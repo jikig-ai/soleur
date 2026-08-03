@@ -319,7 +319,7 @@ report=$(jq -n \
         | map(select(startswith("net-issue-flow") | not))
         | map(select(startswith("cost-of-filing-") | not))
         # grep-rewrite-* is .claude/hooks/grep-rewrite.sh telemetry (issue
-        # #7165, ADR-158): `-would-rewrite` from the observe-only soak and
+        # #7165, ADR-160): `-would-rewrite` from the observe-only soak and
         # `-disarm` when the envelope cannot be built. Same tier-gate rationale
         # as cost-of-filing-* above — the rule body lives in the hook header and
         # the hooks README, not in AGENTS.md, so the id has no core tag to
@@ -468,7 +468,7 @@ orphan_count=$(echo "$report" | jq -r '.summary.orphan_rule_ids | length')
 hook_input_fault_count=$(echo "$report" | jq -r '.summary.hook_input_fault_count // 0')
 grep_rewrite_disarm_count=$(echo "$report" | jq -r '.summary.grep_rewrite_disarm_count // 0')
 if [[ "${grep_rewrite_disarm_count:-0}" -gt 0 ]]; then
-  echo "WARNING: $grep_rewrite_disarm_count grep-rewrite disarm(s) — .claude/hooks/grep-rewrite.sh could not build its updatedInput envelope, so the ugrep shim was NOT neutralized for those calls. See ADR-158." >&2
+  echo "WARNING: $grep_rewrite_disarm_count grep-rewrite disarm(s) — .claude/hooks/grep-rewrite.sh could not build its updatedInput envelope, so the ugrep shim was NOT neutralized for those calls. See ADR-160." >&2
 fi
 
 if [[ "${hook_input_fault_count:-0}" -gt 0 ]]; then

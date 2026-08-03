@@ -65,7 +65,7 @@ done
 pd_hen_ok=$(( fail == 0 ? 1 : 0 ))
 
 # ===========================================================================
-# Registration, exec-bit, and single-rewriter gates (issue #7165, ADR-158)
+# Registration, exec-bit, and single-rewriter gates (issue #7165, ADR-160)
 # ===========================================================================
 # Folded into this meta-suite rather than a 4th meta-file: all three answer the
 # same question this file already asks — "is the hook actually wired up such
@@ -136,12 +136,12 @@ EOF
         echo "PASS: grep-rewrite.sh is registered on the PreToolUse Bash matcher." ;;
       *)
         echo "FAIL: grep-rewrite.sh is NOT in the settings-derived PreToolUse/Bash list."
-        echo "      The ugrep shim is un-neutralized; see ADR-158."
+        echo "      The ugrep shim is un-neutralized; see ADR-160."
         fail=1 ;;
     esac
 
     # --- AC13: exactly ONE hook source may rewrite tool input ---------------
-    # ADR-158 grants the rewrite authority under a single-rewriter invariant:
+    # ADR-160 grants the rewrite authority under a single-rewriter invariant:
     # two hooks emitting updatedInput for the same call have undefined
     # precedence, and the loser's rewrite is silently discarded.
     #
@@ -186,7 +186,7 @@ EOF
       echo "PASS: exactly one rewriting hook (grep-rewrite.sh) — single-rewriter invariant holds."
     else
       echo "FAIL: single-rewriter invariant violated. Rewriting hooks: [${rewriters:-none}]"
-      echo "      ADR-158 permits exactly one. Two hooks emitting updatedInput for the same"
+      echo "      ADR-160 permits exactly one. Two hooks emitting updatedInput for the same"
       echo "      call have undefined precedence and one rewrite is silently discarded."
       fail=1
     fi

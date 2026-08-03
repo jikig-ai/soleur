@@ -1,4 +1,4 @@
-# ADR-158 — PreToolUse hooks may rewrite tool input, under a single-rewriter invariant
+# ADR-160 — PreToolUse hooks may rewrite tool input, under a single-rewriter invariant
 
 - **Status:** Accepted
 - **Date:** 2026-08-03
@@ -14,8 +14,12 @@
   — three pattern-cost heuristics were measured and refuted there. They are **linked, not
   restated**; the point of this ADR is the authority, not that history.
 
-> **Ordinal.** Planned as ADR-155. Renumbered to 158 at implementation time: ADR-155, ADR-156 and
-> ADR-157 all landed on `origin/main` between plan approval and this branch's rebase.
+> **Ordinal.** Planned as ADR-155, renumbered to 158 at implementation time, and to **160** at ship
+> time. Sibling PRs claimed 155/156/157 before this branch's first rebase, and 158/159 before its
+> second — #7189 landed its own `ADR-158` while this one was in review. On a main this fast the
+> collision is expected rather than anomalous, so the number is chosen late and swept across every
+> citation as a unit (hook headers, both suites, README, both payload-shape docs, `model.c4` and its
+> regenerated artifact, the aggregator and its tests, plan, spec, and the AC walk).
 
 ## Context
 

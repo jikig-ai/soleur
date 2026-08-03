@@ -116,4 +116,4 @@ directory argument whose basename is one of the excluded names. For the six
 shim excludes (`.git`, `.svn`, `.hg`, `.bzr`, `.jj`, `.sl`) this is **already
 today's behavior** and therefore not a regression. It is new only for the three
 build dirs this change adds (`node_modules`, `dist`, `.next`), and the
-workaround is a trailing slash. Enumerated as an accepted divergence in ADR-158.
+workaround is a trailing slash. Enumerated as an accepted divergence in ADR-160.

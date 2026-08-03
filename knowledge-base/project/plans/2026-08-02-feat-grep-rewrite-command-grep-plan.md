@@ -357,12 +357,12 @@ visible next to what measurement returned. Every row below changed an artifact.
 
 | Plan said | Measured at /work | Disposition |
 |---|---|---|
-| ADR-155 (provisional) | 155, 156 **and** 157 landed on `main` before this branch rebased | **ADR-158**; swept across plan, tasks, ACs, README, C4 (task 7.8) |
+| ADR-155 (provisional) | 155, 156 **and** 157 landed on `main` before this branch rebased | **ADR-160**; swept across plan, tasks, ACs, README, C4 (task 7.8) |
 | Aggregator exits 5 at `:374` / `:426` | The two `exit 5` sites are the **dry-run orphan gate** and the **post-write orphan gate** (both anchored on `ERROR: orphan rule_id(s) in incidents jsonl`) | Mechanism confirmed by a RED probe. Coordinates were stale — and the line numbers this row originally cited went stale again inside this very PR, which inserts lines above them, so it now cites content anchors instead (`cq-cite-content-anchor-not-line-number`) |
 | `updatedInput` *may* replace `tool_input` | It **does** replace, wholesale — `timeout`/`description`/`run_in_background` all dropped and a background call ran in the foreground | Built from the whole `tool_input`; AC4 fixtured |
 | D3: 423 ms → 5,446 ms → 590 ms (**12.9×**) | ~3,600 ms → ~590 ms (**~6.0×**), spread ~230 ms | D3 **stands**; effect is ~13× the noise floor and the sign is physical. "With" figure reproduces exactly; baseline is machine state |
 | Corpus ≈ 6,100 commands, **zero exceptions** | **12,057** unique commands; **0 corrupted**, **4 declined** (0.03%) | See AC5 amendment below |
-| AC8: identical stdout | **Not identical.** Four divergence classes, measured against real ugrep | Enumerated in ADR-158 §Accepted divergences |
+| AC8: identical stdout | **Not identical.** Four divergence classes, measured against real ugrep | Enumerated in ADR-160 §Accepted divergences |
 | AC17: p95 < 50 ms | Unreachable by construction — 14 ms process floor, 20 ms per jq fork, and every sibling Bash hook is **103–124 ms** | Replaced with a relative gate; see below |
 | AC10: one `grep-rewrite-disarm` incident | Parse failures are owned by `lib/hook-input.sh` (landed on `main` after the plan was written) | See AC10 amendment below |
 | 12 shim bypass arms | **Confirmed byte-exact** against the live snapshot | No change |
@@ -389,7 +389,7 @@ Measured against real ugrep (capped) on a synthesized tree: `.gitignore` is no
 longer respected; `node_modules`/`dist`/`.next` are now always excluded; a bare
 directory argument whose basename is an excluded name returns nothing; and path
 rendering differs (`src/a.ts` vs `./src/a.ts`). All four are enumerated and
-accepted in ADR-158. **The `.gitignore` one carries a privacy dimension the plan
+accepted in ADR-160. **The `.gitignore` one carries a privacy dimension the plan
 did not anticipate** and is called out in the PR body: files a repo hides on
 purpose (`.env`, credential files) can now surface in a recursive grep.
 
