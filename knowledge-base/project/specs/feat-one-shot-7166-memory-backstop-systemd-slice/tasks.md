@@ -91,7 +91,7 @@ starting -- those are requirements, not commentary.
 
 ## Phase 6: ADR + C4 + docs
 
-- [ ] 6.1 Write `knowledge-base/engineering/architecture/decisions/ADR-159-memory-backstop-via-systemd-transient-scopes.md`
+- [ ] 6.1 Write `knowledge-base/engineering/architecture/decisions/ADR-160-memory-backstop-via-systemd-transient-scopes.md`
   - [ ] 6.1.1 `## Alternatives Considered` names raw-cgroup writes, `ulimit -v`, `memory.high`-only, `oom_score_adj`, the `soleur-claude` wrapper, and the static slice unit file -- each with the measurement that refuted it
   - [ ] 6.1.2 Record that `ManagedOOMPreference=avoid` is a property-level mitigation whose runtime efficacy is UNVALIDATED (oomctl monitors zero cgroups); do not present it as verified
   - [ ] 6.1.3 If `/ship` renumbers the ordinal, sweep plan + tasks + AC14 in the same edit
