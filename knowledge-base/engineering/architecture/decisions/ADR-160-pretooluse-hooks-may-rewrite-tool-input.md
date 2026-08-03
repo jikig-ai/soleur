@@ -144,21 +144,33 @@ file, a gitignored dir and hidden files:
    today's behavior; it is new only for the three build dirs. Workaround: a trailing slash. The
    failure is silent — rc=1 with no stderr, byte-identical to "the pattern genuinely is not there".
 
-4. **`.env` and `.env.*` are excluded from the non-bypass arm.** Added after review, and it is an
-   *alignment* rather than a new policy: `.claude/settings.json` already denies `Read(**/.env)` and
-   `Read(**/.env.*)`, so recursive grep was an unguarded bypass of a deny the repo had already
-   declared. Dropping `--ignore-files` widened that bypass from deliberate (`grep KEY .env`, which
-   worked before this change too) to **incidental** (`grep -rn KEY .` on the modal path), in a public
-   repo whose agent writes PR and issue bodies.
+4. **`.env` (exact name) is excluded from the non-bypass arm — a REDUCTION, not a closure.**
+   `.claude/settings.json` already denies `Read(**/.env)` / `Read(**/.env.*)`, so recursive grep was
+   an unguarded bypass of a deny the repo had declared, and dropping `--ignore-files` widened that
+   bypass from deliberate to incidental. This closes the single modal case, `grep -rn KEY .` in a
+   repo containing a `.env`.
 
-   Three limits, stated so this is not mistaken for a general secret control: the 12 bypass arms
-   receive `command grep "$@"` with no excludes, so `grep -Z KEY .` still traverses `.env`; it does
-   not restore `.gitignore` parity, so a repo-specific `secrets.yml` remains reachable; and
-   `grep KEY .env` now returns empty **silently**, since GNU grep applies `--exclude` to
-   command-line file arguments too (measured). The last is consistent with the `Read` deny above
-   rather than a regression against it, but an operator who genuinely needs the file must read it
-   outside the agent. The glob is double-quoted in the emitted prefix — unquoted, bash expands it at
-   execution time against the CWD and it degrades to whatever `.env.*` happens to match.
+   It is **not** a general secret control, and an earlier draft of this ADR claimed more than it
+   delivers. Four measured evasions, each now asserted as a named LIMIT fixture in
+   `grep-rewrite.test.sh` so a future change cannot silently claim to have closed them:
+
+   1. **`--include` wins.** GNU grep evaluates `--include`/`--exclude` in **argv order, last match
+      wins**, and these excludes are *prepended* — so every user flag sits in the winning position.
+      `grep -rn KEY . --include=.env` dumps the file. Appending after `"$@"` was considered and
+      rejected: a user `--` terminates option parsing, so trailing flags would be read as file
+      operands. A grep flag cannot express this guard safely.
+   2. **`--exclude` matches the link NAME, never the target.** With a symlink to `.env`,
+      `grep -Rn KEY .` reads it. `-R` is not one of the 12 bypass arms.
+   3. **The 12 bypass arms** receive `command grep "$@"` with no excludes at all.
+   4. **Only the exact name `.env`.** `.env.local` and siblings remain reachable.
+
+   The glob form `--exclude=".env.*"` was tried and **reverted**: it excluded the tracked,
+   deliberately-published `.env.example` files (2 in this repo), breaking a committed test fixture
+   and two committed plan acceptance criteria — and `grep -c` then prints *nothing* rather than `0`,
+   so a script doing `n=$(grep -c …); [[ "$n" -ge 1 ]]` hits a bash arithmetic error instead of a
+   clean false. Real collateral on legitimate work, for a control already defeated three other ways.
+
+   The durable fix is egress-side, not ingress-side: **#7223**.
 
 5. **Path rendering.** ugrep prints `src/a.ts` where GNU grep given `.` prints `./src/a.ts`.
    Cosmetic, but real for a script parsing the output.
@@ -216,7 +228,7 @@ byte-exact and receive `command grep "$@"` with no injected flags — exactly wh
 
 ## Consequences
 
-- Roughly half of all Bash commands carry a ~490-byte prefix. Accepted; transcript noise only.
+- Roughly half of all Bash commands carry a ~470-byte prefix. Accepted; transcript noise only.
 - A command that inspects `type grep` or defines its own `grep` sees ours. Ours is overridden by any
   later user definition. Vanishingly rare.
 - **Kill switch:** `SOLEUR_DISABLE_GREP_REWRITE=1`, read as the hook's first executable statement,

@@ -102,7 +102,7 @@ want "control: without the prefix the shim wins (harness is live)" \
 # The expected prefix is written out IN FULL, not derived. This is the one
 # place a literal belongs: it is the drift guard. Any change to the hook's
 # injected flags or bypass arms must be a deliberate edit here too.
-EXPECTED_PREFIX='grep(){ local _soleur_grep_rw; for _soleur_grep_rw in "$@"; do case "$_soleur_grep_rw" in -*-filter*|-*-pager*|-*-view*|-*-format-open*|-*-config*|---*|-@*|-*-save-config*|-[Zz]*|-[!-]*[Zz]*|--null|--null-data) command grep "$@"; return;; esac; done; command grep -I --exclude-dir=.git --exclude-dir=.svn --exclude-dir=.hg --exclude-dir=.bzr --exclude-dir=.jj --exclude-dir=.sl --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.next --exclude=.env --exclude=".env.*" "$@"; }; '
+EXPECTED_PREFIX='grep(){ local _soleur_grep_rw; for _soleur_grep_rw in "$@"; do case "$_soleur_grep_rw" in -*-filter*|-*-pager*|-*-view*|-*-format-open*|-*-config*|---*|-@*|-*-save-config*|-[Zz]*|-[!-]*[Zz]*|--null|--null-data) command grep "$@"; return;; esac; done; command grep -I --exclude-dir=.git --exclude-dir=.svn --exclude-dir=.hg --exclude-dir=.bzr --exclude-dir=.jj --exclude-dir=.sl --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.next --exclude=.env "$@"; }; '
 want "AC1a prefix is byte-exact" "$EXPECTED_PREFIX" "$PREFIX"
 want "AC1a emitted command is prefix + ORIGINAL, byte-identical remainder" \
   "${EXPECTED_PREFIX}grep -rn 'a b|c' \"\$X\" # trailing" \
@@ -225,7 +225,7 @@ want "AC7 every representative matched a bypass pattern" "${#ARMS[@]}" \
 # Positive control: a NON-bypass flag MUST receive the injected set. Without
 # this, an always-bypass regression would leave every AC7 case green.
 want "AC7 control: a non-bypass call DOES get the injected flags" \
-  "ARGV: [-I] [--exclude-dir=.git] [--exclude-dir=.svn] [--exclude-dir=.hg] [--exclude-dir=.bzr] [--exclude-dir=.jj] [--exclude-dir=.sl] [--exclude-dir=node_modules] [--exclude-dir=dist] [--exclude-dir=.next] [--exclude=.env] [--exclude=.env.*] [-rn] [needle]" \
+  "ARGV: [-I] [--exclude-dir=.git] [--exclude-dir=.svn] [--exclude-dir=.hg] [--exclude-dir=.bzr] [--exclude-dir=.jj] [--exclude-dir=.sl] [--exclude-dir=node_modules] [--exclude-dir=dist] [--exclude-dir=.next] [--exclude=.env] [-rn] [needle]" \
   "$(runsh "$SHIMF" "${PREFIX}grep -rn needle")"
 
 # ===========================================================================
@@ -454,30 +454,36 @@ want "AC17 happy path does not source incidents.sh" "0" \
 # ===========================================================================
 # .env excludes — alignment with the already-declared Read(**/.env) deny
 # ===========================================================================
-# The glob MUST reach the command line unexpanded. SGR_PREFIX is emitted into a
-# live command, so an unquoted --exclude=.env.* would be glob-expanded by bash
-# at execution time against the CWD: with a .env.local present it silently
-# degrades to --exclude=.env.local and the general rule is lost.
+# Exact name only — the ".env.*" glob form was reverted because it excluded the
+# tracked .env.example files. This asserts the collateral is gone.
 envdir="$(mktemp -d -p "$ROOT")"
-: > "$envdir/.env"; : > "$envdir/.env.local"; : > "$envdir/.env.production"
-envargv="$( cd "$envdir" && runsh "$SHIMF" "${PREFIX}grep -rn KEY ." )"
-case "$envargv" in
-  *'[--exclude=.env]'*'[--exclude=.env.*]'*)
-    ok ".env excludes reach argv with the glob UNEXPANDED (3 dotfiles present in CWD)" ;;
-  *) bad ".env glob was expanded or dropped before reaching grep" "got: $envargv" ;;
-esac
+printf 'SENTRY_ISSUE_RW_TOKEN=x\n' > "$envdir/.env.example"
+want ".env.example is NOT excluded (it is tracked and deliberately published)" "1" \
+  "$( cd "$envdir" && bash --noprofile --norc -c "${PREFIX}grep -c SENTRY_ISSUE_RW_TOKEN .env.example" )"
 # Behavioural: a recursive grep must not surface the gitignored .env, and this
 # is the incidental path the change is aimed at.
 secretdir="$(mktemp -d -p "$ROOT")"
 printf 'SUPABASE_SERVICE_ROLE_KEY=shhh\n' > "$secretdir/.env"
-printf 'SUPABASE_SERVICE_ROLE_KEY=shhh\n' > "$secretdir/.env.local"
 printf 'harmless\n' > "$secretdir/app.ts"
 realpfx_out="$( cd "$secretdir" && bash --noprofile --norc -c "${PREFIX}grep -rn SUPABASE . 2>&1"; echo "rc=$?" )"
 want ".env is NOT surfaced by a recursive grep (the incidental path)" "rc=1" "$realpfx_out"
 # Positive control: the same tree WITHOUT the prefix does surface it, or the
 # assertion above is satisfied by an empty tree rather than by the excludes.
 ctl_out="$( cd "$secretdir" && bash --noprofile --norc -c 'command grep -rn SUPABASE . 2>&1' | grep -c 'SUPABASE' || true )"
-want ".env control: without the excludes the same tree DOES surface it" "2" "$ctl_out"
+want ".env control: without the excludes the same tree DOES surface it" "1" "$ctl_out"
+# The evasions are ASSERTED, not merely commented. If a future change closes one,
+# the fixture reddens and the limits block must be re-derived rather than
+# silently going stale.
+evdir="$(mktemp -d -p "$ROOT")"
+printf 'SECRET=abc\n' > "$evdir/.env"; printf 'plain\n' > "$evdir/app.ts"
+want "LIMIT 1: --include wins over the prepended exclude (argv order)" "0" \
+  "$( cd "$evdir" && bash --noprofile --norc -c "${PREFIX}grep -rn SECRET . --include=.env >/dev/null 2>&1; echo \$?" )"
+( cd "$evdir" && ln -sf .env harmless.txt )
+want "LIMIT 2: --exclude matches the link NAME, not the target" "0" \
+  "$( cd "$evdir" && bash --noprofile --norc -c "${PREFIX}grep -Rn SECRET harmless.txt >/dev/null 2>&1; echo \$?" )"
+printf 'SECRET=def\n' > "$evdir/.env.local"
+want "LIMIT 4: only the exact name .env is excluded (.env.local reachable)" "0" \
+  "$( cd "$evdir" && bash --noprofile --norc -c "${PREFIX}grep -rn SECRET .env.local >/dev/null 2>&1; echo \$?" )"
 
 # ===========================================================================
 # Branches that had ZERO coverage until review found them

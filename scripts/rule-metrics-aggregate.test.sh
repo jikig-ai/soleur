@@ -673,17 +673,25 @@ t22_grep_rewrite_disarm_count_and_stderr() {
   root=$(make_fixture_repo)
   write_event "$root" "grep-rewrite-disarm" "warn" "2026-08-03T11:00:00Z"
   write_event "$root" "grep-rewrite-disarm" "warn" "2026-08-03T11:00:01Z"
+  write_event "$root" "grep-rewrite-would-rewrite" "warn" "2026-08-03T11:00:03Z"
   write_event "$root" "hr-rule-a-synthetic-test" "deny" "2026-08-03T11:00:02Z"
 
   stderr=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" 2>&1 >/dev/null) || exit_code=$?
   assert_eq "T22 disarm rows do not fail the run" "0" "$exit_code"
 
   metrics="$root/knowledge-base/project/rule-metrics.json"
-  assert_eq "T22 grep_rewrite_disarm_count is surfaced" "2" \
-    "$(jq -r '.summary.grep_rewrite_disarm_count' < "$metrics")"
+  assert_eq "T22 grep_rewrite_fault_count is surfaced" "3" \
+    "$(jq -r '.summary.grep_rewrite_fault_count' < "$metrics")"
+  # PREFIX-WIDE, not one hardcoded key. A single-key readout reported nothing for
+  # grep-rewrite-would-rewrite (observe mode ON = the rewrite is DISABLED
+  # repo-wide) or for any typo'd suffix -- the exact blindness the exclusion
+  # above creates. This asserts the hook-input-* parity the comment claims.
+  assert_eq "T22 readout is prefix-wide (disarm AND would-rewrite both counted)" \
+    "disarm=2 would-rewrite=1" \
+    "$(jq -r '.summary.grep_rewrite_fault_reasons | to_entries | sort_by(.key) | map("\(.key)=\(.value)") | join(" ")' < "$metrics")"
   # A number nobody prints is not a surface.
-  assert_eq "T22 a stderr WARNING names the disarm" "1" \
-    "$(printf '%s\n' "$stderr" | grep -c 'grep-rewrite disarm' || true)"
+  assert_eq "T22 a stderr WARNING names the fault" "1" \
+    "$(printf '%s\n' "$stderr" | grep -c 'grep-rewrite event' || true)"
   rm -rf "$root"
 }
 
@@ -694,10 +702,10 @@ t23_grep_rewrite_disarm_zero_is_silent() {
   write_event "$root" "hr-rule-a-synthetic-test" "deny" "2026-08-03T11:00:00Z"
   stderr=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" 2>&1 >/dev/null) || exit_code=$?
   assert_eq "T23 healthy run exits 0" "0" "$exit_code"
-  assert_eq "T23 healthy run prints no disarm warning" "0" \
-    "$(printf '%s\n' "$stderr" | grep -c 'grep-rewrite disarm' || true)"
+  assert_eq "T23 healthy run prints no fault warning" "0" \
+    "$(printf '%s\n' "$stderr" | grep -c 'grep-rewrite event' || true)"
   assert_eq "T23 counter reads 0" "0" \
-    "$(jq -r '.summary.grep_rewrite_disarm_count' < "$root/knowledge-base/project/rule-metrics.json")"
+    "$(jq -r '.summary.grep_rewrite_fault_count' < "$root/knowledge-base/project/rule-metrics.json")"
   rm -rf "$root"
 }
 

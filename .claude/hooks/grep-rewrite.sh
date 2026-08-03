@@ -113,32 +113,38 @@ SGR_SENTINEL='_soleur_grep_rw'
 # trade buys elimination of the 9.5 GB DFA blowup, and both arms are sub-second.
 # See ADR-160 §Accepted divergences.
 #
-# --exclude=.env / ".env.*" ALIGN GREP WITH AN ALREADY-DECLARED DENY.
-# .claude/settings.json permissions.deny carries Read(**/.env) and
-# Read(**/.env.*), and .gitignore lists .env — so the repo's stated posture is
-# already "the agent does not read .env". Recursive grep was an unguarded bypass
-# of that deny, and dropping --ignore-files widens it from DELIBERATE
-# (grep KEY .env, which worked before this change too) to INCIDENTAL
-# (grep -rn KEY . on the modal path), in a PUBLIC repo whose agent writes PR and
-# issue bodies. Closing the incidental path is the point.
+# --exclude=.env REDUCES, BUT DOES NOT CLOSE, INCIDENTAL .env EXPOSURE.
+# .claude/settings.json permissions.deny carries Read(**/.env) / Read(**/.env.*)
+# and .gitignore lists .env, so the repo already states "the agent does not read
+# .env". Recursive grep was an unguarded bypass of that, and dropping
+# --ignore-files widened the bypass from deliberate to incidental. This closes
+# the single modal case — `grep -rn KEY .` in a repo containing a .env.
 #
-# Three honest limits — this is a targeted alignment, NOT a general secret control:
-#   1. The 12 bypass arms receive `command grep "$@"` with NO excludes, so
-#      `grep -Z KEY .` still traverses .env. Accepted: those arms exist to hand
-#      through untouched, and widening them would break the byte-exact mirror.
-#   2. It does not restore .gitignore parity. A repo-specific gitignored secret
-#      (secrets.yml, .envrc.local) is still reachable.
-#   3. `grep KEY .env` now returns empty, SILENTLY (GNU grep applies --exclude to
-#      command-line file arguments too — measured). That is consistent with the
-#      Read deny above rather than a regression against it, but it is silent, and
-#      an operator who needs the file must read it outside the agent.
+# It is NOT a general secret control, and the claim is deliberately weaker than
+# an earlier draft of this comment made it. FOUR measured evasions:
+#   1. --include WINS. GNU grep evaluates --include/--exclude in ARGV ORDER,
+#      last match wins, and these excludes are PREPENDED — so every user flag is
+#      structurally in the winning position. `grep -rn KEY . --include=.env`
+#      dumps the file (measured). Appending after "$@" was considered and
+#      rejected: a user `--` terminates option parsing, so trailing flags would
+#      be read as FILE OPERANDS. A grep flag cannot express this guard safely.
+#   2. --exclude matches the LINK NAME, never the target. With a symlink to
+#      .env, `grep -Rn KEY .` reads it (measured). -R is not a bypass arm.
+#   3. The 12 bypass arms receive `command grep "$@"` with NO excludes, so
+#      `grep -Z KEY .` still traverses .env.
+#   4. Only the exact name `.env`. `.env.local` and friends remain reachable.
 #
-# The glob is DOUBLE-QUOTED. `SGR_PREFIX` is emitted into a live command line, so
-# an unquoted `--exclude=.env.*` would be glob-expanded by bash at execution time
-# against the CWD — with a .env.local present it would silently degrade to
-# `--exclude=.env.local`. Double quotes are safe inside this single-quoted string
-# and preserve the no-apostrophe invariant stated above.
-SGR_PREFIX='grep(){ local _soleur_grep_rw; for _soleur_grep_rw in "$@"; do case "$_soleur_grep_rw" in -*-filter*|-*-pager*|-*-view*|-*-format-open*|-*-config*|---*|-@*|-*-save-config*|-[Zz]*|-[!-]*[Zz]*|--null|--null-data) command grep "$@"; return;; esac; done; command grep -I --exclude-dir=.git --exclude-dir=.svn --exclude-dir=.hg --exclude-dir=.bzr --exclude-dir=.jj --exclude-dir=.sl --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.next --exclude=.env --exclude=".env.*" "$@"; }; '
+# The glob form --exclude=".env.*" was tried and REVERTED: it excluded the
+# tracked, deliberately-published .env.example files (2 in this repo), breaking
+# a committed test fixture and two committed plan acceptance criteria — and
+# `grep -c` then prints NOTHING rather than 0, so a script doing
+# `n=$(grep -c ...); [[ "$n" -ge 1 ]]` hits a bash arithmetic error instead of a
+# clean false. Real collateral on legitimate work, for a control already
+# defeated three other ways.
+#
+# The durable fix is egress-side, not ingress-side: #7223 (gh pr/issue bodies
+# reach a public repo unscanned).
+SGR_PREFIX='grep(){ local _soleur_grep_rw; for _soleur_grep_rw in "$@"; do case "$_soleur_grep_rw" in -*-filter*|-*-pager*|-*-view*|-*-format-open*|-*-config*|---*|-@*|-*-save-config*|-[Zz]*|-[!-]*[Zz]*|--null|--null-data) command grep "$@"; return;; esac; done; command grep -I --exclude-dir=.git --exclude-dir=.svn --exclude-dir=.hg --exclude-dir=.bzr --exclude-dir=.jj --exclude-dir=.sl --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.next --exclude=.env "$@"; }; '
 
 # --- Lazy telemetry --------------------------------------------------------
 # incidents.sh is ~18 kB and this hook is on the hot path of every Bash call

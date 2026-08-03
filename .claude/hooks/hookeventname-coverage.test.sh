@@ -170,19 +170,25 @@ EOF
     rewriters=""
     while IFS= read -r h; do
       [[ -z "$h" ]] && continue
-      b="${h##*/}"
-      [[ "$b" == *.test.sh ]] && continue
+      [[ "$h" == *.test.sh ]] && continue
       f="$REPO_ROOT_DIR/$h"
       [[ -f "$f" ]] || f="$h"
       [[ -f "$f" ]] || continue
+      # Dedup on the CANONICAL path, not the basename. A basename key collapses
+      # .claude/hooks/lib/grep-rewrite.sh into the top-level entry of the same
+      # name, so a SECOND registered rewriter passes the gate (measured). But the
+      # two input streams reach the same file by different spellings
+      # (settings-relative vs absolute), so they must be canonicalized or the
+      # single rewriter counts twice.
+      b="$(cd "$(dirname "$f")" 2>/dev/null && printf '%s/%s' "$(pwd -P)" "${f##*/}")" || b="$f"
       c=$(grep -vE '^[[:space:]]*#' "$f" | grep -cE 'updatedInput\\?"?[[:space:]]*:' || true)
       [[ "$c" -gt 0 ]] && case " $rewriters " in *" $b "*) ;; *) rewriters="$rewriters $b" ;; esac
     done <<EOF
 $reg_all
-$(ls "$HOOK_DIR"/*.sh "$HOOK_DIR"/*.py "$HOOK_DIR"/lib/*.sh 2>/dev/null)
+$(find "$HOOK_DIR" -maxdepth 3 \( -name "*.sh" -o -name "*.py" \) 2>/dev/null)
 EOF
     rewriters="${rewriters# }"
-    if [[ "$rewriters" == "grep-rewrite.sh" ]]; then
+    if [[ "$rewriters" == "$HOOK_DIR/grep-rewrite.sh" ]]; then
       echo "PASS: exactly one rewriting hook (grep-rewrite.sh) — single-rewriter invariant holds."
     else
       echo "FAIL: single-rewriter invariant violated. Rewriting hooks: [${rewriters:-none}]"
