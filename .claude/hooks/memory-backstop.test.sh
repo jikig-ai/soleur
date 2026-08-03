@@ -34,6 +34,11 @@
 # running agent session into a capped scope. That is the feature working as
 # designed and it is idempotent; `SOLEUR_DISABLE_MEMORY_BACKSTOP=1` opts out.
 
+# shellcheck disable=SC2154  # newtmp assigns via `printf -v`; shellcheck cannot
+# see indirect assignment and reports every such variable as "referenced but not
+# assigned". The alternative (`x=$(mktmp)`) is the subshell-append leak this file
+# exists to avoid.
+
 set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || exit 2
@@ -72,7 +77,17 @@ teardown() {
 }
 trap teardown EXIT INT TERM HUP
 
-mktmp() { local d; d=$(mktemp -d -t membackstop.XXXXXXXX) || return 1; TMPDIRS+=("$d"); echo "$d"; }
+# Assigns to the NAMED variable in the caller's scope and registers the directory
+# for teardown. Deliberately NOT `d=$(mktmp)`: command substitution runs the
+# function in a SUBSHELL, so a `TMPDIRS+=(...)` inside it mutates a copy that is
+# discarded — the parent array stays empty and the EXIT trap owns nothing, leaking
+# a temp dir per call. (The repo lints for exactly this shape; see #6734.)
+newtmp() {
+  local __var=$1 __d
+  __d=$(mktemp -d -t membackstop.XXXXXXXX) || return 1
+  TMPDIRS+=("$__d")
+  printf -v "$__var" '%s' "$__d"
+}
 
 echo "memory-backstop: hook contract, fail-open branches, tree adoption, cap enforcement"
 
@@ -161,7 +176,7 @@ fi
 # =====================================================================
 # T4 — PPid walk survives a comm containing a space (D8/R4)
 # =====================================================================
-fx=$(mktmp) || exit 2
+newtmp fx || exit 2
 mkdir -p "$fx/proc/100" "$fx/proc/200" "$fx/proc/300"
 # A comm with a space is the exact shape `awk '{print $4}'` over stat breaks on.
 printf 'Name:\tmy app name\nPid:\t200\nPPid:\t100\n'  > "$fx/proc/200/status"
@@ -221,7 +236,7 @@ run_hook_isolated() { # <logdir> [env assignments...] -> writes log, echoes exit
   echo "$rc"
 }
 
-ld=$(mktmp) || exit 2
+newtmp ld || exit 2
 mkdir -p "$ld/.claude/hooks"
 rc=$(run_hook_isolated "$ld" SOLEUR_DISABLE_MEMORY_BACKSTOP=1)
 logline=$(tail -1 "$ld/.claude/.memory-backstop.jsonl" 2>/dev/null || true)
@@ -242,7 +257,7 @@ else
 fi
 
 # No bus: point XDG_RUNTIME_DIR at a directory with no bus socket.
-ld2=$(mktmp) || exit 2
+newtmp ld2 || exit 2
 mkdir -p "$ld2/.claude/hooks" "$ld2/runtime"
 rc=$(run_hook_isolated "$ld2" XDG_RUNTIME_DIR="$ld2/runtime")
 logline=$(tail -1 "$ld2/.claude/.memory-backstop.jsonl" 2>/dev/null || true)
@@ -266,7 +281,7 @@ fi
 # =====================================================================
 # T16b / T17 — attribution: path argument, fires on INCREASE not non-zero
 # =====================================================================
-ev=$(mktmp) || exit 2
+newtmp ev || exit 2
 printf 'low 0\nhigh 12\nmax 4\noom 2\noom_kill 3\noom_group_kill 0\n' > "$ev/memory.events"
 printf '0\n' > "$ev/memory.peak"
 
@@ -322,7 +337,7 @@ cmd=$(jq -r '.hooks.SessionStart[]?.hooks[]?.command' "$SETTINGS" 2>/dev/null | 
 if [[ -n "$cmd" ]]; then
   resolved=${cmd//\"\$CLAUDE_PROJECT_DIR\"/$PWD}
   resolved=${resolved//\$CLAUDE_PROJECT_DIR/$PWD}
-  ld3=$(mktmp) || exit 2
+  newtmp ld3 || exit 2
   mkdir -p "$ld3/.claude/hooks" "$ld3/runtime"
   if env CLAUDE_PROJECT_DIR="$ld3" XDG_RUNTIME_DIR="$ld3/runtime" "$resolved" </dev/null >/dev/null 2>&1; then
     pass "AC2 hook runs via the settings.json command string (direct exec, no interpreter)"
@@ -339,7 +354,7 @@ if [[ -n "$cmd" ]]; then
 else
   # Before Phase 4 wiring lands this is expected; assert the direct-exec property
   # against the hook path itself so the assertion is never vacuous.
-  ld3=$(mktmp) || exit 2
+  newtmp ld3 || exit 2
   mkdir -p "$ld3/.claude/hooks" "$ld3/runtime"
   if env CLAUDE_PROJECT_DIR="$ld3" XDG_RUNTIME_DIR="$ld3/runtime" "$PWD/$HOOK" </dev/null >/dev/null 2>&1; then
     pass "AC2 hook is directly executable (not yet registered in settings.json)"
@@ -427,7 +442,7 @@ else
   # on its death and self-cleans, so memory.events is gone before it can be read.
   sleep 300 & SENTINEL=$!; SPAWNED+=("$SENTINEL")
   KSCOPE="soleurtest-kill-$$.scope"
-  kdir=$(mktmp) || exit 2
+  newtmp kdir || exit 2
   if start_test_scope "$KSCOPE" "$TEST_SLICE" "$SENTINEL" && wait_in_scope "$KSCOPE" "$SENTINEL"; then
     kcg=$(cg_path "$SENTINEL")
     # The allocator must not allocate a single byte until it is CONFIRMED inside
@@ -537,7 +552,7 @@ sys.exit(0)
   # until membership is confirmed, then signals a ready-file when its pages are
   # actually resident, so the reading is taken at a defined point rather than an
   # arbitrary one on a rising curve.
-  T12D=$(mktmp) || exit 2
+  newtmp T12D || exit 2
   spawn_alloc() { python3 -c "
 import os, sys, time
 go, ready = sys.argv[1], sys.argv[2]
@@ -606,7 +621,7 @@ time.sleep(300)
   fi
 
   # ---- T8/T9/T10/T15/AC18: exercise the REAL hook end-to-end, LAST.
-  before=$(mktmp) || exit 2
+  newtmp before || exit 2
   UROOT="/sys/fs/cgroup/user.slice/user-$UIDN.slice/user@$UIDN.service"
   snapshot() { # <outfile>
     find "$UROOT" -type d 2>/dev/null | sort > "$1.dirs"
@@ -621,11 +636,11 @@ time.sleep(300)
   }
   snapshot "$before/snap"
 
-  hookout=$(mktmp) || exit 2
+  newtmp hookout || exit 2
   "$PWD/$HOOK" </dev/null >"$hookout/stdout" 2>"$hookout/stderr"
   hook_rc=$?
 
-  after=$(mktmp) || exit 2
+  newtmp after || exit 2
   snapshot "$after/snap"
 
   logline=$(tail -1 ".claude/.memory-backstop.jsonl" 2>/dev/null || true)
