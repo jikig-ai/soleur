@@ -8,7 +8,11 @@
 set -euo pipefail
 
 INPUT=$(cat)
-PROJECT_DIR=$(echo "$INPUT" | jq -r '.working_dir // ""')
+# Guarded: an unguarded jq under `set -euo pipefail` aborted this hook at rc 5
+# on any document jq rejects — the same defect fixed in the three PreToolUse
+# mirrors. A SessionStart hook has nothing to deny, so it fails open silently.
+command -v jq >/dev/null 2>&1 || exit 0
+PROJECT_DIR=$(printf '%s' "$INPUT" | jq -r '.working_dir // ""' 2>/dev/null) || PROJECT_DIR=""
 [[ -z "$PROJECT_DIR" ]] && PROJECT_DIR="${OPENHANDS_PROJECT_DIR:-$(pwd)}"
 
 # Only run in projects that have the Soleur plugin installed locally.

@@ -233,7 +233,7 @@ The three mirrors (`guardrails.sh`, `pre-merge-rebase.sh`,
 this helper: a different envelope (`.working_dir`, `.tool_input.path`) and a
 different protocol (`exit 2` + `{"decision":"deny"}`, with no `ask` and no kill
 switch). What each reason class does there is decided in
-[ADR-160][adr160] — `nonstring`, `separator` and `unparseable` deny;
+[ADR-162][adr160] — `nonstring`, `separator` and `unparseable` deny;
 `jq_missing` and `internal` fail **open, loudly**, because the repair for a
 missing `jq` is itself a tool call that a deny would also block.
 
@@ -250,7 +250,7 @@ both undetected precisely because nothing ran the comparison.
 
 [adr155]: ../../knowledge-base/engineering/architecture/decisions/ADR-156-hook-stdin-is-model-controlled-and-untrusted.md
 [adr156]: ../../knowledge-base/engineering/architecture/decisions/ADR-157-a-hook-that-cannot-parse-its-input-asks.md
-[adr160]: ../../knowledge-base/engineering/architecture/decisions/ADR-160-what-ask-means-on-a-harness-with-no-ask-state.md
+[adr160]: ../../knowledge-base/engineering/architecture/decisions/ADR-162-what-ask-means-on-a-harness-with-no-ask-state.md
 
 ## Incident telemetry (ADR-2)
 

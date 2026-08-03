@@ -1,4 +1,4 @@
-# ADR-160 — What `ask` means on a harness that has no `ask` state
+# ADR-162 — What `ask` means on a harness that has no `ask` state
 
 - **Status:** accepted
 - **Date:** 2026-08-03
@@ -78,11 +78,32 @@ single OpenHands state.**
 
 | reason class | `.claude` | `.openhands` | why |
 |---|---|---|---|
-| `nonstring` | ask | **deny** | No legitimate caller sends a non-string. A deny is recoverable where a silent bypass is not: the reason string returns to the agent, which can re-send. |
-| `separator` | ask | **deny** | Same — a forged record boundary is not a transport failure. |
+| `nonstring` | ask | **deny** | No legitimate caller sends a non-string. |
 | `unparseable` | ask | **deny** | Model-controlled and recoverable in-band. |
-| `jq_missing` | ask | **fail OPEN, loudly** (stderr, `exit 0`) | See below. |
-| `internal` | ask | **fail OPEN, loudly** | Our bug, never blamed on the payload. |
+| `jq_missing` | ask | **fail open, pattern-scoped** (stderr + `exit 0`, unless the RAW document matches a protected pattern → deny) | See below. |
+| `internal` | ask | **fail OPEN, loudly** (stderr + `exit 0`) | Our bug, never blamed on the payload. |
+| `separator` | ask | **n/a — cannot arise** | The mirror does three independent per-field `jq -r` extractions. It has no RS-delimited multi-record encoding, so there is no record boundary to forge. This row becomes live only if a future change converges the harnesses onto the shared extractor. |
+
+**Two corrections the review forced, both measured.** An earlier draft of this
+table listed `separator` as a class the mirror *denies* and `internal` as
+failing open *loudly*. Neither was true: `grep -c separator` over all three
+mirrors returns 0, and the `internal` path fell through a fallback assignment
+nothing branched on, so a broken shape program disarmed every guard with **no
+stdout, no stderr and no record** — verified by breaking one token in the shape
+program and feeding it an array `command`. `internal` now emits a stderr line
+before failing open; `separator` is marked inapplicable rather than decided.
+
+**Recoverability is an ASSUMPTION here, not an established fact.** Three rows
+above say a deny is "recoverable in-band" because the reason string returns to
+the agent. This repo does not establish that:
+`knowledge-base/project/specs/openhands-portability/critical-unknowns.md`
+still carries *"Verification needed: … Confirm PreToolUse blocking with JSON
+output injects `additionalContext` into agent prompt."* The decision is sound
+either way — a deny with an unread reason is still strictly better than the
+abort-with-no-decision it replaced — but the recoverability argument rests on an
+unowned runtime invariant, which is the dependency class ADR-156 exists to
+forbid. It is recorded as an assumption with the probe named rather than
+asserted.
 
 **`jq_missing` must not deny, and the reason is ADR-157's, not a new one.**
 ADR-157 rejected a fail-closed posture because *"the repair for a broken `PATH`
@@ -98,6 +119,24 @@ The `unparseable` deny is the deliberate divergence from the mirror's previous
 behaviour, and it is a **strict improvement over what it replaced**: not a
 fall-through, but an abort with no decision at all.
 
+**But `jq_missing` must not fail open UNCONDITIONALLY either, and the first
+draft of this ADR did.** Review measured the consequence: on `origin/main` a
+jq-less PATH produced rc 127 — undefined, whatever the runtime makes of it — and
+the draft's blanket `exit 0` resolved that ambiguity *toward open*, turning
+"remove jq" into a one-call disarm of every guard in the file. `rm -f
+/usr/bin/jq` is not matched by the mirror's own `rm -rf` regex, so the chain
+`rm -f /usr/bin/jq` → `rm -rf $HOME` ran clean.
+
+The resolution is not a choice between denying everything and allowing
+everything: **the raw document is still in hand when jq is gone.** The
+`jq_missing` branch now matches `$INPUT` against the narrow set of patterns
+whose guards are this hook's reason for existing (`rm -r`/`rm -f`, `git stash`,
+`--delete-branch`, `git commit`) and denies on a hit. Measured: every repair
+command the self-referential-repair argument depends on — `apt-get install jq`,
+`export PATH=…`, `ln -s /opt/jq /usr/bin/jq` — matches none of them and still
+passes. It is deliberately over-broad in the other direction; on a branch that
+only executes when the parser is gone, a false deny is the correct error.
+
 ### Scope
 
 This ADR decides the **protocol semantics** question #7173 raised. It does
@@ -112,7 +151,8 @@ fail-*soft* for reasons that do not apply to an input helper.
 ## Consequences
 
 - The mirror no longer has a path where a model-controlled document produces no
-  decision. Every reason class now has a defined, executable outcome.
+  decision. Every reason class the mirror can **reach** now has a defined
+  outcome; `separator` is inapplicable by construction (see the table).
 - The three divergence classes are asserted by
   `.claude/hooks/pre-merge-rebase-parity.test.sh`, which is where they belong:
   that suite's header records that silent divergence between the two harnesses
@@ -121,11 +161,21 @@ fail-*soft* for reasons that do not apply to an input helper.
 - `unparseable` denying is a behaviour change on the mirror. It is bounded: the
   class is reachable only by a document jq rejects, and the agent can re-send.
 - The dependency on OpenHands' non-0/2 exit-code semantics is **removed**, not
-  resolved. No hook in the mirror now exits with a code outside {0, 2}, so the
-  runtime's treatment of other codes is no longer load-bearing and did not have
-  to be probed to make this decision safe.
-- **Not decided here:** extending the type assertion to the ten advisory
-  `.claude` hooks (#7173's other half). That needs a widened jq program and a
+  resolved — but establishing that took three more fixes than the first draft of
+  this ADR assumed, and the draft asserted it before they existed. Review
+  measured `welcome-hook.sh` exiting **rc 5** on a malformed document,
+  `guardrails.sh`'s `git worktree list` exiting **rc 128** from a non-git cwd on
+  a *clean* payload, and the same shape in `pre-merge-rebase.sh`. All three are
+  now guarded. The claim is a **measured property over a probed matrix**, not a
+  proof over all inputs; the matrix is 5 hooks × 9 payload classes (malformed,
+  lone surrogate, array command, absent `tool_input`, benign, empty stdin,
+  non-object root, deny-path, and jq-absent), all landing in {0, 2}. Re-derive
+  with that matrix rather than trusting this sentence.
+- **Not decided here:** extending the type assertion to the four **gating**
+  `.claude` hooks (#7173's other half — the six genuinely-advisory hooks and
+  `security_reminder_hook.py` are exempt with per-hook reasons in the README,
+  which is a different disposition and should not be collapsed into "the ten
+  advisory hooks"). That needs a widened jq program and a
   responder-set change whose design has open findings, and it needs a probe of
   Claude Code's `allow`-vs-`ask` resolution order that cannot be run without a
   live hook registration. Tracked separately; see the follow-up issue linked

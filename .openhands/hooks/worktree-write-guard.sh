@@ -13,7 +13,20 @@ set -euo pipefail
 
 INPUT=$(cat)
 
-# --- reason-class split (ADR-158 D3) ----------------------------------------
+# One constant, defined once. The reason text is agent-facing and was
+# previously duplicated per extraction, in two different lengths, so how much
+# the agent was told depended on which extraction happened to fail first.
+#
+# It names an action the AGENT CAN TAKE. The earlier wording ("re-send a
+# well-formed envelope") named one it cannot: the agent authors tool_input
+# values, while the runtime assembles the envelope, the working_dir and the
+# JSON framing. The parity suite's own fixture puts the offending byte in
+# working_dir, so on that payload the old text asked the agent to fix
+# something it does not produce - and guardrails.sh is registered on BOTH
+# matchers, so it would deny every tool the agent has, with no way forward.
+UNPARSEABLE_REASON="BLOCKED: the tool-call envelope did not parse (ADR-156/ADR-162), so this hook's guards did not run and the call is refused rather than silently permitted. The usual cause is a byte in one of your tool arguments that cannot be encoded as JSON text - most often a lone surrogate from non-UTF-8 file content. Re-send with that value base64- or hex-encoded, or with the offending bytes dropped. If none of your arguments carry such a value the envelope was malformed in transport, which you did not author; re-sending unchanged may succeed."
+
+# --- reason-class split (ADR-162) ----------------------------------------
 # jq MISSING fails OPEN, loudly: ADR-157:115 rejects fail-closed because the
 # repair for a broken PATH or a missing jq is itself a tool call that would also
 # be denied, and that bites harder here — this harness has no `ask`, no operator
@@ -24,6 +37,20 @@ INPUT=$(cat)
 # runtime treats a non-0/2 exit code — an invariant this repo does not define.
 if ! command -v jq >/dev/null 2>&1; then
   echo "[worktree-write-guard] jq missing — envelope unparseable, guards did NOT run for this call" >&2
+  # FAIL OPEN, but not unconditionally. Failing open on this class is required
+  # (ADR-157 §Alternatives Considered, "Fail closed": the repair for a broken
+  # PATH or a missing jq is itself a tool call a deny would also block) — but an
+  # UNCONDITIONAL open turns "delete jq" into a one-call disarm of every guard
+  # in this file. So before proceeding, match the RAW document against the
+  # narrow set of patterns whose guards are the reason this hook exists. The
+  # repair commands themselves (apt-get install jq, export PATH=..., ln -s)
+  # match none of these, so the recovery path stays open. Deliberately
+  # over-broad in the other direction: on a branch that only runs when the
+  # parser is gone, a false deny is the correct error.
+  if grep -qE 'rm[[:space:]]+-[a-zA-Z]*[rf]|git[[:space:]]+stash|--delete-branch|git[[:space:]]+commit' <<<"$INPUT"; then
+    printf '{"decision":"deny","reason":"BLOCKED: jq is unavailable, so the tool-call envelope cannot be parsed and this hook'"'"'s guards did not run — and the raw envelope matches a protected pattern. Repair jq first (install it, or fix PATH), then re-send."}\n'
+    exit 2
+  fi
   exit 0
 fi
 
@@ -54,6 +81,15 @@ WWG_ENVELOPE_SHAPE=$(printf '%s' "$INPUT" | jq -r '
      and ((if (.tool_input | has("path")) and (.tool_input.path != null) then .tool_input.path else .tool_input.file_path end | if . == null then "" else . end) | type == "string")
      and ((.working_dir? | if . == null then "" else . end) | type == "string")
   then "ok" else "nonstring" end' 2>/dev/null) || WWG_ENVELOPE_SHAPE="unparseable"
+# `internal` — the shape program itself failed (a broken program, a jq version
+# change, OOM) while the simpler extractions above succeeded. This was a
+# TOTALLY SILENT fail-open: the fallback assigned "unparseable" and nothing
+# branched on it, so an ARRAY command disarmed every guard below with no
+# stdout, no stderr and no record — measured. Fail open (same
+# self-referential-repair rationale as jq_missing) but LOUDLY.
+if [[ "$WWG_ENVELOPE_SHAPE" != "ok" && "$WWG_ENVELOPE_SHAPE" != "nonstring" ]]; then
+  echo "[worktree-write-guard] envelope shape program failed ($WWG_ENVELOPE_SHAPE) — guards did NOT run for this call" >&2
+fi
 if [[ "$WWG_ENVELOPE_SHAPE" == "nonstring" ]]; then
   jq -n '{"decision":"deny","reason":"BLOCKED: the tool-call envelope carries a non-string field (e.g. an ARRAY tool_input.path). Hook stdin is model-controlled and untrusted (ADR-156); a non-string is never coerced, because the coerced value matches no path test and would bypass this guard. Re-send the path as a string."}'
   exit 2
@@ -61,7 +97,7 @@ fi
 
 # OpenHands file_editor uses "path"; fall back to "file_path" for compatibility
 FILE_PATH=$(printf '%s' "$INPUT" | jq -r '.tool_input.path // .tool_input.file_path // ""' 2>/dev/null) \
-  || { jq -n --arg r "BLOCKED: the tool-call envelope did not parse (ADR-156/ADR-158 D3). Hook stdin is model-controlled and untrusted; a hook that cannot read its input does not run its guards, so the call is refused rather than silently permitted. Re-send a well-formed envelope." '{"decision":"deny","reason":$r}'; exit 2; }
+  || { jq -n --arg r "$UNPARSEABLE_REASON" '{"decision":"deny","reason":$r}'; exit 2; }
 
 [[ -z "$FILE_PATH" ]] && exit 0
 

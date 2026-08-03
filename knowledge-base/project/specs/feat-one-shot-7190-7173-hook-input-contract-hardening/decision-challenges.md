@@ -154,7 +154,7 @@ the riskiest single line in the change set.
 
 **What the plan does:** keeps the mirror on its in-place assertion and discharges #7173(b)
 under the issue's own acceptance criterion 2 ("any hook that stays exempt keeps its reason
-in the README"), while still authoring the ADR-158 D3 decision the issue actually asked for
+in the README"), while still authoring the ADR-162 decision the issue actually asked for
 ("make that decision deliberately rather than as a side effect") and adding two executable
 parity cases.
 

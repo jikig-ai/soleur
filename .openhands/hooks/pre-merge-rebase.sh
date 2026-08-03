@@ -12,7 +12,20 @@ set -eo pipefail
 
 INPUT=$(cat)
 
-# --- reason-class split (ADR-158 D3) ----------------------------------------
+# One constant, defined once. The reason text is agent-facing and was
+# previously duplicated per extraction, in two different lengths, so how much
+# the agent was told depended on which extraction happened to fail first.
+#
+# It names an action the AGENT CAN TAKE. The earlier wording ("re-send a
+# well-formed envelope") named one it cannot: the agent authors tool_input
+# values, while the runtime assembles the envelope, the working_dir and the
+# JSON framing. The parity suite's own fixture puts the offending byte in
+# working_dir, so on that payload the old text asked the agent to fix
+# something it does not produce - and guardrails.sh is registered on BOTH
+# matchers, so it would deny every tool the agent has, with no way forward.
+UNPARSEABLE_REASON="BLOCKED: the tool-call envelope did not parse (ADR-156/ADR-162), so this hook's guards did not run and the call is refused rather than silently permitted. The usual cause is a byte in one of your tool arguments that cannot be encoded as JSON text - most often a lone surrogate from non-UTF-8 file content. Re-send with that value base64- or hex-encoded, or with the offending bytes dropped. If none of your arguments carry such a value the envelope was malformed in transport, which you did not author; re-sending unchanged may succeed."
+
+# --- reason-class split (ADR-162) ----------------------------------------
 # jq MISSING fails OPEN, loudly: ADR-157:115 rejects fail-closed because the
 # repair for a broken PATH or a missing jq is itself a tool call that would also
 # be denied, and that bites harder here — this harness has no `ask`, no operator
@@ -23,6 +36,20 @@ INPUT=$(cat)
 # runtime treats a non-0/2 exit code — an invariant this repo does not define.
 if ! command -v jq >/dev/null 2>&1; then
   echo "[pre-merge-rebase] jq missing — envelope unparseable, guards did NOT run for this call" >&2
+  # FAIL OPEN, but not unconditionally. Failing open on this class is required
+  # (ADR-157 §Alternatives Considered, "Fail closed": the repair for a broken
+  # PATH or a missing jq is itself a tool call a deny would also block) — but an
+  # UNCONDITIONAL open turns "delete jq" into a one-call disarm of every guard
+  # in this file. So before proceeding, match the RAW document against the
+  # narrow set of patterns whose guards are the reason this hook exists. The
+  # repair commands themselves (apt-get install jq, export PATH=..., ln -s)
+  # match none of these, so the recovery path stays open. Deliberately
+  # over-broad in the other direction: on a branch that only runs when the
+  # parser is gone, a false deny is the correct error.
+  if grep -qE 'rm[[:space:]]+-[a-zA-Z]*[rf]|git[[:space:]]+stash|--delete-branch|git[[:space:]]+commit' <<<"$INPUT"; then
+    printf '{"decision":"deny","reason":"BLOCKED: jq is unavailable, so the tool-call envelope cannot be parsed and this hook'"'"'s guards did not run — and the raw envelope matches a protected pattern. Repair jq first (install it, or fix PATH), then re-send."}\n'
+    exit 2
+  fi
   exit 0
 fi
 
@@ -63,21 +90,30 @@ PMR_ENVELOPE_SHAPE=$(printf '%s' "$INPUT" | jq -r '
      and ((.working_dir? | if . == null then "" else . end) | type == "string")
      and ((if (.tool_input | has("path")) and (.tool_input.path != null) then .tool_input.path else .tool_input.file_path end | if . == null then "" else . end) | type == "string")
   then "ok" else "nonstring" end' 2>/dev/null) || PMR_ENVELOPE_SHAPE="unparseable"
+# `internal` — the shape program itself failed (a broken program, a jq version
+# change, OOM) while the simpler extractions above succeeded. This was a
+# TOTALLY SILENT fail-open: the fallback assigned "unparseable" and nothing
+# branched on it, so an ARRAY command disarmed every guard below with no
+# stdout, no stderr and no record — measured. Fail open (same
+# self-referential-repair rationale as jq_missing) but LOUDLY.
+if [[ "$PMR_ENVELOPE_SHAPE" != "ok" && "$PMR_ENVELOPE_SHAPE" != "nonstring" ]]; then
+  echo "[pre-merge-rebase] envelope shape program failed ($PMR_ENVELOPE_SHAPE) — guards did NOT run for this call" >&2
+fi
 if [[ "$PMR_ENVELOPE_SHAPE" == "nonstring" ]]; then
   deny "BLOCKED: the tool-call envelope carries a non-string field (e.g. an ARRAY tool_input.command). Hook stdin is model-controlled and untrusted (ADR-156); a non-string is never coerced, because the coerced value matches no guard and would bypass every gate in this hook. Re-send the command as a string."
 fi
 
 CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null) \
-  || deny "BLOCKED: the tool-call envelope did not parse (ADR-156/ADR-158 D3). Hook stdin is model-controlled and untrusted; a hook that cannot read its input does not run its guards, so the call is refused rather than silently permitted. Re-send a well-formed envelope."
+  || deny "$UNPARSEABLE_REASON"
 
 # Early exit: only intercept gh pr merge commands.
-if ! echo "$CMD" | grep -qE '(^|&&|\|\||;|\s--\s)\s*gh\s+pr\s+merge(\s|$)'; then
+if ! grep -qE '(^|&&|\|\||;|\s--\s)\s*gh\s+pr\s+merge(\s|$)' <<<"$CMD"; then
   exit 0
 fi
 
 # Determine working directory from hook input.
 WORK_DIR=$(printf '%s' "$INPUT" | jq -r '.working_dir // ""' 2>/dev/null) \
-  || deny "BLOCKED: the tool-call envelope did not parse (ADR-156/ADR-158 D3). Hook stdin is model-controlled and untrusted; a hook that cannot read its input does not run its guards, so the call is refused rather than silently permitted. Re-send a well-formed envelope."
+  || deny "$UNPARSEABLE_REASON"
 if [[ -z "$WORK_DIR" ]] || [[ ! -d "$WORK_DIR" ]]; then
   exit 0
 fi
@@ -88,7 +124,7 @@ fi
 
 
 
-CURRENT_BRANCH=$(git -C "$WORK_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null)
+CURRENT_BRANCH=$(git -C "$WORK_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null) || CURRENT_BRANCH=""
 
 if [[ "$CURRENT_BRANCH" == "main" ]] || [[ "$CURRENT_BRANCH" == "master" ]]; then
   exit 0
@@ -115,7 +151,8 @@ fi
 REVIEW_TODOS=""
 while IFS= read -r _todo; do
   [[ -n "$_todo" ]] || continue
-  if git -C "$WORK_DIR" show "HEAD:$_todo" 2>/dev/null | grep -q "code-review"; then
+  _todo_body=$(git -C "$WORK_DIR" show "HEAD:$_todo" 2>/dev/null || true)
+  if grep -q "code-review" <<<"$_todo_body"; then
     REVIEW_TODOS="$_todo"
     break
   fi

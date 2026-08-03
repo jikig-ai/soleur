@@ -7,7 +7,7 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 closes: [7190, 7173]
 branch: feat-one-shot-7190-7173-hook-input-contract-hardening
-adr: ADR-158 (provisional ordinal — re-verify at ship)
+adr: ADR-162 (provisional ordinal — re-verify at ship)
 revision: v3 (post deepen-plan; 22 measured findings, 2 blocking — see § Deepen-Plan Findings. v2 was post plan-review — see § Plan Review Revisions)
 ---
 
@@ -74,7 +74,7 @@ unparseable, happy and deny paths. The invariant holds today and is asserted now
 | Mirror uses `.working_dir` / `.tool_input.path`, `exit 2` + `{"decision":"deny"}` | Read `.openhands/hooks/guardrails.sh:18-33,51-63` | ✅ verbatim |
 | `pre-merge-rebase-parity.test.sh` exists | `.claude/hooks/pre-merge-rebase-parity.test.sh` | ✅ header records both prior divergences |
 | ADR-157 rejected a variadic/per-field extractor | Read ADR-157 § Alternatives | ✅ on fork-count grounds |
-| ADR-158 ordinal free | `ls decisions/` | ✅ **provisional** — re-verify at ship |
+| ADR-162 ordinal free | `ls decisions/` | ✅ **provisional** — re-verify at ship |
 | Baseline suite state | `bash …/hook-input-contract.test.sh` | ✅ **50/50 pass**, exit 0 |
 
 ## Research Reconciliation — Spec vs. Codebase
@@ -92,7 +92,7 @@ unparseable, happy and deny paths. The invariant holds today and is asserted now
 | The OpenHands mirror is two files | **Three.** `.openhands/hooks/worktree-write-guard.sh` also reads the envelope (`:14`), carries its own bespoke in-place assertion (`:34-45`) and its own `jq -r` extraction (`:49`), registered on `file_editor` in `.openhands/hooks.json`. | Added to scope. Omitting it would reintroduce the silent-divergence class in the PR claiming to close it. |
 | `ask` is honored by CC | `DEFER-DECISION-PAYLOAD-SHAPE.md:5` records the probe used a **`PreToolUse(Bash)` stub**; every row in its table is a Bash call. Whether CC honors `ask` on `mcp__*` or `CronCreate` is **unestablished** — and ADR-156:40-41 names exactly that as the unverifiable region. | Phase 5 gains a probe precondition. If `ask` is not honored there, the responder designation for those two hooks is descoped. |
 | "`pencil-open-guard` is the likeliest first candidate" | README says the opposite: *"one of the harder migrations … needs the unpublished camelCase `filePath` and has no responder."* | Plan follows the README's ordering. Recorded so the divergence is deliberate. |
-| Neither ADR pins the 5-slot contract | Correct. ADR-156: *"must never be superseded. It may be extended."* | ADR-158 **extends**. |
+| Neither ADR pins the 5-slot contract | Correct. ADR-156: *"must never be superseded. It may be extended."* | ADR-162 **extends**. |
 | jq-absent skip is a repo-wide convention | Confirmed: **22 suites**, none hard-fail. | Item 5's jq sub-item: **considered and rejected**, with reasons. |
 
 ## Open Code-Review Overlap
@@ -121,7 +121,7 @@ force an `ask` on demand: adding `"content": 123` to a *Bash* payload flips a un
 `guardrails.sh` cannot parse, and a call that would have been **denied** becomes a
 **prompt**. `ask` is not `allow`, but a mechanism the model can trigger at will to convert
 hard blocks into prompts is a prompt-fatigue generator, and prompt fatigue is how an `ask`
-posture degrades into an `allow` posture in practice. The per-slot status vector (ADR-158
+posture degrades into an `allow` posture in practice. The per-slot status vector (ADR-162
 D1) exists to close this.
 
 **Brand-survival threshold:** `single-user incident`.
@@ -138,14 +138,14 @@ Both are in-scope deliverables, not follow-ups.
 
 ### ADR
 
-**ADR-158 — "Extending the hook-input trust boundary past the Bash hot path"**
+**ADR-162 — "Extending the hook-input trust boundary past the Bash hot path"**
 (provisional ordinal; `/ship`'s ADR-Ordinal Collision Gate re-verifies against
 `origin/main`. On renumber, sweep
-`grep -rn 'ADR-158' knowledge-base/project/{plans,specs}/feat-one-shot-7190-7173-*/` in the
+`grep -rn 'ADR-162' knowledge-base/project/{plans,specs}/feat-one-shot-7190-7173-*/` in the
 same edit — a renumber reaching only the ADR body leaves this plan's ACs citing a
 nonexistent file.)
 
-ADR-158 **extends** ADR-156/157; it supersedes neither. Three clauses.
+ADR-162 **extends** ADR-156/157; it supersedes neither. Three clauses.
 
 - **D1 — One program, more slots, a per-slot status vector.** `_HOOK_INPUT_JQ` grows from 5
   slots to cover the fields the migration needs — `.tool_input.content`,
@@ -226,7 +226,7 @@ ADR-158 **extends** ADR-156/157; it supersedes neither. Three clauses.
     not yet writable: today a malformed document does not fall through — it **aborts at
     rc 5** before the shape check (F1); the `unparseable` branch is **dead code** (F3); and
     the `$t == null` conjunct denies every payload with an absent or null `tool_input`
-    (F13). ADR-158 D3 must state, per reason class, what the mirror **measurably** does
+    (F13). ADR-162 must state, per reason class, what the mirror **measurably** does
     after Phase 6.1b/6.1c, and must not assert anything about non-0/2 exit codes until
     Phase 6.1a's runtime probe returns.
 
@@ -251,7 +251,7 @@ wrong C4 layer, and plan v1's inability to decide between "container under `engi
 
 1. Amending `engine.hooks`'s description (`model.c4:68`) so it no longer implies a single
    harness — one clause naming the mirror, its `.working_dir`/`.tool_input.path` envelope,
-   its `exit 2` + `{"decision":"deny"}` protocol, the absence of `ask`, and ADR-158 D3.
+   its `exit 2` + `{"decision":"deny"}` protocol, the absence of `ask`, and ADR-162.
 2. Amending the `claude -> hooks` edge text (`model.c4:390`) if D2 changes what "the
    responder" means.
 3. Running `apps/web-platform/test/c4-code-syntax.test.ts` + `c4-render.test.ts`.
@@ -260,7 +260,7 @@ No new element, so no `views.c4` include is required and no render surface chang
 
 ### Sequencing
 
-ADR-158 is authored in Phase 4, **before** the Phase 5/6 implementations that depend on
+ADR-162 is authored in Phase 4, **before** the Phase 5/6 implementations that depend on
 D1/D2/D3. The C4 amendment lands with it. Neither is deferred to a follow-up issue.
 
 ## Implementation Phases
@@ -367,9 +367,9 @@ setup, both asserting "a `hook-input-*` row is present" from the same payload cl
     `$(jq …)` → RED; delete the aggregator → RED; whitespace-trim `HOOK_CMD` → A17 RED;
     drop sentinel **and** trailing separator → A17 RED on the trailing-newline case.
 
-### Phase 4 — ADR-158 + C4 (contract; precedes Phases 5–6)
+### Phase 4 — ADR-162 + C4 (contract; precedes Phases 5–6)
 
-4.1 Author `ADR-158-*.md` with D1/D2/D3 as specified, including every rejected alternative
+4.1 Author `ADR-162-*.md` with D1/D2/D3 as specified, including every rejected alternative
     named above (flat widening / auxiliary program / guardrails-on-extra-matchers /
     uniform-deny-on-rc-1) and a `## Consequences` section. Status `accepted`.
 4.2 C4 amendments 1–3 from the § above; run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
@@ -389,7 +389,7 @@ setup, both asserting "a `hook-input-*` row is present" from the same payload cl
 5.2 **`ask`-honored probe (precondition for D2's new responders).**
     `DEFER-DECISION-PAYLOAD-SHAPE.md:5` probed `ask` with a **`PreToolUse(Bash)` stub`**
     only. Probe `mcp__pencil__open_document` and `CronCreate` on the model of the existing
-    one. **If `ask` is not honored there, fall back to ADR-158 D2's recorded alternative**
+    one. **If `ask` is not honored there, fall back to ADR-162 D2's recorded alternative**
     (register `guardrails.sh` on those matchers) or descope those two hooks — do not build
     a safety posture on an unverified harness invariant (ADR-156's own clause).
 5.3 **Helper (D1):** widen `_HOOK_INPUT_JQ` with the new slots, replace record 0 with the
@@ -433,7 +433,7 @@ setup, both asserting "a `hook-input-*` row is present" from the same payload cl
     precondition:
     - **6.1a (precondition).** Probe how the OpenHands runtime treats a hook exit code that
       is neither 0 nor 2. Its response decides whether F1 is a live bypass or a loud abort.
-      ADR-158 D3 must not assert anything about it before this returns.
+      ADR-162 must not assert anything about it before this returns.
     - **6.1b.** Give all three mirror hooks' raw extractions an explicit failure branch
       instead of letting `set -e` abort them —
       `… jq -r '…' 2>/dev/null) || deny "BLOCKED: the tool-call envelope did not parse
@@ -447,7 +447,7 @@ setup, both asserting "a `hook-input-*` row is present" from the same payload cl
     extractor's cross-tree fail-hard `source` remains the riskiest line in the change set),
     and the README still records the reason — but it records a **fixed** mirror, not a
     mirror whose divergence was mischaracterised.
-6.2 **ADR-158 D3 is still authored** (Phase 4) — the decision is *why the mirror's
+6.2 **ADR-162 is still authored** (Phase 4) — the decision is *why the mirror's
     divergence is correct*, which is the thing #7173 asked to be made deliberately. It now
     also covers all **three** mirror hooks, not two.
 6.3 **Extend `pre-merge-rebase-parity.test.sh`** with three cases, not two:
@@ -495,7 +495,7 @@ setup, both asserting "a `hook-input-*` row is present" from the same payload cl
 
 | File | Purpose |
 |---|---|
-| `knowledge-base/engineering/architecture/decisions/ADR-158-extending-the-hook-input-trust-boundary-past-the-bash-hot-path.md` | D1/D2/D3 |
+| `knowledge-base/engineering/architecture/decisions/ADR-162-what-ask-means-on-a-harness-with-no-ask-state.md` | D1/D2/D3 |
 | `knowledge-base/project/specs/feat-one-shot-7190-7173-hook-input-contract-hardening/tasks.md` | Task breakdown |
 | `knowledge-base/project/specs/feat-one-shot-7190-7173-hook-input-contract-hardening/decision-challenges.md` | The PR-split challenge (see § Plan Review Revisions) |
 
@@ -542,7 +542,7 @@ setup, both asserting "a `hook-input-*` row is present" from the same payload cl
 
 **Architecture / integration**
 
-- [ ] **AC13** `ADR-158-*.md` exists with D1, D2, D3, an `## Alternatives Considered` table
+- [ ] **AC13** `ADR-162-*.md` exists with D1, D2, D3, an `## Alternatives Considered` table
       carrying all four rejected alternatives named in this plan, the asymmetric
       zero-vs-two responder failure analysis, and `## Consequences`. ADR-156 and ADR-157
       carry forward pointers.
@@ -577,7 +577,7 @@ liveness_signal:
   configured_in: "scripts/rule-metrics-aggregate.sh; asserted end-to-end by A6"
 error_reporting:
   destination: ".claude/.rule-incidents.jsonl via emit_incident, rule_id hook-input-<reason>"
-  fail_loud: "yes — CC asks; the mirror denies on nonstring/separator and fails open LOUDLY (incident + stderr) on unparseable/jq_missing/internal per ADR-158 D3"
+  fail_loud: "yes — CC asks; the mirror denies on nonstring/separator and fails open LOUDLY (incident + stderr) on unparseable/jq_missing/internal per ADR-162"
 failure_modes:
   - mode: "a migrated hook stops reaching the parse gate"
     detection: "Phase-2 loop presence assertion — no hook-input-* row in that hook's own INCIDENTS_REPO_ROOT"
@@ -646,7 +646,7 @@ did not fire.
 
 Plan v1 went to a 5-agent panel at the `single-user incident` threshold.
 `architecture-strategist` and `code-simplicity-reviewer` converged independently on the
-same verdict: the #7190 half was right-sized; **all three ADR-158 clauses were defective.**
+same verdict: the #7190 half was right-sized; **all three ADR-162 clauses were defective.**
 Every finding below was re-verified against source before being applied.
 
 | # | Finding | Verification | Applied |
@@ -714,7 +714,7 @@ COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null) 
 
 Note this makes `unparseable` **deny**, which contradicts D3 as drafted — see F3. The
 current behavior (abort, rc 5) is neither of D3's two options, and **the OpenHands runtime's
-response to a non-0/2 hook exit code must be probed before ADR-158 asserts anything about
+response to a non-0/2 hook exit code must be probed before ADR-162 asserts anything about
 it.** New Phase 6 precondition.
 
 **F2 — D1's per-slot vector converts an aux-slot failure into a silent ALLOW.**
@@ -739,7 +739,7 @@ rationale citing the same threshold:
 The trade is structural and v2 saw only one horn: **coupled token ⇒ forced-ask vector;
 decoupled vector ⇒ silent fail-open on every non-core slot.**
 
-**Amends ADR-158 D1 + Phase 5.6.** The responder model extends from "one hook per matcher"
+**Amends ADR-162 D1 + Phase 5.6.** The responder model extends from "one hook per matcher"
 to "**one core-group responder per matcher, plus each hook is responder for its own
 non-core group.**" ADR-157's all-emit objection does not transfer: it concerned 18 hooks ×
 a *persistent* fault (`jq_missing`), and `jq_missing`/`internal`/`unparseable` remain
@@ -933,12 +933,12 @@ independently shippable.
 | Risk | Mitigation |
 |---|---|
 | **The widened program changes a decision for one of the 20 original hooks.** | Core slots keep positions 1–5 additively; absent fields still render `""`. AC15 pins behaviour on the existing fixture corpus rather than a source diff. The full mutation battery re-runs in Phase 6.5. |
-| **The per-slot flag vector is a more complex record-0 than the union token.** | Real cost, accepted deliberately: the union token hands the model a forced-ask vector (§ User-Brand Impact). Both alternatives are in ADR-158's Alternatives table so the trade is reviewable, and the group predicates are fixed constants — no interpolation, no `printf -v`. |
-| **Zero responders on a matcher — a silent fail-open.** | A9's exactly-one assertion over `.claude/settings.json`, plus its existing non-vacuity control. ADR-158 D2 states explicitly that zero is the P0 direction and two is P2. |
+| **The per-slot flag vector is a more complex record-0 than the union token.** | Real cost, accepted deliberately: the union token hands the model a forced-ask vector (§ User-Brand Impact). Both alternatives are in ADR-162's Alternatives table so the trade is reviewable, and the group predicates are fixed constants — no interpolation, no `printf -v`. |
+| **Zero responders on a matcher — a silent fail-open.** | A9's exactly-one assertion over `.claude/settings.json`, plus its existing non-vacuity control. ADR-162 D2 states explicitly that zero is the P0 direction and two is P2. |
 | **`ask` may not be honored on `mcp__*` / `CronCreate`.** | Phase 5.2 probe is a precondition, with a named fallback (guardrails on those matchers) and descoping as the last resort. Building on it unprobed would violate ADR-156's own clause. |
 | **The migrations may defend nothing** if the harness already rejects non-string `tool_input` for these tools. | Phase 5.1 reachability probe sizes the set. A migration that defends nothing is cut, not shipped for symmetry. |
 | **Scope.** Two issues, one PR, a security-critical helper. | Six phases; Phases 1–3 touch one file and are independently shippable. The split recommendation is persisted as a User-Challenge rather than silently applied or silently dropped. |
-| **ADR-158 ordinal collision** with a sibling PR. | `/ship`'s collision gate re-verifies against `origin/main`. On renumber, sweep `plans/` + `specs/` in the same edit or AC13 cites a nonexistent file. |
+| **ADR-162 ordinal collision** with a sibling PR. | `/ship`'s collision gate re-verifies against `origin/main`. On renumber, sweep `plans/` + `specs/` in the same edit or AC13 cites a nonexistent file. |
 | **Mutations accidentally committed.** | Applied to a scratch copy, observed RED, reverted. Phase 6.5 re-runs from a clean tree; `git status` must show only the intended diff. |
 | **Widening a loop to 19 surfaces a genuine divergence**, tempting a trim back to a passing subset. | Phase 2.3 mandates listing divergent hooks — the discipline A14's existing comment already applies. |
 

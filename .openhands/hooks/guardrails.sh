@@ -24,7 +24,20 @@ deny() {
   exit 2
 }
 
-# --- reason-class split (ADR-158 D3) ----------------------------------------
+# One constant, defined once. The reason text is agent-facing and was
+# previously duplicated per extraction, in two different lengths, so how much
+# the agent was told depended on which extraction happened to fail first.
+#
+# It names an action the AGENT CAN TAKE. The earlier wording ("re-send a
+# well-formed envelope") named one it cannot: the agent authors tool_input
+# values, while the runtime assembles the envelope, the working_dir and the
+# JSON framing. The parity suite's own fixture puts the offending byte in
+# working_dir, so on that payload the old text asked the agent to fix
+# something it does not produce - and guardrails.sh is registered on BOTH
+# matchers, so it would deny every tool the agent has, with no way forward.
+UNPARSEABLE_REASON="BLOCKED: the tool-call envelope did not parse (ADR-156/ADR-162), so this hook's guards did not run and the call is refused rather than silently permitted. The usual cause is a byte in one of your tool arguments that cannot be encoded as JSON text - most often a lone surrogate from non-UTF-8 file content. Re-send with that value base64- or hex-encoded, or with the offending bytes dropped. If none of your arguments carry such a value the envelope was malformed in transport, which you did not author; re-sending unchanged may succeed."
+
+# --- reason-class split (ADR-162) ----------------------------------------
 # jq MISSING fails OPEN, loudly. ADR-157:115 rejects fail-closed here because
 # the repair for a broken PATH or a missing jq is itself a tool call that would
 # also be denied — and that argument bites HARDER on this harness, which has no
@@ -32,6 +45,20 @@ deny() {
 # class blocks its own repair.
 if ! command -v jq >/dev/null 2>&1; then
   echo "[guardrails] jq missing — envelope unparseable, guards did NOT run for this call" >&2
+  # FAIL OPEN, but not unconditionally. Failing open on this class is required
+  # (ADR-157 §Alternatives Considered, "Fail closed": the repair for a broken
+  # PATH or a missing jq is itself a tool call a deny would also block) — but an
+  # UNCONDITIONAL open turns "delete jq" into a one-call disarm of every guard
+  # in this file. So before proceeding, match the RAW document against the
+  # narrow set of patterns whose guards are the reason this hook exists. The
+  # repair commands themselves (apt-get install jq, export PATH=..., ln -s)
+  # match none of these, so the recovery path stays open. Deliberately
+  # over-broad in the other direction: on a branch that only runs when the
+  # parser is gone, a false deny is the correct error.
+  if grep -qE 'rm[[:space:]]+-[a-zA-Z]*[rf]|git[[:space:]]+stash|--delete-branch|git[[:space:]]+commit' <<<"$INPUT"; then
+    printf '{"decision":"deny","reason":"BLOCKED: jq is unavailable, so the tool-call envelope cannot be parsed and this hook'"'"'s guards did not run — and the raw envelope matches a protected pattern. Repair jq first (install it, or fix PATH), then re-send."}\n'
+    exit 2
+  fi
   exit 0
 fi
 
@@ -48,12 +75,12 @@ fi
 # The deny is recoverable in-band: the reason string returns to the agent,
 # which can re-send a well-formed envelope.
 COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null) \
-  || deny "BLOCKED: the tool-call envelope did not parse (ADR-156/ADR-158 D3). Hook stdin is model-controlled and untrusted; a hook that cannot read its input does not run its guards, so the call is refused rather than silently permitted. Re-send a well-formed envelope."
+  || deny "$UNPARSEABLE_REASON"
 HOOK_CWD=$(printf '%s' "$INPUT" | jq -r '.working_dir // ""' 2>/dev/null) \
-  || deny "BLOCKED: the tool-call envelope did not parse (ADR-156/ADR-158 D3). Re-send a well-formed envelope."
+  || deny "$UNPARSEABLE_REASON"
 # OpenHands file_editor uses "path"; fall back to "file_path" for compatibility.
 FILE_PATH=$(printf '%s' "$INPUT" | jq -r '.tool_input.path // .tool_input.file_path // ""' 2>/dev/null) \
-  || deny "BLOCKED: the tool-call envelope did not parse (ADR-156/ADR-158 D3). Re-send a well-formed envelope."
+  || deny "$UNPARSEABLE_REASON"
 
 # Freeze reader — cross-tree to the shared helper. freeze-lock.sh resolves the
 # freeze state file from its OWN BASH_SOURCE (three dirs up from
@@ -102,6 +129,15 @@ GR_ENVELOPE_SHAPE=$(printf '%s' "$INPUT" | jq -r '
      and ((.working_dir? | if . == null then "" else . end) | type == "string")
      and ((if (.tool_input | has("path")) and (.tool_input.path != null) then .tool_input.path else .tool_input.file_path end | if . == null then "" else . end) | type == "string")
   then "ok" else "nonstring" end' 2>/dev/null) || GR_ENVELOPE_SHAPE="unparseable"
+# `internal` — the shape program itself failed (a broken program, a jq version
+# change, OOM) while the simpler extractions above succeeded. This was a
+# TOTALLY SILENT fail-open: the fallback assigned "unparseable" and nothing
+# branched on it, so an ARRAY command disarmed every guard below with no
+# stdout, no stderr and no record — measured. Fail open (same
+# self-referential-repair rationale as jq_missing) but LOUDLY.
+if [[ "$GR_ENVELOPE_SHAPE" != "ok" && "$GR_ENVELOPE_SHAPE" != "nonstring" ]]; then
+  echo "[guardrails] envelope shape program failed ($GR_ENVELOPE_SHAPE) — guards did NOT run for this call" >&2
+fi
 if [[ "$GR_ENVELOPE_SHAPE" == "nonstring" ]]; then
   deny "BLOCKED: the tool-call envelope carries a non-string field (e.g. an ARRAY tool_input.command). Hook stdin is model-controlled and untrusted (ADR-156); a non-string is never coerced, because the coerced value matches no guard and would bypass every gate in this hook. Re-send the command as a string."
 fi
@@ -128,11 +164,11 @@ if [[ -n "$FILE_PATH" && -z "$COMMAND" ]] && declare -f freeze_active_prefix >/d
 fi
 
 # guardrails:block-commit-on-main — Block git commit on main branch
-if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+commit'; then
+if grep -qE '(^|&&|\|\||;)\s*git\s+commit' <<<"$COMMAND"; then
   GIT_DIR=""
-  if echo "$COMMAND" | grep -qE '^\s*cd\s+'; then
+  if grep -qE '^\s*cd\s+' <<<"$COMMAND"; then
     GIT_DIR=$(echo "$COMMAND" | sed -nE 's/^\s*cd\s+"?([^"&;]+)"?.*/\1/p' | xargs)
-  elif echo "$COMMAND" | grep -qoE 'git\s+-C\s+\S+'; then
+  elif grep -qoE 'git\s+-C\s+\S+' <<<"$COMMAND"; then
     GIT_DIR=$(echo "$COMMAND" | grep -oE 'git\s+-C\s+\S+' | head -1 | sed -nE 's/git\s+-C\s+(\S+)/\1/p')
   fi
   if [ -n "$GIT_DIR" ] && [ -d "$GIT_DIR" ]; then
@@ -148,7 +184,7 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+commit'; then
 fi
 
 # guardrails:block-rm-rf-worktrees — Block rm -rf on worktree paths
-if echo "$COMMAND" | grep -qE 'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)\s+\S*\.worktrees/'; then
+if grep -qE 'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)\s+\S*\.worktrees/' <<<"$COMMAND"; then
   deny "BLOCKED: rm -rf on worktree paths is not allowed. Use git worktree remove or worktree-manager.sh cleanup-merged instead."
 fi
 
@@ -169,11 +205,11 @@ fi
 # — a commit MESSAGE documenting `rm -rf` on a feature branch can over-match; the
 # tokenizer (which acts only on a real `rm`/`*/rm` token) prevents false-denies
 # in the common quoted-body case.
-if echo "$COMMAND" | grep -qE '(^|[[:space:]]|&&|\|\||;|\|)[^[:space:]]*rm[[:space:]]+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)'; then
+if grep -qE '(^|[[:space:]]|&&|\|\||;|\|)[^[:space:]]*rm[[:space:]]+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)' <<<"$COMMAND"; then
   _rd_cwd=""
-  if echo "$COMMAND" | grep -qE '^\s*cd\s+'; then
+  if grep -qE '^\s*cd\s+' <<<"$COMMAND"; then
     _rd_cwd=$(echo "$COMMAND" | sed -nE 's/^\s*cd\s+"?([^"&;]+)"?.*/\1/p' | xargs)
-  elif echo "$COMMAND" | grep -qoE 'git\s+-C\s+\S+'; then
+  elif grep -qoE 'git\s+-C\s+\S+' <<<"$COMMAND"; then
     _rd_cwd=$(echo "$COMMAND" | grep -oE 'git\s+-C\s+\S+' | head -1 | sed -nE 's/git\s+-C\s+(\S+)/\1/p')
   fi
   if [ -z "$_rd_cwd" ] || [ ! -d "$_rd_cwd" ]; then
@@ -241,19 +277,23 @@ if echo "$COMMAND" | grep -qE '(^|[[:space:]]|&&|\|\||;|\|)[^[:space:]]*rm[[:spa
 fi
 
 # guardrails:block-delete-branch — Block gh pr merge --delete-branch when worktrees exist
-if echo "$COMMAND" | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
-  WORKTREE_COUNT=$(git worktree list 2>/dev/null | wc -l)
+if grep -qE 'gh\s+pr\s+merge.*--delete-branch' <<<"$COMMAND"; then
+  # `|| WORKTREE_COUNT=0`: git exits 128 from a non-git cwd and `pipefail`
+  # propagates it, so under `set -e` this killed the hook at rc 128 with NO
+  # decision, on a CLEAN payload — the same abort class this change fixes at
+  # the extractions above.
+  WORKTREE_COUNT=$(git worktree list 2>/dev/null | wc -l) || WORKTREE_COUNT=0
   if [ "$WORKTREE_COUNT" -gt 1 ]; then
     deny "BLOCKED: --delete-branch with active worktrees will orphan them. Remove worktrees first, then merge."
   fi
 fi
 
 # guardrails:block-conflict-markers — Block commits with conflict markers in staged content
-if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|merge\s+--continue)'; then
+if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|merge\s+--continue)' <<<"$COMMAND"; then
   CONFLICT_MARKERS_DIR=""
-  if echo "$COMMAND" | grep -qE '^\s*cd\s+'; then
+  if grep -qE '^\s*cd\s+' <<<"$COMMAND"; then
     CONFLICT_MARKERS_DIR=$(echo "$COMMAND" | sed -nE 's/^\s*cd\s+"?([^"&;]+)"?.*/\1/p' | xargs)
-  elif echo "$COMMAND" | grep -qoE 'git\s+-C\s+\S+'; then
+  elif grep -qoE 'git\s+-C\s+\S+' <<<"$COMMAND"; then
     CONFLICT_MARKERS_DIR=$(echo "$COMMAND" | grep -oE 'git\s+-C\s+\S+' | head -1 | sed -nE 's/git\s+-C\s+(\S+)/\1/p')
   fi
   if [ -z "$CONFLICT_MARKERS_DIR" ] || [ ! -d "$CONFLICT_MARKERS_DIR" ]; then
@@ -266,24 +306,24 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|merge
   else
     STAGED_DIFF=$(git diff --cached 2>/dev/null || true)
   fi
-  if echo "$STAGED_DIFF" | grep -qE '^\+(<{7}|={7}|>{7})'; then
+  if grep -qE '^\+(<{7}|={7}|>{7})' <<<"$STAGED_DIFF"; then
     deny "BLOCKED: Staged content contains conflict markers (<<<<<<<, =======, or >>>>>>>). Resolve all conflicts before committing."
   fi
 fi
 
 # guardrails:require-milestone — Block gh issue create without --milestone
-if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create'; then
-  if ! echo "$COMMAND" | grep -qF -- '--milestone'; then
+if grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create' <<<"$COMMAND"; then
+  if ! grep -qF -- '--milestone' <<<"$COMMAND"; then
     deny "BLOCKED: gh issue create must include --milestone. Default to 'Post-MVP / Later' for operational issues. Read knowledge-base/product/roadmap.md for feature issues."
   fi
 fi
 
 # guardrails:block-stash-in-worktrees — Block git stash in worktrees
-if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+stash'; then
+if grep -qE '(^|&&|\|\||;)\s*git\s+stash' <<<"$COMMAND"; then
   STASH_GUARD_DIR=""
-  if echo "$COMMAND" | grep -qE '^\s*cd\s+'; then
+  if grep -qE '^\s*cd\s+' <<<"$COMMAND"; then
     STASH_GUARD_DIR=$(echo "$COMMAND" | sed -nE 's/^\s*cd\s+"?([^"&;]+)"?.*/\1/p' | xargs)
-  elif echo "$COMMAND" | grep -qoE 'git\s+-C\s+\S+'; then
+  elif grep -qoE 'git\s+-C\s+\S+' <<<"$COMMAND"; then
     STASH_GUARD_DIR=$(echo "$COMMAND" | grep -oE 'git\s+-C\s+\S+' | head -1 | sed -nE 's/git\s+-C\s+(\S+)/\1/p')
   fi
   if [ -z "$STASH_GUARD_DIR" ] || [ ! -d "$STASH_GUARD_DIR" ]; then
@@ -292,7 +332,8 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+stash'; then
     fi
   fi
   RESOLVE_DIR="${STASH_GUARD_DIR:-.}"
-  if echo "$(cd "$RESOLVE_DIR" 2>/dev/null && pwd)" | grep -qF '.worktrees'; then
+  _resolved=$(cd "$RESOLVE_DIR" 2>/dev/null && pwd)
+  if grep -qF '.worktrees' <<<"$_resolved"; then
     deny "BLOCKED: git stash in worktrees is not allowed. Use git show <commit>:<path> to inspect old code, or commit WIP first."
   fi
 fi
