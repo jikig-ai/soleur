@@ -33,8 +33,12 @@ by the errno; H4 (inngest not bound on :8288) is near-confirmed.** Do not re-ope
       loopback probe that was already reporting green. It would have returned success
       having fixed nothing — the monitoring blind spot wearing a different hat. Do not
       dispatch it for this failure mode.
-- [ ] 0.1 File the tracking issue (`type/incident`). `Ref #6617` (**blocking dependency**),
+- [x] 0.1 File the tracking issue (`type/incident`). `Ref #6617` (**blocking dependency**),
       `Ref #7144`, `Ref #5697`. Body carries §Evidence.
+      → Filed as **#7228**. NOTE: `type/incident` does not exist in this repo (the taxonomy
+      is `type/{bug,chore,feature,question,security}`), so it carries `type/bug` +
+      `priority/p1-high` + `domain/engineering`. Minting a sixth type label is a governance
+      call, not a side effect of this filing — raised rather than silently substituted.
 - [x] 0.2 **The one real probe (H3/H4).** `hcloud server describe` the dedicated host +
       its boot phone-home (`inngest-boot-phone-home.sh`) / vector stream. Correlate with
       the `SOLEUR_INNGEST_SERVER_PROBE` gap after 2026-07-30. Prior art to check first:
