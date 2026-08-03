@@ -61,8 +61,8 @@ FAIL=0
 # the entire mutation battery -- the suite's own anti-vacuity mechanism -- and still exited 0.
 # A part-level floor makes that a loud "Part C shrank" instead of a silent pass, and gives a
 # better failure message than a total ever could.
-MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-102}"
-MIN_A="${DRIFT_MIN_A:-53}"
+MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-106}"
+MIN_A="${DRIFT_MIN_A:-57}"
 MIN_B="${DRIFT_MIN_B:-38}"
 MIN_C="${DRIFT_MIN_C:-11}"
 COUNT_A=0
@@ -319,6 +319,15 @@ run_part_a() {
   _classify "" 28 5 "$((NOW - THRESH_S - 60))" 0 "$NOW"
   assert_eq "A20 curl failure outranks a stale-looking count -> CHECK_ERROR" "2" "$rc"
 
+  # A20b -- prod serving a sha that is NOT an ancestor of main. main() signals this with the
+  # sentinel rc 64, distinct from a plain range failure, so the operator learns WHICH thing is
+  # odd. Without the ancestry guard the range resolves rc=0 against the merge-base and pages a
+  # confident, wildly wrong age.
+  _classify "$OK_JSON" 0 0 "" 64 "$NOW"
+  assert_eq "A20b prod sha off main's first-parent chain -> CHECK_ERROR" "2" "$rc"
+  assert_eq "A20c -> reason names the ancestry problem, not a generic query failure" \
+    "prod_sha_not_on_main" "$DRIFT_REASON"
+
   run_main_smoke
 }
 
@@ -343,6 +352,11 @@ echo 1900000000
 STUB
   cat > "$sdir/git" <<'STUB'
 #!/usr/bin/env bash
+# `merge-base --is-ancestor` answers by exit code; GIT_STUB_NOT_ANCESTOR makes it say no.
+if [[ "${1:-}" == "merge-base" ]]; then
+  [[ -n "${GIT_STUB_NOT_ANCESTOR:-}" ]] && exit 1
+  exit 0
+fi
 # Emit N `<sha> <ct>` rows per GIT_STUB_ROWS; default none (prod is current).
 [[ -n "${GIT_STUB_FAIL:-}" ]] && exit 128
 for i in $(seq 1 "${GIT_STUB_ROWS:-0}"); do
@@ -398,6 +412,12 @@ STUB
   : > "$CURL_COUNT_FILE"
   out="$(PATH="$sdir:$PATH" CURL_STUB_FAILS=0 GIT_STUB_FAIL=1 bash "$SUT" 2>&1)"; rc=$?
   assert_eq "A24 main() with a failing git range query -> CHECK_ERROR" "2" "$rc"
+
+  # A24b -- the ancestry guard, reached through main() rather than asserted from the source.
+  : > "$CURL_COUNT_FILE"
+  out="$(PATH="$sdir:$PATH" CURL_STUB_FAILS=0 GIT_STUB_NOT_ANCESTOR=1 bash "$SUT" 2>&1)"; rc=$?
+  assert_eq "A24b main() with prod off main's chain -> CHECK_ERROR" "2" "$rc"
+  assert_contains "A24c ...naming the ancestry problem" "^DRIFT_REASON=prod_sha_not_on_main$" "$out"
 
   # A25 -- the default endpoint. A silent repoint at staging is invisible to every other
   # assertion here and to the workflow, and the alarm would look healthy forever.

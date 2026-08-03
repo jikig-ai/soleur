@@ -152,6 +152,12 @@ classify_drift() {
 
   # A failed range query means the question is UNANSWERED. Reporting CLEAN here is precisely
   # the silent-failure this whole workflow exists to catch, one layer up.
+  if [[ "$revlist_rc" == "64" ]]; then
+    DRIFT_VERDICT="CHECK_ERROR"
+    DRIFT_REASON="prod_sha_not_on_main"
+    DRIFT_DETAIL="${DRIFT_DETAIL} is not an ancestor of origin/main — a range query against it would silently measure from the merge-base, so staleness is unknowable rather than large"
+    return 2
+  fi
   if [[ "$revlist_rc" != "0" ]]; then
     DRIFT_VERDICT="CHECK_ERROR"
     DRIFT_REASON="range_query_failed_rc_${revlist_rc:-unset}"
@@ -253,8 +259,20 @@ main() {
       # rc=128 direct but rc=0 when piped (the pipe reports the LAST stage's status), and rc=0
       # with empty output is indistinguishable from CLEAN. That single character is the whole
       # difference between a working alarm and one that is permanently, silently green.
-      missing="$(git log --first-parent --format='%H %ct' "${sha}..origin/main" -- "${PATHSPEC[@]}" 2>/dev/null)"
-      revlist_rc=$?
+      # PROD_SHA MUST BE ON MAIN'S FIRST-PARENT CHAIN, or the range query answers a different
+      # question than the one asked. Measured: a sha on a second-parent side resolves rc=0 with a
+      # count computed against the MERGE-BASE, so the clock can anchor to a months-old commit and
+      # page DRIFT_SUSTAINED with a wildly inflated age — while nothing says "this sha is not on
+      # main". Reachable via any workflow_dispatch from a non-main ref, since force_run bypasses
+      # check_changed and BUILD_SHA is whatever github.sha pointed at. Loud beats plausible.
+      if git merge-base --is-ancestor "$sha" origin/main 2>/dev/null; then
+        missing="$(git log --first-parent --format='%H %ct' "${sha}..origin/main" -- "${PATHSPEC[@]}" 2>/dev/null)"
+        revlist_rc=$?
+      else
+        # Distinguished from a plain range failure so the operator is told WHICH thing is odd.
+        missing=""
+        revlist_rc=64
+      fi
       if [[ "$revlist_rc" -eq 0 ]]; then
         # `grep -c` EXITS 1 on a zero count, so the count is taken as data with `|| true`
         # rather than allowed to read as a failure.
