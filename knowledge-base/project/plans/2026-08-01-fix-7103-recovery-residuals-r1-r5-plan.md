@@ -932,18 +932,29 @@ logs:
   retention: ~3 days hot+archive for Better Stack; 90 days for Actions logs
 
 discoverability_test:
-  command: >-
-    bash scripts/test-all.sh &&
-    doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-assert-absence.sh
-      --since 2h --host soleur-web-platform
-      --absence 'Doppler Error: Invalid Auth token' &&
-    doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh
-      --since 2h --grep SOLEUR_DEPLOY_INVOCATION --limit 20 &&
-    curl -sS --max-time 20 https://app.soleur.ai/health
-  expected_output: >-
-    suite count = baseline + 5; the absence helper prints `clean` and exits 0 (or `unshipping` /
-    `unknown` and exits 2 / 3 — which is the point); at least one SOLEUR_DEPLOY_INVOCATION row whose
-    script_sha matches the deployed commit's ci-deploy.sh; /health returns the deployed version.
+  command: curl -sS -o /dev/null -w '%{http_code}' --max-time 10 https://app.soleur.ai/health
+  expected_output: "200"
+
+# WHY THIS IS ONE UNAUTHENTICATED CURL AND NOT THE FULL RECIPE (corrected 2026-08-03).
+# It was `bash scripts/test-all.sh && doppler run … && doppler run … && curl …`, which
+# /ship preflight Check 10 refuses to execute: the check runs the command with `env -i` but
+# `$HOME` PRESERVED, so a `doppler` invocation reaches the operator's on-disk token — and the
+# gate's credentialed-CLI reject fires rather than running it. So the field that exists to be
+# EXECUTED could never be executed, which is the same "declared-verifiable but unverified" gap
+# the field was added to close (#4148).
+#
+# `discoverability_test.command` means: ONE command, no ssh, no credentials, that an operator
+# can run locally to answer "is this observable at all?". The full verification recipe is a
+# different thing and lives below as prose, where nothing tries to run it.
+#
+# full_verification (operator recipe — credentialed, NOT the discoverability probe):
+#   1. bash scripts/test-all.sh                    -> suite count = baseline + 6
+#   2. doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-assert-absence.sh \
+#        --since 2h --host soleur-web-platform --absence 'Doppler Error: Invalid Auth token'
+#      -> `clean` exit 0, or `unshipping`/`unknown` exit 2/3 — the latter two being the point
+#   3. doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
+#        --since 2h --grep SOLEUR_DEPLOY_INVOCATION --limit 20
+#      -> at least one row whose script_sha matches the deployed ci-deploy.sh
   # Contains no remote-shell invocation.
 ```
 
