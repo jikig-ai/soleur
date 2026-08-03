@@ -254,8 +254,15 @@ job does **not** block container deploys. App users stay insulated in every fail
 **Roles not touched:** no data-persistence, payment, or cross-tenant surface is in this diff. Stated
 so the absence reads as a checked result rather than an omission.
 
-**Brand-survival threshold:** `single-user incident`. CPO sign-off required at plan time before
-`/work`; `user-impact-reviewer` runs again at review time.
+- **Brand-survival threshold:** `single-user incident` — CPO sign-off required at plan time before
+  `/work`; `user-impact-reviewer` runs again at review time (it did, on 2026-08-03, and returned
+  9 findings against this section — see session-state §"Review Phase — session 4").
+
+The canonical bullet form above is load-bearing, not cosmetic: `/ship` preflight Check 6 parses
+`- **Brand-survival threshold:** <label>` as an anchored bullet so a free-text sentence mentioning
+the words cannot satisfy it. This was a bare paragraph until 2026-08-03, so the gate reported the
+bullet missing on a plan that had genuinely declared the threshold — the declaration was there and
+the machine-readable form was not.
 
 ---
 
