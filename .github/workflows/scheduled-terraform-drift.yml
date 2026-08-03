@@ -665,6 +665,31 @@ jobs:
               echo "write in \`emit_json\` (\`scripts/check-cloudflare-token-drift.sh\`). Coverage"
               echo "cannot be assessed until the detector publishes a parseable \`configs\` field"
               echo "again."
+            elif [[ "$CONFIGS" == "1" ]]; then
+              # INTERIM STATE (#7234) — DO NOT send the operator hunting a regression.
+              # 1/13 is the DELIBERATE, documented state while the project-scoped service
+              # account is unusable. Without this branch the else-arm below rewrites #7175
+              # twice daily telling the operator to "work down the three narrowings" and
+              # naming N3 ("repointed at a config-scoped service token, reads 1/13") as the
+              # fault — which is a verbatim description of the intended configuration. An
+              # issue that instructs the operator to undo a deliberate change is worse than
+              # no issue: it burns the one channel this detector has.
+              echo "**This 1/13 is expected and tracked — do not undo it.** The scan is"
+              echo "deliberately running on the config-scoped \`secrets.DOPPLER_TOKEN\`"
+              echo "(\`prd_terraform\`) while **#7234** is open."
+              echo ""
+              echo "The project-scoped \`doppler_service_account\` minted for this scan is live"
+              echo "and correctly shaped — account, \`viewer\` project membership, token, and the"
+              echo "\`DOPPLER_TOKEN_DRIFT\` secret all exist — and it was MEASURED to see nothing:"
+              echo "\`doppler configs -p soleur\` returns \`null\`, and reading \`prd\` returns"
+              echo "\`Could not find requested config 'prd'\`. \`workplace_permissions = []\` yields"
+              echo "\`workplace_role: no_access\`, which denies the project visibility a \`viewer\`"
+              echo "membership cannot confer on its own."
+              echo ""
+              echo "So this run scanned the 13 token-shaped keys \`prd_terraform\` carries — the"
+              echo "\`CI_SSH_ACCESS_TOKEN\` pair and 10 \`CF_API_TOKEN*\` among them — and reported"
+              echo "\`${COVERAGE_RATIO}\` honestly rather than calling it clean. **No action is"
+              echo "needed on this issue.** It closes when #7234 restores the fan-out."
             else
               echo "**There is nothing here to widen.** \`DOPPLER_TOKEN_DRIFT\` is a"
               echo "\`doppler_service_account_token\` belonging to"

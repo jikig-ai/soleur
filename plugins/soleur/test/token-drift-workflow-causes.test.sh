@@ -1185,7 +1185,7 @@ else
   fail "the step's DOPPLER_TOKEN is '${WF_TOKEN}' — expected the interim \${{ secrets.DOPPLER_TOKEN }} per #7234. If this is the flip BACK to DOPPLER_TOKEN_DRIFT, first re-run the enumeration probe against the real credential (mint an ephemeral service-account token, run 'doppler configs -p soleur --json', confirm 13) and update this assertion in the same change — the last time that premise went unmeasured the scan read 0 of 13"
 fi
 
-echo "C2: the bare secrets.DOPPLER_TOKEN and DOPPLER_CONFIG are both gone from the step"
+echo "C2: DOPPLER_CONFIG is absent, and the bare token appears exactly once (the one C1 pins)"
 # Asserted over the PARSED step (comments stripped), because the step's own comment block
 # explains at length why DOPPLER_CONFIG is absent and names it four times.
 STEP_YAML=$(step_get "id:token_drift" .) || { echo "FATAL: could not dump the token_drift step" >&2; exit 2; }
@@ -1196,10 +1196,15 @@ step_get "id:token_drift" env.DOPPLER_CONFIG >/dev/null 2>&1 && _has_cfg=1
 # and loops configs; it takes no direction from DOPPLER_CONFIG, and re-adding it would
 # restore the "this scans one named config" mental model the ladder replaced. The bare-token
 # half of this assertion is suspended while #7234 is open (C1 pins the credential instead).
-if [[ "$_has_cfg" == "0" ]]; then
-  pass "no DOPPLER_CONFIG in the step (the detector enumerates; it takes no config direction)"
+# `_bare_token` is KEPT, not dropped. It greps the WHOLE step YAML, so it catches a
+# secrets.DOPPLER_TOKEN appearing in a `with:` block or a second env key — surface C1 does
+# not see, since C1 inspects env.DOPPLER_TOKEN alone. Asserting == 1 pins "exactly the one
+# C1 pins, and no other": deleting this check would silently un-guard the extra-reference
+# case for the duration of #7234.
+if [[ "$_has_cfg" == "0" && "$_bare_token" == "1" ]]; then
+  pass "no DOPPLER_CONFIG in the step, and exactly 1 bare secrets.DOPPLER_TOKEN (the interim credential C1 pins)"
 else
-  fail "the step declares DOPPLER_CONFIG (present=${_has_cfg}) — the detector loops over enumerated configs, so naming one reads as 'which config this scans', the wrong mental model for a fan-out detector. Even on the interim config-scoped credential the config is implied by the token, never by this variable"
+  fail "the step declares DOPPLER_CONFIG (present=${_has_cfg}) or references the bare secrets.DOPPLER_TOKEN ${_bare_token} time(s), expected exactly 1 — the detector loops over enumerated configs, so naming one in DOPPLER_CONFIG reads as 'which config this scans', the wrong mental model for a fan-out detector; and a SECOND bare-token reference is a surface C1 does not inspect"
 fi
 
 echo "C3: an unset, empty or unparseable floor WRITES the outputs and THEN exits 2"

@@ -18,6 +18,15 @@
 # FOUR RESOURCES, ONE CREDENTIAL: the account (the identity), the project membership (the GRANT),
 # the token (the secret value) and the repo Actions secret (the sink the workflow reads as
 # `secrets.DOPPLER_TOKEN_DRIFT`). Exactly ONE consumer — the `token_drift` step. The rung-2
+#
+# INTERIM (#7234), 2026-08-03: that is currently FALSE — this credential has ZERO
+# consumers. It was measured unable to enumerate or read the project (`doppler configs
+# -p soleur` -> null; reading `prd` -> "Could not find requested config 'prd'"), so the
+# token-drift step was restored to the config-scoped `secrets.DOPPLER_TOKEN`. These
+# resources are deliberately LEFT PROVISIONED so #7234 can probe which permission shape
+# grants project visibility without a gated re-apply. Do NOT garbage-collect the secret
+# as an orphan, and do NOT wire it into anything else as a convenient spare — it grants
+# nothing today and its intended consumer is the token-drift step, once #7234 lands.
 # rehearsal orphan sweep in the same workflow is deliberately NOT wired to it.
 #
 # autonomy-considered: provider-mint-applied (Doppler service account + membership + token and
