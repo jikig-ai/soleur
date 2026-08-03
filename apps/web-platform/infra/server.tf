@@ -1368,7 +1368,8 @@ resource "terraform_data" "deploy_pipeline_fix" {
   # FILE_MAP + a new env key in hooks.json) AND fires this push, the push could run
   # against the host's STALE handler+hooks.json. The new file's env var is then
   # unset on the stale hooks.json, so the handler's per-file `missing_env` arm
-  # (infra-config-apply.sh:106-112, the #4804 self-heal window) records a failure,
+  # (infra-config-apply.sh, the `reason=missing_env` branch — the #4804 self-heal
+  # window; cited by content because line numbers there rot) records a failure,
   # the file does not land, and the op that reads it (e.g. op=inventory) 500s — it
   # lands ONE APPLY LATE, on the next unrelated apply. The bridge is the SOLE
   # delivery path for the handler + hooks.json, so this edge forces Terraform to

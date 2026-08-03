@@ -44,10 +44,21 @@ LOGGER_CMD="${INFRA_CONFIG_LOGGER_CMD:-logger}"
 # State file for observability (#4554). Queryable via /hooks/infra-config-status.
 STATE_FILE="${INFRA_CONFIG_STATE:-/var/lock/infra-config-apply.state}"
 START_TS=$(date +%s)
-# The ERR->EXIT handoff slot. A FILE, not a variable (AC9): a failure inside `$( )` assigns in
-# the child, so the parent's EXIT trap would otherwise publish a frame with no attribution —
-# while the frame is precisely the transport-independent arm of this channel. Measured on the
-# target image's bash 5.2.21: the variable is UNSET in the parent, the file crosses.
+# The ERR->EXIT handoff slot. A FILE, not a variable (AC9), and LAST-WRITER-WINS.
+#
+# Why a file: a fatal inside `$( )` runs the ERR trap in a CHILD shell, so the parent's EXIT
+# trap can only learn about it through something that crosses the process boundary.
+#
+# Why last-writer-wins, which is NOT obvious and was measured on bash 5.2.21 both ways:
+# when several ERR traps fire for one failure (a child, then the enclosing parent), the LAST
+# write is the outermost frame. Keeping the FIRST instead looks like it should be better —
+# "the innermost failure is the root cause" — and for a nested plain command it is. But for a
+# PIPELINE bash reports the LAST ELEMENT, so first-writer-wins recorded
+# `awk "{print $1}"` for a failure that was actually `sha256sum`'s: it names a command that
+# SUCCEEDED. The outer frame (`local_sha=$(sha256sum … | awk …)`) is coarser but can never
+# point at the wrong command, and `fatal_rc` carries the true status either way. A coarse
+# truth beats a precise lie in a channel whose whole purpose is diagnosis.
+# For #7220's own shape — a top-level `systemctl daemon-reload` — both are identical.
 FATAL_FILE="${STATE_FILE}.fatal"
 
 # Clear stale sentinels from the prior run (same pattern as ci-deploy.sh:105).

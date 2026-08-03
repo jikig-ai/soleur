@@ -1182,9 +1182,15 @@ test_fatal_channel_subshell_attribution() {
 
   # Non-vacuity: the command text must actually be there, else the absence assertions in the
   # secret arm below would pass on an empty string.
+  #
+  # This assertion ALSO pins the handoff's last-writer-wins semantics, so do not "improve" the
+  # ERR trap to keep the FIRST write. Measured both ways on bash 5.2.21: the failing construct
+  # here is a PIPELINE (`local_sha=$(sha256sum … | awk …)`), and for a pipeline bash reports the
+  # LAST ELEMENT — so first-writer-wins records `awk "{print $1}"`, naming a command that
+  # SUCCEEDED, and this assertion goes RED. The outer frame is coarser but never wrong.
   case "$fcmd" in
-    *sha256sum*) echo "  PASS: fatal_cmd names the failing command"; PASS=$((PASS + 1)) ;;
-    *) echo "  FAIL: fatal_cmd=<$fcmd> does not name sha256sum"; FAIL=$((FAIL + 1)) ;;
+    *sha256sum*) echo "  PASS: fatal_cmd names the failing command, not a succeeded pipeline element"; PASS=$((PASS + 1)) ;;
+    *) echo "  FAIL: fatal_cmd=<$fcmd> does not name sha256sum (last-writer-wins handoff regressed?)"; FAIL=$((FAIL + 1)) ;;
   esac
 
   # The frame stays valid JSON and carries REAL accounting, not the hardcoded zeros of #7220.
