@@ -115,7 +115,8 @@ disclosed trade-off in `## Encryption Posture` and `## User-Brand Impact`.
   `enclave_project_config_dynamic_secrets_leases_write` (a write verb),
   `enclave_project_config_dynamic_secrets_read`,
   `enclave_project_config_rotated_secrets_read` and `enclave_config_logs`.
-- `workplace_role` and `workplace_permissions` are **left unset**, so the project membership is
+- `workplace_role` is **unset** and `workplace_permissions` is an explicitly **empty list**
+  (the provider enforces `ExactlyOneOf` on the pair), so the project membership is
   the identity's only grant — it cannot reach any other Doppler project.
 - `environments` is **left unset** (project-wide), justified by a measured per-config census of
   scannable keys on 2026-08-03: only `cli` and `cli_ops` are vacuous, so scoping to `prd` would
@@ -153,7 +154,7 @@ own alarm threshold would be the very narrowing the floor exists to catch.
 ## Not challenged
 
 - The credential shape as chosen on 2026-08-03: a project-scoped service account at
-  `role = "viewer"`, with `environments`, `workplace_role` and `workplace_permissions` unset.
+  `role = "viewer"`, with `environments` and `workplace_role` unset, `workplace_permissions = []`.
 - The dedicated `DOPPLER_TOKEN_DRIFT` secret consumed only by the token-drift step.
 - The absence of `lifecycle.ignore_changes` on `plaintext_value`.
 - The absence of `expires_at` (reasoned in FR1, asserted by AC34).

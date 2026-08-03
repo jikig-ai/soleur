@@ -155,7 +155,7 @@ none of the escalation hops disclosed below, because those live in `prd` root.
 environment's **7** configs are the detector header's own motivating case, which cites a
 credential "stale in 5 of 7 configs".
 
-> **Provenance for ADR-155.** The dispositive evidence is this census, not the
+> **Provenance for ADR-158.** The dispositive evidence is this census, not the
 > `inheriting=false / inherits=[]` metadata. That metadata describes Doppler's *explicit
 > cross-config inheritance feature*, which is off everywhere, and is **not** evidence about
 > the built-in environment-root-to-branch behaviour. The census is sufficient for every
@@ -327,7 +327,9 @@ and auto-closes when the credential lands.
   sibling `doppler_service_token` files:
 
   1. `doppler_service_account.token_drift` — `name = "token-drift-ci-tf"`.
-     `workplace_role` and `workplace_permissions` are **deliberately left unset**, so the
+     `workplace_role` is **deliberately unset** and `workplace_permissions` is an explicitly
+     **empty list** (the pinned provider enforces `ExactlyOneOf` on the pair, so neither-unset
+     fails `terraform validate`; an empty list is the least-privileged satisfying value), so the
      project membership below is the identity's *only* grant and it can reach no other Doppler
      project. This is a design statement, not an omission, and the header says so.
   2. `doppler_project_member_service_account.token_drift` — `project = "soleur"`,
@@ -586,11 +588,11 @@ and auto-closes when the credential lands.
   It reads no credential and makes no network call, so it cannot be defeated by narrowing the
   credential, and it cannot red a merge because live Doppler grew.
 
-- **FR9 — the ADR.** `ADR-155` records: that a `doppler_service_token` is config-scoped and a
+- **FR9 — the ADR.** `ADR-158` records: that a `doppler_service_token` is config-scoped and a
   `doppler_service_account` with a project membership is not (with the falsified
   "no project-scoped read token exists" premise from #7159); that the `viewer` role is the
   least-privileged role carrying `enclave_project_config_secrets_read`; the decision to leave
-  `environments`, `workplace_role` and `workplace_permissions` unset; and the gate-versus-report
+  `environments` and `workplace_role` unset, `workplace_permissions = []`; and the gate-versus-report
   split — **the floor is declared, the ratio is reported**. Provenance cites the 2026-08-02
   census and the 2026-08-03 probes.
 
@@ -598,15 +600,17 @@ and auto-closes when the credential lands.
 
 ## Architecture Decision (ADR/C4)
 
-**Create `ADR-155 — A project-scoped Doppler service account reads the fleet; the coverage floor
+**Create `ADR-158 — A project-scoped Doppler service account reads the fleet; the coverage floor
 is declared, not derived`** as an in-scope task of this plan. It corrects reasoning currently
 carried in shipped comments, in the workflow's remedy prose, in a runbook and in the #7159
 option table, and it records why the denominator may report but must not gate.
 
-> **Ordinal.** ADR-155 is the next free ordinal (highest existing is ADR-154). **Provisional**
+> **Ordinal.** ADR-158 is the next free ordinal (highest existing is ADR-157). This plan was
+> authored against ADR-155; that ordinal is now claimed by a sibling plan, and 156/157 landed
+> while this plan was being written. Renumbered 2026-08-03 at implementation. **Provisional**
 > — a sibling PR can claim it. On renumber, sweep this plan, the spec, the tasks file and every
 > AC naming it:
-> `grep -rn 'ADR-155' knowledge-base/project/{plans,specs}/feat-one-shot-7159-doppler-prd-read-token-coverage/`
+> `grep -rn 'ADR-158' knowledge-base/project/{plans,specs}/feat-one-shot-7159-doppler-prd-read-token-coverage/`
 
 Related: ADR-154, ADR-007, ADR-149.
 
@@ -711,7 +715,7 @@ at_rest:
       enclave_project_config_rotated_secrets_read and enclave_config_logs. Those are disclosed
       rather than elided.
       WHAT STILL BOUNDS IT, each verified rather than assumed:
-      (1) workplace_role and workplace_permissions are unset, so the project membership is the
+      (1) workplace_role is unset and workplace_permissions is empty, so the project membership is the
       ONLY grant — the identity cannot reach any other Doppler project;
       (2) the role cannot write secret values (roles probe above);
       (3) the credential is Terraform-managed and rotatable by -replace= in a single apply,
@@ -1263,7 +1267,7 @@ reporting steps is not); `tests/scripts/test-destroy-guard-counter-web-platform.
 |---|---|
 | `apps/web-platform/infra/token-drift-service-account.tf` | FR1 — the three Doppler resources plus the Actions secret |
 | `apps/web-platform/infra/doppler-config-inventory.txt` | FR8 — 13 names, report only |
-| `knowledge-base/engineering/architecture/decisions/ADR-155-project-scoped-service-account-and-declared-coverage-floor.md` | FR9 |
+| `knowledge-base/engineering/architecture/decisions/ADR-158-project-scoped-service-account-and-declared-coverage-floor.md` | FR9 |
 | `knowledge-base/project/specs/feat-one-shot-7159-doppler-prd-read-token-coverage/{spec,tasks,decision-challenges}.md` | planning artifacts |
 
 No new `.test.sh`. (`plugins/soleur/test/*.test.sh` is auto-discovered by
@@ -1308,7 +1312,7 @@ No new `.test.sh`. (`plugins/soleur/test/*.test.sh` is auto-discovered by
 | A lost or clobbered state write on the **create** orphans a live project-wide credential in Doppler with no Terraform record — unrotatable by `-replace=`, and it accumulates on the next run. The R2 backend has no conditional writes and `use_lockfile = false`; the Actions concurrency group is the sole serializer. The "dropped `-target=` surfaces as drift" safeguard does **not** cover this: an object absent from state is invisible to `plan`, and provider v1.21.2 ships no data source that could enumerate service accounts or their tokens. | The count-asserting `live_verification` in `## Encryption Posture` is the detector for this mode; the `-replace=` path in the `.tf` header is the remedy. **This risk is strictly larger at this shape** — an orphan now reads the whole project rather than one config — and it is disclosed as such rather than carried over unchanged. |
 | The credential is a repository-level secret on a public repo; the governing control is who can merge under `.github/workflows/`. `CODEOWNERS` pins that path to the operator, but its own header records the branch-protection rule enforcing CODEOWNERS review as an unfinished follow-up, and no ruleset in IaC enforces it. | Named rather than assumed. This is the same control that already governs `DOPPLER_TOKEN_PRD`, so the change does not alter it; the gap is pre-existing and is called out so a reviewer does not read "repository-scoped like every sibling" as a control. |
 | The issue body and the ops emails are API payloads, so GitHub's log masking does not reach them — and the repo is public, so the coverage issue body is world-readable. | AC30 pins that those bodies carry key/config **names** and counts only, never values. `configs_unread` is a list of Doppler config names, which the committed `.tf` files already disclose. |
-| ADR-155's ordinal is claimed by a sibling PR. | Provisional; the renumber sweep is named above. |
+| ADR-158's ordinal is claimed by a sibling PR. | Provisional; the renumber sweep is named above. |
 
 ---
 
@@ -1447,7 +1451,7 @@ prose:
   AC20 names integers; AC21 uses `git diff` rather than a glob matching 54 existing ADRs; the
   post-merge section no longer claims its criteria are approval-free. `credentials` was renamed
   `configs_floor` to end a collision with "credentials verified".
-- **R14 (P2).** ADR-155's provenance moved from the inheritance metadata (which describes a
+- **R14 (P2).** ADR-158's provenance moved from the inheritance metadata (which describes a
   different Doppler feature) to the per-config census. The `DOPPLER_TOKEN_PRD` consumer count was
   corrected from five to six, and the source-derivation rejection was restated so it is
   reproducible.

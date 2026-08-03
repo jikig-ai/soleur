@@ -14,9 +14,9 @@ dependency-correct: every contract lands before its consumers.
       their attribute names — in particular that the token's value attribute is **`api_key`**,
       not `key`. A schema drift here changes FR1 and AC1.
       `terraform -chdir=apps/web-platform/infra providers schema -json`
-- [ ] 0.3 Confirm `ADR-155` is still the next free ordinal against a freshly fetched
+- [ ] 0.3 Confirm `ADR-158` is still the next free ordinal against a freshly fetched
       `origin/main`. If not, renumber and sweep the plan, spec, this file and every AC:
-      `grep -rn 'ADR-15[45]' knowledge-base/project/{plans,specs}/feat-one-shot-7159-doppler-prd-read-token-coverage/`
+      `grep -rn 'ADR-15[0-9]' knowledge-base/project/{plans,specs}/feat-one-shot-7159-doppler-prd-read-token-coverage/`
 - [ ] 0.4 Re-check the two anti-vacuity floors (`token-drift-workflow-causes.test.sh:525`
       `-lt 28`; `check-cloudflare-token-drift.test.sh:1084` `-lt 53`). Both suites run at
       exactly their floor, so any added assertion forces a raise.
@@ -91,7 +91,7 @@ dependency-correct: every contract lands before its consumers.
       project** and is **wider** than `DOPPLER_TOKEN_PRD`. The v3 sentence "adds no new
       capability" must **not** appear (AC30).
 - [ ] 3.1c Adjacent comments explaining each deliberate absence — `environments`,
-      `workplace_role`, `workplace_permissions` — carrying the literal `deliberately unset`
+      `workplace_role`, and the empty `workplace_permissions` — carrying the literal `deliberately unset`
       (AC33). An unexplained absence reads as an oversight and invites a "fix".
 - [ ] 3.2 Add the **four** `-target=` lines to the **default** block only, including the
       membership. Do not touch `terraform-target-parity.test.ts`.
@@ -154,7 +154,7 @@ dependency-correct: every contract lands before its consumers.
 - [ ] 5.2 One-line premise corrections: `apps/web-platform/infra/tunnel.tf:277`,
       `apps/web-platform/infra/workspaces-luks.tf:78,114`. Do not re-derive their blast-radius
       arguments.
-- [ ] 5.3 Write `ADR-155`. Provenance cites the 2026-08-02 census and the 2026-08-03 probes,
+- [ ] 5.3 Write `ADR-158`. Provenance cites the 2026-08-02 census and the 2026-08-03 probes,
       not the inheritance metadata. `## Decision` must contain the literals
       `declared floor, reported ratio` and `project-scoped service account`, and must record the
       falsified #7159 premise.
