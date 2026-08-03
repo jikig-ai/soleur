@@ -12,6 +12,19 @@
 #   T6: comma-split parser handles multi-pair tags
 #   T7: tolerant matcher strip-leading-Phase variant (work Phase 0 Type-widening cross-consumer grep)
 #
+# Corpus-grammar extension (#7172). The rule corpus uses a richer tag
+# vocabulary than the original one-skill-one-anchor grammar could parse:
+#   T8:  prose/blockquote lines (the tag legend) are NOT tags
+#   T9:  `/`-joined skill list resolves when the anchor lands in >=1 skill
+#   T10: `/`-joined list with a nonexistent skill -> reject
+#   T11: ` + `-joined enforcer segments (phase anchor + hook script)
+#   T12: ` + `-joined with a nonexistent hook segment -> reject
+#   T13: file-form enforcer with a symbol (components.test.ts SYMBOL)
+#   T14: file-form enforcer whose symbol is absent -> reject
+#   T15: `§X.Y` -> `### X.Y` normalization
+#   T16: vacuity floor — a file with zero tags is an ERROR, not a pass
+#   T17: path-traversal anchors stay refused
+#
 # Isolation: each case writes a synthetic AGENTS sidecar under `mktemp -d`
 # and invokes the linter from the repo root so the SKILL.md / agent files
 # resolve against the real plugins/ tree.
@@ -180,6 +193,177 @@ t7_strip_leading_phase() {
   assert_exit "T7 strip-leading-Phase exit 0" "0" "$rc"
 }
 
+# --- Corpus-grammar extension (#7172) ---------------------------------------
+
+# Case T8: the tag legend is prose, not a tag. A blockquote line naming the
+# tag syntax must not be parsed as a tag (it was the 13th "failure" on main,
+# introduced by the PR that documented the marker). A real body tag is
+# included so the vacuity floor (T16) does not fire instead.
+t8_prose_line_is_not_a_tag() {
+  local content="# AGENTS test
+
+> **Tag legend.** \`[hook-enforced: …]\`, \`[skill-enforced: …]\` are descriptive.
+
+## Hard Rules
+
+- placeholder [id: hr-test-pointer] [skill-enforced: plan Phase 1.4].
+"
+  local out rc
+  set +e
+  out=$(run_synth "$content")
+  rc=$?
+  set -e
+  assert_exit "T8 prose legend line is not a tag" "0" "$rc"
+}
+
+# Case T9: `/`-joined skill list; anchor need only resolve in one member.
+t9_slash_joined_skills() {
+  local content="# AGENTS test
+
+## Hard Rules
+
+- placeholder [id: hr-test-pointer] [skill-enforced: plan/work/ship gates].
+"
+  local out rc
+  set +e
+  out=$(run_synth "$content")
+  rc=$?
+  set -e
+  assert_exit "T9 slash-joined skill list exit 0" "0" "$rc"
+}
+
+# Case T10: a nonexistent skill anywhere in the list is still a reject.
+t10_slash_joined_bad_skill() {
+  local content="# AGENTS test
+
+## Hard Rules
+
+- placeholder [id: hr-test-pointer] [skill-enforced: plan/nosuchskill gates].
+"
+  local out rc
+  set +e
+  out=$(run_synth "$content")
+  rc=$?
+  set -e
+  assert_exit "T10 slash-joined bad skill exit 1" "1" "$rc"
+  assert_contains "T10 names the missing skill" "nosuchskill" "$out"
+}
+
+# Case T11: ` + `-joined segments — a phase anchor plus a hook script.
+t11_plus_joined_segments() {
+  local content="# AGENTS test
+
+## Hard Rules
+
+- placeholder [id: hr-test-pointer] [skill-enforced: plan Phase 2.8 + iac-plan-write-guard.sh].
+"
+  local out rc
+  set +e
+  out=$(run_synth "$content")
+  rc=$?
+  set -e
+  assert_exit "T11 plus-joined segments exit 0" "0" "$rc"
+}
+
+# Case T12: a ` + ` segment naming a nonexistent hook is a reject.
+t12_plus_joined_bad_hook() {
+  local content="# AGENTS test
+
+## Hard Rules
+
+- placeholder [id: hr-test-pointer] [skill-enforced: plan Phase 2.8 + no-such-hook-xyz.sh].
+"
+  local out rc
+  set +e
+  out=$(run_synth "$content")
+  rc=$?
+  set -e
+  assert_exit "T12 plus-joined bad hook exit 1" "1" "$rc"
+}
+
+# Case T13: file-form enforcer with a symbol.
+t13_file_form_enforcer() {
+  local content="# AGENTS test
+
+## Hard Rules
+
+- placeholder [id: hr-test-pointer] [skill-enforced: components.test.ts AUTONOMOUS_LOOP_SKILLS].
+"
+  local out rc
+  set +e
+  out=$(run_synth "$content")
+  rc=$?
+  set -e
+  assert_exit "T13 file-form enforcer exit 0" "0" "$rc"
+}
+
+# Case T14: file-form enforcer whose symbol is absent -> reject.
+t14_file_form_bad_symbol() {
+  local content="# AGENTS test
+
+## Hard Rules
+
+- placeholder [id: hr-test-pointer] [skill-enforced: components.test.ts NO_SUCH_SYMBOL_XYZ].
+"
+  local out rc
+  set +e
+  out=$(run_synth "$content")
+  rc=$?
+  set -e
+  assert_exit "T14 file-form bad symbol exit 1" "1" "$rc"
+}
+
+# Case T15: `§X.Y` normalizes to `### X.Y`, mirroring the Phase X.Y variant.
+t15_section_sign_normalization() {
+  local content="# AGENTS test
+
+## Code Quality
+
+- placeholder [id: cq-test-pointer] [skill-enforced: plan §1.8].
+"
+  local out rc
+  set +e
+  out=$(run_synth "$content")
+  rc=$?
+  set -e
+  assert_exit "T15 section-sign normalization exit 0" "0" "$rc"
+}
+
+# Case T16: VACUITY FLOOR. A file with zero enforcement tags must be an
+# ERROR. "Scanned nothing" is the failure class this gate exists to catch —
+# it is indistinguishable from "everything resolved" without this floor.
+t16_vacuity_floor() {
+  local content="# AGENTS test
+
+## Hard Rules
+
+- placeholder [id: hr-test-pointer] with no enforcement tag at all.
+"
+  local out rc
+  set +e
+  out=$(run_synth "$content")
+  rc=$?
+  set -e
+  assert_exit "T16 vacuity floor exit 1" "1" "$rc"
+  assert_contains "T16 floor names the zero-tag condition" "zero enforcement tag" "$out"
+}
+
+# Case T17: path-traversal anchors stay refused after the grammar widening.
+t17_path_traversal_refused() {
+  local content="# AGENTS test
+
+## Hard Rules
+
+- placeholder [id: hr-test-pointer] [skill-enforced: plan ../../etc/passwd].
+"
+  local out rc
+  set +e
+  out=$(run_synth "$content")
+  rc=$?
+  set -e
+  assert_exit "T17 path-traversal anchor exit 1" "1" "$rc"
+}
+
 if [[ ! -f "$SUT" ]]; then
   echo "SKIP: $SUT not yet present (Phase 1 RED — implementation lands in Phase 3)"
   exit 0
@@ -192,6 +376,16 @@ t4_hyphen_space_tolerant
 t5_agent_name_fallback
 t6_comma_split
 t7_strip_leading_phase
+t8_prose_line_is_not_a_tag
+t9_slash_joined_skills
+t10_slash_joined_bad_skill
+t11_plus_joined_segments
+t12_plus_joined_bad_hook
+t13_file_form_enforcer
+t14_file_form_bad_symbol
+t15_section_sign_normalization
+t16_vacuity_floor
+t17_path_traversal_refused
 
 echo
 echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"

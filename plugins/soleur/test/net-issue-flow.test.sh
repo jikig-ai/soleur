@@ -755,14 +755,25 @@ run_gate
 if [[ "$CASE_RC" -eq 0 ]]; then pass "blanket override still passes an unexemptable filing"
 else fail "blanket override must remain functional; got exit $CASE_RC"; fi
 
-# --- TR7a: the SHIPPED corpus derives exactly the two intended ids ----------
+# --- TR7a: the SHIPPED corpus derives exactly the ONE intended id -----------
 # Runs against the real worktree AGENTS.rules.md, so it proves the tag actually
 # shipped. (The merge-base set is necessarily empty until this PR merges -- an
 # assertion against merge-base here would be unsatisfiable by construction.)
+#
+# DELIBERATE CHANGE (#7174, 2026-08-03): this asserted TWO ids until the
+# operator untagged `wg-when-deferring-a-capability-create-a`. The decisive
+# reason was that NOTHING WRITES that claim -- every writer emits
+# `wg-block-pr-ready-on-undeferred-operator-steps` literally (ship/SKILL.md
+# Phase 5.5, work/SKILL.md operator-only deferral row), so citing the other id
+# would have been hand-authored free-form text. This assertion is EXACT (not
+# a superset check) precisely so that re-tagging a rule cannot happen silently:
+# widening it back is a deliberate edit, reviewed alongside the ack row that
+# ADR-092 already forces. The multi-id derivation path stays covered by the
+# synthetic `corpus-default` fixture above, which still carries several tags.
 derived="$(grep -F '[mandates-filing]' "$REPO_ROOT/AGENTS.rules.md" \
   | grep -oE '\[id: (hr|wg)-[a-z0-9-]+\]' | sed -E 's/^\[id: (.*)\]$/\1/' | sort -u | tr '\n' ' ')"
-if [[ "$derived" == "wg-block-pr-ready-on-undeferred-operator-steps wg-when-deferring-a-capability-create-a " ]]; then
-  pass "worktree corpus derives exactly the 2 intended ids"
+if [[ "$derived" == "wg-block-pr-ready-on-undeferred-operator-steps " ]]; then
+  pass "worktree corpus derives exactly the 1 intended id"
 else fail "worktree corpus derived: '$derived'"; fi
 
 # --- Help text (FR8) --------------------------------------------------------

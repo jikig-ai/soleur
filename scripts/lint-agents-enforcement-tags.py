@@ -33,18 +33,49 @@ import sys
 from pathlib import Path
 
 HOOK_TAG_RE = re.compile(r"\[hook-enforced: ([^\]]+)\]")
-SKILL_TAG_RE = re.compile(r"\[skill-enforced: ([a-z][a-z0-9-]*)([^\]]*)\]")
+# Whole-body capture. The corpus grammar is richer than one-skill-one-anchor
+# (#7172): `/` joins a skill list, ` + ` joins enforcer segments, and a
+# file-form token names a test/lib file instead of a skill dir. Parsing is
+# done in `iter_skill_pairs`, not in the regex.
+SKILL_TAG_RE = re.compile(r"\[skill-enforced: ([^\]]+)\]")
 # Per-pair re-parser for comma-split fragments under a multi-pair tag.
 SKILL_PAIR_RE = re.compile(r"^\s*([a-z][a-z0-9-]*)\s+(.+?)\s*$")
 # Phase prefix used by both Phase-normalization variants (#3684).
 PHASE_RE = re.compile(r"Phase\s+(\d+(?:\.\d+)*)")
 PHASE_PREFIX_RE = re.compile(r"^Phase\s+\d+(?:\.\d+)*\s+")
+# `§1.8` -> `### 1.8`, mirroring the Phase X.Y variant (#7172).
+SECTION_SIGN_RE = re.compile(r"§\s*(\d+(?:\.\d+)*)")
+
+# A REAL rule body line: `- ` at column 0. Everything else in the corpus
+# (blockquote prose, the `> **Tag legend.**` block, headings, indented
+# sub-bullets) is documentation ABOUT the tags, not a tag. Without this the
+# legend's own `[hook-enforced: …]` is linted as if it named a hook script
+# — the 13th "failure" on main, introduced by the PR that wrote the legend.
+# Mirrors the body-line discipline in scripts/lint-rule-bodies.py.
+BODY_LINE_RE = re.compile(r"^- ")
 
 HOOK_SEARCH_DIRS = (
     ".claude/hooks",
     "scripts",
     "plugins/soleur/hooks",
 )
+
+# Directories searched for a file-form enforcer (`workflow-fidelity.ts`,
+# `components.test.ts SYMBOL`). These tags are CORRECT — they name the
+# surface that actually enforces the rule — but the enforcer is a lib/test
+# file, not a skill directory, so the skill-dir resolver cannot see them.
+FILE_SEARCH_DIRS = (
+    "plugins/soleur/test",
+    "plugins/soleur/lib",
+    "plugins/soleur/scripts",
+    "scripts",
+    ".claude/hooks",
+    "plugins/soleur/hooks",
+)
+
+FILE_FORM_EXTS = (".ts", ".tsx", ".js", ".mjs", ".py", ".sh")
+# Segment keywords that select a non-skill resolver inside a ` + ` chain.
+SEGMENT_KEYWORDS = ("hook", "review-agent")
 
 # Per-skill SKILL.md content cache (avoids re-reading the same file across the
 # 14-tag / 21-pair corpus). Keyed by absolute path. Lifetime: one `main()`
@@ -155,6 +186,10 @@ def resolve_anchor(
         if spaced in content:
             return True
 
+    section_normalized = SECTION_SIGN_RE.sub(r"### \1", anchor)
+    if section_normalized != anchor and section_normalized in content:
+        return True
+
     if "-" in anchor and not any(c.isdigit() for c in anchor):
         agents_root = root / "plugins" / "soleur" / "agents"
         if agents_root.exists():
@@ -164,30 +199,129 @@ def resolve_anchor(
     return False
 
 
-def iter_skill_pairs(skill: str, rest: str):
-    """Yield (skill, anchor, malformed?) tuples from a `[skill-enforced: ...]`
-    tag body.
+def is_file_form(token: str) -> bool:
+    """Return True if `token` names a file rather than a skill directory.
 
-    The regex captures the first `(skill, rest)` split. `rest` may carry
-    additional comma-separated `<skill> <anchor>` pairs (TR4). The first
-    fragment of `rest` is the anchor for the regex-captured `skill`;
-    subsequent fragments re-parse via SKILL_PAIR_RE.
-
-    Yields `(skill, anchor, None)` on success and `(None, fragment, "malformed")`
-    on a fragment that doesn't parse — the caller surfaces these as errors
-    instead of silently dropping them, mirroring `cq-silent-fallback-must-mirror-to-sentry`.
+    `workflow-fidelity.ts`, `components.test.ts` — the enforcer is a lib or
+    test file. Skill slugs never carry an extension, so the check is exact.
     """
-    fragments = [f.strip() for f in rest.split(",") if f.strip()]
-    if not fragments:
-        return
-    # First fragment: the anchor belongs to the regex-captured `skill`.
-    yield skill, fragments[0], None
-    for frag in fragments[1:]:
-        m = SKILL_PAIR_RE.match(frag)
-        if m:
-            yield m.group(1), m.group(2).strip(), None
+    return token.endswith(FILE_FORM_EXTS)
+
+
+def resolve_file_enforcer(token: str, symbol: str, root: Path) -> bool:
+    """Resolve a file-form enforcer, optionally requiring a symbol inside it.
+
+    `components.test.ts AUTONOMOUS_LOOP_SKILLS` must find the file AND the
+    symbol — a file that no longer defines the named constant is drift the
+    gate should catch, exactly like an unresolvable anchor.
+    """
+    if "/" in token or ".." in token:
+        return False
+    for d in FILE_SEARCH_DIRS:
+        candidate = root / d / token
+        if candidate.is_file():
+            if not symbol:
+                return True
+            try:
+                return symbol in candidate.read_text(encoding="utf-8")
+            except OSError:
+                return False
+    return False
+
+
+def resolve_agent_name(name: str, root: Path) -> bool:
+    """Resolve a `review-agent <name>` segment.
+
+    An agent may live in this repo (`plugins/soleur/agents/**/<name>.md`) or
+    be supplied by an installed sibling plugin, in which case the repo still
+    references it by name (agent manifests, cross-referencing agent bodies).
+    Both count; a fabricated name resolves to neither and is rejected.
+    """
+    if "/" in name or ".." in name:
+        return False
+    agents_root = root / "plugins" / "soleur" / "agents"
+    if not agents_root.exists():
+        return False
+    for _ in agents_root.rglob(f"{name}.md"):
+        return True
+    manifest = root / "plugins" / "soleur" / ".claude-plugin" / "agents.manifest.json"
+    if manifest.is_file():
+        try:
+            if name in manifest.read_text(encoding="utf-8"):
+                return True
+        except OSError:
+            return False
+    return False
+
+
+def skill_exists(slug: str, root: Path) -> bool:
+    """Return True if `slug` names a real skill directory."""
+    if "/" in slug or ".." in slug:
+        return False
+    return (root / "plugins" / "soleur" / "skills" / slug / "SKILL.md").exists()
+
+
+def iter_skill_checks(body: str, root: Path):
+    """Yield resolution units from a `[skill-enforced: ...]` tag body.
+
+    The corpus vocabulary (#7172) is three-dimensional, and every shape below
+    appears on `main` naming an enforcer that genuinely exists:
+
+      * `,`  separates independent `<enforcer> <anchor>` pairs   (pre-existing)
+      * `/`  joins a SKILL LIST sharing one anchor  — `plan/work/ship gates`
+      * ` + ` joins ENFORCER SEGMENTS  — `plan Phase 2.8 + iac-plan-write-guard.sh`
+      * a file extension marks a FILE enforcer — `components.test.ts SYMBOL`
+
+    Yielded units:
+      ("skills", [slug, ...], anchor)  anchor "" means "no anchor to check"
+      ("file",   token, symbol)
+      ("hook",   token)
+      ("agent",  name)
+      ("malformed", fragment)
+    """
+    for frag in (f.strip() for f in body.split(",")):
+        if not frag:
+            continue
+        segments = [s.strip() for s in frag.split(" + ") if s.strip()]
+        if not segments:
+            continue
+
+        head_parts = segments[0].split(None, 1)
+        spec = head_parts[0]
+        anchor = head_parts[1].strip() if len(head_parts) > 1 else ""
+
+        # The skill list carried by this fragment; later segments that are
+        # bare anchors resolve against it.
+        skills: list[str] = []
+        if is_file_form(spec):
+            yield "file", spec, anchor
+        elif re.fullmatch(r"[a-z][a-z0-9-]*(?:/[a-z][a-z0-9-]*)*", spec):
+            skills = spec.split("/")
+            yield "skills", skills, anchor
         else:
-            yield None, frag, "malformed"
+            yield "malformed", segments[0], ""
+            continue
+
+        for seg in segments[1:]:
+            seg_parts = seg.split(None, 1)
+            shead = seg_parts[0]
+            stail = seg_parts[1].strip() if len(seg_parts) > 1 else ""
+            if shead == "hook" and stail:
+                yield "hook", stail.split()[0], ""
+            elif shead == "review-agent" and stail:
+                yield "agent", stail.split()[0], ""
+            elif is_file_form(shead):
+                yield "file", shead, stail
+            elif skills and skill_exists(shead, root) and stail:
+                # A new `<skill> <anchor>` pair joined by ` + `, e.g.
+                # `brainstorm Phase 3.55 + plan Phase 2.5`.
+                yield "skills", [shead], stail
+            elif skills:
+                # A bare descriptive segment — resolve against this
+                # fragment's skill list.
+                yield "skills", skills, seg
+            else:
+                yield "malformed", seg, ""
 
 
 def lefthook_command_known(rest: str, lefthook_text: str) -> bool:
@@ -219,6 +353,11 @@ def lint(
     lefthook_text = lefthook_path.read_text(encoding="utf-8") if lefthook_path.exists() else ""
 
     for line_num, line in enumerate(text.splitlines(), start=1):
+        # Only real rule bodies carry tags. Prose ABOUT the tag syntax (the
+        # `> **Tag legend.**` blockquote) is documentation, not a claim to
+        # resolve. See BODY_LINE_RE.
+        if not BODY_LINE_RE.match(line):
+            continue
         for match in HOOK_TAG_RE.finditer(line):
             content = match.group(1).strip()
             tokens = content.split()
@@ -248,47 +387,76 @@ def lint(
                     )
 
         for match in SKILL_TAG_RE.finditer(line):
-            skill = match.group(1).strip()
-            rest = match.group(2)
-            skill_md = root / "plugins" / "soleur" / "skills" / skill / "SKILL.md"
-            if not skill_md.exists():
-                errors.append(
-                    f"{agents_md}:{line_num}: ERROR: [skill-enforced: {skill} ...] "
-                    f"— SKILL.md not found at {skill_md.relative_to(root)}. "
-                    f"Fix: create the skill, update the tag, or retire the rule."
-                )
-                continue
-            # Anchor-parity check across every comma-split pair (#3684, TR3+TR4).
-            for pair_skill, anchor, parse_state in iter_skill_pairs(skill, rest):
-                if parse_state == "malformed":
-                    errors.append(
-                        f"{agents_md}:{line_num}: ERROR: [skill-enforced: ... "
-                        f"{anchor}] — fragment does not match `<skill> <anchor>` "
-                        f"shape. Fix: re-author the comma-separated pair so it "
-                        f"starts with a lowercase skill slug followed by an anchor."
-                    )
-                    continue
+            body = match.group(1).strip()
+            # Resolution across every comma / slash / plus unit (#3684, #7172).
+            for kind, value, extra in iter_skill_checks(body, root):
                 anchor_pairs_checked += 1
-                pair_skill_md = (
-                    root / "plugins" / "soleur" / "skills" / pair_skill / "SKILL.md"
-                )
-                if not pair_skill_md.exists():
+
+                if kind == "malformed":
                     errors.append(
                         f"{agents_md}:{line_num}: ERROR: [skill-enforced: ... "
-                        f"{pair_skill} {anchor}] — SKILL.md not found at "
-                        f"{pair_skill_md.relative_to(root)}. "
-                        f"Fix: create the skill, update the tag, or retire the rule."
+                        f"{value}] — fragment does not match any supported "
+                        f"shape (`<skill> <anchor>`, `<skill>/<skill> <anchor>`, "
+                        f"`<file>.<ext> <symbol>`). Fix: re-author the fragment."
                     )
-                    continue
-                if not resolve_anchor(pair_skill, anchor, root, skill_cache):
-                    errors.append(
-                        f"{agents_md}:{line_num}: ERROR: [skill-enforced: "
-                        f"{pair_skill} {anchor}] — anchor not resolvable in "
-                        f"plugins/soleur/skills/{pair_skill}/SKILL.md under any "
-                        f"tolerant variant. "
-                        f"Fix: align the tag wording to the SKILL.md heading, "
-                        f"or update the heading."
-                    )
+                elif kind == "file":
+                    if not resolve_file_enforcer(value, extra, root):
+                        detail = f" defining `{extra}`" if extra else ""
+                        errors.append(
+                            f"{agents_md}:{line_num}: ERROR: [skill-enforced: "
+                            f"{value}{' ' + extra if extra else ''}] — no file "
+                            f"named `{value}`{detail} found under: "
+                            f"{', '.join(FILE_SEARCH_DIRS)}. "
+                            f"Fix: add the file, update the tag, or retire the rule."
+                        )
+                elif kind == "hook":
+                    if not hook_resolves(value, root):
+                        errors.append(
+                            f"{agents_md}:{line_num}: ERROR: [skill-enforced: "
+                            f"... hook {value}] — hook script not found in any "
+                            f"of: {', '.join(HOOK_SEARCH_DIRS)}. "
+                            f"Fix: add the script, update the tag, or retire the rule."
+                        )
+                elif kind == "agent":
+                    if not resolve_agent_name(value, root):
+                        errors.append(
+                            f"{agents_md}:{line_num}: ERROR: [skill-enforced: "
+                            f"... review-agent {value}] — no agent named "
+                            f"`{value}` under plugins/soleur/agents/ and no "
+                            f"reference in the agent manifest. "
+                            f"Fix: update the tag or retire the rule."
+                        )
+                elif kind == "skills":
+                    missing = [s for s in value if not skill_exists(s, root)]
+                    if missing:
+                        errors.append(
+                            f"{agents_md}:{line_num}: ERROR: [skill-enforced: "
+                            f"{'/'.join(value)} {extra}] — SKILL.md not found "
+                            f"for: {', '.join(missing)}. "
+                            f"Fix: create the skill, update the tag, or retire "
+                            f"the rule."
+                        )
+                        continue
+                    # An empty anchor is legitimate: the tag names only the
+                    # enforcing skills, with no heading to pin.
+                    if not extra:
+                        continue
+                    # A shared anchor need only resolve in ONE member — a
+                    # cross-skill gate documents its contract in whichever
+                    # skill owns it, not redundantly in all of them.
+                    if not any(
+                        resolve_anchor(s, extra, root, skill_cache) for s in value
+                    ):
+                        where = ", ".join(
+                            f"plugins/soleur/skills/{s}/SKILL.md" for s in value
+                        )
+                        errors.append(
+                            f"{agents_md}:{line_num}: ERROR: [skill-enforced: "
+                            f"{'/'.join(value)} {extra}] — anchor not resolvable "
+                            f"in any of: {where} under any tolerant variant. "
+                            f"Fix: align the tag wording to the SKILL.md heading, "
+                            f"or update the heading."
+                        )
 
     return errors, anchor_pairs_checked
 
@@ -300,8 +468,17 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "files",
         nargs="*",
-        default=["AGENTS.md"],
-        help="AGENTS.md files to lint (default: AGENTS.md in CWD)",
+        # ADR-151 moved every rule BODY — and therefore every enforcement
+        # tag — out of the pointer-only AGENTS.md and into AGENTS.rules.md.
+        # A default of just AGENTS.md scanned a file with zero tags and
+        # reported success (#7172). AGENTS.md stays in the list because a
+        # pointer line may legitimately carry a tag; the vacuity floor below
+        # is asserted over the SUM, so a 0-tag AGENTS.md alone still trips.
+        default=["AGENTS.md", "AGENTS.rules.md"],
+        help=(
+            "AGENTS files to lint "
+            "(default: AGENTS.md AGENTS.rules.md, resolved from CWD)"
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -317,8 +494,14 @@ def main(argv: list[str]) -> int:
             return 2
         root = repo_root_for(path)
         text = path.read_text(encoding="utf-8")
-        total_hook_tags += len(HOOK_TAG_RE.findall(text))
-        total_skill_tags += len(SKILL_TAG_RE.findall(text))
+        # Count over BODY lines only, so the reported totals describe exactly
+        # what lint() resolved. Counting the raw text would re-introduce the
+        # legend-blockquote miscount from the other direction.
+        body = "\n".join(
+            ln for ln in text.splitlines() if BODY_LINE_RE.match(ln)
+        )
+        total_hook_tags += len(HOOK_TAG_RE.findall(body))
+        total_skill_tags += len(SKILL_TAG_RE.findall(body))
         errs, pairs = lint(path, root, skill_cache)
         for e in errs:
             print(e, file=sys.stderr)
@@ -331,6 +514,25 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 1
+
+    # VACUITY FLOOR. "Every tag resolved" and "there were no tags" are the
+    # same exit code without this check, and the second reads as safety —
+    # which is exactly how this gate validated nothing from the ADR-151
+    # corpus split until #7172. A cardinality floor is the only thing that
+    # distinguishes them. Precedent: MIN_ASSERTIONS in
+    # plugins/soleur/test/net-issue-flow.test.sh.
+    if total_hook_tags + total_skill_tags == 0:
+        print(
+            "FAIL: scanned zero enforcement tags across "
+            f"{len(args.files)} file(s): {', '.join(args.files)}.\n"
+            "  A gate that checks nothing is indistinguishable from a gate "
+            "that passes.\n"
+            "  Fix: point the linter at the file that holds the rule bodies "
+            "(AGENTS.rules.md).",
+            file=sys.stderr,
+        )
+        return 1
+
     print(
         f"OK: all {total_hook_tags} hook + {total_skill_tags} skill + "
         f"{total_anchor_pairs} anchor parity check(s) resolve"
