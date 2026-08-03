@@ -33,7 +33,7 @@ bound. systemd remains the **single writer** to the cgroup hierarchy.
 | Level | `MemoryHigh` | `MemoryMax` | `MemorySwapMax` | Other |
 |---|---|---|---|---|
 | per session (`soleur-agent-<pid>.scope`) | 6 GiB | 7 GiB | 0 | `OOMPolicy=continue`, `Delegate=true`, `BindsTo=`/`After=` the terminal's scope |
-| fleet (`soleur-agents.slice`) | 16 GiB | 20 GiB | 0 | `ManagedOOMPreference=avoid` |
+| fleet (`soleur-agents.slice`) | 16 GiB | 20 GiB | 0 | `ManagedOOMPreference=avoid` (also set on the parent `soleur.slice`, which is the unit systemd-oomd actually selects among) |
 
 Sizing is bounded on both sides against measurements, not intuition. The floor clears
 the heaviest honest workload (`claude` + `tsc` + `vitest` = 3.85 GiB concurrent); the
@@ -68,6 +68,18 @@ SessionStart hook's stdout is injected into session context) while the hook repo
 `outcome=applied`. That is the prior attempt's failure shape reproduced by a different
 route, caught only by this check.
 
+Membership alone is not sufficient, and on the re-entry path it is not even a real
+check: that branch is reached only when the process is already in the scope, so
+asserting membership there re-asserts the branch's own entry condition. Every `/clear`
+and every resume takes that path. So the hook reads back the **properties** at both
+levels and logs what was *observed* (`scope_max_after`, `slice_max_after`, …) beside
+what was intended, with distinct `scope_caps_unverified` / `fleet_caps_unverified`
+outcomes. This matters because `SetUnitProperties` is all-or-nothing: on systemd older
+than 247 the unsupported `ManagedOOMPreference` fails the whole call, dropping the
+fleet `MemoryMax` **and** `MemorySwapMax=0` with it — silently restoring the
+swap-exhaustion half of the incident. A zero exit code does not help either: the call
+returns rc=0 for a unit that does not exist yet.
+
 ## Consequences
 
 - Merging is the complete deployment. The units are **transient**, created at runtime,
@@ -79,7 +91,7 @@ route, caught only by this check.
   hook has no business doing. A mutant dropping `runtime=true` is caught by a
   byte-identical check on that directory.
 - The hook **never blocks a session**: `exit 0` on every path, no `set -e`, `timeout` on
-  every external call, five named fail-open branches. It can decline to protect; it
+  every external call, eight named fail-open reasons. It can decline to protect; it
   cannot block.
 - `.claude/settings.json` and `.claude/hooks/` are git-tracked, so this runs for anyone
   running Claude Code inside a clone of this repo — the operator, contributors, CI. It
@@ -105,6 +117,11 @@ route, caught only by this check.
   reads back `avoid`, but `oomctl` currently lists **zero** monitored cgroups, so the
   readback proves a string was transmitted, not that behaviour changed. That uncertainty
   is the reason to set it, not a reason to skip it. It must not be presented as verified.
+  It is set on **both** `soleur.slice` and `soleur-agents.slice`. Setting it only on the
+  latter — as a first cut did — arms it on a unit oomd never consults: the monitored
+  cgroup is `user@<uid>.service`, whose direct child is `soleur.slice`. That was a
+  targeting error, distinct from the efficacy caveat above.
+- **The fleet `MemoryMax` can kill a bystander.** The kernel picks the largest task in the slice subtree, which is usually the one that grew — but not necessarily. A session sitting honestly at 6.9 GiB is the largest task in the slice, so *another* session's growth pushing the fleet to 20 GiB kills the honest session's biggest process. This is why the fleet's working control is the non-lethal `MemoryHigh` and `MemoryMax` is a last resort, and why the attribution message says what happened rather than who caused it.
 - **`BindsTo=` does not fire on an `active (abandoned)` terminal scope.** One orphaned
   helper keeps the terminal scope active and the agent scopes survive with no terminal.
   `BindsTo` is therefore not presented as the only mechanism; the README and the
@@ -115,6 +132,8 @@ route, caught only by this check.
   Convergence happens via the `startup|resume|clear|compact` matcher, which every
   long-lived session eventually hits, but on first merge the fleet bound is close to
   meaningless.
+- **CI runners are in the blast radius, silently.** Repo-local means this runs on CI too, where the absence of a per-user systemd bus makes it inert today — but nothing asserts that. If a runner image ever gains a user bus, CI jobs acquire a 7 GiB cap and share one fleet cap across every concurrent job on that runner.
+- **The slice's drop-ins are shared mutable state.** Scopes self-clean; the slice does not, and `runtime=true` writes four property files under `/run/user/<uid>/systemd/user.control/soleur-agents.slice.d/`. Those four files *are* the fleet cap, and every checkout rewrites them on every SessionStart with no arbitration — so the fleet bound is owned by whichever worktree most recently started a session. Reboot-scoped, but "nothing is provisioned" would be too strong.
 - **A session's cap under-counts by whatever it had already allocated**, because cgroup v2
   does not migrate charge. Carried through the sizing arithmetic above.
 

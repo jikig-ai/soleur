@@ -8,8 +8,10 @@
 #                    of assertions that did not run. A permanently-skipped live
 #                    arm must be VISIBLE, not silently green: the assertions that
 #                    matter most here are the ones CI cannot run.
-#     The skipped COUNT is asserted against the number of live tests declared, so
-#     a live test that is DELETED is distinguishable from one that was skipped.
+#     Every live test MARKS itself when it runs, skips mark the same label, and a
+#     final reconciliation names any label that did neither — so a DELETED live
+#     test is distinguishable from a skipped one. (A count-vs-count check is not:
+#     the previous form stayed green with the whole live arm removed.)
 #
 # NO INJECTION SEAMS. The hook exposes functions and runs `main` only when
 # executed (`[[ "${BASH_SOURCE[0]}" == "${0}" ]]`), so this suite sources it and
@@ -52,13 +54,30 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 fails=0
 passes=0
 skipped_live=0
-# Number of live-arm assertions. Asserted against skipped_live when the live arm
-# does not run, so deleting a live test cannot masquerade as a skip.
-declare -i LIVE_TEST_COUNT=12
+
+# DERIVED live-arm ledger, not a declared integer.
+#
+# The previous form compared LIVE_TEST_COUNT=12 against a hand-written list of 12
+# skip names — two literals, neither referencing a single live assertion, so the
+# reconciliation was `12 == 12`. Measured: deleting the ENTIRE 437-line live arm
+# left it green and printing "skip count matches the 12 declared live tests".
+#
+# Now every live test must MARK itself when it runs, and skips mark the same
+# label. A deleted test is therefore neither seen nor skipped, and the final
+# reconciliation names it. This runs on EVERY path, including LIVE=yes, so the
+# detached shape is covered too — it previously had no bookkeeping at all.
+LIVE_LABELS=(
+  T8-adoption T9-tree-adoption T9-grandchild T10-ac7-sweep
+  T11-bindsto-reap T12-fleet-two-sessions T13-managed-oom-pref
+  T14-kill-mechanism T15-idempotency T15-terminal-scope-stable
+  T18-documented-kill-path AC18-reentry-resweep
+)
+declare -A LIVE_SEEN=()
+live_mark() { LIVE_SEEN["$1"]=1; }
 
 pass() { printf '  ✓ %s\n' "$1"; passes=$((passes + 1)); }
 fail() { printf '  ✗ %s\n' "$1" >&2; fails=$((fails + 1)); }
-skip() { printf '  ~ SKIP %s\n' "$1"; skipped_live=$((skipped_live + 1)); }
+skip() { printf '  ~ SKIP %s (%s)\n' "$1" "${2:-skipped}"; live_mark "$1"; skipped_live=$((skipped_live + 1)); }
 
 SPAWNED=()
 SCOPES=()
@@ -210,6 +229,30 @@ fi
 # =====================================================================
 # T5 — identity guards (D8)
 # =====================================================================
+# POSITIVE cases first. Without these, T5 asserts only that the walk refuses —
+# and a hook whose three positive identity branches were all deleted (i.e. one
+# that can never adopt anything, ever) passes this suite on every CI, Docker,
+# macOS and detached run. Measured: that exact mutation was green at 34/34.
+mkdir -p "$fx/proc/400" "$fx/proc/500" "$fx/exe/claude/versions/2.1.220"
+printf 'claude\n' > "$fx/proc/400/comm"
+printf 'Name:\tclaude\nPid:\t400\nPPid:\t100\n' > "$fx/proc/400/status"
+ln -sf "$fx/exe/claude/versions/2.1.220" "$fx/proc/500/exe"
+printf 'Name:\tnode\nPid:\t500\nPPid:\t100\n' > "$fx/proc/500/status"
+
+got=$(discover_claude_pid 400 "$fx/proc" 2>/dev/null || true)
+if [[ "$got" == "400 comm" ]]; then
+  pass "T5 positive: comm==claude is accepted and the matching signal is reported"
+else
+  fail "T5 positive comm branch returned '$got', expected '400 comm'"
+fi
+
+got=$(discover_claude_pid 500 "$fx/proc" 2>/dev/null || true)
+if [[ "$got" == "500 exe" ]]; then
+  pass "T5 positive: exe under */claude/versions/* is accepted and reported"
+else
+  fail "T5 positive exe branch returned '$got', expected '500 exe'"
+fi
+
 # A /proc with no claude anywhere in the ancestry must adopt NOTHING.
 if out=$(discover_claude_pid 300 "$fx/proc" 2>/dev/null); then
   fail "T5 discover_claude_pid succeeded on a fixture with no verifiable claude exe (returned '$out') — must adopt nothing on no positive match"
@@ -352,8 +395,10 @@ if [[ -n "$cmd" ]]; then
     pass "AC2 a 0644 copy fails to exec (harness honours the mode bit)"
   fi
 else
-  # Before Phase 4 wiring lands this is expected; assert the direct-exec property
-  # against the hook path itself so the assertion is never vacuous.
+  # Registration shipped, so reaching here means the hook was REMOVED from
+  # settings.json. That must be a hard failure: silently degrading to a weaker
+  # assertion and passing with "not yet registered" reads as intentional.
+  fail "AC2 $HOOK is not registered in $SETTINGS — the runtime would never invoke it (this is the #7151 shape)"
   newtmp ld3 || exit 2
   mkdir -p "$ld3/.claude/hooks" "$ld3/runtime"
   if env CLAUDE_PROJECT_DIR="$ld3" XDG_RUNTIME_DIR="$ld3/runtime" "$PWD/$HOOK" </dev/null >/dev/null 2>&1; then
@@ -425,17 +470,11 @@ wait_in_scope() { # <scope-suffix> <pid...>
 }
 
 if [[ "$LIVE" != "yes" ]]; then
-  for t in T8-adoption T9-tree-adoption T10-ac7-sweep T11-bindsto-reap T12-fleet-two-sessions \
-           T13-managed-oom-pref T14-kill-mechanism T15-idempotency T18-documented-kill-path \
-           AC18-reentry-resweep T15-terminal-scope-stable T9-grandchild; do
-    skip "$t (no user systemd bus)"
+  for t in "${LIVE_LABELS[@]}"; do
+    skip "$t" "no user systemd bus"
   done
-  if [[ "$skipped_live" -ne "$LIVE_TEST_COUNT" ]]; then
-    fail "live-arm bookkeeping: skipped $skipped_live but $LIVE_TEST_COUNT live tests are declared — a live test was deleted, not skipped"
-  else
-    pass "live-arm skip count matches the $LIVE_TEST_COUNT declared live tests"
-  fi
 else
+  live_mark T14-kill-mechanism
   # ---- T14: kill mechanism at 256 MB, with a sentinel standing in for claude.
   # Never at the real cap: proving a memory cap kills does not require allocating
   # the cap. The sentinel is required — with the allocator alone the scope empties
@@ -508,6 +547,7 @@ sys.exit(0)
     fail "T14 could not create the 256MB test scope"
   fi
 
+  live_mark T11-bindsto-reap
   # ---- T11: BindsTo reap — behavioural, not just the property readback.
   sleep 300 & PARENT=$!; SPAWNED+=("$PARENT")
   sleep 300 & CHILD=$!;  SPAWNED+=("$CHILD")
@@ -538,6 +578,7 @@ sys.exit(0)
     fail "T11 could not create the parent scope"
   fi
 
+  live_mark T12-fleet-two-sessions
   # ---- T12: fleet bound with MORE THAN ONE session (AC4b)
   ALLOC_MB=48
   # `>/dev/null 2>&1` on the BACKGROUND child is load-bearing, not tidiness:
@@ -594,6 +635,7 @@ time.sleep(300)
     fail "T12 fleet bound: slice memory.current=$cur (need >= $need), memory.max=$smax (need 2147483648)"
   fi
 
+  live_mark T13-managed-oom-pref
   # ---- T13: ManagedOOMPreference on the slice
   busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
     org.freedesktop.systemd1.Manager SetUnitProperties "sba(sv)" \
@@ -605,6 +647,7 @@ time.sleep(300)
     fail "T13 ManagedOOMPreference='$mop', expected 'avoid'"
   fi
 
+  live_mark T18-documented-kill-path
   # ---- T18: the documented kill path actually reaps
   if systemctl --user stop "$TEST_SLICE" >/dev/null 2>&1; then
     for _ in $(seq 1 40); do kill -0 "$A1" 2>/dev/null || break; sleep 0.05; done
@@ -645,10 +688,13 @@ time.sleep(300)
   if [[ "$E2E" != "yes" ]]; then
     for t in T8-adoption T9-tree-adoption T9-grandchild T10-ac7-sweep T15-idempotency \
              T15-terminal-scope-stable AC18-reentry-resweep; do
-      skip "$t (user bus present but this suite is not running inside a Claude Code session)"
+      skip "$t" "user bus present but not running inside a Claude Code session"
     done
   else
 
+  live_mark T8-adoption; live_mark T9-tree-adoption; live_mark T9-grandchild
+  live_mark T10-ac7-sweep; live_mark T15-idempotency
+  live_mark T15-terminal-scope-stable; live_mark AC18-reentry-resweep
   # ---- T8/T9/T10/T15/AC18: exercise the REAL hook end-to-end, LAST.
   newtmp before || exit 2
   UROOT="/sys/fs/cgroup/user.slice/user-$UIDN.slice/user@$UIDN.service"
@@ -820,7 +866,7 @@ $(printf '%s\n' "$missing_list" | head -5 | while IFS= read -r m; do
         fail "AC18 re-entry re-sweep did not adopt the parked process: cgroup=${late_after##*/}, expected $scope_name"
       fi
     else
-      fail "AC18 could not park a process outside the scope, so the re-sweep is untested (terminal_scope='$tscope_now')"
+      fail "AC18 could not park a process outside the scope, so the re-sweep is untested (scope=$scope_name, parked cgroup=${late_cg:-<none>})"
     fi
 
     if [[ "$bindsto_before" == "$bindsto_after" ]]; then
@@ -874,11 +920,17 @@ $(diff "$before/snap.mem" "$after/snap.mem" | grep -E '^[<>]' | grep -vE '/soleu
   fi   # end E2E gate
 fi
 
-# Bookkeeping: a live test that was DELETED must not be indistinguishable from
-# one that was skipped, so the skipped count is reconciled against the declared
-# total whenever anything was skipped at all.
-if [[ "$skipped_live" -gt 0 && "$LIVE" != "yes" && "$skipped_live" -ne "$LIVE_TEST_COUNT" ]]; then
-  fail "live-arm bookkeeping: skipped $skipped_live but $LIVE_TEST_COUNT live tests are declared"
+# Reconcile the ledger on EVERY path. A label that was neither run nor skipped
+# means the test was deleted (or its live_mark was), which is exactly the case
+# the old count-vs-count check could not see.
+_unaccounted=()
+for _l in "${LIVE_LABELS[@]}"; do
+  [[ -z "${LIVE_SEEN[$_l]:-}" ]] && _unaccounted+=("$_l")
+done
+if (( ${#_unaccounted[@]} > 0 )); then
+  fail "live-arm ledger: ${#_unaccounted[@]} declared live test(s) neither ran nor were skipped — deleted, not skipped: ${_unaccounted[*]}"
+else
+  pass "live-arm ledger: all ${#LIVE_LABELS[@]} declared live tests accounted for (ran or explicitly skipped)"
 fi
 
 echo

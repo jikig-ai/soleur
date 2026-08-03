@@ -67,7 +67,7 @@ model {
       }
       hooks = container "Hook Engine" {
         technology "PreToolUse Guards + PostToolUse hints"
-        description "Guards tool calls (blocks commits to main, rm -rf, etc.), injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086) — AND enforces host resource control: at SessionStart it adopts the agent process tree into a memory-capped systemd transient scope (ADR-158)."
+        description "Guards tool calls (blocks commits to main, rm -rf, etc.), injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086) — AND — in the repo-local `.claude/` hook surface only, never the shipped plugin surface — enforces host resource control: at SessionStart it adopts the agent process tree into a memory-capped systemd transient scope (ADR-158). Where this container runs server-side there is no per-user systemd bus, so that path declines and does nothing."
       }
     }
 
@@ -327,7 +327,7 @@ model {
 
   // Host resource control (ADR-158). The Hook Engine never writes a cgroup
   // directory itself; it asks the user's systemd manager to create the scope.
-  platform.engine.hooks -> systemdUser "Adopts the live agent process tree into a memory-capped transient scope under soleur-agents.slice (StartTransientUnit over D-Bus); systemd is the single writer — no raw cgroup directory writes (ADR-158)" {
+  platform.engine.hooks -> systemdUser "Adopts the live agent process tree into a memory-capped transient scope under soleur-agents.slice (StartTransientUnit over D-Bus); systemd is the single writer — no raw cgroup directory writes. Repo-local `.claude/` surface only; declines where there is no per-user bus (ADR-158)" {
     technology "D-Bus (busctl --user)"
   }
 
@@ -335,8 +335,11 @@ model {
   // backstop had to preserve: adoption moves claude out of the terminal's cgroup,
   // so the reap is re-established as a unit dependency rather than cgroup
   // co-membership.
-  founder -> platform.engine.claude "Closes the terminal to reap a runaway session — preserved across the memory backstop by BindsTo= on the terminal's own scope; explicit fallback `systemctl --user stop soleur.slice`, which stops EVERY agent session (ADR-158)" {
+  founder -> systemdUser "Closes the terminal (stopping its scope), or runs `systemctl --user stop soleur.slice` as an explicit fallback — which stops EVERY agent session on the machine (ADR-158)" {
     technology "Terminal / systemctl --user"
+  }
+  systemdUser -> platform.engine.claude "Reaps the agent session by stopping its scope, via BindsTo= on the terminal's own scope — a UNIT dependency, because adoption moves the process out of the terminal's cgroup so co-membership can no longer do it (ADR-158)" {
+    technology "systemd unit dependency"
   }
   webapp -> engine "Thin view/control layer" { technology "WebSocket" }
   webapp -> supabase "Auth and data" { technology "HTTPS" }

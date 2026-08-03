@@ -73,27 +73,33 @@ _repo_root() {
   (cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd -P)
 }
 
-# Minimal JSON string escaper, used only when jq is absent (R8). The sibling
-# supabase-loopback-warn.sh exits 1 when jq is missing precisely because stderr
-# is a dead sink on an exit-0 hook; emitting valid JSON by hand lets this hook
-# keep its unconditional exit-0 contract without writing to that dead sink.
-_json_escape() {
-  local s=$1
-  s=${s//\\/\\\\}
-  s=${s//\"/\\\"}
-  s=${s//$'\n'/\\n}
-  s=${s//$'\r'/\\r}
-  s=${s//$'\t'/\\t}
+# Any /proc-derived string that reaches a systemMessage is untrusted. A cgroup
+# basename is the one such string here, and the scope directory is user-owned
+# (Delegate=true), so anything running inside the session — a build script, an
+# npm postinstall, an MCP server — can create a cgroup whose name ends in
+# `.scope` and contains arbitrary bytes. That name would otherwise be emitted
+# into the NEXT session's context: session N's untrusted code writing into
+# session N+1's model context, and raw ANSI into the operator's terminal.
+# jq escapes control bytes correctly for transport, which does not help — the
+# consumer un-escapes them.
+_sanitize() {
+  local s=${1:-}
+  [[ "$s" =~ ^[A-Za-z0-9:._@-]+$ ]] || { printf '<unprintable>'; return 0; }
   printf '%s' "$s"
+}
+
+# Byte counts in operator-facing text are rendered in GiB. "7516192768-byte" is
+# not a limit a non-technical operator can act on.
+_human_bytes() {
+  local b=${1:-0}
+  [[ "$b" =~ ^[0-9]+$ ]] || { printf '%s' "$b"; return 0; }
+  awk -v b="$b" 'BEGIN{ printf (b >= 1073741824 ? "%.1f GiB" : "%d bytes"), (b >= 1073741824 ? b/1073741824 : b) }'
 }
 
 # Operator-visible channel for an exit-0 hook.
 emit_message() {
   local msg=$1
-  if command -v jq >/dev/null 2>&1; then
-    jq -n --arg m "$msg" '{systemMessage:$m}' 2>/dev/null && return 0
-  fi
-  printf '{"systemMessage":"%s"}\n' "$(_json_escape "$msg")"
+  jq -n --arg m "$msg" '{systemMessage:$m}' 2>/dev/null
 }
 
 # Two-sided range validation. Each floor is set so the band CANNOT admit a value
@@ -115,6 +121,11 @@ validate_caps() {
   (( fm >= 10737418240 && fm <= 25769803776 )) || { printf 'fleet_max:%s' "$fm"; return 1; }
   # 14 GiB .. < fleet_max : floor clears three concurrent `tsc` (13.35 GiB)
   (( fh >= 15032385536 && fh < fm ))         || { printf 'fleet_high:%s' "$fh"; return 1; }
+  # Cross-LEVEL relation. Each band above is independent, so they happily admit a
+  # combination that cannot compose — e.g. scope_max 8 GiB with fleet_max 10 GiB,
+  # a fleet that cannot hold two sessions at their own ceiling. The per-level
+  # bands encode "is this value sane"; this encodes "do these two levels agree".
+  (( fm >= 2 * sm )) || { printf 'fleet_max_below_two_sessions:%s' "$fm"; return 1; }
   return 0
 }
 
@@ -218,9 +229,14 @@ collect_descendants() {
     done
   done
 
+  # NOTE: iteration order of an associative array is bash hash order, i.e.
+  # arbitrary. Above MAX_TREE the kept subset is therefore arbitrary too, and it
+  # could drop the very process the design names as the biggest risk (headless
+  # Chrome under an MCP server). Emit a sentinel line so the caller can record
+  # that truncation happened rather than silently capping an arbitrary subset.
   local n=0
   for pid in "${!keep[@]}"; do
-    (( n >= MAX_TREE )) && break
+    if (( n >= MAX_TREE )); then printf 'TRUNCATED\n'; break; fi
     printf '%s\n' "$pid"; n=$((n + 1))
   done
 }
@@ -268,12 +284,12 @@ attribution_message() {
   if (( oom_kill > last_oom )); then
     printf '%s' "Soleur memory backstop: a process in this session was terminated by the kernel after this session's memory cap was reached.
 
-What this means: a command running here hit the ${SCOPE_MAX_BYTES:-0}-byte per-session limit${peak_h:+ (peak ${peak_h})} and the kernel stopped the largest process in the session. Uncommitted work in that command may be lost. This is not a crash in your code.
+What this means: a command running here hit this session's $(_human_bytes "$SCOPE_MAX_BYTES") memory limit${peak_h:+ (peak ${peak_h})} and the kernel stopped the largest process in the session. Uncommitted work in that command may be lost. This is not a crash in your code.
 
 Note: the fleet-wide limit is shared, so a kill can occasionally land in a session other than the one that grew.
 
-To raise this session's limit now:
-  systemctl --user set-property --runtime soleur-agent-\$\$.scope MemoryHigh=infinity MemoryMax=infinity
+To raise this session's limit now (replace <pid> with the number in the scope name from \`systemctl --user list-units 'soleur-agent-*'\`):
+  systemctl --user set-property --runtime soleur-agent-<pid>.scope MemoryHigh=infinity MemoryMax=infinity
 To turn the backstop off entirely: set SOLEUR_DISABLE_MEMORY_BACKSTOP=1"
     return 0
   fi
@@ -302,6 +318,9 @@ main() {
   local outcome="skipped" reason="" scope="" terminal_scope="" tree_size=0
   local identity_signal="" claude_pid="" msg=""
   local slice_high_before="" slice_max_before=""
+  local scope_high_after="" scope_max_after="" scope_swap_after=""
+  local slice_high_after="" slice_max_after="" slice_swap_after=""
+  local attached=0 tree_truncated="false"
 
   _log() {
     local rotator
@@ -321,13 +340,16 @@ main() {
         --argjson tree "$tree_size" \
         --argjson sh "$SCOPE_HIGH_BYTES" --argjson sm "$SCOPE_MAX_BYTES" \
         --argjson fh "$FLEET_HIGH_BYTES" --argjson fm "$FLEET_MAX_BYTES" \
-        '{schema:1, ts:$ts, pid:($pid|tonumber?), tree_size:$tree, scope:$scope,
+        '{schema:1, ts:$ts, pid:(($pid|tonumber?) // null), tree_size:$tree, scope:$scope,
           terminal_scope:$tscope, slice:$slice, scope_high:$sh, scope_max:$sm,
           slice_high:$fh, slice_max:$fm, slice_high_before:$shb, slice_max_before:$smb,
           swap_max:0, identity_signal:$sig, outcome:$outcome, reason:$reason}' 2>/dev/null)
     fi
-    # No jq: hand-rolled but still valid JSON, so the sink never goes dark.
-    [[ -z "$line" ]] && line="{\"schema\":1,\"ts\":\"$(_json_escape "$ts")\",\"outcome\":\"$(_json_escape "$outcome")\",\"reason\":\"$(_json_escape "$reason")\",\"scope\":\"$(_json_escape "$scope")\",\"tree_size\":$tree_size}"
+    # An empty $line means the jq filter produced no object (an empty stream from
+    # a `?`-suppressed conversion, say). Writing it would append a blank line and
+    # the sink would look present-but-useless, so fall back to a minimal record
+    # that always has the two fields any reader needs.
+    [[ -z "$line" ]] && line="{\"schema\":1,\"ts\":\"$ts\",\"outcome\":\"$outcome\",\"reason\":\"$reason\",\"log_degraded\":true}"
     printf '%s\n' "$line" >> "$log_file" 2>/dev/null
   }
 
@@ -341,6 +363,15 @@ main() {
   # string — an error-string match rots with every systemd release.
   if ! command -v busctl >/dev/null 2>&1; then
     reason="no_busctl"; _log; exit 0
+  fi
+  # jq is required, not optional. A hand-rolled JSON fallback was tried and
+  # removed: it wrote lines WITHOUT the counter fields while the reader
+  # (_last_logged) required jq to read them, so `last_oom_kill` was 0 forever and
+  # the OOM post-mortem re-emitted on EVERY SessionStart — inverting the exact
+  # edge-triggered contract the increase-comparison exists to enforce. Declining
+  # loudly beats a second, silently-wrong output mode.
+  if ! command -v jq >/dev/null 2>&1; then
+    reason="no_jq"; _log; exit 0
   fi
   local bus="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus"
   if [[ ! -S "$bus" ]]; then
@@ -428,9 +459,25 @@ Nothing was applied — this session is UNPROTECTED. To restore the shipped valu
     "ManagedOOMPreference" "s" "avoid" \
     >/dev/null 2>&1
 
+  # ...and on the PARENT slice too. systemd-oomd chooses among the MONITORED
+  # cgroup's DIRECT CHILDREN, and the monitored cgroup is user@<uid>.service —
+  # whose direct child is `soleur.slice`, not `soleur-agents.slice`. Setting
+  # `avoid` only on the latter arms it on a unit oomd never consults, which is a
+  # targeting error rather than the separately-disclosed "efficacy unvalidated"
+  # caveat. (systemd creates `soleur.slice` implicitly via the dash convention.)
+  "${TO[@]}" busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+    org.freedesktop.systemd1.Manager SetUnitProperties "sba(sv)" \
+    "soleur.slice" true 1 \
+    "ManagedOOMPreference" "s" "avoid" \
+    >/dev/null 2>&1
+
   # (7) Adopt the tree.
   local -a tree=()
   mapfile -t tree < <(collect_descendants "$claude_pid" /proc)
+  if [[ "${tree[-1]:-}" == "TRUNCATED" ]]; then
+    tree_truncated="true"
+    unset 'tree[-1]'
+  fi
   (( ${#tree[@]} == 0 )) && tree=("$claude_pid")
   tree_size=${#tree[@]}
 
@@ -507,8 +554,8 @@ Nothing was applied — this session is UNPROTECTED. To restore the shipped valu
       # this is how a changed cap lands without a session restart.
       local scg="/sys/fs/cgroup${our_cg}"
       local last_oom last_high
-      last_oom=$(_last_logged "$log_file" last_oom_kill)
-      last_high=$(_last_logged "$log_file" last_high)
+      last_oom=$(_last_logged "$log_file" last_oom_kill "$scope")
+      last_high=$(_last_logged "$log_file" last_high "$scope")
       msg=$(attribution_message "$scg/memory.events" "$scg/memory.peak" "$last_oom" "$last_high")
 
       # NEVER re-derive the terminal scope here: our own cgroup basename is now
@@ -535,7 +582,6 @@ Nothing was applied — this session is UNPROTECTED. To restore the shipped valu
   # what closes that race for anything spawned since. Attaching is per-process
   # and best-effort — one PID that exited between collection and now costs only
   # itself, which is exactly why the tree is not passed to StartTransientUnit.
-  local attached=0
   for p in "${tree[@]}"; do
     [[ "$p" == "$claude_pid" ]] && continue
     [[ -r "/proc/$p/cgroup" ]] || continue
@@ -549,24 +595,73 @@ Nothing was applied — this session is UNPROTECTED. To restore the shipped valu
   done
 
   # VERIFY, do not assume. Reporting `applied` because a D-Bus call was issued is
-  # precisely the #7151 defect — a green signal over an inert guard. The only
-  # thing that proves adoption is cgroup membership, so read it back.
+  # precisely the #7151 defect — a green signal over an inert guard.
+  #
+  # Membership alone is NOT enough, and on the re-entry path it is worse than not
+  # enough: that branch is only reached when the PID is already in `$scope`, so
+  # asserting membership there re-asserts the branch's own entry condition and
+  # can never fail. Every `/clear` and every resume takes that path. So read back
+  # the properties that actually constitute the cap, at BOTH levels, and record
+  # what was OBSERVED rather than what was intended.
+  #
+  # Reading back is required rather than checking rc: SetUnitProperties returns
+  # rc=0 for a unit that does not exist yet (it loads it inactive), so a zero
+  # exit proves the call was accepted, not that the running unit carries the cap.
+  # And the call is all-or-nothing — one unsupported property (ManagedOOMPreference
+  # needs systemd >= 247) drops MemoryHigh, MemoryMax AND MemorySwapMax with it,
+  # which would silently restore the swap-exhaustion half of the incident.
   local final_cg
   final_cg=$(cut -d: -f3 < "/proc/$claude_pid/cgroup" 2>/dev/null | head -1)
-  if [[ "${final_cg##*/}" == "$scope" ]]; then
-    outcome="applied"
-    [[ -z "$reason" ]] && reason="ok"
-  else
+  scope_max_after=$(systemctl --user show "$scope" -p MemoryMax --value 2>/dev/null)
+  scope_high_after=$(systemctl --user show "$scope" -p MemoryHigh --value 2>/dev/null)
+  scope_swap_after=$(systemctl --user show "$scope" -p MemorySwapMax --value 2>/dev/null)
+  slice_high_after=$(systemctl --user show "$SLICE_NAME" -p MemoryHigh --value 2>/dev/null)
+  slice_max_after=$(systemctl --user show "$SLICE_NAME" -p MemoryMax --value 2>/dev/null)
+  slice_swap_after=$(systemctl --user show "$SLICE_NAME" -p MemorySwapMax --value 2>/dev/null)
+
+  if [[ "${final_cg##*/}" != "$scope" ]]; then
     outcome="failed"
     reason="adoption_unverified"
     msg="Soleur memory backstop could NOT cap this session — it is running UNPROTECTED.
 
 The scope was requested but this process is not a member of it:
   expected: $scope
-  actual:   ${final_cg##*/}
+  actual:   $(_sanitize "${final_cg##*/}")
 
 Nothing else is affected and your session is fine, but a runaway command here is
 not bounded. Details: .claude/.memory-backstop.jsonl"
+  elif [[ "$scope_max_after" != "$SCOPE_MAX_BYTES" || "$scope_high_after" != "$SCOPE_HIGH_BYTES" \
+       || "$scope_swap_after" != "0" ]]; then
+    outcome="failed"
+    reason="scope_caps_unverified"
+    msg="Soleur memory backstop: this session's scope exists but its memory limits were NOT applied.
+
+  MemoryMax     expected $(_human_bytes "$SCOPE_MAX_BYTES"), got ${scope_max_after:-<unset>}
+  MemoryHigh    expected $(_human_bytes "$SCOPE_HIGH_BYTES"), got ${scope_high_after:-<unset>}
+  MemorySwapMax expected 0, got ${scope_swap_after:-<unset>}
+
+A runaway command here is NOT bounded. Details: .claude/.memory-backstop.jsonl"
+  elif [[ "$slice_max_after" != "$FLEET_MAX_BYTES" || "$slice_high_after" != "$FLEET_HIGH_BYTES" \
+       || "$slice_swap_after" != "0" ]]; then
+    # This session is capped, but the SHARED bound is not there — so N sessions
+    # can still exhaust the box between them, and swap is uncapped at the slice.
+    outcome="failed"
+    reason="fleet_caps_unverified"
+    msg="Soleur memory backstop: this session is capped, but the FLEET-WIDE limit was not applied.
+
+  $SLICE_NAME MemoryMax     expected $(_human_bytes "$FLEET_MAX_BYTES"), got ${slice_max_after:-<unset>}
+  $SLICE_NAME MemoryHigh    expected $(_human_bytes "$FLEET_HIGH_BYTES"), got ${slice_high_after:-<unset>}
+  $SLICE_NAME MemorySwapMax expected 0, got ${slice_swap_after:-<unset>}
+
+Each session is still individually bounded, but several sessions together are not.
+On systemd older than 247 this is expected: ManagedOOMPreference is unsupported and
+fails the whole property call. Details: .claude/.memory-backstop.jsonl"
+  else
+    outcome="applied"
+    # Distinguish a fresh adoption (caps proven by StartTransientUnit succeeding)
+    # from a refresh (caps proven only by the readback above) — otherwise the log
+    # cannot tell the two apart after the fact.
+    [[ -z "$reason" ]] && reason=$( (( start_rc == 0 )) && echo "ok_fresh" || echo "ok_refreshed" )
   fi
 
   # Record the counters this run observed so the next run compares against them.
@@ -603,13 +698,19 @@ To turn the backstop off entirely:          set SOLEUR_DISABLE_MEMORY_BACKSTOP=1
 }
 
 # Last recorded value of a counter field, for the increase comparison.
+# Counters are per-SCOPE, but the log is per-worktree and several sessions share
+# it. Without the scope filter, session B (a fresh scope, counters at 0) writes
+# last_oom_kill=0, and session A — which has already seen 3 kills and already
+# messaged — then reads 0, decides 3 > 0, and re-emits its post-mortem. The ADR's
+# own scenario is six concurrent sessions, so that is the default condition, not
+# an edge case.
 _last_logged() {
-  local log_file=$1 field=$2
+  local log_file=$1 field=$2 want_scope=$3
   [[ -r "$log_file" ]] || { printf '0'; return 0; }
   local v
-  if command -v jq >/dev/null 2>&1; then
-    v=$(tail -50 "$log_file" 2>/dev/null | jq -r --arg f "$field" 'select(.[$f] != null) | .[$f]' 2>/dev/null | tail -1)
-  fi
+  v=$(tail -200 "$log_file" 2>/dev/null \
+      | jq -r --arg f "$field" --arg s "$want_scope" \
+          'select(.scope == $s and .[$f] != null) | .[$f]' 2>/dev/null | tail -1)
   [[ "$v" =~ ^[0-9]+$ ]] || v=0
   printf '%s' "$v"
 }
@@ -618,6 +719,14 @@ _last_logged() {
 # increase comparison.
 _log_with_counters() {
   local log_file=$1 cur_oom=$2 cur_high=$3
+  # Rotate here too. `_log` is only reached on the DECLINE paths, so on a machine
+  # where the hook always applies nothing ever rotated and the sink grew forever.
+  local _rot; _rot="$(dirname "${BASH_SOURCE[0]}")/lib/log-rotation.sh"
+  if [[ -f "$_rot" ]]; then
+    # shellcheck source=/dev/null
+    source "$_rot" 2>/dev/null || true
+    declare -F rotate_if_needed >/dev/null 2>&1 && rotate_if_needed "$log_file" 2>/dev/null
+  fi
   if command -v jq >/dev/null 2>&1; then
     jq -nc \
       --arg ts "$ts" --arg outcome "$outcome" --arg reason "$reason" \
@@ -627,15 +736,18 @@ _log_with_counters() {
       --argjson tree "$tree_size" --argjson oom "$cur_oom" --argjson hi "$cur_high" \
       --argjson sh "$SCOPE_HIGH_BYTES" --argjson sm "$SCOPE_MAX_BYTES" \
       --argjson fh "$FLEET_HIGH_BYTES" --argjson fm "$FLEET_MAX_BYTES" \
-      '{schema:1, ts:$ts, pid:($pid|tonumber?), tree_size:$tree, scope:$scope,
-        terminal_scope:$tscope, slice:$slice, scope_high:$sh, scope_max:$sm,
-        slice_high:$fh, slice_max:$fm, slice_high_before:$shb, slice_max_before:$smb,
+      --arg sha "$scope_high_after" --arg sma "$scope_max_after" --arg swa "$scope_swap_after" \
+      --arg fha "$slice_high_after" --arg fma "$slice_max_after" --arg fwa "$slice_swap_after" \
+      --argjson att "$attached" --argjson trunc "$tree_truncated" \
+      '{schema:1, ts:$ts, pid:(($pid|tonumber?) // null), tree_size:$tree, scope:$scope,
+        terminal_scope:$tscope, slice:$slice,
+        scope_high:$sh, scope_max:$sm, slice_high:$fh, slice_max:$fm,
+        scope_high_after:$sha, scope_max_after:$sma, scope_swap_after:$swa,
+        slice_high_after:$fha, slice_max_after:$fma, slice_swap_after:$fwa,
+        slice_high_before:$shb, slice_max_before:$smb,
+        attached:$att, tree_truncated:$trunc,
         swap_max:0, identity_signal:$sig, outcome:$outcome, reason:$reason,
         last_oom_kill:$oom, last_high:$hi}' 2>/dev/null >> "$log_file"
-  else
-    printf '{"schema":1,"ts":"%s","outcome":"%s","reason":"%s","scope":"%s","tree_size":%s,"last_oom_kill":%s,"last_high":%s}\n' \
-      "$(_json_escape "$ts")" "$(_json_escape "$outcome")" "$(_json_escape "$reason")" \
-      "$(_json_escape "$scope")" "$tree_size" "$cur_oom" "$cur_high" >> "$log_file"
   fi
 }
 
