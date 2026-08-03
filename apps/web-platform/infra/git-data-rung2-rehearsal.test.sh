@@ -1151,6 +1151,19 @@ done
 if [[ "$_pfx_wf" == *- && "$_pfx_drift" == *- ]]; then
   pass "both prefixes carry the load-bearing trailing hyphen"
 fi
+# A FOURTH COPY (#7227 item 4): the evidence-capture script now refuses any --host-name that
+# does not carry this prefix, so its regex is a consumer of the same literal and drifts the
+# same way. Folded into this existing chain rather than given its own arm — the comparison
+# here is already "every replica of one literal agrees", and a fourth comparand costs one
+# extraction, where a parallel arm would duplicate the rationale and the mutation.
+_pfx_cap="$(grep -oE '\^soleur-git-data-rehearsal-' \
+  "${ROOT}/scripts/followthroughs/git-data-rung2-evidence-capture.sh" | head -1 | sed 's/^\^//')"
+if [[ "$_pfx_cap" == "$_pfx_wf" ]]; then
+  pass "the evidence-capture script's --host-name constraint pins the same rehearsal prefix"
+else
+  fail "the evidence-capture --host-name constraint does not pin the rehearsal prefix (got '${_pfx_cap:-none}', want '${_pfx_wf}')" \
+    "Unconstrained, the capture script can be aimed at the production host soleur-git-data and project its boot telemetry into a PUBLIC Actions log."
+fi
 if [[ "$_pfx_tf" == *"rehearsal-\${var.rehearsal_run_id}"* ]]; then
   pass "the Terraform host name is prefix + run id (unique per rehearsal, so a leak cannot be adopted)"
 else

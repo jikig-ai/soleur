@@ -70,9 +70,22 @@ done
 
 # --- Predicates (each takes a file, echoes "1" if the property holds, else "0") ---
 
-# isLuks idempotency guard present.
+# The luks_open heredoc, COMMENT-STRIPPED. Defined here rather than beside its first #7204
+# caller further down because A1 and the B18 family both read it, and a shell function must
+# be defined above the line that calls it.
+_luks_slice() {
+  awk '/^[[:space:]]*STAGE=luks_open[[:space:]]*$/{f=1} f&&/^[[:space:]]*LUKSEOF[[:space:]]*$/{f=0} f' "$1" \
+    | grep -vE '^[[:space:]]*#' || true
+}
+
+# isLuks probe present. READS THE COMMENT-STRIPPED SLICE, NOT THE RAW FILE. As a whole-file
+# grep this matched the prose explaining the guard exactly as readily as the guard itself, so
+# deleting the real probe left it green (cq-assert-anchor-not-bare-token; the #7204 session's
+# "four guards were satisfied by the comment I wrote to explain them"). #7216's own comment
+# block names the pre-fix invocation literally, which is precisely the text that would have
+# made this vacuous.
 p_isluks() {
-  if grep -Eq 'cryptsetup[[:space:]]+isLuks' "$1"; then echo 1; else echo 0; fi
+  if _luks_slice "$1" | grep -Eq 'cryptsetup[[:space:]]+isLuks'; then echo 1; else echo 0; fi
 }
 
 # Every luksFormat/luksOpen line pipes the key via `--key-file -` (stdin) AND carries
@@ -1063,10 +1076,7 @@ assert_mutation "A2 no shell source (gc-failure.service)" p_env_file_not_sourced
 # The classified feature allowlist R1 machine-reads. B16b derives its denied set from this
 # same file so the static and runtime layers cannot disagree about what "module-dep" means.
 FIX_FILE="${DIR}/git-data-birth-fs-fingerprint.txt"
-_luks_slice() {
-  awk '/^[[:space:]]*STAGE=luks_open[[:space:]]*$/{f=1} f&&/^[[:space:]]*LUKSEOF[[:space:]]*$/{f=0} f' "$1" \
-    | grep -vE '^[[:space:]]*#' || true
-}
+# `_luks_slice` is defined once, up beside p_isluks — A1 and B18 call it before this point.
 _mkfs_lines() { _luks_slice "$1" | grep -E '^[[:space:]]*mkfs\.ext4[[:space:]]' || true; }
 
 # B16a — EXACTLY ONE mkfs invocation, inside the luks_open heredoc, not on a comment line.
@@ -1185,6 +1195,61 @@ assert_mutation "B17r mount-no-raw-device (by-id fallback)" p_mount_no_raw_devic
   's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 || mount /dev/disk/by-id/scsi-0HC_Volume_x /mnt/git-data-luks#'
 assert_mutation "B17r mount-no-raw-device (\$DEV fallback)" p_mount_no_raw_device "$CLOUD_INIT" \
   's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 || mount "$DEV" /mnt/git-data-luks#'
+
+# --- B18 (#7216): the isLuks probe BRANCHES ON ITS EXIT CODE; rc 1 is the ONLY format ------
+#
+# `if ! cryptsetup isLuks "$DEV"` reads EVERY non-zero exit as "not yet LUKS" and answers with
+# luksFormat. Measured against the pinned image (cryptsetup 2.7.0): no-header = 1, ABSENT
+# device = 4, not-on-PATH = 127. So a probe that could not RUN was indistinguishable from one
+# that ran and said no, and the destructive branch got taken because the measurement was
+# MISSING rather than because the answer was negative. `runcmd` is once-per-instance, so the
+# reachable trigger is a host REPLACEMENT (this template carries no `ignore_changes
+# = [user_data]`) against a volume that persists and re-attaches already-LUKS — which
+# luksFormat answers by overwriting the header and every key slot. Unrecoverable: the old
+# passphrase opens nothing.
+#
+# SIX predicates, because the shipped fix has six separable ways to regress:
+#   (a) the `if !` truthiness form does not come back
+#   (b) rc is captured with `|| _isluks_rc=$?`, NEVER the naked `; _isluks_rc=$?` the issue
+#       proposed — this stage is under `set -euo pipefail`, where the naked form aborts
+#       BEFORE the assignment on rc=1, so a blank volume at birth could never be formatted
+#       at all. (The sshd_config stage's naked capture is legal only because it sits ABOVE
+#       that stage's `set -e`, ~30 lines up. Mirror the discipline, not the two lines.)
+#   (c) the branch is a `case` on the captured rc
+#   (d) EXACTLY ONE arm reaches luksFormat, anchored on `cryptsetup[[:space:]]+luksFormat`
+#       rather than the bare token so no arm's prose can satisfy it
+#   (e) the catch-all `*)` reaches `exit 1` — refusing to format beats guessing
+#   (f) THE PROBE LINE CARRIES NO `2>>`. This is the one that matters. A failed redirection
+#       on a simple command means the command NEVER RUNS and the shell reports rc 1:
+#         $ ( set -euo pipefail; _rc=0; /bin/true 2>>/proc/sys/nonexistent/x || _rc=$?; \
+#             echo "rc=$_rc" )
+#         rc=1
+#       On an unwritable or full /run — a state this very stage's fallbacks enumerate — a
+#       `2>>` on the probe FORGES the single rc that means "format it" while the probe never
+#       executed, reconstructing #7216 inside the patch that closes it. Stderr is therefore
+#       captured through a command SUBSTITUTION, with the append a separately tolerated
+#       statement that cannot influence the measured rc.
+p_isluks_rc_branch() {
+  local slice probe n
+  slice="$(_luks_slice "$1")"
+  # (a)
+  if printf '%s\n' "$slice" | grep -Eq 'if[[:space:]]+![[:space:]]*cryptsetup[[:space:]]+isLuks'; then echo 0; return; fi
+  # (b)
+  if ! printf '%s\n' "$slice" | grep -Eq '\|\|[[:space:]]*_isluks_rc=\$\?'; then echo 0; return; fi
+  # (c)
+  if ! printf '%s\n' "$slice" | grep -Eq 'case[[:space:]]+"\$_isluks_rc"[[:space:]]+in'; then echo 0; return; fi
+  # (d)
+  n=$(printf '%s\n' "$slice" | grep -cE 'cryptsetup[[:space:]]+luksFormat' || true)
+  if [ "${n:-0}" -ne 1 ]; then echo 0; return; fi
+  # (e)
+  if ! printf '%s\n' "$slice" | grep -Eq '^[[:space:]]*\*\).*exit[[:space:]]+1'; then echo 0; return; fi
+  # (f)
+  probe="$(printf '%s\n' "$slice" | grep -E 'cryptsetup[[:space:]]+isLuks' || true)"
+  if [ -z "$probe" ]; then echo 0; return; fi
+  if printf '%s\n' "$probe" | grep -q '2>>'; then echo 0; return; fi
+  echo 1
+}
+assert_holds    "B18 isLuks-rc-branch" p_isluks_rc_branch "$CLOUD_INIT"
 
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
 #

@@ -113,8 +113,14 @@ open(f"{out}/luks-stage.code.sh", "w").write(_code + "\n")
 # arms abort-on-error live in DIFFERENT runcmd entries, and it is precisely because
 # cloud-init joins every entry into ONE script that the trap covers the later ones. A
 # comparison scoped to a single entry reports drift that does not exist.
-open(f"{out}/runcmd-all.sh", "w").write(
-    "\n".join(c for c in d["runcmd"] if isinstance(c, str)))
+_all = "\n".join(c for c in d["runcmd"] if isinstance(c, str))
+open(f"{out}/runcmd-all.sh", "w").write(_all)
+# COMMENT-STRIPPED concatenation, for R3(3b). Same rationale as luks-stage.code.sh one level
+# up: this file's prose discusses `git-data-emit … fatal`, `[ -s "$_detail"` and the literal
+# log path at length, so any regex predicate reading the raw text can be satisfied by the
+# commentary that explains the property instead of the property.
+open(f"{out}/runcmd-all.code.sh", "w").write(
+    "\n".join(l for l in _all.splitlines() if not re.match(r'^\s*#', l)) + "\n")
 PY
 [ -s "$TMP/doppler-dl.sh" ] || { echo "FAIL: could not extract the checksum block" >&2; exit 1; }
 
@@ -1072,56 +1078,129 @@ if [ "${_r3_c:-0}" -ge 1 ]; then pass; else
   fail "R3(3a) POSITIVE CONTROL: the emitter no longer leaks a literal path for an unreadable detail source" \
        "R3(3b) below guards a hazard that may no longer exist — re-derive it against the emitter's current branch. capture-c=[$(head -c 300 "$TMP/r4out/capture-c.log" 2>/dev/null)]"; fi
 
-# R3(3b) — THE GUARD. The stage must never hand the emitter a path it has not proven
-# readable. Pre-#7204 luks_err passed the BARE LITERAL /var/log/cloud-init-output.log, which
-# does not exist in this container and is exactly how a fatal came to carry a filename
-# instead of a cause. Assert the 4th argument is a VARIABLE and that a `[ -r ]` guard on it
-# precedes the emit call.
-if [ -s "$TMP/luks-stage.code.sh" ]; then
-  _r3b="$(python3 - "$TMP/luks-stage.code.sh" <<'PY' 2>/dev/null || true
+# R3(3b) — THE GUARD, WIDENED (#7227) TO EVERY FATAL EMIT SITE IN THE CONCATENATED runcmd.
+#
+# No emit site may hand the emitter a path it has not proven readable. Pre-#7204 luks_err
+# passed the BARE LITERAL /var/log/cloud-init-output.log, which does not exist in this
+# container and is exactly how a fatal came to carry a filename instead of a cause.
+#
+# IT USED TO READ ONE SITE OF FOUR. Scoped to luks-stage.code.sh it asserted the property on
+# the one handler that already satisfied it, while on_err, sshd_config and bootstrap_err all
+# shipped bare literals, unwatched. Widening it is #7227 item 3.
+#
+# THREE CORRECTIONS THE WIDENING REQUIRED — each measured, and without them the widened arm
+# would have shipped WEAKER than the single-site version it replaces:
+#
+#  1. REGION-SCOPED GUARD SEARCH. The original `gpat.search(joined)` is file-global and keyed
+#     on the VARIABLE'S NAME. Every handler used to call its local `_detail`, so on_err's
+#     guard — first in the file — satisfies `gm.start() < epos` for every LATER site: delete
+#     luks_err's own guard and the widened arm still reports GUARDED. The search is therefore
+#     bounded below by the site's own enclosing window (nearest `name() {` or `STAGE=` above
+#     it), and the arg-4 names are asserted PAIRWISE DISTINCT so the next author cannot
+#     re-create the alias.
+#  2. EMITTER-RELATIVE TOKEN INDEXING, never `toks[4]`. Measured on the `||`-chained gc_timer
+#     line, `shlex.split(..., posix=False)[4]` is `'||'` — so an arg-4 check written as
+#     `toks[4]` reports a false clean on exactly the call site #7227 names.
+#  3. A MESSAGE-LITERAL SET, not a count. `len(sites) == 3` passes a tree where one site was
+#     deleted and an unrelated one added.
+#
+# The `.code.sh` input is comment-stripped for the reason one level up: reading the raw text
+# let a comment containing `[ -r "$_detail"` satisfy the guard check while the real guard was
+# deleted — measured GUARDED on code with the literal-leak branch reopened.
+_R3B_SRC="$TMP/runcmd-all.code.sh"
+if [ -s "$_R3B_SRC" ]; then
+  _r3b_out="$(python3 - "$_R3B_SRC" <<'PY' 2>&1 || true
 import re, sys, shlex
-# COMMENT-STRIPPED input (see the extraction block). Reading the raw stage let a comment
-# containing `[ -r "$_detail"` satisfy the guard check while the real guard was deleted —
-# measured GUARDED on code with the literal-leak branch reopened. shlex(posix=False) does
-# not treat `#` as a comment, so a commented-out emit call could also be picked as m[0].
 src = open(sys.argv[1]).read()
 joined = re.sub(r'\\\n\s*', ' ', src)          # fold line continuations
-m = [l for l in joined.splitlines() if 'git-data-emit' in l and 'fatal' in l]
-# Cardinality, matching the `assert len(...) == 1` idiom used by every other extraction here:
-# picking m[0] out of several silently reports on whichever call happens to be first.
-if len(m) != 1:
-    print(f"AMBIGUOUS:{len(m)}"); raise SystemExit
-line = m[0].strip()
-try:
-    toks = shlex.split(line, posix=False)
-except ValueError:
-    print("UNPARSEABLE"); raise SystemExit
-# toks[0] is the emitter; args are 1..N. The detail source is arg 4.
-arg4 = toks[4] if len(toks) > 4 else ""
-isvar = "VAR" if arg4.lstrip('"').startswith("$") else "LITERAL"
-name = arg4.strip('"')
-# Accept -r OR -s. -s is strictly stronger (a readable but EMPTY file yields DETAIL=[], a
-# verdict with no cause — #7204's defect), so pinning -r alone would red the correct fix.
-# ORDERING is asserted too: a guard that appears AFTER the emit protects nothing.
-gpat = re.compile(r'\[\s+-[rs]\s+"?' + re.escape(name))
-gm = gpat.search(joined)
-epos = joined.index(line) if line in joined else len(joined)
-guarded = "GUARDED" if (gm and gm.start() < epos) else "UNGUARDED"
-print(f"{isvar}:{guarded}:{arg4}")
+lines = joined.splitlines()
+# One coordinate system for line index -> char offset, so window bounds and the emit position
+# are directly comparable.
+offs, p = [], 0
+for l in lines:
+    offs.append(p); p += len(l) + 1
+OPENER = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{')
+STAGE  = re.compile(r'^\s*STAGE=([A-Za-z0-9_]+)')
+for i, l in enumerate(lines):
+    if 'git-data-emit' not in l:
+        continue
+    try:
+        toks = shlex.split(l.strip(), posix=False)
+    except ValueError:
+        print("UNPARSEABLE|?|?|?|?"); continue
+    ei = next((k for k, t in enumerate(toks) if 'git-data-emit' in t), None)
+    if ei is None:
+        continue
+    def arg(n):
+        return toks[ei + n] if len(toks) > ei + n else ""
+    msg, level, arg4 = arg(1), arg(3), arg(4)
+    # Nearest enclosing handler / stage boundary ABOVE this line — the guard window.
+    wname, wstart = "?", 0
+    for j in range(i - 1, -1, -1):
+        mo = OPENER.match(lines[j])
+        if mo:
+            wname, wstart = mo.group(1), offs[j]; break
+        ms = STAGE.match(lines[j])
+        if ms:
+            wname, wstart = ms.group(1), offs[j]; break
+    isvar = "VAR" if arg4.lstrip('"').startswith("$") else "LITERAL"
+    name = arg4.strip('"')
+    guarded = "NA"
+    if isvar == "VAR":
+        # Accept -r OR -s. -s is strictly stronger (a readable but EMPTY file yields
+        # DETAIL=[], a verdict with no cause — #7204's defect), so pinning -r alone would
+        # red the correct fix. Bounded to [wstart, epos): a guard belonging to a DIFFERENT
+        # handler, or one placed after the emit, protects nothing here.
+        gpat = re.compile(r'\[\s+-[rs]\s+"?' + re.escape(name))
+        guarded = "GUARDED" if gpat.search(joined, wstart, offs[i]) else "UNGUARDED"
+    print("|".join([wname, level.strip('"'), isvar, guarded, arg4, msg]))
 PY
 )"
-  case "$_r3b" in
-    VAR:GUARDED:*) pass ;;
-    LITERAL:*) fail "R3(3b): luks_err passes a BARE PATH LITERAL as the emitter's detail source: ${_r3b#LITERAL:*:}" \
-                    "That is the #7204 shape — when the literal is unreadable the fatal carries a filename instead of a cause. Pass a variable the stage has seeded and proven readable." ;;
-    VAR:UNGUARDED:*) fail "R3(3b): luks_err's detail variable ${_r3b#VAR:UNGUARDED:} has no '[ -r ]'/'[ -s ]' guard BEFORE the emit call" \
-                    "An unwritable .final (disk full, read-only /run) would hand the emitter an unreadable path and re-open the literal-leak branch. A guard placed after the emit protects nothing." ;;
-    AMBIGUOUS:*) fail "R3(3b): found ${_r3b#AMBIGUOUS:} git-data-emit fatal calls in the luks_open stage, expected exactly 1" \
-                    "Reporting on whichever is first is how a second, unguarded call site ships unnoticed." ;;
-    *) fail "R3(3b): could not locate a parseable git-data-emit fatal call in the luks_open stage (verdict=[${_r3b:-none}])" ;;
-  esac
+  # (i) NON-VACUITY, COUNTED IN THE SHELL. A python `assert` inside the heredoc increments
+  # neither passes nor fails, and aborts extraction in a way that surfaces as some OTHER
+  # arm's failure. An empty parse must be an assertion that FAILS here, loudly.
+  _r3b_fatal="$(printf '%s\n' "$_r3b_out" | awk -F'|' '$2=="fatal"' || true)"
+  _r3b_n=$(printf '%s\n' "$_r3b_fatal" | grep -c . || true)
+  if [ "${_r3b_n:-0}" -ge 3 ]; then pass; else
+    fail "R3(3b)(i): parsed only ${_r3b_n:-0} fatal emit sites in the concatenated runcmd (expected >= 3)" \
+         "The extraction produced nothing usable, so every verdict below is vacuous. out=[$(printf '%s' "$_r3b_out" | head -c 300)]"
+  fi
+
+  # (ii) EVERY fatal site passes a GUARDED VARIABLE.
+  _r3b_bad="$(printf '%s\n' "$_r3b_fatal" | awk -F'|' '$3!="VAR" || $4!="GUARDED"' || true)"
+  if [ -z "$_r3b_bad" ]; then pass; else
+    fail "R3(3b)(ii): a fatal emit site does not pass a guarded variable as the detail source" \
+         "site|level|isvar|guarded|arg4|msg -> $(printf '%s' "$_r3b_bad" | tr '\n' ' ')"
+  fi
+
+  # (iii) THE ARG-4 NAMES ARE PAIRWISE DISTINCT. Two handlers sharing a local name silently
+  # disable (ii) for the later one — that is correction 1's failure mode, re-created.
+  _r3b_names="$(printf '%s\n' "$_r3b_fatal" | awk -F'|' '{print $5}' | sort || true)"
+  _r3b_uniq="$(printf '%s\n' "$_r3b_names" | sort -u | grep -c . || true)"
+  _r3b_tot="$(printf '%s\n' "$_r3b_names" | grep -c . || true)"
+  if [ "${_r3b_uniq:-0}" -eq "${_r3b_tot:-0}" ]; then pass; else
+    fail "R3(3b)(iii): fatal emit sites share a detail-variable name (${_r3b_uniq}/${_r3b_tot} distinct)" \
+         "The guard search is name-keyed, so an alias makes one site's guard satisfy another's check. names=[$(printf '%s' "$_r3b_names" | tr '\n' ' ')]"
+  fi
+
+  # (iv) THE MESSAGE-LITERAL SET, not a count.
+  _r3b_msgs="$(printf '%s\n' "$_r3b_fatal" | awk -F'|' '{print $6}' | sed 's/^"//; s/"$//' | sort || true)"
+  _r3b_want="$(printf '%s\n' 'git-data $STAGE FAILED' 'git-data LUKS stage FAILED' 'git-data sshd -t REJECTED the config' | sort)"
+  if [ "$_r3b_msgs" = "$_r3b_want" ]; then pass; else
+    fail "R3(3b)(iv): the fatal-site message set does not match" \
+         "got=[$(printf '%s' "$_r3b_msgs" | tr '\n' '/')] want=[$(printf '%s' "$_r3b_want" | tr '\n' '/')]"
+  fi
+
+  # (v) AC6 — NO emit site AT ANY LEVEL passes the shared cloud-init log as its detail
+  # source. Evaluated over every level, not just fatal: the gc_timer warning is the site
+  # whose `||` chaining defeats `toks[4]`, and it shipped the literal.
+  _r3b_lit="$(printf '%s\n' "$_r3b_out" | awk -F'|' '$5 ~ /cloud-init-output\.log/' || true)"
+  if [ -z "$_r3b_lit" ]; then pass; else
+    fail "R3(3b)(v): an emit site passes /var/log/cloud-init-output.log as its detail source" \
+         "That log is shared across every stage and is unbounded; outside \`doppler run\` the emitter's value-redactor degrades to \`cat\`. sites=[$(printf '%s' "$_r3b_lit" | tr '\n' ' ')]"
+  fi
 else
-  fail "R3(3b): skipped (luks stage not extracted)"
+  fail "R3(3b): skipped (concatenated runcmd not extracted)"
 fi
 
 total=$((passes + fails))
