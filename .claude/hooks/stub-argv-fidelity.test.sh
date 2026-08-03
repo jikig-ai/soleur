@@ -53,7 +53,7 @@ STUB_CMDS="gh|jq|git"
 # coverage silently collapse from N to 1 and still report PASS — a false-green
 # guard against false greens. Bumping this is the intended edit when a stub is
 # added; a DROP means the detector went blind and must be fixed, not lowered.
-EXPECTED_STUBS="${STUB_ARGV_FIDELITY_EXPECTED:-4}"
+EXPECTED_STUBS="${STUB_ARGV_FIDELITY_EXPECTED:-5}"
 
 fail=0
 checked=0

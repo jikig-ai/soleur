@@ -37,7 +37,14 @@ assert_decision() {
   TOTAL=$((TOTAL + 1))
   local out decision
   out="$(echo "$payload" | bash "$HOOK" 2>/dev/null)"
-  decision="$(echo "$out" | jq -r '.hookSpecificOutput.permissionDecision // "<missing>"' 2>/dev/null || echo "<jq-fail>")"
+  # Normalise "the hook emitted nothing" to a readable sentinel. Empty stdout is
+  # a pass-through (the tool proceeds, no decision asserted) and is distinct
+  # from an explicit allow — a distinction #7164 made load-bearing.
+  if [[ -z "${out//[[:space:]]/}" ]]; then
+    decision="<none>"
+  else
+    decision="$(echo "$out" | jq -r '.hookSpecificOutput.permissionDecision // "<missing>"' 2>/dev/null || echo "<jq-fail>")"
+  fi
   if [[ "$decision" == "$want" ]]; then
     PASS=$((PASS + 1))
     echo "PASS: $label → $decision"
@@ -116,10 +123,41 @@ assert_decision "(l) non-Bash tool allows" "allow" \
   "$(jq -nc '{tool_name: "Write", tool_input: {file_path: "x.md", content: "while gh run watch; do :; done"}}')"
 
 # --- Fail-open on malformed / empty stdin (P3 regression guard) ------------
-# jq exits 5 on invalid JSON; under set -euo pipefail the hook must NOT abort
-# before emitting allow JSON (header invariant: "exit 0 always / fail-open").
-assert_decision "(m) malformed JSON stdin allows (fail-open)" "allow" 'not json{'
-assert_decision "(n) empty stdin allows (fail-open)" "allow" ''
+# EXPECTATION REFRESHED for #7164 (ADR-157), and deliberately TIGHTENED.
+#
+# The fail-open contract is unchanged and still asserted by (o) below: the hook
+# exits 0 and never blocks the session on unparseable input.
+#
+# What changed is that it no longer emits an explicit {"permissionDecision":
+# "allow"}. It records a hook-input fault and passes through silently instead.
+# That is strictly better here, for a reason specific to this hook being a
+# NON-RESPONDER: it fires on the same tool call as guardrails.sh, which emits
+# `ask` on the very same unparseable payload. A non-responder shouting an
+# explicit `allow` into that round is at best redundant and at worst overrides
+# the prompt, depending on Claude Code's multi-hook precedence — an upstream
+# invariant this repo cannot verify, which is exactly what ADR-156 refuses to
+# depend on. Emitting nothing removes the question.
+assert_decision "(m) malformed JSON stdin: no decision emitted (fault recorded, tool not blocked)" "<none>" 'not json{'
+assert_decision "(n) empty stdin: no decision emitted (fault recorded, tool not blocked)" "<none>" ''
+
+# …and the fault is genuinely RECORDED, not silently dropped. Asserting only
+# "no output" would pass equally well against a hook that disarmed and said
+# nothing, which is defect 2 of #7164.
+TOTAL=$((TOTAL + 1))
+# ADR-129 rule (c): one owning trap for the tempdir. The suite runs under
+# `set -euo pipefail`, so a failure between allocation and the rm below would
+# otherwise leak it into /tmp — a machine-global tmpfs shared with sibling
+# worktrees.
+_bpm_root="$(mktemp -d)"
+trap 'rm -rf "$_bpm_root"' EXIT
+printf 'not json{' | INCIDENTS_REPO_ROOT="$_bpm_root" bash "$HOOK" >/dev/null 2>&1 || true
+if [[ -f "$_bpm_root/.claude/.rule-incidents.jsonl" ]] \
+   && grep -q 'hook-input-' "$_bpm_root/.claude/.rule-incidents.jsonl" 2>/dev/null; then
+  PASS=$((PASS + 1)); echo "PASS: (m2) malformed stdin records a hook-input fault"
+else
+  FAIL=$((FAIL + 1)); echo "FAIL: (m2) malformed stdin disarmed the hook with no record"
+fi
+rm -rf "$_bpm_root"
 
 # Exit-code guard: the hook must exit 0 even on malformed input.
 TOTAL=$((TOTAL + 1))

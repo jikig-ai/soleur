@@ -10,7 +10,9 @@ session. `ship` renders this into the PR body.
 
 **Date:** 2026-07-16
 **Classification:** User-Challenge (operator overrode my recommendation, twice)
-**Status:** OPEN — remediation tracked, exposure accepted
+**Status:** **RESOLVED 2026-07-24** — encryption certified, over-claim retracted. See
+§Resolution at the end of this entry. *(The reopen trigger below lapsed by one day before
+the correction landed — recorded, not elided.)*
 
 ### The finding
 
@@ -102,3 +104,48 @@ cross-host clauses) is untouched — neither corrected nor exacerbated — and t
 If the encryption work is not scheduled within **7 days** (by 2026-07-23), re-raise the
 interim-wording decision — an unbounded window on a false security claim is a different
 risk from a short, tracked one, and the second ask above should be re-put.
+
+---
+
+### Resolution — 2026-07-24 (#6588)
+
+**Both halves are now discharged.**
+
+**1. The encryption is real and certified.** web-1 `/mnt/data` runs on the LUKS-encrypted
+`hcloud_volume.workspaces_luks` mapper. Certified 2026-07-23 (`workspaces-luks-verify`
+run **30040444418**) and independently re-asserted at the time of this correction,
+2026-07-24 (run **30130277489**): `device_type=crypto_LUKS`,
+`mount_source=/dev/mapper/workspaces`, `escrow=ok`, `header=readable`,
+`workspace_count=8 expected=8`. The re-assert was deliberate rather than a citation of the
+day-old run — run 29782780158 had held `crypto_LUKS` for ~27 minutes before its own
+dead-man timer silently reverted it (#6812), so a stale green is the documented failure
+mode on this exact surface.
+
+**2. The three unachievable clauses are retracted, and the achievable one is re-scoped.**
+The claim family is removed **whole** across all 6 published files (3 canonical + 3
+Eleventy mirrors), which is the specific defect this entry was written about: the
+2026-07-16 attempt removed the head and left the LUKS clause dangling, making the false
+claim *stronger*. Retracted: cross-host TLS; membership re-verification on sessions served
+across hosts; the dedicated per-workspace git-data host. Retained and re-scoped off the
+dead multi-host premise: the LUKS encryption-at-rest claim, now standing on the live
+single-host topology. The internal Art. 30 register, the DPA scope in
+`compliance-posture.md`, and the NFR register are corrected in the same PR — sequencing
+them would have left the *internal* record over-claiming relative to the *public* one.
+
+**3. The reopen trigger lapsed — stated plainly.** The trigger above set 2026-07-23. The
+correction landed 2026-07-24, **one day late**. The encryption work itself was in fact
+scheduled and executing throughout that window (the cutover ran 2026-07-23), so the
+substantive risk the trigger guarded against — an *unscheduled*, unbounded window — did
+not materialise. But the trigger was written against a date, not against a schedule, and
+by its own terms it fired. Recording that rather than eliding it.
+
+**4. What is NOT resolved by this entry.** A full un-wiped copy of every workspace remains
+on the superseded pre-cutover plaintext volume `hcloud_volume.workspaces`, retained as the
+ADR-119 rollback backstop. The operator was re-asked on 2026-07-24 whether to disclose it
+and **reaffirmed the hold** (UC-3, PR #6918), choosing to cure the reality rather than
+qualify the wording. That is an **accepted, undisclosed residual**, tracked on **#6808**
+(the blocker on the soak, escalated to `priority/p1-high` + `type/security` by this PR) and
+recorded in full at
+`knowledge-base/project/specs/feat-one-shot-6588-legal-clause-retraction/decision-challenges.md`.
+**#6588 does not close on that limb** — this entry closes because its own two asks
+(retract the false clauses; make the surviving claim true) are discharged.

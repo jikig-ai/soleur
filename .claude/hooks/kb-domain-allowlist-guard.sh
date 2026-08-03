@@ -50,18 +50,43 @@ fi
 SANCTIONED_DIRS=(engineering finance legal marketing operations product project sales support)
 SANCTIONED_FILES=(INDEX.md kb-categories.txt kb-tags.txt)
 
-INPUT=$(cat)
+# shellcheck source=lib/hook-input.sh
+# FAIL-HARD (no `|| true`): a fail-soft source leaves hook_parse_input undefined
+# and the hook dies at the call, letting the tool proceed (#7164 defect 2).
+source "$(dirname "${BASH_SOURCE[0]}")/lib/hook-input.sh"
 
-# Fail-open on malformed JSON (mirror no-memory-write.sh): a parse failure must
-# not silently block every tool call.
-if ! TARGET=$(printf '%s' "$INPUT" | jq -r '
-  .tool_input.file_path
-  // .tool_input.notebook_path
-  // .tool_input.command
-  // ""
-' 2>/dev/null); then
+# The source above is fail-hard, but 12 of the 20 hooks run `set -uo pipefail`
+# WITHOUT -e. There a missing helper makes hook_parse_input return 127, `!`
+# inverts that to true, the response functions are 127 too, and the hook reaches
+# `exit 0` — a clean pass-through with no row and no prompt, which is defect 2
+# reintroduced by a broken deploy. Assert it explicitly instead of relying on -e.
+if ! declare -f hook_parse_input >/dev/null 2>&1; then
+  echo "[kb-domain-allowlist-guard] hook-input helper missing — guards did NOT run for this call" >&2
   exit 0
 fi
+
+INPUT=$(cat)
+
+# ADR-156: hook stdin is model-controlled. A non-string field is surfaced, never
+# coerced (#7164). ADR-157: it asks rather than continuing silently. This
+# REPLACES the previous fail-open-on-malformed-JSON branch — the hook still
+# never blocks the session on a parse failure, but the disarm is no longer
+# silent.
+#
+# NB this hook's NORMAL decision is already `ask`, so a test asserting only the
+# decision string cannot tell a routine domain prompt from an input-contract
+# fault. The two are distinguished by `permissionDecisionReason`.
+if ! hook_parse_input "$INPUT"; then
+  hook_input_report "kb-domain-allowlist-guard"
+  hook_input_should_ask && { hook_input_emit_ask "kb-domain-allowlist-guard"; exit 0; }
+  exit 0
+fi
+
+# file_path // notebook_path // command, as before. HOOK_FILE_PATH already folds
+# notebook_path in. NB: an EXPLICITLY empty file_path now falls through to the
+# command where jq's `//` would have kept the empty string — that makes the
+# guard inspect strictly more payloads, never fewer.
+TARGET="${HOOK_FILE_PATH:-$HOOK_CMD}"
 
 [[ -z "$TARGET" ]] && exit 0
 
@@ -73,9 +98,9 @@ fi
 # failure yields empty — a missing/garbled tool_name on a real Bash command still
 # gets the read-vs-write gate (command present), and on a file write still reaches
 # the existing `ask` logic (file_path present, so IS_BASH stays unset).
-TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
-HAS_COMMAND=$(printf '%s' "$INPUT" | jq -r 'if (.tool_input.command // "") != "" then "1" else "" end' 2>/dev/null || true)
-HAS_FILE_PATH=$(printf '%s' "$INPUT" | jq -r 'if (.tool_input.file_path // .tool_input.notebook_path // "") != "" then "1" else "" end' 2>/dev/null || true)
+TOOL_NAME="$HOOK_TOOL_NAME"
+HAS_COMMAND=""; [[ -n "$HOOK_CMD" ]] && HAS_COMMAND="1"
+HAS_FILE_PATH=""; [[ -n "$HOOK_FILE_PATH" ]] && HAS_FILE_PATH="1"
 IS_BASH=""
 if [[ "$TOOL_NAME" == "Bash" ]] || { [[ -z "$TOOL_NAME" ]] && [[ -n "$HAS_COMMAND" ]] && [[ -z "$HAS_FILE_PATH" ]]; }; then
   IS_BASH=1
