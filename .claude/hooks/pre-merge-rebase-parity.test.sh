@@ -35,11 +35,16 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 CLAUDE_HOOK="$SCRIPT_DIR/pre-merge-rebase.sh"
 OPENHANDS_HOOK="$REPO_ROOT/.openhands/hooks/pre-merge-rebase.sh"
 
-PASS=0; FAIL=0
+PASS=0; FAIL=0; SKIPPED=0
 pass() { echo "  pass: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
+# A skip is not a pass: it increments neither PASS nor the total, but it IS
+# counted and printed. Without this the python3-gated cases silently turned a
+# 20/20 into an 18/18 with no signal — the same accounting hole the sibling
+# contract suite closed.
+skip() { echo "  SKIP: $1"; SKIPPED=$((SKIPPED + 1)); }
 
-command -v jq  >/dev/null 2>&1 || { echo "SKIP: jq missing";  exit 0; }
+command -v jq  >/dev/null 2>&1 || { echo "SKIP: jq missing"; echo "=== Results: 0/0 passed, 0 failed, 1 skipped ==="; exit 0; }
 command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
 
 for h in "$CLAUDE_HOOK" "$OPENHANDS_HOOK"; do
@@ -56,7 +61,13 @@ denied() {
   # Exit code is deliberately ignored: the two copies use different codes for
   # the same verdict (.claude exits 0 with a deny payload, .openhands exits 2).
   # The decision field is the shared contract.
-  out=$(printf '%s' "$payload" | "$hook" 2>/dev/null) || true
+  # INCIDENTS_REPO_ROOT redirected: without it this helper appended REAL rows to
+  # the operator's live ledger on every run — synthetic `gh pr merge 900` command
+  # text in `command_snippet`, feeding rule-metrics-aggregate.sh. Pre-existing,
+  # and the other half of the same defect fixed in envelope_verdict below.
+  local _sb; _sb="$(mktemp -d -p "$TMP")"
+  out=$(printf '%s' "$payload" | env INCIDENTS_REPO_ROOT="$_sb" "$hook" 2>/dev/null) || true
+  rm -rf "$_sb"
   if jq -e '(.hookSpecificOutput.permissionDecision // .decision) == "deny"' >/dev/null 2>&1 <<<"$out"; then
     echo "yes"
   else
@@ -223,11 +234,42 @@ done
 #
 # `envelope_verdict` deliberately does NOT normalise the two protocols the way
 # `denied` above does: which harness denies and which asks IS the property.
-envelope_verdict() { # <hook> <payload> -> deny|ask|none|<other>
-  local hook="$1" payload="$2" out
-  out=$(printf '%s' "$payload" | "$hook" 2>/dev/null) || true
-  jq -r '(.hookSpecificOutput.permissionDecision // .decision // "none")' 2>/dev/null <<<"$out" \
-    || echo "none"
+# Echoes "<verdict>|<rc>". The rc half is not decoration: without it a hook that
+# ABORTS with no decision is indistinguishable from one that allows cleanly, and
+# that is the exact pre-#7173 behaviour these cases were written to pin.
+#
+# THE EMPTY-OUTPUT SHORT-CIRCUIT IS LOAD-BEARING. `jq -r '… // "none"' <<<""`
+# emits NOTHING and exits 0, so the `|| echo "none"` fallback below was
+# unreachable dead code and this function returned "" — visible in its own
+# passing output as `is not denied ()`. Every assertion was written `!= "deny"`,
+# so all of them passed against a hook that emitted nothing at all, including
+# one that does not exist. Five review agents converged on it independently.
+# The cases now assert a POSITIVE verdict and an rc, so absence cannot satisfy
+# them.
+#
+# INCIDENTS_REPO_ROOT is redirected per call. Without it these hooks appended
+# real rows to the operator's live `.claude/.rule-incidents.jsonl` — measured at
+# 1349 bytes per run, including synthetic `hook_self_fault` rows that feed
+# `rule-metrics-aggregate.sh`, making a genuine production fault
+# indistinguishable from test noise. `decision_for`/`rc_for` in the sibling
+# suite set it everywhere; this helper was the one that did not.
+envelope_verdict() { # <hook> <payload> [env...] -> "<deny|ask|none|other>|<rc>"
+  local hook="$1" payload="$2"; shift 2
+  local out rc sandbox
+  sandbox="$(mktemp -d -p "$TMP")"
+  # Extra env applies ONLY to the hook. Wrapping the whole call would also strip
+  # jq from THIS function's own parse below, which reports `other` for every
+  # verdict — a fixture defect that reads exactly like a real failure.
+  out=$(cd "$sandbox" && printf '%s' "$payload" \
+        | env INCIDENTS_REPO_ROOT="$sandbox" "$@" "$hook" 2>/dev/null)
+  rc=$?
+  rm -rf "$sandbox"
+  if [[ -z "${out//[[:space:]]/}" ]]; then echo "none|$rc"; return; fi
+  local v
+  v=$(jq -r '(.hookSpecificOutput.permissionDecision // .decision // "other")' 2>/dev/null <<<"$out") \
+    || v="other"
+  [[ -z "$v" ]] && v="other"
+  echo "$v|$rc"
 }
 
 CLAUDE_GUARD="$SCRIPT_DIR/guardrails.sh"
@@ -240,26 +282,80 @@ OPENHANDS_GUARD="$REPO_ROOT/.openhands/hooks/guardrails.sh"
 # its parser and invalid to jq.
 SURROGATE_PAYLOAD="$(python3 -c 'import sys; sys.stdout.write("{\"working_dir\":\"\\ud800\",\"cwd\":\"/tmp\",\"tool_input\":{\"command\":\"rm -rf $HOME\"}}")' 2>/dev/null)"
 
+# want_env <label> <expected "verdict|rc"> <hook> <payload>
+# Asserts the PAIR positively. Never `!= "deny"`: a negative over a verdict that
+# can be empty is satisfied by absence, which is the whole defect above.
+want_env() {
+  local label="$1" expect="$2" hook="$3" payload="$4"; shift 4
+  local got
+  got="$(envelope_verdict "$hook" "$payload" "$@")"
+  if [[ "$got" == "$expect" ]]; then pass "$label → $got"
+  else fail "$label: want $expect, got $got"; fi
+}
+
+# The mirror is THREE blocking hooks, not one. Only guardrails.sh was exercised
+# before, so pre-merge-rebase.sh's and worktree-write-guard.sh's envelope
+# handling — including the availability fix — was asserted nowhere.
+OH_PMR="$REPO_ROOT/.openhands/hooks/pre-merge-rebase.sh"
+OH_WWG="$REPO_ROOT/.openhands/hooks/worktree-write-guard.sh"
+
 if [[ -z "$SURROGATE_PAYLOAD" ]]; then
-  echo "  SKIP: python3 missing — unparseable-envelope parity case"
+  skip "python3 missing — unparseable-envelope parity cases (4 assertions not run)"
 else
-  v="$(envelope_verdict "$CLAUDE_GUARD" "$SURROGATE_PAYLOAD")"
-  [[ "$v" == "ask" ]] && pass "[.claude] unparseable envelope ASKS (ADR-157)" \
-                      || fail "[.claude] unparseable envelope: want ask, got $v"
-  v="$(envelope_verdict "$OPENHANDS_GUARD" "$SURROGATE_PAYLOAD")"
-  [[ "$v" == "deny" ]] && pass "[.openhands] unparseable envelope DENIES (no ask in this protocol)" \
-                       || fail "[.openhands] unparseable envelope: want deny, got $v — before #7173 this aborted at rc 5 with NO decision at all"
+  want_env "[.claude] unparseable envelope ASKS (ADR-157), exit 0" "ask|0" "$CLAUDE_GUARD" "$SURROGATE_PAYLOAD"
+  # rc 2 is the point: before #7173 this aborted at rc 5 with NO decision, which
+  # a verdict-only assertion could not tell apart from a clean allow.
+  want_env "[.openhands] unparseable envelope DENIES, exit 2" "deny|2" "$OPENHANDS_GUARD" "$SURROGATE_PAYLOAD"
+  want_env "[.openhands pre-merge-rebase] unparseable DENIES, exit 2" "deny|2" "$OH_PMR" "$SURROGATE_PAYLOAD"
+  want_env "[.openhands worktree-write-guard] unparseable DENIES, exit 2" "deny|2" "$OH_WWG" "$SURROGATE_PAYLOAD"
+fi
+
+NONSTRING_PAYLOAD_EARLY='{"working_dir":"/tmp","cwd":"/tmp","tool_input":{"command":["git","stash"]}}'
+# jq_missing — the only fail-OPEN class, and the one whose regression is silent.
+# It was asserted NOWHERE for the mirror before this: named in the table above
+# and in the ADR, tested by nothing. The shim keeps every binary the hooks need
+# and drops only jq; `$src == /*` rejects shell builtins and functions, whose
+# `command -v` returns a bare name and would otherwise create a dangling
+# self-referential symlink (measured — it silently broke `grep` inside the shim
+# and made this fixture report the wrong thing).
+_jqless_path() {
+  local d b src; d="$(mktemp -d -p "$TMP")"
+  for b in bash sh env grep sed awk tr cat cut head tail sort uniq wc date \
+           mkdir rm ln ls mktemp dirname basename realpath xargs flock git printf; do
+    src="$(env -i PATH=/usr/bin:/bin bash --noprofile --norc -c 'command -v "$1"' _ "$b" 2>/dev/null)" || continue
+    [[ "$src" == /* ]] || continue
+    ln -sf "$src" "$d/$b" 2>/dev/null
+  done
+  PATH="$d" command -v jq >/dev/null 2>&1 && { echo ""; return; }
+  echo "$d"
+}
+_SHIM="$(_jqless_path)"
+if [[ -z "$_SHIM" ]]; then
+  fail "[fixture] jq still reachable on the jq-less shim — the jq_missing cases would be vacuous"
+else
+  # .claude ASKS (the printf envelope is the only surviving channel there).
+  v="$(envelope_verdict "$CLAUDE_GUARD" "$NONSTRING_PAYLOAD_EARLY" "PATH=$_SHIM")"
+  [[ "$v" == "ask|0" ]] && pass "[.claude] jq missing → ask, exit 0 → $v" \
+                        || fail "[.claude] jq missing: want ask|0, got $v"
+  # .openhands fails OPEN on a benign command — denying would block its own repair.
+  v="$(envelope_verdict "$OPENHANDS_GUARD" '{"working_dir":"/tmp","tool_input":{"command":"echo hi"}}' "PATH=$_SHIM")"
+  [[ "$v" == "none|0" ]] && pass "[.openhands] jq missing + benign → fails open, exit 0 → $v" \
+                         || fail "[.openhands] jq missing + benign: want none|0, got $v"
+  # …but NOT unconditionally: a protected pattern in the raw document still denies.
+  v="$(envelope_verdict "$OPENHANDS_GUARD" '{"working_dir":"/tmp","tool_input":{"command":"rm -rf $HOME"}}' "PATH=$_SHIM")"
+  [[ "$v" == "deny|2" ]] && pass "[.openhands] jq missing + protected pattern → deny, exit 2 → $v" \
+                         || fail "[.openhands] jq missing + protected pattern: want deny|2, got $v"
+  # …and the repair path stays open, which is the whole basis of the fail-open.
+  v="$(envelope_verdict "$OPENHANDS_GUARD" '{"working_dir":"/tmp","tool_input":{"command":"apt-get install -y jq"}}' "PATH=$_SHIM")"
+  [[ "$v" == "none|0" ]] && pass "[.openhands] jq missing + the repair command itself → allowed → $v" \
+                         || fail "[.openhands] jq missing + repair command: want none|0, got $v"
 fi
 
 # Non-string: the original ADR-156 signature. Both must refuse to coerce; they
 # refuse with different verbs.
 NONSTRING_PAYLOAD='{"working_dir":"/tmp","cwd":"/tmp","tool_input":{"command":["git","stash"]}}'
-v="$(envelope_verdict "$CLAUDE_GUARD" "$NONSTRING_PAYLOAD")"
-[[ "$v" == "ask" ]] && pass "[.claude] non-string command ASKS" \
-                    || fail "[.claude] non-string command: want ask, got $v"
-v="$(envelope_verdict "$OPENHANDS_GUARD" "$NONSTRING_PAYLOAD")"
-[[ "$v" == "deny" ]] && pass "[.openhands] non-string command DENIES" \
-                     || fail "[.openhands] non-string command: want deny, got $v"
+want_env "[.claude] non-string command ASKS, exit 0" "ask|0" "$CLAUDE_GUARD" "$NONSTRING_PAYLOAD"
+want_env "[.openhands] non-string command DENIES, exit 2" "deny|2" "$OPENHANDS_GUARD" "$NONSTRING_PAYLOAD"
 
 # Absent / null tool_input. This is the case NEITHER of the two divergence
 # classes above would catch, and the mirror got it wrong in the AVAILABILITY
@@ -269,14 +365,12 @@ v="$(envelope_verdict "$OPENHANDS_GUARD" "$NONSTRING_PAYLOAD")"
 # recovery path, while .claude parsed the same payloads cleanly.
 for payload in '{"working_dir":"/tmp","cwd":"/tmp"}' '{"working_dir":"/tmp","cwd":"/tmp","tool_input":null}'; do
   label="$([[ "$payload" == *tool_input* ]] && echo "null" || echo "absent")"
-  v="$(envelope_verdict "$CLAUDE_GUARD" "$payload")"
-  [[ "$v" != "deny" ]] && pass "[.claude] $label tool_input is not denied ($v)" \
-                       || fail "[.claude] $label tool_input was DENIED — absence is legitimate"
-  v="$(envelope_verdict "$OPENHANDS_GUARD" "$payload")"
-  [[ "$v" != "deny" ]] && pass "[.openhands] $label tool_input is not denied ($v)" \
-                       || fail "[.openhands] $label tool_input was DENIED — the unsatisfiable \$t == null conjunct is back"
+  want_env "[.claude] $label tool_input parses cleanly" "none|0" "$CLAUDE_GUARD" "$payload"
+  for h in "$OPENHANDS_GUARD" "$OH_PMR" "$OH_WWG"; do
+    want_env "[.openhands $(basename "$h" .sh)] $label tool_input parses cleanly" "none|0" "$h" "$payload"
+  done
 done
 
 echo ""
-echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
+echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed, $SKIPPED skipped ==="
 [[ "$FAIL" -eq 0 ]] || exit 1

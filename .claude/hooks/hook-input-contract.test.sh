@@ -27,11 +27,16 @@ FAIL=0
 TOTAL=0
 SKIPPED=0
 
-# The summary line is the only thing an aggregate runner reads. Printing it on
-# EVERY exit path — including this precondition — is what stops a jq-less
-# machine from emitting no line at all while still exiting 0. A silent exit 0
-# and a "50/50 pass, 0 skipped" are indistinguishable to a caller that only
-# greps the summary, which is the accounting hole #7190 item 5 names.
+# Printed on EVERY exit path, including the jq precondition below, so a jq-less
+# machine cannot exit 0 emitting no line at all.
+#
+# It is for a HUMAN reading the log. An earlier version of this comment said the
+# summary "is the only thing an aggregate runner reads", which is false and was
+# load-bearing for the wrong reason: `run_suite` in scripts/test-all.sh branches
+# on the EXIT CODE alone and never parses this line. So the aggregate-level half
+# of #7190 item 5 is NOT closed by this change — a skipped suite still records
+# `ok` upstream. What is closed is legibility: the skip is now counted and
+# visible instead of silently shrinking the denominator.
 summary() { echo; echo "=== hook-input-contract: $PASS/$TOTAL pass, $SKIPPED skipped ==="; }
 
 # jq absent → SKIP, deliberately retained. #7190 item 5 asked us to consider a
@@ -57,6 +62,15 @@ command -v jq >/dev/null 2>&1 || {
 HIC_TMPROOT="$(mktemp -d -t hicroot.XXXXXXXX)"
 trap 'rm -rf "$HIC_TMPROOT"' EXIT
 
+# The trap above did NOT own everything this suite allocates, so the claim
+# directly above it was false. Every fault-path hook invocation writes a
+# PID-named log through `headless_or_stderr` into a session-state root that
+# defaults to a machine-global directory no trap owns: measured 81 leaked files
+# per run on this branch against 40 on main, i.e. this suite doubled a
+# pre-existing leak. Redirecting the root brings them under the trap and makes
+# the suite hermetic, which is also what any future parallelisation would need.
+export SOLEUR_SESSION_STATE_ROOT="$HIC_TMPROOT/session-state"
+
 ok()  { PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1)); echo "PASS: $1"; }
 bad() { FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1)); echo "FAIL: $1"; shift; local l; for l in "$@"; do echo "  $l"; done; }
 want(){ if [[ "$2" == "$3" ]]; then ok "$1 → $3"; else bad "$1" "want: $2" "got:  $3"; fi; }
@@ -72,6 +86,12 @@ skip(){ SKIPPED=$((SKIPPED + 1)); echo "SKIP: $1"; }
 # checkout (a file) are then both comparable across the same run, instead of the
 # assertion existing in one environment and silently vanishing in the other.
 _ledger_bytes() { [[ -f "$1" ]] && wc -c < "$1" | tr -d '[:space:]' || echo 0; }
+# Count of hook_self_fault rows. Robust to unrelated concurrent appenders in a
+# way a byte-size comparison is not.
+_fault_rows() {
+  [[ -f "$1" ]] || { echo 0; return; }
+  jq -r 'select(.kind=="hook_self_fault") | .kind' < "$1" 2>/dev/null | grep -c . || echo 0
+}
 
 EVAL10=(
   cla-signed-author-gate context-reviewed-gate follow-through-directive-gate
@@ -88,11 +108,58 @@ SIBLING8=(
 WRITE2=( worktree-write-guard iac-plan-write-guard )
 INSCOPE20=( "${EVAL10[@]}" "${SIBLING8[@]}" "${WRITE2[@]}" )
 
-# The designated responder, as a NAMED constant rather than the literal
-# `guardrails` scattered across five assertions. Mirrors HOOK_INPUT_RESPONDER in
-# lib/hook-input.sh. Single source of truth here so the responder-set change
-# tracked by #7173 has exactly one place to touch in this file.
+# The designated responder as a named constant. NOT a single source of truth —
+# an earlier version of this comment claimed that and it is measurably false:
+# ~24 hardcoded `guardrails` literals remain in this file, including
+# a8_envelope_pairing's own `responders=(guardrails)` array and A9's jq
+# `index("guardrails.sh")`. Nothing pins this against lib/hook-input.sh's
+# HOOK_INPUT_RESPONDER either. It is a convenience for the assertions that use
+# it; the responder-set change tracked by #7219 will still need a sweep.
 HOOK_INPUT_RESPONDER_NAME="guardrails"
+
+# A18 — INSCOPE20 IS A CLAIM ABOUT THE FILESYSTEM, SO CHECK IT AGAINST THE
+# FILESYSTEM.
+#
+# Eleven assertions iterate this array, and every one of their messages prints
+# its length ("all 20 in-scope hooks …"). Nothing derived it. Measured: setting
+# INSCOPE20=( guardrails ) left the suite at 62/62 with an IDENTICAL pass count
+# and the messages simply reading "all 1 hooks" — so the cardinality was a
+# printf argument, not a measured quantity.
+#
+# The live regression that opens is the one this whole file exists to stop: a
+# NEW hook that sources the helper with `|| true` — defect 2 verbatim — is
+# invisible to A3, A13 and A16 because it is not in the literal. A1 already
+# quantifies dynamically over the directory; these did not.
+#
+# So: derive the set that ACTUALLY sources the helper and assert the difference
+# is empty in both directions. A new in-scope hook now fails this until it is
+# listed, and a listed hook that stops sourcing the helper fails it too.
+a18_inscope_closure() {
+  local discovered f base
+  discovered="$(mktemp -p "$HIC_TMPROOT")"
+  while IFS= read -r f; do
+    base="$(basename "$f" .sh)"
+    printf '%s\n' "$base"
+  done < <(grep -rlE '^[[:space:]]*(source|\.)[[:space:]].*lib/hook-input\.sh' \
+             "$SCRIPT_DIR"/*.sh 2>/dev/null | grep -v '\.test\.sh$' || true) \
+    | sort -u > "$discovered"
+
+  local listed; listed="$(mktemp -p "$HIC_TMPROOT")"
+  printf '%s\n' "${INSCOPE20[@]}" | sort -u > "$listed"
+
+  # Non-vacuity: an empty discovery would make both differences trivially empty.
+  local n; n="$(grep -c . "$discovered" || true)"
+  if [[ "${n:-0}" -lt 1 ]]; then
+    bad "A18 non-vacuity control failed: zero hooks discovered as sourcing the helper" \
+        "the closure check below would pass having compared nothing"
+    return
+  fi
+  ok "A18 non-vacuity control: $n hook(s) discovered sourcing lib/hook-input.sh"
+  want "A18 every hook that sources the helper is in INSCOPE20" "" \
+    "$(comm -23 "$discovered" "$listed" | tr '\n' ' ' | sed 's/ $//')"
+  want "A18 every INSCOPE20 member still sources the helper" "" \
+    "$(comm -13 "$discovered" "$listed" | tr '\n' ' ' | sed 's/ $//')"
+}
 
 # Run a hook from a NON-GIT temp CWD so the orthogonal, branch-dependent
 # block-commit-on-main gate resolves an empty branch and no-ops. Without this
@@ -111,21 +178,27 @@ decision_for() { # <hook> <payload> [extra-env...]
 
 # rc_for — the SIBLING of decision_for that reports the hook's EXIT CODE.
 #
-# Deliberately a second function rather than a `bad` call inside decision_for.
-# decision_for is invoked exclusively inside `$( )` at ~25 call sites, so a
-# FAIL=$((FAIL+1)) there runs in a SUBSHELL and is discarded — measured
-# `FAIL_after=0`. Written to stderr instead, decision_for returns a clean
-# decision, the outer `want` passes, and the suite exits 0 having detected a
-# non-zero rc and thrown it away. That is precisely the A9 dead-gate class this
-# suite was repaired for, one layer down. The rc is therefore returned THROUGH
-# STDOUT and compared by `want` in the CALLER's shell, where the increment
-# survives.
-rc_for() { # <hook> <payload> [extra-env...]
+# It is a SECOND function rather than a `bad` call inside decision_for, because
+# decision_for is invoked exclusively inside `$( )` at ~25 sites: a
+# FAIL=$((FAIL+1)) there runs in a SUBSHELL and is discarded (measured
+# `FAIL_after=0`), so the suite would exit 0 having detected a non-zero rc and
+# thrown it away — the A9 dead-gate class, one layer down.
+#
+# Correction, from review: that argument justifies not touching decision_for. It
+# does NOT justify returning the rc through stdout, and an earlier version of
+# this comment claimed it did. rc_for makes no ok/bad/want call of its own, so
+# `rc_for h p; rc=$?` would work identically. The stdout form is kept only for
+# symmetry with decision_for at the call sites; nothing depends on it.
+rc_for() { # <hook-basename | /abs/path.sh> <payload> [extra-env...]
   local hook="$1" payload="$2"; shift 2
-  local tmp rc=0
+  local tmp rc=0 target
+  # An absolute path is used as-is. That is what lets the control below point at
+  # a throwaway probe WITHOUT dropping a stray .sh into .claude/hooks/, which
+  # A1 scans by directory and would report as an offender.
+  if [[ "$hook" == /* ]]; then target="$hook"; else target="$SCRIPT_DIR/$hook.sh"; fi
   tmp="$(mktemp -d -p "$HIC_TMPROOT")"
   ( cd "$tmp" && printf '%s' "$payload" \
-      | env INCIDENTS_REPO_ROOT="$tmp" "$@" bash "$SCRIPT_DIR/$hook.sh" >/dev/null 2>&1 )
+      | env INCIDENTS_REPO_ROOT="$tmp" "$@" bash "$target" >/dev/null 2>&1 )
   rc=$?
   rm -rf "$tmp"
   echo "$rc"
@@ -145,9 +218,19 @@ make_jqless_path() {
            mkdir rm ln ls mktemp dirname basename realpath xargs flock \
            git perl python3 touch chmod find printf; do
     src="$(command -v "$b" 2>/dev/null)" || continue
-    [[ -n "$src" ]] && ln -sf "$src" "$shim/$b" 2>/dev/null
+    # `command -v` returns a BARE NAME for a builtin, a function or an alias, not
+    # a path — `printf` is the one in this list, and in some shells `grep` is a
+    # wrapper function. `ln -sf printf "$shim/printf"` then creates a DANGLING
+    # SELF-REFERENTIAL symlink, which falsifies this helper's own claim to keep
+    # "everything else a hook needs" and silently broke the fixture when the
+    # missing binary was one the hook actually calls. Absolute paths only.
+    [[ "$src" == /* ]] || continue
+    ln -sf "$src" "$shim/$b" 2>/dev/null
   done
-  [[ -e "$shim/jq" ]] && rm -f "$shim/jq"
+  # Unconditional: `-e` is FALSE for a dangling symlink, so the guarded form
+  # could leave a `jq` entry in place that the precondition below would then
+  # have to catch.
+  rm -f "$shim/jq"
   if PATH="$shim" command -v jq >/dev/null 2>&1; then echo ""; return; fi
   echo "$shim"
 }
@@ -160,6 +243,11 @@ HAPPY_PAYLOAD="$(jq -nc '{tool_name:"Bash", tool_input:{command:"echo hello"}, c
 # the ARRAY_STASH `nonstring` class so A16 and the Phase-2 loop cover disjoint
 # ground rather than duplicating one class across 40 invocations.
 MALFORMED_PAYLOAD='garbage {{'
+# A MIXED payload: a legitimate STRING command (which therefore survives into the
+# slots and could be leaked) plus an unrelated NON-STRING field to trip the type
+# assertion. ARRAY_STASH cannot serve this purpose — its only notable field is
+# the non-string one, which the program emits empty, so nothing exists to leak.
+MIXED_LEAK_PAYLOAD="$(jq -nc '{tool_name:"Bash", tool_input:{command:"git stash --include-untracked SENTINELLEAK"}, cwd:["/secret/path"]}')"
 
 # ===========================================================================
 # A1 — idiom ban: ANY eval, not one spelling.
@@ -211,7 +299,7 @@ a2_guard_still_armed() {
 # A bare absence assertion passes if the payload was malformed, the path wrong,
 # or stdin never arrived. The control pins a deliberately vulnerable stub
 # carrying the ORIGINAL idiom and proves the harness can observe a marker.
-a3_rce_regression() {
+a3_a12_a14_fault_path_properties() {
   local run stub marker hook payload
   local pwned=() unrecorded=() nonzero=() noisy=() strays=() entry
 
@@ -474,10 +562,35 @@ EOF
     want "A6 kind is hook_self_fault" "hook_self_fault" \
       "$(jq -r '.kind' < "$jsonl" | head -1)"
     # A7 — no payload content anywhere in the row.
-    local snip leaked=no
-    snip="$(jq -r '.command_snippet' < "$jsonl" | head -1)"
-    [[ "$snip" == *stash* || "$snip" == *git* ]] && leaked=yes
-    want "A7 no payload content in command_snippet" "no" "$leaked"
+    # A7 — no payload content in telemetry.
+    #
+    # THE FIXTURE USED TO MAKE THIS UNFALSIFIABLE. It ran on ARRAY_STASH, whose
+    # only interesting field is the non-string one — and the jq program emits
+    # bad-path values EMPTY by construction, so there was no payload content in
+    # existence for the assertion to find. Measured: a mutation putting a real
+    # field value into HOOK_INPUT_REASON landed `git stash --include-untracked`
+    # in the ledger on disk and A7 still reported PASS.
+    #
+    # Fixed in two ways. (1) A MIXED payload: the command is a legitimate STRING
+    # that survives into the slots, and an unrelated field is the non-string one,
+    # so a leak has something to leak. (2) Assert over the WHOLE ROW, not just
+    # `.command_snippet` — a leak into any other field, present or future, was
+    # unguarded.
+    local mixed_root mixed_jsonl row leaked=no
+    mixed_root="$(mktemp -d -p "$HIC_TMPROOT")"
+    ( cd "$mixed_root" && printf '%s' "$MIXED_LEAK_PAYLOAD" \
+        | INCIDENTS_REPO_ROOT="$mixed_root" bash "$SCRIPT_DIR/guardrails.sh" >/dev/null 2>&1 )
+    mixed_jsonl="$mixed_root/.claude/.rule-incidents.jsonl"
+    if [[ -f "$mixed_jsonl" ]]; then
+      row="$(jq -c '.' < "$mixed_jsonl" | head -1)"
+      # The canary is the command text the mixed payload carries.
+      [[ "$row" == *include-untracked* || "$row" == *SENTINELLEAK* ]] && leaked=yes
+      want "A7 no payload content anywhere in the incident row (whole row, mixed payload)" "no" "$leaked"
+    else
+      bad "A7 FIXTURE BROKEN — the mixed payload wrote no incident row" \
+          "the leak assertion would be vacuous"
+    fi
+    rm -rf "$mixed_root"
   else
     bad "A6 no incident row written — the disarm is silent (defect 2)"
   fi
@@ -504,12 +617,11 @@ EOF
   # Deleting the INCIDENTS_REPO_ROOT branch from _incidents_repo_root makes both
   # halves RED, and both run on every checkout.
   local wt_ledger="$REPO_ROOT/.claude/.rule-incidents.jsonl"
-  local sb_before sb_after wt_before wt_after
+  local sb_before sb_after wt_fault_rows
   sb_before="$(_ledger_bytes "$jsonl")"
-  wt_before="$(_ledger_bytes "$wt_ledger")"
+  wt_fault_rows="$(_fault_rows "$wt_ledger")"
   ( cd "$root" && printf '%s' "$ARRAY_STASH" | INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT_DIR/guardrails.sh" >/dev/null 2>&1 )
   sb_after="$(_ledger_bytes "$jsonl")"
-  wt_after="$(_ledger_bytes "$wt_ledger")"
 
   if (( sb_after > sb_before )); then
     ok "A6 INCIDENTS_REPO_ROOT honoured: the sandbox ledger grew ($sb_before → $sb_after bytes)"
@@ -517,7 +629,16 @@ EOF
     bad "A6 the sandbox ledger did NOT grow ($sb_before → $sb_after bytes)" \
         "the row went somewhere else, or nowhere — the redirect is not being honoured"
   fi
-  want "A6 …and the worktree ledger is byte-identical (absent counts as 0)" "$wt_before" "$wt_after"
+  # NOT byte-identity. The worktree ledger is SHARED MUTABLE STATE — ~18
+  # PreToolUse hooks append to it per tool call on a live machine — so a
+  # before/after size comparison is the one non-hermetic assertion in this file
+  # and it flaked (reproduced deterministically with a concurrent appender).
+  # What the assertion is actually about is narrower and robust to unrelated
+  # writers: THIS invocation must not have added a hook_self_fault row here.
+  local wt_faults_before="$wt_fault_rows" wt_faults_after
+  wt_faults_after="$(_fault_rows "$wt_ledger")"
+  want "A6 …and no hook_self_fault row reached the worktree ledger" \
+    "$wt_faults_before" "$wt_faults_after"
 
   # --- …and all the way to the surface a human reads -----------------------
   # The `[[ -x $agg || -f $agg ]]` gate is removed. The aggregator is a
@@ -527,7 +648,8 @@ EOF
   local agg="$REPO_ROOT/scripts/rule-metrics-aggregate.sh"
   if [[ ! -f "$agg" ]]; then
     bad "A6 rule-metrics-aggregate.sh is MISSING at scripts/rule-metrics-aggregate.sh" \
-        "it is a committed repo file — this is a broken checkout, not a skippable condition"
+        "it is a committed repo file — this is a broken checkout, not a skippable condition" \
+        "restore it: git checkout -- scripts/rule-metrics-aggregate.sh"
   else
     out="$(INCIDENTS_REPO_ROOT="$root" bash "$agg" --dry-run 2>/dev/null || true)"
     local n; n="$(printf '%s' "$out" | jq -r '.summary.hook_input_fault_count // 0' 2>/dev/null || echo 0)"
@@ -740,6 +862,16 @@ a11_mechanism_ban() {
 a16_exit_codes() {
   local hook shim rc offenders=()
 
+  # POSITIVE CONTROL for the rc channel itself. Every assertion below reads
+  # rc_for's output; stubbing rc_for to `echo 0` left the suite fully green, so
+  # nothing proved it can observe a non-zero rc at all. Same doctrine as A3's
+  # vulnerable stub and A9's non-vacuity control — the fixture must be shown
+  # capable of detecting the thing it is asked about.
+  local probe="$HIC_TMPROOT/rc-probe.sh"
+  printf '#!/usr/bin/env bash\nexit 2\n' > "$probe"
+  want "A16 control: rc_for observes a NON-zero rc" "2" \
+    "$(rc_for "$probe" '{}')"
+
   # --- class 1: unparseable (jq rejects the document; n == 0) ---------------
   offenders=()
   for hook in "${INSCOPE20[@]}"; do
@@ -837,9 +969,19 @@ a13_source_hygiene() {
     # never mention the input contract, so for them a grep for the word
     # `source` was the only thing standing between the fix and silent
     # regression. Assert the three call-site verbs too.
-    local v
+    # COMMENT LINES ARE STRIPPED FIRST. This grepped raw file text, and every
+    # in-scope hook names these verbs in prose — measured raw=4 vs code=2 for
+    # `hook_parse_input`. Replacing the real gate with `if false; then` while
+    # leaving the block textually present therefore left A13 PASSING. (A3's
+    # reachability property caught that mutation behaviourally, but A13's own
+    # comment claims to be the last line of defence for the twelve hooks with no
+    # sibling suite, and that claim was false.) Same class as A1 and A11, which
+    # already strip.
+    local v stripped_f
+    stripped_f="$(sed 's/^[[:space:]]*#.*$//' "$f")"
     for v in hook_parse_input hook_input_report hook_input_should_ask; do
-      [[ "$(grep -cE "(^|[^A-Za-z_])${v}\b" "$f")" -ge 1 ]] || missing_call+=("$hook:$v")
+      [[ "$(printf '%s\n' "$stripped_f" | grep -cE "(^|[^A-Za-z_])${v}\b" || true)" -ge 1 ]] \
+        || missing_call+=("$hook:$v")
     done
   done
   if (( ${#missing[@]} == 0 )); then
@@ -951,33 +1093,48 @@ a17_value_fidelity() {
   # Built with jq so the JSON escaping is not hand-rolled. The expectations
   # inside the probe use $'...' ANSI-C quoting rather than $( ), because $( )
   # strips the very trailing newline this assertion exists to observe.
-  payload="$(jq -nc '{tool_name:"Bash",
+  # All FIVE slots. Covering only 1 and 5 left slot 2 (HOOK_TOOL_NAME) unpinned,
+  # and that one is a live disarm: seven hooks dispatch on it, so lowercasing it
+  # turns `[[ "$TOOL" == "Bash" ]] || exit 0` into an unconditional exit —
+  # measured, doppler-secrets-delete-redirect went from deny to silent with the
+  # whole suite still green.
+  payload="$(jq -nc '{tool_name:"  Ba\nsh  ",
                       tool_input:{command:"  git \n stash  ", file_path:"/tmp/f\n"},
-                      cwd:"/w", session_id:"s"}')"
+                      cwd:"  /w\nx  ", session_id:"  s\ns  "}')"
 
   verdict="$(bash -c '
       source "'"$helper"'"
       hook_parse_input "$1" || { printf "PARSE_FAIL"; exit 0; }
       exp_cmd=$'"'"'  git \n stash  '"'"'
       exp_fp=$'"'"'/tmp/f\n'"'"'
+      exp_tn=$'"'"'  Ba\nsh  '"'"'
+      exp_cwd=$'"'"'  /w\nx  '"'"'
+      exp_sid=$'"'"'  s\ns  '"'"'
       v=0
-      [[ "$HOOK_CMD"       == "$exp_cmd" ]] || v=$((v+1))
-      (( ${#HOOK_CMD}      == ${#exp_cmd} )) || v=$((v+2))
-      [[ "$HOOK_FILE_PATH" == "$exp_fp"  ]] || v=$((v+4))
+      [[ "$HOOK_CMD"        == "$exp_cmd" ]] || v=$((v+1))
+      (( ${#HOOK_CMD}       == ${#exp_cmd} )) || v=$((v+2))
+      [[ "$HOOK_FILE_PATH"  == "$exp_fp"  ]] || v=$((v+4))
       (( ${#HOOK_FILE_PATH} == ${#exp_fp} )) || v=$((v+8))
+      [[ "$HOOK_TOOL_NAME"  == "$exp_tn"  ]] || v=$((v+16))
+      (( ${#HOOK_TOOL_NAME} == ${#exp_tn} )) || v=$((v+32))
+      [[ "$HOOK_CWD"        == "$exp_cwd" ]] || v=$((v+64))
+      (( ${#HOOK_CWD}       == ${#exp_cwd} )) || v=$((v+128))
+      [[ "$HOOK_SESSION_ID" == "$exp_sid" ]] || v=$((v+256))
+      (( ${#HOOK_SESSION_ID} == ${#exp_sid} )) || v=$((v+512))
       printf "%s" "$v"' _ "$payload" 2>/dev/null)"
 
   # Content AND length are both compared. A trailing-newline loss is invisible
   # to a content-only `[[ "$a" == "$b" ]]` evaluated inside $( ), which is how
   # this class survives a test that looks like it checks it.
-  # Verdict bits: 1 cmd content · 2 cmd length · 4 file_path content · 8 file_path length.
+  # Verdict bits: 1/2 cmd · 4/8 file_path · 16/32 tool_name · 64/128 cwd · 256/512 session_id
+  # (content / length for each).
   want "A17 byte-exact round-trip of leading/trailing spaces, embedded and TRAILING newline" \
     "0" "${verdict:-<no-output>}"
 }
 
 a1_idiom_ban
 a2_guard_still_armed
-a3_rce_regression
+a3_a12_a14_fault_path_properties
 a4_cheap_variants
 a5_jq_unusable
 a6_loud_disarm_end_to_end
@@ -989,6 +1146,27 @@ a13_source_hygiene
 a15_shell_state_hygiene
 a16_exit_codes
 a17_value_fidelity
+a18_inscope_closure
 
 summary
+
+# MIN_ASSERTIONS — the floor under everything above.
+#
+# Commenting out the dispatch lines above yields rc 0, PASS=0, FAIL=0 and a
+# printed "0/0 pass" summary. test-all.sh registers this file by glob and
+# run_suite branches on the EXIT CODE alone, so CI was green with zero
+# assertions executed — and every "mutation-proven" claim in the PR body is
+# conditional on them running.
+#
+# A FLOOR, not equality: the count is developer-incremented, so `-eq` would turn
+# every legitimately-added assertion into a spurious failure. Derived from a
+# green run, deliberately a little below it so ordinary growth does not trip it.
+# Mirrors the MIN_SUITES idiom in .github/scripts/test/run-all.sh, which exists
+# for exactly this reason.
+MIN_ASSERTIONS=60
+if (( TOTAL < MIN_ASSERTIONS )); then
+  echo "FAIL: only $TOTAL assertions ran (floor $MIN_ASSERTIONS) — the suite reported success having asserted almost nothing" >&2
+  exit 1
+fi
+
 [[ "$FAIL" -eq 0 ]] || exit 1
