@@ -379,23 +379,55 @@ a8_envelope_pairing() {
 # `Write|Edit` and `Write|Edit|MultiEdit|NotebookEdit` are different strings
 # that both fire on a Write.
 a9_designated_responder() {
-  local settings="$REPO_ROOT/.claude/settings.json"
+  local settings="$SCRIPT_DIR/../settings.json"
   if [[ ! -f "$settings" ]]; then bad "A9 .claude/settings.json not found"; return; fi
-  local uncovered
-  uncovered="$(jq -r --args '
-    [ .hooks.PreToolUse[]
-      | . as $e
-      | ($e.matcher // "") as $m
-      | ($e.hooks[].command | sub(".*/";"")) as $c
-      | select($ARGS.positional | index(($c | sub("\\.sh$";""))))
-      | ($m | split("|"))[]
-    ] | unique as $needed
-    | [ .hooks.PreToolUse[]
-        | select([.hooks[].command | sub(".*/";"")] | index("guardrails.sh"))
-        | (.matcher // "" | split("|"))[]
-      ] | unique as $covered
-    | ($needed - $covered) | join(",")
-  ' "$settings" "${INSCOPE20[@]}" 2>/dev/null || echo "<jq-fail>")"
+
+  # The first version of this assertion COULD NOT FAIL, and it guarded the
+  # invariant the whole designated-responder design rests on.
+  #
+  # It passed the settings path as `jq -r --args '<prog>' "$settings" "${INSCOPE20[@]}"`.
+  # With `--args`, EVERY remaining argument becomes a positional string — the
+  # filename included — so jq never opened the file, read empty stdin, emitted
+  # nothing and exited 0. `uncovered` was always "" and `want "" ""` always
+  # passed. Measured: deleting `.hooks.PreToolUse` outright, and removing
+  # guardrails.sh from the Bash matcher (leaving 17 migrated hooks with NO
+  # responder), both left the suite fully green.
+  #
+  # That is the same defect class this file exists to prevent — a check that
+  # reports success having asserted nothing — so it gets the same treatment the
+  # rest of the suite gets: feed the document on stdin, bind the hook list with
+  # --argjson, and prove non-vacuity before trusting the result.
+  local in20 out needed uncovered
+  in20="$(printf '%s\n' "${INSCOPE20[@]}" | jq -Rsc 'split("\n") - [""]')"
+  out="$(jq -r --argjson in20 "$in20" '
+    . as $d
+    | ([ $d.hooks.PreToolUse[] | . as $e
+         | ($e.hooks[].command | sub(".*/";"") | sub("\\.sh$";"")) as $c
+         | select($in20 | index($c))
+         | (($e.matcher // "") | split("|"))[] ] | unique) as $needed
+    | ([ $d.hooks.PreToolUse[]
+         | select([.hooks[].command | sub(".*/";"")] | index("guardrails.sh"))
+         | ((.matcher // "") | split("|"))[] ] | unique) as $covered
+    | "\($needed | length)\t\(($needed - $covered) | join(","))"
+  ' < "$settings" 2>/dev/null)" || out=""
+
+  if [[ -z "$out" ]]; then
+    # jq errored (malformed settings, PreToolUse absent). NOT a pass — the
+    # old form turned exactly this into silence.
+    bad "A9 could not evaluate .claude/settings.json — refusing to read a jq failure as coverage"
+    return
+  fi
+  needed="${out%%$'\t'*}"
+  uncovered="${out#*$'\t'}"
+
+  # Positive control: if no migrated hook is registered at all, the difference
+  # is trivially empty and the assertion proves nothing.
+  if [[ "${needed:-0}" -lt 1 ]]; then
+    bad "A9 non-vacuity control failed: zero matchers resolved for the ${#INSCOPE20[@]} in-scope hooks" \
+        "settings.json registers none of them — the coverage check would pass vacuously"
+    return
+  fi
+  ok "A9 non-vacuity control: $needed matcher(s) resolved for the in-scope hooks"
   want "A9 every tool triggering a migrated hook also triggers guardrails.sh" "" "$uncovered"
 }
 
@@ -450,7 +482,7 @@ a11_mechanism_ban() {
 # A13 — per-file source hygiene across all 20 in-scope hooks.
 # ===========================================================================
 a13_source_hygiene() {
-  local hook f n bad_src=() missing=()
+  local hook f n bad_src=() missing=() missing_call=()
   for hook in "${INSCOPE20[@]}"; do
     f="$SCRIPT_DIR/$hook.sh"
     n="$(grep -cE 'source .*lib/hook-input\.sh' "$f" || true)"
@@ -458,6 +490,18 @@ a13_source_hygiene() {
     # Fail-soft source is defect 2 one line above where every test points.
     grep -E 'source .*lib/hook-input\.sh' "$f" | grep -qE '\|\|[[:space:]]*(true|:)|2>/dev/null' \
       && bad_src+=("$hook")
+    # The `source` line alone is NOT the contract. A mutation battery showed
+    # that DELETING the entire `if ! hook_parse_input … fi` block from a hook
+    # left this suite fully green while the hook exited 0, wrote no incident
+    # row, and ran every guard it owns against an empty command — defect 2
+    # restored verbatim. Twelve of these twenty hooks have sibling suites that
+    # never mention the input contract, so for them a grep for the word
+    # `source` was the only thing standing between the fix and silent
+    # regression. Assert the three call-site verbs too.
+    local v
+    for v in hook_parse_input hook_input_report hook_input_should_ask; do
+      [[ "$(grep -cE "(^|[^A-Za-z_])${v}\b" "$f")" -ge 1 ]] || missing_call+=("$hook:$v")
+    done
   done
   if (( ${#missing[@]} == 0 )); then
     ok "A13 all ${#INSCOPE20[@]} in-scope hooks source the helper exactly once"
@@ -468,6 +512,11 @@ a13_source_hygiene() {
     ok "A13 every helper source is FAIL-HARD (no '|| true', '|| :', '2>/dev/null')"
   else
     bad "A13 fail-soft source found — leaves hook_parse_input undefined" "${bad_src[@]}"
+  fi
+  if (( ${#missing_call[@]} == 0 )); then
+    ok "A13 every in-scope hook invokes parse + report + should_ask at its call site"
+  else
+    bad "A13 hook(s) source the helper but never call it — the parse gate is absent" "${missing_call[@]}"
   fi
 }
 
