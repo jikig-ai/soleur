@@ -1381,26 +1381,53 @@ if [[ -r "$_CAP" ]]; then
   # `stage` tag is the only positional fact in a FAIL row.
   _emit_src="${DIR}/cloud-init-git-data.yml"
   _boot_src="${DIR}/git-data-bootstrap.sh"
+  # ANCHORED ON THE EMISSION SITE, not on a bare-token scan of two whole files. The previous
+  # form `grep -cE "\"${_k}\"|${_k}="` was satisfied by shell locals and prose: renaming the
+  # Better Stack `detail` field to `diag` — which makes JSONExtractString(raw,'detail')
+  # permanently empty — still matched 3x via `_detail=` in luks_err and via `"detail"` in the
+  # SENTRY body, a channel HOST_SQL never reads. `rc` matched 16x, mostly `rc=$?` locals and
+  # a comment reading "measured: dash rc=2". The arm whose stated purpose is "a static grep
+  # proves the column is SELECTED, never that it is POPULATED" reproduced exactly that.
+  #
+  # A key is PRODUCED iff it appears either:
+  #   (a) as a field of the BETTER STACK body — the `--data-raw` line, which is what
+  #       betterstack-query.sh reads (the Sentry body nests under "tags" and is NOT queried), or
+  #   (b) as a k=v TAG ARGUMENT at a git-data-emit call site, i.e. the literal `"<key>=`.
+  # The body is a shell-escaped JSON literal (\"detail\":\"$DETAIL\"), so strip backslashes
+  # before matching — otherwise every field reads as unproduced and 20d fails CLOSED on a
+  # correct emitter, which is the opposite error but still a broken gate.
+  _bs_body="$(grep -F -- '--data-raw' "$_emit_src" 2>/dev/null | tr -d '\\' || true)"
+  if [[ -z "$_bs_body" ]]; then
+    fail "20d could not locate the emitter's --data-raw line in ${_emit_src}" \
+         "The producer scan has no anchor; treating that as 'all keys produced' would be the fail-open this arm exists to close."
+  else
   _unproduced=""
   while IFS= read -r _k; do
     [[ -n "$_k" ]] || continue
-    _n=$(cat "$_emit_src" "$_boot_src" 2>/dev/null | grep -cE "\"${_k}\"|${_k}=" || true)
-    [[ "${_n:-0}" -ge 1 ]] || _unproduced="${_unproduced} ${_k}"
+    _in_body=$(printf '%s\n' "$_bs_body" | grep -cF -- "\"${_k}\":" || true)
+    _in_tags=$(cat "$_emit_src" "$_boot_src" 2>/dev/null | grep -cF -- "\"${_k}=" || true)
+    [[ "${_in_body:-0}" -ge 1 || "${_in_tags:-0}" -ge 1 ]] || _unproduced="${_unproduced} ${_k}"
   done < <(printf '%s' "$_hostsql" | sed -nE "s/.*JSONExtractString\(raw,'([a-z_]+)'\).*/\1/p" | sort -u)
   if [[ -z "$_unproduced" ]]; then
-    pass "20d every HOST_SQL key is produced by the emitter or a caller"
+    pass "20d every HOST_SQL key is produced by the emitter body or a tag argument"
   else
     fail "20d HOST_SQL projects key(s) nothing emits:${_unproduced}" \
          "An always-empty column reads as 'the host did not report it' rather than 'we never asked correctly'. Either wire the producer or drop the column."
   fi
-  # RENAME MUTATION — the arm D11 exists for: prove 20d notices a projection whose producer
-  # is gone, which a plain 'is detail selected' grep cannot.
-  _n_bogus=$(cat "$_emit_src" "$_boot_src" 2>/dev/null | grep -cE '"zzz_no_such_field"|zzz_no_such_field=' || true)
-  if [[ "${_n_bogus:-0}" -eq 0 ]]; then
-    pass "20e MUTATION control: an unproduced key is detectable as unproduced"
+  fi
+  # LOOSENESS CONTROL — `_detail` is a real shell local in luks_err (`_detail="$GIT_DATA_...`)
+  # and is NOT an emitted field. Under the old bare-token scan it matched and would have been
+  # reported as produced; under the anchored scan it must not. A maximally-implausible token
+  # (`zzz_no_such_field`) could only ever prove the scan is not matching literally everything —
+  # it cannot detect looseness against locals or prose, which is the actual failure mode.
+  _ctl_body=$(printf '%s\n' "$_bs_body" | grep -cF -- '"_detail":' || true)
+  _ctl_tags=$(cat "$_emit_src" "$_boot_src" 2>/dev/null | grep -cF -- '"_detail=' || true)
+  _ctl_loose=$(cat "$_emit_src" "$_boot_src" 2>/dev/null | grep -cE '"_detail"|_detail=' || true)
+  if [[ "${_ctl_body:-0}" -eq 0 && "${_ctl_tags:-0}" -eq 0 && "${_ctl_loose:-0}" -ge 1 ]]; then
+    pass "20e LOOSENESS control: a shell local (_detail) is correctly NOT counted as a producer"
   else
-    fail "20e MUTATION control: the producer scan matches a field that does not exist" \
-         "20d's scan is too loose to distinguish a real producer from noise."
+    fail "20e LOOSENESS control failed (body=${_ctl_body:-?} tags=${_ctl_tags:-?} loose=${_ctl_loose:-?})" \
+         "Expected: _detail present in the files (loose>=1) but NOT counted as an emitted field (body=0, tags=0). A non-zero body/tags means 20d's scan is still matching locals; loose=0 means the control itself no longer exercises anything."
   fi
 else
   fail "20 capture script not readable at ${_CAP}"

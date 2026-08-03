@@ -35,7 +35,11 @@
 #
 # source: the two production LUKS stores that mount successfully on this same image —
 #         apps/web-platform/infra/cloud-init-registry.yml (mkfs.ext4 -q, the zot store)
-#         apps/web-platform/infra/workspaces-cutover.sh   (mkfs.ext4 -q, /workspaces)
+#         apps/web-platform/infra/workspaces-cutover.sh   (/workspaces) — its actual line is
+#           `mkfs.ext4 -q -E lazy_itable_init=0,lazy_journal_init=0`; `-E` sets EXTENDED
+#           OPTIONS, not features, so the resulting feature set is identical to plain
+#           `mkfs.ext4 -q` (measured). Quoted precisely because a paraphrased citation is
+#           how a provenance claim rots without anyone noticing.
 #         measured under e2fsprogs 1.47.0 in ubuntu:24.04:
 #           has_journal ext_attr resize_inode dir_index filetype extent 64bit flex_bg
 #           sparse_super large_file huge_file dir_nlink extra_isize metadata_csum

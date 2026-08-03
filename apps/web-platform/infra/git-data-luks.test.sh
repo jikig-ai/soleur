@@ -58,7 +58,7 @@ VARIABLES_TF="${DIR}/variables.tf"
 passes=0
 fails=0
 pass() { passes=$((passes + 1)); }
-fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
+fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; [ -n "${2:-}" ] && echo "      $2" >&2; return 0; }
 
 [ -f "$CLOUD_INIT" ]   || { echo "FAIL: cloud-init-git-data.yml not found at $CLOUD_INIT" >&2; exit 1; }
 [ -f "$LUKS_TF" ]      || { echo "FAIL: git-data-luks.tf not found at $LUKS_TF" >&2; exit 1; }
@@ -984,7 +984,7 @@ for _bp in $(boot_path_files); do
 done
 # Mutation: echo the key. This is the shape that actually puts it in the shared log.
 assert_mutation "A28b key-never-on-argv" p_key_never_on_argv "$CLOUD_INIT" \
-  's;^([[:space:]]*)mkdir -p /mnt/git-data-luks$;\1echo "key=$GIT_DATA_LUKS_KEY";'
+  's;^([[:space:]]*)mkdir -p /mnt/git-data-luks.*$;\1echo "key=$GIT_DATA_LUKS_KEY";'
 # Same shape in the second key site, which the template-only scan could not see.
 assert_mutation "A28b key-never-on-argv (bootstrap)" p_key_never_on_argv \
   "$DIR/git-data-bootstrap.sh" 's;^LUKS_ROOT="/mnt/git-data-luks"$;echo "key=$GIT_DATA_LUKS_KEY";'
@@ -1029,8 +1029,13 @@ assert_mutation "A2 no shell source (gc-failure.service)" p_env_file_not_sourced
 # WHAT CHANGED AND WHY. B16 previously pinned `-O quota,project` on the grounds that the
 # flags were MIGRATION-FORCING. Two things were wrong with that.
 #
-# First, the premise. `tune2fs(8)` sets and clears BOTH features on an unmounted filesystem,
-# so "adding them later needs a replace plus an rsync of every user's objects" was false.
+# First, the premise — but ONLY for `quota`. `tune2fs(8)` sets and clears both features on an
+# unmounted filesystem, so "adding them later needs a replace plus an rsync of every user's
+# objects" was false as stated. It is NOT a licence to add `project` later: measured,
+# `tune2fs -O project` on a plain filesystem ADDS `quota` implicitly, which is the bit that
+# makes this volume unmountable on the target image. For `project`, birth-or-never HOLDS —
+# see B16c. A maintainer who reads only the first sentence and reaches for tune2fs re-bricks
+# the host.
 # Second, and fatally: `quota` made the volume UNMOUNTABLE on the target image. Setting the
 # ext4 `quota` RO_COMPAT bit makes ext4_fill_super call ext4_enable_quotas() on every mount
 # (v6.8 fs/ext4/super.c gates it on the feature bit alone), which needs the `quota_v2`
@@ -1055,6 +1060,9 @@ assert_mutation "A2 no shell source (gc-failure.service)" p_env_file_not_sourced
 # because this file's own #7204 comment block names the pre-fix invocation literally — a
 # body-grep that saw comments would match it and report the defect it just fixed
 # (cq-assert-anchor-not-bare-token).
+# The classified feature allowlist R1 machine-reads. B16b derives its denied set from this
+# same file so the static and runtime layers cannot disagree about what "module-dep" means.
+FIX_FILE="${DIR}/git-data-birth-fs-fingerprint.txt"
 _luks_slice() {
   awk '/^[[:space:]]*STAGE=luks_open[[:space:]]*$/{f=1} f&&/^[[:space:]]*LUKSEOF[[:space:]]*$/{f=0} f' "$1" \
     | grep -vE '^[[:space:]]*#' || true
@@ -1075,9 +1083,24 @@ assert_mutation "B16a mkfs-exactly-once (duplicated invocation)" p_mkfs_once "$C
 
 # B16b — THE TRIPWIRE. No quota feature on the birth mkfs. This is the one feature-semantics
 # assertion B16 keeps, precisely because it is the only coverage on a docker-less machine.
+# DERIVED from git-data-birth-fs-fingerprint.txt's `module-dep` rows, not hardcoded. A
+# hardcoded `quota` token meant adding a SECOND module-dep feature to the fixture reddened R1
+# only — B16b stayed green, and B16 is the layer documented as the sole coverage on a
+# docker-less machine. The two layers now share one source of truth (the AP-018 third element
+# this split was missing). Fails CLOSED if the fixture is unreadable or yields no rows.
+_module_dep_feats() {
+  awk -F'\t' '/^[a-z_]+\t/ && $2 == "module-dep" { print $1 }' "$FIX_FILE" 2>/dev/null || true
+}
 p_mkfs_no_quota() {
-  n=$(_mkfs_lines "$1" | grep -cE -- '-O[[:space:]]+[a-z,]*quota' || true)
-  if [ "${n:-0}" -eq 0 ]; then echo 1; else echo 0; fi
+  feats="$(_module_dep_feats)"
+  [ -n "$feats" ] || { echo 0; return; }   # no fixture / no rows => fail closed
+  lines="$(_mkfs_lines "$1")"
+  [ -n "$lines" ] || { echo 1; return; }   # B16a owns the disappearance case
+  for f in $feats; do
+    n=$(printf '%s\n' "$lines" | grep -cE -- "-O[[:space:]]*[a-z,]*${f}" || true)
+    [ "${n:-0}" -eq 0 ] || { echo 0; return; }
+  done
+  echo 1
 }
 assert_holds    "B16b mkfs-no-quota-feature" p_mkfs_no_quota "$CLOUD_INIT"
 assert_mutation "B16b mkfs-no-quota-feature (quota re-introduced)" p_mkfs_no_quota "$CLOUD_INIT" \
@@ -1092,7 +1115,7 @@ p_mkfs_project() {
 }
 assert_holds    "B16c mkfs-project-at-birth" p_mkfs_project "$CLOUD_INIT"
 assert_mutation "B16c mkfs-project-at-birth (project dropped)" p_mkfs_project "$CLOUD_INIT" \
-  's/ -O project//'
+  's#^([[:space:]]*mkfs\.ext4[^#]*) -O project#\1#'
 
 # --- B17 (#7204, D3): the mount NEVER falls through to an unencrypted device ----------
 #
@@ -1109,25 +1132,66 @@ assert_mutation "B16c mkfs-project-at-birth (project dropped)" p_mkfs_project "$
 # a continuation.
 p_mount_no_fallthrough() {
   slice="$(_luks_slice "$1")"
-  line="$(printf '%s\n' "$slice" | grep -E 'mount[[:space:]]+/dev/mapper/git-data[[:space:]]+/mnt/git-data-luks' || true)"
-  [ -n "$line" ] || { echo 0; return; }          # the mount vanished entirely — not a pass
+  # FOLD LINE CONTINUATIONS FIRST. `after` is computed from a grep-matched physical line, so
+  # anything past a trailing `\` was invisible — measured: `mount … \` + `|| true` on the next
+  # line left the suite 107/107 green. That is the single most likely way a future author adds
+  # a fall-through, and the previous comment claimed this predicate covered it.
+  folded="$(printf '%s\n' "$slice" | sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*/ /;ba' -e '}')"
+  line="$(printf '%s\n' "$folded" | grep -E 'mount[[:space:]]+/dev/mapper/git-data[[:space:]]+/mnt/git-data-luks' || true)"
+  [ -n "$line" ] || { echo 0; return; }   # the mount vanished entirely — not a pass
   after="${line#*mount /dev/mapper/git-data /mnt/git-data-luks}"
-  case "$after" in *'||'*) echo 0; return ;; esac
-  # And no mount of a RAW by-id device anywhere in the stage — the other way to end up with
-  # an unencrypted filesystem mounted at the LUKS mountpoint.
-  raw=$(printf '%s\n' "$slice" | grep -cE 'mount[[:space:]]+[^|]*/dev/disk/by-id' || true)
-  if [ "${raw:-0}" -ne 0 ]; then echo 0; return; fi
+  # `||` AND `;`-separated continuations both let the boot proceed past a failed mount.
+  case "$after" in
+    *'||'*) echo 0; return ;;
+    *';'*)  echo 0; return ;;
+  esac
+  # An `if mount …; then … else … fi` wrapper suppresses errexit without ever writing `||`.
+  case "$line" in
+    *'if '*'mount /dev/mapper/git-data'*) echo 0; return ;;
+  esac
+  # `set +e` anywhere in the stage disarms errexit for the mount.
+  n_sete=$(printf '%s\n' "$folded" | grep -cE '^[[:space:]]*set \+e([[:space:]]|$)' || true)
+  [ "${n_sete:-0}" -eq 0 ] || { echo 0; return; }
   echo 1
 }
+
+# SPLIT OUT (was folded into p_mount_no_fallthrough, where the `||` arm tripped first and left
+# it with no independent mutation). Covers the OTHER way to end up with an unencrypted
+# filesystem at the LUKS mountpoint: mounting a raw device rather than the mapper. `$DEV` is
+# bound earlier in the stage to the by-id path, so it is matched explicitly — the literal
+# `/dev/disk/by-id` alone missed the most convenient spelling.
+p_mount_no_raw_device() {
+  slice="$(_luks_slice "$1")"
+  n=$(printf '%s\n' "$slice" | grep -cE 'mount[[:space:]]+([^|]*[[:space:]])?(/dev/disk/by-id|/dev/sd[a-z]|"?\$DEV"?)' || true)
+  if [ "${n:-0}" -eq 0 ]; then echo 1; else echo 0; fi
+}
+
 assert_holds    "B17 mount-no-fallthrough" p_mount_no_fallthrough "$CLOUD_INIT"
 assert_mutation "B17 mount-no-fallthrough (|| true)" p_mount_no_fallthrough "$CLOUD_INIT" \
   's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 || true#'
 assert_mutation "B17 mount-no-fallthrough (|| : )" p_mount_no_fallthrough "$CLOUD_INIT" \
   's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 || :#'
-assert_mutation "B17 mount-no-fallthrough (fallback to the raw device)" p_mount_no_fallthrough "$CLOUD_INIT" \
+assert_mutation "B17 mount-no-fallthrough (; true separator)" p_mount_no_fallthrough "$CLOUD_INIT" \
+  's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 ; true#'
+assert_mutation "B17 mount-no-fallthrough (backslash continuation)" p_mount_no_fallthrough "$CLOUD_INIT" \
+  's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 \\\n      || true#'
+assert_mutation "B17 mount-no-fallthrough (if-wrapper suppresses errexit)" p_mount_no_fallthrough "$CLOUD_INIT" \
+  's#mountpoint -q /mnt/git-data-luks \|\| (mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#if \1\2; then :; else echo WARN; fi#'
+assert_mutation "B17 mount-no-fallthrough (set +e disarms errexit)" p_mount_no_fallthrough "$CLOUD_INIT" \
+  's#^([[:space:]]*)(mountpoint -q /mnt/git-data-luks)#\1set +e\n\1\2#'
+
+assert_holds    "B17r mount-no-raw-device" p_mount_no_raw_device "$CLOUD_INIT"
+assert_mutation "B17r mount-no-raw-device (by-id fallback)" p_mount_no_raw_device "$CLOUD_INIT" \
   's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 || mount /dev/disk/by-id/scsi-0HC_Volume_x /mnt/git-data-luks#'
+assert_mutation "B17r mount-no-raw-device (\$DEV fallback)" p_mount_no_raw_device "$CLOUD_INIT" \
+  's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 || mount "$DEV" /mnt/git-data-luks#'
 
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
+#
+# RAISED 107 -> 113 at review (#7204): B17 widened from 3 mutation arms to 6 (`; true`,
+# backslash-continuation and `if`-wrapper each shipped a fall-through past a 107/107 green
+# suite), and the raw-device property split out as B17r with its own hold + 2 arms — folded
+# into B17 it was unreachable, because the `||` arm always tripped first.
 #
 # RAISED 101 -> 107 WITH THE ARMS THAT MADE IT NECESSARY (#7204): B16 re-aimed from one
 # flag-pin (1 hold + 3 mutations = 4) to three precondition predicates (B16a exactly-once,
@@ -1150,8 +1214,8 @@ assert_mutation "B17 mount-no-fallthrough (fallback to the raw device)" p_mount_
 # redden the suite on every legitimate new arm and teach the next author to edit the guard
 # instead of trusting it.
 total=$((passes + fails))
-if [ "$total" -lt 107 ]; then
-  echo "FAIL: ran only ${total} assertions (<107) — suite did not execute fully" >&2
+if [ "$total" -lt 113 ]; then
+  echo "FAIL: ran only ${total} assertions (<113) — suite did not execute fully" >&2
   exit 1
 fi
 

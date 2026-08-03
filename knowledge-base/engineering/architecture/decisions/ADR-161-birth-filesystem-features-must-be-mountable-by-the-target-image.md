@@ -1,22 +1,28 @@
-# ADR-159 — A birth filesystem may only carry features the target image's kernel can mount
+# ADR-161 — A birth filesystem may only carry features the target image's kernel can mount
 
 - **Status:** Accepted
 - **Date:** 2026-08-03
 - **Issue:** #7204
 - **Related:** [ADR-149](./ADR-149-git-data-host-birth-route-and-readiness-interlock.md) (the birth
   route and its interlocks — this ADR records the filesystem decision that route creates),
-  [ADR-152](./ADR-152-strip-rationale-comments-from-git-data-injected-scripts-at-render-time.md) (why baking does not
-  transfer to git-data), [ADR-147](./ADR-147-boot-stage-diagnostics-live-in-baked-host-scripts.md)
-  (boot-stage diagnostics live in baked host-scripts — the tension this ADR resolves explicitly),
+  [ADR-147](./ADR-147-boot-stage-diagnostics-live-in-baked-host-scripts.md) — specifically its own
+  2026-07-27 addendum §"The divergence that matters: git-data-emit ships INSIDE `user_data`",
+  which is the actual carve-out this ADR extends,
+  [ADR-152](./ADR-152-strip-rationale-comments-from-git-data-injected-scripts-at-render-time.md) (the
+  premise that git-data has no bake path — NOT itself a diagnostics carve-out),
   [ADR-068](./ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator.md) (the store this filesystem backs),
   `apps/web-platform/infra/cloud-init-git-data.yml` (`STAGE=luks_open`),
   `apps/web-platform/infra/git-data-birth-fs-fingerprint.txt` (the classified allowlist)
 
-> **Ordinal.** Provisionally 158 at plan time; renumbered 158 -> 159 during `/work` after a
-> sibling PR claimed 158 (`ADR-158-kb-file-tree-host-is-a-derived-value.md`) on `origin/main`
-> while this branch was open. Renumbered MINE, never main's — the rename was applied only to
-> this feature's own artifacts, and deliberately NOT to the two lines in the plan that use
-> `s/ADR-158/ADR-159/g` as the worked example of the blanket sweep this rule forbids.
+> **Ordinal.** THREE collisions while this branch was open. Provisionally 158 at plan time;
+> 158 -> 159 after `ADR-158-kb-file-tree-host-is-a-derived-value.md` landed on `origin/main`;
+> then 159 -> **161** at review time after `ADR-159-delivery-is-not-activation.md` (PR #7146)
+> ALSO landed on main, and 160 turned out to be claimed by unmerged sibling branch
+> `feat-one-shot-7159-doppler-prd-read-token-coverage`. 161 was verified free against both
+> `origin/main` and every remote branch, not merely against main's maximum — checking only
+> main is what let the second collision through. Renumbered MINE, never main's: applied only
+> to this feature's own artifacts, and deliberately NOT to the plan lines that use a blanket
+> `s/ADR-158/.../g` as the worked example of the sweep this rule forbids.
 
 ## Context
 
@@ -92,8 +98,20 @@ intact for the next author.
 But the correction has a sting, measured rather than assumed (see Alternatives (b)): `tune2fs`
 is not the free later-addition path it appears to be either. So the honest statement is narrower
 than "the flags are addable later": **`quota` is addable later; `project` is not addable without
-also adding `quota`.** On this image `project` is a birth-time choice or nothing — which is why
-(a) beats (c) despite (c) being simpler and matching the siblings.
+also adding `quota`** — and adding `quota` on this image is what makes the volume unmountable.
+
+**What this does NOT establish, corrected at review.** An earlier revision of this ADR argued
+that (a) beats (c) because (c) "discards `project` permanently". That is refuted by this ADR's
+own measurement table two paragraphs below: `tune2fs -O project` on a plain filesystem succeeds
+(rc=0). From state (c), `project` is one offline command away — not permanent. And the argument
+is self-defeating in the scenario it was built for: the only future in which `project` is
+*wanted* is one in which enforcement is possible, which requires an image whose kernel can mount
+`quota` — which is exactly the future in which (c)'s upgrade path is open.
+
+The honest, much smaller residual advantage of (a): it buys free optionality on the project-ID
+inode field at **measured-zero present cost**, and it avoids a future maintainer reaching for the
+`tune2fs` path and bricking the mount. That is enough to select it. It is not a claim that (c)
+forecloses anything permanently.
 
 ## Alternatives Considered
 
@@ -105,20 +123,23 @@ sparse file, and under a privileged container over a real loop device for the mo
 |---|---|---|---|
 | **(a)** | `mkfs.ext4 -q -O project` | features `… metadata_csum project`, **no `quota`**; mounts rc=0, write canary OK | **SELECTED** |
 | (b) | `tune2fs -O quota` / `-O project` as a later-addition path | `tune2fs -O quota` on a project-only fs → rc=0 but **`project` CLEARED**. `tune2fs -O project` on a plain fs → rc=0 and **`quota` ADDED implicitly** | **REJECTED as a fix; recorded as an operational hazard.** Adding `project` later would set the exact bit that makes the volume unmountable |
-| (c) | `mkfs.ext4 -q` (sibling parity) | features `… metadata_csum`, neither flag; mounts rc=0 | **REJECTED in favour of (a).** Safe and simpler, but given (b) it discards `project` *permanently*, not merely "for now". (a) is safe on the same axis at identical present cost |
+| (c) | `mkfs.ext4 -q` (sibling parity) | features `… metadata_csum`, neither flag; mounts rc=0 | **REJECTED in favour of (a), on a narrow margin.** Equally safe, simpler, and matches the two working siblings. (a) wins only because it buys the project-ID field at measured-zero present cost and keeps a future maintainer away from the `tune2fs -O project` path, which per (b) re-bricks the mount. NOT because (c) forecloses `project` permanently — it does not (see Decision) |
 | (d) | keep `quota,project` + `mount -o noquota` | mount returned rc=0 — **on a kernel that HAS `quota_v2`**, so the probe cannot discriminate "the option escaped the enable path" from "the enable path ran and succeeded" | **REJECTED** on the feature-bit argument. `ext4_enable_quotas()` is gated on the bit, not the options; upstream changed quota mount options to be *ignored* when the feature is set. The rc=0 is recorded as **non-discriminating**, not as a pass |
-| (e) | keep `quota,project` + `apt-get install linux-modules-extra-$(uname -r)` at boot | not run | **REJECTED a priori** by selection rule (c): it adds a network-dependent, version-pinned boot failure mode on a console-less host to buy a capability that is unusable anyway (no `quota` userspace, no `prjquota` mount option) |
+| (e) | keep `quota,project` + `apt-get install linux-modules-extra-$(uname -r)` at boot | not run | **REJECTED a priori** by criterion **(ii)** — it buys a capability that is unusable anyway (no `quota` userspace, no `prjquota` mount option) — and by **(iii)**, since it *satisfies* the image's module set rather than removing the dependency, so its correctness stays hostage to the image |
 
 ### The selection rule, and how criterion (c) was discharged
 
-A candidate had to (a) produce a filesystem whose mount does not depend on `quota_v2`,
-(b) preserve the most future capability at zero present cost, and (c) be correct **whether or not**
-the assumption "Hetzner's `ubuntu-24.04` is the stock Canonical cloud image" holds.
+A candidate had to **(i)** produce a filesystem whose mount does not depend on `quota_v2`,
+**(ii)** preserve the most future capability at zero present cost, and **(iii)** be correct
+**whether or not** the assumption "Hetzner's `ubuntu-24.04` is the stock Canonical cloud image"
+holds. (Deliberately numbered (i)-(iii): an earlier revision lettered them (a)-(c), colliding
+with the candidate labels in the table above, and then mis-cited (e)'s rejection to the wrong
+one.)
 
-**Criterion (c) is discharged BY CONSTRUCTION, not by a mount observation, and this ADR must not
-claim otherwise.** Every mount probe available runs in a container, which shares the host kernel —
+**Criterion (iii) is discharged BY CONSTRUCTION, not by a mount observation, and this ADR must
+not claim otherwise.** Every mount probe available runs in a container, which shares the host kernel —
 and this host's kernel *has* `quota_v2`. A green mount there cannot distinguish "needs no module"
-from "the module happened to be present". So (c) is discharged as a feature-bit argument read out
+from "the module happened to be present". So (iii) is discharged as a feature-bit argument read out
 of `fs/ext4/super.c`, with mount rc demoted to a sanity signal.
 
 A container-side simulation was considered and **rejected on inspection**: `find_quota_format`
@@ -140,15 +161,36 @@ git-data has **no baked image**. It is a cloud-init-only host with no `remote-ex
 no host-scripts bake step, so ADR-147's vehicle does not exist here. This ADR therefore **extends
 ADR-152's carve-out** rather than contradicting ADR-147: for git-data specifically, boot-stage
 diagnostics live in `user_data` because there is nowhere else for them to live, and the cost is
-paid against the 32 KB `user_data` ForceNew cap (`stored=25904 / cap=32768` after this change).
+paid against the 32 KB `user_data` ForceNew cap. **Delta, because a cap is only legible as a
+delta:** ADR-152 recorded `stored=20456`; `origin/main` is `22772`; after this change
+`stored=25872 / cap=32768`, headroom **6896**. The review pass that added this table also
+collapsed ~2 KB of duplicated rationale prose out of the template — ADR-152 strips comments
+only from the nine injected `write_files` scripts, NOT from the inline `runcmd`, so comments
+in this template are NOT free and the belief that they are is what consumed the headroom.
 If git-data ever gains a baked image, the capture logic moves and this carve-out retires.
+
+### ADR-147's other three constraints, checked rather than assumed
+
+ADR-147 freezes **four** cross-consumer constraints, not one. The section above addresses only
+LOCATION, so the remaining three are recorded here — "ADR-147's vehicle does not exist here"
+must not be read as "ADR-147 does not bind git-data", which is false for three of its four.
+
+| ADR-147 constraint | Status under this change |
+|---|---|
+| Location (diagnostics in baked host-scripts) | The carve-out above — git-data has no bake path |
+| **Stage names are frozen** (they are alert filter values) | **Live and respected.** `apps/web-platform/infra/sentry/issue-alerts.tf` filters `value = "luks_open"`. This change does not rename the stage, so the alert keeps matching. Renaming it would silently unhook the alert |
+| Single emitter, so the redaction guarantee is structural | Respected — the new `dmesg`/stderr capture is an unbounded-content SOURCE, but it reaches the wire only through `git-data-emit`, whose `_devalue` + `_clean` chain is unchanged. That matters here specifically: this host's repo paths are `<workspace_id>.git` and `workspace_id === auth.users.id`, which is why the bare-UUID rule exists |
+| No shared cross-stage buffer | Respected — `/run/git-data-luks-stage.log` is per-stage, read only by `luks_err`, and mode 0600 |
 
 ## Consequences
 
 **Good.**
 - The birth can succeed. This was the only mechanical blocker on the rung-2 rehearsal, which is
   the only route that can produce the evidence the birth gate requires.
-- The invariant is now guarded at two layers with a stated authority split (AP-018): **R1** in
+- The invariant is now guarded at two layers with **AP-018's SHAPE, and its defining clause
+  explicitly NOT satisfied** — AP-018 says the static layer is "never coverage-bearing", and here
+  it is, on any machine without docker. Stated as a deviation rather than filed under the bare
+  label. **R1** in
   `git-data-runcmd-rehearsal.test.sh` is authoritative — it creates the filesystem and classifies
   the resulting superblock against a committed allowlist — and **B16** in `git-data-luks.test.sh`
   is a static pre-filter over R1's preconditions. With the caveat that makes it honest: the rung-1
@@ -159,6 +201,10 @@ If git-data ever gains a baked image, the capture logic moves and this carve-out
   shipping", rather than sailing through a one-entry denylist.
 
 **Bad, and load-bearing.**
+- **Selecting (a) is what puts a silent capability loss on the map.** From the *selected* state,
+  the plausible "add enforcement later" move is `tune2fs -O quota` — measured to CLEAR `project`
+  while also setting the unmountable bit. (c) has no such trap. This is the cost of (a)'s
+  optionality and is recorded so the next author meets it here rather than on a dark host.
 - **Project-quota enforcement is not available and is not cheap to add.** Because `tune2fs -O
   project` implicitly sets `quota`, the store cannot gain enforcement by an offline `tune2fs` on
   this image: doing so would make it unmountable. Enforcement requires the image to ship

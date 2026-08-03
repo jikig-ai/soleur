@@ -79,15 +79,35 @@ open(f"{out}/preamble.sh", "w").write(pre[0])
 sshd = [c for c in d["runcmd"] if isinstance(c, str) and "STAGE=sshd_config" in c]
 assert len(sshd) == 1, f"expected exactly 1 sshd_config runcmd block, found {len(sshd)}"
 open(f"{out}/sshd-stage.sh", "w").write(sshd[0])
-# (#7204, D5) The LUKS stage, for R1/R3/R4. Extracted from the RENDER, not from raw
-# template bytes: the #7204 comment block names the pre-fix invocation literally, so a
-# raw-bytes grep for `mkfs.ext4` matches TWO lines and a `head -1` could execute a
-# comment. ADR-152 strips whole-line comments at render, so the collision disappears here
-# for free. `assert len(...) == 1` mirrors the other extractions — a stage that split into
-# two runcmd entries must fail loudly rather than silently extract the first half.
+# (#7204) The LUKS stage, for R1/R3/R4. Extracted from the RENDER rather than raw template
+# bytes so it tracks what actually ships. `assert len(...) == 1` mirrors the other
+# extractions — a stage that split into two runcmd entries must fail loudly rather than
+# silently extract the first half.
+#
+# TWO FILES, AND THE SPLIT IS LOAD-BEARING.
+#
+# CORRECTION (review, #7204): an earlier revision of this comment claimed "ADR-152 strips
+# whole-line comments at render, so the collision disappears here for free." THAT IS FALSE,
+# and the repo says so verbatim — `modules/git-data-userdata/main.tf` states
+# "cloud-init-git-data.yml itself is NOT stripped." ADR-152's strip applies only to the nine
+# injected `write_files` scripts. Measured on the real render: 81 of the luks stage's 117
+# lines are COMMENTS. Every unanchored grep below was therefore running over prose, and this
+# PR's own comment block — which discusses the seed, the ordering and the emit call at
+# length — is the largest body of prose in the file. Two arms were demonstrably satisfiable
+# by it while the boot-critical property was violated, at a fully green suite
+# (hr-verify-repo-capability-claim-before-assert: the claim was never checked).
+#
+#   luks-stage.sh       raw, comments intact — ONLY for shlex parsing of the real emit call
+#   luks-stage.code.sh  comments stripped    — for every grep/regex predicate
+#
+# This mirrors `_luks_slice()` in git-data-luks.test.sh, which has always stripped comments
+# and is the reason the B16/B17 family was never exposed to this class.
 luks = [c for c in d["runcmd"] if isinstance(c, str) and "STAGE=luks_open" in c]
 assert len(luks) == 1, f"expected exactly 1 luks_open runcmd block, found {len(luks)}"
 open(f"{out}/luks-stage.sh", "w").write(luks[0])
+_code = "\n".join(l for l in luks[0].splitlines() if not re.match(r'^\s*#', l))
+assert "mkfs.ext4" in _code, "comment-stripped luks stage lost its mkfs — strip is too aggressive"
+open(f"{out}/luks-stage.code.sh", "w").write(_code + "\n")
 # The WHOLE runcmd, concatenated the way cloud-init actually runs it. B2 compares against
 # THIS, not against the trap-arming entry alone: `trap on_err EXIT` and the `set -e` that
 # arms abort-on-error live in DIFFERENT runcmd entries, and it is precisely because
@@ -749,17 +769,24 @@ PY
     # Independent of the sed above, so a mutation that silently changes meaning still leaves
     # one control that reproduces the real defect.
     _r1_prefix='mkfs.ext4 -q -O quota,project __DEV__  # what shipped before #7204'
+    # THIRD control, for R1(a) specifically. Both controls above inject `quota`, which IS in
+    # the allowlist — so they exercise (b) and leave (a) with no demonstrated failing
+    # direction at all. `casefold` is a real ext4 feature deliberately absent from the table,
+    # so it must trip "unclassified". Without this, (a)'s "fail-closed against any FUTURE
+    # flag" framing is aspirational rather than tested.
+    _r1_unclass='mkfs.ext4 -q -O casefold __DEV__'
 
     printf '%s\n' "$_r1_shipped" > "$TMP/r1-arm-shipped.txt"
     printf '%s\n' "$_r1_mutant"  > "$TMP/r1-arm-mutant.txt"
     printf '%s\n' "$_r1_prefix"  > "$TMP/r1-arm-prefix.txt"
+    printf '%s\n' "$_r1_unclass" > "$TMP/r1-arm-unclass.txt"
 
     cat > "$TMP/r1-drive.sh" <<'R1DRV'
 set -e
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null 2>&1
 apt-get install -y -qq e2fsprogs >/dev/null 2>&1
-for arm in shipped mutant prefix; do
+for arm in shipped mutant prefix unclass; do
   img="/tmp/$arm.img"
   # 10G sparse. Measured: a backing file under ~3MB falls into mke2fs's `floppy` bucket and
   # silently drops has_journal, which would make R1's non-vacuity probe fail for a reason
@@ -780,6 +807,7 @@ R1DRV
       -v "$TMP/r1-arm-shipped.txt:/work/r1-arm-shipped.txt:ro" \
       -v "$TMP/r1-arm-mutant.txt:/work/r1-arm-mutant.txt:ro" \
       -v "$TMP/r1-arm-prefix.txt:/work/r1-arm-prefix.txt:ro" \
+      -v "$TMP/r1-arm-unclass.txt:/work/r1-arm-unclass.txt:ro" \
       -v "$TMP/r1-drive.sh:/work/r1-drive.sh:ro" \
       -v "$TMP/r1out:/out" \
       ubuntu:24.04 bash /work/r1-drive.sh >"$TMP/r1out/stdout" 2>&1 || true
@@ -810,12 +838,13 @@ def verdict(name):
     return "%s:unclassified=%s:moduledep=%s:hasjournal=%s" % (
         name, ",".join(unclassified) or "-", ",".join(moduledep) or "-",
         "yes" if "has_journal" in f else "no")
-print(" ".join(verdict(a) for a in ("shipped", "mutant", "prefix")))
+print(" ".join(verdict(a) for a in ("shipped", "mutant", "prefix", "unclass")))
 PY
 )"
     _r1_ship="$(printf '%s' "$_r1_verdict" | tr ' ' '\n' | grep '^shipped:' || true)"
     _r1_mut="$(printf '%s' "$_r1_verdict"  | tr ' ' '\n' | grep '^mutant:'  || true)"
     _r1_pre="$(printf '%s' "$_r1_verdict"  | tr ' ' '\n' | grep '^prefix:'  || true)"
+    _r1_unc="$(printf '%s' "$_r1_verdict"  | tr ' ' '\n' | grep '^unclass:' || true)"
 
     # (a) fail-closed against any FUTURE flag, not just the one that bit us.
     case "$_r1_ship" in
@@ -839,15 +868,34 @@ PY
               "Either mkfs did not run, or the backing file fell into mke2fs's floppy bucket (<~3MB). verdict=[$_r1_ship]" ;;
     esac
     # NEGATIVE CONTROL 1 — the in-test mutant MUST be rejected.
+    # NOFEATURES is checked FIRST and explicitly: the pattern below does not match it, so an
+    # arm that produced NO FILESYSTEM AT ALL used to fall through to `*) pass`. Both negative
+    # controls were therefore fail-open — if a future e2fsprogs rejects `-O quota`, the
+    # "committed pre-fix literal" silently stops reproducing the defect and reports green.
     case "$_r1_mut" in
-      *:moduledep=-:*|"") fail "R1 MUTATION: injecting 'quota' did NOT trip the module-dep assertion" \
+      *NOFEATURES*|"") fail "R1 MUTATION: the mutant arm produced no filesystem (verdict=[$_r1_mut])" \
+              "The control is vacuous — it cannot demonstrate R1 rejects a quota-bearing superblock. Check the container's mkfs accepted the injected flag." ;;
+      *:moduledep=-:*) fail "R1 MUTATION: injecting 'quota' did NOT trip the module-dep assertion" \
               "R1 cannot detect the very defect it exists for. verdict=[$_r1_mut]" ;;
       *) pass ;;
     esac
     # NEGATIVE CONTROL 2 — the committed pre-fix literal MUST be rejected.
     case "$_r1_pre" in
-      *:moduledep=-:*|"") fail "R1 PRE-FIX CONTROL: the literal that shipped before #7204 did NOT trip the module-dep assertion" \
+      *NOFEATURES*|"") fail "R1 PRE-FIX CONTROL: the pre-fix arm produced no filesystem (verdict=[$_r1_pre])" \
+              "The committed pre-#7204 literal no longer reproduces the defect — it is certifying nothing." ;;
+      *:moduledep=-:*) fail "R1 PRE-FIX CONTROL: the literal that shipped before #7204 did NOT trip the module-dep assertion" \
               "verdict=[$_r1_pre]. This control is independent of the sed mutation precisely so a mutation that silently changed meaning still leaves one arm reproducing the real defect." ;;
+      *) pass ;;
+    esac
+    # UNCLASSIFIED CONTROL — the failing direction for R1(a). `casefold` is a real ext4
+    # feature that is deliberately not in the allowlist, so (a) must reject it. This is the
+    # only arm that demonstrates the fail-closed-against-future-flags property; the other two
+    # inject `quota`, which is IN the table and therefore exercises (b), not (a).
+    case "$_r1_unc" in
+      *NOFEATURES*|"") fail "R1 UNCLASSIFIED CONTROL: the arm produced no filesystem (verdict=[$_r1_unc])" \
+              "mke2fs may have rejected -O casefold in this image. Pick another feature that is real, producible, and absent from $_r1_fix — the control must be able to run." ;;
+      *:unclassified=-:*) fail "R1 UNCLASSIFIED CONTROL: an off-allowlist feature did NOT trip R1(a)" \
+              "verdict=[$_r1_unc]. R1(a) has no demonstrated failing direction, so its 'fail-closed against any FUTURE flag' claim is untested." ;;
       *) pass ;;
     esac
   else
@@ -890,23 +938,56 @@ if [ -n "$_r1_exp" ] && [ "$(date -u +%Y-%m-%d)" \< "$_r1_exp" ]; then pass; els
 # diagnostic. Measured on the shipped emitter 2026-08-03:
 #   _san('/var/log/cloud-init-output.log') -> '/var/log/cloud-init-output.log'
 # That is what #7204's fatal actually carried.
-if [ -s "$TMP/luks-stage.sh" ]; then
+# EVERY PREDICATE BELOW READS luks-stage.code.sh (COMMENTS STRIPPED), NOT luks-stage.sh.
+# Reading the raw stage is what made the original R3(1)/(2) satisfiable by this PR's own
+# prose: measured, a seed relocated BELOW every early append with a comment left behind
+# ("# the stage seeds GIT_DATA_LUKS_DETAIL=… before the appends") produced seed=22,
+# first-append=55, PASS — with all four early failure modes appending to an unset variable.
+# Combined with the same class in R3(3b), the full suite reported 33/0 while the
+# boot-critical property was violated.
+#
+# _r3_ln() also fails LOUD on a missing anchor rather than returning empty, because an empty
+# line number silently degrades every comparison below into "skip the check".
+_r3_ln() { grep -n "$1" "$TMP/luks-stage.code.sh" 2>/dev/null | head -1 | cut -d: -f1; }
+if [ -s "$TMP/luks-stage.code.sh" ]; then
   # (1) the stage passes a seeded detail file, not the cloud-init log, to the emitter.
-  _r3_seed_ln=$(grep -n 'GIT_DATA_LUKS_DETAIL=' "$TMP/luks-stage.sh" | head -1 | cut -d: -f1)
-  _r3_emit_ln=$(grep -n 'git-data-emit' "$TMP/luks-stage.sh" | head -1 | cut -d: -f1)
+  _r3_seed_ln=$(_r3_ln 'GIT_DATA_LUKS_DETAIL=')
+  _r3_trap_ln=$(_r3_ln '^[[:space:]]*trap luks_err EXIT')
   if [ -n "$_r3_seed_ln" ]; then pass; else
-    fail "R3(1): the luks_open stage does not seed a detail file (no GIT_DATA_LUKS_DETAIL= assignment)" \
+    fail "R3(1): the luks_open stage does not seed a detail file (no GIT_DATA_LUKS_DETAIL= assignment in CODE)" \
          "Without it luks_err falls through to _san and emits the literal path string as the diagnostic."; fi
   # (2) ORDERING, not co-presence (L1). The seed must PRECEDE the first append and the trap.
   # A grep proving both lines exist is exactly the failure mode of
   # knowledge-base/project/learnings/2026-07-26-an-existence-assertion-that-ran-before-the-file-existed-bricked-every-boot.md
   # — assertions sat ~120 lines above the heredocs creating the files they asserted on, and
   # the harness could not see it because it extracts bodies and runs them in isolation.
-  _r3_first_append=$(grep -n '2>>"\?\$GIT_DATA_LUKS_DETAIL' "$TMP/luks-stage.sh" | head -1 | cut -d: -f1)
+  _r3_first_append=$(_r3_ln '2>>"\?\$GIT_DATA_LUKS_DETAIL')
   if [ -n "$_r3_seed_ln" ] && [ -n "$_r3_first_append" ] && [ "$_r3_seed_ln" -lt "$_r3_first_append" ]; then pass; else
     fail "R3(2): the detail-file seed does not precede the first append (seed=${_r3_seed_ln:-none} first-append=${_r3_first_append:-none})" \
          "Co-presence is not ordering. A seed placed after an append leaves the trap's detail source unreadable on exactly the early failures it exists to explain."; fi
+  # (2b) The seed must ALSO precede the TRAP. A seed between the trap and the first append
+  # passes (2) while being strictly worse than #7204: under `set -u` any failure in that
+  # window makes luks_err abort on an unbound $GIT_DATA_LUKS_DETAIL BEFORE reaching
+  # git-data-emit, so the host dies with NO fatal at all rather than a causeless one.
+  if [ -n "$_r3_seed_ln" ] && [ -n "$_r3_trap_ln" ] && [ "$_r3_seed_ln" -lt "$_r3_trap_ln" ]; then pass; else
+    fail "R3(2b): the detail-file seed does not precede 'trap luks_err EXIT' (seed=${_r3_seed_ln:-none} trap=${_r3_trap_ln:-none})" \
+         "A seed after the trap makes the handler abort on an unbound variable under set -u — the stage then emits NOTHING, which is worse than the causeless fatal this arm exists to prevent."; fi
+  # (2c) NEGATIVE CONTROL for the whole R3(2) family — the arm that was missing, and whose
+  # absence is why the comment-satisfaction defect survived. Relocate the seed below the
+  # first append IN A COPY and assert the ordering check flips. Without this, R3(2) is an
+  # assertion nobody has ever seen fail.
+  _r3_mut="$TMP/luks-stage.mut.sh"
+  sed -e 's|^\([[:space:]]*\)GIT_DATA_LUKS_DETAIL=\(.*\)$|\1: # seed relocated by R3(2c)|' \
+    "$TMP/luks-stage.code.sh" > "$_r3_mut"
+  printf 'GIT_DATA_LUKS_DETAIL=/run/git-data-luks-stage.log\n' >> "$_r3_mut"
+  _mut_seed=$(grep -n 'GIT_DATA_LUKS_DETAIL=' "$_r3_mut" | head -1 | cut -d: -f1)
+  _mut_app=$(grep -n '2>>"\?\$GIT_DATA_LUKS_DETAIL' "$_r3_mut" | head -1 | cut -d: -f1)
+  if [ -n "$_mut_seed" ] && [ -n "$_mut_app" ] && [ "$_mut_seed" -gt "$_mut_app" ]; then pass; else
+    fail "R3(2c) MUTATION did not land: relocated seed=${_mut_seed:-none} first-append=${_mut_app:-none}, expected seed AFTER append" \
+         "R3(2)'s green above certifies nothing — the ordering check has no demonstrated failing direction."; fi
 else
+  # Cardinality parity with the success path (4), so a failed extraction cannot satisfy the floor.
+  fail "R3: skipped (luks stage not extracted)"; fail "R3: skipped (luks stage not extracted)"
   fail "R3: skipped (luks stage not extracted)"; fail "R3: skipped (luks stage not extracted)"
 fi
 
@@ -972,9 +1053,14 @@ _r3_c=$(grep -c 'xyzzy' "$TMP/r4out/capture-c.log" 2>/dev/null || true)
 if [ "${_r4_a:-0}" -ge 1 ]; then pass; else
   fail "R4: the mount error did NOT survive the emitter's tail -n 20 | tail -c 180 under the shipped ordering" \
        "Write dmesg FIRST and the failing command's stderr LAST. capture-a=[$(head -c 300 "$TMP/r4out/capture-a.log" 2>/dev/null)]"; fi
-if [ "${_r4_b:-0}" -eq 0 ]; then pass; else
-  fail "R4 MUTATION: reversing the ordering STILL delivered the mount error — R4 cannot detect an ordering regression" \
-       "If the emitter's truncation changed, re-measure the budget before trusting R4's green above."; fi
+# NON-EMPTINESS FIRST: `grep -c … || true` on a missing or empty capture-b.log yields 0,
+# which satisfies "the mount error did not survive" for the wrong reason — the arm would pass
+# because nothing was captured at all. Assert the reversed capture DID happen by requiring the
+# dmesg marker that must survive under that ordering, then assert the mount error did not.
+_r4_b_alive=$(grep -c 'quota feature but no quota format module' "$TMP/r4out/capture-b.log" 2>/dev/null || true)
+if [ "${_r4_b_alive:-0}" -ge 1 ] && [ "${_r4_b:-0}" -eq 0 ]; then pass; else
+  fail "R4 MUTATION: reversed-ordering arm is inconclusive (dmesg-marker=${_r4_b_alive:-0} mount-error=${_r4_b:-0})" \
+       "Expected marker>=1 (the capture ran) AND mount-error=0 (the ordering pushed it out). marker=0 means the container produced nothing and the arm proves nothing; mount-error>=1 means R4 cannot detect an ordering regression."; fi
 # R3(3a) — POSITIVE CONTROL for the hazard, not a defect report. The emitter's
 # `[ -n ] && [ -r ]` branch falls through to `_san "$DETAIL_SRC"`, so handing it a
 # non-empty-but-unreadable path ships THE LITERAL PATH as the "cause". We deliberately do
@@ -991,14 +1077,20 @@ if [ "${_r3_c:-0}" -ge 1 ]; then pass; else
 # does not exist in this container and is exactly how a fatal came to carry a filename
 # instead of a cause. Assert the 4th argument is a VARIABLE and that a `[ -r ]` guard on it
 # precedes the emit call.
-if [ -s "$TMP/luks-stage.sh" ]; then
-  _r3b="$(python3 - "$TMP/luks-stage.sh" <<'PY' 2>/dev/null || true
+if [ -s "$TMP/luks-stage.code.sh" ]; then
+  _r3b="$(python3 - "$TMP/luks-stage.code.sh" <<'PY' 2>/dev/null || true
 import re, sys, shlex
+# COMMENT-STRIPPED input (see the extraction block). Reading the raw stage let a comment
+# containing `[ -r "$_detail"` satisfy the guard check while the real guard was deleted —
+# measured GUARDED on code with the literal-leak branch reopened. shlex(posix=False) does
+# not treat `#` as a comment, so a commented-out emit call could also be picked as m[0].
 src = open(sys.argv[1]).read()
 joined = re.sub(r'\\\n\s*', ' ', src)          # fold line continuations
 m = [l for l in joined.splitlines() if 'git-data-emit' in l and 'fatal' in l]
-if not m:
-    print("NOEMIT"); raise SystemExit
+# Cardinality, matching the `assert len(...) == 1` idiom used by every other extraction here:
+# picking m[0] out of several silently reports on whichever call happens to be first.
+if len(m) != 1:
+    print(f"AMBIGUOUS:{len(m)}"); raise SystemExit
 line = m[0].strip()
 try:
     toks = shlex.split(line, posix=False)
@@ -1008,7 +1100,13 @@ except ValueError:
 arg4 = toks[4] if len(toks) > 4 else ""
 isvar = "VAR" if arg4.lstrip('"').startswith("$") else "LITERAL"
 name = arg4.strip('"')
-guarded = "GUARDED" if re.search(r'\[\s+-r\s+"?' + re.escape(name), joined) else "UNGUARDED"
+# Accept -r OR -s. -s is strictly stronger (a readable but EMPTY file yields DETAIL=[], a
+# verdict with no cause — #7204's defect), so pinning -r alone would red the correct fix.
+# ORDERING is asserted too: a guard that appears AFTER the emit protects nothing.
+gpat = re.compile(r'\[\s+-[rs]\s+"?' + re.escape(name))
+gm = gpat.search(joined)
+epos = joined.index(line) if line in joined else len(joined)
+guarded = "GUARDED" if (gm and gm.start() < epos) else "UNGUARDED"
 print(f"{isvar}:{guarded}:{arg4}")
 PY
 )"
@@ -1016,8 +1114,10 @@ PY
     VAR:GUARDED:*) pass ;;
     LITERAL:*) fail "R3(3b): luks_err passes a BARE PATH LITERAL as the emitter's detail source: ${_r3b#LITERAL:*:}" \
                     "That is the #7204 shape — when the literal is unreadable the fatal carries a filename instead of a cause. Pass a variable the stage has seeded and proven readable." ;;
-    VAR:UNGUARDED:*) fail "R3(3b): luks_err's detail variable ${_r3b#VAR:UNGUARDED:} has no '[ -r ]' readability guard before the emit call" \
-                    "An unwritable .final (disk full, read-only /run) would hand the emitter an unreadable path and re-open the literal-leak branch." ;;
+    VAR:UNGUARDED:*) fail "R3(3b): luks_err's detail variable ${_r3b#VAR:UNGUARDED:} has no '[ -r ]'/'[ -s ]' guard BEFORE the emit call" \
+                    "An unwritable .final (disk full, read-only /run) would hand the emitter an unreadable path and re-open the literal-leak branch. A guard placed after the emit protects nothing." ;;
+    AMBIGUOUS:*) fail "R3(3b): found ${_r3b#AMBIGUOUS:} git-data-emit fatal calls in the luks_open stage, expected exactly 1" \
+                    "Reporting on whichever is first is how a second, unguarded call site ships unnoticed." ;;
     *) fail "R3(3b): could not locate a parseable git-data-emit fatal call in the luks_open stage (verdict=[${_r3b:-none}])" ;;
   esac
 else
@@ -1030,6 +1130,12 @@ total=$((passes + fails))
 # `exit 0` from a skip guard, or a docker run that never produced output — not to be an
 # aspirational target. S1 emits exactly 7 on ALL THREE of its paths (healthy, mutation-did-
 # not-land, extraction-failed) so no short-circuit can satisfy the floor.
+#
+# RAISED 33 -> 36 at review (#7204): R3(2b) seed-precedes-TRAP (a seed between the trap and
+# the first append passed R3(2) while being strictly worse than #7204 — the handler aborts
+# on an unbound var under set -u and emits NOTHING), R3(2c) the ordering arm's first
+# negative control, and R1's unclassified control (both prior controls inject `quota`,
+# which IS in the allowlist, so R1(a) had no demonstrated failing direction).
 #
 # RAISED 19 -> 33 WITH THE ARMS THAT MADE IT NECESSARY (#7204), itemised so the next author
 # can check the sum rather than trust it:
@@ -1044,8 +1150,8 @@ total=$((passes + fails))
 # R1 emits exactly 7 on all three of ITS paths (healthy, extraction-failed,
 # precondition-missing) for the same reason S1 does. The floor must move with the suite or it
 # only ever guards the work that predates it.
-if [ "$total" -lt 33 ]; then
-  echo "FAIL: ran only ${total} assertions (<33) — harness did not execute fully" >&2
+if [ "$total" -lt 36 ]; then
+  echo "FAIL: ran only ${total} assertions (<36) — harness did not execute fully" >&2
   exit 1
 fi
 echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed (${total} assertions)"
