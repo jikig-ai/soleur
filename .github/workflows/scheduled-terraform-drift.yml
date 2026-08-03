@@ -156,7 +156,29 @@ jobs:
           # the whole `soleur` project (apps/web-platform/infra/token-drift-service-account.tf),
           # so unlike the config-scoped `DOPPLER_TOKEN` every other step here uses, it can
           # enumerate and READ all 13 configs. That is the swap #7159 asked for.
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DRIFT }}
+          # RESTORED to secrets.DOPPLER_TOKEN pending #7234. The project-scoped service
+          # account minted by #7162 is live and correctly shaped -- account, `viewer` project
+          # membership and token all exist -- and it can see NOTHING. Measured against the
+          # real credential:
+          #
+          #   doppler configs -p soleur --json          -> null  (0 configs)
+          #   doppler secrets -p soleur -c prd          -> "Could not find requested config 'prd'"
+          #
+          # so it cannot enumerate AND cannot read. `workplace_permissions = []` (the least
+          # privileged value satisfying the provider's ExactlyOneOf) yields workplace_role
+          # no_access, and workplace visibility turns out to be a precondition for project
+          # access rather than something a project membership can confer alone.
+          #
+          # The premise that a service-account credential can enumerate a project's configs
+          # was INFERRED from the provider shipping the resource type; it was never probed.
+          # Everything else in #7159 was measured and three premises were falsified that way.
+          #
+          # DOPPLER_CONFIGS_FLOOR deliberately STAYS 13. This credential reads 1 config, so
+          # the scan will report `degraded` at 1/13 on every run -- which is the honest state
+          # and keeps the operator channel armed. Do NOT "fix" the red by lowering the floor
+          # to 1: that is the floor-edited-down-to-match-a-narrowed-grant shape, and the
+          # runtime `configs_floor < 13` assertion below forces `degraded` anyway.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOPPLER_PROJECT: soleur
           # NO DOPPLER_CONFIG. A project-scoped identity takes no direction from it, and
           # with 13 configs in play the name reads as "which config this scans" — which is
