@@ -49,7 +49,7 @@ passes=0
 skipped_live=0
 # Number of live-arm assertions. Asserted against skipped_live when the live arm
 # does not run, so deleting a live test cannot masquerade as a skip.
-declare -i LIVE_TEST_COUNT=10
+declare -i LIVE_TEST_COUNT=12
 
 pass() { printf '  ✓ %s\n' "$1"; passes=$((passes + 1)); }
 fail() { printf '  ✗ %s\n' "$1" >&2; fails=$((fails + 1)); }
@@ -412,7 +412,7 @@ wait_in_scope() { # <scope-suffix> <pid...>
 if [[ "$LIVE" != "yes" ]]; then
   for t in T8-adoption T9-tree-adoption T10-ac7-sweep T11-bindsto-reap T12-fleet-two-sessions \
            T13-managed-oom-pref T14-kill-mechanism T15-idempotency T18-documented-kill-path \
-           AC18-reentry-resweep; do
+           AC18-reentry-resweep T15-terminal-scope-stable T9-grandchild; do
     skip "$t (no user systemd bus)"
   done
   if [[ "$skipped_live" -ne "$LIVE_TEST_COUNT" ]]; then
@@ -529,14 +529,29 @@ sys.exit(0)
   # this runs inside `$( )`, and a backgrounded child that inherits the command
   # substitution's stdout pipe keeps it open, so the substitution blocks until
   # the child exits — here, 300 seconds.
+  # ATTACH FIRST, ALLOCATE SECOND. cgroup v2 does NOT migrate charge on move, so
+  # memory a process allocates before it joins the scope stays billed to its old
+  # cgroup forever — the slice then reads well under the nominal sum and the
+  # assertion fails for an accounting reason rather than a real one (measured:
+  # ~67 MiB of a nominal 96 MiB). Each allocator therefore blocks on a go-file
+  # until membership is confirmed, then signals a ready-file when its pages are
+  # actually resident, so the reading is taken at a defined point rather than an
+  # arbitrary one on a rising curve.
+  T12D=$(mktmp) || exit 2
   spawn_alloc() { python3 -c "
-import time
-b=bytearray(${ALLOC_MB}*1024*1024)
-for i in range(0,len(b),4096): b[i]=1
+import os, sys, time
+go, ready = sys.argv[1], sys.argv[2]
+dl = time.time() + 30
+while not os.path.exists(go):
+    if time.time() > dl: sys.exit(3)
+    time.sleep(0.02)
+b = bytearray(${ALLOC_MB}*1024*1024)
+for i in range(0, len(b), 4096): b[i] = 1
+open(ready, 'w').write('ok')
 time.sleep(300)
-" >/dev/null 2>&1 & echo $!; }
-  A1=$(spawn_alloc); SPAWNED+=("$A1")
-  A2=$(spawn_alloc); SPAWNED+=("$A2")
+" "$1" "$2" >/dev/null 2>&1 & echo $!; }
+  A1=$(spawn_alloc "$T12D/go" "$T12D/r1"); SPAWNED+=("$A1")
+  A2=$(spawn_alloc "$T12D/go" "$T12D/r2"); SPAWNED+=("$A2")
   S1="soleurtest-sess1-$$.scope"; S2="soleurtest-sess2-$$.scope"
   busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
     org.freedesktop.systemd1.Manager SetUnitProperties "sba(sv)" \
@@ -544,23 +559,19 @@ time.sleep(300)
     "MemoryHigh" "t" 1073741824 "MemoryMax" "t" 2147483648 "MemorySwapMax" "t" 0 >/dev/null 2>&1
   start_test_scope "$S1" "$TEST_SLICE" "$A1" >/dev/null 2>&1
   start_test_scope "$S2" "$TEST_SLICE" "$A2" >/dev/null 2>&1
-  wait_in_scope "$S1" "$A1"; wait_in_scope "$S2" "$A2"
   slice_cg="/sys/fs/cgroup/user.slice/user-$UIDN.slice/user@$UIDN.service/soleurtest.slice/$TEST_SLICE"
-  # The claim under test is "BOTH sessions charge the SAME slice", so the
-  # threshold only has to separate one allocation from two. Asserting the exact
-  # nominal sum instead makes the test a memory-accounting oracle: the resident
-  # charge lands a few percent under the allocated bytes (page rounding, lazily
-  # touched tail pages, concurrent reclaim), so `>= 2x` fails at ~93 MiB of a
-  # nominal 96 MiB while both allocations are plainly charged. 1.5x is the
-  # midpoint — unreachable by one 48 MiB session, comfortably cleared by two.
-  need=$(( ALLOC_MB * 3 / 2 * 1024 * 1024 ))
-  nominal=$(( ALLOC_MB * 2 * 1024 * 1024 ))
-  cur=0
-  for _ in $(seq 1 100); do
-    cur=$(cat "$slice_cg/memory.current" 2>/dev/null || echo 0)
-    [[ "$cur" -ge "$need" ]] && break
+  if wait_in_scope "$S1" "$A1" && wait_in_scope "$S2" "$A2"; then
+    touch "$T12D/go"
+  else
+    fail "T12 allocators never joined their scopes; the charge measurement below would be meaningless"
+  fi
+  for _ in $(seq 1 150); do
+    [[ -f "$T12D/r1" && -f "$T12D/r2" ]] && break
     sleep 0.1
   done
+  need=$(( ALLOC_MB * 3 / 2 * 1024 * 1024 ))
+  nominal=$(( ALLOC_MB * 2 * 1024 * 1024 ))
+  cur=$(cat "$slice_cg/memory.current" 2>/dev/null || echo 0)
   smax=$(cat "$slice_cg/memory.max" 2>/dev/null || echo 0)
   if [[ "$cur" -ge "$need" && "$smax" == "2147483648" ]]; then
     pass "T12 two concurrent scopes charge one shared slice (current=$cur >= $need, nominal $nominal) and its caps are unchanged by the second adoption"
@@ -736,18 +747,53 @@ $(printf '%s\n' "$missing_list" | head -5 | while IFS= read -r m; do
   done)"
     fi
 
-    # AC18 — re-entry re-sweep adopts a child spawned AFTER first adoption.
+    # AC18 — re-entry re-sweep adopts a process that is OUTSIDE the scope at the
+    # time the hook re-runs. Parked in the terminal's own scope (not merely
+    # spawned, which would inherit the cgroup and prove nothing).
     sleep 120 & LATE=$!; SPAWNED+=("$LATE")
-    busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
-      org.freedesktop.systemd1.Manager AttachProcessesToUnit "ssau" \
-      "app-gnome-dev.warp.Warp-3591813.scope" "/" 1 "$LATE" >/dev/null 2>&1
+    # Park it in a DELEGATED test scope. The terminal's own scope is not
+    # delegated, so AttachProcessesToUnit refuses it ("Process migration not
+    # available on non-delegated units") and the process would never leave
+    # claude's scope — making the re-sweep look proven when nothing moved.
+    PARK="soleurtest-park-$$.scope"
+    parked=no
+    if start_test_scope "$PARK" "$TEST_SLICE" "$LATE" && wait_in_scope "$PARK" "$LATE"; then
+      late_cg=$(cut -d: -f3 < "/proc/$LATE/cgroup" 2>/dev/null)
+      [[ "${late_cg##*/}" != "$scope_name" ]] && parked=yes
+    fi
+
     bindsto_before=$(sysd_prop "$scope_name" BindsTo)
+    ts_before=$(tail -1 ".claude/.memory-backstop.jsonl" 2>/dev/null | jq -r '.terminal_scope // ""' 2>/dev/null)
     "$PWD/$HOOK" </dev/null >/dev/null 2>&1
     bindsto_after=$(sysd_prop "$scope_name" BindsTo)
+    ts_after=$(tail -1 ".claude/.memory-backstop.jsonl" 2>/dev/null | jq -r '.terminal_scope // ""' 2>/dev/null)
+
+    if [[ "$parked" == "yes" ]]; then
+      late_after=$(cut -d: -f3 < "/proc/$LATE/cgroup" 2>/dev/null)
+      if [[ "${late_after##*/}" == "$scope_name" ]]; then
+        pass "AC18 re-entry re-sweep pulled a process parked OUTSIDE the scope back in (Delegate=true + AttachProcessesToUnit wired)"
+      else
+        fail "AC18 re-entry re-sweep did not adopt the parked process: cgroup=${late_after##*/}, expected $scope_name"
+      fi
+    else
+      fail "AC18 could not park a process outside the scope, so the re-sweep is untested (terminal_scope='$tscope_now')"
+    fi
+
     if [[ "$bindsto_before" == "$bindsto_after" ]]; then
-      pass "T15/AC10 BindsTo unchanged across re-entry ('$bindsto_after') — the hook does not re-derive the terminal scope from its own scope"
+      pass "T15/AC10 unit BindsTo unchanged across re-entry ('$bindsto_after')"
     else
       fail "T15/AC10 BindsTo changed across re-entry: '$bindsto_before' -> '$bindsto_after' (self-binding bug)"
+    fi
+    # The unit's BindsTo cannot change on re-entry (it is not a settable runtime
+    # property), so it alone cannot detect a hook that RE-DERIVES the terminal
+    # scope from its own cgroup — by then its own cgroup IS its scope. What
+    # carries AC10's claim is that the value the hook RECORDS stays the terminal
+    # scope rather than becoming its own. Mutation-verified: re-deriving on
+    # re-entry flips this to soleur-agent-<pid>.scope.
+    if [[ -n "$ts_before" && "$ts_before" == "$ts_after" ]]; then
+      pass "T15/AC10 logged terminal_scope stable across re-entry ('$ts_after') — the hook preserves the binding instead of re-deriving it"
+    else
+      fail "T15/AC10 logged terminal_scope changed across re-entry: '$ts_before' -> '$ts_after' (self-binding bug)"
     fi
     nscopes=$(systemctl --user list-units 'soleur-agent-*' --all --no-pager 2>/dev/null | grep -cF "$scope_name" || true)
     if [[ "$nscopes" -le 1 ]]; then
