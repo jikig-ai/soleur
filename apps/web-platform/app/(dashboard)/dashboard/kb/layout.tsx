@@ -32,9 +32,9 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     error,
     hasTreeContent,
     openSidebar,
+    fullWidth,
+    treeHost,
   } = state;
-
-  const fullWidth = loading || error || (!loading && !hasTreeContent);
 
   // One back per state (#4915): the mobile page header shows its own "Back to
   // menu" ONLY in the KB doc view, where the persistent band's back is
@@ -53,9 +53,16 @@ export default function KbLayout({ children }: { children: ReactNode }) {
               provider here (React context follows the React tree through the
               portal) so FileTree's useKb() still resolves — ONE /api/kb/tree
               fetch shared with the doc viewer + chat panel. Collapse is owned
-              by the unified rail, so no in-shell collapse button. */}
+              by the unified rail, so no in-shell collapse button.
+
+              #7186: on a mobile populated landing render the ONE shell moves to
+              the content column instead (KbMobileLayout), so the portal renders
+              nothing. This is safe to gate on a viewport-derived value because
+              RailSlotPortal already returns null until its container ref
+              callback fires — the portal side is never server-rendered, so no
+              hydration mismatch is possible here (D1 reason 2). */}
           <RailSlotPortal>
-            <KbSidebarShell />
+            {treeHost === "rail" ? <KbSidebarShell /> : null}
           </RailSlotPortal>
 
           {fullWidth ? (

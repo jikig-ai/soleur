@@ -1,9 +1,11 @@
 "use client";
 
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { KbBreadcrumb } from "@/components/kb/kb-breadcrumb";
 import { SharePopover } from "@/components/kb/share-popover";
 import { KbChatTrigger } from "@/components/kb/kb-chat-trigger";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 import {
   KbSyncStatus,
   type KbSyncHistoryRow,
@@ -30,6 +32,44 @@ export function KbContentHeader({
   onSynced,
   uploaderLabel,
 }: KbContentHeaderProps) {
+  const isMobile = useIsMobile();
+  const [overflowOpen, setOverflowOpen] = useState(false);
+  const overflowRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+
+  const closeOverflow = useCallback(() => {
+    setOverflowOpen(false);
+    // Focus restore: without it, dismissing the menu drops the user at the top
+    // of the document for keyboard/screen-reader navigation.
+    triggerRef.current?.focus();
+  }, []);
+
+  // Escape + outside-pointerdown dismissal. SharePopover (which now lives
+  // INSIDE this menu) implements neither — do not copy that gap forward.
+  useEffect(() => {
+    if (!overflowOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeOverflow();
+    };
+    const onPointerDown = (e: Event) => {
+      const el = overflowRef.current;
+      if (el && !el.contains(e.target as Node)) setOverflowOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [overflowOpen, closeOverflow]);
+
+  // The viewport can change under an open menu (rotation, a desktop resize).
+  // Leaving `overflowOpen` true would strand state the desktop branch cannot
+  // reach — and re-open a stale menu on the way back.
+  useEffect(() => {
+    if (!isMobile) setOverflowOpen(false);
+  }, [isMobile]);
+
   return (
     <header className="flex shrink-0 items-center justify-between border-b border-soleur-border-default px-4 py-3 md:px-6">
       <div className="flex items-center gap-2">
@@ -62,6 +102,67 @@ export function KbContentHeader({
         )}
       </div>
       <div className="flex items-center gap-2">
+        {/* DC3 (#7186): four trailing actions do not fit a 375px phone. Below
+            `md` the secondary three move behind a `⋯` — nothing is dropped
+            (Download is the only way to consume a non-markdown attachment on a
+            phone, and silently losing Share is a capability regression).
+            Gated in JS, not with `md:hidden` twins: SharePopover and
+            KbSyncStatus own state and fetches, so a CSS dual-render would mount
+            each twice. */}
+        {isMobile ? (
+          <>
+            <KbChatTrigger fallbackHref={chatUrl} />
+            <div className="relative" ref={overflowRef}>
+              <button
+                type="button"
+                data-testid="kb-header-overflow-trigger"
+                aria-label="More actions"
+                aria-haspopup="menu"
+                aria-expanded={overflowOpen}
+                ref={triggerRef}
+                onClick={() => setOverflowOpen((v) => !v)}
+                className="flex h-11 w-11 items-center justify-center rounded-lg text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+              >
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  aria-hidden="true"
+                >
+                  <circle cx="5" cy="12" r="1.75" />
+                  <circle cx="12" cy="12" r="1.75" />
+                  <circle cx="19" cy="12" r="1.75" />
+                </svg>
+              </button>
+              {overflowOpen && (
+                <div
+                  role="menu"
+                  aria-label="Document actions"
+                  data-testid="kb-header-overflow-menu"
+                  className="absolute right-0 top-full z-50 mt-2 flex w-56 flex-col gap-2 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-3 shadow-xl"
+                >
+                  {download && (
+                    <a
+                      data-testid="kb-content-download"
+                      href={download.href}
+                      download={download.filename}
+                      aria-label={`Download ${download.filename}`}
+                      className="inline-flex min-h-11 items-center gap-2 rounded-lg px-2 text-sm text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+                    >
+                      Download
+                    </a>
+                  )}
+                  {lastSync !== undefined && (
+                    <KbSyncStatus lastSync={lastSync} onSynced={onSynced} />
+                  )}
+                  <SharePopover documentPath={joinedPath} />
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
         {download && (
           <a
             data-testid="kb-content-download"
@@ -106,6 +207,8 @@ export function KbContentHeader({
         )}
         <SharePopover documentPath={joinedPath} />
         <KbChatTrigger fallbackHref={chatUrl} />
+          </>
+        )}
       </div>
     </header>
   );

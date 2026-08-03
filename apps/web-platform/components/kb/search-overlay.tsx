@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import Link from "next/link";
 import type { SearchResult, SearchMatch } from "@/server/kb-reader";
+import { useNavResume } from "@/hooks/use-nav-resume";
 
 export function SearchOverlay() {
   const [query, setQuery] = useState("");
@@ -10,6 +11,30 @@ export function SearchOverlay() {
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(null);
+  // #7186 — on mobile the whole browse view (this overlay included) unmounts
+  // when a document opens, so a locally-held query would be lost on every
+  // drill-in. Seeding is one frame late because useNavResume gates its reads on
+  // workspaceId — same as `expanded` already behaves.
+  const { workspaceId, readSearchQuery, writeSearchQuery } = useNavResume();
+  const seededForRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    // Keyed on the workspace, not a bare boolean: switching workspaces re-seeds
+    // from the NEW workspace's key (empty → cleared) rather than leaking the
+    // previous workspace's query.
+    if (seededForRef.current === workspaceId) return;
+    seededForRef.current = workspaceId;
+    setQuery(readSearchQuery());
+  }, [workspaceId, readSearchQuery]);
+
+  const onQueryChange = useCallback(
+    (next: string) => {
+      setQuery(next);
+      writeSearchQuery(next);
+    },
+    [writeSearchQuery],
+  );
 
   const search = useCallback(async (q: string) => {
     if (!q.trim()) {
@@ -65,7 +90,7 @@ export function SearchOverlay() {
         <input
           type="search"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => onQueryChange(e.target.value)}
           placeholder="Search files..."
           enterKeyHint="search"
           autoCapitalize="none"

@@ -43,6 +43,9 @@ export interface NavResumeApi {
   writeExpanded: (paths: Iterable<string>) => void;
   readScrollTop: () => number | null;
   writeScrollTop: (n: number) => void;
+  /** #7186 — KB search query, so it survives the mobile browse→doc→back trip. */
+  readSearchQuery: () => string;
+  writeSearchQuery: (q: string) => void;
   clearKbPath: () => void;
   clearChatId: () => void;
   /** Last resumeable chat id for bare `/dashboard/chat` client resume. */
@@ -133,6 +136,28 @@ export function useNavResume(): NavResumeApi {
     [workspaceId],
   );
 
+  // #7186 — on mobile the tree UNMOUNTS when you open a document (the browse
+  // view is replaced by the doc), so SearchOverlay's local query would be lost
+  // on every drill-in. Persisted here alongside its two siblings (expanded,
+  // scrollTop) rather than widening UseKbLayoutStateResult. Workspace-keyed, so
+  // it cannot leak between workspaces. Capped so a pathological paste cannot
+  // fill the per-origin sessionStorage quota and evict the resume keys.
+  const readSearchQuery = useCallback((): string => {
+    if (!workspaceId) return "";
+    return safeSession(resumeKey(workspaceId, "kb", "searchQuery")) ?? "";
+  }, [workspaceId]);
+
+  const writeSearchQuery = useCallback(
+    (q: string) => {
+      if (!workspaceId) return;
+      safeSession(
+        resumeKey(workspaceId, "kb", "searchQuery"),
+        q ? q.slice(0, 256) : null,
+      );
+    },
+    [workspaceId],
+  );
+
   const clearKbPath = useCallback(() => {
     if (!workspaceId) return;
     safeSession(resumeKey(workspaceId, "kb", "path"), null);
@@ -160,6 +185,8 @@ export function useNavResume(): NavResumeApi {
     writeExpanded,
     readScrollTop,
     writeScrollTop,
+    readSearchQuery,
+    writeSearchQuery,
     clearKbPath,
     clearChatId,
     readChatId,

@@ -15,7 +15,7 @@ import { WorkspaceContextBand } from "@/components/dashboard/workspace-context-b
 import { RailSlotProvider, RailCollapsedProvider, RAIL_EXPAND_EVENT } from "@/components/dashboard/rail-slot";
 import { RailResizeHandle } from "@/components/dashboard/rail-resize-handle";
 import { useRailWidth, railMaxPx, RAIL_MIN_PX } from "@/hooks/use-rail-width";
-import { segmentToDrillLevel, isKbDocView } from "@/hooks/segment-to-drill-level";
+import { segmentToDrillLevel } from "@/hooks/segment-to-drill-level";
 import { useNavResume } from "@/hooks/use-nav-resume";
 import { MembershipRevokedScreen } from "@/components/dashboard/membership-revoked-screen";
 import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
@@ -219,14 +219,15 @@ export default function DashboardLayout({
   const kbExpanded = drill === "kb" && !collapsed;
   const mainExpanded = drill !== "kb" && !collapsed;
   // Phase 3 (#4915): one back per state. In the mobile KB DOC VIEW the
-  // kb-content-header owns the only back ("Back to file tree", md:hidden), so the
-  // mobile band's "Back to menu" is suppressed to stop the two co-rendering. This
-  // is path EXTRACTION ("a KB doc is open" — trailing-slash form), explicitly
-  // distinct from drill detection (which stays sole to segmentToDrillLevel,
-  // AC4c): the band itself never reads pathname for this — the layout owns it.
-  // The KB page-body header (kb/layout.tsx) keys its own back on the SAME
-  // predicate, so exactly one "Back to menu" renders per state.
-  const inKbDocView = isKbDocView(pathname);
+  // #7186: `inKbDocView` used to be computed here with a comment claiming the
+  // mobile band's back is suppressed only in the KB doc view. That was never
+  // true — the value was computed and NEVER read, and the mobile band below is
+  // `suppressBack` unconditionally (it lives inside the drawer, where a back
+  // arrow has nothing to go back from). Removed rather than left as a dead
+  // variable asserting behaviour the code does not perform. The KB's in-page
+  // backs — the doc header's "Back to file tree" and, since #7186, the browse
+  // view's "Back to menu" — are the real ones, and they are mutually exclusive
+  // by route.
 
   // Auto-close drawer on route change
   useEffect(() => {
