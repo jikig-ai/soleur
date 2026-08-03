@@ -42,7 +42,20 @@ FAIL=0
 # mentions the words cannot match.
 PATTERN='\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q'
 
+# `.openhands/hooks/*.sh` added by #7173. It is the SIBLING HARNESS of the tree
+# above and it was never in this pathspec, so the class this guard exists to
+# stop was live there the whole time it was enforced here — 20 sites, including
+# the recursive-delete ownership proof. Measured before the fix, with the real
+# grep pinned and `yes | grep -q y` returning 141 as a positive control: a
+# `rm -rf $HOME` padded past the 64 KiB pipe buffer returned rc 0 with no
+# decision at 131 KB and 526 KB, and denied at 8 KB. The producer takes SIGPIPE,
+# `pipefail` promotes it, the `if` reads false, and the guard is skipped.
+#
+# Added as a NAMED directory taken to zero in the same change, which is the
+# growth rule in the scope note above — not a speculative glob widening. The
+# `.test.sh` exclusion below applies to it identically.
 hits="$(git grep -nE "$PATTERN" -- '.claude/hooks/*.sh' '.claude/hooks/lib/*.sh' \
+  '.openhands/hooks/*.sh' \
   | grep -vE '\.test\.sh' || true)"
 
 # The two files #7024 took to zero. Named individually, NOT via a glob — see the scope

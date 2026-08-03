@@ -63,17 +63,26 @@ set -uo pipefail
 # correctness, so the suite goes red at the moment of divergence rather than at 03:00.
 PATHSPEC=(apps/web-platform/ plugins/soleur/ ':(exclude)plugins/soleur/docs/' ':(exclude)plugins/soleur/test/')
 
-# The longest LEGITIMATE commit-to-deployed latency, as the sum of the release pipeline's own
-# declared ceilings on the serial critical path: await-ci 60 + migrate 30 + verify-migrations 15
-# + deploy 90. A principled bound rather than a guess, and ~4x every observed run.
-# (verify-doppler-secrets, 10 min, runs in parallel and is not additive.)
+# The longest LEGITIMATE commit-to-deployed latency, from the release pipeline's own declared
+# ceilings along its critical path. That path is NOT a serial sum: `release` and `await-ci`
+# declare no `needs:` and run in PARALLEL, so it is
+#     max(release 60, await-ci 60) + migrate 30 + verify-migrations 15 + deploy 90 = 195.
+# A principled bound rather than a guess, and ~4x every observed run.
+# (verify-doppler-secrets, 10 min, also runs in parallel and is dominated.)
+#
+# SCOPE (#7160): those ceilings bound EXECUTION only. This constant is compared against an age
+# measured from the oldest undeployed commit's committer epoch, and runner queue wait,
+# concurrency serialization between back-to-back merges, and push-to-workflow-start latency all
+# sit outside any job timeout. The margin for those remains empirical, not provable.
 #
 # Deliberately NOT a tick count. This repo measured GitHub Actions `schedule:` dispatch jitter
 # at a median 80-134 minutes late (max 339), so "N consecutive ticks" measures an interval that
 # is not the interval. A commit timestamp is immutable and readable from a single sample, so
 # jitter can only DELAY detection here — it can never manufacture a false positive.
-# Part B (B9) asserts this stays >= that serial sum, so a pipeline timeout INCREASE fails the
-# suite: the threshold can never silently become smaller than legitimate latency.
+# Part B (B9) asserts this stays >= that critical path, so a pipeline timeout INCREASE fails the
+# suite: the threshold can never silently become smaller than legitimate latency. A DELETED
+# ceiling now reads as the GitHub 360-minute default rather than as zero, so removing one fails
+# the suite too instead of silently lowering the computed bound.
 DRIFT_SUSTAINED_THRESHOLD_MIN=195
 
 PROD_HEALTH_URL="${PROD_HEALTH_URL:-https://app.soleur.ai/health}"

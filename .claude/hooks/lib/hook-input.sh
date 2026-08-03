@@ -53,8 +53,9 @@ HOOK_INPUT_HOOK=""
 
 # The hook designated to emit the `ask` envelope. The other hooks report and
 # exit 0. All-emit would turn a persistent fault (jq missing) into an
-# unrecoverable loop: 18 hooks fire per Bash call and repairing PATH is itself a
-# Bash call, so the operator would face 18 prompts per repair attempt.
+# unrecoverable loop: 19 hooks fire per Bash call and repairing PATH is itself a
+# Bash call, so the operator would face 19 prompts per repair attempt.
+# (19, not 18, since #7165 registered grep-rewrite.sh on the Bash matcher.)
 # ADR-157; the contract test asserts every PreToolUse matcher carrying a
 # migrated hook also carries this one.
 HOOK_INPUT_RESPONDER="guardrails"
@@ -139,7 +140,7 @@ hook_parse_input() {
   #
   # NO TEMPFILE. An earlier draft captured jq's stderr to a `mktemp` file to
   # carry <=120 bytes of diagnostic text. That cost an allocate+unlink pair on
-  # EVERY invocation — 18 hooks fire per Bash tool call — on the hot path, to
+  # EVERY invocation — 19 hooks fire per Bash tool call — on the hot path, to
   # carry garnish. jq's EXIT CODE already makes the only distinction that
   # matters, and with exactly one constant program in this file there is no
   # second program the stderr text could disambiguate between.

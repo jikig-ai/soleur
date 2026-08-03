@@ -42,9 +42,18 @@
 #
 # WHAT THIS DOES NOT CLAIM, stated because a gate believed to cover more than it does is worse
 # than one whose scope is written down:
-#   - It does not verify the SENTRY channel independently. Sentry has no search capability
-#     wired in this repo (scripts/sentry-issue.sh needs an issue id, and the `event:read`
-#     scope lives in a token this route does not carry). The fatal channel is proven at RUNG 1
+#   - It does not verify the SENTRY channel independently. NOTE, corrected 2026-08-03 (#7204):
+#     the reason is NOT that search is unavailable — an earlier revision of this comment said
+#     "Sentry has no search capability wired in this repo", and that is FALSE. Measured:
+#     SENTRY_ISSUE_RO_TOKEN (Doppler soleur/prd, [event:read, org:read]) returns HTTP 200 on
+#     /api/0/organizations/jikigai-eu/issues/?query=..., including a host_name: query. Only
+#     scripts/sentry-issue.sh is id-shaped; the API is not. This route simply does not
+#     implement the read — a scope decision, not a capability limit. It matters because #7116
+#     (mis-reporting TRANSIENT for early-boot fatals it could read from Sentry directly) must
+#     be planned against what is actually possible, and a false constraint in this header
+#     would have planned it against a wall that does not exist
+#     (hr-verify-repo-capability-claim-before-assert). #7116 owns that work; do not do it here.
+#     The fatal channel is proven at RUNG 1
 #     by git-data-runcmd-rehearsal.test.sh, which shows the trap firing and emitting `fatal`;
 #     rung 2's job is the real-host facts rung 1 structurally cannot reach — TLS egress from a
 #     real Hetzner host, a real `doppler run`, and a real `cryptsetup luksOpen`.
@@ -181,12 +190,31 @@ ANCHOR_SQL="
     AND JSONExtractString(raw,'host_name') != '${HOST_NAME}'
   ORDER BY dt DESC LIMIT 5 FORMAT JSONEachRow"
 
+# (#7204) `detail` AND `rc` ARE SELECTED HERE, and this is the single change that would have
+# made #7204 self-diagnosing. The FAIL arm already printed matching rows — but the projection
+# carried a VERDICT WITH NO CAUSE, so diagnosing "stage:luks_open, level:fatal" required
+# hand-writing a new Better Stack query to discover the mount had returned ESRCH. The cause
+# was in the row the whole time; the artifact just never asked for it.
+#
+# `rc` rides in $TAGS, which the emitter concatenates at TOP LEVEL of the JSON body, so
+# JSONExtractString(raw,'rc') resolves — it is not nested under tags. Both columns are pinned
+# by a mutation-armed assertion in git-data-rung2-rehearsal.test.sh; a column with no consumer
+# would be dropped rather than added.
+#
+# KNOWN-EMPTY BY CONSTRUCTION, enumerated so a reader does not over-read them: the four
+# assertion booleans below are emitted ONLY on a stage:boot_complete row. git-data-bootstrap.sh
+# sets them there; the luks_err trap passes only rc=. On EVERY non-boot_complete row they are
+# structurally empty, so "all four are blank" carries no information about how far the boot
+# got — the `stage` tag is the only positional fact in a FAIL row. #7204's source brief made
+# exactly that over-read.
 HOST_SQL="
   SELECT /* __HOSTROWS__ every stage this rehearsal host reported */
          dt,
          JSONExtractString(raw,'stage')         AS stage,
          JSONExtractString(raw,'level')         AS level,
          JSONExtractString(raw,'host_name')     AS host,
+         JSONExtractString(raw,'detail')        AS detail,
+         JSONExtractString(raw,'rc')            AS rc,
          JSONExtractString(raw,'luks_mounted')  AS luks_mounted,
          JSONExtractString(raw,'repo_root')     AS repo_root,
          JSONExtractString(raw,'hooks_path')    AS hooks_path,

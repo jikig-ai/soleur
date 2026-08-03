@@ -18,6 +18,36 @@ exit 0
 Claude Code reads that JSON from stdout and blocks the tool call. Any deviation
 from this shape is treated as a pass-through.
 
+### The third disposition: rewrite (ADR-162)
+
+The two sentences above described the contract completely until #7165. A
+PreToolUse hook has a **third** disposition available to it — it may **rewrite
+the tool input** and let the call proceed:
+
+```bash
+jq -c --arg new "$NEW" \
+  '{hookSpecificOutput:{hookEventName:"PreToolUse",updatedInput:(.tool_input | .command = $new)}}'
+exit 0
+```
+
+This is not a pass-through and it is not a decision. It is a third disposition alongside
+allow and deny, and it is deliberately narrow:
+
+- **Exactly one hook in this directory may do it.** Two rewriters for the same
+  call have undefined precedence and one rewrite is silently discarded. Enforced
+  by a one-entry allowlist in `hookeventname-coverage.test.sh`.
+- **A rewriter never emits `permissionDecision`**, at any depth. An `allow`
+  would bypass the permission system for every call it touches.
+- **`updatedInput` REPLACES `tool_input`; it does not merge.** Build it from the
+  whole object. Emitting only the changed key silently drops `timeout`,
+  `run_in_background`, `description` and `sandbox`.
+- **A sibling's `deny` still wins**, and permission rules match the **original**
+  command — so a rewrite can neither dodge a deny rule nor satisfy an allow one.
+
+Today the sole rewriter is `grep-rewrite.sh`. Full clause list and the probe
+evidence: [ADR-162](../../knowledge-base/engineering/architecture/decisions/ADR-162-pretooluse-hooks-may-rewrite-tool-input.md)
+and [UPDATED-INPUT-PAYLOAD-SHAPE.md](./UPDATED-INPUT-PAYLOAD-SHAPE.md).
+
 ## Parsing hook input
 
 **That stdin envelope is model-controlled and untrusted** ([ADR-156][adr155]).
@@ -61,7 +91,7 @@ Four rules, each of which was a real defect in #7164:
 
 `guardrails.sh` is the **designated responder**: it emits the `ask`, the other
 19 report and exit 0, so a persistent fault produces one prompt per tool call
-rather than 18. That makes `guardrails.sh` load-bearing for the others, and
+rather than 19. That makes `guardrails.sh` load-bearing for the others, and
 `hook-input-contract.test.sh` asserts against `.claude/settings.json` that every
 tool triggering a migrated hook also triggers `guardrails.sh`.
 
@@ -108,14 +138,53 @@ the 20 hooks that can change whether a tool call proceeds:
 `kb-domain-allowlist-guard` · `no-memory-write` · `pre-merge-auto-close-scan` ·
 `pre-merge-rebase` · `worktree-write-guard` · `iac-plan-write-guard`
 
+**Also mandatory, as a separate class** — the *third disposition*
+([ADR-162](../../knowledge-base/engineering/architecture/decisions/ADR-162-pretooluse-hooks-may-rewrite-tool-input.md)):
+
+`grep-rewrite`
+
+A rewriter consumes the same untrusted envelope and is bound by the same trust
+boundary, but two of the twenty's properties do not apply to it **by
+construction**, so it is classified rather than folded into the list above:
+
+- It does not call `hook_input_should_ask`. Asking is the designated
+  responder's job, and a rewriter's failed parse costs a missing
+  *optimization*, not a missing safety check — escalating would spend an
+  operator prompt on a non-event.
+- It is **not** silent on stdout. Emitting `updatedInput` is the entire point;
+  the twenty are asserted to emit nothing unless they are the responder.
+
+Everything else still binds: fail-hard `source`, a real parse gate, a recorded
+fault, and `exit 0` on every payload class. `hook-input-contract.test.sh`
+asserts the set closure over **both** lists (A18) and holds each rewriter to
+those four properties plus the one that separates the classes — it must
+actually emit `updatedInput` (A18b). Without that last one the classification
+would be an escape hatch: measured, a well-behaved *guard* satisfies the other
+four, so listing one here to silence A18 would otherwise cost nothing.
+
 **Not yet migrated** — 10 hooks, in two groups. All remain bound by ADR-156
 clause 1 (no `eval`), which the contract test enforces repo-wide.
 
 *Genuinely advisory* (6) — they emit no `permissionDecision` at all, so a
-mis-parsed field costs a hint rather than a guard:
+mis-parsed field costs a hint rather than a guard. **A shared "advisory"
+blanket is not a reason**, so each carries its own, and two of them are
+deliberately uncomfortable:
 
-`agent-token-tee` · `docs-cli-verification` · `pencil-collapse-guard` ·
-`phase-surface-hint` · `skill-context-queries` · `skill-invocation-logger`
+| Hook | Why it stays exempt |
+|---|---|
+| `agent-token-tee` | Reads an entire `.tool_response.*` family the extractor does not model at all. Migrating it is not a slot widening but a second contract. |
+| `docs-cli-verification` | Emits a reminder string only. Every field it reads is used for prose, never for a path test or a decision. |
+| `pencil-collapse-guard` | Advisory in its output, **but it restores a file from git** on a `filePath` it does not type-assert. Eyes open: the write is bounded by `git checkout` semantics on a path that must already be tracked, so a non-string yields a failed checkout rather than an arbitrary write — but this is the weakest of the six and it should migrate first among them. |
+| `phase-surface-hint` | Pure stdout hint keyed on the phase; reads no attacker-influenced path. |
+| `skill-context-queries` | Emits suggested queries; a mis-parsed field produces a worse suggestion, never a different decision. |
+| `skill-invocation-logger` | Appends a log line. Worst case is a malformed log entry, and the line is already treated as untrusted text downstream. |
+
+*Not a bash hook at all* (1) — and absent from both lists until #7173 caught it,
+which is how an exemption list becomes silent residue:
+
+| Hook | Why it stays exempt |
+|---|---|
+| `security_reminder_hook.py` | A **PreToolUse hook on the `Edit` matcher**, so it is inside ADR-156's scope, but it is Python and cannot `source` a bash helper. It reads the same model-controlled envelope and is explicitly fail-open. Note it is also a **second telemetry writer**: its `emit_incident(…, cmd=…)` path has its own truncation and is not covered by the contract suite's no-payload-content assertion. Converging it needs a Python port of the extractor, not a migration. |
 
 *Gating, but deferred* (4) — **these DO decide whether a tool call proceeds** and
 are in ADR-156's binding scope. They are not exempt on principle; they are
@@ -128,19 +197,48 @@ blocked on two concrete things, and they are the priority set in the follow-up:
 | `pencil-open-guard` | `mcp__pencil__open_document` | `deny` |
 | `skill-security-scan-write` | `Write` | `deny`, `ask`, `allow` |
 
-The two blockers, both real:
+The blockers, **as measured** — two of the three originally written here were
+wrong, and are corrected rather than deleted so the correction is legible:
 
 1. **Every one needs a field the extractor does not publish** — `filePath`
-   (camelCase), `.tool_input.skill`, `.tool_input.content`, `.tool_input.new_string`,
-   and — for `durable-reminder-prefer-inngest` — `.durable` / `.recurring`, which
-   are legitimately **booleans**. `all(type == "string")` structurally cannot
-   express a boolean field, so migrating these widens the fixed-slot contract.
-   That is exactly what ADR-157 rejected a variadic API to avoid, so it is a
-   design decision, not a paste.
-2. **Three of their matchers have no designated responder.** `guardrails.sh` is
-   wired on `Bash` and `Write|Edit|MultiEdit|NotebookEdit` only, so `CronCreate`,
-   `Skill` and `mcp__*` payloads have nothing to emit the `ask`. Migrating them
-   fails the designated-responder invariant (AC14) until that is resolved.
+   (camelCase), `.tool_input.skill`, `.tool_input.content`,
+   `.tool_input.new_string`. `all(type == "string")` is a single shared status
+   token, so publishing these widens the fixed-slot contract. That is exactly
+   what ADR-157 rejected a variadic API to avoid, so it is a design decision,
+   not a paste. **Still true.**
+2. ~~Three of their matchers have no designated responder.~~ **Measured false —
+   it blocks zero of the four.** The contract suite's A9 resolves coverage at
+   the **tool** level, not by matcher-string equality: `Write` and
+   `Write|Edit|MultiEdit|NotebookEdit` are different strings that both fire on a
+   Write. `guardrails.sh`'s covered set is `Bash Edit MultiEdit NotebookEdit
+   Write`, so `skill-security-scan-write` (`Write`) and
+   `new-scheduled-cron-prefer-inngest` (`Write|Edit`) already have a responder.
+   `CronCreate` and `mcp__pencil__open_document` carry **exactly one hook each**,
+   so "election" there is degenerate — a data change, not a mechanism.
+3. ~~`durable-reminder-prefer-inngest`'s booleans block it.~~ **Measured false.**
+   That hook already performs a `has()`-guarded, `//`-avoiding boolean read, with
+   an in-source comment distinguishing *absent* from *present-and-false*. Its
+   booleans are type-safe today; its only unprotected field is
+   `.tool_input.prompt`, a string.
+4. **NEW, and the one that actually blocks the design.** Widening the shared
+   status token into per-slot flags — the obvious fix for (1) — makes an
+   `allow`-vs-`ask` collision reachable **for the first time**. On a Write
+   carrying a non-string `.tool_input.command`, `guardrails.sh` would fail its
+   core group and ask, while `skill-security-scan-write` parses its own slots
+   cleanly and emits its unconditional explicit `allow`. Claude Code's
+   resolution order for two hooks emitting different decisions on one call is
+   **unestablished**, and if `allow` wins it neutralises the responder's ask.
+   Under today's single shared token both hooks fail together and both go
+   silent, so the combination cannot arise. Establishing the order needs a live
+   hook registration and a real permission prompt; per ADR-156 it must not be
+   assumed.
+5. **NEW.** The same decoupling creates a silent fail-open in the other
+   direction: a non-string `.tool_input.content` would leave `guardrails.sh`'s
+   core group clean (no ask) while `skill-security-scan-write` fails its own
+   group and exits 0 — **Write allowed, scanner never ran**. That is ADR-157's
+   explicitly rejected "fail open with a loud incident", and a regression
+   against that hook's own current posture, which already asks rather than
+   allows on both of its cannot-evaluate branches.
 
 `skill-security-scan-write` is the sharpest of the four: it can emit an explicit
 `allow`, which skips the permission prompt outright, and an array
@@ -148,17 +246,35 @@ The two blockers, both real:
 HIGH-RISK pattern. `pencil-open-guard` is the clearest ADR-156 case — an `mcp__*`
 matcher is precisely the "other tool shapes" whose envelope this repo does not
 define — but it is one of the *harder* migrations, not the easiest, because it
-needs the unpublished camelCase `filePath` **and** has no responder.
+needs the unpublished camelCase `filePath`.
 
 Tracked in **#7173**.
 
-`.openhands/hooks/` mirrors carry a **minimal in-place** type assertion instead
-of this helper: a different envelope (`.working_dir`, `.tool_input.path`) and a
-different protocol (`exit 2` + `{"decision":"deny"}`, with no `ask`).
-Convergence is a tracked follow-up.
+### The `.openhands/` mirror
+
+The three mirrors (`guardrails.sh`, `pre-merge-rebase.sh`,
+`worktree-write-guard.sh`) keep a **minimal in-place** type assertion rather than
+this helper: a different envelope (`.working_dir`, `.tool_input.path`) and a
+different protocol (`exit 2` + `{"decision":"deny"}`, with no `ask` and no kill
+switch). What each reason class does there is decided in
+[ADR-165][adr165] — `nonstring`, `separator` and `unparseable` deny;
+`jq_missing` and `internal` fail **open, loudly**, because the repair for a
+missing `jq` is itself a tool call that a deny would also block.
+
+This is an in-place decision, not an unexamined gap. Convergence onto the shared
+extractor would buy DRY and three jq forks down to one on a non-primary harness,
+and would pay for it with a cross-tree fail-hard `source` — whose only precedent
+in that file (`freeze-lock.sh`) is deliberately fail-**soft** for reasons that do
+not apply to an input helper.
+
+The divergence is **executable**, not just documented:
+`pre-merge-rebase-parity.test.sh` asserts all three classes. That matters because
+that suite's header records two prior silent divergences between the harnesses,
+both undetected precisely because nothing ran the comparison.
 
 [adr155]: ../../knowledge-base/engineering/architecture/decisions/ADR-156-hook-stdin-is-model-controlled-and-untrusted.md
 [adr156]: ../../knowledge-base/engineering/architecture/decisions/ADR-157-a-hook-that-cannot-parse-its-input-asks.md
+[adr165]: ../../knowledge-base/engineering/architecture/decisions/ADR-165-what-ask-means-on-a-harness-with-no-ask-state.md
 
 ## Incident telemetry (ADR-2)
 
@@ -211,7 +327,7 @@ same-session deny.
 
 ## Rotation
 
-Three telemetry sinks under `.claude/` rotate via a shared helper at
+Four telemetry sinks under `.claude/` rotate via a shared helper at
 `.claude/hooks/lib/log-rotation.sh`:
 
 | Sink | Owner |
@@ -219,6 +335,7 @@ Three telemetry sinks under `.claude/` rotate via a shared helper at
 | `.claude/.rule-incidents.jsonl` | `lib/incidents.sh::emit_incident` (#2213) |
 | `.claude/.skill-invocations.jsonl` | `skill-invocation-logger.sh` (#3122) |
 | `.claude/.session-tokens.jsonl` | `agent-token-tee.sh` (#3494) |
+| `.claude/.memory-backstop.jsonl` | `memory-backstop.sh` (#7166) |
 
 ### Per-write rotator (primary)
 
@@ -266,7 +383,7 @@ machines that never trigger a hook between aggregations).
 
 All active and archived files are gitignored under wildcards
 (`.claude/.rule-incidents*`, `.claude/.skill-invocations*`,
-`.claude/.session-tokens*`).
+`.claude/.session-tokens*`, `.claude/.memory-backstop*`).
 
 ### Library API
 
@@ -288,6 +405,15 @@ helper itself errors.
 | `pencil-open-guard.sh` | 1 | `cq-before-calling-mcp-pencil-open-document` |
 | `worktree-write-guard.sh` | 1 | `guardrails-worktree-write-guard` |
 
+### PreToolUse rewriters (no deny semantics)
+
+Emit `updatedInput` and let the call proceed — see §The third disposition above.
+ADR-162 permits exactly one entry in this table.
+
+| Hook | Rewrites | Rule IDs emitted |
+|---|---|---|
+| `grep-rewrite.sh` | Prepends a `grep()` redefinition to Bash commands carrying a `grep` substring, neutralizing the ugrep shim that reached 9.5 GB RSS against a 21 kB file (#7163). The command itself is left byte-identical. Kill-switch: `SOLEUR_DISABLE_GREP_REWRITE=1`. Observe-only: `SOLEUR_GREP_REWRITE_OBSERVE=1`. Issue #7165. | `grep-rewrite-would-rewrite` (observe-only soak), `grep-rewrite-disarm` (`warn`, envelope could not be built) |
+
 ### PostToolUse hooks (no deny semantics)
 
 PostToolUse runs after the tool's write, so these cannot block. Most are telemetry-only; `pencil-collapse-guard.sh` additionally performs a file restore and injects `additionalContext` into the model.
@@ -296,6 +422,7 @@ PostToolUse runs after the tool's write, so these cannot block. Most are telemet
 |---|---|---|
 | `skill-invocation-logger.sh` | `.claude/.skill-invocations.jsonl` | Records every Skill tool call (session_id + skill name) for the monthly skill-freshness aggregator. |
 | `agent-token-tee.sh` | `.claude/.session-tokens.jsonl` | Records every Task/Agent invocation envelope (session_id + subagent_type + total_tokens + duration) for compound Phase 1.6 token-efficiency analysis. Kill-switch: `SOLEUR_DISABLE_AGENT_TOKEN_TEE=1`. Issue #3494. |
+| `memory-backstop.sh` | `.claude/.memory-backstop.jsonl` | **SessionStart** (`startup|resume|clear|compact`). Adopts the agent process tree into a memory-capped systemd transient scope `soleur-agent-<pid>.scope` under a shared `soleur-agents.slice` (ADR-162, #7166). Records the scope, the terminal scope it is bound to, the caps written, the caps the slice already had (`slice_*_before`, so a mixed-version fleet flapping the shared slice is visible), and `outcome`/`reason`. Never records the session id. Kill-switch: `SOLEUR_DISABLE_MEMORY_BACKSTOP=1` — **if you set it you are unprotected and nothing will tell you.** |
 | `pencil-collapse-guard.sh` | `.claude/.rule-incidents.jsonl` (`cq-pencil-collapse-auto-recover`, `warn`) | PostToolUse on `mcp__pencil__open_document`: auto-restores a tracked `.pen` collapsed to empty document state from `git HEAD` + emits an `additionalContext` warning. Fail-open, non-destructive. Issue #4859. |
 
 ## macOS note
@@ -599,9 +726,53 @@ to silence a narrow false positive is how a guard goes quietly dark.
 | `SOLEUR_SKIP_OPERATOR_STEP_GATE=1` | `ship-operator-step-gate.sh` | The undeferred-operator-step deny. Reserved for the rare attestation case (`wg-block-pr-ready-on-undeferred-operator-steps`). |
 | `SOLEUR_SKIP_RUNBOOK_SSH_GATE=1` | `ship-runbook-ssh-gate.sh` | The `hr-no-ssh-fallback-in-runbooks` deny on runbook edits. |
 | `CLAUDE_HOOK_BYPASS=1` (+ `_REASON`) | `prod-write-defer-gate.sh` | The prod-write defer. Requires a reason and is audit-logged — see the F2 section above. |
+| `SOLEUR_DISABLE_GREP_REWRITE=1` | `grep-rewrite.sh` | The `grep()` prefix rewrite. Not a denial override — it disarms the **rewrite** disposition, restoring the ugrep shim and with it the 9.5 GB blowup (#7163). Listed here because it is the rollback lever for a hook on the hot path of every Bash call, and is read as the hook's first executable statement so it works even when the hook's own dependencies are broken. **Operator-only, and requires a session restart** — a PreToolUse hook is spawned by the `claude` process, so an inline `VAR=1 <cmd>` or an `export` from a Bash call cannot reach it (measured). An agent needing per-call escape uses `command grep`, which bypasses both the shim and this rewrite. |
 
 Not denial overrides, documented elsewhere in this file: `SOLEUR_DEFER_DRYRUN`
 (F2 mode switch), `SOLEUR_DISABLE_AGENT_TOKEN_TEE`, `SOLEUR_DISABLE_SKILL_LOGGER`,
 `SOLEUR_DISABLE_CONTEXT_QUERIES`, `SOLEUR_DISABLE_PHASE_HINT` (telemetry
-kill-switches), `SOLEUR_DEFER_TARGETS_OVERRIDE` (F2 manifest override).
+kill-switches), `SOLEUR_GREP_REWRITE_OBSERVE` (grep-rewrite observe-only soak),
+`SOLEUR_DISABLE_MEMORY_BACKSTOP` (memory backstop — see below),
+`SOLEUR_DEFER_TARGETS_OVERRIDE` (F2 manifest override).
 
+
+
+## Memory backstop (ADR-162, #7166)
+
+`memory-backstop.sh` is a **SessionStart** hook (matchers
+`startup|resume|clear|compact`). It asks the operator's own systemd manager to
+put this agent session's whole process tree into
+`soleur-agent-<pid>.scope`, capped at `MemoryHigh=6 GiB` / `MemoryMax=7 GiB` /
+`MemorySwapMax=0`, underneath a shared `soleur-agents.slice` capped at
+`16 GiB` / `20 GiB` / swap `0`. It exists because on 2026-08-01 a single runaway
+search reached 9.5 GB RSS, exhausted memory and swap, and took down six
+concurrent agent sessions at once.
+
+It **never blocks a session**: `exit 0` on every path, and every non-applied run
+is logged with a machine-readable `reason` (`disabled`, `no_busctl`, `no_bus`,
+`claude_pid_not_found`, `no_terminal_scope`, `cap_out_of_range`,
+`concurrent_apply`, `adoption_unverified`). On a machine with no per-user systemd
+bus (CI, Docker, macOS) it does nothing at all.
+
+### If a session gets stopped
+
+Remedies are listed **narrowest first** — the last one is fleet-wide and the
+difference matters:
+
+| Goal | Command |
+|---|---|
+| Stop just this one session | `systemctl --user stop soleur-agent-<pid>.scope` |
+| Raise this one session's limits | `systemctl --user set-property --runtime soleur-agent-<pid>.scope MemoryHigh=infinity MemoryMax=infinity` |
+| Change the limits for good | edit the four `readonly` values at the top of `memory-backstop.sh` |
+| Stop **every** agent session on this machine | `systemctl --user stop soleur.slice` — **this kills them all**, including sessions with uncommitted work |
+
+`--runtime` on the raise path is **mandatory**: without it, `set-property` writes
+a permanent drop-in into `~/.config/systemd/user.control/`, which is exactly the
+persistent mutation of the operator's own systemd configuration this hook is
+designed never to make.
+
+### Turning it off
+
+`SOLEUR_DISABLE_MEMORY_BACKSTOP=1` disables it entirely. **If you set this you
+are unprotected and nothing will tell you** — there is no periodic reminder, and
+the only trace is `"reason":"disabled"` in `.claude/.memory-backstop.jsonl`.

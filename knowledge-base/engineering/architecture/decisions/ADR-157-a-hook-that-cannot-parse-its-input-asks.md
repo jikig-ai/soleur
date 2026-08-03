@@ -8,7 +8,11 @@
   boundary this implements), [ADR-070](./ADR-070-l3-phase-tool-scoping-two-tier-fail-open.md) (the
   only prior sanction of fail-open in a hook, and the complement of this case),
   `.claude/hooks/lib/hook-input.sh`, `.claude/hooks/README.md` ("Parsing hook input"),
-  `.claude/hooks/DEFER-DECISION-PAYLOAD-SHAPE.md` (the probe establishing `ask` is honored)
+  `.claude/hooks/DEFER-DECISION-PAYLOAD-SHAPE.md` (the probe establishing `ask` is honored —
+  note it probed a `PreToolUse(Bash)` stub only, so `ask` on `mcp__*` / `CronCreate` matchers
+  remains unestablished),
+  [ADR-165](./ADR-165-what-ask-means-on-a-harness-with-no-ask-state.md) (what this posture becomes
+  on a harness with no `ask` state, and why `jq_missing` must NOT deny there either)
 - **Supersedes:** the silent-absorb reading of
   `knowledge-base/project/learnings/2026-03-18-stop-hook-jq-invalid-json-guard.md` — see below
 

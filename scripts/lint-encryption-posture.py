@@ -246,6 +246,11 @@ def resolve_mapper_operand(file_text: str, raw_token: str) -> str | None:
 # A trailing bare "-" after it (stdin) is its VALUE, not a positional operand.
 _LUKSOPEN_VALUE_FLAGS = {"--key-file"}
 
+# Shell redirections: `>f` `>>f` `2>f` `2>>f` `<f` `2>&1` (shlex strips the quotes, so
+# `2>>"$LOG"` arrives as `2>>$LOG`). An operand never starts with a digit-then-angle or
+# a bare angle bracket, so this cannot swallow a real device or mapper name.
+_REDIRECT_RE = re.compile(r"^\d*(?:>>?|<<?)&?\d*")
+
 
 def _luksopen_positionals(tail: str) -> list[str]:
     """Tokenize the text after `luksOpen` on one logical line and return its
@@ -262,6 +267,14 @@ def _luksopen_positionals(tail: str) -> list[str]:
         tokens = shlex.split(tail)
     except ValueError:
         return []
+    # A SHELL REDIRECTION IS NOT AN OPERAND. `cryptsetup luksOpen ... "$DEV" git-data
+    # 2>>"$LOG"` is a legal, and now shipped (#7204), way to capture the command's stderr
+    # into a stage detail file — but shlex yields the redirect as a trailing token, so
+    # positionals[-1] became `2>>$LOG` and the mapper stopped resolving. The failure mode is
+    # a FALSE FAIL (the store looks unbacked by any luksFormat+luksOpen apparatus), which on
+    # this linter means a red gate on a correctly-encrypted store. Same class as the
+    # line-continuation strip above: a trailing token that is syntax, not an argument.
+    tokens = [t for t in tokens if not _REDIRECT_RE.match(t)]
     positionals: list[str] = []
     i = 0
     n = len(tokens)

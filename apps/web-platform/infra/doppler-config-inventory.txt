@@ -1,0 +1,76 @@
+# generated: 2026-08-03T08:35:38Z
+# command: doppler configs -p soleur --json | python3 -c 'import json,sys; [print(c["name"]) for c in json.load(sys.stdin)]' | sort
+#
+# The live config names of the Doppler `soleur` project, measured by probe G of the #7159 plan
+# (2026-08-03).
+#
+# NO COUNTS IN THIS HEADER. It used to read "13 configs across 4 environments — dev 3, ci 1,
+# prd 7, cli 2". Nothing pinned any of those five numbers: the CI check counts the bare name
+# lines below and never reads a comment, so the moment the name list grows the header keeps
+# asserting the old totals — to an operator who reads exactly this header to decide what the
+# floor should be. The name lines ARE the count; derive it with the `grep` in the CI-check note
+# below rather than restating it here.
+#
+# THIS FILE REPORTS; IT GATES NOTHING. The token-drift coverage ladder compares the number of
+# configs the credential actually READ against `DOPPLER_CONFIGS_FLOOR`, a literal declared in the
+# token-drift step's own `env:` in `.github/workflows/scheduled-terraform-drift.yml`. This
+# inventory only supplies `coverage_ratio`, the `configs_unread` list and `inventory_age_days`.
+# A short, long or stale inventory changes the printed ratio and nothing else: no arm starts or
+# stops firing, no issue opens or closes. Anything else would let a shrinking list lower its own
+# alarm threshold.
+#
+# The file is EXPECTED to drift: `git-data-luks.tf` declares a `prd_git_data` config that will
+# exist after git-data birth, and rehearsal dispatches create ephemeral
+# `prd_git_data_rehearsal_*` configs. The change that alters the project's config set owns both
+# edits — this file AND the floor — in the same PR; re-run the `# command:` line above.
+# Ephemeral rehearsal configs need no edit at all: they only push the count ABOVE the floor,
+# which the one-sided `>=` gate absorbs.
+#
+# `plugins/soleur/test/token-drift-workflow-causes.test.sh` asserts that
+# `grep -E '^[a-z0-9_]+$' | sort -u | wc -l` over this file equals the workflow's
+# `DOPPLER_CONFIGS_FLOOR`. That is the CI check that fails when the floor and this inventory
+# drift apart. It reads no credential and makes no network call, so it cannot be defeated by
+# narrowing the credential. Keep the name lines bare — one lowercase name per line, no comments
+# and no trailing text.
+#
+# THE `sort -u` IS LOAD-BEARING, and its absence was a live hole. The detector parses this file
+# with `grep -E '^[a-z0-9_]+$' | sort -u` (`scripts/check-cloudflare-token-drift.sh`, the
+# inventory block); the CI check used the RAW `grep -c`. Measured on this file: append one
+# duplicate `prd` line and set the floor to 14 and the CI check sees 14 == 14 while the detector
+# sees 13 — a permanent `degraded` that every gate waves through. The two sides count the same
+# thing now, and the suite additionally asserts the raw and deduped counts AGREE, so a duplicate
+# line fails loudly instead of shifting the pin.
+#
+# ── RAISING THE FLOOR: THREE `13`s MOVE TOGETHER, AND NONE IS DERIVED FROM ANOTHER ──────────
+# Regenerating this file is only ONE of the edits. When the project legitimately grows (git-data
+# birth adding `prd_git_data` is the known case), raise ALL of these in the SAME PR:
+#
+#   1. `.github/workflows/scheduled-terraform-drift.yml`  — the token_drift step's
+#      `env: DOPPLER_CONFIGS_FLOOR: 13`                       (the declared gate)
+#   2. `.github/workflows/scheduled-terraform-drift.yml`  — the same step's run-time
+#      re-assertion `(( 10#$cfg_floor < 13 ))`                (external to the declaration)
+#   3. `plugins/soleur/test/token-drift-workflow-causes.test.sh` — `FLOOR_MINIMUM=13`
+#                                                              (the pre-merge ratchet)
+#   (and `RUNG2_CONFIGS_FLOOR: 13` in the same workflow's rung2-rehearsal-orphan-sweep job,
+#    which declares the same demand for the scratch-config half of that sweep)
+#
+# WHY THE RATCHET DECAYS IF YOU SKIP #2 AND #3. Suppose the floor rightly rises to 14 and only
+# `DOPPLER_CONFIGS_FLOOR` and this file are edited. A LATER PR can then narrow the grant back to
+# 13 configs, lower the declared floor to 13 to match, regenerate this file to 13 names — and
+# pass F1, F2, F3 and the run-time assertion with NO test edited. The ratchet is back at its old
+# notch and the diff shows nothing unusual. The pinned `13`s are the only thing that makes a
+# REDUCTION visible, so raising them is a deliberate edit and never an automated one. Never
+# lower them. See ADR-164, "Known limitations".
+ci
+cli
+cli_ops
+dev
+dev_personal
+dev_scheduled
+prd
+prd_cla
+prd_ghcr
+prd_kb_drift_walker
+prd_scheduled
+prd_terraform
+prd_workspaces_luks

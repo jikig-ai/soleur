@@ -520,6 +520,10 @@ jobs:
               -target=github_actions_secret.doppler_token_kb_drift \
               -target=doppler_service_token.write \
               -target=github_actions_secret.doppler_token_write \
+              -target=doppler_service_account.token_drift \
+              -target=doppler_project_member_service_account.token_drift \
+              -target=doppler_service_account_token.token_drift \
+              -target=github_actions_secret.doppler_token_drift \
               -target=doppler_service_token.inngest_arm_write \
               -target=github_repository_environment.inngest_cutover \
               -target=github_repository_environment.inngest_config_signing \
