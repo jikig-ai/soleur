@@ -58,7 +58,7 @@ together" (three sites, two moved).
 "must NOT be touched" set and I did not re-derive it. `hr-verify-repo-capability-claim-before-assert`
 applies to a CTO ruling exactly as it applies to an issue body.
 
-### 2. The paused operating point is not reproducible from IaC
+### 2. The paused operating point is not reproducible from IaC — **IN PROGRESS (2/4), blocked on PR #7203**
 `variables.tf:582-586` sets `web_colocate_inngest` **default false**. A web host recreated
 from `terraform apply` therefore (a) never bootstraps a co-located inngest, and (b) with
 finding 1 unfixed, boots dispatching at `10.0.1.40`. Both halves broken.
@@ -69,6 +69,38 @@ Today's web-1 survives only because it **predates** the 2026-07-11 default flip
 (`5fbf00f0e`, #6344). ADR-155 justifies the rollback as using "the component that is
 demonstrably serving" — true of the running instance, false of anything Terraform builds.
 Violates `hr-fresh-host-provisioning-reachable-from-terraform-apply`.
+
+**Status — 2 of 4 steps done. The fix is NOT a config flip.** `variables.tf`'s
+SOLEUR-DEBT block makes flipping this conditional on digest-pinning `cloud-init.yml`'s
+`$IREF` first, because the flip re-arms a root-executed OCI pull.
+
+1. ✅ **Budget freed.** The pin needs ~104 B that a comment added in this PR's finding-1
+   commit was consuming. Measured with the CI gate's own model, 8 real-entropy digest
+   pairs per arm: with the comment 24,576–24,584 B (**8/8 over** the 24,500 B budget),
+   without it 24,472–24,476 B (**0/8 over**). Spread across real digests is ~8 B, well
+   inside the 32 B margin, so this resolves rather than sitting in the noise. A
+   low-entropy placeholder digest measures ~52 B smaller and will falsely conclude the
+   pin fits — the variable's own note warns of this.
+2. ✅ **Mirror made digest-preserving** — PR **#7203**, split out because it is a
+   supply-chain fix on its own merits and should not wait on the six P1s here.
+   `docker tag`+`push` re-creates the manifest, so zot served a *different* digest than
+   GHCR. Pinning only the GHCR literal would not have closed the hole: the zot arm
+   assigns `IREF="$ZIREF"` and *then* execs as root, so it overwrites the pinned
+   variable. That PR also adds a rebuild-free `mirror_only` backfill — the existing
+   `workflow_dispatch` REBUILDS and moves the tag's GHCR digest, which would have
+   invalidated `cloud-init-inngest.yml`'s live pin on the dedicated host.
+3. ⛔ **Backfill `v1.1.24` and prove parity** — blocked until #7203 merges. Zot is dark
+   from a workstation (`/v2/` → HTTP 000), so the comparison happens in CI. GHCR's side
+   is already confirmed twice over (packages API + `crane digest`):
+   `sha256:6cdaa63d1496642e681898a831234b712f75d3b09bd0844bcabec3de74b0a0f8`.
+4. ⛔ **Pin both refs, then flip the default** — invalid until step 3 is green. Pinning a
+   digest zot cannot serve would send every fresh boot down the GHCR-fallback branch and
+   fire `inngest_ghcr_fallback` permanently.
+
+Deleting the zot arm instead is NOT the cheap alternative it looks like:
+`ci-deploy.sh:1805`'s retirement tripwire records that it darkens `inngest_ghcr_fallback`,
+one of five signals behind `sentry_issue_alert.zot_mirror_fallback_rate`, and belongs to
+ADR-096 task 5.3.
 
 ### 3. The repoint may convert ECONNREFUSED into 401, not into success
 Cutover step 2.4 reconciled `soleur/prd`'s `INNGEST_EVENT_KEY`/`INNGEST_SIGNING_KEY` to
