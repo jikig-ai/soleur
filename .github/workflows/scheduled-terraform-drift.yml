@@ -1356,9 +1356,63 @@ jobs:
             _hits="$(printf '%s' "$body" | jq -r --arg k "$_kind" '[.[$k][]? | "\($k): \(.name // .id)"] | .[]')"
             [[ -n "$_hits" ]] && survivors="${survivors}${_hits}"$'\n'
           done
-          # The scratch Doppler config is not a Hetzner object and needs its own probe.
-          _cfgs="$(doppler configs list -p soleur --json 2>/dev/null \
-                   | jq -r '[.[]? | .name | select(startswith("prd_git_data_rehearsal_"))] | .[]' || true)"
+          # ── THE SCRATCH DOPPLER CONFIG IS NOT A HETZNER OBJECT ────────────────────
+          # It needs its own probe, and that probe needs its own verdict.
+          # `2>/dev/null | jq … || true` made THREE outcomes indistinguishable: a real
+          # listing with no matches, a doppler CLI failure, and a jq parse failure all
+          # produced the empty string, which this job then reported as "no orphans". A
+          # BARE removal of the suppressors would not have fixed it either — this block
+          # opens `set -euo pipefail`, unlike the token-drift step's `set -uo pipefail`,
+          # so the failure would abort the step with no named annotation, which is the
+          # opposite of fail-loud. So the status is captured EXPLICITLY instead.
+          #
+          # AND THE PREDICATE IS UNSATISFIABLE AS WIRED. This job's credential is
+          # `secrets.DOPPLER_TOKEN`, a service token scoped to ONE config, and a Doppler
+          # service token is config-scoped by construction: `doppler configs list`
+          # returns a list SILENTLY SCOPED TO THE CALLER (measured 2026-08-02 — 1 config
+          # back, `success: true`, no error). `startswith("prd_git_data_rehearsal_")`
+          # can therefore never match, and this half of the sweep has been reporting
+          # "no orphans" unconditionally rather than because it looked. That is the
+          # clean-verdict-from-inspecting-nothing shape every sibling control in this
+          # block guards against, so the listed count is checked, not assumed.
+          #
+          # THE FIX IS AN HONEST VERDICT, NOT A WIDER CREDENTIAL. Wiring
+          # `DOPPLER_TOKEN_DRIFT` in here would satisfy the predicate, and it is
+          # deliberately OUT OF SCOPE: that credential is project-scoped and keeps
+          # exactly ONE consumer (the token-drift step), which is what bounds its blast
+          # radius and keeps its rotation a single `-replace=`.
+          _cfg_rc=0
+          _cfg_total=0
+          _cfgs=""
+          _cfg_raw="$(doppler configs list -p soleur --json)" || _cfg_rc=$?
+          if (( _cfg_rc == 0 )); then
+            _cfg_total="$(printf '%s' "$_cfg_raw" | jq -r 'length')" || _cfg_rc=$?
+          fi
+          if (( _cfg_rc == 0 )); then
+            _cfgs="$(printf '%s' "$_cfg_raw" | jq -r '[.[]? | .name | select(startswith("prd_git_data_rehearsal_"))] | .[]')" || _cfg_rc=$?
+          fi
+          # `10#` forces base 10, and the regex runs FIRST: an arithmetic error inside
+          # `(( ))` returns 1, which in a condition reads as false and would fall through
+          # to `performed` — the confident state derived from a value nothing parsed.
+          if (( _cfg_rc != 0 )) || [[ ! "$_cfg_total" =~ ^[0-9]+$ ]]; then
+            _cfg_probe=failed
+          elif (( 10#$_cfg_total < 2 )); then
+            _cfg_probe=unsatisfiable
+          else
+            _cfg_probe=performed
+          fi
+          # ITS OWN OUTPUT, not folded into `orphans`. The orphan filer below is gated
+          # `orphans != '0'` plus an implicit `success()`, so in the steady state — no
+          # Hetzner orphans — it is SKIPPED and this finding would reach nothing; and
+          # inflating `orphans` to force the gate open would file a diagnostic line under
+          # a body asserting the listed items are paying boxes running the git transport
+          # wrappers with LUKS volumes attached, which would be untrue of a diagnostic.
+          {
+            echo "scratch_cfg_probe=${_cfg_probe}"
+            echo "scratch_cfg_rc=${_cfg_rc}"
+            echo "scratch_cfg_listed=${_cfg_total}"
+          } >> "$GITHUB_OUTPUT"
+          echo "scratch-config probe: ${_cfg_probe} (doppler/jq exit ${_cfg_rc}, ${_cfg_total} config(s) listed)"
           [[ -n "$_cfgs" ]] && survivors="${survivors}$(printf 'doppler config: %s\n' $_cfgs)"$'\n'
           survivors="$(printf '%s' "$survivors" | grep -v '^$' || true)"
           if [[ -z "$survivors" ]]; then
@@ -1434,3 +1488,129 @@ jobs:
               --milestone "Post-MVP / Later" \
               --body-file /tmp/orphan-body.md
           fi
+
+      # ── ITS OWN FILER, ITS OWN TITLE, ITS OWN LEAD ──────────────────────────────
+      # Deliberately NOT the step above. That one is gated `orphans != '0'` plus an
+      # implicit `success()`, so on the steady-state green run — the run on which this
+      # finding is true — it does not execute at all. And its body opens by asserting the
+      # listed items are PAYING Hetzner boxes running the git transport wrappers with
+      # LUKS volumes attached, which is false of a diagnostic about a probe that did not
+      # run. Two different claims need two different bodies.
+      #
+      # An issue rather than a `::warning::`, for the reason this workflow's own
+      # COVERAGE-HAS-NO-CHANNEL block records: a warning on a GREEN cron run reaches
+      # nobody. `infra-drift` is this job's existing issue channel, so the finding lands
+      # where an operator already looks rather than opening a new one.
+      #
+      # CREATE-ONLY. The `unsatisfiable` state holds on EVERY run until the wiring
+      # changes, so commenting — which the orphan filer above does, correctly, because a
+      # recurring orphan is fresh signal each time — would post 730 comments a year.
+      - name: File an issue when the scratch-config half of the sweep was not performed
+        if: >-
+          always()
+          && (steps.sweep.outputs.scratch_cfg_probe == 'failed'
+              || steps.sweep.outputs.scratch_cfg_probe == 'unsatisfiable')
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROBE: ${{ steps.sweep.outputs.scratch_cfg_probe }}
+          PROBE_RC: ${{ steps.sweep.outputs.scratch_cfg_rc }}
+          LISTED: ${{ steps.sweep.outputs.scratch_cfg_listed }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          TITLE="infra: the rung-2 orphan sweep is not checking for stranded scratch Doppler configs"
+          RUN_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+
+          LIST_RC=0
+          EXISTING=$(gh issue list --label infra-drift --state open --limit 100 \
+            --json number,title --jq ".[] | select(.title == \"${TITLE}\") | .number" | head -1) || LIST_RC=$?
+          if (( LIST_RC != 0 )); then
+            echo "::error::rung2_scratch_cfg_list_failed — could not query open infra-drift issues (gh exit ${LIST_RC}); declining to create a possible duplicate. The unperformed scratch-config sweep reached no issue channel this run."
+            exit 0
+          fi
+          if [[ -n "$EXISTING" ]]; then
+            echo "scratch-config sweep issue #${EXISTING} already open — create-only, not commenting."
+            exit 0
+          fi
+
+          BODY="${RUNNER_TEMP}/rung2-scratch-cfg.md"
+          {
+            if [[ "$PROBE" == "failed" ]]; then
+              echo "**The rung-2 orphan sweep could not list Doppler configs at all** (doppler/jq"
+              echo "exit \`${PROBE_RC}\`), so the scratch-config half of the sweep produced no"
+              echo "verdict this run."
+            else
+              echo "**The rung-2 orphan sweep reports \"no orphaned scratch Doppler config\" without"
+              echo "being able to look.** Its credential enumerated \`${LISTED}\` config(s), so the"
+              echo "\`startswith(\"prd_git_data_rehearsal_\")\` predicate it filters on is"
+              echo "**unsatisfiable** — the answer is \"none\" by construction, not by inspection."
+            fi
+            echo ""
+            echo "Probe status: \`${PROBE}\`  •  doppler/jq exit: \`${PROBE_RC}\`  •  Configs listed: \`${LISTED}\`  •  Run: ${RUN_URL}"
+            echo ""
+            echo "### Why this matters"
+            echo ""
+            echo "A partial rung-2 teardown does not only strand Hetzner objects, and the Hetzner"
+            echo "objects are not the expensive part. It strands the scratch Doppler config, which"
+            echo "holds a live \`GIT_DATA_LUKS_KEY\` and the real production Better Stack ingest"
+            echo "token. The Hetzner half of this sweep is sound — it is label-selected, it checks"
+            echo "pagination, and it fails closed on an unreachable API. The Doppler half has been"
+            echo "returning a clean verdict for a question it never asked, which is the exact shape"
+            echo "every other control in that step guards against."
+            echo ""
+            echo "Until now this was invisible: the probe ran as"
+            echo "\`doppler configs list … 2>/dev/null | jq … || true\`, which collapsed \"listed"
+            echo "and matched nothing\", \"the CLI failed\" and \"jq failed\" into the same empty"
+            echo "string. The suppressors are gone and the status is captured explicitly, which is"
+            echo "what produced this issue."
+            echo ""
+            echo "### Remedy"
+            echo ""
+            if [[ "$PROBE" == "failed" ]]; then
+              echo "Open the linked run and read the \`Sweep for orphaned rung-2 rehearsal hosts\`"
+              echo "step: the doppler CLI's stderr is no longer discarded, so the specific failure"
+              echo "(missing CLI, rejected credential, malformed JSON) is printed there."
+            else
+              echo "This job authenticates with \`secrets.DOPPLER_TOKEN\`, a \`doppler_service_token\`"
+              echo "scoped to a single config. A Doppler service token is **config-scoped by"
+              echo "construction** and ignores \`DOPPLER_CONFIG\`; \`doppler configs list\` returns a"
+              echo "list silently scoped to the caller — one entry, \`success: true\`, no error — so"
+              echo "no amount of retrying makes the predicate matchable."
+              echo ""
+              echo "**Do not repoint this job at \`DOPPLER_TOKEN_DRIFT\`.** That credential is a"
+              echo "project-scoped \`doppler_service_account_token\` and would satisfy the predicate,"
+              echo "but it is deliberately kept to exactly ONE consumer — the Cloudflare token-drift"
+              echo "step in the \`drift-check\` job — which is what bounds its blast radius and keeps"
+              echo "its rotation a single \`terraform apply"
+              echo "-replace=doppler_service_account_token.token_drift\`. Widening its consumer set"
+              echo "here would trade a bounded credential for a diagnostic."
+              echo ""
+              echo "The shapes that do fit: give this job its own narrowly-scoped read identity, or"
+              echo "have the rehearsal teardown arm assert its own scratch-config deletion at"
+              echo "teardown time (it already holds a credential that can see the config it"
+              echo "created). Either is a Terraform + workflow change, not a dashboard step."
+            fi
+            echo ""
+            echo "### Closing"
+            echo ""
+            echo "Closed by hand once the scratch-config half of the sweep reports a verdict it"
+            echo "actually measured. Filed create-only: the condition holds on every run until the"
+            echo "wiring changes, so this issue is not re-commented."
+            echo ""
+            echo "_Auto-created by the [terraform-drift workflow](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-terraform-drift.yml)._"
+          } > "$BODY"
+
+          if gh issue create \
+            --title "$TITLE" \
+            --label "infra-drift" \
+            --milestone "Post-MVP / Later" \
+            --body-file "$BODY"; then
+            echo "Filed an infra-drift issue for the unperformed scratch-config sweep (${PROBE})."
+          else
+            echo "::error::rung2_scratch_cfg_escalation_failed — gh issue create did not succeed. The unperformed scratch-config sweep (${PROBE}, ${LISTED} config(s) listed) reached NO channel this run."
+          fi
+          rm -f "$BODY"
