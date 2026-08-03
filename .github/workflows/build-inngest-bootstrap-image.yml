@@ -258,7 +258,13 @@ jobs:
       # with the GHCR side, no sign step.
       - name: Bridge to zot registry (CF Tunnel)
         id: zot_bridge
-        continue-on-error: true
+        # BELT OFF under mirror_only, for the same reason as the mirror step below. The
+        # mirror is gated on `zot_bridge.outcome == 'success'`, so a soft-failed bridge
+        # SKIPS the mirror and leaves the job GREEN — under mirror_only that is a run
+        # reporting success for a backfill that never ran, and the caller would then pin a
+        # digest zot cannot serve. Belt stays ON for push/rebuild, where the bridge is
+        # secondary to the GHCR release (#6274).
+        continue-on-error: ${{ !inputs.mirror_only }}
         uses: ./.github/actions/cf-tunnel-registry-bridge
         with:
           # DOPPLER_TOKEN_PRD, NOT the generic DOPPLER_TOKEN (#6122 cutover fix): the bridge
@@ -301,8 +307,9 @@ jobs:
           set -uo pipefail
 
           # Bounded retry to self-heal a transient TCP reset over the CF-tunnel
-          # bridge. 3 attempts, 5s then 15s backoff. Idempotent ops only (docker
-          # tag is local; docker push re-runs safely).
+          # bridge. 3 attempts, 5s then 15s backoff. Idempotent ops only — `crane copy`
+          # re-runs safely (it re-resolves the source manifest and skips blobs the
+          # destination already has), as does the SHA-checked crane download.
           retry() {
             local n=1 max=3 rc=0
             local -a sleeps=(0 5 15)
