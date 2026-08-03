@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fixture suite for .claude/hooks/grep-rewrite.sh (issue #7165, ADR-160).
+# Fixture suite for .claude/hooks/grep-rewrite.sh (issue #7165, ADR-161).
 #
 # The hook is invoked DIRECTLY — "$HOOK", never `bash "$HOOK"`. Running it via
 # an explicit interpreter is the path that makes an exec-bit gate vacuous: the
@@ -513,7 +513,7 @@ want "observe control: without the flag NO would-rewrite row is written" "0" \
 want "non-Bash tool_name is declined (matcher is not a verifiable invariant — ADR-156)" "0" \
   "$(printf '%s' "$(hook_run "$(jq -nc '{tool_name:"Write", tool_input:{command:"grep foo"}}')")" | wc -c | tr -d ' ')"
 
-# --- parse-failure telemetry (ADR-160 clause 7 claims this row exists) -----
+# --- parse-failure telemetry (ADR-161 clause 7 claims this row exists) -----
 pf_dir="$(mktemp -d -p "$ROOT")"
 ( cd "$pf_dir" && printf 'garbage {{' | env INCIDENTS_REPO_ROOT="$pf_dir" "$HOOK" >/dev/null 2>&1 )
 want "parse failure records a hook-input-* row attributed to this hook" "1" \

@@ -3,7 +3,7 @@
 # `grep()` shell-function redefinition to the command. The command itself is
 # left BYTE-IDENTICAL.
 #
-# Issue #7165. ADR-160 (PreToolUse hooks may rewrite tool input).
+# Issue #7165. ADR-161 (PreToolUse hooks may rewrite tool input).
 # Source learning: knowledge-base/project/learnings/2026-08-02-ps-named-it-2-1-220-so-a-grep-that-ate-the-box-read-as-a-claude-leak.md
 #
 # WHY
@@ -111,7 +111,7 @@ SGR_SENTINEL='_soleur_grep_rw'
 # term is the single-threaded-engine swap, not the .gitignore loss. The excludes
 # are what keep the regression bounded; they do not buy parity. Accepted: this
 # trade buys elimination of the 9.5 GB DFA blowup, and both arms are sub-second.
-# See ADR-160 §Accepted divergences.
+# See ADR-161 §Accepted divergences.
 #
 # --exclude=.env REDUCES, BUT DOES NOT CLOSE, INCIDENTAL .env EXPOSURE.
 # .claude/settings.json permissions.deny carries Read(**/.env) / Read(**/.env.*)

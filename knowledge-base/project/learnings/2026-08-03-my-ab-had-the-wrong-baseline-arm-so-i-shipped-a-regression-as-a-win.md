@@ -83,7 +83,7 @@ reconstruction of its flags:
   "cd '$D' && exec -a ugrep '$CLAUDE_BIN' -G --ignore-files --hidden $SHIM6 -rl NEEDLE ." )
 ```
 
-The PR now documents the regression in ADR-160, `spec.md` and the hook header as
+The PR now documents the regression in ADR-161, `spec.md` and the hook header as
 an accepted trade — it buys elimination of a desktop-freezing OOM, and both arms
 are sub-second — rather than presenting it as a win.
 
@@ -165,7 +165,7 @@ producer.
 ## Session Errors
 
 **Benchmarked the wrong baseline arm (#16).** — Recovery: `performance-oracle`
-ran the three-arm version; regression documented in ADR-160, `spec.md` and the
+ran the three-arm version; regression documented in ADR-161, `spec.md` and the
 hook header. — **Prevention:** name both arms literally and check one against
 `main` before reading any A/B; see Key insight above.
 
@@ -239,6 +239,6 @@ warranted.
 
 ## Related
 
-- ADR-160 — PreToolUse hooks may rewrite tool input, under a single-rewriter invariant
+- ADR-161 — PreToolUse hooks may rewrite tool input, under a single-rewriter invariant
 - `knowledge-base/project/learnings/2026-08-02-ps-named-it-2-1-220-so-a-grep-that-ate-the-box-read-as-a-claude-leak.md` — the ugrep OOM and three refuted cost models
 - `knowledge-base/project/learnings/2026-07-27-my-ab-could-not-resolve-the-effect-i-concluded-from-it.md` — the sibling failure: an A/B with the *right* arms and insufficient power. Together they cover both halves — that one is about resolution, this one is about reference.

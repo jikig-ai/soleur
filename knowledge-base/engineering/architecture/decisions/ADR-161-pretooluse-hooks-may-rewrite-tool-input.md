@@ -1,4 +1,4 @@
-# ADR-160 — PreToolUse hooks may rewrite tool input, under a single-rewriter invariant
+# ADR-161 — PreToolUse hooks may rewrite tool input, under a single-rewriter invariant
 
 - **Status:** Accepted
 - **Date:** 2026-08-03
@@ -14,12 +14,14 @@
   — three pattern-cost heuristics were measured and refuted there. They are **linked, not
   restated**; the point of this ADR is the authority, not that history.
 
-> **Ordinal.** Planned as ADR-155, renumbered to 158 at implementation time, and to **160** at ship
-> time. Sibling PRs claimed 155/156/157 before this branch's first rebase, and 158/159 before its
-> second — #7189 landed its own `ADR-158` while this one was in review. On a main this fast the
-> collision is expected rather than anomalous, so the number is chosen late and swept across every
-> citation as a unit (hook headers, both suites, README, both payload-shape docs, `model.c4` and its
-> regenerated artifact, the aggregator and its tests, plan, spec, and the AC walk).
+> **Ordinal.** Planned as ADR-155; renumbered to 158, then 160, then **161**. Four sibling PRs
+> claimed the intended ordinal mid-flight — 155/156/157 before the first rebase, 158/159 before
+> the second, and #7194's own ADR-160 while this PR was in review, which CI caught as a
+> collision. On a main this fast the ordinal is not reservable, so it is chosen at ship time and
+> swept as a unit across every citation (hook header, both suites, README, the payload-shape doc,
+> `model.c4` and its regenerated artifact, the aggregator and its tests, plan, spec, AC walk and
+> the session learning). `scripts/check-adr-ordinals.sh` is the backstop that makes a missed
+> sweep a red check rather than a silent duplicate.
 
 ## Context
 

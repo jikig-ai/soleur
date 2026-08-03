@@ -18,7 +18,7 @@ exit 0
 Claude Code reads that JSON from stdout and blocks the tool call. Any deviation
 from this shape is treated as a pass-through.
 
-### The third disposition: rewrite (ADR-160)
+### The third disposition: rewrite (ADR-161)
 
 The two sentences above described the contract completely until #7165. A
 PreToolUse hook has a **third** disposition available to it — it may **rewrite
@@ -45,7 +45,7 @@ allow and deny, and it is deliberately narrow:
   command — so a rewrite can neither dodge a deny rule nor satisfy an allow one.
 
 Today the sole rewriter is `grep-rewrite.sh`. Full clause list and the probe
-evidence: [ADR-160](../../knowledge-base/engineering/architecture/decisions/ADR-160-pretooluse-hooks-may-rewrite-tool-input.md)
+evidence: [ADR-161](../../knowledge-base/engineering/architecture/decisions/ADR-161-pretooluse-hooks-may-rewrite-tool-input.md)
 and [UPDATED-INPUT-PAYLOAD-SHAPE.md](./UPDATED-INPUT-PAYLOAD-SHAPE.md).
 
 ## Parsing hook input
@@ -321,7 +321,7 @@ helper itself errors.
 ### PreToolUse rewriters (no deny semantics)
 
 Emit `updatedInput` and let the call proceed — see §The third disposition above.
-ADR-160 permits exactly one entry in this table.
+ADR-161 permits exactly one entry in this table.
 
 | Hook | Rewrites | Rule IDs emitted |
 |---|---|---|

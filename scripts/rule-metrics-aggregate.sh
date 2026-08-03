@@ -319,7 +319,7 @@ report=$(jq -n \
         | map(select(startswith("net-issue-flow") | not))
         | map(select(startswith("cost-of-filing-") | not))
         # grep-rewrite-* is .claude/hooks/grep-rewrite.sh telemetry (issue
-        # #7165, ADR-160): `-would-rewrite` from the observe-only soak and
+        # #7165, ADR-161): `-would-rewrite` from the observe-only soak and
         # `-disarm` when the envelope cannot be built. Same tier-gate rationale
         # as cost-of-filing-* above — the rule body lives in the hook header and
         # the hooks README, not in AGENTS.md, so the id has no core tag to
@@ -474,7 +474,7 @@ grep_rewrite_fault_count=$(echo "$report" | jq -r '.summary.grep_rewrite_fault_c
 if [[ "${grep_rewrite_fault_count:-0}" -gt 0 ]]; then
   grep_rewrite_breakdown=$(echo "$report" \
     | jq -r '.summary.grep_rewrite_fault_reasons | to_entries | map("\(.key)=\(.value)") | join(" ")' 2>/dev/null || echo "")
-  echo "WARNING: $grep_rewrite_fault_count grep-rewrite event(s) [${grep_rewrite_breakdown}] — the ugrep shim was NOT neutralized for those calls (disarm = envelope unbuildable; would-rewrite = observe-only mode is ON, which disables the rewrite repo-wide). See ADR-160." >&2
+  echo "WARNING: $grep_rewrite_fault_count grep-rewrite event(s) [${grep_rewrite_breakdown}] — the ugrep shim was NOT neutralized for those calls (disarm = envelope unbuildable; would-rewrite = observe-only mode is ON, which disables the rewrite repo-wide). See ADR-161." >&2
 fi
 
 if [[ "${hook_input_fault_count:-0}" -gt 0 ]]; then
