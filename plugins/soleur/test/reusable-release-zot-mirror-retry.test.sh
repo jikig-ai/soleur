@@ -382,10 +382,14 @@ fi
 #
 # This is the assertion scripts/zot-mirror-diagnosis.test.sh structurally cannot make: it
 # calls the function directly, so it proves the four texts differ but says nothing about
-# whether the workflow ever reaches them with the right value. The plumbing in between —
-# an `env:` mapping rather than a `${{ }}` interpolation baked in at parse time — is the
-# part that silently breaks, and it breaks in the direction where every arm renders as
-# `unmeasured` and the suite stays green.
+# whether the BLOCK routes a verdict to them.
+#
+# SCOPE, stated because the obvious reading is wrong: this harness injects TOKEN_VERDICT
+# itself, and it extracts only the step's `run:` BODY — never its `env:` block. So T17
+# covers the branching inside the body and is BLIND to the mapping that feeds it. Measured:
+# hardcoding `TOKEN_VERDICT: unmeasured` in the workflow's env: leaves T17 fully green.
+# That mapping is pinned structurally in T18 instead. Two instruments, because no single
+# one here can see both halves.
 #
 # The LIVE fixture is today's incident: the credential was verified live in-job and the
 # origin was crash-looping. Getting a rotation instruction here is the whole defect.
@@ -415,7 +419,75 @@ grep -qF 'Do NOT rotate' "$_t17_unver" || _t17_ok=0
 if [[ "$_t17_ok" == "1" ]]; then
   pass "verdict reaches the message: live/stale/unverifiable each render their own arm, and live never says MEASURED DEAD"
 else
-  fail "the bridge message did not branch on TOKEN_VERDICT — check the env: mapping on the mirror step (a \${{ }} inside the run body bakes in at parse time)"
+  fail "the bridge message did not branch on TOKEN_VERDICT — the run body is not consuming the verdict"
+fi
+
+# T18 (#7242) — the WIRING that feeds T17, pinned where T17 cannot look.
+#
+# T17 proves the run body branches correctly on whatever TOKEN_VERDICT holds. It cannot
+# prove the workflow puts the right thing there, because this harness supplies that value
+# itself. So the mapping is asserted structurally against the parsed YAML.
+#
+# Three properties, and the third is the subtle one: the verdict must arrive via an `env:`
+# mapping and NOT via a `${{ }}` interpolation inside the run body. An interpolation is
+# substituted at workflow-parse time, which both bakes the value into the extracted block
+# (making per-arm testing impossible) and is the shape that silently pins every arm to one
+# value. Asserting the negative is what keeps a future "simplification" from undoing it.
+echo "T18: the verdict is WIRED from token_preflight to both consumers (structural)"
+if python3 - "$WF" "$REPO_ROOT/.github/actions/cf-tunnel-registry-bridge/action.yml" <<'PY'
+import sys, yaml, re
+wf = yaml.safe_load(open(sys.argv[1]))
+act = yaml.safe_load(open(sys.argv[2]))
+errs = []
+
+steps = [s for j in wf["jobs"].values() for s in j.get("steps", [])]
+def by_id(i):
+    m = [s for s in steps if s.get("id") == i]
+    return m[0] if m else None
+
+mirror, bridge = by_id("zot_mirror"), by_id("zot_bridge")
+if not mirror: errs.append("no step with id 'zot_mirror'")
+if not bridge: errs.append("no step with id 'zot_bridge'")
+
+# 1. The mirror step's env: must source the verdict from the preflight's output.
+if mirror:
+    v = str(mirror.get("env", {}).get("TOKEN_VERDICT", ""))
+    if "steps.token_preflight.outputs.verdict" not in v:
+        errs.append(f"zot_mirror env.TOKEN_VERDICT does not read the preflight output: {v!r}")
+    # The `|| 'unmeasured'` guard: a composite default does NOT apply to an explicitly
+    # empty string, and a skipped preflight yields exactly that.
+    if "unmeasured" not in v:
+        errs.append(f"zot_mirror env.TOKEN_VERDICT lacks the || 'unmeasured' fallback: {v!r}")
+
+# 2. The bridge step must forward the same value into the composite action.
+if bridge:
+    w = str(bridge.get("with", {}).get("token-verdict", ""))
+    if "steps.token_preflight.outputs.verdict" not in w:
+        errs.append(f"zot_bridge with.token-verdict does not read the preflight output: {w!r}")
+    if "unmeasured" not in w:
+        errs.append(f"zot_bridge with.token-verdict lacks the || 'unmeasured' fallback: {w!r}")
+
+# 3. NEGATIVE: no run: body may interpolate the preflight output directly.
+for s in steps:
+    body = s.get("run") or ""
+    if re.search(r"\$\{\{[^}]*token_preflight[^}]*\}\}", body):
+        errs.append(f"step {s.get('id') or s.get('name')!r} interpolates token_preflight inside a run: body — must be an env: mapping")
+
+# 4. The composite action must declare the input and map it into env: at both sites.
+if "token-verdict" not in act.get("inputs", {}):
+    errs.append("cf-tunnel-registry-bridge declares no token-verdict input")
+mapped = [s for s in act["runs"]["steps"]
+          if "${{ inputs.token-verdict }}" in str(s.get("env", {}).get("TOKEN_VERDICT", ""))]
+if len(mapped) < 2:
+    errs.append(f"cf-tunnel-registry-bridge maps token-verdict into env: on only {len(mapped)} step(s); both ::error:: sites need it")
+
+for e in errs: print("   " + e)
+sys.exit(1 if errs else 0)
+PY
+then
+  pass "token_preflight verdict is wired to the mirror step and the composite action via env:/with:, with the || 'unmeasured' guard, and never interpolated into a run body"
+else
+  fail "the verdict wiring is broken — see the lines above (T17 cannot catch this: it injects TOKEN_VERDICT itself)"
 fi
 
 # T11-T14 close arms the earlier battery never mutated: it mutated the branch the PR
