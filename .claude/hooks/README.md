@@ -138,6 +138,30 @@ the 20 hooks that can change whether a tool call proceeds:
 `kb-domain-allowlist-guard` · `no-memory-write` · `pre-merge-auto-close-scan` ·
 `pre-merge-rebase` · `worktree-write-guard` · `iac-plan-write-guard`
 
+**Also mandatory, as a separate class** — the *third disposition*
+([ADR-162](../../knowledge-base/engineering/architecture/decisions/ADR-162-pretooluse-hooks-may-rewrite-tool-input.md)):
+
+`grep-rewrite`
+
+A rewriter consumes the same untrusted envelope and is bound by the same trust
+boundary, but two of the twenty's properties do not apply to it **by
+construction**, so it is classified rather than folded into the list above:
+
+- It does not call `hook_input_should_ask`. Asking is the designated
+  responder's job, and a rewriter's failed parse costs a missing
+  *optimization*, not a missing safety check — escalating would spend an
+  operator prompt on a non-event.
+- It is **not** silent on stdout. Emitting `updatedInput` is the entire point;
+  the twenty are asserted to emit nothing unless they are the responder.
+
+Everything else still binds: fail-hard `source`, a real parse gate, a recorded
+fault, and `exit 0` on every payload class. `hook-input-contract.test.sh`
+asserts the set closure over **both** lists (A18) and holds each rewriter to
+those four properties plus the one that separates the classes — it must
+actually emit `updatedInput` (A18b). Without that last one the classification
+would be an escape hatch: measured, a well-behaved *guard* satisfies the other
+four, so listing one here to silence A18 would otherwise cost nothing.
+
 **Not yet migrated** — 10 hooks, in two groups. All remain bound by ADR-156
 clause 1 (no `eval`), which the contract test enforces repo-wide.
 
