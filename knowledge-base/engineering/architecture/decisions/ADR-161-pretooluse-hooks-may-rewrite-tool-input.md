@@ -221,9 +221,10 @@ byte-exact and receive `command grep "$@"` with no injected flags — exactly wh
   `eval "grep …"`. The prefix design dissolves all seven — the command is never edited — and solves
   both residuals for free, because those forms resolve the name through the shell too.
 - **A memory cap (cgroup `memory.max`) instead.** Complementary, not a substitute, and tracked
-  separately in #7166. With the rewrite landed the residual coverage gap it was scoped to close no
-  longer exists, so it shrinks from "covers the gap" to defense in depth: a *bound* rather than a
-  lexical bet.
+  separately in #7166, **which landed the same day** (systemd `StartTransientUnit` + a shared
+  `soleur-agents.slice`). The two controls are complementary and fail independently: this ADR's
+  rewrite is *lexical* (it holds wherever bash resolves the name), the slice is a *bound* (it holds
+  regardless of lexical coverage). Neither supersedes the other.
 - **Observe-only permanently.** The soak mode is retained behind
   `SOLEUR_GREP_REWRITE_OBSERVE=1`, but shipping it as the steady state leaves the freeze
   reachable.

@@ -426,3 +426,17 @@ grep-rewrite **89 ms** vs sibling **116 ms**.
   sibling-worktree `test-all.sh` runs (the documented contention condition);
   result reported in the PR. The five suites this diff touches are green
   individually.
+
+### Late correction — #7166 landed during this pipeline
+
+§Premise Validation recorded `#7166 OPEN` and §Risks carried a "**Coverage window:**
+#7166 is OPEN" row escalated to the operator as a **ship-the-cap-first?** call. Both
+were true when written and stale by ship time: #7166 closed **COMPLETED on
+2026-08-03T15:47Z**, in a sibling worktree running in parallel with this one. The
+operator call it asked for is therefore moot — both mitigations shipped, and they
+fail independently (lexical rewrite vs. cgroup bound).
+
+Caught at the ship-phase Incident-PIR gate by probing `gh issue view 7166` rather
+than reusing the plan's figure — the same "plan-quoted facts are preconditions, not
+facts" rule that this branch already applied to the ADR ordinal (three times), the
+aggregator line numbers, and the D3 benchmark.
