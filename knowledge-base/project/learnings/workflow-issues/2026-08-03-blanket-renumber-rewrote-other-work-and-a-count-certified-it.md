@@ -18,7 +18,7 @@ synced_to: [compound, review, work, plan]
 
 # A blanket renumber rewrote other people's work, and the count that verified it could not see the failure
 
-**Date:** 2026-08-03 · **PR:** #7162 · **Issue:** #7159 · **ADR:** [ADR-163](../../../engineering/architecture/decisions/ADR-163-project-scoped-service-account-and-declared-coverage-floor.md)
+**Date:** 2026-08-03 · **PR:** #7162 · **Issue:** #7159 · **ADR:** [ADR-164](../../../engineering/architecture/decisions/ADR-164-project-scoped-service-account-and-declared-coverage-floor.md)
 
 ## Problem
 
@@ -162,13 +162,13 @@ filename slug (`ADR-159(?!-delivery)`).
 
 ```bash
 # WRONG — repo-wide, guarded on the FILENAME, verified by a count
-rg -l 'ADR-159(?!-delivery)' | xargs sed -i 's/ADR-159/ADR-163/g'
+rg -l 'ADR-159(?!-delivery)' | xargs sed -i 's/ADR-159/ADR-164/g'
 grep -c 'ADR-159' && echo "clean"        # counts the old string; blind to mis-writes
 
 # RIGHT — scope to this branch's own files, then assert MEANING
-git diff --name-only origin/main...HEAD | xargs sed -i 's/ADR-159/ADR-163/g'
+git diff --name-only origin/main...HEAD | xargs sed -i 's/ADR-159/ADR-164/g'
 git diff --stat                           # every touched file must be one YOU introduced
-grep -n 'claimed by' knowledge-base/engineering/architecture/decisions/ADR-163-*.md
+grep -n 'claimed by' knowledge-base/engineering/architecture/decisions/ADR-164-*.md
 # ^ read the sentence: does the provenance note still say something TRUE?
 ```
 
@@ -179,7 +179,7 @@ pattern already recorded in
 
 ### 2. Treat a branch-picked ordinal as provisional
 
-`ADR-163`'s header carries an explicit "Ordinal — provisional until merge" note recording all
+`ADR-164`'s header carries an explicit "Ordinal — provisional until merge" note recording all
 three collisions. Nothing in the repo reserves an ordinal; a collision is invisible from a branch
 that is behind `origin/main`. Re-check against a freshly-fetched `origin/main` immediately before
 merge and sweep every citation (`.tf`, plan, spec, tasks, `decision-challenges.md`) in the same PR.

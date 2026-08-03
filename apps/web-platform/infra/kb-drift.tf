@@ -98,7 +98,7 @@ resource "doppler_secret" "kb_drift_ingest_url" {
 # this resource for that job is #7159 verbatim — it read 1 of 13 configs and reported a clean
 # fleet. Nine `doppler_service_token` resources exist in this directory against one
 # `doppler_service_account`, so the majority shape is the misleading one. For a credential that
-# must read ACROSS configs see `token-drift-service-account.tf` and ADR-163.
+# must read ACROSS configs see `token-drift-service-account.tf` and ADR-164.
 resource "doppler_service_token" "kb_drift" {
   project = "soleur"
   config  = "prd_kb_drift_walker"

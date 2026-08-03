@@ -1,4 +1,4 @@
-# ADR-163 — A project-scoped Doppler service account reads the fleet; the coverage floor is declared, not derived
+# ADR-164 — A project-scoped Doppler service account reads the fleet; the coverage floor is declared, not derived
 
 - **Status:** Accepted
 - **Date:** 2026-08-03
@@ -12,15 +12,17 @@
   floor), `scripts/check-cloudflare-token-drift.sh` (the detector),
   `.github/workflows/scheduled-terraform-drift.yml` (the only consumer of the credential)
 
-> **Ordinal — provisional until merge, and this is the FOURTH time it has moved.** Authored as
+> **Ordinal — provisional until merge, and this is the FIFTH time it has moved.** Authored as
 > **ADR-155**; 155, 156 and 157 were all claimed on `origin/main` by sibling PRs mid-pipeline, so
 > it was renumbered to **158**. While this branch was still in flight, **158** was itself claimed
 > by `ADR-158-kb-file-tree-host-is-a-derived-value.md` (merged via #7189) — renumbered to **159**.
 > A rebase onto `origin/main` then pulled in `ADR-159-delivery-is-not-activation.md` → **160**.
 > A BEHIND auto-sync at merge time then pulled in `ADR-160-enforcement-tag-grammar-conforms-to-the-corpus.md`
-> **plus** 161 and 162, so it is renumbered a fourth time to **163**.
+> **plus** 161 and 162 → **163**. A second BEHIND sync then pulled in
+> `ADR-163-birth-filesystem-features-must-be-mountable-by-the-target-image.md`, so it is
+> renumbered a fifth time to **164**.
 >
-> Four moves on one branch is the datum, not the anecdote: an ordinal is claimed at *merge*, and
+> Five moves on one branch is the datum, not the anecdote: an ordinal is claimed at *merge*, and
 > this pipeline's plan→ship span is long enough that the claim reliably goes stale. Every one of
 > the four was surfaced by a `fetch`, a `rebase`, or a BEHIND sync — **never by a gate on this
 > branch**, because `adr-ordinals` is not a required check. Re-run `scripts/check-adr-ordinals.sh`
