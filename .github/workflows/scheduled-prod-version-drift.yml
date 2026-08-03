@@ -96,8 +96,8 @@ jobs:
           set -uo pipefail
 
           strip_log_injection() {
-            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
-              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\010\012-\037\177' \
+              | sed -E ':a; s/##\[/#-[/g; ta; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
           }
 
           # The checker's exit code is DATA, not a job failure. Letting it `exit 1` the step
@@ -106,9 +106,40 @@ jobs:
           out="$(bash scripts/prod-version-drift-check.sh 2>&1)"; rc=$?
 
           # Sanitised BEFORE echoing: $out carries untrusted-derived content, and a raw echo is a
-          # GitHub workflow-command injection surface (::add-mask::, ::stop-commands::). Do not
-          # rely on the source-side charset filter for this — `:` is inside its allowlist.
-          strip_log_injection "$out"; echo
+          # GitHub workflow-command injection surface. Do not rely on the source-side charset
+          # filter for this — `:` is inside its allowlist.
+          #
+          # PER LINE, not on the whole blob. strip_log_injection deletes \000-\037, and \n is
+          # \012 — so sanitising $out as a unit collapsed the checker's seven output lines into
+          # one unreadable string. Measured on the first production run:
+          #   DRIFT_VERDICT=DRIFT_PENDINGDRIFT_REASON=release_in_flightDRIFT_DETAIL=...
+          # Parsing was unaffected (it reads the raw $out), but the run log is the surface the
+          # issue body's own remediation block sends the operator to.
+          #
+          # EVERY line gets a constant non-whitespace marker. An earlier draft INDENTED lines
+          # starting with `::` and claimed that made them inert. That is FALSE, verified against
+          # actions/runner ActionCommand.cs: it calls `message.TrimStart()` BEFORE testing
+          # `StartsWith("::")`, so the indent is removed before the check. The legacy parser is
+          # worse — it uses `message.IndexOf("##[")` with no position test at all, so `##[...]`
+          # anywhere in a line is parsed regardless of indentation. A leading non-whitespace
+          # marker survives TrimStart, which defeats the `::` form, and it is also more
+          # readable: every checker line is greppable as `drift|`.
+          #
+          # The `##[` form needs SEPARATE handling, because a leading marker cannot defeat an
+          # IndexOf scan — that matches at any offset. strip_log_injection rewrites it, and the
+          # substitution LOOPS to a fixed point (`:a … ta`) with a replacement that cannot
+          # re-form the token. An earlier draft used `#[#`, which does: `##[#[stop-commands]X`
+          # became `#[##[stop-commands]X`, leaving an intact `##[` at offset 2 that IndexOf
+          # finds and whose command name parses as `stop-commands`. A replacement beginning and
+          # ending with the same character it is escaping is self-defeating.
+          #
+          # CR (\015) is stripped for the same class of reason: .NET ReadLine treats a bare \r
+          # as a line terminator, so a surviving CR makes the RUNNER re-split the line and the
+          # text after it arrives at column 0 with no marker — defeating the marker entirely.
+          # Only TAB (\011) is preserved; LF cannot occur inside $_line because read consumed it.
+          printf '%s\n' "$out" | while IFS= read -r _line; do
+            printf 'drift| %s\n' "$(strip_log_injection "$_line")"
+          done
 
           verdict="$(printf '%s\n' "$out" | sed -n 's/^DRIFT_VERDICT=//p' | head -1)"
           reason="$(printf '%s\n' "$out" | sed -n 's/^DRIFT_REASON=//p' | head -1)"

@@ -61,9 +61,9 @@ FAIL=0
 # the entire mutation battery -- the suite's own anti-vacuity mechanism -- and still exited 0.
 # A part-level floor makes that a loud "Part C shrank" instead of a silent pass, and gives a
 # better failure message than a total ever could.
-MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-106}"
+MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-115}"
 MIN_A="${DRIFT_MIN_A:-57}"
-MIN_B="${DRIFT_MIN_B:-38}"
+MIN_B="${DRIFT_MIN_B:-47}"
 MIN_C="${DRIFT_MIN_C:-11}"
 COUNT_A=0
 COUNT_B=0
@@ -436,7 +436,7 @@ STUB
 # Emits key=value lines the shell can read. Every step selector asserts exactly-one
 # cardinality, so a rename fails loudly instead of extracting nothing.
 PYEXTRACT='
-import sys, yaml, json, re
+import sys, os, yaml, json, re
 
 wf_path, rel_path = sys.argv[1], sys.argv[2]
 try:
@@ -621,6 +621,11 @@ for (_, st) in steps:
     for var in set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)(?::-[^}]*)?\}", body)):
         if var in env_keys or var in RUNNER_PROVIDED:
             continue
+        # The capture stays WIDE (guarded expansions included). A narrowing was tried and
+        # measured unnecessary: it silently dropped two real detections, because a deleted
+        # MISSING_SHAS or EXIT_CODE declaration degrades a diagnostic to a permanent
+        # placeholder without ever failing a step -- the QUIET half of the class this exists
+        # to catch, and exactly the half a guarded read creates.
         if re.search(r"^\s*(local\s+)?%s=" % var, body, re.M):
             continue
         undeclared.append("%s:%s" % (st.get("id") or st.get("name") or "?", var))
@@ -636,6 +641,16 @@ if undeclared:
 if runs:
     emit("EXTRACTED_KEYS", ",".join(sorted(set(
         re.findall(r"sed -n .s/\^([A-Z_]+)=//p", code(runs[0][1]))))))
+
+# --- the check step body, for EXECUTION rather than grepping --------------------
+# Every other Part B pin is a regex over source, which is right for declarative YAML (if:
+# conditions, fetch-depth, permissions) and wrong for imperative shell. A grep cannot see
+# ordering, cannot see a redirect to /dev/null, and cannot see which variable a `case`
+# actually tests -- all three shipped as survivable mutations. Emit the body so a Part A
+# assertion can run it.
+if runs:
+    with open(os.environ.get("DRIFT_STEP_BODY_OUT", "/dev/null"), "w") as fh:
+        fh.write(runs[0][1].get("run") or "")
 
 # --- B10: schedule + job timeout ---------------------------------------------
 on = wf.get("on", wf.get(True, {})) or {}
@@ -661,6 +676,7 @@ run_part_b() {
   pass "B0 the workflow file exists"
 
   local EX="$TMP/extract.env"
+  export DRIFT_STEP_BODY_OUT="$TMP/check-body.sh"
   if ! python3 -c "$PYEXTRACT" "$WORKFLOW" "$RELEASE_WORKFLOW" > "$EX" 2>"$TMP/extract.err"; then
     fail "B0b PyYAML extraction succeeded" "rc=0" "$(cat "$TMP/extract.err")"
     return 0
@@ -816,6 +832,61 @@ run_part_b() {
   assert_eq "B12 the keys the workflow extracts are exactly the keys the checker emits" \
     "$(grep -oE '^\s*echo "([A-Z_]+)=' "$SUT" | grep -oE '[A-Z_]+' | sort -u | paste -sd, -)" \
     "${X_EXTRACTED_KEYS:-<none>}"
+
+  # B13 -- the run-log echo, EXECUTED rather than grepped.
+  #
+  # The three assertions this replaces pinned spelling, and review demonstrated three
+  # rewrites that satisfied all of them while breaking the property: redirecting the loop to
+  # /dev/null and re-adding the whole-blob form under a different quoting of the same
+  # variable; testing the `case` on the RAW line instead of the sanitised one (so a leading
+  # control byte escapes the marker); and duplicating the printf. All three left the suite
+  # green. A grep over shell cannot see a redirect, an ordering, or which variable is tested.
+  #
+  # So: run the shipped step's own sanitiser and loop against a hostile fixture and assert
+  # the OUTPUT. The fixture carries, on purpose, a control byte before a workflow command --
+  # the exact input that distinguishes sanitise-then-classify from classify-then-sanitise.
+  if [[ -s "$TMP/check-body.sh" ]]; then
+    local fnsrc loopsrc probe out13
+    fnsrc="$(awk "/strip_log_injection\(\) \{/,/^\}/" "$TMP/check-body.sh")"
+    loopsrc="$(awk '/^printf .*while IFS= read/,/^done/' "$TMP/check-body.sh")"
+    if [[ -n "$fnsrc" && -n "$loopsrc" ]]; then
+      probe="$TMP/echo-probe.sh"
+      {
+        printf '%s\n' "$fnsrc"
+        printf '%s\n' 'out="$(printf "A=1\n\001::stop-commands::PWNED\nfoo ##[stop-commands]y\nsafe\r::stop-commands::CRSPOOF\n##[#[stop-commands]DOUBLE\nkeep\tTAB\nbell\007gone")"'
+        printf '%s\n' "$loopsrc"
+      } > "$probe"
+      out13="$(bash "$probe" 2>&1)"
+
+      assert_eq "B13 the echo preserves every line (no whole-blob collapse)" \
+        "7" "$(printf '%s\n' "$out13" | grep -c .)"
+      assert_eq "B13b no line reaches column 0, so ::-form workflow commands cannot parse" \
+        "0" "$(printf '%s\n' "$out13" | grep -c '^::' || true)"
+      assert_eq "B13c the legacy ##[ form is broken even mid-line (IndexOf has no position test)" \
+        "0" "$(printf '%s\n' "$out13" | grep -cF '##[' || true)"
+      assert_contains "B13d a control byte BEFORE a command does not smuggle it past the marker" \
+        "^drift\| ::stop-commands::PWNED$" "$out13"
+      assert_contains "B13e TAB survives (it is \\011, inside the old strip range)" \
+        "keep	TAB" "$out13"
+      assert_not_contains "B13f other control bytes still die" "$(printf 'bell\007gone')" "$out13"
+      # CR is not cosmetic: .NET ReadLine treats a bare \r as a line terminator, so a surviving
+      # one makes the RUNNER re-split the line and everything after it lands at column 0 with no
+      # marker. An earlier draft preserved CR by accident while intending to preserve only TAB,
+      # defeating the marker on precisely the input it exists to stop.
+      assert_not_contains "B13h CR does not survive (it would let the runner re-split past the marker)" \
+        "$(printf '\r')" "$out13"
+      # A replacement that begins and ends with the character it escapes can re-form the token:
+      # `#[#` turned `##[#[` into `#[##[`, leaving an intact `##[` for IndexOf to find.
+      assert_not_contains "B13i the ##[ rewrite cannot re-form its own token" "##\\[" "$out13"
+      assert_eq "B13g each input line is emitted exactly once" \
+        "1" "$(printf '%s\n' "$out13" | grep -c 'A=1' || true)"
+    else
+      fail "B13 the check step exposes a sanitiser and a per-line loop" "both extractable" \
+        "fn=$([[ -n "$fnsrc" ]] && echo yes || echo no) loop=$([[ -n "$loopsrc" ]] && echo yes || echo no)"
+    fi
+  else
+    fail "B13 the check step body was extracted for execution" "a non-empty file" "absent"
+  fi
 
   # B10g -- monitor slug parity. A mismatched slug leaves the Sentry monitor permanently
   # green over a dead alarm: the worst shape available, since it looks like coverage.
