@@ -620,6 +620,35 @@ time.sleep(300)
     fail "T18 could not stop $TEST_SLICE"
   fi
 
+  # ---- End-to-end arm. Needs a SECOND, independent precondition: this suite
+  # must actually be running inside a Claude Code session. "A user bus exists"
+  # does NOT imply "a claude ancestor exists" — a detached runner (nohup, cron,
+  # systemd-run, a CI runner with a lingering user bus) has the former and not
+  # the latter, and the hook then correctly reports
+  # `outcome=skipped reason=claude_pid_not_found`. Asserting adoption there fails
+  # the suite for an environment fact rather than a defect. Measured: running
+  # scripts/test-all.sh under nohup did exactly this.
+  #
+  # Derived by walking /proc independently of the hook, so this gate cannot be
+  # satisfied by the same code it is gating.
+  E2E=no
+  _p=$$
+  for _hop in 1 2 3 4 5 6 7 8; do
+    [[ -r "/proc/$_p/status" ]] || break
+    _exe=$(readlink "/proc/$_p/exe" 2>/dev/null || true)
+    _comm=$(cat "/proc/$_p/comm" 2>/dev/null || true)
+    if [[ "$_comm" == "claude" || "$_exe" == */claude/versions/* ]]; then E2E=yes; break; fi
+    _p=$(awk '/^PPid:/{print $2}' "/proc/$_p/status" 2>/dev/null) || break
+    [[ -n "$_p" && "$_p" != "0" && "$_p" != "1" ]] || break
+  done
+
+  if [[ "$E2E" != "yes" ]]; then
+    for t in T8-adoption T9-tree-adoption T9-grandchild T10-ac7-sweep T15-idempotency \
+             T15-terminal-scope-stable AC18-reentry-resweep; do
+      skip "$t (user bus present but this suite is not running inside a Claude Code session)"
+    done
+  else
+
   # ---- T8/T9/T10/T15/AC18: exercise the REAL hook end-to-end, LAST.
   newtmp before || exit 2
   UROOT="/sys/fs/cgroup/user.slice/user-$UIDN.slice/user@$UIDN.service"
@@ -842,14 +871,30 @@ $(diff "$before/snap.mem" "$after/snap.mem" | grep -E '^[<>]' | grep -vE '/soleu
   else
     fail "T10/AC7 ~/.config/systemd/user.control/ CHANGED — a persistent drop-in was written (runtime=true was dropped)"
   fi
+  fi   # end E2E gate
+fi
+
+# Bookkeeping: a live test that was DELETED must not be indistinguishable from
+# one that was skipped, so the skipped count is reconciled against the declared
+# total whenever anything was skipped at all.
+if [[ "$skipped_live" -gt 0 && "$LIVE" != "yes" && "$skipped_live" -ne "$LIVE_TEST_COUNT" ]]; then
+  fail "live-arm bookkeeping: skipped $skipped_live but $LIVE_TEST_COUNT live tests are declared"
 fi
 
 echo
+_skipnote=""
+if [[ "$LIVE" != "yes" ]]; then
+  _skipnote="SKIP: no user systemd bus — $skipped_live live assertion(s) not run"
+elif [[ "$skipped_live" -gt 0 ]]; then
+  _skipnote="SKIP: user bus present but not running inside a Claude Code session — $skipped_live end-to-end assertion(s) not run"
+fi
+_livetag=$([[ "$LIVE" == yes ]] && { [[ "$skipped_live" -gt 0 ]] && echo "yes, e2e SKIPPED" || echo "yes"; } || echo "SKIPPED")
+
 if (( fails == 0 )); then
-  echo "RESULT: PASSED $passes [live: $([[ "$LIVE" == yes ]] && echo yes || echo SKIPPED)]"
-  [[ "$LIVE" != "yes" ]] && echo "SKIP: no user systemd bus — $skipped_live live assertions not run"
+  echo "RESULT: PASSED $passes [live: $_livetag]"
+  [[ -n "$_skipnote" ]] && echo "$_skipnote"
   exit 0
 fi
-echo "RESULT: FAILED $fails (passed $passes) [live: $([[ "$LIVE" == yes ]] && echo yes || echo SKIPPED)]" >&2
-[[ "$LIVE" != "yes" ]] && echo "SKIP: no user systemd bus — $skipped_live live assertions not run" >&2
+echo "RESULT: FAILED $fails (passed $passes) [live: $_livetag]" >&2
+[[ -n "$_skipnote" ]] && echo "$_skipnote" >&2
 exit 1
