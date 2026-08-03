@@ -75,8 +75,13 @@ not read. #7151 was closed unmerged. **The operator's exposure is unchanged.**
   each with a fixture.
 - **FR7:** Every must-not-touch form in the table below is left byte-identical, each
   with a fixture.
-- **FR8:** Arming resets at newlines and at `|&`, not only at spaced `&&` / `||` /
-  `;` / `|`. A multi-line payload whose later line carries a regex is untouched.
+- **FR8:** *(rewritten 2026-08-02 — the original "arming" wording described the v1
+  classifier's bug and does not transfer to a rewrite. It also contradicted AC3 below,
+  which demanded byte-identity for the same fixture.)* Under the v2 prefix design the
+  hook never parses the command, so there is no arming state and no command position:
+  a multi-line payload is prefixed once and its body is byte-identical. Every `grep`
+  in it — on any line, in any construct — is neutralized by name resolution at
+  execution time.
 
 ### FR6 — the seven bypass forms
 
@@ -109,8 +114,12 @@ expansion, not *function* lookup, so it still reaches the shim.
 
 - **TR1:** Emitted as `hookSpecificOutput.updatedInput` from a PreToolUse hook on the
   `Bash` matcher, registered in `.claude/settings.json`.
-- **TR2:** Quoted/heredoc blanking reuses `strip_command_bodies` from
-  `.claude/hooks/lib/incidents.sh` rather than a second implementation.
+- **TR2:** *(superseded 2026-08-02.)* No quoting/heredoc analysis is performed at all.
+  The v2 prefix design never inspects the command body, so neither
+  `strip_command_bodies` nor any new masking helper is needed —
+  `.claude/hooks/lib/incidents.sh` is not modified. A 5-agent panel reproduced four
+  distinct quote-lexing corruption bugs in the v1 masking approach; the correct
+  response was to delete the lexer, not to fix it.
 - **TR3:** The hook file is committed mode `100755`, asserted against the **git index**
   (`git ls-files -s`), not the working tree. #7151's `memory-cap.sh` shipped `100644`
   and never executed once — 26 green assertions, a 7/7 mutation battery and a live
@@ -135,8 +144,10 @@ expansion, not *function* lookup, so it still reaches the shim.
    completes cheaply (target: single-digit MB, sub-second — GNU grep measured at
    7.7 MB / 0.10 s).
 2. All seven bypass forms have a fixtured, defined behaviour (FR6).
-3. All must-not-touch forms are fixtured and byte-identical (FR7), including `git grep`
-   and multi-line payloads (FR8).
+3. All must-not-touch forms are fixtured and byte-identical (FR7), including `git grep`.
+   *(The "and multi-line payloads (FR8)" clause is struck — it contradicted FR8; see
+   the FR8 note. Under v2 every command body is byte-identical, so FR7 holds trivially
+   and is verified by the AC5 corpus replay rather than by hand-written fixtures.)*
 4. Recursive semantics: explicitly changed, not carved out — recursive greps are
    rewritten (they blow up identically, measured 1.67 GB), and the `--ignore-files`
    delta is fixtured and documented.

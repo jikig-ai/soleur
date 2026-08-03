@@ -1,335 +1,345 @@
 ---
-title: Rewrite grep to command grep via PreToolUse updatedInput
+title: Neutralize the ugrep grep-shim via a prefixed function redefinition
 issue: 7165
 branch: feat-7165-grep-rewrite-updatedinput
 pr: 7167
 lane: cross-domain
 brand_survival_threshold: single-user incident
-requires_cpo_signoff: true
+requires_cpo_signoff: waived-by-operator-2026-08-02
 brainstorm: knowledge-base/project/brainstorms/2026-08-02-grep-rewrite-command-grep-brainstorm.md
 spec: knowledge-base/project/specs/feat-7165-grep-rewrite-updatedinput/spec.md
-status: plan
+status: plan-v2
 ---
 
-# Plan: rewrite `grep` → `command grep` via PreToolUse `updatedInput`
+# Plan v2: neutralize the grep shim by *redefining* `grep`, not by parsing commands
+
+> **v2 supersedes v1 (2026-08-02).** v1 proposed finding `grep` tokens in the command
+> string and splicing `command grep` over them. A 5-agent review panel reproduced
+> **seven** concrete failures in that mechanic, four of which corrupt commands that
+> work today. v2 replaces the parser with a one-line prefix and lets **bash** resolve
+> the name. See `## Plan Review Findings`.
 
 ## Overview
 
-A PreToolUse hook on the `Bash` matcher rewrites shim-reaching `grep` tokens to
-`command grep` with the shim's GNU-compatible flags replayed. The pattern is never
-read, so there is no cost model — the approach #7151 tried three times and had
-refuted three times.
+Claude Code's shell snapshot installs a bash **function** named `grep` that re-execs
+the `claude` binary with `argv[0]=ugrep`. For patterns whose cost depends on literal
+reachability, ugrep builds a DFA that reached 9.5 GB RSS against a single 21 kB file
+and froze a 31 GB desktop, killing six sessions.
 
-Everything load-bearing below was **measured this session**, not derived. The
-issue's framing needed five corrections; each is recorded in Research
-Reconciliation with the command that produced it.
+A PreToolUse hook prepends a `grep()` redefinition to the Bash command and **leaves
+the command itself byte-identical**:
+
+```
+grep(){ …command grep…; }; <original command, untouched>
+```
+
+Bash resolves the name at execution time. Nothing is parsed, so nothing can be
+mis-parsed.
+
+## Why v2 — measured, not argued
+
+| Property | v1 (parse + splice) | v2 (prefix) |
+|---|---|---|
+| Corrupt quoted data (228 measured calls) | guarded by fixtures | **impossible** — command never edited |
+| Corrupt `git grep` (179), `pgrep` (161), `xargs grep` (12) | guarded by fixtures | **unreachable** — different names / binary exec |
+| `G=grep; $G …` | **unfixable**, delegated to #7166 | **solved** (measured) |
+| `eval "grep …"` | **unfixable**, delegated to #7166 | **solved** (measured) |
+| Shell-quoting lexer required | yes (state machine) | **no** |
+| Reviewer-reproduced corruption bugs | 7 | 0 |
+
+Measured against a simulated shim this session — `grep`, `$(grep …)`, `G=grep; $G …`
+and `eval "grep …"` all returned the real GNU-grep result under the prefix, while
+`echo "grep is data"` and `git grep` were untouched.
+
+## Research Reconciliation — v1 claims vs. measurement
+
+| v1 claim | Reality (measured) | v2 response |
+|---|---|---|
+| `nice` is a shell keyword | **binary** (`type -t nice` → `file`). `nice command grep` → rc=127. `nice grep` never reached the shim. | anchor deleted entirely |
+| `\0` mask filler is length-preserving | bash **drops NUL** in `$( )` (3 bytes → 2) | masker deleted entirely |
+| prefix-exclusion list is safe belt-and-braces | it makes AC10's over-rewrite mutation pass **vacuously** (second guard disarms the first) | deleted entirely |
+| shim bypass predicate (9 arms) | shim has **12** arms; v1 dropped `-*-format-open*`, `-*-save-config*`, `-[!-]*[Zz]*` | full 12 arms, mirrored inside the redefined function |
+| D3: losing `.gitignore` has "no latency cost" | **false.** Recursive grep: shim 423 ms → v1 flag set **5,446 ms (12.9×)**; adding `node_modules`/`dist`/`.next` excludes → 590 ms | **D3 reversed** — ship the denylist |
+| emit `updatedInput.command` only | `updatedInput` may **replace** `tool_input`, dropping `timeout`/`run_in_background`/`description`/`sandbox` | build as `.tool_input \| .command = $new` — correct under merge **or** replace |
+| alert route = weekly aggregator | an untagged rule_id makes `scripts/rule-metrics-aggregate.sh` **exit 5** (`:374`, `:426`) and skip log rotation | add a `grep-rewrite-` exclusion + its test |
+| editing `model.c4` is sufficient | `model.likec4.json` (644 KB, committed) contains the falsified string and is byte-diffed by `plugins/soleur/test/c4-model-freshness.test.sh` | regenerate the compiled artifact |
+| permission rules match the rewritten command | **no** — matching runs on the **original** (measured with an `allow: ["Bash(echo:*)"]`-only probe) | no allow-rule regression; recorded in the ADR |
 
 ## Premise Validation
 
-| Cited | Probe | Result |
-|---|---|---|
-| #7151 (prior attempt) | `gh issue view` | CLOSED, unmerged — premise holds |
-| #7163 (learning file) | `gh issue view` | MERGED PR; learning file present on `main` |
-| #7166 (memory backstop) | `gh issue view` | OPEN — remains the residual owner |
-| `strip_command_bodies` | sourced + called | exists in `.claude/hooks/lib/incidents.sh` |
-| `.claude/hooks/*.test.sh` auto-run | `scripts/test-all.sh:577` | confirmed — a new test file is auto-discovered |
-
-## Research Reconciliation — Spec vs. Codebase
-
-| Spec/brainstorm claim | Reality (measured) | Plan response |
-|---|---|---|
-| D4: "reuse `strip_command_bodies`" | It is **length-destroying** — `echo "grep is data" && grep -E foo bar.txt` goes 42 → 29 chars. Offsets are unusable for a positional rewrite. | Add a **length-preserving** sibling `mask_command_bodies` (same regex family, replaces each quoted/heredoc region with equal-length `\0` filler). Do not reuse the stripper. |
-| `updatedInput` is supported | **Verified by execution**, not docs: an isolated `claude -p` subprocess with a throwaway `--settings` hook rewrote a command and the rewritten form ran. | Proceed. Probe re-run is AC1. |
-| (unstated) which `permissionDecision` to emit | `allow` **bypasses the permission prompt entirely**. Emitting it on any grep-bearing command would disable permissions for **50.5%** of all Bash calls. Measured: `updatedInput` works with **no** `permissionDecision` at all. | **Never emit `permissionDecision`.** Emit `updatedInput` alone; normal permission flow is preserved. |
-| (unstated) interaction with 18 sibling Bash hooks | Measured with a two-hook isolated probe: a sibling `deny` **wins** over our `updatedInput` — the command did not run. | Safe. Our hook cannot un-deny a sibling guardrail. Pinned as AC2. |
-| Shim injects `-G --ignore-files --hidden -I --exclude-dir=.git` | Six `--exclude-dir` values (`.git .svn .hg .bzr .jj .sl`). `-G` + `-E` under GNU grep 3.12 → `conflicting matchers specified`, **rc=2**; ugrep tolerates it. `--hidden`/`--ignore-files` rejected outright. | Replay `-I` + all six `--exclude-dir`. **Never** inject `-G`. |
-| AC3: "a multi-line payload whose later line carries a regex [is] untouched" | Ambiguous. Under a rewrite, a later line's `grep` **is** a real grep and must be rewritten; the original wording describes the *old classifier's* arming bug. | Restated as FR8 below: arming resets at newlines and `\|&`; each command-position `grep` is rewritten independently. Fixtured both ways. |
-| Command position = after `&&`/`\|\|`/`;`/`\|` | **Incomplete — measured false negatives.** Shell keywords are command positions too: `if grep` **27**, `do`/`then`/`else grep` **17**, `{ grep` **9**, `while`/`until grep` **4**, `! grep` **1** across 6,113 Bash calls. All reach the shim; all would be missed. | Anchor set extended to `if then else elif while until do time nice !` and `{`. Verified: `sudo grep` is **not** caught by the `do` substring (lookbehind `(?<![\w-])`). |
+#7151 CLOSED unmerged · #7163 MERGED (learning file on `main`) · #7166 OPEN ·
+`updatedInput` verified by execution · sibling `deny` beats `updatedInput` (measured).
 
 ## User-Brand Impact
 
-Carried forward from the brainstorm (`hr-weigh-every-decision-against-target-user-impact`).
+**If this lands broken, the user experiences:** a corrupted shell command. v2 reduces
+this to near-zero by construction — the command is never edited, only prefixed.
 
-**If this lands broken, the user experiences:** a corrupted shell command — a
-mangled `git grep` (179 measured calls), a rewritten quoted payload (228 measured
-calls), or a broken `xargs grep` — so the agent acts on a *wrong* answer rather
-than an absent one.
-
-**If this fails open, the user's workflow is exposed via:** a one-line search
-reaching 9.5 GB RSS at 99% CPU, freezing the desktop and killing every concurrent
-session — the 2026-08-01 incident, unmitigated as of today.
+**If this fails open, the user's workflow is exposed via:** a one-line search reaching
+9.5 GB RSS at 99% CPU, freezing the desktop and killing every concurrent session.
 
 **Brand-survival threshold:** `single-user incident`.
 
+## The mechanic
+
+### The injected prefix
+
+```bash
+grep(){ local a; for a in "$@"; do case "$a" in
+  -*-filter*|-*-pager*|-*-view*|-*-format-open*|-*-config*|---*|-@*|-*-save-config*|-[Zz]*|-[!-]*[Zz]*|--null|--null-data)
+    command grep "$@"; return;; esac; done
+  command grep -I --exclude-dir=.git --exclude-dir=.svn --exclude-dir=.hg --exclude-dir=.bzr --exclude-dir=.jj --exclude-dir=.sl --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.next "$@"; };
+```
+
+All 12 shim bypass arms are mirrored so bypass-flag calls receive **exactly** what
+they receive today (`command grep "$@"`, no injected flags). The non-bypass arm adds
+the six shim `--exclude-dir` values **plus** the three heavy build dirs that recover
+the 12.9× recursive regression (D3, reversed by measurement).
+
+### The hook
+
+1. Read stdin; extract `.tool_input.command` forcing a scalar
+   (`| if type=="string" then . else tojson end`) — do **not** reproduce the confirmed
+   `eval` + `jq @sh` RCE (TR5).
+2. **Kill switch first**, before any lib sourcing or subprocess: if
+   `SOLEUR_DISABLE_GREP_REWRITE` is set, `exit 0`.
+3. **Idempotency:** if the command already contains the sentinel, emit nothing.
+4. **Gate:** if the command contains no `grep` substring, emit nothing. This gate may
+   be sloppy — a false positive costs one inert function definition, never a corrupted
+   command. That property is the entire point of v2.
+5. Emit `updatedInput` built from the **whole** `tool_input`, with **no**
+   `permissionDecision`.
+6. Every exit path is `exit 0`.
+
 ## Implementation Phases
 
-### Phase 0 — Preconditions (no code)
+### Phase 1 — Preconditions (no code)
 
-1. Re-run the `updatedInput` probe in an isolated `claude -p` subprocess with a
-   throwaway `--settings` (never modify the live session's settings). Confirm:
-   rewrite applies, and applies with **no** `permissionDecision`.
-2. Re-run the sibling-`deny` precedence probe. Confirm `deny` still wins.
-3. Confirm all 6 `--exclude-dir` values and `-I` are accepted by the installed
-   GNU grep; confirm `-G` + `-E` still errors (guards against a grep upgrade).
+- `updatedInput` applies, with no `permissionDecision` (re-probe, isolated `claude -p`).
+- Sibling `deny` still wins.
+- **New:** does `updatedInput` merge or replace `tool_input`? Submit a payload with
+  `run_in_background`, `timeout`, `description`; assert all survive.
+- **New:** is the rewritten command re-submitted to PreToolUse (re-entrancy)?
+- Confirm GNU grep accepts the injected flags and still errors on `-G` + `-E`.
 
-### Phase 1 — `mask_command_bodies` (RED → GREEN)
+### Phase 2 — Hook, observe-only (dark launch)
 
-Add a length-preserving masker beside `strip_command_bodies` in
-`.claude/hooks/lib/incidents.sh`. Failing test first: assert
-`${#masked} == ${#original}` for a payload with a double-quoted region, a
-single-quoted region, and a heredoc body; assert masked regions contain no `grep`.
+Ship computing the prefix and emitting `emit_incident "grep-rewrite-would-rewrite"`
+with the original — **no `updatedInput`**. Satisfies `wg-dark-launch-deploy-gates`.
 
-### Phase 2 — the rewrite hook (RED → GREEN)
+### Phase 3 — Corpus replay
 
-Create `.claude/hooks/grep-rewrite-guard.sh`. Verified mechanic (prototyped and
-tested against 26 fixtures this session):
+Replay all ~6,100 real Bash commands from session transcripts through the hook.
+Assert every diff is **exactly** the known prefix insertion, byte-for-byte, remainder
+unchanged, zero exceptions. This replaces v1's 26 hand-written fixtures as the
+primary gate — 26 examples chosen by the regex's author test that author's imagination.
 
-1. Read payload; extract `.tool_input.command` **forcing a scalar** —
-   `| if type=="string" then . else tojson end` (TR5: the confirmed `eval` + `jq @sh`
-   RCE is pre-existing on `main` in 10 files; do not reproduce it here).
-2. If the command matches the **shim's own bypass predicate** (`-[Zz]*`, `--null`,
-   `--null-data`, `---*`, `-@*`, `-*-filter*`, `-*-pager*`, `-*-view*`,
-   `-*-config*`), **return without rewriting** — see OQ1 resolution.
-3. Mask quoted/heredoc regions (Phase 1 helper).
-4. Find `grep` tokens at command position **in the mask**; apply substitutions to
-   the **original** at those offsets, right-to-left.
-5. Emit `{"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":{"command":"<rewritten>"}}}`
-   — **no `permissionDecision`**. If nothing was rewritten, emit nothing and `exit 0`.
+### Phase 4 — Flip live
 
-Anchor (verified — do not hand-edit without re-running the fixture matrix):
+Emit `updatedInput` once the soak is clean.
 
-```
-(?:\A|[\n;&|(`{]|\|\&|\$\(|(?<![\w-])(?:if|then|else|elif|while|until|do|time|nice|!)(?=[ \t]))[ \t]*(\\?)grep(?![\w-])
-```
+### Phase 5 — Differential results test
 
-Injected replacement:
+Over a synthesized tree containing `.git`, a binary file, and a gitignored dir, assert
+original vs. prefixed produce identical stdout for a corpus of recursive greps. Every
+divergence is enumerated in the ADR as explicitly accepted. **v1's fixtures tested the
+command; the risk lives in the results.**
 
-```
-command grep -I --exclude-dir=.git --exclude-dir=.svn --exclude-dir=.hg --exclude-dir=.bzr --exclude-dir=.jj --exclude-dir=.sl
-```
+### Phase 6 — Gates
 
-Prefix-exclusion (defense-in-depth; the anchor already excludes these
-incidentally because none places `grep` adjacent to a delimiter — keep both):
-`git`, `xargs`, `-exec`, `command`, `sudo`.
+- Exec-bit + **registration-membership** assertion (both, see AC9/AC14), folded into
+  the existing `.claude/hooks/hookeventname-coverage.test.sh` meta-suite rather than a
+  4th meta-file. Derivation:
+  `jq -r '.hooks|to_entries[]|.value[]?|.hooks[]?|.command' | sed 's|^"\$CLAUDE_PROJECT_DIR"/||' | sort -u`
+  — note entries are quote-prefixed, `guardrails.sh` appears twice, and at least one
+  is `.py`. Assert the derived list is non-empty with a minimum count.
+- **Single-rewriter invariant:** exactly one Bash-matcher hook source contains
+  `updatedInput`, via a one-entry allowlist; a second goes RED pointing at the ADR.
+- **Rewrite-inertness:** feed original and prefixed through every sibling Bash hook;
+  assert identical decisions. (Measured today: no sibling's trigger regex contains a
+  `grep` token, so nothing flips — this makes it an enforced invariant.)
 
-### Phase 3 — fixtures
-
-Create `.claude/hooks/grep-rewrite-guard.test.sh` (auto-discovered by
-`scripts/test-all.sh:577`). Mirror `guardrails.test.sh`'s harness shape: synthetic
-stdin payloads, `INCIDENTS_REPO_ROOT` redirect, non-git CWD isolation.
-
-### Phase 4 — exec-bit gate
-
-Create `.claude/hooks/hook-exec-bit.test.sh` asserting every hook path referenced
-in `.claude/settings.json` is committed **100755 in the git index**
-(`git ls-files -s`, not `test -x`).
-
-**Derive the path list from `settings.json`, not a glob.** Measured: 68 of 74
-tracked `.claude/hooks/**/*.sh` are 100755, but 6 are legitimately 100644 —
-`lib/incidents.sh`, `lib/freeze-lock.sh`, `lib/log-rotation.sh` (sourced) and
-`incidents.test.sh`, `lib/freeze-lock.test.sh`, `skill-context-queries.test.sh`
-(run via `bash`). A naive `.claude/hooks/*.sh` glob would go **RED immediately**
-on two of those. Deriving from `settings.json` asserts the invariant (*what
-production execs*) rather than a proxy.
-
-### Phase 5 — ADR + C4
-
-### Phase 6 — mutation battery
-
-Both directions (TR6): deleting the rewrite → RED; mutating the anchor to also
-match `git grep` → RED.
+### Phase 7 — Aggregator, docs, ADR/C4
 
 ## Files to Create
 
-| Path | Mode | Note |
-|---|---|---|
-| `.claude/hooks/grep-rewrite-guard.sh` | **100755** | the hook |
-| `.claude/hooks/grep-rewrite-guard.test.sh` | 100644 | auto-run via `test-all.sh:577` |
-| `.claude/hooks/hook-exec-bit.test.sh` | 100644 | settings.json-derived exec-bit gate |
-| `knowledge-base/engineering/architecture/decisions/ADR-155-rewrite-not-classify-for-shim-reaching-grep.md` | 100644 | ordinal **provisional** |
+| Path | Mode |
+|---|---|
+| `.claude/hooks/grep-rewrite.sh` (**not** `-guard.sh` — 18 siblings use that suffix for deny-only) | **100755** |
+| `.claude/hooks/grep-rewrite.test.sh` | 100644 |
+| `.claude/hooks/UPDATED-INPUT-PAYLOAD-SHAPE.md` (matches the two existing payload-shape docs) | 100644 |
+| `knowledge-base/engineering/architecture/decisions/ADR-155-pretooluse-hooks-may-rewrite-tool-input.md` (ordinal provisional) | 100644 |
 
 ## Files to Edit
 
 | Path | Change |
 |---|---|
-| `.claude/hooks/lib/incidents.sh` | add `mask_command_bodies` (length-preserving) |
-| `.claude/settings.json` | register the hook on the `Bash` matcher |
-| `knowledge-base/engineering/architecture/diagrams/model.c4` | `hooks` container + `hooks -> claude` label now falsified (see C4 below) |
+| `.claude/settings.json` | register on `Bash`; set an explicit `timeout` |
+| `.claude/hooks/README.md` | §Hook contract says "decides allow/deny" and "any deviation is a pass-through" — **falsified**; add the rewrite disposition, roster entry, and a row in §Escape-hatch inventory |
+| `scripts/rule-metrics-aggregate.sh` | add `grep-rewrite-` prefix exclusion (else exit 5) |
+| `scripts/rule-metrics-aggregate.test.sh` | parallel test, per the `incidents.sh` synthetic-prefix contract |
+| `.claude/hooks/hookeventname-coverage.test.sh` | exec-bit + membership + single-rewriter assertions |
+| `knowledge-base/engineering/architecture/diagrams/model.c4` | `hooks` container technology/description; `hooks -> claude "Guards tool calls"` → names rewriting *before execution* |
+| `knowledge-base/engineering/architecture/diagrams/model.likec4.json` | **regenerate** (`scripts/regenerate-c4-model.sh`) or CI goes RED |
+
+**Not created (v1 artifacts, deleted):** `mask_command_bodies`, any edit to
+`.claude/hooks/lib/incidents.sh`, `hook-exec-bit.test.sh` as a standalone file.
 
 ## Acceptance Criteria
 
-### Pre-merge (PR)
-
-1. **AC1** — the measured reproducer, submitted as a Bash payload, is **rewritten
-   (not denied)** and completes cheaply. Probe under `ulimit -v 2000000` + `timeout`;
-   expect single-digit MB / sub-second (GNU grep measured 7.7 MB / 0.10 s).
-2. **AC2** — isolated two-hook probe confirms a sibling `deny` still wins over our
-   `updatedInput`.
-3. **AC3** — the hook emits **no** `permissionDecision` key:
-   `... | jq -e '.hookSpecificOutput | has("permissionDecision") | not'`.
-4. **AC4** — all seven bypass forms fixtured with the FR6 dispositions.
-5. **AC5** — all must-not-touch forms fixtured **byte-identical**: `git grep`,
-   `pgrep`/`zgrep`/`ugrep`, `egrep`/`fgrep`, quoted-`grep`-as-data, already-`command grep`,
-   `xargs grep`, `find -exec grep`, `/usr/bin/grep`, `sudo grep`, heredoc body.
-6. **AC6** — `\grep` **is** rewritten.
-7. **AC7** — the six shell-keyword positions are rewritten (`if`, `while`, `until`,
-   `do`/`then`/`else`, `{`, `!`).
-8. **AC8** — shim-bypass commands (`grep -z`, `--null-data`) are **not** rewritten.
-9. **AC9** — `git ls-files -s -- .claude/hooks/grep-rewrite-guard.sh` reports `100755`.
-10. **AC10** — mutation battery kills **both** directions (TR6).
-11. **AC11** — `bash scripts/test-all.sh` green; the new suites appear in the run
-    (assert by suite name in the log, not by total count).
-12. **AC12** — `ADR-155-*.md` exists and the ordinal is re-verified against
-    `origin/main` at ship time (collision gate).
+1. **AC1a** — the hook's stdout `.hookSpecificOutput.updatedInput.command` equals a
+   byte-exact expected string. **AC1b** — *that exact string*, run under
+   `ulimit -v 2000000` + `timeout`, completes in single-digit MB / sub-second.
+   (Split deliberately: v1's AC1 passed vacuously if the hook emitted nothing.)
+2. **AC2** — sibling `deny` beats `updatedInput`. *Precondition, not acceptance* —
+   it tests Claude Code, not this diff; result pasted in the PR body.
+3. **AC3** — the emitted JSON contains `permissionDecision` **nowhere at any depth**,
+   and no top-level `decision`/`continue`. Assert the empty and non-empty cases
+   separately (`jq -e` exits 4 on empty stdin — v1's form was broken *and* vacuous).
+4. **AC4** — all `tool_input` sibling keys (`description`, `timeout`,
+   `run_in_background`, `sandbox`) survive the rewrite.
+5. **AC5** — corpus replay (Phase 3): every one of ~6,100 real commands differs from
+   its rewrite by exactly the prefix, zero exceptions.
+6. **AC6** — all seven bypass forms fixtured. `$G` and `eval "grep …"` now **rewrite
+   successfully** (they did not under v1).
+7. **AC7** — the 12 shim bypass arms receive `command grep "$@"` with **no** injected flags.
+8. **AC8** — differential results (Phase 5): identical stdout, divergences enumerated.
+9. **AC9** — `git ls-files -s` output for the hook is **non-empty** *and* mode is
+   exactly `100755`.
+10. **AC10** — fail-open triad: empty stdin, non-JSON, JSON with no `.tool_input`,
+    1 MB binary garbage, `jq` absent, `perl` absent → **exit 0**, empty stdout, one
+    `grep-rewrite-disarm` incident. (A PreToolUse hook exiting 2 blocks the call —
+    this hook runs on 100% of Bash calls, not just the 50.5% carrying grep.)
+11. **AC11** — idempotency/fixed point: applying the hook to its own output produces
+    no second prefix.
+12. **AC12** — `SOLEUR_DISABLE_GREP_REWRITE=1` disables the hook, read before any
+    subprocess or lib sourcing.
+13. **AC13** — single-rewriter invariant test goes RED on a second rewriting hook.
+14. **AC14** — registration membership: the hook is present in the settings-derived
+    `PreToolUse`/`Bash` list. (Without this, dropping the registration makes the
+    exec-bit gate pass green while the hook never runs — #7151's failure, one level up.)
+15. **AC15** — `scripts/rule-metrics-aggregate.sh` tolerates a `grep-rewrite-*` id
+    (does not exit 5) and still rotates.
+16. **AC16** — `bash scripts/test-all.sh` green **on the scripts shard** (`:577` is
+    inside `if want_scripts`, so a non-scripts shard passes vacuously); new suites
+    asserted by name.
+17. **AC17** — p95 hook latency < 50 ms on a 4 KB command (it runs on every Bash call).
+18. **AC18** — `model.likec4.json` regenerated; `c4-model-freshness.test.sh` green.
 
 ### Post-merge (operator)
 
-None. Every step above is automatable in-session.
+None.
 
 ## Observability
 
 ```yaml
 liveness_signal:
-  what: hook emits updatedInput on shim-reaching grep
-  cadence: per Bash tool call (~50.5% carry a grep token)
-  alert_target: none (too high-volume to alert on)
+  what: grep-rewrite-would-rewrite (Phase 2 soak) then silence steady-state
+  cadence: per Bash call carrying a grep substring
+  alert_target: none steady-state (volume); soak read manually against the corpus
   configured_in: .claude/settings.json PreToolUse[Bash]
 error_reporting:
   destination: emit_incident -> .claude/.rule-incidents.jsonl
-  fail_loud: true (TR4 — the disarm must not be silent)
+  fail_loud: true
 failure_modes:
-  - mode: malformed payload / jq failure -> fail-open, no rewrite
-    detection: emit_incident "grep-rewrite-disarm"
-    alert_route: weekly rule-metrics aggregator
-  - mode: residual form reached (G=grep / eval "grep ...")
-    detection: emit_incident "grep-rewrite-residual"
-    alert_route: weekly aggregator — measured 0/6,116 today, so any hit is signal
-  - mode: over-rewrite (a must-not-touch form mutated)
-    detection: fixture suite AC5 + mutation battery AC10
+  - mode: malformed payload / jq or perl failure -> fail-open, no rewrite
+    detection: emit_incident "grep-rewrite-disarm" (event_type=warn)
+    alert_route: weekly aggregator (requires the AC15 exclusion, else exit 5)
+  - mode: hook deregistered from settings.json
+    detection: AC14 membership assertion
     alert_route: CI red
-logs:
-  where: .claude/.rule-incidents.jsonl (rotated by lib/log-rotation.sh)
-  retention: per existing rotation policy
+  - mode: hook killed by timeout before it can emit
+    detection: accepted + documented; fail-open by construction
+    alert_route: none
+logs: { where: .claude/.rule-incidents.jsonl, retention: per lib/log-rotation.sh }
 discoverability_test:
-  command: 'printf %s "$PAYLOAD" | bash .claude/hooks/grep-rewrite-guard.sh | jq .'
-  expected_output: hookSpecificOutput.updatedInput.command containing "command grep -I"
+  command: 'printf %s "$PAYLOAD" | .claude/hooks/grep-rewrite.sh | jq .'
+  expected_output: hookSpecificOutput.updatedInput.command beginning with the grep() prefix
 ```
 
-**OQ2 resolved:** do **not** emit per rewrite (~3,000 per 6,000 calls). Emit only on
-disarm and on residual-form detection — both rare, both actionable.
+**Residual-form telemetry: dropped.** v1 promised `grep-rewrite-residual` but nothing
+implemented it, and #7166 was scoped assuming occurrences would surface. Under v2 the
+two residual forms are **solved**, so the signal is moot.
 
 ## Architecture Decision (ADR/C4)
 
-### ADR
+**ADR-155 (provisional)** — *PreToolUse hooks may rewrite tool input, under a
+single-rewriter invariant.* The decision grants an **authority**, not just its first
+use; bound it with clauses: which keys are mutable, one rewriter, never emit
+`permissionDecision`, must be idempotent, must fail-open at exit 0, permission
+matching happens on the original. `## Alternatives Considered`: classification (three
+refuted cost models — **link**, don't restate), the v1 parse-and-splice mechanic and
+its seven reproduced failures, and observe-only-first.
 
-**ADR-155 (provisional ordinal)** — *Rewrite, don't classify, for shim-reaching `grep`.*
-Records: cost is `class size × bound magnitude × literal reachability`, the third
-factor is unobservable to a PreToolUse hook, so classification is structurally
-wrong; `updatedInput` sidesteps it. Supersedes the approach of #7151 (closed
-unmerged). `## Alternatives Considered` must carry the three refuted cost models
-and the recursive carve-out (rejected: measured to fail identically at 1.67 GB).
-
-Ordinal is **provisional** — highest on `origin/main` is ADR-154. Re-verify at
-ship time and sweep this plan, `tasks.md`, and AC12 if it moves.
-
-### C4 views
-
-**Enumeration performed** (C4 completeness mandate — all three `.c4` files read):
-
-- **External human actors:** none new. No new human interacts with the system.
-- **External systems / vendors:** none new. GNU grep is a local binary, not an
-  external system; no vendor edge is added.
-- **Containers / data stores:** `platform.engine.hooks` (existing, `model.c4:68`) —
-  **description falsified**. It reads `technology "PreToolUse Guards + PostToolUse hints"`;
-  the engine now also *rewrites* tool input.
-- **Access relationships:** `hooks -> claude "Guards tool calls"` (`model.c4:389`) —
-  **label falsified** for the same reason.
-
-So this is **not** a "no C4 impact" case. In-scope edit: update the `hooks`
-container technology/description and the `hooks -> claude` relationship label to
-cover input rewriting. No new element, so no `views.c4` `include` line is needed
-(`platform.engine.hooks` is already included at `views.c4:30,58`). Run
-`c4-code-syntax.test.ts` + `c4-render.test.ts` after the edit.
+**C4:** `hooks = container "Hook Engine"` / `technology "PreToolUse Guards +
+PostToolUse hints"` and `hooks -> claude "Guards tool calls"` are both falsified.
+Relabel to name the authority (`"Guards, annotates, and rewrites tool input before
+execution"`). No new element, so `views.c4` is unchanged. **Regenerate
+`model.likec4.json`** and run `c4-model-freshness.test.sh` (the binding gate — not
+`c4-code-syntax`/`c4-render`, which v1 named).
 
 ## Domain Review
 
-**Domains relevant:** Engineering (only).
+**Domains relevant:** Engineering. Product/UX Gate: **NONE** (no UI-surface path).
 
-Product/UX Gate: **NONE**. The mechanical UI-surface override does not fire — no
-path in Files to Create/Edit matches a UI-surface term or glob. No wireframes.
+**CPO sign-off: WAIVED by the operator (2026-08-02)** — internal dev-harness hook, no
+user-facing surface. Threshold **not** lowered; `user-impact-reviewer` remains the
+load-bearing review-time gate.
 
-**Not run — operator-declined.** The operator selected a no-agent scoping pass, so
-no domain leaders were spawned at brainstorm Phase 0.5 or here. `requires_cpo_signoff:
-true` is set by the `single-user incident` threshold and is **outstanding** — it must
-be satisfied before `/work`, or explicitly waived. `user-impact-reviewer` remains the
-load-bearing review-time gate either way.
+**GDPR:** trigger (b) fired (threshold); no personal data processed. No Article 30 row.
+**IaC / Encryption posture:** skipped — no infrastructure, no persistent store.
 
-**GDPR gate:** trigger (b) fired (threshold = `single-user incident`), but the change
-processes no personal data. The only new persistence is `emit_incident`, which writes
-to the pre-existing local `.rule-incidents.jsonl` with a 1024-char snippet cap. No
-new processing activity; no Article 30 row.
+## Plan Review Findings
 
-**IaC gate:** skipped — no infrastructure.
-**Encryption posture:** skipped — no persistent store, no new cross-component connection.
+Escalated 5-agent panel, run at operator request. **All P0s accepted.**
 
-## Open Code-Review Overlap
-
-Queried 62 open `code-review` issues against every planned path — **no direct match**.
-
-Adjacent, **acknowledged** (not folded in):
-
-- **#7005** *"sweep the remaining pipefail + `grep -q` fail-open sites"* — same
-  keyword, different concern (fail-open exit-code handling in repo scripts, not the
-  shim). Those 54 hook scripts are structurally out of scope here (the shim is not
-  `export -f`'d). Stays open.
-- **#7076** *"run-registered-suites.sh derivation misses 8 registered infra suites"* —
-  suite-registration coverage. Our new suites land via the `test-all.sh:577` glob,
-  which is a different mechanism. Stays open.
+| Finding | Source | Disposition |
+|---|---|---|
+| Prefix redefinition beats parsing; solves both residuals | DHH P0-1 | **Adopted — v2's core** |
+| `nice` is a binary → rc=127 corruption | DHH, Kieran P0-1, Simplicity S1 | Fixed (anchor deleted) |
+| `\0` filler unimplementable in bash | DHH P0-2, Kieran P0-2, Simplicity S2 | Fixed (masker deleted) |
+| Quote-lexing bugs: escape-aware single quotes, cross-boundary re-pairing, heredoc `\b` terminator, `<<<` mis-detection, `"$(grep …)"` masked away | Kieran P0-4, P1-8, P1-9 | Dissolved — v2 does not lex |
+| `{grep,sed}` brace expansion, `tools=(grep …)` array, `\`+newline continuation, comments, `case` labels | Kieran P1-10, P1-11, P0-7, P2-17, P2-18 | Dissolved — v2 does not parse |
+| Replacement had no backreference → `foo \| grep bar` loses the pipe | Kieran P0-3 | Dissolved |
+| Byte-vs-character offset desync | Kieran P1-15 | Dissolved |
+| `updatedInput` may replace `tool_input` wholesale | Kieran P0-5 | **Adopted** — build from full `tool_input`; AC4 |
+| Exit code unpinned → could block 100% of Bash calls | Kieran P0-6, Arch P0-3 | **Adopted** — AC10 |
+| Aggregator exits 5 on untagged rule_id | Spec-flow P0-2 | **Adopted** — verified `:374`/`:426`; AC15 |
+| `model.likec4.json` byte-diffed → CI red | Arch P1-8(1) | **Adopted** — verified; AC18 |
+| No kill switch; no staged rollout | Arch P0-2 | **Adopted** — AC12 + Phase 2 dark launch |
+| README hook contract falsified | Arch P0-1 | **Adopted** |
+| Registration-membership gap makes exec-bit gate vacuous | Spec-flow P0-3 | **Adopted** — AC14 |
+| Single-rewriter invariant needs enforcing, not documenting | Arch P1-9(4) | **Adopted** — AC13 |
+| Rewrite is not semantics-preserving; test results not commands | Arch P1-6 | **Adopted** — AC8 |
+| D3 justified from the wrong benchmark | Spec-flow P1-14 | **Adopted** — measured 12.9×; D3 reversed |
+| Prefix-exclusion list disarms the mutation battery | Simplicity S4 | Dissolved (deleted) |
+| Bypass predicate missing 3 of 12 arms | Simplicity S6, Spec-flow P0-1 | **Adopted** — all 12 |
+| Spec FR8 vs AC3 demand opposite bytes | Spec-flow P0-4 | **Adopted** — spec edited |
+| Test harness uses `bash "$HOOK"` — the path TR3 indicts | Spec-flow P1-9 | **Adopted** — exec directly |
+| Fold exec-bit into existing meta-suite, not a 4th file | Simplicity S7 | **Adopted** |
+| Corpus replay > 26 hand-written fixtures | DHH P0-3 | **Adopted** — AC5 |
+| Name it `-guard.sh` while not being a guard | Arch P1-7 | **Adopted** — `grep-rewrite.sh` |
+| Permission matching pre/post rewrite | DHH P1-1, Arch P1-9(1), Spec-flow P1-10 | **Measured** — matches on original |
+| Ship #7166's cap first | DHH P1-2 | **Surfaced to operator** — see Risks |
+| ADR should bound the authority, not the use | Arch P2-11 | **Adopted** |
 
 ## Risks & Mitigations
 
 | Risk | Mitigation |
 |---|---|
-| **False positive on 50.5% of Bash calls** | 26-fixture matrix, both directions, prototyped and passing before a line ships. AC5 pins byte-identity. |
-| Multi-hook `updatedInput` combination is **undocumented** | Only our hook rewrites. `deny` precedence measured (AC2). If a second rewriting hook is ever added, behavior is unspecified — recorded in the ADR. |
-| GNU grep upgrade changes `-G`/`-E` conflict semantics | Phase 0 precondition re-checks it; AC8 fixtures the bypass set. |
-| Losing `.gitignore` filtering on recursive greps | Accepted (D3). Cost is result noise on 3.8% of calls; no latency/memory cost (7.6 MB / 0.10 s measured). |
-| Residual forms (`$G`, `eval "grep"`) | Measured **0/6,116** — theoretical today. Owned by #7166; instrumented so any real occurrence surfaces. |
-| Rewriting corrupts a command in a way tests miss | The hook emits nothing on the no-match path, so a bug can only mangle a command it *matched*; the anchor is pinned by fixtures and by the over-rewrite mutation (AC10). |
-
-## Test Scenarios
-
-Rewrite: bare, `-E`, `-f patternfile`, `$(…)`, backtick, `(subshell)`, piped,
-`P='…'; grep "$P"`, `\grep`, `if`/`while`/`until`/`do`/`then`/`{`/`!`, `\|&`,
-later-line-of-multiline.
-
-Untouched: `git grep`, `pgrep`, `zgrep`, `ugrep`, `egrep`, `fgrep`, `xargs grep`,
-`find -exec grep`, `command grep`, `/usr/bin/grep`, `sudo grep`, double-quoted data,
-single-quoted data, heredoc body, `grep -z`, `--null-data`, `eval "grep …"`,
-`G=grep; $G …`.
-
-## Alternative Approaches Considered
-
-| Approach | Verdict |
-|---|---|
-| A fourth regex cost model | **Forbidden** by the prior art — the missing variable is unobservable. |
-| Carve out recursive invocations | **Rejected on measurement** — recursive blows up identically (1.67 GB). Would protect 96% and mislabel the rest as safe. |
-| Replay the full shim flag set incl. `-G` | **Rejected** — `-G` + `-E` is fatal under GNU grep (rc=2). |
-| Hand-maintained `--exclude-dir` denylist for `node_modules`/`dist` | **Rejected as YAGNI** (D3) — drifts from `.gitignore`, buys only noise reduction. |
-| Fold into `guardrails.sh` | **Rejected** — that hook is deny-only with many early `exit 0` paths that would skip the rewrite. Repo convention is one concern per hook (18 on the `Bash` matcher). |
-| Emit `permissionDecision: "allow"` alongside `updatedInput` | **Rejected on measurement** — `allow` bypasses the permission prompt; with grep in 50.5% of commands it would disable permissions repo-wide. Not needed: `updatedInput` works alone. |
+| Prefix on ~50% of commands adds transcript noise | Accepted; ~330 chars. Kill switch AC12. |
+| A command that inspects `type grep` or defines its own `grep` sees ours | Vanishingly rare; ours is overridden by a later user definition. Documented in the ADR. |
+| **Coverage window:** #7166 is OPEN | v2 solves both residuals, so this shrinks #7166 from "covers the gap" to defense-in-depth. DHH argues the cap should still land first — the guarantee is then a *bound*, not a lexical bet. **Operator call.** |
+| `updatedInput` semantics undocumented for multi-hook | AC13 enforces single-rewriter |
+| Hook latency on 100% of Bash calls | AC17 (p95 < 50 ms); no perl, no lib sourcing on the hot path |
 
 ## Sharp Edges
 
-- **Never emit `permissionDecision`.** `allow` bypasses the permission system for
-  every command containing a grep token — half of all Bash calls.
-- **`strip_command_bodies` cannot drive the rewrite.** It is length-destroying
-  (42 → 29 measured); use the length-preserving `mask_command_bodies`.
-- **Never inject `-G`.** GNU grep exits 2 on `-G` + `-E`; ugrep tolerates it, so
-  this only fails after the rewrite lands.
-- **The exec-bit gate must derive from `settings.json`, not a glob.** Six tracked
-  `.claude/hooks/**/*.sh` are legitimately 100644 (libs + tests); a glob goes RED
-  on two of them immediately.
-- **Never re-run the reproducer uncapped** — `ulimit -v 2000000` + `timeout`, always.
-- A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`,
-  or omits the threshold will fail `deepen-plan` Phase 4.6.
+- **Never emit `permissionDecision`** — `allow` bypasses permissions for 50.5% of Bash calls.
+- **Build `updatedInput` from the whole `tool_input`** — emitting only `command` may drop `run_in_background`/`timeout`.
+- **`nice` is a binary, `time` is a keyword.** `nice command grep` → rc=127.
+- **bash cannot hold NUL** — any masking design must use `\x01`.
+- **An untagged `emit_incident` rule_id exits the weekly aggregator with 5** and skips rotation.
+- **`model.c4` edits require regenerating `model.likec4.json`** or CI goes red.
+- **`.claude/hooks/grep-q-pipe-guard.test.sh` forbids `| grep -q`** in `.claude/hooks/*.sh` — use herestrings.
+- **Never re-run the reproducer uncapped** — `ulimit -v 2000000` + `timeout`.

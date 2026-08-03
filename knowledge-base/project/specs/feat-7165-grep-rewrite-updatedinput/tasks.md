@@ -1,5 +1,5 @@
 ---
-title: Tasks — rewrite grep to command grep via PreToolUse updatedInput
+title: Tasks — neutralize the grep shim via a prefixed function redefinition (v2)
 feature: feat-7165-grep-rewrite-updatedinput
 issue: 7165
 pr: 7167
@@ -8,80 +8,94 @@ brand_survival_threshold: single-user incident
 plan: knowledge-base/project/plans/2026-08-02-feat-grep-rewrite-command-grep-plan.md
 ---
 
-# Tasks: `grep` → `command grep` rewrite hook
+# Tasks (v2 — prefix design)
 
-Phase order is load-bearing: the masking helper (Phase 2) is a contract the hook
-(Phase 3) consumes. Do not reorder.
+Phase numbers match the plan's phases exactly (v1's were off by one, breaking
+AC-to-task traceability).
 
 ## Phase 1 — Preconditions (no code)
 
-- [ ] 1.1 Re-run the `updatedInput` probe in an **isolated** `claude -p` subprocess
-      with a throwaway `--settings` JSON. Never modify the live session's settings.
-      Confirm the rewritten command executes.
-- [ ] 1.2 Confirm the rewrite applies with **no** `permissionDecision` key.
-- [ ] 1.3 Re-run the two-hook probe: a sibling `deny` must still win.
-- [ ] 1.4 Confirm installed GNU grep accepts `-I` and all six `--exclude-dir`
-      values, and still exits 2 on `-G` + `-E`.
-- [ ] 1.5 Record all four results in the PR body.
+- [ ] 1.1 Isolated `claude -p` + throwaway `--settings`: `updatedInput` applies with no
+      `permissionDecision`. Never touch the live session's settings.
+- [ ] 1.2 Two-hook probe: sibling `deny` still wins.
+- [ ] 1.3 **Merge-or-replace:** payload with `run_in_background`, `timeout`,
+      `description` → assert all three survive. Build from full `tool_input` regardless.
+- [ ] 1.4 **Re-entrancy:** is the rewritten command re-submitted to PreToolUse?
+- [ ] 1.5 GNU grep accepts the injected flags; still errors on `-G` + `-E`.
+- [ ] 1.6 Paste all results in the PR body.
 
-## Phase 2 — `mask_command_bodies` (TDD)
+## Phase 2 — Hook, observe-only
 
-- [ ] 2.1 RED: test asserting `${#masked} == ${#original}` for a payload carrying a
-      double-quoted region, a single-quoted region, and a heredoc body.
-- [ ] 2.2 RED: test asserting no `grep` token survives inside a masked region.
-- [ ] 2.3 GREEN: implement `mask_command_bodies` in `.claude/hooks/lib/incidents.sh`,
-      beside `strip_command_bodies`. Same regex family; equal-length filler.
-- [ ] 2.4 Comment why the existing stripper cannot be reused (length-destroying,
-      42 → 29 measured).
+- [ ] 2.1 Create `.claude/hooks/grep-rewrite.sh` (**not** `-guard.sh`).
+- [ ] 2.2 `SOLEUR_DISABLE_GREP_REWRITE` checked as the **first executable statement**,
+      before any subprocess or lib sourcing.
+- [ ] 2.3 Scalar-forced command extraction; no `eval` + `jq @sh` (TR5).
+- [ ] 2.4 Idempotency sentinel check.
+- [ ] 2.5 Sloppy `grep`-substring gate (a false positive costs an inert function def).
+- [ ] 2.6 Build the prefix with all 12 shim bypass arms mirrored + the three heavy
+      build dirs (D3 reversed: 5,446 ms → 590 ms measured).
+- [ ] 2.7 Emit `emit_incident "grep-rewrite-would-rewrite"` and **no** `updatedInput`.
+- [ ] 2.8 Every exit path `exit 0`. No `set -e` on the parse path.
+- [ ] 2.9 `chmod +x`; confirm **index** mode 100755.
+- [ ] 2.10 Register in `.claude/settings.json` with an explicit `timeout`.
+- [ ] 2.11 No `| grep -q` anywhere (`grep-q-pipe-guard.test.sh` forbids it).
 
-## Phase 3 — the hook (TDD)
+## Phase 3 — Corpus replay
 
-- [ ] 3.1 RED: fixture suite `.claude/hooks/grep-rewrite-guard.test.sh` covering the
-      full matrix in the plan's Test Scenarios. Mirror `guardrails.test.sh`'s harness
-      (stdin payloads, `INCIDENTS_REPO_ROOT` redirect, non-git CWD isolation).
-- [ ] 3.2 GREEN: create `.claude/hooks/grep-rewrite-guard.sh`.
-  - [ ] 3.2.1 Extract `.tool_input.command` forcing a scalar
-        (`| if type=="string" then . else tojson end`). Do **not** reproduce the
-        `eval` + `jq @sh` RCE.
-  - [ ] 3.2.2 Return early (no rewrite) when the shim's own bypass predicate matches.
-  - [ ] 3.2.3 Mask, match at command position, substitute right-to-left in the original.
-  - [ ] 3.2.4 Emit `updatedInput` only — **never** `permissionDecision`.
-  - [ ] 3.2.5 Emit nothing and `exit 0` when nothing matched.
-  - [ ] 3.2.6 Fail-open on malformed input, but `emit_incident "grep-rewrite-disarm"`.
-  - [ ] 3.2.7 `emit_incident "grep-rewrite-residual"` when a residual form is detected.
-- [ ] 3.3 `chmod +x` and confirm the **index** mode is 100755.
-- [ ] 3.4 Register on the `Bash` matcher in `.claude/settings.json`.
+- [ ] 3.1 Extract ~6,100 real Bash commands from session transcripts.
+- [ ] 3.2 Replay through the hook; assert every diff is exactly the prefix insertion,
+      remainder byte-identical, zero exceptions (AC5).
+- [ ] 3.3 Investigate and record any exception before proceeding.
 
-## Phase 4 — exec-bit gate
+## Phase 4 — Flip live
 
-- [ ] 4.1 Create `.claude/hooks/hook-exec-bit.test.sh`.
-- [ ] 4.2 Derive hook paths from `.claude/settings.json` (strip the
-      `$CLAUDE_PROJECT_DIR` prefix) — **not** from a glob. Six tracked hook `.sh`
-      files are legitimately 100644 (libs + tests); a glob goes RED on two of them.
-- [ ] 4.3 Assert each derived path is 100755 via `git ls-files -s`.
-- [ ] 4.4 Add a minimum-cardinality guard so a broken derivation cannot pass vacuously.
+- [ ] 4.1 Emit `updatedInput` built as `.tool_input | .command = $new` (AC4).
+- [ ] 4.2 Assert `permissionDecision` appears nowhere at any depth; no top-level
+      `decision`/`continue`. Handle empty and non-empty stdout separately (AC3).
 
-## Phase 5 — ADR + C4
+## Phase 5 — Differential results
 
-- [ ] 5.1 Author `ADR-155-rewrite-not-classify-for-shim-reaching-grep.md` (ordinal
-      provisional — highest on `origin/main` is 154). `## Alternatives Considered`
-      carries the three refuted cost models plus the recursive carve-out.
-- [ ] 5.2 Update `model.c4`: the `hooks` container technology/description now
-      includes input rewriting, not only guarding.
-- [ ] 5.3 Update `model.c4`: the `hooks -> claude "Guards tool calls"` relationship
-      label likewise.
-- [ ] 5.4 Run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
-- [ ] 5.5 If the ADR ordinal moves at ship time, sweep plan + tasks + AC12 in the
-      same edit.
+- [ ] 5.1 Synthesize a tree with `.git`, a binary file, and a gitignored dir.
+- [ ] 5.2 Assert identical stdout original vs. prefixed for recursive greps (AC8).
+- [ ] 5.3 Enumerate every accepted divergence in the ADR.
 
-## Phase 6 — Mutation battery
+## Phase 6 — Gates
 
-- [ ] 6.1 Delete the rewrite → suite RED.
-- [ ] 6.2 Mutate the anchor to also match `git grep` → suite RED.
-- [ ] 6.3 Restore; suite GREEN.
+- [ ] 6.1 Fixture suite `.claude/hooks/grep-rewrite.test.sh` invoking `"$HOOK"`
+      **directly** — not `bash "$HOOK"`, the path TR3 indicts.
+- [ ] 6.2 Fail-open triad (AC10): empty stdin, non-JSON, no `.tool_input`, 1 MB binary,
+      `jq` stubbed failing, `perl` stubbed failing → exit 0, empty stdout, one incident.
+- [ ] 6.3 Idempotency fixed-point fixture (AC11).
+- [ ] 6.4 Kill-switch fixture (AC12).
+- [ ] 6.5 Seven bypass forms — `$G` and `eval "grep …"` now **rewrite** (AC6).
+- [ ] 6.6 All 12 bypass arms get `command grep "$@"`, no injected flags (AC7).
+- [ ] 6.7 Extend `.claude/hooks/hookeventname-coverage.test.sh`: exec-bit (non-empty +
+      exactly `100755`), registration membership (AC14), single-rewriter (AC13).
+      Derivation must assert a non-empty list with a minimum count; entries are
+      quote-prefixed, `guardrails.sh` appears twice, one is `.py`.
+- [ ] 6.8 Rewrite-inertness: original and prefixed produce identical decisions from
+      every sibling Bash hook.
+- [ ] 6.9 Latency: p95 < 50 ms on a 4 KB command (AC17).
 
-## Phase 7 — Verification
+## Phase 7 — Aggregator, docs, ADR/C4
 
-- [ ] 7.1 AC1 reproducer probe under `ulimit -v 2000000` + `timeout`.
-- [ ] 7.2 Full `bash scripts/test-all.sh`; assert the two new suites appear **by name**.
-- [ ] 7.3 Walk every AC1–AC12 and paste evidence into the PR body.
+- [ ] 7.1 `scripts/rule-metrics-aggregate.sh`: add the `grep-rewrite-` exclusion
+      (untagged ids exit 5 at `:374`/`:426` and skip rotation).
+- [ ] 7.2 Parallel test in `scripts/rule-metrics-aggregate.test.sh` (AC15).
+- [ ] 7.3 `.claude/hooks/README.md`: §Hook contract gains the rewrite disposition;
+      roster entry; §Escape-hatch inventory row for the kill switch.
+- [ ] 7.4 Create `.claude/hooks/UPDATED-INPUT-PAYLOAD-SHAPE.md`.
+- [ ] 7.5 Author ADR-155 bounding the **authority** (mutable keys, single rewriter,
+      never `permissionDecision`, idempotent, fail-open exit 0, permission matching on
+      the original). Link the refuted cost models — do not restate them.
+- [ ] 7.6 `model.c4`: relabel the `hooks` container + `hooks -> claude` relationship.
+- [ ] 7.7 **Regenerate `model.likec4.json`**; `c4-model-freshness.test.sh` green (AC18).
+- [ ] 7.8 If the ADR ordinal moves at ship time, sweep plan + tasks + ACs together.
+
+## Phase 8 — Verification
+
+- [ ] 8.1 AC1a/AC1b split: byte-exact emitted string, then that string under
+      `ulimit -v 2000000` + `timeout`.
+- [ ] 8.2 `bash scripts/test-all.sh` on the **scripts shard** (`:577` sits inside
+      `if want_scripts`); assert new suites by name (AC16).
+- [ ] 8.3 Walk AC1–AC18; paste evidence in the PR body.
