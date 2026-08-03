@@ -190,6 +190,8 @@ commit when there are no local changes, so a clean branch generates no todos and
 no `review:` commit. Before the trailer existed, the gate denied precisely those
 branches with no escape hatch (#6724).
 
+**Then read `Reviewed-Coverage`, because presence is not sufficiency** (`git log origin/main..HEAD --format='%(trailers:key=Reviewed-Coverage,valueonly)' | grep '[^[:space:]]' | tail -1`). A value of `inline-fallback` or `unknown` on a plan whose `Brand-survival threshold` is `single-user incident` must BLOCK `gh pr ready` and surface the choice to the operator — the three signals above answer "did review run", never "did enough of it run". **Why:** #7146 — a review that ran 0 of ~10 agents correctly labelled itself degraded in `session-state.md`, emitted no trailer at all, and still wrote `Remaining: /compound -> /ship`; the re-run found ~60 findings, 15 P1, and 3 merge blockers on a diff granting a root restart to the one host with no replacement path. Prose self-assessment is invisible to a boolean gate.
+
 **Step 3: Check for GitHub issues with `code-review` label (current).**
 
 If Steps 1 and 2 found nothing, check for review issues linked to this branch's PR. This requires two separate Bash calls (no command substitution):
