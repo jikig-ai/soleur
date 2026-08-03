@@ -18,6 +18,12 @@
         "source": "payload",
         "name": "peers",
         "envname": "SOLEUR_DEPLOY_PEERS"
+      },
+      {
+        "__comment": "#7103 R1 — per-hook identity. ci-deploy.sh emits this in SOLEUR_DEPLOY_INVOCATION so a journald line names WHICH invocation path produced it. On 2026-08-01 two ci-deploy invocations ran 73s apart on one host with different environments and the record could not tell them apart. Constant literal, not payload-derived: a caller-supplied hook id would let the sender lie about which path it came from, which is the one thing this field exists to prevent.",
+        "source": "string",
+        "name": "deploy",
+        "envname": "SOLEUR_DEPLOY_HOOK_ID"
       }
     ],
     "trigger-rule": {
@@ -46,6 +52,12 @@
         "source": "payload",
         "name": "command",
         "envname": "SSH_ORIGINAL_COMMAND"
+      },
+      {
+        "__comment": "#7103 R1 — per-hook identity; see the /hooks/deploy entry. MUST stay distinct from that hook's value: telling the two paths apart is the entire point, and two hooks sharing one id would report a clean-looking marker that discriminates nothing.",
+        "source": "string",
+        "name": "deploy-peer",
+        "envname": "SOLEUR_DEPLOY_HOOK_ID"
       }
     ],
     "trigger-rule": {

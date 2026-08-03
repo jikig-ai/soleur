@@ -190,6 +190,8 @@ commit when there are no local changes, so a clean branch generates no todos and
 no `review:` commit. Before the trailer existed, the gate denied precisely those
 branches with no escape hatch (#6724).
 
+**Then read `Reviewed-Coverage`, because presence is not sufficiency** (`git log origin/main..HEAD --format='%(trailers:key=Reviewed-Coverage,valueonly)' | grep '[^[:space:]]' | tail -1`). A value of `inline-fallback` or `unknown` on a plan whose `Brand-survival threshold` is `single-user incident` must BLOCK `gh pr ready` and surface the choice to the operator — the three signals above answer "did review run", never "did enough of it run". **Why:** #7146 — a review that ran 0 of ~10 agents correctly labelled itself degraded in `session-state.md`, emitted no trailer at all, and still wrote `Remaining: /compound -> /ship`; the re-run found ~60 findings, 15 P1, and 3 merge blockers on a diff granting a root restart to the one host with no replacement path. Prose self-assessment is invisible to a boolean gate.
+
 **Step 3: Check for GitHub issues with `code-review` label (current).**
 
 If Steps 1 and 2 found nothing, check for review issues linked to this branch's PR. This requires two separate Bash calls (no command substitution):
@@ -321,15 +323,30 @@ For each new source file, check if a corresponding test file exists (e.g., `foo.
 
 **Interactive mode:** Ask the user whether to write tests now or continue without them. Do not silently proceed.
 
-Then run the project's full test suite. It is CI parity MINUS `apps/web-platform/infra/`, whose
-suites are registered only in `.github/workflows/infra-validation.yml` — so when the diff touches
-that directory, `run-registered-suites.sh` is required too and `test-all.sh` says so in its
-preamble. Calling `test-all.sh` alone "matches CI" is what produced #6969: a green summary read as
-evidence for infra it never executed, at the last gate before merge.
+Then run the project's full test suite. A default (`TEST_GROUP=all`) run now INVOKES
+`apps/web-platform/infra/run-registered-suites.sh` as a nested suite whenever the diff touches
+that directory, so the summary accounts for it. Calling `test-all.sh` alone "matches CI" is what
+produced #6969: a green summary read as evidence for infra it never executed, at the last gate
+before merge.
 
 ```bash
 bash scripts/test-all.sh
-# AND, when the diff touches apps/web-platform/infra/ (derives its list from infra-validation.yml):
+```
+
+**Do NOT unconditionally run `run-registered-suites.sh` alongside it.** That instruction was
+correct before the runner was registered and is now actively harmful: both commands default
+`TMPDIR=/var/tmp`, so running them concurrently reproduces the sibling-contention shape
+`work/SKILL.md` documents and can self-inflict a false RED at the last gate before merge — while
+paying ~4-5 minutes twice.
+
+Read the epilogue instead. `test-all.sh` reports which of these happened, keyed on whether the
+runner actually ran:
+
+- `apps/web-platform/infra/ IS covered above` — nothing further needed.
+- `... is NOT covered above` (wrong `TEST_GROUP`, diff does not touch it, or
+  `SOLEUR_INCIDENT_SKIP=1`) — then, and only then, run it explicitly:
+
+```bash
 bash apps/web-platform/infra/run-registered-suites.sh
 ```
 

@@ -5688,7 +5688,142 @@ else
 fi
 rm -rf "$T7_D"
 
-# Restore strict mode for the summary/exit.
+echo ""
+echo "--- #7103 R1: SOLEUR_DEPLOY_INVOCATION names the invocation path ---"
+
+# The 2026-08-01 recovery had two ci-deploy invocations 73s apart on one host with different
+# credential environments, and the record could not tell them apart. These assert the marker
+# that will name the divergence on next occurrence. Each cred_file value must be INDEPENDENTLY
+# reachable — a field with one reachable value is decoration that reads like evidence.
+#
+# Capture file lives OUTSIDE MOCK_DIR: run_deploy_doppler's EXIT trap removes MOCK_DIR, so a
+# capture inside it is gone before the assertion reads it.
+#
+# The credential path is redirected by rewriting the literal in a COPY of the script, NOT by
+# adding an env override to ci-deploy.sh. F16 above weighed exactly that override and rejected
+# it ("a production surface … the wrong trade"), and its (e) arm pins the literal to catch one
+# being added. F16 can source the extractable parse block on its own; the marker is emitted by
+# the script as a whole, so the same technique is applied at file scope instead.
+_marker_run() {
+  # $1 = cred-file mode (absent|present|unreadable), $2 = extra env assignments (eval'd)
+  local mode="$1" extra="${2:-}"
+  local cap credfile script
+  cap=$(mktemp -t markercap.XXXXXX)
+  credfile=$(mktemp -t credfile.XXXXXX)
+  script=$(mktemp -t cideploy.XXXXXX)
+  sed "s#/etc/default/soleur-doppler-token#$credfile#g" "$DEPLOY_SCRIPT" > "$script"
+  case "$mode" in
+    absent)     rm -f "$credfile" ;;
+    present)    printf 'DOPPLER_TOKEN=dp.st.prd.fixture-not-a-real-token\n' > "$credfile" ;;
+    unreadable) printf 'DOPPLER_TOKEN=dp.st.prd.fixture-not-a-real-token\n' > "$credfile"
+                chmod 000 "$credfile" ;;
+  esac
+  (
+    export MOCK_LOGGER_CAPTURE_FILE="$cap"
+    DEPLOY_SCRIPT="$script"
+    [[ -n "$extra" ]] && eval "$extra"
+    run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1 || true
+  )
+  chmod 600 "$credfile" 2>/dev/null || true
+  grep -h 'SOLEUR_DEPLOY_INVOCATION' "$cap" 2>/dev/null | tail -1
+  rm -f "$cap" "$credfile" "$script"
+}
+
+# Vacuity guard: if the literal ever moves, the rewrite silently no-ops and every mode would
+# measure the real (absent-on-a-runner) path — three arms agreeing for the wrong reason. Assert
+# the substitution actually happened before trusting anything below.
+TOTAL=$((TOTAL + 1))
+_rw_cred=$(mktemp -t credfile.XXXXXX)
+_rw_n=$(sed "s#/etc/default/soleur-doppler-token#$_rw_cred#g" "$DEPLOY_SCRIPT" | grep -cF "$_rw_cred" || true)
+if [[ "${_rw_n:-0}" -ge 2 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: credential-path rewrite reaches the shipped literal ($_rw_n sites)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: credential-path rewrite matched $_rw_n sites (expected >=2) — the marker arms below are vacuous"
+fi
+rm -f "$_rw_cred"; unset _rw_cred _rw_n
+
+assert_marker_field() {
+  local label="$1" mode="$2" extra="$3" field="$4" expected="$5"
+  TOTAL=$((TOTAL + 1))
+  local line actual
+  line=$(_marker_run "$mode" "$extra")
+  # The class MUST include `-`: hook ids are hyphenated (`deploy-peer`), and a class of
+  # [a-z0-9_] silently truncates it to `deploy` — which is the OTHER hook's id, so the
+  # assertion compares a real value against a real value and can false-pass. Measured: this
+  # exact omission reported `expected deploy-peer, got deploy` against a correct marker.
+  actual=$(printf '%s' "$line" | grep -oE "${field}=[a-z0-9_-]+" | head -1 | cut -d= -f2)
+  if [[ "$actual" == "$expected" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $label ($field=$expected)"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $label — expected $field=$expected, got '${actual:-<no marker emitted>}'"
+    echo "        line: ${line:-<none>}"
+  fi
+}
+
+# cred_file: all three values independently reachable.
+assert_marker_field "credential file absent"     absent  "" cred_file absent
+assert_marker_field "credential file readable"   present "" cred_file present
+
+# `unreadable` is only distinguishable as non-root: root's [ -r ] succeeds on mode 000, so under
+# a root runner this arm would silently measure `present` and report a false PASS. Skip loudly.
+if [[ "$(id -u)" -eq 0 ]]; then
+  echo "  SKIP: credential file unreadable — running as root, [ -r ] cannot fail on mode 000."
+  echo "        Re-run as non-root to cover it: bash apps/web-platform/infra/ci-deploy.test.sh"
+else
+  assert_marker_field "credential file unreadable" unreadable "" cred_file unreadable
+fi
+
+# doppler_token is independent of cred_file: readable-but-empty is a real third state.
+assert_marker_field "doppler token present" present "" doppler_token present
+assert_marker_field "doppler token absent"  absent  "export MOCK_DOPPLER_TOKEN_UNSET=1" doppler_token absent
+
+# hook identity: unset when no hook passed it, and the passed value when one did.
+assert_marker_field "hook id unset when unpassed" absent "" hook unset
+assert_marker_field "hook id reported when passed" absent "export SOLEUR_DEPLOY_HOOK_ID=deploy-peer" hook deploy-peer
+
+# The marker rides journald -> Vector Source 4 -> Better Stack unscrubbed. It must never carry a
+# credential byte. Assert against the FIXTURE TOKEN specifically, not just "looks clean".
+TOTAL=$((TOTAL + 1))
+_purity_line=$(_marker_run present "")
+if [[ -n "$_purity_line" ]] && ! printf '%s' "$_purity_line" | grep -qF 'dp.st.prd.fixture-not-a-real-token'; then
+  PASS=$((PASS + 1)); echo "  PASS: marker carries no credential bytes"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: marker leaked the fixture token (or was never emitted): ${_purity_line:-<none>}"
+fi
+unset _purity_line
+
+# script_sha must be a 12-char truncated hex digest, never empty and never the full 64.
+TOTAL=$((TOTAL + 1))
+_sha_field=$(_marker_run absent "" | grep -oE 'script_sha=[a-z0-9]+' | cut -d= -f2)
+if [[ "$_sha_field" =~ ^[0-9a-f]{12}$ ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: script_sha is a 12-char truncated digest"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: script_sha malformed: '${_sha_field:-<none>}'"
+fi
+unset _sha_field
+
+# hooks.json.tmpl: both deploy hooks must carry a DISTINCT SOLEUR_DEPLOY_HOOK_ID. Two hooks
+# sharing one id would emit a clean-looking marker that discriminates nothing — the precise
+# failure this whole marker exists to prevent.
+TOTAL=$((TOTAL + 1))
+_tmpl="$(dirname "${BASH_SOURCE[0]}")/hooks.json.tmpl"
+_ids=$(grep -A3 '"envname": "SOLEUR_DEPLOY_HOOK_ID"' "$_tmpl" 2>/dev/null | grep -oE '"name": "[a-z-]+"' | cut -d'"' -f4 | sort)
+_ids_alt=$(grep -B3 '"envname": "SOLEUR_DEPLOY_HOOK_ID"' "$_tmpl" 2>/dev/null | grep -oE '"name": "[a-z-]+"' | cut -d'"' -f4 | sort)
+_ids="$(printf '%s\n%s\n' "$_ids" "$_ids_alt" | grep -E '^(deploy|deploy-peer)$' | sort -u)"
+_n=$(printf '%s\n' "$_ids" | grep -c .)
+if [[ "$_n" -eq 2 ]] && printf '%s\n' "$_ids" | grep -qx 'deploy' && printf '%s\n' "$_ids" | grep -qx 'deploy-peer'; then
+  PASS=$((PASS + 1)); echo "  PASS: deploy and deploy-peer carry distinct SOLEUR_DEPLOY_HOOK_ID values"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: expected 2 distinct hook ids (deploy, deploy-peer), got $_n: $(printf '%s' "$_ids" | tr '\n' ' ')"
+fi
+unset _tmpl _ids _ids_alt _n
+
+# Restore strict mode for the summary/exit. This sits AFTER the #7103 arms deliberately: they
+# use `grep -c` and `grep -q` as predicates, and under `set -e` a legitimate no-match (rc=1)
+# kills the run before the summary prints — a red suite that reports nothing at all.
 set -e -o pipefail
 
 # #6665: surface a sleep-cap fire BY NAME. Any test whose run_deploy hot-spun under the no-op
@@ -5704,6 +5839,78 @@ if [[ -s "$MOCK_SLEEP_CAP_MARKER" ]]; then
   sort -u "$MOCK_SLEEP_CAP_MARKER" | sed 's/^/          /'
 fi
 rm -f "$MOCK_SLEEP_CAP_MARKER"
+
+# ---------------------------------------------------------------------------------------------
+# #7103 R1 — `no_credential_source` is EXECUTED, not grepped.
+#
+# This arm had ZERO coverage anywhere in the repo: `grep -rn no_credential_source` found it only
+# in ci-deploy.sh itself. It is the arm the 2026-08-01 incident actually took, and the only one
+# that fires with ZOT_REGISTRY_URL unset.
+#
+# It is executed rather than source-matched because the property under test is a RUNTIME one, and
+# the comment above the emitter used to assert its opposite: it claimed the Sentry beacon was
+# "credential-INDEPENDENT by construction" and therefore "the one transport that survives this
+# exact failure". It is not — the DSN components ship in /etc/default/soleur-doppler-token, the
+# same file whose absence raises this reason, so on the credential-absent path the guard is false
+# and nothing is posted. A grep of the function body cannot tell those two worlds apart; running
+# it with SENTRY_* unset can, and that is what the first arm below pins.
+# ---------------------------------------------------------------------------------------------
+echo "--- #7103 R1: no_credential_source emits on a credential-independent channel ---"
+ZGD_TMP="$(mktemp -d)" || exit 2
+{
+  awk '/^zot_gate_degraded_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT"
+} > "$ZGD_TMP/fn.sh"
+
+cat > "$ZGD_TMP/harness.sh" <<'HARNESS'
+set -uo pipefail
+LOG_TAG="ci-deploy"
+HOST_ID="test-host"
+logger() { printf '%s\n' "$*" >> "$ZGD_TMP/logger.calls"; }
+curl()   { printf 'CURL %s\n' "$*" >> "$ZGD_TMP/curl.calls"; return 0; }
+# shellcheck source=/dev/null
+. "$ZGD_TMP/fn.sh"
+zot_gate_degraded_event no_credential_source
+HARNESS
+
+# Arm 1 — the incident state: no credential file, so no SENTRY_* in the environment.
+: > "$ZGD_TMP/logger.calls"; : > "$ZGD_TMP/curl.calls"
+( export ZGD_TMP; env -u SENTRY_INGEST_DOMAIN -u SENTRY_PROJECT_ID -u SENTRY_PUBLIC_KEY \
+    ZGD_TMP="$ZGD_TMP" bash "$ZGD_TMP/harness.sh" ) >/dev/null 2>&1
+
+TOTAL=$((TOTAL + 1))
+if grep -q 'ZOT_GATE_DEGRADED: reason=no_credential_source' "$ZGD_TMP/logger.calls"; then
+  PASS=$((PASS + 1)); echo "  PASS: the journald marker fires with SENTRY_* absent (the credential-independent carrier)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: no ZOT_GATE_DEGRADED marker on the credential-absent path — this arm has no surviving signal"
+fi
+
+TOTAL=$((TOTAL + 1))
+if [[ -s "$ZGD_TMP/curl.calls" ]]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: a Sentry POST was attempted with SENTRY_* unset — the guard is not doing what it claims"
+else
+  PASS=$((PASS + 1)); echo "  PASS: no Sentry POST is attempted with SENTRY_* unset (the beacon is inert here, as documented)"
+fi
+
+# Arm 2 — THE OTHER DIRECTION. Without it the pair above is satisfied by an emitter that never
+# posts at all, and the "beacon is inert on THIS path specifically" claim would be untestable.
+: > "$ZGD_TMP/logger.calls"; : > "$ZGD_TMP/curl.calls"
+( ZGD_TMP="$ZGD_TMP" SENTRY_INGEST_DOMAIN="o0.ingest.example" SENTRY_PROJECT_ID="1" \
+    SENTRY_PUBLIC_KEY="k" bash "$ZGD_TMP/harness.sh" ) >/dev/null 2>&1
+
+TOTAL=$((TOTAL + 1))
+if grep -q 'CURL .*o0\.ingest\.example' "$ZGD_TMP/curl.calls"; then
+  PASS=$((PASS + 1)); echo "  PASS: the Sentry POST DOES fire when the DSN components are present"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: no Sentry POST even with SENTRY_* set — the emitter is dead in both directions"
+fi
+
+TOTAL=$((TOTAL + 1))
+if grep -q 'reason=no_credential_source (zot not in use' "$ZGD_TMP/logger.calls"; then
+  PASS=$((PASS + 1)); echo "  PASS: the marker's parenthetical is reason-accurate (not 'configured but inactive')"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: the marker still describes no_credential_source as 'configured but inactive', its exact inverse"
+fi
+rm -rf "$ZGD_TMP"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="

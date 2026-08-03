@@ -3,10 +3,11 @@
 # is registered in a shape the local runner cannot derive.
 #
 # WHY (#7068). Infra suites are registered ONLY as explicit `run: bash …` steps in
-# .github/workflows/infra-validation.yml -- there is no glob. scripts/test-all.sh does not
-# cover apps/web-platform/infra/ either (its own preamble says so). So a suite that nobody
-# remembers to register runs in NO job, and is invisible TWICE: it never runs, and it never
-# reds. That is strictly worse than having no suite at all, because the file reads as
+# .github/workflows/infra-validation.yml -- there is no glob. scripts/test-all.sh reaches
+# apps/web-platform/infra/ only through run-registered-suites.sh, which DERIVES its list from
+# this same job -- so an unregistered suite is uncovered locally too, not merely in CI. A suite
+# that nobody remembers to register therefore runs in NO job, and is invisible TWICE: it never
+# runs, and it never reds. That is strictly worse than having no suite at all, because the file reads as
 # coverage to anyone grepping for a guard on the thing it names.
 #
 # The orphan REPORTER that names these suites landed in 2f46570c1 (#6730); #7000 left the seven
@@ -267,7 +268,9 @@ for rel in "${SUITES[@]}"; do
       err "  unavoidable (it needs sudo), add a reasoned exclusion -- see below."
     else
       err "$rel is registered in NO single-line \`run: bash\` step of the \`${JOB}\` job in"
-      err "  $WF_REL, and scripts/test-all.sh does not cover ${INFRA_PREFIX} either."
+      err "  $WF_REL. scripts/test-all.sh reaches ${INFRA_PREFIX} only through"
+      err "  run-registered-suites.sh, which DERIVES its list from that same job -- so an"
+      err "  unregistered suite is uncovered locally too, not just in CI."
       err "  (Only that job is checked; another workflow invoking it would not count here.)"
       err "  Add a \`- name:\` / \`run: bash $rel\` step pair to that job -- a bare \`run:\` line"
       err "  appended to an existing step would clobber that step's own command."
