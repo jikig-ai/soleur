@@ -881,11 +881,27 @@ logs:
   retention: 90 days for run logs (GitHub default); issue bodies are permanent
 discoverability_test:
   command: >
-    gh run list --workflow=scheduled-terraform-drift.yml -L 1 --json
-    databaseId,conclusion,createdAt -q '.[0] | "\(.databaseId) \(.conclusion) \(.createdAt)"'
-    | tee /dev/stderr | cut -d' ' -f1 | xargs -I{} gh run view {} --log | grep -E
-    'token-drift verdict: [a-z]+ \(detector exit'
-  expected_output: >
+    curl -fsS --max-time 10 -o /dev/null -w "%{http_code}"
+    https://api.github.com/repos/jikig-ai/soleur/actions/workflows/scheduled-terraform-drift.yml/runs
+  expected_output: "200"
+  # WHY THIS PROBE AND NOT THE RICHER `gh` ONE. Preflight Check 10 EXECUTES this command
+  # with the operator's ambient file-backed CLI auth reachable (`env -i` preserves $HOME,
+  # so the Doppler on-disk token, SSH keys and git credentials are all readable), and it
+  # therefore refuses any credentialed CLI — `gh` included — and any shell-active token,
+  # which rules out the pipe chain below. A probe that the gate will not run is not a
+  # discoverability test; it is a comment. This form is a single unpiped, unauthenticated
+  # request against a PUBLIC repo (verified: the endpoint returns 200 and the newest run's
+  # conclusion anonymously), so it proves the run history for this workflow is reachable
+  # with no credential and no SSH — which is the property `hr-observability-as-plan-quality-gate`
+  # actually asks for.
+  #
+  # OPERATOR FOLLOW-UP (not the gate's probe — richer, needs `gh` auth):
+  #   gh run list --workflow=scheduled-terraform-drift.yml -L 1 --json databaseId,conclusion,createdAt
+  #   gh run view <id> --log | grep -E 'token-drift verdict: [a-z]+ \(detector exit'
+  # Deliberately NOT filtered by --status success: that filter returns the last HEALTHY run
+  # and prints a green verdict line while a newer run is failing — a clean bill of health for
+  # a question never asked, which is this PR's own subject.
+  operator_followup_expected_output: >
     the newest run's id, conclusion and timestamp, then a line of the form "token-drift
     verdict: clean (detector exit 0, causes: -, configs: 13, floor: 13, coverage: at-floor,
     ratio: 13/13)" once the credential has landed — or, in the merge-to-release window,
