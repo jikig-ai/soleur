@@ -42,6 +42,17 @@ The fix is small; the discipline around it is not. Three things make this plan l
 
 ---
 
+## Premise Validation
+
+Every claim this plan carries by reference was probed against a freshly-fetched `origin/main` during deepen-plan (attribution, not merely state — a cited PR can be genuinely merged while the claim about what it did is false). **20 of 20 claims CONFIRM; zero contradictions; zero unverifiable.**
+
+- **PR #7117** merged 2026-07-31T17:05:52Z as `2cd251885`; `git merge-base --is-ancestor` confirms it is an ancestor of `origin/main`. Run **30649892865**'s `headSha` **is** that commit. The rehearsal workflow shows exactly **4** dispatches (1 success 2026-07-30T15:49, 3 failures). `git log origin/main --since=2026-07-31 -- apps/web-platform/infra/cloud-init-git-data.yml` shows that commit as the **only** change — so the fatal is live on today's `main`.
+- **`git-data-rung2-boot-evidence.env` is absent** on `origin/main` (`git cat-file -e` fails) — the blocker chain's premise holds.
+- **#7025, #7116, #6588 are all OPEN**; #7204 (this plan's tracking issue) exists and is open. None is closed-by-a-merged-PR, so the plan is not built on a stale premise.
+- **Every content anchor resolves**, cited by content rather than line number alone (`cq-cite-content-anchor-not-line-number`): the three `mkfs.ext4` invocations, the three assertion floors (101 / 19 / 65), the `OPERATOR_APPLIED_EXCLUSIONS` comment, the rehearsal workflow's evidence-merge command block, AP-018 in `principles-register.md`, the `"deliberately UNFIRED"` sentence in `model.c4`, and ADR-147 / ADR-152.
+- **ADR ordinal**: highest on `origin/main` is **ADR-157**, so **ADR-158** is the next free ordinal — derived from a fresh `git fetch origin main`, not the branch base. It remains provisional; `/ship`'s collision gate re-verifies at merge.
+- **All AGENTS.md rule IDs cited in this plan are active** (checked against `[id: …]` in `AGENTS.md`; none retired, none fabricated). **All three GitHub labels** applied to #7204 exist.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Claim carried into this plan | Reality, verified | Plan response |
@@ -184,6 +195,23 @@ Phase ordering here is load-bearing (`knowledge-base/project/learnings/2026-07-1
 Re-run the four-arm privileged-container probe (loop file → `luksFormat` → `luksOpen` → `mkfs` arm → `mount`) already run at plan time, and record in the commit message that **all arms pass on a kernel that provides `quota_v2`**. This is the evidence that the naïve runtime guard cannot fail on the unfixed template; the regression test in Phase 2 is designed around it and must not be reverted to the naïve form later.
 
 **0.2 — Measure the candidate fix set in the same container.** For each candidate, record `dumpe2fs -h` features and `mount` rc:
+
+#### Research Insights — the mechanism is now confirmed upstream, and one premise is refuted
+
+Deepen-plan research against kernel.org, LKML and the e2fsprogs man pages. **These findings change the fix calculus and must be read before Phase 0.2 runs.**
+
+**1. The ESRCH chain is confirmed, and this is a known, documented failure mode.** Theodore Ts'o documented exactly this: an ext4 filesystem carrying the `quota` RO_COMPAT feature fails to mount with `ESRCH` ("No such process") when the quota code is built as a module and `quota_v2` is not available. `ext4_enable_quotas()` is called **unconditionally** from `ext4_fill_super()` when the feature bit is set. A later kernel patch (`9db176bceb5c`, *"ext4: fix mount failure with quota configured as module"*) added `IS_ENABLED()`-based autoloading — which cannot help here, because on this image the module **is not on disk at all**, so `request_module` has nothing to find. H5 moves from *strongly supported* to **confirmed against upstream**; only A1 (Hetzner image == stock Ubuntu cloud image) remains, and Hetzner's own changelog documents `ubuntu-24.04` (image ids 161547269 / 161547270) as the stock Canonical cloud image, which narrows A1 substantially.
+   - Refs: <https://docs.kernel.org/admin-guide/ext4.html>, <https://lkml.iu.edu/hypermail/linux/kernel/2002.3/05061.html>
+
+**2. Candidate (d) is REFUTED by upstream before Phase 0 runs it — but run it anyway.** The kernel **ignores** quota mount options entirely when the feature bit is set: the patch *"ext4: ignore quota mount options if the quota feature is enabled"* (merged 3.19/4.4/4.5) changed the behaviour from *failing* the mount to *silently ignoring* the options, matching XFS. Kernel docs state the quota mount options "are ignored by the filesystem … used only by quota tools". So `-o noquota` **cannot** rescue a `quota`-featured filesystem. Phase 0.2.4 still executes it — a two-minute local confirmation of a documented negative is cheap, and this plan does not mark things confirmed on reading alone (`knowledge-base/project/learnings/2026-07-16-refuting-a-hypothesis-by-reasoning-while-its-discriminator-is-invisible.md`) — but it is now expected to fail, and a *surprising pass* would be the finding.
+   - Ref: <https://lkml.iu.edu/hypermail/linux/kernel/1604.2/00669.html>
+
+**3. ⚠️ The "migration-forcing" premise behind B16 is REFUTED.** `tune2fs(8)` lists **both** `quota` and `project` among the features that can be set and cleared **after** filesystem creation on an unmounted filesystem. The template comment (`#6982 W5/R31`) and B16's rationale both assert the opposite — that these ship at birth or need "a replace PLUS an rsync of every user's objects". That is the belief that pinned an unmountable feature set onto a store that had not yet been created, and it is wrong.
+   - **What is genuinely not free later:** `tune2fs -O quota` sets the superblock flag; it does not populate a quota database, so enabling enforcement later additionally needs the `quota` userspace package (absent from the image) and a `quotacheck` pass. That is an *operational* step on an unmounted volume — not a volume replace, and not a data migration.
+   - **Consequence for the fix:** candidate **(c) plain `mkfs.ext4`** — sibling parity with the two working production LUKS stores — is now a *low-future-cost* option rather than a capability write-off, and candidate **(a) `-O project` alone** is viable because `ext4_enable_quotas()` is gated on `RO_COMPAT_QUOTA`, not on `project`. Phase 0.2 still measures both; what changed is that criterion (b) no longer strongly favours keeping the flags.
+   - Refs: <https://manpages.debian.org/unstable/e2fsprogs/tune2fs.8.en.html>, <https://manpages.debian.org/unstable/e2fsprogs/mke2fs.8.en.html>
+
+**4. `-O project` without `quota` is accepted but only half a capability.** mke2fs sets the project-ID inode field, but creates no quota inodes, so project-quota *enforcement* does not work; `-E quotatype=prjquota` "has effect only if the quota feature is set". Phase 0.2.1 must therefore report not just "does it mkfs and mount" but "what does it actually buy" — otherwise the ADR records a preserved capability that is inert, which is precisely the error the current template made.
 
 | Candidate | Question the probe answers |
 |---|---|
@@ -470,6 +498,38 @@ Query: `gh issue list --label code-review --state open --json number,title,body 
 **Not applicable.** The mechanical UI-surface scan over `## Files to Create` and `## Files to Edit` finds no path matching the UI-surface term list or glob superset — the diff is a cloud-init template, four shell test suites, one shell script, one `.c4` model file and one ADR. Product is relevant to this plan (above) without the plan having a UI surface, so the gate resolves to **NONE** by the mechanical rule, not by subjective judgement.
 
 ---
+
+## Research Insights — institutional learnings that bind this plan
+
+Swept from `knowledge-base/project/learnings/` during deepen-plan. Listed only where they change a phase; the four learnings already cited in the body are not repeated.
+
+**1. An existence assertion placed before the thing exists bricks every boot — and a co-presence grep cannot see it.**
+`knowledge-base/project/learnings/2026-07-26-an-existence-assertion-that-ran-before-the-file-existed-bricked-every-boot.md` — a PR fixing boot diagnostics nearly shipped `test -x` assertions ~120 lines *above* the heredocs that create the files they assert on. *"Co-presence is not ordering."* The self-authored mutation battery could not catch it because the suite `awk`-extracts heredoc **bodies** and runs those in isolation, making "created too late" structurally invisible.
+→ **Binds Phase 1.4 directly.** Seeding the detail file at stage entry is exactly this shape: a resource whose *position* relative to its consumers is load-bearing, in a file whose test harness extracts fragments rather than executing the stage in order. **Required:** the new comment must state the ordering as load-bearing, and the R3 arm must assert the seed **precedes** the first append — not merely that both lines exist. A grep proving both are present is the failure mode this learning names.
+
+**2. A mutation battery measures the axes it varies, not the rows it contains.**
+`knowledge-base/project/learnings/2026-07-30-a-known-gap-of-seven-was-a-predicate-and-my-battery-mutated-one-axis.md` — *"N mutations of one axis is one mutation."* Also the canonical source of the assertion-floor doctrine this plan already invokes.
+→ **Binds Phase 2.** B16's three existing arms all mutate the **same axis** (the mkfs flag string). Before declaring Phase 2 done, enumerate the axes the combined battery varies and record them in the test body: (a) mkfs flag set, (b) resulting superblock features, (c) detail-file presence/ordering, (d) `HOST_SQL` column set. An axis with zero arms is the gap; a fourth arm on axis (a) is not coverage.
+
+**3. The infra path-glob fires the apply — independently confirmed.**
+`knowledge-base/project/learnings/best-practices/2026-07-11-cron-egress-sentinel-needs-runbook-row-and-infra-glob-fires-apply.md` — *"The delivery premise 'merging does not fire the apply because it is not a `.tf` file' is **false**."* Same trigger (`apps/web-platform/infra/**` at `:69-70`), same wrong premise, already written up.
+→ **Confirms the R1 correction** in `## Infrastructure (IaC)`. This plan reached the finding independently by reading `on.push.paths`; that a prior session made the identical mistake is the argument for the Sharp Edge being stated rather than assumed. **Cite this learning in the IaC section at implementation time.**
+
+**4. Renumber MINE, never main's — and key the sweep on the issue number.**
+`knowledge-base/project/learnings/workflow-patterns/2026-07-05-adr-ordinal-collision-on-rebase-renumber-mine-not-mains.md` and `knowledge-base/project/learnings/2026-07-05-ghcr-installation-token-minter-dependency-gate-and-adr-ordinal-drift.md` — in shared files (`model.c4`, `principles-register.md`) main's ADR and yours coexist, so a blanket `s/ADR-158/ADR-159/g` corrupts main's references. The discriminator is the **issue number**.
+→ **Binds Phase 4.4.** Replace the blanket sweep with the line-scoped form: `sed -i '/#7204/ s/ADR-158/ADR-<new>/g'` on shared files, plus the unscoped rename only within this feature's own artifacts (`plans/`, `specs/feat-one-shot-git-data-luks-open-fatal/`, the ADR body).
+
+**5. `set -euo pipefail` upgrade pitfalls.**
+`knowledge-base/project/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md` — under `-u`, a bare `$2`/`$3` when unset aborts immediately; under `pipefail`, a `grep` with no match inside a command substitution propagates rc=1 and aborts the caller.
+→ **Binds Phase 1.4.** Audit the new trap code for both: no bare positionals in `luks_err`, and no `$( … | grep … )` in the capture path that could abort the handler before `git-data-emit` runs. The `|| true` on `dmesg` is necessary but not sufficient.
+
+**6. A `moved` block on an operator-excluded resource red-lines targeted CI applies.**
+`knowledge-base/project/learnings/2026-07-02-moved-block-on-operator-excluded-resource-wedges-targeted-ci-apply.md` — the fix is the cutover **with** the migration, never an allow-list edit.
+→ **Validates the current Apply-path analysis** (this plan adds no `moved` block and no `.tf` diff). Recorded as a forward constraint: if a future revision migrates git-data resources, the `moved` block ships with the operator cutover apply, not in a per-PR apply.
+
+**7. C4 impact requires reading all three model files and enumerating external actors.**
+`knowledge-base/project/learnings/2026-06-18-c4-impact-requires-reading-all-diagrams-and-enumerating-external-actors.md`.
+→ **Already satisfied** — the Phase 5 enumeration covers actors, external systems, containers and access relationships, and reaches a *correction* rather than a "no impact" conclusion. No change needed; recorded so a reviewer can see the gate ran.
 
 ## Risks & Mitigations
 
