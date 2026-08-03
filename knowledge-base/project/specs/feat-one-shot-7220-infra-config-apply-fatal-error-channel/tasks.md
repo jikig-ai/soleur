@@ -30,7 +30,7 @@ are written** but before unit reconciliation and the webhook self-restart.
 
 - [ ] 0.1 Re-run `scratchpad/errtrap.sh` + `scratchpad/p0verify.sh` against **the target image's**
       bash (Ubuntu 24.04 / 5.2.x). Plan measurements are from 5.3.9.
-- [ ] 0.2 Read `infra-config-apply.test.sh:401` (`test_exit_trap_unhandled`), `:634`
+- [ ] 0.2 Read `infra-config-apply.test.sh:401` (`test_exit_trap_unhandled`), `:633`
       (`test_dropin_restart_grant`), `:1051` (`test_sudoers_caller_argv_lockstep`). Most new
       assertions **extend these**; do not add parallel arms. `test_exit_trap_unhandled` aborts
       *inside* the write loop, so it cannot cover the abort-before-counters case — that needs a new arm.
@@ -54,12 +54,17 @@ are written** but before unit reconciliation and the webhook self-restart.
       Inline comment: the single quotes are load-bearing (double quotes pin the trap's own line forever).
 - [ ] A2.3 Hand the triple over via **`"$STATE_FILE.fatal"`**, not variables — a subshell fatal
       assigns in the child and the parent would otherwise write a frame with no attribution.
+- [ ] A2.4 Add a **logger env seam** on the fatal emitter, adopting the precedent idiom
+      `"${CUTOVER_LOGGER_CMD:-logger}"` from `inngest-cutover-flip.sh:145` (AC14b). Lets one test arm
+      intercept the fatal channel specifically instead of relying on the global PATH shim.
 
 ### A3 — EXIT trap (AC10, AC11) — **P0**
 - [ ] A3.1 Convert the inline trap at `:221-224` to a named `on_exit()`.
 - [ ] A3.2 In order: capture `rc=$?`; `trap - ERR` as the **first** statement; all work `|| true`;
-      re-pin the original status. `trap - ERR` alone is **not** sufficient — measured, a failing
-      command in an armed EXIT trap turns `exit 0` into rc=1.
+      end with `exit "$rc"` to re-pin the original status. `trap - ERR` alone is **not** sufficient
+      — measured, a failing command in an armed EXIT trap turns `exit 0` into rc=1. The
+      capture-first + `exit "$rc"` shape is exactly the precedent's `on_unexpected_exit`
+      (`inngest-cutover-flip.sh:208-218`); copy it rather than inventing.
 - [ ] A3.3 Sanitize `cmd` with the existing `r_err_safe` idiom (`:497`).
 
 ### A4 — Frame fields (AC12, AC13)
@@ -78,8 +83,14 @@ are written** but before unit reconciliation and the webhook self-restart.
 - [ ] A6.1 `infra-config-gate.sh` renders a fatal `::error::` containing: `infra-config-apply.sh:<line>`
       + sanitized command; **"every step after this line did not run"**; `files_written=N of M
       delivered`; the next command using **`--since 1h`**; and the **`-replace` guardrail** verbatim.
-- [ ] A6.2 Suppress the count branches (`:193`, `:197`) and the per-unit activation-contract branch
-      when `fatal_line` is present.
+- [ ] A6.2 When `fatal_line` is present, suppress the branch anchored on
+      `UNDER-DELIVERED: host reported files_total=` and the per-unit branch anchored on
+      `no verdict for`. **Keep** the `exit_code != 0` line — it is accurate. Verified against the
+      real frame: only two branches fire, not three (`files_written != files_total` does not, since
+      0 == 0). Anchor on content, not line numbers.
+- [ ] A6.4 **Fail-OPEN guard:** the suppression must change only the MESSAGE, never the VERDICT.
+      Add a test arm asserting a frame with `fatal_line` still FAILS the gate, and enumerate in the
+      gate's comments every path that reaches `exit 0`.
 - [ ] A6.3 `infra-config-gate.test.sh` arms asserting the **rendered text** (never `grep -c` on an
       identifier — that is satisfied by a comment).
 
@@ -121,7 +132,7 @@ are written** but before unit reconciliation and the webhook self-restart.
 
 ### B3 — Seam reuse (AC1, AC2)
 - [ ] B3.1 Rename `SYSTEMCTL_RESTART` → `SYSTEMCTL_PRIV` (env name `INFRA_CONFIG_SYSTEMCTL`
-      unchanged) **atomically with** `test_sudoers_caller_argv_lockstep`'s `sed` pattern at `:1064`,
+      unchanged) **atomically with** `test_sudoers_caller_argv_lockstep`'s `sed` pattern at `:1068`,
       or the assertion silently compares against `""`.
 - [ ] B3.2 Route the reload through `$SYSTEMCTL_PRIV`. No third env var — same privilege domain.
 - [ ] B3.3 Update the `:121-128` taxonomy comment inside its existing WRITE paragraph.

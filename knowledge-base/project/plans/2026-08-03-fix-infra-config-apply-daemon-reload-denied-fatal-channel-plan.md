@@ -23,6 +23,42 @@ branch: feat-one-shot-7220-infra-config-apply-fatal-error-channel
 
 # fix(infra): the config channel dies at an ungranted `daemon-reload`, and its own frame says the opposite
 
+## Enhancement Summary
+
+**Deepened:** 2026-08-03 · **Review panel:** 6 agents (DHH, Kieran, code-simplicity,
+architecture-strategist, spec-flow-analyzer, CTO/devex) · **Revisions applied:** R1-R20
+
+### Key improvements
+
+1. **The root cause was measured, not inferred.** A read-only Better Stack query recovered the
+   handler's own journald tail and the webhook's capture of its stderr —
+   `Reload daemon failed: Interactive authentication required.` on the same request id. That
+   falsified three of the issue's premises, including "delivering zero of its 19 FILE_MAP entries"
+   (19/19 landed) and "died before its first `logger` call" (40 rows shipped).
+2. **Two P0s were caught that would have made the instrument worse than the bug** — an ERR trap that
+   stays armed during the EXIT trap (measured: turns `exit 0` into rc=1), and an unset-variable
+   expansion that makes the trap write *no frame at all* under `set -u`.
+3. **A deploy→root escalation chain was found** that the reload grant would have activated. The
+   threshold was raised from `none` to `single-user incident` and a blocking shape-gate AC added.
+4. **The change ships as two PRs**, which makes "instrument before fix" a real deployment ordering
+   rather than an authoring one, and keeps the privilege change off an unreplaceable host until the
+   fatal channel is live and reading.
+5. **The operator-facing output became the deliverable** — the annotation must now carry the
+   do-not-`terraform apply -replace` guardrail, because the previous annotation was two-thirds false
+   and the issue written from it pointed at destroying a host with 0/6 datacentre stock.
+
+### New considerations discovered
+
+- The `files_total:0` in the failing frame is a hardcoded **sentinel**, not a measurement — it
+  reads identically whether 0 or 19 files landed. The CI error built on it was false.
+- The bug is **not new**: the reload has been ungranted since May 2026. #7146 only *moved* it above
+  the state write, converting a two-month silent failure into a loud one.
+- The webhook self-restart has therefore **never executed in production**, and re-enabling it needs
+  its own hardening (`--collect`, `StartLimitIntervalSec=0`, hooks.json parse hard-fail).
+- No `vector.toml` change is needed — the marker rides an identifier allowlisted since #5526.
+- No operator-gated production write is required; the earlier `-replace` framing was declined with
+  artifact-backed evidence.
+
 > Lane note: no `spec.md` exists for this branch, so `lane:` defaulted to `cross-domain` (TR2 fail-closed).
 >
 > **Revision R2** — rewritten after a 6-agent review panel. Every P0 below was found by review, not
@@ -182,6 +218,62 @@ Residual UNKNOWNs, deliberately not graded:
 - Whether any *earlier* apply died at a different line. Untestable retroactively — no line number
   was ever recorded. That is the gap, not a question to answer by argument.
 
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+The gate fires twice over: on the prose keywords (`SSH`, `502/503`) **and** on the resource shape —
+`terraform_data.infra_config_handler_bootstrap` carries four `provisioner "file"` blocks, a
+`provisioner "remote-exec"`, and an SSH `connection` block (`server.tf:1237-1243`), which makes SSH
+a hard apply-time dependency the prose scan alone would miss (the #3061 shape).
+
+| Layer | Status | Artifact |
+|---|---|---|
+| **L3 firewall allow-list** | **verified — no gap** | Not the failing path. The apply's SSH leg reaches the host through the cloudflared TCP forward + `iptables -t nat OUTPUT REDIRECT` bridge, not a raw egress IP, so `var.admin_ips` drift cannot gate it. Positive evidence: run 30811367645's bootstrap completed **all 9** post-write assertions, and the shared `cf-tunnel-ssh-bridge` composite has asserted Access admission in-bridge since #7133 (ADR-154) |
+| **L3 DNS / routing** | **verified** | `deploy.soleur.ai` resolved and proxied to web-1; the handler exec is recorded on `host_name=soleur-web-platform`, `_BOOT_ID=8c86d413…`, `_SYSTEMD_UNIT=webhook.service` |
+| **L7 TLS / proxy** | **verified** | CF Access service-token handshake returned **200**, not 403; `push-infra-config.sh` received its required HTTP 202; the status endpoint answered 200 on all three verify attempts |
+| **L7 application** | **verified, and causal** | The journal entry for the incident window exists and names the fault on the same webhook request id: `Reload daemon failed: Interactive authentication required.` |
+
+**No gap requires closing before implementation.** Absence of a lower-layer signal is normally the
+strong evidence here — but in this incident the L7 signal is *present*, which forecloses every
+lower-layer hypothesis: the packet reached the service, the service ran, and the service said why it
+stopped. This is the inverse of #2654, where three sshd-layer hypotheses were drafted because the L3
+layer had never been checked.
+
+**Residual, carried into PR-B rather than closed here:** the SSH leg is the *only* route by which a
+handler edit reaches prod (the handler is not in FILE_MAP), and ADR-154 records that leg dead for 3
+days on a host with 0/6 stock. If it is dead at PR-B time the fix cannot land at all — an additional
+argument for PR-A (whose payload is equally SSH-delivered) going first as the canary.
+
+## Downtime & Cutover
+
+The Phase 4.55 trigger fires on the **deploy/router class**: both PRs cause a restart of the sole
+webhook listener, and PR-B re-enables a second, delayed restart that has not run since May 2026.
+Zero-downtime is the default and is achievable here without a new cutover mechanism, because the
+affected surface is the management plane only.
+
+- **Offline-inducing operation:** the synchronous webhook restart inside
+  `terraform_data.infra_config_handler_bootstrap`'s `remote-exec` (`server.tf:1301`), plus PR-B's
+  re-enabled `systemd-run --on-active=3s` self-restart.
+- **Surface affected:** `deploy.soleur.ai` (the webhook listener) for well under a second.
+  **`app.soleur.ai` does not traverse this path** — it is a direct CF-proxied A record (`dns.tf`),
+  so no user-facing request is dropped and there is no user-visible downtime.
+- **Zero-downtime path — chosen, and it needs no new mechanism.** The restart is already how every
+  infra-config apply since #3756 has worked; this plan adds none. What it *does* add is the
+  hardening that stops that restart from becoming a **wedge**, which is the real availability risk:
+  1. `StartLimitIntervalSec=0` (AC-B2.3) — the first post-merge apply performs two restarts in quick
+     succession and the unit has no start-limit override, so the systemd default (5-in-10s) is being
+     consumed on every apply. Blowing it leaves webhook `failed` needing `systemctl reset-failed` —
+     recoverable only over the shell channel.
+  2. `--collect` (AC-B2.2) — without it a *failed* transient unit is never garbage-collected and
+     every subsequent apply's `systemd-run` fails "unit already exists", permanently and silently.
+  3. hooks.json parse hard-fail (AC-B2.1) — an unparseable `hooks.json` currently passes delivery
+     and would, post-fix, activate 3 s later into a listener serving **zero hooks** with the port
+     still answering. That is the one genuinely wedging outcome, and it is why PR-B is gated behind
+     PR-A rather than shipped alongside it.
+- **Residual downtime accepted:** sub-second, management-plane only. No maintenance window needed,
+  no operator sign-off sought for the restart itself. **Rollback:** the bootstrap resource is
+  *replaced* (not mutated) on every apply, so reverting the commit and re-running the workflow
+  restores the prior handler and sudoers state by the same path — no manual step, no state surgery.
+
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** nothing directly — `app.soleur.ai/health` is 200 and
@@ -305,6 +397,15 @@ cannot be rebuilt, and it should not be the first thing to exercise a brand-new 
   delivery path to a running host (`server.tf:1422` is a `triggers_replace` hash input;
   `cloud-init.yml:239` is create-time under `ignore_changes=[user_data]`). **This AC must land before
   or with the reload grant, never after.**
+  **Design the gate as if the deploy user is the adversary calling the helper directly** — the
+  bare-command grant means they can. The three traps codified in
+  `knowledge-base/project/learnings/security-issues/2026-06-02-deploy-user-sudo-helper-hardening.md`
+  are already honoured by the existing dests and the `*.service` extension must honour them too:
+  (a) never trust caller-supplied mode/owner — derive from the in-helper `DEST_SPEC` table and
+  reject disagreement (`rc=3`); (b) the helper must never be able to write a file that defines its
+  own grants (`/etc/sudoers.d/*` is root-only via the SSH bridge — that reasoning now extends to a
+  unit file the deploy user can root-start); (c) payload arrives over **stdin**, never a path, so
+  the staged temp cannot be symlink-swapped between check and use.
 - **AC-B2 (P0, self-restart hardening)** The delayed webhook self-restart at `:586` has **never
   executed in production** — `fc8b81796` shipped it *after* the reload in the same `set -e` block, so
   it has been unreachable since May 2026, with zero test coverage (`INFRA_CONFIG_TEST_MODE` gates it
@@ -388,6 +489,11 @@ cannot be rebuilt, and it should not be the first thing to exercise a brand-new 
   second half is the only executable mitigation for the plan's biggest behavioural risk. Both reload
   arms carry a non-vacuity assertion proving the seam stub was actually invoked (mirroring the
   `n_matched >= 1` guard at `:1085-1090`).
+- **AC14b** The fatal emitter carries a **logger env seam**, adopting the precedent idiom
+  `"${CUTOVER_LOGGER_CMD:-logger}"` from `inngest-cutover-flip.sh:145`. Without it the marker is
+  assertable only via the PATH shim, which the suite installs globally — the seam lets a single arm
+  intercept the fatal channel specifically, and is how the precedent makes its own no-SSH state
+  channel testable.
 
 **Operator-facing output**
 
@@ -406,9 +512,22 @@ cannot be rebuilt, and it should not be the first thing to exercise a brand-new 
      **Highest-value line in the change.** The last incident's annotation was two-thirds false and
      the issue written from it pointed at `-replace` on an unreplaceable host. The next incident
      reads the annotation, not this plan.
-- **AC16** The count branches (`infra-config-gate.sh:193`, `:197`) and the per-unit
-  activation-contract branch are suppressed on a frame carrying `fatal_line`, which already explains
-  why there is no verdict. Prevents the abort frame emitting one misleading `::error::` per unit.
+- **AC16** Suppress, on a frame carrying `fatal_line`, the **count** branch anchored on
+  `UNDER-DELIVERED: host reported files_total=` and the **per-unit activation-contract** branch
+  anchored on `no verdict for` — `fatal_line` already explains why there is no verdict.
+  **Verified against the real incident frame** (`exit_code:1, files_written:0, files_failed:0,
+  files_total:0`, expected 19): exactly **two** branches fire — the `exit_code != 0` branch and the
+  `files_total != expected` branch. The `files_written != files_total` branch does **not** fire
+  (0 == 0). So the misleading output was two lines, not three; the `exit_code` line is accurate and
+  must be **kept**. Cite by content anchor, not line number (`cq-cite-content-anchor-not-line-number`).
+  **Fail-OPEN guard (mandatory):** this AC *silences gate branches*, which is exactly the shape that
+  turns a safety gate into a bypass. The suppression MUST change only the **message**, never the
+  **verdict** — the gate's exit status is still non-zero, and `fatal_line` must never become a path
+  to `exit 0`. Add a test arm asserting a frame with `fatal_line` set still FAILS the gate, and
+  enumerate in the gate's own comments every path that reaches `exit 0`. *(Per
+  `knowledge-base/project/learnings/2026-06-08-ci-gate-fail-open-traps-skip-token-grep-and-buildkit-cache-mode.md`
+  — an unanchored skip-token grep once let a deploy ship past a RED CI. Every convenience shortcut
+  in a gate needs re-examining for a fail-open inversion.)*
 - **AC17 (P0)** A red infra-config gate **notifies someone**. Today the workflow's only alerting
   mechanism, `seccomp_unenforced_alert` (files a plain-language GitHub issue **and** a Sentry event;
   the reason the workflow holds `permissions: issues: write` at `:166`), sits inside an
@@ -500,10 +619,11 @@ discoverability_test:
     --since 1h --grep SOLEUR_INFRA_CONFIG_FATAL --limit 20
   expected_output: >-
     zero rows on a healthy apply (negative control); on a fatal, one row carrying rc=, line= and a
-    sanitized cmd=. NO ssh anywhere in the path. `--since 1h` is deliberate: the relative form needs
-    no clock arithmetic and sidesteps the script's ISO papercut (its header advertises "ISO" but the
-    canonical Z-suffixed form is pasted verbatim into SQL and rejected by ClickHouse — measured
-    in-session; filed as a follow-up, not fixed here).
+    sanitized cmd=. The command is HTTPS-only end to end — no shell access to the host is involved
+    at any hop. `--since 1h` is deliberate: the relative form needs no clock arithmetic and
+    sidesteps the script's ISO papercut (its header advertises "ISO" but the canonical Z-suffixed
+    form is pasted verbatim into SQL and rejected by ClickHouse — measured in-session; filed as a
+    follow-up, not fixed here).
 ```
 
 ## Architecture Decision (ADR/C4)
@@ -615,15 +735,46 @@ is a handful of rows on failure only.
 
 ## Encryption Posture
 
-**Skipped — detection did not fire.** No persistent store and no new cross-component connection.
-`server.tf` is edited only to add an assertion inside an existing `remote-exec`; no volume, bucket,
-table, queue, cache or backup target is declared, and no new network edge is opened. The one
-transport touched (journald → Vector → Better Stack over HTTPS) already exists and is unchanged.
+**The file-pattern trigger FIRES (`server.tf` matches `\.tf$`); the substantive trigger does not.**
+Recording the distinction explicitly rather than claiming the gate was skipped — the gate keys on a
+file pattern and over-fires on a `.tf` edit that declares no resource.
 
-One posture-adjacent constraint, carried into AC11: `BASH_COMMAND` can *name*
-`/etc/default/soleur-doppler-token`, and the file's **contents** must never reach journald — the
-same reasoning that made `:326` forbid `diff`/`od` on a FILE_MAP dest. Emitting the command text is
-safe; emitting anything read from the file is not, and AC11 now has a fixture asserting exactly that.
+```yaml
+at_rest:
+  - store: none introduced by this change
+    mechanism: n/a — no store is declared
+    evidence: >-
+      The entire server.tf diff is assertion strings added inside the EXISTING
+      terraform_data.infra_config_handler_bootstrap remote-exec (a `sudo -n -l` policy probe and
+      two `systemctl show -p DropInPaths` reads). No volume, bucket, table, queue, cache, backup
+      target or log sink is declared, altered or re-pointed; the diff adds no `resource "` block.
+    defends_against: n/a — nothing new is persisted
+    does_not_defend: >-
+      This change does NOT alter, and must not be read as attesting to, the posture of any EXISTING
+      store on the host. Those keep whatever the encryption-posture ledger already records. #6588's
+      lesson — legal docs declared LUKS while the volume was plaintext ext4 — is exactly why this
+      section refuses a blanket claim it did not verify.
+    disclosed_as: no disclosure change — no new processing activity, no new store
+    live_verification: n/a — no store to verify
+
+in_transit:
+  - connection: none introduced by this change
+    tls: n/a — no new cross-component connection is opened
+    cert_verification: n/a
+    does_not_defend: >-
+      The three transports this plan READS over already exist and are unchanged: the CF-Tunnel
+      HTTPS path to /hooks/infra-config-status (CF Access service token + HMAC), the root shell
+      channel over the same tunnel used by the bootstrap provisioner, and journald → Vector →
+      Better Stack. This change opens no new edge and re-points none, and attests to none of them.
+    disclosed_as: no disclosure change
+```
+
+**One posture-adjacent constraint is load-bearing, and it is carried into AC11:** `BASH_COMMAND` can
+*name* `/etc/default/soleur-doppler-token`, and the file's **contents** must never reach journald —
+the same reasoning that made `:324` forbid `diff`/`od` on a FILE_MAP dest. Emitting the command
+*text* is safe; emitting anything read from the file is not. AC11's fixture asserts the secret
+**value** never reaches `$LOGGER_LOG` or the frame. This is the only point at which the change comes
+near secret-material handling at all.
 
 ## Open Code-Review Overlap
 
@@ -637,7 +788,7 @@ or `vector.toml`.
 
 0.1 Re-run `scratchpad/errtrap.sh` + `scratchpad/p0verify.sh` on **the target image's** bash
     (Ubuntu 24.04 / 5.2.x), not CI's. The measurements in this plan are from 5.3.9.
-0.2 Read `infra-config-apply.test.sh:401` (`test_exit_trap_unhandled`), `:634`
+0.2 Read `infra-config-apply.test.sh:401` (`test_exit_trap_unhandled`), `:633`
     (`test_dropin_restart_grant`), `:1051` (`test_sudoers_caller_argv_lockstep`) — most new
     assertions are **extensions of these**, not new registered functions. Note
     `test_exit_trap_unhandled` aborts *inside* the write loop, so it cannot cover the
@@ -712,6 +863,28 @@ the correct escalation — and per `hr-menu-option-ack-not-prod-write-auth` it t
 operator authorisation plus Terraform's own interactive `yes`, never `-auto-approve`, on a host that
 cannot be replaced (`cx33`, 0/6 DC stock, ADR-154). AC15's guardrail exists so the operator is told
 this **in the annotation**, at the moment they would otherwise reach for it.
+
+## Precedent Diff — ERR trap (deepen-plan Phase 4.4)
+
+The repo has exactly **one** ERR trap that reaches journald:
+`apps/web-platform/infra/inngest-cutover-flip.sh:208-218` (`on_unexpected_exit`). Diffed side by
+side, it **validates** this plan's shape and contributes one idiom the plan was missing.
+
+| Property | Precedent (`inngest-cutover-flip.sh`) | This plan | Verdict |
+|---|---|---|---|
+| `errtrace` | `-E`, with a comment explaining the trap must be inherited by shared functions (`:56`) | `set -o errtrace` + the same rationale | **match** |
+| Captures rc first | `local rc=$?` as the handler's first statement | `rc=$?` first in `on_exit()` | **match** |
+| Re-pins the exit status | ends with `exit "$rc"` | AC10 requires the same | **match — and this is the idiom that makes AC10 correct.** Measured independently: without it, a failing command in the trap turns `exit 0` into rc=1 |
+| Transport calls are failure-tolerant | `flag_set … 2>/dev/null \|\| true`, `read_flag … \|\| printf ''`, and `emit_state` writes the state file and `logger` each with `2>/dev/null \|\| true` | AC6/AC10 require `\|\| true` on every trap command | **match** |
+| Dual transport | writes the state file **and** `logger -t "$LOG_TAG"`, in that order | same two arms | **match** |
+| Test seam on the emitter | **`"${CUTOVER_LOGGER_CMD:-logger}"`** — an env seam so the suite can intercept the marker | *the plan had none* | **ADOPT.** Add the equivalent seam so the fatal marker is assertable without relying solely on the PATH shim. Folded into AC5/AC14 |
+| Emits **at ERR time** | yes — `on_unexpected_exit` calls `emit_state` directly | **no — deliberate divergence.** ERR is pure assignment; all emission moves to EXIT | **divergence, justified.** The precedent has no competing EXIT trap doing work, so an ERR-time emit is safe there. This handler has both, and enriching the EXIT trap while ERR is armed is the measured P0 (a spurious marker *and* a flipped exit status). Pure-assignment ERR makes a false `SOLEUR_INFRA_CONFIG_FATAL` structurally impossible rather than test-verified |
+| `trap - ERR` inside the EXIT handler | n/a — no EXIT trap | required (AC10) | **new constraint**, arising from the two-trap interaction the precedent never had |
+
+No other pattern in this change is novel: the sudoers alias shape mirrors `DROPIN_TRY_RESTART`
+(`deploy-inngest-bootstrap.sudoers:124`), the `sudo -n -l` policy probe mirrors the existing
+post-write assertions (`server.tf:1310/1314/1320`), and the follow-through probe mirrors
+`scripts/followthroughs/ac12-telemetry-positive-control-7103.sh`.
 
 ## Risks & Mitigations
 
