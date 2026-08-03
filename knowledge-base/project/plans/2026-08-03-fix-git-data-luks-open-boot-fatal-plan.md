@@ -61,7 +61,9 @@ The fix is small; the discipline around it is not. Three things make this plan l
 
 - The fix touches a **migration-forcing** choice on a store that has not yet been created, pinned by an existing mutation-armed guard (`git-data-luks.test.sh` B16) that exists specifically to stop someone doing what this plan proposes. That guard is not wrong — it must be *re-aimed*, and the decision recorded in an ADR.
 - The regression test must be able to **fail on the unfixed template**, and the obvious runtime test cannot: a Docker container shares the host kernel, so on any runner whose kernel provides `quota_v2` the unfixed template mounts fine. This plan measured that directly (see Hypotheses H4) and designs around it.
+<!-- lint-infra-ignore start -->
 - The rehearsal reported a **verdict with no cause**. The cause was recoverable only by writing a new Better Stack query by hand. That is a defect in the diagnostic route itself and is in scope, bounded.
+<!-- lint-infra-ignore end -->
 
 **Do NOT dispatch** the rehearsal (`dry_run=false` spends a paid host) or the birth (environment-gated on a human reviewer). Land the fix only.
 
@@ -249,7 +251,9 @@ Deepen-plan research against kernel.org, LKML and the e2fsprogs man pages. **The
 
 **0.2b — probe `project`'s offline-addability too, not only `quota`'s. [advisor]** If **both** are addable later via `tune2fs`, then criterion (b) below stops distinguishing `-O project` from plain `mkfs.ext4`, and sibling parity (candidate c) becomes the simpler correct answer. Without this probe the fix may be chosen on an unverified asymmetry.
 
+<!-- lint-infra-ignore start -->
 **0.6 — measure the emitter's detail budget before Phase 1 needs the answer. [R3-rev]** Write a representative detail file by hand (20 `dmesg` lines followed by a realistic multi-line `mount` stderr, and the reverse ordering), run each through the **shipped** `_clean`, and report which bytes survive `tail -n 20 | … | tail -c 180`. This is the measurement Phase 1.4 gates on, and it is fully available before Phase 1 exists.
+<!-- lint-infra-ignore end -->
 
 **0.7 — decide R2's disposition explicitly** (drop / promote rung 1 to privileged / push to rung 2), per Phase 2. If "promote", the taxonomy change goes in the Phase 4 ADR.
 
@@ -271,7 +275,9 @@ Deepen-plan research against kernel.org, LKML and the e2fsprogs man pages. **The
    - A `|| true` on the **`dmesg` capture itself** is required and is explicitly carved out of the hard constraint: `luks_err` runs with `set -euo pipefail` still armed, so a failing or SIGPIPE'd `dmesg` would abort the handler *before* `git-data-emit` — killing the diagnostic this step exists to add. The hard constraint is about the **mount**, never about the diagnostic. Note also that `luks_err`'s existing `… "rc=$rc" || true` (`:479`) is load-bearing for the same reason and must stay.
    - Use a plain `2>>file` redirect, **not** `exec 2> >(tee …)`. The heredoc carries a rejected-design comment at exactly this spot (`:482-485`) explaining that a process substitution under `set -euo pipefail` can leave the script waiting on `tee` at exit — a boot that hangs instead of one that reports. Say so in the new comment so a reviewer does not stall there.
    - Keep the failure **fatal**. No `|| true` on the mount, no fallback mount of the raw device (see User-Brand Impact).
+<!-- lint-infra-ignore start -->
 4. **[R3-rev]** The detail-budget question is a **Phase 0.6** measurement, not a Phase 1 judgement call — the first draft gated it on "Phase 0 shows the new detail file still truncates", which was unassignable because Phase 0 runs before Phase 1 creates the file. Phase 0.6 instead writes a *representative* detail file by hand (20 dmesg lines + a realistic mount stderr), runs it through the shipped `_clean`, and reports what survives. If the answer is "not the mount error", Phase 1 either reorders further or raises the cap **for the detail-file path only**, with the reason in the comment. The emitter's redaction ordering is load-bearing (`hr-write-boundary-sentinel-sweep-all-write-sites`) and must not be disturbed.
+<!-- lint-infra-ignore end -->
 5. **[R9]** Respect the hard `user_data` budget. Measured at plan time: `git-data-userdata-budget.sh --json` → `{"raw":51755,"stored":22772,"cap":32768,"headroom":9996}`. Comments are stripped at render (ADR-152), so Phase 1.3's expanded comment block is free; the new capture code is not. Re-run the budget script after the edit and record the headroom — exceeding 32768 stored bytes is a ForceNew gate, not a warning.
 
 ### Phase 2 — Regression test that can fail on the unfixed template
@@ -481,7 +487,9 @@ discoverability_test:
 7b. `bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh` is run **directly** (not through the parallel runner) on a docker-bearing machine, and its output shows R1/R2/R3 actually executing — not skipping. Paste the arm-by-arm result lines into the PR body.
 8. `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts` pass after the `model.c4` edit.
 9. `ADR-162` (the collision-resolved ordinal; was 158, then 159) exists, its `## Decision` names the selected candidate, and its `## Alternatives Considered` carries the Phase-0 measurement for each of the four candidates — including the measured answer for `mount -o noquota` and for `tune2fs -O quota` as a later-addition path.
+<!-- lint-infra-ignore start -->
 10. The PR body uses **`Ref #7204`**, not `Closes #7204` — the issue closes when a rehearsal actually passes against the corrected template, which is a separate operator dispatch. (`wg-use-closes-n-in-pr-body-not-title-to`, ops-remediation carve-out.)
+<!-- lint-infra-ignore end -->
 11. **Merge-apply scope is unchanged.** Zero diff under `apps/web-platform/infra/*.tf` (`git diff --name-only origin/main... | grep -c '\.tf$'` returns 0) **and** zero new `TF_VAR_*` **and** the diff touches none of `web-git-data-probe.sh`, `web-git-data-probe.service`, `web-git-data-probe.timer` (`git diff --name-only origin/main... | grep -c 'web-git-data-probe'` returns 0 — the inputs to `terraform_data.git_data_probe_install`'s `triggers_replace`, whose replacement would fire an SSH provisioner during the merge apply). Note the merge **does** run `apply-web-platform-infra.yml`; this AC asserts the apply is a no-op for scope reasons, not that it does not run.
 12. **[R9-rev]** No construct anywhere in the diff permits the boot to proceed with an unencrypted or wrong device mounted. Mechanically: `mount /dev/mapper/git-data` is not followed by `|| true`, `|| mount`, `|| :` or any `if`-guard that continues on failure, and no `mount` of a `/dev/disk/by-id/…` path is added inside the LUKS heredoc. The first draft's blanket "no `|| true` anywhere" was **unfalsifiable and self-contradictory**: `luks_err` already ends in `… "rc=$rc" || true` (`:479`, load-bearing — an emitter that aborts loses its event), and Phase 1.3's `dmesg` capture *requires* one under the armed `set -euo pipefail`. Both are explicitly carved out; the mount is not.
 13. Every `knowledge-base/` path cited in this plan resolves, excluding the one path the plan explicitly documents as absent (the branch's `spec.md`, named in the frontmatter note): `grep -oE 'knowledge-base/[A-Za-z0-9/_.-]+\.md' <plan> | grep -v 'specs/feat-one-shot-git-data-luks-open-fatal/spec\.md' | sort -u | xargs -I{} bash -c '[[ -f "{}" ]] || echo "BROKEN: {}"'` prints nothing. **Verified at plan time:** the only hit was that documented absence.

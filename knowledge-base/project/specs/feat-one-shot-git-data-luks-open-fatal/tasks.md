@@ -97,7 +97,9 @@ Threshold: `single-user incident` (`requires_cpo_signoff: true`)
 - [x] **6.3** Verify AC11's three greps return 0 (`.tf` diff, new `TF_VAR_*`, `web-git-data-probe` files).
 - [x] **6.4** Verify AC13's citation grep prints nothing (excluding the documented `spec.md` absence).
 - [x] **6.5** File the deferral tracking issues: (a) the `if ! cryptsetup isLuks` 126/127-swallowing hole; (b) project-quota enforcement, if deferred by the Phase-0 choice; (c) the emitter's 180-byte detail cap, if it still bites.
+<!-- lint-infra-ignore start -->
 - [x] **6.6** PR body uses **`Ref #7204`**, not `Closes` — the issue closes when a rehearsal passes against the corrected template, which is a separate operator dispatch.
+<!-- lint-infra-ignore end -->
 - [x] **6.7** **[R13]** PR body carries the dispatch command and **all three** verdict branches, not just PASS:
   - PASS → merge the evidence file (the workflow already prints the four commands at `git-data-rung2-rehearsal.yml:370-374`).
   - FAIL → **stop.** Read the now-selected `detail` column for the cause; open an issue. Do not re-dispatch.
