@@ -62,6 +62,7 @@ Include:
 - Wrong assumptions that required backtracking
 - Tools or agents that returned errors
 - Permission denials or hook rejections
+- Blanket search-replace sweeps (ADR renumbers, identifier renames) that rewrote files outside your own diff — scope every sweep to `git diff --name-only origin/main...HEAD` and assert the SENTENCE, because a residual-zero count (`grep -c '<old>' == 0`) is structurally blind to a new string written where it does not belong, including inside the very note explaining the rename. **Why:** #7162 — a `sed` guarded by a negative lookahead on the sibling ADR's *filename* rewrote 10 files of other work's *bare* `ADR-159` citations, and an earlier sweep turned "ADR-155 was claimed by a sibling plan" into a false sentence that the count read as green. Ordinals collided three times on one branch, each surfaced by a fetch or rebase and never by a gate — treat a branch-picked ordinal as provisional and re-check against freshly-fetched `origin/main` immediately before merge. See `knowledge-base/project/learnings/workflow-issues/2026-08-03-blanket-renumber-rewrote-other-work-and-a-count-certified-it.md`.
 
 If genuinely no errors occurred (including no forwarded errors), output: "Session error inventory: none detected."
 

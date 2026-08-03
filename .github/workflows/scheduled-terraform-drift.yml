@@ -129,8 +129,8 @@ jobs:
       # never wired to anything. A detector nothing runs detects nothing.
       #
       # THIS workflow rather than a new one, for four reasons that are all already true
-      # here: it fires twice daily, it already sets DOPPLER_CONFIG: prd_terraform (the
-      # script's own documented invocation), it already carries notify-ops-email, and it
+      # here: it fires twice daily, it already carries the Doppler CLI wiring this scan
+      # needs, it already carries notify-ops-email, and it
       # is the workflow that DETECTS the terraform-side drift this class travels with. (It
       # does not itself cause it: this job runs `terraform plan -detailed-exitcode` only
       # and never applies. The drift originates in an operator apply that replaces a token
@@ -151,16 +151,65 @@ jobs:
         if: matrix.directory == 'apps/web-platform/infra'
         continue-on-error: true
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          # THE ONLY CONSUMER of DOPPLER_TOKEN_DRIFT, deliberately. It is a
+          # `doppler_service_account_token` whose identity holds a `viewer` membership on
+          # the whole `soleur` project (apps/web-platform/infra/token-drift-service-account.tf),
+          # so unlike the config-scoped `DOPPLER_TOKEN` every other step here uses, it can
+          # enumerate and READ all 13 configs. That is the swap #7159 asked for.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DRIFT }}
           DOPPLER_PROJECT: soleur
-          DOPPLER_CONFIG: prd_terraform
+          # NO DOPPLER_CONFIG. A project-scoped identity takes no direction from it, and
+          # with 13 configs in play the name reads as "which config this scans" — which is
+          # exactly the wrong mental model for a fan-out detector that loops over all of
+          # them. The detector routes every read through an explicit `-c <cfg>`.
+          #
+          # THE FLOOR IS DECLARED HERE AND READ FROM NOWHERE ELSE (outside the tests). It
+          # is not a fact about Doppler; it is a DEMAND this step makes of its own
+          # credential: "the identity I was handed must reach at least this many configs."
+          # A denominator taken from the scan's own listing would be satisfied by
+          # construction — a narrowed credential lists fewer configs, so `configs ==
+          # expected` would still hold and `degraded` would have no producer.
+          # Three places move together when the project's config set changes: this
+          # literal, the name count in apps/web-platform/infra/doppler-config-inventory.txt,
+          # and the pin in plugins/soleur/test/token-drift-workflow-causes.test.sh, which
+          # asserts this parses, is >= 13, and equals the inventory's name count.
+          DOPPLER_CONFIGS_FLOOR: 13
         run: |
           set -uo pipefail
+          # ── FLOOR GUARD: WRITE THE OUTPUTS, *THEN* FAIL ────────────────────────────
+          # The order here is the whole point. Failing before the write leaves every
+          # `steps.token_drift.outputs.*` as the empty string, and every consumer arm in
+          # this job tests POSITIVELY (`== 'dead'`, `== 'degraded'`, `contains(...)`) —
+          # so nothing matches: no email, no issue. The final Sentry check-in derives its
+          # status from `steps.plan.outputs.exit_code`, not from this step, so the monitor
+          # would still report `ok`. A misconfigured floor would be a silently dead
+          # channel. Writing first routes it to the DETECTOR-UNAVAILABLE email and the
+          # `unknown` coverage-issue arm, both of which gate on values written below.
+          floor_declared="${DOPPLER_CONFIGS_FLOOR:-}"
+          if [[ ! "$floor_declared" =~ ^[0-9]+$ ]]; then
+            {
+              echo "rc=2"
+              echo "verdict=unavailable"
+              echo "causes=-"
+              echo "configs=-1"
+              echo "configs_floor=-1"
+              echo "configs_expected=-1"
+              echo "configs_unread=-"
+              echo "coverage=unknown"
+              echo "coverage_ratio=-/-"
+              echo "inventory_age_days=-1"
+            } >> "$GITHUB_OUTPUT"
+            echo "::error::token_drift_floor_unparseable — DOPPLER_CONFIGS_FLOOR is unset, empty or not an integer (got '${floor_declared}'). The scan did not run. coverage=unknown and verdict=unavailable were written to \$GITHUB_OUTPUT BEFORE this failure so the DETECTOR-UNAVAILABLE email and the unknown-coverage issue arm still fire."
+            exit 2
+          fi
           # `|| rc=$?` is load-bearing: `set -uo pipefail` does NOT clear `-e`, and Actions
           # runs this under `bash -eo pipefail {0}`, so a bare invocation would abort the
           # step here and every line below would be unreachable.
           rc=0
-          bash scripts/check-cloudflare-token-drift.sh --json-file "$RUNNER_TEMP/token-drift.json" || rc=$?
+          bash scripts/check-cloudflare-token-drift.sh \
+            --json-file "$RUNNER_TEMP/token-drift.json" \
+            --inventory apps/web-platform/infra/doppler-config-inventory.txt \
+            --configs-floor "$DOPPLER_CONFIGS_FLOOR" || rc=$?
           # ONE verdict, derived once. Exit 1 covers BOTH "a token is dead" and "a token
           # could not be verified", and exit 2 means nothing was checked at all — three
           # states calling for three different operator actions, which is why collapsing
@@ -182,17 +231,46 @@ jobs:
           # is unperformable and the state never clears. The detector now emits a closed
           # `cause` vocabulary per row precisely so this decision does not have to
           # pattern-match English prose.
-          # `configs` rides along for the COVERAGE question, which is separate from the
+          # The COVERAGE fields ride along, and they answer a question separate from the
           # verdict question. This detector exists to catch fan-out drift — its own
-          # header cites "5 of 7 configs stale after a dashboard roll" — and the
-          # scheduled run's Doppler service token is scoped to ONE config, so a
-          # single-config scan reports `clean` while twelve unseen configs could each
-          # hold a stale value. That is the script's own condemned failure ("a clean
-          # bill of health for a question never asked") reproduced at the scheduling
-          # layer. Emitting the number is what lets `clean` be qualified instead of
-          # silently over-read; #7133's escalation channel is only as good as the
-          # coverage feeding it.
-          read -r dead unver causes configs < <(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["dead"], d["unverifiable"], ",".join(sorted({r.get("cause","unknown") for r in d.get("unverifiable_keys",[])})) or "-", d.get("configs", -1))' "$RUNNER_TEMP/token-drift.json" 2>/dev/null || echo "-1 -1 - -1")
+          # header cites "5 of 7 configs stale after a dashboard roll" — so a scan that
+          # reads a fraction of the project reports `clean` while every unread config
+          # could hold a stale value. That is the script's own condemned failure ("a
+          # clean bill of health for a question never asked") reproduced at the
+          # scheduling layer. Emitting the numbers is what lets `clean` be qualified
+          # instead of silently over-read; #7133's escalation channel is only as good as
+          # the coverage feeding it.
+          #
+          # THE LADDER ITSELF IS NO LONGER DERIVED HERE. The detector owns it (it is the
+          # side that knows which reads succeeded), and this step publishes what it
+          # emitted. `configs` counts configs whose secret-NAME listing SUCCEEDED, not
+          # configs the project ENUMERATED: a config that lists but whose `doppler secrets
+          # --only-names` read fails is excluded from the count and named in
+          # `configs_unread`, so a membership scoped to a subset of environments cannot
+          # satisfy the floor on configs it cannot open.
+          #
+          # BE EXACT ABOUT WHICH READ. It is a NAME listing, not a VALUE read, and no
+          # value-read failure decrements `configs`. The credential that can list names but
+          # not read values is therefore NOT caught here — five prose sites in this repo
+          # used to claim it was ("scores 0"), and the code never did that. It is caught by
+          # the detector's own non-vacuity gate instead: having drawn zero conclusions from
+          # a non-empty keyset it prints "PROBED ZERO" and exits 2, which lands here as
+          # `verdict=unavailable`. The close arm is gated on `verdict != 'unavailable'`
+          # precisely so that run cannot close the operator's standing issue.
+          #
+          # `configs` STAYS LAST AND GREEDY in this `read -r`, and that is load-bearing.
+          # Any field-shift lands in it and fails `^[0-9]+$` below, which routes to
+          # `unknown`. The list-valued fields are comma-joins that are the EMPTY STRING
+          # when nothing is in them; IFS word-splitting collapses an empty field and
+          # shifts every later field LEFT, so a list placed after `configs` would let
+          # `configs` receive a wrong-but-numeric value and derive a confident state from
+          # garbage — fail-OPEN. Hence `or "-"` on every list on the producer side here,
+          # AND the non-empty guards below, AND the greedy tail.
+          #
+          # THE `|| echo` FALLBACK'S ARITY MOVES IN LOCKSTEP with the variable list: ten
+          # names, ten tokens. A short fallback silently leaves the trailing variables
+          # empty on exactly the path where nothing else is known.
+          read -r dead unver causes cfg_floor cfg_expected coverage cov_ratio inv_age cfg_unread configs < <(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["dead"], d["unverifiable"], ",".join(sorted({r.get("cause","unknown") for r in d.get("unverifiable_keys",[])})) or "-", d.get("configs_floor", -1), d.get("configs_expected", -1), d.get("coverage", "unknown"), d.get("coverage_ratio", "-/-"), d.get("inventory_age_days", -1), ",".join(sorted(d.get("configs_unread") or [])) or "-", d.get("configs", -1))' "$RUNNER_TEMP/token-drift.json" 2>/dev/null || echo "-1 -1 - -1 -1 unknown -/- -1 - -1")
           # Anything unreadable or unparseable is "unavailable", never "clean". A missing or
           # corrupt verdict file means the scan's result is UNKNOWN, and the one arm it must
           # never take is the one saying every token is live.
@@ -212,47 +290,116 @@ jobs:
           # Closed vocabulary (the ten causes the detector emits, plus `unknown` for a
           # row with no cause field), comma-joined — no newlines, so it cannot
           # break the $GITHUB_OUTPUT key=value framing.
+          # A NON-EMPTY GUARD ON EVERY FIELD, new ones included. An empty value would
+          # write a bare `key=` into $GITHUB_OUTPUT, which every positive-polarity
+          # consumer arm then fails to match — the silent-channel shape this whole step
+          # is arranged to avoid.
           [[ -n "${causes:-}" ]] || causes="-"
           [[ -n "${configs:-}" ]] || configs="-1"
-          # A scan that saw fewer than 2 configs cannot answer the fan-out question at
-          # all. Surfaced as its own output so every downstream consumer can qualify a
-          # clean verdict rather than each re-deriving it.
-          # DEFAULT IS `unknown`, and the ladder only ever moves OFF it on a parsed
-          # non-negative integer. The first version of this defaulted to the optimistic
-          # state and moved off it on two guarded assignments — which meant every
-          # unparseable value (`None` from a JSON null, `-2`, `abc`, or any field-shift
-          # out of `read -r`'s greedy last variable) asserted fleet-wide coverage, and
-          # the email then reassured the operator with the word itself. An unmeasured
-          # coverage must never be the confident one.
+          [[ -n "${cfg_floor:-}" ]] || cfg_floor="-1"
+          [[ -n "${cfg_expected:-}" ]] || cfg_expected="-1"
+          [[ -n "${coverage:-}" ]] || coverage="unknown"
+          [[ -n "${cov_ratio:-}" ]] || cov_ratio="-/-"
+          [[ -n "${inv_age:-}" ]] || inv_age="-1"
+          [[ -n "${cfg_unread:-}" ]] || cfg_unread="-"
+          # `coverage_caveat` RIDES ITS OWN EXTRACTION, deliberately, and must never join the
+          # `read -r` above: it is FREE TEXT containing spaces, so IFS word-splitting would
+          # scatter it across the remaining names and shift `configs` — the greedy-tail failure
+          # T8c pins, manufactured on purpose. Whitespace is collapsed to a single line because a
+          # newline would break the `key=value` framing of $GITHUB_OUTPUT.
           #
-          # `multi-config`, not `full`: this counts the configs the scan ENUMERATED
-          # (`doppler configs`, i.e. what the token could list), which is not the number
-          # that EXISTS. A 2-of-14 scan is still a lower bound, so no state here claims
-          # completeness. Note it is also not a count of configs whose token VALUES were
-          # read: a config whose `secrets get` calls all fail is still enumerated.
+          # IT HAD NO CONSUMER. The detector emitted it (a missing/unparseable inventory, or one
+          # over 90 days old), the producer suite pinned it, and the workflow read it nowhere —
+          # so the one sentence that says "the denominator in this ratio may not describe the
+          # project any more" reached the operator in neither email. Emitted-and-unread is the
+          # same dead-channel shape as derived-and-unshown; it is rendered in both
+          # verdict-bearing bodies now, beside the ratio it qualifies.
+          cov_caveat=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(" ".join((d.get("coverage_caveat") or "-").split()) or "-")' "$RUNNER_TEMP/token-drift.json" 2>/dev/null || echo "-")
+          [[ -n "${cov_caveat:-}" ]] || cov_caveat="-"
+          # DEFAULT IS `unknown`, and nothing moves off it except a value the detector
+          # actually emitted from the closed vocabulary. The first version of the old
+          # in-YAML ladder defaulted to the optimistic state and moved off it on two
+          # guarded assignments — which meant every unparseable value (`None` from a JSON
+          # null, `-2`, `abc`, or any field-shift out of `read -r`'s greedy last
+          # variable) asserted fleet-wide coverage, and the email then reassured the
+          # operator with the word itself. An unmeasured coverage must never be the
+          # confident one.
+          #
+          # `multi-config` and `single-config` are RETIRED. They counted configs the scan
+          # ENUMERATED, with no denominator at all, so `multi-config` could not tell
+          # 2-of-13 from 13-of-13. `full` was never shipped: it would have been a state
+          # with no reachable producer whose only consumer was the close arm.
+          case "$coverage" in
+            unknown|degraded|at-floor) ;;
+            *) coverage=unknown ;;
+          esac
+          # A VALID `coverage` ALONGSIDE AN UNREADABLE `configs` IS THE FAIL-OPEN THIS
+          # ISSUE EXISTS TO CLOSE. The greedy-tail guarantee above protects `configs`, and
+          # ONLY `configs`: `coverage` is now a detector passthrough sitting BEFORE it in
+          # the `read -r`, so an empty mid-list field (a null `coverage_ratio`, say) shifts
+          # the tail to `-1` while `coverage` still reads `at-floor` — a confident state
+          # next to a count that was never parsed. The close arm fires on `at-floor`, so
+          # that pair silently CLOSES the coverage issue on a run that measured nothing:
+          # the same "clean bill of health for a question never asked" the detector's own
+          # header condemns. The vocabulary clamp above cannot catch it, because
+          # `at-floor` IS in the vocabulary. Tie the two: an unreadable count is an
+          # unmeasured state, never a confident one.
+          if [[ ! "$configs" =~ ^[0-9]+$ ]]; then
+            coverage_as_read="$coverage"
+            coverage=unknown
+            cov_ratio="-/-"
+            echo "::error::token_drift_configs_unparseable — configs='${configs}' is not an integer, so coverage is forced to unknown (it read '${coverage_as_read}'). A field shift out of the read -r, or a truncated detector payload, is the usual cause."
+          fi
+          # THE FLOOR ASSERTION IS EXTERNAL TO THE FLOOR. A declared number is exact about
+          # what this step demands, but a number cannot catch its own reduction: a floor
+          # edited DOWN in the same change that narrows the grant would hold the scan at
+          # `at-floor` while coverage regressed. So the value the detector echoed back is
+          # re-checked here against the literal 13, and a failure downgrades to
+          # `degraded`. (The PR-time half of this pin lives in
+          # plugins/soleur/test/token-drift-workflow-causes.test.sh.)
+          #
+          # Guarded on `!= unknown` because the ladder's evaluation order is pinned
+          # `unknown` -> `degraded` -> `at-floor`: an unreadable verdict file must not be
+          # re-graded into a state that claims a measurement was made.
           #
           # `10#` forces base 10. Without it a zero-padded value (`09`) is read as octal,
           # `(( ))` errors, and — because an arithmetic error in an `if` condition is not
-          # fatal under `set -e` — control falls to the `else`, i.e. to the CONFIDENT
-          # state. Unreachable from today's producer (json.dumps of an int never pads),
-          # but this ladder's whole premise is that a future producer may write something
-          # we did not anticipate, and every other unparseable value already fails safe.
-          coverage=unknown
-          if [[ "$configs" =~ ^[0-9]+$ ]]; then
-            if (( 10#$configs < 2 )); then coverage=single-config; else coverage=multi-config; fi
+          # fatal under `set -e` — control falls through to the CONFIDENT state.
+          if [[ "$coverage" != "unknown" ]] \
+             && { [[ ! "$cfg_floor" =~ ^[0-9]+$ ]] || (( 10#$cfg_floor < 13 )); }; then
+            echo "::warning::Cloudflare token drift ran against a declared coverage floor of '${cfg_floor}', below the pinned minimum of 13. A floor lowered alongside a narrowed credential would report healthy while coverage regressed, so this run is downgraded to coverage: degraded regardless of what it read."
+            coverage=degraded
           fi
           {
             echo "rc=${rc}"
             echo "verdict=${verdict}"
             echo "causes=${causes}"
             echo "configs=${configs}"
+            echo "configs_floor=${cfg_floor}"
+            echo "configs_expected=${cfg_expected}"
+            echo "configs_unread=${cfg_unread}"
             echo "coverage=${coverage}"
+            echo "coverage_ratio=${cov_ratio}"
+            echo "coverage_caveat=${cov_caveat}"
+            echo "inventory_age_days=${inv_age}"
           } >> "$GITHUB_OUTPUT"
-          echo "token-drift verdict: ${verdict} (detector exit ${rc}, causes: ${causes}, configs: ${configs}, coverage: ${coverage})"
-          if [[ "$coverage" == "single-config" ]]; then
-            echo "::warning::Cloudflare token drift scanned ${configs} Doppler config(s) — this run CANNOT detect fan-out drift (a value stale in a config it never read), which is the failure class this detector exists for. The verdict '${verdict}' is scoped to what was visible, not to the fleet. Remedy: the DOPPLER_TOKEN repo secret is a service token scoped to prd_terraform; a project-scoped token (or a second secret used only by this step) restores fleet-wide coverage."
+          # `floor:` and `ratio:` are asserted by the Observability discoverability_test
+          # and by AC26, so this line is a CONSUMER of the new fields, not a log nicety —
+          # without them the grep prefix still matches while the asserted fields are absent.
+          echo "token-drift verdict: ${verdict} (detector exit ${rc}, causes: ${causes}, configs: ${configs}, floor: ${cfg_floor}, coverage: ${coverage}, ratio: ${cov_ratio})"
+          # The inventory gates NO state — it supplies the printed ratio, the unread list
+          # and this age. A stale inventory can only make the ratio's denominator wrong,
+          # and a wrong ratio cannot silence a channel or close an issue, so the caveat is
+          # deliberately un-escalated: it reaches the run log and nothing else.
+          if [[ "$inv_age" =~ ^[0-9]+$ ]] && (( 10#$inv_age > 90 )); then
+            echo "token-drift coverage caveat: the committed config inventory is ${inv_age} days old, so the denominator in '${cov_ratio}' may not reflect the project's current config set. Regenerate it with the command in the file's own '# command:' header."
+          fi
+          # TWO ARMS, matching the two non-healthy rungs. The retired `single-config` arm
+          # is gone with the state: at a floor of 13 it collapses into `degraded`.
+          if [[ "$coverage" == "degraded" ]]; then
+            echo "::warning::Cloudflare token drift read ${cov_ratio} Doppler config(s), below its declared floor of ${cfg_floor} — this run CANNOT detect fan-out drift in the configs it did not read, which is the failure class this detector exists for. The verdict '${verdict}' is scoped to what was visible, not to the fleet. Unread: ${cfg_unread}. The credential is missing, empty, revoked, or has been NARROWED — it is a doppler_service_account holding a viewer membership on the whole soleur project, so there is nothing left to widen; compare the ratio and the unread list against the floor."
           elif [[ "$coverage" == "unknown" ]]; then
-            echo "::warning::Cloudflare token drift could not measure its own coverage (configs='${configs}') — the verdict file was unreadable or malformed. Treat the verdict '${verdict}' as unscoped."
+            echo "::warning::Cloudflare token drift could not measure its own coverage (configs='${configs}', floor='${cfg_floor}', ratio='${cov_ratio}') — the verdict file was unreadable or malformed. Treat the verdict '${verdict}' as unscoped."
           fi
           # Re-raise the detector's exit code AFTER the outputs are written. Capturing rc
           # with `|| rc=$?` makes this block succeed, which would have flipped this step's
@@ -277,7 +424,7 @@ jobs:
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[TOKEN DRIFT] A Cloudflare token rotation did not propagate to Doppler'
-          body: '<p><strong>At least one Cloudflare token value in Doppler is no longer accepted by Cloudflare.</strong></p><p>Terraform will NOT fix this on its own: the <code>doppler_secret</code> resources carry <code>lifecycle.ignore_changes = [value]</code>, so <code>terraform apply</code> reports "No changes" while the stale value keeps being served. Set the live value on the <code>prd</code> ROOT config — branch configs inherit it.</p><p>This matters for releases: the registry-push Access service token is what lets CI reach the zot registry, and zot is the only registry production can pull from. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> to see which key in which config is stale.</p><p>Additional finding(s) from this same run that are NOT about a stale value: <code>${{ steps.token_drift.outputs.causes }}</code> (<code>-</code> means none). The verdict ladder reports one headline state; these are the others.</p><p><em>Scan coverage: <code>${{ steps.token_drift.outputs.coverage }}</code> (${{ steps.token_drift.outputs.configs }} Doppler config(s) read). Coverage counts configs this token could READ, which is not the number that EXISTS — so even <code>multi-config</code> is a lower bound, and <code>single-config</code> cannot detect a value stale only in a config it never read.</em></p>'
+          body: '<p><strong>At least one Cloudflare token value in Doppler is no longer accepted by Cloudflare.</strong></p><p>Terraform will NOT fix this on its own: the <code>doppler_secret</code> resources carry <code>lifecycle.ignore_changes = [value]</code>, so <code>terraform apply</code> reports "No changes" while the stale value keeps being served. Set the live value in <strong>every config the run names</strong> — a Doppler config does NOT inherit a value from its environment root, so setting <code>prd</code> root alone repairs nothing but <code>prd</code> root. Measured 2026-08-02: <code>CF_API_TOKEN_DNS_EDIT</code> is carried independently by 7 configs, and <code>prd_terraform</code> does not carry the <code>REGISTRY_PUSH_ACCESS_TOKEN_*</code> pair that <code>prd</code> root does.</p><p>This matters for releases: the registry-push Access service token is what lets CI reach the zot registry, and zot is the only registry production can pull from. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> to see which key in which config is stale.</p><p>Additional finding(s) from this same run that are NOT about a stale value: <code>${{ steps.token_drift.outputs.causes }}</code> (<code>-</code> means none). The verdict ladder reports one headline state; these are the others.</p><p><em>Scan coverage: <code>${{ steps.token_drift.outputs.coverage }}</code> at <code>${{ steps.token_drift.outputs.coverage_ratio }}</code> — ${{ steps.token_drift.outputs.configs }} of the ${{ steps.token_drift.outputs.configs_expected }} Doppler configs the committed inventory names were READ, against a declared floor of <code>${{ steps.token_drift.outputs.configs_floor }}</code>. Configs not read: <code>${{ steps.token_drift.outputs.configs_unread }}</code> (<code>-</code> means none). Denominator caveat: <code>${{ steps.token_drift.outputs.coverage_caveat }}</code> (<code>-</code> means none — otherwise the committed inventory is missing, unparseable, or over 90 days old, so the DENOMINATOR in this ratio may not describe the project any more; the gate is the count against the floor, which the inventory never touches). The count is of configs whose secret-NAME listing SUCCEEDED — a config whose <code>doppler secrets --only-names</code> read failed is excluded from it and named in the unread list above. It is NOT a count of value reads, so a role that can list names but cannot read values still counts here; that case is caught separately, by the non-vacuity gate in the detector — it exits 2 with <code>verdict: unavailable</code> when it enumerated keys and probed zero values — and the issue close arm is gated on <code>verdict != unavailable</code> so it cannot fire on such a run. The ratio REPORTS and gates nothing: the gate is the count against the floor, so <code>degraded</code> means the credential is absent, revoked or narrowed, and <code>at-floor</code> means it reached at least every config this scan demanded.</em></p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       # Fires on `causes`, NOT on `verdict`, and therefore independently of the first-match
@@ -322,16 +469,23 @@ jobs:
       # comment: DEAD is acute and recurrence is signal, so it comments on the open
       # issue; coverage is a standing condition, so it does not.
       # ── COVERAGE HAS NO CHANNEL WITHOUT THIS ────────────────────────────
-      # A single-config scan reports `verdict: clean`, exits 0, and matches NO email
+      # A degraded scan can still report `verdict: clean`, exit 0, and match NO email
       # arm — `Enforce token-drift result` is gated on outcome == 'failure'. So the
       # only artifact is a ::warning:: on a GREEN cron run, which nobody opens. That
       # is `hr-no-dashboard-eyeball-pull-data-yourself`, and it is the same "clean bill
       # of health for a question never asked" shape the detector's own header condemns
       # — reproduced by the change that added the coverage signal.
       #
-      # CREATE-ONLY, not create-or-comment. Coverage is `single-config` on EVERY
-      # scheduled run until the token scope is widened, so the DEAD filer's
-      # comment-on-existing shape would post 730 comments a year.
+      # CREATE-OR-UPDATE-BODY, and never `gh issue comment`. Coverage is a STANDING
+      # condition — it holds on every run until the credential is repaired — so the DEAD
+      # filer's comment-on-existing shape would post 730 comments a year. But the
+      # create-only shape this replaces froze the issue at whichever state filed FIRST:
+      # dedup here is label-scoped rather than title-scoped, so a `single-config`-era
+      # issue would pin a stale title and a remedy this very change has already
+      # performed, and a `degraded` -> `unknown` transition (a different fault with a
+      # different remedy) would never be visible. `gh issue edit --body-file` rewrites
+      # the body in place: one issue, no comment stream, and the body always describes
+      # the CURRENT state.
       #
       # The precedent is the `heartbeat-live-reconcile` job's EMAIL step, which gates on
       # `steps.reconcile_issue.outputs.created == 'true'` — commented there as
@@ -359,11 +513,14 @@ jobs:
       # closing condition unsatisfiable. Every sibling arm in this job tests positively
       # (`== 'dead'`, `== 'unverifiable'`, `contains(...)`), which is exactly why they
       # are skip-safe. Match them: an empty output must match nothing.
-      - name: Open an action-required issue (token drift — narrow scan coverage)
+      - name: Open or update an action-required issue (token drift — coverage below the declared floor)
+        id: coverage_issue
         if: >-
           always()
-          && (steps.token_drift.outputs.coverage == 'single-config'
-              || steps.token_drift.outputs.coverage == 'unknown')
+          && (steps.token_drift.outputs.coverage == 'degraded'
+              || steps.token_drift.outputs.coverage == 'unknown'
+              || (steps.token_drift.outputs.coverage == 'at-floor'
+                  && steps.token_drift.outputs.configs_unread != '-'))
         continue-on-error: true
         timeout-minutes: 2
         env:
@@ -373,21 +530,41 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           COVERAGE: ${{ steps.token_drift.outputs.coverage }}
           CONFIGS: ${{ steps.token_drift.outputs.configs }}
+          CONFIGS_FLOOR: ${{ steps.token_drift.outputs.configs_floor }}
+          CONFIGS_EXPECTED: ${{ steps.token_drift.outputs.configs_expected }}
+          CONFIGS_UNREAD: ${{ steps.token_drift.outputs.configs_unread }}
+          COVERAGE_RATIO: ${{ steps.token_drift.outputs.coverage_ratio }}
+          INVENTORY_AGE_DAYS: ${{ steps.token_drift.outputs.inventory_age_days }}
           VERDICT: ${{ steps.token_drift.outputs.verdict }}
         run: |
           set -uo pipefail
           LABEL="token-drift-coverage"
           RUN_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+          # Every named ::error:: below ALSO sets this, and an ops-email step gates on
+          # it. Without that, a rate-limited or failed filer is a green cron run whose
+          # only artifact is an annotation nobody opens — the exact shape the block at
+          # the top of this section exists to eliminate, and one `continue-on-error:
+          # true` plus `exit 0` makes reachable.
+          echo "channel_failed=false" >> "$GITHUB_OUTPUT"
+
+          # A named ::error:: alone is not a channel. Each one arms the ops-email
+          # fallback below by flipping this step's output; GITHUB_OUTPUT takes the LAST
+          # assignment of a key, so this overrides the `false` written above.
+          fail_channel() {
+            echo "::error::$1"
+            echo "channel_failed=true" >> "$GITHUB_OUTPUT"
+          }
 
           # `unknown` is NOT a narrow scan — it is an unreadable or malformed verdict
-          # file, i.e. a detector that could not run. Filing it under the single-config
-          # title told the operator the scan was narrow (body: "read -1 Doppler
-          # config(s)") and prescribed widening the Doppler token, which fixes nothing
-          # on that path. That is verbatim the defect this workflow's `causes` handling
-          # exists to remove — one remedy for disjoint causes, unperformable for all but
-          # one of them, so the state never clears. It also mattered more than usual
-          # here: dedup is label-scoped and create-only, so whichever state filed FIRST
-          # permanently suppressed the other.
+          # file, i.e. a detector that could not run. Filing it under the degraded title
+          # would tell the operator the scan was narrow (body: "read -1 of -1") and
+          # prescribe a credential remedy, which fixes nothing on that path. That is
+          # verbatim the defect this workflow's `causes` handling exists to remove — one
+          # remedy for disjoint causes, unperformable for all but one of them, so the
+          # state never clears. It mattered more than usual under the create-only shape,
+          # where whichever state filed FIRST permanently suppressed the other; the
+          # update path below removes that, but the two classes still need distinct
+          # titles and leads because the actions differ.
           #
           # `unknown` keeps a channel rather than being dropped, because it is reachable
           # with a CLEAN verdict (well-formed JSON that simply lacks `configs`), and no
@@ -395,10 +572,10 @@ jobs:
           # the crash path.
           if [[ "$COVERAGE" == "unknown" ]]; then
             TITLE="[TOKEN DRIFT] The fan-out detector could not measure its own scan coverage"
-            LEAD="**The token-drift scan published an unreadable config count (\`${CONFIGS}\`).** Its verdict (\`${VERDICT}\`) is therefore unscoped — it is not a fleet-wide claim, and it is not evidence of a narrow scan either. This is a DETECTOR fault, not a token-scope fault: widening the Doppler token will not clear it."
+            LEAD="**The token-drift scan published an unreadable coverage measurement (\`configs=${CONFIGS}\`, \`floor=${CONFIGS_FLOOR}\`, \`ratio=${COVERAGE_RATIO}\`).** Its verdict (\`${VERDICT}\`) is therefore unscoped — it is not a fleet-wide claim, and it is not evidence of a narrowed credential either. This is a DETECTOR fault, not a credential fault: touching the Doppler identity will not clear it."
           else
-            TITLE="[TOKEN DRIFT] The fan-out detector is scanning one Doppler config"
-            LEAD="**The twice-daily Cloudflare token-drift scan read ${CONFIGS} Doppler config(s).**"
+            TITLE="[TOKEN DRIFT] The fan-out detector is reading fewer configs than it declared"
+            LEAD="**The twice-daily Cloudflare token-drift scan read ${COVERAGE_RATIO} Doppler configs, below its declared floor of ${CONFIGS_FLOOR}.** \`configs\` counts configs whose secret-NAME listing SUCCEEDED, not configs the project enumerated — a config the credential can see but cannot open is excluded and named in the unread list below. It is not a count of value reads: a role that lists names but cannot read values still counts here, and is caught instead by the detector's non-vacuity gate (\`verdict: unavailable\`)."
           fi
 
           gh label create "$LABEL" \
@@ -412,16 +589,7 @@ jobs:
           LIST_RC=0
           EXISTING=$(gh issue list --label "$LABEL" --state open -L 5 --json number --jq '.[0].number // empty') || LIST_RC=$?
           if (( LIST_RC != 0 )); then
-            echo "::error::token_drift_coverage_list_failed — could not query open ${LABEL} issues (gh exit ${LIST_RC}); declining to create a possible duplicate. Narrow coverage reached no issue channel this run."
-            exit 0
-          fi
-          if [[ -n "$EXISTING" ]]; then
-            # Re-assert the labels before short-circuiting. The DEAD filer does this for
-            # a reason that applies with more force to a create-only step: if triage
-            # strips `action-required`, `operator-digest` stops harvesting the issue, and
-            # because this path never creates again the channel is lost permanently.
-            gh issue edit "$EXISTING" --add-label action-required --add-label priority/p1-high >/dev/null 2>&1 || true
-            echo "coverage issue #${EXISTING} already open — create-only, not commenting."
+            fail_channel "token_drift_coverage_list_failed — could not query open ${LABEL} issues (gh exit ${LIST_RC}); declining to create a possible duplicate. Coverage '${COVERAGE}' (${COVERAGE_RATIO}) reached no issue channel this run."
             exit 0
           fi
 
@@ -434,15 +602,32 @@ jobs:
           {
             echo "$LEAD"
             echo ""
-            echo "Coverage: \`${COVERAGE}\`  •  Verdict this run: \`${VERDICT}\`  •  Run: ${RUN_URL}"
+            echo "Coverage: \`${COVERAGE}\`  •  Ratio: \`${COVERAGE_RATIO}\`  •  Declared floor: \`${CONFIGS_FLOOR}\`  •  Verdict this run: \`${VERDICT}\`  •  Run: ${RUN_URL}"
             echo ""
+            if [[ "$COVERAGE" != "unknown" ]]; then
+              echo "Configs the committed inventory names but this run did NOT read:"
+              echo ""
+              echo "\`\`\`"
+              echo "${CONFIGS_UNREAD}"
+              echo "\`\`\`"
+              echo ""
+              echo "(\`-\` means none — the ratio is then at or above the floor by growth, and this"
+              echo "issue is here for the floor assertion rather than for an unread config.)"
+              echo ""
+              echo "The denominator comes from \`apps/web-platform/infra/doppler-config-inventory.txt\`"
+              echo "(${CONFIGS_EXPECTED} names, ${INVENTORY_AGE_DAYS} days old). It REPORTS and gates"
+              echo "nothing: a short, long or stale inventory changes this ratio and this list, and"
+              echo "changes no state. The gate is \`configs\` against the floor \`${CONFIGS_FLOOR}\`"
+              echo "declared in the workflow step's own \`env:\`."
+              echo ""
+            fi
             echo "### Why this matters"
             echo ""
             echo "This detector exists to catch **fan-out** drift. Its own header cites the cases"
             echo "that motivated it: \`CF_API_TOKEN_DNS_EDIT\` stale in **5 of 7** configs after a"
-            echo "dashboard roll, \`CF_API_TOKEN_PURGE\` in **6 of 7**. A scan that reads one config"
-            echo "cannot observe that class at all — it reports \`clean\` while every unread config"
-            echo "could hold a stale value."
+            echo "dashboard roll, \`CF_API_TOKEN_PURGE\` in **6 of 7**. A scan that reads a fraction"
+            echo "of the project cannot observe that class at all — it reports \`clean\` while every"
+            echo "unread config could hold a stale value."
             echo ""
             echo "A \`clean\` verdict from this workflow is therefore scoped to what was visible,"
             echo "not to the fleet. That also bounds the escalation added in #7133: an"
@@ -451,64 +636,157 @@ jobs:
             echo "### Remedy"
             echo ""
             if [[ "$COVERAGE" == "unknown" ]]; then
-              echo "**Do not widen the Doppler token on the strength of this issue** — the scan did"
-              echo "not report a narrow config count, it reported an unreadable one. Fix the verdict"
-              echo "file first: check the \`Cloudflare token drift\` step in the linked run for a"
-              echo "non-zero detector exit, a missing \`doppler\`/\`python3\`, or a truncated write in"
-              echo "\`emit_json\` (\`scripts/check-cloudflare-token-drift.sh\`). Coverage cannot be"
-              echo "assessed until the detector publishes a parseable \`configs\` field again."
+              echo "**Do not touch the Doppler identity on the strength of this issue** — the scan"
+              echo "did not report a short config count, it reported an unreadable one. Fix the"
+              echo "verdict file first: check the \`Cloudflare token drift\` step in the linked run"
+              echo "for a non-zero detector exit, a missing \`doppler\`/\`python3\`, or a truncated"
+              echo "write in \`emit_json\` (\`scripts/check-cloudflare-token-drift.sh\`). Coverage"
+              echo "cannot be assessed until the detector publishes a parseable \`configs\` field"
+              echo "again."
             else
-              echo "The \`DOPPLER_TOKEN\` repo secret is a **service token scoped to \`prd_terraform\`**,"
-              echo "so \`doppler configs -p soleur\` returns only that config."
+              echo "**There is nothing here to widen.** \`DOPPLER_TOKEN_DRIFT\` is a"
+              echo "\`doppler_service_account_token\` belonging to"
+              echo "\`doppler_service_account.token_drift\`, and that identity holds"
+              echo "\`doppler_project_member_service_account.token_drift\` — a \`viewer\` membership"
+              echo "on the whole \`soleur\` project with \`environments\` left unset. All four"
+              echo "resources live in \`apps/web-platform/infra/token-drift-service-account.tf\`."
+              echo "Project-wide is already the widest this design goes, so a reading below the"
+              echo "floor means the credential has been **narrowed** or has **stopped working** —"
+              echo "not that it needs more scope."
               echo ""
-              echo "Note a Doppler service token is **config-scoped by construction** (see the"
-              echo "BLAST RADIUS note in \`apps/web-platform/infra/web-probe-read-token.tf\`), so"
-              echo "there is no single \"project-scoped read token\" to mint. The shapes that exist"
-              echo "are: a read token on the \`prd\` ROOT config (branch configs inherit from it), a"
-              echo "\`for_each\` read token per config, or reusing \`DOPPLER_TOKEN_TF\`. They differ in"
-              echo "prd read blast radius, which is why the CHOICE is an operator decision."
+              echo "Compare \`${COVERAGE_RATIO}\` and the unread list above against the declared"
+              echo "floor of \`${CONFIGS_FLOOR}\`, then work down the three narrowings. Each one"
+              echo "SHORTENS what the credential reaches; none of them can lengthen it, which is"
+              echo "what makes this one-sided gate sound."
               echo ""
-              echo "The MECHANISM is not manual: \`apps/web-platform/infra/kb-drift.tf\` already mints"
-              echo "a read-scoped \`doppler_service_token\` in-band via Terraform and publishes it"
-              echo "with \`github_actions_secret\` (\`autonomy-considered: provider-mint-applied\`,"
-              echo "closing the operator-mint requirement in #4150). Four sibling tokens follow the"
-              echo "same pattern. Once the shape is chosen, this is a Terraform change, not a"
-              echo "dashboard step."
+              echo "- **N1 — the membership role was downgraded**, or"
+              echo "  \`doppler_project_member_service_account.token_drift\` was removed. Reads"
+              echo "  \`0/${CONFIGS_EXPECTED}\`, because \`configs\` counts configs whose secret-NAME"
+              echo "  listing succeeded and a downgraded role fails that listing everywhere."
+              echo "  \`viewer\` is the least-privileged role carrying"
+              echo "  \`enclave_project_config_secrets_read\`."
+              echo "  - Its subtler form — a role that can list NAMES but not read VALUES — is"
+              echo "    **not** caught by this count, and an earlier version of this issue"
+              echo "    wrongly claimed it was. The names list, so every config counts and the"
+              echo "    floor is satisfied; what fails is every value read. That case is caught"
+              echo "    one level down instead, by the detector's non-vacuity gate: having drawn"
+              echo "    zero conclusions from a non-empty keyset it prints \`PROBED ZERO\` and"
+              echo "    exits 2, which publishes \`verdict: unavailable\` and sends the"
+              echo "    DETECTOR-UNAVAILABLE email. The close arm is gated on"
+              echo "    \`verdict != 'unavailable'\`, so such a run cannot close this issue."
+              echo "- **N2 — the membership was scoped to a subset of environments**, i.e."
+              echo "  \`environments\` was set (\`[\"prd\"]\` reads 7 of 13). The unread list names"
+              echo "  exactly the dropped configs."
+              echo "- **N3 — \`DOPPLER_TOKEN_DRIFT\` was repointed at a config-scoped"
+              echo "  \`doppler_service_token\`**, or the Actions secret is being sourced from"
+              echo "  somewhere other than \`github_actions_secret.doppler_token_drift\`. Reads"
+              echo "  \`1/${CONFIGS_EXPECTED}\`: a Doppler service token is config-scoped by"
+              echo "  construction and ignores \`DOPPLER_CONFIG\`."
+              echo ""
+              echo "Two operational modes read the same way and are not narrowings: an **absent or"
+              echo "empty** \`DOPPLER_TOKEN_DRIFT\` (the merge-to-release window before the infra"
+              echo "apply clears its environment gate, or a deleted secret — the remedy is"
+              echo "provisioning), and a **revoked or expired** credential (present but"
+              echo "enumerating nothing — the remedy is rotation, and this run additionally sends"
+              echo "the DETECTOR-UNAVAILABLE email). Rotation is in-band and needs no dashboard"
+              echo "step: \`terraform apply -replace=doppler_service_account_token.token_drift\`"
+              echo "mints a new \`api_key\` and republishes the Actions secret in the same run,"
+              echo "because no \`lifecycle.ignore_changes\` holds it back."
+              echo ""
+              echo "If the project genuinely GREW, raise \`DOPPLER_CONFIGS_FLOOR\` in"
+              echo "\`.github/workflows/scheduled-terraform-drift.yml\` and regenerate"
+              echo "\`apps/web-platform/infra/doppler-config-inventory.txt\` in the same PR — the"
+              echo "inventory's \`# command:\` header carries the exact regeneration command, and"
+              echo "\`plugins/soleur/test/token-drift-workflow-causes.test.sh\` fails if the two"
+              echo "drift apart. Growth alone never files this issue: the gate is \`>=\`."
             fi
             echo ""
             echo "### Closing"
             echo ""
-            echo "Closed automatically when a scheduled run reports \`coverage: multi-config\` (see"
-            echo "the \`Close the coverage issue once the fan-out is restored\` step in the same"
-            echo "job). Filed create-only: the condition holds on every run until fixed, so this"
-            echo "issue is not re-commented. Closing it by hand while coverage is still narrow"
-            echo "re-files a fresh one within 12h — the dedup query matches OPEN issues only."
+            echo "Closed automatically when a scheduled run reports \`coverage: at-floor\` (see"
+            echo "the \`Close the coverage issue once the declared floor is met\` step in the same"
+            echo "job). The body above is REWRITTEN on every run rather than re-commented, so it"
+            echo "always describes the current state; the condition holds on every run until"
+            echo "fixed, which is why this issue is never commented on. Closing it by hand while"
+            echo "coverage is still below the floor re-files a fresh one within 12h — the dedup"
+            echo "query matches OPEN issues only."
           } > "$BODY"
 
-          # Never echo success unconditionally, and never let the create's status vanish.
-          # `… 2>&1 | tail -2 || true` lost gh's exit code behind the pipe (tail exits 0)
-          # and then discarded what was left — so a failed create produced a GREEN step
-          # on a GREEN cron run with no issue filed and no annotation. Coverage has no
-          # email arm, so that is total loss of the one channel this step exists to be
-          # (`hr-no-dashboard-eyeball-pull-data-yourself`). The realistic triggers are the
-          # ones the DEAD filer below already enumerates: a renamed or closed milestone,
-          # an API 5xx, a secondary rate limit, or the best-effort `gh label create`
-          # above having failed so `--label "$LABEL"` is rejected.
-          if gh issue create --title "$TITLE" --body-file "$BODY" \
-               --label "$LABEL" --label action-required --label priority/p1-high \
-               --milestone "Post-MVP / Later"; then
-            echo "Filed a new action-required issue for narrow scan coverage (${COVERAGE})."
+          # Never echo success unconditionally, and never let the create's or the edit's
+          # status vanish. `… 2>&1 | tail -2 || true` lost gh's exit code behind the pipe
+          # (tail exits 0) and then discarded what was left — so a failed call produced a
+          # GREEN step on a GREEN cron run with no issue filed and no annotation. A clean
+          # verdict matches no email arm, so that is total loss of the one channel this
+          # step exists to be (`hr-no-dashboard-eyeball-pull-data-yourself`). The
+          # realistic triggers are the ones the DEAD filer below already enumerates: a
+          # renamed or closed milestone, an API 5xx, a secondary rate limit, or the
+          # best-effort `gh label create` above having failed so `--label "$LABEL"` is
+          # rejected.
+          if [[ -n "$EXISTING" ]]; then
+            # UPDATE THE BODY, do not comment. The body is rewritten on every state
+            # transition so the issue always describes the current state rather than the
+            # one that happened to file first — which is the defect the create-only shape
+            # had, and it is why dedup being label-scoped rather than title-scoped is
+            # safe here: a stale title from a retired coverage state is corrected in
+            # place by `--title`.
+            #
+            # THE LABEL RE-ASSERT IS A SEPARATE `|| true` CALL, deliberately. Folding
+            # `--add-label` into the body edit would swallow the body edit's exit status
+            # into the `|| true` that the label re-assert needs — and a failed body
+            # update freezes the issue at whichever state filed first, the exact defect
+            # this update path exists to remove. The re-assert itself matters because if
+            # triage strips `action-required`, `operator-digest` stops harvesting the
+            # issue, and while it is open the create path can never re-fire.
+            if gh issue edit "$EXISTING" --title "$TITLE" --body-file "$BODY"; then
+              echo "Rewrote the body of coverage issue #${EXISTING} for state '${COVERAGE}' (${COVERAGE_RATIO})."
+            else
+              fail_channel "token_drift_coverage_update_failed — gh issue edit could not rewrite issue #${EXISTING}. It is frozen at whatever state filed first, so it may now assert a coverage state (and a remedy) this run did not measure. Current state: ${COVERAGE} at ${COVERAGE_RATIO}."
+            fi
+            gh issue edit "$EXISTING" --add-label action-required --add-label priority/p1-high --add-label "$LABEL" >/dev/null 2>&1 || true
+          elif gh issue create --title "$TITLE" --body-file "$BODY" \
+                 --label "$LABEL" --label action-required --label priority/p1-high \
+                 --milestone "Post-MVP / Later"; then
+            echo "Filed a new action-required issue for coverage '${COVERAGE}' (${COVERAGE_RATIO})."
           else
-            echo "::error::token_drift_coverage_escalation_failed — gh issue create did not succeed. Narrow scan coverage (${COVERAGE}, ${CONFIGS} config(s)) reached NO channel this run: no issue exists, and a clean verdict matches no email arm."
+            fail_channel "token_drift_coverage_escalation_failed — gh issue create did not succeed. Coverage ${COVERAGE} (${COVERAGE_RATIO}, floor ${CONFIGS_FLOOR}) reached NO channel this run: no issue exists, and a clean verdict matches no email arm."
           fi
           rm -f "$BODY"
 
-      # The close arm. Without it `coverage: multi-config` is observable only by opening
+      # The close arm. Without it `coverage: at-floor` is observable only by opening
       # a GREEN cron run's step log — which is the same "nobody opens it" problem the
       # file arm above exists to solve, just on the recovery side. It also made the
       # issue's own stated closing condition an operator step with no artifact behind it.
-      - name: Close the coverage issue once the fan-out is restored
-        if: always() && steps.token_drift.outputs.coverage == 'multi-config'
+      #
+      # It fires on `at-floor` — the state that means the credential reached at least
+      # every config the step demanded. `at-floor` KEEPS its name rather than becoming
+      # `full` even though the steady state is now 13/13: the state is defined against
+      # the DECLARED floor, not against the project, and a name asserting completeness
+      # would invite a future reader to gate on the inventory again.
+      #
+      # THE `configs_unread` CONJUNCT IS LOAD-BEARING, AND `at-floor` ALONE IS NOT ENOUGH.
+      # `configs` counts configs this run READ; that is not the set the inventory NAMES.
+      # An ephemeral config (a `prd_git_data_rehearsal_*` from a rehearsal dispatch, which
+      # the inventory header explicitly anticipates) counts toward `configs` and pads it
+      # back to the floor ONE-FOR-ONE after a real config's `doppler secrets` read fails.
+      # Gating on `at-floor` alone therefore closes the operator's standing issue on a run
+      # that silently skipped a config the inventory names — and closes it with a comment
+      # quoting a healthy-looking ratio. That is the detector's own condemned failure ("a
+      # clean bill of health for a question never asked") reproduced at the close arm, and
+      # it is strictly WORSE than the pre-PR behaviour, where a failed per-config read
+      # exited 2 and fired the DETECTOR-UNAVAILABLE email every run.
+      #
+      # `configs_unread` is exactly the discriminator: it is inventory-minus-read UNION
+      # enumerated-but-unreadable, so ephemeral GROWTH alone leaves it empty (`-`) while a
+      # real config's failure names that config. This is the one place the inventory is
+      # allowed to influence an arm, and it can only ever WITHHOLD a close — it can never
+      # cause one, so a short/stale/missing inventory still gates nothing that matters.
+      - name: Close the coverage issue once the declared floor is met
+        id: coverage_close
+        if: >-
+          always()
+          && steps.token_drift.outputs.coverage == 'at-floor'
+          && steps.token_drift.outputs.configs_unread == '-'
+          && steps.token_drift.outputs.verdict != 'unavailable'
         continue-on-error: true
         timeout-minutes: 2
         env:
@@ -517,22 +795,79 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
           CONFIGS: ${{ steps.token_drift.outputs.configs }}
+          CONFIGS_FLOOR: ${{ steps.token_drift.outputs.configs_floor }}
+          CONFIGS_EXPECTED: ${{ steps.token_drift.outputs.configs_expected }}
+          COVERAGE_RATIO: ${{ steps.token_drift.outputs.coverage_ratio }}
         run: |
           set -uo pipefail
           LABEL="token-drift-coverage"
           RUN_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+          echo "channel_failed=false" >> "$GITHUB_OUTPUT"
           LIST_RC=0
           N=$(gh issue list --label "$LABEL" --state open -L 5 --json number --jq '.[0].number // empty') || LIST_RC=$?
           if (( LIST_RC != 0 )); then
-            echo "::warning::could not query open ${LABEL} issues (gh exit ${LIST_RC}); leaving any open coverage issue alone."
+            # A NAMED SLUG AND THE FLAG, matching this step's own close-failure branch below and
+            # its sibling in the filer. It was a bare `::warning::` that set nothing — so the
+            # fallback email could not fire on it, and when the fallback DID fire for another
+            # reason its body sent the operator hunting the run log for one of four named slugs
+            # that this path never emits. A backstop that names a slug its own arm cannot produce
+            # is a backstop the operator learns to distrust.
+            echo "::error::token_drift_coverage_close_list_failed — could not query open ${LABEL} issues (gh exit ${LIST_RC}); leaving any open coverage issue alone. Coverage is at-floor (${COVERAGE_RATIO}) but the standing issue may still be open, asserting a regression this run says is repaired."
+            echo "channel_failed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           [[ -n "$N" ]] || { echo "no open coverage issue to close."; exit 0; }
-          if gh issue close "$N" --comment "Coverage restored: run ${RUN_URL} reported \`coverage: multi-config\` (${CONFIGS} Doppler config(s) enumerated). Auto-closed. Note the count is a lower bound — it counts configs this token could enumerate, not the number that exist."; then
+          if gh issue close "$N" --comment "Coverage restored: run ${RUN_URL} reported \`coverage: at-floor\` at \`${COVERAGE_RATIO}\` — the credential read ${CONFIGS} of the ${CONFIGS_EXPECTED} configs the committed inventory names, at or above the declared floor of ${CONFIGS_FLOOR}, with every named config read (\`configs_unread\` empty). That is the #7159 Done-when condition met literally. Auto-closed. Note the gate is \`>=\`, not \`==\`: legitimate growth pushes the ratio above 1 and changes no state, and the ratio is REPORTED by the inventory rather than gated on it."; then
             echo "Closed coverage issue #${N}."
           else
-            echo "::error::token_drift_coverage_close_failed — coverage is multi-config but issue #${N} could not be closed; it will keep asserting a narrow scan."
+            echo "::error::token_drift_coverage_close_failed — coverage is at-floor (${COVERAGE_RATIO}) but issue #${N} could not be closed; it will keep asserting a coverage regression that this run says is repaired."
+            echo "channel_failed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      # ── THE ISSUE CHANNEL CAN ITSELF BE DEAD ────────────────────────────
+      # Every coverage path above reaches exactly one channel: a GitHub issue. When that
+      # channel is the thing that failed — a `gh` list, create, edit or close that did
+      # not succeed, a secondary rate limit, a stripped label — the only artifact left is
+      # a named ::error:: annotation on a cron run that is still GREEN, because all four
+      # paths run under `continue-on-error: true` and several `exit 0` deliberately. An
+      # annotation nobody opens is the exact shape the COVERAGE-HAS-NO-CHANNEL block
+      # above exists to eliminate, so it must not be the fallback for the fallback.
+      #
+      # Five paths, one flag: `token_drift_coverage_list_failed`,
+      # `token_drift_coverage_escalation_failed`, `token_drift_coverage_update_failed`
+      # (all three in the filer) and `token_drift_coverage_close_list_failed` /
+      # `token_drift_coverage_close_failed` (both in the close arm). Each sets
+      # `channel_failed=true` on its own step, and this gates on either step's flag.
+      #
+      # POSITIVE POLARITY, like every sibling arm: both steps are skipped on the
+      # `infra/github` matrix leg and on the healthy path, and a skipped step's outputs
+      # are the empty string, which `== 'true'` correctly does not match.
+      #
+      # This mirrors the DEAD filer's "reached the email channel only" fallback, in the
+      # other direction: there the issue is the backstop for the email, here the email is
+      # the backstop for the issue.
+      - name: Email notification (token drift — the coverage issue channel is unreachable)
+        # THE `outcome` LEGS COVER THE FAILURE THE FLAG CANNOT SEE. Both filers carry
+        # `timeout-minutes: 2` + `continue-on-error: true`, so a `gh` call that STALLS is
+        # killed after `channel_failed=false` is written and before `fail_channel` can
+        # overwrite it — the job stays green, no issue is filed or closed, no email is
+        # sent, and no named slug is emitted. That is the single failure mode this
+        # backstop exists for, and gating on the flag alone is blind to exactly it.
+        # `outcome` is populated under `continue-on-error` and is `skipped` (never
+        # `failure`) for a skipped step, so adding these legs preserves the positive
+        # polarity that keeps a skipped filer from firing the email.
+        if: >-
+          always()
+          && (steps.coverage_issue.outputs.channel_failed == 'true'
+              || steps.coverage_close.outputs.channel_failed == 'true'
+              || steps.coverage_issue.outcome == 'failure'
+              || steps.coverage_close.outcome == 'failure')
+        continue-on-error: true
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[TOKEN DRIFT] The coverage finding could not reach its issue channel'
+          body: '<p><strong>The twice-daily token-drift scan produced a coverage finding, and the GitHub issue channel that carries it did not accept it.</strong> This email exists because that finding would otherwise have reached nothing: the cron run is GREEN, and its only other artifact is a run annotation.</p><p>What this run measured: coverage <code>${{ steps.token_drift.outputs.coverage }}</code> at ratio <code>${{ steps.token_drift.outputs.coverage_ratio }}</code> against a declared floor of <code>${{ steps.token_drift.outputs.configs_floor }}</code>; verdict <code>${{ steps.token_drift.outputs.verdict }}</code>. Configs the inventory names that were not read: <code>${{ steps.token_drift.outputs.configs_unread }}</code> (<code>-</code> means none).</p><p><strong>This is a finding about the CHANNEL, not only about the credential.</strong> <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and look for the named error slug — <code>token_drift_coverage_list_failed</code>, <code>token_drift_coverage_escalation_failed</code>, <code>token_drift_coverage_update_failed</code>, <code>token_drift_coverage_close_list_failed</code> or <code>token_drift_coverage_close_failed</code> — which says which call failed. Likely causes: a secondary rate limit, an API 5xx, a renamed or closed <code>Post-MVP / Later</code> milestone, or the <code>token-drift-coverage</code> label having been deleted.</p><p>Until the channel is repaired, the standing <code>token-drift-coverage</code> issue may be missing, frozen at a state this run did not measure, or still open after the coverage it reports was restored.</p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       - name: Open or update an action-required issue (token drift — DEAD credential)
         if: always() && steps.token_drift.outputs.verdict == 'dead'
@@ -581,7 +916,13 @@ jobs:
             echo "\`lifecycle.ignore_changes = [value]\`, so \`terraform apply\` reports \"No changes\""
             echo "while the stale value keeps being served."
             echo ""
-            echo "- Set the live value on the \`prd\` **ROOT** config; branch configs inherit it."
+            echo "- Set the live value in **every config listed above**. A Doppler config does"
+            echo "  **not** inherit a value from its environment root, so setting \`prd\` root"
+            echo "  alone repairs \`prd\` root and nothing else. Measured 2026-08-02:"
+            echo "  \`CF_API_TOKEN_DNS_EDIT\` is carried independently by 7 configs, and"
+            echo "  \`prd_terraform\` does not carry the \`REGISTRY_PUSH_ACCESS_TOKEN_*\` pair that"
+            echo "  \`prd\` root does — the two key sets are not in a superset relation in either"
+            echo "  direction."
             echo "- For \`CI_SSH_ACCESS_TOKEN_*\` specifically, re-mint in-band (copy-paste as-is):"
             echo "  \`\`\`"
             echo "  gh workflow run apply-web-platform-infra.yml \\"
@@ -592,7 +933,7 @@ jobs:
             echo "  Note this publishes to \`prd_terraform\` only. If the detector reports a stale"
             echo "  copy in any OTHER config, re-minting will not clear it — fix that copy directly."
             echo ""
-            echo "_Auto-filed by [scheduled-terraform-drift](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-terraform-drift.yml). Close it when the detector reports \`verdict: clean\` **at \`coverage: multi-config\`** — a \`clean\` from a single-config scan is scoped to the configs it read, not to the fleet._"
+            echo "_Auto-filed by [scheduled-terraform-drift](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-terraform-drift.yml). Close it when the detector reports \`verdict: clean\` **at \`coverage: at-floor\`** — a \`clean\` from a \`degraded\` scan is scoped to the configs it read, not to the fleet, and \`at-floor\` is the state that says the credential reached at least every config the scan demanded._"
           } > "${RUNNER_TEMP}/token-drift-issue.md"
 
           EXISTING=$(gh issue list --label "$LABEL" --state open --limit 100 \
@@ -642,7 +983,7 @@ jobs:
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[TOKEN DRIFT] No conclusion could be drawn about at least one token'
-          body: '<p><strong>No token was found stale, but at least one enumerated token could not be verified at all</strong>, so this run cannot claim the fleet is clean — and it is NOT claiming anything is broken.</p><p><strong>Do not rotate anything on the strength of this email.</strong></p><p>Reported cause(s): <code>${{ steps.token_drift.outputs.causes }}</code>. What each one means:</p><ul><li><code>no-probe-configured</code> — the detector has no hostname mapping for that key. Fix the DETECTOR: add one to <code>access_hostname_for()</code> in <code>scripts/check-cloudflare-token-drift.sh</code>.</li><li><code>gate-absent</code> — an UNCREDENTIALED request to the host was not refused by Cloudflare Access. Nothing is gating that hostname. This is a GATE finding, not a credential finding: check the Access application and policy. Rotating the token changes nothing.</li><li><code>host-unreachable</code> / <code>probe-failed</code> — the probe got no answer (timeout, DNS, TLS). Nothing was measured. Re-run.</li><li><code>unknown</code> — a row arrived with no <code>cause</code> field. That is a detector/consumer contract break, not a credential finding: report it rather than acting on it.</li><li><code>gate-indeterminate</code> — the host answered an anonymous request without an Access stamp and without succeeding (a 530 tunnel outage looks like this). Neither a gate nor its absence was established. Re-run.</li><li><code>control-blocked</code> — Cloudflare itself blocked or challenged the anonymous probe, so it never reached Access. Check the WAF / rate-limit / bot-fight rules for the host.</li><li><code>stamped-non-refusal</code> — the host returned an Access-stamped response that is not a refusal. Not evidence the credential was rejected; investigate the Access application.</li><li><code>unexpected-status</code> — no Access stamp and no success. LIVE requires positive proof of admission, so nothing was certified — and nothing is claimed stale either.</li><li><code>detector-env</code> — a LOCAL fault on the runner (could not allocate a temp file). No request was sent; nothing about the credential or the host is implied.</li><li><code>refused-unstamped</code> — something in FRONT of Access refused the probe (WAF rule, IP access rule, bot-fight). Check the rule set for the host, not the credential.</li></ul><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> for the exact keys and the reason each was skipped.</p><p><em>Scan coverage: <code>${{ steps.token_drift.outputs.coverage }}</code> (${{ steps.token_drift.outputs.configs }} Doppler config(s) read). Coverage counts configs this token could READ, which is not the number that EXISTS — so even <code>multi-config</code> is a lower bound, and <code>single-config</code> cannot detect a value stale only in a config it never read.</em></p>'
+          body: '<p><strong>No token was found stale, but at least one enumerated token could not be verified at all</strong>, so this run cannot claim the fleet is clean — and it is NOT claiming anything is broken.</p><p><strong>Do not rotate anything on the strength of this email.</strong></p><p>Reported cause(s): <code>${{ steps.token_drift.outputs.causes }}</code>. What each one means:</p><ul><li><code>no-probe-configured</code> — the detector has no hostname mapping for that key. Fix the DETECTOR: add one to <code>access_hostname_for()</code> in <code>scripts/check-cloudflare-token-drift.sh</code>.</li><li><code>gate-absent</code> — an UNCREDENTIALED request to the host was not refused by Cloudflare Access. Nothing is gating that hostname. This is a GATE finding, not a credential finding: check the Access application and policy. Rotating the token changes nothing.</li><li><code>host-unreachable</code> / <code>probe-failed</code> — the probe got no answer (timeout, DNS, TLS). Nothing was measured. Re-run.</li><li><code>unknown</code> — a row arrived with no <code>cause</code> field. That is a detector/consumer contract break, not a credential finding: report it rather than acting on it.</li><li><code>gate-indeterminate</code> — the host answered an anonymous request without an Access stamp and without succeeding (a 530 tunnel outage looks like this). Neither a gate nor its absence was established. Re-run.</li><li><code>control-blocked</code> — Cloudflare itself blocked or challenged the anonymous probe, so it never reached Access. Check the WAF / rate-limit / bot-fight rules for the host.</li><li><code>stamped-non-refusal</code> — the host returned an Access-stamped response that is not a refusal. Not evidence the credential was rejected; investigate the Access application.</li><li><code>unexpected-status</code> — no Access stamp and no success. LIVE requires positive proof of admission, so nothing was certified — and nothing is claimed stale either.</li><li><code>detector-env</code> — a LOCAL fault on the runner (could not allocate a temp file). No request was sent; nothing about the credential or the host is implied.</li><li><code>refused-unstamped</code> — something in FRONT of Access refused the probe (WAF rule, IP access rule, bot-fight). Check the rule set for the host, not the credential.</li></ul><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> for the exact keys and the reason each was skipped.</p><p><em>Scan coverage: <code>${{ steps.token_drift.outputs.coverage }}</code> at <code>${{ steps.token_drift.outputs.coverage_ratio }}</code> — ${{ steps.token_drift.outputs.configs }} of the ${{ steps.token_drift.outputs.configs_expected }} Doppler configs the committed inventory names were READ, against a declared floor of <code>${{ steps.token_drift.outputs.configs_floor }}</code>. Configs not read: <code>${{ steps.token_drift.outputs.configs_unread }}</code> (<code>-</code> means none). Denominator caveat: <code>${{ steps.token_drift.outputs.coverage_caveat }}</code> (<code>-</code> means none — otherwise the committed inventory is missing, unparseable, or over 90 days old, so the DENOMINATOR in this ratio may not describe the project any more; the gate is the count against the floor, which the inventory never touches). The count is of configs whose secret-NAME listing SUCCEEDED — a config whose <code>doppler secrets --only-names</code> read failed is excluded from it and named in the unread list above. It is NOT a count of value reads, so a role that can list names but cannot read values still counts here; that case is caught separately, by the non-vacuity gate in the detector — it exits 2 with <code>verdict: unavailable</code> when it enumerated keys and probed zero values — and the issue close arm is gated on <code>verdict != unavailable</code> so it cannot fire on such a run. The ratio REPORTS and gates nothing: the gate is the count against the floor, so <code>degraded</code> means the credential is absent, revoked or narrowed, and <code>at-floor</code> means it reached at least every config this scan demanded.</em></p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       - name: Email notification (token drift — detector could not run)
@@ -826,9 +1167,19 @@ jobs:
           # not stale credentials" unconditionally — including on a genuine dead-credential
           # run, where it invites the operator to discount a real finding. A hedge that
           # fires when there is nothing to hedge makes a true alarm look uncertain.
+          #
+          # THE REMEDY SENTENCE WAS FALSIFIED, AND THIS WAS THE SIXTH SITE CARRYING IT. It read
+          # "Set the live value on the 'prd' ROOT config." The 2026-08-02 census killed the
+          # premise underneath it: a Doppler config does NOT inherit a value from its environment
+          # root — `CF_API_TOKEN_DNS_EDIT` is carried independently by 7 configs, and
+          # `prd_terraform` does not carry the `REGISTRY_PUSH_ACCESS_TOKEN_*` pair that `prd` root
+          # does. An operator who performed the old instruction would edit one config, verify that
+          # one, get a green result, and leave every other stale copy being served. This is the
+          # annotation printed on the RED run, i.e. the one the operator actually sees first, so
+          # of the six sites it was the most expensive one to leave wrong.
           case "${VERDICT}" in
             dead)
-              echo "::error::Cloudflare token drift: at least one DEAD credential. See the 'Cloudflare token drift' step above for the key/config pairs. Set the live value on the 'prd' ROOT config." ;;
+              echo "::error::Cloudflare token drift: at least one DEAD credential. See the 'Cloudflare token drift' step above for the key/config pairs. Set the live value in EVERY config named there — a Doppler config does NOT inherit a value from its environment root, so setting 'prd' root alone repairs nothing but 'prd' root." ;;
             unverifiable)
               echo "::error::Cloudflare token detector drew NO conclusion about at least one token, so this run cannot claim the fleet is clean. Nothing is known to be stale — do NOT rotate. Cause(s): ${CAUSES}. See the step output for the per-key remedy." ;;
             *)
@@ -1081,6 +1432,25 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           REHEARSAL_PREFIX: soleur-git-data-rehearsal-
+          # A DECLARED floor, exactly like the token-drift step's `DOPPLER_CONFIGS_FLOOR`, and
+          # for the same reason: it states not a fact about Doppler but a demand this step makes
+          # of its own credential — *the identity I was handed must be able to see at least this
+          # many configs before its "no orphaned scratch config" answer means anything.* A step
+          # cannot be wrong about a number it declares.
+          #
+          # IT WAS `2`, AND `2` REPRODUCED THE DEFECT THIS PR RETIRES. A credential listing 2 of
+          # 13 configs published `performed`, filed nothing, and let the sweep report "no
+          # orphaned scratch Doppler config" while a `prd_git_data_rehearsal_*` could sit in any
+          # of the 11 it never listed. That is `multi-config` verbatim — a count of configs
+          # enumerated with no denominator, unable to tell 2-of-13 from 13-of-13 — re-committed
+          # in a second job. Unreachable today (this job's credential lists exactly 1), but
+          # nothing held it there.
+          #
+          # KEEP IN LOCKSTEP WITH `DOPPLER_CONFIGS_FLOOR` in the token_drift step above and with
+          # the committed inventory; see the ratchet note in
+          # `apps/web-platform/infra/doppler-config-inventory.txt` and ADR-164's Known
+          # limitations. Three literals, one number.
+          RUNG2_CONFIGS_FLOOR: 13
         run: |
           set -euo pipefail
           TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"
@@ -1111,9 +1481,79 @@ jobs:
             _hits="$(printf '%s' "$body" | jq -r --arg k "$_kind" '[.[$k][]? | "\($k): \(.name // .id)"] | .[]')"
             [[ -n "$_hits" ]] && survivors="${survivors}${_hits}"$'\n'
           done
-          # The scratch Doppler config is not a Hetzner object and needs its own probe.
-          _cfgs="$(doppler configs list -p soleur --json 2>/dev/null \
-                   | jq -r '[.[]? | .name | select(startswith("prd_git_data_rehearsal_"))] | .[]' || true)"
+          # ── THE SCRATCH DOPPLER CONFIG IS NOT A HETZNER OBJECT ────────────────────
+          # It needs its own probe, and that probe needs its own verdict.
+          # `2>/dev/null | jq … || true` made THREE outcomes indistinguishable: a real
+          # listing with no matches, a doppler CLI failure, and a jq parse failure all
+          # produced the empty string, which this job then reported as "no orphans". A
+          # BARE removal of the suppressors would not have fixed it either — this block
+          # opens `set -euo pipefail`, unlike the token-drift step's `set -uo pipefail`,
+          # so the failure would abort the step with no named annotation, which is the
+          # opposite of fail-loud. So the status is captured EXPLICITLY instead.
+          #
+          # AND THE PREDICATE IS UNSATISFIABLE AS WIRED. This job's credential is
+          # `secrets.DOPPLER_TOKEN`, a service token scoped to ONE config, and a Doppler
+          # service token is config-scoped by construction: `doppler configs list`
+          # returns a list SILENTLY SCOPED TO THE CALLER (measured 2026-08-02 — 1 config
+          # back, `success: true`, no error). `startswith("prd_git_data_rehearsal_")`
+          # can therefore never match, and this half of the sweep has been reporting
+          # "no orphans" unconditionally rather than because it looked. That is the
+          # clean-verdict-from-inspecting-nothing shape every sibling control in this
+          # block guards against, so the listed count is checked, not assumed.
+          #
+          # THE FIX IS AN HONEST VERDICT, NOT A WIDER CREDENTIAL. Wiring
+          # `DOPPLER_TOKEN_DRIFT` in here would satisfy the predicate, and it is
+          # deliberately OUT OF SCOPE: that credential is project-scoped and keeps
+          # exactly ONE consumer (the token-drift step), which is what bounds its blast
+          # radius and keeps its rotation a single `-replace=`.
+          _cfg_rc=0
+          _cfg_total=0
+          _cfgs=""
+          _cfg_raw="$(doppler configs list -p soleur --json)" || _cfg_rc=$?
+          if (( _cfg_rc == 0 )); then
+            _cfg_total="$(printf '%s' "$_cfg_raw" | jq -r 'length')" || _cfg_rc=$?
+          fi
+          if (( _cfg_rc == 0 )); then
+            _cfgs="$(printf '%s' "$_cfg_raw" | jq -r '[.[]? | .name | select(startswith("prd_git_data_rehearsal_"))] | .[]')" || _cfg_rc=$?
+          fi
+          # `10#` forces base 10, and the regex runs FIRST: an arithmetic error inside
+          # `(( ))` returns 1, which in a condition reads as false and would fall through
+          # to `performed` — the confident state derived from a value nothing parsed.
+          #
+          # THE DECLARED FLOOR IS PARSE-GUARDED TOO, and an unparseable floor is `failed`, not
+          # `performed`. A demand with no threshold cannot be met, and routing it to the
+          # confident state is the same fail-open shape one clause up.
+          if (( _cfg_rc != 0 )) || [[ ! "$_cfg_total" =~ ^[0-9]+$ ]] \
+             || [[ ! "${RUNG2_CONFIGS_FLOOR:-}" =~ ^[0-9]+$ ]]; then
+            _cfg_probe=failed
+          elif (( 10#$_cfg_total < 10#$RUNG2_CONFIGS_FLOOR )); then
+            _cfg_probe=unsatisfiable
+          else
+            _cfg_probe=performed
+          fi
+          # NON-EMPTY GUARDS, one per published field, for the same reason the token_drift step
+          # carries them: an empty value writes a bare `key=` into $GITHUB_OUTPUT, which every
+          # positive-polarity consumer arm then fails to match — a silent channel. `_cfg_total`
+          # is the reachable one: it is assigned from a command substitution whose `jq -r
+          # 'length'` can fail, which leaves it EMPTY, and the filer's body then renders
+          # "enumerated `` config(s)". `-1` is the same absent-value sentinel the token_drift
+          # step publishes, and it can never satisfy the `>=` above.
+          [[ -n "${_cfg_total:-}" ]] || _cfg_total=-1
+          [[ -n "${_cfg_rc:-}" ]] || _cfg_rc=-1
+          [[ -n "${_cfg_probe:-}" ]] || _cfg_probe=failed
+          # ITS OWN OUTPUT, not folded into `orphans`. The orphan filer below is gated
+          # `orphans != '0'` plus an implicit `success()`, so in the steady state — no
+          # Hetzner orphans — it is SKIPPED and this finding would reach nothing; and
+          # inflating `orphans` to force the gate open would file a diagnostic line under
+          # a body asserting the listed items are paying boxes running the git transport
+          # wrappers with LUKS volumes attached, which would be untrue of a diagnostic.
+          {
+            echo "scratch_cfg_probe=${_cfg_probe}"
+            echo "scratch_cfg_rc=${_cfg_rc}"
+            echo "scratch_cfg_listed=${_cfg_total}"
+            echo "scratch_cfg_floor=${RUNG2_CONFIGS_FLOOR:--1}"
+          } >> "$GITHUB_OUTPUT"
+          echo "scratch-config probe: ${_cfg_probe} (doppler/jq exit ${_cfg_rc}, ${_cfg_total} of a declared floor of ${RUNG2_CONFIGS_FLOOR:--1} config(s) listed)"
           [[ -n "$_cfgs" ]] && survivors="${survivors}$(printf 'doppler config: %s\n' $_cfgs)"$'\n'
           survivors="$(printf '%s' "$survivors" | grep -v '^$' || true)"
           if [[ -z "$survivors" ]]; then
@@ -1189,3 +1629,183 @@ jobs:
               --milestone "Post-MVP / Later" \
               --body-file /tmp/orphan-body.md
           fi
+
+      # ── ITS OWN FILER, ITS OWN TITLE, ITS OWN LEAD ──────────────────────────────
+      # Deliberately NOT the step above. That one is gated `orphans != '0'` plus an
+      # implicit `success()`, so on the steady-state green run — the run on which this
+      # finding is true — it does not execute at all. And its body opens by asserting the
+      # listed items are PAYING Hetzner boxes running the git transport wrappers with
+      # LUKS volumes attached, which is false of a diagnostic about a probe that did not
+      # run. Two different claims need two different bodies.
+      #
+      # An issue rather than a `::warning::`, for the reason this workflow's own
+      # COVERAGE-HAS-NO-CHANNEL block records: a warning on a GREEN cron run reaches
+      # nobody. `infra-drift` is this job's existing issue channel, so the finding lands
+      # where an operator already looks rather than opening a new one.
+      #
+      # CREATE-ONLY. The `unsatisfiable` state holds on EVERY run until the wiring
+      # changes, so commenting — which the orphan filer above does, correctly, because a
+      # recurring orphan is fresh signal each time — would post 730 comments a year.
+      - name: File an issue when the scratch-config half of the sweep was not performed
+        id: scratch_cfg_issue
+        if: >-
+          always()
+          && (steps.sweep.outputs.scratch_cfg_probe == 'failed'
+              || steps.sweep.outputs.scratch_cfg_probe == 'unsatisfiable')
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROBE: ${{ steps.sweep.outputs.scratch_cfg_probe }}
+          PROBE_RC: ${{ steps.sweep.outputs.scratch_cfg_rc }}
+          LISTED: ${{ steps.sweep.outputs.scratch_cfg_listed }}
+          FLOOR: ${{ steps.sweep.outputs.scratch_cfg_floor }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          TITLE="infra: the rung-2 orphan sweep is not checking for stranded scratch Doppler configs"
+          RUN_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+
+          # THIS FILER HAD NO BACKSTOP AT ALL, and it is the mirror of the defect the coverage
+          # filer's own comment block records. Both named ::error:: slugs below were emitted to
+          # the run log and nowhere else: the step is `continue-on-error: true` and `exit 0`s,
+          # this job has no Sentry check-in and had no email arm, so a `gh` failure left a GREEN
+          # cron run whose only artifact was an annotation nobody opens
+          # (`hr-no-dashboard-eyeball-pull-data-yourself`). Every named failure below now flips
+          # this output, and the `notify-ops-email` step beneath gates on it.
+          echo "channel_failed=false" >> "$GITHUB_OUTPUT"
+          fail_channel() {
+            echo "::error::$1"
+            echo "channel_failed=true" >> "$GITHUB_OUTPUT"
+          }
+
+          LIST_RC=0
+          EXISTING=$(gh issue list --label infra-drift --state open --limit 100 \
+            --json number,title --jq ".[] | select(.title == \"${TITLE}\") | .number" | head -1) || LIST_RC=$?
+          if (( LIST_RC != 0 )); then
+            fail_channel "rung2_scratch_cfg_list_failed — could not query open infra-drift issues (gh exit ${LIST_RC}); declining to create a possible duplicate. The unperformed scratch-config sweep reached no issue channel this run."
+            exit 0
+          fi
+          if [[ -n "$EXISTING" ]]; then
+            echo "scratch-config sweep issue #${EXISTING} already open — create-only, not commenting."
+            exit 0
+          fi
+
+          BODY="${RUNNER_TEMP}/rung2-scratch-cfg.md"
+          {
+            if [[ "$PROBE" == "failed" ]]; then
+              echo "**The rung-2 orphan sweep could not list Doppler configs at all** (doppler/jq"
+              echo "exit \`${PROBE_RC}\`), so the scratch-config half of the sweep produced no"
+              echo "verdict this run."
+            else
+              echo "**The rung-2 orphan sweep reports \"no orphaned scratch Doppler config\" without"
+              echo "being able to look.** Its credential enumerated \`${LISTED}\` config(s), below the"
+              echo "\`${FLOOR}\` this step declares, so the \`startswith(\"prd_git_data_rehearsal_\")\`"
+              echo "predicate it filters on cannot be established — a \"none\" drawn from a partial"
+              echo "listing is an answer by construction, not by inspection. At \`${LISTED}\` = 1 it is"
+              echo "literally unsatisfiable; at any count below the floor it is merely unsound, and"
+              echo "the two are reported together because the remedy is the same."
+            fi
+            echo ""
+            echo "Probe status: \`${PROBE}\`  •  doppler/jq exit: \`${PROBE_RC}\`  •  Configs listed: \`${LISTED}\` of a declared floor of \`${FLOOR}\`  •  Run: ${RUN_URL}"
+            echo ""
+            echo "### Why this matters"
+            echo ""
+            echo "A partial rung-2 teardown does not only strand Hetzner objects, and the Hetzner"
+            echo "objects are not the expensive part. It strands the scratch Doppler config, which"
+            echo "holds a live \`GIT_DATA_LUKS_KEY\` and the real production Better Stack ingest"
+            echo "token. The Hetzner half of this sweep is sound — it is label-selected, it checks"
+            echo "pagination, and it fails closed on an unreachable API. The Doppler half has been"
+            echo "returning a clean verdict for a question it never asked, which is the exact shape"
+            echo "every other control in that step guards against."
+            echo ""
+            echo "Until now this was invisible: the probe ran as"
+            echo "\`doppler configs list … 2>/dev/null | jq … || true\`, which collapsed \"listed"
+            echo "and matched nothing\", \"the CLI failed\" and \"jq failed\" into the same empty"
+            echo "string. The suppressors are gone and the status is captured explicitly, which is"
+            echo "what produced this issue."
+            echo ""
+            echo "### Remedy"
+            echo ""
+            if [[ "$PROBE" == "failed" ]]; then
+              echo "Open the linked run and read the \`Sweep for orphaned rung-2 rehearsal hosts\`"
+              echo "step: the doppler CLI's stderr is no longer discarded, so the specific failure"
+              echo "(missing CLI, rejected credential, malformed JSON) is printed there."
+            else
+              echo "This job authenticates with \`secrets.DOPPLER_TOKEN\`, a \`doppler_service_token\`"
+              echo "scoped to a single config. A Doppler service token is **config-scoped by"
+              echo "construction** and ignores \`DOPPLER_CONFIG\`; \`doppler configs list\` returns a"
+              echo "list silently scoped to the caller — one entry, \`success: true\`, no error — so"
+              echo "no amount of retrying makes the predicate matchable."
+              echo ""
+              echo "**Do not repoint this job at \`DOPPLER_TOKEN_DRIFT\`.** That credential is a"
+              echo "project-scoped \`doppler_service_account_token\` and would satisfy the predicate,"
+              echo "but it is deliberately kept to exactly ONE consumer — the Cloudflare token-drift"
+              echo "step in the \`drift-check\` job — which is what bounds its blast radius and keeps"
+              echo "its rotation a single \`terraform apply"
+              echo "-replace=doppler_service_account_token.token_drift\`. Widening its consumer set"
+              echo "here would trade a bounded credential for a diagnostic."
+              echo ""
+              echo "The shapes that do fit: give this job its own narrowly-scoped read identity, or"
+              echo "have the rehearsal teardown arm assert its own scratch-config deletion at"
+              echo "teardown time (it already holds a credential that can see the config it"
+              echo "created). Either is a Terraform + workflow change, not a dashboard step."
+            fi
+            echo ""
+            echo "### Closing"
+            echo ""
+            echo "Closed by hand once the scratch-config half of the sweep reports a verdict it"
+            echo "actually measured. Filed create-only: the condition holds on every run until the"
+            echo "wiring changes, so this issue is not re-commented."
+            echo ""
+            echo "_Auto-created by the [terraform-drift workflow](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-terraform-drift.yml)._"
+          } > "$BODY"
+
+          # `action-required` IS THE HARVESTED LABEL, and `infra-drift` alone is not. The block at
+          # the top of the token-drift escalation section in this same file records it: that label
+          # is what `operator-digest` reads, and it harvests ISSUES. Filed under `infra-drift`
+          # only, this finding sat in a queue nothing renders — which is the same
+          # never-reaches-a-human failure the filer itself exists to fix, one level up.
+          #
+          # `priority/p2-medium`, not the coverage filer's `p1-high`: operator-digest sorts
+          # p0>p1>p2>p3>none and CAPS the rendered list, so an unprioritised issue folds into a
+          # "+N more" line. This finding is a standing diagnostic about a sweep that cannot look,
+          # not an outage — it must be visible and must not outrank a dead credential.
+          if gh issue create \
+            --title "$TITLE" \
+            --label "infra-drift" \
+            --label action-required \
+            --label priority/p2-medium \
+            --milestone "Post-MVP / Later" \
+            --body-file "$BODY"; then
+            echo "Filed an infra-drift issue for the unperformed scratch-config sweep (${PROBE})."
+          else
+            fail_channel "rung2_scratch_cfg_escalation_failed — gh issue create did not succeed. The unperformed scratch-config sweep (${PROBE}, ${LISTED} config(s) listed) reached NO channel this run."
+          fi
+          rm -f "$BODY"
+
+      # ── AND THE ISSUE CHANNEL FOR *THIS* FINDING CAN ITSELF BE DEAD ─────────────
+      # Mirrors the coverage filer's fallback exactly, because the shape is identical: the only
+      # channel this finding has is a GitHub issue, the step runs under `continue-on-error: true`
+      # and `exit 0`s, and this job publishes no Sentry check-in — so when the `gh` call is what
+      # failed, the sole artifact is a named ::error:: on a run that is still GREEN.
+      #
+      # THE `outcome` LEG COVERS THE FAILURE THE FLAG CANNOT SEE, same reasoning as the coverage
+      # fallback: `timeout-minutes: 2` kills a STALLED `gh` after `channel_failed=false` has been
+      # written and before `fail_channel` can overwrite it, so no flag is ever set and no slug is
+      # ever emitted. `outcome` is populated under `continue-on-error` and is `skipped` (never
+      # `failure`) for a skipped step, so this leg preserves the positive polarity that keeps a
+      # skipped filer — the steady-state `performed` run — from firing the email.
+      - name: Email notification (rung-2 sweep — the scratch-config finding could not reach its issue channel)
+        if: >-
+          always()
+          && (steps.scratch_cfg_issue.outputs.channel_failed == 'true'
+              || steps.scratch_cfg_issue.outcome == 'failure')
+        continue-on-error: true
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[INFRA DRIFT] The rung-2 scratch-config finding could not reach its issue channel'
+          body: '<p><strong>The twice-daily rung-2 orphan sweep found that its scratch-config half was not performed, and the GitHub issue channel that carries that finding did not accept it.</strong> This email exists because the finding would otherwise have reached nothing: the cron run is GREEN, this job publishes no Sentry check-in, and its only other artifact is a run annotation.</p><p>What this run measured: probe <code>${{ steps.sweep.outputs.scratch_cfg_probe }}</code>, doppler/jq exit <code>${{ steps.sweep.outputs.scratch_cfg_rc }}</code>, <code>${{ steps.sweep.outputs.scratch_cfg_listed }}</code> config(s) listed against a declared floor of <code>${{ steps.sweep.outputs.scratch_cfg_floor }}</code>.</p><p><strong>This is a finding about the CHANNEL, not only about the sweep.</strong> <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and look for the named error slug — <code>rung2_scratch_cfg_list_failed</code> or <code>rung2_scratch_cfg_escalation_failed</code> — which says which call failed. Likely causes: a secondary rate limit, an API 5xx, a renamed or closed <code>Post-MVP / Later</code> milestone, or the <code>infra-drift</code> label having been deleted.</p><p>What is at stake while the channel is down: a partial rung-2 teardown strands the scratch Doppler config, which holds a live <code>GIT_DATA_LUKS_KEY</code> and the production Better Stack ingest token — and the sweep is currently reporting "no orphaned scratch Doppler config" without being able to look.</p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
