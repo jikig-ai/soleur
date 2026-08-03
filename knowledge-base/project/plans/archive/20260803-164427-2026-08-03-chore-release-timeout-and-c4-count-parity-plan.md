@@ -199,10 +199,8 @@ over the worst, not from a round number.
 **If this leaks, the user's data/workflow/money is exposed via:** nothing — no new data path,
 credential, or egress. Deliverable 2 reads tracked files at CI time and writes nothing.
 
-**Brand-survival threshold:** `none`.
-*Sensitive-path scope-out:* `threshold: none, reason: the diff is a workflow timeout declaration, a
-bash/CI test, and architecture-doc prose — no schema, migration, auth flow, API route, or .sql file
-is touched.*
+- **Brand-survival threshold:** `none`
+- Sensitive-path scope-out: `threshold: none, reason: the diff is a workflow timeout declaration, a bash/CI test, and architecture-doc prose — no schema, migration, auth flow, API route, or .sql file is touched.`
 
 ---
 
@@ -692,12 +690,15 @@ logs:
   retention: GitHub default (90 days)
 
 discoverability_test:
-  command: |
-    gh run list --workflow=web-platform-release.yml --limit 20 --json databaseId,conclusion
-    bash scripts/test-all.sh scripts
-  expected_output: |
-    the release runs list with conclusions; the aggregator exits 0 and its output contains
-    the `plugins/soleur/test/c4-count-parity` suite label
+  # Single-line, unauthenticated, and runnable under preflight Check 10's `env -i`
+  # sandbox. The previous form was a multi-line block scalar invoking `gh`, which
+  # Check 10 rejects twice over (credentialed CLI + embedded newline) -- i.e. it was
+  # declared as verification while being unable to run. Verified: rc=0.
+  command: bash plugins/soleur/test/c4-count-parity.test.sh
+  expected_output: "ALL TESTS PASSED"
+  # Release-run health stays observable via the Actions API, but it is a credentialed
+  # probe and so is deliberately NOT the discoverability command:
+  #   gh run list --workflow=web-platform-release.yml --limit 20 --json conclusion
 ```
 
 No `ssh` appears in any command. Every failure mode is reachable from the Actions API or a local
