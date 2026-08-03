@@ -7,7 +7,10 @@ import {
   KB_TEXT_EXTENSIONS,
   KB_UPLOAD_EXTENSIONS,
 } from "@/lib/kb-constants";
-const MAX_QUERY_LENGTH = 200;
+import { MAX_KB_QUERY_LENGTH } from "@/lib/kb-search-limits";
+// Re-exported under the local name so the client input's maxLength and this
+// validation cannot drift (#7186 review).
+const MAX_QUERY_LENGTH = MAX_KB_QUERY_LENGTH;
 const MAX_SEARCH_RESULTS = 100;
 const MAX_CONCURRENT_STAT = 50;
 // Bound per-file content matches: a 1MB CSV with a common token can yield

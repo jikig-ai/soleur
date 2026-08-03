@@ -7,6 +7,14 @@ import { SwrTestProvider } from "./helpers/swr-wrapper";
 const mockPush = vi.fn();
 const mockRouter = { push: mockPush, back: vi.fn(), forward: vi.fn(), refresh: vi.fn(), replace: vi.fn(), prefetch: vi.fn() };
 let mockPathname = "/dashboard/kb";
+// #7186 — the ONE breakpoint authority for the KB layout. happy-dom has no real
+// media queries, so the viewport axis of the AC2 host table is driven here.
+// Defaults to desktop so every pre-existing case in this file is unaffected.
+let mockIsDesktop = true;
+
+vi.mock("@/hooks/use-media-query", () => ({
+  useMediaQuery: () => mockIsDesktop,
+}));
 
 vi.mock("@/components/feature-flags/provider", () => ({
   FeatureFlagProvider: ({ children }: { children: React.ReactNode }) => children,
@@ -45,9 +53,12 @@ const mockTree = {
   },
 };
 
+const emptyTree = { tree: { name: "root", type: "directory", path: "", children: [] } };
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockPathname = "/dashboard/kb";
+  mockIsDesktop = true;
   global.fetch = vi.fn().mockResolvedValue({
     ok: true,
     status: 200,
@@ -250,5 +261,147 @@ describe("KbLayout", () => {
       name: /knowledge base file tree/i,
     });
     expect(navs).toHaveLength(1);
+  });
+});
+
+// #7186 AC2 — the ONE file tree's HOST is a function of (viewport, route,
+// fixture). Asserted by CONTAINMENT of the role="navigation" node, never by a
+// wrapper testid: `kb-rail-tree` renders even when the tree is DOM-removed
+// (kb-sidebar-shell.tsx wraps the collapsed branch too), so a testid the shell
+// emits about its own placement agrees with a mis-placement bug.
+describe("#7186 — file-tree host table (exactly one tree, in the named host)", () => {
+  interface Cell {
+    label: string;
+    isDesktop: boolean;
+    pathname: string;
+    fixture: "populated" | "empty";
+    expectedHost: "rail" | "content";
+  }
+
+  // Six cells, not eight: {desktop,doc,empty} and {mobile,doc,empty} are
+  // redundant with their landing rows — in a fullWidth (empty) state the host
+  // does not depend on the route.
+  const CELLS: Cell[] = [
+    { label: "desktop / landing / populated", isDesktop: true, pathname: "/dashboard/kb", fixture: "populated", expectedHost: "rail" },
+    { label: "desktop / doc / populated", isDesktop: true, pathname: "/dashboard/kb/INDEX.md", fixture: "populated", expectedHost: "rail" },
+    { label: "desktop / landing / empty", isDesktop: true, pathname: "/dashboard/kb", fixture: "empty", expectedHost: "rail" },
+    { label: "mobile / landing / populated", isDesktop: false, pathname: "/dashboard/kb", fixture: "populated", expectedHost: "content" },
+    { label: "mobile / doc / populated", isDesktop: false, pathname: "/dashboard/kb/INDEX.md", fixture: "populated", expectedHost: "rail" },
+    { label: "mobile / landing / empty", isDesktop: false, pathname: "/dashboard/kb", fixture: "empty", expectedHost: "rail" },
+  ];
+
+  it.each(CELLS)(
+    "$label → the tree is hosted in the $expectedHost",
+    async ({ isDesktop, pathname, fixture, expectedHost }) => {
+      mockIsDesktop = isDesktop;
+      mockPathname = pathname;
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve(fixture === "populated" ? mockTree : emptyTree),
+      });
+
+      const { default: KbLayout } = await import(
+        "@/app/(dashboard)/dashboard/kb/layout"
+      );
+      render(
+        <RailSlotHarness>
+          <KbLayout>
+            <div data-testid="page-content">page content</div>
+          </KbLayout>
+        </RailSlotHarness>,
+      );
+
+      const slot = await screen.findByTestId("rail-slot-harness");
+
+      if (fixture === "empty") {
+        // An empty tree renders RailEmptyState in place of FileTree, so the
+        // correct nav count here is ZERO. Be precise about what that buys: a
+        // `toHaveLength(0)` on the nav is a TAUTOLOGY over this fixture — it is
+        // true for every possible implementation, because FileTree is the sole
+        // emitter of that role and it is not rendered at all. It is kept only as
+        // documentation of the expected count, and `expectedHost` is likewise
+        // decorative on these two rows (the branch returns before the
+        // containment check). The assertion that actually discriminates here is
+        // the `kb-browse-tree` absence below: mounting the shell into the
+        // content column inside the fullWidth block reds it.
+        await within(slot).findByTestId("kb-rail-empty");
+        expect(within(slot).getByTestId("kb-rail-tree")).toBeInTheDocument();
+        expect(
+          screen.queryAllByRole("navigation", {
+            name: /knowledge base file tree/i,
+          }),
+        ).toHaveLength(0);
+        expect(screen.queryByTestId("kb-browse-tree")).not.toBeInTheDocument();
+        return;
+      }
+
+      const navs = await screen.findAllByRole("navigation", {
+        name: /knowledge base file tree/i,
+      });
+      expect(navs).toHaveLength(1);
+      const nav = navs[0];
+
+      if (expectedHost === "rail") {
+        expect(slot).toContainElement(nav);
+        expect(screen.queryByTestId("kb-browse-tree")).not.toBeInTheDocument();
+      } else {
+        expect(slot).not.toContainElement(nav);
+        expect(screen.getByTestId("kb-browse-tree")).toContainElement(nav);
+      }
+    },
+  );
+
+  // The flip is driven by rerender() on the SAME tree: a fresh render() cannot
+  // have a stale portal, which is the only failure mode this case exists to
+  // catch (a portal that fails to unmount when the host changes).
+  it("moves the single tree between hosts on a desktop↔mobile flip (no double mount)", async () => {
+    mockIsDesktop = true;
+    mockPathname = "/dashboard/kb";
+
+    const { default: KbLayout } = await import(
+      "@/app/(dashboard)/dashboard/kb/layout"
+    );
+    // A FRESH element per rerender: React bails out of re-rendering a subtree
+    // whose element is referentially identical to the previous one, so reusing
+    // one `tree` object makes the flip a no-op and the case vacuously green.
+    const makeTree = () => (
+      <RailSlotHarness>
+        <KbLayout>
+          <div data-testid="page-content">page content</div>
+        </KbLayout>
+      </RailSlotHarness>
+    );
+    const { rerender } = render(makeTree());
+
+    const slot = await screen.findByTestId("rail-slot-harness");
+    let navs = await screen.findAllByRole("navigation", {
+      name: /knowledge base file tree/i,
+    });
+    expect(navs).toHaveLength(1);
+    expect(slot).toContainElement(navs[0]);
+
+    mockIsDesktop = false;
+    rerender(makeTree());
+
+    navs = await screen.findAllByRole("navigation", {
+      name: /knowledge base file tree/i,
+    });
+    expect(navs).toHaveLength(1);
+    expect(screen.getByTestId("rail-slot-harness")).not.toContainElement(
+      navs[0],
+    );
+    expect(screen.getByTestId("kb-browse-tree")).toContainElement(navs[0]);
+
+    mockIsDesktop = true;
+    rerender(makeTree());
+
+    navs = await screen.findAllByRole("navigation", {
+      name: /knowledge base file tree/i,
+    });
+    expect(navs).toHaveLength(1);
+    expect(screen.getByTestId("rail-slot-harness")).toContainElement(navs[0]);
+    expect(screen.queryByTestId("kb-browse-tree")).not.toBeInTheDocument();
   });
 });

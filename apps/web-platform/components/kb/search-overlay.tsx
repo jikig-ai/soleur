@@ -3,13 +3,60 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import Link from "next/link";
 import type { SearchResult, SearchMatch } from "@/server/kb-reader";
+import { MAX_KB_QUERY_LENGTH } from "@/lib/kb-search-limits";
 
-export function SearchOverlay() {
-  const [query, setQuery] = useState("");
+/**
+ * #7186 — on mobile the whole browse view (this overlay included) UNMOUNTS when
+ * a document opens, so a query held only in component state is lost on every
+ * drill-in. Module scope gives exactly the lifetime that needs: it survives the
+ * unmount and dies with the page.
+ *
+ * Deliberately NOT sessionStorage. Storage outlives sign-out in the same tab —
+ * `use-sign-out.ts` clears the SWR cache and hard-navs to /login, and neither
+ * step touches sessionStorage — so a co-member signing in on a shared tab would
+ * inherit the previous user's search terms. A free-text query is also a
+ * different sensitivity class from the navigation positions `nav-resume` holds
+ * (paths, a UUID, an expanded-dir set, a scroll offset), which is why it does
+ * not belong in that namespace.
+ *
+ * Safe as module state because ADR-158's single `treeHost` guarantees exactly
+ * one SearchOverlay is mounted at a time — there is no concurrent writer. It
+ * also cannot outlive a workspace change: switching workspaces hard-navs
+ * (`org-switcher-container.tsx`), which resets module scope.
+ */
+let lastQuery = "";
+
+export function SearchOverlay({
+  /**
+   * Restore the last query on mount. TRUE only for the mobile content host,
+   * whose unmount-on-drill-in is the regression this exists to fix. The rail
+   * host opts out so desktop behaviour is unchanged: it also unmounts (on
+   * leaving /dashboard/kb), and restoring there would be a new, unasked-for
+   * resume semantic on a surface nobody reported a problem with.
+   */
+  restoreQuery = false,
+}: {
+  restoreQuery?: boolean;
+} = {}) {
+  const [query, setQuery] = useState(restoreQuery ? lastQuery : "");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(null);
+  // Restore the TEXT, not the REQUEST. The debounce effect below cannot tell a
+  // restored value from a keystroke, and /api/kb/search is an uncached full-tree
+  // walk (~840ms server-side on this repo's own knowledge-base, measured, and
+  // independent of hit count — it is the walk, not the results). Without this
+  // latch every drill-in round trip fires two of them, one of them for a tree
+  // inside a CLOSED drawer the user never sees. Editing the field re-triggers
+  // the search normally.
+  const skipRestoredSearchRef = useRef(restoreQuery && lastQuery !== "");
+
+  const onQueryChange = useCallback((next: string) => {
+    skipRestoredSearchRef.current = false;
+    setQuery(next);
+    lastQuery = next;
+  }, []);
 
   const search = useCallback(async (q: string) => {
     if (!q.trim()) {
@@ -41,6 +88,9 @@ export function SearchOverlay() {
       setSearched(false);
       return;
     }
+    // A restored query paints its text without re-issuing the walk. Cleared by
+    // the first real edit (onQueryChange), so this suppresses exactly one run.
+    if (skipRestoredSearchRef.current) return;
     debounceRef.current = setTimeout(() => search(query), 300);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -65,8 +115,9 @@ export function SearchOverlay() {
         <input
           type="search"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => onQueryChange(e.target.value)}
           placeholder="Search files..."
+          maxLength={MAX_KB_QUERY_LENGTH}
           enterKeyHint="search"
           autoCapitalize="none"
           spellCheck={false}
