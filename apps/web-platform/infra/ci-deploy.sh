@@ -2175,6 +2175,70 @@ verify_inngest_health() {
   return 0
 }
 
+# --- Dispatch proof (#7144 findings 3 + 4) -----------------------------------------
+# verify_inngest_health above proves a PORT ANSWERS. It does not prove a SEND SUCCEEDS,
+# and those came apart for ~3 days: /health returned 200 from the surviving co-located
+# server on every attempt while every inngest.send() from the app got ECONNREFUSED,
+# because the app had been repointed at a host that never bound :8288. The deploy was
+# declared green throughout, while Resend's auto-disable clock ran.
+#
+# Both existing gates are also UNAUTHENTICATED, so neither can see the OTHER failure the
+# reverse repoint can produce: the co-located inngest-server loads its keys once at
+# process start and has not restarted since 2026-07-23, while soleur/prd's keys were
+# reconciled to the dedicated host during the cutover. That mismatch turns ECONNREFUSED
+# into 401 — a DIFFERENT failure that /health also returns 200 through, and one that
+# isTransientFetchError does not match, so it retries zero times.
+#
+# One authenticated POST to the app's real dispatch target closes both: a refused
+# connection is finding 4, a 401/403 is finding 3, and a 2xx proves the actual path the
+# app uses end to end. The cutover workflow has a G3.5 PARITY_FAIL gate for exactly this,
+# but only on its `op=arm` arm — the reverse repoint has no counterpart. This is it.
+#
+# SECRET HANDLING: inngest's event API puts the key in the URL PATH (POST /e/<key>). The
+# URL is therefore never logged, never echoed, and never placed in a variable that
+# reaches journald — only the scheme-stripped host:port and the HTTP status code are.
+# `--data-binary @-` keeps the body off argv too.
+verify_inngest_dispatch() {
+  local base="$1" env_file="$2"
+  local max_attempts="${3:-8}" interval="${4:-3}"
+  local target="${base#*://}"   # host:port only — journald carries no URI (#5503)
+  local key="" code="" i
+
+  if [[ -r "$env_file" ]]; then
+    # cut -d= -f2- keeps '=' inside the value; the quote strip handles both quoted forms.
+    key=$(grep -m1 '^INNGEST_EVENT_KEY=' "$env_file" 2>/dev/null | cut -d= -f2- | tr -d '"'"'" ) || true
+  fi
+  if [[ -z "$key" ]]; then
+    # `inngest start` accepts any key when no signing config is present, so a placeholder
+    # still exercises reachability. Say so rather than implying the auth dimension passed.
+    key="soleur-deploy-probe"
+    logger -t "$LOG_TAG" "INNGEST_DISPATCH: no INNGEST_EVENT_KEY in the env file — probing reachability only; the auth dimension is NOT exercised" 2>/dev/null || true
+  fi
+
+  for i in $(seq 1 "$max_attempts"); do
+    # A benign event name no function subscribes to: accepted and dropped, never executed.
+    code=$(printf '%s' '{"name":"deploy.dispatch_probe","data":{}}' \
+      | curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+             -X POST -H 'Content-Type: application/json' \
+             --data-binary @- "${base}/e/${key}" 2>/dev/null || echo "000")
+
+    case "$code" in
+      2*)
+        logger -t "$LOG_TAG" "INNGEST_DISPATCH: ok — a real send to $target was ACCEPTED (http=$code, attempt $i/$max_attempts)" 2>/dev/null || true
+        return 0 ;;
+      401|403)
+        # Terminal: retrying a rejected key only wastes the deploy window.
+        logger -t "$LOG_TAG" "INNGEST_DISPATCH: FAIL — $target REJECTED the app's event key (http=$code). The server holds different keys than soleur/prd; it loads them once at process start, and a web-platform deploy does not restart it. Dispatch \"restart inngest\" / \"deploy inngest\" so the unit reloads soleur/prd (#7144 finding 3)." 2>/dev/null || true
+        return 1 ;;
+    esac
+    logger -t "$LOG_TAG" "INNGEST_DISPATCH: attempt $i/$max_attempts — $target did not accept a send (http=$code)" 2>/dev/null || true
+    sleep "$interval"
+  done
+
+  logger -t "$LOG_TAG" "INNGEST_DISPATCH: FAIL — after $max_attempts attempts, $target never accepted a send (last http=$code). /health can return 200 while this fails; that gap ran for ~3 days in #7144 with the deploy green throughout." 2>/dev/null || true
+  return 1
+}
+
 # Single-source "is the inngest unit enabled at boot?" (enabled|enabled-runtime).
 # Both verify_inngest_quiesced (fail-branch) and the enable handler (ok-branch) use this
 # so the set of enabled-like states stays defined in ONE place. Exotic states
@@ -2937,6 +3001,28 @@ case "$COMPONENT" in
           logger -t "$LOG_TAG" "INNGEST_HEALTH_CHECK: ok"
         else
           logger -t "$LOG_TAG" "INNGEST_WARN: inngest-server not reachable after deploy — consider running restart-inngest-server.yml workflow"
+        fi
+
+        # Dispatch proof (#7144 findings 3 + 4). The check ABOVE is deliberately
+        # non-blocking and unauthenticated, which is exactly how a 3-day dispatch outage
+        # shipped green: /health answered 200 from the surviving co-located server on
+        # every deploy while every inngest.send() was refused.
+        #
+        # The host-side target is the loopback equivalent of the `-e INNGEST_BASE_URL`
+        # this script injects a few lines above: the container reaches the co-located
+        # server through the host.docker.internal alias, which IS loopback from the host.
+        # Those literals are deliberately NOT refactored into a shared constant — the
+        # parity guards in inngest-inventory.test.sh cases (7)-(9) grep for the literal
+        # form and would match zero sites against a variable, silently disarming
+        # themselves. Cross-file agreement is asserted there instead.
+        #
+        # BLOCKING, unlike its neighbours, and that is the point of the finding. It
+        # retries first (8 x 3s) so a container still settling cannot roll back a healthy
+        # deploy — the #4941 lesson, where a gate that false-positived rolled back every
+        # deploy and had to be reverted. A rejected KEY is terminal and skips the retries.
+        if ! verify_inngest_dispatch "http://127.0.0.1:8288" "$ENV_FILE"; then
+          logger -t "$LOG_TAG" "DEPLOY_FAIL: the app cannot dispatch to inngest — refusing to declare this deploy healthy. A green deploy here is what let #7144 run for ~3 days." 2>/dev/null || true
+          exit 1
         fi
 
         # bwrap userns drift detector (#4927/#4928; follow-up to #4932/#4941).
