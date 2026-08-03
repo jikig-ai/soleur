@@ -643,12 +643,18 @@ try:
             ceiling_err = ("could not read reusable workflow %s: %s"
                            % (callee_rel, str(e).replace("\n", " ")))
 
-    emit("RELEASE_CEILING_MIN", release_ceiling)
-    emit("RELEASE_CEILING_ERROR", ceiling_err)
-
     crit = max(release_ceiling, job_timeout("await-ci"))
     for j in ("migrate", "verify-migrations", "deploy"):
         crit += job_timeout(j)
+
+    # Emitted AFTER every job_timeout call, not before. job_timeout also writes ceiling_err (an
+    # expression-valued timeout-minutes on any of the four caller-side jobs), so emitting above
+    # would publish a stale empty string and B8d would report "resolved fine" while a timeout was
+    # in fact unreadable. B9 still reds in that case -- the unreadable value defaults to 360, which
+    # inflates the path -- so this is a diagnosability gap, not a silent-green hole; but naming the
+    # unreadable input is the entire reason B8d exists. Verified by mutation.
+    emit("RELEASE_CEILING_MIN", release_ceiling)
+    emit("RELEASE_CEILING_ERROR", ceiling_err)
     emit("RELEASE_CRITICAL_PATH_MIN", crit)
 
     # --- topology guard (#7160) ---
