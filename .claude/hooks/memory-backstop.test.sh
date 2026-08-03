@@ -362,6 +362,14 @@ sysd_prop() { systemctl --user show "$1" -p "$2" --value 2>/dev/null; }
 cg_of() { cut -d: -f3 < "/proc/$1/cgroup" 2>/dev/null; }
 cg_path() { echo "/sys/fs/cgroup$(cg_of "$1")"; }
 
+# MemoryHigh is set EQUAL to MemoryMax here, deliberately. With a `high` band
+# below `max` AND MemorySwapMax=0, an anon-heavy allocator is throttled into
+# synchronous reclaim that can never free anything (no swap, no file pages to
+# drop) and it crawls instead of reaching `max` — measured: a 512 MB allocator
+# under high=200 MB / max=256 MB never OOMed and never finished, hanging the
+# suite. That is D2's documented degeneration reproduced, and it is precisely why
+# MemoryMax rather than MemoryHigh is the real backstop; but it makes a
+# kill-mechanism test unrunnable, so the band is closed to zero width here.
 start_test_scope() { # <scope> <slice> <pid...>
   local scope=$1 slice=$2; shift 2
   local n=$#
@@ -375,7 +383,7 @@ start_test_scope() { # <scope> <slice> <pid...>
     "$scope" "fail" 7 \
     "${args[@]}" \
     "Slice" "s" "$slice" \
-    "MemoryHigh" "t" 209715200 \
+    "MemoryHigh" "t" 268435456 \
     "MemoryMax" "t" 268435456 \
     "MemorySwapMax" "t" 0 \
     "OOMPolicy" "s" "continue" \
@@ -458,11 +466,21 @@ sys.exit(0)
     # than a real one. `wait` reaps it and yields the signal that killed it.
     # Safe to wait unbounded here: the allocator is capped, gated, and bounded at
     # 512 MB.
+    # Watchdog: a cap that fails to kill must fail the TEST, never hang the
+    # suite. It marks the timeout on disk so a watchdog SIGKILL cannot be
+    # mistaken for the cgroup OOM kill this test exists to observe.
+    ( sleep 90; touch "$kdir/timedout"; kill -9 "$ALLOC" 2>/dev/null ) >/dev/null 2>&1 &
+    WATCHDOG=$!
     wait "$ALLOC" 2>/dev/null; alloc_rc=$?
+    kill "$WATCHDOG" 2>/dev/null
     alloc_dead=0
     # 137 = 128+SIGKILL, which is what a cgroup OOM kill delivers.
-    [[ "$alloc_rc" == "137" ]] && alloc_dead=1
-    kill -0 "$ALLOC" 2>/dev/null || alloc_dead=1
+    if [[ -f "$kdir/timedout" ]]; then
+      alloc_dead=0
+      fail "T14 allocator neither OOM-killed nor finished within 90s — the cap did not terminate it"
+    elif [[ "$alloc_rc" == "137" ]]; then
+      alloc_dead=1
+    fi
     sentinel_alive=0; kill -0 "$SENTINEL" 2>/dev/null && sentinel_alive=1
     oomk=$(awk '/^oom_kill /{print $2}' "$kcg/memory.events" 2>/dev/null || echo 0)
     if [[ "$alloc_dead" == "1" && "$sentinel_alive" == "1" && "${oomk:-0}" -ge 1 ]]; then
@@ -528,10 +546,15 @@ time.sleep(300)
   start_test_scope "$S2" "$TEST_SLICE" "$A2" >/dev/null 2>&1
   wait_in_scope "$S1" "$A1"; wait_in_scope "$S2" "$A2"
   slice_cg="/sys/fs/cgroup/user.slice/user-$UIDN.slice/user@$UIDN.service/soleurtest.slice/$TEST_SLICE"
-  need=$(( ALLOC_MB * 2 * 1024 * 1024 ))
-  # Poll until both allocations are actually charged. A fixed `sleep 1` samples
-  # an arbitrary point on a curve that is still rising, which makes the assertion
-  # a race rather than a measurement.
+  # The claim under test is "BOTH sessions charge the SAME slice", so the
+  # threshold only has to separate one allocation from two. Asserting the exact
+  # nominal sum instead makes the test a memory-accounting oracle: the resident
+  # charge lands a few percent under the allocated bytes (page rounding, lazily
+  # touched tail pages, concurrent reclaim), so `>= 2x` fails at ~93 MiB of a
+  # nominal 96 MiB while both allocations are plainly charged. 1.5x is the
+  # midpoint — unreachable by one 48 MiB session, comfortably cleared by two.
+  need=$(( ALLOC_MB * 3 / 2 * 1024 * 1024 ))
+  nominal=$(( ALLOC_MB * 2 * 1024 * 1024 ))
   cur=0
   for _ in $(seq 1 100); do
     cur=$(cat "$slice_cg/memory.current" 2>/dev/null || echo 0)
@@ -540,7 +563,7 @@ time.sleep(300)
   done
   smax=$(cat "$slice_cg/memory.max" 2>/dev/null || echo 0)
   if [[ "$cur" -ge "$need" && "$smax" == "2147483648" ]]; then
-    pass "T12 two concurrent scopes charge one shared slice (current=$cur >= $need) and its caps are unchanged by the second adoption"
+    pass "T12 two concurrent scopes charge one shared slice (current=$cur >= $need, nominal $nominal) and its caps are unchanged by the second adoption"
   else
     fail "T12 fleet bound: slice memory.current=$cur (need >= $need), memory.max=$smax (need 2147483648)"
   fi
@@ -652,26 +675,65 @@ time.sleep(300)
     bash -c 'sleep 90 & wait' >/dev/null 2>&1 & GKID=$!
     SPAWNED+=("$GKID")
     sleep 0.3
-    "$PWD/$HOOK" </dev/null >/dev/null 2>&1
 
+    # ORDER IS LOAD-BEARING: snapshot the tree BEFORE the sweep, then assert over
+    # that snapshot. A live agent session spawns processes continuously, so a
+    # snapshot taken AFTER the run contains PIDs that did not exist when the hook
+    # swept — they were never candidates for adoption, and counting them produces
+    # a failure with no defect behind it.
     # `sort` (lexicographic) on BOTH sides, never `sort -n`: comm compares byte
     # strings, so numerically-sorted input makes it emit "not in sorted order"
     # and produce a garbage diff that reads as a real failure.
+    # `pp in keep`, never `keep[pp]`: referencing an awk array element AUTO-CREATES
+    # it, so the truthiness form silently interns every PPid it ever tested and
+    # the final `for (p in keep)` emits them all. Measured: that inflated a real
+    # 8-process tree to 119 phantom PIDs and reported 109 of them "absent from the
+    # scope" — a fabricated failure with no defect behind it.
     indep=$(ps -eo pid=,ppid= | awk -v root="$cpid" '
       { ppid[$1]=$2; pids[NR]=$1 }
       END {
         keep[root]=1
         for (pass=0; pass<12; pass++)
-          for (i=1;i<=NR;i++) if (keep[ppid[pids[i]]]) keep[pids[i]]=1
-        for (p in keep) print p
+          for (i=1;i<=NR;i++) {
+            pp = ppid[pids[i]]
+            if ((pp in keep) && keep[pp] == 1) keep[pids[i]] = 1
+          }
+        for (p in keep) if (keep[p] == 1) print p
       }' | sort)
+    # Processes this suite DELIBERATELY relocated into its own soleurtest-* units
+    # (T11/T12/T14) are descendants of claude but are not meant to be in claude's
+    # scope. Excluding them keeps the assertion about the hook rather than about
+    # the harness.
+    indep=$(while IFS= read -r p; do
+              [[ -z "$p" ]] && continue
+              c=$(cut -d: -f3 < "/proc/$p/cgroup" 2>/dev/null)
+              [[ "$c" == *soleurtest* ]] && continue
+              printf '%s\n' "$p"
+            done <<< "$indep" | sort)
+
+    # NOW sweep, with the snapshot already fixed.
+    "$PWD/$HOOK" </dev/null >/dev/null 2>&1
+
+    # Only PIDs still alive after the sweep can be asserted on: one that exited
+    # in between is absent from cgroup.procs for a reason that is not a defect.
+    indep=$(while IFS= read -r p; do
+              [[ -z "$p" ]] && continue
+              [[ -r "/proc/$p/cgroup" ]] || continue
+              printf '%s\n' "$p"
+            done <<< "$indep" | sort)
+
     inscope=$(sort < "$scg/cgroup.procs" 2>/dev/null)
-    missing_pids=$(comm -23 <(printf '%s\n' "$indep") <(printf '%s\n' "$inscope") | grep -c . || true)
+    missing_list=$(comm -23 <(printf '%s\n' "$indep") <(printf '%s\n' "$inscope"))
+    missing_pids=$(printf '%s\n' "$missing_list" | grep -c . || true)
     tree_n=$(printf '%s\n' "$indep" | grep -c .)
-    if [[ "$tree_n" -ge 2 && "$missing_pids" == "0" ]]; then
-      pass "T9/AC11 independently re-derived tree (n=$tree_n) is a subset of the scope's cgroup.procs"
+    if [[ "$tree_n" -ge 3 && "$missing_pids" == "0" ]]; then
+      pass "T9/AC11 independently re-derived tree (n=$tree_n, >=3 by construction) is fully inside the scope's cgroup.procs"
     else
-      fail "T9/AC11 tree adoption: independently derived n=$tree_n, $missing_pids PID(s) absent from the scope"
+      fail "T9/AC11 tree adoption: independently derived n=$tree_n (need >=3), $missing_pids PID(s) absent from the scope:
+$(printf '%s\n' "$missing_list" | head -5 | while IFS= read -r m; do
+    [[ -z "$m" ]] && continue
+    printf '      pid %s comm=%s cgroup=%s\n' "$m" "$(cat /proc/$m/comm 2>/dev/null)" "$(cut -d: -f3 < /proc/$m/cgroup 2>/dev/null)"
+  done)"
     fi
 
     # AC18 — re-entry re-sweep adopts a child spawned AFTER first adoption.

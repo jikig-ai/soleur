@@ -466,8 +466,16 @@ Nothing was applied — this session is UNPROTECTED. To restore the shipped valu
     "BindsTo" "as" 1 "$terminal_scope" \
     "After" "as" 1 "$terminal_scope" \
     "Description" "s" "Soleur agent session $claude_pid" \
+    0 \
     >/dev/null 2>&1
   local start_rc=$?
+  # ^ That trailing `0` is the empty `aux` array of the signature
+  # `ssa(sv)a(sa(sv))`. Omitting it makes busctl fail with "Too few parameters
+  # for signature" — and because this hook redirects busctl's stdout AND stderr
+  # (the job object path would otherwise land in session context), the failure is
+  # invisible: the run falls through to the re-entry branch, invents a
+  # PID-reuse-disambiguated scope name, and every subsequent readback is empty.
+  # Caught only by the membership verification below.
 
   if (( start_rc != 0 )); then
     # Unit already exists (the normal re-entry case) — OR a stale scope left
@@ -492,6 +500,7 @@ Nothing was applied — this session is UNPROTECTED. To restore the shipped valu
         "BindsTo" "as" 1 "$terminal_scope" \
         "After" "as" 1 "$terminal_scope" \
         "Description" "s" "Soleur agent session $claude_pid" \
+        0 \
         >/dev/null 2>&1
     else
       # Ours. Read attribution BEFORE refreshing, then refresh caps in place —
