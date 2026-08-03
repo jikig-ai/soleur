@@ -381,7 +381,7 @@ jobs:
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[TOKEN DRIFT] A Cloudflare token rotation did not propagate to Doppler'
-          body: '<p><strong>At least one Cloudflare token value in Doppler is no longer accepted by Cloudflare.</strong></p><p>Terraform will NOT fix this on its own: the <code>doppler_secret</code> resources carry <code>lifecycle.ignore_changes = [value]</code>, so <code>terraform apply</code> reports "No changes" while the stale value keeps being served. Set the live value on the <code>prd</code> ROOT config — branch configs inherit it.</p><p>This matters for releases: the registry-push Access service token is what lets CI reach the zot registry, and zot is the only registry production can pull from. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> to see which key in which config is stale.</p><p>Additional finding(s) from this same run that are NOT about a stale value: <code>${{ steps.token_drift.outputs.causes }}</code> (<code>-</code> means none). The verdict ladder reports one headline state; these are the others.</p><p><em>Scan coverage: <code>${{ steps.token_drift.outputs.coverage }}</code> (${{ steps.token_drift.outputs.configs }} Doppler config(s) read). Coverage counts configs this token could READ, which is not the number that EXISTS — so even <code>multi-config</code> is a lower bound, and <code>single-config</code> cannot detect a value stale only in a config it never read.</em></p>'
+          body: '<p><strong>At least one Cloudflare token value in Doppler is no longer accepted by Cloudflare.</strong></p><p>Terraform will NOT fix this on its own: the <code>doppler_secret</code> resources carry <code>lifecycle.ignore_changes = [value]</code>, so <code>terraform apply</code> reports "No changes" while the stale value keeps being served. Set the live value in <strong>every config the run names</strong> — a Doppler config does NOT inherit a value from its environment root, so setting <code>prd</code> root alone repairs nothing but <code>prd</code> root. Measured 2026-08-02: <code>CF_API_TOKEN_DNS_EDIT</code> is carried independently by 7 configs, and <code>prd_terraform</code> does not carry the <code>REGISTRY_PUSH_ACCESS_TOKEN_*</code> pair that <code>prd</code> root does.</p><p>This matters for releases: the registry-push Access service token is what lets CI reach the zot registry, and zot is the only registry production can pull from. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> to see which key in which config is stale.</p><p>Additional finding(s) from this same run that are NOT about a stale value: <code>${{ steps.token_drift.outputs.causes }}</code> (<code>-</code> means none). The verdict ladder reports one headline state; these are the others.</p><p><em>Scan coverage: <code>${{ steps.token_drift.outputs.coverage }}</code> (${{ steps.token_drift.outputs.configs }} Doppler config(s) read). Coverage counts configs this token could READ, which is not the number that EXISTS — so even <code>multi-config</code> is a lower bound, and <code>single-config</code> cannot detect a value stale only in a config it never read.</em></p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       # Fires on `causes`, NOT on `verdict`, and therefore independently of the first-match
@@ -820,7 +820,13 @@ jobs:
             echo "\`lifecycle.ignore_changes = [value]\`, so \`terraform apply\` reports \"No changes\""
             echo "while the stale value keeps being served."
             echo ""
-            echo "- Set the live value on the \`prd\` **ROOT** config; branch configs inherit it."
+            echo "- Set the live value in **every config listed above**. A Doppler config does"
+            echo "  **not** inherit a value from its environment root, so setting \`prd\` root"
+            echo "  alone repairs \`prd\` root and nothing else. Measured 2026-08-02:"
+            echo "  \`CF_API_TOKEN_DNS_EDIT\` is carried independently by 7 configs, and"
+            echo "  \`prd_terraform\` does not carry the \`REGISTRY_PUSH_ACCESS_TOKEN_*\` pair that"
+            echo "  \`prd\` root does — the two key sets are not in a superset relation in either"
+            echo "  direction."
             echo "- For \`CI_SSH_ACCESS_TOKEN_*\` specifically, re-mint in-band (copy-paste as-is):"
             echo "  \`\`\`"
             echo "  gh workflow run apply-web-platform-infra.yml \\"
@@ -831,7 +837,7 @@ jobs:
             echo "  Note this publishes to \`prd_terraform\` only. If the detector reports a stale"
             echo "  copy in any OTHER config, re-minting will not clear it — fix that copy directly."
             echo ""
-            echo "_Auto-filed by [scheduled-terraform-drift](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-terraform-drift.yml). Close it when the detector reports \`verdict: clean\` **at \`coverage: multi-config\`** — a \`clean\` from a single-config scan is scoped to the configs it read, not to the fleet._"
+            echo "_Auto-filed by [scheduled-terraform-drift](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-terraform-drift.yml). Close it when the detector reports \`verdict: clean\` **at \`coverage: at-floor\`** — a \`clean\` from a \`degraded\` scan is scoped to the configs it read, not to the fleet, and \`at-floor\` is the state that says the credential reached at least every config the scan demanded._"
           } > "${RUNNER_TEMP}/token-drift-issue.md"
 
           EXISTING=$(gh issue list --label "$LABEL" --state open --limit 100 \
