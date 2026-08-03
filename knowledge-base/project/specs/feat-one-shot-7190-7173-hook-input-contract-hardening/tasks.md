@@ -24,7 +24,7 @@ survivors on main and are now caught, 0 survive.**
   surrogate in a *sibling* field while the command stayed a clean `rm -rf $HOME`) and an
   availability bug (an unsatisfiable `$t == null` conjunct denied every payload with an
   absent or null `tool_input`). Both fixed in all three mirror hooks, both with parity
-  coverage. ADR-162 records the reason-class decision the issue actually asked for.
+  coverage. ADR-165 records the reason-class decision the issue actually asked for.
 - **(a) advisory-hook migration — descoped to #7219.** The six genuinely-advisory hooks
   and `security_reminder_hook.py` now carry per-hook exemption reasons in the README, so
   they are documented rather than residue. The four **gating** hooks are not exempt on
@@ -140,9 +140,9 @@ now exits outside {0, 2}, so the runtime's treatment of other codes is not load-
       trailing separator.
 - [x] 3.9 Suite green; record delta vs Phase 0.1.
 
-## Phase 4 — ADR-162 + C4 (contract — precedes Phases 5–6)
+## Phase 4 — ADR-165 + C4 (contract — precedes Phases 5–6)
 
-- [x] 4.1 Write `ADR-162-what-ask-means-on-a-harness-with-no-ask-state.md`.
+- [x] 4.1 Write `ADR-165-what-ask-means-on-a-harness-with-no-ask-state.md`.
       Re-verify the ordinal is still free against `origin/main` first.
 - [~] 4.2 D1: one program, widened slots, per-slot flag vector, fixed named group
       predicates. Preserve: one fork, status-before-values, `catch {}`→object, empty
@@ -183,10 +183,10 @@ now exits outside {0, 2}, so the runtime's treatment of other codes is not load-
       probe-failure fallback); uniform-deny-on-rc-1 (behavior change on 3 of 5 classes).
 - [x] 4.6 C4: amend `model.c4:68` `engine.hooks` description to name the mirror, its
       `.working_dir`/`.tool_input.path` envelope, `exit 2` + `{"decision":"deny"}`, the
-      absence of `ask`, and ADR-162. Amend the `claude -> hooks` edge (:390) if D2
+      absence of `ask`, and ADR-165. Amend the `claude -> hooks` edge (:390) if D2
       changes what "the responder" means. NO new element; NO `views.c4` change.
 - [x] 4.7 Run `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts`.
-- [x] 4.8 Forward pointers from ADR-156 and ADR-157 to ADR-162.
+- [x] 4.8 Forward pointers from ADR-156 and ADR-157 to ADR-165.
 
 ## Phase 5 — CC-side migration (#7173a)
 
@@ -195,7 +195,7 @@ now exits outside {0, 2}, so the runtime's treatment of other codes is not load-
       `tool_input` for these tools? Record the outcome; let it SIZE the migration set.
 - [~] 5.2 **`ask`-honored probe (precondition).** `DEFER-DECISION-PAYLOAD-SHAPE.md:5`
       probed only a `PreToolUse(Bash)` stub. Probe `mcp__pencil__open_document` and
-      `CronCreate`. If not honored → fall back to ADR-162 D2's recorded alternative or
+      `CronCreate`. If not honored → fall back to ADR-165 D2's recorded alternative or
       descope those two hooks. Do NOT build on an unverified harness invariant.
 - [~] 5.3 Helper D1: widen `_HOOK_INPUT_JQ`; replace record 0 with the per-slot flag
       vector; add group predicates; update the slot-count detector (`n != 6` → new count).
@@ -245,7 +245,7 @@ now exits outside {0, 2}, so the runtime's treatment of other codes is not load-
 
 - [x] 6.0 **[v3/F1 — PRECONDITION].** Probe how the OpenHands runtime treats a hook exit
       code that is neither 0 nor 2. Its answer decides whether F1 is a live guard bypass or
-      a loud abort. ADR-162 must assert nothing about it until this returns.
+      a loud abort. ADR-165 must assert nothing about it until this returns.
 - [x] 6.1a **[v3/F1 — BLOCKING].** `.openhands/hooks/guardrails.sh:19` runs
       `COMMAND=$(… | jq -r …)` under `set -euo pipefail` with NO `|| true`, so any document
       jq rejects kills the script BEFORE the ADR-156 shape check at :51-60 — measured

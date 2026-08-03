@@ -109,7 +109,19 @@ allowed, so the case **passed for the wrong reason**. The pin only became real o
 ## ADR ordinals collide when a branch is in flight, and `grep -c` will not tell you
 
 The plan's provisional ordinal (158) was taken. I renumbered to **160** — taken by a PR
-that landed mid-session. Then **161** — taken by another. Landed on 162.
+that landed mid-session. Then **161** — taken by another. Then **162** — and that one was
+still free when the ordinal gate ran at ship. It was taken by the time the branch rebased
+minutes later, along with 163 and 164. Landed on **165**.
+
+That fourth collision is the instructive one, because it defeats the obvious fix. Checking
+`max(existing)+1` is necessary but **not sufficient**: the answer is only true for as long
+as `origin/main` does not move, and on a busy repo that window is shorter than the ship
+pipeline itself. The ordinal is not a value you look up once — it is a claim with an
+expiry, and the only safe place to re-derive it is *after* the final rebase, immediately
+before the merge. The gate that caught it was not the ordinal check at all; it was the
+**rebase conflict** in `model.c4`, where main's ADR-162 citation and mine collided in the
+same paragraph. Had the two edits not touched the same file, the collision would have
+merged clean and shipped two different ADRs under one number.
 
 I nearly shipped the second collision because I read `grep -c` wrong: it returned `1` (a
 match *count*), and my `|| echo "FREE"` fallback only fires when grep **fails**, so a
@@ -146,14 +158,17 @@ guidance, check the guidance names something the recipient can actually do.**
   the result.
 - Assert every mutation landed against a pristine backup; baseline-identical is UN-RUN.
 - For a SIGPIPE race: exceed 64 KiB, pin the real binary, feed from a file.
-- Next ADR ordinal = `max(existing) + 1`, re-derived at ship, against a freshly fetched
-  `origin/main`.
+- Next ADR ordinal = `max(existing) + 1`, re-derived against a freshly fetched
+  `origin/main` **after the final rebase**, not once at the start of ship. On a busy repo
+  the answer expires inside the pipeline — it did here, twice.
 
 ## Session Errors
 
-1. **ADR ordinal collided three times** (158 → 160 → 161 → 162), two of them discovered
-   mid-session. **Prevention:** derive from `max+1` against a fresh fetch at ship time; the
-   plan's ordinal is provisional by construction.
+1. **ADR ordinal collided four times** (158 → 160 → 161 → 162 → 165), three of them discovered
+   mid-session, the last AFTER the ship-time ordinal gate had already passed.
+   **Prevention:** `max+1` against a fresh fetch is necessary but not sufficient — the
+   answer expires the moment `origin/main` moves. Re-derive it after the FINAL rebase,
+   immediately before merge, not once at the top of ship.
 2. **Misread `grep -c` as a free/taken signal** — a match count with a failure-only
    fallback. **Prevention:** never use a presence check to establish absence; print and read
    the count itself.

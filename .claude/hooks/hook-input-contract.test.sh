@@ -108,6 +108,25 @@ SIBLING8=(
 WRITE2=( worktree-write-guard iac-plan-write-guard )
 INSCOPE20=( "${EVAL10[@]}" "${SIBLING8[@]}" "${WRITE2[@]}" )
 
+# REWRITERS — the THIRD disposition (ADR-162, #7165). These source the same
+# helper and are bound by the same trust boundary, but two of the guard
+# properties do not apply to them BY CONSTRUCTION, so they are classified
+# rather than listed in INSCOPE20:
+#
+#   * They do not call `hook_input_should_ask`. Asking is the designated
+#     responder's job, and a rewriter's failed parse costs a missing
+#     OPTIMIZATION, not a missing safety check — escalating would spend an
+#     operator prompt on a non-event.
+#   * They are NOT silent on stdout. Emitting `updatedInput` is the entire
+#     point; A3's property (iv) asserts the opposite for guards.
+#
+# This is a classification, not an escape hatch. a18b_rewriter_contract below
+# holds every member to the parts of the contract that DO apply — fail-hard
+# source, a real parse gate, a fault record, and exit 0 on every payload class.
+# Adding a name here therefore buys exemption from exactly two properties and
+# nothing else; a guard misfiled as a rewriter still fails A18b.
+REWRITERS=( grep-rewrite )
+
 # The designated responder as a named constant. NOT a single source of truth —
 # an earlier version of this comment claimed that and it is measurably false:
 # ~24 hardcoded `guardrails` literals remain in this file, including
@@ -144,8 +163,11 @@ a18_inscope_closure() {
              "$SCRIPT_DIR"/*.sh 2>/dev/null | grep -v '\.test\.sh$' || true) \
     | sort -u > "$discovered"
 
+  # The claim is about the WHOLE trust boundary, so the listed set is
+  # INSCOPE20 ∪ REWRITERS. A new hook that sources the helper still fails this
+  # until it is classified into one of the two.
   local listed; listed="$(mktemp -p "$HIC_TMPROOT")"
-  printf '%s\n' "${INSCOPE20[@]}" | sort -u > "$listed"
+  printf '%s\n' "${INSCOPE20[@]}" "${REWRITERS[@]}" | sort -u > "$listed"
 
   # Non-vacuity: an empty discovery would make both differences trivially empty.
   local n; n="$(grep -c . "$discovered" || true)"
@@ -157,8 +179,82 @@ a18_inscope_closure() {
   ok "A18 non-vacuity control: $n hook(s) discovered sourcing lib/hook-input.sh"
   want "A18 every hook that sources the helper is in INSCOPE20" "" \
     "$(comm -23 "$discovered" "$listed" | tr '\n' ' ' | sed 's/ $//')"
-  want "A18 every INSCOPE20 member still sources the helper" "" \
+  want "A18 every listed member (INSCOPE20 + REWRITERS) still sources the helper" "" \
     "$(comm -13 "$discovered" "$listed" | tr '\n' ' ' | sed 's/ $//')"
+}
+
+# A18b — the exemption is bounded. A rewriter is excused from should_ask and
+# from stdout-silence; it is excused from NOTHING else. Without this, REWRITERS
+# would be a one-line way to delete a hook from the entire suite — the exact
+# vacuity A18 exists to close, reintroduced through the classification.
+a18b_rewriter_contract() {
+  local hook src fail_soft=() no_gate=() bad_rc=() unrecorded=() no_rewrite=() sandbox rc payload rids src_lines
+  for hook in "${REWRITERS[@]}"; do
+    src="$SCRIPT_DIR/$hook.sh"
+    if [[ ! -f "$src" ]]; then no_gate+=("$hook (file missing)"); continue; fi
+
+    # (i) fail-hard source — a `|| true` here is defect 2 verbatim.
+    # Uses A13's two-step form verbatim, and for two reasons. A single fused
+    # regex written for this assertion anchored the `||` directly after
+    # `hook-input.sh` and so did NOT match the real-world line, which carries a
+    # closing quote first (`source "$D/lib/hook-input.sh" || true`) — measured:
+    # the mutation landed and this assertion still reported clean. It is also a
+    # herestring, not `producer | grep -q`, per the SIGPIPE note at A13.
+    src_lines="$(grep -E 'source .*lib/hook-input\.sh' "$src" || true)"
+    [[ -n "$src_lines" ]] \
+      && grep -qE '\|\|[[:space:]]*(true|:)|2>/dev/null' <<<"$src_lines" \
+      && fail_soft+=("$hook")
+
+    # (ii) a real parse gate at the call site (comments stripped, per A13).
+    sed 's/[[:space:]]*#.*$//' "$src" | grep -q 'hook_parse_input' \
+      || no_gate+=("$hook: no hook_parse_input call")
+    sed 's/[[:space:]]*#.*$//' "$src" | grep -q 'hook_input_report' \
+      || no_gate+=("$hook: no hook_input_report call")
+
+    # (iii) exit 0 on every payload class — a non-zero exit from a PreToolUse
+    # hook BLOCKS the tool call, which for a rewriter is a pure regression.
+    for payload in "$MALFORMED_PAYLOAD" "$HAPPY_PAYLOAD"; do
+      rc="$(rc_for "$hook" "$payload")"
+      [[ "$rc" == 0 ]] || bad_rc+=("$hook rc=$rc")
+    done
+    rc="$(rc_for "$hook" "$MALFORMED_PAYLOAD" PATH="$(make_jqless_path)")"
+    [[ "$rc" == 0 ]] || bad_rc+=("$hook rc=$rc (jq missing)")
+
+    # (iv) the fault is RECORDED — silence plus exit 0 is defect 2.
+    sandbox="$(mktemp -d -p "$HIC_TMPROOT")"
+    ( cd "$sandbox" && printf '%s' "$MALFORMED_PAYLOAD" \
+        | INCIDENTS_REPO_ROOT="$sandbox" bash "$src" >/dev/null 2>&1 )
+    rids=""
+    [[ -f "$sandbox/.claude/.rule-incidents.jsonl" ]] \
+      && rids="$(jq -r '.rule_id' < "$sandbox/.claude/.rule-incidents.jsonl" 2>/dev/null || true)"
+    grep -qE '^hook-input-' <<<"$rids" || unrecorded+=("$hook")
+    rm -rf "$sandbox"
+  done
+
+  # (v) POSITIVE IDENTITY — the member actually rewrites.
+  # Properties (i)-(iv) are all satisfied by a well-behaved GUARD too, so on
+  # their own they do not bound the classification at all: measured, adding
+  # `no-memory-write` to REWRITERS left the suite at a full green. An earlier
+  # version of this comment claimed the opposite. What separates the two
+  # classes is the third disposition itself — a rewriter emits
+  # `hookSpecificOutput.updatedInput`; a guard never does. Assert that, and
+  # moving a guard into REWRITERS to silence A18 costs a failure here instead.
+  local emitted
+  for hook in "${REWRITERS[@]}"; do
+    [[ -f "$SCRIPT_DIR/$hook.sh" ]] || continue
+    sandbox="$(mktemp -d -p "$HIC_TMPROOT")"
+    emitted="$(cd "$sandbox" && printf '%s' "$REWRITE_PROBE_PAYLOAD" \
+      | INCIDENTS_REPO_ROOT="$sandbox" bash "$SCRIPT_DIR/$hook.sh" 2>/dev/null || true)"
+    rm -rf "$sandbox"
+    jq -e '.hookSpecificOutput.updatedInput' <<<"$emitted" >/dev/null 2>&1 \
+      || no_rewrite+=("$hook")
+  done
+  want "A18b every rewriter EMITS updatedInput (a guard listed here fails)" "" "${no_rewrite[*]-}"
+
+  want "A18b rewriters source the helper FAIL-HARD" "" "${fail_soft[*]-}"
+  want "A18b rewriters run a real parse gate" "" "${no_gate[*]-}"
+  want "A18b rewriters exit 0 on unparseable, happy and jq-missing" "" "${bad_rc[*]-}"
+  want "A18b rewriters RECORD the fault (silent exit 0 is defect 2)" "" "${unrecorded[*]-}"
 }
 
 # Run a hook from a NON-GIT temp CWD so the orthogonal, branch-dependent
@@ -243,6 +339,12 @@ HAPPY_PAYLOAD="$(jq -nc '{tool_name:"Bash", tool_input:{command:"echo hello"}, c
 # the ARRAY_STASH `nonstring` class so A16 and the Phase-2 loop cover disjoint
 # ground rather than duplicating one class across 40 invocations.
 MALFORMED_PAYLOAD='garbage {{'
+
+# A well-formed envelope carrying a command a rewriter acts on. Used by A18b's
+# positive-identity property. The `grep` token is what grep-rewrite gates on;
+# a future rewriter with a different trigger needs its own probe here, and the
+# A18b failure message names the hook that emitted nothing.
+REWRITE_PROBE_PAYLOAD="$(jq -nc '{tool_name:"Bash", tool_input:{command:"grep -rn needle ."}, cwd:"/w", session_id:"s"}')"
 # A MIXED payload: a legitimate STRING command (which therefore survives into the
 # slots and could be leaked) plus an unrelated NON-STRING field to trip the type
 # assertion. ARRAY_STASH cannot serve this purpose — its only notable field is
@@ -1147,6 +1249,7 @@ a15_shell_state_hygiene
 a16_exit_codes
 a17_value_fidelity
 a18_inscope_closure
+a18b_rewriter_contract
 
 summary
 

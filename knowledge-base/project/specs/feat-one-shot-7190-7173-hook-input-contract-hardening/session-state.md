@@ -6,14 +6,14 @@
 
 ### Errors
 None. CWD verified on first call. All halt gates (4.5–4.10) passed. Every path citation
-resolves except `ADR-162-*.md`, which this plan creates.
+resolves except `ADR-165-*.md`, which this plan creates.
 
 ### Decisions
 - **Item 1 reframed from the issue's premise.** The Claude Code hooks reference shows `exit 2`
   blocks *and discards stdout JSON*, and `exit 1` discards it while the tool proceeds — so
   `exit 0` is the precondition for the whole ADR-157 posture, not a convention. Measured: all
   20 hooks exit 0 today, asserted nowhere.
-- **ADR-162 replaced three defective v1 clauses.** The auxiliary jq program was cut (two
+- **ADR-165 replaced three defective v1 clauses.** The auxiliary jq program was cut (two
   migration targets sit on `Write`, so it would take a call from 5 forks to 9); the boolean
   group was cut (`durable-reminder` already reads booleans safely); per-matcher responder
   election *in the helper* was cut (a hook never receives its matcher, and `.tool_name` is

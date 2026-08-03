@@ -23,9 +23,9 @@ INPUT=$(cat)
 # working_dir, so on that payload the old text asked the agent to fix
 # something it does not produce - and guardrails.sh is registered on BOTH
 # matchers, so it would deny every tool the agent has, with no way forward.
-UNPARSEABLE_REASON="BLOCKED: the tool-call envelope did not parse (ADR-156/ADR-162), so this hook's guards did not run and the call is refused rather than silently permitted. The usual cause is a byte in one of your tool arguments that cannot be encoded as JSON text - most often a lone surrogate from non-UTF-8 file content. Re-send with that value base64- or hex-encoded, or with the offending bytes dropped. If none of your arguments carry such a value the envelope was malformed in transport, which you did not author; re-sending unchanged may succeed."
+UNPARSEABLE_REASON="BLOCKED: the tool-call envelope did not parse (ADR-156/ADR-165), so this hook's guards did not run and the call is refused rather than silently permitted. The usual cause is a byte in one of your tool arguments that cannot be encoded as JSON text - most often a lone surrogate from non-UTF-8 file content. Re-send with that value base64- or hex-encoded, or with the offending bytes dropped. If none of your arguments carry such a value the envelope was malformed in transport, which you did not author; re-sending unchanged may succeed."
 
-# --- reason-class split (ADR-162) ----------------------------------------
+# --- reason-class split (ADR-165) ----------------------------------------
 # jq MISSING fails OPEN, loudly: ADR-157:115 rejects fail-closed because the
 # repair for a broken PATH or a missing jq is itself a tool call that would also
 # be denied, and that bites harder here — this harness has no `ask`, no operator

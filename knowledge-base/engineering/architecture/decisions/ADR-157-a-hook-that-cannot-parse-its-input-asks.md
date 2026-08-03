@@ -11,7 +11,7 @@
   `.claude/hooks/DEFER-DECISION-PAYLOAD-SHAPE.md` (the probe establishing `ask` is honored —
   note it probed a `PreToolUse(Bash)` stub only, so `ask` on `mcp__*` / `CronCreate` matchers
   remains unestablished),
-  [ADR-162](./ADR-162-what-ask-means-on-a-harness-with-no-ask-state.md) (what this posture becomes
+  [ADR-165](./ADR-165-what-ask-means-on-a-harness-with-no-ask-state.md) (what this posture becomes
   on a harness with no `ask` state, and why `jq_missing` must NOT deny there either)
 - **Supersedes:** the silent-absorb reading of
   `knowledge-base/project/learnings/2026-03-18-stop-hook-jq-invalid-json-guard.md` — see below

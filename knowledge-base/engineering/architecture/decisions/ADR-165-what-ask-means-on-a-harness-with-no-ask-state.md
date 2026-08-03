@@ -1,4 +1,4 @@
-# ADR-162 — What `ask` means on a harness that has no `ask` state
+# ADR-165 — What `ask` means on a harness that has no `ask` state
 
 - **Status:** accepted
 - **Date:** 2026-08-03
