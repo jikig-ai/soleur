@@ -1086,19 +1086,36 @@ resource "sentry_cron_monitor" "scheduled_heartbeat_reconcile" {
 # only "did the checker run at all". Without it, a disabled workflow or a dropped schedule
 # would be indistinguishable from a permanently CLEAN production.
 #
-# checkin_margin_minutes = 30 == the tick interval, following the live high-frequency
-# GHA-`schedule:`-fired precedent in this file (scheduled_inngest_health */15 -> 15,
-# zot_restart_loop_alarm */30 -> 30) and its rationale: margin == interval MAXIMIZES jitter
-# tolerance (a run up to one full interval late still checks in, so ordinary GHA dispatch
-# drift cannot false-page) while a genuinely dark alarm still pages once the window closes.
-# The 480-minute figure from #4772 governed the TWICE-DAILY cohort and is marked superseded
-# in this file; it does not apply to a */30 schedule.
+# checkin_margin_minutes = 360, sized to MEASURED delivery rather than to the nominal
+# interval. An earlier revision used margin == interval (30) on the strength of the
+# `margin == interval` rationale stated elsewhere in this file. That rationale is refuted by
+# this repo's own dispatch history, so it is deliberately NOT followed here:
+#
+#   $ gh run list --workflow=scheduled-zot-restart-loop.yml --event=schedule --limit 60
+#     n=59 consecutive scheduled runs of the */30 sibling
+#     min=61  median=114  max=243  (minutes between runs)
+#     gaps within the 60-minute (tick + 30 margin) window: 0 of 59
+#
+# GitHub drops scheduled ticks on this repo heavily enough that a */30 cron delivers ~11
+# runs/day, and the */15 sibling delivers the SAME ~11. A 30-minute margin would therefore
+# put this monitor in a missed-check-in state on essentially every tick: the founder's ONE
+# page (Sentry routes cron failures via New/ExistingHighPriorityIssueCondition, so repeats
+# are silent — #7142) would be spent on jitter within the first hours, after which a
+# genuinely disabled workflow or dropped schedule is indistinguishable from the standing
+# noise. That is verbatim the failure this monitor exists to prevent, caused by its own
+# margin. The two sibling monitors cited by the old rationale carry the same defect; it is
+# pre-existing and out of scope here, but their constants are not evidence.
+#
+# 360 exceeds the measured max gap (243) with headroom, and matches the jitter the checker's
+# own header cites (median 80-134 late, max 339). A truly dark alarm still pages within ~6h.
+# The workflow keeps */30: extra ticks cost nothing on a public repo and improve detection
+# latency whenever GitHub does deliver.
 resource "sentry_cron_monitor" "scheduled_prod_version_drift" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-prod-version-drift"
   schedule                = { crontab = "*/30 * * * *" }
-  checkin_margin_minutes  = 30
+  checkin_margin_minutes  = 360
   max_runtime_minutes     = 10
   failure_issue_threshold = 1
   recovery_threshold      = 1

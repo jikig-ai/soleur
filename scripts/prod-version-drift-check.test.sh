@@ -53,9 +53,21 @@ PARTS="${DRIFT_TEST_PARTS:-ABC}"
 
 PASS=0
 FAIL=0
-# Anti-vacuity floor: if a future edit deletes an assertion block, the suite must fail even
-# though nothing "failed". Raise this deliberately when adding coverage.
-MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-58}"
+# Anti-vacuity floors: if a future edit deletes an assertion block, the suite must fail even
+# though nothing "failed". Raise these deliberately when adding coverage.
+#
+# PER-PART, not just global. A single global floor set well below the real total is slack that
+# hides a whole part: at 58 against 79 actual, `if false; then` on the Part C dispatch deleted
+# the entire mutation battery -- the suite's own anti-vacuity mechanism -- and still exited 0.
+# A part-level floor makes that a loud "Part C shrank" instead of a silent pass, and gives a
+# better failure message than a total ever could.
+MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-102}"
+MIN_A="${DRIFT_MIN_A:-53}"
+MIN_B="${DRIFT_MIN_B:-38}"
+MIN_C="${DRIFT_MIN_C:-11}"
+COUNT_A=0
+COUNT_B=0
+COUNT_C=0
 
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() {
@@ -278,14 +290,123 @@ run_part_a() {
   _classify "$OK_JSON" 0 1 "$((NOW - THRESH_S))" 0 "$NOW"
   assert_eq "A18 age EXACTLY at threshold -> DRIFT_PENDING (strict >, no boundary page)" "0" "$rc"
 
-  # A future-dated commit (clock skew) must not underflow into a huge age and page.
+  # --- A19/A19b: an implausible clock is a FAILURE TO MEASURE, both directions ----------
+  # A previous revision asserted `rc=0` here ("a future-dated commit must not underflow into a
+  # huge age and page") and so pinned the alarm's own silence as intended behaviour. The
+  # underflow concern was real, the remedy was backwards: %ct is committer-settable, the clock
+  # takes the numeric MINIMUM, so one bad timestamp decides the verdict. Future-dated meant a
+  # negative age that can never exceed the threshold -- silent for as long as the skew lasted,
+  # with the heartbeat checking in `ok`. Both directions must reach CHECK_ERROR, which alerts on
+  # its own channel and names the clock rather than production.
   _classify "$OK_JSON" 0 1 "$((NOW + 600))" 0 "$NOW"
-  assert_eq "A19 future-dated commit (clock skew) -> not a page" "0" "$rc"
+  assert_eq "A19 future-dated commit -> CHECK_ERROR, never a silent pass" "2" "$rc"
+  assert_eq "A19b -> reason names the future date" "future_dated_commit" "$DRIFT_REASON"
+
+  # The converse: the minimum-taking clock means one absurdly-old commit (epoch 0, an import, a
+  # mis-rebase) would otherwise page instantly regardless of real staleness.
+  _classify "$OK_JSON" 0 1 "$((NOW - 200 * 24 * 3600))" 0 "$NOW"
+  assert_eq "A19c absurdly-old commit date -> CHECK_ERROR, not an instant page" "2" "$rc"
+  assert_eq "A19d -> reason names the implausible date" "implausible_commit_date" "$DRIFT_REASON"
+
+  # ...and the guard must not swallow a REAL sustained drift just inside the bound. Without this
+  # row the two fixtures above are satisfied by a guard that rejects everything.
+  _classify "$OK_JSON" 0 1 "$((NOW - 3 * 24 * 3600))" 0 "$NOW"
+  assert_eq "A19e a genuinely 3-day-old undeployed commit still pages (guard is not a blanket)" "1" "$rc"
+  assert_eq "A19f -> DRIFT_SUSTAINED" "DRIFT_SUSTAINED" "$DRIFT_VERDICT"
 
   # Ordering: an evaluation failure outranks a drift signal. If we could not read prod, we do
   # not get to claim we know prod is stale.
   _classify "" 28 5 "$((NOW - THRESH_S - 60))" 0 "$NOW"
   assert_eq "A20 curl failure outranks a stale-looking count -> CHECK_ERROR" "2" "$rc"
+
+  run_main_smoke
+}
+
+# --- A21+: main() ------------------------------------------------------------------------
+# Until this existed, ZERO assertions executed main(): Part A drove classify_drift and
+# oldest_epoch_from_log directly, and A0 asserted only that sourcing does NOT run main. So the
+# entire I/O half was unpinned, and each of these mutations left the suite fully green:
+#   * repoint the default PROD_HEALTH_URL at staging  -> the alarm monitors the wrong host,
+#     forever, while looking perfectly healthy
+#   * `for attempt in 1 2 3` -> `1`                   -> the retry the check-error step cites as
+#     "what keeps this from being noisy" is gone; one blip files an issue AND emails ops
+#   * rename any DRIFT_*= output key                  -> the workflow greps nothing; issues and
+#     emails ship with empty detail while every alert still fires
+# Driven with curl/git/date stubbed on PATH, so it is hermetic and clock-free.
+run_main_smoke() {
+  local sdir="$TMP/stubs" work="$TMP/mainsmoke"
+  mkdir -p "$sdir" "$work" || { fail "A21 smoke setup" "mkdir rc=0" "failed"; return 0; }
+
+  cat > "$sdir/date" <<'STUB'
+#!/usr/bin/env bash
+echo 1900000000
+STUB
+  cat > "$sdir/git" <<'STUB'
+#!/usr/bin/env bash
+# Emit N `<sha> <ct>` rows per GIT_STUB_ROWS; default none (prod is current).
+[[ -n "${GIT_STUB_FAIL:-}" ]] && exit 128
+for i in $(seq 1 "${GIT_STUB_ROWS:-0}"); do
+  echo "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa$i 1899000000"
+done
+exit 0
+STUB
+  # Fails for the first CURL_STUB_FAILS invocations, then succeeds. The counter file makes the
+  # retry COUNT observable: a single-attempt loop can never reach the success arm.
+  cat > "$sdir/curl" <<'STUB'
+#!/usr/bin/env bash
+n=$(cat "$CURL_COUNT_FILE" 2>/dev/null || echo 0)
+n=$((n + 1)); echo "$n" > "$CURL_COUNT_FILE"
+if [[ "$n" -le "${CURL_STUB_FAILS:-0}" ]]; then exit 7; fi
+printf '{"status":"ok","version":"9.9.9","build_sha":"b35736dedacd0fb4339952af800ac23996dddd28"}'
+STUB
+  chmod +x "$sdir/date" "$sdir/git" "$sdir/curl" || true
+
+  local out rc cnt
+  export CURL_COUNT_FILE="$work/curl.count"
+  # Zero the backoff: these cases drive the REAL retry loop (the count assertions below prove
+  # it), they just must not spend 15s of wall clock each doing it -- 11 battery children pay
+  # this cost too, which took the suite from ~10s to over six minutes.
+  export DRIFT_RETRY_BACKOFF_S=0
+
+  # A21 -- happy path: every documented output key is present, exactly once, and CLEAN.
+  : > "$CURL_COUNT_FILE"
+  out="$(PATH="$sdir:$PATH" CURL_STUB_FAILS=0 GIT_STUB_ROWS=0 bash "$SUT" 2>&1)"; rc=$?
+  assert_eq "A21 main() on a current prod -> exit 0" "0" "$rc"
+  assert_contains "A21b main() emits DRIFT_VERDICT=CLEAN" "^DRIFT_VERDICT=CLEAN$" "$out"
+  local k missing_keys=""
+  for k in DRIFT_VERDICT DRIFT_REASON DRIFT_DETAIL DRIFT_MISSING_COUNT DRIFT_PATHSPEC DRIFT_HEALTH_URL DRIFT_MISSING_SHAS; do
+    printf '%s\n' "$out" | grep -q "^${k}=" || missing_keys="${missing_keys}${k} "
+  done
+  assert_eq "A21c main() emits every documented output key" "" "$missing_keys"
+
+  # A22 -- the retry budget, observed rather than asserted from the source. Two failures then a
+  # success must still reach CLEAN; a loop of one cannot.
+  : > "$CURL_COUNT_FILE"
+  out="$(PATH="$sdir:$PATH" CURL_STUB_FAILS=2 GIT_STUB_ROWS=0 bash "$SUT" 2>&1)"; rc=$?
+  cnt="$(cat "$CURL_COUNT_FILE" 2>/dev/null || echo 0)"
+  assert_eq "A22 main() survives 2 transient curl failures -> exit 0" "0" "$rc"
+  assert_eq "A22b ...having actually retried 3 times" "3" "$cnt"
+
+  # A23 -- exhausted retries fail CLOSED, and the count proves the budget is bounded.
+  : > "$CURL_COUNT_FILE"
+  out="$(PATH="$sdir:$PATH" CURL_STUB_FAILS=99 GIT_STUB_ROWS=0 bash "$SUT" 2>&1)"; rc=$?
+  cnt="$(cat "$CURL_COUNT_FILE" 2>/dev/null || echo 0)"
+  assert_eq "A23 main() with prod unreachable -> CHECK_ERROR (2), never CLEAN" "2" "$rc"
+  assert_eq "A23b ...after exactly 3 attempts, not an unbounded loop" "3" "$cnt"
+
+  # A24 -- a failed range query must reach CHECK_ERROR through main(), not read as CLEAN.
+  : > "$CURL_COUNT_FILE"
+  out="$(PATH="$sdir:$PATH" CURL_STUB_FAILS=0 GIT_STUB_FAIL=1 bash "$SUT" 2>&1)"; rc=$?
+  assert_eq "A24 main() with a failing git range query -> CHECK_ERROR" "2" "$rc"
+
+  # A25 -- the default endpoint. A silent repoint at staging is invisible to every other
+  # assertion here and to the workflow, and the alarm would look healthy forever.
+  : > "$CURL_COUNT_FILE"
+  out="$(PATH="$sdir:$PATH" CURL_STUB_FAILS=0 GIT_STUB_ROWS=0 bash "$SUT" 2>&1)"
+  assert_contains "A25 main() defaults to the PRODUCTION health endpoint" \
+    "^DRIFT_HEALTH_URL=https://app\\.soleur\\.ai/health$" "$out"
+
+  unset CURL_COUNT_FILE DRIFT_RETRY_BACKOFF_S
 }
 
 # ---------------------------------------------------------------------------
@@ -308,6 +429,25 @@ if not isinstance(wf, dict):
 def emit(k, v):
     print("%s=%s" % (k, str(v).replace("\n", "\\n")))
 
+def code(st):
+    # A step run: body with COMMENT LINES REMOVED.
+    #
+    # Every body matcher below reads this, never st["run"] directly. A grep over a raw body
+    # cannot tell code from prose, and that cuts both ways: the ordering pin (B5) false-FAILED
+    # on a comment that named the commands in explanatory order, and any must-not-contain
+    # assertion is satisfiable by prose. The earlier workaround -- rewording the workflow to
+    # avoid tripping the tests -- pointed the coupling the wrong way, making a matcher here a
+    # constraint on how the production artifact may be documented. Strip here instead.
+    #
+    # Deliberately line-based: a hash inside a string literal is not a comment, so only lines
+    # whose first non-space character starts a comment are dropped.
+    #
+    # NOTE: this whole program is a SINGLE-QUOTED bash string, so it must contain no
+    # apostrophes at all -- one would terminate the string and the shell would try to execute
+    # the prose. That is exactly what happened when this docstring was first written.
+    body = st.get("run") or ""
+    return "\n".join(l for l in body.split("\n") if not l.lstrip().startswith("#"))
+
 jobs = wf.get("jobs") or {}
 steps = []
 for jname, job in jobs.items():
@@ -320,11 +460,11 @@ def by_id(sid):
 
 # --- B1: the call site exists, in a job, not buried in a retry loop -----------
 runs = [(j, s) for (j, s) in steps if isinstance(s.get("run"), str)
-        and "prod-version-drift-check.sh" in s["run"]]
+        and re.search(r"(^|[;&|(]|\s)bash\s+scripts/prod-version-drift-check\.sh", code(s), re.M)]
 emit("CALLSITE_COUNT", len(runs))
 if runs:
     emit("CALLSITE_JOB", runs[0][0])
-    body = runs[0][1]["run"]
+    body = code(runs[0][1])
     # A call nested in a poll/retry loop would re-run the checker and mask a transient.
     emit("CALLSITE_IN_LOOP", int(bool(re.search(r"^\s*(while|until|for)\b", body, re.M))))
     emit("CALLSITE_STEP_ID", runs[0][1].get("id", ""))
@@ -342,32 +482,55 @@ def norm(x):
 
 alerting = []   # steps that can notify a human (issue / email), i.e. must never fire when clean
 for (_, s) in steps:
-    body = s.get("run") or ""
+    body = code(s)
     uses = s.get("uses") or ""
     if ("gh issue create" in body or "gh issue comment" in body
             or "api.resend.com" in body or "notify-ops-email" in uses):
         # the close-on-recovery step touches gh issue close, not create/comment
         alerting.append(s)
 emit("ALERT_STEP_COUNT", len(alerting))
+
+# A verdict conjunct is any form that BINDS the step to a non-clean verdict class:
+#   drift        -> exit_code == \x271\x27
+#   cannot-eval  -> exit_code == \x272\x27, or the wider "not 0 and not 1" form that also
+#                   catches 127/126/124/139 (a checker that never reached its reporting path)
+def _drift_gated(cond):
+    return "exit_code == \x271\x27" in cond
+def _err_gated(cond):
+    if "exit_code == \x272\x27" in cond:
+        return True
+    return ("exit_code != \x270\x27" in cond) and ("exit_code != \x271\x27" in cond)
+
 bad = [norm(s.get("if", "")) for s in alerting
-       if "exit_code == \x271\x27" not in norm(s.get("if", ""))
-       and "exit_code == \x272\x27" not in norm(s.get("if", ""))]
+       if not _drift_gated(norm(s.get("if", ""))) and not _err_gated(norm(s.get("if", "")))]
 emit("ALERT_STEPS_WITHOUT_VERDICT_CONJUNCT", len(bad))
 if bad:
     emit("ALERT_BAD_IF", bad[0])
+emit("ALERT_STEPS_GATED_ON_DRIFT", len([s for s in alerting if _drift_gated(norm(s.get("if", "")))]))
+emit("ALERT_STEPS_GATED_ON_CHECK_ERROR", len([s for s in alerting if _err_gated(norm(s.get("if", "")))]))
 # B4: no alerting step may be reachable on a clean tick.
 emit("ALERT_STEPS_REACHABLE_WHEN_CLEAN",
      len([s for s in alerting if "exit_code == \x270\x27" in norm(s.get("if", ""))]))
 
-closers = [s for (_, s) in steps if "gh issue close" in (s.get("run") or "")]
+closers = [s for (_, s) in steps if "gh issue close" in code(s)]
 emit("CLOSE_STEP_COUNT", len(closers))
-if closers:
-    emit("CLOSE_STEP_IF", norm(closers[0].get("if", "")))
+close_ifs = [norm(s.get("if", "")) for s in closers]
+# The drift issue closes ONLY on a genuinely clean verdict. exit_code == 0 is CLEAN UNION
+# DRIFT_PENDING, so gating on it closed the issue while commits were still undeployed and
+# posted a recovery message contradicted by its own interpolated verdict.
+emit("CLOSE_STEPS_GATED_ON_CLEAN_VERDICT", len([c for c in close_ifs if "verdict == \x27CLEAN\x27" in c]))
+# The check-error issue closes as soon as the checker reaches ANY verdict (exit 0 or 1) --
+# otherwise a fixed misconfiguration could not close while a real drift was sustained.
+emit("CLOSE_STEPS_GATED_ON_EVALUATED", len([c for c in close_ifs
+     if "exit_code == \x270\x27" in c and "exit_code == \x271\x27" in c]))
+# No closer may key on the bare exit-0 form alone (the defect above).
+emit("CLOSE_STEPS_ON_BARE_EXIT0", len([c for c in close_ifs
+     if "exit_code == \x270\x27" in c and "exit_code == \x271\x27" not in c]))
 
 # --- B5: label bootstrap precedes every issue create, in the same body --------
 viol = 0
 for (_, s) in steps:
-    body = s.get("run") or ""
+    body = code(s)
     if "gh issue create" not in body:
         continue
     ci = body.find("gh issue create")
@@ -397,6 +560,62 @@ try:
     emit("RELEASE_SERIAL_TIMEOUT_SUM", tot)
 except Exception as e:
     emit("RELEASE_PARSE_ERROR", str(e).replace("\n", " "))
+
+# --- B11: step-id and env CLOSURE --------------------------------------------
+# Part B previously inspected only `if:` and `uses.with`, so an entire class was unmutated and
+# invisible: renaming `id: notify` (heartbeat then reads a permanently-empty output and reports
+# error on every real drift), pointing the heartbeat at the wrong step id, or deleting an `env:`
+# DECLARATION (the body dies on an unbound var under set -u, so the drift email never sends).
+declared_ids = set(s.get("id") for (_, s) in steps if s.get("id"))
+emit("DECLARED_ID_COUNT", len(declared_ids))
+
+ref_re = re.compile(r"steps\.([A-Za-z0-9_-]+)\.")
+referenced = set()
+for (_, st) in steps:
+    surfaces = [str(st.get("if", ""))]
+    w = st.get("with") or {}
+    if isinstance(w, dict):
+        surfaces.extend(str(v) for v in w.values())
+    e = st.get("env") or {}
+    if isinstance(e, dict):
+        surfaces.extend(str(v) for v in e.values())
+    surfaces.append(st.get("run") or "")
+    for surf in surfaces:
+        referenced.update(ref_re.findall(surf))
+dangling = sorted(referenced - declared_ids)
+emit("DANGLING_STEP_REFS", len(dangling))
+if dangling:
+    emit("DANGLING_STEP_REF_NAMES", ",".join(dangling))
+
+# Every ${VAR} a run body expands must be declared in that step env, or be a runner-provided
+# name. Under `set -uo pipefail` an undeclared one kills the step mid-body.
+RUNNER_PROVIDED = set(["GITHUB_OUTPUT", "RUNNER_TEMP", "GITHUB_ENV", "GITHUB_STEP_SUMMARY",
+                       "GITHUB_WORKSPACE", "HOME", "PATH", "BODY", "TITLE", "EXISTING",
+                       "HTTP_CODE", "PAYLOAD", "list_rc"])
+undeclared = []
+for (_, st) in steps:
+    body = code(st)
+    if not body:
+        continue
+    env_keys = set((st.get("env") or {}).keys())
+    for var in set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)(?::-[^}]*)?\}", body)):
+        if var in env_keys or var in RUNNER_PROVIDED:
+            continue
+        if re.search(r"^\s*(local\s+)?%s=" % var, body, re.M):
+            continue
+        undeclared.append("%s:%s" % (st.get("id") or st.get("name") or "?", var))
+emit("UNDECLARED_ENV_REFS", len(undeclared))
+if undeclared:
+    emit("UNDECLARED_ENV_REF_NAMES", ",".join(sorted(undeclared)[:6]))
+
+# --- B12: the SUT<->workflow output-key contract -------------------------------
+# Owned by NEITHER side before: Part A pinned the globals classify_drift sets, Part B pinned the
+# workflow if: conditions, and nothing pinned that the keys the workflow greps out are the keys
+# the checker prints. Renaming one character on either side ships empty issue and email bodies
+# while every alert still fires, so nothing looks broken.
+if runs:
+    emit("EXTRACTED_KEYS", ",".join(sorted(set(
+        re.findall(r"sed -n .s/\^([A-Z_]+)=//p", code(runs[0][1]))))))
 
 # --- B10: schedule + job timeout ---------------------------------------------
 on = wf.get("on", wf.get(True, {})) or {}
@@ -453,8 +672,15 @@ run_part_b() {
   # B3 -- every alerting step names a verdict. A bare !cancelled() is TRUE on success too,
   # so on its own it would email on every healthy tick, forever.
   assert_contains "B3 at least one alerting step exists" "^[1-9]" "${X_ALERT_STEP_COUNT:-0}"
-  assert_eq "B3b every alerting step carries an exit_code conjunct (never a bare !cancelled())" \
+  assert_eq "B3b every alerting step carries a verdict conjunct (never a bare !cancelled())" \
     "0" "${X_ALERT_STEPS_WITHOUT_VERDICT_CONJUNCT:-1}"
+  # Per-CLASS cardinality. B3 was existence-only (^[1-9]), which meant the whole cannot-evaluate
+  # family -- the third verdict this design exists to make non-silent -- could be DELETED with
+  # the suite green, because the two drift steps still satisfied the existence check.
+  assert_eq "B3c exactly two alerting steps on the drift class (issue + email)" \
+    "2" "${X_ALERT_STEPS_GATED_ON_DRIFT:-0}"
+  assert_eq "B3d exactly two alerting steps on the cannot-evaluate class (issue + email)" \
+    "2" "${X_ALERT_STEPS_GATED_ON_CHECK_ERROR:-0}"
 
   # B4 -- the anti-spam pin, stated as its own property rather than inferred from B3.
   assert_eq "B4 NO alerting step is reachable when exit_code == '0'" \
@@ -465,11 +691,18 @@ run_part_b() {
   assert_eq "B5 every 'gh issue create' is preceded by a label bootstrap in the same body" \
     "0" "${X_ISSUE_CREATE_WITHOUT_PRIOR_LABEL_BOOTSTRAP:-1}"
 
-  # B6 -- close-on-recovery must EXIST and be gated on clean. Without it the issue never
-  # closes and "one issue per episode" is fiction.
-  assert_eq "B6 exactly one close-on-recovery step" "1" "${X_CLOSE_STEP_COUNT:-0}"
-  assert_contains "B6b close-on-recovery is gated on exit_code == '0'" \
-    "exit_code == '0'" "${X_CLOSE_STEP_IF:-}"
+  # B6 -- TWO close steps, one per issue class, each on its own recovery condition. A single
+  # label-wide closer gated on exit_code == '0' produced two distinct falsehoods: it closed the
+  # DRIFT issue on DRIFT_PENDING (missing_count > 0) while posting "no longer missing any
+  # commit", and it could never close a RESOLVED check-error issue during a sustained drift,
+  # because exit is 1 throughout -- so that issue sat open, lying, for the whole incident.
+  assert_eq "B6 exactly two close steps (one per issue class)" "2" "${X_CLOSE_STEP_COUNT:-0}"
+  assert_eq "B6b the drift issue closes only on a genuinely CLEAN verdict" \
+    "1" "${X_CLOSE_STEPS_GATED_ON_CLEAN_VERDICT:-0}"
+  assert_eq "B6c the check-error issue closes as soon as the checker reaches ANY verdict" \
+    "1" "${X_CLOSE_STEPS_GATED_ON_EVALUATED:-0}"
+  assert_eq "B6d no closer keys on the bare exit_code == '0' form (CLEAN UNION DRIFT_PENDING)" \
+    "0" "${X_CLOSE_STEPS_ON_BARE_EXIT0:-1}"
 
   # B7 -- heartbeat semantics. The first conjunct must be the step OUTCOME (#7138's lesson:
   # a step that dies before writing its output leaves the output empty, and an output-only
@@ -478,8 +711,21 @@ run_part_b() {
   assert_eq "B7b heartbeat runs unconditionally (if: always())" "always()" "${X_HEARTBEAT_IF:-}"
   assert_contains "B7c heartbeat status' FIRST conjunct is steps.check.outcome == 'success'" \
     "^\\\$\\{\\{ steps\.check\.outcome == 'success'" "${X_HEARTBEAT_STATUS:-}"
+  # B7d -- the drift arm must still require delivery, AND must accept the dedupe tick. Gating
+  # only on `delivered == '1'` made the monitor report ITSELF broken on every tick after the
+  # first of a real incident: the email step is correctly skipped by the anti-spam gate, and a
+  # skipped step's outputs are EMPTY. That pinned the liveness channel at `error` for exactly
+  # the window in which a genuine checker failure would need to page.
   assert_contains "B7d heartbeat drift arm requires the email actually delivered" \
     "delivered == '1'" "${X_HEARTBEAT_STATUS:-}"
+  assert_contains "B7d2 ...or a positively-identified dedupe tick (no alert was required)" \
+    "first_detection == 'false'" "${X_HEARTBEAT_STATUS:-}"
+  # B7f -- pin the terminal MAPPING, not just the tokens. Swapping the arms
+  # (&& 'error' || 'ok') leaves every token present and makes Sentry report error when healthy
+  # and ok when broken -- a monitor permanently green over a dead alarm, by a different route
+  # than the slug mismatch B10g guards.
+  assert_contains "B7f the ok arm is the allowlist's TRUE branch, error its false branch" \
+    "&& 'ok' \|\| 'error' \}\}$" "${X_HEARTBEAT_STATUS:-}"
   assert_contains "B7e heartbeat is an allowlist ending in 'error'" \
     "'error'" "${X_HEARTBEAT_STATUS:-}"
 
@@ -540,6 +786,17 @@ run_part_b() {
     fail "B10f job timeout <= tick interval" "<= 30" "${X_JOB_TIMEOUT:-<unset>}"
   fi
 
+  # B11 -- closure. Both were entirely unpinned: Part B read only `if:` and `uses.with`.
+  assert_eq "B11 every steps.<id>. reference resolves to a declared step id" \
+    "0" "${X_DANGLING_STEP_REFS:-1}"
+  assert_eq "B11b every \${VAR} a run body expands is declared in that step's env" \
+    "0" "${X_UNDECLARED_ENV_REFS:-1}"
+
+  # B12 -- the output-key contract, owned by neither side until now.
+  assert_eq "B12 the keys the workflow extracts are exactly the keys the checker emits" \
+    "$(grep -oE '^\s*echo "([A-Z_]+)=' "$SUT" | grep -oE '[A-Z_]+' | sort -u | paste -sd, -)" \
+    "${X_EXTRACTED_KEYS:-<none>}"
+
   # B10g -- monitor slug parity. A mismatched slug leaves the Sentry monitor permanently
   # green over a dead alarm: the worst shape available, since it looks like coverage.
   if [[ -f "$MONITORS_TF" ]]; then
@@ -570,13 +827,13 @@ run_child() {
     DRIFT_MUTATION_CHILD=1 \
     DRIFT_TEST_PARTS=AB \
     DRIFT_MIN_ASSERTIONS=0 \
+    DRIFT_MIN_A=0 DRIFT_MIN_B=0 DRIFT_MIN_C=0 \
     DRIFT_TEST_SCRIPT="$sbx/scripts/prod-version-drift-check.sh" \
     DRIFT_TEST_WORKFLOW="$sbx/.github/workflows/scheduled-prod-version-drift.yml" \
     DRIFT_TEST_RELEASE_WORKFLOW="$sbx/.github/workflows/web-platform-release.yml" \
     DRIFT_TEST_MONITORS_TF="$sbx/apps/web-platform/infra/sentry/cron-monitors.tf" \
-    bash "$sbx/scripts/prod-version-drift-check.test.sh" >/dev/null 2>&1
+    bash "$sbx/scripts/prod-version-drift-check.test.sh" 2>&1
   )
-  echo $?
 }
 
 make_sandbox() {
@@ -593,10 +850,17 @@ make_sandbox() {
   return 0
 }
 
-# mutate <axis-name> <target-relative-path> <python-mutator>
-# The mutator reads the file on stdin and writes the mutated text on stdout.
+# mutate_and_assert_red <axis-name> <target-relative-path> <python-mutator> [expected-FAIL-label]
+#
+# The 4th argument is what makes an axis evidence about the PROPERTY rather than about the file
+# merely being broken. Scoring on "the child exited non-zero" accepts any failure, including a
+# mutant that is simply a bash SYNTAX ERROR -- the weakest possible mutant, caught by A0 (is the
+# checker sourceable) rather than by the assertion the axis is named for. Axis 2 was exactly
+# that for its whole life: its regex stopped at the `)` inside `:(exclude)...`, emitting
+# unparseable bash, so it never tested pathspec parity at all. With a label, an axis that stops
+# reaching its own property fails LOUDLY instead of passing for the wrong reason.
 mutate_and_assert_red() {
-  local axis="$1" rel="$2" mutator="$3"
+  local axis="$1" rel="$2" mutator="$3" expect_label="${4:-}"
   local sbx="$TMP/mut-$axis"
   rm -rf "$sbx"
   if ! make_sandbox "$sbx"; then
@@ -618,12 +882,26 @@ mutate_and_assert_red() {
     return 0
   fi
 
-  local rc
-  rc="$(run_child "$sbx")"
-  if [[ "$rc" != "0" ]]; then
-    pass "C-$axis $rel sabotage is caught (child exit $rc)"
-  else
+  local child_out
+  child_out="$(run_child "$sbx")"
+  local rc=$?
+
+  if [[ "$rc" == "0" ]]; then
     fail "C-$axis $rel sabotage is caught" "child exit != 0" "child exit 0 (SURVIVED)"
+    return 0
+  fi
+
+  # A syntax-error mutant trips A0 and nothing else. If the axis names a property, require the
+  # assertion for THAT property to be among the failures.
+  if [[ -n "$expect_label" ]]; then
+    if printf '%s' "$child_out" | grep -q "FAIL: ${expect_label}"; then
+      pass "C-$axis caught by ${expect_label}, the assertion it targets"
+    else
+      fail "C-$axis caught by ${expect_label}" "a FAIL line naming ${expect_label}" \
+        "child failed on something else: $(printf '%s' "$child_out" | grep -m3 '^  FAIL' | tr '\n' ';')"
+    fi
+  else
+    pass "C-$axis $rel sabotage is caught (child exit $rc)"
   fi
 }
 
@@ -642,12 +920,13 @@ run_part_c() {
     fail "C0 control sandbox setup" "rc=0" "setup failed"
     return 0
   fi
-  local crc
-  crc="$(run_child "$sbx")"
+  local cout crc
+  cout="$(run_child "$sbx")"; crc=$?
   if [[ "$crc" == "0" ]]; then
     pass "C0 unmutated control is GREEN (the battery's results are meaningful)"
   else
-    fail "C0 unmutated control is GREEN" "exit 0" "exit $crc — battery VOID, fix the baseline first"
+    fail "C0 unmutated control is GREEN" "exit 0" \
+      "exit $crc — battery VOID, fix the baseline first: $(printf '%s' "$cout" | grep -m3 '^  FAIL' | tr '\n' ';')"
     return 0
   fi
 
@@ -659,15 +938,19 @@ run_part_c() {
 import sys,re
 p=sys.argv[1]; s=open(p).read()
 s=s.replace("prod-version-drift-check.sh","prod-version-drift-check-RENAMED.sh")
-open(p,"w").write(s)'
+open(p,"w").write(s)' "B1 exactly one call to prod-version-drift-check.sh"
 
   # Axis 2 -- replace the pathspec with a bare main-HEAD comparison (the issue body sketch).
   # This is the change that reads as an obvious simplification and false-alarms continuously.
   mutate_and_assert_red "axis2-pathspec-to-head" "$SH" '
 import sys,re
 p=sys.argv[1]; s=open(p).read()
-s=re.sub(r"PATHSPEC=\([^)]*\)", "PATHSPEC=()", s, count=1)
-open(p,"w").write(s)'
+# DOTALL across the multi-line array, and anchored at line start so the match cannot end early
+# on the ")" inside ":(exclude)...". The previous form produced a bash SYNTAX ERROR, so the
+# axis was scored by A0 (sourceable) and never exercised pathspec parity at all.
+s2,n = re.subn(r"(?m)^PATHSPEC=\(.*?\)\n", "PATHSPEC=()\n", s, count=1, flags=re.S)
+assert n == 1, "axis2 mutator did not match the PATHSPEC array"
+open(p,"w").write(s2)' "B8 checker PATHSPEC equals the release job"
 
   # Axis 3 -- drop --first-parent. A no-op today, load-bearing the moment a merge lands.
   #
@@ -683,7 +966,7 @@ for i,l in enumerate(ls):
     if l.lstrip().startswith("#"): continue
     if "--first-parent " in l:
         ls[i]=l.replace("--first-parent ","",1); break
-open(p,"w").write("\n".join(ls))'
+open(p,"w").write("\n".join(ls))' "B8b the checker"
 
   # Axis 4 -- anchor the staleness clock to the NEWEST missing commit. Under a steady commit
   # stream this resets forever and never escalates while prod rots. Code-only, per axis 3.
@@ -694,7 +977,7 @@ for i,l in enumerate(ls):
     if l.lstrip().startswith("#"): continue
     if "sort -n | head -1" in l:
         ls[i]=l.replace("sort -n | head -1","sort -n | tail -1",1); break
-open(p,"w").write("\n".join(ls))'
+open(p,"w").write("\n".join(ls))' "A6 oldest_epoch_from_log picks the OLDEST"
 
   # Axis 5 -- replace an alert condition with a bare !cancelled(). True on success too, so
   # this emails on every healthy tick.
@@ -703,7 +986,7 @@ import sys,re
 p=sys.argv[1]; s=open(p).read()
 s=re.sub(r"\$\{\{ !cancelled\(\) && steps\.check\.outputs\.exit_code == .1. \}\}",
          "${{ !cancelled() }}", s, count=1)
-open(p,"w").write(s)'
+open(p,"w").write(s)' "B3b every alerting step carries a verdict conjunct" "A6 oldest_epoch_from_log picks the OLDEST" "B8b the checker"
 
   # Axis 6 -- delete the label bootstrap. gh issue create --label hard-fails on an undefined
   # label, so the verdict would reach the email channel only.
@@ -711,7 +994,7 @@ open(p,"w").write(s)'
 import sys,re
 p=sys.argv[1]; s=open(p).read()
 s=re.sub(r"^.*gh label create.*\n(^.*--description.*\n)?", "", s, count=1, flags=re.M)
-open(p,"w").write(s)'
+open(p,"w").write(s)' "B5 every"
 
   # Axis 7 -- delete close-on-recovery. The issue then never closes and the standing signal
   # becomes permanent noise the operator learns to ignore.
@@ -719,7 +1002,7 @@ open(p,"w").write(s)'
 import sys
 p=sys.argv[1]; s=open(p).read()
 s=s.replace("gh issue close","gh issue view",1)
-open(p,"w").write(s)'
+open(p,"w").write(s)' "B6 exactly two close steps"
 
   # Axis 8 -- flip the heartbeat first conjunct from the step OUTCOME to the output value.
   # A step that dies before writing its output leaves it empty; an output-only test reads
@@ -728,7 +1011,7 @@ open(p,"w").write(s)'
 import sys
 p=sys.argv[1]; s=open(p).read()
 s=s.replace("steps.check.outcome == \x27success\x27","steps.check.outputs.exit_code != \x27\x27",1)
-open(p,"w").write(s)'
+open(p,"w").write(s)' "B7c heartbeat status"
 
   # Axis 9 -- shallow checkout. Puts the checker in permanent CHECK_ERROR on the COMMON path,
   # because origin/main HEAD is frequently not a path-matching commit. Code-only, per axis 3:
@@ -741,7 +1024,7 @@ for i,l in enumerate(ls):
     if l.lstrip().startswith("#"): continue
     if "fetch-depth: 0" in l:
         ls[i]=l.replace("fetch-depth: 0","fetch-depth: 1",1); break
-open(p,"w").write("\n".join(ls))'
+open(p,"w").write("\n".join(ls))' "B2b checkout declares fetch-depth: 0"
 
   # Axis 10 -- neuter the 40-hex validation so the literal string "null" flows through as a
   # SHA. jq -r prints "null" for both {} and {"build_sha":null}, exit 0 either way.
@@ -749,17 +1032,20 @@ open(p,"w").write("\n".join(ls))'
 import sys,re
 p=sys.argv[1]; s=open(p).read()
 s=re.sub(r"\[\[ \"\$sha\" =~ \^\[0-9a-f\]\{40\}\$ \]\]", "true", s, count=1)
-open(p,"w").write(s)'
+open(p,"w").write(s)' "A11 body {}" "B2b checkout declares fetch-depth: 0"
 }
 
 # ---------------------------------------------------------------------------
 
 echo "=== prod-version-drift-check.sh tests ==="
-[[ "$PARTS" == *A* ]] && run_part_a
-[[ "$PARTS" == *B* ]] && run_part_b
+_before=0
+[[ "$PARTS" == *A* ]] && { _before=$((PASS + FAIL)); run_part_a; COUNT_A=$(( PASS + FAIL - _before )); }
+[[ "$PARTS" == *B* ]] && { _before=$((PASS + FAIL)); run_part_b; COUNT_B=$(( PASS + FAIL - _before )); }
 # Part C is skipped inside mutation children (recursion guard) and when PARTS excludes it.
 if [[ "$PARTS" == *C* && "$MUTATION_CHILD" == "0" ]]; then
+  _before=$((PASS + FAIL))
   run_part_c
+  COUNT_C=$(( PASS + FAIL - _before ))
 fi
 
 TOTAL=$((PASS + FAIL))
@@ -776,4 +1062,14 @@ if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FAILED: assertion count $TOTAL regressed below MIN_ASSERTIONS=$MIN_ASSERTIONS"
   exit 1
 fi
+# Per-part floors, checked only for the parts this invocation actually ran. Children run
+# DRIFT_MIN_*=0 so the battery can drive A+B subsets without tripping them.
+_floor_fail=0
+[[ "$PARTS" == *A* && "$COUNT_A" -lt "$MIN_A" ]] && { echo "FAILED: Part A shrank to $COUNT_A (floor $MIN_A)"; _floor_fail=1; }
+[[ "$PARTS" == *B* && "$COUNT_B" -lt "$MIN_B" ]] && { echo "FAILED: Part B shrank to $COUNT_B (floor $MIN_B)"; _floor_fail=1; }
+if [[ "$PARTS" == *C* && "$MUTATION_CHILD" == "0" && "$COUNT_C" -lt "$MIN_C" ]]; then
+  echo "FAILED: Part C shrank to $COUNT_C (floor $MIN_C) — the mutation battery is the suite's own anti-vacuity mechanism; deleting it must not be free"
+  _floor_fail=1
+fi
+[[ "$_floor_fail" -ne 0 ]] && exit 1
 echo "All tests passed"

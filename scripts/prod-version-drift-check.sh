@@ -23,11 +23,21 @@
 # keep cross-run state about operator intent, which it deliberately does not. The tracking
 # issue auto-closes on the next deploy.
 #
-# WHY `--first-parent` IS LOAD-BEARING, NOT DECORATION. `allow_merge_commit` is true on this
-# repo and main already carries merge commits. Without --first-parent, history simplification
-# can resolve to a commit on a merged FEATURE BRANCH rather than to the merge commit that
-# actually triggered the release — a permanent, silent disagreement with the release job's own
-# `check_changed`. On today's history it is a verified no-op, which makes it free insurance.
+# WHY `--first-parent` IS LOAD-BEARING, NOT DECORATION — AND NOT A NO-OP TODAY. An earlier
+# revision of this comment called it "a verified no-op on today's history, which makes it free
+# insurance". That is FALSE, and the false version is the dangerous one: it reads as written
+# permission for a later maintainer to delete the flag. Measured across 800 bases on main's own
+# first-parent chain, 279 of them give a DIFFERENT answer with and without it.
+#
+# The direction matters. Without --first-parent, history simplification DROPS the actual merge
+# commits (they are TREESAME to their second parent) and substitutes feature-branch commits that
+# never independently triggered a release. Since the release fires on push to main with
+# `github.sha` = the merge commit, the flagless walk omits precisely the commits the release job
+# keys on — a permanent, silent disagreement with its own `check_changed`.
+#
+# Exposure is bounded in practice (divergence begins several hundred commits back, and prod is
+# normally a handful behind), which is presumably why a shallow sample once measured it as a
+# no-op. Mutation axis 3 deletes the flag and requires B8b to go red.
 #
 # THE STALENESS CLOCK IS THE OLDEST MISSING COMMIT, NEVER THE NEWEST. A newest-commit clock
 # RESETS every time another qualifying commit lands, so under a steady commit stream with a
@@ -67,6 +77,12 @@ PATHSPEC=(apps/web-platform/ plugins/soleur/ ':(exclude)plugins/soleur/docs/' ':
 DRIFT_SUSTAINED_THRESHOLD_MIN=195
 
 PROD_HEALTH_URL="${PROD_HEALTH_URL:-https://app.soleur.ai/health}"
+
+# Retry backoff base, in seconds. Overridable ONLY so the test harness can drive the real retry
+# loop without paying 15s of wall clock per case (5s + 10s). Production never sets it. Keeping
+# the loop real — rather than skipping it under test — is the point: the retry count is what the
+# check-error step cites as "what keeps this from being noisy", so it has to be observable.
+DRIFT_RETRY_BACKOFF_S="${DRIFT_RETRY_BACKOFF_S:-5}"
 
 # Caller-visible outputs. classify_drift sets these; it must therefore be called DIRECTLY and
 # never inside `$( )`, which would discard every one of them while still yielding a plausible
@@ -167,8 +183,41 @@ classify_drift() {
   local age_s=$(( now_epoch - oldest_epoch ))
   local threshold_s=$(( DRIFT_SUSTAINED_THRESHOLD_MIN * 60 ))
 
+  # AN IMPLAUSIBLE CLOCK IS A FAILURE TO MEASURE, NOT A CLEAN BILL OF HEALTH.
+  #
+  # %ct is the COMMITTER date, set by whichever machine last committed/rebased/amended — it is
+  # attacker- and accident-settable (GIT_COMMITTER_DATE, or simply a laptop with a wrong clock).
+  # Because the clock takes the numeric MINIMUM across missing commits, a single bad timestamp
+  # decides the verdict, and it breaks BOTH ways:
+  #
+  #   future-dated -> negative age -> never `-gt` the threshold -> silent for as long as the
+  #                   skew lasts. Measured: 3 provably undeployed commits with the oldest dated
+  #                   5 days ahead returned DRIFT_PENDING/exit 0 — no issue, no email, and the
+  #                   heartbeat checking in `ok`. That is the alarm going quiet, which is the
+  #                   one failure this whole workflow exists to eliminate.
+  #   absurdly old -> epoch 0 or an imported/mis-rebased commit pages IMMEDIATELY regardless of
+  #                   real staleness, training the operator to ignore the label.
+  #
+  # An earlier revision treated the future case as healthy and pinned that in a fixture. The
+  # underflow concern behind it was real; the remedy was pointed the wrong way for a fail-closed
+  # alarm. Both directions now land on CHECK_ERROR, which alerts on its own channel and says
+  # plainly that the clock — not production — is what could not be read.
+  local max_plausible_age_s=$(( 90 * 24 * 3600 ))
+  if [[ "$age_s" -lt 0 ]]; then
+    DRIFT_VERDICT="CHECK_ERROR"
+    DRIFT_REASON="future_dated_commit"
+    DRIFT_DETAIL="${DRIFT_DETAIL}; ${missing_count} undeployed, but the oldest is dated $(( -age_s / 60 ))m in the FUTURE — the staleness clock is unusable, so staleness cannot be measured"
+    return 2
+  fi
+  if [[ "$age_s" -gt "$max_plausible_age_s" ]]; then
+    DRIFT_VERDICT="CHECK_ERROR"
+    DRIFT_REASON="implausible_commit_date"
+    DRIFT_DETAIL="${DRIFT_DETAIL}; ${missing_count} undeployed, but the oldest is dated $(( age_s / 86400 ))d ago — beyond the 90d plausibility bound, so the clock is untrustworthy rather than the deploy being that stale"
+    return 2
+  fi
+
   # STRICTLY greater, so a legitimate release finishing exactly at its declared ceiling is not
-  # paged. A future-dated commit (clock skew) yields a negative age and likewise cannot page.
+  # paged.
   if [[ "$age_s" -gt "$threshold_s" ]]; then
     DRIFT_VERDICT="DRIFT_SUSTAINED"
     DRIFT_REASON="stale_beyond_threshold"
@@ -192,7 +241,7 @@ main() {
     body="$(curl -fsS --max-time 15 "$PROD_HEALTH_URL" 2>/dev/null)"
     curl_rc=$?
     [[ "$curl_rc" -eq 0 ]] && break
-    [[ "$attempt" -lt 3 ]] && sleep $(( attempt * 5 ))
+    [[ "$attempt" -lt 3 && "$DRIFT_RETRY_BACKOFF_S" -gt 0 ]] && sleep $(( attempt * DRIFT_RETRY_BACKOFF_S ))
   done
 
   local sha="" missing="" revlist_rc=0 missing_count=0 oldest_epoch=""
@@ -224,11 +273,22 @@ main() {
   echo "DRIFT_REASON=${DRIFT_REASON}"
   echo "DRIFT_DETAIL=${DRIFT_DETAIL}"
   echo "DRIFT_MISSING_COUNT=${DRIFT_MISSING_COUNT}"
+  # Emitted so an operator (or an agent handed this alert) can reproduce the exact query without
+  # opening this file to transcribe a four-element bash array including two :(exclude) terms —
+  # a transcription one guess away from a wrong answer that looks right, since a query missing
+  # the excludes returns a superset and no error. Single source of truth: the constants above.
+  echo "DRIFT_PATHSPEC=${PATHSPEC[*]}"
+  echo "DRIFT_HEALTH_URL=${PROD_HEALTH_URL}"
+  # The short SHAs of what is undeployed. Capped at 10 and space-joined because the consumer
+  # writes single-line $GITHUB_OUTPUT values; a bare multi-line emit would corrupt that write.
+  echo "DRIFT_MISSING_SHAS=$(printf '%s' "$missing" | awk '{printf "%s ", substr($1,1,9)}' | head -c 200)"
 
   return "$verdict_rc"
 }
 
 # Sourcing must expose the functions and constants WITHOUT running main().
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+# `${BASH_SOURCE[0]:-}` is guarded: under `set -u` the unguarded form dies with an unbound
+# variable on `bash -c "$(cat script.sh)"` / `bash < script.sh`, emitting no verdict at all.
+if [[ "${BASH_SOURCE[0]:-}" == "${0}" ]]; then
   main "$@"
 fi
