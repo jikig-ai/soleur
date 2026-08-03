@@ -1,0 +1,39 @@
+# generated: 2026-08-03T08:35:38Z
+# command: doppler configs -p soleur --json | python3 -c 'import json,sys; [print(c["name"]) for c in json.load(sys.stdin)]' | sort
+#
+# The live config names of the Doppler `soleur` project, measured by probe G of the #7159 plan
+# (2026-08-03): 13 configs across 4 environments — dev 3, ci 1, prd 7, cli 2.
+#
+# THIS FILE REPORTS; IT GATES NOTHING. The token-drift coverage ladder compares the number of
+# configs the credential actually READ against `DOPPLER_CONFIGS_FLOOR`, a literal declared in the
+# token-drift step's own `env:` in `.github/workflows/scheduled-terraform-drift.yml`. This
+# inventory only supplies `coverage_ratio`, the `configs_unread` list and `inventory_age_days`.
+# A short, long or stale inventory changes the printed ratio and nothing else: no arm starts or
+# stops firing, no issue opens or closes. Anything else would let a shrinking list lower its own
+# alarm threshold.
+#
+# The file is EXPECTED to drift: `git-data-luks.tf` declares a `prd_git_data` config that will
+# exist after git-data birth, and rehearsal dispatches create ephemeral
+# `prd_git_data_rehearsal_*` configs. The change that alters the project's config set owns both
+# edits — this file AND the floor — in the same PR; re-run the `# command:` line above.
+# Ephemeral rehearsal configs need no edit at all: they only push the count ABOVE the floor,
+# which the one-sided `>=` gate absorbs.
+#
+# `plugins/soleur/test/token-drift-workflow-causes.test.sh` asserts that
+# `grep -cE '^[a-z0-9_]+$'` over this file equals the workflow's `DOPPLER_CONFIGS_FLOOR`. That is
+# the CI check that fails when the floor and this inventory drift apart. It reads no credential
+# and makes no network call, so it cannot be defeated by narrowing the credential. Keep the name
+# lines bare — one lowercase name per line, no comments and no trailing text.
+ci
+cli
+cli_ops
+dev
+dev_personal
+dev_scheduled
+prd
+prd_cla
+prd_ghcr
+prd_kb_drift_walker
+prd_scheduled
+prd_terraform
+prd_workspaces_luks

@@ -75,7 +75,10 @@ resource "random_password" "workspaces_luks" {
 # what keeps the key out of `--env-file`.
 #
 # ⚠️ THIS IS NOT LEAST PRIVILEGE, AND SAYING SO WOULD BE FALSE.
-# The inverse does NOT hold: a branch config INHERITS the full root secret set, so
+# The inverse does NOT hold — established EMPIRICALLY (the learning cited below), NOT from the
+# blanket "a branch config INHERITS the full root secret set" premise, which #7159's 2026-08-02
+# census FALSIFIED (ADR-155). The measured conclusion is retained unchanged and is deliberately
+# not re-derived here:
 # `doppler_service_token.workspaces_luks` below resolves ~116 `prd` secrets including
 # SUPABASE_SERVICE_ROLE_KEY. It is materially a full-prd token. The repo established
 # this empirically and is tracking it:
@@ -111,8 +114,9 @@ resource "doppler_secret" "workspaces_luks_key" {
 
 # The host resolves the passphrase at unlock time via this token. `access = "read"`
 # is real (it cannot WRITE secrets) — but it is NOT a narrower READ scope than the
-# host's existing full-prd token: branch configs inherit the root, so this token reads
-# all ~116 prd secrets too (see the escrow comment above, #6167). Do not describe it
+# host's existing full-prd token: this token reads all ~116 prd secrets too — MEASURED, not
+# inferred from the "branch configs inherit the root" premise that #7159 falsified (ADR-155,
+# 2026-08-02 census; see the escrow comment above, #6167). Do not describe it
 # as least-privilege.
 #
 # ⚠️ #6604 (the cutover) MUST read it with `doppler secrets get WORKSPACES_LUKS_KEY
