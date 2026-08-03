@@ -78,7 +78,13 @@ for r in "${REQUIRED_RUNNERS[@]}"; do
   # Escape regex metacharacters in the path (`.` in particular) so the anchor matches the
   # literal path and not an any-character wildcard.
   r_re="${r//./\\.}"
-  if ! grep -qE "^[[:space:]]*run_suite .*[\"' ]${r_re}([\"' ]|\$)" "$RUNNER"; then
+  # ANCHOR ON THE COMMAND, NOT THE LABEL. run_suite's first argument is a display label and the
+  # rest is the command it executes, so a pattern that accepts the path anywhere after
+  # `run_suite ` is satisfied by the LABEL alone. Measured: replacing the command while keeping
+  # the label — `run_suite "apps/web-platform/infra/run-registered-suites.sh" bash -c true` —
+  # left this linter reporting `orphan test suites: none`. That is the same class the tombstone
+  # exists to catch, one level up: a runner that is NAMED but not RUN.
+  if ! grep -qE "^[[:space:]]*run_suite .*[[:space:]]bash[[:space:]]+[\"']?${r_re}[\"']?([[:space:]]|\$)" "$RUNNER"; then
     echo "ERROR: required runner ${r} has no run_suite call in test-all.sh -- it is registered nowhere in the local gate, so its whole suite set is silently uncovered. Restore the run_suite line." >&2
     fails=$((fails + 1))
   fi
