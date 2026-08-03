@@ -1,5 +1,5 @@
 ---
-title: "infra: mint the prd-root read token and give the coverage ladder a denominator"
+title: "infra: a project-scoped Doppler read identity and a declared coverage floor"
 date: 2026-08-02
 issue: 7159
 branch: feat-one-shot-7159-doppler-prd-read-token-coverage
@@ -7,66 +7,89 @@ type: infra
 lane: cross-domain
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
-revision: v3 (after a four-agent plan-review panel; see "Plan Review Revisions")
+revision: v4 (retargeted 2026-08-03 to the credential shape the operator chose; see "Plan Review Revisions" R26–R34)
 ---
 
-# infra: mint the prd-root read token and give the coverage ladder a denominator
+# infra: a project-scoped Doppler read identity and a declared coverage floor
 
 > **Lane note.** No `spec.md` existed for this branch when planning began, so `lane:` could
 > not be carried forward. Defaulted to `cross-domain` (TR2 fail-closed).
 
+> **Filename note.** The file keeps its original
+> `…-prd-root-token-and-coverage-denominator-…` slug so every existing citation resolves. The
+> prd-root token is no longer the shape; the plan was retitled in place rather than renamed.
+
 ## Enhancement Summary
 
-**Deepened on:** 2026-08-02
+**Deepened on:** 2026-08-02. **Retargeted:** 2026-08-03.
 **Review passes:** plan-review panel (architecture-strategist, spec-flow-analyzer,
 code-simplicity-reviewer, kieran-rails-reviewer) → v2/v3; deepen-plan pass (security-sentinel,
-observability-coverage-reviewer) → this revision. 25 numbered revisions, R1–R25.
+observability-coverage-reviewer) → v3; operator decision on the credential shape (interactive,
+2026-08-03) → this revision. 34 numbered revisions, R1–R34.
 
 ### Key improvements
 
-1. **Union, not swap.** A live probe showed a `prd`-root credential enumerates exactly one
-   config and that the two configs' key sets overlap only partially — so the checklist's swap
-   would drop `CI_SSH_ACCESS_TOKEN` (the 2026-07-29 outage credential) and make its own
-   Done-when unreachable.
-2. **The denominator reports; it does not gate.** The first draft let a short inventory derive
-   the healthy state and close the channel — a fail-open in the direction it claimed to guard.
-   The gate now uses a floor exact by construction; the inventory only prints the ratio.
-3. **The credential's real reach is disclosed.** `access = "read"` is not a capability boundary
-   when `prd` root holds a read/write Doppler token for itself and the Terraform GitHub App
-   private key. Both disclosure sections now name the escalation hops — and the mitigation that
-   makes the trade-off acceptable.
-4. **Every failure mode now reaches a channel.** Five paths that previously ended in a green
-   run with an unread annotation (empty credential list, revoked credential, failed issue
-   update, unreachable issue channel, the rung-2 scratch-config sweep) were re-routed.
+1. **One project-scoped identity, not a union of config-scoped tokens.** The v3 union kept
+   `DOPPLER_TOKEN` and added a second credential because a `doppler_service_token` on `prd`
+   root cannot see `prd_terraform`. The pinned provider also ships `doppler_service_account`,
+   which is **not** config-scoped. Shown the measurements, the operator chose that shape on
+   2026-08-03. One credential reaches all 13 configs, the union is dropped, and the token-drift
+   step's `DOPPLER_TOKEN` becomes a plain swap onto `secrets.DOPPLER_TOKEN_DRIFT` — exactly
+   what the #7159 checklist asked for.
+2. **The denominator reports; it does not gate.** A short inventory must never be able to
+   derive the healthy state and close the channel. The gate uses a floor **declared** by the
+   step; the inventory only prints the ratio and the unread list.
+3. **The floor had to be re-founded.** With a project-scoped credential, a denominator taken
+   from the scan's own listing is satisfied by construction, so `degraded` would have no
+   producer. The floor is now a literal the step declares about its own credential, pinned by a
+   repo-internal CI check against the inventory's name count.
+4. **The credential's real reach is disclosed, and it is genuinely wider than before.** This
+   identity reads the whole `soleur` project — all 4 environments, all 13 configs — which is
+   broader than the "whole prd tree" #7159 accepted, and broader than the pre-existing
+   `DOPPLER_TOKEN_PRD`. The v3 "adds no new capability" mitigation is **false** at this shape
+   and has been withdrawn rather than softened.
+5. **Every failure mode still reaches a channel.** Five paths that previously ended in a green
+   run with an unread annotation (empty credential, revoked credential, failed issue update,
+   unreachable issue channel, the rung-2 scratch-config sweep) stay re-routed.
 
 ### New considerations discovered
 
+- A project-scoped credential makes `configs == expected` hold trivially, so the ladder is
+  decorative unless the denominator comes from a source the credential cannot move.
+- The three reachable narrowings (role downgrade, `environments` scoping, a swap back to a
+  config-scoped token) all *shorten* reach and never lengthen it — which is what makes a
+  one-sided floor sound.
+- A role that can enumerate but not read values would list 13 configs and scan none, so
+  `configs` must count configs actually **read**.
+- `doppler_service_account_token` exposes its value as **`api_key`**, not `key` — a silent
+  `terraform plan` failure if copied from the sibling `doppler_service_token` resources.
 - A revoked credential exited before `emit_json`, so the coverage outputs were never published.
 - The `--status success` filter in the discoverability probe returned the last *healthy* run.
-- The floor is self-referential and cannot detect its own shortening.
-- Ambient `DOPPLER_TOKEN` fallback was prevented by a test rather than by construction.
+- Ambient `DOPPLER_TOKEN`/`DOPPLER_CONFIG` fallback was prevented by a test rather than by
+  construction.
 - An orphaned state write on a secret-bearing create is invisible to `terraform plan`, and the
   provider ships no data source that could find it.
 
 ## Overview
 
-Two deliverables, one change, per the decision comment on #7159 (2026-08-02).
+Two deliverables, one change, against #7159 and the operator's 2026-08-03 shape decision.
 
-1. **Mint the read credential.** A read-scoped `doppler_service_token` on `soleur` / `prd`
-   ROOT named `token-drift-ci-tf`, published as a dedicated `github_actions_secret`
-   `DOPPLER_TOKEN_DRIFT`, consumed only by the token-drift step. Mirrors
-   `apps/web-platform/infra/kb-drift.tf:92-113`: `access = "read"`, and no
-   `lifecycle.ignore_changes` on `plaintext_value`, so a `-replace=` rotation propagates in
-   the same run. Plus two `-target=` legs in the infra allow-list.
+1. **A project-scoped read identity.** Three Doppler resources —
+   `doppler_service_account.token_drift`,
+   `doppler_project_member_service_account.token_drift` (`project = "soleur"`,
+   `role = "viewer"`, `environments` unset) and `doppler_service_account_token.token_drift` —
+   published as a dedicated `github_actions_secret` `DOPPLER_TOKEN_DRIFT`, consumed only by the
+   token-drift step. No `lifecycle.ignore_changes` on `plaintext_value`, so a `-replace=`
+   rotation propagates in the same run. Plus four `-target=` legs in the infra allow-list.
 
-2. **Replace the coverage enum with a measured floor and a reported ratio.** `coverage` is
+2. **Replace the coverage enum with a declared floor and a reported ratio.** `coverage` is
    today a 3-state enum with no denominator, so its "more than one config" state cannot
-   distinguish *2 of 13* from *13 of 13*. This change takes the live count from 1 to 2 —
-   exactly the case the issue flags as latent.
+   distinguish *2 of 13* from *13 of 13*. This change takes the live count from 1 to **13**.
 
-The credential shape is settled and is not reopened. What this plan adds is the measured
-behaviour of that shape: six premises in the issue body were probed, and three of the
-falsifications change the implementation.
+The credential shape was reopened once, by the operator, on the strength of the 2026-08-02
+measurements; it is settled again and is not reopened here. What this plan adds is the measured
+behaviour of that shape: the provider schema, the project role set, a per-config census and the
+config topology were all probed on 2026-08-03 ([Appendix A](#appendix-a--the-probes)).
 
 **The `terraform apply` stays behind the environment's required-reviewer set. This plan
 produces a PR.**
@@ -80,13 +103,14 @@ the same command. Reproduce via [Appendix A](#appendix-a--the-probes).
 
 | Claim (issue #7159 / decision comment) | Measured reality | Plan response |
 |---|---|---|
-| "Branch configs inherit from root, so a single credential restores the fan-out view." | A `prd`-ROOT read service token enumerates **exactly 1** config: `doppler configs -p soleur --token <root>` returns `['prd']`; raw `GET /v3/configs?project=soleur` returns 1 with `success: true` — a list silently scoped to the credential, not an error. `GET /v3/environments?project=soleur` returns `[]`. | The scan's config count equals **the number of read credentials supplied**. One credential can never yield `configs >= 2`. |
-| "Point the token-drift step's `DOPPLER_TOKEN` at `secrets.DOPPLER_TOKEN_DRIFT`" (a swap). | The key sets of the two configs are **not in a superset relation in either direction**. `prd_terraform` carries 10 `CF_API_TOKEN*` keys plus `CI_SSH_ACCESS_TOKEN_ID/_SECRET`; `prd` root carries `CF_API_TOKEN_DNS_EDIT`, `CF_API_TOKEN_PURGE` and `REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET`. A swap **drops** the `CI_SSH_ACCESS_TOKEN` pair — the credential of the 2026-07-29 outage (ADR-154). | **Union, not swap.** Keep `DOPPLER_TOKEN`, add `DOPPLER_TOKEN_DRIFT`. Also the only reading under which the decision's own Done-when (which needs `configs >= 2`) is reachable. |
+| "Branch configs inherit from root, so a single credential restores the fan-out view." | A `prd`-ROOT read **service token** enumerates **exactly 1** config: `doppler configs -p soleur --token <root>` returns `['prd']`; raw `GET /v3/configs?project=soleur` returns 1 with `success: true` — a list silently scoped to the credential, not an error. `GET /v3/environments?project=soleur` returns `[]`. | True of `doppler_service_token`, and the reason that shape was abandoned. A `doppler_service_account` holding a project membership is a **different resource class** and is not config-scoped. The measurement survives as the argument for the shape change, not as a constraint on it. |
+| "Point the token-drift step's `DOPPLER_TOKEN` at `secrets.DOPPLER_TOKEN_DRIFT`" (a swap). | The key sets of the two configs are **not in a superset relation in either direction**. `prd_terraform` carries 10 `CF_API_TOKEN*` keys plus `CI_SSH_ACCESS_TOKEN_ID/_SECRET`; `prd` root carries `CF_API_TOKEN_DNS_EDIT`, `CF_API_TOKEN_PURGE` and `REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET`. A swap of one *config-scoped* token for another **drops** the `CI_SSH_ACCESS_TOKEN` pair — the credential of the 2026-07-29 outage (ADR-154). | **The regression dissolves at this shape.** A project-scoped `viewer` reads `prd_terraform` as well as `prd`, so nothing is dropped and no union is needed. The swap is implemented literally: `DOPPLER_TOKEN` points at `secrets.DOPPLER_TOKEN_DRIFT`. |
 | The remedy prose "Set the live value on the `prd` ROOT config; branch configs inherit it." | Falsified by the census: `CF_API_TOKEN_DNS_EDIT` is present in 7 configs, and `prd_terraform` does **not** carry `REGISTRY_PUSH_ACCESS_TOKEN_*` that `prd` root does. Setting root alone does not repair the fan-out. | Corrected at **all five** sites (FR6). Two are on the DEAD path — the acute arm — and were missing from the first draft's consumer list. |
-| "There is no single project-scoped read token to mint." | True for `doppler_service_token`. Provider `DopplerHQ/doppler v1.21.2` also ships `doppler_service_account` + `doppler_service_account_token` — a project-scoped, provider-minted identity needing no credential-entry step. Absent from the issue's 3-row option table. | Not adopted (outside the settled decision). Deferred with re-evaluation criteria; owns the residual fan-out gap. Recorded as **UC-2**. |
-| The `::warning::` remedy "a project-scoped token … restores fleet-wide coverage". | False. No Doppler service token restores fleet-wide coverage. | Corrected (FR6). |
-| A prd-root Actions secret does not yet exist. | `DOPPLER_TOKEN_PRD` **already exists** (prd-root, read) and is consumed by **six** workflows/actions. It is **not** Terraform-managed. `reusable-release.yml:488-490` independently documents "A Doppler service token also reads exactly ONE config and ignores `DOPPLER_CONFIG`" (the sentence wraps, so a single-line grep misses it); `tunnel.tf:273` repeats it. | The dedicated, TF-managed `DOPPLER_TOKEN_DRIFT` remains correct: single consumer, rotatable via `-replace=`. `DOPPLER_TOKEN_PRD` is not reused. |
-| (Found while probing.) | `rung2-rehearsal-orphan-sweep` (same workflow file, `:1115-1116`) filters `startswith("prd_git_data_rehearsal_")` over a list its `prd_terraform` credential can only ever return one entry for. The predicate is **unsatisfiable**; the job reports "no orphans" unconditionally. | Folded in (FR7) — routed into the job's existing `infra-drift` issue channel, not a new warning on a green run. |
+| "There is no single project-scoped read token to mint." | **Falsified premise.** True for `doppler_service_token`; **false** for `doppler_service_account` in the pinned `DopplerHQ/doppler v1.21.2`, which ships `doppler_service_account` + `doppler_project_member_service_account` + `doppler_service_account_token` — a project-scoped, provider-minted identity needing no credential-entry step. Absent from the issue's 3-row option table. | **Adopted.** The operator was shown the measurements and chose this shape on 2026-08-03 (UC-2 in `decision-challenges.md`, now ADOPTED rather than deferred). It is the whole basis of this revision. |
+| The `::warning::` remedy "a project-scoped **token** … restores fleet-wide coverage". | The noun is wrong: no Doppler service *token* is project-scoped. The *claim* is true of a service **account** with project membership. | Corrected (FR6.5) — the remedy now names the service account and the `viewer` membership, and the falsified noun is asserted absent by AC7. |
+| A prd-root Actions secret does not yet exist. | `DOPPLER_TOKEN_PRD` **already exists** (prd-root, read) and is consumed by **six** workflows/actions. It is **not** Terraform-managed. `reusable-release.yml:488-490` independently documents "A Doppler service token also reads exactly ONE config and ignores `DOPPLER_CONFIG`" (the sentence wraps, so a single-line grep misses it); `tunnel.tf:273` repeats it. | The dedicated, TF-managed `DOPPLER_TOKEN_DRIFT` remains correct: single consumer, rotatable via `-replace=`. `DOPPLER_TOKEN_PRD` is not reused — and, critically, its scope is now **narrower** than the new credential's, which is why the v3 "adds no new capability" mitigation is withdrawn. |
+| (Found while probing, 2026-08-03.) | The pinned provider's `doppler_service_account_token` exposes its secret as **`api_key`** (computed, sensitive), not `key` as on `doppler_service_token`. | Pinned in FR1 and asserted by AC1. Copying the sibling attribute name is a `terraform plan` failure, not a runtime one, but it is the single most likely transcription error in this change. |
+| (Found while probing.) | `rung2-rehearsal-orphan-sweep` (same workflow file, `:1115-1116`) filters `startswith("prd_git_data_rehearsal_")` over a list its `prd_terraform` credential can only ever return one entry for. The predicate is **unsatisfiable**; the job reports "no orphans" unconditionally. | Folded in (FR7) — routed into the job's existing `infra-drift` issue channel, not a new warning on a green run. Wiring `DOPPLER_TOKEN_DRIFT` into that job would also satisfy the predicate, but it is deliberately **out of scope**: the new credential keeps exactly one consumer. |
 
 ### Live per-config census (2026-08-02, key names only)
 
@@ -100,9 +124,36 @@ the same command. Reproduce via [Appendix A](#appendix-a--the-probes).
 | `X_ACCESS_TOKEN_SECRET` | 11 | skipped (no `_ID` half) | skipped |
 
 Token-shaped credentials verified per scan mode: **today 11**, **root-only 3**, **union 12**.
-Only the union covers both Access-service-token families, and `REGISTRY_PUSH_ACCESS_TOKEN` —
-the *first* case the detector's header cites as motivating it — **is not scanned at all
-today**.
+`REGISTRY_PUSH_ACCESS_TOKEN` — the *first* case the detector's header cites as motivating it —
+**is not scanned at all today**. The union covered both Access-service-token families; the
+project-scoped identity covers them and the remaining eleven configs as well.
+
+### Per-config census of scannable keys (2026-08-03)
+
+Scannable = the key families the detector actually probes: `CF_API_TOKEN*` and
+`*_ACCESS_TOKEN_ID` / `*_ACCESS_TOKEN_SECRET`. This is the measurement that justifies leaving
+`environments` **unset** rather than scoping the membership to `prd`.
+
+| Config | Scannable keys | | Config | Scannable keys |
+|---|---|---|---|---|
+| `dev` | 2 | | `prd_ghcr` | 5 |
+| `dev_personal` | 2 | | `prd_kb_drift_walker` | 5 |
+| `dev_scheduled` | 2 | | `prd_scheduled` | 5 |
+| `ci` | 1 | | `prd_terraform` | 13 |
+| `prd` | 5 | | `prd_workspaces_luks` | 5 |
+| `prd_cla` | 5 | | `cli` | 0 |
+| | | | `cli_ops` | 0 |
+
+50 scannable key occurrences across the 13 configs. **Only `cli` and `cli_ops` are vacuous**,
+so project-wide membership is a real coverage gain rather than pure blast radius: scoping
+`environments` to `prd` would forfeit 7 scannable keys across `dev*` and `ci` while removing
+none of the escalation hops disclosed below, because those live in `prd` root.
+
+### Config topology (2026-08-03)
+
+13 configs across 4 environments — `dev` (3), `ci` (1), `prd` (7), `cli` (2). The `prd`
+environment's **7** configs are the detector header's own motivating case, which cites a
+credential "stale in 5 of 7 configs".
 
 > **Provenance for ADR-155.** The dispositive evidence is this census, not the
 > `inheriting=false / inherits=[]` metadata. That metadata describes Doppler's *explicit
@@ -116,46 +167,104 @@ today**.
 
 ## How the denominator is obtained
 
-The brief forbids a guessed constant. Five derivations were considered; four are rejected by
-measurement, so they need not be re-derived downstream.
+The shape change moves this problem rather than solving it. A project-scoped identity makes
+`doppler configs -p soleur` return the project's true total, so any denominator taken from the
+scan's own credential satisfies `configs == expected` **by construction**: the ratio would
+always print `13/13`, `degraded` would have no producer, and the whole ladder would be
+decorative. The denominator has to come from a source the credential cannot move.
 
-| Candidate | Result | Verdict |
+### What it has to detect
+
+Exactly three narrowings are reachable after this lands.
+
+| Narrowing | How it lands | What the scan sees |
 |---|---|---|
-| Ask Doppler with the scan's own credential | `GET /v3/configs?project=soleur` returns 1, `success: true` | **Rejected** — silently scoped |
-| Ask Doppler for environments | `GET /v3/environments?project=soleur` returns `[]` | **Rejected** |
-| Derive from committed source (`config = "…"` in `*.tf`, `DOPPLER_CONFIG:` in workflows, `-c <cfg>`) | 6–9 names depending on the exact source set. Either way it **misses live configs** (`ci`, `cli`, `dev_personal`, `prd_cla`, `prd_ghcr`) and **emits `prd_git_data`**, which is TF-declared (`git-data-luks.tf:79`) but verified absent from live Doppler. | **Rejected** — a short denominator flatters coverage, the unsafe direction |
-| A committed inventory re-verified on every infra merge by a new step in `apply-web-platform-infra.yml` | The premise was false: `grep -nEi 'doppler_token_tf' .github/workflows/apply-web-platform-infra.yml` returns **nothing**. That credential materialises only inside the `doppler run … -- terraform` child process, and `variables.tf:476` records it as a workplace-scope **personal** token. Such a step would also red every infra merge the moment live Doppler legitimately grows — `doppler_config.git_data_prd` takes it to 14 at git-data birth, and `rung2-rehearsal/rehearsal.tf:57` creates ephemeral `prd_git_data_rehearsal_*` configs. | **Rejected** — a *new* consumer of the widest credential in the repo, which is a stronger form of the option the decision comment rejected, plus a self-inflicted merge blocker |
-| Doppler Terraform provider data sources | v1.21.2 ships `doppler_environments`, `doppler_group`, `doppler_secrets`, `doppler_user` only | **Rejected** — the graph cannot publish a config list |
+| **N1 — the membership role is downgraded** | `role` moves off `viewer`, or the `doppler_project_member_service_account` resource is removed | 0 configs read — either the enumeration returns nothing, or it returns names whose secret reads all fail |
+| **N2 — the membership is scoped to a subset of environments** | `environments` is set (e.g. `["prd"]`) | 7 of 13 read |
+| **N3 — `DOPPLER_TOKEN_DRIFT` is repointed at a config-scoped `doppler_service_token`** | the resource set is swapped back, or the Actions secret is sourced elsewhere | 1 of 13 read |
 
-### Chosen: separate the *gate* from the *report*
+All three **shorten** what the credential reaches; none of them can lengthen it. The only thing
+that lengthens the count is Doppler genuinely growing (C7). So the scan's own listing is a
+*monotone* signal: it can be inflated by legitimate growth, never by a narrowing. That
+asymmetry is what makes a one-sided gate sound, and it is why the gate compares against a floor
+rather than against an equality.
 
-The trap the first draft walked into is that a denominator which **gates a state** must itself
-be trustworthy, and nothing available can make it so. A short inventory — one truncated to
-`prd` + `prd_terraform` — would have satisfied `scanned == expected`, derived the healthy
-state, fired the close arm and silenced the channel for good: a fail-open in exactly the
-direction the design claimed to guard. And the live config set is *expected* to drift, by two
-in-repo mechanisms named above.
+### The four candidates, and why three fail
 
-So the two roles are split:
+| Candidate | Verdict |
+|---|---|
+| Ask Doppler with the scan's own credential — `GET /v3/configs`, `GET /v3/environments` | **Rejected: credential-derived.** Both endpoints return a list *silently scoped to the caller* (measured 2026-08-02: a config-scoped token gets 1 config and `[]` environments, both with `success: true`). Under N1/N2/N3 the denominator narrows in lockstep with the numerator, `configs == expected` still holds, and `degraded` never fires. This is the failure the whole question exists to avoid, so it is rejected on structure, not on measurement. |
+| Derive `expected` from the environments endpoint | **Rejected, twice over.** It is the same credential (above), *and* it counts environments, not configs: 4 versus 13, and the per-environment fan-out is uneven (3/1/7/2). Turning environments into configs needs a per-environment config listing — the same scoped call again. |
+| Assert the credential's **identity class** (is this a service-account token?) | **Rejected as the mechanism, and not kept as a fallback.** It detects N3 only. A service-account token narrowed by `environments` (N2) or sitting at a reduced role (N1) still asserts as the same identity class while reading a fraction of the project, so the check reports healthy through two of the three narrowings. It also depends on an API response contract that has not been probed. A check that is green through two of three failure modes is worse than no check, because it reads as coverage. |
+| A committed inventory that a CI step re-verifies against **live** Doppler | **Rejected, three independent reasons.** (i) The live side needs a listing credential, and the only credential that can list the whole project is `DOPPLER_TOKEN_DRIFT` itself — so the comparison narrows *with* the credential, and a change that narrows the grant and shortens the inventory together passes green. That is the same two-place defeat as the static check below, with a network dependency and a live-credential consumer added. (ii) C7 holds: the live set is expected to grow (`doppler_config.git_data_prd` at git-data birth, ephemeral `prd_git_data_rehearsal_*` from rehearsal dispatches), so the step reds merges in the direction that does not matter. (iii) It re-creates the merge blocker the v2 panel already cut (R5). |
+| Doppler Terraform provider data sources | **Rejected** — v1.21.2 ships `doppler_environments`, `doppler_group`, `doppler_secrets`, `doppler_user` only; the graph cannot publish a config list. |
+| Derive from committed source (`config = "…"` in `*.tf`, `DOPPLER_CONFIG:` in workflows, `-c <cfg>`) | **Rejected** — 6–9 names depending on the source set; it misses live configs (`ci`, `cli`, `dev_personal`, `prd_cla`, `prd_ghcr`) and emits `prd_git_data`, which is TF-declared (`git-data-luks.tf:79`) but verified absent from live Doppler. A short denominator flatters coverage, the unsafe direction. |
 
-- **The gate uses a floor that is exact by construction.** `configs_floor` = the number of
-  credential env-var names the step supplies. The detector knows it without asking anything
-  external. `scanned < floor` means a configured credential stopped working — a real,
-  producible regression. `scanned == floor` means every credential the step was given did its
-  job.
-- **The report uses the committed inventory, and gates nothing.**
-  `apps/web-platform/infra/doppler-config-inventory.txt` carries a `# generated:` ISO-8601
-  header and the generator command. It supplies `coverage_ratio` (`2/13`) and the list of
-  **unread** config names for the annotation, the two ops emails and the issue body. If it
-  goes short or stale, the printed ratio is wrong — and nothing else. No state changes, no arm
-  starts or stops firing, no channel goes quiet.
+### Chosen: the floor is *declared*, the ratio is *measured*, and they are different numbers
+
+- **`configs_floor` is a literal declared in the token-drift step's own `env:` —
+  `DOPPLER_CONFIGS_FLOOR: 13` — and is read from nowhere else.** It is *exact by construction*
+  in the same sense the v3 floor was: the step cannot be wrong about a number it declares. What
+  it declares is not a fact about Doppler but a **demand on its own credential**: "the identity
+  I was handed must reach at least this many configs." The v3 floor made the same kind of
+  statement about credential count; the shape change only changes the unit.
+- **The gate is one-sided.** `configs < floor → degraded`; `configs >= floor → at-floor`.
+  `>=`, not `==`, because C7 says growth is legitimate and must not red a cron twice daily.
+  Growth pushes the printed ratio above 1 and changes no state.
+- **`configs` counts configs actually READ, not configs listed.** A config enters the count
+  only once its `doppler secrets --only-names` read has succeeded. Without this, N1 in its
+  subtler form — a role that can enumerate but cannot read values — would list 13 and scan
+  none, and the floor would be satisfied by a credential that measures nothing.
+- **`configs_expected` is the committed inventory's name count, and gates nothing.** It
+  supplies `coverage_ratio = configs/configs_expected`, the `configs_unread` list, and
+  `inventory_age_days`. A short, long or stale inventory changes the printed ratio and the
+  unread list, and changes **no state**: no arm starts or stops firing, no issue opens or
+  closes. That is the R1 property, carried forward unchanged at the new shape.
 - **Staleness is bounded without a credential.** The detector emits `inventory_age_days` from
-  the header; a caveat is appended to the ratio past 90 days. Derived, no listing credential,
-  strictly inside the property the decision comment protects.
+  the `# generated:` header; a caveat is appended to the ratio past 90 days.
 
-This satisfies the brief — `coverage_ratio` reports `scanned/expected` rather than a 3-state
-enum, and `expected` is measured rather than guessed — without letting an untrustworthy number
-decide whether the operator hears anything.
+**What `degraded` concretely detects.** N1 → `0/13`. N2 → `7/13` with `configs_unread` naming
+the six dropped configs. N3 → `1/13`. Plus the two operational modes that already existed: an
+absent or empty `DOPPLER_TOKEN_DRIFT` (the merge-to-release window, or a deleted secret) and a
+revoked or expired credential. Every one of those is a real, producible regression with a
+performable remedy — which is the property `multi-config` never had.
+
+### Why the floor cannot quietly follow the credential down
+
+The v3 hazard (R18) generalises: a floor lowered in the same change that narrows the grant
+would keep the scan at `at-floor` while coverage regressed. Three places must move together,
+and the third is a test:
+
+1. `DOPPLER_CONFIGS_FLOOR` in `.github/workflows/scheduled-terraform-drift.yml`.
+2. The name count in `apps/web-platform/infra/doppler-config-inventory.txt`.
+3. **`plugins/soleur/test/token-drift-workflow-causes.test.sh` pins the literal as a named
+   integer — `DOPPLER_CONFIGS_FLOOR` must parse and be `>= 13` — and separately asserts it
+   equals the inventory's name count.**
+
+Item 3 is the CI check that fails when the floor and the inventory drift apart. It is
+repo-internal and deterministic: no credential, no network, no live dependency, and it runs on
+every PR under `scripts/test-all.sh`. It is strictly stronger than the live-verification step
+rejected above — same two-place defeat condition, no merge blocker on legitimate growth, no new
+consumer of a listing credential.
+
+The step additionally re-asserts `configs_floor >= 13` at run time and downgrades to `degraded`
+when that assertion fails, so a workflow-level override cannot lower the bar between merges.
+The assertion is **external** to the floor, exactly as AC29 required at the old value of 2.
+
+### Who updates the floor and the inventory
+
+The change that alters the project's config set owns both edits, in the same PR.
+`git-data-luks.tf` already declares `doppler_config.git_data_prd`, so the git-data birth change
+raises the floor to 14 and regenerates the inventory; the inventory's `# command:` header line
+carries the regeneration command, so the edit is mechanical rather than remembered. Ephemeral
+`prd_git_data_rehearsal_*` configs need no edit at all — they only push `configs` above the
+floor, which `>=` absorbs.
+
+A config **removal** is the one case that produces a false `degraded`: the coverage channel
+reds until the floor is lowered. That is left as-is deliberately. Engineering it away means
+letting a shrinking live count lower its own alarm threshold, which is N1/N2/N3 with extra
+steps. Noisy-in-the-safe-direction is the trade this design takes, and it is recorded in
+`## Risks & Mitigations` rather than hidden.
 
 ---
 
@@ -166,127 +275,181 @@ decide whether the operator hears anything.
 | Value | Condition | Notes |
 |---|---|---|
 | `unknown` | either side unparseable — the **default** | unchanged fail-closed polarity |
-| `degraded` | `scanned < floor` | a configured credential is missing, empty, or stopped enumerating. **Producible and actionable.** |
-| `at-floor` | `scanned == floor` | every configured credential worked |
+| `degraded` | `configs < configs_floor` | the credential is missing, empty, revoked, or has been narrowed (N1/N2/N3). **Producible and actionable.** |
+| `at-floor` | `configs >= configs_floor` | the credential reached at least every config the step demanded |
 
 Evaluation order is pinned: `unknown` → `degraded` → `at-floor`.
 
 `multi-config`, `single-config` and `full` are all retired. `single-config` collapses into
-`degraded` once the floor is 2. `full` would have been a state with no reachable producer
-whose only consumer was the close arm — shipping it would leave the standing issue asserting a
+`degraded` at a floor of 13. `full` would have been a state with no reachable producer whose
+only consumer was the close arm — shipping it would leave the standing issue asserting a
 closing condition the same plan had already decided would never occur, which is verbatim the
 regression `scheduled-terraform-drift.yml:357-359` records from a previous revision.
 
+`at-floor` keeps its name rather than becoming `full`, even though the steady state is now
+`13/13`. The state is defined against the *declared floor*, not against the project — that is
+the whole point of the gate/report split, and a name asserting completeness would invite a
+future reader to gate on the inventory again.
+
 **The close arm fires on `at-floor`.** The recurring `token-drift-coverage` issue therefore
-auto-closes once both credentials work — satisfying the decision comment's Done-when — and the
-residual 11-config fan-out gap is owned by exactly one artifact: the UC-2 deferred-capability
-issue with its re-evaluation criteria. The coverage channel returns to signalling
-*regression*, which is what it is good at, rather than a standing condition nobody can clear.
+auto-closes once the credential reaches all 13 configs — satisfying the #7159 checklist's
+Done-when literally, at `coverage_ratio: 13/13` rather than at a partial ratio the previous
+revision had to defend. The coverage channel goes back to signalling *regression*, which is
+what it is good at.
 
 ### The merge-to-release window
 
 The workflow edits go live at merge; the credential exists only after the environment gate
 releases the infra run. In that window `secrets.DOPPLER_TOKEN_DRIFT` interpolates to the empty
-string. That window must not red the cron twice daily — the file's own comment
-(`:346-349`) explains a standing red here would poison the DEAD arm's red signal too. So:
+string, and the token-drift step's `DOPPLER_TOKEN` is sourced from it. That window must not red
+the cron twice daily — the file's own comment (`:346-349`) explains a standing red here would
+poison the DEAD arm's red signal too. So:
 
-- A named credential variable that is **unset or empty** is a *configuration* fault: it counts
-  toward `configs_floor` but not toward `configs`, yields `coverage: degraded`, reaches the
-  warning and the issue channel, and leaves the job green and the detector exit code
-  untouched.
+- An **unset or empty** `DOPPLER_TOKEN` is a *configuration* fault: `configs` is 0, which is
+  below the floor, so `coverage: degraded` reaches the warning and the issue channel while the
+  job stays green and the detector exit code is untouched. The detector must **not** fall
+  through to an ambient credential here — an empty value is treated by the Doppler CLI as
+  unset, which would silently rebind to whatever the runner happens to carry (FR3).
 - A **non-empty** credential that enumerates nothing is a *detector* fault: exit 2,
-  `verdict: unavailable`, the existing DETECTOR-UNAVAILABLE email.
+  `verdict: unavailable`, the existing DETECTOR-UNAVAILABLE email — with `emit_json` already
+  run, so `configs`, `configs_floor` and `coverage` are still published.
 
-The window produces one `degraded` issue that self-clears to `at-floor` and auto-closes when
-the credential lands.
+The window produces one `degraded` issue at `0/13` that self-clears to `at-floor` at `13/13`
+and auto-closes when the credential lands.
 
 ---
 
 ## Functional Requirements
 
-- **FR1 — the credential.** New `apps/web-platform/infra/token-drift-read-token.tf`:
-  `doppler_service_token.token_drift` (`project = "soleur"`, `config = "prd"`,
-  `name = "token-drift-ci-tf"`, `access = "read"`) and
-  `github_actions_secret.doppler_token_drift` (`repository = "soleur"`,
-  `secret_name = "DOPPLER_TOKEN_DRIFT"`,
-  `plaintext_value = doppler_service_token.token_drift.key`). No `lifecycle` block on either.
-  Header carries `autonomy-considered: provider-mint-applied`, the rotation recipe, the reason
-  no `ignore_changes` is present, **and a BLAST RADIUS block written in the
-  `workspaces-luks.tf:77-89` shape** — stating plainly that this is not least privilege,
-  naming the two escalation hops (`ghcr_minter`'s read/write token and the GitHub App private
-  key, both resident in `prd` root), recording that `DOPPLER_TOKEN_PRD` already carries the
-  same scope so no new capability is added, and citing
-  `knowledge-base/project/learnings/security-issues/2026-07-07-doppler-branch-config-does-not-isolate-secrets.md`
-  and #6167 rather than inventing fresh prose. It also carries a one-line **emergency
-  revocation** path beside the rotation recipe — `doppler configs tokens revoke <slug> -p
-  soleur -c prd` — noting that a revocation performed outside Terraform leaves state stale and
-  surfaces on the next `plan`, which is the safe direction and must not be "fixed" by
-  suppressing the drift.
-  *Templates:* `apps/web-platform/infra/web-arm-write-token.tf`,
-  `apps/web-platform/infra/kb-drift.tf:92-113`.
+- **FR1 — the credential.** New `apps/web-platform/infra/token-drift-service-account.tf`,
+  carrying four resources. Attribute names are taken from the pinned provider's own schema
+  (`terraform providers schema -json`, `DopplerHQ/doppler v1.21.2`, probe D), not from the
+  sibling `doppler_service_token` files:
 
-- **FR2 — the allow-list.** Both addresses added to the **default** per-merge `-target=` block
-  in `apply-web-platform-infra.yml` (between the `cloudflare_ruleset.cache_shared_binaries`
+  1. `doppler_service_account.token_drift` — `name = "token-drift-ci-tf"`.
+     `workplace_role` and `workplace_permissions` are **deliberately left unset**, so the
+     project membership below is the identity's *only* grant and it can reach no other Doppler
+     project. This is a design statement, not an omission, and the header says so.
+  2. `doppler_project_member_service_account.token_drift` — `project = "soleur"`,
+     `role = "viewer"`, `service_account_slug = doppler_service_account.token_drift.slug`.
+     `environments` is **left unset**, i.e. project-wide, justified by the 2026-08-03 per-config
+     census above: only `cli`/`cli_ops` are vacuous, so scoping to `prd` would forfeit 7
+     scannable keys while removing none of the escalation hops.
+  3. `doppler_service_account_token.token_drift` — `name = "token-drift-ci-tf"`,
+     `service_account_slug = doppler_service_account.token_drift.slug`, plus
+     `depends_on = [doppler_project_member_service_account.token_drift]`. Terraform derives
+     ordering from the `slug` reference to the *account*, not to the *membership*, so without
+     the explicit edge a partial apply can publish a working token whose grant has not landed.
+     That state is fail-loud (the first scan reads `0/13` → `degraded`), but it should be
+     unreachable rather than merely detectable.
+  4. `github_actions_secret.doppler_token_drift` — `repository = "soleur"`,
+     `secret_name = "DOPPLER_TOKEN_DRIFT"`,
+     `plaintext_value = doppler_service_account_token.token_drift.api_key`.
+
+  **`api_key`, not `key`.** `doppler_service_account_token` names its computed, sensitive value
+  `api_key`; every sibling `doppler_service_token` in this root uses `key`. Copying the sibling
+  attribute fails at `terraform plan`, not at run time, but it is the single most likely
+  transcription error in this change (AC1).
+
+  **`expires_at` is left unset — deliberately, and here is why.** The attribute is optional and
+  the sibling service tokens do not expire. An expiry would fail the scan closed twice daily
+  with no in-band re-mint path: the only remedy is an infra apply behind the environment gate,
+  which converts a routine credential lifetime into a gated action. It also buys no detection
+  the plan does not already have — a dead credential surfaces as `degraded` within 12 hours
+  either way — and rotation on demand is already available through `-replace=`, which
+  propagates in one apply because there is no `lifecycle.ignore_changes`. Asserted absent by
+  AC34 so the choice is visible rather than assumed.
+
+  No `lifecycle` block on any of the four. Header carries
+  `autonomy-considered: provider-mint-applied`, the rotation recipe
+  (`-replace=doppler_service_account_token.token_drift`), the reason no `ignore_changes` is
+  present, the emergency path (the same `-replace=` mints a new `api_key` and invalidates the
+  old one in a single apply; removing the membership resource strips reach without touching the
+  token), **and a BLAST RADIUS block written in the `workspaces-luks.tf:77-89` shape** — see
+  `## Encryption Posture` for the text it must carry, including the explicit statement that the
+  v3 "no new capability" claim does **not** hold at this shape.
+  *Templates:* `apps/web-platform/infra/web-arm-write-token.tf`,
+  `apps/web-platform/infra/kb-drift.tf:92-113` (shape and header conventions only — the
+  resource types and attribute names differ).
+
+- **FR2 — the allow-list.** All **four** addresses added to the **default** per-merge `-target=`
+  block in `apply-web-platform-infra.yml` (between the `cloudflare_ruleset.cache_shared_binaries`
   anchor at `:465` and the `betteruptime_team_member.ops` terminator at `:573`), and to no
-  dispatch-job set. Neither may go in `OPERATOR_APPLIED_TOKEN_EXCLUSIONS`
+  dispatch-job set: `doppler_service_account.token_drift`,
+  `doppler_project_member_service_account.token_drift`,
+  `doppler_service_account_token.token_drift`, `github_actions_secret.doppler_token_drift`.
+  Omitting the membership leg is the dangerous partial: the account and token would be created
+  and published with no project grant. None may go in `OPERATOR_APPLIED_TOKEN_EXCLUSIONS`
   (`terraform-target-parity.test.ts:795`) or `AUDIT_PENDING_UNCOVERED` (`:631`) — both are
   exact-string `Set<string>`, and `allTargets` is built from `stripDispatchJobs(...)`
   (`:841-849`), so inclusion in the default block is the only way to pass.
 
-- **FR3 — multi-credential enumeration.** `scripts/check-cloudflare-token-drift.sh` takes its
-  credentials from **`DOPPLER_TOKEN_ENVS`**, a whitespace-separated list of *environment-variable
-  names*, defaulting to `DOPPLER_TOKEN` when unset. No new argv surface, so the three
-  single-credential call sites are unchanged **by construction** rather than by care.
+- **FR3 — one credential, a loop over configs.** `scripts/check-cloudflare-token-drift.sh` keeps
+  taking its single credential from `DOPPLER_TOKEN` and gains **no credential-iteration surface
+  at all**: no `DOPPLER_TOKEN_ENVS`, no repeatable flag, no `for_each`. The detector loops over
+  the configs the one credential enumerates. This is simpler than both the v3 union and the
+  per-config `for_each` shape, and it means the three existing single-credential call sites are
+  unchanged **by construction** rather than by care.
   - **Reject unknown flags.** The argument loop's `*) shift ;;` catch-all (`:91`) silently
-    swallows a typo. Replace with an error + exit 2. Without this, a misspelling degrades the
-    scan to one credential with no signal — the class this change exists to remove.
-  - For each name: if the variable is unset or empty, record a failed credential and continue.
-    Do **not** pass an empty `--token` — the CLI treats it as unset and silently rebinds to the
-    ambient credential, so a two-credential run would dedupe to one and report success. This
-    is the same failure the Appendix A footnote records from the probe itself.
-  - Enumerate per credential with `doppler configs -p "$PROJECT" --json`, delivering the
-    credential as an **env prefix** (`DOPPLER_TOKEN="$t" doppler …`), never as `--token <value>`
-    on argv, which would expose every credential in `ps` for the length of a fleet sweep.
+    swallows a typo. Replace with an error + exit 2. The credential-typo motivation is gone,
+    but the hazard is not: a misspelled `--inventory` silently drops the denominator and prints
+    a caveat nobody asked for, and the catch-all is exactly the silent-degradation class this
+    change exists to remove.
+  - **An unset or empty `DOPPLER_TOKEN` is a failed credential, not an ambient fallback.**
+    Record the failure, emit `configs = 0`, and do **not** invoke the CLI with an empty
+    `--token` or an empty env value — the CLI treats it as unset and silently rebinds to
+    whatever ambient credential the runner carries, which would report a confident wrong
+    answer. This is the same failure the Appendix A footnote records from the probe itself.
+  - Enumerate once with `doppler configs -p "$PROJECT" --json`, delivering the credential as an
+    **env prefix** (`DOPPLER_TOKEN="$t" doppler …`), never as `--token <value>` on argv.
   - Drop the `2>/dev/null` on the enumeration (`:102`): a non-empty credential that enumerates
     nothing must be loud, and its stderr is currently swallowed.
-  - Build an exact config-to-credential map (each credential returns exactly one config) and
-    route **all four** downstream reads through it by env prefix: `:138`
-    (`doppler secrets --only-names`), `:223`, `:505`, `:506` (`doppler secrets get`).
-  - **`unset DOPPLER_TOKEN DOPPLER_CONFIG` once the named credentials are snapshotted into
-    the map.** The step keeps `DOPPLER_TOKEN` in its environment for the whole run, so a fifth
-    read site added later — or one of the four missed — silently binds the ambient
-    `prd_terraform` credential and grades the wrong config's bytes. Test P3 catches that at
-    review time only. Unsetting makes a missed site **fail loudly by construction**, which is
-    the standard this FR already sets for the call-site interface, and it closes the
-    empty-`--token`/ambient-rebind hazard at the source rather than per call site.
+  - **Route all four downstream reads through an explicit `-c "$cfg"`**, iterating the
+    enumerated config list: `:138` (`doppler secrets --only-names`), `:223`, `:505`, `:506`
+    (`doppler secrets get`). Under the previous single-config design these bound implicitly to
+    `DOPPLER_CONFIG`; with 13 configs in play, an implicit bind grades the wrong config's bytes.
+  - **`configs` counts configs whose `--only-names` read SUCCEEDED**, not configs enumerated.
+    A role that can list but not read would otherwise satisfy the floor while measuring
+    nothing (N1). A config that enumerates but fails its read is recorded by **name** in the
+    failed set and contributes to `configs_unread`.
+  - **`unset DOPPLER_TOKEN DOPPLER_CONFIG` once the credential is snapshotted into a local.**
+    The step keeps both in its environment for the whole run, so a fifth read site added later
+    — or one of the four missed — silently binds the ambient credential and the ambient config.
+    A test catches that at review time only. Unsetting makes a missed site **fail loudly by
+    construction**, and it closes the empty-value/ambient-rebind hazard at the source rather
+    than per call site.
   - **Register every distinct scanned value with `::add-mask::` under `GITHUB_ACTIONS=true`,
     before the first probe.** Actions auto-masks only `secrets.*`-sourced values, so every
     `CF_API_TOKEN*` value and every Access secret the detector pulls is currently unmasked in
     the job log — in the same change that deliberately un-swallows stderr from that subsystem.
-    This is the control that actually covers the residual below.
+    This matters **more** at 13 configs than it did at 2: the census counts 50 scannable key
+    occurrences that will transit the runner, against 18 under the union.
   - **Argv, stated accurately.** Env-prefix delivery defends against a *different-UID local
     observer* (`/proc/<pid>/cmdline` is world-readable, `/proc/<pid>/environ` is 0400), not
     against a compromised runner — on a GitHub-hosted runner every step shares one UID. It is
     still the right default, and it is not the whole picture: the detector already places
-    credential values on curl's argv at `:210` (`-H "Authorization: Bearer $v"`) and
-    `:361-362` (the Access id/secret headers), and the union **widens** that by bringing
-    `REGISTRY_PUSH_ACCESS_TOKEN_SECRET` into scope. That is pre-existing and accepted on an
-    ephemeral runner; the plan says so rather than implying argv is clean. Bounding fact worth
-    keeping in the header: the detector reads only *token-shaped* keys (`:146`, `:152`,
-    `:162`), not the whole ~116-secret config, so "two configs means more secret material
-    transits the runner" is bounded to that family.
+    scanned values on curl's argv at `:210` (`-H "Authorization: Bearer $v"`) and `:361-362`
+    (the Access id/secret headers), and going from 1 config to 13 **widens** that from 11
+    token-shaped values to the fleet set. That is pre-existing and accepted on an ephemeral
+    runner; the plan says so rather than implying argv is clean. Bounding fact worth keeping in
+    the header: the detector reads only *token-shaped* keys (`:146`, `:152`, `:162`), not the
+    whole config, so "13 configs means more secret material transits the runner" is bounded to
+    that family — 50 key occurrences, not ~1500 secrets.
   - **`emit_json` runs before every exit-2 return.** Today the enumeration guard (`:104-107`)
     and the non-vacuity gate (`:184-192`) exit before `emit_json` (`:679`), so a revoked
     credential produces no verdict file at all, the step parses `configs` as `-1`, and
     coverage lands on `unknown` — whose issue Remedy reads "do not widen the Doppler token,
     fix the verdict file first", which is unperformable for a revoked credential. Emitting
     first keeps `configs`, `configs_floor` and `coverage` published on every path, so a
-    revoked credential surfaces as `degraded` (a credential the step was given did not do its
-    job) rather than blinding the whole scan. The exit codes themselves are unchanged.
+    revoked credential surfaces as `degraded` at `0/13` rather than blinding the whole scan.
+    The exit codes themselves are unchanged.
 
-- **FR4 — the detector owns the ladder.** Add `--inventory <path>`; `emit_json` gains
-  `config_names` (scanned, sorted), `configs_floor`, `configs_expected`, `configs_unread`
-  (inventory minus scanned, sorted), `coverage`, `coverage_ratio` and `inventory_age_days`.
+- **FR4 — the detector owns the ladder.** Add `--inventory <path>` and `--configs-floor <n>`;
+  `emit_json` gains `config_names` (successfully read, sorted), `configs_floor`,
+  `configs_expected`, `configs_unread` (inventory minus read, sorted), `coverage`,
+  `coverage_ratio` and `inventory_age_days`. `--configs-floor` defaults to `1` when absent, so
+  the three existing call sites keep their current behaviour and only the token-drift step
+  passes `13`.
   Every existing key — `live`, `dead`, `unverifiable`, `probes`, `configs`, `stale`,
   `unverifiable_keys` — keeps its name and type; two other call sites read three of them with
   no compile-time link.
@@ -310,25 +473,30 @@ the credential lands.
      `causes`.
   3. **The `|| echo "-1 -1 - -1"` fallback's arity moves in lockstep** with the variable list,
      or new variables silently arrive empty on the fallback path.
-  Also: `DOPPLER_CONFIG: prd_terraform` is **removed** from the step's `env:` (`:156`) — a
-  Doppler service token ignores it, and with two credentials in play it reads as "which config
-  this scans".
+  Also, in the step's `env:`:
+  - `DOPPLER_TOKEN` is repointed from `secrets.DOPPLER_TOKEN` to
+    **`secrets.DOPPLER_TOKEN_DRIFT`** — the literal swap the #7159 checklist asked for, now
+    safe because the new credential is a superset of the old one's reach.
+  - `DOPPLER_CONFIG: prd_terraform` is **removed** (`:156`) — a Doppler credential of this
+    class does not take direction from it, and with 13 configs in play it reads as "which
+    config this scans".
+  - `DOPPLER_CONFIGS_FLOOR: 13` is **added**, and is the only place the floor is written
+    outside the tests.
 
-  **Two guards on the floor, and the order matters.** `configs_floor` counts the names the
-  step supplies, so it is exact — but it is *self-referential*, and therefore structurally
-  blind to its own shortening: reduce the list from two names to one and the scan reports
-  `floor=1, scanned=1 → at-floor`, the close arm fires, and coverage silently regresses to one
-  config. That is the same fail-open shape the gate/report split was introduced to remove, in
-  a new place. So:
-  1. The step asserts `configs_floor >= 2` — an assertion **external** to the floor, because a
-     self-referential number cannot catch its own reduction — and downgrades to `degraded`
-     when it fails. The consumer suite pins both credential names in `DOPPLER_TOKEN_ENVS`.
-  2. When `DOPPLER_TOKEN_ENVS` is empty the step **writes `coverage=unknown` and
-     `verdict=unavailable` to `$GITHUB_OUTPUT` first, and only then fails.** Failing before
-     the write leaves every output as the empty string, and every consumer arm in this job
-     tests positively (`== 'dead'`, `== 'degraded'`, `contains(...)`), so *nothing* matches:
-     no email, no issue, and the final Sentry check-in derives its status from
-     `steps.plan.outputs.exit_code` rather than from `token_drift`, so the monitor still
+  **Two guards on the floor, and the order matters.** The floor is declared rather than
+  derived, so it is exact about what the step demands — but a declared number can be edited
+  down, and a floor lowered alongside a narrowed grant would keep the scan at `at-floor` while
+  coverage regressed. So:
+  1. The step asserts `configs_floor >= 13` — an assertion **external** to the declaration,
+     because a number cannot catch its own reduction — and downgrades to `degraded` when it
+     fails. The consumer suite pins the literal as a named integer and separately asserts it
+     equals the committed inventory's name count (FR8).
+  2. When `DOPPLER_CONFIGS_FLOOR` is unset, empty or unparseable, the step **writes
+     `coverage=unknown` and `verdict=unavailable` to `$GITHUB_OUTPUT` first, and only then
+     fails.** Failing before the write leaves every output as the empty string, and every
+     consumer arm in this job tests positively (`== 'dead'`, `== 'degraded'`, `contains(...)`),
+     so *nothing* matches: no email, no issue, and the final Sentry check-in derives its status
+     from `steps.plan.outputs.exit_code` rather than from `token_drift`, so the monitor still
      reports `ok`. Writing first routes the failure to the DETECTOR-UNAVAILABLE email and the
      `unknown` issue arm.
 
@@ -346,8 +514,12 @@ the credential lands.
      **label-scoped, not title-scoped**, so without this a `single-config`-era issue would pin
      a stale title and a remedy this change has already performed.
   4. Filer `TITLE`/`LEAD` per class; the `degraded` body lists `configs_unread` and the ratio.
-  5. Filer Remedy prose (`:461-476`) — the inheritance sentence and the fleet-wide-coverage
-     promise both replaced with the measured behaviour.
+  5. Filer Remedy prose (`:461-476`) — the inheritance sentence goes, and the
+     "project-scoped read **token**" phrase is replaced by the credential that actually exists:
+     a `doppler_service_account` holding a `viewer` project membership. The remedy for
+     `degraded` is no longer "widen the token" (there is nothing left to widen); it is "the
+     credential has been narrowed or has stopped working — compare `coverage_ratio` and
+     `configs_unread` against the declared floor", with the three narrowings N1/N2/N3 named.
   6. Filer Closing prose (`:481-485`) — closing condition becomes `coverage: at-floor`.
   7. Close arm `if:` → `coverage == 'at-floor'`; close comment body updated.
   8. **DEAD ops email body (`:280`)** — `… branch configs inherit it.` The acute arm, on the
@@ -363,7 +535,7 @@ the credential lands.
       makes that token unreachable, so the runbook step becomes unperformable if left.
   13. **The verdict echo line (`:251`).** Today it prints
       `token-drift verdict: … (detector exit …, causes: …, configs: …, coverage: …)` — no
-      `floor:` and no `ratio:`. The `discoverability_test` and AC27 both assert those fields,
+      `floor:` and no `ratio:`. The `discoverability_test` and AC26 both assert those fields,
       so this line is a consumer and must be listed as one; without it the grep prefix matches
       while the asserted fields are absent.
   14. **The filer's update path gets its own error slug.** `gh issue edit --body-file` branches
@@ -398,26 +570,38 @@ the credential lands.
   an issue rather than a `::warning::` on a green run is the point: a warning on a green cron
   is the shape this file's own header block (`:324-330`) exists to eliminate.
 
-- **FR8 — the inventory (report only).**
+- **FR8 — the inventory (report only) and the floor pin.**
   `apps/web-platform/infra/doppler-config-inventory.txt`: a `# generated: <ISO-8601>` header,
-  the generator command in a comment, then the sorted config names measured on 2026-08-02. It
-  feeds `coverage_ratio`, `configs_unread` and `inventory_age_days`, and **gates no state**.
-  There is no cross-workflow verification step. The file is expected to drift — `git-data-luks.tf:79`
-  declares a `prd_git_data` config that will exist after git-data birth, and rehearsal
-  dispatches create ephemeral ones — which is precisely why it must not gate.
+  the generator command in a `# command:` comment, then the 13 sorted config names measured on
+  2026-08-03. It feeds `coverage_ratio`, `configs_unread` and `inventory_age_days`, and
+  **gates no state**. There is still no cross-workflow live-verification step, for the three
+  reasons recorded above. The file is expected to drift — `git-data-luks.tf:79` declares a
+  `prd_git_data` config that will exist after git-data birth, and rehearsal dispatches create
+  ephemeral ones — which is precisely why it must not gate.
 
-- **FR9 — the ADR.** `ADR-155` records the measured scope of a Doppler service token, that
-  fan-out coverage scales with credential count rather than config count, the union-over-swap
-  correction, and the gate-versus-report split. Provenance cites the census.
+  The one thing that *is* enforced is repo-internal consistency:
+  `plugins/soleur/test/token-drift-workflow-causes.test.sh` asserts that the workflow's
+  `DOPPLER_CONFIGS_FLOOR` literal parses, is `>= 13`, and equals `grep -cE '^[a-z0-9_]+$'` over
+  the inventory. This is the CI check that fails when the floor and the inventory drift apart.
+  It reads no credential and makes no network call, so it cannot be defeated by narrowing the
+  credential, and it cannot red a merge because live Doppler grew.
+
+- **FR9 — the ADR.** `ADR-155` records: that a `doppler_service_token` is config-scoped and a
+  `doppler_service_account` with a project membership is not (with the falsified
+  "no project-scoped read token exists" premise from #7159); that the `viewer` role is the
+  least-privileged role carrying `enclave_project_config_secrets_read`; the decision to leave
+  `environments`, `workplace_role` and `workplace_permissions` unset; and the gate-versus-report
+  split — **the floor is declared, the ratio is reported**. Provenance cites the 2026-08-02
+  census and the 2026-08-03 probes.
 
 ---
 
 ## Architecture Decision (ADR/C4)
 
-**Create `ADR-155 — Fan-out coverage scales with credentials, not configs`** as an in-scope
-task of this plan. It corrects reasoning currently carried in shipped comments, in the
-workflow's remedy prose, in an operator runbook and in the decision comment, and it records
-why the denominator may report but must not gate.
+**Create `ADR-155 — A project-scoped Doppler service account reads the fleet; the coverage floor
+is declared, not derived`** as an in-scope task of this plan. It corrects reasoning currently
+carried in shipped comments, in the workflow's remedy prose, in a runbook and in the #7159
+option table, and it records why the denominator may report but must not gate.
 
 > **Ordinal.** ADR-155 is the next free ordinal (highest existing is ADR-154). **Provisional**
 > — a sibling PR can claim it. On renumber, sweep this plan, the spec, the tasks file and every
@@ -431,37 +615,50 @@ Related: ADR-154, ADR-007, ADR-149.
 (`model.c4:238`), `github` (`:230`) and `cloudflare` (`:234`) are already modelled as external
 systems and are already included in both container views (`views.c4:14`, `:36`). The change
 adds no external human actor, no external system, no container or data store, and moves no
-actor-to-surface access relationship — a second read credential on an existing scheduled job
-sits below C4 component granularity.
+actor-to-surface access relationship — a read identity on an existing scheduled job sits below
+C4 component granularity.
 
 ---
 
 ## Infrastructure (IaC)
 
-**Terraform changes.** `apps/web-platform/infra/token-drift-read-token.tf` (new: the resource
-pair); `apps/web-platform/infra/doppler-config-inventory.txt` (new: a data file, not
-Terraform); `.github/workflows/apply-web-platform-infra.yml` (two `-target=` lines). Providers
-`DopplerHQ/doppler ~> 1.21` and `integrations/github` are already required and locked — no
-version or lockfile change. No new Terraform variable, so no new `TF_VAR_*` precondition on the
-merge-triggered run.
+**Terraform changes.** `apps/web-platform/infra/token-drift-service-account.tf` (new: the three
+Doppler resources plus the Actions secret); `apps/web-platform/infra/doppler-config-inventory.txt`
+(new: a data file, not Terraform); `.github/workflows/apply-web-platform-infra.yml` (four
+`-target=` lines). Providers `DopplerHQ/doppler ~> 1.21` and `integrations/github` are already
+required and locked — no version or lockfile change, and the three new resource types are
+present in the already-pinned v1.21.2 schema (probe D). No new Terraform variable, so no new
+`TF_VAR_*` precondition on the merge-triggered run.
 
 **Apply path.** Not host-touching, so no cloud-init and no bootstrap script. Merge to `main`
-triggers the infra workflow on `apps/web-platform/infra/*.tf`; both new addresses sit in the
-default allow-list; the run waits on the `web-platform-infra-apply` environment gate. Blast
-radius: one Doppler service token, one repository Actions secret. Zero destroys, zero reboots,
-zero host creates — the destroy-guard, reboot counter and `host_creates` tripwire all read 0.
-Rotation is `-replace=doppler_service_token.token_drift`; with no `lifecycle.ignore_changes`,
-the new key reaches `DOPPLER_TOKEN_DRIFT` in the same run.
+triggers the infra workflow on `apps/web-platform/infra/*.tf`; all four new addresses sit in
+the default allow-list; the run waits on the `web-platform-infra-apply` environment gate. Blast
+radius of the *apply itself*: one Doppler service account, one project membership, one service
+account token, one repository Actions secret. Zero destroys, zero reboots, zero host creates —
+the destroy-guard, reboot counter and `host_creates` tripwire all read 0. Rotation is
+`-replace=doppler_service_account_token.token_drift`; with no `lifecycle.ignore_changes`, the
+new `api_key` reaches `DOPPLER_TOKEN_DRIFT` in the same run.
 
-**Distinctness / drift safeguards.** `dev` untouched (the credential is `prd`-scoped by
-construction). The absence of `lifecycle.ignore_changes` is deliberate and explained in the
-file header. `doppler_service_token.token_drift.key` is Computed + Sensitive + write-once and
-lands in `terraform.tfstate` on the R2 backend. If either `-target=` line is dropped, the
-twice-daily `terraform plan` surfaces the resource as unmanaged drift.
+**Ordering.** The token carries an explicit
+`depends_on = [doppler_project_member_service_account.token_drift]`. Terraform infers an edge
+from the token to the *account* via `service_account_slug`, but none from the token to the
+*membership*, so under a partial or reordered apply the Actions secret could be published
+before the grant lands. The explicit edge removes that window.
+
+**Distinctness / drift safeguards.** The identity is project-scoped, so `dev` is **no longer
+untouched** by construction — it is in reach, deliberately, and that is disclosed rather than
+asserted away (see `## Encryption Posture`). The absence of `lifecycle.ignore_changes` is
+deliberate and explained in the file header. `doppler_service_account_token.token_drift.api_key`
+is Computed + Sensitive + write-once and lands in `terraform.tfstate` on the R2 backend. If any
+of the four `-target=` lines is dropped, the twice-daily `terraform plan` surfaces that resource
+as unmanaged drift — and dropping the *membership* leg additionally shows up at run time as
+`coverage: degraded` at `0/13`, because the token would exist with no grant.
 
 **Vendor-tier reality check.** No per-tier quota affects service-token creation on the current
-plan; five already exist on the `prd` config alone, measured 2026-08-02. No new recurring
-vendor expense.
+plan; five service tokens already exist on the `prd` config alone, measured 2026-08-02. Service
+accounts are a distinct object class and their quota was **not** probed — if the apply fails on
+a plan limit, that surfaces as a red infra run at the environment gate, not as a silent partial.
+No new recurring vendor expense.
 
 ---
 
@@ -469,24 +666,30 @@ vendor expense.
 
 ```yaml
 at_rest:
-  - store: Doppler soleur/prd config (the secret set the new credential can read)
+  - store: the ENTIRE Doppler soleur project — 4 environments, 13 configs
     mechanism: vendor-managed encryption at rest (Doppler)
     evidence: >
-      ADR-007-doppler-secrets-management.md. Doppler-side SCOPE evidence:
-      apps/web-platform/infra/web-probe-read-token.tf (same config, same access). SINK
-      evidence is a different comparator and must not be conflated — web_probes.key goes to a
-      host /etc/default file, never to a repo-wide Actions secret. The load-bearing sink
+      ADR-007-doppler-secrets-management.md. Doppler-side SCOPE evidence: the pinned provider
+      schema (probe D) and GET /v3/projects/roles (probe E), both 2026-08-03. SINK evidence is
+      a different comparator and must not be conflated — web_probes.key goes to a host
+      /etc/default file, never to a repo-wide Actions secret. The load-bearing sink
       comparators are github_actions_secret.workspaces_luks_boot_token
       (workspaces-luks.tf:131-148) and github_actions_secret.doppler_token_write
       (doppler-write-token.tf:47-51).
     defends_against: disclosure from Doppler's storage layer
     does_not_defend: >
-      anyone holding the token value. "access = read" is NOT a capability boundary here, and
-      calling this a read-only credential would be false. A Doppler service token is
-      config-scoped, and soleur/prd root contains credentials that escalate past read:
+      anyone holding the api_key value. THIS IS A WIDENING, AND THE v3 MITIGATION NO LONGER
+      APPLIES. The credential is a project-scoped identity, so its reach is the whole soleur
+      project: the 7 prd configs, the 3 dev configs, ci, and the 2 cli configs. That is
+      strictly broader than the "whole prd tree" #7159 accepted, and strictly broader than the
+      pre-existing DOPPLER_TOKEN_PRD, which is prd-root-scoped. The v3 sentence "this adds NO
+      new capability — only a second copy" is FALSE at this shape and is WITHDRAWN, not
+      softened. The operator was shown these measurements and chose this shape on 2026-08-03;
+      it is an accepted, disclosed trade-off, recorded here rather than buried.
+      What the reach resolves to, unchanged from v3 because these all live in prd root:
       (a) GHCR_MINTER_DOPPLER_TOKEN (ghcr-minter-doppler-token.tf:56-60) whose value is
       doppler_service_token.ghcr_minter.key — declared access = "read/write" on config "prd"
-      at :45-50 — so a read credential on prd reads a WRITE credential for prd;
+      at :45-50 — so this credential reads a Doppler WRITE credential;
       (b) GITHUB_APP_PRIVATE_KEY / GITHUB_APP_ID / GITHUB_APP_WEBHOOK_SECRET
       (github-app.tf:40-78) for the same App the Terraform provider authenticates with
       (main.tf:83-90), which kb-drift.tf:101-102 records as holding secrets:write — so it
@@ -495,26 +698,44 @@ at_rest:
       (c) SUPABASE_SERVICE_ROLE_KEY (bypass-RLS read of all user data), PROXY_TLS_KEY,
       the three git transport/provision/remove SSH private keys, the zot push token, and the
       Inngest signing/event/manual-trigger keys.
-      Materially: this credential is equivalent to Doppler WRITE on prd and to GitHub App
-      administration of the repository. That is the true shape of the trade-off the decision
-      comment accepts, and the plan states it rather than the softer "reads the whole prd
-      config".
-      MITIGATION, and the reason the trade-off is acceptable: DOPPLER_TOKEN_PRD already
-      exists as a repo secret with identical scope and six consumers. This adds NO new
-      capability — only a second, independently-rotatable copy. The operational consequence
-      is that an incident response must revoke BOTH, and only one of them is
-      Terraform-managed.
+      NEW at this shape: the same reach now also covers dev, dev_personal, dev_scheduled, ci,
+      cli and cli_ops. Materially, the credential is equivalent to Doppler WRITE on prd and to
+      GitHub App administration of the repository, and it additionally reads every non-prd
+      config in the project.
+      ROLE HONESTY. "viewer" is the least-privileged role that can read secret VALUES — it
+      carries enclave_project_config_secrets_read and, verified via GET /v3/projects/roles,
+      does NOT carry enclave_project_config_secrets_write; the only lower role, no_access, has
+      zero permissions. But "viewer" is not purely read-only: it also carries
+      enclave_project_config_dynamic_secrets_leases_write (a WRITE verb — it can create
+      dynamic-secret leases), enclave_project_config_dynamic_secrets_read,
+      enclave_project_config_rotated_secrets_read and enclave_config_logs. Those are disclosed
+      rather than elided.
+      WHAT STILL BOUNDS IT, each verified rather than assumed:
+      (1) workplace_role and workplace_permissions are unset, so the project membership is the
+      ONLY grant — the identity cannot reach any other Doppler project;
+      (2) the role cannot write secret values (roles probe above);
+      (3) the credential is Terraform-managed and rotatable by -replace= in a single apply,
+      which DOPPLER_TOKEN_PRD is not;
+      (4) the detector reads only token-shaped keys, so what transits the runner is bounded to
+      50 scannable key occurrences (2026-08-03 census), not every secret in the project.
+      OPERATIONAL OBLIGATION: an incident response must revoke BOTH this credential and
+      DOPPLER_TOKEN_PRD; only this one is Terraform-managed.
     disclosed_as: >
-      BLAST RADIUS header block in token-drift-read-token.tf, written in the shape
+      BLAST RADIUS header block in token-drift-service-account.tf, written in the shape
       workspaces-luks.tf:77-89 already uses for this exact class ("THIS IS NOT LEAST
       PRIVILEGE, AND SAYING SO WOULD BE FALSE"), citing
       knowledge-base/project/learnings/security-issues/2026-07-07-doppler-branch-config-does-not-isolate-secrets.md
-      and #6167 rather than inventing fresh prose.
+      and #6167 rather than inventing fresh prose, and stating explicitly that this shape is
+      WIDER than DOPPLER_TOKEN_PRD.
     live_verification: >
-      doppler configs tokens -p soleur -c prd --json | grep -c '"name": *"token-drift-ci-tf"'
-      returns exactly 1. Count-asserting, not a bare grep: a bare match passes on one token
-      and on five, so it cannot distinguish a clean state from a half-completed -replace= or
-      an accumulated orphan (cq-assert-anchor-not-bare-token).
+      terraform state list | grep -c '^doppler_service_account_token\.token_drift$' returns
+      exactly 1, and the same for the account and the membership addresses. Count-asserting,
+      not a bare grep: a bare match cannot distinguish a clean state from a half-completed
+      -replace= or an accumulated orphan (cq-assert-anchor-not-bare-token). The runtime proof
+      that the GRANT is at the intended breadth is the scan itself reporting
+      coverage_ratio 13/13 (AC26) — a token that exists with a narrowed or missing membership
+      reads below the floor. A `doppler` CLI enumeration path for service-account tokens was
+      NOT probed and is deliberately not asserted here.
   - store: terraform.tfstate in the R2 backend bucket soleur-terraform-state
     mechanism: Cloudflare R2 server-side encryption at rest (provider-default, always on),
                TLS-only access; same posture as every sibling token key already in state
@@ -572,32 +793,48 @@ error_reporting:
              sets an output the email fallback gates on; the detector emits its JSON
              BEFORE any exit-2 return, so a failure never blinds the coverage outputs
 failure_modes:
-  - mode: a configured credential's Actions secret is absent or empty (the merge-to-release
-          window, or a deleted secret)
-    detection: the name resolves to an empty value, so it counts toward configs_floor but not
-               configs; scanned < floor yields coverage=degraded
+  - mode: DOPPLER_TOKEN_DRIFT is absent or empty (the merge-to-release window, or a deleted
+          secret)
+    detection: the value is empty, so no config is read; configs=0 < configs_floor yields
+               coverage=degraded at ratio 0/13. The detector must NOT fall through to an
+               ambient credential, which the Doppler CLI does for an empty value.
     alert_route: ::warning:: plus the coverage action-required issue, whose body is rewritten
                  on every state transition
     layer: GitHub Actions run annotations + the GitHub issue channel harvested by
            operator-digest
-  - mode: a configured credential is REVOKED or EXPIRED — non-empty, but enumerates nothing
-    detection: that credential contributes 0 configs, so scanned < floor and coverage is
-               degraded. This is a DIFFERENT path from the absent-secret mode above and must
-               not be collapsed into it: the value is present, so the remedy is rotation, not
-               provisioning. If it is the ONLY credential, no conclusion was drawn and the
-               detector additionally exits 2 (verdict=unavailable) — but emit_json has
-               already run, so coverage/configs_floor are still published.
+  - mode: the credential is REVOKED or EXPIRED — non-empty, but enumerates nothing
+    detection: configs=0 < floor, so coverage is degraded. This is a DIFFERENT path from the
+               absent-secret mode above and must not be collapsed into it: the value is
+               present, so the remedy is rotation, not provisioning. Since it is the only
+               credential, no conclusion was drawn and the detector additionally exits 2
+               (verdict=unavailable) — but emit_json has already run, so coverage,
+               configs_floor and coverage_ratio are still published.
     alert_route: the coverage issue for the degraded case; additionally the
-                 DETECTOR-UNAVAILABLE ops email when nothing at all was measured
+                 DETECTOR-UNAVAILABLE ops email because nothing at all was measured
     layer: GitHub issue channel + Resend ops email (notify-ops-email composite action)
-  - mode: DOPPLER_TOKEN_ENVS is empty, or is shortened to one name, so the floor collapses
-          and a one-config scan would read as healthy
+  - mode: the credential is NARROWED — N1 the membership role is downgraded, N2 environments
+          is scoped to a subset, N3 DOPPLER_TOKEN_DRIFT is repointed at a config-scoped
+          doppler_service_token
+    detection: configs falls below the declared floor of 13 — 0/13 for N1, 7/13 for N2, 1/13
+               for N3 — so coverage=degraded and configs_unread names the dropped configs.
+               This is the mode the whole denominator design exists to catch, and it is the
+               reason the denominator may not be taken from the scan's own credential: a
+               credential-derived denominator narrows in lockstep and reports 13/13 forever.
+               N1's subtle form (a role that lists but cannot read) is caught because configs
+               counts configs successfully READ, not configs listed.
+    alert_route: ::warning:: plus the coverage action-required issue, body rewritten per state
+    layer: GitHub Actions run annotations + the GitHub issue channel
+  - mode: DOPPLER_CONFIGS_FLOOR is unset, empty or unparseable, or has been lowered so a
+          narrowed credential would read as healthy
     detection: the step writes coverage=unknown and verdict=unavailable to $GITHUB_OUTPUT and
-               THEN fails, and separately asserts configs_floor >= 2 — a self-referential
-               floor cannot catch its own shortening, so the assertion is external to it
+               THEN fails; it separately asserts configs_floor >= 13 at run time — a declared
+               number cannot catch its own reduction, so the assertion is external to it — and
+               the consumer suite pins the literal against the committed inventory's name
+               count at PR time
     alert_route: the DETECTOR-UNAVAILABLE ops email arm and the `unknown` coverage-issue arm,
-                 both reachable because the outputs were written before the failure
-    layer: Resend ops email + the GitHub issue channel
+                 both reachable because the outputs were written before the failure; plus a
+                 red PR check for the pre-merge half
+    layer: Resend ops email + the GitHub issue channel + the CI test suite
   - mode: the committed inventory goes short or stale, so the reported ratio overstates
           coverage
     detection: inventory_age_days exceeds 90, appended as a caveat wherever the ratio prints
@@ -637,9 +874,9 @@ discoverability_test:
     'token-drift verdict:'
   expected_output: >
     the newest run's id, conclusion and timestamp, then a line of the form "token-drift
-    verdict: clean (detector exit 0, causes: -, configs: 2, floor: 2, coverage: at-floor,
-    ratio: 2/13)" once the credential has landed — or, in the merge-to-release window,
-    "configs: 1, floor: 2, coverage: degraded, ratio: 1/13". NOTE the command deliberately
+    verdict: clean (detector exit 0, causes: -, configs: 13, floor: 13, coverage: at-floor,
+    ratio: 13/13)" once the credential has landed — or, in the merge-to-release window,
+    "configs: 0, floor: 13, coverage: degraded, ratio: 0/13". NOTE the command deliberately
     does NOT filter --status success: that filter returns the last HEALTHY run and prints a
     green verdict line while a newer run is failing, which is a clean bill of health for a
     question never asked.
@@ -658,23 +895,27 @@ extension does not fire.
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** a production deploy that cannot happen. The
-detector is on the critical path of five workflows (ADR-154). Implemented as a swap,
+detector is on the critical path of five workflows (ADR-154). If the swap lands with a
+credential whose grant did not (the membership `-target=` dropped, the ordering edge missing),
 `CI_SSH_ACCESS_TOKEN` stops being scanned; the next rotation of that credential outside
 Terraform goes undetected and every remote write path to the production host dark-fails — the
 measured 2026-07-29 outcome, where the product served a stale build for roughly 63 hours while
-every dashboard read green. Implemented with a gating denominator, a short inventory silences
-the channel entirely while the job stays green.
+every dashboard read green. That state is fail-loud here (`coverage: degraded` at `0/13`),
+which is the point of the floor. Implemented with a gating denominator instead, a short
+inventory would silence the channel entirely while the job stayed green.
 
 **If this leaks, the user's data and workflow are exposed via:** the new `DOPPLER_TOKEN_DRIFT`
-value — and the exposure is **larger than "read-only on prd"**. A Doppler service token is
-config-scoped, and `soleur/prd` root holds two credentials that escalate past read: the
-`ghcr_minter` **read/write** Doppler token for the same config
+value — and the exposure is **the whole `soleur` project**, not "read-only on prd". This is a
+genuine widening over both #7159's accepted scope and the pre-existing `DOPPLER_TOKEN_PRD`.
+Within reach: the `ghcr_minter` **read/write** Doppler token
 (`ghcr-minter-doppler-token.tf:56-60` storing `doppler_service_token.ghcr_minter.key`, declared
-`access = "read/write"` at `:45-50`), and the Terraform GitHub App private key
+`access = "read/write"` at `:45-50`); the Terraform GitHub App private key
 (`github-app.tf:55-59`) for an App with `secrets:write`, which can rewrite every repository
-Actions secret including this one. It also reads `SUPABASE_SERVICE_ROLE_KEY` — bypass-RLS
-access to all user data. So the honest statement is that this credential is materially
-equivalent to Doppler write on `prd` and to GitHub App administration of the repository.
+Actions secret including this one; `SUPABASE_SERVICE_ROLE_KEY` — bypass-RLS access to all user
+data; and, new at this shape, every secret in `dev`, `dev_personal`, `dev_scheduled`, `ci`,
+`cli` and `cli_ops`. The honest statement is that this credential is materially equivalent to
+Doppler write on `prd` and to GitHub App administration of the repository, and it reads the
+non-prd environments as well.
 
 Vectors: the repository Actions secret (readable by any workflow in the repo — the governing
 control is who can merge under `.github/workflows/`, and `CODEOWNERS` pins that path to the
@@ -682,10 +923,17 @@ operator while its own header records that the branch-protection rule enforcing 
 review is still an unfinished follow-up, with no ruleset in IaC enforcing it), the Terraform
 state object in R2, and the runner process during the scan.
 
-**What makes the trade-off acceptable, and what it obliges:** `DOPPLER_TOKEN_PRD` already
-exists as a repository secret with identical scope and six consumers. This change adds **no new
-capability** — only a second, independently-rotatable copy. The obligation that follows is that
-an incident response must revoke **both**, and only the new one is Terraform-managed.
+**What the trade-off is, and what it obliges.** The v3 answer — "`DOPPLER_TOKEN_PRD` already
+carries identical scope, so this adds no new capability" — is **false at this shape** and is
+withdrawn. This change *does* add capability: a repository-level credential that reads four
+environments where the previous widest read one. That was put to the operator with the
+measurements on 2026-08-03 and accepted, in exchange for the coverage the census quantifies —
+50 scannable key occurrences across 13 configs instead of 11 in one, and both
+Access-service-token families in scope for the first time. What remains true and verified:
+`viewer` cannot write secret values; the identity holds no workplace role or permissions, so
+it cannot reach another Doppler project; and unlike `DOPPLER_TOKEN_PRD` it is Terraform-managed
+and rotates in a single apply. The obligation that follows is unchanged: an incident response
+must revoke **both**, and only the new one is Terraform-managed.
 
 **Brand-survival threshold:** `single-user incident`.
 
@@ -699,12 +947,14 @@ acceptance criterion below asserts the invariant rather than a proxy.
 
 **Domains relevant:** Engineering (CTO).
 
-**Engineering (CTO) — reviewed.** Four risks dominate, each with a named mitigation: (1)
-swap-versus-union, a measured coverage regression (FR3); (2) the config-to-credential map,
-which must be exact so no per-config read falls back to an ambient credential (FR3, test P3);
-(3) detector JSON schema stability, since two other call sites read `live`/`dead`/`unverifiable`
-with no compile-time link (FR4, AC11); (4) a denominator that gates state, resolved by the
-gate/report split.
+**Engineering (CTO) — reviewed.** Four risks dominate, each with a named mitigation: (1) a
+credential published without its grant, from a dropped `-target=` leg or a missing ordering
+edge (FR1, FR2, AC3, AC24); (2) the per-config read binding implicitly instead of through
+`-c "$cfg"`, grading the wrong config's bytes across 13 configs (FR3, test P3); (3) detector
+JSON schema stability, since two other call sites read `live`/`dead`/`unverifiable` with no
+compile-time link (FR4, AC11); (4) a denominator that gates state — now sharper, because a
+project-scoped credential makes a self-derived denominator *look* correct while being
+structurally blind (resolved by the declared floor plus the repo-internal pin).
 
 **Product/UX Gate — NONE.** The mechanical UI-surface override was evaluated against Files to
 Create/Edit: no path matches `components/**/*.tsx`, `app/**/page.tsx`, `app/**/layout.tsx`, or
@@ -718,14 +968,25 @@ incident`), so the gate was run rather than skipped. The *artifacts* this change
 credential material and Doppler config names — no personal data. But the gate must be scoped to
 the credential's **reach**, not the artifacts: `soleur/prd` root holds
 `SUPABASE_SERVICE_ROLE_KEY`, so the credential resolves bypass-RLS read of all user data, and
-this change publishes a second repository-level sink for it. That is a change to the
-access-control surface over regulated data, which is what
-`hr-gdpr-gate-on-regulated-data-surfaces` targets. Assessment: **no new processing activity and
-no new Article 30 row**, because `DOPPLER_TOKEN_PRD` already grants the identical reach to the
-same set of repository workflows — the surface is duplicated, not widened. The obligation that
-follows is the dual-revocation note in `## User-Brand Impact`, not a register entry. Recording
-the reasoning rather than the conclusion, because "the artifacts contain no personal data" is a
-false negative in the understating direction.
+this change publishes a repository-level sink for it. That is a change to the access-control
+surface over regulated data, which is what `hr-gdpr-gate-on-regulated-data-surfaces` targets.
+
+**The v3 assessment's premise is dead and the conclusion is re-derived, not inherited.** v3
+concluded "no new Article 30 row, because `DOPPLER_TOKEN_PRD` grants the identical reach — the
+surface is duplicated, not widened." At this shape the surface **is** widened: the credential
+reads four environments, `DOPPLER_TOKEN_PRD` reads one.
+
+Re-derived assessment: still **no new processing activity and no new Article 30 row**, on
+different grounds. The regulated-data reach is `SUPABASE_SERVICE_ROLE_KEY` in `prd` root, which
+`DOPPLER_TOKEN_PRD` already exposes to the same set of repository workflows; the widening is
+over *non-prd* environments, and `dev` is a distinct Supabase project
+(`hr-dev-prd-distinct-supabase-projects`), so it adds no new category of personal data, no new
+purpose, no new recipient and no new retention. What changed is the number of credentials that
+resolve the existing production reach — a security fact, handled by the dual-revocation
+obligation in `## User-Brand Impact` — not a processing fact. Recording the reasoning rather
+than the conclusion, because "the artifacts contain no personal data" is a false negative in
+the understating direction, and because the v3 conclusion would have been *right by accident*
+if carried over unexamined.
 
 ---
 
@@ -745,50 +1006,73 @@ Every criterion is a command whose output decides it.
 
 ### Pre-merge (PR)
 
-- **AC1 — the resource pair has the settled shape.** In
-  `apps/web-platform/infra/token-drift-read-token.tf`: `grep -cE '^\s*config\s*=\s*"prd"$'` = 1,
-  `grep -cE '^\s*name\s*=\s*"token-drift-ci-tf"'` = 1, `grep -cE '^\s*access\s*=\s*"read"'` = 1,
-  `grep -cE '^\s*secret_name\s*=\s*"DOPPLER_TOKEN_DRIFT"'` = 1. Whitespace-tolerant, because
-  `terraform fmt` realigns `=` when any attribute is added.
+- **AC1 — the four resources have the chosen shape, with the right attribute names.** In
+  `apps/web-platform/infra/token-drift-service-account.tf`, all whitespace-tolerant because
+  `terraform fmt` realigns `=` when any attribute is added:
+  `grep -cE '^resource "doppler_service_account" "token_drift"'` = 1;
+  `grep -cE '^resource "doppler_project_member_service_account" "token_drift"'` = 1;
+  `grep -cE '^resource "doppler_service_account_token" "token_drift"'` = 1;
+  `grep -cE '^\s*project\s*=\s*"soleur"'` = 1; `grep -cE '^\s*role\s*=\s*"viewer"'` = 1;
+  `grep -cE '^\s*name\s*=\s*"token-drift-ci-tf"'` = 2 (the account and the token);
+  `grep -cE '^\s*secret_name\s*=\s*"DOPPLER_TOKEN_DRIFT"'` = 1;
+  `grep -cF 'doppler_service_account_token.token_drift.api_key'` = 1 **and**
+  `grep -cE '\.token_drift\.key\b'` = **0** — `api_key`, not `key`.
 - **AC2 — no rotation suppression, documentation allowed.**
-  `grep -cE '^\s*(lifecycle|ignore_changes)' apps/web-platform/infra/token-drift-read-token.tf` = 0.
-  Comment lines explaining the absence are required by FR1 and must not fail this.
-- **AC3 — both addresses are in the default allow-list, and only there.**
-  `awk 'NR>=465 && NR<=575' .github/workflows/apply-web-platform-infra.yml | grep -cF -- '-target=doppler_service_token.token_drift'`
-  = 1 and the same for `github_actions_secret.doppler_token_drift`; and the whole-file `grep -cF`
-  for each = 1, so neither appears in a dispatch block. `-F` because `.` is a metacharacter.
+  `grep -cE '^\s*(lifecycle|ignore_changes)' apps/web-platform/infra/token-drift-service-account.tf`
+  = 0. Comment lines explaining the absence are required by FR1 and must not fail this.
+- **AC3 — all four addresses are in the default allow-list, and only there.** For each of
+  `doppler_service_account.token_drift`,
+  `doppler_project_member_service_account.token_drift`,
+  `doppler_service_account_token.token_drift` and `github_actions_secret.doppler_token_drift`:
+  `awk 'NR>=465 && NR<=575' .github/workflows/apply-web-platform-infra.yml | grep -cF -- '-target=<addr>'`
+  = 1, and the whole-file `grep -cF` = 1, so none appears in a dispatch block. `-F` because `.`
+  is a metacharacter. The membership leg is the load-bearing one: without it the account and
+  token are created and published with no project grant.
 - **AC4 — the parity gate passes by inclusion, not exclusion.**
   `bun test plugins/soleur/test/terraform-target-parity.test.ts` passes **and**
   `grep -c 'token_drift' plugins/soleur/test/terraform-target-parity.test.ts` = 0.
-- **AC5 — the union is wired, nothing was swapped away, and the floor cannot silently collapse.**
-  The `token_drift` step's `env:` contains both `secrets.DOPPLER_TOKEN` and
-  `secrets.DOPPLER_TOKEN_DRIFT`, contains no `DOPPLER_CONFIG:`, sets `DOPPLER_TOKEN_ENVS` naming
-  both variables, and its `run:` fails the step when `DOPPLER_TOKEN_ENVS` is empty.
+- **AC5 — the swap is wired and the floor is declared exactly once.** The `token_drift` step's
+  `env:` sets `DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DRIFT }}`, contains no `DOPPLER_CONFIG:`,
+  contains no reference to `secrets.DOPPLER_TOKEN` (the swap is literal, not a union), sets
+  `DOPPLER_CONFIGS_FLOOR: 13`, and its `run:` writes `coverage=unknown`/`verdict=unavailable`
+  before failing when that value is unset, empty or unparseable. `grep -c 'DOPPLER_TOKEN_ENVS'`
+  over `.github/` and `scripts/` = 0 — the union's credential-iteration surface is gone, not
+  left dormant.
 - **AC6 — single-credential behaviour is preserved, asserted at the detector.** Producer test P1
-  passes: with `DOPPLER_TOKEN_ENVS` unset, the human report and exit code are byte-identical to
-  the merge-base's for the same fixture, and the JSON is a superset. Additionally
+  passes: with `--configs-floor` and `--inventory` both absent, the human report and exit code
+  are byte-identical to the merge-base's for the same fixture, and the JSON is a superset.
+  Additionally
   `git diff origin/main...HEAD -- .github/workflows/reusable-release.yml .github/actions/cf-tunnel-ssh-bridge/action.yml`
   is empty — three-dot, so a sibling PR advancing `origin/main` cannot fail this.
 - **AC7 — the falsified claims are gone from every site.**
   `grep -rcE 'branch configs inherit' .github/workflows/scheduled-terraform-drift.yml scripts/check-cloudflare-token-drift.sh`
   = 0 on both (the pattern omits "from" deliberately — two of the sites say "inherit it", and a
   literal including "from" matches only the low-severity filer); and
-  `grep -rc 'restores fleet-wide coverage' .github/workflows/scheduled-terraform-drift.yml` = 0
-  (the claim, not the noun — `:466` says "project-scoped read token" and would evade a
-  `project-scoped token` literal).
+  `grep -rc 'project-scoped read token' .github/workflows/scheduled-terraform-drift.yml` = 0 —
+  the falsified **noun**. No Doppler service *token* is project-scoped; the remedy must name the
+  service account and the `viewer` membership. The v3 grep for `restores fleet-wide coverage` is
+  retired: that claim is now true of the credential this change mints, so asserting its absence
+  would forbid correct prose.
 - **AC8 — the retired states are gone from executable positions, repo-wide.**
   `grep -rn "multi-config\|== 'single-config'\|== 'full'" .github/ scripts/ plugins/soleur/test/ knowledge-base/engineering/operations/runbooks/`
   returns 0 matches outside `#`-prefixed comment lines. The runbook scope is load-bearing:
   `ci-ssh-token-replace.md:87` names `coverage: multi-config` as a step's exit condition.
-- **AC9 — the ladder derives three states, and only three.** Producer fixtures prove: two
-  credentials both enumerating → `at-floor`; one of two empty → `degraded`; unparseable
-  `configs` (`-1`, `-2`, `None`, `abc`, `null`, empty, field-shift) → `unknown`. And
+- **AC9 — the ladder derives three states, and only three.** Producer fixtures prove: 13 configs
+  read at floor 13 → `at-floor`; 14 read at floor 13 (legitimate growth) → **also** `at-floor`,
+  ratio above 1, no state change; 7 read at floor 13 → `degraded`; unparseable `configs` (`-1`,
+  `-2`, `None`, `abc`, `null`, empty, field-shift) → `unknown`. And
   `grep -oE '"coverage": *"(at-floor|degraded|unknown)"' <emitted JSON across fixtures> | sort -u | wc -l`
   = 3.
-- **AC10 — an empty credential variable is `degraded`, not exit 2, not a silent success.**
-  Producer test: `DOPPLER_TOKEN_ENVS="A B"` with `B` empty yields `configs=1`, `configs_floor=2`,
-  `coverage=degraded`, exit code unchanged from the clean case, and **no** ambient fallback for
-  `B`.
+- **AC10 — an empty credential is `degraded`, not exit 2, not a silent success.**
+  Producer test: `DOPPLER_TOKEN=""` with `--configs-floor 13` yields `configs=0`,
+  `configs_floor=13`, `coverage=degraded`, `coverage_ratio=0/13`, exit code unchanged from the
+  clean case, and **no** ambient fallback — the stub CLI fails loudly if invoked without an
+  explicit credential.
+- **AC10b — the three narrowings each produce `degraded` with a distinguishing ratio.**
+  Producer fixtures at floor 13: an enumeration returning 0 (N1) → `0/13`; 7 names all in the
+  `prd` environment (N2) → `7/13` with `configs_unread` naming the other six; 1 name (N3) →
+  `1/13`. Plus the subtle N1: 13 names enumerated but every `--only-names` read failing →
+  `configs=0`, **not** 13, because the count is of configs read rather than listed.
 - **AC11 — the existing JSON contract is intact.** A `python3 -c` assertion over the producer
   suite's emitted JSON confirms `{live,dead,unverifiable,probes,configs,stale,unverifiable_keys}`
   is a subset of the top-level keys with unchanged types, and the three-field parse used by
@@ -807,8 +1091,8 @@ Every criterion is a command whose output decides it.
 - **AC15 — the filer covers every non-`at-floor` state, positively.** The filer `if:` contains
   `always()`, `== 'degraded'` and `== 'unknown'`, and no `coverage !=`.
 - **AC16 — the detector rejects an unknown flag.** Producer test: an unrecognised argument exits
-  2 with a named message. Today `:91`'s `*) shift ;;` swallows it, so a typo'd option degrades
-  the scan with no signal.
+  2 with a named message. Today `:91`'s `*) shift ;;` swallows it, so a typo'd `--inventory` or
+  `--configs-floor` degrades the scan with no signal.
 - **AC17 — the orphan sweep no longer suppresses its own failure, and does not abort silently.**
   In the `_cfgs=` statement: `2>/dev/null` and `|| true` are both absent from the whole
   statement — not merely from one physical line, since they currently sit on adjacent lines and
@@ -820,36 +1104,60 @@ Every criterion is a command whose output decides it.
   unread-list and age computations. Reinforced by producer test P7.
 - **AC19 — the inventory is a dated, generator-documented measurement.**
   `apps/web-platform/infra/doppler-config-inventory.txt` begins with a `# generated:` line
-  parsing as ISO-8601, contains a `# command:` line, and `grep -cE '^[a-z0-9_]+$'` = 13.
+  parsing as ISO-8601 and dated 2026-08-03, contains a `# command:` line, and
+  `grep -cE '^[a-z0-9_]+$'` = 13 — the same 13 the topology probe (G) returned.
 - **AC20 — anti-vacuity floors were raised to named integers.** The consumer suite's floor
-  literal reads `>= 34` (from 28) and the producer suite's `>= 62` (from 53), matching the
+  literal reads `>= 37` (from 28) and the producer suite's `>= 68` (from 53), matching the
   assertion counts those suites run. Both suites currently pass at *exactly* their floor, so
   the raise is forced. Named integers, not "at least the number added" — the floors count
-  assertions, and most listed cases are rewrites.
+  assertions, and most listed cases are rewrites. The retarget adds four producer cases (P2b,
+  P5b, P5c, P7b) and three consumer assertions (the AC29.3 floor pin) on top of the v3 counts;
+  if the realized `PASS + FAIL` total exceeds these literals, the literals are raised to match
+  rather than left low.
 - **AC21 — the ADR for this change exists.**
   `git diff --name-only origin/main...HEAD -- knowledge-base/engineering/architecture/decisions/`
-  lists exactly one new file, and that file's `## Decision` section contains the literal
-  `credential count, not config count`.
+  lists exactly one new file, and that file's `## Decision` section contains the literals
+  `declared floor, reported ratio` and `project-scoped service account`.
 - **AC22 — the full suite is green by its own invocation.** `bash scripts/test-all.sh` passes —
   run as that command, not as a hand-enumerated subset of the suites it discovers.
 - **AC23 — the doc lint is green over the gate's own scope.**
   `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` exits 0.
-- **AC29 — the floor cannot be silently shortened.** The `token_drift` step asserts
-  `configs_floor >= 2` and downgrades to `degraded` when it fails; the consumer suite pins both
-  credential names in the step's `DOPPLER_TOKEN_ENVS`. Verified by a consumer-suite case that
-  reduces the list to one name and asserts the state is **not** `at-floor`.
-- **AC30 — no credential value reaches a sink, and the escalating-reach disclosure is
-  present.** Producer test P11 passes across all six sinks; and the new `.tf` header contains
-  the literals `ghcr_minter`, `GITHUB_APP_PRIVATE_KEY` and `DOPPLER_TOKEN_PRD`, so the two
-  escalation hops and the no-new-capability mitigation are stated at the resource rather than
-  only in the plan.
+- **AC29 — the floor cannot be silently lowered, and it is pinned against the inventory.**
+  Three assertions, and the third is the CI check FR8 names:
+  1. The `token_drift` step's `run:` asserts `configs_floor >= 13` and downgrades to `degraded`
+     when it fails.
+  2. A consumer-suite case sets the floor to `1`, runs the step logic, and asserts the state is
+     **not** `at-floor`.
+  3. The consumer suite reads `DOPPLER_CONFIGS_FLOOR` out of
+     `.github/workflows/scheduled-terraform-drift.yml`, asserts it parses as an integer `>= 13`
+     (a named integer in the test, not "at least what is there"), and asserts it **equals**
+     `grep -cE '^[a-z0-9_]+$' apps/web-platform/infra/doppler-config-inventory.txt`. No
+     credential, no network.
+- **AC30 — no scanned value reaches a sink, and the widened-reach disclosure is present.**
+  Producer test P11 passes across all six sinks; and the new `.tf` header contains the literals
+  `ghcr_minter`, `GITHUB_APP_PRIVATE_KEY`, `DOPPLER_TOKEN_PRD` and `viewer`, **and** a sentence
+  stating the credential is wider than `DOPPLER_TOKEN_PRD`, so the escalation hops and the
+  withdrawn no-new-capability claim are stated at the resource rather than only in the plan.
+  `grep -c 'no new capability' apps/web-platform/infra/token-drift-service-account.tf` = 0 —
+  the v3 sentence must not survive a copy-paste from a sibling file.
 - **AC31 — scanned values are masked in the run log.** The detector emits one `::add-mask::`
   line per distinct scanned value when `GITHUB_ACTIONS=true`, asserted by producer test P14.
   Actions auto-masks only `secrets.*` values, so without this every `CF_API_TOKEN*` the
   detector reads is unmasked in the job log.
-- **AC32 — the ambient credential cannot be reached after the map is built.**
+- **AC32 — the ambient credential and config cannot be reached after the snapshot.**
   `grep -cE '^\s*unset DOPPLER_TOKEN DOPPLER_CONFIG' scripts/check-cloudflare-token-drift.sh`
   = 1, and producer test P15 passes.
+- **AC33 — the grant is exactly as narrow as it was chosen to be, and no narrower.** In
+  `apps/web-platform/infra/token-drift-service-account.tf`:
+  `grep -cE '^\s*workplace_role\s*='` = 0, `grep -cE '^\s*workplace_permissions\s*='` = 0 (the
+  membership is the only grant), and `grep -cE '^\s*environments\s*='` = 0 (project-wide, per
+  the 2026-08-03 census). Each absence is required to be explained by an adjacent comment,
+  asserted by `grep -c 'deliberately unset'` >= 3 — an unexplained absence reads as an
+  oversight to the next reader and invites a "fix".
+- **AC34 — `expires_at` is absent by decision.**
+  `grep -cE '^\s*expires_at\s*=' apps/web-platform/infra/token-drift-service-account.tf` = 0,
+  and the header contains the literal `expires_at` in the prose explaining why (FR1). The
+  absence is asserted so the choice is auditable rather than inferred from silence.
 
 ### Post-merge
 
@@ -857,22 +1165,32 @@ The infra run is gated on the `web-platform-infra-apply` environment. AC24–AC2
 after that gate releases; they are automatic in the sense that no command is typed for them, not
 in the sense that they need no approval.
 
-- **AC24 — the resources are created.** The infra run for the merge commit reports
-  `2 to add, 0 to change, 0 to destroy`, limited to `doppler_service_token.token_drift` and
-  `github_actions_secret.doppler_token_drift` (`gh run view <id> --log`).
+- **AC24 — all four resources are created, and the membership is one of them.** The infra run
+  for the merge commit reports `4 to add, 0 to change, 0 to destroy`, limited to
+  `doppler_service_account.token_drift`,
+  `doppler_project_member_service_account.token_drift`,
+  `doppler_service_account_token.token_drift` and `github_actions_secret.doppler_token_drift`
+  (`gh run view <id> --log`). A run reporting `3 to add` is a **failure**, not a partial
+  success: the missing one is almost certainly the grant.
 - **AC25 — the secret is published.**
   `gh secret list --json name -q '.[].name' | grep -c DOPPLER_TOKEN_DRIFT` = 1.
-- **AC26 — the first scan after the credential lands reports `at-floor` at 2/13.** The
-  `discoverability_test` command returns a line containing `configs: 2`, `floor: 2`,
-  `coverage: at-floor`, `ratio: 2/13`.
-- **AC27 — the credential-count gain is checked where it is observable.** The same run's detector
-  *report* line contains `Access service tokens: 2` (up from 1) — the `REGISTRY_PUSH_ACCESS_TOKEN`
-  family is now in scope. Asserted against the report line, not the verdict line, because the
-  verdict line does not carry it.
+- **AC26 — the first scan after the credential lands reports `at-floor` at 13/13.** The
+  `discoverability_test` command returns a line containing `configs: 13`, `floor: 13`,
+  `coverage: at-floor`, `ratio: 13/13`. This is also the live proof that the project membership
+  landed at full breadth — a token published without its grant, or with `environments` scoped,
+  cannot produce this line.
+- **AC27 — the fan-out gain is checked where it is observable.** The same run's detector
+  *report* line lists **13** config names under `configs scanned:`, and its Access-service-token
+  count is `>= 2` naming both `CI_SSH_ACCESS_TOKEN` and `REGISTRY_PUSH_ACCESS_TOKEN` — the
+  latter is the *first* case the detector's own header cites as motivating it and was not
+  scanned at all before this change. Asserted as a floor with both families named rather than
+  as an exact integer, because the fleet-wide distinct count was not measured; asserted against
+  the report line, not the verdict line, because the verdict line does not carry it.
 - **AC28 — the coverage channel ends in the closed state.** Any `token-drift-coverage` issue open
   at merge (none existed at plan time; the filer's first-ever run is the 18:00 UTC run on
-  2026-08-02) has had its body rewritten by the filer rather than frozen, and is closed by the
-  close arm with a comment naming `at-floor` and the ratio.
+  2026-08-02) has had its body rewritten by the filer rather than frozen, and the
+  `Close the coverage issue once the fan-out is restored` step auto-closes it with a comment
+  naming `at-floor` and `13/13`. This is the #7159 checklist's Done-when, satisfied literally.
 
 ---
 
@@ -882,30 +1200,37 @@ in the sense that they need no approval.
 
 | Case | Asserts |
 |---|---|
-| P1 | `DOPPLER_TOKEN_ENVS` unset → report text and exit code byte-identical to the merge-base's; JSON a superset with the seven existing keys unchanged in name and type |
-| P2 | two credential names, two distinct single-config enumerations → `configs=2`, `config_names` sorted, `configs_floor=2`, `coverage=at-floor` |
-| P3 | each per-config read uses the credential that enumerated **that** config, across all four read sites — a stub fails loudly on the wrong credential; mutation check: swap the map and confirm P3 goes red |
-| P4 | a named variable unset or empty → `degraded`, exit code unchanged, **no** ambient fallback for that name |
-| P5 | a non-empty credential enumerating nothing → exit 2 with enumeration stderr visible |
-| P6 | `configs_unread` = inventory minus scanned, sorted; `coverage_ratio` = `2/13`; `inventory_age_days` parsed from the header |
-| P7 | a short inventory (2 names) changes `coverage_ratio` to `2/2` and changes **nothing else** — `coverage` stays `at-floor`, no state flips. The regression guard for the rejected gating design. |
+| P1 | `--configs-floor` and `--inventory` both absent → report text and exit code byte-identical to the merge-base's; JSON a superset with the seven existing keys unchanged in name and type |
+| P2 | a 13-config enumeration at floor 13 → `configs=13`, `config_names` sorted, `configs_floor=13`, `coverage=at-floor`, `coverage_ratio=13/13` |
+| P2b | a **14**-config enumeration at floor 13 (legitimate growth, C7) → still `at-floor`, ratio above 1, no state flip and no warning arm — the `>=` rather than `==` guard |
+| P3 | each per-config read passes an explicit `-c <cfg>` matching the config being graded, across all four read sites — a stub fails loudly when the config argument is absent or wrong; mutation check: shuffle the config passed at one site and confirm P3 goes red |
+| P4 | `DOPPLER_TOKEN` unset or empty → `configs=0`, `coverage=degraded`, ratio `0/13`, exit code unchanged, and **no** ambient fallback (the stub fails loudly if invoked with no explicit credential) |
+| P5 | a non-empty credential enumerating nothing → exit 2 with enumeration stderr visible, and `emit_json` already written |
+| P5b | **the three narrowings.** 0 enumerated (N1) → `0/13`; the 7 `prd*` names (N2) → `7/13` with the other six in `configs_unread`; 1 name (N3) → `1/13`. All `degraded`. |
+| P5c | **N1's subtle form.** 13 names enumerated, every `--only-names` read failing → `configs=0`, not 13 — the count is of configs *read*. Mutation check: count listings instead and confirm P5c goes red. |
+| P6 | `configs_unread` = inventory minus read, sorted; `coverage_ratio` = `13/13`; `inventory_age_days` parsed from the `# generated:` header |
+| P7 | a short inventory (2 names) changes `coverage_ratio` to `13/2` and changes **nothing else** — `coverage` stays `at-floor`, no state flips, no arm fires. The regression guard for the rejected gating design, and the direct test of "the denominator reports, it does not gate". |
+| P7b | a **long** inventory (20 names) yields `13/20` and `coverage=at-floor` — the floor, not the inventory, decides. The inventory cannot manufacture `degraded` any more than it can manufacture `at-floor`. |
 | P8 | a missing or unparseable inventory → ratio absent with a caveat; `coverage` still derived from the floor |
-| P9 | credential values never appear in any child-process argv (the stub receives no `--token`) |
+| P9 | the credential value never appears in any child-process argv (the stub receives no `--token`) |
 | P10 | an unrecognised argument exits 2 with a named message |
 | P11 | **sentinel sweep across every sink.** Inject a sentinel credential value, run every mode (`--json`, `--json-file`, human report, empty-credential, revoked-credential, unknown-flag) and assert the sentinel appears in none of: stdout, stderr, the JSON payload, the `--json-file` on disk, `$GITHUB_OUTPUT`, or the rendered issue/email body fixtures. P9 covers one sink of six; this covers the rest, and the new emitted fields and un-swallowed stderr are exactly what makes it necessary |
 | P12 | a bogus credential's stderr does not contain the credential value (the `2>/dev/null` removal hands a CLI a bad secret and lets it speak) |
-| P13 | a failed-credential row records the credential's **name**, never its value |
-| P14 | under `GITHUB_ACTIONS=true` every distinct scanned value is emitted as `::add-mask::` before the first probe |
-| P15 | after the credential map is built, `DOPPLER_TOKEN` and `DOPPLER_CONFIG` are unset — a read site that forgets the map fails loudly instead of binding the ambient credential |
+| P13 | a failed read records the **config name**, never any secret value |
+| P14 | under `GITHUB_ACTIONS=true` every distinct scanned value is emitted as `::add-mask::` before the first probe — exercised at 13 configs, not 1 |
+| P15 | after the credential is snapshotted, `DOPPLER_TOKEN` and `DOPPLER_CONFIG` are unset — a read site that forgets its `-c` fails loudly instead of binding the ambient config |
 
 ### Consumer suite — `plugins/soleur/test/token-drift-workflow-causes.test.sh`
 
 Rewrites of T6, T7, T8, T8b, T13, T13b, T14, T14b, T14c, T14d, T16, T16b, T17, T19 against the
 three-state vocabulary. New cases: the filer edits an existing issue rather than
-short-circuiting; a `degraded` body carries the unread config names; the close arm fires only on
-`at-floor`; the DEAD email and DEAD issue bodies no longer carry the falsified remedy; both
-`<em>Scan coverage:` spans exist and are identical; the step guards an empty
-`DOPPLER_TOKEN_ENVS`.
+short-circuiting; a `degraded` body carries the unread config names and the ratio; the close arm
+fires only on `at-floor`; the DEAD email and DEAD issue bodies no longer carry the falsified
+remedy; both `<em>Scan coverage:` spans exist and are identical; the step's `DOPPLER_TOKEN` is
+sourced from `secrets.DOPPLER_TOKEN_DRIFT` and `secrets.DOPPLER_TOKEN` appears nowhere in the
+step; the step guards an unset/empty/unparseable `DOPPLER_CONFIGS_FLOOR` by writing outputs
+before failing; and **the floor pin** — `DOPPLER_CONFIGS_FLOOR` parses, is `>= 13`, and equals
+the inventory's name count (AC29.3, the CI check FR8 relies on).
 
 ### Guards that must stay green
 
@@ -921,9 +1246,9 @@ reporting steps is not); `tests/scripts/test-destroy-guard-counter-web-platform.
 
 | Path | Purpose |
 |---|---|
-| `apps/web-platform/infra/token-drift-read-token.tf` | FR1 |
-| `apps/web-platform/infra/doppler-config-inventory.txt` | FR8 |
-| `knowledge-base/engineering/architecture/decisions/ADR-155-fan-out-coverage-scales-with-credentials-not-configs.md` | FR9 |
+| `apps/web-platform/infra/token-drift-service-account.tf` | FR1 — the three Doppler resources plus the Actions secret |
+| `apps/web-platform/infra/doppler-config-inventory.txt` | FR8 — 13 names, report only |
+| `knowledge-base/engineering/architecture/decisions/ADR-155-project-scoped-service-account-and-declared-coverage-floor.md` | FR9 |
 | `knowledge-base/project/specs/feat-one-shot-7159-doppler-prd-read-token-coverage/{spec,tasks,decision-challenges}.md` | planning artifacts |
 
 No new `.test.sh`. (`plugins/soleur/test/*.test.sh` is auto-discovered by
@@ -934,13 +1259,13 @@ No new `.test.sh`. (`plugins/soleur/test/*.test.sh` is auto-discovered by
 
 | Path | Change |
 |---|---|
-| `scripts/check-cloudflare-token-drift.sh` | FR3, FR4, FR6.10 — credential list, unknown-flag rejection, config-to-credential map across all four read sites, the ladder, `emit_json`, the falsified remedy at `:629` |
-| `.github/workflows/scheduled-terraform-drift.yml` | FR5, FR6, FR7 |
-| `.github/workflows/apply-web-platform-infra.yml` | FR2 — two allow-list lines only |
+| `scripts/check-cloudflare-token-drift.sh` | FR3, FR4, FR6.10 — the config loop, unknown-flag rejection, explicit `-c <cfg>` at all four read sites, read-not-listed counting, `--configs-floor`, `--inventory`, the ladder, `emit_json`, the falsified remedy at `:629` |
+| `.github/workflows/scheduled-terraform-drift.yml` | FR5, FR6, FR7 — including the `DOPPLER_TOKEN` swap onto `secrets.DOPPLER_TOKEN_DRIFT` and the new `DOPPLER_CONFIGS_FLOOR: 13` |
+| `.github/workflows/apply-web-platform-infra.yml` | FR2 — four allow-list lines only |
 | `knowledge-base/engineering/operations/runbooks/ci-ssh-token-replace.md` | FR6.12 — the `multi-config` exit condition at `:87` |
-| `apps/web-platform/infra/tunnel.tf`, `apps/web-platform/infra/workspaces-luks.tf` | FR6.13 — one-line premise correction each |
-| `scripts/check-cloudflare-token-drift.test.sh` | P1–P10, floor to 62 |
-| `plugins/soleur/test/token-drift-workflow-causes.test.sh` | rewrites + new cases, floor to 34 |
+| `apps/web-platform/infra/tunnel.tf`, `apps/web-platform/infra/workspaces-luks.tf` | FR6.16 — one-line premise correction each |
+| `scripts/check-cloudflare-token-drift.test.sh` | P1–P15, floor to 62 |
+| `plugins/soleur/test/token-drift-workflow-causes.test.sh` | rewrites + new cases including the AC29.3 floor pin, floor to 34 |
 
 **Not edited, deliberately:** `.github/workflows/reusable-release.yml` and
 `.github/actions/cf-tunnel-ssh-bridge/action.yml` (AC6);
@@ -952,17 +1277,20 @@ No new `.test.sh`. (`plugins/soleur/test/*.test.sh` is auto-discovered by
 
 | Risk | Mitigation |
 |---|---|
-| A per-config read falls back to an ambient credential and grades the wrong config's bytes. | P3 across all four read sites with a stub that fails loudly, plus a mutation check. |
-| An empty `--token` silently rebinds to the ambient credential, so a two-credential run dedupes to one and reports success. | FR3 never passes an empty credential; P4 asserts `degraded` and no fallback. |
-| A typo'd option degrades the scan to one credential with no signal. | FR3 rejects unknown flags (exit 2); AC16, P10. |
-| `DOPPLER_TOKEN_ENVS` goes empty, collapsing the floor to 1 so a single-config scan reads healthy. | The step fails loudly before the detector runs; AC5. |
+| A per-config read binds implicitly and grades the wrong config's bytes — far more damaging at 13 configs than at 1. | P3 asserts an explicit `-c <cfg>` at all four read sites with a stub that fails loudly, plus a mutation check; FR3 unsets `DOPPLER_CONFIG` so a missed site cannot bind anything. |
+| An empty `DOPPLER_TOKEN` silently rebinds to the ambient credential and reports a confident wrong answer. | FR3 never invokes the CLI with an empty credential; P4 asserts `degraded` at `0/13` and no fallback. |
+| A typo'd option silently drops the inventory or the floor. | FR3 rejects unknown flags (exit 2); AC16, P10. |
+| **The token is published without its grant** — a dropped membership `-target=` leg, or a partial apply ordering the token before the membership. | All four addresses in the default allow-list (AC3); an explicit `depends_on` from the token to the membership (FR1); AC24 requires `4 to add` and calls `3 to add` a failure; and the failure is fail-loud at run time as `degraded` at `0/13`. |
+| `DOPPLER_CONFIGS_FLOOR` is unset, empty or unparseable, so the gate has no threshold. | The step writes `coverage=unknown`/`verdict=unavailable` before failing; AC5. |
 | A new `read -r` field shifts the parse and lets `configs` receive a wrong-but-numeric value. | `configs` stays last-and-greedy, non-empty guards on every field, fallback arity in lockstep; FR5. |
 | A schema change breaks the two `--only` call sites that read three fields with no compile-time link. | FR4 pins the seven existing keys; AC11 asserts a superset and re-runs both parses. |
-| The merge-to-release window reds the cron twice daily. | An absent secret is a configuration fault, not a detector fault: `degraded`, green job, one self-clearing issue. |
+| The merge-to-release window reds the cron twice daily. | An absent secret is a configuration fault, not a detector fault: `degraded` at `0/13`, green job, one self-clearing issue. |
 | The standing issue's body freezes at whichever state filed first (dedup is label-scoped, not title-scoped). | FR6.3 makes the filer update the body; AC13, AC28. |
-| A short or stale inventory misleads. | It gates nothing (AC18, P7); `inventory_age_days` bounds staleness with no credential; the inventory is *expected* to drift as `prd_git_data` and rehearsal configs appear. |
-| `DOPPLER_TOKEN_ENVS` is later shortened from two names to one; the self-referential floor follows it down and `at-floor` closes the issue while coverage regresses. | An assertion external to the floor (`configs_floor >= 2`) plus a consumer-suite case pinning both names; AC29. |
-| A lost or clobbered state write on the **create** orphans a live full-prd credential in Doppler with no Terraform record — unrotatable by `-replace=`, and it accumulates on the next run. The R2 backend has no conditional writes and `use_lockfile = false`; the Actions concurrency group is the sole serializer. The plan's "dropped `-target=` surfaces as drift" safeguard does **not** cover this: an object absent from state is invisible to `plan`, and provider v1.21.2 ships no data source that could enumerate service tokens. | The count-asserting `live_verification` in `## Encryption Posture` (exactly one `token-drift-ci-tf`) is the detector for this mode, and the emergency-revocation line in the `.tf` header is the remedy. |
+| A short or stale inventory misleads. | It gates nothing (AC18, P7, P7b); `inventory_age_days` bounds staleness with no credential; the inventory is *expected* to drift as `prd_git_data` and rehearsal configs appear. |
+| **The floor is lowered alongside a narrowed grant, so `at-floor` survives a real regression.** | Three places must move together and the third is a test: the run-time `configs_floor >= 13` assertion, the consumer-suite named integer, and the inventory-equality pin (AC29). Defeating it requires editing a test whose only purpose is to stop that edit. |
+| **A config is legitimately deleted, so the scan reds `degraded` until the floor is lowered.** | Accepted, not engineered away: a mechanism that let a shrinking live count lower its own threshold would be N1/N2/N3 with extra steps. Noisy in the safe direction. The remedy is a two-line change (floor + inventory) in the same PR that deletes the config. |
+| The `viewer` role is not purely read-only — it carries `enclave_project_config_dynamic_secrets_leases_write`. | Disclosed verbatim in `## Encryption Posture` rather than elided. It is still the least-privileged role that can read secret values; the only lower role, `no_access`, has zero permissions and cannot run the scan. |
+| A lost or clobbered state write on the **create** orphans a live project-wide credential in Doppler with no Terraform record — unrotatable by `-replace=`, and it accumulates on the next run. The R2 backend has no conditional writes and `use_lockfile = false`; the Actions concurrency group is the sole serializer. The "dropped `-target=` surfaces as drift" safeguard does **not** cover this: an object absent from state is invisible to `plan`, and provider v1.21.2 ships no data source that could enumerate service accounts or their tokens. | The count-asserting `live_verification` in `## Encryption Posture` is the detector for this mode; the `-replace=` path in the `.tf` header is the remedy. **This risk is strictly larger at this shape** — an orphan now reads the whole project rather than one config — and it is disclosed as such rather than carried over unchanged. |
 | The credential is a repository-level secret on a public repo; the governing control is who can merge under `.github/workflows/`. `CODEOWNERS` pins that path to the operator, but its own header records the branch-protection rule enforcing CODEOWNERS review as an unfinished follow-up, and no ruleset in IaC enforces it. | Named rather than assumed. This is the same control that already governs `DOPPLER_TOKEN_PRD`, so the change does not alter it; the gap is pre-existing and is called out so a reviewer does not read "repository-scoped like every sibling" as a control. |
 | The issue body and the ops emails are API payloads, so GitHub's log masking does not reach them — and the repo is public, so the coverage issue body is world-readable. | AC30 pins that those bodies carry key/config **names** and counts only, never values. `configs_unread` is a list of Doppler config names, which the committed `.tf` files already disclose. |
 | ADR-155's ordinal is claimed by a sibling PR. | Provisional; the renumber sweep is named above. |
@@ -973,13 +1301,16 @@ No new `.test.sh`. (`plugins/soleur/test/*.test.sh` is auto-discovered by
 
 | Approach | Why not |
 |---|---|
-| Swap `DOPPLER_TOKEN` for `DOPPLER_TOKEN_DRIFT` as the checklist reads | Measured regression: drops the `CI_SSH_ACCESS_TOKEN` pair, and can never reach `configs >= 2`, making the decision's own Done-when unreachable. |
+| **A union of two config-scoped `doppler_service_token`s** — keep `DOPPLER_TOKEN` on `prd_terraform`, add a `prd`-root token (the v1–v3 design) | The shape this revision replaces. At N=2 the union *is* a `for_each` with the loop unrolled, so it inherits that option's cost without its generality, and it carries prd-root blast radius while still reading 2 of 13. #7159's own "Known follow-up" section warns that a 2-config scan "would go quiet while still missing the fan-out class" — which the union's `at-floor` close arm would have done. It also forced credential-iteration through the detector, a surface the chosen shape does not need at all. Its measurements survive in `## Research Reconciliation`: they are why the shape changed. |
+| **`for_each` credential per config** (13 `doppler_service_token`s) | 13 credentials, 13 Actions secrets, 13 `-target=` legs and a detector that loops credentials — to obtain what one project membership obtains. Every credential is an independent rotation and revocation obligation. Rejected in the #7159 decision comment, and the union's collapse into it at N=2 is the reason the union went too. |
+| Reuse of `DOPPLER_TOKEN_TF` | Rejected in the decision comment; it is a workplace-scope personal token (`variables.tf:476`) and reusing it would make the scan a consumer of the widest credential in the repo. |
+| Reuse the existing `DOPPLER_TOKEN_PRD` repo secret | Not Terraform-managed, shared by six consumers, not rotatable by `-replace=`, and config-scoped to `prd` root so it reads 1 of 13. |
 | A denominator that gates the state | A short inventory derives the healthy state, fires the close arm and silences the channel — fail-open in the direction the design claimed to guard. |
-| A cross-workflow inventory verification step | Premise false (the credential is not injected at workflow level and is a personal workplace-scope token), and it would red every infra merge once live Doppler legitimately grows. |
-| `for_each` credential per config; reuse of `DOPPLER_TOKEN_TF` | Rejected in the decision comment. |
-| Reuse the existing `DOPPLER_TOKEN_PRD` repo secret | Not Terraform-managed, shared by six consumers, not rotatable by `-replace=`. |
-| `doppler_service_account` + `doppler_service_account_token` | Outside the settled decision; would deliver true fleet coverage and an exact denominator. **Deferred with re-evaluation criteria** (UC-2); owns the residual 11-config gap. |
-| Pin `expected` to a constant | Forbidden by the brief; the repo-grep derivation that looked like a middle path was falsified by measurement. |
+| A denominator taken from the scan's own credential | Structurally blind: it narrows in lockstep with the credential, so `13/13` prints forever through all three narrowings. This becomes *more* seductive at the chosen shape, because the number it prints is correct today. |
+| A cross-workflow inventory verification step against live Doppler | Needs a listing credential (which narrows with the grant), reds merges on legitimate growth (C7), and re-creates the merge blocker R5 already cut. The repo-internal floor/inventory equality pin has the same defeat condition and none of the costs. |
+| Asserting the credential's identity class | Detects only a swap back to a config-scoped token; green through a role downgrade and through `environments` scoping. A check that is green through two of three failure modes reads as coverage and is worse than none. |
+| Pin `expected` to a constant with no provenance | Forbidden by the brief. The chosen floor is a *declared demand* with a dated census behind it and a test pinning it to the inventory — not a guess, and not the denominator. |
+| Scope the membership with `environments = ["prd"]` | Would forfeit 7 scannable keys across `dev*` and `ci` (2026-08-03 census) while removing **none** of the escalation hops, which all live in `prd` root. Narrower on paper, no narrower in consequence. |
 
 ---
 
@@ -1000,6 +1331,24 @@ No new `.test.sh`. (`plugins/soleur/test/*.test.sh` is auto-discovered by
   suppresses every later class unless the body is rewritten.
 - A Doppler service token **ignores `DOPPLER_CONFIG`**, and an **empty `--token` value** is
   treated as unset, silently rebinding to the ambient credential.
+- `doppler_service_account_token` exposes its secret as **`api_key`**; every sibling
+  `doppler_service_token` in this root uses `key`. Copying the sibling attribute fails at
+  `terraform plan`.
+- Terraform derives an edge from `doppler_service_account_token` to the *account* through
+  `service_account_slug`, and **none** to the project membership. Without an explicit
+  `depends_on`, a partial apply can publish a working token whose grant has not landed.
+- `viewer` is the least-privileged role that can read secret values, but it is **not** purely
+  read-only: it carries `enclave_project_config_dynamic_secrets_leases_write` alongside
+  `enclave_project_config_dynamic_secrets_read`,
+  `enclave_project_config_rotated_secrets_read` and `enclave_config_logs`. The only lower role
+  is `no_access`, which has zero permissions.
+- A role that can **enumerate** configs but not **read** them would satisfy a floor that counts
+  listings. `configs` must count configs whose secret read succeeded.
+- The gate is `configs >= floor`, not `==`. C7 says the live set grows; an equality gate would
+  red the cron twice daily the first time a rehearsal config appeared.
+- With a project-scoped credential, `doppler configs -p soleur` returns the true project total,
+  so any self-derived denominator is satisfied by construction. The number it prints is correct
+  today and structurally blind tomorrow — this is the most inviting wrong turn in the design.
 - `emit_json` splits variable-length arrays on a single `"--"` argv sentinel with
   `rest.index("--")`, after five positional scalars parsed as `range(1,6)`. A third list needs a
   distinct sentinel, not another `index`.
@@ -1139,6 +1488,62 @@ A second deepen-plan pass (security-sentinel, observability-coverage-reviewer) t
   risk row and a repository-secret control row were added. An emergency revocation path joined
   the rotation recipe in the `.tf` header.
 
+### Retarget — the operator's credential-shape decision (2026-08-03)
+
+The v3 plan was presented with its measurements. The operator was asked, interactively, to
+choose the credential shape and the coverage ladder, and answered both. R1–R25 above are
+retained as the record of how the design got here; R26–R34 record what that decision changed.
+
+- **R26 (shape).** UC-2 was **adopted**. The credential is a project-scoped
+  `doppler_service_account` + `doppler_project_member_service_account` + a
+  `doppler_service_account_token`, at `role = "viewer"`, with `environments` unset. The union is
+  dropped; `doppler_service_token` is not used. #7159's option-table premise "there is no single
+  project-scoped read token to mint" was falsified: true for `doppler_service_token`, false for
+  `doppler_service_account` in the pinned v1.21.2 provider.
+- **R27 (the swap-regression dissolves).** UC-1 existed because a prd-root service token could
+  not see `prd_terraform`, so a swap dropped `CI_SSH_ACCESS_TOKEN_ID/_SECRET` and 8
+  `CF_API_TOKEN*` keys. A project-scoped `viewer` reads `prd_terraform` too, so nothing is
+  dropped and no union is needed. `DOPPLER_TOKEN` now points at `secrets.DOPPLER_TOKEN_DRIFT` as
+  a plain swap — exactly as the #7159 checklist asked. The measurement that motivated UC-1 is
+  kept; its remedy is superseded.
+- **R28 (no credential iteration).** `DOPPLER_TOKEN_ENVS`, the config-to-credential map and
+  every trace of multi-credential enumeration are removed. The detector loops **configs**, not
+  credentials, and the four read sites take an explicit `-c <cfg>`. Simpler than both the union
+  and `for_each`.
+- **R29 (the floor had to be re-founded).** A project-scoped credential makes a self-derived
+  denominator hold by construction, so `degraded` would have had no producer. `configs_floor`
+  becomes a literal the step declares — `DOPPLER_CONFIGS_FLOOR: 13` — compared one-sidedly
+  (`>=`, so legitimate growth is not a regression). The inventory keeps reporting and keeps
+  gating nothing. The three narrowings it must catch are enumerated as N1/N2/N3 with the ratio
+  each produces.
+- **R30 (read, not listed).** `configs` counts configs whose secret read succeeded. A role that
+  can enumerate but not read would otherwise satisfy the floor while measuring nothing.
+- **R31 (the pin moved from names to a number).** AC29 generalises: the run-time assertion is
+  `configs_floor >= 13`, the consumer suite pins the literal as a named integer, and a new third
+  assertion requires it to equal the committed inventory's name count. That equality is the CI
+  check that fails when floor and inventory drift apart — repo-internal, no credential, no
+  network, no merge blocker on growth.
+- **R32 (P0 — the blast-radius mitigation was withdrawn, not softened).** v3's "adds no new
+  capability, `DOPPLER_TOKEN_PRD` already carries identical scope" is **false** at this shape:
+  the new credential reads 4 environments where `DOPPLER_TOKEN_PRD` reads 1. Both disclosure
+  sections were rewritten to state the widening plainly and to record it as an accepted,
+  operator-chosen trade-off. The surviving mitigations are the ones that were verified: `viewer`
+  cannot write secret values, no workplace role or permissions are granted, and the credential
+  is Terraform-managed and `-replace=`-rotatable. `viewer`'s
+  `enclave_project_config_dynamic_secrets_leases_write` is disclosed rather than elided.
+- **R33 (the GDPR conclusion was re-derived).** R25's reasoning rested on "the surface is
+  duplicated, not widened", which is now false. The conclusion (no new Article 30 row) survives
+  on different grounds — the regulated-data reach is prd-root `SUPABASE_SERVICE_ROLE_KEY`, which
+  `DOPPLER_TOKEN_PRD` already exposes to the same workflows, and `dev` is a distinct Supabase
+  project — and the re-derivation is recorded so the conclusion is not right by accident.
+- **R34 (schema and lifecycle details that would have failed the apply).**
+  `doppler_service_account_token` exposes `api_key`, not `key` (AC1 asserts both the presence of
+  one and the absence of the other). An explicit `depends_on` from the token to the membership
+  closes the partial-apply window Terraform's own graph leaves open. `expires_at` is left unset,
+  with the reason stated and asserted (AC34). The `-target=` allow-list grows from two legs to
+  four, and AC24 treats `3 to add` as a failure because the missing leg is almost certainly the
+  grant.
+
 ---
 
 ## Appendix A — the probes
@@ -1174,4 +1579,70 @@ curl -s -u "$CLI_TOKEN:" "https://api.doppler.com/v3/configs?project=soleur&per_
 > CLI ignore the environment and fall back to the ambient workplace credential. The corrected form
 > uses `--token`. Recorded because the failure mode — a probe that measures the wrong credential
 > and reads as a clean result — is precisely the class this detector exists to catch, and it
-> recurs in FR3 as the empty-`--token` hazard.
+> recurs in FR3 as the empty-value hazard.
+
+### 2026-08-03 — the probes behind the retarget
+
+Probes A–C above stand as the record of why the v3 shape was abandoned. D–G are the
+measurements the chosen shape rests on.
+
+```bash
+# D) What does the PINNED provider actually ship? Read from the v1.21.2 binary already in
+#    .terraform, not from vendor docs — the lockfile is what will run.
+terraform -chdir=apps/web-platform/infra providers schema -json \
+  | python3 -c 'import json,sys
+s=json.load(sys.stdin)["provider_schemas"]["registry.terraform.io/dopplerhq/doppler"]["resource_schemas"]
+for r in ("doppler_service_account","doppler_project_member_service_account","doppler_service_account_token"):
+    print(r, sorted(s[r]["block"]["attributes"]))'
+```
+
+Result, and the three facts that constrain FR1:
+
+| Resource | Attributes |
+|---|---|
+| `doppler_service_account` | `name` (required), `slug` (computed), `workplace_permissions` (optional `list(string)`), `workplace_role` (optional), `id` |
+| `doppler_project_member_service_account` | `project` (required), `role` (required), `service_account_slug` (required), `environments` (optional `set(string)`), `id` |
+| `doppler_service_account_token` | `name` (required), `service_account_slug` (required), **`api_key` (computed, SENSITIVE)**, `expires_at` (optional), `created_at` / `slug` / `id` (computed) |
+
+`api_key` — **not** `key` as on `doppler_service_token`. This is the transcription error most
+likely to be made and is asserted against by AC1.
+
+```bash
+# E) Which project role is least-privileged while still able to READ secret values?
+curl -s -u "$CLI_TOKEN:" "https://api.doppler.com/v3/projects/roles" \
+  | python3 -c 'import json,sys; [print(r["identifier"], sorted(r["permissions"])) for r in json.load(sys.stdin)["roles"]]'
+```
+
+`viewer` carries `enclave_project_config_secrets_read` and does **not** carry
+`enclave_project_config_secrets_write`. The only lower role, `no_access`, has zero permissions.
+`viewer` additionally carries `enclave_project_config_dynamic_secrets_leases_write`,
+`enclave_project_config_dynamic_secrets_read`, `enclave_project_config_rotated_secrets_read` and
+`enclave_config_logs` — disclosed in `## Encryption Posture` rather than elided, because the
+first of those is a write verb.
+
+```bash
+# F) Per-config census of SCANNABLE keys — the families the detector actually probes.
+#    This is what justifies leaving `environments` unset rather than scoping to prd.
+for c in dev dev_personal dev_scheduled ci prd prd_cla prd_ghcr prd_kb_drift_walker \
+         prd_scheduled prd_terraform prd_workspaces_luks cli cli_ops; do
+  n=$(doppler secrets -p soleur -c "$c" --only-names --json \
+        | grep -cE '"(CF_API_TOKEN[A-Z_]*|[A-Z_]+_ACCESS_TOKEN_(ID|SECRET))"')
+  printf '%s %s\n' "$c" "$n"
+done
+```
+
+Result: `dev` 2, `dev_personal` 2, `dev_scheduled` 2, `ci` 1, `prd` 5, `prd_cla` 5, `prd_ghcr` 5,
+`prd_kb_drift_walker` 5, `prd_scheduled` 5, `prd_terraform` 13, `prd_workspaces_luks` 5, `cli` 0,
+`cli_ops` 0 — 50 occurrences, and only `cli`/`cli_ops` vacuous.
+
+```bash
+# G) Config topology — the source of the floor's value and of the inventory's 13 names.
+doppler configs -p soleur --json \
+  | python3 -c 'import json,sys,collections
+c=json.load(sys.stdin)
+print(len(c), collections.Counter(x["environment"] for x in c))'
+```
+
+Result: 13 configs across 4 environments — `dev` 3, `ci` 1, `prd` 7, `cli` 2. The `prd`
+environment's 7 configs are the detector header's own motivating case ("stale in 5 of 7
+configs").
