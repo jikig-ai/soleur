@@ -18,9 +18,10 @@ it, and the classification contract must exist before anything consumes it.
 - [ ] 0.2 Re-run the plan's §Premise Validation live checks; any divergence halts and re-scopes
 - [ ] 0.3 Read ADR-033's 2026-06-02 scope note in full; confirm the anti-circularity corollary is
       genuinely absent before drafting the addendum. No new ordinal, so no collision sweep
-- [ ] 0.4 Read `apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts`; determine
-      whether its workflow enumeration assumes a `scheduled-*` filename prefix. Record the answer —
-      it decides whether Phase 3 needs an extra edit
+- [ ] 0.4 *(resolved at deepen-plan — no edit needed.)* `sentry-monitor-iac-parity.test.ts`
+      enumerates every `.yml`/`.yaml` in `.github/workflows/` and greps for `monitor-slug:`; no
+      `scheduled-*` prefix filter. It auto-discovers this workflow — and FAILS if a `monitor-slug:`
+      is declared with no matching `sentry_cron_monitor`, so the two must land together
 - [ ] 0.5 Baseline the four grep-anchored constraints so drift is detectable: AC7 (API-prefixed
       health literal → expect 0), AC10 (the extracted `307|…` set), `luks-monitor.test.sh` case (y)
       verdict-grep pattern, `workspaces-luks-header.test.sh` H15b/H20
@@ -108,11 +109,12 @@ it, and the classification contract must exist before anything consumes it.
 
 - [ ] 3.1 Add `resource "sentry_cron_monitor" "workspaces_luks_verify"` to
       `apps/web-platform/infra/sentry/cron-monitors.tf` (`name = "workspaces-luks-verify"`,
-      `crontab = "41 4 * * *"`, `checkin_margin_minutes = 420`, `max_runtime_minutes = 20`), with a
-      comment giving the three absence modes it covers, why the margin departs from the
-      margin==interval convention, and the #3958 silent-deactivation residual
+      `crontab = "41 4 * * *"`, `checkin_margin_minutes = 420`, `failure_issue_threshold = 2`, `max_runtime_minutes = 20`),
+      with a comment giving the three absence modes it covers, why BOTH the margin and the threshold
+      depart from convention (cite #4189 — they only work as a pair), and the #3958
+      silent-deactivation residual
 - [ ] 3.2 `bash apps/web-platform/infra/run-registered-suites.sh --list` shows the new suite
-- [ ] 3.3 Apply the Phase 0.4 finding to `sentry-monitor-iac-parity.test.ts` if needed
+- [ ] 3.3 Run `sentry-monitor-iac-parity.test.ts` — auto-discovers the new slug, fails if the TF resource is absent (no edit to the test)
 - [ ] 3.4 Run the sentry-root plan; confirm **zero destroys / zero replaces**
 - [ ] 3.5 Update the `knowledge-base/operations/expenses.md` Sentry Team row (+1 cron-monitor seat,
       +$0.78/mo) using the Phase 0.7 live figure — `wg-record-recurring-vendor-expense-before-ready`

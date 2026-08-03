@@ -15,6 +15,56 @@ adr: "ADR-033 (amended — anti-circularity addendum; no new ordinal minted)"
 
 > **Spec lacks valid `lane:`** — no `knowledge-base/project/specs/feat-one-shot-6808-luks-verify-schedule/spec.md` exists on this branch, so `lane:` defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-03 · **Gates run:** 4.5 (network-outage, fired), 4.6, 4.7, 4.8, 4.9, 4.10,
+4.55 (no trigger) — all pass · **Panels:** CTO, CLO, code-simplicity, spec-flow-analyzer, plus a
+verify-the-negative sweep (12 claims) and a precedent-diff sweep (11 patterns).
+
+### Corrections this pass made to the plan's own first draft
+
+1. **`mapper_path_override_refused` would have fired a P0 legal alarm for a config fault.** It exits
+   **1**, not 3 (`luks-monitor.sh` uses `emit_and_die`), so an rc-first classifier routes it to
+   `drift` → `type/security` + `priority/p0-critical` + a counsel re-evaluation pointer. Fixed by
+   classifying **reason-first, rc-second**. Independently found by the exit-site enumeration and by
+   spec-flow. The runbook's own §5 row already called it *"Config fault, not data loss."*
+2. **The prescribed alarm `if:` cited the wrong half of its precedent.**
+   `scheduled-realtime-probe.yml`'s producer-status-first form is its *heartbeat `status:`* — a
+   positive gate on green. Its actual alarm `if:` (line 175) is `steps.probe.outputs.failure_mode != ''`,
+   the bare-outputs #7138 shape. Pasting the heartbeat form into an alarm `if:` makes the alarm
+   unreachable on every failure. The literal expressions are now written out (§Sharp Edges 2).
+3. **`checkin_margin_minutes = 1440` would have made the Sentry layer blind to a single missed fire**
+   — i.e. to all three modes it exists for. But dropping the margin alone re-introduces the #4189
+   false page. Resolved by pairing margin `420` with `failure_issue_threshold = 2` (§Decision 3).
+4. **Every non-200 health result was classed as a data-loss finding**, routing a Cloudflare-edge
+   outage into the runbook §5 data-recovery table. Split STRUCTURAL → `readiness`,
+   RETRYABLE-exhausted → `unavailable` — and the split needed a *mechanism*, since re-listing the
+   codes is forbidden by AC10 (§Decision 2).
+5. **The guards this PR adds would never have run on the PRs that break them** —
+   `infra-validation.yml`'s `paths:` omits this workflow (§Decision 6a). Now Phase 1 step 1.0.
+6. **Severity was assigned on legal salience, not user impact** — irreversible sole-copy data loss
+   sat at p1 while an intact-data legal event sat at p0. Inverted per
+   `hr-weigh-every-decision-against-target-user-impact`.
+7. **`RESEND_API_KEY` was never named**, and a non-2xx from Resend exits 0 with only a `::warning::`
+   — so an expired key would drop every page silently (§Decision 2).
+8. **Three blocking legal gaps** the engineering framing missed entirely: the Article 30 register and
+   the counsel audit's `claim_decay_trigger` both become **false on merge**, and absence detection is
+   required because the decay trigger's defeat condition is absence, not failure (§Legal).
+
+### Cuts this pass made (simplicity panel)
+
+Extracted classifier + its test suite, a new ADR ordinal, the follow-through probe, the green-close
+step and the two anti-spam mechanisms it forced, two of three `ci/*` labels, four ceremonial ACs, and
+the hand-maintained C4 counts. Net: **13 declared files → 9; two new files → one.** Each cut is
+recorded in §Files to Create / §Alternatives so a later reader does not re-add it.
+
+### Verified, not assumed
+
+All 12 negative/absolute claims in the plan were grep-confirmed against live files, and one resolved
+an open conditional: `sentry-monitor-iac-parity.test.ts` enumerates **every** workflow `.yml` and
+greps for `monitor-slug:` — no `scheduled-*` prefix filter — so it needs no edit, but it **will fail**
+if the workflow declares a slug whose TF resource is absent. That coupling is now stated.
+
 ## Overview
 
 `.github/workflows/workspaces-luks-verify.yml` is `workflow_dispatch`-only. Every run in its
@@ -407,41 +457,67 @@ resource "sentry_cron_monitor" "workspaces_luks_verify" {
   schedule                = { crontab = "41 4 * * *" }
   checkin_margin_minutes  = 420                         # NOT the file's margin==interval convention — see below
   max_runtime_minutes     = 20                          # job timeout-minutes: 15 + setup
-  failure_issue_threshold = 1
+  failure_issue_threshold = 2                           # NOT the file's default of 1 — pairs with the margin; see below
   recovery_threshold      = 1
   timezone                = "UTC"
 }
 ```
 
-**`checkin_margin_minutes = 420`, NOT 1440 — deliberately departing from the file's convention.**
+**`checkin_margin_minutes = 420` AND `failure_issue_threshold = 2` — both depart from the file's
+convention, and they only work as a pair.**
 
-`cron-monitors.tf`'s stated convention is *"margin == interval MAXIMIZES jitter tolerance… while a
-genuinely dark alarm still pages once the window closes at the next expected fire"*, and
-`scheduled_realtime_probe` (also daily, also GHA-fired) sits at 1440. That convention is written for
-monitors whose job is to catch a *sustained* dark period. **It defeats this monitor's entire
-purpose.**
+Two documented positions collide here, and the plan must not pretend otherwise.
 
-With crontab `41 4 * * *` and margin 1440, day N's expected check-in is not marked missed until
-04:41 on day N+1 — the same instant day N+1's run fires and checks in. So a **single** missed fire is
-either absorbed or reported ~24 h late. But all three modes this monitor exists for (§Decision 3 —
-schedule stops, FM2 supersession, job timeout) are, in the common case, **exactly one missed fire**.
-A monitor sized so it can only report the sustained case is a check that cannot report the thing it
-was added for — the same shape, one level up, as the bug this PR fixes.
+*Position A — the file's convention, backed by a real incident.* `cron-monitors.tf` says
+*"margin == interval MAXIMIZES jitter tolerance… while a genuinely dark alarm still pages once the
+window closes at the next expected fire"*, and the `scheduled_realtime_probe` block (also daily, also
+GHA-fired, margin 1440) carries a comment naming the incident that set it: *"On 2026-05-26 GitHub
+dropped the scheduled run ENTIRELY (not jitter — a whole missing run), which paged a 'missed
+check-in' on 2026-05-28 even though the last actual run (05-27) passed 5/5. The 180-min margin
+tolerated jitter but not a dropped 24h run; widen to 1440 (24h) so a single dropped scheduled run does
+not page. See issue #4189."* **A margin below 1440 re-introduces the false page #4189 fixed.**
 
-`420` minutes (7 h) covers the repo's own measured worst-case GHA scheduled-dispatch jitter (339 min)
-with ~24% headroom, and brings single-miss detection to ~11:41 UTC the same day rather than 04:41 the
-next. Note this in the resource comment so a future convention sweep does not "correct" it back.
+*Position B — margin 1440 makes this monitor unable to report its own purpose.* With crontab
+`41 4 * * *` and margin 1440, day N's expected check-in is not marked missed until 04:41 on day N+1 —
+the same instant day N+1's run fires and checks in. A **single** missed fire is absorbed. But all
+three modes this monitor exists for (schedule stops, FM2 supersession, job timeout) are, in the common
+case, exactly one missed fire.
 
-**Residual, stated rather than claimed away:** GitHub can drop a scheduled run entirely
-(`cron-monitors.tf` records 2026-05-26). A dropped fire is indistinguishable from a dark schedule at
-the monitor, so this will occasionally page on a GitHub-side drop. That is the correct trade for this
-surface — a false page is cheap; a missed one is a false Article 32 claim. The vendor-free
-`gh run list --event=schedule --status=success` query (§L1) remains the authority for the 30-day
-decay question.
+**Why `scheduled_realtime_probe` can accept Position A and this monitor cannot:** when that probe's
+run is dropped, the *next* run's own 5×SUBSCRIBED check still catches a real regression and files
+`ci/realtime-broken` — its Sentry monitor is a backstop to a self-reporting probe. Here, the three
+modes produce **no issue from the run at all**, so the Sentry monitor is the *only* detector — and
+#6808's whole lesson is that a probe which cannot report is indistinguishable from a healthy one.
 
-Slug parity is test-enforced by `apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts`
-— **verify at /work time** whether that test's workflow enumeration assumes a `scheduled-*` filename
-prefix; if it does, extend the enumeration in the same PR rather than renaming the workflow.
+**The resolution is not to pick a side — it is `failure_issue_threshold`.** The false page in #4189
+came from the margin *paired with* `failure_issue_threshold = 1`: one drop, one page.
+
+| margin | threshold | single GitHub drop | genuinely dark schedule |
+|---|---|---|---|
+| 1440 | 1 | silent ✓ | absorbed / never ✗ |
+| 420 | 1 | **false page ✗** (the #4189 regression) | ~7 h ✓ |
+| **420** | **2** | **silent ✓** | **~31 h ✓** |
+
+Two consecutive misses are required to open an issue, and `recovery_threshold = 1` resets the counter
+on the next successful check-in — so a lone dropped run is absorbed exactly as #4189 requires, while a
+schedule that is genuinely dark pages on day 2 instead of never. 420 minutes also covers the repo's
+measured worst-case GHA jitter (339 min) with ~24% headroom.
+
+**Record both departures in the resource comment**, citing #4189 and this reasoning, so a future
+convention sweep cannot "correct" either value in isolation — reverting the margin alone re-breaks
+detection; reverting the threshold alone re-breaks #4189. `failure_issue_threshold = 2` also departs
+from the file's own default of 1, so it needs the comment as much as the margin does.
+
+**Residual:** a two-day GitHub outage still pages. Correct — at that point the schedule genuinely has
+not run. The vendor-free `gh run list --event=schedule --status=success` query (§L1) remains the
+authority for the 30-day decay question.
+
+Slug parity is test-enforced by `apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts`.
+**Verified at deepen-plan:** its `workflowHeartbeatSlugs()` walks every `.yml`/`.yaml` in
+`.github/workflows/` and greps for `monitor-slug:` — no `scheduled-*` prefix filter — so it picks up
+this workflow automatically and needs no edit. The corollary is a hard coupling: declaring a
+`monitor-slug:` without the matching resource **fails that test**, so the workflow step and the TF
+resource must land together.
 
 ### The cost, and a residual this monitor does not close
 
@@ -587,6 +663,32 @@ required assertion.
 Either way: leave every existing `exit` line, `::error::` string and grep byte-identical, and emit the
 class immediately before each.
 
+## Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+The keyword gate fired on `SSH`, `unreachable`, `timeout` and `handshake` — but note **what** those
+words are doing here. This plan diagnoses no live outage; those tokens are the *vocabulary of the
+`unavailable` class*. There is no current incident whose L3/L7 layers need verifying, so the
+checklist's four layers are "not applicable — no live symptom" rather than "not verified".
+
+Where the checklist **is** load-bearing is the runbook remediation row this plan adds (Phase 4.5),
+and it converges exactly with the flow review's P1-7 finding: today the runbook's `rc=255` row says
+*"Check the bridge step, re-dispatch."* Re-dispatching does not fix a multi-day CF Tunnel outage, and
+`hr-no-ssh-fallback-in-runbooks` forecloses the manual path — so an operator holding a 6-day-old
+`unavailable` issue has no procedure at all.
+
+**The new escalation row MUST be ordered L3 → L7**, not the reverse (the #2654 → #2681 inversion cost
+a misdirected PR and a second incident day):
+
+| Layer | Check | Artifact |
+|---|---|---|
+| **L3 — tunnel/connector reachability** | The Cloudflare connector census the tunnel-health workflow already reads (`accounts/$CF_ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/connections`) — is there a live connector at all? | connector count + colo attribution |
+| **L3 — firewall / egress** | The GH runner egress IP is deliberately **not** in `var.admin_ips`; the bridge is the only path. Confirm the bridge action itself failed vs. ssh-after-bridge (the two produce different classes — step-skipped vs `rc=255`) | which step failed |
+| **L7 — SSH transport** | Only after both L3 checks: `rc=255` with a live connector and a healthy bridge points at sshd/host, not the network | bridge step log tail |
+
+**Do not** let the runbook row jump straight to sshd or to "re-dispatch". Cross-reference the
+existing tunnel-connector remediation (`ci/tunnel-connector-drift`) rather than restating it, and
+name a real escalation for the sustained case.
+
 ## Sharp Edges
 
 Each of these is a constraint the repo has already been bitten by, verified against current files.
@@ -696,8 +798,7 @@ Each of these is a constraint the repo has already been bitten by, verified agai
 | `knowledge-base/legal/audits/2026-07-counsel-review-6588.md` | Annotate the `claim_decay_trigger` frontmatter field (false on merge) + correct §A3.4 recommendation 2. Disposition **unchanged** |
 | `knowledge-base/engineering/architecture/decisions/ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn.md` | Anti-circularity addendum to the 2026-06-02 scope note (§Architecture Decision). No new ADR ordinal |
 | `knowledge-base/engineering/architecture/diagrams/model.c4` | `github -> sentry` edge — **remove** the four hand-maintained counts; add `workspaces-luks-verify` to the named GHA-`schedule:`-fired list |
-| `apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts` | **Conditional** — only if its workflow enumeration assumes a `scheduled-*` filename prefix (Phase 0.4 determines this) |
-| `knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md` | §5 already carries a per-`rc`/`reason` verdict triage table (anchors: `` `rc=3` `workspace_count_shortfall` ``, `` `rc=3` `readyz_gate_regression` ``) — **extend it, do not create it**: add an `outcome_class` column mapping each existing row to `drift` / `readiness` / `unavailable`, and amend §5's opening (anchor: `**Verify (read-only, no SSH).**` / `gh workflow run workspaces-luks-verify.yml`) to state the check is now daily-automatic rather than dispatch-only. The `ci/luks-verify-*` issue bodies must link to this table |
+| `knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md` | §5 already carries a per-`rc`/`reason` verdict triage table (anchors: `` `rc=3` `workspace_count_shortfall` ``, `` `rc=3` `readyz_gate_regression` ``) — **extend it, do not create it**: add an `outcome_class` column mapping each existing row to `drift` / `readiness` / `unavailable`, and amend §5's opening (anchor: `**Verify (read-only, no SSH).**` / `gh workflow run workspaces-luks-verify.yml`) to state the check is now daily-automatic rather than dispatch-only. The `ci/luks-verify` issue bodies must link to this table |
 
 ## Files to Create
 
@@ -860,12 +961,14 @@ liveness_signal:
     Status is producer-status-first: ok iff
     (steps.reassert.outcome == 'success' && steps.reassert.outputs.outcome_class == 'pass').
   cadence: >-
-    daily, 41 4 * * * UTC. checkin_margin_minutes = 420 — deliberately BELOW the file's
-    margin==interval convention, so a SINGLE missed fire is detectable (see Decision 3).
+    daily, 41 4 * * * UTC. checkin_margin_minutes = 420 + failure_issue_threshold = 2 —
+    below the file's margin==interval convention so a dark schedule is detectable, paired with
+    a 2-miss threshold so a lone GitHub-dropped run stays silent (#4189). See Decision 3.
   alert_target: >-
-    Sentry issue on a missed or error check-in (failure_issue_threshold = 1) -> the
+    Sentry issue on an error check-in, or on TWO consecutive missed check-ins
+    (failure_issue_threshold = 2, ~31 h) -> the
     sentry issue-alert plane -> ops@jikigai.com. Second, independent source:
-    the ci/luks-verify-* GitHub issues.
+    the ci/luks-verify GitHub issues (three titles under one label).
   configured_in: >-
     apps/web-platform/infra/sentry/cron-monitors.tf (auto-applied on merge by
     .github/workflows/apply-sentry-infra.yml)
@@ -906,7 +1009,7 @@ failure_modes:
     alert_route: same unavailable route (fail-closed; this is the #7138 shape)
   - mode: the SCHEDULE ITSELF stops firing (workflow disabled after 60d repo inactivity, cron dropped by GitHub as on 2026-05-26, YAML disabled, file renamed)
     detection: Sentry Crons missed check-in on slug `workspaces-luks-verify` past checkin_margin_minutes
-    alert_route: Sentry issue (failure_issue_threshold = 1). One of THREE modes only this layer can see.
+    alert_route: Sentry issue after TWO consecutive missed check-ins (~31 h). One of THREE modes only this layer can see.
   - mode: FM2 — a pending scheduled run cancelled by concurrency supersession (executes no steps at all)
     detection: Sentry Crons missed check-in. No in-run construction can report this.
     alert_route: Sentry issue
@@ -1225,7 +1328,8 @@ is testing nothing.
     cannot (§Decision 3), and the #3958 deactivation residual.
 3.2 Confirm via `bash apps/web-platform/infra/run-registered-suites.sh --list` that both new suites
     appear — the runner derives its list from `infra-validation.yml`, so an unregistered suite never runs.
-3.3 Apply the Phase 0.4 finding to `sentry-monitor-iac-parity.test.ts` if needed.
+3.3 Run `sentry-monitor-iac-parity.test.ts` — it auto-discovers the new slug and fails if the TF
+    resource is absent. No edit to the test itself.
 3.4 Run the sentry-root plan locally and confirm **zero destroys** (the `sentry-destroy-required`
     gate must stay unarmed; creates pass `scripts/sentry-create-gate.sh` silently with no ack).
 3.5 Re-measure the live Sentry PAYG figure and update the `knowledge-base/operations/expenses.md`
@@ -1315,8 +1419,9 @@ is testing nothing.
     `SEED_WORKSPACE_COUNT` and asserts a non-zero exit **and** that the ssh stub recorded no
     `WORKSPACES_COUNT=` append.
 12. The workflow's `schedule:` cron and the `sentry_cron_monitor`'s `crontab` are equal (asserted by
-    the test), `checkin_margin_minutes = 420`, and the resource comment states why it departs from
-    the file's margin==interval convention.
+    the test); `checkin_margin_minutes = 420` **and** `failure_issue_threshold = 2`; and the resource
+    comment cites #4189 and states why BOTH depart from convention — reverting either in isolation
+    breaks something (§Decision 3).
 13-14. *(folded into AC20 — `run-registered-suites.sh` + `test-all.sh` already run
     `workspaces-luks-freeze.test.sh`, `luks-monitor.test.sh` and `workspaces-luks-header.test.sh`;
     three separate "the pre-existing suite still passes" criteria were restating that.)*
@@ -1345,8 +1450,8 @@ None. Every step is automated:
 
 - The `sentry_cron_monitor` is applied by `.github/workflows/apply-sentry-infra.yml` on push to
   `main` (FULL-ROOT, `paths:` covers `infra/sentry/**`).
-- The three `ci/luks-verify-*` labels are created idempotently by the workflow itself on first
-  alarm — no pre-seeding needed.
+- The single `ci/luks-verify` label is created idempotently by the workflow itself on first alarm —
+  no pre-seeding needed.
 - The first scheduled run fires at the next 04:41 UTC with no dispatch.
 
 **Post-merge verification, by `/soleur:postmerge` — two spot-checks, no soak:**
@@ -1393,7 +1498,7 @@ Sentry monitor provides the standing verification a follow-through probe would h
 | A daily prod SSH increases exposure to the pre-existing host-key TOFU gap; 8 lifetime operator-initiated root sessions become ~365/yr unattended | Named in §Encryption Posture with a tracking issue and an `expires_on`, and as one line in the PR body. Frequency-only increase; the credential and path are unchanged and shared with three other workflows |
 | Alarm spam during a multi-day bridge outage, or a flapping tunnel producing an issue per flap | Dedupe by label + exact title; comment on the existing `unavailable` issue; **reopen** a recently-closed one rather than creating a new one; comment only when `reason` changes. No ops-email on `unavailable` |
 | A readiness issue masks a later drift issue | Three independent dedupe keys; `drift` has its own label and title |
-| GHA cron jitter causes a false Sentry page | `checkin_margin_minutes = 1440` == the inter-fire interval, the file's documented convention for exactly this |
+| GHA cron jitter, or a GitHub-dropped run, causes a false Sentry page (the #4189 regression) | `checkin_margin_minutes = 420` covers measured jitter (339 min) with headroom, and `failure_issue_threshold = 2` absorbs a lone dropped run — the pair is what makes a sub-1440 margin safe (§Decision 3) |
 | The baseline is lost on a rebuilt host, making every run red | `workspace_count_baseline_missing` routes to `unavailable`, whose issue body must name the seed remedy (`workflow_dispatch` with `seed_workspace_count` from an independent proof). Loud and actionable, never a vacuous green |
 | **The alarm ships permanently unreachable** because the one `if:` expression is wrong in a way a test of *our model* of GHA evaluation cannot see | The literal expression is written into §Sharp Edges 2; the test asserts an evaluated truth table, not a substring; a second mutation check targets the `if:` itself; and the `alarm_selftest` dispatch input exercises the real GHA expression once post-merge |
 | **A dropped `notify-ops-email` page is silent** (non-2xx exits 0 with a `::warning::`) | The GitHub issue is the primary channel and is stated as such; the email step's outcome is recorded in the issue body; `RESEND_API_KEY` is added to the up-front secrets guard |
@@ -1470,11 +1575,89 @@ heartbeat is wired **and** the Phase-5 plaintext wipe completes (counsel re-eval
 the heartbeat remains unwired and #6808 stays open. The schedule is a **compensating** control, not a
 substitute.
 
+## Research Insights — canonical in-repo forms to adopt verbatim
+
+Collected by the deepen-plan precedent-diff sweep. **Adopt these; do not invent a variant.** Each is
+quoted from a live file; the implementer should re-read the source rather than trust this excerpt if
+anything looks off.
+
+**Dedupe — by label + exact title** (`scheduled-supabase-advisor-scan.yml`), including the comment
+that explains why `--search` was abandoned:
+
+```bash
+# Dedupe by LABEL, not `--search`: the search API can return empty
+# under some token contexts, which would file a fresh duplicate every
+# single night. Each title dedupes independently.
+EXISTING=$(gh issue list --repo "$GH_REPO" --label "ci/supabase-advisor" --state open \
+  --limit 100 --json number,title \
+  --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty")
+```
+
+**Idempotent label creation** (same file) — note `2>/dev/null` *before* `|| true`:
+
+```bash
+gh label create "ci/supabase-advisor" --repo "$GH_REPO" \
+  --description "Nightly Supabase advisor/catalog RLS gate" --color "B60205" 2>/dev/null || true
+```
+
+**Multi-class routing** — `scheduled-inngest-health.yml` is the reference implementation
+(`case "$FAIL_MODE" in … esac` → `ISSUE_CLASS`), and its comment block records why each class needs a
+**distinct title**: *"four distinct titles so auto-close never cross-matches"*, and why a mandatory
+arm must precede the `*)` default (*"without it a functions_query_degraded verdict falls through to
+`down` → a false [ci/inngest-down] P1"*). Our `*)` default must likewise not be `drift`-by-accident —
+this is the same trap as the `mapper_path_override_refused` finding.
+
+**`GH_TOKEN` wiring** — `env: { GH_TOKEN: ${{ github.token }}, GH_REPO: ${{ github.repository }} }`
+on the filing step (`github.token`, not a PAT).
+
+**Multi-line issue bodies** — `printf` into a `mktemp` file with a `trap`, then `--body-file`. The
+comment states the reason: *"Build body via printf to avoid heredoc-leading-whitespace traps (4+
+leading spaces would render the body as a code block)."*
+
+**`strip_log_injection`** — copy verbatim from `scheduled-realtime-probe.yml`; needed for any *new*
+host-derived field routed into an annotation or issue body (the `reason` is already `[a-z_]*`-safe by
+construction — see §Sharp Edges 10):
+
+```bash
+strip_log_injection() {
+  printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+    | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+}
+```
+
+**Test harness** — `workspaces-luks-cutover-workflow.test.sh` is the template. Its header states the
+rule this plan's suite inherits: *"EVERY structural assertion parses the file as YAML. A grep would
+pass VACUOUSLY… `bash -n` is likewise run only on EXTRACTED `run:` bodies — `bash -n` on the .yml
+itself parses YAML as bash and proves nothing."* Mechanism: `python3 -c 'import yaml' || pip3 install
+--quiet pyyaml` → a Python leg emitting tab-separated verdicts → a bash `while IFS=$'\t' read` loop
+converting them to `ok`/`no` → an assertion floor. Note the Python `check()` helper strips tabs and
+newlines from detail strings *because the bash reader splits on tabs* — an embedded tab would
+manufacture a phantom verdict.
+
+**PATH-stub technique** — `git-data-rung2-rehearsal.test.sh` arm 13 writes stub binaries into a
+per-case `mktemp -d` under one reaped root (an un-reaped `mktemp -d` per call leaked ~6 dirs per run),
+exports `GITHUB_OUTPUT`/`GITHUB_STEP_SUMMARY` to scratch files, and runs `bash -e "$body"` in a
+subshell. Its header states why it **executes** rather than sources: *"`deadline=$(( SECONDS + 16*60 ))`
+reads the shell's own SECONDS, and sourcing would leak this suite's elapsed time and could fire the
+deadline immediately."* Our extracted body has no such deadline, but the execute-don't-source
+discipline still holds — sourcing would pollute the suite's own shell with the workflow's `set +e`.
+
+**Registration line format** (`infra-validation.yml`) — a `- name:` + `run: bash <path>` pair, with a
+comment. The existing sibling's comment states the invariant: *"an unregistered suite is zero
+coverage, silently green."*
+
+```yaml
+      - name: Run /workspaces LUKS cutover WORKFLOW gate (#6588 mode gating + CLEAN_STRAY reachability)
+        run: bash apps/web-platform/infra/workspaces-luks-cutover-workflow.test.sh
+```
+
 ## Test Scenarios
 
 | Scenario | Expected |
 |---|---|
 | Scheduled run, everything healthy | `outcome_class=pass`, no issue filed, nothing closed, Sentry check-in `ok` |
+| GitHub drops ONE scheduled run | Silent — one missed check-in is below `failure_issue_threshold = 2` (#4189) |
+| Schedule genuinely dark (disabled/orphaned) | Two consecutive misses → Sentry issue at ~31 h |
 | Scheduled run, mount reverted (rc 1) | `drift` issue with `type/security` + `priority/p0-critical` + `action-required`, body carries `first_observed_at` + the trigger-(3) pointer, Sentry check-in `error` |
 | Scheduled run, inventory shortfall (rc 3) | `readiness` issue, `priority/p1-high`, Sentry `error`, **no** `drift` issue |
 | Scheduled run, bridge down (rc 255) | `unavailable` issue, Sentry `error`, no `drift` or `readiness` issue |
@@ -1486,9 +1669,9 @@ substitute.
 | Unavailable issue open, then a green run | Nothing happens — the issue stays open until a human closes it. No churn, and dedupe-by-title always finds it |
 | Tunnel flaps over 6 days | ONE issue, commented only when the `reason` changes. No second issue is possible, because none is ever closed |
 | Re-assert step never runs (bridge action failed) | `steps.reassert.outcome != 'success'`, empty class → `unavailable` issue, Sentry `error` |
-| Run cancelled by concurrency supersession (FM2) | No steps execute, so no issue and no check-in from the run itself. Detection is the missed Sentry check-in, visible ~7 h later given `checkin_margin_minutes = 420` |
+| Run cancelled by concurrency supersession (FM2) | No steps execute, so no issue and no check-in from the run itself. Detection is the missed Sentry check-in — silent on a single occurrence (threshold 2), paging at ~31 h if it repeats |
 | Operator cancels a hung scheduled run | `always()` fires → `unavailable` issue ("nothing was proven"), Sentry `error` |
-| Job exceeds `timeout-minutes: 15` | Runner torn down; detection is the missed Sentry check-in (~7 h) |
+| Job exceeds `timeout-minutes: 15` | Runner torn down; detection is the missed Sentry check-in — silent once, paging at ~31 h if it repeats |
 | Operator dispatch fails | Red run, **no** issue filed (alarm is `schedule`-gated), dispatch path otherwise identical to today |
 | Scheduled run with a non-empty seed somehow present | Refused with a non-zero exit before any host write; `unavailable` issue |
 | The schedule stops firing entirely | Sentry Crons missed check-in past 1440 min → Sentry issue. The only layer that sees this |
