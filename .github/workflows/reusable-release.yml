@@ -81,6 +81,39 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Runtime ceiling (#7160). Without this the job inherits GitHub's 360-minute default.
+    #
+    # WHY 60. Measured over the last 60 completed `release / release` runs of
+    # web-platform-release.yml: worst 24.33 min (a cold-cache `Build and push Docker image`
+    # step, 21.72 min of it), p95 11.0, p50 9.4. The other caller of this workflow
+    # (version-bump-and-release.yml, component: plugin) peaks at 0.68 min. So 60 is 2.5x the
+    # worst run ever observed here and 88x the plugin caller's worst.
+    #
+    # WHY NOT LOWER. The drift checker's threshold bounds this pipeline's declared critical
+    # path, which is NOT a serial sum -- `release` and `await-ci` have no `needs:` and run in
+    # PARALLEL, so the path is:
+    #     max(release, await-ci) + (migrate + verify-migrations + deploy)
+    # Naming the jobs rather than their total is deliberate: a literal would silently stale
+    # the moment any one of them changes. `await-ci` already contributes 60 to that max, so
+    # every value <= 60 yields an identical bound -- 60 is the LARGEST ceiling that leaves
+    # DRIFT_SUSTAINED_THRESHOLD_MIN untouched, and anything lower discards free headroom.
+    # The first minute above 60 would force the threshold up.
+    #
+    # WHAT THIS ACTUALLY BUYS. Its main value is not tidier arithmetic. This workflow declares
+    # a workflow-level `concurrency: release-${{ inputs.component }}` with
+    # cancel-in-progress: false, so a wedged `release` job holds that group for its entire
+    # timeout and every later merge queues behind it: 360 minutes before, 60 after -- a 6x cut
+    # in worst-case head-of-line blocking.
+    #
+    # SCOPE CAVEAT -- this bounds EXECUTION ONLY, and the commit-to-deployed bound remains
+    # empirical rather than provable. The checker measures age from the oldest undeployed
+    # commit's committer epoch; runner queue wait, concurrency serialization between
+    # back-to-back merges, and push-to-workflow-start latency all sit outside any job timeout.
+    #
+    # COUPLED (#7160): scripts/prod-version-drift-check.test.sh assertion B9 reads this value
+    # via jobs.release.uses and fails if the declared critical path exceeds the threshold.
+    # Deleting this line raises the computed path to 495 and reds B9 by name.
+    timeout-minutes: 60
     permissions:
       contents: write
       packages: write
