@@ -343,3 +343,82 @@ Escalated 5-agent panel, run at operator request. **All P0s accepted.**
 - **`model.c4` edits require regenerating `model.likec4.json`** or CI goes red.
 - **`.claude/hooks/grep-q-pipe-guard.test.sh` forbids `| grep -q`** in `.claude/hooks/*.sh` — use herestrings.
 - **Never re-run the reproducer uncapped** — `ulimit -v 2000000` + `timeout`.
+
+---
+
+## Implementation Reconciliation (2026-08-03)
+
+Recorded rather than edited into the body above: the plan's predictions stay
+visible next to what measurement returned. Every row below changed an artifact.
+
+| Plan said | Measured at /work | Disposition |
+|---|---|---|
+| ADR-155 (provisional) | 155, 156 **and** 157 landed on `main` before this branch rebased | **ADR-158**; swept across plan, tasks, ACs, README, C4 (task 7.8) |
+| Aggregator exits 5 at `:374` / `:426` | Sites are `:465` (dry-run) and `:520` (post-write) | Mechanism confirmed by a RED probe; coordinates were stale |
+| `updatedInput` *may* replace `tool_input` | It **does** replace, wholesale — `timeout`/`description`/`run_in_background` all dropped and a background call ran in the foreground | Built from the whole `tool_input`; AC4 fixtured |
+| D3: 423 ms → 5,446 ms → 590 ms (**12.9×**) | ~3,600 ms → ~590 ms (**~6.0×**), spread ~230 ms | D3 **stands**; effect is ~13× the noise floor and the sign is physical. "With" figure reproduces exactly; baseline is machine state |
+| Corpus ≈ 6,100 commands, **zero exceptions** | **12,057** unique commands; **0 corrupted**, **4 declined** (0.03%) | See AC5 amendment below |
+| AC8: identical stdout | **Not identical.** Four divergence classes, measured against real ugrep | Enumerated in ADR-158 §Accepted divergences |
+| AC17: p95 < 50 ms | Unreachable by construction — 14 ms process floor, 20 ms per jq fork, and every sibling Bash hook is **103–124 ms** | Replaced with a relative gate; see below |
+| AC10: one `grep-rewrite-disarm` incident | Parse failures are owned by `lib/hook-input.sh` (landed on `main` after the plan was written) | See AC10 amendment below |
+| 12 shim bypass arms | **Confirmed byte-exact** against the live snapshot | No change |
+| Sibling `deny` beats `updatedInput` | **Confirmed** — nothing executed | No change |
+| Re-entrancy unknown | **No re-entrancy** — one PreToolUse invocation per call | Idempotency kept as defense in depth |
+
+### Amended acceptance criteria
+
+**AC5 (corpus replay).** Original: "every one of ~6,100 real commands differs from
+its rewrite by exactly the prefix, zero exceptions."
+
+Amended to the invariant that actually protects the user: **no command is ever
+altered other than by the exact prefix.** That held **12,057 / 12,057**. Four
+commands (0.03%) were *declined* — each contains a literal RS byte (0x1E), the
+field separator `lib/hook-input.sh` uses, so the shared parser correctly reports
+a boundary forge and the hook fails open. All four are fixtures from the PR that
+authored that parser. A decline leaves the command untouched: a missed
+optimization, not a defect. "Zero exceptions" was the right instinct pointed at
+the wrong quantity — a *non-rewrite* is not a *mis-rewrite*.
+
+**AC8 (differential results).** Original: "identical stdout, divergences
+enumerated." The first clause is false and the second is the real deliverable.
+Measured against real ugrep (capped) on a synthesized tree: `.gitignore` is no
+longer respected; `node_modules`/`dist`/`.next` are now always excluded; a bare
+directory argument whose basename is an excluded name returns nothing; and path
+rendering differs (`src/a.ts` vs `./src/a.ts`). All four are enumerated and
+accepted in ADR-158. **The `.gitignore` one carries a privacy dimension the plan
+did not anticipate** and is called out in the PR body: files a repo hides on
+purpose (`.env`, credential files) can now surface in a recursive grep.
+
+**AC10 (fail-open triad).** Original: "→ exit 0, empty stdout, one
+`grep-rewrite-disarm` incident." Two clauses survive unchanged (exit 0, empty
+stdout — fixtured for 9 malformed-input shapes). The third is re-pointed:
+`lib/hook-input.sh` landed on `main` after this plan was written and now owns
+parse-failure telemetry, emitting `hook-input-<reason>` carrying
+`hook=grep-rewrite`. Emitting a second row for the same event would double-count
+in the weekly aggregator, so `grep-rewrite-disarm` is reserved for the failure
+this hook owns outright — the envelope could not be built. Two further
+corrections: "JSON with no `.tool_input`" parses *cleanly* to an empty command
+and correctly produces **no** incident (nothing was disarmed), and the "perl
+absent" arm is a v1 leftover — v2 does not parse, so it is asserted as a
+**mechanism ban** (the hook invokes no perl) rather than a runtime fixture that
+would pass whether or not perl were reachable.
+
+**AC17 (latency).** Original: "p95 < 50 ms on a 4 KB command." Refuted as a
+*target*, not as a result: a bare `bash -c true` costs 14 ms here, one `jq` fork
+20 ms, and **every** sibling PreToolUse Bash hook already registered costs
+103–124 ms p95 on the same payload. No hook that sources the input helper and
+forks jq can reach 50 ms, so the gate would have red on a correct
+implementation. Replaced with the property that actually matters — *this hook
+must not make the hot path worse than what is already on it* — asserted
+**relative** to `no-memory-write.sh` in the same run, which also makes the gate
+machine-independent rather than flaky on a slower CI runner. Measured:
+grep-rewrite **89 ms** vs sibling **116 ms**.
+
+### Not done at /work
+
+- **1.6 / 8.3** — precondition results and the AC1–AC18 walk are pasted into the
+  PR body at ship time.
+- **8.2** — the full `scripts` shard was running against four concurrent
+  sibling-worktree `test-all.sh` runs (the documented contention condition);
+  result reported in the PR. The five suites this diff touches are green
+  individually.
