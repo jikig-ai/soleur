@@ -397,6 +397,10 @@ if want_scripts; then
   # #6512 Fix 2a: the seccomp-unenforced actionable-alert emitter (sourced by
   # apply-deploy-pipeline-fix.yml). Explicit run_suite — scripts/*.test.sh is not auto-globbed here.
   run_suite "scripts/seccomp-unenforced-alert" bash scripts/seccomp-unenforced-alert.test.sh
+  # Production version-drift alerter (#7091), sourced by scheduled-prod-version-drift.yml.
+  # Explicit run_suite — scripts/*.test.sh is not auto-globbed here, and an unregistered
+  # suite is the #5417 class: green CI over zero coverage.
+  run_suite "scripts/prod-version-drift-check" bash scripts/prod-version-drift-check.test.sh
   # Dogfood Grok measure/bootstrap (#6545/#6546). Explicit run_suite — scripts/dogfood/
   # is not in the auto-glob; orphan suites are the #5417 class (green CI, zero coverage).
   run_suite "scripts/dogfood/grok-gpu-bootstrap" bash scripts/dogfood/grok-gpu-bootstrap.test.sh

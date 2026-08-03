@@ -115,6 +115,15 @@ const NON_INNGEST_MONITORS = new Set([
   // const; its final sentry-heartbeat step pings the check-in. Same class as
   // scheduled-realtime-probe / scheduled-zot-restart-loop.
   "scheduled-inngest-health",
+  // #7091: GHA-fired (scheduled-prod-version-drift.yml, on.schedule '*/30') — the
+  // production version-drift alerter. It MUST be external to the deployed image:
+  // an Inngest cron runs from whatever build is CURRENTLY serving, so a staleness
+  // checker dispatched from Inngest would judge staleness using the stale build's
+  // own logic and go dark exactly when it is needed (the same self-blindness class
+  // as scheduled-inngest-health). It also needs an independent view of origin/main,
+  // which only a fresh actions/checkout provides. No cron-*.ts counterpart and no
+  // SENTRY_MONITOR_SLUG const; its final sentry-heartbeat step pings the check-in.
+  "scheduled-prod-version-drift",
 ]);
 
 describe("Inngest function registry — drift guards", () => {
