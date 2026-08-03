@@ -1106,10 +1106,14 @@ exception:
       whose verdict an unauthenticated peer could forge is a weaker monitor, and this PR makes
       that monitor load-bearing for a published Article 32 claim.
     tracking_issue: >-
-      FILE AT /work TIME. #5914 ("Pin git-data host key: replace accept-new TOFU on private-net
-      git SSH") is the sibling for a DIFFERENT surface (git-auth.ts) and must not be reused.
-      A new issue is required for the cf-tunnel-ssh-bridge surface; link it from this row and
-      from the workflow header. Labels: type/security, priority/p2-medium, domain/engineering.
+      #7226 — "security: cf-tunnel-ssh-bridge accepts web-1's SSH host key unverified on every
+      connection (TOFU with no persistence)". FILED 2026-08-03 at /work time with
+      type/security + priority/p2-medium + domain/engineering, and linked from the
+      workspaces-luks-verify.yml header. Deliberately NOT #5914 ("Pin git-data host key: replace
+      accept-new TOFU on private-net git SSH"), which is the sibling for a DIFFERENT surface
+      (git-auth.ts, application-level git SSH over the private network), and not #748
+      (CLOSED/COMPLETED 2026-03-20), which covered the appleboy/ssh-action mechanism this
+      composite replaced.
     reevaluate_when: >-
       the next change to .github/actions/cf-tunnel-ssh-bridge, or the first arms-length data
       subject (which flips the counsel audit's DC-1 residual to p0 and re-opens every

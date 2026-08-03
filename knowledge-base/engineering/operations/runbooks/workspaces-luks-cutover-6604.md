@@ -98,6 +98,33 @@ forever — which the escrow proof + off-host header backup exist to prevent.
 <!-- lint-infra-ignore end -->
 
 5. **Verify (read-only, no SSH).**
+
+   > **This check is DAILY AND AUTOMATIC as of #6808** — `workspaces-luks-verify.yml` carries
+   > `schedule: 41 4 * * *`, so you no longer have to remember to run it. Dispatch it by hand only
+   > when you want an answer *now* (after a cutover, during an incident); the command below still
+   > works and the dispatch path is unchanged. Three things follow, and they change how you read
+   > this section:
+   >
+   > 1. **A failure finds you.** A failing scheduled run files a `ci/luks-verify` issue whose title
+   >    names its class, and `drift`/`readiness` additionally page ops@jikigai.com by email. You do
+   >    not have to watch a dashboard — `hr-no-dashboard-eyeball-pull-data-yourself`.
+   > 2. **Read the `outcome_class` column below FIRST, then the reason.** The class is the workflow's
+   >    own machine-readable verdict and it answers the only question that governs your next move:
+   >    `drift` = encryption is not in effect (a legal re-evaluation trigger); `readiness` = the
+   >    volume is a correct mapper but the app cannot serve from it or the inventory shrank;
+   >    `unavailable` = **the run proved nothing in either direction**, so do NOT start a
+   >    data-recovery procedure on it. Note `mapper_path_override_refused` is `unavailable` even
+   >    though it arrives on `rc=1`: the classifier keys on the REASON first, precisely so a config
+   >    refusal cannot masquerade as at-rest drift.
+   > 3. **Silence is covered too.** A scheduled run that never fires — a dropped GitHub schedule, a
+   >    concurrency-cancelled pending run, a job timeout — is invisible to the workflow itself and is
+   >    caught by the `workspaces-luks-verify` Sentry Crons monitor instead (two consecutive misses,
+   >    so ~31 h).
+   >
+   > Evidence, on demand and without SSH:
+   > `gh run list --workflow=workspaces-luks-verify.yml --event=schedule --limit 40 --json databaseId,conclusion,createdAt`
+   > and `gh issue list --label ci/luks-verify --state all`.
+
    `gh workflow run workspaces-luks-verify.yml` → conclusion `success` means `blkid`=`crypto_LUKS`,
    `findmnt /mnt/data`=`/dev/mapper/workspaces`, the `cryptsetup status` mapper→device link is
    present, `/health`=200, `/internal/readyz` reports `ready=true`, **and** the workspace inventory
@@ -131,31 +158,31 @@ forever — which the escrow proof + off-host header backup exist to prevent.
 
    ### Verdict → operator action
 
-   | Verdict / reason | What it means | Action |
-   | --- | --- | --- |
-   | `probe rc=0` + verdict line, `workspace_count >= expected` | Healthy and certified | None |
-   | Verdict line **ABSENT**, run otherwise green | The assert never ran (flag lost). Proves **nothing** | Treat as FAILED. Re-dispatch; if it recurs, the flag delivery is broken |
+   | Verdict / reason | `outcome_class` (#6808) | What it means | Action |
+   | --- | --- | --- | --- |
+   | `probe rc=0` + verdict line, `workspace_count >= expected` | `pass` | Healthy and certified | None |
+   | Verdict line **ABSENT**, run otherwise green | `unavailable` | The assert never ran (flag lost). Proves **nothing** | Treat as FAILED. Re-dispatch; if it recurs, the flag delivery is broken |
    Exit-code map: `1` = at-rest LUKS drift · `3` = readiness/inventory · `255` = SSH transport ·
    `127` = bundle/command not found. (`3`, not `2` — bash reserves `2` for its own syntax errors.)
    The two TRANSPORT/TOOLING codes prove nothing about the volume in either direction.
 
-   | Verdict / reason | What it means | Action |
-   | --- | --- | --- |
-   | `rc=255` | SSH/CF-tunnel transport failure | **Not** a finding. No Sentry event exists. Check the bridge step, re-dispatch |
-   | `rc=127` | tar bundle failed to land / script not found on web-1 | **Not** a finding. Check the bundle-ship step, re-dispatch |
-   | `rc=1` `mount_not_mapper` / `device_not_luks` | At-rest drift: `/mnt/data` is **not** the LUKS mapper | **Encryption is not in effect.** Do not re-cut before reading §Rollback — a fresh freeze copies whichever volume is live now. **If a prior cutover was undone by the dead-man** (the LUKS volume is still in state + `crypto_LUKS`), a plain re-cut re-opens the stale header instead of re-formatting — run **Sequence Step 0** (`apply_target=workspaces-luks-recut`) first to make the target genuinely raw |
-   | `rc=1` `escrow_passphrase_mismatch` / `header_uuid_unreadable` | Escrow or header problem | Header-recovery path; do **not** wipe the plaintext original |
-   | `rc=1` `mapper_path_override_refused` | A `WORKSPACES_MAPPER_PATH` env override on the host | **Config fault, not data loss.** Remove the stray env var; it is a test-only seam |
-   | `rc=3` `readyz_not_ready` + `capacity` `use=100%` or `mount=ro` | **CAPACITY fault**, not data loss | Free space / remount rw. **Never** run a data-recovery procedure for this |
-   | `rc=3` `readyz_not_ready` on a healthy `rw` mount, space free, `writable=false` | Permission/IO fault (EACCES/EIO/inode exhaustion) — `df -P` block-use looks healthy but the write probe failed | **Not data loss.** Check ownership/perms of the workspaces root and `df -Pi` inodes before any recovery |
-   | `rc=3` `readyz_not_ready`, healthy `rw` mount, space free, `writable=true`, `populated=false` | The mount is writable but empty | Data-recovery incident on sole-copy data — halt and escalate |
-   | `rc=3` `readyz_gate_regression` | 307/401/403/404/405 — loopback gate or route regression | **Probe-integrity/routing bug. NOT data loss**, despite the endpoint being about the mount |
-   | `rc=3` `readyz_unparseable` | Proxy error page / truncated body | Transport or proxy fault. Not data loss |
-   | `rc=3` `readyz_unreachable` | `/internal/readyz` gave no response for the whole budget | Container still coming up, or the port moved. Since the probe runs as `docker exec soleur-web-platform curl …` (#6812 — bridge-gateway peer 403 fix), this ALSO covers the transport failing: container not running, wrong `WL_READYZ_CONTAINER`, or `curl` absent from the image (each → code 000, fail-closed). Not (yet) a data finding — re-dispatch |
-   | `rc=3` `workspace_count_shortfall` | Fewer workspaces than the baseline | **Data-recovery incident on sole-copy data.** Halt and escalate. Do not wipe anything |
-   | `rc=3` `workspace_count_baseline_missing` | No baseline persisted (or a `0`/non-numeric one) | Seed it once (above). Fail-closed by design |
-   | `rc=3` `workspace_count_unreadable` | The workspaces root could not be listed | Permission/IO fault on the root. Not a shrink; fix perms and re-dispatch |
-   | `rc=3` `readiness_helper_unavailable` | `workspaces-luks-emit.sh` missing/stale on the host | The assert cannot run; this run proves nothing. Reinstall via the cutover channel |
+   | Verdict / reason | `outcome_class` (#6808) | What it means | Action |
+   | --- | --- | --- | --- |
+   | `rc=255` | `unavailable` | SSH/CF-tunnel transport failure | **Not** a finding. No Sentry event exists. Check the bridge step, re-dispatch |
+   | `rc=127` | `unavailable` | tar bundle failed to land / script not found on web-1 | **Not** a finding. Check the bundle-ship step, re-dispatch |
+   | `rc=1` `mount_not_mapper` / `device_not_luks` | `drift` | At-rest drift: `/mnt/data` is **not** the LUKS mapper | **Encryption is not in effect.** Do not re-cut before reading §Rollback — a fresh freeze copies whichever volume is live now. **If a prior cutover was undone by the dead-man** (the LUKS volume is still in state + `crypto_LUKS`), a plain re-cut re-opens the stale header instead of re-formatting — run **Sequence Step 0** (`apply_target=workspaces-luks-recut`) first to make the target genuinely raw |
+   | `rc=1` `escrow_passphrase_mismatch` / `header_uuid_unreadable` | `drift` | Escrow or header problem | Header-recovery path; do **not** wipe the plaintext original |
+   | `rc=1` `mapper_path_override_refused` | `unavailable` | A `WORKSPACES_MAPPER_PATH` env override on the host | **Config fault, not data loss.** Remove the stray env var; it is a test-only seam |
+   | `rc=3` `readyz_not_ready` + `capacity` `use=100%` or `mount=ro` | `readiness` | **CAPACITY fault**, not data loss | Free space / remount rw. **Never** run a data-recovery procedure for this |
+   | `rc=3` `readyz_not_ready` on a healthy `rw` mount, space free, `writable=false` | `readiness` | Permission/IO fault (EACCES/EIO/inode exhaustion) — `df -P` block-use looks healthy but the write probe failed | **Not data loss.** Check ownership/perms of the workspaces root and `df -Pi` inodes before any recovery |
+   | `rc=3` `readyz_not_ready`, healthy `rw` mount, space free, `writable=true`, `populated=false` | `readiness` | The mount is writable but empty | Data-recovery incident on sole-copy data — halt and escalate |
+   | `rc=3` `readyz_gate_regression` | `unavailable` | 307/401/403/404/405 — loopback gate or route regression | **Probe-integrity/routing bug. NOT data loss**, despite the endpoint being about the mount |
+   | `rc=3` `readyz_unparseable` | `unavailable` | Proxy error page / truncated body | Transport or proxy fault. Not data loss |
+   | `rc=3` `readyz_unreachable` | `unavailable` | `/internal/readyz` gave no response for the whole budget | Container still coming up, or the port moved. Since the probe runs as `docker exec soleur-web-platform curl …` (#6812 — bridge-gateway peer 403 fix), this ALSO covers the transport failing: container not running, wrong `WL_READYZ_CONTAINER`, or `curl` absent from the image (each → code 000, fail-closed). Not (yet) a data finding — re-dispatch |
+   | `rc=3` `workspace_count_shortfall` | `readiness` **p0** | Fewer workspaces than the baseline | **Data-recovery incident on sole-copy data.** Halt and escalate. Do not wipe anything |
+   | `rc=3` `workspace_count_baseline_missing` | `unavailable` | No baseline persisted (or a `0`/non-numeric one) | Seed it once (above). Fail-closed by design |
+   | `rc=3` `workspace_count_unreadable` | `unavailable` | The workspaces root could not be listed | Permission/IO fault on the root. Not a shrink; fix perms and re-dispatch |
+   | `rc=3` `readiness_helper_unavailable` | `unavailable` | `workspaces-luks-emit.sh` missing/stale on the host | The assert cannot run; this run proves nothing. Reinstall via the cutover channel |
 
    **Cutover-only reason codes (emitted by `app_canary`, NOT the verify workflow — the verify's
    runner-side `/health` loop prints an `::error::` line, no reason code):** `health_probe_structural`

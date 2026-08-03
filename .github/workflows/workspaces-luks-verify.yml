@@ -30,6 +30,15 @@
 # Tunnel SSH bridge (.github/actions/cf-tunnel-ssh-bridge) — the same path apply-web-platform-infra
 # and git-data-cutover use. Creds are held here in GitHub secrets; nothing is held on the host.
 #
+# KNOWN RESIDUAL on that bridge, named rather than left silent (#7226): the composite connects with
+# `StrictHostKeyChecking=accept-new` AND `UserKnownHostsFile=/dev/null`, which is TOFU with no
+# persistence — web-1's host key is re-accepted unverified on every connection, so an adversary in
+# the CF-edge position could impersonate the host and return a forged PASSED verdict. Pre-existing
+# and shared with three other workflows (the two cutovers + apply-web-platform-infra), so pinning it
+# is not this workflow's change to make; #6808 raised the stakes only in FREQUENCY (daily vs manual)
+# by making this verdict load-bearing for a published Article 32 claim. NOT the same surface as
+# #5914 (git-auth.ts private-net git SSH).
+#
 # AP-002 (No SSH state mutation) carve-out, recorded rather than silent: the seed_workspace_count
 # input performs ONE bounded state-file append — a single digits-validated integer, rejected when 0
 # and rejected when it would lower an existing baseline — and exists only because there is no
