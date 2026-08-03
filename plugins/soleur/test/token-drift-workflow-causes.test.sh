@@ -1160,25 +1160,51 @@ fi
 # ---------------------------------------------------------------------------
 # C1-C3 — the CREDENTIAL the step is wired to, and the guard on its floor.
 # ---------------------------------------------------------------------------
-echo "C1: the step's DOPPLER_TOKEN is sourced from secrets.DOPPLER_TOKEN_DRIFT"
+echo "C1: the step's DOPPLER_TOKEN is the documented interim credential (see #7234)"
+# INTERIM STATE, PINNED DELIBERATELY. The TARGET is secrets.DOPPLER_TOKEN_DRIFT -- the
+# project-scoped service-account token. It is minted and live, and it was MEASURED to see
+# nothing at all:
+#
+#   doppler configs -p soleur --json   -> null   (0 configs)
+#   doppler secrets -p soleur -c prd   -> "Could not find requested config 'prd'"
+#
+# `workplace_permissions = []` (the least-privileged value satisfying the provider's
+# ExactlyOneOf) yields workplace_role no_access, and that denies project visibility which a
+# `viewer` project membership cannot restore on its own. Until #7234 settles whether a
+# narrower-than-all_enclave_projects permission exists, the step runs on the config-scoped
+# credential so drift detection keeps running at all -- 1 of 13, reported honestly as
+# `degraded` rather than silently as `clean`.
+#
+# This assertion is NOT relaxed to "either value": it pins the interim credential exactly,
+# so any THIRD value still fails, and flipping back to DOPPLER_TOKEN_DRIFT fails here as a
+# reminder to re-verify enumeration against the real credential first.
 WF_TOKEN=$(step_get "id:token_drift" env.DOPPLER_TOKEN) || WF_TOKEN=""
-if [[ "$WF_TOKEN" == '${{ secrets.DOPPLER_TOKEN_DRIFT }}' ]]; then
-  pass "DOPPLER_TOKEN: \${{ secrets.DOPPLER_TOKEN_DRIFT }}"
+if [[ "$WF_TOKEN" == '${{ secrets.DOPPLER_TOKEN }}' ]]; then
+  pass "DOPPLER_TOKEN: \${{ secrets.DOPPLER_TOKEN }} (interim per #7234; target is DOPPLER_TOKEN_DRIFT)"
 else
-  fail "the step's DOPPLER_TOKEN is '${WF_TOKEN}' — DOPPLER_TOKEN_DRIFT is the doppler_service_account_token holding a viewer membership on the whole soleur project, and it is the ONLY thing that can read all 13 configs. Any other value is narrowing N3: a config-scoped doppler_service_token is config-scoped by construction, ignores DOPPLER_CONFIG, and reads 1 of 13"
+  fail "the step's DOPPLER_TOKEN is '${WF_TOKEN}' — expected the interim \${{ secrets.DOPPLER_TOKEN }} per #7234. If this is the flip BACK to DOPPLER_TOKEN_DRIFT, first re-run the enumeration probe against the real credential (mint an ephemeral service-account token, run 'doppler configs -p soleur --json', confirm 13) and update this assertion in the same change — the last time that premise went unmeasured the scan read 0 of 13"
 fi
 
-echo "C2: the bare secrets.DOPPLER_TOKEN and DOPPLER_CONFIG are both gone from the step"
+echo "C2: DOPPLER_CONFIG is absent, and the bare token appears exactly once (the one C1 pins)"
 # Asserted over the PARSED step (comments stripped), because the step's own comment block
 # explains at length why DOPPLER_CONFIG is absent and names it four times.
 STEP_YAML=$(step_get "id:token_drift" .) || { echo "FATAL: could not dump the token_drift step" >&2; exit 2; }
 _bare_token=$(grep -Ec 'secrets\.DOPPLER_TOKEN[[:space:]]*\}\}' <<<"$STEP_YAML")
 _has_cfg=0
 step_get "id:token_drift" env.DOPPLER_CONFIG >/dev/null 2>&1 && _has_cfg=1
-if [[ "$_bare_token" == "0" && "$_has_cfg" == "0" ]]; then
-  pass "no bare secrets.DOPPLER_TOKEN reference and no DOPPLER_CONFIG in the step"
+# DOPPLER_CONFIG must STAY absent even on the interim credential. The detector enumerates
+# and loops configs; it takes no direction from DOPPLER_CONFIG, and re-adding it would
+# restore the "this scans one named config" mental model the ladder replaced. The bare-token
+# half of this assertion is suspended while #7234 is open (C1 pins the credential instead).
+# `_bare_token` is KEPT, not dropped. It greps the WHOLE step YAML, so it catches a
+# secrets.DOPPLER_TOKEN appearing in a `with:` block or a second env key — surface C1 does
+# not see, since C1 inspects env.DOPPLER_TOKEN alone. Asserting == 1 pins "exactly the one
+# C1 pins, and no other": deleting this check would silently un-guard the extra-reference
+# case for the duration of #7234.
+if [[ "$_has_cfg" == "0" && "$_bare_token" == "1" ]]; then
+  pass "no DOPPLER_CONFIG in the step, and exactly 1 bare secrets.DOPPLER_TOKEN (the interim credential C1 pins)"
 else
-  fail "the step still references the bare secrets.DOPPLER_TOKEN (${_bare_token} time(s)) or declares DOPPLER_CONFIG (present=${_has_cfg}) — a project-scoped identity takes no direction from DOPPLER_CONFIG, so leaving it reads as 'which config this scans', which is the wrong mental model for a detector that loops over all of them; and a surviving bare DOPPLER_TOKEN is the config-scoped credential this change exists to replace"
+  fail "the step declares DOPPLER_CONFIG (present=${_has_cfg}) or references the bare secrets.DOPPLER_TOKEN ${_bare_token} time(s), expected exactly 1 — the detector loops over enumerated configs, so naming one in DOPPLER_CONFIG reads as 'which config this scans', the wrong mental model for a fan-out detector; and a SECOND bare-token reference is a surface C1 does not inspect"
 fi
 
 echo "C3: an unset, empty or unparseable floor WRITES the outputs and THEN exits 2"
