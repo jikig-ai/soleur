@@ -348,9 +348,9 @@ test_dropin_shape_guard() {
   # (good) drop-in byte-intact rather than a partially-written or clobbered file. This is the
   # property that makes the gate safe to put in front of a live delivery path.
   local before after
-  before=$(sha256sum "${TEST_DESTDIR}${d}" | awk '{print $1}')
+  before=$(sha256sum "${TEST_DESTDIR}${d}" 2>/dev/null | awk '{print $1}' || true)
   printf '[Service]\nUser=root\n' | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1 || true
-  after=$(sha256sum "${TEST_DESTDIR}${d}" | awk '{print $1}')
+  after=$(sha256sum "${TEST_DESTDIR}${d}" 2>/dev/null | awk '{print $1}' || true)
   assert_eq "rejected drop-in left the previously-installed file unmodified" "$before" "$after"
 
   # (f) SCOPE: the gate must not leak onto the script dests. A /usr/local/bin payload is a shell
@@ -393,21 +393,21 @@ test_install_preserves_mtime_on_identical_content() {
   local abs="${TEST_DESTDIR}${d}"
   local payload='#!/bin/bash'$'\n''echo one'
 
-  printf '%s' "$payload" | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1
+  printf '%s' "$payload" | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1 || true
   # Age the installed file so a preserved mtime is visibly distinct from "now".
   touch -d '2020-01-02 03:04:05' "$abs"
   local m_before m_after m_changed
   m_before=$(stat -c %Y "$abs")
 
   # (a) Byte-identical re-install: mtime must survive.
-  printf '%s' "$payload" | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1
+  printf '%s' "$payload" | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1 || true
   m_after=$(stat -c %Y "$abs")
   assert_eq "identical payload preserved the dest mtime" "$m_before" "$m_after"
 
   # (b) THE OTHER DIRECTION — without this, an implementation that simply never touches mtime
   # (or one that stopped installing at all) would satisfy (a). A real content change MUST be
   # visible to the predicate, or a genuinely stale unit is never restarted.
-  printf '%s' '#!/bin/bash'$'\n''echo two' | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1
+  printf '%s' '#!/bin/bash'$'\n''echo two' | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1 || true
   m_changed=$(stat -c %Y "$abs")
   if [[ "$m_changed" -gt "$m_before" ]]; then
     echo "  PASS: changed payload advanced the dest mtime"

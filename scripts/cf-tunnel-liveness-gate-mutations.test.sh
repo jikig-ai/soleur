@@ -84,21 +84,45 @@ assert_landed() {
 # silently never fires and every arm reports "reddened for the wrong reason". Matching the
 # message is also the stronger form — it pins what the assertion actually says, so an assertion
 # rewritten to check something else stops satisfying its arm.
+# EVERY named regex must match — this used to take ONE regex, and M1 passed it an ALTERNATION
+# ("scoped invocation at command position|must EMIT ci_ssh_access_denied") under the label
+# "W1/W3/W4". Three consequences, all bad: the label claimed three assertions while the regex
+# was an OR of two; W4's failure text appeared in NEITHER branch, so W4 was never verified at
+# all; and W1 — the assertion whose own comment records that it was previously satisfied by a
+# header comment — could be made fully vacuous while this battery still reported the mutant
+# "caught, identified by its own message". Verified: neutering W1 alone left the battery 8/8.
+#
+# Requiring ALL of them is the difference between "something reddened" and "the assertion I
+# named reddened", which is this file's own Rule 2.
 arm() {
-  local name="$1" label="$2" msg_re="$3" rc fails
+  local name="$1" label="$2"; shift 2
+  local rc fails re missing=""
   rc=$(run_suite)
   if [[ "$rc" == "0" ]]; then
     fail "$name — SURVIVED. The assertion nominally covering it ($label) cannot fail; the gate is protected by nothing."
     return
   fi
   fails=$(grep -E '^[[:space:]]*FAIL:' "$SB/out.log")
-  if grep -qE "$msg_re" <<<"$fails"; then
-    pass "$name — caught by $label, identified by its own message"
+  for re in "$@"; do
+    grep -qE "$re" <<<"$fails" || missing+=" [$re]"
+  done
+  if [[ -z "$missing" ]]; then
+    pass "$name — caught by $label, and EVERY named assertion fired"
   else
-    fail "$name — the suite reddened but NOT via $label. A mutant caught for the wrong reason is indistinguishable from one that was missed. FAILures were: $(head -3 <<<"$fails" | tr '\n' ' ')"
+    fail "$name — the suite reddened but these named assertions did NOT fire:$missing. A mutant caught for the wrong reason is indistinguishable from one that was missed. FAILures were: $(head -3 <<<"$fails" | tr '\n' ' ')"
   fi
 }
 
+# The tree-cleanliness check below compares two `git status` samples. If git cannot answer —
+# REPO_ROOT is not a repo, git is absent, the 2>/dev/null swallows a real error — BOTH samples
+# are the empty string and the comparison passes having verified nothing. Demonstrated: run this
+# file from a non-repo sandbox and it still printed "the working tree is unchanged by this run".
+# A check that cannot fail is indistinguishable from one that passed, so require the instrument
+# to work before trusting its answer.
+if ! git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+  echo "FATAL: $REPO_ROOT is not a git repository, so the working-tree escape check below cannot run. Refusing to report a sandbox-safety result this battery did not establish." >&2
+  exit 2
+fi
 TREE_BEFORE="$(git -C "$REPO_ROOT" status --porcelain -- scripts .github 2>/dev/null)"
 
 echo "=== cf-tunnel liveness-gate mutation battery (#7103 R5(b)) ==="
@@ -129,8 +153,10 @@ io.open(p, "w", encoding="utf-8").write(
     head + "    # Gate — CF Access must still admit the ci_ssh credential (step removed by mutation)\n")
 PY
 assert_landed "$BRIDGE_REL"
-arm "M1 gate step deleted (header comment left intact)" "W1/W3/W4" \
-    "scoped invocation at command position|must EMIT ci_ssh_access_denied"
+arm "M1 gate step deleted (header comment left intact)" "W1+W3+W4" \
+    "scoped invocation at command position" \
+    "must EMIT ci_ssh_access_denied" \
+    "must branch on the JSON verdict"
 
 # --- M3: the gate is no longer the final step -----------------------------------------------
 restore
@@ -245,5 +271,21 @@ fi
 
 echo "---"
 echo "cf-tunnel-liveness-gate-mutations.test.sh: $PASS passed, $FAIL failed"
+# --- Anti-vacuity floor ----------------------------------------------------------------------
+# THE RULE THIS FILE IMPOSES ON ITS SIBLING, APPLIED TO ITSELF. M8 enforces an assertion floor on
+# check-cloudflare-token-drift.test.sh, and this battery — whose entire deliverable is "the
+# sibling suite cannot rot into vacuity" — shipped without one. Verified: neuter pass()/fail()
+# here and it reports "0 passed, 0 failed", prints OK, and exits 0, which is byte-indistinguishable
+# from a clean run. Anything that strands the arm block (an early exit, a failed restore, a
+# renamed SUITE_REL) produced that same output.
+#
+# A FLOOR, not equality: the count is developer-incremented, so `-eq` would turn every added arm
+# into a spurious red — the failure mode that gets a floor deleted rather than updated.
+MIN_ASSERTIONS=8
+if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]]; then
+  echo "FATAL: only $((PASS + FAIL)) arms ran, expected >= $MIN_ASSERTIONS — this battery was stranded, not clean." >&2
+  exit 1
+fi
+
 [[ "$FAIL" -eq 0 ]] || exit 1
 echo "OK"

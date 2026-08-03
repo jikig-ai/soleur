@@ -194,6 +194,30 @@ NOMARKER_B64=$(printf 'SOME_OTHER_KEY=value\n' | base64 -w0)
 run_arm "$NOMARKER_B64" 0
 eq "decodable payload WITHOUT the DOPPLER_TOKEN= marker exports nothing" "" "$ARM_EXPORT"
 
+# --- Arm 5b: the marker check is pinned to THE MARKER, not to any key in the fixture ---------
+# Arm 5's positive fixture carries a CONFOUNDER: RENDERED holds SENTRY_PROJECT_ID= as well as
+# DOPPLER_TOKEN=, and its negative holds SOME_OTHER_KEY=. So every mutation that swaps the
+# grep for something present in the first and absent from the second survived — measured, all
+# at 24/24 green: '^DOPPLER_TOKEN=' -> '^SENTRY_PROJECT_ID=', dropping the '^' anchor, and
+# widening to 'TOKEN='. These two fixtures sit on the missing side of exactly those mutations.
+SENTRY_ONLY_B64=$(printf 'SENTRY_PROJECT_ID=123\n' | base64 -w0)
+run_arm "$SENTRY_ONLY_B64" 0
+eq "a payload with only the SIBLING key exports nothing (the check is not keyed on it)" "" "$ARM_EXPORT"
+
+# A commented-out marker is not a marker. Without the '^' anchor this decodes, matches, and arms
+# the gate with a digest of the wrong bytes — re-creating #7140 in a new shape.
+COMMENTED_B64=$(printf '#DOPPLER_TOKEN=dp.st.NOT_A_REAL_TOKEN_synthesized_for_test\n' | base64 -w0)
+run_arm "$COMMENTED_B64" 0
+eq "a COMMENTED-OUT marker does not arm the gate (the ^ anchor is load-bearing)" "" "$ARM_EXPORT"
+
+# --- Arm 5c: console_rc is a real conjunct ---------------------------------------------------
+# The guard is `[[ "$console_rc" -eq 0 && -n "$b64" ]]`. The fixture matrix never instantiated
+# the one cell that discriminates it — valid, decodable output alongside a NON-ZERO rc — so
+# dropping the rc conjunct entirely passed 24/24. A terraform console that prints usable output
+# and still fails must not arm the gate.
+run_arm "$GOOD_B64" 1
+eq "a non-zero console rc exports nothing even when the output decodes" "" "$ARM_EXPORT"
+
 # --- Arm 6: quoted output (terraform console emits a quoted string) -------------------------
 # The step strips quotes before decoding; assert that survives, or every real run degrades.
 run_arm "\"$GOOD_B64\"" 0
@@ -263,7 +287,11 @@ fi
 # --- MIN_ASSERTS floor (5.5) ----------------------------------------------------------------
 # A broken extraction, a renamed step, or an early `exit` would otherwise let this file report
 # success having asserted almost nothing.
-MIN_ASSERTS=22
+# Raised 22 -> 27 alongside the arms added above. The old value left 1 assertion of slack against
+# 23 running, and that slack was exactly enough to DELETE Arm 5 — the arm the whole design rests
+# on — while still printing "assertion floor met (22 >= 22)". Measured: removing Arm 5 in full
+# reported 23 passed, 0 failed, rc 0. A floor with slack is a floor you can walk under.
+MIN_ASSERTS=26
 if [[ "$asserts" -ge "$MIN_ASSERTS" ]]; then
   ok "assertion floor met ($asserts >= $MIN_ASSERTS)"
 else

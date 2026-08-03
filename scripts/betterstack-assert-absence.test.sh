@@ -179,6 +179,75 @@ else
   bad "no archive arm — a soak-length window would get a silently short answer"
 fi
 
+# --- The two runtime defects the review found, pinned ----------------------------------------
+
+# (1) LOCALE. Bash's [[ =~ ]] uses locale collation for [0-9], so under a UTF-8 locale the
+# FULLWIDTH digits U+FF10-U+FF19 satisfy the shape gate, reach $(( )), and die inside a command
+# substitution — which set -e turns into exit 1, i.e. `present` in this script's own table, with
+# NO verdict line printed. Run under an explicitly UTF-8 environment, because that is the
+# condition under which it fires; a C-locale test would pass against the unfixed script.
+echo "--- malformed --since under a UTF-8 locale ---"
+for bad_since in '０６h' '1;evil h' '0x10h' '+6h' '6H' ' 6h'; do
+  # `|| rc=$?`, never `; rc=$?`. Under this file's `set -euo pipefail` the latter aborts at the
+  # first non-zero — which is EVERY iteration here, since a rejection is the expected outcome.
+  rc=0
+  out=$(LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 BETTERSTACK_QUERY_SCRIPT="$TMP/stub.sh" \
+          bash "$SUT" --host soleur-web-1 --absence X --since "$bad_since" 2>&1) || rc=$?
+  if [[ "$rc" == 64 ]]; then
+    ok "malformed --since '${bad_since:-<empty>}' is rejected by name (exit 64)"
+  else
+    bad "malformed --since '${bad_since:-<empty>}' exited $rc, not 64 — a usage error is being reported as an OUTCOME"
+  fi
+  if [[ "$rc" == 1 ]]; then
+    bad "…and exit 1 is 'present' in this script's own table: a typo now claims the channel regressed"
+  fi
+done
+# The other direction: a WELL-FORMED window must still be accepted under the same locale, or the
+# fix above would read as green by rejecting everything.
+rc=0
+out=$(LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 BETTERSTACK_QUERY_SCRIPT="$TMP/stub.sh" \
+        bash "$SUT" --host soleur-web-1 --absence X --since 6h 2>&1) || rc=$?
+if [[ "$rc" != 64 ]]; then
+  ok "a well-formed --since is still accepted under a UTF-8 locale"
+else
+  bad "the locale pin rejects a VALID window too — it is over-tightened"
+fi
+
+# (2) PARTIAL ANSWER. A body carrying a well-formed count AND a ClickHouse exception is not an
+# answer. `head -1` took the count and discarded the error, returning rc=0 outcome=clean — the
+# exact "absence of evidence recorded as evidence" class this script exists to close.
+echo "--- a count followed by an error is not an answer ---"
+make_stub 'PARTIAL' 'EMPTY' 2>/dev/null || true
+cat > "$TMP/stub-partial.sh" <<'STUB'
+#!/usr/bin/env bash
+printf '{"n":"0"}\nCode: 241. DB::Exception: Memory limit exceeded\n'
+STUB
+chmod +x "$TMP/stub-partial.sh"
+rc=0
+out=$(BETTERSTACK_QUERY_SCRIPT="$TMP/stub-partial.sh" bash "$SUT" --host soleur-web-1 \
+        --absence X --since 6h 2>&1) || rc=$?
+if [[ "$rc" == 3 ]]; then
+  ok "a count-plus-exception body resolves to unknown (exit 3), not clean"
+else
+  bad "a count-plus-exception body exited $rc — expected 3 (unknown); clean here is a false all-clear"
+fi
+if grep -q 'outcome=clean' <<<"$out"; then
+  bad "the verdict line says clean over a response that carried an error"
+else
+  ok "no clean verdict is emitted for a partial response"
+fi
+
+# --- Anti-vacuity floor -----------------------------------------------------------------------
+# This suite imposes assertion floors on other people's guards and had none of its own. Neuter
+# ok()/bad()/eq() and it reported "0 passed, 0 failed / OK / exit 0" — indistinguishable from a
+# clean run. A FLOOR, not equality: the count is developer-incremented, so -eq turns every new
+# assertion into a spurious red.
+MIN_ASSERTIONS=35
+if [[ "$((pass + fail))" -lt "$MIN_ASSERTIONS" ]]; then
+  echo "FATAL: only $((pass + fail)) assertions ran, expected >= $MIN_ASSERTIONS — the suite was stranded, not clean." >&2
+  exit 1
+fi
+
 echo "---"
 echo "betterstack-assert-absence.test.sh: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]] || exit 1

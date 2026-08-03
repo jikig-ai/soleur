@@ -411,7 +411,13 @@ assert "P1-SEC a credential-LESS internal URL passes through untouched (shape-ba
 # would agree with each other while both disagreeing with the script -- a guard that passes
 # precisely when it is wrong. Deriving one side makes a rename fail here instead of in prod.
 CI_DEPLOY_SH="$SCRIPT_DIR/ci-deploy.sh"
-CI_DEPLOY_TAG="$(grep -oE '^readonly LOG_TAG="[^"]+"' "$CI_DEPLOY_SH" | head -1 | cut -d'"' -f2)"
+# `|| true` is load-bearing under this file's `set -euo pipefail`. This derivation feeds R1-1.8a,
+# whose entire job is catching a LOG_TAG rename — and on a rename the grep matches nothing, the
+# capture returns non-zero, and the suite DIES here rather than reporting. Measured: renaming
+# `readonly LOG_TAG=` took the suite from "79/79 passed" to no summary line, no FAIL:, and all
+# nine later assertions (R1-1.8a/b/c, R3-4.5a–f) never executing. The guard fired by killing the
+# run that would have reported it. The emptiness check on the next line is the real assertion.
+CI_DEPLOY_TAG="$(grep -oE '^readonly LOG_TAG="[^"]+"' "$CI_DEPLOY_SH" | head -1 | cut -d'"' -f2 || true)"
 
 assert "R1-1.8a: ci-deploy.sh declares exactly ONE literal LOG_TAG (derivation is unambiguous)" \
   "[[ -n \"\$CI_DEPLOY_TAG\" ]] && [[ \"\$(grep -cE '^readonly LOG_TAG=' \"\$CI_DEPLOY_SH\")\" == 1 ]]"
@@ -451,8 +457,12 @@ assert "R3-4.5b: the unit sets SyslogIdentifier=web-zot-consumer-probe (the join
   "grep -qE '^SyslogIdentifier=web-zot-consumer-probe\$' \"\$ZOT_PROBE_UNIT\""
 
 # (iii) The probe still emits the marker the helper's control reads.
-assert "R3-4.5c: the probe emits SOLEUR_PROBE_CANARY (the allowlist entry is not dead)" \
-  "grep -q 'SOLEUR_PROBE_CANARY' \"\$ZOT_PROBE_SH\""
+# ANCHORED ON THE EMISSION, not the bare token. `grep -q 'SOLEUR_PROBE_CANARY'` matched the
+# VARIABLE NAME (SOLEUR_PROBE_CANARY_MARKER, the rate-limit path) as well as the echo, so
+# deleting the emit line entirely left this arm green — mutation-verified. A marker that is
+# named but never emitted is exactly the dead-allowlist-entry this assertion exists to rule out.
+assert "R3-4.5c: the probe EMITS SOLEUR_PROBE_CANARY (the allowlist entry is not dead)" \
+  "grep -qE '^[[:space:]]*echo \"\\[zot-probe\\] SOLEUR_PROBE_CANARY ' \"\$ZOT_PROBE_SH\""
 
 # (iv) THE 4.3 INVARIANT. The emit site must be OUTSIDE the `doppler run` wrapper.
 #
@@ -466,8 +476,13 @@ assert "R3-4.5d: the canary is emitted from an ExecStartPre OUTSIDE the doppler 
   "grep -qE '^ExecStartPre=-?/usr/local/bin/web-zot-consumer-probe\.sh --canary-only\$' \"\$ZOT_PROBE_UNIT\""
 assert "R3-4.5e: that ExecStartPre line does NOT route through doppler run" \
   "! grep -E '^ExecStartPre=' \"\$ZOT_PROBE_UNIT\" | grep -q 'doppler'"
-assert "R3-4.5f: the probe supports --canary-only before its credential FATAL guards" \
-  "[[ \"\$(grep -n -- '--canary-only' \"\$ZOT_PROBE_SH\" | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'ZOT_PULL_USER/ZOT_PULL_TOKEN unset' \"\$ZOT_PROBE_SH\" | head -1 | cut -d: -f1)\" ]]"
+# ORDERING, anchored on the BRANCH rather than on any occurrence of the flag name. The previous
+# form took `grep -n -- '--canary-only' | head -1`, and the first occurrence in the probe is a
+# COMMENT (line 86) explaining the flag, twelve lines above the code that implements it (line
+# 100). So moving the real branch BELOW the credential FATAL guards — the precise regression
+# this arm names — left it green while the mutant FATALed instead of emitting. Mutation-verified.
+assert "R3-4.5f: the --canary-only BRANCH precedes the credential FATAL guards" \
+  "[[ \"\$(grep -nE '^if \\[ \"\\\$\\{1:-\\}\" = \"--canary-only\" \\]' \"\$ZOT_PROBE_SH\" | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'ZOT_PULL_USER/ZOT_PULL_TOKEN unset' \"\$ZOT_PROBE_SH\" | head -1 | cut -d: -f1)\" ]]"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="

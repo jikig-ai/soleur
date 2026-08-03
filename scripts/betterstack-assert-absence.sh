@@ -46,6 +46,20 @@
 #   SOLEUR_ABSENCE_ASSERT outcome=<o> host=<h> absence_rows=<n> control_rows=<n> since=<w>
 set -euo pipefail
 
+# LOCALE-PINNED, and this is load-bearing rather than hygiene. Bash's [[ =~ ]] uses the locale's
+# collation for [0-9], so under en_US.UTF-8 the FULLWIDTH digits U+FF10-U+FF19 match it. Measured:
+#
+#   LANG=en_US.UTF-8  [[ "０６h" =~ ^([0-9]+)([hdm])$ ]]  -> MATCH
+#   LC_ALL=C          [[ "０６h" =~ ^([0-9]+)([hdm])$ ]]  -> no match
+#
+# So `--since '０６h'` passed the shape gate below, reached $(( n * 3600 )), and died with an
+# arithmetic syntax error INSIDE a command substitution — which `set -e` turns into a script
+# death with exit 1. Exit 1 is `present` in this script's own outcome table, and no
+# SOLEUR_ABSENCE_ASSERT verdict line is printed at all, falsifying the header's "every run prints
+# one machine-readable verdict line". A typo'd window therefore told the operator the credential
+# channel had regressed. Same reasoning as ship/scripts/auto-close-scan.sh's locale pin.
+export LC_ALL=C
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 QUERY="${BETTERSTACK_QUERY_SCRIPT:-$SCRIPT_DIR/betterstack-query.sh}"
 
@@ -160,7 +174,26 @@ run_count() {
   # JSONEachRow: exactly one object with a numeric `n`. Anything else — an empty body, an HTML
   # error page, a ClickHouse exception echoed to stdout — is UNKNOWN, never zero.
   local n
-  n="$(printf '%s' "$out" | grep -oE '"n":"?[0-9]+"?' | head -1 | grep -oE '[0-9]+' || true)"
+  # `head -1` here was a PARTIAL-ANSWER-AS-ABSENCE bug, which is the exact class this script
+  # exists to close. A body of `{"n":"0"}` followed by a ClickHouse exception yielded rc=0 and
+  # outcome=clean: the first match won and everything after it — including the error saying the
+  # query did not complete — was discarded. Reproduced against the pristine script before fixing.
+  #
+  # Require EXACTLY ONE count field, and refuse a response that carries an error alongside it.
+  # More than one match is equally disqualifying: it means the body is not the shape this parser
+  # was written for, and picking one of them is guessing.
+  local matches n_matches
+  matches="$(printf '%s' "$out" | grep -oE '"n":"?[0-9]+"?' || true)"
+  n_matches="$(printf '%s' "$matches" | grep -c . || true)"
+  if [[ "$n_matches" != "1" ]]; then
+    printf 'UNPARSEABLE (expected exactly one "n" field, found %s)\n%s\n' "$n_matches" "$out" >&2
+    return 1
+  fi
+  if printf '%s' "$out" | grep -qiE 'exception|DB::Err|Code: [0-9]+|syntax error'; then
+    printf 'UNPARSEABLE (the response carries an error alongside the count — a partial answer is not an answer)\n%s\n' "$out" >&2
+    return 1
+  fi
+  n="$(printf '%s' "$matches" | grep -oE '[0-9]+' | head -1 || true)"
   [[ "$n" =~ ^[0-9]+$ ]] || { printf 'UNPARSEABLE\n%s\n' "$out" >&2; return 1; }
   printf '%s' "$n"
 }
