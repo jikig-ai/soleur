@@ -126,7 +126,8 @@ const NON_INNGEST_MONITORS = new Set([
   "scheduled-prod-version-drift",
   // #6808: GHA-fired (workspaces-luks-verify.yml, on.schedule '41 4 * * *') — the daily
   // /workspaces LUKS at-rest re-assert. Its native `schedule:` is ANTI-CIRCULARITY, not
-  // convenience. The SCHEDULER is not the problem — since the #5450 cutover Inngest runs on its own
+  // convenience. The SCHEDULER is not the problem — since the #6178 cutover (ADR-100, superseding
+  // the #5450 same-host framing) the Inngest SCHEDULER runs on its own
   // host (hcloud_server.inngest, 10.0.1.40). EXECUTION is: Inngest calls functions over a single
   // stable callback, sdk_url http://10.0.1.10:3000/api/inngest (inngest-host.tf), i.e. the app on
   // WEB-1, with no failover to web-2. This workflow exists to detect that web-1's /mnt/data is no

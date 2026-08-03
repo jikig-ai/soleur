@@ -1,7 +1,9 @@
 # #6604 — the /workspaces LUKS at-rest VERIFY workflow (the no-SSH runbook artifact).
 #
 # NON-DESTRUCTIVE (one OPTIONAL state-file seed — see the seed_workspace_count input; default no
-# write). workflow_dispatch-only. This is the discoverability_test the runbook points at instead
+# write). DAILY `schedule:` + workflow_dispatch as of #6808 — this file was dispatch-only until
+# then, and the counsel audit's §A3.4 quotes that former state as evidence, so the two must not
+# drift. This is the discoverability_test the runbook points at instead
 # of "log in and check" (hr-no-ssh-fallback-in-runbooks): over the CF Tunnel SSH bridge it runs the
 # SAME probe logic as the daily luks-monitor.sh (DP-11 — DRY, not a bespoke reimplementation), plus
 # an app-level liveness probe of /health, the mount-coupled /internal/readyz assert, and the
@@ -73,7 +75,8 @@
 # prd_workspaces_luks boot token, neither of which may be parked on the long-lived app host.
 #
 # ANTI-CIRCULARITY COROLLARY (the reason this is a native `schedule:` and not an Inngest dispatch).
-# Note the SCHEDULER is not the issue: since the #5450 durable-backend cutover Inngest runs on its
+# Note the SCHEDULER is not the issue: since the #6178 cutover (ADR-100, which supersedes the
+# #5450 same-host durable-backend framing) the Inngest SCHEDULER runs on its
 # own host (hcloud_server.inngest, 10.0.1.40). EXECUTION is. Inngest reaches the functions over a
 # single stable callback --sdk-url http://10.0.1.10:3000/api/inngest (inngest-host.tf), i.e. the
 # app on WEB-1 — the very host whose volume this workflow verifies — with no failover to web-2
@@ -170,14 +173,37 @@ jobs:
         env:
           DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
           RESEND_API_KEY_CHECK: ${{ secrets.RESEND_API_KEY }}
+          SENTRY_INGEST_DOMAIN_CHECK: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          SENTRY_PROJECT_ID_CHECK: ${{ secrets.SENTRY_PROJECT_ID }}
+          SENTRY_PUBLIC_KEY_CHECK: ${{ secrets.SENTRY_PUBLIC_KEY }}
         run: |
           set -euo pipefail
+          # DOPPLER_TOKEN is the only HARD requirement: without it the probe cannot run at all, so
+          # there is no verification to protect.
           [[ -n "$DOPPLER_TOKEN_CHECK" ]] || { echo "::error::DOPPLER_TOKEN not configured."; exit 1; }
-          # (#6808) RESEND_API_KEY is a NEW dependency of this workflow: the drift/readiness ops page
-          # rides notify-ops-email. That action exits 1 only on an EMPTY key, so without this guard a
-          # missing key would first surface at PAGE time — i.e. mid-incident, on the one run where
-          # the page matters. Fail at the top of the run instead.
-          [[ -n "$RESEND_API_KEY_CHECK" ]] || { echo "::error::RESEND_API_KEY not configured — the drift/readiness ops page could not be sent."; exit 1; }
+
+          # Everything below is a NOTIFICATION channel, and a notification credential must never
+          # take the verification itself dark. An earlier revision hard-exited on an empty
+          # RESEND_API_KEY, which inverted this workflow's own stated principle ("An email-delivery
+          # fault must not red a verify that otherwise ran correctly" — the ops-email step's
+          # continue-on-error rationale) and let a rotated transactional-email key stop /mnt/data
+          # being verified at all, every night, against a 30-day claim-decay window.
+          #
+          # They are still checked HERE rather than at use time, because the point of the check is
+          # to surface a rotated key at the top of an ordinary run instead of mid-incident on the
+          # one run where the page matters. Warn loudly, record it, and keep verifying.
+          degraded=""
+          [[ -n "$RESEND_API_KEY_CHECK" ]] || { echo "::warning::RESEND_API_KEY not configured — the drift/readiness ops page CANNOT be sent this run."; degraded="${degraded}ops-email "; }
+          # The Sentry triple feeds the Crons check-in — the ONLY layer that can see a run that
+          # never happened. A rotated key here is worse than silence: the check-in stops, and the
+          # monitor then pages "missed check-in", which reads as "the schedule is dark" while the
+          # schedule is in fact running and passing. That is a MISDIRECTED alarm on the one layer
+          # that exists to catch true silence, so it must be visible before it happens.
+          for _s in SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY; do
+            eval "_v=\${${_s}_CHECK:-}"
+            [[ -n "$_v" ]] || { echo "::warning::${_s} not configured — the Sentry Crons check-in CANNOT be posted this run; a missed-check-in page would misreport a healthy schedule as dark."; degraded="${degraded}${_s} "; }
+          done
+          printf 'DEGRADED_CHANNELS=%s\n' "${degraded% }" >> "$GITHUB_ENV"
 
       - name: CF Tunnel SSH bridge
         uses: ./.github/actions/cf-tunnel-ssh-bridge
@@ -254,6 +280,38 @@ jobs:
             return 1
           }
 
+          # THE AT-REST ALLOWLIST — a POSITIVE gate, and the direction is the whole point.
+          #
+          # `drift` is the only class that files priority/p0-critical + type/security and asserts
+          # in its body that the published Article 32 claim is FALSE. A NEGATIVE gate ("anything
+          # not probe-integrity is drift") hands that verdict to every unmodelled non-zero rc —
+          # including rc=2, which bash returns on a SYNTAX ERROR or builtin misuse. luks-monitor.sh
+          # refuses exit 2 for readiness on exactly this reasoning ("a typo in this file ... would
+          # be reported to the operator as a data-loss verdict"), and this layer must not undo it.
+          # A partial `tar`, a future producer failure mode, an unparseable log — all of them
+          # reached `drift` before this allowlist existed.
+          #
+          # Membership is the set of at-rest verdicts luks-monitor.sh emits from `emit_and_die`
+          # once the mount/mapper chain is POSITIVELY refuted. Deliberately absent:
+          # `cryptsetup_status_missing` and `mapper_device_link_missing` — both are reached only
+          # AFTER `mountpoint -q`, `mnt_src == $MAPPER` and `[ -e $MAPPER ]` have all passed, so
+          # the mapper node exists and is serving as the mount source. "cryptsetup cannot describe
+          # it" is a tooling/parse fault, not plaintext at rest.
+          #
+          # Fail direction: an unrecognised reason lands in `unavailable`, which still ALARMS and
+          # still files an issue — it just does not assert a legal claim it cannot support. The
+          # under-reporting risk (a NEW at-rest reason added upstream and not added here) is closed
+          # by the producer/consumer parity assertion in
+          # apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh, which derives this set
+          # from luks-monitor.sh and fails loudly on a new member.
+          is_at_rest_drift() {
+            case "${1:-}" in
+              not_mounted|mount_not_mapper|mapper_absent|device_not_luks|escrow_passphrase_mismatch|header_uuid_unreadable)
+                return 0 ;;
+            esac
+            return 1
+          }
+
           # A seed WRITES host state, and a scheduled run must never do that. GitHub supplies no
           # inputs on a schedule event, so SEED_WORKSPACE_COUNT is set-but-empty and the seed
           # branch below is already unreachable — but that is an ASSUMPTION about a vendor
@@ -268,6 +326,18 @@ jobs:
 
           # Fail loud if the bridge did not export WEB_HOST_SSH (bare ssh would connect keyless).
           [[ -n "${WEB_HOST_SSH:-}" ]] || { echo "::error::CF Tunnel SSH bridge did not export WEB_HOST_SSH — cannot reach web-1. Check the bridge step logs."; emit_class unavailable bridge_web_host_ssh_missing; exit 1; }
+
+          # BOUND EVERY SSH. The bridge exports its invocation with no ConnectTimeout,
+          # ServerAliveInterval or ServerAliveCountMax, and the TCP connect is to a LOCAL
+          # cloudflared listener, so it always succeeds instantly — a stall at the banner exchange
+          # or mid-stream therefore has no client-side bound at all and falls back to the kernel's
+          # 2-hour keepalive default. Unattended, that means a hung tunnel burns the full
+          # `timeout-minutes: 15` and the job is cancelled mid-step, which produces an alarm with
+          # an EMPTY class ("nothing proven") instead of the named `ssh_transport_failure` the
+          # classifier already has an enum member and a runbook row for. ~75 s to a real rc=255
+          # beats 15 minutes to a teardown. Set once here so every call site inherits it; the
+          # cleanup step re-derives its own below.
+          WEB_HOST_SSH="${WEB_HOST_SSH} -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
           [[ -n "${WORKSPACES_LUKS_BOOT_TOKEN:-}" ]] || { echo "::error::WORKSPACES_LUKS_BOOT_TOKEN not configured — run the DEFAULT apply of apply-web-platform-infra.yml to publish it (#6649)."; emit_class unavailable boot_token_missing; exit 1; }
           # Ship luks-monitor.sh + its emit sibling to a temp dir on the PERSISTENT STATE_DIR and run
           # it AS A FILE (read-only; MUTATES NOTHING — it opens no device). This removes the
@@ -291,11 +361,17 @@ jobs:
           # requested". Appended, and read back with `tail -1`, matching persist_state's semantics
           # in workspaces-cutover.sh:170 — the state file is append-only with last-write-wins.
           if [[ -n "${SEED_WORKSPACE_COUNT:-}" ]]; then
-            # Digits, and NOT zero. A `0` baseline makes `count -lt 0` false for every count, so it
-            # is an absorbing green a total wipe would pass — a missing baseline wearing a number.
+            # Digits, NOT zero, and NOT absurdly wide. A `0` baseline makes `count -lt 0` false for
+            # every count, so it is an absorbing green a total wipe would pass — a missing baseline
+            # wearing a number. The WIDTH bound closes the same hole one order up: POSIX `[` (which
+            # luks-monitor.sh uses for the shortfall comparison) exits 2 "integer expected" above
+            # INT64_MAX, and inside an `if` under `set -uo pipefail` with no `-e` that reads as
+            # "not less than" — so a >19-digit baseline SKIPS the comparison entirely and a total
+            # wipe reports PASS. Measured: `[ 0 -lt 99999999999999999999 ]` exits 2.
+            # 9 digits (max 999,999,999 workspaces) is far beyond any real inventory.
             case "$SEED_WORKSPACE_COUNT" in
-              ''|*[!0-9]*|0|0[0-9]*)
-                echo "::error::seed_workspace_count must be a positive integer (digits only, not zero). Refusing to write a baseline that cannot fail."
+              ''|*[!0-9]*|0|0[0-9]*|??????????*)
+                echo "::error::seed_workspace_count must be a positive integer, digits only, not zero, at most 9 digits. Refusing to write a baseline that cannot fail."
                 # Dispatch-only branch: the alarm is schedule-gated, so this class is recorded for
                 # the step output's completeness, not because it can ever page.
                 emit_class unavailable seed_not_positive_integer
@@ -306,9 +382,28 @@ jobs:
             # (shrunk) count would convert a real sole-copy data-loss finding into a certified green
             # in one click. A seed is only sound as a FIRST baseline (or a genuine upward correction),
             # never as a way past a shortfall; that decision is a data-recovery incident, not a knob.
+            #
+            # THE READ MUST FAIL CLOSED. `2>/dev/null || true` collapsed "no baseline exists yet"
+            # (a legitimate first seed) into the same empty string as "I could not read the
+            # baseline", and empty short-circuits the guard to ALLOW. The write below is a separate
+            # SSH invocation that can succeed after the read failed — so a single tunnel blip on
+            # the read, during exactly the incident that motivates re-seeding, let a downward
+            # re-seed land. Capture the transport status separately and refuse to seed blind.
             # shellcheck disable=SC2086
-            existing="$(${WEB_HOST_SSH} "$WEB_HOST" "grep -E '^WORKSPACES_COUNT=' /var/lib/workspaces-luks/state 2>/dev/null | tail -1 | cut -d= -f2-" 2>/dev/null || true)"
-            if [[ -n "$existing" && "$existing" =~ ^[0-9]+$ && "$SEED_WORKSPACE_COUNT" -lt "$existing" ]]; then
+            if ! existing_raw="$(${WEB_HOST_SSH} "$WEB_HOST" "cat /var/lib/workspaces-luks/state 2>/dev/null || true")"; then
+              echo "::error::could not read the existing WORKSPACES_COUNT baseline from web-1 (SSH/transport fault). Refusing to seed blind — a seed written without reading the current baseline can silently lower it."
+              emit_class unavailable seed_baseline_unreadable
+              exit 1
+            fi
+            # `tr -d '\r'` so a CRLF state file cannot defeat the ^[0-9]+$ shape check below and
+            # thereby skip the comparison; the host side already fails closed on `\r`.
+            existing="$(printf '%s\n' "$existing_raw" | grep -E '^WORKSPACES_COUNT=' | tail -1 | cut -d= -f2- | tr -d '\r' || true)"
+            if [[ -n "$existing" && ! "$existing" =~ ^[0-9]{1,9}$ ]]; then
+              echo "::error::the existing baseline on web-1 is not a usable integer (got '${existing}'). Refusing to seed against an unreadable baseline."
+              emit_class unavailable seed_baseline_unreadable
+              exit 1
+            fi
+            if [[ -n "$existing" && "$SEED_WORKSPACE_COUNT" -lt "$existing" ]]; then
               echo "::error::refusing to seed WORKSPACES_COUNT=$SEED_WORKSPACE_COUNT below the existing baseline ($existing). A downward re-seed masks a real shortfall — treat a shortfall as a data-recovery incident (runbook §5), not a seed."
               emit_class unavailable seed_below_existing_baseline
               exit 1
@@ -414,14 +509,17 @@ jobs:
             exit 3
           fi
           if [[ "$probe_rc" -ne 0 ]]; then
-            echo "::error::workspaces-luks AT-REST re-assert FAILED (rc=$probe_rc) — see the emitted Sentry event: feature=workspaces-luks op=workspaces-luks-drift."
-            # THE reason-first branch. Everything that reaches here on a non-zero rc is an at-rest
-            # drift verdict EXCEPT a probe-integrity reason — which arrives here precisely because
-            # emit_and_die carries it on rc 1, not on rc 3.
-            if is_probe_integrity "$reason"; then
-              emit_class unavailable "$reason"
+            # THE reason-first branch, gated POSITIVELY (see is_at_rest_drift above). Only a
+            # recognised at-rest verdict earns `drift`; everything else on a non-zero rc — an
+            # unparseable log, a partial tar, a bash syntax error's rc=2 — is a can't-measure.
+            # The headline is branched with it so the ::error:: text cannot contradict the class
+            # the same run emits.
+            if is_at_rest_drift "$reason"; then
+              echo "::error::workspaces-luks AT-REST re-assert FAILED (rc=$probe_rc, reason=$reason) — see the emitted Sentry event: feature=workspaces-luks op=workspaces-luks-drift."
+              emit_class drift "$reason"
             else
-              emit_class drift "${reason:-unparsed}"
+              echo "::error::workspaces-luks re-assert exited $probe_rc with reason='${reason:-unparsed}', which is NOT a recognised at-rest verdict. This run proves NOTHING about the volume — do NOT run a data-recovery procedure and do NOT treat it as an encryption-claim regression."
+              emit_class unavailable "${reason:-unparsed}"
             fi
             exit "$probe_rc"
           fi
@@ -470,8 +568,14 @@ jobs:
         run: |
           set +e
           if [[ -n "${WEB_HOST_SSH:-}" && -n "${REMOTE_DIR:-}" ]]; then
+            # Bounded like every other SSH in this workflow (see the Re-assert step's note): the
+            # bridge's exported invocation carries no client-side timeout, and this is an
+            # `if: always()` cleanup step, so a hung tunnel here would hold the job open to the
+            # 15-minute teardown AFTER the verdict was already emitted — turning a completed run
+            # into a cancelled one. This step's own `|| true` keeps it advisory either way.
             # shellcheck disable=SC2086
-            ${WEB_HOST_SSH} "$WEB_HOST" "rm -rf '$REMOTE_DIR'" 2>/dev/null || true
+            ${WEB_HOST_SSH} -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+              "$WEB_HOST" "rm -rf '$REMOTE_DIR'" 2>/dev/null || true
           fi
 
       - name: Tear down cloudflared SSH bridge
@@ -552,6 +656,7 @@ jobs:
           REASON: ${{ steps.reassert.outputs.outcome_reason }}
           REASSERT_OUTCOME: ${{ steps.reassert.outcome }}
           EMAIL_OUTCOME: ${{ steps.ops_email.outcome }}
+          DEGRADED_CHANNELS: ${{ env.DEGRADED_CHANNELS }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -574,54 +679,76 @@ jobs:
           # honest reading of that, and `unavailable` is the class that says so.
           [[ -n "$class" ]] || class=unavailable
 
-          # ONE LABEL, THREE TITLES. The class lives in the TITLE, which is already the dedupe key.
-          # Three bespoke labels would buy three dedupe keys the titles already give, at the cost of
-          # three label-create calls. The mandatory `*)` default must NOT fall through to `drift`:
-          # that would file a p0 type/security at-rest finding for a dead bridge.
+          # TITLE IS THE DEDUPE KEY, and severity must never ride a key it does not own. The
+          # p0/p1 split inside `readiness` therefore gets its OWN title rather than sharing one:
+          # `labels` is consumed only by `gh issue create`, so a shortfall arriving onto an open
+          # p1 `readyz_not_ready` issue would take the comment path and NEVER receive
+          # `priority/p0-critical` — irreversible sole-copy data loss, filed as a capacity fault.
+          # A shared title made that a property of arrival ORDER; a distinct title removes it.
+          #
+          # `luks/class-<class>` is emitted alongside so the class is recoverable from
+          # `gh issue list --json labels` without title-string matching. Without it
+          # `readiness`-other and `unavailable` are label-IDENTICAL, which collapses "act on it"
+          # against "nothing was proven, do NOT start a data-recovery procedure" on the only
+          # channel an agent can query structurally.
+          #
+          # The mandatory `*)` default must NOT fall through to `drift`: that would file a p0
+          # type/security at-rest finding for a dead bridge.
           case "$class" in
             drift)
               title="[ci/luks-verify] at-rest drift on /mnt/data"
-              labels=(--label "ci/luks-verify" --label "type/security" --label "priority/p0-critical" --label "action-required")
+              bare_labels=("ci/luks-verify" "luks/class-drift" "type/security" "priority/p0-critical" "action-required")
               headline="Encryption at rest is no longer in effect on the live workspaces volume"
               ;;
             readiness)
-              title="[ci/luks-verify] readiness or inventory failure"
               # SEVERITY ON USER IMPACT, not on legal salience. A workspace_count_shortfall is
               # irreversible sole-copy user DATA LOSS; drift is a claim-integrity event on a volume
               # whose data is intact. Ranking the legal event above the data-loss event would invert
               # hr-weigh-every-decision-against-target-user-impact, so the p0 goes where the user
-              # data is.
+              # data is — and it gets a distinct title so dedupe cannot demote it.
               if [[ "$reason" == "workspace_count_shortfall" ]]; then
-                labels=(--label "ci/luks-verify" --label "priority/p0-critical" --label "action-required")
+                title="[ci/luks-verify] workspace inventory SHORTFALL on /mnt/data"
+                bare_labels=("ci/luks-verify" "luks/class-readiness" "priority/p0-critical" "action-required")
+                headline="The workspace inventory shrank — sole-copy user data may be irrecoverably lost"
               else
-                labels=(--label "ci/luks-verify" --label "priority/p1-high" --label "action-required")
+                title="[ci/luks-verify] readiness or inventory failure"
+                bare_labels=("ci/luks-verify" "luks/class-readiness" "priority/p1-high" "action-required")
+                headline="The volume is a correct LUKS mapper, but the app cannot serve from it"
               fi
-              headline="The volume is a correct LUKS mapper, but the app cannot serve from it or the inventory shrank"
               ;;
             selftest)
               title="[ci/luks-verify] SELF-TEST — ignore"
-              labels=(--label "ci/luks-verify")
+              bare_labels=("ci/luks-verify" "luks/class-selftest")
               headline="Deliberate rehearsal of the alarm path — nothing is wrong with the volume"
               ;;
             *)
               class=unavailable
               title="[ci/luks-verify] could not verify — nothing proven"
-              labels=(--label "ci/luks-verify" --label "priority/p1-high" --label "action-required")
+              bare_labels=("ci/luks-verify" "luks/class-unavailable" "priority/p1-high" "action-required")
               headline="This run could not verify the volume in either direction"
               ;;
           esac
 
+          labels=()
+          for _l in "${bare_labels[@]}"; do labels+=(--label "$_l"); done
+
           # Idempotent: 2>/dev/null BEFORE || true, so a pre-existing label is not an error and a
-          # first fire on a repo without the label still works.
-          gh label create "ci/luks-verify" --repo "$repo" \
-            --description "Scheduled /workspaces LUKS at-rest verification (#6808)" \
-            --color "B60205" 2>/dev/null || true
+          # first fire on a repo without the label still works. Every label this run will apply
+          # is created, not just the umbrella one — a `--label` naming a label that does not exist
+          # makes `gh issue create` exit non-zero, which on this step means the alarm files
+          # NOTHING (see the fail-open note on the dedupe query below).
+          for _l in "${bare_labels[@]}"; do
+            gh label create "$_l" --repo "$repo" \
+              --description "Scheduled /workspaces LUKS at-rest verification (#6808)" \
+              --color "B60205" 2>/dev/null || true
+          done
 
           tmpd="$(mktemp -d)"
           trap 'rm -rf "$tmpd"' EXIT
-          # Named for the class it carries — deliberately, not incidentally. It puts the routing
-          # decision in the run log and in the `gh` invocation itself, which is where the committed
-          # drift-guard can observe that an empty class really did fail closed to `unavailable`.
+          # Named for the class it carries so the routing decision appears in the run log. NOTE:
+          # nothing asserts this filename — the suite pins the fail-closed default by TITLE
+          # IDENTITY, deliberately, because a substring match anywhere in the argv (a label, a
+          # temp-file name) would claim that property without proving it.
           body_file="$tmpd/luks-alarm-$class.md"
 
           # printf into a file rather than a heredoc: 4+ leading spaces would render the whole body
@@ -629,15 +756,21 @@ jobs:
           {
             printf '## %s\n\n' "$headline"
             printf -- '- **outcome_class:** %s\n' "$class"
-            printf -- '- **reason:** %s\n' "${reason:-unknown}"
+            # The `reason=<x>` token is load-bearing, not decoration: the anti-spam bound below
+            # greps the joined body+comments for exactly that spelling. Emitting only the prose
+            # form `- **reason:** x` left the CREATED body invisible to its own dedupe, so the
+            # second occurrence of a reason always re-commented. Keep both spellings in one line.
+            printf -- '- **reason:** `reason=%s`\n' "${reason:-unknown}"
             printf -- '- **re-assert step outcome:** %s\n' "$reassert_outcome"
             printf -- '- **first_observed_at:** %s\n' "$now"
             printf -- '- **run log:** %s\n' "$run_url"
-            printf -- '- **ops email page:** %s\n\n' "$email_outcome"
+            printf -- '- **ops email step:** %s (INVOKED, not confirmed delivered — see below)\n' "$email_outcome"
+            printf -- '- **degraded channels this run:** %s\n\n' "${DEGRADED_CHANNELS:-none}"
             printf 'The ops email is BEST-EFFORT and this issue is the primary channel. notify-ops-email\n'
-            printf 'exits 0 with only a warning on a non-2xx from Resend, so an expired key would drop every\n'
-            printf 'page into a log nobody reads — the outcome recorded above is the durable evidence of\n'
-            printf 'whether a page actually went out.\n\n'
+            printf 'exits 0 with only a warning on a non-2xx from Resend, so the step outcome above records\n'
+            printf 'only that the step RAN — it reads `success` even when Resend returned 500 or the key was\n'
+            printf 'revoked. Do NOT read it as proof a page was delivered. The `degraded channels` line is\n'
+            printf 'the durable evidence of a credential that was already missing at the top of the run.\n\n'
             case "$class" in
               drift)
                 printf '### Legal consequence — counsel re-evaluation trigger (3)\n\n'
@@ -673,15 +806,37 @@ jobs:
 
           # Dedupe by LABEL + exact TITLE, never by the issue-search API: that API can return empty
           # under some token contexts, which would file a fresh duplicate every single night. The
-          # flag that would reach it is deliberately absent from this file, comments included —
-          # AC10 greps for it without stripping comments, on the same reasoning as the header's
-          # note about the API-prefixed health spelling: a prose mention would make the guard
-          # unable to distinguish "we use it" from "we explain why we do not".
+          # flag that would reach it is deliberately absent from this file, comments included, and
+          # `workspaces-luks-verify-workflow.test.sh` asserts that absence against the RAW file
+          # (comments intact) — a prose mention would make the guard unable to distinguish "we use
+          # it" from "we explain why we do not".
           # `gh --jq` does not forward `--arg`, so the title match is a standalone second-stage jq.
-          existing="$(gh issue list --repo "$repo" --label "ci/luks-verify" --state open --limit 100 \
-            --json number,title | jq -r --arg t "$title" 'map(select(.title == $t)) | .[0].number // empty')"
+          #
+          # FAIL OPEN, DELIBERATELY. This step runs under `set -euo pipefail`, so an unguarded
+          # pipeline here aborts the whole step on any transient `gh` fault (secondary rate limit,
+          # 403, API 5xx) — AFTER the class was computed correctly and BEFORE anything is filed.
+          # That is silence on the one run the alarm exists for, and for `unavailable` (which gets
+          # no ops email) the issue is the only GitHub-side channel. `|| true` restores the
+          # fail-open the code already almost had: `jq` on empty stdin exits 0 emitting nothing, so
+          # `existing` is empty and control reaches `gh issue create`. A duplicate issue is
+          # recoverable; a missed at-rest-drift alarm is not. The `::error::` makes the degraded
+          # query visible rather than indistinguishable from "no open issue".
+          if ! existing="$(gh issue list --repo "$repo" --label "ci/luks-verify" --state open --limit 100 \
+            --json number,title 2>/dev/null | jq -r --arg t "$title" 'map(select(.title == $t)) | .[0].number // empty')"; then
+            echo "::error::dedupe query failed (gh issue list) — filing without dedupe. A duplicate ${class} issue is possible; that is the deliberate trade against filing nothing."
+            existing=""
+          fi
 
           if [[ -n "$existing" ]]; then
+            # RE-ASSERT THE LABELS. `labels` is otherwise consumed only by `gh issue create`, so
+            # any label the class implies is applied at CREATION and never afterwards. Distinct
+            # titles now stop severity from riding the wrong key, but this keeps the label set
+            # true even if an issue was opened by an earlier revision of this workflow, or edited
+            # by hand. Idempotent, and guarded so a label fault cannot swallow the comment below.
+            gh issue edit "$existing" --repo "$repo" \
+              "${bare_labels[@]/#/--add-label=}" >/dev/null 2>&1 || \
+              echo "::warning::could not re-assert labels on #$existing — the comment below still lands."
+
             # ANTI-SPAM BOUND. Nothing here ever auto-closes an issue (see the header: a green run
             # files nothing and closes nothing), so a daily cadence against a standing issue would
             # otherwise accrete ~365 comments a year. Comment only when the REASON changes. Two
