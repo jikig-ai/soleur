@@ -262,7 +262,7 @@ experiment** — Recovery: re-ran in a real `git worktree`. **Prevention:** any 
 whose subject resolves paths via git must run inside a real repository; a comforting
 conclusion from a broken harness is the dangerous kind.
 
-**Commits authored `ops@jikigai.com` failed the CLA check** — Recovery: `git filter-branch
+**Commits authored a non-CLA-signed automation address failed the CLA check** — Recovery: `git filter-branch
 --env-filter` over the branch range, preserving the merge commit. **Prevention:** use the
 repo's configured `user.email` rather than inventing one for automation commits.
 
