@@ -69,7 +69,7 @@ same-session deny.
 
 ## Rotation
 
-Three telemetry sinks under `.claude/` rotate via a shared helper at
+Four telemetry sinks under `.claude/` rotate via a shared helper at
 `.claude/hooks/lib/log-rotation.sh`:
 
 | Sink | Owner |
@@ -77,6 +77,7 @@ Three telemetry sinks under `.claude/` rotate via a shared helper at
 | `.claude/.rule-incidents.jsonl` | `lib/incidents.sh::emit_incident` (#2213) |
 | `.claude/.skill-invocations.jsonl` | `skill-invocation-logger.sh` (#3122) |
 | `.claude/.session-tokens.jsonl` | `agent-token-tee.sh` (#3494) |
+| `.claude/.memory-backstop.jsonl` | `memory-backstop.sh` (#7166) |
 
 ### Per-write rotator (primary)
 
@@ -124,7 +125,7 @@ machines that never trigger a hook between aggregations).
 
 All active and archived files are gitignored under wildcards
 (`.claude/.rule-incidents*`, `.claude/.skill-invocations*`,
-`.claude/.session-tokens*`).
+`.claude/.session-tokens*`, `.claude/.memory-backstop*`).
 
 ### Library API
 
@@ -154,6 +155,7 @@ PostToolUse runs after the tool's write, so these cannot block. Most are telemet
 |---|---|---|
 | `skill-invocation-logger.sh` | `.claude/.skill-invocations.jsonl` | Records every Skill tool call (session_id + skill name) for the monthly skill-freshness aggregator. |
 | `agent-token-tee.sh` | `.claude/.session-tokens.jsonl` | Records every Task/Agent invocation envelope (session_id + subagent_type + total_tokens + duration) for compound Phase 1.6 token-efficiency analysis. Kill-switch: `SOLEUR_DISABLE_AGENT_TOKEN_TEE=1`. Issue #3494. |
+| `memory-backstop.sh` | `.claude/.memory-backstop.jsonl` | **SessionStart** (`startup|resume|clear|compact`). Adopts the agent process tree into a memory-capped systemd transient scope `soleur-agent-<pid>.scope` under a shared `soleur-agents.slice` (ADR-158, #7166). Records the scope, the terminal scope it is bound to, the caps written, the caps the slice already had (`slice_*_before`, so a mixed-version fleet flapping the shared slice is visible), and `outcome`/`reason`. Never records the session id. Kill-switch: `SOLEUR_DISABLE_MEMORY_BACKSTOP=1` — **if you set it you are unprotected and nothing will tell you.** |
 | `pencil-collapse-guard.sh` | `.claude/.rule-incidents.jsonl` (`cq-pencil-collapse-auto-recover`, `warn`) | PostToolUse on `mcp__pencil__open_document`: auto-restores a tracked `.pen` collapsed to empty document state from `git HEAD` + emits an `additionalContext` warning. Fail-open, non-destructive. Issue #4859. |
 
 ## macOS note
@@ -461,5 +463,46 @@ to silence a narrow false positive is how a guard goes quietly dark.
 Not denial overrides, documented elsewhere in this file: `SOLEUR_DEFER_DRYRUN`
 (F2 mode switch), `SOLEUR_DISABLE_AGENT_TOKEN_TEE`, `SOLEUR_DISABLE_SKILL_LOGGER`,
 `SOLEUR_DISABLE_CONTEXT_QUERIES`, `SOLEUR_DISABLE_PHASE_HINT` (telemetry
-kill-switches), `SOLEUR_DEFER_TARGETS_OVERRIDE` (F2 manifest override).
+kill-switches), `SOLEUR_DISABLE_MEMORY_BACKSTOP` (memory backstop — see below), `SOLEUR_DEFER_TARGETS_OVERRIDE` (F2 manifest override).
 
+
+
+## Memory backstop (ADR-158, #7166)
+
+`memory-backstop.sh` is a **SessionStart** hook (matchers
+`startup|resume|clear|compact`). It asks the operator's own systemd manager to
+put this agent session's whole process tree into
+`soleur-agent-<pid>.scope`, capped at `MemoryHigh=6 GiB` / `MemoryMax=7 GiB` /
+`MemorySwapMax=0`, underneath a shared `soleur-agents.slice` capped at
+`16 GiB` / `20 GiB` / swap `0`. It exists because on 2026-08-01 a single runaway
+search reached 9.5 GB RSS, exhausted memory and swap, and took down six
+concurrent agent sessions at once.
+
+It **never blocks a session**: `exit 0` on every path, and every non-applied run
+is logged with a machine-readable `reason` (`disabled`, `no_busctl`, `no_bus`,
+`claude_pid_not_found`, `no_terminal_scope`, `cap_out_of_range`,
+`concurrent_apply`, `adoption_unverified`). On a machine with no per-user systemd
+bus (CI, Docker, macOS) it does nothing at all.
+
+### If a session gets stopped
+
+Remedies are listed **narrowest first** — the last one is fleet-wide and the
+difference matters:
+
+| Goal | Command |
+|---|---|
+| Stop just this one session | `systemctl --user stop soleur-agent-<pid>.scope` |
+| Raise this one session's limits | `systemctl --user set-property --runtime soleur-agent-<pid>.scope MemoryHigh=infinity MemoryMax=infinity` |
+| Change the limits for good | edit the four `readonly` values at the top of `memory-backstop.sh` |
+| Stop **every** agent session on this machine | `systemctl --user stop soleur.slice` — **this kills them all**, including sessions with uncommitted work |
+
+`--runtime` on the raise path is **mandatory**: without it, `set-property` writes
+a permanent drop-in into `~/.config/systemd/user.control/`, which is exactly the
+persistent mutation of the operator's own systemd configuration this hook is
+designed never to make.
+
+### Turning it off
+
+`SOLEUR_DISABLE_MEMORY_BACKSTOP=1` disables it entirely. **If you set this you
+are unprotected and nothing will tell you** — there is no periodic reminder, and
+the only trace is `"reason":"disabled"` in `.claude/.memory-backstop.jsonl`.

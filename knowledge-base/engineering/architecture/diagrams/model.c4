@@ -67,7 +67,7 @@ model {
       }
       hooks = container "Hook Engine" {
         technology "PreToolUse Guards + PostToolUse hints"
-        description "Guards tool calls (blocks commits to main, rm -rf, etc.) AND injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086)."
+        description "Guards tool calls (blocks commits to main, rm -rf, etc.), injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086) — AND enforces host resource control: at SessionStart it adopts the agent process tree into a memory-capped systemd transient scope (ADR-158)."
       }
     }
 
@@ -247,6 +247,10 @@ model {
     #external
     description "Payment processing and subscription billing"
   }
+  systemdUser = system "systemd (per-user manager)" {
+    #external
+    description "The operator's own per-user systemd manager, reached over the D-Bus socket at /run/user/<uid>/bus (SO_PEERCRED-authenticated, same uid only, no network). Owns the cgroup v2 hierarchy for the login session: the Hook Engine asks IT to create the memory-capped transient scope each agent session runs in, so systemd stays the SINGLE WRITER to that hierarchy and no component writes cgroup directories directly (ADR-158). Units are transient and self-clean when their last process exits, so nothing is provisioned and nothing persists across a reboot."
+  }
   plausible = system "Plausible Analytics" {
     #external
     description "Privacy-focused website analytics"
@@ -320,6 +324,20 @@ model {
 
   // ---- C4 L1 (System Context) — 18 relationships -------------------------
   founder -> webapp "Interacts via browser" { technology "HTTPS" }
+
+  // Host resource control (ADR-158). The Hook Engine never writes a cgroup
+  // directory itself; it asks the user's systemd manager to create the scope.
+  platform.engine.hooks -> systemdUser "Adopts the live agent process tree into a memory-capped transient scope under soleur-agents.slice (StartTransientUnit over D-Bus); systemd is the single writer — no raw cgroup directory writes (ADR-158)" {
+    technology "D-Bus (busctl --user)"
+  }
+
+  // The operator's only always-available stop mechanism, and what the memory
+  // backstop had to preserve: adoption moves claude out of the terminal's cgroup,
+  // so the reap is re-established as a unit dependency rather than cgroup
+  // co-membership.
+  founder -> platform.engine.claude "Closes the terminal to reap a runaway session — preserved across the memory backstop by BindsTo= on the terminal's own scope; explicit fallback `systemctl --user stop soleur.slice`, which stops EVERY agent session (ADR-158)" {
+    technology "Terminal / systemctl --user"
+  }
   webapp -> engine "Thin view/control layer" { technology "WebSocket" }
   webapp -> supabase "Auth and data" { technology "HTTPS" }
   webapp -> stripe "Checkout and billing" { technology "HTTPS" }

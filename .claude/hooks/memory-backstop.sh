@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SessionStart hook — bounds an agent session's memory via a systemd transient
-# scope (ADR-155, #7166).
+# scope (ADR-158, #7166).
 #
 # WHAT HAPPENED. On 2026-08-01 a one-line regex search against a single 21 kB
 # markdown file reached 9.5 GB RSS in 171 s at 99 % CPU and was still climbing,
