@@ -8,7 +8,7 @@ requires_cpo_signoff: false
 type: chore
 labels: [type/chore, priority/p3-low, domain/engineering, deferred-scope-out]
 branch: feat-one-shot-7160-release-timeout-and-c4-count-parity
-plan_revision: v2   # v1 revised after a 2-agent review panel; see §Review Revisions
+plan_revision: v3   # v1 -> v2 (plan-review panel), v2 -> v3 (deepen-plan); see §Review Revisions
 ```
 
 > Spec lacks valid `lane:` (no `knowledge-base/project/specs/feat-one-shot-7160-.../spec.md` exists) — defaulted to `cross-domain` (TR2 fail-closed).
@@ -54,7 +54,8 @@ are recorded in full because the plan's approach turns on them.
 | P6 | The three sketch derivation commands produce the encoded numbers | ✅ HOLDS (all three) | §Verified Derivations. |
 | P7 | Adjacent worktree has an open PR on the same files | ✅ HOLDS — **and it collides** | PR **#7206**. §Coordination. |
 | P8 | A `timeout-minutes` ceiling makes the commit→deployed bound *provable* | ❌ **REFUTED** | See P8. This is the correction that reframes the whole deliverable. |
-| P9 | The existing `RELEASE_PARSE_ERROR` arm is a fail-closed precedent to mirror | ❌ **REFUTED — it is asserted nowhere** | See P9. |
+| P9 | A parse failure passes silently today via B9's `:-0` coercion | ❌ **REFUTED — it already fails, messily** | See P9. *(This was asserted in plan v2 and is wrong; corrected in v3 by execution.)* |
+| P10 | The Part-C mutation sandbox can exercise the new extractor | ❌ **REFUTED — `make_sandbox` does not copy the reusable workflow** | See P10. Implementation blocker. |
 
 ### P3 — `timeout-minutes` is INVALID on the `release` job as it exists today
 
@@ -129,18 +130,61 @@ is not made anywhere in this plan. The honest statement, which every AC is writt
 > push-to-start latency remain **unbounded and unmodelled**; the threshold's tolerance for them is
 > empirical, exactly as it was before this change.
 
-This is still worth doing: it removes 300 minutes of *declared* slack, and (via Phase 2) makes
-deleting the ceiling a red CI instead of a silent no-op. It does not close the residual, and the
-residual is now named rather than papered over. Bounding queue/concurrency latency is a distinct
-problem — **out of scope, tracked as a deferral** (§Deferrals).
+**The ceiling's real payoff — and it is a partial bound on the very term P8 calls unbounded.**
+`reusable-release.yml` declares a **workflow-level** `concurrency: { group: release-${component},
+cancel-in-progress: false }`. A `release` job that hangs therefore holds that group for its entire
+timeout, and **every subsequent merge queues behind it**. With no declared ceiling that is
+**360 minutes** of head-of-line blocking; at 60 it is **60**. So the ceiling does not merely tidy
+declared arithmetic — it caps, by 6×, the worst-case queue-wait contribution that P8 identifies as
+the dominant unbounded term. It bounds a real one (a wedged release holding the group) while leaving
+another unbounded (organic back-to-back merges serializing). That partial-but-real bound, plus the
+Phase-2 regression guard, is the justification; the declared-slack arithmetic is a side effect, not
+the point.
 
-### P9 — `RELEASE_PARSE_ERROR` is emitted but never asserted
+### P9 — a parse failure already FAILS today; plan v2's claim that it passes was wrong
 
-The existing B8 extractor's `except` arm emits `RELEASE_PARSE_ERROR` — and **nothing in the suite
-asserts on that key**. Worse, B9's own guard reads
-`"${X_RELEASE_SERIAL_TIMEOUT_SUM:-0}" =~ ^[0-9]+$`, so on a parse failure the sum is unset, coerces
-to `0`, and `195 >= 0` **passes**. Instructing /work to "mirror the existing arm" would therefore
-mirror a silently-green path. Phase 2 adds a real assertion on the error key instead (AC7).
+Plan v2 asserted that a parse failure "passes via `:-0`". **That is false, and it was corrected by
+running the code rather than reading it** — the same discipline this plan applies everywhere else.
+Measured:
+
+- The suite runs under `set -uo pipefail`.
+- B9's **outer** condition defaults the value (`"${X_RELEASE_SERIAL_TIMEOUT_SUM:-0}" =~ ^[0-9]+$`),
+  but its **inner** comparison does not: `[[ "$THRESH_MIN" -ge "${X_RELEASE_SERIAL_TIMEOUT_SUM}" ]]`.
+  Under `set -u` an unset variable there **aborts** the script (`unbound variable`) — verified with a
+  standalone probe reproducing the exact expansion shape.
+- Independently, `X_RELEASE_PATH_FILTER` is emitted inside the **same** `try` block and **is**
+  asserted (with a `:-<missing>` default), so a parse failure also produces a loud B8 assertion
+  failure before B9 is reached.
+
+**Corrected conclusion:** a parse failure today is caught, not silently green. What is genuinely
+wrong with it is *diagnosability*, not safety: the operator sees a `<missing>` path-filter mismatch
+and an opaque `unbound variable` abort rather than "the release workflow could not be parsed".
+
+**What this changes in the plan:** Phase 2.2 is no longer justified as "closing a silent-green hole".
+It is justified as replacing an abort-with-an-opaque-message with a named assertion, and — genuinely
+new — extending coverage to the *unresolvable-`uses:`* case, which does not exist today because
+nothing resolves `uses:` today. AC7 is rewritten accordingly, and its evidence must show the **new
+assertion's own label**, not merely a non-zero exit (an exit code cannot distinguish a named failure
+from a `set -u` abort).
+
+### P10 — the Part-C mutation sandbox does not carry the reusable workflow
+
+`make_sandbox` in `scripts/prod-version-drift-check.test.sh` copies exactly **five** files into the
+sandbox root: the checker, the test itself, `scheduled-prod-version-drift.yml`,
+`web-platform-release.yml`, and `cron-monitors.tf`. **`reusable-release.yml` is not among them.**
+
+The moment the extractor resolves `jobs.release.uses` relative to the sandbox root, `open()` fails in
+**every** Part-C mutation child → parse error → and (with AC7's new hard assertion) a spurious FAIL
+in all of them. Because each mutation axis carries an expected-FAIL label, the whole battery would
+still report green while actually testing nothing — precisely the "false confidence" failure the
+suite's own Part-C header warns about, and the same anti-vacuity concern that motivates the
+`MIN_ASSERTIONS` floors.
+
+**Consequence:** `make_sandbox` MUST copy `reusable-release.yml` in the same change, and the
+resolution must be explicitly rooted at the **sandbox root** (the directory containing
+`.github/workflows/`), not at CWD and not at the real repo — the two differ under the test's
+workflow-path override. This is an implementation blocker, not a nicety; it is why Phase 2 now has a
+dedicated sandbox step (2.2) ordered *before* the extractor rewrite consumes it.
 
 ---
 
@@ -195,7 +239,13 @@ Substituting into `declared_execution_bound = max(T_release, 60) + 135`:
 | **60** | **195** | **equal** | **no** |
 | 45 / 30 | 195 | equal | no |
 
-Two constraints meet at 60:
+Three constraints meet at 60:
+
+0. **It caps head-of-line blocking 6×.** Per P8, a wedged `release` job holds the workflow-level
+   `release-${component}` concurrency group (`cancel-in-progress: false`) for its full timeout,
+   queueing every later merge behind it: 360 minutes today, 60 after. This is the change's primary
+   value and the term that most directly moves observed commit-to-deployed latency.
+
 
 1. **60 is the largest ceiling that costs nothing.** Any `T ≤ 60` is absorbed by the `max(·, 60)`
    term `await-ci` already contributes. The first minute above 60 pushes the declared bound past the
@@ -258,9 +308,27 @@ values are present once Phase 1 lands, so the result is 195 either way).
 
 The reusable workflow is resolved **from `jobs.release.uses`**, not hard-coded. Hard-coding is one
 line shorter and less safe: repointing `jobs.release.uses` at a different reusable workflow would
-leave the extractor reading the old file's `60` and passing green — the exact silent-false-green
-class this deliverable exists to close. When stripping the leading `./`, use `removeprefix('./')`,
-**never `lstrip('./')`** (a character-class strip that mangles any `.`-prefixed segment).
+leave the extractor reading the old file's `60` and passing green. Three resolution edge cases must
+be handled explicitly rather than falling out of the code:
+
+- **Leading `./`** — strip with `removeprefix('./')`, **never `lstrip('./')`** (a character-class
+  strip that mangles any `.`-prefixed segment).
+- **Remote form** (`owner/repo/.github/workflows/x.yml@ref`) — survives `removeprefix` unchanged and
+  would surface as a raw `FileNotFoundError`. Take an explicit non-`./` branch that fails with
+  *"remote reusable workflow — release ceiling unverifiable"*. Fail-closed is right (the ceiling
+  genuinely is not verifiable from this repo); the message must say so.
+- **Expression-valued timeout** (`timeout-minutes: ${{ inputs.x }}`) — `int()` raises. Guard and fail
+  with a named message rather than an uncaught traceback.
+- **Sandbox rooting** — resolve relative to the **sandbox root** (the directory containing
+  `.github/workflows/`), not CWD and not the real repo. See P10.
+
+**Topology guard (new).** Uniform-360 closes the *delete-a-value* hole but not the *change-the-graph*
+hole: inserting a job between `verify-migrations` and `deploy`, or raising the currently-dominated
+`verify-doppler-secrets` (10 min) to 200, leaves the formula returning 195 while the real bound is
+290 — silently green. The extractor therefore also emits the **set of jobs having a `needs:` path to
+`deploy`**, and a Part-B assertion pins it to the expected five. A graph change then reds the suite
+instead of being ignored. Without this, §Observability's claim that "a ceiling on the critical path
+is deleted or raised" is detected would be an overclaim for the topology case.
 
 Directional properties, each with an AC:
 
@@ -416,10 +484,14 @@ assertions have nothing true to assert.
 0.2 Run the #7206 sequencing rule; rebase onto `origin/main`.
 0.3 Re-derive all seven counts in §Verified Derivations. **If any has drifted, correct `model.c4`
     prose in Phase 3 and record it** — do not assume the table.
-0.4 Capture the baseline: `bash scripts/test-all.sh scripts` must be green **and**
-    `actionlint .github/workflows/reusable-release.yml` output captured verbatim (it exits **1**
-    today on six pre-existing shellcheck findings — SC2129 ×4, SC2012, SC2015). This baseline is
-    what AC2 diffs against.
+0.4 Capture baselines:
+    (a) `bash scripts/test-all.sh scripts` must be green. If it is already red, stop and apply
+        `wg-when-tests-fail-and-are-confirmed-pre` — do not build on an unattributable baseline.
+    (b) `actionlint` output captured verbatim for **both** `reusable-release.yml` **and**
+        `web-platform-release.yml` (Phase 2.4 edits the latter, so it needs a baseline too).
+        `reusable-release.yml` exits **1** today on six pre-existing shellcheck findings
+        (SC2129 ×4, SC2012, SC2015). This is what AC2 diffs against.
+    (c) The Part-C mutation axis count, so Phase 2.0's "unchanged" check is attributable.
 
 ### Phase 1 — Declare the ceiling
 
@@ -437,8 +509,14 @@ assertions have nothing true to assert.
     itself tolerates).
 1.4 Do **not** add `timeout-minutes` to `web-platform-release.yml`'s `release` job (P3).
 
-### Phase 2 — Close the silent-green holes (the B9 extension)
+### Phase 2 — Strengthen B9
 
+2.0 **BLOCKER — do this first.** Add `reusable-release.yml` to `make_sandbox`'s copy set in
+    `scripts/prod-version-drift-check.test.sh` (it copies five files today; the reusable workflow is
+    not one of them). Without it, every Part-C mutation child hits a parse error the moment the
+    extractor resolves `jobs.release.uses`, and the 10-axis battery reports green while testing
+    nothing (P10). Run Part C **before** touching the extractor and confirm the axis count is
+    unchanged, so the baseline is attributable.
 2.1 In `scripts/prod-version-drift-check.test.sh`, replace the `RELEASE_SERIAL_TIMEOUT_SUM` sum with
     the critical-path computation in §The B9 extension:
     - resolve the reusable workflow from `jobs.release.uses` (`removeprefix('./')`, **not**
@@ -446,8 +524,12 @@ assertions have nothing true to assert.
     - apply **`360` when `timeout-minutes` is absent, uniformly to all five jobs** — replacing every
       `int(x or 0)` on this path;
     - emit `max(release_ceiling, await-ci) + migrate + verify-migrations + deploy`.
-2.2 Add a **real assertion** on the parse-error / unresolvable-`uses:` arm (P9), and remove B9's
-    `:-0` coercion so an unset sum **fails** instead of passing `195 >= 0`.
+2.2 Add a **named assertion** on the parse-error / unresolvable-`uses:` arm, replacing today's
+    opaque `set -u` abort with a message that says which input could not be read (P9 — note the
+    corrected framing: this improves diagnosability and adds the genuinely-new unresolvable-`uses:`
+    case; it does **not** close a silent-green hole, because none exists here).
+2.2b Emit the **needs-path-to-`deploy` job set** and add a Part-B assertion pinning it to the
+    expected five, so a topology change reds instead of being silently absorbed by the formula.
 2.3 Update B9's assertion text and comment: the value is a **critical path with a `max()` term**, not
     a serial sum; state the corrected **495** undeclared-case figure; state the P8 caveat that this
     bounds declared execution only.
@@ -458,12 +540,23 @@ assertions have nothing true to assert.
     `DRIFT_SUSTAINED_THRESHOLD_MIN` is untouched.
 2.5 Raise `MIN_ASSERTIONS` / `MIN_B` by exactly the number of assertions added, from post-rebase
     values.
-2.6 **Verify by mutation, not by reading.** Independently: (a) remove the Phase-1 ceiling → suite
-    **red**; (b) remove `deploy`'s `timeout-minutes` → suite **red** (this case is silently green
-    today); (c) restore both → green. Record all three outputs.
+2.6 **Verify by mutation, not by reading.** Four independent runs — and each recorded output MUST
+    show the **specific failing assertion's label**, never merely a non-zero exit code (an exit code
+    cannot distinguish the intended failure from a `MIN_ASSERTIONS` floor trip or a `set -u` abort):
+    (a) remove the Phase-1 ceiling → B9 fails by name;
+    (b) remove `deploy`'s `timeout-minutes` → B9 fails by name (silently green today);
+    (c) point `jobs.release.uses` at a nonexistent path → the new named assertion fails (today: an
+        opaque abort);
+    (d) add a synthetic job on the `deploy` needs-path → the 2.2b topology assertion fails;
+    then restore all four → green.
 
 ### Phase 3 — C4 count parity test
 
+3.0 **If Phase 0.3 found drift:** correct the affected `model.c4` prose FIRST, then regenerate the
+    render with `bash scripts/regenerate-c4-model.sh` and commit `model.likec4.json`, then run
+    `plugins/soleur/test/c4-model-freshness.test.sh`. The registry regexes in 3.2 must be authored
+    against the **corrected** prose, so this precedes test authoring. If Phase 0.3 found no drift,
+    skip.
 3.1 Create `plugins/soleur/test/c4-count-parity.test.sh`, `source`-ing `test-helpers.sh`, using the
     `PASS`/`FAIL`/`print_results` convention **and the `REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"`
     idiom** of `c4-model-freshness.test.sh`.
@@ -476,7 +569,12 @@ assertions have nothing true to assert.
 
 4.1 `bash scripts/test-all.sh scripts` — exits 0, and the output contains the new suite's label.
 4.2 `actionlint` on both release workflows — no new diagnostic vs the Phase-0.4 baseline.
-4.3 Re-run the Phase-2.6 and Phase-3.3 mutation checks; record outputs in the PR body.
+4.3 Record **all mutation outputs** in the PR body — the five from Phase 2.6 plus the artifact-side
+    and prose-side ones from Phase 3.3 — each showing the failing assertion's label, not just an
+    exit code.
+4.3b Immediately before marking the PR ready, re-check PR #7206's state and re-derive
+    `MIN_ASSERTIONS` / `MIN_B` against current `origin/main`. The Phase-0.2 check goes stale if
+    #7206 merges mid-implementation.
 4.4 If `model.c4` was edited (Phase 0.3 drift), re-run `plugins/soleur/test/c4-model-freshness.test.sh`
     and commit the regenerated `model.likec4.json` — a description edit changes that artifact.
 
@@ -512,19 +610,24 @@ log and the alert drill, is disjoint from the timeout bound and the C4 counts).
 
 ### Pre-merge (PR)
 
-- **AC1** `jobs.release` in `.github/workflows/reusable-release.yml` declares `timeout-minutes: 60`, with a comment naming the measured worst run, the arithmetic **by job name** (not the literal 135), and the B9 coupling.
-- **AC2** `actionlint` on `reusable-release.yml` and `web-platform-release.yml` produces **no diagnostic absent from the Phase-0.4 baseline**. (It exits 1 on six pre-existing shellcheck findings; a "exits 0" criterion would be unachievable, and ci.yml itself only asserts the linter terminates.)
-- **AC3** The B8 extractor resolves the reusable workflow from `jobs.release.uses` — no hard-coded `reusable-release.yml` literal in the resolution path — and uses `removeprefix('./')`, not `lstrip('./')`.
-- **AC4** A missing `timeout-minutes` is read as **360** for **all five** critical-path jobs; no `int(x or 0)` remains on that path. Verified by mutation (AC5).
-- **AC5** Three recorded mutation runs: (a) delete the release ceiling → B9 **FAIL**; (b) delete `deploy`'s `timeout-minutes` → B9 **FAIL** *(silently green before this change)*; (c) both restored → **PASS**. Outputs in the PR body.
-- **AC6** B9's computed value **equals 195** on the merged tree, and `git diff origin/main -- scripts/prod-version-drift-check.sh` shows **no change to `DRIFT_SUSTAINED_THRESHOLD_MIN`**.
-- **AC7** A parse failure or unresolvable `uses:` target makes the suite **FAIL**. Verified by mutation: point `jobs.release.uses` at a nonexistent path, run the suite, observe FAIL; restore. Output recorded. *(Today this passes via `:-0`.)*
-- **AC8** `MIN_ASSERTIONS` and `MIN_B` are raised by exactly the count of assertions added, computed from post-rebase values. PR body shows before → after → delta.
-- **AC9** `plugins/soleur/test/c4-count-parity.test.sh` exists, is executable, and asserts all seven counts C1–C7 with **clause-anchored** regexes. No assertion matches a bare numeral alone. C7's number-word is handled explicitly.
-- **AC10** The suite **fails** on a perturbed count in a synthetic prose copy, and the failure message names the edge, the clause, both values, and the derivation. Output recorded.
-- **AC11** `bash scripts/test-all.sh scripts` exits 0 **and its output contains the new suite's label** — proving auto-discovery by running the aggregator's own invocation (the same one ci.yml's `test-scripts` job runs), not by reading the glob or hand-enumerating paths.
-- **AC12** No `.md`/`.yml`/`.json`/`.tf` file in the diff claims the commit→deployed bound is "provable", "strict", or "guaranteed"; the P8 execution-only caveat appears in the `reusable-release.yml` comment and in B9's comment.
-- **AC13** Every count in §Verified Derivations re-derived at implementation time matches the committed `model.c4`; any drift is corrected in the same PR, with `model.likec4.json` regenerated and `c4-model-freshness.test.sh` green.
+> **Evidence rule for every mutation AC below:** the recorded output MUST show the **specific
+> failing assertion's label**. A non-zero exit code is a proxy — it is equally satisfied by a
+> `MIN_ASSERTIONS` floor trip, a `set -u` abort, or an unrelated suite failing.
+
+- **AC1** `jobs.release` in `.github/workflows/reusable-release.yml` declares `timeout-minutes: 60`, with a comment naming the measured worst run, the arithmetic **by job name** (not the literal 135), the head-of-line-blocking rationale, the P8 execution-only caveat, and the B9 coupling.
+- **AC2** `actionlint` on **both** `reusable-release.yml` and `web-platform-release.yml` produces **no diagnostic absent from the Phase-0.4(b) baseline**. (`reusable-release.yml` exits 1 on six pre-existing shellcheck findings; an "exits 0" criterion would be unachievable, and ci.yml itself only asserts the linter terminates.)
+- **AC3** `make_sandbox` copies `reusable-release.yml` into the sandbox, and the Part-C axis count after the extractor rewrite **equals the Phase-0.4(c) baseline**. Without this the mutation battery reports green while testing nothing (P10).
+- **AC4** The extractor resolves the reusable workflow from `jobs.release.uses` — no hard-coded `reusable-release.yml` literal in the resolution path — using `removeprefix('./')`, not `lstrip('./')`; resolution is rooted at the **sandbox root**. The remote-`uses:` and expression-valued-timeout cases each fail with their own named message, not a raw traceback.
+- **AC5** A missing `timeout-minutes` is read as **360** for **all five** critical-path jobs. Verified by the AC6 mutations, **not** by grepping for the absence of `int(x or 0)` (a grep proxy that `int(x) if x else 0` would defeat).
+- **AC6** Five recorded mutation runs, each showing the failing assertion's label: (a) delete the release ceiling → B9 FAIL; (b) delete `deploy`'s `timeout-minutes` → B9 FAIL *(silently green today)*; (c) point `jobs.release.uses` at a nonexistent path → the new named assertion FAILs *(today: an opaque `set -u` abort)*; (d) add a synthetic job on the `deploy` needs-path → the topology assertion FAILs *(silently green today)*; (e) all restored → PASS.
+- **AC7** B9's computed value **equals 195** on the merged tree, and `git diff origin/main -- scripts/prod-version-drift-check.sh` shows **no change to `DRIFT_SUSTAINED_THRESHOLD_MIN`**.
+- **AC8** `MIN_ASSERTIONS` and `MIN_B` are raised by exactly the count of assertions added, computed from **post-rebase** values, and re-checked against `origin/main` immediately before marking the PR ready (PR #7206 moves them). PR body shows before → after → delta.
+- **AC9** The two comments stating the superseded serial arithmetic are corrected — in `scripts/prod-version-drift-check.sh` and `.github/workflows/web-platform-release.yml` — and `git diff` shows those files changed on **comment lines only** (no key, value, or job change).
+- **AC10** `plugins/soleur/test/c4-count-parity.test.sh` exists, is executable, and asserts all seven counts C1–C7 with **clause-anchored** regexes. No assertion matches a bare numeral alone. C7's number-**word** is handled explicitly.
+- **AC11 (artifact-side mutation — the one that actually verifies the deliverable).** The suite **reds when the REPO changes**, not merely when the prose is perturbed: add a synthetic 8th workflow referencing `actions/sentry-heartbeat` → **C1 FAILs**; add a synthetic file matching the Resend-emitter pattern → **C7 FAILs**; revert both → green. *A registry row whose derivation globs the wrong path, or is quietly constant, passes a prose-only mutation forever — and "a future scheduled-workflow addition fails loudly" is the entire point of Deliverable 2.* Prose-side perturbation is also recorded, but it is the weaker half.
+- **AC12** `bash scripts/test-all.sh scripts` exits 0, its output contains the new suite's label, **and at least 7 PASS lines are attributable to that suite** — label presence alone proves invocation, not execution (a suite that early-returns on a missing dependency still prints its label and exits 0).
+- **AC13** No file in the diff claims the commit→deployed bound is "provable", "strict", or "guaranteed"; the P8 execution-only caveat appears in both the `reusable-release.yml` comment and B9's comment.
+- **AC14** Every count in §Verified Derivations re-derived at implementation time matches the committed `model.c4`. Any drift is corrected in the same PR via Phase 3.0 (`bash scripts/regenerate-c4-model.sh`, `model.likec4.json` committed, `c4-model-freshness.test.sh` green).
 
 ### Post-merge (operator)
 
@@ -559,12 +662,22 @@ failure_modes:
         build error by duration and by a healthy build log
     alert_route: release-outcome operator email + Sentry mirror (pre-existing)
   - mode: a ceiling on the critical path is deleted or raised past what the threshold permits
-    detection: B9 in scripts/prod-version-drift-check.test.sh (uniform 360-if-absent).
-        Silently green today for ALL five jobs — closing it is the point of Phase 2.
+    detection: B9 (uniform 360-if-absent). Silently green today for ALL five jobs.
+    alert_route: CI `test-scripts` -> required `test` check -> PR blocked
+  - mode: the critical-path TOPOLOGY changes (a job inserted before deploy, or a
+        currently-dominated job raised above the max term) so the formula still returns 195
+    detection: the needs-path-to-deploy set assertion (Phase 2.2b). Silently green today,
+        and NOT covered by the uniform-360 default.
     alert_route: CI `test-scripts` -> required `test` check -> PR blocked
   - mode: the extractor cannot parse or resolve the reusable workflow
-    detection: the new parse-error assertion (AC7). Passes today via a `:-0` coercion.
+    detection: the new named assertion. Today this aborts under `set -u` with an opaque
+        "unbound variable" — caught, but undiagnosable. The unresolvable-`uses:` case is
+        genuinely new (nothing resolves `uses:` today).
     alert_route: CI `test-scripts` -> required `test` check -> PR blocked
+  - mode: a parity-test derivation silently stops tracking its artifacts (wrong glob,
+        constant-folded value) while the prose still matches
+    detection: the artifact-side mutation (AC11) — a prose-only check cannot see this
+    alert_route: caught at implementation time by AC11; thereafter by CI on real additions
   - mode: a new scheduled workflow or Resend emitter stales a model.c4 count
     detection: plugins/soleur/test/c4-count-parity.test.sh
     alert_route: CI `test-scripts` -> required `test` check -> PR blocked
@@ -696,6 +809,10 @@ threshold raise, in that order.
 Per `wg-when-deferring-a-capability-create-a`, each needs a GitHub issue with what/why/re-evaluation
 criteria and the `Post-MVP / Later` milestone:
 
+0. **Stale embedded count in `scripts/test-all.sh`'s own header** — it reads "21
+   `plugins/soleur/test/*.test.sh`" while the actual count is 55. Same defect class as Deliverable 2
+   (a hard-coded count in prose with no checker), different file. Fold into the same follow-up as
+   item 1 or file alongside it.
 1. **`hetzner -> tunnel` embedded-count staleness.** "12 `connection{}` inlines" — actual is 18
    (server.tf 16, ci-ssh-key.tf 1, tunnel.tf 1); "THREE ingress rules" — `tunnel.tf` has four
    `ingress_rule {` blocks, three with `hostname =`. Both need the prose disambiguated *before* a
@@ -724,7 +841,7 @@ A 2-agent panel (correctness + simplicity) verified v1's claims against the repo
 
 | # | Finding | Applied |
 |---|---|---|
-| R1 | **P0** — "strictly provable bound" is false: `timeout-minutes` caps execution, the checker's clock is the committer epoch, and `cancel-in-progress: false` serializes runs | New **P8**; Overview reframed; AC12 forbids the language re-entering; residual filed as a deferral |
+| R1 | **P0** — "strictly provable bound" is false: `timeout-minutes` caps execution, the checker's clock is the committer epoch, and `cancel-in-progress: false` serializes runs | New **P8**; Overview reframed; **AC13** (AC12 before the v3 renumber) forbids the language re-entering; residual filed as a deferral |
 | R2 | `actionlint` exits 1 on six pre-existing findings — an "exits 0" AC is unachievable | AC2 restated as "no new diagnostic vs the Phase-0.4 baseline" |
 | R3 | `RELEASE_PARSE_ERROR` is asserted nowhere; B9's `:-0` coercion makes a parse failure **pass** | New **P9**; Phase 2.2 + AC7 add a real assertion and remove the coercion |
 | R4 | The completeness guard reds a correct model (unconsumed `3` in `github -> sentry`) and is vacuous on `github -> resend` | **Cut** — design section, phase step, and AC removed; rationale recorded |
@@ -739,6 +856,32 @@ A 2-agent panel (correctness + simplicity) verified v1's claims against the repo
 | R13 | The `12 connection{} inlines` fix is scope creep on a p3 chore | Moved from an in-scope phase step to **Deferral 1** |
 | R14 | `c4-model-freshness.test.sh`'s `REPO_ROOT` idiom was not named | Named in Phase 3.1 |
 | R15 | B9's margin was already exactly zero before this change | Stated as an **inherited condition** in §Ceiling Analysis, not implied as headroom this plan preserves |
+
+### v2 → v3 (deepen-plan: architecture-strategist + spec-flow-analyzer)
+
+| # | Finding | Applied |
+|---|---|---|
+| R16 | **P0 — `make_sandbox` copies five files and `reusable-release.yml` is not one.** Resolving `jobs.release.uses` would parse-error in all 10 Part-C mutation children, so the battery reports green while testing nothing | New **P10**; new **Phase 2.0** (blocker, ordered first); **AC3** pins the post-rewrite axis count to a Phase-0.4(c) baseline |
+| R17 | **P0 — plan v2's own P9 was FALSE.** Verified by execution: `set -uo pipefail` is active and B9's inner comparison is undefaulted, so a parse failure **aborts**; and `X_RELEASE_PATH_FILTER` is asserted from the same `try`. It was never silently green | **P9 rewritten** with the probe; Phase 2.2 and the Observability entry re-justified as diagnosability + the genuinely-new unresolvable-`uses:` case |
+| R18 | **P0 — AC10(v2) tested the wrong direction.** Perturbing *prose* cannot detect a derivation that globs the wrong path or is constant-folded — yet "a future workflow addition fails loudly" is Deliverable 2's whole purpose | **AC11** now requires an **artifact-side** mutation (add a synthetic 8th heartbeat workflow → C1 red; a synthetic Resend emitter → C7 red); prose-side demoted to the weaker half |
+| R19 | The uniform-360 default closes *delete-a-value* but not *change-the-graph*: insert a job before `deploy`, or raise the dominated `verify-doppler-secrets` to 200, and the formula still returns 195 | New **topology guard** (Phase 2.2b) emitting the needs-path-to-`deploy` job set; new Observability failure mode; new mutation (d) |
+| R20 | The ceiling's rationale was "removes declared slack" — cosmetic. The real payoff: a workflow-level `concurrency` group with `cancel-in-progress: false` means a wedged release blocks every later merge for its full timeout — **360 min today, 60 after** | §Ceiling Analysis re-anchored on head-of-line blocking as constraint #0; AC1 requires it in the comment. This is a partial bound on the very term P8 calls unbounded |
+| R21 | Remote `uses:` (`owner/repo/...@ref`) and expression-valued `timeout-minutes` would surface as raw tracebacks | Both given explicit named-failure branches (AC4) |
+| R22 | Phase 0.3 dead-ended — "correct in Phase 3" but Phase 3 had no such step, and no doc named the regeneration command | New **Phase 3.0** with `scripts/regenerate-c4-model.sh`, ordered before test authoring since regexes must target corrected prose |
+| R23 | All mutation ACs were exit-code proxies (a `MIN_ASSERTIONS` trip or `set -u` abort satisfies "red") | Blanket **evidence rule** above the AC list: every mutation must show the failing assertion's **label** |
+| R24 | AC11(v2) proved invocation, not execution — a suite that early-returns still prints its label and exits 0 | **AC12** now requires ≥7 PASS lines attributable to the suite |
+| R25 | AC2's baseline covered only `reusable-release.yml`, but Phase 2.4 edits `web-platform-release.yml` too | Phase 0.4(b) baselines **both**; AC2 diffs both |
+| R26 | Phase 2.4's comment corrections had no AC | New **AC9**, including a comment-lines-only diff check |
+| R27 | AC4(v2)'s "no `int(x or 0)` remains" is a grep proxy (`int(x) if x else 0` defeats it) | **AC5** now verified by mutation instead |
+| R28 | #7206 was checked once at Phase 0.2; nothing re-checked before push, so AC8's post-rebase floors could stale | New **Phase 4.3b** + AC8 re-check gate immediately before PR-ready |
+| R29 | Plan said "three mutation outputs", tasks.md had four — AC evidence would be dropped by the count | Unified at **five** (Phase 2.6) plus Phase 3.3's; tasks.md synced |
+| R30 | `scripts/test-all.sh`'s header embeds "21 suites" vs an actual 55 — same defect class, different file | Added as **Deferral 0** |
+| R31 | No branch existed if the Phase-0.4 baseline is already red | Phase 0.4(a) now routes to `wg-when-tests-fail-and-are-confirmed-pre` |
+
+**Not applied (judged correct as-is):** the shared 60-minute ceiling across two callers with 35×
+different runtimes — the callers cannot contend (the concurrency group is keyed on
+`inputs.component`), and the per-caller input alternative is worse at p3. Recorded as accepted
+coupling in the Phase-1.2 comment.
 
 **Surfaced, not auto-applied** (headless — persisted to `decision-challenges.md` for operator
 review): the simplicity panel recommended deleting §Hypotheses, §Domain Review, the C4 (a)–(d)
