@@ -14,6 +14,50 @@ pr: 7194
 > **Lane note.** No `spec.md` exists for this branch, so `lane:` defaulted to
 > `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-03
+**Method note:** this session runs under an operator config that forbids
+spawning subagents, so the deepen pass was executed **inline** — every gate and
+verification below was run mechanically rather than delegated. The mandated
+halts all ran; no research fan-out occurred. Recorded here so a reader does not
+mistake the absence of agent output for a skipped phase.
+
+### Gates run
+
+| Gate | Result |
+|---|---|
+| 4.4 Precedent-diff | **Satisfied.** Sibling precedent found and adopted: `scripts/test-all.sh:277-278` registers `lint-rule-ids` as a `-unit` + `-live` pair; Phase 4 mirrors it exactly. Scheduled-work sub-check N/A (no new job). |
+| 4.5 Network-outage | Skipped — no trigger pattern; no SSH-provisioned resource. |
+| 4.55 Downtime & cutover | Skipped — no infra reboot/replace, no lock-taking DDL, no deploy/router change. |
+| 4.6 User-Brand Impact | **PASS** — heading present, 11 non-blank lines, threshold `none`. Sensitive-path regex run against all 12 Files-to-Edit/Create paths: **zero matches**, so `none` is valid without a scope-out bullet. |
+| 4.7 Observability | **PASS** — all 5 fields present with non-placeholder values; `discoverability_test.command` contains no `ssh`. |
+| 4.8 PAT-shaped variable | **PASS** — zero matches across all four PAT patterns. |
+| 4.9 UI-wireframe | Skipped — zero UI-surface files (no `components/**/*.tsx`, `app/**/page.tsx`, `app/**/layout.tsx`). |
+| 4.10 Encryption posture | Skipped — zero store-class files (`.tf`, `supabase/migrations/*.sql`, `cloud-init*`, `docker-compose*`); no new store or cross-component connection. |
+
+### Verification checks run
+
+- **Cited rule IDs** — every `\b(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]+\b` token in the plan resolves to an active `[id: …]` in `AGENTS.md`. No fabricated or retired citations.
+- **Cited issue/PR numbers** — `#7174`, `#7172`, `#6751`, `#4622` all live-verified **OPEN**; PR `#7194` **OPEN**. No number cited from memory.
+- **ADR ordinal** — re-derived after `git fetch origin main`. Highest on **fresh** `origin/main` is ADR-157, so **ADR-158 is free**. Still provisional; `/ship` re-verifies, and a renumber must sweep this plan, `tasks.md`, and AC16.
+- **Knowledge-base citations** — every `knowledge-base/…\.md` path in the plan resolves on disk except the three this plan creates.
+- **Self-grep scope** — no AC greps a scope containing this plan or its `tasks.md`; AC7/AC8 are scoped to `AGENTS.rules.md`, AC15 reads the plan deliberately.
+
+### Key improvements over the plan's first draft
+
+1. The reconciliation table now carries the measurement that **inverts the issue's prescribed remedy** — 9 of 12 failures are parser-grammar limits, not corpus errors.
+2. Ack-row budget corrected from the issue's "three or more" to **one**, because no rule body is factually wrong.
+3. Two sibling issues (**#6751**, **#4622**) folded in — they are the same defect and would otherwise rot as stale trackers.
+
+### New consideration discovered during the deepen pass
+
+The `AGENTS.rules.md:8` legend false positive was introduced by the *same PR*
+that filed these issues, and it is the **sole** cause of both
+`lint-agents-enforcement-tags.test.sh` T1 failures. That makes Phase 1.2 a
+higher-leverage single edit than its size suggests: it converts the suite from
+7/9 to 9/9 and unlocks the Phase 4 de-orphaning.
+
 ## Overview
 
 Two operator-facing work items that must ship together because both touch
