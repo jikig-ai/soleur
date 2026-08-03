@@ -79,6 +79,15 @@ open(f"{out}/preamble.sh", "w").write(pre[0])
 sshd = [c for c in d["runcmd"] if isinstance(c, str) and "STAGE=sshd_config" in c]
 assert len(sshd) == 1, f"expected exactly 1 sshd_config runcmd block, found {len(sshd)}"
 open(f"{out}/sshd-stage.sh", "w").write(sshd[0])
+# (#7204, D5) The LUKS stage, for R1/R3/R4. Extracted from the RENDER, not from raw
+# template bytes: the #7204 comment block names the pre-fix invocation literally, so a
+# raw-bytes grep for `mkfs.ext4` matches TWO lines and a `head -1` could execute a
+# comment. ADR-152 strips whole-line comments at render, so the collision disappears here
+# for free. `assert len(...) == 1` mirrors the other extractions — a stage that split into
+# two runcmd entries must fail loudly rather than silently extract the first half.
+luks = [c for c in d["runcmd"] if isinstance(c, str) and "STAGE=luks_open" in c]
+assert len(luks) == 1, f"expected exactly 1 luks_open runcmd block, found {len(luks)}"
+open(f"{out}/luks-stage.sh", "w").write(luks[0])
 # The WHOLE runcmd, concatenated the way cloud-init actually runs it. B2 compares against
 # THIS, not against the trap-arming entry alone: `trap on_err EXIT` and the `set -e` that
 # arms abort-on-error live in DIFFERENT runcmd entries, and it is precisely because
@@ -666,14 +675,377 @@ else
   fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
 fi
 
+# ══ #7204 — R1 / R3 / R4: the birth filesystem, and the diagnostic that named it ══
+#
+# WHY THESE ARMS DO NOT MOUNT ANYTHING. #7204 was a mount that failed with ESRCH because
+# the birth `mkfs` set the ext4 `quota` feature and the target image has no `quota_v2`
+# module to satisfy it. The obvious guard — "mkfs it and mount it in the test" — CANNOT
+# go red for that reason, and this is measured, not assumed: a four-arm privileged probe
+# (loop file -> luksFormat -> luksOpen -> mkfs -> mount) run 2026-08-03 on kernel
+# 7.0.0-28-generic mounted ALL FOUR arms rc=0, including the unfixed `-O quota,project`.
+# A container shares the host kernel, so on any runner whose kernel provides `quota_v2`
+# the defective filesystem mounts perfectly. Worse, `request_module` reaches the loader via
+# `call_usermodehelper`, which runs in the INIT NAMESPACE — so a container-side
+# /etc/modprobe.d blacklist is never consulted and cannot simulate the target either.
+# Simulating this needs a VM, not a container.
+#
+# So R1 asserts the PROPERTY THAT MADE THE BOOT FAIL — the created superblock's feature
+# set — not the failure itself. That is kernel-independent by construction.
+#
+# ANYONE PROPOSING "just mount it and see" SHOULD BE SHOWN THE PARAGRAPH ABOVE.
+#
+# R2 (a real mount) is DELIBERATELY ABSENT. Disposition taken in this PR's Phase 0.7:
+# this harness runs four plain `docker run --rm` and contains zero
+# --privileged/--cap-add/--device, so `mount(2)` fails EPERM on the fixed AND the unfixed
+# template — an arm that is green on neither, proving nothing about either. Promoting this
+# rung to privileged would be an architectural change to the rung-1/rung-2 taxonomy that
+# this file's own header declares, and rung 2 already mounts a real mapper on a real host.
+# Do not add a mount arm here without revisiting that taxonomy first.
+
+_r1_fix="$DIR/git-data-birth-fs-fingerprint.txt"
+if [ -s "$TMP/luks-stage.sh" ] && [ -s "$_r1_fix" ]; then
+  # Extract the mkfs invocation FROM THE RENDER (D5). Device path -> __DEV__ so the arms
+  # can retarget it at a regular file. `assert len(...) == 1` mirrors every other
+  # extraction here: a stage whose mkfs moved or duplicated must fail loudly.
+  _r1_extract_rc=0
+  python3 - "$TMP/luks-stage.sh" "$TMP" <<'PY' || _r1_extract_rc=$?
+import re, sys
+src = open(sys.argv[1]).read(); out = sys.argv[2]
+lines = [l for l in src.splitlines() if re.match(r'^\s*mkfs\.ext4\b', l)]
+assert len(lines) == 1, f"expected exactly 1 mkfs.ext4 invocation in the luks stage, found {len(lines)}"
+cmd = lines[0].strip()
+# Strip any trailing REDIRECT before touching the device operand. The shipped line ends in
+# `2>>"$GIT_DATA_LUKS_DETAIL"` (the #7204 stderr capture), and that variable is unset in this
+# harness — so treating it as the device produced a command that silently created no
+# filesystem at all, and R1 reported "NOFEATURES" as though the template were broken.
+# A guard, not a strip-and-hope: the device operand must still look like a path afterwards.
+cmd = re.sub(r'\s+\d*>>?\s*\S+\s*$', '', cmd).strip()
+assert re.search(r'/\S+$', cmd), f"mkfs line has no path-shaped device operand after stripping redirects: {cmd!r}"
+# Replace the trailing device operand with a placeholder the container retargets.
+cmd = re.sub(r'\S+$', '__DEV__', cmd)
+open(f"{out}/r1-mkfs-shipped.txt", "w").write(cmd + "\n")
+PY
+  if [ "$_r1_extract_rc" -eq 0 ] && [ -s "$TMP/r1-mkfs-shipped.txt" ]; then pass; else
+    fail "R1: could not extract exactly one mkfs.ext4 invocation from the rendered luks_open stage" \
+         "A rename such as mkfs.ext4 -> mke2fs -t ext4 would red B16 while R1 silently failed to extract."; fi
+
+  if [ "$_r1_extract_rc" -eq 0 ] && [ -s "$TMP/r1-mkfs-shipped.txt" ]; then
+    _r1_shipped="$(cat "$TMP/r1-mkfs-shipped.txt")"
+    # MUTANT: re-introduce the `quota` feature. Candidate-dependent by construction — if the
+    # shipped line carries no -O at all, inject one. Asserted to have LANDED before it is
+    # used, so a no-op sed reports "the mutation did not land" rather than the far more
+    # misleading "the fingerprint held on the mutant" (the S1/T5 misattribution class).
+    if printf '%s' "$_r1_shipped" | grep -qE -- '-O '; then
+      _r1_mutant="$(printf '%s' "$_r1_shipped" | sed -E 's/-O ([^ ]+)/-O quota,\1/')"
+    else
+      _r1_mutant="$(printf '%s' "$_r1_shipped" | sed -E 's/^([[:space:]]*mkfs\.ext4)/\1 -O quota/')"
+    fi
+    _r1_mut_has_quota=$(printf '%s' "$_r1_mutant" | grep -cE -- '-O [^ ]*quota' || true)
+    if [ "$_r1_mutant" != "$_r1_shipped" ] && [ "$_r1_mut_has_quota" -ge 1 ]; then pass; else
+      fail "R1 MUTATION did not land: injecting 'quota' left the line unchanged or without a quota feature" \
+           "shipped=[$_r1_shipped] mutant=[$_r1_mutant] — R1's green below would certify nothing."; fi
+
+    # SECOND negative control (D7): the literal that shipped before #7204, executed directly.
+    # Independent of the sed above, so a mutation that silently changes meaning still leaves
+    # one control that reproduces the real defect.
+    _r1_prefix='mkfs.ext4 -q -O quota,project __DEV__  # what shipped before #7204'
+
+    printf '%s\n' "$_r1_shipped" > "$TMP/r1-arm-shipped.txt"
+    printf '%s\n' "$_r1_mutant"  > "$TMP/r1-arm-mutant.txt"
+    printf '%s\n' "$_r1_prefix"  > "$TMP/r1-arm-prefix.txt"
+
+    cat > "$TMP/r1-drive.sh" <<'R1DRV'
+set -e
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq >/dev/null 2>&1
+apt-get install -y -qq e2fsprogs >/dev/null 2>&1
+for arm in shipped mutant prefix; do
+  img="/tmp/$arm.img"
+  # 10G sparse. Measured: a backing file under ~3MB falls into mke2fs's `floppy` bucket and
+  # silently drops has_journal, which would make R1's non-vacuity probe fail for a reason
+  # that has nothing to do with the template. 100M and 10G are identical; 10G also matches
+  # var.git_data_luks_volume_size.
+  truncate -s 10G "$img"
+  # -F inserted immediately after the binary (never appended after the device operand,
+  # where mke2fs would read it as a blocks-count).
+  cmd="$(sed -e "s#__DEV__#$img#" -e 's#^\([[:space:]]*mkfs\.ext4\)#\1 -F#' "/work/r1-arm-$arm.txt")"
+  sh -c "$cmd" >/dev/null 2>&1 || true
+  feats="$(dumpe2fs -h "$img" 2>/dev/null | sed -n 's/^Filesystem features:[[:space:]]*//p')"
+  printf 'ARM=%s FEATURES=%s\n' "$arm" "$feats" >> /out/r1-features.txt
+done
+R1DRV
+
+    rm -rf "$TMP/r1out"; mkdir -p "$TMP/r1out"; : > "$TMP/r1out/r1-features.txt"
+    docker run --rm \
+      -v "$TMP/r1-arm-shipped.txt:/work/r1-arm-shipped.txt:ro" \
+      -v "$TMP/r1-arm-mutant.txt:/work/r1-arm-mutant.txt:ro" \
+      -v "$TMP/r1-arm-prefix.txt:/work/r1-arm-prefix.txt:ro" \
+      -v "$TMP/r1-drive.sh:/work/r1-drive.sh:ro" \
+      -v "$TMP/r1out:/out" \
+      ubuntu:24.04 bash /work/r1-drive.sh >"$TMP/r1out/stdout" 2>&1 || true
+
+    # Classify every arm against the committed allowlist. Three assertions with three
+    # DISTINCT messages (D1): unclassified-feature, module-dep-present, non-vacuity.
+    _r1_verdict="$(python3 - "$_r1_fix" "$TMP/r1out/r1-features.txt" <<'PY' 2>/dev/null || true
+import sys
+tbl = {}
+for ln in open(sys.argv[1]):
+    ln = ln.rstrip("\n")
+    if not ln.strip() or ln.lstrip().startswith("#"):
+        continue
+    parts = ln.split("\t")
+    if len(parts) >= 2:
+        tbl[parts[0].strip()] = parts[1].strip()
+arms = {}
+for ln in open(sys.argv[2]):
+    if ln.startswith("ARM="):
+        head, _, feats = ln.strip().partition(" FEATURES=")
+        arms[head[4:]] = feats.split()
+def verdict(name):
+    f = arms.get(name)
+    if not f:
+        return f"{name}:NOFEATURES"
+    unclassified = [x for x in f if x not in tbl]
+    moduledep = [x for x in f if tbl.get(x) == "module-dep"]
+    return "%s:unclassified=%s:moduledep=%s:hasjournal=%s" % (
+        name, ",".join(unclassified) or "-", ",".join(moduledep) or "-",
+        "yes" if "has_journal" in f else "no")
+print(" ".join(verdict(a) for a in ("shipped", "mutant", "prefix")))
+PY
+)"
+    _r1_ship="$(printf '%s' "$_r1_verdict" | tr ' ' '\n' | grep '^shipped:' || true)"
+    _r1_mut="$(printf '%s' "$_r1_verdict"  | tr ' ' '\n' | grep '^mutant:'  || true)"
+    _r1_pre="$(printf '%s' "$_r1_verdict"  | tr ' ' '\n' | grep '^prefix:'  || true)"
+
+    # (a) fail-closed against any FUTURE flag, not just the one that bit us.
+    case "$_r1_ship" in
+      *:unclassified=-:*) pass ;;
+      "") fail "R1(a): no verdict for the shipped arm — the container produced no feature line" \
+               "$(tail -5 "$TMP/r1out/stdout" 2>/dev/null)" ;;
+      *) fail "R1(a): the birth filesystem carries feature(s) absent from the allowlist: ${_r1_ship#*unclassified=}" \
+              "Classify each in $_r1_fix with its mount-time class before shipping. Do NOT 'refresh' the fixture wholesale — the point is the classification, not the diff. (mke2fs measured 1.47.0 in ubuntu:24.04 / 1.47.2 on the authoring host.)" ;;
+    esac
+    # (b) THE invariant, stated directly.
+    case "$_r1_ship" in
+      *:moduledep=-:*) pass ;;
+      "") fail "R1(b): no verdict for the shipped arm" "$(tail -5 "$TMP/r1out/stdout" 2>/dev/null)" ;;
+      *) fail "R1(b): the birth filesystem carries a module-dep feature: ${_r1_ship##*moduledep=}" \
+              "This is the #7204 defect class: mounting it makes ext4 request a kernel module the target image does not ship, so the host boots dark with mount(8) rc=32. See $_r1_fix." ;;
+    esac
+    # (c) non-vacuity: also catches an accidentally-tiny backing file.
+    case "$_r1_ship" in
+      *:hasjournal=yes) pass ;;
+      *) fail "R1(c): has_journal absent from the shipped arm — the probe is vacuous" \
+              "Either mkfs did not run, or the backing file fell into mke2fs's floppy bucket (<~3MB). verdict=[$_r1_ship]" ;;
+    esac
+    # NEGATIVE CONTROL 1 — the in-test mutant MUST be rejected.
+    case "$_r1_mut" in
+      *:moduledep=-:*|"") fail "R1 MUTATION: injecting 'quota' did NOT trip the module-dep assertion" \
+              "R1 cannot detect the very defect it exists for. verdict=[$_r1_mut]" ;;
+      *) pass ;;
+    esac
+    # NEGATIVE CONTROL 2 — the committed pre-fix literal MUST be rejected.
+    case "$_r1_pre" in
+      *:moduledep=-:*|"") fail "R1 PRE-FIX CONTROL: the literal that shipped before #7204 did NOT trip the module-dep assertion" \
+              "verdict=[$_r1_pre]. This control is independent of the sed mutation precisely so a mutation that silently changed meaning still leaves one arm reproducing the real defect." ;;
+      *) pass ;;
+    esac
+  else
+    # Identical cardinality to the success path (D9) minus the extraction assert already
+    # emitted above, so a drifted extraction cannot satisfy the anti-vacuity floor by
+    # emitting fewer assertions and burying the real cause.
+    fail "R1: skipped (mkfs extraction failed)"; fail "R1: skipped (mkfs extraction failed)"
+    fail "R1: skipped (mkfs extraction failed)"; fail "R1: skipped (mkfs extraction failed)"
+    fail "R1: skipped (mkfs extraction failed)"; fail "R1: skipped (mkfs extraction failed)"
+  fi
+else
+  fail "R1: could not extract the luks_open stage from the render, or the fingerprint fixture is missing ($_r1_fix)"
+  fail "R1: skipped (precondition missing)"; fail "R1: skipped (precondition missing)"
+  fail "R1: skipped (precondition missing)"; fail "R1: skipped (precondition missing)"
+  fail "R1: skipped (precondition missing)"; fail "R1: skipped (precondition missing)"
+fi
+
+# R1-EXPIRY — its OWN labelled arm, deliberately OUT of R1's pass/fail path (D8). A CI
+# failure triggered by a wall-clock date is unrepeatable and its message says nothing about
+# the filesystem; worse, a stale date can mask or merge with real feature drift. The
+# remediation is tied to the birth, not to an arbitrary +6 months: when the git-data host is
+# actually born, re-measure the sibling baseline against the REAL image's e2fsprogs instead
+# of the inferred one, then move the date.
+_r1_exp="$(sed -n 's/^# expires_on:[[:space:]]*//p' "$_r1_fix" 2>/dev/null | head -1)"
+if [ -n "$_r1_exp" ] && [ "$(date -u +%Y-%m-%d)" \< "$_r1_exp" ]; then pass; else
+  fail "R1-EXPIRY: the birth-fs fingerprint's provenance is stale (expires_on=${_r1_exp:-<unparseable>})" \
+       "Re-measure the sibling baseline (cloud-init-registry.yml / workspaces-cutover.sh mkfs) against the image's own e2fsprogs and move the date. This does not gate R1's feature assertions."; fi
+
+# ── R3 — the detail SOURCE is a readable file, not a literal path ───────────────────
+#
+# NOT "the failure is diagnosable" — that name over-claimed. What this arm can observe in an
+# unprivileged container is narrower and worth stating: `dmesg` is EPERM-blocked here and
+# /var/log/cloud-init-output.log does not exist, so the "carries dmesg context" property is a
+# DOCUMENTED LIMITATION of this rung, not an assertion. Rung 2 covers it.
+#
+# The defect being guarded: the emitter branches
+#   [ -n "$DETAIL_SRC" ] && [ -r "$DETAIL_SRC" ]  ->  tail the file
+#   else                                          ->  _san "$DETAIL_SRC"
+# so a NON-EMPTY but UNREADABLE detail source ships THE LITERAL PATH STRING as the
+# diagnostic. Measured on the shipped emitter 2026-08-03:
+#   _san('/var/log/cloud-init-output.log') -> '/var/log/cloud-init-output.log'
+# That is what #7204's fatal actually carried.
+if [ -s "$TMP/luks-stage.sh" ]; then
+  # (1) the stage passes a seeded detail file, not the cloud-init log, to the emitter.
+  _r3_seed_ln=$(grep -n 'GIT_DATA_LUKS_DETAIL=' "$TMP/luks-stage.sh" | head -1 | cut -d: -f1)
+  _r3_emit_ln=$(grep -n 'git-data-emit' "$TMP/luks-stage.sh" | head -1 | cut -d: -f1)
+  if [ -n "$_r3_seed_ln" ]; then pass; else
+    fail "R3(1): the luks_open stage does not seed a detail file (no GIT_DATA_LUKS_DETAIL= assignment)" \
+         "Without it luks_err falls through to _san and emits the literal path string as the diagnostic."; fi
+  # (2) ORDERING, not co-presence (L1). The seed must PRECEDE the first append and the trap.
+  # A grep proving both lines exist is exactly the failure mode of
+  # knowledge-base/project/learnings/2026-07-26-an-existence-assertion-that-ran-before-the-file-existed-bricked-every-boot.md
+  # — assertions sat ~120 lines above the heredocs creating the files they asserted on, and
+  # the harness could not see it because it extracts bodies and runs them in isolation.
+  _r3_first_append=$(grep -n '2>>"\?\$GIT_DATA_LUKS_DETAIL' "$TMP/luks-stage.sh" | head -1 | cut -d: -f1)
+  if [ -n "$_r3_seed_ln" ] && [ -n "$_r3_first_append" ] && [ "$_r3_seed_ln" -lt "$_r3_first_append" ]; then pass; else
+    fail "R3(2): the detail-file seed does not precede the first append (seed=${_r3_seed_ln:-none} first-append=${_r3_first_append:-none})" \
+         "Co-presence is not ordering. A seed placed after an append leaves the trap's detail source unreadable on exactly the early failures it exists to explain."; fi
+else
+  fail "R3: skipped (luks stage not extracted)"; fail "R3: skipped (luks stage not extracted)"
+fi
+
+# ── R3(3) + R4 — drive the EXTRACTED emitter against the capture endpoint ────────────
+#
+# R4 is the arm that pins Phase 1's ordering decision. The emitter keeps
+# `tail -n 20 "$DETAIL_SRC" | _devalue | _clean`, and `_clean` ENDS in `tail -c 180` — a
+# DOUBLE truncation. Measured against the shipped _clean on 2026-08-03:
+#   dmesg first, mount stderr last -> the 180-byte survivor ENDS with "No such process."
+#   reversed (dmesg last)          -> the mount error is pushed out ENTIRELY
+# Nothing pinned that before this arm. It is a one-character regression in the exact code
+# path whose absence cost #7204 a hand-written Better Stack query to diagnose.
+cat > "$TMP/r4-drive.sh" <<'R4DRV'
+#!/bin/bash
+set -uo pipefail
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq >/dev/null 2>&1
+apt-get install -y -qq curl python3 >/dev/null 2>&1
+python3 /work/capture.py & sleep 1
+cp /work/git-data-emit-src /work/git-data-emit
+sed -i "s#^DSN='.*'#DSN='https://k@127.0.0.1:8099/1'#" /work/git-data-emit
+python3 - <<'FIX'
+p="/work/git-data-emit"; s=open(p).read()
+s=s.replace('"https://${SHOST}/api/${PROJ}/store/"','"http://${SHOST}/api/${PROJ}/store/"')
+open(p,"w").write(s)
+FIX
+chmod +x /work/git-data-emit
+
+MOUNTERR='mount: /mnt/git-data-luks: mount(2) system call failed: No such process.'
+mk_dmesg() { i=1; while [ "$i" -le 20 ]; do echo "[   12.3456$i] EXT4-fs (dm-0): mounting with quota feature but no quota format module line $i"; i=$((i+1)); done; }
+
+# ORDER A — the shipped ordering: dmesg first, failing stderr last.
+{ mk_dmesg; printf '%s\n' "$MOUNTERR"; } > /tmp/detail-a.txt
+: > /out/capture.log
+/work/git-data-emit "probe A" luks_open fatal /tmp/detail-a.txt "rc=32" >/dev/null 2>&1 || true
+cp /out/capture.log /out/capture-a.log
+
+# ORDER B — the MUTATION: reversed, so dmesg is what survives the tail.
+{ printf '%s\n' "$MOUNTERR"; mk_dmesg; } > /tmp/detail-b.txt
+: > /out/capture.log
+/work/git-data-emit "probe B" luks_open fatal /tmp/detail-b.txt "rc=32" >/dev/null 2>&1 || true
+cp /out/capture.log /out/capture-b.log
+
+# ORDER C — R3(3): non-empty but UNREADABLE detail source. An ABSENT $4 would fall to
+# _san "" and pass vacuously; only a non-empty-unreadable path exercises the literal leak.
+: > /out/capture.log
+/work/git-data-emit "probe C" luks_open fatal /nonexistent/xyzzy "rc=32" >/dev/null 2>&1 || true
+cp /out/capture.log /out/capture-c.log
+R4DRV
+
+rm -rf "$TMP/r4out"; mkdir -p "$TMP/r4out"; : > "$TMP/r4out/capture.log"
+docker run --rm \
+  -v "$TMP/git-data-emit:/work/git-data-emit-src:ro" \
+  -v "$TMP/capture.py:/work/capture.py:ro" \
+  -v "$TMP/r4-drive.sh:/work/r4-drive.sh:ro" \
+  -v "$TMP/r4out:/out" \
+  ubuntu:24.04 bash /work/r4-drive.sh >"$TMP/r4out/stdout" 2>&1 || true
+
+_r4_a=$(grep -c 'No such process' "$TMP/r4out/capture-a.log" 2>/dev/null || true)
+_r4_b=$(grep -c 'No such process' "$TMP/r4out/capture-b.log" 2>/dev/null || true)
+_r3_c=$(grep -c 'xyzzy' "$TMP/r4out/capture-c.log" 2>/dev/null || true)
+
+if [ "${_r4_a:-0}" -ge 1 ]; then pass; else
+  fail "R4: the mount error did NOT survive the emitter's tail -n 20 | tail -c 180 under the shipped ordering" \
+       "Write dmesg FIRST and the failing command's stderr LAST. capture-a=[$(head -c 300 "$TMP/r4out/capture-a.log" 2>/dev/null)]"; fi
+if [ "${_r4_b:-0}" -eq 0 ]; then pass; else
+  fail "R4 MUTATION: reversing the ordering STILL delivered the mount error — R4 cannot detect an ordering regression" \
+       "If the emitter's truncation changed, re-measure the budget before trusting R4's green above."; fi
+# R3(3a) — POSITIVE CONTROL for the hazard, not a defect report. The emitter's
+# `[ -n ] && [ -r ]` branch falls through to `_san "$DETAIL_SRC"`, so handing it a
+# non-empty-but-unreadable path ships THE LITERAL PATH as the "cause". We deliberately do
+# NOT change the emitter here — its redaction/truncation ordering is load-bearing and out of
+# this PR's scope. Instead we PROVE the hazard is live, which is what makes the stage-side
+# guard in R3(3b) load-bearing rather than decorative. If this control ever stops leaking,
+# the emitter changed and R3(3b)'s rationale must be re-derived.
+if [ "${_r3_c:-0}" -ge 1 ]; then pass; else
+  fail "R3(3a) POSITIVE CONTROL: the emitter no longer leaks a literal path for an unreadable detail source" \
+       "R3(3b) below guards a hazard that may no longer exist — re-derive it against the emitter's current branch. capture-c=[$(head -c 300 "$TMP/r4out/capture-c.log" 2>/dev/null)]"; fi
+
+# R3(3b) — THE GUARD. The stage must never hand the emitter a path it has not proven
+# readable. Pre-#7204 luks_err passed the BARE LITERAL /var/log/cloud-init-output.log, which
+# does not exist in this container and is exactly how a fatal came to carry a filename
+# instead of a cause. Assert the 4th argument is a VARIABLE and that a `[ -r ]` guard on it
+# precedes the emit call.
+if [ -s "$TMP/luks-stage.sh" ]; then
+  _r3b="$(python3 - "$TMP/luks-stage.sh" <<'PY' 2>/dev/null || true
+import re, sys, shlex
+src = open(sys.argv[1]).read()
+joined = re.sub(r'\\\n\s*', ' ', src)          # fold line continuations
+m = [l for l in joined.splitlines() if 'git-data-emit' in l and 'fatal' in l]
+if not m:
+    print("NOEMIT"); raise SystemExit
+line = m[0].strip()
+try:
+    toks = shlex.split(line, posix=False)
+except ValueError:
+    print("UNPARSEABLE"); raise SystemExit
+# toks[0] is the emitter; args are 1..N. The detail source is arg 4.
+arg4 = toks[4] if len(toks) > 4 else ""
+isvar = "VAR" if arg4.lstrip('"').startswith("$") else "LITERAL"
+name = arg4.strip('"')
+guarded = "GUARDED" if re.search(r'\[\s+-r\s+"?' + re.escape(name), joined) else "UNGUARDED"
+print(f"{isvar}:{guarded}:{arg4}")
+PY
+)"
+  case "$_r3b" in
+    VAR:GUARDED:*) pass ;;
+    LITERAL:*) fail "R3(3b): luks_err passes a BARE PATH LITERAL as the emitter's detail source: ${_r3b#LITERAL:*:}" \
+                    "That is the #7204 shape — when the literal is unreadable the fatal carries a filename instead of a cause. Pass a variable the stage has seeded and proven readable." ;;
+    VAR:UNGUARDED:*) fail "R3(3b): luks_err's detail variable ${_r3b#VAR:UNGUARDED:} has no '[ -r ]' readability guard before the emit call" \
+                    "An unwritable .final (disk full, read-only /run) would hand the emitter an unreadable path and re-open the literal-leak branch." ;;
+    *) fail "R3(3b): could not locate a parseable git-data-emit fatal call in the luks_open stage (verdict=[${_r3b:-none}])" ;;
+  esac
+else
+  fail "R3(3b): skipped (luks stage not extracted)"
+fi
+
 total=$((passes + fails))
 # Floor = the ACTUAL assertion count (B1: 1, B2: 1, D1: 2, T5: 4 + 1 mutation, T17: 2 + 1
 # mutation, S1: 3 + 4 mutation). Its job is to catch a silently-empty harness — an early
 # `exit 0` from a skip guard, or a docker run that never produced output — not to be an
 # aspirational target. S1 emits exactly 7 on ALL THREE of its paths (healthy, mutation-did-
 # not-land, extraction-failed) so no short-circuit can satisfy the floor.
-if [ "$total" -lt 19 ]; then
-  echo "FAIL: ran only ${total} assertions (<19) — harness did not execute fully" >&2
+#
+# RAISED 19 -> 33 WITH THE ARMS THAT MADE IT NECESSARY (#7204), itemised so the next author
+# can check the sum rather than trust it:
+#   R1        7  extraction, mutation-landed, (a) unclassified, (b) module-dep,
+#                (c) non-vacuity, in-test mutation control, committed pre-fix control
+#   R1-EXPIRY 1  fixture provenance, deliberately OUTSIDE R1's pass/fail path
+#   R3        2  detail-file seed present, seed PRECEDES first append (ordering, not co-presence)
+#   R3(3a)    1  positive control: the emitter's literal-path leak is still live
+#   R3(3b)    1  the stage passes a readability-guarded VARIABLE, never a bare path literal
+#   R4        2  mount error survives the double-truncation, + ordering-reversal mutation
+#              = 14 new, 19 pre-existing, 33 total.
+# R1 emits exactly 7 on all three of ITS paths (healthy, extraction-failed,
+# precondition-missing) for the same reason S1 does. The floor must move with the suite or it
+# only ever guards the work that predates it.
+if [ "$total" -lt 33 ]; then
+  echo "FAIL: ran only ${total} assertions (<33) — harness did not execute fully" >&2
   exit 1
 fi
 echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed (${total} assertions)"
