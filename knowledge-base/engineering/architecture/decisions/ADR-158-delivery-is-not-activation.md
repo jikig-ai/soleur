@@ -73,10 +73,22 @@ stale(unit) := ExecMainStartTimestamp(unit) < max(mtime(drop-in), mtime(credenti
 ```
 
 which also heals a credential rotation predating the code. Its failure modes get *distinct* enum
-values — `unit_inactive`, `noop_not_active`, `restart_did_not_advance`, `sudo_denied`,
-`timestamp_unparseable`. A denied `sudo` is a provisioning defect and must never share an enum with
-a property of the unit; #5934 is the case where a swallowed denial became a silent no-op nobody
-noticed until the next incident.
+values — `unit_inactive`, `unit_absent`, `noop_not_active`, `restart_did_not_advance`,
+`sudo_denied`, `restart_invocation_failed`, `timestamp_absent`, `timestamp_unparseable`,
+`probe_unavailable`. A denied `sudo` is a provisioning defect and must never share an enum with a
+property of the unit; #5934 is the case where a swallowed denial became a silent no-op nobody
+noticed until the next incident. By the same rule `restart_invocation_failed` is split from
+`sudo_denied` (`try-restart` returns non-zero when the restart JOB fails, not only when sudo
+refuses), and `probe_unavailable` is split from `unit_inactive` — an instrument that could not
+answer is not a unit that is not running, and folding the two let a failed `systemctl show`
+certify an apply as green.
+
+**And the adjudicator denies rather than allows.** An enum list is open by construction: it grows
+whenever a new fault is named. The gate therefore hard-fails on any `action` outside its known set
+and on any `skipped` reason it does not recognise, rather than enumerating the failures it knows
+about. The first version allow-listed three reason strings and never keyed on `action` at all, so
+`action=failed` with any unrecognised reason returned rc=0 with no output — the proposition-1
+defect surviving inside the gate that exists to catch it.
 
 ### 3. An absence assertion must prove its own channel is alive, or report that it cannot.
 
@@ -111,11 +123,24 @@ is a follow-up, recorded on #7103.
 
 **One deliberate narrowing.** The gate does *not* fail on a unit that is merely inactive and was
 never restarted. Every case where the handler acted and the restart did not take is already covered
-by the failure enums. `inngest-heartbeat.service` is created by `inngest-bootstrap.sh` and is
-therefore co-location dependent, so failing on it would permanently red the deploy gate on a
-correct host — a worse outcome than the one guarded against. "Is this unit actually shipping?" is
-proposition 3's question, answered at the sink where "not running" and "not supposed to be running"
-are distinguishable.
+by the failure enums. A unit created by `inngest-bootstrap.sh` is co-location dependent, so failing
+on its absence would permanently red the deploy gate on a correct host — a worse outcome than the
+one guarded against. "Is this unit actually shipping?" is proposition 3's question, answered at the
+sink where "not running" and "not supposed to be running" are distinguishable.
+
+**`RESTART_MAP` holds `vector.service` alone, and the shape of that decision generalises.**
+`inngest-heartbeat.service` was in it when this ADR was first written, and the review that preceded
+merge removed it. It is a `Type=oneshot` with no `RemainAfterExit`, driven by a 60s timer around a
+sub-second `ExecStart`, so it reads `inactive` on essentially every apply: the entry graded
+`skipped/unit_inactive` *forever*, which made the narrowing above the STEADY STATE on a correct
+host rather than the edge case it is described as — precisely the alert fatigue #7103 B3 names. The
+grant bought nothing either, because a timer-driven oneshot re-reads its drop-in on its next tick
+after the `daemon-reload` the handler already performs. Proposition 1 says a channel must reconcile
+the units that consume its configuration; it does not say every consumer needs a restart primitive,
+and the same argument that rejects a `restart-unit` webhook rejects a standing root-restart grant
+that activates nothing. The general rule: **before granting a restart, establish that a restart is
+what activates the unit** — for some unit types, `daemon-reload` plus the next scheduled start is
+the activation, and a grant is pure surface.
 
 **AC12 cannot be verified pre-merge.** Its measurement path runs through the component this repairs,
 so it is enrolled as a post-apply soak on its own issue (#7170) rather than on #7103 — the sweeper
@@ -127,6 +152,6 @@ to prevent.
 | Option | Why not |
 |---|---|
 | A `restart-unit` webhook hook | Adds a remote-triggerable restart primitive to the one host with no replacement path, decouples the restart from the event requiring it, and falsifies the `tunnel -> hetzner` C4 description. |
-| Accept it; units refresh on host recreate | The host cannot be recreated (cx33, orderable in 0 of 3 EU DCs). The telemetry plane ages out silently and proposition 3 has no live channel to assert against. |
+| Accept it; units refresh on host recreate | The host cannot be recreated (cx33, orderable in 0 of 6 datacentres — ADR-154 and the plan both record 6/6, and this ADR halved its own evidence). The telemetry plane ages out silently and proposition 3 has no live channel to assert against. |
 | Reconcile inside `infra-config-install.sh`, which is already root | Genuinely attractive — zero new sudoers alias, one fewer file on the SSH leg. Rejected on the real reason: the installer is reachable through a **bare-command** grant that permits any arguments, and its own header records that the security boundary is therefore the helper, not sudoers. Adding a unit-restart capability there widens that boundary from *write these dests* to *write these dests and restart units*. It is also per-file and stateless, while the decision is per-unit and needs the whole delivery outcome. |
 | Fail the gate on any `active != active` | Would red the deploy gate permanently on a host where a co-location-dependent unit legitimately does not run. See the narrowing above. |

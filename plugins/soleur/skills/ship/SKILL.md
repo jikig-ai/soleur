@@ -321,15 +321,30 @@ For each new source file, check if a corresponding test file exists (e.g., `foo.
 
 **Interactive mode:** Ask the user whether to write tests now or continue without them. Do not silently proceed.
 
-Then run the project's full test suite. It is CI parity MINUS `apps/web-platform/infra/`, whose
-suites are registered only in `.github/workflows/infra-validation.yml` — so when the diff touches
-that directory, `run-registered-suites.sh` is required too and `test-all.sh` says so in its
-preamble. Calling `test-all.sh` alone "matches CI" is what produced #6969: a green summary read as
-evidence for infra it never executed, at the last gate before merge.
+Then run the project's full test suite. A default (`TEST_GROUP=all`) run now INVOKES
+`apps/web-platform/infra/run-registered-suites.sh` as a nested suite whenever the diff touches
+that directory, so the summary accounts for it. Calling `test-all.sh` alone "matches CI" is what
+produced #6969: a green summary read as evidence for infra it never executed, at the last gate
+before merge.
 
 ```bash
 bash scripts/test-all.sh
-# AND, when the diff touches apps/web-platform/infra/ (derives its list from infra-validation.yml):
+```
+
+**Do NOT unconditionally run `run-registered-suites.sh` alongside it.** That instruction was
+correct before the runner was registered and is now actively harmful: both commands default
+`TMPDIR=/var/tmp`, so running them concurrently reproduces the sibling-contention shape
+`work/SKILL.md` documents and can self-inflict a false RED at the last gate before merge — while
+paying ~4-5 minutes twice.
+
+Read the epilogue instead. `test-all.sh` reports which of these happened, keyed on whether the
+runner actually ran:
+
+- `apps/web-platform/infra/ IS covered above` — nothing further needed.
+- `... is NOT covered above` (wrong `TEST_GROUP`, diff does not touch it, or
+  `SOLEUR_INCIDENT_SKIP=1`) — then, and only then, run it explicitly:
+
+```bash
 bash apps/web-platform/infra/run-registered-suites.sh
 ```
 
