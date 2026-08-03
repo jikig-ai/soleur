@@ -344,6 +344,15 @@ If agent spawning is unavailable or unauthorized:
 4. Do NOT mark the PR ready on a `single-user incident` brand-survival threshold with zero
    agents. Surface the choice to the operator: degraded review is adequate evidence for a
    docs PR and is not adequate for an irreversible-blast-radius surface.
+5. **Emit the trailer even though nothing else is committed, and do not write a `/ship` handoff.**
+   Step 6's "commit local artifacts" branch does not fire on a degraded pass (there are usually
+   none), and the trailer is the ONLY artifact that carries the coverage — skip it and the
+   degraded review is downstream-indistinguishable from a full one. Write the resume point as
+   `Remaining: re-run /review with the panel`, never `Remaining: /compound -> /ship`: a session
+   resuming from that state reads the pipeline position, not the prose caveat above it.
+   **Why:** #7146 — a 0-of-10 review labelled itself degraded, asked in `session-state.md` for a
+   re-run before shipping, emitted no trailer, and still left `/ship` as the next step. The
+   re-run found ~60 findings, 15 P1, 3 of them merge blockers.
 
 **Gate 2b — did the agents that WERE spawned return?**
 

@@ -72,7 +72,7 @@ bdc9e510c1034d0e7d62cb2dcda9c974703ff6629e0496d7e64a4761744aee55  wg-when-a-test
 c2f594134bc9a968584656621ba45bb5dcf5efe6778f5eb4ce088ee4912902db  wg-when-a-workflow-gap-causes-a-mistake-fix
 f7664416f6cf7eb36ce7d2e5977f904069e1811c29928a9853f81df425634980  wg-when-an-audit-identifies-pre-existing
 b95ce4dcdabe6b01a67775263a97bff856aacd380ef7de07c8f9c552461291ae  wg-when-closing-a-phase-milestone-update
-d0a0ee4bb8476c53d17585b1c6b0b640de744852d32cf142129502f29e739129  wg-when-deferring-a-capability-create-a
+0bd0bc73f6535aeb97e9d0f07812bad5631231473b62d6c704c39b1acd3d969b  wg-when-deferring-a-capability-create-a
 70897e40a0f3f0ebc33ad0310d528590c9f4fb602f0b2fcf51748a81417c6629  wg-when-fixing-a-workflow-gates-detection
 d0511fb43e953e962dc14188c9ad2d6d6d1d76cb78e0b1d7bde23d5220a58e92  wg-when-tests-fail-and-are-confirmed-pre
 5e963b1aecdd81004578ed7e100f2267a1e3b8f48cfda6a15477c731280a8846  wg-zero-agents-until-user-confirms

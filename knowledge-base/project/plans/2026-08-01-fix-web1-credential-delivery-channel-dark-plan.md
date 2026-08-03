@@ -712,8 +712,18 @@ logs:
   retention: "~3 days hot+archive for Better Stack; 90 days for Actions logs"
 
 discoverability_test:
-  command: "curl -sS --max-time 20 https://app.soleur.ai/health && gh run list --workflow=apply-deploy-pipeline-fix.yml --limit 3 --json conclusion,createdAt && doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep ZOT_GATE --limit 20"
-  expected_output: "health JSON with version >= 0.247.0 and uptime < 900; latest apply run conclusion=success; no ZOT_GATE dark lines"
+  # #7103 R3 (4.6) — the Better Stack leg now runs through betterstack-assert-absence.sh rather
+  # than a bare --grep. The bare form reports the same empty stdout whether the events are
+  # genuinely absent, the credentials were not injected, or this host stopped shipping
+  # altogether — so "no ZOT_GATE dark lines" was satisfied by a dead channel, which is exactly
+  # how AC12 came to be unverifiable. The helper exits 0 ONLY on `clean`: absence confirmed AND
+  # a host-scoped positive control read back through the sink. `unshipping` (2) and `unknown`
+  # (3) are distinct non-zero outcomes, never reported as clean.
+  #
+  # --host is mandatory: betterstack-query.sh has no host flag and its repeated --grep terms
+  # OR-combine, so a grep-based control lets another host's canary certify this one.
+  command: "curl -sS --max-time 20 https://app.soleur.ai/health && gh run list --workflow=apply-deploy-pipeline-fix.yml --limit 3 --json conclusion,createdAt && doppler run -p soleur -c prd_terraform -- scripts/betterstack-assert-absence.sh --host soleur-web-platform --absence 'Doppler Error: Invalid Auth token' --absence 'ZOT_GATE: … dark, pre-provisioning' --since 6h"
+  expected_output: "health JSON with version >= 0.247.0 and uptime < 900; latest apply run conclusion=success; absence helper exits 0 printing SOLEUR_ABSENCE_ASSERT outcome=clean with control_rows>=1 (a non-zero exit distinguishes present=1 / unshipping=2 / unknown=3 — an empty result is never reported as clean)"
 ```
 
 The `discoverability_test.command` contains no remote-shell invocation. Every failure mode above is

@@ -107,16 +107,21 @@ fi
 #   webplat  only apps/web-platform vitest
 #   bun      3 named bun tests + plugins/soleur + blog-link-validation
 #   scripts  11 pre-suite bash/python + 21 plugins/soleur/test/*.test.sh
+#   infra    ONLY the CI-registered apps/web-platform/infra/ runner (#7103 R5(a)).
+#            This is the "TEST_GROUP asks" arm of the relevance gate below: an
+#            explicit ask bypasses the diff check, so an infra run is reachable
+#            without fabricating a diff. It is deliberately NOT part of `all`'s
+#            shard set in ci.yml — infra gates through infra-validation.yml there.
 #
 # See `.github/workflows/ci.yml` test-{webplat,bun,scripts} jobs + the
 # synthetic `test` aggregator. See plan
 # `knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md`.
 TEST_GROUP="${TEST_GROUP:-${1:-all}}"
 case "$TEST_GROUP" in
-  all|webplat|bun|scripts) ;;
+  all|webplat|bun|scripts|infra) ;;
   *)
-    echo "ERROR: TEST_GROUP must be one of: all, webplat, bun, scripts (got: $TEST_GROUP)" >&2
-    echo "Usage: bash scripts/test-all.sh [all|webplat|bun|scripts]" >&2
+    echo "ERROR: TEST_GROUP must be one of: all, webplat, bun, scripts, infra (got: $TEST_GROUP)" >&2
+    echo "Usage: bash scripts/test-all.sh [all|webplat|bun|scripts|infra]" >&2
     echo "   or: TEST_GROUP=<value> bash scripts/test-all.sh" >&2
     exit 2
     ;;
@@ -125,6 +130,11 @@ esac
 want_scripts() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "scripts" ]]; }
 want_bun()     { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "bun"     ]]; }
 want_webplat() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "webplat" ]]; }
+# `infra` is reachable from `all` (so a default local run covers it when the diff is
+# relevant) and from an explicit ask. It is NOT folded into `scripts`: that shard is a CI
+# matrix job with no terraform/cloud-init toolchain, and registering an 87-suite runner
+# into it would red a required check for want of a binary (#6454's exact shape).
+want_infra()   { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "infra"   ]]; }
 
 # --- Run Tests Per Directory ---
 failed=0
@@ -177,20 +187,24 @@ run_suite() {
   fi
 }
 
-# COVERAGE BOUNDARY (#6730), announced in the PREAMBLE (#7014). This runner does NOT
-# cover apps/web-platform/infra/; those suites are registered only in
-# .github/workflows/infra-validation.yml, and the authoritative runner for that
-# directory is apps/web-platform/infra/run-registered-suites.sh, which DERIVES its list
-# from that workflow (an ad-hoc `for f in infra/*.test.sh` loop is not the CI-registered
-# set either). The gap is silent and has cost two sessions: a required check was RED
-# behind a 223/223 green here (#6730), and an infra diff was validated by the wrong
-# runner entirely (#6969) — both times "all tests pass" was read as evidence for infra
-# the run never touched.
+# INFRA RELEVANCE DETECTION (#6730/#7014, converted from a boundary to a gate by #7103).
+# This runner NOW COVERS apps/web-platform/infra/, by registering
+# apps/web-platform/infra/run-registered-suites.sh as a nested suite (see the registration
+# block near the end of this file). That runner DERIVES its list from
+# .github/workflows/infra-validation.yml, so registering it — rather than globbing the
+# suites — is what keeps this file and CI from forking.
 #
-# It fires HERE rather than after the suites because the announcement is only actionable
-# while there is still a decision to make; at the end of a ~20-minute run the cost is
-# already paid and the note reads as an epitaph. A one-line restatement stays in the
-# epilogue for readers who `tail` the log instead of reading it from the top.
+# What survives from #6730/#7014 is the DETECTION, which now decides whether to RUN the
+# infra runner instead of merely whether to print a notice about not running it. The
+# original gap cost two sessions: a required check was RED behind a 223/223 green here
+# (#6730), and an infra diff was validated by the wrong runner entirely (#6969) — both
+# times "all tests pass" was read as evidence for infra the run never touched. A notice
+# asking the reader to go run something else is a weaker fix than running it, which is why
+# this became a gate.
+#
+# It still fires HERE rather than after the suites: the announcement is only actionable
+# while there is still a decision to make, and at the end of a ~20-minute run the cost is
+# already paid. A one-line restatement stays in the epilogue for readers who `tail` the log.
 #
 # Detection reads a VARIABLE, not a pipe into `grep -q`. Under this script's `set -o
 # pipefail` a `producer | grep -q` pipeline reports non-zero when grep exits on a match
@@ -242,18 +256,50 @@ fi
 if [[ "$_infra_detect_ok" == 0 ]]; then
   # Fail SAFE, not quiet: assume the boundary applies rather than assume it does not.
   _infra_in_diff=1
+fi
+
+# Observed, never predicted. Set ONLY where the runner is actually invoked; every coverage
+# claim in this script keys off it.
+_infra_ran=0
+_infra_skip_reason=""
+
+# WHY THE want_infra CONJUNCT IS LOAD-BEARING. These notices used to key on `_infra_in_diff`
+# alone — a fact about the DIFF — while the runner keys on `want_infra`, a fact about
+# TEST_GROUP, and nothing coupled them. CI runs `test-all.sh webplat`, `bun` and `scripts`;
+# want_infra is false in all three. So on every CI run of an infra-touching PR — exactly the
+# case this phase exists for — three job logs affirmatively announced that the infra runner
+# would be invoked, and it never was. That is strictly worse than what it replaced: the old
+# text said "infra is NOT covered above", which was true in every group. Inverting the
+# sentence without adding this conjunct turned a universally-true warning into a
+# conditionally-false assurance.
+if ! want_infra; then
+  _infra_skip_reason="group"
+  if [[ "$_infra_in_diff" == 1 ]]; then
+    echo ""
+    echo "NOTE: your diff touches apps/web-platform/infra/, but TEST_GROUP=$TEST_GROUP does"
+    echo "      NOT include the infra runner. Nothing below is evidence for that directory."
+    echo "      Cover it with either:"
+    echo "        bash apps/web-platform/infra/run-registered-suites.sh"
+    echo "        TEST_GROUP=infra bash scripts/test-all.sh"
+    echo ""
+  fi
+elif [[ "$_infra_detect_ok" == 0 ]]; then
   echo ""
   echo "NOTE: could not determine this branch's diff (no origin/main, shallow clone, or a"
   echo "      fresh repo), so this runner cannot tell whether apps/web-platform/infra/ is"
-  echo "      affected. It does NOT cover that directory in any case. Run:"
-  echo "        bash apps/web-platform/infra/run-registered-suites.sh"
+  echo "      affected. Assuming it IS: the CI-registered infra runner will be invoked"
+  echo "      below as a nested suite. This costs time on an irrelevant diff, which is the"
+  echo "      safe direction — the unsafe one is a green that skipped it silently."
+  echo "      Set SOLEUR_INCIDENT_SKIP=1 to skip it on an incident path — that skip is loud"
+  echo "      and prints its re-run command."
   echo ""
 elif [[ "$_infra_in_diff" == 1 ]]; then
   echo ""
-  echo "NOTE: your diff touches apps/web-platform/infra/, which this runner does NOT cover."
-  echo "      Nothing below is evidence for it. Run the CI-registered suites — in parallel"
-  echo "      with this run, not after it:"
-  echo "        bash apps/web-platform/infra/run-registered-suites.sh"
+  echo "NOTE: your diff touches apps/web-platform/infra/. The CI-registered infra runner"
+  echo "      (apps/web-platform/infra/run-registered-suites.sh) will be invoked below as a"
+  echo "      nested suite, so the summary DOES account for it. Set SOLEUR_INCIDENT_SKIP=1"
+  echo "      to skip it on an incident path — that skip is loud and prints its re-run"
+  echo "      command."
   echo ""
 fi
 
@@ -290,6 +336,12 @@ if want_scripts; then
   # -live asserts the tree is in sync; -unit asserts the guard can still fail.
   run_suite "scripts/lint-agents-compound-sync-live" bash scripts/lint-agents-compound-sync.sh
   run_suite "scripts/lint-agents-compound-sync-unit" bash scripts/lint-agents-compound-sync.test.sh
+  # Enforcement-tag parity — CI-wired in #7172 (was lefthook pre-commit only,
+  # so main drifted to 13 unresolved tags with every local run green). -live
+  # asserts the shipped corpus resolves AND that a non-zero number of tags was
+  # actually scanned; -unit asserts the linter can still fail.
+  run_suite "scripts/lint-agents-enforcement-tags-live" python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.rules.md
+  run_suite "scripts/lint-agents-enforcement-tags-unit" bash scripts/lint-agents-enforcement-tags.test.sh
   run_suite "scripts/lint-infra-no-human-steps" bash scripts/lint-infra-no-human-steps.test.sh
   run_suite "scripts/lint-credential-path-literals" bash scripts/lint-credential-path-literals.test.sh
   # #7136: a `run:` step reading a variable declared only on ANOTHER step. Part B of this
@@ -397,6 +449,10 @@ if want_scripts; then
   # #6512 Fix 2a: the seccomp-unenforced actionable-alert emitter (sourced by
   # apply-deploy-pipeline-fix.yml). Explicit run_suite — scripts/*.test.sh is not auto-globbed here.
   run_suite "scripts/seccomp-unenforced-alert" bash scripts/seccomp-unenforced-alert.test.sh
+  # Production version-drift alerter (#7091), sourced by scheduled-prod-version-drift.yml.
+  # Explicit run_suite — scripts/*.test.sh is not auto-globbed here, and an unregistered
+  # suite is the #5417 class: green CI over zero coverage.
+  run_suite "scripts/prod-version-drift-check" bash scripts/prod-version-drift-check.test.sh
   # Dogfood Grok measure/bootstrap (#6545/#6546). Explicit run_suite — scripts/dogfood/
   # is not in the auto-glob; orphan suites are the #5417 class (green CI, zero coverage).
   run_suite "scripts/dogfood/grok-gpu-bootstrap" bash scripts/dogfood/grok-gpu-bootstrap.test.sh
@@ -574,34 +630,122 @@ fi
 # .claude/hooks/*.test.sh added 2026-05-15 (#3799 prereq to #3789); covers the
 # 8 hook tests that previously only the session-rules-loader entry pulled in.
 if want_scripts; then
+  # #7103 R3/R4/R5(b) + the R5(a) follow-up. These live in scripts/, which the glob below does
+  # NOT cover (it reaches scripts/lib/*.test.sh, not scripts/*.test.sh), so each is registered
+  # explicitly — an unregistered gate is the #3366 class, a suite whose whole claim is "this
+  # cannot silently pass" running in zero runners.
+  #
+  # THE SHARD MATTERS. These were registered under want_bun, whose CI job (`test-bun`) installs
+  # bun and node and nothing else. All four are bash, and two shell out to python3:
+  # digest-oracle-guard.test.sh hard-exits 2 when `python3 -c 'import yaml'` fails, which
+  # run_suite reports as a FAIL — a red required check for want of an interpreter its shard was
+  # never documented to have. `test-scripts` is the job ci.yml describes as "bash + python3",
+  # which is where the other 33 scripts/*.test.sh siblings already run.
+  run_suite "scripts/betterstack-assert-absence" bash scripts/betterstack-assert-absence.test.sh
+  run_suite "scripts/digest-oracle-guard" bash scripts/digest-oracle-guard.test.sh
+  # Sandbox-only: copies scripts/ and .github/ into a mktemp -d, mutates the copies, and asserts
+  # the working tree is unchanged when it finishes.
+  run_suite "scripts/cf-tunnel-liveness-gate-mutations" bash scripts/cf-tunnel-liveness-gate-mutations.test.sh
+  # Pins that this runner's OWN infra coverage claim matches whether it actually invoked the
+  # infra runner. Registered here rather than under want_bun for the same reason as above.
+  run_suite "scripts/test-all-infra-coverage-notice" bash scripts/test-all-infra-coverage-notice.test.sh
   for f in plugins/soleur/test/*.test.sh plugins/soleur/skills/*/test/*.test.sh plugins/soleur/scripts/*.test.sh .claude/hooks/*.test.sh apps/cla-evidence/scripts/*.test.sh apps/web-platform/scripts/*.test.sh apps/web-platform/scripts/lib/*.test.sh scripts/lib/*.test.sh; do
     [[ -f "$f" ]] || continue
     run_suite "$f" bash "$f"
   done
 fi
 
+# --- Nested CI-registered runners (#7103 R5(a)) -----------------------------------------
+# Until now this file only NAMED these two runners, in comments and echo strings, while
+# executing neither. That is the defect: a runner mentioned in a NOTE is not a runner that
+# ran, and "all tests pass" was read as evidence for suites this file never invoked (#6730,
+# #6969). Each registration counts as ONE suite at the aggregate level; the nested runner
+# reports its own per-suite counts inside that line.
+#
+# The infra RUNNER is registered, never its 87 suites individually. run-registered-suites.sh
+# DERIVES its list from .github/workflows/infra-validation.yml and reports unregistered
+# orphans; enumerating the suites here would fork that list and recreate the very drift the
+# derivation prevents.
+if want_infra; then
+  # Relevance gate (2.2). The infra runner is the expensive one, so a docs-only run should
+  # not pay for it. Reuses the preamble's `_infra_in_diff` verdict rather than re-deriving
+  # it, so the notice up top and the gate down here can never disagree — including its
+  # fail-SAFE arm, where an undeterminable diff sets 1 and the runner RUNS.
+  #
+  # Every skip is LOUD and carries the exact re-run command. A silent skip would reproduce,
+  # one level up, the same "green that is not evidence" this phase exists to close.
+  if [[ "${SOLEUR_INCIDENT_SKIP:-0}" == "1" ]]; then
+    # Named incident bypass (2.3). The relevance gate fires on exactly the paths an infra
+    # hotfix must touch, so without a documented lever this lands minutes on the incident
+    # path. The alternative was leaving TEST_GROUP as an undocumented escape hatch — which
+    # silently drops far more than the infra runner and says so nowhere.
+    _infra_skip_reason="incident"
+    echo ""
+    echo "SKIPPED (SOLEUR_INCIDENT_SKIP=1): apps/web-platform/infra/run-registered-suites.sh"
+    echo "      Nothing below is evidence for apps/web-platform/infra/. Re-run with:"
+    echo "        bash apps/web-platform/infra/run-registered-suites.sh"
+    echo ""
+  elif [[ "$TEST_GROUP" == "infra" || "$_infra_in_diff" == 1 ]]; then
+    run_suite "apps/web-platform/infra/run-registered-suites.sh" bash "apps/web-platform/infra/run-registered-suites.sh"
+    # THE ONLY site that may set this. Every downstream coverage claim reads it, so it records
+    # what happened rather than what was predicted.
+    _infra_ran=1
+  else
+    _infra_skip_reason="not_in_diff"
+    echo ""
+    echo "SKIPPED (diff does not touch apps/web-platform/infra/): apps/web-platform/infra/run-registered-suites.sh"
+    echo "      Re-run explicitly with either:"
+    echo "        bash apps/web-platform/infra/run-registered-suites.sh"
+    echo "        TEST_GROUP=infra bash scripts/test-all.sh"
+    echo ""
+  fi
+fi
+
+# The guard-script fixture runner. Its own MIN_SUITES floor (10) is what makes a silently
+# empty run fail rather than pass, so registering it here inherits that floor instead of
+# re-implementing one.
+if want_scripts; then
+  run_suite ".github/scripts/test/run-all.sh" bash .github/scripts/test/run-all.sh
+fi
+
 tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
 
 echo "=== $((suites - failed))/$suites suites passed ==="
 
-# Restatement of the PREAMBLE coverage-boundary notice (#6730/#7014). The decision it
-# supports is made up top, before the run is paid for; this line exists only so a reader
-# who `tail`s the log — the documented log-reading shape — still sees that the summary
-# above excludes apps/web-platform/infra/. Reuses the preamble's detection result rather
-# than re-running the diff, so the two can never disagree.
+# Restatement of the PREAMBLE notice (#6730/#7014, re-pointed by #7103). Since the infra
+# runner is now a REGISTERED nested suite, the thing worth restating inverted: it is no
+# longer "the summary excludes infra" but "the summary includes it — unless it was skipped,
+# in which case say so HERE too". A reader who `tail`s the log (the documented log-reading
+# shape) must not have to infer which of those happened.
 #
-# Bare `$_infra_in_diff`, deliberately NOT `${_infra_in_diff:-0}`. The variable is set
-# unconditionally at top level, so the default could only mask a future edit that removed
-# the preamble block — and it would mask it by silently dropping BOTH notices. Under this
-# script's `set -u` the bare form makes that edit fail loudly instead.
+# Keyed on `_infra_ran`, which is set ONLY at the run_suite call site — an OBSERVED fact, not
+# a predicted one. It previously keyed on `_infra_in_diff`, so the "IS covered above" line
+# printed in the three CI shards where want_infra is false and the runner never executed, and
+# the SOLEUR_INCIDENT_SKIP line attributed to the incident bypass any skip that happened for a
+# different reason entirely (wrong TEST_GROUP, or a docs-only diff with the var incidentally
+# set).
 #
-# "Nothing above is evidence" rather than "the green is not evidence": this line prints
-# BEFORE the `exit 1` below, so on a failing run there is no green to qualify.
-if [[ "$_infra_in_diff" == 1 ]]; then
+# Bare `$_infra_ran`, deliberately NOT `${_infra_ran:-0}`. The variable is set unconditionally
+# at top level, so the default could only mask a future edit that removed that initialisation —
+# and it would mask it by silently dropping every notice. Under `set -u` the bare form makes
+# that edit fail loudly instead.
+if [[ "$_infra_ran" == 1 ]]; then
   echo ""
-  echo "NOTE (announced in the preamble): apps/web-platform/infra/ is NOT covered above."
+  echo "NOTE (announced in the preamble): apps/web-platform/infra/ IS covered above, via the"
+  echo "      nested apps/web-platform/infra/run-registered-suites.sh suite."
+elif [[ "$_infra_skip_reason" == "incident" ]]; then
+  echo ""
+  echo "NOTE: apps/web-platform/infra/ was SKIPPED (SOLEUR_INCIDENT_SKIP=1)."
   echo "      Nothing above is evidence for it. Run the CI-registered suites:"
   echo "        bash apps/web-platform/infra/run-registered-suites.sh"
+elif [[ "$_infra_skip_reason" == "group" && "$_infra_in_diff" == 1 ]]; then
+  echo ""
+  echo "NOTE: apps/web-platform/infra/ is NOT covered above — TEST_GROUP=$TEST_GROUP excludes"
+  echo "      the infra runner, and your diff touches that directory. Run:"
+  echo "        bash apps/web-platform/infra/run-registered-suites.sh"
+elif [[ "$_infra_skip_reason" == "not_in_diff" ]]; then
+  echo ""
+  echo "NOTE: apps/web-platform/infra/ is NOT covered above (diff does not touch it)."
 fi
 
 if [[ "$failed" -gt 0 ]]; then

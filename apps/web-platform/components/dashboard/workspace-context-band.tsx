@@ -45,16 +45,19 @@ export function WorkspaceContextBand({
    *  container (the former remount-on-collapse bug; ADR-047 Amendment 2026-06-22). */
   collapsed?: boolean;
   /** Suppress the band's "Back to menu" affordance (Phase 3, #4915). The layout
-   *  sets this on the MOBILE band in the KB doc view, where kb-content-header
-   *  already owns the only back ("Back to file tree") — so the two backs no
-   *  longer co-render. The band derives nothing from pathname here: the decision
+   *  sets this on the MOBILE band UNCONDITIONALLY (#6917) — the mobile band
+   *  lives inside the drawer, where a back chevron has nothing to go back from,
+   *  and the drawer's own `drawer-back-to-menu` link owns that job. It is NOT
+   *  route-conditional, despite what this doc said until #7186. The band
+   *  derives nothing from pathname here: the decision
    *  is computed by the layout (the sole pathname owner) and passed in, keeping
    *  segmentToDrillLevel the sole drill authority (ADR-047 AC4c). */
   suppressBack?: boolean;
   /** Suppress the band's section-title row (Phase 4, #4915). The layout sets
    *  this on the MOBILE band for KB, where the page body owns the "Knowledge
    *  Base" title — so the two don't double-render on mobile. The desktop rail
-   *  band keeps its section title. KB-scoped, so Settings/Chat are unaffected. */
+   *  band keeps its section title. Passed unconditionally on the mobile band
+   *  (#6917), so despite the KB-motivated name it applies on every route. */
   suppressSectionTitle?: boolean;
 }) {
   const drill = segmentToDrillLevel(pathname);

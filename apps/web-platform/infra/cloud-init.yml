@@ -128,6 +128,13 @@ write_files:
       # argv ci-deploy.sh invokes; no wildcards (sudo-rs safe).
       Cmnd_Alias GIT_LOCK_CHARDEVICE_SWEEP = /usr/bin/timeout 60 /usr/local/bin/git-lock-chardevice-sweep.sh
       deploy ALL=(root) NOPASSWD: GIT_LOCK_CHARDEVICE_SWEEP
+
+      # #7103 — drop-in activation grant (full rationale in the mirrored
+      # deploy-inngest-bootstrap.sudoers; keep the two in sync). try-restart, not
+      # restart: an inactive unit stays inactive. Gated on the drop-in shape check
+      # in infra-config-install; exact argv, no wildcards (sudo-rs safe).
+      Cmnd_Alias DROPIN_TRY_RESTART = /usr/bin/systemctl try-restart vector.service
+      deploy ALL=(root) NOPASSWD: DROPIN_TRY_RESTART
     owner: root:root
     permissions: '0440'
 
