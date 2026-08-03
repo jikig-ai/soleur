@@ -740,6 +740,39 @@ jobs:
             echo "channel_failed=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # ── THE ISSUE CHANNEL CAN ITSELF BE DEAD ────────────────────────────
+      # Every coverage path above reaches exactly one channel: a GitHub issue. When that
+      # channel is the thing that failed — a `gh` list, create, edit or close that did
+      # not succeed, a secondary rate limit, a stripped label — the only artifact left is
+      # a named ::error:: annotation on a cron run that is still GREEN, because all four
+      # paths run under `continue-on-error: true` and several `exit 0` deliberately. An
+      # annotation nobody opens is the exact shape the COVERAGE-HAS-NO-CHANNEL block
+      # above exists to eliminate, so it must not be the fallback for the fallback.
+      #
+      # Four paths, one flag: `token_drift_coverage_list_failed`,
+      # `token_drift_coverage_escalation_failed`, `token_drift_coverage_update_failed`
+      # (all three in the filer) and `token_drift_coverage_close_failed` (the close arm).
+      # Each sets `channel_failed=true` on its own step, and this gates on either.
+      #
+      # POSITIVE POLARITY, like every sibling arm: both steps are skipped on the
+      # `infra/github` matrix leg and on the healthy path, and a skipped step's outputs
+      # are the empty string, which `== 'true'` correctly does not match.
+      #
+      # This mirrors the DEAD filer's "reached the email channel only" fallback, in the
+      # other direction: there the issue is the backstop for the email, here the email is
+      # the backstop for the issue.
+      - name: Email notification (token drift — the coverage issue channel is unreachable)
+        if: >-
+          always()
+          && (steps.coverage_issue.outputs.channel_failed == 'true'
+              || steps.coverage_close.outputs.channel_failed == 'true')
+        continue-on-error: true
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[TOKEN DRIFT] The coverage finding could not reach its issue channel'
+          body: '<p><strong>The twice-daily token-drift scan produced a coverage finding, and the GitHub issue channel that carries it did not accept it.</strong> This email exists because that finding would otherwise have reached nothing: the cron run is GREEN, and its only other artifact is a run annotation.</p><p>What this run measured: coverage <code>${{ steps.token_drift.outputs.coverage }}</code> at ratio <code>${{ steps.token_drift.outputs.coverage_ratio }}</code> against a declared floor of <code>${{ steps.token_drift.outputs.configs_floor }}</code>; verdict <code>${{ steps.token_drift.outputs.verdict }}</code>. Configs the inventory names that were not read: <code>${{ steps.token_drift.outputs.configs_unread }}</code> (<code>-</code> means none).</p><p><strong>This is a finding about the CHANNEL, not only about the credential.</strong> <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and look for the named error slug — <code>token_drift_coverage_list_failed</code>, <code>token_drift_coverage_escalation_failed</code>, <code>token_drift_coverage_update_failed</code> or <code>token_drift_coverage_close_failed</code> — which says which call failed. Likely causes: a secondary rate limit, an API 5xx, a renamed or closed <code>Post-MVP / Later</code> milestone, or the <code>token-drift-coverage</code> label having been deleted.</p><p>Until the channel is repaired, the standing <code>token-drift-coverage</code> issue may be missing, frozen at a state this run did not measure, or still open after the coverage it reports was restored.</p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+
       - name: Open or update an action-required issue (token drift — DEAD credential)
         if: always() && steps.token_drift.outputs.verdict == 'dead'
         continue-on-error: true
