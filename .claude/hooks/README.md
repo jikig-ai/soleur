@@ -30,8 +30,8 @@ jq -c --arg new "$NEW" \
 exit 0
 ```
 
-This is not a pass-through and it is not a decision. It is a fourth thing, and
-it is deliberately narrow:
+This is not a pass-through and it is not a decision. It is a third disposition alongside
+allow and deny, and it is deliberately narrow:
 
 - **Exactly one hook in this directory may do it.** Two rewriters for the same
   call have undefined precedence and one rewrite is silently discarded. Enforced
@@ -91,7 +91,7 @@ Four rules, each of which was a real defect in #7164:
 
 `guardrails.sh` is the **designated responder**: it emits the `ask`, the other
 19 report and exit 0, so a persistent fault produces one prompt per tool call
-rather than 18. That makes `guardrails.sh` load-bearing for the others, and
+rather than 19. That makes `guardrails.sh` load-bearing for the others, and
 `hook-input-contract.test.sh` asserts against `.claude/settings.json` that every
 tool triggering a migrated hook also triggers `guardrails.sh`.
 
@@ -638,8 +638,7 @@ to silence a narrow false positive is how a guard goes quietly dark.
 | `SOLEUR_SKIP_OPERATOR_STEP_GATE=1` | `ship-operator-step-gate.sh` | The undeferred-operator-step deny. Reserved for the rare attestation case (`wg-block-pr-ready-on-undeferred-operator-steps`). |
 | `SOLEUR_SKIP_RUNBOOK_SSH_GATE=1` | `ship-runbook-ssh-gate.sh` | The `hr-no-ssh-fallback-in-runbooks` deny on runbook edits. |
 | `CLAUDE_HOOK_BYPASS=1` (+ `_REASON`) | `prod-write-defer-gate.sh` | The prod-write defer. Requires a reason and is audit-logged — see the F2 section above. |
-
-| `SOLEUR_DISABLE_GREP_REWRITE=1` | `grep-rewrite.sh` | The `grep()` prefix rewrite. Not a denial override — it disarms the **rewrite** disposition, restoring the ugrep shim and with it the 9.5 GB blowup (#7163). Listed here because it is the rollback lever for a hook on the hot path of every Bash call, and is read as the hook's first executable statement so it works even when the hook's own dependencies are broken. |
+| `SOLEUR_DISABLE_GREP_REWRITE=1` | `grep-rewrite.sh` | The `grep()` prefix rewrite. Not a denial override — it disarms the **rewrite** disposition, restoring the ugrep shim and with it the 9.5 GB blowup (#7163). Listed here because it is the rollback lever for a hook on the hot path of every Bash call, and is read as the hook's first executable statement so it works even when the hook's own dependencies are broken. **Operator-only, and requires a session restart** — a PreToolUse hook is spawned by the `claude` process, so an inline `VAR=1 <cmd>` or an `export` from a Bash call cannot reach it (measured). An agent needing per-call escape uses `command grep`, which bypasses both the shim and this rewrite. |
 
 Not denial overrides, documented elsewhere in this file: `SOLEUR_DEFER_DRYRUN`
 (F2 mode switch), `SOLEUR_DISABLE_AGENT_TOKEN_TEE`, `SOLEUR_DISABLE_SKILL_LOGGER`,

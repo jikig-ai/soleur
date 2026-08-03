@@ -23,8 +23,16 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/grep-rewrite.sh"
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
+# jq is a PRECONDITION, not a skip. `SKIP … exit 0` reports success having
+# asserted nothing, which is the same vacuity this suite exists to prevent —
+# and it is reachable on any CI shard that lacks jq.
+command -v jq >/dev/null 2>&1 || { echo "FAIL: jq missing — this suite cannot assert anything without it"; exit 1; }
 [[ -x "$HOOK" ]] || { echo "FAIL: $HOOK is not executable — the suite invokes it directly"; exit 1; }
+
+# Floor for the anti-vacuity gate at the bottom of this file. Derived from a
+# green run, and a FLOOR rather than an equality so adding an assertion does not
+# spuriously red. Raise it when the suite grows.
+MIN_ASSERTIONS=60
 
 PASS=0; FAIL=0
 
@@ -147,13 +155,16 @@ ac6_case "backtick substitution"            'echo "r=`grep alpha`"'       'r=ARG
 ac6_case "subshell"                         '( grep alpha )'              'ARGV:'
 ac6_case "variable indirection (v1: unfixable)" 'G=grep; $G alpha'        'ARGV:'
 ac6_case "eval (v1: unfixable)"             'eval "grep alpha"'           'ARGV:'
-# The shim must never be reached in any of the seven.
+# The shim must never be reached in any of the seven. The summary `ok` below is
+# CONDITIONAL on a loop-local flag — an unconditional `ok` after a loop that can
+# call `bad` prints PASS on a run that just failed.
+shim_hits=0
 for f in 'grep alpha' 'echo x | grep alpha' 'echo "r=$(grep alpha)"' \
          'echo "r=`grep alpha`"' '( grep alpha )' 'G=grep; $G alpha' 'eval "grep alpha"'; do
   out="$(runsh "$SHIMF" "${PREFIX}$f")"
-  case "$out" in *SHIM-CALLED*) bad "AC6 shim reached by: $f" "got: $out" ;; esac
+  case "$out" in *SHIM-CALLED*) bad "AC6 shim reached by: $f" "got: $out"; shim_hits=$((shim_hits+1)) ;; esac
 done
-ok "AC6 shim reached by none of the seven resolution forms"
+[[ "$shim_hits" -eq 0 ]] && ok "AC6 shim reached by none of the seven resolution forms"
 
 # ===========================================================================
 # AC7 — all 12 shim bypass arms receive `command grep "$@"` with NO injected flags
@@ -182,7 +193,34 @@ for a in "${ARMS[@]}"; do
     bad "AC7 bypass arm '$a' must get no injected flags" "got: $out"
   fi
 done
-want "AC7 all ${#ARMS[@]} bypass arms pass through unmodified" "${#ARMS[@]}" "$arms_clean"
+want "AC7 all ${#ARMS[@]} representatives pass through unmodified" "${#ARMS[@]}" "$arms_clean"
+
+# ARM REACHABILITY. The label "all 12 arms" overclaimed: 12 representatives do
+# not imply 12 distinct arms fire, because `case` takes the FIRST match. This
+# loop reports which pattern each representative actually lands on.
+#
+# MEASURED RESULT: arm 8 `-*-save-config*` is UNREACHABLE — `--save-config`
+# matches arm 5 `-*-config*` first. That is true of the LIVE SHIM TOO (same
+# ordering), so the dead arm is faithfully mirrored, and this suite deliberately
+# does NOT "fix" it: byte-exactness with the vendor's shim is the invariant the
+# whole design rests on, and diverging to prune a dead arm would break it.
+PATTERNS=( '-*-filter*' '-*-pager*' '-*-view*' '-*-format-open*' '-*-config*' '---*'
+           '-@*' '-*-save-config*' '-[Zz]*' '-[!-]*[Zz]*' '--null' '--null-data' )
+reached=""
+for a in "${ARMS[@]}"; do
+  idx=0
+  for p in "${PATTERNS[@]}"; do
+    idx=$((idx+1))
+    # shellcheck disable=SC2254  # $p is a case pattern by design
+    case "$a" in $p) reached="$reached $idx"; break ;; esac
+  done
+done
+uniq_reached="$(printf '%s\n' $reached | sort -un | tr '\n' ' ' | sed 's/ $//')"
+want "AC7 representatives resolve to arms (8 absent: subsumed by 5, as in the shim)" \
+  "1 2 3 4 5 6 7 9 10 11 12" "$uniq_reached"
+# Every representative must land on SOME arm, or it is not testing a bypass.
+want "AC7 every representative matched a bypass pattern" "${#ARMS[@]}" \
+  "$(printf '%s\n' $reached | grep -c . || true)"
 
 # Positive control: a NON-bypass flag MUST receive the injected set. Without
 # this, an always-bypass regression would leave every AC7 case green.
@@ -236,6 +274,12 @@ else bad "AC10 jq emits garbage at rc 0" "rc=$rc_junk" "stdout=${out_junk:0:120}
 # whether or not perl were reachable, which is the vacuous form.
 want "AC10 the hook invokes no perl (v2 does not parse)" "0" \
   "$(awk '!/^[[:space:]]*#/' "$HOOK" | grep -cE '(^|[^[:alnum:]_])perl([^[:alnum:]_]|$)' || true)"
+# POSITIVE CONTROL. The count above is 0 for a hook with no perl AND for no
+# input at all (a renamed file, a broken awk). Without this, the assertion is
+# satisfied by absence-of-input rather than absence-of-perl.
+printf '%s\n' '#!/usr/bin/env bash' 'perl -e "print 1"' > "$ROOT/perl-decoy.sh"
+want "AC10 control: the perl detector finds perl when it is present" "1" \
+  "$(awk '!/^[[:space:]]*#/' "$ROOT/perl-decoy.sh" | grep -cE '(^|[^[:alnum:]_])perl([^[:alnum:]_]|$)' || true)"
 
 # ===========================================================================
 # AC11 — idempotency / fixed point
@@ -295,13 +339,23 @@ while [[ $i -lt 400 ]]; do printf 'lorem ipsum q dolor sit amet 0123456789 %s\n'
 MARKER="$ROOT/shim-was-reached"
 SHIM2="$(mktemp -p "$ROOT")"
 printf '%s\n' "function grep { : > '$MARKER'; echo SHIM-CALLED-ugrep; }" > "$SHIM2"
-REPRO_CMD="$(cmd_of "$(hook_run "$(payload "grep -c '.{0,16}q[^.]{0,16}' '$FIX'")")")"
+# `-E` IS LOAD-BEARING. GNU grep defaults to BRE, where `{0,16}` is literal text
+# and the pattern matches nothing — so without -E this measured a zero-match
+# linear scan and the "cheap" assertion proved nothing about the pathological
+# path. Under -E it compiles two bounded repeats over a wide atom with a literal
+# between them that OCCURS in the subject, which is the #7163 blowup class.
+REPRO_CMD="$(cmd_of "$(hook_run "$(payload "grep -Ec '.{0,16}q[^.]{0,16}' '$FIX'")")")"
+[[ -n "$REPRO_CMD" ]] || bad "AC1b could not build the reproducer command — the cases below would be vacuous"
 SCRIPT2="$(mktemp -p "$ROOT")"
 cat "$SHIM2" > "$SCRIPT2"; printf '%s\n' "$REPRO_CMD" >> "$SCRIPT2"
 t0=$(date +%s%N)
 ( ulimit -v 2000000; timeout 20 bash --noprofile --norc "$SCRIPT2" ) >/dev/null 2>&1
 rc_repro=$?
 t1=$(date +%s%N); ms=$(( (t1-t0)/1000000 ))
+# rc IS PINNED. With the script absent the run yields rc=127 and no marker, and
+# BOTH assertions below would read green — a reproducer that never executed is
+# indistinguishable from one that passed. 0 = matches found (expected here).
+want "AC1b reproducer actually executed and matched (rc pinned, not merely non-124)" "0" "$rc_repro"
 if [[ -e "$MARKER" ]]; then bad "AC1b shim was reached by the rewritten reproducer"
 else ok "AC1b shim NOT reached by the rewritten reproducer"; fi
 # 124 = timeout, 137 = SIGKILL (OOM). Either means the cost profile did not change.
@@ -310,6 +364,15 @@ if [[ "$rc_repro" == "124" || "$rc_repro" == "137" ]]; then
 else
   ok "AC1b rewritten reproducer completed under ulimit -v 2000000 in ${ms}ms (rc=$rc_repro)"
 fi
+# Positive control for the marker mechanism: the UNPREFIXED command must reach
+# the shim and write the marker. Without this, "marker absent" is satisfied by a
+# marker mechanism that never works.
+rm -f "$MARKER"
+SCRIPT2C="$(mktemp -p "$ROOT")"
+cat "$SHIM2" > "$SCRIPT2C"; printf "grep -Ec 'q' '%s'\n" "$FIX" >> "$SCRIPT2C"
+( ulimit -v 2000000; timeout 20 bash --noprofile --norc "$SCRIPT2C" ) >/dev/null 2>&1
+if [[ -e "$MARKER" ]]; then ok "AC1b control: the UNPREFIXED command does reach the shim (marker mechanism works)"
+else bad "AC1b control: unprefixed command did not reach the shim — the marker assertion above is vacuous"; fi
 if command -v /usr/bin/time >/dev/null 2>&1; then
   peak_kb="$( ( ulimit -v 2000000; /usr/bin/time -f '%M' timeout 20 bash --noprofile --norc "$SCRIPT2" ) 2>&1 >/dev/null | tail -1 )"
   case "$peak_kb" in
@@ -345,20 +408,107 @@ bench_hook() { # <path-to-hook> -> p95 ms over 15 reps
   done
   printf '%s\n' "${t[@]}" | sort -n | awk 'NR==14{print}'
 }
-MINE_P95="$(bench_hook "$HOOK")"
-BASE_HOOK="$SCRIPT_DIR/no-memory-write.sh"
-if [[ -x "$BASE_HOOK" ]]; then
-  BASE_P95="$(bench_hook "$BASE_HOOK")"
-  echo "  (latency p95: grep-rewrite=${MINE_P95}ms  no-memory-write=${BASE_P95}ms)"
-  if [[ -n "$MINE_P95" && -n "$BASE_P95" && "$MINE_P95" -le "$BASE_P95" ]]; then
-    ok "AC17 p95 ${MINE_P95}ms <= sibling baseline ${BASE_P95}ms (hot path not made worse)"
-  else
-    bad "AC17 hot-path cost regressed past an existing sibling" \
-        "grep-rewrite p95: ${MINE_P95}ms" "no-memory-write p95: ${BASE_P95}ms"
-  fi
+# MECHANISM GATE, NOT A WALL-CLOCK GATE.
+#
+# The wall-clock form this replaced was defective three ways, all measured:
+# it benchmarked the two arms in separate blocks (non-interleaved — demonstrated
+# to bias the comparison by up to 6x on this machine), `awk NR==14` of 15 sorted
+# samples is ~p93 not p95, and a purely relative bound passes trivially if the
+# sibling regresses. It also flaked ~16% of runs with the hook unmutated.
+#
+# `lib/hook-input.sh` states the principle this now follows: "a mechanism ban is
+# deterministic where a wall-clock comparison is not." Fork COUNT is the property
+# the latency gate was only ever a proxy for, and it is exact.
+#
+# (Hooks were also measured to run in PARALLEL — 19 hooks 259 ms vs 18 hooks
+# 281 ms, i.e. this hook's marginal wall-clock cost is indistinguishable from
+# zero. That is another reason a timing gate here pins nothing an operator feels.)
+FORKLOG="$ROOT/forks.log"
+mkdir -p "$ROOT/forkbin"
+for tool in jq cat; do
+  real="$(command -v "$tool")"
+  { printf '#!/usr/bin/env bash\n'
+    printf 'printf "%%s\\n" %s >> "%s"\n' "$tool" "$FORKLOG"
+    printf 'exec %s "$@"\n' "$real"
+  } > "$ROOT/forkbin/$tool"
+  chmod +x "$ROOT/forkbin/$tool"
+done
+count_forks() { # <payload> -> "<jq-count> <cat-count>"
+  : > "$FORKLOG"
+  local d; d="$(mktemp -d -p "$ROOT")"
+  ( cd "$d" && printf '%s' "$1" | env PATH="$ROOT/forkbin:$PATH" INCIDENTS_REPO_ROOT="$d" "$HOOK" >/dev/null 2>&1 )
+  printf '%s %s' "$(grep -c '^jq$' "$FORKLOG" || true)" "$(grep -c '^cat$' "$FORKLOG" || true)"
+}
+GREP_FORKS="$(count_forks "$(payload 'grep -rn needle .')")"
+NOGREP_FORKS="$(count_forks "$(payload 'ls -la /tmp')")"
+echo "  (forks — grep path: ${GREP_FORKS} [jq cat]; non-grep path: ${NOGREP_FORKS})"
+# Grep path: one jq to parse (the shared ADR-156 program), one to build the
+# envelope, one to validate it. Non-grep path must not pay the envelope forks.
+want "AC17 grep path forks jq exactly 3 times (parse + build + validate)" "3 1" "$GREP_FORKS"
+want "AC17 non-grep path forks jq exactly once (parse only)" "1 1" "$NOGREP_FORKS"
+# incidents.sh must never be sourced on the happy path — it is ~18 kB and this
+# hook runs on 100% of Bash calls.
+want "AC17 happy path does not source incidents.sh" "0" \
+  "$(awk '!/^[[:space:]]*#/' "$HOOK" | grep -c 'source .*incidents\.sh' | awk '{print ($1>1)?1:0}')"
+
+# ===========================================================================
+# Branches that had ZERO coverage until review found them
+# ===========================================================================
+# Each of the three below could be deleted or neutered with the whole suite
+# green. They are the hook's telemetry and mode surfaces — the parts that only
+# matter when something has already gone wrong, which is exactly why nothing
+# exercised them.
+
+# --- observe-only mode (the wg-dark-launch-deploy-gates mechanism) ----------
+obs_dir="$(mktemp -d -p "$ROOT")"
+obs_out="$( cd "$obs_dir" && printf '%s' "$(payload 'grep -rn foo .')" \
+  | env INCIDENTS_REPO_ROOT="$obs_dir" SOLEUR_GREP_REWRITE_OBSERVE=1 "$HOOK" 2>/dev/null )"
+want "observe mode emits NO envelope" "0" "$(printf '%s' "$obs_out" | wc -c | tr -d ' ')"
+want "observe mode records grep-rewrite-would-rewrite" "1" \
+  "$(jq -r 'select(.rule_id=="grep-rewrite-would-rewrite")|.rule_id' "$obs_dir/.claude/.rule-incidents.jsonl" 2>/dev/null | grep -c . || true)"
+# Control: the SAME payload without the env var must emit an envelope and no row.
+ctl_dir="$(mktemp -d -p "$ROOT")"
+ctl_out="$( cd "$ctl_dir" && printf '%s' "$(payload 'grep -rn foo .')" \
+  | env INCIDENTS_REPO_ROOT="$ctl_dir" "$HOOK" 2>/dev/null )"
+want "observe control: without the flag an envelope IS emitted" "1" \
+  "$([[ -n "$ctl_out" ]] && echo 1 || echo 0)"
+want "observe control: without the flag NO would-rewrite row is written" "0" \
+  "$(jq -r 'select(.rule_id=="grep-rewrite-would-rewrite")|.rule_id' "$ctl_dir/.claude/.rule-incidents.jsonl" 2>/dev/null | grep -c . || true)"
+
+# --- the tool_name gate ----------------------------------------------------
+want "non-Bash tool_name is declined (matcher is not a verifiable invariant — ADR-156)" "0" \
+  "$(printf '%s' "$(hook_run "$(jq -nc '{tool_name:"Write", tool_input:{command:"grep foo"}}')")" | wc -c | tr -d ' ')"
+
+# --- parse-failure telemetry (ADR-158 clause 7 claims this row exists) -----
+pf_dir="$(mktemp -d -p "$ROOT")"
+( cd "$pf_dir" && printf 'garbage {{' | env INCIDENTS_REPO_ROOT="$pf_dir" "$HOOK" >/dev/null 2>&1 )
+want "parse failure records a hook-input-* row attributed to this hook" "1" \
+  "$(jq -r 'select(.rule_id|startswith("hook-input-"))|.command_snippet' "$pf_dir/.claude/.rule-incidents.jsonl" 2>/dev/null | grep -c 'hook=grep-rewrite' || true)"
+
+# ===========================================================================
+# Large commands — the MAX_ARG_STRLEN regression
+# ===========================================================================
+# `jq --arg` carrying prefix+command as ONE argv entry hit Linux
+# MAX_ARG_STRLEN (131072): bisected to 453 + 130,619 = 131,072, so every command
+# at or above 130,619 bytes silently failed to rewrite. Fail-open, so nothing
+# broke — it just stopped working, on exactly the heredoc-shaped calls most
+# likely to be large. The fix passes only the constant prefix through argv.
+big_dir="$(mktemp -d -p "$ROOT")"
+{ printf 'grep foo '; head -c 200000 /dev/zero | tr '\0' 'x'; } > "$big_dir/cmd.txt"
+jq -Rs '{tool_name:"Bash", tool_input:{command:., timeout:7}}' < "$big_dir/cmd.txt" > "$big_dir/payload.json"
+big_out="$( cd "$big_dir" && env INCIDENTS_REPO_ROOT="$big_dir" "$HOOK" < "$big_dir/payload.json" 2>/dev/null )"
+want "200 kB command still rewrites (argv limit is structurally unreachable)" "1" \
+  "$([[ -n "$big_out" ]] && echo 1 || echo 0)"
+printf '%s' "$big_out" | jq -r '.hookSpecificOutput.updatedInput.command' > "$big_dir/got.txt"
+# jq -r appends a trailing newline; compare against the fixture plus that byte.
+{ cat "$big_dir/cmd.txt"; printf '\n'; } > "$big_dir/want-tail.txt"
+if cmp -s <(tail -c +"$(( ${#EXPECTED_PREFIX} + 1 ))" "$big_dir/got.txt") "$big_dir/want-tail.txt"; then
+  ok "200 kB command survives byte-exact after the prefix"
 else
-  echo "SKIP: sibling baseline hook not executable — relative latency gate not run"
+  bad "200 kB command was altered beyond the prefix"
 fi
+want "200 kB rewrite preserves sibling keys" "7" \
+  "$(printf '%s' "$big_out" | jq -r '.hookSpecificOutput.updatedInput.timeout')"
 
 # ===========================================================================
 # Gate behaviour — the sloppy gate is sloppy in the SAFE direction only
@@ -372,5 +522,15 @@ done
 
 echo
 echo "=== grep-rewrite: ${PASS} passed, ${FAIL} failed ==="
+
+# ANTI-VACUITY FLOOR. Gating only on `FAIL -eq 0` is satisfied by a suite that
+# ran ZERO assertions: neutering ok/bad/want to no-ops printed
+# "0 passed, 0 failed" and exited 0 (measured). Nothing above pins that the
+# assertions executed at all, so the floor is the only thing that can.
+if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
+  echo "FAIL: only ${PASS} assertions ran (floor ${MIN_ASSERTIONS}) — the suite went vacuous."
+  echo "      A suite that asserts nothing exits 0 on FAIL-count alone; this floor is what stops that."
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]] || exit 1
 exit 0

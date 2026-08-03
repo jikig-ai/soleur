@@ -529,7 +529,7 @@ a13_source_hygiene() {
 a14_bare_payload_coverage() {
   # The designated-responder design means only guardrails.sh EMITS the ask; the
   # other 19 report and exit 0, so the operator sees ONE prompt per tool call
-  # rather than 18. An earlier draft of this assertion expected every hook to
+  # rather than 19. An earlier draft of this assertion expected every hook to
   # ask and was simply wrong about the contract.
   #
   # What must hold for a NON-responder is therefore: it does not proceed to a

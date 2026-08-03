@@ -344,6 +344,12 @@ report=$(jq -n \
     # other counter in this script.
     | ($counts | to_entries
         | map(select(.key | startswith("hook-input-")))) as $hook_input_faults
+    # grep-rewrite-disarm is a hook_self_fault — the SAME class as hook-input-*,
+    # not the cost-of-filing-* disposition class an earlier draft cited. It means
+    # "the rewriter broke", so the exclusion above needs the same replacement
+    # readout the hook-input- exclusion documents as its LOAD-BEARING PAIR.
+    # Without it the row appears in NO field of this report (measured).
+    | (($counts["grep-rewrite-disarm"].fire_count) // 0) as $grep_rewrite_disarms
     | {
         schema: $schema,
         generated_at: $generated_at,
@@ -431,6 +437,7 @@ report=$(jq -n \
           # "Parsing hook input". This counter is the surface that replaces the
           # orphan_rule_ids listing removed by the exclusion above; the stderr
           # line below is what makes it visible without reading the JSON.
+          grep_rewrite_disarm_count: $grep_rewrite_disarms,
           hook_input_fault_count: ($hook_input_faults | map(.value.fire_count) | add // 0),
           hook_input_fault_reasons: ($hook_input_faults
             | map({key: (.key | ltrimstr("hook-input-")), value: .value.fire_count})
@@ -459,6 +466,11 @@ orphan_count=$(echo "$report" | jq -r '.summary.orphan_rule_ids | length')
 # so both the dry-run and the write path surface it. Advisory, never fatal — a
 # disarmed hook is already reported in-band by a permissionDecision=ask.
 hook_input_fault_count=$(echo "$report" | jq -r '.summary.hook_input_fault_count // 0')
+grep_rewrite_disarm_count=$(echo "$report" | jq -r '.summary.grep_rewrite_disarm_count // 0')
+if [[ "${grep_rewrite_disarm_count:-0}" -gt 0 ]]; then
+  echo "WARNING: $grep_rewrite_disarm_count grep-rewrite disarm(s) — .claude/hooks/grep-rewrite.sh could not build its updatedInput envelope, so the ugrep shim was NOT neutralized for those calls. See ADR-158." >&2
+fi
+
 if [[ "${hook_input_fault_count:-0}" -gt 0 ]]; then
   hook_input_breakdown=$(echo "$report" \
     | jq -r '.summary.hook_input_fault_reasons | to_entries | map("\(.key)=\(.value)") | join(" ")' 2>/dev/null || echo "")

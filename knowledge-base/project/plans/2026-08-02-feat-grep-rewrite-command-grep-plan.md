@@ -244,7 +244,11 @@ error_reporting:
 failure_modes:
   - mode: malformed payload / jq or perl failure -> fail-open, no rewrite
     detection: emit_incident "grep-rewrite-disarm" (event_type=warn)
-    alert_route: weekly aggregator (requires the AC15 exclusion, else exit 5)
+    alert_route: summary.grep_rewrite_disarm_count + a stderr WARNING in
+      scripts/rule-metrics-aggregate.sh (added after review — the AC15 exclusion
+      alone DELETED the only surface this id had, mirroring the hook-input-*
+      load-bearing pair). NOT "weekly": that workflow is workflow_dispatch-only;
+      the schedule was removed in #6042.
   - mode: hook deregistered from settings.json
     detection: AC14 membership assertion
     alert_route: CI red
@@ -253,7 +257,7 @@ failure_modes:
     alert_route: none
 logs: { where: .claude/.rule-incidents.jsonl, retention: per lib/log-rotation.sh }
 discoverability_test:
-  command: 'printf %s "$PAYLOAD" | .claude/hooks/grep-rewrite.sh | jq .'
+  command: 'printf %s ''{"tool_name":"Bash","tool_input":{"command":"grep -r foo ."}}'' | .claude/hooks/grep-rewrite.sh | jq -r .hookSpecificOutput.updatedInput.command'
   expected_output: hookSpecificOutput.updatedInput.command beginning with the grep() prefix
 ```
 
@@ -327,7 +331,7 @@ Escalated 5-agent panel, run at operator request. **All P0s accepted.**
 
 | Risk | Mitigation |
 |---|---|
-| Prefix on ~50% of commands adds transcript noise | Accepted; ~330 chars. Kill switch AC12. |
+| Prefix on ~50% of commands adds transcript noise | Accepted; **453 chars** (measured; an earlier ~330 estimate was wrong). Kill switch AC12. |
 | A command that inspects `type grep` or defines its own `grep` sees ours | Vanishingly rare; ours is overridden by a later user definition. Documented in the ADR. |
 | **Coverage window:** #7166 is OPEN | v2 solves both residuals, so this shrinks #7166 from "covers the gap" to defense-in-depth. DHH argues the cap should still land first — the guarantee is then a *bound*, not a lexical bet. **Operator call.** |
 | `updatedInput` semantics undocumented for multi-hook | AC13 enforces single-rewriter |
@@ -354,7 +358,7 @@ visible next to what measurement returned. Every row below changed an artifact.
 | Plan said | Measured at /work | Disposition |
 |---|---|---|
 | ADR-155 (provisional) | 155, 156 **and** 157 landed on `main` before this branch rebased | **ADR-158**; swept across plan, tasks, ACs, README, C4 (task 7.8) |
-| Aggregator exits 5 at `:374` / `:426` | Sites are `:465` (dry-run) and `:520` (post-write) | Mechanism confirmed by a RED probe; coordinates were stale |
+| Aggregator exits 5 at `:374` / `:426` | The two `exit 5` sites are the **dry-run orphan gate** and the **post-write orphan gate** (both anchored on `ERROR: orphan rule_id(s) in incidents jsonl`) | Mechanism confirmed by a RED probe. Coordinates were stale — and the line numbers this row originally cited went stale again inside this very PR, which inserts lines above them, so it now cites content anchors instead (`cq-cite-content-anchor-not-line-number`) |
 | `updatedInput` *may* replace `tool_input` | It **does** replace, wholesale — `timeout`/`description`/`run_in_background` all dropped and a background call ran in the foreground | Built from the whole `tool_input`; AC4 fixtured |
 | D3: 423 ms → 5,446 ms → 590 ms (**12.9×**) | ~3,600 ms → ~590 ms (**~6.0×**), spread ~230 ms | D3 **stands**; effect is ~13× the noise floor and the sign is physical. "With" figure reproduces exactly; baseline is machine state |
 | Corpus ≈ 6,100 commands, **zero exceptions** | **12,057** unique commands; **0 corrupted**, **4 declined** (0.03%) | See AC5 amendment below |

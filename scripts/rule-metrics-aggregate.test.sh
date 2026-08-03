@@ -646,13 +646,58 @@ t21_grep_rewrite_plus_orphan_isolates_real_orphan() {
   root=$(make_fixture_repo)
   write_event "$root" "grep-rewrite-would-rewrite" "info" "2026-08-03T10:00:00Z"
   write_event "$root" "totally-made-up-rule" "deny" "2026-08-03T10:00:01Z"
+  # PREFIX BOUNDARY. Without this row, widening the filter from
+  # `startswith("grep-rewrite-")` to `startswith("grep")` passed all 63 tests —
+  # T20/T21 pinned "the exclusion works" and "it is not blanket", but not
+  # "it is not OVER-broad". This id is a real sibling hook's rule_id shape.
+  write_event "$root" "grep-q-pipe-guard" "deny" "2026-08-03T10:00:02Z"
 
   INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
   assert_eq "T21 a real orphan alongside grep-rewrite-* still exits 5" "5" "$exit_code"
 
   metrics="$root/knowledge-base/project/rule-metrics.json"
-  assert_eq "T21 only the real orphan is listed" "totally-made-up-rule" \
-    "$(jq -r '.summary.orphan_rule_ids | join(",")' < "$metrics")"
+  assert_eq "T21 exclusion is prefix-scoped, not any-id-starting-with-grep" \
+    "grep-q-pipe-guard,totally-made-up-rule" \
+    "$(jq -r '.summary.orphan_rule_ids | sort | join(",")' < "$metrics")"
+  rm -rf "$root"
+}
+
+# --- T22: the disarm REPLACEMENT SURFACE (load-bearing pair with T20) -------
+# Mirrors T18's role for hook-input-*. The T20 exclusion deletes the only place
+# a counts-only rule_id appeared (orphan_rule_ids); verified before this landed
+# that the string `grep-rewrite` then appeared in NO field of rule-metrics.json.
+# grep-rewrite-disarm is a hook_self_fault — it means the rewriter broke and the
+# ugrep shim was live for those calls — so it must remain visible somewhere.
+t22_grep_rewrite_disarm_count_and_stderr() {
+  local root metrics stderr exit_code=0
+  root=$(make_fixture_repo)
+  write_event "$root" "grep-rewrite-disarm" "warn" "2026-08-03T11:00:00Z"
+  write_event "$root" "grep-rewrite-disarm" "warn" "2026-08-03T11:00:01Z"
+  write_event "$root" "hr-rule-a-synthetic-test" "deny" "2026-08-03T11:00:02Z"
+
+  stderr=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" 2>&1 >/dev/null) || exit_code=$?
+  assert_eq "T22 disarm rows do not fail the run" "0" "$exit_code"
+
+  metrics="$root/knowledge-base/project/rule-metrics.json"
+  assert_eq "T22 grep_rewrite_disarm_count is surfaced" "2" \
+    "$(jq -r '.summary.grep_rewrite_disarm_count' < "$metrics")"
+  # A number nobody prints is not a surface.
+  assert_eq "T22 a stderr WARNING names the disarm" "1" \
+    "$(printf '%s\n' "$stderr" | grep -c 'grep-rewrite disarm' || true)"
+  rm -rf "$root"
+}
+
+# --- T23: zero disarms is silent (no false alarm on a healthy run) ----------
+t23_grep_rewrite_disarm_zero_is_silent() {
+  local root stderr exit_code=0
+  root=$(make_fixture_repo)
+  write_event "$root" "hr-rule-a-synthetic-test" "deny" "2026-08-03T11:00:00Z"
+  stderr=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" 2>&1 >/dev/null) || exit_code=$?
+  assert_eq "T23 healthy run exits 0" "0" "$exit_code"
+  assert_eq "T23 healthy run prints no disarm warning" "0" \
+    "$(printf '%s\n' "$stderr" | grep -c 'grep-rewrite disarm' || true)"
+  assert_eq "T23 counter reads 0" "0" \
+    "$(jq -r '.summary.grep_rewrite_disarm_count' < "$root/knowledge-base/project/rule-metrics.json")"
   rm -rf "$root"
 }
 
@@ -730,6 +775,8 @@ t19_hook_input_zero_is_silent
 
 t20_grep_rewrite_prefix_not_orphan
 t21_grep_rewrite_plus_orphan_isolates_real_orphan
+t22_grep_rewrite_disarm_count_and_stderr
+t23_grep_rewrite_disarm_zero_is_silent
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"

@@ -4,7 +4,7 @@
 # left BYTE-IDENTICAL.
 #
 # Issue #7165. ADR-158 (PreToolUse hooks may rewrite tool input).
-# Source learning: knowledge-base/project/learnings/2026-08-02-the-ugrep-oom-and-three-refuted-guard-designs.md
+# Source learning: knowledge-base/project/learnings/2026-08-02-ps-named-it-2-1-220-so-a-grep-that-ate-the-box-read-as-a-claude-leak.md
 #
 # WHY
 # ---
@@ -65,7 +65,10 @@
 # -u and pipefail, never -e: see FAIL-OPEN above.
 set -uo pipefail
 
-SGR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# ${BASH_SOURCE[0]%/*} rather than $(cd "$(dirname …)" && pwd): the nested
+# command substitution cost TWO forks on 100% of Bash calls for a value the
+# parameter expansion yields with none.
+SGR_DIR="${BASH_SOURCE[0]%/*}"
 
 # The idempotency sentinel (AC11) is the loop variable's NAME, not a comment.
 # The prefix is a single `;`-joined line, so a `#` comment inside it would
@@ -90,12 +93,25 @@ SGR_SENTINEL='_soleur_grep_rw'
 #   -G --ignore-files --hidden -I --exclude-dir={.git,.svn,.hg,.bzr,.jj,.sl}
 # Of those, `-G` is GNU grep's default (BRE) and `--hidden` is a ugrep flag for
 # behavior GNU grep already has, so both are dropped as no-ops. `--ignore-files`
-# (ugrep's .gitignore support) has no GNU grep equivalent — dropping it is the
-# ONE semantic divergence, and it is what makes the three build-dir excludes
-# necessary rather than optional: measured on this repo, a recursive grep over
-# 101,104 files costs ~3,600 ms without them and ~590 ms with them (~6.0x),
-# against a ~230 ms run-to-run spread. 87,988 of those files are under
-# node_modules.
+# (ugrep's .gitignore support) has no GNU grep equivalent.
+#
+# There are TWO semantic deltas, not one (an earlier draft of this comment said
+# one, and review measured it false):
+#   1. .gitignore is no longer honoured.
+#   2. node_modules/dist/.next are excluded UNCONDITIONALLY — including in a repo
+#      that COMMITS them, where ugrep would have searched them. Routine for a
+#      published npm package shipping dist/.
+#
+# And this is a NET SLOWDOWN vs today, not a speedup. Three-arm measurement on
+# this repo (101,110 files, 87,988 under node_modules), interleaved:
+#   today  (ugrep --ignore-files)      243 ms
+#   new    (GNU grep + 3 excludes)     548 ms   <- 2.25x REGRESSION
+#   new    (without the 3 excludes)  3,179 ms
+# At an IDENTICAL file set GNU grep is 4.0x slower than ugrep, so the dominant
+# term is the single-threaded-engine swap, not the .gitignore loss. The excludes
+# are what keep the regression bounded; they do not buy parity. Accepted: this
+# trade buys elimination of the 9.5 GB DFA blowup, and both arms are sub-second.
+# See ADR-158 §Accepted divergences.
 SGR_PREFIX='grep(){ local _soleur_grep_rw; for _soleur_grep_rw in "$@"; do case "$_soleur_grep_rw" in -*-filter*|-*-pager*|-*-view*|-*-format-open*|-*-config*|---*|-@*|-*-save-config*|-[Zz]*|-[!-]*[Zz]*|--null|--null-data) command grep "$@"; return;; esac; done; command grep -I --exclude-dir=.git --exclude-dir=.svn --exclude-dir=.hg --exclude-dir=.bzr --exclude-dir=.jj --exclude-dir=.sl --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.next "$@"; }; '
 
 # --- Lazy telemetry --------------------------------------------------------
@@ -163,8 +179,6 @@ case "$CMD" in *"$SGR_SENTINEL"*) exit 0 ;; esac
 # That is correct and intended: see THE MECHANIC above.
 case "$CMD" in *grep*) ;; *) exit 0 ;; esac
 
-NEW="${SGR_PREFIX}${CMD}"
-
 # --- Dark-launch / observe-only mode ---------------------------------------
 # Emits what it WOULD do and returns no envelope. Used for the corpus replay
 # soak (wg-dark-launch-deploy-gates) and available as a diagnostic.
@@ -180,10 +194,28 @@ fi
 # Claude Code silently ignores the envelope and the original command runs —
 # a test asserting only the updatedInput value would pass while nothing applied
 # (DEFER-DECISION-PAYLOAD-SHAPE.md).
+# --arg carries the 453-byte CONSTANT prefix, never the command. Passing
+# prefix+command as one argv entry hit Linux MAX_ARG_STRLEN (32 * PAGE_SIZE =
+# 131072): bisected to the byte, 453 + 130,619 = 131,072, so every command at or
+# above 130,619 bytes silently failed to rewrite. Concatenating INSIDE jq makes
+# the limit structurally unreachable — verified byte-exact at 200 kB.
+#
+# This also makes the `[[ -z "$CMD" ]]` guard above load-bearing for a second
+# reason: `$pre + .command` raises on a null .command, where the old form would
+# instead FABRICATE a tool_input object containing a grep() definition and no
+# user command. Do not reorder that guard below this emit.
 OUT=$(printf '%s' "$INPUT" \
-  | jq -c --arg new "$NEW" \
-      '{hookSpecificOutput:{hookEventName:"PreToolUse",updatedInput:(.tool_input | .command = $new)}}' \
+  | jq -c --arg pre "$SGR_PREFIX" \
+      '{hookSpecificOutput:{hookEventName:"PreToolUse",updatedInput:(.tool_input | .command = ($pre + .command))}}' \
       2>/dev/null) || OUT=""
+
+# jq's EXIT CODE is not sufficient: a jq that exits 0 while emitting non-JSON
+# would otherwise be printed verbatim as an envelope. Measured — a stub that
+# passed through the parse call and emitted garbage on this one made the hook
+# print `not json at all` on stdout. Validate the bytes, not the status.
+if [[ -n "$OUT" ]] && ! printf '%s' "$OUT" | jq -e . >/dev/null 2>&1; then
+  OUT=""
+fi
 
 if [[ -z "$OUT" ]]; then
   # The parse succeeded but the envelope could not be built. Distinct from a

@@ -59,9 +59,10 @@ for h in "$HOOK_DIR"/*.sh; do
   fi
 done
 
-if [[ "$fail" -eq 0 ]]; then
-  echo "PASS: all PreToolUse hooks pair permissionDecision with hookEventName."
-fi
+# NB the summary for this first block is deferred to the end of the file: it
+# used to print before the three gates below ran, so a run whose AC13 failed
+# still OPENED with a PASS line.
+pd_hen_ok=$(( fail == 0 ? 1 : 0 ))
 
 # ===========================================================================
 # Registration, exec-bit, and single-rewriter gates (issue #7165, ADR-158)
@@ -76,7 +77,8 @@ fi
 #     gate green while the hook never runs again.
 #   * registration alone — a hook registered at mode 100644 is registered and
 #     unrunnable.
-SETTINGS="$(cd "$HOOK_DIR/../.." && pwd)/.claude/settings.json"
+REPO_ROOT_DIR="$(cd "$HOOK_DIR/../.." && pwd)"
+SETTINGS="$REPO_ROOT_DIR/.claude/settings.json"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "SKIP: jq missing — registration/exec-bit/single-rewriter gates not run"
@@ -154,13 +156,31 @@ EOF
     # a second rewriter added that way passed this gate. printf is not a
     # hypothetical spelling here; lib/hook-input.sh emits its ask envelope
     # exactly that way, precisely because jq may be what is broken.
+    # SCOPE. A `"$HOOK_DIR"/*.sh` glob was the obvious loop and it is too narrow
+    # in two directions that both matter, and one of which this file's own
+    # comment above names:
+    #   * lib/*.sh — where a shared rewrite helper would naturally live, and
+    #     where lib/hook-input.sh (cited above as the printf-envelope precedent)
+    #     actually sits. A second rewriter added there passed the old gate.
+    #   * security_reminder_hook.py — a REGISTERED PreToolUse hook. The
+    #     registration derivation above already notes "at least one is a .py";
+    #     the rewriter scan filtered it out anyway.
+    # Union of the settings-derived registration list and the on-disk hook tree,
+    # so neither an unregistered new file nor a non-.sh registered hook escapes.
     rewriters=""
-    for h in "$HOOK_DIR"/*.sh; do
-      b="$(basename "$h")"
+    while IFS= read -r h; do
+      [[ -z "$h" ]] && continue
+      b="${h##*/}"
       [[ "$b" == *.test.sh ]] && continue
-      c=$(grep -vE '^[[:space:]]*#' "$h" | grep -cE 'updatedInput\\?"?[[:space:]]*:' || true)
-      [[ "$c" -gt 0 ]] && rewriters="$rewriters $b"
-    done
+      f="$REPO_ROOT_DIR/$h"
+      [[ -f "$f" ]] || f="$h"
+      [[ -f "$f" ]] || continue
+      c=$(grep -vE '^[[:space:]]*#' "$f" | grep -cE 'updatedInput\\?"?[[:space:]]*:' || true)
+      [[ "$c" -gt 0 ]] && case " $rewriters " in *" $b "*) ;; *) rewriters="$rewriters $b" ;; esac
+    done <<EOF
+$reg_all
+$(ls "$HOOK_DIR"/*.sh "$HOOK_DIR"/*.py "$HOOK_DIR"/lib/*.sh 2>/dev/null)
+EOF
     rewriters="${rewriters# }"
     if [[ "$rewriters" == "grep-rewrite.sh" ]]; then
       echo "PASS: exactly one rewriting hook (grep-rewrite.sh) — single-rewriter invariant holds."
@@ -171,6 +191,10 @@ EOF
       fail=1
     fi
   fi
+fi
+
+if [[ "$pd_hen_ok" -eq 1 ]]; then
+  echo "PASS: all PreToolUse hooks pair permissionDecision with hookEventName."
 fi
 
 exit "$fail"

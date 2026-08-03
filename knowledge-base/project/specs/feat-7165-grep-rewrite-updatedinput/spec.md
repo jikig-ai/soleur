@@ -59,18 +59,32 @@ not read. #7151 was closed unmerged. **The operator's exposure is unchanged.**
 - **FR1:** A Bash tool payload containing a shim-reaching `grep` invocation is
   **rewritten** via `updatedInput`, not denied. The measured reproducer completes
   cheaply.
-- **FR2:** The rewrite replaces the `grep` token with
-  `command grep -I --exclude-dir=.git --exclude-dir=.svn --exclude-dir=.hg
-  --exclude-dir=.bzr --exclude-dir=.jj --exclude-dir=.sl`.
+- **FR2:** *(rewritten 2026-08-03 — the original described the v1 parse-and-splice
+  mechanic a 5-agent panel refuted, and omitted three flags the shipped prefix
+  injects. It was missed by the v2 sweep that corrected FR8.)* The rewrite
+  **replaces no token**. It PREPENDS a `grep()` shell-function redefinition and
+  leaves the command byte-identical; bash resolves the name at execution time. The
+  function's non-bypass arm runs `command grep -I` with the shim's six
+  `--exclude-dir` values **plus** `node_modules`, `dist` and `.next`.
 - **FR3:** `-G` is **not** injected. GNU grep exits 2 with `conflicting matchers
   specified` when `-G` precedes `-E`/`-F`/`-P`, where ugrep tolerates it. BRE is GNU
   grep's default, so `-G` is redundant as well as fatal.
 - **FR4:** `--hidden` and `--ignore-files` are not injected — GNU grep 3.12 rejects
   both. `--hidden` is a no-op against GNU's default (`-r` includes hidden files).
-  Losing `--ignore-files` is the single accepted semantic delta: recursive greps no
-  longer respect `.gitignore`.
-- **FR5:** Rewriting applies **only at command position in unquoted context**.
-  Tokens inside quoted strings and heredoc bodies are never rewritten.
+  Losing `--ignore-files` is **one of two** accepted semantic deltas, not the single
+  one (corrected 2026-08-03 — review measured the original claim false): recursive
+  greps no longer respect `.gitignore`, AND the three build dirs above are excluded
+  unconditionally even in a repo that commits them. Nor is the second a free
+  compensation for the first — measured end to end this is a ~2.25x SLOWDOWN versus
+  the shim, dominated by the single-threaded-engine swap rather than by the
+  `.gitignore` loss. See ADR-158 §Accepted divergences.
+- **FR5:** *(rewritten 2026-08-03 — the original stated the v1 lexer's contract and
+  is contradicted by FR8 and by this feature's own fixtures; same missed sweep as
+  FR2.)* The v2 design **does not inspect token position at all**. Every command
+  carrying a `grep` substring receives the prefix, including one where the substring
+  occurs only inside a quoted string or a heredoc body. That is safe precisely
+  because the command is never edited: a false positive costs one inert function
+  definition and can never corrupt a command, which is what licenses the sloppy gate.
 - **FR6:** Each of the seven bypass forms has the defined behaviour in the table below,
   each with a fixture.
 - **FR7:** Every must-not-touch form in the table below is left byte-identical, each
