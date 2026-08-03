@@ -1306,14 +1306,38 @@ _doppler_get_or_report() {
 # read a registry URL with, so the gate goes dark and the pull drops to a GHCR path whose read
 # PAT is documented-revoked. Treating it as "nothing to report because nothing was configured"
 # is what made the 2026-08-01 second invocation indistinguishable from healthy pre-provisioning.
-# It rides the same Sentry store transport, which is credential-INDEPENDENT here by
-# construction: SENTRY_INGEST_DOMAIN/PROJECT_ID/PUBLIC_KEY come from the boot-baked
-# /etc/default/webhook-deploy EnvironmentFile, not from the re-deliverable token file whose
-# absence triggers this reason — so this is the one transport that survives this exact failure.
-# Fail-open, same Sentry store transport as pull_failure_event.
+# THE SENTRY BEACON IS NOT CREDENTIAL-INDEPENDENT. This said it was, "by construction", on the
+# grounds that SENTRY_INGEST_DOMAIN/PROJECT_ID/PUBLIC_KEY come from the boot-baked
+# /etc/default/webhook-deploy EnvironmentFile rather than from the re-deliverable token file.
+# That is false, and measurably so:
+#
+#   grep -c SENTRY_INGEST_DOMAIN cloud-init.yml   -> 0
+#
+# cloud-init writes exactly three keys into webhook-deploy (DOPPLER_TOKEN, DOPPLER_CONFIG_DIR,
+# DOPPLER_ENABLE_VERSION_CHECK). The Sentry components are delivered by
+# soleur-doppler-token.tmpl into /etc/default/soleur-doppler-token — the SAME file whose absence
+# raises `no_credential_source` — and ci-deploy.sh only exports them when that file is readable.
+# So on the `cred_file=absent|unreadable` path the guard below is false and NO event is posted:
+# the beacon was silent in precisely the incident it was written to report.
+#
+# WHAT ACTUALLY CARRIES THIS SIGNAL is the `logger` line: LOG_TAG is `ci-deploy`, which IS in
+# vector.toml's [sources.host_scripts_journald] SYSLOG_IDENTIFIER allowlist, so it reaches
+# Better Stack independent of any credential. That is the layer to cite (ADR-158; layer 3, not
+# the Sentry route), and it is why the line below is unconditional and the POST is not.
+#
+# Not fixed by baking SENTRY_* into cloud-init: web-1 carries lifecycle ignore_changes=[user_data]
+# (server.tf), so that would be true only for a future fresh host while reading as true today —
+# the delivery-is-not-activation trap this very ADR names. The residual (no Better Stack alert
+# rule on ZOT_GATE_DEGRADED, so the journald line is queryable but does not page) is stated in
+# the plan's Observability section rather than papered over here.
+#
+# Fail-open, same Sentry store transport as pull_failure_event — best-effort, never the only one.
 zot_gate_degraded_event() {
   local reason="$1" login_class="${2:-}" login_http="${3:-}" login_hatch="${4:-}"
-  logger -t "$LOG_TAG" "ZOT_GATE_DEGRADED: reason=$reason (configured but inactive — GHCR path)"
+  # Reason-accurate: `(configured but inactive)` is the exact inverse of `no_credential_source`,
+  # whose whole trigger is ZOT_REGISTRY_URL being UNSET. The enum already says which state this
+  # is; the parenthetical said the opposite for one of them and added nothing for the rest.
+  logger -t "$LOG_TAG" "ZOT_GATE_DEGRADED: reason=$reason (zot not in use for this deploy — GHCR path)"
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload
     # #6497: login_class + login_http make `login_failed` DIAGNOSABLE — it was one
@@ -1607,8 +1631,11 @@ zot_gate_and_login() {
       # probe_unreachable, creds_absent and login_failed all emit one, and this arm — the one the
       # 2026-08-01 second invocation actually took — emitted a journald line and returned 0.
       # Journald alone was not enough: the unit's own channel runs through vector, so "no errors"
-      # was indistinguishable from "not shipping". The Sentry beacon is the transport that does
-      # not depend on the credential that is missing.
+      # was indistinguishable from "not shipping". The answer to THAT is R3's absence helper,
+      # which reads the sink with a host-scoped positive control — not the Sentry beacon, which
+      # is inert on this arm because its DSN components ship in the very file that is missing
+      # here (see zot_gate_degraded_event's header). The durable carrier for this line is the
+      # `ci-deploy` journald tag, which vector.toml allowlists.
       #
       # Control flow is UNCHANGED — still `return 0`, still fail-open. Converting this to a
       # terminal abort is #7103 B1 and is deliberately out of scope: a new abort path here would
@@ -2399,14 +2426,29 @@ fi
 # when the upstream poll ceiling is shorter than the realistic deploy
 # window.
 # --- #7103 R1: make the invocation say who it is ---------------------------------------
-# On the 2026-08-01 recovery the SAME host emitted, 73 seconds apart, both tagged ci-deploy
-# under webhook.service:
-#   18:45:26  ZOT_GATE: active — docker login 10.0.1.30:5000 ok (zot-primary)   ← deployed
-#   18:46:39  ZOT_GATE: ZOT_REGISTRY_URL unset — GHCR path (dark, pre-provisioning)
-#   18:47:03  IMAGE_PULL_FAIL: ref=ghcr.io/…:v0.247.5 result=auth_denied recovery_stage=refetch_unavailable
-# Two invocation paths on ONE host with DIFFERENT environments, and nothing in the record said
-# which path either invocation came from. It was harmless only by coincidence — prod already
-# held that tag and the fall-through target was an already-revoked GHCR read PAT.
+# On the 2026-08-01 recovery these three lines were emitted within 97 seconds, all tagged
+# ci-deploy under webhook.service — re-queried from Better Stack rather than recalled:
+#   18:45:26  soleur-web-platform  ZOT_GATE: active — docker login 10.0.1.30:5000 ok (zot-primary)
+#   18:46:39  soleur-web-2         ZOT_GATE: ZOT_REGISTRY_URL unset — GHCR path (dark, pre-provisioning)
+#   18:47:03  soleur-web-2         IMAGE_PULL_FAIL: ref=ghcr.io/…:v0.247.5 result=auth_denied recovery_stage=refetch_unavailable
+#
+# CORRECTION, AND IT MATTERS FOR WHAT THIS MARKER IS FOR. An earlier draft of this comment read
+# "the SAME host emitted, 73 seconds apart ... two invocation paths on ONE host". That is wrong:
+# host_name, _MACHINE_ID and _BOOT_ID all differ, and the two are joined by the fan-out line
+# `FANOUT: peer 10.0.1.11 accepted deploy (HTTP 202)`. The misattribution was itself produced by
+# the R3 defect this PR fixes — betterstack-query.sh has no --host flag and its --grep terms
+# OR-combine, so a two-host sequence renders as one host's timeline.
+#
+# So `host_name` already answered "which host", and this marker is NOT needed for that. What the
+# record genuinely could not say is which INVOCATION PATH (hook) and which SCRIPT REVISION
+# produced a given line — hence hook= and script_sha=, which no sink field supplies. Overstating
+# the gap would have justified a field nobody needs.
+#
+# It was harmless only by coincidence — prod already held that tag and the fall-through target
+# was an already-revoked GHCR read PAT. Note web-2's text does not match either arm in this file
+# even at HEAD, so it is running a ci-deploy.sh that predates main and will not emit this marker
+# at all; that host's stale-script and unprovisioned-ZOT_REGISTRY_URL state is #7103 B4, filed
+# separately and deliberately not widened into this PR.
 #
 # Emitted AFTER the credential-read block and BEFORE the flock, so it reports credential state
 # at the point of USE rather than at parse time. Four fields, deliberately not six: `peers` is

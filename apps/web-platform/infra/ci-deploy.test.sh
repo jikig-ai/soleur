@@ -5840,6 +5840,78 @@ if [[ -s "$MOCK_SLEEP_CAP_MARKER" ]]; then
 fi
 rm -f "$MOCK_SLEEP_CAP_MARKER"
 
+# ---------------------------------------------------------------------------------------------
+# #7103 R1 — `no_credential_source` is EXECUTED, not grepped.
+#
+# This arm had ZERO coverage anywhere in the repo: `grep -rn no_credential_source` found it only
+# in ci-deploy.sh itself. It is the arm the 2026-08-01 incident actually took, and the only one
+# that fires with ZOT_REGISTRY_URL unset.
+#
+# It is executed rather than source-matched because the property under test is a RUNTIME one, and
+# the comment above the emitter used to assert its opposite: it claimed the Sentry beacon was
+# "credential-INDEPENDENT by construction" and therefore "the one transport that survives this
+# exact failure". It is not — the DSN components ship in /etc/default/soleur-doppler-token, the
+# same file whose absence raises this reason, so on the credential-absent path the guard is false
+# and nothing is posted. A grep of the function body cannot tell those two worlds apart; running
+# it with SENTRY_* unset can, and that is what the first arm below pins.
+# ---------------------------------------------------------------------------------------------
+echo "--- #7103 R1: no_credential_source emits on a credential-independent channel ---"
+ZGD_TMP="$(mktemp -d)" || exit 2
+{
+  awk '/^zot_gate_degraded_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT"
+} > "$ZGD_TMP/fn.sh"
+
+cat > "$ZGD_TMP/harness.sh" <<'HARNESS'
+set -uo pipefail
+LOG_TAG="ci-deploy"
+HOST_ID="test-host"
+logger() { printf '%s\n' "$*" >> "$ZGD_TMP/logger.calls"; }
+curl()   { printf 'CURL %s\n' "$*" >> "$ZGD_TMP/curl.calls"; return 0; }
+# shellcheck source=/dev/null
+. "$ZGD_TMP/fn.sh"
+zot_gate_degraded_event no_credential_source
+HARNESS
+
+# Arm 1 — the incident state: no credential file, so no SENTRY_* in the environment.
+: > "$ZGD_TMP/logger.calls"; : > "$ZGD_TMP/curl.calls"
+( export ZGD_TMP; env -u SENTRY_INGEST_DOMAIN -u SENTRY_PROJECT_ID -u SENTRY_PUBLIC_KEY \
+    ZGD_TMP="$ZGD_TMP" bash "$ZGD_TMP/harness.sh" ) >/dev/null 2>&1
+
+TOTAL=$((TOTAL + 1))
+if grep -q 'ZOT_GATE_DEGRADED: reason=no_credential_source' "$ZGD_TMP/logger.calls"; then
+  PASS=$((PASS + 1)); echo "  PASS: the journald marker fires with SENTRY_* absent (the credential-independent carrier)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: no ZOT_GATE_DEGRADED marker on the credential-absent path — this arm has no surviving signal"
+fi
+
+TOTAL=$((TOTAL + 1))
+if [[ -s "$ZGD_TMP/curl.calls" ]]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: a Sentry POST was attempted with SENTRY_* unset — the guard is not doing what it claims"
+else
+  PASS=$((PASS + 1)); echo "  PASS: no Sentry POST is attempted with SENTRY_* unset (the beacon is inert here, as documented)"
+fi
+
+# Arm 2 — THE OTHER DIRECTION. Without it the pair above is satisfied by an emitter that never
+# posts at all, and the "beacon is inert on THIS path specifically" claim would be untestable.
+: > "$ZGD_TMP/logger.calls"; : > "$ZGD_TMP/curl.calls"
+( ZGD_TMP="$ZGD_TMP" SENTRY_INGEST_DOMAIN="o0.ingest.example" SENTRY_PROJECT_ID="1" \
+    SENTRY_PUBLIC_KEY="k" bash "$ZGD_TMP/harness.sh" ) >/dev/null 2>&1
+
+TOTAL=$((TOTAL + 1))
+if grep -q 'CURL .*o0\.ingest\.example' "$ZGD_TMP/curl.calls"; then
+  PASS=$((PASS + 1)); echo "  PASS: the Sentry POST DOES fire when the DSN components are present"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: no Sentry POST even with SENTRY_* set — the emitter is dead in both directions"
+fi
+
+TOTAL=$((TOTAL + 1))
+if grep -q 'reason=no_credential_source (zot not in use' "$ZGD_TMP/logger.calls"; then
+  PASS=$((PASS + 1)); echo "  PASS: the marker's parenthetical is reason-accurate (not 'configured but inactive')"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: the marker still describes no_credential_source as 'configured but inactive', its exact inverse"
+fi
+rm -rf "$ZGD_TMP"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
