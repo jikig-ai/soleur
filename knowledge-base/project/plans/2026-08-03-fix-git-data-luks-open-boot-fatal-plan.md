@@ -57,7 +57,7 @@ The fix is small; the discipline around it is not. Three things make this plan l
 
 ## Hypotheses
 
-The `hr-ssh-diagnosis-verify-firewall` network-outage checklist does **not** fire: no SSH/handshake/timeout/unreachable symptom, and no `provisioner`/`connection` block exists in either Terraform root (`rehearsal.tf:167-172` states the cloud-init-only posture explicitly).
+The `hr-ssh-diagnosis-verify-firewall` checklist does **not** fire on the *prose* trigger: no SSH/handshake/timeout/unreachable symptom, and neither Terraform root carries a `provisioner`/`connection` block (`rehearsal.tf:167-172` states the cloud-init-only posture explicitly). It **does** fire on the resource-shape trigger via the merge-time apply — dispositioned in the deep-dive below.
 
 Verdicts below are stated against the discriminator that produced them. Nothing is marked CONFIRMED on reasoning alone.
 
@@ -69,6 +69,19 @@ Verdicts below are stated against the discriminator that produced them. Nothing 
 | H4 | The `-O quota,project` filesystem is unmountable *in general* | **REFUTED** | Privileged-container probe, four arms (`-O quota,project`, `-O quota`, `-O quota,project` + `-o prjquota`, plain) over a real loop device + `luksFormat`/`luksOpen`, kernel `7.0.0-28-generic`: **all four mounted, rc=0**, `dmesg` showing `Quota mode: journalled`. The defect is kernel-dependent, not filesystem-dependent. **This is why a container-based runtime guard cannot fail on the unfixed template.** |
 | H5 | The `quota` superblock feature forces `ext4_enable_quotas()` at mount; the target image has no `quota_v2` to load, so `find_quota_format` returns NULL and `dquot_load_quota_sb` returns `-ESRCH` | **CONFIRMED**, modulo A1 below | (a) Errno match: `mount(2)` = `ESRCH`, `mount(8)` rc=32 — both measured on the host. (b) Ubuntu `noble` Contents index: `fs/quota/quota_v2.ko.zst` is in `linux-modules-extra-*-generic` only; `ext4.ko` has no generic row (built in) as a working control for the grep. (c) `CONFIG_QFMT_V2=m` on the generic kernel. (d) **Ubuntu 24.04 server cloud image manifest** (`ubuntu-24.04-server-cloudimg-amd64.manifest`, 664 packages): `linux-image-virtual`, `linux-modules-6.8.0-136-generic` present; **`linux-modules-extra-*` ABSENT**; no `quota` userspace package either. (e) Fleet natural experiment: `cloud-init-registry.yml:790` and `workspaces-cutover.sh:1042` `mkfs` **without** quota features on the same image and mount successfully in production; git-data is the only one that sets them and the only one that fails at mount. |
 | A1 | **Assumption, not yet discharged:** Hetzner's `ubuntu-24.04` image *is* the stock Ubuntu cloud image (or at least shares its `linux-modules-extra`-absent package set) | **OPEN** | Every observable is consistent with it, and no cheap probe closes it without either SSH (forbidden, `hr-no-ssh-fallback-in-runbooks`) or a paid host (forbidden by scope). **Phase 1 therefore requires a fix that is correct whether or not A1 holds** — see the Fix-selection rule. |
+
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+The gate fires on the **resource-shape trigger**, not the prose trigger: merging this PR runs `apply-web-platform-infra.yml`, whose push-time `-target` set includes `terraform_data.git_data_probe_install` — a resource carrying `connection { type = "ssh" }` plus `provisioner "file"`/`remote-exec` against live `web-1` (`server.tf:733-765`). Per `hr-ssh-diagnosis-verify-firewall` the L3→L7 order is mandatory, so each layer is dispositioned rather than skipped. Telemetry emitted.
+
+| Layer | Status for this change | Verification artifact |
+|---|---|---|
+| **L3 — firewall allow-list / egress IP** | **Not reached.** The provisioner only runs if the resource replaces, and its `triggers_replace` hashes exactly `web-git-data-probe.{sh,service,timer}` + the probe service token (`server.tf:737-743`). None is in Files to Edit. | Read of `triggers_replace` inputs vs. this plan's Files-to-Edit list — a set intersection, verified empty. |
+| **L3 — DNS / routing** | **Not reached**, same reason. | As above. |
+| **L7 — TLS / proxy** | **Not applicable.** No HTTPS surface changes; the git-data host's own egress (Sentry, Better Stack, Doppler CDN, GitHub) is unchanged by this plan. | The emitter's `curl` invocations are untouched (Phase 1 edits the LUKS heredoc and the detail file, not the emitter's transport). |
+| **L7 — application** | **This is where the defect lives**, and it is not a network fault at all: `mount(2)` returned `ESRCH` from the ext4/quota subsystem on a host with working egress (it had already downloaded the Doppler CLI over the network and shipped two events off-box). | The fatal reached **both** Sentry and Better Stack from the failing host, which is itself proof that L3/L4/L7 egress was healthy at the moment of failure. |
+
+**Conclusion: no network hypothesis is live, and the discharge is by scope rather than by assumption.** If a future revision adds any of `web-git-data-probe.{sh,service,timer}` to Files to Edit, this discharge is void and the full L3→L7 checklist applies before any sshd/fail2ban-shaped hypothesis may be entertained.
 
 **What remains genuinely unknown**, stated so a later reader does not over-read this table: the untruncated `/var/log/cloud-init-output.log` (host destroyed by the workflow's `if: always()` teardown; the emitter ships only the last 180 bytes), the `dmesg` output the mount error points at, and any Better Stack rows for the 2026-07-30 run (aged out of a ~72 h retention floor — **unverifiable, not silent**).
 
@@ -355,7 +368,7 @@ discoverability_test:
       ORDER BY dt DESC LIMIT 50 FORMAT JSONEachRow"
   expected_output: for a healthy boot, one stage:boot_complete row for the host; for a
                    failed boot, a level:fatal row whose `detail` names the failing command.
-                   No ssh anywhere in this path.
+                   This path never shells out over SSH.
 ```
 
 **Affected-surface note (§2.9.2).** The git-data host is a blind execution surface by construction — deny-all firewall, no console, no log shipper, no SSH from CI. Every `detection` above is an **in-surface** probe: the event is emitted *from* the failing host, not inferred from a host-side gate. The `stage` tag is the discriminator, and Phase 1's change makes a single event carry enough to separate the competing hypotheses (which command, what errno, what the kernel said) rather than only that *something* failed — the exact gap that made #7204 cost a hand-written query to diagnose.
