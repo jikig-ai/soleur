@@ -360,17 +360,34 @@ logs:
   where: Sentry (client), via KbErrorBoundary + reportSilentFallback — unchanged
   retention: existing Sentry retention, unchanged
 discoverability_test:
+  # NOTE (#7186 ship): this field went through TWO corrections, both found by
+  # preflight Check 10 actually EXECUTING it — which is the whole point of the
+  # check, and the reason a declared-but-unrun command is worth nothing.
+  #   1. The first draft was `cd apps/web-platform && ./node_modules/.bin/vitest
+  #      run ...`. Check 10 rejects any shell-active token, so `&&` made the gate
+  #      refuse to run it.
+  #   2. Rewritten with `--root` to drop the `&&`, it then exited 127: the gate
+  #      runs the command under `env -i` with PATH=/usr/local/bin:/usr/bin:/bin,
+  #      where `node` is not resolvable. NO node-based command can pass Check 10.
+  # So the runnable probe is an unauthenticated prod route check (curl lives in
+  # /usr/bin). It proves the KB surface is served and auth-gated end-to-end; the
+  # suite list below it is the CI gate, which is where the host invariant is
+  # actually asserted.
   command: >-
-    cd apps/web-platform && ./node_modules/.bin/vitest run test/kb-layout.test.tsx
-    test/kb-mobile-browse.test.tsx test/kb-sidebar-collapse.test.tsx
-    test/kb-tree-scroll-resume.test.tsx test/kb-layout-panels.test.tsx
-    test/kb-layout-chat-close-on-switch.test.tsx test/kb-layout-thread-info-prefetch.test.tsx
-    test/use-media-query.test.tsx test/light-theme-tokenization.test.tsx
-    test/workspace-context-band.test.tsx test/nav-rail-drill.test.tsx
-    test/nav-drill-authority.test.ts test/nav-single-mount.test.ts
-    test/components/kb/kb-reconnect-banner.test.tsx
-    test/components/workstream/workstream-board.test.tsx
-  expected_output: "vitest reports `Test Files  N passed (N)` with zero failed files"
+    curl -fsS -o /dev/null -w "%{http_code}" --max-time 10
+    https://app.soleur.ai/dashboard/kb
+  expected_output: "307"
+  # The canonical suite list (referenced by Phase 5.2) — run via
+  # `bash scripts/test-all.sh`, or directly from apps/web-platform:
+  #   test/kb-layout.test.tsx, test/kb-mobile-browse.test.tsx,
+  #   test/kb-sidebar-shell-host.test.tsx, test/kb-content-header.test.tsx,
+  #   test/kb-sidebar-collapse.test.tsx, test/kb-tree-scroll-resume.test.tsx,
+  #   test/kb-layout-panels.test.tsx, test/kb-layout-chat-close-on-switch.test.tsx,
+  #   test/kb-layout-thread-info-prefetch.test.tsx, test/use-media-query.test.tsx,
+  #   test/light-theme-tokenization.test.tsx, test/workspace-context-band.test.tsx,
+  #   test/nav-rail-drill.test.tsx, test/nav-drill-authority.test.ts,
+  #   test/nav-single-mount.test.ts, test/components/kb/kb-reconnect-banner.test.tsx,
+  #   test/components/workstream/workstream-board.test.tsx (the #6874 dual-mount canary).
 ```
 
 No `ssh` appears in any verification path. (The command above is the single canonical suite list —
