@@ -100,7 +100,34 @@ this challenge. It should ship regardless of the outcome.
 **Class:** User-Challenge (contradicts explicit operator direction)
 **Raised by:** the plan-time engineering consult, then independently by `dhh-rails-reviewer` and
 `spec-flow-analyzer`. Three reviewers, three different arguments, same conclusion.
-**Status:** recorded; operator direction followed in the plan (both rules tagged)
+**Status:** **RESOLVED 2026-08-03 (PR #7194, closes #7174) — the challenge was upheld.** The
+operator reversed the original direction and untagged
+`wg-when-deferring-a-capability-create-a`; `wg-block-pr-ready-on-undeferred-operator-steps` keeps
+the marker. Ack row recorded in `.claude/rule-weakening-acks.txt`; ADR-155 amended.
+
+> **Disposition detail — the reviewers were right, but not for the reason they gave.**
+>
+> The challenge rested partly on "this rule covers the largest category of filings, so the gate
+> becomes advisory in practice." A 30-day measurement (2026-08-03) **refuted** that: of 256 merged
+> PRs with closing-or-filing activity, 138 block at `NET > 0`; tagging both rules flips 8 (5.8%)
+> under strict label-only classification and 32 (23.2%) under a deliberately over-inclusive keyword
+> proxy, versus 2 (1.4%) / 10 (7.2%) for the first rule alone. So **77–94% of blocked PRs still
+> block either way**, and the ">half" bar #7174 itself set was not met. (Method: 178 of 256
+> deferral classifications came from the keyword proxy, not the label — hence a bounded range.)
+>
+> The **decisive** argument was the reviewers' other one: *nothing writes the claim.* Every writer
+> emits `wg-block-pr-ready-on-undeferred-operator-steps` literally (`ship/SKILL.md` Phase 5.5,
+> `work/SKILL.md` operator-only deferral row); no writer anywhere emits
+> `Mandated-By: wg-when-deferring-a-capability-create-a`, so citing it would have been hand-authored
+> free-form text — the shape the closed vocabulary exists to prevent.
+>
+> Full measurement and method:
+> `knowledge-base/project/learnings/2026-08-03-an-issues-diagnosis-is-a-hypothesis-measure-the-failure-set-first.md`.
+
+> **DC-2 (the `reason=` token alternative) was DECLINED** in the same operator decision. The
+> corpus-marker mechanism stands unchanged: the self-serve constraint is unaltered, and ADR-155
+> already records honestly that the marker buys a closed vocabulary and per-rule attribution rather
+> than tamper-evidence.
 
 ### The operator's stated direction
 

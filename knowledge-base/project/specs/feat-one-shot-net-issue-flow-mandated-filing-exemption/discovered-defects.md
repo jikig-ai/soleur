@@ -7,8 +7,33 @@ Phase 4 net-flow filing gate has a work-list rather than a memory.
 
 ## DD-1 — `lint-agents-enforcement-tags.py` lints a file that no longer holds the tags
 
-**Status:** pre-existing, unrelated subsystem, NOT fixed in this PR → **filed as #7172**
-(verified OPEN, `type/chore`, milestone `Post-MVP / Later`).
+**Status:** **RESOLVED 2026-08-03 in PR #7194 (closes #7172, #6751, #4622).**
+Originally: pre-existing, unrelated subsystem, NOT fixed in this PR → filed as #7172.
+
+> **Diagnosis correction (recorded because the filed issue propagated it).**
+> The account below is accurate that the gate validated nothing, but its
+> explanation and its prescribed remedy were both wrong, and #7172 inherited
+> them:
+>
+> - **The default was not the whole cause.** `lefthook.yml` already passed
+>   `AGENTS.md AGENTS.rules.md` explicitly. The real defect was that the linter
+>   ran in **no CI workflow at all** — pre-commit was the only site that saw
+>   the real corpus, so `--no-verify` (or any bot commit) let `main` drift.
+> - **"12 unresolved, ten of them wording drift" was wrong.** Live count was
+>   **13**. Only **2** were wording drift (one a single capital letter). **9**
+>   were parser-grammar limits — the corpus uses `/` for a skill list, ` + `
+>   for enforcer segments, and file-form tokens for lib/test enforcers, none of
+>   which the one-skill-one-anchor grammar could express. The 13th was the
+>   linter parsing the `> **Tag legend.**` blockquote *this very PR added*.
+> - **Zero tags named a nonexistent skill.** `components.test.ts` and
+>   `workflow-fidelity.ts` name real files; `SKILL_TAG_RE` captured their
+>   leading `[a-z][a-z0-9-]*` and mistook the prefix for a skill slug. The
+>   "retire the rule or repoint the tag" disposition would have been applied to
+>   two tags that were already correct.
+>
+> Every enforcer named by all 13 tags exists and enforces. The fix extends the
+> parser (ADR-160) and adds a vacuity floor, needing **zero** rule-body edits
+> for this defect — not the "three or more ack rows" #7172 budgeted.
 
 The linter's argparse default is `["AGENTS.md"]`. ADR-151 made `AGENTS.md`
 pointer-only and moved every rule body — and therefore every `[skill-enforced:]`

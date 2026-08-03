@@ -61,9 +61,9 @@ FAIL=0
 # the entire mutation battery -- the suite's own anti-vacuity mechanism -- and still exited 0.
 # A part-level floor makes that a loud "Part C shrank" instead of a silent pass, and gives a
 # better failure message than a total ever could.
-MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-106}"
+MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-117}"
 MIN_A="${DRIFT_MIN_A:-57}"
-MIN_B="${DRIFT_MIN_B:-38}"
+MIN_B="${DRIFT_MIN_B:-49}"
 MIN_C="${DRIFT_MIN_C:-11}"
 COUNT_A=0
 COUNT_B=0
@@ -436,7 +436,7 @@ STUB
 # Emits key=value lines the shell can read. Every step selector asserts exactly-one
 # cardinality, so a rename fails loudly instead of extracting nothing.
 PYEXTRACT='
-import sys, yaml, json, re
+import sys, os, yaml, json, re
 
 wf_path, rel_path = sys.argv[1], sys.argv[2]
 try:
@@ -569,15 +569,111 @@ if hb:
     emit("HEARTBEAT_IF", norm(hb[0].get("if", "")))
 
 # --- B8: pathspec parity vs the release workflow -----------------------------
+#
+# The critical path is NOT a serial sum (#7160). `release` and `await-ci` declare no `needs:`,
+# so they run in PARALLEL and the declared bound is:
+#     max(release, await-ci) + migrate + verify-migrations + deploy
+#
+# Two properties this computation must preserve, both previously violated in the UNSAFE
+# direction:
+#
+#  1. A MISSING `timeout-minutes` means the GitHub 360-minute default, never 0. The old
+#     `int(x or 0)` read a DELETED ceiling as zero, so removing the 90 on `deploy` silently
+#     LOWERED the computed bound and B9 stayed green. The 360 default is applied uniformly to
+#     all five jobs -- simpler than a special case, and it closes four more silent-green holes.
+#  2. The ceiling for `release` lives in the CALLEE (a `uses:` job cannot declare
+#     timeout-minutes -- the GitHub schema rejects it), so it is read from whatever workflow
+#     jobs.release `uses:`. Resolved from `uses:` rather than hardcoded: repointing that key at
+#     another workflow must not leave this reading a stale value and passing green.
+DEFAULT_JOB_TIMEOUT_MIN = 360
 try:
     rel = yaml.safe_load(open(rel_path))
-    pf = ((rel.get("jobs") or {}).get("release") or {}).get("with", {}).get("path_filter", "")
-    emit("RELEASE_PATH_FILTER", pf)
     rjobs = rel.get("jobs") or {}
-    tot = 0
-    for j in ("await-ci", "migrate", "verify-migrations", "deploy"):
-        tot += int((rjobs.get(j) or {}).get("timeout-minutes") or 0)
-    emit("RELEASE_SERIAL_TIMEOUT_SUM", tot)
+    rel_release = rjobs.get("release") or {}
+    pf = rel_release.get("with", {}).get("path_filter", "")
+    emit("RELEASE_PATH_FILTER", pf)
+
+    ceiling_err = ""
+
+    def job_timeout(name):
+        # Returns (value, error). Absent -> the GitHub default. Non-integer (an expression such
+        # as ${{ inputs.x }}) -> a NAMED error, never an uncaught traceback.
+        global ceiling_err
+        j = rjobs.get(name) or {}
+        if "timeout-minutes" not in j:
+            return DEFAULT_JOB_TIMEOUT_MIN
+        raw = j.get("timeout-minutes")
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            if not ceiling_err:
+                ceiling_err = "job %s has a non-integer timeout-minutes (%r)" % (name, raw)
+            return DEFAULT_JOB_TIMEOUT_MIN
+
+    # --- resolve the release ceiling out of the callee ---
+    release_ceiling = DEFAULT_JOB_TIMEOUT_MIN
+    uses = rel_release.get("uses") or ""
+    if not uses:
+        ceiling_err = "jobs.release declares no `uses:` -- release ceiling unverifiable"
+    elif not uses.startswith("./"):
+        # owner/repo/.github/workflows/x.yml@ref -- genuinely not verifiable from this repo.
+        # Fail CLOSED with a message that says so, rather than a raw FileNotFoundError.
+        ceiling_err = "remote reusable workflow (%s) -- release ceiling unverifiable" % uses
+    else:
+        # Root at the SANDBOX root -- the directory containing .github/workflows/ -- not CWD and
+        # not the real repo. Under the Part-C mutation harness those differ.
+        # removeprefix, never lstrip("./"): lstrip is a CHARACTER-class strip that would mangle
+        # any "."-prefixed path segment.
+        callee_rel = uses.removeprefix("./")
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(rel_path))))
+        callee_path = os.path.join(root, callee_rel)
+        try:
+            callee = yaml.safe_load(open(callee_path))
+            cjob = ((callee.get("jobs") or {}).get("release") or {})
+            if "timeout-minutes" not in cjob:
+                release_ceiling = DEFAULT_JOB_TIMEOUT_MIN
+            else:
+                raw = cjob.get("timeout-minutes")
+                try:
+                    release_ceiling = int(raw)
+                except (TypeError, ValueError):
+                    ceiling_err = ("callee %s jobs.release has a non-integer timeout-minutes (%r)"
+                                   % (callee_rel, raw))
+        except Exception as e:
+            ceiling_err = ("could not read reusable workflow %s: %s"
+                           % (callee_rel, str(e).replace("\n", " ")))
+
+    crit = max(release_ceiling, job_timeout("await-ci"))
+    for j in ("migrate", "verify-migrations", "deploy"):
+        crit += job_timeout(j)
+
+    # Emitted AFTER every job_timeout call, not before. job_timeout also writes ceiling_err (an
+    # expression-valued timeout-minutes on any of the four caller-side jobs), so emitting above
+    # would publish a stale empty string and B8d would report "resolved fine" while a timeout was
+    # in fact unreadable. B9 still reds in that case -- the unreadable value defaults to 360, which
+    # inflates the path -- so this is a diagnosability gap, not a silent-green hole; but naming the
+    # unreadable input is the entire reason B8d exists. Verified by mutation.
+    emit("RELEASE_CEILING_MIN", release_ceiling)
+    emit("RELEASE_CEILING_ERROR", ceiling_err)
+    emit("RELEASE_CRITICAL_PATH_MIN", crit)
+
+    # --- topology guard (#7160) ---
+    # Uniform-360 closes the delete-a-VALUE hole but not the change-the-GRAPH hole: inserting a
+    # job before `deploy`, or raising the currently-dominated `verify-doppler-secrets` (10m) to
+    # 200, leaves the formula returning 195 while the real bound is larger. Pin the set of jobs
+    # with a needs-path to `deploy` so a topology change reds instead of being absorbed.
+    def needs_of(name):
+        n = (rjobs.get(name) or {}).get("needs") or []
+        return [n] if isinstance(n, str) else list(n)
+
+    seen, stack = set(), list(needs_of("deploy"))
+    while stack:
+        cur = stack.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        stack.extend(needs_of(cur))
+    emit("DEPLOY_NEEDS_CLOSURE", ",".join(sorted(seen)))
 except Exception as e:
     emit("RELEASE_PARSE_ERROR", str(e).replace("\n", " "))
 
@@ -621,6 +717,11 @@ for (_, st) in steps:
     for var in set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)(?::-[^}]*)?\}", body)):
         if var in env_keys or var in RUNNER_PROVIDED:
             continue
+        # The capture stays WIDE (guarded expansions included). A narrowing was tried and
+        # measured unnecessary: it silently dropped two real detections, because a deleted
+        # MISSING_SHAS or EXIT_CODE declaration degrades a diagnostic to a permanent
+        # placeholder without ever failing a step -- the QUIET half of the class this exists
+        # to catch, and exactly the half a guarded read creates.
         if re.search(r"^\s*(local\s+)?%s=" % var, body, re.M):
             continue
         undeclared.append("%s:%s" % (st.get("id") or st.get("name") or "?", var))
@@ -636,6 +737,16 @@ if undeclared:
 if runs:
     emit("EXTRACTED_KEYS", ",".join(sorted(set(
         re.findall(r"sed -n .s/\^([A-Z_]+)=//p", code(runs[0][1]))))))
+
+# --- the check step body, for EXECUTION rather than grepping --------------------
+# Every other Part B pin is a regex over source, which is right for declarative YAML (if:
+# conditions, fetch-depth, permissions) and wrong for imperative shell. A grep cannot see
+# ordering, cannot see a redirect to /dev/null, and cannot see which variable a `case`
+# actually tests -- all three shipped as survivable mutations. Emit the body so a Part A
+# assertion can run it.
+if runs:
+    with open(os.environ.get("DRIFT_STEP_BODY_OUT", "/dev/null"), "w") as fh:
+        fh.write(runs[0][1].get("run") or "")
 
 # --- B10: schedule + job timeout ---------------------------------------------
 on = wf.get("on", wf.get(True, {})) or {}
@@ -661,6 +772,7 @@ run_part_b() {
   pass "B0 the workflow file exists"
 
   local EX="$TMP/extract.env"
+  export DRIFT_STEP_BODY_OUT="$TMP/check-body.sh"
   if ! python3 -c "$PYEXTRACT" "$WORKFLOW" "$RELEASE_WORKFLOW" > "$EX" 2>"$TMP/extract.err"; then
     fail "B0b PyYAML extraction succeeded" "rc=0" "$(cat "$TMP/extract.err")"
     return 0
@@ -779,18 +891,43 @@ run_part_b() {
     fail "B8 checker present for pathspec parity" "a readable file" "absent"
   fi
 
+  # B8d -- the release ceiling was actually RESOLVED (#7160). Without this, an unreadable or
+  # remote `uses:` surfaced as an opaque `unbound variable` abort under set -u: caught, but
+  # undiagnosable. It also covers a case that did not exist before, because nothing resolved
+  # `uses:` before -- an unresolvable callee.
+  # `-` not `:-`: the SUCCESS value here is the empty string, and `:-` would substitute on it,
+  # turning every clean run into a <unset> mismatch. Only a genuinely absent key -- extraction
+  # never reached the emit -- should read as <unset>.
+  assert_eq "B8d the release ceiling resolves out of jobs.release.uses" "" "${X_RELEASE_CEILING_ERROR-<unset>}"
+
+  # B8e -- the critical-path TOPOLOGY is pinned. Uniform-360 catches a deleted ceiling but not
+  # a changed graph: insert a job before `deploy`, or raise the dominated verify-doppler-secrets
+  # (10m) to 200, and the formula still returns 195 while the real bound is larger.
+  assert_eq "B8e the set of jobs with a needs-path to deploy is unchanged" \
+    "await-ci,migrate,release,verify-doppler-secrets,verify-migrations" \
+    "${X_DEPLOY_NEEDS_CLOSURE:-<unset>}"
+
   # B9 -- threshold safety, in the SAFE direction: a pipeline timeout INCREASE fails the
   # suite, so the threshold can never silently become smaller than legitimate latency.
-  if [[ -n "${THRESH_MIN:-}" && "${X_RELEASE_SERIAL_TIMEOUT_SUM:-0}" =~ ^[0-9]+$ ]]; then
-    if [[ "$THRESH_MIN" -ge "${X_RELEASE_SERIAL_TIMEOUT_SUM}" ]]; then
-      pass "B9 threshold (${THRESH_MIN}m) >= release serial critical path (${X_RELEASE_SERIAL_TIMEOUT_SUM}m)"
+  #
+  # The compared value is a CRITICAL PATH with a max() term, not a serial sum: `release` and
+  # `await-ci` start in parallel, so it is max(release, await-ci) + migrate + verify-migrations
+  # + deploy. With `release` undeclared that is 495, not the 555 a serial reading gives.
+  #
+  # SCOPE (#7160): this bounds DECLARED EXECUTION only. The checker's own clock starts at the
+  # oldest undeployed commit's committer epoch, and runner queue wait, concurrency
+  # serialization between back-to-back merges, and push-to-start latency all sit outside any
+  # job timeout. The threshold's tolerance for those remains empirical, not provable.
+  if [[ -n "${THRESH_MIN:-}" && "${X_RELEASE_CRITICAL_PATH_MIN:-x}" =~ ^[0-9]+$ ]]; then
+    if [[ "$THRESH_MIN" -ge "${X_RELEASE_CRITICAL_PATH_MIN}" ]]; then
+      pass "B9 threshold (${THRESH_MIN}m) >= release declared critical path (${X_RELEASE_CRITICAL_PATH_MIN}m)"
     else
-      fail "B9 threshold >= release serial critical path" \
-        ">= ${X_RELEASE_SERIAL_TIMEOUT_SUM}" "$THRESH_MIN"
+      fail "B9 threshold >= release declared critical path" \
+        ">= ${X_RELEASE_CRITICAL_PATH_MIN}" "$THRESH_MIN"
     fi
   else
-    fail "B9 threshold and release timeouts both readable" "integers" \
-      "thresh=${THRESH_MIN:-<unset>} sum=${X_RELEASE_SERIAL_TIMEOUT_SUM:-<unset>}"
+    fail "B9 threshold and release critical path both readable" "integers" \
+      "thresh=${THRESH_MIN:-<unset>} path=${X_RELEASE_CRITICAL_PATH_MIN:-<unset>}"
   fi
 
   # B10 -- schedule/monitor coherence. A job timeout above the tick interval, combined with
@@ -816,6 +953,61 @@ run_part_b() {
   assert_eq "B12 the keys the workflow extracts are exactly the keys the checker emits" \
     "$(grep -oE '^\s*echo "([A-Z_]+)=' "$SUT" | grep -oE '[A-Z_]+' | sort -u | paste -sd, -)" \
     "${X_EXTRACTED_KEYS:-<none>}"
+
+  # B13 -- the run-log echo, EXECUTED rather than grepped.
+  #
+  # The three assertions this replaces pinned spelling, and review demonstrated three
+  # rewrites that satisfied all of them while breaking the property: redirecting the loop to
+  # /dev/null and re-adding the whole-blob form under a different quoting of the same
+  # variable; testing the `case` on the RAW line instead of the sanitised one (so a leading
+  # control byte escapes the marker); and duplicating the printf. All three left the suite
+  # green. A grep over shell cannot see a redirect, an ordering, or which variable is tested.
+  #
+  # So: run the shipped step's own sanitiser and loop against a hostile fixture and assert
+  # the OUTPUT. The fixture carries, on purpose, a control byte before a workflow command --
+  # the exact input that distinguishes sanitise-then-classify from classify-then-sanitise.
+  if [[ -s "$TMP/check-body.sh" ]]; then
+    local fnsrc loopsrc probe out13
+    fnsrc="$(awk "/strip_log_injection\(\) \{/,/^\}/" "$TMP/check-body.sh")"
+    loopsrc="$(awk '/^printf .*while IFS= read/,/^done/' "$TMP/check-body.sh")"
+    if [[ -n "$fnsrc" && -n "$loopsrc" ]]; then
+      probe="$TMP/echo-probe.sh"
+      {
+        printf '%s\n' "$fnsrc"
+        printf '%s\n' 'out="$(printf "A=1\n\001::stop-commands::PWNED\nfoo ##[stop-commands]y\nsafe\r::stop-commands::CRSPOOF\n##[#[stop-commands]DOUBLE\nkeep\tTAB\nbell\007gone")"'
+        printf '%s\n' "$loopsrc"
+      } > "$probe"
+      out13="$(bash "$probe" 2>&1)"
+
+      assert_eq "B13 the echo preserves every line (no whole-blob collapse)" \
+        "7" "$(printf '%s\n' "$out13" | grep -c .)"
+      assert_eq "B13b no line reaches column 0, so ::-form workflow commands cannot parse" \
+        "0" "$(printf '%s\n' "$out13" | grep -c '^::' || true)"
+      assert_eq "B13c the legacy ##[ form is broken even mid-line (IndexOf has no position test)" \
+        "0" "$(printf '%s\n' "$out13" | grep -cF '##[' || true)"
+      assert_contains "B13d a control byte BEFORE a command does not smuggle it past the marker" \
+        "^drift\| ::stop-commands::PWNED$" "$out13"
+      assert_contains "B13e TAB survives (it is \\011, inside the old strip range)" \
+        "keep	TAB" "$out13"
+      assert_not_contains "B13f other control bytes still die" "$(printf 'bell\007gone')" "$out13"
+      # CR is not cosmetic: .NET ReadLine treats a bare \r as a line terminator, so a surviving
+      # one makes the RUNNER re-split the line and everything after it lands at column 0 with no
+      # marker. An earlier draft preserved CR by accident while intending to preserve only TAB,
+      # defeating the marker on precisely the input it exists to stop.
+      assert_not_contains "B13h CR does not survive (it would let the runner re-split past the marker)" \
+        "$(printf '\r')" "$out13"
+      # A replacement that begins and ends with the character it escapes can re-form the token:
+      # `#[#` turned `##[#[` into `#[##[`, leaving an intact `##[` for IndexOf to find.
+      assert_not_contains "B13i the ##[ rewrite cannot re-form its own token" "##\\[" "$out13"
+      assert_eq "B13g each input line is emitted exactly once" \
+        "1" "$(printf '%s\n' "$out13" | grep -c 'A=1' || true)"
+    else
+      fail "B13 the check step exposes a sanitiser and a per-line loop" "both extractable" \
+        "fn=$([[ -n "$fnsrc" ]] && echo yes || echo no) loop=$([[ -n "$loopsrc" ]] && echo yes || echo no)"
+    fi
+  else
+    fail "B13 the check step body was extracted for execution" "a non-empty file" "absent"
+  fi
 
   # B10g -- monitor slug parity. A mismatched slug leaves the Sentry monitor permanently
   # green over a dead alarm: the worst shape available, since it looks like coverage.
@@ -867,6 +1059,27 @@ make_sandbox() {
   cp "$REPO_ROOT/.github/workflows/scheduled-prod-version-drift.yml" "$dst/.github/workflows/" || return 1
   cp "$RELEASE_WORKFLOW" "$dst/.github/workflows/web-platform-release.yml" || return 1
   cp "$MONITORS_TF" "$dst/apps/web-platform/infra/sentry/cron-monitors.tf" || return 1
+
+  # B8 resolves jobs.release.uses and reads the CALLEE's timeout-minutes, so the sandbox must
+  # carry the reusable workflow too. Without it every mutation child hits an unresolvable
+  # `uses:` -- and because each axis carries an expected-FAIL label, the whole battery would
+  # report green while testing nothing, which is exactly the false confidence Part C exists to
+  # remove (#7160 P10).
+  #
+  # Resolved FROM `uses:` rather than hardcoded, so repointing jobs.release.uses at a
+  # different callee cannot silently leave the sandbox carrying a stale file.
+  local reusable_rel
+  reusable_rel="$(python3 - "$RELEASE_WORKFLOW" <<'PY' 2>/dev/null
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1])) or {}
+u = ((d.get("jobs") or {}).get("release") or {}).get("uses") or ""
+print(u.removeprefix("./") if u.startswith("./") else "")
+PY
+  )" || return 1
+  if [[ -n "$reusable_rel" ]]; then
+    mkdir -p "$dst/$(dirname "$reusable_rel")" || return 1
+    cp "$REPO_ROOT/$reusable_rel" "$dst/$reusable_rel" || return 1
+  fi
   return 0
 }
 
