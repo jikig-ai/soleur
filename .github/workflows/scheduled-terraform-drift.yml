@@ -426,16 +426,23 @@ jobs:
       # comment: DEAD is acute and recurrence is signal, so it comments on the open
       # issue; coverage is a standing condition, so it does not.
       # ── COVERAGE HAS NO CHANNEL WITHOUT THIS ────────────────────────────
-      # A single-config scan reports `verdict: clean`, exits 0, and matches NO email
+      # A degraded scan can still report `verdict: clean`, exit 0, and match NO email
       # arm — `Enforce token-drift result` is gated on outcome == 'failure'. So the
       # only artifact is a ::warning:: on a GREEN cron run, which nobody opens. That
       # is `hr-no-dashboard-eyeball-pull-data-yourself`, and it is the same "clean bill
       # of health for a question never asked" shape the detector's own header condemns
       # — reproduced by the change that added the coverage signal.
       #
-      # CREATE-ONLY, not create-or-comment. Coverage is `single-config` on EVERY
-      # scheduled run until the token scope is widened, so the DEAD filer's
-      # comment-on-existing shape would post 730 comments a year.
+      # CREATE-OR-UPDATE-BODY, and never `gh issue comment`. Coverage is a STANDING
+      # condition — it holds on every run until the credential is repaired — so the DEAD
+      # filer's comment-on-existing shape would post 730 comments a year. But the
+      # create-only shape this replaces froze the issue at whichever state filed FIRST:
+      # dedup here is label-scoped rather than title-scoped, so a `single-config`-era
+      # issue would pin a stale title and a remedy this very change has already
+      # performed, and a `degraded` -> `unknown` transition (a different fault with a
+      # different remedy) would never be visible. `gh issue edit --body-file` rewrites
+      # the body in place: one issue, no comment stream, and the body always describes
+      # the CURRENT state.
       #
       # The precedent is the `heartbeat-live-reconcile` job's EMAIL step, which gates on
       # `steps.reconcile_issue.outputs.created == 'true'` — commented there as
@@ -463,10 +470,11 @@ jobs:
       # closing condition unsatisfiable. Every sibling arm in this job tests positively
       # (`== 'dead'`, `== 'unverifiable'`, `contains(...)`), which is exactly why they
       # are skip-safe. Match them: an empty output must match nothing.
-      - name: Open an action-required issue (token drift — narrow scan coverage)
+      - name: Open or update an action-required issue (token drift — coverage below the declared floor)
+        id: coverage_issue
         if: >-
           always()
-          && (steps.token_drift.outputs.coverage == 'single-config'
+          && (steps.token_drift.outputs.coverage == 'degraded'
               || steps.token_drift.outputs.coverage == 'unknown')
         continue-on-error: true
         timeout-minutes: 2
@@ -477,21 +485,41 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           COVERAGE: ${{ steps.token_drift.outputs.coverage }}
           CONFIGS: ${{ steps.token_drift.outputs.configs }}
+          CONFIGS_FLOOR: ${{ steps.token_drift.outputs.configs_floor }}
+          CONFIGS_EXPECTED: ${{ steps.token_drift.outputs.configs_expected }}
+          CONFIGS_UNREAD: ${{ steps.token_drift.outputs.configs_unread }}
+          COVERAGE_RATIO: ${{ steps.token_drift.outputs.coverage_ratio }}
+          INVENTORY_AGE_DAYS: ${{ steps.token_drift.outputs.inventory_age_days }}
           VERDICT: ${{ steps.token_drift.outputs.verdict }}
         run: |
           set -uo pipefail
           LABEL="token-drift-coverage"
           RUN_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+          # Every named ::error:: below ALSO sets this, and an ops-email step gates on
+          # it. Without that, a rate-limited or failed filer is a green cron run whose
+          # only artifact is an annotation nobody opens — the exact shape the block at
+          # the top of this section exists to eliminate, and one `continue-on-error:
+          # true` plus `exit 0` makes reachable.
+          echo "channel_failed=false" >> "$GITHUB_OUTPUT"
+
+          # A named ::error:: alone is not a channel. Each one arms the ops-email
+          # fallback below by flipping this step's output; GITHUB_OUTPUT takes the LAST
+          # assignment of a key, so this overrides the `false` written above.
+          fail_channel() {
+            echo "::error::$1"
+            echo "channel_failed=true" >> "$GITHUB_OUTPUT"
+          }
 
           # `unknown` is NOT a narrow scan — it is an unreadable or malformed verdict
-          # file, i.e. a detector that could not run. Filing it under the single-config
-          # title told the operator the scan was narrow (body: "read -1 Doppler
-          # config(s)") and prescribed widening the Doppler token, which fixes nothing
-          # on that path. That is verbatim the defect this workflow's `causes` handling
-          # exists to remove — one remedy for disjoint causes, unperformable for all but
-          # one of them, so the state never clears. It also mattered more than usual
-          # here: dedup is label-scoped and create-only, so whichever state filed FIRST
-          # permanently suppressed the other.
+          # file, i.e. a detector that could not run. Filing it under the degraded title
+          # would tell the operator the scan was narrow (body: "read -1 of -1") and
+          # prescribe a credential remedy, which fixes nothing on that path. That is
+          # verbatim the defect this workflow's `causes` handling exists to remove — one
+          # remedy for disjoint causes, unperformable for all but one of them, so the
+          # state never clears. It mattered more than usual under the create-only shape,
+          # where whichever state filed FIRST permanently suppressed the other; the
+          # update path below removes that, but the two classes still need distinct
+          # titles and leads because the actions differ.
           #
           # `unknown` keeps a channel rather than being dropped, because it is reachable
           # with a CLEAN verdict (well-formed JSON that simply lacks `configs`), and no
@@ -499,10 +527,10 @@ jobs:
           # the crash path.
           if [[ "$COVERAGE" == "unknown" ]]; then
             TITLE="[TOKEN DRIFT] The fan-out detector could not measure its own scan coverage"
-            LEAD="**The token-drift scan published an unreadable config count (\`${CONFIGS}\`).** Its verdict (\`${VERDICT}\`) is therefore unscoped — it is not a fleet-wide claim, and it is not evidence of a narrow scan either. This is a DETECTOR fault, not a token-scope fault: widening the Doppler token will not clear it."
+            LEAD="**The token-drift scan published an unreadable coverage measurement (\`configs=${CONFIGS}\`, \`floor=${CONFIGS_FLOOR}\`, \`ratio=${COVERAGE_RATIO}\`).** Its verdict (\`${VERDICT}\`) is therefore unscoped — it is not a fleet-wide claim, and it is not evidence of a narrowed credential either. This is a DETECTOR fault, not a credential fault: touching the Doppler identity will not clear it."
           else
-            TITLE="[TOKEN DRIFT] The fan-out detector is scanning one Doppler config"
-            LEAD="**The twice-daily Cloudflare token-drift scan read ${CONFIGS} Doppler config(s).**"
+            TITLE="[TOKEN DRIFT] The fan-out detector is reading fewer configs than it declared"
+            LEAD="**The twice-daily Cloudflare token-drift scan read ${COVERAGE_RATIO} Doppler configs, below its declared floor of ${CONFIGS_FLOOR}.** \`configs\` counts configs whose secret read SUCCEEDED, not configs the credential could list — a role that can enumerate but not read scores 0 here, which is the point."
           fi
 
           gh label create "$LABEL" \
@@ -516,16 +544,7 @@ jobs:
           LIST_RC=0
           EXISTING=$(gh issue list --label "$LABEL" --state open -L 5 --json number --jq '.[0].number // empty') || LIST_RC=$?
           if (( LIST_RC != 0 )); then
-            echo "::error::token_drift_coverage_list_failed — could not query open ${LABEL} issues (gh exit ${LIST_RC}); declining to create a possible duplicate. Narrow coverage reached no issue channel this run."
-            exit 0
-          fi
-          if [[ -n "$EXISTING" ]]; then
-            # Re-assert the labels before short-circuiting. The DEAD filer does this for
-            # a reason that applies with more force to a create-only step: if triage
-            # strips `action-required`, `operator-digest` stops harvesting the issue, and
-            # because this path never creates again the channel is lost permanently.
-            gh issue edit "$EXISTING" --add-label action-required --add-label priority/p1-high >/dev/null 2>&1 || true
-            echo "coverage issue #${EXISTING} already open — create-only, not commenting."
+            fail_channel "token_drift_coverage_list_failed — could not query open ${LABEL} issues (gh exit ${LIST_RC}); declining to create a possible duplicate. Coverage '${COVERAGE}' (${COVERAGE_RATIO}) reached no issue channel this run."
             exit 0
           fi
 
@@ -538,15 +557,32 @@ jobs:
           {
             echo "$LEAD"
             echo ""
-            echo "Coverage: \`${COVERAGE}\`  •  Verdict this run: \`${VERDICT}\`  •  Run: ${RUN_URL}"
+            echo "Coverage: \`${COVERAGE}\`  •  Ratio: \`${COVERAGE_RATIO}\`  •  Declared floor: \`${CONFIGS_FLOOR}\`  •  Verdict this run: \`${VERDICT}\`  •  Run: ${RUN_URL}"
             echo ""
+            if [[ "$COVERAGE" != "unknown" ]]; then
+              echo "Configs the committed inventory names but this run did NOT read:"
+              echo ""
+              echo "\`\`\`"
+              echo "${CONFIGS_UNREAD}"
+              echo "\`\`\`"
+              echo ""
+              echo "(\`-\` means none — the ratio is then at or above the floor by growth, and this"
+              echo "issue is here for the floor assertion rather than for an unread config.)"
+              echo ""
+              echo "The denominator comes from \`apps/web-platform/infra/doppler-config-inventory.txt\`"
+              echo "(${CONFIGS_EXPECTED} names, ${INVENTORY_AGE_DAYS} days old). It REPORTS and gates"
+              echo "nothing: a short, long or stale inventory changes this ratio and this list, and"
+              echo "changes no state. The gate is \`configs\` against the floor \`${CONFIGS_FLOOR}\`"
+              echo "declared in the workflow step's own \`env:\`."
+              echo ""
+            fi
             echo "### Why this matters"
             echo ""
             echo "This detector exists to catch **fan-out** drift. Its own header cites the cases"
             echo "that motivated it: \`CF_API_TOKEN_DNS_EDIT\` stale in **5 of 7** configs after a"
-            echo "dashboard roll, \`CF_API_TOKEN_PURGE\` in **6 of 7**. A scan that reads one config"
-            echo "cannot observe that class at all — it reports \`clean\` while every unread config"
-            echo "could hold a stale value."
+            echo "dashboard roll, \`CF_API_TOKEN_PURGE\` in **6 of 7**. A scan that reads a fraction"
+            echo "of the project cannot observe that class at all — it reports \`clean\` while every"
+            echo "unread config could hold a stale value."
             echo ""
             echo "A \`clean\` verdict from this workflow is therefore scoped to what was visible,"
             echo "not to the fleet. That also bounds the escalation added in #7133: an"
@@ -589,21 +625,43 @@ jobs:
             echo "re-files a fresh one within 12h — the dedup query matches OPEN issues only."
           } > "$BODY"
 
-          # Never echo success unconditionally, and never let the create's status vanish.
-          # `… 2>&1 | tail -2 || true` lost gh's exit code behind the pipe (tail exits 0)
-          # and then discarded what was left — so a failed create produced a GREEN step
-          # on a GREEN cron run with no issue filed and no annotation. Coverage has no
-          # email arm, so that is total loss of the one channel this step exists to be
-          # (`hr-no-dashboard-eyeball-pull-data-yourself`). The realistic triggers are the
-          # ones the DEAD filer below already enumerates: a renamed or closed milestone,
-          # an API 5xx, a secondary rate limit, or the best-effort `gh label create`
-          # above having failed so `--label "$LABEL"` is rejected.
-          if gh issue create --title "$TITLE" --body-file "$BODY" \
-               --label "$LABEL" --label action-required --label priority/p1-high \
-               --milestone "Post-MVP / Later"; then
-            echo "Filed a new action-required issue for narrow scan coverage (${COVERAGE})."
+          # Never echo success unconditionally, and never let the create's or the edit's
+          # status vanish. `… 2>&1 | tail -2 || true` lost gh's exit code behind the pipe
+          # (tail exits 0) and then discarded what was left — so a failed call produced a
+          # GREEN step on a GREEN cron run with no issue filed and no annotation. A clean
+          # verdict matches no email arm, so that is total loss of the one channel this
+          # step exists to be (`hr-no-dashboard-eyeball-pull-data-yourself`). The
+          # realistic triggers are the ones the DEAD filer below already enumerates: a
+          # renamed or closed milestone, an API 5xx, a secondary rate limit, or the
+          # best-effort `gh label create` above having failed so `--label "$LABEL"` is
+          # rejected.
+          if [[ -n "$EXISTING" ]]; then
+            # UPDATE THE BODY, do not comment. The body is rewritten on every state
+            # transition so the issue always describes the current state rather than the
+            # one that happened to file first — which is the defect the create-only shape
+            # had, and it is why dedup being label-scoped rather than title-scoped is
+            # safe here: a stale title from a retired coverage state is corrected in
+            # place by `--title`.
+            #
+            # THE LABEL RE-ASSERT IS A SEPARATE `|| true` CALL, deliberately. Folding
+            # `--add-label` into the body edit would swallow the body edit's exit status
+            # into the `|| true` that the label re-assert needs — and a failed body
+            # update freezes the issue at whichever state filed first, the exact defect
+            # this update path exists to remove. The re-assert itself matters because if
+            # triage strips `action-required`, `operator-digest` stops harvesting the
+            # issue, and while it is open the create path can never re-fire.
+            if gh issue edit "$EXISTING" --title "$TITLE" --body-file "$BODY"; then
+              echo "Rewrote the body of coverage issue #${EXISTING} for state '${COVERAGE}' (${COVERAGE_RATIO})."
+            else
+              fail_channel "token_drift_coverage_update_failed — gh issue edit could not rewrite issue #${EXISTING}. It is frozen at whatever state filed first, so it may now assert a coverage state (and a remedy) this run did not measure. Current state: ${COVERAGE} at ${COVERAGE_RATIO}."
+            fi
+            gh issue edit "$EXISTING" --add-label action-required --add-label priority/p1-high --add-label "$LABEL" >/dev/null 2>&1 || true
+          elif gh issue create --title "$TITLE" --body-file "$BODY" \
+                 --label "$LABEL" --label action-required --label priority/p1-high \
+                 --milestone "Post-MVP / Later"; then
+            echo "Filed a new action-required issue for coverage '${COVERAGE}' (${COVERAGE_RATIO})."
           else
-            echo "::error::token_drift_coverage_escalation_failed — gh issue create did not succeed. Narrow scan coverage (${COVERAGE}, ${CONFIGS} config(s)) reached NO channel this run: no issue exists, and a clean verdict matches no email arm."
+            fail_channel "token_drift_coverage_escalation_failed — gh issue create did not succeed. Coverage ${COVERAGE} (${COVERAGE_RATIO}, floor ${CONFIGS_FLOOR}) reached NO channel this run: no issue exists, and a clean verdict matches no email arm."
           fi
           rm -f "$BODY"
 
