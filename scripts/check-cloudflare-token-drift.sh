@@ -8,8 +8,11 @@
 # tunnel.tf, zot-registry.tf). That rule is deliberate — it stops refresh-time
 # churn — but it has a consequence nothing surfaces: **Terraform can never
 # propagate a rotated token**. `terraform apply` reports `No changes` while the
-# `prd` root config still holds the dead value, and every branch config that
-# inherits from root serves it too.
+# `prd` root config still holds the dead value — and so does every OTHER config
+# that carries its own copy. Branch configs do NOT inherit values from the `prd`
+# root config; measured 2026-08-02, `CF_API_TOKEN_DNS_EDIT` is carried
+# independently by seven configs. That is what makes the fan-out the problem
+# rather than a single stale copy.
 #
 # The failure is silent and delayed. Rotating a token in the Cloudflare
 # dashboard and updating `prd_terraform` looks completely successful — the
@@ -28,8 +31,35 @@
 # churn bug the comments say was hit before. Detection is the safer fix.
 #
 # USAGE
-#   doppler run -p soleur -c prd_terraform -- bash scripts/check-cloudflare-token-drift.sh
+#   DOPPLER_TOKEN=<a Doppler read credential> bash scripts/check-cloudflare-token-drift.sh
 #   bash scripts/check-cloudflare-token-drift.sh --json
+#
+# THE CREDENTIAL
+#   Exactly ONE credential, taken from DOPPLER_TOKEN, and there is deliberately no
+#   credential-iteration surface: this script loops over CONFIGS, never over credentials.
+#   The credential is snapshotted into a local and DOPPLER_TOKEN / DOPPLER_CONFIG are then
+#   UNSET, so every Doppler read has to name its config explicitly. A read site that
+#   forgets its `-c <cfg>` fails loudly instead of silently binding whatever config the
+#   ambient environment happened to carry — which, at 13 configs, would grade the wrong
+#   config's bytes and report a confident wrong answer.
+#
+#   An unset or EMPTY DOPPLER_TOKEN is a failed credential, never a fallback: the Doppler
+#   CLI treats an empty value as unset and rebinds to whatever ambient credential the
+#   runner carries. This script refuses to invoke the CLI at all in that state.
+#
+# COVERAGE LADDER (--configs-floor / --inventory)
+#   `coverage` is unknown | degraded | at-floor, evaluated in that order.
+#     degraded  configs < configs_floor  — the credential is missing, empty, revoked, or
+#               has been narrowed (role downgrade, environment scoping, or a swap back to
+#               a config-scoped token). Producible, and actionable.
+#     at-floor  configs >= configs_floor — `>=`, NOT `==`: the live config set is expected
+#               to grow, and growth must not red a twice-daily cron.
+#   `configs` counts configs whose secret-name read SUCCEEDED, not configs listed. A role
+#   that can enumerate but not read values would otherwise satisfy the floor while
+#   measuring nothing.
+#   The FLOOR gates. The INVENTORY (--inventory) gates NOTHING — it supplies only
+#   configs_expected, configs_unread and inventory_age_days. A short, long, stale or
+#   missing inventory changes the printed ratio and NO state.
 #
 # COVERAGE
 #   CF_API_TOKEN*             Cloudflare API tokens (single value, Bearer-verified).
@@ -70,6 +100,24 @@ ONLY_MATCH=""
 # obvious alternative and is wrong — it doubles the Cloudflare probes, which the calling
 # workflow's own comment forbids for exactly that reason.
 JSON_FILE=""
+# --configs-floor <n> is the coverage floor this invocation DEMANDS OF ITS OWN CREDENTIAL:
+# "the identity I was handed must reach at least this many configs". It is a DECLARATION,
+# not a measurement — a caller cannot be wrong about a number it declares — and it is the
+# only input that gates `coverage`.
+#
+# Default 1, so the three pre-existing call sites keep exactly their current behaviour and
+# only the scheduled token-drift step raises it. A denominator taken from the scan's own
+# credential would be satisfied by construction (a project-scoped credential lists the
+# project's true total, so `configs == expected` always holds and `degraded` would have no
+# producer) — which is why the gate compares against a declared floor and never against
+# the inventory.
+CONFIGS_FLOOR_RAW="1"
+# --inventory <path> supplies the DENOMINATOR and GATES NOTHING. It contributes
+# `configs_expected`, `configs_unread` and `inventory_age_days` to the verdict, and no
+# state anywhere depends on it: a short, long, stale or missing inventory changes the
+# printed ratio and nothing else. A denominator that gated would let a two-line file
+# derive the healthy state and silence the channel, which is the fail-open direction.
+INVENTORY_PATH=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --json) JSON_OUT=1; shift ;;
@@ -88,7 +136,23 @@ while [[ $# -gt 0 ]]; do
       # full fleet sweep, which is the opposite of what the caller asked for.
       [[ $# -ge 2 && -n "${2:-}" ]] || { echo "ERROR: --only requires a non-empty value" >&2; exit 2; }
       ONLY_MATCH="$2"; shift 2 ;;
-    *) shift ;;
+    --configs-floor)
+      [[ $# -ge 2 && -n "${2:-}" ]] || { echo "ERROR: --configs-floor requires a non-empty integer" >&2; exit 2; }
+      CONFIGS_FLOOR_RAW="$2"; shift 2 ;;
+    --inventory)
+      [[ $# -ge 2 && -n "${2:-}" ]] || { echo "ERROR: --inventory requires a non-empty path" >&2; exit 2; }
+      INVENTORY_PATH="$2"; shift 2 ;;
+    # An unrecognised argument is an ERROR, not something to skip. The previous
+    # `*) shift ;;` catch-all silently swallowed a typo, and every flag this script takes
+    # narrows or instruments the scan: a misspelled `--only` widens a scoped check back to
+    # a full sweep, and a misspelled `--inventory` silently drops the denominator and
+    # prints a caveat nobody asked for. Silent degradation is the defect class this whole
+    # script exists to remove; the argument loop should not be the one place that still
+    # commits it.
+    *)
+      echo "ERROR: unrecognised argument '$1'" >&2
+      echo "       Known flags: --json | --json-file <path> | --only <substring> | --configs-floor <n> | --inventory <path>" >&2
+      exit 2 ;;
   esac
 done
 
@@ -96,13 +160,284 @@ for bin in doppler curl python3; do
   command -v "$bin" >/dev/null 2>&1 || { echo "ERROR: $bin not on PATH" >&2; exit 2; }
 done
 
+# ── VERDICT STATE ───────────────────────────────────────────────────────────
+# Every variable emit_json reads is declared and initialised HERE, above the first
+# possible `exit 2`, because emit_json now runs BEFORE every one of them. It used to run
+# only on the success path, so a revoked credential produced no verdict file at all: the
+# caller parsed `configs` as -1, coverage landed on `unknown`, and `unknown`'s remedy
+# ("fix the verdict file first") is unperformable for a revoked credential. Publishing
+# first makes a revoked credential surface as `degraded` at 0/N — a state with a remedy —
+# instead of blinding the whole scan. The exit codes themselves are unchanged.
+CONFIGS=()             # every config name the credential ENUMERATED
+CONFIG_NAMES=()        # configs whose --only-names read SUCCEEDED — the `configs` count
+FAILED_CONFIGS=()      # enumerated but unreadable; contributes to configs_unread
+LIVE_N=0
+DEAD_N=0
+UNVERIFIABLE_N=0
+DEAD_ROWS=()
+UNVERIFIABLE_ROWS=()
+# Positive-work counter, incremented at every real probe. Declared here, beside the other
+# counters, because verify_value below already touches it and `set -u` makes a later
+# declaration a fatal ordering bug rather than a silent zero.
+PROBES_MADE=0
+CONFIGS_EXPECTED=-1    # -1 = no usable inventory. NEVER a gate; see the block below.
+INVENTORY_AGE_DAYS=-1
+INVENTORY_NAMES=()
+CONFIGS_UNREAD=()
+COVERAGE_RATIO="-"
+COVERAGE_CAVEAT=""
+VERDICT_PUBLISHED=""
+
+# The floor must PARSE. `unknown` is the fail-closed default of the ladder and this is its
+# one producer inside the detector: a floor that is not a non-negative integer means the
+# gate has no threshold, and deriving `at-floor` from an unparseable demand would be a
+# confident state drawn from garbage.
+CONFIGS_FLOOR=0
+FLOOR_OK=0
+if [[ "$CONFIGS_FLOOR_RAW" =~ ^[0-9]+$ ]]; then
+  CONFIGS_FLOOR="$CONFIGS_FLOOR_RAW"
+  FLOOR_OK=1
+fi
+
+# ── THE INVENTORY: A DENOMINATOR THAT REPORTS AND NEVER GATES ───────────────
+# Read once, here, so a file that appears or vanishes mid-scan cannot change the verdict
+# halfway through. Name syntax is `^[a-z0-9_]+$`, byte-identical to the repo-internal CI
+# check that pins the workflow's declared floor against this file's name count — the two
+# must count the same thing or the pin measures nothing.
+if [[ -n "$INVENTORY_PATH" ]]; then
+  if [[ -r "$INVENTORY_PATH" ]]; then
+    mapfile -t INVENTORY_NAMES < <(grep -E '^[a-z0-9_]+$' "$INVENTORY_PATH" | sort -u || true)
+    if (( ${#INVENTORY_NAMES[@]} > 0 )); then
+      CONFIGS_EXPECTED=${#INVENTORY_NAMES[@]}
+      # Staleness is bounded WITHOUT a credential: the header says when the file was
+      # generated, and a stale denominator prints a caveat rather than moving a state.
+      _inv_ts=$(grep -m1 -E '^#[[:space:]]*generated:' "$INVENTORY_PATH" | sed -E 's/^#[[:space:]]*generated:[[:space:]]*//' || true)
+      if [[ -n "$_inv_ts" ]]; then
+        INVENTORY_AGE_DAYS=$(python3 -c '
+import sys, datetime
+s = sys.argv[1].strip()
+try:
+    d = datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=datetime.timezone.utc)
+    print(int((datetime.datetime.now(datetime.timezone.utc) - d).total_seconds() // 86400))
+except Exception:
+    print(-1)
+' "$_inv_ts" 2>/dev/null || printf '%s' -1)
+      fi
+    else
+      COVERAGE_CAVEAT="inventory '$INVENTORY_PATH' carries no parseable config names — ratio unavailable; the floor still decides"
+    fi
+  else
+    COVERAGE_CAVEAT="inventory '$INVENTORY_PATH' is missing or unreadable — ratio unavailable; the floor still decides"
+  fi
+fi
+
+# ── THE LADDER ──────────────────────────────────────────────────────────────
+# Evaluation order is pinned: unknown -> degraded -> at-floor.
+#
+# The gate reads the FLOOR and the READ COUNT, and nothing else. `configs_expected` is
+# computed alongside it and is deliberately absent from every comparison below: the whole
+# point of the gate/report split is that a denominator can be short, long, stale or
+# missing without starting or stopping a single arm.
+compute_coverage() {
+  local n=${#CONFIG_NAMES[@]}
+  COVERAGE=unknown
+  if (( FLOOR_OK == 1 )); then
+    if (( n < CONFIGS_FLOOR )); then
+      COVERAGE=degraded
+    else
+      # `>=`, not `==`. The live config set is expected to grow (a new config at git-data
+      # birth, ephemeral rehearsal configs), and an equality gate would red a twice-daily
+      # cron the first time growth was legitimate. Growth pushes the ratio above 1 and
+      # changes no state.
+      COVERAGE=at-floor
+    fi
+  fi
+  if (( CONFIGS_EXPECTED >= 0 )); then
+    COVERAGE_RATIO="${n}/${CONFIGS_EXPECTED}"
+    if (( INVENTORY_AGE_DAYS > 90 )); then
+      COVERAGE_CAVEAT="inventory is ${INVENTORY_AGE_DAYS} days old (>90) — the denominator may no longer describe the project"
+    fi
+  else
+    # Absent, not fabricated. A `-` cannot be mistaken for a measurement, and it keeps the
+    # field non-empty so a whitespace-splitting consumer cannot shift its later fields.
+    COVERAGE_RATIO="-"
+  fi
+  # configs_unread = (inventory minus read) UNION (enumerated but unreadable), sorted and
+  # deduped. The second half matters on its own: a config that lists but whose secret read
+  # fails is the subtle form of a narrowed role, and it must be nameable even when no
+  # inventory was supplied at all.
+  CONFIGS_UNREAD=()
+  local want got seen
+  for want in ${INVENTORY_NAMES[@]+"${INVENTORY_NAMES[@]}"} ${FAILED_CONFIGS[@]+"${FAILED_CONFIGS[@]}"}; do
+    seen=0
+    for got in ${CONFIG_NAMES[@]+"${CONFIG_NAMES[@]}"}; do
+      [[ "$want" == "$got" ]] && { seen=1; break; }
+    done
+    (( seen == 0 )) && CONFIGS_UNREAD+=("$want")
+  done
+  if (( ${#CONFIGS_UNREAD[@]} > 0 )); then
+    mapfile -t CONFIGS_UNREAD < <(printf '%s\n' "${CONFIGS_UNREAD[@]}" | grep -v '^$' | sort -u || true)
+  fi
+}
+
+# Extracted so --json (stdout) and --json-file (file, alongside the human report) render
+# from ONE code path. Two renderers would be a second unsynchronized pin on the same
+# schema, which is how the two sides drift apart silently.
+emit_json() {
+  compute_coverage
+  # `split("|", 1)` — maxsplit 1, so a diagnostic containing a pipe cannot shift fields.
+  # Unverifiable rows get their own key rather than riding in "stale" with the diagnostic
+  # sentence mis-rendered into the "config" field.
+  #
+  # ARGV CONTRACT. ELEVEN positional scalars, then FOUR variable-length lists behind THREE
+  # DISTINCT sentinels. `rest.index("--")` returns the FIRST match, so one sentinel cannot
+  # separate more than two lists — a second `--` would silently fold two lists into one.
+  # Inserting a scalar shifts every index, so the scalar count and the `range(1, 9)` /
+  # `sys.argv[9:12]` / `sys.argv[12:]` reads move together or not at all.
+  python3 - \
+    "$LIVE_N" "$DEAD_N" "${#UNVERIFIABLE_ROWS[@]}" "$PROBES_MADE" "${#CONFIG_NAMES[@]}" \
+    "$CONFIGS_FLOOR" "$CONFIGS_EXPECTED" "$INVENTORY_AGE_DAYS" \
+    "$COVERAGE" "$COVERAGE_RATIO" "${COVERAGE_CAVEAT:--}" \
+    ${DEAD_ROWS[@]+"${DEAD_ROWS[@]}"} "--" \
+    ${UNVERIFIABLE_ROWS[@]+"${UNVERIFIABLE_ROWS[@]}"} "--names--" \
+    ${CONFIG_NAMES[@]+"${CONFIG_NAMES[@]}"} "--unread--" \
+    ${CONFIGS_UNREAD[@]+"${CONFIGS_UNREAD[@]}"} <<'PY'
+import json, sys
+live, dead, unver, probes, configs, floor, expected, age = (int(sys.argv[i]) for i in range(1, 9))
+coverage, ratio, caveat = sys.argv[9], sys.argv[10], sys.argv[11]
+rest = sys.argv[12:]
+i_unver = rest.index("--")
+i_names = rest.index("--names--")
+i_unread = rest.index("--unread--")
+def rows(xs, second):
+    out = []
+    for r in xs:
+        if not r:
+            continue
+        k, _, v = r.partition("|")
+        out.append({"key": k, second: v})
+    return out
+def unver_rows(xs):
+    # Three fields: key|cause|reason. `cause` is a closed vocabulary the workflow can
+    # branch on — the previous shape forced any consumer to pattern-match English prose,
+    # so it sent one static remedy for four disjoint causes.
+    out = []
+    for r in xs:
+        if not r:
+            continue
+        k, _, tail = r.partition("|")
+        cause, _, reason = tail.partition("|")
+        out.append({"key": k, "cause": cause, "reason": reason})
+    return out
+print(json.dumps({
+    # `configs` counts configs whose secret-name read SUCCEEDED, not configs LISTED. A
+    # role that can enumerate but not read values would list the whole project and scan
+    # none of it, satisfying any floor with a credential that measures nothing.
+    "live": live, "dead": dead, "unverifiable": unver, "probes": probes, "configs": configs,
+    "stale": rows(rest[:i_unver], "config"),
+    "unverifiable_keys": unver_rows(rest[i_unver + 1:i_names]),
+    # The gate: `configs >= configs_floor`. The report: everything below it.
+    "config_names": [c for c in rest[i_names + 1:i_unread] if c],
+    "configs_floor": floor,
+    "configs_expected": expected,
+    "configs_unread": [c for c in rest[i_unread + 1:] if c],
+    "coverage": coverage,
+    "coverage_ratio": ratio,
+    "inventory_age_days": age,
+    # "-" is the non-empty stand-in for "no caveat", so a whitespace-splitting consumer
+    # cannot lose a field to an empty string.
+    "coverage_caveat": caveat,
+}, indent=2))
+PY
+}
+
+# Publish the verdict to whichever sinks the caller asked for, exactly once.
+#
+# Called before EVERY exit-2 return as well as on the success path, so `configs`,
+# `configs_floor`, `coverage` and `coverage_ratio` reach the caller on every path — a
+# revoked credential included. The idempotence guard is what lets the error paths call it
+# unconditionally without the success path emitting twice.
+publish_verdict() {
+  [[ -n "$VERDICT_PUBLISHED" ]] && return 0
+  VERDICT_PUBLISHED=1
+  local rc=0
+  if [[ "$JSON_OUT" -eq 1 ]]; then
+    emit_json || rc=1
+  fi
+  if [[ -n "$JSON_FILE" ]]; then
+    emit_json > "$JSON_FILE" || { echo "ERROR: could not write --json-file '$JSON_FILE'" >&2; rc=1; }
+  fi
+  return "$rc"
+}
+
+if (( FLOOR_OK == 0 )); then
+  echo "ERROR: --configs-floor '$CONFIGS_FLOOR_RAW' is not a non-negative integer — the coverage gate has no threshold." >&2
+  echo "       Publishing coverage: unknown rather than deriving a state from an unparseable demand." >&2
+  publish_verdict || true
+  exit 2
+fi
+
+# ── THE CREDENTIAL ──────────────────────────────────────────────────────────
+# Snapshotted into a local, then BOTH variables are unset. The caller keeps them in the
+# step environment for the whole run, so a read site that forgets its `-c <cfg>` — one of
+# the four below, or a fifth added later — would silently bind the ambient config and
+# grade the wrong config's bytes. Unsetting makes that failure loud BY CONSTRUCTION rather
+# than by a test noticing it at review time, and it closes the empty-value rebind hazard
+# at the source instead of once per call site.
+DOPPLER_CRED="${DOPPLER_TOKEN:-}"
+unset DOPPLER_TOKEN DOPPLER_CONFIG
+
+# An EMPTY credential is a failed credential, not a fallback. The Doppler CLI treats an
+# empty `--token` / env value as UNSET and rebinds to whatever ambient credential the
+# runner carries, so invoking it here would report a confident answer about a config set
+# nobody asked for. This is a CONFIGURATION fault (the secret is absent or empty), and it
+# surfaces as `degraded` at 0/N with a performable remedy.
+if [[ -z "$DOPPLER_CRED" ]]; then
+  {
+    echo "ERROR: DOPPLER_TOKEN is unset or empty — no Doppler credential to scan with."
+    echo "       Refusing to invoke the Doppler CLI without one: it treats an empty value as"
+    echo "       unset and would silently bind whatever ambient credential this runner carries."
+    echo "       0 configs read, so coverage is 'degraded' against the declared floor of ${CONFIGS_FLOOR}."
+  } >&2
+  publish_verdict || true
+  exit 2
+fi
+
+# Register a scanned value with the Actions log masker, once per distinct value, BEFORE it
+# can reach any probe. Actions auto-masks only `secrets.*`-sourced values, so everything
+# this detector pulls out of Doppler is unmasked in the job log by default — in the same
+# script that deliberately un-swallows stderr from the subsystem handling those values.
+# The credential itself is deliberately NOT masked here: `::add-mask::<value>` writes the
+# value to stdout, and the credential must reach no sink at all.
+declare -A MASKED=()
+mask_value() {
+  local v="$1"
+  [[ -z "$v" ]] && return 0
+  [[ -n "${MASKED[$v]:-}" ]] && return 0
+  MASKED["$v"]=1
+  [[ "${GITHUB_ACTIONS:-}" == "true" ]] && echo "::add-mask::$v"
+  return 0
+}
+
 # Enumerate configs from Doppler rather than hardcoding. A hardcoded list is
 # exactly how CF_API_TOKEN_AUDIT was missed during the incident: it lived only
 # in the dev* configs, which the audit sweep never looked at.
-mapfile -t CONFIGS < <(doppler configs -p "$PROJECT" --json 2>/dev/null |
+#
+# The credential is delivered as an ENV PREFIX, never as `--token <value>` on argv:
+# /proc/<pid>/cmdline is world-readable and /proc/<pid>/environ is 0400. That defends
+# against a different-UID local observer, NOT against a compromised runner where every
+# step shares one UID — stated accurately rather than overstated.
+#
+# `2>/dev/null` is deliberately GONE from the enumeration. A non-empty credential that
+# enumerates nothing must be loud, and its stderr — the one line that says whether the
+# credential was rejected, expired, or merely scoped to nothing — was being swallowed.
+mapfile -t CONFIGS < <(DOPPLER_TOKEN="$DOPPLER_CRED" doppler configs -p "$PROJECT" --json |
   python3 -c 'import json,sys; [print(c["name"]) for c in json.load(sys.stdin)]' 2>/dev/null)
 if [[ ${#CONFIGS[@]} -eq 0 ]]; then
   echo "ERROR: could not enumerate Doppler configs for project '$PROJECT'" >&2
+  publish_verdict || true
   exit 2
 fi
 
@@ -134,11 +469,24 @@ for cfg in "${CONFIGS[@]}"; do
   #
   # The exit status is CAPTURED, not discarded. `2>/dev/null || true` on a read whose
   # emptiness decides the verdict is how a scope-denied token renders as a clean fleet.
+  #
+  # A FAILED read no longer aborts the whole scan. It records the config BY NAME in the
+  # failed set, and that config does NOT enter `configs` — which is the entire reason
+  # `configs` counts configs READ rather than configs LISTED. A role that can enumerate
+  # but not read values lists the whole project and scans none of it; counting listings
+  # would let that credential satisfy any floor while measuring nothing. The partial
+  # enumeration is still refused, just one level up: the unread configs surface in
+  # `configs_unread` and drag `coverage` to `degraded` instead of taking the scan down.
+  #
+  # The config is named EXPLICITLY on every read (`-c "$cfg"`). DOPPLER_CONFIG was unset
+  # above, so an implicit bind is not merely discouraged here — it has nothing to bind to.
   _names=""
-  if ! _names="$(doppler secrets -p "$PROJECT" -c "$cfg" --only-names 2>/dev/null)"; then
-    echo "ERROR: could not read secret names for config '$cfg' — refusing to report a verdict from a partial enumeration" >&2
-    exit 2
+  if ! _names="$(DOPPLER_TOKEN="$DOPPLER_CRED" doppler secrets -p "$PROJECT" -c "$cfg" --only-names 2>/dev/null)"; then
+    echo "WARNING: could not read secret names for config '$cfg' — it is counted UNREAD, not scanned" >&2
+    FAILED_CONFIGS+=("$cfg")
+    continue
   fi
+  CONFIG_NAMES+=("$cfg")
   while read -r k; do
     [[ -z "$k" ]] && continue
     [[ -n "$ONLY_MATCH" && "$k" != *"$ONLY_MATCH"* ]] && continue
@@ -162,6 +510,13 @@ for cfg in "${CONFIGS[@]}"; do
   done < <(printf '%s\n' "$_names" | grep -oE '[A-Z0-9_]*ACCESS_TOKEN_(ID|SECRET)' || true)
 done
 
+# Sorted, because `config_names` is a published contract field and two runs that read the
+# same set must render it identically — a consumer diffing the list should see a change
+# only when the SET changed, never when Doppler's listing order did.
+if (( ${#CONFIG_NAMES[@]} > 0 )); then
+  mapfile -t CONFIG_NAMES < <(printf '%s\n' "${CONFIG_NAMES[@]}" | sort)
+fi
+
 # ── NON-VACUITY GATE ────────────────────────────────────────────────────────
 # `CONFIGS` emptiness was guarded; key emptiness was not, so every path that enumerated
 # NOTHING fell through to `exit 0` — a clean bill of health for a question never asked.
@@ -173,32 +528,25 @@ done
 # preflight prints "verified live" on exit 0, and the twice-daily scheduled arm is the only
 # CONTINUOUS coverage there is.
 #
-# Not "fleet-wide", though the line said so until #7152 measured it. The scheduled arm's
-# `DOPPLER_TOKEN` is a service token scoped to `prd_terraform`, so `doppler configs`
-# returns ONE config and the twice-daily run inspects 1 of 13 — the same "clean bill of
-# health for a question never asked" shape as the paragraph above, one layer up at the
-# scheduling layer. The run now publishes `configs`/`coverage` so the gap is loud, and
-# files an action-required issue while it persists; widening the token scope is an
-# operator decision and is tracked there. Until it lands, read a scheduled `clean` as
-# "clean in prd_terraform", never as a fleet claim.
+# "Fleet-wide" is a claim about the CREDENTIAL, not about this gate, and #7152 measured it
+# false: a config-scoped Doppler service token enumerates exactly ONE config, so a scan
+# carrying one inspected 1 of 13 while reporting the same clean exit code as a scan that
+# read all 13 — the "clean bill of health for a question never asked" shape of the
+# paragraph above, one layer up at the scheduling layer. That is why the coverage ladder
+# exists and why `configs` counts configs READ: the caller can now tell 1 of 13 from 13 of
+# 13, so a `clean` verdict is only ever as wide as the published `coverage_ratio` says.
 if (( ${#KEYSET[@]} + ${#ACCESS_BASESET[@]} == 0 )); then
   {
-    echo "ERROR: enumerated 0 token-shaped keys across ${#CONFIGS[@]} config(s)${ONLY_MATCH:+ under --only '$ONLY_MATCH'}."
+    echo "ERROR: enumerated 0 token-shaped keys across ${#CONFIG_NAMES[@]} readable config(s) of ${#CONFIGS[@]} enumerated${ONLY_MATCH:+ under --only '$ONLY_MATCH'}."
     echo "       This is a COVERAGE GAP, not a clean bill of health — nothing was checked."
     echo "       Likely causes: the --only filter matches no key; or this Doppler token"
     echo "       cannot read secret names in the scanned configs."
   } >&2
+  publish_verdict || true
   exit 2
 fi
 
 declare -A VERDICT=()   # token value -> LIVE|DEAD  (verify each distinct value once)
-DEAD_ROWS=()
-LIVE_N=0
-DEAD_N=0
-# Positive-work counter, incremented at every real probe. Declared here, beside the other
-# counters, because verify_value below already touches it and `set -u` makes a later
-# declaration a fatal ordering bug rather than a silent zero.
-PROBES_MADE=0
 
 # Sets REPLY, for the same subshell reason as verify_access_pair below: called as
 # `state=$(verify_value ...)` the VERDICT writes never reached the parent, so the
@@ -217,19 +565,6 @@ except Exception: print("DEAD")' 2>/dev/null)
   fi
   REPLY="${VERDICT[$v]}"
 }
-
-for key in $(printf '%s\n' "${!KEYSET[@]}" | sort); do
-  for cfg in "${CONFIGS[@]}"; do
-    val=$(doppler secrets get "$key" -p "$PROJECT" -c "$cfg" --plain 2>/dev/null)
-    [[ -z "$val" ]] && continue
-    verify_value "$val"; state="$REPLY"
-    if [[ "$state" == "DEAD" ]]; then
-      DEAD_N=$((DEAD_N + 1)); DEAD_ROWS+=("$key|$cfg")
-    else
-      LIVE_N=$((LIVE_N + 1))
-    fi
-  done
-done
 
 # ── Cloudflare ACCESS SERVICE TOKENS ────────────────────────────────────────
 #
@@ -304,7 +639,72 @@ access_config_hint() {
     "$1" "$(basename "${BASH_SOURCE[0]}")"
 }
 
-UNVERIFIABLE_ROWS=()
+# ── VALUE PRE-PASS ──────────────────────────────────────────────────────────
+# Every secret VALUE this scan will grade is read here, in one pass, and registered with
+# the Actions log masker as it is read — so no value can reach a probe before it has been
+# masked. Mask-on-read would already give "masked before ITS OWN first probe"; a full
+# pre-pass gives the stronger and testable "masked before the FIRST probe of the run",
+# which is what the requirement asks for and what a stub can observe.
+#
+# It also concentrates the four Doppler read sites: this pass owns three of them
+# (`secrets get` × key / _ID / _SECRET) and the name enumeration above owns the fourth.
+# Each one names its config with an explicit `-c "$cfg"` and iterates CONFIG_NAMES — the
+# configs whose names were actually READ — so a config the credential cannot read is never
+# graded on an empty value.
+declare -A API_VALS=()       # "<key>\x1f<cfg>"  -> value
+declare -A ACC_ID_VALS=()    # "<base>\x1f<cfg>" -> client id
+declare -A ACC_SEC_VALS=()   # "<base>\x1f<cfg>" -> client secret
+declare -A ACCESS_HOST_OF=() # base -> hostname ('' = no mapping configured)
+ACCESS_BASES=()              # bases that are genuinely Cloudflare Access pairs, sorted
+
+for key in $(printf '%s\n' "${!KEYSET[@]}" | sort); do
+  for cfg in ${CONFIG_NAMES[@]+"${CONFIG_NAMES[@]}"}; do
+    val=$(DOPPLER_TOKEN="$DOPPLER_CRED" doppler secrets get "$key" -p "$PROJECT" -c "$cfg" --plain 2>/dev/null)
+    [[ -z "$val" ]] && continue
+    API_VALS["${key}"$'\x1f'"${cfg}"]="$val"
+    mask_value "$val"
+  done
+done
+
+for base in $(printf '%s\n' "${!ACCESS_BASESET[@]}" | sort); do
+  # A Cloudflare Access service token is a PAIR. If no `<base>_ID` exists anywhere in the
+  # fleet, this base is not one — it is some other vendor's credential whose name merely
+  # ends in _ACCESS_TOKEN_SECRET, and treating it as an Access pair invents a key that
+  # does not exist.
+  #
+  # Measured against live Doppler before this guard: `X_ACCESS_TOKEN_SECRET` (an X/Twitter
+  # OAuth 1.0a secret, present in 11 of 13 configs) produced base `X_ACCESS_TOKEN`, and the
+  # reporting path below rendered a FABRICATED `X_ACCESS_TOKEN_ID/_SECRET` row — a
+  # credential name that has never existed — inside an ops email whose entire job is naming
+  # a real stale key. The scheduled arm would have sent that twice daily, forever.
+  if [[ -z "${ALL_ID_KEYS[${base}_ID]:-}" ]]; then
+    continue
+  fi
+  ACCESS_BASES+=("$base")
+  ACCESS_HOST_OF["$base"]="$(access_hostname_for "$base")"
+  # An unmapped base is a DETECTOR coverage gap reported without any probe, so its values
+  # are never read — nothing would be done with them.
+  [[ -z "${ACCESS_HOST_OF[$base]}" ]] && continue
+  for cfg in ${CONFIG_NAMES[@]+"${CONFIG_NAMES[@]}"}; do
+    tid=$(DOPPLER_TOKEN="$DOPPLER_CRED" doppler secrets get "${base}_ID" -p "$PROJECT" -c "$cfg" --plain 2>/dev/null)
+    tsec=$(DOPPLER_TOKEN="$DOPPLER_CRED" doppler secrets get "${base}_SECRET" -p "$PROJECT" -c "$cfg" --plain 2>/dev/null)
+    [[ -n "$tid" ]] && { ACC_ID_VALS["${base}"$'\x1f'"${cfg}"]="$tid"; mask_value "$tid"; }
+    [[ -n "$tsec" ]] && { ACC_SEC_VALS["${base}"$'\x1f'"${cfg}"]="$tsec"; mask_value "$tsec"; }
+  done
+done
+
+for key in $(printf '%s\n' "${!KEYSET[@]}" | sort); do
+  for cfg in ${CONFIG_NAMES[@]+"${CONFIG_NAMES[@]}"}; do
+    val="${API_VALS["${key}"$'\x1f'"${cfg}"]:-}"
+    [[ -z "$val" ]] && continue
+    verify_value "$val"; state="$REPLY"
+    if [[ "$state" == "DEAD" ]]; then
+      DEAD_N=$((DEAD_N + 1)); DEAD_ROWS+=("$key|$cfg")
+    else
+      LIVE_N=$((LIVE_N + 1))
+    fi
+  done
+done
 
 # Probe results. Set as GLOBALS and read by the caller, never returned on stdout.
 #
@@ -482,28 +882,18 @@ verify_access_pair() {
   REPLY="${PAIR_VERDICT[$cache_key]}"
 }
 
-for base in $(printf '%s\n' "${!ACCESS_BASESET[@]}" | sort); do
-  # A Cloudflare Access service token is a PAIR. If no `<base>_ID` exists anywhere in the
-  # fleet, this base is not one — it is some other vendor's credential whose name merely
-  # ends in _ACCESS_TOKEN_SECRET, and treating it as an Access pair invents a key that
-  # does not exist.
-  #
-  # Measured against live Doppler before this guard: `X_ACCESS_TOKEN_SECRET` (an X/Twitter
-  # OAuth 1.0a secret, present in 11 of 13 configs) produced base `X_ACCESS_TOKEN`, and the
-  # reporting path below rendered a FABRICATED `X_ACCESS_TOKEN_ID/_SECRET` row — a
-  # credential name that has never existed — inside an ops email whose entire job is naming
-  # a real stale key. The scheduled arm would have sent that twice daily, forever.
-  if [[ -z "${ALL_ID_KEYS[${base}_ID]:-}" ]]; then
-    continue
-  fi
-  host=$(access_hostname_for "$base")
+for base in ${ACCESS_BASES[@]+"${ACCESS_BASES[@]}"}; do
+  # The `<base>_ID must exist somewhere in the fleet` discrimination happened in the value
+  # pre-pass, which is what built ACCESS_BASES — see the comment there for the fabricated
+  # X_ACCESS_TOKEN_ID/_SECRET row that made it necessary.
+  host="${ACCESS_HOST_OF[$base]}"
   if [[ -z "$host" ]]; then
     UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|no-probe-configured|$(access_config_hint "$base")")
     continue
   fi
-  for cfg in "${CONFIGS[@]}"; do
-    tid=$(doppler secrets get "${base}_ID" -p "$PROJECT" -c "$cfg" --plain 2>/dev/null)
-    tsec=$(doppler secrets get "${base}_SECRET" -p "$PROJECT" -c "$cfg" --plain 2>/dev/null)
+  for cfg in ${CONFIG_NAMES[@]+"${CONFIG_NAMES[@]}"}; do
+    tid="${ACC_ID_VALS["${base}"$'\x1f'"${cfg}"]:-}"
+    tsec="${ACC_SEC_VALS["${base}"$'\x1f'"${cfg}"]:-}"
     # Both halves absent = this config simply does not carry the token. ONE half present
     # is a distinct and worse state — a half-propagated rotation, which authenticates as
     # nothing — so it is reported rather than skipped.
@@ -564,56 +954,24 @@ done
 # detector should not be the one place that still conflates them.
 UNVERIFIABLE_N=${#UNVERIFIABLE_ROWS[@]}
 
-# Extracted so --json (stdout) and --json-file (file, alongside the human report) render
-# from ONE code path. Two renderers would be a second unsynchronized pin on the same
-# schema, which is how the two sides drift apart silently.
-emit_json() {
-  # `split("|", 1)` — maxsplit 1, so a diagnostic containing a pipe cannot shift fields.
-  # Unverifiable rows get their own key rather than riding in "stale" with the diagnostic
-  # sentence mis-rendered into the "config" field.
-  python3 - "$LIVE_N" "$DEAD_N" "$UNVERIFIABLE_N" "$PROBES_MADE" "${#CONFIGS[@]}" "${DEAD_ROWS[@]:-}" "--" "${UNVERIFIABLE_ROWS[@]:-}" <<'PY'
-import json, sys
-live, dead, unver, probes, configs = (int(sys.argv[i]) for i in range(1, 6))
-rest = sys.argv[6:]
-sep = rest.index("--")
-def rows(xs, second):
-    out = []
-    for r in xs:
-        if not r:
-            continue
-        k, _, v = r.partition("|")
-        out.append({"key": k, second: v})
-    return out
-def unver_rows(xs):
-    # Three fields: key|cause|reason. `cause` is a closed vocabulary the workflow can
-    # branch on — the previous shape forced any consumer to pattern-match English prose,
-    # so it sent one static remedy for four disjoint causes.
-    out = []
-    for r in xs:
-        if not r:
-            continue
-        k, _, tail = r.partition("|")
-        cause, _, reason = tail.partition("|")
-        out.append({"key": k, "cause": cause, "reason": reason})
-    return out
-print(json.dumps({
-    # `configs` is emitted so a CONSUMER can tell a fleet-wide clean from a
-    # single-config clean. The detector exists to catch fan-out drift ("5 of 7
-    # configs stale after a dashboard roll"); a scan that saw ONE config cannot
-    # answer that question, and without this field the caller's `clean` verdict
-    # is indistinguishable from one earned across the whole fleet.
-    "live": live, "dead": dead, "unverifiable": unver, "probes": probes, "configs": configs,
-    "stale": rows(rest[:sep], "config"),
-    "unverifiable_keys": unver_rows(rest[sep + 1:]),
-}, indent=2))
-PY
-}
-
 if [[ "$JSON_OUT" -eq 1 ]]; then
-  emit_json
+  publish_verdict || true
 else
+  compute_coverage
   echo "Cloudflare token drift check — project '$PROJECT'"
-  echo "  configs scanned: ${#CONFIGS[@]}   API-token keys: ${#KEYSET[@]}   Access service tokens: ${#ACCESS_BASESET[@]}"
+  # The NAMES, not just the count. `configs scanned: 1` and `configs scanned: 13` are the
+  # difference between a claim about one config and a claim about the fleet, and a reader
+  # of this report cannot tell WHICH configs a partial scan reached from a bare integer —
+  # which is exactly the question a fan-out detector's output has to answer.
+  _scanned_list="none"
+  (( ${#CONFIG_NAMES[@]} > 0 )) && _scanned_list=$(IFS=,; printf '%s' "${CONFIG_NAMES[*]}")
+  echo "  configs scanned: ${#CONFIG_NAMES[@]} (${_scanned_list})   API-token keys: ${#KEYSET[@]}   Access service tokens: ${#ACCESS_BASESET[@]}"
+  echo "  coverage: ${COVERAGE} (ratio ${COVERAGE_RATIO}, declared floor ${CONFIGS_FLOOR})"
+  if (( ${#CONFIGS_UNREAD[@]} > 0 )); then
+    _unread_list=$(IFS=,; printf '%s' "${CONFIGS_UNREAD[*]}")
+    echo "  configs NOT read: ${_unread_list}"
+  fi
+  [[ -n "$COVERAGE_CAVEAT" ]] && echo "  coverage caveat: $COVERAGE_CAVEAT"
   # `network probes` is reported, not just computed. It is the one number that separates
   # "conclusions drawn from something measured" from "conclusions drawn from Doppler reads
   # alone", and a consumer that has it does not have to re-derive this class.
@@ -626,7 +984,17 @@ else
     echo "A rotation did not propagate. Terraform will NOT fix this: the"
     echo "doppler_secret resources carry lifecycle.ignore_changes = [value], so"
     echo "'terraform apply' reports 'No changes' while the stale value persists."
-    echo "Set the live value on the 'prd' ROOT config; branch configs inherit it."
+    # The previous line here read "Set the live value on the 'prd' ROOT config; branch
+    # configs inherit it." That is FALSIFIED, and it was the remedy printed on the acute
+    # path: measured 2026-08-02, CF_API_TOKEN_DNS_EDIT is carried independently by seven
+    # configs, and `prd_terraform` does not carry the REGISTRY_PUSH_ACCESS_TOKEN_* pair
+    # that `prd` root does — so setting root alone repairs neither fan-out. An operator
+    # who performed it would verify the one config they edited, get a green result, and
+    # leave every other stale copy in place: the exact silent-and-delayed shape this
+    # script's own header cites as the reason it exists.
+    echo "Set the live value in EVERY config named above — Doppler branch configs do NOT"
+    echo "inherit values from the 'prd' root config. Setting root alone leaves the other"
+    echo "stale copies in place and looks completely successful."
   fi
   if [[ "$UNVERIFIABLE_N" -gt 0 ]]; then
     echo
@@ -675,9 +1043,7 @@ fi
 # A write failure is exit 2, not a warning: the caller branches its operator email on
 # this file, and a missing file would silently take the "could not determine" arm and
 # report a wrong cause — the defect class this whole script exists to prevent.
-if [[ -n "$JSON_FILE" ]]; then
-  emit_json > "$JSON_FILE" || { echo "ERROR: could not write --json-file '$JSON_FILE'" >&2; exit 2; }
-fi
+publish_verdict || exit 2
 
 # POSITIVE-WORK FLOOR. The non-vacuity gate above counts enumerated key NAMES, which is a
 # different question from whether anything was ever measured. Every value read is
@@ -697,6 +1063,7 @@ if (( LIVE_N + DEAD_N + UNVERIFIABLE_N == 0 )); then
   echo "ERROR: enumerated ${#KEYSET[@]} API key(s) and ${#ACCESS_BASESET[@]} Access base(s) but PROBED ZERO values." >&2
   echo "       Nothing was measured, so this run cannot report a clean fleet. Most likely the" >&2
   echo "       Doppler token can read secret NAMES but not VALUES, or a read failed mid-scan." >&2
+  publish_verdict || true
   exit 2
 fi
 

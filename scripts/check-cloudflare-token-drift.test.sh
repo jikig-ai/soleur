@@ -29,6 +29,14 @@ SUT="$REPO_ROOT/scripts/check-cloudflare-token-drift.sh"
 # disk usage. Default to /var/tmp when invoked directly (test-all.sh already exports it).
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
+# AMBIENT-CREDENTIAL HYGIENE. The SUT now takes its credential from DOPPLER_TOKEN and
+# refuses to run without one, so a suite that inherits an operator's real DOPPLER_TOKEN /
+# DOPPLER_CONFIG would (a) put a live credential on a stubbed child's environment and
+# (b) make the "unset credential" cases unreachable — they would silently test the
+# operator's laptop instead of the code. Every case declares its own credential through
+# run_sut; nothing here may come from the environment.
+unset DOPPLER_TOKEN DOPPLER_CONFIG
+
 PASS=0
 FAIL=0
 pass() { echo "  pass: $1"; PASS=$((PASS + 1)); }
@@ -46,6 +54,10 @@ mkdir -p "$STUB_DIR" || { echo "FATAL: could not create stub dir"; exit 2; }
 # ---------------------------------------------------------------------------
 FIX_ID="0123456789abcdef0123456789abcdef.access"
 FIX_SECRET="fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+# The Doppler CREDENTIAL the SUT scans with. Shaped like a service-account token
+# (`dp.sa.<40>`) so a future format check exercises the same path. Invented, and never
+# valid anywhere. It doubles as the P11 sentinel: it must reach NO sink.
+FIX_CRED="dp.sa.SYNTHETICNOTREALSYNTHETICNOTREAL0000"
 
 # `doppler` stub. Reads its fixture world from two files so each case can reshape it
 # without rewriting the stub:
@@ -60,8 +72,30 @@ FIX_SECRET="fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
 cat > "$STUB_DIR/doppler" <<'STUB'
 #!/usr/bin/env bash
 [[ -n "${MOCK_DOPPLER_LOG:-}" ]] && printf '%s\n' "$*" >> "$MOCK_DOPPLER_LOG"
+# Credential and ambient-config observability, recorded for EVERY invocation.
+# `set`/`unset` only — the VALUE is deliberately not written here, because this log is
+# read by assertions whose whole point is that no credential value reaches a file.
+[[ -n "${MOCK_DOPPLER_ENV_LOG:-}" ]] && \
+  printf 'TOKEN=%s CONFIG=%s\n' "${DOPPLER_TOKEN:+set}" "${DOPPLER_CONFIG:+set}" >> "$MOCK_DOPPLER_ENV_LOG"
+# THE STUB FAILS LOUDLY WITH NO EXPLICIT CREDENTIAL, and the real CLI does not — that
+# asymmetry is the point. Given no token, real `doppler` falls back to the ambient login
+# and answers confidently about a scope nobody asked for; the failure is silent and the
+# verdict is wrong. A stub that also answered would make "the SUT delivers its credential
+# explicitly" untestable, so the one observable difference between an explicit credential
+# and an ambient one is manufactured here.
+if [[ -z "${DOPPLER_TOKEN:-}" ]]; then
+  echo "STUB ERROR: doppler invoked with no explicit DOPPLER_TOKEN — refusing to answer from an ambient credential" >&2
+  exit 3
+fi
 case "${1:-}" in
   configs)
+    # Enumeration failure injection: a NON-EMPTY credential that the API rejects (revoked,
+    # expired, or scoped to nothing). Its stderr is the only line saying which, and the
+    # SUT must not swallow it.
+    if [[ -n "${MOCK_ENUM_FAIL:-}" ]]; then
+      echo "doppler: ${MOCK_ENUM_FAIL}" >&2
+      exit 1
+    fi
     printf '['
     _first=1
     while read -r c; do
@@ -81,6 +115,12 @@ case "${1:-}" in
       for ((i=1; i<=$#; i++)); do
         [[ "${!i}" == "-c" ]] && { j=$((i+1)); _cfg="${!j}"; }
       done
+      # Same hard error as the --only-names branch below, and for the same reason: a value
+      # read with no explicit config grades the wrong config's bytes in production.
+      if [[ -z "$_cfg" ]]; then
+        echo "STUB ERROR: 'doppler secrets get ${_key}' invoked with no -c <config>" >&2
+        exit 4
+      fi
       _v=$(grep -E "^${_cfg}\|${_key}\|" "$MOCK_SECRETS" 2>/dev/null | head -1 | cut -d'|' -f3-)
       [[ -n "$_v" ]] && printf '%s\n' "$_v"
       exit 0
@@ -89,6 +129,20 @@ case "${1:-}" in
     for ((i=1; i<=$#; i++)); do
       [[ "${!i}" == "-c" ]] && { j=$((i+1)); _cfg="${!j}"; }
     done
+    # NO `-c` IS A HARD STUB ERROR. With DOPPLER_CONFIG unset in the SUT there is nothing
+    # for an implicit bind to reach, but the real CLI would bind whatever the environment
+    # carried and grade another config's bytes. A stub that answered anyway would let a
+    # dropped `-c <cfg>` pass every verdict assertion in this file.
+    if [[ -z "$_cfg" ]]; then
+      echo "STUB ERROR: 'doppler secrets --only-names' invoked with no -c <config>" >&2
+      exit 4
+    fi
+    # Per-config read failure injection. This is N1's subtle form: a role that can
+    # ENUMERATE configs but cannot READ their secrets. The config still lists.
+    if [[ "${MOCK_UNREADABLE:-}" == "ALL" || ",${MOCK_UNREADABLE:-}," == *",${_cfg},"* ]]; then
+      echo "doppler: you do not have access to config '${_cfg}'" >&2
+      exit 1
+    fi
     # Anchored: an unanchored `grep -F "prd|"` also matches `prd_terraform|…`, which would
     # silently bleed one config's keys into another the moment cardinality exceeds 1 —
     # exactly when the two-config cases below need it to be exact.
@@ -135,6 +189,20 @@ chmod +x "$STUB_DIR/doppler"
 cat > "$STUB_DIR/curl" <<'STUB'
 #!/usr/bin/env bash
 [[ -n "${MOCK_CURL_LOG:-}" ]] && printf '%s\n' "$*" >> "$MOCK_CURL_LOG"
+# curl is given NO env prefix by the SUT, so it sees whatever the SUT's own environment
+# still holds. That makes it the instrument for "the credential was snapshotted and both
+# Doppler variables were then unset": if the SUT had kept relying on an ambient
+# DOPPLER_TOKEN / DOPPLER_CONFIG, this child would inherit them.
+[[ -n "${MOCK_CURL_ENV_LOG:-}" ]] && \
+  printf 'TOKEN=%s CONFIG=%s\n' "${DOPPLER_TOKEN:+set}" "${DOPPLER_CONFIG:+set}" >> "$MOCK_CURL_ENV_LOG"
+# ORDERING INSTRUMENT for ::add-mask::. At the moment of the FIRST probe, record how many
+# mask directives the SUT had already written to its (redirected, unbuffered) stdout.
+# Presence alone cannot distinguish "masked before anything was probed" from "masked on
+# the way past" — this reads the real interleaving instead of a proxy for it.
+if [[ -n "${MOCK_MASK_SNAPSHOT:-}" && ! -f "${MOCK_MASK_SNAPSHOT}" && -n "${MOCK_SUT_STDOUT:-}" ]]; then
+  _seen=$(grep -c '::add-mask::' "${MOCK_SUT_STDOUT}" 2>/dev/null || true)
+  printf '%s' "${_seen:-0}" > "${MOCK_MASK_SNAPSHOT}"
+fi
 _want_code=0
 _outfile=""
 _hdrfile=""
@@ -258,15 +326,44 @@ RC=""
 OUT=""
 CURL_LOG=""
 DOPPLER_LOG=""
+DOPPLER_ENV_LOG=""
+CURL_ENV_LOG=""
+GH_OUTPUT=""
+MASK_SNAPSHOT=""
 run_sut() {
   local label="$1" http_code="$2" secrets_body="$3" configs_body="${4:-prd}" only_arg="${5:-}"
   local cfgs="$TMP/$label.configs" secs="$TMP/$label.secrets"
   OUT="$TMP/$label.out"; CURL_LOG="$TMP/$label.curl"; DOPPLER_LOG="$TMP/$label.doppler"
+  DOPPLER_ENV_LOG="$TMP/$label.dopplerenv"; CURL_ENV_LOG="$TMP/$label.curlenv"
+  GH_OUTPUT="$TMP/$label.ghoutput"; MASK_SNAPSHOT="$TMP/$label.masksnap"
   : > "$DOPPLER_LOG"
+  : > "$DOPPLER_ENV_LOG"
+  : > "$CURL_ENV_LOG"
+  : > "$GH_OUTPUT"
+  rm -f "$MASK_SNAPSHOT"
   printf '%s\n' "$configs_body" > "$cfgs" || { echo "FATAL: fixture write failed"; exit 2; }
   printf '%s\n' "$secrets_body" > "$secs" || { echo "FATAL: fixture write failed"; exit 2; }
   : > "$CURL_LOG"
+  # THE CREDENTIAL, declared per case rather than inherited. `unset` and `empty` are
+  # DIFFERENT states to a shell and the same state to the Doppler CLI (which treats an
+  # empty value as absent and rebinds to the ambient credential), so both are expressible.
+  local -a _cred=()
+  case "${MOCK_CRED_MODE:-set}" in
+    set)   _cred=(DOPPLER_TOKEN="${MOCK_TOKEN_VALUE:-$FIX_CRED}") ;;
+    empty) _cred=(DOPPLER_TOKEN=) ;;
+    unset) _cred=() ;;
+    *)     echo "FATAL: unknown MOCK_CRED_MODE '${MOCK_CRED_MODE:-}'"; exit 2 ;;
+  esac
+  # An AMBIENT DOPPLER_CONFIG, set deliberately. The SUT must unset it so no child can
+  # inherit it and no read site can bind it implicitly.
+  local -a _ambient=()
+  [[ -n "${MOCK_AMBIENT_CONFIG:-}" ]] && _ambient=(DOPPLER_CONFIG="$MOCK_AMBIENT_CONFIG")
+  # `env -u` first: the suite unsets both variables at file scope, but a direct invocation
+  # from an operator shell that exported them would otherwise leak a real credential into
+  # every case.
   # shellcheck disable=SC2086
+  env -u DOPPLER_TOKEN -u DOPPLER_CONFIG \
+  ${_cred[@]+"${_cred[@]}"} ${_ambient[@]+"${_ambient[@]}"} \
   MOCK_CONFIGS="$cfgs" MOCK_SECRETS="$secs" \
   MOCK_HTTP_CODE="$http_code" MOCK_CURL_LOG="$CURL_LOG" \
   MOCK_HTTP_BODY="${MOCK_HTTP_BODY:-}" \
@@ -277,7 +374,15 @@ run_sut() {
   MOCK_HOSTS="${MOCK_HOSTS:-}" \
   MOCK_CREDS="${MOCK_CREDS:-}" \
   MOCK_MKTEMP_FAIL="${MOCK_MKTEMP_FAIL:-0}" \
+  MOCK_ENUM_FAIL="${MOCK_ENUM_FAIL:-}" \
+  MOCK_UNREADABLE="${MOCK_UNREADABLE:-}" \
   MOCK_DOPPLER_LOG="$DOPPLER_LOG" \
+  MOCK_DOPPLER_ENV_LOG="$DOPPLER_ENV_LOG" \
+  MOCK_CURL_ENV_LOG="$CURL_ENV_LOG" \
+  MOCK_SUT_STDOUT="$OUT" \
+  MOCK_MASK_SNAPSHOT="$MASK_SNAPSHOT" \
+  GITHUB_ACTIONS="${MOCK_GITHUB_ACTIONS:-}" \
+  GITHUB_OUTPUT="$GH_OUTPUT" \
   APP_DOMAIN_BASE="soleur.ai" \
   PATH="$STUB_DIR:$PATH" \
     bash "$SUT" $only_arg > "$OUT" 2>&1
@@ -879,6 +984,532 @@ else
 fi
 
 # ===========================================================================
+# P1-P15 — THE SINGLE CREDENTIAL AND THE COVERAGE LADDER (#7159).
+#
+# What is being pinned here is a GATE/REPORT SPLIT, and every case below exists to keep
+# the two apart:
+#
+#   the FLOOR gates      `configs >= configs_floor` decides `coverage`, and nothing else
+#                        does. The floor is DECLARED by the caller — a caller cannot be
+#                        wrong about a number it declares — and the comparison is `>=`,
+#                        never `==`, because the live config set is expected to grow.
+#   the INVENTORY reports it supplies `configs_expected`, `configs_unread` and
+#                        `inventory_age_days`, and gates NOTHING. P7/P7b/P8 are the
+#                        regression guards for that: a short, long or missing inventory
+#                        must move the printed ratio and no state at all.
+#
+# And `configs` counts configs whose secret-name read SUCCEEDED, never configs listed
+# (P5c). A role that can enumerate but not read would otherwise satisfy any floor with a
+# credential that measures nothing — which is the whole failure this ladder exists to
+# make loud.
+# ---------------------------------------------------------------------------
+
+# Doppler's own listing order is NOT alphabetical, and this fixture is deliberately
+# unsorted: `config_names` is a published contract field, so the sort has to be done by
+# the SUT. A pre-sorted fixture would let the sort be deleted without any case noticing.
+P_CFG13=$'prd\nprd_terraform\nci\ncli\ncli_ops\ndev\ndev_personal\ndev_scheduled\nprd_cla\nprd_ghcr\nprd_kb_drift_walker\nprd_scheduled\nprd_workspaces_luks'
+P_CFG13_SORTED='ci,cli,cli_ops,dev,dev_personal,dev_scheduled,prd,prd_cla,prd_ghcr,prd_kb_drift_walker,prd_scheduled,prd_terraform,prd_workspaces_luks'
+P_CFG14="$P_CFG13"$'\nprd_git_data'
+# The seven `prd*` configs — the shape narrowing N2 (a membership scoped to one
+# environment) produces on a 13-config project.
+P_CFG7=$'prd\nprd_terraform\nprd_cla\nprd_ghcr\nprd_kb_drift_walker\nprd_scheduled\nprd_workspaces_luks'
+
+# One DISTINCT token value per config, so a 13-config run carries 13 distinct values.
+# Identical values across configs would collapse under the memo cache and make P14's
+# "one ::add-mask:: per distinct value" unable to tell 13 masks from 1.
+p_secrets_for() {
+  local cfgs="$1" out="" c
+  while read -r c; do
+    [[ -z "$c" ]] && continue
+    out+="${c}|CF_API_TOKEN_X|synthetic-token-value-${c}"$'\n'
+  done <<< "$cfgs"
+  printf '%s' "${out%$'\n'}"
+}
+P_SEC13="$(p_secrets_for "$P_CFG13")"
+P_SEC14="$(p_secrets_for "$P_CFG14")"
+P_SEC7="$(p_secrets_for "$P_CFG7")"
+
+# The committed inventory's shape: an ISO-8601 `# generated:` header, the regeneration
+# command, then sorted names matching `^[a-z0-9_]+$` — the SAME syntax the repo-internal
+# floor/inventory equality check counts, because two checks counting different things
+# would pin nothing.
+p_write_inventory() {
+  local path="$1" names="$2" stamp="${3:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+  {
+    printf '# generated: %s\n' "$stamp"
+    printf '# command: doppler configs -p soleur --json | jq -r .[].name | sort\n'
+    printf '%s\n' "$names"
+  } > "$path" || { echo "FATAL: could not write inventory fixture $path" >&2; exit 2; }
+}
+P_INV13="$TMP/inv13.txt"
+p_write_inventory "$P_INV13" "$(printf '%s\n' "$P_CFG13" | sort)"
+P_INV2="$TMP/inv2.txt"
+p_write_inventory "$P_INV2" $'prd\nprd_terraform'
+P_INV20="$TMP/inv20.txt"
+p_write_inventory "$P_INV20" "$(printf '%s\n' "$(printf '%s\n' "$P_CFG13" | sort)"; printf 'extra_%02d\n' 1 2 3 4 5 6 7)"
+P_INV_STALE="$TMP/inv_stale.txt"
+p_write_inventory "$P_INV_STALE" "$(printf '%s\n' "$P_CFG13" | sort)" '2020-01-01T00:00:00Z'
+P_INV_MISSING="$TMP/no-such-inventory.txt"
+rm -f "$P_INV_MISSING"
+
+# Read one field out of a verdict file. Prints a distinguishable marker rather than an
+# empty string on any failure — an empty string compares equal to too many things.
+jget() {
+  python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print("<unparseable>"); raise SystemExit(0)
+v = d.get(sys.argv[2], "<absent>")
+print(",".join(v) if isinstance(v, list) else v)
+' "$1" "$2" 2>/dev/null || printf '<unparseable>'
+}
+
+echo "P1: with --configs-floor and --inventory absent, the pre-existing contract is unchanged"
+# The three existing call sites pass neither flag. They must keep their exit code, keep
+# every field they already parse (two of them read three fields with no compile-time link
+# to this file), and land on a coverage state rather than an error.
+JP1="$TMP/p1.json"
+run_sut p1 200 "$CI_SSH_FIXTURE" prd "--json-file $JP1"
+_p1=1
+[[ "$RC" == "0" ]] || _p1=0
+grep -qF 'Cloudflare token drift check' "$OUT" || _p1=0
+python3 - "$JP1" <<'PY' || _p1=0
+import json, sys
+d = json.load(open(sys.argv[1]))
+for k, t in (("live", int), ("dead", int), ("unverifiable", int), ("probes", int),
+             ("configs", int), ("stale", list), ("unverifiable_keys", list)):
+    if k not in d or isinstance(d[k], bool) or not isinstance(d[k], t):
+        raise SystemExit(1)
+# The default floor is 1, so a single-config caller stays at-floor and no caller has to
+# learn a new flag to keep its current behaviour.
+if d.get("configs_floor") != 1 or d.get("coverage") != "at-floor":
+    raise SystemExit(1)
+# No inventory was supplied, so there is no denominator to print — and none is invented.
+if d.get("configs_expected") != -1 or d.get("coverage_ratio") != "-":
+    raise SystemExit(1)
+PY
+if [[ "$_p1" == "1" ]]; then
+  pass "flags absent: exit code, human report and the seven pre-existing JSON keys all intact; floor defaults to 1"
+else
+  fail "adding the ladder must not change what the three existing call sites see: same exit code, same seven keys with the same types, --configs-floor defaulting to 1 (rc=$RC)"
+fi
+
+echo "P10: an unrecognised argument exits 2 with a named message"
+# The old `*) shift ;;` catch-all swallowed typos silently. Every flag here narrows or
+# instruments the scan, so a swallowed typo does not disable a feature — it silently
+# widens or blinds the check while the run stays green.
+run_sut p10 200 "$CI_SSH_FIXTURE" prd "--configs-floorr 13"
+_p10=1
+[[ "$RC" == "2" ]] || _p10=0
+grep -qF 'unrecognised argument' "$OUT" || _p10=0
+grep -qF -- "--configs-floorr" "$OUT" || _p10=0
+if [[ "$_p10" == "1" ]]; then
+  pass "a typo'd flag exits 2 and the message names the offending argument"
+else
+  fail "an unknown argument must exit 2 and name itself — the previous catch-all shifted past a misspelled --inventory and printed a caveat nobody asked for (rc=$RC)"
+fi
+
+echo "P10b: an unparseable floor publishes coverage: unknown BEFORE it fails"
+JP10="$TMP/p10b.json"
+run_sut p10b 200 "$CI_SSH_FIXTURE" prd "--configs-floor abc --json-file $JP10"
+_p10b=1
+[[ "$RC" == "2" ]] || _p10b=0
+[[ -s "$JP10" ]] || _p10b=0
+[[ "$(jget "$JP10" coverage)" == "unknown" ]] || _p10b=0
+if [[ "$_p10b" == "1" ]]; then
+  pass "a floor that does not parse yields the fail-closed 'unknown', published rather than swallowed"
+else
+  fail "a gate with no threshold must publish coverage: unknown and exit 2 — deriving 'at-floor' from an unparseable demand is a confident state drawn from garbage (rc=$RC, coverage=$(jget "$JP10" coverage))"
+fi
+
+echo "P2: 13 configs at floor 13 -> at-floor at 13/13, names sorted"
+JP2="$TMP/p2.json"
+MOCK_HTTP_BODY='{"success":true}' run_sut p2 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV13 --json-file $JP2"
+_p2=1
+[[ "$RC" == "0" ]] || _p2=0
+[[ "$(jget "$JP2" configs)" == "13" ]] || _p2=0
+[[ "$(jget "$JP2" configs_floor)" == "13" ]] || _p2=0
+[[ "$(jget "$JP2" coverage)" == "at-floor" ]] || _p2=0
+[[ "$(jget "$JP2" coverage_ratio)" == "13/13" ]] || _p2=0
+[[ "$(jget "$JP2" config_names)" == "$P_CFG13_SORTED" ]] || _p2=0
+[[ "$(jget "$JP2" configs_unread)" == "" ]] || _p2=0
+if [[ "$_p2" == "1" ]]; then
+  pass "the full fleet reads at-floor at 13/13 with a sorted name list and nothing unread"
+else
+  fail "13 of 13 read at a declared floor of 13 must be at-floor with ratio 13/13 and sorted config_names (rc=$RC, configs=$(jget "$JP2" configs), coverage=$(jget "$JP2" coverage), ratio=$(jget "$JP2" coverage_ratio), names=$(jget "$JP2" config_names))"
+fi
+
+echo "P2b: 14 configs at floor 13 -> STILL at-floor (the gate is >=, not ==)"
+# C7: the live config set is expected to grow — a config at git-data birth, ephemeral
+# rehearsal configs. An equality gate would red a twice-daily cron the first time growth
+# was legitimate, and a red on legitimate growth trains the operator to ignore the channel.
+JP2B="$TMP/p2b.json"
+MOCK_HTTP_BODY='{"success":true}' run_sut p2b 200 "$P_SEC14" "$P_CFG14" "--configs-floor 13 --inventory $P_INV13 --json-file $JP2B"
+_p2b=1
+[[ "$RC" == "0" ]] || _p2b=0
+[[ "$(jget "$JP2B" configs)" == "14" ]] || _p2b=0
+[[ "$(jget "$JP2B" coverage)" == "at-floor" ]] || _p2b=0
+[[ "$(jget "$JP2B" coverage_ratio)" == "14/13" ]] || _p2b=0
+grep -q '::warning' "$OUT" && _p2b=0
+if [[ "$_p2b" == "1" ]]; then
+  pass "growth past the floor stays at-floor, pushes the ratio above 1, and fires nothing"
+else
+  fail "the gate must be 'configs >= floor', not '=='. A 14th config is legitimate growth and must not flip a state or raise a warning (rc=$RC, configs=$(jget "$JP2B" configs), coverage=$(jget "$JP2B" coverage), ratio=$(jget "$JP2B" coverage_ratio))"
+fi
+
+echo "P3: every Doppler read names its config explicitly (-c <cfg>), at all four read sites"
+# With 13 configs in play an implicit bind does not fail — it grades ANOTHER config's
+# bytes and reports a confident wrong answer. The stub exits 4 on any `secrets` call
+# without a `-c`, so a dropped argument is loud rather than merely wrong; this case then
+# pins that the config named is the config being graded, at each of the four sites.
+P3_FIXTURE="prd|CI_SSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd|CI_SSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}
+prd|CF_API_TOKEN_DNS_EDIT|synthetic-api-prd
+prd_terraform|CI_SSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd_terraform|CI_SSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}
+prd_terraform|CF_API_TOKEN_DNS_EDIT|synthetic-api-prd-terraform"
+MOCK_HTTP_BODY='{"success":true}' run_sut p3 200 "$P3_FIXTURE" $'prd\nprd_terraform'
+_p3=1
+_p3_secrets=$(grep -E '^secrets' "$DOPPLER_LOG" 2>/dev/null || true)
+[[ -n "$_p3_secrets" ]] || _p3=0
+# Not one `secrets` invocation without a config.
+_p3_no_c=$(grep -cv -- ' -c ' <<<"$_p3_secrets" || true)
+[[ "${_p3_no_c:-1}" == "0" ]] || _p3=0
+# All four sites, for BOTH configs. Anchored on the invocation shape, which no comment in
+# any file can produce, and matched per config so a site that reads the right key from
+# the wrong config fails.
+for _cfg in prd prd_terraform; do
+  grep -qF "secrets -p soleur -c ${_cfg} --only-names" <<<"$_p3_secrets" || _p3=0
+  grep -qF "secrets get CF_API_TOKEN_DNS_EDIT -p soleur -c ${_cfg} --plain" <<<"$_p3_secrets" || _p3=0
+  grep -qF "secrets get CI_SSH_ACCESS_TOKEN_ID -p soleur -c ${_cfg} --plain" <<<"$_p3_secrets" || _p3=0
+  grep -qF "secrets get CI_SSH_ACCESS_TOKEN_SECRET -p soleur -c ${_cfg} --plain" <<<"$_p3_secrets" || _p3=0
+done
+if [[ "$_p3" == "1" ]]; then
+  pass "all four read sites name their config, and each config is read at every site"
+else
+  fail "each of the four Doppler reads (--only-names, and `secrets get` for the API key, the _ID half and the _SECRET half) must pass an explicit -c matching the config being graded; an implicit bind grades another config's bytes. Log:\n$_p3_secrets"
+fi
+
+echo "P4: an unset or empty DOPPLER_TOKEN is a failed credential, never an ambient fallback"
+# The Doppler CLI treats an EMPTY token exactly as it treats an absent one: it rebinds to
+# whatever credential the runner carries and answers confidently about a scope nobody
+# asked for. Both states must therefore refuse to invoke the CLI at all — and the strongest
+# available evidence of that is an empty invocation log.
+for _mode in unset empty; do
+  JP4="$TMP/p4-$_mode.json"
+  MOCK_CRED_MODE="$_mode" run_sut "p4$_mode" 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV13 --json-file $JP4"
+  _p4=1
+  [[ "$RC" == "2" ]] || _p4=0
+  [[ -s "$DOPPLER_LOG" ]] && _p4=0
+  [[ "$(jget "$JP4" configs)" == "0" ]] || _p4=0
+  [[ "$(jget "$JP4" coverage)" == "degraded" ]] || _p4=0
+  [[ "$(jget "$JP4" coverage_ratio)" == "0/13" ]] || _p4=0
+  if [[ "$_p4" == "1" ]]; then
+    pass "DOPPLER_TOKEN $_mode -> degraded at 0/13, and the Doppler CLI was never invoked"
+  else
+    fail "an $_mode DOPPLER_TOKEN must publish degraded at 0/13 WITHOUT invoking the CLI — an empty value is treated as unset and silently rebinds to the ambient credential (rc=$RC, configs=$(jget "$JP4" configs), coverage=$(jget "$JP4" coverage), doppler calls=$(wc -l < "$DOPPLER_LOG"))"
+  fi
+done
+
+echo "P5: a non-empty credential that enumerates nothing is loud, and the verdict is still published"
+# This is the REVOKED-credential path. It used to exit before emit_json, so no verdict
+# file existed at all: the caller parsed configs as -1, coverage landed on 'unknown', and
+# 'unknown' tells the reader to fix the verdict file — unperformable for a dead credential.
+JP5="$TMP/p5.json"
+MOCK_ENUM_FAIL='Invalid Auth token (revoked)' run_sut p5 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV13 --json-file $JP5"
+_p5=1
+[[ "$RC" == "2" ]] || _p5=0
+grep -qF 'Invalid Auth token (revoked)' "$OUT" || _p5=0
+[[ -s "$JP5" ]] || _p5=0
+[[ "$(jget "$JP5" configs)" == "0" ]] || _p5=0
+[[ "$(jget "$JP5" coverage)" == "degraded" ]] || _p5=0
+[[ "$(jget "$JP5" coverage_ratio)" == "0/13" ]] || _p5=0
+if [[ "$_p5" == "1" ]]; then
+  pass "a revoked credential exits 2, shows the CLI's own stderr, and STILL publishes degraded at 0/13"
+else
+  fail "the enumeration's stderr must not be swallowed (it is the only line saying whether the credential was revoked, expired or scoped to nothing), and emit_json must run before the exit-2 return so a revoked credential surfaces as degraded rather than blinding the scan (rc=$RC, verdict written=$([[ -s "$JP5" ]] && echo yes || echo no))"
+fi
+
+echo "P5b: the three narrowings all produce degraded — 0/13, 7/13 and 1/13"
+# N1 role downgrade, N2 environment scoping, N3 a swap back to a config-scoped token. All
+# three SHORTEN what the credential reaches and none can lengthen it, which is what makes
+# a one-sided floor sound. Each must be nameable, not merely non-green.
+#
+# Written as three explicit tuples rather than one packed loop variable: both the config
+# lists and the secrets fixtures carry newlines AND `|`, so any single-string encoding of
+# them is silently truncated by `read` — measured here, n1 and n2 both collapsed to the
+# 1-config default and the case still reported a narrowing.
+p5b_case() {
+  local _lbl="$1" _want="$2" _cfgs="$3" _secs="$4"
+  local JP5B="$TMP/p5b-$_lbl.json"
+  local _p5b=1 _p5b_unread
+  MOCK_HTTP_BODY='{"success":true}' run_sut "p5b$_lbl" 200 "$_secs" "$_cfgs" "--configs-floor 13 --inventory $P_INV13 --json-file $JP5B"
+  [[ "$(jget "$JP5B" configs)" == "$_want" ]] || _p5b=0
+  [[ "$(jget "$JP5B" coverage)" == "degraded" ]] || _p5b=0
+  [[ "$(jget "$JP5B" coverage_ratio)" == "${_want}/13" ]] || _p5b=0
+  _p5b_unread=$(jget "$JP5B" configs_unread)
+  [[ "$(printf '%s\n' "$_p5b_unread" | tr ',' '\n' | grep -c .)" == "$((13 - _want))" ]] || _p5b=0
+  if [[ "$_p5b" == "1" ]]; then
+    pass "narrowing $_lbl reads ${_want}/13 -> degraded, with the $((13 - _want)) missing configs named"
+  else
+    fail "narrowing $_lbl must produce degraded at ${_want}/13 and name every config it did not reach — a narrowing that reports a bare state gives the operator nothing to act on (configs=$(jget "$JP5B" configs), coverage=$(jget "$JP5B" coverage), ratio=$(jget "$JP5B" coverage_ratio), unread=$_p5b_unread)"
+  fi
+}
+# N1 — the membership role is downgraded: the enumeration itself returns nothing.
+# A bare "" cannot express this: run_sut's `${4:-prd}` default fires on a NULL argument as
+# well as an unset one, so an empty config list silently became the 1-config default and
+# the case graded a narrowing it never produced. A lone newline is non-null to the shell
+# and still renders as `[]` from the stub.
+p5b_case n1 0 $'\n' ""
+# N2 — the membership is scoped to one environment: the 7 prd* configs, and only those.
+p5b_case n2 7 "$P_CFG7" "$P_SEC7"
+# N3 — DOPPLER_TOKEN_DRIFT is repointed at a config-scoped service token: 1 of 13.
+p5b_case n3 1 'prd' 'prd|CF_API_TOKEN_X|synthetic-token-value-prd'
+
+echo "P5c: 13 configs LISTED with every read failing counts 0, not 13"
+# N1's subtle form: a role that can enumerate configs but not read their secrets. Counting
+# LISTINGS would satisfy a floor of 13 with a credential that measured nothing at all —
+# a green coverage signal earned by a credential that read zero bytes.
+JP5C="$TMP/p5c.json"
+MOCK_UNREADABLE=ALL run_sut p5c 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV13 --json-file $JP5C"
+_p5c=1
+[[ "$(jget "$JP5C" configs)" == "0" ]] || _p5c=0
+[[ "$(jget "$JP5C" coverage)" == "degraded" ]] || _p5c=0
+[[ "$(jget "$JP5C" config_names)" == "" ]] || _p5c=0
+[[ "$(jget "$JP5C" configs_unread)" == "$P_CFG13_SORTED" ]] || _p5c=0
+if [[ "$_p5c" == "1" ]]; then
+  pass "configs counts configs READ, not configs listed — 13 listings with 0 reads is 0"
+else
+  fail "a role that lists 13 configs and can read none of them must count 0, not 13. Counting listings lets the floor be satisfied by a credential that measures nothing (configs=$(jget "$JP5C" configs), coverage=$(jget "$JP5C" coverage), unread=$(jget "$JP5C" configs_unread))"
+fi
+
+echo "P6: configs_unread is the inventory minus the read set, sorted, and the age is parsed"
+JP6="$TMP/p6.json"
+MOCK_HTTP_BODY='{"success":true}' run_sut p6 200 "$P_SEC7" "$P_CFG7" "--configs-floor 13 --inventory $P_INV13 --json-file $JP6"
+_p6=1
+[[ "$(jget "$JP6" coverage_ratio)" == "7/13" ]] || _p6=0
+[[ "$(jget "$JP6" configs_expected)" == "13" ]] || _p6=0
+[[ "$(jget "$JP6" configs_unread)" == "ci,cli,cli_ops,dev,dev_personal,dev_scheduled" ]] || _p6=0
+# Parsed from the `# generated:` header, so staleness is bounded with no credential and no
+# network call — the denominator cannot be quietly ancient.
+[[ "$(jget "$JP6" inventory_age_days)" == "0" ]] || _p6=0
+if [[ "$_p6" == "1" ]]; then
+  pass "the six unreached configs are named in sorted order and the inventory age parses to 0 days"
+else
+  fail "configs_unread must be the inventory minus the read set, sorted, and inventory_age_days must come from the '# generated:' header (ratio=$(jget "$JP6" coverage_ratio), unread=$(jget "$JP6" configs_unread), age=$(jget "$JP6" inventory_age_days))"
+fi
+
+echo "P6b: a stale inventory changes the caveat and nothing else"
+JP6B="$TMP/p6b.json"
+MOCK_HTTP_BODY='{"success":true}' run_sut p6b 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV_STALE --json-file $JP6B"
+_p6b=1
+[[ "$(jget "$JP6B" coverage)" == "at-floor" ]] || _p6b=0
+[[ "$(jget "$JP6B" coverage_ratio)" == "13/13" ]] || _p6b=0
+_p6b_age=$(jget "$JP6B" inventory_age_days)
+[[ "$_p6b_age" =~ ^[0-9]+$ && "$_p6b_age" -gt 90 ]] || _p6b=0
+[[ "$(jget "$JP6B" coverage_caveat)" == *"days old"* ]] || _p6b=0
+if [[ "$_p6b" == "1" ]]; then
+  pass "an inventory generated in 2020 carries a staleness caveat and moves no state"
+else
+  fail "a stale denominator must be DISCLOSED (a caveat past 90 days) and must not move a state — bounding staleness is what keeps the printed ratio honest without a credential (coverage=$(jget "$JP6B" coverage), age=$_p6b_age, caveat=$(jget "$JP6B" coverage_caveat))"
+fi
+
+echo "P7: a SHORT inventory changes the ratio and NOTHING else"
+# The regression guard for the rejected design in which the denominator gated. A two-line
+# file must not be able to derive the healthy state, fire the close arm and silence the
+# channel while the job stays green.
+JP7="$TMP/p7.json"
+MOCK_HTTP_BODY='{"success":true}' run_sut p7 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV2 --json-file $JP7"
+_p7=1
+[[ "$RC" == "0" ]] || _p7=0
+[[ "$(jget "$JP7" coverage_ratio)" == "13/2" ]] || _p7=0
+[[ "$(jget "$JP7" configs_expected)" == "2" ]] || _p7=0
+[[ "$(jget "$JP7" coverage)" == "at-floor" ]] || _p7=0
+[[ "$(jget "$JP7" configs)" == "13" ]] || _p7=0
+[[ "$(jget "$JP7" configs_unread)" == "" ]] || _p7=0
+if [[ "$_p7" == "1" ]]; then
+  pass "a 2-name inventory prints 13/2 and leaves coverage, the exit code and the read count untouched"
+else
+  fail "THE DENOMINATOR REPORTS AND MUST NOT GATE. A short inventory may change the printed ratio and nothing else — if it can move `coverage`, a two-line file can derive the healthy state and silence the channel (rc=$RC, ratio=$(jget "$JP7" coverage_ratio), coverage=$(jget "$JP7" coverage))"
+fi
+
+echo "P7b: a LONG inventory likewise — the floor decides, never the inventory"
+JP7B="$TMP/p7b.json"
+MOCK_HTTP_BODY='{"success":true}' run_sut p7b 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV20 --json-file $JP7B"
+_p7b=1
+[[ "$RC" == "0" ]] || _p7b=0
+[[ "$(jget "$JP7B" coverage_ratio)" == "13/20" ]] || _p7b=0
+[[ "$(jget "$JP7B" coverage)" == "at-floor" ]] || _p7b=0
+[[ "$(tr ',' '\n' <<<"$(jget "$JP7B" configs_unread)" | grep -c .)" == "7" ]] || _p7b=0
+if [[ "$_p7b" == "1" ]]; then
+  pass "a 20-name inventory prints 13/20, names the 7 it did not reach, and stays at-floor"
+else
+  fail "the inventory cannot manufacture `degraded` any more than it can manufacture `at-floor` — only the declared floor decides (ratio=$(jget "$JP7B" coverage_ratio), coverage=$(jget "$JP7B" coverage), unread=$(jget "$JP7B" configs_unread))"
+fi
+
+echo "P8: a MISSING inventory leaves the ratio absent with a caveat, and coverage still derives from the floor"
+JP8="$TMP/p8.json"
+MOCK_HTTP_BODY='{"success":true}' run_sut p8 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV_MISSING --json-file $JP8"
+_p8=1
+[[ "$RC" == "0" ]] || _p8=0
+[[ "$(jget "$JP8" coverage)" == "at-floor" ]] || _p8=0
+[[ "$(jget "$JP8" configs_expected)" == "-1" ]] || _p8=0
+# Absent, not fabricated. A `13/13` invented from the read count would be a denominator
+# derived from the scan's own credential — exactly the structurally blind measure the
+# design rejects.
+[[ "$(jget "$JP8" coverage_ratio)" == "-" ]] || _p8=0
+[[ "$(jget "$JP8" coverage_caveat)" == *"missing or unreadable"* ]] || _p8=0
+if [[ "$_p8" == "1" ]]; then
+  pass "no inventory: ratio absent, caveat named, coverage still decided by the floor"
+else
+  fail "with no readable inventory the ratio must be ABSENT with a caveat — never back-filled from the scan's own count, which would be a denominator that narrows in lockstep with the credential (rc=$RC, coverage=$(jget "$JP8" coverage), ratio=$(jget "$JP8" coverage_ratio), caveat=$(jget "$JP8" coverage_caveat))"
+fi
+
+echo "P9: the credential value never reaches a child process's argv"
+MOCK_HTTP_BODY='{"success":true}' run_sut p9 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV13"
+_p9=1
+[[ -s "$DOPPLER_LOG" ]] || _p9=0
+grep -qF -- '--token' "$DOPPLER_LOG" && _p9=0
+grep -qF "$FIX_CRED" "$DOPPLER_LOG" && _p9=0
+grep -qF "$FIX_CRED" "$CURL_LOG" && _p9=0
+if [[ "$_p9" == "1" ]]; then
+  pass "delivered as an env prefix: no --token flag and no credential bytes on any child argv"
+else
+  fail "the credential must be delivered as an env prefix, never as \`--token <value>\`: /proc/<pid>/cmdline is world-readable while /proc/<pid>/environ is 0400"
+fi
+
+echo "P11: the credential reaches none of the six sinks, in any mode"
+# P9 covers ONE sink of six. The modes below are the ones that write: --json puts a
+# payload on stdout, --json-file puts one on disk, the human report prints prose, and the
+# three failure modes are the paths that newly un-swallow a CLI's stderr and newly publish
+# a verdict before exiting.
+_p11=1
+_p11_detail=""
+_p11_json="$TMP/p11.json"
+p11_check() {
+  local label="$1"
+  local sink
+  for sink in "$OUT" "$_p11_json" "$GH_OUTPUT" "$DOPPLER_LOG" "$CURL_LOG" "$DOPPLER_ENV_LOG"; do
+    [[ -f "$sink" ]] || continue
+    if grep -qF "$FIX_CRED" "$sink"; then
+      _p11=0
+      _p11_detail+="  ${label}: sentinel found in $(basename "$sink")"$'\n'
+    fi
+  done
+}
+rm -f "$_p11_json"
+MOCK_HTTP_BODY='{"success":true}' run_sut p11a 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV13 --json"
+p11_check "--json"
+MOCK_HTTP_BODY='{"success":true}' run_sut p11b 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV13 --json-file $_p11_json"
+p11_check "--json-file"
+MOCK_HTTP_BODY='{"success":true}' run_sut p11c 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV13"
+p11_check "human report"
+rm -f "$_p11_json"
+MOCK_CRED_MODE=empty run_sut p11d 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13"
+p11_check "empty credential"
+MOCK_ENUM_FAIL='Invalid Auth token (revoked)' run_sut p11e 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13"
+p11_check "revoked credential"
+run_sut p11f 200 "$P_SEC13" "$P_CFG13" "--bogus-flag"
+p11_check "unknown flag"
+if [[ "$_p11" == "1" ]]; then
+  pass "sentinel absent from stdout/stderr, the JSON payload, the --json-file, \$GITHUB_OUTPUT and both child argv logs, across all six modes"
+else
+  fail "no credential value may reach any sink. The issue bodies and ops emails built from these fields are API payloads on a PUBLIC repository, so log masking does not reach them:\n$_p11_detail"
+fi
+
+echo "P12: a rejected credential's stderr is surfaced without echoing the credential"
+# Un-swallowing the enumeration's stderr is the point of the change, and it is also the
+# moment a credential could start appearing in a job log — the CLI is handed a bad secret
+# and allowed to speak.
+MOCK_ENUM_FAIL='Invalid Auth token' run_sut p12 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13"
+_p12=1
+grep -qF 'Invalid Auth token' "$OUT" || _p12=0
+grep -qF "$FIX_CRED" "$OUT" && _p12=0
+if [[ "$_p12" == "1" ]]; then
+  pass "the CLI's rejection is visible and the credential is not"
+else
+  fail "dropping 2>/dev/null must surface the CLI's diagnosis without surfacing the credential it was handed"
+fi
+
+echo "P13: a config whose read fails is recorded by NAME, never by value"
+JP13="$TMP/p13.json"
+MOCK_UNREADABLE=prd_terraform MOCK_HTTP_BODY='{"success":true}' run_sut p13 200 \
+  "prd|CF_API_TOKEN_X|synthetic-token-value-prd
+prd_terraform|CF_API_TOKEN_X|synthetic-token-value-prd-terraform" $'prd\nprd_terraform' "--configs-floor 2 --json-file $JP13"
+_p13=1
+[[ "$(jget "$JP13" configs)" == "1" ]] || _p13=0
+[[ "$(jget "$JP13" config_names)" == "prd" ]] || _p13=0
+# No inventory here at all: an unreadable config must still be nameable, because that is
+# the finding — not a gap in a denominator.
+[[ "$(jget "$JP13" configs_unread)" == "prd_terraform" ]] || _p13=0
+[[ "$(jget "$JP13" coverage)" == "degraded" ]] || _p13=0
+grep -qF 'prd_terraform' "$OUT" || _p13=0
+grep -qF 'synthetic-token-value-prd-terraform' "$OUT" && _p13=0
+if [[ "$_p13" == "1" ]]; then
+  pass "the unreadable config is named in configs_unread and in the report, with no value anywhere"
+else
+  fail "an enumerated-but-unreadable config must be recorded by NAME (it is the finding), must not enter the read count, and must never carry a secret value into the report (configs=$(jget "$JP13" configs), unread=$(jget "$JP13" configs_unread), coverage=$(jget "$JP13" coverage))"
+fi
+
+echo "P14: under GITHUB_ACTIONS every distinct scanned value is masked BEFORE the first probe"
+# Actions auto-masks only `secrets.*`-sourced values, so everything read out of Doppler is
+# unmasked in the job log by default. At 13 configs this is 13 distinct values transiting
+# the runner rather than 1 — and the same change deliberately un-swallows stderr from the
+# subsystem that handles them.
+MOCK_GITHUB_ACTIONS=true MOCK_HTTP_BODY='{"success":true}' run_sut p14 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV13"
+_p14=1
+_p14_masks=$(grep -c '::add-mask::' "$OUT" 2>/dev/null || true)
+[[ "${_p14_masks:-0}" == "13" ]] || _p14=0
+# One per DISTINCT value, deduped, and naming the real bytes rather than a placeholder.
+# `-x` (whole line), not a substring match: `…-value-prd` is a PREFIX of `…-value-prd_cla`
+# and five other config names, so an unanchored count returns 7 and the dedup assertion
+# would fail for a reason that has nothing to do with deduping.
+for _cfg in prd ci cli_ops prd_workspaces_luks; do
+  [[ "$(grep -cxF "::add-mask::synthetic-token-value-${_cfg}" "$OUT" 2>/dev/null || true)" == "1" ]] || _p14=0
+done
+# ORDERING, measured rather than assumed: at the moment of the first curl invocation, all
+# 13 masks were already on stdout. "Masked eventually" is not the property — a value that
+# reaches a probe before its mask can be echoed by a failing probe into an unmasked log.
+[[ -f "$MASK_SNAPSHOT" ]] || _p14=0
+[[ "$(cat "$MASK_SNAPSHOT" 2>/dev/null || echo missing)" == "13" ]] || _p14=0
+if [[ "$_p14" == "1" ]]; then
+  pass "13 distinct values, 13 ::add-mask:: directives, all emitted before the first probe"
+else
+  fail "every distinct scanned value must be registered with ::add-mask:: BEFORE the first probe (masks emitted=${_p14_masks:-0}, masks present at first probe=$(cat "$MASK_SNAPSHOT" 2>/dev/null || echo '<no probe>'))"
+fi
+
+echo "P14b: outside Actions nothing is masked — the directive is not printed into an operator's terminal"
+MOCK_HTTP_BODY='{"success":true}' run_sut p14b 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13"
+if ! grep -q '::add-mask::' "$OUT"; then
+  pass "no ::add-mask:: outside GITHUB_ACTIONS"
+else
+  fail "::add-mask:: writes the value to stdout; outside Actions nothing consumes the directive, so it would print 13 live secrets into a local terminal for no benefit"
+fi
+
+echo "P15: DOPPLER_TOKEN and DOPPLER_CONFIG are unset once the credential is snapshotted"
+# curl is given NO env prefix, so it inherits the SUT's own environment. If the SUT had
+# kept relying on ambient variables rather than snapshotting and unsetting them, both
+# would show up here — and a read site that forgot its `-c` would silently bind the
+# ambient config instead of failing.
+MOCK_AMBIENT_CONFIG=prd_terraform MOCK_HTTP_BODY='{"success":true}' run_sut p15 200 "$P3_FIXTURE" $'prd\nprd_terraform'
+_p15=1
+[[ -s "$CURL_ENV_LOG" ]] || _p15=0
+[[ -s "$DOPPLER_ENV_LOG" ]] || _p15=0
+grep -q 'TOKEN=set' "$CURL_ENV_LOG" && _p15=0
+grep -q 'CONFIG=set' "$CURL_ENV_LOG" && _p15=0
+grep -q 'CONFIG=set' "$DOPPLER_ENV_LOG" && _p15=0
+_p15_tok=$(grep -c 'TOKEN=set' "$DOPPLER_ENV_LOG" 2>/dev/null || true)
+_p15_all=$(grep -c . "$DOPPLER_ENV_LOG" 2>/dev/null || true)
+[[ "${_p15_tok:-0}" == "${_p15_all:-1}" ]] || _p15=0
+if [[ "$_p15" == "1" ]]; then
+  pass "every Doppler call carries the credential explicitly; curl inherits neither variable, and the ambient DOPPLER_CONFIG reaches nothing"
+else
+  fail "the credential must be snapshotted and both variables then unset, so a missed read site fails loudly instead of binding the ambient config (doppler calls with a token: ${_p15_tok:-0}/${_p15_all:-0}; curl inherited: $(head -1 "$CURL_ENV_LOG" 2>/dev/null || echo '<no probe>'))"
+fi
+
+# ===========================================================================
 # W1-W9 — CONSUMER WIRING (#7095).
 #
 # The detector above is only half the story. During the 2026-07-29 outage it produced the
@@ -1081,8 +1712,14 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # (measured in the sibling consumer suite — 20 against 22 let the two tests carrying that
 # PR's only in-run deliverable be deleted at "20/20 passed", exit 0). Still a floor, so
 # ADDING a case needs no edit here; only a removal trips it, which is the point.
-if [[ "$((PASS + FAIL))" -lt 53 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 53. The suite did not execute what it claims to." >&2
+#
+# Raised 53 -> 78 with P1-P15 (the single-credential path and the coverage ladder). 78 is
+# the REALIZED count on a green run, not a round number: the plan's provisional 68 was
+# written before the cases were split per narrowing (P5b runs three) and per credential
+# state (P4 runs two), and a floor below the realized count would license deleting exactly
+# the cases this change adds.
+if [[ "$((PASS + FAIL))" -lt 78 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 78. The suite did not execute what it claims to." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
