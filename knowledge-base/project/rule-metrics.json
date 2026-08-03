@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-07-23T21:22:19Z",
+  "generated_at": "2026-08-03T10:27:32Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -13,7 +13,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "cm-delegate-verbose-exploration-3-file",
@@ -26,7 +26,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "cm-when-proposing-to-clear-context-or",
@@ -39,7 +39,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "cq-agents-md-tier-gate",
@@ -52,7 +52,20 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → docs-only"
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "cq-agents-md-why-single-line",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
     },
     {
       "id": "cq-assert-anchor-not-bare-token",
@@ -65,7 +78,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "cq-before-pushing-package-json-changes",
@@ -78,7 +91,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "cq-cite-content-anchor-not-line-number",
@@ -91,7 +104,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "cq-eleventy-critical-css-screenshot-gate",
@@ -104,7 +117,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → docs-only"
+      "rule_text_prefix": ""
     },
     {
       "id": "cq-nextjs-route-files-http-only-exports",
@@ -117,7 +130,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "cq-pg-security-definer-search-path-pin-pg-temp",
@@ -130,7 +143,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "cq-ref-removal-sweep-cleanup-closures",
@@ -143,7 +156,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "cq-regex-unicode-separators-escape-only",
@@ -156,7 +169,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "cq-rule-ids-are-immutable",
@@ -169,7 +182,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → docs-only"
+      "rule_text_prefix": ""
     },
     {
       "id": "cq-silent-fallback-must-mirror-to-sentry",
@@ -182,7 +195,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "cq-skill-description-budget-headroom",
@@ -195,7 +208,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → docs-only"
+      "rule_text_prefix": ""
     },
     {
       "id": "cq-test-fixtures-synthesized-only",
@@ -208,7 +221,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "cq-union-widening-grep-three-patterns",
@@ -221,7 +234,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "cq-write-failing-tests-before",
@@ -234,7 +247,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-all-infrastructure-provisioning-servers",
@@ -247,7 +260,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-always-read-a-file-before-editing-it",
@@ -260,7 +273,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-autonomous-loop-skill-api-budget-disclosure",
@@ -273,7 +286,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-before-asserting-github-issue-status",
@@ -286,7 +299,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-before-shipping-ship-phase-5-5-runs",
@@ -299,7 +312,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-bulk-delete-per-item-live-infra-role-check",
@@ -312,7 +325,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-dev-prd-distinct-supabase-projects",
@@ -325,7 +338,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-every-new-terraform-root-must-include-an",
@@ -338,7 +351,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-exhaust-all-automated-options-before",
@@ -351,7 +364,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-fresh-host-provisioning-reachable-from-terraform-apply",
@@ -364,7 +377,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-gdpr-gate-on-regulated-data-surfaces",
@@ -377,7 +390,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-github-api-endpoints-with-enum",
@@ -390,7 +403,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-github-app-auth-not-pat",
@@ -403,7 +416,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-mcp-tools-playwright-etc-resolve-paths",
@@ -416,7 +429,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-menu-option-ack-not-prod-write-auth",
@@ -429,7 +442,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-monitor-not-run-in-background-for-polling",
@@ -442,7 +455,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-multi-step-post-merge-bootstrap-script",
@@ -455,7 +468,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-never-git-add-a-in-user-repo-agents",
@@ -468,7 +481,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-never-git-stash-in-worktrees",
@@ -481,7 +494,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-never-label-any-step-as-manual-without",
@@ -494,7 +507,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-never-paste-secrets-via-bang-prefix",
@@ -507,7 +520,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-never-run-commands-with-unbounded-output",
@@ -520,7 +533,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-never-write-to-claude-code-memory-claude",
@@ -533,7 +546,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-new-skills-agents-or-user-facing",
@@ -546,7 +559,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-no-dashboard-eyeball-pull-data-yourself",
@@ -559,7 +572,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-no-ssh-fallback-in-runbooks",
@@ -572,7 +585,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-observability-as-plan-quality-gate",
@@ -585,7 +598,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-observability-layer-citation",
@@ -598,7 +611,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-pipeline-skills-never-inline-after-go-route",
@@ -611,7 +624,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-prod-host-config-change-immutable-redeploy",
@@ -624,7 +637,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-ship-message-no-operator-checklist",
@@ -637,7 +650,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-ssh-diagnosis-verify-firewall",
@@ -650,7 +663,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-tagged-build-workflow-needs-initial-tag-push",
@@ -663,7 +676,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-tf-variable-no-operator-mint-default",
@@ -676,7 +689,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-the-bash-tool-runs-in-a-non-interactive",
@@ -689,7 +702,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-the-host-terminal-is-warp",
@@ -702,7 +715,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-type-widening-cross-consumer-grep",
@@ -715,7 +728,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-verify-repo-capability-claim-before-assert",
@@ -728,7 +741,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-when-a-command-exits-non-zero-or-prints",
@@ -741,7 +754,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-when-a-plan-specifies-relative-paths-e-g",
@@ -754,7 +767,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-when-a-workflow-concludes-with-an",
@@ -767,7 +780,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-when-in-a-worktree-never-read-from-bare",
@@ -780,7 +793,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-when-triaging-a-batch-of-issues-never",
@@ -793,7 +806,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-write-boundary-sentinel-sweep-all-write-sites",
@@ -806,7 +819,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "pdr-do-not-route-on-trivial-messages-yes",
@@ -819,7 +832,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "pdr-when-a-user-message-contains-a-clear",
@@ -832,7 +845,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "rf-after-merging-read-files-from-the-merged",
@@ -845,7 +858,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "rf-before-shipping-verify-1-review-comments",
@@ -858,7 +871,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "rf-before-spawning-review-agents-push-the",
@@ -871,7 +884,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "rf-never-skip-qa-review-before-merging",
@@ -884,7 +897,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "rf-review-finding-default-fix-inline",
@@ -897,7 +910,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "rf-when-a-reviewer-or-user-says-to-keep-a",
@@ -910,7 +923,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-after-a-pr-merges-to-main-verify-all",
@@ -923,7 +936,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-after-marking-a-pr-ready-run-gh-pr-merge",
@@ -936,7 +949,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-after-merging-a-pr-that-adds-or-modifies",
@@ -949,7 +962,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-architecture-decision-is-a-plan-deliverable",
@@ -962,7 +975,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-at-session-start-after-cleanup-merged",
@@ -975,7 +988,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-at-session-start-run-bash-plugins-soleur",
@@ -988,7 +1001,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-block-pr-ready-on-undeferred-operator-steps",
@@ -1001,7 +1014,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-cla-signed-author-before-merge",
@@ -1014,7 +1027,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-dark-launch-deploy-gates",
@@ -1027,7 +1040,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-defer-only-after-inline-triage",
@@ -1040,7 +1053,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-end-of-work-emit-resume-prompt",
@@ -1053,7 +1066,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-every-feature-listed-in-a-roadmap-phase",
@@ -1066,7 +1079,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-every-session-error-must-produce-either",
@@ -1079,7 +1092,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-never-bump-version-files-in-feature",
@@ -1092,7 +1105,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-plan-prescribed-skills-must-run-inline",
@@ -1105,7 +1118,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-pm-class-followthrough-for-operator-dogfood",
@@ -1118,7 +1131,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-record-recurring-vendor-expense-before-ready",
@@ -1131,7 +1144,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-ship-push-before-merge",
@@ -1144,7 +1157,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-ui-feature-requires-pen-wireframe",
@@ -1157,7 +1170,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → docs-only"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-use-closes-n-in-pr-body-not-title-to",
@@ -1170,7 +1183,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-verified-work-ships-without-asking",
@@ -1183,7 +1196,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-when-a-test-runner-crashes-segfault-oom",
@@ -1196,7 +1209,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-when-a-workflow-gap-causes-a-mistake-fix",
@@ -1209,7 +1222,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-when-an-audit-identifies-pre-existing",
@@ -1222,7 +1235,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-when-closing-a-phase-milestone-update",
@@ -1235,7 +1248,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-when-deferring-a-capability-create-a",
@@ -1248,7 +1261,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-when-fixing-a-workflow-gates-detection",
@@ -1261,7 +1274,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-when-tests-fail-and-are-confirmed-pre",
@@ -1274,7 +1287,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → rest"
+      "rule_text_prefix": ""
     },
     {
       "id": "wg-zero-agents-until-user-confirms",
@@ -1287,20 +1300,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
-    },
-    {
-      "id": "cq-agents-md-why-single-line",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 1,
-      "warn_count": 0,
-      "fire_count": 1,
-      "prevented_errors": 0,
-      "last_hit": "2026-07-23T21:22:06Z",
-      "first_seen": "2026-07-23T21:22:06Z",
-      "rule_text_prefix": " → docs-only"
+      "rule_text_prefix": ""
     },
     {
       "id": "hr-weigh-every-decision-against-target-user-impact",
@@ -1311,17 +1311,25 @@
       "warn_count": 0,
       "fire_count": 1,
       "prevented_errors": 0,
-      "last_hit": "2026-07-23T20:56:36Z",
-      "first_seen": "2026-07-23T20:56:36Z",
-      "rule_text_prefix": " → core"
+      "last_hit": "2026-08-03T10:07:15Z",
+      "first_seen": "2026-08-03T10:07:15Z",
+      "rule_text_prefix": ""
     }
   ],
   "summary": {
     "total_rules_tagged": 101,
-    "rules_unused_over_8w": 99,
+    "rules_unused_over_8w": 100,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": [],
+    "gate_exemptions": [],
+    "gate_override_count": 0,
+    "gate_timeout_warn_count": 0,
+    "gate_failopen_warn_count": 0,
+    "gate_corpus_unreadable_warn_count": 0,
+    "gate_zero_tagged_warn_count": 0,
     "drops_jq_fail_count": 0,
-    "drops_rotation_fail_count": 0
+    "drops_rotation_fail_count": 0,
+    "hook_input_fault_count": 0,
+    "hook_input_fault_reasons": {}
   }
 }
