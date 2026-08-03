@@ -62,6 +62,55 @@ def check(name, cond, detail=""):
     d = str(detail)[:200].replace("\t", " ").replace("\n", " ").replace("\r", " ")
     verdicts.append(("ok" if cond else "FAIL", name.replace("\t", " "), d))
 
+# --- a GitHub-expression evaluator for the subset these two conditions use ---------------------
+# A SUBSTRING GREP IS NOT ENOUGH, and this is the whole reason the file exists. "always() is in the
+# string" passes just as happily for an INVERTED class clause, for `||` where `&&` was meant, and
+# for a condition that fires on every run including the green ones. Only evaluating the expression
+# over the outcome x class grid can tell those apart from the correct one.
+#
+# Python's `and`/`or` short-circuit with the same value semantics GitHub uses for the
+# `cond && 'a' || 'b'` ternary (both yield the last evaluated operand), so ONE evaluator covers the
+# alarm's boolean `if:` and the heartbeat's string-valued `status:`.
+#
+# It fails CLOSED: any token it was not taught (a status function like failure(), a context path
+# nobody translated) raises, and the caller turns that into a FAIL rather than a quiet pass.
+_GHA_SUBS = [
+    ("steps.reassert.outputs.outcome_class", "OUTCLASS"),
+    ("steps.reassert.outcome", "OUTCOME"),
+    ("github.event_name", "EVENT"),
+    ("inputs.alarm_selftest", "SELFTEST"),
+    ("always()", "True"),
+    ("&&", " and "),
+    ("||", " or "),
+]
+
+def gha_translate(expr):
+    e = str(expr).strip()
+    if e.startswith("${{"):
+        e = e[3:]
+    if e.endswith("}}"):
+        e = e[:-2]
+    # A YAML folded scalar (`if: >-`) KEEPS the newline before any more-indented continuation line,
+    # so the raw string arrives multi-line and Python would reject the leading spaces as an indent.
+    # GitHub does not care; collapse to one line before translating.
+    e = " ".join(e.split())
+    for a, b in _GHA_SUBS:
+        e = e.replace(a, b)
+    # Any surviving dotted identifier is a context reference this evaluator never learned, so every
+    # verdict below would be about an expression we do not actually understand.
+    leftover = re.search(r"[A-Za-z_][A-Za-z_0-9]*\.[A-Za-z_]", e)
+    if leftover:
+        raise ValueError("untranslated context reference: " + leftover.group(0))
+    return e
+
+def gha_eval(expr, **ctx):
+    return eval(gha_translate(expr), {"__builtins__": {}}, ctx)  # noqa: S307 - fixed grammar, no external input
+
+# The closed grid every assertion below quantifies over. 'skipped' is the one that matters most:
+# it is what a Re-assert step that NEVER RAN looks like, and it leaves outcome_class empty.
+OUTCOMES = ["success", "failure", "skipped", "cancelled"]
+CLASSES = ["pass", "drift", "readiness", "unavailable", ""]
+
 # `on` parses to the boolean True under YAML 1.1, hence the two-key lookup.
 on = wf.get(True) or wf.get("on") or {}
 
@@ -151,6 +200,78 @@ if hb:
     blob = json.dumps(hb[0])
     check("heartbeat status gates POSITIVELY on 'pass' (a negative gate inverts silently)",
           "'pass'" in blob or '"pass"' in blob, blob[:200])
+
+# --- (G2) THE EVALUATED TRUTH TABLES ------------------------------------------------------------
+# Everything above about these two expressions was a substring test. These are the assertions that
+# can tell a correct condition from an inverted one. The eval is over a fixed, repo-controlled
+# grammar with builtins stripped and an untranslated-token guard, so it executes no external input.
+if alarm:
+    cond = str(alarm[0].get("if", ""))
+    try:
+        wrong = []
+        for outcome in OUTCOMES:
+            for cls in CLASSES:
+                fired = bool(gha_eval(cond, OUTCOME=outcome, OUTCLASS=cls,
+                                      EVENT="schedule", SELFTEST=False))
+                # The contract, stated once: a scheduled run alarms unless the producer SUCCEEDED
+                # and classified the run a pass. Every other cell -- including the empty class a
+                # step that never ran leaves behind -- must alarm.
+                expected = not (outcome == "success" and cls == "pass")
+                if fired != expected:
+                    wrong.append(f"{outcome}/{cls or 'EMPTY'}: fired={fired} want={expected}")
+        check("alarm if: evaluated over the full outcome x class grid fires on every cell except (success, pass)",
+              not wrong, "; ".join(wrong[:4]) or "20 cells correct")
+    except Exception as exc:  # noqa: BLE001 - an unparseable condition is a hard failure
+        check("alarm if: is evaluable (an unknown token means the grid above proved nothing)",
+              False, repr(exc))
+
+    # Scope: a FAILED operator dispatch must file nothing. Dropping the event-name conjunct is
+    # invisible to a substring check and turns every operator experiment into an issue.
+    try:
+        check("alarm if: does NOT fire on a failed operator dispatch (no spam on the manual path)",
+              not gha_eval(cond, OUTCOME="failure", OUTCLASS="drift",
+                           EVENT="workflow_dispatch", SELFTEST=False))
+        check("alarm if: DOES fire for the dispatch-only selftest rehearsal (else it can never be proven live)",
+              bool(gha_eval(cond, OUTCOME="success", OUTCLASS="selftest",
+                            EVENT="workflow_dispatch", SELFTEST=True)))
+    except Exception as exc:  # noqa: BLE001
+        check("alarm if: scope cells are evaluable", False, repr(exc))
+
+if hb:
+    status_expr = str((hb[0].get("with") or {}).get("status", ""))
+    check("the heartbeat declares a status expression", bool(status_expr), status_expr[:120])
+    try:
+        wrong = []
+        for outcome in OUTCOMES:
+            for cls in CLASSES:
+                got = gha_eval(status_expr, OUTCOME=outcome, OUTCLASS=cls,
+                               EVENT="schedule", SELFTEST=False)
+                want = "ok" if (outcome == "success" and cls == "pass") else "error"
+                if got != want:
+                    wrong.append(f"{outcome}/{cls or 'EMPTY'}: got={got!r} want={want!r}")
+        check("heartbeat status: evaluates to 'ok' ONLY on (success, pass) and 'error' everywhere else",
+              not wrong, "; ".join(wrong[:4]) or "20 cells correct")
+    except Exception as exc:  # noqa: BLE001
+        check("heartbeat status: is evaluable", False, repr(exc))
+
+# The two conditions must be exact complements over the grid: anything that alarms must also check
+# in `error`, and anything that checks in `ok` must file nothing. A drift between them would let a
+# class page the operator while the monitor stays green -- or the reverse.
+if alarm and hb:
+    try:
+        split = []
+        for outcome in OUTCOMES:
+            for cls in CLASSES:
+                fired = bool(gha_eval(str(alarm[0].get("if", "")), OUTCOME=outcome, OUTCLASS=cls,
+                                      EVENT="schedule", SELFTEST=False))
+                st = gha_eval(str((hb[0].get("with") or {}).get("status", "")),
+                              OUTCOME=outcome, OUTCLASS=cls, EVENT="schedule", SELFTEST=False)
+                if fired != (st == "error"):
+                    split.append(f"{outcome}/{cls or 'EMPTY'}: alarm={fired} status={st!r}")
+        check("the alarm condition and the heartbeat status are exact complements over the grid",
+              not split, "; ".join(split[:4]) or "20 cells agree")
+    except Exception as exc:  # noqa: BLE001
+        check("alarm/heartbeat complement check is evaluable", False, repr(exc))
 
 # --- (H) ops-email routing ----------------------------------------------------------------------
 email = by_name("email")

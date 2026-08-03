@@ -616,12 +616,12 @@ jobs:
           # as a code block.
           {
             printf '## %s\n\n' "$headline"
-            printf -- '- **outcome_class:** `%s`\n' "$class"
-            printf -- '- **reason:** `%s`\n' "${reason:-unknown}"
-            printf -- '- **re-assert step outcome:** `%s`\n' "$reassert_outcome"
+            printf -- '- **outcome_class:** %s\n' "$class"
+            printf -- '- **reason:** %s\n' "${reason:-unknown}"
+            printf -- '- **re-assert step outcome:** %s\n' "$reassert_outcome"
             printf -- '- **first_observed_at:** %s\n' "$now"
             printf -- '- **run log:** %s\n' "$run_url"
-            printf -- '- **ops email page:** `%s`\n\n' "$email_outcome"
+            printf -- '- **ops email page:** %s\n\n' "$email_outcome"
             printf 'The ops email is BEST-EFFORT and this issue is the primary channel. notify-ops-email\n'
             printf 'exits 0 with only a warning on a non-2xx from Resend, so an expired key would drop every\n'
             printf 'page into a log nobody reads — the outcome recorded above is the durable evidence of\n'
@@ -649,7 +649,7 @@ jobs:
                 printf 'outage on the app liveness check. Do NOT run a data-recovery procedure for this class.\n\n'
                 ;;
               selftest)
-                printf 'Filed by a deliberate `alarm_selftest` dispatch to prove this step is reachable under\n'
+                printf 'Filed by a deliberate alarm_selftest dispatch to prove this step is reachable under\n'
                 printf 'real GitHub expression evaluation. Close it.\n\n'
                 ;;
             esac
