@@ -365,7 +365,8 @@ fi
 # (c) Each activation failure enum must RED the gate. One arm per enum — they are distinct
 # defects (a unit that died after fork, one that never re-exec'd, a missing grant) and a
 # single representative case would let two of the three regress unnoticed.
-for bad_reason in noop_not_active restart_did_not_advance sudo_denied; do
+for bad_reason in noop_not_active restart_did_not_advance sudo_denied \
+                  restart_invocation_failed probe_unavailable timestamp_absent timestamp_unparseable; do
   VBAD="$TMP/v2-$bad_reason.json"
   bad_restarts=$(jq --arg r "$bad_reason" \
     '(.[0].action) = "failed" | (.[0].reason) = $r' <<<"$RESTARTS_OK")
@@ -374,6 +375,57 @@ for bad_reason in noop_not_active restart_did_not_advance sudo_denied; do
     fail "activation reason=$bad_reason must FAIL the gate — it passed"
   else
     pass "activation reason=$bad_reason REDS the gate (delivered but not running)"
+  fi
+done
+
+# (c2) THE DENY-LIST ITSELF. The arms above enumerate reasons the gate knows; these pin what it
+# does with ones it does NOT. This was an allow-list of three reason strings that never keyed on
+# `action`, so every verdict outside those three passed silently — measured against the shipped
+# function, `action=failed` with an unrecognised reason returned rc=0 with no output at all.
+# An allow-list classifies every fault named in future as inert, so the fixtures below are the
+# ones that would go red if anyone reverted to one.
+for unknown_reason in brand_new_reason_added_next_year ''; do
+  VUNK="$TMP/v2-unknown-reason-${unknown_reason:-empty}.json"
+  unk_restarts=$(jq --arg r "$unknown_reason" \
+    '(.[0].action) = "skipped" | (.[0].reason) = $r' <<<"$RESTARTS_OK")
+  build_status_json_v2 "$VUNK" 2 "$unk_restarts"
+  if adjudicate_infra_config "$VUNK" "$SYNTH" "$SYNTH/infra-config-apply.sh" >/dev/null 2>&1; then
+    fail "an UNRECOGNISED skip reason ('${unknown_reason:-<empty>}') must FAIL the gate — it passed"
+  else
+    pass "unrecognised skip reason ('${unknown_reason:-<empty>}') REDS the gate (fails closed)"
+  fi
+done
+
+# action=failed is a failure whatever the reason says — including a reason from the inert list.
+VFAILINERT="$TMP/v2-failed-but-inert-reason.json"
+build_status_json_v2 "$VFAILINERT" 2 \
+  "$(jq '(.[0].action) = "failed" | (.[0].reason) = "not_stale"' <<<"$RESTARTS_OK")"
+if adjudicate_infra_config "$VFAILINERT" "$SYNTH" "$SYNTH/infra-config-apply.sh" >/dev/null 2>&1; then
+  fail "action=failed must FAIL the gate even with an inert-looking reason — it passed"
+else
+  pass "action=failed REDS the gate regardless of the reason string"
+fi
+
+# An action outside the vocabulary is not evidence of anything either.
+VUNKACT="$TMP/v2-unknown-action.json"
+build_status_json_v2 "$VUNKACT" 2 \
+  "$(jq '(.[0].action) = "reconciled" | (.[0].reason) = "not_stale"' <<<"$RESTARTS_OK")"
+if adjudicate_infra_config "$VUNKACT" "$SYNTH" "$SYNTH/infra-config-apply.sh" >/dev/null 2>&1; then
+  fail "an UNRECOGNISED action must FAIL the gate — it passed"
+else
+  pass "unrecognised action REDS the gate (fails closed)"
+fi
+
+# (c3) THE OTHER DIRECTION. A deny-list that reds everything is as useless as an allow-list that
+# reds nothing, and no fixture above would notice. Every known-inert verdict must still PASS.
+for ok_reason in not_stale unit_inactive unit_absent; do
+  VOK="$TMP/v2-inert-$ok_reason.json"
+  build_status_json_v2 "$VOK" 2 \
+    "$(jq --arg r "$ok_reason" '(.[0].action) = "skipped" | (.[0].reason) = $r | (.[0].active) = "inactive"' <<<"$RESTARTS_OK")"
+  if adjudicate_infra_config "$VOK" "$SYNTH" "$SYNTH/infra-config-apply.sh" >/dev/null 2>&1; then
+    pass "known-inert skip reason=$ok_reason PASSES the gate (warn, not fail)"
+  else
+    fail "known-inert skip reason=$ok_reason must NOT fail the gate — it red"
   fi
 done
 

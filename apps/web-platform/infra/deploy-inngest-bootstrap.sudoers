@@ -111,9 +111,15 @@ deploy ALL=(root) NOPASSWD: GIT_LOCK_CHARDEVICE_SWEEP
 # capability into an execution capability — vector.service runs User=deploy, and systemd merges
 # drop-ins after the unit body. The gate ships first for that reason; do not reorder them.
 #
-# One line, two commands — the INNGEST_QUIESCE form above, not a continuation. Sudoers argument
-# matching is EXACT, so `try-restart vector.service --no-block` is denied rather than silently
-# widened: the failure mode of a drift here is denial, which infra-config-apply.test.sh's
-# sudoers-to-caller argv lockstep pins in both directions.
-Cmnd_Alias DROPIN_TRY_RESTART = /usr/bin/systemctl try-restart inngest-heartbeat.service, /usr/bin/systemctl try-restart vector.service
+# Sudoers argument matching is EXACT, so `try-restart vector.service --no-block` is denied rather
+# than silently widened: the failure mode of a drift here is denial, which
+# infra-config-apply.test.sh's sudoers-to-caller argv lockstep pins in both directions.
+#
+# ONE unit, deliberately. inngest-heartbeat.service was granted here when this shipped and has
+# been removed: it is a Type=oneshot with no RemainAfterExit on a 60s timer, so it re-reads its
+# drop-in on its next tick after daemon-reload and never needed a restart grant at all. Keeping
+# it would have been a standing root-restart capability on the unreplaceable host in exchange for
+# nothing. Full rationale at RESTART_MAP in infra-config-apply.sh; the argv lockstep asserts this
+# alias and that map agree, so the two cannot drift apart silently.
+Cmnd_Alias DROPIN_TRY_RESTART = /usr/bin/systemctl try-restart vector.service
 deploy ALL=(root) NOPASSWD: DROPIN_TRY_RESTART

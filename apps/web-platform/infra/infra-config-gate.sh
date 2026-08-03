@@ -240,12 +240,41 @@ adjudicate_infra_config() {
       r_rc=$(jq   -r '.rc      // "MISSING"' <<<"$verdict")
       r_active=$(jq -r '.active // "MISSING"' <<<"$verdict")
 
-      # HARD FAIL: a restart was attempted and did not take. No host topology makes any of
-      # these legitimate — each means the handler tried to activate a delivered drop-in and
-      # could not. This is ADR-158 proposition 1's defect exactly.
-      case "$reason" in
-        noop_not_active|restart_did_not_advance|sudo_denied)
+      # HARD FAIL BY DENY-LIST, keyed on `action` first.
+      #
+      # This was an ALLOW-LIST of three reason strings and never keyed on action at all, which
+      # meant every verdict outside those three passed SILENTLY — measured against the shipped
+      # function: reason=timestamp_unparseable, an unrecognised reason, and even
+      # action=failed/reason=anything each returned rc=0 with no output, not even a warning.
+      # The handler's vocabulary is larger than three and grows whenever a new fault is named,
+      # so an allow-list classifies every future fault as inert. That is the same fail-open shape
+      # the repo already documents for terraform action verbs: deny-list what is known to be
+      # harmless, never allow-list what is known to be dangerous.
+      #
+      # A `failed` action is a failure whatever the reason says. No host topology makes it
+      # legitimate — each means the handler tried to activate a delivered drop-in and could not,
+      # or could not measure whether it had. This is ADR-158 proposition 1's defect exactly.
+      case "$action" in
+        restarted)
+          : ;;
+        skipped)
+          case "$reason" in
+            # KNOWN-INERT skips only. unit_inactive/unit_absent are co-location facts and get the
+            # warning arm below; not_stale means the running process already postdates its inputs.
+            not_stale|unit_inactive|unit_absent)
+              : ;;
+            *)
+              echo "::error::infra-config activation for $unit reports an UNRECOGNISED skip reason: reason=$reason (action=$action rc=$r_rc active=$r_active). The gate fails closed on reasons it does not know: a verdict this adjudicator cannot classify is not evidence that the unit is running its drop-in."
+              rc=1
+              ;;
+          esac
+          ;;
+        failed)
           echo "::error::infra-config activation FAILED for $unit: action=$action reason=$reason rc=$r_rc active=$r_active. The drop-in was delivered but the unit is not running it."
+          rc=1
+          ;;
+        *)
+          echo "::error::infra-config activation for $unit reports an UNRECOGNISED action: action=$action (reason=$reason rc=$r_rc active=$r_active)."
           rc=1
           ;;
       esac
@@ -257,11 +286,16 @@ adjudicate_infra_config() {
       # WARN, not fail, when a unit the handler never ATTEMPTED is not active.
       #
       # The plan called for failing on any active != active. That is right for a unit we acted
-      # on — and every such case is already covered by the three enums above, which fire whether
-      # or not the unit ended up active. Extending it to SKIPPED units would fail the gate on a
-      # host where the unit legitimately does not run: inngest-heartbeat.service is created by
-      # inngest-bootstrap.sh and so is co-location dependent, and a permanently-red deploy gate
-      # on a correct host is a worse failure than the one being guarded against.
+      # on — and every such case is already covered by the `failed` arm above, which fires
+      # whether or not the unit ended up active. Extending it to SKIPPED units would fail the
+      # gate on a host where the unit legitimately does not run, and a permanently-red deploy
+      # gate on a correct host is a worse failure than the one being guarded against.
+      #
+      # Note this arm is now genuinely an edge case rather than the steady state. While
+      # inngest-heartbeat.service was in RESTART_MAP it fired on essentially every apply — that
+      # unit is a timer-driven Type=oneshot with no RemainAfterExit, so `inactive` was its
+      # normal condition — which is precisely the alert fatigue that trains a reader to skip
+      # warnings. It has been removed from the map; see the rationale there.
       #
       # "Is vector actually shipping?" is a real question, and it is R3's — the absence helper's
       # `unshipping` outcome answers it against the sink, which is where it can be answered
@@ -275,7 +309,11 @@ adjudicate_infra_config() {
     # Non-vacuity: a broken derivation would yield an empty unit list and this whole block
     # would pass having checked nothing.
     local expected_units
-    expected_units=$(infra_config_expected_restart_units "$apply_script" | grep -c .)
+    # `grep -c` prints 0 AND EXITS 1 on no match. Unguarded, that non-zero propagates out of the
+    # command substitution and — on any future call site that is not `if ! adjudicate …` —
+    # aborts before the very check below can report the vacuity it exists to report.
+    expected_units=$(infra_config_expected_restart_units "$apply_script" | grep -c . || true)
+    [[ "$expected_units" =~ ^[0-9]+$ ]] || expected_units=0
     if [[ "$expected_units" -lt 1 ]]; then
       echo "::error::infra-config activation contract: derived ZERO units from the handler's RESTART_MAP — the parse is broken and every activation assertion above was vacuous."
       rc=1

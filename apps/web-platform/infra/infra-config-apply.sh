@@ -94,10 +94,22 @@ INSTALL_HELPER="${INFRA_CONFIG_INSTALL_HELPER:-/usr/local/bin/infra-config-insta
 # inngest-server.service also carries a drop-in but is deliberately ABSENT here: inngest-bootstrap
 # restarts it on every co-located ci-deploy, so it already re-reads its environment on a schedule
 # this handler does not need to duplicate. Its omission is a decision, not an oversight — and the
-# sudoers grant covers exactly the two units below, so adding a third here without widening the
+# sudoers grant covers exactly the unit below, so adding a second here without widening the
 # grant would produce denied restarts rather than coverage.
+#
+# inngest-heartbeat.service is ALSO absent, and that is a correction rather than an omission.
+# It was in this map when the contract first shipped. It is a `Type=oneshot` with NO
+# `RemainAfterExit` anywhere in inngest-bootstrap.sh, driven by a 60s timer around a sub-second
+# ExecStart — so it reads `inactive` on essentially every apply. Three consequences, all bad and
+# none hypothetical: the entry graded `skipped/unit_inactive` forever, making the gate's warning
+# arm the STEADY STATE on a correct host rather than an edge case (the alert fatigue #7103 B3
+# names); the grant bought nothing, because a timer-driven oneshot re-reads its drop-in on its
+# next tick after the `daemon-reload` this handler already performs; and an apply landing inside
+# the heartbeat's brief active window could try-restart it, find it exited two seconds later, and
+# grade `noop_not_active` — a spurious HARD RED on the sole no-SSH remediation path.
+# Dropping it also retires one root-restart grant on the host that cannot be replaced, which is
+# the direction ADR-158 argues for: do not widen the surface to buy nothing.
 RESTART_MAP=(
-  "inngest-heartbeat.service|/etc/systemd/system/inngest-heartbeat.service.d/10-inngest-heartbeat-doppler-token.conf"
   "vector.service|/etc/systemd/system/vector.service.d/10-vector-doppler-token.conf"
 )
 
@@ -121,6 +133,21 @@ SYSTEMCTL_RESTART="${INFRA_CONFIG_SYSTEMCTL:-sudo /usr/bin/systemctl}"
 # forked, so reading ActiveState immediately would grade a process that has not yet lived long
 # enough to fail. Overridable so the suite does not pay it.
 RESTART_SETTLE_SECS="${INFRA_CONFIG_RESTART_SETTLE_SECS:-2}"
+# VALIDATED, because an unvalidated value here is a deterministic prod freeze, not a footgun.
+# `sleep abc` exits 1; under this script's `set -euo pipefail` that kills the handler MID-LOOP,
+# the EXIT trap overwrites the state with files_total:0/"unhandled", and the post-write
+# daemon-reload + webhook self-restart never run — freshly-delivered hooks.json written but never
+# activated. Measured on the unmodified script with INFRA_CONFIG_RESTART_SETTLE_SECS=abc: 19 of 19
+# files on disk, frame reported "files_total":0 "reason":"unhandled", webhook restart NEVER RAN.
+# That is the #4804 chicken-and-egg freeze, deterministic, on the host with no SSH runbook.
+# Reachable in practice: webhook.service carries EnvironmentFile=/etc/default/webhook-deploy and
+# the handler inherits it wholesale, so any render or operator write of a non-numeric value bricks
+# the delivery channel. Fail LOUD and early here rather than mid-loop.
+if [[ ! "$RESTART_SETTLE_SECS" =~ ^[0-9]+$ ]]; then
+  logger -t "$LOG_TAG" "SOLEUR_INFRA_CONFIG_CONFIG_INVALID: var=INFRA_CONFIG_RESTART_SETTLE_SECS reason=not_a_non_negative_integer"
+  echo "FATAL: INFRA_CONFIG_RESTART_SETTLE_SECS must be a non-negative integer" >&2
+  exit 64
+fi
 
 # mtime in epoch seconds, or 0. GUARDED: `stat` on an absent dest exits 1, and under this
 # script's `set -euo pipefail` that would kill the handler MID-LOOP — the EXIT trap would then
@@ -134,10 +161,19 @@ dest_mtime() {
   printf '%s' "$m"
 }
 
-# One systemd property, or empty on any failure (unit absent, systemctl missing, no bus).
+# One systemd property. Prints the value and returns 0 when the PROBE ITSELF succeeded;
+# returns 1 when it did not.
+#
+# The distinction is the whole point. This previously returned "" on any failure, and the caller
+# mapped "" to `unit_inactive` — so a missing systemctl, an unreachable D-Bus, or EPERM inside
+# webhook.service's namespace all rendered as "the unit is not running", which the gate treats as
+# a WARNING and passes. That is an instrument failure being graded as a measurement: the run then
+# certifies activation having reconciled nothing, which is the exact false-green this contract
+# exists to end. `systemctl show` exits 0 and prints empty for an ABSENT unit, so rc is a genuine
+# discriminator between "I asked and the answer is nothing" and "I could not ask".
 unit_prop() {
   local unit="$1" prop="$2" v=""
-  v=$($SYSTEMCTL_SHOW show "$unit" -p "$prop" --value 2>/dev/null) || v=""
+  v=$($SYSTEMCTL_SHOW show "$unit" -p "$prop" --value 2>/dev/null) || return 1
   printf '%s' "$v"
 }
 
@@ -390,15 +426,37 @@ for restart_entry in "${RESTART_MAP[@]}"; do
   # "unparseable ⇒ stale" would build a loop that restarts forever while reporting success.
   # try-restart is also a deliberate no-op on an inactive unit, so attempting it would produce
   # rc=0 and grade as a successful restart that never happened.
-  r_active=$(unit_prop "$r_unit" ActiveState)
-  if [[ "$r_active" != "active" ]]; then
-    r_action="skipped"; r_reason="unit_inactive"
+  #
+  # Every unit_prop call is rc-guarded: it now returns 1 when the PROBE failed, and an unguarded
+  # `x=$(unit_prop …)` under `set -euo pipefail` would abort the handler mid-loop — the same
+  # class as the RESTART_SETTLE_SECS freeze guarded above.
+  r_probe_ok=1
+  r_active=$(unit_prop "$r_unit" ActiveState) || r_probe_ok=0
+  if [[ "$r_probe_ok" -eq 0 ]]; then
+    # COULD NOT MEASURE is its own outcome, and it fails the gate. Folding it into
+    # `unit_inactive` is what let an instrument failure certify an apply as green.
+    r_action="failed"; r_reason="probe_unavailable"; r_active=""
+  elif [[ "$r_active" != "active" ]]; then
+    # rc=0 with an empty value means systemd has no such unit loaded; rc=0 with a non-active
+    # state means it is loaded and not running. Both are legitimate on a co-location-dependent
+    # host, but they are different facts and the frame now carries which one.
+    r_action="skipped"
+    if [[ -z "$r_active" ]]; then r_reason="unit_absent"; else r_reason="unit_inactive"; fi
   else
-    r_raw_before=$(unit_prop "$r_unit" ExecMainStartTimestamp)
+    r_probe_ok=1
+    r_raw_before=$(unit_prop "$r_unit" ExecMainStartTimestamp) || r_probe_ok=0
     r_e_before=$(ts_epoch "$r_raw_before")
-    if [[ -z "$r_e_before" || "$r_e_before" == "x" ]]; then
+    if [[ "$r_probe_ok" -eq 0 ]]; then
+      r_action="failed"; r_reason="probe_unavailable"
+    elif [[ -z "$r_e_before" ]]; then
+      # ACTIVE but carrying no start timestamp — a Type=oneshot in `active (exited)`, or a unit
+      # whose main process is gone. ts_epoch deliberately separates this from unparseable, and
+      # the caller used to discard that separation one line later. Kept apart, and both fail:
+      # neither is a state in which a staleness comparison means anything.
+      r_action="failed"; r_reason="timestamp_absent"
+    elif [[ "$r_e_before" == "x" ]]; then
       # Reserved for a NON-EMPTY value date could not read. Reported, never guessed at.
-      r_action="skipped"; r_reason="timestamp_unparseable"
+      r_action="failed"; r_reason="timestamp_unparseable"
     else
       r_ts_before="$r_e_before"
       # --- The single staleness predicate ---
@@ -414,14 +472,31 @@ for restart_entry in "${RESTART_MAP[@]}"; do
         r_action="skipped"; r_reason="not_stale"; r_ts_after="$r_ts_before"
       else
         r_reason="stale_config"
-        $SYSTEMCTL_RESTART try-restart "$r_unit" >/dev/null 2>&1 || r_rc=$?
+        # Capture stderr instead of discarding it. `>/dev/null 2>&1` here destroyed the one datum
+        # that says WHICH failure this is, at the source — the same mistake this codebase already
+        # documents as why WEB-PLATFORM-5B was undiagnosable. Without it, every non-zero rc was
+        # reported as `sudo_denied`, so the derived remediation ("repair DROPIN_TRY_RESTART") sent
+        # an agent at a grant that server.tf already asserts is present, leaving no next lever
+        # short of SSH.
+        r_err=$($SYSTEMCTL_RESTART try-restart "$r_unit" 2>&1 >/dev/null) || r_rc=$?
         if [[ "$r_rc" -ne 0 ]]; then
-          # A denial is a PROVISIONING defect and gets its own enum — it must never share one
-          # with unit_inactive or noop_not_active, which are states of the unit rather than of
-          # the grant. #5934: a swallowed sudo denial is how a remediation becomes a silent
-          # no-op that nobody notices until the next incident.
-          r_action="failed"; r_reason="sudo_denied"
-          r_active=$(unit_prop "$r_unit" ActiveState)
+          # try-restart returns non-zero when the restart JOB fails (start error, dependency
+          # failure, timeout), not only when sudo refuses. Those are different defects with
+          # different owners: a denial is a PROVISIONING defect, a failed job is a state of the
+          # unit. #5934: a swallowed sudo denial is how a remediation becomes a silent no-op.
+          r_action="failed"
+          case "$r_err" in
+            *"a password is required"*|*"not allowed to execute"*|*"may not run"*|*"is not in the sudoers file"*)
+              r_reason="sudo_denied" ;;
+            *)
+              r_reason="restart_invocation_failed" ;;
+          esac
+          # Sanitized separately from the closed-vocabulary marker below, which must stay a fixed
+          # alphabet: this line carries free upstream text and so is scrubbed to a safe charset
+          # and truncated before it reaches journald and the off-box sink.
+          r_err_safe=$(printf '%s' "$r_err" | tr -d '\000-\037' | tr -c 'A-Za-z0-9 ._:/=-' '?' | cut -c1-200)
+          logger -t "$LOG_TAG" "SOLEUR_INFRA_CONFIG_RESTART_STDERR: unit=$r_unit rc=$r_rc detail=$r_err_safe"
+          r_active=$(unit_prop "$r_unit" ActiveState) || r_active=""
         else
           # --- GRADE ON EFFECT, NOT ON EXIT CODE ---
           # try-restart exits 0 on a FAILED unit (it is defined as a no-op there), and on a
@@ -430,14 +505,22 @@ for restart_entry in "${RESTART_MAP[@]}"; do
           # DropInPaths is deliberately NOT an input: daemon-reload refreshes systemd's
           # in-memory view, so it lists the new drop-in even though the process never re-exec'd.
           [[ "$RESTART_SETTLE_SECS" == "0" ]] || sleep "$RESTART_SETTLE_SECS"
-          r_active=$(unit_prop "$r_unit" ActiveState)
-          r_raw_after=$(unit_prop "$r_unit" ExecMainStartTimestamp)
+          # Each probe rc-guarded, and each `[[ … ]] && x=y` given an explicit `|| true`: a
+          # non-matching test is the LAST command of that compound, so it returns 1 and `set -e`
+          # would abort the handler here — after the restart fired but before the frame records
+          # it, which is the worst possible point to die.
+          r_post_ok=1
+          r_active=$(unit_prop "$r_unit" ActiveState) || r_post_ok=0
+          r_raw_after=$(unit_prop "$r_unit" ExecMainStartTimestamp) || r_post_ok=0
           r_e_after=$(ts_epoch "$r_raw_after")
-          [[ "$r_e_after" =~ ^[0-9]+$ ]] && r_ts_after="$r_e_after"
-          r_n=$(unit_prop "$r_unit" NRestarts)
-          [[ "$r_n" =~ ^[0-9]+$ ]] && r_nrestarts="$r_n"
+          [[ "$r_e_after" =~ ^[0-9]+$ ]] && r_ts_after="$r_e_after" || true
+          r_n=$(unit_prop "$r_unit" NRestarts) || r_post_ok=0
+          [[ "$r_n" =~ ^[0-9]+$ ]] && r_nrestarts="$r_n" || true
 
-          if [[ "$r_active" != "active" ]]; then
+          if [[ "$r_post_ok" -eq 0 ]]; then
+            # The restart was ISSUED and we cannot read whether it took. That is not success.
+            r_action="failed"; r_reason="probe_unavailable"
+          elif [[ "$r_active" != "active" ]]; then
             r_action="failed"; r_reason="noop_not_active"
           elif [[ "$r_ts_after" -le "$r_ts_before" ]]; then
             r_action="failed"; r_reason="restart_did_not_advance"

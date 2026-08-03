@@ -622,10 +622,12 @@ test_orphan_hook_selfcheck() {
 # sweep ... and the durable remediation is a SILENT no-op", #5934). Every other alias in the file
 # is paired; this asserts the new one is too, in BOTH provisioning paths.
 #
-# The two argv are pinned here as data and reused by the lockstep assertion, so the units and
+# The granted argv are pinned here as data and reused by the lockstep assertion, so the units and
 # their exact invocation form have ONE definition in this suite rather than three copies.
+# inngest-heartbeat.service was here and is deliberately gone: a timer-driven Type=oneshot with no
+# RemainAfterExit re-reads its drop-in on the next tick after daemon-reload, so the grant bought
+# nothing and cost a standing root-restart capability. See RESTART_MAP in the handler.
 DROPIN_RESTART_ARGV=(
-  "/usr/bin/systemctl try-restart inngest-heartbeat.service"
   "/usr/bin/systemctl try-restart vector.service"
 )
 test_dropin_restart_grant() {
@@ -633,7 +635,11 @@ test_dropin_restart_grant() {
   local sudoers="${SCRIPT_DIR}/deploy-inngest-bootstrap.sudoers"
   local cloud_init="${SCRIPT_DIR}/cloud-init.yml"
   local server_tf="${SCRIPT_DIR}/server.tf"
-  local expected_alias="Cmnd_Alias DROPIN_TRY_RESTART = ${DROPIN_RESTART_ARGV[0]}, ${DROPIN_RESTART_ARGV[1]}"
+  # Joined from the array rather than indexed, so the assertion survives the grant growing or
+  # shrinking without silently reading only its first two members.
+  local expected_alias joined
+  joined=$(printf '%s, ' "${DROPIN_RESTART_ARGV[@]}"); joined="${joined%, }"
+  expected_alias="Cmnd_Alias DROPIN_TRY_RESTART = ${joined}"
 
   # (a) The alias, with byte-exact argv. sudo matches the FULL resolved command, so an absolute
   # path or a stray flag here is a denial at runtime, not a widening.
@@ -676,8 +682,18 @@ test_dropin_restart_grant() {
   # (e) NON-VACUITY: the units named in the grant must be the units the RESTART_MAP drives.
   # A grant for units the script never restarts, or a script restarting units the grant omits,
   # both read as "green" on (a)-(d) alone.
-  local unit
-  for unit in inngest-heartbeat.service vector.service; do
+  # DERIVED from the live grant, never a hardcoded pair. A literal list is a FIRST-MEMBER guard:
+  # it can only notice units it already knows about, so a unit ADDED to the grant — the direction
+  # that widens privilege — passes unnoticed. Deriving it means the population this arm walks
+  # grows with the grant automatically.
+  local unit granted_units n_units=0
+  granted_units=$(grep -E '^Cmnd_Alias DROPIN_TRY_RESTART = ' "$sudoers" \
+    | sed 's/^Cmnd_Alias DROPIN_TRY_RESTART = //' \
+    | tr ',' '\n' \
+    | sed -n 's#.*try-restart[[:space:]]\{1,\}\([^[:space:],]\{1,\}\).*#\1#p')
+  while IFS= read -r unit; do
+    [[ -n "$unit" ]] || continue
+    n_units=$((n_units + 1))
     if grep -qE "^[[:space:]]*\"?${unit}\"?" <(sed -n '/^RESTART_MAP=(/,/^)/p' "$HANDLER"); then
       echo "  PASS: RESTART_MAP drives $unit"
       PASS=$((PASS + 1))
@@ -685,7 +701,16 @@ test_dropin_restart_grant() {
       echo "  FAIL: $unit is granted in sudoers but absent from the handler's RESTART_MAP"
       FAIL=$((FAIL + 1))
     fi
-  done
+  done <<<"$granted_units"
+
+  # Non-vacuity: a broken derivation yields an empty list and this arm "passes" having compared
+  # nothing — the exact shape the (e) header warns about one level up.
+  if [[ "$n_units" -ge 1 ]]; then
+    echo "  PASS: the grant derivation found $n_units unit(s) to check"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: derived ZERO granted units from the sudoers alias — every check in (e) was vacuous"
+    FAIL=$((FAIL + 1))
+  fi
 }
 
 # --- #7103 R2 3.10/3.11: unit reconciliation ------------------------------------------------
@@ -723,7 +748,17 @@ STUB
 printf '%s\n' "$*" >> "$STUB_CALLS"
 [[ "$1" == "try-restart" ]] || { echo "stub: expected 'try-restart', got '$1'" >&2; exit 64; }
 unit="$2"
-[[ -f "$STUB_STATE/$unit.deny" ]] && exit 1
+# A bare `exit 1` cannot distinguish a sudo REFUSAL from a failed restart JOB, and the handler now
+# separates them because they have different owners and different remediations. Each arm therefore
+# emits the stderr its real counterpart emits, on stderr, exactly as sudo/systemctl do.
+[[ -f "$STUB_STATE/$unit.deny" ]] && {
+  echo "Sorry, user deploy is not allowed to execute '/usr/bin/systemctl try-restart $unit' as root on soleur-web-platform." >&2
+  exit 1
+}
+[[ -f "$STUB_STATE/$unit.jobfail" ]] && {
+  echo "Job for $unit failed because the control process exited with error code. See \"systemctl status $unit\" for details." >&2
+  exit 1
+}
 for p in ActiveState ExecMainStartTimestamp NRestarts; do
   [[ -f "$STUB_STATE/$unit.after.$p" ]] && cp "$STUB_STATE/$unit.after.$p" "$STUB_STATE/$unit.$p"
 done
@@ -735,6 +770,14 @@ STUB
 # systemd's own rendering of a timestamp, so `date -d` in the handler parses exactly the shape
 # it will meet in production rather than a convenient ISO string.
 sd_ts() { date -u -d "@$1" '+%a %Y-%m-%d %H:%M:%S UTC'; }
+
+# How many units RESTART_MAP drives, DERIVED from the handler. Assertions about "every unit" are
+# expressed against this rather than a literal, because a literal count is the cheapest thing to
+# make green by dropping a registration — which is the exact class #7103 R5 exists to close.
+restart_map_count() {
+  sed -n '/^RESTART_MAP=(/,/^)/p' "$HANDLER" \
+    | sed -n 's/^[[:space:]]*"\([^|]*\)|.*"$/\1/p' | grep -c . || true
+}
 
 # Arm a unit's pre-restart state, and optionally the state a successful restart lands it in.
 arm_unit() {
@@ -783,7 +826,6 @@ test_reconcile_stale_fires_and_disarms() {
   # self-disarm, or the handler restarts vector on every apply forever.
   arm_unit  vector.service            active "$(( $(date +%s) - 3600 ))"
   arm_after vector.service            active "$(( $(date +%s) + 3600 ))"
-  arm_unit  inngest-heartbeat.service inactive ""
   bash "$HANDLER" >/dev/null 2>&1 || true
 
   assert_eq "stale unit action is restarted"     "restarted"    "$(restart_field vector.service action)"
@@ -822,7 +864,6 @@ test_reconcile_inactive_short_circuits() {
   echo "TEST: reconcile — an inactive unit is skipped with NO restart attempted"
   restart_setup
   arm_unit vector.service            inactive ""
-  arm_unit inngest-heartbeat.service inactive ""
   bash "$HANDLER" >/dev/null 2>&1 || true
   assert_eq "inactive unit action" "skipped"       "$(restart_field vector.service action)"
   assert_eq "inactive unit reason" "unit_inactive" "$(restart_field vector.service reason)"
@@ -843,7 +884,6 @@ test_reconcile_noop_not_active() {
   # "forked", not "running" — so the exit code alone would certify a unit that immediately died.
   arm_unit  vector.service            active "$(( $(date +%s) - 3600 ))"
   arm_after vector.service            failed "$(( $(date +%s) + 3600 ))"
-  arm_unit  inngest-heartbeat.service inactive ""
   bash "$HANDLER" >/dev/null 2>&1 || true
   assert_eq "post-fork death action" "failed"          "$(restart_field vector.service action)"
   assert_eq "post-fork death reason" "noop_not_active" "$(restart_field vector.service reason)"
@@ -858,7 +898,6 @@ test_reconcile_did_not_advance() {
   # failure; graded on exit code it would be a success.
   arm_unit vector.service            active "$(( $(date +%s) - 3600 ))"
   arm_after vector.service           active ""   # no timestamp change armed
-  arm_unit inngest-heartbeat.service inactive ""
   bash "$HANDLER" >/dev/null 2>&1 || true
   assert_eq "unchanged timestamp action" "failed"                  "$(restart_field vector.service action)"
   assert_eq "unchanged timestamp reason" "restart_did_not_advance" "$(restart_field vector.service reason)"
@@ -870,7 +909,6 @@ test_reconcile_sudo_denied() {
   restart_setup
   arm_unit vector.service            active "$(( $(date +%s) - 3600 ))"
   touch "$STUB_STATE/vector.service.deny"
-  arm_unit inngest-heartbeat.service inactive ""
   bash "$HANDLER" >/dev/null 2>&1 || true
   assert_eq "denial action" "failed"      "$(restart_field vector.service action)"
   # A provisioning defect must not be reported as a property of the unit — #5934 is the case
@@ -880,14 +918,30 @@ test_reconcile_sudo_denied() {
   restart_teardown
 }
 
+# The OTHER side of the same discriminator. Without this arm the suite has only one fixture for
+# "try-restart returned non-zero", so collapsing both branches back into a single `sudo_denied`
+# — the defect being fixed — would stay green. try-restart returns non-zero when the restart JOB
+# fails too, and reporting that as a sudoers defect sends an agent at a grant server.tf already
+# asserts is present, leaving it no next lever short of SSH.
+test_reconcile_restart_job_failure_is_not_a_denial() {
+  echo "TEST: reconcile — a failed restart JOB is not reported as a sudo denial"
+  restart_setup
+  arm_unit vector.service active "$(( $(date +%s) - 3600 ))"
+  touch "$STUB_STATE/vector.service.jobfail"
+  bash "$HANDLER" >/dev/null 2>&1 || true
+  assert_eq "job-failure action" "failed" "$(restart_field vector.service action)"
+  assert_eq "job-failure reason" "restart_invocation_failed" "$(restart_field vector.service reason)"
+  assert_eq "job-failure records the non-zero rc" "1" "$(restart_field vector.service rc)"
+  restart_teardown
+}
+
 test_reconcile_timestamp_unparseable() {
   echo "TEST: reconcile — a non-empty unreadable timestamp is reported, not guessed at"
   restart_setup
   arm_unit vector.service active 0
   printf 'not-a-timestamp' > "$STUB_STATE/vector.service.ExecMainStartTimestamp"
-  arm_unit inngest-heartbeat.service inactive ""
   bash "$HANDLER" >/dev/null 2>&1 || true
-  assert_eq "unparseable action" "skipped"                "$(restart_field vector.service action)"
+  assert_eq "unparseable action" "failed"                 "$(restart_field vector.service action)"
   assert_eq "unparseable reason" "timestamp_unparseable"  "$(restart_field vector.service reason)"
   # Treating unparseable as stale would restart on every apply while reporting success.
   if [[ -s "$STUB_CALLS" ]]; then
@@ -901,17 +955,31 @@ test_reconcile_timestamp_unparseable() {
 test_reconcile_vector_ordered_last() {
   echo "TEST: reconcile — vector is restarted LAST (asserted on emitted order)"
   restart_setup
-  # Both stale, so both are attempted and the ORDER is observable. Asserted on the order the
-  # calls actually happened in, not on the order of the declarations that produced them.
-  arm_unit  vector.service            active "$(( $(date +%s) - 3600 ))"
-  arm_after vector.service            active "$(( $(date +%s) + 3600 ))"
-  arm_unit  inngest-heartbeat.service active "$(( $(date +%s) - 3600 ))"
-  arm_after inngest-heartbeat.service active "$(( $(date +%s) + 3600 ))"
+  # Every mapped unit armed stale, so all are attempted and the ORDER is observable. Asserted on
+  # the order the calls actually happened in, not on the order of the declarations that produced
+  # them. The expected call count is DERIVED from RESTART_MAP: re-pinning a literal here is how a
+  # dropped registration goes green.
+  local u
+  while IFS= read -r u; do
+    [[ -n "$u" ]] || continue
+    arm_unit  "$u" active "$(( $(date +%s) - 3600 ))"
+    arm_after "$u" active "$(( $(date +%s) + 3600 ))"
+  done < <(sed -n '/^RESTART_MAP=(/,/^)/p' "$HANDLER" | sed -n 's/^[[:space:]]*"\([^|]*\)|.*"$/\1/p')
   bash "$HANDLER" >/dev/null 2>&1 || true
-  local n_calls last_call
+  local n_calls last_call expected_calls
+  expected_calls=$(restart_map_count)
+  # `|| true` on BOTH captures. The sibling above carried it and this one did not, so a
+  # legitimate no-match killed the suite here — before the assertion written to name that exact
+  # failure could report, and taking the six test functions after it with it.
   n_calls=$(grep -c 'try-restart' "$STUB_CALLS" || true)
-  last_call=$(grep 'try-restart' "$STUB_CALLS" | tail -1)
-  assert_eq "both stale units were attempted" "2" "$n_calls"
+  last_call=$(grep 'try-restart' "$STUB_CALLS" | tail -1 || true)
+  assert_eq "every stale mapped unit was attempted" "$expected_calls" "$n_calls"
+  # Non-vacuity: a broken derivation would make the line above compare 0 against 0.
+  if [[ "$expected_calls" -ge 1 ]]; then
+    echo "  PASS: RESTART_MAP derivation is non-empty ($expected_calls unit(s))"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: derived ZERO units from RESTART_MAP — the ordering assertion is vacuous"; FAIL=$((FAIL + 1))
+  fi
   # Restarting vector blinks the log stream every post-apply assertion is read through, so it
   # must be the last thing this handler disturbs.
   assert_eq "vector.service is the final restart" "try-restart vector.service" "$last_call"
@@ -948,7 +1016,7 @@ STUB
   assert_eq "files_total is the full managed set" "$MANAGED_N" "$total"
   # The array must still be emitted, in EVERY outcome — an absent key is indistinguishable from
   # a handler too old to have one, and the gate treats those differently.
-  assert_eq "restarts array still covers every unit" "2" \
+  assert_eq "restarts array still covers every unit" "$(restart_map_count)" \
     "$(jq -r '.restarts | length' "$INFRA_CONFIG_STATE" 2>/dev/null || echo MISSING)"
   assert_eq "state reports the v2 contract" "2" \
     "$(jq -r '.schema_version' "$INFRA_CONFIG_STATE" 2>/dev/null || echo MISSING)"
@@ -959,7 +1027,6 @@ test_reconcile_unchanged_content_preserves_mtime() {
   echo "TEST: reconcile — a content-identical re-delivery does not re-trigger the predicate"
   restart_setup
   arm_unit vector.service            active "$(( $(date +%s) + 3600 ))"
-  arm_unit inngest-heartbeat.service inactive ""
   bash "$HANDLER" >/dev/null 2>&1 || true
   local dropin="${TEST_DESTDIR}/etc/systemd/system/vector.service.d/10-vector-doppler-token.conf"
   local m1 m2
@@ -1018,7 +1085,13 @@ test_sudoers_caller_argv_lockstep() {
 
   # Non-vacuity: a broken extraction would yield an empty work-list and "pass" having compared
   # nothing. Also pins that the grant has no members the map does not drive, in both directions.
-  assert_eq "every RESTART_MAP unit was checked" "2" "$n_matched"
+  assert_eq "every RESTART_MAP unit was checked" "$(restart_map_count)" "$n_matched"
+  # …and that derived count is itself non-zero, so the line above cannot pass 0 against 0.
+  if [[ "$n_matched" -ge 1 ]]; then
+    echo "  PASS: the lockstep walked $n_matched unit(s)"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: the lockstep walked ZERO units — the argv comparison was vacuous"; FAIL=$((FAIL + 1))
+  fi
   assert_eq "the grant has no units the handler never restarts" "$n_matched" \
     "$(grep -c . <<<"$granted_sudoers")"
 }
@@ -1031,6 +1104,7 @@ test_reconcile_inactive_short_circuits
 test_reconcile_noop_not_active
 test_reconcile_did_not_advance
 test_reconcile_sudo_denied
+test_reconcile_restart_job_failure_is_not_a_denial
 test_reconcile_timestamp_unparseable
 test_reconcile_vector_ordered_last
 test_reconcile_survives_missing_inputs
