@@ -156,6 +156,21 @@ and the grant is pure attack surface.
   neither a pass nor a failure.** The aggregate total was deliberately left unrecorded and
   per-suite results plus a *derived* registration delta recorded instead — inventing a total is
   the precise defect this PR exists to remove.
+- **Added prose to a file whose header says not to, and the gate caught it.** CI `test`/`test-bun`
+  reddened on `cloud-init-user-data-size.test.ts`: `Expected: < 24500, Received: 24572` — 72 bytes
+  over, from three comment lines I added to `cloud-init.yml` explaining the one-unit sudoers grant.
+  That file's own header reads *"THIS FILE IS BYTE-BUDGETED — keep prose in server.tf."* The
+  rationale was also already in the mirrored `deploy-inngest-bootstrap.sudoers` that the surviving
+  comment names, so the over-budget bytes were a DUPLICATE of prose that already existed.
+  Prevention: before adding a comment to any generated/embedded/size-capped artifact, read its
+  header for a budget declaration — and when the comment you are about to write points at another
+  file for "the full rationale", that is the signal the rationale belongs only there.
+- **A local suite gave two different results on one unchanged tree** — `bun test plugins/soleur/`
+  reported 2308 pass / 1 fail, then 2309 pass / 0 fail, and the failing test was not captured
+  before it passed. Recorded rather than dismissed: this repo's own guidance treats differing
+  failure sets across runs of an unchanged tree as a HARNESS defect, not something to re-run past.
+  Prevention: capture the run to a file on the FIRST execution (`> log 2>&1`), never rely on being
+  able to re-derive which test failed from a second run.
 - **Forwarded from session-state (earlier phases):** the IaC-routing PreToolUse hook blocked the
   first plan write (resolved by adding the required section, not by weakening the routing); a
   second write failed "file modified since read" after a linter touched the file; and a
