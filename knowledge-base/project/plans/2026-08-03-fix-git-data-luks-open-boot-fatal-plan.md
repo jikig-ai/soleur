@@ -667,3 +667,180 @@ Two features differ across **one e2fsprogs patch version**, and `ubuntu:24.04` i
 **Also corrected:** AC3's name ("the failure is diagnosable") over-claimed what the arm asserts — rename to *"the detail source is a readable file, not a literal"* so a green run is not over-read. The `## Observability` block's `failure_modes` entry has been updated to describe R4 + R3 as revised, and now carries the B17 failure mode.
 
 **Not applied:** nothing. Three reviewer suggestions were folded rather than adopted verbatim — the backing-file size (10G sparse, matching `git_data_luks_volume_size`) is folded into D1(c)'s non-vacuity probe; the "fold R1 into an existing container invocation" performance note is folded into D5 (extraction from the existing render makes it free); and the fixture-provenance loophole ("nothing forbids generating the fixture by running the post-fix template") is folded into D1 as an explicit requirement that the fixture derive from the **sibling baseline**, not from the post-fix output — otherwise R1 degrades from an invariant to a change-detector and the TDD claim becomes ceremonial.
+
+---
+
+## Phase 0 Measurement Record — executed 2026-08-03, before any fix line was written
+
+Task 0.4 requires the fix-selection decision to be written here **before** Phase 1 starts. This
+section is that record. Every number below was produced by a command run in this session; nothing
+is carried over from plan-time prose.
+
+### 0.1 — Four-arm LUKS probe (privileged `ubuntu:24.04`, host kernel `7.0.0-28-generic`)
+
+Loop-backed file → `luksFormat --type luks2` → `luksOpen` → mkfs arm → `mount`.
+
+| Arm | mkfs | Resulting features (tail) | `mount` rc |
+|---|---|---|---|
+| A | `-O quota,project` | `… extra_isize quota metadata_csum project` | **0** |
+| B | `-O quota` | `… extra_isize quota metadata_csum` | **0** |
+| C | `-O quota,project` + `mount -o prjquota` | `… quota metadata_csum project` | **0** |
+| D | plain | `… extra_isize metadata_csum` | **0** |
+
+**All four mounted.** H4 reproduced: on any kernel providing `quota_v2` the *unfixed* template
+mounts fine, so a container mount test cannot go RED for the real reason. This is the measurement
+that justifies R1 being a superblock assertion rather than a mount assertion, and it must not be
+"simplified" back into a mount test later.
+
+Incidental but load-bearing: inside the container `find /lib/modules/$(uname -r) -name 'quota_v2*'`
+returned **NONE**, yet the arms still mounted — because `request_module()` →
+`call_usermodehelper` runs in the **init namespace** and loaded the *host's* module. That is
+direct evidence for R5's rejection of the `modprobe.d`-blacklist simulation: simulating this
+condition needs a VM, not a container.
+
+### 0.2 — Candidate measurement (10G sparse regular file)
+
+| Candidate | Command | Features produced | Carries `quota`? |
+|---|---|---|---|
+| (a) | `mkfs.ext4 -q -O project` | `… extra_isize metadata_csum project` | **NO** |
+| (c) | `mkfs.ext4 -q` | `… extra_isize metadata_csum` | NO |
+| pre-fix | `mkfs.ext4 -q -O quota,project` | `… extra_isize quota metadata_csum project` | YES |
+
+**mke2fs does NOT imply `quota` from `project`.** Candidate (a) yields the project-ID inode field
+with no `quota` RO_COMPAT bit.
+
+### 0.2.2 / 0.2.5 — `tune2fs` offline-addability: BOTH probe results were surprising, and both change the calculus
+
+| Start state | Command | End state | Note |
+|---|---|---|---|
+| `-O project` fs | `tune2fs -O quota` | `… quota metadata_csum` — **`project` CLEARED** | rc=0 |
+| plain fs | `tune2fs -O project` | `… quota metadata_csum project` — **`quota` ADDED** | rc=0 |
+| plain fs | `tune2fs -O quota,project` | `… quota metadata_csum project` | rc=0 |
+
+Re-measured in a second isolated probe with explicit before/after capture; both reproduced.
+
+**Consequence, and it is the decisive one.** `tune2fs -O project` **implicitly sets `quota`**
+(project quota depends on the quota feature). So "ship plain now, add `project` later via
+`tune2fs`" is **not a safe path on this image** — it would set the exact RO_COMPAT bit that makes
+the volume unmountable, converting a working store into a dark boot. The deepen-plan finding that
+`tune2fs` makes these features "addable later" is true *mechanically* and misleading *operationally*:
+`quota` is addable, `project` is not addable **without also adding `quota`**.
+
+This inverts the (a)-vs-(c) comparison the plan left open. `project` must be set **at birth by
+`mkfs`** (which does not pull in `quota`) or it cannot be had at all on this image.
+
+### 0.2.4 — `mount -o noquota` (candidate (d))
+
+`mount -o noquota` on a `-O quota,project` mapper returned **rc=0**, feature bit still present.
+
+**This probe is NOT evidence that (d) works.** It ran on a kernel that *has* `quota_v2`, so it
+cannot discriminate "the option escaped the enable path" from "the enable path ran and succeeded" —
+the same blindness criterion (c) names. (d) is rejected on the feature-bit argument below, and this
+rc=0 is recorded as **non-discriminating**, not as a pass.
+
+### 0.2b — backing-file size (D-Measurement 2 reproduced)
+
+`1M` → **no `has_journal`** (mke2fs `floppy` bucket); `100M` and `10G` → identical, `has_journal`
+present. R1 uses a **10G sparse** file and asserts `has_journal` as its non-vacuity probe.
+
+### 0.3 — Image fact, re-fetched 2026-08-03T10:39:33Z
+
+`https://cloud-images.ubuntu.com/releases/24.04/release/…` **302-redirects** to `…/releases/noble/release/…`;
+the first fetch without `-L` returned a 372-byte HTML redirect stub whose greps reported
+`linux-modules-extra: 0`. **That zero was an artifact, not absence.** Re-fetched with `-L`:
+
+- `HTTP=200`, 21233 bytes, **664 packages** (matches the plan-time count).
+- Positive control: 13 `linux-*` rows present, incl. `linux-image-virtual`,
+  `linux-image-6.8.0-136-generic`, `linux-modules-6.8.0-136-generic`.
+- `linux-modules-extra` → **count=0** (now genuine absence — the positive control proves the grep works).
+- `quota` userspace package → **count=0**.
+- `e2fsprogs 1.47.0-2.4~exp1ubuntu4.1` — **exactly the version measured in `ubuntu:24.04`**, and
+  one patch level below this host's 1.47.2, reproducing D-Measurement 1's feature-set delta.
+
+### H5 / criterion (c) — discharged against kernel source, not against a mount rc
+
+Read from `torvalds/linux` at tag **v6.8** (`fs/ext4/super.c`, fetched via the GitHub contents API):
+
+- **`super.c:5567`** — `if (ext4_has_feature_quota(sb) && !sb_rdonly(sb)) err = ext4_enable_quotas(sb);`
+  The call is gated on the **`quota`** feature bit **only**. `project` does not reach it.
+- **`super.c:3645-3652`** — the only project-related mount refusal is wrapped in
+  `#if !IS_ENABLED(CONFIG_QUOTA) || !IS_ENABLED(CONFIG_QFMT_V2)`.
+
+From Ubuntu's own noble kernel-config annotations (fetched this session):
+`CONFIG_QFMT_V2 policy<{'amd64': 'm', …}>`, `CONFIG_QUOTA policy<{'amd64': 'y', …}>`
+(control row `CONFIG_EXT4_FS … 'y'` proves the grep resolves).
+
+`IS_ENABLED()` is true for `=m`, so that refusal block is **compiled out** on the target kernel —
+`project`-without-`quota` mounts. And because `CONFIG_QFMT_V2=m`, `quota_v2` must exist **on disk**,
+which is precisely what `linux-modules-extra`'s absence denies. The chain
+`quota` bit → `ext4_enable_quotas()` → `find_quota_format(QFMT_VFS_V1)` → NULL → `-ESRCH` → `mount(8)` rc=32
+is now confirmed at every link. **A1 no longer gates correctness of the selected fix** (see below).
+
+### 0.4 — FIX SELECTION: candidate (a), `mkfs.ext4 -q -O project`
+
+| Criterion | Candidate (a) verdict |
+|---|---|
+| (a) mount does not depend on `quota_v2` | **MET** — measured: no `quota` bit; and `super.c:5567` gates the module load on that bit alone |
+| (b) most future capability at zero present cost | **MET, and uniquely so** — `project` is obtainable ONLY at birth, because `tune2fs -O project` would implicitly add `quota` (0.2.5) |
+| (c) correct whether or not A1 holds | **MET** — the fix removes the module dependency rather than satisfying it, so the image's module set is irrelevant to correctness |
+
+**Full candidate disposition** (the canonical five-set; every candidate gets one):
+
+- **(a) `-O project`, no `quota` — SELECTED.**
+- **(b) `tune2fs` as a later-addition path — REJECTED as a fix, and recorded as an operational hazard.** Measured to mutate the feature set in both directions unsafely (0.2.2/0.2.5).
+- **(c) plain `mkfs.ext4` (sibling parity) — REJECTED in favour of (a).** Safe and mountable, but given (b) it discards `project` *permanently*, not merely "for now". (a) is safe on the same axis at identical present cost.
+- **(d) keep `quota,project` + `mount -o noquota` — REJECTED** on the feature-bit argument (`ext4_enable_quotas` is gated on the bit, not the options). The probe's rc=0 is non-discriminating and is not counted as evidence either way.
+- **(e) keep `quota,project` + install `linux-modules-extra` at boot — REJECTED a priori by rule (c).**
+
+**Capability actually preserved vs deferred, stated honestly:** (a) preserves the project-ID inode
+field. It does **not** deliver project-quota *enforcement* — that additionally needs the `quota`
+feature, the `quota` userspace package (absent from the image) and a `quotacheck` pass. Enforcement
+is therefore **deferred**, and re-adding it is a genuine future cost, not a free `tune2fs`. Tracked
+per Phase 6.5(b).
+
+### 0.6 — Emitter detail budget, measured against the SHIPPED `_clean`
+
+Extracted the emitter body from the template, de-escaped `$${`→`${`, sourced its real `_clean`/`_devalue`
+(guards assert both `_clean()` and `tail -c 180` were extracted, else the measurement voids), and ran
+`tail -n 20 <file> | _devalue | _clean`:
+
+| Ordering | 180-byte survivor ends with | Mount error survives? |
+|---|---|---|
+| **dmesg first, mount stderr last** | `… mount(2) system call failed: No such process.` | **YES** |
+| reversed (dmesg last) | `… no quota format module line 20` | **NO** |
+| 5-line dmesg, stderr last | `… No such process.` | YES |
+
+**Answer to Phase 1.5: reorder only — do NOT raise the cap.** The prescribed ordering already fits
+the mount error inside 180 bytes, so the redaction/truncation ordering is left untouched.
+
+Also measured: `_san('/var/log/cloud-init-output.log')` → `/var/log/cloud-init-output.log`. That is
+the literal path string, and it is exactly what the shipped `luks_err` emits as its "detail" whenever
+that file is unreadable. Confirms R8/D6 and gives R3/AC3b a real pre-fix RED.
+
+### 0.7 — R2 disposition: **DROP**
+
+Measured: `git-data-runcmd-rehearsal.test.sh` runs **four** plain `docker run --rm` invocations and
+contains **zero** occurrences of `--privileged`/`--cap-add`/`--device`. A `mount(2)` arm fails EPERM
+on *both* templates there, so it would be green on neither. Promoting rung 1 to privileged is an
+architectural change against the boundary the harness header itself declares, and rung 2 already
+mounts a real mapper on a real host. R1 plus the classified allowlist carries the guarantee. The
+reasoning is written into the test body so a later reader does not restore a mount arm believing it
+covers something.
+
+### 0.8 — R1 feasibility confirmed unprivileged
+
+`docker run --rm ubuntu:24.04` (no privilege flags): `truncate -s 10G` → `mkfs.ext4 -q -F -O project`
+→ rc=0 → `dumpe2fs -h` reads the feature set. `e2fsprogs` must be apt-installed in the container step
+(absent from base `ubuntu:24.04`).
+
+### Sibling baseline for the R1 fixture (provenance)
+
+Plain `mkfs.ext4 -q` under e2fsprogs 1.47.0 — the measured-good witness the two working production
+LUKS stores create:
+
+```
+has_journal ext_attr resize_inode dir_index filetype extent 64bit flex_bg sparse_super large_file huge_file dir_nlink extra_isize metadata_csum
+```
+
+The fixture is derived from **this** baseline plus `project` classified explicitly — never from the
+post-fix template's own output, which would make R1 a change-detector instead of an invariant.

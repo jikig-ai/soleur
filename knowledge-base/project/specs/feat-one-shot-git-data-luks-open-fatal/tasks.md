@@ -10,20 +10,20 @@ Threshold: `single-user incident` (`requires_cpo_signoff: true`)
 
 ## Phase 0 — Probe first. Ships alone, before any fix line is written.
 
-- [ ] **0.1** Re-run the four-arm privileged-container probe (loop file → `luksFormat` → `luksOpen` → mkfs arm → `mount`) and record that **all arms pass on a kernel providing `quota_v2`**. This is the evidence that a naive container mount test cannot fail on the unfixed template.
-  - [ ] 0.1.1 Record kernel version, `dumpe2fs -h` features and `mount` rc per arm into the commit message.
-- [ ] **0.2** Measure the candidate fix set in the same container, recording features + mount rc for each:
-  - [ ] 0.2.1 `mkfs.ext4 -q -O project` (no `quota`) — does mke2fs accept it, and does the superblock carry `quota`?
-  - [ ] 0.2.2 `tune2fs -O quota <dev>` on a `project`-only fs — is `quota` addable later, offline, without recreating the volume?
-  - [ ] 0.2.3 `mkfs.ext4 -q` (plain) — the sibling-parity baseline (`cloud-init-registry.yml:790`).
-  - [ ] 0.2.4 `mkfs.ext4 -q -O quota,project` + `mount -o noquota` — does the mount option escape the feature-driven enable path? (Expected NO; probe rather than assume.)
-  - [ ] 0.2.5 **[R7-adv]** Probe whether **`project`** is offline-addable via `tune2fs`, not only `quota`. If both are, criterion (b) stops distinguishing `-O project` from plain mkfs and sibling parity becomes the simpler answer.
-- [ ] **0.3** Re-fetch `ubuntu-24.04-server-cloudimg-amd64.manifest`; pin the observed `linux-*` package set and the fetch date into the fix's comment block. Confirm `linux-modules-extra-*` absent.
-- [ ] **0.4** Write the fix-selection decision into the plan record **before** Phase 1 starts, against the canonical five-candidate table (a)-(e). Criterion (c) is discharged **by construction** (a feature-bit argument), never by a container mount rc — the container's kernel has `quota_v2`, and a `modprobe.d` blacklist inside it does nothing because `request_module` runs in the init namespace.
+- [x] **0.1** Re-run the four-arm privileged-container probe (loop file → `luksFormat` → `luksOpen` → mkfs arm → `mount`) and record that **all arms pass on a kernel providing `quota_v2`**. This is the evidence that a naive container mount test cannot fail on the unfixed template.
+  - [x] 0.1.1 Record kernel version, `dumpe2fs -h` features and `mount` rc per arm into the commit message.
+- [x] **0.2** Measure the candidate fix set in the same container, recording features + mount rc for each:
+  - [x] 0.2.1 `mkfs.ext4 -q -O project` (no `quota`) — does mke2fs accept it, and does the superblock carry `quota`?
+  - [x] 0.2.2 `tune2fs -O quota <dev>` on a `project`-only fs — is `quota` addable later, offline, without recreating the volume?
+  - [x] 0.2.3 `mkfs.ext4 -q` (plain) — the sibling-parity baseline (`cloud-init-registry.yml:790`).
+  - [x] 0.2.4 `mkfs.ext4 -q -O quota,project` + `mount -o noquota` — does the mount option escape the feature-driven enable path? (Expected NO; probe rather than assume.)
+  - [x] 0.2.5 **[R7-adv]** Probe whether **`project`** is offline-addable via `tune2fs`, not only `quota`. If both are, criterion (b) stops distinguishing `-O project` from plain mkfs and sibling parity becomes the simpler answer.
+- [x] **0.3** Re-fetch `ubuntu-24.04-server-cloudimg-amd64.manifest`; pin the observed `linux-*` package set and the fetch date into the fix's comment block. Confirm `linux-modules-extra-*` absent.
+- [x] **0.4** Write the fix-selection decision into the plan record **before** Phase 1 starts, against the canonical five-candidate table (a)-(e). Criterion (c) is discharged **by construction** (a feature-bit argument), never by a container mount rc — the container's kernel has `quota_v2`, and a `modprobe.d` blacklist inside it does nothing because `request_module` runs in the init namespace.
 - [ ] **0.5** Run `/soleur:gdpr-gate` against this plan (trigger (b): `single-user incident` threshold). Advisory only.
-- [ ] **0.6** **[R8]** Measure the emitter's detail budget: hand-write a representative detail file (20 dmesg lines + a realistic multi-line mount stderr, and the reverse ordering), run each through the shipped `_clean`, report which bytes survive `tail -n 20 | … | tail -c 180`. This is what Phase 1.4 gates on.
-- [ ] **0.7** **[R2]** Decide R2's disposition explicitly: drop / promote rung 1 to privileged / push to rung 2. If "promote", the rung-taxonomy change goes in the Phase 4 ADR.
-- [ ] **0.8** **[R2]** Feasibility-check the container shape R1 will actually use (unprivileged `docker run`, `e2fsprogs` installed, `mkfs.ext4` on a regular file, `dumpe2fs -h` on that file).
+- [x] **0.6** **[R8]** Measure the emitter's detail budget: hand-write a representative detail file (20 dmesg lines + a realistic multi-line mount stderr, and the reverse ordering), run each through the shipped `_clean`, report which bytes survive `tail -n 20 | … | tail -c 180`. This is what Phase 1.4 gates on.
+- [x] **0.7** **[R2]** Decide R2's disposition explicitly: drop / promote rung 1 to privileged / push to rung 2. If "promote", the rung-taxonomy change goes in the Phase 4 ADR.
+- [x] **0.8** **[R2]** Feasibility-check the container shape R1 will actually use (unprivileged `docker run`, `e2fsprogs` installed, `mkfs.ext4` on a regular file, `dumpe2fs -h` on that file).
 
 ## Phase 1 — Fix the template
 
