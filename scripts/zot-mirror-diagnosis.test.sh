@@ -188,6 +188,17 @@ assert_contains "unmeasured has a base case when the settling probe is itself un
 assert_not_contains "unmeasured never names a most-likely cause" "most likely" "$UNMEAS_TXT"
 assert_not_contains "unmeasured does not assert the token is dead" "MEASURED DEAD" "$UNMEAS_TXT"
 
+# ACTIONABLE STANDALONE — this is a contract, not a nicety, and it is what makes the
+# cross-consumer answer defensible. cf-tunnel-registry-bridge has THREE callers and only
+# reusable-release.yml runs a token preflight; build-inngest-config-bundle.yml and
+# build-inngest-bootstrap-image.yml therefore sit on `unmeasured` PERMANENTLY. If this arm
+# were merely a degraded placeholder, those two workflows would have been handed a worse
+# message than they had before. So it must carry a runnable command of its own.
+assert_contains "unmeasured is actionable standalone: it names the detector command" \
+  "check-cloudflare-token-drift.sh" "$UNMEAS_TXT"
+assert_contains "unmeasured points at the origin telemetry by marker name" \
+  "SOLEUR_ZOT_DISK" "$UNMEAS_TXT"
+
 echo "=== cross-arm: no arm may name an unmeasured cause ==="
 
 # The ADR-166 invariant, asserted mechanically across every arm rather than left to review.

@@ -194,6 +194,10 @@ run_mirror() {
   COMMIT_SHA="abc123def" \
   BRIDGE_OUTCOME="$bridge_outcome" \
   MIRROR_OVERRIDE_REASON="$override_reason" \
+  GITHUB_WORKSPACE="$REPO_ROOT" \
+  TOKEN_VERDICT="${5:-unmeasured}" \
+  TOKEN_CHECKED_AT="${6:-}" \
+  TOKEN_CAUSE="${7:-unknown}" \
   PATH="$STUB_DIR:$PATH" \
     bash "$MIRROR_BLOCK" > "$log" 2>&1
   rc=$?
@@ -338,11 +342,30 @@ run_mirror always_ok failure >/dev/null
 _t9_log="$(last_log)"
 _t9_ok=1
 grep -qF 'UNPUBLISHED DRAFT' "$_t9_log" || _t9_ok=0
-grep -qF 'check-cloudflare-token-drift.sh' "$_t9_log" || _t9_ok=0
 # The recovery verb must be the one that preserves the version. "Re-run failed jobs" keeps
 # the push event so the merge PR's semver label is re-read; a fresh dispatch defaults the
 # bump_type and can strand the draft permanently.
 grep -qF 'Re-run failed jobs' "$_t9_log" || _t9_ok=0
+# #7242. The `check-cloudflare-token-drift.sh` assertion MOVED, and the move is the point.
+#
+# Both literals above live in the shared $SAFE_TO_RERUN suffix that degraded() appends to
+# EVERY call, so asserting them here proves only that degraded() ran — they pass for any
+# arm, including a blank one. That made this test read as per-arm coverage while providing
+# none. The detector command is now arm-DEPENDENT (it must appear on stale/unverifiable/
+# unmeasured and must NOT headline `live`, because on `live` the job has already measured
+# the credential and rotation is ruled out), so pinning it to a fixed string here would
+# re-assert the very misdiagnosis this PR removes.
+#
+# Per-arm text is asserted where it can be driven directly, as function calls, in
+# scripts/zot-mirror-diagnosis.test.sh. What belongs HERE is only what this harness alone
+# can see: that the block actually reaches the shared helper and renders its OUTPUT.
+#
+# The anchor is a literal only the REAL helper emits. An earlier version of this line
+# grepped for the helper's own filename, which the block's could-not-load FALLBACK also
+# prints — so it passed identically whether the helper loaded or not. That is the
+# assert-the-definition-not-the-invocation trap, committed inside the fix for it.
+grep -qF 'NOTHING WAS MEASURED' "$_t9_log" || _t9_ok=0
+grep -qF 'could not be loaded' "$_t9_log" && _t9_ok=0
 # NEGATIVE, and the half with teeth: apply-deploy-pipeline-fix.yml must NOT be offered as a
 # way to ship past this gate. It redeploys the CURRENTLY RUNNING version (it resolves its
 # tag from web-1's /health) and hard-errors without a released semver, so an operator
@@ -350,9 +373,49 @@ grep -qF 'Re-run failed jobs' "$_t9_log" || _t9_ok=0
 # assertion previously pinned that false claim — a test protecting a lie.
 grep -qF 'apply-deploy-pipeline-fix.yml' "$_t9_log" && _t9_ok=0
 if [[ "$_t9_ok" == "1" ]]; then
-  pass "bridge message: unpublished-draft reassurance + the version-preserving re-run verb + the drift detector, and no false bypass hatch"
+  pass "bridge message: unpublished-draft reassurance + the version-preserving re-run verb + real helper output, and no false bypass hatch"
 else
-  fail "bridge message must name 'Re-run failed jobs' and check-cloudflare-token-drift.sh, and must NOT name apply-deploy-pipeline-fix.yml as a ship path"
+  fail "bridge message must name 'Re-run failed jobs', render the REAL helper output (not its could-not-load fallback), and must NOT name apply-deploy-pipeline-fix.yml as a ship path"
+fi
+
+# T17 (#7242) — the arm actually SWITCHES on the verdict the job measured.
+#
+# This is the assertion scripts/zot-mirror-diagnosis.test.sh structurally cannot make: it
+# calls the function directly, so it proves the four texts differ but says nothing about
+# whether the workflow ever reaches them with the right value. The plumbing in between —
+# an `env:` mapping rather than a `${{ }}` interpolation baked in at parse time — is the
+# part that silently breaks, and it breaks in the direction where every arm renders as
+# `unmeasured` and the suite stays green.
+#
+# The LIVE fixture is today's incident: the credential was verified live in-job and the
+# origin was crash-looping. Getting a rotation instruction here is the whole defect.
+echo "T17: the bridge message branches on the MEASURED verdict, end-to-end through the block"
+run_mirror always_ok failure match "" live "20:23:05Z" >/dev/null
+_t17_live="$(last_log)"
+_t17_ok=1
+grep -qF 'MEASURED LIVE' "$_t17_live" || _t17_ok=0
+grep -qF '20:23:05Z' "$_t17_live" || _t17_ok=0
+# The acute regression: on a verdict of `live`, the message must NOT tell the operator to
+# go rotate the credential this same job just proved works.
+grep -qF 'MEASURED DEAD' "$_t17_live" && _t17_ok=0
+
+run_mirror always_ok failure match "" stale "20:23:05Z" >/dev/null
+_t17_stale="$(last_log)"
+grep -qF 'MEASURED DEAD' "$_t17_stale" || _t17_ok=0
+# ...and the corrected remedy, not the FALSIFIED "set it on the prd ROOT, branches
+# inherit" clause the detector itself retracted.
+grep -qF 'do NOT inherit' "$_t17_stale" || _t17_ok=0
+grep -qF 'MEASURED LIVE' "$_t17_stale" && _t17_ok=0
+
+run_mirror always_ok failure match "" unverifiable "20:23:05Z" gate-indeterminate >/dev/null
+_t17_unver="$(last_log)"
+grep -qF 'gate-indeterminate' "$_t17_unver" || _t17_ok=0
+grep -qF 'Do NOT rotate' "$_t17_unver" || _t17_ok=0
+
+if [[ "$_t17_ok" == "1" ]]; then
+  pass "verdict reaches the message: live/stale/unverifiable each render their own arm, and live never says MEASURED DEAD"
+else
+  fail "the bridge message did not branch on TOKEN_VERDICT — check the env: mapping on the mirror step (a \${{ }} inside the run body bakes in at parse time)"
 fi
 
 # T11-T14 close arms the earlier battery never mutated: it mutated the branch the PR

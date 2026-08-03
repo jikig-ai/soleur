@@ -535,15 +535,36 @@ jobs:
           # `continue-on-error: true` then hid the abort. That made this step
           # silent on exactly the two paths it exists for — the
           # naming-an-unmeasured-cause defect it was written to prevent.
+          # shellcheck source=/dev/null
+          source "$GITHUB_WORKSPACE/scripts/zot-mirror-diagnosis.sh"
           rc=0
-          bash scripts/check-cloudflare-token-drift.sh --only REGISTRY_PUSH_ACCESS_TOKEN || rc=$?
-          # THREE-valued, because the script is: 0 live / 1 dead / 2 could-not-check.
-          # Collapsing 2 into 1 is what turns "nothing was checked" into a confident
-          # accusation — the naming-an-unmeasured-cause defect this PR exists to drain.
-          case "$rc" in
-            0) echo "Registry-push Access service token verified live — the zot bridge should authenticate." ;;
-            1) echo "::warning::The registry-push CF Access service token is STALE in at least one Doppler config. The zot mirror step later in this job will very likely fail with mirror_reason=bridge. Fix now to save the round trip: set the live REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET on the 'prd' ROOT config. This step is advisory and is not failing the release." ;;
-            *) echo "::warning::Token preflight could NOT run (exit ${rc}: preconditions missing or nothing enumerated). No conclusion drawn about the registry-push token — this is not a claim that it is stale." ;;
+          bash scripts/check-cloudflare-token-drift.sh --only REGISTRY_PUSH_ACCESS_TOKEN \
+            --json-file "$RUNNER_TEMP/registry-push-token.json" || rc=$?
+          # FOUR-valued, and derived from the JSON counts rather than from `rc`.
+          #
+          # `rc` cannot carry this decision: the detector exits 1 for `DEAD_N > 0 OR
+          # UNVERIFIABLE_N > 0`, and UNVERIFIABLE is not STALE — it is UNMEASURED. The
+          # previous three-valued version mapped rc=1 to "the token is STALE, rotate it",
+          # so a transient edge fault during the probe produced a confident accusation
+          # about a credential nothing had graded. That is the same
+          # naming-an-unmeasured-cause defect this step exists to prevent, committed by
+          # the step itself. #7242 / ADR-166.
+          #
+          # The ladder lives in scripts/zot-mirror-diagnosis.sh so it is unit-tested
+          # directly (scripts/zot-mirror-diagnosis.test.sh) instead of only in CI.
+          verdict="$(zot_mirror_verdict "$rc" "$RUNNER_TEMP/registry-push-token.json")"
+          cause="$(zot_mirror_unverifiable_cause "$RUNNER_TEMP/registry-push-token.json")"
+          checked_at="$(date -u +%H:%M:%SZ)"
+          {
+            printf 'verdict=%s\n'    "$verdict"
+            printf 'checked_at=%s\n' "$checked_at"
+            printf 'cause=%s\n'      "$cause"
+          } >> "$GITHUB_OUTPUT"
+          case "$verdict" in
+            live)         echo "Registry-push Access service token verified live at ${checked_at} — Cloudflare Access admitted these exact credentials on registry.soleur.ai. If the zot mirror still fails, the credential is ruled OUT by measurement." ;;
+            stale)        echo "::warning::The registry-push CF Access service token is MEASURED DEAD in at least one Doppler config. The zot mirror step later in this job will very likely fail with mirror_reason=bridge. Fix now to save the round trip: set the live REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET in EVERY config the detector names — branch configs do NOT inherit from the 'prd' root. This step is advisory and is not failing the release." ;;
+            unverifiable) echo "::warning::The registry-push token could NOT be graded (cause: ${cause}). This is NOT a claim that it is stale, and it is not a reason to rotate. If the mirror fails later in this job, the failure message will repeat this cause." ;;
+            *)            echo "::warning::Token preflight could NOT run (exit ${rc}: preconditions missing, or the verdict file was unreadable). No conclusion drawn about the registry-push token — this is not a claim that it is stale." ;;
           esac
 
       - name: Docker login
@@ -794,6 +815,16 @@ jobs:
           doppler-token: ${{ secrets.DOPPLER_TOKEN_PRD }}
           cloudflared-version: "2026.5.0"
           cloudflared-sha256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+          # The `|| 'unmeasured'` is LOAD-BEARING and is not made redundant by the
+          # composite's own `default:`. A composite input default applies when the input is
+          # OMITTED, not when it is passed as an explicitly-empty string — and
+          # `steps.token_preflight.outputs.verdict` IS an empty string whenever that step
+          # was skipped (it is gated on `steps.version.outputs.next != ''`) or died before
+          # writing $GITHUB_OUTPUT. Without the guard, "the preflight never ran" would
+          # render as the empty arm rather than as `unmeasured`. #7242 / ADR-166.
+          token-verdict: ${{ steps.token_preflight.outputs.verdict || 'unmeasured' }}
+          token-checked-at: ${{ steps.token_preflight.outputs.checked_at || '' }}
+          token-cause: ${{ steps.token_preflight.outputs.cause || 'unknown' }}
 
       - name: Mirror image GHCR→zot (crane) + cosign-sign the zot digest
         id: zot_mirror
@@ -871,6 +902,22 @@ jobs:
           # outcome keeps the TRUE result. That masking is precisely what made the
           # broken bridge invisible.
           BRIDGE_OUTCOME: ${{ steps.zot_bridge.outcome }}
+          # #7242 / ADR-166. Passed as an `env:` mapping rather than interpolated inside the
+          # run: body, because the retry suite awk-EXTRACTS this run: block and executes it
+          # under PATH stubs — a `${{ }}` inside the body bakes in as a literal at parse
+          # time and makes per-arm testing structurally impossible. `|| 'unmeasured'` for the
+          # skipped/never-wrote-output case; see the same guard on the bridge step above.
+          TOKEN_VERDICT: ${{ steps.token_preflight.outputs.verdict || 'unmeasured' }}
+          TOKEN_CHECKED_AT: ${{ steps.token_preflight.outputs.checked_at || '' }}
+          TOKEN_CAUSE: ${{ steps.token_preflight.outputs.cause || 'unknown' }}
+          # #7242. Read ONLY on the bridge-failure path, to capture the registry host's own
+          # restart series before this ephemeral runner destroys it. Reachable here because
+          # web-platform-release.yml declares `secrets: inherit`; the same three secrets are
+          # already used by scheduled-zot-restart-loop.yml and three other workflows. If they
+          # are absent the message says so explicitly rather than inferring anything.
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
           # FR-A10 — the dispatch-only, reason-required override. Non-empty ⇒ a failed
           # mirror is recorded but does not block. The reason IS the switch: there is no
           # separate boolean to get out of sync with it, so "enabled but blank" cannot
@@ -949,13 +996,27 @@ jobs:
           #     semver. Naming it here sent an operator on a ~70-minute prod apply that
           #     ends where it started. The real escape hatch is this workflow's own
           #     dispatch-only allow_unmirrored_reason input.
-          SAFE_TO_RERUN="Nothing was half-shipped: the release is still an UNPUBLISHED DRAFT with no git tag, no version consumed and no notes sent. Recover with GitHub's 'Re-run failed jobs' on THIS run — do NOT start a fresh 'Run workflow' dispatch, which recomputes the version from a default bump_type and can strand this draft. If the gate itself is misfiring, re-dispatch web-platform-release.yml with allow_unmirrored_reason=<why> to publish anyway (it does not make the image pullable)."
+          # (3) The last two sentences read as a contradiction — "do NOT start a fresh
+          #     dispatch" followed immediately by "re-dispatch web-platform-release.yml" —
+          #     and an operator reading under incident pressure can take the second as
+          #     permission to ignore the first. They are different actions for different
+          #     states, so say which state each belongs to instead of leaving the reader to
+          #     infer it. RECOVERY is always Re-run failed jobs. The override is not a
+          #     recovery path at all: it publishes a draft whose image is still absent from
+          #     zot, so the deploy still will not land. #7242.
+          SAFE_TO_RERUN="Nothing was half-shipped: the release is still an UNPUBLISHED DRAFT with no git tag, no version consumed and no notes sent. TO RECOVER THIS RELEASE, use GitHub's 'Re-run failed jobs' on THIS run — never a fresh 'Run workflow' dispatch, which recomputes the version from a default bump_type and can strand this draft permanently. (Separately, and NOT a recovery path: if the gate itself is MISFIRING — the image really is in zot and the check is wrong — a dispatch with allow_unmirrored_reason=<why> publishes the draft anyway. It does not put the image in zot, so the deploy still will not land; it only unblocks a false positive.)"
           degraded() {
             local reason="$1" rc="$2"
             local detail="${3:-zot did not receive this image; backfill via 'crane copy GHCR→zot && cosign sign --yes <zot>@<digest>', then re-run.}"
             echo "mirror_status=degraded" >> "$GITHUB_OUTPUT"
             echo "mirror_reason=${reason}" >> "$GITHUB_OUTPUT"
-            echo "::error::zot mirror FAILED at stage '${reason}' for ${ZOT:-<image>} (rc=${rc}) — this release is BLOCKED and will not deploy. ${detail} ${SAFE_TO_RERUN} If disk-full: see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
+            # The telemetry pointer was gated behind "If disk-full:", which made it
+            # unreachable for the failure it most needed to serve. SOLEUR_ZOT_DISK carries
+            # `zot_restarts` — the field that settles an origin-flap — not just the disk
+            # gauge its name suggests. On 2026-08-03 a 4-restarts/min crash-loop blocked
+            # three releases while this pointer sat one conditional away from naming it.
+            # Widened to registry-host health generally. #7242.
+            echo "::error::zot mirror FAILED at stage '${reason}' for ${ZOT:-<image>} (rc=${rc}) — this release is BLOCKED and will not deploy. ${detail} ${SAFE_TO_RERUN} Registry-host health (disk AND zot_restarts/exit_code, which is what an origin flap shows up in): see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
             {
               echo "### ❌ zot mirror failed — release blocked"
               echo ""
@@ -1052,11 +1113,69 @@ jobs:
             #      answers 401 from zot itself. Reading that prediction as a finding is
             #      what sent the 2026-07-29 investigation to the wrong network layer and
             #      consumed its entire diagnostic budget.
-            # The MEASURED cause class is a CF Access service-token rotation that never
-            # propagated to Doppler: lifecycle { ignore_changes = [value] } means Terraform
-            # replaces the token and then reports "No changes" while the stale value is
-            # still being served.
-            degraded bridge "n/a" "The CF-tunnel bridge to zot failed, so NOTHING was mirrored for this release (not a partial copy) and this version is absent from zot. GHCR is NOT a fallback — its pull credential is revoked — so this release could not have deployed. Most likely cause: a Cloudflare Access service token was rotated and the new value never reached Doppler. Check it with: doppler run -p soleur -c prd_terraform -- bash scripts/check-cloudflare-token-drift.sh — if it reports REGISTRY_PUSH_ACCESS_TOKEN_* DEAD, set the live value on the 'prd' ROOT config and re-run this workflow."
+            #   3. It then named "a CF Access service-token rotation that never propagated"
+            #      as THE MEASURED cause class. That was measured for the 2026-07-29
+            #      incident and asserted here as a standing fact — so on 2026-08-03 it
+            #      misdiagnosed a zot crash-loop as a stale token, and the operator was
+            #      sent to rotate a credential this job had already verified live six
+            #      minutes earlier. A cause measured ONCE is not a cause measured ALWAYS.
+            #
+            # That is the third iteration of one defect: iterations one (2026-07-15) and two
+            # (2026-07-29) were each "fixed" by rewriting this sentence, and each re-drifted,
+            # because a sentence cannot enforce anything. The fix is structural — the text
+            # now BRANCHES on a verdict this job actually computed, and it lives in
+            # scripts/zot-mirror-diagnosis.sh so this site and the two in
+            # .github/actions/cf-tunnel-registry-bridge/action.yml cannot drift apart.
+            # #7242 / ADR-166.
+            # The load is GUARDED, and the guard is load-bearing rather than defensive
+            # boilerplate. An unguarded `source` of a missing/unreadable path aborts this
+            # block under `set -u`, which would mean degraded() never runs — and a bridge
+            # failure that reports NOTHING is precisely the #6416 defect this branch was
+            # written to close. A diagnosis helper must never be able to silence the
+            # failure it exists to explain, so a load failure degrades to the short form.
+            DIAG=""
+            if [[ -n "${GITHUB_WORKSPACE:-}" && -r "${GITHUB_WORKSPACE}/scripts/zot-mirror-diagnosis.sh" ]]; then
+              # shellcheck source=/dev/null
+              source "${GITHUB_WORKSPACE}/scripts/zot-mirror-diagnosis.sh"
+            fi
+
+            # Measure the ORIGIN hypothesis here, in-job, rather than telling the operator to
+            # go look at a dashboard (hr-no-dashboard-eyeball-pull-data-yourself). This is an
+            # ephemeral runner: the deciding datum for "was the registry flapping while this
+            # push ran" is destroyed the moment this job ends unless it is captured now.
+            #
+            # FAIL-SOFT, and the direction matters: a query that fails yields an explicit
+            # "could not query" sentence, NEVER silence and never a claim about zot. An
+            # unavailable instrument must not be able to produce a diagnosis.
+            RESTART_SUMMARY="(not queried)"
+            if [[ -n "${BETTERSTACK_QUERY_HOST:-}" ]]; then
+              bs_log="$(mktemp -t zot-restarts.XXXXXXXX)"
+              if bash scripts/betterstack-query.sh --since 3h --grep SOLEUR_ZOT_DISK > "$bs_log" 2>&1; then
+                RESTART_SUMMARY="$(grep -oE 'zot_restarts=[0-9]+' "$bs_log" | sort -t= -k2 -n | sed -n '1p;$p' | paste -sd' -> ' -)"
+                oom="$(grep -oE 'oom_kills=[0-9]+' "$bs_log" | sort -t= -k2 -n | tail -1)"
+                if [[ -n "$RESTART_SUMMARY" ]]; then
+                  RESTART_SUMMARY="${RESTART_SUMMARY} over the last 3h (${oom:-oom_kills=unknown})"
+                else
+                  RESTART_SUMMARY="the SOLEUR_ZOT_DISK query returned no zot_restarts samples in the last 3h — no conclusion drawn about the registry host."
+                fi
+              else
+                RESTART_SUMMARY="could not query Better Stack for SOLEUR_ZOT_DISK (the query itself failed) — no conclusion drawn about the registry host."
+              fi
+              rm -f "$bs_log"
+            else
+              RESTART_SUMMARY="BETTERSTACK_QUERY_HOST is not set in this job, so the registry-host restart series was not read — no conclusion drawn about the registry host."
+            fi
+
+            if declare -F zot_mirror_diagnosis >/dev/null 2>&1; then
+              DIAG="$(zot_mirror_diagnosis "${TOKEN_VERDICT:-unmeasured}" "${TOKEN_CHECKED_AT:-}" "${RESTART_SUMMARY}" "${TOKEN_CAUSE:-unknown}" || true)"
+            fi
+            # Short form. Still names no unmeasured cause: it reports the verdict it was
+            # handed and points at the two things an operator can run, which is the same
+            # contract the `unmeasured` arm carries.
+            if [[ -z "$DIAG" ]]; then
+              DIAG="Registry-push token verdict for this run: ${TOKEN_VERDICT:-unmeasured}. Registry-host health: ${RESTART_SUMMARY}. (The shared diagnosis helper scripts/zot-mirror-diagnosis.sh could not be loaded in this job, so this is the short form — no cause is being named. Run 'doppler run -p soleur -c prd_terraform -- bash scripts/check-cloudflare-token-drift.sh' for the credential, and read SOLEUR_ZOT_DISK in Better Stack for the registry host.)"
+            fi
+            degraded bridge "n/a" "The CF-tunnel bridge to zot failed, so NOTHING was mirrored for this release (not a partial copy) and this version is absent from zot. GHCR is NOT a fallback — its pull credential is revoked — so this release could not have deployed. ${DIAG}"
           fi
 
           # Install crane (SHA-pinned; supply-chain discipline, same as cloudflared).
@@ -1236,7 +1355,16 @@ jobs:
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[BLOCKED] ${{ inputs.component_display }} release failed — nothing was shipped'
-          body: '<p><strong>The ${{ inputs.component_display }} release job failed, so no release was published and no deploy ran.</strong></p><p>zot mirror stage: <code>${{ steps.zot_mirror.outputs.mirror_reason || ''n/a — the job failed before or outside the mirror step'' }}</code></p><p>Nothing was half-shipped: no version was consumed, no git tag was created and no release notes were sent, so re-running this workflow is safe. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> — the failing step names the cause and the one command that fixes it.</p>'
+          # #7242 / ADR-166. The closing promise used to read "the failing step names the
+          # cause and the one command that fixes it". That was false in practice — it was
+          # what the misdiagnosing message had claimed — and it is now false BY DESIGN on
+          # two of the four arms: `unverifiable` and `unmeasured` exist precisely to say
+          # that the job could not settle the cause. Promising a cause-and-a-command sets
+          # the operator up to accept whichever sentence looks most like one. Promise what
+          # the run actually delivers instead: what was measured, and what that rules out.
+          # `verdict` rides in the body so the first touchpoint is triageable without
+          # opening the run at all.
+          body: '<p><strong>The ${{ inputs.component_display }} release job failed, so no release was published and no deploy ran.</strong></p><p>zot mirror stage: <code>${{ steps.zot_mirror.outputs.mirror_reason || ''n/a — the job failed before or outside the mirror step'' }}</code><br>registry-push token verdict: <code>${{ steps.token_preflight.outputs.verdict || ''unmeasured — the preflight did not run'' }}</code></p><p>Nothing was half-shipped: no version was consumed, no git tag was created and no release notes were sent, so re-running this workflow is safe. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> — the failing step reports what it MEASURED and what that rules in or out. Where it could not measure a cause it says so rather than naming one.</p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       # Inline step required: GITHUB_TOKEN-created releases don't fire
