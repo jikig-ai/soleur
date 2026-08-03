@@ -14,7 +14,7 @@ adr: ADR-166 (PROVISIONAL ordinal — re-derive before merge)
 # fix(infra): per-config Doppler read tokens restore the token-drift scan to 13 of 13
 
 Closes #7234. `Ref #7159`, `Ref #7175` — **never `Closes`/`Resolves` for those two**: both
-close on a live scheduled run, not at merge (see AC-P1 and SE-3).
+close on a live scheduled run, not at merge (see **AC-P4** and SE-3).
 
 > **Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed).** No
 > `knowledge-base/project/specs/feat-one-shot-7234-per-config-doppler-service-tokens/spec.md`
@@ -189,8 +189,8 @@ A `CRED_FOR[<config>]` associative array replaces the single `DOPPLER_CRED` snap
 **The definedness axis is pinned deliberately.** `DOPPLER_TOKEN_MAP: ${{ secrets.X }}` with the
 secret absent yields a *defined but empty* variable. `-n` puts the merge→apply window into the
 "neither" arm → today's `degraded 0/13`, which is what the follow-through's surviving `0/*`
-TRANSIENT arm expects and what the `degraded` issue body (rewritten by FR10) correctly
-diagnoses. Choosing `${x+set}` would route it to `unknown`, whose issue body says *"this is a
+TRANSIENT arm expects and what the `degraded` issue body (rewritten by **FR9**'s `:693-748`
+bullet) correctly diagnoses. Choosing `${x+set}` would route it to `unknown`, whose issue body says *"this is a
 DETECTOR fault, not a credential fault — do not touch the Doppler identity"* — the wrong remedy
 in the one window it is guaranteed to fire.
 
@@ -1024,7 +1024,7 @@ The 5-agent panel + CTO + advisor found 4 P0s and 12 P1s against v1. Audit trail
 | **P1 (deepen)** the `unknown` branch's LEAD at `:597` — *"a DETECTOR fault, not a credential fault"* — lives outside the Remedy block and names no resource, so **v2's own rewrite scope (`:660-667`) and its `doppler_service_account` grep both missed it**, while FR7b routes credential faults straight to `unknown` | verify-the-negative pass | FR9's `:597` bullet; AC-C3a; tasks 3.3.2 |
 | **P2 (deepen)** the `doppler_service_account` grep count was stated as 6; it is **8** (`155, 422, 681, 695, 696, 739, 1791, 1795`) — wrong in two consecutive revisions | verify-the-negative pass | FR9 and R7 now instruct running the grep and name the count as a reading aid only |
 | **P2 (deepen)** "`doppler me` appears nowhere in this repository" was **false** — it is a literal runbook command at `tenant-provisioning.md:151,292` | verify-the-negative pass | R5 corrected; the unmeasured part is narrowed to *which field* carries a config-scoped token's binding |
-| **taste** the plan was ~1,300 lines of scaffolding around a loop; the `Test Scenarios` table duplicated the ACs 1:1; CI-green ACs, six restating-NFRs, and four self-referential Sharp Edges were ceremony | DHH + code-simplicity | table deleted, ACs consolidated 35→22, FRs merged, Risks cut to the 6 no FR encodes, Alternatives reduced to an index pointing at the ADR |
+| **taste** the plan was ~1,300 lines of scaffolding around a loop; the `Test Scenarios` table duplicated the ACs 1:1; CI-green ACs, six restating-NFRs, and four self-referential Sharp Edges were ceremony | DHH + code-simplicity | table deleted, ACs consolidated (v1 had 35 flat; v2 has **27** in five labelled groups, `AC-A1..AC-P4` — recount before quoting this number, it has drifted once already), FRs merged to **24** (`FR1..FR18b`), Risks cut to the 6 no FR encodes, Alternatives reduced to an index pointing at the ADR |
 
 Two panel recommendations were **declined**, with reasons, per `rf-when-a-reviewer-or-user-says-to-keep-a`:
 

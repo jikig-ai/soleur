@@ -240,6 +240,37 @@ identical to the probe host. Nothing to re-run.)*
 
 ## Phase 6 — Verify and ship
 
+**AC traceability.** The plan defines 27 acceptance criteria (`AC-A1..AC-P4`). Every one must be
+discharged by a task above or by 6.1-6.5 below. Map, so no AC is orphaned:
+
+| Plan AC | Discharged by |
+|---|---|
+| AC-A1, AC-A2, AC-A3 | 1.1, 1.2, 1.3, 1.4 |
+| AC-A4, AC-A5 | 1.6, 1.7 |
+| AC-B1 | 4.1, 4.2 |
+| AC-B2 | 2.2, 2.4, 4.11 |
+| AC-B3 | 2.3 |
+| AC-B4 | 2.3 (single-mode case), 2.6 |
+| AC-B5 | 2.3 (malformed-map case), 2.5, 2.10, 2.11 |
+| AC-B6 | 2.12 |
+| AC-C1, AC-C2 | 4.3, 4.4 |
+| AC-C3a | 3.3.2 |
+| AC-C3 | 3.3 (all sub-tasks) |
+| AC-C4 | 1.4, 1.5, 3.3.5, 4.6 |
+| AC-C5 | 4.5 |
+| AC-C6 | 4.1, 4.2, 4.11 |
+| AC-D1 | 5.1, 5.2, 5.3 |
+| AC-D2 | 5.4, 5.5, 5.6 |
+| AC-D3 | 6.2 |
+| AC-D4 | 6.3 |
+| AC-D5 | 4.9, 4.10, 6.3 |
+| AC-P1 | 6.4 (apply verification) |
+| AC-P2 | 6.4 (scheduled run at 13/13) |
+| AC-P3 | 6.4 (#7175 auto-close + follow-through PASS) |
+| AC-P4 | 6.5 |
+
+
+
 - [ ] **6.1** Full suite. Then, each in **CI's exact form**:
   - [ ] `terraform fmt -check` + `terraform validate` (`apps/web-platform/infra/`)
   - [ ] `shellcheck` on every edited shell file
