@@ -471,37 +471,112 @@ runcmd:
     # STAGE/on_err do not cross the exec boundary — without it a failed luksOpen and a
     # Doppler scope failure both surface as doppler_run, collapsing the discriminator.
     STAGE=luks_open
+    # (#7204) DETAIL FILE, SEEDED AT STAGE ENTRY. ORDERING HERE IS LOAD-BEARING: this seed
+    # MUST precede the trap and every append below. luks_err is the trap for the WHOLE
+    # stage — the key guard, isLuks, luksFormat, luksOpen, mkfs, mkdir, mount AND the fstab
+    # line — so a detail
+    # source created later (say, next to the mount) would not exist on any EARLIER failure,
+    # and the emitter's `[ -n "$DETAIL_SRC" ] && [ -r "$DETAIL_SRC" ]` branch would fall
+    # through to `_san "$DETAIL_SRC"` and ship THE LITERAL PATH STRING as the diagnostic.
+    # Measured on the shipped emitter: _san('/var/log/cloud-init-output.log') returns
+    # '/var/log/cloud-init-output.log'. That is precisely the useless "cause" #7204's fatal
+    # carried, and why diagnosing it needed a hand-written Better Stack query.
+    # Co-presence is NOT ordering: a guard proving the seed and the appends both exist
+    # cannot see a seed that moved below them, which is the shape that bricked every boot in
+    # the #6982-era incident. git-data-runcmd-rehearsal.test.sh R3(2) asserts the ORDER.
+    GIT_DATA_LUKS_DETAIL=/run/git-data-luks-stage.log
+    # umask 077, not the inherited 022: cloud-init's default would create this 0644 on a
+    # host that has a real local `git` account, and the file receives a dmesg tail that
+    # kernel.dmesg_restrict=1 deliberately withholds from non-root. Defense-in-depth (the
+    # account is git-shell-confined), one subshell.
+    ( umask 077; : > "$GIT_DATA_LUKS_DETAIL" ) || true
     luks_err() {
       rc=$?
       trap - EXIT
       [ "$rc" -eq 0 ] && exit 0
+      # ORDERING: the FAILING COMMAND'S OWN STDERR GOES LAST. The emitter keeps
+      # `tail -n 20 <file> | _devalue | _clean` and _clean ENDS in `tail -c 180` — a DOUBLE
+      # truncation — so whatever is last is what survives. Measured 2026-08-03 against the
+      # shipped _clean: with this ordering the 180-byte survivor ends with
+      # "mount(2) system call failed: No such process."; reversed, the mount error is pushed
+      # out of the window entirely. The cap is NOT raised — the ordering alone fits it, and
+      # the redaction/truncation ordering inside _clean is load-bearing and untouched.
+      #
+      # /var/log/cloud-init-output.log sits in the MIDDLE, deliberately. Two commands in
+      # this stage (mkdir, the fstab line) plus bash's own `set -u` errors report to the
+      # shell's stderr rather than into the detail file, and that log is the only place
+      # those land. Putting it last would displace the mount error it exists to preserve;
+      # putting it before the detail file means it survives exactly when the detail file is
+      # EMPTY — which is precisely the uncaptured-failure case.
+      #
+      # `|| true` on each capture is REQUIRED, not sloppiness: this handler runs with
+      # `set -euo pipefail` still armed, so a failing or SIGPIPE'd dmesg would abort
+      # luks_err BEFORE git-data-emit and destroy the very diagnostic this block adds. The
+      # hard constraint is about the MOUNT, never about the diagnostic.
+      _detail="$GIT_DATA_LUKS_DETAIL.final"
+      {
+        dmesg 2>/dev/null | tail -n 20 || true
+        tail -n 20 /var/log/cloud-init-output.log 2>/dev/null || true
+        # Drop mount(8)'s constant trailer. Measured: "dmesg(1) may have more information
+        # after failed mount system call." is 73 of the 180 available bytes and carries no
+        # information — it appears on every mount failure. Reclaiming it is what keeps the
+        # GENERIC failure ("wrong fs type, bad option, bad superblock on …", 220 raw bytes)
+        # from having its head truncated away.
+        grep -v 'dmesg(1) may have more information' "$GIT_DATA_LUKS_DETAIL" 2>/dev/null || true
+      } > "$_detail" 2>/dev/null || true
+      # -s, NOT -r. A readable but EMPTY file yields DETAIL=[] — a verdict with no cause,
+      # which IS #7204's defect, reproduced inside its own fix. And the fallback target must
+      # itself be proven non-empty: the seed above is `|| true`'d, so on a read-only or full
+      # /run BOTH candidates are unreadable and the emitter would take its
+      # `_san "$DETAIL_SRC"` branch and ship THE PATH STRING as the cause — the exact
+      # literal-leak this stage was rewritten to eliminate. The terminal fallback is
+      # therefore a self-describing LITERAL, never a path: _san of a sentence ships the
+      # sentence, so a degraded diagnostic announces itself instead of impersonating one.
+      [ -s "$_detail" ] || _detail="$GIT_DATA_LUKS_DETAIL"
+      [ -s "$_detail" ] || _detail="git-data luks_open rc=$rc: detail capture unavailable (/run unwritable or empty)"
       /usr/local/bin/git-data-emit "git-data LUKS stage FAILED" "$STAGE" fatal \
-        /var/log/cloud-init-output.log "rc=$rc" || true
+        "$_detail" "rc=$rc" || true
       exit 1
     }
-    # Detail comes from cloud-init's own captured output (same file the parent trap
-    # reads). Deliberately NOT `exec 2> >(tee …)`: a process substitution under
-    # `set -euo pipefail` can leave the script waiting on tee at exit — a boot that hangs
-    # instead of one that reports.
+    # Plain `2>>` appends below — deliberately NOT `exec 2> >(tee …)`: a process
+    # substitution under `set -euo pipefail` can leave the script waiting on tee at exit,
+    # i.e. a boot that HANGS instead of one that reports. A hung boot on a console-less,
+    # deny-all host is strictly worse than a reported failure.
     trap luks_err EXIT
     DEV="/dev/disk/by-id/scsi-0HC_Volume_${git_data_luks_volume_id}"
-    [ -n "$GIT_DATA_LUKS_KEY" ] || { echo "[git-data-luks] FATAL: GIT_DATA_LUKS_KEY empty — refusing unencrypted mount"; exit 1; }
-    if ! cryptsetup isLuks "$DEV"; then
-      printf '%s' "$GIT_DATA_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$DEV"
+    [ -n "$GIT_DATA_LUKS_KEY" ] || { echo "[git-data-luks] FATAL: GIT_DATA_LUKS_KEY empty — refusing unencrypted mount" | tee -a "$GIT_DATA_LUKS_DETAIL"; exit 1; }
+    if ! cryptsetup isLuks "$DEV" 2>>"$GIT_DATA_LUKS_DETAIL"; then
+      printf '%s' "$GIT_DATA_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$DEV" 2>>"$GIT_DATA_LUKS_DETAIL"
     fi
     if [ ! -e /dev/mapper/git-data ]; then
-      printf '%s' "$GIT_DATA_LUKS_KEY" | cryptsetup luksOpen --key-file - "$DEV" git-data
+      printf '%s' "$GIT_DATA_LUKS_KEY" | cryptsetup luksOpen --key-file - "$DEV" git-data 2>>"$GIT_DATA_LUKS_DETAIL"
     fi
     if ! blkid /dev/mapper/git-data >/dev/null 2>&1; then
-      # (#6982, W5/R31) `-O quota,project` at mkfs time: MIGRATION-FORCING (adding it later
-      # needs a replace PLUS an rsync of every user's objects), so it ships before any data
-      # exists. The `prjquota` MOUNT option is deliberately NOT shipped — reversible, inert
-      # until projects are assigned, and it adds a boot-failure mode on a console-less host.
-      mkfs.ext4 -q -O quota,project /dev/mapper/git-data
+      # (#7204) `-O project`, NOT `-O quota,project`. THE QUOTA FEATURE BRICKED EVERY BOOT.
+      #
+      # WHY: `quota` sets an ext4 RO_COMPAT bit that makes ext4_fill_super call
+      # ext4_enable_quotas() on EVERY mount, which needs the quota_v2 module. Ubuntu builds
+      # it =m and ships it only in linux-modules-extra-*, which the 24.04 cloud image does
+      # NOT install => -ESRCH, mount(8) rc=32, dark boot. That is rung-2 run 30649892865.
+      # `project` alone loads no module. It must be set HERE or never: measured,
+      # `tune2fs -O project` later ADDS `quota` implicitly and re-bricks the mount.
+      # Project-quota ENFORCEMENT is deferred (needs an image change) — #7217.
+      #
+      # DO NOT RE-ADD `quota`. Rationale + the five-candidate disposition + every
+      # measurement: ADR-163. Per-feature adjudication (which classes are mount-safe):
+      # apps/web-platform/infra/git-data-birth-fs-fingerprint.txt, which is the file R1
+      # machine-reads. Guards: R1 (runtime, authoritative when it runs) + B16 (static, the
+      # only coverage on a docker-less machine).
+      mkfs.ext4 -q -O project /dev/mapper/git-data 2>>"$GIT_DATA_LUKS_DETAIL"
     fi
-    mkdir -p /mnt/git-data-luks
-    mountpoint -q /mnt/git-data-luks || mount /dev/mapper/git-data /mnt/git-data-luks
-    grep -q '/dev/mapper/git-data' /etc/fstab || echo '/dev/mapper/git-data /mnt/git-data-luks ext4 defaults,nofail 0 2' >> /etc/fstab
+    mkdir -p /mnt/git-data-luks 2>>"$GIT_DATA_LUKS_DETAIL"
+    # THE MOUNT STAYS FATAL. No `|| true`, no fallback to the raw device, no `if`-guard that
+    # continues on failure. A fix that made this succeed by mounting something other than
+    # the LUKS mapper would put real user source code on plaintext disk while every artifact
+    # attests encryption — strictly worse than the unstarted promise. Guarded standing by
+    # B17 p_mount_no_fallthrough in git-data-luks.test.sh.
+    mountpoint -q /mnt/git-data-luks || mount /dev/mapper/git-data /mnt/git-data-luks 2>>"$GIT_DATA_LUKS_DETAIL"
+    grep -q '/dev/mapper/git-data' /etc/fstab 2>>"$GIT_DATA_LUKS_DETAIL" || echo '/dev/mapper/git-data /mnt/git-data-luks ext4 defaults,nofail 0 2' >> /etc/fstab 2>>"$GIT_DATA_LUKS_DETAIL"
     # NO `trap - EXIT`: disarming on success would make the `rc` guard unreachable and so
     # untested. The guard IS what keeps a healthy boot silent (AC36/T17).
     LUKSEOF

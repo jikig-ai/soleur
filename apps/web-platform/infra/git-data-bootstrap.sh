@@ -109,6 +109,16 @@ if ! mountpoint -q "$LUKS_ROOT"; then
   log "FATAL: fresh LUKS cutover volume is not mounted at $LUKS_ROOT — refusing to continue"
   exit 1
 fi
+# (#7204 review) MOUNTEDNESS IS NOT IDENTITY. `mountpoint -q` is satisfied by ANY device, so
+# every check downstream of it — and the boot_complete `luks_mounted=yes` tag — was really
+# asserting "something is mounted here", not "the LUKS mapper is mounted here". That is the
+# one remaining way to reach a serving host with user source code on a plaintext device while
+# every artifact attests encryption (#6588). Assert the SOURCE, not just the mountpoint.
+_luks_src="$(findmnt -n -o SOURCE "$LUKS_ROOT" 2>/dev/null || true)"
+if [ "$_luks_src" != "$LUKS_MAPPER" ]; then
+  log "FATAL: $LUKS_ROOT is mounted from '$_luks_src', expected '$LUKS_MAPPER' — refusing to continue on a non-LUKS device"
+  exit 1
+fi
 
 # 2. git + flock (util-linux) + git-shell. cloud-init `packages:` installs git;
 #    assert + self-heal idempotently so a transient apt drop on first boot fails
