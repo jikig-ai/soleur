@@ -7,7 +7,7 @@ states what was actually verified.
 
 | AC | Verdict | Evidence |
 |---|---|---|
-| **AC1a** byte-exact emitted command | ✅ | `grep-rewrite.test.sh` asserts the 453-byte prefix as a full literal (the one place a literal belongs — it is the drift guard) and asserts prefix+original with a byte-identical remainder, including a fixture carrying quotes, a pipe, `$X` and a trailing comment. |
+| **AC1a** byte-exact emitted command | ✅ | `grep-rewrite.test.sh` asserts the 487-byte prefix as a full literal (the one place a literal belongs — it is the drift guard) and asserts prefix+original with a byte-identical remainder, including a fixture carrying quotes, a pipe, `$X` and a trailing comment. |
 | **AC1b** that string is cheap; shim not reached | ✅ | The #7163 reproducer class (two bounded repeats over a wide atom, literal present in subject) run under `ulimit -v 2000000` + `timeout 20`: completed in **119 ms**, peak RSS **7,416 KB** (< 100 MB gate). A shim stand-in writes a marker file if reached — **not written**. |
 | **AC2** sibling `deny` beats `updatedInput` | ✅ *(precondition)* | Isolated `claude -p`, two-hook probe: PostToolUse never fired → nothing executed → **deny wins**. Tests Claude Code, not this diff. |
 | **AC3** no `permissionDecision` at any depth | ✅ | Asserted on the non-empty and empty cases **separately** (`jq -e` exits 4 on empty stdin, so a combined assertion is vacuous for the empty case). Also: no top-level `decision`/`continue`, and `hookEventName` rides in the same object as `updatedInput`. |

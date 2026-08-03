@@ -112,7 +112,33 @@ SGR_SENTINEL='_soleur_grep_rw'
 # are what keep the regression bounded; they do not buy parity. Accepted: this
 # trade buys elimination of the 9.5 GB DFA blowup, and both arms are sub-second.
 # See ADR-160 §Accepted divergences.
-SGR_PREFIX='grep(){ local _soleur_grep_rw; for _soleur_grep_rw in "$@"; do case "$_soleur_grep_rw" in -*-filter*|-*-pager*|-*-view*|-*-format-open*|-*-config*|---*|-@*|-*-save-config*|-[Zz]*|-[!-]*[Zz]*|--null|--null-data) command grep "$@"; return;; esac; done; command grep -I --exclude-dir=.git --exclude-dir=.svn --exclude-dir=.hg --exclude-dir=.bzr --exclude-dir=.jj --exclude-dir=.sl --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.next "$@"; }; '
+#
+# --exclude=.env / ".env.*" ALIGN GREP WITH AN ALREADY-DECLARED DENY.
+# .claude/settings.json permissions.deny carries Read(**/.env) and
+# Read(**/.env.*), and .gitignore lists .env — so the repo's stated posture is
+# already "the agent does not read .env". Recursive grep was an unguarded bypass
+# of that deny, and dropping --ignore-files widens it from DELIBERATE
+# (grep KEY .env, which worked before this change too) to INCIDENTAL
+# (grep -rn KEY . on the modal path), in a PUBLIC repo whose agent writes PR and
+# issue bodies. Closing the incidental path is the point.
+#
+# Three honest limits — this is a targeted alignment, NOT a general secret control:
+#   1. The 12 bypass arms receive `command grep "$@"` with NO excludes, so
+#      `grep -Z KEY .` still traverses .env. Accepted: those arms exist to hand
+#      through untouched, and widening them would break the byte-exact mirror.
+#   2. It does not restore .gitignore parity. A repo-specific gitignored secret
+#      (secrets.yml, .envrc.local) is still reachable.
+#   3. `grep KEY .env` now returns empty, SILENTLY (GNU grep applies --exclude to
+#      command-line file arguments too — measured). That is consistent with the
+#      Read deny above rather than a regression against it, but it is silent, and
+#      an operator who needs the file must read it outside the agent.
+#
+# The glob is DOUBLE-QUOTED. `SGR_PREFIX` is emitted into a live command line, so
+# an unquoted `--exclude=.env.*` would be glob-expanded by bash at execution time
+# against the CWD — with a .env.local present it would silently degrade to
+# `--exclude=.env.local`. Double quotes are safe inside this single-quoted string
+# and preserve the no-apostrophe invariant stated above.
+SGR_PREFIX='grep(){ local _soleur_grep_rw; for _soleur_grep_rw in "$@"; do case "$_soleur_grep_rw" in -*-filter*|-*-pager*|-*-view*|-*-format-open*|-*-config*|---*|-@*|-*-save-config*|-[Zz]*|-[!-]*[Zz]*|--null|--null-data) command grep "$@"; return;; esac; done; command grep -I --exclude-dir=.git --exclude-dir=.svn --exclude-dir=.hg --exclude-dir=.bzr --exclude-dir=.jj --exclude-dir=.sl --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.next --exclude=.env --exclude=".env.*" "$@"; }; '
 
 # --- Lazy telemetry --------------------------------------------------------
 # incidents.sh is ~18 kB and this hook is on the hot path of every Bash call
@@ -194,11 +220,13 @@ fi
 # Claude Code silently ignores the envelope and the original command runs —
 # a test asserting only the updatedInput value would pass while nothing applied
 # (DEFER-DECISION-PAYLOAD-SHAPE.md).
-# --arg carries the 453-byte CONSTANT prefix, never the command. Passing
+# --arg carries the CONSTANT prefix only, never the command. Passing
 # prefix+command as one argv entry hit Linux MAX_ARG_STRLEN (32 * PAGE_SIZE =
-# 131072): bisected to the byte, 453 + 130,619 = 131,072, so every command at or
-# above 130,619 bytes silently failed to rewrite. Concatenating INSIDE jq makes
-# the limit structurally unreachable — verified byte-exact at 200 kB.
+# 131072). Bisected to the byte when the prefix was 453 bytes: 453 + 130,619 =
+# 131,072, so every command at or above 130,619 bytes silently failed to
+# rewrite. The threshold moved with the prefix, which is why it is not restated
+# as a constant here — concatenating INSIDE jq makes the limit structurally
+# unreachable at any prefix size. Verified byte-exact at 200 kB.
 #
 # This also makes the `[[ -z "$CMD" ]]` guard above load-bearing for a second
 # reason: `$pre + .command` raises on a null .command, where the old form would

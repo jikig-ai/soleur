@@ -331,7 +331,7 @@ Escalated 5-agent panel, run at operator request. **All P0s accepted.**
 
 | Risk | Mitigation |
 |---|---|
-| Prefix on ~50% of commands adds transcript noise | Accepted; **453 chars** (measured; an earlier ~330 estimate was wrong). Kill switch AC12. |
+| Prefix on ~50% of commands adds transcript noise | Accepted; **487 chars** (measured; an earlier ~330 estimate was wrong, and 453 predates the .env excludes). Kill switch AC12. |
 | A command that inspects `type grep` or defines its own `grep` sees ours | Vanishingly rare; ours is overridden by a later user definition. Documented in the ADR. |
 | **Coverage window:** #7166 is OPEN | v2 solves both residuals, so this shrinks #7166 from "covers the gap" to defense-in-depth. DHH argues the cap should still land first — the guarantee is then a *bound*, not a lexical bet. **Operator call.** |
 | `updatedInput` semantics undocumented for multi-hook | AC13 enforces single-rewriter |

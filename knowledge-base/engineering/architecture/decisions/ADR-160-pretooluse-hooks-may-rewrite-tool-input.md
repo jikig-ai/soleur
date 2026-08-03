@@ -120,13 +120,18 @@ file, a gitignored dir and hidden files:
    On a public repo that content can reach a PR or issue body. Accepted: GNU grep's behavior is the
    POSIX-standard one and the one the flags on screen describe, whereas the shim's silent
    `.gitignore` filtering was itself a surprise that has bitten this repo before (`grep -z` no-op,
-   2026-05-29). Operators who need the old scoping should pass an explicit path or `--exclude`.
+   2026-05-29). Operators who need the old scoping should pass an explicit path or `--exclude` — except for
+   `.env` itself, which divergence 4 now excludes on both paths.
 
-   **`--exclude=.env --exclude='.env.*'` was proposed as a mitigation and is REFUTED by measurement.**
-   GNU grep applies `--exclude` to command-line file arguments too, so it also suppresses an
-   *explicit* `grep SUPABASE .env` — rc=1, empty, silent. Since `.claude/settings.json` already
-   denies `Read(**/.env)`, that would leave no way to read the file at all and would fail silently on
-   the single file most worth grepping. The widening is the lesser harm. Do not re-propose it.
+   **On `--exclude=.env` — the measurement was right and the first conclusion drawn from it was
+   wrong.** GNU grep applies `--exclude` to command-line file arguments too, so it also suppresses an
+   *explicit* `grep SUPABASE .env` (rc=1, empty, silent — measured). That was initially read as
+   disqualifying, on the grounds that it "leaves no way to read the file at all". A second reviewer
+   pointed out the premise is inverted: `.claude/settings.json` **already denies** `Read(**/.env)`
+   and `Read(**/.env.*)`, so having no in-agent way to read `.env` is the repo's *declared posture*,
+   not a loss the exclude would introduce. Under that posture recursive grep was an unguarded bypass
+   of an existing deny. The excludes were therefore **adopted** — see divergence 4 — with their
+   limits stated rather than the flag being sold as a general secret control.
 
 2. **`node_modules`, `dist` and `.next` are now excluded UNCONDITIONALLY** — including in a repo that
    *commits* them, where ugrep would have searched them. Routine for a published npm package shipping
@@ -139,10 +144,26 @@ file, a gitignored dir and hidden files:
    today's behavior; it is new only for the three build dirs. Workaround: a trailing slash. The
    failure is silent — rc=1 with no stderr, byte-identical to "the pattern genuinely is not there".
 
-4. **Path rendering.** ugrep prints `src/a.ts` where GNU grep given `.` prints `./src/a.ts`.
+4. **`.env` and `.env.*` are excluded from the non-bypass arm.** Added after review, and it is an
+   *alignment* rather than a new policy: `.claude/settings.json` already denies `Read(**/.env)` and
+   `Read(**/.env.*)`, so recursive grep was an unguarded bypass of a deny the repo had already
+   declared. Dropping `--ignore-files` widened that bypass from deliberate (`grep KEY .env`, which
+   worked before this change too) to **incidental** (`grep -rn KEY .` on the modal path), in a public
+   repo whose agent writes PR and issue bodies.
+
+   Three limits, stated so this is not mistaken for a general secret control: the 12 bypass arms
+   receive `command grep "$@"` with no excludes, so `grep -Z KEY .` still traverses `.env`; it does
+   not restore `.gitignore` parity, so a repo-specific `secrets.yml` remains reachable; and
+   `grep KEY .env` now returns empty **silently**, since GNU grep applies `--exclude` to
+   command-line file arguments too (measured). The last is consistent with the `Read` deny above
+   rather than a regression against it, but an operator who genuinely needs the file must read it
+   outside the agent. The glob is double-quoted in the emitted prefix — unquoted, bash expands it at
+   execution time against the CWD and it degrades to whatever `.env.*` happens to match.
+
+5. **Path rendering.** ugrep prints `src/a.ts` where GNU grep given `.` prints `./src/a.ts`.
    Cosmetic, but real for a script parsing the output.
 
-5. **Bash syntax-error line numbers shift** by the prefix, since it occupies the first line. The
+6. **Bash syntax-error line numbers shift** by the prefix, since it occupies the first line. The
    command itself is unchanged; only the reported coordinate moves. Measured across 16 hostile
    command shapes, this was the ONLY observable difference, and only on input that is a syntax
    error in both arms.
@@ -195,7 +216,7 @@ byte-exact and receive `command grep "$@"` with no injected flags — exactly wh
 
 ## Consequences
 
-- Roughly half of all Bash commands carry a ~450-byte prefix. Accepted; transcript noise only.
+- Roughly half of all Bash commands carry a ~490-byte prefix. Accepted; transcript noise only.
 - A command that inspects `type grep` or defines its own `grep` sees ours. Ours is overridden by any
   later user definition. Vanishingly rare.
 - **Kill switch:** `SOLEUR_DISABLE_GREP_REWRITE=1`, read as the hook's first executable statement,
