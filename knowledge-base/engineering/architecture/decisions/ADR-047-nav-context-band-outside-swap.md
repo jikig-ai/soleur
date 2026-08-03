@@ -2,7 +2,7 @@
 title: Workspace context band + switcher render outside the single-rail swap region; secondary navs lift in via a portal slot
 status: active
 date: 2026-06-02
-related_adrs: [ADR-044]
+related_adrs: [ADR-044, ADR-158]
 related: [4813, 4810, 4826, 5632]
 related_plans:
   - knowledge-base/project/plans/2026-06-02-feat-single-nav-rail-drill-in-plan.md
@@ -124,3 +124,29 @@ single mounted container is again the sole source of workspace identity in both 
 across a collapse→expand toggle), since happy-dom presence assertions cannot observe a
 remount. Status stays `active` — this amendment describes the current (now-correct) target
 state.
+
+## Amendment 2026-08-03 (#7186): Decision 2's portal is scoped, not unconditional
+
+Decision 2 says drilled sections lift their secondary nav into the rail via a portal. That
+remains the rule. It is now stated with its one scoped exception, because the KB read as
+unconditional and that produced a surface with no mobile navigation model.
+
+**Scoped exception.** The KB file tree still has exactly ONE mount and the rail is still
+its default host. On a phone (`< 768px`) with a populated tree, at the KB landing route
+only, that single mount relocates to the content column — the rail portal then renders
+nothing, so no second tree exists at any breakpoint. Every other cell is unchanged:
+desktop anything, the mobile document route, and all mobile `fullWidth` states (loading /
+503 / 404 / unknown / empty) keep the tree portaled into the drawer, which is what keeps
+the empty-tree "Connect a repo or add docs" CTA and the "Sync now" self-recovery valve
+exactly as reachable as before.
+
+Note the breakpoint is NOT the discriminator on its own — the portal is live *below* `md`
+in every non-populated state — so this must not be written down as an "`md+` only" rule.
+The discriminator is the derived `treeHost` value in `useKbLayoutState`.
+
+See [ADR-158](./ADR-158-kb-file-tree-host-is-a-derived-value.md) for the derivation, the two
+safety facts that make it safe — one CONDITIONAL (no viewport-derived value reaches the hydration
+render, which holds only while the KB tree's SWR key is never seeded pre-hydration) and one
+structural (`RailSlotPortal` is null until its ref callback fires) — and the rejected alternatives. The
+rejected-alternatives table above is unchanged — CSS dual-render is still rejected, and
+ADR-158 rejects it again on the same grounds.
