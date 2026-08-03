@@ -35,10 +35,65 @@
 # and rejected when it would lower an existing baseline — and exists only because there is no
 # operator SSH to seed the baseline by hand (hr-no-ssh-fallback-in-runbooks). Every normal verify
 # writes nothing.
+#
+# ---------------------------------------------------------------------------------------------
+# #6808 — SCHEDULED, AND THEREFORE ALARMED. The two land together, deliberately.
+#
+# Every run in this workflow's history was a manual dispatch, so a human was watching each one. A
+# `schedule:` removes that human. A cron WITHOUT a working alarm is strictly WORSE than the
+# dispatch-only state it replaces, because it also makes people believe the surface is monitored —
+# so the schedule and the alarm are one change, never two.
+#
+# WHY IT MATTERS MORE HERE THAN ELSEWHERE. While #6808 keeps WORKSPACES_LUKS_HEARTBEAT_URL unwired,
+# this workflow is the ONLY automatic verification that web-1's /mnt/data is still on the LUKS
+# mapper. The published privacy, GDPR and data-protection documents assert that verification in the
+# PRESENT TENSE (merged 2026-08-02), and the counsel attestation records a 30-day
+# claim_decay_trigger: if no successful run lands in any trailing 30-day window while that wording
+# stands, it must be re-tensed or withdrawn. A silent gap here decays a live Article 32 claim.
+#
+# CADENCE — daily at 04:41 UTC. The claim_decay_trigger's window is 30 days, which weekly would
+# still clear with 4x margin; daily is chosen on a different axis. The readyz/inventory dimension
+# (workspace_count_shortfall — irreversible sole-copy user data loss) has ZERO host-side coverage,
+# so the recovery window for a shrink is bounded by this cadence alone. 04:41 is off the hour and
+# off every neighbouring cron to avoid the runner-contention band.
+#
+# ADR-033 CARVE-OUT. ADR-033's Option-C rejection (Inngest → workflow_dispatch) is scoped to the
+# AGENT-LOOP crons, whose point was to move claude-code execution off GHA. Its 2026-06-02 scope
+# note already carves out credential-heavy infra crons that MUST run in an ephemeral runner. This
+# workflow is squarely in that carve-out: it holds a cloud-admin CF Tunnel bridge key and a
+# prd_workspaces_luks boot token, neither of which may be parked on the long-lived app host.
+#
+# ANTI-CIRCULARITY COROLLARY (the reason this is a native `schedule:` and not an Inngest dispatch).
+# The Inngest dispatcher runs ON web-1 — the very host whose volume this workflow verifies. A
+# verifier dispatched by the host it verifies cannot report the failure mode "that host is gone":
+# the dispatch dies with the subject. A native GHA `schedule:` has no dependency on web-1, which is
+# exactly the independence the check requires. This corollary is recorded in ADR-033 alongside the
+# scope note.
+#
+# always(), NOT !cancelled(), on the alarm. A run cancelled while PENDING by concurrency
+# supersession executes no steps at all, so !cancelled() buys nothing there — while being the
+# construction most likely to SUPPRESS the alarm on the timeout / operator-cancel path, which is
+# the single most likely real failure shape. A hung run that an operator kills should file
+# "nothing was proven"; that is the correct outcome, not a suppressed one.
+#
+# WHAT THE SCHEDULE DOES NOT CLOSE (sunset note). A missed or dropped scheduled RUN produces
+# silence, not a red run, and no `always()` construction inside a run that never started can report
+# it. That layer is the Sentry Crons monitor `workspaces-luks-verify` in
+# apps/web-platform/infra/sentry/cron-monitors.tf. And this whole arrangement is a stand-in for the
+# host-side heartbeat: when WORKSPACES_LUKS_HEARTBEAT_URL is finally wired (#6808), re-evaluate
+# whether a daily GHA schedule is still the right cadence, or whether it becomes the weekly
+# belt-and-braces to a continuous host-side signal.
+# ---------------------------------------------------------------------------------------------
 
 name: workspaces-luks verify (#6604 re-assert; optional one-time baseline seed)
 
 on:
+  schedule:
+    # Daily 04:41 UTC — see the CADENCE note above. This cron and the `crontab` of
+    # sentry_cron_monitor.workspaces_luks_verify are asserted EQUAL by
+    # apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh: a drifted pair silently
+    # mis-sizes the missed-check-in margin, which is the one layer that sees a dropped run.
+    - cron: "41 4 * * *"
   workflow_dispatch:
     inputs:
       seed_workspace_count:
@@ -57,6 +112,18 @@ on:
         required: false
         type: string
         default: ""
+      alarm_selftest:
+        description: >-
+          Dispatch-only. Classify an otherwise-healthy run as `selftest` so the alarm step's REAL
+          GitHub `if:` expression is evaluated by GitHub and files one issue titled SELF-TEST.
+          Additive: it does not touch seed_workspace_count and writes nothing to the host. It
+          exists because the alarm is schedule-gated and `schedule:` never fires from a PR branch,
+          so without it the operator-reaching path would first execute during a genuine incident.
+          The committed test evaluates OUR MODEL of GitHub expression evaluation; this evaluates
+          GitHub's. Fire once post-merge, then close the issue.
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   # Read-only, but serialize dispatches so two verifies do not interleave their SSH sessions.
@@ -65,6 +132,9 @@ concurrency:
 
 permissions:
   contents: read
+  # (#6808) The alarm files and comments on issues, and creates its own label on first fire.
+  # `gh label create` is Issues-scoped, so this one bump covers both.
+  issues: write
 
 env:
   INFRA_DIR: apps/web-platform/infra
@@ -87,9 +157,15 @@ jobs:
       - name: Verify required secrets present
         env:
           DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+          RESEND_API_KEY_CHECK: ${{ secrets.RESEND_API_KEY }}
         run: |
           set -euo pipefail
           [[ -n "$DOPPLER_TOKEN_CHECK" ]] || { echo "::error::DOPPLER_TOKEN not configured."; exit 1; }
+          # (#6808) RESEND_API_KEY is a NEW dependency of this workflow: the drift/readiness ops page
+          # rides notify-ops-email. That action exits 1 only on an EMPTY key, so without this guard a
+          # missing key would first surface at PAGE time — i.e. mid-incident, on the one run where
+          # the page matters. Fail at the top of the run instead.
+          [[ -n "$RESEND_API_KEY_CHECK" ]] || { echo "::error::RESEND_API_KEY not configured — the drift/readiness ops page could not be sent."; exit 1; }
 
       - name: CF Tunnel SSH bridge
         uses: ./.github/actions/cf-tunnel-ssh-bridge
@@ -104,6 +180,11 @@ jobs:
           server-ip: ${{ env.WEB_HOST_PRIVATE_IP }}
 
       - name: Re-assert /workspaces LUKS at-rest (read-only)
+        # (#6808) LOAD-BEARING id: the alarm and the Sentry check-in both gate on
+        # steps.reassert.outputs.outcome_class. Without the id those resolve to '' — which the
+        # fail-closed default does catch, but the drift-guard pins the id's presence anyway so a
+        # rename fails loudly instead of quietly leaning on the fallback.
+        id: reassert
         env:
           # The bridge exports WEB_HOST_SSH as the exact ssh invocation (key -i <keyfile> + the
           # iptables NAT redirect scoped to server-ip; no ProxyCommand — the Go/bash client dials
@@ -118,14 +199,64 @@ jobs:
           # substitution, i.e. shell injection. It is additionally validated digits-only below
           # before it is ever allowed near the SSH command string.
           SEED_WORKSPACE_COUNT: ${{ inputs.seed_workspace_count }}
+          # (#6808) Dispatch-only alarm rehearsal. Empty on a schedule event.
+          # GITHUB_EVENT_NAME is NOT re-declared here: the runner already exports it, and
+          # shadowing a GITHUB_* default is both redundant and unreliable.
+          ALARM_SELFTEST: ${{ inputs.alarm_selftest }}
         run: |
           # set +e so a failing probe is captured in probe_rc (and reported) rather than exiting the
           # step at the ssh line under GitHub's inherited `-e` (which `set -uo pipefail` does not clear).
           set +e
           set -uo pipefail
+
+          # --- outcome classification (#6808) -------------------------------------------------
+          # EVERY exit below is preceded by emit_class. An exit that emits no class is an outcome
+          # the alarm cannot distinguish from "the step never ran" — a silent failure wearing a
+          # green tab. The alarm's fail-closed default catches an empty class, but a default is a
+          # last resort, not a design.
+          emit_class() {
+            # $1 class, $2 reason. GITHUB_OUTPUT is always set on a runner; the :- default keeps a
+            # local fixture run from dying under `set -u` before it can assert anything.
+            printf 'outcome_class=%s\n' "$1" >> "${GITHUB_OUTPUT:-/dev/null}"
+            printf 'outcome_reason=%s\n' "${2:-}" >> "${GITHUB_OUTPUT:-/dev/null}"
+            echo "outcome_class=$1 outcome_reason=${2:-}"
+          }
+
+          # PROBE-INTEGRITY reasons: the probe refused to run, or could not read its own inputs.
+          # Whichever rc carried it, the run proved NOTHING about the volume in either direction,
+          # so it can never be an at-rest finding.
+          #
+          # THIS IS WHY CLASSIFICATION KEYS ON reason FIRST AND rc SECOND.
+          # mapper_path_override_refused is emitted by emit_and_die (rc 1), NOT by
+          # emit_readiness_and_die (rc 3) — the rc-3 case arm below lists it, but rc 3 is the only
+          # way into that arm, so that entry is dead. An rc-FIRST classifier therefore receives it
+          # as "some other non-zero rc" and files a p0-critical type/security at-rest-drift issue
+          # asserting the retained Article 32 claim is false — for what is a refusal to run under
+          # an incoherent config. Nothing was proven. Reason-first also immunises the split against
+          # future producer/consumer drift of exactly this kind.
+          is_probe_integrity() {
+            case "${1:-}" in
+              readyz_gate_regression|readyz_unparseable|readyz_unreachable|readiness_helper_unavailable|workspace_count_baseline_missing|workspace_count_unreadable|mapper_path_override_refused|doppler_unreachable)
+                return 0 ;;
+            esac
+            return 1
+          }
+
+          # A seed WRITES host state, and a scheduled run must never do that. GitHub supplies no
+          # inputs on a schedule event, so SEED_WORKSPACE_COUNT is set-but-empty and the seed
+          # branch below is already unreachable — but that is an ASSUMPTION about a vendor
+          # expression evaluator sitting between a cron and a write to production. Enforce it
+          # instead, before anything reaches the host. Placed above the guards below so a refusal
+          # costs no SSH at all.
+          if [[ "${GITHUB_EVENT_NAME:-}" == "schedule" && -n "${SEED_WORKSPACE_COUNT:-}" ]]; then
+            echo "::error::a scheduled run must never seed the inventory baseline. A seed is a host-state WRITE and is operator-only. Refusing."
+            emit_class unavailable scheduled_seed_refused
+            exit 1
+          fi
+
           # Fail loud if the bridge did not export WEB_HOST_SSH (bare ssh would connect keyless).
-          [[ -n "${WEB_HOST_SSH:-}" ]] || { echo "::error::CF Tunnel SSH bridge did not export WEB_HOST_SSH — cannot reach web-1. Check the bridge step logs."; exit 1; }
-          [[ -n "${WORKSPACES_LUKS_BOOT_TOKEN:-}" ]] || { echo "::error::WORKSPACES_LUKS_BOOT_TOKEN not configured — run the DEFAULT apply of apply-web-platform-infra.yml to publish it (#6649)."; exit 1; }
+          [[ -n "${WEB_HOST_SSH:-}" ]] || { echo "::error::CF Tunnel SSH bridge did not export WEB_HOST_SSH — cannot reach web-1. Check the bridge step logs."; emit_class unavailable bridge_web_host_ssh_missing; exit 1; }
+          [[ -n "${WORKSPACES_LUKS_BOOT_TOKEN:-}" ]] || { echo "::error::WORKSPACES_LUKS_BOOT_TOKEN not configured — run the DEFAULT apply of apply-web-platform-infra.yml to publish it (#6649)."; emit_class unavailable boot_token_missing; exit 1; }
           # Ship luks-monitor.sh + its emit sibling to a temp dir on the PERSISTENT STATE_DIR and run
           # it AS A FILE (read-only; MUTATES NOTHING — it opens no device). This removes the
           # dependency on a prior cutover having installed /usr/local/bin/luks-monitor AND, unlike the
@@ -135,7 +266,7 @@ jobs:
           # stdin .env, shredded on a host-local EXIT trap — same discipline as the cutover.
           # shellcheck disable=SC2086
           REMOTE_DIR="$(${WEB_HOST_SSH} "$WEB_HOST" 'mkdir -p /var/lib/workspaces-luks && chmod 700 /var/lib/workspaces-luks && mktemp -d /var/lib/workspaces-luks/wl-verify.XXXXXX')"
-          [[ -n "$REMOTE_DIR" ]] || { echo "::error::failed to create the remote bundle dir on web-1"; exit 1; }
+          [[ -n "$REMOTE_DIR" ]] || { echo "::error::failed to create the remote bundle dir on web-1"; emit_class unavailable remote_bundle_dir_failed; exit 1; }
           echo "REMOTE_DIR=$REMOTE_DIR" >> "$GITHUB_ENV"
           # shellcheck disable=SC2086
           tar czf - -C "$INFRA_DIR" luks-monitor.sh workspaces-luks-emit.sh \
@@ -153,6 +284,9 @@ jobs:
             case "$SEED_WORKSPACE_COUNT" in
               ''|*[!0-9]*|0|0[0-9]*)
                 echo "::error::seed_workspace_count must be a positive integer (digits only, not zero). Refusing to write a baseline that cannot fail."
+                # Dispatch-only branch: the alarm is schedule-gated, so this class is recorded for
+                # the step output's completeness, not because it can ever page.
+                emit_class unavailable seed_not_positive_integer
                 exit 1 ;;
             esac
             # REFUSE TO LOWER an existing baseline. The operator most likely to reach for this input
@@ -164,11 +298,12 @@ jobs:
             existing="$(${WEB_HOST_SSH} "$WEB_HOST" "grep -E '^WORKSPACES_COUNT=' /var/lib/workspaces-luks/state 2>/dev/null | tail -1 | cut -d= -f2-" 2>/dev/null || true)"
             if [[ -n "$existing" && "$existing" =~ ^[0-9]+$ && "$SEED_WORKSPACE_COUNT" -lt "$existing" ]]; then
               echo "::error::refusing to seed WORKSPACES_COUNT=$SEED_WORKSPACE_COUNT below the existing baseline ($existing). A downward re-seed masks a real shortfall — treat a shortfall as a data-recovery incident (runbook §5), not a seed."
+              emit_class unavailable seed_below_existing_baseline
               exit 1
             fi
             # shellcheck disable=SC2086
             ${WEB_HOST_SSH} "$WEB_HOST" "mkdir -p /var/lib/workspaces-luks && chmod 700 /var/lib/workspaces-luks && printf 'WORKSPACES_COUNT=%s\n' '$SEED_WORKSPACE_COUNT' >> /var/lib/workspaces-luks/state" \
-              || { echo "::error::failed to seed the workspace-inventory baseline on web-1"; exit 1; }
+              || { echo "::error::failed to seed the workspace-inventory baseline on web-1"; emit_class unavailable seed_write_failed; exit 1; }
             echo "::warning::SEEDED the workspace-inventory baseline to WORKSPACES_COUNT=$SEED_WORKSPACE_COUNT on this run. The comparison below is only meaningful because this value comes from an INDEPENDENT proof (a cutover run's own host-side inventory of \$STAGING/workspaces — never the host's current live count). Future cutovers persist it automatically."
           fi
 
@@ -199,6 +334,12 @@ jobs:
           # codes emitted while the tunnel connector reattaches after a container restart, and they
           # are FAST responses — which is why the old single-shot probe's `--max-time 20` never
           # helped: the budget is never consumed by an instant 521.
+          # (#6808) health_class is set INSIDE the enumerated STRUCTURAL arm below rather than by
+          # re-listing those codes in the classifier. Re-listing would create a second competing
+          # set, which workspaces-luks-freeze.test.sh AC10 exists to forbid: it extracts the arm's
+          # pattern from this file and asserts byte-equality against wl_http_class. Setting a flag
+          # in the arm BODY adds a line without touching the arm's pattern.
+          health_class=""
           health=000
           for attempt in $(seq 1 10); do
             health=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 https://app.soleur.ai/health || echo "000")
@@ -206,6 +347,7 @@ jobs:
               200) break ;;
               307|401|403|404|405|525|526)
                 echo "::error::app /health returned a STRUCTURAL $health — an endpoint/routing regression, not a boot race. Not retrying."
+                health_class=structural
                 break ;;
             esac
             echo "app /health=$health (attempt $attempt/10)"
@@ -220,12 +362,20 @@ jobs:
           # 127 (bash: the tar bundle never landed, or the script path resolved to nothing) both
           # mean the run proved NOTHING, in either direction. No Sentry event exists for either; the
           # old single message told the operator to go read one that was never emitted.
+          # (#6808) HOISTED above the rc branching. The extraction regex is unchanged and still
+          # bounds the value to [a-z_]*, so it cannot carry CR/LF into a $GITHUB_OUTPUT line or an
+          # annotation. It used to live inside the rc==3 branch; the reason-first classifier needs
+          # it available for EVERY rc (see is_probe_integrity above for the concrete bug this fixes).
+          reason="$(sed -n 's/^\[luks-monitor\] FAIL (\([a-z_]*\)).*/\1/p' "$probe_log" | tail -1)"
+
           if [[ "$probe_rc" -eq 255 ]]; then
             echo "::error::SSH transport failure (rc=255) reaching web-1 over the CF Tunnel bridge. REACHABILITY failure, NOT an at-rest finding: nothing has been proven about the volume. Check the bridge step logs and re-dispatch."
+            emit_class unavailable "${reason:-ssh_transport_failure}"
             exit 255
           fi
           if [[ "$probe_rc" -eq 127 ]]; then
             echo "::error::command/bundle not found on web-1 (rc=127) — the tar bundle failed to land or luks-monitor.sh was not where the run expected it. TOOLING failure, NOT an at-rest finding; nothing proven. Check the bundle-ship step and re-dispatch."
+            emit_class unavailable "${reason:-bundle_or_tooling_missing}"
             exit 127
           fi
           # rc=3 is emit_readiness_and_die: the volume IS a correct LUKS mapper but readiness/inventory
@@ -235,21 +385,45 @@ jobs:
           # on the reason so the fix in wl_probe_readyz (keeping a 403 out of the data-loss arm) is not
           # undone one layer up. `sed` reads the reason off the FAIL line the host already emitted.
           if [[ "$probe_rc" -eq 3 ]]; then
-            reason="$(sed -n 's/^\[luks-monitor\] FAIL (\([a-z_]*\)).*/\1/p' "$probe_log" | tail -1)"
             case "$reason" in
               readyz_gate_regression|readyz_unparseable|readyz_unreachable|readiness_helper_unavailable|workspace_count_baseline_missing|workspace_count_unreadable|mapper_path_override_refused)
                 echo "::error::workspaces-luks PROBE-INTEGRITY failure (rc=3, reason=$reason). This run proves NOTHING about the volume — it is a routing/config/tooling fault, NOT data loss. Do NOT run a data-recovery procedure. Sentry: feature=workspaces-luks op=workspaces-luks-drift." ;;
               *)
                 echo "::error::workspaces-luks READINESS/INVENTORY failure (rc=3, reason=${reason:-unknown}). The volume is a correct LUKS mapper but the app cannot serve from it or the inventory shrank. Follow the verdict triage table in knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md §5 — a capacity fault and a count shortfall have DIFFERENT operator responses. Sentry: feature=workspaces-luks op=workspaces-luks-drift." ;;
             esac
+            # A probe-integrity fault proves nothing; a shortfall or a genuine not-ready is a
+            # data-loss- or routing-shaped ops event. An UNPARSEABLE reason falls to `readiness`,
+            # i.e. fail-closed toward the LOUDER of the two plausible readings.
+            if is_probe_integrity "$reason"; then
+              emit_class unavailable "$reason"
+            else
+              emit_class readiness "${reason:-unparsed}"
+            fi
             exit 3
           fi
           if [[ "$probe_rc" -ne 0 ]]; then
             echo "::error::workspaces-luks AT-REST re-assert FAILED (rc=$probe_rc) — see the emitted Sentry event: feature=workspaces-luks op=workspaces-luks-drift."
+            # THE reason-first branch. Everything that reaches here on a non-zero rc is an at-rest
+            # drift verdict EXCEPT a probe-integrity reason — which arrives here precisely because
+            # emit_and_die carries it on rc 1, not on rc 3.
+            if is_probe_integrity "$reason"; then
+              emit_class unavailable "$reason"
+            else
+              emit_class drift "${reason:-unparsed}"
+            fi
             exit "$probe_rc"
           fi
           if [[ "$health" != "200" ]]; then
             echo "::error::app /health returned $health (expected 200) after the full retry budget."
+            # A STRUCTURAL code is a routing regression the operator can act on. Anything else is a
+            # RETRYABLE CF-edge code that exhausted its budget — a transport outage, and therefore a
+            # can't-measure rather than a finding. Routing an edge outage into the data-recovery
+            # triage table would send the operator down a procedure for data that is fine.
+            if [[ "$health_class" == "structural" ]]; then
+              emit_class readiness app_health_structural
+            else
+              emit_class unavailable app_health_unreachable
+            fi
             exit 1
           fi
           # POSITIVE CONTROL — assert the verdict line is PRESENT, not merely that nothing errored.
@@ -258,9 +432,20 @@ jobs:
           # producer for 141 and the negative arm fails OPEN.
           if [[ "$(grep -cE '^\[luks-monitor\] SOLEUR_WORKSPACES_READYZ ready=true ' "$probe_log" || true)" -lt 1 ]]; then
             echo "::error::the readiness/inventory verdict line is ABSENT from the probe output. The assert did not run (LUKS_MONITOR_ASSERT_READYZ was lost before reaching luks-monitor.sh), so this run proves NOTHING about whether the repointed volume is serving user data. Treat as FAILED, not passed."
+            emit_class unavailable verdict_line_absent
             exit 1
           fi
           grep -E '^\[luks-monitor\] SOLEUR_WORKSPACES_READYZ ' "$probe_log" || true
+          # The alarm_selftest rehearsal classifies an otherwise-healthy run as `selftest`, which is
+          # a non-`pass` class and therefore trips the alarm's REAL class clause. Forcing the alarm
+          # from inside its own `if:` instead would have exercised every conjunct EXCEPT the one
+          # most likely to be wrong.
+          if [[ "${ALARM_SELFTEST:-}" == "true" ]]; then
+            echo "::warning::alarm_selftest requested — classifying this otherwise-healthy run as selftest so GitHub itself evaluates the alarm condition. The issue it files is titled SELF-TEST; close it."
+            emit_class selftest alarm_selftest
+          else
+            emit_class pass verified
+          fi
           echo "workspaces-luks re-assert PASSED (blkid=crypto_LUKS, mapper mount, escrow ok, /health 200, readyz ready=true, workspace inventory >= baseline)."
 
       - name: Remove remote verify bundle
@@ -294,6 +479,211 @@ jobs:
           fi
           if [[ -f /tmp/cloudflared.log ]]; then tail -n 200 /tmp/cloudflared.log || true; fi
 
+      # The alarm steps run AFTER the bridge teardown above, so the CI SSH key is already shredded
+      # before any `gh` call is made.
+
+      - name: Page ops by email (drift and readiness only)
+        id: ops_email
+        # `unavailable` deliberately gets NO direct page. A CF-edge outage or an SSH drop is a
+        # can't-measure, and a per-run email on a flapping tunnel is noise the operator learns to
+        # ignore. That is a decision about VOLUME AND FRAMING, not about channel: an `unavailable`
+        # still posts a Sentry `error` check-in, which routes to ops@jikigai.com through the
+        # issue-alert plane, where Sentry's own grouping dedupes it as a per-run email would not.
+        #
+        # always() is load-bearing: with no status function GitHub ANDs an implicit success() into
+        # this `if:`, making it unreachable on exactly the failing runs it exists for.
+        if: >-
+          ${{ always() && (github.event_name == 'schedule' || inputs.alarm_selftest)
+              && (steps.reassert.outputs.outcome_class == 'drift'
+                  || steps.reassert.outputs.outcome_class == 'readiness') }}
+        # An email-delivery fault must not red a verify that otherwise ran correctly, and `outcome`
+        # (unlike `conclusion`) still records the failure for the issue body below.
+        continue-on-error: true
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: "[workspaces-luks ${{ steps.reassert.outputs.outcome_class }}] at-rest verification failed on web-1"
+          body: >-
+            <p>The daily <code>workspaces-luks-verify</code> run did not pass.</p>
+            <p><b>Outcome class:</b> ${{ steps.reassert.outputs.outcome_class }}<br>
+            <b>Reason:</b> ${{ steps.reassert.outputs.outcome_reason }}<br>
+            <b>Run:</b> ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</p>
+            <p>A GitHub issue labelled <code>ci/luks-verify</code> carries the full triage. The
+            issue is the primary channel; this email is best-effort.</p>
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+
+      - name: File or update the ci/luks-verify alarm issue
+        # THE REACHABILITY CONTRACT. GitHub ANDs an implicit success() into any step `if:` that
+        # contains no status function, so the obvious `if: steps.reassert.outputs.outcome_class !=
+        # 'pass'` would be silently unreachable on every run this step exists for (#7138). Hence
+        # always(), which is also deliberate over !cancelled(): a run cancelled while PENDING by
+        # concurrency supersession executes no steps at all, so !cancelled() buys nothing there
+        # while suppressing the alarm on the timeout / operator-cancel path — the most likely real
+        # failure shape. A killed hung run SHOULD file "nothing was proven".
+        #
+        # Three conjuncts, each load-bearing:
+        #   always()                       — or the whole step is unreachable (above).
+        #   event is schedule (or selftest) — or every failed operator dispatch files an issue.
+        #   producer status OR class       — checked in that order, because a step that never ran
+        #                                    emits NO class, and an empty class must alarm rather
+        #                                    than read as a pass.
+        # The class clause gates on `!= 'pass'`, the negation of the heartbeat's positive `== 'pass'`
+        # gate. Never `!= 'failure'`: a negative gate over a closed enum is a single-literal gate
+        # wearing a disguise.
+        if: >-
+          ${{ always() && (github.event_name == 'schedule' || inputs.alarm_selftest)
+              && (steps.reassert.outcome != 'success'
+                  || steps.reassert.outputs.outcome_class != 'pass') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          OUTCOME_CLASS: ${{ steps.reassert.outputs.outcome_class }}
+          REASON: ${{ steps.reassert.outputs.outcome_reason }}
+          REASSERT_OUTCOME: ${{ steps.reassert.outcome }}
+          EMAIL_OUTCOME: ${{ steps.ops_email.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          class="${OUTCOME_CLASS:-}"
+          reason="${REASON:-}"
+          repo="${GH_REPO:-${GITHUB_REPOSITORY:-}}"
+          run_url="${RUN_URL:-}"
+          email_outcome="${EMAIL_OUTCOME:-skipped}"
+          reassert_outcome="${REASSERT_OUTCOME:-unknown}"
+          now="$(date -u '+%Y-%m-%d %H:%M UTC')"
+
+          # No strip_log_injection call here, and that is a considered omission rather than a gap:
+          # every field below is either a fixed enum member (class) or the probe `reason`, which the
+          # extraction sed bounds to [a-z_]* on the producer side. Any NEW host-derived field routed
+          # into this body must go through the house helper first.
+
+          # FAIL CLOSED. An empty class is exactly what a Re-assert step that NEVER RAN looks like
+          # (bridge action failed, secrets guard exited, job cancelled). "Nothing was proven" is the
+          # honest reading of that, and `unavailable` is the class that says so.
+          [[ -n "$class" ]] || class=unavailable
+
+          # ONE LABEL, THREE TITLES. The class lives in the TITLE, which is already the dedupe key.
+          # Three bespoke labels would buy three dedupe keys the titles already give, at the cost of
+          # three label-create calls. The mandatory `*)` default must NOT fall through to `drift`:
+          # that would file a p0 type/security at-rest finding for a dead bridge.
+          case "$class" in
+            drift)
+              title="[ci/luks-verify] at-rest drift on /mnt/data"
+              labels=(--label "ci/luks-verify" --label "type/security" --label "priority/p0-critical" --label "action-required")
+              headline="Encryption at rest is no longer in effect on the live workspaces volume"
+              ;;
+            readiness)
+              title="[ci/luks-verify] readiness or inventory failure"
+              # SEVERITY ON USER IMPACT, not on legal salience. A workspace_count_shortfall is
+              # irreversible sole-copy user DATA LOSS; drift is a claim-integrity event on a volume
+              # whose data is intact. Ranking the legal event above the data-loss event would invert
+              # hr-weigh-every-decision-against-target-user-impact, so the p0 goes where the user
+              # data is.
+              if [[ "$reason" == "workspace_count_shortfall" ]]; then
+                labels=(--label "ci/luks-verify" --label "priority/p0-critical" --label "action-required")
+              else
+                labels=(--label "ci/luks-verify" --label "priority/p1-high" --label "action-required")
+              fi
+              headline="The volume is a correct LUKS mapper, but the app cannot serve from it or the inventory shrank"
+              ;;
+            selftest)
+              title="[ci/luks-verify] SELF-TEST — ignore"
+              labels=(--label "ci/luks-verify")
+              headline="Deliberate rehearsal of the alarm path — nothing is wrong with the volume"
+              ;;
+            *)
+              class=unavailable
+              title="[ci/luks-verify] could not verify — nothing proven"
+              labels=(--label "ci/luks-verify" --label "priority/p1-high" --label "action-required")
+              headline="This run could not verify the volume in either direction"
+              ;;
+          esac
+
+          # Idempotent: 2>/dev/null BEFORE || true, so a pre-existing label is not an error and a
+          # first fire on a repo without the label still works.
+          gh label create "ci/luks-verify" --repo "$repo" \
+            --description "Scheduled /workspaces LUKS at-rest verification (#6808)" \
+            --color "B60205" 2>/dev/null || true
+
+          tmpd="$(mktemp -d)"
+          trap 'rm -rf "$tmpd"' EXIT
+          # Named for the class it carries — deliberately, not incidentally. It puts the routing
+          # decision in the run log and in the `gh` invocation itself, which is where the committed
+          # drift-guard can observe that an empty class really did fail closed to `unavailable`.
+          body_file="$tmpd/luks-alarm-$class.md"
+
+          # printf into a file rather than a heredoc: 4+ leading spaces would render the whole body
+          # as a code block.
+          {
+            printf '## %s\n\n' "$headline"
+            printf -- '- **outcome_class:** `%s`\n' "$class"
+            printf -- '- **reason:** `%s`\n' "${reason:-unknown}"
+            printf -- '- **re-assert step outcome:** `%s`\n' "$reassert_outcome"
+            printf -- '- **first_observed_at:** %s\n' "$now"
+            printf -- '- **run log:** %s\n' "$run_url"
+            printf -- '- **ops email page:** `%s`\n\n' "$email_outcome"
+            printf 'The ops email is BEST-EFFORT and this issue is the primary channel. notify-ops-email\n'
+            printf 'exits 0 with only a warning on a non-2xx from Resend, so an expired key would drop every\n'
+            printf 'page into a log nobody reads — the outcome recorded above is the durable evidence of\n'
+            printf 'whether a page actually went out.\n\n'
+            case "$class" in
+              drift)
+                printf '### Legal consequence — counsel re-evaluation trigger (3)\n\n'
+                printf 'The published privacy, GDPR and data-protection documents assert encryption at rest on\n'
+                printf 'this volume in the PRESENT TENSE, and knowledge-base/legal/audits/2026-07-counsel-review-6588.md\n'
+                printf 'records a 30-day claim_decay_trigger. From the moment of this regression that retained\n'
+                printf 'Article 32 claim is FALSE. Restore the mapper, or re-tense/withdraw the wording. This is\n'
+                printf 'the one alarm class that fires a legal re-evaluation.\n\n'
+                ;;
+              readiness)
+                printf '### This is an ops event, not the encryption claim\n\n'
+                printf 'The volume IS a correct LUKS mapper. A workspace_count_shortfall is irreversible\n'
+                printf 'sole-copy user data loss and is possibly Article 33-adjacent; a readyz_not_ready or a\n'
+                printf 'structural health code is a capacity or routing regression. They have DIFFERENT\n'
+                printf 'operator responses — read the reason above before acting.\n\n'
+                ;;
+              unavailable)
+                printf '### Nothing was proven, in either direction\n\n'
+                printf 'This is NOT a legal event and NOT a data-loss finding. The run could not measure the\n'
+                printf 'volume: an SSH transport drop, a missing bundle, a probe-integrity refusal, or an edge\n'
+                printf 'outage on the app liveness check. Do NOT run a data-recovery procedure for this class.\n\n'
+                ;;
+              selftest)
+                printf 'Filed by a deliberate `alarm_selftest` dispatch to prove this step is reachable under\n'
+                printf 'real GitHub expression evaluation. Close it.\n\n'
+                ;;
+            esac
+            printf '### Triage\n\n'
+            printf 'knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md section 5 —\n'
+            printf 'the verdict triage table maps every rc and reason to an outcome_class and an operator\n'
+            printf 'response, no SSH required.\n'
+          } > "$body_file"
+
+          # Dedupe by LABEL + exact TITLE, never `gh issue list --search`: the search API can return
+          # empty under some token contexts, which would file a fresh duplicate every single night.
+          # `gh --jq` does not forward `--arg`, so the title match is a standalone second-stage jq.
+          existing="$(gh issue list --repo "$repo" --label "ci/luks-verify" --state open --limit 100 \
+            --json number,title | jq -r --arg t "$title" 'map(select(.title == $t)) | .[0].number // empty')"
+
+          if [[ -n "$existing" ]]; then
+            # ANTI-SPAM BOUND. Nothing here ever auto-closes an issue (see the header: a green run
+            # files nothing and closes nothing), so a daily cadence against a standing issue would
+            # otherwise accrete ~365 comments a year. Comment only when the REASON changes. Two
+            # lines of comparison, and no read-modify-write against a mutable remote resource.
+            # A herestring, not a pipe: under `pipefail` an early `grep -q` match SIGPIPEs the
+            # producer for 141 and the negative arm fails OPEN.
+            prior="$(gh issue view "$existing" --repo "$repo" --json body,comments \
+              --jq '[.body] + [(.comments // [])[].body] | join("\n")' 2>/dev/null || true)"
+            if grep -qF -- "reason=${reason:-unknown}" <<<"$prior"; then
+              echo "::notice::open $class issue #$existing already records reason=${reason:-unknown} — not commenting again at $now."
+            else
+              gh issue comment "$existing" --repo "$repo" \
+                --body "Still failing at ${now} — outcome_class=${class} reason=${reason:-unknown}. Ops email page: ${email_outcome}. Run: ${run_url}"
+            fi
+          else
+            gh issue create --repo "$repo" --title "$title" "${labels[@]}" --body-file "$body_file"
+          fi
+
       - name: Verify summary
         if: always()
         env:
@@ -311,3 +701,32 @@ jobs:
             echo "Re-assert of /mnt/data == LUKS mapper + escrow + /health + /internal/readyz + workspace inventory."
             echo "Non-destructive: no freeze, no flip, no wipe. The readyz check write+unlinks one random probe file."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # LIVENESS — the layer that sees what no step inside a run can.
+      #
+      # The in-run alarm above is structurally blind to three failure modes, and each of them
+      # produces SILENCE rather than a red run: (1) the schedule stops firing at all — GitHub
+      # disables `schedule:` after 60 days of repository inactivity, and on 2026-05-26 it dropped a
+      # scheduled run outright (see scheduled_realtime_probe in cron-monitors.tf, #4189);
+      # (2) a pending run cancelled by concurrency supersession executes NO steps, so no `always()`
+      # construction inside it can report itself; (3) a `timeout-minutes: 15` teardown against an
+      # SSH hang. All three are detectable only from OUTSIDE the run — that is this monitor.
+      #
+      # SCHEDULE-GATED, and not extended to alarm_selftest: a manual dispatch must not be able to
+      # forge liveness while the cron is dead. The self-test exercises the alarm, never the monitor.
+      #
+      # The status gates POSITIVELY on `== 'pass'` ANDed with the producer having succeeded — the
+      # exact negation of the alarm's condition. A `!= 'failure'` form would read green for the
+      # empty class a step that never ran leaves behind.
+      - name: Sentry Crons check-in
+        if: always() && github.event_name == 'schedule'
+        # A Sentry outage must not red an otherwise-correct verify; the action's own secret-guard
+        # warns and exits 0, and this keeps a transport failure advisory too.
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: workspaces-luks-verify
+          status: ${{ (steps.reassert.outcome == 'success' && steps.reassert.outputs.outcome_class == 'pass') && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

@@ -256,9 +256,16 @@ EOS
   chmod +x "$SCRATCH/bin/tar" "$SCRATCH/bin/curl" "$SCRATCH/bin/sshstub"
 
   # Drive one fixture; echo the class the workflow emitted to GITHUB_OUTPUT.
+  #
+  # `drive` is invoked as `x=$(... drive)`, i.e. inside a COMMAND SUBSTITUTION — a subshell. Any
+  # variable it assigns is discarded the moment the substitution closes, so a `LAST_CALLS=...` here
+  # would read as working and be empty in the parent. The CALLER therefore owns the artifact paths
+  # via $CALLS and drive only WRITES to them: the ssh-argv file, and a sibling `.rc` holding the
+  # exit code. Anything the parent must observe has to travel through a file or through stdout.
   drive() {
     local rc=0
-    local out="$SCRATCH/out.$$" genv="$SCRATCH/genv.$$" calls="$SCRATCH/calls.$$"
+    local calls="${CALLS:-$SCRATCH/calls.default}"
+    local out="$calls.out" genv="$calls.env"
     : > "$out"; : > "$genv"; : > "$calls"
     PATH="$SCRATCH/bin:$PATH" \
     SSH_CALLS="$calls" \
@@ -272,8 +279,7 @@ EOS
     FIXTURE_HEALTH="${HEALTH:-200}" \
     FIXTURE_EXISTING_BASELINE="${EXISTING:-}" \
       bash -e "$SCRATCH/reassert.sh" >/dev/null 2>&1 || rc=$?
-    LAST_CALLS="$calls"
-    LAST_RC="$rc"
+    printf '%s\n' "$rc" > "$calls.rc"
     sed -n 's/^outcome_class=//p' "$out" | tail -1
   }
 
@@ -323,9 +329,9 @@ EOS
   expect_class "health 521 after the full retry budget is an outage, not a finding" "unavailable" "$c_521"
 
   # --- read-only guarantee on the scheduled path ------------------------------------------------
-  c_seed_sched=$(EV=schedule SEED=9 PRC=0 PLOG="$READYZ_OK" drive)
-  seed_calls="$LAST_CALLS"
-  if [[ "$LAST_RC" -ne 0 ]]; then
+  seed_calls="$SCRATCH/calls.seed-scheduled"
+  c_seed_sched=$(EV=schedule SEED=9 CALLS="$seed_calls" PRC=0 PLOG="$READYZ_OK" drive)
+  if [[ "$(cat "$seed_calls.rc" 2>/dev/null || echo 0)" -ne 0 ]]; then
     ok "a scheduled run carrying a seed is REFUSED (non-zero exit)"
   else
     no "a scheduled run carrying a seed was ACCEPTED — the scheduled path is not read-only"
@@ -337,8 +343,8 @@ EOS
     ok "a refused scheduled seed reached the host with NO WORKSPACES_COUNT= write"
   fi
 
-  c_noseed=$(EV=schedule SEED="" PRC=0 PLOG="$READYZ_OK" drive)
-  noseed_calls="$LAST_CALLS"
+  noseed_calls="$SCRATCH/calls.no-seed"
+  c_noseed=$(EV=schedule SEED="" CALLS="$noseed_calls" PRC=0 PLOG="$READYZ_OK" drive)
   if grep -q 'WORKSPACES_COUNT=' "$noseed_calls" 2>/dev/null; then
     no "an ordinary scheduled run wrote a baseline (the empty seed entered the seed branch)"
   else
@@ -346,9 +352,15 @@ EOS
   fi
 
   # The dispatch path must keep working — a seed on a manual dispatch is the supported operation.
-  c_seed_disp=$(EV=workflow_dispatch SEED=9 PRC=0 PLOG="$READYZ_OK" drive)
-  disp_calls="$LAST_CALLS"
-  if grep -q 'WORKSPACES_COUNT=9' "$disp_calls" 2>/dev/null; then
+  # Anchored on the WRITE construct, not on a bare `WORKSPACES_COUNT=9`: the workflow sends the
+  # value as a separate printf argument (`printf 'WORKSPACES_COUNT=%s\n' '9'`), so the naive
+  # concatenated form never appears in argv and the assertion would fail against a CORRECT
+  # implementation. Both halves are required — the format string alone would also match the
+  # refuse-to-lower READ that precedes it.
+  disp_calls="$SCRATCH/calls.dispatch-seed"
+  c_seed_disp=$(EV=workflow_dispatch SEED=9 CALLS="$disp_calls" PRC=0 PLOG="$READYZ_OK" drive)
+  if grep -qF "printf 'WORKSPACES_COUNT=%s" "$disp_calls" 2>/dev/null \
+     && grep -qF "'9' >> /var/lib/workspaces-luks/state" "$disp_calls" 2>/dev/null; then
     ok "POSITIVE CONTROL: a manual dispatch CAN still seed (the operator path is not broken)"
   else
     no "the manual seed path stopped working — the dispatch contract regressed"
@@ -373,6 +385,10 @@ printf '%s\n' "$*" >> "${GH_CALLS:-/dev/null}"
 case "$1 $2" in
   "label create") exit "${FIXTURE_LABEL_RC:-0}" ;;
   "issue list")   printf '%s' "${FIXTURE_ISSUE_LIST:-[]}"; exit 0 ;;
+  # The prior body+comments of an already-open issue. This is what the anti-spam bound reads to
+  # decide whether the reason CHANGED; without it the "unchanged reason does not re-comment"
+  # contract could not be driven at all.
+  "issue view")   printf '%s' "${FIXTURE_ISSUE_VIEW:-}"; exit 0 ;;
 esac
 exit 0
 EOS
@@ -383,7 +399,7 @@ EOS
     : > "$calls"
     PATH="$SCRATCH/bin:$PATH" GH_CALLS="$calls" \
     OUTCOME_CLASS="${CLASS:-}" REASON="${RSN:-none}" \
-    FIXTURE_ISSUE_LIST="${LIST:-[]}" \
+    FIXTURE_ISSUE_LIST="${LIST:-[]}" FIXTURE_ISSUE_VIEW="${VIEW:-}" \
     RUN_URL="https://example.invalid/run/1" GH_TOKEN="fixture" \
       bash -e "$SCRATCH/alarm.sh" >/dev/null 2>&1 || rc=$?
     LAST_GH="$calls"; LAST_ALARM_RC="$rc"
@@ -397,28 +413,76 @@ EOS
     && ok "the alarm QUERIES for an existing issue before creating (dedupe, not spam)" \
     || no "the alarm creates without querying — every scheduled failure would open a new issue"
 
-  d_title=$(grep -o 'issue create.*' "$LAST_GH" 2>/dev/null | head -1)
+  # Extract the TITLE ONLY. Grepping the whole `issue create` argv would compare strings that
+  # include a per-run mktemp path, so the distinctness check below would pass even if every class
+  # produced an identical title — the exact vacuity this assertion exists to rule out.
+  title_of() { sed -n 's/.*--title \(.*\) --label.*/\1/p' "$1" | head -1; }
+
+  d_title=$(title_of "$LAST_GH")
   CLASS=readiness RSN=readyz_not_ready alarm_drive
-  r_title=$(grep -o 'issue create.*' "$LAST_GH" 2>/dev/null | head -1)
+  r_title=$(title_of "$LAST_GH")
   CLASS=unavailable RSN=ssh_transport alarm_drive
-  u_title=$(grep -o 'issue create.*' "$LAST_GH" 2>/dev/null | head -1)
-  distinct=$(printf '%s\n%s\n%s\n' "$d_title" "$r_title" "$u_title" | sort -u | grep -c . || true)
-  if [[ "$distinct" -ge 3 ]]; then
-    ok "the three classes route to three DISTINCT issue titles"
+  u_title=$(title_of "$LAST_GH")
+  CLASS=selftest RSN=alarm_selftest alarm_drive
+  s_title=$(title_of "$LAST_GH")
+  distinct=$(printf '%s\n%s\n%s\n%s\n' "$d_title" "$r_title" "$u_title" "$s_title" | sort -u | grep -c . || true)
+  if [[ "$distinct" -ge 4 ]]; then
+    ok "the four classes route to four DISTINCT issue titles"
   else
     no "the classes collapse to $distinct distinct title(s) — dedupe would merge unrelated findings"
   fi
+  case "$s_title" in
+    *SELF-TEST*) ok "the alarm_selftest rehearsal files under an unmistakable SELF-TEST title" ;;
+    *) no "the selftest title ('$s_title') is not marked SELF-TEST — a rehearsal could be read as a real alarm" ;;
+  esac
 
   CLASS="" RSN=none alarm_drive
   grep -qi 'unavailable' "$LAST_GH" 2>/dev/null \
     && ok "an EMPTY outcome_class fails closed to unavailable" \
     || no "an empty outcome_class produced no unavailable routing — the fail-closed default is missing"
 
-  LIST='[{"number":1,"title":"x"}]' CLASS=drift RSN=blkid_not_luks alarm_drive
+  # DEDUPE IS BY EXACT TITLE, so the fixture must carry the exact title the drift class files. An
+  # arbitrary open issue (the earlier fixture used title "x") would leave the alarm correctly
+  # CREATING, and the assertion would then fail against a correct implementation while passing
+  # against one that comments on any open issue at all. Pinning the literal here is deliberate: the
+  # title IS the dedupe key, so a title change must turn this suite red.
+  DRIFT_TITLE='[ci/luks-verify] at-rest drift on /mnt/data'
+  LIST="[{\"number\":1,\"title\":\"${DRIFT_TITLE}\"}]" CLASS=drift RSN=blkid_not_luks alarm_drive
   if grep -q 'issue comment' "$LAST_GH" 2>/dev/null && ! grep -q 'issue create' "$LAST_GH" 2>/dev/null; then
-    ok "an existing open issue is COMMENTED on, not re-created"
+    ok "an open issue with the EXACT title is COMMENTED on, not re-created"
   else
     no "an existing open issue was re-created — the alarm spams on every scheduled failure"
+  fi
+
+  # The negative control the fixture above needs to mean anything: an open issue with a DIFFERENT
+  # title must NOT suppress the filing. Without this, "dedupe by exact title" and "dedupe by any
+  # open issue in the label" are indistinguishable, and the second would silently swallow the first
+  # at-rest drift issue behind a standing readiness issue.
+  LIST='[{"number":7,"title":"[ci/luks-verify] readiness or inventory failure"}]' CLASS=drift RSN=blkid_not_luks alarm_drive
+  if grep -q 'issue create' "$LAST_GH" 2>/dev/null && ! grep -q 'issue comment' "$LAST_GH" 2>/dev/null; then
+    ok "an open issue of a DIFFERENT class does not suppress a drift filing (dedupe is by exact title)"
+  else
+    no "a different-class open issue swallowed the drift filing — the legal re-evaluation trigger would never be filed"
+  fi
+
+  # ANTI-SPAM BOUND. Nothing here auto-closes, so a daily cadence against a standing issue would
+  # accrete a comment a day. A repeat failure whose reason is UNCHANGED must stay silent.
+  LIST="[{\"number\":1,\"title\":\"${DRIFT_TITLE}\"}]" VIEW='previously seen at ... reason=blkid_not_luks ...' \
+    CLASS=drift RSN=blkid_not_luks alarm_drive
+  if grep -q 'issue comment' "$LAST_GH" 2>/dev/null; then
+    no "a repeat failure with an UNCHANGED reason still commented — the issue accretes ~365 comments a year"
+  else
+    ok "a repeat failure with an unchanged reason does NOT add another comment"
+  fi
+
+  # ...and the positive control for that bound: a CHANGED reason must still be reported, or the
+  # anti-spam rule would silently swallow a genuine escalation.
+  LIST="[{\"number\":1,\"title\":\"${DRIFT_TITLE}\"}]" VIEW='previously seen at ... reason=blkid_not_luks ...' \
+    CLASS=drift RSN=mount_not_mapper alarm_drive
+  if grep -q 'issue comment' "$LAST_GH" 2>/dev/null; then
+    ok "a repeat failure with a CHANGED reason is still commented (the bound is not a mute button)"
+  else
+    no "a changed reason was suppressed — the anti-spam bound is swallowing real escalations"
   fi
 fi
 
