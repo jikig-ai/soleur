@@ -173,16 +173,50 @@ infra_config_content_assert() {
 # TERMINAL adjudication: count invariant (with specific diagnostics) + content assert.
 # The caller runs this ONCE after the poll loop, never inside it. Returns non-zero on
 # any failure with a named ::error:: line for each.
+#
+# EVERY PATH THAT REACHES A ZERO RETURN (#7220 A6.4 — enumerated because this function gained a
+# message-suppression mode, and suppression is the exact shape that turns a safety gate into a
+# bypass). `rc` starts at 0 and this function returns it. It stays 0 only if ALL of:
+#   1. exit_code == 0;                         2. files_failed == 0;
+#   3. files_written == files_total (non-null); 4. files_total == repo FILE_MAP count;
+#   5. infra_config_content_assert passed (per-dest sha + template-cardinality pin);
+#   6. every RESTART_MAP unit has a verdict, and none is `failed`/unrecognised/rc!=0;
+#   7. the RESTART_MAP derivation was non-empty.
+# There is NO other `return`. The #7220 fatal branch below only ever SETS rc=1 and silences
+# other MESSAGES; it can never clear rc, and `fatal_line` is not a path to zero.
 adjudicate_infra_config() {
   local status_json="$1" infra_dir="$2" apply_script="$3"
   local rc=0 expected exit_code files_failed files_written files_total
+  local fatal_line fatal_rc fatal_cmd fatal_mode=0
   expected=$(infra_config_expected_count "$apply_script")
   exit_code=$(jq -r '.exit_code // "MISSING"' "$status_json" 2>/dev/null)
   files_failed=$(jq -r '.files_failed // "MISSING"' "$status_json" 2>/dev/null)
   files_written=$(jq -r '.files_written // "MISSING"' "$status_json" 2>/dev/null)
   files_total=$(jq -r '.files_total // "MISSING"' "$status_json" 2>/dev/null)
 
+  # --- #7220 fatal attribution -------------------------------------------------------------
+  # A frame carrying a non-zero fatal_line means the handler died at a KNOWN line and every
+  # step after it did not run. That single fact explains the count shortfall and the missing
+  # activation verdicts, so repeating them as separate failures buries the one line the
+  # operator needs. Suppression is of MESSAGES ONLY — see the enumeration above.
+  fatal_line=$(jq -r '.fatal_line // 0' "$status_json" 2>/dev/null || echo 0)
+  fatal_rc=$(jq -r '.fatal_rc // 0' "$status_json" 2>/dev/null || echo 0)
+  fatal_cmd=$(jq -r '.fatal_cmd // ""' "$status_json" 2>/dev/null || echo "")
+  [[ "$fatal_line" =~ ^[0-9]+$ ]] || fatal_line=0
+  [[ "$fatal_rc"   =~ ^[0-9]+$ ]] || fatal_rc=0
+  [[ "$fatal_line" -gt 0 ]] && fatal_mode=1
+
+  if [[ "$fatal_mode" -eq 1 ]]; then
+    echo "::error::infra-config-apply DIED at infra-config-apply.sh:${fatal_line} (rc=${fatal_rc}) running: ${fatal_cmd:-<unrecorded>}"
+    echo "::error::every step after this line did not run — that is why the counts below are short and why units have no activation verdict."
+    echo "::error::what is still true: files_written=${files_written} of ${expected} delivered. The files that DID land are on the host; this is an ACTIVATION failure, not necessarily a delivery one."
+    echo "::error::next: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_INFRA_CONFIG_FATAL"
+    echo "::error::This does NOT mean the host is bricked. Do NOT run \`terraform apply -replace\` — that lever is only for a status endpoint returning 000/502/503, and this host cannot be re-provisioned (\`cx33\`, 0/6 stock)."
+    rc=1
+  fi
+
   if [[ "$exit_code" != "0" ]]; then
+    # KEPT in fatal mode: it is accurate, and it is the verdict the gate adjudicates on first.
     echo "::error::infra-config-apply reported exit_code=$exit_code (partial failure or no prior apply)."
     rc=1
   fi
@@ -195,7 +229,11 @@ adjudicate_infra_config() {
     rc=1
   fi
   if [[ "$files_total" != "$expected" ]]; then
-    echo "::error::infra-config-apply UNDER-DELIVERED: host reported files_total=$files_total but the repo FILE_MAP expects $expected (#6178 false-green fix). This is NOT a pass."
+    # SUPPRESSED (message only) in fatal mode — fatal_line already explains the shortfall, and
+    # in #7220 this line said "files_total=0" about an apply that had written 19 of 19.
+    if [[ "$fatal_mode" -eq 0 ]]; then
+      echo "::error::infra-config-apply UNDER-DELIVERED: host reported files_total=$files_total but the repo FILE_MAP expects $expected (#6178 false-green fix). This is NOT a pass."
+    fi
     rc=1
   fi
 
@@ -232,7 +270,14 @@ adjudicate_infra_config() {
       [[ -n "$unit" ]] || continue
       verdict=$(jq -c --arg u "$unit" '.restarts[]? | select(.unit == $u)' "$status_json" 2>/dev/null)
       if [[ -z "$verdict" ]]; then
-        echo "::error::infra-config activation contract: no verdict for $unit. A schema_version>=2 frame must carry one entry per RESTART_MAP unit — an absent entry is indistinguishable from a unit that was never considered."
+        # SUPPRESSED (message only) in #7220 fatal mode. "An absent entry is indistinguishable
+        # from a unit that was never considered" is the right thing to say when the handler ran
+        # to completion — but when fatal_line names the line it died on, the entry is absent
+        # for a KNOWN reason and this line competes with it for the operator's attention.
+        # The verdict is unchanged: rc=1 either way.
+        if [[ "$fatal_mode" -eq 0 ]]; then
+          echo "::error::infra-config activation contract: no verdict for $unit. A schema_version>=2 frame must carry one entry per RESTART_MAP unit — an absent entry is indistinguishable from a unit that was never considered."
+        fi
         rc=1; missing=$((missing + 1)); continue
       fi
       action=$(jq -r '.action  // "MISSING"' <<<"$verdict")

@@ -490,6 +490,107 @@ else
   pass "activation contract is absent from the poll break-condition (terminal only)"
 fi
 
+# ===================================================================================
+# #7220 — the fatal annotation. Asserted by RENDERED TEXT, never by `grep -c fatal_line`
+# (which a comment satisfies — cq-assert-anchor-not-bare-token).
+#
+# The fixture is the REAL incident frame, byte-for-byte from the failing run
+# (30811367645): the handler died at :415 on an ungranted `systemctl daemon-reload`, and the
+# frame's hardcoded zeros made the gate report `files_total=0` about an apply that had written
+# 19 of 19. Every assertion below is a line the operator would have needed that day.
+# ===================================================================================
+FATAL="$TMP/7220-fatal.json"
+printf '{"schema_version":2,"start_ts":1785758310,"end_ts":1785758311,"exit_code":1,"reason":"unhandled","files_written":0,"files_failed":0,"files_total":0,"fatal_rc":1,"fatal_line":415,"fatal_cmd":"systemctl daemon-reload","files":[],"restarts":[]}\n' > "$FATAL"
+
+FATAL_OUT="$TMP/7220-fatal.out"
+adjudicate_infra_config "$FATAL" "$SYNTH" "$SYNTH/infra-config-apply.sh" > "$FATAL_OUT" 2>&1
+FATAL_RC=$?
+
+# (1) FAIL-OPEN GUARD — the highest-stakes assertion here. This block SILENCES gate branches,
+# which is exactly the shape that turns a safety gate into a bypass. fatal_line must never be a
+# path to a zero return.
+if [[ "$FATAL_RC" -ne 0 ]]; then
+  pass "#7220 fail-open guard: a frame carrying fatal_line still FAILS the gate (rc=$FATAL_RC)"
+else
+  fail "#7220 FAIL-OPEN: a fatal frame returned 0 — the suppression changed the VERDICT, not just the message"
+fi
+
+# (2) The five elements AC15 requires, each by its rendered text.
+if grep -qF 'infra-config-apply.sh:415' "$FATAL_OUT"; then
+  pass "#7220 annotation names the exact line the handler died at"
+else
+  fail "#7220 annotation does not name infra-config-apply.sh:415"
+fi
+if grep -qF 'systemctl daemon-reload' "$FATAL_OUT"; then
+  pass "#7220 annotation names the failing command"
+else
+  fail "#7220 annotation does not name the failing command"
+fi
+if grep -qF 'every step after this line did not run' "$FATAL_OUT"; then
+  pass "#7220 annotation turns a line number into a mental model"
+else
+  fail "#7220 annotation omits 'every step after this line did not run'"
+fi
+if grep -qF 'files_written=0 of ' "$FATAL_OUT"; then
+  pass "#7220 annotation states what is STILL TRUE, so a red gate is not misread as total loss"
+else
+  fail "#7220 annotation omits the files_written=N of M statement"
+fi
+if grep -qF -- '--since 1h' "$FATAL_OUT"; then
+  pass "#7220 annotation carries a copy-pasteable next command with a relative window"
+else
+  fail "#7220 annotation omits the --since 1h query"
+fi
+# The single highest-value line in this change. The previous incident's annotation was
+# two-thirds false and the issue written from it pointed the operator at destroying a host with
+# 0/6 datacentre stock. The next incident reads THIS, not the plan.
+if grep -qF 'Do NOT run' "$FATAL_OUT" && grep -qF 'cx33' "$FATAL_OUT" && grep -qF '000/502/503' "$FATAL_OUT"; then
+  pass "#7220 annotation carries the -replace guardrail with its scope and the stock reality"
+else
+  fail "#7220 annotation is missing the -replace guardrail — the failure mode that produced this issue"
+fi
+
+# (3) Suppression: MESSAGE only, and only the two branches fatal_line already explains.
+if grep -qF 'UNDER-DELIVERED: host reported files_total=' "$FATAL_OUT"; then
+  fail "#7220: the UNDER-DELIVERED line still fires in fatal mode — it said files_total=0 about a 19/19 apply"
+else
+  pass "#7220 suppresses the UNDER-DELIVERED count line when fatal_line explains the shortfall"
+fi
+if grep -qF 'no verdict for' "$FATAL_OUT"; then
+  fail "#7220: the per-unit 'no verdict for' line still fires in fatal mode"
+else
+  pass "#7220 suppresses the per-unit activation line when fatal_line explains the absence"
+fi
+# KEPT, deliberately — it is accurate, and it is what the gate adjudicates on first.
+if grep -qF 'reported exit_code=1' "$FATAL_OUT"; then
+  pass "#7220 KEEPS the exit_code line (verified against the real frame: it is accurate)"
+else
+  fail "#7220 suppressed the exit_code line, which is accurate and must survive"
+fi
+
+# (4) ANTI-VACUITY / mutation guard. The two suppressions above are conditional, not deletions.
+# Without this, replacing the branches with nothing at all would pass every assertion in (3).
+NOFATAL="$TMP/7220-nofatal.json"
+printf '{"schema_version":2,"start_ts":1785758310,"end_ts":1785758311,"exit_code":1,"reason":"unhandled","files_written":0,"files_failed":0,"files_total":0,"fatal_rc":0,"fatal_line":0,"fatal_cmd":"","files":[],"restarts":[]}\n' > "$NOFATAL"
+NOFATAL_OUT="$TMP/7220-nofatal.out"
+adjudicate_infra_config "$NOFATAL" "$SYNTH" "$SYNTH/infra-config-apply.sh" > "$NOFATAL_OUT" 2>&1 || true
+if grep -qF 'UNDER-DELIVERED: host reported files_total=' "$NOFATAL_OUT"; then
+  pass "#7220 non-vacuity: without fatal_line the UNDER-DELIVERED line still fires (suppression is conditional)"
+else
+  fail "#7220 VACUOUS: the UNDER-DELIVERED branch never fires at all — it was deleted, not suppressed"
+fi
+if grep -qF 'no verdict for' "$NOFATAL_OUT"; then
+  pass "#7220 non-vacuity: without fatal_line the per-unit activation line still fires"
+else
+  fail "#7220 VACUOUS: the per-unit activation branch never fires at all"
+fi
+# And a clean frame must not acquire a fatal annotation.
+if grep -qF 'DIED at infra-config-apply.sh' "$NOFATAL_OUT"; then
+  fail "#7220: a frame with fatal_line=0 rendered a fatal annotation — false attribution"
+else
+  pass "#7220 no false attribution on a frame that carries no fatal_line"
+fi
+
 # --- non-vacuity floor: the synthetic FILE_MAP produced a real, non-empty set --------
 if [[ "$EXPECTED_COUNT" -ge 2 && "${#COMPARABLE_DESTS[@]}" -ge 1 ]]; then
   pass "fixture non-vacuity: EXPECTED_COUNT=$EXPECTED_COUNT, ${#COMPARABLE_DESTS[@]} comparable dests"
