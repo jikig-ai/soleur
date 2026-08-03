@@ -612,6 +612,103 @@ t17_hook_input_prefix_not_orphan() {
   rm -rf "$root"
 }
 
+# --- T20: grep-rewrite-* is not an orphan (issue #7165, ADR-162) ------------
+# .claude/hooks/grep-rewrite.sh emits `grep-rewrite-would-rewrite` (observe-only
+# soak) and `grep-rewrite-disarm` (envelope could not be built). Same tier-gate
+# rationale as T12/T17: the rule body lives in the hook header and the hooks
+# README, not in AGENTS.md, so the id has no core tag to match.
+#
+# Verified RED before the exclusion landed: a single `grep-rewrite-would-rewrite`
+# row exited the aggregator 5 with
+#   "ERROR: orphan rule_id(s) ... : grep-rewrite-would-rewrite"
+# On the post-write path that exit also short-circuits jsonl rotation.
+t20_grep_rewrite_prefix_not_orphan() {
+  local root exit_code=0 metrics
+  root=$(make_fixture_repo)
+  write_event "$root" "grep-rewrite-would-rewrite" "info" "2026-08-03T10:00:00Z"
+  write_event "$root" "grep-rewrite-disarm" "warn" "2026-08-03T10:00:01Z"
+  write_event "$root" "hr-rule-a-synthetic-test" "deny" "2026-08-03T10:00:02Z"
+
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T20 grep-rewrite-* does not trip the orphan gate" "0" "$exit_code"
+
+  metrics="$root/knowledge-base/project/rule-metrics.json"
+  assert_eq "T20 orphan_rule_ids empty" "0" \
+    "$(jq -r '.summary.orphan_rule_ids | length' < "$metrics")"
+  rm -rf "$root"
+}
+
+# --- T21: the exclusion is a PREFIX rule, not a blanket amnesty -------------
+# Non-vacuity partner for T20, mirroring T7's shape. Without this, replacing the
+# orphan filter with `map(select(false))` would leave T20 green.
+t21_grep_rewrite_plus_orphan_isolates_real_orphan() {
+  local root exit_code=0 metrics
+  root=$(make_fixture_repo)
+  write_event "$root" "grep-rewrite-would-rewrite" "info" "2026-08-03T10:00:00Z"
+  write_event "$root" "totally-made-up-rule" "deny" "2026-08-03T10:00:01Z"
+  # PREFIX BOUNDARY. Without this row, widening the filter from
+  # `startswith("grep-rewrite-")` to `startswith("grep")` passed all 63 tests —
+  # T20/T21 pinned "the exclusion works" and "it is not blanket", but not
+  # "it is not OVER-broad". This id is a real sibling hook's rule_id shape.
+  write_event "$root" "grep-q-pipe-guard" "deny" "2026-08-03T10:00:02Z"
+
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T21 a real orphan alongside grep-rewrite-* still exits 5" "5" "$exit_code"
+
+  metrics="$root/knowledge-base/project/rule-metrics.json"
+  assert_eq "T21 exclusion is prefix-scoped, not any-id-starting-with-grep" \
+    "grep-q-pipe-guard,totally-made-up-rule" \
+    "$(jq -r '.summary.orphan_rule_ids | sort | join(",")' < "$metrics")"
+  rm -rf "$root"
+}
+
+# --- T22: the disarm REPLACEMENT SURFACE (load-bearing pair with T20) -------
+# Mirrors T18's role for hook-input-*. The T20 exclusion deletes the only place
+# a counts-only rule_id appeared (orphan_rule_ids); verified before this landed
+# that the string `grep-rewrite` then appeared in NO field of rule-metrics.json.
+# grep-rewrite-disarm is a hook_self_fault — it means the rewriter broke and the
+# ugrep shim was live for those calls — so it must remain visible somewhere.
+t22_grep_rewrite_disarm_count_and_stderr() {
+  local root metrics stderr exit_code=0
+  root=$(make_fixture_repo)
+  write_event "$root" "grep-rewrite-disarm" "warn" "2026-08-03T11:00:00Z"
+  write_event "$root" "grep-rewrite-disarm" "warn" "2026-08-03T11:00:01Z"
+  write_event "$root" "grep-rewrite-would-rewrite" "warn" "2026-08-03T11:00:03Z"
+  write_event "$root" "hr-rule-a-synthetic-test" "deny" "2026-08-03T11:00:02Z"
+
+  stderr=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" 2>&1 >/dev/null) || exit_code=$?
+  assert_eq "T22 disarm rows do not fail the run" "0" "$exit_code"
+
+  metrics="$root/knowledge-base/project/rule-metrics.json"
+  assert_eq "T22 grep_rewrite_fault_count is surfaced" "3" \
+    "$(jq -r '.summary.grep_rewrite_fault_count' < "$metrics")"
+  # PREFIX-WIDE, not one hardcoded key. A single-key readout reported nothing for
+  # grep-rewrite-would-rewrite (observe mode ON = the rewrite is DISABLED
+  # repo-wide) or for any typo'd suffix -- the exact blindness the exclusion
+  # above creates. This asserts the hook-input-* parity the comment claims.
+  assert_eq "T22 readout is prefix-wide (disarm AND would-rewrite both counted)" \
+    "disarm=2 would-rewrite=1" \
+    "$(jq -r '.summary.grep_rewrite_fault_reasons | to_entries | sort_by(.key) | map("\(.key)=\(.value)") | join(" ")' < "$metrics")"
+  # A number nobody prints is not a surface.
+  assert_eq "T22 a stderr WARNING names the fault" "1" \
+    "$(printf '%s\n' "$stderr" | grep -c 'grep-rewrite event' || true)"
+  rm -rf "$root"
+}
+
+# --- T23: zero disarms is silent (no false alarm on a healthy run) ----------
+t23_grep_rewrite_disarm_zero_is_silent() {
+  local root stderr exit_code=0
+  root=$(make_fixture_repo)
+  write_event "$root" "hr-rule-a-synthetic-test" "deny" "2026-08-03T11:00:00Z"
+  stderr=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" 2>&1 >/dev/null) || exit_code=$?
+  assert_eq "T23 healthy run exits 0" "0" "$exit_code"
+  assert_eq "T23 healthy run prints no fault warning" "0" \
+    "$(printf '%s\n' "$stderr" | grep -c 'grep-rewrite event' || true)"
+  assert_eq "T23 counter reads 0" "0" \
+    "$(jq -r '.summary.grep_rewrite_fault_count' < "$root/knowledge-base/project/rule-metrics.json")"
+  rm -rf "$root"
+}
+
 # --- T18: the REPLACEMENT surface (issue #7164, plan Phase 1.2) -------------
 # LOAD-BEARING PAIR with T17. The orphan exclusion deletes the only place a
 # counts-only rule_id used to appear, so the exclusion without this counter
@@ -683,6 +780,11 @@ t16_argv_ceiling_stage_payloads_exceed_max_arg_strlen
 t17_hook_input_prefix_not_orphan
 t18_hook_input_fault_count_and_stderr
 t19_hook_input_zero_is_silent
+
+t20_grep_rewrite_prefix_not_orphan
+t21_grep_rewrite_plus_orphan_isolates_real_orphan
+t22_grep_rewrite_disarm_count_and_stderr
+t23_grep_rewrite_disarm_zero_is_silent
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
