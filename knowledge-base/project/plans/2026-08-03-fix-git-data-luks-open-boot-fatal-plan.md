@@ -11,6 +11,31 @@ brand_survival_threshold: single-user incident
 
 # Fix the `stage:luks_open` boot fatal blocking the git-data rung-2 rehearsal
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-03
+**Panels run:** plan-review (architecture-strategist, spec-flow-analyzer, scoped strong-model advisor) → 20 revisions R1–R20, all mechanical, all applied. deepen-plan (best-practices kernel research, learnings-researcher, git-history-analyzer, test-design-reviewer).
+**Gates:** 4.5 network-outage **triggered and dispositioned**; 4.6 user-brand impact **pass**; 4.7 observability 5-field **pass**; 4.8 PAT-shaped **pass** (no hits); 4.9 UI wireframe **skip** (no UI surface); 4.10 encryption posture **pass**; 4.55 downtime/cutover **no trigger**.
+
+### Key improvements from the deepen pass
+
+1. **The root cause moved from "strongly supported" to confirmed against upstream.** Theodore Ts'o documented this exact failure mode; `ext4_enable_quotas()` is called unconditionally from `ext4_fill_super()` on the `quota` feature bit, and the missing `quota_v2` module yields `ESRCH`. Kernel-source and LKML citations are now in the plan.
+2. **A load-bearing premise was refuted.** `tune2fs(8)` lists **both** `quota` and `project` as settable/clearable after filesystem creation — so the "migration-forcing, cannot fix forward" rationale behind guard B16 and the template comment is **wrong**. That false belief is *why* an unmountable feature set was pinned onto a store that did not yet exist. The fix-selection calculus changed as a result.
+3. **Candidate (d) (`mount -o noquota`) was refuted before Phase 0 runs it** — the kernel *ignores* quota mount options when the feature bit is set. The probe still executes, but a pass would now be the surprising outcome.
+4. **The apply-path claim in the first draft was false and is corrected.** Merging *does* fire `apply-web-platform-infra.yml` (path filter `apps/web-platform/infra/**`, not `*.tf`); safety comes from `-target` scope + `OPERATOR_APPLIED_EXCLUSIONS`, verified per-PR. A prior session made the identical mistake — there is a learning file for it.
+5. **The regression-test design was rebuilt.** The original R1 was unimplementable in the named harness (it needed `--privileged` + loop devices the unprivileged harness does not have) and its RED control (`git show <merge-base>`) would have inverted the moment this PR merged. R1 is now an unprivileged superblock **fingerprint** check with an in-test mutation control; R2 is an explicit Phase-0 disposition rather than an assumed arm; R3 is re-scoped to what the container can actually observe.
+6. **The diagnostic fix was corrected before it could regress four failure modes.** Seeding the detail file at *stage entry* (not at mount time) and ordering `dmesg` before the failing stderr are both load-bearing given the emitter's `tail -n 20 | tail -c 180` double-truncation.
+7. **Premise validation: 20 of 20 cited claims CONFIRM** against a freshly-fetched `origin/main`, including every content anchor, every issue state, and the ADR ordinal.
+
+### New considerations discovered
+
+- The rung-2 FAIL artifact carries a verdict with **no cause** — `HOST_SQL` never selected `detail`. The cause of this incident was recoverable only by hand-writing a new Better Stack query.
+- The capture script's header contains a **false capability claim** ("Sentry has no search capability wired in this repo"). Sentry search works today via `SENTRY_ISSUE_RO_TOKEN`, which materially changes what #7116 could do.
+- The C4 model still describes the rehearsal route as "deliberately UNFIRED"; it has fired four times and consumed three paid hosts.
+- Ordering-vs-co-presence is the specific defect class this plan's Phase 1.4 is exposed to, and a grep proving both lines exist cannot detect it.
+
+---
+
 Tracking issue: **#7204**.
 Related, referenced and NOT closed: **#7025** (DO-NOT-DISPATCH banner — this fix is its precondition), **#7116** (capture mis-reports TRANSIENT for early-boot fatals), **#6588** (P1: user source code unencrypted at rest), **#7117** (the immediate predecessor whose fix exposed this one).
 
@@ -376,8 +401,15 @@ failure_modes:
     alert_route: rung-2 capture's `"…":"no"` FAIL arm; note in the test body that those
                  booleans are hardcoded literals today, so this arm is latent
   - mode: the emitted detail is truncated past usefulness (the near-miss on #7204)
-    detection: Phase 2 arm R3 asserts the emitted detail names the mount error and carries
-               dmesg context; it goes RED on the unfixed template
+    detection: Phase 2 arm R4 drives the EXTRACTED emitter with a synthetic detail file
+               (dmesg-shaped lines then the real mount error) and asserts the captured
+               detail still contains "No such process" after tail -n 20 | tail -c 180;
+               its mutation arm reverses the ordering and asserts RED. R3 separately
+               asserts the detail SOURCE is a readable file rather than a literal path.
+    alert_route: CI (infra-validation.yml), pre-merge
+  - mode: a future edit makes the mount non-fatal (fall-through to an unencrypted device)
+    detection: Phase 2 arm B17 (p_mount_no_fallthrough) — a STANDING static guard with
+               three mutation arms, not a one-shot diff grep
     alert_route: CI (infra-validation.yml), pre-merge
 logs:
   where: Sentry events (tags stage/host_name/detail/rc) and Better Stack Logs source
@@ -411,7 +443,8 @@ discoverability_test:
 |---|---|
 | `apps/web-platform/infra/cloud-init-git-data.yml` | The `mkfs.ext4` feature set in the `STAGE=luks_open` heredoc; the mount made cause-carrying (stderr file + `dmesg` tail into the emitted detail); the `#6982 W5/R31` comment replaced with the measured mechanism and the image fact + fetch date |
 | `apps/web-platform/infra/git-data-luks.test.sh` | Re-aim **B16** at the post-fix invariant with mutation arms catching a re-introduction of the `quota` feature; rewrite its comment to cite #7204 |
-| `apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh` | New arms **R1** (feature-set allowlist + explicit fail-on-pre-fix-bytes demonstration), **R2** (mount sanity, with its limitation written into the body), **R3** (the fatal names the cause) |
+| `apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh` | New arms **R1** (classified feature allowlist, extracted from the render, two negative controls), **R3** (the detail source is a readable file, not a literal path), **R4** (the mount error survives the emitter's double-truncation, + ordering-reversal mutation). **R2 only if Phase 0.7 selects it** — see D2. |
+| `apps/web-platform/infra/git-data-luks.test.sh` (second entry) | New **B17** `p_mount_no_fallthrough` + three mutation arms — the standing guard for this plan's top invariant (D3) |
 | `apps/web-platform/infra/git-data-rung2-rehearsal.test.sh` | Pin that `HOST_SQL` selects `detail` |
 | `scripts/followthroughs/git-data-rung2-evidence-capture.sh` | Add `detail` (and `rc`) to `HOST_SQL`; correct the false Sentry-search capability claim in the header |
 | `knowledge-base/engineering/architecture/diagrams/model.c4` | Correct the `gitDataStore` "deliberately UNFIRED" sentence (line ~214) |
@@ -602,3 +635,35 @@ Panel: `architecture-strategist`, `spec-flow-analyzer`, and a scoped strong-mode
 | R20 | **ADR-147 tension unaddressed** — it freezes diagnostic-capture logic in baked host-scripts, and Phase 1.3 adds capture logic to `user_data`. ADR-152 records why baking does not transfer to git-data. | The Phase 4 ADR must state the relationship (extends ADR-152's carve-out) rather than leaving a reader to reconcile them. Advisory from the same finding: consider an `advisory`-tier AP row for "a boot-time filesystem/feature choice must be honourable by the target image's kernel" — the class generalises beyond git-data. |
 
 **Findings deliberately NOT applied:** none. Two were *corrected* rather than adopted verbatim — R5's container-blacklist mechanism (refuted on inspection, see above) and R3's committed-pre-fix-fixture form (the in-test mutation is equivalent and matches the harness idiom).
+
+---
+
+## Deepen-Plan Revisions (D1–D11)
+
+From `test-design-reviewer` (Dave Farley 8-property evaluation; **Test Quality Score 7.25/10, grade C** — reasoning graded B/A, *specification* is what lands it at C). The reviewer ran its own measurements; two are load-bearing and reproduced here. All revisions below are mechanical and supersede the Phase 2 / Acceptance Criteria text above where they conflict.
+
+**Measurement 1 — the equality fingerprint is measurably brittle.** Same `mkfs.ext4 -O project` on a 10G file:
+- host, e2fsprogs **1.47.2** → `… metadata_csum_seed … orphan_file … project`
+- `ubuntu:24.04`, e2fsprogs **1.47.0** → same set **minus** `orphan_file` and `metadata_csum_seed`
+
+Two features differ across **one e2fsprogs patch version**, and `ubuntu:24.04` is a moving tag. Neither differing feature can trigger a `request_module`.
+
+**Measurement 2 — `-O` accumulates** (`-O project -O quota` yields both), and a backing file under 3 MB falls into mke2fs's `floppy` bucket and silently drops `has_journal`. 100M/600M/10G are identical.
+
+| # | Revision | Rationale |
+|---|---|---|
+| **D1** | **R1 asserts a CLASSIFIED ALLOWLIST, not set equality.** The fixture becomes one row per feature with a mount-time class (`in-tree` / `module-dep`), each `module-dep` row carrying its mechanism. R1 makes three assertions with three distinct messages: (a) every observed feature appears in the table — fail-closed against any *future* flag, which is what equality was bought for; (b) no observed feature is classified `module-dep` — the invariant, stated directly; (c) the observed set contains `has_journal` — a non-vacuity probe that also catches an accidentally-tiny backing file. | Equality reds on a benign e2fsprogs bump (Measurement 1), and the remedy an author reaches for is "refresh the fixture" — training exactly the rubber-stamping the plan says it wants to prevent. The allowlist reds with *"new feature `orphan_file` is unclassified — classify it before shipping"*, whose remedy is a one-line classification with a rationale. Still fail-closed. |
+| **D2** | **`## Files to Edit` no longer mandates R2.** It is listed conditionally, resolved by Phase 0.7. | The table contradicted Phase 0.7's "decide, do not assume" — a reviewer would have read R2 as a required deliverable. |
+| **D3** | **Add B17 `p_mount_no_fallthrough` to `git-data-luks.test.sh`**, with three mutation arms (one per fall-through shape). Predicate anchors on what follows the **mount** command — the shipped line is `mountpoint -q … || mount …`, so a naive "no `||` near mount" test is wrong in both directions. | This plan's highest-stakes invariant ("a *wrong* fix is worse than none") was enforced only by **AC12, a hand-run grep over one PR diff**. That protects this PR and nothing after it. The next author is the threat. |
+| **D4** | **Promote Phase 0.6 from a measurement to arm R4**, with an ordering-reversal mutation: write a synthetic detail file (20 dmesg-shaped lines, then the real `No such process` mount error), drive the **extracted** emitter (`$TMP/git-data-emit`, already extracted at `:59-60`), assert the captured detail still contains `No such process`; reverse the ordering and assert RED. | R8 identified the `tail -n 20 \| tail -c 180` double-truncation hazard, the plan fixes it in prose, and **nothing pins it**. A one-character regression in the exact code path whose absence cost #7204 a hand-written query. Unprivileged, deterministic, no dmesg, no mount. The reviewer calls this the single most valuable available assertion. |
+| **D5** | **R1 extracts from `$TMP/rendered.yml`, not raw template bytes**, with `assert len(...) == 1` in the same python block (matching `:67`, `:71`, `:80`). | Phase 1.3 mandates a new comment block that will contain the literal `mkfs.ext4 -q -O quota,project` — so a raw-bytes grep matches **two** lines and `head -1` may execute a comment. `cq-assert-anchor-not-bare-token` firing on the plan's own new comment. The harness already renders (`:52`) and already extracts stage blocks by `STAGE=` marker (`:79-81`); ADR-152 strips whole-line comments at render, so the collision disappears for free. R3's earlier "do not re-render" reasoning was about re-rendering a *mutated* template, which this does not require. |
+| **D6** | **AC3b is rewritten.** Drive the extracted emitter with `$4=/nonexistent/xyzzy` and assert the captured detail does not contain `xyzzy`. | As worded ("absent `DETAIL_SRC`") it tests the wrong branch and **passes vacuously**: the emitter guards `[ -n "$DETAIL_SRC" ] && [ -r "$DETAIL_SRC" ]`, so an *empty* `$4` falls to `_san ""` (empty detail). The literal-path leak needs **non-empty but unreadable**. Bonus: the corrected form reds on the shipped code today (`luks_err` passes `/var/log/cloud-init-output.log`, unreadable in-container) and greens post-fix — a real RED/GREEN control replacing an argument-by-construction. |
+| **D7** | **Add a second negative control**: a committed pre-fix literal `MKFS_PREFIX='mkfs.ext4 -q -O quota,project /dev/mapper/git-data'  # what shipped before #7204`, executed directly, alongside the in-test mutation. Plus a **mutation-landed** assertion before the mkfs runs. | The mutation is candidate-dependent: if Phase 0 picks candidate (c) plain `mkfs.ext4 -q`, there is no `-O` to inject and the sed silently changes meaning. AC2 still catches a no-op sed, but *misattributes* it ("fingerprint held on the mutant" instead of "the mutation did not land") — the exact misattribution class this suite's own S1 (`:638-645`) and T5 (`:492-494`) arms exist to prevent. |
+| **D8** | **`expires_on` leaves R1's assertion path** into its own labelled arm with a named remediation tied to the birth, not an arbitrary +6 months. `mke2fs -V` is recorded in the fixture as **failure-message context**, not as an assertion. | A CI failure triggered by a wall-clock date is unrepeatable and its message says nothing about the filesystem; worse, a stale date can mask or merge with real feature drift. Supersedes AC1's `expires_on` clause. |
+| **D9** | **R1's extraction-failure and fixture-missing paths emit identical cardinality**, mirroring S1's seven `fail`s at `:660-667`. | Otherwise a drifted extraction emits 1 assertion instead of 5, the *floor* reports "ran only N" and the real cause ("the mkfs line moved") is buried. Also: `mkfs.ext4` → `mke2fs -t ext4` would red B16 while R1 silently fails to extract. |
+| **D10** | **Restate the AP-018 split with the docker-less caveat, and re-scope B16 to guard R1's *preconditions* rather than duplicate its semantics.** B16 owns: the `mkfs` invocation appears exactly once, is not on a comment line, and lies inside the `STAGE=luks_open` heredoc. R1 owns the feature semantics. Caveat to state: *R1 is authoritative **when it runs**; CI is the only environment where both run; B16 is the unconditional tripwire.* | AP-018 presumes the runtime gate always runs — here the suite `exit 0`s at `:41-44` without docker, so on a docker-less laptop **B16 is the only coverage that exists**. An author who reads "B16 is never coverage-bearing" and deletes it leaves local runs with zero coverage. Non-overlapping arms also remove the drift hazard. |
+| **D11** | **Add a `HOST_SQL`-keys ⊆ emitter-payload-keys subset arm**, with a rename mutation. Also resolves AC5's open `rc` question: **keep it** — verified from the emitter's `--data-raw`, `rc` rides in `$TAGS` which is concatenated at top level, so `JSONExtractString(raw,'rc')` works. | A static grep for `detail` proves the column is *selected*, not that it is ever *populated*: rename the emitter's field and the SQL keeps selecting an always-empty column with the test still green. The subset arm also mechanically surfaces Research Reconciliation row #1 (`luks_mounted`/`repo_root`/`hooks_path`/`provision` are selected but emitted only on `boot_complete`), converting a Sharp Edge into an enumerated exception in the test body instead of folklore. |
+
+**Also corrected:** AC3's name ("the failure is diagnosable") over-claimed what the arm asserts — rename to *"the detail source is a readable file, not a literal"* so a green run is not over-read. The `## Observability` block's `failure_modes` entry has been updated to describe R4 + R3 as revised, and now carries the B17 failure mode.
+
+**Not applied:** nothing. Three reviewer suggestions were folded rather than adopted verbatim — the backing-file size (10G sparse, matching `git_data_luks_volume_size`) is folded into D1(c)'s non-vacuity probe; the "fold R1 into an existing container invocation" performance note is folded into D5 (extraction from the existing render makes it free); and the fixture-provenance loophole ("nothing forbids generating the fixture by running the post-fix template") is folded into D1 as an explicit requirement that the fixture derive from the **sibling baseline**, not from the post-fix output — otherwise R1 degrades from an invariant to a change-detector and the TDD claim becomes ceremonial.
