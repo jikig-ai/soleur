@@ -38,12 +38,38 @@ else
 fi
 export SOLEUR_HOOK_NAME="pre-merge-rebase"
 
+# shellcheck source=lib/hook-input.sh
+# FAIL-HARD (no `|| true`): a fail-soft source leaves hook_parse_input undefined
+# and the hook dies at the call, letting the tool proceed (#7164 defect 2).
+source "$(dirname "${BASH_SOURCE[0]}")/lib/hook-input.sh"
+
+# The source above is fail-hard, but 12 of the 20 hooks run `set -uo pipefail`
+# WITHOUT -e. There a missing helper makes hook_parse_input return 127, `!`
+# inverts that to true, the response functions are 127 too, and the hook reaches
+# `exit 0` — a clean pass-through with no row and no prompt, which is defect 2
+# reintroduced by a broken deploy. Assert it explicitly instead of relying on -e.
+if ! declare -f hook_parse_input >/dev/null 2>&1; then
+  echo "[pre-merge-rebase] hook-input helper missing — guards did NOT run for this call" >&2
+  exit 0
+fi
+
 INPUT=$(cat)
+__HI_RAW="$INPUT"
+# ADR-156: hook stdin is model-controlled. A non-string field is surfaced,
+# never coerced — this hook never ran eval, but `jq -r` renders an array
+# across lines, which matches none of its guards, so the payload would have
+# slipped every gate below (#7164). ADR-157: it asks instead.
+if ! hook_parse_input "$__HI_RAW"; then
+  hook_input_report "pre-merge-rebase"
+  hook_input_should_ask && { hook_input_emit_ask "pre-merge-rebase"; exit 0; }
+  exit 0
+fi
+
 # `|| true`: under `set -eo pipefail`, jq exits 5 on malformed/empty stdin and
 # would otherwise abort the script before the fail-open guards below — breaking
 # the header's "fail-open on infrastructure errors" invariant. Degrade to "" so
 # a malformed payload yields no merge-detection and a clean exit 0 (#4600).
-CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""' || true)
+CMD="$HOOK_CMD"
 
 # Strip commit-message bodies before merge-detection so a commit whose message
 # documents "gh pr merge" (e.g. `git commit -m "do not hand-roll gh pr merge"`)
@@ -79,8 +105,7 @@ fi
 # uncommitted-changes check, or the origin/main auto-sync.
 
 # Determine working directory from hook input (.cwd is authoritative).
-# `|| true` for the same fail-open reason as the CMD read above (#4600).
-WORK_DIR=$(echo "$INPUT" | jq -r '.cwd // ""' || true)
+WORK_DIR="$HOOK_CWD"
 if [[ -z "$WORK_DIR" ]] || [[ ! -d "$WORK_DIR" ]]; then
   exit 0
 fi

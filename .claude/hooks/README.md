@@ -18,6 +18,148 @@ exit 0
 Claude Code reads that JSON from stdout and blocks the tool call. Any deviation
 from this shape is treated as a pass-through.
 
+## Parsing hook input
+
+**That stdin envelope is model-controlled and untrusted** ([ADR-156][adr155]).
+It is assembled from the model's own tool-call output; nothing a hook can see
+validates it. Parse it with the shared extractor — never by hand, and never with
+`eval`:
+
+```bash
+# shellcheck source=lib/hook-input.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/hook-input.sh"   # FAIL-HARD
+
+INPUT=$(cat)
+if ! hook_parse_input "$INPUT"; then
+  hook_input_report "<hook-basename>"
+  hook_input_should_ask && { hook_input_emit_ask "<hook-basename>"; exit 0; }
+  exit 0
+fi
+CMD="$HOOK_CMD"          # also: HOOK_TOOL_NAME HOOK_CWD HOOK_SESSION_ID HOOK_FILE_PATH
+```
+
+`hook_parse_input` returns 0 only when the document parses **and** every
+contracted field is a string; the values are then byte-exact. Any other outcome
+returns 1 and classifies via `HOOK_INPUT_REASON` (`nonstring`, `unparseable`,
+`separator`, `jq_missing`, `internal`). **The return code is normative; the
+reason is diagnostic.**
+
+Four rules, each of which was a real defect in #7164:
+
+1. **Source it fail-hard.** No `|| true`, no `|| :`, no `2>/dev/null`. A
+   fail-soft source leaves `hook_parse_input` undefined, the hook dies at the
+   call under `set -e`, prints nothing, exits non-zero — and the tool proceeds.
+2. **The `exit` lives at the call site**, never in the library. A sourced
+   library that exits terminates its caller invisibly, is untestable without a
+   subshell, and silently no-ops inside `$( )` or a pipeline.
+3. **Never coerce a non-string.** Coercion (`tojson`) closes the code execution
+   and leaves every anchored guard evaded — `["git","stash"]` matches no guard
+   regex. Same for scrubbing: a normalized value is a *different* value than the
+   matcher was written against.
+4. **A hook that cannot parse its input asks** ([ADR-157][adr156]). It never
+   continues silently and it never denies.
+
+`guardrails.sh` is the **designated responder**: it emits the `ask`, the other
+19 report and exit 0, so a persistent fault produces one prompt per tool call
+rather than 18. That makes `guardrails.sh` load-bearing for the others, and
+`hook-input-contract.test.sh` asserts against `.claude/settings.json` that every
+tool triggering a migrated hook also triggers `guardrails.sh`.
+
+`SOLEUR_DISABLE_HOOK_INPUT_ASK=1` suppresses **escalation only** — parsing, the
+type assertion and the telemetry still run. It is the in-band escape hatch if
+the posture ever proves noisy.
+
+### Verifying the fault path end to end
+
+One command, no SSH, no dashboard. It proves both halves: the operator is told
+**synchronously** (the `ask`), and the fault reaches the surface a human reads
+**later** (the aggregate counter).
+
+```bash
+R=$(mktemp -d)
+cp AGENTS.md AGENTS.rules.md "$R/"          # the aggregator resolves rules from this root
+printf 'not-json' | INCIDENTS_REPO_ROOT="$R" bash .claude/hooks/guardrails.sh \
+  | jq -r '.hookSpecificOutput.permissionDecision'          # -> "ask"
+INCIDENTS_REPO_ROOT="$R" bash scripts/rule-metrics-aggregate.sh --dry-run \
+  | jq '.summary.hook_input_fault_count'                    # -> 1
+rm -rf "$R"
+```
+
+The `cp AGENTS.md AGENTS.rules.md` line is load-bearing and was **missing from
+the original plan's version of this probe**: `INCIDENTS_REPO_ROOT` is read by
+*both* the incident emitter (for the ledger path) and the aggregator (for the
+rule corpus), so a bare `mktemp -d` makes the aggregator exit 2 with
+`AGENTS.md not found` and the count comes back empty. The probe reported a
+failure that was its own, not the code's — the same "declared-verifiable but
+never executed" gap that #7164's `@sh`-is-safe comment belongs to. Corrected
+here after running it.
+
+### Scope of the mandate
+
+**Mandatory** for hooks on the `Bash` matcher and for blocking write guards —
+the 20 hooks that can change whether a tool call proceeds:
+
+`guardrails` · `cla-signed-author-gate` · `context-reviewed-gate` ·
+`follow-through-directive-gate` · `prod-write-defer-gate` ·
+`ship-net-issue-flow-gate` · `ship-operator-step-gate` · `ship-runbook-ssh-gate` ·
+`ship-soak-followthrough-gate` · `ship-unpushed-commits-gate` ·
+`background-poll-prefer-monitor` · `brand-hex-commit-gate` ·
+`doppler-secrets-delete-redirect` · `git-commit-secret-scan` ·
+`kb-domain-allowlist-guard` · `no-memory-write` · `pre-merge-auto-close-scan` ·
+`pre-merge-rebase` · `worktree-write-guard` · `iac-plan-write-guard`
+
+**Not yet migrated** — 10 hooks, in two groups. All remain bound by ADR-156
+clause 1 (no `eval`), which the contract test enforces repo-wide.
+
+*Genuinely advisory* (6) — they emit no `permissionDecision` at all, so a
+mis-parsed field costs a hint rather than a guard:
+
+`agent-token-tee` · `docs-cli-verification` · `pencil-collapse-guard` ·
+`phase-surface-hint` · `skill-context-queries` · `skill-invocation-logger`
+
+*Gating, but deferred* (4) — **these DO decide whether a tool call proceeds** and
+are in ADR-156's binding scope. They are not exempt on principle; they are
+blocked on two concrete things, and they are the priority set in the follow-up:
+
+| Hook | Matcher | Emits |
+|---|---|---|
+| `durable-reminder-prefer-inngest` | `CronCreate` | `deny`, `allow` |
+| `new-scheduled-cron-prefer-inngest` | `Write\|Edit` | `deny`, `allow` |
+| `pencil-open-guard` | `mcp__pencil__open_document` | `deny` |
+| `skill-security-scan-write` | `Write` | `deny`, `ask`, `allow` |
+
+The two blockers, both real:
+
+1. **Every one needs a field the extractor does not publish** — `filePath`
+   (camelCase), `.tool_input.skill`, `.tool_input.content`, `.tool_input.new_string`,
+   and — for `durable-reminder-prefer-inngest` — `.durable` / `.recurring`, which
+   are legitimately **booleans**. `all(type == "string")` structurally cannot
+   express a boolean field, so migrating these widens the fixed-slot contract.
+   That is exactly what ADR-157 rejected a variadic API to avoid, so it is a
+   design decision, not a paste.
+2. **Three of their matchers have no designated responder.** `guardrails.sh` is
+   wired on `Bash` and `Write|Edit|MultiEdit|NotebookEdit` only, so `CronCreate`,
+   `Skill` and `mcp__*` payloads have nothing to emit the `ask`. Migrating them
+   fails the designated-responder invariant (AC14) until that is resolved.
+
+`skill-security-scan-write` is the sharpest of the four: it can emit an explicit
+`allow`, which skips the permission prompt outright, and an array
+`.tool_input.content` renders multi-line under `jq -r` so it matches no
+HIGH-RISK pattern. `pencil-open-guard` is the clearest ADR-156 case — an `mcp__*`
+matcher is precisely the "other tool shapes" whose envelope this repo does not
+define — but it is one of the *harder* migrations, not the easiest, because it
+needs the unpublished camelCase `filePath` **and** has no responder.
+
+Tracked in **#7173**.
+
+`.openhands/hooks/` mirrors carry a **minimal in-place** type assertion instead
+of this helper: a different envelope (`.working_dir`, `.tool_input.path`) and a
+different protocol (`exit 2` + `{"decision":"deny"}`, with no `ask`).
+Convergence is a tracked follow-up.
+
+[adr155]: ../../knowledge-base/engineering/architecture/decisions/ADR-156-hook-stdin-is-model-controlled-and-untrusted.md
+[adr156]: ../../knowledge-base/engineering/architecture/decisions/ADR-157-a-hook-that-cannot-parse-its-input-asks.md
+
 ## Incident telemetry (ADR-2)
 
 Hooks call `emit_incident` **before** the deny payload to record one JSON line

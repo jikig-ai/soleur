@@ -53,13 +53,39 @@ deny() {
   exit 0
 }
 
+# shellcheck source=lib/hook-input.sh
+# FAIL-HARD (no `|| true`): a fail-soft source leaves hook_parse_input undefined
+# and the hook dies at the call, letting the tool proceed (#7164 defect 2).
+source "$(dirname "${BASH_SOURCE[0]}")/lib/hook-input.sh"
+
+# The source above is fail-hard, but 12 of the 20 hooks run `set -uo pipefail`
+# WITHOUT -e. There a missing helper makes hook_parse_input return 127, `!`
+# inverts that to true, the response functions are 127 too, and the hook reaches
+# `exit 0` — a clean pass-through with no row and no prompt, which is defect 2
+# reintroduced by a broken deploy. Assert it explicitly instead of relying on -e.
+if ! declare -f hook_parse_input >/dev/null 2>&1; then
+  echo "[git-commit-secret-scan] hook-input helper missing — guards did NOT run for this call" >&2
+  exit 0
+fi
+
 payload="$(cat)"
-tool_name="$(echo "$payload" | jq -r '.tool_name // empty' 2>/dev/null)"
+__HI_RAW="$payload"
+# ADR-156: hook stdin is model-controlled. A non-string field is surfaced,
+# never coerced — this hook never ran eval, but `jq -r` renders an array
+# across lines, which matches none of its guards, so the payload would have
+# slipped every gate below (#7164). ADR-157: it asks instead.
+if ! hook_parse_input "$__HI_RAW"; then
+  hook_input_report "git-commit-secret-scan"
+  hook_input_should_ask && { hook_input_emit_ask "git-commit-secret-scan"; exit 0; }
+  exit 0
+fi
+
+tool_name="$HOOK_TOOL_NAME"
 
 # Only fire on Bash.
 [ "$tool_name" = "Bash" ] || allow
 
-command="$(echo "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
+command="$HOOK_CMD"
 [ -n "$command" ] || allow
 
 # Match `git commit` as a command-leading verb. Tolerates:

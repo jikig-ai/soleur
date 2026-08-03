@@ -317,7 +317,25 @@ report=$(jq -n \
         # (cost-of-filing-flip-inline / cost-of-filing-file) because this
         # aggregator keys every counter on rule_id and never reads .kind.
         | map(select(startswith("net-issue-flow") | not))
-        | map(select(startswith("cost-of-filing-") | not))) as $orphan_ids
+        | map(select(startswith("cost-of-filing-") | not))
+        # hook-input-* reserved for .claude/hooks/lib/hook-input.sh self-fault
+        # telemetry (issue #7164, ADR-156/ADR-157). Same tier-gate rationale as
+        # context-reviewed-*: the rule body lives in the helper header + the
+        # hooks README, and the always-loaded B_ALWAYS budget has no room for a
+        # new core tag. The reason rides IN the rule_id
+        # (hook-input-nonstring / -unparseable / -separator / -jq_missing /
+        # -internal) because this aggregator keys every counter on rule_id and
+        # never reads .kind — same convention as cost-of-filing-* above.
+        #
+        # LOAD-BEARING PAIR: this exclusion alone would DELETE the only surface
+        # a counts-only rule_id has (orphan_rule_ids). summary.hook_input_fault_count
+        # below is the replacement surface and must not be removed independently.
+        | map(select(startswith("hook-input-") | not))) as $orphan_ids
+    # Hook input-contract faults, split out of $counts BEFORE the summary so the
+    # count survives the orphan exclusion above. Keyed on rule_id like every
+    # other counter in this script.
+    | ($counts | to_entries
+        | map(select(.key | startswith("hook-input-")))) as $hook_input_faults
     | {
         schema: $schema,
         generated_at: $generated_at,
@@ -343,12 +361,72 @@ report=$(jq -n \
             | map(select(.bypass_count > 0))
             | length),
           orphan_rule_ids: $orphan_ids,
+          # Gate-exemption readout (ADR-156). The net-issue-flow mandated-filing
+          # exemption is justified by ATTRIBUTION — being able to see which rule
+          # is being cited, how often, and whether the citing PRs look like
+          # genuine mandates or a new reflex. That justification is only true if
+          # the numbers are actually readable somewhere, and before this block
+          # they were not: `net-issue-flow*` is filtered out of $orphan_rule_ids
+          # a few lines up (correctly — those ids are tier-gated out of
+          # AGENTS.md), and $enriched is built from AGENTS.md ids only, so the
+          # rows reached this file NOWHERE. Shipping the framing without the
+          # readout is the one thing this must not do.
+          #
+          # Keyed off the rule_id, not .kind: the emitter encodes the mandating
+          # rule as `net-issue-flow-mandated-filing--<rule-id>` precisely so the
+          # attribution is structured rather than buried in the free-text
+          # rule_text_prefix that nothing parses.
+          gate_exemptions: (
+            [ $counts | to_entries[]
+              | select(.key | startswith("net-issue-flow-mandated-filing--")) ]
+            | map({
+                rule: (.key | ltrimstr("net-issue-flow-mandated-filing--")),
+                bypass_count: (.value.bypass_count // 0)
+              })
+            | sort_by(.rule)
+          ),
+          # The blanket override, counted separately. The comparison is the
+          # signal worth watching: exemptions rising while overrides fall is the
+          # intended effect; BOTH rising means the gate is being routed around
+          # rather than satisfied.
+          gate_override_count: (($counts["net-issue-flow"].bypass_count // 0)),
+          # Distinct ids, deliberately. `net-issue-flow` + warn is the GENERIC
+          # fail-open (gh outage, empty issue list); the timeout has its own id.
+          # Sharing one id collapsed "the API was down" and "the gate was killed
+          # for running too long" into a single number with two different fixes
+          # — measured at 8 inseparable warns before the split.
+          gate_timeout_warn_count: (($counts["net-issue-flow-timeout"].warn_count // 0)),
+          gate_failopen_warn_count: (($counts["net-issue-flow"].warn_count // 0)),
+          # These two were write-only until now: the single-dash ids that
+          # correctly keep them OUT of gate_exemptions (which matches the
+          # double-dash prefix) also kept them out of every other key, while
+          # orphan_rule_ids filters the whole net-issue-flow prefix. So they
+          # reached this file NOWHERE — consequence (b) of ADR-156 reproduced
+          # one level down, in the PR that diagnosed it. They are distinct
+          # conditions: "could not read the corpus" vs "read it, nothing tagged".
+          # The second is expected rollout noise and should decay to 0; the
+          # first should always be 0.
+          gate_corpus_unreadable_warn_count:
+            (($counts["net-issue-flow-mandated-filing-corpus-unreadable"].warn_count // 0)),
+          gate_zero_tagged_warn_count:
+            (($counts["net-issue-flow-mandated-filing-zero-tagged"].warn_count // 0)),
           # Telemetry-drop sentinel counts (issue #3509). Per-class counts
           # default to 0 when the class has no occurrences. emit_incident
           # has no `flock_timeout` site (indefinite flock per plan-review),
           # so that field is intentionally absent for this sink.
           drops_jq_fail_count: ($drops["jq_fail"] // 0),
-          drops_rotation_fail_count: ($drops["rotation_fail"] // 0)
+          drops_rotation_fail_count: ($drops["rotation_fail"] // 0),
+          # Hook input-contract faults (issue #7164). A PreToolUse hook that
+          # cannot fully parse its stdin emits `ask` in-band AND a row here.
+          # Zero is healthy. Non-zero means at least one hook ran with its
+          # guards disarmed for one tool call — see .claude/hooks/README.md
+          # "Parsing hook input". This counter is the surface that replaces the
+          # orphan_rule_ids listing removed by the exclusion above; the stderr
+          # line below is what makes it visible without reading the JSON.
+          hook_input_fault_count: ($hook_input_faults | map(.value.fire_count) | add // 0),
+          hook_input_fault_reasons: ($hook_input_faults
+            | map({key: (.key | ltrimstr("hook-input-")), value: .value.fire_count})
+            | from_entries)
         }
       }
   ')
@@ -365,6 +443,19 @@ echo "$report" | jq -e '.schema == 1' >/dev/null 2>&1 \
 # silent normalization otherwise. The file IS still written first so
 # operators have forensic context for the orphan list on failed runs.
 orphan_count=$(echo "$report" | jq -r '.summary.orphan_rule_ids | length')
+
+# Hook input-contract faults (issue #7164). Mirrors the drops_* sentinel line
+# above: the count is invisible to an operator who does not read the JSON, and
+# the orphan-gate exclusion that keeps these rule_ids from failing the run also
+# removed the only place they used to appear. Printed BEFORE the DRY_RUN branch
+# so both the dry-run and the write path surface it. Advisory, never fatal — a
+# disarmed hook is already reported in-band by a permissionDecision=ask.
+hook_input_fault_count=$(echo "$report" | jq -r '.summary.hook_input_fault_count // 0')
+if [[ "${hook_input_fault_count:-0}" -gt 0 ]]; then
+  hook_input_breakdown=$(echo "$report" \
+    | jq -r '.summary.hook_input_fault_reasons | to_entries | map("\(.key)=\(.value)") | join(" ")' 2>/dev/null || echo "")
+  echo "WARNING: $hook_input_fault_count PreToolUse hook input-contract fault(s) — a hook could not parse its stdin and ran with guards disarmed [${hook_input_breakdown}]. See .claude/hooks/README.md 'Parsing hook input' (ADR-157)." >&2
+fi
 
 if [[ "$DRY_RUN" == "1" ]]; then
   echo "$report" | jq '{schema, generated_at, summary}'

@@ -593,6 +593,76 @@ t16_argv_ceiling_stage_payloads_exceed_max_arg_strlen() {
   rm -rf "$root"
 }
 
+# --- T17: hook-input-* is not an orphan (issue #7164, plan Phase 1.1) -------
+# .claude/hooks/lib/hook-input.sh emits `hook-input-<reason>` rule_ids for a
+# PreToolUse hook that could not parse its stdin. These are operational events
+# tied to the helper, not AGENTS.md rule ids, so they must not fail the run.
+t17_hook_input_prefix_not_orphan() {
+  local root exit_code=0 metrics
+  root=$(make_fixture_repo)
+  write_event "$root" "hook-input-nonstring" "warn" "2026-08-02T10:00:00Z"
+  write_event "$root" "hr-rule-a-synthetic-test" "deny" "2026-08-02T10:00:01Z"
+
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T17 hook-input-* does not trip the orphan gate" "0" "$exit_code"
+
+  metrics="$root/knowledge-base/project/rule-metrics.json"
+  assert_eq "T17 orphan_rule_ids empty" "0" \
+    "$(jq -r '.summary.orphan_rule_ids | length' < "$metrics")"
+  rm -rf "$root"
+}
+
+# --- T18: the REPLACEMENT surface (issue #7164, plan Phase 1.2) -------------
+# LOAD-BEARING PAIR with T17. The orphan exclusion deletes the only place a
+# counts-only rule_id used to appear, so the exclusion without this counter
+# makes a disarmed hook invisible. Asserts the count, the per-reason
+# breakdown, AND the stderr line — a number nobody prints is not a surface.
+t18_hook_input_fault_count_and_stderr() {
+  local root metrics stderr exit_code=0
+  root=$(make_fixture_repo)
+  write_event "$root" "hook-input-nonstring"   "warn" "2026-08-02T10:00:00Z"
+  write_event "$root" "hook-input-nonstring"   "warn" "2026-08-02T10:00:01Z"
+  write_event "$root" "hook-input-unparseable" "warn" "2026-08-02T10:00:02Z"
+
+  stderr=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" 2>&1 >/dev/null) || exit_code=$?
+  assert_eq "T18 run still exits 0" "0" "$exit_code"
+
+  metrics="$root/knowledge-base/project/rule-metrics.json"
+  assert_eq "T18 hook_input_fault_count sums every reason" "3" \
+    "$(jq -r '.summary.hook_input_fault_count' < "$metrics")"
+  assert_eq "T18 per-reason breakdown: nonstring" "2" \
+    "$(jq -r '.summary.hook_input_fault_reasons.nonstring' < "$metrics")"
+  assert_eq "T18 per-reason breakdown: unparseable" "1" \
+    "$(jq -r '.summary.hook_input_fault_reasons.unparseable' < "$metrics")"
+
+  # The operator-visible half. Without this line the counter is JSON nobody reads.
+  local warned="no"
+  [[ "$stderr" == *"hook input-contract fault"* ]] && warned="yes"
+  assert_eq "T18 non-zero count prints a stderr WARNING" "yes" "$warned"
+  local named="no"
+  [[ "$stderr" == *"nonstring=2"* ]] && named="yes"
+  assert_eq "T18 stderr names the per-reason breakdown" "yes" "$named"
+  rm -rf "$root"
+}
+
+# --- T19: a clean run is silent and reports zero ----------------------------
+# Guards the inverse: the WARNING must not fire when nothing faulted, or it
+# becomes noise the operator learns to skip past.
+t19_hook_input_zero_is_silent() {
+  local root metrics stderr
+  root=$(make_fixture_repo)
+  write_event "$root" "hr-rule-a-synthetic-test" "deny" "2026-08-02T10:00:00Z"
+
+  stderr=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" 2>&1 >/dev/null) || true
+  metrics="$root/knowledge-base/project/rule-metrics.json"
+  assert_eq "T19 hook_input_fault_count is 0 on a clean run" "0" \
+    "$(jq -r '.summary.hook_input_fault_count' < "$metrics")"
+  local warned="no"
+  [[ "$stderr" == *"hook input-contract fault"* ]] && warned="yes"
+  assert_eq "T19 no WARNING when the count is zero" "no" "$warned"
+  rm -rf "$root"
+}
+
 t1_mixed_events
 t2_unused_predicate_uses_fire_count
 t3_orphan_rule_id_exits_nonzero
@@ -610,6 +680,9 @@ t13_empty_log_noop_leaves_committed_file_untouched
 t14_sentinel_only_noop_leaves_file_and_reports_drops
 t15_dry_run_empty_still_prints_json
 t16_argv_ceiling_stage_payloads_exceed_max_arg_strlen
+t17_hook_input_prefix_not_orphan
+t18_hook_input_fault_count_and_stderr
+t19_hook_input_zero_is_silent
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"

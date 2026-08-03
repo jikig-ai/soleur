@@ -30,6 +30,12 @@ trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/.claude/hooks/lib" "$WORK/scripts/lib"
 cp "$REPO_ROOT/.claude/hooks/lib/incidents.sh" "$WORK/.claude/hooks/lib/"
 cp "$REPO_ROOT/.claude/hooks/lib/freeze-lock.sh" "$WORK/.claude/hooks/lib/"
+# hook-input.sh is a HARD dependency of every hook copied below (#7164): they
+# source it fail-hard and refuse to run without it. Omitting it here made all
+# 19 emission assertions fail with an empty ledger — correctly, because the
+# hooks detected their own missing helper and declined to decide rather than
+# passing through silently. Keep this in step with the hooks' dependencies.
+cp "$REPO_ROOT/.claude/hooks/lib/hook-input.sh" "$WORK/.claude/hooks/lib/"
 cp "$REPO_ROOT/.claude/hooks/guardrails.sh" "$WORK/.claude/hooks/"
 cp "$REPO_ROOT/.claude/hooks/pencil-open-guard.sh" "$WORK/.claude/hooks/"
 cp "$REPO_ROOT/.claude/hooks/worktree-write-guard.sh" "$WORK/.claude/hooks/"
