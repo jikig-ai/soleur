@@ -1312,6 +1312,12 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
       # pre-canary sweep is sudo-denied and the durable #5912 wedge remediation is
       # a silent no-op). Fail the provisioner loud rather than ship it missing.
       "grep -q GIT_LOCK_CHARDEVICE_SWEEP /etc/sudoers.d/deploy-inngest-bootstrap",
+      # #7103 — the drop-in activation grant landed. Without it the handler delivers a
+      # corrected drop-in and every try-restart is sudo-denied, so the units keep running
+      # the stale configuration while the delivery reports success — delivery without
+      # activation is the exact defect R2 exists to close, so assert it here rather than
+      # discovering it as a denied restart on the next credential rotation.
+      "grep -q DROPIN_TRY_RESTART /etc/sudoers.d/deploy-inngest-bootstrap",
       # hooks.json re-registers the status hook + maps the state-reporter key (the
       # exact host drift that caused the #4804 freeze: stale hooks.json had neither).
       "grep -q infra-config-status /etc/webhook/hooks.json",

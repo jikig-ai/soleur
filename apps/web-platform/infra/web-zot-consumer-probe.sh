@@ -47,15 +47,6 @@ URL="${WEB_ZOT_CONSUMER_URL:-}"
 # fault classifications below always emit. Set SOLEUR_PROBE_VERBOSE=1 in /etc/default for on-host debug.
 VERBOSE="${SOLEUR_PROBE_VERBOSE:-}"
 
-if [ -z "$REPO" ]; then
-  echo "[zot-probe] FATAL: ZOT_PROBE_REPO unset (source /etc/default/web-zot-consumer-probe) — cannot probe serviceability without a real repository path." >&2
-  exit 1
-fi
-if [ -z "$ZUSER" ] || [ -z "$ZTOK" ]; then
-  echo "[zot-probe] FATAL: ZOT_PULL_USER/ZOT_PULL_TOKEN unset (run under 'doppler run --project soleur --config prd') — an anonymous probe gets 401 on every path and proves nothing." >&2
-  exit 1
-fi
-
 _ping() {
   # Route to the test log if seamed; else fire the real heartbeat ping (two attempts).
   if [ -n "${SOLEUR_ZOT_PROBE_PING_LOG:-}" ]; then
@@ -90,6 +81,35 @@ _canary() {
     printf '%s\n' "$now" > "$m" 2>/dev/null || true
   fi
 }
+
+# --- #7103 R3 4.3: the canary must not depend on the credential it certifies ---------------
+# `--canary-only` emits the beacon and exits, so the unit can invoke it from an ExecStartPre
+# that runs OUTSIDE the `doppler run` wrapper.
+#
+# THE DEFECT THIS CLOSES. The unit's ExecStart is
+#   doppler run --project soleur --config prd -- bash -c '... exec web-zot-consumer-probe.sh'
+# so on a dead prd token `doppler run` exits before the inner bash ever execs and the canary is
+# never emitted. The positive control for "is vector shipping?" was therefore gated behind
+# exactly the credential whose failure it is used to certify — and its absence reads as
+# "vector is dead" rather than "the token is dead". That is the reading that made #7095's
+# telemetry unfalsifiable.
+#
+# It sits BEFORE the FATAL guards below because those require the credentials this mode exists
+# to run without. The guards moved down rather than the check moving up so that a canary-only
+# invocation cannot be turned into a silent no-op by a future guard added above it.
+if [ "${1:-}" = "--canary-only" ]; then
+  _canary
+  exit 0
+fi
+
+if [ -z "$REPO" ]; then
+  echo "[zot-probe] FATAL: ZOT_PROBE_REPO unset (source /etc/default/web-zot-consumer-probe) — cannot probe serviceability without a real repository path." >&2
+  exit 1
+fi
+if [ -z "$ZUSER" ] || [ -z "$ZTOK" ]; then
+  echo "[zot-probe] FATAL: ZOT_PULL_USER/ZOT_PULL_TOKEN unset (run under 'doppler run --project soleur --config prd') — an anonymous probe gets 401 on every path and proves nothing." >&2
+  exit 1
+fi
 
 if [ -n "${SOLEUR_ZOT_PROBE_STATUS_OVERRIDE:-}" ]; then
   CODE="$SOLEUR_ZOT_PROBE_STATUS_OVERRIDE"

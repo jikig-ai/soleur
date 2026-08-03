@@ -171,6 +171,34 @@ assert "infra-validation.yml exists" "[[ -f '$INFRA_VALIDATION' ]]"
 assert "infra-validation.yml invokes this drift-guard" \
   "grep -qE 'bash apps/web-platform/infra/infra-config-handler-bootstrap\.test\.sh' '$INFRA_VALIDATION'"
 
+# --- AC8 (#7103 R2 3.9): deploy_pipeline_fix depends_on the handler bootstrap ---
+# ORDERING IS A TASK, NOT A HOPE. deploy_pipeline_fix PUSHES the payload to the webhook; this
+# bootstrap resource is what DELIVERS the handler that receives it, over the root SSH leg.
+# Without the edge, terraform is free to run the push first, and the push then executes against
+# whatever handler the host already had — so a payload shaped for the new contract is processed
+# by a handler that knows nothing about it, and the apply reports success.
+#
+# The edge exists today. It is asserted here because nothing else pins it, and #6594's nonce-1
+# post-mortem (recorded in push-infra-config.sh) is the case where these two resources raced:
+# the push got its HTTP 202 from a restarting webhook, no files were written, and the status
+# endpoint kept serving the previous frame.
+echo ""
+echo "--- AC8: deploy_pipeline_fix -> infra_config_handler_bootstrap ordering edge ---"
+DPF_BLOCK=$(awk '
+  /^resource "terraform_data" "deploy_pipeline_fix"/ { f=1 }
+  f { print }
+  f && /^}/ { exit }
+' "$SERVER_TF")
+assert "deploy_pipeline_fix block is non-empty" "[[ -n \"\$DPF_BLOCK\" ]]"
+# Anchored on the depends_on ASSIGNMENT, not a bare mention of the name: the identifier also
+# appears in prose comments in this file, and a bare grep would pass against a deleted edge.
+# shellcheck disable=SC2034  # consumed via `eval "$condition"` in assert()
+DPF_DEPENDS=$(printf '%s\n' "$DPF_BLOCK" \
+  | awk '/^[[:space:]]*depends_on[[:space:]]*=[[:space:]]*\[/{f=1} f{print} f && /\]/{exit}')
+assert "deploy_pipeline_fix declares a depends_on list" "[[ -n \"\$DPF_DEPENDS\" ]]"
+assert "the list names terraform_data.infra_config_handler_bootstrap" \
+  "printf '%s' \"\$DPF_DEPENDS\" | grep -qE 'terraform_data\\.infra_config_handler_bootstrap'"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="
 if (( FAIL > 0 )); then

@@ -217,6 +217,37 @@ run_canary 000 yes
 assert "zot probe canary fires INDEPENDENT of zot health (emits even on a 000 unreachable verdict)" \
   "grep -q 'SOLEUR_PROBE_CANARY' '$CANARY_OUT'"
 
+# --- #7103 R3 (4.3): --canary-only runs WITHOUT the credentials the probe otherwise demands ---
+# This is the mode the unit's ExecStartPre invokes, outside the `doppler run` wrapper. It has to
+# work with ZOT_PULL_USER/ZOT_PULL_TOKEN and ZOT_PROBE_REPO all unset, because the entire point
+# is to emit the Source-4 positive control on a host whose prd token is dead — the state in
+# which the canary matters most and, before this, was the one state it could not reach.
+#
+# Asserted behaviourally, not just as source ordering: a guard added above the flag check would
+# leave the ordering assertion in journald-config.test.sh green while turning this into a
+# silent no-op that the operator would read as a dead vector agent.
+rm -f "$CANARY_MARKER"
+CANARY_ONLY_OUT="$(mktemp "$TMP/canaryonly.XXXXXX")"
+CANARY_ONLY_RC=0
+env -u ZOT_PULL_USER -u ZOT_PULL_TOKEN -u ZUSER -u ZTOK -u ZOT_PROBE_REPO \
+  SOLEUR_PROBE_CANARY_MARKER="$CANARY_MARKER" \
+  bash "$SUT" --canary-only >/dev/null 2>"$CANARY_ONLY_OUT" || CANARY_ONLY_RC=$?
+assert "--canary-only EMITS the canary with no credentials present (the dead-token case)" \
+  "grep -q 'SOLEUR_PROBE_CANARY' '$CANARY_ONLY_OUT'"
+assert "--canary-only exits 0 rather than tripping the credential FATAL guard" \
+  "[[ '$CANARY_ONLY_RC' == '0' ]]"
+# It must not run the probe itself — no HTTP verdict, no heartbeat ping.
+assert "--canary-only does NOT emit a zot serviceability verdict (it is a beacon, not a probe run)" \
+  "! grep -qE 'servable|UNREACHABLE|SUPPRESS' '$CANARY_ONLY_OUT'"
+# And it shares the rate-limit, so wiring it as ExecStartPre alongside the in-probe call does
+# not double the emit rate against the Better Stack quota.
+CANARY_ONLY_OUT2="$(mktemp "$TMP/canaryonly2.XXXXXX")"
+env -u ZOT_PULL_USER -u ZOT_PULL_TOKEN -u ZUSER -u ZTOK -u ZOT_PROBE_REPO \
+  SOLEUR_PROBE_CANARY_MARKER="$CANARY_MARKER" \
+  bash "$SUT" --canary-only >/dev/null 2>"$CANARY_ONLY_OUT2" || true
+assert "--canary-only honours the same rate-limit marker (no double emit as ExecStartPre)" \
+  "! grep -q 'SOLEUR_PROBE_CANARY' '$CANARY_ONLY_OUT2'"
+
 echo
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

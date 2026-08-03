@@ -10,13 +10,17 @@
 # CI-only (cannot run here): CodeQL, CLA, e2e Playwright container, tenant-integration
 # (dev Supabase), dependency-review, skill-security-scan, creds-gated propagation probes.
 #
-# NOT covered by any phase below: infra-validation.yml, whose suites live in
-# apps/web-platform/infra/ and are reachable only via that directory's own
-# run-registered-suites.sh. It is a required check and it is runnable locally, so its
-# absence here is a real gap, not a CI-only exclusion — when the diff touches
-# apps/web-platform/infra/, run it alongside this gate (test-all.sh announces this in its
-# preamble). Omitting it from the CI-only list above would have implied coverage this
-# gate does not have (#7014).
+# infra-validation.yml (suites under apps/web-platform/infra/) IS covered by this gate now,
+# indirectly: it invokes `bash scripts/test-all.sh` with no TEST_GROUP, so `want_infra` holds
+# and test-all.sh runs run-registered-suites.sh as a nested suite whenever the diff touches
+# that directory (#7103 R5(a)).
+#
+# So do NOT "run it alongside this gate", which is what this comment used to say. That advice
+# predates the registration and is now actively harmful: both entry points default
+# TMPDIR=/var/tmp, so a concurrent second run reproduces the sibling-contention shape and can
+# self-inflict a false RED — while paying the ~4-5 minute cost twice. Read test-all.sh's
+# epilogue, which states whether the runner actually ran, and invoke it separately only when
+# that line says it did not (#7014 is why the coverage status is stated here at all).
 #
 # Usage:
 #   bash plugins/soleur/scripts/grok-pre-push-gate.sh
