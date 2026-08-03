@@ -1,4 +1,4 @@
-# ADR-159 — A project-scoped Doppler service account reads the fleet; the coverage floor is declared, not derived
+# ADR-160 — A project-scoped Doppler service account reads the fleet; the coverage floor is declared, not derived
 
 - **Status:** Accepted
 - **Date:** 2026-08-03
@@ -12,15 +12,26 @@
   floor), `scripts/check-cloudflare-token-drift.sh` (the detector),
   `.github/workflows/scheduled-terraform-drift.yml` (the only consumer of the credential)
 
-> **Ordinal — provisional until merge, and this is the second time it has moved.** Authored as
+> **Ordinal — provisional until merge, and this is the THIRD time it has moved.** Authored as
 > **ADR-155**; 155, 156 and 157 were all claimed on `origin/main` by sibling PRs mid-pipeline, so
 > it was renumbered to **158**. While this branch was still in flight, **158** was itself claimed
-> by `ADR-158-kb-file-tree-host-is-a-derived-value.md` (merged via #7189), so it is renumbered
-> again to **159**. An ordinal picked on a branch is a *claim*, not a reservation: nothing in the
-> repo reserves one, and the collision is invisible from a branch that is behind `origin/main`.
-> Re-check against a freshly fetched `origin/main` immediately before merge, and sweep every
-> citation — the `.tf` files, the plan, the spec, the tasks file and `decision-challenges.md` — in
-> the same PR.
+> by `ADR-158-kb-file-tree-host-is-a-derived-value.md` (merged via #7189) — renumbered to **159**.
+> A rebase onto `origin/main` then pulled in `ADR-159-delivery-is-not-activation.md`, so it is
+> renumbered a third time to **160**.
+>
+> An ordinal picked on a branch is a *claim*, not a reservation: nothing in the repo reserves one,
+> and the collision is invisible from a branch that is behind `origin/main` — each of the three
+> was surfaced only by a fetch or a rebase, never by a gate. Re-check against a freshly fetched
+> `origin/main` immediately before merge, and sweep every citation — the `.tf` files, the plan,
+> the spec, the tasks file and `decision-challenges.md` — in the same PR.
+>
+> **Sweep the OWN-ordinal only.** A blanket `ADR-<n>` → `ADR-<n+1>` replace is the wrong tool and
+> has now mis-fired twice on this branch: once rewriting a reference *inside this very note* (so
+> it read "158 was claimed by ADR-158", a sentence that is false and reads as true), and once
+> rewriting bare `ADR-159` citations in ten files belonging to *other* work — `ci-deploy.sh`,
+> `model.c4`, the #7103 spec — that legitimately cite the sibling ADR-159. Restrict the sweep to
+> files in this branch's own diff (`git diff --name-only origin/main...HEAD`), and remember the
+> prose form: a replace keyed on `ADR-159` silently misses a bold bare **159** in a sentence.
 
 ## Context
 

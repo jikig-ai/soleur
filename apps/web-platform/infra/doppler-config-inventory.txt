@@ -60,7 +60,7 @@
 # pass F1, F2, F3 and the run-time assertion with NO test edited. The ratchet is back at its old
 # notch and the diff shows nothing unusual. The pinned `13`s are the only thing that makes a
 # REDUCTION visible, so raising them is a deliberate edit and never an automated one. Never
-# lower them. See ADR-159, "Known limitations".
+# lower them. See ADR-160, "Known limitations".
 ci
 cli
 cli_ops

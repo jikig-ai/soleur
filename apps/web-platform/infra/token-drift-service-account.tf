@@ -12,7 +12,7 @@
 # NOT config-scoped. That is the shape this file mints. #7159's option-table premise "there is no
 # single project-scoped read token to mint" is FALSIFIED for this class — true of
 # `doppler_service_token`, false of `doppler_service_account` in the pinned DopplerHQ/doppler
-# v1.21.2 (`.terraform.lock.hcl`). ADR-159 records that, the census behind it, and the
+# v1.21.2 (`.terraform.lock.hcl`). ADR-160 records that, the census behind it, and the
 # gate-versus-report split the coverage ladder rests on.
 #
 # FOUR RESOURCES, ONE CREDENTIAL: the account (the identity), the project membership (the GRANT),

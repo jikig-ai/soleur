@@ -155,7 +155,7 @@ none of the escalation hops disclosed below, because those live in `prd` root.
 environment's **7** configs are the detector header's own motivating case, which cites a
 credential "stale in 5 of 7 configs".
 
-> **Provenance for ADR-159.** The dispositive evidence is this census, not the
+> **Provenance for ADR-160.** The dispositive evidence is this census, not the
 > `inheriting=false / inherits=[]` metadata. That metadata describes Doppler's *explicit
 > cross-config inheritance feature*, which is off everywhere, and is **not** evidence about
 > the built-in environment-root-to-branch behaviour. The census is sufficient for every
@@ -588,7 +588,7 @@ and auto-closes when the credential lands.
   It reads no credential and makes no network call, so it cannot be defeated by narrowing the
   credential, and it cannot red a merge because live Doppler grew.
 
-- **FR9 — the ADR.** `ADR-159` records: that a `doppler_service_token` is config-scoped and a
+- **FR9 — the ADR.** `ADR-160` records: that a `doppler_service_token` is config-scoped and a
   `doppler_service_account` with a project membership is not (with the falsified
   "no project-scoped read token exists" premise from #7159); that the `viewer` role is the
   least-privileged role carrying `enclave_project_config_secrets_read`; the decision to leave
@@ -600,7 +600,7 @@ and auto-closes when the credential lands.
 
 ## Architecture Decision (ADR/C4)
 
-**Create `ADR-159 — A project-scoped Doppler service account reads the fleet; the coverage floor
+**Create `ADR-160 — A project-scoped Doppler service account reads the fleet; the coverage floor
 is declared, not derived`** as an in-scope task of this plan. It corrects reasoning currently
 carried in shipped comments, in the workflow's remedy prose, in a runbook and in the #7159
 option table, and it records why the denominator may report but must not gate.
@@ -613,7 +613,7 @@ option table, and it records why the denominator may report but must not gate.
 > behind `origin/main` cannot see the collision at all — re-check against a freshly fetched
 > `origin/main` immediately before merge. On renumber, sweep this plan, the spec, the tasks file,
 > `decision-challenges.md`, the `.tf` citations and every AC naming it:
-> `grep -rn 'ADR-159' knowledge-base/project/{plans,specs}/feat-one-shot-7159-doppler-prd-read-token-coverage/`
+> `grep -rn 'ADR-160' knowledge-base/project/{plans,specs}/feat-one-shot-7159-doppler-prd-read-token-coverage/`
 
 Related: ADR-154, ADR-007, ADR-149.
 
@@ -1284,7 +1284,7 @@ reporting steps is not); `tests/scripts/test-destroy-guard-counter-web-platform.
 |---|---|
 | `apps/web-platform/infra/token-drift-service-account.tf` | FR1 — the three Doppler resources plus the Actions secret |
 | `apps/web-platform/infra/doppler-config-inventory.txt` | FR8 — 13 names, report only |
-| `knowledge-base/engineering/architecture/decisions/ADR-159-project-scoped-service-account-and-declared-coverage-floor.md` | FR9 |
+| `knowledge-base/engineering/architecture/decisions/ADR-160-project-scoped-service-account-and-declared-coverage-floor.md` | FR9 |
 | `knowledge-base/project/specs/feat-one-shot-7159-doppler-prd-read-token-coverage/{spec,tasks,decision-challenges}.md` | planning artifacts |
 
 No new `.test.sh`. (`plugins/soleur/test/*.test.sh` is auto-discovered by
@@ -1329,7 +1329,7 @@ No new `.test.sh`. (`plugins/soleur/test/*.test.sh` is auto-discovered by
 | A lost or clobbered state write on the **create** orphans a live project-wide credential in Doppler with no Terraform record — unrotatable by `-replace=`, and it accumulates on the next run. The R2 backend has no conditional writes and `use_lockfile = false`; the Actions concurrency group is the sole serializer. The "dropped `-target=` surfaces as drift" safeguard does **not** cover this: an object absent from state is invisible to `plan`, and provider v1.21.2 ships no data source that could enumerate service accounts or their tokens. | The count-asserting `live_verification` in `## Encryption Posture` is the detector for this mode; the `-replace=` path in the `.tf` header is the remedy. **This risk is strictly larger at this shape** — an orphan now reads the whole project rather than one config — and it is disclosed as such rather than carried over unchanged. |
 | The credential is a repository-level secret on a public repo; the governing control is who can merge under `.github/workflows/`. `CODEOWNERS` pins that path to the operator, but its own header records the branch-protection rule enforcing CODEOWNERS review as an unfinished follow-up, and no ruleset in IaC enforces it. | Named rather than assumed. This is the same control that already governs `DOPPLER_TOKEN_PRD`, so the change does not alter it; the gap is pre-existing and is called out so a reviewer does not read "repository-scoped like every sibling" as a control. |
 | The issue body and the ops emails are API payloads, so GitHub's log masking does not reach them — and the repo is public, so the coverage issue body is world-readable. | AC30 pins that those bodies carry key/config **names** and counts only, never values. `configs_unread` is a list of Doppler config names, which the committed `.tf` files already disclose. |
-| ADR-159's ordinal is claimed by a sibling PR. | Provisional; the renumber sweep is named above. |
+| ADR-160's ordinal is claimed by a sibling PR. | Provisional; the renumber sweep is named above. |
 
 ---
 
@@ -1468,7 +1468,7 @@ prose:
   AC20 names integers; AC21 uses `git diff` rather than a glob matching 54 existing ADRs; the
   post-merge section no longer claims its criteria are approval-free. `credentials` was renamed
   `configs_floor` to end a collision with "credentials verified".
-- **R14 (P2).** ADR-159's provenance moved from the inheritance metadata (which describes a
+- **R14 (P2).** ADR-160's provenance moved from the inheritance metadata (which describes a
   different Doppler feature) to the per-config census. The `DOPPLER_TOKEN_PRD` consumer count was
   corrected from five to six, and the source-derivation rejection was restated so it is
   reproducible.
