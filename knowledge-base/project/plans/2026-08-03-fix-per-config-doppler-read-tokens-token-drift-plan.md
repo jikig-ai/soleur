@@ -20,11 +20,15 @@ close on a live scheduled run, not at merge (see AC-P1 and SE-3).
 > `knowledge-base/project/specs/feat-one-shot-7234-per-config-doppler-service-tokens/spec.md`
 > exists; `tasks.md` is derived from this plan.
 
-> **Revision note.** This is v2. A 5-agent review panel (architecture-strategist,
+> **Revision note.** This is v2, deepened. A 5-agent review panel (architecture-strategist,
 > spec-flow-analyzer, kieran, dhh, code-simplicity) plus a CTO domain review and a scoped
 > strong-model consult found **4 P0s and 12 P1s** against v1, including three claims v1 made
 > about code that were false when read. All are applied below; the audit trail is
-> §Review Findings Applied.
+> §Review Findings Applied. `deepen-plan`'s halt gates (4.6 user-brand impact, 4.7
+> observability, 4.8 PAT-shaped variables, 4.9 UI wireframe, 4.10 encryption posture) all pass;
+> 4.5's resource-shape trigger fired and is answered by R10; 4.55 does not trigger (no serving
+> surface goes offline — the change touches credentials and a workflow, not a host, a hot-table
+> migration, or a router).
 
 ## Overview
 
@@ -918,6 +922,25 @@ proof); `learnings/best-practices/2026-04-22-verification-claims-in-plans-decay-
 **R9 — tooling verified locally** (2026-08-03): `terraform` v1.10.5, `doppler` v3.75.3, `jq`
 1.8.1, `shellcheck` 0.10.0. Next free ADR ordinal on freshly-fetched `origin/main` is **166**.
 `python3 scripts/lint-infra-no-human-steps.py` returns `OK` against this plan.
+
+**R10 — this change's apply cannot be blocked by the SSH bridge (measured step order).** The
+`apply` job runs, in order: `Terraform plan (allow-list, non-SSH resources only)` (`:434`) →
+`Pre-apply entrypoint gate` (`:733`, ADR-136 — creates no ruleset here, so it passes) →
+**`Terraform apply` (`:757`)** → … → `Check CI-SSH token presence` (`:869`) → `CF Tunnel SSH
+bridge (gated)` (`:888`) → `Terraform apply (SSH-provisioned resources, over the bridge)`
+(`:897`). Every resource this plan creates or destroys rides the **non-SSH** apply at `:757`,
+which completes **before** the bridge is even attempted. So the #7095-class failure (a rotated
+`ci_ssh` Access token stranding the apply) cannot prevent AC-P1 from landing — a materially
+different risk profile from a plan whose resources rode Block B. Recorded because deepen-plan's
+resource-shape trigger fires on any apply whose job contains `provisioner`/`connection` blocks,
+and the honest answer is "yes it does, and they run after us".
+
+**R11 — no Context7 lookup was performed for the Doppler provider, deliberately.** Context7
+returns latest docs, not version-pinned ones, and the pinned provider is `1.21.2`. Nine live
+sibling `doppler_service_token` resources in this very root already exercise `project`, `config`,
+`name`, `access` and `.key` against that exact pin — a stronger, version-correct source than
+vendor docs. `doppler_service_token` accepting `access = "read"` and exposing `.key` is verified
+from `kb-drift.tf:102-110`, `web-probe-read-token.tf:33`, `workspaces-luks.tf:128` and six more.
 
 ## Alternatives Considered
 
