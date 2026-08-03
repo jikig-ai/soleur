@@ -1149,11 +1149,26 @@ Every criterion is a command whose output decides it.
   = 1, and producer test P15 passes.
 - **AC33 — the grant is exactly as narrow as it was chosen to be, and no narrower.** In
   `apps/web-platform/infra/token-drift-service-account.tf`:
-  `grep -cE '^\s*workplace_role\s*='` = 0, `grep -cE '^\s*workplace_permissions\s*='` = 0 (the
-  membership is the only grant), and `grep -cE '^\s*environments\s*='` = 0 (project-wide, per
-  the 2026-08-03 census). Each absence is required to be explained by an adjacent comment,
-  asserted by `grep -c 'deliberately unset'` >= 3 — an unexplained absence reads as an
-  oversight to the next reader and invites a "fix".
+  `grep -cE '^\s*workplace_role\s*='` = 0, `grep -cE '^\s*environments\s*='` = 0 (project-wide,
+  per the 2026-08-03 census), and `grep -cE '^\s*workplace_permissions\s*=\s*\[\]\s*$'` = **1**
+  — an explicitly EMPTY list, never a populated one. Each is required to be explained by an
+  adjacent comment, asserted by `grep -c 'deliberately unset'` >= 2 — an unexplained absence
+  reads as an oversight to the next reader and invites a "fix".
+
+  **Amended 2026-08-03, at implementation.** This AC originally required
+  `workplace_permissions` to be ABSENT (= 0), alongside `workplace_role`. That is
+  unsatisfiable: the pinned `DopplerHQ/doppler v1.21.2` enforces `ExactlyOneOf` on the pair.
+  With neither set, `terraform validate` fails `"one of workplace_permissions,workplace_role
+  must be specified"`; with both, `"Invalid combination of arguments"`. Verified by mutating
+  the as-written file and re-running `validate` (fails), then restoring (passes) — not from
+  the schema dump, which lists both as merely `optional` because `ExactlyOneOf` is
+  provider-side validation and does not appear in `providers schema -json`.
+
+  The design intent is unchanged and is what the assertion now pins: an empty list is the
+  least-privileged satisfying value — zero workplace-wide permissions, and no assumption about
+  the workplace-role vocabulary (a different endpoint, never measured here) — so the project
+  membership remains this identity's only grant. The `\[\]\s*$` anchor is load-bearing: it
+  fails the moment anyone adds an entry, which a bare `= 1` count would not catch.
 - **AC34 — `expires_at` is absent by decision.**
   `grep -cE '^\s*expires_at\s*=' apps/web-platform/infra/token-drift-service-account.tf` = 0,
   and the header contains the literal `expires_at` in the prose explaining why (FR1). The
