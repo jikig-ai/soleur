@@ -351,10 +351,12 @@ jobs:
           if [[ "$inv_age" =~ ^[0-9]+$ ]] && (( 10#$inv_age > 90 )); then
             echo "token-drift coverage caveat: the committed config inventory is ${inv_age} days old, so the denominator in '${cov_ratio}' may not reflect the project's current config set. Regenerate it with the command in the file's own '# command:' header."
           fi
-          if [[ "$coverage" == "single-config" ]]; then
-            echo "::warning::Cloudflare token drift scanned ${configs} Doppler config(s) — this run CANNOT detect fan-out drift (a value stale in a config it never read), which is the failure class this detector exists for. The verdict '${verdict}' is scoped to what was visible, not to the fleet. Remedy: the DOPPLER_TOKEN repo secret is a service token scoped to prd_terraform; a project-scoped token (or a second secret used only by this step) restores fleet-wide coverage."
+          # TWO ARMS, matching the two non-healthy rungs. The retired `single-config` arm
+          # is gone with the state: at a floor of 13 it collapses into `degraded`.
+          if [[ "$coverage" == "degraded" ]]; then
+            echo "::warning::Cloudflare token drift read ${cov_ratio} Doppler config(s), below its declared floor of ${cfg_floor} — this run CANNOT detect fan-out drift in the configs it did not read, which is the failure class this detector exists for. The verdict '${verdict}' is scoped to what was visible, not to the fleet. Unread: ${cfg_unread}. The credential is missing, empty, revoked, or has been NARROWED — it is a doppler_service_account holding a viewer membership on the whole soleur project, so there is nothing left to widen; compare the ratio and the unread list against the floor."
           elif [[ "$coverage" == "unknown" ]]; then
-            echo "::warning::Cloudflare token drift could not measure its own coverage (configs='${configs}') — the verdict file was unreadable or malformed. Treat the verdict '${verdict}' as unscoped."
+            echo "::warning::Cloudflare token drift could not measure its own coverage (configs='${configs}', floor='${cfg_floor}', ratio='${cov_ratio}') — the verdict file was unreadable or malformed. Treat the verdict '${verdict}' as unscoped."
           fi
           # Re-raise the detector's exit code AFTER the outputs are written. Capturing rc
           # with `|| rc=$?` makes this block succeed, which would have flipped this step's
