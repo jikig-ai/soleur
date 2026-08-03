@@ -1,4 +1,4 @@
-# ADR-160: Memory backstop via systemd transient scopes
+# ADR-161: Memory backstop via systemd transient scopes
 
 - **Status:** accepted
 - **Date:** 2026-08-02

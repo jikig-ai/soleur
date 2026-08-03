@@ -9,7 +9,7 @@ tags: [systemd, cgroups, silent-failure, test-vacuity, mutation-testing, verific
 
 # The verification I shipped could not fail, and my instrument measured the wrong machine
 
-Building the memory backstop (#7166, ADR-160) produced more lessons about *verifying*
+Building the memory backstop (#7166, ADR-161) produced more lessons about *verifying*
 than about cgroups. The feature exists because a predecessor shipped a hook that never
 executed while its suite was 26/26 green. I then reproduced that same failure shape
 three separate times in my own work, each by a different route, and each time it was
@@ -283,7 +283,7 @@ can silently fail makes the assertion after it vacuous.
 
 ## Related
 
-- `ADR-160-memory-backstop-via-systemd-transient-scopes.md`
+- `ADR-161-memory-backstop-via-systemd-transient-scopes.md`
 - `2026-08-02-ps-named-it-2-1-220-so-a-grep-that-ate-the-box-read-as-a-claude-leak.md` (the incident)
 - `2026-07-30-every-green-signal-i-had-certified-a-gate-with-six-fail-open-paths.md`
 - `2026-07-27-my-refutation-measured-a-shim-and-my-safe-fixture-hid-12240-deletions.md`
