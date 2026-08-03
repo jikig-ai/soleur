@@ -1,4 +1,4 @@
-# ADR-161 — A birth filesystem may only carry features the target image's kernel can mount
+# ADR-162 — A birth filesystem may only carry features the target image's kernel can mount
 
 - **Status:** Accepted
 - **Date:** 2026-08-03
@@ -14,13 +14,16 @@
   `apps/web-platform/infra/cloud-init-git-data.yml` (`STAGE=luks_open`),
   `apps/web-platform/infra/git-data-birth-fs-fingerprint.txt` (the classified allowlist)
 
-> **Ordinal.** THREE collisions while this branch was open. Provisionally 158 at plan time;
+> **Ordinal.** FOUR collisions while this branch was open. Provisionally 158 at plan time;
 > 158 -> 159 after `ADR-158-kb-file-tree-host-is-a-derived-value.md` landed on `origin/main`;
 > then 159 -> **161** at review time after `ADR-159-delivery-is-not-activation.md` (PR #7146)
 > ALSO landed on main, and 160 turned out to be claimed by unmerged sibling branch
-> `feat-one-shot-7159-doppler-prd-read-token-coverage`. 161 was verified free against both
-> `origin/main` and every remote branch, not merely against main's maximum — checking only
-> main is what let the second collision through. Renumbered MINE, never main's: applied only
+> `feat-one-shot-7159-doppler-prd-read-token-coverage`. Then 161 collided TOO, during the
+> ship phase: a BEHIND auto-sync pulled `ADR-161-memory-backstop-via-systemd-transient-scopes.md`
+> in from main. Final: **162**. The lesson is not "check harder before you start" — it is that
+> on a repo merging this fast, **an ADR ordinal cannot be reserved at all**; it must be
+> re-verified after every sync, right up to the merge. `/ship` Phase 7 says exactly this and
+> it is the only reason this one was caught before landing a duplicate on main. Renumbered MINE, never main's: applied only
 > to this feature's own artifacts, and deliberately NOT to the plan lines that use a blanket
 > `s/ADR-158/.../g` as the worked example of the sweep this rule forbids.
 

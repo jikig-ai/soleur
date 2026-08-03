@@ -563,7 +563,7 @@ runcmd:
       # Project-quota ENFORCEMENT is deferred (needs an image change) — #7217.
       #
       # DO NOT RE-ADD `quota`. Rationale + the five-candidate disposition + every
-      # measurement: ADR-161. Per-feature adjudication (which classes are mount-safe):
+      # measurement: ADR-162. Per-feature adjudication (which classes are mount-safe):
       # apps/web-platform/infra/git-data-birth-fs-fingerprint.txt, which is the file R1
       # machine-reads. Guards: R1 (runtime, authoritative when it runs) + B16 (static, the
       # only coverage on a docker-less machine).
