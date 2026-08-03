@@ -11,7 +11,40 @@ Per ADR-084, the operator's stated direction is the default; these are surfaced,
 > "What changed at deepen-plan" block inside DC-1. DC-2 is **withdrawn**: its premise was
 > refuted by measurement.
 
-## DC-1 — Three independent reviewers now recommend splitting this into 2 PRs
+## DC-1 — RESOLVED at /work, 2026-08-03: shipped as one PR, scope split instead
+
+**Outcome: the operator kept the single PR and split the SCOPE, not the branch.**
+
+The decision arrived on its own during Phase 5, before anyone had to choose in the
+abstract. Implementing #7173(a) required widening the fixed-slot contract, and the
+per-slot widening turned out to open two holes the design does not close:
+
+1. An `allow`-vs-`ask` collision that D1's decoupling makes reachable **for the first
+   time** — `guardrails.sh` asks on a non-string `.tool_input.command` while
+   `skill-security-scan-write` parses its own slots cleanly and emits its unconditional
+   explicit `allow`. Claude Code's resolution order for that is unestablished, and if
+   `allow` wins it neutralises the responder's ask. Under today's single shared token
+   both hooks fail together and both go silent, so it cannot arise. Establishing it needs
+   a live hook registration and a real permission prompt.
+2. A silent fail-open in the other direction (a non-string `.tool_input.content` leaves
+   the core group clean, the scanner exits 0, Write allowed, scanner never ran).
+
+So the blocking question was never "one PR or two" — it was whether to build a
+trust-boundary change on an unverified harness invariant, which ADR-156 forbids.
+
+**What shipped:** #7190 complete, plus #7173(b) — which measurement showed was a real
+bypass and a real availability bug, not the documentation exercise the plan assumed.
+**What did not:** #7173(a), tracked in **#7219** with all seven design corrections and
+the three probe requirements carried forward. #7173 stays open.
+
+The reviewers' split boundary was Phase 3/4. The actual cut landed one phase later, at
+4/5 — the ADR and the C4 amendment shipped because they document decisions that were
+*made*, and only the implementation that depends on unrun probes was held back.
+
+<details>
+<summary>Original challenge as persisted at plan time</summary>
+
+### Three independent reviewers recommend splitting this into 2 PRs
 
 **Your stated direction:** "Implement and ship #7190 and #7173 together — both harden the
 ADR-156 hook-input trust boundary … and both touch `.claude/hooks/lib/hook-input.sh` and
@@ -82,6 +115,8 @@ item in either issue.
 
 Holding #7190 behind that work is the concrete cost of the single-PR shape. That is the
 whole of the argument — the decision remains yours.
+
+</details>
 
 ---
 

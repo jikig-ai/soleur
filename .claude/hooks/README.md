@@ -142,10 +142,25 @@ the 20 hooks that can change whether a tool call proceeds:
 clause 1 (no `eval`), which the contract test enforces repo-wide.
 
 *Genuinely advisory* (6) — they emit no `permissionDecision` at all, so a
-mis-parsed field costs a hint rather than a guard:
+mis-parsed field costs a hint rather than a guard. **A shared "advisory"
+blanket is not a reason**, so each carries its own, and two of them are
+deliberately uncomfortable:
 
-`agent-token-tee` · `docs-cli-verification` · `pencil-collapse-guard` ·
-`phase-surface-hint` · `skill-context-queries` · `skill-invocation-logger`
+| Hook | Why it stays exempt |
+|---|---|
+| `agent-token-tee` | Reads an entire `.tool_response.*` family the extractor does not model at all. Migrating it is not a slot widening but a second contract. |
+| `docs-cli-verification` | Emits a reminder string only. Every field it reads is used for prose, never for a path test or a decision. |
+| `pencil-collapse-guard` | Advisory in its output, **but it restores a file from git** on a `filePath` it does not type-assert. Eyes open: the write is bounded by `git checkout` semantics on a path that must already be tracked, so a non-string yields a failed checkout rather than an arbitrary write — but this is the weakest of the six and it should migrate first among them. |
+| `phase-surface-hint` | Pure stdout hint keyed on the phase; reads no attacker-influenced path. |
+| `skill-context-queries` | Emits suggested queries; a mis-parsed field produces a worse suggestion, never a different decision. |
+| `skill-invocation-logger` | Appends a log line. Worst case is a malformed log entry, and the line is already treated as untrusted text downstream. |
+
+*Not a bash hook at all* (1) — and absent from both lists until #7173 caught it,
+which is how an exemption list becomes silent residue:
+
+| Hook | Why it stays exempt |
+|---|---|
+| `security_reminder_hook.py` | A **PreToolUse hook on the `Edit` matcher**, so it is inside ADR-156's scope, but it is Python and cannot `source` a bash helper. It reads the same model-controlled envelope and is explicitly fail-open. Note it is also a **second telemetry writer**: its `emit_incident(…, cmd=…)` path has its own truncation and is not covered by the contract suite's no-payload-content assertion. Converging it needs a Python port of the extractor, not a migration. |
 
 *Gating, but deferred* (4) — **these DO decide whether a tool call proceeds** and
 are in ADR-156's binding scope. They are not exempt on principle; they are
@@ -158,19 +173,48 @@ blocked on two concrete things, and they are the priority set in the follow-up:
 | `pencil-open-guard` | `mcp__pencil__open_document` | `deny` |
 | `skill-security-scan-write` | `Write` | `deny`, `ask`, `allow` |
 
-The two blockers, both real:
+The blockers, **as measured** — two of the three originally written here were
+wrong, and are corrected rather than deleted so the correction is legible:
 
 1. **Every one needs a field the extractor does not publish** — `filePath`
-   (camelCase), `.tool_input.skill`, `.tool_input.content`, `.tool_input.new_string`,
-   and — for `durable-reminder-prefer-inngest` — `.durable` / `.recurring`, which
-   are legitimately **booleans**. `all(type == "string")` structurally cannot
-   express a boolean field, so migrating these widens the fixed-slot contract.
-   That is exactly what ADR-157 rejected a variadic API to avoid, so it is a
-   design decision, not a paste.
-2. **Three of their matchers have no designated responder.** `guardrails.sh` is
-   wired on `Bash` and `Write|Edit|MultiEdit|NotebookEdit` only, so `CronCreate`,
-   `Skill` and `mcp__*` payloads have nothing to emit the `ask`. Migrating them
-   fails the designated-responder invariant (AC14) until that is resolved.
+   (camelCase), `.tool_input.skill`, `.tool_input.content`,
+   `.tool_input.new_string`. `all(type == "string")` is a single shared status
+   token, so publishing these widens the fixed-slot contract. That is exactly
+   what ADR-157 rejected a variadic API to avoid, so it is a design decision,
+   not a paste. **Still true.**
+2. ~~Three of their matchers have no designated responder.~~ **Measured false —
+   it blocks zero of the four.** The contract suite's A9 resolves coverage at
+   the **tool** level, not by matcher-string equality: `Write` and
+   `Write|Edit|MultiEdit|NotebookEdit` are different strings that both fire on a
+   Write. `guardrails.sh`'s covered set is `Bash Edit MultiEdit NotebookEdit
+   Write`, so `skill-security-scan-write` (`Write`) and
+   `new-scheduled-cron-prefer-inngest` (`Write|Edit`) already have a responder.
+   `CronCreate` and `mcp__pencil__open_document` carry **exactly one hook each**,
+   so "election" there is degenerate — a data change, not a mechanism.
+3. ~~`durable-reminder-prefer-inngest`'s booleans block it.~~ **Measured false.**
+   That hook already performs a `has()`-guarded, `//`-avoiding boolean read, with
+   an in-source comment distinguishing *absent* from *present-and-false*. Its
+   booleans are type-safe today; its only unprotected field is
+   `.tool_input.prompt`, a string.
+4. **NEW, and the one that actually blocks the design.** Widening the shared
+   status token into per-slot flags — the obvious fix for (1) — makes an
+   `allow`-vs-`ask` collision reachable **for the first time**. On a Write
+   carrying a non-string `.tool_input.command`, `guardrails.sh` would fail its
+   core group and ask, while `skill-security-scan-write` parses its own slots
+   cleanly and emits its unconditional explicit `allow`. Claude Code's
+   resolution order for two hooks emitting different decisions on one call is
+   **unestablished**, and if `allow` wins it neutralises the responder's ask.
+   Under today's single shared token both hooks fail together and both go
+   silent, so the combination cannot arise. Establishing the order needs a live
+   hook registration and a real permission prompt; per ADR-156 it must not be
+   assumed.
+5. **NEW.** The same decoupling creates a silent fail-open in the other
+   direction: a non-string `.tool_input.content` would leave `guardrails.sh`'s
+   core group clean (no ask) while `skill-security-scan-write` fails its own
+   group and exits 0 — **Write allowed, scanner never ran**. That is ADR-157's
+   explicitly rejected "fail open with a loud incident", and a regression
+   against that hook's own current posture, which already asks rather than
+   allows on both of its cannot-evaluate branches.
 
 `skill-security-scan-write` is the sharpest of the four: it can emit an explicit
 `allow`, which skips the permission prompt outright, and an array
@@ -178,17 +222,35 @@ The two blockers, both real:
 HIGH-RISK pattern. `pencil-open-guard` is the clearest ADR-156 case — an `mcp__*`
 matcher is precisely the "other tool shapes" whose envelope this repo does not
 define — but it is one of the *harder* migrations, not the easiest, because it
-needs the unpublished camelCase `filePath` **and** has no responder.
+needs the unpublished camelCase `filePath`.
 
 Tracked in **#7173**.
 
-`.openhands/hooks/` mirrors carry a **minimal in-place** type assertion instead
-of this helper: a different envelope (`.working_dir`, `.tool_input.path`) and a
-different protocol (`exit 2` + `{"decision":"deny"}`, with no `ask`).
-Convergence is a tracked follow-up.
+### The `.openhands/` mirror
+
+The three mirrors (`guardrails.sh`, `pre-merge-rebase.sh`,
+`worktree-write-guard.sh`) keep a **minimal in-place** type assertion rather than
+this helper: a different envelope (`.working_dir`, `.tool_input.path`) and a
+different protocol (`exit 2` + `{"decision":"deny"}`, with no `ask` and no kill
+switch). What each reason class does there is decided in
+[ADR-160][adr160] — `nonstring`, `separator` and `unparseable` deny;
+`jq_missing` and `internal` fail **open, loudly**, because the repair for a
+missing `jq` is itself a tool call that a deny would also block.
+
+This is an in-place decision, not an unexamined gap. Convergence onto the shared
+extractor would buy DRY and three jq forks down to one on a non-primary harness,
+and would pay for it with a cross-tree fail-hard `source` — whose only precedent
+in that file (`freeze-lock.sh`) is deliberately fail-**soft** for reasons that do
+not apply to an input helper.
+
+The divergence is **executable**, not just documented:
+`pre-merge-rebase-parity.test.sh` asserts all three classes. That matters because
+that suite's header records two prior silent divergences between the harnesses,
+both undetected precisely because nothing ran the comparison.
 
 [adr155]: ../../knowledge-base/engineering/architecture/decisions/ADR-156-hook-stdin-is-model-controlled-and-untrusted.md
 [adr156]: ../../knowledge-base/engineering/architecture/decisions/ADR-157-a-hook-that-cannot-parse-its-input-asks.md
+[adr160]: ../../knowledge-base/engineering/architecture/decisions/ADR-160-what-ask-means-on-a-harness-with-no-ask-state.md
 
 ## Incident telemetry (ADR-2)
 

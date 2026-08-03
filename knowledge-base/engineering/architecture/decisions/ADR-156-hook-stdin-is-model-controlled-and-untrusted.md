@@ -8,7 +8,9 @@
   this boundary implies), `.claude/hooks/lib/hook-input.sh` (the mechanism),
   `.claude/hooks/security_reminder_hook.py` (the pre-existing Python precedent this converges on),
   `knowledge-base/engineering/architecture/diagrams/model.c4` (the `claude -> hooks` edge that
-  encodes this boundary)
+  encodes this boundary),
+  [ADR-160](./ADR-160-what-ask-means-on-a-harness-with-no-ask-state.md) (extends this boundary to
+  the `.openhands/` mirror, whose protocol has no `ask` state)
 
 > **Ordinal.** Renumbered 155 -> 156 at `/ship` time: a sibling PR landed its own ADR-155
 > (cross-gate exemption markers) on `origin/main` during this pipeline, and `adr-ordinals` is not a
