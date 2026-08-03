@@ -12,10 +12,12 @@
 > `inngest-inventory.test.sh` 120 → 139 assertions. Registered infra suites 87/87;
 > `scripts/test-all.sh` 242/242.
 >
-> **Still open and still blocking:** findings **2, 3, 4, 5, 6, 7** (all P1), the P2
-> and P3 lists, and **P2-b / M7** — deleting a test function call still exits 0,
-> because this suite has no assertion-count floor. M7 is the one that can silently
-> undo the P1-a work above.
+> Also applied: **P2-b** (assertion-count floors on both `inngest-inventory.test.sh`
+> and `inngest.test.sh`), which closes **M7** — unhooking a test function now exits
+> non-zero instead of reporting a smaller, entirely green result.
+>
+> **Still open and still blocking:** findings **2, 3, 4, 5, 6, 7** (all P1), plus the
+> remainder of the P2 and P3 lists.
 
 7 of 9 agents reported (test-design-reviewer, code-quality-analyst still running when this
 was written). Independent convergence on the top finding from 3 agents. Every measurement
@@ -366,9 +368,15 @@ corrected when the tests are fixed.
 - **P2-a** Widen both greps to `INNGEST_BASE_URL=[^[:space:]\\]+` (drop the `http://`
   anchor) so `https://`/`${VAR}`/quoted forms enter the population, and assert the match
   COUNT is exactly the expected number, not just unique-count 1.
-- **P2-b** Add an assertion-count floor (`[[ "$PASS" -ge N ]]`) — this file has a stable
-  enumerable count of 120. Same for `inngest.test.sh`, which already computes `TOTAL` and
-  discards it.
+- **P2-b** — **APPLIED.** Add an assertion-count floor (`[[ "$PASS" -ge N ]]`) — this file
+  has a stable enumerable count of 120. Same for `inngest.test.sh`, which already computes
+  `TOTAL` and discards it.
+  Floors at 139 and 181 respectively, placed AFTER the `$FAIL` check so a genuine failure
+  still reports as one. Mutation-verified: deleting the `test_probe_targets_end_to_end`
+  call now exits 1 at 127 passed / 0 failed (was rc=0 — this is M7 closed); deleting
+  `test_probe_target_follows_app` exits 1 at 126; deleting one `assert` in
+  `inngest.test.sh` exits 1 at 180/180. That last one is the shape worth remembering —
+  `TOTAL` shrinks in lockstep with `PASS`, so the ratio still reads as complete.
 - **P2-c** `cron-inngest-cron-watchdog.test.ts:291` — use `matchAll` with `/g`, assert every
   capture is identical, then compare to `resolveInngestHost(undefined)`.
 - **P3-a** Fixture `http://host.docker.internal:9288` (kills M11) and the portless case.
