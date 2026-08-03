@@ -661,10 +661,15 @@ state_tmp=$(mktemp "${STATE_FILE}.XXXXXX" 2>/dev/null) || {
 }
 if [[ -n "${state_tmp:-}" ]]; then
   # #7220 AC12 — fatal_rc/fatal_line/fatal_cmd are emitted UNCONDITIONALLY, by BOTH frame
-  # writers, zeroed here because reaching this line means no ERR fired. Schema parity between
-  # the success path and the EXIT-trap path is the point: a consumer that has to ask WHICH
-  # writer produced a frame before it knows which keys exist is a second source of truth, and
-  # the gate's fatal-mode branch keys on exactly these fields.
+  # writers, zeroed here because reaching this line means no ERR fired. The point is that a
+  # consumer never has to ask WHICH writer produced a frame before it knows these three keys
+  # exist — the gate's fatal-mode branch reads them directly, and an absent key would make
+  # "no ERR fired" and "old handler" indistinguishable.
+  #
+  # This is parity on the fatal triple ONLY, not on the whole frame: `reason` remains
+  # trap-exclusive (a completed apply has no reason), which is pre-existing and correct.
+  # Stated explicitly so the next reader does not infer a whole-schema guarantee that the
+  # two printf statements do not actually make.
   printf '{"schema_version":2,"start_ts":%d,"end_ts":%d,"exit_code":%d,"files_written":%d,"files_failed":%d,"files_total":%d,"fatal_rc":0,"fatal_line":0,"fatal_cmd":"","files":[%s],"restarts":[%s]}\n' \
     "$START_TS" "$END_TS" "$EXIT_CODE" "$WRITTEN_COUNT" "$FAIL_COUNT" "$TOTAL_COUNT" "$FILES_JSON" "$RESTARTS_JSON" \
     > "$state_tmp" 2>/dev/null || {

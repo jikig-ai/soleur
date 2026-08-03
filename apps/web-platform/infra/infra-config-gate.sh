@@ -208,7 +208,7 @@ adjudicate_infra_config() {
 
   if [[ "$fatal_mode" -eq 1 ]]; then
     echo "::error::infra-config-apply DIED at infra-config-apply.sh:${fatal_line} (rc=${fatal_rc}) running: ${fatal_cmd:-<unrecorded>}"
-    echo "::error::every step after this line did not run — that is why the counts below are short and why units have no activation verdict."
+    echo "::error::every step after this line did not run, which is why no unit has an activation verdict below (and why any count shortfall is a stopping point, not a delivery failure)."
     echo "::error::what is still true: files_written=${files_written} of ${expected} delivered. The files that DID land are on the host; this is an ACTIVATION failure, not necessarily a delivery one."
     echo "::error::next: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_INFRA_CONFIG_FATAL"
     echo "::error::This does NOT mean the host is bricked. Do NOT run \`terraform apply -replace\` — that lever is only for a status endpoint returning 000/502/503, and this host cannot be re-provisioned (\`cx33\`, 0/6 stock)."
