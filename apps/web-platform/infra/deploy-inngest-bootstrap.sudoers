@@ -72,7 +72,7 @@ Cmnd_Alias INNGEST_ENABLE = /usr/bin/systemctl enable inngest-server.service
 deploy ALL=(root) NOPASSWD: INNGEST_ENABLE
 
 # #4827 — permits infra-config-apply.sh (the /hooks/infra-config handler, running
-# as the deploy user) to escalate the atomic install of its 11 managed files into
+# as the deploy user) to escalate the atomic install of its managed files into
 # their root:root 0755 destination dirs, which the deploy user cannot mktemp into
 # (EACCES). The command is pinned to a fixed helper path with NO argument
 # wildcards (sudo-rs safe); the helper itself hardcodes the dest allowlist and
@@ -94,3 +94,32 @@ deploy ALL=(root) NOPASSWD: INFRA_CONFIG_INSTALL
 # change in lockstep (git-lock-chardevice-sweep.test.sh asserts consistency).
 Cmnd_Alias GIT_LOCK_CHARDEVICE_SWEEP = /usr/bin/timeout 60 /usr/local/bin/git-lock-chardevice-sweep.sh
 deploy ALL=(root) NOPASSWD: GIT_LOCK_CHARDEVICE_SWEEP
+
+# #7103 R2 — permits infra-config-apply.sh (the /hooks/infra-config handler, running as the
+# deploy user) to restart the two units whose systemd drop-ins it delivers. Delivery is not
+# activation: a drop-in re-pointing vector.service and inngest-heartbeat.service at the
+# re-deliverable credential lands on disk, and the running process keeps its old configuration
+# until something restarts it. Nothing did — so the credential channel reported success while
+# the units it exists to repair carried on with the stale environment.
+#
+# `try-restart` and not `restart`: an inactive unit must stay inactive. Starting a unit the
+# operator (or a failure) stopped is a decision this handler has no standing to make.
+#
+# PRECONDITION, NOT A DETAIL: /usr/local/bin/infra-config-install validates drop-in content
+# against a permitted-directive whitelist before any of this can activate it. Granting a root
+# restart of a unit whose configuration can be written without validation converts a delivery
+# capability into an execution capability — vector.service runs User=deploy, and systemd merges
+# drop-ins after the unit body. The gate ships first for that reason; do not reorder them.
+#
+# Sudoers argument matching is EXACT, so `try-restart vector.service --no-block` is denied rather
+# than silently widened: the failure mode of a drift here is denial, which
+# infra-config-apply.test.sh's sudoers-to-caller argv lockstep pins in both directions.
+#
+# ONE unit, deliberately. inngest-heartbeat.service was granted here when this shipped and has
+# been removed: it is a Type=oneshot with no RemainAfterExit on a 60s timer, so it re-reads its
+# drop-in on its next tick after daemon-reload and never needed a restart grant at all. Keeping
+# it would have been a standing root-restart capability on the unreplaceable host in exchange for
+# nothing. Full rationale at RESTART_MAP in infra-config-apply.sh; the argv lockstep asserts this
+# alias and that map agree, so the two cannot drift apart silently.
+Cmnd_Alias DROPIN_TRY_RESTART = /usr/bin/systemctl try-restart vector.service
+deploy ALL=(root) NOPASSWD: DROPIN_TRY_RESTART

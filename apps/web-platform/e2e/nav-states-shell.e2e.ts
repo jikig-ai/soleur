@@ -1040,3 +1040,131 @@ test.describe("rail gold-confinement gate — desktop", () => {
     expect(asideClass).not.toContain("bg-soleur-accent-gold-fill");
   });
 });
+
+// ---------------------------------------------------------------------------
+// #7186 — the ONE file tree's host, in a REAL browser.
+//
+// Every unit test mocks `useMediaQuery`, so this block is the only place in the
+// repo where the actual `(min-width: 768px)` literal is evaluated. Assertions
+// are by CONTAINMENT in the rail's secondary slot, never by `kb-rail-tree`
+// attachment (that wrapper renders even when the tree itself is DOM-removed).
+// ---------------------------------------------------------------------------
+
+const kbTreeNav = (page: Page) =>
+  page.getByRole("navigation", { name: /knowledge base file tree/i });
+const kbBrowseTree = (page: Page) => page.getByTestId("kb-browse-tree");
+
+async function routeEmptyKbTree(page: Page): Promise<void> {
+  await page.route("**/api/kb/tree*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        tree: { name: "root", type: "directory", path: "", children: [] },
+        lastSync: null,
+        needsReconnect: false,
+      }),
+    }),
+  );
+}
+
+test.describe("#7186 KB tree host — desktop", () => {
+  test.use({ viewport: DESKTOP });
+
+  test("1280x900 populated landing: the tree is inside the rail slot, no browse host", async ({ page }) => {
+    await setupNavMocks(page);
+    await gotoOrSkip(page, "/dashboard/kb");
+
+    const nav = kbTreeNav(page);
+    await expect(nav).toHaveCount(1, { timeout: 15_000 });
+    await expect(secondarySlot(page).getByRole("navigation", { name: /knowledge base file tree/i })).toHaveCount(1);
+    await expect(kbBrowseTree(page)).toHaveCount(0);
+  });
+});
+
+test.describe("#7186 KB tree host — the 768px switch point", () => {
+  // UNCONDITIONAL: 768px is exactly `(min-width: 768px)`, i.e. the desktop side
+  // of the boundary. This is the empirical closure of the stale-isDesktop risk.
+  test.use({ viewport: { width: 768, height: 1024 } });
+
+  test("768x1024 populated landing: still the DESKTOP host (the tree stays in the rail)", async ({ page }) => {
+    await setupNavMocks(page);
+    await gotoOrSkip(page, "/dashboard/kb");
+
+    await expect(kbTreeNav(page)).toHaveCount(1, { timeout: 15_000 });
+    await expect(secondarySlot(page).getByRole("navigation", { name: /knowledge base file tree/i })).toHaveCount(1);
+    await expect(kbBrowseTree(page)).toHaveCount(0);
+  });
+});
+
+test.describe("#7186 KB tree host — mobile", () => {
+  test.use({ viewport: MOBILE });
+
+  test("390x844 populated landing: the tree fills the content column and the rail slot holds none", async ({ page }) => {
+    await setupNavMocks(page);
+    await gotoOrSkip(page, "/dashboard/kb");
+
+    const browse = kbBrowseTree(page);
+    await expect(browse).toBeVisible({ timeout: 15_000 });
+    await expect(kbTreeNav(page)).toHaveCount(1);
+
+    // #7186 review: the "exactly one back per state" contract spans a
+    // COMPOSITION boundary — the browse header's back and the drawer's
+    // `drawer-back-to-menu` live in different layouts, so a KbLayout-scoped
+    // unit test is structurally incapable of counting both. Only a real-viewport
+    // render can. The closed drawer is translated off-canvas, not unmounted and
+    // not inert, so its link is in the a11y tree here too: this asserts the
+    // count we actually ship, and will fail loudly if it changes.
+    await expect(
+      page.getByRole("link", { name: /back to menu/i }),
+    ).toHaveCount(2);
+    await expect(browse.getByRole("navigation", { name: /knowledge base file tree/i })).toHaveCount(1);
+    await expect(secondarySlot(page).getByRole("navigation", { name: /knowledge base file tree/i })).toHaveCount(0);
+  });
+
+  test("390x844 populated DOCUMENT route: the tree is back in the rail slot", async ({ page }) => {
+    await setupNavMocks(page);
+    await gotoOrSkip(
+      page,
+      "/dashboard/kb/an-extremely-long-document-filename-that-truncates-at-the-default-rail-width.md",
+    );
+
+    await expect(secondarySlot(page).getByRole("navigation", { name: /knowledge base file tree/i })).toHaveCount(1, { timeout: 15_000 });
+    await expect(kbBrowseTree(page)).toHaveCount(0);
+  });
+
+  test("390x844 EMPTY tree: unchanged — the shell stays in the rail slot", async ({ page }) => {
+    await setupNavMocks(page);
+    await routeEmptyKbTree(page);
+    await gotoOrSkip(page, "/dashboard/kb");
+
+    await expect(page.getByTestId("kb-page-mobile-header")).toBeVisible({ timeout: 15_000 });
+    await expect(secondarySlot(page).getByTestId("kb-rail-tree")).toHaveCount(1);
+    await expect(kbBrowseTree(page)).toHaveCount(0);
+  });
+
+  // AC4 — the drill-in round trip is a client-side nav. A `window` sentinel is
+  // the right probe: `page.on("framenavigated")` fires on CORRECT SPA navs too,
+  // so it cannot distinguish a soft nav from a document reload.
+  test("390x844 browse → document → back is a client-side round trip (no full reload)", async ({ page }) => {
+    await setupNavMocks(page);
+    await gotoOrSkip(page, "/dashboard/kb");
+
+    await expect(kbBrowseTree(page)).toBeVisible({ timeout: 15_000 });
+    await page.evaluate(() => {
+      (window as unknown as { __kbNoReload?: boolean }).__kbNoReload = true;
+    });
+
+    await kbLongFile(page).click();
+    await expect(kbBrowseTree(page)).toHaveCount(0, { timeout: 15_000 });
+
+    await page.getByRole("link", { name: /back to file tree/i }).click();
+    await expect(kbBrowseTree(page)).toBeVisible({ timeout: 15_000 });
+
+    // A document reload would have wiped the sentinel.
+    const survived = await page.evaluate(
+      () => (window as unknown as { __kbNoReload?: boolean }).__kbNoReload === true,
+    );
+    expect(survived, "a full document reload wiped the round-trip sentinel").toBe(true);
+  });
+});

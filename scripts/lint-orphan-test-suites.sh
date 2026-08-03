@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# lint-orphan-test-suites.sh -- fail when a scripts/*.test.sh is never run by test-all.sh.
+# lint-orphan-test-suites.sh -- fail when a scripts/*.test.sh, or a required nested RUNNER,
+# is never run by test-all.sh.
 #
 # WHY (#6734): test-all.sh's glob covers `scripts/lib/*.test.sh` but NOT `scripts/*.test.sh`,
 # which must be registered by hand. Three suites had silently never run in any CI job.
@@ -55,6 +56,42 @@ for f in "$REPO_ROOT"/scripts/*.test.sh; do
   # unregistered suite pass vacuously (cq-assert-anchor-not-bare-token).
   if ! grep -qE "^[[:space:]]*run_suite .*[\"' ]scripts/${base}([\"' ]|$)" "$RUNNER"; then
     echo "ERROR: scripts/${base} is never run by test-all.sh -- add a run_suite line, or add a reasoned exclusion citing a tracking issue" >&2
+    fails=$((fails + 1))
+  fi
+done
+
+# --- Required nested runners (#7103 R5(a)) ---------------------------------------------
+# The loop above answers "is every scripts/*.test.sh registered?". This answers the inverse
+# question one level up: "is every nested RUNNER still registered?"
+#
+# The two failures are not symmetric. An unregistered suite leaves an orphan FILE that the
+# glob above can find. A de-registered runner leaves NOTHING to find -- the runner still
+# exists, still passes when invoked by hand, and still gates in CI; it has simply stopped
+# being reachable from the local gate, taking its entire suite set with it. That is the
+# #6730/#6969 shape exactly: a green summary read as evidence for suites the run never
+# invoked. So the registration needs its own tombstone.
+#
+# Anchored on the run_suite CALL SHAPE, never the bare path. Both paths ALREADY appear in
+# test-all.sh comments and echo strings (measured: 5 sites for the infra runner alone,
+# including the skip messages that print the re-run command), so a bare-path grep would
+# false-pass on the prose describing the registration it just lost -- the failure mode is
+# not hypothetical, it is the default. cq-assert-anchor-not-bare-token.
+REQUIRED_RUNNERS=(
+  "apps/web-platform/infra/run-registered-suites.sh"
+  ".github/scripts/test/run-all.sh"
+)
+for r in "${REQUIRED_RUNNERS[@]}"; do
+  # Escape regex metacharacters in the path (`.` in particular) so the anchor matches the
+  # literal path and not an any-character wildcard.
+  r_re="${r//./\\.}"
+  # ANCHOR ON THE COMMAND, NOT THE LABEL. run_suite's first argument is a display label and the
+  # rest is the command it executes, so a pattern that accepts the path anywhere after
+  # `run_suite ` is satisfied by the LABEL alone. Measured: replacing the command while keeping
+  # the label — `run_suite "apps/web-platform/infra/run-registered-suites.sh" bash -c true` —
+  # left this linter reporting `orphan test suites: none`. That is the same class the tombstone
+  # exists to catch, one level up: a runner that is NAMED but not RUN.
+  if ! grep -qE "^[[:space:]]*run_suite .*[[:space:]]bash[[:space:]]+[\"']?${r_re}[\"']?([[:space:]]|\$)" "$RUNNER"; then
+    echo "ERROR: required runner ${r} has no run_suite call in test-all.sh -- it is registered nowhere in the local gate, so its whole suite set is silently uncovered. Restore the run_suite line." >&2
     fails=$((fails + 1))
   fi
 done
