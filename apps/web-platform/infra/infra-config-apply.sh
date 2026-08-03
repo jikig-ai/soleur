@@ -108,7 +108,7 @@ INSTALL_HELPER="${INFRA_CONFIG_INSTALL_HELPER:-/usr/local/bin/infra-config-insta
 # the heartbeat's brief active window could try-restart it, find it exited two seconds later, and
 # grade `noop_not_active` — a spurious HARD RED on the sole no-SSH remediation path.
 # Dropping it also retires one root-restart grant on the host that cannot be replaced, which is
-# the direction ADR-158 argues for: do not widen the surface to buy nothing.
+# the direction ADR-159 argues for: do not widen the surface to buy nothing.
 RESTART_MAP=(
   "vector.service|/etc/systemd/system/vector.service.d/10-vector-doppler-token.conf"
 )

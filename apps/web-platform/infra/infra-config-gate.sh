@@ -253,7 +253,7 @@ adjudicate_infra_config() {
       #
       # A `failed` action is a failure whatever the reason says. No host topology makes it
       # legitimate — each means the handler tried to activate a delivered drop-in and could not,
-      # or could not measure whether it had. This is ADR-158 proposition 1's defect exactly.
+      # or could not measure whether it had. This is ADR-159 proposition 1's defect exactly.
       case "$action" in
         restarted)
           : ;;

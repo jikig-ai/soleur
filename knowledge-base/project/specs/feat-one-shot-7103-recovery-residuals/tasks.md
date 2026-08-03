@@ -127,7 +127,7 @@ recurrence risk), R2 → R3 a hard dependent pair.
 
 ## Phase 7 — Records
 
-- [x] 7.1 Write ADR-158 (provisional ordinal; re-derive at `/ship`).
+- [x] 7.1 Write ADR-159 (provisional ordinal; re-derive at `/ship`).
 - [x] 7.2 Add the one `model.c4` element-description sentence naming the shape gate as the
       delivery↔activation boundary; run the two C4 tests.
 - [x] 7.3 Append the missing Session Error to the 2026-08-01 learning.

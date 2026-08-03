@@ -204,7 +204,7 @@ betterstack-assert-absence 44/44 (23 when this line was first written; the P2 --
   claim named a version this repo does not use — clean on the one edited
   workflow (the plan said "two" — only `apply-deploy-pipeline-fix.yml` was touched).
 - 8.3 `AGENTS.md` (5290 B) and `AGENTS.rules.md` (37330 B) byte-identical to `origin/main`.
-- 8.4 every citation in ADR-158 / tasks.md / session-state resolves.
+- 8.4 every citation in ADR-159 / tasks.md / session-state resolves.
 
 **Plan arithmetic correction.** 8.1 says "baseline + 4"; the measured delta is **+5**. All five are
 plan-mandated — the two nested runners (2.1), `betterstack-assert-absence` (4.8),
@@ -309,7 +309,7 @@ green branch:
 1. **ADR-155 collided** with `ADR-155-cross-gate-exemption-markers` (#7161), plus 156 and 157
    landed on main mid-pipeline. `check-adr-ordinals.sh` reads only the local tree, so it was
    GREEN on the un-rebased branch and RED the moment the branch caught up — measured in exactly
-   that order. Renumbered to **ADR-158**, 15 citations, scoped by file ownership.
+   that order. Renumbered to **ADR-159**, 15 citations, scoped by file ownership.
 2. **`model.likec4.json` was a hard merge conflict** (`mergeable: CONFLICTING`). REGENERATED from
    the merged `.c4` at every conflict, never hand-resolved: picking a side would have dropped
    main's ADR-156/157 `claude -> hooks` edge while the `.c4` still declared it.
@@ -320,7 +320,7 @@ green branch:
 ### The through-line, in one sentence
 
 *The diagnostic is correct and the routing is wrong — the unknown-value path and the error path
-both land on the same branch as success.* That is ADR-158's own thesis, found inside the
+both land on the same branch as success.* That is ADR-159's own thesis, found inside the
 machinery written to enforce it. Instances, each independently corroborated by 3+ agents:
 
 - The activation gate hard-failed on an **allow-list of three reason strings** and never keyed on

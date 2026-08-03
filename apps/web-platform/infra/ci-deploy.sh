@@ -1322,7 +1322,7 @@ _doppler_get_or_report() {
 #
 # WHAT ACTUALLY CARRIES THIS SIGNAL is the `logger` line: LOG_TAG is `ci-deploy`, which IS in
 # vector.toml's [sources.host_scripts_journald] SYSLOG_IDENTIFIER allowlist, so it reaches
-# Better Stack independent of any credential. That is the layer to cite (ADR-158; layer 3, not
+# Better Stack independent of any credential. That is the layer to cite (ADR-159; layer 3, not
 # the Sentry route), and it is why the line below is unconditional and the POST is not.
 #
 # Not fixed by baking SENTRY_* into cloud-init: web-1 carries lifecycle ignore_changes=[user_data]

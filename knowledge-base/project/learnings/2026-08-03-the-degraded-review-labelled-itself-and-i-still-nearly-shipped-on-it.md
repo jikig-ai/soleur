@@ -62,11 +62,15 @@ session-state means X has NOT run.** Treat it as a blocking precondition, not as
 
 Three defects were **green on the branch and only existed relative to `main`**:
 
-1. **ADR ordinal collision.** `check-adr-ordinals.sh` scans the local `decisions/` directory. Three
-   sibling ADRs (155, 156, 157) landed on `main` mid-pipeline. Measured in this exact order:
-   `rc=0` before the rebase → `rc=1` immediately after → `rc=0` after renumbering to ADR-158.
-   The ADR's own header had called the ordinal *"Provisional until `/ship` re-checks at merge"* —
-   the re-check is what caught it, one rebase later.
+1. **ADR ordinal collision, TWICE.** `check-adr-ordinals.sh` scans the local `decisions/`
+   directory. Three sibling ADRs (155, 156, 157) landed on `main` mid-pipeline. Measured in this
+   exact order: `rc=0` before the rebase → `rc=1` immediately after → `rc=0` after renumbering to
+   ADR-158. Then, during the BEHIND auto-sync immediately before merge, a further sibling (#7189)
+   landed *its* ADR-158 and the gate reddened again → renumbered to **ADR-159**. The ADR's own
+   header had called the ordinal *"Provisional until `/ship` re-checks at merge"* — the re-check
+   caught it both times. **An ordinal is not claimed until the branch merges**, so the check
+   belongs after every sync, not once at ship entry: a single re-check is a snapshot of a moving
+   target.
 2. **`model.likec4.json`** — a single-line generated artifact both sides rewrote, so
    `mergeable: CONFLICTING`. Resolved by **regenerating from the merged `.c4` at every conflict**;
    picking either side would have dropped `main`'s ADR-156/157 `claude -> hooks` edge while the

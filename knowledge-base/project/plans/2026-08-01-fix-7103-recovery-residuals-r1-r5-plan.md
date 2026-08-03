@@ -93,7 +93,7 @@ symptoms of one cause as if they were two facts.
 | 4 | **R3** | A four-outcome absence helper that cannot return `clean` without a host-scoped positive control read **at the sink**, a credential-independent canary, and the AC12 re-verification enrolled on a dedicated soak issue. **Hard-gated on Phase 3.** |
 | 5 | **R4** | The #7140 digest-oracle regression harness, committed, hermetic, with an `::add-mask::` and an `id: rendered_digest` on the step. |
 | 6 | **R5(b)** | A committed mutation battery proving the `cf-tunnel-ssh-bridge` liveness gate is non-deletable. (The re-anchoring itself already shipped in #7133.) |
-| 7 | — | ADR-158, the one C4 description correction, and the Session Error the 2026-08-01 learning is missing. |
+| 7 | — | ADR-159, the one C4 description correction, and the Session Error the 2026-08-01 learning is missing. |
 
 ### Sequencing invariants (load-bearing, not preferences)
 
@@ -135,7 +135,7 @@ found is corrected in Phase 0.2.
 | R3: "add a positive control" | **The emitter exists but is unusable as-is, twice over.** `web-zot-consumer-probe.sh` › `_canary()` is the sole `SOLEUR_PROBE_CANARY` emitter repo-wide — but it runs *inside* `doppler run …`, so a dead prd token silences the control used to certify that token's errors absent; and `betterstack-query.sh` has **no `--host` flag** while repeated `--grep` terms are OR-combined, so a foreign host's canary would satisfy it. | Hoist the canary out of the credential wrapper; read the control with an explicit `host_name` SQL predicate. §Phase 4. |
 | Phase 0.2's `--list \| wc -l` expects 87 | **CONTRADICTS.** The command returns **88** — the runner prints a `Derived 87 registered infra suite(s)…` header to stdout ahead of the list. The underlying count (87) is right; the instruction is wrong. | Phase 0.2 now pipes through `grep -c '\.test\.sh$'`. |
 | AC12/AC13 and Phase 4b "live in the 2026-07-30 plan" | They live in the **2026-08-01** plan. The 2026-07-30 plan's AC12/AC13 were **deleted** during its own review (its Revision R20 records the cut). | All citations resolve to the 2026-08-01 file. |
-| B5's ADR ordinal | Next free on a **freshly-fetched** `origin/main` is **ADR-158**. | Provisional; `/ship` re-verifies. |
+| B5's ADR ordinal | Next free on a **freshly-fetched** `origin/main` is **ADR-159**. | Provisional; `/ship` re-verifies. |
 
 ---
 
@@ -350,7 +350,7 @@ guards.
     `doppler_token` are genuinely independent: *readable but empty* is a real third state.
 1.3 **Break the silent absence** — the credential `if [ -r … ]` gets an `else` that sets the
     `cred_file` value the marker reports. **No separate `SOLEUR_DEPLOY_CRED_SOURCE` line** — a second
-    marker for one fact is what ADR-158 proposition 3 forbids. Distinguish absent (`[ -e ]` false)
+    marker for one fact is what ADR-159 proposition 3 forbids. Distinguish absent (`[ -e ]` false)
     from unreadable (`[ -e ]` true, `[ -r ]` false) — a permissions or namespace fault is a different
     diagnosis. Fail-open control flow unchanged.
 1.4 **Fail loudly on the dark branch** — add `zot_gate_degraded_event no_credential_source` to the one
@@ -536,7 +536,7 @@ property of the option chosen.
     - `schema_version >= 2` ⇒ the array must cover every `RESTART_MAP` unit, and **fail** on any
       `rc != 0`, `active != active`, or
       `action ∈ {noop_not_active, restart_did_not_advance, sudo_denied}`. A delivered-but-unactivated
-      unit is precisely ADR-158 proposition 1's defect.
+      unit is precisely ADR-159 proposition 1's defect.
 
     The hard-on-absent flip happens in a follow-up once one apply has demonstrably delivered the
     contract; that flip is recorded on #7103, not smuggled in here.
@@ -739,7 +739,7 @@ pinning nothing. M4 and M8 exist precisely because they are the arms such a batt
 
 ### Phase 7 — Records
 
-7.1 **ADR-158** (provisional ordinal, re-derived from a freshly-fetched `origin/main`).
+7.1 **ADR-159** (provisional ordinal, re-derived from a freshly-fetched `origin/main`).
 7.2 One `model.c4` element-description sentence naming the drop-in shape gate as the
     delivery↔activation boundary (see §Architecture Decision — this is the only C4 edit in scope).
 7.3 Append one Session Error to
@@ -820,7 +820,7 @@ server, volume, or firewall rule. Cloudflare: no new token, ruleset, or DNS reco
 
 ### ADR
 
-**ADR-158 — Delivery is not activation, and absence is not evidence.** (Provisional ordinal 155,
+**ADR-159 — Delivery is not activation, and absence is not evidence.** (Provisional ordinal 155,
 re-derived from a freshly-fetched `origin/main`.)
 
 1. **A config push that writes a unit drop-in must reconcile the running unit, must validate what it
@@ -1064,7 +1064,7 @@ personal data.
 | `scripts/betterstack-assert-absence.test.sh` | R3 — its suite (clean/present/unshipping/unknown; foreign-host control; short-window rejection) |
 | `scripts/followthroughs/ac12-telemetry-positive-control-7103.sh` | R3 — soak-gated AC12 probe with elapsed-time and invocation-count self-guards |
 | `apps/web-platform/infra/web-zot-consumer-probe-canary.sh` (or an `ExecStartPre=` equivalent) | R3 — the credential-independent canary emit hoisted out of `doppler run` |
-| `knowledge-base/engineering/architecture/decisions/ADR-158-delivery-is-not-activation-and-absence-is-not-evidence.md` | Phase 7 |
+| `knowledge-base/engineering/architecture/decisions/ADR-159-delivery-is-not-activation-and-absence-is-not-evidence.md` | Phase 7 |
 
 ## Files to Edit
 
@@ -1284,7 +1284,7 @@ Source-4 allowlist, both directions; token-shaped redaction is a filed follow-up
 | 13 | **`python3`+`yaml` unavailable on the required runner.** | 0.4 measures first; two sibling suites in the same check already depend on it; documented fallback is a path-filtered workflow. |
 | 14 | **The `restarts` array changes the status response shape.** | Additive, behind `schema_version`. 0.9 enumerates every consumer before the change. |
 | 15 | **`cloud-init.yml` edits do not reach web-1** (`ignore_changes = [user_data]`). | Stated in §Infrastructure. The live grant arrives via the bootstrap leg; AC-PM-1/2 verify the live path, not the mirror. |
-| 16 | **ADR-158's ordinal is claimed by a sibling PR.** | Provisional; `/ship`'s collision gate re-verifies after every sync; on renumber sweep plan + `tasks.md` + every AC naming it. |
+| 16 | **ADR-159's ordinal is claimed by a sibling PR.** | Provisional; `/ship`'s collision gate re-verifies after every sync; on renumber sweep plan + `tasks.md` + every AC naming it. |
 | 17 | **Scope.** Seven phases across infra, CI, security, and knowledge-base. | The items are coupled: 3.1 is a precondition of 3.2, R2 gates R3, R5's lesson decides R4's placement, R5(a) makes Phase 3's green trustworthy. Splitting would ship R3's verification before R2's mechanism — the ordering the coordinator ruled invalid — or the grant before the gate. |
 
 ---

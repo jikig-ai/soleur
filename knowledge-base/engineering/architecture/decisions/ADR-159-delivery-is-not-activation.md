@@ -1,4 +1,4 @@
-# ADR-158 — Delivery is not activation: a config channel must reconcile the units it configures
+# ADR-159 — Delivery is not activation: a config channel must reconcile the units it configures
 
 - **Status:** Accepted
 - **Date:** 2026-08-02
@@ -12,12 +12,18 @@
   `apps/web-platform/infra/infra-config-install.sh` (the shape gate that had to ship first),
   `scripts/betterstack-assert-absence.sh` (the absence assertion that refuses to guess)
 
-> **Ordinal.** Renumbered 155 -> 158 at `/ship` time. Three sibling PRs landed ADR-155 (cross-gate
-> exemption markers), ADR-156 and ADR-157 on `origin/main` while this pipeline was open. The
-> collision was invisible on the un-rebased branch — `check-adr-ordinals.sh` sees only the local
-> tree, so it stayed green here and would have gone red on `main` post-squash. The `/work`-time note
-> this replaces called the ordinal provisional and named the re-check; the re-check is what caught
-> it, one rebase later.
+> **Ordinal.** Renumbered 155 -> 158 -> 159 at `/ship` time — TWICE, which is the point worth
+> recording. Sibling PRs landed ADR-155 (cross-gate exemption markers), ADR-156 and ADR-157 on
+> `origin/main` while this pipeline was open; the branch was renumbered to 158 and re-verified
+> green. Then a further sibling (#7189) landed its own ADR-158 during the BEHIND auto-sync that
+> immediately preceded merge, and the gate reddened again.
+>
+> Both collisions were invisible on the un-rebased branch — `check-adr-ordinals.sh` sees only the
+> local tree, so it stayed green here and would have gone red on `main` post-squash. The `/work`-time
+> note this replaces called the ordinal provisional and named the re-check; the re-check is what
+> caught it, both times. The generalisation: an ordinal is not claimed until the branch is merged,
+> so re-run the check after EVERY sync, not once at ship entry — a single re-check is a snapshot of
+> a moving target.
 
 ## Context
 
