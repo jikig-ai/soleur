@@ -1213,4 +1213,27 @@ STUB
 test_probe_targets_end_to_end
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
-[[ "$FAIL" -eq 0 ]]
+
+# --- Assertion-count floor (review P2-b; mutation M7) --------------------------------
+# `$FAIL -eq 0` answers "did everything that RAN pass?" — never "did everything RUN?".
+# Unhooking a test function removes its assertions and its failures together, so the suite
+# reports a smaller, entirely green result and exits 0. There is no failure to notice.
+#
+# Measured, not hypothesised: deleting the bare `test_probe_targets_end_to_end` call left
+# 127 passed / 0 failed / rc=0, silently retiring the only end-to-end coverage of the
+# probe-target wiring — the coverage added specifically because three mutations had already
+# survived this suite. The ways in are all quiet: a dropped call, an early `return`, a
+# rename that orphans a definition, a `git` conflict resolution that eats one line.
+#
+# The count is stable and enumerable, so the floor is cheap. Raise it when you ADD
+# assertions. A DROP is the signal this gate exists to catch: find the unhooked function
+# before editing this number downward.
+if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
+
+readonly EXPECTED_MIN_ASSERTIONS=139
+if [[ "$PASS" -lt "$EXPECTED_MIN_ASSERTIONS" ]]; then
+  echo "FAIL: assertion-count floor — ran $PASS assertions, expected >= $EXPECTED_MIN_ASSERTIONS."
+  echo "      Nothing FAILED, so a test function was unhooked rather than broken."
+  echo "      Locate the missing call or early return before changing this number."
+  exit 1
+fi

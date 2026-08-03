@@ -1064,3 +1064,20 @@ assert "ci-deploy.sh --preserve-env drops DOPPLER_PROJECT (#6555)" \
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
+
+# --- Assertion-count floor (review P2-b; mutation M7) --------------------------------
+# This file already computed TOTAL and then discarded it, which is the whole gap: a count
+# that nothing compares against cannot detect its own shrinkage. `$FAIL -gt 0` answers "did
+# everything that RAN pass?" — never "did everything RUN?" — so a dropped `assert` call, an
+# early `return`, or a conflict resolution that eats a line removes assertions and failures
+# together and the suite exits 0 on a smaller, entirely green report.
+#
+# Raise this when you ADD assertions. A DROP is the signal the gate exists to catch: find
+# what stopped running before editing the number downward.
+readonly EXPECTED_MIN_ASSERTIONS=181
+if [[ "$TOTAL" -lt "$EXPECTED_MIN_ASSERTIONS" ]]; then
+  echo "FAIL: assertion-count floor — ran $TOTAL assertions, expected >= $EXPECTED_MIN_ASSERTIONS."
+  echo "      Nothing FAILED, so an assertion was unhooked rather than broken."
+  echo "      Locate the missing call or early return before changing this number."
+  exit 1
+fi
