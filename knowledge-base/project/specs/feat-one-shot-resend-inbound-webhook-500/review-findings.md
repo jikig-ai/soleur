@@ -1,22 +1,26 @@
 # Review findings — DO NOT MERGE AS-IS
 
-> **Status 2026-08-02 — three findings applied, the merge block STANDS.**
+> **Status 2026-08-03 — four P1s and two P2s applied. The merge block STANDS.**
 >
-> Applied, each RED-proven before GREEN and mutation-verified on sandbox copies:
-> **finding 8** (`head -1` → `tail -1` + duplicate-key fixtures), **finding 1** (the
-> third write site at `cloud-init.yml`, + a value-based parity guard covering it, +
-> the two falsified ADR-155 claims), and **P1-a** (`init_probe_targets()` inside the
-> `BASH_SOURCE` guard + an end-to-end case that sources the real file — which also
-> discharges the P2 source-time-invariant finding).
+> Every item below was RED-proven before GREEN. The bash guards (findings 8, 1, P1-a,
+> P2-b) were additionally mutation-tested on sandbox copies, each mutation proven to have
+> landed via `diff`; finding 5's RED was run against the unfixed helper directly.
+>
+> - **finding 8** — `head -1` → `tail -1`, plus duplicate-key fixtures in both orderings.
+> - **finding 1** — the third write site at `cloud-init.yml`, a value-based parity guard
+>   covering it, and the two falsified ADR-155 claims corrected.
+> - **finding 5** — the terminal `inngest.send` failure now reaches a log row and a
+>   distinctly-tagged Sentry event, emitted from the helper so all 8 call sites are covered.
+> - **P1-a** — `init_probe_targets()` inside the `BASH_SOURCE` guard plus an end-to-end
+>   case that sources the real file, which also discharges the P2 source-time invariant.
+> - **P2-b** — assertion-count floors on `inngest-inventory.test.sh` and `inngest.test.sh`,
+>   closing **M7**: unhooking a test function now exits non-zero instead of reporting a
+>   smaller, entirely green result.
 >
 > `inngest-inventory.test.sh` 120 → 139 assertions. Registered infra suites 87/87;
 > `scripts/test-all.sh` 242/242.
 >
-> Also applied: **P2-b** (assertion-count floors on both `inngest-inventory.test.sh`
-> and `inngest.test.sh`), which closes **M7** — unhooking a test function now exits
-> non-zero instead of reporting a smaller, entirely green result.
->
-> **Still open and still blocking:** findings **2, 3, 4, 5, 6, 7** (all P1), plus the
+> **Still open and still blocking:** findings **2** (2 of 4 steps done), **3, 4, 6, 7** (all P1), plus the
 > remainder of the P2 and P3 lists.
 
 7 of 9 agents reported (test-design-reviewer, code-quality-analyst still running when this
@@ -130,7 +134,7 @@ declared green while Resend's auto-disable clock keeps running. The only verific
 `tasks.md` 1.3, which is unchecked, manual, and post-merge. AC11 gates Phase 2's cutover,
 not this merge.
 
-### 5. Diagnosability REGRESSION on the failure path this PR most plausibly creates
+### 5. Diagnosability REGRESSION on the failure path this PR most plausibly creates — **APPLIED**
 `isTransientFetchError` (`send-with-retry.ts:19`) matches only TypeError "fetch failed",
 TimeoutError, and errno codes. An Inngest **401 carries none of them** → no retry, no warn
 rows. Net: the plan's own §B1 `econnrefused` column drops to **0** — which a responder
@@ -150,6 +154,27 @@ route.ts (covers 1):** capture a wrapper `new Error(msg, { cause: err })` with
 `tags:{feature, op:"inngest-send"}`. `linkedErrorsIntegration` walks `cause` so the
 undici chain survives. Do NOT switch to `String(err)` — pino's cause-flattening is the
 only reason `connect ECONNREFUSED 10.0.1.40:8288` appears in the shipped line.
+
+**Applied, as prescribed.** One correction: it is **8** call sites, not 5 —
+`server/index.ts` ×2, `run-routine`, `resend-inbound`, `github` ×2, `stripe`,
+`schedule-reminder`. The case for fixing centrally is stronger than stated.
+
+The terminal branch now emits one `logger.error` (with `err` kept as an OBJECT, so pino's
+cause-flattening still surfaces the underlying `connect ECONNREFUSED <host>:<port>`) plus
+a wrapper capture tagged `op:inngest-send`, then rethrows the ORIGINAL so caller handling
+is unchanged.
+
+RED was discriminating: 4 of 6 new tests failed against the old helper — including
+wrapper-identity (`captureException` never called at all) and the exhausted-transient case
+(`fn` called 3×, `logger.error` 0×, which is the literal #7144 shape). The 2 that passed
+pin behaviour that must NOT change: rethrow identity, and silence on success.
+
+Verified: `send-with-retry` 20/20, call-site suites 46/46, full web-platform suite
+CI-equivalent (no Doppler) **12,826 passed / 0 failed**, `tsc --noEmit` clean on the pinned
+compiler, `scripts/test-all.sh` 242/242.
+
+The now-redundant route-level captures in `resend-inbound` and `github` are left in place —
+harmless once the helper emits, and removing them is a separate sweep.
 
 ### 6. The new fail-open derivation is silent, and the path is LIVE
 `inngest-inventory.sh:162` falls back to `http://127.0.0.1:8288` — **byte-identical to a
