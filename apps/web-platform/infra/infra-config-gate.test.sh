@@ -591,11 +591,93 @@ else
   pass "#7220 no false attribution on a frame that carries no fatal_line"
 fi
 
+# --- #7220 review: a SECOND fatal fixture, with different values in every field -------------
+# Mutation-proven necessary. With only the frozen incident fixture, every assertion greps that
+# fixture's own literals, so replacing the whole annotation with a hardcoded string passed 53/0.
+# One fixture cannot distinguish "renders the frame" from "prints a constant". This one also
+# carries files_written == files_total, the state the "what is still true" line exists for and
+# which the incident fixture (0 of 19) never exercised.
+FATAL2="$TMP/7220-fatal2.json"
+printf '{"schema_version":2,"start_ts":1785758400,"end_ts":1785758409,"exit_code":203,"reason":"fatal_after_publish","files_written":%d,"files_failed":0,"files_total":%d,"fatal_rc":203,"fatal_line":772,"fatal_cmd":"sudo /usr/bin/systemd-run --on-active=3s","files":[],"restarts":[]}\n' "$EXPECTED_COUNT" "$EXPECTED_COUNT" > "$FATAL2"
+FATAL2_OUT="$TMP/7220-fatal2.out"
+adjudicate_infra_config "$FATAL2" "$SYNTH" "$SYNTH/infra-config-apply.sh" > "$FATAL2_OUT" 2>&1
+FATAL2_RC=$?
+
+if [[ "$FATAL2_RC" -ne 0 ]]; then
+  pass "#7220 fixture-2: a post-publish fatal frame still FAILS the gate"
+else
+  fail "#7220 fixture-2 FAIL-OPEN: a post-publish fatal frame returned 0"
+fi
+if grep -qF 'infra-config-apply.sh:772' "$FATAL2_OUT" && grep -qF 'rc=203' "$FATAL2_OUT"; then
+  pass "#7220 fixture-2: annotation renders THIS frame's line and rc (not a constant)"
+else
+  fail "#7220 fixture-2: annotation did not render line=772/rc=203 — values may be hardcoded"
+fi
+if grep -qF 'systemd-run' "$FATAL2_OUT"; then
+  pass "#7220 fixture-2: annotation renders THIS frame's failing command"
+else
+  fail "#7220 fixture-2: annotation did not render this frame's fatal_cmd"
+fi
+# The number that tells the operator delivery SUCCEEDED. Never exercised non-zero before.
+if grep -qF "files_written=${EXPECTED_COUNT} of ${EXPECTED_COUNT}" "$FATAL2_OUT"; then
+  pass "#7220 fixture-2: 'what is still true' reports a FULL delivery, not a hardcoded 0"
+else
+  fail "#7220 fixture-2: files_written line did not render ${EXPECTED_COUNT} of ${EXPECTED_COUNT}"
+fi
+# Suppression must stay scoped to the two branches it was authorised for.
+if grep -qF 'landed-files mismatch' "$FATAL2_OUT"; then
+  fail "#7220 fixture-2: landed-files mismatch fired on an equal-count frame (unexpected)"
+else
+  pass "#7220 fixture-2: no spurious landed-files mismatch on an equal-count frame"
+fi
+
 # --- non-vacuity floor: the synthetic FILE_MAP produced a real, non-empty set --------
 if [[ "$EXPECTED_COUNT" -ge 2 && "${#COMPARABLE_DESTS[@]}" -ge 1 ]]; then
   pass "fixture non-vacuity: EXPECTED_COUNT=$EXPECTED_COUNT, ${#COMPARABLE_DESTS[@]} comparable dests"
 else
   fail "fixture is vacuous: EXPECTED_COUNT=$EXPECTED_COUNT comparable=${#COMPARABLE_DESTS[@]}"
+fi
+
+# --- #7220 review: the FATAL-ONLY-RED fixture (isolates the fatal branch's own verdict) -----
+# Mutation-proven necessary. Deleting `rc=1` from the gate's fatal branch left the suite green,
+# because every fatal fixture ALSO trips exit_code!=0 — so the branch's verdict was carried by a
+# neighbour and pinned by nothing. This frame passes every other check (clean exit_code, correct
+# counts, full restarts, matching shas); only the fatal branch can red it.
+#
+# Defence in depth: with the producer's `died` fix a post-publish death now carries a non-zero
+# exit_code, so this exact frame should no longer arise — which is precisely why the gate must
+# still refuse it. A frame asserting "clean apply" AND "died at line N" is self-contradictory,
+# and a gate that passes a self-contradictory frame is a gate that trusts the wrong field.
+FATALONLY="$TMP/7220-fatal-only.json"
+jq -c '. + {fatal_rc:1, fatal_line:661, fatal_cmd:"sudo /usr/bin/systemctl daemon-reload"}' "$VNOOP" > "$FATALONLY"
+FATALONLY_OUT="$TMP/7220-fatal-only.out"
+adjudicate_infra_config "$FATALONLY" "$SYNTH" "$SYNTH/infra-config-apply.sh" > "$FATALONLY_OUT" 2>&1
+FATALONLY_RC=$?
+
+# Sanity: the SAME frame without the fatal fields must PASS, or this arm proves nothing.
+if adjudicate_infra_config "$VNOOP" "$SYNTH" "$SYNTH/infra-config-apply.sh" >/dev/null 2>&1; then
+  pass "#7220 fatal-only: the base frame passes, so the fatal fields are the only variable"
+else
+  fail "#7220 fatal-only: base frame does not pass — this arm is vacuous"
+fi
+if [[ "$FATALONLY_RC" -ne 0 ]]; then
+  pass "#7220 fatal-only: fatal_line alone is enough to RED an otherwise-clean frame"
+else
+  fail "#7220 FAIL-OPEN: a frame carrying fatal_line=661 PASSED because every other check was clean"
+fi
+if grep -qF 'infra-config-apply.sh:661' "$FATALONLY_OUT"; then
+  pass "#7220 fatal-only: the annotation still names the line"
+else
+  fail "#7220 fatal-only: no attribution rendered"
+fi
+
+# --- #7220 review: ASSERTION-COUNT FLOOR ---------------------------------------------------
+# Nothing asserted that the assertions RAN. Measured: deleting the entire #7220 block took the
+# suite 53 -> 40 passed, 0 failed, exit 0 — a silent truncation that reads exactly like a clean
+# run. A floor (not equality — the count is developer-incremented) makes arm deletion loud.
+GATE_MIN_ASSERTIONS=61
+if [[ "$pass" -lt "$GATE_MIN_ASSERTIONS" ]]; then
+  fail "assertion-count floor: only $pass assertions ran, expected >= $GATE_MIN_ASSERTIONS — arms were deleted or skipped"
 fi
 
 echo "---"

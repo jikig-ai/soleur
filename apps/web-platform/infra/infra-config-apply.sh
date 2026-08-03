@@ -70,8 +70,14 @@ FATAL_FILE="${STATE_FILE}.fatal"
 # stale frame would satisfy both the count and the content invariants and certify a `restarts`
 # array produced by an earlier run. That is #6594's latched false-green reproduced inside the
 # very mechanism built to end it.
-rm -f "${STATE_FILE}.final" "$FATAL_FILE"
-rm -f "$STATE_FILE"
+# `|| true` is load-bearing, not decoration. STATE_FILE defaults under /var/lock -> /run/lock,
+# which is mode 1777 and NOT covered by webhook.service's PrivateTmp (that covers /tmp and
+# /var/tmp only). Sticky-bit semantics mean a file owned by another local UID cannot be unlinked
+# here, so an unguarded `rm -f` would abort the handler at this line under `set -e` — a denial of
+# the ONLY no-SSH remediation path, triggered by any local user creating one path. Failing to
+# clear a stale sentinel is survivable; refusing to start is not.
+rm -f "${STATE_FILE}.final" "$FATAL_FILE" 2>/dev/null || true
+rm -f "$STATE_FILE" 2>/dev/null || true
 
 TMPFILES=()
 
@@ -113,7 +119,14 @@ on_exit() {
   trap - ERR
 
   local f_rc=0 f_line=0 f_cmd="" f_cmd_safe=""
-  if [[ -f "$FATAL_FILE" ]]; then
+  # `-O` (owned by the effective UID) is a TRUST gate, not a tidiness check, and it is why this
+  # is not a plain `-f`. The handoff lives under /run/lock (mode 1777), so any local UID can
+  # create this path before we do. Since #7220 this file is an INPUT — it decides fatal_line,
+  # which the gate turns into `fatal_mode=1`, which SUPPRESSES two genuine diagnostics. A planted
+  # file could therefore steer the operator to a fabricated line while silencing the real ones.
+  # `-f` alone would believe it. `-O` means we only ever read back what this process wrote.
+  # (`-f` is retained ahead of it so a FIFO planted at the path can never block the read.)
+  if [[ -f "$FATAL_FILE" ]] && [[ -O "$FATAL_FILE" ]]; then
     { IFS= read -r f_rc || true; IFS= read -r f_line || true; IFS= read -r f_cmd || true; } < "$FATAL_FILE" || true
   fi
   [[ "$f_rc"   =~ ^[0-9]+$ ]] || f_rc=0
@@ -128,7 +141,38 @@ on_exit() {
   # because this string is the only free-form upstream text that reaches the frame.
   f_cmd_safe=$(printf '%s' "$f_cmd" | tr -d '\000-\037' | tr -c 'A-Za-z0-9 ._:/=-' '?' | cut -c1-200) || f_cmd_safe=""
 
-  if [[ "$rc" -ne 0 ]] && [[ ! -f "${STATE_FILE}.final" ]]; then
+  # --- What counts as a DEATH (as opposed to a non-zero accounting exit) --------------------
+  # `.final` alone is the WRONG discriminator on both arms, and review proved it in both
+  # directions before this predicate existed:
+  #
+  #   * Using `! -f .final` alone SUPPRESSED a real death. The webhook self-restart below runs
+  #     AFTER the frame is published, and it is a second ungranted `sudo`. When it failed, the
+  #     published frame still said `exit_code:0` — the gate adjudicates on exit_code first, so it
+  #     PASSED. #7220's exact shape, relocated ~200 lines later, invisible to the instrument
+  #     built for it.
+  #   * Using `rc != 0` alone INVENTED a death. A `missing_env` partial delivery (the documented
+  #     #4804 self-heal) completes, publishes a correct frame, and exits 1 for accounting. That
+  #     emitted `SOLEUR_INFRA_CONFIG_FATAL: line=0 rc=1 cmd=` — a fatal with no attribution, on
+  #     the channel the annotation tells the operator to grep.
+  #
+  # The honest question is "did the handler DIE", and the answer is: it exited non-zero AND
+  # either never published a frame, or an ERR actually fired. `f_line > 0` is the ERR's own
+  # fingerprint; an accounting exit leaves it 0 because no ERR ran.
+  local died=0
+  if [[ "$rc" -ne 0 ]] && { [[ ! -f "${STATE_FILE}.final" ]] || [[ "$f_line" -gt 0 ]]; }; then
+    died=1
+  fi
+
+  if [[ "$died" -eq 1 ]]; then
+    # A death AFTER a successful publish must CORRECT the frame, not leave it green — but it must
+    # keep the accounting the run actually earned, so the files[]/restarts[] the operator needs
+    # survive. `reason` distinguishes the two shapes for anyone reading the frame directly.
+    local reason="unhandled" files_arr="[]" restarts_arr="[]"
+    if [[ -f "${STATE_FILE}.final" ]]; then
+      reason="fatal_after_publish"
+      files_arr="[${FILES_JSON:-}]"
+      restarts_arr="[${RESTARTS_JSON:-}]"
+    fi
     # ONE branchless printf: fatal_* are emitted UNCONDITIONALLY (zeroed when ERR never fired),
     # so "valid JSON in both cases" is true by construction rather than by a branch that can rot.
     #
@@ -137,15 +181,20 @@ on_exit() {
     # makes an abort in that window write NO FRAME AT ALL — which cat-infra-config-state.sh
     # reports as `no_prior_apply`, i.e. "the handler never ran". The instrument would erase
     # exactly the death it exists to report.
-    printf '{"schema_version":2,"start_ts":%d,"end_ts":%d,"exit_code":%d,"reason":"unhandled","files_written":%d,"files_failed":%d,"files_total":%d,"fatal_rc":%d,"fatal_line":%d,"fatal_cmd":"%s","files":[],"restarts":[]}\n' \
-      "$START_TS" "$(date +%s)" "$rc" \
+    printf '{"schema_version":2,"start_ts":%d,"end_ts":%d,"exit_code":%d,"reason":"%s","files_written":%d,"files_failed":%d,"files_total":%d,"fatal_rc":%d,"fatal_line":%d,"fatal_cmd":"%s","files":%s,"restarts":%s}\n' \
+      "$START_TS" "$(date +%s)" "$rc" "$reason" \
       "${WRITTEN_COUNT:-0}" "${FAIL_COUNT:-0}" "${TOTAL_COUNT:-0}" \
-      "$f_rc" "$f_line" "$f_cmd_safe" > "$STATE_FILE" 2>/dev/null || true
+      "$f_rc" "$f_line" "$f_cmd_safe" "$files_arr" "$restarts_arr" > "$STATE_FILE" 2>/dev/null || true
   fi
 
   # The journald arm of the same fact. Dual-channel on purpose: the frame needs the status
   # endpoint to be reachable, journald->Vector->Better Stack does not.
-  if [[ "$rc" -ne 0 ]]; then
+  #
+  # SAME `died` PREDICATE as the frame arm — deliberately one variable, computed once. The
+  # precedent this trap copies (`emit_state` in the inngest cutover-flip script) writes its state
+  # slot and its logger line from ONE call with ONE payload; splitting them into two arms with
+  # two predicates is what let them disagree, and both disagreements were live bugs.
+  if [[ "$died" -eq 1 ]]; then
     "$LOGGER_CMD" -t "$LOG_TAG" "SOLEUR_INFRA_CONFIG_FATAL: line=$f_line rc=$f_rc files_written=${WRITTEN_COUNT:-0} files_total=${TOTAL_COUNT:-0} cmd=$f_cmd_safe" 2>/dev/null || true
   fi
 
@@ -497,10 +546,24 @@ if [[ -f "$hooks_dest" ]] && command -v jq >/dev/null 2>&1; then
     [[ -n "$cmd_path" ]] || continue
     case "$cmd_path" in /usr/local/bin/*) : ;; *) continue ;; esac
     if [[ ! -e "${DESTDIR}${cmd_path}" ]]; then
-      logger -t "$LOG_TAG" "SOLEUR_INFRA_CONFIG_HOOK_ORPHAN dangling_hook_command=$cmd_path reason=script_not_on_disk_after_push"
-      echo "ERROR: hooks.json advertises $cmd_path but no script is on disk after this push — webhook exec of this hook would fast-500 (dangling hook)" >&2
+      # SANITIZED (#7220 review). Unlike every FILE_MAP dest — which the map's own header pins as
+      # JSON-safe by construction — this value is read from the just-delivered hooks.json, and
+      # only its /usr/local/bin/ PREFIX is constrained; the tail is arbitrary. Two live defects
+      # followed from emitting it raw, and both target the channel #7220 just built:
+      #   1. LOG FORGERY. `while IFS= read -r` splits on \n only, so U+2028/U+2029/0x7f survive
+      #      into journald -> Better Stack. A crafted tail could forge a green-looking
+      #      `SOLEUR_INFRA_CONFIG_FATAL: … rc=0 …` row into the exact query this PR's annotation
+      #      tells the operator to run.
+      #   2. FRAME BREAK. A `"` or `\` in the tail is interpolated unescaped into FILES_JSON
+      #      below, making the whole frame unparseable — so EVERY jq in the gate returns MISSING,
+      #      including fatal_line, and the fatal channel goes dark in the one situation it exists
+      #      for. (It fails CLOSED — the gate still reds — but it reds mute.)
+      # Same idiom as the restart-stderr scrub; the charset excludes '"' and '\' by construction.
+      cmd_path_safe=$(printf '%s' "$cmd_path" | tr -d '\000-\037' | tr -c 'A-Za-z0-9 ._:/=-' '?' | cut -c1-200) || cmd_path_safe="?"
+      logger -t "$LOG_TAG" "SOLEUR_INFRA_CONFIG_HOOK_ORPHAN dangling_hook_command=$cmd_path_safe reason=script_not_on_disk_after_push"
+      echo "ERROR: hooks.json advertises $cmd_path_safe but no script is on disk after this push — webhook exec of this hook would fast-500 (dangling hook)" >&2
       [[ -n "$FILES_JSON" ]] && FILES_JSON+=","
-      FILES_JSON+="{\"file\":\"$cmd_path\",\"sha256\":\"\",\"status\":\"failed\",\"reason\":\"orphan_hook_command\"}"
+      FILES_JSON+="{\"file\":\"$cmd_path_safe\",\"sha256\":\"\",\"status\":\"failed\",\"reason\":\"orphan_hook_command\"}"
       FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
   done < <(jq -r '.[]."execute-command" // empty' "$hooks_dest" 2>/dev/null || true)

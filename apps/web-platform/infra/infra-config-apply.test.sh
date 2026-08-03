@@ -1316,7 +1316,15 @@ test_fatal_channel_red_against_main() {
 
   local old="${TMPDIR_ROOT}/old-handler.sh"
   if ! git -C "$SCRIPT_DIR" show "origin/main:apps/web-platform/infra/infra-config-apply.sh" > "$old" 2>/dev/null; then
-    echo "  SKIP: origin/main handler unavailable (shallow clone?) — mutation proof NOT run"
+    # FAIL, not SKIP, when origin/main RESOLVES but the show fails — that is a real breakage,
+    # not an unavailable environment. A silent skip here makes the PR's only proof-of-red one
+    # `fetch-depth: 1` away from not existing, and nothing downstream consumes a skip.
+    if git -C "$SCRIPT_DIR" rev-parse --verify origin/main >/dev/null 2>&1; then
+      echo "  FAIL: origin/main resolves but the handler could not be read — mutation proof is broken, not skipped"
+      FAIL=$((FAIL + 1))
+    else
+      echo "  SKIP (loud): origin/main unavailable (shallow clone) — mutation proof NOT run"
+    fi
     teardown
     return 0
   fi
@@ -1335,8 +1343,132 @@ test_fatal_channel_red_against_main() {
   teardown
 }
 
+# --- #7220 review: the two arms the original fixture set could not see ---
+#
+# Every fatal-channel arm above drives a DEATH, so the suite could only ever confirm the channel
+# fires — never that it stays quiet, and never that it fires when a frame was already published.
+# Both gaps were live bugs. These two arms sit on the other side of the `died` predicate.
+
+# A routine partial delivery is NOT a death. `missing_env` is the documented #4804 self-heal
+# window — the expected outcome of every FILE_MAP addition — and it exits 1 for ACCOUNTING while
+# publishing a correct frame. Before the fix this emitted `FATAL: line=0 rc=1 cmd=`, which the
+# follow-through probe hard-FAILs on, so a normal self-heal would have reported #7220 as unfixed.
+test_fatal_channel_partial_apply_is_not_a_death() {
+  echo "TEST: #7220 — a routine partial apply emits ZERO fatal markers (review finding)"
+  setup
+  export_valid_env_vars
+  unset CAT_INFRA_CONFIG_STATE_SH_B64   # the #4804 host-drift shape
+
+  local rc=0
+  bash "$HANDLER" >/dev/null 2>&1 || rc=$?
+  assert_eq "partial apply still exits 1 (accounting, not death)" "1" "$rc"
+  assert_eq "the frame keeps the REAL partial accounting" "$MANAGED_MINUS_1" "$(_frame_field files_written)"
+
+  local n_fatal
+  n_fatal=$(grep -c 'SOLEUR_INFRA_CONFIG_FATAL' "$LOGGER_LOG" 2>/dev/null || true)
+  [[ "$n_fatal" =~ ^[0-9]+$ ]] || n_fatal=0
+  assert_eq "ZERO fatal markers on a documented self-heal — the channel must not cry wolf" "0" "$n_fatal"
+  assert_eq "no fabricated attribution" "0" "$(_frame_field fatal_line)"
+
+  teardown
+}
+
+# A death AFTER the frame is published must CORRECT the frame, not leave it green. The webhook
+# self-restart is a second ungranted `sudo` running after `.final` exists; before the fix its
+# failure left `exit_code:0` on disk and `adjudicate_infra_config` PASSED — #7220's own shape
+# relocated ~200 lines later, invisible to the instrument built for it.
+test_fatal_channel_death_after_publish_corrects_the_frame() {
+  echo "TEST: #7220 — a death AFTER publish rewrites the frame instead of leaving it green"
+  setup
+  export_valid_env_vars
+  # Deny ONLY systemd-run, so delivery and reconciliation both succeed first.
+  printf '#!/bin/sh\ncase "$*" in *systemd-run*) exit 1 ;; esac\nexit 0\n' > "$TMPDIR_ROOT/bin/sudo"
+  chmod +x "$TMPDIR_ROOT/bin/sudo"
+  unset INFRA_CONFIG_TEST_MODE   # the self-restart is gated out in test mode
+
+  bash "$HANDLER" >/dev/null 2>&1 || true
+
+  # The whole point: a frame that says 0 here is the false green.
+  assert_eq "frame reports the TRUE non-zero status, not the published 0" "1" "$(_frame_field exit_code)"
+  assert_eq "the post-publish death is named as its own shape" "fatal_after_publish" "$(_frame_field reason)"
+  local fline; fline=$(_frame_field fatal_line)
+  if [[ "$fline" =~ ^[0-9]+$ ]] && [[ "$fline" -gt 0 ]]; then
+    echo "  PASS: the death is attributed to a line ($fline)"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: fatal_line=$fline — a post-publish death lost its attribution"; FAIL=$((FAIL + 1))
+  fi
+  # Correcting the frame must not discard what the run actually earned.
+  assert_eq "delivery accounting survives the rewrite" "$MANAGED_N" "$(_frame_field files_total)"
+  if [[ "$(jq '.files | length' "$INFRA_CONFIG_STATE" 2>/dev/null || echo 0)" -eq "$MANAGED_N" ]]; then
+    echo "  PASS: files[] preserved through the correction"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: files[] was discarded when the frame was corrected"; FAIL=$((FAIL + 1))
+  fi
+
+  teardown
+}
+
+# --- #7220 review: the handoff is an INPUT, so it needs a trust gate that can fail ---
+#
+# Since #7220 the `.fatal` handoff decides fatal_line, which the gate turns into `fatal_mode=1`,
+# which SUPPRESSES two genuine diagnostics. STATE_FILE defaults under /var/lock -> /run/lock,
+# mode 1777 and NOT covered by webhook.service's PrivateTmp — so any local UID can create that
+# path first. `-O` (owned by the effective UID) is what stops a planted file steering the
+# operator to a fabricated line while silencing the real ones.
+#
+# This arm exists because a mutation battery caught that dropping `-O` left the suite fully
+# GREEN. A security guard whose deletion nothing notices is not a guard.
+test_fatal_channel_handoff_requires_ownership() {
+  echo "TEST: #7220 — the .fatal handoff is ownership-gated before it is believed (review finding)"
+  setup
+
+  # STRUCTURAL: anchored on the shell test construct, which a comment cannot produce (verified
+  # unique in-file). Also pins ORDER — a trust gate below the read is not a trust gate.
+  local guard_line read_line
+  guard_line=$(grep -n -- '-O "\$FATAL_FILE"' "$HANDLER" | head -1 | cut -d: -f1)
+  read_line=$(grep -n 'IFS= read -r f_rc' "$HANDLER" | head -1 | cut -d: -f1)
+  if [[ -n "$guard_line" ]]; then
+    echo "  PASS: the handoff read is ownership-gated (line $guard_line)"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: no -O ownership gate on \$FATAL_FILE — a planted handoff would be believed"
+    FAIL=$((FAIL + 1))
+  fi
+  if [[ -n "$guard_line" && -n "$read_line" && "$guard_line" -lt "$read_line" ]]; then
+    echo "  PASS: the gate precedes the read"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: ownership gate at '$guard_line' does not precede the read at '$read_line'"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # BEHAVIOURAL, when the environment can actually express foreign ownership. Skips LOUDLY —
+  # a silent skip here would read exactly like a pass.
+  if [[ "$(id -u)" -eq 0 ]] && id -u nobody >/dev/null 2>&1; then
+    export_valid_env_vars
+    printf '#!/bin/sh\nexit 7\n' > "$TMPDIR_ROOT/bin/sha256sum"; chmod +x "$TMPDIR_ROOT/bin/sha256sum"
+    printf '1\n999999\nPLANTED_FABRICATED_COMMAND\n' > "${INFRA_CONFIG_STATE}.fatal"
+    chown nobody "${INFRA_CONFIG_STATE}.fatal" 2>/dev/null || true
+    bash "$HANDLER" >/dev/null 2>&1 || true
+    case "$(_frame_field fatal_cmd)" in
+      *PLANTED_FABRICATED_COMMAND*)
+        echo "  FAIL: a foreign-owned handoff was believed — fabricated attribution reached the frame"
+        FAIL=$((FAIL + 1)) ;;
+      *)
+        echo "  PASS: foreign-owned handoff ignored; attribution came from this process only"
+        PASS=$((PASS + 1)) ;;
+    esac
+  else
+    echo "  SKIP (loud): not root, so foreign ownership cannot be expressed here — the structural"
+    echo "               assertions above are the only coverage in this environment."
+  fi
+
+  teardown
+}
+
 # --- Run all tests ---
 echo "=== infra-config-apply.sh test suite ==="
+test_fatal_channel_handoff_requires_ownership
+test_fatal_channel_partial_apply_is_not_a_death
+test_fatal_channel_death_after_publish_corrects_the_frame
 test_fatal_channel_exit64_replaces_stale_frame
 test_fatal_channel_subshell_attribution
 test_fatal_channel_no_secret_leak
@@ -1367,6 +1499,15 @@ test_missing_env_partial_write
 test_prod_mode_escalated_move
 test_b64_delivery_parity
 test_orphan_hook_selfcheck
+# --- #7220 review: ASSERTION-COUNT FLOOR ---------------------------------------------------
+# Measured: removing the new arm invocations from the runner took this suite 144 -> 110 passed,
+# 0 failed, exit 0. Nothing noticed. A floor makes that loud.
+APPLY_MIN_ASSERTIONS=140
+if [[ "$PASS" -lt "$APPLY_MIN_ASSERTIONS" ]]; then
+  echo "  FAIL: assertion-count floor — only $PASS assertions ran, expected >= $APPLY_MIN_ASSERTIONS"
+  FAIL=$((FAIL + 1))
+fi
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then
