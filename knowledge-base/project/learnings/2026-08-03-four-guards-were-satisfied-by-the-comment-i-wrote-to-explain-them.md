@@ -1,6 +1,6 @@
 # Four guards were satisfied by the comment I wrote to explain them
 
-**Date:** 2026-08-03 · **PR:** #7197 · **Issue:** #7204 · **ADR:** ADR-162
+**Date:** 2026-08-03 · **PR:** #7197 · **Issue:** #7204 · **ADR:** ADR-163
 
 ## Problem
 
@@ -115,15 +115,17 @@ puts it on a sibling). Verify before acting, especially when the report agrees w
 
 ## ADR ordinals: check every remote branch, not main's maximum
 
-Collided **four times** on one branch: 158 at plan, 159 at `/work`, 161 at review, 162 during
-ship. The second happened because I verified "next free" against `origin/main`'s maximum only —
+Collided **five times** on one branch: 158 at plan, 159 at `/work`, 161 at review, then 162 AND
+163 during ship — two consecutive syncs each pulled in a freshly-merged ADR at the ordinal I had
+just taken. The second happened because I verified "next free" against `origin/main`'s maximum only —
 `ADR-160` was already claimed by an unmerged sibling branch. So I widened the check to
 `origin/main ∪ every remote branch`, and it collided **again** anyway, when a BEHIND auto-sync
 pulled a freshly-merged `ADR-161` in during the ship phase.
 
 The real lesson is not "check harder before you start." On a repo merging this fast, **an ADR
 ordinal cannot be reserved at all** — any pre-merge check has a shelf life measured in minutes.
-It has to be re-verified after *every* sync, right up to the merge. `/ship` Phase 7 already says
+It has to be re-verified after *every* sync, right up to the merge — and 'every' is literal: two
+syncs eight minutes apart each invalidated the previous answer. `/ship` Phase 7 already says
 this, and following it is the only reason the fourth collision was caught instead of landing a
 duplicate ordinal on `main`.
 

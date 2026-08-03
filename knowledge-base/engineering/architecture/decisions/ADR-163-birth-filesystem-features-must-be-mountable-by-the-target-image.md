@@ -1,4 +1,4 @@
-# ADR-162 — A birth filesystem may only carry features the target image's kernel can mount
+# ADR-163 — A birth filesystem may only carry features the target image's kernel can mount
 
 - **Status:** Accepted
 - **Date:** 2026-08-03
@@ -14,7 +14,8 @@
   `apps/web-platform/infra/cloud-init-git-data.yml` (`STAGE=luks_open`),
   `apps/web-platform/infra/git-data-birth-fs-fingerprint.txt` (the classified allowlist)
 
-> **Ordinal.** FOUR collisions while this branch was open. Provisionally 158 at plan time;
+> **Ordinal.** FIVE collisions while this branch was open — 158, 159, 161, 162, and the
+> number this file now carries is simply the one that was free at the last sync before merge. Provisionally 158 at plan time;
 > 158 -> 159 after `ADR-158-kb-file-tree-host-is-a-derived-value.md` landed on `origin/main`;
 > then 159 -> **161** at review time after `ADR-159-delivery-is-not-activation.md` (PR #7146)
 > ALSO landed on main, and 160 turned out to be claimed by unmerged sibling branch

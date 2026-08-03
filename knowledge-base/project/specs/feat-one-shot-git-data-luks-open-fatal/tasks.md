@@ -79,7 +79,7 @@ Threshold: `single-user incident` (`requires_cpo_signoff: true`)
 
 ## Phase 4 — ADR
 
-- [x] **4.1** Write the birth-filesystem feature-set ADR under `knowledge-base/engineering/architecture/decisions/` (**ADR-162** — 158 collided at /work, then 159 collided at review time; 160 was claimed by an unmerged sibling branch. `/ship` re-verifies again).
+- [x] **4.1** Write the birth-filesystem feature-set ADR under `knowledge-base/engineering/architecture/decisions/` (**ADR-163** — 158 collided at /work, then 159 collided at review time; 160 was claimed by an unmerged sibling branch. `/ship` re-verifies again).
 - [x] **4.2** `## Decision` names the selected candidate; `## Alternatives Considered` carries the Phase-0 measurement for all four candidates, including `mount -o noquota` and `tune2fs -O quota`.
 - [x] **4.3** Status `accepted` if Phase 0 confirms; `adopting` if any measurement is ambiguous.
 - [x] **4.4** **[L4]** On any renumber: **renumber MINE, never main's.** In shared files (`model.c4`, `principles-register.md`) another ADR with the same ordinal may legitimately coexist, so a blanket `s/ADR-158/ADR-<new>/g` corrupts main's references. Use the issue number as the discriminator — `sed -i '/#7204/ s/ADR-158/ADR-<new>/g'` on shared files — and the unscoped rename only inside this feature's own artifacts (the ADR body, `knowledge-base/project/plans/2026-08-03-*`, `knowledge-base/project/specs/feat-one-shot-git-data-luks-open-fatal/`). Then re-grep for stragglers.
