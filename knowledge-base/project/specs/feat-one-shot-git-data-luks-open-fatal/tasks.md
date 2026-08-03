@@ -20,7 +20,7 @@ Threshold: `single-user incident` (`requires_cpo_signoff: true`)
   - [x] 0.2.5 **[R7-adv]** Probe whether **`project`** is offline-addable via `tune2fs`, not only `quota`. If both are, criterion (b) stops distinguishing `-O project` from plain mkfs and sibling parity becomes the simpler answer.
 - [x] **0.3** Re-fetch `ubuntu-24.04-server-cloudimg-amd64.manifest`; pin the observed `linux-*` package set and the fetch date into the fix's comment block. Confirm `linux-modules-extra-*` absent.
 - [x] **0.4** Write the fix-selection decision into the plan record **before** Phase 1 starts, against the canonical five-candidate table (a)-(e). Criterion (c) is discharged **by construction** (a feature-bit argument), never by a container mount rc — the container's kernel has `quota_v2`, and a `modprobe.d` blacklist inside it does nothing because `request_module` runs in the init namespace.
-- [ ] **0.5** Run `/soleur:gdpr-gate` against this plan (trigger (b): `single-user incident` threshold). Advisory only.
+- [x] **0.5** Run `/soleur:gdpr-gate` against this plan (trigger (b): `single-user incident` threshold). Advisory only.
 - [x] **0.6** **[R8]** Measure the emitter's detail budget: hand-write a representative detail file (20 dmesg lines + a realistic multi-line mount stderr, and the reverse ordering), run each through the shipped `_clean`, report which bytes survive `tail -n 20 | … | tail -c 180`. This is what Phase 1.4 gates on.
 - [x] **0.7** **[R2]** Decide R2's disposition explicitly: drop / promote rung 1 to privileged / push to rung 2. If "promote", the rung-taxonomy change goes in the Phase 4 ADR.
 - [x] **0.8** **[R2]** Feasibility-check the container shape R1 will actually use (unprivileged `docker run`, `e2fsprogs` installed, `mkfs.ext4` on a regular file, `dumpe2fs -h` on that file).
@@ -79,7 +79,7 @@ Threshold: `single-user incident` (`requires_cpo_signoff: true`)
 
 ## Phase 4 — ADR
 
-- [ ] **4.1** Write the birth-filesystem feature-set ADR under `knowledge-base/engineering/architecture/decisions/` (provisional ordinal **ADR-158**; `/ship` re-verifies against `origin/main`).
+- [x] **4.1** Write the birth-filesystem feature-set ADR under `knowledge-base/engineering/architecture/decisions/` (**ADR-159** — provisional 158 collided with a sibling PR on `origin/main` and was renumbered; `/ship` re-verifies again).
 - [ ] **4.2** `## Decision` names the selected candidate; `## Alternatives Considered` carries the Phase-0 measurement for all four candidates, including `mount -o noquota` and `tune2fs -O quota`.
 - [ ] **4.3** Status `accepted` if Phase 0 confirms; `adopting` if any measurement is ambiguous.
 - [ ] **4.4** **[L4]** On any renumber: **renumber MINE, never main's.** In shared files (`model.c4`, `principles-register.md`) another ADR with the same ordinal may legitimately coexist, so a blanket `s/ADR-158/ADR-<new>/g` corrupts main's references. Use the issue number as the discriminator — `sed -i '/#7204/ s/ADR-158/ADR-<new>/g'` on shared files — and the unscoped rename only inside this feature's own artifacts (the ADR body, `knowledge-base/project/plans/2026-08-03-*`, `knowledge-base/project/specs/feat-one-shot-git-data-luks-open-fatal/`). Then re-grep for stragglers.
