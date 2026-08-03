@@ -1207,10 +1207,85 @@ STUB
   assert_eq "explicit INNGEST_GQL_URL still overrides the derivation" \
     "http://override.invalid/gql" "$ov_gql"
 
+  # (6) THE THIRD STATE (#7144 finding 6). The loopback fallback produced a value
+  # BYTE-IDENTICAL to a successful co-located derivation, so a green verdict had an
+  # unknown subject — #7144 restated by the code written to prevent it. And it is not
+  # rare: ci-deploy.sh's `docker rm` → `docker run` leaves a window with no container,
+  # and the watchdog runs every 15 minutes.
+  #
+  # The reason must survive too. `2>/dev/null` on the docker call made "no such
+  # container" (the ordinary deploy window) indistinguishable from "permission denied
+  # on docker.sock" (a real, persistent misconfiguration) without SSH — the error path
+  # hr-no-ssh-fallback-in-runbooks exists to forbid.
+  # $1 = fixture, $2.. = extra `env` assignments. TARGET is passed as a positional to the
+  # inner shell — an earlier attempt used `declare -f` + a nested bash -c, and $TARGET was
+  # not exported into it, so every probe silently read UNSET and the assertions "failed"
+  # for a harness reason rather than a SUT one.
+  probe_source() {
+    local fixture="$1"; shift
+    env "$@" PATH="$bindir:$PATH" DOCKER_ENV_FIXTURE="$fixture" \
+        DOCKER_CALL_LOG="$d/calls.log" \
+      bash -c '
+        source "$1" >/dev/null 2>&1
+        init_probe_targets 2>/dev/null
+        printf "%s|%s" "${INNGEST_PROBE_TARGET_SOURCE-UNSET}" "${INNGEST_PROBE_DERIVE_ERR-UNSET}"
+      ' _ "$TARGET" 2>/dev/null || true
+  }
+
+  printf 'INNGEST_BASE_URL=http://host.docker.internal:8288\n' > "$d/src"
+  : > "$d/src-empty"
+  local src
+
+  src=$(probe_source "$d/src" -u INNGEST_PROBE_BASE -u INNGEST_GQL_URL -u INNGEST_HEALTH_URL)
+  assert_eq "derived from the container reports source=derived" "derived" "${src%%|*}"
+
+  src=$(probe_source "$d/src" INNGEST_PROBE_BASE=http://explicit.invalid:8288)
+  assert_eq "an explicit override reports source=env" "env" "${src%%|*}"
+
+  src=$(probe_source "$d/src-empty" -u INNGEST_PROBE_BASE -u INNGEST_GQL_URL -u INNGEST_HEALTH_URL)
+  assert_eq "an underivable target reports source=fallback" "fallback" "${src%%|*}"
+  if [[ -n "${src#*|}" && "${src#*|}" != "UNSET" ]]; then
+    echo "  PASS: the fallback carries a reason (${src#*|})"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: the fallback carries NO reason — docker's stderr was discarded, so"
+    echo "        no-such-container vs docker.sock-permission needs SSH to tell apart"
+    FAIL=$((FAIL + 1))
+  fi
+
   rm -rf "$d"
 }
 
 test_probe_targets_end_to_end
+
+# The emitted verdict must NAME its subject. A consumer reading functions=N has no way to
+# know WHICH server answered unless the probe target rides the same object.
+test_probe_target_in_emitted_verdict() {
+  echo "Test: the emitted verdict names its probe target (#7144 finding 6)"
+  local d ff combined
+  d=$(mktemp -d) || { echo "  FAIL: mktemp"; FAIL=$((FAIL + 1)); return; }
+  ff=$(mktemp) || { echo "  FAIL: mktemp"; FAIL=$((FAIL + 1)); rm -rf "$d"; return; }
+  make_functions '["cron-daily-triage"]' > "$ff"
+  make_page false "" "[$(make_edge 01A reminder.scheduled rem-fut "$FUTURE_MS" "[]")]" > "$d/page-1.json"
+
+  combined=$(INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" \
+    INVENTORY_NOW_MS="$NOW_MS" INNGEST_PROBE_BASE="http://probe.invalid:8288" \
+    bash "$TARGET" 2>/dev/null)
+
+  if printf '%s' "$combined" | jq -e 'has("probe_base") and has("probe_target_source")' >/dev/null 2>&1; then
+    echo "  PASS: verdict JSON carries probe_base + probe_target_source"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: verdict JSON names no probe target — a green verdict has an unknown subject"
+    FAIL=$((FAIL + 1))
+  fi
+  assert_eq "verdict JSON reports the probe base actually used" \
+    "http://probe.invalid:8288" "$(printf '%s' "$combined" | jq -r '.probe_base // "MISSING"')"
+  assert_eq "verdict JSON reports how that target was chosen" \
+    "env" "$(printf '%s' "$combined" | jq -r '.probe_target_source // "MISSING"')"
+
+  rm -rf "$d" "$ff"
+}
+
+test_probe_target_in_emitted_verdict
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
 
@@ -1230,7 +1305,7 @@ echo "=== Results: $PASS passed, $FAIL failed ==="
 # before editing this number downward.
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
 
-readonly EXPECTED_MIN_ASSERTIONS=139
+readonly EXPECTED_MIN_ASSERTIONS=146
 if [[ "$PASS" -lt "$EXPECTED_MIN_ASSERTIONS" ]]; then
   echo "FAIL: assertion-count floor — ran $PASS assertions, expected >= $EXPECTED_MIN_ASSERTIONS."
   echo "      Nothing FAILED, so a test function was unhooked rather than broken."

@@ -109,6 +109,12 @@ jobs:
                 # coerce to "absent" (benign, self-heals on next deploy). "unknown" means a
                 # redeployed host whose parser could not read the ExecStart (a read failure).
                 dstate=$(printf '%s' "$BODY" | jq -r '.durability_state // "absent"' 2>/dev/null || echo "absent")
+                # #7144 finding 6 — WHICH server did this verdict describe? The on-host
+                # probe target used to be unreportable: its loopback fallback produced a
+                # value byte-identical to a successful co-located derivation, so a green
+                # verdict had an unknown subject. `absent` here means an older on-host
+                # script (pre-#7144), same benign self-healing shape as durability_state.
+                ptsource=$(printf '%s' "$BODY" | jq -r '.probe_target_source // "absent"' 2>/dev/null || echo "absent")
                 healthy="yes"; break
               fi
               cause=$(strip_log_injection "$(printf '%s' "$BODY" | tr '\n' ' ' | head -c 400)")
@@ -144,9 +150,12 @@ jobs:
           fail_mode_safe=$(strip_log_injection "$fail_mode")
           fail_detail_safe=$(strip_log_injection "$fail_detail")
           dstate_safe=$(strip_log_injection "${dstate:-}")
-          { echo "failure_mode=${fail_mode_safe}"; echo "failure_detail=${fail_detail_safe}"; echo "durability_state=${dstate_safe}"; } >> "$GITHUB_OUTPUT"
+          ptsource_safe=$(strip_log_injection "${ptsource:-}")
+          { echo "failure_mode=${fail_mode_safe}"; echo "failure_detail=${fail_detail_safe}"; echo "durability_state=${dstate_safe}"; echo "probe_target_source=${ptsource_safe}"; } >> "$GITHUB_OUTPUT"
           if [[ -n "$fail_mode_safe" ]]; then
             echo "::error::Inngest health probe failed: ${fail_mode_safe} — ${fail_detail_safe}"
+          elif [[ "$ptsource_safe" == "fallback" ]]; then
+            echo "::warning::Inngest answered, but the on-host probe could NOT derive the app's dispatch target and fell back to loopback (probe_target_source=fallback). This verdict describes loopback — NOT necessarily the server the app dispatches to, which is the exact blind spot behind #7144. Read the reason from journald: journalctl -t inngest-inventory | grep SOLEUR_INNGEST_PROBE_TARGET_FALLBACK. A single occurrence is usually the deploy window between docker rm and docker run; a persistent one is not."
           elif [[ "$dstate_safe" == "absent" ]]; then
             echo "::notice::Inngest healthy; durability_state field absent (older on-host inventory script, pre-#5553). No durability signal until the next infra-config push re-stages inngest-inventory.sh — blind window made visible, no issue filed."
           elif [[ "$dstate_safe" == "unknown" ]]; then
