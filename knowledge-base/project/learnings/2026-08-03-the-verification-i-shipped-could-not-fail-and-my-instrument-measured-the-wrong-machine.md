@@ -3,7 +3,6 @@ title: "The verification I shipped could not fail, and my instrument measured th
 date: 2026-08-03
 issue: 7166
 pr: 7169
-adr: ADR-160
 category: workflow-patterns
 tags: [systemd, cgroups, silent-failure, test-vacuity, mutation-testing, verification]
 ---
