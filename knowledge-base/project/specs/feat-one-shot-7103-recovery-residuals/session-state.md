@@ -185,7 +185,7 @@ session. Past tense means done, not intended.
 ### Verified at this checkpoint
 `run-registered-suites.sh` **87/87**. infra-config-install 44/44, infra-config-apply 106/106,
 infra-config-gate 29/29, infra-config-handler-bootstrap 36/36, journald-config 79/79,
-betterstack-assert-absence 23/23, web-zot-consumer-probe green. `terraform fmt -check` clean.
+betterstack-assert-absence 44/44 (23 when this line was first written; the P2 --since fix and the 2026-08-03 review each added arms), web-zot-consumer-probe green. `terraform fmt -check` clean.
 `visudo -cf` parses. All shellcheck findings on touched files are pre-existing or annotated.
 
 ### Exit gate (Phase 8) — measured on the final clean tree
@@ -199,7 +199,9 @@ betterstack-assert-absence 23/23, web-zot-consumer-probe green. `terraform fmt -
 - Contention epilogue clean: 4% `/tmp` used, 3959MB avail, delta 26 entries. **No banner fired** —
   the `LOW_TMP_HEADROOM` / `SIBLING_RUN_DETECTED` grep hits are the contention SUITE's own `[ok]`
   assertion lines, exactly the false positive the runner's guidance warns about.
-- 8.2 `shellcheck` on all 20 changed shell files; `actionlint` 1.7.12 clean on the one edited
+- 8.2 (as measured on the pre-review tree) `shellcheck` on all **19** changed `.sh` files (the "20" counted `deploy-inngest-bootstrap.sudoers`,
+  which shellcheck cannot lint); `actionlint` **1.7.7** — the version `ci.yml` pins; the "1.7.12"
+  claim named a version this repo does not use — clean on the one edited
   workflow (the plan said "two" — only `apply-deploy-pipeline-fix.yml` was touched).
 - 8.3 `AGENTS.md` (5290 B) and `AGENTS.rules.md` (37330 B) byte-identical to `origin/main`.
 - 8.4 every citation in ADR-158 / tasks.md / session-state resolves.
@@ -257,6 +259,12 @@ Every escalation attempt rejected; the two accepts are correct-by-design and now
 
 Remaining: **/compound -> /ship**. Review is done (inline, degraded — see above).
 
+> **SUPERSEDED 2026-08-03.** The degraded review above was re-run with the full 12-agent panel,
+> which is what the paragraph below asked for. It found ~60 findings, 15 P1, and three
+> merge blockers the green branch could not see. See "Review Phase — session 4" at the end of
+> this file. The line below stands as the record of what session 3 knew; it is no longer the
+> current state.
+
 `/ship` still owes: `gh pr ready`, the Phase 5.5 review-findings exit gate, and auto-merge. The
 PR body is already written and safe (8.5 verified on both surfaces). If the panel can be run in a
 later session, run `/review` again BEFORE shipping — this diff grants a root restart on a host
@@ -266,8 +274,108 @@ with no replacement path, and a 0-agent review is thin evidence for that blast r
 A PR body is drafted and ready for /ship, carrying 5.7's required-check gating decision verbatim,
 the Net +1 issue-flow accounting, and a post-merge section with no operator steps.
 
-Note for Phase 8: `scripts/test-all.sh` does NOT cover `apps/web-platform/infra/` — both runners
+Note for Phase 8 (SUPERSEDED by this PR's own R5(a) — kept for the record, corrected here):
+`scripts/test-all.sh` now INVOKES `run-registered-suites.sh` as a nested suite when `want_infra`
+holds and the diff touches that directory. What was true when written — that both runners
 are required, and `betterstack-assert-absence.test.sh` was newly registered in test-all.sh, so the
 baseline is **+1** there beyond the pre-existing delta.
 
 PR 7146 still draft, MERGEABLE. Branch pushed through Phase 4.
+
+---
+
+## Review Phase — session 4 (2026-08-03): the 12-agent panel that session 3 asked for
+
+**Everything below was measured in this session.** Session 3 recorded its review as
+`0 of ~10 agents` and said plainly: *"Treat the findings below as a floor, not a clearance … If the
+panel can be run in a later session, run `/review` again BEFORE shipping."* It was run. The floor
+was low.
+
+### Coverage
+
+12 agents: security-sentinel, test-design-reviewer, architecture-strategist,
+observability-coverage-reviewer, silent-failure-hunter, user-impact-reviewer,
+data-integrity-guardian, code-quality-analyst, pattern-recognition-specialist,
+git-history-analyzer, agent-native-reviewer, performance-oracle. All 12 returned.
+`semgrep-sast` deliberately SKIPPED — bash-only diff, where OSS semgrep's tree-sitter parser
+matches ~0 rules and reports a vacuous clean; `shellcheck` substituted (HEAD 249 findings vs
+main 245, zero error-level, no net-new codes, all five new scripts clean).
+
+### What the 0-agent review had missed
+
+~60 distinct findings after dedup, 15 P1. Three were merge-blocking and none was visible to the
+green branch:
+
+1. **ADR-155 collided** with `ADR-155-cross-gate-exemption-markers` (#7161), plus 156 and 157
+   landed on main mid-pipeline. `check-adr-ordinals.sh` reads only the local tree, so it was
+   GREEN on the un-rebased branch and RED the moment the branch caught up — measured in exactly
+   that order. Renumbered to **ADR-158**, 15 citations, scoped by file ownership.
+2. **`model.likec4.json` was a hard merge conflict** (`mergeable: CONFLICTING`). REGENERATED from
+   the merged `.c4` at every conflict, never hand-resolved: picking a side would have dropped
+   main's ADR-156/157 `claude -> hooks` edge while the `.c4` still declared it.
+3. **The squash merge would have retired #7103.** The repo's own `auto-close-scan.sh` flagged the
+   commit body that RECORDED session 3's review — the same trap, re-introduced by the paragraph
+   documenting it. Reworded; scanner now CLEAN on commits, body and title.
+
+### The through-line, in one sentence
+
+*The diagnostic is correct and the routing is wrong — the unknown-value path and the error path
+both land on the same branch as success.* That is ADR-158's own thesis, found inside the
+machinery written to enforce it. Instances, each independently corroborated by 3+ agents:
+
+- The activation gate hard-failed on an **allow-list of three reason strings** and never keyed on
+  `action`. Measured against the shipped adjudicator: `action=failed` with an unrecognised reason
+  returned `rc=0` with EMPTY output. Now a deny-list; reverting takes the suite 40/40 → 24/16.
+- `unit_prop` returned `""` on ANY failure, so a `systemctl show` that could not answer graded as
+  `unit_inactive` → warning → green, certifying an apply that reconciled nothing.
+- `test-all.sh` printed *"infra IS covered above"* in the three CI shards where `want_infra` is
+  false. Strictly worse than the `main` text it replaced, which was universally true.
+- The `no_credential_source` Sentry beacon was **inert in the failure it reports**
+  (`grep -c SENTRY_INGEST_DOMAIN cloud-init.yml` → 0), and had zero tests anywhere in the repo.
+- The anti-vacuity batteries **exempted themselves** from the floors they impose on siblings.
+
+### Deliberate decisions taken during the fix pass
+
+- **`inngest-heartbeat.service` removed from `RESTART_MAP` and both sudoers copies.** Verified
+  `Type=oneshot`, no `RemainAfterExit` anywhere in `inngest-bootstrap.sh`, 60s timer around a
+  sub-second `ExecStart` — so it graded `skipped/unit_inactive` on essentially every apply,
+  making the gate's warning arm the STEADY STATE, and the grant activated nothing that
+  `daemon-reload` + the next tick does not. Retires one standing root-restart capability on the
+  host with no replacement path.
+- **The Sentry claim was corrected, not "fixed".** Baking `SENTRY_*` into cloud-init would be true
+  only for a future fresh host (`ignore_changes=[user_data]`) while reading as true today — the
+  delivery-is-not-activation trap this ADR names. Code and comment now agree AT MERGE.
+- **`RESTART_SETTLE_SECS` validated.** Unvalidated it was a deterministic prod freeze: measured
+  with the value `abc`, 19 of 19 files on disk, frame reporting `files_total:0/"unhandled"`,
+  webhook self-restart NEVER RAN.
+
+### Measured on this tree (per-suite; each re-run after the final rebase)
+
+`run-registered-suites.sh` **87/87** · `ci-deploy` **216/216** · `infra-config-apply` **110/110** ·
+`infra-config-gate` **40/40** · `infra-config-install` **44/44** ·
+`infra-config-handler-bootstrap` **36/36** · `journald-config` **79/79** ·
+`betterstack-assert-absence` **44/44** · `digest-oracle-guard` **27/27** ·
+`cf-tunnel-liveness-gate-mutations` **8/8** · `test-all-infra-coverage-notice` **20/20** (new).
+`check-adr-ordinals` rc=0 · `lint-orphan-test-suites` none · `visudo -cf` parses ·
+`terraform fmt -check` clean · `actionlint` 1.7.7 clean · shellcheck no error-level findings.
+
+**`run_suite` registration delta: main 103 → HEAD 109 = +6**, derived from the two files rather
+than asserted (a literal count is the cheapest thing to make green by dropping a registration —
+the R5 defect itself). The six are named in the tasks.md 8.1 entry.
+
+**The aggregate `scripts/test-all.sh` run is NOT recorded here as a number.** Two attempts were
+killed under 4 and then 7 concurrent sibling `test-all.sh` runs (load 16.15/16 cores, `/tmp` 70%);
+the runner's own `SIBLING_RUN_DETECTED` banner fired both times. A killed run is not a failure and
+not a pass, and inventing a total for it is the precise defect this PR exists to remove. CI is the
+authoritative aggregate.
+
+### Errors made in this session
+
+1. Set a `MIN_ASSERTS` floor to 27 against 26 actual — **caught by the floor itself**, which is the
+   behaviour it was added for.
+2. Wrote `out=$(...); rc=$?` under `set -e` in the very commit fixing that class; the suite aborted
+   and showed me. Converted to `|| rc=$?`.
+3. Guessed `BETTERSTACK_QUERY_BIN` for the stub seam when the real name is
+   `BETTERSTACK_QUERY_SCRIPT` — a stub that cannot reject, caught before it could certify anything.
+4. Ran a `git commit` from a shell whose CWD had been reset to the bare root, tripping the
+   commit-to-main guard. Re-established CWD in its own call.

@@ -135,10 +135,11 @@ recurrence risk), R2 → R3 a hard dependent pair.
 
 ## Phase 8 — Exit gate
 
-- [x] 8.1 Run the full local suite on the **final** tree; assert baseline + 4 and that the nested
+- [x] 8.1 Run the full local suite on the **final** tree; assert baseline + 6 and that the nested
       runners report 0 RED / RAN ≥ 10. This is also Phase 1's re-verification.
-- [x] 8.2 `shellcheck` every created/edited `.sh`; `actionlint` the two edited workflows (never the
-      composite action).
+- [x] 8.2 `shellcheck` every created/edited `.sh`; `actionlint` the **one** edited workflow
+      (`apply-deploy-pipeline-fix.yml` — the plan said "two"; only one is in the diff), never the
+      composite action.
 - [x] 8.3 Assert the AGENTS byte budget is unchanged.
 - [x] 8.4 Resolve every `knowledge-base/` citation in the plan, ADR, and this file.
 - [ ] 8.5 Use `Ref #7103` in the PR body — never `Closes`.
