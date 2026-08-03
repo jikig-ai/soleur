@@ -1107,6 +1107,17 @@ test.describe("#7186 KB tree host — mobile", () => {
     const browse = kbBrowseTree(page);
     await expect(browse).toBeVisible({ timeout: 15_000 });
     await expect(kbTreeNav(page)).toHaveCount(1);
+
+    // #7186 review: the "exactly one back per state" contract spans a
+    // COMPOSITION boundary — the browse header's back and the drawer's
+    // `drawer-back-to-menu` live in different layouts, so a KbLayout-scoped
+    // unit test is structurally incapable of counting both. Only a real-viewport
+    // render can. The closed drawer is translated off-canvas, not unmounted and
+    // not inert, so its link is in the a11y tree here too: this asserts the
+    // count we actually ship, and will fail loudly if it changes.
+    await expect(
+      page.getByRole("link", { name: /back to menu/i }),
+    ).toHaveCount(2);
     await expect(browse.getByRole("navigation", { name: /knowledge base file tree/i })).toHaveCount(1);
     await expect(secondarySlot(page).getByRole("navigation", { name: /knowledge base file tree/i })).toHaveCount(0);
   });

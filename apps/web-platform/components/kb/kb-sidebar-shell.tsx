@@ -50,8 +50,10 @@ export function KbSidebarShell({
   // + "Refresh" (refetch the tree) — so the collapsed KB rail is meaningful, not
   // blank. NOTE: this is a tree REFRESH, not the repo "Sync now" (POST
   // /api/kb/sync) — that richer action with its in-flight + error states lives in
-  // the expanded rail's KbSyncStatus, reachable once expanded. The stable
-  // `kb-rail-tree` wrapper always renders to anchor present/absent assertions.
+  // the expanded rail's KbSyncStatus, reachable once expanded. #7186: the
+  // wrapper testid is now host-dependent (`kb-rail-tree` / `kb-browse-tree`),
+  // so host assertions are made by CONTAINMENT of the tree's role="navigation"
+  // node; `data-kb-tree-host` below is the stable, host-invariant handle.
   // #7186: collapse is a RAIL concept only. `RailCollapsedProvider` wraps
   // <main> in app/(dashboard)/layout.tsx — not just the rail — so a
   // content-column host reads the SAME context; without this guard a user who
@@ -124,6 +126,10 @@ export function KbSidebarShell({
   return (
     <div
       data-testid={host === "content" ? "kb-browse-tree" : "kb-rail-tree"}
+      /* Stable across hosts, unlike the testid above: anything keying on the
+         shell itself (an agent, a runbook, a DOM-driving script) should use
+         this rather than a name that vanishes when the tree relocates. */
+      data-kb-tree-host={host}
       data-tour-id="action:kb-tree"
       className="flex h-full flex-col"
     >
@@ -157,7 +163,7 @@ export function KbSidebarShell({
       ) : (
         <>
           <div className="shrink-0 px-3 pb-3 pt-3">
-            <SearchOverlay />
+            <SearchOverlay restoreQuery={host === "content"} />
           </div>
           <div
             ref={scrollRef}

@@ -148,7 +148,7 @@ No product code until 0.4 closes (`wg-ui-feature-requires-pen-wireframe`).
 ## Phase 4 — ADR + docs
 
 - [x] 4.1 Create
-      `knowledge-base/engineering/architecture/decisions/ADR-158-kb-file-tree-mounts-by-breakpoint.md`
+      `knowledge-base/engineering/architecture/decisions/ADR-158-kb-file-tree-host-is-a-derived-value.md`
       — one decision clause, two seriously-weighed alternatives, and the two structural safety facts
       (no JS-gated DOM in the `fullWidth` block; `RailSlotPortal` null until its ref callback)
 - [x] 4.2 Amend `ADR-047-nav-context-band-outside-swap.md` as a **dated append-only

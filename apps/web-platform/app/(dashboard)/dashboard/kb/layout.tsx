@@ -1,10 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { isKbDocView } from "@/hooks/segment-to-drill-level";
-import { BackArrowIcon } from "@/components/dashboard/nav-icons";
 import { KbContext } from "@/components/kb/kb-context";
 import { KbChatContext } from "@/components/kb/kb-chat-context";
 import { KbChatQuoteBridgeProvider } from "@/components/kb/kb-chat-quote-bridge";
@@ -19,6 +17,7 @@ import { useKbLayoutState } from "@/hooks/use-kb-layout-state";
 import { KbDesktopLayout } from "@/components/kb/kb-desktop-layout";
 import { KbMobileLayout } from "@/components/kb/kb-mobile-layout";
 import { KbSidebarShell } from "@/components/kb/kb-sidebar-shell";
+import { KbMobilePageHeader } from "@/components/kb/kb-mobile-page-header";
 import { ReconnectNotice } from "@/components/repo/reconnect-notice";
 import { RailSlotPortal } from "@/components/dashboard/rail-slot";
 
@@ -36,11 +35,12 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     treeHost,
   } = state;
 
-  // One back per state (#4915): the mobile page header shows its own "Back to
-  // menu" ONLY in the KB doc view, where the persistent band's back is
-  // suppressed (layout.tsx keys `suppressBack` on the SAME isKbDocView
-  // predicate). On the KB landing (and its fullWidth sub-states) the band keeps
-  // its back, so the page header renders the title only — no duplicate back.
+  // #7186 correction: the previous comment here claimed the mobile band keeps
+  // its back on the KB landing and that layout.tsx keys `suppressBack` on this
+  // same predicate. Neither was ever true — the mobile band is `suppressBack`
+  // unconditionally, and layout.tsx no longer imports isKbDocView at all. What
+  // IS true: this fullWidth header renders its own back only on the doc route,
+  // because on the landing the browse view (kb-mobile-layout.tsx) owns one.
   const pathname = usePathname();
   const showHeaderBack = isKbDocView(pathname);
 
@@ -62,7 +62,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
               callback fires — the portal side is never server-rendered, so no
               hydration mismatch is possible here (D1 reason 2). */}
           <RailSlotPortal>
-            {treeHost === "rail" ? <KbSidebarShell /> : null}
+            {treeHost === "rail" ? <KbSidebarShell host={treeHost} /> : null}
           </RailSlotPortal>
 
           {fullWidth ? (
@@ -74,26 +74,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
             // header is mobile-only (md:hidden): desktop orientation comes from
             // the persistent rail band.
             <div className="flex h-full flex-col">
-              <header
-                data-testid="kb-page-mobile-header"
-                className="flex shrink-0 items-center gap-2 border-b border-soleur-border-default px-4 py-3 md:hidden"
-              >
-                {showHeaderBack && (
-                  <Link
-                    href="/dashboard"
-                    aria-label="Back to menu"
-                    className="flex items-center text-soleur-text-secondary hover:text-soleur-text-primary"
-                  >
-                    <BackArrowIcon className="h-5 w-5" />
-                  </Link>
-                )}
-                {/* Mobile page title — the band's mobile section title is
-                    suppressed for KB so this is the single "Knowledge Base"
-                    title on mobile (P2-4). */}
-                <h1 className="text-sm font-medium text-soleur-text-primary">
-                  Knowledge Base
-                </h1>
-              </header>
+              <KbMobilePageHeader showBack={showHeaderBack} hideOnDesktop />
               <div className="flex min-h-0 flex-1 flex-col">
                 {/* #4712 — surface the reconnect banner even on the empty/error
                     branch. Suppressed during loading to avoid flicker. */}

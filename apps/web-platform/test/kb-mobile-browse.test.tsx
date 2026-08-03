@@ -131,7 +131,7 @@ async function renderLayout() {
 
 describe("#7186 — mobile KB drill-in", () => {
   it("mobile + populated + landing: the tree fills the content column and the rail slot holds no tree (AC1/AC6)", async () => {
-    const { container } = await renderLayout();
+    await renderLayout();
 
     const browse = await screen.findByTestId("kb-browse-tree");
     expect(
@@ -146,7 +146,6 @@ describe("#7186 — mobile KB drill-in", () => {
         name: /knowledge base file tree/i,
       }),
     ).toBeNull();
-    expect(container).toBeTruthy();
   });
 
   it("mobile + populated + document route: the document fills the content column and the tree is back in the rail", async () => {
@@ -269,6 +268,9 @@ describe("#7186 — mobile KB drill-in", () => {
     await renderLayout();
     await screen.findByTestId("kb-browse-tree");
 
+    // Scoped to KbLayout: DashboardLayout (and its `drawer-back-to-menu`) is
+    // not mounted here, so this counts the KB's OWN backs only — it is NOT the
+    // composition-wide count. That one lives in the 390x844 e2e arm.
     const backs = screen.getAllByRole("link", { name: /back to menu/i });
     expect(backs).toHaveLength(1);
     expect(backs[0]).toHaveAttribute("href", "/dashboard");

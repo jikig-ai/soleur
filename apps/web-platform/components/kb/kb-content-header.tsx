@@ -117,7 +117,16 @@ export function KbContentHeader({
                 type="button"
                 data-testid="kb-header-overflow-trigger"
                 aria-label="More actions"
-                aria-haspopup="menu"
+                /* NOT `menu`: the panel holds a link, an async sync button and
+                   SharePopover (which opens its own nested popover) — none of
+                   which are menuitems, and an ARIA menu whose owned children are
+                   not menuitems announces as empty and breaks
+                   getByRole("menuitem") for DOM-driving agents. `dialog` +
+                   role="group" is the honest shape for a container of
+                   heterogeneous controls, and needs no roving tabindex: the
+                   panel follows the trigger in DOM order, so Tab already works. */
+                aria-haspopup="dialog"
+                aria-controls="kb-header-overflow"
                 aria-expanded={overflowOpen}
                 ref={triggerRef}
                 onClick={() => setOverflowOpen((v) => !v)}
@@ -137,7 +146,8 @@ export function KbContentHeader({
               </button>
               {overflowOpen && (
                 <div
-                  role="menu"
+                  id="kb-header-overflow"
+                  role="group"
                   aria-label="Document actions"
                   data-testid="kb-header-overflow-menu"
                   className="absolute right-0 top-full z-50 mt-2 flex w-56 flex-col gap-2 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-3 shadow-xl"

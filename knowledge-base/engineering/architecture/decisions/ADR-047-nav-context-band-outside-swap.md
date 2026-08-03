@@ -144,8 +144,9 @@ Note the breakpoint is NOT the discriminator on its own — the portal is live *
 in every non-populated state — so this must not be written down as an "`md+` only" rule.
 The discriminator is the derived `treeHost` value in `useKbLayoutState`.
 
-See [ADR-158](./ADR-158-kb-file-tree-mounts-by-breakpoint.md) for the derivation, the two
-structural safety facts that make it safe (no viewport-derived value reaches first paint;
-`RailSlotPortal` is null until its ref callback fires), and the rejected alternatives. The
+See [ADR-158](./ADR-158-kb-file-tree-host-is-a-derived-value.md) for the derivation, the two
+safety facts that make it safe — one CONDITIONAL (no viewport-derived value reaches the hydration
+render, which holds only while the KB tree's SWR key is never seeded pre-hydration) and one
+structural (`RailSlotPortal` is null until its ref callback fires) — and the rejected alternatives. The
 rejected-alternatives table above is unchanged — CSS dual-render is still rejected, and
 ADR-158 rejects it again on the same grounds.

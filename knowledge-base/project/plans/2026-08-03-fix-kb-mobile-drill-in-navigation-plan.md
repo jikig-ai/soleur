@@ -826,7 +826,7 @@ second breakpoint crossing does not restore (Non-Goals #5).
 
 ### Phase 4 — ADR + docs
 
-4.1 Write `ADR-158-kb-file-tree-mounts-by-breakpoint.md` — one decision clause, two
+4.1 Write `ADR-158-kb-file-tree-host-is-a-derived-value.md` — one decision clause, two
 seriously-weighed alternatives, and the two structural safety facts (no JS-gated DOM in the
 `fullWidth` block; `RailSlotPortal` is null until its ref callback fires).
 4.2 Amend `ADR-047`: the `md+` qualifier on Decision 2 and `related_adrs += ADR-158`.
@@ -862,7 +862,7 @@ this host): desktop, **tablet at exactly 768px**, and mobile (constitution line 
 |---|---|
 | `apps/web-platform/test/kb-mobile-browse.test.tsx` | Mobile browse-view coverage, written against the layout |
 | `apps/web-platform/test/kb-sidebar-shell-host.test.tsx` | Component-level `host` prop coverage — the RED for the `RailCollapsedProvider` leak, and the bisect for the layout suite |
-| `knowledge-base/engineering/architecture/decisions/ADR-158-kb-file-tree-mounts-by-breakpoint.md` | The decision record |
+| `knowledge-base/engineering/architecture/decisions/ADR-158-kb-file-tree-host-is-a-derived-value.md` | The decision record |
 | `knowledge-base/product/design/navigation/screenshots/37-*.png` | The 768px tablet frame (Phase 0.2) |
 
 *(`kb-mobile-drill-in-nav.pen` + frames `29-`…`36-` are already committed in `15ac70b19`.)*

@@ -104,7 +104,7 @@ describe("KbContentHeader — mobile overflow (DC3)", () => {
 
     expect(screen.getByTestId("chat-trigger")).toBeInTheDocument();
     const trigger = screen.getByTestId("kb-header-overflow-trigger");
-    expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+    expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
     expect(trigger).toHaveAttribute("aria-expanded", "false");
 
     // Closed: the secondary actions are not mounted…
@@ -119,7 +119,11 @@ describe("KbContentHeader — mobile overflow (DC3)", () => {
 
     fireEvent.click(screen.getByTestId("kb-header-overflow-trigger"));
     const menu = screen.getByTestId("kb-header-overflow-menu");
-    expect(menu).toHaveAttribute("role", "menu");
+    // `group`, not `menu` — the children are a link, an async sync button and a
+    // popover trigger, so an ARIA menu would announce as empty and would break
+    // getByRole("menuitem") for any agent addressing it by role.
+    expect(menu).toHaveAttribute("role", "group");
+    expect(menu).toHaveAccessibleName("Document actions");
 
     // Single-mount: a `md:hidden` twin would make each of these two.
     expect(screen.getAllByTestId("kb-content-download")).toHaveLength(1);

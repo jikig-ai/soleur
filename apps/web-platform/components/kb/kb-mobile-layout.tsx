@@ -2,11 +2,10 @@
 
 import type { ReactNode } from "react";
 import dynamic from "next/dynamic";
-import Link from "next/link";
 import type { UseKbLayoutStateResult } from "@/hooks/use-kb-layout-state";
 import { KbDocShell } from "@/components/kb/kb-doc-shell";
 import { KbSidebarShell } from "@/components/kb/kb-sidebar-shell";
-import { BackArrowIcon } from "@/components/dashboard/nav-icons";
+import { KbMobilePageHeader } from "@/components/kb/kb-mobile-page-header";
 import { useKb } from "@/components/kb/kb-context";
 import { ReconnectNotice } from "@/components/repo/reconnect-notice";
 
@@ -57,20 +56,9 @@ export function KbMobileLayout({ children, state }: KbMobileLayoutProps) {
                   mobile KB landing has no reachable in-page back at all. It
                   lives HERE — on the populated browse view only — never in the
                   shared fullWidth block, which must stay viewport-invariant. */}
-              <header className="flex shrink-0 items-center gap-2 border-b border-soleur-border-default px-4 py-3">
-                <Link
-                  href="/dashboard"
-                  aria-label="Back to menu"
-                  className="flex min-h-11 min-w-11 items-center text-soleur-text-secondary hover:text-soleur-text-primary"
-                >
-                  <BackArrowIcon className="h-5 w-5" />
-                </Link>
-                <h1 className="text-sm font-medium text-soleur-text-primary">
-                  Knowledge Base
-                </h1>
-              </header>
+              <KbMobilePageHeader showBack />
               <div className="min-h-0 flex-1">
-                <KbSidebarShell host="content" />
+                <KbSidebarShell host={treeHost} />
               </div>
             </>
           ) : (

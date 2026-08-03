@@ -19,6 +19,32 @@ approved.
 | DC4 | **Deferred — not this PR.** Brand-guide vs shipped-surface radius contradiction is a brand-guide edit; filed as its own issue at Phase 6. Wireframes keep 8–10px to match the shipped dashboard and the eight sibling wireframes. | pipeline, per DC4's own "not blocking this PR" |
 | DC5 | **Verified, not a choice — global bar is NOT suppressed on KB routes.** `app/(dashboard)/layout.tsx:320-334` renders the `md:hidden` top bar (hamburger-left, `MobilePaletteTrigger`-right) unconditionally for every dashboard route. The plan's assumption holds; the mobile ⌘K trigger survives on KB. | verified in code, no operator input needed |
 
+### CORRECTION to DC1's premise (post-review, 2026-08-03)
+
+The premise put to the operator — *"the mobile KB landing has no reachable in-page back at all
+today"* — was **wrong**, and the operator approved DC1(a) on it. Multi-agent review found a FOURTH
+back-renderer that neither the plan nor the wireframe pass counted: `drawer-back-to-menu` in
+`app/(dashboard)/layout.tsx`, an `md:hidden` "Back to menu" → `/dashboard` rendered on every
+drilled route. The drawer `<aside>` is translated off-canvas — not unmounted, not `inert` — so
+that link is in the accessibility tree in the state the premise called empty.
+
+What this does and does not change:
+
+- **It does not invalidate the decision.** The drawer back is behind a hamburger tap; an in-page
+  back on the browse view is still the better affordance, and the wireframe the operator signed
+  off on is unaffected.
+- **It does add a consequence the operator was not told about:** the populated mobile landing now
+  renders TWO links with the same accessible name and the same href. Not visually simultaneous
+  (one is off-canvas), but identical to a screen reader and to any composition-scoped query.
+- The unit assertion that appeared to guard this (`kb-mobile-browse.test.tsx`) renders `KbLayout`
+  without `DashboardLayout`, so it was structurally incapable of seeing the second link. The real
+  count is now asserted at the composition root in the 390x844 e2e arm, and the durable fix
+  (making the closed drawer `inert`) is filed as a follow-up.
+
+Recorded here rather than quietly fixed, because the operator's approval rested on the false half.
+
+---
+
 **Waived:** task 0.2 (a 9th `37-*` wireframe frame at the 768px switch point). The operator signed off
 on the eight committed frames, and the 768px switch is pinned behaviourally by the unconditional
 `768×1024` e2e arm in task 1.3 — which is stronger evidence than a static frame. Recorded here rather
