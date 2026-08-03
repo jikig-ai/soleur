@@ -318,6 +318,14 @@ report=$(jq -n \
         # aggregator keys every counter on rule_id and never reads .kind.
         | map(select(startswith("net-issue-flow") | not))
         | map(select(startswith("cost-of-filing-") | not))
+        # grep-rewrite-* is .claude/hooks/grep-rewrite.sh telemetry (issue
+        # #7165, ADR-158): `-would-rewrite` from the observe-only soak and
+        # `-disarm` when the envelope cannot be built. Same tier-gate rationale
+        # as cost-of-filing-* above — the rule body lives in the hook header and
+        # the hooks README, not in AGENTS.md, so the id has no core tag to
+        # match. Without this the orphan gate exits 5 and, on the post-write
+        # path, short-circuits before jsonl rotation.
+        | map(select(startswith("grep-rewrite-") | not))
         # hook-input-* reserved for .claude/hooks/lib/hook-input.sh self-fault
         # telemetry (issue #7164, ADR-156/ADR-157). Same tier-gate rationale as
         # context-reviewed-*: the rule body lives in the helper header + the
