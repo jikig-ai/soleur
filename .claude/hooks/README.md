@@ -18,6 +18,36 @@ exit 0
 Claude Code reads that JSON from stdout and blocks the tool call. Any deviation
 from this shape is treated as a pass-through.
 
+### The third disposition: rewrite (ADR-158)
+
+The two sentences above described the contract completely until #7165. A
+PreToolUse hook has a **third** disposition available to it — it may **rewrite
+the tool input** and let the call proceed:
+
+```bash
+jq -c --arg new "$NEW" \
+  '{hookSpecificOutput:{hookEventName:"PreToolUse",updatedInput:(.tool_input | .command = $new)}}'
+exit 0
+```
+
+This is not a pass-through and it is not a decision. It is a fourth thing, and
+it is deliberately narrow:
+
+- **Exactly one hook in this directory may do it.** Two rewriters for the same
+  call have undefined precedence and one rewrite is silently discarded. Enforced
+  by a one-entry allowlist in `hookeventname-coverage.test.sh`.
+- **A rewriter never emits `permissionDecision`**, at any depth. An `allow`
+  would bypass the permission system for every call it touches.
+- **`updatedInput` REPLACES `tool_input`; it does not merge.** Build it from the
+  whole object. Emitting only the changed key silently drops `timeout`,
+  `run_in_background`, `description` and `sandbox`.
+- **A sibling's `deny` still wins**, and permission rules match the **original**
+  command — so a rewrite can neither dodge a deny rule nor satisfy an allow one.
+
+Today the sole rewriter is `grep-rewrite.sh`. Full clause list and the probe
+evidence: [ADR-158](../../knowledge-base/engineering/architecture/decisions/ADR-158-pretooluse-hooks-may-rewrite-tool-input.md)
+and [UPDATED-INPUT-PAYLOAD-SHAPE.md](./UPDATED-INPUT-PAYLOAD-SHAPE.md).
+
 ## Parsing hook input
 
 **That stdin envelope is model-controlled and untrusted** ([ADR-156][adr155]).
@@ -287,6 +317,15 @@ helper itself errors.
 | `guardrails.sh` | 6 | `guardrails-block-commit-on-main`, `guardrails-block-rm-rf-worktrees`, `guardrails-block-delete-branch`, `guardrails-block-conflict-markers`, `guardrails-require-milestone`, `hr-never-git-stash-in-worktrees` |
 | `pencil-open-guard.sh` | 1 | `cq-before-calling-mcp-pencil-open-document` |
 | `worktree-write-guard.sh` | 1 | `guardrails-worktree-write-guard` |
+
+### PreToolUse rewriters (no deny semantics)
+
+Emit `updatedInput` and let the call proceed — see §The third disposition above.
+ADR-158 permits exactly one entry in this table.
+
+| Hook | Rewrites | Rule IDs emitted |
+|---|---|---|
+| `grep-rewrite.sh` | Prepends a `grep()` redefinition to Bash commands carrying a `grep` substring, neutralizing the ugrep shim that reached 9.5 GB RSS against a 21 kB file (#7163). The command itself is left byte-identical. Kill-switch: `SOLEUR_DISABLE_GREP_REWRITE=1`. Observe-only: `SOLEUR_GREP_REWRITE_OBSERVE=1`. Issue #7165. | `grep-rewrite-would-rewrite` (observe-only soak), `grep-rewrite-disarm` (`warn`, envelope could not be built) |
 
 ### PostToolUse hooks (no deny semantics)
 
@@ -600,8 +639,11 @@ to silence a narrow false positive is how a guard goes quietly dark.
 | `SOLEUR_SKIP_RUNBOOK_SSH_GATE=1` | `ship-runbook-ssh-gate.sh` | The `hr-no-ssh-fallback-in-runbooks` deny on runbook edits. |
 | `CLAUDE_HOOK_BYPASS=1` (+ `_REASON`) | `prod-write-defer-gate.sh` | The prod-write defer. Requires a reason and is audit-logged — see the F2 section above. |
 
+| `SOLEUR_DISABLE_GREP_REWRITE=1` | `grep-rewrite.sh` | The `grep()` prefix rewrite. Not a denial override — it disarms the **rewrite** disposition, restoring the ugrep shim and with it the 9.5 GB blowup (#7163). Listed here because it is the rollback lever for a hook on the hot path of every Bash call, and is read as the hook's first executable statement so it works even when the hook's own dependencies are broken. |
+
 Not denial overrides, documented elsewhere in this file: `SOLEUR_DEFER_DRYRUN`
 (F2 mode switch), `SOLEUR_DISABLE_AGENT_TOKEN_TEE`, `SOLEUR_DISABLE_SKILL_LOGGER`,
 `SOLEUR_DISABLE_CONTEXT_QUERIES`, `SOLEUR_DISABLE_PHASE_HINT` (telemetry
-kill-switches), `SOLEUR_DEFER_TARGETS_OVERRIDE` (F2 manifest override).
+kill-switches), `SOLEUR_GREP_REWRITE_OBSERVE` (grep-rewrite observe-only soak),
+`SOLEUR_DEFER_TARGETS_OVERRIDE` (F2 manifest override).
 
