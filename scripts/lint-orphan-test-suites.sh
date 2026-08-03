@@ -20,9 +20,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNNER="$REPO_ROOT/scripts/test-all.sh"
 
 # name | reason (must cite a tracking issue)
-EXCLUSIONS=(
-  "lint-agents-enforcement-tags.test.sh|pre-existing FAILURE on main (Total: 9 Pass: 7 Fail: 2), unrelated to #6734. Registering it as-is would turn test-all.sh red for a defect this PR did not introduce and does not fix. Tracked in #6751."
-)
+#
+# EMPTY IS THE GOAL STATE. lint-agents-enforcement-tags.test.sh was excluded
+# here as a pre-existing failure (7/9) tracked in #6751; #7172 fixed the
+# defect, registered both suites in test-all.sh, and removed the exclusion.
+# Leaving a stale exclusion behind would re-hide the next regression in the
+# very suite that was just repaired.
+EXCLUSIONS=()
 
 fails=0
 for f in "$REPO_ROOT"/scripts/*.test.sh; do
@@ -30,7 +34,9 @@ for f in "$REPO_ROOT"/scripts/*.test.sh; do
   base=$(basename "$f")
 
   excluded=""
-  for e in "${EXCLUSIONS[@]}"; do
+  # `${a[@]+"${a[@]}"}` so an EMPTY exclusion list does not trip `set -u` on
+  # bash < 4.4 (macOS still ships 3.2). Empty is now the expected state.
+  for e in ${EXCLUSIONS[@]+"${EXCLUSIONS[@]}"}; do
     [[ "${e%%|*}" == "$base" ]] && excluded="${e#*|}"
   done
   if [[ -n "$excluded" ]]; then

@@ -345,7 +345,11 @@ per-rule attribution rather than tamper-evidence — leave that framing intact.
 
 1. `python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.rules.md; echo EXIT=$?` → `EXIT=0` and an `OK: all …` line. *(This is the exact lefthook invocation — the AC runs the gate's own command, per `cq-assert-anchor-not-bare-token`'s input-side twin.)*
 2. `python3 scripts/lint-agents-enforcement-tags.py; echo EXIT=$?` (bare, default args) → `EXIT=0`, and the OK line reports **non-zero** hook and skill counts.
-3. The OK line reports `12 hook + 32 skill` tags — asserting the **expected** counts, not merely "> 0".
+3. The OK line reports `10 hook + 30 skill` tags — asserting the **expected** counts, not merely "> 0". Derived from the as-written corpus, not estimated:
+   ```
+   python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.rules.md
+   ```
+   **Corrected during /work.** This AC first said `12 hook + 32 skill`, taken from a naive `grep -oE '\[hook-enforced:'` prefix count. That count is wrong twice over: it counts the tag-legend blockquote (prose, not a tag) and it counts two empty-bodied `[hook-enforced:]` / `[skill-enforced:]` prose mentions inside a rule body at `AGENTS.rules.md:120`, which the full-tag regex correctly ignores. Full-regex total is 11/31; body-line total — what the linter actually resolves — is **10/30**. Reconciled exactly: 11 − 1 legend line = 10. The code was right; the AC was wrong.
 4. `bash scripts/lint-agents-enforcement-tags.test.sh` → `Fail: 0`, and total cases **increased** (new floor + grammar cases).
 5. Vacuity floor fires: running the linter against a tag-free fixture exits 1 with a message naming the scanned paths.
 6. Negative case preserved: a fixture with a genuinely unresolvable anchor still exits 1. *(Guards against the grammar becoming a silent always-pass.)*
