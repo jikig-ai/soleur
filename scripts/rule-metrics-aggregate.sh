@@ -318,6 +318,14 @@ report=$(jq -n \
         # aggregator keys every counter on rule_id and never reads .kind.
         | map(select(startswith("net-issue-flow") | not))
         | map(select(startswith("cost-of-filing-") | not))
+        # grep-rewrite-* is .claude/hooks/grep-rewrite.sh telemetry (issue
+        # #7165, ADR-162): `-would-rewrite` from the observe-only soak and
+        # `-disarm` when the envelope cannot be built. Same tier-gate rationale
+        # as cost-of-filing-* above — the rule body lives in the hook header and
+        # the hooks README, not in AGENTS.md, so the id has no core tag to
+        # match. Without this the orphan gate exits 5 and, on the post-write
+        # path, short-circuits before jsonl rotation.
+        | map(select(startswith("grep-rewrite-") | not))
         # hook-input-* reserved for .claude/hooks/lib/hook-input.sh self-fault
         # telemetry (issue #7164, ADR-156/ADR-157). Same tier-gate rationale as
         # context-reviewed-*: the rule body lives in the helper header + the
@@ -336,6 +344,13 @@ report=$(jq -n \
     # other counter in this script.
     | ($counts | to_entries
         | map(select(.key | startswith("hook-input-")))) as $hook_input_faults
+    # grep-rewrite-* is hook self-fault telemetry — the SAME class as hook-input-*,
+    # not the cost-of-filing-* disposition class an earlier draft cited. It means
+    # "the rewriter broke", so the exclusion above needs the same replacement
+    # readout the hook-input- exclusion documents as its LOAD-BEARING PAIR.
+    # Without it the row appears in NO field of this report (measured).
+    | ($counts | to_entries
+        | map(select(.key | startswith("grep-rewrite-")))) as $grep_rewrite_faults
     | {
         schema: $schema,
         generated_at: $generated_at,
@@ -423,6 +438,10 @@ report=$(jq -n \
           # "Parsing hook input". This counter is the surface that replaces the
           # orphan_rule_ids listing removed by the exclusion above; the stderr
           # line below is what makes it visible without reading the JSON.
+          grep_rewrite_fault_count: ($grep_rewrite_faults | map(.value.fire_count) | add // 0),
+          grep_rewrite_fault_reasons: ($grep_rewrite_faults
+            | map({key: (.key | ltrimstr("grep-rewrite-")), value: .value.fire_count})
+            | from_entries),
           hook_input_fault_count: ($hook_input_faults | map(.value.fire_count) | add // 0),
           hook_input_fault_reasons: ($hook_input_faults
             | map({key: (.key | ltrimstr("hook-input-")), value: .value.fire_count})
@@ -451,6 +470,13 @@ orphan_count=$(echo "$report" | jq -r '.summary.orphan_rule_ids | length')
 # so both the dry-run and the write path surface it. Advisory, never fatal — a
 # disarmed hook is already reported in-band by a permissionDecision=ask.
 hook_input_fault_count=$(echo "$report" | jq -r '.summary.hook_input_fault_count // 0')
+grep_rewrite_fault_count=$(echo "$report" | jq -r '.summary.grep_rewrite_fault_count // 0')
+if [[ "${grep_rewrite_fault_count:-0}" -gt 0 ]]; then
+  grep_rewrite_breakdown=$(echo "$report" \
+    | jq -r '.summary.grep_rewrite_fault_reasons | to_entries | map("\(.key)=\(.value)") | join(" ")' 2>/dev/null || echo "")
+  echo "WARNING: $grep_rewrite_fault_count grep-rewrite event(s) [${grep_rewrite_breakdown}] — the ugrep shim was NOT neutralized for those calls (disarm = envelope unbuildable; would-rewrite = observe-only mode is ON, which disables the rewrite repo-wide). See ADR-162." >&2
+fi
+
 if [[ "${hook_input_fault_count:-0}" -gt 0 ]]; then
   hook_input_breakdown=$(echo "$report" \
     | jq -r '.summary.hook_input_fault_reasons | to_entries | map("\(.key)=\(.value)") | join(" ")' 2>/dev/null || echo "")
