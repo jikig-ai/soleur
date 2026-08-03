@@ -12,9 +12,9 @@ criterion. Plan ACs 1–18 (`## Acceptance Criteria` → `### Pre-merge (PR)`).
 
 | AC | Criterion | Command | Result |
 | --- | --- | --- | --- |
-| 1 | suite exits 0, `Total` ≥ `MIN_ASSERTIONS` | `bash scripts/prod-version-drift-check.test.sh` | **exit 0**, `Total: 75 Pass: 75 Fail: 0`, floor `MIN_ASSERTIONS=58` |
-| 2 | Part A covers the fixture table, each asserting an EXIT CODE | `DRIFT_TEST_PARTS=A bash …test.sh` | **35 PASS**, covering A1–A20 (a superset of the plan's A1–A17); every row asserts `$rc` |
-| 3 | Part C: 10 axes, each mutation asserted LANDED, control green FIRST | full suite run | `C0 unmutated control is GREEN` printed before any axis; all 10 axes `sabotage is caught` |
+| 1 | suite exits 0, `Total` ≥ `MIN_ASSERTIONS` | `bash scripts/prod-version-drift-check.test.sh` | **exit 0**, `Total: 102 Pass: 102 Fail: 0` (A=53 B=38 C=11), floors `MIN_ASSERTIONS=102` + per-part `A=53 B=38 C=11` |
+| 2 | Part A covers the fixture table, each asserting an EXIT CODE | `DRIFT_TEST_PARTS=A bash …test.sh` | **53 PASS**, covering A1–A25 (a superset of the plan's A1–A17); every row asserts `$rc`. A21–A25 drive `main()`, which had zero coverage until the review |
+| 3 | Part C: 10 axes, each mutation asserted LANDED, control green FIRST | full suite run | `C0 unmutated control is GREEN` printed before any axis; all 10 axes caught, and each now names the assertion it targets — axis 2 was VACUOUS (a syntax-error mutant caught by A0, never by B8) until the review |
 | 4 | axis 3 — dropping `--first-parent` goes red | Part C | `C-axis3-drop-first-parent … caught (child exit 1)` |
 | 5 | axis 4 — newest-commit clock fails A6 | Part C | `C-axis4-newest-not-oldest … caught (child exit 1)` |
 | 6 | axis 5 — bare `!cancelled()` fails B3 **and** B4 | Part C | `C-axis5-bare-not-cancelled … caught (child exit 1)` |
@@ -66,3 +66,23 @@ visible in a green suite, because in each case the suite WAS green for the wrong
    comment mentions, so it stayed green with the flag deleted from the git invocation as long as
    any comment still named it. It is now anchored on the command shape
    (`^[^#]*git (log|rev-list)[^|]*--first-parent`), which a `#`-leading line cannot satisfy.
+
+## Post-review corrections (2026-08-02)
+
+Two rows above were recorded before the sanitiser commit and never re-derived, so they
+understated the suite (75/75 and 35) — failing the standard this file's own preamble sets. They
+are corrected against a fresh run rather than edited to look consistent.
+
+The review itself is the substantive addendum: ten agents found the alarm could go silent four
+independent ways, all in the alerting state machine rather than the classifier, and 16 of 20 new
+mutations survived the then-green suite. The fixes and their evidence are in commit
+`68ff78602`; the mutation-proofs are reproducible from the assertions named there.
+
+Two figures worth carrying forward because they were MEASURED and contradicted in-repo comments:
+
+- GHA `schedule:` delivery on this repo: 59 consecutive `*/30` runs, min 61 / median 114 /
+  max 243 minutes apart, **0 within the nominal+margin window**. This refutes the
+  `margin == interval` rationale that two sibling monitors still rely on (pre-existing, out of
+  scope here, tracked in the follow-up).
+- `--first-parent` changes the answer on **279 of 800** on-chain bases. It is not the "verified
+  no-op" the original comment claimed.
