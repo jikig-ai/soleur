@@ -366,8 +366,13 @@ EOS
 printf '%s\n' "$*" >> "${SSH_CALLS:-/dev/null}"
 case "$*" in
   *mktemp*)   printf '%s\n' "/var/lib/workspaces-luks/wl-verify.XXXX"; exit 0 ;;
-  *WORKSPACES_COUNT=*) exit 0 ;;
+  # ORDER IS LOAD-BEARING. The baseline READ arm must precede the generic write arm: the read
+  # command embeds the literal `WORKSPACES_COUNT=` inside its own grep pattern, so a generic
+  # `*WORKSPACES_COUNT=*` placed first swallows it, FIXTURE_EXISTING_BASELINE becomes dead, and the
+  # workflow's refuse-to-lower-baseline guard — which stops an operator converting a real shortfall
+  # into a certified green — is left with zero coverage while the suite reports 69 green.
   *"grep -E '^WORKSPACES_COUNT='"*) printf '%s\n' "${FIXTURE_EXISTING_BASELINE:-}"; exit 0 ;;
+  *WORKSPACES_COUNT=*) exit 0 ;;
   *tar\ xzf*) exit 0 ;;
 esac
 # The probe invocation: emit the fixture's log body, then exit the fixture's rc.
@@ -471,6 +476,28 @@ EOS
   else
     ok "an ordinary scheduled run does not enter the seed branch (empty seed, no state write)"
   fi
+  # The refusal must not cost the healthy path its verdict: a scheduled run with no seed still
+  # classifies pass. Without this the no-seed fixture asserts only an absence, and a guard that
+  # aborted every scheduled run would satisfy it.
+  expect_class "an ordinary scheduled run still reaches a verdict" "pass" "$c_noseed"
+
+  # REFUSE TO LOWER AN EXISTING BASELINE — the guard that stops an operator staring at a
+  # workspace_count_shortfall from re-seeding down to the observed (shrunk) count and converting a
+  # real sole-copy data-loss finding into a certified green. Reachable only now that the stub's
+  # read arm is ordered ahead of its write arm.
+  lower_calls="$SCRATCH/calls.seed-below-baseline"
+  c_seed_lower=$(EV=workflow_dispatch SEED=5 EXISTING=8 CALLS="$lower_calls" PRC=0 PLOG="$READYZ_OK" drive)
+  if [[ "$(cat "$lower_calls.rc" 2>/dev/null || echo 0)" -ne 0 ]]; then
+    ok "a dispatch seed BELOW the existing baseline is refused (non-zero exit)"
+  else
+    no "a downward re-seed was ACCEPTED — a real shortfall can be certified green in one click"
+  fi
+  expect_class "a refused downward re-seed classifies as unavailable" "unavailable" "$c_seed_lower"
+  if grep -qF "printf 'WORKSPACES_COUNT=%s" "$lower_calls" 2>/dev/null; then
+    no "the refused downward re-seed still WROTE a baseline to the host"
+  else
+    ok "the refused downward re-seed reached the host with no baseline write"
+  fi
 
   # The dispatch path must keep working — a seed on a manual dispatch is the supported operation.
   # Anchored on the WRITE construct, not on a bare `WORKSPACES_COUNT=9`: the workflow sends the
@@ -486,6 +513,7 @@ EOS
   else
     no "the manual seed path stopped working — the dispatch contract regressed"
   fi
+  expect_class "a successful dispatch seed still reaches a verdict" "pass" "$c_seed_disp"
 
   # --- non-vacuity floor over the class space ----------------------------------------------------
   produced=$(printf '%s\n' "$c_pass" "$c_drift" "$c_short" "$c_basemiss" | sort -u | grep -c '[a-z]' || true)
@@ -527,6 +555,14 @@ EOS
   }
 
   CLASS=drift RSN=blkid_not_luks alarm_drive
+  # The alarm body runs under `set -euo pipefail`. An abort anywhere between classification and
+  # `gh issue create` leaves a run that classified correctly and then filed NOTHING — silence on
+  # the one run the alarm exists for. Assert the body completes, not merely that it started.
+  if [[ "$LAST_ALARM_RC" -eq 0 ]]; then
+    ok "the alarm body runs to completion under set -euo pipefail (no mid-step abort)"
+  else
+    no "the alarm body aborted (rc=$LAST_ALARM_RC) — it would classify correctly and file nothing"
+  fi
   grep -q 'label create' "$LAST_GH" 2>/dev/null \
     && ok "the alarm creates its label idempotently before filing" \
     || no "the alarm never ran gh label create — a first fire on a fresh repo would fail"
