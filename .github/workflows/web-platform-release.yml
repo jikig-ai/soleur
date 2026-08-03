@@ -75,6 +75,13 @@ jobs:
       component_display: "Soleur Web Platform"
       # git-pathspec dialect (NO ** — check_changed runs under `set -f`). Mirrors
       # the outer on.push.paths denylist: plugins/soleur/ minus docs/ and test/.
+      #
+      # COUPLED (#7091): this string is the DEFINITION of "a commit that should have
+      # deployed", so scripts/prod-version-drift-check.sh mirrors it as its PATHSPEC
+      # constant and scripts/prod-version-drift-check.test.sh (B8) parity-asserts the two
+      # are byte-identical. Changing it here without changing there would silently
+      # redefine what the production drift alerter considers correct — the suite goes red
+      # at the moment of divergence rather than at 03:00.
       path_filter: "apps/web-platform/ plugins/soleur/ :(exclude)plugins/soleur/docs/ :(exclude)plugins/soleur/test/"
       tag_prefix: "web-v"
       docker_image: "ghcr.io/jikig-ai/soleur-web-platform"
@@ -495,6 +502,14 @@ jobs:
     # a hang BEFORE those loops (e.g. a buildx wedge per post-mortems/
     # v0116-1-buildx-driver-full-repull-deploy-timeout) and MUST stay above the
     # ~65m legitimate ceiling so it never kills a slow-but-healthy deploy.
+    #
+    # COUPLED (#7091): this value is one of four on the serial critical path (await-ci 60 +
+    # migrate 30 + verify-migrations 15 + deploy 90 = 195) that together bound the longest
+    # LEGITIMATE commit-to-deployed latency. scripts/prod-version-drift-check.sh sets
+    # DRIFT_SUSTAINED_THRESHOLD_MIN from that sum, and B9 asserts the threshold stays >= it —
+    # so RAISING any of these four fails that suite until the threshold is raised too. That
+    # direction is deliberate: the threshold must never silently become smaller than the
+    # latency the pipeline itself permits, or the alerter pages on healthy releases.
     timeout-minutes: 90
     concurrency:
       group: web-1-swap
