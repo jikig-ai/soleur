@@ -38,9 +38,10 @@ Measured against the target corpus in one command each:
 
 | Signal | Measured |
 |---|---|
-| Corpus composition | **~98.5% prose** (~111,830 lines; ~1.1k inside code blocks) |
-| Cross-doc relative `.md` links | 271, across 122 of 2,084 files (**5.9%**) |
-| Top headings | `## Tags` ×920, `## Key Insight` ×788, `## Solution` ×677 |
+| Corpus composition | **~92% prose** (177,530 lines; 11,020 inside code blocks) |
+| Cross-doc `.md` links | 354, across 152 of 2,085 files |
+| Files with any extractor-capturable link (incl. wikilinks) | 502 of 2,085 (**24%**) |
+| Top headings (anchored) | `## Problem` ×1,868, `## Solution` ×1,644, `## Session Errors` ×1,522 |
 
 So the deterministic path indexes headings + filenames + explicit links — a **strict
 subset** of what the existing grep arm already searches (full text) at R@5(heavy) 0.2966,
@@ -68,7 +69,8 @@ Three corollaries, each of which independently would have reached the verdict fa
 
 1. **Measure corpus composition before evaluating any code-intelligence tool against a
    knowledge base.** A prose-vs-code line ratio and a link-density count are one command
-   each. A ~98.5%-prose corpus gives 28 AST extractors nothing to parse.
+   each. A ~92%-prose corpus gives 28 AST extractors nothing to parse. Derive the ratio
+   with a fence-**state machine**, not a fence count, and check the parts sum to the whole.
 2. **A "zero LLM / deterministic / local" claim is usually scoped to one input class.**
    Find which class, and check whether it is *your* class. If the answer is the other
    one, the headline properties invert — a tool adopted for token efficiency can become a
@@ -102,11 +104,31 @@ Three corollaries, each of which independently would have reached the verdict fa
    it carried as unverified and re-probe from a path you listed yourself — do not let the
    conclusion survive on the subagent's authority.
 
-3. **Subagent counts diverged from direct measurement.** A leader reported 353 cross-doc
-   links across 153 files (7.3%); direct measurement gave 271 across 122 (5.9%).
-   Conclusion unchanged; measured values used.
-   **Prevention:** already covered by the "a subagent's COUNT is a claim to re-derive"
-   rule — this is a confirming instance, not a new gap.
+3. **RETRACTED — I logged a subagent's count as an error when my own pattern was the
+   narrower one.** This entry originally recorded a leader's "353 links across 153 files
+   (7.3%)" as diverging from my "direct measurement" of 271/122. Review re-derivation
+   showed my regex required a `./` or `../` prefix and silently dropped ~83 sibling links;
+   the broader pattern gives **354 across 152 (7.29%)**, within one of the leader's figure.
+   The subagent was right.
+   **Prevention:** re-deriving a subagent's number is only half the check — when the two
+   disagree, diff the **patterns** and ask which population each selects before deciding
+   who is wrong. A stricter regex is not a more accurate one. This is the failure mode the
+   "a subagent's COUNT is a claim to re-derive" habit does *not* cover: it guards against
+   trusting the agent, not against trusting yourself.
+
+4. **Three composition figures and all five heading counts shipped wrong; review caught
+   them.** Total lines (~111,830 vs **177,530**), code-block lines (~1.1k vs **11,020**,
+   ~10× off), and the derived "~98.5% prose" (vs **~92%**) were all wrong, and the heading
+   frequencies were each a single whitespace variant read off a truncated
+   `sort | uniq -c | head -8` — inverting the true rank order.
+   **Prevention:** never take a total from a truncated `uniq -c` listing; count per key
+   with an anchored, whitespace-tolerant pattern and sum explicitly.
+
+5. **The sparsity argument ignored what the extractor actually ingests.** Wikilinks were
+   tabled separately as if inert; `markdown.py` feeds them through the same `add_link`
+   path, making true coverage 24% of files rather than 6%.
+   **Prevention:** derive a "corpus too sparse for tool X" claim from X's own extractor
+   regex list, not from the link syntax you happened to grep for.
 
 4. **Three different Stage-2 R@5 number sets are in circulation** for one stage: the
    committed `learning-retrieval-metrics-2026-05-20.json` (identity 0.775 / light 0.636),

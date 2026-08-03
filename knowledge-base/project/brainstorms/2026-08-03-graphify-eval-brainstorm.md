@@ -7,6 +7,9 @@ lane: cross-domain
 brand_survival_threshold: single-user incident
 external_tool: https://github.com/Graphify-Labs/graphify
 supersedes_consideration_of: kb-search Stage 3 candidate set (#4206)
+branch: feat-graphify-eval
+pr: 7205
+issues: [4206, 5708]
 ---
 
 # Brainstorm: Adopt Graphify for Soleur?
@@ -29,7 +32,9 @@ mechanism is disqualifying on inspection. See Key Decision 1.
 Probed directly from the repo API on 2026-08-03 — not README claims.
 
 - **Apache-2.0**; `NOTICE` retains `LICENSE-MIT` for pre-relicense contributions.
-- **v0.9.32 — pre-1.0.** 101k stars, 9.8k forks, **768 open issues**, pushed 2026-08-01.
+- **v0.9.32 — pre-1.0.** 101,437 stars, 9,846 forks, pushed 2026-08-01T14:44Z.
+  **348 open issues and 420 open PRs** — the repo API's `open_issues_count` of 768 is the
+  sum of both, so cite the split, not the aggregate.
 - Python library + Claude Code skill + **MCP stdio server** (`serve.py`; optional
   `mcp`/`starlette` extras). Pipeline: `detect → extract → build_graph → cluster →
   analyze → report → export`; tree-sitter AST → NetworkX → Leiden. **No vector store.**
@@ -52,7 +57,7 @@ under the existing #5708 track. Axis B (user repos) unchanged — stays deferred
 
 | Surface | Verdict | Rationale |
 |---|---|---|
-| **Knowledge base** (#4206 Stage 3) | **Decline** | Its markdown path indexes headings, filenames and explicit links only — never paragraph text. A strictly smaller lexical surface than the grep arm that already plateaus at R@5(heavy) 0.297. Cannot clear the committed 0.4 gate. |
+| **Knowledge base** (#4206 Stage 3) | **Decline** | Its markdown path indexes headings, filenames and explicit links only — never paragraph text. A strictly smaller lexical surface than the grep arm that already plateaus at R@5(heavy) 0.2966. Cannot clear the committed ≥0.40 gate. |
 | **Code base** (Axis A, #5708) | **Probe, time-boxed** | This is Graphify's real competency (28 language extractors; `resolution.py` 115 KB, `engine.py` 257 KB) against ~3,200 Soleur code files. Its own `benchmark.py` measures the exact token delta that would justify or kill it. |
 | **User repos** (Axis B, #5708) | **Unchanged — deferred** | All prior gates still apply; nothing in this evaluation moved them. |
 
@@ -73,20 +78,23 @@ no paragraph text. Measured against the live corpus:
 
 | Signal | Measured (2026-08-03) |
 |---|---|
-| Learnings corpus | **2,084** `.md` files (2,079 excluding `archive/`) |
-| Corpus composition | **~98.5% prose** — ~111,830 lines total, ~1.1k lines inside code blocks |
-| Cross-doc relative `.md` links | **271**, spread over **122 files (5.9%)** |
-| Wikilinks (`[[...]]`) | 753 |
-| Top headings | `## Tags` ×920, `## Key Insight` ×788, `## Solution` ×677, `## Problem` ×527, `## Session Errors` ×354 |
+| Learnings corpus | **2,085** `.md` files (2,080 excluding `archive/`; includes this evaluation's own learning) |
+| Corpus composition | **~91.7% prose** of all lines (**~93.7%** excluding fence delimiters) — **177,530** lines total, **11,020** inside code blocks, 3,723 fence lines |
+| Cross-doc `.md` links | **354** over **152 files** (strict `./`-prefixed subset: 271 over 122) |
+| Wikilinks (`[[...]]`) | **753** — also captured by the extractor, via `_MD_WIKILINK_RE` |
+| Files with **any** capturable link | **502 of 2,085 (24.1%)** |
+| Top headings (anchored `^## X$`) | `## Problem` ×1,868, `## Solution` ×1,644, `## Session Errors` ×1,522, `## Key Insight` ×1,456, `## Tags` ×1,171 |
 
-~94% of learnings carry no outbound cross-doc link, and the heading population is
-overwhelmingly a handful of repeated template strings. The graph would be sparse and
-boilerplate-dominated.
+Roughly **76% of learnings carry no outbound link at all**, and total edge fuel is ~1,107
+link occurrences across 2,085 files (~0.53 per file). The heading population is a handful
+of template strings repeated across most of the corpus — `## Problem` alone appears in
+~90% of files. The resulting graph is sparse and boilerplate-dominated: Leiden clusters it
+by *section type*, not by topic.
 
-The composition row is the decisive corroboration: the corpus is **~98.5% prose**, so
-Graphify's 28 AST extractors have essentially nothing to parse, and the one extractor
-that does run on `.md` is the heading-and-link parser that ignores prose. Both halves of
-the tool miss the corpus.
+The composition row is the corroboration: the corpus is **~92% prose**, so Graphify's 28
+AST extractors have essentially nothing to parse, and the one extractor that does run on
+`.md` is the heading-and-link parser that ignores prose. Both halves of the tool miss the
+corpus.
 
 **2. The lexical ceiling is why this is fatal, and it is already established.**
 `2026-05-20-retrieval-diagnostic-findings.md` concluded the heavy-paraphrase ceiling is
@@ -106,10 +114,10 @@ inverts the token-efficiency goal.** `graphify/skill.md` states:
 Three consequences, all against adoption for the KB:
 
 - The "$0 / deterministic / no-vector-store" property that makes Graphify attractive
-  applies **only to code**. Our corpus is ~98.5% prose, so it sits entirely on the
+  applies **only to code**. Our corpus is ~92% prose, so it sits entirely on the
   semantic path.
 - **Token efficiency inverts.** With no Gemini key set, *the host agent is the LLM* —
-  indexing 2,084 prose learnings bills semantic extraction to Soleur's own agent tokens.
+  indexing 2,085 prose learnings bills semantic extraction to Soleur's own agent tokens.
   A tool adopted to reduce token cost would impose a large one-off, and recurring
   per-update, cost on exactly the corpus in question.
 - **Egress becomes concrete, not hypothetical.** With a key set, the named third-party
@@ -117,7 +125,9 @@ Three consequences, all against adoption for the KB:
   the CLO gate from "architecturally possible" to "documented default for this corpus".
 
 It also repeats a failed experiment: Stage 2 already shipped an LLM pre-pass and
-**regressed** heavy recall by −0.038 while adding cost.
+**regressed** heavy recall — by **−0.0238** per the canonical auto-emitted diagnostic
+(#4206's issue-body table says −0.0381 on a 1,169-file corpus; see Session Error 2) —
+while adding cost.
 
 **4. Graphify does NOT re-open the "no embeddings" brand objection.** The 2026-04-07
 decision rejected RAG partly on the brand line "no vector DB, no embeddings". Graphify's
@@ -154,7 +164,7 @@ cross-domain loop, not the retrieval mechanism.
 
 1. **Code-axis probe design (blocking the probe, not this decision):** does Graphify's
    TypeScript/bash/SQL/Terraform extraction over ~3,200 Soleur files produce a token
-   saving that survives index-maintenance cost across **19 live worktrees**?
+   saving that survives index-maintenance cost across **20 live worktrees**?
    `watch.py` is single-working-tree; regeneration is per-tree and currently unbudgeted.
 2. **Egress proof (CLO hard gate, if the probe runs):** `llm.py` and `google_workspace.py`
    make outbound architecturally real. Settle with a deny-all-egress netns run plus host
@@ -190,7 +200,7 @@ cost: the OSS package is free and no hosted plan is proposed).
 ### Engineering (CTO)
 
 **Summary:** Graphify's markdown path is a heading-and-link structural parser that never
-reads paragraph text; on Soleur's 2,084 learnings it yields mostly-boilerplate heading
+reads paragraph text; on Soleur's 2,085 learnings it yields mostly-boilerplate heading
 nodes and a near-disconnected graph, a strictly smaller lexical surface than the grep arm
 already at R@5(heavy) ≈0.30, so it cannot plausibly clear the ≥0.4 gate — and its
 prose-capable path requires the LLM pass Stage 2 already showed regresses recall.
@@ -224,23 +234,34 @@ early.
 None blocking. One recorded for the code-axis probe:
 
 - **Multi-worktree index maintenance.** Graphify's `watch.py` tracks a single working
-  tree; Soleur runs 19 live worktrees (`git worktree list`, 2026-08-03). Any code-axis
+  tree; Soleur runs 20 live worktrees (`git worktree list`, 2026-08-03). Any code-axis
   adoption needs a per-tree regeneration story that does not exist today. Evidence:
   read `graphify/watch.py` module responsibilities in upstream `ARCHITECTURE.md`;
   worktree count from `git worktree list`.
 
 ## Session Errors
 
-1. **Subagent counts diverged from direct measurement — direct values used.** The CTO
-   reported 353 cross-doc links across 153 files (7.3%); direct measurement on the same
-   corpus gave **271 across 122 files (5.9%)** (`grep -rhoE '\]\(\.{1,2}/[^)]+\.md\)'`).
-   Both support the same conclusion; the measured values are recorded. Per
-   `hr-…`/"a subagent's COUNT is a claim to re-derive".
-2. **CPO quoted Stage-2 R@5 values (identity 0.802 / light 0.675) matching neither
+1. **RETRACTED — I recorded a subagent count as an error when my own pattern was the
+   narrower one.** This entry originally read: *"The CTO reported 353 cross-doc links
+   across 153 files (7.3%); direct measurement gave 271 across 122 (5.9%)."* Review
+   re-derivation showed my pattern (`\]\(\.{1,2}/[^)]+\.md\)`) required a `./` or `../`
+   prefix and silently dropped ~83 sibling links written without one. The broader pattern
+   yields **354 across 152 files (7.29%)** — within one of the CTO's figure. **The
+   subagent was right and my "correction" was the error.** The table now carries the
+   broader number.
+   **Prevention:** when a re-derivation *disagrees* with a subagent, do not assume the
+   direct measurement is the correct one — diff the two **patterns** first and ask which
+   population each actually selects. A stricter regex is not a more accurate one, and
+   "I measured it myself" is not evidence that I measured the right thing.
+2. **Three Stage-2 R@5 number sets are in circulation for one stage.** A subagent quoted
+   identity 0.802 / light 0.675, matching neither the committed
    `learning-retrieval-metrics-2026-05-20.json` (0.775 / 0.636) nor the #4206 issue body
-   (0.7528 / 0.5928).** The committed JSON is treated as authoritative. Three different
-   number sets are in circulation for the same stage — a re-baseline (Key Decision 5)
-   should collapse them.
+   (0.7528 / 0.5928). The regression magnitude diverges the same way: #4206's table says
+   −0.0381 (corpus 1,169), the diagnostic file says −0.0238 (corpus 1,163). **The
+   auto-emitted diagnostic + its sibling JSON are treated as canonical; #4206's table is
+   stale.**
+   **Prevention:** cite the auto-emitted artifact, never an issue body's transcription of
+   it, and re-baseline before the next Stage-3 evaluation (Key Decision 6).
 3. **`extract.py` grep produced a false negative on the prose path.** Searching the
    264 KB `extract.py` for a markdown extractor returned nothing, which read as "no prose
    support". The extractor lives in `graphify/extractors/markdown.py`. Corrected before
@@ -262,3 +283,24 @@ None blocking. One recorded for the code-axis probe:
    `pyproject.toml`'s `name =` field directly rather than the repo name or install docs.
    **Prevention:** for any Python tool adoption, read `[project].name` in `pyproject.toml`
    — the repo name is not the distribution name.
+6. **Three composition figures shipped wrong by large margins and were caught only at
+   review.** The first draft claimed ~111,830 total lines, ~1.1k code-block lines, and
+   "~98.5% prose". Re-derivation gave **177,530**, **11,020**, and **~92%** — the
+   code-block figure off by ~10×. All five heading frequencies were also wrong *and
+   inverted in rank order* (`## Problem` ×1,868 is the most common, not `## Tags` ×920):
+   the original numbers were each heading's **largest single whitespace variant**, taken
+   from a `sort | uniq -c | head -8` whose tail was truncated, and read as totals.
+   **Prevention:** never take a total from a truncated `uniq -c` listing. Count with an
+   anchored, whitespace-tolerant pattern per key (`grep -cE '^## X[[:space:]]*$'`) and
+   sum explicitly. For a prose-vs-code ratio, use a fence-state machine — not a fence
+   count — and sanity-check that the parts sum to the whole.
+7. **The link-sparsity row understated capture because I never checked what the extractor
+   ingests.** I counted relative `.md` links and listed wikilinks in a separate row as if
+   they were inert. `markdown.py` feeds both through the same `add_link` path via
+   `_MD_WIKILINK_RE`, so the correct coverage is **502 of 2,085 files (24%)**, not 6%.
+   The decline is unaffected — Key Decision 2's strict-subset-of-grep argument is
+   independent and stronger — but this specific evidence row overstated the case against
+   the tool.
+   **Prevention:** when arguing a corpus is too sparse for a tool, derive the sparsity
+   from *what that tool's extractor actually ingests*, not from the link syntax you
+   happened to grep for. Read the extractor's regex list first.

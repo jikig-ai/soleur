@@ -3,9 +3,12 @@ title: Graphify evaluation — KB decline, code-axis probe
 date: 2026-08-03
 lane: cross-domain
 brand_survival_threshold: single-user incident
-status: draft
+status: decided — decline for KB (#4206); narrow code-axis probe on #5708
 brainstorm: knowledge-base/project/brainstorms/2026-08-03-graphify-eval-brainstorm.md
 external_tool: https://github.com/Graphify-Labs/graphify
+branch: feat-graphify-eval
+pr: 7205
+issues: [4206, 5708]
 ---
 
 # Spec: Graphify evaluation outcome
@@ -41,13 +44,19 @@ a possible improvement to code-base understanding and token efficiency.
 - **FR1 — KB verdict: DECLINE.** `graphify/extractors/markdown.py` (194 lines) emits a
   file node, heading nodes, `contains` edges and `references` edges for explicit links
   only; it returns `input_tokens: 0` and never reads paragraph text.
-- **FR2 — Corpus evidence.** 2,084 learnings, **~98.5% prose**; 271 cross-doc relative
-  links across 122 files (5.9%); heading population dominated by ~6 template strings.
+- **FR2 — Corpus evidence.** 2,085 learnings, **~92% prose** (177,530 lines total, 11,020
+  inside code blocks); 354 cross-doc `.md` links across 152 files, 753 wikilinks, for
+  502 of 2,085 files (24%) carrying any extractor-capturable link; heading population
+  dominated by ~5 template strings, `## Problem` alone in ~90% of files.
 - **FR3 — Mechanism is disqualifying.** The deterministic path searches a strict subset
   of what the grep arm already searches (full text) at R@5(heavy) 0.2966. It cannot beat
   a superset of its own signal.
-- **FR4 — The semantic fallback repeats a failed experiment.** Graphify's document path
-  routes through `llm.py`; Stage 2's LLM pre-pass regressed heavy recall by −0.038.
+- **FR4 — The semantic path is LLM extraction, and it repeats a failed experiment.** Per
+  the vendor's `skill.md`, the no-LLM guarantee covers **code only**; docs, papers and
+  images go through semantic extraction using **Gemini** when `GEMINI_API_KEY`/
+  `GOOGLE_API_KEY` is set, "otherwise the host agent itself is the LLM." Stage 2's LLM
+  pre-pass regressed heavy recall by −0.0238 per the canonical diagnostic (#4206's table
+  says −0.0381 on a 1,169-file corpus; see the re-baseline requirement in AC1).
 - **FR5 — Code axis is open.** ~3,200 tracked code files (1,599 `.ts`, 736 `.sh`,
   480 `.tsx`, 283 `.sql`, 69 `.tf`) match Graphify's real extractors.
 
@@ -63,7 +72,7 @@ a possible improvement to code-base understanding and token efficiency.
 - **TR3 — Time-box.** Probe is scoped to the operator's machine and this repo only. Any
   result that requires new always-on infrastructure ends the probe rather than expanding it.
 - **TR4 — Worktree maintenance is in scope.** `watch.py` is single-working-tree; the
-  probe must state the per-tree regeneration cost across the current 19 worktrees, or
+  probe must state the per-tree regeneration cost across the current 20 worktrees, or
   explicitly scope to one tree.
 - **TR5 — No `.mcp.json` entry during the probe.** The bench harness calls retrievers as
   shell functions; an MCP stdio server is not callable from it and is not needed to
@@ -73,7 +82,10 @@ a possible improvement to code-base understanding and token efficiency.
 
 - **AC1.** #4206 records Graphify as eliminated, with the mechanism reason and the
   measured corpus evidence, and proceeds to (or closes in favour of) its original
-  embeddings ADR.
+  embeddings ADR. It also records that the bench baseline is stale (1,163-file corpus vs
+  2,085 live) and that three Stage-2 R@5 number sets are in circulation, so **any future
+  Stage-3 evaluation re-baselines first** and cites the auto-emitted diagnostic rather
+  than an issue body's transcription of it.
 - **AC2.** #5708 records the code-axis finding so the Axis-A probe, if picked up,
   inherits TR1–TR5 rather than re-deriving them.
 - **AC3.** No fourth KB-retrieval candidate is evaluated absent a user-side signal
