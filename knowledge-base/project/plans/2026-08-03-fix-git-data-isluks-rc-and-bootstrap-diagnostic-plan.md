@@ -33,6 +33,53 @@ Closes #7216. Closes #7227.
 > Spec note: no `spec.md` exists for this branch, so `lane:` was defaulted to `cross-domain`
 > (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-03 · **Gates run:** 4.4, 4.45, 4.55, 4.6, 4.7, 4.8, 4.9, 4.10
+
+### Halt gates
+
+| Gate | Result |
+| --- | --- |
+| 4.6 User-Brand Impact | **PASS** — section present, threshold `single-user incident` |
+| 4.7 Observability | **PASS** — all 5 fields present, non-placeholder, no `ssh ` in `discoverability_test.command` |
+| 4.10 Encryption Posture | **PASS** — all 6 `at_rest` fields present; `does_not_defend` non-empty; `exception` carries `tracking_issue` + `expires_on` |
+| 4.9 UI wireframe | **N/A** — zero UI-surface files |
+| 4.8 PAT-shaped variable | **PASS** — no matches |
+| **4.55 Downtime & Cutover** | **FIRED** — `user_data` edit is `ForceNew` on `hcloud_server.git_data`. New `## Downtime & Cutover` section added; telemetry emitted. |
+
+### Verify-the-negative pass (10 claims probed against source)
+
+**All 10 `confirms`, zero `contradicts`.** The load-bearing ones:
+
+- `hcloud_server.git_data` has `ignore_changes = [ssh_keys]` only — the `user_data` ForceNew is
+  deliberate and documented in-file.
+- No `set -x` in either file; `random_password.git_data_luks` is `length = 40, special = false`;
+  all **3 key-consuming** `cryptsetup` calls (of 5 total) use `--key-file -` on stdin. Together
+  these are the evidence base for Decision **clause B**, and Phase 3.5 mechanizes them.
+- `log()` writes **stdout** — confirming Phase 2.10 is required, not optional.
+- Better Stack is gated on `BETTERSTACK_LOGS_TOKEN`, absent from the parent shell; the capture
+  script routes every query through `betterstack-query.sh` and its own header disclaims Sentry.
+  **This is the #7116 chain, confirmed end-to-end.**
+- Exactly **9** `replace(file(...), git_data_rationale_strip, "")` calls vs an unstripped
+  `templatefile()` on the template itself — the byte-budget premise holds.
+
+### Citation verification (live)
+
+`#7116` OPEN · `#6897` OPEN · `#7217` OPEN · `#7204` OPEN · `#7197` MERGED · `#6982` CLOSED ·
+`#7025` OPEN · `#6588` OPEN. Both cited AGENTS rule IDs active. `AP-008` present in the
+principles register. All 6 knowledge-base citations + the runbook path resolve on disk.
+
+### Key improvements from this pass
+
+1. **`## Downtime & Cutover` added**, and it corrected a framing error: the host has **never been
+   born**, so the first apply is a *birth*, not a replacement — and the already-LUKS danger state
+   is reached by a **retried birth**, a later `user_data` edit, or an unrelated replace. That
+   makes #7216 a near-path risk rather than a hypothetical, and pins why the fix must precede the
+   dispatch.
+2. Decision clause B moved from assertion to **verified evidence** (all four sub-claims probed).
+3. Confirmed Phase 2.10 (`log()` → stderr) is load-bearing, not defensive.
+
 ## Overview
 
 Two defects in `apps/web-platform/infra/cloud-init-git-data.yml` and the artifacts bound to it.
@@ -856,6 +903,68 @@ constraint is a further safeguard: the evidence reader can no longer be pointed 
 
 Not applicable — no provider resource is created. The only spend is the rehearsal's paid `cpx22`,
 capped at two dispatches and gated on the operator.
+
+## Downtime & Cutover
+
+*Required by deepen-plan Phase 4.55: the template edit is `ForceNew` on `hcloud_server.git_data`
+(verified — that resource declares no `lifecycle { ignore_changes = [user_data] }`), which is the
+infra reboot/replace trigger class.*
+
+**The offline-inducing operation and the surface it affects.** Editing
+`cloud-init-git-data.yml` changes `user_data`, which Hetzner applies by **replacing** the server.
+The affected surface is the git-data host: the `git` transport user, the bare-repo root on
+`/mnt/git-data`, and the LUKS store at `/mnt/git-data-luks`.
+
+**User-visible downtime: none — and for a stronger reason than the flag.** Two independent facts,
+both verified:
+
+1. **The host does not exist yet.** `hcloud_server.git_data` has never been born — the birth
+   runbook (`knowledge-base/engineering/operations/runbooks/git-data-birth.md`) carries a
+   DO-NOT-DISPATCH banner and `git_data_rung2_rehearsal_gate` exits 1 before planning anything
+   while `git-data-rung2-boot-evidence.env` is absent. There is no running server to replace.
+2. **Even once born, the store is dark.** `GIT_DATA_STORE_ENABLED` is absent from Doppler `prd`,
+   and `apps/web-platform/server/workspace-resolver.ts` gates every git-data read/write on
+   `process.env.GIT_DATA_STORE_ENABLED === "true"`. `apply-web-platform-infra.yml` says so in its
+   own operator banner.
+
+So the first apply is a **birth**, not a replacement, and no user push, clone, or workspace
+operation routes to this host in either state. Zero in-flight requests dropped, zero sessions
+interrupted. The gate's zero-downtime evaluation is satisfied by *absence of the surface*, not by
+a cutover mechanism — and saying exactly which of the two facts is load-bearing matters, because
+they expire at different times.
+
+**Blast radius of THIS PR at merge: zero hosts.** The plan applies nothing.
+`apply-web-platform-infra.yml`'s git-data path stays held by `git_data_rung2_rehearsal_gate`,
+which HOLDs fail-closed while no `git-data-rung2-boot-evidence.env` is committed (verified
+absent). The replacement happens later, at the operator-gated birth — not on this merge.
+
+**Where the already-LUKS volume actually comes from — and why #7216 is not hypothetical.** The
+*first* birth runs against a blank volume (rc=1 → `luksFormat`, the correct path). The dangerous
+state is every boot **after** the volume has been formatted once, because a `ForceNew` provisions
+a fresh instance while the **block volumes persist and re-attach**. Three concrete routes reach it,
+all on the near path:
+
+- a **retried birth** after a partially-successful one (LUKS formatted, a later stage failed) —
+  the most likely single case, and the plan's own AC20 contemplates a second dispatch;
+- any **later `user_data` edit** once the host exists (this file is edited constantly);
+- a host replace for an unrelated reason (`server_type`, image, placement).
+
+In each, the replacement boots `runcmd` against an already-LUKS volume — precisely the `isLuks`
+path this PR fixes. **The fix must land before the birth, not after**: once a volume has been
+formatted, every subsequent boot is a coin-flip on whether `cryptsetup` was reachable.
+
+**Per-stage verification and rollback.** Verification is the rung-2 rehearsal itself — a
+throwaway host with throwaway volumes, born and destroyed by the workflow, asserting
+`stage:boot_complete` with no `level:fatal` before any production host is touched (ADR-149's
+interlock). Rollback for the *production* birth is that the volumes are untouched by a failed
+boot: a host that aborts in `runcmd` leaves the LUKS header intact (that is the whole point of
+the catch-all `exit 1`), so a failed birth is retried by replacing the host again, not by
+restoring data. **The one path with no rollback is the bug being fixed** — a `luksFormat` on an
+already-LUKS volume destroys every key slot, and no amount of cutover discipline recovers it.
+
+**Residual downtime accepted:** none, and no maintenance window is needed. If the store is
+serving by the time the birth actually runs (i.e. `GIT_DATA_STORE_ENABLED` has flipped),
+**re-run this section** — the trivial answer above expires with the flag.
 
 ## Sharp Edges
 
