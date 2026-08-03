@@ -402,7 +402,7 @@ jobs:
             echo "### Rung-2 rehearsal: TRANSIENT (no verdict)" >> "$GITHUB_STEP_SUMMARY"
             echo "The poll expired without a terminal answer (last rc=\`${rc}\`). This is NOT evidence the host booted dark — read the capture output above to see whether the log source itself was answering." >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Next:** download the \`git-data-rung2-capture-log\` artifact and check whether the Better Stack source-liveness anchor answered. If it did, the host booted but never emitted \`stage:boot_complete\`; if it did not, the query path is the suspect. Re-dispatch either way. **#7025 stays open and the DO-NOT-DISPATCH banner stays up.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "**Next:** download the \`git-data-rung2-capture-log\` artifact and check whether the Better Stack source-liveness anchor answered. If it did, the host booted but never emitted \`stage:boot_complete\`; if it did not, the query path is the suspect. **DO NOT simply re-dispatch.** #7116 mis-reports TRANSIENT for exactly the early-boot fatals it could read from Sentry directly — attempt 1 of run 30649892865 was that mis-report, one attempt before the real FAIL. Confirm against Sentry first (\`host_name:soleur-git-data-rehearsal-<run-id>\`, org \`jikigai-eu\`, project \`web-platform\`); a \`level:fatal\` row means treat this as FAIL and STOP. Each dispatch spends a paid cpx22 — cap two per fix attempt. **#7025 stays open and the DO-NOT-DISPATCH banner stays up.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$rc"
 
