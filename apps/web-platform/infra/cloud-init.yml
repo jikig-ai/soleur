@@ -807,8 +807,6 @@ runcmd:
     # from /tmp — if future hardening flips it on, grep for other
     # exec-from-/tmp call sites first.
     stage=docker_run
-    # INNGEST_BASE_URL below is the THIRD dispatch write site (ADR-155). Value-pinned to
-    # the other two by inngest-inventory.test.sh test_probe_target_follows_app case (9).
     docker run -d \
       --name soleur-web-platform \
       --log-driver journald \
