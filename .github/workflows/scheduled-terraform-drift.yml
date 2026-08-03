@@ -308,6 +308,23 @@ jobs:
             unknown|degraded|at-floor) ;;
             *) coverage=unknown ;;
           esac
+          # A VALID `coverage` ALONGSIDE AN UNREADABLE `configs` IS THE FAIL-OPEN THIS
+          # ISSUE EXISTS TO CLOSE. The greedy-tail guarantee above protects `configs`, and
+          # ONLY `configs`: `coverage` is now a detector passthrough sitting BEFORE it in
+          # the `read -r`, so an empty mid-list field (a null `coverage_ratio`, say) shifts
+          # the tail to `-1` while `coverage` still reads `at-floor` — a confident state
+          # next to a count that was never parsed. The close arm fires on `at-floor`, so
+          # that pair silently CLOSES the coverage issue on a run that measured nothing:
+          # the same "clean bill of health for a question never asked" the detector's own
+          # header condemns. The vocabulary clamp above cannot catch it, because
+          # `at-floor` IS in the vocabulary. Tie the two: an unreadable count is an
+          # unmeasured state, never a confident one.
+          if [[ ! "$configs" =~ ^[0-9]+$ ]]; then
+            coverage_as_read="$coverage"
+            coverage=unknown
+            cov_ratio="-/-"
+            echo "::error::token_drift_configs_unparseable — configs='${configs}' is not an integer, so coverage is forced to unknown (it read '${coverage_as_read}'). A field shift out of the read -r, or a truncated detector payload, is the usual cause."
+          fi
           # THE FLOOR ASSERTION IS EXTERNAL TO THE FLOOR. A declared number is exact about
           # what this step demands, but a number cannot catch its own reduction: a floor
           # edited DOWN in the same change that narrows the grant would hold the scan at

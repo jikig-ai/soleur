@@ -427,9 +427,12 @@ echo "T8c: a FIELD SHIFT lands in the greedy tail and publishes configs=-1, not 
 # ten names, so the shift must terminate in `configs` — which then fails `^[0-9]+$` and
 # publishes the -1 sentinel rather than a plausible count.
 #
-# RESIDUAL, recorded deliberately rather than asserted as correct: `coverage` sits BEFORE
-# the shift point and is now a detector passthrough, so on this path it survives the shift
-# intact. The fail-closed property this case pins is about `configs`, not about `coverage`.
+# `coverage` MUST FOLLOW `configs` DOWN. `coverage` sits BEFORE the shift point and is a
+# detector passthrough, so the greedy-tail guarantee protects `configs` and not it — left
+# alone, this fixture publishes `configs=-1` beside a confident `at-floor`, and the close
+# arm fires on `at-floor` alone. That pair silently CLOSES the coverage issue on a run that
+# parsed no count at all. The vocabulary clamp cannot catch it (`at-floor` is IN the
+# vocabulary), so the step ties the two explicitly: an unreadable count forces `unknown`.
 mkfix shifted '{"live":0,"dead":0,"unverifiable":0,"probes":0,"configs":13,
  "configs_floor":13,"configs_expected":13,"configs_unread":[],
  "coverage":"at-floor","coverage_ratio":"","inventory_age_days":0,
@@ -439,6 +442,16 @@ if [[ "$(out_val "$r" configs)" == "-1" ]]; then
   pass "an empty mid-list field shifts into the greedy tail and configs publishes -1"
 else
   fail "a field shift left configs='$(out_val "$r" configs)' — a wrong-but-numeric count is fail-OPEN: it is the number the issue body, both email caveats and the close arm's comment all quote as fact"
+fi
+if [[ "$(out_val "$r" coverage)" == "unknown" ]]; then
+  pass "an unreadable configs drags coverage to unknown, so the close arm cannot fire"
+else
+  fail "configs was unparseable but coverage published '$(out_val "$r" coverage)' — the close arm fires on at-floor, so this silently closes the coverage issue on a run that measured nothing"
+fi
+if [[ "$(out_val "$r" coverage_ratio)" == "-/-" ]]; then
+  pass "the ratio is blanked alongside the forced-unknown coverage"
+else
+  fail "coverage_ratio='$(out_val "$r" coverage_ratio)' survived a forced-unknown coverage — both ops emails quote this ratio as measured fact"
 fi
 
 # ---------------------------------------------------------------------------
@@ -965,8 +978,8 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 #
 # 46 is the REALIZED `PASS + FAIL` at #7159, not the plan's provisional 37 — the plan
 # said "confirm against the realized count and raise further if it is higher", and it is.
-if [[ "$((PASS + FAIL))" -lt 46 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 46." >&2
+if [[ "$((PASS + FAIL))" -lt 48 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 48." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
