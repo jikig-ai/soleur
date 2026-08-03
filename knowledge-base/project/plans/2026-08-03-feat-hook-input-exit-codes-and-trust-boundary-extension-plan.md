@@ -8,7 +8,7 @@ requires_cpo_signoff: true
 closes: [7190, 7173]
 branch: feat-one-shot-7190-7173-hook-input-contract-hardening
 adr: ADR-158 (provisional ordinal — re-verify at ship)
-revision: v2 (post plan-review; v1 had three defective ADR clauses — see § Plan Review Revisions)
+revision: v3 (post deepen-plan; 22 measured findings, 2 blocking — see § Deepen-Plan Findings. v2 was post plan-review — see § Plan Review Revisions)
 ---
 
 # hook-input contract: exit codes, suite vacuity, and the boundary past the hot path
@@ -169,6 +169,17 @@ ADR-158 **extends** ADR-156/157; it supersedes neither. Three clauses.
     rejected the per-field shape over.
   - **No boolean group.** `durable-reminder-prefer-inngest` already reads its booleans
     safely (`:83-84`) and keeps doing so. Its migration takes only the `prompt` slot.
+  - **[v3 — D1 is INCOMPLETE without this; see F2.]** Decoupling the token buys the
+    forced-ask fix and pays in **silent fail-open on every non-core slot**: a non-string
+    `.tool_input.content` leaves guardrails' core group clean, so it does not ask, while
+    `skill-security-scan-write` fails its own group, reports, and exits 0 — Write allowed,
+    scanner never ran. So the responder model must extend to **one core-group responder per
+    matcher, plus each hook is responder for its own non-core group.** ADR-157's all-emit
+    objection does not transfer (it concerned 18 hooks × a *persistent* fault;
+    `jq_missing`/`internal`/`unparseable` stay core-group failures owned by the single
+    responder). D1 must also pin an exact **vector-width check** and **positively-phrased**
+    group predicates (F5), and A13 must bind each hook's slot reads to the predicate it
+    calls (F6) — without that last one, D1 reintroduces defect 2 per-slot.
 - **D2 — The designated responder is a SET, not a scalar.** `HOOK_INPUT_RESPONDER`
   (`hook-input.sh:60`) becomes `HOOK_INPUT_RESPONDERS`, a space-delimited list of hook
   basenames (bash 3.2 — no `declare -A`, per the helper's own portability pin at `:34-35`).
@@ -210,6 +221,14 @@ ADR-158 **extends** ADR-156/157; it supersedes neither. Three clauses.
   - Uniformly denying on helper rc 1 — plan v1's proposal — would have been a **behavior
     change on three of five reason classes** with a hard brick on `jq_missing`. Recorded in
     Alternatives as measured-and-rejected.
+  - **[v3 — D3 must be rebuilt a THIRD time on measured behavior; see F1/F3/F13.]** The
+    `.claude` half is sound and was signed off by security review. The **mirror** half is
+    not yet writable: today a malformed document does not fall through — it **aborts at
+    rc 5** before the shape check (F1); the `unparseable` branch is **dead code** (F3); and
+    the `$t == null` conjunct denies every payload with an absent or null `tool_input`
+    (F13). ADR-158 D3 must state, per reason class, what the mirror **measurably** does
+    after Phase 6.1b/6.1c, and must not assert anything about non-0/2 exit codes until
+    Phase 6.1a's runtime probe returns.
 
 ### C4 views
 
@@ -259,12 +278,15 @@ file and were verified by one command.
 
 ### Phase 1 — #7190 item 1: exit codes (highest value)
 
-1.1 `decision_for()` discards `$?`. Assert `rc == 0` **inside the helper** and `bad` loudly
-    on violation — one edit site, no churn across ~25 `want` expectation strings. (Do *not*
-    make `decision_for` return `"<decision>/<rc>"`; that variant is explicitly rejected.)
-    Add a sibling `rc_for()` for the cases that need the code alone. Borrow the conjoined
-    idiom proven at `.claude/hooks/pre-merge-rebase.test.sh:84-101` — never assert rc in
-    isolation where a decision is also available.
+1.1 **[v3 — reversed by F7]** Do **not** call `bad` inside `decision_for()`. It is invoked
+    exclusively inside `$( )` (~25 sites), so the increment runs in a subshell and is
+    discarded — measured `FAIL_after=0`. Written to stderr it returns a clean decision, the
+    outer `want` passes, and the suite exits 0 having detected a non-zero rc and thrown it
+    away: the A9 vacuity class reproduced. **Leave `decision_for` unchanged.** Add a sibling
+    `rc_for()` and let **A16** own the rc assertion in the caller's shell via `want` — zero
+    churn across the `want` strings, and it is where 1.2 already puts it. Borrow the
+    conjoined idiom proven at `.claude/hooks/pre-merge-rebase.test.sh:84-101` — never assert
+    rc in isolation where a decision is also available.
 1.2 New assertion **A16 — every in-scope hook exits 0 on every path.** `INSCOPE20` × three
     payload classes (unparseable, happy, and — for the responder — deny). Comment states
     *why*: a non-zero rc voids the stdout JSON channel, so `ask` and `deny` both evaporate.
@@ -307,11 +329,16 @@ setup, both asserting "a `hook-input-*` row is present" from the same payload cl
 3.3 **Item 5 — skips.** Add a `SKIPPED` counter and a `skip()` helper beside `ok()`/`bad()`,
     printed in the summary (`=== hook-input-contract: $PASS/$TOTAL pass, $SKIPPED skipped
     ===`). Real user today: the python3-gated fixtures at `:234-244`.
-3.4 Make the ":328 worktree ledger unchanged" assertion **unconditional**. It currently
-    depends on an untracked, gitignored file existing. Restructure: synthesize a git repo in
-    the sandbox with a `.claude/` the test owns, run the hook with `INCIDENTS_REPO_ROOT`
-    pointed at a *different* sandbox, assert the synthesized repo's ledger is untouched
-    while the target grows. Stronger, and always runs.
+3.4 **[v3 — corrected by F8]** Make the ":328 worktree ledger unchanged" assertion
+    **unconditional**, but **without synthesizing a git repo**. `_incidents_repo_root()`
+    (`lib/incidents.sh:36-42`) falls back to `dirname(BASH_SOURCE)/../../..` —
+    helper-relative, not cwd- or git-relative — so a synthesized sandbox repo is a location
+    the fallback can never resolve to, and asserting its ledger is untouched cannot fail
+    under any mutation. The `git init` would also re-couple to the branch-dependent gate
+    `:56-58` deliberately avoids (#5192). Instead: point `INCIDENTS_REPO_ROOT` at sandbox
+    `T`; assert (a) `T`'s ledger **grew** and (b) `$REPO_ROOT/.claude/.rule-incidents.jsonl`
+    is **byte-identical**, treating absent as size 0 on both sides. Deleting the
+    `INCIDENTS_REPO_ROOT` branch from `_incidents_repo_root` then makes both RED.
 3.5 The ":338" aggregator walk is gated on `[[ -x $agg || -f $agg ]]`. The aggregator is a
     committed repo file; its absence is a broken checkout, not a legitimate skip. Hard-fail
     with a message saying so.
@@ -327,10 +354,14 @@ setup, both asserting "a `hook-input-*` row is present" from the same payload cl
 3.7 **Item 6 — fidelity.** New assertion **A17**: round-trip a value carrying, in one
     payload, leading spaces, trailing spaces, an embedded newline and a **trailing**
     newline. Assert byte-exact equality — compare lengths *and* content, since a
-    trailing-newline loss is invisible to a naive `[[ "$a" == "$b" ]]` inside `$( )`. Assert
-    for `HOOK_CMD` and one other slot so the property is not pinned to slot 1. The trailing
-    newline is what the sentinel/trailing-separator pair exists to protect
-    (`lib/hook-input.sh:130-135`) and nothing observes it today.
+    trailing-newline loss is invisible to a naive `[[ "$a" == "$b" ]]` inside `$( )`.
+    **[v3 — pinned by F9]** The trailing-newline case MUST be asserted on
+    **`HOOK_FILE_PATH` (slot 5)**: only the last emitted record sits at the end of `raw`, so
+    only slot 5 is protected by the sentinel/trailing-separator pair. Measured against a
+    scratch mutation dropping both, slots 1–4 keep `trailing_nl=YES` and only
+    `HOOK_FILE_PATH` flips to `NO` — so asserting "`HOOK_CMD` and one other slot" leaves
+    two of three choices under which prescribed mutation 6 is **GREEN**. `HOOK_CMD` carries
+    the non-trailing whitespace and embedded-newline properties.
 3.8 **Mutations (6):** rename `_HOOK_INPUT_JQ` → RED on the new non-emptiness precondition
     (today: silently vacuous-pass); rename `hook_input_report` → RED; add a second `jq` as
     `$(jq …)` → RED; delete the aggregator → RED; whitespace-trim `HOOK_CMD` → A17 RED;
@@ -393,26 +424,46 @@ setup, both asserting "a `hook-input-*` row is present" from the same payload cl
 
 ### Phase 6 — #7173(b): OpenHands + integration
 
-6.1 **The mirror stays on its in-place assertion; #7173(b) is discharged under the issue's
-    own AC2.** The gap there is code duplication, not a trust-boundary hole: all three
-    mirror hooks already type-assert (`guardrails.sh:51-63`,
-    `worktree-write-guard.sh:34-45`, `pre-merge-rebase.sh:36,42-53`), with the `//`
-    falsy-trap already avoided. Converging them onto the shared extractor would buy DRY and
-    3-4 forks → 1 on a non-primary harness, and would pay for it with a cross-tree
-    **fail-hard** source that is the single riskiest line in the change set (a fail-soft
-    source there leaves `hook_parse_input` undefined and the hook dies silently — the exact
-    disarm the helper exists to end; a fail-hard source in a harness we cannot easily test
-    is its own hazard). Record the reason in the README, replacing *"Convergence is a
-    tracked follow-up."*
+6.1 **[v3 — premise REFUTED by F1; this phase is rewritten.]** v2 claimed "the gap is code
+    duplication, not a trust-boundary hole." Measurement refutes it: a malformed document
+    kills `.openhands/hooks/guardrails.sh` at `:19` under `set -euo pipefail` — **before**
+    the ADR-156 shape check at `:51-60` — with rc 5, no `deny`, no decision JSON and no
+    incident row. A lone surrogate in a sibling field induces it while
+    `.tool_input.command` stays a clean `rm -rf $HOME`. Two mandatory items, and a
+    precondition:
+    - **6.1a (precondition).** Probe how the OpenHands runtime treats a hook exit code that
+      is neither 0 nor 2. Its response decides whether F1 is a live bypass or a loud abort.
+      ADR-158 D3 must not assert anything about it before this returns.
+    - **6.1b.** Give all three mirror hooks' raw extractions an explicit failure branch
+      instead of letting `set -e` abort them —
+      `… jq -r '…' 2>/dev/null) || deny "BLOCKED: the tool-call envelope did not parse
+      (ADR-156/158 D3)."` Two lines per extraction, no cross-tree source and none of its
+      fail-hard hazard. Note this makes `unparseable` **deny**, which D3 must then reflect.
+    - **6.1c.** Fix `.openhands/hooks/guardrails.sh:56`'s unsatisfiable `$t == null`
+      conjunct to `$t == "null"` (F13). Measured, the mirror currently denies
+      `{"tool_input":null,…}` **and** any payload with no `tool_input` at all — an
+      availability incident in a harness with no `ask`, where `.claude` parses both cleanly.
+    The convergence-vs-in-place decision itself still stands as v2 wrote it (the shared
+    extractor's cross-tree fail-hard `source` remains the riskiest line in the change set),
+    and the README still records the reason — but it records a **fixed** mirror, not a
+    mirror whose divergence was mischaracterised.
 6.2 **ADR-158 D3 is still authored** (Phase 4) — the decision is *why the mirror's
     divergence is correct*, which is the thing #7173 asked to be made deliberately. It now
     also covers all **three** mirror hooks, not two.
-6.3 **Extend `pre-merge-rebase-parity.test.sh`** with a non-string-envelope case asserting
-    both copies reach their own correct verdict — `.claude` **asks**, `.openhands`
-    **denies** — and an `unparseable` case asserting `.openhands` **falls through** (the
-    narrow scope D3 pins). This is the highest-value item in Phase 6: it makes the
-    divergence executable, which is what the parity suite is for. Header comment records
-    the new divergence class it prevents.
+6.3 **Extend `pre-merge-rebase-parity.test.sh`** with three cases, not two:
+    - **non-string** — `.claude` **asks**, `.openhands` **denies**. Unchanged from v2.
+    - **unparseable** — **[v3, corrected by F3]** assert what the mirror *measurably does*
+      after 6.1b, **not** "falls through." v2's drafted assertion would have passed while
+      asserting the opposite of the truth: `GR_ENVELOPE_SHAPE="unparseable"` (`:60`) is
+      **dead code** in the mirror (reachable only if the shape program fails while the
+      simpler `:19-22` extractions succeed on the same document — on jq 1.8 that set is
+      effectively empty), and today a malformed document aborts at rc 5 rather than falling
+      through. Written as "no `decision:deny` on stdout" it is the repaired-A9
+      false-confidence class.
+    - **absent/null `tool_input`** — **[v3, new, F13]** the third divergence class neither
+      v2 case would catch: `.claude` parses cleanly, the mirror denies. Asserts 6.1c's fix.
+    This is the highest-value item in Phase 6: it makes the divergence executable, which is
+    what the parity suite is for. Header comment records the new divergence classes.
 6.4 Verify the suite's existing T-S fixed-string cases (`:175-193`) and behavioural cases
     (`:54-65`) still pass — Phase 6 does not touch the `grep -E` literal, but verify rather
     than assume (issue AC3; the header records two prior silent divergences).
@@ -625,6 +676,257 @@ and one PR closing both issues. Per ADR-084 that is a User-Challenge, not guidan
 silently — persisted to
 `knowledge-base/project/specs/feat-one-shot-7190-7173-hook-input-contract-hardening/decision-challenges.md`
 for `/ship` to surface.
+
+## Deepen-Plan Findings (v3)
+
+`test-design-reviewer` (Farley 8-property, scored **7.5/10 B**) and `security-sentinel` ran
+against plan v2. Both **measured** rather than reasoned. Every finding below was
+independently re-verified in this worktree before being accepted. Two are blocking.
+
+### Blocking
+
+**F1 — The OpenHands mirror aborts on malformed JSON with no deny, no decision, no
+incident row. Phase 6.1's premise is FALSE.** *(security CRITICAL-2)*
+
+```console
+$ printf '{"tool_input":' | bash .openhands/hooks/guardrails.sh
+jq: parse error: Unfinished JSON term at EOF at line 2, column 0
+  rc=5
+```
+
+`.openhands/hooks/guardrails.sh:19` runs `COMMAND=$(… | jq -r …)` under `set -euo pipefail`
+with **no `|| true`**, so any document jq rejects kills the script *before* the ADR-156
+shape check at `:51-60`. A lone surrogate in a sibling field is enough — OpenHands is
+Python, `json.dumps` re-emits `\ud800`, and the document is valid to its parser and invalid
+to jq. `.tool_input.command` can stay a clean `rm -rf $HOME`. If the OpenHands runtime
+treats hook rc 5 as anything but "block," **every guard in the mirror is bypassed silently.**
+The same payload on the `.claude` side yields `n == 0` → `unparseable` → rc 1 → ask.
+
+So v2 Phase 6.1's *"the gap is code duplication, not a trust-boundary hole"* is refuted by
+measurement — the same error class v2 was written to correct in v1's D3. **Amends Phase
+6.1:** the mirror needs a fix regardless of the convergence decision. Minimum, two lines
+per extraction, no cross-tree source and none of its fail-hard hazard:
+
+```bash
+COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null) \
+  || deny "BLOCKED: the tool-call envelope did not parse (ADR-156/158 D3)."
+```
+
+Note this makes `unparseable` **deny**, which contradicts D3 as drafted — see F3. The
+current behavior (abort, rc 5) is neither of D3's two options, and **the OpenHands runtime's
+response to a non-0/2 hook exit code must be probed before ADR-158 asserts anything about
+it.** New Phase 6 precondition.
+
+**F2 — D1's per-slot vector converts an aux-slot failure into a silent ALLOW.**
+*(security CRITICAL-1)*
+
+The chain, all four steps verified: under D1, `guardrails.sh` checks only the **core** group,
+so a non-string `.tool_input.content` on a `Write` does not flip its flags — that is D1's
+stated purpose. `guardrails.sh` parses cleanly and does not ask.
+`skill-security-scan-write.sh` reads `content`, its group predicate fails, and per v2 Phase
+5.6 it takes the standard non-responder path (`report` → `should_ask` false → `exit 0`):
+no stdout, no ask. Claude Code sees no `permissionDecision` → **the Write is allowed and
+the security scanner never ran.**
+
+That is ADR-157's explicitly rejected *"fail open with a loud incident."* Worse, it is a
+**regression against the hook's own current posture** — `skill-security-scan-write.sh`
+already asks rather than allows on both of its "cannot evaluate" branches, with in-source
+rationale citing the same threshold:
+
+> `# Scanner missing → ask, not allow. At single-user incident threshold a silently-removed
+> scanner must surface for operator approval rather than silently disable enforcement.`
+
+The trade is structural and v2 saw only one horn: **coupled token ⇒ forced-ask vector;
+decoupled vector ⇒ silent fail-open on every non-core slot.**
+
+**Amends ADR-158 D1 + Phase 5.6.** The responder model extends from "one hook per matcher"
+to "**one core-group responder per matcher, plus each hook is responder for its own
+non-core group.**" ADR-157's all-emit objection does not transfer: it concerned 18 hooks ×
+a *persistent* fault (`jq_missing`), and `jq_missing`/`internal`/`unparseable` remain
+core-group failures owned by the single responder. A per-slot `nonstring` on `content` is
+transient, model-induced, and reaches at most two hooks on `Write`. New AC: *no migrated
+hook whose failure disarms a deny/ask gate may exit silently on a failed group predicate*,
+with a mutation (array `content` on a SKILL.md Write → assert an `ask` on stdout).
+
+### High
+
+**F3 — D3 must be rebuilt a third time, on measured five-class behavior.** `unparseable`
+is attacker-inducible (lone surrogate, measured on both harnesses) but is **dead code in the
+mirror**: `GR_ENVELOPE_SHAPE="unparseable"` (`:60`) is reachable only if the shape program
+fails while the simpler `:19-22` extractions succeeded on the same document, and on jq 1.8
+that set is effectively empty. So v2 Phase 6.3's *"assert `.openhands` falls through on
+unparseable"* would, written as "no `decision:deny` on stdout," **pass while asserting the
+opposite of the truth** — the false-confidence class of the repaired A9 dead gate. Written
+faithfully it fails. Fail-open on `jq_missing`/`internal`/`unparseable` remains **sound on
+the `.claude` side** and the security reviewer signed it off there.
+
+**F4 — D2's named probe-failure fallback is a no-op under D1.** Registering `guardrails.sh`
+on `CronCreate` does nothing: with a non-string `.tool_input.prompt`, guardrails' **core**
+group is clean (`.tool_input.command` absent → `""` → string, measured), so it parses, its
+guards no-op on a CronCreate payload, and it exits 0 silently. D1 and D2 were revised
+independently in v2 and the interaction was never re-checked. Either drop the fallback and
+make descoping the only branch, or have guardrails check the **union** of groups on matchers
+where it is sole responder (acceptable there — each carries one hook).
+
+**F5 — The flag vector needs a width assertion and positively-phrased predicates.** Today's
+`[[ ${_hi_s[0]} != "ok" ]]` is fail-closed against every possible value. A vector consumed
+by indexing is not: if it is shorter than expected, `${vec:5:1}` is `""` and a predicate
+written `!= "b"` returns true → **treated as ok → guards run against an unvalidated slot.**
+Pin in D1 and assert: `hook_parse_input` returns 1 unless `${#_hi_s[0]}` equals the exact
+expected width; every group predicate is **positive** (`== "s"`, never `!= "b"`); mutation —
+truncate the vector by one char, every predicate must go RED.
+
+**F6 — Nothing binds a hook's slot reads to the group predicate it calls.** A13's three
+verbs do not catch a hook that reads `HOOK_FILE_PATH` while calling `hook_input_ok_write`.
+Combined with "bad-path values emitted empty," the hook sees `""`, every guard no-ops, exit
+0 — **defect 2 restored per-slot**, re-entering through the widening. Add a fourth A13
+check: grep each in-scope hook's referenced `HOOK_*` globals, map to group, assert the hook
+calls that group's predicate. A static grep over ~24 files, and the only thing standing
+between D1 and a silent disarm.
+
+**F7 — Phase 1.1's `bad()`-inside-`decision_for` is the A9 vacuity class reproduced.**
+`decision_for` is called exclusively inside `$( )` (~25 sites), so `FAIL=$((FAIL+1))` runs
+in a **subshell and is discarded**. Measured: `captured=[ask] FAIL_after=0`. Written to
+stderr — the natural reading of "fail loudly" — the decision returns clean, the outer `want`
+passes, and the suite exits 0 having detected a non-zero rc and thrown it away. **v2's
+explicit rejection of the `"<decision>|<rc>"` return was backwards.** *Amends Phase 1.1:*
+leave `decision_for` unchanged and let **A16** own rc via `rc_for()` in the caller's shell —
+which is where v2 already puts it, at zero `want`-string churn.
+
+### Medium
+
+**F8 — Phase 3.4's synthesized git repo is itself vacuous.** `_incidents_repo_root()`
+(`lib/incidents.sh:36-42`) falls back to `dirname(BASH_SOURCE)/../../..` — **helper-relative,
+not cwd- or git-relative** (verified: with cwd inside a fresh git repo and the env unset, it
+resolves to this worktree). The synthesized sandbox is a location the fallback can never
+return, so "the synthesized repo's ledger is untouched" cannot fail under any mutation — a
+vacuous assertion added by the phase whose purpose is removing vacuity. The `git init` also
+re-couples to the branch-dependent gate `:56-58` deliberately avoids (#5192) and leaks
+`init.defaultBranch` / global config. *Amends Phase 3.4:* no git. Point
+`INCIDENTS_REPO_ROOT` at sandbox `T`; assert (a) `T`'s ledger grew **and** (b)
+`$REPO_ROOT/.claude/.rule-incidents.jsonl` is byte-identical, treating absent as size 0 on
+both sides. Deleting the `INCIDENTS_REPO_ROOT` branch from `_incidents_repo_root` then makes
+both RED — the mutation the assertion exists for — and it runs on every checkout.
+
+**F9 — A17 must name `HOOK_FILE_PATH` or prescribed mutation 6 survives.** Only the **last**
+emitted record sits at the end of `raw`, so only slot 5 is protected by the
+sentinel/trailing-separator pair. Measured against a scratch mutation dropping both: slots
+1–4 keep `trailing_nl=YES`; only `HOOK_FILE_PATH` flips to `NO`. v2 Phase 3.7 says "`HOOK_CMD`
+and one other slot" — two of the three available choices make mutation 6 **GREEN**, and the
+PR body would record a mutation row that was never RED. *Amends Phase 3.7:* the
+trailing-newline case is asserted on `HOOK_FILE_PATH` (slot 5); the second slot covers the
+non-trailing whitespace properties.
+
+**F10 — A16 needs a fourth payload class: `jq_missing`.** v2 covers unparseable/happy/deny.
+`jq_missing` is the class where `hook_input_emit_ask`'s printf envelope is the *only*
+surviving channel (`lib/hook-input.sh:277-281`) — `emit_incident` needs jq too — so a
+non-zero exit there voids the ask **with zero telemetry**. A mutation
+`[[ "$HOOK_INPUT_REASON" == jq_missing ]] && exit 1` survives A16 as drafted. Reuse A5's
+shim PATH (`:253-278`). Also: A16's name overclaims — `pre-merge-auto-close-scan.sh:252`
+carries a deliberate commented `exit 2` on a branch no A16 payload reaches; scope the
+comment to the probed classes so a future maintainer does not delete it as a violation.
+
+**F11 — Three of the four migration targets emit an unconditional explicit `allow`.**
+Measured on a happy `Write`: `skill-security-scan-write` and
+`new-scheduled-cron-prefer-inngest` both return
+`{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}`;
+`durable-reminder-prefer-inngest` likewise. When Phase 5.6 grows `INSCOPE20`, **Phase 2
+property (iv) ("silent unless responder") goes RED for three of four new members** — a
+guaranteed mid-implementation stall that v2 budgets as a small data change. Either Phase 5.6
+also rewrites their emit behaviour, or property (iv) carries an explicit exempt list.
+Related and newly reachable: an explicit `allow` from these hooks races an `ask` from
+`guardrails.sh` on the same `Write`. Under the union token both fail together and both go
+silent, so the combination is unreachable today; **D1's decoupling makes allow-vs-ask
+reachable for the first time**, and Claude Code's resolution order for it is unestablished.
+Per ADR-156's own clause that is a **third probe**, alongside 5.1 and 5.2.
+
+**F12 — `command -v jq || allow` short-circuits *before* the parse gate in two designated
+responders.** `durable-reminder-prefer-inngest.sh:66` and
+`new-scheduled-cron-prefer-inngest.sh:51` both exit with an explicit `allow` when jq is
+missing. Under D2 `durable-reminder-prefer-inngest` becomes the **sole responder on
+`CronCreate`**, so with jq absent that matcher has **zero responders** — the plan's own
+stated P0 direction. *Amends Phase 5.6:* every migrated hook's pre-existing jq/parse
+short-circuit is **deleted**, not layered above the helper. Mutation: `PATH=/nonexistent` +
+a `CronCreate` payload → assert an `ask`.
+
+**F13 — The mirror's `$t == null` conjunct is unsatisfiable, and it denies every payload
+without a `tool_input` object.** `type` returns the **string** `"null"`; measured,
+`$t == null` → `false`, `$t == "null"` → `true`. Consequences, both measured: the mirror
+denies `{"tool_input":null,…}` **and** `{"working_dir":"/tmp"}` (no `tool_input` at all),
+rc 2 — an availability incident in a harness with no `ask` and no recovery path, where
+`.claude` parses both cleanly. It also falsifies the mirror's own comment that the guard
+*"fires only when the document PARSES and a contracted field is the wrong TYPE"* — the
+sentence D3 is built on — and it is a **third divergence class** neither of Phase 6.3's
+planned parity cases would catch. Fix the conjunct to `$t == "null" or $t == "object"` and
+add the parity case.
+
+**F14 — `security_reminder_hook.py` is a PreToolUse hook on `Edit`, in neither list.**
+Verified registered on the `Edit` matcher. It reads the same model-controlled envelope and
+is explicitly fail-open. It is absent from `INSCOPE20`, from Phase 5.6's migration set and
+from Phase 5.7's exemption list — so **AC10 passes vacuously** while a Python PreToolUse
+hook sits outside the ADR-156 boundary undocumented. "It is Python and cannot source a bash
+helper" is a fine reason; write it down. Note also its `emit_incident(…, cmd=…)` path
+(`:52`, `:217`) is a second telemetry writer with its own truncation, not covered by A7.
+
+**F15 — Phase 2 must keep A12 (stray artifacts) as a fifth property.** A12 (`:161-176`)
+appears in neither v2 Phase 2.1's four properties nor AC3, and it currently depends on the
+**shared** `$run` that per-hook sandboxes dissolve. High risk of silent loss during the
+merge. Add as property (v), per-hook, keeping `.claude` allow-listed (each sandbox is now
+also an `INCIDENTS_REPO_ROOT`). A3's positive control also needs its own directory once the
+shared `$run` is gone.
+
+**F16 — The telemetry claim in § User-Brand Impact and § GDPR is broader than A7 asserts,
+and false as written.** A7 reads the first row of one sandbox from one hook on one payload
+class. Repo-wide, full model-controlled command text and file paths already reach the ledger
+on every guard deny — `guardrails.sh:125,145,161,281,300,325,373,392` pass `"$COMMAND"`;
+`worktree-write-guard.sh:69` and `pencil-open-guard.sh:43` pass `"$FILE_PATH"`. That may be
+intended for forensics, but the GDPR section discharges trigger (b) on a claim A7 does not
+check. Narrow both sections to: *the `hook-input` **fault** rows carry only a classifier and
+a hook name, asserted by A7.*
+
+### Low
+
+**F17** — `grep -c` counts *lines*, not occurrences; Phase 3.2's jq count must be
+`grep -oE '\bjq\b' | wc -l`. The claim "exactly twice, comment-stripped" is **verified**
+(`:125` `command -v jq`, `:147` the invocation; raw count 28, so the strip is load-bearing),
+but the count is not a fork count — relocating `:147` into a loop keeps it at 2. Retitle the
+assertion. **AC16 contradicts Phase 3.2** (it requires the assertion pass "unchanged" while
+3.2 rewrites it) — reconcile.
+**F18** — D2's membership test must be space-padded/loop-based, not a bare `==` glob match:
+an empty `HOOK_INPUT_HOOK` would otherwise make **every** hook a responder (the
+20-prompts-per-call loop ADR-157 designed against), and `guard` would substring-match
+`guardrails`. Use an explicit `for r in $HOOK_INPUT_RESPONDERS` loop with `local IFS=' '`.
+No injection risk otherwise — all 20 call sites pass hardcoded literal basenames (verified).
+**F19** — A9 reads only `.claude/settings.json`; Claude Code merges `settings.local.json`,
+`~/.claude/settings.json` and enterprise policy. A hook registered through any of those gets
+zero responders and A9 cannot see it. Record the limitation in D2 at minimum.
+**F20** — Phase 3.3's `SKIPPED` counter: the `:29` jq precondition exits *before* the summary
+prints, so a jq-less machine emits no summary line at all for `test-all.sh` to read. Make
+that path print the summary form. AC1's "0 skipped" is also python3-dependent (`:234-244`).
+**F21** — Phase 3.1's A4 apostrophe non-emptiness is **not** needed: measured, an empty range
+yields `awk '{print $1-2}'` → `-2`, and `want "0" "-2"` is already RED. Harmless for
+uniformity, but v2's justification for it is wrong. A11's program check *is* vacuous
+(`printf '%s\n' "" | grep -cF '$'` → `0`) — that one is real.
+**F22** — Runtime budget: baseline 9.1s; A16 adds ~60 hook invocations and Phase 2 goes
+14→20 with per-hook ledger reads. Roughly 2–3×, unbudgeted. A16 can reuse Phase 2's
+invocations. Also consider dropping Phase 2's rc property (it duplicates A16's unparseable
+class) or having Phase 2 use the *happy* class so the two cover disjoint ground.
+
+### Surviving-mutation classes after v3
+
+Named so they are not mistaken for coverage: `exit 1`/`exit 2` gated on `internal`;
+an `exit` added inside `hook_input_report`..EOF with non-leading whitespace
+(`[[ x ]] && exit 1` evades A11's `^\s*exit `); a second jq fork created by relocating the
+invocation into a loop or by swapping `command -v jq` for `type jq`.
+
+### Effect on the split recommendation
+
+**F1, F2, F3, F4 and F13 all live in Phases 4–6. None touches Phases 1–3.** The
+security-sentinel reached the split conclusion independently of the two plan reviewers, and
+added a reason none of them had: the trust-boundary half now needs a further design pass and
+**three more probes** (OpenHands rc-5 runtime semantics, allow-vs-ask resolution order, plus
+the two already planned). DC-1 is updated accordingly. Phases 1–3 remain sound and
+independently shippable.
 
 ## Risks & Mitigations
 
