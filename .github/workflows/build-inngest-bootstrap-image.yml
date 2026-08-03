@@ -19,12 +19,23 @@ on:
   # for a CVE base-image rebuild of an already-released version). It takes the
   # tag name as `ref` — NOT a free-form version — so it can never mint a
   # tagless image that blinds the cloud-init drift-guard (#4692 / #4676 AC6).
+  #
+  # CAUTION on the default (rebuild) path: it re-runs `docker build` and pushes the SAME
+  # tag, so the tag's GHCR digest MOVES. Anything pinning that tag by @sha256 —
+  # cloud-init-inngest.yml pins the dedicated host's payload — is pinned to bytes the tag
+  # no longer points at. Use `mirror_only` when the goal is only to get an already-published
+  # tag onto zot; it cannot move a digest because it never builds.
   workflow_dispatch:
     inputs:
       ref:
         description: 'Existing vinngest-vX.Y.Z tag to (re)publish (e.g., vinngest-v1.1.11)'
         required: true
         type: string
+      mirror_only:
+        description: 'Backfill only: crane-copy the EXISTING GHCR manifest to zot, no rebuild (digest-preserving)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -144,7 +155,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Skipped entirely under `mirror_only`. Not an optimisation: a rebuild re-pushes the
+      # same tag and MOVES its GHCR digest, which is the one thing a digest backfill must
+      # not do. `crane copy` reads the published manifest from GHCR, so the local image this
+      # step would produce is not needed for the mirror.
       - name: Build + verify + push
+        if: ${{ !inputs.mirror_only }}
         env:
           IMAGE: ghcr.io/jikig-ai/soleur-inngest-bootstrap
           TAG: ${{ steps.tag.outputs.tag }}
@@ -217,16 +233,38 @@ jobs:
           docker push "$IMAGE:$TAG"
           echo "Pushed $IMAGE:$TAG"
 
-      # --- #6122 (ADR-096) Phase 2: dual-push the inngest-bootstrap image to the self-hosted
-      # zot registry. The plain `docker build`/`docker push` above leaves the image in the
-      # runner's local docker, so `docker tag` + `docker push 127.0.0.1:5000/...` mirrors it
-      # over the CF Tunnel bridge directly (no crane/buildx-localhost issue). GHCR push stays
-      # primary (break-glass through the Phase-5 soak). Additive: a zot/bridge failure must not
-      # fail the GHCR release (bridge continue-on-error; teardown if:always()). This image is
-      # NOT cosign-signed (no id-token perm) — parity with the GHCR side, no sign step.
+      # --- #6122 (ADR-096) Phase 2: mirror the inngest-bootstrap image to the self-hosted
+      # zot registry, DIGEST-PRESERVING (#7144 finding 2).
+      #
+      # This was `docker tag` + `docker push`, chosen because the build leaves the image in
+      # the runner's local docker so re-pushing over the CF Tunnel bridge needed no extra
+      # tooling. That convenience was the defect: docker re-uploads and re-creates the
+      # manifest, so zot served a DIFFERENT digest than GHCR for the same tag — silently,
+      # because nothing compared them.
+      #
+      # It matters because cloud-init.yml's web-host arm substitutes the zot ref INTO $IREF
+      # (`if docker pull "$ZIREF"; then IREF="$ZIREF"`) and then execs that payload AS ROOT.
+      # An unpinnable zot copy therefore left the root-executed path on a mutable tag, and
+      # pinning only the GHCR literal would not have closed it. ADR-155 named this as the
+      # blocker for its Alternative C; #7144 finding 2 inherits it.
+      #
+      # `crane copy` is registry->registry and preserves the manifest bytes, so a single
+      # @sha256 resolves on BOTH registries. That is also what makes `mirror_only` possible:
+      # backfilling an already-published tag no longer needs — or is permitted — a rebuild.
+      #
+      # GHCR push stays primary (break-glass through the Phase-5 soak). Additive on the BUILD
+      # path: a zot/bridge failure must not fail the GHCR release (bridge continue-on-error;
+      # teardown if:always()). This image is NOT cosign-signed (no id-token perm) — parity
+      # with the GHCR side, no sign step.
       - name: Bridge to zot registry (CF Tunnel)
         id: zot_bridge
-        continue-on-error: true
+        # BELT OFF under mirror_only, for the same reason as the mirror step below. The
+        # mirror is gated on `zot_bridge.outcome == 'success'`, so a soft-failed bridge
+        # SKIPS the mirror and leaves the job GREEN — under mirror_only that is a run
+        # reporting success for a backfill that never ran, and the caller would then pin a
+        # digest zot cannot serve. Belt stays ON for push/rebuild, where the bridge is
+        # secondary to the GHCR release (#6274).
+        continue-on-error: ${{ !inputs.mirror_only }}
         uses: ./.github/actions/cf-tunnel-registry-bridge
         with:
           # DOPPLER_TOKEN_PRD, NOT the generic DOPPLER_TOKEN (#6122 cutover fix): the bridge
@@ -237,7 +275,7 @@ jobs:
           cloudflared-version: "2026.5.0"
           cloudflared-sha256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
 
-      - name: Mirror inngest image GHCR→zot (docker tag + push)
+      - name: Mirror inngest image GHCR→zot (crane, digest-preserving)
         id: zot_mirror
         if: steps.zot_bridge.outcome == 'success'
         # The continue-on-error marker below is BELT: the zot mirror is a SECONDARY/shadow
@@ -245,12 +283,21 @@ jobs:
         # pull-side fallback), so a mirror failure must NEVER red this build. #6274:
         # a transient `connection reset` mid blob-upload over the CF-tunnel bridge
         # was failing the whole job. Sibling of reusable-release.yml's mirror step.
-        continue-on-error: true
+        #
+        # BELT OFF under mirror_only: there the mirror is not a secondary copy alongside a
+        # release, it IS the deliverable, and a silent degrade would hand back a green run
+        # whose whole purpose (zot serving the GHCR digest) did not happen. Same reasoning
+        # as the degrade path itself — a success code that fires regardless of success is
+        # the failure mode this PR exists to remove.
+        continue-on-error: ${{ !inputs.mirror_only }}
         env:
           IMAGE: ghcr.io/jikig-ai/soleur-inngest-bootstrap
           TAG: ${{ steps.tag.outputs.tag }}
+          # Typed boolean, consumed only as a string comparison below — never interpolated
+          # into the script body.
+          MIRROR_ONLY: ${{ inputs.mirror_only }}
         run: |
-          # No `set -e` — every failure path exits 0 so this build stays green
+          # No `set -e` — on the BUILD path every failure exits 0 so this build stays green
           # (SUSPENDERS to the continue-on-error belt). A persistent miss surfaces
           # as mirror_status=degraded → ::warning:: + step summary AND (#6278) a Slack
           # ⚠️ via the "Post to Slack (inngest mirror status)" step below — degrade-only
@@ -260,8 +307,9 @@ jobs:
           set -uo pipefail
 
           # Bounded retry to self-heal a transient TCP reset over the CF-tunnel
-          # bridge. 3 attempts, 5s then 15s backoff. Idempotent ops only (docker
-          # tag is local; docker push re-runs safely).
+          # bridge. 3 attempts, 5s then 15s backoff. Idempotent ops only — `crane copy`
+          # re-runs safely (it re-resolves the source manifest and skips blobs the
+          # destination already has), as does the SHA-checked crane download.
           retry() {
             local n=1 max=3 rc=0
             local -a sleeps=(0 5 15)
@@ -277,20 +325,62 @@ jobs:
           degraded() {
             local rc="$1"
             echo "mirror_status=degraded" >> "$GITHUB_OUTPUT"
-            echo "::warning::zot mirror degraded for ${ZOT:-<image>} (rc=${rc}) — build UNAFFECTED (GHCR primary/break-glass); zot redundancy reduced, backfill via 'docker pull ghcr + docker push zot'. If disk-full: see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
-            echo "⚠️ zot mirror degraded (rc=${rc}) — inngest image push failed; GHCR unaffected, backfill needed." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::zot mirror degraded for ${ZOT:-<image>} (rc=${rc}) — build UNAFFECTED (GHCR primary/break-glass); zot redundancy reduced, backfill via the mirror_only dispatch of this workflow (crane, digest-preserving — NOT 'docker pull + docker push', which re-creates the manifest and breaks digest parity). If disk-full: see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
+            echo "⚠️ zot mirror degraded (rc=${rc}) — inngest image mirror failed; GHCR unaffected, backfill needed." >> "$GITHUB_STEP_SUMMARY"
+            # On the BUILD path the mirror is secondary, so exit 0 and let the release stand.
+            # Under mirror_only the mirror IS the run, so a degrade must be a RED run — an
+            # exit 0 here would report success for a backfill that did not happen, and the
+            # caller would then pin a digest zot cannot serve.
+            if [ "${MIRROR_ONLY:-false}" = "true" ]; then
+              echo "::error::mirror_only backfill FAILED (rc=${rc}) — zot does not serve the GHCR digest for ${TAG}. Do not pin until this is green."
+              exit 1
+            fi
             exit 0
           }
+
+          # Install crane, SHA-pinned. Same version as build-inngest-config-bundle.yml and
+          # reusable-release.yml — keep the three in step.
+          CRANE_VERSION="v0.20.2"
+          CRANE_SHA256="c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b"
+          curl -fsSL -o /tmp/crane.tgz \
+            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" || degraded "$?"
+          echo "${CRANE_SHA256}  /tmp/crane.tgz" | sha256sum -c - || degraded "$?"
+          sudo tar -xzf /tmp/crane.tgz -C /usr/local/bin crane || degraded "$?"
+          rm -f /tmp/crane.tgz
 
           # Full org namespace (jikig-ai/…) to match the ci-deploy.sh pull path
           # (zot_ref="${ZOT_REGISTRY_URL}/${IMAGE#ghcr.io/}") + zot-entry-gate.sh. A bare
           # `soleur-inngest-bootstrap` is an orphan repo nothing reads (#6122 namespace fix).
           ZOT="127.0.0.1:5000/${IMAGE#ghcr.io/}"
-          retry docker tag "$IMAGE:$TAG" "$ZOT:$TAG" || degraded "$?"
-          retry docker push "$ZOT:$TAG" || degraded "$?"
+          # Registry -> registry, so this reads the PUBLISHED GHCR manifest and needs no
+          # local image. crane inherits both logins from ~/.docker/config.json (GHCR from
+          # docker/login-action above, zot from the bridge action).
+          retry crane copy "$IMAGE:$TAG" "$ZOT:$TAG" || degraded "$?"
+
+          # Digest parity is the entire point of using crane, so ASSERT it — do not infer it
+          # from a zero exit. An empty source digest counts as failure: `|| true` on the
+          # capture means an auth/network fault yields "", and "" == "" would otherwise read
+          # as a match and certify nothing.
+          SRC_DIGEST=$(crane digest "$IMAGE:$TAG" 2>/dev/null || true)
+          DST_DIGEST=$(crane digest "$ZOT:$TAG" 2>/dev/null || true)
+          echo "ghcr=${SRC_DIGEST:-<none>} zot=${DST_DIGEST:-<none>}"
+          echo "ghcr_digest=$SRC_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "zot_digest=$DST_DIGEST" >> "$GITHUB_OUTPUT"
+          if [ -z "$SRC_DIGEST" ] || [ "$SRC_DIGEST" != "$DST_DIGEST" ]; then
+            echo "::error::zot digest parity FAILED for $TAG — ghcr=${SRC_DIGEST:-<none>} zot=${DST_DIGEST:-<none>}. A cloud-init @sha256 pin on this tag would not resolve on zot."
+            degraded 1
+          fi
 
           echo "mirror_status=ok" >> "$GITHUB_OUTPUT"
-          echo "Pushed $ZOT:$TAG"
+          echo "Mirrored $ZOT:$TAG at $SRC_DIGEST (digest-preserving)"
+          {
+            echo "### inngest-bootstrap zot mirror"
+            echo ""
+            echo "| ref | digest |"
+            echo "| --- | --- |"
+            echo "| \`$IMAGE:$TAG\` | \`$SRC_DIGEST\` |"
+            echo "| \`$ZOT:$TAG\` | \`$DST_DIGEST\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Tear down cloudflared registry bridge
         if: always()
