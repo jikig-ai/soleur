@@ -61,9 +61,9 @@ FAIL=0
 # the entire mutation battery -- the suite's own anti-vacuity mechanism -- and still exited 0.
 # A part-level floor makes that a loud "Part C shrank" instead of a silent pass, and gives a
 # better failure message than a total ever could.
-MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-113}"
+MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-115}"
 MIN_A="${DRIFT_MIN_A:-57}"
-MIN_B="${DRIFT_MIN_B:-45}"
+MIN_B="${DRIFT_MIN_B:-47}"
 MIN_C="${DRIFT_MIN_C:-11}"
 COUNT_A=0
 COUNT_B=0
@@ -621,12 +621,12 @@ for (_, st) in steps:
     for var in set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)(?::-[^}]*)?\}", body)):
         if var in env_keys or var in RUNNER_PROVIDED:
             continue
-        # `export VAR=` is an in-body assignment too. This exemption ALONE clears the
-        # false positive that prompted a wider change; narrowing the capture to unguarded
-        # ${VAR} as well was measured unnecessary and silently dropped two real detections
-        # (a deleted MISSING_SHAS or EXIT_CODE declaration degrades a diagnostic to a
-        # permanent placeholder without ever failing a step -- the QUIET half of the class).
-        if re.search(r"^\s*(local\s+|export\s+)?%s=" % var, body, re.M):
+        # The capture stays WIDE (guarded expansions included). A narrowing was tried and
+        # measured unnecessary: it silently dropped two real detections, because a deleted
+        # MISSING_SHAS or EXIT_CODE declaration degrades a diagnostic to a permanent
+        # placeholder without ever failing a step -- the QUIET half of the class this exists
+        # to catch, and exactly the half a guarded read creates.
+        if re.search(r"^\s*(local\s+)?%s=" % var, body, re.M):
             continue
         undeclared.append("%s:%s" % (st.get("id") or st.get("name") or "?", var))
 emit("UNDECLARED_ENV_REFS", len(undeclared))
@@ -853,13 +853,13 @@ run_part_b() {
       probe="$TMP/echo-probe.sh"
       {
         printf '%s\n' "$fnsrc"
-        printf '%s\n' 'out="$(printf "A=1\n\001::stop-commands::PWNED\nfoo ##[stop-commands]y\nkeep\tTAB\nbell\007gone")"'
+        printf '%s\n' 'out="$(printf "A=1\n\001::stop-commands::PWNED\nfoo ##[stop-commands]y\nsafe\r::stop-commands::CRSPOOF\n##[#[stop-commands]DOUBLE\nkeep\tTAB\nbell\007gone")"'
         printf '%s\n' "$loopsrc"
       } > "$probe"
       out13="$(bash "$probe" 2>&1)"
 
       assert_eq "B13 the echo preserves every line (no whole-blob collapse)" \
-        "5" "$(printf '%s\n' "$out13" | grep -c .)"
+        "7" "$(printf '%s\n' "$out13" | grep -c .)"
       assert_eq "B13b no line reaches column 0, so ::-form workflow commands cannot parse" \
         "0" "$(printf '%s\n' "$out13" | grep -c '^::' || true)"
       assert_eq "B13c the legacy ##[ form is broken even mid-line (IndexOf has no position test)" \
@@ -869,6 +869,15 @@ run_part_b() {
       assert_contains "B13e TAB survives (it is \\011, inside the old strip range)" \
         "keep	TAB" "$out13"
       assert_not_contains "B13f other control bytes still die" "$(printf 'bell\007gone')" "$out13"
+      # CR is not cosmetic: .NET ReadLine treats a bare \r as a line terminator, so a surviving
+      # one makes the RUNNER re-split the line and everything after it lands at column 0 with no
+      # marker. An earlier draft preserved CR by accident while intending to preserve only TAB,
+      # defeating the marker on precisely the input it exists to stop.
+      assert_not_contains "B13h CR does not survive (it would let the runner re-split past the marker)" \
+        "$(printf '\r')" "$out13"
+      # A replacement that begins and ends with the character it escapes can re-form the token:
+      # `#[#` turned `##[#[` into `#[##[`, leaving an intact `##[` for IndexOf to find.
+      assert_not_contains "B13i the ##[ rewrite cannot re-form its own token" "##\\[" "$out13"
       assert_eq "B13g each input line is emitted exactly once" \
         "1" "$(printf '%s\n' "$out13" | grep -c 'A=1' || true)"
     else
