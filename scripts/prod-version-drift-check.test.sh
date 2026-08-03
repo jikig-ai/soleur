@@ -61,9 +61,9 @@ FAIL=0
 # the entire mutation battery -- the suite's own anti-vacuity mechanism -- and still exited 0.
 # A part-level floor makes that a loud "Part C shrank" instead of a silent pass, and gives a
 # better failure message than a total ever could.
-MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-106}"
+MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-114}"
 MIN_A="${DRIFT_MIN_A:-57}"
-MIN_B="${DRIFT_MIN_B:-38}"
+MIN_B="${DRIFT_MIN_B:-46}"
 MIN_C="${DRIFT_MIN_C:-11}"
 COUNT_A=0
 COUNT_B=0
@@ -581,6 +581,37 @@ try:
 except Exception as e:
     emit("RELEASE_PARSE_ERROR", str(e).replace("\n", " "))
 
+# --- B13: the log echo must be PER LINE ---------------------------------------
+# strip_log_injection deletes \000-\037 and \n is \012, so sanitising the checker output as one
+# blob collapsed seven lines into one unreadable string on the first production run. The run log
+# is the surface the issue body points an operator at, so this is a diagnosability contract, not
+# style. Assert the loop shape rather than the absence of the old call: the old form is a
+# SUBSTRING of nothing distinctive, whereas the loop is.
+if runs:
+    cb = code(runs[0][1])
+    emit("ECHO_IS_PER_LINE", int(bool(re.search(r"while IFS= read -r _line", cb))))
+    # ...and a line that could read as a workflow command must be indented so it cannot be one.
+    # chr(39) not a literal apostrophe: this whole program is a single-quoted bash string, so
+    # one quote here terminates it and the shell executes the remainder as commands.
+    emit("ECHO_NEUTRALISES_COMMANDS", int(bool(re.search(r"::\*\)\s*printf " + chr(39) + " +%s", cb))))
+    # The whole-blob form must be gone: it is the regression.
+    emit("ECHO_WHOLE_BLOB", int(bool(re.search(r"strip_log_injection \"\$out\"", cb))))
+
+# --- B14: the alert-path drill -------------------------------------------------
+on_ = wf.get("on", wf.get(True, {})) or {}
+wd = on_.get("workflow_dispatch") or {}
+drill = ((wd.get("inputs") or {}).get("simulate_prod_sha") or {})
+emit("DRILL_INPUT_PRESENT", int(bool(drill)))
+emit("DRILL_INPUT_REQUIRED", drill.get("required", "<unset>"))
+if runs:
+    cb = code(runs[0][1])
+    # Untrusted dispatch input: must be 40-hex-validated before it reaches a path or a word.
+    emit("DRILL_VALIDATES_HEX", int(bool(re.search(r"SIMULATE_PROD_SHA.*=~.*\[0-9a-f\]\{40\}", cb))))
+    # Threaded through the EXISTING seam, so a drilled run differs from a real one by one value.
+    emit("DRILL_USES_HEALTH_URL_SEAM", int(bool(re.search(r"export PROD_HEALTH_URL=", cb))))
+    # The operator must be told the run is a drill, or a drill artefact reads as a real outage.
+    emit("DRILL_ANNOUNCES_ITSELF", int(bool(re.search(r"::warning::DRILL MODE", cb))))
+
 # --- B11: step-id and env CLOSURE --------------------------------------------
 # Part B previously inspected only `if:` and `uses.with`, so an entire class was unmutated and
 # invisible: renaming `id: notify` (heartbeat then reads a permanently-empty output and reports
@@ -618,10 +649,15 @@ for (_, st) in steps:
     if not body:
         continue
     env_keys = set((st.get("env") or {}).keys())
-    for var in set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)(?::-[^}]*)?\}", body)):
+    # UNGUARDED expansions only. `${VAR:-default}` is safe under set -u by construction, and
+    # scripts/lint-workflow-step-env-refs.py says so in its own remediation text ("or guard the
+    # expansion as ${NAME:-} if being unset is legitimate"). Flagging the guarded form made this
+    # check stricter than the rule it enforces, and it fired on a legitimate guarded read.
+    for var in set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)\}", body)):
         if var in env_keys or var in RUNNER_PROVIDED:
             continue
-        if re.search(r"^\s*(local\s+)?%s=" % var, body, re.M):
+        # `export VAR=` is an in-body assignment too; the previous pattern missed it.
+        if re.search(r"^\s*(local\s+|export\s+)?%s=" % var, body, re.M):
             continue
         undeclared.append("%s:%s" % (st.get("id") or st.get("name") or "?", var))
 emit("UNDECLARED_ENV_REFS", len(undeclared))
@@ -816,6 +852,23 @@ run_part_b() {
   assert_eq "B12 the keys the workflow extracts are exactly the keys the checker emits" \
     "$(grep -oE '^\s*echo "([A-Z_]+)=' "$SUT" | grep -oE '[A-Z_]+' | sort -u | paste -sd, -)" \
     "${X_EXTRACTED_KEYS:-<none>}"
+
+  # B13 -- the log echo. A collapsed log is a real regression: it shipped, and it degraded the
+  # exact surface the issue body's remediation block sends the operator to.
+  assert_eq "B13 the run log is echoed PER LINE, not as one sanitised blob" "1" "${X_ECHO_IS_PER_LINE:-0}"
+  assert_eq "B13b a line that could read as a workflow command is indented inert" "1" "${X_ECHO_NEUTRALISES_COMMANDS:-0}"
+  assert_eq "B13c the whole-blob form is gone" "0" "${X_ECHO_WHOLE_BLOB:-1}"
+
+  # B14 -- the drill. #7091 requires exercising the alert path WITHOUT waiting for a real
+  # outage; as first merged there was no way to do that, so the criterion could only be met by
+  # the incident it exists to detect.
+  assert_eq "B14 a simulate_prod_sha dispatch input exists" "1" "${X_DRILL_INPUT_PRESENT:-0}"
+  assert_eq "B14b it is optional, so a normal dispatch is unchanged" "False" "${X_DRILL_INPUT_REQUIRED:-<unset>}"
+  assert_eq "B14c the untrusted input is 40-hex validated before use" "1" "${X_DRILL_VALIDATES_HEX:-0}"
+  assert_eq "B14d it drives the EXISTING PROD_HEALTH_URL seam, not a parallel code path" \
+    "1" "${X_DRILL_USES_HEALTH_URL_SEAM:-0}"
+  assert_eq "B14e a drilled run announces itself, so its artefacts are not read as a real outage" \
+    "1" "${X_DRILL_ANNOUNCES_ITSELF:-0}"
 
   # B10g -- monitor slug parity. A mismatched slug leaves the Sentry monitor permanently
   # green over a dead alarm: the worst shape available, since it looks like coverage.
