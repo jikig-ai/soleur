@@ -31,8 +31,14 @@ readonly LOG_TAG="infra-config-apply"
 # `files_total=0` — the exact opposite of what happened — with no line, no command and no rc.
 # The handler could fail; it could not say how.
 #
-# Logger seam (AC14b), same idiom as inngest-cutover-flip.sh:145. The suite installs a PATH shim
-# globally; this seam lets a single arm intercept the fatal channel specifically.
+# Logger seam (AC14b), adopting the CUTOVER_LOGGER_CMD idiom the inngest cutover-flip script
+# already uses for its own no-SSH state channel (grep CUTOVER_LOGGER_CMD). The suite installs a
+# PATH shim globally; this seam lets a single arm intercept the fatal channel specifically.
+#
+# The precedent is cited by MECHANISM, not by filename, on purpose: cutover-inngest-workflow.
+# test.sh pins a topology invariant — the cutover-flip assets must appear on OCI/cloud-init
+# surfaces and NEVER on a webhook surface like this file — using a bare `grep -qF <filename>`,
+# which cannot tell a delivery from a comment. Naming the file here would false-trip it.
 LOGGER_CMD="${INFRA_CONFIG_LOGGER_CMD:-logger}"
 
 # State file for observability (#4554). Queryable via /hooks/infra-config-status.
