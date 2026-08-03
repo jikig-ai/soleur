@@ -1329,10 +1329,93 @@ PY
   fi
 fi
 
+# ── 20 (#7204). THE FAIL ARTIFACT MUST CARRY A CAUSE, NOT ONLY A VERDICT ───────────
+#
+# Rehearsal run 30649892865 reported `stage:luks_open level:fatal` and nothing else. The
+# cause — mount(2) returning ESRCH — was in the same Better Stack row the whole time;
+# HOST_SQL simply never projected it, so diagnosing a FAIL required hand-writing a new query.
+# These arms pin the projection so the artifact stays self-diagnosing.
+_CAP="${ROOT}/scripts/followthroughs/git-data-rung2-evidence-capture.sh"
+if [[ -r "$_CAP" ]]; then
+  # Slice HOST_SQL so a `detail` appearing anywhere else in the script (prose, the FAIL-arm
+  # message) cannot satisfy these — cq-assert-anchor-not-bare-token.
+  _hostsql="$(awk '/^HOST_SQL="/{f=1} f{print} f&&/FORMAT JSONEachRow"/{exit}' "$_CAP")"
+
+  if printf '%s' "$_hostsql" | grep -qE "JSONExtractString\(raw,'detail'\)"; then
+    pass "20a HOST_SQL projects detail"
+  else
+    fail "20a HOST_SQL does not project detail" \
+         "A FAIL artifact then carries a verdict with no cause — the #7204 defect."
+  fi
+  if printf '%s' "$_hostsql" | grep -qE "JSONExtractString\(raw,'rc'\)"; then
+    pass "20b HOST_SQL projects rc"
+  else
+    fail "20b HOST_SQL does not project rc" \
+         "rc rides in \$TAGS, which the emitter concatenates at TOP LEVEL of the Better Stack body, so raw.rc resolves. It is the mount(8) exit status — 32 for the ESRCH class."
+  fi
+
+  # MUTATION for both: strip the projections and prove the arms flip. Without this the two
+  # greps above are satisfied by any file that happens to contain the strings.
+  _mut="$(printf '%s' "$_hostsql" | sed -E "/JSONExtractString\(raw,'(detail|rc)'\)/d")"
+  if printf '%s' "$_mut" | grep -qE "JSONExtractString\(raw,'(detail|rc)'\)"; then
+    fail "20c MUTATION did not land — the projections survived deletion" \
+         "20a/20b certify nothing; re-anchor the slice."
+  else
+    pass "20c MUTATION lands (projections are deletable, so 20a/20b are real)"
+  fi
+
+  # ── D11: HOST_SQL's key set ⊆ the keys something actually EMITS ──────────────────
+  # A static grep for `detail` proves the column is SELECTED, never that it is POPULATED:
+  # rename the emitter's field and the SQL keeps selecting an always-empty column with this
+  # suite still green. So every projected key must be traceable to a producer.
+  #
+  # Producers: cloud-init-git-data.yml's git-data-emit writes a FLAT Better Stack body
+  # (message/stage/level/host_name/detail) with $TAGS concatenated at top level; tag keys
+  # come from its callers — `rc=` from the luks_err trap, and the four assertion booleans
+  # from git-data-bootstrap.sh's boot_complete emit.
+  #
+  # KNOWN EXCEPTION, enumerated rather than left as folklore: luks_mounted/repo_root/
+  # hooks_path/provision are emitted ONLY on a stage:boot_complete row. They are structurally
+  # empty on every FAIL row, so their presence in the projection is not evidence about how far
+  # a failed boot got. #7204's source brief read four blanks as "died before mount" — the
+  # `stage` tag is the only positional fact in a FAIL row.
+  _emit_src="${DIR}/cloud-init-git-data.yml"
+  _boot_src="${DIR}/git-data-bootstrap.sh"
+  _unproduced=""
+  while IFS= read -r _k; do
+    [[ -n "$_k" ]] || continue
+    _n=$(cat "$_emit_src" "$_boot_src" 2>/dev/null | grep -cE "\"${_k}\"|${_k}=" || true)
+    [[ "${_n:-0}" -ge 1 ]] || _unproduced="${_unproduced} ${_k}"
+  done < <(printf '%s' "$_hostsql" | sed -nE "s/.*JSONExtractString\(raw,'([a-z_]+)'\).*/\1/p" | sort -u)
+  if [[ -z "$_unproduced" ]]; then
+    pass "20d every HOST_SQL key is produced by the emitter or a caller"
+  else
+    fail "20d HOST_SQL projects key(s) nothing emits:${_unproduced}" \
+         "An always-empty column reads as 'the host did not report it' rather than 'we never asked correctly'. Either wire the producer or drop the column."
+  fi
+  # RENAME MUTATION — the arm D11 exists for: prove 20d notices a projection whose producer
+  # is gone, which a plain 'is detail selected' grep cannot.
+  _n_bogus=$(cat "$_emit_src" "$_boot_src" 2>/dev/null | grep -cE '"zzz_no_such_field"|zzz_no_such_field=' || true)
+  if [[ "${_n_bogus:-0}" -eq 0 ]]; then
+    pass "20e MUTATION control: an unproduced key is detectable as unproduced"
+  else
+    fail "20e MUTATION control: the producer scan matches a field that does not exist" \
+         "20d's scan is too loose to distinguish a real producer from noise."
+  fi
+else
+  fail "20 capture script not readable at ${_CAP}"
+  fail "20: skipped (capture script missing)"; fail "20: skipped (capture script missing)"
+  fail "20: skipped (capture script missing)"; fail "20: skipped (capture script missing)"
+fi
+
 # ── Minimum-cardinality floor ──────────────────────────────────────────────────────
 # A floor, not an equality: developer-incremented, so `-eq` would redden the suite on every
 # legitimately added arm and train the next person to bump it unread. Counts passes+fails so
 # a genuine failure reports as a failure rather than as an empty suite.
+#
+# RAISED 65 -> 70 WITH THE ARMS THAT MADE IT NECESSARY (#7204: arms 20a-20e — HOST_SQL
+# projects detail and rc, the projections are deletable so those greps are real, and every
+# projected key is traceable to a producer with an unproduced-key control).
 #
 # RAISED 28 -> 39 -> 43 -> 65 WITH THE ARMS THAT MADE IT NECESSARY (#7025 R7; the 43 -> 56
 # step is the behavioural capture-poll block, arms 13/13b/13c/13d/13e). At 28 the slack had grown
@@ -1342,11 +1425,11 @@ fi
 # not move with the suite only ever guards the work that predates it, and the deletion it
 # most needs to catch is the one that removes the arms someone just argued for.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 65 ]]; then
+if [[ "$_ran" -lt 70 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 65. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 70. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 65)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 70)\n' "$_ran"
 fi
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"
