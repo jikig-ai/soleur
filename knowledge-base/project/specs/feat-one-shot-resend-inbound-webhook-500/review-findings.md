@@ -1,6 +1,7 @@
 # Review findings — DO NOT MERGE AS-IS
 
-> **Status 2026-08-03 — four P1s and two P2s applied. The merge block STANDS.**
+> **Status 2026-08-03 — all seven P1s applied except finding 2 (2 of 4 steps).**
+> The merge block STANDS until finding 2 completes.
 >
 > Every item below was RED-proven before GREEN. The bash guards (findings 8, 1, P1-a,
 > P2-b) were additionally mutation-tested on sandbox copies, each mutation proven to have
@@ -17,11 +18,18 @@
 >   closing **M7**: unhooking a test function now exits non-zero instead of reporting a
 >   smaller, entirely green result.
 >
-> `inngest-inventory.test.sh` 120 → 139 assertions. Registered infra suites 87/87;
-> `scripts/test-all.sh` 242/242.
+> - **finding 3 + finding 4** — one authenticated dispatch proof in ci-deploy.sh, BLOCKING.
+>   A refused connection is finding 4, a 401/403 is finding 3, a 2xx proves the real path.
+> - **finding 6** — the probe's fail-open branch was byte-identical to success; verdicts
+>   now carry probe_target_source (env|derived|fallback) and name their own subject.
+> - **finding 7** — the `inngest-dispatch-failure` Sentry alert, unshippable until
+>   finding 5 made `op:inngest-send` actually land. Tracking issue filed: **#7228**.
 >
-> **Still open and still blocking:** findings **2** (2 of 4 steps done), **3, 4, 6, 7** (all P1), plus the
-> remainder of the P2 and P3 lists.
+> `inngest-inventory.test.sh` 120 → 146 assertions; `ci-deploy.test.sh` 201 → 207.
+> Registered infra suites 87/87.
+>
+> **Still open:** finding **2** only, at 2 of 4 steps, blocked on PR **#7203** merging so
+> the v1.1.24 zot backfill can run from main. Plus the remainder of the P2/P3 lists.
 
 7 of 9 agents reported (test-design-reviewer, code-quality-analyst still running when this
 was written). Independent convergence on the top finding from 3 agents. Every measurement
@@ -106,7 +114,7 @@ Deleting the zot arm instead is NOT the cheap alternative it looks like:
 one of five signals behind `sentry_issue_alert.zot_mirror_fallback_rate`, and belongs to
 ADR-096 task 5.3.
 
-### 3. The repoint may convert ECONNREFUSED into 401, not into success
+### 3. The repoint may convert ECONNREFUSED into 401, not into success — **APPLIED**
 Cutover step 2.4 reconciled `soleur/prd`'s `INNGEST_EVENT_KEY`/`INNGEST_SIGNING_KEY` to
 the DEDICATED host's values (`inngest-server.md` §2.4 "Channel-key reconcile"). That
 reconcile provably happened — the predecessor host served 2026-07-24 → 07-30, which the
@@ -127,7 +135,7 @@ workflow's `op=arm` arm.
 and make it a hard pre-deploy gate, not a spec bullet. This is the CTO's P1 pre-flight,
 which was deferred.
 
-### 4. No post-deploy proof that a send SUCCEEDS
+### 4. No post-deploy proof that a send SUCCEEDS — **APPLIED**
 `ci-deploy.sh`'s `verify_inngest_health` curls `http://127.0.0.1:8288/health` — an
 **unauthenticated** liveness probe. It returns 200 under finding 3 and the deploy is
 declared green while Resend's auto-disable clock keeps running. The only verification is
@@ -176,7 +184,7 @@ compiler, `scripts/test-all.sh` 242/242.
 The now-redundant route-level captures in `resend-inbound` and `github` are left in place —
 harmless once the helper emits, and removing them is a separate sweep.
 
-### 6. The new fail-open derivation is silent, and the path is LIVE
+### 6. The new fail-open derivation is silent, and the path is LIVE — **APPLIED**
 `inngest-inventory.sh:162` falls back to `http://127.0.0.1:8288` — **byte-identical to a
 successful derivation** for the co-located case. There is no third state, and the probe
 target appears in neither emitted JSON (`:554`, `:618-621`) nor journald summary
@@ -194,7 +202,7 @@ journald summaries; WARN on the fallback branch; add a `::warning::` branch in
 Layer 3 (Vector journald — `inngest-inventory` already allowlisted at `vector.toml:158`)
 + Layer 6 (webhook response body).
 
-### 7. CTO limb (c) — the ECONNREFUSED alarm — is absent AND untracked
+### 7. CTO limb (c) — the ECONNREFUSED alarm — is absent AND untracked — **APPLIED**
 No `.tf`/`.yml` in the diff. `apps/web-platform/infra/sentry/issue-alerts.tf` already
 carries ~30 per-symptom rules for strictly less severe classes (incl.
 `outbound_email_send_failure`, and one filtering `op=inngest-send-push`). This is one
