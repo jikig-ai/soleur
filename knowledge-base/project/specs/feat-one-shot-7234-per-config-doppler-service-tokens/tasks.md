@@ -9,30 +9,30 @@ Phase order is dependency-directed, not file-grouped. Do not reorder.
 
 ## Phase 0 — Preconditions (probes only, no edits)
 
-- [ ] **0.1** Confirm `access = "read"` and the `.key` attribute against a sibling
+- [x] **0.1** Confirm `access = "read"` and the `.key` attribute against a sibling
       `doppler_service_token` (`apps/web-platform/infra/kb-drift.tf`). Read one; no network.
-- [ ] **0.2** `terraform validate` on `apps/web-platform/infra/` with the new file present.
+- [ ] **0.2** *(deferred to task 1.7 — needs the new .tf to exist)* `terraform validate` on `apps/web-platform/infra/` with the new file present.
       Provider `ExactlyOneOf`-class validation is invisible to `terraform providers schema -json`
       (ADR-164), so `validate` is the authority. Note that it will **not** catch an API-side
       token-name rejection — `token-drift-ci-tf-prd_workspaces_luks` is 37 chars vs siblings of
       13-19; that surfaces only at apply.
-- [ ] **0.3** **The conditional-adoption probe.** Against an existing config-scoped credential:
-  - [ ] **0.3.1** Does a config-scoped token self-identify, and via **which field**? Try
+- [x] **0.3** **The conditional-adoption probe.** Against an existing config-scoped credential:
+  - [x] **0.3.1** Does a config-scoped token self-identify, and via **which field**? Try
         `doppler me --json` (pinned CLI v3.75.3, alias `whoami`), then
         `doppler configs -p soleur --json`. **Hard constraint: the field must be one Doppler
         DERIVES from the config binding — never one echoing the Terraform-supplied `name`.**
-  - [ ] **0.3.2** Does `doppler secrets -c <WRONG-config>` **error**, or silently serve the bound
+  - [x] **0.3.2** Does `doppler secrets -c <WRONG-config>` **error**, or silently serve the bound
         config? Decides whether `-p`/`-c` stay on argv (FR7) and whether the script's "the config
         is named EXPLICITLY on every read" comment has inverted into a false guarantee.
-  - [ ] **0.3.3** Confirm on a **branch**-scoped credential. The parse is already recorded at
+  - [x] **0.3.3** Confirm on a **branch**-scoped credential. The parse is already recorded at
         `apps/web-platform/infra/kb-drift.tf:94-96` (one entry, `success: true`) — this is
         confirmation, not discovery.
-  - [ ] **0.3.4** Confirm a non-empty identity for the configs ADR-164's census called vacuous
+  - [x] **0.3.4** Confirm a non-empty identity for the configs ADR-164's census called vacuous
         (`cli`, `cli_ops`).
-  - [ ] **0.3.5** **Decision gate.** If 0.3.1 or 0.3.3 fails, control **C-c is DROPPED**. Record
+  - [x] **0.3.5** **Decision gate.** If 0.3.1 or 0.3.3 fails, control **C-c is DROPPED**. Record
         that in the plan/spec and in ADR-166. Do NOT improvise a substitute mid-build — C-a
         (static, pre-merge) carries the class and C-d (`sort -u`) is required regardless.
-- [ ] **0.4** Re-measure the inventory against live Doppler
+- [x] **0.4** Re-measure the inventory against live Doppler
       (`doppler configs -p soleur --json | jq -r '.[].name' | sort`). This is the **only**
       pre-merge control on the new apply coupling: `infra-validation.yml`'s plan job is
       `continue-on-error: true` (`:1178`) and its other infra job runs `-backend=false validate`.
