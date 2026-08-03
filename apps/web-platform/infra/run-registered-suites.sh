@@ -1,12 +1,23 @@
 #!/usr/bin/env bash
 # Run every infra suite REGISTERED IN CI, locally and in parallel.
 #
-# WHY THIS EXISTS (#6730). `scripts/test-all.sh` does not cover
-# `apps/web-platform/infra/`. Those suites are registered ONLY as `run: bash …`
-# steps in `.github/workflows/infra-validation.yml`, so a green test-all says
-# nothing about an infra change — during #6730 a required check was RED behind a
-# 223/223 green test-all, and the red was found by reading CI, not by testing
-# locally. There was no local command that ran them; now there is.
+# WHY THIS EXISTS (#6730). These suites are registered as `run: bash …` steps in
+# `.github/workflows/infra-validation.yml` — during #6730 a required check was RED
+# behind a 223/223 green test-all, and the red was found by reading CI, not by
+# testing locally. There was no local command that ran them; now there is.
+#
+# COVERAGE STATUS, CORRECTED (#7103 R5(a)). This header said "`scripts/test-all.sh`
+# does not cover `apps/web-platform/infra/`" and that is no longer true: test-all.sh
+# now invokes THIS FILE as a nested `run_suite`. The claim survived the change that
+# falsified it because the sweep was indexed by file and never opened the file it
+# had just started calling — the registered runner denying its own registration.
+#
+# What is true now, and the distinction matters: test-all.sh runs this runner only
+# when `want_infra` holds (TEST_GROUP is `all` or `infra`) AND the diff touches this
+# directory. CI's three shards (`webplat`, `bun`, `scripts`) satisfy neither, so a
+# green run in those says nothing about infra — and test-all.sh now says so in its
+# epilogue rather than claiming coverage it does not have. Read the log: it reports
+# which of those happened, keyed on whether this runner actually ran.
 #
 # The suite list is DERIVED from infra-validation.yml rather than globbed off the
 # directory, so this runner and CI cannot drift: a suite added to the workflow is
