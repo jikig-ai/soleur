@@ -56,6 +56,15 @@ export interface UseKbLayoutStateResult {
   loading: boolean;
   error: KbContextValue["error"];
   hasTreeContent: boolean;
+  /** Loading / error / empty — the chromeless states that take the whole column. */
+  fullWidth: boolean;
+  /**
+   * #7186 — where the ONE `KbSidebarShell` mounts. Derived ONCE here and
+   * consumed by both the rail portal (kb/layout.tsx) and the mobile content
+   * column (kb-mobile-layout.tsx). Two independent conditions that merely agree
+   * is how a second tree gets mounted; this value makes single-host structural.
+   */
+  treeHost: "rail" | "content";
   // Chat state
   contextPath: string | null;
   showChat: boolean;
@@ -217,6 +226,19 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
   const isContentView = pathname !== "/dashboard/kb";
   const hasTreeContent = !!(tree?.children && tree.children.length > 0);
 
+  // Lifted from kb/layout.tsx (#7186 D5) so `treeHost` below can be derived
+  // from the same value the layout branches on — not from a copy.
+  const fullWidth = loading || !!error || !hasTreeContent;
+
+  // The ONE tree lives in the content column only on a mobile, populated,
+  // landing render. Every other cell — desktop anything, any fullWidth state,
+  // and the mobile document route — keeps it in the rail's drawer, exactly as
+  // today. `loading` starts true so `fullWidth` short-circuits before
+  // `isDesktop` is consulted, which is why no viewport-derived value can reach
+  // a first-paint render (D1 reason 1).
+  const treeHost: "rail" | "content" =
+    !isDesktop && !fullWidth && !isContentView ? "content" : "rail";
+
   // Document 404 clear lives in kb/[...path]/page.tsx (tree-level not-found
   // is workspace/repo missing, not a single doc path).
 
@@ -373,6 +395,8 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
     loading,
     error,
     hasTreeContent,
+    fullWidth,
+    treeHost,
     contextPath,
     showChat,
     openSidebar,

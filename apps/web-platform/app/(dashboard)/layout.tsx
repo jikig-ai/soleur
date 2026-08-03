@@ -15,7 +15,7 @@ import { WorkspaceContextBand } from "@/components/dashboard/workspace-context-b
 import { RailSlotProvider, RailCollapsedProvider, RAIL_EXPAND_EVENT } from "@/components/dashboard/rail-slot";
 import { RailResizeHandle } from "@/components/dashboard/rail-resize-handle";
 import { useRailWidth, railMaxPx, RAIL_MIN_PX } from "@/hooks/use-rail-width";
-import { segmentToDrillLevel, isKbDocView } from "@/hooks/segment-to-drill-level";
+import { segmentToDrillLevel } from "@/hooks/segment-to-drill-level";
 import { useNavResume } from "@/hooks/use-nav-resume";
 import { MembershipRevokedScreen } from "@/components/dashboard/membership-revoked-screen";
 import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
@@ -218,15 +218,24 @@ export default function DashboardLayout({
   // existing KB CSS rule untouched). Collapsed (md:w-14) applies neither.
   const kbExpanded = drill === "kb" && !collapsed;
   const mainExpanded = drill !== "kb" && !collapsed;
-  // Phase 3 (#4915): one back per state. In the mobile KB DOC VIEW the
-  // kb-content-header owns the only back ("Back to file tree", md:hidden), so the
-  // mobile band's "Back to menu" is suppressed to stop the two co-rendering. This
-  // is path EXTRACTION ("a KB doc is open" — trailing-slash form), explicitly
-  // distinct from drill detection (which stays sole to segmentToDrillLevel,
-  // AC4c): the band itself never reads pathname for this — the layout owns it.
-  // The KB page-body header (kb/layout.tsx) keys its own back on the SAME
-  // predicate, so exactly one "Back to menu" renders per state.
-  const inKbDocView = isKbDocView(pathname);
+  // #7186: `inKbDocView` was computed here until this commit, under a comment
+  // claiming the mobile band's back is suppressed only in the KB doc view. It
+  // was introduced by #4911 as a real `suppressBack={inKbDocView}` reader and
+  // lost that reader in #6917, when suppressBack went unconditional — the
+  // variable and its comment were left behind. Removed rather than kept as dead
+  // code asserting behaviour that no longer happens.
+  //
+  // The full mobile "back" census, because a partial one is what produced the
+  // stale comment in the first place. FOUR renderers, not two:
+  //   1. the drawer's "Back to menu" (below, `drawer-back-to-menu`) — every
+  //      drilled route, always in the DOM (the aside is translated off-canvas,
+  //      not unmounted and not inert), so it is always in the a11y tree;
+  //   2. the KB fullWidth page header (kb/layout.tsx), doc route only;
+  //   3. the KB browse header (kb-mobile-layout.tsx), populated landing only;
+  //   4. kb-content-header's "Back to file tree", doc route only, different
+  //      label and a different destination.
+  // They are NOT mutually exclusive: (1) co-renders with each of the others.
+  // Tracked as a follow-up — the durable fix is making the closed drawer inert.
 
   // Auto-close drawer on route change
   useEffect(() => {
@@ -595,10 +604,13 @@ export default function DashboardLayout({
           </>
         ) : (
           <>
-            {/* Mobile-only "Back to menu": the mobile band suppresses its own
-                back when drilled, so the drawer owns it here. Hidden on desktop
-                (the desktop rail band renders the back affordance). Tapping it
-                navigates to /dashboard, which auto-closes the drawer. */}
+            {/* Mobile-only "Back to menu": the mobile band is `suppressBack`
+                UNCONDITIONALLY (not "when drilled" — #6917 made it so), so the
+                drawer owns the band-level back here. Hidden on desktop (the
+                desktop rail band renders the back affordance). Tapping it
+                navigates to /dashboard, which auto-closes the drawer. NOTE this
+                link is in the a11y tree even while the drawer is closed, so it
+                co-renders with any in-page back the KB adds (#7186). */}
             <Link
               href="/dashboard"
               data-testid="drawer-back-to-menu"

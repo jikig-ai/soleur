@@ -113,6 +113,8 @@ When surfacing (attached) or persisting (headless) a User-Challenge, use:
 - **If we're wrong, the cost is:** what happens if the operator's original
   direction was right and we changed it.
 
+**A premise that is a universal negative must ship with the enumeration that produced it, not just the conclusion.** When a challenge's framing rests on "there is no X in state S" (no reachable affordance, no existing caller, no other writer), specific verified facts about *particular* members — `this variable is dead`, `that flag is unconditional` — cannot establish a claim quantified over the *category*, however many you list. Put the command and its result in the challenge (`git grep -n 'aria-label="Back' -- <scope>` → N renderers, each classified), because the operator is being asked for taste and reasonably assumes the facts framing the choice were established; an approval laundered through a false premise acquires human authority while remaining an unverified engineering claim, and every downstream artifact — wireframe, plan, challenges file, code comment, and the test that "guards" it — inherits it. If the premise is later falsified, correct it **where the approval lives** (a dated `CORRECTION` block in `decision-challenges.md` saying what it does and does not change), never silently in code. **Why:** #7186 — DC1 was approved on "the mobile KB landing has no reachable in-page back at all today"; review found a fourth renderer in a file the enumeration never opened, so the shipped state has two links sharing one accessible name.
+
 ## "Both signals" — scope, disagreement, and the security exception
 
 **Both signals = the session model + the ADR-083 scoped `fable`→`opus` consult**,
