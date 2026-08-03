@@ -972,7 +972,7 @@ it cannot reach another Doppler project; and unlike `DOPPLER_TOKEN_PRD` it is Te
 and rotates in a single apply. The obligation that follows is unchanged: an incident response
 must revoke **both**, and only the new one is Terraform-managed.
 
-**Brand-survival threshold:** `single-user incident`.
+- **Brand-survival threshold:** `single-user incident`.
 
 `requires_cpo_signoff: true` is set; `user-impact-reviewer` runs at review time; the review
 panel escalates to include `architecture-strategist` and `spec-flow-analyzer`; and every
