@@ -275,7 +275,7 @@ resource "cloudflare_zero_trust_access_policy" "registry_push_service_token" {
 # written into the `prd_terraform` branch was invisible to the release token and the bridge
 # failed "REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET missing or empty". Writing to the `prd` root
 # fixes it because the release token reads `prd` root ITSELF — NOT because branches inherit it:
-# that premise is FALSIFIED (#7159 / ADR-155, 2026-08-02 census — `prd_terraform` does NOT carry
+# that premise is FALSIFIED (#7159 / ADR-159, 2026-08-02 census — `prd_terraform` does NOT carry
 # REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET, which `prd` root does). The fix above is unaffected; the
 # "keeps every branch working" corollary is withdrawn, not re-derived.
 # The earlier `like CI_SSH_ACCESS_TOKEN` analogy was the trap — CI_SSH runs under a

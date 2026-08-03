@@ -243,9 +243,20 @@ jobs:
           #
           # THE LADDER ITSELF IS NO LONGER DERIVED HERE. The detector owns it (it is the
           # side that knows which reads succeeded), and this step publishes what it
-          # emitted. `configs` counts configs whose secret read SUCCEEDED, not configs
-          # enumerated — a role that can list but not read would otherwise satisfy the
-          # floor while measuring nothing.
+          # emitted. `configs` counts configs whose secret-NAME listing SUCCEEDED, not
+          # configs the project ENUMERATED: a config that lists but whose `doppler secrets
+          # --only-names` read fails is excluded from the count and named in
+          # `configs_unread`, so a membership scoped to a subset of environments cannot
+          # satisfy the floor on configs it cannot open.
+          #
+          # BE EXACT ABOUT WHICH READ. It is a NAME listing, not a VALUE read, and no
+          # value-read failure decrements `configs`. The credential that can list names but
+          # not read values is therefore NOT caught here — five prose sites in this repo
+          # used to claim it was ("scores 0"), and the code never did that. It is caught by
+          # the detector's own non-vacuity gate instead: having drawn zero conclusions from
+          # a non-empty keyset it prints "PROBED ZERO" and exits 2, which lands here as
+          # `verdict=unavailable`. The close arm is gated on `verdict != 'unavailable'`
+          # precisely so that run cannot close the operator's standing issue.
           #
           # `configs` STAYS LAST AND GREEDY in this `read -r`, and that is load-bearing.
           # Any field-shift lands in it and fails `^[0-9]+$` below, which routes to
@@ -291,6 +302,20 @@ jobs:
           [[ -n "${cov_ratio:-}" ]] || cov_ratio="-/-"
           [[ -n "${inv_age:-}" ]] || inv_age="-1"
           [[ -n "${cfg_unread:-}" ]] || cfg_unread="-"
+          # `coverage_caveat` RIDES ITS OWN EXTRACTION, deliberately, and must never join the
+          # `read -r` above: it is FREE TEXT containing spaces, so IFS word-splitting would
+          # scatter it across the remaining names and shift `configs` — the greedy-tail failure
+          # T8c pins, manufactured on purpose. Whitespace is collapsed to a single line because a
+          # newline would break the `key=value` framing of $GITHUB_OUTPUT.
+          #
+          # IT HAD NO CONSUMER. The detector emitted it (a missing/unparseable inventory, or one
+          # over 90 days old), the producer suite pinned it, and the workflow read it nowhere —
+          # so the one sentence that says "the denominator in this ratio may not describe the
+          # project any more" reached the operator in neither email. Emitted-and-unread is the
+          # same dead-channel shape as derived-and-unshown; it is rendered in both
+          # verdict-bearing bodies now, beside the ratio it qualifies.
+          cov_caveat=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(" ".join((d.get("coverage_caveat") or "-").split()) or "-")' "$RUNNER_TEMP/token-drift.json" 2>/dev/null || echo "-")
+          [[ -n "${cov_caveat:-}" ]] || cov_caveat="-"
           # DEFAULT IS `unknown`, and nothing moves off it except a value the detector
           # actually emitted from the closed vocabulary. The first version of the old
           # in-YAML ladder defaulted to the optimistic state and moved off it on two
@@ -355,6 +380,7 @@ jobs:
             echo "configs_unread=${cfg_unread}"
             echo "coverage=${coverage}"
             echo "coverage_ratio=${cov_ratio}"
+            echo "coverage_caveat=${cov_caveat}"
             echo "inventory_age_days=${inv_age}"
           } >> "$GITHUB_OUTPUT"
           # `floor:` and `ratio:` are asserted by the Observability discoverability_test
@@ -398,7 +424,7 @@ jobs:
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[TOKEN DRIFT] A Cloudflare token rotation did not propagate to Doppler'
-          body: '<p><strong>At least one Cloudflare token value in Doppler is no longer accepted by Cloudflare.</strong></p><p>Terraform will NOT fix this on its own: the <code>doppler_secret</code> resources carry <code>lifecycle.ignore_changes = [value]</code>, so <code>terraform apply</code> reports "No changes" while the stale value keeps being served. Set the live value in <strong>every config the run names</strong> — a Doppler config does NOT inherit a value from its environment root, so setting <code>prd</code> root alone repairs nothing but <code>prd</code> root. Measured 2026-08-02: <code>CF_API_TOKEN_DNS_EDIT</code> is carried independently by 7 configs, and <code>prd_terraform</code> does not carry the <code>REGISTRY_PUSH_ACCESS_TOKEN_*</code> pair that <code>prd</code> root does.</p><p>This matters for releases: the registry-push Access service token is what lets CI reach the zot registry, and zot is the only registry production can pull from. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> to see which key in which config is stale.</p><p>Additional finding(s) from this same run that are NOT about a stale value: <code>${{ steps.token_drift.outputs.causes }}</code> (<code>-</code> means none). The verdict ladder reports one headline state; these are the others.</p><p><em>Scan coverage: <code>${{ steps.token_drift.outputs.coverage }}</code> at <code>${{ steps.token_drift.outputs.coverage_ratio }}</code> — ${{ steps.token_drift.outputs.configs }} of the ${{ steps.token_drift.outputs.configs_expected }} Doppler configs the committed inventory names were READ, against a declared floor of <code>${{ steps.token_drift.outputs.configs_floor }}</code>. Configs not read: <code>${{ steps.token_drift.outputs.configs_unread }}</code> (<code>-</code> means none). The count is of configs whose secret read SUCCEEDED, not of configs the credential could list — a role that can enumerate but not read scores 0. The ratio REPORTS and gates nothing: the gate is the count against the floor, so <code>degraded</code> means the credential is absent, revoked or narrowed, and <code>at-floor</code> means it reached at least every config this scan demanded.</em></p>'
+          body: '<p><strong>At least one Cloudflare token value in Doppler is no longer accepted by Cloudflare.</strong></p><p>Terraform will NOT fix this on its own: the <code>doppler_secret</code> resources carry <code>lifecycle.ignore_changes = [value]</code>, so <code>terraform apply</code> reports "No changes" while the stale value keeps being served. Set the live value in <strong>every config the run names</strong> — a Doppler config does NOT inherit a value from its environment root, so setting <code>prd</code> root alone repairs nothing but <code>prd</code> root. Measured 2026-08-02: <code>CF_API_TOKEN_DNS_EDIT</code> is carried independently by 7 configs, and <code>prd_terraform</code> does not carry the <code>REGISTRY_PUSH_ACCESS_TOKEN_*</code> pair that <code>prd</code> root does.</p><p>This matters for releases: the registry-push Access service token is what lets CI reach the zot registry, and zot is the only registry production can pull from. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> to see which key in which config is stale.</p><p>Additional finding(s) from this same run that are NOT about a stale value: <code>${{ steps.token_drift.outputs.causes }}</code> (<code>-</code> means none). The verdict ladder reports one headline state; these are the others.</p><p><em>Scan coverage: <code>${{ steps.token_drift.outputs.coverage }}</code> at <code>${{ steps.token_drift.outputs.coverage_ratio }}</code> — ${{ steps.token_drift.outputs.configs }} of the ${{ steps.token_drift.outputs.configs_expected }} Doppler configs the committed inventory names were READ, against a declared floor of <code>${{ steps.token_drift.outputs.configs_floor }}</code>. Configs not read: <code>${{ steps.token_drift.outputs.configs_unread }}</code> (<code>-</code> means none). Denominator caveat: <code>${{ steps.token_drift.outputs.coverage_caveat }}</code> (<code>-</code> means none — otherwise the committed inventory is missing, unparseable, or over 90 days old, so the DENOMINATOR in this ratio may not describe the project any more; the gate is the count against the floor, which the inventory never touches). The count is of configs whose secret-NAME listing SUCCEEDED — a config whose <code>doppler secrets --only-names</code> read failed is excluded from it and named in the unread list above. It is NOT a count of value reads, so a role that can list names but cannot read values still counts here; that case is caught separately, by the non-vacuity gate in the detector — it exits 2 with <code>verdict: unavailable</code> when it enumerated keys and probed zero values — and the issue close arm is gated on <code>verdict != unavailable</code> so it cannot fire on such a run. The ratio REPORTS and gates nothing: the gate is the count against the floor, so <code>degraded</code> means the credential is absent, revoked or narrowed, and <code>at-floor</code> means it reached at least every config this scan demanded.</em></p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       # Fires on `causes`, NOT on `verdict`, and therefore independently of the first-match
@@ -492,7 +518,9 @@ jobs:
         if: >-
           always()
           && (steps.token_drift.outputs.coverage == 'degraded'
-              || steps.token_drift.outputs.coverage == 'unknown')
+              || steps.token_drift.outputs.coverage == 'unknown'
+              || (steps.token_drift.outputs.coverage == 'at-floor'
+                  && steps.token_drift.outputs.configs_unread != '-'))
         continue-on-error: true
         timeout-minutes: 2
         env:
@@ -547,7 +575,7 @@ jobs:
             LEAD="**The token-drift scan published an unreadable coverage measurement (\`configs=${CONFIGS}\`, \`floor=${CONFIGS_FLOOR}\`, \`ratio=${COVERAGE_RATIO}\`).** Its verdict (\`${VERDICT}\`) is therefore unscoped — it is not a fleet-wide claim, and it is not evidence of a narrowed credential either. This is a DETECTOR fault, not a credential fault: touching the Doppler identity will not clear it."
           else
             TITLE="[TOKEN DRIFT] The fan-out detector is reading fewer configs than it declared"
-            LEAD="**The twice-daily Cloudflare token-drift scan read ${COVERAGE_RATIO} Doppler configs, below its declared floor of ${CONFIGS_FLOOR}.** \`configs\` counts configs whose secret read SUCCEEDED, not configs the credential could list — a role that can enumerate but not read scores 0 here, which is the point."
+            LEAD="**The twice-daily Cloudflare token-drift scan read ${COVERAGE_RATIO} Doppler configs, below its declared floor of ${CONFIGS_FLOOR}.** \`configs\` counts configs whose secret-NAME listing SUCCEEDED, not configs the project enumerated — a config the credential can see but cannot open is excluded and named in the unread list below. It is not a count of value reads: a role that lists names but cannot read values still counts here, and is caught instead by the detector's non-vacuity gate (\`verdict: unavailable\`)."
           fi
 
           gh label create "$LABEL" \
@@ -633,10 +661,19 @@ jobs:
               echo ""
               echo "- **N1 — the membership role was downgraded**, or"
               echo "  \`doppler_project_member_service_account.token_drift\` was removed. Reads"
-              echo "  \`0/${CONFIGS_EXPECTED}\`. Its subtler form is a role that can ENUMERATE but"
-              echo "  not read values: the names list fine and every secret read fails, which"
-              echo "  still scores 0 because \`configs\` counts successful reads. \`viewer\` is the"
-              echo "  least-privileged role carrying \`enclave_project_config_secrets_read\`."
+              echo "  \`0/${CONFIGS_EXPECTED}\`, because \`configs\` counts configs whose secret-NAME"
+              echo "  listing succeeded and a downgraded role fails that listing everywhere."
+              echo "  \`viewer\` is the least-privileged role carrying"
+              echo "  \`enclave_project_config_secrets_read\`."
+              echo "  - Its subtler form — a role that can list NAMES but not read VALUES — is"
+              echo "    **not** caught by this count, and an earlier version of this issue"
+              echo "    wrongly claimed it was. The names list, so every config counts and the"
+              echo "    floor is satisfied; what fails is every value read. That case is caught"
+              echo "    one level down instead, by the detector's non-vacuity gate: having drawn"
+              echo "    zero conclusions from a non-empty keyset it prints \`PROBED ZERO\` and"
+              echo "    exits 2, which publishes \`verdict: unavailable\` and sends the"
+              echo "    DETECTOR-UNAVAILABLE email. The close arm is gated on"
+              echo "    \`verdict != 'unavailable'\`, so such a run cannot close this issue."
               echo "- **N2 — the membership was scoped to a subset of environments**, i.e."
               echo "  \`environments\` was set (\`[\"prd\"]\` reads 7 of 13). The unread list names"
               echo "  exactly the dropped configs."
@@ -725,9 +762,31 @@ jobs:
       # `full` even though the steady state is now 13/13: the state is defined against
       # the DECLARED floor, not against the project, and a name asserting completeness
       # would invite a future reader to gate on the inventory again.
+      #
+      # THE `configs_unread` CONJUNCT IS LOAD-BEARING, AND `at-floor` ALONE IS NOT ENOUGH.
+      # `configs` counts configs this run READ; that is not the set the inventory NAMES.
+      # An ephemeral config (a `prd_git_data_rehearsal_*` from a rehearsal dispatch, which
+      # the inventory header explicitly anticipates) counts toward `configs` and pads it
+      # back to the floor ONE-FOR-ONE after a real config's `doppler secrets` read fails.
+      # Gating on `at-floor` alone therefore closes the operator's standing issue on a run
+      # that silently skipped a config the inventory names — and closes it with a comment
+      # quoting a healthy-looking ratio. That is the detector's own condemned failure ("a
+      # clean bill of health for a question never asked") reproduced at the close arm, and
+      # it is strictly WORSE than the pre-PR behaviour, where a failed per-config read
+      # exited 2 and fired the DETECTOR-UNAVAILABLE email every run.
+      #
+      # `configs_unread` is exactly the discriminator: it is inventory-minus-read UNION
+      # enumerated-but-unreadable, so ephemeral GROWTH alone leaves it empty (`-`) while a
+      # real config's failure names that config. This is the one place the inventory is
+      # allowed to influence an arm, and it can only ever WITHHOLD a close — it can never
+      # cause one, so a short/stale/missing inventory still gates nothing that matters.
       - name: Close the coverage issue once the declared floor is met
         id: coverage_close
-        if: always() && steps.token_drift.outputs.coverage == 'at-floor'
+        if: >-
+          always()
+          && steps.token_drift.outputs.coverage == 'at-floor'
+          && steps.token_drift.outputs.configs_unread == '-'
+          && steps.token_drift.outputs.verdict != 'unavailable'
         continue-on-error: true
         timeout-minutes: 2
         env:
@@ -737,6 +796,7 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           CONFIGS: ${{ steps.token_drift.outputs.configs }}
           CONFIGS_FLOOR: ${{ steps.token_drift.outputs.configs_floor }}
+          CONFIGS_EXPECTED: ${{ steps.token_drift.outputs.configs_expected }}
           COVERAGE_RATIO: ${{ steps.token_drift.outputs.coverage_ratio }}
         run: |
           set -uo pipefail
@@ -746,11 +806,18 @@ jobs:
           LIST_RC=0
           N=$(gh issue list --label "$LABEL" --state open -L 5 --json number --jq '.[0].number // empty') || LIST_RC=$?
           if (( LIST_RC != 0 )); then
-            echo "::warning::could not query open ${LABEL} issues (gh exit ${LIST_RC}); leaving any open coverage issue alone."
+            # A NAMED SLUG AND THE FLAG, matching this step's own close-failure branch below and
+            # its sibling in the filer. It was a bare `::warning::` that set nothing — so the
+            # fallback email could not fire on it, and when the fallback DID fire for another
+            # reason its body sent the operator hunting the run log for one of four named slugs
+            # that this path never emits. A backstop that names a slug its own arm cannot produce
+            # is a backstop the operator learns to distrust.
+            echo "::error::token_drift_coverage_close_list_failed — could not query open ${LABEL} issues (gh exit ${LIST_RC}); leaving any open coverage issue alone. Coverage is at-floor (${COVERAGE_RATIO}) but the standing issue may still be open, asserting a regression this run says is repaired."
+            echo "channel_failed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           [[ -n "$N" ]] || { echo "no open coverage issue to close."; exit 0; }
-          if gh issue close "$N" --comment "Coverage restored: run ${RUN_URL} reported \`coverage: at-floor\` at \`${COVERAGE_RATIO}\` — the credential read ${CONFIGS} of the 13 configs the committed inventory names, at or above the declared floor of ${CONFIGS_FLOOR}. That is 13/13 in the steady state, which is the #7159 Done-when condition met literally. Auto-closed. Note the gate is \`>=\`, not \`==\`: legitimate growth pushes the ratio above 1 and changes no state, and the ratio is REPORTED by the inventory rather than gated on it."; then
+          if gh issue close "$N" --comment "Coverage restored: run ${RUN_URL} reported \`coverage: at-floor\` at \`${COVERAGE_RATIO}\` — the credential read ${CONFIGS} of the ${CONFIGS_EXPECTED} configs the committed inventory names, at or above the declared floor of ${CONFIGS_FLOOR}, with every named config read (\`configs_unread\` empty). That is the #7159 Done-when condition met literally. Auto-closed. Note the gate is \`>=\`, not \`==\`: legitimate growth pushes the ratio above 1 and changes no state, and the ratio is REPORTED by the inventory rather than gated on it."; then
             echo "Closed coverage issue #${N}."
           else
             echo "::error::token_drift_coverage_close_failed — coverage is at-floor (${COVERAGE_RATIO}) but issue #${N} could not be closed; it will keep asserting a coverage regression that this run says is repaired."
@@ -766,10 +833,11 @@ jobs:
       # annotation nobody opens is the exact shape the COVERAGE-HAS-NO-CHANNEL block
       # above exists to eliminate, so it must not be the fallback for the fallback.
       #
-      # Four paths, one flag: `token_drift_coverage_list_failed`,
+      # Five paths, one flag: `token_drift_coverage_list_failed`,
       # `token_drift_coverage_escalation_failed`, `token_drift_coverage_update_failed`
-      # (all three in the filer) and `token_drift_coverage_close_failed` (the close arm).
-      # Each sets `channel_failed=true` on its own step, and this gates on either.
+      # (all three in the filer) and `token_drift_coverage_close_list_failed` /
+      # `token_drift_coverage_close_failed` (both in the close arm). Each sets
+      # `channel_failed=true` on its own step, and this gates on either step's flag.
       #
       # POSITIVE POLARITY, like every sibling arm: both steps are skipped on the
       # `infra/github` matrix leg and on the healthy path, and a skipped step's outputs
@@ -779,15 +847,26 @@ jobs:
       # other direction: there the issue is the backstop for the email, here the email is
       # the backstop for the issue.
       - name: Email notification (token drift — the coverage issue channel is unreachable)
+        # THE `outcome` LEGS COVER THE FAILURE THE FLAG CANNOT SEE. Both filers carry
+        # `timeout-minutes: 2` + `continue-on-error: true`, so a `gh` call that STALLS is
+        # killed after `channel_failed=false` is written and before `fail_channel` can
+        # overwrite it — the job stays green, no issue is filed or closed, no email is
+        # sent, and no named slug is emitted. That is the single failure mode this
+        # backstop exists for, and gating on the flag alone is blind to exactly it.
+        # `outcome` is populated under `continue-on-error` and is `skipped` (never
+        # `failure`) for a skipped step, so adding these legs preserves the positive
+        # polarity that keeps a skipped filer from firing the email.
         if: >-
           always()
           && (steps.coverage_issue.outputs.channel_failed == 'true'
-              || steps.coverage_close.outputs.channel_failed == 'true')
+              || steps.coverage_close.outputs.channel_failed == 'true'
+              || steps.coverage_issue.outcome == 'failure'
+              || steps.coverage_close.outcome == 'failure')
         continue-on-error: true
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[TOKEN DRIFT] The coverage finding could not reach its issue channel'
-          body: '<p><strong>The twice-daily token-drift scan produced a coverage finding, and the GitHub issue channel that carries it did not accept it.</strong> This email exists because that finding would otherwise have reached nothing: the cron run is GREEN, and its only other artifact is a run annotation.</p><p>What this run measured: coverage <code>${{ steps.token_drift.outputs.coverage }}</code> at ratio <code>${{ steps.token_drift.outputs.coverage_ratio }}</code> against a declared floor of <code>${{ steps.token_drift.outputs.configs_floor }}</code>; verdict <code>${{ steps.token_drift.outputs.verdict }}</code>. Configs the inventory names that were not read: <code>${{ steps.token_drift.outputs.configs_unread }}</code> (<code>-</code> means none).</p><p><strong>This is a finding about the CHANNEL, not only about the credential.</strong> <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and look for the named error slug — <code>token_drift_coverage_list_failed</code>, <code>token_drift_coverage_escalation_failed</code>, <code>token_drift_coverage_update_failed</code> or <code>token_drift_coverage_close_failed</code> — which says which call failed. Likely causes: a secondary rate limit, an API 5xx, a renamed or closed <code>Post-MVP / Later</code> milestone, or the <code>token-drift-coverage</code> label having been deleted.</p><p>Until the channel is repaired, the standing <code>token-drift-coverage</code> issue may be missing, frozen at a state this run did not measure, or still open after the coverage it reports was restored.</p>'
+          body: '<p><strong>The twice-daily token-drift scan produced a coverage finding, and the GitHub issue channel that carries it did not accept it.</strong> This email exists because that finding would otherwise have reached nothing: the cron run is GREEN, and its only other artifact is a run annotation.</p><p>What this run measured: coverage <code>${{ steps.token_drift.outputs.coverage }}</code> at ratio <code>${{ steps.token_drift.outputs.coverage_ratio }}</code> against a declared floor of <code>${{ steps.token_drift.outputs.configs_floor }}</code>; verdict <code>${{ steps.token_drift.outputs.verdict }}</code>. Configs the inventory names that were not read: <code>${{ steps.token_drift.outputs.configs_unread }}</code> (<code>-</code> means none).</p><p><strong>This is a finding about the CHANNEL, not only about the credential.</strong> <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and look for the named error slug — <code>token_drift_coverage_list_failed</code>, <code>token_drift_coverage_escalation_failed</code>, <code>token_drift_coverage_update_failed</code>, <code>token_drift_coverage_close_list_failed</code> or <code>token_drift_coverage_close_failed</code> — which says which call failed. Likely causes: a secondary rate limit, an API 5xx, a renamed or closed <code>Post-MVP / Later</code> milestone, or the <code>token-drift-coverage</code> label having been deleted.</p><p>Until the channel is repaired, the standing <code>token-drift-coverage</code> issue may be missing, frozen at a state this run did not measure, or still open after the coverage it reports was restored.</p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       - name: Open or update an action-required issue (token drift — DEAD credential)
@@ -904,7 +983,7 @@ jobs:
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[TOKEN DRIFT] No conclusion could be drawn about at least one token'
-          body: '<p><strong>No token was found stale, but at least one enumerated token could not be verified at all</strong>, so this run cannot claim the fleet is clean — and it is NOT claiming anything is broken.</p><p><strong>Do not rotate anything on the strength of this email.</strong></p><p>Reported cause(s): <code>${{ steps.token_drift.outputs.causes }}</code>. What each one means:</p><ul><li><code>no-probe-configured</code> — the detector has no hostname mapping for that key. Fix the DETECTOR: add one to <code>access_hostname_for()</code> in <code>scripts/check-cloudflare-token-drift.sh</code>.</li><li><code>gate-absent</code> — an UNCREDENTIALED request to the host was not refused by Cloudflare Access. Nothing is gating that hostname. This is a GATE finding, not a credential finding: check the Access application and policy. Rotating the token changes nothing.</li><li><code>host-unreachable</code> / <code>probe-failed</code> — the probe got no answer (timeout, DNS, TLS). Nothing was measured. Re-run.</li><li><code>unknown</code> — a row arrived with no <code>cause</code> field. That is a detector/consumer contract break, not a credential finding: report it rather than acting on it.</li><li><code>gate-indeterminate</code> — the host answered an anonymous request without an Access stamp and without succeeding (a 530 tunnel outage looks like this). Neither a gate nor its absence was established. Re-run.</li><li><code>control-blocked</code> — Cloudflare itself blocked or challenged the anonymous probe, so it never reached Access. Check the WAF / rate-limit / bot-fight rules for the host.</li><li><code>stamped-non-refusal</code> — the host returned an Access-stamped response that is not a refusal. Not evidence the credential was rejected; investigate the Access application.</li><li><code>unexpected-status</code> — no Access stamp and no success. LIVE requires positive proof of admission, so nothing was certified — and nothing is claimed stale either.</li><li><code>detector-env</code> — a LOCAL fault on the runner (could not allocate a temp file). No request was sent; nothing about the credential or the host is implied.</li><li><code>refused-unstamped</code> — something in FRONT of Access refused the probe (WAF rule, IP access rule, bot-fight). Check the rule set for the host, not the credential.</li></ul><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> for the exact keys and the reason each was skipped.</p><p><em>Scan coverage: <code>${{ steps.token_drift.outputs.coverage }}</code> at <code>${{ steps.token_drift.outputs.coverage_ratio }}</code> — ${{ steps.token_drift.outputs.configs }} of the ${{ steps.token_drift.outputs.configs_expected }} Doppler configs the committed inventory names were READ, against a declared floor of <code>${{ steps.token_drift.outputs.configs_floor }}</code>. Configs not read: <code>${{ steps.token_drift.outputs.configs_unread }}</code> (<code>-</code> means none). The count is of configs whose secret read SUCCEEDED, not of configs the credential could list — a role that can enumerate but not read scores 0. The ratio REPORTS and gates nothing: the gate is the count against the floor, so <code>degraded</code> means the credential is absent, revoked or narrowed, and <code>at-floor</code> means it reached at least every config this scan demanded.</em></p>'
+          body: '<p><strong>No token was found stale, but at least one enumerated token could not be verified at all</strong>, so this run cannot claim the fleet is clean — and it is NOT claiming anything is broken.</p><p><strong>Do not rotate anything on the strength of this email.</strong></p><p>Reported cause(s): <code>${{ steps.token_drift.outputs.causes }}</code>. What each one means:</p><ul><li><code>no-probe-configured</code> — the detector has no hostname mapping for that key. Fix the DETECTOR: add one to <code>access_hostname_for()</code> in <code>scripts/check-cloudflare-token-drift.sh</code>.</li><li><code>gate-absent</code> — an UNCREDENTIALED request to the host was not refused by Cloudflare Access. Nothing is gating that hostname. This is a GATE finding, not a credential finding: check the Access application and policy. Rotating the token changes nothing.</li><li><code>host-unreachable</code> / <code>probe-failed</code> — the probe got no answer (timeout, DNS, TLS). Nothing was measured. Re-run.</li><li><code>unknown</code> — a row arrived with no <code>cause</code> field. That is a detector/consumer contract break, not a credential finding: report it rather than acting on it.</li><li><code>gate-indeterminate</code> — the host answered an anonymous request without an Access stamp and without succeeding (a 530 tunnel outage looks like this). Neither a gate nor its absence was established. Re-run.</li><li><code>control-blocked</code> — Cloudflare itself blocked or challenged the anonymous probe, so it never reached Access. Check the WAF / rate-limit / bot-fight rules for the host.</li><li><code>stamped-non-refusal</code> — the host returned an Access-stamped response that is not a refusal. Not evidence the credential was rejected; investigate the Access application.</li><li><code>unexpected-status</code> — no Access stamp and no success. LIVE requires positive proof of admission, so nothing was certified — and nothing is claimed stale either.</li><li><code>detector-env</code> — a LOCAL fault on the runner (could not allocate a temp file). No request was sent; nothing about the credential or the host is implied.</li><li><code>refused-unstamped</code> — something in FRONT of Access refused the probe (WAF rule, IP access rule, bot-fight). Check the rule set for the host, not the credential.</li></ul><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> for the exact keys and the reason each was skipped.</p><p><em>Scan coverage: <code>${{ steps.token_drift.outputs.coverage }}</code> at <code>${{ steps.token_drift.outputs.coverage_ratio }}</code> — ${{ steps.token_drift.outputs.configs }} of the ${{ steps.token_drift.outputs.configs_expected }} Doppler configs the committed inventory names were READ, against a declared floor of <code>${{ steps.token_drift.outputs.configs_floor }}</code>. Configs not read: <code>${{ steps.token_drift.outputs.configs_unread }}</code> (<code>-</code> means none). Denominator caveat: <code>${{ steps.token_drift.outputs.coverage_caveat }}</code> (<code>-</code> means none — otherwise the committed inventory is missing, unparseable, or over 90 days old, so the DENOMINATOR in this ratio may not describe the project any more; the gate is the count against the floor, which the inventory never touches). The count is of configs whose secret-NAME listing SUCCEEDED — a config whose <code>doppler secrets --only-names</code> read failed is excluded from it and named in the unread list above. It is NOT a count of value reads, so a role that can list names but cannot read values still counts here; that case is caught separately, by the non-vacuity gate in the detector — it exits 2 with <code>verdict: unavailable</code> when it enumerated keys and probed zero values — and the issue close arm is gated on <code>verdict != unavailable</code> so it cannot fire on such a run. The ratio REPORTS and gates nothing: the gate is the count against the floor, so <code>degraded</code> means the credential is absent, revoked or narrowed, and <code>at-floor</code> means it reached at least every config this scan demanded.</em></p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       - name: Email notification (token drift — detector could not run)
@@ -1088,9 +1167,19 @@ jobs:
           # not stale credentials" unconditionally — including on a genuine dead-credential
           # run, where it invites the operator to discount a real finding. A hedge that
           # fires when there is nothing to hedge makes a true alarm look uncertain.
+          #
+          # THE REMEDY SENTENCE WAS FALSIFIED, AND THIS WAS THE SIXTH SITE CARRYING IT. It read
+          # "Set the live value on the 'prd' ROOT config." The 2026-08-02 census killed the
+          # premise underneath it: a Doppler config does NOT inherit a value from its environment
+          # root — `CF_API_TOKEN_DNS_EDIT` is carried independently by 7 configs, and
+          # `prd_terraform` does not carry the `REGISTRY_PUSH_ACCESS_TOKEN_*` pair that `prd` root
+          # does. An operator who performed the old instruction would edit one config, verify that
+          # one, get a green result, and leave every other stale copy being served. This is the
+          # annotation printed on the RED run, i.e. the one the operator actually sees first, so
+          # of the six sites it was the most expensive one to leave wrong.
           case "${VERDICT}" in
             dead)
-              echo "::error::Cloudflare token drift: at least one DEAD credential. See the 'Cloudflare token drift' step above for the key/config pairs. Set the live value on the 'prd' ROOT config." ;;
+              echo "::error::Cloudflare token drift: at least one DEAD credential. See the 'Cloudflare token drift' step above for the key/config pairs. Set the live value in EVERY config named there — a Doppler config does NOT inherit a value from its environment root, so setting 'prd' root alone repairs nothing but 'prd' root." ;;
             unverifiable)
               echo "::error::Cloudflare token detector drew NO conclusion about at least one token, so this run cannot claim the fleet is clean. Nothing is known to be stale — do NOT rotate. Cause(s): ${CAUSES}. See the step output for the per-key remedy." ;;
             *)
@@ -1343,6 +1432,25 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           REHEARSAL_PREFIX: soleur-git-data-rehearsal-
+          # A DECLARED floor, exactly like the token-drift step's `DOPPLER_CONFIGS_FLOOR`, and
+          # for the same reason: it states not a fact about Doppler but a demand this step makes
+          # of its own credential — *the identity I was handed must be able to see at least this
+          # many configs before its "no orphaned scratch config" answer means anything.* A step
+          # cannot be wrong about a number it declares.
+          #
+          # IT WAS `2`, AND `2` REPRODUCED THE DEFECT THIS PR RETIRES. A credential listing 2 of
+          # 13 configs published `performed`, filed nothing, and let the sweep report "no
+          # orphaned scratch Doppler config" while a `prd_git_data_rehearsal_*` could sit in any
+          # of the 11 it never listed. That is `multi-config` verbatim — a count of configs
+          # enumerated with no denominator, unable to tell 2-of-13 from 13-of-13 — re-committed
+          # in a second job. Unreachable today (this job's credential lists exactly 1), but
+          # nothing held it there.
+          #
+          # KEEP IN LOCKSTEP WITH `DOPPLER_CONFIGS_FLOOR` in the token_drift step above and with
+          # the committed inventory; see the ratchet note in
+          # `apps/web-platform/infra/doppler-config-inventory.txt` and ADR-159's Known
+          # limitations. Three literals, one number.
+          RUNG2_CONFIGS_FLOOR: 13
         run: |
           set -euo pipefail
           TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"
@@ -1411,13 +1519,28 @@ jobs:
           # `10#` forces base 10, and the regex runs FIRST: an arithmetic error inside
           # `(( ))` returns 1, which in a condition reads as false and would fall through
           # to `performed` — the confident state derived from a value nothing parsed.
-          if (( _cfg_rc != 0 )) || [[ ! "$_cfg_total" =~ ^[0-9]+$ ]]; then
+          #
+          # THE DECLARED FLOOR IS PARSE-GUARDED TOO, and an unparseable floor is `failed`, not
+          # `performed`. A demand with no threshold cannot be met, and routing it to the
+          # confident state is the same fail-open shape one clause up.
+          if (( _cfg_rc != 0 )) || [[ ! "$_cfg_total" =~ ^[0-9]+$ ]] \
+             || [[ ! "${RUNG2_CONFIGS_FLOOR:-}" =~ ^[0-9]+$ ]]; then
             _cfg_probe=failed
-          elif (( 10#$_cfg_total < 2 )); then
+          elif (( 10#$_cfg_total < 10#$RUNG2_CONFIGS_FLOOR )); then
             _cfg_probe=unsatisfiable
           else
             _cfg_probe=performed
           fi
+          # NON-EMPTY GUARDS, one per published field, for the same reason the token_drift step
+          # carries them: an empty value writes a bare `key=` into $GITHUB_OUTPUT, which every
+          # positive-polarity consumer arm then fails to match — a silent channel. `_cfg_total`
+          # is the reachable one: it is assigned from a command substitution whose `jq -r
+          # 'length'` can fail, which leaves it EMPTY, and the filer's body then renders
+          # "enumerated `` config(s)". `-1` is the same absent-value sentinel the token_drift
+          # step publishes, and it can never satisfy the `>=` above.
+          [[ -n "${_cfg_total:-}" ]] || _cfg_total=-1
+          [[ -n "${_cfg_rc:-}" ]] || _cfg_rc=-1
+          [[ -n "${_cfg_probe:-}" ]] || _cfg_probe=failed
           # ITS OWN OUTPUT, not folded into `orphans`. The orphan filer below is gated
           # `orphans != '0'` plus an implicit `success()`, so in the steady state — no
           # Hetzner orphans — it is SKIPPED and this finding would reach nothing; and
@@ -1428,8 +1551,9 @@ jobs:
             echo "scratch_cfg_probe=${_cfg_probe}"
             echo "scratch_cfg_rc=${_cfg_rc}"
             echo "scratch_cfg_listed=${_cfg_total}"
+            echo "scratch_cfg_floor=${RUNG2_CONFIGS_FLOOR:--1}"
           } >> "$GITHUB_OUTPUT"
-          echo "scratch-config probe: ${_cfg_probe} (doppler/jq exit ${_cfg_rc}, ${_cfg_total} config(s) listed)"
+          echo "scratch-config probe: ${_cfg_probe} (doppler/jq exit ${_cfg_rc}, ${_cfg_total} of a declared floor of ${RUNG2_CONFIGS_FLOOR:--1} config(s) listed)"
           [[ -n "$_cfgs" ]] && survivors="${survivors}$(printf 'doppler config: %s\n' $_cfgs)"$'\n'
           survivors="$(printf '%s' "$survivors" | grep -v '^$' || true)"
           if [[ -z "$survivors" ]]; then
@@ -1523,6 +1647,7 @@ jobs:
       # changes, so commenting — which the orphan filer above does, correctly, because a
       # recurring orphan is fresh signal each time — would post 730 comments a year.
       - name: File an issue when the scratch-config half of the sweep was not performed
+        id: scratch_cfg_issue
         if: >-
           always()
           && (steps.sweep.outputs.scratch_cfg_probe == 'failed'
@@ -1534,6 +1659,7 @@ jobs:
           PROBE: ${{ steps.sweep.outputs.scratch_cfg_probe }}
           PROBE_RC: ${{ steps.sweep.outputs.scratch_cfg_rc }}
           LISTED: ${{ steps.sweep.outputs.scratch_cfg_listed }}
+          FLOOR: ${{ steps.sweep.outputs.scratch_cfg_floor }}
           SERVER_URL: ${{ github.server_url }}
           REPOSITORY: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
@@ -1542,11 +1668,24 @@ jobs:
           TITLE="infra: the rung-2 orphan sweep is not checking for stranded scratch Doppler configs"
           RUN_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
 
+          # THIS FILER HAD NO BACKSTOP AT ALL, and it is the mirror of the defect the coverage
+          # filer's own comment block records. Both named ::error:: slugs below were emitted to
+          # the run log and nowhere else: the step is `continue-on-error: true` and `exit 0`s,
+          # this job has no Sentry check-in and had no email arm, so a `gh` failure left a GREEN
+          # cron run whose only artifact was an annotation nobody opens
+          # (`hr-no-dashboard-eyeball-pull-data-yourself`). Every named failure below now flips
+          # this output, and the `notify-ops-email` step beneath gates on it.
+          echo "channel_failed=false" >> "$GITHUB_OUTPUT"
+          fail_channel() {
+            echo "::error::$1"
+            echo "channel_failed=true" >> "$GITHUB_OUTPUT"
+          }
+
           LIST_RC=0
           EXISTING=$(gh issue list --label infra-drift --state open --limit 100 \
             --json number,title --jq ".[] | select(.title == \"${TITLE}\") | .number" | head -1) || LIST_RC=$?
           if (( LIST_RC != 0 )); then
-            echo "::error::rung2_scratch_cfg_list_failed — could not query open infra-drift issues (gh exit ${LIST_RC}); declining to create a possible duplicate. The unperformed scratch-config sweep reached no issue channel this run."
+            fail_channel "rung2_scratch_cfg_list_failed — could not query open infra-drift issues (gh exit ${LIST_RC}); declining to create a possible duplicate. The unperformed scratch-config sweep reached no issue channel this run."
             exit 0
           fi
           if [[ -n "$EXISTING" ]]; then
@@ -1562,12 +1701,15 @@ jobs:
               echo "verdict this run."
             else
               echo "**The rung-2 orphan sweep reports \"no orphaned scratch Doppler config\" without"
-              echo "being able to look.** Its credential enumerated \`${LISTED}\` config(s), so the"
-              echo "\`startswith(\"prd_git_data_rehearsal_\")\` predicate it filters on is"
-              echo "**unsatisfiable** — the answer is \"none\" by construction, not by inspection."
+              echo "being able to look.** Its credential enumerated \`${LISTED}\` config(s), below the"
+              echo "\`${FLOOR}\` this step declares, so the \`startswith(\"prd_git_data_rehearsal_\")\`"
+              echo "predicate it filters on cannot be established — a \"none\" drawn from a partial"
+              echo "listing is an answer by construction, not by inspection. At \`${LISTED}\` = 1 it is"
+              echo "literally unsatisfiable; at any count below the floor it is merely unsound, and"
+              echo "the two are reported together because the remedy is the same."
             fi
             echo ""
-            echo "Probe status: \`${PROBE}\`  •  doppler/jq exit: \`${PROBE_RC}\`  •  Configs listed: \`${LISTED}\`  •  Run: ${RUN_URL}"
+            echo "Probe status: \`${PROBE}\`  •  doppler/jq exit: \`${PROBE_RC}\`  •  Configs listed: \`${LISTED}\` of a declared floor of \`${FLOOR}\`  •  Run: ${RUN_URL}"
             echo ""
             echo "### Why this matters"
             echo ""
@@ -1621,13 +1763,49 @@ jobs:
             echo "_Auto-created by the [terraform-drift workflow](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-terraform-drift.yml)._"
           } > "$BODY"
 
+          # `action-required` IS THE HARVESTED LABEL, and `infra-drift` alone is not. The block at
+          # the top of the token-drift escalation section in this same file records it: that label
+          # is what `operator-digest` reads, and it harvests ISSUES. Filed under `infra-drift`
+          # only, this finding sat in a queue nothing renders — which is the same
+          # never-reaches-a-human failure the filer itself exists to fix, one level up.
+          #
+          # `priority/p2-medium`, not the coverage filer's `p1-high`: operator-digest sorts
+          # p0>p1>p2>p3>none and CAPS the rendered list, so an unprioritised issue folds into a
+          # "+N more" line. This finding is a standing diagnostic about a sweep that cannot look,
+          # not an outage — it must be visible and must not outrank a dead credential.
           if gh issue create \
             --title "$TITLE" \
             --label "infra-drift" \
+            --label action-required \
+            --label priority/p2-medium \
             --milestone "Post-MVP / Later" \
             --body-file "$BODY"; then
             echo "Filed an infra-drift issue for the unperformed scratch-config sweep (${PROBE})."
           else
-            echo "::error::rung2_scratch_cfg_escalation_failed — gh issue create did not succeed. The unperformed scratch-config sweep (${PROBE}, ${LISTED} config(s) listed) reached NO channel this run."
+            fail_channel "rung2_scratch_cfg_escalation_failed — gh issue create did not succeed. The unperformed scratch-config sweep (${PROBE}, ${LISTED} config(s) listed) reached NO channel this run."
           fi
           rm -f "$BODY"
+
+      # ── AND THE ISSUE CHANNEL FOR *THIS* FINDING CAN ITSELF BE DEAD ─────────────
+      # Mirrors the coverage filer's fallback exactly, because the shape is identical: the only
+      # channel this finding has is a GitHub issue, the step runs under `continue-on-error: true`
+      # and `exit 0`s, and this job publishes no Sentry check-in — so when the `gh` call is what
+      # failed, the sole artifact is a named ::error:: on a run that is still GREEN.
+      #
+      # THE `outcome` LEG COVERS THE FAILURE THE FLAG CANNOT SEE, same reasoning as the coverage
+      # fallback: `timeout-minutes: 2` kills a STALLED `gh` after `channel_failed=false` has been
+      # written and before `fail_channel` can overwrite it, so no flag is ever set and no slug is
+      # ever emitted. `outcome` is populated under `continue-on-error` and is `skipped` (never
+      # `failure`) for a skipped step, so this leg preserves the positive polarity that keeps a
+      # skipped filer — the steady-state `performed` run — from firing the email.
+      - name: Email notification (rung-2 sweep — the scratch-config finding could not reach its issue channel)
+        if: >-
+          always()
+          && (steps.scratch_cfg_issue.outputs.channel_failed == 'true'
+              || steps.scratch_cfg_issue.outcome == 'failure')
+        continue-on-error: true
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[INFRA DRIFT] The rung-2 scratch-config finding could not reach its issue channel'
+          body: '<p><strong>The twice-daily rung-2 orphan sweep found that its scratch-config half was not performed, and the GitHub issue channel that carries that finding did not accept it.</strong> This email exists because the finding would otherwise have reached nothing: the cron run is GREEN, this job publishes no Sentry check-in, and its only other artifact is a run annotation.</p><p>What this run measured: probe <code>${{ steps.sweep.outputs.scratch_cfg_probe }}</code>, doppler/jq exit <code>${{ steps.sweep.outputs.scratch_cfg_rc }}</code>, <code>${{ steps.sweep.outputs.scratch_cfg_listed }}</code> config(s) listed against a declared floor of <code>${{ steps.sweep.outputs.scratch_cfg_floor }}</code>.</p><p><strong>This is a finding about the CHANNEL, not only about the sweep.</strong> <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and look for the named error slug — <code>rung2_scratch_cfg_list_failed</code> or <code>rung2_scratch_cfg_escalation_failed</code> — which says which call failed. Likely causes: a secondary rate limit, an API 5xx, a renamed or closed <code>Post-MVP / Later</code> milestone, or the <code>infra-drift</code> label having been deleted.</p><p>What is at stake while the channel is down: a partial rung-2 teardown strands the scratch Doppler config, which holds a live <code>GIT_DATA_LUKS_KEY</code> and the production Better Stack ingest token — and the sweep is currently reporting "no orphaned scratch Doppler config" without being able to look.</p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}

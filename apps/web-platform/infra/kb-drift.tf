@@ -89,6 +89,16 @@ resource "doppler_secret" "kb_drift_ingest_url" {
 # tokens. Closes the operator-mint requirement called out in #4150.
 # access = "read" — kb-drift cron only reads secrets; do NOT widen to "write".
 # autonomy-considered: provider-mint-applied.
+#
+# CORRECT FOR THIS CONSUMER, AND NOT THE PATTERN TO COPY FOR A FLEET-WIDE READER. A
+# `doppler_service_token` is CONFIG-SCOPED BY CONSTRUCTION — it ignores `DOPPLER_CONFIG` and
+# `doppler configs list` under it returns a list silently scoped to the caller (one entry,
+# `success: true`, no error). That is exactly right here: the kb-drift walker reads one config.
+# It was WRONG for the twice-daily token-drift scan, which must span every config, and copying
+# this resource for that job is #7159 verbatim — it read 1 of 13 configs and reported a clean
+# fleet. Nine `doppler_service_token` resources exist in this directory against one
+# `doppler_service_account`, so the majority shape is the misleading one. For a credential that
+# must read ACROSS configs see `token-drift-service-account.tf` and ADR-159.
 resource "doppler_service_token" "kb_drift" {
   project = "soleur"
   config  = "prd_kb_drift_walker"

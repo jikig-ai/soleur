@@ -54,9 +54,16 @@
 #               a config-scoped token). Producible, and actionable.
 #     at-floor  configs >= configs_floor — `>=`, NOT `==`: the live config set is expected
 #               to grow, and growth must not red a twice-daily cron.
-#   `configs` counts configs whose secret-name read SUCCEEDED, not configs listed. A role
-#   that can enumerate but not read values would otherwise satisfy the floor while
-#   measuring nothing.
+#   `configs` counts configs whose secret-NAME LISTING succeeded, not configs the project
+#   enumerated. A membership that can see a config but cannot open it is excluded from the
+#   count and named in `configs_unread`, so it cannot satisfy the floor.
+#   BE EXACT: this is a NAME listing, not a VALUE read, and NO value-read failure
+#   decrements `configs`. A role that lists names but cannot read values still counts every
+#   config here — five prose sites in this repo used to claim such a role "scores 0", and
+#   the code has never done that. That case is caught by the NON-VACUITY GATE at the foot
+#   of this file instead: with a non-empty keyset and zero conclusions drawn it prints
+#   "PROBED ZERO" and exits 2, which the workflow publishes as `verdict: unavailable`, and
+#   the coverage-issue close arm is gated on `verdict != unavailable` so it cannot fire.
 #   The FLOOR gates. The INVENTORY (--inventory) gates NOTHING — it supplies only
 #   configs_expected, configs_unread and inventory_age_days. A short, long, stale or
 #   missing inventory changes the printed ratio and NO state.
@@ -201,9 +208,19 @@ fi
 
 # ── THE INVENTORY: A DENOMINATOR THAT REPORTS AND NEVER GATES ───────────────
 # Read once, here, so a file that appears or vanishes mid-scan cannot change the verdict
-# halfway through. Name syntax is `^[a-z0-9_]+$`, byte-identical to the repo-internal CI
-# check that pins the workflow's declared floor against this file's name count — the two
-# must count the same thing or the pin measures nothing.
+# halfway through.
+#
+# THE PARSE IS `grep -E '^[a-z0-9_]+$' | sort -u`, AND THE `sort -u` IS PART OF THE
+# CONTRACT. An earlier version of this comment claimed the expression was "byte-identical
+# to the repo-internal CI check that pins the workflow's declared floor against this
+# file's name count". THAT CLAIM WAS FALSE, and it was exactly the claim the pin rested
+# on: the CI check counted `grep -cE '^[a-z0-9_]+$'` — RAW lines, no dedup. Measured on
+# this very file: append one duplicate `prd` line and set the floor to 14, and the CI
+# check sees 14 == 14 while this parse sees 13, so the scan lands on a permanent
+# `degraded` that every gate waves through. The two sides must count the SAME thing or
+# the pin measures nothing; `plugins/soleur/test/token-drift-workflow-causes.test.sh`
+# now dedups too AND asserts the raw and deduped counts agree, so a duplicate line is a
+# loud CI failure rather than a silent divergence.
 if [[ -n "$INVENTORY_PATH" ]]; then
   if [[ -r "$INVENTORY_PATH" ]]; then
     mapfile -t INVENTORY_NAMES < <(grep -E '^[a-z0-9_]+$' "$INVENTORY_PATH" | sort -u || true)
@@ -244,13 +261,36 @@ compute_coverage() {
   local n=${#CONFIG_NAMES[@]}
   COVERAGE=unknown
   if (( FLOOR_OK == 1 )); then
-    if (( n < CONFIGS_FLOOR )); then
+    if (( n < CONFIGS_FLOOR || n == 0 )); then
+      # `n == 0` is a POSITIVE-WORK FLOOR, independent of the declared floor. Without it a
+      # floor of 0 makes `0 < 0` false and the confident state is assigned to a run that
+      # read nothing and probed nothing — measured: `--configs-floor 0` with an empty
+      # credential published `configs: 0, probes: 0, coverage: at-floor` while this
+      # script's own stderr said "0 configs read, so coverage is 'degraded'". A threshold
+      # of zero is a threshold that gates nothing; the confident state must never be
+      # reachable without at least one successful read. No shipped call site passes 0
+      # today (the scheduled step declares 13, the other three take the default 1), so
+      # this is the detector honouring its own contract rather than depending on every
+      # future caller to pass a sane floor.
       COVERAGE=degraded
     else
       # `>=`, not `==`. The live config set is expected to grow (a new config at git-data
       # birth, ephemeral rehearsal configs), and an equality gate would red a twice-daily
       # cron the first time growth was legitimate. Growth pushes the ratio above 1 and
       # changes no state.
+      #
+      # NOTE for the consumer: `at-floor` means "read at least the declared floor", NOT
+      # "read the right configs". `n` counts configs this run READ, which is not the same
+      # set the inventory NAMES — an ephemeral config (a rehearsal dispatch) counts toward
+      # `n` and can pad it back to the floor one-for-one after a real config's read fails.
+      # `configs_unread` is the discriminator for that case and is deliberately NOT read
+      # here (the gate stays credential-derived and inventory-independent). The workflow's
+      # close arm gates on it in its `if:` EXPRESSION —
+      # `steps.token_drift.outputs.configs_unread == '-'` — not in its run body, whose
+      # `env:` deliberately does not carry the field. Do not "fix" that env block: moving
+      # the check into the body would put it behind `continue-on-error: true` and an
+      # `exit 0`, where a failure to evaluate it is indistinguishable from a pass. See
+      # scheduled-terraform-drift.yml.
       COVERAGE=at-floor
     fi
   fi
@@ -332,9 +372,12 @@ def unver_rows(xs):
         out.append({"key": k, "cause": cause, "reason": reason})
     return out
 print(json.dumps({
-    # `configs` counts configs whose secret-name read SUCCEEDED, not configs LISTED. A
-    # role that can enumerate but not read values would list the whole project and scan
-    # none of it, satisfying any floor with a credential that measures nothing.
+    # `configs` counts configs whose secret-NAME LISTING succeeded, not configs LISTED by
+    # the project enumeration. A membership scoped away from a config lists it and cannot
+    # open it, so it is excluded here and named in `configs_unread`.
+    # It is NOT a count of value reads: a role that can list names but not read values
+    # still counts every config. The non-vacuity gate ("PROBED ZERO", exit 2 ->
+    # verdict: unavailable) is what catches that one, not this field.
     "live": live, "dead": dead, "unverifiable": unver, "probes": probes, "configs": configs,
     "stale": rows(rest[:i_unver], "config"),
     "unverifiable_keys": unver_rows(rest[i_unver + 1:i_names]),
@@ -472,11 +515,20 @@ for cfg in "${CONFIGS[@]}"; do
   #
   # A FAILED read no longer aborts the whole scan. It records the config BY NAME in the
   # failed set, and that config does NOT enter `configs` — which is the entire reason
-  # `configs` counts configs READ rather than configs LISTED. A role that can enumerate
-  # but not read values lists the whole project and scans none of it; counting listings
-  # would let that credential satisfy any floor while measuring nothing. The partial
-  # enumeration is still refused, just one level up: the unread configs surface in
-  # `configs_unread` and drag `coverage` to `degraded` instead of taking the scan down.
+  # `configs` counts configs whose NAME LISTING succeeded rather than configs the project
+  # enumeration returned. A membership scoped away from a config still sees it in
+  # `doppler configs`; counting that would let a narrowed credential satisfy the floor on
+  # configs it cannot open. The partial enumeration is still refused, just one level up:
+  # the unread configs surface in `configs_unread` and drag `coverage` to `degraded`
+  # instead of taking the scan down.
+  #
+  # WHAT THIS DOES NOT CATCH, stated plainly because five prose sites used to claim the
+  # opposite: a role that can list NAMES but not read VALUES passes this read for every
+  # config and is counted for every config. Nothing below decrements `configs` when a
+  # VALUE read comes back empty. That credential is caught by the non-vacuity gate at the
+  # foot of this file — zero conclusions from a non-empty keyset is "PROBED ZERO", exit 2,
+  # `verdict: unavailable` — and the workflow's close arm is gated on
+  # `verdict != unavailable` so it cannot close the standing coverage issue on such a run.
   #
   # The config is named EXPLICITLY on every read (`-c "$cfg"`). DOPPLER_CONFIG was unset
   # above, so an implicit bind is not merely discouraged here — it has nothing to bind to.
@@ -850,8 +902,17 @@ verify_access_pair() {
         PAIR_VERDICT[$cache_key]="UNVERIFIABLE:probe-failed"
       elif [[ "$PROBE_STAMPED" == 1 ]]; then
         # Access's own page WITH credentials attached. DEAD is the destructive verdict —
-        # its remedy overwrites the prd ROOT secret every branch config inherits — so it
-        # requires the answer to actually BE a refusal, not merely to carry the stamp. A
+        # its remedy overwrites a live credential in EVERY config that carries a copy, and
+        # the report below names them one by one — so it requires the answer to actually BE
+        # a refusal, not merely to carry the stamp. (This comment used to justify DEAD's
+        # cost as "overwrites the prd ROOT secret every branch config inherits". That
+        # premise is FALSIFIED — the same file says so ~90 lines below, and the 2026-08-02
+        # census is the evidence: `CF_API_TOKEN_DNS_EDIT` is carried independently by 7
+        # configs and `prd_terraform` does not carry the `REGISTRY_PUSH_ACCESS_TOKEN_*`
+        # pair that `prd` root does. The cost is HIGHER than the old sentence implied, not
+        # lower: there is no single write that fixes the fan-out, so a wrong DEAD costs one
+        # overwrite per carrying config. The conclusion the comment defends is unchanged;
+        # only its false justification is replaced.) A
         # stamped 200 is not a rejection whatever else it is; calling it one would print
         # "HTTP 200 ... rejected by Access" and order an overwrite on the strength of it.
         if [[ "$PROBE_CODE" == 401 || "$PROBE_CODE" == 403 ]]; then
@@ -1008,31 +1069,41 @@ else
       echo "  [${_cause}] ${_k}  —  ${_why}"
     done
     echo
-    if printf '%s\n' "${UNVERIFIABLE_ROWS[@]}" | grep -q '|no-probe-configured|'; then
+    # HERESTRINGS, NOT PIPES, on all six. `printf … | grep -q` is a SIGPIPE trap under
+    # `set -o pipefail`: `grep -q` exits the instant it matches, `printf` is then killed
+    # with SIGPIPE, and the PIPELINE status becomes 141 — so the `if` reads FALSE on a run
+    # where the pattern DID match. Reproduced here at 20,000 rows: false negative, pipeline
+    # rc=141. It does not bite at today's row counts (~50 rows / ~17.5 kB fits the pipe
+    # buffer, so printf finishes before grep exits), but this change takes the scan from 1
+    # config to 13 — a 13x row increase — and the failure direction is silent: the
+    # per-cause remedy footer vanishes from the operator's output during exactly the
+    # outage that produces the most rows (host-unreachable across every config). A
+    # herestring materialises the whole string first and has no second process to kill.
+    if grep -q '|no-probe-configured|' <<<"$(printf '%s\n' "${UNVERIFIABLE_ROWS[@]}")"; then
       echo "  no-probe-configured: fix the DETECTOR, not the credential — add a hostname"
       echo "    mapping to access_hostname_for(). Do NOT rotate these tokens."
     fi
-    if printf '%s\n' "${UNVERIFIABLE_ROWS[@]}" | grep -q '|gate-absent|'; then
+    if grep -q '|gate-absent|' <<<"$(printf '%s\n' "${UNVERIFIABLE_ROWS[@]}")"; then
       echo "  gate-absent: an UNCREDENTIALED request was not refused by Cloudflare Access."
       echo "    This is a GATE finding, not a credential finding — check the Access"
       echo "    application and policy for the host. Rotating the token changes nothing."
     fi
-    if printf '%s\n' "${UNVERIFIABLE_ROWS[@]}" | grep -qE '\|(host-unreachable|probe-failed)\|'; then
+    if grep -qE '\|(host-unreachable|probe-failed)\|' <<<"$(printf '%s\n' "${UNVERIFIABLE_ROWS[@]}")"; then
       echo "  host-unreachable / probe-failed: the probe measured nothing. Re-run. Do NOT"
       echo "    rotate — an overwrite here destroys a credential no one has shown to be bad."
     fi
-    if printf '%s\n' "${UNVERIFIABLE_ROWS[@]}" | grep -qE '\|(refused-unstamped|control-blocked)\|'; then
+    if grep -qE '\|(refused-unstamped|control-blocked)\|' <<<"$(printf '%s\n' "${UNVERIFIABLE_ROWS[@]}")"; then
       echo "  refused-unstamped / control-blocked: something in FRONT of Cloudflare Access"
       echo "    refused the probe. Check the WAF / rate-limit / IP rules for the host, not"
       echo "    the credential."
     fi
-    if printf '%s\n' "${UNVERIFIABLE_ROWS[@]}" | grep -qE '\|(unexpected-status|stamped-non-refusal|gate-indeterminate)\|'; then
+    if grep -qE '\|(unexpected-status|stamped-non-refusal|gate-indeterminate)\|' <<<"$(printf '%s\n' "${UNVERIFIABLE_ROWS[@]}")"; then
       echo "  unexpected-status / stamped-non-refusal / gate-indeterminate: the edge gave an"
       echo "    answer this probe cannot classify. LIVE requires positive proof of admission"
       echo "    and DEAD requires positive proof of refusal, so neither was claimed. Do NOT"
       echo "    rotate on the strength of these rows."
     fi
-    if printf '%s\n' "${UNVERIFIABLE_ROWS[@]}" | grep -q '|detector-env|'; then
+    if grep -q '|detector-env|' <<<"$(printf '%s\n' "${UNVERIFIABLE_ROWS[@]}")"; then
       echo "  detector-env: a LOCAL fault on the runner (could not allocate a temp file)."
       echo "    No request was sent. Nothing about the credential or the host is implied."
     fi

@@ -155,7 +155,7 @@ none of the escalation hops disclosed below, because those live in `prd` root.
 environment's **7** configs are the detector header's own motivating case, which cites a
 credential "stale in 5 of 7 configs".
 
-> **Provenance for ADR-158.** The dispositive evidence is this census, not the
+> **Provenance for ADR-159.** The dispositive evidence is this census, not the
 > `inheriting=false / inherits=[]` metadata. That metadata describes Doppler's *explicit
 > cross-config inheritance feature*, which is off everywhere, and is **not** evidence about
 > the built-in environment-root-to-branch behaviour. The census is sufficient for every
@@ -588,7 +588,7 @@ and auto-closes when the credential lands.
   It reads no credential and makes no network call, so it cannot be defeated by narrowing the
   credential, and it cannot red a merge because live Doppler grew.
 
-- **FR9 — the ADR.** `ADR-158` records: that a `doppler_service_token` is config-scoped and a
+- **FR9 — the ADR.** `ADR-159` records: that a `doppler_service_token` is config-scoped and a
   `doppler_service_account` with a project membership is not (with the falsified
   "no project-scoped read token exists" premise from #7159); that the `viewer` role is the
   least-privileged role carrying `enclave_project_config_secrets_read`; the decision to leave
@@ -600,17 +600,20 @@ and auto-closes when the credential lands.
 
 ## Architecture Decision (ADR/C4)
 
-**Create `ADR-158 — A project-scoped Doppler service account reads the fleet; the coverage floor
+**Create `ADR-159 — A project-scoped Doppler service account reads the fleet; the coverage floor
 is declared, not derived`** as an in-scope task of this plan. It corrects reasoning currently
 carried in shipped comments, in the workflow's remedy prose, in a runbook and in the #7159
 option table, and it records why the denominator may report but must not gate.
 
-> **Ordinal.** ADR-158 is the next free ordinal (highest existing is ADR-157). This plan was
-> authored against ADR-155; that ordinal is now claimed by a sibling plan, and 156/157 landed
-> while this plan was being written. Renumbered 2026-08-03 at implementation. **Provisional**
-> — a sibling PR can claim it. On renumber, sweep this plan, the spec, the tasks file and every
-> AC naming it:
-> `grep -rn 'ADR-158' knowledge-base/project/{plans,specs}/feat-one-shot-7159-doppler-prd-read-token-coverage/`
+> **Ordinal — provisional until merge, and it has already moved twice.** This plan was authored
+> against **ADR-155**; 155, 156 and 157 all landed on `origin/main` from sibling PRs while it was
+> being written, so it was renumbered to **158**. **158** was then claimed mid-flight by
+> `ADR-158-kb-file-tree-host-is-a-derived-value.md` (merged via #7189), so it is renumbered again
+> to **159**. An ordinal chosen on a branch is a claim, not a reservation, and a branch that is
+> behind `origin/main` cannot see the collision at all — re-check against a freshly fetched
+> `origin/main` immediately before merge. On renumber, sweep this plan, the spec, the tasks file,
+> `decision-challenges.md`, the `.tf` citations and every AC naming it:
+> `grep -rn 'ADR-159' knowledge-base/project/{plans,specs}/feat-one-shot-7159-doppler-prd-read-token-coverage/`
 
 Related: ADR-154, ADR-007, ADR-149.
 
@@ -790,9 +793,15 @@ liveness_signal:
 error_reporting:
   destination: GitHub Actions ::error:: annotations with named slugs
                (token_drift_coverage_list_failed, token_drift_coverage_escalation_failed,
-               token_drift_coverage_update_failed, token_drift_coverage_close_failed) plus
-               the action-required issue channel and, when the issue channel itself is
-               unreachable, the ops-email fallback described in mode 6
+               token_drift_coverage_update_failed, token_drift_coverage_close_list_failed,
+               token_drift_coverage_close_failed, token_drift_floor_unparseable,
+               token_drift_configs_unparseable, rung2_scratch_cfg_list_failed,
+               rung2_scratch_cfg_escalation_failed) plus the action-required issue channel
+               and, when the issue channel itself is unreachable, the ops-email fallback
+               described in mode 6. THE LIST IS THE OPERATOR CONTRACT: the fallback emails
+               tell the reader to search the run log for "the named error slug", so a slug
+               emitted by the code and absent here sends them looking for the wrong string
+               — and a slug listed here that no arm emits trains them to distrust the list.
   fail_loud: true — every arm that cannot reach its channel emits a named ::error:: AND
              sets an output the email fallback gates on; the detector emits its JSON
              BEFORE any exit-2 return, so a failure never blinds the coverage outputs
@@ -875,7 +884,7 @@ discoverability_test:
     gh run list --workflow=scheduled-terraform-drift.yml -L 1 --json
     databaseId,conclusion,createdAt -q '.[0] | "\(.databaseId) \(.conclusion) \(.createdAt)"'
     | tee /dev/stderr | cut -d' ' -f1 | xargs -I{} gh run view {} --log | grep -E
-    'token-drift verdict:'
+    'token-drift verdict: [a-z]+ \(detector exit'
   expected_output: >
     the newest run's id, conclusion and timestamp, then a line of the form "token-drift
     verdict: clean (detector exit 0, causes: -, configs: 13, floor: 13, coverage: at-floor,
@@ -884,6 +893,14 @@ discoverability_test:
     does NOT filter --status success: that filter returns the last HEALTHY run and prints a
     green verdict line while a newer run is failing, which is a clean bill of health for a
     question never asked.
+    NOTE ALSO why the grep is anchored on "[a-z]+ \(detector exit" and not on the bare
+    prefix "token-drift verdict:". Actions echoes the RESOLVED `run:` script into the log,
+    and the script's source line contains that literal prefix verbatim — so the loose
+    pattern matched on a run that ABORTED before ever printing a verdict, and the
+    discoverability probe could not fail. Measured on a two-line fixture holding the echoed
+    source line and the resolved output line: the loose pattern matches 2, the anchored one
+    matches 1 (the resolved line only), because the source carries "${verdict}" where the
+    output carries a bare lowercase word.
 ```
 
 No SSH anywhere in the verification path.
@@ -1208,7 +1225,7 @@ in the sense that they need no approval.
 - **AC28 — the coverage channel ends in the closed state.** Any `token-drift-coverage` issue open
   at merge (none existed at plan time; the filer's first-ever run is the 18:00 UTC run on
   2026-08-02) has had its body rewritten by the filer rather than frozen, and the
-  `Close the coverage issue once the fan-out is restored` step auto-closes it with a comment
+  `Close the coverage issue once the declared floor is met` step auto-closes it with a comment
   naming `at-floor` and `13/13`. This is the #7159 checklist's Done-when, satisfied literally.
 
 ---
@@ -1267,7 +1284,7 @@ reporting steps is not); `tests/scripts/test-destroy-guard-counter-web-platform.
 |---|---|
 | `apps/web-platform/infra/token-drift-service-account.tf` | FR1 — the three Doppler resources plus the Actions secret |
 | `apps/web-platform/infra/doppler-config-inventory.txt` | FR8 — 13 names, report only |
-| `knowledge-base/engineering/architecture/decisions/ADR-158-project-scoped-service-account-and-declared-coverage-floor.md` | FR9 |
+| `knowledge-base/engineering/architecture/decisions/ADR-159-project-scoped-service-account-and-declared-coverage-floor.md` | FR9 |
 | `knowledge-base/project/specs/feat-one-shot-7159-doppler-prd-read-token-coverage/{spec,tasks,decision-challenges}.md` | planning artifacts |
 
 No new `.test.sh`. (`plugins/soleur/test/*.test.sh` is auto-discovered by
@@ -1312,7 +1329,7 @@ No new `.test.sh`. (`plugins/soleur/test/*.test.sh` is auto-discovered by
 | A lost or clobbered state write on the **create** orphans a live project-wide credential in Doppler with no Terraform record — unrotatable by `-replace=`, and it accumulates on the next run. The R2 backend has no conditional writes and `use_lockfile = false`; the Actions concurrency group is the sole serializer. The "dropped `-target=` surfaces as drift" safeguard does **not** cover this: an object absent from state is invisible to `plan`, and provider v1.21.2 ships no data source that could enumerate service accounts or their tokens. | The count-asserting `live_verification` in `## Encryption Posture` is the detector for this mode; the `-replace=` path in the `.tf` header is the remedy. **This risk is strictly larger at this shape** — an orphan now reads the whole project rather than one config — and it is disclosed as such rather than carried over unchanged. |
 | The credential is a repository-level secret on a public repo; the governing control is who can merge under `.github/workflows/`. `CODEOWNERS` pins that path to the operator, but its own header records the branch-protection rule enforcing CODEOWNERS review as an unfinished follow-up, and no ruleset in IaC enforces it. | Named rather than assumed. This is the same control that already governs `DOPPLER_TOKEN_PRD`, so the change does not alter it; the gap is pre-existing and is called out so a reviewer does not read "repository-scoped like every sibling" as a control. |
 | The issue body and the ops emails are API payloads, so GitHub's log masking does not reach them — and the repo is public, so the coverage issue body is world-readable. | AC30 pins that those bodies carry key/config **names** and counts only, never values. `configs_unread` is a list of Doppler config names, which the committed `.tf` files already disclose. |
-| ADR-158's ordinal is claimed by a sibling PR. | Provisional; the renumber sweep is named above. |
+| ADR-159's ordinal is claimed by a sibling PR. | Provisional; the renumber sweep is named above. |
 
 ---
 
@@ -1451,7 +1468,7 @@ prose:
   AC20 names integers; AC21 uses `git diff` rather than a glob matching 54 existing ADRs; the
   post-merge section no longer claims its criteria are approval-free. `credentials` was renamed
   `configs_floor` to end a collision with "credentials verified".
-- **R14 (P2).** ADR-158's provenance moved from the inheritance metadata (which describes a
+- **R14 (P2).** ADR-159's provenance moved from the inheritance metadata (which describes a
   different Doppler feature) to the per-config census. The `DOPPLER_TOKEN_PRD` consumer count was
   corrected from five to six, and the source-derivation rejection was restated so it is
   reproducible.

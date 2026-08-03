@@ -1367,6 +1367,98 @@ else
   fail "with no readable inventory the ratio must be ABSENT with a caveat — never back-filled from the scan's own count, which would be a denominator that narrows in lockstep with the credential (rc=$RC, coverage=$(jget "$JP8" coverage), ratio=$(jget "$JP8" coverage_ratio), caveat=$(jget "$JP8" coverage_caveat))"
 fi
 
+echo "P16: the COMMITTED inventory and the WORKFLOW-DECLARED floor, executed together"
+# NOTHING EVER RAN THESE TWO AGAINST EACH OTHER. This suite only ever used inventories it
+# wrote itself, and the consumer suite replaces the detector invocation with
+# `bash -c "exit $DET_RC"` — so the committed file and the declared floor were only ever
+# GREPPED AS TEXT, by three static assertions. Six mutations survived that arrangement at a
+# fully green consumer suite; this case observes the EFFECTIVE parameters instead of their
+# spelling, and it is the only place the shipped inventory is ever parsed by the shipped parser.
+#
+# The fleet is built FROM the inventory, so the case says exactly one thing and says it
+# honestly: *given a project whose configs are precisely the names this file lists, the floor
+# the workflow declares grades that project `at-floor` at N/N with nothing unread.* Any
+# divergence between the two counting rules breaks it — notably the duplicate-line case, where
+# the file's raw line count and its DEDUPED name count differ: the detector dedupes, so a floor
+# raised to match the raw count reds this case (measured: append one duplicate `prd`, set the
+# floor to 14, and the detector reads 13 against a floor of 14 -> permanent `degraded`).
+#
+# It reads no credential and makes no network call. It cannot verify that these names exist in
+# live Doppler — no offline check can — and it does not claim to.
+P_REAL_INV="$REPO_ROOT/apps/web-platform/infra/doppler-config-inventory.txt"
+P_REAL_WF="$REPO_ROOT/.github/workflows/scheduled-terraform-drift.yml"
+[[ -r "$P_REAL_INV" ]] || { echo "FATAL: committed inventory unreadable at $P_REAL_INV" >&2; exit 2; }
+[[ -r "$P_REAL_WF" ]] || { echo "FATAL: workflow unreadable at $P_REAL_WF" >&2; exit 2; }
+# PARSED OUT OF THE YAML, never grepped: a `#` line inside a `run:` block scalar survives
+# yaml.safe_load, and this workflow's comments quote the floor repeatedly.
+P_WF_FLOOR=$(python3 - "$P_REAL_WF" <<'PYF'
+import sys, yaml
+for job in yaml.safe_load(open(sys.argv[1]))["jobs"].values():
+    for st in job.get("steps", []) or []:
+        if st.get("id") == "token_drift":
+            sys.stdout.write(str((st.get("env") or {}).get("DOPPLER_CONFIGS_FLOOR", "")))
+            raise SystemExit(0)
+raise SystemExit(2)
+PYF
+) || { echo "FATAL: could not parse DOPPLER_CONFIGS_FLOOR out of the workflow" >&2; exit 2; }
+[[ "$P_WF_FLOOR" =~ ^[0-9]+$ ]] || { echo "FATAL: workflow floor '${P_WF_FLOOR}' is not an integer" >&2; exit 2; }
+# The SUT's own parse, reproduced: `^[a-z0-9_]+$` then `sort -u`.
+mapfile -t P_REAL_NAMES < <(grep -E '^[a-z0-9_]+$' "$P_REAL_INV" | sort -u)
+(( ${#P_REAL_NAMES[@]} > 0 )) || { echo "FATAL: the committed inventory yielded 0 parseable names" >&2; exit 2; }
+P_REAL_CFGS=$(printf '%s\n' "${P_REAL_NAMES[@]}")
+P_REAL_SECS="$(p_secrets_for "$P_REAL_CFGS")"
+P_REAL_N=${#P_REAL_NAMES[@]}
+JP16="$TMP/p16.json"
+MOCK_HTTP_BODY='{"success":true}' run_sut p16 200 "$P_REAL_SECS" "$P_REAL_CFGS" "--configs-floor $P_WF_FLOOR --inventory $P_REAL_INV --json-file $JP16"
+_p16=1
+[[ "$RC" == "0" ]] || { _p16=0; echo "    rc=$RC"; }
+[[ "$(jget "$JP16" configs)" == "$P_REAL_N" ]] || { _p16=0; echo "    configs=$(jget "$JP16" configs), expected $P_REAL_N"; }
+[[ "$(jget "$JP16" configs_floor)" == "$P_WF_FLOOR" ]] || { _p16=0; echo "    configs_floor=$(jget "$JP16" configs_floor), expected $P_WF_FLOOR"; }
+[[ "$(jget "$JP16" configs_expected)" == "$P_REAL_N" ]] || { _p16=0; echo "    configs_expected=$(jget "$JP16" configs_expected), expected $P_REAL_N"; }
+[[ "$(jget "$JP16" coverage)" == "at-floor" ]] || { _p16=0; echo "    coverage=$(jget "$JP16" coverage)"; }
+[[ "$(jget "$JP16" coverage_ratio)" == "${P_REAL_N}/${P_REAL_N}" ]] || { _p16=0; echo "    ratio=$(jget "$JP16" coverage_ratio), expected ${P_REAL_N}/${P_REAL_N}"; }
+[[ "$(jget "$JP16" configs_unread)" == "" ]] || { _p16=0; echo "    configs_unread=$(jget "$JP16" configs_unread), expected empty"; }
+# The committed file must not be stale enough to caveat, either — that caveat rides into both
+# ops emails, and a permanently-caveated ratio is a permanently hedged one.
+[[ "$(jget "$JP16" coverage_caveat)" == "-" || "$(jget "$JP16" coverage_caveat)" == "" ]] \
+  || { _p16=0; echo "    the committed inventory carries a caveat: $(jget "$JP16" coverage_caveat)"; }
+if [[ "$_p16" == "1" ]]; then
+  pass "the committed inventory (${P_REAL_N} names) at the workflow's declared floor (${P_WF_FLOOR}) grades at-floor at ${P_REAL_N}/${P_REAL_N}, nothing unread, no caveat"
+else
+  fail "the SHIPPED inventory and the SHIPPED floor do not agree when actually executed together. Every other assertion on this pair — in either suite — compares them as TEXT: the consumer suite stubs the detector out entirely, and this suite otherwise writes its own inventories. If the two counting rules diverge (the raw line count vs the deduped name count is the measured case), the scheduled scan lands on a permanent 'degraded' that no static check can see (rc=$RC, configs=$(jget "$JP16" configs), floor=$(jget "$JP16" configs_floor), coverage=$(jget "$JP16" coverage), ratio=$(jget "$JP16" coverage_ratio))"
+fi
+
+echo "P17: a floor of 0 does NOT license the confident state — the positive-work floor"
+# A THRESHOLD OF ZERO IS A THRESHOLD THAT GATES NOTHING. `0 < 0` is false, so the pure
+# floor comparison assigned the CONFIDENT state to a run that read nothing and probed
+# nothing. Measured before the fix: `--configs-floor 0` with an unusable credential
+# published `configs: 0, probes: 0, coverage: at-floor` while the script's own stderr said
+# "0 configs read, so coverage is 'degraded'" — the report and the published verdict
+# disagreeing, with the published one being the optimistic lie.
+#
+# No shipped call site passes 0 today (the scheduled step declares 13, the other three take
+# the default 1), which is exactly why this needs a test: the guarantee is the detector
+# honouring its own contract rather than depending on every future caller to pass a sane
+# floor.
+JP17="$TMP/p17.json"
+_p17=1
+MOCK_CRED_MODE=empty run_sut p17 200 "$P_SEC13" "$P_CFG13" "--configs-floor 0 --inventory $P_INV13 --json-file $JP17"
+[[ "$(jget "$JP17" configs)" == "0" ]] || { _p17=0; echo "    configs=$(jget "$JP17" configs), expected 0"; }
+[[ "$(jget "$JP17" configs_floor)" == "0" ]] || { _p17=0; echo "    configs_floor=$(jget "$JP17" configs_floor), expected 0"; }
+[[ "$(jget "$JP17" coverage)" == "degraded" ]] || { _p17=0; echo "    coverage=$(jget "$JP17" coverage), expected degraded"; }
+# AND THE FLOOR MUST STILL GATE ABOVE ZERO — an override that forced `degraded` whenever the
+# floor was 0 would pass the line above and destroy the ladder. A real read at a floor of 0
+# is at-floor, because the positive-work floor is about WORK DONE, not about the threshold.
+JP17B="$TMP/p17b.json"
+MOCK_HTTP_BODY='{"success":true}' run_sut p17b 200 "$P_SEC13" "$P_CFG13" "--configs-floor 0 --inventory $P_INV13 --json-file $JP17B"
+[[ "$(jget "$JP17B" configs)" == "13" ]] || { _p17=0; echo "    control: configs=$(jget "$JP17B" configs), expected 13"; }
+[[ "$(jget "$JP17B" coverage)" == "at-floor" ]] || { _p17=0; echo "    control: 13 configs read at floor 0 published '$(jget "$JP17B" coverage)', expected at-floor"; }
+if [[ "$_p17" == "1" ]]; then
+  pass "a floor of 0 with zero configs read is degraded, while 13 read at a floor of 0 is still at-floor"
+else
+  fail "the confident state must never be reachable without at least one successful read. At a floor of 0 the bare comparison '0 < 0' is false, so a run that read nothing and probed nothing published 'at-floor' — a threshold of zero gates nothing, and the state that closes the operator's standing coverage issue was derived from a scan that did no work at all"
+fi
+
 echo "P9: the credential value never reaches a child process's argv"
 MOCK_HTTP_BODY='{"success":true}' run_sut p9 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV13"
 _p9=1
@@ -1718,8 +1810,11 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # written before the cases were split per narrowing (P5b runs three) and per credential
 # state (P4 runs two), and a floor below the realized count would license deleting exactly
 # the cases this change adds.
-if [[ "$((PASS + FAIL))" -lt 78 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 78. The suite did not execute what it claims to." >&2
+#
+# Raised 78 -> 80 with P16 (the committed inventory executed against the workflow-declared
+# floor) and P17 (the positive-work floor). 80 is the REALIZED count on a green run.
+if [[ "$((PASS + FAIL))" -lt 80 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 80. The suite did not execute what it claims to." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

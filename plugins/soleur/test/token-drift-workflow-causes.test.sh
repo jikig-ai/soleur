@@ -117,6 +117,27 @@ sys.stdout.write(str(cur))
 PYF
 }
 
+# ---------------------------------------------------------------------------
+# COMMENT-STRIPPING, applied to EVERY `run:` body this suite asserts over.
+#
+# Rule 3 at the top of this file says nothing is asserted by grepping the workflow because
+# "comments cannot survive yaml.safe_load". That is true of the workflow's YAML STRUCTURE
+# and FALSE of a `run:` block scalar, which yaml.safe_load hands back as one opaque string
+# with every `#` line inside it intact. So a shell comment in a step's own `run:` body can
+# satisfy an assertion about that body — and the coverage filer's body is ~27% comment
+# lines, several of which quote the exact slugs and control-flow fragments asserted below.
+# Measured: no in-comment match today, which is precisely why it is worth fixing now rather
+# than after one appears.
+#
+# TWO HELPERS, and the difference matters. `strip_comments` removes comment LINES and keeps
+# the line structure, so line-anchored negative assertions (`! grep -qE 'gh issue create.*|
+# tail'`) stay scoped to one line. `flatten_body` additionally joins everything into one
+# line, which is required only where a sentence is SPLIT ACROSS `echo` calls and a
+# line-based grep therefore cannot see it — and which would make a `.*` in a negative
+# assertion span the whole body. Use the narrower one unless the sentence spans lines.
+strip_comments() { grep -vE '^[[:space:]]*#' <<<"$1"; }
+flatten_body() { tr '\n' ' ' <<<"$(strip_comments "$1")" | tr -s ' '; }
+
 # Every `if:` expression in the whole workflow, one per line. Comment-free by
 # construction, so a plain grep over THIS is anchored on live syntax.
 all_step_ifs() {
@@ -203,15 +224,41 @@ else
   fail "the detector invocation no longer carries '|| rc=\$?' (it is: ${DETECTOR_CALL}) — under 'bash -eo pipefail' a non-zero detector aborts the step before a single output is written, leaving every positive-polarity consumer arm unmatched"
 fi
 
-echo "H2: the DECLARED floor and the committed inventory are both handed to the detector"
+echo "H2: the DECLARED floor and the committed inventory each reach the detector's argv EXACTLY ONCE"
 # The floor is declared in this step's `env:` and read from nowhere else. If it does not
 # reach the detector's argv, the detector falls back to its own default and the step's
 # declaration becomes decorative while `configs_floor` still echoes back a number.
-if grep -Fq -- '--configs-floor "$DOPPLER_CONFIGS_FLOOR"' <<<"$DETECTOR_CALL" \
-   && grep -Fq -- '--inventory apps/web-platform/infra/doppler-config-inventory.txt' <<<"$DETECTOR_CALL"; then
-  pass "the invocation passes --configs-floor \$DOPPLER_CONFIGS_FLOOR and --inventory"
+#
+# THIS WAS TWO `grep -Fq` CALLS, AND THREE MUTATIONS WALKED PAST THEM, all measured green:
+#   S4  APPEND `--configs-floor 1` to the invocation, leaving the pinned spelling intact.
+#       Both greps still match, F1/F2/F3 read the unchanged `env:` block, and the detector's
+#       own arg loop is LAST-WINS — effective floor 1. The gate is disabled at 48/48 green.
+#   S5  APPEND `--inventory /nonexistent/inv.txt`. Same shape, and SILENT: the run stays green
+#       and `at-floor` while `configs_expected` -> -1, the ratio -> `-`, and `configs_unread`
+#       empties. Every denominator this change adds vanishes from both emails and the issue
+#       body while the suite reports full coverage.
+#   S6  MOVE the pinned literals into inline `# …` comments while the live flags read
+#       `--configs-floor 1`. `DETECTOR_CALL` is a raw slice of a `run:` BLOCK SCALAR, and
+#       yaml.safe_load hands block scalars back with their `#` lines intact — so this file's
+#       own rule 3 ("comments cannot survive yaml.safe_load") is FALSE for exactly this blob.
+#
+# So: strip comments, TOKENIZE, and count. Counting is what kills append-a-second-copy;
+# tokenizing is what kills a value hidden in a comment; and asserting the VALUE (not just the
+# flag) is what keeps `--configs-floor 1` from satisfying a presence check.
+_H2_CALL=$(strip_comments "$DETECTOR_CALL" | sed -e 's/[[:space:]]*\\$//' | tr '\n' ' ' | tr -s ' ')
+_h2=1
+for _flag in --configs-floor --inventory; do
+  _n=$(grep -oE -- "(^| )${_flag}( |$)" <<<"$_H2_CALL" | grep -c .) || _n=0
+  [[ "$_n" == "1" ]] || { _h2=0; echo "    ${_flag} appears ${_n} time(s) in the resolved call, not exactly 1 (last-wins would silently re-point it)"; }
+done
+grep -qE -- '--configs-floor +"\$DOPPLER_CONFIGS_FLOOR"' <<<"$_H2_CALL" \
+  || { _h2=0; echo "    --configs-floor is not passed the step's own \$DOPPLER_CONFIGS_FLOOR"; }
+grep -qF -- '--inventory apps/web-platform/infra/doppler-config-inventory.txt' <<<"$_H2_CALL" \
+  || { _h2=0; echo "    --inventory does not name the committed inventory path"; }
+if [[ "$_h2" == "1" ]]; then
+  pass "--configs-floor \$DOPPLER_CONFIGS_FLOOR and --inventory <committed path> each appear exactly once outside comments"
 else
-  fail "the detector invocation does not pass both --configs-floor \"\$DOPPLER_CONFIGS_FLOOR\" and --inventory (it is: ${DETECTOR_CALL}) — the step's declared floor would then gate nothing, and the coverage ratio would have no denominator"
+  fail "the detector invocation must hand the declared floor and the committed inventory to the detector EXACTLY ONCE each, outside comments (resolved call: ${_H2_CALL}). The arg loop is last-wins, so a second --configs-floor or --inventory silently overrides the first while every spelling-based assertion stays green; and a `#` line inside a run: block scalar survives yaml.safe_load, so a commented-out literal can satisfy a naive grep"
 fi
 
 # The floor the workflow declares, read once and reused by the harness so run_step
@@ -256,6 +303,7 @@ DEAD_ISSUE_STEP="Open or update an action-required issue (token drift — DEAD c
 UNVER_EMAIL_STEP="Email notification (token drift — UNVERIFIABLE only)"
 CHANNEL_EMAIL_STEP="Email notification (token drift — the coverage issue channel is unreachable)"
 SCRATCH_STEP="File an issue when the scratch-config half of the sweep was not performed"
+SCRATCH_EMAIL_STEP="Email notification (rung-2 sweep — the scratch-config finding could not reach its issue channel)"
 
 # ---------------------------------------------------------------------------
 # T1-T5 — the parser's contract.
@@ -514,8 +562,22 @@ UNVER_BODY=$(step_get "name:$UNVER_EMAIL_STEP" with.body) \
   || { echo "FATAL: could not read the UNVERIFIABLE email body" >&2; exit 2; }
 echo "T10: every cause the detector can emit is explained in the UNVERIFIABLE email"
 missing=()
+# ANCHORED AT LIST-ITEM POSITION, via the SAME extraction its sibling T11 uses twenty lines
+# down, and for the same reason T11 states: this body legitimately uses bare <code> for
+# non-cause spans (access_hostname_for(), the script path, the coverage states `degraded` /
+# `at-floor`, the output field names), so `grep -qF "<code>${c}</code>"` can be satisfied by
+# a span that is not a per-cause remedy at all. No collision today — the collision arrives
+# the first time a cause name is also a coverage state or an output field name, and T10 is
+# then green over an email that explains nothing (cq-assert-anchor-not-bare-token).
+#
+# Deriving the SET once, rather than one grep per cause, is what keeps the two directions
+# symmetric: T10 asks "is every derived cause in the rendered set", T11 asks "is every
+# rendered entry a derived cause", and both now read the same rendered set.
+mapfile -t _RENDERED_CAUSES < <(printf '%s' "$UNVER_BODY" \
+         | grep -oE '<li><code>[a-z-]+</code>( / <code>[a-z-]+</code>)?' \
+         | grep -oE '<code>[a-z-]+</code>' | sed 's/<\/\?code>//g' | sort -u)
 for c in "${CAUSES[@]}"; do
-  grep -qF "<code>${c}</code>" <<<"$UNVER_BODY" || missing+=("$c")
+  grep -qxF "$c" <<<"$(printf '%s\n' ${_RENDERED_CAUSES[@]+"${_RENDERED_CAUSES[@]}"})" || missing+=("$c")
 done
 if (( ${#missing[@]} == 0 )); then
   pass "all ${#CAUSES[@]} causes have a <li><code>cause</code> entry"
@@ -568,7 +630,7 @@ fi
 # artifact that channel produces.
 # ---------------------------------------------------------------------------
 COV_IF=$(step_get "name:$COVERAGE_STEP" if) || COV_IF=""
-COV_RUN=$(step_get "name:$COVERAGE_STEP" run) || COV_RUN=""
+COV_RUN=$(strip_comments "$(step_get "name:$COVERAGE_STEP" run)") || COV_RUN=""
 
 echo "T13: narrow coverage has a delivery channel that survives a GREEN clean run"
 # Three properties, all load-bearing, asserted on the step's OWN parsed `if:`:
@@ -591,6 +653,24 @@ if grep -qF "steps.token_drift.outputs.coverage == 'unknown'" <<<"$COV_IF"; then
   pass "an unmeasurable coverage still reaches the issue channel"
 else
   fail "coverage=unknown has no channel. It is reachable with a CLEAN verdict (well-formed JSON that simply lacks 'configs'), and no email arm fires on clean — the verdict=='unavailable' email only covers the crash path"
+fi
+
+echo "T13c: the filer ALSO fires at 'at-floor' when a named config went unread"
+# The third leg, and the counterpart to the close arm's `configs_unread` conjunct. Without it
+# the run that the close arm now correctly DECLINES to close reaches nothing at all: `at-floor`
+# matches no email arm, no ::warning:: arm and — before this leg — no issue arm, so an
+# ephemeral rehearsal config padding the count back to the floor after a real config's read
+# failed produced a GREEN cron run with no artifact whatsoever. Withholding a close and filing
+# nothing is a channel that goes quiet on exactly the state it was widened to detect.
+#
+# Asserted on the step's own parsed `if:`, on the FULL comparison, and requiring BOTH halves of
+# the conjunction to be present in one leg — `at-floor` alone anywhere in this expression would
+# make the filer fire on every healthy run.
+if grep -qE "outputs\.coverage[[:space:]]*==[[:space:]]*'at-floor'" <<<"$COV_IF" \
+   && grep -qE "outputs\.configs_unread[[:space:]]*!=[[:space:]]*'-'" <<<"$COV_IF"; then
+  pass "at-floor with a non-empty configs_unread still reaches the issue channel"
+else
+  fail "the coverage filer's if: is '${COV_IF}' — it must carry an (at-floor AND configs_unread != '-') leg. That run is the one the close arm declines to close, and it matches no email arm and no warning arm, so without this leg it is a GREEN cron run with no artifact at all: the credential silently skipped a config the inventory names and nothing anywhere says so"
 fi
 
 echo "T14: the filer is CREATE-OR-UPDATE-BODY — an existing issue is REWRITTEN, never commented on"
@@ -651,7 +731,7 @@ fi
 
 echo "T14f: the close arm fires ONLY on 'at-floor', and closes rather than comments"
 CLOSE_IF=$(step_get "name:$CLOSE_STEP" if) || CLOSE_IF=""
-CLOSE_RUN=$(step_get "name:$CLOSE_STEP" run) || CLOSE_RUN=""
+CLOSE_RUN=$(strip_comments "$(step_get "name:$CLOSE_STEP" run)") || CLOSE_RUN=""
 _close_states=$(grep -Ec "outputs\.coverage[[:space:]]*==[[:space:]]*'(degraded|unknown)'" <<<"$CLOSE_IF")
 if grep -qF "steps.token_drift.outputs.coverage == 'at-floor'" <<<"$CLOSE_IF" \
    && [[ "$_close_states" == "0" ]] \
@@ -661,11 +741,57 @@ else
   fail "the close arm's if: is '${CLOSE_IF}' (unhealthy states matched: ${_close_states}) — it must fire on 'at-floor' ALONE. Closing on 'degraded' or 'unknown' silences the channel on exactly the runs it exists for; firing on nothing makes the issue's stated closing condition ('a scheduled run reports coverage: at-floor') an operator step observable only by opening a GREEN cron run's log"
 fi
 
-echo "T14g: the close comment names the steady-state ratio 13/13"
-if grep -qF '13/13' <<<"$CLOSE_RUN"; then
-  pass "the close comment states 13/13, the #7159 Done-when condition met literally"
+echo "T14f2: 'at-floor' is NOT sufficient — the close arm carries all THREE conjuncts"
+# `at-floor` says the credential read at least the DECLARED FLOOR. It does not say it read
+# the configs the inventory NAMES, and it does not say anything was measured:
+#   configs_unread == '-'      an ephemeral rehearsal config counts toward `configs` and pads
+#                              it back to the floor ONE-FOR-ONE after a real config's read
+#                              fails, so `at-floor` alone closes the operator's standing issue
+#                              on a run that silently skipped a named config — and closes it
+#                              quoting a healthy-looking ratio.
+#   verdict != 'unavailable'   a credential that lists NAMES but reads no VALUES counts every
+#                              config, satisfies the floor, and draws zero conclusions. The
+#                              detector catches it ("PROBED ZERO", exit 2) and this conjunct
+#                              is what stops that run closing the issue.
+# ANCHORED ON SYNTAX A COMMENT CANNOT PRODUCE: asserted over the step's own PARSED `if:`
+# expression, and on the full comparison (`outputs.configs_unread == '-'`), never on the bare
+# field names — the workflow's comment block beside this step names both fields repeatedly
+# while explaining why they are there (cq-assert-anchor-not-bare-token).
+_t14f2=1
+grep -qE "outputs\.configs_unread[[:space:]]*==[[:space:]]*'-'" <<<"$CLOSE_IF" \
+  || { _t14f2=0; echo "    the close arm does not require configs_unread == '-'"; }
+grep -qE "outputs\.verdict[[:space:]]*!=[[:space:]]*'unavailable'" <<<"$CLOSE_IF" \
+  || { _t14f2=0; echo "    the close arm does not require verdict != 'unavailable'"; }
+if [[ "$_t14f2" == "1" ]]; then
+  pass "the close arm requires at-floor AND configs_unread=='-' AND verdict!='unavailable'"
 else
-  fail "the close comment does not name 13/13 — the operator receives 'coverage restored' with no statement of what was restored TO, and a close at a lowered floor reads identically to a close at full coverage"
+  fail "the close arm's if: is '${CLOSE_IF}' — gating on 'at-floor' alone auto-closes the operator's standing coverage issue on a run that skipped a config the inventory names (an ephemeral rehearsal config pads the count back to the floor one-for-one) or that drew no conclusion at all. That is 'a clean bill of health for a question never asked' reproduced at the close arm, and it is strictly WORSE than the pre-PR behaviour, where a failed per-config read exited 2 and fired the DETECTOR-UNAVAILABLE email every run"
+fi
+
+echo "T14g: the close comment INTERPOLATES the measured denominator, never a hardcoded 13"
+# IT USED TO ASSERT THE LITERAL `13/13` WAS PRESENT. That is the guard restating the value it
+# guards: it pinned the literal's PRESENCE and never that it EQUALS the floor or the inventory
+# count. Measured — apply the growth edit the inventory's own header prescribes (append
+# `prd_git_data`, raise DOPPLER_CONFIGS_FLOOR to 14 in the same PR) and this suite went fully
+# GREEN while the auto-close comment on the operator's P1 issue rendered "at `14/14` — the
+# credential read 14 of the 13 configs the committed inventory names ... That is 13/13 in the
+# steady state". Two false statements, on the one artifact that tells the operator the incident
+# is over. Assert the WIRING instead: the run body must interpolate the output, and the step's
+# `env:` must actually supply it (an interpolation of a variable no `env:` sets renders empty).
+_t14g=1
+grep -qF '${CONFIGS_EXPECTED}' <<<"$CLOSE_RUN" \
+  || { _t14g=0; echo "    the close comment does not interpolate \${CONFIGS_EXPECTED}"; }
+grep -qF '${COVERAGE_RATIO}' <<<"$CLOSE_RUN" \
+  || { _t14g=0; echo "    the close comment does not interpolate \${COVERAGE_RATIO}"; }
+grep -qE '(^|[^0-9])13/13([^0-9]|$)' <<<"$CLOSE_RUN" \
+  && { _t14g=0; echo "    the close comment hardcodes 13/13 — it goes stale the moment the floor legitimately rises"; }
+_close_expected=$(step_get "name:$CLOSE_STEP" env.CONFIGS_EXPECTED) || _close_expected=""
+[[ "$_close_expected" == '${{ steps.token_drift.outputs.configs_expected }}' ]] \
+  || { _t14g=0; echo "    the close step's env: does not carry CONFIGS_EXPECTED (it is '${_close_expected}')"; }
+if [[ "$_t14g" == "1" ]]; then
+  pass "the close comment renders the run's own configs_expected and ratio, and hardcodes neither"
+else
+  fail "the close comment must state what coverage was restored TO by interpolating this run's measurements, not by restating a literal. A hardcoded 13 survives every growth edit and every floor change — and the operator reads that comment exactly once, to decide the incident is over"
 fi
 
 echo "T14h: a dead ISSUE channel has an email backstop gated on either filer's channel_failed"
@@ -678,6 +804,29 @@ if grep -qF "always()" <<<"$CHAN_IF" \
   pass "both filers publish channel_failed and one always() email arm gates on either"
 else
   fail "the coverage finding's only channel is a GitHub issue, and when THAT is what failed the sole artifact is a named ::error:: on a still-GREEN cron run (every path runs under continue-on-error and several 'exit 0' deliberately). The backstop email's if: is '${CHAN_IF}' — it must be always() and gate positively on coverage_issue AND coverage_close channel_failed, and both steps must set it"
+fi
+
+echo "T14h2: the backstop ALSO gates on each filer's outcome, which the flag cannot see"
+# THE FLAG IS BLIND TO A STALL. Both filers carry `timeout-minutes: 2` plus
+# `continue-on-error: true`, so a `gh` call that HANGS is killed AFTER `channel_failed=false`
+# has been written and BEFORE `fail_channel` can overwrite it. Result: job green, no issue
+# filed or closed, no email sent, and no named slug emitted — the single failure mode this
+# backstop exists for, and gating on the flag alone is blind to precisely it.
+#
+# `outcome` is populated under `continue-on-error` and is `skipped` (never `failure`) for a
+# skipped step, so these legs preserve the positive polarity that keeps the `infra/github`
+# matrix leg and every healthy run from firing the email.
+_t14h2=1
+for _st in coverage_issue coverage_close; do
+  grep -qE "steps\.${_st}\.outcome[[:space:]]*==[[:space:]]*'failure'" <<<"$CHAN_IF" \
+    || { _t14h2=0; echo "    the backstop does not gate on steps.${_st}.outcome == 'failure'"; }
+done
+grep -qE "steps\.(coverage_issue|coverage_close)\.outcome[[:space:]]*!=" <<<"$CHAN_IF" \
+  && { _t14h2=0; echo "    the backstop tests an outcome NEGATIVELY, which also matches the skipped matrix leg"; }
+if [[ "$_t14h2" == "1" ]]; then
+  pass "both filers' outcome == 'failure' arm the backstop, positively"
+else
+  fail "the backstop's if: is '${CHAN_IF}' — it must carry an outcome == 'failure' leg for BOTH filers. A stalled gh call is killed by timeout-minutes after channel_failed=false is written and before it can be flipped, so the flag stays false, the job stays green, nothing is filed, no slug is emitted, and no email is sent"
 fi
 
 # ---------------------------------------------------------------------------
@@ -819,6 +968,77 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# T21-T22 — THE STALE-DENOMINATOR CAVEAT. The >90-day rule exists TWICE in
+# production: the detector emits `coverage_caveat`, and this step INDEPENDENTLY
+# re-derives the same threshold from `inventory_age_days`. The producer suite
+# pins the detector's copy; nothing pinned this one.
+# ---------------------------------------------------------------------------
+mkfix stale_inv '{"live":9,"dead":0,"unverifiable":0,"probes":9,"configs":13,
+ "configs_floor":13,"configs_expected":13,"configs_unread":[],
+ "coverage":"at-floor","coverage_ratio":"13/13","inventory_age_days":400,
+ "coverage_caveat":"inventory is 400 days old (>90) — the denominator may no longer describe the project",
+ "stale":[],"unverifiable_keys":[]}'
+
+echo "T21: an inventory older than 90 days prints the staleness caveat and moves NO state"
+# EVERY OTHER FIXTURE IN THIS FILE SETS inventory_age_days TO 0, 1 OR 2, so the workflow's own
+# copy of the >90 threshold was exercised by nothing at all — deleting the whole branch, or
+# inverting it to `< 90`, left the suite green. The threshold is duplicated across the
+# producer and the consumer, which is the two-copies-one-pin shape this file exists for.
+#
+# BOTH HALVES. The caveat must PRINT (a derivation shown to nobody is the defect this whole
+# signal exists to fix), and it must move nothing: the inventory REPORTS and gates nothing, so
+# a 400-day-old file must still publish at-floor. If staleness could move a state, an
+# un-regenerated file would be able to derive the unhealthy state — or, inverted, to close the
+# channel — on the strength of its own mtime.
+r=$(run_step "$TMP/stale_inv" 0)
+_t21=1
+[[ "$(out_val "$r" coverage)" == "at-floor" ]] || { _t21=0; echo "    a stale inventory moved coverage to '$(out_val "$r" coverage)'"; }
+[[ "$(out_val "$r" inventory_age_days)" == "400" ]] || { _t21=0; echo "    inventory_age_days published '$(out_val "$r" inventory_age_days)', not 400"; }
+grep -q 'token-drift coverage caveat: the committed config inventory is 400 days old' "$STEP_STDOUT" \
+  || { _t21=0; echo "    the step did not print its own staleness caveat"; }
+# POSITIVE CONTROL on the negative half: a FRESH inventory must NOT print it. A caveat that
+# fires at every age is not a threshold, and this branch is the only in-run surface saying the
+# denominator may be wrong.
+run_step "$TMP/clean" 0 >/dev/null
+grep -q 'token-drift coverage caveat' "$STEP_STDOUT" \
+  && { _t21=0; echo "    a 0-day-old inventory also printed the staleness caveat"; }
+if [[ "$_t21" == "1" ]]; then
+  pass "a 400-day-old inventory prints the caveat, publishes age 400, and stays at-floor; a fresh one prints nothing"
+else
+  fail "the workflow re-derives the >90-day staleness rule independently of the detector, and nothing exercised it — every other fixture here sets the age to 0, 1 or 2. Deleting the branch, or flipping it to fire on a FRESH inventory, is invisible without this case; and if staleness ever moved a state, an un-regenerated file could derive the healthy state from its own mtime"
+fi
+
+echo "T22: coverage_caveat is PUBLISHED as an output and rendered in both verdict emails"
+# IT HAD NO CONSUMER. The detector emitted it, the producer suite pinned it, and the workflow
+# read it nowhere — so the one sentence saying "the denominator in this ratio may not describe
+# the project any more" reached the operator in neither email. Emitted-and-unread is the same
+# dead-channel shape as derived-and-unshown, which is the defect this whole signal exists for.
+#
+# IT MUST NOT RIDE THE `read -r`. The caveat is free text with SPACES; IFS word-splitting would
+# scatter it across the remaining names and shift `configs`, which is exactly the greedy-tail
+# failure T8c pins — manufactured on purpose. So it gets its own extraction, and this case
+# proves the extraction works AND that `configs` beside it is undisturbed.
+_t22=1
+r=$(run_step "$TMP/stale_inv" 0)
+[[ "$(out_val "$r" coverage_caveat)" == *"400 days old"* ]] \
+  || { _t22=0; echo "    coverage_caveat published '$(out_val "$r" coverage_caveat)'"; }
+[[ "$(out_val "$r" configs)" == "13" ]] \
+  || { _t22=0; echo "    the multi-word caveat shifted the greedy tail: configs='$(out_val "$r" configs)'"; }
+# The `-` sentinel on the path where the detector emitted none, for the same reason every
+# other list-valued field carries one: a bare `key=` matches no positive-polarity consumer.
+[[ "$(out_val "$(run_step "$TMP/clean" 0)" coverage_caveat)" == "-" ]] \
+  || { _t22=0; echo "    an absent caveat did not publish the '-' sentinel"; }
+for _body_var in DEAD_BODY UNVER_BODY; do
+  grep -qF 'outputs.coverage_caveat' <<<"${!_body_var}" \
+    || { _t22=0; echo "    ${_body_var} does not render outputs.coverage_caveat"; }
+done
+if [[ "$_t22" == "1" ]]; then
+  pass "coverage_caveat is published, sentinel-guarded, harmless to the greedy tail, and rendered in both verdict-bearing emails"
+else
+  fail "coverage_caveat was emitted by the detector and read by nothing. The operator reads the ratio in both verdict emails; the caveat is the only thing that says the DENOMINATOR in that ratio may be stale, missing or unparseable. Either it is rendered beside the ratio or it should not be emitted at all"
+fi
+
+# ---------------------------------------------------------------------------
 # F1-F3 — THE FLOOR PIN (AC29.3). Repo-internal: no credential, no network.
 # This is the CI check that fails when the floor and the inventory drift apart.
 #
@@ -843,14 +1063,98 @@ else
   fail "DOPPLER_CONFIGS_FLOOR is '${WF_FLOOR}', below the pinned minimum of ${FLOOR_MINIMUM} — a floor lowered in the same change that narrows the grant holds the scan at 'at-floor' while coverage regresses, which is the one failure this whole coverage ladder exists to make impossible"
 fi
 
-echo "F3: the declared floor EQUALS the committed inventory's name count"
 # `grep -c` exits 1 on zero matches, so the status is captured rather than allowed to
 # collapse a legitimate 0 into an empty string.
-INV_COUNT=$(grep -cE '^[a-z0-9_]+$' "$INVENTORY") || INV_COUNT=0
-if [[ "$WF_FLOOR" =~ ^[0-9]+$ ]] && [[ "$INV_COUNT" =~ ^[0-9]+$ ]] && (( 10#$WF_FLOOR == 10#$INV_COUNT )); then
-  pass "DOPPLER_CONFIGS_FLOOR=${WF_FLOOR} == ${INV_COUNT} bare name lines in $(basename "$INVENTORY")"
+INV_RAW_COUNT=$(grep -cE '^[a-z0-9_]+$' "$INVENTORY") || INV_RAW_COUNT=0
+# DEDUPED, because the SUT dedupes. See F3b for the divergence this closes.
+INV_COUNT=$(grep -E '^[a-z0-9_]+$' "$INVENTORY" | sort -u | grep -c .) || INV_COUNT=0
+
+echo "F2b: the floor is bounded ABOVE as well as below — it EQUALS the inventory count"
+# F2 asserted only `>=`, with no ceiling anywhere and T17 exercising only downward (12, 0).
+# Measured: a floor of 99 with the inventory padded to 99 names passes F2, F3 and the
+# run-time re-assertion — and reds the twice-daily cron forever, because the live project
+# can never reach 99. A one-sided ratchet stops the floor being lowered to hide a narrowing
+# and does nothing about a floor raised past what the credential can possibly read; the
+# second is quieter, because "the alarm has been red for months" reads as an alarm working.
+# The equality is asserted against the DEDUPED inventory count for the reason F3b states.
+# AND A CEILING THAT THE INVENTORY CANNOT MOVE. Equality alone is not a ceiling: the
+# measured S3 mutation raises the floor to 99 AND pads the inventory to 99 names, which
+# satisfies every equality in this file while reddening the twice-daily cron forever —
+# quietly, because "that alarm has been red for months" reads as an alarm doing its job.
+# FLOOR_HEADROOM is a small, deliberate band above the pinned minimum: the project's known
+# growth is `prd_git_data` at git-data birth plus ephemeral rehearsal configs, and ephemeral
+# ones need no floor edit at all (they only push the count ABOVE it, which the one-sided
+# `>=` absorbs). Raising the floor past MINIMUM+HEADROOM is a real event and should cost a
+# deliberate edit here, alongside the three `13`s named in the inventory's own header.
+FLOOR_HEADROOM=3
+_f2b=1
+[[ "$WF_FLOOR" =~ ^[0-9]+$ ]] && (( 10#$WF_FLOOR == 10#$INV_COUNT )) \
+  || { _f2b=0; echo "    floor ${WF_FLOOR} != inventory count ${INV_COUNT}"; }
+[[ "$WF_FLOOR" =~ ^[0-9]+$ ]] && (( 10#$WF_FLOOR <= FLOOR_MINIMUM + FLOOR_HEADROOM )) \
+  || { _f2b=0; echo "    floor ${WF_FLOOR} exceeds the ceiling of $((FLOOR_MINIMUM + FLOOR_HEADROOM)) (minimum ${FLOOR_MINIMUM} + headroom ${FLOOR_HEADROOM})"; }
+if [[ "$_f2b" == "1" ]]; then
+  pass "DOPPLER_CONFIGS_FLOOR=${WF_FLOOR} == ${INV_COUNT} and <= $((FLOOR_MINIMUM + FLOOR_HEADROOM)): bounded above and below"
 else
-  fail "DOPPLER_CONFIGS_FLOOR='${WF_FLOOR}' but apps/web-platform/infra/doppler-config-inventory.txt lists ${INV_COUNT} names. The change that alters the project's config set owns BOTH edits in the same PR — re-run the '# command:' line in the inventory's header and update the floor. This assertion reads no credential and makes no network call, so it cannot be defeated by narrowing the credential; that is the whole reason it lives here rather than in a live-Doppler verification step"
+  fail "DOPPLER_CONFIGS_FLOOR='${WF_FLOOR}' must EQUAL the inventory count (${INV_COUNT}) and stay within ${FLOOR_HEADROOM} of the pinned minimum (${FLOOR_MINIMUM}). A floor above what the project can contain is unreachable by any credential and reds the cron twice daily forever; padding the inventory to match it satisfies every equality here while doing exactly that"
+fi
+
+echo "F3: the declared floor EQUALS the committed inventory's DEDUPED name count"
+if [[ "$WF_FLOOR" =~ ^[0-9]+$ ]] && [[ "$INV_COUNT" =~ ^[0-9]+$ ]] && (( 10#$WF_FLOOR == 10#$INV_COUNT )); then
+  pass "DOPPLER_CONFIGS_FLOOR=${WF_FLOOR} == ${INV_COUNT} distinct bare name lines in $(basename "$INVENTORY")"
+else
+  fail "DOPPLER_CONFIGS_FLOOR='${WF_FLOOR}' but apps/web-platform/infra/doppler-config-inventory.txt lists ${INV_COUNT} distinct names. The change that alters the project's config set owns BOTH edits in the same PR — re-run the '# command:' line in the inventory's header and update the floor. This assertion reads no credential and makes no network call, so it cannot be defeated by narrowing the credential; that is the whole reason it lives here rather than in a live-Doppler verification step"
+fi
+
+echo "F3b: the raw and DEDUPED inventory counts agree — a duplicate line is loud, not silent"
+# THE TWO SIDES COUNTED DIFFERENT THINGS, and F3 rested on the claim that they did not.
+# F3 used `grep -cE '^[a-z0-9_]+$'` — RAW lines. The detector parses the same file with
+# `grep -E '^[a-z0-9_]+$' | sort -u` — DEDUPED. Measured on the committed file: append one
+# duplicate `prd` line and set the floor to 14 and F3 saw 14 == 14, F2 saw 14 >= 13, and the
+# detector saw 13 — a permanent `degraded` that every gate in this suite waved through, with
+# the run-time `>= 13` re-assertion agreeing.
+#
+# F3 dedupes now, which closes the divergence. This assertion is the SEPARATE half: making
+# F3 dedupe alone would turn a duplicate line into a silent equality (13 == 13, nothing said)
+# rather than a failure, and a duplicated name is a real defect in a file whose whole job is
+# to name the configs the credential must reach.
+if (( 10#$INV_RAW_COUNT == 10#$INV_COUNT )); then
+  pass "${INV_RAW_COUNT} name lines, ${INV_COUNT} distinct — no duplicates"
+else
+  fail "apps/web-platform/infra/doppler-config-inventory.txt has ${INV_RAW_COUNT} name lines but only ${INV_COUNT} distinct ones. The detector dedupes and this pin dedupes, so the duplicate does not shift the gate — but the file is the operator's statement of which configs must be reachable, and a repeated name means it was hand-edited rather than regenerated. Re-run the '# command:' line in its header"
+fi
+
+echo "F4: every Doppler config the infra Terraform NAMES appears in the inventory"
+# NOTHING TIED THE INVENTORY'S CONTENT TO ANYTHING. Measured: replace all 13 names with
+# `zzz_nonexistent_01..13` and every assertion in this file stays green — the counts still
+# match, the floor still equals them — while production prints ratio `13/13` and lists 13
+# configs that do not exist in `configs_unread`, in both ops emails and the standing issue
+# body. The counts were pinned; the NAMES were pinned by nothing.
+#
+# WHAT THIS CAN AND CANNOT DO. No offline check can confirm a name exists in live Doppler —
+# that needs the credential, and a credential-derived denominator narrows in lockstep with
+# the numerator, which is the whole reason the inventory is committed rather than fetched.
+# What IS checkable offline: the infra Terraform NAMES several configs directly
+# (`config = "prd_terraform"` and friends), and every one of those must be in the inventory,
+# because a config the infrastructure depends on is by construction a config the scan must
+# reach. That is a strict subset of the 13 and is stated as such — it kills the wholesale
+# rename and any regeneration that drops a depended-on config, and it says nothing about the
+# remainder.
+INFRA_DIR="$REPO_ROOT/apps/web-platform/infra"
+mapfile -t _TF_CONFIGS < <(grep -rhoE 'config[[:space:]]*=[[:space:]]*"[a-z0-9_]+"' "$INFRA_DIR"/*.tf 2>/dev/null \
+                           | grep -oE '"[a-z0-9_]+"' | tr -d '"' | sort -u)
+_f4=1
+if (( ${#_TF_CONFIGS[@]} == 0 )); then
+  _f4=0
+  echo "    the extraction found NO config names in ${INFRA_DIR}/*.tf — it has drifted, and this assertion would pass vacuously"
+fi
+_inv_names=$(grep -E '^[a-z0-9_]+$' "$INVENTORY" | sort -u)
+for _c in ${_TF_CONFIGS[@]+"${_TF_CONFIGS[@]}"}; do
+  grep -qxF "$_c" <<<"$_inv_names" || { _f4=0; echo "    Terraform names config '${_c}' but the inventory does not list it"; }
+done
+if [[ "$_f4" == "1" ]]; then
+  pass "all ${#_TF_CONFIGS[@]} Terraform-referenced configs are present in $(basename "$INVENTORY")"
+else
+  fail "the committed inventory must contain every Doppler config the infra Terraform names — those are configs production depends on, so a scan that cannot reach them is exactly the fan-out blindness this detector exists for. A regenerated-and-wrong or hand-edited inventory otherwise prints a healthy ratio over names that mean nothing, and lists nonexistent configs to the operator as 'not read'"
 fi
 
 # ---------------------------------------------------------------------------
@@ -911,13 +1215,25 @@ echo "D1: neither DEAD body still claims branch configs inherit the prd root val
 DEAD_ISSUE_RUN=$(step_get "name:$DEAD_ISSUE_STEP" run) \
   || { echo "FATAL: could not read the DEAD issue filer's run body" >&2; exit 2; }
 # The issue body is built from ~40 `echo` lines, so the remedy sentence is SPLIT ACROSS
-# LINES and a line-based grep cannot see it — flatten first. And drop the run body's own
-# shell comments before matching: a `#` line explaining the retired remedy would otherwise
-# satisfy the positive half and false-fail the negative one (cq-assert-anchor-not-bare-token).
-flatten_body() { tr '\n' ' ' <<<"$(grep -vE '^[[:space:]]*#' <<<"$1")" | tr -s ' '; }
+# LINES and a line-based grep cannot see it — flatten first (`flatten_body` also drops the
+# run body's own shell comments: a `#` line explaining the retired remedy would otherwise
+# satisfy the positive half and false-fail the negative one, cq-assert-anchor-not-bare-token).
+#
+# THREE BODIES, NOT TWO. The `Enforce token-drift result` step was the SIXTH site carrying
+# the falsified remedy and the only one this pin could not see: its `dead)` arm printed
+# "Set the live value on the 'prd' ROOT config." while the plan recorded the remedy
+# "corrected at all five sites". It is also the site that matters most — it is the ::error::
+# annotation on the RED run, i.e. the first thing the operator reads — so leaving it
+# unpinned meant the loudest copy of the falsified instruction was the unguarded one.
+ENFORCE_RUN=$(step_get "name:Enforce token-drift result" run) \
+  || { echo "FATAL: could not read the Enforce token-drift result step's run body" >&2; exit 2; }
 _d1=1
-for body_name in DEAD_EMAIL DEAD_ISSUE; do
-  if [[ "$body_name" == "DEAD_EMAIL" ]]; then b=$(flatten_body "$DEAD_BODY"); else b=$(flatten_body "$DEAD_ISSUE_RUN"); fi
+for body_name in DEAD_EMAIL DEAD_ISSUE DEAD_ENFORCE; do
+  case "$body_name" in
+    DEAD_EMAIL)   b=$(flatten_body "$DEAD_BODY") ;;
+    DEAD_ISSUE)   b=$(flatten_body "$DEAD_ISSUE_RUN") ;;
+    DEAD_ENFORCE) b=$(flatten_body "$ENFORCE_RUN") ;;
+  esac
   # The falsified claim, in the exact shape both bodies carried it.
   grep -qE 'configs inherit it' <<<"$b" && { _d1=0; echo "    ${body_name} still says 'configs inherit it'"; }
   # And the correction must be present, not merely the falsehood absent — deleting the
@@ -927,10 +1243,14 @@ for body_name in DEAD_EMAIL DEAD_ISSUE; do
   grep -qiE 'does[^.]{0,40}not[^.]{0,40}inherit' <<<"$b" \
     || { _d1=0; echo "    ${body_name} does not state the non-inheritance premise"; }
 done
-# The DEAD issue's closing condition must name the surviving coverage state.
-grep -qF 'coverage: at-floor' <<<"$DEAD_ISSUE_RUN" || { _d1=0; echo "    the DEAD issue's closing condition does not name 'coverage: at-floor'"; }
+# The DEAD issue's closing condition must name the surviving coverage state. Read from the
+# COMMENT-STRIPPED body like its two siblings three lines up: this string is exactly the kind
+# a `#` line explaining the coverage vocabulary would carry, and an assertion satisfiable by
+# a comment measures the comment (cq-assert-anchor-not-bare-token).
+grep -qF 'coverage: at-floor' <<<"$(strip_comments "$DEAD_ISSUE_RUN")" \
+  || { _d1=0; echo "    the DEAD issue's closing condition does not name 'coverage: at-floor'"; }
 if [[ "$_d1" == "1" ]]; then
-  pass "both DEAD bodies state that a config does NOT inherit from its environment root, and the issue closes at at-floor"
+  pass "all three DEAD bodies (email, issue, red-run annotation) state that a config does NOT inherit from its environment root, and the issue closes at at-floor"
 else
   fail "a DEAD body still carries the falsified inheritance remedy, or lost the correction. Telling the operator to set prd root and stop is the wrong action on the acute arm: measured 2026-08-02, CF_API_TOKEN_DNS_EDIT is carried independently by 7 configs, so the stale copies keep being served while the operator believes the rotation propagated"
 fi
@@ -942,7 +1262,7 @@ fi
 # "no orphans" unconditionally rather than because it looked.
 # ---------------------------------------------------------------------------
 echo "S1: the scratch-config probe publishes a three-state verdict, defaulting to the unconfident one"
-SWEEP_RUN=$(step_get "id:sweep" run) || SWEEP_RUN=""
+SWEEP_RUN=$(strip_comments "$(step_get "id:sweep" run)") || SWEEP_RUN=""
 if grep -qF 'scratch_cfg_probe=' <<<"$SWEEP_RUN" \
    && grep -qF '_cfg_probe=failed' <<<"$SWEEP_RUN" \
    && grep -qF '_cfg_probe=unsatisfiable' <<<"$SWEEP_RUN" \
@@ -964,6 +1284,73 @@ else
   fail "the scratch-config filer's if: is '${SCRATCH_IF}' — it must be always() and test the probe POSITIVELY for both dishonest states. A plain-expression if: also carries an implicit success(), and the orphan filer beside it is gated 'orphans != 0', so in the steady state (no Hetzner orphans) a finding routed there reaches nothing; a negative test additionally matches the empty output of a skipped sweep"
 fi
 
+echo "S3: the scratch-config filer's named failures arm an ops-email backstop"
+# IT HAD NO CHANNEL AT ALL. Both `rung2_scratch_cfg_list_failed` and
+# `rung2_scratch_cfg_escalation_failed` were emitted to the run log and nowhere else: the step
+# is `continue-on-error: true` and `exit 0`s, this job publishes no Sentry check-in, and there
+# was no email arm — so a `gh` failure left a GREEN cron run whose only artifact was an
+# annotation nobody opens (`hr-no-dashboard-eyeball-pull-data-yourself`). That is the identical
+# shape the coverage filer's own backstop exists to eliminate, one job over.
+SCRATCH_RUN=$(strip_comments "$(step_get "name:$SCRATCH_STEP" run)") || SCRATCH_RUN=""
+SCRATCH_EMAIL_IF=$(step_get "name:$SCRATCH_EMAIL_STEP" if) || SCRATCH_EMAIL_IF=""
+_s3=1
+# Both named failures must FLIP THE FLAG, not merely annotate. Asserted on the assignment
+# syntax, which a `#` line cannot produce — and the body is comment-stripped besides.
+grep -qF 'channel_failed=false' <<<"$SCRATCH_RUN" \
+  || { _s3=0; echo "    the filer never writes the channel_failed=false default"; }
+[[ "$(grep -c 'channel_failed=true' <<<"$SCRATCH_RUN")" -ge 1 ]] \
+  || { _s3=0; echo "    no path in the filer sets channel_failed=true"; }
+for _slug in rung2_scratch_cfg_list_failed rung2_scratch_cfg_escalation_failed; do
+  grep -qF "$_slug" <<<"$SCRATCH_RUN" || { _s3=0; echo "    the filer no longer emits ${_slug}"; }
+done
+# The list path must go through the same flag-setting helper as the create path. A bare
+# `echo "::error::…"` there is exactly what the close arm carried, and it left one of the two
+# failure paths unable to arm the email it is backed by.
+grep -qE 'fail_channel "rung2_scratch_cfg_list_failed' <<<"$SCRATCH_RUN" \
+  || { _s3=0; echo "    the list-failure path annotates without arming the backstop"; }
+grep -qE 'fail_channel "rung2_scratch_cfg_escalation_failed' <<<"$SCRATCH_RUN" \
+  || { _s3=0; echo "    the create-failure path annotates without arming the backstop"; }
+# And the email arm: always(), positive polarity, plus the outcome leg that covers the stall
+# the flag cannot see (see T14h2 for the full reasoning — same failure mode, same fix).
+grep -qF 'always()' <<<"$SCRATCH_EMAIL_IF" \
+  || { _s3=0; echo "    the backstop email is not always() — the sweep job can fail earlier"; }
+grep -qE "steps\.scratch_cfg_issue\.outputs\.channel_failed[[:space:]]*==[[:space:]]*'true'" <<<"$SCRATCH_EMAIL_IF" \
+  || { _s3=0; echo "    the backstop email does not gate on the filer's channel_failed"; }
+grep -qE "steps\.scratch_cfg_issue\.outcome[[:space:]]*==[[:space:]]*'failure'" <<<"$SCRATCH_EMAIL_IF" \
+  || { _s3=0; echo "    the backstop email has no outcome == 'failure' leg (blind to a stalled gh call)"; }
+grep -qE "channel_failed[[:space:]]*!=" <<<"$SCRATCH_EMAIL_IF" \
+  && { _s3=0; echo "    the backstop email tests the flag NEGATIVELY, so it fires from the skipped steady-state run"; }
+if [[ "$_s3" == "1" ]]; then
+  pass "both named scratch-config failures set channel_failed and an always() ops-email arm gates on it plus outcome"
+else
+  fail "the scratch-config filer's only channel is a GitHub issue, and when THAT is what failed the sole artifact is a named ::error:: on a still-GREEN cron run (the step is continue-on-error and exits 0, and this job has no Sentry check-in). Its backstop email's if: is '${SCRATCH_EMAIL_IF}'"
+fi
+
+echo "S4: the scratch-config probe demands a DECLARED floor, not a bare count of 2"
+# `elif (( 10#$_cfg_total < 2 ))` published `performed` for a credential listing 2 of 13
+# configs — the sweep then reported "no orphaned scratch Doppler config" while a
+# `prd_git_data_rehearsal_*` could sit in any of the 11 it never listed. That is `multi-config`
+# verbatim, the retired state this same change exists to remove ("could not tell 2-of-13 from
+# 13-of-13"), re-committed in a second job. Unreachable today (this job's credential lists
+# exactly 1) and nothing held it there — S1 asserts only that the three state literals appear.
+_s4=1
+_rung2_floor=$(step_get "id:sweep" env.RUNG2_CONFIGS_FLOOR) || _rung2_floor=""
+[[ "$_rung2_floor" =~ ^[0-9]+$ ]] \
+  || { _s4=0; echo "    the sweep step declares no integer env.RUNG2_CONFIGS_FLOOR (it is '${_rung2_floor}')"; }
+[[ "$_rung2_floor" =~ ^[0-9]+$ ]] && (( 10#$_rung2_floor >= FLOOR_MINIMUM )) \
+  || { _s4=0; echo "    RUNG2_CONFIGS_FLOOR='${_rung2_floor}' is below the pinned minimum of ${FLOOR_MINIMUM}"; }
+# The comparison must READ the declared floor. A literal left in place beside a declared-and-
+# unused env var is the decorative-declaration shape H2 exists to catch on the sibling step.
+grep -qF 'RUNG2_CONFIGS_FLOOR' <<<"$SWEEP_RUN" \
+  || { _s4=0; echo "    the probe's threshold does not read RUNG2_CONFIGS_FLOOR — the declaration is decorative"; }
+grep -qE '_cfg_total[[:space:]]*<[[:space:]]*2[^0-9]' <<<"$SWEEP_RUN" \
+  && { _s4=0; echo "    the probe still thresholds on a bare 2, which grades 2-of-13 as 'performed'"; }
+if [[ "$_s4" == "1" ]]; then
+  pass "the probe grades against a declared floor of ${_rung2_floor}, so a partial listing cannot publish 'performed'"
+else
+  fail "the scratch-config probe must grade its listing against a DECLARED floor, not against 2. At a threshold of 2 a credential seeing 2 of 13 configs publishes 'performed', files nothing, and the sweep reports 'no orphaned scratch Doppler config' — an answer by construction, from a listing that never covered 11 of the places the config could be"
+fi
+
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Deleting every assertion call yields "0/0 passed" and exit 0,
@@ -976,10 +1363,12 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # deletion of exactly the assertions under review. Raise it when adding a case; that edit
 # is the point, because it is what makes a REMOVAL visible in the diff.
 #
-# 46 is the REALIZED `PASS + FAIL` at #7159, not the plan's provisional 37 — the plan
-# said "confirm against the realized count and raise further if it is higher", and it is.
-if [[ "$((PASS + FAIL))" -lt 48 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 48." >&2
+# 57 is the REALIZED `PASS + FAIL` after the #7159 review batch, and the number in this
+# comment and the number in the guard below MUST be the same number. They disagreed once
+# (comment 46, guard 48, run 48/48), which is a ratchet whose own prose says the notch is
+# lower than it is — a reader trusting the comment would have "raised" it downward.
+if [[ "$((PASS + FAIL))" -lt 57 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 57." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

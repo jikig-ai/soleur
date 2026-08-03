@@ -14,7 +14,7 @@ dependency-correct: every contract lands before its consumers.
       their attribute names — in particular that the token's value attribute is **`api_key`**,
       not `key`. A schema drift here changes FR1 and AC1.
       `terraform -chdir=apps/web-platform/infra providers schema -json`
-- [ ] 0.3 Confirm `ADR-158` is still the next free ordinal against a freshly fetched
+- [ ] 0.3 Confirm `ADR-159` is still the next free ordinal against a freshly fetched
       `origin/main`. If not, renumber and sweep the plan, spec, this file and every AC:
       `grep -rn 'ADR-15[0-9]' knowledge-base/project/{plans,specs}/feat-one-shot-7159-doppler-prd-read-token-coverage/`
 - [ ] 0.4 Re-check the two anti-vacuity floors (`token-drift-workflow-causes.test.sh:525`
@@ -154,7 +154,7 @@ dependency-correct: every contract lands before its consumers.
 - [ ] 5.2 One-line premise corrections: `apps/web-platform/infra/tunnel.tf:277`,
       `apps/web-platform/infra/workspaces-luks.tf:78,114`. Do not re-derive their blast-radius
       arguments.
-- [ ] 5.3 Write `ADR-158`. Provenance cites the 2026-08-02 census and the 2026-08-03 probes,
+- [ ] 5.3 Write `ADR-159`. Provenance cites the 2026-08-02 census and the 2026-08-03 probes,
       not the inheritance metadata. `## Decision` must contain the literals
       `declared floor, reported ratio` and `project-scoped service account`, and must record the
       falsified #7159 premise.

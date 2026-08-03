@@ -59,8 +59,11 @@ consequences are void:
   `REGISTRY_PUSH_ACCESS_TOKEN` — the *first* case the detector's header cites as motivating it,
   and not scanned at all today — comes into scope for the first time.
 - No unreachable Done-when. The scan reaches `coverage: at-floor` at `coverage_ratio: 13/13`,
-  and the `Close the coverage issue once the fan-out is restored` step auto-closes the recurring
-  `token-drift-coverage` issue, exactly as the checklist specifies.
+  and the `Close the coverage issue once the declared floor is met` step auto-closes the recurring
+  `token-drift-coverage` issue, exactly as the checklist specifies. (The checklist quoted above
+  names that step `… once the fan-out is restored`; no step has ever carried that name. The
+  blockquote keeps the checklist's wording because it is a historical record; this line names the
+  step that exists, because it is a claim about the shipped workflow.)
 
 **What survives.** Only the vocabulary change. `multi-config` is still retired — the same
 issue's "Known follow-up" section says a 2-config scan deriving `multi-config` "would go quiet

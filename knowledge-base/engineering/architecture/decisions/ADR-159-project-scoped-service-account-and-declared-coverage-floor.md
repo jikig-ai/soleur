@@ -1,4 +1,4 @@
-# ADR-158 — A project-scoped Doppler service account reads the fleet; the coverage floor is declared, not derived
+# ADR-159 — A project-scoped Doppler service account reads the fleet; the coverage floor is declared, not derived
 
 - **Status:** Accepted
 - **Date:** 2026-08-03
@@ -12,11 +12,15 @@
   floor), `scripts/check-cloudflare-token-drift.sh` (the detector),
   `.github/workflows/scheduled-terraform-drift.yml` (the only consumer of the credential)
 
-> **Ordinal.** The plan, the spec and the tasks file for this branch all name **ADR-155**. That
-> ordinal was claimed on `origin/main` by a sibling PR mid-pipeline, as were 156 and 157. This ADR
-> is **158**, the next free ordinal against a freshly fetched `origin/main`. Citations naming
-> ADR-155 in `knowledge-base/project/{plans,specs}/feat-one-shot-7159-doppler-prd-read-token-coverage/`
-> are swept in the same PR.
+> **Ordinal — provisional until merge, and this is the second time it has moved.** Authored as
+> **ADR-155**; 155, 156 and 157 were all claimed on `origin/main` by sibling PRs mid-pipeline, so
+> it was renumbered to **158**. While this branch was still in flight, **158** was itself claimed
+> by `ADR-158-kb-file-tree-host-is-a-derived-value.md` (merged via #7189), so it is renumbered
+> again to **159**. An ordinal picked on a branch is a *claim*, not a reservation: nothing in the
+> repo reserves one, and the collision is invisible from a branch that is behind `origin/main`.
+> Re-check against a freshly fetched `origin/main` immediately before merge, and sweep every
+> citation — the `.tf` files, the plan, the spec, the tasks file and `decision-challenges.md` — in
+> the same PR.
 
 ## Context
 
@@ -49,7 +53,10 @@ cites a credential "stale in 5 of 7 configs".
 **Why the checklist's swap was not a fix.** #7159 asked for a literal repoint of the token-drift
 step's `DOPPLER_TOKEN` from the `prd_terraform` credential to a `prd`-root one. The two configs'
 key sets are **not in a superset relation in either direction**: `prd_terraform` alone holds
-`CI_SSH_ACCESS_TOKEN_ID` / `_SECRET` — the ADR-154 outage credential — plus 8 `CF_API_TOKEN*` keys;
+`CI_SSH_ACCESS_TOKEN_ID` / `_SECRET` — the ADR-154 outage credential — plus 8 `CF_API_TOKEN*` keys
+that `prd` root does **not** carry (10 `CF_API_TOKEN*` in `prd_terraform` in total — the plan and the
+spec quote the total, this line quotes the exclusive subset, and "alone holds" did not disambiguate
+them);
 `prd` root alone holds `REGISTRY_PUSH_ACCESS_TOKEN_ID` / `_SECRET`. Swapping one config-scoped token
 for another was therefore a **coverage regression**, and it still left `configs` at 1, which makes
 the checklist's own `multi-config` Done-when **unreachable by the change that was supposed to
@@ -188,6 +195,27 @@ revoked one. Every one is a real, producible regression with a performable remed
   config that will exist after git-data birth; rehearsal dispatches create ephemeral ones. The
   change that alters the project's config set owns both edits — floor and inventory — in the same
   PR.
+
+- **The `13` ratchet decays silently unless BOTH pinned literals are raised together.** The
+  minimum is asserted in two independent places and they are not derived from each other:
+
+  | Site | Literal |
+  |---|---|
+  | `plugins/soleur/test/token-drift-workflow-causes.test.sh` — `FLOOR_MINIMUM=13` (F2/F3) | pre-merge, repo-internal |
+  | `.github/workflows/scheduled-terraform-drift.yml` — the token_drift step's `(( 10#$cfg_floor < 13 ))` run-time re-assertion | per-run, external to the declaration |
+
+  A third literal, `RUNG2_CONFIGS_FLOOR: 13` in the same workflow's `rung2-rehearsal-orphan-sweep`
+  job, declares the same demand for the scratch-config sweep and moves with them.
+
+  **When the floor legitimately rises** — git-data birth adding `prd_git_data` is the known one —
+  raise `DOPPLER_CONFIGS_FLOOR`, regenerate `doppler-config-inventory.txt`, **and raise all three
+  `13`s in the same PR.** The failure this prevents is specific and quiet: with the floor at 14 and
+  `FLOOR_MINIMUM` left at 13, a later PR can narrow the grant back to 13 configs, lower
+  `DOPPLER_CONFIGS_FLOOR` to 13 to match, and pass F1, F2, F3 and the run-time assertion with **no
+  test edited** — the ratchet has silently returned to its old notch. F3's inventory-equality pin
+  does not catch it either, because that PR would regenerate the inventory too. The `13`s are the
+  only thing that makes a *reduction* visible in a diff, which is why raising them is a deliberate
+  edit and never an automated one.
 - **An orphaned state write on the create is invisible to `terraform plan`.** The provider ships no
   data source that can enumerate service accounts or their tokens, so a lost state write leaves a
   live project-wide credential with no Terraform record. The detector is the count-asserting
