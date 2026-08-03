@@ -770,8 +770,13 @@ else fail "blanket override must remain functional; got exit $CASE_RC"; fi
 # widening it back is a deliberate edit, reviewed alongside the ack row that
 # ADR-092 already forces. The multi-id derivation path stays covered by the
 # synthetic `corpus-default` fixture above, which still carries several tags.
-derived="$(grep -F '[mandates-filing]' "$REPO_ROOT/AGENTS.rules.md" \
-  | grep -oE '\[id: (hr|wg)-[a-z0-9-]+\]' | sed -E 's/^\[id: (.*)\]$/\1/' | sort -u | tr '\n' ' ')"
+# Derive via the AUTHORITY's own parser, not a second grep. ADR-155 names
+# the shell form by name as "a strict SUPERSET along the line-shape axis"
+# (it derived 4 ids where parse_bodies saw 2), and the gate itself consumes
+# --emit-mandating-ids. A test that re-implements the predicate can agree
+# with the gate today and diverge silently tomorrow.
+derived="$(python3 "$REPO_ROOT/scripts/lint-rule-bodies.py" --emit-mandating-ids \
+  < "$REPO_ROOT/AGENTS.rules.md" | sort -u | tr '\n' ' ')"
 if [[ "$derived" == "wg-block-pr-ready-on-undeferred-operator-steps " ]]; then
   pass "worktree corpus derives exactly the 1 intended id"
 else fail "worktree corpus derived: '$derived'"; fi

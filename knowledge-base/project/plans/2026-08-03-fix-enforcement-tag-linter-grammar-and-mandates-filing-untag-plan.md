@@ -40,7 +40,7 @@ mistake the absence of agent output for a skipped phase.
 
 - **Cited rule IDs** — every `\b(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]+\b` token in the plan resolves to an active `[id: …]` in `AGENTS.md`. No fabricated or retired citations.
 - **Cited issue/PR numbers** — `#7174`, `#7172`, `#6751`, `#4622` all live-verified **OPEN**; PR `#7194` **OPEN**. No number cited from memory.
-- **ADR ordinal** — re-derived after `git fetch origin main`. Highest on **fresh** `origin/main` is ADR-157, so **ADR-158 is free**. Still provisional; `/ship` re-verifies, and a renumber must sweep this plan, `tasks.md`, and AC16.
+- **ADR ordinal** — re-derived after `git fetch origin main`. Highest on **fresh** `origin/main` is ADR-157, so **ADR-160 is free**. Still provisional; `/ship` re-verifies, and a renumber must sweep this plan, `tasks.md`, and AC16.
 - **Knowledge-base citations** — every `knowledge-base/…\.md` path in the plan resolves on disk except the three this plan creates.
 - **Self-grep scope** — no AC greps a scope containing this plan or its `tasks.md`; AC7/AC8 are scoped to `AGENTS.rules.md`, AC15 reads the plan deliberately.
 
@@ -129,7 +129,7 @@ touches no sensitive path.
 
 ### ADR
 
-**Create ADR-158** (ordinal provisional — highest on disk is ADR-157; `/ship`
+**Create ADR-160** (ordinal provisional — highest on disk is ADR-157; `/ship`
 re-verifies against `origin/main` before merge, and a renumber must sweep this
 plan, `tasks.md`, and every AC that names the ordinal).
 
@@ -210,7 +210,7 @@ red for reasons the later phases fix.
 
 1. Re-run the baseline and pin it: `python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.rules.md 2>&1 | tail -3` → expect `FAIL: 13`.
 2. `bash scripts/lint-agents-enforcement-tags.test.sh` → expect `Total: 9 Pass: 7 Fail: 2`, both failures on T1.
-3. Confirm the ADR-158 ordinal is still free against `origin/main`.
+3. Confirm the ADR-160 ordinal is still free against `origin/main`.
 
 ### Phase 1 — Linter grammar (TDD: failing tests first, per `cq-write-failing-tests-before`)
 
@@ -295,7 +295,7 @@ Exit condition: `FAIL: 13` → `OK`, with **no** `AGENTS.rules.md` edit yet.
 
 ### Phase 5 — ADR + learning
 
-1. Write `ADR-158-enforcement-tag-grammar-conforms-to-the-corpus.md`.
+1. Write `ADR-160-enforcement-tag-grammar-conforms-to-the-corpus.md`.
 2. Write a learning capturing the two transferable findings: (a) *an issue's
    diagnosis is a hypothesis — measure the failure set before adopting its
    prescribed remedy*, and (b) *when a gate and its corpus disagree, fix the
@@ -362,7 +362,7 @@ per-rule attribution rather than tamper-evidence — leave that framing intact.
 13. `git diff --stat AGENTS.rules.md` → exactly **one** body line changed (the untag), unless AC14 applies.
 14. If the `brainstorm Phase 2 budget checkpoint` tag text changed, a second ack row exists for `cq-skill-description-budget-headroom` and AC13's count is 2.
 15. Every `knowledge-base/` path cited in this plan resolves: `grep -oE 'knowledge-base/[A-Za-z0-9/_.-]+\.md' <plan> | xargs -I{} bash -c '[[ -f "{}" ]] || echo BROKEN: {}'` → no output.
-16. `ADR-158-*.md` exists on disk and its ordinal is still free against `origin/main` at ship time.
+16. `ADR-160-*.md` exists on disk and its ordinal is still free against `origin/main` at ship time.
 17. PR body carries `Closes #7174`, `Closes #7172`, `Closes #6751`, `Closes #4622`.
 
 ### Post-merge (operator)
@@ -378,7 +378,7 @@ no credential mint, and no infrastructure apply in this change.
 
 **Status:** reviewed
 **Assessment:** Repo-local developer tooling. The one architectural call (corpus
-authoritative over parser) is recorded as ADR-158. Risk is concentrated in
+authoritative over parser) is recorded as ADR-160. Risk is concentrated in
 grammar permissiveness, mitigated by AC6's preserved negative case and AC3's
 exact-count assertion. No runtime, user, or data surface.
 
@@ -408,7 +408,7 @@ containing any path in this plan's edit set.
 
 ## Files to Create
 
-- `knowledge-base/engineering/architecture/decisions/ADR-158-enforcement-tag-grammar-conforms-to-the-corpus.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-160-enforcement-tag-grammar-conforms-to-the-corpus.md`
 - `knowledge-base/project/learnings/2026-08-03-an-issues-diagnosis-is-a-hypothesis-measure-the-failure-set-first.md`
 - `knowledge-base/project/specs/feat-one-shot-7174-7172-mandates-filing-and-enforcement-tag-lint/tasks.md`
 
@@ -420,14 +420,14 @@ containing any path in this plan's edit set.
 | `/`-anchor rejection is a path-traversal defense (`:118`). Loosening it could allow `../` escapes into `rglob`. | Narrow the loosening to the **skill-list** token only. Keep `..` rejected unconditionally, and keep the anchor's own `/` rejection. Add a test asserting a `../` anchor is still refused. |
 | The default flip makes `... .py AGENTS.md` fail for anyone invoking it narrowly. | Deliberate — that is the vacuity signal. Documented in the docstring and the ADR. lefthook and test-all both pass explicit paths. |
 | Un-allowlisting the orphan suite turns `test-all.sh` red if any case still fails. | AC4 requires `Fail: 0` **before** Phase 4 removes the entry. Phase order enforces it. |
-| ADR-158 ordinal collides with a sibling PR merging first. | `/ship` re-verifies against `origin/main`; on renumber, sweep this plan + `tasks.md` + AC16 in the same edit. |
+| ADR-160 ordinal collides with a sibling PR merging first. | `/ship` re-verifies against `origin/main`; on renumber, sweep this plan + `tasks.md` + AC16 in the same edit. |
 | The untag prose sweep misses a site claiming "two rules". | AC7/AC8 pin the corpus; the Phase 3.3 sweep is explicit; review re-greps `mandates-filing` repo-wide. |
 
 ## Non-Goals
 
 - **Reverting the corpus-marker mechanism to a `reason=` token** — operator-decided A2, no change.
 - **Re-litigating either #7174 decision.**
-- **Normalising the corpus tags to the parser's old grammar** — explicitly rejected in ADR-158's alternatives.
+- **Normalising the corpus tags to the parser's old grammar** — explicitly rejected in ADR-160's alternatives.
 - **Adding a dedicated `.github/workflows/` job** — `scripts/test-all.sh` is the established home for corpus linters (`:277-284`); a new job would duplicate coverage.
 
 ## Test Scenarios

@@ -1,4 +1,4 @@
-# ADR-158 — The enforcement-tag grammar conforms to the corpus, not the reverse
+# ADR-160 — The enforcement-tag grammar conforms to the corpus, not the reverse
 
 - **Status:** Accepted
 - **Date:** 2026-08-03
@@ -9,8 +9,10 @@
   (why a rule-body edit is expensive), [ADR-155](./ADR-155-cross-gate-exemption-markers-in-the-rule-corpus.md)
   (the marker whose legend this linter was mis-parsing), `scripts/lint-agents-enforcement-tags.py` (the gate)
 
-> **Ordinal.** ADR-158 is the next free ordinal against a freshly fetched `origin/main` (highest
-> existing is ADR-157), verified at `/work` time. Provisional until `/ship` re-checks at merge.
+> **Ordinal.** Renumbered 158 → 160 during review. ADR-158 was free when this was authored and
+> was claimed by PR #7189 (`kb-file-tree-host-is-a-derived-value`) hours later, with ADR-159
+> following — the documented mid-pipeline collision class. ADR-160 is the next free ordinal
+> against a freshly fetched `origin/main`; still provisional until `/ship` re-checks at merge.
 
 ## Context
 
@@ -30,9 +32,20 @@ before acting is the whole point of this ADR. Of the 13:
 - **1** was the linter parsing its own documentation. The `> **Tag legend.**` blockquote, added by
   the PR that discovered this defect, literally contains `[hook-enforced: …]`; the linter tried to
   resolve `…` as a hook script.
-- **2** were genuine wording drift, both on one line, and one of those was a single capital letter
-  (`budget checkpoint` vs the actual bold label `**Budget checkpoint.**`).
-- **9** were the parser being narrower than the vocabulary the corpus has always used.
+- **2** were genuine wording drift, both on `AGENTS.rules.md:126`: `budget checkpoint` vs the
+  actual bold label `**Budget checkpoint.**` (a single capital letter), and `§1.8` vs the heading
+  `### 1.8`. Both were fixed in the CORPUS, not the parser — that line is
+  `cq-skill-description-budget-headroom`, and `cq-*` sits outside `lint-rule-bodies.py`'s
+  `^(hr|wg)-` gate, so both edits cost **zero** ack rows.
+- **10** were the parser being narrower than the vocabulary the corpus has always used
+  (`AGENTS.rules.md` lines 34, 35, 37, 49, 52, 54, 60, 61, 65, 97 — every one an `hr-`/`wg-` body,
+  i.e. every one an ack row had it been "fixed" in the corpus).
+
+1 + 2 + 10 = 13. An earlier draft of this ADR published `1 + 2 + 9`, which sums to 12 — it
+counted the `§1.8` failure as grammar because the first cut added a `§X.Y` parser variant for it.
+That variant was reverted during review: `Phase 1.8` resolves through the EXISTING matcher, so the
+one-word tag edit was free and ~20 lines of parser were not needed. Correcting the arithmetic in a
+PR whose thesis is "measure before you act" is the point, not an aside.
 
 Every enforcer named by all 13 tags **exists and actually enforces**: all seven skills, both hook
 scripts, `plugins/soleur/lib/workflow-fidelity.ts`, `plugins/soleur/test/components.test.ts` (and
@@ -48,10 +61,17 @@ does not exist, a hook that was deleted, a symbol that moved.
 
 The rationale is asymmetric cost. A tag body is security-tagged, human-reviewed text whose every
 edit costs an ADR-092 ack row and escalates to mandatory human review; the parser is ungated code
-with a test suite. Optimising the cheap side is correct. Rewriting nine accurate rule bodies to fit
-a parser limitation would have cost nine ack rows, destroyed information (a rule enforced across
+with a test suite. Optimising the cheap side is correct. Rewriting the ten grammar-limited rule bodies to fit
+a parser limitation would have cost ten ack rows, destroyed information (a rule enforced across
 five skills would have had to name one), and encoded the parser's limits into the corpus — making
 the *documentation* worse to make the *tool* pass.
+
+**The cost asymmetry is the secondary argument, not the load-bearing one.** ADR-092 makes corpus
+edits expensive deliberately — that expense is the control, not an accident of tooling, and
+"the corpus is gated and the parser is not, therefore change the parser" generalizes badly:
+every future disagreement would resolve toward the tool. The sufficient argument stands alone and
+needs no cost appeal: **the tags are accurate about reality, and normalizing them would destroy
+information.** Accuracy wins over expressibility.
 
 The supported vocabulary is now, explicitly:
 
@@ -103,14 +123,20 @@ instead, which is also better documentation.
 
 ## Consequences
 
-- The gate now resolves 10 hook + 30 skill tags across 38 anchor-parity checks, and is registered in
+- The gate now resolves 10 hook + 30 skill tags via 31 anchor checks, and is registered in
   `scripts/test-all.sh` as a `-live` / `-unit` pair alongside `lint-rule-ids`, so it runs in CI
   rather than only at pre-commit.
-- `scripts/lint-agents-enforcement-tags.test.sh` goes from 7/9 to 21/21 and is removed from the
+- `scripts/lint-agents-enforcement-tags.test.sh` goes from 7/9 to 40/40 and is removed from the
   `lint-orphan-test-suites.sh` exclusion list, which is now empty — the goal state.
-- **The grammar is more permissive, which is the risk this ADR accepts.** It is bounded by keeping a
-  negative test per variant, asserting exact expected tag counts rather than `> 0`, and the vacuity
-  floor. A future widening must add its own negative case.
+- **The grammar is more permissive, which is the risk this ADR accepts.** The bounds are, precisely:
+  a negative fixture per variant; a `MIN_CHECKS` ratchet floored PER DIMENSION on counts
+  incremented at the resolution sites themselves; and a terminal `malformed` case so an
+  unrecognised segment is an error rather than a silently re-interpreted anchor.
+  An earlier draft of this ADR claimed two bounds it had not implemented — "exact expected tag
+  counts" (the test asserted only the substring `"anchor parity"`, which is present in a fully
+  vacuous run too) and "a new tag shape is a deliberate act" (a catch-all fallback absorbed any
+  unrecognised segment). Both were implemented during review rather than reworded away, which is
+  the only honest direction when the ADR and the code disagree.
 - Adding a new tag shape is now a deliberate act: extend the parser, add a positive **and** a
   negative test, and record the shape in the table above.
 

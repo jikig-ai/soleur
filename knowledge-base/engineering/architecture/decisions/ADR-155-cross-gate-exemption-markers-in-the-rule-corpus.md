@@ -58,7 +58,7 @@ and `wg-when-deferring-a-capability-create-a`.
 > **Amended 2026-08-03 (#7174).** The tagged set is now **one rule**:
 > `wg-block-pr-ready-on-undeferred-operator-steps`. The operator untagged
 > `wg-when-deferring-a-capability-create-a`, reversing the original "at
-> minimum these two" direction and siding with the four reviewers recorded in
+> minimum these two" direction and siding with the three reviewers recorded in
 > DC-1. The deciding evidence was **not** that the gate would become advisory
 > — a 30-day measurement refuted that (of 256 merged PRs with closing-or-filing
 > activity, 138 block at NET>0; tagging both flips 8 (5.8%) to 32 (23.2%)
@@ -71,6 +71,17 @@ and `wg-when-deferring-a-capability-create-a`.
 > exists to prevent. The second design challenge in that issue — replacing the
 > corpus marker with a free-form `reason=` token — was **declined**; the
 > mechanism below stands unchanged.
+>
+> **Revocation is not retroactive — the caveat below is now LIVE.** The gate
+> reads the corpus at `git merge-base origin/main HEAD`, so every branch whose
+> merge-base predates this untag still sees `[mandates-filing]` on
+> `wg-when-deferring-a-capability-create-a` and can still claim the exemption
+> until it rebases. Nothing forces that rebase. The untag's decisive rationale
+> ("nothing writes the claim, so citing it would be hand-authored") does NOT
+> bind on such a branch — a hand-authoring agent is precisely the threat model.
+> Merge-base reading is still correct (it is what stops a PR granting itself an
+> exemption in the same diff); the residue is a bounded lag, recorded here
+> rather than left for the next reader to rediscover.
 
 ### The class boundary (what is actually new here)
 

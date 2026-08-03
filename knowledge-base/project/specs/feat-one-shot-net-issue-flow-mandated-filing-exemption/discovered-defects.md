@@ -32,7 +32,7 @@ Originally: pre-existing, unrelated subsystem, NOT fixed in this PR → filed as
 >   two tags that were already correct.
 >
 > Every enforcer named by all 13 tags exists and enforces. The fix extends the
-> parser (ADR-158) and adds a vacuity floor, needing **zero** rule-body edits
+> parser (ADR-160) and adds a vacuity floor, needing **zero** rule-body edits
 > for this defect — not the "three or more ack rows" #7172 budgeted.
 
 The linter's argparse default is `["AGENTS.md"]`. ADR-151 made `AGENTS.md`

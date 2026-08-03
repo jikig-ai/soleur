@@ -27,10 +27,13 @@ count — split them very differently than the issue did:
 
 | Class | Count | The issue said |
 |---|---|---|
-| Parser-grammar limits (`/`, ` + `, file-form enforcers) | 9 | "wording drift — align the tag to the heading" |
-| Genuine wording drift (one of them a single capital letter) | 2 | — |
+| Parser-grammar limits (`/`, ` + `, file-form enforcers) | 10 | "wording drift — align the tag to the heading" |
+| Genuine wording drift (both on one line; one a single capital letter) | 2 | — |
 | The linter parsing its own tag-legend blockquote | 1 | not mentioned (issue said 12, live was 13) |
 | Skills that genuinely do not exist | **0** | "two — retire the rule or repoint the tag" |
+
+10 + 2 + 1 = 13. This table first published `9 + 2 + 1 = 12` — see rule 6 below; the
+miscount was mine, in the artifact arguing for measurement.
 
 **Every enforcer named by all 13 tags existed and actually enforced.** Not one tag was factually
 wrong. The two tags the issue said named nonexistent skills (`components`, `workflow-fidelity`) named
@@ -38,9 +41,11 @@ no skill at all — `SKILL_TAG_RE` captured the leading `[a-z][a-z0-9-]*` of `co
 `workflow-fidelity.ts` and mistook the prefix for a skill slug. Both already pointed at the file that
 enforces the rule.
 
-Following the issue would have rewritten nine accurate rule bodies — nine ADR-092 ack rows, each
-escalating to mandatory human review — to satisfy a deficient parser. The actual fix (ADR-158)
-extends the parser and needs **one** ack row, for an unrelated operator decision.
+Following the issue would have rewritten ten accurate rule bodies — ten ADR-092 ack rows, each
+escalating to mandatory human review — to satisfy a deficient parser. The actual fix (ADR-160)
+extends the parser and needs **one** ack row, for an unrelated operator decision. (Two `cq-*`
+bodies were edited for the two real wording drifts; `cq-*` is outside the `^(hr|wg)-` ack gate,
+so those cost zero ack rows.)
 
 ## The transferable rules
 
@@ -68,11 +73,14 @@ gate that still ran nowhere in CI. The real defect was the invocation graph: gre
 cardinality floor separates them, and the silent one reads as safety. Precedent: `MIN_ASSERTIONS` in
 `plugins/soleur/test/net-issue-flow.test.sh`.
 
-**6. Your own count is a claim too.** This PR's acceptance criterion asserted `12 hook + 32 skill`
-tags, taken from a naive `grep -oE '\[hook-enforced:'`. The derived figure is `10 + 30`: the naive
-count included the legend line and two empty-bodied `[hook-enforced:]` prose mentions the full-tag
-regex correctly ignores. The code was right and the AC was wrong — publish the command next to the
-number (`cq-assert-anchor-not-bare-token`).
+**6. Your own count is a claim too — and this file got it wrong twice.** The acceptance criterion
+asserted `12 hook + 32 skill` tags from a naive `grep -oE '\[hook-enforced:'`; the derived figure
+is `10 + 30` (the naive count included the legend line, plus one empty-bodied `[hook-enforced:]`
+and one `[skill-enforced:]` prose mention at `AGENTS.rules.md:120` that the full-tag regex
+correctly ignores). Separately, the classification table above first published a breakdown summing
+to **12** while describing 13 failures. Both were caught by review, not by me, in the document
+whose thesis is "measure the set." Publish the command next to the number
+(`cq-assert-anchor-not-bare-token`) — and re-add your own columns.
 
 ## The #7174 measurement (preserved here because the issue asked for it)
 
@@ -110,7 +118,7 @@ will reach for when deciding whether to tag a third rule.
 - `scripts/lint-agents-enforcement-tags.py` now carries the grammar, the body-line filter, and the vacuity floor.
 - Registered in `scripts/test-all.sh` as `-live` + `-unit`, so it runs in CI rather than pre-commit only.
 - `scripts/lint-orphan-test-suites.sh` exclusion list is now **empty** — the goal state.
-- ADR-158 records the corpus-is-authoritative decision and the supported tag vocabulary.
+- ADR-160 records the corpus-is-authoritative decision and the supported tag vocabulary.
 
 ## Session Errors
 

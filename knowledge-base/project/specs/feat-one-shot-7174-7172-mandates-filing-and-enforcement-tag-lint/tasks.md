@@ -10,7 +10,7 @@ Phase order is load-bearing — the grammar contract must land before its consum
 
 - [ ] 0.1 Pin the baseline: `python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.rules.md 2>&1 | tail -3` → expect `FAIL: 13`
 - [ ] 0.2 Pin the suite baseline: `bash scripts/lint-agents-enforcement-tags.test.sh` → expect `Total: 9  Pass: 7  Fail: 2`, both on T1
-- [ ] 0.3 Confirm ADR-158 is still the next free ordinal against `origin/main`
+- [ ] 0.3 Confirm ADR-160 is still the next free ordinal against `origin/main`
 
 ## Phase 1 — Linter grammar (RED first)
 
@@ -50,7 +50,7 @@ Phase order is load-bearing — the grammar contract must land before its consum
 
 ## Phase 5 — ADR + learning
 
-- [ ] 5.1 Write `ADR-158-enforcement-tag-grammar-conforms-to-the-corpus.md` with the two rejected alternatives
+- [ ] 5.1 Write `ADR-160-enforcement-tag-grammar-conforms-to-the-corpus.md` with the two rejected alternatives
 - [ ] 5.2 Write the learning: an issue's diagnosis is a hypothesis; fix the ungated side; preserve the #7174 measurement with its stated method and bounds
 
 ## Phase 6 — Verification (all ACs)
