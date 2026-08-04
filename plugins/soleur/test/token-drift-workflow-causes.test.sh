@@ -1217,20 +1217,39 @@ if (( _base_has_inventory )) && [[ -z "$_base_names" ]]; then
   echo "    the baseline inventory exists at ${_merge_base} but yielded ZERO parseable names — the extraction has drifted and this ratchet would pass vacuously"
 fi
 _base_n=$(grep -c . <<<"$_base_names") || _base_n=0
+_checked=0
+_acked_n=0
+# Herestring, not `printf ... | while`: a pipe would put the loop in a SUBSHELL and every
+# counter increment below would be discarded, which is the failure mode this loop's own
+# accounting guard is written to detect.
 while IFS= read -r _bn; do
   [[ -n "$_bn" ]] || continue
   _acked=0
   for _ack in ${INVENTORY_REMOVALS_ACK[@]+"${INVENTORY_REMOVALS_ACK[@]}"}; do
     [[ "$_ack" == "$_bn" ]] && { _acked=1; break; }
   done
-  (( _acked )) && continue
+  (( _acked )) && { _acked_n=$((_acked_n + 1)); continue; }
+  _checked=$((_checked + 1))
   # Herestring, never a pipe: `producer | grep -q` takes SIGPIPE on an early match under
   # `pipefail`, which inverts a negative assertion into a silent pass.
   grep -qxF "$_bn" <<<"$_inv_names" \
     || { _f4b=0; echo "    config '${_bn}' is present in the merge base's inventory and absent from this branch's — a removal or a rename. That DESTROYS its read token and drops the config out of the scan's reach, and no count in this file moves when it is a rename"; }
 done <<<"$_base_names"
+# THE LOOP ACTUALLY RAN OVER THE BASELINE SET. Measured: deleting the comparison loop
+# outright left this file reporting 61/61 and exit 0. The anti-vacuity floor at the bottom
+# counts assertion CALLS, not assertion BODIES, so it sees a neutered control as a passing
+# one — and the non-vacuity guard above only covers a baseline that fails to PARSE, not a
+# comparison that never happens. This reconciles the two counts, so a body that stops
+# iterating is as loud as a body that finds a missing name.
+if (( _checked + _acked_n != _base_n )); then
+  _f4b=0
+  echo "    the comparison examined ${_checked} of ${_base_n} baseline names (${_acked_n} acked) — it did not run over the baseline set, so this assertion would report 'reach did not shrink' without having compared anything"
+fi
 if [[ "$_f4b" == "1" ]]; then
-  pass "all ${_base_n} config names in the merge base's inventory survive in $(basename "$INVENTORY") — reach did not shrink"
+  # Says what was actually established. "all N survive" is FALSE the moment one is acked,
+  # and a pass line that overstates its own scope is the defect this suite keeps finding
+  # elsewhere.
+  pass "reach did not shrink: ${_checked} of the merge base's ${_base_n} config names are still present in $(basename "$INVENTORY"), ${_acked_n} deliberately retired via INVENTORY_REMOVALS_ACK"
 else
   fail "the committed inventory is the for_each key set, so its name set is the scan's REACH and must only ever grow. Every other layer here bounds a COUNT, and a rename moves no count: the ratio still reads 13/13 while one config is unread and one token is minted for a config that does not exist. Deliberately retiring a config means adding its name to INVENTORY_REMOVALS_ACK above — a visible edit to a test, which is the point"
 fi
