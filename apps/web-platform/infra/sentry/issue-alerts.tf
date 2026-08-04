@@ -1265,6 +1265,70 @@ resource "sentry_issue_alert" "outbound_email_send_failure" {
   }
 }
 
+# ── Inngest dispatch failure alert (#7144 finding 7 — the CTO's limb (c)) ────
+# The alarm for the failure that ran ~3 days with nothing paging: every
+# inngest.send() got ECONNREFUSED because the app dispatched at a host that never
+# bound :8288, while scheduled-inngest-health.yml reported SUCCESS throughout — it
+# was certifying a DIFFERENT, surviving server. The vendor's auto-disable clock,
+# not our monitoring, was the effective detector.
+#
+# Filters on op="inngest-send", emitted by sendInngestWithRetry's TERMINAL branch,
+# which covers all EIGHT call sites (resend-inbound, github x2, stripe,
+# schedule-reminder, run-routine, server/index x2) — not just the two routes that
+# happened to carry their own capture.
+#
+# THIS ALERT WAS UNSHIPPABLE BEFORE #7144 finding 5, and that is the point. The
+# pre-existing op:inngest-send captures sat immediately after a logger.error({ err })
+# whose pino hook had already mirrored the same Error instance to Sentry, marking it
+# caught — so the tagged call early-returned and the tag never landed. Sentry measured
+# ZERO issues for op:inngest-send across the entire outage. A tagged_event filter
+# shipped then would have matched nothing, forever: worse than no alert, because it
+# reads as coverage. The emit now captures a distinct wrapper carrying `cause`.
+#
+# Cross-artifact drift (a rename on either side silently zeroes the matches) is pinned
+# by apps/web-platform/test/sentry-inngest-dispatch-alert-op-contract.test.ts.
+resource "sentry_issue_alert" "inngest_dispatch_failure" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "inngest-dispatch-failure"
+  action_match = "any"
+  filter_match = "all"
+  frequency    = 16
+
+  # reappeared/regression are load-bearing here, not boilerplate: this failure mode
+  # RECURS across deploys, so a first-seen-only rule goes quiet exactly when the
+  # incident resumes.
+  conditions_v2 = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "op"
+        match = "EQUAL"
+        value = "inngest-send"
+      }
+    },
+  ]
+  # Same N=1 fallthrough as outbound_email_send_failure. These events carry the feature
+  # tag, attempt count, transient flag and a delivery id — no bodies, no recipients, no
+  # connection strings.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # ── Sandbox-startup failure alert (#5875 / ADR-079) — APPLY-CREATED ──────────
 # Pages when the agent-sandbox startup path fails for ≥K DISTINCT tenants in a
 # rolling window. The 2026-07-01 P0 (#5873 — a seccomp EPERM on the SDK's split

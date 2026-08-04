@@ -269,9 +269,14 @@ describe("cron-inngest-cron-watchdog — resolveInngestHost", () => {
     );
   });
 
-  it("falls back to the dedicated inngest host when unset", () => {
-    expect(resolveInngestHost(undefined)).toBe("http://10.0.1.40:8288");
-    expect(resolveInngestHost("")).toBe("http://10.0.1.40:8288");
+  // ADR-100 is PAUSED at the pre-repoint operating point: the dedicated host
+  // (10.0.1.40) never bound :8288 — its first boot failed the GHCR pull — so
+  // dispatch runs against the co-located inngest-server on the web host.
+  it("falls back to the co-located inngest host when unset", () => {
+    expect(resolveInngestHost(undefined)).toBe(
+      "http://host.docker.internal:8288",
+    );
+    expect(resolveInngestHost("")).toBe("http://host.docker.internal:8288");
   });
 
   // Parity guard: the fallback host must equal the INNGEST_BASE_URL that

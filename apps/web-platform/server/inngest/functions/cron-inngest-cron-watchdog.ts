@@ -68,10 +68,21 @@ const SENTRY_MONITOR_SLUG = "scheduled-inngest-cron-watchdog";
 
 // Fallback when INNGEST_BASE_URL is unset. Matches the container's
 // runtime env: the web-platform `docker run` in ci-deploy.sh sets
-// `-e INNGEST_BASE_URL=http://10.0.1.40:8288` (both the canary and
-// production run blocks) — the dedicated soleur-inngest host (epic #6178).
-// Parity-tested in cron-inngest-cron-watchdog.test.ts.
-const INNGEST_HOST_FALLBACK = "http://10.0.1.40:8288";
+// `-e INNGEST_BASE_URL=http://host.docker.internal:8288` (both the canary
+// and production run blocks) — the CO-LOCATED inngest-server on the web
+// host. Parity-tested in cron-inngest-cron-watchdog.test.ts.
+//
+// This pointed at the dedicated soleur-inngest host (10.0.1.40, epic #6178)
+// between 2026-07-24 and 2026-08-02. ADR-100's cutover repointed the app
+// before that host was proven to boot; it never bound :8288 (its first boot
+// failed `docker login ghcr.io` on a dead PAT, so the bootstrap image never
+// pulled), and every inngest.send() got ECONNREFUSED for ~3 days — surfacing
+// as 500s on /api/webhooks/resend-inbound. ADR-100 is now PAUSED at this
+// pre-repoint operating point; the repoint returns only once the dedicated
+// host boots with no GHCR dependency, is health-probed, and has a no-SSH
+// restart verb. Do NOT re-point this constant alone: it is one half of a
+// parity pair with ci-deploy.sh and both move together or neither does.
+const INNGEST_HOST_FALLBACK = "http://host.docker.internal:8288";
 
 // Restart cooldown (defense-in-depth on the backstop): must exceed the
 // watchdog cron interval (4h) so two consecutive escalated ticks do not

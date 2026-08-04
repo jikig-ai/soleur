@@ -120,11 +120,123 @@ resolve_host_id() {
   return 1
 }
 
-GQL_URL="${INNGEST_GQL_URL:-http://127.0.0.1:8288/v0/gql}"
-# #6407 Defect A — loopback /health endpoint used to CORROBORATE a functions-query failure
-# in LIVENESS_ONLY mode before declaring a hard down. Same loopback server + same /health
-# path that ci-deploy.sh verify_inngest_health gates on (ci-deploy.sh:1002).
-INNGEST_HEALTH_URL="${INNGEST_HEALTH_URL:-http://127.0.0.1:8288/health}"
+# --- Probe target derivation (#7144) -------------------------------------------------
+# The watchdog MUST probe whatever the app actually dispatches to, not a fixed loopback.
+#
+# This defaulted to 127.0.0.1:8288 unconditionally. When ADR-100's cutover repointed the
+# app at the dedicated host (10.0.1.40) on 2026-07-24 but left this probe on loopback,
+# the two silently disagreed: the dedicated host never bound :8288, every inngest.send()
+# got ECONNREFUSED for ~3 days, and scheduled-inngest-health.yml reported SUCCESS every
+# ~1-2h throughout — because it was certifying the SURVIVING co-located server while the
+# app's real dependency was dead. The vendor (Resend) detected the outage before we did.
+#
+# A hardcoded target can only be correct while the app agrees with it, and is only WRONG
+# in exactly the window where the alarm matters. So derive it from the app container's own
+# env, which is the source of truth for where inngest.send() goes.
+#
+# Container-vs-host view: the container reaches the co-located server through
+# `host.docker.internal` (a --add-host host-gateway alias that does NOT resolve on the
+# host). From the host that same server IS loopback, so map it. Any other host (an IP
+# like 10.0.1.40) is on the private network and is probed literally — which is precisely
+# the case this function exists to stop hiding.
+INNGEST_APP_CONTAINER="${INNGEST_APP_CONTAINER:-soleur-web-platform}"
+
+# Why a FAILED derivation failed. Empty when it succeeded. Only ever set from docker's
+# stderr on a NON-ZERO exit — never from its stdout, which on success is the container's
+# full environment and therefore secret-bearing (#5503 purity).
+INNGEST_PROBE_DERIVE_ERR=""
+# How INNGEST_PROBE_BASE was chosen: env | derived | fallback. Rides every emitted verdict
+# so a green result names its own subject (#7144 finding 6).
+INNGEST_PROBE_TARGET_SOURCE=""
+
+derive_dispatch_base() {
+  local base host_part out rc
+  # `tail -1`, NOT `head -1`: Config.Env legitimately carries INNGEST_BASE_URL twice —
+  # docker lists the `--env-file` (Doppler) entry FIRST and the `-e` override SECOND, and
+  # the container process resolves to the LAST one. Reading the first returns the value
+  # the app does NOT dispatch to, which is #7144 rebuilt by the code written to prevent
+  # it: with Doppler still on host.docker.internal, a `-e …10.0.1.40` repoint would map to
+  # loopback and certify the surviving co-located server. Masked today only because the
+  # two duplicates agree. Verified on Docker 29.4.3; fixtured both orderings in
+  # inngest-inventory.test.sh test_probe_target_follows_app (5)+(6).
+  # stderr is CAPTURED, not discarded. `2>/dev/null` made "no such container" — the
+  # ordinary window ci-deploy.sh's `docker rm` → `docker run` opens, which the */15
+  # watchdog lands in routinely — indistinguishable from "permission denied on
+  # /var/run/docker.sock", which is a real and persistent misconfiguration. Telling the
+  # two apart required SSH: exactly the error path hr-no-ssh-fallback-in-runbooks forbids.
+  out=$(docker inspect "$INNGEST_APP_CONTAINER" \
+          --format '{{range .Config.Env}}{{println .}}{{end}}' 2>&1) && rc=0 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    # rc is always included, so a silent non-zero exit (a stub, a missing binary) still
+    # produces a non-empty reason rather than an empty string that reads as "no error".
+    # STDERR, not a global. `derived=$(derive_dispatch_base)` runs this in a SUBSHELL, so
+    # a global assignment here is discarded on return — the documented trap where a
+    # function called via command substitution loses every effect except stdout. The
+    # caller merges 2>&1: on success this function writes only the base to stdout and
+    # nothing to stderr, on failure only the reason to stderr, so the merge is unambiguous.
+    printf 'docker inspect rc=%s: %s' "$rc" "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-140)" >&2
+    return 1
+  fi
+  base=$(printf '%s\n' "$out" | sed -n 's#^INNGEST_BASE_URL=##p' | tail -1)
+  base="${base%/}"
+  if [ -z "$base" ]; then
+    printf 'container env carries no INNGEST_BASE_URL' >&2
+    return 1
+  fi
+  host_part="${base#http://}"; host_part="${host_part#https://}"
+  case "$host_part" in
+    host.docker.internal|host.docker.internal:*)
+      # Container-side alias for the co-located server; loopback from the host.
+      printf 'http://127.0.0.1:%s' "${host_part##*:}" ;;
+    *) printf '%s' "$base" ;;
+  esac
+}
+
+# Explicit env override always wins (tests + ad-hoc probes). Otherwise follow the app.
+# Loopback remains the last resort ONLY when the container env cannot be read at all.
+#
+# A FUNCTION, not three top-level assignments, for the same reason HOST_ID resolves inside
+# the BASH_SOURCE guard at the foot of this file: sourcing must NOT hit the network. As
+# top-level assignments these fired `docker inspect` on every `source` — measured — and
+# they were worse than the pattern they violated, because resolve_host_id at least bounds
+# itself at `curl --max-time 3` while `docker inspect` has no timeout at all, and it fired
+# even for consumers that override both URLs and need none of it.
+#
+# Keeping the wiring in a named function is also what makes it testable end-to-end: as
+# bare top-level lines they were sourced by nothing and asserted by nothing, so measured
+# mutations that hardcoded the probe base (M1), hardcoded GQL_URL — the PRIMARY probe
+# (M2), or deleted the port passthrough (M11) all left the suite fully green. See
+# inngest-inventory.test.sh test_probe_targets_end_to_end.
+init_probe_targets() {
+  local probe_out
+  if [ -n "${INNGEST_PROBE_BASE:-}" ]; then
+    INNGEST_PROBE_TARGET_SOURCE="env"
+  elif probe_out=$(derive_dispatch_base 2>&1); then
+    INNGEST_PROBE_BASE="$probe_out"
+    INNGEST_PROBE_TARGET_SOURCE="derived"
+  else
+    INNGEST_PROBE_DERIVE_ERR="$probe_out"
+    # THE THIRD STATE (#7144 finding 6). This branch used to produce a value
+    # BYTE-IDENTICAL to a successful co-located derivation, so a green verdict had an
+    # unknown subject — #7144 restated by the code written to prevent it. It is not a
+    # rare path either: ci-deploy.sh's `docker rm` → `docker run` leaves a window with no
+    # container at all, and this watchdog runs every 15 minutes.
+    INNGEST_PROBE_BASE="http://127.0.0.1:8288"
+    INNGEST_PROBE_TARGET_SOURCE="fallback"
+    # journald-only, and `2>/dev/null || true` like every other logger call here — the
+    # success-path stdout/stderr purity invariant (#5503) forbids writing to either.
+    # Scheme-stripped, and the reason scrubbed of any `://`: journald lines carry NO URI
+    # (#5503 marker purity, pinned by inngest-inventory.test.sh). host:port keeps every bit
+    # of the diagnostic value without tripping it.
+    logger -t "$LOG_TAG" "WARN: SOLEUR_INNGEST_PROBE_TARGET_FALLBACK probe_target=${INNGEST_PROBE_BASE#*://} reason=$(printf '%s' "${INNGEST_PROBE_DERIVE_ERR:-unknown}" | sed 's#://#:#g') — could NOT derive the app's dispatch target; this verdict describes loopback, not necessarily what the app dispatches to" 2>/dev/null || true
+  fi
+
+  GQL_URL="${INNGEST_GQL_URL:-${INNGEST_PROBE_BASE}/v0/gql}"
+  # #6407 Defect A — loopback /health endpoint used to CORROBORATE a functions-query failure
+  # in LIVENESS_ONLY mode before declaring a hard down. Same loopback server + same /health
+  # path that ci-deploy.sh verify_inngest_health gates on (ci-deploy.sh:1002).
+  INNGEST_HEALTH_URL="${INNGEST_HEALTH_URL:-${INNGEST_PROBE_BASE}/health}"
+}
 # Cost lever (#6258 Deepen Finding 3): raise PAGE_SIZE (lossless round-trip cut) — the ONLY
 # completeness-preserving lever. Never narrow FROM_TS. Env-overridable for tests.
 PAGE_SIZE="${INNGEST_GQL_PAGE_SIZE:-500}"
@@ -507,10 +619,12 @@ run_inventory() {
     local durability_state_lo fn_count_lo
     durability_state_lo=$(derive_durability_state)
     fn_count_lo=$(echo "$functions" | jq 'length')
-    logger -t "$LOG_TAG" "liveness: functions=$fn_count_lo durability=$durability_state_lo mode=liveness_only" 2>/dev/null || true
+    logger -t "$LOG_TAG" "liveness: functions=$fn_count_lo durability=$durability_state_lo mode=liveness_only probe_target=${INNGEST_PROBE_BASE#*://} probe_target_source=$INNGEST_PROBE_TARGET_SOURCE" 2>/dev/null || true
     _pf_done_marker
     jq -nc --argjson f "$functions" --arg d "$durability_state_lo" --arg hid "$HOST_ID" \
-      '{functions:$f, event_names:[], armed_reminders:[], durability_state:$d, host_id:$hid}'
+      --arg pb "$INNGEST_PROBE_BASE" --arg pts "$INNGEST_PROBE_TARGET_SOURCE" \
+      '{functions:$f, event_names:[], armed_reminders:[], durability_state:$d, host_id:$hid,
+        probe_base:$pb, probe_target_source:$pts}'
     return 0
   fi
 
@@ -565,7 +679,7 @@ run_inventory() {
   ev_count=$(jq 'length' "$event_names_file")
   armed_count=$(jq 'length' "$armed_file")
   armed_ids=$(jq -r '[.[].reminder_id] | join(",")' "$armed_file")
-  logger -t "$LOG_TAG" "inventory: functions=$fn_count event_names=$ev_count armed=$armed_count armed_ids=[$armed_ids] durability=$durability_state" 2>/dev/null || true
+  logger -t "$LOG_TAG" "inventory: functions=$fn_count event_names=$ev_count armed=$armed_count armed_ids=[$armed_ids] durability=$durability_state probe_target=${INNGEST_PROBE_BASE#*://} probe_target_source=$INNGEST_PROBE_TARGET_SOURCE" 2>/dev/null || true
   _pf_done_marker
 
   # Single pure-JSON object on stdout (the webhook body the workflow jq-parses).
@@ -576,8 +690,9 @@ run_inventory() {
   # bounds nothing. $durability_state and $host_id are enums and stay on argv.
   jq -nc --rawfile f "$functions_file" --rawfile e "$event_names_file" \
     --rawfile r "$armed_file" --arg d "$durability_state" --arg hid "$HOST_ID" \
+    --arg pb "$INNGEST_PROBE_BASE" --arg pts "$INNGEST_PROBE_TARGET_SOURCE" \
     '{functions:($f|fromjson), event_names:($e|fromjson), armed_reminders:($r|fromjson),
-      durability_state:$d, host_id:$hid}'
+      durability_state:$d, host_id:$hid, probe_base:$pb, probe_target_source:$pts}'
 }
 
 # Run only when executed directly — sourcing (the unit test) must NOT hit the network.
@@ -586,8 +701,13 @@ run_inventory() {
 # under `set -euo pipefail` — resolve_host_id return-1s when metadata is unreachable AND
 # /etc/machine-id is unreadable, and a bare assignment would abort the hook into a non-200,
 # losing the whole liveness verdict to protect one field.
+#
+# init_probe_targets is here for the same reason: its `docker inspect` is an off-process
+# call, and unlike resolve_host_id's curl it carries no timeout. Callers that source this
+# file invoke it themselves once they have arranged their own environment.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   HOST_ID="$(resolve_host_id || true)"
   readonly HOST_ID
+  init_probe_targets
   run_inventory
 fi

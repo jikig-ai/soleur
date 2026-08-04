@@ -5913,6 +5913,46 @@ fi
 rm -rf "$ZGD_TMP"
 
 echo ""
+# --- Dispatch proof (#7144 findings 3 + 4) -----------------------------------------
+# verify_inngest_health proves a PORT ANSWERS; these pin the properties that make
+# verify_inngest_dispatch prove a SEND SUCCEEDS. Each anchors on a syntactic construct
+# rather than a bare token: every one of these words also appears in the surrounding
+# explanatory comments, so a bare grep would pass against a deleted implementation.
+assert_dispatch_gate() {
+  local desc="$1" cond="$2"
+  TOTAL=$((TOTAL + 1))
+  if eval "$cond"; then echo "  PASS: $desc"; PASS=$((PASS + 1));
+  else echo "  FAIL: $desc"; FAIL=$((FAIL + 1)); fi
+}
+
+echo ""
+echo "--- Inngest dispatch proof (#7144 findings 3+4) ---"
+
+assert_dispatch_gate "verify_inngest_dispatch is defined" \
+  "grep -qE '^verify_inngest_dispatch\(\) \{' '$SCRIPT_DIR/ci-deploy.sh'"
+
+# BLOCKING is the entire finding: the check it sits beside is explicitly non-blocking,
+# which is how a 3-day dispatch outage shipped green.
+assert_dispatch_gate "a failed dispatch proof EXITS the deploy (blocking, not advisory)" \
+  "grep -qE 'if ! verify_inngest_dispatch ' '$SCRIPT_DIR/ci-deploy.sh' && grep -A3 'if ! verify_inngest_dispatch ' '$SCRIPT_DIR/ci-deploy.sh' | grep -qE '^\s*exit 1'"
+
+# A rejected key is finding 3. Retrying it only burns the deploy window.
+assert_dispatch_gate "a 401/403 is terminal — it does NOT consume the retry budget" \
+  "grep -qE '^\s*401\|403\)' '$SCRIPT_DIR/ci-deploy.sh'"
+
+# The probe must send to the app's target, not just poll a health endpoint.
+assert_dispatch_gate "the probe POSTs a real event to the /e/ ingestion endpoint" \
+  "grep -qE '\"\\\$\{base\}/e/\\\$\{key\}\"' '$SCRIPT_DIR/ci-deploy.sh'"
+
+# SECRET: inngest puts the event key in the URL PATH. It must never reach journald.
+assert_dispatch_gate "the event key never reaches a logger line" \
+  "! grep -nE 'logger .*\\\$\{?key\}?' '$SCRIPT_DIR/ci-deploy.sh'"
+
+# Retries exist so a still-settling container cannot roll back a healthy deploy — the
+# #4941 lesson, where a gate that false-positived reverted every deploy.
+assert_dispatch_gate "reachability failures retry before failing (no #4941 false-positive rollback)" \
+  "grep -qE 'for i in \\\$\(seq 1 \\\"\\\$max_attempts\\\"\)' '$SCRIPT_DIR/ci-deploy.sh'"
+
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
 if [[ "$FAIL" -gt 0 ]]; then

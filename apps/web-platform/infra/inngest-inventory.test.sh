@@ -920,5 +920,395 @@ test_no_argv_accumulation
 test_fatal_cleans_spool_tempfile
 test_argv_ceiling_final_emit_armed
 
+# --- #7144: the probe target must FOLLOW the app's dispatch target -------------------
+# Regression guard for the 3-day silent outage. ci-deploy.sh repointed the app at the
+# dedicated host (10.0.1.40) while this script kept probing loopback, so the watchdog
+# certified a DIFFERENT, surviving server and reported success throughout. A hardcoded
+# target is only wrong in exactly the window where the alarm matters.
+#
+# Drives the REAL function out of the REAL file (extracted, not re-declared) so a revert
+# to a hardcoded default fails this suite instead of quietly passing.
+test_probe_target_follows_app() {
+  echo "Test: probe target derives from the app container (#7144)"
+
+  # Extract INNGEST_APP_CONTAINER default + derive_dispatch_base from the source file.
+  local fn
+  fn=$(sed -n '/^INNGEST_APP_CONTAINER=/,/^}$/p' "$TARGET")
+  if [[ -z "$fn" || "$fn" != *"derive_dispatch_base()"* ]]; then
+    echo "  FAIL: could not extract derive_dispatch_base from $TARGET (hardcoded default reintroduced?)"
+    FAIL=$((FAIL + 1)); return
+  fi
+
+  local d bindir
+  d=$(mktemp -d) || { echo "  FAIL: mktemp"; FAIL=$((FAIL + 1)); return; }
+  bindir="$d/bin"; mkdir -p "$bindir" || { echo "  FAIL: mkdir"; FAIL=$((FAIL + 1)); rm -rf "$d"; return; }
+
+  # docker stub: emits the container env from a fixture file. Fails loudly (64) if the
+  # SUT does not ask for the container by name — a stub that answers regardless of argv
+  # cannot detect the SUT querying the wrong thing.
+  cat > "$bindir/docker" <<'STUB'
+#!/usr/bin/env bash
+[[ "$1" == "inspect" ]] || exit 64
+[[ "$*" == *"soleur-web-platform"* ]] || exit 64
+[[ -s "$DOCKER_ENV_FIXTURE" ]] || exit 1
+cat "$DOCKER_ENV_FIXTURE"
+STUB
+  chmod +x "$bindir/docker"
+
+  run_derive() {
+    local fixture="$1"
+    ( export PATH="$bindir:$PATH" DOCKER_ENV_FIXTURE="$fixture"
+      unset INNGEST_PROBE_BASE INNGEST_GQL_URL INNGEST_HEALTH_URL
+      eval "$fn"
+      derive_dispatch_base || printf 'http://127.0.0.1:8288' )
+  }
+
+  # (1) Co-located: the container-side alias maps to loopback from the host.
+  printf 'PATH=/usr/bin\nINNGEST_BASE_URL=http://host.docker.internal:8288\nNODE_ENV=production\n' > "$d/colocated"
+  assert_eq "host.docker.internal maps to host loopback" \
+    "http://127.0.0.1:8288" "$(run_derive "$d/colocated")"
+
+  # (2) THE REGRESSION: a dedicated-host repoint must be FOLLOWED, not silently ignored.
+  # Under the old hardcoded default this returned loopback and the watchdog went green
+  # against the wrong server for three days.
+  printf 'INNGEST_BASE_URL=http://10.0.1.40:8288\n' > "$d/dedicated"
+  assert_eq "dedicated-host repoint is followed (the #7144 blind spot)" \
+    "http://10.0.1.40:8288" "$(run_derive "$d/dedicated")"
+
+  # (3) Trailing slash normalised.
+  printf 'INNGEST_BASE_URL=http://10.0.1.40:8288/\n' > "$d/trailing"
+  assert_eq "trailing slash normalised" \
+    "http://10.0.1.40:8288" "$(run_derive "$d/trailing")"
+
+  # (4) Unreadable container env degrades to loopback rather than probing nothing.
+  : > "$d/empty"
+  assert_eq "unreadable container env falls back to loopback" \
+    "http://127.0.0.1:8288" "$(run_derive "$d/empty")"
+
+  # (5)+(6) FIXTURE SHAPE, not code path: `Config.Env` legitimately carries
+  # INNGEST_BASE_URL TWICE — once from `--env-file` (Doppler) and once from the `-e`
+  # override — and docker lists the `--env-file` entry FIRST. `printenv` inside the
+  # container resolves to the LAST one, so the `-e` override is what the app process
+  # actually dispatches to. Verified empirically on Docker 29.4.3.
+  #
+  # Every fixture above is single-entry, so the derivation's positional selector was
+  # unpinned: `head -1` passed all four while reading the value the app does NOT use.
+  # The duplicate-key condition holds in prod TODAY (phase-0 §Split-brain: ci-deploy.sh's
+  # `-e` overrides a Doppler value that still reads host.docker.internal) and is masked
+  # only while the two agree. Both orderings are fixtured because a one-directional
+  # fixture is satisfied by the weaker implementation in exactly one of them.
+  printf 'PATH=/usr/bin\nINNGEST_BASE_URL=http://host.docker.internal:8288\nINNGEST_BASE_URL=http://10.0.1.40:8288\nNODE_ENV=production\n' > "$d/dup-dash-e-dedicated"
+  assert_eq "duplicate key: the -e override (listed LAST) wins over --env-file" \
+    "http://10.0.1.40:8288" "$(run_derive "$d/dup-dash-e-dedicated")"
+
+  printf 'PATH=/usr/bin\nINNGEST_BASE_URL=http://10.0.1.40:8288\nINNGEST_BASE_URL=http://host.docker.internal:8288\nNODE_ENV=production\n' > "$d/dup-dash-e-colocated"
+  assert_eq "duplicate key: reversed order — still the LAST entry, mapped to loopback" \
+    "http://127.0.0.1:8288" "$(run_derive "$d/dup-dash-e-colocated")"
+
+  # (7) PARITY with ci-deploy.sh, mirroring the cron-inngest-cron-watchdog guard: the
+  # value the deploy script actually injects must be one this function can resolve.
+  local ci_deploy ci_val derived
+  ci_deploy="$(dirname "$TARGET")/ci-deploy.sh"
+  if [[ -r "$ci_deploy" ]]; then
+    ci_val=$(grep -oE 'INNGEST_BASE_URL=http://[^[:space:]\\]+' "$ci_deploy" | head -1 | sed 's#^INNGEST_BASE_URL=##')
+    if [[ -z "$ci_val" ]]; then
+      echo "  FAIL: no INNGEST_BASE_URL found in ci-deploy.sh"; FAIL=$((FAIL + 1))
+    else
+      printf 'INNGEST_BASE_URL=%s\n' "$ci_val" > "$d/parity"
+      derived=$(run_derive "$d/parity")
+      if [[ "$derived" == http://*:8288 ]]; then
+        echo "  PASS: ci-deploy.sh target ($ci_val) resolves to a probe target ($derived)"
+        PASS=$((PASS + 1))
+      else
+        echo "  FAIL: ci-deploy.sh target ($ci_val) resolved to '$derived'"; FAIL=$((FAIL + 1))
+      fi
+    fi
+  fi
+
+  # (8) Every ci-deploy.sh dispatch site must agree — a per-site divergence would make
+  # canary and prod dispatch to different servers.
+  if [[ -r "$ci_deploy" ]]; then
+    local uniq_n
+    uniq_n=$(grep -oE 'INNGEST_BASE_URL=http://[^[:space:]\\]+' "$ci_deploy" | sort -u | wc -l | tr -d ' ')
+    assert_eq "all ci-deploy.sh INNGEST_BASE_URL sites agree" "1" "$uniq_n"
+  fi
+
+  # (9) THE THIRD WRITE SITE (finding 1). The ADR-100 cutover commit b02870e1d changed
+  # ci-deploy.sh AND cloud-init.yml in LOCKSTEP; the rollback moved only ci-deploy.sh.
+  # cloud-init.yml's `-e INNGEST_BASE_URL` sits OUTSIDE the `%{ if web_colocate_inngest ~}`
+  # gate, so it fires on every fresh boot regardless of the toggle — and every guard in
+  # this PR was scoped to ci-deploy.sh and structurally could not see it. The one guard
+  # that does touch cloud-init's value (cloud-init-inngest-bootstrap.test.sh) is
+  # presence-only: it passes with 10.0.1.40 just as happily.
+  #
+  # Assertions are on the VALUE, not a port-shape glob. Mutual agreement ALONE is not
+  # enough: reverting all three sites in lockstep keeps them agreeing, which is measured
+  # mutation M6 — the one that leaves the whole change under review green. So the shared
+  # value is also pinned to the ADR-155 paused operating point, here, in the suite that
+  # infra-validation.yml runs, rather than only in a TypeScript file gated by a different
+  # workflow.
+  #
+  # The extraction deliberately drops the `http://` anchor the ci-deploy greps use, so
+  # `https://`, `${VAR}` and quoted forms enter the population instead of silently
+  # vanishing from it (measured mutation M5), and the match COUNT is asserted rather than
+  # assumed.
+  local paused_target ci_init ci_init_n ci_init_val ci_init_derived
+  paused_target="http://host.docker.internal:8288"
+  ci_init="$(dirname "$TARGET")/cloud-init.yml"
+  if [[ -r "$ci_init" ]]; then
+    ci_init_n=$( { grep -oE 'INNGEST_BASE_URL=[^[:space:]\\]+' "$ci_init" || true; } | wc -l | tr -d ' ')
+    assert_eq "cloud-init.yml has exactly one INNGEST_BASE_URL write site" "1" "$ci_init_n"
+
+    ci_init_val=$( { grep -oE 'INNGEST_BASE_URL=[^[:space:]\\]+' "$ci_init" || true; } \
+      | head -1 | sed 's#^INNGEST_BASE_URL=##')
+    assert_eq "cloud-init.yml agrees with ci-deploy.sh (the b02870e1d lockstep)" \
+      "$ci_val" "$ci_init_val"
+    assert_eq "cloud-init.yml carries the ADR-155 paused operating point (kills M6)" \
+      "$paused_target" "$ci_init_val"
+    assert_eq "ci-deploy.sh carries the ADR-155 paused operating point (kills M6)" \
+      "$paused_target" "$ci_val"
+
+    # And it must RESOLVE — a fresh-boot host derives its probe target from this value.
+    printf 'INNGEST_BASE_URL=%s\n' "$ci_init_val" > "$d/parity-cloud-init"
+    ci_init_derived=$(run_derive "$d/parity-cloud-init")
+    assert_eq "cloud-init.yml target resolves to the co-located probe target" \
+      "http://127.0.0.1:8288" "$ci_init_derived"
+  else
+    echo "  FAIL: cloud-init.yml unreadable at $ci_init — the third write site is unguarded"
+    FAIL=$((FAIL + 1))
+  fi
+
+  rm -rf "$d"
+}
+
+test_probe_target_follows_app
+
+# --- P1-a: the WIRING, end-to-end through the REAL file ------------------------------
+# test_probe_target_follows_app extracts derive_dispatch_base with a sed range that stops
+# at the function's closing brace, so it tests the function and nothing downstream of it.
+# The behaviour that actually reaches curl lives in the assignments BELOW that brace —
+# INNGEST_PROBE_BASE, GQL_URL, INNGEST_HEALTH_URL — and those were sourced by nothing,
+# executed by nothing, and asserted by nothing but one indirect grep.
+#
+# Three measured mutations stayed GREEN across the whole suite because of that gap:
+#   M1  the caller disconnected (probe base hardcoded to loopback, function left intact)
+#   M2  GQL_URL hardcoded — the PRIMARY probe, the query that decides the verdict
+#   M11 the port passthrough deleted (hardcoded :8288)
+#
+# So this case SOURCES the real file and drives its own wiring. Nothing is re-declared
+# and nothing is extracted: a revert of any of the three assignments fails here. The
+# non-default port in case (2) is what makes M11 detectable — every earlier fixture used
+# 8288, so a hardcoded port was indistinguishable from a correct passthrough.
+test_probe_targets_end_to_end() {
+  echo "Test: GQL_URL + INNGEST_HEALTH_URL derive end-to-end from the real file (P1-a)"
+
+  local d bindir
+  d=$(mktemp -d) || { echo "  FAIL: mktemp"; FAIL=$((FAIL + 1)); return; }
+  bindir="$d/bin"; mkdir -p "$bindir" || { echo "  FAIL: mkdir"; FAIL=$((FAIL + 1)); rm -rf "$d"; return; }
+
+  # Same argv-fidelity contract as the sibling stub (exit 64 on an unexpected call), plus
+  # a call log so source-time purity is measurable rather than asserted.
+  cat > "$bindir/docker" <<'STUB'
+#!/usr/bin/env bash
+echo "docker $*" >> "$DOCKER_CALL_LOG"
+[[ "$1" == "inspect" ]] || exit 64
+[[ "$*" == *"soleur-web-platform"* ]] || exit 64
+[[ -s "$DOCKER_ENV_FIXTURE" ]] || exit 1
+cat "$DOCKER_ENV_FIXTURE"
+STUB
+  chmod +x "$bindir/docker"
+
+  # Every probe runs in a FRESH bash process, never a `( … )` subshell. This suite marks
+  # NOW_MS readonly as a fixture constant and the real file assigns NOW_MS at load; a
+  # subshell inherits the readonly ATTRIBUTE, so the assignment fails and the file's own
+  # `set -euo pipefail` aborts the source partway through — silently, since the source is
+  # redirected. A new process inherits exported VALUES but not readonly attributes, and it
+  # is also closer to how the webhook actually invokes this script.
+  #
+  # Sources the real file, invokes its real wiring, emits <probe_base>|<gql>|<health>.
+  run_e2e() {
+    local fixture="$1"
+    env -u INNGEST_PROBE_BASE -u INNGEST_GQL_URL -u INNGEST_HEALTH_URL \
+        PATH="$bindir:$PATH" DOCKER_ENV_FIXTURE="$fixture" DOCKER_CALL_LOG="$d/calls.log" \
+      bash -c '
+        # shellcheck disable=SC1090
+        source "$1" >/dev/null 2>&1
+        init_probe_targets
+        printf "%s|%s|%s" "$INNGEST_PROBE_BASE" "$GQL_URL" "$INNGEST_HEALTH_URL"
+      ' _ "$TARGET" 2>/dev/null || true
+  }
+
+  assert_e2e() {
+    local desc="$1" fixture="$2" want_base="$3" want_gql="$4" want_health="$5"
+    local triple pb gql health
+    triple=$(run_e2e "$fixture" || true)
+    IFS='|' read -r pb gql health <<< "$triple" || true
+    assert_eq "$desc — probe base" "$want_base" "$pb"
+    assert_eq "$desc — GQL_URL (the PRIMARY probe)" "$want_gql" "$gql"
+    assert_eq "$desc — INNGEST_HEALTH_URL" "$want_health" "$health"
+  }
+
+  # (1) SOURCE-TIME PURITY. The file states this invariant itself ("sourcing must NOT hit
+  # the network"; HOST_ID resolves inside the BASH_SOURCE guard for exactly that reason),
+  # and the probe-target derivation violated it: a bare `source` fired docker inspect,
+  # with no timeout, on every consumer — including the two that override both targets and
+  # need none of it. Measured, not predicted.
+  printf 'INNGEST_BASE_URL=http://host.docker.internal:8288\n' > "$d/purity"
+  local src_calls after_calls
+  : > "$d/calls.log"
+  env -u INNGEST_PROBE_BASE -u INNGEST_GQL_URL -u INNGEST_HEALTH_URL \
+      PATH="$bindir:$PATH" DOCKER_ENV_FIXTURE="$d/purity" DOCKER_CALL_LOG="$d/calls.log" \
+    bash -c 'source "$1" >/dev/null 2>&1' _ "$TARGET" 2>/dev/null || true
+  src_calls=$(wc -l < "$d/calls.log" | tr -d ' ')
+  assert_eq "sourcing the file invokes docker ZERO times (its own :624-629 invariant)" \
+    "0" "$src_calls"
+
+  # POSITIVE CONTROL for (1): the stub must be reachable, or the zero above is vacuous —
+  # it would read as purity when it is really a broken PATH.
+  : > "$d/calls.log"
+  run_e2e "$d/purity" > /dev/null || true
+  after_calls=$( { grep -c 'docker inspect' "$d/calls.log" || true; } | tr -d ' ')
+  if [[ "$after_calls" -ge 1 ]]; then
+    echo "  PASS: control — the derivation DOES reach the stub when invoked ($after_calls call(s))"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: control — the stub was never reached, so the source-time zero proves nothing"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # (2) Co-located on a NON-DEFAULT port. Kills M11: every other fixture uses 8288, where
+  # a hardcoded port and a correct passthrough are indistinguishable.
+  printf 'PATH=/usr/bin\nINNGEST_BASE_URL=http://host.docker.internal:9288\n' > "$d/e2e-alt-port"
+  assert_e2e "co-located, non-default port" "$d/e2e-alt-port" \
+    "http://127.0.0.1:9288" "http://127.0.0.1:9288/v0/gql" "http://127.0.0.1:9288/health"
+
+  # (3) A dedicated-host repoint must reach BOTH URLs — the outage shape.
+  printf 'INNGEST_BASE_URL=http://10.0.1.40:8288\n' > "$d/e2e-dedicated"
+  assert_e2e "dedicated-host repoint" "$d/e2e-dedicated" \
+    "http://10.0.1.40:8288" "http://10.0.1.40:8288/v0/gql" "http://10.0.1.40:8288/health"
+
+  # (4) Finding 8, carried all the way to the URLs the probes actually use: the `-e`
+  # override (listed LAST) is what the app dispatches to, so it must be what we probe.
+  printf 'INNGEST_BASE_URL=http://host.docker.internal:8288\nINNGEST_BASE_URL=http://10.0.1.40:9288\n' > "$d/e2e-dup"
+  assert_e2e "duplicate key: the -e override reaches GQL_URL and HEALTH_URL" "$d/e2e-dup" \
+    "http://10.0.1.40:9288" "http://10.0.1.40:9288/v0/gql" "http://10.0.1.40:9288/health"
+
+  # (5) The documented env seams still win over derivation (tests + ad-hoc probes).
+  local ov_gql
+  ov_gql=$(env -u INNGEST_PROBE_BASE -u INNGEST_HEALTH_URL \
+               PATH="$bindir:$PATH" DOCKER_ENV_FIXTURE="$d/e2e-dedicated" \
+               DOCKER_CALL_LOG="$d/calls.log" INNGEST_GQL_URL="http://override.invalid/gql" \
+             bash -c '
+               # shellcheck disable=SC1090
+               source "$1" >/dev/null 2>&1
+               init_probe_targets
+               printf "%s" "$GQL_URL"
+             ' _ "$TARGET" 2>/dev/null || true)
+  assert_eq "explicit INNGEST_GQL_URL still overrides the derivation" \
+    "http://override.invalid/gql" "$ov_gql"
+
+  # (6) THE THIRD STATE (#7144 finding 6). The loopback fallback produced a value
+  # BYTE-IDENTICAL to a successful co-located derivation, so a green verdict had an
+  # unknown subject — #7144 restated by the code written to prevent it. And it is not
+  # rare: ci-deploy.sh's `docker rm` → `docker run` leaves a window with no container,
+  # and the watchdog runs every 15 minutes.
+  #
+  # The reason must survive too. `2>/dev/null` on the docker call made "no such
+  # container" (the ordinary deploy window) indistinguishable from "permission denied
+  # on docker.sock" (a real, persistent misconfiguration) without SSH — the error path
+  # hr-no-ssh-fallback-in-runbooks exists to forbid.
+  # $1 = fixture, $2.. = extra `env` assignments. TARGET is passed as a positional to the
+  # inner shell — an earlier attempt used `declare -f` + a nested bash -c, and $TARGET was
+  # not exported into it, so every probe silently read UNSET and the assertions "failed"
+  # for a harness reason rather than a SUT one.
+  probe_source() {
+    local fixture="$1"; shift
+    env "$@" PATH="$bindir:$PATH" DOCKER_ENV_FIXTURE="$fixture" \
+        DOCKER_CALL_LOG="$d/calls.log" \
+      bash -c '
+        source "$1" >/dev/null 2>&1
+        init_probe_targets 2>/dev/null
+        printf "%s|%s" "${INNGEST_PROBE_TARGET_SOURCE-UNSET}" "${INNGEST_PROBE_DERIVE_ERR-UNSET}"
+      ' _ "$TARGET" 2>/dev/null || true
+  }
+
+  printf 'INNGEST_BASE_URL=http://host.docker.internal:8288\n' > "$d/src"
+  : > "$d/src-empty"
+  local src
+
+  src=$(probe_source "$d/src" -u INNGEST_PROBE_BASE -u INNGEST_GQL_URL -u INNGEST_HEALTH_URL)
+  assert_eq "derived from the container reports source=derived" "derived" "${src%%|*}"
+
+  src=$(probe_source "$d/src" INNGEST_PROBE_BASE=http://explicit.invalid:8288)
+  assert_eq "an explicit override reports source=env" "env" "${src%%|*}"
+
+  src=$(probe_source "$d/src-empty" -u INNGEST_PROBE_BASE -u INNGEST_GQL_URL -u INNGEST_HEALTH_URL)
+  assert_eq "an underivable target reports source=fallback" "fallback" "${src%%|*}"
+  if [[ -n "${src#*|}" && "${src#*|}" != "UNSET" ]]; then
+    echo "  PASS: the fallback carries a reason (${src#*|})"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: the fallback carries NO reason — docker's stderr was discarded, so"
+    echo "        no-such-container vs docker.sock-permission needs SSH to tell apart"
+    FAIL=$((FAIL + 1))
+  fi
+
+  rm -rf "$d"
+}
+
+test_probe_targets_end_to_end
+
+# The emitted verdict must NAME its subject. A consumer reading functions=N has no way to
+# know WHICH server answered unless the probe target rides the same object.
+test_probe_target_in_emitted_verdict() {
+  echo "Test: the emitted verdict names its probe target (#7144 finding 6)"
+  local d ff combined
+  d=$(mktemp -d) || { echo "  FAIL: mktemp"; FAIL=$((FAIL + 1)); return; }
+  ff=$(mktemp) || { echo "  FAIL: mktemp"; FAIL=$((FAIL + 1)); rm -rf "$d"; return; }
+  make_functions '["cron-daily-triage"]' > "$ff"
+  make_page false "" "[$(make_edge 01A reminder.scheduled rem-fut "$FUTURE_MS" "[]")]" > "$d/page-1.json"
+
+  combined=$(INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" \
+    INVENTORY_NOW_MS="$NOW_MS" INNGEST_PROBE_BASE="http://probe.invalid:8288" \
+    bash "$TARGET" 2>/dev/null)
+
+  if printf '%s' "$combined" | jq -e 'has("probe_base") and has("probe_target_source")' >/dev/null 2>&1; then
+    echo "  PASS: verdict JSON carries probe_base + probe_target_source"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: verdict JSON names no probe target — a green verdict has an unknown subject"
+    FAIL=$((FAIL + 1))
+  fi
+  assert_eq "verdict JSON reports the probe base actually used" \
+    "http://probe.invalid:8288" "$(printf '%s' "$combined" | jq -r '.probe_base // "MISSING"')"
+  assert_eq "verdict JSON reports how that target was chosen" \
+    "env" "$(printf '%s' "$combined" | jq -r '.probe_target_source // "MISSING"')"
+
+  rm -rf "$d" "$ff"
+}
+
+test_probe_target_in_emitted_verdict
+
 echo "=== Results: $PASS passed, $FAIL failed ==="
-[[ "$FAIL" -eq 0 ]]
+
+# --- Assertion-count floor (review P2-b; mutation M7) --------------------------------
+# `$FAIL -eq 0` answers "did everything that RAN pass?" — never "did everything RUN?".
+# Unhooking a test function removes its assertions and its failures together, so the suite
+# reports a smaller, entirely green result and exits 0. There is no failure to notice.
+#
+# Measured, not hypothesised: deleting the bare `test_probe_targets_end_to_end` call left
+# 127 passed / 0 failed / rc=0, silently retiring the only end-to-end coverage of the
+# probe-target wiring — the coverage added specifically because three mutations had already
+# survived this suite. The ways in are all quiet: a dropped call, an early `return`, a
+# rename that orphans a definition, a `git` conflict resolution that eats one line.
+#
+# The count is stable and enumerable, so the floor is cheap. Raise it when you ADD
+# assertions. A DROP is the signal this gate exists to catch: find the unhooked function
+# before editing this number downward.
+if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
+
+readonly EXPECTED_MIN_ASSERTIONS=146
+if [[ "$PASS" -lt "$EXPECTED_MIN_ASSERTIONS" ]]; then
+  echo "FAIL: assertion-count floor — ran $PASS assertions, expected >= $EXPECTED_MIN_ASSERTIONS."
+  echo "      Nothing FAILED, so a test function was unhooked rather than broken."
+  echo "      Locate the missing call or early return before changing this number."
+  exit 1
+fi
