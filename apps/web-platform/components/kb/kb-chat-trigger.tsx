@@ -42,8 +42,11 @@ export function KbChatTrigger({ fallbackHref }: KbChatTriggerProps) {
   // visually identical to the dashboard "New conversation" CTA at
   // dashboard/page.tsx:526 (which currently uses the literal-hex form).
   // Consolidating those literal-hex sites is tracked as a separate cleanup.
+  // #7222 — `min-h-[44px]` below `md`. Once the mobile conversation is a
+  // full-screen takeover this pill is the ONLY way back into it, so a 26px
+  // target is not acceptable; `md:min-h-0` keeps the compact desktop pill.
   const baseClass =
-    "inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-3 py-1.5 text-xs font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90";
+    "inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-3 py-1.5 text-xs font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90 md:min-h-0";
 
   const icon = (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0">
