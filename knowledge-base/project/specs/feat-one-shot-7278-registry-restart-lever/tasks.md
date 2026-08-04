@@ -99,7 +99,13 @@ blocks #7277; surface it to the operator independently of this PR.
 - [ ] 2.3 Guarantee the install is **non-fatal to boot** — it must never `exit 1` in
       `runcmd`. A failed control plane must never be a new reason the data plane stays dark.
 - [ ] 2.4 Add the `SOLEUR_ZOT_CONTROL` activation heartbeat to the existing 5-min cron.
-- [ ] 2.5 Cloud-init render test.
+- [ ] 2.5 **(deepen R18 — P0)** `cloud-init-registry.yml` is a `templatefile()` evaluated at
+      plan time **regardless of `-target=`**. EVERY shell expansion added in Phase 2 must be
+      written `$${…}` (13 existing sites already comply; the file states the rule at its own
+      anchor). One unescaped `${DEV}` / `${HTTP_CODE}` / `${1}` fails `terraform plan` for the
+      WHOLE root and blocks every subsequent infra PR. Add a render test to
+      `infra-validation.yml`'s render-then-validate step — `terraform validate` will NOT catch
+      this (the vars map carries resource-derived unknowns) — and fold the 0.5d size assertion in.
 
 ## Phase 3 — Edge half (Terraform) + the ordering invariant
 
@@ -113,13 +119,37 @@ blocks #7277; surface it to the operator independently of this PR.
 - [ ] 3.4 `zot-registry.tf`: `random_password.registry_ctl_webhook_secret` +
       `doppler_secret`s (HMAC secret into `soleur-registry/prd`; Access token id/secret for
       the workflow). No no-default TF variable.
-- [ ] 3.5 **P0 — extend the `-target=` allowlist** in
-      `.github/workflows/apply-web-platform-infra.yml` with all four new resources, so the
-      Access policy is created in the SAME apply as the ingress rule. Without this the
-      merge publishes an unprotected control hostname.
-- [ ] 3.6 Sweep the sibling allowlist assertions:
-      `tests/scripts/test-destroy-guard-counter-web-platform.sh` and
-      `.github/workflows/infra-validation.yml`.
+- [ ] 3.5 **P0 (deepen R19 — the delta is 6-7, not 4)** extend the merge-apply `-target=` list in
+      `.github/workflows/apply-web-platform-infra.yml` with the four Cloudflare resources **plus**
+      `random_password.registry_ctl_webhook_secret` **plus** every new `doppler_secret`. Omitting
+      the latter ships a workflow holding no token for an Access-protected hostname. (The block
+      is ~120 targets, not ~238 — that figure counted every `-target` in the file.)
+- [ ] 3.5a **P0 (deepen R17 — do NOT brick the activation vehicle)** add the new
+      `random_password` + `doppler_secret` addresses to `def allow:` in **all three**
+      `tests/scripts/lib/registry-{luks-recut,host-replace,region-migrate}-gate.sh` (byte-identical
+      hardcoded 6-member sets today), to the `-target` lists of all three dispatch plan steps, and
+      to the gate test suites. `-target` is transitive over `depends_on`, so these plan as
+      `+ create` → `out_of_scope ≥ 2` → **all three registry dispatches abort**, including the
+      recut this plan needs for activation and #7277 needs for the live incident. Verify by
+      running each gate against a synthetic plan and requiring `out_of_scope=0`.
+      Do NOT add the `random_password` to `hcloud_server.registry`'s `replace_triggered_by`.
+- [ ] 3.6 **(deepen R22 — corrected)** `infra-validation.yml` has NO `-target` list and
+      `test-destroy-guard-counter-web-platform.sh` pins neither size nor membership, so AC5a has
+      **no backstop today**. SHIP the assertion: a test that every
+      `cloudflare_zero_trust_access_*` / `cloudflare_record` declared in `tunnel.tf`/`dns.tf` and
+      referenced by a targeted resource is in the merge-apply `-target` set.
+- [ ] 3.6a **(deepen R21)** Add `origin_request { access { required, team_name, aud_tag =
+      [<app>.aud] } }` to the new ingress rule (supported on pinned provider 4.52.7). The
+      computed `aud` reference forces app-before-tunnel-config AND makes the connector itself
+      reject un-authenticated requests. Add `depends_on` the Access policy on the DNS record —
+      same-plan is NOT same-order, and it is the RECORD (not the ingress rule) that publishes.
+- [ ] 3.6b **(deepen R20 — v1 prescribed the bug)** The HMAC `doppler_secret` gets **NO**
+      `ignore_changes = [value]` (TF owns the value; adding it manufactures the #7071 trap).
+      `ignore_changes` belongs only on the CF Access service-token secrets.
+- [ ] 3.6c **(deepen R23)** Document in §Apply path and the runbook pointer that a standing
+      `-/+ hcloud_server.registry` will appear in the 12h drift detector from merge until
+      activation — expected, do NOT act on it. With #7247 live this is exactly the signal a
+      responder would wrongly act on.
 - [ ] 3.7 **(deepen R5 — corrected target)** `check-cloudflare-token-drift.sh` has NO
       hardcoded token list. Add an `access_hostname_for()` case arm mapping
       `REGISTRY_CTL_ACCESS_TOKEN` → `registry-ctl.<base>`, and pin it with a case in

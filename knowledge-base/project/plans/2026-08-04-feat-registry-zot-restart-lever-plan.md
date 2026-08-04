@@ -148,6 +148,118 @@ the registry is destroyed **by the lever meant to repair it, during an outage**.
 **Response:** `docker image inspect <digest>` as a hard precondition **ahead of** `rm -f`, with
 its own named `reason=image_unavailable` verdict, mirroring the mount gate.
 
+### R17 (BLOCKING, worst finding) — this PR would abort its own activation vehicle *and* #7277's remedy
+
+`tests/scripts/lib/registry-luks-recut-gate.sh` and `registry-host-replace-gate.sh` carry a
+**byte-identical hardcoded 6-member `def allow:`** set and fail closed on `out_of_scope == 0`:
+
+```
+def allow: [
+  "hcloud_server.registry", "hcloud_server_network.registry",
+  "hcloud_volume_attachment.registry", "hcloud_firewall_attachment.registry",
+  "hcloud_volume.registry", "doppler_secret.registry_betterstack_logs_token"
+];
+```
+
+The established boot-ordering pattern in `zot-registry.tf` puts registry `doppler_secret`s in
+`hcloud_server.registry`'s `depends_on` ("make the ordering DETERMINISTIC (not latency-lucky)").
+`-target` is **transitive over dependencies**, so this plan's `random_password.registry_ctl_*`
+and its `doppler_secret`s enter the recut/replace/migrate plan graphs. Unapplied, they plan as
+`+ create` — a positive action, absent from `allow` — so `out_of_scope ≥ 2` and **all three
+registry dispatches fail closed**. That `doppler_secret.registry_betterstack_logs_token` is
+*already* in the set is the precedent proving the class (#6244); v1 re-creates it.
+
+**This is the sharpest possible version of the plan's own thesis:** it would brick the recut —
+the activation vehicle this plan depends on, and the remedy #7277 needs for the live incident.
+
+**Response (all in the same PR):** add the new addresses to the merge-apply `-target` list
+**and** to the `-target` lists of all three registry dispatch plan steps; add them to `def allow:`
+in all three `tests/scripts/lib/registry-*-gate.sh`; update the gate test suites. Do **not** add
+`random_password.registry_ctl_webhook_secret` to `hcloud_server.registry`'s
+`lifecycle.replace_triggered_by` — `zot-registry.tf` already documents why for `registry_luks`.
+
+### R18 (BLOCKING) — `cloud-init-registry.yml` is a `templatefile()`; one unescaped `${…}` blocks the whole root
+
+`user_data = base64gzip(templatefile(…))`, and HCL evaluates `templatefile` at **plan time
+regardless of `-target=` filtering**. The file states the discipline at its own anchor —
+*"(templatefile only expands dollar-brace); shell brace-expansions are written `$${VAR:-}`"* —
+and 13 sites already comply. v1's Phase 2 adds a binary install, a JSON render, three shell
+scripts, a systemd unit and an emitter into that template and **never mentions `$$` once**.
+A single missed `${DEV}` / `${HTTP_CODE}` / `${1}` yields `There is no variable named "…"` at
+plan time and **blocks every subsequent infra PR's apply**, not just this one.
+**Response:** mandate `$${…}` for every shell expansion in the new content; add a render test
+(in `infra-validation.yml`'s render-then-validate step — `terraform validate` will **not** catch
+it, since the vars map carries resource-derived unknowns); and fold the byte-size assertion
+(R1/AC14) into the same step.
+
+### R19 (BLOCKING) — the merge-apply delta is 6-7 addresses, not 4; as written the workflow ships with no credentials
+
+v1's "edge half" table includes the `doppler_secret`s and the `random_password`, but the
+merge-blocking allowlist edit names only **four Cloudflare resources**. Only allowlisted
+addresses apply, so `restart-zot-registry.yml` would merge holding **no token** for an
+Access-protected hostname. Note the trap that makes this easy to get wrong:
+`doppler_secret.registry_push_access_token_{id,secret}` are *deliberately* absent from the
+merge-apply list (operator-applied); copying that shape here produces exactly the
+credential-less workflow.
+
+### R20 (correction) — v1 prescribed the #7071 bug rather than mitigating it
+
+<!-- lint-infra-ignore start -->
+<!-- Quotes an existing in-repo code comment that contains a `terraform apply -replace`
+     example, to explain why a lifecycle setting must NOT be added. Describing an
+     existing comment is not prescribing a human-run step. -->
+
+
+v1 asserted *"Every `doppler_secret` carrying a token in this root declares
+`lifecycle { ignore_changes = [value] }`"*. **False, and deliberately so:** `zot-registry.tf`
+says *"NO ignore_changes anywhere downstream (TF owns the values), so
+`terraform apply -replace=random_password.zot_pull` updates BOTH Doppler copies in one apply."*
+`ignore_changes` exists on exactly two shapes, each for a specific reason (an operator-sourced
+`var`; the write-once CF `client_secret` that reads empty on refresh). A TF-minted
+`random_password` has **neither**. Adding `ignore_changes = [value]` to the HMAC secret would
+**manufacture** the #7071 trap: a `-replace` would rotate state while Doppler kept the dead
+value, and the guest's `hooks.json` HMAC would silently diverge from the workflow's.
+**Response: the HMAC `doppler_secret` carries NO `ignore_changes`.** #7071 applies only to the
+CF Access service-token secrets.
+
+<!-- lint-infra-ignore end -->
+
+### R21 (correction) — the ordering invariant is under-specified, and the structural fix already exists
+
+Two errors in v1's P0 framing: (a) an ingress rule alone does **not** publish a reachable
+hostname — `cloudflare_record.registry_ctl` does, so the exposure needs the *record* without the
+policy, and v1's framing would survive a reviewer who omits only the record (the safer
+omission); (b) **same-plan ≠ ordered** — there is no dependency edge, so the graph may create the
+record first, and AC5a can assert co-presence but not order.
+
+The pinned provider (4.52.7) already carries the structural fix: `ingress_rule.origin_request`
+supports a nested `access { required, team_name, aud_tag }` block. Referencing
+`cloudflare_zero_trust_access_application.registry_ctl.aud` (computed) makes the **connector
+itself** reject any request lacking a valid Access JWT *and* creates the dependency edge forcing
+app-before-tunnel-config. Pair with `depends_on` on the record. This also materially narrows the
+private-net replay exposure — update the Encryption Posture `does_not_defend` if it lands.
+
+### R22 (correction) — AC5a has no automated backstop, and two of its three "sweep" artifacts do nothing
+
+`.github/workflows/infra-validation.yml` carries **no** `-target=` list (its only match is prose
+in a comment), and `tests/scripts/test-destroy-guard-counter-web-platform.sh` does **not** pin
+allowlist size or membership — it exercises the jq filter and greps for a HALT. So v1's
+"the counter test fails last and loudest" is unsupported and AC5a would merge silently if the
+author forgot the allowlist edit. **Response:** ship the assertion — a test that every
+`cloudflare_zero_trust_access_*` / `cloudflare_record` declared in `tunnel.tf`/`dns.tf` and
+referenced by a targeted resource is itself in the merge-apply `-target` set.
+Also: the merge-apply list is **~120** entries, not v1's "~238" (that figure counted every
+`-target` in the file, including all dispatch jobs) — the inflated number sends reviewers to the
+wrong block.
+
+### R23 (operational) — a standing "registry pending replace" drift signal during the activation window
+
+Per R3, editing `cloud-init-registry.yml` parks a standing `-/+ hcloud_server.registry` in
+`scheduled-terraform-drift.yml`'s 12 h `terraform plan -detailed-exitcode`, from merge until
+activation. With #7247 live, "registry pending replacement" is **exactly** the signal a responder
+would act on — and acting on it is fatal. Document it in §Apply path **and** in the Phase 6.1
+runbook pointer as expected-and-do-not-act.
+
 ### Accepted-and-applied (non-blocking)
 
 R6 AC3 must allowlist permitted hook keys — `adnanh/webhook` also honours
@@ -317,7 +429,9 @@ The change splits cleanly into two halves with different apply paths:
 ### ⚠ Ordering invariant: the ingress rule must never be live without its Access policy
 
 The merge-apply job in `.github/workflows/apply-web-platform-infra.yml` runs against a
-**hand-maintained `-target=` allowlist** (~238 entries). Verified:
+**hand-maintained `-target=` allowlist** (**~120** entries in the merge-apply block; v1's
+"~238" counted every `-target` in the file including all dispatch jobs, and would send a
+reviewer to the wrong block). Verified:
 `cloudflare_zero_trust_tunnel_cloudflared_config.web` **is** in that set, alongside
 `cloudflare_zero_trust_access_application.deploy` / `.ssh`, their tokens and policies, and
 `cloudflare_record.deploy` / `.ssh`.
@@ -532,13 +646,21 @@ The ADR describes the target state and ships with status `adopting`, flipping to
   change or first boot fails its own self-check.
 - The CF Access token id/secret published for the workflow to read.
 
-**#7071 trap — mandatory, not optional.** Every `doppler_secret` carrying a token in this
-root declares `lifecycle { ignore_changes = [value] }`. That is precisely what caused
-#7071: Terraform *replaced* the `registry_push` Access token and could never propagate the
-new value, so a stale token was served until CI failed with `websocket: bad handshake`.
-The new token must therefore be **registered in `scripts/check-cloudflare-token-drift.sh`**
-(already wired into `scheduled-terraform-drift.yml` and a release preflight). Omitting this
-reproduces #7071 silently on the new surface.
+**#7071 trap — scoped correctly per deepen R20.** v1 claimed *every* `doppler_secret` carrying
+a token in this root declares `lifecycle { ignore_changes = [value] }`. **That is false, and
+deliberately so** — `zot-registry.tf` states *"NO ignore_changes anywhere downstream (TF owns
+the values), so `terraform apply -replace=random_password.zot_pull` updates BOTH Doppler copies
+in one apply."* `ignore_changes` exists on exactly two shapes: a secret whose value comes from
+an operator-sourced `var`, and the write-once CF `client_secret` that reads empty on refresh.
+
+- **The HMAC `doppler_secret` gets NO `ignore_changes`.** It is a TF-minted `random_password`
+  with neither property; adding `ignore_changes` would **manufacture** the #7071 trap — a
+  `-replace` rotates state while Doppler keeps the dead value, and the guest's `hooks.json`
+  HMAC silently diverges from the workflow's. v1 prescribed the bug.
+- **The CF Access service-token secrets DO get `ignore_changes` plus drift coverage** — that is
+  the genuine #7071 surface (Terraform replaced the `registry_push` token and could never
+  propagate the new value; CI failed `websocket: bad handshake`). The coverage mechanism is
+  **not** an edit to the drift script — see AC5.
 
 `apps/web-platform/infra/cloud-init-registry.yml`
 - Install the `webhook` binary; write `/etc/webhook/registry-hooks.json`; add
@@ -935,14 +1057,24 @@ provisioning-gated — so the probe must exit non-zero-but-not-failing until
       deliberately holds **no** hardcoded token list ("A hardcoded list is exactly how
       CF_API_TOKEN_AUDIT was missed") — it enumerates from Doppler via
       `[A-Z0-9_]*ACCESS_TOKEN_(ID|SECRET)` and maps each to a hostname in the
-      `access_hostname_for()` case arm, keyed on the **uppercase** Doppler key. So the AC is:
-      an `access_hostname_for()` arm exists mapping `REGISTRY_CTL_ACCESS_TOKEN` →
-      `registry-ctl.<base>`, pinned by a case in `scripts/check-cloudflare-token-drift.test.sh`.
-      **This is merge-blocking in the strong sense:** an enumerated token with no mapping is
-      reported UNVERIFIABLE and **fails the run**, so shipping the `doppler_secret` without the
-      mapping turns the fleet-wide scheduled drift detector red. v1's
-      `grep -c registry_ctl` was case-sensitive and could never have matched.
-      Also run `scripts/followthroughs/token-drift-coverage-7159.sh` and require exit 0.
+      `access_hostname_for()` case arm, keyed on the **uppercase** Doppler key.
+      **Further corrected per deepen R5→R22:** the script discovers by *name pattern*
+      (`[A-Z0-9_]*ACCESS_TOKEN_ID`) and its header forbids the v1 remedy verbatim — *"Never a
+      list hardcoded HERE. A hardcoded list is exactly how CF_API_TOKEN_AUDIT was missed."*
+      It is also **project-scoped** (`PROJECT="${DOPPLER_PROJECT:-soleur}"`), so a token
+      published into `soleur-registry/prd` is **outside the scan entirely** — a grep would pass
+      while coverage is zero, which is the #7071 shape wearing the AC's own hat.
+      **So the AC is:** name the secrets `REGISTRY_CTL_ACCESS_TOKEN_ID` / `_SECRET` and publish
+      them into a **`soleur`-project config the scan enumerates**, so auto-discovery covers them
+      with no script edit; add the `access_hostname_for()` arm; and make
+      `scripts/followthroughs/token-drift-coverage-7159.sh` (exit 0) the real assertion. Drop
+      the `grep` half entirely.
+      **Unresolved tension for /work to settle explicitly:** the security review requires the
+      token **not** live in `soleur/prd` root (the release workflow token reads root and could
+      otherwise fire `recreate-zot`), while drift coverage requires a `soleur`-project config the
+      scan enumerates. Resolve to a non-root `soleur` config that the scan covers and the release
+      token cannot read (e.g. `prd_terraform`), and **verify both properties by probe** rather
+      than assuming — do not pick one constraint and silently drop the other.
 - [ ] **AC5a (ordering invariant — P0).** The four new Cloudflare resources are present in
       the `-target=` allowlist in `.github/workflows/apply-web-platform-infra.yml`, and the
       `terraform plan` output for the merge-apply target set shows
@@ -1045,6 +1177,36 @@ provisioning-gated — so the probe must exit non-zero-but-not-failing until
       (only web hosts run cloudflared connectors). `hcloud_firewall.registry` stays at zero
       rules, so AC3's firewall assertion is unaffected. Without this, a compromise of git-data or
       inngest — which today have **no** path to registry control — gains one.
+- [ ] **AC24 (R17 — do not brick the activation vehicle, P0).** The new `random_password` and
+      `doppler_secret` addresses appear in **all three** `tests/scripts/lib/registry-*-gate.sh`
+      `def allow:` sets, in the `-target` lists of all three registry dispatch plan steps, and in
+      the gate test suites. Verify by running each gate against a synthetic plan containing the
+      new addresses and requiring `out_of_scope=0`. **Without this, `registry-luks-recut`,
+      `registry-host-replace` and `registry-region-migrate` all abort — including the recut this
+      plan depends on for activation and that #7277 needs for the live incident.**
+- [ ] **AC25 (R18 — templatefile escaping, P0).** Every shell expansion added to
+      `cloud-init-registry.yml` uses `$${…}` (the file's stated discipline; 13 existing sites
+      comply). A `templatefile` **render test** runs in `infra-validation.yml`'s
+      render-then-validate step and passes. `terraform validate` does **not** catch this — the
+      vars map carries resource-derived unknowns — and one unescaped `${…}` fails
+      `terraform plan` for the **whole root**, blocking every subsequent infra PR.
+- [ ] **AC26 (R19 — the allowlist delta is 6-7, not 4).** `random_password.registry_ctl_webhook_secret`
+      and every new `doppler_secret` are in the merge-apply `-target` list alongside the four
+      Cloudflare resources. Assert the workflow can actually authenticate at merge — otherwise
+      `restart-zot-registry.yml` ships holding no token for an Access-protected hostname.
+- [ ] **AC27 (R21 — enforce ordering structurally, not by co-presence).** The new `ingress_rule`
+      carries `origin_request { access { required = true, team_name = …, aud_tag = [<app>.aud] } }`
+      (supported on the pinned provider 4.52.7). Referencing the computed `aud` both makes the
+      **connector** reject any request lacking a valid Access JWT and creates the dependency edge
+      forcing app-before-tunnel-config. `cloudflare_record.registry_ctl` additionally carries
+      `depends_on` the Access policy. AC5a's co-presence check is retained but is **no longer the
+      only guarantee** — it could not assert ordering.
+- [ ] **AC28 (R22 — AC5a must have an automated backstop).** Ship a test asserting every
+      `cloudflare_zero_trust_access_*` / `cloudflare_record` declared in `tunnel.tf`/`dns.tf` and
+      referenced by a targeted resource is itself in the merge-apply `-target` set. Neither
+      `infra-validation.yml` (no `-target` list at all) nor
+      `test-destroy-guard-counter-web-platform.sh` (pins neither size nor membership) provides
+      this today, so AC5a would otherwise merge unenforced.
 - [ ] **AC23 (hooks file mode + mutual exclusion).** `/etc/webhook/registry-hooks.json` is
       `0640` owned by the control user (it holds HMAC secrets in plaintext; precedent
       `chmod 600 /etc/default/webhook-deploy`). The mutating scripts take a `flock` — workflow
