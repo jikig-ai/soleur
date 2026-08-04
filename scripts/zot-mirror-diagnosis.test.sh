@@ -53,14 +53,35 @@ assert_not_contains() {
 FIXDIR="$(mktemp -d -t zot-diag-fix.XXXXXXXX)"
 trap 'rm -rf "$FIXDIR"; rm -f "$_TXT"' EXIT
 
-mkjson() { # $1 = name, $2 = dead, $3 = unverifiable, [$4 = cause]
-  local cause="${4:-}" keys="[]"
+# $5/$6 default to a HEALTHY measured run so existing cases read unchanged, but they are
+# parameters because holding them constant is exactly what hid the absence-of-bad-news
+# defect: every fixture said `live:1, probes:2`, so the axis "did the detector actually
+# probe this credential?" was never sampled and `probes:0` silently graded `live`.
+mkjson() { # $1 = name, $2 = dead, $3 = unverifiable, [$4 = cause] [$5 = live] [$6 = probes]
+  local cause="${4:-}" alive="${5:-1}" probes="${6:-2}" keys="[]"
   [[ -n "$cause" ]] && keys="[{\"key\":\"REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET\",\"cause\":\"${cause}\",\"reason\":\"synthesized fixture\"}]"
   cat > "$FIXDIR/$1" <<EOF
-{ "live": 1, "dead": $2, "unverifiable": $3, "probes": 2, "configs": 1,
+{ "live": $alive, "dead": $2, "unverifiable": $3, "probes": $probes, "configs": 1,
   "stale": [], "unverifiable_keys": $keys }
 EOF
   printf '%s' "$FIXDIR/$1"
+}
+
+# A multi-row unverifiable_keys fixture. `mkjson` can only build 0 or 1 rows, so the
+# "which row does the cause come from?" axis was unsampled and `rows[0]` -> `rows[-1]`
+# survived every mutation.
+mkjson_multi() { # $1 = name, $2... = cause tokens
+  local name="$1"; shift
+  local rows="" c
+  for c in "$@"; do
+    [[ -n "$rows" ]] && rows="${rows},"
+    rows="${rows}{\"key\":\"KEY_${c}\",\"cause\":\"${c}\",\"reason\":\"synthesized fixture\"}"
+  done
+  cat > "$FIXDIR/$name" <<EOF
+{ "live": 0, "dead": 0, "unverifiable": $#, "probes": 2, "configs": 1,
+  "stale": [], "unverifiable_keys": [${rows}] }
+EOF
+  printf '%s' "$FIXDIR/$name"
 }
 
 echo "=== zot-mirror-diagnosis.sh — verdict derivation ==="
@@ -130,6 +151,61 @@ assert_eq "no unverifiable rows → unknown (never empty, never invented)" "unkn
   "$(zot_mirror_unverifiable_cause "$(mkjson c3.json 0 0)")"
 assert_eq "absent file → unknown" "unknown" \
   "$(zot_mirror_unverifiable_cause "$FIXDIR/does-not-exist.json")"
+
+echo "=== positive evidence, and the cells no fixture sampled ==="
+
+# THE ABSENCE-OF-BAD-NEWS CELL. Every arm above this tests for the absence of a negative,
+# and a detector run that probed NOTHING produces exactly that. Without this case,
+# {"live":0,"dead":0,"unverifiable":0,"probes":0} at rc=0 graded `live` and rendered
+# "Cloudflare Access ADMITTED them" about a measurement that never happened — this
+# library's own thesis violated in its primary function.
+assert_eq "rc=0 but live=0 and probes=0 → unmeasured, NEVER live" "unmeasured" \
+  "$(zot_mirror_verdict 0 "$(mkjson zeroprobe.json 0 0 "" 0 0)")"
+
+# The mirror image of the rc=1/counts-disagree case. A MEASURED dead count is an accusation
+# backed by evidence whatever the exit code says; pinning it stops a future edit from
+# quietly conditioning `stale` on rc and flipping the direction.
+assert_eq "rc=0 but dead>0 → stale (a measured count outranks the exit code)" "stale" \
+  "$(zot_mirror_verdict 0 "$(mkjson rc0dead.json 3 0)")"
+
+# Cardinality. mkjson can only build 0 or 1 rows, so "which row does the cause come from?"
+# was unsampled and rows[0] -> rows[-1] survived every mutation.
+assert_eq "multi-row unverifiable_keys reads the FIRST row" "gate-absent" \
+  "$(zot_mirror_unverifiable_cause "$(mkjson_multi multi.json gate-absent refused-unstamped detector-env)")"
+
+# unverifiable>0 with an EMPTY keys array: the count says several keys were ungradeable and
+# the rows say nothing. Report unknown rather than inventing one.
+printf '{"live":0,"dead":0,"unverifiable":3,"probes":2,"unverifiable_keys":[]}\n' > "$FIXDIR/unver-nokeys.json"
+assert_eq "unverifiable>0 with empty keys → unknown" "unknown" \
+  "$(zot_mirror_unverifiable_cause "$FIXDIR/unver-nokeys.json")"
+
+echo "=== cause vocabulary: SET-EQUALITY against the detector, not a spot-check ==="
+
+# A per-member spot-check ("does it grep <member>?") cannot detect a MISSING member, which
+# is how a four-row table shipped under a claim that it was exhaustive while the detector
+# emits TEN. This derives the producer's set from its source and asserts the consumer
+# renders a specific remedy for every one — so adding a cause to the detector reddens here.
+DETECTOR="$SCRIPT_DIR/check-cloudflare-token-drift.sh"
+mapfile -t DETECTOR_CAUSES < <(
+  { grep -oE 'UNVERIFIABLE:[a-z-]+' "$DETECTOR" | sed 's/UNVERIFIABLE://'
+    grep -oE '\|(gate-absent|host-unreachable|detector-env|control-blocked|probe-failed|no-probe-configured)\|' "$DETECTOR" | tr -d '|'
+  } | sort -u
+)
+assert_eq "the detector's cause vocabulary was extracted (non-vacuity control)" "true" \
+  "$([[ "${#DETECTOR_CAUSES[@]}" -ge 9 ]] && echo true || echo "false (${#DETECTOR_CAUSES[@]} found)")"
+
+_unmapped=""
+for c in "${DETECTOR_CAUSES[@]}"; do
+  h="$(zot_mirror_cause_help "$c")"
+  # The `*)` fallback names the token and says "does not recognise" — so a member that fell
+  # through is detectable, which is the whole point of routing through a keyed helper.
+  case "$h" in *"does not recognise"*) _unmapped="${_unmapped} ${c}" ;; esac
+done
+assert_eq "every cause the detector can emit has its own remedy" "" "$_unmapped"
+
+# ...and the fallback itself must still work, or the check above would be unfalsifiable.
+assert_contains "an unrecognised cause is reported, not silently blank" \
+  "does not recognise" "$(zot_mirror_cause_help "not-a-real-cause")"
 
 echo "=== arm text — Scenario 7: live ==="
 
@@ -204,8 +280,12 @@ echo "=== cross-arm: no arm may name an unmeasured cause ==="
 # The ADR-166 invariant, asserted mechanically across every arm rather than left to review.
 for v in live stale unverifiable unmeasured; do
   t="$(zot_mirror_diagnosis "$v" "20:23:05Z" "series" "gate-indeterminate")"
-  assert_not_contains "$v arm does not use the falsified edge-vs-origin heuristic" \
-    "the EDGE rejected you" "$t"
+  # The needle is the literal that ACTUALLY shipped on this code path and caused the
+  # incident (action.yml on main: "which is the stale-service-token shape"). The previous
+  # needle was "the EDGE rejected you", which has only ever existed in a RUNBOOK and in this
+  # test file — it cannot regress into the library, so all four assertions were vacuous.
+  assert_not_contains "$v arm does not revive the falsified stale-service-token inference" \
+    "stale-service-token" "$t"
   # Every arm must carry the recovery instruction, because a blocked release is a draft.
   assert_contains "$v arm is non-empty" "zot" "$t"
 done
@@ -216,4 +296,16 @@ UNKNOWN_TXT="$(zot_mirror_diagnosis banana "" "" "" 2>&1 || true)"
 assert_contains "an unrecognised verdict is reported, not silently rendered" "unrecognised verdict" "$UNKNOWN_TXT"
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
+
+# ANTI-VACUITY DISPATCH FLOOR. Every assertion above is reached through assert_eq /
+# assert_contains / assert_not_contains, so commenting out the CALLS — an edit that reads
+# like ordinary cleanup — yields "0 passed, 0 failed" and exit 0, and scripts/test-all.sh
+# reads only the exit code. A floor (never equality: equality makes every new assertion a
+# spurious failure) is the only thing that notices.
+MIN_ASSERTIONS=50   # derived from a green run (54 at time of writing), with headroom
+if [[ $((PASS + FAIL)) -lt "$MIN_ASSERTIONS" ]]; then
+  echo "FAIL: only $((PASS + FAIL)) assertions ran, expected >= ${MIN_ASSERTIONS}." >&2
+  echo "      The suite did not execute what it claims to. Fix the dispatch, do not lower the floor." >&2
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]]

@@ -55,21 +55,24 @@ zot_mirror_verdict() {
   # A missing key reads as the -1 sentinel, never as 0 — treating "the file did not report
   # this" as "the count was zero" would manufacture `live` out of a file that measured
   # nothing. `|| true` keeps a python failure from aborting a sourced caller under -e.
-  read -r dead unver < <(python3 -c '
+  read -r dead unver alive < <(python3 -c '
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))
     if not isinstance(d, dict):
         raise ValueError("not an object")
-    print(int(d["dead"]), int(d["unverifiable"]))
+    print(int(d["dead"]), int(d["unverifiable"]), int(d["live"]))
 except Exception:
-    print(-1, -1)
-' "$json_file" 2>/dev/null || printf '%s\n' "-1 -1")
+    print(-1, -1, -1)
+' "$json_file" 2>/dev/null || printf '%s\n' "-1 -1 -1")
 
-  if [[ "$dead" == "-1" || "$unver" == "-1" ]]; then
+  if [[ "$dead" == "-1" || "$unver" == "-1" || "$alive" == "-1" ]]; then
     echo "unmeasured"
   elif [[ "$dead" -gt 0 ]]; then
     # A measured dead count outranks a measured ungradeable one: the accusation has evidence.
+    # Deliberately NOT conditioned on rc: a measured DEAD count is an accusation backed by
+    # evidence whatever the exit code says, and the opposite direction (rc=1 with zero counts)
+    # is handled below.
     echo "stale"
   elif [[ "$unver" -gt 0 ]]; then
     echo "unverifiable"
@@ -78,8 +81,22 @@ except Exception:
     # code and the counts disagree. Resolving that to `live` would certify a credential the
     # detector explicitly refused to certify — the worst available direction. No claim.
     echo "unmeasured"
-  else
+  elif [[ "$alive" -gt 0 ]]; then
     echo "live"
+  else
+    # POSITIVE EVIDENCE IS REQUIRED. Everything above this line tests for the ABSENCE of bad
+    # news, and absence-of-bad-news is exactly what a run that probed NOTHING produces:
+    # {"live":0,"dead":0,"unverifiable":0,"probes":0} at rc=0 would otherwise render
+    # "MEASURED LIVE … Cloudflare Access ADMITTED them" about a measurement that never
+    # happened — this library's own thesis, violated in its primary function.
+    #
+    # It is prevented today one layer away, by the detector's own zero-conclusions floor
+    # (`LIVE_N + DEAD_N + UNVERIFIABLE_N == 0` -> exit 2). That floor has already been
+    # relaxed once, and the `live` arm names `access_hostname_for()` as its load-bearing
+    # external assumption without naming this one. So assert it here too: `live` requires a
+    # positive count, not merely the absence of a negative. The `unverifiable` arm's own
+    # prose already states the principle — "LIVE requires positive evidence of admission".
+    echo "unmeasured"
   fi
   return 0
 }
@@ -102,6 +119,38 @@ except Exception:
     print("unknown")
 ' "$json_file" 2>/dev/null || printf 'unknown\n')
   printf '%s\n' "${cause:-unknown}"
+  return 0
+}
+
+# Per-cause remedy for an `unverifiable` verdict. $1 = the detector's cause token.
+#
+# THE VOCABULARY HAS TEN MEMBERS, NOT FOUR. An earlier version of this library rendered a
+# hardcoded four-row table under the sentence "Every cause in that vocabulary describes the
+# edge or the probe" — so an operator handed `control-blocked` got a cause token followed by
+# a list that did not contain it, beneath a claim that the list was exhaustive. Two of the
+# six missing members got an actively WRONG remedy from the arm's closing line ("investigate
+# the edge"): `detector-env` is a fault on the RUNNER (nothing was sent, nothing to do with
+# the edge), and `no-probe-configured` means `access_hostname_for()` lost its mapping — which
+# is precisely the failure the `live` arm's own caveat warns about, mis-routed by the arm
+# that fires in its place.
+#
+# Keyed by token so `zot-mirror-diagnosis.test.sh` can assert set-equality against the
+# detector's own emissions. A per-member spot-check ("does it grep <member>?") can never
+# detect a MISSING member, which is how four-of-ten survived.
+zot_mirror_cause_help() {
+  case "${1:-unknown}" in
+    gate-indeterminate)  echo "  The host answered an uncredentialed request with no Access stamp, which characterises neither a gate nor its absence (a tunnel outage looks like this). Nothing is known about the credential. Re-run." ;;
+    stamped-non-refusal) echo "  An Access stamp on something that is not a refusal — not evidence the credential was rejected. Investigate the Access application for the host." ;;
+    unexpected-status)   echo "  No stamp and no success. LIVE requires positive evidence of admission, and this is not evidence of staleness either. Re-run and investigate the edge." ;;
+    refused-unstamped)   echo "  Something other than Cloudflare Access is refusing (a WAF rule, an IP access rule, bot-fight mode), so the credential could not be graded. Investigate the rule set for the host." ;;
+    gate-absent)         echo "  No Access gate was detected in front of the host AT ALL. This is a SECURITY signal as well as an ungraded credential: the host may be exposed. Investigate the Access application before anything else." ;;
+    host-unreachable)    echo "  The probe could not reach the host. That is a network/DNS/edge fault, not a credential fault." ;;
+    control-blocked)     echo "  The uncredentialed CONTROL request was blocked, so the probe had no baseline to grade the credentialed request against. Investigate what is blocking unauthenticated requests to the host." ;;
+    detector-env)        echo "  The DETECTOR's own environment failed (unwritable/full temp dir, missing dependency) on the runner. No request was sent. This says nothing about the credential or the edge — fix the runner." ;;
+    probe-failed)        echo "  The probe itself errored before producing a gradeable response. Re-run; if it repeats, the fault is in the detector or its network path." ;;
+    no-probe-configured) echo "  access_hostname_for() has NO hostname mapping for this token, so nothing was probed. The remedy is in the DETECTOR (scripts/check-cloudflare-token-drift.sh), not at the edge and not in the credential — add the mapping. NOTE: this also means any 'live' verdict for this token would be unearned." ;;
+    *)                   echo "  The detector reported a cause this message does not recognise ('${1:-unknown}'). Read scripts/check-cloudflare-token-drift.sh for its meaning; do NOT rotate on an unrecognised cause." ;;
+  esac
   return 0
 }
 
@@ -169,20 +218,9 @@ EOF
 NOT GRADED — the registry-push credential could not be measured either way, so nothing
 here accuses it. The detector reported: ${cause}
 
-Do NOT rotate on this verdict. Every cause in that vocabulary describes the edge or the
-probe, not the credential:
-  gate-indeterminate   the host answered an uncredentialed request with no Access stamp,
-                       which characterises neither a gate nor its absence (a tunnel
-                       outage looks like this). Re-run.
-  stamped-non-refusal  an Access stamp on something that is not a refusal — not evidence
-                       the credential was rejected. Investigate the Access application.
-  unexpected-status    no stamp and no success; LIVE requires positive evidence of
-                       admission, and this is not evidence of staleness either.
-  refused-unstamped    something other than Access is refusing (WAF, IP rule, bot-fight),
-                       so the credential could not be graded.
+$(zot_mirror_cause_help "$cause")
 
-The zot push failed while the credential was ungraded. Re-run to re-probe; if the same
-cause repeats, investigate the edge for registry.soleur.ai before touching any secret.
+Do NOT rotate on this verdict. The zot push failed while the credential was ungraded.
 EOF
       ;;
     unmeasured)

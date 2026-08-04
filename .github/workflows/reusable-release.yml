@@ -1147,21 +1147,59 @@ jobs:
             # FAIL-SOFT, and the direction matters: a query that fails yields an explicit
             # "could not query" sentence, NEVER silence and never a claim about zot. An
             # unavailable instrument must not be able to produce a diagnosis.
+            # EVERY command below carries `|| true`, and that is the load-bearing part, not
+            # defensive noise. This step has NO `shell:` key, so Actions runs it under
+            # `bash --noprofile --norc -eo pipefail {0}` — `set -uo pipefail` at the top of
+            # the block does NOT clear `-e`. `grep` exits 1 when it matches nothing, and
+            # `pipefail` promotes that to the whole pipeline, so an UNGUARDED
+            # `X="$(grep … | …)"` ABORTS this step. The abort lands between "the bridge
+            # failed" and `degraded()`, so the release would fail with NO ::error::, NO
+            # mirror_status and NO mirror_reason — the #6416 silent-mirror defect, re-entered
+            # by the very block whose comment above promises it never goes silent.
+            #
+            # The triggering input is not exotic: a query returning no `zot_restarts=` rows
+            # is exactly the PRODUCER-SILENT state this repo alarms on, and a registry host
+            # sick enough to break the bridge is a plausible producer of a dark stream.
             RESTART_SUMMARY="(not queried)"
             if [[ -n "${BETTERSTACK_QUERY_HOST:-}" ]]; then
-              bs_log="$(mktemp -t zot-restarts.XXXXXXXX)"
-              if bash scripts/betterstack-query.sh --since 3h --grep SOLEUR_ZOT_DISK > "$bs_log" 2>&1; then
-                RESTART_SUMMARY="$(grep -oE 'zot_restarts=[0-9]+' "$bs_log" | sort -t= -k2 -n | sed -n '1p;$p' | paste -sd' -> ' -)"
-                oom="$(grep -oE 'oom_kills=[0-9]+' "$bs_log" | sort -t= -k2 -n | tail -1)"
-                if [[ -n "$RESTART_SUMMARY" ]]; then
-                  RESTART_SUMMARY="${RESTART_SUMMARY} over the last 3h (${oom:-oom_kills=unknown})"
+              bs_log="$(mktemp -t zot-restarts.XXXXXXXX 2>/dev/null || true)"
+              if [[ -n "$bs_log" ]] && bash scripts/betterstack-query.sh --since 3h --grep SOLEUR_ZOT_DISK > "$bs_log" 2>&1; then
+                # BOOT-SCOPED. `zot_restarts` RESETS on host reboot, so a min->max across a
+                # 3h window that spans a reboot reports "0 -> 41" when the truth may be "was
+                # 41, host rebooted, now flat at 0" — a FABRICATED climb, on the one message
+                # whose job is to settle the origin-flap hypothesis. Scope to the newest
+                # boot_id first, the same discipline scripts/zot-restart-loop-alarm.sh
+                # applies to this identical field.
+                newest_boot="$(grep -oE 'boot_id=[A-Za-z0-9-]+' "$bs_log" | tail -1 || true)"
+                scoped_log="$bs_log"
+                if [[ -n "$newest_boot" ]]; then
+                  scoped_log="$(mktemp -t zot-restarts-scoped.XXXXXXXX 2>/dev/null || true)"
+                  [[ -n "$scoped_log" ]] && { grep -F "$newest_boot" "$bs_log" > "$scoped_log" || true; } || scoped_log="$bs_log"
+                fi
+                # `[0-9]+` cannot match the `-1` inspect-miss sentinel (the regex stops at
+                # `=`), which is deliberate: a sentinel is not a measurement.
+                lo="$(grep -oE 'zot_restarts=[0-9]+' "$scoped_log" | cut -d= -f2 | sort -n | head -1 || true)"
+                hi="$(grep -oE 'zot_restarts=[0-9]+' "$scoped_log" | cut -d= -f2 | sort -n | tail -1 || true)"
+                # The emitter publishes `zot_oom_kills` (cumulative) and `oom_kills_5m`
+                # (windowed). There is NO bare `oom_kills` field — an earlier version of this
+                # grep matched `zot_oom_kills` by substring and then RELABELLED it
+                # `oom_kills`, printing a field name that exists nowhere in the telemetry.
+                # Naming a field nobody emits is this PR's own thesis violated in its fix.
+                oom5m="$(grep -oE 'oom_kills_5m=[0-9]+' "$scoped_log" | cut -d= -f2 | sort -n | tail -1 || true)"
+                if [[ -n "$lo" && -n "$hi" ]]; then
+                  if [[ "$lo" == "$hi" ]]; then
+                    RESTART_SUMMARY="zot_restarts=${hi} (flat across the samples in the last 3h on the newest boot; oom_kills_5m peak=${oom5m:-unknown})"
+                  else
+                    RESTART_SUMMARY="zot_restarts ${lo} -> ${hi} over the last 3h on the newest boot (oom_kills_5m peak=${oom5m:-unknown})"
+                  fi
                 else
                   RESTART_SUMMARY="the SOLEUR_ZOT_DISK query returned no zot_restarts samples in the last 3h — no conclusion drawn about the registry host."
                 fi
+                [[ "$scoped_log" != "$bs_log" && -n "$scoped_log" ]] && rm -f "$scoped_log"
               else
                 RESTART_SUMMARY="could not query Better Stack for SOLEUR_ZOT_DISK (the query itself failed) — no conclusion drawn about the registry host."
               fi
-              rm -f "$bs_log"
+              [[ -n "$bs_log" ]] && rm -f "$bs_log"
             else
               RESTART_SUMMARY="BETTERSTACK_QUERY_HOST is not set in this job, so the registry-host restart series was not read — no conclusion drawn about the registry host."
             fi

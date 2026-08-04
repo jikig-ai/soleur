@@ -199,7 +199,7 @@ run_mirror() {
   TOKEN_CHECKED_AT="${6:-}" \
   TOKEN_CAUSE="${7:-unknown}" \
   PATH="$STUB_DIR:$PATH" \
-    bash "$MIRROR_BLOCK" > "$log" 2>&1
+    bash --noprofile --norc -eo pipefail "$MIRROR_BLOCK" > "$log" 2>&1
   rc=$?
   local status warn copies reason
   status=$(grep -E '^mirror_status=' "$out" | tail -1 | cut -d= -f2)
@@ -208,6 +208,18 @@ run_mirror() {
   copies=$(cat "$count" 2>/dev/null || echo 0)
   echo "$rc ${status:-<unset>} $warn ${copies:-0} ${reason:-<unset>}"
 }
+
+# `bash --noprofile --norc -eo pipefail` MATCHES WHAT ACTIONS ACTUALLY RUNS. The harness
+# previously invoked the extracted block with a bare `bash`, so `-e` and `pipefail` were OFF
+# — and this suite claims to execute the real block "verbatim". It did not: every `set -e`
+# abort inside the block was structurally invisible to it.
+#
+# That gap hid a live P0. A `grep` that matches nothing exits 1; under `pipefail` that
+# promotes to the whole pipeline; under `-e` the enclosing assignment ABORTS the step. The
+# Better Stack read added on the bridge-failure path did exactly this, so on a query that
+# returned no `zot_restarts` rows the step died BEFORE `degraded()` — no ::error::, no
+# mirror_status, no mirror_reason. That is the #6416 silent-mirror defect, and the suite
+# was green throughout because its shell flags differed from CI's.
 
 # The log / $GITHUB_OUTPUT of the LAST run_mirror call, for content assertions.
 last_log() { ls -t "$TMP"/log.* 2>/dev/null | head -1; }
@@ -537,6 +549,47 @@ echo "T10: override with a reason -> exit 0 but status/reason still record the f
 assert_eq "override active" "$(run_mirror always_fail success match 'zot host down, shipping the service_role remediation')" "0 degraded loud 3 copy_v"
 
 echo ""
+# T19 (#7242) — the origin-telemetry read must never be able to SILENCE the bridge failure.
+#
+# This is the case that shipped and that nothing could see. `grep` exits 1 when it matches
+# nothing; under `pipefail` that promotes to the pipeline; under `-e` the enclosing
+# assignment aborts the step. So a Better Stack query that SUCCEEDS but returns no
+# `zot_restarts=` rows killed the step between "the bridge failed" and `degraded()` — no
+# ::error::, no mirror_status, no mirror_reason. The ops email then renders "the job failed
+# before or outside the mirror step", which is false.
+#
+# A zero-row response is not exotic: it is exactly the PRODUCER-SILENT state this repo
+# alarms on, and a registry host sick enough to break the bridge is a plausible producer of
+# a dark telemetry stream.
+echo "T19: a zero-row telemetry query cannot silence degraded() on the bridge-failure path"
+cat > "$STUB_DIR/betterstack-query.sh" <<'STUB'
+#!/usr/bin/env bash
+# Succeeds, prints rows that contain NO zot_restarts field. The dangerous shape.
+echo '{"dt":"2026-08-03 20:00:00","raw":"SOLEUR_ZOT_DISK pcent=41 boot_id=abc"}'
+exit 0
+STUB
+chmod +x "$STUB_DIR/betterstack-query.sh"
+_t19_prev_path="$PATH"
+# The block calls `bash scripts/betterstack-query.sh`, a PATH-independent relative path, so
+# shadow it via a scripts/ dir on the block's CWD rather than via PATH.
+_t19_dir="$TMP/t19"; mkdir -p "$_t19_dir/scripts"
+cp "$STUB_DIR/betterstack-query.sh" "$_t19_dir/scripts/betterstack-query.sh"
+_t19_out="$TMP/t19out"; _t19_sum="$TMP/t19sum"; _t19_log="$TMP/t19log"; _t19_cnt="$TMP/t19cnt"
+: > "$_t19_out"; : > "$_t19_sum"; : > "$_t19_cnt"
+( cd "$_t19_dir" &&   MOCK_CRANE_MODE=always_ok MOCK_CRANE_COUNT="$_t19_cnt" MOCK_CRANE_DIGEST_MODE=match   GITHUB_OUTPUT="$_t19_out" GITHUB_STEP_SUMMARY="$_t19_sum"   IMAGE="ghcr.io/jikig-ai/soleur-web-platform" DIGEST="sha256:deadbeef" VERSION="1.2.3"   COMMIT_SHA="abc123def" BRIDGE_OUTCOME="failure" MIRROR_OVERRIDE_REASON=""   GITHUB_WORKSPACE="$REPO_ROOT" TOKEN_VERDICT="live" TOKEN_CHECKED_AT="20:23:05Z"   TOKEN_CAUSE="unknown" BETTERSTACK_QUERY_HOST="stub.example"   PATH="$STUB_DIR:$PATH"     bash --noprofile --norc -eo pipefail "$MIRROR_BLOCK" > "$_t19_log" 2>&1 )
+_t19_ok=1
+grep -qE '^mirror_status=degraded' "$_t19_out" || _t19_ok=0
+grep -qE '^mirror_reason=bridge' "$_t19_out" || _t19_ok=0
+grep -qF '::error::' "$_t19_log" || _t19_ok=0
+# ...and it must say it could not conclude, never invent a restart series.
+grep -qF 'no zot_restarts samples' "$_t19_log" || _t19_ok=0
+if [[ "$_t19_ok" == "1" ]]; then
+  pass "a zero-row telemetry query still reaches degraded() and reports no conclusion about zot"
+else
+  fail "the telemetry read SILENCED the bridge failure (no ::error::/mirror_status) — the #6416 shape; check for an unguarded grep/pipefail abort"
+fi
+PATH="$_t19_prev_path"
+
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Measured: replacing every assert_eq/pass/fail CALL with `:` yields
 # "0/0 passed, 0 failed" and exit 0, and test-all.sh reads only the exit code — so a suite

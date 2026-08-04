@@ -23,7 +23,20 @@ FIX="$(mktemp -d -t lint-diag-fix.XXXXXXXX)"
 trap 'rm -rf "$FIX"' EXIT
 mkdir -p "$FIX/.github/workflows" "$FIX/.github/actions/some-action"
 
-census_of() { LINT_DIAGNOSIS_ROOT="$1" bash "$LINT" --census; }
+# A permanent benign file, so the fixture tree is never EMPTY. Without it the walk finds
+# zero files after the last `rm` and the vacuity floor fires — which would make "clean tree
+# passes" fail, and worse would make the missing-baseline case's exit 2 ambiguous between
+# "no baseline" and "scanned nothing". Two different hard errors must not be indistinguishable.
+cat > "$FIX/.github/workflows/keeper.yml" <<'YAML'
+name: keeper
+jobs:
+  x:
+    steps:
+      - run: |
+          echo "::notice::the mirror completed and the digest matched."
+YAML
+
+census_of() { LINT_DIAGNOSIS_ROOT="$1" LINT_DIAGNOSIS_MIN_FILES=1 bash "$LINT" --census; }
 
 echo "=== lint-diagnosis-claims.sh ==="
 
@@ -121,13 +134,19 @@ HW="$SCRIPT_DIR/lint-diagnosis-claims.highwater"
 saved="$(mktemp)"; cp "$HW" "$saved"
 mv "$HW" "$HW.bak"
 set +e
-LINT_DIAGNOSIS_ROOT="$FIX" bash "$LINT" >/dev/null 2>&1
+LINT_DIAGNOSIS_ROOT="$FIX" LINT_DIAGNOSIS_MIN_FILES=1 bash "$LINT" >/dev/null 2>&1
 rc_missing=$?
 set -e
 mv "$HW.bak" "$HW"
 assert_eq "a missing baseline is a hard error, not a pass" "2" "$rc_missing"
 
 # A regression above the baseline must FAIL.
+#
+# The baseline is PINNED TO 0 for this case rather than inherited from the committed file.
+# An earlier version relied on the live baseline being 0, so the moment the ratchet moved to
+# 1 the single-offender fixture merely EQUALLED it and the case silently inverted — a test
+# for "a regression fails" that passes when nothing regresses is worse than no test. Pinning
+# makes the case independent of wherever the ratchet currently sits.
 cat > "$FIX/.github/workflows/offender2.yml" <<'YAML'
 name: offender2
 jobs:
@@ -136,20 +155,35 @@ jobs:
       - run: |
           echo "::error::it broke. Most likely cause: something nobody checked."
 YAML
+printf '0\n' > "$HW"
 set +e
-LINT_DIAGNOSIS_ROOT="$FIX" bash "$LINT" >/dev/null 2>&1
+LINT_DIAGNOSIS_ROOT="$FIX" LINT_DIAGNOSIS_MIN_FILES=1 bash "$LINT" >/dev/null 2>&1
 rc_regress=$?
 set -e
+cp "$saved" "$HW"
 assert_eq "a count above the baseline fails the build" "1" "$rc_regress"
 rm "$FIX/.github/workflows/offender2.yml"
 
 # ...and a clean tree passes.
 set +e
-LINT_DIAGNOSIS_ROOT="$FIX" bash "$LINT" >/dev/null 2>&1
+LINT_DIAGNOSIS_ROOT="$FIX" LINT_DIAGNOSIS_MIN_FILES=1 bash "$LINT" >/dev/null 2>&1
 rc_clean=$?
 set -e
 assert_eq "a tree at or below the baseline passes" "0" "$rc_clean"
 rm -f "$saved"
+
+# ANTI-VACUITY: a walk that finds nothing must be a hard error, not a clean bill. os.walk
+# on a missing tree yields nothing, so a rename or an extension typo would otherwise
+# certify silence forever — "zero offenders" and "walked zero files" must not be the same
+# answer.
+empty_root="$(mktemp -d -t lint-diag-empty.XXXXXXXX)"
+mkdir -p "$empty_root/.github/workflows"
+set +e
+LINT_DIAGNOSIS_ROOT="$empty_root" bash "$LINT" >/dev/null 2>&1
+rc_vacuous=$?
+set -e
+rm -rf "$empty_root"
+assert_eq "a walk that scans no files is a hard error, not a clean pass" "2" "$rc_vacuous"
 
 # ── The live repo ──────────────────────────────────────────────────────────────────────
 # The gate's own invocation. Kept last so a fixture failure above is not mistaken for a
@@ -161,4 +195,12 @@ set -e
 assert_eq "the live repo is at or below its committed baseline" "0" "$rc_live"
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
+
+# ANTI-VACUITY DISPATCH FLOOR — see zot-mirror-diagnosis.test.sh. Neutering assert_eq
+# yields "0 passed, 0 failed" and exit 0, and test-all.sh reads only the exit code.
+MIN_ASSERTIONS=9   # derived from a green run (11 at time of writing), with headroom
+if [[ $((PASS + FAIL)) -lt "$MIN_ASSERTIONS" ]]; then
+  echo "FAIL: only $((PASS + FAIL)) assertions ran, expected >= ${MIN_ASSERTIONS}." >&2
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]]

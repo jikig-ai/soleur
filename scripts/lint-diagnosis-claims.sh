@@ -15,10 +15,12 @@
 #   - the block references a verdict/outcome variable, or
 #   - the line carries an explicit `# MEASURED-BY: <what measured it>` marker.
 #
-# SCOPE. Both .github/workflows/ AND .github/actions/. The actions directory is the reason
+# SCOPE. .github/workflows/, .github/actions/ AND scripts/. The actions directory is the reason
 # this matters: lint-workflows.sh and lint-workflow-step-env-refs.py both scan
 # `workflows/*.yml` only, which is exactly why the two offending ::error:: lines in
-# cf-tunnel-registry-bridge/action.yml went unexamined through two prior fixes.
+# cf-tunnel-registry-bridge/action.yml went unexamined through two prior fixes. `scripts/`
+# is included because that is where this PR MOVED the canonical message text — a lint that
+# skipped it would have enforced nothing over the very prose it was built for.
 #
 # RATCHET. Ships with a .highwater baseline so it lands green over a pre-existing
 # population and drives that population down. Blocking upward, advisory downward — a
@@ -49,7 +51,15 @@ census() {
 import sys, os, re
 
 root = sys.argv[1]
-DIRS = [".github/workflows", ".github/actions"]
+# `scripts/` is not optional garnish — it is where THIS PR moved every operator-facing
+# causal claim (scripts/zot-mirror-diagnosis.sh). A lint written because "prose is not an
+# enforcement mechanism", that does not read the file the prose now lives in, enforces
+# nothing over its own canonical text: inserting a fresh "Most likely cause: …" into the
+# `live` arm left the census at 0 and the unit suite fully green.
+# `scripts/zot-restart-loop-alarm.sh` likewise emits NIC_CAUSE strings ("serving is fine",
+# "not an outage") that reach ::error:: and issue bodies through the workflow.
+DIRS = [".github/workflows", ".github/actions", "scripts"]
+SCAN_EXTS = (".yml", ".yaml", ".sh")
 
 # Phrases that assert a CAUSE. Deliberately narrow: each one is a claim about why
 # something failed, not a description of what failed. Broadening this to every hedge word
@@ -73,20 +83,59 @@ CLAIM = re.compile(
 # outcome, a measured count, or an explicit marker.
 MEASURED = re.compile(
     r"MEASURED-BY:|TOKEN_VERDICT|token-verdict|steps\.[A-Za-z0-9_-]+\.(outcome|conclusion)|"
+    r"steps\.[A-Za-z0-9_-]+\.outputs\.[A-Za-z0-9_]+|"
     r"outputs\.verdict|\$\{?VERDICT|zot_mirror_diagnosis|verdict=|_VERDICT\b",
     re.IGNORECASE)
 
 # Only lines that actually SPEAK to an operator.
-OPERATOR_LINE = re.compile(r"::error::|::warning::|::notice::|GITHUB_STEP_SUMMARY|body:|echo \"")
+#
+# The last alternative is the one that matters, and its absence made the first version of
+# this lint catch ONE of the two historical offenders. The acute site was an `echo
+# "::error::…"` and was caught; the site the whole #7242 narrative quotes —
+#
+#   degraded bridge "n/a" "… Most likely cause: a Cloudflare Access service token was
+#   rotated and the new value never reached Doppler. …"
+#
+# — is a HELPER CALL whose message rides in an argument, and it matched none of the
+# annotation shapes. A lint built to catch a specific line, that does not catch that line,
+# reports `.highwater = 0` and reads as "the class is enforced" while the next regression
+# ships green in exactly the shape the last one had.
+#
+# `[a-z_][a-z0-9_]*` + a quoted argument is deliberately broad: on this corpus the FALSE
+# positives are cheap (a causal-claim phrase must also be present, and the measured-basis
+# escape hatch is one comment away) and the false NEGATIVE is the entire point of the lint.
+EVIDENCE_LINES_BEFORE = 16
+EVIDENCE_LINES_AFTER = 4
+
+OPERATOR_LINE = re.compile(
+    r"::error::|::warning::|::notice::|GITHUB_STEP_SUMMARY|body:|echo \"|printf |"
+    r"^\s*[a-z_][a-z0-9_]*(\s+\S+)*\s+\"")
 
 hits = []
+scanned_files = 0
 for d in DIRS:
     base = os.path.join(root, d)
     for dirpath, _, files in os.walk(base):
         for fn in files:
-            if not fn.endswith((".yml", ".yaml")):
+            if not fn.endswith(SCAN_EXTS):
                 continue
             path = os.path.join(dirpath, fn)
+            # A test file is not an operator-facing CI message. Excluding them is a SCOPE
+            # decision, not a suppression: this lint's own suite deliberately contains the
+            # verbatim historical offenders as fixtures (that is how it proves it can still
+            # catch them), and sibling suites quote causal prose inside assertion
+            # descriptions. Scanning them would force the ratchet to carry permanent false
+            # positives, so the count could never reach zero and every future reader would
+            # assume real offenders remained.
+            if fn.endswith((".test.sh", ".test.yml")) or "/test/" in path.replace(os.sep, "/"):
+                continue
+            # os.walk does not RECURSE symlinked directories, but it does list symlinked
+            # FILES, and this scanner open()s and echoes up to 120 chars of any line it
+            # flags — so a `.github/workflows/x.yml -> /etc/shadow` symlink is a read
+            # primitive. Nothing legitimate here is a symlink.
+            if os.path.islink(path):
+                continue
+            scanned_files += 1
             rel = os.path.relpath(path, root)
             try:
                 lines = open(path, encoding="utf-8").read().splitlines()
@@ -105,21 +154,46 @@ for d in DIRS:
                     continue
                 # Evidence may sit on the line or in its immediate neighbourhood (an env:
                 # mapping a few lines up, a verdict computed just above).
-                lo, hi = max(0, i - 16), min(len(lines), i + 4)
-                block = "\n".join(lines[lo:hi])
+                # EVIDENCE_LINES_BEFORE is sized to the longest `env:` block in .github/ —
+                # the evidence for a message is usually a mapping a few lines above it.
+                lo, hi = max(0, i - EVIDENCE_LINES_BEFORE), min(len(lines), i + EVIDENCE_LINES_AFTER)
+                # Comments are stripped from the evidence window for the same reason they are
+                # skipped as claims: otherwise a comment explaining a RETRACTED claim
+                # ("the verdict= plumbing used to live here") exonerates the live claim next
+                # to it. `# MEASURED-BY:` is the one deliberate comment-borne exception.
+                block = "\n".join(
+                    ln for ln in lines[lo:hi]
+                    if not ln.strip().startswith("#") or "MEASURED-BY:" in ln
+                )
                 if MEASURED.search(block):
                     continue
                 hits.append((rel, i, stripped[:120]))
 
 for rel, i, text in sorted(hits):
     print(f"{rel}:{i}: {text}")
+print(f"FILES={scanned_files}")
 print(f"COUNT={len(hits)}")
 PY
 }
 
 out="$(census)"
 live="$(printf '%s\n' "$out" | sed -n 's/^COUNT=//p')"
-detail="$(printf '%s\n' "$out" | grep -v '^COUNT=' || true)"
+files="$(printf '%s\n' "$out" | sed -n 's/^FILES=//p')"
+detail="$(printf '%s\n' "$out" | grep -vE '^(COUNT|FILES)=' || true)"
+
+# ANTI-VACUITY. `os.walk` on a missing directory yields nothing, so a renamed tree, a
+# relocated scripts/ or a typo in SCAN_EXTS produces COUNT=0 — byte-identical to a clean
+# repo — and this gate would certify silence forever. "Zero offenders" and "walked zero
+# files" must not be the same answer. A floor, not equality: the corpus only grows.
+# Overridable ONLY so the suite can drive small fixture trees through the same code path —
+# and the suite also asserts the floor itself fires, so making it configurable does not make
+# it bypassable in anger. Default is sized well under the live corpus and only grows.
+MIN_FILES="${LINT_DIAGNOSIS_MIN_FILES:-40}"
+if ! [[ "$files" =~ ^[0-9]+$ ]] || [[ "$files" -lt "$MIN_FILES" ]]; then
+  echo "error: lint-diagnosis-claims walked ${files:-<none>} files, expected >= ${MIN_FILES}." >&2
+  echo "       A clean result from a walk that found nothing is not a clean result." >&2
+  exit 2
+fi
 
 case "$MODE" in
   --census)
