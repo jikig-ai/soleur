@@ -1,0 +1,274 @@
+<!-- iac-routing-ack: plan-phase-2-8-reviewed -->
+<!--
+  Phase 2.8 opt-out rationale. The IaC gate matched `systemctl daemon-reload` in this plan's
+  prose. Every occurrence is a CITATION of the historical defect #7220 was filed for (the
+  ungranted daemon-reload that killed the config handler), never a step this plan prescribes.
+  This plan edits exactly one bash TEST file and introduces no server, service, unit, cron,
+  secret, DNS record, or vendor account — there is nothing to route through Terraform. See
+  "Gates Assessed and Skipped" below.
+-->
+---
+title: "fix(infra): pin the #7220 regression guard to an immutable SHA"
+date: 2026-08-04
+type: fix
+branch: feat-one-shot-7220-pin-regression-guard-ref
+pr: 7271
+refs: [7220]
+lane: procedural
+brand_survival_threshold: none
+---
+
+# fix(infra): pin the #7220 regression guard to an immutable SHA
+
+## Overview
+
+`apps/web-platform/infra/infra-config-apply.test.sh` contains a proof-of-red guard,
+`test_fatal_channel_red_against_main`, whose job is to demonstrate that the fatal-channel
+assertions above it genuinely fail against the handler they were written to catch. It reads that
+"old" handler from the **moving ref `origin/main`**.
+
+The handler fix (PR-A) merged to main as `c2de2581e` on 2026-08-03/04. From that moment
+`origin/main` carries the **fixed** handler, so the guard's two assertions inverted and now fail
+permanently:
+
+```
+=== Results: 144 passed, 2 failed ===
+  FAIL: pre-fix handler carried NO fatal_line (this is #7220)
+  FAIL: pre-fix handler reported the hardcoded files_total=0
+```
+
+The guard did not detect a regression — **it consumed its own fix.** Its own header states the
+intent correctly ("a regression guard that passes against the code it was written to catch is
+decoration"); only the implementation is wrong.
+
+The fix is to pin the old handler to the immutable pre-fix commit
+`701e76e6bfce84ceed91096a58d88df7da5b6932` instead of a branch name. That is what makes the guard
+*mean* something: it asserts a specific historical handler failed these properties, which stays
+true forever, instead of asserting a live branch is still broken, which stops being true the
+instant you fix it.
+
+## Research Reconciliation — Spec vs. Codebase
+
+Every premise inherited from the issue was probed before planning. Two corrections:
+
+| Claim (from #7220) | Reality (measured) | Plan response |
+|---|---|---|
+| Guard reads `origin/main`; two assertions fail | **Holds.** Reproduced locally: `144 passed, 2 failed`, exactly the two named assertions. Confirmed on freshly-fetched `origin/main` @ `9336356` that line 1352 still carries the moving ref. | Proceed as scoped. |
+| `701e76e6b` is the correct pre-fix commit | **Holds, and verified against the assertions rather than assumed.** At that SHA the handler contains `fatal_line` **0 times** (→ `$old_line` is `MISSING`) and hardcodes `"files_total":0` in the EXIT trap at line 222. Both assertions are satisfied by this exact object. | Pin to it. Use the **full 40-char SHA**, not the 9-char abbreviation. |
+| "reds Infra Validation on **every** infra PR" | **Partly overstated.** The job goes red, but `deploy-script-tests` is **ADVISORY** — `.github/workflows/infra-validation.yml:472-475` records it does not block merge today (tracked by #6480). | Keep the fix; state the urgency honestly (below). Do **not** claim the merge queue is blocked. |
+| *(not in the issue — checked because the fix depends on it)* Can CI even see a pinned SHA? | **Yes.** The suite runs at `infra-validation.yml:808`, inside `deploy-script-tests` (job spans 339–1155), whose checkout at 418–421 sets `fetch-depth: 0` + `fetch-tags: true`. A full clone reaches `701e76e6b`. | Pin is safe. Without this, the pin would have converted a failing test into a permanently-skipping one. |
+
+**Why this still matters despite being advisory.** A permanently-red correctness gate is precisely
+how a gate becomes decoration. #7266 already merged with this check red, justified as "proven
+pre-existing" — and that PR's own author flagged the risk that this "does not quietly become the
+norm." That is the cost being paid, and it compounds silently.
+
+## User-Brand Impact
+
+**If this lands broken, the user experiences:** nothing directly — this is a test-only change on
+an advisory CI gate with no runtime surface. The realistic failure is indirect: a wrong pin (or a
+weakened skip) leaves the fatal-channel assertions unproven, so a future regression in
+`infra-config-apply.sh` — the handler that delivers 19 config files to the prod host — could ship
+believing it was guarded when it was not.
+
+**If this leaks, the user's data/workflow/money is exposed via:** no exposure vector. The change
+touches no secrets, no persistent store, no network path, no user data. The pinned SHA is public
+repo history.
+
+**Brand-survival threshold:** `none` — reason: a test-file change to an advisory, offline CI suite
+with no runtime, data, or user-facing surface.
+
+## Files to Edit
+
+- `apps/web-platform/infra/infra-config-apply.test.sh` — the only file. Three regions:
+  - `test_fatal_channel_red_against_main` (~1346–1378): the `git show` ref, the skip/fail
+    predicate, and the pin-rationale comment.
+  - Block header (~1107–1108): "proven RED against **origin/main's** handler" — now false.
+  - Section marker (~1340): "PROVE THE ARMS ABOVE ARE RED AGAINST **origin/main**" — now false.
+
+No other file. Scope is deliberately confined so this merges fast.
+
+## Open Code-Review Overlap
+
+Checked `gh issue list --label code-review --state open` against
+`apps/web-platform/infra/infra-config-apply.test.sh`: **None.**
+
+## Implementation Phases
+
+### Phase 1 — Pin the ref (the fix)
+
+Introduce a named constant near the test so the SHA is stated once, with the rationale attached:
+
+```bash
+# The pre-fix handler, pinned to an IMMUTABLE commit — NOT `origin/main`.
+#
+# `origin/main` is the natural thing to write here and is exactly wrong: the moment the fix
+# merges, main carries the FIXED handler and these two assertions invert and fail forever. A
+# guard pinned to a moving ref consumes its own fix (that is #7220's second defect, filed after
+# PR-A merged as c2de2581e and turned this suite permanently red). A pinned SHA asserts that a
+# specific historical handler failed these properties — true forever. Do not "helpfully" restore
+# the branch name.
+#
+# 701e76e6b = the last commit to touch infra-config-apply.sh BEFORE c2de2581e. Full SHA, not the
+# abbreviation, so no future object can make it ambiguous. Verified: at this commit the handler
+# contains `fatal_line` zero times and hardcodes "files_total":0 in the EXIT trap.
+readonly PRE_FIX_HANDLER_SHA="701e76e6bfce84ceed91096a58d88df7da5b6932"
+```
+
+Then swap the read and the predicate. **The two-arm structure is preserved exactly** — only the
+thing being tested changes, from "does the branch resolve" to "is the commit present":
+
+```bash
+  if ! git -C "$SCRIPT_DIR" show "${PRE_FIX_HANDLER_SHA}:apps/web-platform/infra/infra-config-apply.sh" > "$old" 2>/dev/null; then
+    # FAIL, not SKIP, when the commit IS present but the show fails — that is a real breakage,
+    # not an unavailable environment. A silent skip here makes the PR's only proof-of-red one
+    # `fetch-depth: 1` away from not existing, and nothing downstream consumes a skip.
+    if git -C "$SCRIPT_DIR" cat-file -e "${PRE_FIX_HANDLER_SHA}^{commit}" 2>/dev/null; then
+      echo "  FAIL: pinned pre-fix commit resolves but the handler could not be read — mutation proof is broken, not skipped"
+      FAIL=$((FAIL + 1))
+    else
+      echo "  SKIP (loud): pinned pre-fix commit ${PRE_FIX_HANDLER_SHA:0:9} unavailable (shallow clone) — mutation proof NOT run"
+    fi
+    teardown
+    return 0
+  fi
+```
+
+`git cat-file -e <sha>^{commit}` is the correct presence predicate — `rev-parse --verify` on a raw
+SHA succeeds on syntax alone in some git versions and would collapse the skip arm.
+
+### Phase 2 — Sweep the stale prose
+
+A stale prose claim must not outlive the assertion it describes.
+
+- ~1107: `# Every arm below is proven RED against origin/main's handler by` → name the pinned
+  pre-fix handler instead.
+- ~1340: `# --- #7220: PROVE THE ARMS ABOVE ARE RED AGAINST origin/main ---` → `... AGAINST THE
+  PINNED PRE-FIX HANDLER ---`.
+- ~1342–1344: the body prose says "runs the pre-#7220 handler from git" (still true) and
+  "shallow clone / detached worktree" (still true) — re-read and adjust only what the pin
+  falsifies.
+
+Then `grep -n 'origin/main'` the whole file and confirm every survivor is either gone or is
+deliberate rationale prose explaining why the branch name is *not* used.
+
+### Phase 3 — Verify
+
+Run the suite and show real output. Expected: the two named assertions flip to PASS, giving
+**146 passed, 0 failed** (146 = the current 144 + 2).
+
+```bash
+bash apps/web-platform/infra/infra-config-apply.test.sh 2>&1 | tail -5
+```
+
+## Acceptance Criteria
+
+Note on AC design: a naive `grep -c 'origin/main' == 0` would **false-fail**, because Phase 1's
+rationale comment legitimately names `origin/main` to warn against it. The ACs below therefore
+assert the *guardrail's presence* and scope the absence check to **non-comment lines**.
+
+### Pre-merge (PR)
+
+1. **The pin exists and is the full SHA.**
+   `grep -c '^readonly PRE_FIX_HANDLER_SHA="701e76e6bfce84ceed91096a58d88df7da5b6932"$' apps/web-platform/infra/infra-config-apply.test.sh` → `1`
+
+2. **No executable line reads the moving ref.** Strip comment lines first:
+   `grep -vE '^\s*#' apps/web-platform/infra/infra-config-apply.test.sh | grep -c 'origin/main'` → `0`
+
+3. **The pin is CORRECT, not merely present** — the pinned object actually carries both pre-fix
+   properties (this is the AC that catches a wrong SHA):
+   - `git show 701e76e6bfce84ceed91096a58d88df7da5b6932:apps/web-platform/infra/infra-config-apply.sh | grep -c fatal_line` → `0`
+   - `git show 701e76e6bfce84ceed91096a58d88df7da5b6932:apps/web-platform/infra/infra-config-apply.sh | grep -c '"files_total\\":0'` → `≥ 1`
+
+4. **The guardrail comment is present** (asserted by presence, per the note above):
+   `grep -c 'Do not "helpfully" restore the branch name' apps/web-platform/infra/infra-config-apply.test.sh` → `1`
+
+5. **Loud-skip semantics preserved — both arms still exist:**
+   - `grep -c 'cat-file -e "${PRE_FIX_HANDLER_SHA}^{commit}"' …` → `1`
+   - `grep -c 'FAIL: pinned pre-fix commit resolves but the handler could not be read' …` → `1`
+   - `grep -c 'SKIP (loud): pinned pre-fix commit' …` → `1`
+
+6. **Stale prose swept:** neither of the two stale claims survives.
+   `grep -c "proven RED against origin/main's handler" …` → `0`
+   `grep -c 'RED AGAINST origin/main ---' …` → `0`
+
+7. **Suite green, with the run output pasted into the PR body — not asserted without it:**
+   `bash apps/web-platform/infra/infra-config-apply.test.sh` → `=== Results: 146 passed, 0 failed ===`
+
+8. **Scope held:** `git diff origin/main...HEAD --name-only` lists only
+   `apps/web-platform/infra/infra-config-apply.test.sh` plus this plan and its spec artifacts.
+
+### Post-merge (operator)
+
+None. Nothing to apply, provision, or verify by hand — this is a test-file change on an offline
+CI suite. `#7220` **stays OPEN**: this lands the CI repair only; the ungranted privileged
+unit-reload the issue was filed for is still ungranted (PR-B).
+
+## Test Scenarios
+
+The suite is its own test. Three states worth confirming during Phase 3:
+
+1. **Happy path (full clone, this worktree):** the guard runs, both assertions PASS, 146/0.
+2. **The guard can still fail** — sanity-check the proof is not vacuous by temporarily pointing
+   `PRE_FIX_HANDLER_SHA` at `c2de2581e` (the *fixed* handler); the two assertions must FAIL.
+   Revert immediately. This is the control that proves the pin still discriminates.
+3. **Shallow-clone arm:** not reproducible in this worktree; covered by inspection of the two-arm
+   structure (AC5). CI runs `fetch-depth: 0`, so the skip arm is not expected to fire in practice.
+
+## Observability
+
+This plan edits a file under `apps/web-platform/infra/`, so the gate is named rather than skipped
+silently — but the change introduces **no runtime surface**: no new error path, no log call, no
+failure mode reachable from production. The edited file is a test harness that runs only in CI and
+locally.
+
+- `liveness_signal`: the suite's own `=== Results: N passed, M failed ===` line, emitted per run of
+  `deploy-script-tests` (`infra-validation.yml:808`) on every infra-path PR.
+- `error_reporting`: assertion failures print `FAIL: <name>` to the job log and increment the
+  suite's exit-code accounting. Fail-loud by construction — and this PR's whole purpose is
+  restoring that property.
+- `failure_modes`: (a) *pin unreachable* → detection: the loud `SKIP` line in the job log;
+  (b) *pin present but unreadable* → detection: the `FAIL` arm, which reds the suite;
+  (c) *pin points at the wrong object* → detection: AC3, which asserts the pinned object's
+  properties directly rather than trusting the SHA.
+- `logs`: GitHub Actions job logs for `Infra Validation / deploy-script-tests`; retention per repo
+  default.
+- `discoverability_test`: `bash apps/web-platform/infra/infra-config-apply.test.sh` (no SSH).
+
+## Gates Assessed and Skipped
+
+- **GDPR / compliance (2.7):** no regulated-data surface — no schema, migration, auth flow, API
+  route, or `.sql`. None of the (a)–(d) expansion triggers fire. Skipped.
+- **Infrastructure-as-Code (2.8):** introduces no server, service, cron, secret, DNS record, or
+  vendor account — one bash test file. The gate's keyword match is on citations of the historical
+  defect, not on prescribed steps; ack comment at the top of this file. Skipped.
+- **Architecture Decision ADR/C4 (2.10):** no architectural decision. This is a bug fix on an
+  existing test surface; no actor, external system, container, or access relationship changes.
+  A competent engineer reading the current ADRs + C4 would not be misled after this ships.
+  Skipped.
+- **Encryption Posture (2.11):** no persistent store, no new cross-component connection. Skipped.
+- **Soak follow-through (2.9.1):** no time-gated close criterion. Skipped.
+
+## Domain Review
+
+**Domains relevant:** none
+
+No cross-domain implications — an internal CI-tooling correctness fix with no user-facing,
+product, legal, or financial surface. No file matches the UI-surface term list, so the mechanical
+Product override does not fire.
+
+## Risks & Mitigations
+
+| Risk | Mitigation |
+|---|---|
+| The pin is unreachable on a shallow clone, silently converting the guard into a permanent skip | Verified CI uses `fetch-depth: 0` (`infra-validation.yml:418-421`). The skip is loud, not silent, and AC5 asserts both arms survive. |
+| A future reader "helpfully" restores `origin/main` | The rationale comment names the failure mode explicitly and says not to; AC2 + AC4 encode it mechanically. |
+| The chosen SHA is wrong | AC3 asserts the pinned object's *properties* (`fatal_line` absent, `files_total:0` hardcoded), not just that the SHA resolves — a wrong pin fails the AC. |
+| Scope creep into PR-B's grant work | Explicit non-goal; AC8 pins the diff to one source file. |
+
+## Non-Goals
+
+- The privileged unit-reload sudoers grant (PR-B, worktree
+  `feat-7220-pr-b-daemon-reload-grant` — commits present, unpushed, no PR open). Untouched.
+- Making `deploy-script-tests` a required check — that is #6480's scope, and folding it in would
+  turn a 1-file test repair into a merge-queue policy change.
