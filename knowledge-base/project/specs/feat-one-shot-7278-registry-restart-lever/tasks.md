@@ -46,19 +46,28 @@ blocks #7277; surface it to the operator independently of this PR.
 ## Phase 1 — Hook contract + scripts (RED first)
 
 - [ ] 1.1 Write failing tests before implementation (`cq-write-failing-tests-before`):
-  - [ ] 1.1.1 `tests/scripts/test-registry-control-hooks-shape.sh` — exactly 3 hooks;
-        **zero** `pass-environment-to-command` entries across all three (the AC3 structural
-        guarantee); every hook has an HMAC `trigger-rule` +
-        `trigger-rule-mismatch-http-response-code: 403`; the 2 mutating hooks are async
-        (`include-command-output-in-response: false`, `success-http-response-code: 202`).
+  - [ ] 1.1.1 **(deepen R13/R14 — HARDENED)** `tests/scripts/test-registry-control-hooks-shape.sh`:
+        exactly 3 hooks; every hook object's key set is a **subset of a permitted-key allowlist**
+        excluding **all three** forwarding keys (`pass-environment-to-command`,
+        `pass-arguments-to-command`, `pass-file-to-command` — v1 pinned only the first, and the
+        precedent `infra-config` hook uses `pass-file-to-command` 20×); `trigger-rule`
+        **PRESENT** on every hook (a hook without one fires unconditionally, and the 403
+        mismatch code is inert without it); the 3 hooks reference **3 DISTINCT secrets**;
+        `http-methods` pinned (mutating hooks POST-only); the 2 mutating hooks are async
+        (`include-command-output-in-response: false`, `success-http-response-code: 202`) and set
+        `include-command-output-in-response-on-error: false`.
   - [ ] 1.1.2 `recreate-zot.sh` refuses when `/var/lib/zot` is not backed by
         `/dev/mapper/registry` (feed it a non-mapper mount source).
   - [ ] 1.1.3 `hcloud_firewall.registry` still declares zero inbound rules.
 - [ ] 1.2 Implement `restart-zot.sh` (`docker restart zot`).
 - [ ] 1.3 Implement `recreate-zot.sh`: re-assert the `findmnt` gate → pull pinned digest →
-      `docker rm -f zot` → re-run the **exact** baked run-line (memory cap, journald log
-      driver, volume mounts, `-p 0.0.0.0:5000:5000`). Never a retyped variant.
-      `docker restart` does NOT apply a new image — that is why this action exists.
+      **(deepen R16) `docker image inspect <digest>` as a HARD precondition** with a named
+      `reason=image_unavailable` verdict → **only then** `docker rm -f zot` → re-run the
+      **exact** baked run-line (memory cap, journald log driver, volume mounts,
+      `-p 0.0.0.0:5000:5000`). Never a retyped variant. Without the image gate, a failed pull
+      (GHCR is dead as a fallback) followed by `rm -f` destroys the registry with its own
+      repair lever, mid-outage. Take a `flock` (workflow `concurrency` does not bind a direct
+      hook caller). `docker restart` does NOT apply a new image — that is why this action exists.
 - [ ] 1.4 Implement `zot-status.sh` — read-only; returns `container_id`, `started_at`,
       `restart_count`, `image_digest`, `mount_source`.
 - [ ] 1.5 Implement the `SOLEUR_ZOT_RESTART` emitter (same `doppler run` + `curl` idiom as
@@ -71,6 +80,21 @@ blocks #7277; surface it to the operator independently of this PR.
 - [ ] 2.1 Add `webhook` install + `/etc/webhook/registry-hooks.json` render +
       `zot-control.service` (hardened: `ProtectSystem=strict`, minimal `ReadWritePaths`,
       `Restart=on-failure`) to `cloud-init-registry.yml`.
+- [ ] 2.1a **(deepen R15 — the service must not run as root)** systemd defaults to root and v1
+      never named a `User=`. `cloud-init-registry.yml` has **no `users:` block at all**, so the
+      user must be CREATED. Add a `zotctl` user **not** in the `docker` group (web-1's `deploy`
+      IS in `docker`, which is itself root-equivalent — "mirror web-1" buys nothing), plus
+      `User=`/`Group=` on the unit and a wildcard-free `/etc/sudoers.d/zotctl` pinning the fixed
+      helper-script paths, following the `Cmnd_Alias INFRA_CONFIG_INSTALL` precedent. A
+      `docker run *` wildcard would equal full docker access — pin scripts, not docker commands.
+- [ ] 2.1b **(deepen R13)** Render THREE distinct HMAC secrets into the hooks file, one per hook.
+- [ ] 2.1c **(deepen)** `/etc/webhook/registry-hooks.json` mode `0640`, owned by the control user
+      (it holds HMAC secrets in plaintext; precedent `chmod 600 /etc/default/webhook-deploy`).
+- [ ] 2.1d **(deepen)** Bind the listener to the registry's **private IP**, not `0.0.0.0`, and
+      add a host-local nftables rule restricting `tcp/9000` to the web-host private IPs — only
+      web hosts run cloudflared connectors, and git-data/inngest have no reason to reach it.
+      Confirm `-verbose` does not log the `X-Signature-256` header before keeping it (this host
+      has no journald reader).
 - [ ] 2.2 Update the admitted-secret cardinality self-check (from 0.3).
 - [ ] 2.3 Guarantee the install is **non-fatal to boot** — it must never `exit 1` in
       `runcmd`. A failed control plane must never be a new reason the data plane stays dark.

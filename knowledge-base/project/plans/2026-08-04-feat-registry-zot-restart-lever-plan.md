@@ -86,6 +86,68 @@ and maps via an `access_hostname_for()` case arm keyed on the **uppercase** Dopp
 Worse: an enumerated token with no mapping is reported **UNVERIFIABLE and fails the run**, so
 v1 would have turned the fleet-wide scheduled drift detector red.
 
+### R13 (BLOCKING, security) — one signature authorizes all three hooks
+
+`adnanh/webhook` v2.8.2 `CheckPayloadSignature` HMACs **`req.Body` and nothing else** — not
+the method, not the URL, not the hook id — and the package has no nonce, timestamp or dedup
+for `payload-hmac-sha256`. The plan's own design point is that "the action is the **hook id in
+the URL**, never a parameter", so **all three hooks see the same (empty) body and therefore
+accept the same signature string**.
+
+That the string is a fixed constant is already proven by the precedent this plan mirrors —
+`.github/workflows/restart-inngest-server.yml` signs an empty body twice:
+
+```bash
+SIGNATURE=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+```
+
+and replays it up to `MAX_POLLS=120` times per run across the **plaintext** private-net leg.
+
+**Consequence: the three-hook allow-list collapses to a single capability, and read escalates
+to destructive write.** A status-poll signature lifted off `10.0.1.0/24` is a valid signature
+for `POST /hooks/recreate-zot`. This defeats AC3 — the exact property AC3 exists to guarantee
+— and it makes this sentence in v1's §Encryption Posture **false**:
+
+> "a replay can only re-fire an already-authorised restart"
+
+**Response (applied):** **three distinct `random_password` secrets, one per hook.** A status
+signature is then worthless against the mutating hooks. No body, no parameters, no AC3 impact.
+Also record honestly that a true nonce/timestamp is **not expressible** in webhook v2.8.2
+without forwarding a parameter to a script — which would break AC3 — so the achievable posture
+is *per-verb capability separation plus accepted same-verb replay inside the private net*.
+
+### R14 (BLOCKING, security) — `trigger-rule-mismatch-http-response-code` is inert on its own
+
+A hook with **no** `trigger-rule` fires unconditionally; the 403 code only applies when a rule
+exists. v1's AC3 asserted the 403 as though it were the control. The shape test must assert
+`trigger-rule` **presence** per hook, plus `http-methods` pinned (mutating hooks POST-only)
+and `include-command-output-in-response-on-error: false` (several precedent hooks set it
+`true`, which returns stderr to the caller).
+
+### R15 (BLOCKING, security) — the service runs as **root** and the host has no user to run it as
+
+Phase 2.1 listed hardening but **never named a `User=`**; systemd defaults to **root**. And
+there is nothing to inherit: `cloud-init-registry.yml` has **no `users:` block at all** (only a
+top-level `groups:` with `docker`), unlike `cloud-init.yml` which creates `deploy`.
+
+"Mirror web-1" also buys nothing as literally stated — web-1's `deploy` user **is in the
+`docker` group**, which is itself root-equivalent (`docker run --privileged -v /:/host`).
+The narrowing that actually reduces privilege: a **`zotctl` user NOT in the `docker` group**
+plus a **wildcard-free** `/etc/sudoers.d/zotctl` pinning the **fixed helper script paths**
+(not the docker commands — the run-line's argv is template-derived, and a `docker run *`
+wildcard equals full docker access). The precedent to copy already exists in `cloud-init.yml`:
+`Cmnd_Alias INFRA_CONFIG_INSTALL = /usr/local/bin/infra-config-install`.
+
+### R16 (BLOCKING) — `recreate-zot` can destroy the registry with its own repair lever
+
+AC8 gates `docker run` on `findmnt`, but **nothing gates `docker rm -f` on the image being
+obtainable**. `zot_image` is a **ghcr.io digest**, and this plan's own §Overview records that
+GHCR is dead as a fallback. So "pull → `rm -f` → run" has a destruction-ordering hazard: if the
+pull fails and the failure is tolerated, `rm -f` still runs, and if the local image was pruned
+the registry is destroyed **by the lever meant to repair it, during an outage**.
+**Response:** `docker image inspect <digest>` as a hard precondition **ahead of** `rm -f`, with
+its own named `reason=image_unavailable` verdict, mirroring the mount gate.
+
 ### Accepted-and-applied (non-blocking)
 
 R6 AC3 must allowlist permitted hook keys — `adnanh/webhook` also honours
@@ -211,7 +273,7 @@ because a hypothesis table must not read CONFIRMED while its discriminator is in
 | H1 | Host/container OOM (the #6288 class) | **REFUTED** by measurement | `zot_oom_kills=0`, `oom_killed=false`, `zot_anon_mb` 36-47 MB vs `zot_memory_cap_mb=3072`, over 12 h |
 | H2 | Store exhaustion causes the loop | **UNKNOWN — direction unresolved** | `pcent` 30→82 while looping. Cause vs. effect is not decidable from this data; a GC that restarts mid-pass could leak orphans, or a full-ish store could crash zot. Needs zot's own stderr. |
 | H3 | Corrupt blob/index crashes zot on a specific GC pass | **UNKNOWN** | `zot_last_err` is a truncated tail of the *info*-level HTTP/gc log — the fatal line is not in it. Deciding datum is zot's stderr on exit, which is not currently shipped. |
-| H4 | Bad/incompatible zot image | **UNKNOWN** | Would be discriminated by `recreate-zot` pulling a fresh digest. |
+| H4 | Bad/incompatible zot image | **UNKNOWN, and this lever does NOT discriminate it** | v1 claimed `recreate-zot` discriminates H4 "by pulling a fresh digest". **Retracted (security review):** Phase 1 pulls the *pinned* digest, and re-pulling a pinned digest is by construction the same bytes — it cannot discriminate a bad image. Keep the pin (cosign-verified integrity on the fleet's sole pull path) and drop the claim. Do **not** let this become a rationale for pulling a mutable tag: that would trade integrity for a supply-chain hole. |
 
 **No verdict above may be upgraded without its discriminator.** H2/H3/H4 are precisely
 why the lever needs a *recreate* and a *status* hook: `restart-zot-status` returning the
@@ -655,7 +717,7 @@ in_transit:
   - connection: "connector (web-1) → registry host 10.0.1.30:9000"
     tls: "none — plain HTTP over the Hetzner private network"
     cert_verification: "n/a"
-    does_not_defend: "an attacker with a foothold on 10.0.1.0/24 can observe the request and replay it. The HMAC secret is never transmitted (the signature is over the body), so replay — not disclosure — is the exposure, and a replay can only re-fire an already-authorised restart."
+    does_not_defend: "an attacker with a foothold on 10.0.1.0/24 can observe the request and replay it. The HMAC secret is never transmitted (the signature is over the body), so replay — not disclosure — is the exposure. CORRECTED per deepen R13: with ONE secret this replay would NOT be bounded to 're-firing an already-authorised restart' — adnanh/webhook HMACs the body only, the hooks are parameterless, so the empty-body status signature is ALSO a valid signature for POST /hooks/recreate-zot, escalating a read capability into a destructive write. That is why this design uses THREE per-hook secrets: replay is then bounded to the same verb whose signature was captured. Same-verb replay inside the private net remains accepted and is NOT defended against — a nonce/timestamp is not expressible in webhook v2.8.2 without forwarding a parameter to a script, which would break the AC3 zero-forwarding guarantee."
     disclosed_as: "private-net internal call"
 
 exception:
@@ -852,7 +914,14 @@ provisioning-gated — so the probe must exit non-zero-but-not-failing until
       `pass-environment-to-command`" was itself a reject-list of one, the exact failure mode
       the design claims to escape. The test asserts: exactly three hooks; every hook object's
       key set is a **subset of an explicit permitted-key allowlist** that contains **none** of
-      the three forwarding keys; all three carry an HMAC `trigger-rule` with mismatch code 403.
+      the three forwarding keys. **Per deepen R14, assert `trigger-rule` PRESENCE on every
+      hook** — a hook with no `trigger-rule` fires unconditionally, and
+      `trigger-rule-mismatch-http-response-code: 403` is *inert* without one, so v1 asserted the
+      403 as though it were the control when it is not. Also pin `http-methods` per hook
+      (mutating hooks POST-only) and `include-command-output-in-response-on-error: false` on the
+      mutating hooks (several precedent hooks set it `true`, returning stderr to the caller).
+      **Per deepen R13, assert the three hooks reference three DISTINCT secrets** — a shared
+      secret makes the hook set one capability, not three.
       Separately, pin **both** that `hcloud_firewall.registry` declares zero inbound rules
       **and** that `hcloud_firewall_attachment.registry` still binds it to the host — a
       detached firewall is zero-rules *and* wide open, which the zero-rule assertion alone
@@ -920,14 +989,21 @@ provisioning-gated — so the probe must exit non-zero-but-not-failing until
       *behaviour* to the unstripped one and `base64gzip` length must be `< 32768`. Record the
       before/after numbers in the PR body (baseline measured 2026-08-04: **34,320**).
       **This AC gates every other host-half AC** — without it nothing can be provisioned.
-- [ ] **AC15 (R4 — boot self-check is order-independent).** The admitted-secret self-check
-      accepts **both** cardinalities during the transition (`n_total ∈ {4,5}` with the 5th
-      admitted **by name**), so the `doppler_secret` and the cloud-init edit may land in either
-      order without a boot-fatal window. Asserted by a unit test feeding the self-check both a
-      4-secret and a 5-secret config. If the reviewer-preferred simplification is taken instead
-      (drop the HMAC secret; rely on the CF Access service token alone), record that decision
-      in the ADR with its defense-in-depth trade-off — do **not** leave a single-cardinality
-      assertion that only one apply order can satisfy.
+- [ ] **AC15 (R4 — boot self-check is order-independent) — SUPERSEDED by the security review's
+      stronger form.** Do **not** bump the assertion from `4` to `5`: that reproduces the same
+      trap next time, and it leaves a **version-skew window**. The `doppler_secret` is created by
+      the **edge half on merge**, while the cardinality fix only takes effect at the **next
+      provisioning** — which §Activation Sequencing gates on #7277 and may be far off. In that
+      window, any provisioning from an *older* cloud-init (rollback, an earlier
+      `registry-host-replace`, a `-replace` from prior state) reads `n_total=5` and **FATALs
+      zot's launch**, bringing the registry back dark on the very path meant to restore it.
+      **Correct fix:** relax the check to `n_admitted -eq n_total` with the admitted-name regex
+      extended. Identity — the actual #6122 property — stays asserted; cardinality stops being
+      independently fatal in either direction. Asserted by a unit test covering a 4-secret and a
+      5-secret config, and an old-cloud-init-with-5-secrets case.
+      Do **not** "fix" this by templating the secret into `user_data`: `cloud-init-registry.yml`
+      states the ADR-096 invariant that secrets are injected via the scoped Doppler token and
+      **never** baked into `user_data` (which is retrievable from the hcloud metadata API).
 - [ ] **AC16 (R10 — the dead end has an exit).** The `lever_not_activated` message names the
       escalation path in its text: the recut dispatch as the activation vehicle, #7277 as its
       blocker, and #7247 for the live crash-loop/disk-exhaustion. Asserted by a test on the
@@ -940,7 +1016,41 @@ provisioning-gated — so the probe must exit non-zero-but-not-failing until
       that a container restart cannot fix — re-pointing it would be actively harmful).
 - [ ] **AC18 (R8 — credential co-residence).** The registry-ctl Access token is **not** written
       to the `soleur/prd` root config (which the release workflow token reads); assert its
-      Doppler `config` is the scoped one, so a release run cannot fire `recreate-zot`.
+      Doppler `config` is the scoped one, so a release run cannot fire `recreate-zot`. Name the
+      config explicitly in the Terraform — an unnamed config reproduces the #6122 cutover bug in
+      reverse (a Doppler service token reads exactly one config; branch values do not propagate
+      to root).
+- [ ] **AC19 (R13 — per-hook secrets, P0).** Three distinct `random_password` resources, one per
+      hook, and the shape test asserts the three hooks reference three **different** secrets.
+      Rationale to record in the ADR: `adnanh/webhook` v2.8.2 HMACs the request **body only**,
+      and this design's hooks are parameterless, so a single shared secret would make the
+      empty-body status signature a valid signature for `recreate-zot` — collapsing the
+      allow-list to one capability and escalating read to destructive write.
+- [ ] **AC20 (R15 — the service must not run as root).** `zot-control.service` declares an
+      explicit `User=`/`Group=`; `cloud-init-registry.yml` **creates** that user (it currently
+      has no `users:` block at all); the user is **not** in the `docker` group; and
+      `/etc/sudoers.d/` grants it exactly the fixed helper-script paths with **no argument
+      wildcards** — following the `Cmnd_Alias INFRA_CONFIG_INSTALL = /usr/local/bin/infra-config-install`
+      precedent. Asserted by a cloud-init render test. Note explicitly why "mirror web-1's
+      `deploy` user" is **not** sufficient: that user is in the `docker` group, which is itself
+      root-equivalent (`docker run --privileged -v /:/host`).
+- [ ] **AC21 (R16 — the lever must not destroy the registry).** `recreate-zot.sh` runs
+      `docker image inspect <digest>` as a **hard precondition ahead of `docker rm -f`**, with a
+      named `reason=image_unavailable` verdict. Asserted by a unit test that makes the image
+      lookup fail and requires the container to survive. Without this, a failed pull (GHCR is
+      dead as a fallback) followed by `rm -f` destroys the registry with its own repair lever,
+      mid-outage.
+- [ ] **AC22 (listener reach).** The listener binds the registry's **private IP**, not
+      `0.0.0.0`, and a host-local nftables rule restricts `tcp/9000` to the web-host private IPs
+      (only web hosts run cloudflared connectors). `hcloud_firewall.registry` stays at zero
+      rules, so AC3's firewall assertion is unaffected. Without this, a compromise of git-data or
+      inngest — which today have **no** path to registry control — gains one.
+- [ ] **AC23 (hooks file mode + mutual exclusion).** `/etc/webhook/registry-hooks.json` is
+      `0640` owned by the control user (it holds HMAC secrets in plaintext; precedent
+      `chmod 600 /etc/default/webhook-deploy`). The mutating scripts take a `flock` — workflow
+      `concurrency` does not bind a direct hook caller, and two overlapping fires would race
+      `docker rm -f` against `docker run`. The precedent already reserves
+      `"command-working-directory": "/var/lock"` for this.
 
 ### Post-activation (fires at the next registry-host provisioning event — tracked by the Phase 7 follow-through, not a merge blocker)
 
