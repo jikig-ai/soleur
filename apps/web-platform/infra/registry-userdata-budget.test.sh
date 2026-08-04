@@ -2,7 +2,7 @@
 # (#7144 task 5b) Tests registry-userdata-budget.sh — the terraform-byte-exact user_data gate for
 # the zot registry host.
 #
-# WHAT THIS SUITE IS FOR. The registry host has ~616 B of real headroom under Hetzner's 32,768 B
+# WHAT THIS SUITE IS FOR. The registry host has 612 B of real headroom under Hetzner's 32,768 B
 # user_data cap, and `hcloud_server.registry` carries no `lifecycle.ignore_changes = [user_data]`,
 # so user_data is ForceNew. It is also the SOLE pull path for both platform images since the GHCR
 # read PAT was revoked 2026-07-30. Blowing the budget is therefore learned from a failed apply on
@@ -40,6 +40,28 @@ NODE_TEST="$REPO_ROOT/plugins/soleur/test/cloud-init-user-data-size.test.ts"
 
 PASS=0
 FAIL=0
+
+# ANTI-VACUITY FLOOR, ON AN EXIT TRAP. Review proved the previous placement — a count check at the
+# END of the file — is bypassable by any `exit` above it, and the suite SHIPPED such an exit (the
+# terraform-absent SKIP). Measured: 5 of 45 assertions ran, rc=0, floor never evaluated, against a
+# SUT with subcap mutated above the vendor cap. On a trap it is evaluated on EVERY termination
+# path. A FLOOR, not equality: adding assertions must not spuriously red.
+#
+# It still does not catch a NEUTERED verdict (`if true` in place of `eval "$cond"`), which review
+# also demonstrated. That gap is closed by the mutation arms below driving the SUT behaviorally —
+# a count cannot distinguish "45 assertions ran" from "45 assertions ran and all lied".
+EXPECTED=50
+finish() {
+  local rc=$?
+  local ran=$((PASS + FAIL))
+  if [ "$ran" -lt "$EXPECTED" ]; then
+    echo "FATAL: only ${ran} assertions ran, expected >= ${EXPECTED} — suite truncated." >&2
+    exit 1
+  fi
+  exit "$rc"
+}
+trap finish EXIT
+
 assert() {
   local desc="$1" cond="$2"
   if eval "$cond"; then PASS=$((PASS + 1)); echo "  PASS: $desc"
@@ -55,10 +77,20 @@ assert "zot-registry.tf exists" "[ -f '$REGISTRY_TF' ]"
 assert "the node-side budget test exists" "[ -f '$NODE_TEST' ]"
 
 if ! command -v terraform >/dev/null 2>&1; then
+  if [ -n "${REQUIRE_TERRAFORM:-}" ]; then
+    echo "FATAL: REQUIRE_TERRAFORM is set but terraform is not on PATH — refusing to SKIP." >&2
+    exit 1
+  fi
   echo "  SKIP: terraform not on PATH — the behavioral half of this suite cannot run." >&2
   echo ""
   echo "=== registry-userdata-budget.test.sh: ${PASS} passed, ${FAIL} failed (terraform absent) ==="
-  [ "$FAIL" -eq 0 ] || exit 1
+  # EXPECTED is lowered so the EXIT-trap floor still applies on this path rather than being
+  # skipped past. Review measured the alternative: with the floor on the fall-through path only,
+  # a coreutils-only PATH ran 5 of 45 assertions and exited 0 against a SUT whose sub-cap had been
+  # mutated ABOVE Hetzner's cap — a defect assertion :150 would have caught. CI is protected by
+  # job placement (deploy-script-tests installs terraform), but that was a workflow COMMENT rather
+  # than a property of this suite. REQUIRE_TERRAFORM=1 makes it a property.
+  EXPECTED=5
   exit 0
 fi
 
@@ -99,7 +131,12 @@ assert "hb_base reconstructed from the join() parts" "[ -n '$hb_base' ]"
 assert "reconstructed hb_base is the 48-char Better Stack heartbeat prefix" "[ ${#hb_base} -eq 48 ]"
 HB_NEEDLE='${local.hb_base}'
 hb_expand() { # <raw-rhs> -> the value terraform renders
-  printf '%s' "${1//"$HB_NEEDLE"/$hb_base}"
+  # BOTH sides quoted. The pattern is quoted so `${local.hb_base}` is not read as a glob; the
+  # REPLACEMENT is quoted because bash >= 5.2 expands `&` in a replacement to the match, exactly
+  # as sed does — the same defect this session shipped into the SUT's path splice and corrected
+  # there. A Better Stack URL that ever gained a query string would otherwise splice the needle
+  # back in, and only the 72-length assertion below would notice, by accident rather than design.
+  printf '%s' "${1//"$HB_NEEDLE"/"$hb_base"}"
 }
 disk_hb="$(hb_expand "$(grep -oE '^[[:space:]]*disk_hb[[:space:]]*=[[:space:]]*"[^"]*"' "$BUDGET" | sed 's/.*"\(.*\)"/\1/')")"
 liveness_hb="$(hb_expand "$(grep -oE '^[[:space:]]*liveness_hb[[:space:]]*=[[:space:]]*"[^"]*"' "$BUDGET" | sed 's/.*"\(.*\)"/\1/')")"
@@ -112,6 +149,24 @@ assert "the two heartbeat stubs are DISTINCT (identical ones compress away)" \
 # sub-1 KB margin both are defects.
 assert "disk heartbeat stub is the measured live length (72)" "[ ${#disk_hb} -eq 72 ]"
 assert "liveness heartbeat stub is the measured live length (72)" "[ ${#liveness_hb} -eq 72 ]"
+
+# --- ENTROPY. The property this whole file exists for, and it had ZERO assertions ---------------
+# Review measured the gap: replacing the credential stubs with all-`a`/all-`b` runs of the SAME
+# length, still DISTINCT, satisfied every assertion above and took `stored` from 32,156 to 32,004
+# — a 152 B under-report, 25% of the entire 612 B margin, at 45/0 green. Length and distinctness
+# were being asserted; incompressibility, which is the reason the stubs are synthesized from
+# high-entropy material at all, was not.
+#
+# A BOUND, deliberately, not a pin: gzip output for a ~24 B input varies with dictionary state and
+# gzip version, so an exact byte count would be flaky. A real credential segment is incompressible
+# and clears 0.75; an all-`a` run of the same length does not come close.
+tok_gz() { printf '%s' "$1" | gzip -9 -c | wc -c; }
+doppler_body="$(grep -oE '^[[:space:]]*doppler_token[[:space:]]*=.*' "$BUDGET" | grep -oE '"[A-Za-z0-9]{40,}"' | tr -d '"')"
+assert "doppler token body extracted" "[[ '$doppler_body' =~ ^[A-Za-z0-9]{43}$ ]]"
+for _stub in "${disk_hb: -24}" "${liveness_hb: -24}" "$doppler_body"; do
+  assert "credential stub '${_stub:0:8}…' is incompressible (gzip >= 0.75 of raw)" \
+    "[ \$(tok_gz '$_stub') -ge \$(( ${#_stub} * 3 / 4 )) ]"
+done
 
 # --- Drift guard: committed-value stubs must equal zot-registry.tf's locals --------------------
 # A zot version bump moves local.zot_image_amd64; if this model keeps the old digest it keeps
@@ -198,9 +253,14 @@ cp "$TEMPLATE" "$SANDBOX/cloud-init-registry.yml" || { echo "FATAL: sandbox setu
 bash "$SANDBOX/budget.sh" >/dev/null 2>&1; rc_ctl=$?
 assert "control: the unmutated copy passes in the sandbox" "[ $rc_ctl -eq 0 ]"
 
-mutate() { # <name> <sed-expr>  -> writes $SANDBOX/<name>.sh
-  cp "$SANDBOX/budget.sh" "$SANDBOX/$1.sh" || { echo "FATAL: sandbox setup failed (cp $1)" >&2; exit 2; }
-  sed -i "$2" "$SANDBOX/$1.sh" || { echo "FATAL: sandbox setup failed (mutate $1)" >&2; exit 2; }
+mutate() { # <name> <sed-expr>... -> writes $SANDBOX/<name>.sh
+  # Variadic so a mutant can perturb more than one line. That is not a convenience: the (b) arm
+  # NEEDS two edits to make both branches live, and with a single-expression helper the fixture
+  # silently tested one arm while its label claimed to test the ordering of two.
+  local name="$1"; shift
+  cp "$SANDBOX/budget.sh" "$SANDBOX/$name.sh" || { echo "FATAL: sandbox setup failed (cp $name)" >&2; exit 2; }
+  sed -i "$@" "$SANDBOX/$name.sh" || { echo "FATAL: sandbox setup failed (mutate $name)" >&2; exit 2; }
+  set -- "$name"
   # Prove the mutation LANDED — a sed that silently matched nothing yields a mutant identical to
   # the control, which then "passes" and reads as a guard that cannot fire.
   if cmp -s "$SANDBOX/budget.sh" "$SANDBOX/$1.sh"; then
@@ -209,18 +269,34 @@ mutate() { # <name> <sed-expr>  -> writes $SANDBOX/<name>.sh
 }
 
 # (a) OVER SUB-CAP — drop the sub-cap below the measured size; cap untouched.
-mutate m_subcap 's/^subcap=[0-9]*$/subcap=100/'
+mutate m_subcap -e 's/^subcap=[0-9]*$/subcap=100/'
 out_a="$(bash "$SANDBOX/m_subcap.sh" 2>&1)"; rc_a=$?
 assert "(a) an over-sub-cap render exits non-zero" "[ $rc_a -ne 0 ]"
 assert "(a) and says OVER SUB-CAP, not OVER CAP" "grep -q 'OVER SUB-CAP' <<<\"\$out_a\""
 
-# (b) OVER CAP — drop the cap below the measured size. Cap is checked first, so this must report
-# the fatal arm even though the sub-cap is also exceeded.
-mutate m_cap 's/^cap=[0-9]*$/cap=100/'
+# (b) OVER CAP — BOTH bounds dropped below the measured size, so both arms are live and the
+# ORDER is actually under test. Review proved the previous fixture (cap only) could not test what
+# its own label claimed: it left subcap=32450 above stored=32156, so only the cap arm was
+# reachable in EITHER order, and physically swapping the two blocks in the SUT left the suite
+# 45/0 green. Asserting the absence of OVER SUB-CAP is what discriminates; note `OVER SUB-CAP`
+# does not contain the substring `OVER CAP`, so the two needles are genuinely distinguishing.
+mutate m_cap -e 's/^cap=[0-9]*$/cap=100/' -e 's/^subcap=[0-9]*$/subcap=50/'
 out_b="$(bash "$SANDBOX/m_cap.sh" 2>&1)"; rc_b=$?
-assert "(b) an over-cap render exits non-zero" "[ $rc_b -ne 0 ]"
+assert "(b) an over-cap render exits 1 (the documented fatal code, not merely non-zero)" "[ $rc_b -eq 1 ]"
 assert "(b) and reports OVER CAP (the fatal arm outranks the sub-cap arm)" \
   "grep -q 'OVER CAP' <<<\"\$out_b\""
+assert "(b) and does NOT report OVER SUB-CAP (this is what pins the ORDER)" \
+  "! grep -q 'OVER SUB-CAP' <<<\"\$out_b\""
+
+# (b2) PROVENANCE — the reported number must have transited terraform's base64gzip, not merely
+# resemble it. Review's sharpest mutant: swapping the `console 'local.stored'` read for
+# `gzip -c "$rendered" | base64 -w0` under-reported by 256 B at 45/0 green, because every honesty
+# assertion above pins that a correct-looking expression EXISTS in the heredoc, never that the
+# emitted value FLOWS through it. Renaming the local breaks the read; the SUT must fail closed.
+mutate m_measure -e 's/^  stored   = base64gzip/  stored_x = base64gzip/'
+out_b2="$(bash "$SANDBOX/m_measure.sh" 2>&1)"; rc_b2=$?
+assert "(b2) a renamed local.stored fails closed (exit 2), proving the number transits terraform" \
+  "[ $rc_b2 -eq 2 ]"
 
 # (c) FAIL-CLOSED on an unrenderable template. An unmeasurable template must never read as one
 # that fits — the arm git-data's script documents and this one inherits.

@@ -165,17 +165,38 @@ const GIT_DATA_FLOOR = 10_000;
 //   * modeledValue() substitutes `"x".repeat(n)` for every non-file arg, and x-runs compress
 //     ~1000:1 (this file says so at the webhook_doppler_token_env branch). EVERY registry arg is
 //     a non-file value and five carry real entropy — the zot image digest, the Doppler CLI
-//     sha256, the Doppler service token, and two heartbeat path tokens. Worth 340 B.
-//   * Go's and node's zlib make different match choices at the same level: 228 B on this render.
+//     sha256, the Doppler service token, and two heartbeat path tokens. Worth 336 B.
+//   * Go's and node's zlib make different match choices at the same level: 220 B on this render.
+//   * terraform's Base64Gzip calls gz.Flush() before gz.Close(), emitting an empty stored block:
+//     a further 8 B that is not a compression difference at all.
 //   * Go's `gzip.NewWriter` is DefaultCompression (level 6), not the level 9 used below. The
 //     "level 9 (matching terraform's base64gzip)" note on renderedGzipB64Len was wrong about the
-//     level, though only 16 B rides on it.
+//     level, though only 20 B rides on it. (An earlier revision published 340/228/16, which
+//     folded the flush marker into the zlib term and measured two components against the dumped
+//     render rather than terraform's true bytes. The 584 total was and is correct.)
 //
-// So the AUTHORITATIVE gate is `apps/web-platform/infra/registry-userdata-budget.sh`, which
-// renders through terraform and measures with terraform's own `base64gzip`. This constant is the
-// cheap fast-suite proxy for it: REGISTRY_BUDGET + REGISTRY_NODE_OFFSET is that script's sub-cap,
-// so the two trip at the same REAL size. registry-userdata-budget.test.sh pins the relation, and
-// pins the offset as an under-statement guard — move one number and that suite reds.
+// WHICH GATE ACTUALLY BLOCKS A MERGE — corrected at review, because an earlier revision of this
+// comment had it exactly backwards. It called `registry-userdata-budget.sh` "the AUTHORITATIVE
+// gate" and this constant its "proxy". In fact `deploy-script-tests`, the job that runs the
+// terraform-exact script, is NOT in `infra/github/ruleset-ci-required.tf` — its own header says so
+// ("an advisory job … a visible-red signal, not a merge-blocking gate"), and the live ruleset API
+// confirms it. The required contexts include `test`, which runs THIS file.
+//
+// So the merge-blocking gate is the node model, and the node model is the optimistic one. That
+// inversion is why REGISTRY_BUDGET is set to 31,866 rather than to the modelled 31,572 plus
+// comfort: 31,866 + 584 lands exactly on the terraform script's 32,450 sub-cap, so a render that
+// passes here is — at the offset measured on 2026-08-04 — still under the real sub-cap.
+//
+// READ THE NEXT SENTENCE BEFORE TRUSTING THAT. The 584 is a margin measured ONCE, not an interlock
+// that is re-checked. Nothing computes the current node-vs-terraform gap, so the offset can drift
+// silently: strip 400 B of compressible prose and add 300 B of high-entropy material and both
+// gates stay green while the true gap grows to ~884. Review demonstrated this, and demonstrated
+// that the assertions which claimed to guard it were algebraically implied by their neighbours.
+// They have been deleted rather than left reading as coverage.
+//
+// Treat this budget as a re-inlining TRIPWIRE with a safety margin, never as a cap proof. The cap
+// is proven only by `registry-userdata-budget.sh`, whose red does not block a merge — so on any
+// change that moves the render, read that gate's output rather than relying on this one.
 //
 // IMPORTANT for whoever trips this: the three prior re-baselines above (#6425, #6594, #6604) are
 // NOT the precedent to follow here. Those raised a self-imposed sub-cap that still sat ~10 KB below
@@ -361,8 +382,8 @@ function modeledValue(name: string, expr: string): string {
 // DefaultCompression (level 6). This comment used to claim level 9 "matches" base64gzip — it does
 // not, and level 9 emits FEWER bytes, so the mismatch runs OPTIMISTIC. It is left at 9 rather than
 // changed to 6 because every caller's budget was baselined against these numbers and the level is
-// the SMALLEST of the three model-vs-terraform gaps (16 B on the registry render, against 340 B
-// from x-run stand-ins and 228 B from Go-vs-node match choices). Re-levelling would move every
+// the SMALLEST of the four model-vs-terraform gaps (20 B on the registry render, against 336 B
+// from x-run stand-ins, 220 B from Go-vs-node match choices and 8 B from terraform's flush). Re-levelling would move every
 // baseline while closing ~3% of the error. Where the gap actually matters — the registry host,
 // with 612 B of headroom — the fix is a terraform-native gate, not a better model: see
 // apps/web-platform/infra/registry-userdata-budget.sh.
@@ -419,11 +440,12 @@ describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
     expect(size).toBeLessThan(REGISTRY_BUDGET);
     expect(size).toBeGreaterThan(REGISTRY_FLOOR); // non-vacuity
 
-    // The property that makes a NODE-space budget safe on a host with 616 B of real headroom:
-    // passing here must imply the terraform-measured render is still under Hetzner's cap. Any
-    // budget raise that spends the offset lands here rather than at a failed apply. This is the
-    // one half of the coupling expressible without terraform; registry-userdata-budget.test.sh
-    // holds the other half (that the offset is not an under-statement).
+    // Sanity bound on the margin, stated for what it is. This is arithmetic over two constants,
+    // so it is true at authoring time and stays true regardless of what the template does — it is
+    // NOT a measurement, and an earlier revision that labelled it "a node-passing render is
+    // provably under the vendor cap" was overclaiming. Review proved the label false: with the
+    // offset drifted, a render this budget admits can exceed the cap. It is kept only to stop a
+    // future re-baseline from setting a budget whose margin would not fit under the cap at all.
     expect(REGISTRY_BUDGET + REGISTRY_NODE_OFFSET).toBeLessThan(HETZNER_CAP);
   });
 

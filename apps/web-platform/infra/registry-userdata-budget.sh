@@ -12,19 +12,30 @@
 #     non-file value, and five of them are HIGH-ENTROPY — the zot image digest, the Doppler CLI
 #     sha256, the Doppler service token, and two heartbeat path tokens. Real high-entropy bytes
 #     gzip at ~1:1; their x-run stand-ins gzip to nothing. The model does not under-measure a
-#     little, it under-measures exactly the incompressible part. Worth 340 B here.
-#   * Go's and node's zlib make different match choices at the same level: 228 B on this render.
+#     little, it under-measures exactly the incompressible part. Worth 336 B here.
+#   * Go's and node's zlib make different match choices at the same level: 220 B on this render.
 #   * node's `gzipSync(level: 9)` is not terraform's `base64gzip`. Terraform calls
 #     `gzip.NewWriter`, i.e. Go's DefaultCompression (level 6). Level 9 emits FEWER bytes, so
-#     the model reads smaller than the thing Hetzner stores — though only 16 B of it.
+#     the model reads smaller than the thing Hetzner stores — though only 20 B of it.
+#   * terraform's `Base64Gzip` calls `gz.Flush()` before `gz.Close()`, emitting an empty stored
+#     block: a further 8 B that is not a compression difference at all.
 #
-# Measured total: 32,156 B here against 31,572 B modelled, a 584 B under-report. On the web
-# (~8.3 KB headroom) and git-data (~6 KB) hosts that slack is irrelevant. The registry host has
-# 612 B, so it is the one host where an optimistic model can report PASS on a render that would
-# fail the apply — and the node budget it was reporting PASS against (32,000) was already BELOW
-# the true size. `git-data-userdata-budget.sh` states the general rule in its own header — "on a
-# hard gate an optimistic measurement is worse than none" — and this script is that rule applied
-# to the tightest of the three hosts.
+# Measured total: 32,156 B here against 31,572 B modelled, a 584 B under-report (336+220+20+8).
+# The per-component figures were re-derived against terraform's true `local.rendered` bytes at
+# review; an earlier revision published 340/228/16, which folded the flush marker into the zlib
+# term and measured the other two against the dumped file rather than the render.
+#
+# HOW THE THREE HOSTS COMPARE — terraform-exact where a terraform-exact gate exists, and labelled
+# where one does not, because mixing the two spaces is the error this file exists to correct:
+#   * registry  32,156 B stored -> 612 B headroom   (terraform-exact, this script)
+#   * git-data  22,772 B stored -> 9,996 B headroom (terraform-exact, git-data-userdata-budget.sh)
+#   * web       ~24,320 B render -> ~8.4 KB         (NODE-MODELLED; no terraform-exact gate exists)
+# The registry is the tightest of the three by an order of magnitude, which is the whole argument
+# for a second, terraform-space gate here and not there. `git-data-userdata-budget.sh` states the
+# general rule in its own header — "on a hard gate an optimistic measurement is worse than none" —
+# and this script is that rule applied to the tightest host. Note git-data is NOT unguarded in
+# sub-cap terms: it has one in NODE space (GIT_DATA_BUDGET = 28,000, ~4.7 KB under the cap), which
+# its ~10 KB of slack absorbs. Do not "fix" git-data by bolting a redundant shell sub-cap onto it.
 #
 # `hcloud_server.registry` has no `lifecycle.ignore_changes = [user_data]`, so user_data is
 # ForceNew: blowing the budget is learned from a failing apply on the host that is the SOLE
@@ -46,8 +57,15 @@ command -v terraform >/dev/null 2>&1 || {
   exit 0
 }
 
-TFDIR=$(mktemp -d -t regbudget.XXXXXXXX)
-trap 'rm -rf "$TFDIR"' EXIT
+# Fail CLOSED on a scratch-dir failure. Without the `||` an mktemp failure leaves TFDIR empty, and
+# the render-failure detector below then goes silently inert — `[ -s "/err" ]` is false and `$raw`
+# is empty, so the run limps to the later `[ -n "$stored" ]` check instead of reporting the real
+# cause. INT/TERM as well as EXIT: a cancelled CI job kills bash by signal, and an EXIT-only trap
+# does not run, leaking a regbudget.* dir into the shared tmpfs.
+TFDIR=$(mktemp -d -t regbudget.XXXXXXXX) || {
+  echo "registry-userdata-budget: could not create scratch dir" >&2; exit 2
+}
+trap 'rm -rf "$TFDIR"' EXIT INT TERM
 
 # templatefile()/base64gzip() are builtins, so an EMPTY scratch dir needs no providers, no
 # backend and no credentials — this never touches state.
@@ -121,12 +139,25 @@ locals {
 }
 EOF
 )
-# The heredoc is QUOTED so terraform's own `${local.hb_base}` interpolation survives verbatim — an
-# unquoted one would let the shell eat it. The path is therefore spliced afterwards, and with bash
-# parameter substitution rather than `sed`: in a sed replacement `&` expands to the whole match, so
-# a repo checked out under a path containing `&` would silently produce a wrong path (and `|`
-# would break the delimiter). Bash substitution treats the replacement literally.
-printf '%s\n' "${tf_body//__DIR__/$DIR}" > "$TFDIR/main.tf"
+# The heredoc is QUOTED for a bigger reason than the interpolation. `${local.hb_base}` would be
+# eaten by an unquoted heredoc, yes — but so would EIGHT backticked spans in the body, which the
+# shell would run as command substitutions. One of them is `doppler secrets get --plain | wc -c`,
+# and `dp.st.prd.<43>` additionally dies on `<43>` as a redirect. The sibling
+# git-data-userdata-budget.sh gets away with an unquoted heredoc only because its body contains
+# neither; do not "simplify" this one to match it.
+#
+# CORRECTION (review, 2026-08-04). An earlier revision of this comment — and the commit message
+# that shipped it — claimed the splice used bash parameter substitution "rather than sed" because
+# "bash substitution treats the replacement literally". THAT IS FALSE on bash >= 5.2 (this fleet
+# runs 5.3): `&` in the replacement of `${var//pat/repl}` expands to the MATCH, exactly as it does
+# in a sed replacement. Both forms had the identical defect; the swap fixed nothing and the
+# rationale inverted the comparison. Measured on 5.3.9 with DIR=/x&y/z:
+#     ${v//__DIR__/$DIR}    -> A/x__DIR__y/zB     (broken)
+#     ${v//__DIR__/"$DIR"}  -> A/x&y/zB           (correct)
+# QUOTING the replacement is the actual fix, and it is what is written below. The __DIR__ sentinel
+# check that follows is retained, but note it was never the designed control — it caught the `&`
+# case only by the accident that `&` re-emits the sentinel itself.
+printf '%s\n' "${tf_body//__DIR__/"$DIR"}" > "$TFDIR/main.tf"
 grep -q '__DIR__' "$TFDIR/main.tf" && {
   echo "registry-userdata-budget: path splice failed — __DIR__ still present" >&2; exit 2
 }

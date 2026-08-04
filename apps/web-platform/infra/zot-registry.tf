@@ -356,11 +356,20 @@ resource "hcloud_server" "registry" {
   # level 9; every var this host passes is a non-file value and five carry real entropy, so it
   # under-reports by a measured 584 B (340 x-run stand-ins + 228 Go-vs-node zlib + 16 level).
   #
-  # Terraform's own base64gzip measures 32,156 B against the 32,768 cap: **612 B of headroom**,
-  # the TIGHTEST of the three hosts (web ~24.3 KB, git-data ~16.2 KB) and the only one that was
-  # unguarded — and already OVER the 32,000 sub-cap the node test was passing against. The
-  # authoritative gate is now `registry-userdata-budget.sh`, which renders through terraform;
-  # the node REGISTRY_BUDGET is retained as a cheap fast-suite proxy and re-baselined so that
+  # Terraform's own base64gzip measures 32,156 B against the 32,768 cap: **612 B of headroom** —
+  # already OVER the 32,000 sub-cap the node test was passing against, and the tightest of the
+  # three hosts by an order of magnitude. The comparison, each figure labelled with the space it
+  # was measured in (an earlier revision of this line quoted "web ~24.3 KB, git-data ~16.2 KB" as
+  # HEADROOM; the first was the web RENDER transposed into a headroom slot and the second was the
+  # node model's figure for a host that has a terraform-exact gate sitting in this directory):
+  #   registry  32,156 B stored ->   612 B headroom  (terraform-exact, registry-userdata-budget.sh)
+  #   git-data  22,772 B stored -> 9,996 B headroom  (terraform-exact, git-data-userdata-budget.sh)
+  #   web      ~24,320 B render -> ~8.4 KB           (NODE-MODELLED; no terraform-exact gate)
+  # `registry-userdata-budget.sh` renders through terraform and is the only gate that measures
+  # what Hetzner stores — but note it runs in `deploy-script-tests`, which is NOT in
+  # ruleset-ci-required.tf, so its red is a visible signal and not a merge block. The
+  # merge-blocking gate is the node REGISTRY_BUDGET (via the required `test` context), which is
+  # why that constant is re-baselined with an explicit margin rather than deleted, and why
   # budget + measured offset lands exactly on that script's 32,450 sub-cap.
   #
   # Consequence for the next editor: this file has no room left for prose. Put rationale HERE

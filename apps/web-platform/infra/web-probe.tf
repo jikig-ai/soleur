@@ -19,14 +19,19 @@
 # comment claimed an absence the code does not have.
 #
 # AND WEB-2 IS GENUINELY FED — do not infer otherwise from server.tf. An intermediate revision of
-# this comment reasoned that because terraform_data.web_zot_consumer_probe_install and
+# this comment reasoned that because terraform_data.zot_consumer_probe_install and
 # .private_nic_guard_install are hardcoded to web-1, web-2 had no feeder and its beats rested
 # paused. That inference is WRONG and Better Stack refutes it: `web-zot-consumer-probe.service`
 # emits from `soleur-web-2` as well as `soleur-web-platform`. The install path for a FRESH host is
 # cloud-init.yml, whose runcmd carries `systemctl enable --now web-zot-consumer-probe.timer` (grep
 # that literal rather than a line number — this file has churned); the web-1-only SSH
-# provisioners exist because web-1 carries ignore_changes=[user_data] and is the unrebuildable pet,
-# so they are its RE-provisioning path, not the only install path. Read the telemetry before
+# provisioners are web-1-scoped NOT because ignore_changes=[user_data] is web-1-specific — it is
+# not. hcloud_server.web is a for_each resource with ONE lifecycle block (ignore_changes =
+# [user_data, ssh_keys, image, placement_group_id], server.tf), so it covers web-2 too, and a
+# draft of this very correction implied web-2 self-heals, which is the opposite of the truth. The
+# real reason is that web-2's public :22 is firewalled — web-host-provisioner-parity.test.sh spells
+# it out: a fan-out would hang every merge on an SSH timeout. So they are web-1's RE-provisioning
+# path, not the only install path. Read the telemetry before
 # asserting which hosts run a unit — the resource that installs it on the pet is not the resource
 # that installs it on the cattle.
 #
@@ -80,14 +85,29 @@ locals {
   # is the same "a verdict must name its own subject" discipline #7144's probe-target-source fix
   # applied to inngest-inventory. A second beat would buy a marginally faster read of WHICH repo
   # failed, at the cost of a second betteruptime_heartbeat + doppler_secret per host and a second
-  # URL in the probe's EnvironmentFile — which feeds terraform_data.web_zot_consumer_probe_install's
-  # triggers_replace (server.tf:686), i.e. it re-provisions web-1. Adding a second never-observed
+  # URL in the probe's EnvironmentFile — which feeds terraform_data.zot_consumer_probe_install's
+  # triggers_replace (grep that resource name in server.tf), i.e. it re-provisions web-1. Adding a second never-observed
   # gate to a host whose FIRST gate has not yet met its promotion criterion is the wrong trade.
   #
-  # KNOWN RESIDUAL: this fold CHANGED THE SUBJECT of an existing beat. `soleur-web-zot-consumer-
-  # web-1` used to attest "the web platform image is servable"; it now attests "web platform AND
-  # inngest-bootstrap are servable". A historical absence read across 2026-08-04 is ambiguous
-  # between the two, and no amount of aggregation rigour fixes that — only the journald line does.
+  # KNOWN RESIDUAL 1 — TEMPORAL. This fold CHANGED THE SUBJECT of an existing beat.
+  # `soleur-web-zot-consumer-web-1` used to attest "the web platform image is servable"; it now
+  # attests "web platform AND inngest-bootstrap are servable". A historical absence read across
+  # 2026-08-04 is ambiguous between the two, and no aggregation rigour fixes that — only the
+  # journald line does.
+  #
+  # KNOWN RESIDUAL 2 — PER-HOST, and the sharper of the two (found at review). This local reaches
+  # web-1 through terraform_data.zot_consumer_probe_install's triggers_replace and its remote-exec
+  # env write; it reaches web-2 through NOTHING until web-2 is rebuilt. So after this merges,
+  # web-1's beat attests both repos and web-2's attests soleur-web-platform ONLY — indefinitely,
+  # under a resource declaration and a monitor name that say otherwise.
+  #
+  # That is the same hazard §3 uses to justify keeping the NIC beat separate, pointed at §1: a
+  # SILENTLY-ABSENT CONJUNCT DEGRADES AND INTO OR. web-zot-consumer-probe.sh splits on the comma
+  # and has NO count assertion, so a dropped conjunct is indistinguishable from one that passed.
+  # The durable fix is a repo-count floor in the probe, fed by the same envwriter that supplies
+  # ZOT_PROBE_REPO — deliberately NOT taken here, because it would add a second unproven change to
+  # a probe whose first one has never been observed passing (#7267 has zot dark from both hosts).
+  # Do it when the promotion criterion can actually be observed.
   zot_probe_repo = join(",", [local.zot_probe_repo_web, var.inngest_bootstrap_repo])
 }
 

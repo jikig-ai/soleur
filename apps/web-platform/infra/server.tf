@@ -396,7 +396,7 @@ resource "hcloud_server" "web" {
     #   web_host_key     — each.key ("web-1"/"web-2"); the env-writer upper-cases it to name the
     #     per-host Better Stack heartbeat URL var (WEB_NIC_GUARD_URL_WEB_2, …), matching the SSH
     #     provisioner's upper(replace(each.key,"-","_")).
-    #   zot_probe_repo   — local.zot_probe_repo (web-probe.tf:22), the ZOT_PROBE_REPO env value.
+    #   zot_probe_repo   — local.zot_probe_repo (grep the local name in web-probe.tf), the ZOT_PROBE_REPO env value.
     # betterstack_ingest_url + registry_endpoint are already in this map (reused, not re-added).
     web_probes_token = doppler_service_token.web_probes.key
     expected_ip      = var.web_hosts[each.key].private_ip
