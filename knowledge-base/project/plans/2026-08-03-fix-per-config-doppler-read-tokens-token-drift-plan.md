@@ -627,6 +627,13 @@ No `exception` block: no `plaintext-exception`, no `cert_verification: off`.
   and publishes in-band via `DOPPLER_TOKEN_TF` and the Terraform GitHub App, and the per-merge
   apply carries it — nothing is typed by an operator to stand these up.
 
+  <!-- lint-infra-ignore start -->
+  <!-- DESCRIBES an existing automation gap and its tracking issue; it does not PRESCRIBE the
+       manual step to anyone. `lint-infra-no-human-steps` flagged this paragraph (correctly, on
+       its own terms — "actor + terraform imperative co-occur"), which is the linter working:
+       the gap it names is real and is exactly why #7263 exists. Wrapped rather than reworded,
+       because softening the words would hide the finding the paragraph was written to record.
+       Remove this region when #7263 lands a dispatch route and the prose becomes historical. -->
   > **CORRECTED — "rotates in-band" and "no operator step at any point" were both too strong.**
   > ROTATION has no dispatch route: `terraform apply -replace=…` is not expressible through a
   > merge, so rotating a token today means an operator running Terraform locally with
@@ -638,6 +645,7 @@ No `exception` block: no `plaintext-exception`, no `cert_verification: off`.
   > tracked in issue #7263 so it gets fixed for all eleven at once. The tokens do not expire, so
   > rotation is incident-response rather than a schedule; that is why the gap is a gap and not an
   > outage.
+  <!-- lint-infra-ignore end -->
 
 ## Implementation Phases
 
