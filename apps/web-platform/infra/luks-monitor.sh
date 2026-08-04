@@ -246,16 +246,25 @@ if [ "${LUKS_MONITOR_ASSERT_READYZ:-0}" = "1" ]; then
   # `0` is rejected as missing: a zero baseline makes `count -lt 0` false for EVERY count, so it is a
   # missing baseline wearing a number — an absorbing green a total wipe would pass. A real host never
   # has zero workspaces at a cutover, and wl_count_workspace_dirs already refuses to persist 0.
+  # The WIDTH bound is the third way this operand can defeat the comparison, and it is the one a
+  # character-class check cannot see: POSIX `[` exits 2 ("integer expected") above INT64_MAX, and
+  # inside an `if` under `set -uo pipefail` with no `-e` that reads as "not less than" — silently
+  # SKIPPING the comparison and falling through to the green verdict. Measured:
+  # `[ 0 -lt 99999999999999999999 ]` exits 2, so a total wipe reports PASS against a wide
+  # baseline. The comment below used to claim "BOTH operands guarded" while guarding only the
+  # character class of this one. 9 digits is far beyond any real inventory.
   case "${WL_WORKSPACE_COUNT_EXPECTED:-}" in
-    ''|0|*[!0-9]*) emit_readiness_and_die workspace_count_baseline_missing ;;
+    ''|0|*[!0-9]*|??????????*) emit_readiness_and_die workspace_count_baseline_missing ;;
   esac
-  # BOTH operands guarded. The baseline is validated above; validate the OBSERVED count too, because
+  # BOTH operands guarded, on BOTH axes (character class AND width — see the baseline case above,
+  # where a width-only escape silently skipped this comparison). Validate the OBSERVED count too,
+  # because
   # `[ <non-numeric> -lt N ]` exits 2 ("integer expected") and — inside an `if` under `set -uo
   # pipefail` with no `-e` — is read as "not less than", SILENTLY SKIPPING the comparison and falling
   # through to the green verdict. A fail-OPEN shape next to a fail-CLOSED one on the same assertion is
   # exactly the asymmetry this change removes. Latent today (the counter always prints an integer).
   case "${WL_WORKSPACE_COUNT:-}" in
-    ''|*[!0-9]*) emit_readiness_and_die workspace_count_unreadable ;;
+    ''|*[!0-9]*|??????????*) emit_readiness_and_die workspace_count_unreadable ;;
   esac
   # `-lt`, not `-ne`: users create workspaces between cutovers, so a GROWN inventory is healthy.
   # Only a SHRINK is the sole-copy data-loss signal.

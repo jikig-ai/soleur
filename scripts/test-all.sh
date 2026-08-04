@@ -336,6 +336,12 @@ if want_scripts; then
   # -live asserts the tree is in sync; -unit asserts the guard can still fail.
   run_suite "scripts/lint-agents-compound-sync-live" bash scripts/lint-agents-compound-sync.sh
   run_suite "scripts/lint-agents-compound-sync-unit" bash scripts/lint-agents-compound-sync.test.sh
+  # Enforcement-tag parity — CI-wired in #7172 (was lefthook pre-commit only,
+  # so main drifted to 13 unresolved tags with every local run green). -live
+  # asserts the shipped corpus resolves AND that a non-zero number of tags was
+  # actually scanned; -unit asserts the linter can still fail.
+  run_suite "scripts/lint-agents-enforcement-tags-live" python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.rules.md
+  run_suite "scripts/lint-agents-enforcement-tags-unit" bash scripts/lint-agents-enforcement-tags.test.sh
   run_suite "scripts/lint-infra-no-human-steps" bash scripts/lint-infra-no-human-steps.test.sh
   run_suite "scripts/lint-credential-path-literals" bash scripts/lint-credential-path-literals.test.sh
   # #7136: a `run:` step reading a variable declared only on ANOTHER step. Part B of this

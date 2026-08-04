@@ -503,12 +503,16 @@ jobs:
     # v0116-1-buildx-driver-full-repull-deploy-timeout) and MUST stay above the
     # ~65m legitimate ceiling so it never kills a slow-but-healthy deploy.
     #
-    # COUPLED (#7091): this value is one of four on the serial critical path (await-ci 60 +
-    # migrate 30 + verify-migrations 15 + deploy 90 = 195) that together bound the longest
-    # LEGITIMATE commit-to-deployed latency. scripts/prod-version-drift-check.sh sets
-    # DRIFT_SUSTAINED_THRESHOLD_MIN from that sum, and B9 asserts the threshold stays >= it —
-    # so RAISING any of these four fails that suite until the threshold is raised too. That
-    # direction is deliberate: the threshold must never silently become smaller than the
+    # COUPLED (#7091, #7160): this value is one term on the declared critical path that bounds
+    # the longest LEGITIMATE commit-to-deployed latency. That path is NOT a serial sum —
+    # `release` and `await-ci` declare no `needs:` and run in PARALLEL:
+    #     max(release 60, await-ci 60) + migrate 30 + verify-migrations 15 + deploy 90 = 195
+    # (the release ceiling is declared on the CALLEE, reusable-release.yml, because the GitHub
+    # schema forbids timeout-minutes on a `uses:` job). scripts/prod-version-drift-check.sh sets
+    # DRIFT_SUSTAINED_THRESHOLD_MIN from that path, and B9 asserts the threshold stays >= it —
+    # so RAISING any of these fails that suite until the threshold is raised too, and DELETING
+    # one now fails it as well (an absent ceiling reads as the GitHub 360 default, not as zero).
+    # That direction is deliberate: the threshold must never silently become smaller than the
     # latency the pipeline itself permits, or the alerter pages on healthy releases.
     timeout-minutes: 90
     concurrency:

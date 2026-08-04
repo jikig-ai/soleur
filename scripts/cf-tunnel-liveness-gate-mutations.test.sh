@@ -52,9 +52,22 @@ trap 'rm -rf "$SB"' EXIT
 mkdir -p "$SB/repo" || { echo "FATAL: mkdir"; exit 2; }
 cp -a "$REPO_ROOT/scripts" "$SB/repo/scripts" || { echo "FATAL: cp scripts"; exit 2; }
 cp -a "$REPO_ROOT/.github" "$SB/repo/.github" || { echo "FATAL: cp .github"; exit 2; }
+# THE SUITE'S DEPENDENCY SET IS NOT `scripts/` + `.github/`. #7159 gave
+# check-cloudflare-token-drift.test.sh a case (P16) that executes the COMMITTED Doppler config
+# inventory against the floor parsed out of the workflow — deliberately, because pinning the two
+# as separate literals is what let six mutations survive. That case reads
+# apps/web-platform/infra/doppler-config-inventory.txt and, correctly, `exit 2`s when it is
+# unreadable rather than skipping (a harness that cannot set up must abort, per the note above).
+# So a sandbox carrying only two of the three directories takes the whole suite down and reds
+# M7's control, which reads as "the battery found something" when the battery never ran.
+# Copy the file, not the tree: it is ~4.7 KB and the rest of infra/ is irrelevant here.
+INVENTORY_REL="apps/web-platform/infra/doppler-config-inventory.txt"
+mkdir -p "$SB/repo/$(dirname "$INVENTORY_REL")" || { echo "FATAL: mkdir inventory dir"; exit 2; }
+cp -a "$REPO_ROOT/$INVENTORY_REL" "$SB/repo/$INVENTORY_REL" || { echo "FATAL: cp inventory"; exit 2; }
 cp -a "$SB/repo" "$SB/pristine" || { echo "FATAL: cp pristine"; exit 2; }
 [[ -f "$SB/repo/$SUITE_REL" ]]  || { echo "FATAL: suite missing from sandbox"; exit 2; }
 [[ -f "$SB/repo/$BRIDGE_REL" ]] || { echo "FATAL: bridge action missing from sandbox"; exit 2; }
+[[ -f "$SB/repo/$INVENTORY_REL" ]] || { echo "FATAL: inventory missing from sandbox"; exit 2; }
 
 # Written as explicit ifs rather than `A && B || C`: BOTH steps must be checked. A restore that
 # removed the sandbox but failed to repopulate it would leave the next arm running against an
@@ -218,10 +231,24 @@ import sys, io, re
 # other `verdict == 'dead'` guards, so a count=1 replace mutates a site NO assertion covers and
 # the arm reports a survivor that is really a mis-aimed mutation. The first draft of this arm did
 # exactly that.
+#
+# THE PREFIX IS NO LONGER A DISCRIMINATOR. #7159 added a SECOND step sharing it — the coverage
+# filer, `…(token drift — coverage below the declared floor)` — and it sorts ABOVE the DEAD
+# filer, so a `startswith` on the shared prefix silently re-aims this mutation at the coverage
+# step, whose `if:` is a `>-` block that carries no `dead` and is 3+ lines from its `- name:`.
+# The arm then dies on the else-branch below, which is the safe direction but reports an anchor
+# drift rather than the real cause. Match the FULL name including the `DEAD credential`
+# discriminator: adding a third `Open or update an action-required issue (…)` step must not be
+# able to re-aim this arm again. This is the same first-match-degrades-when-the-set-grows shape
+# the comment above records for the arm's first draft — it recurred the moment a sibling landed.
 p = sys.argv[1]
 lines = io.open(p, encoding="utf-8").read().split("\n")
-step = next(i for i, l in enumerate(lines)
-            if l.startswith("      - name: Open or update an action-required issue (token drift"))
+DEAD_STEP = "      - name: Open or update an action-required issue (token drift — DEAD credential)"
+_matches = [i for i, l in enumerate(lines) if l == DEAD_STEP]
+assert len(_matches) == 1, (
+    f"expected exactly 1 DEAD-filer step named {DEAD_STEP!r}, found {len(_matches)} — "
+    "the anchor is ambiguous and this arm would mutate an uncovered site")
+step = _matches[0]
 for i in range(step, min(step + 4, len(lines))):
     if lines[i].lstrip().startswith("if:") and "dead" in lines[i]:
         lines[i] = lines[i].replace("'dead'", "'unverifiable'").replace('"dead"', '"unverifiable"')
