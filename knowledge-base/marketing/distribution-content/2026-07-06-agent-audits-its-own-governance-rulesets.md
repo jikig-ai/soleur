@@ -1,9 +1,9 @@
 ---
 title: "My agent now audits its own governance rulesets daily"
 type: feature-launch
-publish_date: ""
+publish_date: 2026-09-01
 channels: x, bluesky
-status: draft
+status: scheduled
 pr_reference: "#6070"
 issue_reference: "#6061"
 ---
