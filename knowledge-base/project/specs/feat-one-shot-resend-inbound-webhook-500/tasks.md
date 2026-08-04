@@ -28,7 +28,7 @@ by the errno; H4 (inngest not bound on :8288) is near-confirmed.** Do not re-ope
       failure; reshapes Phase 3) or it did not (→ it cannot see "nothing bound on :8288",
       a bigger finding than this plan).
 - [x] 0.0b ~~**Try the cheap fix before any IaC:** `restart-inngest-server.yml`~~ **STRUCK
-      (CTO ruling, ADR-155 Alternative D).** It restarts the WEB host's already-healthy
+      (CTO ruling, ADR-167 Alternative D).** It restarts the WEB host's already-healthy
       co-located unit, never touches 10.0.1.40, and then confirms success via the same
       loopback probe that was already reporting green. It would have returned success
       having fixed nothing — the monitoring blind spot wearing a different hat. Do not

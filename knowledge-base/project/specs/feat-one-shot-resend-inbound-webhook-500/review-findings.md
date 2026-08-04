@@ -9,7 +9,7 @@
 >
 > - **finding 8** — `head -1` → `tail -1`, plus duplicate-key fixtures in both orderings.
 > - **finding 1** — the third write site at `cloud-init.yml`, a value-based parity guard
->   covering it, and the two falsified ADR-155 claims corrected.
+>   covering it, and the two falsified ADR-167 claims corrected.
 > - **finding 5** — the terminal `inngest.send` failure now reaches a log row and a
 >   distinctly-tagged Sentry event, emitted from the helper so all 8 call sites are covered.
 > - **P1-a** — `init_probe_targets()` inside the `BASH_SOURCE` guard plus an end-to-end
@@ -62,7 +62,7 @@ it** — `cron-inngest-cron-watchdog.test.ts:291`, `inngest-inventory.test.sh:10
 only guard touching cloud-init's value (`cloud-init-inngest-bootstrap.test.sh:447`) is
 presence-only and value-blind: it passes with `10.0.1.40` just as happily.
 
-This also falsifies two claims in ADR-155 that I wrote: ":141-142 every other 10.0.1.40
+This also falsifies two claims in ADR-167 that I wrote: ":141-142 every other 10.0.1.40
 reference legitimately describes it" (false) and ":139-140 both write sites moved
 together" (three sites, two moved).
 
@@ -78,7 +78,7 @@ finding 1 unfixed, boots dispatching at `10.0.1.40`. Both halves broken.
 `/etc/default/inngest-server` — `web_colocate_inngest` defaults false"*.
 
 Today's web-1 survives only because it **predates** the 2026-07-11 default flip
-(`5fbf00f0e`, #6344). ADR-155 justifies the rollback as using "the component that is
+(`5fbf00f0e`, #6344). ADR-167 justifies the rollback as using "the component that is
 demonstrably serving" — true of the running instance, false of anything Terraform builds.
 Violates `hr-fresh-host-provisioning-reachable-from-terraform-apply`.
 
@@ -259,7 +259,7 @@ review skill documents.
   (`inngest-bootstrap.sh:799`). Net: the unauthenticated control API moves from an
   allowlist-guarded host to one reachable from every peer on `10.0.1.0/24` (git-data .20,
   registry .30, .40, grok-dogfood) — exactly the sources SEC-H2 drops. Pre-existing posture,
-  but this PR makes it load-bearing and ADR-155 does not mention it. Recommend a web-host
+  but this PR makes it load-bearing and ADR-167 does not mention it. Recommend a web-host
   `inngest-nftables` unit mirroring `cloud-init-inngest.yml:70-90`.
 - **`ci-deploy.sh` retains the identical blind spot in 4 places** (`:2099`, `:2164`, `:2211`,
   `:2935` all hardcode `127.0.0.1:8288`). They agree with the app only by the coincidence
@@ -267,7 +267,7 @@ review skill documents.
   repoint. Sharpened by this PR's own edit to `inngest.test.sh:581-584`, which still pins
   ci-deploy to the loopback literal under a "probe is not a lone snowflake" rationale while
   `inngest-inventory.sh` has left that pairing.
-- **Double-fire window is scheduled by ADR-155's own criteria.** ADR-100: "two inngest
+- **Double-fire window is scheduled by ADR-167's own criteria.** ADR-100: "two inngest
   servers on the *same* prd Inngest Postgres both fire every cron's schedule regardless of
   local `--sdk-url`". Criteria 1–3 require booting + health-probing the dedicated host
   BEFORE criterion 4 repoints — i.e. both schedulers live on the shared backend. Add a fifth
@@ -305,10 +305,10 @@ review skill documents.
   earlier variable whose value embeds `\nINNGEST_BASE_URL=http://attacker.tld` wins over the
   genuine entry. `--env-file` rejects multi-line values, so the vector is image-level `ENV`
   or an API-set `-e`.
-- ADR-155:93-96 "silently recreate this outage" — with the derived probe from this same PR
+- ADR-167:93-96 "silently recreate this outage" — with the derived probe from this same PR
   that case now goes RED, so it would not be silent. Reword or name the residual precisely.
-- ADR-155 should cite **AP-016** (`principles-register.md:26`), which already records the
-  ADR-088 refutation verbatim; ADR-155 presents it as new. AP-016's LAPSED clause (#7071,
+- ADR-167 should cite **AP-016** (`principles-register.md:26`), which already records the
+  ADR-088 refutation verbatim; ADR-167 presents it as new. AP-016's LAPSED clause (#7071,
   PAT revoked 2026-07-30) is the same-day upstream of this incident.
 - Completion criterion 2 is circular: it requires the health probe to watch the DEDICATED
   host before the repoint, but this PR makes the probe target derive FROM the app's
@@ -327,7 +327,7 @@ review skill documents.
 - **No credential values in the diff.** Only shape-descriptors (`ghp_` PAT, dead) and HTTP
   status codes. The runbook reads the token via `doppler secrets get --plain` and never
   echoes it.
-- architecture-strategist verified ADR-155's entire factual table line by line (ADR-088
+- architecture-strategist verified ADR-167's entire factual table line by line (ADR-088
   refutation, `ignore_changes`, all four Alternative-C zot-mirror claims) — all substantiated.
 - ADR numbering 155 is correct and unclaimed; `paused` is the right disposition vs supersede.
 - The probe-target derivation itself is a genuine improvement and is well-tested for the
@@ -336,7 +336,7 @@ review skill documents.
 ## P2 (continued — from code-quality-analyst)
 
 - **Three code comments reassert the claim this branch's own last commit corrected.**
-  `cffcdceab` rewrote ADR-155 + phase-0 after measuring that a PREDECESSOR host served
+  `cffcdceab` rewrote ADR-167 + phase-0 after measuring that a PREDECESSOR host served
   until 29s before the replacement. But `cron-inngest-cron-watchdog.ts:75-78` still says
   the cutover repointed "before that host was proven to boot" and "it never bound :8288
   (its FIRST boot failed…)" — all three clauses false; `inngest-inventory.sh:128` implies a

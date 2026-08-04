@@ -1,4 +1,4 @@
-# ADR-155 — Pause the ADR-100 dedicated-Inngest cutover at the pre-repoint operating point
+# ADR-167 — Pause the ADR-100 dedicated-Inngest cutover at the pre-repoint operating point
 
 - **Status:** Accepted
 - **Date:** 2026-08-02

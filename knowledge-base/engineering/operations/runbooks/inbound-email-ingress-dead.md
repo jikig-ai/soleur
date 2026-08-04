@@ -32,7 +32,7 @@ ops@soleur.ai (Proton mailbox, apex MX = protonmail.ch)
             └─ svix-signed POST → https://app.soleur.ai/api/webhooks/resend-inbound  [Cloudflare tunnel → host INPUT]
                  └─ HOP C: route.ts dedup claim → processed_resend_events  [Supabase egress]
                       └─ HOP D: inngest.send (host.docker.internal:8288 -> host gateway,
-                                 self-hosted, ADR-030; ADR-100 PAUSED by ADR-155)  [private hop, NOT egress]
+                                 self-hosted, ADR-030; ADR-100 PAUSED by ADR-167)  [private hop, NOT egress]
                            └─ HOP E: email-on-received claim-insert → email_triage_items  [Supabase egress, SHARED probe+real]
                                 ├─ probe: probe_tokens lookup → mail_class='probe' (NO LLM)   [finalize AFTER the shared HOP E insert]
                                 └─ HOP F: real mail → fetch-sanitize-summarize (Resend body GET + Anthropic LLM)

@@ -1044,7 +1044,7 @@ STUB
   # Assertions are on the VALUE, not a port-shape glob. Mutual agreement ALONE is not
   # enough: reverting all three sites in lockstep keeps them agreeing, which is measured
   # mutation M6 — the one that leaves the whole change under review green. So the shared
-  # value is also pinned to the ADR-155 paused operating point, here, in the suite that
+  # value is also pinned to the ADR-167 paused operating point, here, in the suite that
   # infra-validation.yml runs, rather than only in a TypeScript file gated by a different
   # workflow.
   #
@@ -1063,9 +1063,9 @@ STUB
       | head -1 | sed 's#^INNGEST_BASE_URL=##')
     assert_eq "cloud-init.yml agrees with ci-deploy.sh (the b02870e1d lockstep)" \
       "$ci_val" "$ci_init_val"
-    assert_eq "cloud-init.yml carries the ADR-155 paused operating point (kills M6)" \
+    assert_eq "cloud-init.yml carries the ADR-167 paused operating point (kills M6)" \
       "$paused_target" "$ci_init_val"
-    assert_eq "ci-deploy.sh carries the ADR-155 paused operating point (kills M6)" \
+    assert_eq "ci-deploy.sh carries the ADR-167 paused operating point (kills M6)" \
       "$paused_target" "$ci_val"
 
     # And it must RESOLVE — a fresh-boot host derives its probe target from this value.

@@ -77,7 +77,7 @@ Two consequences, both of which corrected an earlier draft of the record:
 1. **The dedicated host is not unviable.** A PREDECESSOR `soleur-inngest` was serving until
    2026-07-30T15:12:37Z — **29 seconds before** the current host was created at 15:13:06Z. So the
    cutover did not ship against a host that had never worked; it worked from 2026-07-24 until the
-   07-30 replacement, and the *replacement* could not boot. ADR-155's first draft asserted the host
+   07-30 replacement, and the *replacement* could not boot. ADR-167's first draft asserted the host
    "never served a single event", which is false and is corrected there. The defect is not the
    target architecture — it is that a routine host replacement failing became a silent multi-day
    outage instead of a paged one, because the monitoring and repair verbs never moved with the

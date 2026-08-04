@@ -1,24 +1,24 @@
 ---
 title: Inngest as a dedicated single-host singleton control plane
 status: paused
-paused_by: ADR-155
+paused_by: ADR-167
 paused_date: 2026-08-02
 date: 2026-07-07
 amends: ADR-030
 supersedes: none
 issue: 6178
 related: [5450, 6185, 6122]
-related_adrs: [ADR-030, ADR-059, ADR-068, ADR-080, ADR-088, ADR-096, ADR-155]
+related_adrs: [ADR-030, ADR-059, ADR-068, ADR-080, ADR-088, ADR-096, ADR-167]
 brand_survival_threshold: single-user incident
 ---
 
-> **PAUSED 2026-08-02 by [ADR-155](./ADR-155-pause-adr-100-inngest-cutover-at-pre-repoint-operating-point.md).**
+> **PAUSED 2026-08-02 by [ADR-167](./ADR-167-pause-adr-100-inngest-cutover-at-pre-repoint-operating-point.md).**
 > Cutover step 2.4 (the app repoint to `10.0.1.40`) is reverted; the app dispatches to the
 > co-located `inngest-server` again. The dedicated host was replaced on 2026-07-30, its first
 > boot failed the GHCR pull on a dead PAT, and it never bound `:8288` (its predecessor had been
 > serving until 29s before that replacement) — causing a ~3-day silent
 > dispatch outage (#7144) that our own watchdog could not see. The target architecture below
-> stands; ADR-155 records the four completion criteria that must hold before the repoint returns.
+> stands; ADR-167 records the four completion criteria that must hold before the repoint returns.
 > Do not treat this document as describing the live operating point.
 
 # ADR-100: Inngest as a dedicated single-host singleton control plane
