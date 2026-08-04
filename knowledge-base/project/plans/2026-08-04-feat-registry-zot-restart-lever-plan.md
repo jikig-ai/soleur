@@ -494,7 +494,11 @@ reproduces #7071 silently on the new surface.
 **(a) cloud-init + (b) edge-applies-on-merge, split.** The edge half applies on merge and
 is inert until a listener exists. The host half is cloud-init-only per ADR-096 and
 activates at the next provisioning event (§Activation Sequencing). Expected downtime from
-this PR: **none** — nothing in the edge half touches a serving path. This is an immutable
+this PR: **none expected** — but the earlier v1 wording ("nothing in the edge half touches a
+serving path") is **retracted**: `cloudflare_zero_trust_tunnel_cloudflared_config.web` IS the
+live serving path for `deploy.`/`ssh.`/`registry.`, and its ingress list is a whole-list
+replacement. See §Downtime & Cutover for the zero-downtime cutover and its pre-apply
+verification. This is an immutable
 redeploy in the `hr-prod-host-config-change-immutable-redeploy` sense: the host config
 change is delivered by re-provisioning, never patched in place.
 
@@ -568,11 +572,26 @@ discoverability_test:
 
 The verification must measure something the **pre-restart** zot could not have produced.
 `state_status=running` and a 200 on `/v2/` are both emitted by the crash-looping container
-today, so neither can be the success signal. The success signal is the **container identity
-and start time** — a new `container_id` with `started_at >= FRESH_FLOOR` is structurally
-impossible for the old container to produce. That is the source of truth the workflow
-asserts against, exactly mirroring `restart-inngest-server.yml`'s `FRESH_FLOOR` guard on
-`start_ts`.
+today, so neither can be the success signal.
+
+**v1's answer was wrong and is retracted here (deepen R2).** v1 claimed "a new `container_id`
+with `started_at >= FRESH_FLOOR` is structurally impossible for the old container to
+produce". Both halves fail against this very outage:
+
+- `docker restart` **reuses the container**, so `container_id` never changes for `restart-zot`
+  (v1's own §R7 says exactly this, two sections earlier).
+- `--restart unless-stopped` is advancing `started_at` every ~17 s on its own, so a
+  crash-looping zot clears any freshness floor within seconds of the trigger.
+
+v1 therefore reproduced the precise anti-pattern named in the learning it cites — a probe
+that passes against the outage it was built to detect.
+
+**The corrected source of truth is a delta, and the property is "the loop stopped":** capture
+`{container_id, restart_count}` **before** the hook POST, then after a settle window require
+`restart_count` to be **stable** (plus a changed `container_id` for `recreate-zot`) and zot to
+be serving. A counter that keeps climbing is the unfixed crash-loop and must fail loud. This
+is stricter than `restart-inngest-server.yml`'s `FRESH_FLOOR` guard on `start_ts`, because
+inngest is not self-restarting on a timer and zot is. See AC2 for the full contract.
 
 ### zot `/v2/` returns 401 when healthy
 
