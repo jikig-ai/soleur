@@ -44,5 +44,39 @@ One agent (user-impact) reported `PROBE A found something` before dying. That fi
 never retrieved. The review is not merely thin — it is thin with a KNOWN unretrieved
 finding on the highest-risk lens.
 
-**Remaining: re-run `/soleur:review` with the panel after 9pm Europe/Paris.** Do NOT run
-`/compound` -> `/ship` from here.
+**SUPERSEDED — the panel was re-run and all 11 agents reported.** See below.
+
+
+## Review Phase — RE-RUN, 11 of 11 agents
+
+All 11 agents were resumed from their transcripts (context intact) once the session limit
+cleared, so the unretrieved `PROBE A` finding was recovered rather than guessed at.
+
+They found five P1s, all PR-introduced, all now fixed and mutation-proven:
+
+1. A death AFTER the frame publish read GREEN. The webhook self-restart is a second ungranted
+   `sudo` running past `.final`; the published frame still said `exit_code:0` and the gate
+   adjudicates on that first. #7220's shape relocated ~200 lines later, invisible to the
+   instrument built for it.
+2. A routine partial apply INVENTED a death (`FATAL: line=0 rc=1 cmd=`). That is the documented
+   #4804 self-heal, and the soak hard-FAILs on `line=0`, so a normal apply would have reported
+   #7220 as unfixed.
+3. The soak probe returned PASS against a host that was dying, and the sweeper auto-closes on
+   exit 0 — it would have closed #7220 while #7220 was happening. Verified live before and after:
+   PASS -> FAIL with an accurate reason.
+4. The operator issue was titled "Security profile (seccomp) not enforced" — a fabricated
+   security claim, a remediation that loops forever, a dedupe key that lets a seccomp incident
+   swallow this alert, and Sentry paging the security rule.
+5. The alert contradicted the gate on 000/502/503, telling the operator not to pull the exact
+   lever the gate had just prescribed.
+
+Root cause of 1 and 2 was one mistake: `.final` was never the question. "Did it DIE" is.
+
+Mutation-proven: reverting the `died` predicate either way reds, as do dropping frame
+preservation, dropping the ownership gate, hardcoding the annotation, hardcoding files_written,
+and deleting the fatal branch's rc=1. Six of those passed a green suite beforehand. Both suites
+gained assertion-count floors — deleting the new arms previously left both exiting 0.
+
+Rebased onto main (9 commits, incl. #7197's 482-line suite growth). Registered infra suites
+88/88. An earlier RED on `git-data-runcmd-rehearsal` was the stale suite version on an
+un-rebased branch, not this diff — confirmed by A/B against pristine main.
