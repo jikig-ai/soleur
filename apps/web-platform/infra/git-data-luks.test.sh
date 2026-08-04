@@ -1336,9 +1336,27 @@ assert_holds    "B19d bootstrap-key-file-stdin" p_bootstrap_keyfile_stdin "$BOOT
 assert_mutation "B19d bootstrap-key-file-stdin (key moved to argv)" p_bootstrap_keyfile_stdin "$BOOTSTRAP_SH" \
   's#cryptsetup luksOpen --key-file - "\$luks_dev"#cryptsetup luksOpen "$GIT_DATA_LUKS_KEY" "$luks_dev"#'
 
+# --- B20 (#7227): the bootstrap payload's log() writes to fd 2 -----------------------------
+#
+# The parent runcmd routes this script's STDERR into the per-stage scoped detail file. On
+# stdout, all 19 of its `log "FATAL: …"` sentences were invisible to on_err, so the bootstrap
+# stage's fatal shipped a detail that knew nothing about the invariant that actually failed —
+# the stage is the host's other major failure surface and it was the one with no cause.
+#
+# REGION-SCOPED to the log() body: a `>&2` anywhere else in this file (there are several)
+# would satisfy a file-global grep while log() itself went back to stdout.
+p_bootstrap_log_stderr() {
+  awk '/^log\(\)[[:space:]]*\{/{f=1} f&&/^\}/{f=0} f' "$1" \
+    | grep -vE '^[[:space:]]*#' \
+    | grep -Eq '^[[:space:]]*echo "\[git-data-bootstrap\] \$\*"[[:space:]]+>&2[[:space:]]*$' && echo 1 || echo 0
+}
+assert_holds    "B20 bootstrap-log-to-stderr" p_bootstrap_log_stderr "$BOOTSTRAP_SH"
+assert_mutation "B20 bootstrap-log-to-stderr (back to stdout)" p_bootstrap_log_stderr "$BOOTSTRAP_SH" \
+  's#^([[:space:]]*echo "\[git-data-bootstrap\] \$\*") >&2$#\1#'
+
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
 #
-# RAISED 113 -> 127 WITH THE ARMS THAT MADE IT NECESSARY (#7216 + #7227). Itemised, because a
+# RAISED 113 -> 129 WITH THE ARMS THAT MADE IT NECESSARY (#7216 + #7227). Itemised, because a
 # floor that does not move with the suite only ever guards the work that predates it:
 #   B18 isLuks-rc-branch        1 hold + 5 mutations = 6
 #     (revert-to-`if !`, naked rc capture, rc 0 also formats, catch-all no longer exits,
@@ -1348,7 +1366,8 @@ assert_mutation "B19d bootstrap-key-file-stdin (key moved to argv)" p_bootstrap_
 #   B19b no-set-x (template)    1 hold + 1 mutation  = 2
 #   B19c no-set-x (bootstrap)   1 hold + 1 mutation  = 2
 #   B19d bootstrap-key-file     1 hold + 1 mutation  = 2
-#   113 + 6 + 2 + 2 + 2 + 2 = 127. Measured: 127 passed, 0 failed.
+#   B20  bootstrap-log-to-fd-2  1 hold + 1 mutation  = 2
+#   113 + 6 + 2 + 2 + 2 + 2 + 2 = 129. Measured: 129 passed, 0 failed.
 # A22's own non-vacuity floor moved 3 -> 2 in the same change (bootstrap_err deleted); that
 # is inside the predicate, not here, and changes no assertion count.
 #
@@ -1378,8 +1397,8 @@ assert_mutation "B19d bootstrap-key-file-stdin (key moved to argv)" p_bootstrap_
 # redden the suite on every legitimate new arm and teach the next author to edit the guard
 # instead of trusting it.
 total=$((passes + fails))
-if [ "$total" -lt 127 ]; then
-  echo "FAIL: ran only ${total} assertions (<127) — suite did not execute fully" >&2
+if [ "$total" -lt 129 ]; then
+  echo "FAIL: ran only ${total} assertions (<129) — suite did not execute fully" >&2
   exit 1
 fi
 
