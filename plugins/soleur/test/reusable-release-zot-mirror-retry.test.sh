@@ -590,6 +590,34 @@ else
 fi
 PATH="$_t19_prev_path"
 
+# T20 (#7242, plan Test Scenario 11) — a FAILING telemetry query must say so, and must not
+# produce a claim about zot. T19 covers the query that SUCCEEDS with no rows; this covers the
+# query that fails outright, which is the other half of the fail-soft contract and the arm an
+# unavailable instrument actually takes. An instrument that cannot report must never be able
+# to author a diagnosis.
+echo "T20: a FAILING telemetry query says 'could not query' and claims nothing about zot"
+_t20_dir="$TMP/t20"; mkdir -p "$_t20_dir/scripts"
+cat > "$_t20_dir/scripts/betterstack-query.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "auth error: 401" >&2
+exit 1
+STUB
+chmod +x "$_t20_dir/scripts/betterstack-query.sh"
+_t20_out="$TMP/t20out"; _t20_log="$TMP/t20log"; _t20_cnt="$TMP/t20cnt"
+: > "$_t20_out"; : > "$_t20_cnt"
+( cd "$_t20_dir" &&   MOCK_CRANE_MODE=always_ok MOCK_CRANE_COUNT="$_t20_cnt" MOCK_CRANE_DIGEST_MODE=match   GITHUB_OUTPUT="$_t20_out" GITHUB_STEP_SUMMARY="$TMP/t20sum"   IMAGE="ghcr.io/jikig-ai/soleur-web-platform" DIGEST="sha256:deadbeef" VERSION="1.2.3"   COMMIT_SHA="abc123def" BRIDGE_OUTCOME="failure" MIRROR_OVERRIDE_REASON=""   GITHUB_WORKSPACE="$REPO_ROOT" TOKEN_VERDICT="live" TOKEN_CHECKED_AT="20:23:05Z"   TOKEN_CAUSE="unknown" BETTERSTACK_QUERY_HOST="stub.example"   PATH="$STUB_DIR:$PATH"     bash --noprofile --norc -eo pipefail "$MIRROR_BLOCK" > "$_t20_log" 2>&1 )
+_t20_ok=1
+grep -qE '^mirror_status=degraded' "$_t20_out" || _t20_ok=0
+grep -qE '^mirror_reason=bridge' "$_t20_out" || _t20_ok=0
+grep -qF 'could not query Better Stack' "$_t20_log" || _t20_ok=0
+# The failure of the instrument must not become a statement about the thing it measures.
+grep -qE 'zot_restarts [0-9]+ ->' "$_t20_log" && _t20_ok=0
+if [[ "$_t20_ok" == "1" ]]; then
+  pass "a failed query reports itself as a failed query and fabricates no restart series"
+else
+  fail "the failed-query arm did not fail soft — it either silenced degraded() or invented a zot claim"
+fi
+
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Measured: replacing every assert_eq/pass/fail CALL with `:` yields
 # "0/0 passed, 0 failed" and exit 0, and test-all.sh reads only the exit code — so a suite
