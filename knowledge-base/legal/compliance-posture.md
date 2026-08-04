@@ -104,7 +104,7 @@ The `gdpr-gate` skill incorporates upstream-vendored detection rules under permi
 |---|---|---|---|---|---|
 | github.com/goSprinto/compliance-skills | MIT | `7b58d68` | 5 (gdpr-gate `references/`) | 2026-05-10 | active |
 
-NOTICE-of-record: `plugins/soleur/skills/gdpr-gate/NOTICE` (YAML frontmatter is the canonical machine-readable form). Drift-detection workflow: `.github/workflows/scheduled-content-vendor-drift.yml`. Operator runbook: `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md`.
+NOTICE-of-record: `plugins/soleur/skills/gdpr-gate/NOTICE` (YAML frontmatter is the canonical machine-readable form). Drift-detection cron: `apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts` (an Inngest function since the TR9 Phase-2 migration; the workflow it replaced, `.github/workflows/scheduled-content-vendor-drift.yml`, no longer exists -- the Sentry monitor slug keeps the old name). Operator runbook: `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md`.
 
 ## Active Compliance Items
 
