@@ -433,7 +433,7 @@ runcmd:
     # (#7227) THE RESTART WARNING GETS ITS OWN CAUSE; it shipped `detail=""`. It does NOT
     # reuse $_sshd_detail: reaching here means `sshd -t` PASSED, so that file is empty and
     # its literal would blame the config check that succeeded. SUBSTITUTION, not `2>>` on the
-    # command — the same rule as the two probes above. A `2>>` here makes a REDIRECT failure
+    # command — the same rule as the probe above. A `2>>` here makes a REDIRECT failure
     # indistinguishable from a restart failure, and would emit "restart failed (config valid)"
     # for a boot where the restart never ran. Caught by S1, whose systemctl stub exits 0.
     _sshd_r_rc=0
