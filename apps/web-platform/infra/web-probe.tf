@@ -19,7 +19,22 @@ locals {
   # never goes stale across deploys). Derived from var.image_name: strip the ghcr.io host, then keep
   # the path before any `:tag` or `@sha256:` — e.g. ghcr.io/jikig-ai/soleur-web-platform:latest →
   # jikig-ai/soleur-web-platform. zot mirrors GHCR under the identical repository path.
-  zot_probe_repo = regex("^[^:@]+", replace(var.image_name, "ghcr.io/", ""))
+  zot_probe_repo_web = regex("^[^:@]+", replace(var.image_name, "ghcr.io/", ""))
+
+  # (#7144 task 5a) The probe covers BOTH platform repos, comma-joined. Until now it derived solely
+  # from var.image_name, so it proved serviceability of soleur-web-platform ONLY — and nothing in the
+  # stack verified that the HOST can pull soleur-inngest-bootstrap over the private NIC with the
+  # ZOT_PULL_* credential. That gap matters because a green mirror_only run proves only that zot
+  # serves the digest to the PUSH credential over the tunnel from a GitHub runner; zot accessControl
+  # can grant push-read without pull-read, and since the GHCR read PAT was revoked 2026-07-30 zot is
+  # the SOLE pull path. cloud-init.yml's web arm runs under `set -e` and traps to
+  # `soleur-boot-emit inngest_bootstrap failed`, so a digest zot cannot serve the host is a FATAL
+  # fresh boot on the only live web origin — not a graceful inngest_ghcr_fallback.
+  #
+  # Comma (not space) because it cannot appear in an OCI repository name, so the value needs no
+  # quoting in the systemd EnvironmentFile that carries it. The probe splits on it and applies
+  # ALL-MUST-SERVE aggregation; see web-zot-consumer-probe.sh.
+  zot_probe_repo = join(",", [local.zot_probe_repo_web, var.inngest_bootstrap_repo])
 }
 
 # §1 — zot consumer-perspective serviceability heartbeat (per host).

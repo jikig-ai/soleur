@@ -1,7 +1,13 @@
 # Review findings — DO NOT MERGE AS-IS
 
-> **Status 2026-08-03 — all seven P1s applied except finding 2 (2 of 4 steps).**
+> **Status 2026-08-04 — all seven P1s applied except finding 2 (still 2 of 4 steps).**
 > The merge block STANDS until finding 2 completes.
+>
+> Update 2026-08-04: step 2's blocker (#7203) MERGED, and both step-4 prerequisites were
+> taken up — (b) retention carve-out is DONE and verified; (a) host-side pull proof is
+> AUTHORED but UNPROVEN and carries a promotion criterion that is not yet met. Steps 3
+> and 4 remain blocked, now on **#7242** (zot bridge down since 2026-08-03). Nothing in
+> this update advances the 2-of-4 count: a prerequisite is not a step.
 >
 > Every item below was RED-proven before GREEN. The bash guards (findings 8, 1, P1-a,
 > P2-b) were additionally mutation-tested on sandbox copies, each mutation proven to have
@@ -101,13 +107,60 @@ SOLEUR-DEBT block makes flipping this conditional on digest-pinning `cloud-init.
    variable. That PR also adds a rebuild-free `mirror_only` backfill — the existing
    `workflow_dispatch` REBUILDS and moves the tag's GHCR digest, which would have
    invalidated `cloud-init-inngest.yml`'s live pin on the dedicated host.
-3. ⛔ **Backfill `v1.1.24` and prove parity** — blocked until #7203 merges. Zot is dark
-   from a workstation (`/v2/` → HTTP 000), so the comparison happens in CI. GHCR's side
-   is already confirmed twice over (packages API + `crane digest`):
+3. ⛔ **Backfill `v1.1.24` and prove parity** — #7203 MERGED 2026-08-04 (`766fcde86`), so
+   its stated blocker is cleared; now blocked on **#7242** instead (the zot bridge has
+   been down since 17:11 UTC 2026-08-03, CF Access refusing the websocket upgrade, so no
+   `mirror_only` run can execute). Zot is dark from a workstation (`/v2/` → HTTP 000), so
+   the comparison happens in CI. GHCR's side is already confirmed twice over (packages
+   API + `crane digest`):
    `sha256:6cdaa63d1496642e681898a831234b712f75d3b09bd0844bcabec3de74b0a0f8`.
 4. ⛔ **Pin both refs, then flip the default** — invalid until step 3 is green. Pinning a
    digest zot cannot serve would send every fresh boot down the GHCR-fallback branch and
    fire `inngest_ghcr_fallback` permanently.
+
+#### Step-4 prerequisites (operator decision 2026-08-04 — do not re-litigate)
+
+A green `mirror_only` run does NOT license step 4. It proves zot serves the digest to the
+**PUSH** credential, over the tunnel, from a GitHub runner. It says nothing about
+**host-side pull** (`ZOT_PULL_*`, private NIC), and zot `accessControl` can grant
+push-read without pull-read. Since the GHCR pull PAT was revoked 2026-07-30 (AP-016) zot
+is the SOLE pull path, and `cloud-init.yml`'s web arm opens `set -e` and ends
+`trap '... || soleur-boot-emit inngest_bootstrap failed' EXIT` — so a digest zot cannot
+serve the host is a FATAL fresh boot on the only live web origin, not a graceful
+`inngest_ghcr_fallback`. Two prerequisites therefore gate step 4:
+
+- **(a) Prove the HOST can pull `jikig-ai/soleur-inngest-bootstrap` from zot — AUTHORED,
+  NOT YET PROVEN.** Nothing verified this before: `web-probe.tf`'s `zot_probe_repo`
+  derived from `var.image_name`, covering `soleur-web-platform` ONLY. Extended
+  `web-zot-consumer-probe` (the host-side probe that already runs with the pull credential
+  over the private NIC) to take a comma-separated repo list covering both platform repos,
+  with ALL-MUST-SERVE aggregation so a servable web repo cannot mask an unservable
+  bootstrap repo. `zot-entry-gate.sh` was NOT resurrected: it is a CI/operator-side gate
+  probing over the tunnel with Doppler prd creds, so it structurally cannot prove
+  host-side pullability — independent of its known false-gate defect
+  (`curl -s -o /dev/null` exits 0 on any HTTP response). Its wire-or-delete decision is
+  tracked separately.
+
+  **PROMOTION CRITERION — this gate has never been observed passing, and MUST NOT merge
+  until it has.** The bridge is down, so only the offline seam has run (54/54 in
+  `web-zot-consumer-probe.test.sh`, plus a 4-mutant battery: any-of aggregation,
+  401-demotion, empty-list gate, and first-repo-only all KILLED, against a green control).
+  Before this ships, observe on a real run: web-1's `soleur-web-zot-consumer-web-1`
+  heartbeat still beating with the bootstrap repo in `ZOT_PROBE_REPO`, i.e. a genuine 200
+  from `/v2/jikig-ai/soleur-inngest-bootstrap/tags/list` using `ZOT_PULL_*` over the
+  private NIC. Until then a merge would re-provision web-1 (the probe script feeds
+  `terraform_data.web_zot_consumer_probe_install`'s `triggers_replace`, `server.tf:686`)
+  and install a probe that suppresses its own heartbeat if the bootstrap repo is not yet
+  mirrored — converting an unproven assumption into a live alarm.
+
+- **(b) Retention cannot evict the pinned tag — DONE.** The keep-set kept only the 5
+  most-recently-pushed `v*` tags per repo, and the file's own comment already warned that
+  `mostRecentlyPushedCount` "can evict out of order under the ADR-096 crane-copy backfill
+  path" — the very path used to place the pin. Added an anchored, count-free `keepTags`
+  entry above the `v.*` entry, verified against project-zot v2.1.2 source (first-match-wins
+  at both policy and tag level; `regexp.MatchString` is unanchored; a patterns-only entry
+  retains unconditionally; policies REPLACE rather than merge, which is why the carve-out
+  lives inside the existing `**` policy and not a bootstrap-only one).
 
 Deleting the zot arm instead is NOT the cheap alternative it looks like:
 `ci-deploy.sh:1805`'s retirement tripwire records that it darkens `inngest_ghcr_fallback`,

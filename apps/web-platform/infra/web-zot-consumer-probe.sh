@@ -91,43 +91,83 @@ _canary() {
   fi
 }
 
-if [ -n "${SOLEUR_ZOT_PROBE_STATUS_OVERRIDE:-}" ]; then
-  CODE="$SOLEUR_ZOT_PROBE_STATUS_OVERRIDE"
-else
-  # NO -f (see header). -u presents Basic auth; -w captures the HTTP code; -m bounds it; a
-  # transport failure (unreachable private net) yields the curl default 000.
-  CODE=$(curl -s -u "$ZUSER:$ZTOK" -o /dev/null -w '%{http_code}' -m 10 "http://${ENDPOINT}/v2/${REPO}/tags/list" 2>/dev/null || echo 000)
-  [ -n "$CODE" ] || CODE=000
-fi
-
 # Source-4 liveness beacon — fires on EVERY run (rate-limited), independent of the zot verdict below,
 # so a zot outage is never misread as a dead vector agent. See _canary().
 _canary
 
-case "$CODE" in
-  200)
-    _ping "$URL"
-    [ -n "$VERBOSE" ] && echo "[zot-probe] servable (200): ${ENDPOINT}/v2/${REPO}/tags/list — pinged heartbeat." >&2
-    exit 0
-    ;;
-  404)
-    echo "[zot-probe] SUPPRESS ping: 404 — zot answered auth but the store is EMPTY/DETACHED for ${REPO} (the #6400-inside-the-probe case). Absence-of-ping will alarm." >&2
-    exit 0
-    ;;
-  401)
-    echo "[zot-probe] HARD FAILURE: 401 — the probe's Basic auth (ZOT_PULL_USER/ZOT_PULL_TOKEN) BROKE. This is NOT 'alive'; suppressing ping AND failing loud so it is not read as a down host." >&2
-    exit 3
-    ;;
-  000)
-    echo "[zot-probe] SUPPRESS ping: 000 — ${ENDPOINT} UNREACHABLE (private-net path to zot down — the L3 target signal). Absence-of-ping will alarm." >&2
-    exit 0
-    ;;
-  5??)
-    echo "[zot-probe] SUPPRESS ping: ${CODE} — zot WEDGED. Absence-of-ping will alarm." >&2
-    exit 0
-    ;;
-  *)
-    echo "[zot-probe] SUPPRESS ping: unexpected code ${CODE} for ${ENDPOINT}/v2/${REPO}/tags/list. Absence-of-ping will alarm." >&2
-    exit 0
-    ;;
-esac
+# --- Per-repo probe + CONSERVATIVE aggregation (#7144 task 5a) --------------------------------
+# ZOT_PROBE_REPO is a COMMA-separated list; a single repo (no comma) behaves exactly as before.
+# Comma is the separator precisely because it cannot occur in an OCI repository name, so no
+# quoting/whitespace question arises in the systemd EnvironmentFile that carries this value.
+#
+# Aggregation is deliberately ALL-MUST-SERVE, not any-of: the whole point of adding the bootstrap
+# repo is that a digest zot cannot serve the HOST is a fatal fresh boot. An any-of rule would let a
+# servable web repo mask an unservable bootstrap repo — reproducing the #6400 "every signal green
+# while the thing is broken" failure this probe family exists to end.
+IFS=',' read -r -a _REPOS <<< "$REPO"
+_OVERRIDES=()
+[ -n "${SOLEUR_ZOT_PROBE_STATUS_OVERRIDE:-}" ] && IFS=',' read -r -a _OVERRIDES <<< "$SOLEUR_ZOT_PROBE_STATUS_OVERRIDE"
+
+auth_broke=""
+unservable=""
+probed=0
+
+for _i in "${!_REPOS[@]}"; do
+  r="${_REPOS[$_i]}"
+  [ -n "$r" ] || continue
+  probed=$((probed + 1))
+  if [ "${#_OVERRIDES[@]}" -gt 0 ]; then
+    # A single injected code applies to EVERY repo (preserves the pre-#7144 single-repo seam);
+    # a comma-list injects per-repo codes positionally so mixed outcomes are testable offline.
+    if [ "${#_OVERRIDES[@]}" -eq 1 ]; then CODE="${_OVERRIDES[0]}"; else CODE="${_OVERRIDES[$_i]:-000}"; fi
+  else
+    # NO -f (see header). -u presents Basic auth; -w captures the HTTP code; -m bounds it; a
+    # transport failure (unreachable private net) yields the curl default 000.
+    CODE=$(curl -s -u "$ZUSER:$ZTOK" -o /dev/null -w '%{http_code}' -m 10 "http://${ENDPOINT}/v2/${r}/tags/list" 2>/dev/null || echo 000)
+    [ -n "$CODE" ] || CODE=000
+  fi
+
+  case "$CODE" in
+    200)
+      [ -n "$VERBOSE" ] && echo "[zot-probe] servable (200): ${ENDPOINT}/v2/${r}/tags/list" >&2
+      ;;
+    401)
+      auth_broke="${auth_broke}${r}(401) "
+      ;;
+    404)
+      unservable="${unservable}${r}(404 EMPTY/DETACHED) "
+      ;;
+    000)
+      unservable="${unservable}${r}(000 UNREACHABLE) "
+      ;;
+    5??)
+      unservable="${unservable}${r}(${CODE} WEDGED) "
+      ;;
+    *)
+      # Phrase pinned: web-zot-consumer-probe.test.sh (c) greps the literal "unexpected code" to
+      # prove a corrupted capture (the -f mutant) lands in this catch-all rather than a clean branch.
+      unservable="${unservable}${r}(unexpected code ${CODE}) "
+      ;;
+  esac
+done
+
+if [ "$probed" -eq 0 ]; then
+  echo "[zot-probe] FATAL: ZOT_PROBE_REPO contained no non-empty repository path — cannot probe serviceability." >&2
+  exit 1
+fi
+
+# 401 outranks every other fault: absence-of-ping alone cannot distinguish a probe-auth misconfig
+# from a genuinely down host, so it must fail LOUD rather than merely suppress.
+if [ -n "$auth_broke" ]; then
+  echo "[zot-probe] HARD FAILURE: 401 — the probe's Basic auth (ZOT_PULL_USER/ZOT_PULL_TOKEN) BROKE for: ${auth_broke%% }. This is NOT 'alive'; suppressing ping AND failing loud so it is not read as a down host." >&2
+  exit 3
+fi
+
+if [ -n "$unservable" ]; then
+  echo "[zot-probe] SUPPRESS ping: ${probed} repo(s) probed, NOT ALL servable — ${unservable%% }. Absence-of-ping will alarm." >&2
+  exit 0
+fi
+
+_ping "$URL"
+[ -n "$VERBOSE" ] && echo "[zot-probe] all ${probed} repo(s) servable — pinged heartbeat." >&2
+exit 0

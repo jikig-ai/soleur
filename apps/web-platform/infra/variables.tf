@@ -70,6 +70,17 @@ variable "image_name" {
   default     = "ghcr.io/jikig-ai/soleur-web-platform:latest"
 }
 
+variable "inngest_bootstrap_repo" {
+  # (#7144 task 5a) REPOSITORY PATH ONLY — no host, no tag. The zot consumer probe HEADs the
+  # tag-INDEPENDENT /v2/<repo>/tags/list, so a tag here would be dead weight that also implied a
+  # deploy pin this variable does not control (the live pin is cloud-init-inngest.yml's IREF).
+  # Non-secret and org-derived, so it carries a default: no operator mint is required
+  # (hr-tf-variable-no-operator-mint-default). zot mirrors GHCR under the identical repo path.
+  description = "zot/GHCR repository path of the inngest bootstrap image, probed by the web host's zot consumer probe to prove host-side pullability over the private NIC."
+  type        = string
+  default     = "jikig-ai/soleur-inngest-bootstrap"
+}
+
 variable "volume_size" {
   description = "Size of the persistent volume in GB (for /workspaces)"
   type        = number

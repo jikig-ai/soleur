@@ -73,6 +73,55 @@ run_override 503
 assert "503 (5xx wedged) => NO ping" "[[ '$PINGED' == no ]]"
 assert "503 => exit 0 (absence alarms)" "[[ '$EC' -eq 0 ]]"
 
+# --- #7144 task 5a: MULTI-REPO probing + conservative aggregation ------------------------------
+# 5(a) needs proof the HOST can pull the inngest-bootstrap repo, not just the web one. ZOT_PROBE_REPO
+# is now a comma-separated list. The property under test is that aggregation is ALL-MUST-SERVE: a
+# servable web repo must NOT be able to mask an unservable bootstrap repo, which is precisely the
+# #6400 "every signal green while the thing is broken" class this probe family exists to end.
+# SOLEUR_ZOT_PROBE_STATUS_OVERRIDE takes a positional comma-list so mixed verdicts are testable with
+# no live registry (the bridge has been down since 2026-08-03; see the promotion criterion in tasks.md).
+run_override_multi() {  # <comma repos> <comma codes>
+  local repos="$1" codes="$2" pinglog ec=0
+  pinglog="$(mktemp "$TMP/ping.XXXXXX")"; MOUT="$(mktemp "$TMP/mout.XXXXXX")"
+  SOLEUR_ZOT_PROBE_STATUS_OVERRIDE="$codes" SOLEUR_ZOT_PROBE_PING_LOG="$pinglog" \
+    ZOT_PROBE_REPO="$repos" ZUSER=u ZTOK=t \
+    bash "$SUT" >/dev/null 2>"$MOUT" || ec=$?
+  EC=$ec; PINGED=no; [[ -s "$pinglog" ]] && PINGED=yes
+}
+
+echo "--- #7144: multi-repo aggregation ---"
+run_override_multi "a/web,b/bootstrap" "200,200"
+assert "two repos both servable => ping" "[[ '$PINGED' == yes ]]"
+assert "two repos both servable => exit 0" "[[ '$EC' -eq 0 ]]"
+
+# THE load-bearing case: repo 1 green, repo 2 empty. An any-of rule would ping here and mask it.
+run_override_multi "a/web,b/bootstrap" "200,404"
+assert "web servable but bootstrap 404 => NO ping (all-must-serve, no masking)" "[[ '$PINGED' == no ]]"
+assert "web servable but bootstrap 404 => exit 0 (absence alarms)" "[[ '$EC' -eq 0 ]]"
+assert "the suppress message NAMES the unservable repo, not just a count" \
+  "grep -q 'b/bootstrap(404' '$MOUT'"
+assert "the suppress message does NOT name the servable repo as a fault" \
+  "! grep -q 'a/web(' '$MOUT'"
+
+# 401 outranks a mere suppression even when it is the SECOND repo that broke.
+run_override_multi "a/web,b/bootstrap" "200,401"
+assert "bootstrap 401 => exit 3 (HARD failure outranks suppression)" "[[ '$EC' -eq 3 ]]"
+assert "bootstrap 401 => NO ping" "[[ '$PINGED' == no ]]"
+assert "bootstrap 401 => names the auth-broken repo" "grep -q 'b/bootstrap(401' '$MOUT'"
+
+# 000 on the bootstrap repo is the L3 target signal for the pin's pull path.
+run_override_multi "a/web,b/bootstrap" "200,000"
+assert "bootstrap unreachable (000) => NO ping" "[[ '$PINGED' == no ]]"
+
+# Backward compatibility: ONE injected code still applies to every repo in the list.
+run_override_multi "a/web,b/bootstrap" "200"
+assert "a single injected code applies to ALL repos (pre-#7144 seam preserved)" "[[ '$PINGED' == yes ]]"
+
+# A trailing/duplicate comma must not silently probe an empty path and count it as servable.
+run_override_multi ",," "200"
+assert "a list with no non-empty repo => FATAL exit 1 (never a silent green)" "[[ '$EC' -eq 1 ]]"
+assert "a list with no non-empty repo => NO ping" "[[ '$PINGED' == no ]]"
+
 # --- required-env gate (guards the -u/-f mutants below have creds to reach the probe) -----
 echo "--- seam: required-env gate ---"
 gate_ec=0
