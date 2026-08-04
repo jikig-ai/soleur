@@ -100,7 +100,7 @@ resource "doppler_secret" "kb_drift_ingest_url" {
 # different resource class: a project-scoped `doppler_service_account` was tried and measured
 # unable to enumerate or read the project at all (#7234). The shape that works is one of THESE
 # per config, minted under a `for_each` over the committed inventory — see
-# `token-drift-read-tokens.tf` and ADR-166, with ADR-164 keeping the record of the falsified
+# `token-drift-read-tokens.tf` and ADR-168, with ADR-164 keeping the record of the falsified
 # premise.
 #
 # One property of this resource class is load-bearing there and worth stating where it is

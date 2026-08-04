@@ -171,7 +171,7 @@ jobs:
           # no_access, and workplace visibility turns out to be a precondition for project
           # access rather than something a project membership can confer alone. The two
           # values that might have worked both reach EVERY project in the workplace, wider
-          # than #7159 authorised. See ADR-166.
+          # than #7159 authorised. See ADR-168.
           #
           # SO NOTHING HERE ENUMERATES ANY MORE. The detector takes its config list from the
           # map's KEYS, which Terraform derives from the committed inventory. That is the
@@ -1620,7 +1620,7 @@ jobs:
           # it is a map of CONFIG-SCOPED read tokens, each of which lists exactly itself,
           # so it can no more enumerate the project than the credential this job already
           # holds. The project-scoped identity that could have is gone — measured unable to
-          # enumerate or read anything at all (#7234, ADR-166).
+          # enumerate or read anything at all (#7234, ADR-168).
           #
           # So this gap is now STRUCTURAL rather than elective. It needs a credential class
           # that does not exist here, and its replacement is its own decision — tracked

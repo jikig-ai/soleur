@@ -8,7 +8,7 @@ branch: feat-one-shot-7234-per-config-doppler-service-tokens
 lane: cross-domain
 requires_cpo_signoff: true
 brand_survival_threshold: single-user incident
-adr: ADR-166 (PROVISIONAL ordinal — re-derive before merge)
+adr: ADR-168 (PROVISIONAL ordinal — re-derive before merge)
 ---
 
 # fix(infra): per-config Doppler read tokens restore the token-drift scan to 13 of 13
@@ -264,7 +264,7 @@ accepted cost of option (c), disclosed in the ADR.
 
 ### ADR
 
-**Create `ADR-166-per-config-read-tokens-for-the-token-drift-scan.md`**, header
+**Create `ADR-168-per-config-read-tokens-for-the-token-drift-scan.md`**, header
 `**Supersedes (in part):** ADR-164` — established corpus vocabulary (`ADR-091:6`, `ADR-053:6`,
 `ADR-149:8`), with the reciprocal marker convention of `ADR-027:10`.
 
@@ -282,9 +282,9 @@ record where a reader will find it, rather than overwriting it. But the boundary
 narrower than v1 of this plan claimed: Decision 2's bullet **"The committed inventory reports,
 and gates NOTHING … changes no state"** is falsified by FR1, because a short inventory now
 changes the *minted token set*. That bullet is amended in place to "gates no verdict
-*threshold*", with a pointer to ADR-166. The rest of Decision 2 — declared floor, `configs`
+*threshold*", with a pointer to ADR-168. The rest of Decision 2 — declared floor, `configs`
 counts successful reads, `unknown → degraded → at-floor` — stands and is carried by reference.
-ADR-164's status becomes `Accepted — Decision 1 superseded by ADR-166 (2026-08-03); Decision 2
+ADR-164's status becomes `Accepted — Decision 1 superseded by ADR-168 (2026-08-03); Decision 2
 amended in one bullet, otherwise in force`.
 
 > **Ordinal PROVISIONAL.** `ADR-165` is the highest on freshly-fetched `origin/main`;
@@ -308,10 +308,10 @@ single-line) beside the other `github -> *` edges, with **no hardcoded counts** 
 unchecked, and a "13" here would be a sixth unpinned copy:
 
 ```
-github -> doppler "scheduled-terraform-drift's token-drift scan reads token-shaped keys across the soleur project's configs using per-config read-only service tokens delivered as ONE Actions secret; the config list comes from the committed inventory, never from a live listing (ADR-166)" { technology "doppler CLI (config-scoped read service tokens)" }
+github -> doppler "scheduled-terraform-drift's token-drift scan reads token-shaped keys across the soleur project's configs using per-config read-only service tokens delivered as ONE Actions secret; the config list comes from the committed inventory, never from a live listing (ADR-168)" { technology "doppler CLI (config-scoped read service tokens)" }
 ```
 
-Rationale, hazards and control set live in ADR-166, not the diagram — a label that documents a
+Rationale, hazards and control set live in ADR-168, not the diagram — a label that documents a
 control would rot the first time the control changes.
 
 Both endpoints are already view-included, so **no `views.c4` edit**. `spec.c4` untouched.
@@ -665,7 +665,7 @@ new prose describing a step still on the old credential.
 
 **Phase 4 — guards, sweep, probe.** FR10-FR17, FR18b. Mutation-test every new assertion.
 
-**Phase 5 — ADR, C4, closure.** ADR-166 + the ADR-164 partial-supersede and Decision-2 bullet
+**Phase 5 — ADR, C4, closure.** ADR-168 + the ADR-164 partial-supersede and Decision-2 bullet
 amendment + the `github -> doppler` edge + `bash scripts/regenerate-c4-model.sh` and the
 committed `model.likec4.json`. Re-derive the ordinal against freshly-fetched `origin/main`.
 
@@ -749,7 +749,7 @@ Every command below is written so a no-match `grep` cannot read as a failure und
       `web-platform-infra-apply` reviewer gate. `bash -n` and `shellcheck` clean.
 - [ ] **AC-C6** Every assertion removed from the guard ladder has a named replacement in the same
       suite, listed in the PR body as a removed→replacement table.
-- [ ] **AC-D1** `ADR-166` (or its final ordinal) exists with `**Supersedes (in part):** ADR-164`;
+- [ ] **AC-D1** `ADR-168` (or its final ordinal) exists with `**Supersedes (in part):** ADR-164`;
       ADR-164 carries the reciprocal marker **and** its Decision-2 "gates NOTHING … changes no
       state" bullet is amended to "gates no verdict threshold".
 - [ ] **AC-D2** `model.c4` contains a **single-line** `github -> doppler` relationship carrying
@@ -794,7 +794,7 @@ No open review issue names any other file in this plan's edit set.
 ## Files to Create
 
 - `apps/web-platform/infra/token-drift-read-tokens.tf`
-- `knowledge-base/engineering/architecture/decisions/ADR-166-per-config-read-tokens-for-the-token-drift-scan.md` *(ordinal provisional)*
+- `knowledge-base/engineering/architecture/decisions/ADR-168-per-config-read-tokens-for-the-token-drift-scan.md` *(ordinal provisional)*
 - `knowledge-base/project/specs/feat-one-shot-7234-per-config-doppler-service-tokens/tasks.md`
 
 ## Files to Edit
@@ -974,7 +974,7 @@ from `kb-drift.tf:102-110`, `web-probe-read-token.tf:33`, `workspaces-luks.tf:12
 
 ## Alternatives Considered
 
-Full rationale belongs in ADR-166; this is the index.
+Full rationale belongs in ADR-168; this is the index.
 
 | Alternative | Verdict |
 |---|---|

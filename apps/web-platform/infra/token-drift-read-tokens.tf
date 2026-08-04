@@ -19,7 +19,7 @@
 # rather than something a project membership can confer on its own. The two values that might have
 # worked (`all_enclave_projects`, or any `workplace_role`) both reach EVERY project in the
 # workplace, strictly wider than the single `soleur` project #7159 authorised. The operator chose
-# this shape instead on 2026-08-03 with that measurement in hand. ADR-166 records the reversal;
+# this shape instead on 2026-08-03 with that measurement in hand. ADR-168 records the reversal;
 # ADR-164 records the falsified premise, which is worth keeping rather than overwriting.
 #
 # WHAT DOES THE ENUMERATING, NOW THAT NO CREDENTIAL CAN — the committed inventory. `local
@@ -62,7 +62,7 @@
 # Whole set: one `-replace=` per config in a single apply, generated from the inventory. The map
 # republishes in the same apply either way. Emergency revocation of the whole set is deleting the
 # resource; the next scan reports `degraded 0/13` within 12 hours. Thirteen tokens is thirteen
-# rotation obligations — the accepted cost of this shape, disclosed in ADR-166.
+# rotation obligations — the accepted cost of this shape, disclosed in ADR-168.
 #
 # NO `lifecycle` BLOCK AND NO `ignore_changes` ON `plaintext_value`, DELIBERATELY. With one, a
 # `-replace=` rotation would mint values that never reached the Actions secret, and the scan would

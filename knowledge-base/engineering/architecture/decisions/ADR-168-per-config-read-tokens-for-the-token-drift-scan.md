@@ -1,4 +1,4 @@
-# ADR-166 — Per-config read tokens for the token-drift scan; the committed inventory becomes the reach
+# ADR-168 — Per-config read tokens for the token-drift scan; the committed inventory becomes the reach
 
 - **Status:** Accepted
 - **Date:** 2026-08-03

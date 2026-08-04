@@ -1,6 +1,6 @@
 # ADR-164 — A project-scoped Doppler service account reads the fleet; the coverage floor is declared, not derived
 
-- **Status:** Accepted — **Decision 1 superseded by [ADR-166](./ADR-166-per-config-read-tokens-for-the-token-drift-scan.md) (2026-08-03); Decision 2 amended in one bullet, otherwise in force**
+- **Status:** Accepted — **Decision 1 superseded by [ADR-168](./ADR-168-per-config-read-tokens-for-the-token-drift-scan.md) (2026-08-03); Decision 2 amended in one bullet, otherwise in force**
 - **Date:** 2026-08-03
 - **PR:** #7162
 - **Issue:** #7159 (the token-drift scan reads one Doppler config and calls the result healthy)
@@ -172,9 +172,9 @@ gate and the report are split:
   ratio and the unread list and moves **no verdict state**: no arm starts or stops firing on
   account of it, no issue opens or closes. A denominator that gates is a denominator that can
   derive the healthy state and close the channel.
-  > **AMENDED 2026-08-03 by [ADR-166](./ADR-166-per-config-read-tokens-for-the-token-drift-scan.md).**
+  > **AMENDED 2026-08-03 by [ADR-168](./ADR-168-per-config-read-tokens-for-the-token-drift-scan.md).**
   > This bullet originally read *"gates NOTHING … changes no state"*, and that is now **false**.
-  > ADR-166 derives the per-config read tokens' `for_each` from this file, so the name lines
+  > ADR-168 derives the per-config read tokens' `for_each` from this file, so the name lines
   > determine the credential's REACH — a shortened inventory mints fewer tokens and destroys the
   > ones it drops. What survives is the narrower claim above: it gates no verdict *threshold*,
   > because the floor is a literal declared independently in the workflow. The rest of this
@@ -260,7 +260,7 @@ revoked one. Every one is a real, producible regression with a performable remed
 | Alternative | Verdict |
 |---|---|
 | **A union of two config-scoped `doppler_service_token`s** — keep the `prd_terraform` credential, add a `prd`-root one | **Rejected.** It reads 2 of 13 while carrying `prd`-root blast radius. At N=2 the union *is* `for_each` with the loop unrolled, so it takes that option's cost without its generality, and it forces a credential-iteration surface through the detector that the chosen shape does not need at all. Decisively, #7159's own "Known follow-up" warns that a 2-config scan "would go quiet while still missing the fan-out class" — which is exactly what a union's `at-floor` close arm would have done. |
-| **A `for_each` credential per config** (13 `doppler_service_token`s) | **Rejected here; ADOPTED by [ADR-166](./ADR-166-per-config-read-tokens-for-the-token-drift-scan.md) after this rejection was falsified by measurement.** The rejection read: "13 credentials, 13 Actions secrets, 13 `-target=` legs and a detector that loops credentials, to obtain what one project membership obtains — and every credential is an independent rotation and revocation obligation." Measured 2026-08-03: **one** Actions secret (`jsonencode` over the `for_each` map is tracked sensitive and key-sorted), **one** `-target=` leg (targeting a `for_each` resource expands to every instance), and the project membership obtains **nothing** — it could neither enumerate nor read. Three of the four cost claims were wrong and the premise they were weighed against was void. Only the rotation-obligation clause survives, and ADR-166 accepts it. |
+| **A `for_each` credential per config** (13 `doppler_service_token`s) | **Rejected here; ADOPTED by [ADR-168](./ADR-168-per-config-read-tokens-for-the-token-drift-scan.md) after this rejection was falsified by measurement.** The rejection read: "13 credentials, 13 Actions secrets, 13 `-target=` legs and a detector that loops credentials, to obtain what one project membership obtains — and every credential is an independent rotation and revocation obligation." Measured 2026-08-03: **one** Actions secret (`jsonencode` over the `for_each` map is tracked sensitive and key-sorted), **one** `-target=` leg (targeting a `for_each` resource expands to every instance), and the project membership obtains **nothing** — it could neither enumerate nor read. Three of the four cost claims were wrong and the premise they were weighed against was void. Only the rotation-obligation clause survives, and ADR-168 accepts it. |
 | **Reuse `DOPPLER_TOKEN_TF`** | **Rejected.** It is a workplace-scope personal token; reusing it would make the scheduled scan a consumer of the widest credential in the repo, and it is not scoped, rotatable or revocable independently of everything else that uses it. |
 | **Reuse the existing `DOPPLER_TOKEN_PRD` repo secret** | **Rejected.** Not Terraform-managed, shared by six consumers, not rotatable by `-replace=`, and config-scoped to `prd` root — so it reads 1 of 13. |
 | **A denominator that gates the state** | **Rejected.** A short inventory would derive the healthy state, fire the close arm and silence the channel — fail-open in the exact direction the design claims to guard. |

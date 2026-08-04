@@ -30,7 +30,7 @@ Phase order is dependency-directed, not file-grouped. Do not reorder.
   - [x] **0.3.4** Confirm a non-empty identity for the configs ADR-164's census called vacuous
         (`cli`, `cli_ops`).
   - [x] **0.3.5** **Decision gate.** If 0.3.1 or 0.3.3 fails, control **C-c is DROPPED**. Record
-        that in the plan/spec and in ADR-166. Do NOT improvise a substitute mid-build — C-a
+        that in the plan/spec and in ADR-168. Do NOT improvise a substitute mid-build — C-a
         (static, pre-merge) carries the class and C-d (`sort -u`) is required regardless.
 - [x] **0.4** Re-measure the inventory against live Doppler
       (`doppler configs -p soleur --json | jq -r '.[].name' | sort`). This is the **only**
