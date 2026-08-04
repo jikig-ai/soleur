@@ -45,6 +45,18 @@ on:
       - ".github/workflows/git-data-rung2-rehearsal.yml"
       - ".github/workflows/apply-web-platform-infra.yml"
       - ".github/workflows/scheduled-terraform-drift.yml"
+      # (#7203 review) inngest-bootstrap-mirror-only.test.sh asserts ~30 properties OF
+      # build-inngest-bootstrap-image.yml -- the mirror_only gating, the belt posture on both
+      # trigger paths, the bridge-outcome branch, and the behavioural degraded() contract.
+      # That workflow was not listed here, so the suite could not fire on the file it guards:
+      # a PR restoring `continue-on-error: true` under mirror_only, or re-adding the
+      # `if: steps.zot_bridge.outcome == 'success'` gate, touches no apps/*/infra/** path and
+      # would have skipped its own guard entirely. #7203 ran this job only incidentally,
+      # because it also ADDED the suite file under apps/web-platform/infra/.
+      # Same defect class as the #6454, #6178 and #7025 comments above.
+      # cutover-inngest-workflow.test.sh also reads this workflow (its BUILD_IMG variable),
+      # so the same one-line addition closes that pre-existing gap too.
+      - ".github/workflows/build-inngest-bootstrap-image.yml"
       # (#6178) cutover-inngest-workflow.test.sh asserts ~90 properties OF cutover-inngest.yml
       # -- the anchor derivation, the non-vacuity gate, the per-arm window split, the null-safe
       # bucketing, and the emitter-parity of the flip-FSM reason set. Without this path a PR that

@@ -132,7 +132,7 @@ owner: founder
 ## Review & Feedback
 
 - After merging, read files from the merged branch (`git show main:<path>`), not the bare repo directory (stale) [id: rf-after-merging-read-files-from-the-merged]. This bare-root assumption holds for local CLI dev; the Concierge agent workspace is a **non-bare** clone (`.git` is a directory) — see ADR-099 for the three git-surface layouts and which code paths each gates.
-- Never skip QA/review before merging [id: rf-never-skip-qa-review-before-merging]. Full pipeline: plan → implement → review → QA → compound → ship.
+- Never skip QA/review before merging, and never wait on a human to do it [id: rf-never-skip-qa-review-before-merging]. Full pipeline: plan → implement → review → QA → compound → ship. "Review-gated" = `/soleur:review` RAN and its findings are fixed inline, never that a person approves. Carry every PR to MERGED in-session; "awaiting review"/"needs a human" as an end state defers to an operator who cannot clear it. Pause only for irreversible prod effects (`hr-menu-option-ack-not-prod-write-auth`). **Why:** 2026-08-04 — read "review-gated" as human-gated and parked a finished PR.
 - Before spawning review agents, push the branch to remote (`git push -u origin <branch>`) [id: rf-before-spawning-review-agents-push-the]. Review subagents use remote state; unpushed commits produce stale analysis. **Why:** 2026-04-13 — 4 of 9 reviewers analyzed pre-push state.
 - Before shipping, verify: (1) review comments resolved, (2) QA run with screenshots if UI, (3) tests pass locally [id: rf-before-shipping-verify-1-review-comments].
 - When a reviewer or user says to keep a feature/phase, do not remove it without explicit confirmation [id: rf-when-a-reviewer-or-user-says-to-keep-a].
