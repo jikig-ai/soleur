@@ -335,6 +335,14 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
+          # #7220 AC20 — record when THIS apply began, for the verify step's start_ts freshness
+          # pin. Without a reference point the verify asserts a PROXY: exit_code=0,
+          # files_written=19/19 and a populated restarts[] are all satisfiable by a frame the
+          # host published on some EARLIER apply, so the gate would prove "some apply
+          # reconciled" and not "this one did". A stale frame is exactly what a handler that
+          # dies before publishing leaves behind, which is the #7220 shape.
+          # Captured BEFORE the apply so clock skew can only make the pin stricter, never laxer.
+          echo "APPLY_START_EPOCH=$(date -u +%s)" >> "$GITHUB_ENV"
           doppler run --name-transformer tf-var -- \
             terraform apply -target=terraform_data.deploy_pipeline_fix \
             -target=terraform_data.infra_config_handler_bootstrap \
@@ -618,6 +626,29 @@ jobs:
               cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
               exit 1
             fi
+            # #7220 AC20 — FRESHNESS PIN. Everything adjudicated above is satisfiable by a
+            # frame the host published on an EARLIER apply: exit_code=0, files_written=19/19,
+            # matching per-file digests and a populated restarts[] all persist on disk. So
+            # without this the gate proves "some apply reconciled", never "THIS one did" — and
+            # a handler that dies before publishing is exactly what leaves the previous frame
+            # in place, which is the #7220 shape. Same guard as
+            # scripts/followthroughs/ac12-telemetry-positive-control-7103.sh Guard 1.
+            FRAME_START_TS=$(jq -r '.start_ts // empty' /tmp/infra-config-status-response.txt 2>/dev/null || true)
+            if [[ ! "$FRAME_START_TS" =~ ^[0-9]+$ ]]; then
+              echo "::error::infra-config frame carries no numeric start_ts ('${FRAME_START_TS:-<absent>}') — freshness cannot be established, so a stale frame cannot be distinguished from this apply's. Failing closed."
+              cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+              exit 1
+            fi
+            if [[ ! "${APPLY_START_EPOCH:-}" =~ ^[0-9]+$ ]]; then
+              echo "::error::APPLY_START_EPOCH was not recorded by the apply step — the freshness pin cannot run, and silently skipping it would restore the stale-frame blind spot. Failing closed."
+              exit 1
+            fi
+            if [[ "$FRAME_START_TS" -lt "$APPLY_START_EPOCH" ]]; then
+              echo "::error::STALE FRAME: the status endpoint reports an apply that started at ${FRAME_START_TS}, BEFORE this workflow's apply began at ${APPLY_START_EPOCH}. The handler did not publish a new frame for this run — every green value above belongs to a previous apply. This is the #7220 failure shape: delivery reported against a frame the dying handler never overwrote."
+              cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+              exit 1
+            fi
+            echo "Frame freshness OK: start_ts=${FRAME_START_TS} postdates this apply's start (${APPLY_START_EPOCH})."
             echo "Infra-config apply verified: count invariant + per-file content match (#6594 PR-B)."
           elif [[ "$HTTP_CODE" == "000" || "$HTTP_CODE" == "502" || "$HTTP_CODE" == "503" ]]; then
             # #7095 R34 — DISTINCT from the 404 branch above, and the distinction is the whole
