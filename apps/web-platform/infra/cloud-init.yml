@@ -135,6 +135,16 @@ write_files:
       # in infra-config-install; exact argv, no wildcards (sudo-rs safe).
       Cmnd_Alias DROPIN_TRY_RESTART = /usr/bin/systemctl try-restart vector.service
       deploy ALL=(root) NOPASSWD: DROPIN_TRY_RESTART
+
+      # #7220 — daemon-reload (full rationale in the mirrored
+      # deploy-inngest-bootstrap.sudoers; keep the two in sync). THE REPAIR: called by
+      # infra-config-apply.sh since ~2026-05 with no grant, so activation silently never
+      # happened while delivery looked healthy. daemon-reload takes no unit argument, so
+      # exact-argv pinning buys nothing on scope — what bounds it is the *.service digest pin
+      # and drop-in shape gate in infra-config-install.sh, which ship before or with it.
+      # Reloads unit files only; cannot start/stop/restart anything on its own.
+      Cmnd_Alias SYSTEMCTL_DAEMON_RELOAD = /usr/bin/systemctl daemon-reload
+      deploy ALL=(root) NOPASSWD: SYSTEMCTL_DAEMON_RELOAD
     owner: root:root
     permissions: '0440'
 

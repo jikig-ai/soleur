@@ -320,11 +320,17 @@ CRED_FILE="/etc/default/soleur-doppler-token"
 #           DROPIN_TRY_RESTART grant pins `try-restart` only), turning every read into a failure.
 #   WRITE — must expand to the exact argv the sudoers alias grants. sudo matches the full
 #           resolved command, so a stray flag here is a denial, not a widening.
+#
+# #7220 B3 — the WRITE seam is named SYSTEMCTL_PRIV, not SYSTEMCTL_RESTART, because it now
+# carries two verbs: `try-restart <unit>` (DROPIN_TRY_RESTART) and `daemon-reload`
+# (SYSTEMCTL_DAEMON_RELOAD). The env override keeps its original name so nothing downstream
+# has to change. Both verbs are granted separately and matched exactly by sudo; the seam is
+# only the shared prefix, never an authorisation of its own.
 # The seam exists so the predicate, the grading and the ordering all run UNGUARDED in sandbox
 # mode. Gating them behind INFRA_CONFIG_TEST_MODE instead would mean the assertions covering
 # this logic assert behaviour that never executes in the test run.
 SYSTEMCTL_SHOW="${INFRA_CONFIG_SYSTEMCTL_SHOW:-/usr/bin/systemctl}"
-SYSTEMCTL_RESTART="${INFRA_CONFIG_SYSTEMCTL:-sudo /usr/bin/systemctl}"
+SYSTEMCTL_PRIV="${INFRA_CONFIG_SYSTEMCTL:-sudo /usr/bin/systemctl}"
 
 # Seconds to wait before grading a restart by effect. try-restart returns as soon as the unit is
 # forked, so reading ActiveState immediately would grade a process that has not yet lived long
@@ -586,13 +592,22 @@ fi
 # sync/daemon-reload ran afterwards; a restart decided after the frame was published could never
 # appear in it.
 #
-# sync + daemon-reload stay behind INFRA_CONFIG_TEST_MODE (they need a real host). The
-# reconciliation loop does NOT — it runs through the seams in sandbox mode so the predicate,
-# the grading and the ordering are actually exercised by the suite rather than gated out of it.
+# #7220 B4 — SPLIT. `sync` stays behind INFRA_CONFIG_TEST_MODE because it needs a real host and
+# has no seam. `daemon-reload` moves OUT and onto the WRITE seam, for two independent reasons:
+#
+#   1. It was the #7220 bug. The bare `systemctl daemon-reload` that stood here ran as
+#      User=deploy with no grant, returned "Interactive authentication required", and set -e
+#      aborted the handler after all 19 files were written but before any unit was reconciled.
+#      Routing it through SYSTEMCTL_PRIV is what makes it match the sudoers alias.
+#   2. Gated out of the suite, it was untestable by construction. A verb the tests never see is
+#      a verb whose denial the tests cannot detect — which is precisely why this shipped
+#      unnoticed for ~3 months. On the seam it executes in sandbox mode against the stub, so
+#      the reload-denied and reload-success arms exercise real code rather than asserting
+#      behaviour that never runs.
 if [[ -z "${INFRA_CONFIG_TEST_MODE:-}" ]]; then
   sync
-  systemctl daemon-reload
 fi
+$SYSTEMCTL_PRIV daemon-reload
 
 RESTARTS_JSON=""
 for restart_entry in "${RESTART_MAP[@]}"; do
@@ -657,7 +672,7 @@ for restart_entry in "${RESTART_MAP[@]}"; do
         # reported as `sudo_denied`, so the derived remediation ("repair DROPIN_TRY_RESTART") sent
         # an agent at a grant that server.tf already asserts is present, leaving no next lever
         # short of SSH.
-        r_err=$($SYSTEMCTL_RESTART try-restart "$r_unit" 2>&1 >/dev/null) || r_rc=$?
+        r_err=$($SYSTEMCTL_PRIV try-restart "$r_unit" 2>&1 >/dev/null) || r_rc=$?
         if [[ "$r_rc" -ne 0 ]]; then
           # try-restart returns non-zero when the restart JOB fails (start error, dependency
           # failure, timeout), not only when sudo refuses. Those are different defects with

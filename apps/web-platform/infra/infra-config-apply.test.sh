@@ -746,7 +746,28 @@ STUB
 #!/usr/bin/env bash
 # Records the FULL argv so ordering and sudoers lockstep are both checkable.
 printf '%s\n' "$*" >> "$STUB_CALLS"
-[[ "$1" == "try-restart" ]] || { echo "stub: expected 'try-restart', got '$1'" >&2; exit 64; }
+# #7220 B7 — ONE verb-dispatching stub, not a second stub binary. The WRITE seam now carries two
+# granted verbs (try-restart <unit>, daemon-reload), and sudo matches the FULL resolved argv, so
+# the stub's job is to be as intolerant as sudo is: an unexpected verb or a stray argument is
+# exit 64, never a silent success. A stub that accepted any argv would make the handler's call
+# shape unpinned — the class where switching a flag leaves a suite green.
+case "$1" in
+  daemon-reload)
+    # Exactly one word. `daemon-reload` takes no unit, so any extra argument is a DIFFERENT
+    # command than the one sudoers grants and would be denied in production.
+    [[ "$#" -eq 1 ]] || { echo "stub: daemon-reload takes no arguments, got '$*'" >&2; exit 64; }
+    # The denial arm reproduces polkit's real refusal text, which is what #7220 actually
+    # returned, so the handler's attribution is graded against the bytes it will really meet.
+    [[ -f "$STUB_STATE/daemon-reload.deny" ]] && {
+      echo "Failed to reload daemon: Interactive authentication required." >&2
+      exit 1
+    }
+    printf '1' > "$STUB_STATE/daemon-reload.ran"
+    exit 0
+    ;;
+  try-restart) : ;;
+  *) echo "stub: unexpected verb '$1'" >&2; exit 64 ;;
+esac
 unit="$2"
 # A bare `exit 1` cannot distinguish a sudo REFUSAL from a failed restart JOB, and the handler now
 # separates them because they have different owners and different remediations. Each arm therefore
@@ -852,7 +873,7 @@ test_reconcile_stale_fires_and_disarms() {
   : > "$STUB_CALLS"
   bash "$HANDLER" >/dev/null 2>&1 || true
   assert_eq "second apply skips the now-current unit" "not_stale" "$(restart_field vector.service reason)"
-  if [[ -s "$STUB_CALLS" ]]; then
+  if grep -q "^try-restart" "$STUB_CALLS"; then
     echo "  FAIL: predicate did not self-disarm — restarted again ($(tr '\n' ';' < "$STUB_CALLS"))"; FAIL=$((FAIL + 1))
   else
     echo "  PASS: predicate self-disarmed (no restart attempted on the second apply)"; PASS=$((PASS + 1))
@@ -869,7 +890,7 @@ test_reconcile_inactive_short_circuits() {
   assert_eq "inactive unit reason" "unit_inactive" "$(restart_field vector.service reason)"
   # try-restart is a deliberate no-op on an inactive unit and STILL EXITS 0, so an attempt here
   # would grade as a successful restart that never happened. Assert no attempt was made at all.
-  if [[ -s "$STUB_CALLS" ]]; then
+  if grep -q "^try-restart" "$STUB_CALLS"; then
     echo "  FAIL: attempted a restart on an inactive unit ($(tr '\n' ';' < "$STUB_CALLS"))"; FAIL=$((FAIL + 1))
   else
     echo "  PASS: no restart attempted on an inactive unit"; PASS=$((PASS + 1))
@@ -944,7 +965,7 @@ test_reconcile_timestamp_unparseable() {
   assert_eq "unparseable action" "failed"                 "$(restart_field vector.service action)"
   assert_eq "unparseable reason" "timestamp_unparseable"  "$(restart_field vector.service reason)"
   # Treating unparseable as stale would restart on every apply while reporting success.
-  if [[ -s "$STUB_CALLS" ]]; then
+  if grep -q "^try-restart" "$STUB_CALLS"; then
     echo "  FAIL: attempted a restart on an unreadable timestamp"; FAIL=$((FAIL + 1))
   else
     echo "  PASS: no restart attempted on an unreadable timestamp"; PASS=$((PASS + 1))
@@ -1048,6 +1069,181 @@ test_reconcile_unchanged_content_preserves_mtime() {
   restart_teardown
 }
 
+# --- #7220 B2/B3/B4: the daemon-reload grant, and the seam that carries it -----------------
+#
+# THIS IS THE REPAIR. Everything in PR-A was the instrument that measured this gap; this arm is
+# the property that closes it. The handler's `systemctl daemon-reload` ran as User=deploy with
+# no grant, returned "Interactive authentication required", and set -e aborted the handler AFTER
+# all 19 files were written but BEFORE unit reconciliation — so delivery was healthy and
+# ACTIVATION silently was not, since roughly 2026-05.
+#
+# The lockstep matters more here than for try-restart. Sudoers matching is EXACT, so a drift
+# between grant and caller does not widen anything — it DENIES, and a denied reload is exactly
+# the silent no-op #7220 already was. Pinning both provisioning paths and the caller together is
+# what stops this from regressing into the same invisible failure.
+test_daemon_reload_grant_lockstep() {
+  echo "TEST: #7220 B2 — daemon-reload is granted, and the handler sends the granted argv"
+  local sudoers="${SCRIPT_DIR}/deploy-inngest-bootstrap.sudoers"
+  local cloud_init="${SCRIPT_DIR}/cloud-init.yml"
+
+  # (a) Both provisioning paths must grant it, and grant the SAME thing. cloud-init is create-time
+  # under ignore_changes=[user_data] and the sudoers file is the delivered copy; a host provisioned
+  # from one and reconciled by the other must end up with identical authority.
+  local g_sudoers g_cloudinit
+  g_sudoers=$(sed -n 's/^Cmnd_Alias SYSTEMCTL_DAEMON_RELOAD = //p' "$sudoers" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  g_cloudinit=$(sed -n 's/^[[:space:]]*Cmnd_Alias SYSTEMCTL_DAEMON_RELOAD = //p' "$cloud_init" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  # Each side is pinned against the LITERAL, not against the other. A bare cross-file equality
+  # passes vacuously when both extractions come back empty — measured on this arm's first RED
+  # run, where "" == "" reported PASS while neither file granted anything at all.
+  assert_eq "sudoers grants daemon-reload" "/usr/bin/systemctl daemon-reload" "$g_sudoers"
+  assert_eq "cloud-init mirror grants the identical argv" "/usr/bin/systemctl daemon-reload" "$g_cloudinit"
+
+  # (b) A Cmnd_Alias with no User_Spec grants NOTHING — it is a definition, not an authorisation.
+  # Asserting only the alias would pass against a file that never says `deploy ALL=(root)`.
+  if grep -qE '^deploy ALL=\(root\) NOPASSWD: SYSTEMCTL_DAEMON_RELOAD$' "$sudoers"; then
+    echo "  PASS: sudoers binds the alias to deploy via a User_Spec"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: SYSTEMCTL_DAEMON_RELOAD has no 'deploy ALL=(root) NOPASSWD:' line — the alias grants nothing"
+    FAIL=$((FAIL + 1))
+  fi
+  if grep -qE '^[[:space:]]*deploy ALL=\(root\) NOPASSWD: SYSTEMCTL_DAEMON_RELOAD$' "$cloud_init"; then
+    echo "  PASS: cloud-init binds the alias to deploy via a User_Spec"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: cloud-init mirror defines the alias without a User_Spec"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # (c) The CALLER must actually route through the seam. A bare `systemctl daemon-reload` (what
+  # shipped, and what #7220 is) would be denied no matter how the grant is written, so asserting
+  # the grant alone proves nothing about whether the reload can run.
+  # shellcheck disable=SC2016
+  local seam_default
+  seam_default=$(sed -n 's/^SYSTEMCTL_PRIV="\${INFRA_CONFIG_SYSTEMCTL:-\(.*\)}"$/\1/p' "$HANDLER")
+  assert_eq "the privileged seam defaults to a sudo-prefixed absolute systemctl" \
+    "sudo /usr/bin/systemctl" "$seam_default"
+  # Anchored on the seam variable, not on the bare verb: a bare-token grep would match the
+  # prose in this file's own header comments describing the bug.
+  if grep -qE '^[[:space:]]*\$SYSTEMCTL_PRIV daemon-reload$' "$HANDLER"; then
+    echo "  PASS: the handler invokes daemon-reload through the privileged seam"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: handler does not call daemon-reload via \$SYSTEMCTL_PRIV — this is the #7220 shape"
+    FAIL=$((FAIL + 1))
+  fi
+  # And the un-seamed form must be GONE, not merely joined by a seamed one.
+  if grep -qE '^[[:space:]]*systemctl daemon-reload$' "$HANDLER"; then
+    echo "  FAIL: a bare 'systemctl daemon-reload' survives in the handler — it would be denied"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: no bare un-seamed daemon-reload remains"; PASS=$((PASS + 1))
+  fi
+
+  # (d) What sudoers grants is what sudo RUNS, so the granted argv is the seam minus its sudo
+  # prefix. This is the join that makes (a) and (c) one property rather than two coincidences.
+  assert_eq "granted argv equals the caller's resolved argv" \
+    "${seam_default#sudo } daemon-reload" "$g_sudoers"
+}
+
+# --- #7220 B7: the reload actually runs, and its denial is attributed --------------------
+#
+# TWO ARMS, and the pair is the point. The denied arm alone would pass against a handler that
+# never calls daemon-reload at all (no call, no denial, no fatal marker — vacuously "correct"),
+# which is the shape #7220 shipped in. The success arm is what makes the denial meaningful.
+test_daemon_reload_runs_on_a_clean_apply() {
+  echo "TEST: #7220 B7 — a clean apply invokes daemon-reload through the seam, exactly once"
+  restart_setup
+  arm_unit vector.service active "$(date -u +%s)"
+  bash "$HANDLER" >/dev/null 2>&1 || true
+
+  # POSITIVE CONTROL. Counted, not just present: the handler must not reload per-file (19x on
+  # every apply is a real cost on a cx33) and must not skip it.
+  local n_reload
+  n_reload=$(grep -c '^daemon-reload$' "$STUB_CALLS" 2>/dev/null || true)
+  [[ "$n_reload" =~ ^[0-9]+$ ]] || n_reload=0
+  assert_eq "daemon-reload invoked exactly once per apply" "1" "$n_reload"
+
+  # The argv is EXACTLY the granted one. The stub exits 64 on a stray argument, so a handler
+  # sending `daemon-reload --now` would surface here rather than in production as a denial.
+  if grep -qxF 'daemon-reload' "$STUB_CALLS"; then
+    echo "  PASS: the argv sent is exactly 'daemon-reload', no extra arguments"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: daemon-reload argv is not the granted shape: $(tr '\n' ';' < "$STUB_CALLS")"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # A successful reload is NOT a fatal event — the channel must stay quiet, or it trains the
+  # reader to ignore the one time it fires (AC14).
+  local n_fatal
+  n_fatal=$(grep -c 'SOLEUR_INFRA_CONFIG_FATAL' "$LOGGER_LOG" 2>/dev/null || true)
+  [[ "$n_fatal" =~ ^[0-9]+$ ]] || n_fatal=0
+  assert_eq "zero fatal markers when the reload succeeds" "0" "$n_fatal"
+  assert_eq "fatal_line zeroed when the reload succeeds" "0" "$(_frame_field fatal_line)"
+
+  restart_teardown
+}
+
+test_daemon_reload_denied_is_attributed() {
+  echo "TEST: #7220 B7 — a DENIED daemon-reload is named by the fatal channel (this is #7220)"
+  restart_setup
+  arm_unit vector.service active "$(date -u +%s)"
+  # Reproduce the exact production failure: the grant is absent, so polkit refuses.
+  printf '1' > "$STUB_STATE/daemon-reload.deny"
+
+  local rc=0
+  bash "$HANDLER" >/dev/null 2>&1 || rc=$?
+
+  # It must DIE, not limp on. A reload that silently failed is what left every managed unit
+  # running its start-time environment for ~3 months.
+  if [[ "$rc" -ne 0 ]]; then
+    echo "  PASS: a denied reload fails the apply rather than passing silently"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: handler exited 0 despite a denied daemon-reload — the #7220 silent failure"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # And PR-A's channel must name it. This is the join between the two PRs: the instrument
+  # shipped in PR-A is what makes this repair's failure mode diagnosable without SSH.
+  # fatal_cmd carries $BASH_COMMAND, which is UNEXPANDED source text — that is the property
+  # keeping secrets out of the frame, and it is deliberate. A consequence of routing the reload
+  # through the seam (B4) is that the operator now reads `?SYSTEMCTL_PRIV daemon-reload` where
+  # the pre-B4 bare call produced `systemctl daemon-reload` (the `$` is sanitized to `?`).
+  #
+  # KNOWN OPERATOR-FACING WART, deliberately asserted rather than papered over: the actionable
+  # word survives, so the annotation still tells a non-technical operator WHICH step died, but
+  # the seam's variable name is noise they cannot act on. Flagged for the mandatory
+  # user-impact-reviewer pass on this PR rather than silently accepted.
+  local f_cmd
+  f_cmd=$(_frame_field fatal_cmd)
+  if [[ "$f_cmd" == *"daemon-reload"* ]]; then
+    echo "  PASS: fatal_cmd names the failing verb ($f_cmd)"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: fatal_cmd '$f_cmd' does not name daemon-reload — the operator cannot tell what died"
+    FAIL=$((FAIL + 1))
+  fi
+  local f_line
+  f_line=$(_frame_field fatal_line)
+  if [[ "$f_line" =~ ^[0-9]+$ ]] && [[ "$f_line" -gt 0 ]]; then
+    echo "  PASS: fatal_line carries a real coordinate ($f_line)"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: fatal_line is '$f_line' — attribution missing, which is #7220's original shape"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # NON-VACUITY: the files were still delivered. If this read 0 the arm would be measuring a
+  # handler that died before writing anything, not one that died at activation — a different
+  # bug wearing the same assertion.
+  local written
+  written=$(_frame_field files_written)
+  if [[ "$written" =~ ^[0-9]+$ ]] && [[ "$written" -gt 0 ]]; then
+    echo "  PASS: delivery still completed ($written files) — the failure is activation, not delivery"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: files_written='$written' — this arm is not exercising the activation failure"
+    FAIL=$((FAIL + 1))
+  fi
+
+  restart_teardown
+}
+
 test_sudoers_caller_argv_lockstep() {
   echo "TEST: lockstep — the argv the handler sends is the argv sudoers grants"
   # Sudoers matching is EXACT. A drift between the grant and the caller does not widen anything;
@@ -1065,7 +1261,7 @@ test_sudoers_caller_argv_lockstep() {
   # The single quotes below hold a sed SCRIPT; the ${...} inside is literal text being matched in
   # the handler's source, not an expansion we want performed here.
   # shellcheck disable=SC2016
-  seam_default=$(sed -n 's/^SYSTEMCTL_RESTART="\${INFRA_CONFIG_SYSTEMCTL:-\(.*\)}"$/\1/p' "$HANDLER")
+  seam_default=$(sed -n 's/^SYSTEMCTL_PRIV="\${INFRA_CONFIG_SYSTEMCTL:-\(.*\)}"$/\1/p' "$HANDLER")
   assert_eq "the restart seam defaults to a sudo-prefixed absolute systemctl" \
     "sudo /usr/bin/systemctl" "$seam_default"
 
@@ -1539,6 +1735,9 @@ test_reconcile_timestamp_unparseable
 test_reconcile_vector_ordered_last
 test_reconcile_survives_missing_inputs
 test_reconcile_unchanged_content_preserves_mtime
+test_daemon_reload_grant_lockstep
+test_daemon_reload_runs_on_a_clean_apply
+test_daemon_reload_denied_is_attributed
 test_sudoers_caller_argv_lockstep
 test_happy_path
 test_missing_env_var

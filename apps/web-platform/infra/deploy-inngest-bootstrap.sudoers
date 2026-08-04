@@ -123,3 +123,24 @@ deploy ALL=(root) NOPASSWD: GIT_LOCK_CHARDEVICE_SWEEP
 # alias and that map agree, so the two cannot drift apart silently.
 Cmnd_Alias DROPIN_TRY_RESTART = /usr/bin/systemctl try-restart vector.service
 deploy ALL=(root) NOPASSWD: DROPIN_TRY_RESTART
+
+# #7220 — daemon-reload. THE REPAIR: this verb has been called by infra-config-apply.sh since
+# ~2026-05 with no grant at all. It returned "Interactive authentication required" and set -e
+# aborted the handler AFTER all 19 managed files were written but BEFORE any unit was
+# reconciled, so delivery looked healthy while ACTIVATION never happened. Every managed unit
+# has been running the environment it was started with.
+#
+# SCOPE, stated plainly because it is wider than every other alias here and cannot be narrowed:
+# `daemon-reload` takes no unit argument, so exact-argv pinning buys NOTHING on the scope axis.
+# It reloads every unit file on the host. The control that bounds what it can adopt is therefore
+# NOT this line — it is the content gate in infra-config-install.sh, which pins
+# /etc/systemd/system/*.service dests to an exact digest (#7220 AC-B1) and refuses any drop-in
+# carrying User=, ExecStart=, AmbientCapabilities= or NoNewPrivileges=. That gate ships before
+# or with this grant, never after; without it, deploy could write an arbitrary root unit and
+# then make systemd adopt it.
+#
+# It reloads unit FILES; it does not start, stop or restart anything, so on its own it cannot
+# move a unit into a new state — a separate grant is still required for that, and the only one
+# is DROPIN_TRY_RESTART above.
+Cmnd_Alias SYSTEMCTL_DAEMON_RELOAD = /usr/bin/systemctl daemon-reload
+deploy ALL=(root) NOPASSWD: SYSTEMCTL_DAEMON_RELOAD
