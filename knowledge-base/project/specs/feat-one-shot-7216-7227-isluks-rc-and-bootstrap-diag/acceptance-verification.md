@@ -90,6 +90,39 @@ emitter-relative arg4 = '/var/log/cloud-init-output.log'
 | AC18 all four floors re-derived with an itemised sum | PASS | luks 113→129, capture 30→33, rung2 70→71, runcmd 36→44 |
 | AC19 ADR-147 addendum exists, records cost + headroom | PASS | also corrects that ADR's now-false "three arming sites" claim |
 
+## Phase 5.1 — full-suite exit gate
+
+`bash scripts/test-all.sh` → **rc=1, 258/259 suites passed**. The run's preamble confirms the
+coverage boundary is on the right side of this diff:
+
+```
+NOTE: your diff touches apps/web-platform/infra/. The CI-registered infra runner
+      (apps/web-platform/infra/run-registered-suites.sh) will be invoked below as a
+      [nested suite]
+```
+
+and the nested runner reported **87 passed, 1 failed (of 88)**.
+
+**The single RED is `cron-egress-firewall.test.sh`, and it is contention, not a regression.**
+Not accepted as a flake — confirmed three ways, per the banner's own instruction:
+
+1. **Isolated re-run on this branch: `216 passed, 0 failed` (rc=0).**
+2. **No overlap.** `git diff --name-only <base>..HEAD` matches nothing cron/egress/firewall;
+   that suite reads none of the files this PR touches.
+3. **The run announced the contention itself:**
+
+```
+[contention] machine: 16 cores, load 10.09, MemAvailable 13736MB
+[contention] siblings: 2 other worktree(s) running test-all.sh
+[contention]   -> pid 2466210 in .worktrees/feat-one-shot-6808-luks-verify-schedule (running 2153s)
+[contention]   -> pid 3585194 in .worktrees/feat-one-shot-7242-zot-mirror-error-misdiagnosis (running 578s)
+[contention] BANNER SIBLING_RUN_DETECTED
+```
+
+The banner's third confirmation ("the matching CI gate") is CI on this PR, which runs the same
+infra suites via `infra-validation.yml`. **Every suite this PR actually changes was green in
+that same run**, including `git-data-runcmd-rehearsal.test.sh` under the nested runner.
+
 ## Deliberate deviations from the plan
 
 1. **The restart warning does not reuse `_sshd_detail`.** The plan said to use it in all three
