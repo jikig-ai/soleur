@@ -407,7 +407,10 @@ runcmd:
     _sshd_t_rc=0
     _sshd_t_err="$(/usr/sbin/sshd -t 2>&1)" || _sshd_t_rc=$?
     _sshd_detail=/run/git-data-sshd-t.err
-    ( umask 077; printf '%s\n' "$_sshd_t_err" > "$_sshd_detail" ) 2>/dev/null || true
+    # ONLY WRITE A NON-EMPTY CAPTURE. `printf '%s\n' ""` emits a newline, which is 1 byte, so
+    # [ -s ] would pass on a file carrying no cause — the readable-but-empty DETAIL=[] shape
+    # the -s guard exists to reject. Unwritten, the guard falls through to the literal.
+    [ -z "$_sshd_t_err" ] || ( umask 077; printf '%s\n' "$_sshd_t_err" > "$_sshd_detail" ) 2>/dev/null || true
     [ -s "$_sshd_detail" ] || _sshd_detail="git-data sshd -t rc=$_sshd_t_rc: no stderr captured"
     if [ "$_sshd_t_rc" -eq 126 ] || [ "$_sshd_t_rc" -eq 127 ]; then
       /usr/local/bin/git-data-emit "git-data sshd -t could not run" sshd_config_warn warning \
@@ -433,13 +436,19 @@ runcmd:
     fi
     # (#7227) THE RESTART WARNING GETS ITS OWN CAUSE; it shipped `detail=""`. It does NOT
     # reuse $_sshd_detail: reaching here means `sshd -t` PASSED, so that file is empty and
-    # its literal would blame the config check that succeeded. Same shape as gc_timer below.
-    systemctl restart sshd 2>>"$GIT_DATA_RUNCMD_DETAIL" || {
-      _sshd_r_detail="$GIT_DATA_RUNCMD_DETAIL"
-      [ -s "$_sshd_r_detail" ] || _sshd_r_detail="git-data sshd restart failed (config valid): no stderr captured"
+    # its literal would blame the config check that succeeded. SUBSTITUTION, not `2>>` on the
+    # command — the same rule as the two probes above. A `2>>` here makes a REDIRECT failure
+    # indistinguishable from a restart failure, and would emit "restart failed (config valid)"
+    # for a boot where the restart never ran. Caught by S1, whose systemctl stub exits 0.
+    _sshd_r_rc=0
+    _sshd_r_err="$(systemctl restart sshd 2>&1)" || _sshd_r_rc=$?
+    if [ "$_sshd_r_rc" -ne 0 ]; then
+      _sshd_r_detail=/run/git-data-sshd-restart.err
+      [ -z "$_sshd_r_err" ] || ( umask 077; printf '%s\n' "$_sshd_r_err" > "$_sshd_r_detail" ) 2>/dev/null || true
+      [ -s "$_sshd_r_detail" ] || _sshd_r_detail="git-data sshd restart failed (config valid) rc=$_sshd_r_rc: no stderr captured"
       /usr/local/bin/git-data-emit "git-data sshd restart failed (config valid)" \
         sshd_config_warn warning "$_sshd_r_detail" || true
-    }
+    fi
 
     # (#6982) Arm `set -e` only AFTER the Phase-0.4 classification. From here every
     # command is MUST-ABORT unless it carries an explicit `|| true` + a naming comment.
@@ -698,13 +707,19 @@ runcmd:
     STAGE=gc_timer
     ( : > "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
     systemctl daemon-reload || true
-    # (#7227) THE GUARD LIVES INSIDE THE FAILURE BRANCH. Above the `||` chain it runs BEFORE
-    # systemctl writes stderr, so on a real failure it would discard the actual error. The
-    # `{ }` is the RHS of `||`, where errexit is suspended. This also makes the emitter
-    # toks[0] of its own simple command — chained, shlex puts `||` at toks[4].
-    systemctl enable --now git-data-gc.timer 2>>"$GIT_DATA_RUNCMD_DETAIL" || {
-      _gc_detail="$GIT_DATA_RUNCMD_DETAIL"
-      [ -s "$_gc_detail" ] || _gc_detail="git-data gc timer failed to arm: no captured stderr"
+    # (#7227) SUBSTITUTION + an `if`, matching the three captures above. Two properties, and
+    # neither survives the `cmd 2>>file || { … }` shape this replaced: a failed REDIRECT would
+    # be indistinguishable from a failed timer and emit "failed to arm" for a timer that armed
+    # fine; and the guard must sit INSIDE the failure branch, because above the `||` chain it
+    # runs before systemctl writes stderr and would discard the real error. It also makes the
+    # emitter toks[0] of its own simple command — chained, shlex puts `||` at toks[4], which
+    # is precisely how the pre-#7227 arg-4 check reported a false clean on this line.
+    _gc_rc=0
+    _gc_err="$(systemctl enable --now git-data-gc.timer 2>&1)" || _gc_rc=$?
+    if [ "$_gc_rc" -ne 0 ]; then
+      _gc_detail=/run/git-data-gc-timer.err
+      [ -z "$_gc_err" ] || ( umask 077; printf '%s\n' "$_gc_err" > "$_gc_detail" ) 2>/dev/null || true
+      [ -s "$_gc_detail" ] || _gc_detail="git-data gc timer failed to arm (rc=$_gc_rc): no stderr captured"
       /usr/local/bin/git-data-emit "SOLEUR_GIT_DATA_GC timer failed to arm" "$STAGE" warning \
         "$_gc_detail" "gc_timer=unarmed" || true
-    }
+    fi
