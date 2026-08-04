@@ -62,8 +62,21 @@ route around it:
      service token. Symptom: releases fail at the zot mirror step.
    - Host → zot goes over the private NIC (10.0.1.10 → 10.0.1.30:5000) with `ZOT_PULL_*`
      and no tunnel at all. Symptom: deploys fail `image_pull_failed`.
-2. **Check for a rotation that did not propagate** — the measured cause of the 2026-07-29
-   outage, and the single most likely explanation:
+2. **Read the release job's own token verdict first — do not re-rank hypotheses by hand.**
+   Since #7242 the failing release step reports what it MEASURED. Open the run and read
+   `verdict=` (it is also in the ops email):
+
+   | `verdict` | What it means | What to do |
+   |---|---|---|
+   | `live` | The job presented these exact credentials to `registry.soleur.ai` and Cloudflare Access **admitted** them. | Rotation is ruled OUT by measurement. Go to step 3. |
+   | `stale` | A **measured** DEAD count. | Rotate — see below. |
+   | `unverifiable` | The credential could not be graded; the message names the cause. | **Do NOT rotate.** Follow the cause. |
+   | `unmeasured` | The preflight did not run. | Run the detector yourself, below. |
+
+   This replaces the sentence that used to sit here — *"the measured cause of the
+   2026-07-29 outage, and the single most likely explanation"*. It was measured for
+   **that** incident and then read as a standing fact, which is how 2026-08-03 spent its
+   diagnostic budget rotating a credential the job had already verified live.
 
    ```bash
    doppler run -p soleur -c prd_terraform -- bash scripts/check-cloudflare-token-drift.sh
@@ -72,10 +85,21 @@ route around it:
    Any `DEAD` row means a token was rotated and the new value never reached Doppler.
    Terraform will not fix it — the `doppler_secret` resources carry
    `lifecycle { ignore_changes = [value] }`, so `terraform apply` reports "No changes"
-   while the stale value keeps being served. Set the live value on the **`prd` ROOT**
-   config; branch configs inherit it.
-3. **Is the zot host itself healthy?** Disk-full is the recurring cause — see
-   `SOLEUR_ZOT_DISK` / the Better Stack `registry_disk_prd` source.
+   while the stale value keeps being served. Set the live value in **every config the
+   detector names**: Doppler branch configs do **not** inherit values from the `prd` root
+   config (measured 2026-08-02 — one token was carried independently by seven configs), so
+   setting root alone leaves every other stale copy in place and looks completely
+   successful. The script itself calls the old "branch configs inherit it" advice
+   `FALSIFIED`; that correction had never been propagated back here.
+3. **Is the zot host itself healthy?** Two recurring causes, and disk-full is only one:
+   - **Disk-full** — see `SOLEUR_ZOT_DISK` / the Better Stack `registry_disk_prd` source.
+   - **A crash-restart loop** — the same `SOLEUR_ZOT_DISK` marker carries `zot_restarts`,
+     `exit_code` and `oom_kills`. A climbing `zot_restarts` means pushes are straddling a
+     restart: a `docker login` plus a three-tag `crane copy` takes tens of seconds, so at a
+     few restarts per minute the tunnel's origin dial fails mid-push. On 2026-08-03 this
+     blocked three releases while the credential was fine and the read path was healthy.
+     Re-run once the count has **plateaued** — `scripts/followthroughs/zot-restart-plateau-6288.sh`
+     is the prober (0 = plateau holds, 1 = still climbing, 2 = could not tell).
 4. **If an image is missing from zot but present in GHCR**, backfill it rather than
    reverting. This does not depend on GHCR being readable **by the production hosts** —
    but it DOES need GHCR readable by whoever runs `crane`, because GHCR is the copy's
@@ -124,10 +148,23 @@ propagated to Doppler) sat unexamined.
 ```bash
 cloudflared access tcp --hostname registry.soleur.ai --url 127.0.0.1:15000 &
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:15000/v2/
-# 401 (or 200) = zot itself answered — the origin is UP.
-# Anything else, or a 'websocket: bad handshake' from cloudflared = the EDGE rejected you,
-# which is the stale-Access-token shape, not an origin problem.
+# 401 (or 200) = zot itself answered — the origin is UP *at this instant*.
+# A 'websocket: bad handshake' from cloudflared = the tunnel could not complete an ORIGIN
+# DIAL. That is NOT diagnostic of an edge refusal. At least three things produce it:
+#   - the tcp:// vs http:// ingress misconfiguration (#6122)
+#   - Cloudflare Access actually refusing the credential
+#   - the origin being down, or RESTARTING  <- 2026-08-03, with Access admitting every request
 ```
+
+> **This sentence used to read "= the EDGE rejected you, which is the stale-Access-token
+> shape, not an origin problem."** It was false, and it is the single line that most
+> directly produced the 2026-08-03 misdirection: a crash-looping origin generated bad
+> handshakes while Cloudflare Access admitted the request every time. Do not restore it.
+
+**A single sample cannot clear the origin.** The probe above tells you about one instant.
+An origin restarting a few times a minute answers healthily between restarts, which is
+exactly the signature that defeats a one-shot health check — so a `401` here is compatible
+with a push that fails seconds later. Pair it with the `zot_restarts` series (step 3).
 
 A `401` here is a **healthy** result: it is zot's own auth challenge
 (`Www-Authenticate: Basic realm=…`), which proves the request reached the origin.
