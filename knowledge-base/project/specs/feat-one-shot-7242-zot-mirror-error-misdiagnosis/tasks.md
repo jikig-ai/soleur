@@ -106,13 +106,17 @@ Lane: `cross-domain` (no spec.md present — defaulted fail-closed per TR2)
 
 ## Phase 13 — Exit gate
 
-- [ ] 13.1 `bash scripts/test-all.sh` (the gate's own invocation — no hand-enumerated subset).
+- [x] 13.1 `bash scripts/test-all.sh` — **rc=0, 261/261 suites passed**, terminal marker present. Coverage NOTE reads `apps/web-platform/infra/ is NOT covered (diff does not touch it)`, the benign polarity: verified the diff contains no `infra/` path, so rc=0 accounts for the whole diff. Two sibling worktrees were running concurrently (SIBLING_RUN_DETECTED + LOCK_CONTENDED_PROCEEDING banners), which is moot at 0 failures.
 - [x] 13.2 `actionlint` on edited workflows only (`.github/actions/**` is not linted today).
 - [x] 13.3 `--loglevel warn` verified present by grep at review time (1 occurrence). **NOT asserted by a committed test** — plan AC19 asked for "a real grep, not a wish", and a one-off grep is exactly the wish. Carried as a known gap rather than claimed as covered.
 - [x] 13.4 `lint-orphan-test-suites.sh` clean.
 - [x] 13.4b Syntax-gate the composite action: `python3 -c 'import yaml; yaml.safe_load(open(...))'` + `bash -n` on its extracted `run:` bodies (actionlint does not cover `.github/actions/**`).
 - [x] 13.4c Mutation check: deleting each arm's distinguishing literal must red the suite.
-- [ ] 13.5 Walk every AC 1-21; do **not** claim 20/21 as satisfied-by-merge.
+- [x] 13.5 Walked the ACs with their own commands (not from memory). Corrections recorded rather than smoothed over:
+  - **AC13 was self-contradictory** — it said `model.c4`'s heuristic "is deleted" while Deliverable D, the file table and the Sharp Edges said AMEND. Amend won; the AC and the two other delete-side statements are reconciled.
+  - **AC19** (`--loglevel warn` "asserted by a real grep, not a wish") is **NOT** satisfied by a committed test — verified by a one-off grep, which is precisely the wish the AC forbids. Carried as a known gap, not claimed.
+  - **AC20** (cross-consumer) satisfied via the second branch: `unmeasured` is asserted actionable standalone (`zot-mirror-diagnosis.test.sh`) and recorded as the two inngest callers' steady state in the action's input description.
+  - AC26/AC27 are the deliberately-post-merge pair; #7247 carries the sweeper directive (dry-run verified) and #7248 the read-path scope.
 
 > **Not acceptance criteria of this PR:** "the three drafts re-ran" and "production `build_sha`
 > advanced". Both require the crash-loop to stop, which this PR does not fix. They are
