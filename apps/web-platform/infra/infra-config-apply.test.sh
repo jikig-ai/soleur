@@ -19,6 +19,13 @@ MANAGED_MINUS_1=$((MANAGED_N - 1))
 
 PASS=0
 FAIL=0
+
+# Single owning trap for every tempfile this suite allocates outside setup()/teardown()
+# (ADR-129 rule (c)). setup() manages TMPDIR_ROOT; arms that run without it register here.
+# /tmp is a machine-global tmpfs shared by parallel worktrees, so a per-run leak is unbounded.
+OWNED_TMPFILES=()
+cleanup_owned_tmpfiles() { [[ ${#OWNED_TMPFILES[@]} -gt 0 ]] && rm -f "${OWNED_TMPFILES[@]}"; return 0; }
+trap cleanup_owned_tmpfiles EXIT INT TERM
 TMPDIR_ROOT=""
 
 setup() {
@@ -1181,8 +1188,10 @@ test_handler_to_grant_lint() {
   local PRE_FIX_SHA="c051005f49c8f1afb7322e5ed3b31c975db29355"
   # Own temp, not TMPDIR_ROOT: this arm calls no setup(), so TMPDIR_ROOT is whatever the
   # previous test's teardown removed — writing into it fails with ENOENT and the RED proof
-  # reports "broken" when nothing is broken.
-  local old; old=$(mktemp -t lint-old-handler.XXXXXXXX.sh)
+  # reports "broken" when nothing is broken. Registered with the file's owning trap (ADR-129
+  # rule (c)) so a mid-arm death still reclaims it; /tmp here is a machine-global tmpfs shared
+  # by parallel worktrees, so an unreclaimed leak per run is not bounded.
+  local old; old=$(mktemp -t lint-old-handler.XXXXXXXX.sh); OWNED_TMPFILES+=("$old")
   if git -C "$SCRIPT_DIR" show "${PRE_FIX_SHA}:apps/web-platform/infra/infra-config-apply.sh" > "$old" 2>/dev/null; then
     local old_out old_rc=0
     old_out=$(_lint_privileged_verbs "$old") || old_rc=$?
