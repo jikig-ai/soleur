@@ -80,11 +80,19 @@ with no runtime, data, or user-facing surface.
 
 ## Files to Edit
 
-- `apps/web-platform/infra/infra-config-apply.test.sh` — the only file. Three regions:
+- `apps/web-platform/infra/infra-config-apply.test.sh` — the only file. Five regions
+  (regions 4–5 added at review; see "Review Findings Applied" below):
   - `test_fatal_channel_red_against_main` (~1346–1378): the `git show` ref, the skip/fail
     predicate, and the pin-rationale comment.
   - Block header (~1107–1108): "proven RED against **origin/main's** handler" — now false.
   - Section marker (~1340): "PROVE THE ARMS ABOVE ARE RED AGAINST **origin/main**" — now false.
+  - **Function rename** — `test_fatal_channel_red_against_main` →
+    `test_fatal_channel_red_against_pre_fix`, plus the runner call site (~1526). The name is
+    itself the stale prose Phase 2 sweeps: it asserts the guard runs against main, which is
+    exactly the misconception this PR exists to kill. Not prescribed in the original draft;
+    added because leaving it would contradict the comment being added two lines away.
+  - **Assertion-count floor** (~1555) — `APPLY_MIN_ASSERTIONS`, ratcheted 142 → 146. See the
+    P1 below; this is the mechanical backstop that makes a silently-skipping guard red.
 
 No other file. Scope is deliberately confined so this merges fast.
 
@@ -176,9 +184,18 @@ assert the *guardrail's presence* and scope the absence check to **non-comment l
    `grep -vE '^\s*#' apps/web-platform/infra/infra-config-apply.test.sh | grep -c 'origin/main'` → `0`
 
 3. **The pin is CORRECT, not merely present** — the pinned object actually carries both pre-fix
-   properties (this is the AC that catches a wrong SHA):
-   - `git show 701e76e6bfce84ceed91096a58d88df7da5b6932:apps/web-platform/infra/infra-config-apply.sh | grep -c fatal_line` → `0`
-   - `git show 701e76e6bfce84ceed91096a58d88df7da5b6932:apps/web-platform/infra/infra-config-apply.sh | grep -c '"files_total\\":0'` → `≥ 1`
+   properties (this is the AC that catches a wrong SHA). Note `grep -c` exits 1 on a zero
+   match, so run these un-chained (a `set -e` / `&&` runner aborts on a *passing* AC):
+   - `git show 701e76e6b…:…/infra-config-apply.sh | grep -c fatal_line` → `0`
+   - Anchored on the **mechanism**, not prose — the EXIT trap is a `printf` with escaped
+     quotes, and a bare `"files_total":0` also matches an explanatory comment at line 141:
+     `git show 701e76e6b…:…/infra-config-apply.sh | grep -c 'printf.*files_total\\\\":0'` → `≥ 1`
+
+3b. **The floor catches a silent skip** (the P1 this review found). With the pin repointed at an
+   absent object, the suite must NOT exit 0:
+   - non-CI → loud `SKIP` + `FAIL: assertion-count floor — only 144 assertions ran, expected >= 146`
+   - `CI=true` → `FAIL: pinned pre-fix commit … is absent under CI` + the floor failure
+   Both measured; pre-fix behaviour was `144 passed, 0 failed`, exit 0.
 
 4. **The guardrail comment is present** (asserted by presence, per the note above):
    `grep -c 'Do not "helpfully" restore the branch name' apps/web-platform/infra/infra-config-apply.test.sh` → `1`
@@ -227,10 +244,16 @@ locally.
 - `error_reporting`: assertion failures print `FAIL: <name>` to the job log and increment the
   suite's exit-code accounting. Fail-loud by construction — and this PR's whole purpose is
   restoring that property.
-- `failure_modes`: (a) *pin unreachable* → detection: the loud `SKIP` line in the job log;
+- `failure_modes`: (a) *pin unreachable* → detection: **the assertion-count floor reds the
+  suite** (`144 < 146`), and under `CI` the arm additionally emits a `FAIL`. The pre-review
+  draft cited "the loud `SKIP` line in the job log" here, which was a citation that read as
+  covered and was not: the run exited 0, printed a normally-shaped results line, emitted no
+  annotation, moved no counter, and sits in an advisory job. A layer only counts when a
+  consumer can distinguish the signal.
   (b) *pin present but unreadable* → detection: the `FAIL` arm, which reds the suite;
-  (c) *pin points at the wrong object* → detection: AC3, which asserts the pinned object's
-  properties directly rather than trusting the SHA.
+  (c) *pin points at the wrong object* → detection: the non-vacuity control (repointing at
+  `c2de2581e` must red the two assertions). AC3 is a one-time pre-merge grep, not ongoing
+  detection — stated plainly rather than counted as a monitored layer.
 - `logs`: GitHub Actions job logs for `Infra Validation / deploy-script-tests`; retention per repo
   default.
 - `discoverability_test`: `bash apps/web-platform/infra/infra-config-apply.test.sh` (no SSH).
@@ -261,7 +284,7 @@ Product override does not fire.
 
 | Risk | Mitigation |
 |---|---|
-| The pin is unreachable on a shallow clone, silently converting the guard into a permanent skip | Verified CI uses `fetch-depth: 0` (`infra-validation.yml:418-421`). The skip is loud, not silent, and AC5 asserts both arms survive. |
+| The pin is unreachable, silently converting the guard into a permanent skip | **This was under-mitigated in the pre-review draft and is the PR's main review finding.** Two agents independently reproduced a real fail-open: a shallow clone printed `144 passed, 0 failed` and exited 0. Corrected three ways: (a) `APPLY_MIN_ASSERTIONS` ratcheted 142 → 146, so the skip's 2 lost assertions now red the suite; (b) under `CI` the absent pin is a **FAIL**, not a skip, because `fetch-depth: 0` makes reachability a contract there; (c) reachability documented as resting on the tags + fetch-tags, not on the SHA's length. The original mitigation — "AC5 asserts both arms survive" — was wrong: AC5 asserts the arms exist *in source*, which does not make a *fired* skip fail anything. |
 | A future reader "helpfully" restores `origin/main` | The rationale comment names the failure mode explicitly and says not to; AC2 + AC4 encode it mechanically. |
 | The chosen SHA is wrong | AC3 asserts the pinned object's *properties* (`fatal_line` absent, `files_total:0` hardcoded), not just that the SHA resolves — a wrong pin fails the AC. |
 | Scope creep into PR-B's grant work | Explicit non-goal; AC8 pins the diff to one source file. |
