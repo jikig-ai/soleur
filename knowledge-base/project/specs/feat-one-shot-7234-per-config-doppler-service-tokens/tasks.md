@@ -121,67 +121,67 @@ identical to the probe host. Nothing to re-run.)*
 
 ## Phase 3 — Workflow
 
-- [ ] **3.1** `.github/workflows/scheduled-terraform-drift.yml` `env:` (`:153-198`): drop
+- [x] **3.1** `.github/workflows/scheduled-terraform-drift.yml` `env:` (`:153-198`): drop
       `DOPPLER_TOKEN`, add `DOPPLER_TOKEN_MAP: ${{ secrets.DOPPLER_TOKEN_DRIFT_MAP }}`.
       `DOPPLER_PROJECT` and `DOPPLER_CONFIGS_FLOOR: 13` unchanged; `DOPPLER_CONFIG` still absent.
       **This lands before 3.2** so no intermediate commit has new prose over an old credential.
-- [ ] **3.2** Rewrite the `env:` comment block (`:154-197`) from the interim narration to the map
+- [x] **3.2** Rewrite the `env:` comment block (`:154-197`) from the interim narration to the map
       shape, keeping the "three places move together" floor note in substance.
-- [ ] **3.3 — the stale-prose sweep. RUN THE GREP; this list is a reading aid, not the
+- [x] **3.3 — the stale-prose sweep. RUN THE GREP; this list is a reading aid, not the
       authority.** `git grep -n 'doppler_service_account' .github/workflows/scheduled-terraform-drift.yml`
       returns **8** lines (`155, 422, 681, 695, 696, 739, 1791, 1795`). The count in the plan has
       been wrong twice; trust the live output. **And the grep is not sufficient** — task 3.3.2
       covers a site that carries credential-shape prose while naming no resource.
-  - [ ] **3.3.1** **`:422`** — the `degraded`-path `::warning::` in the token_drift step's own
+  - [x] **3.3.1** **`:422`** — the `degraded`-path `::warning::` in the token_drift step's own
         `run:` body. It fires on **every degraded run** and says the credential *"is a
         `doppler_service_account` holding a viewer membership … nothing left to widen"*. Both
         clauses become false. **This is the site the first sweep missed.**
-  - [ ] **3.3.2** **`:597` AND `:660-667`** — the `unknown` branch, in two places that must agree.
+  - [x] **3.3.2** **`:597` AND `:660-667`** — the `unknown` branch, in two places that must agree.
         **`:597`** is the `LEAD=` assignment carrying *"This is a DETECTOR fault, not a credential
         fault: touching the Doppler identity will not clear it"* — it names no resource, so the
         3.3 grep does **not** find it and no Remedy-scoped assertion can see it. **`:660-667`** is
         the Remedy paragraph (*"Do not touch the Doppler identity… check for a truncated write in
         `emit_json`"*). FR7b routes malformed-map faults to `unknown`, and those **are**
         credential faults. Rewrite both.
-  - [ ] **3.3.3** **`:668-692`** — the `CONFIGS == 1` interim branch: **delete**.
-  - [ ] **3.3.4** **`:693-748`** — the `else` branch. Replace `N1`/`N2`/`N3` with plan §D5's rows.
+  - [x] **3.3.3** **`:668-692`** — the `CONFIGS == 1` interim branch: **delete**.
+  - [x] **3.3.4** **`:693-748`** — the `else` branch. Replace `N1`/`N2`/`N3` with plan §D5's rows.
         The service-account paragraph (`:694-702`), the `environments` paragraph (`:724-726`), the
         `doppler_service_token`-repoint-as-fault paragraph (`:727-731`) and the
         `-replace=doppler_service_account_token.token_drift` recipe (`:739`) all go. The
         `>=`-growth paragraph (`:743-748`) survives. **The step's `env:` (`:548-560`) carries no
         cause channel** — enumerate the possible causes and point at the run's annotations; never
         claim to have diagnosed one.
-  - [ ] **3.3.5** `:156`, `:681-699`, `:710`, `:727-739`, `:1552`, `:1790-1795` — remaining
+  - [x] **3.3.5** `:156`, `:681-699`, `:710`, `:727-739`, `:1552`, `:1790-1795` — remaining
         resource/file references.
-  - [ ] **3.3.6** `:1551-1555` and `:1790-1801` — the rung-2 prose asserting that repointing that
+  - [x] **3.3.6** `:1551-1555` and `:1790-1801` — the rung-2 prose asserting that repointing that
         job at the token-drift credential *"would satisfy the predicate"*. False under the new
         shape too; the reason becomes structural. `RUNG2_CONFIGS_FLOOR: 13` (`:1500`) unchanged.
-  - [ ] **3.3.7** `:802-829` — the close arm's comment justifying the `configs_unread` conjunct
+  - [x] **3.3.7** `:802-829` — the close arm's comment justifying the `configs_unread` conjunct
         via ephemeral configs padding the count. That route is structurally closed; the conjunct
         stays load-bearing for a different reason (C-d).
-- [ ] **3.4** Widen the coverage-issue filer's gate so `at-floor` + `configs_unread == '-'` +
+- [x] **3.4** Widen the coverage-issue filer's gate so `at-floor` + `configs_unread == '-'` +
       `verdict == 'unavailable'` files/refreshes #7175 instead of falling between filer and
       closer. Reachable via the non-vacuity gate (`:278-281`, `:718-723`); today it strands #7175
       with a stale body and pins the follow-through TRANSIENT forever.
-- [ ] **3.5** `lint-workflows`; `bash -c` each edited `run:` snippet.
+- [x] **3.5** `lint-workflows`; `bash -c` each edited `run:` snippet.
 
 ---
 
 ## Phase 4 — Guards, sweep, probe
 
-- [ ] **4.1** `plugins/soleur/test/token-drift-workflow-causes.test.sh` **C1** (`:1163`):
+- [x] **4.1** `plugins/soleur/test/token-drift-workflow-causes.test.sh` **C1** (`:1163`):
       re-point to `env.DOPPLER_TOKEN_MAP == '${{ secrets.DOPPLER_TOKEN_DRIFT_MAP }}'` and assert
       `env.DOPPLER_TOKEN` absent. Update the fail message to name Phase-0 probe 0.3 as the
       re-measurement it demands.
-- [ ] **4.2** **C2** (`:1188`): keep `env.DOPPLER_CONFIG` absent; bare-token count **1 → 0**; add
+- [x] **4.2** **C2** (`:1188`): keep `env.DOPPLER_CONFIG` absent; bare-token count **1 → 0**; add
       a positive pin of exactly one `secrets.DOPPLER_TOKEN_DRIFT_MAP` reference over the whole
       step YAML. Use `grep -Eo … | wc -l` (occurrences), **not** `grep -Ec` (lines).
-- [ ] **4.3** **DO NOT EDIT** `FLOOR_MINIMUM=13` (`:1050`), the run-time
+- [x] **4.3** **DO NOT EDIT** `FLOOR_MINIMUM=13` (`:1050`), the run-time
       `(( 10#$cfg_floor < 13 ))` (`:391`), or `RUNG2_CONFIGS_FLOOR: 13` (`:1500`). The C-a test
       and F5 are **additive**. F3 is an equality pin and cannot be the ratchet.
-- [ ] **4.4** Raise both anti-vacuity floors: `>= 57` (`:1396`) and `>= 80`
+- [x] **4.4** Raise both anti-vacuity floors: `>= 57` (`:1396`) and `>= 80`
       (`scripts/check-cloudflare-token-drift.test.sh:1806`) by the net-new case count. Never down.
-- [ ] **4.5** `scripts/followthroughs/token-drift-coverage-7159.sh`:
+- [x] **4.5** `scripts/followthroughs/token-drift-coverage-7159.sh`:
   - [ ] delete the `1/*` TRANSIENT arm (`:96-106`);
   - [ ] keep the `0/*` arm (`:92-95`);
   - [ ] add an **unparseable-ratio** arm (`-/-`, `-`, empty) → TRANSIENT, not FAIL;
@@ -190,50 +190,50 @@ identical to the probe host. Nothing to re-run.)*
   - [ ] fix `:8-9` and `:93`, which assert a `web-platform-infra-apply` **required-reviewer gate
         that no longer exists** (removed by PR #4220, `apply-web-platform-infra.yml:341`);
   - [ ] rename the `DOPPLER_TOKEN_DRIFT` reference at `:8` to `DOPPLER_TOKEN_DRIFT_MAP`.
-- [ ] **4.6** `scripts/check-cloudflare-token-drift.test.sh:1268` — the N3 comment.
-- [ ] **4.7** `scripts/encryption-posture-ledger.json` — remove the three now-dead
+- [x] **4.6** `scripts/check-cloudflare-token-drift.test.sh:1268` — the N3 comment.
+- [x] **4.7** `scripts/encryption-posture-ledger.json` — remove the three now-dead
       `non_store_types` entries (verified harmless to leave; removed for hygiene).
-- [ ] **4.8** `apps/web-platform/infra/doppler-config-inventory.txt` header: rewrite the
+- [x] **4.8** `apps/web-platform/infra/doppler-config-inventory.txt` header: rewrite the
       "REPORTS; GATES NOTHING" claim for the dual role (it now determines the credential's reach;
       it still gates no verdict **threshold**). Add to the "THREE `13`s" block: the **destroy
       guard** as the fourth ratchet layer, and the **`prd_git_data` `depends_on` trap** (SE-4) —
       the floor-raiser reads this block, not the plan.
-- [ ] **4.9** Fix `plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh` — it hard-codes
+- [x] **4.9** Fix `plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh` — it hard-codes
       `scheduled-content-vendor-drift.yml`, which no longer exists (the job moved to
       `apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts`). One line, fixed
       inline rather than filed (`rf-review-finding-default-fix-inline`).
-- [ ] **4.10** File **two** follow-up issues: (a) the `rung2-rehearsal-orphan-sweep` scratch probe
+- [x] **4.10** File **two** follow-up issues: (a) the `rung2-rehearsal-orphan-sweep` scratch probe
       is `unsatisfiable` by construction, together with the new standing blind spot (a
       Doppler-side config addition is now undetectable); (b) prune the four dead `-target=` legs,
       **gated on `terraform state list | grep -c doppler_service_account` returning 0**, not on a
       green apply.
-- [ ] **4.11** **Mutation-test every new/changed assertion** — delete it and confirm the suite
+- [x] **4.11** **Mutation-test every new/changed assertion** — delete it and confirm the suite
       reds. Specifically: removing `-u` from `:569` must make `n5'` report `13/13`.
 
 ---
 
 ## Phase 5 — ADR, C4, closure artifacts
 
-- [ ] **5.1** Re-derive the ADR ordinal against **freshly-fetched `origin/main`** (166 at plan
+- [x] **5.1** Re-derive the ADR ordinal against **freshly-fetched `origin/main`** (166 at plan
       time; ADR-164 moved five times in one pipeline). Sweep this branch's own artifacts only.
-- [ ] **5.2** Create `ADR-<n>-per-config-read-tokens-for-the-token-drift-scan.md`, header
+- [x] **5.2** Create `ADR-<n>-per-config-read-tokens-for-the-token-drift-scan.md`, header
       `**Supersedes (in part):** ADR-164`. Record: the service-account measurement; why ADR-164's
       `for_each` rejection is void; the measured cost corrections; the mis-binding hazard and the
       C-a/C-b/C-c/C-d set including that C-c is conditional; rotation cost; the new standing
       blind spot.
-- [ ] **5.3** Edit ADR-164: status → `Accepted — Decision 1 superseded by ADR-<n> (2026-08-03);
+- [x] **5.3** Edit ADR-164: status → `Accepted — Decision 1 superseded by ADR-<n> (2026-08-03);
       Decision 2 amended in one bullet, otherwise in force`; add the reciprocal marker; add the
       falsified-premise note to the `for_each` row of Alternatives; **amend Decision 2's "The
       committed inventory reports, and gates NOTHING … changes no state" bullet** to "gates no
       verdict threshold". Do not rewrite the rest of the body — it is the record.
-- [ ] **5.4** Add a **single-line** `github -> doppler` relationship to
+- [x] **5.4** Add a **single-line** `github -> doppler` relationship to
       `knowledge-base/engineering/architecture/diagrams/model.c4`, beside the other `github -> *`
       edges, carrying **no numeric count** (`plugins/soleur/test/c4-count-parity.test.sh` exists
       because prose counts went unchecked). Rationale lives in the ADR, not the diagram.
-- [ ] **5.5** `bash scripts/regenerate-c4-model.sh` and **commit `model.likec4.json`** —
+- [x] **5.5** `bash scripts/regenerate-c4-model.sh` and **commit `model.likec4.json`** —
       `plugins/soleur/test/c4-model-freshness.test.sh` byte-diffs it and runs in the required
       `test-scripts` shard; the pre-commit hook is `--no-verify`-bypassable.
-- [ ] **5.6** Run `apps/web-platform/test/c4-code-syntax.test.ts`, `c4-render.test.ts`, and
+- [x] **5.6** Run `apps/web-platform/test/c4-code-syntax.test.ts`, `c4-render.test.ts`, and
       `plugins/soleur/test/c4-model-freshness.test.sh`.
 
 ---
