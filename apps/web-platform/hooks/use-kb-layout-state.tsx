@@ -302,11 +302,19 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
     [],
   );
 
-  // Restore sidebarOpen from sessionStorage on mount (per-tab persistence)
+  // Restore sidebarOpen from sessionStorage on mount (per-tab persistence).
+  //
+  // #7222 — DESKTOP ONLY. On desktop the restored panel is a side column beside
+  // a still-visible document, so re-opening it is a convenience. On mobile it is
+  // now a full-screen takeover, and silently restoring it would put every KB
+  // entry behind a conversation the user has to dismiss before they can read
+  // anything. The key is still WRITTEN on mobile, so a session that started on a
+  // phone and continues on a laptop keeps its place.
   useEffect(() => {
     if (!kbChatFlag) return;
+    if (!isDesktop) return;
     if (safeSession(KB_SIDEBAR_OPEN_KEY) === "1") setSidebarOpen(true);
-  }, [kbChatFlag]);
+  }, [kbChatFlag, isDesktop]);
 
   const openSidebar = useCallback(() => {
     setSidebarOpen(true);

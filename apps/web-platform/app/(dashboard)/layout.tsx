@@ -14,6 +14,7 @@ import { SignOutConfirmModal } from "@/components/auth/sign-out-confirm-modal";
 import { useSignOut } from "@/components/auth/use-sign-out";
 import { WorkspaceContextBand } from "@/components/dashboard/workspace-context-band";
 import { BackArrowIcon } from "@/components/dashboard/nav-icons";
+import { CHAT_OVERLAY_OPEN_EVENT } from "@/components/chat/kb-chat-fullscreen";
 import { RailSlotProvider, RailCollapsedProvider, RAIL_EXPAND_EVENT } from "@/components/dashboard/rail-slot";
 import { RailResizeHandle } from "@/components/dashboard/rail-resize-handle";
 import { useRailWidth, railMaxPx, RAIL_MIN_PX } from "@/hooks/use-rail-width";
@@ -293,6 +294,21 @@ export default function DashboardLayout({
     return () =>
       window.removeEventListener(RAIL_EXPAND_EVENT, handleExpandRequest);
   }, [collapsed, toggleCollapsed]);
+
+  // #7222 — the mobile chat takeover and this nav drawer are BOTH `z-50`
+  // full-height surfaces. The takeover already wins on paint order (it portals
+  // to <body> after the drawer), but ordering is an accident of DOM structure
+  // that no test asserts; closing the drawer on open makes the exclusivity a
+  // state invariant instead. Expand-only in the other direction: opening the
+  // drawer does not close a chat, because the drawer's own route change does.
+  useEffect(() => {
+    function handleChatOverlayOpen() {
+      setDrawerOpen(false);
+    }
+    window.addEventListener(CHAT_OVERLAY_OPEN_EVENT, handleChatOverlayOpen);
+    return () =>
+      window.removeEventListener(CHAT_OVERLAY_OPEN_EVENT, handleChatOverlayOpen);
+  }, []);
 
   // Body scroll lock when drawer is open
   useEffect(() => {

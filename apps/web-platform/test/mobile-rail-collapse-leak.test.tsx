@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, act } from "@testing-library/react";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
 import { ThemeProvider } from "@/components/theme/theme-provider";
 import { RailSlotPortal, useRailCollapsed } from "@/components/dashboard/rail-slot";
+import { CHAT_OVERLAY_OPEN_EVENT } from "@/components/chat/kb-chat-fullscreen";
 
 // #7222 — collapse must not leak below `md`.
 //
@@ -122,12 +123,14 @@ async function renderDashboard(pathname: string) {
 
 beforeEach(() => {
   localStorage.clear();
+  // One shape for every endpoint the layout touches. `memberships: []` matters:
+  // opening the drawer mounts OrgSwitcher, which indexes the array unguarded.
   vi.stubGlobal(
     "fetch",
     vi.fn(() =>
       Promise.resolve({
         ok: true,
-        json: () => Promise.resolve({ isAdmin: false }),
+        json: () => Promise.resolve({ isAdmin: false, memberships: [] }),
       } as Response),
     ),
   );
@@ -185,6 +188,26 @@ describe("#7222 — rail collapse is a desktop-only concept", () => {
     // The fix gates the DERIVED value, not the stored one: a phone must not
     // silently expand the user's desktop rail on their next laptop visit.
     expect(localStorage.getItem(COLLAPSE_KEY)).toBe("1");
+  });
+});
+
+describe("#7222 — the nav drawer and the chat takeover are mutually exclusive", () => {
+  it("closes the open drawer when a chat takeover announces itself", async () => {
+    stubViewport(true);
+    await renderDashboard("/dashboard/kb");
+
+    const hamburger = screen.getByLabelText(/open (navigation|menu)/i);
+    fireEvent.click(hamburger);
+    expect(hamburger.getAttribute("aria-expanded")).toBe("true");
+
+    // Both surfaces are `z-50` full-height. Paint order happens to favour the
+    // portaled takeover today, but that is a property of DOM structure no test
+    // asserts — so the layout makes the exclusivity a state invariant.
+    await act(async () => {
+      window.dispatchEvent(new Event(CHAT_OVERLAY_OPEN_EVENT));
+    });
+
+    expect(hamburger.getAttribute("aria-expanded")).toBe("false");
   });
 });
 

@@ -168,6 +168,12 @@ un-`return` a component, and mount-both-hide-one is forbidden by ADR-047/ADR-158
 
 ## User-Brand Impact
 
+<!-- lint-infra-ignore start -->
+<!-- User-impact prose, not a runbook. lint-infra-no-human-steps reads
+     "a mobile user … can mount two chat surfaces" as an actor plus an infra
+     imperative; it is a description of a client-side React defect, and there is
+     no human-run terraform / SSH / reboot step anywhere in this plan. -->
+
 **If this lands broken, the user experiences:** at 390×844 with
 `soleur:sidebar.main.collapsed = "1"`, the hamburger drawer renders Settings as
 seven unlabelled glyphs — two of them identical featureless circles — the theme
@@ -193,6 +199,8 @@ transmits nothing, persists nothing new, and touches no auth, RLS, billing or
 knowledge-base content path. The nearest adjacency is that the affected nav links
 *point at* Settings rows holding billing and API keys — the defect governs the
 rendering of those links' labels, never the rows' contents or permissions.
+
+<!-- lint-infra-ignore end -->
 
 **Brand-survival threshold:** `single-user incident`. Bounded blast radius
 (client-side render, gated on the user having previously collapsed a desktop rail;

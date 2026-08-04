@@ -14,6 +14,7 @@ import { useContext, useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { KbChatContent } from "@/components/chat/kb-chat-content";
+import { KbChatFullScreen } from "@/components/chat/kb-chat-fullscreen";
 import { KbChatContext } from "@/components/kb/kb-chat-context";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import {
@@ -99,10 +100,12 @@ export default function C4Workspace({
 
   // #7222 — TOPOLOGY, not just a default. Desktop keeps the resizable
   // side-by-side split. Below `md` a 190px/190px split makes both panes
-  // unusable, so the revealed Concierge becomes a FULL-SCREEN overlay stacked on
-  // the diagram (which itself keeps the whole width underneath). Safe to read
-  // real matchMedia on the first render: this component is loaded via
-  // next/dynamic({ ssr: false }), so there is no server HTML to hydrate against.
+  // unusable, so the diagram Panel stands alone at full width and the revealed
+  // Concierge becomes the shared full-screen takeover (KbChatFullScreen), which
+  // covers the mobile top bar and owns its own back affordance.
+  //
+  // Safe to read real matchMedia on the first render: this component is loaded
+  // via next/dynamic({ ssr: false }), so there is no server HTML to mismatch.
   const isDesktop = useMediaQuery("(min-width: 768px)");
   const conciergeOpen = !conciergeCollapsed;
 
@@ -112,9 +115,12 @@ export default function C4Workspace({
   // there is never a second ChatSurface subscribed to the same contextPath.
   const conciergeWindow = (
     /* `md:border-l` only — the left border separates the window from the
-       diagram COLUMN, and on the mobile overlay there is no column beside it
-       (the diagram is underneath), so the rule would read as a stray hairline. */
+       diagram COLUMN, and inside the mobile takeover there is no column beside
+       it, so the rule would read as a stray hairline. */
     <div className="flex h-full min-h-0 flex-col bg-soleur-bg-base md:border-l md:border-soleur-border-default">
+      {/* Tab strip. Below `md` the takeover's own header owns the close
+          affordance, so this strip carries only the tabs / edit hint there —
+          two chevrons doing the same job in adjacent 56px bars reads as a bug. */}
       <div className="flex shrink-0 items-center gap-1 border-b border-soleur-border-default bg-soleur-bg-surface-2/40 px-2 py-1.5">
         {c4EditEnabled ? (
           (
@@ -145,19 +151,19 @@ export default function C4Workspace({
           </span>
         )}
         <div className="ml-auto flex items-center gap-1.5 pr-1">
+          {isDesktop && (
           <button
             type="button"
-            aria-label={isDesktop ? "Collapse Concierge" : "Close Concierge"}
+            aria-label="Collapse Concierge"
             onClick={collapseConcierge}
-            /* 44px touch target below `md` (the desktop icon button is a
-               pointer-only affordance and stays compact). */
-            className="flex h-11 w-11 items-center justify-center rounded text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-secondary md:h-auto md:w-auto md:p-1"
+            className="rounded p-1 text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-secondary"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="13 17 18 12 13 7" />
               <polyline points="6 17 11 12 6 7" />
             </svg>
           </button>
+          )}
         </div>
       </div>
 
@@ -194,7 +200,7 @@ export default function C4Workspace({
   );
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <Group orientation="horizontal" className="h-full min-h-0 flex-1">
         {/* LEFT — interactive diagram (+ collapsible Notes). Reveal is driven by
             the shared top-bar "Ask about this document" trigger (KbContentHeader),
@@ -250,18 +256,21 @@ export default function C4Workspace({
         )}
       </Group>
 
-      {/* MOBILE — the same window as a full-screen overlay above the diagram.
-          Absolute inside this component's own `relative` box rather than
-          `fixed`/portaled, so it covers the diagram and NOT the KB content
-          header: the header carries the trigger that reopens it and the back
-          affordance out of the document, both of which must stay reachable. */}
-      {conciergeOpen && !isDesktop && (
-        <div
-          data-testid="c4-concierge-overlay"
-          className="absolute inset-0 z-30 flex flex-col bg-soleur-bg-base"
+      {/* MOBILE — the SAME window, hosted by the shared takeover instead of a
+          column. Portaled to <body> at `z-50` so it covers the mobile top bar:
+          the nav drawer is also `z-50`, and leaving the hamburger tappable would
+          let the drawer stack over an open conversation with no defined winner.
+          Rendered unconditionally (not `&& conciergeOpen`) because
+          KbChatFullScreen returns null when closed and mounting it here keeps
+          the open/close focus-restore effect stable across toggles. */}
+      {!isDesktop && (
+        <KbChatFullScreen
+          open={conciergeOpen}
+          onClose={collapseConcierge}
+          contextPath={contextPath}
         >
           {conciergeWindow}
-        </div>
+        </KbChatFullScreen>
       )}
     </div>
   );
