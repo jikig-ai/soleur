@@ -344,10 +344,42 @@ resource "hcloud_server" "registry" {
   }
 
   # base64gzip-first (git-data.tf / ADR-080 #5927): wrap the whole render so the shell
-  # payload compresses under Hetzner's 32,768-byte user_data cap. zot's cloud-init is small
-  # (docker + one container + htpasswd gen; no bake-and-extract), but budget for it anyway
-  # and verify the byte-exact size at the first `terraform plan`. Hetzner base64-decodes →
+  # payload compresses under Hetzner's 32,768-byte user_data cap. Hetzner base64-decodes →
   # gzip magic → cloud-init auto-gunzips → byte-identical #cloud-config (DataSourceHetzner).
+  #
+  # NO LONGER SMALL (#7144, 2026-08-04). This comment used to read "zot's cloud-init is small
+  # ... but budget for it anyway and verify the byte-exact size at the first terraform plan" —
+  # the budget half was never written, and the render has since reached 32,024 B against the
+  # 32,768 cap: ~744 B of headroom, the TIGHTEST of the three hosts, and the only one that was
+  # unguarded. `cloud-init-user-data-size.test.ts` now enforces REGISTRY_BUDGET alongside the
+  # long-standing web + git-data budgets. Consequence for the next editor: this file has no
+  # room left for prose. Put rationale HERE (this .tf is not byte-budgeted) and leave only a
+  # pointer in the YAML — the #6425/#6594 precedent. If a real multi-KB addition is ever
+  # needed, reclaim bytes by moving comment blocks out, or bake logic into an image like
+  # #5921 did for the web host; do not raise the budget, since the cap is the vendor's.
+  #
+  # PINNED-TAG CARVE-OUT — full rationale for cloud-init-registry.yml's `^v1\.1\.24$` keepTags
+  # entry (#7144 task 5b). A host that pins an image by digest needs its tag to survive
+  # retention, but `mostRecentlyPushedCount` is a push-ORDER heuristic that can evict out of
+  # order under the ADR-096 crane-copy backfill/re-sign path — which is the very path used to
+  # place the pin. Since the GHCR read PAT was revoked 2026-07-30, zot is the SOLE pull path,
+  # so an evicted pin is a FATAL fresh boot, not a graceful fallback.
+  #
+  # Four properties, each verified against project-zot v2.1.2 (pkg/retention/retention.go and
+  # pkg/retention/matcher.go) rather than assumed — do not "tidy" any of them:
+  #   (1) NO count field. GetRetainedTags does `if len(rules) > 0 { retainCandidates =
+  #       rulesCandidates }`, so a patterns-only entry yields zero rules and is retained
+  #       UNCONDITIONALLY — the same mechanism that keeps `latest`. Adding a count re-arms the
+  #       eviction the entry exists to prevent.
+  #   (2) ORDER. getTagPolicy is FIRST-match-wins over keepTags in DECLARATION order, so the
+  #       entry only works ABOVE `v.*`; moved below, `v.*` claims the tag and the count applies.
+  #   (3) ANCHORS. MatchesListOfRegex uses regexp.MatchString — UNANCHORED. Without ^...$ the
+  #       pin would also match v1.1.240 and v1.1.24-rc1.
+  #   (4) ONE policy. getRepoPolicy returns the FIRST policy whose glob matches and does NOT
+  #       merge them, so adding a second repo-scoped policy would REPLACE the whole keep-set for
+  #       that repo — silently dropping the ADR-087 sha256-* cosign sig protection. That is why
+  #       the carve-out lives inside the existing "**" policy instead of a bootstrap-only one.
+  # Update the pattern when the pin moves; registry-boot-guard.test.sh asserts all four.
   user_data = base64gzip(templatefile("${path.module}/cloud-init-registry.yml", {
     # Mount the zot storage volume by its specific id (server.tf/cloud-init.yml by-id
     # pattern). Known at plan time; the attachment is a separate resource.

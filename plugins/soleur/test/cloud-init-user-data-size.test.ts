@@ -1,4 +1,4 @@
-// Rendered-`user_data` size guard for the Hetzner web + git-data hosts (#5921).
+// Rendered-`user_data` size guard for the Hetzner web + git-data + registry hosts (#5921, #7144).
 //
 // Hetzner caps cloud-init `user_data` at 32,768 bytes. Before this guard the web host's
 // rendered `user_data` was ~282 KB (~8.6x over) because server.tf inlined 22 scripts +
@@ -149,6 +149,21 @@ const WEB_GZIP_FLOOR = 10_000;
 // so a broken model that gzips near-nothing (e.g. accidentally x-run placeholders) fails loudly.
 const GIT_DATA_BUDGET = 28_000;
 const GIT_DATA_FLOOR = 10_000;
+
+// Registry host base64gzip'd budget (#7144 task 5b). Unlike WEB and GIT_DATA, this budget is NOT
+// a comfortable sub-cap — it is a tripwire on a host that is genuinely close to the vendor ceiling.
+// Measured 31,572 B against HETZNER_CAP's 32,768: ~1,196 B of real headroom, the tightest of the
+// three. 32,000 reds CI at roughly +428 B — early enough to fail in CI rather than at apply, while
+// leaving room for an ordinary small edit.
+//
+// IMPORTANT for whoever trips this: the three prior re-baselines above (#6425, #6594, #6604) are
+// NOT the precedent to follow here. Those raised a self-imposed sub-cap that still sat ~10 KB below
+// the vendor cap. This one has ~1.2 KB, and 32,768 is Hetzner's number, not ours — so raising
+// REGISTRY_BUDGET toward it buys a boot failure, not headroom. Reclaim instead: move comment prose
+// into zot-registry.tf (not byte-budgeted — the #6425 pattern, and where this carve-out's own
+// rationale already lives), or bake host logic into the image as #5921 did for the web host.
+const REGISTRY_BUDGET = 32_000;
+const REGISTRY_FLOOR = 20_000;
 
 const IMAGE_NAME = "ghcr.io/jikig-ai/soleur-web-platform:latest";
 // Modeled byte lengths for render-time values that are NOT base64-of-a-file. base64-of-file
@@ -339,6 +354,7 @@ const gitDataTf = readFileSync(
   join(INFRA, "modules", "git-data-userdata", "main.tf"),
   "utf8",
 );
+const registryTf = readFileSync(join(INFRA, "zot-registry.tf"), "utf8");
 const cloudInit = readFileSync(join(INFRA, "cloud-init.yml"), "utf8");
 const bootstrap = readFileSync(join(INFRA, "soleur-host-bootstrap.sh"), "utf8");
 const dockerfile = readFileSync(DOCKERFILE, "utf8");
@@ -352,6 +368,20 @@ describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
     expect(size).toBeLessThan(HETZNER_CAP);
     expect(size).toBeLessThan(WEB_GZIP_BUDGET);
     expect(size).toBeGreaterThan(WEB_GZIP_FLOOR); // non-vacuity
+  });
+
+  test("registry host base64gzip'd user_data is under the sub-cap budget (#7144 task 5b)", () => {
+    // GAP THIS CLOSES: the web and git-data hosts have carried sub-cap budgets since #6090/#5927,
+    // but the REGISTRY host never got one — zot-registry.tf's own comment says "budget for it
+    // anyway and verify the byte-exact size at the first terraform plan", and the budget half was
+    // never written. Measured while adding the #7144 pinned-tag carve-out, it is the host CLOSEST
+    // to the hard 32,768 cap of the three, so it was the one place a comment could silently
+    // un-bootable the registry — and a dead registry is a cold-boot outage for BOTH platform
+    // images now that zot is the sole pull path (GHCR read PAT revoked 2026-07-30).
+    const size = renderedGzipB64Len("cloud-init-registry.yml", registryTf);
+    expect(size).toBeLessThan(HETZNER_CAP);
+    expect(size).toBeLessThan(REGISTRY_BUDGET);
+    expect(size).toBeGreaterThan(REGISTRY_FLOOR); // non-vacuity
   });
 
   test("git-data host base64gzip'd user_data is under the sub-cap budget (#5927)", () => {

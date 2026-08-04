@@ -68,6 +68,10 @@ write_files:
   # cosign-verify coupling (ADR-087): mostRecentlyPushedCount is push-ORDER heuristic and can evict
   # out of order under the ADR-096 crane-copy backfill/re-sign path, so 50 is deliberately generous.
   #
+  # PINNED-TAG CARVE-OUT (#7144 task 5b): the `^v1\.1\.24$` entry exempts a host-pinned tag from
+  # count-based eviction. Its NO-count / ABOVE-`v.*` / anchored / single-policy properties are all
+  # load-bearing — full rationale in zot-registry.tf (not byte-budgeted, #6425 precedent).
+  #
   # gc/retention TIMING (#6240 defense-in-depth, UNCHANGED here): gcInterval 24h->1h and
   # retention.delay 24h->2h so a filling store is reclaimed within ~1h, not once per 24h. gcDelay
   # stays 1h (the dangling-blob SAFETY window that protects a blob just uploaded but not yet
@@ -102,6 +106,7 @@ write_files:
                 "keepTags": [
                   { "patterns": ["latest"] },
                   { "patterns": ["sha256-.*"], "mostRecentlyPushedCount": 50 },
+                  { "patterns": ["^v1\\.1\\.24$"] },
                   { "patterns": ["v.*"], "mostRecentlyPushedCount": 5 },
                   { "patterns": ["[0-9a-f]{7,64}"], "mostRecentlyPushedCount": 5 }
                 ]

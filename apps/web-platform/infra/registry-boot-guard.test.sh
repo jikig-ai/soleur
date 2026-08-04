@@ -217,6 +217,36 @@ assert "commit-sha tag keep-set lowered to 5" \
 assert "no keepTags count left at the old value 10" \
   "! grep -qE '\"mostRecentlyPushedCount\": 10\\b' '$CI'"
 
+echo "--- structural: pinned-tag carve-out is exempt from count-based eviction (#7144 task 5b) ---"
+# WHY these assertions are shaped this way — verified against project-zot v2.1.2 source,
+# pkg/retention/retention.go + pkg/retention/matcher.go (hr-verify-repo-capability-claim):
+#
+#   1. getRepoPolicy() returns on the FIRST policy whose ANY `repositories` glob matches, and
+#      policies are NOT merged. So a second policy added for one repo REPLACES the whole
+#      keep-set for it — silently dropping the ADR-087 sha256-* cosign sig protection. The
+#      carve-out therefore lives INSIDE the single "**" policy, and assertion (c) pins that
+#      there is still exactly one policy.
+#   2. getTagPolicy() is likewise FIRST-match-wins over keepTags in DECLARATION ORDER, so the
+#      pin entry is only effective ABOVE the "v.*" count entry — assertion (b) pins the order.
+#   3. GetRetainedTags(): `if len(rules) > 0 { retainCandidates = rulesCandidates }` — an entry
+#      with `patterns` and NO count/within field produces zero rules and is retained
+#      UNCONDITIONALLY (this is how "latest" already works). Assertion (a) pins the absence of
+#      a count on the pin entry; a count there would re-arm the eviction it exists to prevent.
+#   4. MatchesListOfRegex() uses regexp.MatchString — UNANCHORED. `^`/`$` are load-bearing:
+#      without them the pin would also match v1.1.240, v1.1.24-rc1, etc.
+# Matched OUTSIDE assert(): it eval()s its condition, and grep -F of a JSON-escaped regex through
+# an extra eval layer is unreadable-and-wrong. The matched fragment ends `] }` with no count field,
+# so a single -F match proves BOTH "entry exists, anchored" and "carries no count" (property 1).
+pin_line=$(grep -nF '{ "patterns": ["^v1\\.1\\.24$"] }' "$CI" | head -1 | cut -d: -f1)
+vstar_line=$(grep -nF '"patterns": ["v.*"], "mostRecentlyPushedCount": 5' "$CI" | head -1 | cut -d: -f1)
+assert "(a) pinned-tag keepTags entry exists, anchored, and carries NO count field" \
+  "[ -n '$pin_line' ]"
+assert "(b) pin entry precedes the v.* count entry (first-match-wins ordering is load-bearing)" \
+  "[ -n '$pin_line' ] && [ -n '$vstar_line' ] && [ '$pin_line' -lt '$vstar_line' ]"
+n_policy_repos=$(grep -cF '"repositories": ["**"]' "$CI")
+assert "(c) still exactly ONE retention policy (a 2nd would REPLACE, not merge, the keep-set)" \
+  "[ '$n_policy_repos' = '1' ]"
+
 echo ""
 echo "=== registry-boot-guard.test.sh: ${PASS} passed, ${FAIL} failed ==="
 [ "$FAIL" -eq 0 ] || exit 1
