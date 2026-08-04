@@ -281,14 +281,43 @@ if [ "${LUKS_MONITOR_ASSERT_READYZ:-0}" = "1" ]; then
 fi
 
 # All asserts passed — push the heartbeat so a dead probe FAILS it (P1-4).
+#
+# #6808 AC3 — BOTH arms below are FATAL, not WARN. Until the 2026-08-04 apply, an absent URL logged
+# a WARN and exited 0, so a never-configured probe and a dead probe were indistinguishable and
+# NEITHER paged: "a check that cannot report is indistinguishable from one that passed". The old
+# text ("operator wires it at cutover") described a deferred manual step that no longer exists —
+# the URL is provisioned by terraform as a REFERENCE to betteruptime_heartbeat.workspaces_luks.url
+# (doppler_secret.workspaces_luks_heartbeat_url, uptime-alerts.tf). Its absence is therefore a real
+# regression — a deleted secret, or a boot token that lost its prd_workspaces_luks scope — and
+# never the expected steady state.
+#
+# exit 3 (emit_readiness_and_die), NOT exit 1 (emit_and_die): this is a PROBE-INTEGRITY fault. By
+# the time control reaches here every at-rest assert above has PASSED, so the at-rest exit would
+# classify a broken ALERTING path as plaintext-at-rest — the p0 type/security verdict whose issue
+# body asserts the published Article 32 claim is false. Both reasons are registered in the
+# workflow's is_probe_integrity() + rc=3 headline branch and in the runbook triage table;
+# workspaces-luks-verify-workflow.test.sh (M)/(N) fail loudly if that drifts.
+#
+# NOTE ON WORDING: never write the at-rest helper's name followed by a bare lowercase word anywhere
+# in this file, comments included. The (M)/(N) parity gates derive the producible-reason set by
+# regex over the whole file, so `<helper> would classify ...` registers "would" as an emittable
+# reason and reds the gate. Existing prose uses the possessive form for exactly this reason.
 hb_url="$(doppler secrets get WORKSPACES_LUKS_HEARTBEAT_URL --plain --config prd_workspaces_luks 2>/dev/null || true)"
-if [ -n "$hb_url" ]; then
-  # -g (--globoff): the URL is a bearer capability; without -g a URL with [ ]/{ } prints the full
-  # URL in curl's glob-parse error, which SyslogIdentifier would ship to Better Stack.
-  curl -gfsS --max-time 10 "$hb_url" >/dev/null 2>&1 || log "WARN: heartbeat push failed (URL present)"
-else
-  log "WARN: WORKSPACES_LUKS_HEARTBEAT_URL absent — heartbeat not pushed (operator wires it at cutover)"
-fi
+[ -n "$hb_url" ] || emit_readiness_and_die heartbeat_url_absent
+# -g (--globoff): the URL is a bearer capability; without -g a URL with [ ]/{ } prints the full
+# URL in curl's glob-parse error, which SyslogIdentifier would ship to Better Stack.
+#
+# RETRIED before it is fatal, unlike the absent-URL arm above. An absent secret is a config fault
+# that no retry can fix, but a push is one outbound HTTPS call: making a single transient egress
+# blip red the daily probe and file an issue would trade a silent gap for a noisy one. Three
+# attempts, each capped at 10s, 2s apart: ~36s worst case, well inside the unit's runtime. An
+# EXHAUSTED push is the same "cannot report" state as an absent URL, so it ends the same way.
+hb_pushed=false
+for _ in 1 2 3; do
+  if curl -gfsS --max-time 10 "$hb_url" >/dev/null 2>&1; then hb_pushed=true; break; fi
+  sleep 2
+done
+[ "$hb_pushed" = true ] || emit_readiness_and_die heartbeat_push_failed
 
 log "OK: /mnt/data is LUKS-backed (device_type=crypto_LUKS mount_source=$MAPPER escrow=ok header=readable)"
 exit 0
