@@ -124,3 +124,24 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
 - **Manual run**: `gh workflow run scheduled-followthrough-sweeper.yml`
 - **Dry run**: `gh workflow run scheduled-followthrough-sweeper.yml -f dry_run=true`
 - **First user**: #3859 (Sentry cron monitor check-in receipts after #3849 rotation)
+
+
+## The positive control must be impossible for the OLD artifact (#7220, 2026-08-04)
+
+A soak probe proves a NEW thing is live. Its liveness control must therefore be a signal the
+**pre-change** artifact cannot produce. A signal both versions emit cannot discriminate
+"deployed and healthy" from "never deployed" — and on a delivery channel, "never deployed" is
+usually the failure being verified.
+
+Measured: #7220's first probe counted the handler's `starting:`/`writing:`/`wrote:`/`complete:`
+journald rows. The pre-fix handler emits all four. Run against production it returned **PASS on
+40 such rows while the host was dying at `daemon-reload`** — and `sweep-followthroughs.sh` closes
+the issue on exit 0, so it would have closed the incident while the incident was happening.
+
+Valid controls are things the old version structurally cannot emit: a marker string introduced by
+the change, or a KEY the new writer adds unconditionally (so its ABSENCE proves the old artifact
+even on a healthy run).
+
+**And when the probe cannot resolve the ambiguity, exit TRANSIENT.** `PASS` is an auto-close;
+spending it on "I could not tell" converts an unverified channel into a closed issue. Ask of every
+PASS branch: *what would this report if the change were never deployed?*

@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Run every infra suite REGISTERED IN CI, locally and in parallel.
 #
+# READING THE OUTPUT: a failing suite prints `RED <path>`, not `FAIL`. A `grep FAIL` over this
+# runner's log returns zero hits on a failing run and reads as clean — measured 2026-08-04 (#7220),
+# where the summary said "1 failed" and the greps for FAIL came back empty. Match `^RED ` (or just
+# read the trailing `N passed, M failed` line).
+#
 # WHY THIS EXISTS (#6730). These suites are registered as `run: bash …` steps in
 # `.github/workflows/infra-validation.yml` — during #6730 a required check was RED
 # behind a 223/223 green test-all, and the red was found by reading CI, not by

@@ -449,6 +449,7 @@ if want_scripts; then
   # #6512 Fix 2a: the seccomp-unenforced actionable-alert emitter (sourced by
   # apply-deploy-pipeline-fix.yml). Explicit run_suite — scripts/*.test.sh is not auto-globbed here.
   run_suite "scripts/seccomp-unenforced-alert" bash scripts/seccomp-unenforced-alert.test.sh
+  run_suite "scripts/infra-config-red-alert" bash scripts/infra-config-red-alert.test.sh
   # Production version-drift alerter (#7091), sourced by scheduled-prod-version-drift.yml.
   # Explicit run_suite — scripts/*.test.sh is not auto-globbed here, and an unregistered
   # suite is the #5417 class: green CI over zero coverage.
