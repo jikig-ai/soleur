@@ -15,7 +15,7 @@ signed_off_at: 2026-08-02
 signed_off_at_withdrawn: 2026-07-24
 amended_at: 2026-08-02
 pre_merge_condition: "E-1 — DISCHARGED 2026-08-02. Satisfied by Door 1: `workspaces-luks-verify` run 30749271370 (2026-08-02T13:07:46Z, workflow_dispatch on main @ b5871b9f6d, conclusion success) — `device_type=crypto_LUKS`, `mount_source=/dev/mapper/workspaces`, escrow ok, header readable, `workspace_count=8 expected=8`, `/health=200`, readyz ready=true. Verified independently against the GitHub API and the raw run log, not from a report. See §A3.1."
-claim_decay_trigger: "While #6808 is OPEN, `workspaces-luks-verify` is workflow_dispatch-only and no automatic verification of any kind exists. The published clause asserts present-tense live verification. If no successful run lands within any trailing 30-day window while that clause stands, the clause MUST be re-tensed to a dated past verification (Amendment No. 2, Door 2) or withdrawn. See §A3.4."
+claim_decay_trigger: "ANNOTATED 2026-08-03 (#6808 schedule PR): the PREMISE of this trigger — `workspaces-luks-verify` being workflow_dispatch-only, with no automatic verification of any kind — RETIRES ON MERGE of that PR, which adds a daily `schedule: 41 4 * * *` plus a three-class alarm and a Sentry Crons monitor for the schedule itself. The TRIGGER ITSELF IS NOT RETIRED and its threshold is unchanged: if no successful run lands within any trailing 30-day window while the published present-tense clause stands, the clause MUST still be re-tensed to a dated past verification (Amendment No. 2, Door 2) or withdrawn. What changes is only that the window is now defended by a standing control rather than by operator memory, and that a failure is now self-reporting: a failing run files a `ci/luks-verify` issue, and a run that never fires is caught by the Sentry monitor. Evidence query: `gh run list --workflow=workspaces-luks-verify.yml --event=schedule --limit 40 --json databaseId,conclusion,createdAt`. See §A3.4."
 amended_by: "clo agent (Soleur legal domain leader) — Amendment No. 1 re-attested HEAD 25e5de36e on 2026-08-02 after the 2026-08-01 rebase (DC-2) materially reversed the PR's own position; Amendment No. 2 re-attested HEAD c9747f0aa the same day after the A–E rulings were applied. Evidence recomputed from the working tree, hashed against `main`, and pulled live from the GitHub API at each pass; nothing carried over on trust from any earlier pass."
 signed_off_by: "WITHDRAWN. The 2026-07-24 attribution is preserved below for the record: 'clo agent (Soleur legal domain leader) — reviewing authority for v1 per the agent-native company model; review performed 2026-07-24T22:43Z (00:43 CEST on 2026-07-25 local), same session as the PR; dated 2026-07-24 to match the PR, the corrections banner, and the sibling spec artifacts. External counsel re-review reserved for the re-evaluation triggers below.' That review is superseded, not deleted — see §Amendment No. 1 for what it got wrong and why."
 tier_classification: "Tier 1 (material) per `knowledge-base/legal/tc-version-bump-policy.md` — retraction of published Article 32 TOM claims plus re-scoping of a surviving one. NO `TC_VERSION` bump: that constant governs `docs/legal/terms-and-conditions.md` exclusively (`apps/web-platform/lib/legal/tc-version.ts:14,17,26-27`); the three documents amended here are notice/disclosure documents with no re-acceptance gate."
@@ -901,6 +901,13 @@ it.** Three reasons:
 - **The bounding fact is unchanged** — zero arms-length data subjects (#3723 OPEN, verified).
 
 **But the existing escalation is not sufficient either, for a reason today's run exposed.**
+> **SUPERSEDED ON MERGE 2026-08-03 (#6808 schedule PR) — retained as the finding's premise, not
+> as a current statement of fact.** The two sentences below were true when this amendment was
+> written and are FALSE from the merge of that PR: the workflow now carries a daily
+> `schedule: 41 4 * * *`, so there IS automatic verification. The finding they support stands —
+> the heartbeat remains dead and the schedule is a compensating control, not a replacement (see
+> rec 2 below, which is a CONJUNCTION).
+
 `workspaces-luks-verify.yml` is **`workflow_dispatch`-only** — its own header says so, and all
 four runs in its history are manual dispatches. So while #6808 is open there is **no automatic
 verification of any kind**: the heartbeat is the only continuous control and it is dead. Before
@@ -914,9 +921,28 @@ priority label is the wrong instrument for a change in kind.
    automatic, and — unlike the heartbeat — it needs no operator secret-wiring, which is precisely
    what #6808 is blocked on. This bounds the decay of the published claim without depending on the
    thing that is broken. File as a sub-task of #6808 or a linked **P2**.
-2. **#6808 should not be closeable until either the heartbeat is wired *or* the schedule
-   exists.** Record that on the issue, so closing the narrow secret-wiring task cannot silently
-   retire the broader guarantee.
+   > **DISCHARGED 2026-08-03 (#6808 schedule PR).** Implemented as a daily `schedule: 41 4 * * *`.
+   > The recommendation asked only for the trigger; what shipped deliberately went further, because a
+   > cron without a working alarm is strictly worse than the dispatch-only state it replaces — it also
+   > makes people believe the surface is monitored. So the schedule lands together with a three-class
+   > alarm (`drift` / `readiness` / `unavailable`, the first being this audit's re-evaluation trigger
+   > (3)), an ops-email page for the first two, and a Sentry Crons monitor covering the mode the
+   > in-run alarm structurally cannot see: the run that never fires at all.
+2. **#6808 must not be closeable until the heartbeat is wired *AND* the schedule exists.**
+   (Drafted as "either ... or"; corrected to a conjunction on 2026-08-03 — see the note below,
+   and note that the correction is recorded on the ISSUE itself, not only here.) Record that on
+   the issue, so closing the narrow secret-wiring task cannot silently retire the broader
+   guarantee.
+   > **CORRECTED 2026-08-03 (#6808 schedule PR). Read the disjunction as a CONJUNCTION.** As
+   > drafted, "either ... or" was harmless while neither limb existed. Now that the schedule limb is
+   > satisfied it would license closing #6808 with the heartbeat still dead — retiring the broader
+   > guarantee by exactly the mechanism this recommendation was written to prevent, and inverting its
+   > own stated intent. The two limbs are not substitutes: the schedule is a DAILY SAMPLE taken from
+   > outside the host, while `WORKSPACES_LUKS_HEARTBEAT_URL` is a CONTINUOUS signal emitted by the
+   > host itself, and this audit's own §A3.4 preamble calls the heartbeat "the only continuous
+   > control". A daily sample leaves an up-to-24-hour blind window that no schedule cadence closes in
+   > principle. **#6808 therefore remains OPEN.** The PR that added the schedule uses `Ref #6808`,
+   > never `Closes`, and satisfies only the "schedule exists" half of the recorded closure condition.
 3. **Correct the #6808 comment.** The 2026-07-24 comment says it gates *"a live published
    over-claim."* Ruling C removed that over-claim, so the framing is now obsolete and overstated.
    What #6808 gates today is the **continued truth of a published present-tense verification

@@ -124,6 +124,22 @@ const NON_INNGEST_MONITORS = new Set([
   // which only a fresh actions/checkout provides. No cron-*.ts counterpart and no
   // SENTRY_MONITOR_SLUG const; its final sentry-heartbeat step pings the check-in.
   "scheduled-prod-version-drift",
+  // #6808: GHA-fired (workspaces-luks-verify.yml, on.schedule '41 4 * * *') — the daily
+  // /workspaces LUKS at-rest re-assert. Its native `schedule:` is ANTI-CIRCULARITY, not
+  // convenience. The SCHEDULER is not the problem — since the #6178 cutover (ADR-100, superseding
+  // the #5450 same-host framing) the Inngest SCHEDULER runs on its own
+  // host (hcloud_server.inngest, 10.0.1.40). EXECUTION is: Inngest calls functions over a single
+  // stable callback, sdk_url http://10.0.1.10:3000/api/inngest (inngest-host.tf), i.e. the app on
+  // WEB-1, with no failover to web-2. This workflow exists to detect that web-1's /mnt/data is no
+  // longer on the LUKS mapper — up to and including "web-1 is gone" — so a cron-*.ts dispatching it
+  // would execute on the subject itself, the callback would never land, and the check would report
+  // silence, read as health. A verifier must not be executed by the host it verifies (ADR-033's
+  // anti-circularity corollary, recorded alongside the 2026-06-02 scope note). It additionally
+  // holds a cloud-admin CF Tunnel bridge key and a prd_workspaces_luks boot token that must not be
+  // parked on the long-lived app host, which is the ordinary credential-heavy carve-out. No
+  // cron-*.ts counterpart and no SENTRY_MONITOR_SLUG const; its final sentry-heartbeat step pings
+  // the check-in. Same class as scheduled-inngest-health / scheduled-prod-version-drift.
+  "workspaces-luks-verify",
 ]);
 
 describe("Inngest function registry — drift guards", () => {

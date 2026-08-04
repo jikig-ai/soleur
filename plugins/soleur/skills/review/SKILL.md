@@ -1030,8 +1030,23 @@ After emitting the marker, the calling skill's continuation gate takes over — 
 
    Run it even when step 2 committed something: the trailer is the durable
    machine-readable signal, and the commit subject is only a legacy fallback.
-4. Display: "Review complete. All findings are tracked as GitHub issues.
-   Run `/clear` then `/soleur:work` or `/soleur:ship` for maximum context headroom."
+4. **Continue to `/soleur:ship` in the same turn — review is not a stopping point.**
+   Findings are fixed inline (§5), so a clean review means the PR is ready to go
+   out, not ready to be handed over. Invoke `skill: soleur:compound` then
+   `skill: soleur:ship`, and let ship carry the PR to MERGED
+   (`rf-never-skip-qa-review-before-merging`, `wg-after-marking-a-pr-ready-run-gh-pr-merge`).
+
+   Do NOT end the turn by telling the operator to run the next skill. This step
+   used to read *"Run `/clear` then `/soleur:work` or `/soleur:ship` for maximum
+   context headroom"*, which reads as an instruction TO THE OPERATOR and is the
+   deferral `wg-verified-work-ships-without-asking` exists to stop — Soleur's
+   operator is non-technical and cannot clear that gate. If context headroom is
+   genuinely the constraint, say so and continue anyway; `/clear` is the
+   operator's choice to make, never a precondition you impose on finishing.
+
+   The only sanctioned pause is an irreversible production effect
+   (`hr-menu-option-ack-not-prod-write-auth`) — surface the exact command and
+   stop. A pending merge is not that.
 
 ### 7. End-to-End Testing (Optional)
 
