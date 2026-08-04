@@ -107,6 +107,14 @@ jobs:
 
       - name: Read pinned inngest-cli + vector versions + SHAs from *.tf
         id: pin
+        # Gated to match the ONLY step that consumes its outputs (`Build + verify + push`
+        # reads steps.pin.outputs.* in its env). Ungated, this ran under mirror_only as dead
+        # work that could still RED the run: it uses `set -euo pipefail` and the two
+        # inngest.tf greps carry no `|| true`, while mirror_only checks out an OLD tag's tree
+        # — whose infra/ layout is exactly what a backfill has no control over. Failing a
+        # digest backfill because a years-old tag spelled a terraform variable differently is
+        # a fault with no relationship to the mirror.
+        if: ${{ !inputs.mirror_only }}
         # Reads only from tracked files (no untrusted github.event.* input).
         run: |
           set -euo pipefail
@@ -242,11 +250,25 @@ jobs:
       # manifest, so zot served a DIFFERENT digest than GHCR for the same tag — silently,
       # because nothing compared them.
       #
-      # It matters because cloud-init.yml's web-host arm substitutes the zot ref INTO $IREF
+      # It matters because cloud-init.yml's WEB-HOST arm substitutes the zot ref INTO $IREF
       # (`if docker pull "$ZIREF"; then IREF="$ZIREF"`) and then execs that payload AS ROOT.
       # An unpinnable zot copy therefore left the root-executed path on a mutable tag, and
-      # pinning only the GHCR literal would not have closed it. ADR-155 named this as the
-      # blocker for its Alternative C; #7144 finding 2 inherits it.
+      # pinning only the GHCR literal would not have closed it.
+      #
+      # PRECISION, because #7203 got this wrong in its own title: the DEDICATED inngest host
+      # (cloud-init-inngest.yml) is ALREADY digest-pinned. The unpinned root-exec is the WEB
+      # host arm, which apps/web-platform/infra/variables.tf records as DORMANT today
+      # (`web_colocate_inngest` defaults false post-ADR-100) — so this is a latent exposure
+      # that arms when that variable flips, not a live one.
+      #
+      # The SOLEUR-DEBT block in variables.tf is the authority for that trade; its `trigger:`
+      # clause makes digest-pinning $IREF a precondition of flipping the variable, and #7144
+      # finding 2 inherits it.
+      #
+      # #7203 cited "ADR-155" here. Do not restore that: ADR-155 on main is
+      # ADR-155-cross-gate-exemption-markers-in-the-rule-corpus, which has nothing to do with
+      # registries — the intended document was minted under the same number on an unmerged
+      # branch, so the citation resolved to an unrelated ADR for every reader on main.
       #
       # `crane copy` is registry->registry and preserves the manifest bytes, so a single
       # @sha256 resolves on BOTH registries. That is also what makes `mirror_only` possible:
@@ -258,13 +280,26 @@ jobs:
       # with the GHCR side, no sign step.
       - name: Bridge to zot registry (CF Tunnel)
         id: zot_bridge
-        # BELT OFF under mirror_only, for the same reason as the mirror step below. The
-        # mirror is gated on `zot_bridge.outcome == 'success'`, so a soft-failed bridge
-        # SKIPS the mirror and leaves the job GREEN — under mirror_only that is a run
-        # reporting success for a backfill that never ran, and the caller would then pin a
-        # digest zot cannot serve. Belt stays ON for push/rebuild, where the bridge is
-        # secondary to the GHCR release (#6274).
-        continue-on-error: ${{ !inputs.mirror_only }}
+        # Belt ON unconditionally, and that is deliberate — it is NOT the thing that decides
+        # whether a bridge failure reds the run. The mirror step below is no longer gated on
+        # this step's outcome; it reads `BRIDGE_OUTCOME` as env and branches INTERNALLY, so a
+        # bridge failure reaches the same `degraded()` emitter and the same step id every
+        # consumer already keys on. `degraded()` then decides: exit 0 on the build path,
+        # exit 1 under mirror_only.
+        #
+        # #7203 shipped `continue-on-error: ${{ !inputs.mirror_only }}` here plus an
+        # `if: steps.zot_bridge.outcome == 'success'` gate on the mirror. That closed the
+        # false-green for mirror_only ONLY, by job status, and left the BUILD path with the
+        # #6416 defect verbatim: a soft-failed bridge SKIPPED the mirror, a skipped step
+        # emits no outputs, so `mirror_status` stayed unset and every degrade signal this
+        # workflow owns — ::warning::, step summary, and the #6278 Slack ⚠️ — was unreachable
+        # in the one case worth reporting. The bridge is also the step the measured fault
+        # class actually kills (#7242: CF Access refusing the websocket upgrade), so that was
+        # the path with no signal.
+        #
+        # reusable-release.yml records the same conclusion at its own zot_bridge:
+        # "Do NOT re-gate this step on zot_bridge — that was the #6416 defect."
+        continue-on-error: true
         uses: ./.github/actions/cf-tunnel-registry-bridge
         with:
           # DOPPLER_TOKEN_PRD, NOT the generic DOPPLER_TOKEN (#6122 cutover fix): the bridge
@@ -277,7 +312,17 @@ jobs:
 
       - name: Mirror inngest image GHCR→zot (crane, digest-preserving)
         id: zot_mirror
-        if: steps.zot_bridge.outcome == 'success'
+        # NO `if:` — deliberately. GitHub prepends an implicit `success()` to a step with no
+        # status function, which is exactly the gate wanted here: run whenever the job is
+        # still healthy. Re-adding `if: steps.zot_bridge.outcome == 'success'` reinstates the
+        # #6416 defect, because a skipped step cannot emit `mirror_status` and every
+        # consumer below keys on that output. The bridge's own result arrives as
+        # BRIDGE_OUTCOME in `env:` and is branched on INSIDE the script.
+        #
+        # The step id is load-bearing and must not change: step outputs are namespaced by id,
+        # so handling bridge-down in a NEW sibling step would write an output no consumer
+        # reads (reusable-release.yml records this at its own zot_mirror).
+        #
         # The continue-on-error marker below is BELT: the zot mirror is a SECONDARY/shadow
         # copy during the ADR-096 soak (GHCR primary + break-glass; atomic GHCR
         # pull-side fallback), so a mirror failure must NEVER red this build. #6274:
@@ -296,15 +341,31 @@ jobs:
           # Typed boolean, consumed only as a string comparison below — never interpolated
           # into the script body.
           MIRROR_ONLY: ${{ inputs.mirror_only }}
+          # OUTCOME, never CONCLUSION. `zot_bridge` carries continue-on-error: true, which
+          # forces its CONCLUSION to 'success' while OUTCOME keeps the true result. Reading
+          # conclusion here would mask every bridge failure — the masking is the whole reason
+          # the #6416 defect was invisible.
+          BRIDGE_OUTCOME: ${{ steps.zot_bridge.outcome }}
         run: |
-          # No `set -e` — on the BUILD path every failure exits 0 so this build stays green
-          # (SUSPENDERS to the continue-on-error belt). A persistent miss surfaces
-          # as mirror_status=degraded → ::warning:: + step summary AND (#6278) a Slack
-          # ⚠️ via the "Post to Slack (inngest mirror status)" step below — degrade-only
-          # (this workflow fires on inngest-bootstrap infra changes, not a per-release
-          # operator event). Before #6278 the degrade was annotations-only; a sustained
-          # pre-cutover degrade now gets push-notification parity with reusable-release.yml.
+          # No `set -e` — on the BUILD path every failure routes through degraded(), which
+          # exits 0 so this build stays green (SUSPENDERS to the continue-on-error belt). A
+          # persistent miss surfaces as mirror_status=degraded → ::warning:: + step summary,
+          # and on the BUILD path also a Slack ⚠️ (#6278). Under mirror_only the run is RED
+          # and the Slack step is reached via `!cancelled()` — see that step's own comment;
+          # do not restate the delivery guarantee here, it drifted once already.
+          #
+          # `set -e` is deliberately NOT used: the crane-install rc is captured explicitly
+          # below, and `set -e` would abort at the failing command before the rc could be
+          # classified — emitting no mirror_status at all, which is the silence this file
+          # exists to remove.
           set -uo pipefail
+
+          # BACKSTOP for the above. Without `set -e`, a future fallible command added with no
+          # `|| degraded` route fails silently and execution falls through to
+          # `mirror_status=ok` — a green run with no mirror. The ERR trap makes that a named
+          # degrade instead of a false green. `set -E` propagates it into functions.
+          set -E
+          trap 'degraded unrouted "$?" "a command failed with no explicit || degraded route — this is a workflow bug, not an infrastructure fault"' ERR
 
           # Bounded retry to self-heal a transient TCP reset over the CF-tunnel
           # bridge. 3 attempts, 5s then 15s backoff. Idempotent ops only — `crane copy`
@@ -322,30 +383,72 @@ jobs:
             done
           }
 
+          # SIGNATURE: degraded <reason> <rc> [detail]
+          #
+          # `reason` is a first-class parameter, not decoration. Before this, all six call
+          # sites collapsed into one undifferentiated "degraded" bucket, so `mirror_status` —
+          # the only machine-readable output, and the thing the Slack gate reads — could not
+          # name a cause. A crane-tarball CHECKSUM MISMATCH on a binary about to be
+          # `sudo tar`-extracted into /usr/local/bin is the strongest supply-chain signal this
+          # workflow can emit, and it was rendering as a message about registry redundancy.
+          # reusable-release.yml derived the same rule: "Naming an unmeasured cause is the
+          # defect this whole PR exists to drain."
           degraded() {
-            local rc="$1"
+            local reason="$1" rc="$2" detail="${3:-}"
             echo "mirror_status=degraded" >> "$GITHUB_OUTPUT"
-            echo "::warning::zot mirror degraded for ${ZOT:-<image>} (rc=${rc}) — build UNAFFECTED (GHCR primary/break-glass); zot redundancy reduced, backfill via the mirror_only dispatch of this workflow (crane, digest-preserving — NOT 'docker pull + docker push', which re-creates the manifest and breaks digest parity). If disk-full: see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
-            echo "⚠️ zot mirror degraded (rc=${rc}) — inngest image mirror failed; GHCR unaffected, backfill needed." >> "$GITHUB_STEP_SUMMARY"
-            # On the BUILD path the mirror is secondary, so exit 0 and let the release stand.
-            # Under mirror_only the mirror IS the run, so a degrade must be a RED run — an
-            # exit 0 here would report success for a backfill that did not happen, and the
-            # caller would then pin a digest zot cannot serve.
+            echo "mirror_reason=${reason}" >> "$GITHUB_OUTPUT"
+            # Mode-aware text. The build path and mirror_only have OPPOSITE meanings for the
+            # same failure, and a single string was wrong for one of them: under mirror_only
+            # there is no build to be "UNAFFECTED", and "backfill needed" describes a run
+            # whose entire purpose WAS the backfill.
             if [ "${MIRROR_ONLY:-false}" = "true" ]; then
-              echo "::error::mirror_only backfill FAILED (rc=${rc}) — zot does not serve the GHCR digest for ${TAG}. Do not pin until this is green."
+              echo "::error::mirror_only backfill FAILED for ${IMAGE}:${TAG} (reason=${reason} rc=${rc})${detail:+ — ${detail}} — zot does not serve the GHCR digest. DO NOT PIN until this is green. Re-run: gh workflow run build-inngest-bootstrap-image.yml -f ref=vinngest-${TAG} -f mirror_only=true"
+              echo "❌ mirror_only backfill FAILED for \`${IMAGE}:${TAG}\` (reason=\`${reason}\` rc=${rc}) — zot does not serve the GHCR digest; do not pin." >> "$GITHUB_STEP_SUMMARY"
               exit 1
             fi
+            echo "::warning::zot mirror degraded for ${ZOT:-$IMAGE}:${TAG} (reason=${reason} rc=${rc})${detail:+ — ${detail}} — build UNAFFECTED (GHCR primary/break-glass); zot redundancy reduced. Backfill: gh workflow run build-inngest-bootstrap-image.yml -f ref=vinngest-${TAG} -f mirror_only=true (crane, digest-preserving — NOT 'docker pull + docker push', which re-creates the manifest and breaks digest parity). If disk-full: see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
+            echo "⚠️ zot mirror degraded for \`${TAG}\` (reason=\`${reason}\` rc=${rc}) — GHCR unaffected, backfill needed." >> "$GITHUB_STEP_SUMMARY"
+            # On the BUILD path the mirror is secondary, so exit 0 and let the release stand.
             exit 0
           }
 
+          # The bridge's result arrives as env, NOT as a step-level `if:` gate. A gate would
+          # SKIP this step, and a skipped step emits no `mirror_status` — so bridge-down, the
+          # fault class actually observed in the field (#7242: CF Access refusing the
+          # websocket upgrade), would produce a green run with no annotation, no summary line
+          # and no Slack. Branching here instead routes it through the same emitter as every
+          # other fault.
+          if [ "${BRIDGE_OUTCOME:-}" != "success" ]; then
+            degraded bridge_down 1 "cf-tunnel-registry-bridge outcome=${BRIDGE_OUTCOME:-<unset>}; zot was never reachable from this runner"
+          fi
+
           # Install crane, SHA-pinned. Same version as build-inngest-config-bundle.yml and
-          # reusable-release.yml — keep the three in step.
+          # reusable-release.yml — keep the three in step (asserted by the suite's
+          # cross-workflow parity check).
           CRANE_VERSION="v0.20.2"
           CRANE_SHA256="c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b"
-          curl -fsSL -o /tmp/crane.tgz \
-            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" || degraded "$?"
-          echo "${CRANE_SHA256}  /tmp/crane.tgz" | sha256sum -c - || degraded "$?"
-          sudo tar -xzf /tmp/crane.tgz -C /usr/local/bin crane || degraded "$?"
+          # Retried: a transient GitHub-releases blip must not hard-RED a mirror_only backfill
+          # that would self-heal on attempt 2. reusable-release.yml wraps the identical block.
+          # The SHA check is INSIDE the retried function, so a corrupted download is re-fetched
+          # rather than accepted — and a genuinely drifted CRANE_SHA256 still fails all three
+          # attempts and reports `crane_verify`, which a re-dispatch cannot clear.
+          install_crane() {
+            curl -fsSL -o /tmp/crane.tgz \
+              "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" || return 10
+            echo "${CRANE_SHA256}  /tmp/crane.tgz" | sha256sum -c - || return 11
+            sudo tar -xzf /tmp/crane.tgz -C /usr/local/bin crane || return 12
+          }
+          # `|| rc=$?`, never a bare call followed by `rc=$?`: the bare form fires the ERR
+          # trap above (and, under any future `set -e`, aborts) before the rc can be
+          # classified, turning a specific supply-chain verdict into a generic `unrouted`.
+          rc=0
+          retry install_crane || rc=$?
+          case "$rc" in
+            0)  ;;
+            11) degraded crane_verify "$rc" "SHA256 mismatch on the crane tarball — SUPPLY-CHAIN signal, not a network fault; a re-dispatch re-fetches the same pinned URL and cannot clear it" ;;
+            12) degraded crane_extract "$rc" "tar extraction into /usr/local/bin failed" ;;
+            *)  degraded crane_download "$rc" "could not fetch crane ${CRANE_VERSION} from GitHub releases after 3 attempts" ;;
+          esac
           rm -f /tmp/crane.tgz
 
           # Full org namespace (jikig-ai/…) to match the ci-deploy.sh pull path
@@ -355,31 +458,90 @@ jobs:
           # Registry -> registry, so this reads the PUBLISHED GHCR manifest and needs no
           # local image. crane inherits both logins from ~/.docker/config.json (GHCR from
           # docker/login-action above, zot from the bridge action).
-          retry crane copy "$IMAGE:$TAG" "$ZOT:$TAG" || degraded "$?"
+          retry crane copy "$IMAGE:$TAG" "$ZOT:$TAG" || degraded copy "$?" "crane copy GHCR->zot failed after 3 attempts"
 
           # Digest parity is the entire point of using crane, so ASSERT it — do not infer it
-          # from a zero exit. An empty source digest counts as failure: `|| true` on the
-          # capture means an auth/network fault yields "", and "" == "" would otherwise read
-          # as a match and certify nothing.
-          SRC_DIGEST=$(crane digest "$IMAGE:$TAG" 2>/dev/null || true)
-          DST_DIGEST=$(crane digest "$ZOT:$TAG" 2>/dev/null || true)
+          # from a zero exit. An empty source digest counts as failure: a failed capture
+          # yields "", and "" == "" would otherwise read as a match and certify nothing.
+          #
+          # stderr is CAPTURED, not discarded. `2>/dev/null` collapsed 404 (tag absent), 401
+          # (the credential can push but not read manifests) and connection-reset into one
+          # undifferentiated "unresolvable" with the evidence destroyed — and under
+          # mirror_only that stderr is the ONLY evidence an operator has for a RED backfill.
+          #
+          # Read through a FILE, never `$(retry crane digest …)`: retry's ::notice:: goes to
+          # stdout and would be captured AS the digest, manufacturing a bogus MISMATCH.
+          digest_read() {
+            # $1 = ref, $2 = out file, $3 = err file
+            retry crane digest "$1" >"$2" 2>"$3"
+          }
+          digest_read "$IMAGE:$TAG" "$RUNNER_TEMP/src.digest" "$RUNNER_TEMP/src.err" || true
+          digest_read "$ZOT:$TAG"   "$RUNNER_TEMP/dst.digest" "$RUNNER_TEMP/dst.err" || true
+          # `retry`'s ::notice:: lines land on stdout too, so keep only a sha256: token.
+          SRC_DIGEST=$(grep -oE '^sha256:[0-9a-f]{64}$' "$RUNNER_TEMP/src.digest" | head -1 || true)
+          DST_DIGEST=$(grep -oE '^sha256:[0-9a-f]{64}$' "$RUNNER_TEMP/dst.digest" | head -1 || true)
+          SRC_ERR=$(tail -c 400 "$RUNNER_TEMP/src.err" 2>/dev/null | tr '\n' ' ' || true)
+          DST_ERR=$(tail -c 400 "$RUNNER_TEMP/dst.err" 2>/dev/null | tr '\n' ' ' || true)
           echo "ghcr=${SRC_DIGEST:-<none>} zot=${DST_DIGEST:-<none>}"
           echo "ghcr_digest=$SRC_DIGEST" >> "$GITHUB_OUTPUT"
           echo "zot_digest=$DST_DIGEST" >> "$GITHUB_OUTPUT"
-          if [ -z "$SRC_DIGEST" ] || [ "$SRC_DIGEST" != "$DST_DIGEST" ]; then
-            echo "::error::zot digest parity FAILED for $TAG — ghcr=${SRC_DIGEST:-<none>} zot=${DST_DIGEST:-<none>}. A cloud-init @sha256 pin on this tag would not resolve on zot."
-            degraded 1
-          fi
-
-          echo "mirror_status=ok" >> "$GITHUB_OUTPUT"
-          echo "Mirrored $ZOT:$TAG at $SRC_DIGEST (digest-preserving)"
+          # The discriminating values go to the step summary on BOTH paths. They used to be
+          # appended only AFTER mirror_status=ok, i.e. published on success and withheld on
+          # failure — inverted, since the summary is the layer that survives log truncation.
           {
             echo "### inngest-bootstrap zot mirror"
             echo ""
             echo "| ref | digest |"
             echo "| --- | --- |"
-            echo "| \`$IMAGE:$TAG\` | \`$SRC_DIGEST\` |"
-            echo "| \`$ZOT:$TAG\` | \`$DST_DIGEST\` |"
+            echo "| \`$IMAGE:$TAG\` | \`${SRC_DIGEST:-<none>}\` |"
+            echo "| \`$ZOT:$TAG\` | \`${DST_DIGEST:-<none>}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # "could not measure" and "measured, and they differ" are NOT the same fault and
+          # must not collapse into one bucket: the first is usually auth/reachability and a
+          # re-dispatch may clear it; the second means the copy landed wrong and pinning is
+          # unsafe. Splitting them is why stderr is captured above.
+          if [ -z "$SRC_DIGEST" ] || [ -z "$DST_DIGEST" ]; then
+            echo "::error::zot digest parity UNMEASURABLE for $TAG — ghcr=${SRC_DIGEST:-<none>} zot=${DST_DIGEST:-<none>}. This is not a proven mismatch: one or both reads failed."
+            degraded parity_unmeasured 1 "ghcr_err=${SRC_ERR:-<none>} zot_err=${DST_ERR:-<none>}"
+          fi
+          if [ "$SRC_DIGEST" != "$DST_DIGEST" ]; then
+            echo "::error::zot digest parity FAILED for $TAG — ghcr=${SRC_DIGEST} zot=${DST_DIGEST}. A cloud-init @sha256 pin on this tag would not resolve on zot."
+            degraded parity_mismatch 1 "ghcr=${SRC_DIGEST} zot=${DST_DIGEST}"
+          fi
+
+          # A matching digest proves zot holds the MANIFEST. It does not prove zot still holds
+          # the BLOBS: zot runs gc + dedupe, `crane digest` is a manifest HEAD, and `crane
+          # copy` skips blob upload when the destination HEADs the blob as present — so a
+          # reclaimed layer yields green parity and a `blob unknown` on the host's docker pull.
+          # `crane validate --remote` fetches the manifest AND every blob, which is the
+          # property a pin actually depends on.
+          retry crane validate --remote "$ZOT:$TAG" \
+            || degraded blobs_missing "$?" "manifest digest matches but crane validate --remote failed — zot may have gc'd a layer; a pin would fail at docker pull with 'blob unknown'"
+
+          echo "mirror_status=ok" >> "$GITHUB_OUTPUT"
+          echo "mirror_reason=ok" >> "$GITHUB_OUTPUT"
+          echo "Mirrored $ZOT:$TAG at $SRC_DIGEST (digest-preserving, blobs validated)"
+
+          # WHAT THIS GATE DOES NOT PROVE — state this wherever the gate is described.
+          # It asserts the manifest and blobs are in zot AND readable by the PUSH credential
+          # over the CF-tunnel bridge from a GitHub runner. It does NOT prove the HOST can
+          # pull: the host uses ZOT_PULL_* over the private NIC, and zot's accessControl can
+          # grant push-read without pull-read. There is currently no live probe of
+          # jikig-ai/soleur-inngest-bootstrap from the host side (web-probe.tf scopes to the
+          # web image; zot-entry-gate.sh is SUPERSEDED/UNWIRED), so a green run here is NOT
+          # sufficient evidence to write an @sha256 pin into cloud-init.yml.
+          #
+          # Retention is the second gap: cloud-init-registry.yml keeps only the 5
+          # most-recently-pushed v* tags per repo with deleteUntagged + hourly gc, and its own
+          # comment warns the count "can evict out of order under the ADR-096 crane-copy
+          # backfill path". A pin therefore has a bounded fuse unless the tag is carved out.
+          {
+            echo ""
+            echo "> **This does not license a pin.** Green here means zot serves the digest to"
+            echo "> the PUSH credential over the tunnel. Host-side pull (\`ZOT_PULL_*\`, private"
+            echo "> NIC) is unverified for this repo, and zot retention keeps only the 5 most"
+            echo "> recent \`v*\` tags. See the #7203 review findings."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Tear down cloudflared registry bridge
@@ -398,13 +560,27 @@ jobs:
         # on inngest-bootstrap infra changes, not an operator-triggered release), so a
         # degrade-only ⚠️ is the minimal push signal. Before the ADR-096 Phase-5 GHCR-push
         # retirement a sustained inngest-mirror degrade must not stay annotations-only.
-        if: steps.zot_mirror.outputs.mirror_status == 'degraded'
+        #
+        # `!cancelled() &&` is LOAD-BEARING, not decoration. GitHub prepends an implicit
+        # success() to any step `if:` with no status function — so with the bare expression
+        # this step was SKIPPED on every mirror_only degrade, because degraded() exits 1 with
+        # the belt off and the job is already failed by the time this is evaluated. The one
+        # mode whose whole purpose is to authorise a root-exec digest pin was the one mode
+        # with no push signal, while the mirror step's own comment claimed the opposite.
+        # A failed step's outputs ARE still readable, so mirror_status/mirror_reason resolve
+        # normally here. reusable-release.yml records the identical correction at its own
+        # Slack step after shipping a stale version of this same comment once.
+        if: ${{ !cancelled() && steps.zot_mirror.outputs.mirror_status == 'degraded' }}
         continue-on-error: true
         env:
           SLACK_RELEASES_WEBHOOK_URL: ${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}
           # Resolved image tag (internal, validated by "Resolve image tag") — env-injected,
           # never inline-interpolated into the run script.
           TAG: ${{ steps.tag.outputs.tag }}
+          # Named cause, so the message can say WHICH fault. Empty only if the step died
+          # before writing it.
+          MIRROR_REASON: ${{ steps.zot_mirror.outputs.mirror_reason }}
+          MIRROR_ONLY: ${{ inputs.mirror_only }}
         run: |
           set -uo pipefail
           WEBHOOK="${SLACK_RELEASES_WEBHOOK_URL:-}"
@@ -414,8 +590,16 @@ jobs:
           fi
           echo "::add-mask::$WEBHOOK"
 
-          MESSAGE="⚠️ inngest-bootstrap zot mirror degraded ($TAG) — GHCR unaffected, zot redundancy reduced; backfill needed."
-          # jq --arg keeps the payload injection-inert (TAG is JSON-escaped).
+          # Mode-aware: the same fault means opposite things on the two paths. On the build
+          # path the release stands and zot redundancy is reduced; under mirror_only the run
+          # IS the backfill, it is RED, and the operator must not pin.
+          REASON="${MIRROR_REASON:-unknown}"
+          if [ "${MIRROR_ONLY:-false}" = "true" ]; then
+            MESSAGE="❌ inngest-bootstrap mirror_only backfill FAILED ($TAG, reason=$REASON) — zot does not serve the GHCR digest. DO NOT pin cloud-init to this tag."
+          else
+            MESSAGE="⚠️ inngest-bootstrap zot mirror degraded ($TAG, reason=$REASON) — GHCR unaffected, zot redundancy reduced; backfill needed."
+          fi
+          # jq --arg keeps the payload injection-inert (TAG/REASON are JSON-escaped).
           PAYLOAD=$(jq -n --arg text "$MESSAGE" '{text: $text, unfurl_links: false}')
 
           # `|| echo 000` keeps a curl transport failure (timeout, DNS) on the ::warning
