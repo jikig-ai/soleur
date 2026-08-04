@@ -85,7 +85,8 @@ _luks_slice() {
 # block names the pre-fix invocation literally, which is precisely the text that would have
 # made this vacuous.
 p_isluks() {
-  if _luks_slice "$1" | grep -Eq 'cryptsetup[[:space:]]+isLuks'; then echo 1; else echo 0; fi
+  # Herestring, not a pipe — see the SIGPIPE note on p_isluks_rc_branch below.
+  if grep -Eq 'cryptsetup[[:space:]]+isLuks' <<<"$(_luks_slice "$1")"; then echo 1; else echo 0; fi
 }
 
 # Every luksFormat/luksOpen line pipes the key via `--key-file -` (stdin) AND carries
@@ -1237,24 +1238,48 @@ assert_mutation "B17r mount-no-raw-device (\$DEV fallback)" p_mount_no_raw_devic
 #       executed, reconstructing #7216 inside the patch that closes it. Stderr is therefore
 #       captured through a command SUBSTITUTION, with the append a separately tolerated
 #       statement that cannot influence the measured rc.
+# EVERY MATCH BELOW USES A HERESTRING, NEVER `producer | grep -q`. Under this suite's
+# `set -uo pipefail`, `grep -q` exits on first match, the upstream producer takes SIGPIPE, the
+# pipeline returns 141, and an `if` on it takes the ELSE branch — so a guard written that way
+# reports "property holds" on a file that VIOLATES it, and its mutation arm flakes. Measured
+# on this template: 31 of 40 runs returned 141 on a pattern that plainly matches. A herestring
+# has no pipe and no producer to kill.
 p_isluks_rc_branch() {
-  local slice probe n
+  local slice n n_one n_star n_fmt n_blk
   slice="$(_luks_slice "$1")"
-  # (a)
-  if printf '%s\n' "$slice" | grep -Eq 'if[[:space:]]+![[:space:]]*cryptsetup[[:space:]]+isLuks'; then echo 0; return; fi
-  # (b)
-  if ! printf '%s\n' "$slice" | grep -Eq '\|\|[[:space:]]*_isluks_rc=\$\?'; then echo 0; return; fi
-  # (c)
-  if ! printf '%s\n' "$slice" | grep -Eq 'case[[:space:]]+"\$_isluks_rc"[[:space:]]+in'; then echo 0; return; fi
-  # (d)
-  n=$(printf '%s\n' "$slice" | grep -cE 'cryptsetup[[:space:]]+luksFormat' || true)
+  # (a) the truthiness form is gone
+  if grep -Eq 'if[[:space:]]+![[:space:]]*cryptsetup[[:space:]]+isLuks' <<<"$slice"; then echo 0; return; fi
+  # (b) errexit-safe rc capture
+  if ! grep -Eq '\|\|[[:space:]]*_isluks_rc=\$\?' <<<"$slice"; then echo 0; return; fi
+  # (c) branch on the captured rc
+  if ! grep -Eq 'case[[:space:]]+"\$_isluks_rc"[[:space:]]+in' <<<"$slice"; then echo 0; return; fi
+  # (d) exactly one luksFormat…
+  n=$(grep -cE 'cryptsetup[[:space:]]+luksFormat' <<<"$slice" || true)
   if [ "${n:-0}" -ne 1 ]; then echo 0; return; fi
-  # (e)
-  if ! printf '%s\n' "$slice" | grep -Eq '^[[:space:]]*\*\).*exit[[:space:]]+1'; then echo 0; return; fi
-  # (f)
-  probe="$(printf '%s\n' "$slice" | grep -E 'cryptsetup[[:space:]]+isLuks' || true)"
-  if [ -z "$probe" ]; then echo 0; return; fi
-  if printf '%s\n' "$probe" | grep -q '2>>'; then echo 0; return; fi
+  # (e) the catch-all refuses
+  if ! grep -Eq '^[[:space:]]*\*\).*exit[[:space:]]+1' <<<"$slice"; then echo 0; return; fi
+  # (f) the probe carries no `2>>` (a failed redirect forges rc=1 without running it)
+  if grep -E 'cryptsetup[[:space:]]+isLuks' <<<"$slice" | grep -q '2>>'; then echo 0; return; fi
+  # (g) …AND THAT ONE luksFormat IS INSIDE THE `1)` ARM. (d) is a COUNT, so on its own it
+  # permits the format to sit on `*)` — the unknown-status arm — which is #7216's exact hazard
+  # rebuilt inside the guard that closes it. Demonstrated: a tree with `1) : ;;` and the format
+  # moved to `*)` satisfied (a)-(f). Assert POSITION, not population.
+  n_one=$(grep -nE '^[[:space:]]*1\)' <<<"$slice" | head -1 | cut -d: -f1)
+  n_star=$(grep -nE '^[[:space:]]*\*\)' <<<"$slice" | head -1 | cut -d: -f1)
+  n_fmt=$(grep -nE 'cryptsetup[[:space:]]+luksFormat' <<<"$slice" | head -1 | cut -d: -f1)
+  if [ -z "$n_one" ] || [ -z "$n_star" ] || [ -z "$n_fmt" ]; then echo 0; return; fi
+  if [ "$n_fmt" -le "$n_one" ] || [ "$n_fmt" -ge "$n_star" ]; then echo 0; return; fi
+  # (h) the `1)` arm demands a POSITIVE blankness proof before formatting. rc=1 is cryptsetup's
+  # default errno bucket: measured, a corrupted-header LUKS2 device returns 1 with empty stderr
+  # while blkid still reports crypto_LUKS. The refusal must precede the format.
+  n_blk=$(grep -nE 'crypto_LUKS' <<<"$slice" | head -1 | cut -d: -f1)
+  if [ -z "$n_blk" ] || [ "$n_blk" -le "$n_one" ] || [ "$n_blk" -ge "$n_fmt" ]; then echo 0; return; fi
+  # (i) the device wait proves USABILITY, not mere presence. `-e` is true the instant udev makes
+  # the node, which can precede the kernel setting its capacity — and a zero-length device also
+  # returns isLuks rc=1, feeding (h). Bounded by a literal so it cannot become an unbounded spin.
+  if ! grep -Eq '\[ -b "\$DEV" \]' <<<"$slice"; then echo 0; return; fi
+  if ! grep -Eq 'getsize64' <<<"$slice"; then echo 0; return; fi
+  if ! grep -Eq '_i"?[[:space:]]*-lt[[:space:]]*30' <<<"$slice"; then echo 0; return; fi
   echo 1
 }
 assert_holds    "B18 isLuks-rc-branch" p_isluks_rc_branch "$CLOUD_INIT"
@@ -1280,6 +1305,18 @@ assert_mutation "B18 isLuks-rc-branch (catch-all no longer exits)" p_isluks_rc_b
 # "format it". This arm is why the capture is a substitution and not a redirect.
 assert_mutation "B18 isLuks-rc-branch (2>> forges rc=1 on the probe)" p_isluks_rc_branch "$CLOUD_INIT" \
   's#cryptsetup isLuks "\$DEV" 2>&1#cryptsetup isLuks "$DEV" 2>>"$GIT_DATA_LUKS_DETAIL"#'
+# (g) THE ARM THE COUNT COULD NOT SEE. Re-key the format arm off rc=1 and the store is
+# formatted on a code that does not mean "blank" — the count in (d) is still exactly 1.
+assert_mutation "B18 isLuks-rc-branch (format arm re-keyed off rc=1)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#^([[:space:]]*)1\)$#\10)#'
+# (h) drop the blkid cross-check: rc=1 alone authorises the format again, which is the
+# corrupted-header case measured on 2.7.0 (rc=1, empty stderr, blkid says crypto_LUKS).
+assert_mutation "B18 isLuks-rc-branch (blankness proof removed)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#^([[:space:]]*)\[ "\$_blk_type" != "crypto_LUKS" \].*$#\1: ;#'
+# (i) revert the wait to presence-only: `-e` is true before the kernel sets capacity, and a
+# zero-length device also returns isLuks rc=1.
+assert_mutation "B18 isLuks-rc-branch (wait reverts to -e presence)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#\[ -b "\$DEV" \]#[ -e "$DEV" ]#'
 
 # --- B19 (#7227): Decision clause B, mechanized -------------------------------------------
 #
@@ -1303,24 +1340,23 @@ BOOTSTRAP_SH="${DIR}/git-data-bootstrap.sh"
 
 p_luks_key_alnum() {
   # Region-scoped to the resource block: a `special = false` on ANY other random_password
-  # would otherwise satisfy a file-global grep.
-  awk '/^resource "random_password" "git_data_luks"/{f=1} f&&/^}/{f=0; print; next} f' "$1" \
-    | grep -Eq '^[[:space:]]*special[[:space:]]*=[[:space:]]*false[[:space:]]*$' && echo 1 || echo 0
+  # would otherwise satisfy a file-global grep. Herestring, not a pipe (SIGPIPE note below).
+  local blk
+  blk="$(awk '/^resource "random_password" "git_data_luks"/{f=1} f&&/^}/{f=0; print; next} f' "$1")"
+  if grep -Eq '^[[:space:]]*special[[:space:]]*=[[:space:]]*false[[:space:]]*$' <<<"$blk"; then echo 1; else echo 0; fi
 }
 assert_holds    "B19a luks-key-alphanumeric" p_luks_key_alnum "$LUKS_TF"
 assert_mutation "B19a luks-key-alphanumeric (special re-enabled)" p_luks_key_alnum "$LUKS_TF" \
   's/^([[:space:]]*)special([[:space:]]*)=([[:space:]]*)false$/\1special\2=\3true/'
 
-p_no_set_x() {
-  # Comment-stripped: the word appears in prose in both files.
-  if sed 's/#.*//' "$1" | grep -Eq '(^|[[:space:];])set[[:space:]]+(-[a-z]*x|-o[[:space:]]+xtrace)'; then echo 0; else echo 1; fi
-}
-assert_holds    "B19b no-set-x (template)" p_no_set_x "$CLOUD_INIT"
-assert_mutation "B19b no-set-x (template)" p_no_set_x "$CLOUD_INIT" \
-  's/^([[:space:]]*)set -euo pipefail$/\1set -euxo pipefail/'
-assert_holds    "B19c no-set-x (bootstrap payload)" p_no_set_x "$BOOTSTRAP_SH"
-assert_mutation "B19c no-set-x (bootstrap payload)" p_no_set_x "$BOOTSTRAP_SH" \
-  's/^([[:space:]]*)set -euo pipefail$/\1set -euxo pipefail/'
+# B19b/B19c (no-`set -x`) ARE NOT WRITTEN HERE — A28a ABOVE ALREADY OWNS THAT PROPERTY, and
+# owns it better on all three axes. Its regex `(set|(ba)?sh)[[:space:]]+-[a-z]*x[a-z]*` is a
+# strict superset of a `set -x`-only pattern (it also catches `bash -x`/`sh -x` and the
+# mid-flag `set -exuo` drift); it quantifies over EVERY derived boot-path file, including
+# git-data-bootstrap.sh, with its own bootstrap mutation arm; and it greps the file DIRECTLY,
+# so it cannot take the `producer | grep -q` SIGPIPE fail-open this file's other predicates
+# had to be rewritten to avoid. A second, weaker guard on one property is not defence in
+# depth — it is the one a future author edits, believing it is the one that matters.
 
 p_bootstrap_keyfile_stdin() {
   local n_key n_stdin
@@ -1346,9 +1382,9 @@ assert_mutation "B19d bootstrap-key-file-stdin (key moved to argv)" p_bootstrap_
 # REGION-SCOPED to the log() body: a `>&2` anywhere else in this file (there are several)
 # would satisfy a file-global grep while log() itself went back to stdout.
 p_bootstrap_log_stderr() {
-  awk '/^log\(\)[[:space:]]*\{/{f=1} f&&/^\}/{f=0} f' "$1" \
-    | grep -vE '^[[:space:]]*#' \
-    | grep -Eq '^[[:space:]]*echo "\[git-data-bootstrap\] \$\*"[[:space:]]+>&2[[:space:]]*$' && echo 1 || echo 0
+  local body
+  body="$(awk '/^log\(\)[[:space:]]*\{/{f=1} f&&/^\}/{f=0} f' "$1" | grep -vE '^[[:space:]]*#' || true)"
+  if grep -Eq '^[[:space:]]*echo "\[git-data-bootstrap\] \$\*"[[:space:]]+>&2[[:space:]]*$' <<<"$body"; then echo 1; else echo 0; fi
 }
 assert_holds    "B20 bootstrap-log-to-stderr" p_bootstrap_log_stderr "$BOOTSTRAP_SH"
 assert_mutation "B20 bootstrap-log-to-stderr (back to stdout)" p_bootstrap_log_stderr "$BOOTSTRAP_SH" \
@@ -1356,18 +1392,20 @@ assert_mutation "B20 bootstrap-log-to-stderr (back to stdout)" p_bootstrap_log_s
 
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
 #
-# RAISED 113 -> 129 WITH THE ARMS THAT MADE IT NECESSARY (#7216 + #7227). Itemised, because a
+# RAISED 113 -> 128 WITH THE ARMS THAT MADE IT NECESSARY (#7216 + #7227). Itemised, because a
 # floor that does not move with the suite only ever guards the work that predates it:
-#   B18 isLuks-rc-branch        1 hold + 5 mutations = 6
-#     (revert-to-`if !`, naked rc capture, rc 0 also formats, catch-all no longer exits,
-#      and `2>>` back on the probe — the forged-rc-1 arm, which is the reason the capture
-#      is a command substitution rather than a redirect)
+#   B18 isLuks-rc-branch        1 hold + 8 mutations = 9
+#     (revert-to-`if !`; naked rc capture; rc 0 also formats; catch-all no longer exits;
+#      `2>>` back on the probe — the forged-rc-1 arm; the format arm re-keyed off rc=1;
+#      the blkid blankness proof removed; the wait reverted to `-e` presence)
 #   B19a luks-key-alphanumeric  1 hold + 1 mutation  = 2
-#   B19b no-set-x (template)    1 hold + 1 mutation  = 2
-#   B19c no-set-x (bootstrap)   1 hold + 1 mutation  = 2
 #   B19d bootstrap-key-file     1 hold + 1 mutation  = 2
 #   B20  bootstrap-log-to-fd-2  1 hold + 1 mutation  = 2
-#   113 + 6 + 2 + 2 + 2 + 2 + 2 = 129. Measured: 129 passed, 0 failed.
+#   113 + 9 + 2 + 2 + 2 = 128. Measured: 128 passed, 0 failed.
+# NET vs the first cut of this PR (129): B19b/B19c were DELETED as redundant with A28a (see the
+# note where they used to live), and three arms were added for the vacuities review found in
+# B18 — a count that permitted luksFormat on the `*)` unknown-status arm, a missing positive
+# blankness proof, and a device wait that tested presence rather than usability.
 # A22's own non-vacuity floor moved 3 -> 2 in the same change (bootstrap_err deleted); that
 # is inside the predicate, not here, and changes no assertion count.
 #
@@ -1397,8 +1435,8 @@ assert_mutation "B20 bootstrap-log-to-stderr (back to stdout)" p_bootstrap_log_s
 # redden the suite on every legitimate new arm and teach the next author to edit the guard
 # instead of trusting it.
 total=$((passes + fails))
-if [ "$total" -lt 129 ]; then
-  echo "FAIL: ran only ${total} assertions (<129) — suite did not execute fully" >&2
+if [ "$total" -lt 128 ]; then
+  echo "FAIL: ran only ${total} assertions (<128) — suite did not execute fully" >&2
   exit 1
 fi
 

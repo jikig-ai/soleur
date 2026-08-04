@@ -1156,8 +1156,15 @@ fi
 # same way. Folded into this existing chain rather than given its own arm — the comparison
 # here is already "every replica of one literal agrees", and a fourth comparand costs one
 # extraction, where a parallel arm would duplicate the rationale and the mutation.
-_pfx_cap="$(grep -oE '\^soleur-git-data-rehearsal-' \
-  "${ROOT}/scripts/followthroughs/git-data-rung2-evidence-capture.sh" | head -1 | sed 's/^\^//')"
+# ANCHORED ON THE `=~` CONDITION, NOT THE BARE LITERAL. The capture script names this prefix
+# TWICE — once in the real `[[ ! "$HOST_NAME" =~ ^… ]]` test and once in the refusal message
+# that explains it — so a bare-token grep is satisfied by the prose. Demonstrated: reverting
+# the constraint to `^[A-Za-z0-9._-]+$` (re-admitting the production host) left this arm GREEN.
+# Same class the confirm-token arm 30 lines above already documents, and the same class
+# #7204's learning is named for. The runtime arm 6b in the capture suite is what actually
+# caught the revert; this arm is the drift guard and must not be the one that lies.
+_pfx_cap="$(grep -oE '=~[[:space:]]*\^soleur-git-data-rehearsal-' \
+  "${ROOT}/scripts/followthroughs/git-data-rung2-evidence-capture.sh" | head -1 | sed 's/.*\^//')"
 if [[ "$_pfx_cap" == "$_pfx_wf" ]]; then
   pass "the evidence-capture script's --host-name constraint pins the same rehearsal prefix"
 else

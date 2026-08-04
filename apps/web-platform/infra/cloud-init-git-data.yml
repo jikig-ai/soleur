@@ -292,7 +292,7 @@ runcmd:
   # item below. This file had NEITHER until #6982 ("NOTHING ABORTS"): a failed checksum
   # still tar-xzf'd an unverified binary, and a dead Doppler stage left the host up with
   # LUKS unmounted, emitting nothing. The `rc` guard is NOT optional — `trap … EXIT` fires
-  # on success too, so without it every HEALTHY boot emits fatal. All THREE sites; T17 pins it.
+  # on success too, so without it every HEALTHY boot emits fatal. BOTH sites; T17 pins it.
   - |
     # HOME is required BEFORE any doppler call: cloud-final.service synthesises none, and
     # the CLI resolves its home dir before reading DOPPLER_CONFIG_DIR. Three prior dark
@@ -364,18 +364,14 @@ runcmd:
   # the store; sshd keeps its previous config and the warn emit shows it).
   - |
     STAGE=sshd_config
-    # (#7227) TRUNCATE AT EVERY STAGE BOUNDARY. The file is append-only across the whole boot
-    # and `mount … || true` writes an error while the boot CONTINUES, so a later stage's fatal
-    # would otherwise ship that tolerated error as its own cause. Stage-scoping is also what
-    # keeps the `2>>` list short: a file that cannot inherit another stage's noise needs fewer.
+    # (#7227) TRUNCATE AT EVERY STAGE BOUNDARY. The file is append-only across the boot and
+    # `mount … || true` writes an error while the boot CONTINUES, so a later fatal would ship
+    # that tolerated error as its own cause. This is also what keeps the `2>>` list short.
     #
-    # THE SUBSHELL IS LOAD-BEARING, NOT STYLE. `:` is a POSIX SPECIAL BUILTIN, and a
-    # redirection error on a special builtin makes the shell EXIT — `|| true` never runs.
-    # This shell is /bin/sh = dash. Measured: `dash -c ': > "" 2>/dev/null || true; echo X'`
-    # prints no X and exits 2, while the same line under BASH tolerates it — so the hazard is
-    # invisible to any test that does not use the real interpreter. Wrapping in ( ) confines
-    # the exit to the subshell. Caught by git-data-runcmd-rehearsal.test.sh S1, which runs
-    # the extracted stage under dash in a real 24.04 container.
+    # THE SUBSHELL IS LOAD-BEARING, NOT STYLE. `:` is a POSIX SPECIAL BUILTIN, so a redirection
+    # error on it makes the shell EXIT and `|| true` never runs. Measured — `dash -c ': > ""
+    # 2>/dev/null || true; echo X'` prints no X and exits 2; the same line under BASH tolerates
+    # it, so the hazard is invisible to any test not using the real interpreter (/bin/sh=dash).
     ( : > "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
     # (#7025) `sshd -t` CHECKS THE PRIVSEP DIRECTORY, AND ON 24.04 NOTHING HAS CREATED IT YET.
     # ubuntu-24.04 ships ssh SOCKET-ACTIVATED, so /run/sshd — which ssh.service declares via
@@ -574,12 +570,12 @@ runcmd:
       # out of the window entirely. The cap is NOT raised — the ordering alone fits it, and
       # the redaction/truncation ordering inside _clean is load-bearing and untouched.
       #
-      # /var/log/cloud-init-output.log sits in the MIDDLE, deliberately. Two commands in
-      # this stage (mkdir, the fstab line) plus bash's own `set -u` errors report to the
-      # shell's stderr rather than into the detail file, and that log is the only place
-      # those land. Putting it last would displace the mount error it exists to preserve;
-      # putting it before the detail file means it survives exactly when the detail file is
-      # EMPTY — which is precisely the uncaptured-failure case.
+      # /var/log/cloud-init-output.log sits in the MIDDLE, deliberately — but for a NARROWER
+      # reason than it used to carry. #7227 gave mkdir and the fstab line their own `2>>` into
+      # this stage's detail file, and routed this heredoc's own shell stderr to the PARENT's
+      # scoped file, so the cloud-init log is no longer where those land. What it still catches
+      # is anything written before this stage's seed. Kept because it survives exactly when the
+      # detail file is EMPTY — the uncaptured-failure case — and costs nothing when it is not.
       #
       # `|| true` on each capture is REQUIRED, not sloppiness: this handler runs with
       # `set -euo pipefail` still armed, so a failing or SIGPIPE'd dmesg would abort
@@ -621,20 +617,33 @@ runcmd:
     trap luks_err EXIT
     DEV="/dev/disk/by-id/scsi-0HC_Volume_${git_data_luks_volume_id}"
     [ -n "$GIT_DATA_LUKS_KEY" ] || { echo "[git-data-luks] FATAL: GIT_DATA_LUKS_KEY empty — refusing unencrypted mount" | tee -a "$GIT_DATA_LUKS_DETAIL"; exit 1; }
-    # (#7216) rc CAPTURE, NOT TRUTHINESS. `if !` reads 126/127/4 as "not LUKS" and luksFormats
-    # a store that IS LUKS. rc 1 is the ONLY "genuinely not LUKS" (2.7.0: no-header=1,
-    # absent=4, not-on-PATH=127). Stderr via SUBSTITUTION, never `2>>`: a failed redirect
-    # returns 1 WITHOUT RUNNING the probe (measured), which the 1) arm answers by formatting.
-    # `|| _rc=$?` not `; _rc=$?` — under `set -euo pipefail` the naked form aborts on rc=1.
-    # Enforced by B18, not by this comment.
-    _i=0; while [ ! -e "$DEV" ] && [ "$_i" -lt 30 ]; do sleep 1; _i=$((_i+1)); done
+    # (#7216) rc CAPTURE + A POSITIVE BLANKNESS PROOF. Measured on 2.7.0: rc 1 is cryptsetup's
+    # DEFAULT errno bucket, not a "no header" signal — a LUKS2 device with corrupted header JSON
+    # returns 1 with EMPTY stderr, identical to blank, while blkid still says crypto_LUKS. So rc
+    # alone cannot authorise a format. workspaces-luks.tf already mandates the blkid
+    # discriminator ("NEVER cryptsetup isLuks — the documented data-destroyer on a populated
+    # device"); this volume stopped being born-fresh when git-data-cutover.sh made it the rsync
+    # target, and there is no luksHeaderBackup here, so a wrong format is terminal. blkid's OWN
+    # rc is checked (0=found, 2=none, 127=absent) — "could not measure" is never "blank".
+    # Stderr via SUBSTITUTION, never `2>>`: a failed redirect returns 1 WITHOUT running the
+    # probe. `|| _rc=$?` not `; _rc=$?` — the naked form aborts under `set -euo pipefail`.
+    # Absolute paths: this file already notes nothing pins a PATH. Enforced by B18.
+    _i=0
+    while [ "$_i" -lt 30 ]; do
+      [ -b "$DEV" ] && [ "$(/usr/sbin/blockdev --getsize64 "$DEV" 2>/dev/null || echo 0)" -gt 0 ] && break
+      sleep 1; _i=$((_i+1))
+    done
     _isluks_rc=0
     _isluks_err="$(cryptsetup isLuks "$DEV" 2>&1)" || _isluks_rc=$?
     [ -z "$_isluks_err" ] || printf '%s\n' "$_isluks_err" >>"$GIT_DATA_LUKS_DETAIL" 2>/dev/null || true
     case "$_isluks_rc" in
       0) : ;;
-      1) printf '%s' "$GIT_DATA_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$DEV" 2>>"$GIT_DATA_LUKS_DETAIL" ;;
-      *) { echo "[git-data-luks] FATAL: the LUKS-status probe could not run (rc=$_isluks_rc) — refusing to write to a device whose status is unknown" | tee -a "$GIT_DATA_LUKS_DETAIL" >/dev/null; exit 1; } || exit 1 ;;
+      1)
+        _blk_rc=0; _blk_type="$(/usr/sbin/blkid -o value -s TYPE "$DEV" 2>/dev/null)" || _blk_rc=$?
+        { [ "$_blk_rc" -eq 0 ] || [ "$_blk_rc" -eq 2 ]; } || { echo "[git-data-luks] FATAL: blkid could not read the device (rc=$_blk_rc) — refusing to write to a device whose contents are unknown" | tee -a "$GIT_DATA_LUKS_DETAIL"; exit 1; }
+        [ "$_blk_type" != "crypto_LUKS" ] || { echo "[git-data-luks] FATAL: status probe rc=1 but blkid still reports crypto_LUKS — a DAMAGED header, not a blank volume. Refusing to overwrite a populated store." | tee -a "$GIT_DATA_LUKS_DETAIL"; exit 1; }
+        printf '%s' "$GIT_DATA_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$DEV" 2>>"$GIT_DATA_LUKS_DETAIL" ;;
+      *) { echo "[git-data-luks] FATAL: the LUKS-status probe could not run (rc=$_isluks_rc; 4=device absent, 126/127=cryptsetup unusable) — refusing to write to a device whose status is unknown" | tee -a "$GIT_DATA_LUKS_DETAIL"; exit 1; } ;;
     esac
     if [ ! -e /dev/mapper/git-data ]; then
       printf '%s' "$GIT_DATA_LUKS_KEY" | cryptsetup luksOpen --key-file - "$DEV" git-data 2>>"$GIT_DATA_LUKS_DETAIL"

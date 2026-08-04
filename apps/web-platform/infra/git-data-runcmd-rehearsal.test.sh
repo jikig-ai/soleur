@@ -372,7 +372,13 @@ PY
 cat > "$TMP/drive.sh" <<'DRIVE'
 #!/bin/bash
 set -uo pipefail
-python3 /work/capture.py & sleep 1
+python3 /work/capture.py &
+# BOUNDED POLL, not a fixed `sleep 1`. Under CPU contention (several of these containers
+# run concurrently on a dev box) python3 can miss a 1s window, curl gets connection-refused,
+# capture.log stays empty, and R3(3a) fails -- which reads as a substantive finding about
+# the emitter rather than as a starved fixture. Fail loud if it never comes up.
+for _i in $(seq 50); do (echo > /dev/tcp/127.0.0.1/8099) 2>/dev/null && break; sleep 0.1; done
+(echo > /dev/tcp/127.0.0.1/8099) 2>/dev/null || { echo 'FIXTURE: capture server never bound :8099' >&2; exit 2; }
 sed -i "s#^DSN='.*'#DSN='https://k@127.0.0.1:8099/1'#" /work/git-data-emit
 python3 - <<'FIX'
 p="/work/git-data-emit"; s=open(p).read()
@@ -1018,7 +1024,13 @@ set -uo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null 2>&1
 apt-get install -y -qq curl python3 >/dev/null 2>&1
-python3 /work/capture.py & sleep 1
+python3 /work/capture.py &
+# BOUNDED POLL, not a fixed `sleep 1`. Under CPU contention (several of these containers
+# run concurrently on a dev box) python3 can miss a 1s window, curl gets connection-refused,
+# capture.log stays empty, and R3(3a) fails -- which reads as a substantive finding about
+# the emitter rather than as a starved fixture. Fail loud if it never comes up.
+for _i in $(seq 50); do (echo > /dev/tcp/127.0.0.1/8099) 2>/dev/null && break; sleep 0.1; done
+(echo > /dev/tcp/127.0.0.1/8099) 2>/dev/null || { echo 'FIXTURE: capture server never bound :8099' >&2; exit 2; }
 cp /work/git-data-emit-src /work/git-data-emit
 sed -i "s#^DSN='.*'#DSN='https://k@127.0.0.1:8099/1'#" /work/git-data-emit
 python3 - <<'FIX'
@@ -1251,29 +1263,46 @@ fi
 # had a seed with no arm behind it at all. Unseeded, $GIT_DATA_RUNCMD_DETAIL expands EMPTY,
 # so on_err's `.final` becomes a RELATIVE path in cloud-init's cwd and the emitter falls
 # through to shipping the path string as the cause — #7204's defect, one shell up.
-if [ -s "$_R3B_SRC" ]; then
-  _r2d_seed=$(grep -n '^[[:space:]]*GIT_DATA_RUNCMD_DETAIL=' "$_R3B_SRC" | head -1 | cut -d: -f1)
-  _r2d_trap=$(grep -n '^[[:space:]]*trap on_err EXIT[[:space:]]*$' "$_R3B_SRC" | head -1 | cut -d: -f1)
-  _r2d_app=$(grep -n '2>>"\$GIT_DATA_RUNCMD_DETAIL"' "$_R3B_SRC" | head -1 | cut -d: -f1)
-  if [ -n "$_r2d_seed" ] && [ -n "$_r2d_trap" ] && [ -n "$_r2d_app" ] \
-     && [ "$_r2d_seed" -lt "$_r2d_trap" ] && [ "$_r2d_seed" -lt "$_r2d_app" ]; then
-    pass
+# THE ORDERING CHECK IS A FUNCTION so the mutation arm can RE-RUN IT, exactly as R3(3c)/R3(3d)
+# re-run _r3b_analyze. The first cut of this arm applied its sed and then asserted only that
+# the seed line was gone — i.e. it verified its own mutation had landed and never evaluated the
+# seed/trap/append comparison at all. A pure co-presence check would have "passed" that arm
+# identically, so it demonstrated nothing about the ordering-vs-co-presence distinction its
+# own comment claims. Echoes 1 when the ordering holds, 0 otherwise.
+_r2d_ordered() {  # $1 = comment-stripped concatenated runcmd
+  local s t a
+  s=$(grep -n '^[[:space:]]*GIT_DATA_RUNCMD_DETAIL=' "$1" | head -1 | cut -d: -f1)
+  t=$(grep -n '^[[:space:]]*trap on_err EXIT[[:space:]]*$' "$1" | head -1 | cut -d: -f1)
+  a=$(grep -n '2>>"\$GIT_DATA_RUNCMD_DETAIL"' "$1" | head -1 | cut -d: -f1)
+  if [ -n "$s" ] && [ -n "$t" ] && [ -n "$a" ] && [ "$s" -lt "$t" ] && [ "$s" -lt "$a" ]; then
+    echo 1
   else
-    fail "R3(2d): the parent detail seed does not precede BOTH 'trap on_err EXIT' and the first 2>> (seed=${_r2d_seed:-none} trap=${_r2d_trap:-none} first-append=${_r2d_app:-none})" \
+    echo "0 seed=${s:-none} trap=${t:-none} first-append=${a:-none}"
+  fi
+}
+if [ -s "$_R3B_SRC" ]; then
+  _r2d_real="$(_r2d_ordered "$_R3B_SRC")"
+  if [ "$_r2d_real" = "1" ]; then pass; else
+    fail "R3(2d): the parent detail seed does not precede BOTH 'trap on_err EXIT' and the first 2>> (${_r2d_real})" \
          "An unseeded handler builds '.final' as a relative path in cloud-init's cwd, and the emitter then ships the path literal as the cause."
   fi
-  # RELOCATION MUTATION, mirroring R3(2c): move the seed BELOW the trap and the ordering
-  # check must flip. Co-presence cannot see a seed that moved.
+  # RELOCATION MUTATION: move the seed BELOW the trap it must precede, then RE-RUN the check.
+  # Not a deletion — a deletion is detectable by co-presence, which is the weaker property this
+  # arm exists to distinguish itself from.
   _r2dm="$TMP/r2d.code.sh"
-  sed -E 's|^([[:space:]]*)GIT_DATA_RUNCMD_DETAIL=(.*)$|\1: # seed relocated by R3(2d)|' "$_R3B_SRC" > "$_r2dm"
-  _m_seed=$(grep -n '^[[:space:]]*GIT_DATA_RUNCMD_DETAIL=' "$_r2dm" | head -1 | cut -d: -f1)
+  awk '
+    /^[[:space:]]*GIT_DATA_RUNCMD_DETAIL=/ && !moved { held = $0; moved = 1; next }
+    { print }
+    /^[[:space:]]*trap on_err EXIT[[:space:]]*$/ && moved == 1 { print held; moved = 2 }
+  ' "$_R3B_SRC" > "$_r2dm"
   if cmp -s "$_R3B_SRC" "$_r2dm"; then
-    fail "R3(2d) MUTATION DID NOT LAND — the seed line was not relocated"
-  elif [ -z "$_m_seed" ]; then
+    fail "R3(2d) MUTATION DID NOT LAND — the seed line was not relocated" \
+         "Re-anchor against the current text; as written this arm certifies nothing."
+  elif [ "$(_r2d_ordered "$_r2dm")" != "1" ]; then
     pass
   else
-    fail "R3(2d) MUTATION: the seed survived relocation (seed=${_m_seed})" \
-         "R3(2d)'s green above certifies nothing — the ordering check has no demonstrated failing direction."
+    fail "R3(2d) MUTATION: the ordering check still reports ORDERED with the seed moved below the trap" \
+         "R3(2d)'s green above certifies nothing — the check has no demonstrated failing direction."
   fi
 else
   fail "R3(2d): skipped (concatenated runcmd not extracted)"

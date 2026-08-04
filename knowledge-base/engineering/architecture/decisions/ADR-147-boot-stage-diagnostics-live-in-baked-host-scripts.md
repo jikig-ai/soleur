@@ -322,22 +322,34 @@ Node-zlib model is an approximation and says so in its own header:
 
 | | stored | cap | headroom |
 | --- | --- | --- | --- |
-| before (#7204 baseline) | 25,968 B | 32,768 B | 6,800 B |
-| after (#7216 + #7227) | 29,664 B | 32,768 B | 3,104 B |
+| before (current `origin/main`) | 25,968 B | 32,768 B | 6,800 B |
+| after (#7216 + #7227) | 30,152 B | 32,768 B | 2,616 B |
 
-Net **+3,696 stored bytes**. Comments in `cloud-init-git-data.yml` are **not** render-stripped
+Net **+4,184 stored bytes**. Comments in `cloud-init-git-data.yml` are **not** render-stripped
 (ADR-152 covers only the nine `file()`-bound payloads), so prose is charged at full weight —
 comment blocks are capped at ~6 lines here and the durable statements live in the guards
 (`B18`, `R3(3b)`) rather than in the paragraphs. Diagnostics added to
 `git-data-bootstrap.sh` are free, because that file IS render-stripped.
 
-The next diagnostics change on this host should treat 3,104 B as the working budget, and
+The next diagnostics change on this host should treat 2,616 B as the working budget, and
 should prefer `git-data-bootstrap.sh` over the template wherever the code can live there.
 
-Note that `plugins/soleur/test/cloud-init-user-data-size.test.ts` asserts a *sub-cap* budget
-of 28,000 against its Node-zlib model, and that model reads ~2 kB smaller than Terraform's Go
-zlib on this input — so it still passes at a real 29,664 B. The two numbers are not
-comparable and the model is not the ceiling; `git-data-userdata-budget.sh` is.
+**The Node model is not a second opinion on this number — it is currently blind to nine tenths
+of the payload.** `plugins/soleur/test/cloud-init-user-data-size.test.ts` asserts a *sub-cap*
+budget of 28,000 against its own model, and that model reads **kilobytes low** — far more than a
+zlib-flavour difference explains (one instrumented reading during #7227 put it ~6.9 kB under
+Terraform's figure; treat the magnitude as indicative and re-measure before relying on it).
+The cause is a stale regex, not compression: `modeledValue` substitutes real bytes
+only for `base64encode(file("${path.module}/…"))`, and the module emits
+`replace(file(…), local.git_data_rationale_strip, "")` — **9 occurrences of the latter, 0 of
+the former** — so all nine payloads fall through to an 80-character `x`-run. The test named
+*"reads REAL script content, not x-run placeholders (guards R2)"* hand-writes the obsolete
+expression as a string literal, so it is green against a shape production stopped emitting.
+`git-data-userdata-budget.sh` (Terraform's own `base64gzip`) is the only ceiling that binds.
+
+Corollary for the advice above: diagnostics moved into `git-data-bootstrap.sh` are free only
+for **comments**. ADR-152 strips comments from the nine payloads, not code — the `>&2` this
+change adds to `log()` is real stored bytes.
 
 ### Correction to the 2026-07-27 addendum: TWO arming sites, not three
 
