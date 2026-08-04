@@ -1158,6 +1158,143 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# F5 + C-a — THE PER-CONFIG READ-TOKEN SHAPE (#7234).
+#
+# The credential is now 13 config-scoped `doppler_service_token`s under one `for_each`,
+# keyed off the committed inventory, published as ONE Actions secret holding a JSON map.
+# Two things about that shape are worth pinning here, and neither is reachable from the
+# workflow YAML the rest of this suite reads:
+#
+#   F5  the `for_each` list IS the inventory — not a hand-maintained copy of it. A fifth
+#       place `13` lives would be a fifth place it can drift.
+#   C-a `config = each.key`, never a string literal. This is the ONE mis-binding Terraform
+#       can actually produce: `config = "prd"` mints 13 DISTINCT tokens with correct map
+#       keys, all bound to one config. It passes every shape check, and Phase 0 measured
+#       that it would then surface at runtime as 12 access-denied reads -> `1/13 degraded`.
+#       That runtime signal is real but it costs a merge and up to 12 hours; this static
+#       assertion costs nothing and fires on the PR.
+#
+# ASSERTED OVER COMMENT-STRIPPED HCL. The .tf deliberately DOCUMENTS the literal-vs-each.key
+# hazard in prose beside the attribute, so a bare grep for `config = "` would match the
+# warning against the defect and fail a correct file (cq-assert-anchor-not-bare-token; the
+# "narrowing is not anchoring" class in #6456, four occurrences in one PR).
+# ---------------------------------------------------------------------------
+TF_READ_TOKENS="$INFRA_DIR/token-drift-read-tokens.tf"
+
+# hcl_uncommented <file> — strip `#` line comments, keeping code. Not a full HCL lexer: it
+# does not know about `#` inside a quoted string, and it does not need to — no attribute in
+# this file carries one, and F5's regex-literal assertion below would red if one appeared.
+hcl_uncommented() { sed -E 's/(^|[[:space:]])#.*$//' "$1"; }
+
+# hcl_block <file> <type> <name> — the body of one `resource "<type>" "<name>" { … }`,
+# comment-stripped. Brace-counted rather than awk-range'd so a nested block cannot end it
+# early. Prints nothing and returns 1 when the block is absent, so callers fail loudly
+# instead of asserting over an empty string.
+hcl_block() {
+  local _out
+  _out=$(hcl_uncommented "$1" | awk -v t="$2" -v n="$3" '
+    !inb && $0 ~ "resource[[:space:]]+\"" t "\"[[:space:]]+\"" n "\"" { inb=1; d=0 }
+    inb {
+      for (i=1; i<=length($0); i++) { c=substr($0,i,1); if (c=="{") d++; else if (c=="}") d-- }
+      print
+      if (d<=0 && seen) { exit }
+      if (d>0) seen=1
+    }
+  ')
+  [[ -n "$_out" ]] || return 1
+  printf '%s\n' "$_out"
+}
+
+echo "F5: the for_each config list is DERIVED from the committed inventory, not restated"
+_f5=1
+if [[ ! -f "$TF_READ_TOKENS" ]]; then
+  _f5=0
+  echo "    $(basename "$TF_READ_TOKENS") does not exist — the per-config read-token shape (#7234) is not in place"
+else
+  _tf_src=$(hcl_uncommented "$TF_READ_TOKENS")
+  # (a) the list comes from the inventory FILE, by name.
+  grep -qF 'file("${path.module}/doppler-config-inventory.txt")' <<<"$_tf_src" \
+    || { _f5=0; echo "    the locals block does not read doppler-config-inventory.txt via file() — the config list has become a second, unpinned copy"; }
+  # (b) no normaliser. R4 measured HCL's regex and the detector's grep agreeing on raw
+  #     split("\n") lines; adding trimspace() BREAKS that agreement rather than helping.
+  if grep -qE '(trimspace|chomp)\(|[^a-z_]trim\(' <<<"$_tf_src"; then
+    _f5=0; echo "    the .tf normalises inventory lines (trimspace/trim/chomp) — that diverges it from the detector's grep, which does not"
+  fi
+  # (c) EXTRACT the accepted-name regex — do not assert it against a hardcoded copy. The
+  #     literal is pulled out so (d) can APPLY it; asserting `== "^[a-z0-9_]+$"` here and
+  #     then grepping with that same hardcoded string in (d) would compare the detector's
+  #     regex to itself and pass for every possible .tf.
+  _tf_re=$(sed -nE 's/.*can\(regex\("([^"]+)".*/\1/p' <<<"$_tf_src" | head -1)
+  [[ -n "$_tf_re" ]] \
+    || { _f5=0; echo "    the .tf's locals block contains no can(regex(\"…\")) name filter — nothing constrains which inventory lines become tokens"; }
+  # (d) THE SET-EQUALITY. The regex APPLIED is the one extracted from the .tf; the expected
+  #     set is the DETECTOR's own inventory parse. A .tf that filtered differently — a
+  #     dropped anchor, an added character class, `[A-Za-z]` — selects a different set here
+  #     and reds with the diff named. Mutation-proven: changing the .tf literal to
+  #     `^[a-z0-9_-]+$` or `^[a-z]+$` fails this assertion.
+  if [[ -n "$_tf_re" ]]; then
+    _tf_set=$(LC_ALL=C grep -E "$_tf_re" "$INVENTORY" | LC_ALL=C sort -u)
+    _det_set=$(LC_ALL=C grep -E '^[a-z0-9_]+$' "$INVENTORY" | LC_ALL=C sort -u)
+    _n=$(grep -c . <<<"$_tf_set") || _n=0
+    if [[ "$_tf_set" != "$_det_set" ]]; then
+      _f5=0
+      echo "    the .tf's filter '${_tf_re}' and the detector's inventory parse select DIFFERENT name sets:"
+      diff <(printf '%s\n' "$_det_set") <(printf '%s\n' "$_tf_set") | sed 's/^/      /'
+    elif (( _n < FLOOR_MINIMUM )); then
+      _f5=0; echo "    the derived list has ${_n} names, below the pinned minimum of ${FLOOR_MINIMUM} — that would mint fewer tokens than the floor demands and hold the scan at 'degraded' forever"
+    fi
+  fi
+  # (e) the list is not a hardcoded literal wearing a derivation's clothes.
+  if grep -qE 'token_drift_configs[[:space:]]*=[[:space:]]*\[[[:space:]]*"' <<<"$_tf_src"; then
+    _f5=0; echo "    local.token_drift_configs is assigned a literal list — a fifth place the number 13 lives, pinned to the inventory by nothing"
+  fi
+fi
+if [[ "$_f5" == "1" ]]; then
+  pass "local.token_drift_configs derives from the committed inventory with the detector's own name filter, and yields >= ${FLOOR_MINIMUM} names"
+else
+  fail "the per-config read tokens must be minted from the committed inventory using the detector's name filter. A restated list is a second unsynchronised pin: the inventory grows a config, the list does not, and the scan mints 13 tokens for a 14-config project while every count in the ladder still agrees with itself"
+fi
+
+echo "C-a: the token's config comes from each.key, never a string literal"
+_ca=1
+if [[ ! -f "$TF_READ_TOKENS" ]]; then
+  _ca=0
+  echo "    $(basename "$TF_READ_TOKENS") does not exist"
+else
+  _tok_block=$(hcl_block "$TF_READ_TOKENS" doppler_service_token token_drift) || _tok_block=""
+  if [[ -z "$_tok_block" ]]; then
+    _ca=0
+    echo "    no 'resource \"doppler_service_token\" \"token_drift\"' block found — the extraction has drifted and every assertion below would pass vacuously"
+  else
+    grep -qE '^[[:space:]]*config[[:space:]]*=[[:space:]]*each\.key[[:space:]]*$' <<<"$_tok_block" \
+      || { _ca=0; echo "    the token block does not set 'config = each.key'"; }
+    if grep -qE '^[[:space:]]*config[[:space:]]*=[[:space:]]*"' <<<"$_tok_block"; then
+      _ca=0
+      echo "    the token block binds 'config' to a STRING LITERAL — 13 distinct tokens all reading one config. Phase 0 measured the runtime consequence: 12 access-denied reads and a 1/13 degraded run, a merge and up to 12 hours after this line could have been caught here"
+    fi
+    grep -qE 'for_each[[:space:]]*=[[:space:]]*toset\(local\.token_drift_configs\)' <<<"$_tok_block" \
+      || { _ca=0; echo "    for_each is not toset(local.token_drift_configs) — the instance keys and the config bindings are no longer the same set"; }
+  fi
+  # The map's key and value must come from the SAME iteration variable. A key/value skew
+  # would be an HCL bug rather than a producible defect, but the assertion is one grep and
+  # it is the line a future edit is most likely to get subtly wrong.
+  _sec_block=$(hcl_block "$TF_READ_TOKENS" github_actions_secret doppler_token_drift_map) || _sec_block=""
+  if [[ -z "$_sec_block" ]]; then
+    _ca=0; echo "    no 'resource \"github_actions_secret\" \"doppler_token_drift_map\"' block found"
+  else
+    grep -qE 'for[[:space:]]+([A-Za-z_][A-Za-z0-9_]*),[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]+in[[:space:]]+doppler_service_token\.token_drift[[:space:]]*:[[:space:]]*\1[[:space:]]*=>[[:space:]]*\2\.key' <<<"$_sec_block" \
+      || { _ca=0; echo "    the published map's key and value do not come from the same 'for' iteration variables over doppler_service_token.token_drift — a skew here hands every config someone else's credential"; }
+    grep -qE '\.api_key' <<<"$_sec_block" \
+      && { _ca=0; echo "    the map reads .api_key, which belonged to the retired doppler_service_account_token; doppler_service_token exposes .key"; }
+  fi
+fi
+if [[ "$_ca" == "1" ]]; then
+  pass "config = each.key, for_each = toset(local.token_drift_configs), and the map's key/value share one iteration variable"
+else
+  fail "the per-config tokens must bind 'config' to each.key. A string literal there is the one mis-binding Terraform can produce: 13 distinct tokens, 13 correct map keys, one config actually read — it passes shape validation, which is exactly why it needs a static gate"
+fi
+
+# ---------------------------------------------------------------------------
 # C1-C3 — the CREDENTIAL the step is wired to, and the guard on its floor.
 # ---------------------------------------------------------------------------
 echo "C1: the step's DOPPLER_TOKEN is the documented interim credential (see #7234)"

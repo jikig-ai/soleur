@@ -96,9 +96,18 @@ resource "doppler_secret" "kb_drift_ingest_url" {
 # `success: true`, no error). That is exactly right here: the kb-drift walker reads one config.
 # It was WRONG for the twice-daily token-drift scan, which must span every config, and copying
 # this resource for that job is #7159 verbatim — it read 1 of 13 configs and reported a clean
-# fleet. Nine `doppler_service_token` resources exist in this directory against one
-# `doppler_service_account`, so the majority shape is the misleading one. For a credential that
-# must read ACROSS configs see `token-drift-service-account.tf` and ADR-164.
+# fleet. For a credential that must read ACROSS configs, the answer turned out NOT to be a
+# different resource class: a project-scoped `doppler_service_account` was tried and measured
+# unable to enumerate or read the project at all (#7234). The shape that works is one of THESE
+# per config, minted under a `for_each` over the committed inventory — see
+# `token-drift-read-tokens.tf` and ADR-166, with ADR-164 keeping the record of the falsified
+# premise.
+#
+# One property of this resource class is load-bearing there and worth stating where it is
+# measured: a config-scoped token ERRORS on a wrong `-c` ("This token does not have access to
+# requested config 'X'") rather than silently serving its bound config. That is what makes a
+# fan-out of per-config tokens self-policing. It is specific to the `secrets` verb — `configs
+# list` behaves as described above, silently scoped.
 resource "doppler_service_token" "kb_drift" {
   project = "soleur"
   config  = "prd_kb_drift_walker"
