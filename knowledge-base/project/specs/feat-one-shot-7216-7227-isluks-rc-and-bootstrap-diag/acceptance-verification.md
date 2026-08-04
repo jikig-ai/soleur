@@ -7,7 +7,7 @@ from the as-written files, not from the plan (all four floors were re-derived).
 
 | measurement | baseline (plan Phase 0) | final | command |
 | --- | --- | --- | --- |
-| git-data-luks | 113 passed, 0 failed | **128 passed, 0 failed** | `bash apps/web-platform/infra/git-data-luks.test.sh` |
+| git-data-luks | 113 passed, 0 failed | **133 passed, 0 failed** | `bash apps/web-platform/infra/git-data-luks.test.sh` |
 | git-data-runcmd-rehearsal | 36 assertions, 0 failed | **44 passed, 0 failed** | `bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh` |
 | evidence-capture | 30 passed, 0 failed | **33 passed, 0 failed** | `bash tests/scripts/test-git-data-rung2-evidence-capture.sh` |
 | git-data-rung2-rehearsal | 70 passed, 0 failed | **71 passed, 0 failed** | `bash apps/web-platform/infra/git-data-rung2-rehearsal.test.sh` |
@@ -105,7 +105,7 @@ emitter-relative arg4 = '/var/log/cloud-init-output.log'
 | AC15 clause B mechanized | PASS | B19a `special = false`, B19d `--key-file -` in the bootstrap payload, and pre-existing **A28a** for no-`set -x` — B19b/c were deleted as weaker duplicates of it |
 | AC16 each RED observed and quoted | PASS | table above |
 | AC17 rc measurement re-taken on the branch | PASS | `rc_nonluks=1` |
-| AC18 all four floors re-derived with an itemised sum | PASS | luks 113→128, capture 30→33, rung2 70→71, runcmd 36→44 |
+| AC18 all four floors re-derived with an itemised sum | PASS | luks 113→133, capture 30→33, rung2 70→71, runcmd 36→44 |
 | AC19 ADR-147 addendum exists, records cost + headroom | PASS | also corrects that ADR's now-false "three arming sites" claim |
 
 ## Phase 5.1 — full-suite exit gate
@@ -152,6 +152,9 @@ Recorded here rather than silently overwritten, because the failure modes are th
 | 1 | "rc 1 is the ONLY genuinely-not-LUKS" | False. rc 1 is cryptsetup's default errno bucket; a corrupted-header LUKS2 device returns 1 with empty stderr while `blkid` still says `crypto_LUKS`. The `1)` arm would have formatted a populated store. |
 | 2 | B18 pins the destructive branch | It pinned a COUNT. A tree with `1) : ;;` and `luksFormat` moved to the `*)` unknown-status arm satisfied every predicate. |
 | 3 | The device wait protects the birth | It tested `-e` (present), which is true before the kernel sets capacity; a zero-length device also returns rc=1, feeding finding 1. Now `-b` + non-zero `getsize64`. |
+| 9 | B18's `(h)`/`(i)` pin the blankness proof and the usability wait | They pinned TOKENS. Measured: `!=` → `==` INVERTS the refusal (blank volume bricked, damaged-header populated store formatted) and `-gt 0` → `-ge 0` breaks the wait on iteration 1 — both green at 128/0. Now the operator, branch and comparison are pinned; mutation arms perturb semantics, not their own anchor. |
+| 10 | B20 pins the bootstrap's `log()` writer | Nothing pinned the PIPE. Deleting `2>>"$GIT_DATA_RUNCMD_DETAIL"` on the bootstrap `doppler run` returns to the pre-#7227 state, green in both suites. B18p added. |
+| 11 | `R3(3b)(ii)` binds "every emit site" | It filtered `$2=="fatal"` — 3 of 7. The `gc_timer` WARNING, the site this PR's narrative names, was unbound. Widening it also surfaced that the fatal-only filter had been hiding a PARSE defect: the delivery assertion `if [ ! -x …git-data-emit ]` produced a bogus LITERAL row. The analyzer now emits a row only for a real call. |
 | 4 | "129 passed, 0 failed" | True of the runs taken, but the suite was **non-deterministic** and determinism was never measured before asserting it. Predicates written `producer \| grep -q` under `set -uo pipefail` fail OPEN — grep exits on match, the producer takes SIGPIPE, the pipeline returns 141, and the `if` takes the ELSE branch. Measured 31/40 on the shape and 1 RED in 10 suite runs. Converted to herestrings; now **12/12 green**. |
 | 5 | B19b/c mechanize no-`set -x` | Redundant with pre-existing **A28a**, which is strictly stronger (also catches `bash -x` and mid-flag `set -exuo`), covers every boot-path file, and greps the file directly so it cannot take the SIGPIPE path. Deleted rather than repaired. |
 | 6 | Arm 10 pins the capture script's prefix | Satisfied by the refusal message that explains it — reverting the constraint left the arm GREEN. Re-anchored on the `=~` condition and demonstrated RED on that revert. |

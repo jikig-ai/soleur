@@ -1155,6 +1155,13 @@ for i, l in enumerate(lines):
     def arg(n):
         return toks[ei + n] if len(toks) > ei + n else ""
     msg, level, arg4 = arg(1), arg(3), arg(4)
+    # ONLY REAL CALLS. The emitter PATH also appears in the delivery assertion
+    # (`if [ ! -x /usr/local/bin/git-data-emit ]`), where arg(3) is empty and arg(1) is `]`.
+    # Filtering downstream on `level != "info"` admits that row as a bogus LITERAL site;
+    # filtering on `level == "fatal"` hid it by accident rather than by intent. A row is a
+    # call only if its arg 3 is one of the emitter's three levels.
+    if level.strip('"') not in ("fatal", "warning", "info"):
+        continue
     # Nearest enclosing handler / stage boundary ABOVE this line — the guard window.
     wname, wstart = "?", 0
     for j in range(i - 1, -1, -1):
