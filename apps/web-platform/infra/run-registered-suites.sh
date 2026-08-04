@@ -173,4 +173,36 @@ report_orphans
 
 echo ""
 echo "=== registered infra suites: ${PASS} passed, ${RED} failed (of ${#SUITES[@]}) ==="
+
+# ACCOUNT FOR EVERY SUITE, not just the ones that reported RED. A suite killed by a SIGNAL dies
+# before either `echo` in the xargs body, so it emits NEITHER "PASS" nor "RED": RED stays 0, PASS
+# comes up short, and the pre-2026-08-04 exit condition `(( RED == 0 ))` returned 0. The `(of N)`
+# was printed and compared against nothing.
+#
+# Not hypothetical — measured on this box while validating #7144:
+#     PASS apps/web-platform/infra/ci-deploy.test.sh
+#     xargs: bash: terminated by signal 9
+#     === registered infra suites: 87 passed, 0 failed (of 88) ===   rc=0
+# git-data-runcmd-rehearsal.test.sh was OOM-killed under sibling-worktree contention and the
+# authoritative infra gate reported success. "0 failed" and "one suite never ran" are the same
+# output, which is the failure class this runner exists to prevent elsewhere.
+#
+# A shortfall is deliberately fatal rather than a warning: the whole value of this runner is that
+# a green means the CI-registered set actually executed. Re-run under less load (or with a lower
+# -P) if a kill was environmental — that is a real signal about the run, not noise to suppress.
+accounted=$(( PASS + RED ))
+if (( accounted != ${#SUITES[@]} )); then
+  echo "FATAL: ${accounted} of ${#SUITES[@]} suites reported a verdict — $(( ${#SUITES[@]} - accounted )) produced NEITHER pass nor fail (killed by a signal, or the runner died mid-stream). This is NOT a clean run." >&2
+  # Name the suites that went missing, by set difference. Deliberately NOT grepped out of "$LOG"
+  # for xargs' own "terminated by signal N" line: that goes to xargs' STDERR, which never passes
+  # through the `tee` that writes $LOG, so it is only visible when the CALLER merged 2>&1. The
+  # set difference needs no such luck.
+  printf '%s\n' "${SUITES[@]}" | LC_ALL=C sort -u > "$LOG.expected"
+  awk '{print $2}' "$LOG" | LC_ALL=C sort -u > "$LOG.seen"
+  echo "  no verdict from:" >&2
+  LC_ALL=C comm -23 "$LOG.expected" "$LOG.seen" | sed 's/^/    /' >&2
+  rm -f "$LOG.expected" "$LOG.seen"
+  exit 1
+fi
+
 (( RED == 0 ))
