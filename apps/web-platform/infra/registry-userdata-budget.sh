@@ -58,7 +58,7 @@ trap 'rm -rf "$TFDIR"' EXIT
 # committed non-secrets (zot_image, doppler_sha256, betterstack_ingest_url) are the REAL values
 # read straight from zot-registry.tf's locals, and the three secrets are synthesized at full
 # length from incompressible material (cq-test-fixtures-synthesized-only).
-cat > "$TFDIR/main.tf" <<'EOF'
+tf_body=$(cat <<'EOF'
 locals {
   # --- REAL committed values (non-secret, byte-exact with zot-registry.tf locals) -------------
   # amd64 arm of local.zot_image. cx23 (the var default) does not start with `cax`, so
@@ -120,9 +120,16 @@ locals {
   stored   = base64gzip(local.rendered)
 }
 EOF
-# The heredoc is quoted so terraform's own ${...} interpolations survive verbatim; splice the
-# absolute template path afterwards rather than letting the shell expand $DIR inside it.
-sed -i "s|__DIR__|${DIR}|" "$TFDIR/main.tf"
+)
+# The heredoc is QUOTED so terraform's own `${local.hb_base}` interpolation survives verbatim — an
+# unquoted one would let the shell eat it. The path is therefore spliced afterwards, and with bash
+# parameter substitution rather than `sed`: in a sed replacement `&` expands to the whole match, so
+# a repo checked out under a path containing `&` would silently produce a wrong path (and `|`
+# would break the delimiter). Bash substitution treats the replacement literally.
+printf '%s\n' "${tf_body//__DIR__/$DIR}" > "$TFDIR/main.tf"
+grep -q '__DIR__' "$TFDIR/main.tf" && {
+  echo "registry-userdata-budget: path splice failed — __DIR__ still present" >&2; exit 2
+}
 
 console() { printf '%s\n' "$1" | terraform -chdir="$TFDIR" console 2>>"$TFDIR/err"; }
 
