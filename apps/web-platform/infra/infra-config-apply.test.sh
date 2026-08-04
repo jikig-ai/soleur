@@ -1104,8 +1104,8 @@ test_sudoers_caller_argv_lockstep() {
 # HARDCODED ZEROS. The CI gate then reported `files_total=0` — the precise opposite of what had
 # happened — with no line, no command and no rc. The handler could fail; it could not say how.
 #
-# Every arm below is proven RED against origin/main's handler by
-# `test_fatal_channel_red_against_main` at the end of this block.
+# Every arm below is proven RED against the PINNED pre-fix handler by
+# `test_fatal_channel_red_against_pre_fix` at the end of this block.
 # =============================================================================================
 
 # Helper: the handler's frame, or the literal string MISSING.
@@ -1337,27 +1337,43 @@ test_fatal_channel_clean_apply_exits_zero() {
   teardown
 }
 
-# --- #7220: PROVE THE ARMS ABOVE ARE RED AGAINST origin/main ---
+# --- #7220: PROVE THE ARMS ABOVE ARE RED AGAINST THE PINNED PRE-FIX HANDLER ---
 # A regression guard that passes against the code it was written to catch is decoration. This
 # runs the pre-#7220 handler from git and asserts it FAILS the two load-bearing properties:
 # attribution (fatal_line) and real accounting (files_total). Skips loudly rather than silently
 # if the git object is unavailable (shallow clone / detached worktree), so a vacuous pass is
 # never mistaken for a proof.
-test_fatal_channel_red_against_main() {
+#
+# The pre-fix handler, pinned to an IMMUTABLE commit — NOT `origin/main`.
+#
+# `origin/main` is the natural thing to write here and is exactly wrong: the moment the fix
+# merges, main carries the FIXED handler and these two assertions invert and fail forever. A
+# guard pinned to a moving ref consumes its own fix — that is #7220's second defect, filed after
+# PR-A merged as c2de2581e and turned this suite permanently red (144 passed, 2 failed on every
+# infra PR). A pinned SHA instead asserts that a specific historical handler failed these
+# properties, which stays true forever. Do not "helpfully" restore the branch name.
+#
+# 701e76e6b = the last commit to touch infra-config-apply.sh BEFORE c2de2581e. Full 40-char SHA,
+# not the abbreviation, so no future object can make it ambiguous. Verified at that commit: the
+# handler contains `fatal_line` zero times and hardcodes "files_total":0 in its EXIT trap.
+readonly PRE_FIX_HANDLER_SHA="701e76e6bfce84ceed91096a58d88df7da5b6932"
+
+test_fatal_channel_red_against_pre_fix() {
   echo "TEST: #7220 — the new assertions are RED against the pre-fix handler"
   setup
   export_valid_env_vars
 
   local old="${TMPDIR_ROOT}/old-handler.sh"
-  if ! git -C "$SCRIPT_DIR" show "origin/main:apps/web-platform/infra/infra-config-apply.sh" > "$old" 2>/dev/null; then
-    # FAIL, not SKIP, when origin/main RESOLVES but the show fails — that is a real breakage,
-    # not an unavailable environment. A silent skip here makes the PR's only proof-of-red one
-    # `fetch-depth: 1` away from not existing, and nothing downstream consumes a skip.
-    if git -C "$SCRIPT_DIR" rev-parse --verify origin/main >/dev/null 2>&1; then
-      echo "  FAIL: origin/main resolves but the handler could not be read — mutation proof is broken, not skipped"
+  if ! git -C "$SCRIPT_DIR" show "${PRE_FIX_HANDLER_SHA}:apps/web-platform/infra/infra-config-apply.sh" > "$old" 2>/dev/null; then
+    # FAIL, not SKIP, when the pinned commit IS present but the show fails — that is a real
+    # breakage, not an unavailable environment. A silent skip here makes the PR's only
+    # proof-of-red one `fetch-depth: 1` away from not existing, and nothing downstream
+    # consumes a skip. (CI checks out with fetch-depth: 0, so the skip arm should not fire.)
+    if git -C "$SCRIPT_DIR" cat-file -e "${PRE_FIX_HANDLER_SHA}^{commit}" 2>/dev/null; then
+      echo "  FAIL: pinned pre-fix commit resolves but the handler could not be read — mutation proof is broken, not skipped"
       FAIL=$((FAIL + 1))
     else
-      echo "  SKIP (loud): origin/main unavailable (shallow clone) — mutation proof NOT run"
+      echo "  SKIP (loud): pinned pre-fix commit ${PRE_FIX_HANDLER_SHA:0:9} unavailable (shallow clone) — mutation proof NOT run"
     fi
     teardown
     return 0
@@ -1507,7 +1523,7 @@ test_fatal_channel_exit64_replaces_stale_frame
 test_fatal_channel_subshell_attribution
 test_fatal_channel_no_secret_leak
 test_fatal_channel_clean_apply_exits_zero
-test_fatal_channel_red_against_main
+test_fatal_channel_red_against_pre_fix
 test_dropin_restart_grant
 test_reconcile_stale_fires_and_disarms
 test_reconcile_inactive_short_circuits
