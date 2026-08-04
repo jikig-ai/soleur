@@ -56,7 +56,7 @@ Three layers, each catching a distinct failure mode:
 
 ### 4.1 Cron-driven content drift (workflow)
 
-`.github/workflows/scheduled-content-vendor-drift.yml` runs weekly at `'17 11 * * MON'` (off-peak / off-cluster). It reads NOTICE frontmatter, fetches current upstream blob SHAs via `gh api repos/<o>/<r>/contents/<path>?ref=main`, classifies any drift via `vendor-drift-classify.sh`, and on classifier exit codes 10–16 opens a re-vendor PR via the `bot-pr-with-synthetic-checks` composite. The PR body links to the runbook; the operator merges after review.
+The content-vendor-drift cron (`apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts`, an Inngest function since the TR9 Phase-2 migration -- it was `.github/workflows/scheduled-content-vendor-drift.yml`, which no longer exists) runs weekly at `'17 11 * * 1'` (off-peak / off-cluster). It reads NOTICE frontmatter, fetches current upstream blob SHAs via `gh api repos/<o>/<r>/contents/<path>?ref=main`, classifies any drift via `vendor-drift-classify.sh`, and on classifier exit codes 10–16 opens a re-vendor PR via the `bot-pr-with-synthetic-checks` composite. The PR body links to the runbook; the operator merges after review.
 
 ### 4.2 Pre-commit silent-edit detection (lefthook)
 
@@ -113,7 +113,7 @@ When `gdpr-gate.sh` emits a `POSTURE_FAIL:` line during a regulated PR's `/soleu
 2. Opens a tracking issue with `gh issue create --label compliance/critical --title "[gdpr-gate] >90d stale rules — N days since last-verified"`.
 3. Appends a row to `compliance-posture.md` §Active Compliance Items per the canonical row schema (the gate never writes there directly; this is operator-acknowledged write only).
 4. Commits the row with `compliance: register vendor-pin-staleness for #<issue>`.
-5. Pings the in-flight `ci/vendor-drift-*` PR (or dispatches the workflow manually via `gh workflow run scheduled-content-vendor-drift.yml`) to drive re-vendor.
+5. Pings the in-flight `ci/vendor-drift-*` PR (or dispatches the cron manually via `/soleur:trigger-cron` with `cron/content-vendor-drift.manual-trigger` -- `gh workflow run` cannot reach it, there is no workflow) to drive re-vendor.
 
 The current regulated-data PR can ship; the staleness-driven follow-up is a separate work cycle with its own review + merge.
 
@@ -134,5 +134,5 @@ When a new bundle is added: append a row here, write its NOTICE per §2, registe
 - Operator runbook: `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md`
 - Compliance posture: `knowledge-base/legal/compliance-posture.md` §Vendored Code Provenance
 - gdpr-gate skill: `plugins/soleur/skills/gdpr-gate/SKILL.md`
-- Drift workflow: `.github/workflows/scheduled-content-vendor-drift.yml`
+- Drift cron: `apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts` (Inngest; the Sentry monitor slug keeps the pre-migration name `scheduled-content-vendor-drift`)
 - Helper scripts: `plugins/soleur/skills/gdpr-gate/scripts/{notice-frontmatter,vendor-pin-integrity,vendor-drift-classify}.sh`

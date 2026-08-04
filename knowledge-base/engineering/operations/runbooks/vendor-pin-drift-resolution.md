@@ -1,10 +1,17 @@
 # Runbook: Vendor Pin Drift Resolution
 
-When the `scheduled-content-vendor-drift.yml` workflow files a re-vendor PR (label `vendor/pin-drift`) or opens a tracking issue (label `vendor/cron-failure` / `vendor/upstream-rollback` / `vendor/upstream-archived`), use this runbook to resolve the situation.
+When the content-vendor-drift cron files a re-vendor PR (label `vendor/pin-drift`) or opens a tracking issue (label `vendor/cron-failure` / `vendor/upstream-rollback` / `vendor/upstream-archived`), use this runbook to resolve the situation.
 
 Cross-references:
 - Policy: `knowledge-base/engineering/policies/content-vendoring.md`
-- Workflow: `.github/workflows/scheduled-content-vendor-drift.yml`
+- Cron: `apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts` (an Inngest
+  function since the TR9 Phase-2 migration; it was
+  `.github/workflows/scheduled-content-vendor-drift.yml`, and that file no longer exists. The
+  Sentry monitor slug keeps the old name, so a `scheduled-content-vendor-drift` hit in
+  `cron-monitors.tf` is correct and is not a stale reference.)
+- Manual trigger: `/soleur:trigger-cron` with `cron/content-vendor-drift.manual-trigger`
+  (allowlisted via the drift-guarded manifest in `server/inngest/cron-manifest.ts`).
+  **`gh workflow run` cannot dispatch this job** — there is no workflow to dispatch.
 - Compliance posture: `knowledge-base/legal/compliance-posture.md` §Vendored Code Provenance
 - gdpr-gate skill: `plugins/soleur/skills/gdpr-gate/SKILL.md`
 - Helper scripts: `plugins/soleur/skills/gdpr-gate/scripts/{notice-frontmatter,vendor-pin-integrity,vendor-drift-classify}.sh`
@@ -27,14 +34,17 @@ git commit -am 'test: mutate one upstream-blob-sha to non-existent for cron-fail
 git push -u origin synthetic-drift-test
 
 # 2. Dispatch the workflow against this branch.
-gh workflow run scheduled-content-vendor-drift.yml --ref synthetic-drift-test
+# NOTE: `gh workflow run` does NOT work here — the job is an Inngest cron, not a
+# workflow. Trigger it with /soleur:trigger-cron (event
+# `cron/content-vendor-drift.manual-trigger`). An Inngest function has no branch
+# scoping, so the `--ref synthetic-drift-test` half of this rehearsal no longer has
+# an equivalent: the trigger runs against deployed code. Rehearse the classifier
+# directly instead -- `vendor-drift-classify.sh` is a standalone script.
 
 # 3. Poll until the run completes (expect failure status — the
 #    cron-failure arm is what fires).
-RUN_ID=$(gh run list --workflow=scheduled-content-vendor-drift.yml \
-                     --branch=synthetic-drift-test --limit=1 \
-                     --json databaseId --jq '.[0].databaseId')
-gh run watch "$RUN_ID"
+# Observe the run in Inngest / Sentry (monitor slug `scheduled-content-vendor-drift`)
+# rather than via `gh run`.
 
 # 4. Assert a `vendor/cron-failure` issue was auto-filed with a link to
 #    the failed run.
@@ -89,7 +99,7 @@ When `gh api repos/<o>/<r>` returns a `full_name` that doesn't match our recorde
 
 1. Update NOTICE `upstream` field to the new `github.com/<new-owner>/<new-repo>` path.
 2. Verify upstream content is still accessible at that new path.
-3. Re-run the workflow (`gh workflow run scheduled-content-vendor-drift.yml`).
+3. Re-run the cron via `/soleur:trigger-cron` (`cron/content-vendor-drift.manual-trigger`).
 4. Merge any drift PR the re-run produces normally.
 
 ## 5. Upstream Archived (`vendor/upstream-archived`, no redirect)
@@ -132,7 +142,7 @@ When `gdpr-gate.sh` emits `POSTURE_FAIL: gdpr-gate rules >90 days stale` to STDO
    ```
 5. Drive re-vendor:
    - If a `ci/vendor-drift-*` PR is already open, ping it.
-   - Otherwise dispatch: `gh workflow run scheduled-content-vendor-drift.yml`.
+   - Otherwise dispatch via `/soleur:trigger-cron` (`cron/content-vendor-drift.manual-trigger`).
 6. The current regulated PR ships per its own gate; the staleness-driven follow-up is a separate work cycle with its own review and merge. The Active Compliance Items row tracks both.
 
 Precedent: `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md` uses the same operator-acknowledged-write pattern for credential drift.

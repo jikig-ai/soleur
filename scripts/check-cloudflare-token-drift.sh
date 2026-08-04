@@ -32,20 +32,51 @@
 #
 # USAGE
 #   DOPPLER_TOKEN=<a Doppler read credential> bash scripts/check-cloudflare-token-drift.sh
+#   DOPPLER_TOKEN_MAP='{"<config>":"<read token>", …}' bash scripts/check-cloudflare-token-drift.sh
 #   bash scripts/check-cloudflare-token-drift.sh --json
 #
-# THE CREDENTIAL
-#   Exactly ONE credential, taken from DOPPLER_TOKEN, and there is deliberately no
-#   credential-iteration surface: this script loops over CONFIGS, never over credentials.
-#   The credential is snapshotted into a local and DOPPLER_TOKEN / DOPPLER_CONFIG are then
-#   UNSET, so every Doppler read has to name its config explicitly. A read site that
-#   forgets its `-c <cfg>` fails loudly instead of silently binding whatever config the
-#   ambient environment happened to carry — which, at 13 configs, would grade the wrong
-#   config's bytes and report a confident wrong answer.
+# THE CREDENTIALS — TWO MODES SINCE #7234, AND THIS SECTION USED TO DENY THE SECOND
+#   This block said "exactly ONE credential, taken from DOPPLER_TOKEN, and there is
+#   deliberately no credential-iteration surface: this script loops over CONFIGS, never
+#   over credentials". That was true before #7234 and is false now, and it is false in the
+#   direction that matters: it is the paragraph an editor opens before deleting the
+#   per-config plumbing as dead weight. The full mode contract lives at `declare -A
+#   CRED_FOR` below; the short version:
 #
-#   An unset or EMPTY DOPPLER_TOKEN is a failed credential, never a fallback: the Doppler
-#   CLI treats an empty value as unset and rebinds to whatever ambient credential the
-#   runner carries. This script refuses to invoke the CLI at all in that state.
+#     MAP     `DOPPLER_TOKEN_MAP` non-empty — a JSON object of one config-scoped READ token
+#             per config, minted by `doppler_service_token.token_drift` under a `for_each`
+#             over the committed inventory and published as ONE Actions secret. This is the
+#             twice-daily fan-out scan. There IS a credential-iteration surface: the scan
+#             holds N credentials and selects `CRED_FOR[<config>]` per config.
+#     SINGLE  `DOPPLER_TOKEN` non-empty — one credential, N enumerated configs, N reads.
+#             Byte-for-byte the pre-#7234 behaviour, which five call sites still use.
+#
+#   Setting BOTH is a hard error (`unknown`, exit 2): they select different scan modes and
+#   there is no defensible precedence.
+#
+#   WHY THE MAP EXISTS AT ALL. #7159 wired this scan to a project-scoped
+#   `doppler_service_account` on the INFERRED premise that a project membership can
+#   enumerate and read every config. #7234 measured it: that credential could do NEITHER —
+#   `doppler configs -p soleur --json` returned null and reading `prd` returned "Could not
+#   find requested config 'prd'". No credential in this repository can enumerate the
+#   project, which is why in map mode the config list comes from the map's KEYS rather than
+#   from an enumeration.
+#
+#   In BOTH modes every source variable is snapshotted into a local and DOPPLER_TOKEN /
+#   DOPPLER_TOKEN_MAP / DOPPLER_CONFIG are then UNSET, so every Doppler read has to name its
+#   config explicitly. A read site that forgets its `-c <cfg>` fails loudly instead of
+#   silently binding whatever config the ambient environment happened to carry — which, at
+#   13 configs, would grade the wrong config's bytes and report a confident wrong answer.
+#
+#   DO NOT DROP `-p`/`-c` FROM THE READS. A config-scoped token ERRORS on a wrong `-c`
+#   (measured against live Doppler, both on `main` and on this branch). That error IS the
+#   binding control: it is why no self-identification probe exists, and why a mis-bound
+#   token surfaces as a failed read rather than as a confident wrong answer.
+#
+#   An unset or EMPTY credential is a failed credential, never a fallback: the Doppler CLI
+#   treats an empty value as unset and rebinds to whatever ambient credential the runner
+#   carries. This script refuses to invoke the CLI at all in that state, and map entries are
+#   rejected outright if the token side is empty.
 #
 # COVERAGE LADDER (--configs-floor / --inventory)
 #   `coverage` is unknown | degraded | at-floor, evaluated in that order.
@@ -64,9 +95,17 @@
 #   of this file instead: with a non-empty keyset and zero conclusions drawn it prints
 #   "PROBED ZERO" and exits 2, which the workflow publishes as `verdict: unavailable`, and
 #   the coverage-issue close arm is gated on `verdict != unavailable` so it cannot fire.
-#   The FLOOR gates. The INVENTORY (--inventory) gates NOTHING — it supplies only
-#   configs_expected, configs_unread and inventory_age_days. A short, long, stale or
-#   missing inventory changes the printed ratio and NO state.
+#   The FLOOR gates. The `--inventory` FLAG gates nothing IN THIS SCRIPT — it supplies only
+#   configs_expected, configs_unread and inventory_age_days, so a short, long, stale or
+#   missing inventory changes the printed ratio and NO state here.
+#
+#   BUT THE INVENTORY FILE IS NOT INERT, AND THIS SENTENCE USED TO SAY IT WAS. Since #7234
+#   `apps/web-platform/infra/token-drift-read-tokens.tf` reads the SAME file with `file()`
+#   and derives the `for_each` key set of `doppler_service_token.token_drift` from it, so
+#   its name lines DETERMINE REACH: deleting one destroys that config's read token and drops
+#   the config out of the scan entirely. The flag and the file have different consequences
+#   and the unqualified "the inventory gates nothing" conflated them — in the direction that
+#   invites a line deletion. See the inventory's own header, which states both jobs.
 #
 # COVERAGE
 #   CF_API_TOKEN*             Cloudflare API tokens (single value, Bearer-verified).
@@ -119,11 +158,16 @@ JSON_FILE=""
 # producer) — which is why the gate compares against a declared floor and never against
 # the inventory.
 CONFIGS_FLOOR_RAW="1"
-# --inventory <path> supplies the DENOMINATOR and GATES NOTHING. It contributes
-# `configs_expected`, `configs_unread` and `inventory_age_days` to the verdict, and no
-# state anywhere depends on it: a short, long, stale or missing inventory changes the
-# printed ratio and nothing else. A denominator that gated would let a two-line file
-# derive the healthy state and silence the channel, which is the fail-open direction.
+# --inventory <path> supplies the DENOMINATOR and gates nothing IN THIS SCRIPT. It
+# contributes `configs_expected`, `configs_unread` and `inventory_age_days` to the verdict,
+# and no state here depends on it: a short, long, stale or missing inventory changes the
+# printed ratio and nothing else. A denominator that gated would let a two-line file derive
+# the healthy state and silence the channel, which is the fail-open direction.
+#
+# THAT IS A STATEMENT ABOUT THIS FLAG, NOT ABOUT THE FILE. Since #7234 the same file is the
+# `for_each` key set for `doppler_service_token.token_drift`, so its name lines decide which
+# configs get a read token at all — a line deleted there is a config the scan can never
+# reach, whatever this flag does. Do not read "gates nothing" as "is safe to shorten".
 INVENTORY_PATH=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -163,7 +207,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-for bin in doppler curl python3; do
+for bin in doppler curl python3 jq; do
   command -v "$bin" >/dev/null 2>&1 || { echo "ERROR: $bin not on PATH" >&2; exit 2; }
 done
 
@@ -223,7 +267,7 @@ fi
 # loud CI failure rather than a silent divergence.
 if [[ -n "$INVENTORY_PATH" ]]; then
   if [[ -r "$INVENTORY_PATH" ]]; then
-    mapfile -t INVENTORY_NAMES < <(grep -E '^[a-z0-9_]+$' "$INVENTORY_PATH" | sort -u || true)
+    mapfile -t INVENTORY_NAMES < <(LC_ALL=C grep -E '^[a-z0-9_]+$' "$INVENTORY_PATH" | sort -u || true)
     if (( ${#INVENTORY_NAMES[@]} > 0 )); then
       CONFIGS_EXPECTED=${#INVENTORY_NAMES[@]}
       # Staleness is bounded WITHOUT a credential: the header says when the file was
@@ -260,6 +304,17 @@ fi
 compute_coverage() {
   local n=${#CONFIG_NAMES[@]}
   COVERAGE=unknown
+  # CONTROL C-b, evaluated FIRST. A credential SOURCE this run could not parse is not a
+  # measurement, so it publishes `unknown` — the fail-closed state — rather than falling
+  # through to the `n == 0` positive-work floor and publishing `degraded`. The distinction
+  # is operator-facing and load-bearing: `degraded` asserts "the credential is absent or
+  # narrowed", a claim a run that never made a Doppler call cannot support, and it points
+  # at a remedy (widen or republish the credential) that would not fix a malformed map.
+  if (( ${MAP_SHAPE_OK:-1} == 0 )); then
+    COVERAGE=unknown
+    if (( CONFIGS_EXPECTED >= 0 )); then COVERAGE_RATIO="${n}/${CONFIGS_EXPECTED}"; fi
+    return 0
+  fi
   if (( FLOOR_OK == 1 )); then
     if (( n < CONFIGS_FLOOR || n == 0 )); then
       # `n == 0` is a POSITIVE-WORK FLOOR, independent of the declared floor. Without it a
@@ -325,21 +380,79 @@ compute_coverage() {
 # Extracted so --json (stdout) and --json-file (file, alongside the human report) render
 # from ONE code path. Two renderers would be a second unsynchronized pin on the same
 # schema, which is how the two sides drift apart silently.
+# ── READ-FAILURE CAUSES, COUNTED RATHER THAN ANNOTATED ONE-PER-CONFIG ────────────────
+# GitHub caps workflow annotations at ~10 per level per step. The mis-binding this detector
+# exists to catch fails TWELVE of thirteen configs, so emitting one `::error::` per failed
+# config puts the run over the cap on exactly the scenario the annotations were added for,
+# and which two get dropped is not defined. Causes are accumulated here and emitted as ONE
+# aggregated annotation after the read loops; the per-config detail keeps going to stderr,
+# which is uncapped, so nothing is lost from the log.
+declare -A READ_CAUSE_COUNT=()
+# NOT called inside a command substitution anywhere: `$( )` runs a SUBSHELL and every
+# increment would be discarded — the defect this file already records against its own
+# memoised probe helpers, which measured 3 curl calls against a comment promising 1.
+note_read_cause() {
+  READ_CAUSE_COUNT["$1"]=$(( ${READ_CAUSE_COUNT["$1"]:-0} + 1 ))
+}
+# Rate-limit signature ONLY — anchored on what an HTTP 429 actually carries. Deliberately
+# narrow: see the value-read block for why no absent-key classification is attempted.
+is_rate_limited() {
+  [[ "$1" =~ (^|[^0-9])429([^0-9]|$) ]] && return 0
+  local _rc=1
+  shopt -s nocasematch
+  [[ "$1" == *"too many requests"* || "$1" == *"rate limit"* ]] && _rc=0
+  shopt -u nocasematch
+  return "$_rc"
+}
+# Emit the aggregated annotation. Names ONLY causes that actually fired, so a consumer
+# grepping for a specific cause (the suite's M2/M3 do exactly that, in both polarities)
+# still gets a true answer.
+emit_read_cause_annotation() {
+  (( ${#READ_CAUSE_COUNT[@]} == 0 )) && return 0
+  local _c _parts=() _total=0
+  for _c in $(printf '%s\n' "${!READ_CAUSE_COUNT[@]}" | LC_ALL=C sort); do
+    _parts+=("${_c}=${READ_CAUSE_COUNT[$_c]}")
+    # `${READ_CAUSE_COUNT[$_c]}`, EXPANDED BEFORE the arithmetic — not the bare
+    # `READ_CAUSE_COUNT[_c]` form. Inside `$(( ))` an unprefixed subscript is evaluated as
+    # an arithmetic expression, so `_c` (holding a cause NAME) resolves as an undefined
+    # variable to 0 and every lookup silently reads index 0. Measured: the annotation
+    # printed "0 failed read(s)" on the same line as "…mismatch=1".
+    _total=$(( _total + ${READ_CAUSE_COUNT[$_c]} ))
+  done
+  echo "::error::token_drift_read_failures — ${_total} failed read(s): $(IFS=' '; echo "${_parts[*]}"). Per-config detail is on stderr above (annotations are capped at ~10 per step, so they are aggregated here)." >&2
+  return 0
+}
+
 emit_json() {
   compute_coverage
   # `split("|", 1)` — maxsplit 1, so a diagnostic containing a pipe cannot shift fields.
   # Unverifiable rows get their own key rather than riding in "stale" with the diagnostic
   # sentence mis-rendered into the "config" field.
   #
-  # ARGV CONTRACT. ELEVEN positional scalars, then FOUR variable-length lists behind THREE
+  # ARGV CONTRACT. THIRTEEN positional scalars, then FOUR variable-length lists behind THREE
   # DISTINCT sentinels. `rest.index("--")` returns the FIRST match, so one sentinel cannot
   # separate more than two lists — a second `--` would silently fold two lists into one.
   # Inserting a scalar shifts every index, so the scalar count and the `range(1, 9)` /
-  # `sys.argv[9:12]` / `sys.argv[12:]` reads move together or not at all.
+  # `sys.argv[9:14]` / `sys.argv[14:]` reads move together or not at all.
+  #
+  # `read_causes` rides as ONE space-joined scalar (`cause=N cause=N`, or "-" for none)
+  # rather than as a fifth list, precisely because a fourth sentinel is what the paragraph
+  # above says cannot be added safely. Both new scalars are appended AFTER the existing
+  # eleven so the list indices shift by a constant.
+  _rc_pairs="-"
+  if (( ${#READ_CAUSE_COUNT[@]} > 0 )); then
+    _rc_parts=()
+    for _rc_c in $(printf '%s\n' "${!READ_CAUSE_COUNT[@]}" | LC_ALL=C sort); do
+      _rc_parts+=("${_rc_c}=${READ_CAUSE_COUNT[$_rc_c]}")
+    done
+    _rc_pairs="$(IFS=' '; echo "${_rc_parts[*]}")"
+    unset _rc_parts _rc_c
+  fi
   python3 - \
     "$LIVE_N" "$DEAD_N" "${#UNVERIFIABLE_ROWS[@]}" "$PROBES_MADE" "${#CONFIG_NAMES[@]}" \
     "$CONFIGS_FLOOR" "$CONFIGS_EXPECTED" "$INVENTORY_AGE_DAYS" \
     "$COVERAGE" "$COVERAGE_RATIO" "${COVERAGE_CAVEAT:--}" \
+    "${CRED_MODE:-unknown}" "$_rc_pairs" \
     ${DEAD_ROWS[@]+"${DEAD_ROWS[@]}"} "--" \
     ${UNVERIFIABLE_ROWS[@]+"${UNVERIFIABLE_ROWS[@]}"} "--names--" \
     ${CONFIG_NAMES[@]+"${CONFIG_NAMES[@]}"} "--unread--" \
@@ -347,7 +460,19 @@ emit_json() {
 import json, sys
 live, dead, unver, probes, configs, floor, expected, age = (int(sys.argv[i]) for i in range(1, 9))
 coverage, ratio, caveat = sys.argv[9], sys.argv[10], sys.argv[11]
-rest = sys.argv[12:]
+cred_mode, rc_pairs = sys.argv[12], sys.argv[13]
+rest = sys.argv[14:]
+def read_causes(spec):
+    # "-" is the non-empty stand-in for "no failed reads", for the same reason
+    # coverage_caveat uses it: a whitespace-splitting consumer cannot lose an empty field.
+    if spec == "-":
+        return {}
+    out = {}
+    for part in spec.split():
+        cause, _, n = part.partition("=")
+        if cause and n.isdigit():
+            out[cause] = int(n)
+    return out
 i_unver = rest.index("--")
 i_names = rest.index("--names--")
 i_unread = rest.index("--unread--")
@@ -392,6 +517,17 @@ print(json.dumps({
     # "-" is the non-empty stand-in for "no caveat", so a whitespace-splitting consumer
     # cannot lose a field to an empty string.
     "coverage_caveat": caveat,
+    # WHICH SCAN MODE RAN. Previously computed and never published, so a consumer looking at
+    # a verdict could not tell a 13-token fan-out from a single-credential run — and those
+    # grade very different things (only the map asserts a per-config binding on every read).
+    # "unknown" is reachable: the both-variables-set arm publishes before either mode is
+    # selected.
+    "cred_mode": cred_mode,
+    # FAILED READS, AGGREGATED BY CAUSE. The machine-readable half of the annotation
+    # aggregation: GitHub caps annotations at ~10 per level per step and the mis-binding
+    # case fails 12 configs, so the counts live here where nothing truncates them.
+    # Empty object when every read succeeded.
+    "read_causes": read_causes(rc_pairs),
 }, indent=2))
 PY
 }
@@ -405,6 +541,9 @@ PY
 publish_verdict() {
   [[ -n "$VERDICT_PUBLISHED" ]] && return 0
   VERDICT_PUBLISHED=1
+  # Emitted HERE rather than after the read loops so it reaches the log on EVERY exit path,
+  # including the early exit-2 returns. A no-op when nothing failed.
+  emit_read_cause_annotation
   local rc=0
   if [[ "$JSON_OUT" -eq 1 ]]; then
     emit_json || rc=1
@@ -422,38 +561,13 @@ if (( FLOOR_OK == 0 )); then
   exit 2
 fi
 
-# ── THE CREDENTIAL ──────────────────────────────────────────────────────────
-# Snapshotted into a local, then BOTH variables are unset. The caller keeps them in the
-# step environment for the whole run, so a read site that forgets its `-c <cfg>` — one of
-# the four below, or a fifth added later — would silently bind the ambient config and
-# grade the wrong config's bytes. Unsetting makes that failure loud BY CONSTRUCTION rather
-# than by a test noticing it at review time, and it closes the empty-value rebind hazard
-# at the source instead of once per call site.
-DOPPLER_CRED="${DOPPLER_TOKEN:-}"
-unset DOPPLER_TOKEN DOPPLER_CONFIG
-
-# An EMPTY credential is a failed credential, not a fallback. The Doppler CLI treats an
-# empty `--token` / env value as UNSET and rebinds to whatever ambient credential the
-# runner carries, so invoking it here would report a confident answer about a config set
-# nobody asked for. This is a CONFIGURATION fault (the secret is absent or empty), and it
-# surfaces as `degraded` at 0/N with a performable remedy.
-if [[ -z "$DOPPLER_CRED" ]]; then
-  {
-    echo "ERROR: DOPPLER_TOKEN is unset or empty — no Doppler credential to scan with."
-    echo "       Refusing to invoke the Doppler CLI without one: it treats an empty value as"
-    echo "       unset and would silently bind whatever ambient credential this runner carries."
-    echo "       0 configs read, so coverage is 'degraded' against the declared floor of ${CONFIGS_FLOOR}."
-  } >&2
-  publish_verdict || true
-  exit 2
-fi
-
 # Register a scanned value with the Actions log masker, once per distinct value, BEFORE it
 # can reach any probe. Actions auto-masks only `secrets.*`-sourced values, so everything
 # this detector pulls out of Doppler is unmasked in the job log by default — in the same
 # script that deliberately un-swallows stderr from the subsystem handling those values.
-# The credential itself is deliberately NOT masked here: `::add-mask::<value>` writes the
-# value to stdout, and the credential must reach no sink at all.
+#
+# DEFINED BEFORE THE CREDENTIAL BLOCK, because the credential block now masks. See the
+# NFR1 note there for why the prohibition that used to stand here was overturned.
 declare -A MASKED=()
 mask_value() {
   local v="$1"
@@ -464,25 +578,228 @@ mask_value() {
   return 0
 }
 
-# Enumerate configs from Doppler rather than hardcoding. A hardcoded list is
-# exactly how CF_API_TOKEN_AUDIT was missed during the incident: it lived only
-# in the dev* configs, which the audit sweep never looked at.
+# ── THE CREDENTIALS ─────────────────────────────────────────────────────────
+# `CRED_FOR[<config>]` — one credential per config this run may read. Snapshotted, then
+# every source variable is unset. The caller keeps them in the step environment for the
+# whole run, so a read site that forgets its `-c <cfg>` would silently bind the ambient
+# config and grade the wrong config's bytes. Unsetting makes that failure loud BY
+# CONSTRUCTION rather than by a test noticing it at review time.
 #
-# The credential is delivered as an ENV PREFIX, never as `--token <value>` on argv:
-# /proc/<pid>/cmdline is world-readable and /proc/<pid>/environ is 0400. That defends
-# against a different-UID local observer, NOT against a compromised runner where every
-# step shares one UID — stated accurately rather than overstated.
+# TWO MODES, ONE DOWNSTREAM PATH:
 #
-# `2>/dev/null` is deliberately GONE from the enumeration. A non-empty credential that
-# enumerates nothing must be loud, and its stderr — the one line that says whether the
-# credential was rejected, expired, or merely scoped to nothing — was being swallowed.
-mapfile -t CONFIGS < <(DOPPLER_TOKEN="$DOPPLER_CRED" doppler configs -p "$PROJECT" --json |
-  python3 -c 'import json,sys; [print(c["name"]) for c in json.load(sys.stdin)]' 2>/dev/null)
-if [[ ${#CONFIGS[@]} -eq 0 ]]; then
-  echo "ERROR: could not enumerate Doppler configs for project '$PROJECT'" >&2
+#   MAP    `DOPPLER_TOKEN_MAP` non-empty — a JSON object {"<config>": "<token>", …}. The
+#          twice-daily fan-out scan (#7234). No credential in this repository can
+#          enumerate the `soleur` project, so the config list comes from the map's KEYS,
+#          which Terraform derives from the committed inventory.
+#   SINGLE `DOPPLER_TOKEN` non-empty — one credential, N enumerated configs, N reads.
+#          Byte-for-byte what every pre-#7234 caller had. Five call sites still use it,
+#          none passing --configs-floor, two of them branch-scoped.
+#
+# SELECTION IS ON NON-EMPTINESS (`-n`), NOT DEFINEDNESS, AND THAT IS PINNED. A workflow
+# writing `DOPPLER_TOKEN_MAP: ${{ secrets.X }}` with the secret absent yields a variable
+# that is DEFINED and EMPTY. `-n` routes that to the "neither" arm → `degraded 0/N`, the
+# correct diagnosis (a credential is missing) and exactly the shape of the merge→apply
+# window before the secret is first published. Selecting on `${x+set}` would route it to a
+# malformed-map fault → `unknown`, whose operator-facing remedy says the Doppler identity
+# is NOT at fault — the wrong remedy in the one window it is guaranteed to fire.
+declare -A CRED_FOR=()
+MAP_SHAPE_OK=1
+_cred_map_raw="${DOPPLER_TOKEN_MAP:-}"
+_cred_single="${DOPPLER_TOKEN:-}"
+unset DOPPLER_TOKEN_MAP DOPPLER_TOKEN DOPPLER_CONFIG
+
+if [[ -n "$_cred_map_raw" && -n "$_cred_single" ]]; then
+  # FAIL CLOSED TO `unknown`, NOT `degraded`. `degraded` asserts the credential is absent
+  # or narrowed; this run made no Doppler call and cannot support that claim — it is the
+  # same distinction compute_coverage's C-b arm exists to draw, and without this line the
+  # positive-work floor (`n == 0`) publishes `degraded` and sends the operator to re-mint a
+  # token when the actual fault is a workflow that set two variables.
+  MAP_SHAPE_OK=0
+  echo "::error::token_drift_credential_mode_ambiguous — both DOPPLER_TOKEN_MAP and DOPPLER_TOKEN are set; refusing to choose a scan mode." >&2
+  {
+    echo "ERROR: both DOPPLER_TOKEN_MAP and DOPPLER_TOKEN are set and non-empty."
+    echo "       These select different scan modes (fan-out over a config map vs a single"
+    echo "       credential) and there is no defensible precedence between them."
+    echo "       Refusing to guess: no config was read and none was probed."
+  } >&2
   publish_verdict || true
   exit 2
 fi
+
+if [[ -n "$_cred_map_raw" ]]; then
+  # ── CONTROL C-b: shape validation, BEFORE any network call ────────────────
+  # A malformed credential SOURCE is not a measurement, so it publishes `unknown` (the
+  # fail-closed state) rather than `degraded` (which asserts "the credential is absent or
+  # narrowed", a claim a run that made no Doppler call cannot support). Parsed with `jq`,
+  # never a regex.
+  #
+  # ⚠️ STDERR IS CAPTURED SEPARATELY, NEVER `2>&1`, AND THAT IS A CREDENTIAL BOUNDARY.
+  # jq is a STREAMING parser: given more than one JSON value (`{...} {...}`, or a valid
+  # object followed by trailing bytes) it emits the `config\ttoken` lines for every value
+  # it processed successfully BEFORE it hits the fault. Folding stdout into the error
+  # variable with `2>&1` therefore puts live read tokens into a variable this block echoes
+  # to the job log — and masking has not run yet on this path, because it happens only
+  # after a successful parse. Measured: `{"prd":"dp.st.prd.X"} junk` printed the token pair
+  # alongside the parse error, with zero `::add-mask::` emitted. Keep the streams apart.
+  #
+  # ANCHORS ARE `\A`/`\z`, NOT `^`/`$`. jq's regex engine is Oniguruma, where `$` matches
+  # before a FINAL NEWLINE — so `test("^[a-z0-9_]+$")` accepts `"prd\n"`. A key or value
+  # containing a newline then splits the `key\tvalue` record below, yielding a forged entry
+  # whose credential is the EMPTY STRING, which the Doppler CLI treats as unset and rebinds
+  # to whatever ambient credential the runner carries. That is the precise hazard the
+  # snapshot-and-unset discipline above exists to close, reintroduced through the
+  # validator. `\A`/`\z` anchor to the whole string and admit neither.
+  #
+  # VALUES ARE CHARSET-CHECKED TOO, not merely "a non-empty string". A Doppler token is
+  # `dp.st.<name>.<url-safe>`, so the alphabet below is a superset of what the provider
+  # can mint and still excludes every whitespace and control character that could split a
+  # record.
+  _map_err=""
+  _map_jq_err=$(mktemp) || _map_jq_err=/dev/null
+  if ! _map_norm=$(jq -e -r '
+        def bad_key:   (.|test("\\A[a-z0-9_]+\\z")|not);
+        def bad_value: (.|type != "string") or (. == "") or (.|test("\\A[A-Za-z0-9._-]+\\z")|not);
+        if type != "object" then error("not a JSON object")
+        elif (keys|length) == 0 then error("object has zero keys")
+        elif (keys|map(select(bad_key))|length) > 0 then error("a key is not a Doppler config name")
+        elif ([.[]]|map(select(bad_value))|length) > 0 then error("a value is not a Doppler read token")
+        else (to_entries|map(.key + "\t" + .value)|.[])
+        end' <<<"$_cred_map_raw" 2>"$_map_jq_err"); then
+    # ONLY the classification, never jq's stdout. `head -c 200` bounds a hostile parser
+    # message; the message itself is one of the `error(...)` strings above or a jq parse
+    # error, neither of which echoes input values.
+    _map_err="$(tr -d '\r' <"$_map_jq_err" | head -c 200)"
+    MAP_SHAPE_OK=0
+  fi
+  [[ "$_map_jq_err" != /dev/null ]] && rm -f "$_map_jq_err"
+  unset _map_jq_err
+  if (( MAP_SHAPE_OK == 0 )); then
+    # NAMED ANNOTATION, not just a stderr line. The `unknown` issue body tells the operator
+    # to discriminate a credential fault from a detector fault by looking for exactly this
+    # marker; without it that instruction resolves to "no annotation → detector fault",
+    # which is the wrong branch on the one path that IS a credential fault.
+    echo "::error::token_drift_map_malformed — DOPPLER_TOKEN_DRIFT_MAP is not a usable credential map: ${_map_err}" >&2
+    {
+      echo "ERROR: DOPPLER_TOKEN_MAP is not a usable credential map."
+      echo "       ${_map_err}"
+      echo "       Expected a JSON object of {\"<config>\": \"<read token>\"} whose keys are"
+      echo "       Doppler config names and whose values are read tokens, as published by"
+      echo "       github_actions_secret.doppler_token_drift_map."
+      echo "       Publishing coverage: unknown — a credential source this run could not parse"
+      echo "       is not evidence that the credential is absent or narrowed, which is what"
+      echo "       'degraded' would assert. NO Doppler call was made."
+    } >&2
+    publish_verdict || true
+    exit 2
+  fi
+  # Mask EVERY credential before the first `doppler` invocation of any kind.
+  #
+  # NFR1 — THIS REVERSES AN EXPLICIT PROHIBITION THAT USED TO STAND HERE, and the reversal
+  # is the point rather than an oversight. The old comment read: "The credential itself is
+  # deliberately NOT masked here: `::add-mask::<value>` writes the value to stdout, and the
+  # credential must reach no sink at all." That reasoning was sound for a WHOLE-SECRET
+  # credential, which Actions masks automatically from `secrets.*` — registering it again
+  # bought nothing and cost one more sink. It does NOT hold for a MAP: Actions masks the
+  # map as ONE OPAQUE STRING, so the values extracted out of it are unmasked, and this
+  # script deliberately does not suppress the Doppler CLI's stderr precisely so a rejected
+  # credential is loud. A rejected token can therefore print itself into a workflow log.
+  # Masking each extracted value is the lesser exposure: `::add-mask::` reaches the Actions
+  # log processor, the alternative reaches the log itself.
+  while IFS=$'\t' read -r _cfg _tok; do
+    [[ -z "$_cfg" ]] && continue
+    # DEFENCE IN DEPTH behind the validator above. If a record ever splits despite the
+    # anchors, the fragment arrives with an empty token — and an empty DOPPLER_TOKEN is an
+    # ambient-credential rebind, not a failed read. Fail the whole map closed rather than
+    # scanning one config with someone else's credential.
+    if [[ -z "$_tok" ]]; then
+      MAP_SHAPE_OK=0
+      echo "::error::token_drift_map_malformed — DOPPLER_TOKEN_DRIFT_MAP yielded an entry with an empty credential (key '${_cfg}')." >&2
+      echo "ERROR: refusing to scan with an empty credential — the Doppler CLI treats it as unset and rebinds to the runner's ambient credential." >&2
+      publish_verdict || true
+      exit 2
+    fi
+    mask_value "$_tok"
+    CRED_FOR["$_cfg"]="$_tok"
+  done <<<"$_map_norm"
+  unset _map_norm
+  CRED_MODE=map
+elif [[ -n "$_cred_single" ]]; then
+  CRED_MODE=single
+else
+  # An EMPTY credential is a failed credential, not a fallback. The Doppler CLI treats an
+  # empty `--token` / env value as UNSET and rebinds to whatever ambient credential the
+  # runner carries, so invoking it here would report a confident answer about a config set
+  # nobody asked for. This is a CONFIGURATION fault, and it surfaces as `degraded` at 0/N.
+  #
+  # BOTH variables are named because either satisfies this script, and the caller that
+  # reaches this path most often — the twice-daily scan during the window between merging
+  # the credential change and the infra apply that publishes the secret — sets only
+  # DOPPLER_TOKEN_MAP. Naming only the other would point the operator at a variable their
+  # workflow no longer sets.
+  {
+    echo "ERROR: neither DOPPLER_TOKEN_MAP nor DOPPLER_TOKEN is set and non-empty —"
+    echo "       no Doppler credential to scan with."
+    echo "       Refusing to invoke the Doppler CLI without one: it treats an empty value as"
+    echo "       unset and would silently bind whatever ambient credential this runner carries."
+    echo "       0 configs read, so coverage is 'degraded' against the declared floor of ${CONFIGS_FLOOR}."
+    echo "       If this is the fan-out scan, DOPPLER_TOKEN_MAP comes from the Actions secret"
+    echo "       DOPPLER_TOKEN_DRIFT_MAP, published by the infra apply."
+  } >&2
+  publish_verdict || true
+  exit 2
+fi
+
+# ── WHICH CONFIGS THIS RUN COVERS ───────────────────────────────────────────
+# Never a list hardcoded HERE. A hardcoded list is exactly how CF_API_TOKEN_AUDIT was
+# missed during the incident: it lived only in the dev* configs, which the audit sweep
+# never looked at. Where the list comes from instead differs by mode, and the difference
+# is the substance of #7234 — see each branch.
+#
+# In BOTH modes the credential is delivered as an ENV PREFIX, never as `--token <value>`
+# on argv: /proc/<pid>/cmdline is world-readable and /proc/<pid>/environ is 0400. That
+# defends against a different-UID local observer, NOT against a compromised runner where
+# every step shares one UID — stated accurately rather than overstated.
+if [[ "$CRED_MODE" == "map" ]]; then
+  # MAP MODE — the config list is the map's KEYS, and Doppler is never asked to enumerate.
+  #
+  # That is not an optimisation, it is the whole correction #7234 makes: enumerating the
+  # project is a capability NO credential in this repository has. A config-scoped token
+  # answers `doppler configs` with a list SILENTLY SCOPED TO ITSELF (one entry,
+  # `success: true`, no error), so under the old shape the denominator narrowed in lockstep
+  # with the numerator and `13/13` printed through every possible narrowing. The map's keys
+  # come from the committed inventory via Terraform's `for_each`, so the list is fixed
+  # before the run starts and cannot be shrunk by a narrowed credential.
+  mapfile -t CONFIGS < <(printf '%s\n' "${!CRED_FOR[@]}" | LC_ALL=C sort)
+else
+  # SINGLE MODE — unchanged.
+  #
+  # `2>/dev/null` is deliberately GONE from the enumeration. A non-empty credential that
+  # enumerates nothing must be loud, and its stderr — the one line that says whether the
+  # credential was rejected, expired, or merely scoped to nothing — was being swallowed.
+  mapfile -t CONFIGS < <(DOPPLER_TOKEN="$_cred_single" doppler configs -p "$PROJECT" --json |
+    python3 -c 'import json,sys; [print(c["name"]) for c in json.load(sys.stdin)]' 2>/dev/null)
+  if [[ ${#CONFIGS[@]} -eq 0 ]]; then
+    echo "ERROR: could not enumerate Doppler configs for project '$PROJECT'" >&2
+    publish_verdict || true
+    exit 2
+  fi
+  # EVERY enumerated config maps to the ONE credential. This is today's behaviour exactly,
+  # and it is deliberately NOT "exactly one config".
+  #
+  # It is tempting to assume a single credential implies a single config — a config-scoped
+  # service token does enumerate exactly itself. But the credential class is not fixed:
+  # `DOPPLER_TOKEN_PRD` is prd-ROOT scoped, and the whole fan-out this detector performs —
+  # enumerate N, read N — is what the five legacy call sites and this suite's multi-config
+  # fixtures exercise. Refusing N > 1 here would convert the detector's core behaviour into
+  # an error on its own tests.
+  #
+  # What single mode gives up is the per-config binding assertion: one credential cannot be
+  # wrong about which config it is bound to, so `-c "$cfg"` is a scoping instruction here
+  # rather than an assertion. That is why the fan-out scan uses the map instead.
+  for _c in "${CONFIGS[@]}"; do CRED_FOR["$_c"]="$_cred_single"; done
+  unset _c
+fi
+unset _cred_single _cred_map_raw
 
 # Enumerate token-shaped keys the same way — never a fixed list.
 #
@@ -505,6 +822,26 @@ fi
 declare -A KEYSET=()          # API tokens:            KEY -> 1
 declare -A ACCESS_BASESET=()  # Access service tokens: BASE (no _ID/_SECRET) -> 1
 declare -A ALL_ID_KEYS=()     # every *_ACCESS_TOKEN_ID name seen anywhere in the fleet
+
+# One reused file for the name-read's stderr, not one mktemp per config: a per-call
+# mktemp+rm leaks on any signal, and the loop runs once per config. If allocation fails the
+# reads must still run — `2>` to an unwritable path would abort them — so fall back to
+# /dev/null and let the cause discrimination degrade to `identify_empty`, the honest answer
+# when the diagnostic could not be captured.
+READ_ERR_FILE=$(mktemp) || READ_ERR_FILE=/dev/null
+
+# THE script's single EXIT trap, deliberately. `trap ... EXIT` REPLACES rather than
+# appends, so the probe-header cleanup further down used to be installed second and would
+# have silently disarmed this one. Both temp files are freed here instead; `PROBE_HDR` is
+# a global assigned much later, hence the `:-` guard.
+# shellcheck disable=SC2317  # invoked by the EXIT trap below, which shellcheck cannot see
+_tmpfile_cleanup() {
+  [[ -n "${READ_ERR_FILE:-}" && "${READ_ERR_FILE:-}" != /dev/null ]] && rm -f "$READ_ERR_FILE"
+  [[ -n "${PROBE_HDR:-}" ]] && rm -f "$PROBE_HDR"
+  return 0
+}
+trap _tmpfile_cleanup EXIT
+
 for cfg in "${CONFIGS[@]}"; do
   # ONE `--only-names` read per config, reused by both families. Two calls doubled the
   # Doppler request count for no benefit (measured: 26 of 53 calls on the release
@@ -532,9 +869,85 @@ for cfg in "${CONFIGS[@]}"; do
   #
   # The config is named EXPLICITLY on every read (`-c "$cfg"`). DOPPLER_CONFIG was unset
   # above, so an implicit bind is not merely discouraged here — it has nothing to bind to.
+  # ── CONTROL C-c: this read IS the credential/config binding assertion ─────
+  # Measured 2026-08-03 (Phase 0 of #7234): a config-scoped Doppler service token ERRORS
+  # on a wrong `-c` — "This token does not have access to requested config 'X'", rc=1 —
+  # rather than silently serving whatever config it is bound to. Confirmed in both
+  # directions on root and branch configs. So `-c "$cfg"` is not decoration: pairing
+  # CRED_FOR[$cfg] with `-c "$cfg"` asserts the binding on every read, and the producible
+  # Terraform defect (`config = "prd"` in place of `config = each.key`, which mints 13
+  # distinct tokens all bound to one config) fails twelve of these reads, counts twelve
+  # configs UNREAD, and grades the run `1/13 degraded` naming them.
+  #
+  # That is why NO separate self-identification probe is made. An earlier design issued one
+  # `doppler configs` call per credential to re-derive a binding this very next call
+  # enforces — 13 extra API calls to learn what the read already tells us. The three causes
+  # that design distinguished are preserved below, from the read's own failure shape.
+  #
+  # ONE call, with stderr captured to a reused file — not a second invocation to re-read
+  # the error, which would double the round-trips and undo that argument.
+  #
+  # DO NOT DROP `-p`/`-c` FROM THESE READS. Without `-c` the token serves its bound config
+  # regardless of which config the loop believes it is on, and the assertion silently
+  # becomes a tautology.
+  # CONFIGS and CRED_FOR must agree. If they ever diverge, `${CRED_FOR[$cfg]}` expands to
+  # the EMPTY STRING (measured: bash does NOT abort on a missing key of an existing
+  # associative array under `set -u`), and an empty DOPPLER_TOKEN is an ambient-credential
+  # rebind, not a failed read — the same hazard the map validator closes one level up.
+  #
+  # NO REACHABLE PRODUCER TODAY, AND THIS COMMENT WILL NOT CLAIM ONE. In map mode CONFIGS
+  # *is* `${!CRED_FOR[@]}`; in single mode every enumerated config is assigned the one
+  # credential. So this is a floor, not a gate, and deleting it leaves the suite green —
+  # stated because the alternative is a `mutation-proven` adjective with nothing behind it.
+  # What made it worth adding: pointing CONFIGS at the inventory instead of the map's keys
+  # produced exactly this divergence, and the resulting empty-token read was
+  # indistinguishable from an honest read failure. It is here so that the NEXT edit which
+  # lets the two lists drift fails loudly instead of scanning with the runner's ambient
+  # credential.
+  if [[ -z "${CRED_FOR[$cfg]:-}" ]]; then
+    note_read_cause token_drift_missing_credential
+    echo "WARNING: config '$cfg' is counted UNREAD — no credential was mapped to it. The config list and the credential map disagree." >&2
+    FAILED_CONFIGS+=("$cfg")
+    continue
+  fi
   _names=""
-  if ! _names="$(DOPPLER_TOKEN="$DOPPLER_CRED" doppler secrets -p "$PROJECT" -c "$cfg" --only-names 2>/dev/null)"; then
-    echo "WARNING: could not read secret names for config '$cfg' — it is counted UNREAD, not scanned" >&2
+  _read_err=""
+  if ! _names="$(DOPPLER_TOKEN="${CRED_FOR[$cfg]}" doppler secrets -p "$PROJECT" -c "$cfg" --only-names 2>"$READ_ERR_FILE")"; then
+    _read_err="$(tr -d '\r' <"$READ_ERR_FILE" | head -c 400)"
+    # THREE DISTINCT CAUSES, never collapsed into one. Reporting "this credential is
+    # mis-bound" for what was actually a Doppler 5xx is the defect this script condemns
+    # elsewhere in its own comments; each cause carries its own annotation so the
+    # operator's remedy differs. All three count the config UNREAD, which is what gives
+    # them a channel: it depresses `configs` below the floor, so the coverage issue files
+    # and the workflow's close arm cannot fire.
+    # THE CLI IS NOT VERSION-PINNED, AND THIS MATCH IS THE ONLY THING THAT DEPENDS ON THAT.
+    # Measured 2026-08-04 against the pinned action SHA: `DopplerHQ/cli-action` declares NO
+    # inputs at all (its `action.yml` at 5351693 has no `inputs:` block), and on Linux it
+    # runs `https://cli.doppler.com/install.sh --debug --no-package-manager --install-path
+    # <dir>`, which installs the LATEST CLI. So "add a `version:` input" is not a fix that
+    # exists here — an unknown input is silently ignored by Actions, which would have bought
+    # a false pin rather than a real one.
+    #
+    # WHAT ACTUALLY RIDES ON THE VERSION, WHICH IS LESS THAN IT LOOKS. The CONTROL is that a
+    # config-scoped token's read FAILS on a wrong `-c` — that is server-side, and a failed
+    # read appends to FAILED_CONFIGS, counts the config UNREAD and depresses coverage no
+    # matter what the CLI prints. Only the CAUSE LABEL below depends on the message string.
+    # If Doppler reword it, a mis-binding degrades to `token_drift_identify_unreachable`:
+    # the operator gets a less specific remedy, the gate still fires, and coverage still
+    # goes `degraded`. That is a fail-SAFE degradation, so the un-pinned CLI is a
+    # diagnostic-quality risk rather than a correctness one — stated because the earlier
+    # framing ("the whole -c-errors control rests on a v3.75.3 measurement") implied the
+    # control itself would silently stop working, and it would not.
+    if [[ "$_read_err" == *"does not have access to requested config"* ]]; then
+      note_read_cause token_drift_config_binding_mismatch
+      echo "WARNING: config '$cfg' is counted UNREAD. Its credential is bound to a DIFFERENT config, so the minted token set and the map keys disagree — check that doppler_service_token.token_drift sets 'config = each.key' and not a string literal." >&2
+    elif [[ -z "$_read_err" ]]; then
+      note_read_cause token_drift_identify_empty
+      echo "WARNING: config '$cfg' is counted UNREAD, and this run cannot say why." >&2
+    else
+      note_read_cause token_drift_identify_unreachable
+      echo "WARNING: config '$cfg' is counted UNREAD, not scanned — this is a read FAILURE, not a statement about the credential's binding." >&2
+    fi
     FAILED_CONFIGS+=("$cfg")
     continue
   fi
@@ -565,8 +978,18 @@ done
 # Sorted, because `config_names` is a published contract field and two runs that read the
 # same set must render it identically — a consumer diffing the list should see a change
 # only when the SET changed, never when Doppler's listing order did.
+#
+# ── CONTROL C-d: THE `-u` ───────────────────────────────────────────────────
+# `configs` — the number the whole coverage ladder grades — is this array's LENGTH, so a
+# duplicate in it inflates coverage directly. The producer is the enumeration: in map mode
+# the keys of a JSON object are unique by construction, but in single mode the list is
+# whatever `doppler configs` returned, and nothing downstream re-checks it. A duplicate
+# there would length-2 this array for one config actually read.
+#
+# Mutation-proven by the "a duplicate in the enumeration must not inflate configs" case:
+# removing `-u` makes a two-entry listing of one config report 2. Do not "simplify" it.
 if (( ${#CONFIG_NAMES[@]} > 0 )); then
-  mapfile -t CONFIG_NAMES < <(printf '%s\n' "${CONFIG_NAMES[@]}" | sort)
+  mapfile -t CONFIG_NAMES < <(printf '%s\n' "${CONFIG_NAMES[@]}" | sort -u)
 fi
 
 # ── NON-VACUITY GATE ────────────────────────────────────────────────────────
@@ -709,9 +1132,60 @@ declare -A ACC_SEC_VALS=()   # "<base>\x1f<cfg>" -> client secret
 declare -A ACCESS_HOST_OF=() # base -> hostname ('' = no mapping configured)
 ACCESS_BASES=()              # bases that are genuinely Cloudflare Access pairs, sorted
 
+# ── VALUE READS: RATE-LIMIT SIGNAL, AND THE PART DELIBERATELY LEFT ALONE ──────────────
+# These three `doppler secrets get` calls used to end in a bare `2>/dev/null` with the exit
+# status discarded entirely: `val=$(… 2>/dev/null)` followed by `[[ -z "$val" ]] && continue`.
+# Every failure mode collapsed into "empty", so a THROTTLED read was indistinguishable from a
+# key that simply does not exist in that config — and the run went on to grade the fleet over
+# a value set with holes in it, reporting a clean bill of health for values it never read.
+#
+# WHY THAT GOT SHARPER AT THIS SHAPE. The value-read loop is key-set x config-set, so the
+# #7234 fan-out took the per-run call volume from ~16 to ~220. Doppler's free tier caps
+# secrets reads at 120/min PER TOKEN — and this is an argument FOR the map that the ADR does
+# not make: the map divides those ~220 calls across 13 config-scoped tokens (~17 each), where
+# one project-scoped credential would have taken all ~220 against a single 120/min budget.
+# The shape that was adopted for binding reasons also happens to be the one that stays under
+# the quota.
+#
+# WHAT IS CLASSIFIED HERE, AND WHAT IS NOT. Only the throttle signature is claimed:
+# a non-zero read whose stderr names a 429 / rate limit is counted and annotated. Everything
+# else keeps EXACTLY today's behaviour — silent skip — because the distinguishing question
+# ("what does this CLI print when a key is genuinely absent from one config?") was NOT
+# measured in this change, and key-absent-in-this-config is the COMMON case in a key-set x
+# config-set loop: the key set is the UNION across configs, so most pairs are legitimately
+# empty. A classifier guessing that message shape would either alarm on ~200 normal reads a
+# run or silently swallow the errors it was added to surface. Narrow and measured beats broad
+# and inferred; the remaining ambiguity is named rather than papered over.
+# REUSES `READ_ERR_FILE`, and does NOT allocate a second temp file. Two reasons, both
+# already written down in this script: the EXIT trap installed above is THE script's single
+# trap (`trap … EXIT` REPLACES rather than appends, so a second one here would silently
+# disarm the first and leak the file it owns — ADR-129 / lint-trap-tempfile-ownership rule
+# (c)), and the name-listing loop that owns this file has fully finished before any value
+# read starts, so there is no overlap to race on.
+#
+# read_secret_value <cfg> <key> — sets REPLY to the value, or to empty on any failure.
+# Deliberately NOT called as `$( )`: command substitution runs a SUBSHELL, so
+# `note_read_cause`'s increment would be discarded — the exact defect this file records
+# against its own memoised probe helpers.
+read_secret_value() {
+  local _cfg="$1" _key="$2" _rc=0 _err=""
+  REPLY=""
+  REPLY="$(DOPPLER_TOKEN="${CRED_FOR[$_cfg]}" doppler secrets get "$_key" -p "$PROJECT" -c "$_cfg" --plain 2>"$READ_ERR_FILE")" || _rc=$?
+  if (( _rc != 0 )); then
+    REPLY=""
+    _err="$(tr -d '\r' <"$READ_ERR_FILE" | head -c 400)"
+    if is_rate_limited "$_err"; then
+      note_read_cause token_drift_value_read_rate_limited
+      echo "WARNING: reading '$_key' for config '$_cfg' was RATE LIMITED by Doppler; this value is ungraded for this run. Doppler: ${_err}" >&2
+    fi
+  fi
+  return 0
+}
+
 for key in $(printf '%s\n' "${!KEYSET[@]}" | sort); do
   for cfg in ${CONFIG_NAMES[@]+"${CONFIG_NAMES[@]}"}; do
-    val=$(DOPPLER_TOKEN="$DOPPLER_CRED" doppler secrets get "$key" -p "$PROJECT" -c "$cfg" --plain 2>/dev/null)
+    read_secret_value "$cfg" "$key"
+    val="$REPLY"
     [[ -z "$val" ]] && continue
     API_VALS["${key}"$'\x1f'"${cfg}"]="$val"
     mask_value "$val"
@@ -738,8 +1212,8 @@ for base in $(printf '%s\n' "${!ACCESS_BASESET[@]}" | sort); do
   # are never read — nothing would be done with them.
   [[ -z "${ACCESS_HOST_OF[$base]}" ]] && continue
   for cfg in ${CONFIG_NAMES[@]+"${CONFIG_NAMES[@]}"}; do
-    tid=$(DOPPLER_TOKEN="$DOPPLER_CRED" doppler secrets get "${base}_ID" -p "$PROJECT" -c "$cfg" --plain 2>/dev/null)
-    tsec=$(DOPPLER_TOKEN="$DOPPLER_CRED" doppler secrets get "${base}_SECRET" -p "$PROJECT" -c "$cfg" --plain 2>/dev/null)
+    read_secret_value "$cfg" "${base}_ID";     tid="$REPLY"
+    read_secret_value "$cfg" "${base}_SECRET"; tsec="$REPLY"
     [[ -n "$tid" ]] && { ACC_ID_VALS["${base}"$'\x1f'"${cfg}"]="$tid"; mask_value "$tid"; }
     [[ -n "$tsec" ]] && { ACC_SEC_VALS["${base}"$'\x1f'"${cfg}"]="$tsec"; mask_value "$tsec"; }
   done
@@ -785,11 +1259,10 @@ PROBE_SETUP_FAILED=''         # 1 = the probe could not be SET UP; not a network
 PROBE_HDR=""
 # ONE owning trap for the whole run (ADR-129 / lint-trap-tempfile-ownership rule (c)).
 # One reused file rather than one per probe: a per-call mktemp+rm leaks on any signal
-# between allocation and cleanup, and there is no other trap in this script to hang the
-# cleanup off.
-# shellcheck disable=SC2317  # invoked by the EXIT trap below, which shellcheck cannot see
-_probe_hdr_cleanup() { [[ -n "$PROBE_HDR" ]] && rm -f "$PROBE_HDR"; }
-trap _probe_hdr_cleanup EXIT
+# between allocation and cleanup. The cleanup hangs off the SINGLE EXIT trap installed
+# near the config loop (`_tmpfile_cleanup`), which frees this file too — installing a
+# second `trap ... EXIT` here would REPLACE that one rather than add to it, silently
+# disarming the read-error file's cleanup.
 
 access_probe() {
   local host="$1" id="${2:-}" secret="${3:-}"

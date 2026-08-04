@@ -2348,7 +2348,16 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
    Navigate to the repository root directory, then run `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged`.
 
-This detects `[gone]` branches (where the remote was deleted after merge), removes their worktrees, archives spec directories, deletes local branches, and pulls latest main so the next worktree branches from the current state.
+This detects `[gone]` branches (where the remote was deleted after merge), removes their worktrees, deletes local branches, and pulls latest main so the next worktree branches from the current state.
+
+**It does NOT durably archive spec directories — do not defer archival to it.** `cleanup-merged` carries an archive step, but its own header scopes it: *"Backward-compat for legacy pre-#2815 worktrees that created specs at the bare root. New layout commits the spec inside the worktree (git history is the canonical archive); the `[[ -d ]]` guard silently skips when the bare-root dir does not exist."* Two independent reasons it cannot durably archive a modern spec dir:
+
+1. **It usually does not run at all.** The step guards on `[[ -d "$GIT_ROOT/knowledge-base/project/specs/<branch>" ]]` against the BARE ROOT's on-disk files, and it executes *before* the "Updated main to latest" step. On a just-merged branch the bare root is therefore still at the pre-merge commit, where the spec dir does not exist — it arrives only with the merge being cleaned up. Guard false, silent skip. Measured on PR #7240: the dir is ABSENT at `5133e3cb` (main at archival time) and PRESENT at `933635603` (the merge commit).
+2. **Even when it runs it commits nothing.** It is a plain `mv` of the bare root's working files, so it produces no commit and leaves the spec dir tracked at its LIVE path on `main`.
+
+The archives that actually exist under `specs/archive/` were committed by **compound's** automatic consolidation (`git mv` + commit on the feature branch), which is the only mechanism that persists.
+
+The practical consequence: **compound is the last point at which archival can happen.** If compound's consolidation is skipped or deferred — a legitimate choice when Phase 6 still needs `specs/<branch>/decision-challenges.md` at its live path to render Model Dissents — then archival does not happen at all, and completing it later costs a follow-up PR. Decide deliberately; do not assume a post-merge step will collect it. **Why:** PR #7240 deferred compound's archival so Phase 6 step 2.5 could read `decision-challenges.md`, on the strength of this sentence claiming `cleanup-merged` would archive post-merge. It did not, and the spec dir shipped unarchived.
 
 **If working from a worktree:** Navigate to the main repo root first, then run cleanup.
 

@@ -1,6 +1,6 @@
 # ADR-164 — A project-scoped Doppler service account reads the fleet; the coverage floor is declared, not derived
 
-- **Status:** Accepted
+- **Status:** Accepted — **Decision 1 superseded by [ADR-168](./ADR-168-per-config-read-tokens-for-the-token-drift-scan.md) (2026-08-03); Decision 2 amended in one bullet, otherwise in force**
 - **Date:** 2026-08-03
 - **PR:** #7162
 - **Issue:** #7159 (the token-drift scan reads one Doppler config and calls the result healthy)
@@ -96,6 +96,26 @@ Two decisions, one change.
 
 ### 1. The scan runs as a project-scoped service account
 
+> **SUPERSEDED 2026-08-03 by [ADR-168](./ADR-168-per-config-read-tokens-for-the-token-drift-scan.md).
+> DO NOT BUILD ON THIS DECISION — ITS CENTRAL PREMISE WAS NEVER MEASURED AND IS FALSE.**
+> Everything below rests on the inference that a project-scoped `doppler_service_account`
+> with a `viewer` project membership can enumerate and read every config. #7234 measured
+> that credential against live Doppler: it could do **neither**. `doppler configs -p soleur
+> --json` returned `null`, and reading `prd` returned *"Could not find requested config
+> 'prd'"*. The scan therefore read **nothing**, not thirteen configs.
+>
+> ADR-168 replaces this credential with 13 config-scoped `doppler_service_token`s under one
+> `for_each` over the committed inventory, published as a single Actions secret
+> `DOPPLER_TOKEN_DRIFT_MAP`. The blast-radius analysis, the `viewer` role probe and the
+> `workplace_permissions = []` reasoning below are retained as the record of what was
+> decided and why — they are **not** a description of what runs today, and the whole
+> `doppler_service_account` / `doppler_service_account_token` /
+> `doppler_project_member_service_account` triple has been retired from the infra root.
+>
+> Marked inline, alongside Decision 2's amendment, because the status line at the top of a
+> 270-line ADR is not where a reader lands when they arrive from a code comment or a search
+> hit — and this section reads as current, load-bearing design.
+
 **The #7159 premise is falsified.** The issue's three-row option table rested on the assertion that
 *"there is no project-scoped read token to mint."* That is **true of `doppler_service_token`**,
 which is config-scoped by construction and is the reason the config-scoped shapes were all dead
@@ -166,12 +186,20 @@ gate and the report are split:
 - **`configs` counts configs whose read SUCCEEDED**, not configs enumerated. A role that can list
   but not read values would otherwise list 13, scan none, and satisfy the floor while measuring
   nothing.
-- **The committed inventory reports, and gates NOTHING.**
-  `apps/web-platform/infra/doppler-config-inventory.txt` supplies only `coverage_ratio`,
+- **The committed inventory reports, and gates no verdict THRESHOLD.**
+  `apps/web-platform/infra/doppler-config-inventory.txt` supplies `coverage_ratio`,
   `configs_unread` and `inventory_age_days`. A short, long or stale inventory changes the printed
-  ratio and the unread list and changes **no state**: no arm starts or stops firing, no issue opens
-  or closes. A denominator that gates is a denominator that can derive the healthy state and close
-  the channel.
+  ratio and the unread list and moves **no verdict state**: no arm starts or stops firing on
+  account of it, no issue opens or closes. A denominator that gates is a denominator that can
+  derive the healthy state and close the channel.
+  > **AMENDED 2026-08-03 by [ADR-168](./ADR-168-per-config-read-tokens-for-the-token-drift-scan.md).**
+  > This bullet originally read *"gates NOTHING … changes no state"*, and that is now **false**.
+  > ADR-168 derives the per-config read tokens' `for_each` from this file, so the name lines
+  > determine the credential's REACH — a shortened inventory mints fewer tokens and destroys the
+  > ones it drops. What survives is the narrower claim above: it gates no verdict *threshold*,
+  > because the floor is a literal declared independently in the workflow. The rest of this
+  > Decision 2 stands. Amended in place rather than left standing behind a pointer, because a
+  > reader deleting a line from that file would have trusted this sentence.
 - **A CI assertion pins the floor equal to the inventory's name count**, in
   `plugins/soleur/test/token-drift-workflow-causes.test.sh`, alongside a run-time re-assertion of
   `configs_floor >= 13` that is *external* to the declaration — a number cannot catch its own
@@ -187,11 +215,29 @@ close arm. `at-floor` keeps its name rather than becoming `full` even though the
 `13/13`, because the state is defined against the declared floor and not against the project — a
 name asserting completeness would invite a future reader to gate on the inventory again.
 
-**What `degraded` concretely detects**, and it is the whole point: a role downgrade (`0/13`), a
-membership scoped to a subset of environments (`7/13`, with `configs_unread` naming the six dropped
-configs), a repoint back to a config-scoped token (`1/13`), an absent or empty credential, and a
-revoked one. Every one is a real, producible regression with a performable remedy — the property
-`multi-config` never had.
+**What `degraded` concretely detects**, and it is the whole point: an absent or empty credential,
+and a revoked one. Every one is a real, producible regression with a performable remedy — the
+property `multi-config` never had.
+
+> **AMENDED 2026-08-03 by [ADR-168](./ADR-168-per-config-read-tokens-for-the-token-drift-scan.md)
+> — THREE OF THE FIVE LISTED PRODUCERS NO LONGER EXIST.** This paragraph used to open with *"a role
+> downgrade (`0/13`), a membership scoped to a subset of environments (`7/13`, with
+> `configs_unread` naming the six dropped configs), a repoint back to a config-scoped token
+> (`1/13`)"*. All three describe ways to narrow a **project-scoped service account**, and there is
+> no longer one: there is no role and no environment-scoped membership to downgrade, and "a repoint
+> back to a config-scoped token" is the shape that now ships. A list of producers that cannot occur
+> reads as coverage the ladder does not have, which is the failure mode the paragraph's own last
+> sentence complains about in `multi-config`.
+>
+> The producers under the map shape, each real: the `DOPPLER_TOKEN_DRIFT_MAP` secret absent or
+> empty (`0/13` — this is also the shape of the merge→apply window before it is first published);
+> a map with fewer entries than the floor, which is what a shortened inventory or a destroyed token
+> instance produces; individual tokens revoked or expired, which fail their own reads and are named
+> in `configs_unread` while the rest still count; and the `config = <literal>` mis-binding, which
+> mints 13 distinct tokens all bound to one config and surfaces as `1/13` with 12 access-denied
+> reads. That last one is now caught pre-merge by C-a in
+> `plugins/soleur/test/token-drift-workflow-causes.test.sh` rather than by a scheduled run up to
+> 12 hours later.
 
 ## Consequences
 
@@ -217,8 +263,8 @@ revoked one. Every one is a real, producible regression with a performable remed
   change that alters the project's config set owns both edits — floor and inventory — in the same
   PR.
 
-- **The `13` ratchet decays silently unless BOTH pinned literals are raised together.** The
-  minimum is asserted in two independent places and they are not derived from each other:
+- **The `13` ratchet decays silently unless the pinned literals are raised together.** The
+  minimum is asserted in independent places that are not derived from each other:
 
   | Site | Literal |
   |---|---|
@@ -235,13 +281,45 @@ revoked one. Every one is a real, producible regression with a performable remed
   `DOPPLER_CONFIGS_FLOOR` to 13 to match, and pass F1, F2, F3 and the run-time assertion with **no
   test edited** — the ratchet has silently returned to its old notch. F3's inventory-equality pin
   does not catch it either, because that PR would regenerate the inventory too. The `13`s are the
-  only thing that makes a *reduction* visible in a diff, which is why raising them is a deliberate
-  edit and never an automated one.
+  only thing that makes a *reduction in the COUNT* visible in a diff, which is why raising them is
+  a deliberate edit and never an automated one.
+
+  > **AMENDED 2026-08-03 by [ADR-168](./ADR-168-per-config-read-tokens-for-the-token-drift-scan.md)
+  > — THIS BLOCK IS THE PRE-#7234 THREE-LITERAL VERSION, AND THE INVENTORY'S OWN HEADER CITES IT.**
+  > Two corrections. First, all three literals above bound a **COUNT**, and since ADR-168 the
+  > inventory's name lines are the `for_each` key set, so what matters is a **SET**: a RENAME moves
+  > no count at all, so every pin above holds while one config goes permanently unread and a token
+  > is minted for a config that does not exist. Second, the 14→13 round trip this block describes as
+  > uncaught **is now caught** — by a fourth site, `INVENTORY_REMOVALS_ACK` (assertion **F4b**) in
+  > the same test file, which asserts the inventory's name set is a SUPERSET of the same file's at
+  > the merge base. Retiring a config for real means naming it there, which is the same
+  > deliberate-edit discipline as `FLOOR_MINIMUM`.
+  >
+  > The earlier revision also leaned on the apply's destroy guard as "the only layer that fires
+  > above 13". That is withdrawn rather than softened:
+  > `destroy-guard-filter-web-platform.jq` counts planned deletes **inside** the
+  > `[ack-destroy]`-bypassable `destroy_count` sum — the same file's comments record why
+  > `host_creates` and `reboot_updates` were deliberately placed *outside* it — so a PR carrying
+  > that ack for an unrelated reason waves the token deletes through with it. ADR-168's own merge
+  > commit is exactly such a PR. The guard also has no `for_each` instance-delete case among its 40
+  > tfplan fixtures. It is defence in depth behind F4b, never the gate.
 - **An orphaned state write on the create is invisible to `terraform plan`.** The provider ships no
   data source that can enumerate service accounts or their tokens, so a lost state write leaves a
-  live project-wide credential with no Terraform record. The detector is the count-asserting
-  `terraform state list` check; the remedy is `-replace=`. This risk is **strictly larger** at this
-  shape than at a config-scoped one, because an orphan now reads the whole project.
+  live credential with no Terraform record; the remedy is `-replace=`.
+  > **CORRECTED 2026-08-03 by [ADR-168](./ADR-168-per-config-read-tokens-for-the-token-drift-scan.md).**
+  > This bullet named "the count-asserting `terraform state list` check" as the detector for that
+  > orphan. **No such check exists in this Terraform root.** `grep -rn 'terraform state list'` over
+  > `apps/web-platform/infra/` and `.github/workflows/` returns a comment in `seo-config-rules.tf`,
+  > a line in `sentry/README.md`, and two live uses in `apply-github-infra.yml` — a *different*
+  > root. The web-platform apply has none, so this risk currently has **no detector at all**, which
+  > is a materially different disclosure from "detected by a check". Tracked with the dead
+  > `-target=` legs in issue #7254, which is gated on the same state read.
+  >
+  > The severity claim is also inverted by ADR-168: the sentence said the risk was *"strictly
+  > larger at this shape than at a config-scoped one, because an orphan now reads the whole
+  > project."* The shape that shipped **is** config-scoped — 13 tokens each reaching exactly one
+  > config — so an orphan leaks one config's read access rather than the project's, while there
+  > are now 13 instances that can individually orphan instead of one.
 - **The governing control on a repository-level secret is who can merge under `.github/workflows/`.**
   `CODEOWNERS` pins that path to the operator, but no ruleset in IaC enforces CODEOWNERS review.
   Pre-existing and unchanged by this ADR — named so "repository-scoped like every sibling" is not
@@ -252,7 +330,7 @@ revoked one. Every one is a real, producible regression with a performable remed
 | Alternative | Verdict |
 |---|---|
 | **A union of two config-scoped `doppler_service_token`s** — keep the `prd_terraform` credential, add a `prd`-root one | **Rejected.** It reads 2 of 13 while carrying `prd`-root blast radius. At N=2 the union *is* `for_each` with the loop unrolled, so it takes that option's cost without its generality, and it forces a credential-iteration surface through the detector that the chosen shape does not need at all. Decisively, #7159's own "Known follow-up" warns that a 2-config scan "would go quiet while still missing the fan-out class" — which is exactly what a union's `at-floor` close arm would have done. |
-| **A `for_each` credential per config** (13 `doppler_service_token`s) | **Rejected.** 13 credentials, 13 Actions secrets, 13 `-target=` legs and a detector that loops credentials, to obtain what one project membership obtains — and every credential is an independent rotation and revocation obligation. |
+| **A `for_each` credential per config** (13 `doppler_service_token`s) | **Rejected here; ADOPTED by [ADR-168](./ADR-168-per-config-read-tokens-for-the-token-drift-scan.md) after this rejection was falsified by measurement.** The rejection read: "13 credentials, 13 Actions secrets, 13 `-target=` legs and a detector that loops credentials, to obtain what one project membership obtains — and every credential is an independent rotation and revocation obligation." Measured 2026-08-03: **one** Actions secret (`jsonencode` over the `for_each` map is tracked sensitive and key-sorted), **one** `-target=` leg (targeting a `for_each` resource expands to every instance), and the project membership obtains **nothing** — it could neither enumerate nor read. Three of the four cost claims were wrong and the premise they were weighed against was void. Only the rotation-obligation clause survives, and ADR-168 accepts it. |
 | **Reuse `DOPPLER_TOKEN_TF`** | **Rejected.** It is a workplace-scope personal token; reusing it would make the scheduled scan a consumer of the widest credential in the repo, and it is not scoped, rotatable or revocable independently of everything else that uses it. |
 | **Reuse the existing `DOPPLER_TOKEN_PRD` repo secret** | **Rejected.** Not Terraform-managed, shared by six consumers, not rotatable by `-replace=`, and config-scoped to `prd` root — so it reads 1 of 13. |
 | **A denominator that gates the state** | **Rejected.** A short inventory would derive the healthy state, fire the close arm and silence the channel — fail-open in the exact direction the design claims to guard. |
