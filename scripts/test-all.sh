@@ -463,6 +463,12 @@ if want_scripts; then
   # exists to report. Static gate over both alarm workflows — the condition is evaluated by
   # GitHub, so the YAML is the only artifact there is to test.
   run_suite "scripts/alarm-issue-filing-guard" bash scripts/alarm-issue-filing-guard.test.sh
+  # #7242 / ADR-166: no operator-facing CI message may name a cause the job did not measure.
+  # Registered HERE rather than in the lint-bot-statuses job on purpose -- that job is
+  # advisory (absent from required-checks.txt and the ruleset), and this defect has already
+  # survived two non-blocking corrections. The suite invokes the lint, so a regression above
+  # the committed .highwater reds the required `test` context.
+  run_suite "scripts/lint-diagnosis-claims" bash scripts/lint-diagnosis-claims.test.sh
   # Dogfood Grok measure/bootstrap (#6545/#6546). Explicit run_suite — scripts/dogfood/
   # is not in the auto-glob; orphan suites are the #5417 class (green CI, zero coverage).
   run_suite "scripts/dogfood/grok-gpu-bootstrap" bash scripts/dogfood/grok-gpu-bootstrap.test.sh

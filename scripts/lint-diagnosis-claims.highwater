@@ -1,0 +1,4 @@
+0  # ADR-166: operator-facing CI messages naming a cause the job did not measure.
+   # RATCHETS DOWN ONLY. Do not raise this to make a build pass -- a regression above it
+   # means a new message asserts an unmeasured cause, which is the defect (#7242) that
+   # blocked three production releases. Fix the message instead.
