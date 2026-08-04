@@ -23,7 +23,12 @@ set -euo pipefail
 # die() at 12 sites) makes it impossible to add a future FATAL without an emit. Fail-open.
 GIT_DATA_EMIT="${GIT_DATA_EMIT:-/usr/local/bin/git-data-emit}"
 log() {
-  echo "[git-data-bootstrap] $*"
+  # (#7227) fd 2, NOT stdout. The parent runcmd redirects this script's STDERR into the
+  # per-stage scoped detail file, so on stdout every one of the FATAL sentences below was
+  # invisible to on_err and the bootstrap stage's fatal shipped a detail that knew nothing
+  # about the invariant that actually failed. Comments and content in this file are
+  # render-stripped (ADR-152), so this costs zero stored user_data bytes.
+  echo "[git-data-bootstrap] $*" >&2
   case "$*" in
     FATAL:*) [ -x "$GIT_DATA_EMIT" ] && "$GIT_DATA_EMIT" "git-data bootstrap FATAL" bootstrap fatal "$*" || true ;;
   esac

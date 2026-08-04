@@ -45,6 +45,13 @@ on:
       - ".github/workflows/git-data-rung2-rehearsal.yml"
       - ".github/workflows/apply-web-platform-infra.yml"
       - ".github/workflows/scheduled-terraform-drift.yml"
+      # (#7227) The evidence-capture script, for the same reason as the three workflows above:
+      # git-data-rung2-rehearsal.test.sh arm 10 now compares its `--host-name` constraint
+      # against the rehearsal prefix those workflows pin, and test-git-data-rung2-evidence-
+      # capture.sh asserts its refusal behaviour. Without this path a PR that edits ONLY the
+      # script -- including one that relaxes the constraint keeping this reader off the
+      # production host -- skips both guards that watch it.
+      - "scripts/followthroughs/git-data-rung2-evidence-capture.sh"
       # (#7203 review) inngest-bootstrap-mirror-only.test.sh asserts ~30 properties OF
       # build-inngest-bootstrap-image.yml -- the mirror_only gating, the belt posture on both
       # trigger paths, the bridge-outcome branch, and the behavioural degraded() contract.

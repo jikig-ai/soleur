@@ -70,9 +70,23 @@ done
 
 # --- Predicates (each takes a file, echoes "1" if the property holds, else "0") ---
 
-# isLuks idempotency guard present.
+# The luks_open heredoc, COMMENT-STRIPPED. Defined here rather than beside its first #7204
+# caller further down because A1 and the B18 family both read it, and a shell function must
+# be defined above the line that calls it.
+_luks_slice() {
+  awk '/^[[:space:]]*STAGE=luks_open[[:space:]]*$/{f=1} f&&/^[[:space:]]*LUKSEOF[[:space:]]*$/{f=0} f' "$1" \
+    | grep -vE '^[[:space:]]*#' || true
+}
+
+# isLuks probe present. READS THE COMMENT-STRIPPED SLICE, NOT THE RAW FILE. As a whole-file
+# grep this matched the prose explaining the guard exactly as readily as the guard itself, so
+# deleting the real probe left it green (cq-assert-anchor-not-bare-token; the #7204 session's
+# "four guards were satisfied by the comment I wrote to explain them"). #7216's own comment
+# block names the pre-fix invocation literally, which is precisely the text that would have
+# made this vacuous.
 p_isluks() {
-  if grep -Eq 'cryptsetup[[:space:]]+isLuks' "$1"; then echo 1; else echo 0; fi
+  # Herestring, not a pipe — see the SIGPIPE note on p_isluks_rc_branch below.
+  if grep -Eq 'cryptsetup[[:space:]]+isLuks' <<<"$(_luks_slice "$1")"; then echo 1; else echo 0; fi
 }
 
 # Every luksFormat/luksOpen line pipes the key via `--key-file -` (stdin) AND carries
@@ -494,7 +508,12 @@ p_trap_rc_guard() {
   # And `rc=$?` must be the FIRST statement in each handler: `$?` is clobbered by any command
   # before it, so a guard placed after the emit reads the emit's status, not the failure's.
   n_first=$(grep -A1 -E '^[[:space:]]*[a-z_]+\(\) \{$' "$1" | grep -Ec '^[[:space:]]*rc=\$\?$' || true)
-  if [ "$n_trap" -ge 3 ] && [ "$n_guard" -eq "$n_trap" ] \
+  # FLOOR 3 -> 2 (#7227): bootstrap_err was deleted. It was byte-identical to on_err but for
+  # a title $STAGE already supplies, and it was never disarmed — so a gc_timer failure emitted
+  # "git-data bootstrap FAILED". Two arming sites remain: on_err (parent) and luks_err (the
+  # doppler child). The floor is non-vacuity only; the PROPERTY is the three equalities below,
+  # which are unchanged and still bind every site that exists.
+  if [ "$n_trap" -ge 2 ] && [ "$n_guard" -eq "$n_trap" ] \
      && [ "$n_bind" -eq "$n_trap" ] && [ "$n_first" -ge "$n_trap" ]; then echo 1; else echo 0; fi
 }
 
@@ -863,8 +882,11 @@ assert_mutation "A25 set-e-before-checksum" p_set_e_before_checksum "$CLOUD_INIT
   's;^([[:space:]]*)set -e$;\1set +e;'
 # Mutation: TOLERATE the checksum. Ordering alone is not the property — `set -e` before a
 # `|| true`-suffixed command aborts nothing, and this mutation survived the first battery.
+# RE-ANCHORED (#7227): the checksum line now carries `2>>"$GIT_DATA_RUNCMD_DETAIL"`, so the
+# old `$`-anchored form matched nothing and reported MUTATION DID NOT LAND — an arm that
+# certifies nothing, which is exactly what assert_mutation's landing guard exists to surface.
 assert_mutation "A25 checksum-not-tolerated" p_set_e_before_checksum "$CLOUD_INIT" \
-  's;(sha256sum -c -)$;\1 || true;'
+  's;(sha256sum -c -.*)$;\1 || true;'
 
 # A26: no bare terraform directive (AC4).
 assert_holds    "A26 no-bare-directive" p_no_bare_directive "$CLOUD_INIT"
@@ -883,10 +905,16 @@ assert_mutation "A27 plain-script-delivery" p_plain_script_delivery "$CLOUD_INIT
 #
 # `_devalue` (git-data-emit) is the passphrase's ONLY defence: it is 40 chars of
 # alphanumeric and matches no pattern rule in the redactor chain. It is armed only when
-# GIT_DATA_LUKS_KEY is in the emitter's environment — which is true for `luks_err` and the
-# bootstrap trap (both children of `doppler run`) and FALSE for the parent `on_err` and
-# `bootstrap_err`, which run outside that boundary. All four traps ship the SAME
-# /var/log/cloud-init-output.log as their detail.
+# GIT_DATA_LUKS_KEY is in the emitter's environment — true for `luks_err` (a child of
+# `doppler run`) and false for the parent `on_err`, which runs outside that boundary.
+#
+# UPDATED (#7227): this paragraph used to say "all four traps ship the SAME
+# /var/log/cloud-init-output.log as their detail". That is now false in both halves. There are
+# TWO traps, not four — `bootstrap_err` was deleted once `on_err` derived its title from
+# $STAGE — and NO trap ships that log as its detail: #7204 moved `luks_err` off it and #7227
+# moved `on_err` onto a seeded, per-stage-truncated scoped file. The argument this paragraph
+# makes still holds and is the one B19 mechanizes 400 lines below: the invariant is not the
+# redactor, it is that the passphrase never reaches the log in the first place.
 #
 # So the invariant that keeps this safe is not the redactor — it is that the passphrase
 # never reaches that log in the first place. Audited: every use is either `[ -n "$VAR" ]`
@@ -1063,10 +1091,7 @@ assert_mutation "A2 no shell source (gc-failure.service)" p_env_file_not_sourced
 # The classified feature allowlist R1 machine-reads. B16b derives its denied set from this
 # same file so the static and runtime layers cannot disagree about what "module-dep" means.
 FIX_FILE="${DIR}/git-data-birth-fs-fingerprint.txt"
-_luks_slice() {
-  awk '/^[[:space:]]*STAGE=luks_open[[:space:]]*$/{f=1} f&&/^[[:space:]]*LUKSEOF[[:space:]]*$/{f=0} f' "$1" \
-    | grep -vE '^[[:space:]]*#' || true
-}
+# `_luks_slice` is defined once, up beside p_isluks — A1 and B18 call it before this point.
 _mkfs_lines() { _luks_slice "$1" | grep -E '^[[:space:]]*mkfs\.ext4[[:space:]]' || true; }
 
 # B16a — EXACTLY ONE mkfs invocation, inside the luks_open heredoc, not on a comment line.
@@ -1186,7 +1211,247 @@ assert_mutation "B17r mount-no-raw-device (by-id fallback)" p_mount_no_raw_devic
 assert_mutation "B17r mount-no-raw-device (\$DEV fallback)" p_mount_no_raw_device "$CLOUD_INIT" \
   's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 || mount "$DEV" /mnt/git-data-luks#'
 
+# --- B18 (#7216): the isLuks probe BRANCHES ON ITS EXIT CODE; rc 1 is the ONLY format ------
+#
+# `if ! cryptsetup isLuks "$DEV"` reads EVERY non-zero exit as "not yet LUKS" and answers with
+# luksFormat. Measured against the pinned image (cryptsetup 2.7.0): no-header = 1, ABSENT
+# device = 4, not-on-PATH = 127. So a probe that could not RUN was indistinguishable from one
+# that ran and said no, and the destructive branch got taken because the measurement was
+# MISSING rather than because the answer was negative. `runcmd` is once-per-instance, so the
+# reachable trigger is a host REPLACEMENT (this template carries no `ignore_changes
+# = [user_data]`) against a volume that persists and re-attaches already-LUKS — which
+# luksFormat answers by overwriting the header and every key slot. Unrecoverable: the old
+# passphrase opens nothing.
+#
+# SIX predicates, because the shipped fix has six separable ways to regress:
+#   (a) the `if !` truthiness form does not come back
+#   (b) rc is captured with `|| _isluks_rc=$?`, NEVER the naked `; _isluks_rc=$?` the issue
+#       proposed — this stage is under `set -euo pipefail`, where the naked form aborts
+#       BEFORE the assignment on rc=1, so a blank volume at birth could never be formatted
+#       at all. (The sshd_config stage's naked capture is legal only because it sits ABOVE
+#       that stage's `set -e`, ~30 lines up. Mirror the discipline, not the two lines.)
+#   (c) the branch is a `case` on the captured rc
+#   (d) EXACTLY ONE arm reaches luksFormat, anchored on `cryptsetup[[:space:]]+luksFormat`
+#       rather than the bare token so no arm's prose can satisfy it
+#   (e) the catch-all `*)` reaches `exit 1` — refusing to format beats guessing
+#   (f) THE PROBE LINE CARRIES NO `2>>`. This is the one that matters. A failed redirection
+#       on a simple command means the command NEVER RUNS and the shell reports rc 1:
+#         $ ( set -euo pipefail; _rc=0; /bin/true 2>>/proc/sys/nonexistent/x || _rc=$?; \
+#             echo "rc=$_rc" )
+#         rc=1
+#       On an unwritable or full /run — a state this very stage's fallbacks enumerate — a
+#       `2>>` on the probe FORGES the single rc that means "format it" while the probe never
+#       executed, reconstructing #7216 inside the patch that closes it. Stderr is therefore
+#       captured through a command SUBSTITUTION, with the append a separately tolerated
+#       statement that cannot influence the measured rc.
+# EVERY MATCH BELOW USES A HERESTRING, NEVER `producer | grep -q`. Under this suite's
+# `set -uo pipefail`, `grep -q` exits on first match, the upstream producer takes SIGPIPE, the
+# pipeline returns 141, and an `if` on it takes the ELSE branch — so a guard written that way
+# reports "property holds" on a file that VIOLATES it, and its mutation arm flakes. Measured
+# on this template: 31 of 40 runs returned 141 on a pattern that plainly matches. A herestring
+# has no pipe and no producer to kill.
+p_isluks_rc_branch() {
+  local slice n n_one n_star n_fmt n_blk
+  slice="$(_luks_slice "$1")"
+  # (a) the truthiness form is gone
+  if grep -Eq 'if[[:space:]]+![[:space:]]*cryptsetup[[:space:]]+isLuks' <<<"$slice"; then echo 0; return; fi
+  # (b) errexit-safe rc capture
+  if ! grep -Eq '\|\|[[:space:]]*_isluks_rc=\$\?' <<<"$slice"; then echo 0; return; fi
+  # (c) branch on the captured rc
+  if ! grep -Eq 'case[[:space:]]+"\$_isluks_rc"[[:space:]]+in' <<<"$slice"; then echo 0; return; fi
+  # (d) exactly one luksFormat…
+  n=$(grep -cE 'cryptsetup[[:space:]]+luksFormat' <<<"$slice" || true)
+  if [ "${n:-0}" -ne 1 ]; then echo 0; return; fi
+  # (e) the catch-all refuses
+  if ! grep -Eq '^[[:space:]]*\*\).*exit[[:space:]]+1' <<<"$slice"; then echo 0; return; fi
+  # (f) the probe carries no `2>>` (a failed redirect forges rc=1 without running it).
+  # Captured, not piped — a `producer | grep -q` here would fail OPEN via SIGPIPE.
+  _probe="$(grep -E 'cryptsetup[[:space:]]+isLuks' <<<"$slice" || true)"
+  if [ -z "$_probe" ]; then echo 0; return; fi
+  if grep -q '2>>' <<<"$_probe"; then echo 0; return; fi
+  # (g) …AND THAT ONE luksFormat IS INSIDE THE `1)` ARM — asserted by MEMBERSHIP of the arm's
+  # extracted body, not by line-number position. (d) is a COUNT, so alone it permits the format
+  # on `*)`, the unknown-status arm. A position check is barely stronger: swapping the `0)`/`1)`
+  # labels keeps the format between the two anchors while re-keying it onto rc 0 — i.e. onto
+  # ALREADY-LUKS. Extract the arm, then ask what is in it.
+  _arm1="$(awk '/^[[:space:]]*1\)/{f=1} f{print} f&&/;;[[:space:]]*$/{exit}' <<<"$slice")"
+  if [ -z "$_arm1" ]; then echo 0; return; fi
+  if ! grep -Eq 'cryptsetup[[:space:]]+luksFormat' <<<"$_arm1"; then echo 0; return; fi
+  # (h) THE POLARITY, NOT THE TOKEN. The arm must REFUSE when blkid still reports crypto_LUKS.
+  # Asserting that the string `crypto_LUKS` merely occurs is satisfied by the inverted guard —
+  # measured: flipping `!=` to `==` bricks a blank volume AND formats the damaged-header
+  # populated store, with this suite fully green. So pin the comparison operator and the `||`
+  # that makes it a refusal, and require blkid's own rc to be consulted in the same arm
+  # ("could not measure" must never read as "blank").
+  if ! grep -Eq '"\$_blk_type"[[:space:]]*!=[[:space:]]*"crypto_LUKS"[[:space:]]*\][[:space:]]*\|\|' <<<"$_arm1"; then echo 0; return; fi
+  if ! grep -Eq '_blk_rc' <<<"$_arm1"; then echo 0; return; fi
+  # (i) THE COMPARISON, NOT THE CALL. `getsize64` occurring somewhere proves nothing: measured,
+  # relaxing `-gt 0` to `-ge 0` makes the loop break on the first iteration regardless of
+  # capacity — the exact "presence, not usability" defect this conjunct exists for, and it feeds
+  # (h) because a zero-length device also returns isLuks rc=1. Assert `-b`, the capacity call and
+  # the `> 0` test on ONE line, plus the literal bound so the wait cannot become unbounded.
+  _waitln="$(grep -E 'getsize64' <<<"$slice" || true)"
+  if [ -z "$_waitln" ]; then echo 0; return; fi
+  if ! grep -Eq '\[ -b "\$DEV" \]' <<<"$_waitln"; then echo 0; return; fi
+  if ! grep -Eq -- '-gt[[:space:]]+0' <<<"$_waitln"; then echo 0; return; fi
+  if ! grep -Eq '_i"?[[:space:]]*-lt[[:space:]]*30' <<<"$slice"; then echo 0; return; fi
+  echo 1
+}
+
+# B18p — THE PIPE THAT CARRIES B20's WRITER. B20 pins that git-data-bootstrap.sh's log() writes
+# to fd 2; that is worth nothing unless the parent actually ROUTES fd 2 into the scoped detail
+# file. Deleting the redirect on the bootstrap `doppler run` returns the boot to the pre-#7227
+# state — 20 FATAL sentences written to a stream nothing reads — and, measured, left both the
+# luks suite and the runcmd rehearsal fully green. A guard on the writer with none on the pipe
+# is half a contract.
+p_bootstrap_stderr_routed() {
+  if grep -Eq '^[[:space:]]*doppler run .*git-data-bootstrap\.sh[[:space:]]+2>>"\$GIT_DATA_RUNCMD_DETAIL"' "$1"; then echo 1; else echo 0; fi
+}
+assert_holds    "B18 isLuks-rc-branch" p_isluks_rc_branch "$CLOUD_INIT"
+# One arm per predicate, each anchored so the mutation actually LANDS (assert_mutation fails
+# loud on a byte-identical mutant, which is how a re-anchored predicate stops certifying).
+# (a) the truthiness form comes back. NOT a single-token s/// — the `if !` shape has to
+# replace the rc capture, so anchor on the whole `_isluks_rc=0` line.
+assert_mutation "B18 isLuks-rc-branch (revert to \`if !\`)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's/^([[:space:]]*)_isluks_rc=0$/\1if ! cryptsetup isLuks "$DEV"; then :; fi/'
+# (b) the naked capture the issue proposed — aborts under `set -euo pipefail` on rc=1.
+# `#` delimiter, not `|`: the pattern contains `||`.
+assert_mutation "B18 isLuks-rc-branch (naked rc capture)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#\|\| _isluks_rc=\$\?#; _isluks_rc=$?#'
+# (d) a SECOND arm reaches luksFormat — i.e. an already-LUKS device (rc 0) gets reformatted.
+assert_mutation "B18 isLuks-rc-branch (rc 0 also formats)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#^([[:space:]]*)0\) : ;;#\1 0) printf "%s" "$GIT_DATA_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$DEV" ;;#'
+# (e) the catch-all stops refusing. Anchored on `\*\)` so it cannot also hit the empty-key
+# guard, which is a `||`-chained brace group with no case arm.
+assert_mutation "B18 isLuks-rc-branch (catch-all no longer exits)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#^([[:space:]]*)\*\).*$#\1*) : ;;#'
+# (f) THE ONE THAT MATTERS — `2>>` back on the probe line. A failed redirect returns 1
+# WITHOUT running the command, so on an unwritable /run this forges the single rc that means
+# "format it". This arm is why the capture is a substitution and not a redirect.
+assert_mutation "B18 isLuks-rc-branch (2>> forges rc=1 on the probe)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#cryptsetup isLuks "\$DEV" 2>&1#cryptsetup isLuks "$DEV" 2>>"$GIT_DATA_LUKS_DETAIL"#'
+# (g) THE ARM THE COUNT COULD NOT SEE. Re-key the format arm off rc=1 and the store is
+# formatted on a code that does not mean "blank" — the count in (d) is still exactly 1.
+assert_mutation "B18 isLuks-rc-branch (format arm re-keyed off rc=1)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#^([[:space:]]*)1\)$#\10)#'
+# (h) drop the blkid cross-check: rc=1 alone authorises the format again, which is the
+# corrupted-header case measured on 2.7.0 (rc=1, empty stderr, blkid says crypto_LUKS).
+assert_mutation "B18 isLuks-rc-branch (blankness proof removed)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#^([[:space:]]*)\[ "\$_blk_type" != "crypto_LUKS" \].*$#\1: ;#'
+# (i) revert the wait to presence-only: `-e` is true before the kernel sets capacity, and a
+# zero-length device also returns isLuks rc=1.
+assert_mutation "B18 isLuks-rc-branch (wait reverts to -e presence)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#\[ -b "\$DEV" \]#[ -e "$DEV" ]#'
+# (h) INVERT the refusal rather than deleting it. This is the arm that matters: `==` refuses a
+# blank volume and formats the damaged-header populated store. A token-presence predicate stays
+# green on it; this one must not.
+assert_mutation "B18 isLuks-rc-branch (blkid refusal INVERTED)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#"\$_blk_type" != "crypto_LUKS"#"$_blk_type" == "crypto_LUKS"#'
+# (i) RELAX the capacity comparison rather than deleting the call: the loop then breaks on the
+# first iteration whatever the device's size.
+assert_mutation "B18 isLuks-rc-branch (capacity test relaxed to -ge 0)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#-gt 0 \] \&\& break#-ge 0 ] \&\& break#'
+# (g) re-key the format arm onto rc 0 by SWAPPING the labels — the format stays between the
+# same two anchors, so a position check cannot see it, but it now runs on ALREADY-LUKS.
+assert_mutation "B18 isLuks-rc-branch (0)/1) labels swapped)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#^([[:space:]]*)0\) : ;;#\1 1) : ;;#'
+
+# B18p — the pipe that carries B20's writer.
+assert_holds    "B18p bootstrap-stderr-routed" p_bootstrap_stderr_routed "$CLOUD_INIT"
+assert_mutation "B18p bootstrap-stderr-routed (redirect deleted)" p_bootstrap_stderr_routed "$CLOUD_INIT" \
+  's#(git-data-bootstrap\.sh) 2>>"\$GIT_DATA_RUNCMD_DETAIL"#\1#'
+
+# --- B19 (#7227): Decision clause B, mechanized -------------------------------------------
+#
+# The parent-shell detail file is safe to ship unredacted because of a TWO-CLAUSE invariant,
+# and only clause A is structural. Clause A: parent commands provably do not hold
+# GIT_DATA_LUKS_KEY, so they cannot leak it. Clause B covers the two `doppler run` children,
+# which DO hold it, and is BEHAVIOURAL — it rests on three facts that a future edit could
+# silently revoke. Behavioural bounds that nothing checks are how a redactor bypass ships, so
+# each fact gets an assertion:
+#
+#   1. the passphrase is `special = false` (alphanumeric), so it carries no regex
+#      metacharacter and cannot malform the `sed` _devalue constructs from it;
+#   2. there is no `set -x` in the template or the bootstrap payload, so no command echo
+#      can put the key on a stream;
+#   3. every key-consuming cryptsetup call takes it on stdin via `--key-file -`, never argv.
+#
+# (3) overlaps A2 deliberately: A2 asserts it for the TEMPLATE's luksFormat/luksOpen, while
+# clause B's bound has to hold for the bootstrap payload's luksOpen too, which A2 never reads.
+BOOTSTRAP_SH="${DIR}/git-data-bootstrap.sh"
+[ -f "$BOOTSTRAP_SH" ] || { echo "FAIL: git-data-bootstrap.sh not found at $BOOTSTRAP_SH" >&2; exit 1; }
+
+p_luks_key_alnum() {
+  # Region-scoped to the resource block: a `special = false` on ANY other random_password
+  # would otherwise satisfy a file-global grep. Herestring, not a pipe (SIGPIPE note below).
+  local blk
+  blk="$(awk '/^resource "random_password" "git_data_luks"/{f=1} f&&/^}/{f=0; print; next} f' "$1")"
+  if grep -Eq '^[[:space:]]*special[[:space:]]*=[[:space:]]*false[[:space:]]*$' <<<"$blk"; then echo 1; else echo 0; fi
+}
+assert_holds    "B19a luks-key-alphanumeric" p_luks_key_alnum "$LUKS_TF"
+assert_mutation "B19a luks-key-alphanumeric (special re-enabled)" p_luks_key_alnum "$LUKS_TF" \
+  's/^([[:space:]]*)special([[:space:]]*)=([[:space:]]*)false$/\1special\2=\3true/'
+
+# B19b/B19c (no-`set -x`) ARE NOT WRITTEN HERE — A28a ABOVE ALREADY OWNS THAT PROPERTY, and
+# owns it better on all three axes. Its regex `(set|(ba)?sh)[[:space:]]+-[a-z]*x[a-z]*` is a
+# strict superset of a `set -x`-only pattern (it also catches `bash -x`/`sh -x` and the
+# mid-flag `set -exuo` drift); it quantifies over EVERY derived boot-path file, including
+# git-data-bootstrap.sh, with its own bootstrap mutation arm; and it greps the file DIRECTLY,
+# so it cannot take the `producer | grep -q` SIGPIPE fail-open this file's other predicates
+# had to be rewritten to avoid. A second, weaker guard on one property is not defence in
+# depth — it is the one a future author edits, believing it is the one that matters.
+
+p_bootstrap_keyfile_stdin() {
+  local n_key n_stdin
+  n_key=$(grep -cE 'cryptsetup[[:space:]]+luks(Format|Open)' "$1" || true)
+  [ "${n_key:-0}" -ge 1 ] || { echo 0; return; }
+  n_stdin=$(grep -E 'cryptsetup[[:space:]]+luks(Format|Open)' "$1" | grep -c -- '--key-file -' || true)
+  # And the key must not appear as a cryptsetup argv positional.
+  if [ "$n_stdin" -ne "$n_key" ]; then echo 0; return; fi
+  if grep -E 'cryptsetup[[:space:]]+luks(Format|Open)' "$1" | sed -E 's/.*(cryptsetup[[:space:]]+luks)/\1/' | grep -q 'GIT_DATA_LUKS_KEY'; then echo 0; return; fi
+  echo 1
+}
+assert_holds    "B19d bootstrap-key-file-stdin" p_bootstrap_keyfile_stdin "$BOOTSTRAP_SH"
+assert_mutation "B19d bootstrap-key-file-stdin (key moved to argv)" p_bootstrap_keyfile_stdin "$BOOTSTRAP_SH" \
+  's#cryptsetup luksOpen --key-file - "\$luks_dev"#cryptsetup luksOpen "$GIT_DATA_LUKS_KEY" "$luks_dev"#'
+
+# --- B20 (#7227): the bootstrap payload's log() writes to fd 2 -----------------------------
+#
+# The parent runcmd routes this script's STDERR into the per-stage scoped detail file. On
+# stdout, all 19 of its `log "FATAL: …"` sentences were invisible to on_err, so the bootstrap
+# stage's fatal shipped a detail that knew nothing about the invariant that actually failed —
+# the stage is the host's other major failure surface and it was the one with no cause.
+#
+# REGION-SCOPED to the log() body: a `>&2` anywhere else in this file (there are several)
+# would satisfy a file-global grep while log() itself went back to stdout.
+p_bootstrap_log_stderr() {
+  local body
+  body="$(awk '/^log\(\)[[:space:]]*\{/{f=1} f&&/^\}/{f=0} f' "$1" | grep -vE '^[[:space:]]*#' || true)"
+  if grep -Eq '^[[:space:]]*echo "\[git-data-bootstrap\] \$\*"[[:space:]]+>&2[[:space:]]*$' <<<"$body"; then echo 1; else echo 0; fi
+}
+assert_holds    "B20 bootstrap-log-to-stderr" p_bootstrap_log_stderr "$BOOTSTRAP_SH"
+assert_mutation "B20 bootstrap-log-to-stderr (back to stdout)" p_bootstrap_log_stderr "$BOOTSTRAP_SH" \
+  's#^([[:space:]]*echo "\[git-data-bootstrap\] \$\*") >&2$#\1#'
+
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
+#
+# RAISED 113 -> 133 WITH THE ARMS THAT MADE IT NECESSARY (#7216 + #7227). Itemised, because a
+# floor that does not move with the suite only ever guards the work that predates it:
+#   B18 isLuks-rc-branch        1 hold + 11 mutations = 12
+#     (revert-to-`if !`; naked rc capture; rc 0 also formats; catch-all no longer exits;
+#      `2>>` back on the probe — the forged-rc-1 arm; the format arm re-keyed off rc=1;
+#      the blkid blankness proof removed; the wait reverted to `-e` presence)
+#   B19a luks-key-alphanumeric  1 hold + 1 mutation  = 2
+#   B19d bootstrap-key-file     1 hold + 1 mutation  = 2
+#   B20  bootstrap-log-to-fd-2  1 hold + 1 mutation  = 2
+#   B18p bootstrap-stderr-routed 1 hold + 1 mutation  = 2
+#   113 + 12 + 2 + 2 + 2 + 2 = 133. Measured: 133 passed, 0 failed.
+# NET vs the first cut of this PR (129): B19b/B19c were DELETED as redundant with A28a (see the
+# note where they used to live), and three arms were added for the vacuities review found in
+# B18 — a count that permitted luksFormat on the `*)` unknown-status arm, a missing positive
+# blankness proof, and a device wait that tested presence rather than usability.
+# A22's own non-vacuity floor moved 3 -> 2 in the same change (bootstrap_err deleted); that
+# is inside the predicate, not here, and changes no assertion count.
 #
 # RAISED 107 -> 113 at review (#7204): B17 widened from 3 mutation arms to 6 (`; true`,
 # backslash-continuation and `if`-wrapper each shipped a fall-through past a 107/107 green
@@ -1214,8 +1479,8 @@ assert_mutation "B17r mount-no-raw-device (\$DEV fallback)" p_mount_no_raw_devic
 # redden the suite on every legitimate new arm and teach the next author to edit the guard
 # instead of trusting it.
 total=$((passes + fails))
-if [ "$total" -lt 113 ]; then
-  echo "FAIL: ran only ${total} assertions (<113) — suite did not execute fully" >&2
+if [ "$total" -lt 133 ]; then
+  echo "FAIL: ran only ${total} assertions (<133) — suite did not execute fully" >&2
   exit 1
 fi
 

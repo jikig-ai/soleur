@@ -255,6 +255,59 @@ out="$(BETTERSTACK_QUERY_SH="$STUB" BETTERSTACK_QUERY_HOST=stub \
 if [[ "$rc" -ne 0 ]]; then pass "a missing --host-name refuses"; else
   fail "a missing --host-name refuses" "$rc" "$out"; fi
 
+# ── ARM 6b (#7227 item 4): --host-name IS CONSTRAINED TO REHEARSAL HOSTS ──────────
+#
+# The charset check above is necessary (the name reaches the WHERE clause of every Better
+# Stack query) but says nothing about WHICH host. `soleur-git-data` — the production store
+# holding every connected user's source code — satisfies `^[A-Za-z0-9._-]+$` perfectly, and
+# the rehearsal workflow projects this script's `detail` output into a PUBLIC Actions log on
+# a PUBLIC repo. A reader aimed at production is a one-flag path from boot telemetry about
+# real user data to a world-readable artifact.
+#
+# NO OVERRIDE FLAG. Reading production boot telemetry is a different tool with a different
+# output contract, not a flag on this one — an `--allow-production` escape reopens the hole
+# for exactly the caller most likely to be in a hurry.
+#
+# The 180-byte emit-time bound is NOT a substitute: it bounds VOLUME, not CONTENT, and it is
+# applied on the host at emit time. This script is a reader and inherits whatever shipped.
+_hn_probe() {  # $1 = host name under test; echoes "rc=<n> <first line of stderr>"
+  local _o _r
+  _o="$(BETTERSTACK_QUERY_SH="$STUB" BETTERSTACK_QUERY_HOST=stub \
+        BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+        bash "$SUT" --host-name "$1" --evidence-url "$URL" --divergence "$DIVERGENCE" \
+          --cloud-init "$FIX/cloud-init-git-data.yml" --out "$TMP/evidence-hn.env" 2>&1)"; _r=$?
+  printf 'rc=%s %s' "$_r" "$(printf '%s' "$_o" | grep -m1 'refusing: --host-name' || true)"
+}
+
+_hn="$(_hn_probe 'soleur-git-data')"
+if [[ "$_hn" == rc=64*refusing:\ --host-name* ]]; then
+  pass "the PRODUCTION host name soleur-git-data is refused (rc 64)"
+else
+  fail "the PRODUCTION host name soleur-git-data is refused (rc 64)" "$_hn" \
+    "This script projects detail rows into a public Actions log; aimed at production it exports real boot telemetry."
+fi
+
+# The constraint must be strictly NARROWER, not merely different: the legitimate call site
+# passes ${REHEARSAL_PREFIX}${GITHUB_RUN_ID}, which must still be accepted.
+_hn="$(_hn_probe 'soleur-git-data-rehearsal-17250000001')"
+if [[ "$_hn" != *'refusing: --host-name'* ]]; then
+  pass "a rehearsal host name is still accepted by the --host-name gate"
+else
+  fail "a rehearsal host name is still accepted by the --host-name gate" "$_hn" \
+    "The constraint is too tight — it would refuse the only production call site (\${REHEARSAL_PREFIX}\${GITHUB_RUN_ID})."
+fi
+
+# AND THE CHARSET PROPERTY MUST SURVIVE. A prefix check written as a bare `case`/`==` glob
+# would accept `soleur-git-data-rehearsal-1" OR 1=1 --`, trading the SQL-interpolation
+# property for the scope one. Both, or neither.
+_hn="$(_hn_probe 'soleur-git-data-rehearsal-1"quote')"
+if [[ "$_hn" == rc=64*refusing:\ --host-name* ]]; then
+  pass "a rehearsal-prefixed name carrying a quote is STILL refused (charset property kept)"
+else
+  fail "a rehearsal-prefixed name carrying a quote is STILL refused (charset property kept)" "$_hn" \
+    "The name is interpolated into the Better Stack SQL WHERE clause; a quote changes which rows the verdict is read from."
+fi
+
 # An evidence URL that the GATE would refuse must be refused HERE, at write time. Writing a
 # file the consumer rejects converts a rehearsal that succeeded into one that has to be re-run
 # on real hardware -- the expensive way to learn about a typo.
@@ -384,12 +437,20 @@ fi
 # Developer-incremented, and a FLOOR rather than an equality so a legitimately added arm does
 # not redden the suite and train the next person to bump it unread. Counts passes+fails, so a
 # genuine failure still reports as a failure rather than as an empty suite.
+#
+# RAISED 30 -> 33 WITH THE ARMS THAT MADE IT NECESSARY (#7227 item 4). ARM 6b constrains
+# --host-name to rehearsal hosts, and is three arms because the constraint has three
+# separable ways to be wrong: the production name must be REFUSED (rc 64), the legitimate
+# ${REHEARSAL_PREFIX}${GITHUB_RUN_ID} name must still be ACCEPTED (a too-tight regex would
+# break the only real call site), and a rehearsal-prefixed name carrying a quote must STILL
+# be refused (the SQL-interpolation property must survive the narrowing, not be traded for
+# it). 30 + 3 = 33. Measured: 33 passed, 0 failed.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 30 ]]; then
+if [[ "$_ran" -lt 33 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 30. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 33. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 30)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 33)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"

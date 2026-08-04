@@ -1151,6 +1151,26 @@ done
 if [[ "$_pfx_wf" == *- && "$_pfx_drift" == *- ]]; then
   pass "both prefixes carry the load-bearing trailing hyphen"
 fi
+# A FOURTH COPY (#7227 item 4): the evidence-capture script now refuses any --host-name that
+# does not carry this prefix, so its regex is a consumer of the same literal and drifts the
+# same way. Folded into this existing chain rather than given its own arm — the comparison
+# here is already "every replica of one literal agrees", and a fourth comparand costs one
+# extraction, where a parallel arm would duplicate the rationale and the mutation.
+# ANCHORED ON THE `=~` CONDITION, NOT THE BARE LITERAL. The capture script names this prefix
+# TWICE — once in the real `[[ ! "$HOST_NAME" =~ ^… ]]` test and once in the refusal message
+# that explains it — so a bare-token grep is satisfied by the prose. Demonstrated: reverting
+# the constraint to `^[A-Za-z0-9._-]+$` (re-admitting the production host) left this arm GREEN.
+# Same class the confirm-token arm 30 lines above already documents, and the same class
+# #7204's learning is named for. The runtime arm 6b in the capture suite is what actually
+# caught the revert; this arm is the drift guard and must not be the one that lies.
+_pfx_cap="$(grep -oE '=~[[:space:]]*\^soleur-git-data-rehearsal-' \
+  "${ROOT}/scripts/followthroughs/git-data-rung2-evidence-capture.sh" | head -1 | sed 's/.*\^//')"
+if [[ "$_pfx_cap" == "$_pfx_wf" ]]; then
+  pass "the evidence-capture script's --host-name constraint pins the same rehearsal prefix"
+else
+  fail "the evidence-capture --host-name constraint does not pin the rehearsal prefix (got '${_pfx_cap:-none}', want '${_pfx_wf}')" \
+    "Unconstrained, the capture script can be aimed at the production host soleur-git-data and project its boot telemetry into a PUBLIC Actions log."
+fi
 if [[ "$_pfx_tf" == *"rehearsal-\${var.rehearsal_run_id}"* ]]; then
   pass "the Terraform host name is prefix + run id (unique per rehearsal, so a leak cannot be adopted)"
 else
@@ -1451,12 +1471,19 @@ fi
 # and printed `ok anti-vacuity floor: 28 assertions ran`, exit 0. Measured. A floor that does
 # not move with the suite only ever guards the work that predates it, and the deletion it
 # most needs to catch is the one that removes the arms someone just argued for.
+#
+# RAISED 70 -> 71 WITH THE ARM THAT MADE IT NECESSARY (#7227 item 4): arm 10's comparison
+# chain gained a FOURTH replica of the rehearsal prefix — the evidence-capture script's
+# `--host-name` constraint, which is now a consumer of the same literal and drifts the same
+# way. Folded into the existing chain rather than given its own arm plus mutation, because
+# that chain's whole property is already "every replica of one literal agrees".
+# 70 + 1 = 71. Measured: 71 passed, 0 failed.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 70 ]]; then
+if [[ "$_ran" -lt 71 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 70. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 71. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 70)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 71)\n' "$_ran"
 fi
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"
