@@ -336,13 +336,17 @@ For each file changed in the PR:
 gh pr diff <number> --name-only
 ```
 
-Spot-check up to 5 files by reading from the merged main:
+Spot-check up to 5 files by reading from **the merge commit recorded in Phase 1** — not from the `main` ref:
 
 ```bash
-git show main:<filepath>
+git show <merge-commit-sha-from-phase-1>:<filepath>
 ```
 
-Compare against expectations from the PR description and review. Flag if any file content seems stale or doesn't reflect the PR changes.
+**Do NOT use `git show main:<path>` here.** `main` is a LOCAL ref and it lags: in a worktree or bare-repo layout nothing fast-forwards it as a side effect of the merge, so it routinely points at a commit from before this PR landed. Reading a file that this PR ADDED through a stale `main` returns `fatal: path ... does not exist`, and the phase whose entire job is answering *"did the merge land?"* then reports **MISSING** for a file that is present in the merge commit. The failure is silent and inverted — it manufactures a false alarm about the thing it is verifying, and it gets worse the busier the repo is.
+
+`git rev-parse --short main` next to `git rev-parse --short origin/main` is the cheap tell when a result looks wrong. Prefer the merge SHA unconditionally: it is immutable, it is the exact tree that merged, and it cannot drift while the phase runs. `origin/main` is an acceptable second choice only immediately after a fetch, and even then a sibling merge can move it mid-phase.
+
+Compare against expectations from the PR description and review. Flag if any file content seems stale or doesn't reflect the PR changes. **Why:** PR #7240 — Phase 4 read `git show main:` while local `main` sat 2 commits behind, reported the PR's own new learning file as MISSING, and the same stale ref undercounted `blkid` occurrences 2-vs-8 in a file the PR had rewritten.
 
 ## Phase 5: Browser Verification (Conditional)
 
@@ -507,7 +511,7 @@ Feature-tweet draft: <path + "flip publish_date + status: scheduled to publish" 
 
 ## Notes
 
-- Always use `git show main:<path>` to read merged files -- never read from the bare repo filesystem directly.
+- Always read merged files out of git rather than off the bare repo filesystem — but address them by the **merge commit SHA** (`git show <merge-sha>:<path>`), never by the local `main` ref. `main` is not fast-forwarded as a side effect of a merge, so in a worktree/bare layout it lags and a file the PR ADDED reads as absent. See Phase 4.
 - MCP tools resolve paths from the repo root. Use absolute paths when in a worktree.
 - This skill is designed to run after `/soleur:merge-pr` completes. It can also be invoked standalone with a PR number.
 
