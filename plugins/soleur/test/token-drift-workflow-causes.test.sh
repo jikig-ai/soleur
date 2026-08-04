@@ -1184,7 +1184,22 @@ TF_READ_TOKENS="$INFRA_DIR/token-drift-read-tokens.tf"
 # hcl_uncommented <file> — strip `#` line comments, keeping code. Not a full HCL lexer: it
 # does not know about `#` inside a quoted string, and it does not need to — no attribute in
 # this file carries one, and F5's regex-literal assertion below would red if one appeared.
-hcl_uncommented() { sed -E 's/(^|[[:space:]])#.*$//' "$1"; }
+# Strips `#` AND `//` line comments AND `/* … */` blocks. All three are HCL comment forms,
+# and stripping only `#` left C-a defeatable: a `/* … */` block containing a commented-out
+# `config = each.key` satisfies C-a's anchored positive while the live attribute binds a
+# `local.` (not a string literal, so the negative grep never fires). Measured — that .tf
+# passes 60/60 with 13 tokens all bound to one config, which is the exact defect C-a is the
+# pre-merge gate for. Not a full HCL lexer: it does not know about `#`/`//` inside a quoted
+# string, and does not need to — no attribute in the guarded file carries one, and F5's
+# regex-literal assertion would red if one appeared.
+hcl_uncommented() {
+  # `-z` on the FIRST pass is load-bearing: a `/* … */` block spans lines, and plain `sed`
+  # is line-oriented, so a line-scoped pattern silently matches nothing and the block
+  # survives whole. Measured — the first version of this fix left the bypass passing 60/60.
+  # `-z` makes the file one record so the block pattern can span newlines.
+  sed -Ez ':a; s@/\*([^*]|\*+[^*/])*\*+/@@g; ta' "$1" \
+    | sed -E 's@(^|[[:space:]])(#|//).*$@@'
+}
 
 # hcl_block <file> <type> <name> — the body of one `resource "<type>" "<name>" { … }`,
 # comment-stripped. Brace-counted rather than awk-range'd so a nested block cannot end it
@@ -1197,8 +1212,12 @@ hcl_block() {
     inb {
       for (i=1; i<=length($0); i++) { c=substr($0,i,1); if (c=="{") d++; else if (c=="}") d-- }
       print
-      if (d<=0 && seen) { exit }
-      if (d>0) seen=1
+      # `seen` is set on the OPENING line unconditionally. Keying it on `d>0` meant a
+      # single-line block (`resource "x" "y" { config = each.key }`) closed to d==0 on the
+      # same line, never set `seen`, never hit the exit — so the extraction ran to EOF and
+      # bled every following resource into the block, silently inverting both C-a greps.
+      seen=1
+      if (d<=0) { exit }
     }
   ')
   [[ -n "$_out" ]] || return 1
@@ -1268,9 +1287,13 @@ else
   else
     grep -qE '^[[:space:]]*config[[:space:]]*=[[:space:]]*each\.key[[:space:]]*$' <<<"$_tok_block" \
       || { _ca=0; echo "    the token block does not set 'config = each.key'"; }
-    if grep -qE '^[[:space:]]*config[[:space:]]*=[[:space:]]*"' <<<"$_tok_block"; then
+    # WHITELIST, not blacklist. The original form rejected only a string literal, so
+    # `config = local.pinned` — 13 tokens on one config, identical blast radius — sailed
+    # through. Anything that is not literally `each.key` is rejected, whatever its syntax.
+    _cfg_binding=$(grep -oE '^[[:space:]]*config[[:space:]]*=[[:space:]]*[^[:space:]]+' <<<"$_tok_block" | head -1 | sed -E 's/.*=[[:space:]]*//')
+    if [[ -n "$_cfg_binding" && "$_cfg_binding" != "each.key" ]]; then
       _ca=0
-      echo "    the token block binds 'config' to a STRING LITERAL — 13 distinct tokens all reading one config. Phase 0 measured the runtime consequence: 12 access-denied reads and a 1/13 degraded run, a merge and up to 12 hours after this line could have been caught here"
+      echo "    the token block binds 'config' to '${_cfg_binding}', not each.key — every instance then reads the SAME config. A string literal, a local. or a var. are all the same defect: 13 distinct tokens, 13 correct map keys, one config actually read. Phase 0 measured the runtime consequence: 12 access-denied reads and a 1/13 degraded run, a merge and up to 12 hours after this line could have been caught here"
     fi
     grep -qE 'for_each[[:space:]]*=[[:space:]]*toset\(local\.token_drift_configs\)' <<<"$_tok_block" \
       || { _ca=0; echo "    for_each is not toset(local.token_drift_configs) — the instance keys and the config bindings are no longer the same set"; }
@@ -1291,7 +1314,7 @@ fi
 if [[ "$_ca" == "1" ]]; then
   pass "config = each.key, for_each = toset(local.token_drift_configs), and the map's key/value share one iteration variable"
 else
-  fail "the per-config tokens must bind 'config' to each.key. A string literal there is the one mis-binding Terraform can produce: 13 distinct tokens, 13 correct map keys, one config actually read — it passes shape validation, which is exactly why it needs a static gate"
+  fail "the per-config tokens must bind 'config' to each.key — not a string literal, not a local., not a var. Any of them is the same mis-binding: 13 distinct tokens, 13 correct map keys, one config actually read. It passes shape validation and pairwise-distinctness, which is exactly why it needs a static gate. This assertion reads COMMENT-STRIPPED HCL (#, // and multi-line /* */), because the guarded file documents this hazard in prose beside the attribute"
 fi
 
 # ---------------------------------------------------------------------------

@@ -163,7 +163,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-for bin in doppler curl python3; do
+for bin in doppler curl python3 jq; do
   command -v "$bin" >/dev/null 2>&1 || { echo "ERROR: $bin not on PATH" >&2; exit 2; }
 done
 
@@ -223,7 +223,7 @@ fi
 # loud CI failure rather than a silent divergence.
 if [[ -n "$INVENTORY_PATH" ]]; then
   if [[ -r "$INVENTORY_PATH" ]]; then
-    mapfile -t INVENTORY_NAMES < <(grep -E '^[a-z0-9_]+$' "$INVENTORY_PATH" | sort -u || true)
+    mapfile -t INVENTORY_NAMES < <(LC_ALL=C grep -E '^[a-z0-9_]+$' "$INVENTORY_PATH" | sort -u || true)
     if (( ${#INVENTORY_NAMES[@]} > 0 )); then
       CONFIGS_EXPECTED=${#INVENTORY_NAMES[@]}
       # Staleness is bounded WITHOUT a credential: the header says when the file was
@@ -481,6 +481,13 @@ _cred_single="${DOPPLER_TOKEN:-}"
 unset DOPPLER_TOKEN_MAP DOPPLER_TOKEN DOPPLER_CONFIG
 
 if [[ -n "$_cred_map_raw" && -n "$_cred_single" ]]; then
+  # FAIL CLOSED TO `unknown`, NOT `degraded`. `degraded` asserts the credential is absent
+  # or narrowed; this run made no Doppler call and cannot support that claim — it is the
+  # same distinction compute_coverage's C-b arm exists to draw, and without this line the
+  # positive-work floor (`n == 0`) publishes `degraded` and sends the operator to re-mint a
+  # token when the actual fault is a workflow that set two variables.
+  MAP_SHAPE_OK=0
+  echo "::error::token_drift_credential_mode_ambiguous — both DOPPLER_TOKEN_MAP and DOPPLER_TOKEN are set; refusing to choose a scan mode." >&2
   {
     echo "ERROR: both DOPPLER_TOKEN_MAP and DOPPLER_TOKEN are set and non-empty."
     echo "       These select different scan modes (fan-out over a config map vs a single"
@@ -497,24 +504,58 @@ if [[ -n "$_cred_map_raw" ]]; then
   # fail-closed state) rather than `degraded` (which asserts "the credential is absent or
   # narrowed", a claim a run that made no Doppler call cannot support). Parsed with `jq`,
   # never a regex.
+  #
+  # ⚠️ STDERR IS CAPTURED SEPARATELY, NEVER `2>&1`, AND THAT IS A CREDENTIAL BOUNDARY.
+  # jq is a STREAMING parser: given more than one JSON value (`{...} {...}`, or a valid
+  # object followed by trailing bytes) it emits the `config\ttoken` lines for every value
+  # it processed successfully BEFORE it hits the fault. Folding stdout into the error
+  # variable with `2>&1` therefore puts live read tokens into a variable this block echoes
+  # to the job log — and masking has not run yet on this path, because it happens only
+  # after a successful parse. Measured: `{"prd":"dp.st.prd.X"} junk` printed the token pair
+  # alongside the parse error, with zero `::add-mask::` emitted. Keep the streams apart.
+  #
+  # ANCHORS ARE `\A`/`\z`, NOT `^`/`$`. jq's regex engine is Oniguruma, where `$` matches
+  # before a FINAL NEWLINE — so `test("^[a-z0-9_]+$")` accepts `"prd\n"`. A key or value
+  # containing a newline then splits the `key\tvalue` record below, yielding a forged entry
+  # whose credential is the EMPTY STRING, which the Doppler CLI treats as unset and rebinds
+  # to whatever ambient credential the runner carries. That is the precise hazard the
+  # snapshot-and-unset discipline above exists to close, reintroduced through the
+  # validator. `\A`/`\z` anchor to the whole string and admit neither.
+  #
+  # VALUES ARE CHARSET-CHECKED TOO, not merely "a non-empty string". A Doppler token is
+  # `dp.st.<name>.<url-safe>`, so the alphabet below is a superset of what the provider
+  # can mint and still excludes every whitespace and control character that could split a
+  # record.
   _map_err=""
+  _map_jq_err=$(mktemp) || _map_jq_err=/dev/null
   if ! _map_norm=$(jq -e -r '
+        def bad_key:   (.|test("\\A[a-z0-9_]+\\z")|not);
+        def bad_value: (.|type != "string") or (. == "") or (.|test("\\A[A-Za-z0-9._-]+\\z")|not);
         if type != "object" then error("not a JSON object")
         elif (keys|length) == 0 then error("object has zero keys")
-        elif (to_entries|map(select(.value|type != "string"))|length) > 0 then error("a value is not a string")
-        elif (to_entries|map(select(.value == ""))|length) > 0 then error("a value is the empty string")
-        elif (keys|map(select(test("^[a-z0-9_]+$")|not))|length) > 0 then error("a key is not a Doppler config name")
+        elif (keys|map(select(bad_key))|length) > 0 then error("a key is not a Doppler config name")
+        elif ([.[]]|map(select(bad_value))|length) > 0 then error("a value is not a Doppler read token")
         else (to_entries|map(.key + "\t" + .value)|.[])
-        end' <<<"$_cred_map_raw" 2>&1); then
-    _map_err="$_map_norm"
+        end' <<<"$_cred_map_raw" 2>"$_map_jq_err"); then
+    # ONLY the classification, never jq's stdout. `head -c 200` bounds a hostile parser
+    # message; the message itself is one of the `error(...)` strings above or a jq parse
+    # error, neither of which echoes input values.
+    _map_err="$(tr -d '\r' <"$_map_jq_err" | head -c 200)"
     MAP_SHAPE_OK=0
   fi
+  [[ "$_map_jq_err" != /dev/null ]] && rm -f "$_map_jq_err"
+  unset _map_jq_err
   if (( MAP_SHAPE_OK == 0 )); then
+    # NAMED ANNOTATION, not just a stderr line. The `unknown` issue body tells the operator
+    # to discriminate a credential fault from a detector fault by looking for exactly this
+    # marker; without it that instruction resolves to "no annotation → detector fault",
+    # which is the wrong branch on the one path that IS a credential fault.
+    echo "::error::token_drift_map_malformed — DOPPLER_TOKEN_DRIFT_MAP is not a usable credential map: ${_map_err}" >&2
     {
       echo "ERROR: DOPPLER_TOKEN_MAP is not a usable credential map."
       echo "       ${_map_err}"
-      echo "       Expected a JSON object of {\"<config>\": \"<read token>\"} with at least one"
-      echo "       entry and non-empty string values, as published by"
+      echo "       Expected a JSON object of {\"<config>\": \"<read token>\"} whose keys are"
+      echo "       Doppler config names and whose values are read tokens, as published by"
       echo "       github_actions_secret.doppler_token_drift_map."
       echo "       Publishing coverage: unknown — a credential source this run could not parse"
       echo "       is not evidence that the credential is absent or narrowed, which is what"
@@ -538,6 +579,17 @@ if [[ -n "$_cred_map_raw" ]]; then
   # log processor, the alternative reaches the log itself.
   while IFS=$'\t' read -r _cfg _tok; do
     [[ -z "$_cfg" ]] && continue
+    # DEFENCE IN DEPTH behind the validator above. If a record ever splits despite the
+    # anchors, the fragment arrives with an empty token — and an empty DOPPLER_TOKEN is an
+    # ambient-credential rebind, not a failed read. Fail the whole map closed rather than
+    # scanning one config with someone else's credential.
+    if [[ -z "$_tok" ]]; then
+      MAP_SHAPE_OK=0
+      echo "::error::token_drift_map_malformed — DOPPLER_TOKEN_DRIFT_MAP yielded an entry with an empty credential (key '${_cfg}')." >&2
+      echo "ERROR: refusing to scan with an empty credential — the Doppler CLI treats it as unset and rebinds to the runner's ambient credential." >&2
+      publish_verdict || true
+      exit 2
+    fi
     mask_value "$_tok"
     CRED_FOR["$_cfg"]="$_tok"
   done <<<"$_map_norm"
