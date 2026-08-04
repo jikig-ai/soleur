@@ -323,15 +323,15 @@ Node-zlib model is an approximation and says so in its own header:
 | | stored | cap | headroom |
 | --- | --- | --- | --- |
 | before (current `origin/main`) | 25,968 B | 32,768 B | 6,800 B |
-| after (#7216 + #7227) | 30,152 B | 32,768 B | 2,616 B |
+| after (#7216 + #7227) | 30,148 B | 32,768 B | 2,620 B |
 
-Net **+4,184 stored bytes**. Comments in `cloud-init-git-data.yml` are **not** render-stripped
+Net **+4,180 stored bytes**. Comments in `cloud-init-git-data.yml` are **not** render-stripped
 (ADR-152 covers only the nine `file()`-bound payloads), so prose is charged at full weight —
 comment blocks are capped at ~6 lines here and the durable statements live in the guards
 (`B18`, `R3(3b)`) rather than in the paragraphs. Diagnostics added to
 `git-data-bootstrap.sh` are free, because that file IS render-stripped.
 
-The next diagnostics change on this host should treat 2,616 B as the working budget, and
+The next diagnostics change on this host should treat 2,620 B as the working budget, and
 should prefer `git-data-bootstrap.sh` over the template wherever the code can live there.
 
 **The Node model is not a second opinion on this number — it is currently blind to nine tenths
