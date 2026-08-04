@@ -388,6 +388,16 @@ cannot be rebuilt, and it should not be the first thing to exercise a brand-new 
   have caught #7220. Existing guards run grant→handler (`:1051`, derived from `RESTART_MAP`) and
   source→source, so neither can **structurally** see a bare non-sudo verb at `:415`.
 
+  > **CORRECTED at review, 2026-08-04 (#7220 second defect):** read "proven RED against `main`" as
+  > *proven RED against the immutable pre-fix COMMIT*, never against the moving ref `origin/main`.
+  > A guard that reads `origin/main` is correct only until its own PR merges — at that moment main
+  > carries the fixed code, the assertions invert, and the guard fails permanently while appearing
+  > to have caught a regression. That is exactly what happened to
+  > `test_fatal_channel_red_against_main` in `infra-config-apply.test.sh`: it went red on every
+  > infra PR from the moment PR-A merged, and was repaired by pinning to `701e76e6b`. This lint
+  > (AC6/B8) does not read a ref, so nothing is broken today — the wording is annotated so the next
+  > implementer does not reproduce the defect from it.
+
 - **AC-B1 (P0, blocks the grant)** `infra-config-install.sh`'s content gate is extended to cover
   `/etc/systemd/system/*.service` dests — the full-unit case that today matches **neither** the
   `/etc/default/*` env-file gate (`:160`) nor the `*.service.d/*.conf` drop-in gate. A content pin
@@ -836,7 +846,8 @@ drop-in-only units (AC-B4).
 **B7** Tests: extend the two existing sudoers tests; the reload-denied arm and the reload-success
 positive control (one verb-dispatching stub, `case "$1" in`), both with non-vacuity assertions and
 the zero-fatal-markers assertion (AC14).
-**B8** The handler→grant lint (AC6), proven RED against `main`.
+**B8** The handler→grant lint (AC6), proven RED against `main` — read as the immutable pre-fix
+COMMIT, not the moving ref `origin/main`; see the CORRECTED note at the AC6 body (#7220).
 **B9** Amend ADR-159 (`## Decision` **and** the falsified `## Consequences` clause, plus the two
 duplicate sites); correct `model.c4:431` including the invariant text; run the two C4 tests.
 **B10** `start_ts` freshness pin (AC20) + the enrolled follow-through probe (AC21).
