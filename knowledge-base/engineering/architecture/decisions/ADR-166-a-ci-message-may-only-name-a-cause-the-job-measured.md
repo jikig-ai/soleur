@@ -6,19 +6,24 @@
   [ADR-126 — cron liveness must assert the consumed artifact](ADR-126-cron-liveness-must-assert-the-consumed-artifact.md)
   (a check must assert the thing it claims about, not a proxy for it — this generalizes that
   from liveness to *diagnosis*),
-  [ADR-147 — boot-stage diagnostics live in baked host scripts](ADR-147-boot-stage-diagnostics-live-in-baked-host-scripts.md)
-  (a diagnosis must be produced where the evidence exists),
   [ADR-154 — repair the credential channel, not the host](ADR-154-repair-the-credential-channel-not-the-host.md)
   (the prior decision on *this* failure shape: a credential misdiagnosis routed an operator
-  to the wrong repair),
+  to the wrong repair; ADR-154 also established the precedent this ADR's implementation
+  relies on — `.github/actions/cf-tunnel-ssh-bridge/action.yml` already runs a repo script
+  from inside a composite action),
   [ADR-164 — project-scoped service account and declared coverage floor](ADR-164-project-scoped-service-account-and-declared-coverage-floor.md)
   (a scan must declare what it did and did not cover)
 - **Related:**
   [ADR-096](ADR-096-migrate-container-registry-ghcr-to-self-hosted-zot.md) (the zot pull
   path this fires on),
-  [ADR-115](ADR-115-dedicated-host-private-nic-boot-convergence.md) and
-  [ADR-082](ADR-082-fresh-web2-boot-observability.md) (the private-NIC advisory whose undated
-  reboot claim supplied two of this incident's refuted hypotheses)
+  [ADR-115](ADR-115-dedicated-host-private-nic-boot-convergence.md) (the private-NIC
+  advisory whose undated reboot claim supplied two of this incident's refuted hypotheses),
+  [ADR-147](ADR-147-boot-stage-diagnostics-live-in-baked-host-scripts.md) — *analogy only,
+  not an extension*: ADR-147 decides where diagnostic CODE lives (baked host-scripts behind
+  a coherence gate, not `user_data`). This ADR borrows the locality intuition and applies it
+  to EVIDENCE. Listing it under `Extends:` over-claimed a relation it does not have.
+  [ADR-082](ADR-082-fresh-web2-boot-observability.md) is cited for history only — it is
+  `superseded-in-part` and its subject (web-2) was retired 2026-07-17.
 - **Supersedes:** nothing
 - **Issue:** #7242
 - **Enforced by:** `scripts/lint-diagnosis-claims.sh` + `scripts/lint-diagnosis-claims.highwater`,
@@ -85,9 +90,11 @@ Concretely:
 
 4. **Enforcement is the lint, not the prose.** An ADR whose only mitigation is "the ADR
    states the invariant" is the same unenforceable-prose failure it is trying to describe.
-   `scripts/lint-diagnosis-claims.sh` scans `.github/workflows/` **and** `.github/actions/`
-   for causal-claim phrases lacking a measured basis, ratcheted by a `.highwater` baseline,
-   and it blocks.
+   `scripts/lint-diagnosis-claims.sh` scans `.github/workflows/`, `.github/actions/` **and**
+   `scripts/` for causal-claim phrases lacking a measured basis, ratcheted by a `.highwater`
+   baseline, and it blocks. `scripts/` is not optional: this change MOVED the canonical
+   message text there, so a lint that skipped it would have enforced nothing over its own
+   prose.
 
 ### Scope
 
@@ -102,7 +109,7 @@ to commit it.
   helpful, and it is *more* honest — an unranked list beats a confident wrong answer, which
   is what consumed two prior diagnostic budgets.
 - `.github/actions/**` gains its first lint of any kind. It was unlinted by every other
-  tool here, which is why two offending lines in `cf-tunnel-registry-bridge/action.yml`
+  tool here, which is why the offending line in `cf-tunnel-registry-bridge/action.yml`
   survived two rounds of fixes aimed at exactly this defect.
 - The four-valued verdict has to be threaded from producer to consumer explicitly. That
   plumbing is pinned structurally, because a behavioural test that injects the verdict

@@ -868,9 +868,11 @@ liveness_signal:
                 monitor scheduled-zot-restart-loop
   configured_in: apps/web-platform/infra/cloud-init-registry.yml (emitter);
                  .github/workflows/scheduled-zot-restart-loop.yml (consumer)
-  ROUTE_STATUS: RESTORED BY THIS PR (Deliverable B2). Before B2 this route could not open its
-                issue on any non-zero checker exit — including FIRE. Declaring it as live
-                coverage without B2 would certify a dark route, so B2 is in scope, not deferred.
+  ROUTE_STATUS: RESTORED BY THIS PR — but B2's `always()` sweep alone did NOT restore it, and
+                claiming so was itself an unmeasured claim. The producer step aborted under
+                `-e` before writing $GITHUB_OUTPUT, so every arm compared against unset. The
+                route is restored by the `|| rc=$?` capture PLUS the sweep PLUS pairing the
+                numeric arms with their verdict (GHA `==` coerces null to 0). Found at review.
 
 error_reporting:
   destination: GitHub Actions annotations on the release run + notify-ops-email to
@@ -957,9 +959,14 @@ workflows with the same secrets. Gate skipped per §2.11.
     in their `if:`; verified by asserting each condition string contains `always()`.
 12. `zot-restart-loop-alarm.sh` makes no "converged by REBOOTING" claim when `uptime_s` exceeds the
     named `RECENT_BOOT_S` constant or when fewer than 2 in-window samples exist.
-13. `zot-registry-revert.md` no longer contains the `branch configs inherit` clause or the
-    "bad handshake = the EDGE rejected you, not an origin problem" sentence; `model.c4:457`'s
-    falsified heuristic is deleted.
+13. `zot-registry-revert.md` no longer PRESCRIBES the `branch configs inherit` clause or the
+    "bad handshake = the EDGE rejected you, not an origin problem" sentence, and `model.c4`'s
+    cause-class record is AMENDED to admit the measured third case.
+    **Corrected at implementation.** This AC originally said "no longer contains" (an
+    absence-grep, which false-fails on a file that quotes its own retraction to warn against
+    it — the exact trap AC7 names one screen above) and "is deleted" for `model.c4`, which
+    contradicted Deliverable D, the Files-to-Edit table and the Sharp Edges. Deleting the
+    record re-opens the #6416 re-derivation it exists to close, so AMEND won.
 14. `scripts/lint-diagnosis-claims.sh` exists, scans **both** `.github/workflows/` and
     `.github/actions/`, and passes at its committed `.highwater`.
 15. `ADR-166-*.md` exists (ordinal re-derived against `origin/main`) and names the lint as its
@@ -1055,7 +1062,7 @@ four this plan creates.
 | The in-job Better Stack read (A2b) adds a failure mode to releases. | Runs only on the already-failing path, fail-soft: a query error prints "could not query", never a claim. |
 | B2's `always() &&` causes issue steps to run on unrelated earlier failures. | Their output conditions still gate them; `always()` only removes the implicit `success()`. An unset output matches no arm. |
 | ADR-166 ordinal collides with a sibling PR. | Provisional; re-derived before merge with a full artifact sweep if it moves. |
-| Deleting `model.c4:457`'s heuristic loses information. | It is *false* information, and the true version lives in the runbook — one copy, deliberately. |
+| ~~Deleting `model.c4`'s heuristic loses information.~~ **Row retired:** it was written for a delete that did not happen. The record was AMENDED — its dichotomy was incomplete, not false, and it is a deliberate #7071 cause-class note. |
 
 ---
 

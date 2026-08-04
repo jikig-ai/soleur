@@ -77,7 +77,9 @@ worktree's `test-all.sh` on the advisory lock).
 
 - Introduced a re-entry of the **#6416 silent-mirror defect**: an unguarded `source` of the
   helper aborts under `set -e`, so `degraded()` would never run and a bridge failure would
-  report NOTHING. Caught by T4. Every load site is now guarded with a short-form fallback.
+  report NOTHING. Caught by T4. **CORRECTED at review:** the claim "every load site is now
+  guarded" was false — there are FOUR load sites and the token-preflight one was still
+  unguarded (three review agents flagged it independently). Now genuinely all four.
 - First T9 rewrite grepped for the helper's own FILENAME, which the could-not-load fallback
   also prints — so it passed whether or not the helper loaded. Re-anchored on text only the
   real helper emits.
@@ -93,5 +95,14 @@ worktree's `test-all.sh` on the advisory lock).
 
 ### Mutation coverage
 
-24 mutations run, 24 killed: 7 arm/ladder, 5 verdict-wiring, 7 alarm-condition (incl. an
-anti-vacuity scanner-break control), 5 B4 recency/dating.
+Pre-review: 24 mutations run, 24 killed (7 arm/ladder, 5 verdict-wiring, 7 alarm-condition,
+5 B4 recency/dating). **That number measured the mutations I imagined, not the tests.** The
+review panel's `test-design-reviewer` was pointed at the axes the battery did NOT touch and
+found eight surviving mutants, three of them live fail-opens — including two suites that
+exited 0 with `0 passed, 0 failed` when their assert helpers were neutered, and a guard that
+walked 2 of 71 workflows while reporting "certified".
+
+Post-review the battery is 36/36 across five families, and the three defects the panel found
+in the guards themselves are fixed rather than baselined. The honest summary is: a self-run
+mutation battery is evidence about its author's imagination; the panel is what measured the
+tests.

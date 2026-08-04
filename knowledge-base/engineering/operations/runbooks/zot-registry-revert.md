@@ -87,14 +87,17 @@ route around it:
    `lifecycle { ignore_changes = [value] }`, so `terraform apply` reports "No changes"
    while the stale value keeps being served. Set the live value in **every config the
    detector names**: Doppler branch configs do **not** inherit values from the `prd` root
-   config (measured 2026-08-02 — one token was carried independently by seven configs), so
-   setting root alone leaves every other stale copy in place and looks completely
-   successful. The script itself calls the old "branch configs inherit it" advice
+   config, so setting root alone leaves every other stale copy in place and looks completely
+   successful. (The detector's own header records the 2026-08-02 measurement behind this;
+   the count is not re-derivable from a default run, which reads one config — so treat the
+   detector's output, not a remembered number, as the list of configs to fix.) The script itself calls the old "branch configs inherit it" advice
    `FALSIFIED`; that correction had never been propagated back here.
 3. **Is the zot host itself healthy?** Two recurring causes, and disk-full is only one:
    - **Disk-full** — see `SOLEUR_ZOT_DISK` / the Better Stack `registry_disk_prd` source.
    - **A crash-restart loop** — the same `SOLEUR_ZOT_DISK` marker carries `zot_restarts`,
-     `exit_code` and `oom_kills`. A climbing `zot_restarts` means pushes are straddling a
+     `exit_code`, `zot_oom_kills` (cumulative) and `oom_kills_5m` (windowed). There is no
+     bare `oom_kills` field — grepping for one substring-matches the cumulative counter and
+     silently relabels it. A climbing `zot_restarts` means pushes are straddling a
      restart: a `docker login` plus a three-tag `crane copy` takes tens of seconds, so at a
      few restarts per minute the tunnel's origin dial fails mid-push. On 2026-08-03 this
      blocked three releases while the credential was fine and the read path was healthy.
