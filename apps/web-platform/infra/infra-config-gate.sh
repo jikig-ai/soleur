@@ -182,6 +182,11 @@ infra_config_content_assert() {
 #   5. infra_config_content_assert passed (per-dest sha + template-cardinality pin);
 #   6. every RESTART_MAP unit has a verdict, and none is `failed`/unrecognised/rc!=0;
 #   7. the RESTART_MAP derivation was non-empty.
+# CARVE-OUT, stated because the list above otherwise overstates the guarantee: items 6 and 7 sit
+# INSIDE the `schema_version >= 2` branch. A frame reporting a lower version skips the whole
+# activation block with a ::warning:: and can return 0 with 6 and 7 never evaluated. That is a
+# deliberate staged-adoption carve-out (see the comment at the branch), not an oversight — but a
+# reader auditing "every path to zero" needs it in the list, not only at the branch.
 # There is NO other `return`. The #7220 fatal branch below only ever SETS rc=1 and silences
 # other MESSAGES; it can never clear rc, and `fatal_line` is not a path to zero.
 adjudicate_infra_config() {

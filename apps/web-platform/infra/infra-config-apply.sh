@@ -290,11 +290,22 @@ INSTALL_HELPER="${INFRA_CONFIG_INSTALL_HELPER:-/usr/local/bin/infra-config-insta
 # none hypothetical: the entry graded `skipped/unit_inactive` forever, making the gate's warning
 # arm the STEADY STATE on a correct host rather than an edge case (the alert fatigue #7103 B3
 # names); the grant bought nothing, because a timer-driven oneshot re-reads its drop-in on its
-# next tick after the `daemon-reload` this handler already performs; and an apply landing inside
+# next tick after the `daemon-reload` this handler PERFORMS ON PAPER — see below; and an apply landing inside
 # the heartbeat's brief active window could try-restart it, find it exited two seconds later, and
 # grade `noop_not_active` — a spurious HARD RED on the sole no-SSH remediation path.
 # Dropping it also retires one root-restart grant on the host that cannot be replaced, which is
 # the direction ADR-159 argues for: do not widen the surface to buy nothing.
+#
+# CORRECTION (#7220): the clause above — and ADR-159, which quotes this comment as its evidence —
+# assumes the `daemon-reload` below actually runs. It does not. It executes as User=deploy with
+# no sudoers grant and has since the line was introduced, so it has never reconciled anything.
+# The reasoning for dropping inngest-heartbeat still holds on its other legs (a timer-driven
+# Type=oneshot with no RemainAfterExit reads `inactive` on nearly every apply, so the entry
+# graded skipped/unit_inactive forever and the grant bought nothing). But the specific premise
+# "its drop-in is re-read after the reload this handler already performs" is FALSE today. The
+# grant that makes it true is PR-B; ADR-159's own Decision text is amended there. Stated here
+# because a file that contradicts itself about its central capability misleads whoever reads it
+# next, and this file's own header now says the reload is ungranted.
 RESTART_MAP=(
   "vector.service|/etc/systemd/system/vector.service.d/10-vector-doppler-token.conf"
 )

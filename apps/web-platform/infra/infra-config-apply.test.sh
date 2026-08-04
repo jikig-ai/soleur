@@ -1252,6 +1252,40 @@ test_fatal_channel_no_secret_leak() {
     *sha256sum*) echo "  PASS: non-vacuous — fatal_cmd was populated"; PASS=$((PASS + 1)) ;;
     *) echo "  FAIL: fatal_cmd empty — the absence assertions above were vacuous"; FAIL=$((FAIL + 1)) ;;
   esac
+
+  # THE ABOVE IS NOT THE PROPERTY. Review caught that honestly: the handler never reads
+  # SOLEUR_SECRET_PROBE, and the failing command's source text (`local_sha=$(sha256sum …)`)
+  # names no secret-bearing variable — so the absence assertions hold by FIXTURE CONSTRUCTION,
+  # not by mechanism. They would still pass against a handler that fully expanded $BASH_COMMAND.
+  #
+  # The real safety argument is a BASH invariant: $BASH_COMMAND carries the literal SOURCE TEXT,
+  # unexpanded. That matters because the sanitizer is NOT a redactor — its charset
+  # `A-Za-z0-9 ._:/=-` preserves a `dp.st.…` token intact. So pin the invariant itself, under
+  # the same shell settings and the same trap shape the handler uses.
+  local probe_out
+  probe_out=$(bash -c '
+    set -euo pipefail; set -o errtrace
+    SECRET="dp.st.LEAKCANARY7220"
+    trap '"'"'printf "%s" "$BASH_COMMAND" > "'"$TMPDIR_ROOT"'/bc.txt"'"'"' ERR
+    /nonexistent-probe-7220 --token="$SECRET"
+  ' 2>/dev/null; cat "$TMPDIR_ROOT/bc.txt" 2>/dev/null || true)
+
+  if [[ -n "$probe_out" ]] && [[ "$probe_out" != *"dp.st.LEAKCANARY7220"* ]] && [[ "$probe_out" == *'$SECRET'* ]]; then
+    echo "  PASS: \$BASH_COMMAND is UNEXPANDED — it carries the literal \$SECRET, never the value"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: \$BASH_COMMAND expansion invariant broken — the sanitizer does NOT redact, so"
+    echo "        this channel would ship credentials to Better Stack. Captured: <$probe_out>"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # The invariant above is voided by exactly one construct class: `eval`, or sourcing generated
+  # text — both re-expand before the trap sees the command. Nothing else in the file pins this,
+  # so a future `eval` would silently convert the fatal channel into a token exfiltrator.
+  local n_eval
+  n_eval=$(grep -cE '(^|[^A-Za-z_])eval[[:space:]]' "$HANDLER" 2>/dev/null || true)
+  [[ "$n_eval" =~ ^[0-9]+$ ]] || n_eval=0
+  assert_eq "the handler contains no \`eval\` (the construct that would void non-expansion)" "0" "$n_eval"
   # The frame must contain no raw quote or newline, which is what keeps it parseable.
   if jq -e . "$INFRA_CONFIG_STATE" >/dev/null 2>&1; then
     echo "  PASS: frame parses (no raw quote/backslash/newline survived the sanitizer)"
@@ -1502,7 +1536,7 @@ test_orphan_hook_selfcheck
 # --- #7220 review: ASSERTION-COUNT FLOOR ---------------------------------------------------
 # Measured: removing the new arm invocations from the runner took this suite 144 -> 110 passed,
 # 0 failed, exit 0. Nothing noticed. A floor makes that loud.
-APPLY_MIN_ASSERTIONS=140
+APPLY_MIN_ASSERTIONS=142
 if [[ "$PASS" -lt "$APPLY_MIN_ASSERTIONS" ]]; then
   echo "  FAIL: assertion-count floor — only $PASS assertions ran, expected >= $APPLY_MIN_ASSERTIONS"
   FAIL=$((FAIL + 1))
