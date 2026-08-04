@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useState } from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import {
@@ -161,8 +161,27 @@ async function renderC4WithHeader(suppressSidebar = true, c4Edit = true) {
   );
 }
 
+/**
+ * #7222 — C4Workspace picks its topology from a live matchMedia read (it is
+ * `ssr: false`-loaded, so there is no hydration seam to protect). happy-dom
+ * defaults to 1024px, which is why every test above exercises the DESKTOP
+ * split without stubbing anything; the mobile arm has to say so explicitly.
+ */
+function stubViewport(mobile: boolean) {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: query.includes("max-width") ? mobile : !mobile,
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("C4Workspace — header-driven Concierge consistency (Workstream C)", () => {
@@ -296,5 +315,59 @@ describe("C4Workspace — c4-edit flag gates the Code tab (AC3/AC10)", () => {
   it("AC10: flag ON ⇒ the discoverability hint is absent (Code tab handles editing)", async () => {
     await renderC4WithHeader(true, true);
     expect(screen.queryByText(/ask the Concierge/i)).toBeNull();
+  });
+});
+
+describe("#7222 — C4Workspace Concierge topology below `md`", () => {
+  it("renders the revealed Concierge as a full-screen overlay, not a split column", async () => {
+    stubViewport(true);
+    await renderC4WithHeader();
+
+    // The overlay host exists and the resizable split does NOT: a splitter with
+    // nothing on its far side is the compressed-panes layout the operator hit.
+    expect(screen.getByTestId("c4-concierge-overlay")).toBeTruthy();
+    expect(screen.queryByTestId("resize-handle")).toBeNull();
+  });
+
+  it("keeps the desktop split column and no overlay above `md`", async () => {
+    stubViewport(false);
+    await renderC4WithHeader();
+
+    // The discriminator for the test above.
+    expect(screen.queryByTestId("c4-concierge-overlay")).toBeNull();
+    expect(screen.getByTestId("resize-handle")).toBeTruthy();
+  });
+
+  it("still mounts exactly one Concierge on mobile (the two hosts share one window)", async () => {
+    stubViewport(true);
+    const { container } = await renderC4WithHeader();
+
+    // Building the window once and choosing its HOST — rather than writing two
+    // breakpoint branches — is what makes this structural. A CSS dual-render
+    // would put two ChatSurfaces on the same contextPath.
+    expect(container.querySelectorAll("[data-kb-chat]")).toHaveLength(1);
+    expect(screen.getAllByTestId("kb-chat-content")).toHaveLength(1);
+  });
+
+  it("the overlay's close control dismisses it and leaves the diagram full-width", async () => {
+    stubViewport(true);
+    await renderC4WithHeader();
+
+    fireEvent.click(screen.getByLabelText("Close Concierge"));
+    expect(screen.queryByTestId("c4-concierge-overlay")).toBeNull();
+    expect(screen.queryByTestId("kb-chat-content")).toBeNull();
+    // The diagram is never unmounted by the overlay — it sits underneath.
+    expect(screen.getByTestId("c4-canvas")).toBeTruthy();
+  });
+
+  it("the shared header trigger re-opens it as an overlay after a dismiss", async () => {
+    stubViewport(true);
+    await renderC4WithHeader();
+
+    fireEvent.click(screen.getByLabelText("Close Concierge"));
+    fireEvent.click(
+      screen.getByRole("button", { name: /ask about this document/i }),
+    );
+    expect(screen.getByTestId("c4-concierge-overlay")).toBeTruthy();
   });
 });
