@@ -84,9 +84,23 @@ three distinct causes FR6c requires:
 
 | Condition | Annotation | Coverage effect |
 |---|---|---|
-| read fails with `does not have access to requested config` | `::error::token_drift_config_binding_mismatch` | config counted UNREAD |
-| read fails any other non-zero way | `::error::token_drift_identify_unreachable` | config counted UNREAD |
-| read succeeds but yields no parseable key set | `::error::token_drift_identify_empty` | config counted UNREAD |
+| read FAILS with `does not have access to requested config` | `::error::token_drift_config_binding_mismatch` | config counted UNREAD |
+| read FAILS non-zero with a non-empty diagnostic on stderr | `::error::token_drift_identify_unreachable` | config counted UNREAD |
+| read FAILS non-zero with an EMPTY stderr — the CLI said nothing | `::error::token_drift_identify_empty` | config counted UNREAD |
+
+**All three arms are branches of a FAILED read.** The third row of this table originally read
+*"read succeeds but yields no parseable key set"*, which describes a different condition that this
+annotation does not fire on. Corrected against the code
+(`scripts/check-cloudflare-token-drift.sh`, the `if ! _names="$(… --only-names …)"` block): the
+discriminator is `[[ -z "$_read_err" ]]` — an empty stderr on an already-failed read — not an empty
+key set on a successful one.
+
+A read that SUCCEEDS and yields no parseable keys is not an error state and is deliberately not one:
+the config is appended to `CONFIG_NAMES`, so it counts as READ and contributes to the floor. That is
+correct — `configs` counts configs whose secret-NAME LISTING succeeded, and a config that genuinely
+holds no token-shaped keys has nothing to grade and is not evidence of a narrowed credential. The
+original wording implied such a config would be counted UNREAD and depress coverage, which would
+have made a legitimately token-free config look like a credential regression.
 
 This satisfies FR6c's substance — mismatch counts UNREAD (which is what gives it a channel), a
 named annotation, and three distinct causes rather than collapsing "the API 5xx'd" into "this

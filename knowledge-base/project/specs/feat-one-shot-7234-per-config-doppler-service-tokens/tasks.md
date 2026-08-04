@@ -80,9 +80,22 @@ identical to the probe host. Nothing to re-run.)*
       exit 2, **zero** doppler calls), the masking-order case, and the single-mode regression case
       driving the **real** argv of all five legacy call sites — **none of which passes
       `--configs-floor`**.
-- [x] **2.4 GREEN — `sort -u` (control C-d).** `scripts/check-cloudflare-token-drift.sh:569` is
-      currently plain `sort`. Add `-u`. Without it, N assertions of one config still length-N the
-      array and print `N/13`. Mutation-test: removing `-u` must red `n5'`.
+- [x] **2.4 GREEN — `sort -u` (control C-d).** The `mapfile -t CONFIG_NAMES < <(printf '%s\n'
+      "${CONFIG_NAMES[@]}" | sort -u)` line in `scripts/check-cloudflare-token-drift.sh` was plain
+      `sort`. Add `-u`. Without it, N appearances of one config still length-N the array and print
+      `N/13`.
+
+      > **CORRECTED — the mutation proof written here was measured UNCONSTRUCTIBLE.** This task
+      > said *"removing `-u` must red `n5'`"*, and it cannot: `n5'` is the mis-binding case, and a
+      > mis-bound credential makes its reads **FAIL**. A failed read appends to `FAILED_CONFIGS`
+      > and never reaches `CONFIG_NAMES`, so nothing is ever duplicated and the case passes
+      > identically with `sort` and with `sort -u`. Confirmed by measurement, not by inspection.
+      >
+      > The real producer of a duplicate is a duplicate in the **ENUMERATION** — the same config
+      > name arriving twice from the config list — which is what **M9** in
+      > `scripts/check-cloudflare-token-drift.test.sh` drives (`$'prd\nprd'` → expect `configs: 1`,
+      > `config_names: prd`). M9 is the mutation proof for C-d; `n5'` is not, and citing it as one
+      > was a claim of coverage the assertion did not have.
 - [x] **2.5 GREEN** Replace the `DOPPLER_CRED` snapshot (`:425-449`) with a `CRED_FOR[<config>]`
       map per plan §D3. Mode selection on **non-emptiness** (`[[ -n … ]]`), pinned — an empty
       `DOPPLER_TOKEN_MAP` must land in the "neither" arm so the merge→apply window reads
@@ -92,9 +105,22 @@ identical to the probe host. Nothing to re-run.)*
       DOPPLER_TOKEN is unset or empty…"*, and that path is now the **merge→apply window's**
       normal shape (empty `DOPPLER_TOKEN_MAP`). Name both variables. Do **not** change its
       behaviour: it must keep publishing `degraded` at 0 configs before `exit 2`.
-- [x] **2.6 GREEN** Single-credential mode (FR5b): 1-entry map from the existing
-      `doppler configs -p soleur --json` (`:479-480`) restricted to exactly-one-result. Byte-for-byte
-      today's behaviour; must NOT depend on the new self-identification surface.
+- [x] **2.6 GREEN** Single-credential mode (FR5b): map every enumerated config to the one
+      credential, from the existing `doppler configs -p soleur --json`. Byte-for-byte today's
+      behaviour; must NOT depend on the new self-identification surface.
+
+      > **CORRECTED — the "restricted to exactly-one-result" restriction was written here, then
+      > deliberately REVERSED during implementation, and this line kept asserting it.** The
+      > restriction assumed a single credential implies a single config. It does not: the
+      > credential class is not fixed — `DOPPLER_TOKEN_PRD` is `prd`-ROOT scoped, and the
+      > enumerate-N-then-read-N fan-out is exactly what the five legacy call sites and this
+      > suite's multi-config fixtures exercise. Refusing `N > 1` would have turned the detector's
+      > core behaviour into an error on its own tests. The shipped code maps every enumerated
+      > config to the one credential and says so in a comment at the `for _c in "${CONFIGS[@]}";
+      > do CRED_FOR["$_c"]="$_cred_single"; done` line ("deliberately NOT 'exactly one config'").
+      > What single mode gives up instead is the per-config binding assertion — one credential
+      > cannot be wrong about which config it is bound to — which is the reason the fan-out scan
+      > uses the map.
 - [x] **2.7 GREEN** Retain `:479-480` with its new meaning; the fatal guard at `:481-485` becomes
       a per-credential failure that counts the config UNREAD.
 - [x] **2.8 GREEN — control C-c, ONLY IF task 0.3.5 admitted it.** Per-credential
