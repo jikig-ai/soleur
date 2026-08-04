@@ -179,11 +179,17 @@ write_files:
       # default the WHOLE capture to sentinels. Adapted from container-restart-monitor.sh:118-119
       # (adds .State.Status). Loop DETECTION keys on zot_restarts delta (reliable); the exit-reason
       # fields are for CAUSE attribution (often stale when a 4/min loop is sampled mid-run).
-      INSPECT=$(docker inspect -f '{{.Id}} {{.RestartCount}} {{.State.Status}} {{.State.OOMKilled}} {{.State.ExitCode}}' zot 2>/dev/null)
+      # StartedAt joins THIS call rather than getting its own (#7247). A second `docker inspect`
+      # would break the one-inspect invariant above in a way that defeats the field's purpose: the
+      # two calls can straddle a restart and pair an exit_code from one run with an uptime from
+      # the next, and if the first succeeds while the second misses you get
+      # `exit_code=0 state_status=running zot_uptime_s=-1` — ambiguous again, which is the exact
+      # condition zot_uptime_s exists to remove.
+      INSPECT=$(docker inspect -f '{{.Id}} {{.RestartCount}} {{.State.Status}} {{.State.OOMKilled}} {{.State.ExitCode}} {{.State.StartedAt}}' zot 2>/dev/null)
       if [ -n "$INSPECT" ]; then
-        read -r ID ZOT_RESTARTS STATE_STATUS OOM_KILLED EXIT_CODE <<<"$INSPECT"
+        read -r ID ZOT_RESTARTS STATE_STATUS OOM_KILLED EXIT_CODE STARTED_AT <<<"$INSPECT"
       else
-        ID=; ZOT_RESTARTS=-1; STATE_STATUS=unknown; OOM_KILLED=unknown; EXIT_CODE=-1
+        ID=; ZOT_RESTARTS=-1; STATE_STATUS=unknown; OOM_KILLED=unknown; EXIT_CODE=-1; STARTED_AT=
       fi
       # (2b2) #7247 — the exit_code STALENESS discriminator. `.State.ExitCode` is 0 for ANY RUNNING
       # container; it only carries a real value while the container is stopped. A 5-minute probe
@@ -197,11 +203,19 @@ write_files:
       # seconds is positive proof the sample is mid-loop and that exit_code carries no information;
       # a large value means the container is genuinely up and exit_code is trustworthy. One field
       # turns an ambiguous 0 into a self-describing one, with no host access.
-      STARTED_AT=$(docker inspect -f '{{.State.StartedAt}}' zot 2>/dev/null)
+      # STARTED_AT comes from the single inspect above. CLAMP is load-bearing: a never-started
+      # container reports StartedAt=0001-01-01T00:00:00Z, which GNU date parses to -62135596800 —
+      # yielding zot_uptime_s≈6.4e10, i.e. "up for 2000 years". That is not the -1 sentinel, it
+      # survives the consumers' non-sentinel filters, and it reads as "exit_code is trustworthy":
+      # the precise inversion of this field's purpose. Negative or absurd => -1 (unknown).
       ZOT_UPTIME_S=-1
       if [ -n "$STARTED_AT" ]; then
         _started_epoch=$(date -u -d "$STARTED_AT" +%s 2>/dev/null || echo "")
-        [ -n "$_started_epoch" ] && ZOT_UPTIME_S=$(( $(date -u +%s) - _started_epoch ))
+        if [ -n "$_started_epoch" ]; then
+          ZOT_UPTIME_S=$(( $(date -u +%s) - _started_epoch ))
+          # Clamp: negative (clock skew) or > 10 years (the 0001-01-01 sentinel) is not a runtime.
+          if [ "$ZOT_UPTIME_S" -lt 0 ] || [ "$ZOT_UPTIME_S" -gt 315360000 ]; then ZOT_UPTIME_S=-1; fi
+        fi
       fi
       # (2c) Container anonymous RSS — the OOM-CONFIRMATION signal (excludes reclaimable page cache,
       # unlike host used-memory). cgroup v2 memory.stat `anon` in bytes → /1048576. Path mirrors
@@ -271,9 +285,37 @@ write_files:
       #
       # grep -a: the buffer may contain binary from a truncated write; without it GNU grep treats
       # the stream as binary and prints nothing, which would silently re-create the empty-field bug.
-      ZOT_ERR_RAW=$(docker logs --tail 2000 zot 2>&1 | grep -aiE 'panic|fatal|"level":"error"|level:error|signal (SIGTERM|SIGKILL|SIGSEGV)|out of memory|runtime error|cannot |failed to ' | tail -n 3)
-      [ -n "$ZOT_ERR_RAW" ] || ZOT_ERR_RAW=$(docker logs --tail 3 zot 2>&1)
-      ZOT_LAST_ERR=$(printf '%s' "$ZOT_ERR_RAW" | tail -c 300 | tr '\n\r\t' ' ' | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\'); [ -n "$ZOT_LAST_ERR" ] || ZOT_LAST_ERR=none
+      # RANKED, not merely widened. A flat grep + `tail -n 3` keeps the NEWEST matches, and the
+      # broadest terms (`cannot `/`failed to `) are exactly what routine zot warn lines hit — so
+      # the current run's chatter evicts the previous run's `panic:`. Try tiers in severity order
+      # and stop at the first that hits.
+      #
+      # `--since 12m` (not `--tail N`): the container runs `--log-driver journald`, so retention is
+      # journald's and a LINE bound is the wrong bound against a variable-chattiness startup scan.
+      # A time bound spans the 5-min cadence regardless of how many restarts occurred.
+      _zlogs() { docker logs --since 12m zot 2>&1; }
+      ZOT_ERR_SRC=none
+      ZOT_ERR_RAW=$(_zlogs | grep -aE 'panic:|fatal error|\[signal SIG|runtime error' | head -n 4)
+      [ -n "$ZOT_ERR_RAW" ] && ZOT_ERR_SRC=panic
+      if [ -z "$ZOT_ERR_RAW" ]; then
+        ZOT_ERR_RAW=$(_zlogs | grep -aE '"level":"(error|fatal)"|level:(error|fatal)|level=(error|fatal)' | head -n 3)
+        [ -n "$ZOT_ERR_RAW" ] && ZOT_ERR_SRC=error
+      fi
+      if [ -z "$ZOT_ERR_RAW" ]; then
+        ZOT_ERR_RAW=$(_zlogs | grep -aiE 'cannot |failed to |unable to |could not |no such file|permission denied' | head -n 3)
+        [ -n "$ZOT_ERR_RAW" ] && ZOT_ERR_SRC=warn
+      fi
+      # Fallback must be DISTINGUISHABLE from a match. Emitting routine tail-3 under the same field
+      # name is how a downstream alarm ends up printing "gc successfully completed" as the cause of
+      # a crash loop — naming a cause nobody measured (ADR-166), which is the defect this whole
+      # change exists to remove. zot_last_err_src says which tier produced the text.
+      if [ -z "$ZOT_ERR_RAW" ]; then ZOT_ERR_RAW=$(docker logs --tail 3 zot 2>&1); ZOT_ERR_SRC=fallback; fi
+      # head -c, NOT tail -c. A Go panic puts `panic: <msg>` on the FIRST line and the frame
+      # offsets after it; tail -c keeps the offsets and discards the only part that names the
+      # cause. Measured: the 2026-08-04 15:00:02Z sample reached Better Stack carrying only
+      # `...scheduler.go:143 +0x265 created by ...poolWorker in goroutine 32` — the panic header
+      # had already been truncated away by exactly this bug.
+      ZOT_LAST_ERR=$(printf '%s' "$ZOT_ERR_RAW" | tr '\n\r\t' ' ' | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\' | head -c 300); [ -n "$ZOT_LAST_ERR" ] || { ZOT_LAST_ERR=none; ZOT_ERR_SRC=none; }
       # (2f) Boot discriminator — the immutable redeploy reuses the terraform hostname, so boot_id is
       # what cleanly separates old-host from new-host events for the automated decision rule.
       BOOT_ID=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null); [ -n "$BOOT_ID" ] || BOOT_ID=unknown
@@ -325,7 +367,7 @@ write_files:
       fi
       # zot_last_err is free-text (may contain spaces) → keep it the LAST field so it never corrupts
       # key=value parsing of the fields before it.
-      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
+      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S zot_last_err_src=$ZOT_ERR_SRC oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
       if [ -n "$TOKEN" ]; then
         # Fail-loud-but-not-wedge: retry ONCE, then breadcrumb to journald. ping_rc is carried in

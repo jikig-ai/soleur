@@ -102,14 +102,24 @@ assert "SOLEUR_ZOT_DISK marker line emitted" "grep -qF 'SOLEUR_ZOT_DISK pcent=' 
 # shellcheck disable=SC2034  # used inside the eval'd `assert` condition strings below (shellcheck can't see it)
 LINE_ASSIGN="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$CI" | head -1)"
 assert "LINE=\"SOLEUR_ZOT_DISK assignment found" "[ -n \"\$LINE_ASSIGN\" ]"
-# zot_uptime_s (#7247): the exit_code staleness discriminator. Guarded here so it cannot be
-# silently dropped — without it `exit_code=0 state_status=running` is unfalsifiable mid-loop.
+# zot_uptime_s + zot_last_err_src (#7247): the two ambiguity discriminators. Guarded here so
+# neither can be silently dropped — without zot_uptime_s, `exit_code=0 state_status=running` is
+# unfalsifiable mid-loop; without zot_last_err_src, a routine-traffic FALLBACK is indistinguishable
+# from a real match and a downstream alarm will print it as the crash cause (ADR-166).
 for f in pcent= fs_size_gb= block_size_gb= resize_ok= zot_restarts= ping_rc= \
          mem_total_mb= zot_anon_mb= zot_oom_kills= state_status= oom_killed= exit_code= \
-         zot_uptime_s= \
+         zot_uptime_s= zot_last_err_src= \
          oom_kills_5m= zot_last_err= boot_id= htpasswd_pull_matches= htpasswd_push_matches=; do
   assert "SOLEUR_ZOT_DISK LINE carries field ${f}" "grep -qF '${f}' <<<\"\$LINE_ASSIGN\""
 done
+# zot_last_err MUST be the LAST field. This is a SECURITY invariant, not cosmetics:
+# scripts/lib/zot-telemetry-parse.sh strips `zot_last_err=` and everything after it so a crafted
+# zot log line cannot spoof boot_id=/exit_code=137. Any field emitted after it is (a) outside the
+# trusted region and (b) invisible to every consumer. This had ZERO coverage before #7247 — the
+# first field insertion next to it got the placement right, and nothing would have caught it if
+# it had not.
+assert "zot_last_err is the LAST field in the LINE (trusted-region boundary)" \
+  "[[ \"\$LINE_ASSIGN\" == *'zot_last_err=\$ZOT_LAST_ERR\"' ]]"
 
 # --- #6497: the htpasswd-divergence probe -------------------------------------------------
 # zot-disk-heartbeat.sh runs `set -u`. A BARE "$ZOT_PULL_TOKEN" on an unset token raises
@@ -142,7 +152,7 @@ assert "probe emits a boolean/sentinel only — never the token" \
 # EXIT_CODE` must match the `docker inspect -f` template column order, else oom_killed/exit_code
 # transpose silently (values still look plausible in telemetry). Pin the exact 5-field template.
 assert "docker inspect -f template order matches the read target order" \
-  "grep -qF \"docker inspect -f '{{.Id}} {{.RestartCount}} {{.State.Status}} {{.State.OOMKilled}} {{.State.ExitCode}}' zot\" '$CI'"
+  "grep -qF \"docker inspect -f '{{.Id}} {{.RestartCount}} {{.State.Status}} {{.State.OOMKilled}} {{.State.ExitCode}} {{.State.StartedAt}}' zot\" '$CI'"
 assert "read targets are in the same order as the inspect template" \
   "grep -qF 'read -r ID ZOT_RESTARTS STATE_STATUS OOM_KILLED EXIT_CODE' '$CI'"
 
