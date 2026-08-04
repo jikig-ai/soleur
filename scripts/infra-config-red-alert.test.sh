@@ -17,6 +17,16 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$HERE/infra-config-red-alert.sh"
 PASS=0; FAIL=0
 
+# Single owning trap for every sandbox this file allocates (ADR-129, rule (c)). Each mock set
+# needs its own dir — the mocks are stateful per case — so they accumulate here and one EXIT
+# trap reclaims them all. Without it a mid-run death (a failing assertion under a future
+# `set -e`, a SIGINT) leaves a /tmp dir per case behind, and /tmp here is a machine-global
+# 4 GiB tmpfs shared by parallel worktrees.
+TMPDIRS=()
+cleanup_tmpdirs() { [[ ${#TMPDIRS[@]} -gt 0 ]] && rm -rf "${TMPDIRS[@]}"; return 0; }
+trap cleanup_tmpdirs EXIT INT TERM
+mk_sandbox() { local d; d=$(mktemp -d); TMPDIRS+=("$d"); printf '%s' "$d"; }
+
 ok()   { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 has()  { grep -qF "$2" "$1"; }
@@ -46,7 +56,7 @@ EOF
 }
 
 run_alert() {  # <detail> <reach>
-  T=$(mktemp -d); mk_mocks "$T"
+  T=$(mk_sandbox); mk_mocks "$T"
   export MOCK_GH_FILE="$T/gh.log" MOCK_CURL_FILE="$T/curl.log"
   : > "$MOCK_GH_FILE"; : > "$MOCK_CURL_FILE"
   PATH="$T:$PATH" \
@@ -103,7 +113,7 @@ if printf '%s' "$UNREACH_CURL" | grep -qF 'infra-config-listener-down'; then
 else bad "unreachable state reused the gate-red Sentry op"; fi
 
 # --- DEDUPE: comment on an open issue rather than filing a second -------------------------
-T=$(mktemp -d); mk_mocks "$T"
+T=$(mk_sandbox); mk_mocks "$T"
 export MOCK_GH_FILE="$T/gh.log" MOCK_CURL_FILE="$T/curl.log"; : > "$MOCK_GH_FILE"; : > "$MOCK_CURL_FILE"
 PATH="$T:$PATH" MOCK_EXISTING_ISSUE=4242 bash "$SCRIPT" "recurred" reachable >/dev/null 2>&1
 if has "$MOCK_GH_FILE" 'issue comment 4242' && ! has "$MOCK_GH_FILE" 'issue create'; then
@@ -111,7 +121,7 @@ if has "$MOCK_GH_FILE" 'issue comment 4242' && ! has "$MOCK_GH_FILE" 'issue crea
 else bad "did not dedupe onto the existing open issue"; fi
 
 # --- FAIL-OPEN: this runs on the failure path and must never abort the caller -------------
-T=$(mktemp -d); mk_mocks "$T"
+T=$(mk_sandbox); mk_mocks "$T"
 export MOCK_GH_FILE="$T/gh.log" MOCK_CURL_FILE="$T/curl.log"; : > "$MOCK_GH_FILE"; : > "$MOCK_CURL_FILE"
 PATH="$T:$PATH" MOCK_GH_WRITE_FAIL=1 MOCK_CURL_FAIL=1 bash "$SCRIPT" "everything broken" reachable >/dev/null 2>&1
 if [[ "$?" -eq 0 ]]; then
@@ -119,7 +129,7 @@ if [[ "$?" -eq 0 ]]; then
 else bad "non-zero exit on telemetry failure — would mask the real failure it reports"; fi
 
 # Sentry is skipped, not fatal, when its env is absent.
-T=$(mktemp -d); mk_mocks "$T"
+T=$(mk_sandbox); mk_mocks "$T"
 export MOCK_GH_FILE="$T/gh.log" MOCK_CURL_FILE="$T/curl.log"; : > "$MOCK_GH_FILE"; : > "$MOCK_CURL_FILE"
 env -u SENTRY_INGEST_DOMAIN -u SENTRY_PROJECT_ID -u SENTRY_PUBLIC_KEY \
   PATH="$T:$PATH" bash "$SCRIPT" "no sentry env" reachable >/dev/null 2>&1
