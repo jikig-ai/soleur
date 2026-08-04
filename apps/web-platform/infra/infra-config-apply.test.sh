@@ -1081,6 +1081,126 @@ test_reconcile_unchanged_content_preserves_mtime() {
 # between grant and caller does not widen anything — it DENIES, and a denied reload is exactly
 # the silent no-op #7220 already was. Pinning both provisioning paths and the caller together is
 # what stops this from regressing into the same invisible failure.
+# --- #7220 AC6: handler->grant lint (CLASS CLOSURE) ---------------------------------------
+#
+# The one guard that would have caught #7220 STRUCTURALLY. The existing lockstep runs
+# grant->handler (derived from RESTART_MAP) and the drift guards run source->source, so neither
+# can see a privileged verb the handler invokes that no map and no grant mentions. A bare
+# `systemctl daemon-reload` was exactly that: invisible to every check in the repo.
+#
+# Direction matters. This walks handler -> grant: every non-READ systemctl/systemd-run verb the
+# handler invokes must be sudo-prefixed AND granted in BOTH sudoers sources.
+#
+# Emits violations on stdout, returns 1 if any. Parameterised by handler path so the SAME code
+# can be run against the pre-fix handler as the proof it would have caught the incident.
+_lint_privileged_verbs() {
+  local handler="$1" sudoers="${SCRIPT_DIR}/deploy-inngest-bootstrap.sudoers"
+  local cloud_init="${SCRIPT_DIR}/cloud-init.yml"
+  local code n_found=0 violations=0
+
+  # Comments MUST be stripped. This handler's prose names `systemctl daemon-reload` seven times
+  # while the code contains it zero times; a lint that reads comments would both false-flag the
+  # documentation and (worse) report a verb as "found" that is never invoked.
+  code=$(sed 's/#.*//' "$handler")
+
+  # READ verbs need no root, and routing them through sudo would be DENIED (the grants pin
+  # specific write verbs), turning every read into a failure. Explicit allowlist, not a
+  # heuristic -- an unknown verb must fall through to the privileged branch, never be assumed
+  # safe.
+  local read_verbs=" show is-active is-enabled cat status list-units "
+
+  local line verb prefix resolved
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    n_found=$((n_found + 1))
+    # Resolve the invocation to (prefix, verb).
+    if [[ "$line" =~ \$SYSTEMCTL_SHOW[[:space:]]+([a-z-]+) ]]; then
+      prefix="read-seam"; verb="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ \$SYSTEMCTL_PRIV[[:space:]]+([a-z-]+) ]]; then
+      prefix="sudo"; verb="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ sudo[[:space:]]+/usr/bin/systemd-run ]]; then
+      prefix="sudo"; verb="systemd-run"
+    elif [[ "$line" =~ (^|[^-_[:alnum:]])(/usr/bin/)?systemctl[[:space:]]+([a-z-]+) ]]; then
+      # A LITERAL, UN-SEAMED, UN-SUDOED systemctl call. This is the #7220 shape.
+      prefix="bare"; verb="${BASH_REMATCH[3]}"
+    else
+      continue
+    fi
+
+    # READ verbs are exempt regardless of prefix.
+    [[ "$read_verbs" == *" $verb "* ]] && continue
+
+    if [[ "$prefix" != "sudo" ]]; then
+      echo "VIOLATION: privileged verb '$verb' is invoked without sudo: $(printf '%s' "$line" | sed 's/^[[:space:]]*//' | cut -c1-90)"
+      violations=$((violations + 1))
+      continue
+    fi
+
+    # Granted in BOTH sources. Matched against the Cmnd_Alias lines only, so a verb named in a
+    # sudoers COMMENT cannot satisfy the check -- the same comment-vs-code trap as above,
+    # one file over.
+    local aliases_s aliases_c
+    aliases_s=$(grep -E '^Cmnd_Alias ' "$sudoers")
+    aliases_c=$(grep -E '^[[:space:]]*Cmnd_Alias ' "$cloud_init")
+    if [[ "$verb" == "systemd-run" ]]; then resolved="systemd-run"; else resolved="systemctl $verb"; fi
+    if ! grep -qF -- "$resolved" <<<"$aliases_s"; then
+      echo "VIOLATION: '$resolved' is invoked but not granted in deploy-inngest-bootstrap.sudoers"
+      violations=$((violations + 1))
+    fi
+    if ! grep -qF -- "$resolved" <<<"$aliases_c"; then
+      echo "VIOLATION: '$resolved' is invoked but not granted in the cloud-init mirror"
+      violations=$((violations + 1))
+    fi
+  done < <(grep -nE '\$SYSTEMCTL_(PRIV|SHOW)|systemd-run|(^|[^-_[:alnum:]$/])(/usr/bin/)?systemctl[[:space:]]' <<<"$code")
+
+  # VACUITY GUARD, mirroring the RESTART_MAP one. A broken extraction yields zero invocations
+  # and the loop above "passes" having classified nothing -- which is the exact failure mode
+  # this lint exists to prevent, reproduced inside the lint itself.
+  if [[ "$n_found" -lt 2 ]]; then
+    echo "VIOLATION: derived only $n_found systemctl invocations from $(basename "$handler") — the extraction is broken, so this lint proves nothing"
+    violations=$((violations + 1))
+  fi
+  [[ "$violations" -eq 0 ]]
+}
+
+test_handler_to_grant_lint() {
+  echo "TEST: #7220 AC6 — every privileged verb the handler invokes is sudo'd AND granted"
+  local out rc=0
+  out=$(_lint_privileged_verbs "$HANDLER") || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    echo "  PASS: no ungranted or un-sudoed privileged verbs in the handler"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: handler->grant lint found violations:"; printf '    %s\n' "$out"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # PROVEN RED AGAINST THE PRE-FIX HANDLER. Without this the lint could be vacuous in a way no
+  # green run would reveal: a check that passes against the code it was written to catch is
+  # decoration. c051005f is pinned for the same reason as the RED-against arm above -- a moving
+  # ref becomes the fixed handler at merge and silently inverts the proof.
+  local PRE_FIX_SHA="c051005f49c8f1afb7322e5ed3b31c975db29355"
+  # Own temp, not TMPDIR_ROOT: this arm calls no setup(), so TMPDIR_ROOT is whatever the
+  # previous test's teardown removed — writing into it fails with ENOENT and the RED proof
+  # reports "broken" when nothing is broken.
+  local old; old=$(mktemp -t lint-old-handler.XXXXXXXX.sh)
+  if git -C "$SCRIPT_DIR" show "${PRE_FIX_SHA}:apps/web-platform/infra/infra-config-apply.sh" > "$old" 2>/dev/null; then
+    local old_out old_rc=0
+    old_out=$(_lint_privileged_verbs "$old") || old_rc=$?
+    if [[ "$old_rc" -ne 0 ]] && [[ "$old_out" == *"daemon-reload"* ]]; then
+      echo "  PASS: the lint FLAGS the pre-fix handler's ungranted daemon-reload (this is #7220)"
+      PASS=$((PASS + 1))
+    else
+      echo "  FAIL: the lint did NOT flag the pre-fix handler — it would not have caught #7220 (rc=$old_rc, out=${old_out:-<none>})"
+      FAIL=$((FAIL + 1))
+    fi
+  elif git -C "$SCRIPT_DIR" rev-parse --verify "${PRE_FIX_SHA}^{commit}" >/dev/null 2>&1; then
+    echo "  FAIL: ${PRE_FIX_SHA:0:8} resolves but could not be read — the RED proof is broken, not skipped"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  SKIP (loud): pinned baseline unavailable (shallow clone) — AC6 RED proof NOT run"
+  fi
+}
+
 # --- #7220 B5 (AC-B2): hardening the self-restart that has NEVER run in production ---------
 #
 # fc8b8179 shipped the delayed webhook self-restart AFTER the reload in the same set -e block,
@@ -1838,6 +1958,7 @@ test_reconcile_timestamp_unparseable
 test_reconcile_vector_ordered_last
 test_reconcile_survives_missing_inputs
 test_reconcile_unchanged_content_preserves_mtime
+test_handler_to_grant_lint
 test_unparseable_hooks_json_is_a_hard_failure
 test_self_restart_collect_argv_lockstep
 test_webhook_start_limit_disabled
