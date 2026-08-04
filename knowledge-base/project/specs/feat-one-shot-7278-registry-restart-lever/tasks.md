@@ -29,6 +29,20 @@ polls, and the `-target=` allowlist must land with the resources it admits.
 - [ ] 0.6 Re-run the allowlist artifact sweep: `git grep -ln -- '-target=' tests/ scripts/ .github/`.
       The plan found 3 relevant artifacts; confirm the set has not grown.
 
+## Phase 0.5 — BLOCKING PREREQUISITE: user_data under the cap (deepen R1)
+
+**Nothing below can be provisioned until this lands.** Measured 2026-08-04:
+`gzip -9 -c apps/web-platform/infra/cloud-init-registry.yml | base64 -w0 | wc -c` = **34320**
+against Hetzner's **32768** cap — already over, before this plan adds anything. This also
+blocks #7277; surface it to the operator independently of this PR.
+
+- [ ] 0.5a Measure the baseline on the **substituted** render, not the raw file.
+- [ ] 0.5b Adopt/generalise `apps/web-platform/infra/modules/git-data-userdata/`
+      (rationale-strip). Do NOT hand-roll a second stripper.
+- [ ] 0.5c Port the parity test (`git-data-render-strip-parity.test.sh`).
+- [ ] 0.5d Assert `base64gzip` length `< 32768` **with margin** for what this plan adds.
+- [ ] 0.5e If it cannot be made to fit → STOP and re-scope; the lever is undeliverable.
+
 ## Phase 1 — Hook contract + scripts (RED first)
 
 - [ ] 1.1 Write failing tests before implementation (`cq-write-failing-tests-before`):
@@ -82,8 +96,29 @@ polls, and the `-target=` allowlist must land with the resources it admits.
 - [ ] 3.6 Sweep the sibling allowlist assertions:
       `tests/scripts/test-destroy-guard-counter-web-platform.sh` and
       `.github/workflows/infra-validation.yml`.
-- [ ] 3.7 Register the new token in `scripts/check-cloudflare-token-drift.sh` (#7071 trap),
-      then run `scripts/followthroughs/token-drift-coverage-7159.sh` and require exit 0.
+- [ ] 3.7 **(deepen R5 — corrected target)** `check-cloudflare-token-drift.sh` has NO
+      hardcoded token list. Add an `access_hostname_for()` case arm mapping
+      `REGISTRY_CTL_ACCESS_TOKEN` → `registry-ctl.<base>`, and pin it with a case in
+      `scripts/check-cloudflare-token-drift.test.sh`. An enumerated token with no mapping is
+      reported UNVERIFIABLE and **fails** the scheduled drift run — so shipping the
+      `doppler_secret` without this arm turns the fleet-wide detector red. Then run
+      `scripts/followthroughs/token-drift-coverage-7159.sh` and require exit 0.
+- [ ] 3.11 **(deepen R4)** Widen the cloud-init admitted-secret self-check to accept
+      `n_total ∈ {4,5}` with the 5th admitted BY NAME, so the `doppler_secret` and the
+      cloud-init edit can land in either order without a boot-fatal window. Unit-test both
+      cardinalities. (Alternative recorded in the ADR: drop the HMAC secret and rely on the CF
+      Access token alone.)
+- [ ] 3.12 **(deepen R8)** Write the registry-ctl Access token to the SCOPED Doppler config,
+      never `soleur/prd` root — the release workflow token reads root and could otherwise fire
+      `recreate-zot`.
+- [ ] 3.13 **(deepen R3)** Add a comment at the cloud-init edit site disclosing that
+      `hcloud_server.registry` has no `ignore_changes=[user_data]` and `user_data` is ForceNew,
+      so this edit arms a pending REPLACE in any untargeted plan — fatal against the current
+      plaintext volume. Ensure no untargeted apply is prescribed anywhere.
+- [ ] 3.14 **(deepen R12)** Before applying, dump the live tunnel ingress list and assert the
+      plan preserves all three existing rules verbatim and in order (whole-list replacement).
+- [ ] 3.15 **(deepen)** `depends_on` from `cloudflare_record.registry_ctl` to the Access policy
+      so DNS cannot resolve ahead of admission control.
 - [ ] 3.8 Add the fourth `connections` entry to `scripts/encryption-posture-ledger.json`
       (schema in the plan) and run `python3 scripts/lint-encryption-posture.py`.
 - [ ] 3.9 Update `cloudflare_notification_policy.service_token_expiry`'s description to name
@@ -95,9 +130,14 @@ polls, and the `-target=` allowlist must land with the resources it admits.
 
 - [ ] 4.1 `scripts/zot-restart-poll-classify.sh` — pure per-frame classifier mirroring
       `scripts/inngest-restart-poll-classify.sh`.
-- [ ] 4.2 `tests/scripts/test-zot-restart-poll-classify.sh` — a fresh-`started_at` frame with
-      a non-serving zot must classify `terminal_fail`; an `exit_code=0` frame whose
-      `started_at < FRESH_FLOOR` must classify `predates`, never `success`.
+- [ ] 4.2 **(deepen R2 — success contract REWRITTEN)** `started_at` alone is disqualified
+      (`--restart unless-stopped` advances it every ~17 s) and `container_id` alone is
+      disqualified for `restart-zot` (`docker restart` reuses the container). Capture
+      `{container_id, restart_count}` at trigger time and compare deltas:
+      - `restart-zot` success ⟺ serving AND `restart_count` **stable** across the settle window.
+      - `recreate-zot` success ⟺ `container_id` **changed** AND serving AND counter stable.
+      - `restart_count` still advancing ⟹ `terminal_fail` (the loop is unfixed).
+      `tests/scripts/test-zot-restart-poll-classify.sh` must cover all three.
 - [ ] 4.3 `.github/workflows/restart-zot-registry.yml`: `workflow_dispatch` with a `choice`
       input (`restart-zot` | `recreate-zot`) selecting the **hook**; `push` registration
       trigger scoped to the file **plus** `if: github.event_name == 'workflow_dispatch'` on
@@ -130,9 +170,16 @@ polls, and the `-target=` allowlist must land with the resources it admits.
 - [ ] 6.1 `registry-luks-recut-6929.md`: "try the restart lever first" pointer + `## Related`
       entry + **the activation-vehicle constraint** (this recut activates the lever; confirm
       the lever's code is on `main` before firing). **Banner untouched.**
-- [ ] 6.2 `scripts/zot-restart-loop-alarm.sh`: re-point the crash-loop remediation from
-      `registry-host-replace` to the lever, with the not-yet-activated caveat. Re-read first;
-      cite content anchors, not line numbers.
+- [ ] 6.2 **(deepen R9 — premise CORRECTED)** `scripts/zot-restart-loop-alarm.sh`: the
+      crash-loop arm sets only `CAUSE=` and has NO remediation text; the
+      `registry-host-replace` routing lives in the **`NIC_CAUSE`** arms, a different failure
+      class a container restart cannot fix. Edit ONLY the crash-loop arm; leave every
+      `NIC_CAUSE` arm untouched.
+- [ ] 6.2b **(deepen R9)** `.github/workflows/scheduled-zot-restart-loop.yml` — the FIRE issue
+      body is what the responder actually reads. Name the lever there.
+- [ ] 6.2c **(deepen R10)** The `lever_not_activated` message must name its escalation path
+      (recut = activation vehicle, #7277 = its blocker, #7247 = live crash-loop/disk). Assert
+      on the message string in a test.
 - [ ] 6.3 `zot-registry-revert.md`: name the lever as the "fix it as a zot problem" how.
 - [ ] 6.4 Verify no `ssh ` appears in any runbook text added, and no human-executed step.
 

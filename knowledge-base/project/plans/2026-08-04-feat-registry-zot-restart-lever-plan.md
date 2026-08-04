@@ -16,6 +16,97 @@ created: 2026-08-04
 
 Closes #7278.
 
+## Enhancement Summary (deepen-plan, 2026-08-04)
+
+**Agents:** architecture-strategist, spec-flow-analyzer, security-sentinel, terraform-architect,
+learnings-researcher. **Gates run:** 4.5, 4.55, 4.6, 4.7, 4.8, 4.9, 4.10.
+
+Deepen-plan found **five blocking defects** in v1. Two of them invalidate v1's central
+claims, and one is a pre-existing production landmine that v1 would have walked into.
+
+### R1 (BLOCKING, pre-existing) — the activation vehicle is already broken
+
+v1 named `registry-luks-recut` as the vehicle that activates the host half. **It cannot run
+today.** Measured directly:
+
+```
+$ gzip -9 -c apps/web-platform/infra/cloud-init-registry.yml | base64 -w0 | wc -c
+34320          # Hetzner user_data cap = 32768  → 1,552 bytes OVER, before template substitution
+# siblings for scale: cloud-init-git-data.yml = 23312, cloud-init-inngest.yml = 18624
+```
+
+`hcloud_server.registry` renders `user_data = base64gzip(templatefile("cloud-init-registry.yml", …))`
+with no comment stripping, and substitution only grows it (incompressible digests/URLs/tokens).
+So **any** registry provisioning event — the recut included — fails at the Hetzner API right
+now. This is inherited (it crossed the cap before this plan existed), not caused by it, but
+v1's entire sequencing story rested on the recut succeeding and never checked.
+
+**Response:** adopt the in-repo remedy as **Phase 1, ahead of all other work** —
+`apps/web-platform/infra/modules/git-data-userdata/` already solves exactly this
+("THE RATIONALE STRIP … comments were 61% of the raw payload") and ships a parity test
+(`git-data-render-strip-parity.test.sh`). The registry must use it before this plan adds a
+webhook binary, a hooks file, three scripts, a unit and an emitter. **This finding also
+blocks #7277 and should be surfaced to the operator independently of this PR.**
+
+### R2 (BLOCKING) — v1's success signal cannot work for `restart-zot`
+
+v1 claimed a fresh `container_id` + `started_at >= FRESH_FLOOR` was "structurally impossible
+for the old container to produce". **False, and v1's own R7 proves it:** `docker restart`
+reuses the container, so `container_id` never changes — and `--restart unless-stopped` is
+already advancing `started_at` every ~17 s, so a crash-looping zot satisfies any freshness
+floor within seconds. v1 reproduced the exact anti-pattern it cited two paragraphs earlier.
+
+**Response:** the success contract is rewritten in AC2 around **the loop stopping**, which is
+the property the operator actually wants and which the burning outage cannot fake.
+
+### R3 (BLOCKING) — this plan arms a host-replace landmine
+
+`hcloud_server.registry` carries **"Deliberately NO lifecycle.ignore_changes=[user_data]"**
+(`zot-registry.tf`), and `user_data` is ForceNew. Editing `cloud-init-registry.yml` therefore
+leaves a **pending REPLACE of the registry host** in any untargeted plan — which, against
+today's plaintext volume, hits R3's `refusing-non-luks-device` arm and takes the registry
+permanently dark. v1's AC6 asserted "no replace" without naming which plan it evaluates, so
+it would have passed *vacuously* against the CI-targeted plan while the landmine sat armed.
+
+### R4 (BLOCKING) — the HMAC secret has no apply path, and either state is boot-fatal
+
+`cloud-init-registry.yml` asserts both directions (`n_total -ne 4 || n_admitted -ne 4` →
+`FATAL … refusing to launch`). Adding a 5th secret while the config holds 4 is fatal; bumping
+the assertion to 5 while the secret is absent is also fatal. The two halves land on
+**different, unorderable apply paths**: `zot-registry.tf` is an `OPERATOR_APPLIED_EXCLUSION`
+(not in the CI `-target` list), and the recut's own gate forbids widening its 6-address
+allow-set.
+
+### R5 (BLOCKING) — AC5 guards the wrong artifact
+
+`scripts/check-cloudflare-token-drift.sh` deliberately has **no hardcoded token list**
+("A hardcoded list is exactly how CF_API_TOKEN_AUDIT was missed"); it enumerates from Doppler
+and maps via an `access_hostname_for()` case arm keyed on the **uppercase** Doppler key. v1's
+`grep -c registry_ctl` is case-sensitive and would never match `REGISTRY_CTL_ACCESS_TOKEN`.
+Worse: an enumerated token with no mapping is reported **UNVERIFIABLE and fails the run**, so
+v1 would have turned the fleet-wide scheduled drift detector red.
+
+### Accepted-and-applied (non-blocking)
+
+R6 AC3 must allowlist permitted hook keys — `adnanh/webhook` also honours
+`pass-arguments-to-command` and `pass-file-to-command`, so v1's "zero
+`pass-environment-to-command`" was itself a reject-list of one.
+R7 Pin `hcloud_firewall_attachment.registry`, not just the zero-rule firewall — a detached
+firewall is zero-rules *and* wide open once :9000 carries a root-equivalent listener.
+R8 The registry-ctl credentials must **not** land in `soleur/prd` root (the release token
+reads it — every release run could fire `recreate-zot`).
+R9 `.github/workflows/scheduled-zot-restart-loop.yml` is the responder's real first-read
+surface and was missing from Files to Edit; and v1's premise about
+`zot-restart-loop-alarm.sh` was wrong — its `registry-host-replace` text lives in the
+**NIC_CAUSE** arms (a different failure class a container restart cannot fix), so
+re-pointing those would be actively harmful.
+R10 `lever_not_activated` must print its escalation path, or Phase 6 makes the incident
+path strictly worse than today's.
+R11 Baking `hooks.json` into `user_data` makes the action set immutable-until-reprovision —
+an ADR consequence, not only a security property.
+R12 Add a `## Downtime & Cutover` section (gate 4.55): the tunnel ingress list is a
+whole-list replacement on the live serving path for `deploy.`/`ssh.`/`registry.`.
+
 > Phase 2.8 note: every provisioning step in this plan is a Terraform resource plus
 > cloud-init. The phrases that read as manual framing below appear only in *prohibitions*
 > (statements that such steps must not exist) and in acceptance criteria that assert their
@@ -204,6 +295,46 @@ is unavailable (R3). Therefore:
 - The activation state must be **observable, never assumed** — see the activation probe
   in §Observability. A lever whose liveness is inferred rather than measured is the
   silent-failure anti-pattern in AC2 wearing a different hat.
+
+---
+
+## Downtime & Cutover
+
+Gate 4.55 fires on the **deploy/router class**: the change rewrites
+`cloudflare_zero_trust_tunnel_cloudflared_config.web`'s `ingress_rule` list, and that
+resource is the **live serving path** for `deploy.` (the deploy webhook), `ssh.` (the CI
+runner bridge) and `registry.` (the fleet's sole image-pull path). v1's claim that "nothing in
+the edge half touches a serving path" was wrong, and its "harmless while nothing listens" was
+right for the wrong reason (it is inert because no DNS record resolves yet, not because the
+origin returns 502/404).
+
+**Offline-inducing operation:** the ingress list is a **whole-list replacement**. Terraform
+sends the full `config` block; a dropped or reordered rule silently breaks the route it
+belonged to, and ingress rules are **first-match**, so a rule landing below the
+`http_status:404` catch-all is dead.
+
+**Zero-downtime path (default, chosen):**
+1. The new rule is **appended above the catch-all** and below the three existing rules — it
+   cannot shadow them, because hostnames are disjoint and matching is exact-host.
+2. The four new resources land in the **same apply** as the ingress edit (the §Ordering
+   invariant), so the hostname never resolves without its Access policy.
+3. `cloudflare_record.registry_ctl` carries an explicit `depends_on` the Access policy, so DNS
+   cannot resolve ahead of admission control.
+4. **Pre-apply verification:** dump the live ingress list before applying and assert the plan
+   preserves all three existing rules verbatim and in relative order. This is the
+   whole-list-replacement discipline ADR-136/#6767 established for ruleset entrypoints; it is
+   **not** currently wired for tunnel configs, and this plan should record that gap rather than
+   assume the existing gate covers it.
+5. **Rollback:** revert the ingress-rule addition and re-apply; the three existing rules are
+   restored from the same declarative source. No data is involved.
+
+**Residual downtime:** none expected. The apply mutates Cloudflare edge config, not the origin;
+existing routes are unchanged tuples. The residual *risk* — not downtime — is a malformed
+whole-list write during an active incident, which step 4 is designed to catch.
+
+**Timing caveat:** the registry store is filling (§Live incident finding). Prefer not to apply
+a tunnel-config rewrite during the window in which the sole pull path may be hard-downing; the
+edge half has no urgency, because the host half cannot activate until the recut anyway.
 
 ---
 
@@ -536,6 +667,23 @@ consumers.
 0.5 Re-pull `SOLEUR_ZOT_DISK` and record whether the store filled since planning — the
     activation story changes if the registry has hard-downed.
 
+### Phase 0.5 — BLOCKING PREREQUISITE: get `user_data` back under the cap (R1)
+
+Nothing else in this plan can be provisioned until this lands. **Do this first; if it cannot
+be made to fit, stop and re-scope — the lever is undeliverable.**
+
+1.0a Measure the baseline on the **substituted** render, not the raw file (the raw file
+     measured 34,320 B against a 32,768 B cap on 2026-08-04).
+1.0b Adopt the existing in-repo remedy: `apps/web-platform/infra/modules/git-data-userdata/`
+     (rationale-strip; its own comment records comments were 61 % of the raw payload).
+     Generalise or mirror it for the registry — do **not** hand-roll a second stripper.
+1.0c Port the parity test (`git-data-render-strip-parity.test.sh`) so the stripped render is
+     provably behaviour-identical to the unstripped one.
+1.0d Assert `base64gzip` length `< 32768` **with margin**, since this plan then adds a webhook
+     binary install, a hooks file, three scripts, a unit and an emitter on top.
+1.0e **Surface to the operator independently:** this defect also blocks #7277, and it blocks
+     *any* registry provisioning today. It is not caused by this PR.
+
 ### Phase 1 — Contract: the hook set and its scripts (RED first)
 
 1.1 Write failing tests **before** implementation (`cq-write-failing-tests-before`):
@@ -630,6 +778,9 @@ provisioning-gated — so the probe must exit non-zero-but-not-failing until
 - `apps/web-platform/infra/dns.tf`
 - `apps/web-platform/infra/zot-registry.tf`
 - `apps/web-platform/infra/cloud-init-registry.yml`
+- `apps/web-platform/infra/modules/git-data-userdata/` — generalise the rationale-strip module for the registry (R1, blocking)
+- `.github/workflows/scheduled-zot-restart-loop.yml` — the FIRE issue body is the responder's real first-read surface (R9)
+- `scripts/check-cloudflare-token-drift.test.sh` — pin the new `access_hostname_for()` arm (R5)
 - `.github/workflows/apply-web-platform-infra.yml` — **extend the `-target=` allowlist** with the four new resources (the ordering invariant above)
 - `tests/scripts/test-destroy-guard-counter-web-platform.sh` — the counter test that pins the allowlist size/membership
 - `.github/workflows/infra-validation.yml` — third artifact asserting on the `-target=` set
@@ -655,27 +806,55 @@ provisioning-gated — so the probe must exit non-zero-but-not-failing until
 - [ ] **AC1a (delivery honesty).** The workflow distinguishes `lever_not_activated`
       (ingress resolves, nothing listening) from a restart failure, with distinct exit
       messages. `grep` the workflow for both verdict strings.
-- [ ] **AC2 (fail-loud + telemetry).** No success path exists that does not assert a
-      **fresh container identity**. Verified by `tests/scripts/test-zot-restart-poll-classify.sh`:
-      a frame with `exit_code=0` whose `started_at < FRESH_FLOOR` classifies as `predates`,
-      never `success`; a frame with a fresh `started_at` but a non-serving zot classifies as
-      `terminal_fail`. Plus: `SOLEUR_ZOT_RESTART` is emitted on both outcomes, and
+- [ ] **AC2 (fail-loud + telemetry) — REWRITTEN per R2.** The success contract is
+      **"the loop stopped"**, not "something restarted". `started_at` alone is disqualified:
+      `--restart unless-stopped` advances it every ~17 s, so a crash-looping zot satisfies any
+      freshness floor. `container_id` alone is disqualified for `restart-zot`: `docker restart`
+      reuses the container. The per-action contracts are therefore:
+      - `restart-zot` → success iff, across a settle window, zot is **serving** AND
+        `restart_count` is **stable** (did not advance). A `restart_count` that keeps climbing
+        is the unfixed crash-loop and MUST classify `terminal_fail`.
+      - `recreate-zot` → success iff `container_id` **differs** from the value captured at
+        trigger time AND zot is serving AND `restart_count` is stable across the settle window.
+      Both actions capture `{container_id, restart_count}` at trigger time (before the hook
+      POST) and compare against the post-settle read — a delta, never an absolute.
+      Verified by `tests/scripts/test-zot-restart-poll-classify.sh` with at minimum: a
+      still-looping frame (`restart_count` advancing) → `terminal_fail`; a `restart-zot` frame
+      with an unchanged `container_id` but stable counter + serving → `success`; a
+      `recreate-zot` frame with an unchanged `container_id` → `terminal_fail`.
+      Plus: `SOLEUR_ZOT_RESTART` is emitted on both outcomes, and
       `scripts/betterstack-query.sh --grep SOLEUR_ZOT_RESTART` is the documented read path
       (**no `ssh `** appears in any prescribed verification command).
-- [ ] **AC3 (blast radius, structural).** `tests/scripts/test-registry-control-hooks-shape.sh`
-      asserts: exactly three hooks; **zero** `pass-environment-to-command` entries across
-      all three; all three carry an HMAC `trigger-rule` with mismatch code 403. Separately,
-      `hcloud_firewall.registry` still declares **zero** inbound rules.
+- [ ] **AC3 (blast radius, structural) — REWRITTEN per R6/R7.**
+      `tests/scripts/test-registry-control-hooks-shape.sh` asserts an **allowlist of permitted
+      keys** per hook object — not the absence of three named ones. `adnanh/webhook` forwards
+      caller input through **three** keys (`pass-environment-to-command`,
+      `pass-arguments-to-command`, `pass-file-to-command`); v1's "zero
+      `pass-environment-to-command`" was itself a reject-list of one, the exact failure mode
+      the design claims to escape. The test asserts: exactly three hooks; every hook object's
+      key set is a **subset of an explicit permitted-key allowlist** that contains **none** of
+      the three forwarding keys; all three carry an HMAC `trigger-rule` with mismatch code 403.
+      Separately, pin **both** that `hcloud_firewall.registry` declares zero inbound rules
+      **and** that `hcloud_firewall_attachment.registry` still binds it to the host — a
+      detached firewall is zero-rules *and* wide open, which the zero-rule assertion alone
+      would pass while :9000 carries a root-equivalent listener.
 - [ ] **AC4 (pointers).** `registry-luks-recut-6929.md` points at the lever as the first
       thing to try **and** states the activation-vehicle constraint;
       `zot-restart-loop-alarm.sh`'s crash-loop remediation names the lever;
       `zot-registry-revert.md` names it. `git diff` on `registry-luks-recut-6929.md` shows
       **no change** to the blocked-state banner owned by PR #7279.
-- [ ] **AC5 (#7071 trap).** The new CF Access service token appears in
-      `scripts/check-cloudflare-token-drift.sh`. `grep -c registry_ctl` ≥ 1. This is
-      independently enforced by the existing `scripts/followthroughs/token-drift-coverage-7159.sh`
-      probe, which asserts every CF token is drift-covered — run it and require exit 0, rather
-      than relying on the grep alone.
+- [ ] **AC5 (#7071 trap) — REWRITTEN per R5.** `scripts/check-cloudflare-token-drift.sh`
+      deliberately holds **no** hardcoded token list ("A hardcoded list is exactly how
+      CF_API_TOKEN_AUDIT was missed") — it enumerates from Doppler via
+      `[A-Z0-9_]*ACCESS_TOKEN_(ID|SECRET)` and maps each to a hostname in the
+      `access_hostname_for()` case arm, keyed on the **uppercase** Doppler key. So the AC is:
+      an `access_hostname_for()` arm exists mapping `REGISTRY_CTL_ACCESS_TOKEN` →
+      `registry-ctl.<base>`, pinned by a case in `scripts/check-cloudflare-token-drift.test.sh`.
+      **This is merge-blocking in the strong sense:** an enumerated token with no mapping is
+      reported UNVERIFIABLE and **fails the run**, so shipping the `doppler_secret` without the
+      mapping turns the fleet-wide scheduled drift detector red. v1's
+      `grep -c registry_ctl` was case-sensitive and could never have matched.
+      Also run `scripts/followthroughs/token-drift-coverage-7159.sh` and require exit 0.
 - [ ] **AC5a (ordering invariant — P0).** The four new Cloudflare resources are present in
       the `-target=` allowlist in `.github/workflows/apply-web-platform-infra.yml`, and the
       `terraform plan` output for the merge-apply target set shows
@@ -687,8 +866,22 @@ provisioning-gated — so the probe must exit non-zero-but-not-failing until
       and `.github/workflows/infra-validation.yml` are updated consistently with the new
       allowlist membership, and the full `tests/scripts/` suite passes — the counter test is
       the one that fails last and loudest if the sweep was partial.
-- [ ] **AC6 (no premature provisioning).** `terraform plan` shows **no** create, replace or
-      destroy of `hcloud_server.registry` or `hcloud_volume.registry`.
+- [ ] **AC6 (no premature provisioning) — REWRITTEN per R3, and it must name its plan.**
+      v1 said "`terraform plan` shows no replace" without naming which plan, which made it pass
+      **vacuously**: the registry is excluded from the CI `-target` set, so the CI plan cannot
+      show a registry replace no matter what. The real state is the opposite of what v1 implied.
+      Split into two assertions:
+      - **AC6a.** The **CI-targeted** plan (the merge-apply `-target` set) shows no create,
+        replace or destroy of `hcloud_server.registry` or `hcloud_volume.registry`.
+      - **AC6b (the landmine disclosure).** Because `hcloud_server.registry` carries
+        *"Deliberately NO lifecycle.ignore_changes=[user_data]"* and `user_data` is ForceNew,
+        editing `cloud-init-registry.yml` leaves a **pending REPLACE** visible in any
+        **untargeted** plan — which against today's plaintext volume would take the registry
+        permanently dark. Assert that (i) this is stated explicitly in the ADR and in a
+        comment at the cloud-init edit site, (ii) **no untargeted apply is prescribed anywhere**
+        in this change or its runbook edits, and (iii) the recut runbook pointer warns that the
+        documented operator-local full apply is now a registry-killing operation until the
+        volume is LUKS.
 - [ ] **AC7 (ADR/C4).** ADR-169 exists (ordinal re-derived at ship) and records the R1
       refutation, the root-equivalence disclosure, and all four rejected alternatives.
       `model.c4` says four ingress rules, carries the control edge, and no longer claims
@@ -701,6 +894,34 @@ provisioning-gated — so the probe must exit non-zero-but-not-failing until
       introduced; no step requires a human to execute a command.
 - [ ] **AC10 (self-restart guard).** The workflow's `push` registration trigger cannot fire
       the op: the job carries `if: github.event_name == 'workflow_dispatch'`.
+- [ ] **AC14 (R1 — user_data under the cap).** After the rationale-strip module is applied,
+      the rendered payload is under Hetzner's 32,768-byte cap **with margin**, measured on the
+      substituted template, not the raw file. Assert via a parity/size test mirroring
+      `git-data-render-strip-parity.test.sh`: the stripped render must be byte-identical in
+      *behaviour* to the unstripped one and `base64gzip` length must be `< 32768`. Record the
+      before/after numbers in the PR body (baseline measured 2026-08-04: **34,320**).
+      **This AC gates every other host-half AC** — without it nothing can be provisioned.
+- [ ] **AC15 (R4 — boot self-check is order-independent).** The admitted-secret self-check
+      accepts **both** cardinalities during the transition (`n_total ∈ {4,5}` with the 5th
+      admitted **by name**), so the `doppler_secret` and the cloud-init edit may land in either
+      order without a boot-fatal window. Asserted by a unit test feeding the self-check both a
+      4-secret and a 5-secret config. If the reviewer-preferred simplification is taken instead
+      (drop the HMAC secret; rely on the CF Access service token alone), record that decision
+      in the ADR with its defense-in-depth trade-off — do **not** leave a single-cardinality
+      assertion that only one apply order can satisfy.
+- [ ] **AC16 (R10 — the dead end has an exit).** The `lever_not_activated` message names the
+      escalation path in its text: the recut dispatch as the activation vehicle, #7277 as its
+      blocker, and #7247 for the live crash-loop/disk-exhaustion. Asserted by a test on the
+      message string, not by a comment. A verdict that tells the responder only "not activated"
+      makes the incident path worse than today's.
+- [ ] **AC17 (R9 — the responder's real first-read surface).** The FIRE issue body composed in
+      `.github/workflows/scheduled-zot-restart-loop.yml` names the lever. The
+      `zot-restart-loop-alarm.sh` edit touches **only** the crash-loop arm; `git diff` shows
+      **no change** to any `NIC_CAUSE` arm (a private-NIC fault is a different failure class
+      that a container restart cannot fix — re-pointing it would be actively harmful).
+- [ ] **AC18 (R8 — credential co-residence).** The registry-ctl Access token is **not** written
+      to the `soleur/prd` root config (which the release workflow token reads); assert its
+      Doppler `config` is the scoped one, so a release run cannot fire `recreate-zot`.
 
 ### Post-activation (fires at the next registry-host provisioning event — tracked by the Phase 7 follow-through, not a merge blocker)
 
