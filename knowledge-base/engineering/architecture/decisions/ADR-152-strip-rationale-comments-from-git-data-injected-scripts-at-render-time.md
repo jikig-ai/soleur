@@ -201,3 +201,47 @@ This ADR covers the render-time transformation only. The birth dispatch and the 
 rehearsal remain out of scope for #6982 and are carried by #7025; the DO-NOT-DISPATCH banner
 stays up, and #6982 additionally re-arms the birth interlock mechanically
 (`git_data_rung2_rehearsal_gate`) so that hold is no longer prose alone.
+
+## Amendment (2026-08-04, #7278) — extended to the registry host, with a DIFFERENT expression
+
+`hcloud_server.registry` was measured at **34,628 B** against the same 32,768 B cap — over it,
+and therefore unprovisionable, before anyone tried to add to it. Because ADR-096 makes the
+registry host cloud-init-only, a provisioning event is its only channel for host-side change,
+so the cap breach silently disabled `registry-host-replace` AND `registry-luks-recut` — both
+recovery levers — independently of their own gates. This ADR's technique is what brought it
+back under (34,628 → 9,072 B).
+
+**The expression is deliberately not shared, and must not be.** The rule above
+(`/(?m)^[ \t]*#([^!\n][^\n]*)?\n/`) preserves `#!` and nothing else. That is correct for the
+artifacts this ADR was written about — the nine INJECTED SCRIPTS — and it is wrong for a
+cloud-init template, because it deletes `#cloud-config`. Deleting it does not fail: the apply
+succeeds, the host boots, and cloud-init never recognises the payload, so none of it runs.
+That is the dark-host indistinguishability ADR-149 names, reached through the mechanism this
+ADR introduced.
+
+The registry uses `/(?m)^[ \t]*#([ \t][^\n]*)?\n/` (`local.registry_rationale_strip` in
+`zot-registry.tf`): a `#` line is rationale only when followed by a **space/tab**, or when
+**bare**. This preserves `#cloud-config` and `#!` by construction rather than by enumeration.
+
+**The generalizable rule, for the next host:**
+
+| What is being stripped | Safe expression | Why |
+|---|---|---|
+| Injected scripts, cloud-init NOT stripped (git-data) | preserve `#!` only | scripts have no `#`-directive but a shebang |
+| The cloud-init template itself (registry) | preserve `#!` **and** any `#`-directive without a separator | `#cloud-config` is load-bearing and is a comment by syntax |
+
+Do not port an expression between these two cases. Verify the divergence the same way #7278
+did: assert the first line survives, assert every shebang survives, and assert the strip is
+not a no-op — a strip that matched nothing satisfies both preservation checks while leaving
+the payload over the cap.
+
+**One copy per expression.** git-data's is hand-mirrored into `git-data-userdata-budget.sh`
+and kept equal by `git-data-render-strip-parity.test.sh`. The registry's is instead
+**extracted** from `zot-registry.tf` by `plugins/soleur/test/cloud-init-user-data-size.test.ts`,
+so there is no second copy and no parity suite. Prefer extraction for any future host: a model
+that strips differently than production measures a payload production never boots, and
+measures it green.
+
+**Coverage gap this closed.** `cloud-init-user-data-size.test.ts` guarded the web and git-data
+hosts and had no registry arm at all, which is why a 1,860 B breach sat undetected. Any host
+whose `user_data` is rendered against the cap needs an arm there at birth, not after a breach.
