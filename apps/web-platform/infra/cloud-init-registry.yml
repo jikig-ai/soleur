@@ -185,6 +185,24 @@ write_files:
       else
         ID=; ZOT_RESTARTS=-1; STATE_STATUS=unknown; OOM_KILLED=unknown; EXIT_CODE=-1
       fi
+      # (2b2) #7247 — the exit_code STALENESS discriminator. `.State.ExitCode` is 0 for ANY RUNNING
+      # container; it only carries a real value while the container is stopped. A 5-minute probe
+      # against a ~14-second restart cycle therefore reads `exit_code=0 state_status=running`
+      # forever, which reads as "clean exit" and is in fact "we sampled mid-run". That is not a
+      # hypothetical misreading: it is the one this issue's own triage had to back out of.
+      # The comment at (2b) already warns these fields are "often stale when a 4/min loop is
+      # sampled mid-run" — but nothing EMITTED let a reader tell stale from real.
+      #
+      # zot_uptime_s closes that: it is the age of the CURRENT run. A value that is always a few
+      # seconds is positive proof the sample is mid-loop and that exit_code carries no information;
+      # a large value means the container is genuinely up and exit_code is trustworthy. One field
+      # turns an ambiguous 0 into a self-describing one, with no host access.
+      STARTED_AT=$(docker inspect -f '{{.State.StartedAt}}' zot 2>/dev/null)
+      ZOT_UPTIME_S=-1
+      if [ -n "$STARTED_AT" ]; then
+        _started_epoch=$(date -u -d "$STARTED_AT" +%s 2>/dev/null || echo "")
+        [ -n "$_started_epoch" ] && ZOT_UPTIME_S=$(( $(date -u +%s) - _started_epoch ))
+      fi
       # (2c) Container anonymous RSS — the OOM-CONFIRMATION signal (excludes reclaimable page cache,
       # unlike host used-memory). cgroup v2 memory.stat `anon` in bytes → /1048576. Path mirrors
       # container-restart-monitor.sh:129-132. Guard -1 if the container/cgroup is absent (mid-restart).
@@ -239,7 +257,23 @@ write_files:
       # mid-sequence-sliced UTF-8 — both invalid unescaped in a JSON string, RFC 8259 §7, so an
       # unstripped tab-indented Go crash trace would make Better Stack reject the WHOLE payload in
       # the exact crash case this field targets); finally drop "/\ so it can't corrupt the JSON.
-      ZOT_LAST_ERR=$(docker logs --tail 3 zot 2>&1 | tail -c 300 | tr '\n\r\t' ' ' | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\'); [ -n "$ZOT_LAST_ERR" ] || ZOT_LAST_ERR=none
+      # (#7247) `--tail 3` was STRUCTURALLY incapable of carrying the crash line this field exists
+      # to carry. zot logs EVERY request at info (:128) and this host's own liveness probe GETs
+      # /v2/ every 5 min, so the last 3 lines are near-always routine HTTP traffic. Across a 21-hour
+      # 4.4-restarts/min loop (2026-08-03 17:08Z onward) the field carried a cause exactly zero
+      # times — every sample was an HTTP 200/401 session line or a gc/dedupe info line. The comment
+      # above already called this "the exact crash case this field targets"; the window was the bug.
+      #
+      # Scan WIDE and FILTER for cause-bearing lines instead. Falls back to the original tail-3 when
+      # nothing matches, so this is never emptier than what it replaces. `--restart unless-stopped`
+      # restarts the SAME container (RestartCount 5032 on one container id), so `docker logs`
+      # accumulates ACROSS restarts and a prior run's fatal line is still in the buffer.
+      #
+      # grep -a: the buffer may contain binary from a truncated write; without it GNU grep treats
+      # the stream as binary and prints nothing, which would silently re-create the empty-field bug.
+      ZOT_ERR_RAW=$(docker logs --tail 2000 zot 2>&1 | grep -aiE 'panic|fatal|"level":"error"|level:error|signal (SIGTERM|SIGKILL|SIGSEGV)|out of memory|runtime error|cannot |failed to ' | tail -n 3)
+      [ -n "$ZOT_ERR_RAW" ] || ZOT_ERR_RAW=$(docker logs --tail 3 zot 2>&1)
+      ZOT_LAST_ERR=$(printf '%s' "$ZOT_ERR_RAW" | tail -c 300 | tr '\n\r\t' ' ' | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\'); [ -n "$ZOT_LAST_ERR" ] || ZOT_LAST_ERR=none
       # (2f) Boot discriminator — the immutable redeploy reuses the terraform hostname, so boot_id is
       # what cleanly separates old-host from new-host events for the automated decision rule.
       BOOT_ID=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null); [ -n "$BOOT_ID" ] || BOOT_ID=unknown
@@ -291,7 +325,7 @@ write_files:
       fi
       # zot_last_err is free-text (may contain spaces) → keep it the LAST field so it never corrupts
       # key=value parsing of the fields before it.
-      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
+      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
       if [ -n "$TOKEN" ]; then
         # Fail-loud-but-not-wedge: retry ONCE, then breadcrumb to journald. ping_rc is carried in

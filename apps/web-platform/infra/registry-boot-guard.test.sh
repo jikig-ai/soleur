@@ -102,8 +102,11 @@ assert "SOLEUR_ZOT_DISK marker line emitted" "grep -qF 'SOLEUR_ZOT_DISK pcent=' 
 # shellcheck disable=SC2034  # used inside the eval'd `assert` condition strings below (shellcheck can't see it)
 LINE_ASSIGN="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$CI" | head -1)"
 assert "LINE=\"SOLEUR_ZOT_DISK assignment found" "[ -n \"\$LINE_ASSIGN\" ]"
+# zot_uptime_s (#7247): the exit_code staleness discriminator. Guarded here so it cannot be
+# silently dropped — without it `exit_code=0 state_status=running` is unfalsifiable mid-loop.
 for f in pcent= fs_size_gb= block_size_gb= resize_ok= zot_restarts= ping_rc= \
          mem_total_mb= zot_anon_mb= zot_oom_kills= state_status= oom_killed= exit_code= \
+         zot_uptime_s= \
          oom_kills_5m= zot_last_err= boot_id= htpasswd_pull_matches= htpasswd_push_matches=; do
   assert "SOLEUR_ZOT_DISK LINE carries field ${f}" "grep -qF '${f}' <<<\"\$LINE_ASSIGN\""
 done
