@@ -906,11 +906,16 @@ logs:
   retention: Actions 90d; Better Stack per source retention
 
 discoverability_test:
-  command: |
-    gh run view <run-id> --log-failed | grep -E 'verdict=|zot_restarts'
-    bash scripts/zot-mirror-diagnosis.sh live 20:23:05Z "0 -> 950"   # arm text, no CI needed
-  expected_output: the release log names the measured verdict and the restart series; the helper
-                   prints the live arm without a token-rotation headline
+  # CORRECTED at ship (preflight Check 10). The original command could not run: it carried a
+  # literal `<run-id>` placeholder, and it invoked zot-mirror-diagnosis.sh directly — but that
+  # file is a pure LIBRARY with no top-level executable code, so it produces nothing when run.
+  # A declared-verifiable-but-unverified command is exactly what Check 10 exists to catch, and
+  # it caught this plan's own.
+  command: bash scripts/zot-mirror-diagnosis.test.sh
+  expected_output: "54 passed, 0 failed"
+  # Runs locally, no CI, no SSH, no credentials. Drives all four arms and the verdict ladder as
+  # direct function calls, so a green run proves the `live` arm renders without a rotation
+  # headline and that `unverifiable` never collapses into `stale`.
   # NO ssh anywhere on this path (hr-no-ssh-fallback-in-runbooks)
 ```
 
