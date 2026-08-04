@@ -358,10 +358,11 @@ PY
 # hand-written copy, not the extracted one — and runs the extracted checksum block under
 # `set -e` exactly as runcmd does.
 #
-# WHY A COPY, AND WHAT KEEPS IT HONEST. The shipped preamble cannot be sourced verbatim
-# here: it hard-codes /var/log/cloud-init-output.log as its detail (absent in the container,
-# so every emit would ship an empty detail and the delivery assertion would prove nothing)
-# and it runs a delivery pre-check against the real DSN. So the driver models it.
+# WHY A COPY, AND WHAT KEEPS IT HONEST. The shipped preamble cannot be sourced verbatim here
+# because it runs a delivery pre-check against the real DSN. (Until #7227 it ALSO hard-coded
+# /var/log/cloud-init-output.log as its detail — absent in the container, so every emit shipped
+# an empty detail; `on_err` now passes "$_onerr_detail", so that half of the reason is gone and
+# the DSN pre-check is what remains.) So the driver models it.
 #
 # A model that nothing compares against is how "the SAME preamble" becomes false without
 # anyone noticing — this comment said exactly that while `preamble.sh` was extracted,
@@ -389,11 +390,23 @@ chmod +x /work/git-data-emit
 mkdir -p /usr/local/bin && cp /work/git-data-emit /usr/local/bin/git-data-emit
 
 STAGE=runcmd_early
+# (#7227) MODELS THE SHIPPED HANDLER, which now derives its title from $STAGE and passes a
+# seeded, [ -s ]-guarded scoped file rather than the literal "". Kept in step deliberately:
+# B2SPEC pins six constructs but NOT the title or the detail source, so a driver left modelling
+# the old shape drifts silently from the preamble it exists to mirror.
+GIT_DATA_RUNCMD_DETAIL=/run/git-data-runcmd.log
+( umask 077; : > "$GIT_DATA_RUNCMD_DETAIL" ) || true
+[ -w "$GIT_DATA_RUNCMD_DETAIL" ] || GIT_DATA_RUNCMD_DETAIL=/dev/null
 on_err() {
   rc=$?
   trap - EXIT
   [ "$rc" -eq 0 ] && exit 0
-  /usr/local/bin/git-data-emit "git-data cloud-init FAILED" "$STAGE" fatal "" "rc=$rc" || true
+  _onerr_detail="$GIT_DATA_RUNCMD_DETAIL.final"
+  ( umask 077; : > "$_onerr_detail" ) || true
+  { dmesg 2>/dev/null | tail -n 20 || true; } > "$_onerr_detail" 2>/dev/null || true
+  [ -s "$_onerr_detail" ] || _onerr_detail="git-data $STAGE rc=$rc: detail capture unavailable"
+  /usr/local/bin/git-data-emit "git-data $STAGE FAILED" "$STAGE" fatal \
+    "$_onerr_detail" "rc=$rc" || true
   exit 1
 }
 trap on_err EXIT

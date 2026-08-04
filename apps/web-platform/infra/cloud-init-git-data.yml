@@ -673,7 +673,12 @@ runcmd:
     # attests encryption — strictly worse than the unstarted promise. Guarded standing by
     # B17 p_mount_no_fallthrough in git-data-luks.test.sh.
     mountpoint -q /mnt/git-data-luks || mount /dev/mapper/git-data /mnt/git-data-luks 2>>"$GIT_DATA_LUKS_DETAIL"
-    grep -q '/dev/mapper/git-data' /etc/fstab 2>>"$GIT_DATA_LUKS_DETAIL" || echo '/dev/mapper/git-data /mnt/git-data-luks ext4 defaults,nofail 0 2' >> /etc/fstab 2>>"$GIT_DATA_LUKS_DETAIL"
+    # (#7227) NO `2>>` ON THE grep. Its rc is consumed by `||`, so a failed redirect — not a
+    # failed search — would fire the append branch: the last instance in this file of the shape
+    # the isLuks/sshd/restart/gc_timer captures were all rewritten to avoid. grep's own stderr
+    # here carries nothing worth a slot; the WRITE keeps its capture, since that is the fallible
+    # half whose cause an operator would actually need.
+    grep -q '/dev/mapper/git-data' /etc/fstab || echo '/dev/mapper/git-data /mnt/git-data-luks ext4 defaults,nofail 0 2' >> /etc/fstab 2>>"$GIT_DATA_LUKS_DETAIL"
     # NO `trap - EXIT`: disarming on success would make the `rc` guard unreachable and so
     # untested. The guard IS what keeps a healthy boot silent (AC36/T17).
     LUKSEOF

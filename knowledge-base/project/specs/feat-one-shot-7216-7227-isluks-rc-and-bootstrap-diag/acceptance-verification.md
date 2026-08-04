@@ -11,7 +11,7 @@ from the as-written files, not from the plan (all four floors were re-derived).
 | git-data-runcmd-rehearsal | 36 assertions, 0 failed | **44 passed, 0 failed** | `bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh` |
 | evidence-capture | 30 passed, 0 failed | **33 passed, 0 failed** | `bash tests/scripts/test-git-data-rung2-evidence-capture.sh` |
 | git-data-rung2-rehearsal | 70 passed, 0 failed | **71 passed, 0 failed** | `bash apps/web-platform/infra/git-data-rung2-rehearsal.test.sh` |
-| user_data `stored` | 25,968 B (headroom 6,800) | **30,148 B (headroom 2,620)** | `bash apps/web-platform/infra/git-data-userdata-budget.sh` |
+| user_data `stored` | 25,968 B (headroom 6,800) | **30,376 B (headroom 2,392)** | `bash apps/web-platform/infra/git-data-userdata-budget.sh` |
 | encryption-posture | 16 stores, 3 connections, 0 unledgered, 0 failing → PASS | **unchanged** | `python3 scripts/lint-encryption-posture.py [--repo-sweep]` |
 
 ## Phase 0.4 — `isLuks` exit codes, re-taken on this branch (AC17)

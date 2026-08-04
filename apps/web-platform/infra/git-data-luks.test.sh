@@ -905,10 +905,16 @@ assert_mutation "A27 plain-script-delivery" p_plain_script_delivery "$CLOUD_INIT
 #
 # `_devalue` (git-data-emit) is the passphrase's ONLY defence: it is 40 chars of
 # alphanumeric and matches no pattern rule in the redactor chain. It is armed only when
-# GIT_DATA_LUKS_KEY is in the emitter's environment — which is true for `luks_err` and the
-# bootstrap trap (both children of `doppler run`) and FALSE for the parent `on_err` and
-# `bootstrap_err`, which run outside that boundary. All four traps ship the SAME
-# /var/log/cloud-init-output.log as their detail.
+# GIT_DATA_LUKS_KEY is in the emitter's environment — true for `luks_err` (a child of
+# `doppler run`) and false for the parent `on_err`, which runs outside that boundary.
+#
+# UPDATED (#7227): this paragraph used to say "all four traps ship the SAME
+# /var/log/cloud-init-output.log as their detail". That is now false in both halves. There are
+# TWO traps, not four — `bootstrap_err` was deleted once `on_err` derived its title from
+# $STAGE — and NO trap ships that log as its detail: #7204 moved `luks_err` off it and #7227
+# moved `on_err` onto a seeded, per-stage-truncated scoped file. The argument this paragraph
+# makes still holds and is the one B19 mechanizes 400 lines below: the invariant is not the
+# redactor, it is that the passphrase never reaches the log in the first place.
 #
 # So the invariant that keeps this safe is not the redactor — it is that the passphrase
 # never reaches that log in the first place. Audited: every use is either `[ -n "$VAR" ]`
