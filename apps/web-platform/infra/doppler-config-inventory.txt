@@ -55,7 +55,7 @@
 # thing now, and the suite additionally asserts the raw and deduped counts AGREE, so a duplicate
 # line fails loudly instead of shifting the pin.
 #
-# ── RAISING THE FLOOR: THREE `13`s MOVE TOGETHER, AND NONE IS DERIVED FROM ANOTHER ──────────
+# ── RAISING THE FLOOR: THREE `13`s MOVE TOGETHER (NONE DERIVED FROM ANOTHER), PLUS A SET RATCHET ──
 # Regenerating this file is only ONE of the edits. When the project legitimately grows (git-data
 # birth adding `prd_git_data` is the known case), raise ALL of these in the SAME PR:
 #
@@ -104,13 +104,18 @@
 # token create can be ordered before the config exists and the apply fails on a race that reads
 # as flake.
 #
-# WHY THE RATCHET DECAYS IF YOU SKIP #2 AND #3. Suppose the floor rightly rises to 14 and only
-# `DOPPLER_CONFIGS_FLOOR` and this file are edited. A LATER PR can then narrow the grant back to
-# 13 configs, lower the declared floor to 13 to match, regenerate this file to 13 names — and
-# pass F1, F2, F3 and the run-time assertion with NO test edited. The ratchet is back at its old
-# notch and the diff shows nothing unusual. The pinned `13`s are the only thing that makes a
-# REDUCTION visible, so raising them is a deliberate edit and never an automated one. Never
-# lower them. See ADR-164, "Known limitations".
+# WHY THE COUNT RATCHET DECAYS IF YOU SKIP #2 AND #3. Suppose the floor rightly rises to 14 and
+# only `DOPPLER_CONFIGS_FLOOR` and this file are edited. A LATER PR can then narrow the grant back
+# to 13 configs, lower the declared floor to 13 to match, regenerate this file to 13 names — and
+# pass F1, F2, F3 and the run-time assertion with NO test edited. The COUNT ratchet is back at its
+# old notch and the diff shows nothing unusual. The pinned `13`s are what make a reduction in the
+# COUNT visible, so raising them is a deliberate edit and never an automated one. Never lower them.
+#
+# That PR still reds, on #4: dropping a name makes this file's name set no longer a superset of
+# origin/main's, and F4b names the config it dropped. This paragraph used to end "the pinned `13`s
+# are the ONLY thing that makes a REDUCTION visible" — true when written, false since #7234's F4b,
+# and the sentence that made the round trip look unpreventable rather than merely unprevented.
+# See ADR-164, "Known limitations" (amended), and ADR-168.
 ci
 cli
 cli_ops
