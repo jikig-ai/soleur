@@ -815,8 +815,8 @@ No open review issue names any other file in this plan's edit set.
 ## Files to Create
 
 - `apps/web-platform/infra/token-drift-read-tokens.tf`
-- `knowledge-base/engineering/architecture/decisions/ADR-168-per-config-read-tokens-for-the-token-drift-scan.md` *(ordinal provisional)*
-- `knowledge-base/project/specs/feat-one-shot-7234-per-config-doppler-service-tokens/tasks.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-168-per-config-read-tokens-for-the-token-drift-scan.md` *(ordinal re-derived 2026-08-04 against freshly-fetched `origin/main`, whose highest is ADR-165; 166/167 are claimed by unmerged siblings, so 168 is free)*
+- `knowledge-base/project/specs/archive/20260804-170149-feat-one-shot-7234-per-config-doppler-service-tokens/tasks.md` *(archived by `/compound` on 2026-08-04, alongside `session-state.md` and `phase0-probe-results.md`)*
 
 ## Files to Edit
 
