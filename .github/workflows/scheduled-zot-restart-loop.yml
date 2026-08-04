@@ -82,7 +82,26 @@ jobs:
           # The checker exit code is DATA, not a job failure — capture it, never let it `exit 1` the
           # step (a non-zero exit would skip the final if:always heartbeat's success path semantics
           # and self-dark the liveness signal). Mirrors scheduled-inngest-health.yml.
-          out="$(bash scripts/zot-restart-loop-alarm.sh 2>&1)"; rc=$?
+          #
+          # `|| rc=$?` IS THE CAPTURE. The previous form was `out="$(…)"; rc=$?`, which does not
+          # capture anything: this step has no `shell:` key, so Actions runs it under
+          # `bash --noprofile --norc -eo pipefail {0}`, and `set -uo pipefail` above does NOT
+          # clear `-e`. An assignment whose command substitution exits non-zero therefore ABORTS
+          # the step AT THAT LINE — before `printf`, before the `$GITHUB_OUTPUT` block below,
+          # before every `::error::` annotation.
+          #
+          # A FIRE is rc=1 BY DESIGN. So on precisely the verdict this alarm exists to report,
+          # the step died and wrote NO outputs, and every downstream `if:` compared against an
+          # unset value. Adding `always()` to those conditions (#7242) removed the implicit
+          # success() lock and left this one — the alarm stayed dark either way. Measured on run
+          # 30851584863: the step printed NOTHING between ##[endgroup] and the exit-1 error.
+          # This is the same defect, and the same fix, that reusable-release.yml documents at
+          # its token-preflight step; it was applied there and missed here.
+          #
+          # Nothing gates on this step's `outcome` (verified: no `steps.alarm.outcome` reference
+          # in this file), so capturing rc cannot disarm a downstream failure gate.
+          rc=0
+          out="$(bash scripts/zot-restart-loop-alarm.sh 2>&1)" || rc=$?
           printf '%s\n' "$out"
 
           verdict="$(printf '%s\n' "$out" | grep -oE 'ZOT_ALARM_VERDICT=[A-Z_]+' | head -1 | cut -d= -f2 || true)"
@@ -129,8 +148,30 @@ jobs:
             *)         echo "::warning::private-NIC evaluation TRANSIENT — ${nic_detail_safe}. No issue filed." ;;
           esac
 
+      # ── WHY `always() &&` ON EVERY FILING STEP BELOW (#7242) ──────────────────
+      # A GitHub Actions step whose `if:` contains no status-check function inherits an
+      # implicit `success()`, so it SKIPS whenever any earlier step failed — regardless of
+      # its own condition. All seven filing steps here carried a bare condition, which
+      # meant that whenever the checker step exited non-zero, every one of them skipped.
+      #
+      # A FIRE *is* a non-zero exit (rc=1, by design). So this alarm — built for exactly
+      # this recurrence (#6291) — could not open its issue on the one verdict it exists to
+      # report. Measured on run 30851584863 (2026-08-03 20:44): checker = failure, all
+      # seven filing steps = skipped, while a textbook 4-restarts/min climb ran for four
+      # hours and produced no [ci/zot-restart-loop] issue at all.
+      #
+      # `always()` only removes the implicit success(); the output conditions still gate
+      # each step. That is safe HERE specifically because all seven compare against
+      # NON-EMPTY literals ('0','1','3','FIRE','ADVISORY','SILENT','GREEN') and a crashed
+      # checker writes no outputs, so an unset value matches no arm. A sibling alarm gating
+      # on an EMPTY-string comparison would invert under the same edit — see the note in
+      # scheduled-inngest-health.yml, where one step needed an outcome guard instead.
+      #
+      # The sibling detector already uses this form: scheduled-terraform-drift.yml
+      # `if: always() && steps.token_drift.outputs.verdict == 'dead'`. This alarm was the
+      # outlier, not the innovation.
       - name: Open or comment recurrence issue (FIRE)
-        if: steps.alarm.outputs.exit_code == '1'
+        if: ${{ !cancelled() && steps.alarm.outputs.exit_code == '1' && steps.alarm.outputs.verdict == 'FIRE' }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -166,7 +207,7 @@ jobs:
           fi
 
       - name: Open or comment producer-silence issue (PRODUCER-SILENT)
-        if: steps.alarm.outputs.exit_code == '3'
+        if: ${{ !cancelled() && steps.alarm.outputs.exit_code == '3' && steps.alarm.outputs.verdict == 'PRODUCER_SILENT' }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -185,6 +226,8 @@ jobs:
           {
             printf '## Zot SOLEUR_ZOT_DISK reporter went dark\n\n'
             printf -- '- **Detail:** %s\n' "$DETAIL"
+            # MEASURED-BY: steps.alarm.outputs.cause, derived by scripts/zot-restart-loop-alarm.sh
+            # from the SOLEUR_ZOT_DISK series scoped to the newest boot_id. Not an inference.
             printf -- '- **Likely cause:** %s\n' "$CAUSE"
             printf -- '- **Detected at:** %s\n' "$NOW"
             printf -- '- **Run log:** %s\n\n' "$RUN_URL"
@@ -201,7 +244,7 @@ jobs:
           fi
 
       - name: Open or comment private-NIC issue (NIC FIRE)
-        if: steps.alarm.outputs.nic_verdict == 'FIRE'
+        if: ${{ !cancelled() && steps.alarm.outputs.nic_verdict == 'FIRE' }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -238,7 +281,7 @@ jobs:
           fi
 
       - name: Open or comment private-NIC self-heal advisory (NIC ADVISORY)
-        if: steps.alarm.outputs.nic_verdict == 'ADVISORY'
+        if: ${{ !cancelled() && steps.alarm.outputs.nic_verdict == 'ADVISORY' }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -260,6 +303,9 @@ jobs:
             printf -- '- **Detail:** %s\n' "$DETAIL"
             printf -- '- **Detected at:** %s\n' "$NOW"
             printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            # MEASURED-BY: steps.alarm.outputs.nic_verdict == 'ADVISORY', which the checker sets
+            # only from a measured nic_ok=true on the newest boot. "serving is FINE" is a statement
+            # about the READ path the NIC guard probed, and it is scoped to that.
             printf '### Why this is filed at all (serving is FINE)\n\nA successful self-heal emits `nic_ok=true`, so the terminal alarm cannot see it. Without this advisory the boot race would self-heal silently forever and never be reported — a LOST ceiling, because today the race at least eventually surfaces as an outage (#6400). A production host rebooting itself is a STANDING signal, not a one-time post-merge read.\n\n'
             printf '### What it confirms\n\nThis is the empirical H2 verdict: `hcloud_server_network` is an ADDITIVE ONLINE ATTACH that landed after the guest configured its network. No terraform ordering can fix that (the attach needs a created server, and a created server is already booting) — which is why the convergence lives on the host. See ADR-115.\n\n'
             printf '### Action\n\nNone urgent. Triage: if `reboot_count` climbs toward the cap (2) across boots, the race is worsening and the bounded wait may need lengthening. Reproduce (no SSH):\n\n```\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep SOLEUR_PRIVATE_NIC --limit 50\n```\n'
@@ -284,7 +330,7 @@ jobs:
           fi
 
       - name: Open or comment private-NIC guard silence issue (NIC SILENT)
-        if: steps.alarm.outputs.nic_verdict == 'SILENT'
+        if: ${{ !cancelled() && steps.alarm.outputs.nic_verdict == 'SILENT' }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -303,6 +349,8 @@ jobs:
           {
             printf '## Private-NIC guard went dark\n\n'
             printf -- '- **Detail:** %s\n' "$DETAIL"
+            # MEASURED-BY: steps.alarm.outputs.cause, derived by scripts/zot-restart-loop-alarm.sh
+            # from the SOLEUR_ZOT_DISK series scoped to the newest boot_id. Not an inference.
             printf -- '- **Likely cause:** %s\n' "$CAUSE"
             printf -- '- **Detected at:** %s\n' "$NOW"
             printf -- '- **Run log:** %s\n\n' "$RUN_URL"
@@ -319,7 +367,7 @@ jobs:
           fi
 
       - name: Auto-close stale private-NIC issues (NIC GREEN)
-        if: steps.alarm.outputs.nic_verdict == 'GREEN'
+        if: ${{ !cancelled() && steps.alarm.outputs.nic_verdict == 'GREEN' }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -343,7 +391,7 @@ jobs:
           done
 
       - name: Auto-close stale issues (GREEN)
-        if: steps.alarm.outputs.exit_code == '0'
+        if: ${{ !cancelled() && steps.alarm.outputs.exit_code == '0' && steps.alarm.outputs.verdict == 'GREEN' }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -380,7 +428,19 @@ jobs:
           # alert. Fail-loud on ANY OTHER exit code too (an abnormal set -u/signal abort) — an
           # unexpected exit must surface as a monitor problem, never be silently checked-in ok.
           # A FIRE is NOT a monitor error — the recurrence issue is its surface.
-          status: ${{ (steps.alarm.outputs.exit_code == '0' || steps.alarm.outputs.exit_code == '1' || steps.alarm.outputs.exit_code == '3') && 'ok' || 'error' }}
+          #
+          # #7242: each `ok` arm now ALSO requires the matching verdict, because exit_code
+          # alone cannot distinguish "the checker evaluated and returned this" from "the
+          # checker aborted and this is what the output happened to hold". Those call for
+          # opposite monitor states and the old expression graded them identically — a
+          # check that cannot report is indistinguishable from one that passed, which is
+          # this PR's own thesis applied to the monitor rather than to the message.
+          #
+          # The discriminator was already in the same step's outputs and simply unread:
+          # the checker emits ZOT_ALARM_VERDICT on every exit path. Pairing them means an
+          # abort that emits no verdict now checks in `error` (the monitor pages) instead
+          # of `ok` (silence). Fail-loud is the correct direction for a liveness signal.
+          status: ${{ ((steps.alarm.outputs.exit_code == '0' && steps.alarm.outputs.verdict == 'GREEN') || (steps.alarm.outputs.exit_code == '1' && steps.alarm.outputs.verdict == 'FIRE') || (steps.alarm.outputs.exit_code == '3' && steps.alarm.outputs.verdict == 'PRODUCER_SILENT')) && 'ok' || 'error' }}
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

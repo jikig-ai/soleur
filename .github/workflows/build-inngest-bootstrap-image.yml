@@ -118,8 +118,12 @@ jobs:
         # Reads only from tracked files (no untrusted github.event.* input).
         run: |
           set -euo pipefail
-          version=$(grep -E '^\s*inngest_cli_version\s*=' apps/web-platform/infra/inngest.tf | sed -E 's/.*"([^"]+)".*/\1/')
-          sha=$(grep -E '^\s*inngest_cli_sha256\s*=' apps/web-platform/infra/inngest.tf | sed -E 's/.*"([^"]+)".*/\1/')
+          # `|| true` so the ERROR branch below is REACHABLE. This block runs under
+          # `set -euo pipefail`, so a grep that matches nothing exits 1, pipefail promotes it,
+          # and `-e` aborts the step HERE — before the `if [[ -z ... ]]` the author wrote to
+          # report exactly that case. The step then fails with no message at all. (#7242)
+          version=$(grep -E '^\s*inngest_cli_version\s*=' apps/web-platform/infra/inngest.tf | sed -E 's/.*"([^"]+)".*/\1/' || true)
+          sha=$(grep -E '^\s*inngest_cli_sha256\s*=' apps/web-platform/infra/inngest.tf | sed -E 's/.*"([^"]+)".*/\1/' || true)
           if [[ -z "$version" || -z "$sha" ]]; then
             echo "ERROR: failed to extract inngest_cli_version or inngest_cli_sha256 from inngest.tf"
             exit 1
