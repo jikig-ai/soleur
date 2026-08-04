@@ -234,7 +234,13 @@ fi
 # branch, for the same reason the gate is (see below).
 if git log "$SCOPE" --format='%(trailers:key='"$TRAILER_KEY"',valueonly)' 2>/dev/null \
      | grep -q '[^[:space:]]'; then
+  # Skipping is right for a REPEATED pass and wrong when the recorded reality CHANGED — e.g. a
+  # degraded 0/N review whose agents later ran to N/N (#7220, 2026-08-04). The stale trailer then
+  # misdescribes coverage to every downstream consumer, in the direction that looks safe. To
+  # supersede, commit a trailer by hand whose final paragraph is trailers ONLY, and say in the body
+  # which commit it supersedes and why.
   echo "emit-review-trailer: branch already carries a $TRAILER_KEY trailer (scope: $SCOPE) — skipping."
+  echo "emit-review-trailer: if coverage CHANGED since that trailer, supersede it by hand — see the comment at this line." >&2
   exit 0
 fi
 

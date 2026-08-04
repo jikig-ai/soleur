@@ -367,6 +367,14 @@ any-succeeded means continue.
 **It is NOT a binary gate for what you REPORT.** Partial coverage is the common case under
 load, and the two states are not interchangeable:
 
+- **A dead agent is RESUMABLE — resume it, do not respawn it.** An agent killed mid-work by a
+  session limit or `529` keeps its transcript; `SendMessage` to its id continues it with context
+  intact, so partial findings it had already established are recovered rather than re-derived. A
+  fresh spawn loses them. Measured 2026-08-04 (#7220): 11 of 11 agents died on a session limit and
+  all 11 resumed — one had reported `PROBE A found something` before dying, and only the resume
+  retrieved it. Corollary for Gate 2a: once the blocking condition clears, that is a RESUME signal,
+  not a fresh decision point — re-running the panel and continuing the pipeline is the default, and
+  stopping again needs a NEW reason.
 - **Retry agents that died on a transient error before accepting partial coverage.** A
   `529 Overloaded` is server-side and usually clears. Resume in small batches (3–4) with
   backoff between batches — re-spawning ten at once is what caused the cascade in the first
