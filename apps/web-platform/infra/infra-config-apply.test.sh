@@ -1104,8 +1104,12 @@ test_sudoers_caller_argv_lockstep() {
 # HARDCODED ZEROS. The CI gate then reported `files_total=0` — the precise opposite of what had
 # happened — with no line, no command and no rc. The handler could fail; it could not say how.
 #
-# Every arm below is proven RED against origin/main's handler by
-# `test_fatal_channel_red_against_main` at the end of this block.
+# The two load-bearing properties below — attribution (fatal_line) and real accounting
+# (files_total) — are proven RED against the PINNED pre-fix handler by
+# `test_fatal_channel_red_against_pre_fix`. Scoped deliberately: that arm drives ONE scenario
+# (poisoned sha256sum) and checks those two fields, so it does not and cannot prove the
+# quiet-channel arms (partial-apply-is-not-a-death, clean-apply-exits-zero) RED — those are
+# expected GREEN against the old handler by construction.
 # =============================================================================================
 
 # Helper: the handler's frame, or the literal string MISSING.
@@ -1337,40 +1341,104 @@ test_fatal_channel_clean_apply_exits_zero() {
   teardown
 }
 
-# --- #7220: PROVE THE ARMS ABOVE ARE RED AGAINST origin/main ---
+# --- #7220: PROVE THE ARMS ABOVE ARE RED AGAINST THE PINNED PRE-FIX HANDLER ---
 # A regression guard that passes against the code it was written to catch is decoration. This
 # runs the pre-#7220 handler from git and asserts it FAILS the two load-bearing properties:
 # attribution (fatal_line) and real accounting (files_total). Skips loudly rather than silently
-# if the git object is unavailable (shallow clone / detached worktree), so a vacuous pass is
-# never mistaken for a proof.
-test_fatal_channel_red_against_main() {
+# if the git object is unavailable, so a vacuous pass is never mistaken for a proof. (NOT
+# "detached worktree" — a linked worktree shares the common object database, so a commit present
+# in the clone is reachable regardless of HEAD state. The pin falsified that half of the old
+# note; absence now means the OBJECT is missing, not that HEAD moved.)
+#
+# NOTE for the next maintainer: this arm runs a FROZEN 2026-08-03 handler through the LIVE
+# fixture path (setup / export_valid_env_vars / _frame_field). If the frame schema changes, this
+# arm asserts against the OLD schema by design — update the expected literal, do NOT repoint the
+# SHA. A red here can mean fixture drift rather than a regression.
+#
+# The pre-fix handler, pinned to an IMMUTABLE commit — NOT `origin/main`.
+#
+# `origin/main` is the natural thing to write here and is exactly wrong: the moment the fix
+# merges, main carries the FIXED handler and these two assertions invert and fail forever. A
+# guard pinned to a moving ref consumes its own fix — that is #7220's second defect, filed after
+# PR-A merged as c2de2581e and turned this suite permanently red (144 passed, 2 failed on every
+# infra PR). A pinned SHA instead asserts that a specific historical handler failed these
+# properties, which stays true forever. Do not "helpfully" restore the branch name.
+#
+# The pinned commit below is the last to touch infra-config-apply.sh BEFORE c2de2581e. Full
+# 40-char SHA, not an abbreviation, so no future object can make it ambiguous. Verified at that
+# commit: the handler contains `fatal_line` zero times and hardcodes "files_total":0 in its
+# EXIT trap.
+#
+# REACHABILITY is what keeps this pin working, and the SHA's LENGTH does not provide it: the
+# commit is an ancestor of main AND carries tags web-v0.248.2 / v3.243.2, and deploy-script-tests
+# checks out with fetch-depth: 0 + fetch-tags: true. Do not prune those tags or narrow that
+# checkout without re-reading the skip/fail arms below.
+readonly PRE_FIX_HANDLER_SHA="701e76e6bfce84ceed91096a58d88df7da5b6932"
+
+test_fatal_channel_red_against_pre_fix() {
   echo "TEST: #7220 — the new assertions are RED against the pre-fix handler"
   setup
   export_valid_env_vars
 
   local old="${TMPDIR_ROOT}/old-handler.sh"
-  if ! git -C "$SCRIPT_DIR" show "origin/main:apps/web-platform/infra/infra-config-apply.sh" > "$old" 2>/dev/null; then
-    # FAIL, not SKIP, when origin/main RESOLVES but the show fails — that is a real breakage,
-    # not an unavailable environment. A silent skip here makes the PR's only proof-of-red one
-    # `fetch-depth: 1` away from not existing, and nothing downstream consumes a skip.
-    if git -C "$SCRIPT_DIR" rev-parse --verify origin/main >/dev/null 2>&1; then
-      echo "  FAIL: origin/main resolves but the handler could not be read — mutation proof is broken, not skipped"
+  if ! git -C "$SCRIPT_DIR" show "${PRE_FIX_HANDLER_SHA}:apps/web-platform/infra/infra-config-apply.sh" > "$old" 2>/dev/null; then
+    # Probe the BLOB, not the commit. `cat-file -e <sha>^{commit}` is the intuitive check and is
+    # wrong here: a BLOBLESS clone (`--filter=blob:none`, a routine CI speed-up) has the commit
+    # object present while the handler's blob is unfetchable, so a commit-probe sends a
+    # legitimate environment to the hard-FAIL arm — the inverse of the bug this guard fixes.
+    # The blob is absent in exactly the environments that should SKIP and present in exactly
+    # those that should FAIL, so it is the predicate that matches the two arms.
+    #
+    # Also NOT `rev-parse --verify`: that returns 0 for any well-formed 40-hex string whose
+    # object is ABSENT (measured on git 2.53.0), which would make the skip arm dead code.
+    if git -C "$SCRIPT_DIR" cat-file -e "${PRE_FIX_HANDLER_SHA}:apps/web-platform/infra/infra-config-apply.sh" 2>/dev/null; then
+      echo "  FAIL: pinned pre-fix commit resolves but the handler could not be read — mutation proof is broken, not skipped"
+      FAIL=$((FAIL + 1))
+    elif [[ -n "${CI:-}" ]]; then
+      # Under CI the pinned commit is REACHABLE BY CONTRACT (deploy-script-tests checks out with
+      # fetch-depth: 0 + fetch-tags: true), so absence is a breakage, not an environment limit.
+      # Pinning widened this window relative to the old `origin/main` read — a remote-tracking
+      # ref resolves at ANY depth, a specific historical commit does not — so the arm that
+      # absence lands on must be the LOUD one wherever the depth is guaranteed.
+      echo "  FAIL: pinned pre-fix commit ${PRE_FIX_HANDLER_SHA:0:9} is absent under CI, where fetch-depth: 0 should guarantee it — mutation proof NOT run"
       FAIL=$((FAIL + 1))
     else
-      echo "  SKIP (loud): origin/main unavailable (shallow clone) — mutation proof NOT run"
+      # Local/offline only. Cause is deliberately NOT narrowed to "shallow clone": `cat-file -e`
+      # measures ABSENCE, and absence is equally produced by a partial/treeless clone, rewritten
+      # history that orphaned the object, a pruned tag, or running outside the soleur checkout.
+      # Naming one unmeasured cause sends the reader to fix something that was never wrong.
+      echo "  SKIP (loud): pinned pre-fix commit ${PRE_FIX_HANDLER_SHA:0:9} not in this object store (shallow/partial clone, rewritten history, or not run inside the soleur checkout) — mutation proof NOT run."
+      echo "              Remedy: run from a full clone (git fetch --unshallow), or re-pin to tag web-v0.248.2."
     fi
     teardown
     return 0
   fi
 
-  printf '#!/bin/sh\nexit 7\n' > "$TMPDIR_ROOT/bin/sha256sum"
+  # The sabotage is what makes this #7220's SHAPE (a delivery that got partway and then died)
+  # rather than any old abort. It must be PROVEN to have been reached: without this witness,
+  # injecting an `exit 99` immediately after the EXIT trap installs — dying before the write
+  # loop, never invoking sha256sum — leaves BOTH assertions below passing at 146/0, because the
+  # trap emits its hardcoded zeros for ANY unhandled exit. The test would then prove only "the
+  # old abort frame is uninformative", never "the old handler could not attribute a DELIVERY
+  # failure". Measured: that mutation survives the two assertions and dies on this one.
+  local sabotage_witness="$TMPDIR_ROOT/sha256sum-invoked"
+  printf '#!/bin/sh\nprintf x >> %s\nexit 7\n' "$sabotage_witness" > "$TMPDIR_ROOT/bin/sha256sum"
   chmod +x "$TMPDIR_ROOT/bin/sha256sum"
   bash "$old" >/dev/null 2>&1 || true
 
+  assert_eq "the sabotage was actually reached — the handler got INTO the delivery path" \
+    "yes" "$([[ -s "$sabotage_witness" ]] && echo yes || echo no)"
+
   # The pre-fix handler wrote hardcoded zeros and carried no attribution at all.
-  local old_line old_total
+  local old_line old_total old_reason
   old_line=$(_frame_field fatal_line)
   old_total=$(_frame_field files_total)
+  old_reason=$(_frame_field reason)
+  # `_frame_field` returns the literal MISSING both when the FIELD is absent and when the FRAME
+  # is absent, so the fatal_line assertion alone is satisfied by the empty universe — replacing
+  # `bash "$old"` with a no-op leaves it passing. Asserting a field that must EXIST is what
+  # pins that a frame was actually published.
+  assert_eq "a frame was actually published (not the empty universe)" "unhandled" "$old_reason"
   assert_eq "pre-fix handler carried NO fatal_line (this is #7220)" "MISSING" "$old_line"
   assert_eq "pre-fix handler reported the hardcoded files_total=0" "0" "$old_total"
 
@@ -1507,7 +1575,7 @@ test_fatal_channel_exit64_replaces_stale_frame
 test_fatal_channel_subshell_attribution
 test_fatal_channel_no_secret_leak
 test_fatal_channel_clean_apply_exits_zero
-test_fatal_channel_red_against_main
+test_fatal_channel_red_against_pre_fix
 test_dropin_restart_grant
 test_reconcile_stale_fires_and_disarms
 test_reconcile_inactive_short_circuits
@@ -1536,7 +1604,18 @@ test_orphan_hook_selfcheck
 # --- #7220 review: ASSERTION-COUNT FLOOR ---------------------------------------------------
 # Measured: removing the new arm invocations from the runner took this suite 144 -> 110 passed,
 # 0 failed, exit 0. Nothing noticed. A floor makes that loud.
-APPLY_MIN_ASSERTIONS=142
+#
+# RATCHET WHEN THE SUITE GROWS. This is a floor, not an equality — but a floor left behind by a
+# growing suite silently re-opens the hole it was built to close. Measured at the 144-assertion
+# era, it carried 2 assertions of slack; the pinned proof-of-red arm costs EXACTLY 2, so a
+# silently-skipping guard landed on 144 >= 142 and passed. Re-measured against the current suite
+# so the skip arm now reds instead of reading green.
+#
+# This is deliberately set to the FULL current count, i.e. zero headroom. That is what makes the
+# skip detectable, and the cost is that it must be ratcheted with every added assertion — treat a
+# floor failure on a green-looking suite as "you added assertions, update this number", not as a
+# regression. Any future environment-conditional SKIP arm must be counted here too.
+APPLY_MIN_ASSERTIONS=148
 if [[ "$PASS" -lt "$APPLY_MIN_ASSERTIONS" ]]; then
   echo "  FAIL: assertion-count floor — only $PASS assertions ran, expected >= $APPLY_MIN_ASSERTIONS"
   FAIL=$((FAIL + 1))
