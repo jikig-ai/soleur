@@ -11,13 +11,27 @@
 # floor should be. The name lines ARE the count; derive it with the `grep` in the CI-check note
 # below rather than restating it here.
 #
-# THIS FILE REPORTS; IT GATES NOTHING. The token-drift coverage ladder compares the number of
-# configs the credential actually READ against `DOPPLER_CONFIGS_FLOOR`, a literal declared in the
-# token-drift step's own `env:` in `.github/workflows/scheduled-terraform-drift.yml`. This
-# inventory only supplies `coverage_ratio`, the `configs_unread` list and `inventory_age_days`.
-# A short, long or stale inventory changes the printed ratio and nothing else: no arm starts or
-# stops firing, no issue opens or closes. Anything else would let a shrinking list lower its own
-# alarm threshold.
+# THIS FILE GATES NO VERDICT THRESHOLD — BUT SINCE #7234 IT DOES DETERMINE REACH.
+#
+# It has two jobs now, and conflating them is the mistake to avoid:
+#
+#   1. REPORTING (unchanged). The coverage ladder compares the number of configs the credential
+#      actually READ against `DOPPLER_CONFIGS_FLOOR`, a literal declared in the token-drift
+#      step's own `env:` in `.github/workflows/scheduled-terraform-drift.yml`. This inventory
+#      supplies only `coverage_ratio`, the `configs_unread` list and `inventory_age_days`. A
+#      short, long or stale inventory changes the printed ratio and nothing else: no arm starts
+#      or stops firing on account of it. Anything else would let a shrinking list lower its own
+#      alarm threshold.
+#   2. MINTING (new). `apps/web-platform/infra/token-drift-read-tokens.tf` reads this file with
+#      `file()` and derives `local.token_drift_configs` from it, so the name lines below ARE the
+#      `for_each` list for `doppler_service_token.token_drift` — one read token per line. The
+#      scan no longer enumerates the project (no credential here can), so this list is also the
+#      only thing that decides which configs get covered at all.
+#
+# The threshold and the reach are therefore DIFFERENT numbers that must stay equal, and the
+# ratchet below is what keeps a shrink visible. An earlier version of this header said "THIS
+# FILE REPORTS; IT GATES NOTHING" — true when written, false since #7234, and the sentence a
+# reader would have trusted while deleting a line.
 #
 # The file is EXPECTED to drift: `git-data-luks.tf` declares a `prd_git_data` config that will
 # exist after git-data birth, and rehearsal dispatches create ephemeral
@@ -53,6 +67,24 @@
 #                                                              (the pre-merge ratchet)
 #   (and `RUNG2_CONFIGS_FLOOR: 13` in the same workflow's rung2-rehearsal-orphan-sweep job,
 #    which declares the same demand for the scratch-config half of that sweep)
+#
+#   4. THE DESTROY GUARD — the only layer that fires ABOVE 13. Since #7234 this list is the
+#      `for_each` key set, so REMOVING a name DESTROYS that config's read token. The apply's
+#      destroy guard (`destroy-guard-filter-web-platform.jq`) counts planned deletes and HALTS
+#      without `[ack-destroy]` on its own line in the MERGE COMMIT MESSAGE (this repo squashes
+#      from branch commit messages, so a PR-body-only ack never reaches it). The three literals
+#      above bound the floor from BELOW; they cannot see a 14→13 round trip, because F3 pins
+#      `floor == inventory count` and `FLOOR_HEADROOM=3` admits 14-16. This is the layer that
+#      makes such a shrink a deliberate act rather than a quiet one.
+#
+# ⚠️ ADDING `prd_git_data` NEEDS A `depends_on`, AND NOTHING ELSE WILL TELL YOU. `config =
+# each.key` is a STRING, so Terraform builds NO dependency edge from the token to the config.
+# Every name in this file today belongs to a config that pre-exists outside Terraform — but
+# `git-data-luks.tf` declares `doppler_config.git_data_prd`, and ADR-149 says `prd_git_data`
+# appears at git-data birth. The PR that adds that name here MUST also add
+# `depends_on = [doppler_config.git_data_prd]` to `doppler_service_token.token_drift`, or the
+# token create can be ordered before the config exists and the apply fails on a race that reads
+# as flake.
 #
 # WHY THE RATCHET DECAYS IF YOU SKIP #2 AND #3. Suppose the floor rightly rises to 14 and only
 # `DOPPLER_CONFIGS_FLOOR` and this file are edited. A LATER PR can then narrow the grant back to

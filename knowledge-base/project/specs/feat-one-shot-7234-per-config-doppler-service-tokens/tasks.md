@@ -44,78 +44,78 @@ identical to the probe host. Nothing to re-run.)*
 
 ## Phase 1 — Terraform (RED → GREEN)
 
-- [ ] **1.1 RED** Write the **C-a** static test in `plugins/soleur/test/token-drift-workflow-causes.test.sh`:
+- [x] **1.1 RED** Write the **C-a** static test in `plugins/soleur/test/token-drift-workflow-causes.test.sh`:
       the `token_drift` resource block sets `config = each.key`, contains no `config = "` literal,
       and the map's key and value come from the same iteration variable. Anchor on the call form,
       not a bare token (`cq-assert-anchor-not-bare-token`). Confirm it fails now.
-- [ ] **1.2 RED** Write **F5**: `local.token_drift_configs` is **set-equal** to the inventory's
+- [x] **1.2 RED** Write **F5**: `local.token_drift_configs` is **set-equal** to the inventory's
       name lines; plus two source greps — the `.tf` contains the literal `^[a-z0-9_]+$` and
       contains no `trimspace(`/`trim(`/`chomp(`.
-- [ ] **1.3 GREEN** Create `apps/web-platform/infra/token-drift-read-tokens.tf` per plan §D1:
+- [x] **1.3 GREEN** Create `apps/web-platform/infra/token-drift-read-tokens.tf` per plan §D1:
       `distinct()`-wrapped `local.token_drift_configs` from `file()` + `can(regex(...))` over raw
       `split("\n")` lines (**no `trimspace()`**); `doppler_service_token.token_drift` with
       `for_each = toset(...)`, `config = each.key`, `name = "token-drift-ci-tf-${each.key}"`,
       `access = "read"`, no `lifecycle`, no `expires_at`;
       `github_actions_secret.doppler_token_drift_map` publishing `DOPPLER_TOKEN_DRIFT_MAP` as
       `jsonencode({for _cfg, _t in ... : _cfg => _t.key})` (**`.key`**, not `.api_key`).
-- [ ] **1.4** Delete `apps/web-platform/infra/token-drift-service-account.tf` (all four resources).
-- [ ] **1.5** Fix `apps/web-platform/infra/kb-drift.tf:100-101` — the "one `doppler_service_account`"
+- [x] **1.4** Delete `apps/web-platform/infra/token-drift-service-account.tf` (all four resources).
+- [x] **1.5** Fix `apps/web-platform/infra/kb-drift.tf:100-101` — the "one `doppler_service_account`"
       count and the `token-drift-service-account.tf` cross-reference.
-- [ ] **1.6** `.github/workflows/apply-web-platform-infra.yml`: **add** two legs
+- [x] **1.6** `.github/workflows/apply-web-platform-infra.yml`: **add** two legs
       (`-target=doppler_service_token.token_drift`, one leg covers all 13 instances;
       `-target=github_actions_secret.doppler_token_drift_map`) to the default per-merge allow-list
       (`:461-577`). **KEEP** the four existing legs at `:523-526` — they carry the destroy.
-- [ ] **1.7** `terraform fmt`, `terraform validate`, `plugins/soleur/test/terraform-target-parity.test.ts`.
+- [x] **1.7** `terraform fmt`, `terraform validate`, `plugins/soleur/test/terraform-target-parity.test.ts`.
 
 ---
 
 ## Phase 2 — Detector (RED → GREEN)
 
-- [ ] **2.1 RED** Teach the `doppler` stub in `scripts/check-cloudflare-token-drift.test.sh:72-154`
+- [x] **2.1 RED** Teach the `doppler` stub in `scripts/check-cloudflare-token-drift.test.sh:72-154`
       a token→config binding fixture so P3's per-config argv assertions gain teeth.
-- [ ] **2.2 RED** Author `n5'` — the **producible** mis-binding: 13 **distinct** tokens all bound
+- [x] **2.2 RED** Author `n5'` — the **producible** mis-binding: 13 **distinct** tokens all bound
       to one config (it passes shape validation, which is the point). Confirm it fails now.
-- [ ] **2.3 RED** Author `n4'` (one revoked token → `configs: 12`, `degraded`, `configs_unread`
+- [x] **2.3 RED** Author `n4'` (one revoked token → `configs: 12`, `degraded`, `configs_unread`
       naming exactly it), the malformed-map case (`unknown`, `0/13`, verdict published before
       exit 2, **zero** doppler calls), the masking-order case, and the single-mode regression case
       driving the **real** argv of all five legacy call sites — **none of which passes
       `--configs-floor`**.
-- [ ] **2.4 GREEN — `sort -u` (control C-d).** `scripts/check-cloudflare-token-drift.sh:569` is
+- [x] **2.4 GREEN — `sort -u` (control C-d).** `scripts/check-cloudflare-token-drift.sh:569` is
       currently plain `sort`. Add `-u`. Without it, N assertions of one config still length-N the
       array and print `N/13`. Mutation-test: removing `-u` must red `n5'`.
-- [ ] **2.5 GREEN** Replace the `DOPPLER_CRED` snapshot (`:425-449`) with a `CRED_FOR[<config>]`
+- [x] **2.5 GREEN** Replace the `DOPPLER_CRED` snapshot (`:425-449`) with a `CRED_FOR[<config>]`
       map per plan §D3. Mode selection on **non-emptiness** (`[[ -n … ]]`), pinned — an empty
       `DOPPLER_TOKEN_MAP` must land in the "neither" arm so the merge→apply window reads
       `degraded 0/13`, not `unknown`. Map-shape validation (C-b) before any network call. **Unset
       `DOPPLER_TOKEN_MAP` after the parse**, mirroring the discipline the replaced block states.
-- [ ] **2.5b** Update the "neither" arm's message at `:440-449` — it currently reads *"ERROR:
+- [x] **2.5b** Update the "neither" arm's message at `:440-449` — it currently reads *"ERROR:
       DOPPLER_TOKEN is unset or empty…"*, and that path is now the **merge→apply window's**
       normal shape (empty `DOPPLER_TOKEN_MAP`). Name both variables. Do **not** change its
       behaviour: it must keep publishing `degraded` at 0 configs before `exit 2`.
-- [ ] **2.6 GREEN** Single-credential mode (FR5b): 1-entry map from the existing
+- [x] **2.6 GREEN** Single-credential mode (FR5b): 1-entry map from the existing
       `doppler configs -p soleur --json` (`:479-480`) restricted to exactly-one-result. Byte-for-byte
       today's behaviour; must NOT depend on the new self-identification surface.
-- [ ] **2.7 GREEN** Retain `:479-480` with its new meaning; the fatal guard at `:481-485` becomes
+- [x] **2.7 GREEN** Retain `:479-480` with its new meaning; the fatal guard at `:481-485` becomes
       a per-credential failure that counts the config UNREAD.
-- [ ] **2.8 GREEN — control C-c, ONLY IF task 0.3.5 admitted it.** Per-credential
+- [x] **2.8 GREEN — control C-c, ONLY IF task 0.3.5 admitted it.** Per-credential
       self-identification; a mismatch counts the config **UNREAD** (that is what gives it a
       channel) and emits `::error::token_drift_config_binding_mismatch`. **Capture the probe's
       exit status**: non-zero → `token_drift_identify_unreachable`, empty answer →
       `token_drift_identify_empty`, distinct from a mismatch.
-- [ ] **2.9 GREEN** Point the four read sites (`:536`, `:714`, `:741`, `:742`) at
+- [x] **2.9 GREEN** Point the four read sites (`:536`, `:714`, `:741`, `:742`) at
       `${CRED_FOR[$cfg]}`. Whether `-p`/`-c` stay is decided by task 0.3.2; if they go, test P3
       and the "named EXPLICITLY on every read" comment move with them.
-- [ ] **2.10 GREEN** `compute_coverage` (`:260-296`): add a **map-shape** failure as a second
+- [x] **2.10 GREEN** `compute_coverage` (`:260-296`): add a **map-shape** failure as a second
       `unknown` trigger, evaluated first. An absent/empty credential keeps publishing `degraded`.
       Nothing else changes.
-- [ ] **2.11 GREEN** `coverage_ratio` on any fail-closed path is `<successful reads>/<inventory count>`
+- [x] **2.11 GREEN** `coverage_ratio` on any fail-closed path is `<successful reads>/<inventory count>`
       — `0/13`, never `-/-`.
-- [ ] **2.12 GREEN — NFR1.** Mask each credential the instant it is parsed out of the map and
+- [x] **2.12 GREEN — NFR1.** Mask each credential the instant it is parsed out of the map and
       **BEFORE the first `doppler` invocation of any kind**. **Rewrite the comment at `:454-456`**
       — it currently forbids exactly this (*"The credential itself is deliberately NOT masked
       here"*) and its reasoning was written for a whole-secret credential GitHub masks
       automatically. Record why the prohibition is overturned.
-- [ ] **2.13** `shellcheck` + `bash scripts/check-cloudflare-token-drift.test.sh`.
+- [x] **2.13** `shellcheck` + `bash scripts/check-cloudflare-token-drift.test.sh`.
 
 ---
 

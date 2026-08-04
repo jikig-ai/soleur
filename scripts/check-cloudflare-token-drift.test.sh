@@ -1290,9 +1290,15 @@ else
 fi
 
 echo "P5b: the three narrowings all produce degraded — 0/13, 7/13 and 1/13"
-# N1 role downgrade, N2 environment scoping, N3 a swap back to a config-scoped token. All
-# three SHORTEN what the credential reaches and none can lengthen it, which is what makes
-# a one-sided floor sound. Each must be nameable, not merely non-green.
+# Three ways a SINGLE credential's reach can shorten: a role downgrade (0/13), scoping to
+# one environment (7/13), and a swap to a config-scoped token (1/13). All three SHORTEN
+# what the credential reaches and none can lengthen it, which is what makes a one-sided
+# floor sound. Each must be nameable, not merely non-green.
+#
+# These keep their value under the per-config map (#7234) even though the project-scoped
+# identity they were written against is gone: they are the single-credential path, which
+# five call sites still drive, and the 1/13 case is now ALSO what the fan-out step looks
+# like if it is repointed at a bare DOPPLER_TOKEN. The map's own failure modes are M1-M9.
 #
 # Written as three explicit tuples rather than one packed loop variable: both the config
 # lists and the secrets fixtures carry newlines AND `|`, so any single-string encoding of
