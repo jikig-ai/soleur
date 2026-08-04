@@ -47,12 +47,24 @@ fi
 #
 # Trust-binding (#3535): invoke parser twice and compute MIN in the caller
 # frame. NOTICE last-verified is operator-controlled (a PR can backdate it);
-# scheduled-content-vendor-drift workflow run timestamp is not. Taking the
-# MIN ensures a fresh-looking last-verified cannot suppress a stale-cron
-# banner. NOTICE_FILE and GH_TOKEN propagate explicitly — Bash subshell-exec
-# does NOT inherit them otherwise. Operator-attested-mode banner fires only
-# when the cron binding is unavailable AND last-verified is parseable — when
-# both are 999 the existing 30d/90d banners cover the case.
+# the content-vendor-drift cron's run timestamp is not. Taking the MIN ensures
+# a fresh-looking last-verified cannot suppress a stale-cron banner.
+# NOTICE_FILE and GH_TOKEN propagate explicitly — Bash subshell-exec does NOT
+# inherit them otherwise. Operator-attested-mode banner fires only when the
+# cron binding is unavailable AND last-verified is parseable — when both are
+# 999 the existing 30d/90d banners cover the case.
+#
+# ⚠️ THE CRON HALF OF THIS BINDING IS INERT TODAY (#7255). `cron_days_stale`
+# resolves to 999 on EVERY call: the probe queries
+# `scheduled-content-vendor-drift.yml`, and that workflow no longer exists —
+# the job moved to an Inngest cron with no GitHub Actions run to list. So the
+# MIN below is always MIN(notice, 999) == notice, and the anti-backdating
+# property this comment describes is NOT currently in force. The direction is
+# fail-safe (the operator-attested-mode banner fires rather than a false
+# freshness claim), which is exactly why it went unnoticed. Not fixed here —
+# an Inngest-aware liveness source is a different change in a different
+# subsystem. The comment is corrected rather than left asserting a defense
+# that is not running.
 NOTICE_PARSER="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh"
 notice_days_stale=$(NOTICE_FILE="${NOTICE_FILE:-}" \
   bash "$NOTICE_PARSER" days-stale 2>/dev/null || echo 999)

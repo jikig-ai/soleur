@@ -24,12 +24,18 @@
 /apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh @deruelle
 
 # Trust-binding gate — protects last-verified from drive-by edits (issue #3535).
-# Both workflow files are load-bearing: scheduled-content-vendor-drift.yml is
-# the workflow whose run timestamp feeds cron-run-stale (a rename silently
-# bypasses the MIN-binding); gdpr-gate-self-test.yml is the self-test that
-# asserts the operator-attested-mode banner literal.
+# gdpr-gate-self-test.yml is the self-test that asserts the operator-attested-mode
+# banner literal.
+#
+# The row for /.github/workflows/scheduled-content-vendor-drift.yml is REMOVED: that
+# file does not exist. The content-vendor-drift job migrated to an Inngest cron
+# (apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts), and a
+# CODEOWNERS row matching no path protects nothing while reading, to anyone auditing
+# this block, as though the cron-run-stale binding were still covered. It is not —
+# that probe returns 999 unconditionally (#7255). Restoring a row here is not the fix;
+# the fix is an Inngest-aware liveness source, and whatever path carries it gets the
+# row then.
 /plugins/soleur/skills/gdpr-gate/NOTICE                 @deruelle
-/.github/workflows/scheduled-content-vendor-drift.yml   @deruelle
 /.github/workflows/gdpr-gate-self-test.yml              @deruelle
 /plugins/soleur/test/fixtures/gdpr-gate-stale/          @deruelle
 
