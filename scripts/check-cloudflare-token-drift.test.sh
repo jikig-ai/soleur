@@ -72,6 +72,15 @@ FIX_CRED="dp.sa.SYNTHETICNOTREALSYNTHETICNOTREAL0000"
 cat > "$STUB_DIR/doppler" <<'STUB'
 #!/usr/bin/env bash
 [[ -n "${MOCK_DOPPLER_LOG:-}" ]] && printf '%s\n' "$*" >> "$MOCK_DOPPLER_LOG"
+# NFR1 ORDERING PROBE. How many `::add-mask::` directives had the SUT emitted by the time
+# it first invoked the Doppler CLI? Written once, at the FIRST invocation. The sibling
+# snapshot in the curl stub answers the same question for the first network PROBE; this one
+# is what pins "masked BEFORE the first doppler invocation of any kind", which is the
+# ordering NFR1 requires and the curl snapshot cannot see (every doppler read precedes it).
+if [[ -n "${MOCK_MASK_SNAPSHOT_DOPPLER:-}" && ! -f "${MOCK_MASK_SNAPSHOT_DOPPLER}" && -n "${MOCK_SUT_STDOUT:-}" ]]; then
+  _dseen=$(grep -c '::add-mask::' "${MOCK_SUT_STDOUT}" 2>/dev/null || true)
+  printf '%s' "${_dseen:-0}" > "${MOCK_MASK_SNAPSHOT_DOPPLER}"
+fi
 # Credential and ambient-config observability, recorded for EVERY invocation.
 # `set`/`unset` only — the VALUE is deliberately not written here, because this log is
 # read by assertions whose whole point is that no credential value reaches a file.
@@ -87,6 +96,37 @@ if [[ -z "${DOPPLER_TOKEN:-}" ]]; then
   echo "STUB ERROR: doppler invoked with no explicit DOPPLER_TOKEN — refusing to answer from an ambient credential" >&2
   exit 3
 fi
+
+# TOKEN->CONFIG BINDING FIXTURE. `$MOCK_TOKEN_BINDING` is a file of `token|config` lines.
+# When set, this stub enforces the binding the REAL CLI enforces, measured 2026-08-03
+# against live Doppler with ephemeral config-scoped tokens:
+#
+#   token bound to prd,  -c dev  -> exit 1, "This token does not have access to requested config 'dev'"
+#   token bound to prd,  -c prd  -> the config's keys
+#
+# Without this the stub answers for ANY config given ANY token, so a fan-out whose 13
+# credentials are all bound to ONE config reads 13 configs successfully and reports a
+# confident 13/13 — the exact defect the per-config shape has to be able to detect. A stub
+# that dispatches only on `$1` puts the fixture seam above the code under test.
+#
+# Unset => legacy behaviour: any token answers for any config. Every pre-#7234 case relies
+# on that, and single-credential mode genuinely has no binding to assert.
+_bound_cfg_for_token() {
+  [[ -z "${MOCK_TOKEN_BINDING:-}" || ! -s "${MOCK_TOKEN_BINDING:-/nonexistent}" ]] && return 1
+  grep -E "^${DOPPLER_TOKEN}\|" "$MOCK_TOKEN_BINDING" 2>/dev/null | head -1 | cut -d'|' -f2
+  return 0
+}
+_assert_binding() { # $1 = requested config; echoes the real CLI's error and exits 1 on mismatch
+  local _want="$1" _bound
+  _bound=$(_bound_cfg_for_token) || return 0
+  [[ -z "$_bound" ]] && { echo "doppler: Invalid token" >&2; exit 1; }
+  if [[ "$_bound" != "$_want" ]]; then
+    echo "This token does not have access to requested config '${_want}'" >&2
+    exit 1
+  fi
+  return 0
+}
+
 case "${1:-}" in
   configs)
     # Enumeration failure injection: a NON-EMPTY credential that the API rejects (revoked,
@@ -95,6 +135,12 @@ case "${1:-}" in
     if [[ -n "${MOCK_ENUM_FAIL:-}" ]]; then
       echo "doppler: ${MOCK_ENUM_FAIL}" >&2
       exit 1
+    fi
+    # A bound token's listing is silently scoped to itself (measured: one entry,
+    # success, no error) — the property that made the old shape's narrowing invisible.
+    if _b=$(_bound_cfg_for_token); then
+      [[ -n "$_b" ]] && { printf '[{"name":"%s"}]\n' "$_b"; exit 0; }
+      echo "doppler: Invalid token" >&2; exit 1
     fi
     printf '['
     _first=1
@@ -121,6 +167,7 @@ case "${1:-}" in
         echo "STUB ERROR: 'doppler secrets get ${_key}' invoked with no -c <config>" >&2
         exit 4
       fi
+      _assert_binding "$_cfg"
       _v=$(grep -E "^${_cfg}\|${_key}\|" "$MOCK_SECRETS" 2>/dev/null | head -1 | cut -d'|' -f3-)
       [[ -n "$_v" ]] && printf '%s\n' "$_v"
       exit 0
@@ -137,6 +184,7 @@ case "${1:-}" in
       echo "STUB ERROR: 'doppler secrets --only-names' invoked with no -c <config>" >&2
       exit 4
     fi
+    _assert_binding "$_cfg"
     # Per-config read failure injection. This is N1's subtle form: a role that can
     # ENUMERATE configs but cannot READ their secrets. The config still lists.
     if [[ "${MOCK_UNREADABLE:-}" == "ALL" || ",${MOCK_UNREADABLE:-}," == *",${_cfg},"* ]]; then
@@ -336,11 +384,12 @@ run_sut() {
   OUT="$TMP/$label.out"; CURL_LOG="$TMP/$label.curl"; DOPPLER_LOG="$TMP/$label.doppler"
   DOPPLER_ENV_LOG="$TMP/$label.dopplerenv"; CURL_ENV_LOG="$TMP/$label.curlenv"
   GH_OUTPUT="$TMP/$label.ghoutput"; MASK_SNAPSHOT="$TMP/$label.masksnap"
+  MASK_SNAPSHOT_DOPPLER="$TMP/$label.masksnapdop"
   : > "$DOPPLER_LOG"
   : > "$DOPPLER_ENV_LOG"
   : > "$CURL_ENV_LOG"
   : > "$GH_OUTPUT"
-  rm -f "$MASK_SNAPSHOT"
+  rm -f "$MASK_SNAPSHOT" "$MASK_SNAPSHOT_DOPPLER"
   printf '%s\n' "$configs_body" > "$cfgs" || { echo "FATAL: fixture write failed"; exit 2; }
   printf '%s\n' "$secrets_body" > "$secs" || { echo "FATAL: fixture write failed"; exit 2; }
   : > "$CURL_LOG"
@@ -352,6 +401,12 @@ run_sut() {
     set)   _cred=(DOPPLER_TOKEN="${MOCK_TOKEN_VALUE:-$FIX_CRED}") ;;
     empty) _cred=(DOPPLER_TOKEN=) ;;
     unset) _cred=() ;;
+    # #7234 fan-out modes. `map` is the shipped shape; `map_empty` is the merge->apply
+    # window (secret declared, not yet published) and must land in the SAME arm as
+    # `unset`, which is the property D3 pins by selecting on -n rather than definedness.
+    map)       _cred=(DOPPLER_TOKEN_MAP="${MOCK_TOKEN_MAP:-}") ;;
+    map_empty) _cred=(DOPPLER_TOKEN_MAP=) ;;
+    both)      _cred=(DOPPLER_TOKEN_MAP="${MOCK_TOKEN_MAP:-}" DOPPLER_TOKEN="${MOCK_TOKEN_VALUE:-$FIX_CRED}") ;;
     *)     echo "FATAL: unknown MOCK_CRED_MODE '${MOCK_CRED_MODE:-}'"; exit 2 ;;
   esac
   # An AMBIENT DOPPLER_CONFIG, set deliberately. The SUT must unset it so no child can
@@ -362,7 +417,7 @@ run_sut() {
   # from an operator shell that exported them would otherwise leak a real credential into
   # every case.
   # shellcheck disable=SC2086
-  env -u DOPPLER_TOKEN -u DOPPLER_CONFIG \
+  env -u DOPPLER_TOKEN -u DOPPLER_CONFIG -u DOPPLER_TOKEN_MAP \
   ${_cred[@]+"${_cred[@]}"} ${_ambient[@]+"${_ambient[@]}"} \
   MOCK_CONFIGS="$cfgs" MOCK_SECRETS="$secs" \
   MOCK_HTTP_CODE="$http_code" MOCK_CURL_LOG="$CURL_LOG" \
@@ -376,11 +431,13 @@ run_sut() {
   MOCK_MKTEMP_FAIL="${MOCK_MKTEMP_FAIL:-0}" \
   MOCK_ENUM_FAIL="${MOCK_ENUM_FAIL:-}" \
   MOCK_UNREADABLE="${MOCK_UNREADABLE:-}" \
+  MOCK_TOKEN_BINDING="${MOCK_TOKEN_BINDING:-}" \
   MOCK_DOPPLER_LOG="$DOPPLER_LOG" \
   MOCK_DOPPLER_ENV_LOG="$DOPPLER_ENV_LOG" \
   MOCK_CURL_ENV_LOG="$CURL_ENV_LOG" \
   MOCK_SUT_STDOUT="$OUT" \
   MOCK_MASK_SNAPSHOT="$MASK_SNAPSHOT" \
+  MOCK_MASK_SNAPSHOT_DOPPLER="$MASK_SNAPSHOT_DOPPLER" \
   GITHUB_ACTIONS="${MOCK_GITHUB_ACTIONS:-}" \
   GITHUB_OUTPUT="$GH_OUTPUT" \
   APP_DOMAIN_BASE="soleur.ai" \
@@ -1784,6 +1841,188 @@ if [[ -n "$W10_STEP_START" ]] && grep -qE "verdict == 'dead'" <<<"$W10_GUARD" &&
 else
   fail "the step filing the action-required issue must itself be guarded on verdict == 'dead' (found guard: '${W10_GUARD:-none}') and must carry --label priority/p0-critical (operator-digest sorts on priority and caps the list, so an unprioritised issue is filed and still unseen)"
 fi
+
+# ---------------------------------------------------------------------------
+# M1-M9 — MAP MODE (#7234): the per-config credential fan-out.
+#
+# The scan no longer asks Doppler to enumerate the project — no credential in this
+# repository can — and instead receives one config-scoped read token per config as a JSON
+# map. These cases cover what that shape can get wrong that the single-credential shape
+# could not, and one thing it must keep doing exactly as before.
+#
+# The stub enforces the REAL binding rule here (see MOCK_TOKEN_BINDING): a token errors on
+# a wrong -c rather than silently serving its bound config, measured against live Doppler
+# on 2026-08-03. Without that, every case below would pass against a detector that ignored
+# the binding entirely.
+# ---------------------------------------------------------------------------
+p_map_for() { # $1 = newline-separated configs -> {"cfg":"<distinct token>",...}
+  local cfgs="$1" c out=""
+  while read -r c; do
+    [[ -z "$c" ]] && continue
+    out+="$(printf '"%s":"dp.st.SYNTHETIC.%s"' "$c" "$c"),"
+  done <<< "$cfgs"
+  printf '{%s}' "${out%,}"
+}
+p_bind_for() { # $1 = configs, $2 = config each token is bound to (default: itself)
+  local cfgs="$1" to="${2:-}" c out=""
+  while read -r c; do
+    [[ -z "$c" ]] && continue
+    out+="dp.st.SYNTHETIC.${c}|${to:-$c}"$'\n'
+  done <<< "$cfgs"
+  printf '%s' "$out"
+}
+P_MAP13="$(p_map_for "$P_CFG13")"
+P_BIND13="$TMP/bind13.txt";      p_bind_for "$P_CFG13"     > "$P_BIND13"
+P_BIND_MISBOUND="$TMP/bindmis.txt"; p_bind_for "$P_CFG13" prd > "$P_BIND_MISBOUND"
+
+echo "M1: 13 correctly-bound tokens read 13 of 13"
+JM1="$TMP/m1.json"
+MOCK_HTTP_BODY='{"success":true}' MOCK_CRED_MODE=map MOCK_TOKEN_MAP="$P_MAP13" \
+  MOCK_TOKEN_BINDING="$P_BIND13" \
+  run_sut m1 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV13 --json-file $JM1"
+_m1=1
+[[ "$RC" == "0" ]] || _m1=0
+[[ "$(jget "$JM1" configs)" == "13" ]] || _m1=0
+[[ "$(jget "$JM1" coverage)" == "at-floor" ]] || _m1=0
+[[ "$(jget "$JM1" coverage_ratio)" == "13/13" ]] || _m1=0
+[[ "$(jget "$JM1" config_names)" == "$P_CFG13_SORTED" ]] || _m1=0
+[[ "$(jget "$JM1" configs_unread)" == "" ]] || _m1=0
+# The map's keys ARE the config list: no `doppler configs` enumeration is performed.
+[[ "$(grep -c '^configs' "$DOPPLER_LOG")" == "0" ]] || _m1=0
+if [[ "$_m1" == "1" ]]; then
+  pass "the fan-out reads every config from its own credential, with no project enumeration at all"
+else
+  fail "13 correctly-bound per-config tokens must read 13/13 at-floor with nothing unread, and must NOT call 'doppler configs' — enumeration is the capability no credential here has (rc=$RC, configs=$(jget "$JM1" configs), coverage=$(jget "$JM1" coverage), ratio=$(jget "$JM1" coverage_ratio), enum_calls=$(grep -c '^configs' "$DOPPLER_LOG"))"
+fi
+
+echo "M2 (n5'): 13 DISTINCT tokens all bound to ONE config must not report 13/13"
+# THE PRODUCIBLE TERRAFORM DEFECT: `config = "prd"` in place of `config = each.key`. It
+# mints 13 distinct tokens and 13 correct map keys, so it passes every shape check there
+# is — pairwise distinctness included, which is why distinctness was rejected as the
+# primary control. Only the read can tell, and only because a wrong -c errors.
+JM2="$TMP/m2.json"
+MOCK_HTTP_BODY='{"success":true}' MOCK_CRED_MODE=map MOCK_TOKEN_MAP="$P_MAP13" \
+  MOCK_TOKEN_BINDING="$P_BIND_MISBOUND" \
+  run_sut m2 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV13 --json-file $JM2"
+_m2=1
+[[ "$(jget "$JM2" coverage_ratio)" == "13/13" ]] && _m2=0   # the whole point
+[[ "$(jget "$JM2" configs)" == "1" ]] || _m2=0
+[[ "$(jget "$JM2" coverage)" == "degraded" ]] || _m2=0
+grep -q 'token_drift_config_binding_mismatch' "$OUT" || _m2=0
+if [[ "$_m2" == "1" ]]; then
+  pass "a 13-token set all bound to one config grades 1/13 degraded and names the mismatch, not 13/13"
+else
+  fail "13 distinct tokens bound to a single config must NOT read as full coverage. This is the one mis-binding Terraform can produce and it passes shape validation — if it reports 13/13 the fan-out is decorative (configs=$(jget "$JM2" configs), coverage=$(jget "$JM2" coverage), ratio=$(jget "$JM2" coverage_ratio), mismatch_annotation=$(grep -c 'token_drift_config_binding_mismatch' "$OUT"))"
+fi
+
+echo "M3 (n4'): one revoked token -> 12 of 13, degraded, naming exactly that config"
+JM3="$TMP/m3.json"
+MOCK_HTTP_BODY='{"success":true}' MOCK_CRED_MODE=map MOCK_TOKEN_MAP="$P_MAP13" \
+  MOCK_TOKEN_BINDING="$P_BIND13" MOCK_UNREADABLE="prd_ghcr" \
+  run_sut m3 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV13 --json-file $JM3"
+_m3=1
+[[ "$(jget "$JM3" configs)" == "12" ]] || _m3=0
+[[ "$(jget "$JM3" coverage)" == "degraded" ]] || _m3=0
+[[ "$(jget "$JM3" configs_unread)" == "prd_ghcr" ]] || _m3=0
+if [[ "$_m3" == "1" ]]; then
+  pass "a single revoked per-config token is visible AS that config — the capability the whole-project credential never had"
+else
+  fail "one unreadable config must drop the count to 12, grade degraded, and name exactly it. Under the old project-scoped credential this failure was INVISIBLE: one revoked token was indistinguishable from a healthy fleet (configs=$(jget "$JM3" configs), coverage=$(jget "$JM3" coverage), unread=$(jget "$JM3" configs_unread))"
+fi
+
+echo "M4: a malformed map fails CLOSED to unknown, publishes 0/13, and makes ZERO doppler calls"
+_m4=1
+for _bad in '["not","an","object"]' '{}' '{"prd": 42}' '{"prd": ""}' 'not json at all' '{"PRD": "dp.st.x"}'; do
+  JM4="$TMP/m4.json"; rm -f "$JM4"
+  MOCK_CRED_MODE=map MOCK_TOKEN_MAP="$_bad" \
+    run_sut m4 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV13 --json-file $JM4"
+  [[ "$RC" == "2" ]]                                  || { _m4=0; echo "    '$_bad' exited $RC, expected 2"; }
+  [[ -s "$JM4" ]]                                     || { _m4=0; echo "    '$_bad' published no verdict before exiting"; }
+  [[ "$(jget "$JM4" coverage)" == "unknown" ]]        || { _m4=0; echo "    '$_bad' -> coverage $(jget "$JM4" coverage), expected unknown"; }
+  [[ "$(jget "$JM4" coverage_ratio)" == "0/13" ]]     || { _m4=0; echo "    '$_bad' -> ratio $(jget "$JM4" coverage_ratio), expected 0/13"; }
+  [[ ! -s "$DOPPLER_LOG" ]]                           || { _m4=0; echo "    '$_bad' invoked doppler $(grep -c . "$DOPPLER_LOG") time(s) before validating the map"; }
+done
+if [[ "$_m4" == "1" ]]; then
+  pass "six malformed map shapes each publish unknown at 0/13 before exit 2, with no Doppler call made"
+else
+  fail "a credential SOURCE this run could not parse is not a measurement: it must publish 'unknown' (fail-closed), never 'degraded' (which asserts the credential is absent or narrowed — a claim a run that made no call cannot support), and it must not reach the network first"
+fi
+
+echo "M5: an ABSENT or EMPTY map is degraded 0/13, NOT unknown — the merge->apply window"
+# D3 pins mode selection on -n rather than definedness precisely for this. A workflow
+# writing `DOPPLER_TOKEN_MAP: ${{ secrets.X }}` with the secret not yet published yields a
+# DEFINED, EMPTY variable, and that window is guaranteed to occur on every rollout of this
+# change. `degraded` names a missing credential; `unknown` would tell the operator the
+# Doppler identity is not at fault, which is the wrong remedy in the one window it fires.
+_m5=1
+for _mode in map_empty unset; do
+  JM5="$TMP/m5.json"; rm -f "$JM5"
+  MOCK_CRED_MODE="$_mode" run_sut m5 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV13 --json-file $JM5"
+  [[ "$RC" == "2" ]]                              || { _m5=0; echo "    mode=$_mode exited $RC"; }
+  [[ "$(jget "$JM5" coverage)" == "degraded" ]]   || { _m5=0; echo "    mode=$_mode -> $(jget "$JM5" coverage), expected degraded"; }
+  [[ "$(jget "$JM5" coverage_ratio)" == "0/13" ]] || { _m5=0; echo "    mode=$_mode -> ratio $(jget "$JM5" coverage_ratio)"; }
+  [[ ! -s "$DOPPLER_LOG" ]]                       || { _m5=0; echo "    mode=$_mode reached the CLI with no credential"; }
+done
+if [[ "$_m5" == "1" ]]; then
+  pass "an empty map and an unset map both land in the missing-credential arm at degraded 0/13"
+else
+  fail "an empty DOPPLER_TOKEN_MAP must be diagnosed as a MISSING credential (degraded), not as a malformed one (unknown). Selecting the mode on definedness instead of non-emptiness inverts this, and the merge->apply window hits it on every rollout"
+fi
+
+echo "M6: both credentials set is ambiguous — exit 2, no read attempted"
+JM6="$TMP/m6.json"
+MOCK_CRED_MODE=both MOCK_TOKEN_MAP="$P_MAP13" \
+  run_sut m6 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV13 --json-file $JM6"
+_m6=1
+[[ "$RC" == "2" ]] || _m6=0
+[[ ! -s "$DOPPLER_LOG" ]] || _m6=0
+if [[ "$_m6" == "1" ]]; then
+  pass "DOPPLER_TOKEN_MAP and DOPPLER_TOKEN together refuse to guess a precedence"
+else
+  fail "two credentials selecting different scan modes have no defensible precedence — picking one silently would grade a config set nobody asked for (rc=$RC, doppler_calls=$(grep -c . "$DOPPLER_LOG"))"
+fi
+
+echo "M7 (NFR1): every map credential is masked BEFORE the first doppler invocation"
+JM7="$TMP/m7.json"
+MOCK_GITHUB_ACTIONS=true MOCK_HTTP_BODY='{"success":true}' MOCK_CRED_MODE=map \
+  MOCK_TOKEN_MAP="$P_MAP13" MOCK_TOKEN_BINDING="$P_BIND13" \
+  run_sut m7 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV13 --json-file $JM7"
+_m7=1
+_masks_at_first_doppler=$(cat "$MASK_SNAPSHOT_DOPPLER" 2>/dev/null || echo "<none>")
+[[ "$_masks_at_first_doppler" == "13" ]] || _m7=0
+for _c in prd ci dev; do grep -q "::add-mask::dp.st.SYNTHETIC.${_c}\$" "$OUT" || _m7=0; done
+if [[ "$_m7" == "1" ]]; then
+  pass "all 13 credentials are registered with ::add-mask:: before the CLI is invoked even once"
+else
+  fail "Actions masks the map as ONE opaque string, so the values extracted from it are unmasked — and this detector deliberately does not suppress the Doppler CLI's stderr, so a rejected token can print itself into the job log. Masking must complete BEFORE the first invocation, not merely happen (masks at first doppler call: ${_masks_at_first_doppler}, expected 13)"
+fi
+
+echo "M8: single-credential mode is unchanged on the REAL argv of every legacy call site"
+# None of the five shipped invocations passes --configs-floor, so all of them take the
+# default of 1. Driving the real argv is the point: a case invented for this suite could
+# pass while every actual caller broke.
+_m8=1
+_m8_case() { # $1=label $2=fixture $3=only_arg  (single credential, as every legacy site uses)
+  local jf="$TMP/$1.json"; rm -f "$jf"
+  MOCK_HTTP_BODY='{"success":true}' run_sut "$1" 200 "$2" "prd" "$3 --json-file $jf"
+  [[ "$RC" == "0" ]] || { _m8=0; echo "    $1: rc=$RC"; return; }
+  [[ "$(jget "$jf" configs_floor)" == "1" ]] || { _m8=0; echo "    $1: floor=$(jget "$jf" configs_floor), expected the default 1"; }
+  [[ "$(jget "$jf" configs)" == "1" ]] || { _m8=0; echo "    $1: configs=$(jget "$jf" configs)"; }
+  # The credential must still be delivered explicitly on every call, never ambiently.
+  grep -q 'TOKEN=set' "$DOPPLER_ENV_LOG" || { _m8=0; echo "    $1: the credential was not delivered explicitly"; }
+}
+# The REAL argv of the shipped call sites, each with the fixture that actually carries the
+# key it filters on — a --only whose key is absent trips the non-vacuity gate, which would
+# make this case assert the gate rather than the single-credential contract.
+_m8_case m8a "$ACCESS_FIXTURE"  "--only REGISTRY_PUSH_ACCESS_TOKEN"
+_m8_case m8b "$CI_SSH_FIXTURE"  "--only CI_SSH_ACCESS_TOKEN"
+_m8_case m8c "$P_SEC13"         ""
+if [[ "$_m8" == "1" ]]; then
+  pass "the five legacy single-credential call sites see the same behaviour, floor default included"
+else
+  fail "single-credential mode must be byte-for-byte what it was: the release preflight, the infra apply and the tunnel bridge actions all drive it, none passes --configs-floor, and two are branch-scoped"
+fi
+
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Without it, deleting every assertion call yields
