@@ -267,7 +267,16 @@ T0 remount + replay from LUKS", never a total loss.
   A `status` of `up` means a push landed inside the window; `down` means the probe stopped; `paused`
   means someone re-paused it (terraform will NOT un-pause it for you — the resource ships
   `paused = true` behind `lifecycle { ignore_changes = [paused] }`, so a re-pause survives every
-  apply and is invisible in a plan).
+  apply and is invisible in a plan). Un-pausing does not need the UI:
+  `curl -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"paused":false}' https://uptime.betterstack.com/api/v2/heartbeats/478794`
+  **Margin, because it is thinner than it looks.** Two independent pushers feed this heartbeat: the
+  host unit (`luks-monitor.timer`, `OnCalendar=daily` + `RandomizedDelaySec=1800`) and the daily
+  verify at 04:41 UTC. Together the largest gap is ~20h, comfortably inside the 25h window. But the
+  host unit ALONE can space two pushes up to **24h30m** apart at opposite jitter extremes, against a
+  25h window — about 30 minutes of headroom. So if the scheduled verify is ever paused, dropped, or
+  retired, this heartbeat moves from comfortable to marginal, and a slow probe or a `Persistent=true`
+  catch-up after a reboot can tip it into a false `down`. Widen `grace` before removing the verify,
+  not after the first spurious page.
   Two things it still does not cover, so do not over-read a green heartbeat. It is
   `policy_id`-gated on the paid tier (`var.betterstack_paid_tier`); on the free tier it alerts by
   **email only** and does not page. And the readyz/inventory dimension has no host-side coverage at
