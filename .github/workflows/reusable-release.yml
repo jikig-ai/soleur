@@ -535,8 +535,16 @@ jobs:
           # `continue-on-error: true` then hid the abort. That made this step
           # silent on exactly the two paths it exists for — the
           # naming-an-unmeasured-cause defect it was written to prevent.
-          # shellcheck source=/dev/null
-          source "$GITHUB_WORKSPACE/scripts/zot-mirror-diagnosis.sh"
+          # GUARDED, like the other three load sites. This one is SAFE either way — the step
+          # carries continue-on-error and every consumer applies `|| 'unmeasured'` — but an
+          # unguarded `source` under the active `-e` documented directly below aborts the step
+          # silently: no $GITHUB_OUTPUT, no ::warning::, a yellow step and zero output. That is
+          # the same shape this step's own comment was written about, and leaving one site
+          # unguarded invites the form being copied into a step without that cushion.
+          if [[ -n "${GITHUB_WORKSPACE:-}" && -r "${GITHUB_WORKSPACE}/scripts/zot-mirror-diagnosis.sh" ]]; then
+            # shellcheck source=/dev/null
+            source "${GITHUB_WORKSPACE}/scripts/zot-mirror-diagnosis.sh"
+          fi
           rc=0
           bash scripts/check-cloudflare-token-drift.sh --only REGISTRY_PUSH_ACCESS_TOKEN \
             --json-file "$RUNNER_TEMP/registry-push-token.json" || rc=$?
@@ -552,8 +560,15 @@ jobs:
           #
           # The ladder lives in scripts/zot-mirror-diagnosis.sh so it is unit-tested
           # directly (scripts/zot-mirror-diagnosis.test.sh) instead of only in CI.
-          verdict="$(zot_mirror_verdict "$rc" "$RUNNER_TEMP/registry-push-token.json")"
-          cause="$(zot_mirror_unverifiable_cause "$RUNNER_TEMP/registry-push-token.json")"
+          if declare -F zot_mirror_verdict >/dev/null 2>&1; then
+            verdict="$(zot_mirror_verdict "$rc" "$RUNNER_TEMP/registry-push-token.json")"
+            cause="$(zot_mirror_unverifiable_cause "$RUNNER_TEMP/registry-push-token.json")"
+          else
+            # No helper: publish `unmeasured`, never a guess. An unset output would degrade to
+            # the same place via `|| 'unmeasured'`, but saying it explicitly keeps the step's
+            # own log honest about why.
+            verdict="unmeasured"; cause="unknown"
+          fi
           checked_at="$(date -u +%H:%M:%SZ)"
           {
             printf 'verdict=%s\n'    "$verdict"
@@ -1016,7 +1031,26 @@ jobs:
             # gauge its name suggests. On 2026-08-03 a 4-restarts/min crash-loop blocked
             # three releases while this pointer sat one conditional away from naming it.
             # Widened to registry-host health generally. #7242.
-            echo "::error::zot mirror FAILED at stage '${reason}' for ${ZOT:-<image>} (rc=${rc}) — this release is BLOCKED and will not deploy. ${detail} ${SAFE_TO_RERUN} Registry-host health (disk AND zot_restarts/exit_code, which is what an origin flap shows up in): see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
+            # A GitHub Actions workflow command is LINE-ORIENTED: `::error::` takes everything
+            # up to the first newline and nothing after it (multi-line needs %0A encoding,
+            # which this repo uses nowhere). The diagnosis is 22 lines, so an unsplit
+            # `${detail}` put ~1 line in the annotation an operator reads in the Checks UI and
+            # dropped the restart series, the scope note and the recovery instruction into raw
+            # log text — and with the static prefix first, even the headline fell off the end.
+            #
+            # So: the annotation gets the HEADLINE, and the full text goes where length is
+            # free — the step summary (already below) and a collapsed log group. Length is
+            # cheap in a group and expensive in an annotation; this stops paying the
+            # annotation cost for text the annotation cannot carry.
+            local detail_head="${detail%%$'\n'*}"
+            echo "::error::zot mirror FAILED at stage '${reason}' for ${ZOT:-<image>} (rc=${rc}) — ${detail_head} This release is BLOCKED and will not deploy. Full diagnosis in the job summary and the 'zot mirror diagnosis' log group."
+            if [[ "$detail" != "$detail_head" ]]; then
+              echo "::group::zot mirror diagnosis (full)"
+              printf '%s\n' "$detail"
+              printf '%s\n' "$SAFE_TO_RERUN"
+              echo "Registry-host health (disk AND zot_restarts/exit_code, which is what an origin flap shows up in): see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
+              echo "::endgroup::"
+            fi
             {
               echo "### ❌ zot mirror failed — release blocked"
               echo ""

@@ -195,10 +195,15 @@ runs:
           if [[ -n "${GITHUB_WORKSPACE:-}" && -r "${GITHUB_WORKSPACE}/scripts/zot-mirror-diagnosis.sh" ]]; then
             # shellcheck source=/dev/null
             source "${GITHUB_WORKSPACE}/scripts/zot-mirror-diagnosis.sh"
-            DIAG="$(zot_mirror_diagnosis "${TOKEN_VERDICT:-unmeasured}" "${TOKEN_CHECKED_AT:-}" "(not queried on this path — the listener never came up, so no push was attempted)" "${TOKEN_CAUSE:-unknown}" || true)"
+            DIAG="$(zot_mirror_diagnosis "${TOKEN_VERDICT:-unmeasured}" "${TOKEN_CHECKED_AT:-}" "(not queried — the listener never came up, so no push was attempted)" "${TOKEN_CAUSE:-unknown}" || true)"
           fi
           [[ -n "$DIAG" ]] || DIAG="Registry-push token verdict for this run: ${TOKEN_VERDICT:-unmeasured}. (scripts/zot-mirror-diagnosis.sh could not be loaded, so no cause is being named here.)"
-          echo "::error::cloudflared TCP forward did not open on 127.0.0.1:5000 within 15s — the bridge listener never bound, so nothing was pushed. ${DIAG}"
+          # Headline to the annotation, full text to a collapsed group: `::error::` stops at
+          # the first newline, and the diagnosis is multi-line.
+          echo "::error::cloudflared TCP forward did not open on 127.0.0.1:5000 within 15s — the bridge listener never bound, so nothing was pushed. ${DIAG%%$'\n'*}"
+          echo "::group::zot bridge diagnosis (full)"
+          printf '%s\n' "$DIAG"
+          echo "::endgroup::"
           cat /tmp/cloudflared-registry.log >&2 || true
           exit 1
         fi
@@ -254,10 +259,20 @@ runs:
           if [[ -n "${GITHUB_WORKSPACE:-}" && -r "${GITHUB_WORKSPACE}/scripts/zot-mirror-diagnosis.sh" ]]; then
             # shellcheck source=/dev/null
             source "${GITHUB_WORKSPACE}/scripts/zot-mirror-diagnosis.sh"
-            DIAG="$(zot_mirror_diagnosis "${TOKEN_VERDICT:-unmeasured}" "${TOKEN_CHECKED_AT:-}" "(not read by this action — see the calling job's mirror step, which queries SOLEUR_ZOT_DISK on the bridge-failure path)" "${TOKEN_CAUSE:-unknown}" || true)"
+            # CALLER-NEUTRAL. This said "see the calling job's mirror step, which queries
+          # SOLEUR_ZOT_DISK" — true for reusable-release.yml and FALSE for the two inngest
+          # callers, which have no BETTERSTACK_QUERY_* and no such step. A shared component
+          # asserting an unmeasured fact about its caller is the exact class ADR-166 forbids,
+          # committed inside the fix for it. Name the marker; do not narrate a job you cannot see.
+          DIAG="$(zot_mirror_diagnosis "${TOKEN_VERDICT:-unmeasured}" "${TOKEN_CHECKED_AT:-}" "(not read by this action; the registry host's own restart series is the SOLEUR_ZOT_DISK marker in Better Stack, source registry_disk_prd)" "${TOKEN_CAUSE:-unknown}" || true)"
           fi
-          [[ -n "$DIAG" ]] || DIAG="Registry-push token verdict for this run: ${TOKEN_VERDICT:-unmeasured}. (scripts/zot-mirror-diagnosis.sh could not be loaded, so no cause is being named here.)"
-          echo "::error::docker login to zot (127.0.0.1:5000) failed over the CF-tunnel bridge. Read the cloudflared log below, NOT the listener probe above — the probe only proves cloudflared bound the local port, not that the origin answered. A 'websocket: bad handshake' line means the tunnel could not complete its origin dial; it does NOT by itself distinguish an edge refusal from an origin that is down or restarting. ${DIAG}"
+          # The fallback must stay ACTIONABLE STANDALONE for the same reason the `unmeasured`
+          # arm does: two of this action's three callers run no preflight, so they live here.
+          [[ -n "$DIAG" ]] || DIAG="Registry-push token verdict for this run: ${TOKEN_VERDICT:-unmeasured}. No cause is being named (scripts/zot-mirror-diagnosis.sh could not be loaded). Run 'doppler run -p soleur -c prd_terraform -- bash scripts/check-cloudflare-token-drift.sh' for the credential, and read the SOLEUR_ZOT_DISK marker in Better Stack for the registry host."
+          echo "::error::docker login to zot (127.0.0.1:5000) failed over the CF-tunnel bridge. Read the cloudflared log below, NOT the listener probe above — the probe only proves cloudflared bound the local port, not that the origin answered. A 'websocket: bad handshake' line means the tunnel could not complete its origin dial; it does NOT by itself distinguish an edge refusal from an origin that is down or restarting. ${DIAG%%$'\n'*}"
+          echo "::group::zot bridge diagnosis (full)"
+          printf '%s\n' "$DIAG"
+          echo "::endgroup::"
           echo "::group::cloudflared registry bridge log (tail 200)"
           tail -n 200 /tmp/cloudflared-registry.log 2>/dev/null || echo "(no /tmp/cloudflared-registry.log — cloudflared may not have started)"
           echo "::endgroup::"
