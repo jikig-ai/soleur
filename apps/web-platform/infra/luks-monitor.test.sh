@@ -391,6 +391,56 @@ else
   no "the workflow's positive-control anchor [$wf_anchor] does NOT match the emitted verdict line — the workflow would fail closed on every run: ${MON_OUT:0:200}"
 fi
 
+# ===========================================================================
+# (t) #6808 — THE HEARTBEAT PUSH, both arms fatal.
+#
+# Until 2026-08-04 an absent URL logged a WARN and the probe exited 0, so a never-configured probe
+# and a dead one were indistinguishable off-host and NEITHER paged. Nothing in this suite covered
+# the heartbeat at all — in either direction — so the WARN could not have been caught here.
+#
+# All three cases assert on the REASON, not merely on a non-zero rc: rc=3 is shared with every
+# readiness/inventory failure, so an rc-only assertion would pass against a probe that died at
+# workspace_count_baseline_missing having never reached the heartbeat block.
+# ===========================================================================
+
+# (t1) POSITIVE CONTROL FIRST. A healthy probe must actually PUSH — without this, (t2)/(t3) below
+# would both pass against a build that removed the push entirely.
+mon_prepare "$PROBE"; mkdir -p "$WSDIR/ws-a"; seed_count 1
+mon_run LUKS_MONITOR_ASSERT_READYZ=1
+if [ "$MON_RC" -eq 0 ] && has 'curl .*betterstack.test'; then
+  ok "healthy probe PUSHES the heartbeat and exits 0 (positive control for the two fatal arms)"
+else
+  no "healthy probe did not push the heartbeat (rc=$MON_RC, pushes=$(cnt 'curl .*betterstack.test')): ${MON_OUT:0:200}"
+fi
+
+# (t2) ABSENT URL => fatal. The exact state #6808 existed to remove.
+mon_prepare "$PROBE"; mkdir -p "$WSDIR/ws-a"; seed_count 1
+mon_run LUKS_MONITOR_ASSERT_READYZ=1 MON_HB_URL=
+if [ "$MON_RC" -eq 3 ] && monOut 'heartbeat_url_absent'; then
+  ok "absent WORKSPACES_LUKS_HEARTBEAT_URL is FATAL (rc=3 heartbeat_url_absent), never a survivable WARN"
+else
+  no "an absent heartbeat URL did not fail loudly (rc=$MON_RC): ${MON_OUT:0:300}"
+fi
+
+# (t3) EXHAUSTED PUSH => fatal, and only after retrying. The retry count is asserted because a
+# build that dropped the loop would still be "fatal on a failing push" and pass a bare rc check,
+# while turning one transient egress blip into a red daily probe.
+mon_prepare "$PROBE"; mkdir -p "$WSDIR/ws-a"; seed_count 1
+mon_run LUKS_MONITOR_ASSERT_READYZ=1 MON_HB_PUSH_RC=7
+if [ "$MON_RC" -eq 3 ] && monOut 'heartbeat_push_failed' && [ "$(cnt 'curl .*betterstack.test')" -eq 3 ]; then
+  ok "an exhausted heartbeat push is FATAL (rc=3 heartbeat_push_failed) and is retried 3x first"
+else
+  no "failing heartbeat push wrong (rc=$MON_RC, attempts=$(cnt 'curl .*betterstack.test')): ${MON_OUT:0:300}"
+fi
+
+# (t4) The absent-URL arm must NOT be classified as at-rest drift. It exits 3, not 1 — an alerting
+# fault must never file the p0 type/security issue whose body asserts the Article 32 claim is false.
+if [ "$MON_RC" -ne 1 ]; then
+  ok "a heartbeat fault never exits 1 (would classify a broken alerting path as plaintext-at-rest)"
+else
+  no "a heartbeat fault exited 1 — it would file the p0 at-rest drift verdict"
+fi
+
 echo ""
 echo "=== luks-monitor.test.sh: ${passes} passed, ${fails} failed ==="
 [ "$fails" -eq 0 ] || exit 1
