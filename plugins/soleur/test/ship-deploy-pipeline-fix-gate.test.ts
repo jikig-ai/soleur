@@ -416,7 +416,8 @@ describe("apply-deploy-pipeline-fix.yml on.push.paths in sync with TRIGGER_FILES
 // the host). Without the depends_on edge, a merge that BOTH replaces the handler
 // (new FILE_MAP entry + new hooks.json env key) AND fires the push runs the push
 // against the host's STALE handler/hooks.json: the new file's env var is unset, so
-// the handler's per-file `missing_env` arm (infra-config-apply.sh:105-112, the #4804
+// the handler's per-file `missing_env` arm (infra-config-apply.sh, the `reason=missing_env`
+// branch — cited by content because line numbers there rot; the #4804
 // self-heal) drops it and the file lands ONE APPLY LATE (op=inventory 500s until the
 // next unrelated apply). `-target` does NOT impose ordering — only the graph edge
 // does — even though apply-deploy-pipeline-fix.yml lists BOTH as explicit -target=s.

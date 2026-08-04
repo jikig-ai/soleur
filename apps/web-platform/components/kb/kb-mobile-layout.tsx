@@ -27,6 +27,7 @@ export function KbMobileLayout({ children, state }: KbMobileLayoutProps) {
     chatCtxValue,
     closeSidebar,
     treeHost,
+    showChat,
   } = state;
   const { needsReconnect, refreshTree } = useKb();
 
@@ -68,7 +69,13 @@ export function KbMobileLayout({ children, state }: KbMobileLayoutProps) {
           )}
         </div>
 
-        {chatCtxValue.enabled && contextPath && (
+        {/* #7222 — gate on `showChat`, matching kb-desktop-layout. The old
+            `enabled && contextPath` predicate ignored BOTH `suppressSidebar` and
+            `sidebarOpen`, so on a C4 document with a restored-open session this
+            side panel and the workspace's embedded Concierge could mount two
+            ChatSurfaces on the same contextPath — sharing one sessionStorage
+            draft key, each overwriting the other's composer. */}
+        {showChat && contextPath && (
           <KbChatSidebar
             open={chatCtxValue.open}
             onClose={closeSidebar}
