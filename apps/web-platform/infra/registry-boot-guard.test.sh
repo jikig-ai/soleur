@@ -244,6 +244,11 @@ echo "--- structural: pinned-tag carve-out is exempt from count-based eviction (
 # This suite already said so at the head of this block ("Anchor on the keepTags JSON fragments, NOT
 # comment prose") — the new assertions regressed on guidance 30 lines above them.
 CI_CODE="$(mktemp -t regci.XXXXXXXX)"
+# Owning trap (ADR-129, scripts/lint-trap-tempfile-ownership.py rule (c)). The explicit `rm -f`
+# further down is the happy path; this is what removes the file when the suite does NOT reach it —
+# a signal, or an unbound-variable abort under `set -u`. Without it every interrupted run leaks a
+# regci.* file into the shared /tmp tmpfs that nothing reaps at this size.
+trap 'rm -f "$CI_CODE"' EXIT
 grep -vE '^[[:space:]]*#' "$CI" > "$CI_CODE"
 # The pin tag is DERIVED from the live pull pin, never restated: cloud-init.yml's ZIREF is the ref
 # the web host actually pulls, so bumping the pin without updating retention now fails loudly here
