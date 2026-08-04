@@ -661,30 +661,61 @@ jobs:
           SECCOMP_ALERT_SHA: ${{ github.sha }}
         run: |
           set -uo pipefail
-          source "$GITHUB_WORKSPACE/scripts/seccomp-unenforced-alert.sh"
+          source "$GITHUB_WORKSPACE/scripts/infra-config-red-alert.sh"
+          # A sourced-but-undefined function would be swallowed by the `|| true` below, and the
+          # step would pass green having alerted nobody — the exact invisibility this step was
+          # added to end. Fail loudly instead.
+          declare -F infra_config_red_alert >/dev/null || {
+            echo "::error::#7220 alert helper unavailable — the red-gate notification did NOT fire"
+            exit 1
+          }
 
           # Read the host's own frame. Every field below is sanitized AT THE SOURCE by
           # infra-config-apply.sh's on_exit (charset A-Za-z0-9 ._:/=-, so no quote, backslash,
           # newline or control character can survive) and is used here only as a shell VALUE
           # passed as a function argument — never eval'd, never interpolated into a command.
           RESP=/tmp/infra-config-status-response.txt
+
+          # REACHABILITY FIRST. This step fires on ANY failure of the gate, and the gate has a
+          # branch (000/502/503) whose recovery guidance is the OPPOSITE of the normal one: there,
+          # the webhook LISTENER is down, `-replace` on the handler bootstrap IS the documented
+          # route back, and "app health is unaffected" is not something this step can assert.
+          # Emitting the reachable text on that branch would tell the operator not to pull the
+          # exact lever the gate just told them to pull. A frame that does not parse is the
+          # signal: a Cloudflare error page, an empty body, or no file at all.
+          if ! jq -e . "$RESP" >/dev/null 2>&1; then
+            infra_config_red_alert "The status endpoint did not return a parseable frame, so the webhook listener itself may be down. Follow the recovery guidance printed by the verify step in the CI run — it distinguishes a missing endpoint (404, first bootstrap) from a dead listener (000/502/503), and those have different and non-interchangeable remedies." "unreachable" || true
+            exit 0
+          fi
+
           FATAL_LINE=$(jq -r '.fatal_line // 0' "$RESP" 2>/dev/null || echo 0)
           FATAL_RC=$(jq -r '.fatal_rc // 0' "$RESP" 2>/dev/null || echo 0)
           FATAL_CMD=$(jq -r '.fatal_cmd // ""' "$RESP" 2>/dev/null || echo "")
           FILES_W=$(jq -r '.files_written // "?"' "$RESP" 2>/dev/null || echo "?")
           FILES_T=$(jq -r '.files_total // "?"' "$RESP" 2>/dev/null || echo "?")
           [[ "$FATAL_LINE" =~ ^[0-9]+$ ]] || FATAL_LINE=0
+          [[ "$FATAL_RC"   =~ ^[0-9]+$ ]] || FATAL_RC=0
 
           if [[ "$FATAL_LINE" -gt 0 ]]; then
-            WHERE="The config handler died at infra-config-apply.sh:${FATAL_LINE} (rc=${FATAL_RC}) running: ${FATAL_CMD}. Every step after that line did not run, so units were not reconciled. ${FILES_W} of ${FILES_T} files had already been delivered."
+            # `line=N` is a coordinate into the DEPLOYED handler, which can lag this checkout by
+            # one apply — so it is labelled as such rather than rendered as a repo coordinate.
+            # The command is the durable half and leads.
+            WHERE="The config handler died running: ${FATAL_CMD} (rc=${FATAL_RC}, at line ${FATAL_LINE} of the handler as deployed on the host — that number may not match the current checkout). Every step after it did not run, so units were not reconciled. ${FILES_W} of ${FILES_T} files had already been delivered."
+          elif ! jq -e 'has("fatal_rc")' "$RESP" >/dev/null 2>&1; then
+            # No fatal_rc KEY at all is the one state that genuinely proves an old handler; the
+            # earlier version asserted this whenever fatal_line was 0, which also covers a
+            # perfectly healthy frame failing on a content mismatch.
+            WHERE="The gate failed and the host is still running a handler that predates #7220, so it cannot report where it stopped. Replacing the handler is what makes the next failure self-describing."
           else
-            WHERE="The config-delivery gate failed and the host's frame carried no fatal attribution (files_written=${FILES_W} of ${FILES_T}). If the handler predates #7220 it cannot report where it died — that is itself the finding."
+            WHERE="The gate failed with no fatal attribution in the frame (files_written=${FILES_W} of ${FILES_T}), so the handler did not die — the failure is in what was delivered or in a unit that did not come back. The verify step in the CI run names the specific file or unit."
           fi
 
           # The guardrail is repeated HERE and not only in the annotation, because this issue is
           # what the operator actually reads. The previous incident's annotation was two-thirds
-          # false and the issue written from it pointed at destroying an unreplaceable host.
-          seccomp_unenforced_alert "infra-config delivery channel is RED. ${WHERE} What is still true: the files that landed are on the host, and app health is unaffected — this is an ACTIVATION failure, not necessarily a delivery one. Next: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_INFRA_CONFIG_FATAL. Do NOT run terraform apply -replace: that lever is only for a status endpoint returning 000/502/503, and this host cannot be re-provisioned (cx33, 0/6 stock)." || true
+          # false and the issue written from it pointed at destroying an unreplaceable host. It
+          # names the forbidden TARGET, not just the command: `-replace` on the handler bootstrap
+          # is legitimate and is prescribed elsewhere in this very workflow.
+          infra_config_red_alert "${WHERE} What is still true: the files that landed are on the host, and app health is unaffected — this is an ACTIVATION failure, not a delivery one. Next: from the repo root, run: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_INFRA_CONFIG_FATAL. Do NOT run terraform apply -replace=hcloud_server.web — that host cannot be re-provisioned (cx33, 0/6 stock). Replacing terraform_data.infra_config_handler_bootstrap is a different and safe operation, but it is only the right lever when the status endpoint returns 000/502/503." "reachable" || true
 
       - name: Redeploy to load applied profile and assert loaded==committed (#5875 item 4)
         if: success()

@@ -516,10 +516,18 @@ else
 fi
 
 # (2) The five elements AC15 requires, each by its rendered text.
-if grep -qF 'infra-config-apply.sh:415' "$FATAL_OUT"; then
+if grep -qF 'line 415' "$FATAL_OUT"; then
   pass "#7220 annotation names the exact line the handler died at"
 else
-  fail "#7220 annotation does not name infra-config-apply.sh:415"
+  fail "#7220 annotation does not render this frame's fatal_line (415)"
+fi
+# The line is a coordinate into the DEPLOYED handler, which can lag this checkout by one apply.
+# Rendering it bare invites the operator to open the repo at a line that means something else —
+# #7220's own fix moved the reload 415 -> 520 within one PR. The qualifier is the fix.
+if grep -qF 'AS DEPLOYED' "$FATAL_OUT"; then
+  pass "#7220 annotation qualifies the line as a deployed-handler coordinate, not a repo one"
+else
+  fail "#7220 annotation renders fatal_line as if it were a repo coordinate"
 fi
 if grep -qF 'systemctl daemon-reload' "$FATAL_OUT"; then
   pass "#7220 annotation names the failing command"
@@ -548,6 +556,19 @@ if grep -qF 'Do NOT run' "$FATAL_OUT" && grep -qF 'cx33' "$FATAL_OUT" && grep -q
   pass "#7220 annotation carries the -replace guardrail with its scope and the stock reality"
 else
   fail "#7220 annotation is missing the -replace guardrail — the failure mode that produced this issue"
+fi
+# A prohibition on a bare command PREFIX is uncheckable and self-contradicting: this same
+# workflow prescribes -replace=terraform_data.infra_config_handler_bootstrap for the 000/502/503
+# shape. The guardrail must name the target that destroys the host, and clear the one that does not.
+if grep -qF 'hcloud_server.web' "$FATAL_OUT"; then
+  pass "#7220 guardrail names the FORBIDDEN target, not just the command"
+else
+  fail "#7220 guardrail forbids a command prefix without naming a target — unactionable and self-contradicting"
+fi
+if grep -qF 'terraform_data.infra_config_handler_bootstrap' "$FATAL_OUT"; then
+  pass "#7220 guardrail clears the SAFE replace target so the operator is not stranded"
+else
+  fail "#7220 guardrail does not distinguish the safe replace target from the forbidden one"
 fi
 
 # (3) Suppression: MESSAGE only, and only the two branches fatal_line already explains.
@@ -608,7 +629,7 @@ if [[ "$FATAL2_RC" -ne 0 ]]; then
 else
   fail "#7220 fixture-2 FAIL-OPEN: a post-publish fatal frame returned 0"
 fi
-if grep -qF 'infra-config-apply.sh:772' "$FATAL2_OUT" && grep -qF 'rc=203' "$FATAL2_OUT"; then
+if grep -qF 'line 772' "$FATAL2_OUT" && grep -qF 'rc=203' "$FATAL2_OUT"; then
   pass "#7220 fixture-2: annotation renders THIS frame's line and rc (not a constant)"
 else
   fail "#7220 fixture-2: annotation did not render line=772/rc=203 — values may be hardcoded"
@@ -665,7 +686,7 @@ if [[ "$FATALONLY_RC" -ne 0 ]]; then
 else
   fail "#7220 FAIL-OPEN: a frame carrying fatal_line=661 PASSED because every other check was clean"
 fi
-if grep -qF 'infra-config-apply.sh:661' "$FATALONLY_OUT"; then
+if grep -qF 'line 661' "$FATALONLY_OUT"; then
   pass "#7220 fatal-only: the annotation still names the line"
 else
   fail "#7220 fatal-only: no attribution rendered"
@@ -675,7 +696,7 @@ fi
 # Nothing asserted that the assertions RAN. Measured: deleting the entire #7220 block took the
 # suite 53 -> 40 passed, 0 failed, exit 0 — a silent truncation that reads exactly like a clean
 # run. A floor (not equality — the count is developer-incremented) makes arm deletion loud.
-GATE_MIN_ASSERTIONS=61
+GATE_MIN_ASSERTIONS=64
 if [[ "$pass" -lt "$GATE_MIN_ASSERTIONS" ]]; then
   fail "assertion-count floor: only $pass assertions ran, expected >= $GATE_MIN_ASSERTIONS — arms were deleted or skipped"
 fi

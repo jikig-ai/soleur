@@ -207,11 +207,23 @@ adjudicate_infra_config() {
   [[ "$fatal_line" -gt 0 ]] && fatal_mode=1
 
   if [[ "$fatal_mode" -eq 1 ]]; then
-    echo "::error::infra-config-apply DIED at infra-config-apply.sh:${fatal_line} (rc=${fatal_rc}) running: ${fatal_cmd:-<unrecorded>}"
+    # The COMMAND leads, and the line is labelled as a DEPLOYED-handler coordinate. `fatal_line`
+    # indexes the handler as it exists ON THE HOST, which terraform_data.deploy_pipeline_fix
+    # documents can lag this checkout by one apply — and #7220's own fix moved the reload from
+    # line 415 to 520 within a single PR, where 415 then held an unrelated statement. Rendering
+    # it bare invites the operator to open the repo at a line that means something else. This is
+    # the same reason cq-cite-content-anchor-not-line-number exists, applied to a runtime value.
+    echo "::error::infra-config-apply DIED running: ${fatal_cmd:-<unrecorded>} (rc=${fatal_rc}, at line ${fatal_line} of the handler AS DEPLOYED — that number may not match this checkout)"
     echo "::error::every step after this line did not run, which is why no unit has an activation verdict below (and why any count shortfall is a stopping point, not a delivery failure)."
     echo "::error::what is still true: files_written=${files_written} of ${expected} delivered. The files that DID land are on the host; this is an ACTIVATION failure, not necessarily a delivery one."
     echo "::error::next: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_INFRA_CONFIG_FATAL"
-    echo "::error::This does NOT mean the host is bricked. Do NOT run \`terraform apply -replace\` — that lever is only for a status endpoint returning 000/502/503, and this host cannot be re-provisioned (\`cx33\`, 0/6 stock)."
+    # NAMES THE FORBIDDEN TARGET, not just the command. A prohibition on a command PREFIX is
+    # uncheckable and self-contradicting here: this same workflow legitimately prescribes
+    # `-replace=terraform_data.infra_config_handler_bootstrap` for the 000/502/503 shape. A
+    # reader who takes the bare form literally is stranded; one who notices the stock
+    # justification cannot apply to a terraform_data resource goes looking for a target — and
+    # nothing told them WHICH one destroys the host. The previous incident destroyed via a target.
+    echo "::error::This does NOT mean the host is bricked. Do NOT run \`terraform apply -replace=hcloud_server.web\` — that host cannot be re-provisioned (\`cx33\`, 0/6 stock). Replacing \`terraform_data.infra_config_handler_bootstrap\` is a DIFFERENT and safe operation, but it is the right lever only when the status endpoint returns 000/502/503, which is not this failure."
     rc=1
   fi
 
