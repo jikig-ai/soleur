@@ -149,6 +149,21 @@ const WEB_GZIP_FLOOR = 10_000;
 // so a broken model that gzips near-nothing (e.g. accidentally x-run placeholders) fails loudly.
 const GIT_DATA_BUDGET = 28_000;
 const GIT_DATA_FLOOR = 10_000;
+// (#7278) registry base64gzip'd budget. THE REGISTRY HAD NO ARM HERE AT ALL until #7278, and
+// that absence is the whole finding: `hcloud_server.registry` has rendered
+// `base64gzip(templatefile("cloud-init-registry.yml", …))` since #6122 with no comment strip and
+// no size guard, and it crossed the cap silently — measured 34,320 B against Hetzner's 32,768 B,
+// i.e. ~1.5 KB OVER, before this issue added a single byte. Every registry provisioning event
+// (the `registry-luks-recut` this lever needs for activation included) fails at the Hetzner API
+// in that state, which is why this guard lands ahead of the lever itself.
+//
+// zot-registry.tf now strips whole-line rationale comments at render time (ADR-152's
+// git-data precedent, `local.registry_rationale_strip`), taking the render to ~9 KB. The BUDGET
+// keeps the KB-scale re-inlining tripwire; the FLOOR is non-vacuity — a model that stopped
+// substituting real values, or a strip that ate the entire payload, gzips to near-nothing and
+// fails loudly here rather than at a dark host.
+const REGISTRY_GZIP_BUDGET = 20_000;
+const REGISTRY_GZIP_FLOOR = 4_000;
 
 const IMAGE_NAME = "ghcr.io/jikig-ai/soleur-web-platform:latest";
 // Modeled byte lengths for render-time values that are NOT base64-of-a-file. base64-of-file
@@ -330,6 +345,61 @@ function renderedGzipB64Len(cloudInitFile: string, tfSrc: string): number {
   return gzipSync(Buffer.from(s, "utf8"), { level: 9 }).toString("base64").length;
 }
 
+// (#7278) THE STRIP EXPRESSION IS EXTRACTED FROM zot-registry.tf, NEVER RESTATED HERE.
+//
+// git-data solved the same problem with a hand-mirrored second copy plus a dedicated parity
+// suite (git-data-render-strip-parity.test.sh) whose entire job is to keep the two equal —
+// because a model that strips differently than production measures a payload production never
+// boots, and it measures it GREEN. Extracting the one canonical copy makes that divergence
+// unexpressible instead of merely policed, so there is no second copy and no parity suite to
+// forget to run.
+//
+// The pattern text is shared verbatim between HCL and JS on purpose: `\t` and `\n` are escape
+// sequences with identical meaning to HCL(→Go RE2) and to `new RegExp`, so the same bytes
+// denote the same language on both sides. `(?m)` is Go's inline multiline flag; JS spells it as
+// the `m` flag, which is the one transformation applied.
+function registryStripRegex(tfSrc: string): RegExp {
+  const m = /registry_rationale_strip\s*=\s*"((?:[^"\\]|\\.)*)"/.exec(tfSrc);
+  if (m === null) {
+    throw new Error("local.registry_rationale_strip not found in zot-registry.tf");
+  }
+  let body = m[1];
+  if (!body.startsWith("/") || !body.endsWith("/")) {
+    throw new Error(
+      `registry_rationale_strip must be a slash-delimited terraform regex literal, got: ${body}`,
+    );
+  }
+  body = body.slice(1, -1);
+  if (!body.startsWith("(?m)")) {
+    throw new Error(`registry_rationale_strip must be multiline-anchored ((?m)), got: ${body}`);
+  }
+  return new RegExp(body.slice("(?m)".length), "gm");
+}
+
+// The registry render is `base64gzip(replace(templatefile(...), local.registry_rationale_strip, ""))`
+// — render FIRST, then strip, then gzip. Modeled in that exact order: stripping before
+// substitution would measure a different payload than terraform produces, and the substituted
+// values (ids, digests, tokens) are single-line scalars that the line-anchored strip cannot touch.
+function renderedGzipB64LenStripped(
+  cloudInitFile: string,
+  tfSrc: string,
+  strip: RegExp,
+): number {
+  const map = parseVarMap(extractTemplatefileMap(tfSrc, cloudInitFile));
+  const src = readFileSync(join(INFRA, cloudInitFile), "utf8");
+  const ESC = "__SOLEUR_ESC__";
+  let s = src.split("$${").join(ESC);
+  s = s.replace(/\$\{([a-zA-Z0-9_]+)\}/g, (_whole, name) => {
+    if (!(name in map)) {
+      throw new Error(`${cloudInitFile} references un-provided template var \${${name}}`);
+    }
+    return modeledValue(name, map[name]);
+  });
+  s = s.split(ESC).join("${");
+  s = s.replace(strip, "");
+  return gzipSync(Buffer.from(s, "utf8"), { level: 9 }).toString("base64").length;
+}
+
 const serverTf = readFileSync(join(INFRA, "server.tf"), "utf8");
 // (#7025, R7) The git-data templatefile map lives in the shared module both roots call, not
 // in git-data.tf. Read it from there — git-data.tf now holds only the `module` block, so
@@ -339,6 +409,7 @@ const gitDataTf = readFileSync(
   join(INFRA, "modules", "git-data-userdata", "main.tf"),
   "utf8",
 );
+const registryTf = readFileSync(join(INFRA, "zot-registry.tf"), "utf8");
 const cloudInit = readFileSync(join(INFRA, "cloud-init.yml"), "utf8");
 const bootstrap = readFileSync(join(INFRA, "soleur-host-bootstrap.sh"), "utf8");
 const dockerfile = readFileSync(DOCKERFILE, "utf8");
@@ -362,6 +433,54 @@ describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
     expect(size).toBeLessThan(HETZNER_CAP);
     expect(size).toBeLessThan(GIT_DATA_BUDGET);
     expect(size).toBeGreaterThan(GIT_DATA_FLOOR); // non-vacuity: model must gzip real content
+  });
+
+  test("registry host base64gzip'd user_data is under the Hetzner cap (#7278)", () => {
+    // Pre-#7278 this rendered 34,320 B against a 32,768 B cap, so EVERY registry provisioning
+    // event failed at the Hetzner API — including the `registry-luks-recut` that is this lever's
+    // only activation vehicle. There was no arm here to catch it.
+    const size = renderedGzipB64LenStripped(
+      "cloud-init-registry.yml",
+      registryTf,
+      registryStripRegex(registryTf),
+    );
+    expect(size).toBeLessThan(HETZNER_CAP);
+    expect(size).toBeLessThan(REGISTRY_GZIP_BUDGET);
+    expect(size).toBeGreaterThan(REGISTRY_GZIP_FLOOR); // non-vacuity
+  });
+
+  test("registry strip preserves #cloud-config — the silent boot-brick guard (#7278)", () => {
+    // THE reason the git-data strip cannot be ported verbatim. ADR-152's expression preserves
+    // `#!` and nothing else, so it eats `#cloud-config` — and cloud-init identifies a payload by
+    // that first line. Losing it does not fail the apply: Hetzner accepts the user_data, the host
+    // boots, and cloud-init simply never recognises the config, so NOTHING in it runs. The volume
+    // is never unlocked, zot never starts, and the failure presents as a silent dark host — the
+    // exact indistinguishable-from-success class this repo has been bitten by before.
+    //
+    // Asserted on the REAL template through the REAL extracted expression, so a future edit to
+    // either the strip or line 1 has to come through this test.
+    const strip = registryStripRegex(registryTf);
+    const src = readFileSync(join(INFRA, "cloud-init-registry.yml"), "utf8");
+    expect(src.startsWith("#cloud-config\n")).toBe(true); // precondition, not an assumption
+    const stripped = src.replace(strip, "");
+    expect(stripped.startsWith("#cloud-config\n")).toBe(true);
+  });
+
+  test("registry strip preserves every shebang and still removes rationale (#7278)", () => {
+    // A lost `#!` is the other silent-divergence shape: the kernel falls back to sh (dash on
+    // 24.04) rather than raising ENOEXEC, so a bash-ism degrades quietly instead of failing.
+    const strip = registryStripRegex(registryTf);
+    const src = readFileSync(join(INFRA, "cloud-init-registry.yml"), "utf8");
+    const shebangs = (src.match(/^[ \t]*#!.*$/gm) ?? []).length;
+    expect(shebangs).toBeGreaterThan(0); // non-vacuity: there ARE shebangs to preserve
+    const stripped = src.replace(strip, "");
+    expect((stripped.match(/^[ \t]*#!.*$/gm) ?? []).length).toBe(shebangs);
+
+    // ...and the strip is not a no-op. Without this, an expression that matched nothing would
+    // satisfy both preservation assertions above while leaving the payload over the cap.
+    const commentsBefore = (src.match(/^[ \t]*#([ \t][^\n]*)?$/gm) ?? []).length;
+    expect(commentsBefore).toBeGreaterThan(100);
+    expect((stripped.match(/^[ \t]*#([ \t][^\n]*)?$/gm) ?? []).length).toBe(0);
   });
 
   test("git-data gzip model reads REAL script content, not x-run placeholders (guards R2)", () => {
