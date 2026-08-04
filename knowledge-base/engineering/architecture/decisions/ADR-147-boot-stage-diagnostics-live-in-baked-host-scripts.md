@@ -323,16 +323,21 @@ Node-zlib model is an approximation and says so in its own header:
 | | stored | cap | headroom |
 | --- | --- | --- | --- |
 | before (#7204 baseline) | 25,968 B | 32,768 B | 6,800 B |
-| after (#7216 + #7227) | 28,692 B | 32,768 B | 4,076 B |
+| after (#7216 + #7227) | 29,664 B | 32,768 B | 3,104 B |
 
-Net **+2,724 stored bytes**. Comments in `cloud-init-git-data.yml` are **not** render-stripped
+Net **+3,696 stored bytes**. Comments in `cloud-init-git-data.yml` are **not** render-stripped
 (ADR-152 covers only the nine `file()`-bound payloads), so prose is charged at full weight —
 comment blocks are capped at ~6 lines here and the durable statements live in the guards
 (`B18`, `R3(3b)`) rather than in the paragraphs. Diagnostics added to
 `git-data-bootstrap.sh` are free, because that file IS render-stripped.
 
-The next diagnostics change on this host should treat 4,076 B as the working budget, and
+The next diagnostics change on this host should treat 3,104 B as the working budget, and
 should prefer `git-data-bootstrap.sh` over the template wherever the code can live there.
+
+Note that `plugins/soleur/test/cloud-init-user-data-size.test.ts` asserts a *sub-cap* budget
+of 28,000 against its Node-zlib model, and that model reads ~2 kB smaller than Terraform's Go
+zlib on this input — so it still passes at a real 29,664 B. The two numbers are not
+comparable and the model is not the ceiling; `git-data-userdata-budget.sh` is.
 
 ### Correction to the 2026-07-27 addendum: TWO arming sites, not three
 
