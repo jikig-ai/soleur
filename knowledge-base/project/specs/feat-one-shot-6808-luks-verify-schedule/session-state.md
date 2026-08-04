@@ -62,3 +62,25 @@ placeholder. Zero published `docs/legal/*` files touched (verified). The Inngest
 ## Compounded
 
 `knowledge-base/project/learnings/2026-08-04-a-zero-of-eleven-review-hid-fourteen-p1s-and-my-fixes-reproduced-two-of-them.md`
+
+## One RED in the full run, resolved as contention — do not re-litigate
+
+`scripts/test-all.sh` reported **258/259 suites**. The single failure was
+`apps/web-platform/test/pdf-text-extract.test.ts` — the *"does NOT trip oversized_buffer for buffers
+in the [old-15MB, new-24MB] band"* assertion, 16 s runtime. Confirmed **not** this diff, three ways:
+
+1. **Isolated re-run: 29/29 passed.**
+2. **Unreachable from the diff.** The test's SUT (`@/server/pdf-text-extract`) and both its imports
+   (`@/lib/attachment-constants`, `./helpers/engines-floor`) are unchanged. This PR touches only
+   `.github/workflows/`, `apps/web-platform/infra/`, one inngest count test, and `knowledge-base/`.
+3. **The failure window had known resource pressure.** `/tmp` reached 100% (a whole-worktree sandbox
+   copy) and a sibling `test-all` had been wedged for ~10 h, outliving its own `timeout 3000`
+   wrapper. A 24 MB-buffer allocation is exactly what fails first under that.
+
+Not filed as an issue: it is a flake induced by this session's own disk pressure, not a defect and
+not a pre-existing red on `main`.
+
+**Worth noting separately:** `test-all.sh` exited **0** while reporting 258/259. A non-zero suite
+count and a zero exit code should not co-occur — that is the "a check that cannot report is
+indistinguishable from one that passed" shape, in the runner itself. Not this PR's surface; recorded
+here rather than swallowed.
