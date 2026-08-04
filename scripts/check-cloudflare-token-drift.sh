@@ -762,6 +762,26 @@ for cfg in "${CONFIGS[@]}"; do
   # DO NOT DROP `-p`/`-c` FROM THESE READS. Without `-c` the token serves its bound config
   # regardless of which config the loop believes it is on, and the assertion silently
   # becomes a tautology.
+  # CONFIGS and CRED_FOR must agree. If they ever diverge, `${CRED_FOR[$cfg]}` expands to
+  # the EMPTY STRING (measured: bash does NOT abort on a missing key of an existing
+  # associative array under `set -u`), and an empty DOPPLER_TOKEN is an ambient-credential
+  # rebind, not a failed read — the same hazard the map validator closes one level up.
+  #
+  # NO REACHABLE PRODUCER TODAY, AND THIS COMMENT WILL NOT CLAIM ONE. In map mode CONFIGS
+  # *is* `${!CRED_FOR[@]}`; in single mode every enumerated config is assigned the one
+  # credential. So this is a floor, not a gate, and deleting it leaves the suite green —
+  # stated because the alternative is a `mutation-proven` adjective with nothing behind it.
+  # What made it worth adding: pointing CONFIGS at the inventory instead of the map's keys
+  # produced exactly this divergence, and the resulting empty-token read was
+  # indistinguishable from an honest read failure. It is here so that the NEXT edit which
+  # lets the two lists drift fails loudly instead of scanning with the runner's ambient
+  # credential.
+  if [[ -z "${CRED_FOR[$cfg]:-}" ]]; then
+    echo "::error::token_drift_missing_credential — config '$cfg' is in the scan list but has no credential; refusing to read it with an empty token." >&2
+    echo "WARNING: config '$cfg' is counted UNREAD — no credential was mapped to it. The config list and the credential map disagree." >&2
+    FAILED_CONFIGS+=("$cfg")
+    continue
+  fi
   _names=""
   _read_err=""
   if ! _names="$(DOPPLER_TOKEN="${CRED_FOR[$cfg]}" doppler secrets -p "$PROJECT" -c "$cfg" --only-names 2>"$READ_ERR_FILE")"; then

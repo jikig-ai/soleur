@@ -1881,6 +1881,25 @@ P_MAP13="$(p_map_for "$P_CFG13")"
 P_BIND13="$TMP/bind13.txt";      p_bind_for "$P_CFG13"     > "$P_BIND13"
 P_BIND_MISBOUND="$TMP/bindmis.txt"; p_bind_for "$P_CFG13" prd > "$P_BIND_MISBOUND"
 
+echo "M0 (fixture self-test): the doppler stub can actually REJECT"
+# The stub's `-c` guard is the seam that produces all 59 reds when the SUT drops `-c`.
+# Nothing tested the guard itself, so neutralising it left the suite at 89/89 while every
+# one of those 59 assertions was silently unpinned. A fake that cannot reject certifies
+# nothing.
+_m0=1
+_stub_rc() { ( PATH="$STUB_DIR:$PATH" DOPPLER_TOKEN="${1:-}" doppler "${@:2}" >/dev/null 2>&1 ); echo $?; }
+[[ "$(_stub_rc "" secrets -p soleur -c prd --only-names)" == "3" ]] \
+  || { _m0=0; echo "    stub answered with NO credential (expected exit 3)"; }
+[[ "$(_stub_rc "tok" secrets -p soleur --only-names)" == "4" ]] \
+  || { _m0=0; echo "    stub answered --only-names with no -c (expected exit 4)"; }
+[[ "$(_stub_rc "tok" secrets get KEY -p soleur)" == "4" ]] \
+  || { _m0=0; echo "    stub answered 'secrets get' with no -c (expected exit 4)"; }
+if [[ "$_m0" == "1" ]]; then
+  pass "the stub refuses an absent credential (3) and an absent -c (4) — its rejections are real"
+else
+  fail "the doppler stub must be able to REJECT. Every 'the SUT names its config explicitly' assertion in this file is produced by the stub's -c guard; if that guard is inert, all of them pass vacuously and the suite reports full coverage over a detector that grades whatever config the ambient credential happens to bind"
+fi
+
 echo "M1: 13 correctly-bound tokens read 13 of 13"
 JM1="$TMP/m1.json"
 MOCK_HTTP_BODY='{"success":true}' MOCK_CRED_MODE=map MOCK_TOKEN_MAP="$P_MAP13" \
@@ -1930,6 +1949,13 @@ _m3=1
 [[ "$(jget "$JM3" configs)" == "12" ]] || _m3=0
 [[ "$(jget "$JM3" coverage)" == "degraded" ]] || _m3=0
 [[ "$(jget "$JM3" configs_unread)" == "prd_ghcr" ]] || _m3=0
+# SPECIFICITY, not just presence. Collapsing the three causes into one (`if true; then`
+# over the binding arm) survived the whole suite, because M2 asserted only that the
+# binding annotation APPEARS and nothing asserted it appears ONLY for a binding fault.
+# A revoked token routed to token_drift_config_binding_mismatch sends the operator to
+# rewrite a correct `config = each.key`.
+grep -q 'token_drift_identify_unreachable' "$OUT" || { _m3=0; echo "    a non-binding read failure did not emit token_drift_identify_unreachable"; }
+grep -q 'token_drift_config_binding_mismatch' "$OUT" && { _m3=0; echo "    a non-binding read failure wrongly emitted token_drift_config_binding_mismatch — the operator is sent to rewrite correct Terraform"; }
 if [[ "$_m3" == "1" ]]; then
   pass "a single revoked per-config token is visible AS that config — the capability the whole-project credential never had"
 else
@@ -1938,7 +1964,15 @@ fi
 
 echo "M4: a malformed map fails CLOSED to unknown, publishes 0/13, and makes ZERO doppler calls"
 _m4=1
-for _bad in '["not","an","object"]' '{}' '{"prd": 42}' '{"prd": ""}' 'not json at all' '{"PRD": "dp.st.x"}'; do
+# The last four put the defect at a NON-ZERO position. Without them the validator could be
+# reduced to checking entry 0 only (`.[0:1]` in each pipeline) and the suite stayed green —
+# a 13-entry map with a bad token at position 7 would reach the read loop.
+# The newline pair covers the Oniguruma `$`-before-final-newline route, which splits the
+# key\tvalue record and yields an EMPTY credential -> ambient rebind.
+for _bad in '["not","an","object"]' '{}' '{"prd": 42}' '{"prd": ""}' 'not json at all' '{"PRD": "dp.st.x"}' \
+            '{"prd":"dp.st.a","dev":42}' '{"prd":"dp.st.a","DEV":"dp.st.b"}' \
+            '{"prd":"dp.st.a","dev":""}' '{"prd\n":"dp.st.a"}' '{"prd":"dp.st.a\nevilcfg"}' \
+            '{"prd":"dp.st.a","dev":"tok with space"}'; do
   JM4="$TMP/m4.json"; rm -f "$JM4"
   MOCK_CRED_MODE=map MOCK_TOKEN_MAP="$_bad" \
     run_sut m4 200 "$P_SEC13" "$P_CFG13" "--configs-floor 13 --inventory $P_INV13 --json-file $JM4"
@@ -2029,6 +2063,34 @@ else
   fail "single-credential mode must be byte-for-byte what it was: the release preflight, the infra apply and the tunnel bridge actions all drive it, none passes --configs-floor, and two are branch-scoped"
 fi
 
+echo "M10: the config list comes from the MAP's keys, not from the inventory"
+# FIXTURE DIRECTION, and the direction matters. In M1/M2/M3/M7 the map keys, the
+# enumeration fixture and the inventory are byte-identical, so nothing samples the
+# transform — and pointing the SUT at the inventory instead of the map survived the suite.
+#
+# The MISSING-key direction cannot discriminate: with a 12-key map against a 13-name
+# inventory BOTH implementations report 12/13, because the inventory-derived list just
+# fails the one read it has no credential for. The EXTRA-key direction separates them —
+# a map key absent from the inventory is read only if the list came from the map.
+JM10="$TMP/m10.json"
+P_CFG14X="$P_CFG13"$'\nextra_cfg'
+P_MAP14X="$(p_map_for "$P_CFG14X")"
+P_BIND14X="$TMP/bind14x.txt"; p_bind_for "$P_CFG14X" > "$P_BIND14X"
+MOCK_HTTP_BODY='{"success":true}' MOCK_CRED_MODE=map MOCK_TOKEN_MAP="$P_MAP14X" \
+  MOCK_TOKEN_BINDING="$P_BIND14X" \
+  run_sut m10 200 "$(p_secrets_for "$P_CFG14X")" "$P_CFG14X" "--configs-floor 13 --inventory $P_INV13 --json-file $JM10"
+_m10=1
+# 14 map keys, 13-name inventory: the run must cover all 14 and print 14/13. If the list
+# came from the inventory it would read 13 and print 13/13.
+[[ "$(jget "$JM10" configs)" == "14" ]] || { _m10=0; echo "    configs=$(jget "$JM10" configs), expected 14 — the config list did not come from the map's keys"; }
+[[ "$(jget "$JM10" coverage_ratio)" == "14/13" ]] || { _m10=0; echo "    ratio=$(jget "$JM10" coverage_ratio), expected 14/13"; }
+[[ "$(jget "$JM10" coverage)" == "at-floor" ]] || { _m10=0; echo "    coverage=$(jget "$JM10" coverage), expected at-floor (growth is >=, not ==)"; }
+if [[ "$_m10" == "1" ]]; then
+  pass "a map key absent from the inventory is still scanned — the config list is the map's keys"
+else
+  fail "the config list must be the MAP's keys, not the inventory's names. If it is read from the inventory, the credential set and the scanned set can diverge silently — and a config whose token exists but whose name is missing from the committed file is never scanned at all, which is a narrowing invisible to every count in the ladder"
+fi
+
 echo "M9 (C-d): a DUPLICATE in the enumeration must not inflate the config count"
 # THE MUTATION PROOF FOR `sort -u`, and it is deliberately NOT the mis-binding case.
 #
@@ -2089,8 +2151,15 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # empty-vs-malformed distinction, the both-credentials refusal, the mask ORDERING, the
 # legacy single-credential argv, and the duplicate-enumeration case that is the actual
 # mutation proof for `sort -u`. 89 is the REALIZED count on a green run.
-if [[ "$((PASS + FAIL))" -lt 89 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 89. The suite did not execute what it claims to." >&2
+#
+# Raised 89 -> 91 after multi-agent review found six surviving mutations, all on axes the
+# author's own battery never edited: M0 (the stub's -c guard had no control of its own,
+# yet produced all 59 reds cited as proof the SUT names its config), M10 (every map-mode
+# fixture had map keys == enumeration == inventory, so the transform's direction was
+# unsampled), plus specificity assertions in M3 and non-zero-position fixtures in M4.
+# 91 is the REALIZED count on a green run.
+if [[ "$((PASS + FAIL))" -lt 91 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 91. The suite did not execute what it claims to." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
