@@ -2077,8 +2077,14 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 #
 # Raised 78 -> 80 with P16 (the committed inventory executed against the workflow-declared
 # floor) and P17 (the positive-work floor). 80 is the REALIZED count on a green run.
-if [[ "$((PASS + FAIL))" -lt 80 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 80. The suite did not execute what it claims to." >&2
+#
+# Raised 80 -> 89 with M1-M9, the per-config credential map (#7234): the fan-out itself,
+# the producible mis-binding, a single revoked token, six malformed-map shapes, the
+# empty-vs-malformed distinction, the both-credentials refusal, the mask ORDERING, the
+# legacy single-credential argv, and the duplicate-enumeration case that is the actual
+# mutation proof for `sort -u`. 89 is the REALIZED count on a green run.
+if [[ "$((PASS + FAIL))" -lt 89 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 89. The suite did not execute what it claims to." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

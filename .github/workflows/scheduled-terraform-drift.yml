@@ -151,39 +151,52 @@ jobs:
         if: matrix.directory == 'apps/web-platform/infra'
         continue-on-error: true
         env:
-          # THE ONLY CONSUMER of DOPPLER_TOKEN_DRIFT, deliberately. It is a
-          # `doppler_service_account_token` whose identity holds a `viewer` membership on
-          # the whole `soleur` project (apps/web-platform/infra/token-drift-service-account.tf),
-          # so unlike the config-scoped `DOPPLER_TOKEN` every other step here uses, it can
-          # enumerate and READ all 13 configs. That is the swap #7159 asked for.
-          # RESTORED to secrets.DOPPLER_TOKEN pending #7234. The project-scoped service
-          # account minted by #7162 is live and correctly shaped -- account, `viewer` project
-          # membership and token all exist -- and it can see NOTHING. Measured against the
-          # real credential:
+          # THE ONLY CONSUMER of DOPPLER_TOKEN_DRIFT_MAP, deliberately. It is ONE Actions
+          # secret carrying a JSON object {"<config>": "<read token>"} — one config-scoped
+          # `doppler_service_token` per config, minted under a single `for_each` over the
+          # committed inventory (apps/web-platform/infra/token-drift-read-tokens.tf).
+          #
+          # WHY A MAP AND NOT ONE PROJECT-WIDE CREDENTIAL. #7159 minted a
+          # `doppler_service_account` with a `viewer` project membership on the premise that
+          # such an identity can enumerate and read every config. That premise was INFERRED
+          # from the provider shipping the resource type and was never probed; everything
+          # else in #7159 was measured, and three other premises were falsified that way.
+          # Measured against the real credential (#7234):
           #
           #   doppler configs -p soleur --json          -> null  (0 configs)
           #   doppler secrets -p soleur -c prd          -> "Could not find requested config 'prd'"
           #
-          # so it cannot enumerate AND cannot read. `workplace_permissions = []` (the least
-          # privileged value satisfying the provider's ExactlyOneOf) yields workplace_role
+          # It could neither enumerate NOR read. `workplace_permissions = []` — the least
+          # privileged value satisfying the provider's ExactlyOneOf — yields workplace_role
           # no_access, and workplace visibility turns out to be a precondition for project
-          # access rather than something a project membership can confer alone.
+          # access rather than something a project membership can confer alone. The two
+          # values that might have worked both reach EVERY project in the workplace, wider
+          # than #7159 authorised. See ADR-166.
           #
-          # The premise that a service-account credential can enumerate a project's configs
-          # was INFERRED from the provider shipping the resource type; it was never probed.
-          # Everything else in #7159 was measured and three premises were falsified that way.
+          # SO NOTHING HERE ENUMERATES ANY MORE. The detector takes its config list from the
+          # map's KEYS, which Terraform derives from the committed inventory. That is the
+          # correction: a config-scoped credential answers `doppler configs` with a list
+          # SILENTLY SCOPED TO ITSELF, so a denominator taken from the scan's own listing
+          # narrows in lockstep with the credential and prints 13/13 through every possible
+          # narrowing.
           #
-          # DOPPLER_CONFIGS_FLOOR deliberately STAYS 13. This credential reads 1 config, so
-          # the scan will report `degraded` at 1/13 on every run -- which is the honest state
-          # and keeps the operator channel armed. Do NOT "fix" the red by lowering the floor
-          # to 1: that is the floor-edited-down-to-match-a-narrowed-grant shape, and the
-          # runtime `configs_floor < 13` assertion below forces `degraded` anyway.
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          # AN ABSENT OR EMPTY SECRET IS `degraded 0/13`, NOT AN ERROR IN THIS STEP. Between
+          # merging the credential change and the infra apply that publishes the secret,
+          # this expression yields a DEFINED, EMPTY variable. The detector selects its mode
+          # on non-emptiness, so that window lands in the missing-credential arm and reports
+          # `degraded` — a credential is absent — rather than the malformed-map arm, whose
+          # remedy says the Doppler identity is not at fault.
+          #
+          # DOPPLER_CONFIGS_FLOOR deliberately STAYS 13. Do NOT "fix" a red by lowering it:
+          # that is the floor-edited-down-to-match-a-narrowed-grant shape, and the runtime
+          # `configs_floor < 13` assertion below forces `degraded` anyway.
+          DOPPLER_TOKEN_MAP: ${{ secrets.DOPPLER_TOKEN_DRIFT_MAP }}
           DOPPLER_PROJECT: soleur
-          # NO DOPPLER_CONFIG. A project-scoped identity takes no direction from it, and
-          # with 13 configs in play the name reads as "which config this scans" — which is
-          # exactly the wrong mental model for a fan-out detector that loops over all of
-          # them. The detector routes every read through an explicit `-c <cfg>`.
+          # NO DOPPLER_CONFIG, and no bare DOPPLER_TOKEN. The detector reads each config
+          # with that config's OWN credential and names it explicitly (`-c <cfg>`); a single
+          # ambient config would read as "which config this scans", exactly the wrong mental
+          # model for a fan-out. Setting DOPPLER_TOKEN here as well is a hard error in the
+          # detector — the two select different scan modes with no defensible precedence.
           #
           # THE FLOOR IS DECLARED HERE AND READ FROM NOWHERE ELSE (outside the tests). It
           # is not a fact about Doppler; it is a DEMAND this step makes of its own
@@ -195,6 +208,12 @@ jobs:
           # literal, the name count in apps/web-platform/infra/doppler-config-inventory.txt,
           # and the pin in plugins/soleur/test/token-drift-workflow-causes.test.sh, which
           # asserts this parses, is >= 13, and equals the inventory's name count.
+          #
+          # THE INVENTORY NOW ALSO DETERMINES REACH, not just the printed denominator: it is
+          # the `for_each` list the per-config tokens are minted from. So shrinking it
+          # DESTROYS tokens, which the destroy guard catches — the one layer that fires
+          # ABOVE 13, where the three literals above only bound it from below. The
+          # inventory's own header carries the full floor-raising checklist.
           DOPPLER_CONFIGS_FLOOR: 13
         run: |
           set -uo pipefail
@@ -419,7 +438,7 @@ jobs:
           # TWO ARMS, matching the two non-healthy rungs. The retired `single-config` arm
           # is gone with the state: at a floor of 13 it collapses into `degraded`.
           if [[ "$coverage" == "degraded" ]]; then
-            echo "::warning::Cloudflare token drift read ${cov_ratio} Doppler config(s), below its declared floor of ${cfg_floor} — this run CANNOT detect fan-out drift in the configs it did not read, which is the failure class this detector exists for. The verdict '${verdict}' is scoped to what was visible, not to the fleet. Unread: ${cfg_unread}. The credential is missing, empty, revoked, or has been NARROWED — it is a doppler_service_account holding a viewer membership on the whole soleur project, so there is nothing left to widen; compare the ratio and the unread list against the floor."
+            echo "::warning::Cloudflare token drift read ${cov_ratio} Doppler config(s), below its declared floor of ${cfg_floor} — this run CANNOT detect fan-out drift in the configs it did not read, which is the failure class this detector exists for. The verdict '${verdict}' is scoped to what was visible, not to the fleet. Unread: ${cfg_unread}. The credential set is DOPPLER_TOKEN_DRIFT_MAP, one config-scoped read token per config; at ${cov_ratio} either the whole secret is missing or empty (0/N — including the window between merging a credential change and the infra apply that publishes it), or the individual tokens for the unread configs are revoked, expired or were never minted. The unread list names exactly which. This is per-config, so a partial number is actionable: it names the tokens to re-mint, not a grant to widen."
           elif [[ "$coverage" == "unknown" ]]; then
             echo "::warning::Cloudflare token drift could not measure its own coverage (configs='${configs}', floor='${cfg_floor}', ratio='${cov_ratio}') — the verdict file was unreadable or malformed. Treat the verdict '${verdict}' as unscoped."
           fi
@@ -535,6 +554,16 @@ jobs:
       # closing condition unsatisfiable. Every sibling arm in this job tests positively
       # (`== 'dead'`, `== 'unverifiable'`, `contains(...)`), which is exactly why they
       # are skip-safe. Match them: an empty output must match nothing.
+      # THE FOURTH DISJUNCT CLOSES A DEAD ZONE BETWEEN THIS ARM AND THE CLOSE ARM.
+      # `at-floor` + `configs_unread == '-'` + `verdict == 'unavailable'` is reachable: the
+      # detector's non-vacuity gate publishes `unavailable` when it enumerated keys and
+      # probed zero values, and every config's NAME listing can succeed on such a run. The
+      # close arm refuses it (it is gated `verdict != 'unavailable'`, correctly — a run that
+      # concluded nothing must not close the issue), and until now this arm did not match it
+      # either. So the issue stayed OPEN carrying whatever body filed first, describing a
+      # state the current run did not measure, and the #7159 follow-through returned
+      # TRANSIENT forever. Falling between two arms is how a channel goes quiet without
+      # anything reporting that it did.
       - name: Open or update an action-required issue (token drift — coverage below the declared floor)
         id: coverage_issue
         if: >-
@@ -542,7 +571,9 @@ jobs:
           && (steps.token_drift.outputs.coverage == 'degraded'
               || steps.token_drift.outputs.coverage == 'unknown'
               || (steps.token_drift.outputs.coverage == 'at-floor'
-                  && steps.token_drift.outputs.configs_unread != '-'))
+                  && steps.token_drift.outputs.configs_unread != '-')
+              || (steps.token_drift.outputs.coverage == 'at-floor'
+                  && steps.token_drift.outputs.verdict == 'unavailable'))
         continue-on-error: true
         timeout-minutes: 2
         env:
@@ -594,7 +625,7 @@ jobs:
           # the crash path.
           if [[ "$COVERAGE" == "unknown" ]]; then
             TITLE="[TOKEN DRIFT] The fan-out detector could not measure its own scan coverage"
-            LEAD="**The token-drift scan published an unreadable coverage measurement (\`configs=${CONFIGS}\`, \`floor=${CONFIGS_FLOOR}\`, \`ratio=${COVERAGE_RATIO}\`).** Its verdict (\`${VERDICT}\`) is therefore unscoped — it is not a fleet-wide claim, and it is not evidence of a narrowed credential either. This is a DETECTOR fault, not a credential fault: touching the Doppler identity will not clear it."
+            LEAD="**The token-drift scan published an unreadable coverage measurement (\`configs=${CONFIGS}\`, \`floor=${CONFIGS_FLOOR}\`, \`ratio=${COVERAGE_RATIO}\`).** Its verdict (\`${VERDICT}\`) is therefore unscoped — it is not a fleet-wide claim, and it is not evidence of a narrowed credential either. Two causes reach this state and they need different actions: a truncated or malformed VERDICT FILE (a detector fault — the Doppler identity is not implicated), or a malformed \`DOPPLER_TOKEN_DRIFT_MAP\` (a CREDENTIAL fault — the detector fails closed here deliberately, because a credential source it could not parse is not evidence the credential is absent or narrowed, which is what \`degraded\` would assert). The run's own annotations discriminate: a map that failed to parse names itself on stderr and makes no Doppler call at all."
           else
             TITLE="[TOKEN DRIFT] The fan-out detector is reading fewer configs than it declared"
             LEAD="**The twice-daily Cloudflare token-drift scan read ${COVERAGE_RATIO} Doppler configs, below its declared floor of ${CONFIGS_FLOOR}.** \`configs\` counts configs whose secret-NAME listing SUCCEEDED, not configs the project enumerated — a config the credential can see but cannot open is excluded and named in the unread list below. It is not a count of value reads: a role that lists names but cannot read values still counts here, and is caught instead by the detector's non-vacuity gate (\`verdict: unavailable\`)."
@@ -658,92 +689,84 @@ jobs:
             echo "### Remedy"
             echo ""
             if [[ "$COVERAGE" == "unknown" ]]; then
-              echo "**Do not touch the Doppler identity on the strength of this issue** — the scan"
-              echo "did not report a short config count, it reported an unreadable one. Fix the"
-              echo "verdict file first: check the \`Cloudflare token drift\` step in the linked run"
-              echo "for a non-zero detector exit, a missing \`doppler\`/\`python3\`, or a truncated"
-              echo "write in \`emit_json\` (\`scripts/check-cloudflare-token-drift.sh\`). Coverage"
-              echo "cannot be assessed until the detector publishes a parseable \`configs\` field"
-              echo "again."
-            elif [[ "$CONFIGS" == "1" ]]; then
-              # INTERIM STATE (#7234) — DO NOT send the operator hunting a regression.
-              # 1/13 is the DELIBERATE, documented state while the project-scoped service
-              # account is unusable. Without this branch the else-arm below rewrites #7175
-              # twice daily telling the operator to "work down the three narrowings" and
-              # naming N3 ("repointed at a config-scoped service token, reads 1/13") as the
-              # fault — which is a verbatim description of the intended configuration. An
-              # issue that instructs the operator to undo a deliberate change is worse than
-              # no issue: it burns the one channel this detector has.
-              echo "**This 1/13 is expected and tracked — do not undo it.** The scan is"
-              echo "deliberately running on the config-scoped \`secrets.DOPPLER_TOKEN\`"
-              echo "(\`prd_terraform\`) while **#7234** is open."
+              echo "**The scan did not report a short config count — it reported an unreadable"
+              echo "measurement.** Two different faults land here and the run's own annotations"
+              echo "say which, so read them before acting:"
               echo ""
-              echo "The project-scoped \`doppler_service_account\` minted for this scan is live"
-              echo "and correctly shaped — account, \`viewer\` project membership, token, and the"
-              echo "\`DOPPLER_TOKEN_DRIFT\` secret all exist — and it was MEASURED to see nothing:"
-              echo "\`doppler configs -p soleur\` returns \`null\`, and reading \`prd\` returns"
-              echo "\`Could not find requested config 'prd'\`. \`workplace_permissions = []\` yields"
-              echo "\`workplace_role: no_access\`, which denies the project visibility a \`viewer\`"
-              echo "membership cannot confer on its own."
+              echo "- \`::error::\` naming \`DOPPLER_TOKEN_DRIFT_MAP\` — a CREDENTIAL fault. The"
+              echo "  secret is not a JSON object of \`{\"<config>\": \"<read token>\"}\` with"
+              echo "  non-empty string values. The detector fails closed here on purpose and"
+              echo "  makes NO Doppler call, because a credential source it could not parse is"
+              echo "  not evidence the credential is absent or narrowed — which is what"
+              echo "  \`degraded\` would assert. Re-run the infra apply so"
+              echo "  \`github_actions_secret.doppler_token_drift_map\` republishes."
+              echo "- no such annotation — a DETECTOR fault. Check the \`Cloudflare token drift\`"
+              echo "  step in the linked run for a non-zero detector exit, a missing"
+              echo "  \`doppler\`/\`python3\`/\`jq\`, or a truncated write in \`emit_json\`"
+              echo "  (\`scripts/check-cloudflare-token-drift.sh\`). The Doppler identity is not"
+              echo "  implicated on this path."
               echo ""
-              echo "So this run scanned the 13 token-shaped keys \`prd_terraform\` carries — the"
-              echo "\`CI_SSH_ACCESS_TOKEN\` pair and 10 \`CF_API_TOKEN*\` among them — and reported"
-              echo "\`${COVERAGE_RATIO}\` honestly rather than calling it clean. **No action is"
-              echo "needed on this issue.** It closes when #7234 restores the fan-out."
+              echo "Coverage cannot be assessed until the detector publishes a parseable"
+              echo "\`configs\` field again."
             else
-              echo "**There is nothing here to widen.** \`DOPPLER_TOKEN_DRIFT\` is a"
-              echo "\`doppler_service_account_token\` belonging to"
-              echo "\`doppler_service_account.token_drift\`, and that identity holds"
-              echo "\`doppler_project_member_service_account.token_drift\` — a \`viewer\` membership"
-              echo "on the whole \`soleur\` project with \`environments\` left unset. All four"
-              echo "resources live in \`apps/web-platform/infra/token-drift-service-account.tf\`."
-              echo "Project-wide is already the widest this design goes, so a reading below the"
-              echo "floor means the credential has been **narrowed** or has **stopped working** —"
-              echo "not that it needs more scope."
+              # THIS BODY RECEIVES NO CAUSE CHANNEL. The step's `env:` carries COVERAGE,
+              # CONFIGS, CONFIGS_FLOOR, CONFIGS_EXPECTED, CONFIGS_UNREAD, COVERAGE_RATIO,
+              # INVENTORY_AGE_DAYS and VERDICT — and nothing that says WHY. So it enumerates
+              # what can produce this state and points at the run's own annotations; it must
+              # never claim to have diagnosed one. Do not "improve" this by asserting a
+              # cause: one static remedy for disjoint causes is the defect the `causes`
+              # vocabulary exists to remove.
+              echo "**A reading below the floor is now per-config, so it names its own scope.**"
+              echo "The credential is \`DOPPLER_TOKEN_DRIFT_MAP\`: ONE Actions secret holding a"
+              echo "JSON object of \`{\"<config>\": \"<read token>\"}\`, one config-scoped"
+              echo "\`doppler_service_token\` per config, minted under a single \`for_each\` over"
+              echo "\`apps/web-platform/infra/doppler-config-inventory.txt\` in"
+              echo "\`apps/web-platform/infra/token-drift-read-tokens.tf\`. There is no"
+              echo "project-wide grant to widen or narrow any more — reach is the token SET."
               echo ""
               echo "Compare \`${COVERAGE_RATIO}\` and the unread list above against the declared"
-              echo "floor of \`${CONFIGS_FLOOR}\`, then work down the three narrowings. Each one"
-              echo "SHORTENS what the credential reaches; none of them can lengthen it, which is"
-              echo "what makes this one-sided gate sound."
+              echo "floor of \`${CONFIGS_FLOOR}\`, then read the linked run's annotations. The"
+              echo "states that produce this, and what each looks like:"
               echo ""
-              echo "- **N1 — the membership role was downgraded**, or"
-              echo "  \`doppler_project_member_service_account.token_drift\` was removed. Reads"
-              echo "  \`0/${CONFIGS_EXPECTED}\`, because \`configs\` counts configs whose secret-NAME"
-              echo "  listing succeeded and a downgraded role fails that listing everywhere."
-              echo "  \`viewer\` is the least-privileged role carrying"
-              echo "  \`enclave_project_config_secrets_read\`."
-              echo "  - Its subtler form — a role that can list NAMES but not read VALUES — is"
-              echo "    **not** caught by this count, and an earlier version of this issue"
-              echo "    wrongly claimed it was. The names list, so every config counts and the"
-              echo "    floor is satisfied; what fails is every value read. That case is caught"
-              echo "    one level down instead, by the detector's non-vacuity gate: having drawn"
-              echo "    zero conclusions from a non-empty keyset it prints \`PROBED ZERO\` and"
-              echo "    exits 2, which publishes \`verdict: unavailable\` and sends the"
-              echo "    DETECTOR-UNAVAILABLE email. The close arm is gated on"
-              echo "    \`verdict != 'unavailable'\`, so such a run cannot close this issue."
-              echo "- **N2 — the membership was scoped to a subset of environments**, i.e."
-              echo "  \`environments\` was set (\`[\"prd\"]\` reads 7 of 13). The unread list names"
-              echo "  exactly the dropped configs."
-              echo "- **N3 — \`DOPPLER_TOKEN_DRIFT\` was repointed at a config-scoped"
-              echo "  \`doppler_service_token\`**, or the Actions secret is being sourced from"
-              echo "  somewhere other than \`github_actions_secret.doppler_token_drift\`. Reads"
-              echo "  \`1/${CONFIGS_EXPECTED}\`: a Doppler service token is config-scoped by"
-              echo "  construction and ignores \`DOPPLER_CONFIG\`."
+              echo "- **The secret is absent or empty** — reads \`0/${CONFIGS_EXPECTED}\`. Expected"
+              echo "  between merging a change to the credential and the infra apply that"
+              echo "  republishes it; also a deleted secret. The remedy is the apply, not a"
+              echo "  credential edit. The detector makes no Doppler call at all on this path."
+              echo "- **One config's token is revoked, expired, or was never minted** — reads"
+              echo "  one short of \`${CONFIGS_EXPECTED}\` (or lower), and the unread list names"
+              echo "  EXACTLY which. **This is a capability the previous"
+              echo "  project-scoped credential did not have**: one dead token was"
+              echo "  indistinguishable from a healthy fleet. Remedy is per token:"
+              echo "  \`terraform apply -replace='doppler_service_token.token_drift[\"<config>\"]'\`,"
+              echo "  which mints a fresh value and republishes the map in the same apply."
+              echo "- **The inventory shrank** — the \`for_each\` list shortened, so tokens were"
+              echo "  DESTROYED and those configs now read unread. This is the case the destroy"
+              echo "  guard exists to make deliberate; it should never appear without an"
+              echo "  \`[ack-destroy]\` in the merge commit that caused it."
+              echo "- **The step was repointed at a bare \`DOPPLER_TOKEN\`** — reads"
+              echo "  \`1/${CONFIGS_EXPECTED}\`. That selects the detector's single-credential"
+              echo "  mode, which a config-scoped token satisfies by reading exactly itself."
+              echo "- **A \`token_drift_config_binding_mismatch\` annotation is present** — the"
+              echo "  minted token set and the map keys disagree, i.e."
+              echo "  \`doppler_service_token.token_drift\` binds \`config\` to a string literal"
+              echo "  rather than \`each.key\`. A wrong \`-c\` is refused by Doppler, so those"
+              echo "  configs count unread rather than silently reading the wrong one. This is"
+              echo "  gated pre-merge by the C-a assertion in"
+              echo "  \`plugins/soleur/test/token-drift-workflow-causes.test.sh\`."
               echo ""
-              echo "Two operational modes read the same way and are not narrowings: an **absent or"
-              echo "empty** \`DOPPLER_TOKEN_DRIFT\` (the merge-to-release window before the infra"
-              echo "apply clears its environment gate, or a deleted secret — the remedy is"
-              echo "provisioning), and a **revoked or expired** credential (present but"
-              echo "enumerating nothing — the remedy is rotation, and this run additionally sends"
-              echo "the DETECTOR-UNAVAILABLE email). Rotation is in-band and needs no dashboard"
-              echo "step: \`terraform apply -replace=doppler_service_account_token.token_drift\`"
-              echo "mints a new \`api_key\` and republishes the Actions secret in the same run,"
-              echo "because no \`lifecycle.ignore_changes\` holds it back."
+              echo "A subtler case this count does NOT catch: a credential that can list NAMES"
+              echo "but not read VALUES. The names list, so every config counts and the floor is"
+              echo "satisfied; what fails is every value read. That is caught one level down by"
+              echo "the detector's non-vacuity gate — having drawn zero conclusions from a"
+              echo "non-empty keyset it prints \`PROBED ZERO\` and exits 2, publishing"
+              echo "\`verdict: unavailable\` and sending the DETECTOR-UNAVAILABLE email. The close"
+              echo "arm is gated on \`verdict != 'unavailable'\`, so such a run cannot close this."
               echo ""
               echo "If the project genuinely GREW, raise \`DOPPLER_CONFIGS_FLOOR\` in"
               echo "\`.github/workflows/scheduled-terraform-drift.yml\` and regenerate"
               echo "\`apps/web-platform/infra/doppler-config-inventory.txt\` in the same PR — the"
-              echo "inventory's \`# command:\` header carries the exact regeneration command, and"
+              echo "inventory's \`# command:\` header carries the exact regeneration command, its"
+              echo "floor-raising block carries the full checklist, and"
               echo "\`plugins/soleur/test/token-drift-workflow-causes.test.sh\` fails if the two"
               echo "drift apart. Growth alone never files this issue: the gate is \`>=\`."
             fi
@@ -827,6 +850,15 @@ jobs:
       # real config's failure names that config. This is the one place the inventory is
       # allowed to influence an arm, and it can only ever WITHHOLD a close — it can never
       # cause one, so a short/stale/missing inventory still gates nothing that matters.
+      #
+      # SINCE #7234 THE EPHEMERAL-PADDING ROUTE ABOVE IS STRUCTURALLY CLOSED, and the
+      # conjunct is kept anyway. The scan no longer enumerates: its config list is the KEYS
+      # of a credential map Terraform derives from the committed inventory, so a config that
+      # is not in the inventory has no token, is never read, and cannot pad `configs` at
+      # all. The paragraph above is retained because it is the argument for the conjunct
+      # EXISTING, and the conjunct still earns its place — it is now what stops a close on a
+      # run where one config's own token failed while the others made the floor. Do not
+      # delete it on the strength of the padding route being gone.
       - name: Close the coverage issue once the declared floor is met
         id: coverage_close
         if: >-
@@ -1548,11 +1580,17 @@ jobs:
           # clean-verdict-from-inspecting-nothing shape every sibling control in this
           # block guards against, so the listed count is checked, not assumed.
           #
-          # THE FIX IS AN HONEST VERDICT, NOT A WIDER CREDENTIAL. Wiring
-          # `DOPPLER_TOKEN_DRIFT` in here would satisfy the predicate, and it is
-          # deliberately OUT OF SCOPE: that credential is project-scoped and keeps
-          # exactly ONE consumer (the token-drift step), which is what bounds its blast
-          # radius and keeps its rotation a single `-replace=`.
+          # THE FIX IS AN HONEST VERDICT, AND NO CREDENTIAL IN THIS REPOSITORY CAN GIVE
+          # ONE. Wiring `DOPPLER_TOKEN_DRIFT_MAP` in here would NOT satisfy the predicate:
+          # it is a map of CONFIG-SCOPED read tokens, each of which lists exactly itself,
+          # so it can no more enumerate the project than the credential this job already
+          # holds. The project-scoped identity that could have is gone — measured unable to
+          # enumerate or read anything at all (#7234, ADR-166).
+          #
+          # So this gap is now STRUCTURAL rather than elective. It needs a credential class
+          # that does not exist here, and its replacement is its own decision — tracked
+          # separately rather than papered over. The listed count stays checked, not
+          # assumed, so the sweep keeps reporting honestly that it looked at nothing.
           _cfg_rc=0
           _cfg_total=0
           _cfgs=""
@@ -1787,13 +1825,17 @@ jobs:
               echo "list silently scoped to the caller — one entry, \`success: true\`, no error — so"
               echo "no amount of retrying makes the predicate matchable."
               echo ""
-              echo "**Do not repoint this job at \`DOPPLER_TOKEN_DRIFT\`.** That credential is a"
-              echo "project-scoped \`doppler_service_account_token\` and would satisfy the predicate,"
-              echo "but it is deliberately kept to exactly ONE consumer — the Cloudflare token-drift"
-              echo "step in the \`drift-check\` job — which is what bounds its blast radius and keeps"
-              echo "its rotation a single \`terraform apply"
-              echo "-replace=doppler_service_account_token.token_drift\`. Widening its consumer set"
-              echo "here would trade a bounded credential for a diagnostic."
+              echo "**Repointing this job at \`DOPPLER_TOKEN_DRIFT_MAP\` would not help.** That"
+              echo "secret is a map of CONFIG-SCOPED read tokens, one per config in the committed"
+              echo "inventory — each lists exactly itself, so the map can no more enumerate the"
+              echo "project than the credential this job already holds. It also cannot see an"
+              echo "EPHEMERAL rehearsal config at all: the tokens are minted by \`for_each\` over a"
+              echo "committed file, and a scratch config created at dispatch time is not in it."
+              echo "The project-scoped identity that could have satisfied this predicate was"
+              echo "measured unable to enumerate or read anything and has been removed (#7234)."
+              echo ""
+              echo "So this is a STRUCTURAL gap, not a scoping preference — there is no credential"
+              echo "in this repository that can answer the question this sweep asks."
               echo ""
               echo "The shapes that do fit: give this job its own narrowly-scoped read identity, or"
               echo "have the rehearsal teardown arm assert its own scratch-config deletion at"

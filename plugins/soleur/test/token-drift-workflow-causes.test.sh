@@ -1297,51 +1297,50 @@ fi
 # ---------------------------------------------------------------------------
 # C1-C3 — the CREDENTIAL the step is wired to, and the guard on its floor.
 # ---------------------------------------------------------------------------
-echo "C1: the step's DOPPLER_TOKEN is the documented interim credential (see #7234)"
-# INTERIM STATE, PINNED DELIBERATELY. The TARGET is secrets.DOPPLER_TOKEN_DRIFT -- the
-# project-scoped service-account token. It is minted and live, and it was MEASURED to see
-# nothing at all:
+echo "C1: the step is wired to the per-config credential MAP, not a bare token"
+# WHAT THIS PINS, AND WHY IT IS AN EXACT MATCH RATHER THAN "either value". The step reads
+# DOPPLER_TOKEN_DRIFT_MAP: ONE Actions secret carrying a JSON object of per-config read
+# tokens, minted by `doppler_service_token.token_drift` under a `for_each` over the
+# committed inventory. Any THIRD value fails here, and so does a flip back to a bare
+# project-scoped credential.
 #
-#   doppler configs -p soleur --json   -> null   (0 configs)
-#   doppler secrets -p soleur -c prd   -> "Could not find requested config 'prd'"
-#
-# `workplace_permissions = []` (the least-privileged value satisfying the provider's
-# ExactlyOneOf) yields workplace_role no_access, and that denies project visibility which a
-# `viewer` project membership cannot restore on its own. Until #7234 settles whether a
-# narrower-than-all_enclave_projects permission exists, the step runs on the config-scoped
-# credential so drift detection keeps running at all -- 1 of 13, reported honestly as
-# `degraded` rather than silently as `clean`.
-#
-# This assertion is NOT relaxed to "either value": it pins the interim credential exactly,
-# so any THIRD value still fails, and flipping back to DOPPLER_TOKEN_DRIFT fails here as a
-# reminder to re-verify enumeration against the real credential first.
-WF_TOKEN=$(step_get "id:token_drift" env.DOPPLER_TOKEN) || WF_TOKEN=""
-if [[ "$WF_TOKEN" == '${{ secrets.DOPPLER_TOKEN }}' ]]; then
-  pass "DOPPLER_TOKEN: \${{ secrets.DOPPLER_TOKEN }} (interim per #7234; target is DOPPLER_TOKEN_DRIFT)"
+# THE HISTORY THIS ASSERTION EXISTS TO STOP REPEATING. #7159 wired this step to a
+# `doppler_service_account` on the INFERRED premise that a project membership can
+# enumerate and read every config. It was never probed. Measured (#7234): that credential
+# saw NOTHING — `doppler configs -p soleur --json` returned null and reading `prd`
+# returned "Could not find requested config 'prd'". If you are changing this line, the
+# thing to carry forward is not the value but the discipline: measure the credential's
+# reach against live Doppler BEFORE wiring it, not after the first scheduled run.
+WF_TOKEN_MAP=$(step_get "id:token_drift" env.DOPPLER_TOKEN_MAP) || WF_TOKEN_MAP=""
+_has_bare_token=0
+step_get "id:token_drift" env.DOPPLER_TOKEN >/dev/null 2>&1 && _has_bare_token=1
+if [[ "$WF_TOKEN_MAP" == '${{ secrets.DOPPLER_TOKEN_DRIFT_MAP }}' && "$_has_bare_token" == "0" ]]; then
+  pass "DOPPLER_TOKEN_MAP: \${{ secrets.DOPPLER_TOKEN_DRIFT_MAP }}, and no bare DOPPLER_TOKEN alongside it"
 else
-  fail "the step's DOPPLER_TOKEN is '${WF_TOKEN}' — expected the interim \${{ secrets.DOPPLER_TOKEN }} per #7234. If this is the flip BACK to DOPPLER_TOKEN_DRIFT, first re-run the enumeration probe against the real credential (mint an ephemeral service-account token, run 'doppler configs -p soleur --json', confirm 13) and update this assertion in the same change — the last time that premise went unmeasured the scan read 0 of 13"
+  fail "the step's DOPPLER_TOKEN_MAP is '${WF_TOKEN_MAP}' (bare DOPPLER_TOKEN present=${_has_bare_token}) — expected \${{ secrets.DOPPLER_TOKEN_DRIFT_MAP }} and no bare token. Setting BOTH is a hard error in the detector: they select different scan modes and there is no defensible precedence, so it refuses rather than grading a config set nobody asked for. Before wiring any different credential here, measure its reach against live Doppler first — the last two premises about this credential that went unmeasured both shipped a scan that read fewer configs than it reported"
 fi
 
-echo "C2: DOPPLER_CONFIG is absent, and the bare token appears exactly once (the one C1 pins)"
+echo "C2: DOPPLER_CONFIG is absent, no bare token reference survives, and the map is referenced exactly once"
 # Asserted over the PARSED step (comments stripped), because the step's own comment block
-# explains at length why DOPPLER_CONFIG is absent and names it four times.
+# discusses both variable names at length.
 STEP_YAML=$(step_get "id:token_drift" .) || { echo "FATAL: could not dump the token_drift step" >&2; exit 2; }
-_bare_token=$(grep -Ec 'secrets\.DOPPLER_TOKEN[[:space:]]*\}\}' <<<"$STEP_YAML")
+# OCCURRENCES, not matching LINES: `grep -Ec` counts lines and would read 1 for two
+# references sharing one. The `_MAP` suffix is what makes the bare-token count reach a
+# clean 0 — `secrets\.DOPPLER_TOKEN[[:space:]]*\}\}` cannot match
+# `secrets.DOPPLER_TOKEN_DRIFT_MAP }}` because the `_DRIFT_MAP` defeats the `\}\}` tail.
+# Reusing the old secret NAME for a map would have made this assertion unwritable.
+_bare_token=$(grep -Eo 'secrets\.DOPPLER_TOKEN[[:space:]]*\}\}' <<<"$STEP_YAML" | grep -c .) || _bare_token=0
+_map_refs=$(grep -Eo 'secrets\.DOPPLER_TOKEN_DRIFT_MAP[[:space:]]*\}\}' <<<"$STEP_YAML" | grep -c .) || _map_refs=0
 _has_cfg=0
 step_get "id:token_drift" env.DOPPLER_CONFIG >/dev/null 2>&1 && _has_cfg=1
-# DOPPLER_CONFIG must STAY absent even on the interim credential. The detector enumerates
-# and loops configs; it takes no direction from DOPPLER_CONFIG, and re-adding it would
-# restore the "this scans one named config" mental model the ladder replaced. The bare-token
-# half of this assertion is suspended while #7234 is open (C1 pins the credential instead).
-# `_bare_token` is KEPT, not dropped. It greps the WHOLE step YAML, so it catches a
-# secrets.DOPPLER_TOKEN appearing in a `with:` block or a second env key — surface C1 does
-# not see, since C1 inspects env.DOPPLER_TOKEN alone. Asserting == 1 pins "exactly the one
-# C1 pins, and no other": deleting this check would silently un-guard the extra-reference
-# case for the duration of #7234.
-if [[ "$_has_cfg" == "0" && "$_bare_token" == "1" ]]; then
-  pass "no DOPPLER_CONFIG in the step, and exactly 1 bare secrets.DOPPLER_TOKEN (the interim credential C1 pins)"
+# DOPPLER_CONFIG must STAY absent. The detector reads each config with that config's OWN
+# credential and names it explicitly on every read; a single ambient config would read as
+# "which config this scans", the wrong mental model for a fan-out — and the detector
+# unsets it anyway, so declaring it here could only mislead a reader.
+if [[ "$_has_cfg" == "0" && "$_bare_token" == "0" && "$_map_refs" == "1" ]]; then
+  pass "no DOPPLER_CONFIG, zero bare secrets.DOPPLER_TOKEN references, and exactly 1 secrets.DOPPLER_TOKEN_DRIFT_MAP"
 else
-  fail "the step declares DOPPLER_CONFIG (present=${_has_cfg}) or references the bare secrets.DOPPLER_TOKEN ${_bare_token} time(s), expected exactly 1 — the detector loops over enumerated configs, so naming one in DOPPLER_CONFIG reads as 'which config this scans', the wrong mental model for a fan-out detector; and a SECOND bare-token reference is a surface C1 does not inspect"
+  fail "the step declares DOPPLER_CONFIG (present=${_has_cfg}), references the bare secrets.DOPPLER_TOKEN ${_bare_token} time(s) (expected 0) or the credential map ${_map_refs} time(s) (expected exactly 1) — this grep sees the WHOLE step YAML, so it catches a reference in a \`with:\` block or a second env key that C1's single-field lookup cannot"
 fi
 
 echo "C3: an unset, empty or unparseable floor WRITES the outputs and THEN exits 2"
@@ -1526,12 +1525,13 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # deletion of exactly the assertions under review. Raise it when adding a case; that edit
 # is the point, because it is what makes a REMOVAL visible in the diff.
 #
-# 57 is the REALIZED `PASS + FAIL` after the #7159 review batch, and the number in this
-# comment and the number in the guard below MUST be the same number. They disagreed once
+# Raised 57 -> 60 with #7234's F5 (the for_each list IS the inventory) and C-a
+# (`config = each.key`, never a literal). 60 is the REALIZED `PASS + FAIL`, and the number
+# in this comment and the number in the guard below MUST be the same number. They disagreed once
 # (comment 46, guard 48, run 48/48), which is a ratchet whose own prose says the notch is
 # lower than it is — a reader trusting the comment would have "raised" it downward.
-if [[ "$((PASS + FAIL))" -lt 57 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 57." >&2
+if [[ "$((PASS + FAIL))" -lt 60 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 60." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
