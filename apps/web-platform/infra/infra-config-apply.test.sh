@@ -1348,17 +1348,37 @@ test_fatal_channel_red_against_main() {
   setup
   export_valid_env_vars
 
+  # #7220 PR-B — the baseline is a PINNED COMMIT, never `origin/main`.
+  #
+  # This arm originally read `origin/main:…/infra-config-apply.sh`. That is a MOVING ref, and at
+  # the moment PR-A merged it started resolving to the FIXED handler — so the two assertions
+  # below ("pre-fix carried no fatal_line", "pre-fix reported files_total=0") began failing
+  # against the very fix they were written to prove. Measured on a pristine `origin/main`
+  # worktree: 144 passed, 2 failed. The suite was green on the PR-A branch and red on main the
+  # instant it landed, which is the documented golden-baseline time-bomb — a parity/RED-against
+  # baseline must be frozen, because the file it names BECOMES the new implementation at merge.
+  #
+  # c051005f is the last commit before PR-A (#7221) landed; `git show` of a SHA cannot drift.
+  local PRE_FIX_SHA="c051005f49c8f1afb7322e5ed3b31c975db29355"
   local old="${TMPDIR_ROOT}/old-handler.sh"
-  if ! git -C "$SCRIPT_DIR" show "origin/main:apps/web-platform/infra/infra-config-apply.sh" > "$old" 2>/dev/null; then
-    # FAIL, not SKIP, when origin/main RESOLVES but the show fails — that is a real breakage,
-    # not an unavailable environment. A silent skip here makes the PR's only proof-of-red one
-    # `fetch-depth: 1` away from not existing, and nothing downstream consumes a skip.
-    if git -C "$SCRIPT_DIR" rev-parse --verify origin/main >/dev/null 2>&1; then
-      echo "  FAIL: origin/main resolves but the handler could not be read — mutation proof is broken, not skipped"
+  if ! git -C "$SCRIPT_DIR" show "${PRE_FIX_SHA}:apps/web-platform/infra/infra-config-apply.sh" > "$old" 2>/dev/null; then
+    # A shallow clone legitimately lacks this object, so that is a loud SKIP rather than a FAIL.
+    # But if the commit RESOLVES and the read still fails, the proof is broken, not unavailable.
+    if git -C "$SCRIPT_DIR" rev-parse --verify "${PRE_FIX_SHA}^{commit}" >/dev/null 2>&1; then
+      echo "  FAIL: ${PRE_FIX_SHA:0:8} resolves but the handler could not be read — mutation proof is broken, not skipped"
       FAIL=$((FAIL + 1))
     else
-      echo "  SKIP (loud): origin/main unavailable (shallow clone) — mutation proof NOT run"
+      echo "  SKIP (loud): pinned baseline ${PRE_FIX_SHA:0:8} unavailable (shallow clone) — mutation proof NOT run"
     fi
+    teardown
+    return 0
+  fi
+  # Guard the pin itself: if this object ever stops being the pre-fix handler (a bad rebase, a
+  # mis-typed SHA), the arm would silently prove nothing. The pre-fix handler has none of the
+  # fix's markers — assert that before trusting it as a baseline.
+  if grep -q 'local died=0' "$old"; then
+    echo "  FAIL: pinned baseline already contains the #7220 fix — it is not a pre-fix handler"
+    FAIL=$((FAIL + 1))
     teardown
     return 0
   fi
