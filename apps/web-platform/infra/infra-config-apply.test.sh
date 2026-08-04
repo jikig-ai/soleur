@@ -1081,6 +1081,109 @@ test_reconcile_unchanged_content_preserves_mtime() {
 # between grant and caller does not widen anything — it DENIES, and a denied reload is exactly
 # the silent no-op #7220 already was. Pinning both provisioning paths and the caller together is
 # what stops this from regressing into the same invisible failure.
+# --- #7220 B5 (AC-B2): hardening the self-restart that has NEVER run in production ---------
+#
+# fc8b8179 shipped the delayed webhook self-restart AFTER the reload in the same set -e block,
+# so it has been unreachable since ~2026-05 with zero test coverage. B2's grant makes it
+# reachable for the first time. Re-enabling a never-once-executed root-restart path on a host
+# with no orderable replacement is the single riskiest thing in this PR, hence three guards.
+
+# B5.1 -- an unparseable hooks.json must be a HARD failure, not a silent pass.
+#
+# The sweep is `jq … 2>/dev/null || true`, so a syntactically invalid hooks.json yields no
+# commands and the loop finds nothing to complain about. With the self-restart now live, webhook
+# would restart 3s later and come up serving ZERO hooks: adnanh/webhook with -verbose does not
+# abort on an unparseable hooks file. The port then ANSWERS, so the verify's 000/502/503
+# "listener is down" branch never fires -- the 404 branch does, whose remediation text points at
+# "first bootstrap". That is the wrong diagnosis, delivered on the exact channel needed to
+# repair it, on a host with no SSH runbook. Self-wedge.
+test_unparseable_hooks_json_is_a_hard_failure() {
+  echo "TEST: #7220 B5.1 — an unparseable hooks.json fails loudly instead of wedging the listener"
+  setup
+  export_valid_env_vars
+  # Valid base64, invalid JSON — the shape a truncated or half-rendered delivery produces.
+  export HOOKS_JSON_B64=$(_payload_file '{"id": "broken", ')
+
+  local rc=0
+  bash "$HANDLER" >/dev/null 2>&1 || rc=$?
+
+  if [[ "$rc" -ne 0 ]]; then
+    echo "  PASS: apply fails when hooks.json does not parse"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: apply exited 0 with an unparseable hooks.json — webhook would restart serving zero hooks"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # Named, so the operator gets the RIGHT diagnosis rather than the 404 "first bootstrap" one.
+  local reasons
+  reasons=$(jq -r '.files[]?.reason // empty' "$INFRA_CONFIG_STATE" 2>/dev/null | tr '\n' ' ' || true)
+  if [[ "$reasons" == *"hooks_json_unparseable"* ]]; then
+    echo "  PASS: the frame names hooks_json_unparseable"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: frame does not name the parse failure (reasons: ${reasons:-<none>})"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # NON-VACUITY: a VALID hooks.json must not trip this. Without this arm a gate that rejected
+  # every hooks.json would satisfy the assertions above and brick delivery outright.
+  setup
+  export_valid_env_vars
+  export HOOKS_JSON_B64=$(_payload_file '[{"id":"good","execute-command":"/usr/local/bin/inngest-inventory.sh"}]')
+  bash "$HANDLER" >/dev/null 2>&1 || true
+  local ok_reasons
+  ok_reasons=$(jq -r '.files[]?.reason // empty' "$INFRA_CONFIG_STATE" 2>/dev/null | tr '\n' ' ' || true)
+  if [[ "$ok_reasons" != *"hooks_json_unparseable"* ]]; then
+    echo "  PASS: a well-formed hooks.json is not flagged"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: a VALID hooks.json was flagged unparseable — the guard rejects everything"
+    FAIL=$((FAIL + 1))
+  fi
+  teardown
+}
+
+# B5.2 -- --collect on the transient unit, in argv lockstep with BOTH sudoers copies.
+#
+# --unit=webhook-self-restart is a FIXED name. A transient unit that FAILS is not garbage
+# collected, so the next apply's systemd-run fails "unit already exists" -- permanently, and
+# silently, on the only remediation channel. --collect changes the argv, and sudo matches the
+# full resolved command, so the grant must move with it or the self-restart becomes denied.
+test_self_restart_collect_argv_lockstep() {
+  echo "TEST: #7220 B5.2 — --collect is sent AND granted in both provisioning paths"
+  local sudoers="${SCRIPT_DIR}/deploy-inngest-bootstrap.sudoers"
+  local cloud_init="${SCRIPT_DIR}/cloud-init.yml"
+  local expected="/usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook"
+
+  local g_sudoers g_cloudinit
+  g_sudoers=$(sed -n 's/^Cmnd_Alias WEBHOOK_SELF_RESTART = //p' "$sudoers" | sed 's/[[:space:]]*$//')
+  g_cloudinit=$(sed -n 's/^[[:space:]]*Cmnd_Alias WEBHOOK_SELF_RESTART = //p' "$cloud_init" | sed 's/[[:space:]]*$//')
+  assert_eq "sudoers grants the --collect argv" "$expected" "$g_sudoers"
+  assert_eq "cloud-init grants the --collect argv" "$expected" "$g_cloudinit"
+
+  # The caller must send exactly that. Anchored on the sudo-prefixed call, not a bare --collect
+  # grep, which would also match this file's own prose.
+  if grep -qF "sudo $expected" "$HANDLER"; then
+    echo "  PASS: the handler sends the granted --collect argv"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: handler's systemd-run argv does not match the grant — the self-restart would be DENIED"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+# B5.3 -- StartLimitIntervalSec=0.
+#
+# webhook.service sets Restart=on-failure / RestartSec=5 with no start-limit override, so
+# systemd's default 5-in-10s applies. The first post-merge apply performs TWO restarts in quick
+# succession (server.tf's synchronous one, then the handler's). Blowing the limit leaves webhook
+# `failed` and needing `systemctl reset-failed` -- i.e. SSH, on the host that has none.
+test_webhook_start_limit_disabled() {
+  echo "TEST: #7220 B5.3 — webhook.service disables the systemd start limit"
+  local unit="${SCRIPT_DIR}/webhook.service"
+  # Must live in [Unit]: systemd ignores StartLimitIntervalSec in [Service] on modern versions.
+  local in_unit
+  in_unit=$(awk '/^\[Unit\]/{u=1;next} /^\[/{u=0} u && /^StartLimitIntervalSec=0[[:space:]]*$/{n++} END{print n+0}' "$unit")
+  assert_eq "StartLimitIntervalSec=0 is present in the [Unit] section" "1" "$in_unit"
+}
+
 test_daemon_reload_grant_lockstep() {
   echo "TEST: #7220 B2 — daemon-reload is granted, and the handler sends the granted argv"
   local sudoers="${SCRIPT_DIR}/deploy-inngest-bootstrap.sudoers"
@@ -1735,6 +1838,9 @@ test_reconcile_timestamp_unparseable
 test_reconcile_vector_ordered_last
 test_reconcile_survives_missing_inputs
 test_reconcile_unchanged_content_preserves_mtime
+test_unparseable_hooks_json_is_a_hard_failure
+test_self_restart_collect_argv_lockstep
+test_webhook_start_limit_disabled
 test_daemon_reload_grant_lockstep
 test_daemon_reload_runs_on_a_clean_apply
 test_daemon_reload_denied_is_attributed

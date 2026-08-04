@@ -108,7 +108,7 @@ declare -rA DEST_SPEC=(
 # no SSH runbook. `test_service_pin_matches_repo_unit` derives the expected value from the
 # committed unit and is what makes the split safe; update both together or that test reds.
 declare -rA SERVICE_SHA256=(
-  ["/etc/systemd/system/webhook.service"]="a2224b3f17fe7a23c841699b63b6309420b38e30f0df9bcc5bb4a2afbe5583c8"
+  ["/etc/systemd/system/webhook.service"]="01bd79b2eab379620576131acf34c433dbee51a614020fa796370df7028dd2cc"
 )
 
 # TEST_DESTDIR redirects writes to a sandbox and skips chown (no root needed),

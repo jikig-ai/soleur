@@ -1,6 +1,17 @@
 [Unit]
 Description=Webhook deploy listener
 After=network.target
+# #7220 AC-B2.3 — disable systemd's start rate limit for this unit.
+#
+# Restart=on-failure with RestartSec=5 (below) and no override means systemd's default
+# 5-starts-in-10s applies. The first apply after the daemon-reload grant lands performs TWO
+# restarts in quick succession: terraform_data's synchronous one, then the handler's own delayed
+# self-restart 3s later. Blowing the limit leaves webhook in `failed` and needing
+# `systemctl reset-failed` to recover — which means SSH, on the one host that has no SSH runbook
+# and no orderable replacement. The unit is the sole remediation channel, so a rate limit that
+# can strand it buys nothing: a genuinely crash-looping webhook is a louder, separate problem
+# than a webhook systemd refuses to start.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

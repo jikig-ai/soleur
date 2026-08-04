@@ -87,7 +87,11 @@ write_files:
       # #3756 — permits infra-config-apply.sh to schedule a delayed webhook restart
       # via systemd-run. The handler runs as the deploy user inside webhook.service's
       # mount namespace; systemctl restart requires root.
-      Cmnd_Alias WEBHOOK_SELF_RESTART = /usr/bin/systemd-run --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook
+      # #7220 — --collect added (full rationale in the mirrored sudoers): a FAILED
+      # transient unit is never garbage-collected, so without it the fixed --unit name collides and
+      # every later apply's systemd-run dies "unit already exists" on the only
+      # remediation channel. sudo matches the full argv, so the grant moved with it.
+      Cmnd_Alias WEBHOOK_SELF_RESTART = /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook
       deploy ALL=(root) NOPASSWD: WEBHOOK_SELF_RESTART
 
       # #4538 — permits ci-deploy.sh to restart inngest-server.service via the

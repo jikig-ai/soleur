@@ -27,7 +27,16 @@ deploy ALL=(root) NOPASSWD: INNGEST_BOOTSTRAP
 # #3756 — permits infra-config-apply.sh to schedule a delayed webhook restart
 # via systemd-run. The handler runs as the deploy user inside webhook.service's
 # mount namespace; systemctl restart requires root.
-Cmnd_Alias WEBHOOK_SELF_RESTART = /usr/bin/systemd-run --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook
+#
+# #7220 AC-B2.2 — `--collect` was added, and the argv here moved with it because sudo matches
+# the FULL resolved command (a drift denies rather than widens). --unit=webhook-self-restart is
+# a FIXED name, and systemd does NOT garbage-collect a transient unit that FAILED, so without
+# --collect the first failed self-restart leaves the unit lingering and every subsequent apply's
+# systemd-run dies with "unit already exists" — permanently, silently, on the only remediation
+# channel this host has. That path had never once executed in production before #7220 (it shipped
+# after the ungranted reload in the same set -e block, so it was unreachable from ~2026-05), so
+# this is a first-run hardening, not a regression fix.
+Cmnd_Alias WEBHOOK_SELF_RESTART = /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook
 deploy ALL=(root) NOPASSWD: WEBHOOK_SELF_RESTART
 
 # #4538 — permits ci-deploy.sh to restart inngest-server.service via the

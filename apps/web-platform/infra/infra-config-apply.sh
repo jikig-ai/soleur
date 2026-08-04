@@ -559,6 +559,28 @@ logger -t "$LOG_TAG" "complete: $WRITTEN_COUNT/$TOTAL_COUNT files written, $FAIL
 # FILE_MAP, but it exists on disk in prod so it passes the on-disk existence check.
 hooks_dest="${DESTDIR}/etc/webhook/hooks.json"
 if [[ -f "$hooks_dest" ]] && command -v jq >/dev/null 2>&1; then
+  # #7220 AC-B2.1 — PARSE FAILURE IS A HARD FAILURE, not a silent pass.
+  #
+  # The sweep below reads commands through `jq … 2>/dev/null || true`, so a syntactically
+  # invalid hooks.json yields NO commands and the loop finds nothing to complain about. That was
+  # survivable only while the webhook self-restart was unreachable. B2's grant makes it live, so
+  # the handler would now restart webhook 3s later and it would come up serving ZERO hooks —
+  # adnanh/webhook with -verbose does not abort on an unparseable hooks file.
+  #
+  # The port then ANSWERS, which is the trap: the CI verify's 000/502/503 "listener is down"
+  # branch never fires, and the 404 branch does instead, whose remediation text points the
+  # operator at "first bootstrap". Wrong diagnosis, delivered over the one channel that can
+  # still repair the host — and the host has no SSH runbook. Self-wedge.
+  #
+  # `jq empty` is the canonical parse check: it exits non-zero only on a syntax error, unlike
+  # `jq -e .`, which also exits 1 on a valid document whose top level is `null` or `false`.
+  if ! jq empty "$hooks_dest" >/dev/null 2>&1; then
+    logger -t "$LOG_TAG" "SOLEUR_INFRA_CONFIG_HOOK_UNPARSEABLE reason=hooks_json_did_not_parse" 2>/dev/null || true
+    echo "ERROR: the just-delivered /etc/webhook/hooks.json does not parse as JSON — webhook would restart serving ZERO hooks and answer 404 on every path. Refusing to activate." >&2
+    [[ -n "$FILES_JSON" ]] && FILES_JSON+=","
+    FILES_JSON+="{\"file\":\"/etc/webhook/hooks.json\",\"sha256\":\"\",\"status\":\"failed\",\"reason\":\"hooks_json_unparseable\"}"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+  else
   while IFS= read -r cmd_path; do
     [[ -n "$cmd_path" ]] || continue
     case "$cmd_path" in /usr/local/bin/*) : ;; *) continue ;; esac
@@ -584,6 +606,7 @@ if [[ -f "$hooks_dest" ]] && command -v jq >/dev/null 2>&1; then
       FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
   done < <(jq -r '.[]."execute-command" // empty' "$hooks_dest" 2>/dev/null || true)
+  fi
 fi
 
 # --- Activate what was delivered (#7103 R2 3.3/3.5/3.6/3.7) --------------------------------
@@ -795,7 +818,7 @@ if [[ -z "${INFRA_CONFIG_TEST_MODE:-}" ]]; then
   logger -t "$LOG_TAG" "scheduling self-restart in 3s"
   # Self-restart: schedule a delayed restart so the HTTP 202 response
   # completes before the webhook binary is killed.
-  sudo /usr/bin/systemd-run --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook
+  sudo /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook
 fi
 
 exit "$EXIT_CODE"
