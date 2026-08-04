@@ -1328,7 +1328,10 @@ p5b_case() {
 p5b_case n1 0 $'\n' ""
 # N2 — the membership is scoped to one environment: the 7 prd* configs, and only those.
 p5b_case n2 7 "$P_CFG7" "$P_SEC7"
-# N3 — DOPPLER_TOKEN_DRIFT is repointed at a config-scoped service token: 1 of 13.
+# N3 — the step is repointed at a BARE `DOPPLER_TOKEN` (single-credential mode), which
+#      enumerates only what that credential can see: 1 of 13. The secret named here used to
+#      be `DOPPLER_TOKEN_DRIFT`, retired with the project-scoped service account in #7234;
+#      the map secret is `DOPPLER_TOKEN_DRIFT_MAP` and selects map mode instead.
 p5b_case n3 1 'prd' 'prd|CF_API_TOKEN_X|synthetic-token-value-prd'
 
 echo "P5c: 13 configs LISTED with every read failing counts 0, not 13"

@@ -48,10 +48,12 @@
 #
 # So under the mis-binding above, twelve of the thirteen reads fail closed, twelve configs count
 # UNREAD, and the run grades `1/13 degraded` naming them. No extra probe is needed and none is
-# made. NOTE this contradicts `knowledge-base/project/learnings/
-# 2026-03-29-doppler-service-token-config-scope-mismatch.md`, which says `-c` is IGNORED — that is
-# true of the `configs list` verb (see `kb-drift.tf`) and false of `secrets` in the pinned CLI
-# v3.75.3. The two verbs differ; do not generalise either one.
+# made. This contradicted `knowledge-base/project/learnings/
+# 2026-03-29-doppler-service-token-config-scope-mismatch.md`, which said `-c` is IGNORED and
+# advised dropping it — true of the `configs list` verb (see `kb-drift.tf`) and false of `secrets`
+# in CLI v3.75.3. That learning now carries the correction at the top, so the two no longer
+# disagree; the note is kept because the two VERBS still differ and neither generalises to the
+# other.
 #
 # autonomy-considered: provider-mint-applied. Terraform mints and publishes every one of these
 # in-band via `DOPPLER_TOKEN_TF` and the Terraform GitHub App: there is no operator
@@ -109,9 +111,18 @@
 # scan CLOSED with no in-band re-mint path, and it buys no detection this design lacks — a dead
 # credential surfaces as `degraded` within 12 hours either way.
 #
-# STATE STORAGE. Each token's `key` is Computed + Sensitive + write-once, so the cleartext lands in
-# `terraform.tfstate` on the R2 backend (`soleur-terraform-state`; server-side encrypted, TLS-only
-# — see `main.tf`), the same posture the other ten `doppler_service_token` keys in this root already have.
+# STATE STORAGE — THIRTEEN KEYS, AND A FOURTEENTH COPY OF ALL OF THEM. Each token's `key` is
+# Computed + Sensitive + write-once, so the cleartext lands in `terraform.tfstate` on the R2 backend
+# (`soleur-terraform-state`; server-side encrypted, TLS-only — see `main.tf`), the same posture the
+# other ten `doppler_service_token` keys in this root already have.
+#
+# What is NOT the same posture, and what this paragraph used to omit: `github_actions_secret
+# .doppler_token_drift_map` carries `plaintext_value` — the WHOLE JSON map — so the state also holds
+# all thirteen tokens a second time, concatenated into ONE attribute. The sibling tokens each put a
+# single credential in state; this shape additionally puts a ready-made bundle of all thirteen
+# there. It changes no threat that the per-token keys do not already create (same file, same
+# backend, same readers), which is why it is not a new risk — but it is the object an attacker with
+# state access would actually take, and reading the old paragraph you would not know it existed.
 #
 # ⚠️ BLAST RADIUS — UNCHANGED FROM ADR-164, AND STILL A WIDENING. Thirteen read credentials
 # covering the whole `soleur` project, including `prd`, which holds SUPABASE_SERVICE_ROLE_KEY

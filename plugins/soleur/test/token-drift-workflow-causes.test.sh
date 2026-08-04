@@ -873,7 +873,7 @@ if grep -q '::warning::.*could not measure its own coverage' "$STEP_STDOUT" \
    && ! grep -q '::warning::.*below its declared floor' "$STEP_STDOUT"; then
   pass "an unreadable verdict file says so, rather than reporting a narrowed credential"
 else
-  fail "coverage=unknown did not emit its own annotation — a detector that could not run is being described to the operator as a narrowed credential, whose remedy is unperformable on that path (there is nothing to widen; the identity is already project-scoped), so the state never clears"
+  fail "coverage=unknown did not emit its own annotation — a detector that could not run is being described to the operator as a narrowed credential, whose remedy is unperformable on that path (there is nothing to widen: since #7234 the credential is thirteen config-scoped tokens keyed off the committed inventory, not one project-scoped identity that could be granted more), so the state never clears"
 fi
 
 # ---------------------------------------------------------------------------
@@ -1042,6 +1042,26 @@ else
   fail "coverage_caveat was emitted by the detector and read by nothing. The operator reads the ratio in both verdict emails; the caveat is the only thing that says the DENOMINATOR in that ratio may be stale, missing or unparseable. Either it is rendered beside the ratio or it should not be emitted at all"
 fi
 
+# hcl_uncommented <file> — strip `#` line comments, keeping code. Not a full HCL lexer: it
+# does not know about `#` inside a quoted string, and it does not need to — no attribute in
+# this file carries one, and F5's regex-literal assertion below would red if one appeared.
+# Strips `#` AND `//` line comments AND `/* … */` blocks. All three are HCL comment forms,
+# and stripping only `#` left C-a defeatable: a `/* … */` block containing a commented-out
+# `config = each.key` satisfies C-a's anchored positive while the live attribute binds a
+# `local.` (not a string literal, so the negative grep never fires). Measured — that .tf
+# passes 60/60 with 13 tokens all bound to one config, which is the exact defect C-a is the
+# pre-merge gate for. Not a full HCL lexer: it does not know about `#`/`//` inside a quoted
+# string, and does not need to — no attribute in the guarded file carries one, and F5's
+# regex-literal assertion would red if one appeared.
+hcl_uncommented() {
+  # `-z` on the FIRST pass is load-bearing: a `/* … */` block spans lines, and plain `sed`
+  # is line-oriented, so a line-scoped pattern silently matches nothing and the block
+  # survives whole. Measured — the first version of this fix left the bypass passing 60/60.
+  # `-z` makes the file one record so the block pattern can span newlines.
+  sed -Ez ':a; s@/\*([^*]|\*+[^*/])*\*+/@@g; ta' "$1" \
+    | sed -E 's@(^|[[:space:]])(#|//).*$@@'
+}
+
 # ---------------------------------------------------------------------------
 # F1-F3 — THE FLOOR PIN (AC29.3). Repo-internal: no credential, no network.
 # This is the CI check that fails when the floor and the inventory drift apart.
@@ -1144,12 +1164,26 @@ echo "F4: every Doppler config the infra Terraform NAMES appears in the inventor
 # rename and any regeneration that drops a depended-on config, and it says nothing about the
 # remainder.
 INFRA_DIR="$REPO_ROOT/apps/web-platform/infra"
-mapfile -t _TF_CONFIGS < <(grep -rhoE 'config[[:space:]]*=[[:space:]]*"[a-z0-9_]+"' "$INFRA_DIR"/*.tf 2>/dev/null \
-                           | grep -oE '"[a-z0-9_]+"' | tr -d '"' | sort -u)
+# COMMENT-STRIPPED, for the same reason F5 and C-a are (cq-assert-anchor-not-bare-token).
+# This used to grep the RAW .tf files, so any `config = "<name>"` written in PROSE counted as
+# a Terraform reference — and `token-drift-read-tokens.tf`'s header documents the mis-binding
+# hazard by quoting `config = "prd"` verbatim, several times. Measured before and after this
+# change: both extractions yield the same five names today, so nothing is being loosened. What
+# it fixes is the NON-VACUITY GUARD below: with raw greps, deleting every real `config = "…"`
+# attribute in the whole directory would still leave the guard satisfied by comment prose, so
+# the one check that exists to catch a drifted extraction could be held up by a sentence.
+mapfile -t _TF_CONFIGS < <(
+  for _tf in "$INFRA_DIR"/*.tf; do
+    [[ -f "$_tf" ]] || continue
+    hcl_uncommented "$_tf"
+  done 2>/dev/null | grep -ohE 'config[[:space:]]*=[[:space:]]*"[a-z0-9_]+"' \
+                   | grep -oE '"[a-z0-9_]+"' | tr -d '"' | LC_ALL=C sort -u
+)
+unset _tf
 _f4=1
 if (( ${#_TF_CONFIGS[@]} == 0 )); then
   _f4=0
-  echo "    the extraction found NO config names in ${INFRA_DIR}/*.tf — it has drifted, and this assertion would pass vacuously"
+  echo "    the extraction found NO config names in ${INFRA_DIR}/*.tf (comments stripped) — it has drifted, and this assertion would pass vacuously"
 fi
 _inv_names=$(grep -E '^[a-z0-9_]+$' "$INVENTORY" | sort -u)
 for _c in ${_TF_CONFIGS[@]+"${_TF_CONFIGS[@]}"}; do
@@ -1277,26 +1311,6 @@ fi
 # "narrowing is not anchoring" class in #6456, four occurrences in one PR).
 # ---------------------------------------------------------------------------
 TF_READ_TOKENS="$INFRA_DIR/token-drift-read-tokens.tf"
-
-# hcl_uncommented <file> — strip `#` line comments, keeping code. Not a full HCL lexer: it
-# does not know about `#` inside a quoted string, and it does not need to — no attribute in
-# this file carries one, and F5's regex-literal assertion below would red if one appeared.
-# Strips `#` AND `//` line comments AND `/* … */` blocks. All three are HCL comment forms,
-# and stripping only `#` left C-a defeatable: a `/* … */` block containing a commented-out
-# `config = each.key` satisfies C-a's anchored positive while the live attribute binds a
-# `local.` (not a string literal, so the negative grep never fires). Measured — that .tf
-# passes 60/60 with 13 tokens all bound to one config, which is the exact defect C-a is the
-# pre-merge gate for. Not a full HCL lexer: it does not know about `#`/`//` inside a quoted
-# string, and does not need to — no attribute in the guarded file carries one, and F5's
-# regex-literal assertion would red if one appeared.
-hcl_uncommented() {
-  # `-z` on the FIRST pass is load-bearing: a `/* … */` block spans lines, and plain `sed`
-  # is line-oriented, so a line-scoped pattern silently matches nothing and the block
-  # survives whole. Measured — the first version of this fix left the bypass passing 60/60.
-  # `-z` makes the file one record so the block pattern can span newlines.
-  sed -Ez ':a; s@/\*([^*]|\*+[^*/])*\*+/@@g; ta' "$1" \
-    | sed -E 's@(^|[[:space:]])(#|//).*$@@'
-}
 
 # hcl_block <file> <type> <name> — the body of one `resource "<type>" "<name>" { … }`,
 # comment-stripped. Brace-counted rather than awk-range'd so a nested block cannot end it
@@ -1647,6 +1661,14 @@ _rung2_floor=$(step_get "id:sweep" env.RUNG2_CONFIGS_FLOOR) || _rung2_floor=""
   || { _s4=0; echo "    the sweep step declares no integer env.RUNG2_CONFIGS_FLOOR (it is '${_rung2_floor}')"; }
 [[ "$_rung2_floor" =~ ^[0-9]+$ ]] && (( 10#$_rung2_floor >= FLOOR_MINIMUM )) \
   || { _s4=0; echo "    RUNG2_CONFIGS_FLOOR='${_rung2_floor}' is below the pinned minimum of ${FLOOR_MINIMUM}"; }
+# EQUALITY, not just `>=`. The workflow's own comment on this literal reads "KEEP IN LOCKSTEP
+# WITH `DOPPLER_CONFIGS_FLOOR` … Three literals, one number", and a one-sided `>=` pins no
+# such thing: RUNG2_CONFIGS_FLOOR could sit at 99 against a token_drift floor of 13 and every
+# assertion here would agree, reddening the scratch-config half of the twice-daily sweep
+# forever while the prose says the two numbers move together. Same one-sided-ratchet defect
+# F2b closes for DOPPLER_CONFIGS_FLOOR, in the file that documents the lockstep.
+[[ "$_rung2_floor" =~ ^[0-9]+$ ]] && [[ "$WF_FLOOR" =~ ^[0-9]+$ ]] && (( 10#$_rung2_floor == 10#$WF_FLOOR )) \
+  || { _s4=0; echo "    RUNG2_CONFIGS_FLOOR='${_rung2_floor}' != DOPPLER_CONFIGS_FLOOR='${WF_FLOOR}' — the workflow's own comment calls these one number kept in lockstep"; }
 # The comparison must READ the declared floor. A literal left in place beside a declared-and-
 # unused env var is the decorative-declaration shape H2 exists to catch on the sibling step.
 grep -qF 'RUNG2_CONFIGS_FLOOR' <<<"$SWEEP_RUN" \
