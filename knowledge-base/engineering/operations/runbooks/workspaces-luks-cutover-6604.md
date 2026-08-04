@@ -188,6 +188,8 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    | `rc=1` `cryptsetup_status_missing` | `unavailable` | The mapper node exists and IS serving the mount, but `cryptsetup status` failed | **Tooling/parse fault, not plaintext.** Reached only after mountpoint, mount-source and mapper-node checks all passed, so at-rest encryption is in effect. Check `cryptsetup` on the host |
    | `rc=1` `mapper_device_link_missing` | `unavailable` | `cryptsetup status` succeeded but its `device:` line did not parse | **Parse fault, not data loss.** Same reasoning as above |
    | `rc=1` `doppler_unreachable` | `unavailable` | The host could not read `WORKSPACES_LUKS_KEY` from Doppler | Probe-integrity: the escrow assert never ran. Check the boot token's `prd_workspaces_luks` scope |
+   | `rc=3` `heartbeat_url_absent` | `unavailable` | Every at-rest assert PASSED, but `WORKSPACES_LUKS_HEARTBEAT_URL` could not be read, so the dead-probe heartbeat was not pushed | **Alerting-path fault, NOT data loss** — the volume is fine; what broke is the probe's ability to report, which is what makes a dead probe indistinguishable from a healthy one (#6808). Confirm `doppler_secret.workspaces_luks_heartbeat_url` is applied and the boot token still reads `prd_workspaces_luks`. Never run a data-recovery procedure for this |
+   | `rc=3` `heartbeat_push_failed` | `unavailable` | The URL was present but all 3 push attempts to Better Stack failed | **Alerting-path fault, NOT data loss.** Egress or Better Stack outage. The heartbeat will also miss on its own (period 86400 + 1h grace), so expect a dead-probe alert to follow; re-dispatch once egress is healthy |
    | `app_health_structural` | `readiness` | `/health` returned a structural code (307/401/403/404/405/525/526) after the full retry budget | **Routing/endpoint regression the operator can act on.** Not data loss. Check the custom server and the CF route |
    | `app_health_unreachable` | `unavailable` | `/health` exhausted its retry budget on a retryable CF-edge code | Transport outage. Nothing proven about the volume — do **not** run a data-recovery procedure |
    | `verdict_line_absent` | `unavailable` | rc=0 but the readiness/inventory verdict line never appeared | The assert did not run (`LUKS_MONITOR_ASSERT_READYZ` lost before reaching the host). Treat as FAILED, re-dispatch |
@@ -225,9 +227,12 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    the `follow-through` label. It PASSes only on observed completion (drift=0 ∧ heartbeat spanning
    ≥7d ∧ ADR-119 `accepted`).
 
-   > **The soak clock has not started and cannot until #6808 lands.** The heartbeat it gates on is
-   > UNFED (see Failure signals), so no rows accumulate and the ≥7d span can never be satisfied.
-   > #6808 is the critical path to this step, not an optional tidy-up.
+   > **The soak clock STARTED 2026-08-04**, when the heartbeat it gates on took its first observed
+   > push (#6808 — see Failure signals). Rows now accumulate daily, so the ≥7d span is first
+   > satisfiable on **2026-08-11**. Before that date the soak has not failed, it has merely not
+   > matured — do not read a short span as a drift finding.
+   > The blocker this note used to record is cleared; #6897's plaintext-volume soak is no longer
+   > waiting on #6808.
 
 7. **Wipe + converge + PR 3 (separate, environment-gated).** After the soak comments "SOAK PASSED —
    wipe authorized", a human authorizes the **separate** environment-gated destructive dispatch:
@@ -250,16 +255,42 @@ T0 remount + replay from LUKS", never a total loss.
   (`device_type`, `mount_source`, `mapper_present`, `luks_open_result`, `header_uuid_match`,
   `cryptsetup_unit_result`, `doppler_reachable`, `mountpoint_ok`, `host`, `reason`) tell the failure
   modes apart in one event.
-- ~~**Better Stack** `betteruptime_heartbeat.workspaces_luks` — a missed daily push = a dead probe.~~
-  **UNFED pending #6808.** The Terraform resource exists, but `WORKSPACES_LUKS_HEARTBEAT_URL` is not
-  wired, so `luks-monitor.sh` (the heartbeat push, `WORKSPACES_LUKS_HEARTBEAT_URL` block) logs the URL as absent and pushes nothing. This channel pages on
-  **nothing today** — do not count it as a failure signal, and note that the 7-day soak gates on
-  heartbeat rows spanning ≥7d, so that clock has not started.
-  A worked consequence: on 2026-07-20 the daily probe stopped running entirely for ~6 hours and no
-  dead-probe signal fired, because there is no live heartbeat to miss (#6812).
-- **`workspaces-luks-verify.yml` (daily `schedule: 41 4 * * *`) — the COMPENSATING channel while the
-  heartbeat above is unfed (#6808/#7196).** This is the only automatic verification of the at-rest
-  claim today. A failing scheduled run files one `ci/luks-verify` issue classified `drift` (the
+- **Better Stack** `betteruptime_heartbeat.workspaces_luks` — a missed daily push = a dead probe.
+  **LIVE as of 2026-08-04** (#6808). `WORKSPACES_LUKS_HEARTBEAT_URL` is provisioned by terraform as a
+  reference to the heartbeat resource, and `luks-monitor.sh` (the heartbeat push,
+  `WORKSPACES_LUKS_HEARTBEAT_URL` block) pushes it on a fully-green probe. Period 86400 + 1h grace,
+  so a probe that dies goes `up` → `down` about 25h later. First observed push: the verify run of
+  2026-08-04, which took the heartbeat `pending` → `up`.
+  Pull it without a dashboard (the heartbeat id is stable; the URL itself is a bearer capability and
+  must never be echoed):
+  `curl -s -H "Authorization: Bearer $(doppler secrets get BETTERSTACK_API_TOKEN --plain -p soleur -c prd_terraform)" https://uptime.betterstack.com/api/v2/heartbeats/478794 | jq '.data.attributes | {paused, status}'`
+  A `status` of `up` means a push landed inside the window; `down` means the probe stopped; `paused`
+  means someone re-paused it (terraform will NOT un-pause it for you — the resource ships
+  `paused = true` behind `lifecycle { ignore_changes = [paused] }`, so a re-pause survives every
+  apply and is invisible in a plan). Un-pausing does not need the UI:
+  `curl -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"paused":false}' https://uptime.betterstack.com/api/v2/heartbeats/478794`
+  **Margin, because it is thinner than it looks.** Two independent pushers feed this heartbeat: the
+  host unit (`luks-monitor.timer`, `OnCalendar=daily` + `RandomizedDelaySec=1800`) and the daily
+  verify at 04:41 UTC. Together the largest gap is ~20h, comfortably inside the 25h window. But the
+  host unit ALONE can space two pushes up to **24h30m** apart at opposite jitter extremes, against a
+  25h window — about 30 minutes of headroom. So if the scheduled verify is ever paused, dropped, or
+  retired, this heartbeat moves from comfortable to marginal, and a slow probe or a `Persistent=true`
+  catch-up after a reboot can tip it into a false `down`. Widen `grace` before removing the verify,
+  not after the first spurious page.
+  Two things it still does not cover, so do not over-read a green heartbeat. It is
+  `policy_id`-gated on the paid tier (`var.betterstack_paid_tier`); on the free tier it alerts by
+  **email only** and does not page. And the readyz/inventory dimension has no host-side coverage at
+  all, because `LUKS_MONITOR_ASSERT_READYZ` is default-OFF and the daily unit carries
+  `RequiresMountsFor=/mnt/data` — a shortfall is still seen only by the scheduled verify below.
+  Historical note, kept because it is the worked example of why this channel matters: on 2026-07-20
+  the daily probe stopped running entirely for ~6 hours and no dead-probe signal fired, because at
+  that time there was no live heartbeat to miss (#6812).
+- **`workspaces-luks-verify.yml` (daily `schedule: 41 4 * * *`) — the SECOND independent channel,
+  alongside the heartbeat above (#6808/#7196).** It was introduced as the compensating control while
+  the heartbeat was unfed; now that the heartbeat is live it is no longer the only automatic
+  verification of the at-rest claim, but it is still not redundant — it remains the ONLY channel that
+  sees the readyz/inventory dimension (a `workspace_count_shortfall`), which the heartbeat cannot
+  observe. A failing scheduled run files one `ci/luks-verify` issue classified `drift` (the
   at-rest claim itself — p0, `type/security`, and the counsel re-evaluation trigger), `readiness`
   (an ops or inventory event; a `workspace_count_shortfall` files under its own title at p0 because
   it is irreversible sole-copy data loss) or `unavailable` (nothing proven in either direction — do
