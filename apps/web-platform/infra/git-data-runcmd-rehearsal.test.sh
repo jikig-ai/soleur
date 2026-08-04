@@ -1182,28 +1182,45 @@ if [ -s "$_R3B_SRC" ]; then
   # (i) NON-VACUITY, COUNTED IN THE SHELL. A python `assert` inside the heredoc increments
   # neither passes nor fails, and aborts extraction in a way that surfaces as some OTHER
   # arm's failure. An empty parse must be an assertion that FAILS here, loudly.
+  # TWO SCOPES, DELIBERATELY DIFFERENT — and the difference is the point.
+  #   _r3b_bound = every REPORTING site (fatal AND warning). (ii)/(iii) quantify over this,
+  #     because a warning that ships an unguarded path misleads an operator exactly as a fatal
+  #     does — and the gc_timer WARNING is the site #7227 names as having shipped the bare log
+  #     literal. Scoped to `fatal` only, this arm's header ("No emit site may hand the emitter
+  #     a path it has not proven readable") over-claimed: 3 of 7 sites were bound, and
+  #     re-pointing gc_timer at an unguarded path left every arm green.
+  #   _r3b_fatal = fatal only. (iv) pins the fatal MESSAGE SET, which is a claim about the
+  #     three titles Sentry groups on; folding warnings in would make it a different assertion.
+  _r3b_bound="$(printf '%s\n' "$_r3b_out" | awk -F'|' '$2!="info" && $1!=""' || true)"
   _r3b_fatal="$(printf '%s\n' "$_r3b_out" | awk -F'|' '$2=="fatal"' || true)"
-  _r3b_n=$(printf '%s\n' "$_r3b_fatal" | grep -c . || true)
-  if [ "${_r3b_n:-0}" -ge 3 ]; then pass; else
-    fail "R3(3b)(i): parsed only ${_r3b_n:-0} fatal emit sites in the concatenated runcmd (expected >= 3)" \
+  _r3b_n=$(printf '%s\n' "$_r3b_bound" | grep -c . || true)
+  if [ "${_r3b_n:-0}" -ge 6 ]; then pass; else
+    fail "R3(3b)(i): parsed only ${_r3b_n:-0} reporting emit sites in the concatenated runcmd (expected >= 6)" \
          "The extraction produced nothing usable, so every verdict below is vacuous. out=[$(printf '%s' "$_r3b_out" | head -c 300)]"
   fi
 
-  # (ii) EVERY fatal site passes a GUARDED VARIABLE.
-  _r3b_bad="$(printf '%s\n' "$_r3b_fatal" | awk -F'|' '$3!="VAR" || $4!="GUARDED"' || true)"
+  # (ii) EVERY reporting site passes a GUARDED VARIABLE.
+  _r3b_bad="$(printf '%s\n' "$_r3b_bound" | awk -F'|' '$3!="VAR" || $4!="GUARDED"' || true)"
   if [ -z "$_r3b_bad" ]; then pass; else
-    fail "R3(3b)(ii): a fatal emit site does not pass a guarded variable as the detail source" \
+    fail "R3(3b)(ii): a reporting emit site does not pass a guarded variable as the detail source" \
          "site|level|isvar|guarded|arg4|msg -> $(printf '%s' "$_r3b_bad" | tr '\n' ' ')"
   fi
 
   # (iii) THE ARG-4 NAMES ARE PAIRWISE DISTINCT. Two handlers sharing a local name silently
   # disable (ii) for the later one — that is correction 1's failure mode, re-created.
-  _r3b_names="$(printf '%s\n' "$_r3b_fatal" | awk -F'|' '{print $5}' | sort || true)"
+  # ACROSS WINDOWS, not across emits. Two emits in the SAME stage sharing one variable is
+  # correct and intended — sshd_config's fatal and its 126/127 warning both ship $_sshd_detail.
+  # The defect is two DIFFERENT windows sharing a name, because the guard search is name-keyed
+  # and bounded to a window: an alias lets one handler's guard satisfy another handler's check.
+  # So collapse to unique (site,name) pairs first, then require the NAMES among them to be
+  # unique. A flat name-uniqueness check would red the correct tree.
+  _r3b_pairs="$(printf '%s\n' "$_r3b_bound" | awk -F'|' '$5 != "" {print $1"|"$5}' | sort -u || true)"
+  _r3b_names="$(printf '%s\n' "$_r3b_pairs" | awk -F'|' '{print $2}' | sort || true)"
   _r3b_uniq="$(printf '%s\n' "$_r3b_names" | sort -u | grep -c . || true)"
   _r3b_tot="$(printf '%s\n' "$_r3b_names" | grep -c . || true)"
   if [ "${_r3b_uniq:-0}" -eq "${_r3b_tot:-0}" ]; then pass; else
-    fail "R3(3b)(iii): fatal emit sites share a detail-variable name (${_r3b_uniq}/${_r3b_tot} distinct)" \
-         "The guard search is name-keyed, so an alias makes one site's guard satisfy another's check. names=[$(printf '%s' "$_r3b_names" | tr '\n' ' ')]"
+    fail "R3(3b)(iii): two DIFFERENT emit windows share a detail-variable name (${_r3b_uniq}/${_r3b_tot} distinct)" \
+         "The guard search is name-keyed and window-bounded, so an alias makes one site's guard satisfy another's check. pairs=[$(printf '%s' "$_r3b_pairs" | tr '\n' ' ')]"
   fi
 
   # (iv) THE MESSAGE-LITERAL SET, not a count.

@@ -1258,29 +1258,48 @@ p_isluks_rc_branch() {
   if [ "${n:-0}" -ne 1 ]; then echo 0; return; fi
   # (e) the catch-all refuses
   if ! grep -Eq '^[[:space:]]*\*\).*exit[[:space:]]+1' <<<"$slice"; then echo 0; return; fi
-  # (f) the probe carries no `2>>` (a failed redirect forges rc=1 without running it)
-  if grep -E 'cryptsetup[[:space:]]+isLuks' <<<"$slice" | grep -q '2>>'; then echo 0; return; fi
-  # (g) …AND THAT ONE luksFormat IS INSIDE THE `1)` ARM. (d) is a COUNT, so on its own it
-  # permits the format to sit on `*)` — the unknown-status arm — which is #7216's exact hazard
-  # rebuilt inside the guard that closes it. Demonstrated: a tree with `1) : ;;` and the format
-  # moved to `*)` satisfied (a)-(f). Assert POSITION, not population.
-  n_one=$(grep -nE '^[[:space:]]*1\)' <<<"$slice" | head -1 | cut -d: -f1)
-  n_star=$(grep -nE '^[[:space:]]*\*\)' <<<"$slice" | head -1 | cut -d: -f1)
-  n_fmt=$(grep -nE 'cryptsetup[[:space:]]+luksFormat' <<<"$slice" | head -1 | cut -d: -f1)
-  if [ -z "$n_one" ] || [ -z "$n_star" ] || [ -z "$n_fmt" ]; then echo 0; return; fi
-  if [ "$n_fmt" -le "$n_one" ] || [ "$n_fmt" -ge "$n_star" ]; then echo 0; return; fi
-  # (h) the `1)` arm demands a POSITIVE blankness proof before formatting. rc=1 is cryptsetup's
-  # default errno bucket: measured, a corrupted-header LUKS2 device returns 1 with empty stderr
-  # while blkid still reports crypto_LUKS. The refusal must precede the format.
-  n_blk=$(grep -nE 'crypto_LUKS' <<<"$slice" | head -1 | cut -d: -f1)
-  if [ -z "$n_blk" ] || [ "$n_blk" -le "$n_one" ] || [ "$n_blk" -ge "$n_fmt" ]; then echo 0; return; fi
-  # (i) the device wait proves USABILITY, not mere presence. `-e` is true the instant udev makes
-  # the node, which can precede the kernel setting its capacity — and a zero-length device also
-  # returns isLuks rc=1, feeding (h). Bounded by a literal so it cannot become an unbounded spin.
-  if ! grep -Eq '\[ -b "\$DEV" \]' <<<"$slice"; then echo 0; return; fi
-  if ! grep -Eq 'getsize64' <<<"$slice"; then echo 0; return; fi
+  # (f) the probe carries no `2>>` (a failed redirect forges rc=1 without running it).
+  # Captured, not piped — a `producer | grep -q` here would fail OPEN via SIGPIPE.
+  _probe="$(grep -E 'cryptsetup[[:space:]]+isLuks' <<<"$slice" || true)"
+  if [ -z "$_probe" ]; then echo 0; return; fi
+  if grep -q '2>>' <<<"$_probe"; then echo 0; return; fi
+  # (g) …AND THAT ONE luksFormat IS INSIDE THE `1)` ARM — asserted by MEMBERSHIP of the arm's
+  # extracted body, not by line-number position. (d) is a COUNT, so alone it permits the format
+  # on `*)`, the unknown-status arm. A position check is barely stronger: swapping the `0)`/`1)`
+  # labels keeps the format between the two anchors while re-keying it onto rc 0 — i.e. onto
+  # ALREADY-LUKS. Extract the arm, then ask what is in it.
+  _arm1="$(awk '/^[[:space:]]*1\)/{f=1} f{print} f&&/;;[[:space:]]*$/{exit}' <<<"$slice")"
+  if [ -z "$_arm1" ]; then echo 0; return; fi
+  if ! grep -Eq 'cryptsetup[[:space:]]+luksFormat' <<<"$_arm1"; then echo 0; return; fi
+  # (h) THE POLARITY, NOT THE TOKEN. The arm must REFUSE when blkid still reports crypto_LUKS.
+  # Asserting that the string `crypto_LUKS` merely occurs is satisfied by the inverted guard —
+  # measured: flipping `!=` to `==` bricks a blank volume AND formats the damaged-header
+  # populated store, with this suite fully green. So pin the comparison operator and the `||`
+  # that makes it a refusal, and require blkid's own rc to be consulted in the same arm
+  # ("could not measure" must never read as "blank").
+  if ! grep -Eq '"\$_blk_type"[[:space:]]*!=[[:space:]]*"crypto_LUKS"[[:space:]]*\][[:space:]]*\|\|' <<<"$_arm1"; then echo 0; return; fi
+  if ! grep -Eq '_blk_rc' <<<"$_arm1"; then echo 0; return; fi
+  # (i) THE COMPARISON, NOT THE CALL. `getsize64` occurring somewhere proves nothing: measured,
+  # relaxing `-gt 0` to `-ge 0` makes the loop break on the first iteration regardless of
+  # capacity — the exact "presence, not usability" defect this conjunct exists for, and it feeds
+  # (h) because a zero-length device also returns isLuks rc=1. Assert `-b`, the capacity call and
+  # the `> 0` test on ONE line, plus the literal bound so the wait cannot become unbounded.
+  _waitln="$(grep -E 'getsize64' <<<"$slice" || true)"
+  if [ -z "$_waitln" ]; then echo 0; return; fi
+  if ! grep -Eq '\[ -b "\$DEV" \]' <<<"$_waitln"; then echo 0; return; fi
+  if ! grep -Eq -- '-gt[[:space:]]+0' <<<"$_waitln"; then echo 0; return; fi
   if ! grep -Eq '_i"?[[:space:]]*-lt[[:space:]]*30' <<<"$slice"; then echo 0; return; fi
   echo 1
+}
+
+# B18p — THE PIPE THAT CARRIES B20's WRITER. B20 pins that git-data-bootstrap.sh's log() writes
+# to fd 2; that is worth nothing unless the parent actually ROUTES fd 2 into the scoped detail
+# file. Deleting the redirect on the bootstrap `doppler run` returns the boot to the pre-#7227
+# state — 20 FATAL sentences written to a stream nothing reads — and, measured, left both the
+# luks suite and the runcmd rehearsal fully green. A guard on the writer with none on the pipe
+# is half a contract.
+p_bootstrap_stderr_routed() {
+  if grep -Eq '^[[:space:]]*doppler run .*git-data-bootstrap\.sh[[:space:]]+2>>"\$GIT_DATA_RUNCMD_DETAIL"' "$1"; then echo 1; else echo 0; fi
 }
 assert_holds    "B18 isLuks-rc-branch" p_isluks_rc_branch "$CLOUD_INIT"
 # One arm per predicate, each anchored so the mutation actually LANDS (assert_mutation fails
@@ -1317,6 +1336,24 @@ assert_mutation "B18 isLuks-rc-branch (blankness proof removed)" p_isluks_rc_bra
 # zero-length device also returns isLuks rc=1.
 assert_mutation "B18 isLuks-rc-branch (wait reverts to -e presence)" p_isluks_rc_branch "$CLOUD_INIT" \
   's#\[ -b "\$DEV" \]#[ -e "$DEV" ]#'
+# (h) INVERT the refusal rather than deleting it. This is the arm that matters: `==` refuses a
+# blank volume and formats the damaged-header populated store. A token-presence predicate stays
+# green on it; this one must not.
+assert_mutation "B18 isLuks-rc-branch (blkid refusal INVERTED)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#"\$_blk_type" != "crypto_LUKS"#"$_blk_type" == "crypto_LUKS"#'
+# (i) RELAX the capacity comparison rather than deleting the call: the loop then breaks on the
+# first iteration whatever the device's size.
+assert_mutation "B18 isLuks-rc-branch (capacity test relaxed to -ge 0)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#-gt 0 \] \&\& break#-ge 0 ] \&\& break#'
+# (g) re-key the format arm onto rc 0 by SWAPPING the labels — the format stays between the
+# same two anchors, so a position check cannot see it, but it now runs on ALREADY-LUKS.
+assert_mutation "B18 isLuks-rc-branch (0)/1) labels swapped)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#^([[:space:]]*)0\) : ;;#\1 1) : ;;#'
+
+# B18p — the pipe that carries B20's writer.
+assert_holds    "B18p bootstrap-stderr-routed" p_bootstrap_stderr_routed "$CLOUD_INIT"
+assert_mutation "B18p bootstrap-stderr-routed (redirect deleted)" p_bootstrap_stderr_routed "$CLOUD_INIT" \
+  's#(git-data-bootstrap\.sh) 2>>"\$GIT_DATA_RUNCMD_DETAIL"#\1#'
 
 # --- B19 (#7227): Decision clause B, mechanized -------------------------------------------
 #
@@ -1392,16 +1429,17 @@ assert_mutation "B20 bootstrap-log-to-stderr (back to stdout)" p_bootstrap_log_s
 
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
 #
-# RAISED 113 -> 128 WITH THE ARMS THAT MADE IT NECESSARY (#7216 + #7227). Itemised, because a
+# RAISED 113 -> 133 WITH THE ARMS THAT MADE IT NECESSARY (#7216 + #7227). Itemised, because a
 # floor that does not move with the suite only ever guards the work that predates it:
-#   B18 isLuks-rc-branch        1 hold + 8 mutations = 9
+#   B18 isLuks-rc-branch        1 hold + 11 mutations = 12
 #     (revert-to-`if !`; naked rc capture; rc 0 also formats; catch-all no longer exits;
 #      `2>>` back on the probe — the forged-rc-1 arm; the format arm re-keyed off rc=1;
 #      the blkid blankness proof removed; the wait reverted to `-e` presence)
 #   B19a luks-key-alphanumeric  1 hold + 1 mutation  = 2
 #   B19d bootstrap-key-file     1 hold + 1 mutation  = 2
 #   B20  bootstrap-log-to-fd-2  1 hold + 1 mutation  = 2
-#   113 + 9 + 2 + 2 + 2 = 128. Measured: 128 passed, 0 failed.
+#   B18p bootstrap-stderr-routed 1 hold + 1 mutation  = 2
+#   113 + 12 + 2 + 2 + 2 + 2 = 133. Measured: 133 passed, 0 failed.
 # NET vs the first cut of this PR (129): B19b/B19c were DELETED as redundant with A28a (see the
 # note where they used to live), and three arms were added for the vacuities review found in
 # B18 — a count that permitted luksFormat on the `*)` unknown-status arm, a missing positive
@@ -1435,8 +1473,8 @@ assert_mutation "B20 bootstrap-log-to-stderr (back to stdout)" p_bootstrap_log_s
 # redden the suite on every legitimate new arm and teach the next author to edit the guard
 # instead of trusting it.
 total=$((passes + fails))
-if [ "$total" -lt 128 ]; then
-  echo "FAIL: ran only ${total} assertions (<128) — suite did not execute fully" >&2
+if [ "$total" -lt 133 ]; then
+  echo "FAIL: ran only ${total} assertions (<133) — suite did not execute fully" >&2
   exit 1
 fi
 
