@@ -380,21 +380,79 @@ compute_coverage() {
 # Extracted so --json (stdout) and --json-file (file, alongside the human report) render
 # from ONE code path. Two renderers would be a second unsynchronized pin on the same
 # schema, which is how the two sides drift apart silently.
+# ── READ-FAILURE CAUSES, COUNTED RATHER THAN ANNOTATED ONE-PER-CONFIG ────────────────
+# GitHub caps workflow annotations at ~10 per level per step. The mis-binding this detector
+# exists to catch fails TWELVE of thirteen configs, so emitting one `::error::` per failed
+# config puts the run over the cap on exactly the scenario the annotations were added for,
+# and which two get dropped is not defined. Causes are accumulated here and emitted as ONE
+# aggregated annotation after the read loops; the per-config detail keeps going to stderr,
+# which is uncapped, so nothing is lost from the log.
+declare -A READ_CAUSE_COUNT=()
+# NOT called inside a command substitution anywhere: `$( )` runs a SUBSHELL and every
+# increment would be discarded — the defect this file already records against its own
+# memoised probe helpers, which measured 3 curl calls against a comment promising 1.
+note_read_cause() {
+  READ_CAUSE_COUNT["$1"]=$(( ${READ_CAUSE_COUNT["$1"]:-0} + 1 ))
+}
+# Rate-limit signature ONLY — anchored on what an HTTP 429 actually carries. Deliberately
+# narrow: see the value-read block for why no absent-key classification is attempted.
+is_rate_limited() {
+  [[ "$1" =~ (^|[^0-9])429([^0-9]|$) ]] && return 0
+  local _rc=1
+  shopt -s nocasematch
+  [[ "$1" == *"too many requests"* || "$1" == *"rate limit"* ]] && _rc=0
+  shopt -u nocasematch
+  return "$_rc"
+}
+# Emit the aggregated annotation. Names ONLY causes that actually fired, so a consumer
+# grepping for a specific cause (the suite's M2/M3 do exactly that, in both polarities)
+# still gets a true answer.
+emit_read_cause_annotation() {
+  (( ${#READ_CAUSE_COUNT[@]} == 0 )) && return 0
+  local _c _parts=() _total=0
+  for _c in $(printf '%s\n' "${!READ_CAUSE_COUNT[@]}" | LC_ALL=C sort); do
+    _parts+=("${_c}=${READ_CAUSE_COUNT[$_c]}")
+    # `${READ_CAUSE_COUNT[$_c]}`, EXPANDED BEFORE the arithmetic — not the bare
+    # `READ_CAUSE_COUNT[_c]` form. Inside `$(( ))` an unprefixed subscript is evaluated as
+    # an arithmetic expression, so `_c` (holding a cause NAME) resolves as an undefined
+    # variable to 0 and every lookup silently reads index 0. Measured: the annotation
+    # printed "0 failed read(s)" on the same line as "…mismatch=1".
+    _total=$(( _total + ${READ_CAUSE_COUNT[$_c]} ))
+  done
+  echo "::error::token_drift_read_failures — ${_total} failed read(s): $(IFS=' '; echo "${_parts[*]}"). Per-config detail is on stderr above (annotations are capped at ~10 per step, so they are aggregated here)." >&2
+  return 0
+}
+
 emit_json() {
   compute_coverage
   # `split("|", 1)` — maxsplit 1, so a diagnostic containing a pipe cannot shift fields.
   # Unverifiable rows get their own key rather than riding in "stale" with the diagnostic
   # sentence mis-rendered into the "config" field.
   #
-  # ARGV CONTRACT. ELEVEN positional scalars, then FOUR variable-length lists behind THREE
+  # ARGV CONTRACT. THIRTEEN positional scalars, then FOUR variable-length lists behind THREE
   # DISTINCT sentinels. `rest.index("--")` returns the FIRST match, so one sentinel cannot
   # separate more than two lists — a second `--` would silently fold two lists into one.
   # Inserting a scalar shifts every index, so the scalar count and the `range(1, 9)` /
-  # `sys.argv[9:12]` / `sys.argv[12:]` reads move together or not at all.
+  # `sys.argv[9:14]` / `sys.argv[14:]` reads move together or not at all.
+  #
+  # `read_causes` rides as ONE space-joined scalar (`cause=N cause=N`, or "-" for none)
+  # rather than as a fifth list, precisely because a fourth sentinel is what the paragraph
+  # above says cannot be added safely. Both new scalars are appended AFTER the existing
+  # eleven so the list indices shift by a constant.
+  _rc_pairs="-"
+  if (( ${#READ_CAUSE_COUNT[@]} > 0 )); then
+    _rc_parts=()
+    for _rc_c in $(printf '%s\n' "${!READ_CAUSE_COUNT[@]}" | LC_ALL=C sort); do
+      _rc_parts+=("${_rc_c}=${READ_CAUSE_COUNT[$_rc_c]}")
+    done
+    _rc_pairs="$(IFS=' '; echo "${_rc_parts[*]}")"
+    unset _rc_parts _rc_c
+  fi
   python3 - \
     "$LIVE_N" "$DEAD_N" "${#UNVERIFIABLE_ROWS[@]}" "$PROBES_MADE" "${#CONFIG_NAMES[@]}" \
     "$CONFIGS_FLOOR" "$CONFIGS_EXPECTED" "$INVENTORY_AGE_DAYS" \
     "$COVERAGE" "$COVERAGE_RATIO" "${COVERAGE_CAVEAT:--}" \
+    "${CRED_MODE:-unknown}" "$_rc_pairs" \
     ${DEAD_ROWS[@]+"${DEAD_ROWS[@]}"} "--" \
     ${UNVERIFIABLE_ROWS[@]+"${UNVERIFIABLE_ROWS[@]}"} "--names--" \
     ${CONFIG_NAMES[@]+"${CONFIG_NAMES[@]}"} "--unread--" \
@@ -402,7 +460,19 @@ emit_json() {
 import json, sys
 live, dead, unver, probes, configs, floor, expected, age = (int(sys.argv[i]) for i in range(1, 9))
 coverage, ratio, caveat = sys.argv[9], sys.argv[10], sys.argv[11]
-rest = sys.argv[12:]
+cred_mode, rc_pairs = sys.argv[12], sys.argv[13]
+rest = sys.argv[14:]
+def read_causes(spec):
+    # "-" is the non-empty stand-in for "no failed reads", for the same reason
+    # coverage_caveat uses it: a whitespace-splitting consumer cannot lose an empty field.
+    if spec == "-":
+        return {}
+    out = {}
+    for part in spec.split():
+        cause, _, n = part.partition("=")
+        if cause and n.isdigit():
+            out[cause] = int(n)
+    return out
 i_unver = rest.index("--")
 i_names = rest.index("--names--")
 i_unread = rest.index("--unread--")
@@ -447,6 +517,17 @@ print(json.dumps({
     # "-" is the non-empty stand-in for "no caveat", so a whitespace-splitting consumer
     # cannot lose a field to an empty string.
     "coverage_caveat": caveat,
+    # WHICH SCAN MODE RAN. Previously computed and never published, so a consumer looking at
+    # a verdict could not tell a 13-token fan-out from a single-credential run — and those
+    # grade very different things (only the map asserts a per-config binding on every read).
+    # "unknown" is reachable: the both-variables-set arm publishes before either mode is
+    # selected.
+    "cred_mode": cred_mode,
+    # FAILED READS, AGGREGATED BY CAUSE. The machine-readable half of the annotation
+    # aggregation: GitHub caps annotations at ~10 per level per step and the mis-binding
+    # case fails 12 configs, so the counts live here where nothing truncates them.
+    # Empty object when every read succeeded.
+    "read_causes": read_causes(rc_pairs),
 }, indent=2))
 PY
 }
@@ -460,6 +541,9 @@ PY
 publish_verdict() {
   [[ -n "$VERDICT_PUBLISHED" ]] && return 0
   VERDICT_PUBLISHED=1
+  # Emitted HERE rather than after the read loops so it reaches the log on EVERY exit path,
+  # including the early exit-2 returns. A no-op when nothing failed.
+  emit_read_cause_annotation
   local rc=0
   if [[ "$JSON_OUT" -eq 1 ]]; then
     emit_json || rc=1
@@ -821,7 +905,7 @@ for cfg in "${CONFIGS[@]}"; do
   # lets the two lists drift fails loudly instead of scanning with the runner's ambient
   # credential.
   if [[ -z "${CRED_FOR[$cfg]:-}" ]]; then
-    echo "::error::token_drift_missing_credential — config '$cfg' is in the scan list but has no credential; refusing to read it with an empty token." >&2
+    note_read_cause token_drift_missing_credential
     echo "WARNING: config '$cfg' is counted UNREAD — no credential was mapped to it. The config list and the credential map disagree." >&2
     FAILED_CONFIGS+=("$cfg")
     continue
@@ -837,13 +921,13 @@ for cfg in "${CONFIGS[@]}"; do
     # them a channel: it depresses `configs` below the floor, so the coverage issue files
     # and the workflow's close arm cannot fire.
     if [[ "$_read_err" == *"does not have access to requested config"* ]]; then
-      echo "::error::token_drift_config_binding_mismatch — the credential mapped to config '$cfg' is not bound to it. Doppler: ${_read_err}" >&2
+      note_read_cause token_drift_config_binding_mismatch
       echo "WARNING: config '$cfg' is counted UNREAD. Its credential is bound to a DIFFERENT config, so the minted token set and the map keys disagree — check that doppler_service_token.token_drift sets 'config = each.key' and not a string literal." >&2
     elif [[ -z "$_read_err" ]]; then
-      echo "::error::token_drift_identify_empty — reading names for config '$cfg' failed with no diagnostic from the Doppler CLI." >&2
+      note_read_cause token_drift_identify_empty
       echo "WARNING: config '$cfg' is counted UNREAD, and this run cannot say why." >&2
     else
-      echo "::error::token_drift_identify_unreachable — reading names for config '$cfg' failed. Doppler: ${_read_err}" >&2
+      note_read_cause token_drift_identify_unreachable
       echo "WARNING: config '$cfg' is counted UNREAD, not scanned — this is a read FAILURE, not a statement about the credential's binding." >&2
     fi
     FAILED_CONFIGS+=("$cfg")
@@ -1030,9 +1114,60 @@ declare -A ACC_SEC_VALS=()   # "<base>\x1f<cfg>" -> client secret
 declare -A ACCESS_HOST_OF=() # base -> hostname ('' = no mapping configured)
 ACCESS_BASES=()              # bases that are genuinely Cloudflare Access pairs, sorted
 
+# ── VALUE READS: RATE-LIMIT SIGNAL, AND THE PART DELIBERATELY LEFT ALONE ──────────────
+# These three `doppler secrets get` calls used to end in a bare `2>/dev/null` with the exit
+# status discarded entirely: `val=$(… 2>/dev/null)` followed by `[[ -z "$val" ]] && continue`.
+# Every failure mode collapsed into "empty", so a THROTTLED read was indistinguishable from a
+# key that simply does not exist in that config — and the run went on to grade the fleet over
+# a value set with holes in it, reporting a clean bill of health for values it never read.
+#
+# WHY THAT GOT SHARPER AT THIS SHAPE. The value-read loop is key-set x config-set, so the
+# #7234 fan-out took the per-run call volume from ~16 to ~220. Doppler's free tier caps
+# secrets reads at 120/min PER TOKEN — and this is an argument FOR the map that the ADR does
+# not make: the map divides those ~220 calls across 13 config-scoped tokens (~17 each), where
+# one project-scoped credential would have taken all ~220 against a single 120/min budget.
+# The shape that was adopted for binding reasons also happens to be the one that stays under
+# the quota.
+#
+# WHAT IS CLASSIFIED HERE, AND WHAT IS NOT. Only the throttle signature is claimed:
+# a non-zero read whose stderr names a 429 / rate limit is counted and annotated. Everything
+# else keeps EXACTLY today's behaviour — silent skip — because the distinguishing question
+# ("what does this CLI print when a key is genuinely absent from one config?") was NOT
+# measured in this change, and key-absent-in-this-config is the COMMON case in a key-set x
+# config-set loop: the key set is the UNION across configs, so most pairs are legitimately
+# empty. A classifier guessing that message shape would either alarm on ~200 normal reads a
+# run or silently swallow the errors it was added to surface. Narrow and measured beats broad
+# and inferred; the remaining ambiguity is named rather than papered over.
+# REUSES `READ_ERR_FILE`, and does NOT allocate a second temp file. Two reasons, both
+# already written down in this script: the EXIT trap installed above is THE script's single
+# trap (`trap … EXIT` REPLACES rather than appends, so a second one here would silently
+# disarm the first and leak the file it owns — ADR-129 / lint-trap-tempfile-ownership rule
+# (c)), and the name-listing loop that owns this file has fully finished before any value
+# read starts, so there is no overlap to race on.
+#
+# read_secret_value <cfg> <key> — sets REPLY to the value, or to empty on any failure.
+# Deliberately NOT called as `$( )`: command substitution runs a SUBSHELL, so
+# `note_read_cause`'s increment would be discarded — the exact defect this file records
+# against its own memoised probe helpers.
+read_secret_value() {
+  local _cfg="$1" _key="$2" _rc=0 _err=""
+  REPLY=""
+  REPLY="$(DOPPLER_TOKEN="${CRED_FOR[$_cfg]}" doppler secrets get "$_key" -p "$PROJECT" -c "$_cfg" --plain 2>"$READ_ERR_FILE")" || _rc=$?
+  if (( _rc != 0 )); then
+    REPLY=""
+    _err="$(tr -d '\r' <"$READ_ERR_FILE" | head -c 400)"
+    if is_rate_limited "$_err"; then
+      note_read_cause token_drift_value_read_rate_limited
+      echo "WARNING: reading '$_key' for config '$_cfg' was RATE LIMITED by Doppler; this value is ungraded for this run. Doppler: ${_err}" >&2
+    fi
+  fi
+  return 0
+}
+
 for key in $(printf '%s\n' "${!KEYSET[@]}" | sort); do
   for cfg in ${CONFIG_NAMES[@]+"${CONFIG_NAMES[@]}"}; do
-    val=$(DOPPLER_TOKEN="${CRED_FOR[$cfg]}" doppler secrets get "$key" -p "$PROJECT" -c "$cfg" --plain 2>/dev/null)
+    read_secret_value "$cfg" "$key"
+    val="$REPLY"
     [[ -z "$val" ]] && continue
     API_VALS["${key}"$'\x1f'"${cfg}"]="$val"
     mask_value "$val"
@@ -1059,8 +1194,8 @@ for base in $(printf '%s\n' "${!ACCESS_BASESET[@]}" | sort); do
   # are never read — nothing would be done with them.
   [[ -z "${ACCESS_HOST_OF[$base]}" ]] && continue
   for cfg in ${CONFIG_NAMES[@]+"${CONFIG_NAMES[@]}"}; do
-    tid=$(DOPPLER_TOKEN="${CRED_FOR[$cfg]}" doppler secrets get "${base}_ID" -p "$PROJECT" -c "$cfg" --plain 2>/dev/null)
-    tsec=$(DOPPLER_TOKEN="${CRED_FOR[$cfg]}" doppler secrets get "${base}_SECRET" -p "$PROJECT" -c "$cfg" --plain 2>/dev/null)
+    read_secret_value "$cfg" "${base}_ID";     tid="$REPLY"
+    read_secret_value "$cfg" "${base}_SECRET"; tsec="$REPLY"
     [[ -n "$tid" ]] && { ACC_ID_VALS["${base}"$'\x1f'"${cfg}"]="$tid"; mask_value "$tid"; }
     [[ -n "$tsec" ]] && { ACC_SEC_VALS["${base}"$'\x1f'"${cfg}"]="$tsec"; mask_value "$tsec"; }
   done
