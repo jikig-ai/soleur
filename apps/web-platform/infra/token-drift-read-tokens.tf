@@ -97,8 +97,8 @@
 # step, and it is the status quo for all ten sibling `doppler_service_token`s in this root
 # (`git_data`, `registry`, `ghcr_minter`, `kb_drift`, `write`, `inngest_arm`, …), every one of
 # which documents the same bare recipe. It is a family-wide gap rather than one this shape
-# introduces — tracked separately so it is fixed for all eleven at once rather than bolted onto
-# this change for one.
+# introduces — tracked in issue #7263 so it is fixed for all eleven at once rather than bolted
+# onto this change for one.
 #
 # NO `lifecycle` BLOCK AND NO `ignore_changes` ON `plaintext_value`, DELIBERATELY. With one, a
 # `-replace=` rotation would mint values that never reached the Actions secret, and the scan would

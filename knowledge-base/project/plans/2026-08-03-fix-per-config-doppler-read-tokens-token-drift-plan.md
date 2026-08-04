@@ -635,7 +635,7 @@ No `exception` block: no `plaintext-exception`, no `cert_verification: off`.
   > required reason, a concurrency mutex, and a publish-channel check before the irreversible
   > apply). This is a family-wide gap — all ten sibling `doppler_service_token`s in this root
   > document the same operator-local recipe — rather than one this shape introduces, and it is
-  > tracked separately so it gets fixed for all eleven at once. The tokens do not expire, so
+  > tracked in issue #7263 so it gets fixed for all eleven at once. The tokens do not expire, so
   > rotation is incident-response rather than a schedule; that is why the gap is a gap and not an
   > outage.
 
