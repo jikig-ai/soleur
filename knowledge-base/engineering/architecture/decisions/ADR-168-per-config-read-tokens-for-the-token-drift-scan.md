@@ -181,7 +181,7 @@ commit message.
 capability this repository structurally lacks. Tracked with the related rung-2 gap on #7233.
 
 **More rotation surface.** Thirteen tokens is thirteen rotation obligations. Per token:
-`terraform apply -replace='doppler_service_token.token_drift["<config>"]'`; whole-set rotation is
+`terraform apply -replace='doppler_service_token.token_drift["<config>"]' -target='doppler_service_token.token_drift["<config>"]' -target='github_actions_secret.doppler_token_drift_map'` (both `-target=`s are load-bearing: without the first the apply plans the whole root; without the second the map is pruned as a *dependent* and republishes the destroyed token); whole-set rotation is
 one `-replace=` per config in a single apply, generated from the inventory. The map republishes in
 the same apply either way. This is the accepted cost of the shape.
 

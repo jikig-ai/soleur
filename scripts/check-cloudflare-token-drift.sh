@@ -920,6 +920,24 @@ for cfg in "${CONFIGS[@]}"; do
     # operator's remedy differs. All three count the config UNREAD, which is what gives
     # them a channel: it depresses `configs` below the floor, so the coverage issue files
     # and the workflow's close arm cannot fire.
+    # THE CLI IS NOT VERSION-PINNED, AND THIS MATCH IS THE ONLY THING THAT DEPENDS ON THAT.
+    # Measured 2026-08-04 against the pinned action SHA: `DopplerHQ/cli-action` declares NO
+    # inputs at all (its `action.yml` at 5351693 has no `inputs:` block), and on Linux it
+    # runs `https://cli.doppler.com/install.sh --debug --no-package-manager --install-path
+    # <dir>`, which installs the LATEST CLI. So "add a `version:` input" is not a fix that
+    # exists here — an unknown input is silently ignored by Actions, which would have bought
+    # a false pin rather than a real one.
+    #
+    # WHAT ACTUALLY RIDES ON THE VERSION, WHICH IS LESS THAN IT LOOKS. The CONTROL is that a
+    # config-scoped token's read FAILS on a wrong `-c` — that is server-side, and a failed
+    # read appends to FAILED_CONFIGS, counts the config UNREAD and depresses coverage no
+    # matter what the CLI prints. Only the CAUSE LABEL below depends on the message string.
+    # If Doppler reword it, a mis-binding degrades to `token_drift_identify_unreachable`:
+    # the operator gets a less specific remedy, the gate still fires, and coverage still
+    # goes `degraded`. That is a fail-SAFE degradation, so the un-pinned CLI is a
+    # diagnostic-quality risk rather than a correctness one — stated because the earlier
+    # framing ("the whole -c-errors control rests on a v3.75.3 measurement") implied the
+    # control itself would silently stop working, and it would not.
     if [[ "$_read_err" == *"does not have access to requested config"* ]]; then
       note_read_cause token_drift_config_binding_mismatch
       echo "WARNING: config '$cfg' is counted UNREAD. Its credential is bound to a DIFFERENT config, so the minted token set and the map keys disagree — check that doppler_service_token.token_drift sets 'config = each.key' and not a string literal." >&2

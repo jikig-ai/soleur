@@ -53,16 +53,52 @@
 # true of the `configs list` verb (see `kb-drift.tf`) and false of `secrets` in the pinned CLI
 # v3.75.3. The two verbs differ; do not generalise either one.
 #
-# autonomy-considered: provider-mint-applied. Terraform mints, publishes and rotates every one of
-# these in-band via `DOPPLER_TOKEN_TF` and the Terraform GitHub App. There is no operator
-# credential-entry step at any point.
+# autonomy-considered: provider-mint-applied. Terraform mints and publishes every one of these
+# in-band via `DOPPLER_TOKEN_TF` and the Terraform GitHub App: there is no operator
+# credential-entry step in the CREATE path, which is what the `hr-tf-variable-no-operator-mint-default`
+# class asks about. ROTATION is a different claim and is stated separately below, because an
+# earlier version of this comment said "mints, publishes and rotates … in-band … no operator step
+# at any point" and the rotation half of that is not true today.
 #
 # ROTATION. Per token:
-#   terraform apply -replace='doppler_service_token.token_drift["<config>"]'
-# Whole set: one `-replace=` per config in a single apply, generated from the inventory. The map
-# republishes in the same apply either way. Emergency revocation of the whole set is deleting the
-# resource; the next scan reports `degraded 0/13` within 12 hours. Thirteen tokens is thirteen
-# rotation obligations — the accepted cost of this shape, disclosed in ADR-168.
+#
+#   terraform apply \
+#     -replace='doppler_service_token.token_drift["<config>"]' \
+#     -target='doppler_service_token.token_drift["<config>"]' \
+#     -target='github_actions_secret.doppler_token_drift_map'
+#
+# BOTH `-target=`s ARE REQUIRED, AND THE RECIPE USED TO CARRY NEITHER. Two independent defects in
+# the bare `-replace=`-only form:
+#
+#   1. `terraform apply -replace=<addr>` with no `-target=` plans the WHOLE ROOT. Copy-pasted
+#      under incident pressure it applies every unrelated pending change in this configuration,
+#      destroys included. That is not a rotation, it is a fleet apply with a replacement in it.
+#   2. Adding `-target=` on the TOKEN ALONE is worse than useless: `-target` selects the address
+#      and its DEPENDENCIES, never its DEPENDENTS. `github_actions_secret.doppler_token_drift_map`
+#      reads `doppler_service_token.token_drift[*].key`, so it is a dependent — it would be
+#      PRUNED from the plan. The apply would mint a new token, destroy the old one, and leave the
+#      published map holding the destroyed value: every scan then reads with a revoked credential
+#      and reports `degraded 0/13` until someone notices. The map must be targeted explicitly.
+#
+# The sentence this replaces read "The map republishes in the same apply either way", which is true
+# only of the whole-root form in (1) — i.e. true of exactly the variant that is unsafe for the
+# other reason.
+#
+# Whole set: one `-replace=` per config in a single apply, generated from the inventory, plus the
+# same map `-target=`. Emergency revocation of the whole set is deleting the resource; the next
+# scan reports `degraded 0/13` within 12 hours. Thirteen tokens is thirteen rotation obligations —
+# the accepted cost of this shape, disclosed in ADR-168.
+#
+# NO DISPATCH ROUTE, AND THAT IS A GAP THIS CHANGE DOES NOT CLOSE. `ci-ssh-token-replace` in
+# `apply-web-platform-infra.yml` is the precedent that has one — a `workflow_dispatch` arm with a
+# distinct typo-guard token, a required reason, a concurrency mutex and a publish-channel check
+# BEFORE the irreversible apply. Nothing equivalent exists for these tokens, so rotating one today
+# means an operator running Terraform locally with `DOPPLER_TOKEN_TF` in hand. That is an operator
+# step, and it is the status quo for all ten sibling `doppler_service_token`s in this root
+# (`git_data`, `registry`, `ghcr_minter`, `kb_drift`, `write`, `inngest_arm`, …), every one of
+# which documents the same bare recipe. It is a family-wide gap rather than one this shape
+# introduces — tracked separately so it is fixed for all eleven at once rather than bolted onto
+# this change for one.
 #
 # NO `lifecycle` BLOCK AND NO `ignore_changes` ON `plaintext_value`, DELIBERATELY. With one, a
 # `-replace=` rotation would mint values that never reached the Actions secret, and the scan would

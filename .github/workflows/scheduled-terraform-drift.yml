@@ -772,7 +772,7 @@ jobs:
               echo "  EXACTLY which. **This is a capability the previous"
               echo "  project-scoped credential did not have**: one dead token was"
               echo "  indistinguishable from a healthy fleet. Remedy is per token:"
-              echo "  \`terraform apply -replace='doppler_service_token.token_drift[\"<config>\"]'\`,"
+              echo "  \`terraform apply -replace='doppler_service_token.token_drift[\"<config>\"]' -target='doppler_service_token.token_drift[\"<config>\"]' -target='github_actions_secret.doppler_token_drift_map'\`,"
               echo "  which mints a fresh value and republishes the map in the same apply."
               echo "- **The inventory shrank** — the \`for_each\` list shortened, so tokens were"
               echo "  DESTROYED and those configs now read unread. This is the case the destroy"

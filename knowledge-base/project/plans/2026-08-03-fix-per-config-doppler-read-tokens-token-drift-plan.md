@@ -254,7 +254,7 @@ otherwise.
 
 ### D6 — Rotation
 
-`terraform apply -replace='doppler_service_token.token_drift["<cfg>"]'` per token; whole-set
+`terraform apply -replace='doppler_service_token.token_drift["<cfg>"]' -target='doppler_service_token.token_drift["<cfg>"]' -target='github_actions_secret.doppler_token_drift_map'` per token (both `-target=`s required — see the .tf header); whole-set
 rotation passes one `-replace=` per config in a single apply, generated from the inventory. The
 map republishes in the same apply. Emergency revocation of the set is deleting the resource; the
 next scan reports `degraded 0/13` within 12 hours. More rotation surface than one token — the
@@ -369,8 +369,8 @@ logs:
   retention:     "90 days (Actions default); derived state persists on issue #7175, rewritten every run"
 
 discoverability_test:
-  command:       "gh run list --workflow=scheduled-terraform-drift.yml --status success -L 1 --json databaseId --jq '.[0].databaseId' | xargs -I{} gh run view {} --log | grep 'token-drift verdict:' | tail -1"
-  expected_output: "a line containing `coverage: at-floor, ratio: 13/13` (gh prefixes each log line with job/step columns, so match as a substring; --status success avoids `gh run view --log` refusing an in-progress run, and `tail -1` avoids SIGPIPE-ing gh the way `grep -m1` would)"
+  command:       "gh run list --workflow=scheduled-terraform-drift.yml --status completed -L 1 --json databaseId --jq '.[0].databaseId' | xargs -I{} gh run view {} --log | grep -aoE 'token-drift verdict: [a-z]+ \\(detector exit[^)]*\\)' | tail -1"
+  expected_output: "a line containing `coverage: at-floor, ratio: 13/13` (gh prefixes each log line with job/step columns, so match as a substring; `tail -1` avoids SIGPIPE-ing gh the way `grep -m1` would). CORRECTED: this read `--status success`, which the sibling follow-through shipped in THIS PR (`scripts/followthroughs/token-drift-coverage-7159.sh`) documents and refuses by name -- it returns the last HEALTHY run, so it reports a green verdict while a newer run is failing, which is a clean bill of health for a question never asked and the exact defect #7159 exists to close. `--status completed` still excludes the in-progress run that `gh run view --log` refuses, without selecting for greenness. The grep is likewise anchored on the RESOLVED verdict line rather than the bare `token-drift verdict:` prefix, because Actions echoes the `run:` script source into the log and that source contains the literal prefix -- so a prefix grep matches on a run that never printed a verdict at all.
 ```
 
 **Soak follow-through:** none new. `scripts/followthroughs/token-drift-coverage-7159.sh` exists,
@@ -623,8 +623,21 @@ No `exception` block: no `plaintext-exception`, no `cert_verification: off`.
   requirement, not presence.
 - **NFR2** — `access = "read"` on every token; no `read/write` credential minted; no credential
   on a child argv (tests P9/P11).
-- **NFR3** — no new recurring vendor expense; no operator step at any point. Terraform mints,
-  publishes and rotates in-band.
+- **NFR3** — no new recurring vendor expense; no operator step in the CREATE path. Terraform mints
+  and publishes in-band via `DOPPLER_TOKEN_TF` and the Terraform GitHub App, and the per-merge
+  apply carries it — nothing is typed by an operator to stand these up.
+
+  > **CORRECTED — "rotates in-band" and "no operator step at any point" were both too strong.**
+  > ROTATION has no dispatch route: `terraform apply -replace=…` is not expressible through a
+  > merge, so rotating a token today means an operator running Terraform locally with
+  > `DOPPLER_TOKEN_TF` in hand. `ci-ssh-token-replace` in `apply-web-platform-infra.yml` is the
+  > precedent that has a real one (a `workflow_dispatch` arm with its own typo-guard token, a
+  > required reason, a concurrency mutex, and a publish-channel check before the irreversible
+  > apply). This is a family-wide gap — all ten sibling `doppler_service_token`s in this root
+  > document the same operator-local recipe — rather than one this shape introduces, and it is
+  > tracked separately so it gets fixed for all eleven at once. The tokens do not expire, so
+  > rotation is incident-response rather than a schedule; that is why the gap is a gap and not an
+  > outage.
 
 ## Implementation Phases
 
@@ -1018,7 +1031,7 @@ The 5-agent panel + CTO + advisor found 4 P0s and 12 P1s against v1. Audit trail
 | **P2** AC14's `awk '/^### Remedy/…'` extracts **zero** lines and passes vacuously | kieran | AC-C3's anchored form + non-vacuity clause |
 | **P2** AC2's `grep -c` over `*.tf` prints per-file counts and misses `infra/modules/**` | kieran | AC-A1's `git grep -q` form |
 | **P2** the C4 label hardcoded three `13`s into the one file with a count-parity gate, as a multi-line string | architecture + DHH | single line, no counts, rationale moved to the ADR |
-| **P2** `discoverability_test` errors on an in-progress run; `grep -m1` SIGPIPEs `gh` | kieran | `--status success` + `tail -1` |
+| **P2** `discoverability_test` errors on an in-progress run; `grep -m1` SIGPIPEs `gh` | kieran | `--status completed` + `tail -1` + the anchored verdict regex (`--status success` was the first fix and is wrong for the reason the sibling follow-through documents: it selects the last GREEN run) |
 | **P2** the follow-through asserts a reviewer gate removed by PR #4220 | spec-flow | FR16 |
 | **P2** `DOPPLER_TOKEN_MAP` should be unset after the parse, per the discipline of the block it replaces | architecture | FR5 |
 | **P1 (deepen)** the `unknown` branch's LEAD at `:597` — *"a DETECTOR fault, not a credential fault"* — lives outside the Remedy block and names no resource, so **v2's own rewrite scope (`:660-667`) and its `doppler_service_account` grep both missed it**, while FR7b routes credential faults straight to `unknown` | verify-the-negative pass | FR9's `:597` bullet; AC-C3a; tasks 3.3.2 |

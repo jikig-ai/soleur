@@ -122,7 +122,7 @@ case "$COVERAGE" in
       echo "TRANSIENT: coverage ${COVERAGE} with an unparseable ratio '${RATIO:-<empty>}' — this run published no measurement to grade. Retrying next sweep." >&2
       exit 2
     fi
-    echo "FAIL: run ${RUN_ID} reported coverage: ${COVERAGE} at ${RATIO:-?}. The credential set reaches fewer configs than the declared floor. This is per-config now, so the run names which: read \`configs_unread\` in the linked run, then re-mint just those tokens with \`terraform apply -replace='doppler_service_token.token_drift[\"<config>\"]'\`. A ratio of 1/N instead means the step was repointed at a bare DOPPLER_TOKEN, which selects single-credential mode." >&2
+    echo "FAIL: run ${RUN_ID} reported coverage: ${COVERAGE} at ${RATIO:-?}. The credential set reaches fewer configs than the declared floor. This is per-config now, so the run names which: read \`configs_unread\` in the linked run, then re-mint just those tokens with \`terraform apply -replace='doppler_service_token.token_drift[\"<config>\"]' -target='doppler_service_token.token_drift[\"<config>\"]' -target='github_actions_secret.doppler_token_drift_map'\` (BOTH -targets: without the first the apply plans the whole root, and without the second the republished map keeps the destroyed token). A ratio of 1/N instead means the step was repointed at a bare DOPPLER_TOKEN, which selects single-credential mode." >&2
     exit 1
     ;;
   *)
