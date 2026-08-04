@@ -360,12 +360,21 @@ jobs:
           # exists to remove.
           set -uo pipefail
 
-          # BACKSTOP for the above. Without `set -e`, a future fallible command added with no
+          # BACKSTOP for the above. Without `set -e`, a future fallible COMMAND added with no
           # `|| degraded` route fails silently and execution falls through to
           # `mirror_status=ok` — a green run with no mirror. The ERR trap makes that a named
           # degrade instead of a false green. `set -E` propagates it into functions.
+          #
+          # SCOPE, precisely: this covers a command exiting non-zero. It does NOT cover a
+          # `set -u` unbound-variable abort, which bypasses the ERR trap entirely (measured:
+          # exit 1, no trap line). On the build path continue-on-error then turns that into a
+          # green run with mirror_status UNSET — the exact silence this trap exists to remove.
+          # So assert the external variables this block depends on, rather than relying on the
+          # trap to catch their absence. RUNNER_TEMP is always set on ubuntu-latest without a
+          # container:, so this is a guard against future drift, not a live fault.
           set -E
           trap 'degraded unrouted "$?" "a command failed with no explicit || degraded route — this is a workflow bug, not an infrastructure fault"' ERR
+          : "${RUNNER_TEMP:?RUNNER_TEMP unset — the digest capture below writes there}"
 
           # Bounded retry to self-heal a transient TCP reset over the CF-tunnel
           # bridge. 3 attempts, 5s then 15s backoff. Idempotent ops only — `crane copy`
@@ -418,6 +427,12 @@ jobs:
           # websocket upgrade), would produce a green run with no annotation, no summary line
           # and no Slack. Branching here instead routes it through the same emitter as every
           # other fault.
+          #
+          # `!= "success"` here, where reusable-release.yml deliberately uses `== 'failure'`.
+          # The divergence is intentional and safe, not a porting slip: the sibling's bridge is
+          # gated, so `skipped` is reachable there and would produce a misleading "degraded".
+          # This bridge carries no `if:`, so it can only be `skipped` when success() is already
+          # false — in which case this step is skipped too, and the branch is unreachable.
           if [ "${BRIDGE_OUTCOME:-}" != "success" ]; then
             degraded bridge_down 1 "cf-tunnel-registry-bridge outcome=${BRIDGE_OUTCOME:-<unset>}; zot was never reachable from this runner"
           fi
@@ -480,6 +495,12 @@ jobs:
           # `retry`'s ::notice:: lines land on stdout too, so keep only a sha256: token.
           SRC_DIGEST=$(grep -oE '^sha256:[0-9a-f]{64}$' "$RUNNER_TEMP/src.digest" | head -1 || true)
           DST_DIGEST=$(grep -oE '^sha256:[0-9a-f]{64}$' "$RUNNER_TEMP/dst.digest" | head -1 || true)
+          # The `tr '\n' ' '` is a WORKFLOW-COMMAND INJECTION GUARD, not formatting — do not
+          # "keep the linebreaks for readability". This stderr is externally-influenced text
+          # from a registry, and it is interpolated into `echo "::error::…"` below. GitHub
+          # parses workflow commands per LINE, so a newline followed by `::add-mask::` or
+          # `::error::` in that stderr would be executed as a command. Collapsing newlines
+          # makes the whole capture a single un-parseable payload.
           SRC_ERR=$(tail -c 400 "$RUNNER_TEMP/src.err" 2>/dev/null | tr '\n' ' ' || true)
           DST_ERR=$(tail -c 400 "$RUNNER_TEMP/dst.err" 2>/dev/null | tr '\n' ' ' || true)
           echo "ghcr=${SRC_DIGEST:-<none>} zot=${DST_DIGEST:-<none>}"
@@ -531,8 +552,17 @@ jobs:
           #   retry crane validate --remote "$ZOT:$TAG" \
           #     || degraded blobs_missing "$?" "manifest digest matches but blobs are missing"
           # Until then a failure is recorded and reported, and nothing is gated on it.
+          # `timeout 300` is load-bearing, not hygiene. "Non-blocking" holds for EXIT CODES;
+          # it does not hold for wall clock, and this job declares no `timeout-minutes` (so it
+          # inherits GitHub's 360-minute default). The unverified case named above — crane
+          # guessing the wrong scheme against the tunnelled loopback listener — fails as a
+          # STALL, not a clean non-zero: the local port binds and accepts, then the origin hop
+          # hangs. Three retried stalls would burn the job timeout and RED a tag-push release
+          # from a check documented as unable to affect the outcome. `timeout` exits 124,
+          # which the else-arm reports as blob_validate=failed with the rc — better promotion
+          # evidence than a job timeout, and it keeps the dark-launch property intact.
           blob_rc=0
-          retry crane validate --remote "$ZOT:$TAG" || blob_rc=$?
+          retry timeout 300 crane validate --remote "$ZOT:$TAG" || blob_rc=$?
           if [ "$blob_rc" = 0 ]; then
             echo "blob_validate=ok" >> "$GITHUB_OUTPUT"
           else
@@ -590,8 +620,16 @@ jobs:
         # mode whose whole purpose is to authorise a root-exec digest pin was the one mode
         # with no push signal, while the mirror step's own comment claimed the opposite.
         # A failed step's outputs ARE still readable, so mirror_status/mirror_reason resolve
-        # normally here. reusable-release.yml records the identical correction at its own
-        # Slack step after shipping a stale version of this same comment once.
+        # normally here.
+        #
+        # This workflow is AHEAD of reusable-release.yml here, NOT in parity with it — do not
+        # go looking to "port the correction back". Measured: `cancelled()` occurs ZERO times
+        # in that file. Its `Post to Slack (release)` carries a plain-expression `if:`, and
+        # its own comment states the consequence outright ("this Slack step does not run at
+        # all"). Its failure-path signal is a DIFFERENT step — `Email notification (release
+        # FAILED)`, `if: failure()`, reading mirror_reason — so a blocking mirror failure
+        # there yields no Slack. Tracked separately (#7256); fixing it inline here would
+        # collide with the in-flight #7242 work on that same file.
         if: ${{ !cancelled() && steps.zot_mirror.outputs.mirror_status == 'degraded' }}
         continue-on-error: true
         env:
