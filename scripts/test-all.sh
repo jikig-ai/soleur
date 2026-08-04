@@ -459,6 +459,10 @@ if want_scripts; then
   # `test-scripts` feeds the aggregate `test` job (ci.yml), which IS in the CI Required ruleset,
   # whereas the `lint-bot-statuses` job the other repo linters live in is advisory by design.
   run_suite "scripts/zot-mirror-diagnosis" bash scripts/zot-mirror-diagnosis.test.sh
+  # #7242: an alarm step that cannot run after an earlier failure cannot report the FIRE it
+  # exists to report. Static gate over both alarm workflows — the condition is evaluated by
+  # GitHub, so the YAML is the only artifact there is to test.
+  run_suite "scripts/alarm-issue-filing-guard" bash scripts/alarm-issue-filing-guard.test.sh
   # Dogfood Grok measure/bootstrap (#6545/#6546). Explicit run_suite — scripts/dogfood/
   # is not in the auto-glob; orphan suites are the #5417 class (green CI, zero coverage).
   run_suite "scripts/dogfood/grok-gpu-bootstrap" bash scripts/dogfood/grok-gpu-bootstrap.test.sh

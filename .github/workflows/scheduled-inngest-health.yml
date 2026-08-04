@@ -385,7 +385,7 @@ jobs:
             echo "::warning::restart dispatch failed — the tracking issue below carries the escalation."
 
       - name: File or comment tracking issue (failure)
-        if: steps.effmode.outputs.failure_mode != ''
+        if: always() && steps.effmode.outputs.failure_mode != ''
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -571,7 +571,14 @@ jobs:
           fi
 
       - name: Auto-close tracking issue (healthy)
-        if: steps.effmode.outputs.failure_mode == ''
+        # `steps.effmode.outcome == 'success'` is LOAD-BEARING, not boilerplate. This
+        # condition reads an EMPTY failure_mode as "healthy", and empty is exactly what a
+        # CRASHED effmode produces -- so a bare always() here would let a gh API blip
+        # auto-close up to five tracking issues including P1 [ci/inngest-down]. That is a
+        # false all-clear: the strict inverse of the defect being fixed. Producer liveness
+        # has to be checked separately, because this arm cannot tell "healthy" from
+        # "never ran" on the value alone (#7242).
+        if: always() && steps.effmode.outcome == 'success' && steps.effmode.outputs.failure_mode == ''
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -621,7 +628,7 @@ jobs:
       # checks above pass). These two steps close that gap using the inventory hook's
       # no-SSH durability_state enum.
       - name: File or comment durability advisory (non-durable)
-        if: steps.probe.outputs.failure_mode == '' && (steps.probe.outputs.durability_state == 'sqlite_only' || steps.probe.outputs.durability_state == 'degraded')
+        if: always() && steps.probe.outputs.failure_mode == '' && (steps.probe.outputs.durability_state == 'sqlite_only' || steps.probe.outputs.durability_state == 'degraded')
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -667,7 +674,7 @@ jobs:
           fi
 
       - name: Auto-close durability advisory (durable)
-        if: steps.probe.outputs.failure_mode == '' && steps.probe.outputs.durability_state == 'durable'
+        if: always() && steps.probe.outputs.failure_mode == '' && steps.probe.outputs.durability_state == 'durable'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -812,7 +819,7 @@ jobs:
         # ONLY the two REAL connector verdicts page. census_unavailable is deliberately excluded:
         # a token expiry or API blip must never page the operator against a healthy tunnel (the
         # #6374 relocated-false-positive class). It surfaces in the run log breadcrumb instead.
-        if: steps.census.outputs.verdict == 'multi_connector' || steps.census.outputs.verdict == 'zero_connectors'
+        if: always() && (steps.census.outputs.verdict == 'multi_connector' || steps.census.outputs.verdict == 'zero_connectors')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -871,7 +878,7 @@ jobs:
           fi
 
       - name: Auto-resolve the drift issue once the invariant is restored
-        if: steps.census.outputs.verdict == 'ok'
+        if: always() && steps.census.outputs.verdict == 'ok'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
