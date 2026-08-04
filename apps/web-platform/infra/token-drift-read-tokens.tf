@@ -75,7 +75,7 @@
 #
 # STATE STORAGE. Each token's `key` is Computed + Sensitive + write-once, so the cleartext lands in
 # `terraform.tfstate` on the R2 backend (`soleur-terraform-state`; server-side encrypted, TLS-only
-# — see `main.tf`), the same posture five sibling token keys already have.
+# — see `main.tf`), the same posture the other ten `doppler_service_token` keys in this root already have.
 #
 # ⚠️ BLAST RADIUS — UNCHANGED FROM ADR-164, AND STILL A WIDENING. Thirteen read credentials
 # covering the whole `soleur` project, including `prd`, which holds SUPABASE_SERVICE_ROLE_KEY

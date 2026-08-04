@@ -247,7 +247,18 @@ jobs:
           # runs this under `bash -eo pipefail {0}`, so a bare invocation would abort the
           # step here and every line below would be unreachable.
           rc=0
-          bash scripts/check-cloudflare-token-drift.sh \
+          # `timeout` is load-bearing, not belt-and-braces. The Doppler CLI retries a 429
+          # five times with doubling jitter and IGNORES Retry-After, so a sustained
+          # rate-limit run can outlast the JOB timeout — which kills the job before
+          # $GITHUB_OUTPUT is written. Every consumer arm in this job tests POSITIVELY, so
+          # empty outputs match nothing: no email, no coverage issue, no close. And the
+          # final Sentry check-in derives its status from steps.plan.outputs.exit_code, so
+          # the monitor would report `ok`. `continue-on-error` does not survive a job
+          # timeout either, so the step's own write-outputs-then-fail guard is bypassed.
+          # rc=124 leaves the verdict file absent, which the ladder already grades
+          # `unavailable` -> the DETECTOR-UNAVAILABLE email fires. 300s is ~5x the
+          # projected unthrottled runtime (~50-65s measured against a 13-config fan-out).
+          timeout 300 bash scripts/check-cloudflare-token-drift.sh \
             --json-file "$RUNNER_TEMP/token-drift.json" \
             --inventory apps/web-platform/infra/doppler-config-inventory.txt \
             --configs-floor "$DOPPLER_CONFIGS_FLOOR" || rc=$?
@@ -427,7 +438,7 @@ jobs:
           # `floor:` and `ratio:` are asserted by the Observability discoverability_test
           # and by AC26, so this line is a CONSUMER of the new fields, not a log nicety —
           # without them the grep prefix still matches while the asserted fields are absent.
-          echo "token-drift verdict: ${verdict} (detector exit ${rc}, causes: ${causes}, configs: ${configs}, floor: ${cfg_floor}, coverage: ${coverage}, ratio: ${cov_ratio})"
+          echo "token-drift verdict: ${verdict} (detector exit ${rc}, causes: ${causes}, configs: ${configs}, floor: ${cfg_floor}, coverage: ${coverage}, ratio: ${cov_ratio}, unread: ${cfg_unread})"
           # The inventory gates NO state — it supplies the printed ratio, the unread list
           # and this age. A stale inventory can only make the ratio's denominator wrong,
           # and a wrong ratio cannot silence a channel or close an issue, so the caveat is
@@ -623,7 +634,17 @@ jobs:
           # with a CLEAN verdict (well-formed JSON that simply lacks `configs`), and no
           # email arm fires on clean. The `verdict == 'unavailable'` email only covers
           # the crash path.
-          if [[ "$COVERAGE" == "unknown" ]]; then
+          if [[ "$COVERAGE" == "at-floor" && "$VERDICT" == "unavailable" ]]; then
+            # THE DEAD-ZONE STATE, which the filer's fourth disjunct routes here. Reachable
+            # via the non-vacuity gate: every config's NAME listing succeeded (so coverage
+            # is at-floor and nothing is unread) while ZERO values were probed. Without its
+            # own branch it fell to the else below, which would have filed an issue titled
+            # "reading fewer configs than it declared" saying "read 13/13 ... below its
+            # declared floor of 13" — self-contradicting — and stated a closing condition
+            # that was already true on that very run, i.e. unsatisfiable.
+            TITLE="[TOKEN DRIFT] The scan read every config but drew no conclusion"
+            LEAD="**The scan reached ${COVERAGE_RATIO} Doppler configs — at or above its declared floor of ${CONFIGS_FLOOR} — and still concluded nothing (\`verdict: ${VERDICT}\`).** Coverage counts configs whose secret-NAME listing SUCCEEDED; this run listed names everywhere and probed ZERO values. A credential that can list names but not read values produces exactly this, and it is the one shape the coverage count alone cannot see."
+          elif [[ "$COVERAGE" == "unknown" ]]; then
             TITLE="[TOKEN DRIFT] The fan-out detector could not measure its own scan coverage"
             LEAD="**The token-drift scan published an unreadable coverage measurement (\`configs=${CONFIGS}\`, \`floor=${CONFIGS_FLOOR}\`, \`ratio=${COVERAGE_RATIO}\`).** Its verdict (\`${VERDICT}\`) is therefore unscoped — it is not a fleet-wide claim, and it is not evidence of a narrowed credential either. Two causes reach this state and they need different actions: a truncated or malformed VERDICT FILE (a detector fault — the Doppler identity is not implicated), or a malformed \`DOPPLER_TOKEN_DRIFT_MAP\` (a CREDENTIAL fault — the detector fails closed here deliberately, because a credential source it could not parse is not evidence the credential is absent or narrowed, which is what \`degraded\` would assert). The run's own annotations discriminate: a map that failed to parse names itself on stderr and makes no Doppler call at all."
           else
@@ -688,7 +709,21 @@ jobs:
             echo ""
             echo "### Remedy"
             echo ""
-            if [[ "$COVERAGE" == "unknown" ]]; then
+            if [[ "$COVERAGE" == "at-floor" && "$VERDICT" == "unavailable" ]]; then
+              echo "**Do not widen or re-mint anything on the strength of this issue.** The"
+              echo "credential reached every config it was asked to. What failed is the VALUE"
+              echo "read, everywhere — which is the names-but-not-values credential class."
+              echo ""
+              echo "Check the linked run for \`::error::\` annotations naming individual"
+              echo "configs, and for the detector's \`PROBED ZERO\` line. If the tokens are"
+              echo "sound, suspect a Doppler-side outage or a rate limit rather than the"
+              echo "credential set."
+              echo ""
+              echo "**Closing condition for THIS issue is different from the others:** it"
+              echo "closes when a run reports \`coverage: at-floor\` AND \`verdict\` is"
+              echo "anything other than \`unavailable\`. \`at-floor\` alone is already true"
+              echo "here, so gating on it would make this issue unclosable."
+            elif [[ "$COVERAGE" == "unknown" ]]; then
               echo "**The scan did not report a short config count — it reported an unreadable"
               echo "measurement.** Two different faults land here and the run's own annotations"
               echo "say which, so read them before acting:"

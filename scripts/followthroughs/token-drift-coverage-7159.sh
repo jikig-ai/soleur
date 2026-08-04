@@ -96,6 +96,15 @@ case "$COVERAGE" in
   degraded|unknown)
     # The credential either never landed (apply not released) or landed narrowed.
     # Distinguish: a 0/N ratio on a run this soon after merge is the un-applied case.
+    # `unknown` NEVER takes the pre-apply fast path. A malformed DOPPLER_TOKEN_DRIFT_MAP
+    # publishes `unknown` at 0/N — the apply HAS run, it published garbage — and the arm
+    # below would grade that TRANSIENT forever with a message asserting the apply is
+    # pending. That is the same defect as the `1/*` arm this script deleted, one label
+    # higher: a real credential fault masked as a blameless window.
+    if [[ "$COVERAGE" == "unknown" ]]; then
+      echo "FAIL: run ${RUN_ID} published coverage: unknown at ${RATIO:-?}. The detector could not parse its own credential source or its own verdict file — the apply has already run. Check the run for a \`token_drift_map_malformed\` annotation (a CREDENTIAL fault: re-run the infra apply so github_actions_secret.doppler_token_drift_map republishes) or its absence (a DETECTOR fault: check the step for a non-zero exit or a truncated emit_json write)." >&2
+      exit 1
+    fi
     if [[ "$RATIO" == 0/* ]]; then
       echo "TRANSIENT: coverage ${COVERAGE} at ${RATIO} — reads as the credential not yet published. The merge-triggered terraform apply publishes DOPPLER_TOKEN_DRIFT_MAP, and the scan observes it on its next scheduled run (up to 12h). Retrying next sweep." >&2
       exit 2

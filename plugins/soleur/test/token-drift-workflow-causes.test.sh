@@ -186,8 +186,12 @@ if body is None:
     sys.stderr.write("no step with id: token_drift, or it has no run:\n")
     raise SystemExit(2)
 lines = body.split("\n")
+# Tolerates a runner prefix (`timeout N `, `env X=Y `) before `bash`. The invocation is
+# wrapped in `timeout 300` so a rate-limited run cannot outlive the JOB timeout, which
+# would kill it before $GITHUB_OUTPUT is written; anchoring on a bare `bash ` prefix made
+# that wrapper invisible to this extractor and the whole harness FATAL'd.
 hits = [i for i, l in enumerate(lines)
-        if l.lstrip().startswith("bash scripts/check-cloudflare-token-drift.sh")]
+        if "bash scripts/check-cloudflare-token-drift.sh" in l and not l.lstrip().startswith("#")]
 if len(hits) != 1:
     sys.stderr.write("expected exactly 1 detector invocation, found %d\n" % len(hits))
     raise SystemExit(3)
@@ -1249,11 +1253,37 @@ else
   # (d) THE SET-EQUALITY. The regex APPLIED is the one extracted from the .tf; the expected
   #     set is the DETECTOR's own inventory parse. A .tf that filtered differently — a
   #     dropped anchor, an added character class, `[A-Za-z]` — selects a different set here
-  #     and reds with the diff named. Mutation-proven: changing the .tf literal to
-  #     `^[a-z0-9_-]+$` or `^[a-z]+$` fails this assertion.
+  #     and reds with the diff named.
+  #
+  #     ⚠️ THE REACH OF THIS ASSERTION IS BOUNDED BY THE CORPUS, and the comment here used
+  #     to overstate it. Measured: `^[a-z]+$` fails, but `^[a-z0-9_-]+$`, `^[a-zA-Z0-9_]+$`
+  #     and `^[a-z0-9_]*$` all select the SAME 13 names over the committed inventory and
+  #     PASS. Both sides evaluate over one 13-line corpus, so only a corpus-witnessed
+  #     divergence can ever fail. A widening that no current name exercises is invisible
+  #     here — the reason (e) forbids a literal list and the reason the detector's own
+  #     regex is extracted below rather than restated.
   if [[ -n "$_tf_re" ]]; then
     _tf_set=$(LC_ALL=C grep -E "$_tf_re" "$INVENTORY" | LC_ALL=C sort -u)
-    _det_set=$(LC_ALL=C grep -E '^[a-z0-9_]+$' "$INVENTORY" | LC_ALL=C sort -u)
+    # EXTRACTED, not restated. This line used to hardcode the detector's regex, so
+    # changing the detector left BOTH suites green while the .tf and the detector diverged
+    # — violating this file's own header Rule 2 ("derived from the detector source, never
+    # restated here"). Now a change on either side reds.
+    _det_re=$(sed -nE "s/.*LC_ALL=C grep -E '(\^[^']+)' \"\\\$INVENTORY_PATH\".*/\1/p" "$DETECTOR" | head -1)
+    if [[ -z "$_det_re" ]]; then
+      _f5=0; echo "    could not extract the detector's inventory-parse regex from $(basename "$DETECTOR") — the extraction has drifted and this comparison would be vacuous"
+      _det_re='^[a-z0-9_]+$'
+    fi
+    # THE LITERALS THEMSELVES, because set-equality alone cannot pin this. Measured:
+    # widening the DETECTOR's regex to `^[a-zA-Z0-9_-]+$` while the .tf keeps
+    # `^[a-z0-9_]+$` leaves both sets identical over the committed 13 names and passes.
+    # Extracting both sides was necessary and not sufficient — the comparison is bounded by
+    # the corpus, so a widening no current name exercises is invisible to it. Comparing the
+    # PREDICATES is corpus-independent and reds on any divergence.
+    if [[ "$_tf_re" != "$_det_re" ]]; then
+      _f5=0
+      echo "    the .tf's filter and the detector's inventory parse are DIFFERENT predicates: .tf='${_tf_re}' detector='${_det_re}'. They must be the same string — a config name accepted by one and rejected by the other is either a token minted for a config the scan never counts, or a counted config with no token."
+    fi
+    _det_set=$(LC_ALL=C grep -E "$_det_re" "$INVENTORY" | LC_ALL=C sort -u)
     _n=$(grep -c . <<<"$_tf_set") || _n=0
     if [[ "$_tf_set" != "$_det_set" ]]; then
       _f5=0

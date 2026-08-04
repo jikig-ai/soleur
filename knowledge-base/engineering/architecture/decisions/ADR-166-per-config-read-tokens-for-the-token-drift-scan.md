@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-03
-- **PR:** #7256
+- **PR:** #7241
 - **Issue:** #7234 (the project-scoped Doppler service account cannot enumerate configs — drift scan reads 0 of 13)
 - **Supersedes (in part):** [ADR-164](./ADR-164-project-scoped-service-account-and-declared-coverage-floor.md)
   — Decision 1 only. Decision 2 stands, with one bullet amended in place.
