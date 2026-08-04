@@ -8,6 +8,14 @@
 # an `http://` service makes the origin HTTP-proxy the WS-upgrade → "websocket: bad handshake".
 # That was the #6122 cutover bug — see tunnel.tf's registry ingress_rule for the full rationale.
 #
+# But "bad handshake" is NOT diagnostic of that, or of any single cause (#7242). It means the
+# tunnel could not complete an origin dial, and at least three things produce it: the ingress
+# misconfiguration above, an Access refusal at the edge, and an origin that is down or
+# RESTARTING. On 2026-08-03 it was the third — zot crash-looping at ~4 restarts/min — while
+# Cloudflare Access admitted every request. Reading the symptom as a cause is what blocked
+# three releases and sent the investigation to the wrong layer twice. Any message on this path
+# must report what the job MEASURED; see scripts/zot-mirror-diagnosis.sh and ADR-166.
+#
 # "A web-host cloudflared connector", NOT "THE web host's": ONE tunnel, MULTIPLE connector
 # replicas, CF load-balances across them. This ingress works only if EVERY connector host is a
 # 10.0.1.0/24 member — web-2 was not, which is #6416. See ADR-114 (I1 connector homogeneity).
@@ -67,6 +75,27 @@ inputs:
   cloudflared-sha256:
     description: 'SHA-256 of the cloudflared-linux-amd64 binary at cloudflared-version (recompute against the real binary — see header).'
     required: true
+  # #7242 / ADR-166. These three exist so this action's failure messages can branch on
+  # something the CALLING JOB measured, instead of naming a cause nobody checked.
+  #
+  # THREE CALLERS, and only one of them measures anything: reusable-release.yml runs a
+  # token preflight; build-inngest-config-bundle.yml and build-inngest-bootstrap-image.yml
+  # do not. `unmeasured` is therefore those two workflows' PERMANENT steady state, not an
+  # error — which is exactly why the `unmeasured` arm is written to be actionable on its
+  # own (it lists candidates unranked and carries a base case) rather than as a degraded
+  # version of a real verdict.
+  token-verdict:
+    description: 'live|stale|unverifiable|unmeasured — the calling job''s MEASURED verdict on the registry-push CF Access credential. Branches the failure message only; never gates behaviour. Callers with no token preflight leave this at `unmeasured`, which is a supported steady state, not a fault.'
+    required: false
+    default: unmeasured
+  token-checked-at:
+    description: 'UTC HH:MM:SSZ at which the caller measured token-verdict. Cited in the `live` arm so the claim is anchored to an observation in this same run.'
+    required: false
+    default: ''
+  token-cause:
+    description: 'The detector''s own cause token for an `unverifiable` verdict (gate-indeterminate|stamped-non-refusal|unexpected-status|refused-unstamped). Surfaced verbatim; all four carry "Do NOT rotate".'
+    required: false
+    default: unknown
 
 runs:
   using: composite
@@ -106,6 +135,12 @@ runs:
         # the `prd_terraform` branch and CANNOT read the prd root (#6122 cutover fix). tunnel.tf
         # writes REGISTRY_PUSH_* to the `prd` root; zot-registry.tf writes ZOT_PUSH_* there too.
         DOPPLER_CONFIG: prd
+        # #7242. Mapped into env: rather than interpolated into the run: body — an input
+        # referenced as ${{ }} inside a body bakes in at parse time, which is what makes a
+        # run: block untestable per-arm.
+        TOKEN_VERDICT: ${{ inputs.token-verdict }}
+        TOKEN_CHECKED_AT: ${{ inputs.token-checked-at }}
+        TOKEN_CAUSE: ${{ inputs.token-cause }}
       run: |
         set -euo pipefail
         # NO 2>/dev/null: a doppler error (command-not-found, auth, wrong config) must surface in
@@ -147,7 +182,28 @@ runs:
           sleep 1
         done
         if ! nc -z 127.0.0.1 5000 2>/dev/null; then
-          echo "::error::cloudflared TCP forward did not open on 127.0.0.1:5000 within 15s (CF Access registry_push token may be expired/missing, or the zot host is down)."
+          # #7242 / ADR-166. This used to offer two guesses in parentheses ("token may be
+          # expired/missing, or the zot host is down") — more honest than the docker-login
+          # site below, which offered only one, but still two causes nothing had measured.
+          # It now reports the caller's MEASURED verdict, from the shared library, so this
+          # site and the docker-login site cannot tell different stories.
+          # GUARDED: this step runs under `set -euo pipefail`, so an unguarded source of a
+          # missing helper would abort BEFORE the ::error:: printed — suppressing the only
+          # report of the failure. A diagnosis helper must never silence the failure it
+          # exists to explain.
+          DIAG=""
+          if [[ -n "${GITHUB_WORKSPACE:-}" && -r "${GITHUB_WORKSPACE}/scripts/zot-mirror-diagnosis.sh" ]]; then
+            # shellcheck source=/dev/null
+            source "${GITHUB_WORKSPACE}/scripts/zot-mirror-diagnosis.sh"
+            DIAG="$(zot_mirror_diagnosis "${TOKEN_VERDICT:-unmeasured}" "${TOKEN_CHECKED_AT:-}" "(not queried — the listener never came up, so no push was attempted)" "${TOKEN_CAUSE:-unknown}" || true)"
+          fi
+          [[ -n "$DIAG" ]] || DIAG="Registry-push token verdict for this run: ${TOKEN_VERDICT:-unmeasured}. (scripts/zot-mirror-diagnosis.sh could not be loaded, so no cause is being named here.)"
+          # Headline to the annotation, full text to a collapsed group: `::error::` stops at
+          # the first newline, and the diagnosis is multi-line.
+          echo "::error::cloudflared TCP forward did not open on 127.0.0.1:5000 within 15s — the bridge listener never bound, so nothing was pushed. ${DIAG%%$'\n'*}"
+          echo "::group::zot bridge diagnosis (full)"
+          printf '%s\n' "$DIAG"
+          echo "::endgroup::"
           cat /tmp/cloudflared-registry.log >&2 || true
           exit 1
         fi
@@ -158,6 +214,10 @@ runs:
         DOPPLER_TOKEN: ${{ inputs.doppler-token }}
         DOPPLER_PROJECT: soleur
         DOPPLER_CONFIG: prd
+        # #7242 — see the bridge step above for why these are env: and not ${{ }} inline.
+        TOKEN_VERDICT: ${{ inputs.token-verdict }}
+        TOKEN_CHECKED_AT: ${{ inputs.token-checked-at }}
+        TOKEN_CAUSE: ${{ inputs.token-cause }}
       # zot-push creds live in the `prd` config (written by zot-registry.tf). The bridge
       # listener is up (previous step), so `docker login 127.0.0.1:5000` reaches zot's /v2/
       # over the tunnel. --password-stdin (never argv). 127.0.0.1 is auto-insecure to docker.
@@ -185,7 +245,34 @@ runs:
         # far enough that the investigation never connected them and spent its budget on a
         # refuted missing-route hypothesis instead.
         if ! printf '%s' "$ZOT_PUSH_TOKEN" | docker login 127.0.0.1:5000 -u "$ZOT_PUSH_USER" --password-stdin; then
-          echo "::error::docker login to zot (127.0.0.1:5000) failed over the CF-tunnel bridge. Read the cloudflared log below, NOT the listener probe above — the probe only proves cloudflared bound the local port. A 'websocket: bad handshake' line means Cloudflare Access refused the upgrade, which is the stale-service-token shape: run 'doppler run -p soleur -c prd_terraform -- bash scripts/check-cloudflare-token-drift.sh' and set any DEAD REGISTRY_PUSH_ACCESS_TOKEN_* on the prd ROOT config."
+          # #7242 / ADR-166. This was the acute site and the repo's only `stale-service-token`
+          # literal. It asserted that a 'websocket: bad handshake' line MEANS Cloudflare Access
+          # refused the upgrade — an if-and-only-if that is simply false, and that on
+          # 2026-08-03 sent every operator to rotate a credential the calling job had verified
+          # live six minutes earlier. A bad handshake means the tunnel could not complete an
+          # origin dial; a crash-looping origin produces it with Access ADMITTING the request,
+          # which is exactly what happened. The log still deserves reading — what changes is
+          # that this message no longer tells you what you will find in it.
+          # GUARDED — see the listener step above: an unguarded source under `set -e` would
+          # abort before this ::error:: printed, suppressing the only report of the failure.
+          DIAG=""
+          if [[ -n "${GITHUB_WORKSPACE:-}" && -r "${GITHUB_WORKSPACE}/scripts/zot-mirror-diagnosis.sh" ]]; then
+            # shellcheck source=/dev/null
+            source "${GITHUB_WORKSPACE}/scripts/zot-mirror-diagnosis.sh"
+            # CALLER-NEUTRAL. This said "see the calling job's mirror step, which queries
+          # SOLEUR_ZOT_DISK" — true for reusable-release.yml and FALSE for the two inngest
+          # callers, which have no BETTERSTACK_QUERY_* and no such step. A shared component
+          # asserting an unmeasured fact about its caller is the exact class ADR-166 forbids,
+          # committed inside the fix for it. Name the marker; do not narrate a job you cannot see.
+          DIAG="$(zot_mirror_diagnosis "${TOKEN_VERDICT:-unmeasured}" "${TOKEN_CHECKED_AT:-}" "(not read by this action; the registry host's own restart series is the SOLEUR_ZOT_DISK marker in Better Stack, source registry_disk_prd)" "${TOKEN_CAUSE:-unknown}" || true)"
+          fi
+          # The fallback must stay ACTIONABLE STANDALONE for the same reason the `unmeasured`
+          # arm does: two of this action's three callers run no preflight, so they live here.
+          [[ -n "$DIAG" ]] || DIAG="Registry-push token verdict for this run: ${TOKEN_VERDICT:-unmeasured}. No cause is being named (scripts/zot-mirror-diagnosis.sh could not be loaded). Run 'doppler run -p soleur -c prd_terraform -- bash scripts/check-cloudflare-token-drift.sh' for the credential, and read the SOLEUR_ZOT_DISK marker in Better Stack for the registry host."
+          echo "::error::docker login to zot (127.0.0.1:5000) failed over the CF-tunnel bridge. Read the cloudflared log below, NOT the listener probe above — the probe only proves cloudflared bound the local port, not that the origin answered. A 'websocket: bad handshake' line means the tunnel could not complete its origin dial; it does NOT by itself distinguish an edge refusal from an origin that is down or restarting. ${DIAG%%$'\n'*}"
+          echo "::group::zot bridge diagnosis (full)"
+          printf '%s\n' "$DIAG"
+          echo "::endgroup::"
           echo "::group::cloudflared registry bridge log (tail 200)"
           tail -n 200 /tmp/cloudflared-registry.log 2>/dev/null || echo "(no /tmp/cloudflared-registry.log — cloudflared may not have started)"
           echo "::endgroup::"

@@ -75,6 +75,16 @@ BQ="${ZOT_BQ_OVERRIDE:-$SCRIPT_DIR/betterstack-query.sh}"
 # per boot >> CLIMB_N. Detection is WINDOW-bound, NOT poll-bound — the workflow's 30-min cadence
 # only governs MTTD, never whether a loop is caught. Do NOT shrink WINDOW below CLIMB_N x 5min.
 WINDOW="3h"
+# RECENT_BOOT_S — what "this host booted recently" MEANS, in seconds. Named rather than
+# inlined so the implementation and its tests cannot each pick a different number and both
+# pass, and DERIVED from WINDOW so the two cannot drift: a boot is "recent" exactly when it
+# falls inside the window this alarm reasons over. See the reboot-claim gate in
+# evaluate_nic() for why an undefined "recent" was a live defect (#7242).
+case "$WINDOW" in
+  *h) RECENT_BOOT_S=$(( ${WINDOW%h} * 3600 )) ;;
+  *m) RECENT_BOOT_S=$(( ${WINDOW%m} * 60 )) ;;
+  *)  RECENT_BOOT_S=10800 ;;
+esac
 # LOOKBACK discriminates PRODUCER-SILENT (reporter recently alive, now dark) from a fresh
 # never-installed host (no rows ever). 24h >> the 5-min emit + any plausible reboot window.
 LOOKBACK="24h"
@@ -288,11 +298,60 @@ evaluate_nic() {
   #     GREEN and the race is never reported.
   # Without either, a silently-self-healing race is invisible forever — a lost ceiling, since
   # today it at least eventually surfaces as an outage.
+  # #7242 — `reboot_count` is CUMULATIVE and PERSISTED on the root disk, so it survives every
+  # boot. Reading `max_rb > 0` as "the guard rebooted this host" therefore restates a fact
+  # that may be arbitrarily old as if it were current. Measured 2026-08-03: reboot_count=1
+  # alongside uptime_s=1570434 (18.2 DAYS) and an unchanged boot_id — the reboot it refers to
+  # happened over two weeks earlier.
+  #
+  # That false claim is not academic: it is what produced the two leading hypotheses in
+  # #7242 ("the registry host rebooted at 17:13", "confirm the connector re-registered after
+  # the reboot"). Both were investigated and refuted, and the host had not rebooted at all.
+  # A counter is evidence that something happened ONCE, never that it happened NOW.
+  #
+  # So the reboot claim needs in-window boot evidence. `uptime_s < RECENT_BOOT_S` is the
+  # direct measurement, and RECENT_BOOT_S is DERIVED from WINDOW rather than restated —
+  # a second hand-maintained constant is a second thing to drift.
+  # The claim itself is NOT wrong — reboot_count is carried across the reboot on the root
+  # disk, so on the resulting boot it does mean "this boot exists because the guard rebooted
+  # me". What is wrong is that it carries NO TIME. The advisory is re-emitted verbatim on
+  # every poll, so a convergence from weeks ago still reads as news, and a reader reasonably
+  # takes it as "the host rebooted just now". That is exactly what happened: the standing
+  # advisory was read as evidence of a 17:13 reboot on a host with 18.2 DAYS of uptime and an
+  # unchanged boot_id, which produced two of #7242's hypotheses and consumed the
+  # investigation that chased them.
+  #
+  # So anchor it. Every arm below states the boot age, and the not-recent arm says outright
+  # that no reboot happened in this window.
+  local recent_boot=false age=""
+  if [[ "${up:-}" =~ ^[0-9]+$ ]]; then
+    if   [[ "$up" -lt 3600   ]]; then age="$(( up / 60 ))m ago"
+    elif [[ "$up" -lt 172800 ]]; then age="$(( up / 3600 ))h ago"
+    else                              age="$(( up / 86400 ))d ago"
+    fi
+    [[ "$up" -lt "$RECENT_BOOT_S" ]] && recent_boot=true
+  fi
+  # More than one boot_id inside WINDOW is a reboot in-window regardless of what the newest
+  # row's uptime reads.
+  if [[ "$(printf '%s\n' "$trusted" | grep -oE 'boot_id=[A-Za-z0-9-]+' | sort -u | wc -l)" -gt 1 ]]; then
+    recent_boot=true
+  fi
+
   if [[ "$max_rb" -gt 0 ]] || [[ "$any_false" == true ]] || printf '%s\n' "$scoped" | grep -qE 'converged_by=reboot'; then
     NIC_VERDICT="ADVISORY"
-    if [[ "$max_rb" -gt 0 ]]; then
-      NIC_DETAIL="newest boot_id=${newest}: nic_ok=true reboot_count=${max_rb} — the NIC was ABSENT at boot and the guard converged it by REBOOTING"
-      NIC_CAUSE="the boot race is REAL on this host and the guard healed it by rebooting — H2 confirmed empirically. Not an outage: serving is fine. This is the standing signal that the race recurs (without it, a silently-self-healing race is never reported). Triage if reboot_count climbs toward the cap (2) across boots."
+    if [[ "$max_rb" -gt 0 ]] && [[ -z "$age" ]]; then
+      # No usable uptime_s: the boot cannot be placed in time at all. Report the counter as
+      # the undated fact it is rather than implying recency — fail toward no claim.
+      NIC_DETAIL="newest boot_id=${newest}: nic_ok=true reboot_count=${max_rb} (CUMULATIVE, no usable uptime_s) — cannot date this boot"
+      NIC_CAUSE="the boot race is REAL on this host and the guard healed it by rebooting — H2 confirmed empirically. Not an outage: serving is fine. WHEN is unknown: this row carries no usable uptime_s, and reboot_count is a cumulative root-disk counter, so this is NOT evidence of a recent reboot. Triage if reboot_count climbs toward the cap (2) across boots."
+    elif [[ "$max_rb" -gt 0 ]] && [[ "$recent_boot" == true ]]; then
+      NIC_DETAIL="newest boot_id=${newest}: nic_ok=true reboot_count=${max_rb} uptime_s=${up} — the NIC was ABSENT at boot and the guard converged it by REBOOTING, ${age} (WITHIN the last ${WINDOW})"
+      NIC_CAUSE="the boot race is REAL on this host and the guard healed it by rebooting ${age} — H2 confirmed empirically, and this one IS recent. Not an outage: serving is fine. This is the standing signal that the race recurs (without it, a silently-self-healing race is never reported). Triage if reboot_count climbs toward the cap (2) across boots."
+    elif [[ "$max_rb" -gt 0 ]]; then
+      # The reboot is real but OLD. State the age up front, because this arm is the one that
+      # gets misread as a live event.
+      NIC_DETAIL="newest boot_id=${newest}: nic_ok=true reboot_count=${max_rb} uptime_s=${up} — the guard converged this host by REBOOTING at its last boot, ${age}; NO reboot within the last ${WINDOW}"
+      NIC_CAUSE="the boot race is REAL on this host and the guard healed it by rebooting — H2 confirmed empirically. Not an outage: serving is fine. THE REBOOT WAS ${age}, NOT RECENT: this host has been up ${up}s under an unchanged boot_id, and reboot_count is a cumulative root-disk counter that survives every boot. Do NOT read this advisory as evidence of a reboot in the last ${WINDOW} (#7242: doing so produced two refuted hypotheses during a release-blocking investigation). Triage if reboot_count climbs toward the cap (2) across boots."
     else
       NIC_DETAIL="newest boot_id=${newest}: nic_ok=true now, but this boot ALSO emitted nic_ok=false earlier — reboot_count=0, so it healed with NO reboot"
       NIC_CAUSE="the attach landed AFTER the guest configured its network and the NIC came up on its own within the bounded wait — H2 confirmed empirically, healed without a reboot. Not an outage: serving is fine. This is the cheapest possible outcome of the race, and the reason the guard uses a cadence rather than a boot-only oneshot."

@@ -347,6 +347,45 @@ export NIC_FIX_MAIN="$TMP/n5.json"
 assert_nic_case           "N5 self-healed (nic_ok=true, reboot_count=1) → advisory not green" ADVISORY
 assert_nic_cause_contains "N5 advisory confirms H2 empirically" "H2 confirmed"
 
+# --- N20 (#7242 REGRESSION): an OLD reboot must not read as a recent one -------------------
+# reboot_count is CUMULATIVE and persisted on the root disk, so it survives every boot. The
+# advisory is re-emitted verbatim on every poll, which meant a convergence from weeks ago
+# still read as news. Measured 2026-08-03: reboot_count=1 alongside uptime_s=1570434 (18.2
+# DAYS) and an unchanged boot_id -- read as "the registry host rebooted at 17:13", which
+# became two of #7242's hypotheses and consumed the investigation that refuted them.
+#
+# The claim itself stays (the guard really did reboot this host, producing this boot); what
+# it gains is a DATE and an explicit denial of recency.
+reset_fix
+export ZOT_FIX_MAIN="$TMP/zot-healthy.json"
+{ nline "2026-07-10 10:05:00" "$BOOT_NEW" true already 0 1 1 1570434 "enp7s0:10.0.1.30/32"; } > "$TMP/n20.json"
+export NIC_FIX_MAIN="$TMP/n20.json"
+assert_nic_case           "N20 reboot_count=1 with 18d uptime → still advisory" ADVISORY
+assert_nic_cause_contains "N20 dates the reboot instead of implying it just happened" "18d ago"
+assert_nic_cause_contains "N20 states outright that the reboot was NOT recent" "NOT RECENT"
+# The H2 finding is preserved -- this is a dating fix, not a suppression.
+assert_nic_cause_contains "N20 still confirms H2 (the fix dates the claim, it does not drop it)" "H2 confirmed"
+
+# --- N21 (#7242): a reboot INSIDE the window is still reported as recent -------------------
+# The complement of N20, and the half that proves the gate is not simply always-false: a
+# genuinely recent convergence must still say so.
+reset_fix
+export ZOT_FIX_MAIN="$TMP/zot-healthy.json"
+{ nline "2026-07-10 10:05:00" "$BOOT_NEW" true already 0 1 1 1800 "enp7s0:10.0.1.30/32"; } > "$TMP/n21.json"
+export NIC_FIX_MAIN="$TMP/n21.json"
+assert_nic_case           "N21 reboot_count=1 with 30m uptime → advisory" ADVISORY
+assert_nic_cause_contains "N21 reports a genuinely recent reboot as recent" "30m ago"
+assert_nic_cause_contains "N21 says this one IS recent" "IS recent"
+
+# --- N22 (#7242): no usable uptime_s → the boot cannot be dated, so claim no recency -------
+# Fail toward no claim. An undatable boot must not inherit the recent reading by default.
+reset_fix
+export ZOT_FIX_MAIN="$TMP/zot-healthy.json"
+{ nline "2026-07-10 10:05:00" "$BOOT_NEW" true already 0 1 1 "unknown" "enp7s0:10.0.1.30/32"; } > "$TMP/n22.json"
+export NIC_FIX_MAIN="$TMP/n22.json"
+assert_nic_case           "N22 unusable uptime_s → advisory" ADVISORY
+assert_nic_cause_contains "N22 says WHEN is unknown rather than implying recency" "WHEN is unknown"
+
 # --- N6 (AC7 REGRESSION): NIC guard silent WHILE SOLEUR_ZOT_DISK still flows → SILENT ------
 # The zot PRODUCER_SILENT branch is computed ONLY when the zot window is empty. Here it is NOT
 # empty (the disk heartbeat is alive), so that branch never evaluates. A NIC absence check that

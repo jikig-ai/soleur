@@ -98,6 +98,23 @@ describe("ship Incident-PIR gate (#6813)", () => {
     expect(signals("network-outage-determination-with-real-outage.md")).toBe(true);
   });
 
+  // #7242: a DELIVERY outage — releases blocked, production pinned N versions
+  // behind — is a production incident that owes a PIR, but it is described with
+  // none of the user-facing verbs. The gate returned "no incident signal" on the
+  // PR fixing a four-hour release blockage, i.e. it missed the exact event class
+  // it exists to catch. Both directions pinned below.
+  test("a delivery outage (releases blocked / prod N releases behind) DOES signal", () => {
+    expect(signals("delivery-outage-releases-behind.md")).toBe(true);
+  });
+
+  // The negative half. A greenfield release-tooling plan is dense with `release`,
+  // `deploy`, `production` and `live` but describes no event. Widening the new
+  // alternation to a bare `release`/`blocked` would stay green without this —
+  // the #6813 false-positive class, re-entered through the fix for its opposite.
+  test("a greenfield release-tooling plan does NOT signal", () => {
+    expect(signals("release-tooling-plan-no-delivery-outage.md")).toBe(false);
+  });
+
   // The gate must own its own exit semantics: a no-signal run exits 1 cleanly,
   // never crashes, so a `set -euo pipefail` caller cannot misread it as an
   // infrastructure failure (the foot-gun the old inline `A && B && echo` chain had).

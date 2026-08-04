@@ -257,4 +257,21 @@ T0 remount + replay from LUKS", never a total loss.
   heartbeat rows spanning ≥7d, so that clock has not started.
   A worked consequence: on 2026-07-20 the daily probe stopped running entirely for ~6 hours and no
   dead-probe signal fired, because there is no live heartbeat to miss (#6812).
+- **`workspaces-luks-verify.yml` (daily `schedule: 41 4 * * *`) — the COMPENSATING channel while the
+  heartbeat above is unfed (#6808/#7196).** This is the only automatic verification of the at-rest
+  claim today. A failing scheduled run files one `ci/luks-verify` issue classified `drift` (the
+  at-rest claim itself — p0, `type/security`, and the counsel re-evaluation trigger), `readiness`
+  (an ops or inventory event; a `workspace_count_shortfall` files under its own title at p0 because
+  it is irreversible sole-copy data loss) or `unavailable` (nothing proven in either direction — do
+  NOT run a data-recovery procedure for it). `drift` and `readiness` also page ops by email;
+  `unavailable` deliberately does not.
+  Pull it without a dashboard:
+  `gh run list --workflow=workspaces-luks-verify.yml --event=schedule --limit 40 --json databaseId,conclusion,createdAt`
+  and `gh issue list --label ci/luks-verify --label action-required --state open`
+  (the `action-required` filter excludes the `luks/class-selftest` rehearsal issues).
+  **It is a compensating control, not a replacement for the heartbeat.** It runs on GitHub's
+  scheduler, which drops runs (#4189), and it cannot see a host-side probe that stops between its
+  own fires — which is exactly what the heartbeat exists to catch. The run-that-never-fires mode is
+  covered one layer out by the `workspaces-luks-verify` Sentry Crons monitor, which pages on two
+  consecutive missed or errored check-ins.
 - **`betteruptime_monitor.app`** — a refused container (failed unlock) is a hard down.
