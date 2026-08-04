@@ -4,8 +4,11 @@
 > The merge block STANDS until finding 2 completes.
 >
 > Update 2026-08-04: step 2's blocker (#7203) MERGED, and both step-4 prerequisites were
-> taken up — (b) retention carve-out is DONE and verified; (a) host-side pull proof is
-> AUTHORED but UNPROVEN and carries a promotion criterion that is not yet met. Steps 3
+> taken up — BOTH are AUTHORED, NEITHER is live. (b)'s carve-out is correct and verified
+> statically, but `cloud-init-registry.yml` has no auto-apply path, so merging changes
+> nothing live until `registry-host-replace` is dispatched; (a) carries a promotion
+> criterion that is not yet met. An earlier revision of this line said (b) was "DONE" —
+> that was a static-verification result written as a live-state claim. Steps 3
 > and 4 remain blocked, now on **#7242** (zot bridge down since 2026-08-03). Nothing in
 > this update advances the 2-of-4 count: a prerequisite is not a step.
 >
@@ -153,7 +156,19 @@ serve the host is a FATAL fresh boot on the only live web origin, not a graceful
   and install a probe that suppresses its own heartbeat if the bootstrap repo is not yet
   mirrored — converting an unproven assumption into a live alarm.
 
-- **(b) Retention cannot evict the pinned tag — DONE.** The keep-set kept only the 5
+- **(b) Retention cannot evict the pinned tag — AUTHORED, NOT LIVE.** Corrected 2026-08-04 after
+  review: this was first recorded as DONE, which overstated it. `cloud-init-registry.yml` reaches
+  the registry host ONLY via the `registry-host-replace` workflow_dispatch — `hcloud_server.registry`
+  appears in ZERO `-target=` arguments of the auto-apply job (verified: its only occurrences are in
+  the three dispatch-only jobs). zot-registry.tf resources are OPERATOR_APPLIED_EXCLUSIONS by CTO
+  ruling 2026-07-06. So merging authors the carve-out and changes nothing live; the count-5 eviction
+  window stays open until the dispatch is fired. Two consequences: the scheduled drift plan is
+  UNTARGETED, so it will report the registry host as needing replacement (exit 2) until then; and the
+  dispatch darks the registry while it replaces (the store survives — cloud-init discriminates on
+  `blkid TYPE`, skipping `luksFormat` on `crypto_LUKS` and guarding `mkfs.ext4`).
+  **PROMOTION CRITERION for (b):** fire `registry-host-replace` and confirm the live keep-set carries
+  the pin. ORDERING: it must run BEFORE step 3's `mirror_only` backfill lands `v1.1.24`, or the
+  backfill pushes into a store whose live policy still evicts on the 6th `v*` push. The keep-set kept only the 5
   most-recently-pushed `v*` tags per repo, and the file's own comment already warned that
   `mostRecentlyPushedCount` "can evict out of order under the ADR-096 crane-copy backfill
   path" — the very path used to place the pin. Added an anchored, count-free `keepTags`
@@ -382,7 +397,11 @@ review skill documents.
   echoes it.
 - architecture-strategist verified ADR-167's entire factual table line by line (ADR-088
   refutation, `ignore_changes`, all four Alternative-C zot-mirror claims) — all substantiated.
-- ADR numbering 155 is correct and unclaimed; `paused` is the right disposition vs supersede.
+- ~~ADR numbering 155 is correct and unclaimed~~ — **FALSE as of 2026-08-04, corrected here.** main
+  carries a different ADR-155 (cross-gate exemption markers). This branch's ADR renumbered to 167.
+  The line survived the 21-reference sweep because it spells the ordinal bare (`155`, not `ADR-155`),
+  so a `grep ADR-155` could not see it — the file-indexed-vs-claim-indexed miss. `paused` remains the
+  right disposition vs supersede.
 - The probe-target derivation itself is a genuine improvement and is well-tested for the
   cases it covers.
 

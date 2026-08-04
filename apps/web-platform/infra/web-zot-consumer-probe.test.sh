@@ -122,6 +122,25 @@ run_override_multi ",," "200"
 assert "a list with no non-empty repo => FATAL exit 1 (never a silent green)" "[[ '$EC' -eq 1 ]]"
 assert "a list with no non-empty repo => NO ping" "[[ '$PINGED' == no ]]"
 
+# --- the DELIVERABLE itself: production must actually SET a second repo -------------------------
+# Everything above drives ZOT_PROBE_REPO from the harness, so all 13 assertions stayed GREEN with
+# web-probe.tf reverted to the single-repo form — i.e. task 5(a) could ship dead with no signal.
+# Pin the composition, not just the script's ability to consume it.
+WP="$SCRIPT_DIR/web-probe.tf"
+assert "web-probe.tf comma-joins BOTH platform repos (task 5a is WIRED, not merely supported)" \
+  "grep -qE 'zot_probe_repo[[:space:]]*=[[:space:]]*join\(\",\", \[local\.zot_probe_repo_web, var\.inngest_bootstrap_repo\]\)' '$WP'"
+assert "var.inngest_bootstrap_repo defaults to the bootstrap repo PATH (no host, no tag)" \
+  "awk '/variable \"inngest_bootstrap_repo\"/,/^}/' '$SCRIPT_DIR/variables.tf' | grep -qE 'default[[:space:]]*=[[:space:]]*\"jikig-ai/soleur-inngest-bootstrap\"'"
+
+# --- fault in POSITION 1 (fixtures were order-asymmetric: every fault sat in position 2) --------
+# Without this, "ignore repo #1" survives — the probe silently stops covering soleur-web-platform,
+# the repo this probe family was built for, while the new bootstrap coverage keeps it green.
+run_override_multi "a/web,b/bootstrap" "404,200"
+assert "fault in POSITION 1 also suppresses (aggregation is order-independent)" "[[ '$PINGED' == no ]]"
+assert "the suppress message names a/web and NOT b/bootstrap" \
+  "grep -q 'a/web(404' '$MOUT' && ! grep -q 'b/bootstrap(' '$MOUT'"
+assert "the suppress message reports the true probed count (2, not 1)" "grep -q '2 repo(s) probed' '$MOUT'"
+
 # --- required-env gate (guards the -u/-f mutants below have creds to reach the probe) -----
 echo "--- seam: required-env gate ---"
 gate_ec=0
@@ -265,6 +284,14 @@ assert "zot probe RATE-LIMITS the canary (no re-emit within the window)" \
 run_canary 000 yes
 assert "zot probe canary fires INDEPENDENT of zot health (emits even on a 000 unreachable verdict)" \
   "grep -q 'SOLEUR_PROBE_CANARY' '$CANARY_OUT'"
+
+# Anti-vacuity floor: deleting the whole new assertion block exits 0 at "41 passed, 0 failed"
+# without it — measured. A FLOOR, not equality, so adding assertions never spuriously reds.
+MIN_ASSERTIONS=59
+if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= $MIN_ASSERTIONS — suite truncated." >&2
+  exit 1
+fi
 
 echo
 echo "=== $PASS passed, $FAIL failed ==="

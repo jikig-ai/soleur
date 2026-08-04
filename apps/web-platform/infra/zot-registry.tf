@@ -349,9 +349,9 @@ resource "hcloud_server" "registry" {
   #
   # NO LONGER SMALL (#7144, 2026-08-04). This comment used to read "zot's cloud-init is small
   # ... but budget for it anyway and verify the byte-exact size at the first terraform plan" —
-  # the budget half was never written, and the render has since reached 32,024 B against the
-  # 32,768 cap: ~744 B of headroom, the TIGHTEST of the three hosts, and the only one that was
-  # unguarded. `cloud-init-user-data-size.test.ts` now enforces REGISTRY_BUDGET alongside the
+  # the budget half was never written, and the render has since reached 31,572 B against the
+  # 32,768 cap: ~1,196 B of headroom, the TIGHTEST of the three hosts (web ~24.3 KB, git-data
+  # ~16.2 KB) and the only one that was unguarded. `cloud-init-user-data-size.test.ts` now enforces REGISTRY_BUDGET alongside the
   # long-standing web + git-data budgets. Consequence for the next editor: this file has no
   # room left for prose. Put rationale HERE (this .tf is not byte-budgeted) and leave only a
   # pointer in the YAML — the #6425/#6594 precedent. If a real multi-KB addition is ever
@@ -379,7 +379,23 @@ resource "hcloud_server" "registry" {
   #       merge them, so adding a second repo-scoped policy would REPLACE the whole keep-set for
   #       that repo — silently dropping the ADR-087 sha256-* cosign sig protection. That is why
   #       the carve-out lives inside the existing "**" policy instead of a bootstrap-only one.
-  # Update the pattern when the pin moves; registry-boot-guard.test.sh asserts all four.
+  # The pattern is DERIVED from cloud-init.yml's ZIREF pin by registry-boot-guard.test.sh, not
+  # restated: bumping the pin without updating this entry fails the suite loudly rather than
+  # leaving the carve-out protecting a tag nothing pulls. That test pins (1), (2), (3) and the
+  # single-policy half of (4); the "no second policy" half is pinned by the keepTags-block count.
+  #
+  # KNOWN RESIDUAL — the carve-out pins the IMAGE, not its SIGNATURE. The pinned tag is now
+  # immortal, but its cosign `sha256-<digest>.sig` tag stays bounded at mostRecentlyPushedCount
+  # 50, which is the same push-ORDER heuristic this entry exists to escape. After 50 newer sig
+  # pushes the image survives and its signature does not, and ADR-087 deploy-verify then fails
+  # at boot — fatal in a different place, not avoided. 50 sits far above the true requirement
+  # (~12-18 sig tags/repo at current scale), so this is a bound worth knowing, not a live risk;
+  # revisit if the sig-tag population grows.
+  #
+  # SCOPE — keepTags matches TAGS, not repos, so this exemption applies in EVERY repo under the
+  # "**" policy, not just the bootstrap one. A same-named v1.1.24 in soleur-web-platform would
+  # also be pinned forever. That is a consequence of property (4), not an oversight: a
+  # repo-scoped tag exemption is inexpressible without a second policy, which (4) forbids.
   user_data = base64gzip(templatefile("${path.module}/cloud-init-registry.yml", {
     # Mount the zot storage volume by its specific id (server.tf/cloud-init.yml by-id
     # pattern). Known at plan time; the attachment is a separate resource.

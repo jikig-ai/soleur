@@ -13,25 +13,34 @@ set -u
 # the repo lookup, cloud-init-registry.yml:341-345). So a bare `/v2/` 401-or-200 check proves only
 # that the auth gate answers, NEVER that the store SERVES. This probe presents the on-host zot
 # htpasswd Basic auth (ZUSER/ZTOK = ZOT_PULL_USER/ZOT_PULL_TOKEN, the same creds cloud-init uses for
-# `docker login`) and reads a REAL repository's tag list. Classification:
-#   200 = servable                       -> ping the heartbeat (healthy)
-#   404 = store empty / detached         -> the #6400-inside-the-probe case: SUPPRESS the ping so
-#                                            absence alarms (a servable auth gate over a dead store)
-#   401 = auth broke                     -> HARD failure (NOT "alive"): suppress AND exit non-zero,
-#                                            because absence-of-ping alone cannot distinguish a
-#                                            probe-auth misconfig from a genuinely down host
-#   5xx = wedged                         -> suppress (absence alarms)
-#   000 = unreachable (private net down) -> suppress (absence alarms — this is the L3 target signal)
+# `docker login`) and reads EACH listed repository's tag list. ZOT_PROBE_REPO is a COMMA-separated
+# LIST (#7144 task 5a); the per-repo classification is:
+#   200 = servable                       -> this repo is OK
+#   404 = store empty / detached         -> the #6400-inside-the-probe case (a servable auth gate
+#                                            over a dead store)
+#   401 = auth broke                     -> probe-auth misconfig; outranks every other fault
+#   5xx = wedged
+#   000 = unreachable (private net down) -> the L3 target signal
+# and the RUN-LEVEL verdict aggregates them ALL-MUST-SERVE:
+#   every repo 200            -> ping the heartbeat (healthy)
+#   any repo 401              -> suppress AND exit 3 (HARD failure, NOT "alive"): absence-of-ping
+#                                alone cannot distinguish a probe-auth misconfig from a down host
+#   any other non-200         -> suppress the ping so absence alarms; the message NAMES the repo
+#   list has no non-empty repo -> FATAL exit 1 (never a silent green)
+# A 200 on one repo therefore pings NOTHING unless every repo is 200 — that is the point: an
+# any-of rule would let a servable web repo mask an unservable bootstrap repo.
 #
 # NO `curl -f`: -f makes curl exit non-zero and emit NOTHING on 4xx/5xx, collapsing every non-200
 # into an empty CODE and destroying the classification. The `-w '%{http_code}'` capture is the whole
 # point. -u presents Basic auth; -m 10 bounds the probe; -o /dev/null discards the body.
 #
 # CONFIG IS ENV (delivered both by the SSH provisioner to web-1 AND baked verbatim into cloud-init
-# for future hosts): ZOT_ENDPOINT + ZOT_PROBE_REPO from /etc/default/web-zot-consumer-probe;
+# for future hosts): ZOT_ENDPOINT + ZOT_PROBE_REPO (comma-separated) from
+# /etc/default/web-zot-consumer-probe;
 # ZUSER/ZTOK/WEB_ZOT_CONSUMER_URL from the doppler-run env.
 #
-# TEST SEAM: SOLEUR_ZOT_PROBE_STATUS_OVERRIDE injects a CODE so the classification branches are
+# TEST SEAM: SOLEUR_ZOT_PROBE_STATUS_OVERRIDE injects a CODE (or a positional comma-list, one per
+# repo; a single code broadcasts to all) so the classification branches are
 # unit-testable without a live registry; SOLEUR_ZOT_PROBE_PING_LOG re-routes the heartbeat ping to
 # a file so a test can assert ping/no-ping. Neither is ever set in production. The -u/-f behavioral
 # properties are covered by a separate mock-HTTP-server test (web-zot-consumer-probe.test.sh).
@@ -125,6 +134,14 @@ for _i in "${!_REPOS[@]}"; do
     # transport failure (unreachable private net) yields the curl default 000.
     CODE=$(curl -s -u "$ZUSER:$ZTOK" -o /dev/null -w '%{http_code}' -m 10 "http://${ENDPOINT}/v2/${r}/tags/list" 2>/dev/null || echo 000)
     [ -n "$CODE" ] || CODE=000
+    # On a TRANSPORT failure curl writes 000 via -w AND exits non-zero, so the `|| echo 000` above
+    # appends a SECOND one and CODE becomes 000000 — which misses the 000) arm and lands in the
+    # catch-all. Not hypothetical: Better Stack carries live `unexpected code 000000` rows from
+    # BOTH web hosts, i.e. the documented L3 target-signal branch has never once executed in
+    # production. Normalising here rather than dropping the `|| echo 000` deliberately: the
+    # fallback is what the (c) -f mutation test uses to prove the absence of `curl -f` is
+    # load-bearing, and that coupling should not be broken as a side effect of this fix.
+    [ "$CODE" = "000000" ] && CODE=000
   fi
 
   case "$CODE" in

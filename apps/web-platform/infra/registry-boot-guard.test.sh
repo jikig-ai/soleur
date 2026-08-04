@@ -237,15 +237,50 @@ echo "--- structural: pinned-tag carve-out is exempt from count-based eviction (
 # Matched OUTSIDE assert(): it eval()s its condition, and grep -F of a JSON-escaped regex through
 # an extra eval layer is unreadable-and-wrong. The matched fragment ends `] }` with no count field,
 # so a single -F match proves BOTH "entry exists, anchored" and "carries no count" (property 1).
-pin_line=$(grep -nF '{ "patterns": ["^v1\\.1\\.24$"] }' "$CI" | head -1 | cut -d: -f1)
-vstar_line=$(grep -nF '"patterns": ["v.*"], "mostRecentlyPushedCount": 5' "$CI" | head -1 | cut -d: -f1)
+# COMMENT-STRIPPED. Two mutations proved the un-stripped form vacuous at 82/0 green: quoting the
+# JSON entry verbatim in the explanatory comment (the single most likely next edit) satisfied both
+# (a) and (b) with the real entry MOVED BELOW `v.*`, and again with it DELETED outright. $CI is not
+# comment-stripped and line 71 is a comment about this exact entry, so a whole-file grep reads it.
+# This suite already said so at the head of this block ("Anchor on the keepTags JSON fragments, NOT
+# comment prose") — the new assertions regressed on guidance 30 lines above them.
+CI_CODE="$(mktemp -t regci.XXXXXXXX)"
+grep -vE '^[[:space:]]*#' "$CI" > "$CI_CODE"
+# The pin tag is DERIVED from the live pull pin, never restated: cloud-init.yml's ZIREF is the ref
+# the web host actually pulls, so bumping the pin without updating retention now fails loudly here
+# instead of silently leaving the carve-out protecting a tag nothing pulls.
+PIN_TAG=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$SCRIPT_DIR/cloud-init.yml" | head -1 | sed 's/.*://')
+assert "the live pull pin tag is extractable from cloud-init.yml (guards the derivation itself)" \
+  "[[ '$PIN_TAG' =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]"
+PIN_RE="^${PIN_TAG//./\\.}$"
+PIN_JSON="${PIN_RE//\\/\\\\}"
+pin_line=$(grep -nF "{ \"patterns\": [\"$PIN_JSON\"] }" "$CI_CODE" | head -1 | cut -d: -f1)
+vstar_line=$(grep -nF '"patterns": ["v.*"], "mostRecentlyPushedCount": 5' "$CI_CODE" | head -1 | cut -d: -f1)
+n_pin=$(grep -cF "$PIN_JSON" "$CI_CODE")
+assert "exactly ONE pinned-tag entry (a duplicate cannot split the ordering check)" \
+  "[ '$n_pin' = '1' ]"
 assert "(a) pinned-tag keepTags entry exists, anchored, and carries NO count field" \
   "[ -n '$pin_line' ]"
 assert "(b) pin entry precedes the v.* count entry (first-match-wins ordering is load-bearing)" \
   "[ -n '$pin_line' ] && [ -n '$vstar_line' ] && [ '$pin_line' -lt '$vstar_line' ]"
-n_policy_repos=$(grep -cF '"repositories": ["**"]' "$CI")
-assert "(c) still exactly ONE retention policy (a 2nd would REPLACE, not merge, the keep-set)" \
-  "[ '$n_policy_repos' = '1' ]"
+# Counts policy OBJECTS, not the `**` literal. The literal form passed at 82/0 with a SECOND,
+# repo-scoped policy injected above the catch-all — the exact mutation this assertion's own label
+# warns about, which drops the ADR-087 sha256-* sig protection AND the pin for the bootstrap repo.
+# NB: `"repositories":` also appears in the accessControl block, so counting it reads 2 on a
+# correct file. `"keepTags"` is retention-only and exactly one per policy object.
+n_policies=$(grep -cE '^[[:space:]]*"keepTags":' "$CI_CODE")
+assert "(c) still exactly ONE retention policy OBJECT (a 2nd would REPLACE, not merge, the keep-set)" \
+  "[ '$n_policies' = '1' ]"
+
+rm -f "$CI_CODE"
+
+# Anti-vacuity floor (the inngest-inventory.test.sh shape). Without it, deleting the whole new
+# assertion block exits 0 at "79 passed, 0 failed" — measured. A FLOOR, not equality, so adding
+# assertions does not spuriously red.
+MIN_ASSERTIONS=84
+if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= $MIN_ASSERTIONS — suite silently truncated." >&2
+  exit 1
+fi
 
 echo ""
 echo "=== registry-boot-guard.test.sh: ${PASS} passed, ${FAIL} failed ==="
