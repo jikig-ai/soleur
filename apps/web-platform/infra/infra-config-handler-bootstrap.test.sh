@@ -199,6 +199,33 @@ assert "deploy_pipeline_fix declares a depends_on list" "[[ -n \"\$DPF_DEPENDS\"
 assert "the list names terraform_data.infra_config_handler_bootstrap" \
   "printf '%s' \"\$DPF_DEPENDS\" | grep -qE 'terraform_data\\.infra_config_handler_bootstrap'"
 
+# --- #7220 B6: the grant is PROVEN, and activation is asserted, not assumed ---
+echo ""
+echo "--- #7220 B6: daemon-reload grant + DropInPaths activation assertions ---"
+
+# AC4 -- a POLICY probe, not just a text grep. Every sibling here asserts the alias NAME
+# appears in the sudoers file, which proves the bytes landed and says nothing about whether
+# sudo actually grants the command: a valid file whose User_Spec is missing, or whose alias
+# never reaches `deploy`, passes a grep and denies at runtime. `sudo -n -l -U deploy <cmd>`
+# resolves the real policy for the real user and exits non-zero if it is not permitted --
+# which is the property #7220 needed and did not have.
+assert "post-write asserts the daemon-reload grant landed in the file" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'grep -q SYSTEMCTL_DAEMON_RELOAD /etc/sudoers.d/deploy-inngest-bootstrap'"
+assert "post-write PROBES sudo policy for daemon-reload (not just the text)" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'sudo -n -l -U deploy /usr/bin/systemctl daemon-reload'"
+assert "post-write probes sudo policy for the --collect self-restart argv" \
+  "printf '%s' \"\$BLOCK\" | grep -qF 'sudo -n -l -U deploy /usr/bin/systemd-run --collect'"
+
+# AC-B4 -- activation, not just reload. inngest-heartbeat and inngest-server carry drop-ins in
+# FILE_MAP but sit in NEITHER RESTART_MAP nor the grant set: their entire activation story IS
+# the daemon-reload. If those units exist on the host they have been running the pre-#7095
+# (revoked) credential ever since. Asserting DropInPaths is the difference between "we fixed
+# reload" and "we fixed what reload was for".
+assert "post-write asserts inngest-heartbeat drop-in is LOADED (DropInPaths)" \
+  "printf '%s' \"\$BLOCK\" | grep -qF 'DropInPaths inngest-heartbeat.service'"
+assert "post-write asserts inngest-server drop-in is LOADED (DropInPaths)" \
+  "printf '%s' \"\$BLOCK\" | grep -qF 'DropInPaths inngest-server.service'"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="
 if (( FAIL > 0 )); then

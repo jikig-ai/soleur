@@ -1318,6 +1318,32 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
       # activation is the exact defect R2 exists to close, so assert it here rather than
       # discovering it as a denied restart on the next credential rotation.
       "grep -q DROPIN_TRY_RESTART /etc/sudoers.d/deploy-inngest-bootstrap",
+      # #7220 — the daemon-reload grant landed. Without it the handler writes all 19 files and
+      # then dies at activation, which is the incident this whole PR exists to close.
+      "grep -q SYSTEMCTL_DAEMON_RELOAD /etc/sudoers.d/deploy-inngest-bootstrap",
+      # #7220 AC4 — POLICY PROBE, not another text grep. Every assertion above proves the BYTES
+      # landed; none proves sudo actually grants the command. A file that parses but whose
+      # User_Spec is missing, or whose alias never reaches `deploy`, passes every grep here and
+      # denies at runtime — which is precisely the failure shape #7220 had for three months
+      # while CI stayed green. `sudo -n -l -U deploy <cmd>` resolves the REAL policy for the
+      # REAL user and exits non-zero when the command is not permitted. -n so it can never
+      # block on a prompt during a provisioner.
+      "sudo -n -l -U deploy /usr/bin/systemctl daemon-reload >/dev/null",
+      "sudo -n -l -U deploy /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook >/dev/null",
+      # #7220 AC-B4 — ACTIVATION, not just reload. inngest-heartbeat.service and
+      # inngest-server.service carry drop-ins in FILE_MAP but appear in NEITHER RESTART_MAP nor
+      # the grant set: their entire activation story IS the daemon-reload. If those units exist
+      # on this host they have been running the pre-#7095 (revoked) credential ever since. This
+      # is the difference between "we fixed reload" and "we fixed what reload was for".
+      #
+      # Guarded on the unit being loaded at all: these units are not present on every host in
+      # the fleet, and a missing unit is not a failed activation. `systemctl show` exits 0 for
+      # an unknown unit, so LoadState is the discriminator, not the exit code.
+      # One explicit line per unit rather than a loop: each is independently greppable, so the
+      # drift guard can pin the units by name instead of trusting a loop variable to have
+      # covered them.
+      "if [ \"$(systemctl show -p LoadState --value inngest-heartbeat.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-heartbeat.service | grep -q 'doppler-token.conf' || { echo 'FATAL: inngest-heartbeat.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      "if [ \"$(systemctl show -p LoadState --value inngest-server.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-server.service | grep -q 'doppler-token.conf' || { echo 'FATAL: inngest-server.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
       # hooks.json re-registers the status hook + maps the state-reporter key (the
       # exact host drift that caused the #4804 freeze: stale hooks.json had neither).
       "grep -q infra-config-status /etc/webhook/hooks.json",
