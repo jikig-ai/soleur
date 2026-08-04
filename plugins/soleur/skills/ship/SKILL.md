@@ -2348,7 +2348,11 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
    Navigate to the repository root directory, then run `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged`.
 
-This detects `[gone]` branches (where the remote was deleted after merge), removes their worktrees, archives spec directories, deletes local branches, and pulls latest main so the next worktree branches from the current state.
+This detects `[gone]` branches (where the remote was deleted after merge), removes their worktrees, deletes local branches, and pulls latest main so the next worktree branches from the current state.
+
+**It does NOT durably archive spec directories — do not defer archival to it.** `cleanup-merged` does attempt an archive, but as an uncommitted filesystem `mv` in the bare root, and the `checkout-index -a -f` "sync on-disk files from git HEAD" step that runs afterwards re-materializes every tracked file at its original path. Nothing is committed either way, so the spec dir stays tracked at its LIVE path on `main`. The archives that actually exist under `specs/archive/` were committed by **compound's** automatic consolidation (`git mv` + commit on the feature branch), which is the only mechanism that persists.
+
+The practical consequence: **compound is the last point at which archival can happen.** If compound's consolidation is skipped or deferred — a legitimate choice when Phase 6 still needs `specs/<branch>/decision-challenges.md` at its live path to render Model Dissents — then archival does not happen at all, and completing it later costs a follow-up PR. Decide deliberately; do not assume a post-merge step will collect it. **Why:** PR #7240 deferred compound's archival so Phase 6 step 2.5 could read `decision-challenges.md`, on the strength of this sentence claiming `cleanup-merged` would archive post-merge. It did not, and the spec dir shipped unarchived.
 
 **If working from a worktree:** Navigate to the main repo root first, then run cleanup.
 

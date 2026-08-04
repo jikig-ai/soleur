@@ -139,7 +139,7 @@ lesson was forgotten.
 ## 5. Review found more defects in the guards than in the fix — three of them shipped green
 
 Ten agents reviewed the branch. The corrections table in
-`knowledge-base/project/specs/feat-one-shot-7216-7227-isluks-rc-and-bootstrap-diag/acceptance-verification.md`
+`knowledge-base/project/specs/archive/20260804-142911-feat-one-shot-7216-7227-isluks-rc-and-bootstrap-diag/acceptance-verification.md`
 runs to 11 rows; **more of them are defects in assertions this PR added than in the code it
 was fixing**, and three were introduced by the *fix* pass and were green when written:
 
