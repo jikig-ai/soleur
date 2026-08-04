@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Query Better Stack Telemetry logs/metrics via the ClickHouse HTTP SQL API.
 #
+# OUTPUT SHAPE: each row's `raw` column is DOUBLE-ENCODED JSON (a JSON string containing a JSON
+# document). A grep for a field name or a message substring against the raw line silently returns
+# nothing — the quotes are backslash-escaped. Decode first:
+#   … | jq -r '.raw | fromjson | "\(.SYSLOG_IDENTIFIER) \(.message)"'
+# Field-isolate on SYSLOG_IDENTIFIER from the decoded object rather than substring-matching the
+# line (#6475), or a CI job that merely PRINTED a marker name counts as an occurrence.
+#
 # Better Stack stores ingested logs in a ClickHouse warehouse queryable over
 # HTTP with plain SQL. This is the ONLY way to read HISTORICAL logs
 # programmatically — the `BETTERSTACK_LOGS_TOKEN` is INGEST-ONLY (write), and

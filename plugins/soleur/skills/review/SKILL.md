@@ -367,6 +367,14 @@ any-succeeded means continue.
 **It is NOT a binary gate for what you REPORT.** Partial coverage is the common case under
 load, and the two states are not interchangeable:
 
+- **A dead agent is RESUMABLE — resume it, do not respawn it.** An agent killed mid-work by a
+  session limit or `529` keeps its transcript; `SendMessage` to its id continues it with context
+  intact, so partial findings it had already established are recovered rather than re-derived. A
+  fresh spawn loses them. Measured 2026-08-04 (#7220): 11 of 11 agents died on a session limit and
+  all 11 resumed — one had reported `PROBE A found something` before dying, and only the resume
+  retrieved it. Corollary for Gate 2a: once the blocking condition clears, that is a RESUME signal,
+  not a fresh decision point — re-running the panel and continuing the pipeline is the default, and
+  stopping again needs a NEW reason.
 - **Retry agents that died on a transient error before accepting partial coverage.** A
   `529 Overloaded` is server-side and usually clears. Resume in small batches (3–4) with
   backoff between batches — re-spawning ten at once is what caused the cascade in the first
@@ -1022,8 +1030,23 @@ After emitting the marker, the calling skill's continuation gate takes over — 
 
    Run it even when step 2 committed something: the trailer is the durable
    machine-readable signal, and the commit subject is only a legacy fallback.
-4. Display: "Review complete. All findings are tracked as GitHub issues.
-   Run `/clear` then `/soleur:work` or `/soleur:ship` for maximum context headroom."
+4. **Continue to `/soleur:ship` in the same turn — review is not a stopping point.**
+   Findings are fixed inline (§5), so a clean review means the PR is ready to go
+   out, not ready to be handed over. Invoke `skill: soleur:compound` then
+   `skill: soleur:ship`, and let ship carry the PR to MERGED
+   (`rf-never-skip-qa-review-before-merging`, `wg-after-marking-a-pr-ready-run-gh-pr-merge`).
+
+   Do NOT end the turn by telling the operator to run the next skill. This step
+   used to read *"Run `/clear` then `/soleur:work` or `/soleur:ship` for maximum
+   context headroom"*, which reads as an instruction TO THE OPERATOR and is the
+   deferral `wg-verified-work-ships-without-asking` exists to stop — Soleur's
+   operator is non-technical and cannot clear that gate. If context headroom is
+   genuinely the constraint, say so and continue anyway; `/clear` is the
+   operator's choice to make, never a precondition you impose on finishing.
+
+   The only sanctioned pause is an irreversible production effect
+   (`hr-menu-option-ack-not-prod-write-auth`) — surface the exact command and
+   stop. A pending merge is not that.
 
 ### 7. End-to-End Testing (Optional)
 

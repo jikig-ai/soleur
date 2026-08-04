@@ -1121,3 +1121,70 @@ resource "sentry_cron_monitor" "scheduled_prod_version_drift" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# (#6808) Liveness for the DAILY /workspaces LUKS at-rest verification
+# (.github/workflows/workspaces-luks-verify.yml, on.schedule "41 4 * * *"). The check-in is posted
+# by that workflow's final `sentry-heartbeat` step and ONLY on a `schedule` event, so an operator
+# dispatch — including the alarm_selftest rehearsal — cannot forge liveness while the cron is dead.
+#
+# WHY THIS MONITOR EXISTS AT ALL. The workflow's own in-run alarm files an issue for every failure
+# it can observe, but it is structurally blind to three modes that produce SILENCE rather than a red
+# run: (1) the schedule stops firing (GitHub disables `schedule:` after 60 days of repository
+# inactivity, and on 2026-05-26 it dropped a scheduled run ENTIRELY — see scheduled_realtime_probe
+# above, #4189); (2) a pending run cancelled by concurrency supersession executes no steps, so no
+# `always()` construction inside the run can report it; (3) a run cancelled or torn down before its
+# `always()` steps complete — note the ORDINARY `timeout-minutes: 15` teardown is NOT in this set:
+# `always()` steps DO run on a timeout cancellation, which is exactly why the workflow chose
+# `always()` over `!cancelled()`, so a hung SSH normally files "nothing was proven" by itself.
+# What this monitor covers is the residual: a cancellation grace window too short for the alarm's
+# `gh` calls to land. A missed check-in is the only layer that sees any of them — and while #6808
+# keeps the host-side heartbeat unwired, this workflow is the ONLY automatic verification that
+# web-1's /mnt/data is still on the LUKS mapper, with a published present-tense Article 32 claim and
+# a 30-day claim_decay_trigger resting on it.
+#
+# BOTH constants below depart from the file's convention, and they are a PAIR — reverting either one
+# in isolation breaks something:
+#
+#   failure_issue_threshold = 2 (convention: 1). GitHub drops individual scheduled runs on this
+#   repo; #4189 records a whole daily run vanishing and paging a false "missed check-in" while the
+#   previous run had passed 5/5. At threshold 1 this monitor would page on that jitter, and a
+#   founder-grade alarm spent on jitter is an alarm nobody reads.
+#
+#   checkin_margin_minutes = 420 (convention for a daily cron: 1440, per scheduled_realtime_probe).
+#   1440 was that monitor's way of buying single-dropped-run tolerance THROUGH the margin, because
+#   its threshold stayed at 1. Here the threshold buys that tolerance instead, so the margin can go
+#   back to sizing GHA start-delay jitter (7h is generous against observed delays). Keeping BOTH the
+#   1440 margin and the threshold of 2 would push detection of a genuinely dark schedule past 2.5
+#   days; keeping the 420 margin with a threshold of 1 reintroduces the #4189 false page.
+#
+# Net: one dropped run is silent, and a schedule that is genuinely dark pages at ~31 h after the
+# first MISSED TICK (24 h to the next expected tick + the 7 h margin) — i.e. ~55 h since the last
+# PROVEN verification, which is the number that matters against the decay window. Comfortably
+# inside 30 days either way.
+#
+# WHAT THE THRESHOLD ALSO BUYS, stated because it is easy to miss: Sentry counts an explicit
+# `status=error` check-in as a failed check-in exactly like a missed one, so threshold 2 ALSO
+# means a single night of asserted failure opens no Sentry issue. That is acceptable only because
+# the in-run alarm files a GitHub issue on the FIRST occurrence — Sentry is the backstop for
+# silence, never the primary channel for an observed failure. If the alarm's filing path is ever
+# made best-effort, this threshold has to be revisited with it.
+#
+# max_runtime_minutes = 20 is DECORATIVE here, like every other value of it in this file: the
+# header above records that it only applies to two-step (in_progress -> ok/error) check-ins, and
+# the sentry-heartbeat composite posts a single terminal check-in. It is set to track the
+# workflow's own `timeout-minutes: 15` with headroom so the pair stays coherent if Sentry ever
+# gains single-check-in runtime detection — NOT because it currently flags a slow SSH run.
+#
+# #3958 residual, recorded rather than rediscovered: a monitor removed from this file is DEACTIVATED
+# in Sentry rather than deleted, so re-adding one with the same name adopts the existing object.
+resource "sentry_cron_monitor" "workspaces_luks_verify" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "workspaces-luks-verify"
+  schedule                = { crontab = "41 4 * * *" }
+  checkin_margin_minutes  = 420
+  max_runtime_minutes     = 20
+  failure_issue_threshold = 2
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}

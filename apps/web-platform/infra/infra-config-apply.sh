@@ -18,6 +18,192 @@ set -euo pipefail
 
 readonly LOG_TAG="infra-config-apply"
 
+# --- No-SSH fatal-error channel (#7220) -----------------------------------------------------
+# HOISTED TO THE TOP, deliberately. #7220 measured what the old placement cost: START_TS, the
+# state-file resets and the EXIT trap all sat BELOW the RESTART_SETTLE_SECS guard, so an
+# `exit 64` there left the PREVIOUS run's frame on disk and the gate certified a stale green for
+# an apply that had delivered nothing. Everything required for the handler to REPORT ITS OWN
+# DEATH is therefore established before the first line that can die.
+#
+# What #7220 actually was: `systemctl daemon-reload` (below) runs as User=deploy with no sudoers
+# grant. It returned "Interactive authentication required", `set -e` aborted AFTER all 19 files
+# were written, and the EXIT trap published a frame of hardcoded zeros. The gate then reported
+# `files_total=0` — the exact opposite of what happened — with no line, no command and no rc.
+# The handler could fail; it could not say how.
+#
+# Logger seam (AC14b), adopting the CUTOVER_LOGGER_CMD idiom the inngest cutover-flip script
+# already uses for its own no-SSH state channel (grep CUTOVER_LOGGER_CMD). The suite installs a
+# PATH shim globally; this seam lets a single arm intercept the fatal channel specifically.
+#
+# The precedent is cited by MECHANISM, not by filename, on purpose: cutover-inngest-workflow.
+# test.sh pins a topology invariant — the cutover-flip assets must appear on OCI/cloud-init
+# surfaces and NEVER on a webhook surface like this file — using a bare `grep -qF <filename>`,
+# which cannot tell a delivery from a comment. Naming the file here would false-trip it.
+LOGGER_CMD="${INFRA_CONFIG_LOGGER_CMD:-logger}"
+
+# State file for observability (#4554). Queryable via /hooks/infra-config-status.
+STATE_FILE="${INFRA_CONFIG_STATE:-/var/lock/infra-config-apply.state}"
+START_TS=$(date +%s)
+# The ERR->EXIT handoff slot. A FILE, not a variable (AC9), and LAST-WRITER-WINS.
+#
+# Why a file: a fatal inside `$( )` runs the ERR trap in a CHILD shell, so the parent's EXIT
+# trap can only learn about it through something that crosses the process boundary.
+#
+# Why last-writer-wins, which is NOT obvious and was measured on bash 5.2.21 both ways:
+# when several ERR traps fire for one failure (a child, then the enclosing parent), the LAST
+# write is the outermost frame. Keeping the FIRST instead looks like it should be better —
+# "the innermost failure is the root cause" — and for a nested plain command it is. But for a
+# PIPELINE bash reports the LAST ELEMENT, so first-writer-wins recorded
+# `awk "{print $1}"` for a failure that was actually `sha256sum`'s: it names a command that
+# SUCCEEDED. The outer frame (`local_sha=$(sha256sum … | awk …)`) is coarser but can never
+# point at the wrong command, and `fatal_rc` carries the true status either way. A coarse
+# truth beats a precise lie in a channel whose whole purpose is diagnosis.
+# For #7220's own shape — a top-level `systemctl daemon-reload` — both are identical.
+FATAL_FILE="${STATE_FILE}.fatal"
+
+# Clear stale sentinels from the prior run (same pattern as ci-deploy.sh:105).
+# #7103 R2 3.3 — and the STATE FILE itself, so an apply that dies before writing one reads as
+# "no_prior_apply" rather than serving the PREVIOUS apply's frame as if it were current.
+#
+# Not cosmetic. The gate's poll window is ~18s while two synchronous try-restarts can exceed it,
+# and on a handler-only apply (the handler is not in FILE_MAP) no payload byte changes — so a
+# stale frame would satisfy both the count and the content invariants and certify a `restarts`
+# array produced by an earlier run. That is #6594's latched false-green reproduced inside the
+# very mechanism built to end it.
+# `|| true` is load-bearing, not decoration. STATE_FILE defaults under /var/lock -> /run/lock,
+# which is mode 1777 and NOT covered by webhook.service's PrivateTmp (that covers /tmp and
+# /var/tmp only). Sticky-bit semantics mean a file owned by another local UID cannot be unlinked
+# here, so an unguarded `rm -f` would abort the handler at this line under `set -e` — a denial of
+# the ONLY no-SSH remediation path, triggered by any local user creating one path. Failing to
+# clear a stale sentinel is survivable; refusing to start is not.
+rm -f "${STATE_FILE}.final" "$FATAL_FILE" 2>/dev/null || true
+rm -f "$STATE_FILE" 2>/dev/null || true
+
+TMPFILES=()
+
+# errtrace propagates ERR into functions, command substitutions and subshells. Without it a
+# fatal inside `$( )` — where most of this script's probes live — leaves no trace at all.
+set -o errtrace
+
+# ERR trap: PURE ASSIGNMENT plus one redirect. No logger, no subshell, no sanitizer, no
+# branching. All emission happens in on_exit, which runs only once and only on the real exit.
+# That makes a FALSE `SOLEUR_INFRA_CONFIG_FATAL` structurally impossible rather than
+# test-verified.
+#
+# THE SINGLE QUOTES ARE LOAD-BEARING. Double quotes would expand $LINENO and $BASH_COMMAND at
+# trap-DEFINITION time, permanently pinning the trap to its own line and its own text — the
+# instrument reporting itself as the fault, forever.
+#
+# Verified on bash 5.2.21 (the ubuntu-24.04 target image, not just the dev box): this does NOT
+# fire for `[[ cond ]] && x=y` with a false test, for `v=$(cmd) || v=""`, or for anything under
+# `if`/`!` — the idioms this script is built from. Only a genuine unhandled non-zero fires it.
+trap 'FATAL_RC=$?; FATAL_LINE=$LINENO; FATAL_CMD=$BASH_COMMAND; printf "%s\n%s\n%s\n" "$FATAL_RC" "$FATAL_LINE" "$FATAL_CMD" > "$FATAL_FILE" 2>/dev/null || true' ERR
+
+# EXIT trap: on non-zero exit without a .final sentinel, publish the "unhandled" frame — now
+# carrying WHERE it died, WHAT died, and how much had already landed.
+#
+# #7103 R2 3.3 — the payload carries schema_version:2 and an EMPTY restarts array. An unhandled
+# abort must report itself as UNHANDLED, not trip the gate's restarts contract check; exit_code
+# is non-zero here, which is what the gate adjudicates on first.
+on_exit() {
+  # rc FIRST — every command below overwrites $?.
+  local rc=$?
+  # DISARM ERR IMMEDIATELY, as the first statement after the capture.
+  #
+  # MEASURED (bash 5.2.21 and 5.3.9, #7220 AC10): a failing command inside an ARMED EXIT trap
+  # both fires ERR and turns `exit 0` into rc=1 — and `trap - ERR` alone suppresses the marker
+  # but NOT the status flip. Enriching this trap without the full shape below would turn a
+  # GREEN apply RED on the one host that has no SSH runbook: the instrument becoming the
+  # outage. Hence all three of: capture-first, disarm here, every statement `|| true`, and the
+  # explicit `exit "$rc"` re-pin at the end.
+  trap - ERR
+
+  local f_rc=0 f_line=0 f_cmd="" f_cmd_safe=""
+  # `-O` (owned by the effective UID) is a TRUST gate, not a tidiness check, and it is why this
+  # is not a plain `-f`. The handoff lives under /run/lock (mode 1777), so any local UID can
+  # create this path before we do. Since #7220 this file is an INPUT — it decides fatal_line,
+  # which the gate turns into `fatal_mode=1`, which SUPPRESSES two genuine diagnostics. A planted
+  # file could therefore steer the operator to a fabricated line while silencing the real ones.
+  # `-f` alone would believe it. `-O` means we only ever read back what this process wrote.
+  # (`-f` is retained ahead of it so a FIFO planted at the path can never block the read.)
+  if [[ -f "$FATAL_FILE" ]] && [[ -O "$FATAL_FILE" ]]; then
+    { IFS= read -r f_rc || true; IFS= read -r f_line || true; IFS= read -r f_cmd || true; } < "$FATAL_FILE" || true
+  fi
+  [[ "$f_rc"   =~ ^[0-9]+$ ]] || f_rc=0
+  [[ "$f_line" =~ ^[0-9]+$ ]] || f_line=0
+  # An explicit `exit N` (the RESTART_SETTLE_SECS guard below) is not an ERR, but it IS a death
+  # the operator must see attributed. Carry the process status when no ERR fired; a clean exit
+  # leaves this 0, so the field is still "zeroed when ERR never fired" (AC12).
+  [[ "$f_rc" -ne 0 ]] || f_rc="$rc"
+
+  # Same sanitizer as the restart-stderr path below. The charset EXCLUDES '"' and '\', which is
+  # what keeps the frame valid JSON BY CONSTRUCTION rather than by escaping — load-bearing,
+  # because this string is the only free-form upstream text that reaches the frame.
+  f_cmd_safe=$(printf '%s' "$f_cmd" | tr -d '\000-\037' | tr -c 'A-Za-z0-9 ._:/=-' '?' | cut -c1-200) || f_cmd_safe=""
+
+  # --- What counts as a DEATH (as opposed to a non-zero accounting exit) --------------------
+  # `.final` alone is the WRONG discriminator on both arms, and review proved it in both
+  # directions before this predicate existed:
+  #
+  #   * Using `! -f .final` alone SUPPRESSED a real death. The webhook self-restart below runs
+  #     AFTER the frame is published, and it is a second ungranted `sudo`. When it failed, the
+  #     published frame still said `exit_code:0` — the gate adjudicates on exit_code first, so it
+  #     PASSED. #7220's exact shape, relocated ~200 lines later, invisible to the instrument
+  #     built for it.
+  #   * Using `rc != 0` alone INVENTED a death. A `missing_env` partial delivery (the documented
+  #     #4804 self-heal) completes, publishes a correct frame, and exits 1 for accounting. That
+  #     emitted `SOLEUR_INFRA_CONFIG_FATAL: line=0 rc=1 cmd=` — a fatal with no attribution, on
+  #     the channel the annotation tells the operator to grep.
+  #
+  # The honest question is "did the handler DIE", and the answer is: it exited non-zero AND
+  # either never published a frame, or an ERR actually fired. `f_line > 0` is the ERR's own
+  # fingerprint; an accounting exit leaves it 0 because no ERR ran.
+  local died=0
+  if [[ "$rc" -ne 0 ]] && { [[ ! -f "${STATE_FILE}.final" ]] || [[ "$f_line" -gt 0 ]]; }; then
+    died=1
+  fi
+
+  if [[ "$died" -eq 1 ]]; then
+    # A death AFTER a successful publish must CORRECT the frame, not leave it green — but it must
+    # keep the accounting the run actually earned, so the files[]/restarts[] the operator needs
+    # survive. `reason` distinguishes the two shapes for anyone reading the frame directly.
+    local reason="unhandled" files_arr="[]" restarts_arr="[]"
+    if [[ -f "${STATE_FILE}.final" ]]; then
+      reason="fatal_after_publish"
+      files_arr="[${FILES_JSON:-}]"
+      restarts_arr="[${RESTARTS_JSON:-}]"
+    fi
+    # ONE branchless printf: fatal_* are emitted UNCONDITIONALLY (zeroed when ERR never fired),
+    # so "valid JSON in both cases" is true by construction rather than by a branch that can rot.
+    #
+    # The `:-0` defaults are MANDATORY, not defensive. This trap is installed above
+    # WRITTEN_COUNT=0, and measured on the target bash: a bare `$WRITTEN_COUNT` under `set -u`
+    # makes an abort in that window write NO FRAME AT ALL — which cat-infra-config-state.sh
+    # reports as `no_prior_apply`, i.e. "the handler never ran". The instrument would erase
+    # exactly the death it exists to report.
+    printf '{"schema_version":2,"start_ts":%d,"end_ts":%d,"exit_code":%d,"reason":"%s","files_written":%d,"files_failed":%d,"files_total":%d,"fatal_rc":%d,"fatal_line":%d,"fatal_cmd":"%s","files":%s,"restarts":%s}\n' \
+      "$START_TS" "$(date +%s)" "$rc" "$reason" \
+      "${WRITTEN_COUNT:-0}" "${FAIL_COUNT:-0}" "${TOTAL_COUNT:-0}" \
+      "$f_rc" "$f_line" "$f_cmd_safe" "$files_arr" "$restarts_arr" > "$STATE_FILE" 2>/dev/null || true
+  fi
+
+  # The journald arm of the same fact. Dual-channel on purpose: the frame needs the status
+  # endpoint to be reachable, journald->Vector->Better Stack does not.
+  #
+  # SAME `died` PREDICATE as the frame arm — deliberately one variable, computed once. The
+  # precedent this trap copies (`emit_state` in the inngest cutover-flip script) writes its state
+  # slot and its logger line from ONE call with ONE payload; splitting them into two arms with
+  # two predicates is what let them disagree, and both disagreements were live bugs.
+  if [[ "$died" -eq 1 ]]; then
+    "$LOGGER_CMD" -t "$LOG_TAG" "SOLEUR_INFRA_CONFIG_FATAL: line=$f_line rc=$f_rc files_written=${WRITTEN_COUNT:-0} files_total=${TOTAL_COUNT:-0} cmd=$f_cmd_safe" 2>/dev/null || true
+  fi
+
+  rm -f "${TMPFILES[@]}" "${STATE_FILE}.final" "$FATAL_FILE" 2>/dev/null || true
+  # Re-pin the ORIGINAL status. Without this the trap's own work decides the exit code.
+  exit "$rc"
+}
+trap on_exit EXIT
+
 # --- File map (hardcoded — no generic JSON, no jq) ---
 # Each entry: ENV_VAR_NAME | DEST_PATH | MODE | OWNER
 # DEST_PATH values are interpolated unescaped into the state JSON ("file":"...");
@@ -104,11 +290,22 @@ INSTALL_HELPER="${INFRA_CONFIG_INSTALL_HELPER:-/usr/local/bin/infra-config-insta
 # none hypothetical: the entry graded `skipped/unit_inactive` forever, making the gate's warning
 # arm the STEADY STATE on a correct host rather than an edge case (the alert fatigue #7103 B3
 # names); the grant bought nothing, because a timer-driven oneshot re-reads its drop-in on its
-# next tick after the `daemon-reload` this handler already performs; and an apply landing inside
+# next tick after the `daemon-reload` this handler PERFORMS ON PAPER — see below; and an apply landing inside
 # the heartbeat's brief active window could try-restart it, find it exited two seconds later, and
 # grade `noop_not_active` — a spurious HARD RED on the sole no-SSH remediation path.
 # Dropping it also retires one root-restart grant on the host that cannot be replaced, which is
 # the direction ADR-159 argues for: do not widen the surface to buy nothing.
+#
+# CORRECTION (#7220): the clause above — and ADR-159, which quotes this comment as its evidence —
+# assumes the `daemon-reload` below actually runs. It does not. It executes as User=deploy with
+# no sudoers grant and has since the line was introduced, so it has never reconciled anything.
+# The reasoning for dropping inngest-heartbeat still holds on its other legs (a timer-driven
+# Type=oneshot with no RemainAfterExit reads `inactive` on nearly every apply, so the entry
+# graded skipped/unit_inactive forever and the grant bought nothing). But the specific premise
+# "its drop-in is re-read after the reload this handler already performs" is FALSE today. The
+# grant that makes it true is PR-B; ADR-159's own Decision text is amended there. Stated here
+# because a file that contradicts itself about its central capability misleads whoever reads it
+# next, and this file's own header now says the reload is ungranted.
 RESTART_MAP=(
   "vector.service|/etc/systemd/system/vector.service.d/10-vector-doppler-token.conf"
 )
@@ -190,38 +387,6 @@ ts_epoch() {
   [[ "$e" =~ ^[0-9]+$ ]] || { printf 'x'; return 0; }
   printf '%s' "$e"
 }
-
-# State file for observability (#4554). Queryable via /hooks/infra-config-status.
-STATE_FILE="${INFRA_CONFIG_STATE:-/var/lock/infra-config-apply.state}"
-START_TS=$(date +%s)
-
-# Clear stale sentinel from prior run (same pattern as ci-deploy.sh:105)
-rm -f "${STATE_FILE}.final"
-# #7103 R2 3.3 — and the STATE FILE itself, so an apply that dies before writing one reads as
-# "no_prior_apply" rather than serving the PREVIOUS apply's frame as if it were current.
-#
-# Not cosmetic. The gate's poll window is ~18s while two synchronous try-restarts can exceed it,
-# and on a handler-only apply (the handler is not in FILE_MAP) no payload byte changes — so a
-# stale frame would satisfy both the count and the content invariants and certify a `restarts`
-# array produced by an earlier run. That is #6594's latched false-green reproduced inside the
-# very mechanism built to end it.
-rm -f "$STATE_FILE"
-
-# EXIT trap: on non-zero exit without a .final sentinel, write "unhandled" state.
-# Also cleans up temp files and the sentinel. files_total:0 is a "no-accounting"
-# sentinel (the trap fires before/independent of the write loop and before
-# TOTAL_COUNT is set); it pairs with files_written:0/files_failed:0 and is
-# harmless to the CI gate, which fails on the non-zero exit_code first.
-TMPFILES=()
-# #7103 R2 3.3 — the trap payload carries schema_version:2 and an EMPTY restarts array. An
-# unhandled abort must report itself as UNHANDLED, not trip the gate's restarts contract check:
-# the gate fails on a schema_version>=2 frame whose array does not cover every RESTART_MAP unit,
-# and an abort frame legitimately covers none. exit_code is non-zero here, which is what the
-# gate adjudicates on first.
-trap 'rc=$?; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then
-  printf "{\"schema_version\":2,\"start_ts\":%d,\"end_ts\":%d,\"exit_code\":%d,\"reason\":\"unhandled\",\"files_written\":0,\"files_failed\":0,\"files_total\":0,\"files\":[],\"restarts\":[]}\n" \
-    "$START_TS" "$(date +%s)" "$rc" > "$STATE_FILE" 2>/dev/null || true
-fi; rm -f "${TMPFILES[@]}" "${STATE_FILE}.final"' EXIT
 
 # NOTE: env vars are validated PER FILE inside the write loop below (missing_env
 # arm), NOT upfront. The former upfront all-or-nothing `exit 1` caused the
@@ -392,10 +557,24 @@ if [[ -f "$hooks_dest" ]] && command -v jq >/dev/null 2>&1; then
     [[ -n "$cmd_path" ]] || continue
     case "$cmd_path" in /usr/local/bin/*) : ;; *) continue ;; esac
     if [[ ! -e "${DESTDIR}${cmd_path}" ]]; then
-      logger -t "$LOG_TAG" "SOLEUR_INFRA_CONFIG_HOOK_ORPHAN dangling_hook_command=$cmd_path reason=script_not_on_disk_after_push"
-      echo "ERROR: hooks.json advertises $cmd_path but no script is on disk after this push — webhook exec of this hook would fast-500 (dangling hook)" >&2
+      # SANITIZED (#7220 review). Unlike every FILE_MAP dest — which the map's own header pins as
+      # JSON-safe by construction — this value is read from the just-delivered hooks.json, and
+      # only its /usr/local/bin/ PREFIX is constrained; the tail is arbitrary. Two live defects
+      # followed from emitting it raw, and both target the channel #7220 just built:
+      #   1. LOG FORGERY. `while IFS= read -r` splits on \n only, so U+2028/U+2029/0x7f survive
+      #      into journald -> Better Stack. A crafted tail could forge a green-looking
+      #      `SOLEUR_INFRA_CONFIG_FATAL: … rc=0 …` row into the exact query this PR's annotation
+      #      tells the operator to run.
+      #   2. FRAME BREAK. A `"` or `\` in the tail is interpolated unescaped into FILES_JSON
+      #      below, making the whole frame unparseable — so EVERY jq in the gate returns MISSING,
+      #      including fatal_line, and the fatal channel goes dark in the one situation it exists
+      #      for. (It fails CLOSED — the gate still reds — but it reds mute.)
+      # Same idiom as the restart-stderr scrub; the charset excludes '"' and '\' by construction.
+      cmd_path_safe=$(printf '%s' "$cmd_path" | tr -d '\000-\037' | tr -c 'A-Za-z0-9 ._:/=-' '?' | cut -c1-200) || cmd_path_safe="?"
+      logger -t "$LOG_TAG" "SOLEUR_INFRA_CONFIG_HOOK_ORPHAN dangling_hook_command=$cmd_path_safe reason=script_not_on_disk_after_push"
+      echo "ERROR: hooks.json advertises $cmd_path_safe but no script is on disk after this push — webhook exec of this hook would fast-500 (dangling hook)" >&2
       [[ -n "$FILES_JSON" ]] && FILES_JSON+=","
-      FILES_JSON+="{\"file\":\"$cmd_path\",\"sha256\":\"\",\"status\":\"failed\",\"reason\":\"orphan_hook_command\"}"
+      FILES_JSON+="{\"file\":\"$cmd_path_safe\",\"sha256\":\"\",\"status\":\"failed\",\"reason\":\"orphan_hook_command\"}"
       FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
   done < <(jq -r '.[]."execute-command" // empty' "$hooks_dest" 2>/dev/null || true)
@@ -546,13 +725,26 @@ if [[ "$FAIL_COUNT" -gt 0 ]]; then
   EXIT_CODE=1
 fi
 
-touch "${STATE_FILE}.final"
+# NOTE (#7220 A5): the `.final` sentinel is touched AFTER a successful `mv`, not here. It is the
+# EXIT trap's "a real frame was published, do not overwrite it" flag, so touching it before the
+# publish made "completed, but the frame never landed" indistinguishable from "never ran" —
+# the trap saw the sentinel and stayed silent about a failure it could have described.
 state_tmp=$(mktemp "${STATE_FILE}.XXXXXX" 2>/dev/null) || {
   logger -t "$LOG_TAG" "write_state: mktemp failed for STATE_FILE=$STATE_FILE"
   state_tmp=""
 }
 if [[ -n "${state_tmp:-}" ]]; then
-  printf '{"schema_version":2,"start_ts":%d,"end_ts":%d,"exit_code":%d,"files_written":%d,"files_failed":%d,"files_total":%d,"files":[%s],"restarts":[%s]}\n' \
+  # #7220 AC12 — fatal_rc/fatal_line/fatal_cmd are emitted UNCONDITIONALLY, by BOTH frame
+  # writers, zeroed here because reaching this line means no ERR fired. The point is that a
+  # consumer never has to ask WHICH writer produced a frame before it knows these three keys
+  # exist — the gate's fatal-mode branch reads them directly, and an absent key would make
+  # "no ERR fired" and "old handler" indistinguishable.
+  #
+  # This is parity on the fatal triple ONLY, not on the whole frame: `reason` remains
+  # trap-exclusive (a completed apply has no reason), which is pre-existing and correct.
+  # Stated explicitly so the next reader does not infer a whole-schema guarantee that the
+  # two printf statements do not actually make.
+  printf '{"schema_version":2,"start_ts":%d,"end_ts":%d,"exit_code":%d,"files_written":%d,"files_failed":%d,"files_total":%d,"fatal_rc":0,"fatal_line":0,"fatal_cmd":"","files":[%s],"restarts":[%s]}\n' \
     "$START_TS" "$END_TS" "$EXIT_CODE" "$WRITTEN_COUNT" "$FAIL_COUNT" "$TOTAL_COUNT" "$FILES_JSON" "$RESTARTS_JSON" \
     > "$state_tmp" 2>/dev/null || {
     logger -t "$LOG_TAG" "write_state: printf/redirect failed"
@@ -561,10 +753,15 @@ if [[ -n "${state_tmp:-}" ]]; then
   }
 fi
 if [[ -n "${state_tmp:-}" ]]; then
-  mv "$state_tmp" "$STATE_FILE" 2>/dev/null || {
+  if mv "$state_tmp" "$STATE_FILE" 2>/dev/null; then
+    # #7220 A5 — the publish SUCCEEDED, so now the frame on disk is authoritative and the EXIT
+    # trap must not clobber it. Any earlier and the sentinel is a claim about a write that had
+    # not happened yet.
+    touch "${STATE_FILE}.final"
+  else
     logger -t "$LOG_TAG" "write_state: mv failed"
     rm -f "$state_tmp"
-  }
+  fi
 fi
 
 # --- Post-write self-restart (skip in test mode) ---

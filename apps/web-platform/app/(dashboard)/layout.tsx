@@ -8,10 +8,13 @@ import { createClient } from "@/lib/supabase/client";
 import { swrConfig } from "@/lib/swr-config";
 import { TeamNamesProvider } from "@/hooks/use-team-names";
 import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { SignOutConfirmModal } from "@/components/auth/sign-out-confirm-modal";
 import { useSignOut } from "@/components/auth/use-sign-out";
 import { WorkspaceContextBand } from "@/components/dashboard/workspace-context-band";
+import { BackArrowIcon } from "@/components/dashboard/nav-icons";
+import { CHAT_OVERLAY_OPEN_EVENT } from "@/components/chat/kb-chat-fullscreen";
 import { RailSlotProvider, RailCollapsedProvider, RAIL_EXPAND_EVENT } from "@/components/dashboard/rail-slot";
 import { RailResizeHandle } from "@/components/dashboard/rail-resize-handle";
 import { useRailWidth, railMaxPx, RAIL_MIN_PX } from "@/hooks/use-rail-width";
@@ -142,7 +145,28 @@ export default function DashboardLayout({
   const [isAdmin, setIsAdmin] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
-  const [collapsed, toggleCollapsed] = useSidebarCollapse("soleur:sidebar.main.collapsed");
+  const [collapsePref, toggleCollapsed] = useSidebarCollapse("soleur:sidebar.main.collapsed");
+  // #7222 — collapse is a DESKTOP-RAIL concept and must not leak below `md`.
+  // Below the breakpoint the `aside` is the full-width hamburger drawer (`w-64`,
+  // never `md:w-14`), so there is nothing to collapse — yet the persisted
+  // preference is viewport-blind. Every consumer that branches in JS rather than
+  // through a `md:`-prefixed class therefore rendered the drawer as if it were a
+  // 56px icon rail: Settings dropped its sub-nav labels, the theme control
+  // degraded from the three-segment selector to the icon-only cycle button, and
+  // the Conversations rail hid its list. The `md:`-prefixed classNames below were
+  // never affected, which is exactly why this stayed invisible on desktop.
+  //
+  // Fixed HERE rather than at each consumer: ADR-047 makes this layout the sole
+  // collapse owner, so gating the value once at the source covers the context
+  // consumers, the `ThemeToggle` prop, and any future reader by construction.
+  // `collapsePref` (the raw persisted value) stays the toggle's subject so a
+  // desktop preference survives a phone session untouched.
+  //
+  // Hydration-safe: `useIsMobile` seeds `false` on the server AND on the first
+  // client render, so `collapsed` starts identical to the pre-#7222 value and
+  // only narrows after mount.
+  const isMobile = useIsMobile();
+  const collapsed = collapsePref && !isMobile;
   // Widenable rail: ONE persisted width applied to the `aside` whenever it is
   // expanded, in EVERY drill state (collapse still takes precedence) and only at
   // the md+ breakpoint (the mobile drawer keeps its `w-64` width). The value
@@ -270,6 +294,21 @@ export default function DashboardLayout({
     return () =>
       window.removeEventListener(RAIL_EXPAND_EVENT, handleExpandRequest);
   }, [collapsed, toggleCollapsed]);
+
+  // #7222 — the mobile chat takeover and this nav drawer are BOTH `z-50`
+  // full-height surfaces. The takeover already wins on paint order (it portals
+  // to <body> after the drawer), but ordering is an accident of DOM structure
+  // that no test asserts; closing the drawer on open makes the exclusivity a
+  // state invariant instead. Expand-only in the other direction: opening the
+  // drawer does not close a chat, because the drawer's own route change does.
+  useEffect(() => {
+    function handleChatOverlayOpen() {
+      setDrawerOpen(false);
+    }
+    window.addEventListener(CHAT_OVERLAY_OPEN_EVENT, handleChatOverlayOpen);
+    return () =>
+      window.removeEventListener(CHAT_OVERLAY_OPEN_EVENT, handleChatOverlayOpen);
+  }, []);
 
   // Body scroll lock when drawer is open
   useEffect(() => {
@@ -610,26 +649,19 @@ export default function DashboardLayout({
                 desktop rail band renders the back affordance). Tapping it
                 navigates to /dashboard, which auto-closes the drawer. NOTE this
                 link is in the a11y tree even while the drawer is closed, so it
-                co-renders with any in-page back the KB adds (#7186). */}
+                co-renders with any in-page back the KB adds (#7186).
+                #7222: this link is the SAME affordance as the rail band's
+                `nav-back-chevron` — only its host moved (#6915 lifted it into
+                the drawer). It must therefore keep that affordance's brand-gold
+                treatment (`text-soleur-accent-gold-fg` + BackArrowIcon), which
+                the lift silently dropped for muted grey and a bare chevron. Any
+                future change to one of the two renderers belongs in both. */}
             <Link
               href="/dashboard"
               data-testid="drawer-back-to-menu"
-              className="mx-3 mt-3 flex min-h-[44px] shrink-0 items-center gap-3 rounded-lg px-3 py-2 text-sm text-soleur-text-muted hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary md:hidden"
+              className="mx-3 mt-3 flex min-h-[44px] shrink-0 items-center gap-3 rounded-lg px-3 py-2 text-sm text-soleur-accent-gold-fg hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-primary md:hidden"
             >
-              <svg
-                width="18"
-                height="18"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-                className="shrink-0"
-              >
-                <polyline points="15 18 9 12 15 6" />
-              </svg>
+              <BackArrowIcon className="h-4 w-4 shrink-0" />
               Back to menu
             </Link>
             <div

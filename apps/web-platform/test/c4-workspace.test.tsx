@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useState } from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import {
@@ -161,8 +161,27 @@ async function renderC4WithHeader(suppressSidebar = true, c4Edit = true) {
   );
 }
 
+/**
+ * #7222 — C4Workspace picks its topology from a live matchMedia read (it is
+ * `ssr: false`-loaded, so there is no hydration seam to protect). happy-dom
+ * defaults to 1024px, which is why every test above exercises the DESKTOP
+ * split without stubbing anything; the mobile arm has to say so explicitly.
+ */
+function stubViewport(mobile: boolean) {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: query.includes("max-width") ? mobile : !mobile,
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("C4Workspace — header-driven Concierge consistency (Workstream C)", () => {
@@ -296,5 +315,105 @@ describe("C4Workspace — c4-edit flag gates the Code tab (AC3/AC10)", () => {
   it("AC10: flag ON ⇒ the discoverability hint is absent (Code tab handles editing)", async () => {
     await renderC4WithHeader(true, true);
     expect(screen.queryByText(/ask the Concierge/i)).toBeNull();
+  });
+});
+
+describe("#7222 — C4Workspace Concierge topology below `md`", () => {
+  it("hosts the revealed Concierge in the full-screen takeover, not a split column", async () => {
+    stubViewport(true);
+    await renderC4WithHeader();
+
+    // The takeover chrome is present and the resizable split is NOT: a splitter
+    // with nothing on its far side is the compressed-panes layout the operator
+    // hit. `getByTestId` reaches it because the modal portals to <body>, which
+    // RTL's `screen` queries (unlike `container`) cover.
+    expect(screen.getByTestId("kb-chat-fullscreen-header")).toBeTruthy();
+    expect(screen.queryByTestId("resize-handle")).toBeNull();
+  });
+
+  it("keeps the desktop split column and no takeover above `md`", async () => {
+    stubViewport(false);
+    await renderC4WithHeader();
+
+    // The discriminator for the test above.
+    expect(screen.queryByTestId("kb-chat-fullscreen-header")).toBeNull();
+    expect(screen.getByTestId("resize-handle")).toBeTruthy();
+  });
+
+  it("is a real modal — aria-modal dialog, not a bare stacked div", async () => {
+    stubViewport(true);
+    await renderC4WithHeader();
+
+    // The rejected alternative was an in-workspace `absolute` div: no backdrop,
+    // no focus trap, no aria-modal, and the z-50 nav drawer free to stack over
+    // it. Asserting the dialog contract is what keeps that from creeping back.
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    expect(dialog.getAttribute("aria-label")).toMatch(/c4-model\.md/);
+  });
+
+  it("names the document it is asking about", async () => {
+    stubViewport(true);
+    await renderC4WithHeader();
+
+    // The context block is what compensates for hiding the document (decision
+    // 5) — without it a full takeover leaves the user with no subject on screen.
+    expect(screen.getByText(/asking about/i)).toBeTruthy();
+    expect(screen.getByText("c4-model.md")).toBeTruthy();
+  });
+
+  it("still mounts exactly one Concierge on mobile (the two hosts share one window)", async () => {
+    stubViewport(true);
+    await renderC4WithHeader();
+
+    // Building the window once and choosing its HOST — rather than writing two
+    // breakpoint branches — is what makes this structural. A CSS dual-render
+    // would put two ChatSurfaces on the same contextPath, sharing one draft key.
+    expect(document.body.querySelectorAll("[data-kb-chat]")).toHaveLength(1);
+    expect(screen.getAllByTestId("kb-chat-content")).toHaveLength(1);
+  });
+
+  it("drops the inner collapse chevron so the takeover header owns the close", async () => {
+    stubViewport(true);
+    await renderC4WithHeader();
+
+    // Two chevrons doing the same job in adjacent bars reads as a bug.
+    expect(screen.queryByLabelText("Collapse Concierge")).toBeNull();
+    expect(screen.getByTestId("kb-chat-fullscreen-back")).toBeTruthy();
+  });
+
+  it("the takeover's back control dismisses it and leaves the diagram full-width", async () => {
+    stubViewport(true);
+    await renderC4WithHeader();
+
+    fireEvent.click(screen.getByLabelText("Back to document"));
+    expect(screen.queryByTestId("kb-chat-fullscreen-header")).toBeNull();
+    expect(screen.queryByTestId("kb-chat-content")).toBeNull();
+    // The diagram is never unmounted by the takeover — it is underneath.
+    expect(screen.getByTestId("c4-canvas")).toBeTruthy();
+  });
+
+  it("the shared header trigger re-opens it as a takeover after a dismiss", async () => {
+    stubViewport(true);
+    await renderC4WithHeader();
+
+    fireEvent.click(screen.getByLabelText("Back to document"));
+    fireEvent.click(
+      screen.getByRole("button", { name: /ask about this document/i }),
+    );
+    expect(screen.getByTestId("kb-chat-fullscreen-header")).toBeTruthy();
+  });
+
+  it("announces the open so the nav drawer can close (two z-50 surfaces)", async () => {
+    stubViewport(true);
+    const heard: string[] = [];
+    const onOpen = () => heard.push("open");
+    window.addEventListener("soleur:chat-overlay-open", onOpen);
+
+    await renderC4WithHeader();
+    window.removeEventListener("soleur:chat-overlay-open", onOpen);
+
+    // Exclusivity by state, not by paint order — the layout listens for this.
+    expect(heard.length).toBeGreaterThan(0);
   });
 });
