@@ -219,6 +219,15 @@ if mirror:
     check("blob presence is validated at call position, not inferred from the digest",
           re.search(r'^\s*retry\s+crane\s+validate\s+--remote\s+"\$ZOT', code, re.M) is not None,
           "expected a `retry crane validate --remote \"$ZOT...` invocation at line start")
+    # DARK-LAUNCH POSTURE (wg-dark-launch-deploy-gates). The blob check is runtime-unvalidated
+    # against this registry, so it must NOT gate until observed passing on a real run. Pinned
+    # in both directions: it must record a verdict (so the promotion criterion is measurable)
+    # and it must NOT route to degraded() (so a heuristic mismatch cannot red every release).
+    check("blob validation records a verdict for the promotion criterion",
+          re.search(r'^\s*echo "blob_validate=ok" >> "\$GITHUB_OUTPUT"', code, re.M) is not None)
+    check("blob validation is NON-BLOCKING while dark-launched (does not reach degraded)",
+          re.search(r'crane\s+validate\s+--remote[^\n]*\|\|\s*degraded', code) is None,
+          "a dark-launched gate must not route to degraded() until promoted")
 
     # Ordering: a `mirror_status=ok` written before the comparison certifies regardless of
     # the verdict. Unconditional now -- the old `if ... in body` form silently emitted NO

@@ -516,8 +516,30 @@ jobs:
           # reclaimed layer yields green parity and a `blob unknown` on the host's docker pull.
           # `crane validate --remote` fetches the manifest AND every blob, which is the
           # property a pin actually depends on.
-          retry crane validate --remote "$ZOT:$TAG" \
-            || degraded blobs_missing "$?" "manifest digest matches but crane validate --remote failed — zot may have gc'd a layer; a pin would fail at docker pull with 'blob unknown'"
+          #
+          # DARK-LAUNCHED, NON-BLOCKING (wg-dark-launch-deploy-gates). This check has never
+          # run against this zot: `crane copy`/`crane digest` are known to work over the
+          # loopback bridge, but whether `validate` applies the same localhost-insecure
+          # heuristic is UNVERIFIED, and it could not be verified before merge because the
+          # bridge itself is down (#7242). A gate proven only against a mock is
+          # runtime-unvalidated, and if the heuristic differs this would degrade EVERY release
+          # and hard-red every backfill — a self-inflicted outage in the workflow that exists
+          # to prevent one.
+          #
+          # PROMOTION CRITERION: once `blob_validate=ok` has been observed on >=1 real run
+          # (any trigger), delete this branch and restore the blocking form:
+          #   retry crane validate --remote "$ZOT:$TAG" \
+          #     || degraded blobs_missing "$?" "manifest digest matches but blobs are missing"
+          # Until then a failure is recorded and reported, and nothing is gated on it.
+          blob_rc=0
+          retry crane validate --remote "$ZOT:$TAG" || blob_rc=$?
+          if [ "$blob_rc" = 0 ]; then
+            echo "blob_validate=ok" >> "$GITHUB_OUTPUT"
+          else
+            echo "blob_validate=failed" >> "$GITHUB_OUTPUT"
+            echo "::warning::[dark-launch, NON-BLOCKING] crane validate --remote failed for ${ZOT}:${TAG} (rc=${blob_rc}). Either zot gc'd a layer (a pin would fail at docker pull with 'blob unknown') OR crane validate does not speak plain-HTTP to the loopback bridge the way copy/digest do. Resolve which BEFORE promoting this to a gate, and before pinning cloud-init to this tag."
+            echo "⚠️ blob validation failed for \`${TAG}\` (rc=${blob_rc}) — NON-BLOCKING while dark-launched; see the run log before pinning." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
           echo "mirror_status=ok" >> "$GITHUB_OUTPUT"
           echo "mirror_reason=ok" >> "$GITHUB_OUTPUT"
