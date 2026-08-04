@@ -771,7 +771,7 @@ done
 # Mutation-proven by the "a duplicate in the enumeration must not inflate configs" case:
 # removing `-u` makes a two-entry listing of one config report 2. Do not "simplify" it.
 if (( ${#CONFIG_NAMES[@]} > 0 )); then
-  mapfile -t CONFIG_NAMES < <(printf '%s\n' "${CONFIG_NAMES[@]}" | sort)
+  mapfile -t CONFIG_NAMES < <(printf '%s\n' "${CONFIG_NAMES[@]}" | sort -u)
 fi
 
 # ── NON-VACUITY GATE ────────────────────────────────────────────────────────

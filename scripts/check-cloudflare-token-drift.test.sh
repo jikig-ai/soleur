@@ -2023,6 +2023,31 @@ else
   fail "single-credential mode must be byte-for-byte what it was: the release preflight, the infra apply and the tunnel bridge actions all drive it, none passes --configs-floor, and two are branch-scoped"
 fi
 
+echo "M9 (C-d): a DUPLICATE in the enumeration must not inflate the config count"
+# THE MUTATION PROOF FOR `sort -u`, and it is deliberately NOT the mis-binding case.
+#
+# The plan asserted that removing `-u` would make the 13-tokens-one-config case report
+# 13/13. Measured: it does not, and cannot. That defect makes twelve reads FAIL (a wrong
+# -c errors), so twelve configs never enter CONFIG_NAMES at all and there is nothing to
+# deduplicate — the case passes identically with `sort` and `sort -u`, which was confirmed
+# by mutation before this case was written.
+#
+# The reachable producer is the ENUMERATION. In single mode the config list is whatever
+# `doppler configs` returned, and nothing downstream re-checks it for repeats; a listing
+# that named one config twice would length-2 CONFIG_NAMES for one config actually read.
+# That is what `-u` defends, and this case is what makes removing it go red.
+JM9="$TMP/m9.json"
+MOCK_HTTP_BODY='{"success":true}' \
+  run_sut m9 200 "$P_SEC13" $'prd\nprd' "--configs-floor 1 --inventory $P_INV13 --json-file $JM9"
+_m9=1
+[[ "$(jget "$JM9" configs)" == "1" ]] || _m9=0
+[[ "$(jget "$JM9" config_names)" == "prd" ]] || _m9=0
+if [[ "$_m9" == "1" ]]; then
+  pass "a config listed twice is counted once — the count reflects configs READ, not listings received"
+else
+  fail "'configs' is the number the entire coverage ladder grades, so a duplicate in the enumeration inflates coverage directly: one config read would report 2, and at a floor of 2 a single-config credential would publish 'at-floor'. Deduplication is the control, not tidiness (configs=$(jget "$JM9" configs), names=$(jget "$JM9" config_names))"
+fi
+
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Without it, deleting every assertion call yields
