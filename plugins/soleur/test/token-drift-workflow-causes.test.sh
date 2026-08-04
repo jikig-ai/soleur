@@ -1161,6 +1161,80 @@ else
   fail "the committed inventory must contain every Doppler config the infra Terraform names — those are configs production depends on, so a scan that cannot reach them is exactly the fan-out blindness this detector exists for. A regenerated-and-wrong or hand-edited inventory otherwise prints a healthy ratio over names that mean nothing, and lists nonexistent configs to the operator as 'not read'"
 fi
 
+echo "F4b: the inventory's name set never SHRINKS — it is a SUPERSET of the merge base's"
+# THE ONE LAYER THAT IS NOT COUNT-FRAMED, and the gap that made it necessary.
+#
+# F2, F2b, F3 and the workflow's run-time re-assertion all bound a COUNT. Since #7234 the
+# thing that matters is a SET: these name lines ARE the `for_each` key set, so the reach of
+# the whole scan is the set, not its cardinality. A RENAME moves no count at all — swap
+# `prd_cla` for `prd_cla_v2` and F2b's equality holds, F3 holds, F5's derived list still has
+# 13 names, the run-time `>= 13` holds, and the scan reports a clean 13/13 while one config
+# goes permanently unread and a token is minted for a config that does not exist. The
+# 14->13 round trip the inventory's own header describes is the same blindness with the
+# count moving DOWN and every pinned literal moving down with it.
+#
+# WHY NOT LEAVE THIS TO THE DESTROY GUARD. Removing a name DESTROYS that config's read
+# token, and `destroy-guard-filter-web-platform.jq` does count planned deletes — but that
+# count is inside the `[ack-destroy]`-bypassable `destroy_count` sum, and #7234's own merge
+# commit carries `[ack-destroy]` (it retires the project-scoped service account). A PR
+# shaped exactly like this one therefore sails through the only layer that fires above 13.
+# That guard also has no `for_each` instance-delete fixture anywhere in its 40 tfplan
+# cases. This assertion is pre-merge, reads no credential, makes no network call, and
+# nothing in a commit message can wave it through.
+#
+# BASELINE IS THE MERGE BASE, NOT origin/main's TIP. Against the tip, every branch that has
+# not rebased past a legitimate inventory GROWTH reds for a shrink it did not make. Against
+# the merge base a stale branch compares to the tree it forked from, and CI — which builds
+# the PR's MERGE commit — compares the merged result to main. Both are the semantics wanted.
+# What this therefore does NOT catch: a stale branch that reverts a merged growth wholesale.
+# F2/F3 pin the floor side of that, and a wholesale revert is not this ratchet's job.
+#
+# Names deliberately RETIRED from the Doppler project. Empty by default: adding a name here
+# is what lets the ratchet down by exactly one config, and it is an edit to a test whose
+# only purpose is to stop that edit — the same discipline as FLOOR_MINIMUM above. A stale
+# entry (the name is gone from the baseline too) is inert rather than an error, because
+# making it an error would red main for everyone the moment the removal merged.
+INVENTORY_REMOVALS_ACK=()
+
+_f4b=1
+_INV_REL="apps/web-platform/infra/doppler-config-inventory.txt"
+_base_names=""
+_base_has_inventory=0
+if ! _merge_base=$(git -C "$REPO_ROOT" merge-base HEAD origin/main 2>/dev/null) || [[ -z "$_merge_base" ]]; then
+  _f4b=0
+  echo "    could not resolve 'git merge-base HEAD origin/main' — run 'git fetch origin main' (CI: actions/checkout needs fetch-depth: 0, which the test-scripts shard already sets). This FAILS rather than skips: a ratchet that quietly disappears when its baseline is unreachable is the shape that lets the shrink through on exactly the runner where nobody is looking"
+elif git -C "$REPO_ROOT" cat-file -e "${_merge_base}:${_INV_REL}" 2>/dev/null; then
+  _base_has_inventory=1
+  _base_names=$(git -C "$REPO_ROOT" show "${_merge_base}:${_INV_REL}" | LC_ALL=C grep -E '^[a-z0-9_]+$' | LC_ALL=C sort -u)
+else
+  echo "    the merge base has no ${_INV_REL} — the baseline set is empty, so any current set is a superset of it"
+fi
+# NON-VACUITY. A baseline blob that exists but parses to nothing means the extraction has
+# drifted (a reformatted inventory, a changed name charset), and every comparison below
+# would then pass over an empty set forever.
+if (( _base_has_inventory )) && [[ -z "$_base_names" ]]; then
+  _f4b=0
+  echo "    the baseline inventory exists at ${_merge_base} but yielded ZERO parseable names — the extraction has drifted and this ratchet would pass vacuously"
+fi
+_base_n=$(grep -c . <<<"$_base_names") || _base_n=0
+while IFS= read -r _bn; do
+  [[ -n "$_bn" ]] || continue
+  _acked=0
+  for _ack in ${INVENTORY_REMOVALS_ACK[@]+"${INVENTORY_REMOVALS_ACK[@]}"}; do
+    [[ "$_ack" == "$_bn" ]] && { _acked=1; break; }
+  done
+  (( _acked )) && continue
+  # Herestring, never a pipe: `producer | grep -q` takes SIGPIPE on an early match under
+  # `pipefail`, which inverts a negative assertion into a silent pass.
+  grep -qxF "$_bn" <<<"$_inv_names" \
+    || { _f4b=0; echo "    config '${_bn}' is present in the merge base's inventory and absent from this branch's — a removal or a rename. That DESTROYS its read token and drops the config out of the scan's reach, and no count in this file moves when it is a rename"; }
+done <<<"$_base_names"
+if [[ "$_f4b" == "1" ]]; then
+  pass "all ${_base_n} config names in the merge base's inventory survive in $(basename "$INVENTORY") — reach did not shrink"
+else
+  fail "the committed inventory is the for_each key set, so its name set is the scan's REACH and must only ever grow. Every other layer here bounds a COUNT, and a rename moves no count: the ratio still reads 13/13 while one config is unread and one token is minted for a config that does not exist. Deliberately retiring a config means adding its name to INVENTORY_REMOVALS_ACK above — a visible edit to a test, which is the point"
+fi
+
 # ---------------------------------------------------------------------------
 # F5 + C-a — THE PER-CONFIG READ-TOKEN SHAPE (#7234).
 #
@@ -1579,12 +1653,13 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # is the point, because it is what makes a REMOVAL visible in the diff.
 #
 # Raised 57 -> 60 with #7234's F5 (the for_each list IS the inventory) and C-a
-# (`config = each.key`, never a literal). 60 is the REALIZED `PASS + FAIL`, and the number
+# (`config = each.key`, never a literal), then 60 -> 61 with F4b (the inventory's name set
+# never shrinks). 61 is the REALIZED `PASS + FAIL`, and the number
 # in this comment and the number in the guard below MUST be the same number. They disagreed once
 # (comment 46, guard 48, run 48/48), which is a ratchet whose own prose says the notch is
 # lower than it is — a reader trusting the comment would have "raised" it downward.
-if [[ "$((PASS + FAIL))" -lt 60 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 60." >&2
+if [[ "$((PASS + FAIL))" -lt 61 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 61." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
