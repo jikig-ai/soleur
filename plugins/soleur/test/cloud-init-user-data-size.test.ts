@@ -152,18 +152,45 @@ const GIT_DATA_FLOOR = 10_000;
 
 // Registry host base64gzip'd budget (#7144 task 5b). Unlike WEB and GIT_DATA, this budget is NOT
 // a comfortable sub-cap — it is a tripwire on a host that is genuinely close to the vendor ceiling.
-// Measured 31,572 B against HETZNER_CAP's 32,768: ~1,196 B of real headroom, the tightest of the
-// three. 32,000 reds CI at roughly +428 B — early enough to fail in CI rather than at apply, while
-// leaving room for an ordinary small edit.
+//
+// THIS NUMBER LIVES IN NODE-SPACE, NOT TERRAFORM-SPACE, AND THE DIFFERENCE IS LOAD-BEARING HERE.
+// An earlier revision of this comment read "Measured 31,572 B ... ~1,196 B of real headroom". The
+// 31,572 is real but it is what `renderedGzipB64Len` models, not what Hetzner stores; the "real
+// headroom" clause read that modeled figure as the artifact. Terraform's own `base64gzip` on the
+// same template measures 32,156 B — 612 B of actual headroom, roughly half what was claimed, and
+// already OVER the 32,000 this constant used to carry. So the old budget was not passing because
+// the render fit; it was passing because the model was small. Optimistic three ways, all in the
+// same direction, each measured against the as-written files:
+//
+//   * modeledValue() substitutes `"x".repeat(n)` for every non-file arg, and x-runs compress
+//     ~1000:1 (this file says so at the webhook_doppler_token_env branch). EVERY registry arg is
+//     a non-file value and five carry real entropy — the zot image digest, the Doppler CLI
+//     sha256, the Doppler service token, and two heartbeat path tokens. Worth 340 B.
+//   * Go's and node's zlib make different match choices at the same level: 228 B on this render.
+//   * Go's `gzip.NewWriter` is DefaultCompression (level 6), not the level 9 used below. The
+//     "level 9 (matching terraform's base64gzip)" note on renderedGzipB64Len was wrong about the
+//     level, though only 16 B rides on it.
+//
+// So the AUTHORITATIVE gate is `apps/web-platform/infra/registry-userdata-budget.sh`, which
+// renders through terraform and measures with terraform's own `base64gzip`. This constant is the
+// cheap fast-suite proxy for it: REGISTRY_BUDGET + REGISTRY_NODE_OFFSET is that script's sub-cap,
+// so the two trip at the same REAL size. registry-userdata-budget.test.sh pins the relation, and
+// pins the offset as an under-statement guard — move one number and that suite reds.
 //
 // IMPORTANT for whoever trips this: the three prior re-baselines above (#6425, #6594, #6604) are
 // NOT the precedent to follow here. Those raised a self-imposed sub-cap that still sat ~10 KB below
-// the vendor cap. This one has ~1.2 KB, and 32,768 is Hetzner's number, not ours — so raising
+// the vendor cap. This one has 612 B, and 32,768 is Hetzner's number, not ours — so raising
 // REGISTRY_BUDGET toward it buys a boot failure, not headroom. Reclaim instead: move comment prose
 // into zot-registry.tf (not byte-budgeted — the #6425 pattern, and where this carve-out's own
 // rationale already lives), or bake host logic into the image as #5921 did for the web host.
-const REGISTRY_BUDGET = 32_000;
+const REGISTRY_BUDGET = 31_866;
 const REGISTRY_FLOOR = 20_000;
+// Measured node-model-vs-terraform gap on cloud-init-registry.yml: 32,156 − 31,572. Used by
+// registry-userdata-budget.test.sh to convert this file's node-space budget into the terraform-
+// space sub-cap (31,866 + 584 = 32,450). Asserted there as an UNDER-STATEMENT guard
+// (terraform_stored <= BUDGET + OFFSET), which is the safety direction: an offset that grows
+// silently reds rather than passing.
+const REGISTRY_NODE_OFFSET = 584;
 
 const IMAGE_NAME = "ghcr.io/jikig-ai/soleur-web-platform:latest";
 // Modeled byte lengths for render-time values that are NOT base64-of-a-file. base64-of-file
@@ -326,10 +353,19 @@ function modeledValue(name: string, expr: string): string {
 }
 
 // Model the base64gzip() OUTPUT length — what Hetzner stores against the 32,768 cap for git-data
-// (#5927). Renders the cloud-init template with REAL script content (via modeledValue), gzips at
-// level 9 (matching terraform's base64gzip), and base64-encodes. NOT byte-exact vs terraform's Go
-// zlib (different header/level), so callers assert a BUDGET, never equality (#5887's terraform
-// plan is the byte-exact truth).
+// (#5927). Renders the cloud-init template with REAL script content (via modeledValue), gzips, and
+// base64-encodes. NOT byte-exact vs terraform's Go zlib, so callers assert a BUDGET, never
+// equality (#5887's terraform plan is the byte-exact truth).
+//
+// The level below is 9; terraform's `base64gzip` calls `gzip.NewWriter`, i.e. Go's
+// DefaultCompression (level 6). This comment used to claim level 9 "matches" base64gzip — it does
+// not, and level 9 emits FEWER bytes, so the mismatch runs OPTIMISTIC. It is left at 9 rather than
+// changed to 6 because every caller's budget was baselined against these numbers and the level is
+// the SMALLEST of the three model-vs-terraform gaps (16 B on the registry render, against 340 B
+// from x-run stand-ins and 228 B from Go-vs-node match choices). Re-levelling would move every
+// baseline while closing ~3% of the error. Where the gap actually matters — the registry host,
+// with 612 B of headroom — the fix is a terraform-native gate, not a better model: see
+// apps/web-platform/infra/registry-userdata-budget.sh.
 function renderedGzipB64Len(cloudInitFile: string, tfSrc: string): number {
   const map = parseVarMap(extractTemplatefileMap(tfSrc, cloudInitFile));
   const src = readFileSync(join(INFRA, cloudInitFile), "utf8");
@@ -382,6 +418,13 @@ describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
     expect(size).toBeLessThan(HETZNER_CAP);
     expect(size).toBeLessThan(REGISTRY_BUDGET);
     expect(size).toBeGreaterThan(REGISTRY_FLOOR); // non-vacuity
+
+    // The property that makes a NODE-space budget safe on a host with 616 B of real headroom:
+    // passing here must imply the terraform-measured render is still under Hetzner's cap. Any
+    // budget raise that spends the offset lands here rather than at a failed apply. This is the
+    // one half of the coupling expressible without terraform; registry-userdata-budget.test.sh
+    // holds the other half (that the offset is not an under-statement).
+    expect(REGISTRY_BUDGET + REGISTRY_NODE_OFFSET).toBeLessThan(HETZNER_CAP);
   });
 
   test("git-data host base64gzip'd user_data is under the sub-cap budget (#5927)", () => {

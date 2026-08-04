@@ -349,14 +349,26 @@ resource "hcloud_server" "registry" {
   #
   # NO LONGER SMALL (#7144, 2026-08-04). This comment used to read "zot's cloud-init is small
   # ... but budget for it anyway and verify the byte-exact size at the first terraform plan" —
-  # the budget half was never written, and the render has since reached 31,572 B against the
-  # 32,768 cap: ~1,196 B of headroom, the TIGHTEST of the three hosts (web ~24.3 KB, git-data
-  # ~16.2 KB) and the only one that was unguarded. `cloud-init-user-data-size.test.ts` now enforces REGISTRY_BUDGET alongside the
-  # long-standing web + git-data budgets. Consequence for the next editor: this file has no
-  # room left for prose. Put rationale HERE (this .tf is not byte-budgeted) and leave only a
-  # pointer in the YAML — the #6425/#6594 precedent. If a real multi-KB addition is ever
-  # needed, reclaim bytes by moving comment blocks out, or bake logic into an image like
-  # #5921 did for the web host; do not raise the budget, since the cap is the vendor's.
+  # the budget half was never written. It IS written now, and the "verify the byte-exact size"
+  # half is the part that turned out to matter: an interim revision of this block quoted
+  # 31,572 B / ~1,196 B of headroom, both taken from `cloud-init-user-data-size.test.ts`'s NODE
+  # model. That model substitutes `"x".repeat(n)` for every non-file template var and gzips at
+  # level 9; every var this host passes is a non-file value and five carry real entropy, so it
+  # under-reports by a measured 584 B (340 x-run stand-ins + 228 Go-vs-node zlib + 16 level).
+  #
+  # Terraform's own base64gzip measures 32,156 B against the 32,768 cap: **612 B of headroom**,
+  # the TIGHTEST of the three hosts (web ~24.3 KB, git-data ~16.2 KB) and the only one that was
+  # unguarded — and already OVER the 32,000 sub-cap the node test was passing against. The
+  # authoritative gate is now `registry-userdata-budget.sh`, which renders through terraform;
+  # the node REGISTRY_BUDGET is retained as a cheap fast-suite proxy and re-baselined so that
+  # budget + measured offset lands exactly on that script's 32,450 sub-cap.
+  #
+  # Consequence for the next editor: this file has no room left for prose. Put rationale HERE
+  # (this .tf is not byte-budgeted) and leave only a pointer in the YAML — the #6425/#6594
+  # precedent. If a real multi-KB addition is ever needed, reclaim bytes by moving comment
+  # blocks out, or bake logic into an image like #5921 did for the web host; do not raise the
+  # budget, since the cap is the vendor's and there are 612 bytes between it and a host that
+  # cannot boot — on the sole pull path for both platform images.
   #
   # PINNED-TAG CARVE-OUT — full rationale for cloud-init-registry.yml's `^v1\.1\.24$` keepTags
   # entry (#7144 task 5b). A host that pins an image by digest needs its tag to survive

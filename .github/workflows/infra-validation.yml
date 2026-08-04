@@ -1097,6 +1097,26 @@ jobs:
       - name: Check git-data user_data stays under the Hetzner 32 KB cap
         run: bash apps/web-platform/infra/git-data-userdata-budget.sh
 
+      # (#7144 task 5b) Same hard gate, on the host that is actually close to it. The registry
+      # render measures 32,156 B against the 32,768 cap — 612 B — and hcloud_server.registry
+      # likewise carries no ignore_changes=[user_data], so it is ForceNew on the SOLE pull path
+      # for both platform images (GHCR read PAT revoked 2026-07-30). A blown budget there is a
+      # cold-boot outage, not a retry.
+      #
+      # This is registered in ADDITION to cloud-init-user-data-size.test.ts's REGISTRY_BUDGET, not
+      # instead of it, because that test models the render in node — `"x".repeat(n)` for every
+      # non-file var, gzip level 9 — and under-reports by a measured 584 B. On the web and git-data
+      # hosts that slack is absorbed by KBs of headroom; here it exceeded the entire sub-cap, so
+      # the node gate was reporting PASS against a render already over its own budget. Belongs in
+      # THIS job specifically: it needs `terraform console`, which this job installs with
+      # terraform_wrapper:false — registering it in a runner without terraform would SKIP into a
+      # fake gate (#6454).
+      - name: Check registry user_data stays under the Hetzner 32 KB cap (terraform-exact)
+        run: bash apps/web-platform/infra/registry-userdata-budget.sh
+
+      - name: Run registry user_data budget-gate tests (#7144 task 5b)
+        run: bash apps/web-platform/infra/registry-userdata-budget.test.sh
+
       - name: Run /workspaces LUKS-at-rest drift-guards (#6588, ADR-119)
         run: bash apps/web-platform/infra/workspaces-luks.test.sh
 
