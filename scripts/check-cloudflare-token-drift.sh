@@ -32,20 +32,51 @@
 #
 # USAGE
 #   DOPPLER_TOKEN=<a Doppler read credential> bash scripts/check-cloudflare-token-drift.sh
+#   DOPPLER_TOKEN_MAP='{"<config>":"<read token>", …}' bash scripts/check-cloudflare-token-drift.sh
 #   bash scripts/check-cloudflare-token-drift.sh --json
 #
-# THE CREDENTIAL
-#   Exactly ONE credential, taken from DOPPLER_TOKEN, and there is deliberately no
-#   credential-iteration surface: this script loops over CONFIGS, never over credentials.
-#   The credential is snapshotted into a local and DOPPLER_TOKEN / DOPPLER_CONFIG are then
-#   UNSET, so every Doppler read has to name its config explicitly. A read site that
-#   forgets its `-c <cfg>` fails loudly instead of silently binding whatever config the
-#   ambient environment happened to carry — which, at 13 configs, would grade the wrong
-#   config's bytes and report a confident wrong answer.
+# THE CREDENTIALS — TWO MODES SINCE #7234, AND THIS SECTION USED TO DENY THE SECOND
+#   This block said "exactly ONE credential, taken from DOPPLER_TOKEN, and there is
+#   deliberately no credential-iteration surface: this script loops over CONFIGS, never
+#   over credentials". That was true before #7234 and is false now, and it is false in the
+#   direction that matters: it is the paragraph an editor opens before deleting the
+#   per-config plumbing as dead weight. The full mode contract lives at `declare -A
+#   CRED_FOR` below; the short version:
 #
-#   An unset or EMPTY DOPPLER_TOKEN is a failed credential, never a fallback: the Doppler
-#   CLI treats an empty value as unset and rebinds to whatever ambient credential the
-#   runner carries. This script refuses to invoke the CLI at all in that state.
+#     MAP     `DOPPLER_TOKEN_MAP` non-empty — a JSON object of one config-scoped READ token
+#             per config, minted by `doppler_service_token.token_drift` under a `for_each`
+#             over the committed inventory and published as ONE Actions secret. This is the
+#             twice-daily fan-out scan. There IS a credential-iteration surface: the scan
+#             holds N credentials and selects `CRED_FOR[<config>]` per config.
+#     SINGLE  `DOPPLER_TOKEN` non-empty — one credential, N enumerated configs, N reads.
+#             Byte-for-byte the pre-#7234 behaviour, which five call sites still use.
+#
+#   Setting BOTH is a hard error (`unknown`, exit 2): they select different scan modes and
+#   there is no defensible precedence.
+#
+#   WHY THE MAP EXISTS AT ALL. #7159 wired this scan to a project-scoped
+#   `doppler_service_account` on the INFERRED premise that a project membership can
+#   enumerate and read every config. #7234 measured it: that credential could do NEITHER —
+#   `doppler configs -p soleur --json` returned null and reading `prd` returned "Could not
+#   find requested config 'prd'". No credential in this repository can enumerate the
+#   project, which is why in map mode the config list comes from the map's KEYS rather than
+#   from an enumeration.
+#
+#   In BOTH modes every source variable is snapshotted into a local and DOPPLER_TOKEN /
+#   DOPPLER_TOKEN_MAP / DOPPLER_CONFIG are then UNSET, so every Doppler read has to name its
+#   config explicitly. A read site that forgets its `-c <cfg>` fails loudly instead of
+#   silently binding whatever config the ambient environment happened to carry — which, at
+#   13 configs, would grade the wrong config's bytes and report a confident wrong answer.
+#
+#   DO NOT DROP `-p`/`-c` FROM THE READS. A config-scoped token ERRORS on a wrong `-c`
+#   (measured against live Doppler, both on `main` and on this branch). That error IS the
+#   binding control: it is why no self-identification probe exists, and why a mis-bound
+#   token surfaces as a failed read rather than as a confident wrong answer.
+#
+#   An unset or EMPTY credential is a failed credential, never a fallback: the Doppler CLI
+#   treats an empty value as unset and rebinds to whatever ambient credential the runner
+#   carries. This script refuses to invoke the CLI at all in that state, and map entries are
+#   rejected outright if the token side is empty.
 #
 # COVERAGE LADDER (--configs-floor / --inventory)
 #   `coverage` is unknown | degraded | at-floor, evaluated in that order.
@@ -64,9 +95,17 @@
 #   of this file instead: with a non-empty keyset and zero conclusions drawn it prints
 #   "PROBED ZERO" and exits 2, which the workflow publishes as `verdict: unavailable`, and
 #   the coverage-issue close arm is gated on `verdict != unavailable` so it cannot fire.
-#   The FLOOR gates. The INVENTORY (--inventory) gates NOTHING — it supplies only
-#   configs_expected, configs_unread and inventory_age_days. A short, long, stale or
-#   missing inventory changes the printed ratio and NO state.
+#   The FLOOR gates. The `--inventory` FLAG gates nothing IN THIS SCRIPT — it supplies only
+#   configs_expected, configs_unread and inventory_age_days, so a short, long, stale or
+#   missing inventory changes the printed ratio and NO state here.
+#
+#   BUT THE INVENTORY FILE IS NOT INERT, AND THIS SENTENCE USED TO SAY IT WAS. Since #7234
+#   `apps/web-platform/infra/token-drift-read-tokens.tf` reads the SAME file with `file()`
+#   and derives the `for_each` key set of `doppler_service_token.token_drift` from it, so
+#   its name lines DETERMINE REACH: deleting one destroys that config's read token and drops
+#   the config out of the scan entirely. The flag and the file have different consequences
+#   and the unqualified "the inventory gates nothing" conflated them — in the direction that
+#   invites a line deletion. See the inventory's own header, which states both jobs.
 #
 # COVERAGE
 #   CF_API_TOKEN*             Cloudflare API tokens (single value, Bearer-verified).
@@ -119,11 +158,16 @@ JSON_FILE=""
 # producer) — which is why the gate compares against a declared floor and never against
 # the inventory.
 CONFIGS_FLOOR_RAW="1"
-# --inventory <path> supplies the DENOMINATOR and GATES NOTHING. It contributes
-# `configs_expected`, `configs_unread` and `inventory_age_days` to the verdict, and no
-# state anywhere depends on it: a short, long, stale or missing inventory changes the
-# printed ratio and nothing else. A denominator that gated would let a two-line file
-# derive the healthy state and silence the channel, which is the fail-open direction.
+# --inventory <path> supplies the DENOMINATOR and gates nothing IN THIS SCRIPT. It
+# contributes `configs_expected`, `configs_unread` and `inventory_age_days` to the verdict,
+# and no state here depends on it: a short, long, stale or missing inventory changes the
+# printed ratio and nothing else. A denominator that gated would let a two-line file derive
+# the healthy state and silence the channel, which is the fail-open direction.
+#
+# THAT IS A STATEMENT ABOUT THIS FLAG, NOT ABOUT THE FILE. Since #7234 the same file is the
+# `for_each` key set for `doppler_service_token.token_drift`, so its name lines decide which
+# configs get a read token at all — a line deleted there is a config the scan can never
+# reach, whatever this flag does. Do not read "gates nothing" as "is safe to shorten".
 INVENTORY_PATH=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
