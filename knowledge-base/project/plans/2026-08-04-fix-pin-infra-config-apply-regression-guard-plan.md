@@ -65,18 +65,17 @@ norm." That is the cost being paid, and it compounds silently.
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** nothing directly — this is a test-only change on
-an advisory CI gate with no runtime surface. The realistic failure is indirect: a wrong pin (or a
-weakened skip) leaves the fatal-channel assertions unproven, so a future regression in
-`infra-config-apply.sh` — the handler that delivers 19 config files to the prod host — could ship
-believing it was guarded when it was not.
-
-**If this leaks, the user's data/workflow/money is exposed via:** no exposure vector. The change
-touches no secrets, no persistent store, no network path, no user data. The pinned SHA is public
-repo history.
-
-**Brand-survival threshold:** `none` — reason: a test-file change to an advisory, offline CI suite
-with no runtime, data, or user-facing surface.
+- **If this lands broken, the user experiences:** nothing directly — this is a test-only change on
+  an advisory CI gate with no runtime surface. The realistic failure is indirect: a wrong pin (or a
+  weakened skip) leaves the fatal-channel assertions unproven, so a future regression in
+  `infra-config-apply.sh` — the handler that delivers 19 config files to the prod host — could ship
+  believing it was guarded when it was not.
+- **If this leaks, the user's data / workflow / money is exposed via:** no exposure vector. The
+  change touches no secrets, no persistent store, no network path, no user data. The pinned SHA is
+  public repo history.
+- **Brand-survival threshold:** none
+- Scope-out: threshold: none, reason: a test-file change to an advisory, offline CI suite with no
+  runtime, data, or user-facing surface — the diff touches only bash test harnesses and markdown.
 
 ## Files to Edit
 
@@ -256,7 +255,19 @@ locally.
   detection — stated plainly rather than counted as a monitored layer.
 - `logs`: GitHub Actions job logs for `Infra Validation / deploy-script-tests`; retention per repo
   default.
-- `discoverability_test`: `bash apps/web-platform/infra/infra-config-apply.test.sh` (no SSH).
+- `discoverability_test` — the load-bearing property is that the pinned commit is REACHABLE in the
+  checkout; if it is not, the guard degrades to a skip (locally) or a loud FAIL (under CI). That is
+  the one thing an operator can check in a second, with no SSH and no credentials:
+
+```yaml
+discoverability_test:
+  command: git cat-file -t 701e76e6bfce84ceed91096a58d88df7da5b6932
+  expected_output: commit
+```
+
+  The full proof is `bash apps/web-platform/infra/infra-config-apply.test.sh` (also no SSH), which
+  runs ~40s — too slow for the 15s preflight cap, so the reachability probe above is the gate and
+  the suite is the deeper check.
 
 ## Gates Assessed and Skipped
 
