@@ -152,8 +152,12 @@ const GIT_DATA_FLOOR = 10_000;
 // (#7278) registry base64gzip'd budget. THE REGISTRY HAD NO ARM HERE AT ALL until #7278, and
 // that absence is the whole finding: `hcloud_server.registry` has rendered
 // `base64gzip(templatefile("cloud-init-registry.yml", …))` since #6122 with no comment strip and
-// no size guard, and it crossed the cap silently — measured 34,320 B against Hetzner's 32,768 B,
-// i.e. ~1.5 KB OVER, before this issue added a single byte. Every registry provisioning event
+// no size guard, and it crossed the cap silently — 34,628 B against Hetzner's 32,768 B, i.e.
+// 1,860 B OVER, before this issue added a single byte. That figure is terraform's OWN base64gzip;
+// `gzip -9` on the raw file reads 34,320 and is FORBIDDEN as a measurement here
+// (git-data-userdata-budget.sh:19-22 — it overstates headroom). The model below necessarily
+// differs by a few hundred bytes (node zlib vs Go zlib), which is why callers assert a BUDGET and
+// never equality. Every registry provisioning event
 // (the `registry-luks-recut` this lever needs for activation included) fails at the Hetzner API
 // in that state, which is why this guard lands ahead of the lever itself.
 //
@@ -354,16 +358,59 @@ function renderedGzipB64Len(cloudInitFile: string, tfSrc: string): number {
 // unexpressible instead of merely policed, so there is no second copy and no parity suite to
 // forget to run.
 //
-// The pattern text is shared verbatim between HCL and JS on purpose: `\t` and `\n` are escape
-// sequences with identical meaning to HCL(→Go RE2) and to `new RegExp`, so the same bytes
-// denote the same language on both sides. `(?m)` is Go's inline multiline flag; JS spells it as
-// the `m` flag, which is the one transformation applied.
+// The pattern text is shared verbatim between HCL and JS: `\t` and `\n` are escape sequences with
+// identical meaning to HCL(→Go RE2) and to `new RegExp`.
+//
+// THE ONE PLACE THE TWO ENGINES GENUINELY DIVERGE, and it is not cosmetic. An earlier version of
+// this comment claimed the shared bytes made divergence "unexpressible"; that was an overclaim.
+// JS's `m` flag treats U+2028, U+2029 and a lone CR as line starts; Go RE2's `(?m)` recognises
+// ONLY `\n`. Measured:
+//
+//   input "A\u2028# rationale\nB\n"
+//     JS "gm"  → "A\u2028B\n"                  (line stripped)
+//     Go "(?m)" → "A\u2028# rationale\nB\n"    (unchanged)
+//
+// The consequence runs in the dangerous direction: the model would strip a line production KEEPS,
+// under-measuring the payload — a green cap assertion over an over-cap render, which is the exact
+// failure this arm exists to prevent. So the `m` flag is NOT used; `^` is rewritten to an explicit
+// `\n`-only line anchor, and `assertNoExoticLineBreaks` below makes the residual unreachable.
+function toNewlineOnlyMultiline(body: string): string {
+  if (!body.startsWith("^")) {
+    throw new Error(`registry strip must be line-anchored, got: ${body}`);
+  }
+  return `(?:^|(?<=\\n))${body.slice(1)}`;
+}
+
+// Go's `(?m)` sees only `\n`, so any CR / U+2028 / U+2029 in the template is a byte on which the
+// model and production could disagree. Zero occurrences today; asserted so it stays that way
+// rather than being rediscovered as a silent under-measurement.
+function assertNoExoticLineBreaks(src: string, label: string): void {
+  const exotic = [...src.matchAll(/[\r\u2028\u2029]/g)].map((m) => m.index);
+  if (exotic.length > 0) {
+    throw new Error(
+      `${label} contains ${exotic.length} CR/U+2028/U+2029 byte(s) at offsets ${exotic
+        .slice(0, 5)
+        .join(",")} — JS and Go RE2 disagree on these as line starts`,
+    );
+  }
+}
 function registryStripRegex(tfSrc: string): RegExp {
-  const m = /registry_rationale_strip\s*=\s*"((?:[^"\\]|\\.)*)"/.exec(tfSrc);
-  if (m === null) {
+  // Comments stripped FIRST, and the match required to be UNIQUE. A non-global `.exec` returns the
+  // FIRST occurrence, so a `#`-commented historical note carrying the good expression would shadow
+  // a live local carrying a boot-bricking one — the extractor would read the comment, the host
+  // would boot the local, and the suite would be green. Demonstrated: that exact mutation survived
+  // the first version of these tests.
+  const src = stripHclLineComments(tfSrc);
+  const all = [...src.matchAll(/registry_rationale_strip\s*=\s*"((?:[^"\\]|\\.)*)"/g)];
+  if (all.length === 0) {
     throw new Error("local.registry_rationale_strip not found in zot-registry.tf");
   }
-  let body = m[1];
+  if (all.length > 1) {
+    throw new Error(
+      `local.registry_rationale_strip must be declared exactly once, found ${all.length}`,
+    );
+  }
+  let body = all[0][1];
   if (!body.startsWith("/") || !body.endsWith("/")) {
     throw new Error(
       `registry_rationale_strip must be a slash-delimited terraform regex literal, got: ${body}`,
@@ -373,17 +420,69 @@ function registryStripRegex(tfSrc: string): RegExp {
   if (!body.startsWith("(?m)")) {
     throw new Error(`registry_rationale_strip must be multiline-anchored ((?m)), got: ${body}`);
   }
-  return new RegExp(body.slice("(?m)".length), "gm");
+  // `g` only — never `m`. See toNewlineOnlyMultiline for why.
+  return new RegExp(toNewlineOnlyMultiline(body.slice("(?m)".length)), "g");
+}
+
+// (#7278) Line-leading HCL comment removal, so an assertion about the RENDER cannot be satisfied
+// by the prose ABOVE it. `local.registry_rationale_strip`'s own rationale block names
+// `replace(...)` in English, so a bare grep for the call would match the comment explaining the
+// guard rather than the guard — the recurring "the comment I wrote to explain it satisfied it"
+// class. Only LINE-LEADING comments are removed: the strip expression itself contains a `#`
+// inside a quoted string, and a naive to-end-of-line stripper would mangle it.
+function stripHclLineComments(src: string): string {
+  return src
+    .split("\n")
+    .filter((l) => !/^[ \t]*(#|\/\/)/.test(l))
+    .join("\n");
+}
+
+// Is the strip ACTUALLY WIRED INTO user_data, or does the local merely exist?
+//
+// This is the difference between a guard that certifies PLACEMENT and one that certifies
+// BEHAVIOUR. Extracting the expression (above) proves the model and production agree on WHAT the
+// strip is; it says nothing about whether `user_data` applies it. Deleting the `replace(...)`
+// wrapper and leaving the local orphaned is a one-edit revert that terraform accepts silently —
+// an unused local is not an error — and it puts the payload back over the Hetzner cap. Measured:
+// with that wrapper removed and only the extraction-based tests in place, the suite stayed fully
+// GREEN while the rendered payload returned to 34,628 B.
+//
+// So the size test below derives its input from THIS predicate rather than assuming the strip is
+// applied: unwire the strip and the modelled payload is the un-stripped one, which exceeds the
+// cap and reds the cap assertion. The guard now fails for the reason the host would.
+function registryStripIsApplied(tfSrc: string): boolean {
+  const src = stripHclLineComments(tfSrc);
+  const anchor = /user_data\s*=\s*base64gzip\(\s*replace\(\s*templatefile\(/.exec(src);
+  if (anchor === null) return false;
+  // Bound the user_data expression by balancing parens from `base64gzip(`, so a
+  // `local.registry_rationale_strip` mention in some LATER resource cannot satisfy this.
+  const open = src.indexOf("(", anchor.index + anchor[0].indexOf("base64gzip"));
+  let depth = 0;
+  let end = open;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === "(") depth++;
+    else if (src[i] === ")") {
+      depth--;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  return /local\.registry_rationale_strip/.test(src.slice(open, end + 1));
 }
 
 // The registry render is `base64gzip(replace(templatefile(...), local.registry_rationale_strip, ""))`
 // — render FIRST, then strip, then gzip. Modeled in that exact order: stripping before
 // substitution would measure a different payload than terraform produces, and the substituted
 // values (ids, digests, tokens) are single-line scalars that the line-anchored strip cannot touch.
+//
+// `strip` is nullable BY DESIGN: pass null to model the un-stripped payload, which is what the
+// caller does when `registryStripIsApplied` is false.
 function renderedGzipB64LenStripped(
   cloudInitFile: string,
   tfSrc: string,
-  strip: RegExp,
+  strip: RegExp | null,
 ): number {
   const map = parseVarMap(extractTemplatefileMap(tfSrc, cloudInitFile));
   const src = readFileSync(join(INFRA, cloudInitFile), "utf8");
@@ -436,17 +535,83 @@ describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
   });
 
   test("registry host base64gzip'd user_data is under the Hetzner cap (#7278)", () => {
-    // Pre-#7278 this rendered 34,320 B against a 32,768 B cap, so EVERY registry provisioning
+    // Pre-#7278 this rendered 34,628 B (terraform's own base64gzip) against a 32,768 B cap, so EVERY registry provisioning
     // event failed at the Hetzner API — including the `registry-luks-recut` that is this lever's
     // only activation vehicle. There was no arm here to catch it.
+    //
+    // The strip is applied to the model ONLY if the render actually applies it. Unwiring the
+    // `replace()` wrapper therefore reds THIS assertion at the cap, exactly as the host would
+    // fail — rather than leaving a green suite measuring a payload production never produces.
+    const applied = registryStripIsApplied(registryTf);
     const size = renderedGzipB64LenStripped(
       "cloud-init-registry.yml",
       registryTf,
-      registryStripRegex(registryTf),
+      applied ? registryStripRegex(registryTf) : null,
     );
     expect(size).toBeLessThan(HETZNER_CAP);
     expect(size).toBeLessThan(REGISTRY_GZIP_BUDGET);
     expect(size).toBeGreaterThan(REGISTRY_GZIP_FLOOR); // non-vacuity
+  });
+
+  test("registry user_data applies the strip through the shared local (#7278)", () => {
+    // Two one-edit reverts this pins, both of which left the earlier version of this suite fully
+    // green while the payload went back over the cap:
+    //   - drop the `replace()` wrapper, orphaning the local (terraform accepts an unused local;
+    //     nothing in CI runs tflint, and fmt/validate are blind to it);
+    //   - keep `replace()` but pass an INLINE literal, leaving the local as decoration for this
+    //     test to read. That is the likely real edit — "inline the regex, drop the indirection" —
+    //     and the expression an engineer would most plausibly reach for is git-data's, which
+    //     deletes `#cloud-config`.
+    expect(registryStripIsApplied(registryTf)).toBe(true);
+  });
+
+  test("registry strip removes ONLY comments — no YAML content is eaten (#7278)", () => {
+    // The far side of the fixture set. Every other assertion here checks the strip is gentle
+    // enough (`#cloud-config` lives, shebangs live); none checked it is not too AGGRESSIVE beyond
+    // those two tokens. An expression that also ate `^[ \t]*- ` list items deleted 32
+    // runcmd/packages/write_files entries — the host boots a valid `#cloud-config` with every
+    // shebang intact and does essentially nothing — and passed every other test here, because the
+    // FLOOR only catches near-total annihilation, not targeted content loss.
+    const strip = registryStripRegex(registryTf);
+    const src = readFileSync(join(INFRA, "cloud-init-registry.yml"), "utf8");
+    const stripped = src.replace(strip, "");
+
+    const listItems = (s: string) => (s.match(/^[ \t]*- /gm) ?? []).length;
+    expect(listItems(src)).toBeGreaterThan(20); // non-vacuity: there ARE items to lose
+    expect(listItems(stripped)).toBe(listItems(src));
+
+    // Load-bearing anchors: the LUKS open path, the zot launch, and the boot credential-isolation
+    // self-check must all survive verbatim.
+    for (const anchor of ["cryptsetup", "docker run", "n_admitted", "findmnt"]) {
+      expect(src).toContain(anchor); // non-vacuity
+      expect(stripped).toContain(anchor);
+    }
+
+    // Every surviving line is either unchanged or was a comment: the stripped output must be a
+    // subsequence of the original's non-comment lines.
+    const nonComment = src.split("\n").filter((l) => !/^[ \t]*#([ \t]|$)/.test(l));
+    expect(stripped.split("\n")).toEqual(nonComment);
+  });
+
+  test("registry: #cloud-config is the ONLY separator-less comment line (#7278)", () => {
+    // zot-registry.tf asserts this in prose as the reason the separator rule is safe, and nothing
+    // verified it. A future `#TODO: …` (no space after `#`) would survive the strip and be
+    // invisible to the comment counters, which use the same separator-requiring regex — so the
+    // claim licensing the whole design would quietly stop being true.
+    const src = readFileSync(join(INFRA, "cloud-init-registry.yml"), "utf8");
+    const separatorless = (src.match(/^[ \t]*#[^ \t!\n][^\n]*$/gm) ?? []).filter(
+      (l) => l.trim() !== "#cloud-config",
+    );
+    expect(separatorless).toEqual([]);
+  });
+
+  test("registry size constants stay discriminating (#7278)", () => {
+    // M5: budget and floor are self-referential — loosening them to the hard cap and 1 removes
+    // both the re-inlining tripwire and the non-vacuity arm with nothing objecting. Pin them to a
+    // range that keeps each doing its job.
+    expect(REGISTRY_GZIP_BUDGET).toBeLessThan(HETZNER_CAP - 8_000); // real headroom, not the cap
+    expect(REGISTRY_GZIP_FLOOR).toBeGreaterThan(2_000); // a gutted payload must not clear it
+    expect(REGISTRY_GZIP_FLOOR).toBeLessThan(REGISTRY_GZIP_BUDGET);
   });
 
   test("registry strip preserves #cloud-config — the silent boot-brick guard (#7278)", () => {
@@ -464,6 +629,20 @@ describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
     expect(src.startsWith("#cloud-config\n")).toBe(true); // precondition, not an assumption
     const stripped = src.replace(strip, "");
     expect(stripped.startsWith("#cloud-config\n")).toBe(true);
+  });
+
+  test("registry template carries no byte JS and Go RE2 disagree on (#7278)", () => {
+    // The residual of the `m`-flag divergence documented at toNewlineOnlyMultiline. The model is
+    // now anchored to `\n` explicitly, so this is belt-and-braces — but it is what makes the
+    // divergence UNREACHABLE rather than merely handled, and it fails loudly with offsets if a
+    // future edit pastes in a CR or a Unicode line separator.
+    assertNoExoticLineBreaks(
+      readFileSync(join(INFRA, "cloud-init-registry.yml"), "utf8"),
+      "cloud-init-registry.yml",
+    );
+    // Non-vacuity: the detector must actually fire on the bytes it names.
+    expect(() => assertNoExoticLineBreaks("a\u2028b", "fixture")).toThrow(/U\+2028/);
+    expect(() => assertNoExoticLineBreaks("a\rb", "fixture")).toThrow(/CR/);
   });
 
   test("registry strip preserves every shebang and still removes rationale (#7278)", () => {

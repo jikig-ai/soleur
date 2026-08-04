@@ -8,22 +8,29 @@ created: 2026-08-04
 
 # Tasks — registry zot restart lever (#7278)
 
+> **STATUS (2026-08-04).** Only **Phase 0** and **Phase 0.5** landed, in PR #7280 — the
+> `user_data` cap fix and its missing size guard. **#7278 remains OPEN**; every unchecked box
+> below is still outstanding and tracks there. Phase 0.5 was a BLOCKING prerequisite discovered
+> during planning, not part of the lever: the registry render was 34,628 B against Hetzner's
+> 32,768 B cap, so no registry host could be provisioned at all — which also blocked #7277's
+> recut. It was split out because it is independently shippable and unblocks recovery today.
+
 Derived from the plan. Ordering is dependency-directed: contract-defining changes precede
 their consumers. Do not reorder phases 1→3 — the hook contract defines what the workflow
 polls, and the `-target=` allowlist must land with the resources it admits.
 
 ## Phase 0 — Preconditions (verify, never assume)
 
-- [ ] 0.1 Re-derive the next-free ADR ordinal against freshly-fetched `origin/main`
+- [x] 0.1 Re-derive the next-free ADR ordinal against freshly-fetched `origin/main`
       (`git fetch origin main && git ls-tree -r --name-only origin/main -- knowledge-base/engineering/architecture/decisions/ | grep -oE 'ADR-[0-9]+' | sort -u | tail -3`).
       Plan assumes **169** (168 is the max, 167 absent) — PROVISIONAL.
 - [ ] 0.2 Confirm PR #7279 status. If merged, rebase; either way **do not edit the recut
       runbook's blocked-state banner**.
-- [ ] 0.3 Read the admitted-secret self-check cardinality in `cloud-init-registry.yml`
+- [x] 0.3 Read the admitted-secret self-check cardinality in `cloud-init-registry.yml`
       (`n_admitted=…`, currently 4) and record it — the new HMAC secret changes it.
 - [ ] 0.4 Determine the exact `webhook` binary acquisition method used for web-1 and reuse
       it verbatim; do not invent a new install path.
-- [ ] 0.5 Re-pull `SOLEUR_ZOT_DISK` (`doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2h --grep SOLEUR_ZOT_DISK`).
+- [x] 0.5 Re-pull `SOLEUR_ZOT_DISK` (`doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2h --grep SOLEUR_ZOT_DISK`).
       Record `pcent` and `zot_restarts`. **If the store has filled and the registry is hard
       down, STOP and re-scope** — the activation story changes materially.
 - [ ] 0.6 Re-run the allowlist artifact sweep: `git grep -ln -- '-target=' tests/ scripts/ .github/`.
@@ -36,11 +43,11 @@ polls, and the `-target=` allowlist must land with the resources it admits.
 against Hetzner's **32768** cap — already over, before this plan adds anything. This also
 blocks #7277; surface it to the operator independently of this PR.
 
-- [ ] 0.5a Measure the baseline on the **substituted** render, not the raw file.
-- [ ] 0.5b Adopt/generalise `apps/web-platform/infra/modules/git-data-userdata/`
+- [x] 0.5a Measure the baseline on the **substituted** render, not the raw file.
+- [x] 0.5b Adopt/generalise `apps/web-platform/infra/modules/git-data-userdata/`
       (rationale-strip). Do NOT hand-roll a second stripper.
-- [ ] 0.5c Port the parity test (`git-data-render-strip-parity.test.sh`).
-- [ ] 0.5d Assert `base64gzip` length `< 32768` **with margin** for what this plan adds.
+- [x] 0.5c Port the parity test (`git-data-render-strip-parity.test.sh`).
+- [x] 0.5d Assert `base64gzip` length `< 32768` **with margin** for what this plan adds.
 - [ ] 0.5e If it cannot be made to fit → STOP and re-scope; the lever is undeliverable.
 
 ## Phase 1 — Hook contract + scripts (RED first)

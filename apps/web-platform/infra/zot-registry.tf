@@ -328,7 +328,10 @@ resource "doppler_secret" "zot_push_token" {
 # (#7278, ADR-152 precedent) THE RATIONALE STRIP for the registry's cloud-init.
 #
 # Removes whole-line `#` comments from the render, so the repo keeps its rationale and
-# user_data does not pay for it: 34,320 B → ~9 KB against Hetzner's hard 32,768 B ForceNew cap.
+# user_data does not pay for it: 34,628 B → 9,072 B against Hetzner's hard 32,768 B ForceNew cap
+# (measured with terraform's OWN base64gzip, never `gzip -9` — git-data-userdata-budget.sh:19-22
+# forbids the latter because it OVERSTATES headroom, and on a hard gate an optimistic
+# measurement is worse than none).
 # Measured over-cap BEFORE this issue added anything, which meant every registry provisioning
 # event — the `registry-luks-recut` that activates the restart lever included — failed at the
 # Hetzner API. Comments were ~55% of the payload's lines.
@@ -388,12 +391,41 @@ resource "hcloud_server" "registry" {
   # gzip magic → cloud-init auto-gunzips → byte-identical #cloud-config (DataSourceHetzner).
   #
   # (#7278) "budget for it anyway and verify the byte-exact size at the first terraform plan"
-  # was never done, and the payload crossed the cap: measured 34,320 B against 32,768 B. In that
+  # was never done, and the payload crossed the cap: 34,628 B against 32,768 B, i.e. 1,860 B over
+  # (terraform's own base64gzip). In that
   # state EVERY registry provisioning event fails at the Hetzner API — including the
   # `registry-luks-recut` that is the only vehicle able to deliver new host-side code here
   # (ADR-096 makes this host cloud-init-only). The rationale strip below is what brings it back
   # under, and plugins/soleur/test/cloud-init-user-data-size.test.ts now carries the registry arm
   # that was missing, so the next drift fails in CI instead of at a dark host.
+  #
+  # ⚠ THIS EDIT ARMS A PENDING REPLACE, AND THE RECREATE WOULD FAIL ON STOCK IN hel1.
+  #
+  # `user_data` is ForceNew and this resource DELIBERATELY carries no
+  # `lifecycle.ignore_changes = [user_data]` (see the note ~40 lines below). Changing the render
+  # therefore shows `-/+ hcloud_server.registry` — a destroy-then-create — in any UNTARGETED
+  # plan, which is the operator's full apply and the 12h drift detector, i.e. the ONLY apply
+  # paths these resources have.
+  #
+  # The replace was ALREADY pending before this change (state ≠ over-cap render). What this
+  # change does is make the CREATE attemptable: pre-fix it would have destroyed the host and then
+  # failed at the Hetzner 32 KB error. That is an improvement only if the type is orderable.
+  #
+  # STOCK REALITY — live probe 2026-08-04, read from `.server_types.available` (never
+  # `.supported`, never the hcloud CLI location column; both report the SUPPORTED set):
+  #   nbg1-dc3   cx23 ✓  cpx22 ✓
+  #   hel1-dc2   cx23 ✗  cpx22 ✓     ← the registry lives here (registry_location = hel1)
+  #   fsn1-dc14  cx23 ✗  cpx22 ✓
+  # So `cx23` IS orderable again in nbg1-dc3 — variables.tf's "0 of 3 EU DCs" (probe 2026-07-26)
+  # is stale in that direction — but NOT in hel1, where this host runs. A recreate here still
+  # fails on stock and is a TYPE DECISION, exactly as variables.tf warns. #6508's plan-time guard
+  # does NOT catch it: `data.hcloud_server_type.registry` resolves cx23 fine because the type is
+  # SUPPORTED; it is AVAILABILITY that is zero, which is the whole distinction.
+  #
+  # CONSEQUENCE: do not run an untargeted apply against this root without re-probing stock first.
+  # Re-provisioning is the guarded `registry-host-replace` / `registry-luks-recut` dispatch path,
+  # which is destroy-guarded and scoped. This is disclosure, not a new hazard — but until #6460's
+  # DR remediation lands, "the plan shows the registry being replaced" is a STOP, not a proceed.
   user_data = base64gzip(replace(templatefile("${path.module}/cloud-init-registry.yml", {
     # Mount the zot storage volume by its specific id (server.tf/cloud-init.yml by-id
     # pattern). Known at plan time; the attachment is a separate resource.

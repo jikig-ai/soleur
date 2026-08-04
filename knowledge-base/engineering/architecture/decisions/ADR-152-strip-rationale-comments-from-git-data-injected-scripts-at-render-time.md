@@ -1,4 +1,8 @@
-# ADR-152 — Strip rationale comments from the git-data injected scripts at render time
+# ADR-152 — Strip rationale comments from rendered `user_data` at render time
+
+- **Scope:** git-data's injected scripts (2026-07-29) and the registry's cloud-init template
+  (2026-08-04, #7278). The technique is shared; the EXPRESSION is deliberately not — see the
+  amendment. Filename kept at its original slug so cross-references do not churn.
 
 - **Status:** Accepted
 - **Date:** 2026-07-29
@@ -207,8 +211,11 @@ stays up, and #6982 additionally re-arms the birth interlock mechanically
 `hcloud_server.registry` was measured at **34,628 B** against the same 32,768 B cap — over it,
 and therefore unprovisionable, before anyone tried to add to it. Because ADR-096 makes the
 registry host cloud-init-only, a provisioning event is its only channel for host-side change,
-so the cap breach silently disabled `registry-host-replace` AND `registry-luks-recut` — both
-recovery levers — independently of their own gates. This ADR's technique is what brought it
+so the cap breach silently disabled EVERY path that creates this host —
+`registry-host-replace`, `registry-luks-recut` AND `registry-region-migrate`
+(apply-web-platform-infra.yml) — independently of their own gates. The region-migrate omission
+is the one that matters most in practice: that is the lever an operator reaches for when the
+REGION is the problem, i.e. exactly when they are least likely to suspect a byte cap. This ADR's technique is what brought it
 back under (34,628 → 9,072 B).
 
 **The expression is deliberately not shared, and must not be.** The rule above
@@ -235,13 +242,34 @@ did: assert the first line survives, assert every shebang survives, and assert t
 not a no-op — a strip that matched nothing satisfies both preservation checks while leaving
 the payload over the cap.
 
-**One copy per expression.** git-data's is hand-mirrored into `git-data-userdata-budget.sh`
-and kept equal by `git-data-render-strip-parity.test.sh`. The registry's is instead
-**extracted** from `zot-registry.tf` by `plugins/soleur/test/cloud-init-user-data-size.test.ts`,
-so there is no second copy and no parity suite. Prefer extraction for any future host: a model
-that strips differently than production measures a payload production never boots, and
+**One copy per expression — and know what that does NOT buy.** git-data's is hand-mirrored into
+`git-data-userdata-budget.sh` and kept equal by `git-data-render-strip-parity.test.sh`. The
+registry's is instead **extracted** from `zot-registry.tf` by
+`plugins/soleur/test/cloud-init-user-data-size.test.ts`. Prefer extraction for a future host: a
+model that strips differently than production measures a payload production never boots, and
 measures it green.
 
-**Coverage gap this closed.** `cloud-init-user-data-size.test.ts` guarded the web and git-data
-hosts and had no registry arm at all, which is why a 1,860 B breach sat undetected. Any host
-whose `user_data` is rendered against the cap needs an arm there at birth, not after a breach.
+But extraction removes only EXPRESSION divergence. It does not replace git-data's
+`git-data-userdata-budget.sh`, which exists for a reason extraction cannot satisfy — it renders
+through terraform's OWN `base64gzip` from an empty scratch dir with no `terraform init`, i.e. a
+byte-exact measurement. The TS model is explicitly not that (node zlib vs Go zlib; it asserts a
+BUDGET, never equality), so the registry has no byte-exact CI measurement today. At 9,072 B
+against 32,768 that is acceptable on margin; it is a gap, not a solved problem.
+
+Extraction also does not prove the strip is APPLIED. Reading the expression out of the `.tf`
+says nothing about whether `user_data` wraps `templatefile()` in it — measured: unwiring the
+`replace()` and leaving the local orphaned kept the whole suite green while the render returned
+to 34,628 B, and so did keeping `replace()` with an inline boot-bricking literal. git-data hit
+the identical class (`git-data-render-strip-parity.test.sh`: "nothing checked that the budget
+harness actually APPLIES it"). Assert on the RENDER EXPRESSION, not on a string in a file.
+
+**Coverage gap this closed, and the one it did not.** `cloud-init-user-data-size.test.ts`
+guarded the web and git-data hosts and had no registry arm at all, which is why a 1,860 B breach
+sat undetected. Any host whose `user_data` is rendered against the cap needs an arm there at
+birth, not after a breach.
+
+**The sweep is OUTSTANDING, not done.** After #7278 two further hosts still render
+`base64gzip(templatefile(...))` with no arm in that suite: `hcloud_server.inngest`
+(`inngest-host.tf`) and the grok-dogfood host (`grok-dogfood.tf`). Both are under cap today and
+neither is this PR's scope — but they are on the same unguarded trajectory the registry was on,
+and this paragraph is the record that the gap is known rather than closed.
