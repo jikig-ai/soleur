@@ -154,6 +154,20 @@ Two corollaries worth keeping:
 - **A mutation battery timed out mid-run**, leaving `RECENT_BOOT_S=99999999` in the tree.
   **Prevention:** size batteries under the harness timeout and restore from a pristine
   backup in a separate call.
+- **A fixture's explanatory prose IS the haystack.** Both new fixtures for the PIR-gate fix
+  opened by describing what they pinned — "contains no *outage*, no *went down*, no *failed in
+  production*" — and thereby contained every one of those tokens. The positive fixture passed
+  with the new alternation deleted; the negative one signalled outright. Baseline green,
+  mutation green, both for the same self-inflicted reason. **Prevention:** for a
+  scanner/matcher fixture, the file is input, not documentation — put the rationale in the test
+  case and mutate in BOTH directions, because a fixture that matches for the wrong reason is
+  invisible to a one-direction battery.
+- **Accepting a gate's PASS without checking what it measured.** `net-issue-flow.sh` reported
+  `Filing: 0` on a PR that filed two issues, because it counts issues whose *body* cites the PR
+  and neither did. The honest state was `+1`, i.e. BLOCKED. Taking the green would have been
+  the exact defect this PR exists to remove, committed against my own ship gate. **Prevention:**
+  when a gate reports a count you can independently name, name it first and reconcile — a gate
+  that passes because it looked at the wrong set is worse than one that fails.
 
 ## Postscript: the filing that DISSENT correctly rejected
 
