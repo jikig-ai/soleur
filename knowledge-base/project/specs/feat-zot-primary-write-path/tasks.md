@@ -25,23 +25,29 @@ record, and ships one narrow retry. Do not treat this as a topology migration.
   - [ ] 1.4.5 **Do not** touch L260/264/362/474/475 (the Web Push cluster). Correct ordinal unestablished; out of scope. See plan §C4 views "Deliberately NOT fixed".
   - [ ] 1.4.6 Run `apps/web-platform/test/c4-code-syntax.test.ts` + `apps/web-platform/test/c4-render.test.ts`.
 
-## Phase 2 — The one change the evidence supports
+## Phase 2 — DESCOPED on review evidence (no workflow change ships)
 
-- [ ] **2.1** Add a bounded, **conditional** retry around the GHCR push in `.github/workflows/reusable-release.yml` (step at ~L740).
-  - [ ] 2.1.1 Reuse the existing `retry()` idiom already in this file (mirror step) — do not invent a second shape.
-  - [ ] 2.1.2 Size backoff to GitHub's own guidance (*"wait a few minutes"*), not the mirror step's 5s/15s TCP-reset tuning. Quote the response body in the code comment.
-  - [ ] 2.1.3 Gate on the rate-limit signature (`secondary rate limit` / 403 carrying the rate-limit `documentation_url`). A non-matching 403 must still fail immediately. **A blanket retry fails AC7.**
-  - [ ] 2.1.4 `docker/build-push-action` has no native retry — confirm the chosen shape actually wraps the push (verify against the installed action version, don't assume a flag exists).
-- [ ] **2.2** Emit `::notice::` per retry attempt so a rate-limited-but-recovered push is visible.
-- [ ] **2.3** *(Conditional)* If 2.1 lands as a sourced classifier helper, add its suite mirroring `scripts/zot-mirror-diagnosis.sh` and register it in `test-all.sh` (scripts group).
+~~Conditional retry on the GHCR push.~~ **Cut.** Three verified findings:
+
+1. The GHCR push is `uses: docker/build-push-action@…` (`reusable-release.yml:743`) — a `uses:`
+   step. The `retry()` it was told to reuse is a bash function in a `run:` block (`:962-971`).
+   You cannot wrap one in the other, and a `uses:` step's stderr is not readable from a sibling
+   step, so the signature gate has nothing to match.
+2. A cause-classifying retry is *more* ADR-166-exposed than a blanket one, and
+   `scripts/lint-diagnosis-claims.sh` is a **blocking** lint over `.github/workflows/`.
+3. GHCR blocked one attempt transiently; the zot leg blocked five releases the same day.
+   Re-running the job is the existing remedy and it worked.
+
+- [ ] **2.1** Nothing to do. Confirm `git diff --name-only origin/main...HEAD -- '.github/workflows/'` is empty (AC10).
 
 ## Phase 3 — Verification
 
-- [ ] **3.1** `actionlint .github/workflows/reusable-release.yml` — clean. *(Workflow file, so actionlint is correct here; do **not** run it against a composite `action.yml`.)*
-- [ ] **3.2** Extract the changed `run:` snippet and check with `bash -c` — **not** `bash -n` on the YAML.
-- [ ] **3.3** c4 syntax + render tests (from 1.4.6).
-- [ ] **3.4** Full-suite exit gate: `bash test-all.sh`.
-- [ ] **3.5** Walk AC1–AC13 explicitly, including AC13's ADR-link resolution sweep.
+- [ ] **3.1** c4 syntax + render tests (from 1.4.6).
+- [ ] **3.2** Full-suite exit gate: `bash test-all.sh`.
+- [ ] **3.3** Walk AC1–AC13, skipping the deleted AC7/AC8. Use the **rewritten** AC4/AC5/AC12
+      commands — the originals were defective (AC4 would have deleted true facts about web-1 and
+      soleur-grok-dogfood; AC5 passed before any edit; AC12 false-passed on a line shift).
+- [ ] **3.4** `actionlint` / `bash -c` — **not applicable**, no workflow edited.
 
 ## Phase 4 — Ship
 

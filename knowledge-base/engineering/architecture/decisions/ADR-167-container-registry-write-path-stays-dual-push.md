@@ -1,6 +1,6 @@
 # ADR-167: The container-registry write path stays dual-push — GHCR is CI's backfill source, not a demotable archive
 
-- **Status:** Accepted
+- **Status:** Proposed
 - **Date:** 2026-08-04
 - **Issues:** [#7247](https://github.com/jikig-ai/soleur/issues/7247) (OPEN, the measured blocker) · [#7248](https://github.com/jikig-ai/soleur/issues/7248) (OPEN, related, not a dependency)
 - **Amends:** [ADR-096](./ADR-096-migrate-container-registry-ghcr-to-self-hosted-zot.md) — scopes the 2026-07-30 amendment's read claim to hosts; its conclusion is unchanged
@@ -10,9 +10,25 @@
 
 ## Status
 
-**Accepted.** This ADR records a decision *not* to change the write-path topology. There is no
-adoption phase and nothing to soak. It carries an explicit **revisit trigger** (below) so the
-decision expires on evidence rather than on time.
+**Proposed.** Not accepted: CPO sign-off (required at the declared `single-user incident`
+threshold) has not been given, and adversarial review returned findings that narrow this ADR's
+scope — see `## Scope: this is a hold, not a permanent topology decision`.
+
+### Scope: this is a hold, not a permanent topology decision
+
+A review panel's central objection is upheld: the evidence below supports **"do not re-route the
+write path while zot is crash-looping"** — a *sequencing* claim with a lifetime of days — and an
+earlier draft of this ADR overstated it into a permanent topology decision. It is restated as a
+**conditional hold**:
+
+> The dual-push topology stands **while #7247 is open**. Within **14 days of zot reaching a
+> verified restart plateau**, the zot-first question is re-opened and decided against
+> steady-state evidence, not against outage-window evidence.
+
+The distinction matters because every failure row below was drawn from a window in which one leg
+was pinned near-zero availability. That tells you which leg failed *during the outage*; it does
+not settle each leg's steady-state contribution. Reading it as the latter is survivorship
+reasoning, and this ADR no longer does.
 
 ## Context
 
@@ -52,21 +68,37 @@ not supported.
 
 ### P3 — "GHCR serves zero reads and is not a refill source." — **false**
 
-GHCR serves at least two live reads:
+GHCR serves reads — but the two candidates are **not** equally live, and an earlier draft of this
+ADR asserted both flatly. Corrected:
 
 1. **CI's own backfill read.** The release job's `crane copy ghcr.io/… → 127.0.0.1:5000` is an
    authenticated GHCR *read*, visible in the run log as
    `Copying from ghcr.io/jikig-ai/soleur-***:v0.249.5 to 127.0.0.1:5000/…` followed by
-   `existing blob:` lines. This is also precisely the recovery `reusable-release.yml`'s own
-   `degraded()` prescribes: *"backfill via `crane copy GHCR→zot && cosign sign --yes
-   <zot>@<digest>`, then re-run."*
-2. **The ADR-135 config-refresh bundle**, which is GHCR-authoritative with a **GHCR-direct host
-   pull** and a `continue-on-error` zot mirror — the inverse of the app-image topology, already
-   shipped. (`build-inngest-config-bundle.yml:151` states it plainly: *"GHCR is authoritative
-   for the v1 GHCR-direct host pull (D-ZOT); the zot copy is a dark-safe convenience, so this
-   step is continue-on-error."*) Note that `model.c4` cites this as "ADR-136" in three places;
-   ADR-136 is the pre-apply entrypoint-enumeration gate. The correct ordinal is **ADR-135**,
-   and the C4 citation is corrected alongside this decision.
+   `existing blob:` lines. This is also the recovery `reusable-release.yml`'s own `degraded()`
+   prescribes: *"backfill via `crane copy GHCR→zot && cosign sign --yes <zot>@<digest>`, then
+   re-run."*
+   **Weight this read carefully — an earlier draft over-claimed it.** Review established two
+   limits: (a) it is *partly circular* as evidence — the mirror step reads GHCR only because the
+   same job pushed there seconds earlier, so under a zot-first topology the read is not *lost*,
+   it is *unnecessary*; and (b) every `crane copy GHCR→zot` outside the release job is a **prose
+   string an operator pastes** (`reusable-release.yml:1025, 1277, 1340`), not an automated
+   consumer. Under `hr-never-label-any-step-as-manual-without`, "keep a second registry on the
+   release critical path so a human has something to paste" is weak on its own.
+   What survives: GHCR is the only place a **completed, signed** image exists when the mirror
+   fails. That is a real recovery property. Whether it is the *cheapest* way to hold one is the
+   open question this ADR now defers rather than settles — see §Alternatives.
+2. **The ADR-135 config-refresh bundle** is GHCR-authoritative with a **GHCR-direct host pull**
+   and a `continue-on-error` zot mirror — the inverse of the app-image topology.
+   `build-inngest-config-bundle.yml:151` states it plainly: *"GHCR is authoritative for the v1
+   GHCR-direct host pull (D-ZOT); the zot copy is a dark-safe convenience, so this step is
+   continue-on-error."*
+   **But this read is NOT live.** `model.c4:515` marks the `inngest -> ghcr` edge
+   **`ADOPTING` (rides #6178 cutover, PR #6348)**. It is evidence that the inverse topology is a
+   *sanctioned pattern in this repo*, and nothing more. It is a different OCI repo and a
+   different artifact, and it must not be counted as a live consumer of the app-image path.
+   *(Also: `model.c4` cites this channel as "ADR-136" in four places; ADR-136 is the pre-apply
+   entrypoint-enumeration gate. The correct ordinal is **ADR-135**, corrected alongside this
+   decision.)*
 
 The reconciling distinction, which the record did not previously state: **hosts cannot read
 GHCR; CI can.** ADR-088 arm-b is a finding about *host-side zero-touch* credentials. In-job,
@@ -136,15 +168,32 @@ unchanged).**
 
 ### Revisit trigger
 
-Reopen this decision if **any** of the following is measured:
+**Mandatory (time-boxed):** re-open within **14 days of zot reaching a verified restart
+plateau** (`scripts/followthroughs/zot-restart-plateau-6288.sh` returning `0`), and decide the
+zot-first question against steady-state evidence. This fires regardless of the triggers below.
 
-- A GHCR push blocks a release for a reason that is **not** retryable (a genuine authorization
-  change, package deletion, or org policy change) — i.e. the retry in (4) exhausts on a
-  non-rate-limit signature.
-- Over any rolling 30-day window, releases blocked by the **GHCR** leg exceed those blocked by
-  the **zot** leg. The `::notice::` from (4) is what makes this countable; today it is not.
-- The `crane copy` GHCR→zot backfill stops working from CI — which would remove the sole
-  justification in (1) for keeping GHCR on the path.
+Additionally, re-open if **any** of the following is measured:
+
+- **A GHCR push fails with a non-rate-limit signature.** *(Rewritten: an earlier draft said "the
+  retry in (4) exhausts on a non-rate-limit signature," which is unsatisfiable by construction —
+  a retry gated on the rate-limit signature never engages on a non-rate-limit failure, so it can
+  never exhaust on one. The observable condition is the failure itself, not the retry's
+  exhaustion.)*
+- **Over any rolling 30-day window, releases blocked by the GHCR leg exceed those blocked by the
+  zot leg.** ⚠️ **Not currently instrumented — this trigger is inert until it is.** The
+  `::notice::` from (4) counts *recovered* attempts, not blocks; the zot leg emits
+  `mirror_reason` but the GHCR leg emits no per-leg block label; and nothing aggregates a window.
+  Making this measurable requires a per-leg `block_reason` output plus an aggregator. Until that
+  ships, do not treat this trigger as live.
+- **The `crane copy` GHCR→zot backfill stops working from CI**, which would remove the recovery
+  property in (1). ⚠️ Also under-instrumented: `degraded()` emits `copy_v`/`copy_sha`/`copy_latest`
+  per tag (`reusable-release.yml:1276-1277`), and those fire identically whether the **GHCR read**
+  or the **zot write** failed. Splitting that label into read-side vs. write-side is a
+  prerequisite for this trigger to mean anything.
+
+The two ⚠️ triggers are recorded as **stated but inert**. An ADR whose expiry conditions cannot be
+evaluated by anything it ships is a closed door with a comment on it — naming the gap is the
+minimum honest treatment, and the mandatory time-box above is what actually guarantees a revisit.
 
 ## Consequences
 
@@ -169,6 +218,19 @@ Reopen this decision if **any** of the following is measured:
   measurement shows the second one *does* help (it holds the backfill source) and the *first*
   one is what is failing. Removing GHCR would concentrate risk onto the crash-looping component,
   not away from it.
+- **The open deferral that would actually reduce it is [#6126](https://github.com/jikig-ai/soleur/issues/6126)**
+  — *"zot registry HA + read-replicas (deferred from #6122)"*, OPEN at `priority/p3-low`. This
+  ADR formally accepts a single point of failure whose named mitigation is sitting at the lowest
+  priority tier. That juxtaposition should be uncomfortable, and it is recorded here rather than
+  left implicit: **#6126's priority deserves re-evaluation** in light of a 21-hour outage that
+  blocked five releases.
+- **Both legs are serial and blocking, so `P(release) = P(GHCR) × P(zot)`.** Keeping GHCR on the
+  blocking path can only *lower* nominal availability; it is justified only by the recovery
+  property, which is why the untested artifact alternative above is load-bearing.
+- **The topology is causally contributory to its own measured failure.** Each release makes three
+  GHCR tag pushes, a cosign signature push, and three crane GHCR reads. Secondary rate limits are
+  volume-triggered, so the dual-push shape helps produce the exact failure Decision (4) retries
+  into. Not addressed here; noted so the next reader does not have to rediscover it.
 
 **Neutral**
 
@@ -178,11 +240,12 @@ Reopen this decision if **any** of the following is measured:
 
 | Option | Why rejected |
 |---|---|
-| **Push zot-first, GHCR best-effort (`continue-on-error`)** | Not the small change it appears to be. GHCR is not a separable *leg* — it is the buildx `push: true` **output target** (`reusable-release.yml:740-746`). Making it best-effort first requires re-targeting the build (OCI-layout export, or a zot-direct push), which is option 2's cost. It also sends the *full image upload* through the failing origin instead of a digest-preserving copy from a staged source. |
+| **Push zot-first, GHCR best-effort (`continue-on-error`)** | **Corrected argument.** An earlier draft claimed GHCR "is the buildx `push: true` output target (`:740-746`)" — that citation is wrong: the targets are the `tags:` **list** at `:756-759`, and buildx pushes every entry, so adding a zot tag is one line. The real obstacle is documented in this repo already, at **`reusable-release.yml:805-806`**: *"the buildx container driver cannot reach the runner's 127.0.0.1 bridge listener, so adding a zot tag to build-push would not work."* CI reaches zot only through the CF-tunnel bridge on runner loopback. That is why the copy is runner-side `crane`. **Caveat, stated rather than hidden:** `docker/setup-buildx-action` accepts `driver-opts: network=host`, which would give the container driver the runner's loopback; `git grep -rn "driver-opts\|network=host" .github/` returns nothing repo-wide, so this is **untested here** and its interaction with `cache-to: type=gha` is unmeasured. The cost of this option is therefore *unmeasured*, not *proven high*. Separately, buildx fails the whole step on any tag failure, so option 1 still needs step separation to make GHCR best-effort. |
 | **Build and push directly to zot; drop the crane hop** | Deletes the documented backfill by deleting its source; routes the entire upload through the currently-failing origin with no staged copy if it fails; and trades a transient, retryable, self-documenting failure for total dependence on the component that failed 3+ consecutive times that day. |
 | **Keep dual-push but make the GHCR leg non-blocking** | Same structural objection as option 1. Additionally, *ignoring* a GHCR push failure would publish a release whose only image copy lives in a crash-looping registry — removing the backfill source at exactly the moment it is needed. Its intent is partially adopted in Decision (4), by retrying the measured failure class rather than ignoring it. |
 | **Treat the 403 as a credential defect to repair** | There is no credential defect. The 403 is a secondary rate limit (P2). Repairing a working credential would be the ADR-166 failure applied to a remedy. |
 | **Reintroduce a personal GHCR pull credential** | Out of bounds. That class was deliberately retired (#7071, ADR-088 arm-b) and nothing in this analysis argues for it: CI's read already works, and the host read is not what failed. |
+| **Hold the staged copy somewhere other than GHCR** — `outputs: type=oci,dest=…` + `actions/upload-artifact` (90-day retention, digest-preserving, restorable via `crane push`), or simply rebuild from the same SHA against the `type=gha` cache | **NOT YET EVALUATED — and this is the option that decides whether Decision (1) stands.** An earlier draft of this ADR omitted it entirely while resting its central argument on GHCR being the *only* place a completed signed image lives. If an artifact-held OCI layout satisfies the recovery property, the backfill justification for keeping GHCR on the critical path dissolves. Open questions: does cosign's signature survive an OCI-layout round-trip; is 90-day retention sufficient; does the rebuild reproduce the digest bit-for-bit. **Resolving this is a precondition of promoting this ADR from Proposed to Accepted.** |
 
 ---
 

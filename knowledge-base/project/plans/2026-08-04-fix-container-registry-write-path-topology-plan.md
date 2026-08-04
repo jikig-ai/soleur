@@ -121,7 +121,7 @@ has. Remove the GHCR leg and that recovery path is deleted along with it.
 
 | # | Option | Verdict |
 |---|---|---|
-| 1 | **Push zot-first, GHCR best-effort** (`continue-on-error`) | **Reject.** Not the "smallest change" it appears to be: GHCR is not a separable *leg* — it is the buildx `push: true` **output target** (`reusable-release.yml:740-746`). Making it best-effort requires re-targeting the build (OCI-layout export or a zot-direct push) first, so this collapses into option 2's cost. It also inverts the ordering so the *full image upload* traverses the crash-looping origin instead of a digest-preserving crane copy from a staged source. |
+| 1 | **Push zot-first, GHCR best-effort** (`continue-on-error`) | **Hold, on a corrected argument.** An earlier draft said GHCR "is the buildx `push: true` output target (`:740-746`)" — **that citation is wrong.** The targets are the `tags:` *list* at `:756-759`, and buildx pushes every entry, so adding a zot tag is one line. The real obstacle is already documented at **`reusable-release.yml:805-806`**: *"the buildx container driver cannot reach the runner's 127.0.0.1 bridge listener, so adding a zot tag to build-push would not work."* CI reaches zot only via the CF-tunnel bridge on runner loopback — hence the runner-side `crane` copy. **Unmeasured caveat:** `setup-buildx-action` accepts `driver-opts: network=host`, which would hand the container driver that loopback; `git grep "driver-opts\|network=host" .github/` returns nothing repo-wide, so this is untested here and its interaction with `cache-to: type=gha` is unknown. This option's cost is therefore **unmeasured, not proven high** — and measuring it is a precondition of the ADR's promotion to Accepted. |
 | 2 | **Build and push directly to zot; drop the crane hop** | **Reject — actively harmful today.** (a) Deletes the documented `crane copy GHCR→zot` backfill by deleting its source. (b) Pushes the entire image through the CF tunnel into the origin that is currently failing, with no staged copy anywhere if it fails. (c) Trades one registry's *transient, retryable, self-documenting* failure for total dependence on one that has failed 3+ consecutive times today. |
 | 3 | **Keep dual-push, make the GHCR leg non-blocking** | **Reject as framed** (same L740 structural objection as option 1), **but its intent is partially adopted**: the *measured* GHCR failure class is made non-blocking the correct way — by retrying it — rather than by ignoring it. Ignoring a GHCR push failure would silently ship a release whose only image copy is in a crash-looping registry, removing the backfill source precisely when it is needed. |
 | 4 | **Treat the 403 as a credential defect to repair** | **Reject — there is no credential defect.** The 403 is a secondary rate limit (R2). Repairing a credential that is working would be the exact ADR-166 failure: acting on a cause nobody measured. |
@@ -301,30 +301,39 @@ Ordered so contract changes precede consumers.
 1.3 Add the one scoping sentence to ADR-088 arm-b.
 1.4 Correct the three `model.c4` descriptions (§C4 views). Run the two c4 tests.
 
-### Phase 2 — The one change the evidence supports
+### Phase 2 — DESCOPED (was: conditional retry on the GHCR push)
 
-2.1 Wrap the GHCR push in a bounded retry for the measured secondary-rate-limit class.
-    `docker/build-push-action` has no native retry, so the shape is a `retry()` wrapper —
-    **reuse the one already in this file** at the mirror step (`n=1 max=3`, `sleeps=(0 5 15)`)
-    rather than inventing a second idiom.
-    - **Backoff must suit the failure.** GitHub's own body says *"wait a few minutes."* The
-      mirror step's 5s/15s is tuned for a TCP reset, not a rate limit. Use longer waits
-      (e.g. `0 60 180`) and state the number in the code comment with the body quoted.
-    - **Retry only the retryable.** Gate on the response signature (`secondary rate limit` /
-      HTTP 403 carrying the rate-limit `documentation_url`). A blanket retry would paper over a
-      genuine authz change — the exact "name a cause you measured" discipline of ADR-166,
-      applied to a remedy instead of a message.
-2.2 Emit `::notice::` per retry attempt so a rate-limited-but-recovered push is visible
-    (today it is invisible unless it exhausts the job).
-2.3 Extend `scripts/` test coverage for the classifier if 2.1 lands as a sourced helper
-    (mirroring `scripts/zot-mirror-diagnosis.sh` + its suite, registered in `test-all.sh`).
+**Cut on review evidence. Ship no workflow change in this PR.** Three independent findings, each
+verified against source, collapse this phase:
+
+1. **It is not implementable in the prescribed shape.** The GHCR push is
+   `uses: docker/build-push-action@…` (`reusable-release.yml:743`) — a `uses:` step with no
+   `run:` block. The `retry()` the plan said to reuse is a **bash function inside a `run:` block**
+   (`:962-971`). You cannot wrap a `uses:` step in a bash function, and a `uses:` step's stderr is
+   not readable from a sibling step, so the signature gate has nothing to match against.
+2. **The conditional gate is *more* ADR-166-exposed than a blanket retry, not less.** A blanket
+   retry emits `attempt N/M failed (rc=…)` and names no cause. A classifier that labels a 403 a
+   "secondary rate limit" from a string match **is** an assertion of cause — and
+   `scripts/lint-diagnosis-claims.sh` is a **blocking** lint (in `test-all.sh`, CI Required) that
+   scans `.github/workflows/` for exactly that. The plan invoked ADR-166 to justify the option
+   ADR-166 most disfavours.
+3. **The evidence does not support spending here.** GHCR blocked one attempt, transiently, in a
+   day when the zot leg blocked five releases. Re-running the job is the existing remedy and it
+   **worked** on 2026-08-04. Adding an unimplementable retry to the leg that is not blocking is
+   not "the one change the evidence supports" — it is motion.
+
+**If a retry is wanted later**, the realizable forms are: (a) a blanket bounded retry via a
+vendored retry action (new dependency), or (b) converting the build to `run: docker buildx build
+--push`, which voids the heavily-commented `cache-to: type=gha,mode=min` secret-safety reasoning
+at `:748-756`. Both are larger than this plan's premise allowed, and neither is urgent. Tracked as
+a follow-up rather than smuggled in here.
 
 ### Phase 3 — Verification
 
-3.1 `actionlint` on the changed workflow; `bash -c` on the extracted `run:` snippet
-    (**not** `bash -n` on the YAML).
-3.2 c4 syntax + render tests.
-3.3 `bash test-all.sh` (or the scripts group) if 2.3 added a suite.
+3.1 c4 syntax + render tests (`apps/web-platform/test/c4-code-syntax.test.ts`, `c4-render.test.ts`).
+3.2 `bash test-all.sh` (full-suite exit gate).
+3.3 No workflow change ships, so `actionlint` and the `bash -c` snippet extraction are **not
+    applicable** — both presupposed a `run:` block this PR no longer touches.
 
 ---
 
@@ -339,35 +348,76 @@ Ordered so contract changes precede consumers.
 - **AC3** ADR-088 contains the host-scope sentence, and no ADR touched by this PR **proposes**
   reintroducing a personal credential. Assert on the proposal, not on the token string —
   historical citations of the *revoked* credential are expected and must not fail this AC.
-- **AC4** `model.c4` no longer contains the literal `can serve none`; and
-  `grep -c 'cx33' model.c4` == 0.
-- **AC5** `model.c4` `zotRegistry` description contains `cx23` and does **not** contain `7168m`.
+- **AC4** *(rewritten — the original was harmful)*. `model.c4` no longer contains `can serve none`,
+  and the **zotRegistry description specifically** no longer says `cx33`:
+  ```bash
+  grep -c 'can serve none' model.c4                                   # expect 0
+  awk '/OCI-native container registry \(zot\)/,/^  }/' model.c4 | grep -c 'cx33'   # expect 0
+  ```
+  **The original `grep -c 'cx33' model.c4 == 0` was unsatisfiable without corrupting true data.**
+  `cx33` appears three times: `:182` and `:458` are **correct** (web-1 and soleur-grok-dogfood
+  really are cx33; `:458` records web-1's cx33 stock-out), and only `:272` is stale. The
+  file-wide form ordered the implementer to strip true facts about *other hosts* — and directly
+  contradicted `tasks.md` 1.4.5, which forbids touching out-of-scope lines. Content-anchored to
+  the zotRegistry block instead of line-numbered, per `cq-cite-content-anchor-not-line-number`.
+- **AC5** *(rewritten — the original was vacuous)*. The **zotRegistry description** contains
+  `cx23` and does not contain `7168m`:
+  ```bash
+  awk '/OCI-native container registry \(zot\)/,/^  }/' model.c4 | grep -c 'cx23'    # expect >=1
+  awk '/OCI-native container registry \(zot\)/,/^  }/' model.c4 | grep -c '7168m'   # expect 0
+  ```
+  A file-wide `grep -c cx23` already returns non-zero **today** via `:182`, so the original
+  passed before any edit was made.
 - **AC6** `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts` pass.
-- **AC7** The GHCR push retry exists and is **conditional**: the changed region contains both
-  a retry construct and a rate-limit signature match. A blanket unconditional retry fails this AC.
-- **AC8** `actionlint .github/workflows/reusable-release.yml` clean; the extracted `run:`
-  snippet passes `bash -c`.
+- **AC7** ~~conditional GHCR retry~~ — **DELETED with Phase 2.** It gated on a shape that is not
+  implementable (`uses:` step, no capturable stderr) and was gameable as written.
+- **AC8** ~~`actionlint` + `bash -c` snippet~~ — **DELETED.** No workflow file is edited, and the
+  `run:` snippet it presupposed does not exist at the GHCR push step.
 - **AC9** Full-suite exit gate green (`test-all.sh`).
-- **AC10** No `continue-on-error` is added to, and none is removed from, the
-  `zot_mirror` step. (This plan explicitly does **not** relax the #7242/ADR-096 blocking gate.)
+- **AC10** *(now trivially satisfiable, kept as a guard)* No workflow file is modified at all:
+  ```bash
+  git diff --name-only origin/main...HEAD -- '.github/workflows/' | wc -l   # expect 0
+  ```
+  This is the strongest form of "the #7242/ADR-096 blocking gate is not relaxed" — the file is
+  untouched.
 - **AC11** PR body uses `Ref #7247` / `Ref #7248` — **not** `Closes` — since neither is
   resolved by this plan.
-- **AC12** The four config-refresh C4 lines cite ADR-135, and line 470 still cites ADR-136:
+- **AC12** *(rewritten — both original commands were defective)*. The config-refresh citations
+  move to ADR-135 and the rulesets citation stays ADR-136:
   ```bash
-  awk 'NR==507||NR==513||NR==514||NR==515' knowledge-base/engineering/architecture/diagrams/model.c4 \
-    | grep -c 'ADR-136'   # expect 0
-  awk 'NR==470' knowledge-base/engineering/architecture/diagrams/model.c4 \
-    | grep -c 'ADR-136'   # expect 1  (correct citation — must NOT be rewritten)
+  # config-refresh cluster: co-occurs with #6780. Content-anchored, shift-immune.
+  grep -c 'ADR-136.*#6780\|#6780.*ADR-136' model.c4   # expect 0  (currently 4)
+  grep -c 'rulesets API (ADR-136' model.c4            # expect 1  (must NOT be rewritten)
   ```
-  Line numbers are brittle across edits — re-anchor to content (`config-refresh bundle`,
-  `rulesets API`) if the file shifts, per `cq-cite-content-anchor-not-line-number`.
+  Two defects in the original, both confirmed:
+  (a) `awk 'NR==470' … | grep -c 'ADR-136'` **false-passes** — lines 474/475 *also* contain
+  `ADR-136` (the Web Push cluster), so a 4–5 line shift lands the anchor on a different line and
+  the AC goes green while the line it protects was rewritten.
+  (b) `grep -c` **exits 1 when the count is 0**, so under `set -e`/`pipefail` the *passing* state
+  fails the script. Use the counts as values, not as exit codes (`[[ $(grep -c …) -eq 0 ]]`).
+  The original footnote cited `cq-cite-content-anchor-not-line-number` and then shipped the
+  line-numbered form anyway.
 - **AC13** **Every** `ADR-*.md` link in every file this PR touches resolves on disk:
   ```bash
   git diff --name-only origin/main...HEAD -- '*.md' \
     | xargs -r grep -ohE 'ADR-[0-9]+[A-Za-z0-9._-]*\.md' | sort -u \
     | xargs -rI{} bash -c '[[ -f knowledge-base/engineering/architecture/decisions/{} ]] || echo "BROKEN: {}"'
   ```
-  Expect no output. This is the gate that caught R10; it must run on every future ADR edit.
+  Expect no output. **Correction:** an earlier draft claimed *"this is the gate that caught R10."*
+  That is false and worth stating rather than quietly deleting. AC13 filters `-- '*.md'` and its
+  regex requires a literal `.md` suffix, so it **structurally cannot** catch the R10 class —
+  R10 is a bare `ADR-136` ordinal inside `model.c4`, which is neither. What AC13 actually caught
+  was this plan's own invented ADR *filename*, which is what sent me looking and *led* to R10.
+  Keep the gate for the filename class; it needs a sibling for bare ordinals:
+  ```bash
+  # bare-ordinal check: every ADR-NNN cited in .c4 must exist as a file
+  grep -ohE 'ADR-[0-9]{3}' knowledge-base/engineering/architecture/diagrams/*.c4 | sort -u \
+    | while read a; do ls knowledge-base/engineering/architecture/decisions/$a-*.md >/dev/null 2>&1 \
+        || echo "NO SUCH ADR: $a"; done
+  ```
+  (This finds *nonexistent* ordinals. It cannot catch R10's actual shape — a **real** ADR cited
+  for the **wrong subject** — which needs a human or a title-vs-context check. Said plainly so
+  nobody mistakes this for full coverage.)
 
 ### Post-merge (operator)
 
@@ -454,11 +504,19 @@ shell script. The mechanical UI-surface override does not fire; Product is NONE.
 
 ## Open Code-Review Overlap
 
-Queried `gh issue list --label code-review --state open --limit 200` and matched each planned
-path against the issue bodies.
+**First pass returned a false negative — recorded rather than silently corrected.** The
+`--label code-review` scope found nothing, and I reported "None." Review re-ran the query
+**unlabelled** and surfaced three genuine overlaps. The label was the defect: these are filed
+under `type/chore` / `observability`, not `code-review`.
 
-**None.** No open `code-review` issue names `reusable-release.yml`, `web-platform-release.yml`,
-`model.c4`, or any of the three ADR files.
+| Issue | Overlap | Disposition |
+|---|---|---|
+| **#7256** (OPEN) — *"reusable-release: a blocking zot-mirror failure sends no Slack (implicit `success()` on the gate)"* | Names the exact file this plan edits, **and contradicts this plan's Observability alert-routing assumption** — the block claims the mirror failure reaches the operator, #7256 says the Slack path is inert. | **Acknowledge + correct.** This plan no longer edits `reusable-release.yml` (Phase 2 descoped), so there is no code conflict. But the Observability section's alert_route claim is weakened by #7256 and is annotated accordingly. #7256 stays open and is the right owner. |
+| **#7243** (OPEN) — *"build-inngest-config-bundle: a soft-failed bridge silently skips the zot mirror"* | Same `continue-on-error` zot-leg pattern this plan cites as the ADR-135 precedent — and reports it failing silently. | **Acknowledge.** Strengthens the ADR's caution about treating that channel as a live, healthy precedent. Cited in ADR-167 §P3. Not fixed here. |
+| **#6126** (OPEN, `priority/p3-low`) — *"zot registry HA + read-replicas (deferred from #6122)"* | The named mitigation for the exact single point of failure ADR-167 formally accepts. | **Acknowledge + escalate the question.** Cited in ADR-167 §Consequences with an explicit note that its p3-low priority deserves re-evaluation after a 21-hour outage that blocked five releases. Re-prioritising is the operator's call, not this plan's. |
+
+**Process fix:** an overlap check scoped to one label is not an overlap check. Future runs should
+query unlabelled and grep bodies for the planned paths.
 
 ---
 
@@ -469,8 +527,8 @@ path against the issue bodies.
 | `knowledge-base/engineering/architecture/decisions/ADR-096-migrate-container-registry-ghcr-to-self-hosted-zot.md` | amend in place (host-scope the read claim) |
 | `knowledge-base/engineering/architecture/decisions/ADR-088-control-plane-installation-token-minter-for-private-ghcr-reads.md` | add host-scope sentence to arm-b |
 | `knowledge-base/engineering/architecture/diagrams/model.c4` | 3 description corrections (L268, L272) |
-| `.github/workflows/reusable-release.yml` | conditional bounded retry + `::notice::` on the GHCR push |
-| `scripts/` + `test-all.sh` | **optional** — only if 2.1 lands as a sourced classifier helper |
+| ~~`.github/workflows/reusable-release.yml`~~ | **REMOVED** — Phase 2 descoped; no workflow change ships |
+| ~~`scripts/` + `test-all.sh`~~ | **REMOVED** — no classifier helper is written |
 
 ## Files to create
 
