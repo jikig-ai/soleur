@@ -23,7 +23,8 @@
 # .private_nic_guard_install are hardcoded to web-1, web-2 had no feeder and its beats rested
 # paused. That inference is WRONG and Better Stack refutes it: `web-zot-consumer-probe.service`
 # emits from `soleur-web-2` as well as `soleur-web-platform`. The install path for a FRESH host is
-# cloud-init.yml (it enables web-zot-consumer-probe.timer at boot, :667); the web-1-only SSH
+# cloud-init.yml, whose runcmd carries `systemctl enable --now web-zot-consumer-probe.timer` (grep
+# that literal rather than a line number — this file has churned); the web-1-only SSH
 # provisioners exist because web-1 carries ignore_changes=[user_data] and is the unrebuildable pet,
 # so they are its RE-provisioning path, not the only install path. Read the telemetry before
 # asserting which hosts run a unit — the resource that installs it on the pet is not the resource
