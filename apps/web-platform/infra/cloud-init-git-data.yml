@@ -299,12 +299,40 @@ runcmd:
     # boots on sibling hosts came from exactly this.
     export HOME=/root
     STAGE=gitdata_runcmd_early
+    # (#7227) PARENT-SHELL DETAIL SOURCE. NOT /var/log/cloud-init-output.log: this shell runs
+    # OUTSIDE `doppler run`, so GIT_DATA_LUKS_KEY is absent from git-data-emit's env, its
+    # value-redactor `_devalue` degrades to `cat`, and the rung-2 capture projects `detail`
+    # into a PUBLIC Actions log. Seeded ABOVE the trap because unseeded it expands EMPTY and
+    # `.final` becomes a relative path in cloud-init's cwd. /dev/null fallback keeps an
+    # unwritable /run from aborting the boot at the first redirected command.
+    GIT_DATA_RUNCMD_DETAIL=/run/git-data-runcmd.log
+    ( umask 077; : > "$GIT_DATA_RUNCMD_DETAIL" ) || true
+    [ -w "$GIT_DATA_RUNCMD_DETAIL" ] || GIT_DATA_RUNCMD_DETAIL=/dev/null
     on_err() {
       rc=$?
       trap - EXIT
       [ "$rc" -eq 0 ] && exit 0
-      /usr/local/bin/git-data-emit "git-data cloud-init FAILED" "$STAGE" fatal \
-        /var/log/cloud-init-output.log "rc=$rc" || true
+      # dmesg FIRST, the stage's own stderr LAST — the emitter double-truncates
+      # (tail -n 20 | … | tail -c 180), so whatever is last survives. No cloud-init-log slot:
+      # luks_err can afford one under doppler with _devalue armed; this handler cannot. The
+      # `else` is load-bearing — without it a dmesg tail satisfies [ -s ] alone and the
+      # literal below is UNREACHABLE, shipping kernel chatter as a plausible WRONG cause.
+      _onerr_detail="$GIT_DATA_RUNCMD_DETAIL.final"
+      ( umask 077; : > "$_onerr_detail" ) || true
+      {
+        dmesg 2>/dev/null | tail -n 20 || true
+        if [ -s "$GIT_DATA_RUNCMD_DETAIL" ]; then
+          grep -v 'dmesg(1) may have more information' "$GIT_DATA_RUNCMD_DETAIL" 2>/dev/null || true
+        else
+          echo "git-data $STAGE rc=$rc: no stderr captured for this command (dmesg tail above)" || true
+        fi
+      } > "$_onerr_detail" 2>/dev/null || true
+      [ -s "$_onerr_detail" ] || _onerr_detail="git-data $STAGE rc=$rc: detail capture unavailable (/run unwritable or empty)"
+      # MSG DERIVED FROM $STAGE. Lets bootstrap_err be deleted, and fixes a latent live bug:
+      # nothing disarmed it, so a gc_timer failure emitted "git-data bootstrap FAILED".
+      # Regroups the Sentry issue — deliberate; the title now says what was MEASURED.
+      /usr/local/bin/git-data-emit "git-data $STAGE FAILED" "$STAGE" fatal \
+        "$_onerr_detail" "rc=$rc" || true
       exit 1
     }
     trap on_err EXIT
@@ -336,6 +364,19 @@ runcmd:
   # the store; sshd keeps its previous config and the warn emit shows it).
   - |
     STAGE=sshd_config
+    # (#7227) TRUNCATE AT EVERY STAGE BOUNDARY. The file is append-only across the whole boot
+    # and `mount … || true` writes an error while the boot CONTINUES, so a later stage's fatal
+    # would otherwise ship that tolerated error as its own cause. Stage-scoping is also what
+    # keeps the `2>>` list short: a file that cannot inherit another stage's noise needs fewer.
+    #
+    # THE SUBSHELL IS LOAD-BEARING, NOT STYLE. `:` is a POSIX SPECIAL BUILTIN, and a
+    # redirection error on a special builtin makes the shell EXIT — `|| true` never runs.
+    # This shell is /bin/sh = dash. Measured: `dash -c ': > "" 2>/dev/null || true; echo X'`
+    # prints no X and exits 2, while the same line under BASH tolerates it — so the hazard is
+    # invisible to any test that does not use the real interpreter. Wrapping in ( ) confines
+    # the exit to the subshell. Caught by git-data-runcmd-rehearsal.test.sh S1, which runs
+    # the extracted stage under dash in a real 24.04 container.
+    ( : > "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
     # (#7025) `sshd -t` CHECKS THE PRIVSEP DIRECTORY, AND ON 24.04 NOTHING HAS CREATED IT YET.
     # ubuntu-24.04 ships ssh SOCKET-ACTIVATED, so /run/sshd — which ssh.service declares via
     # `RuntimeDirectory=sshd` — is not created until that service first starts, which is on the
@@ -359,11 +400,18 @@ runcmd:
     # ABSOLUTE PATH + 126/127 branch: sshd is in /usr/sbin and nothing pins a PATH, so a bare
     # `sshd` can exit 127 — which a blanket `if !` reads as "malformed" and answers with a
     # permanent boot abort. Never treat "could not measure" as "measurement is false".
-    /usr/sbin/sshd -t 2>/run/git-data-sshd-t.err
-    _sshd_t_rc=$?
+    # (#7227) SAME FORGED-rc HAZARD AS #7216, on the stage that already argues the principle.
+    # `sshd -t 2>/run/…` on an unwritable /run fails the REDIRECT, so the command never runs
+    # and the shell reports rc=1 — which the branch below reads as "config REJECTED" and
+    # answers with `exit 1`: a bricked boot from a measurement that never happened.
+    _sshd_t_rc=0
+    _sshd_t_err="$(/usr/sbin/sshd -t 2>&1)" || _sshd_t_rc=$?
+    _sshd_detail=/run/git-data-sshd-t.err
+    ( umask 077; printf '%s\n' "$_sshd_t_err" > "$_sshd_detail" ) 2>/dev/null || true
+    [ -s "$_sshd_detail" ] || _sshd_detail="git-data sshd -t rc=$_sshd_t_rc: no stderr captured"
     if [ "$_sshd_t_rc" -eq 126 ] || [ "$_sshd_t_rc" -eq 127 ]; then
       /usr/local/bin/git-data-emit "git-data sshd -t could not run" sshd_config_warn warning \
-        /run/git-data-sshd-t.err "rc=$_sshd_t_rc" || true
+        "$_sshd_detail" "rc=$_sshd_t_rc" || true
       echo "[git-data] WARN: sshd -t unavailable (rc=$_sshd_t_rc) — cannot validate; restarting anyway rather than bricking the boot." >&2
       _sshd_t_rc=0
     fi
@@ -373,19 +421,24 @@ runcmd:
       # and the real reason was only in the DETAIL. Retitling regroups it in Sentry — intended:
       # WEB-PLATFORM-64 stays the record of the privsep-dir defect this PR fixes.
       /usr/local/bin/git-data-emit "git-data sshd -t REJECTED the config" sshd_config fatal \
-        /run/git-data-sshd-t.err || true
+        "$_sshd_detail" || true
       # (#7025) NAME WHAT WAS MEASURED, NOT A GUESSED CAUSE. This read "sshd -t rejected the
       # hardening drop-in" — an attribution `sshd -t` never makes. When it actually fired, the
       # cause was a missing /run/sshd and the drop-in was valid, so the one console line a
       # dark host leaves behind pointed at the wrong file. The stderr the emitter ships is the
       # only thing that knows why; say that, and print it here too for the serial console.
       echo "[git-data] FATAL: sshd -t rejected the config (rc=$_sshd_t_rc). Its stderr:" >&2
-      if [ -r /run/git-data-sshd-t.err ]; then cat /run/git-data-sshd-t.err >&2; fi
+      printf '%s\n' "$_sshd_t_err" >&2
       exit 1
     fi
-    systemctl restart sshd || {
+    # (#7227) THE RESTART WARNING GETS ITS OWN CAUSE; it shipped `detail=""`. It does NOT
+    # reuse $_sshd_detail: reaching here means `sshd -t` PASSED, so that file is empty and
+    # its literal would blame the config check that succeeded. Same shape as gc_timer below.
+    systemctl restart sshd 2>>"$GIT_DATA_RUNCMD_DETAIL" || {
+      _sshd_r_detail="$GIT_DATA_RUNCMD_DETAIL"
+      [ -s "$_sshd_r_detail" ] || _sshd_r_detail="git-data sshd restart failed (config valid): no stderr captured"
       /usr/local/bin/git-data-emit "git-data sshd restart failed (config valid)" \
-        sshd_config_warn warning "" || true
+        sshd_config_warn warning "$_sshd_r_detail" || true
     }
 
     # (#6982) Arm `set -e` only AFTER the Phase-0.4 classification. From here every
@@ -398,7 +451,9 @@ runcmd:
   # by-id mount pattern server.tf / cloud-init.yml use for hcloud_volume.workspaces.
   # `nofail` so a volume hiccup does not wedge boot; the bootstrap's mount assert is
   # the real gate.
-  - STAGE=volume_mount # (#6982) name the stage for the top-armed on_err fatal
+  - |
+    STAGE=volume_mount # (#6982) name the stage for the top-armed on_err fatal
+    ( : > "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
   - mkdir -p /mnt/git-data
   # MUST-TOLERATE (Phase 0.4 item 3). The `|| true` is now load-bearing, not decorative:
   # under the armed `set -e` a volume hiccup would abort the boot. The bootstrap's own
@@ -427,12 +482,18 @@ runcmd:
   # (#6982) The stage sits immediately above the checksum block — issue item 3. Under the
   # armed `set -e` a failed `sha256sum -c -` now ABORTS, so `tar xzf` and `chmod +x` no
   # longer run on an unverified tarball that would execute as root.
-  - STAGE=gitdata_doppler_dl
+  - |
+    STAGE=gitdata_doppler_dl
+    ( : > "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
   - |
     DOPPLER_VERSION="3.75.3"
     DOPPLER_SHA256="${doppler_sha256}"
-    curl -fsSL --retry 3 "https://github.com/DopplerHQ/cli/releases/download/$${DOPPLER_VERSION}/doppler_$${DOPPLER_VERSION}_linux_${doppler_arch}.tar.gz" -o /tmp/doppler.tar.gz
-    echo "$${DOPPLER_SHA256}  /tmp/doppler.tar.gz" | sha256sum -c -
+    # (#7227) `2>>` ON THE FALLIBLE COMMANDS ONLY: this curl (it sets -S), this checksum (a
+    # supply-chain event), and BOTH `doppler run` invocations (the #6982 W0 discriminator).
+    # NOT tar/chmod (reachable only once the checksum passed) and NOT the MUST-TOLERATE
+    # mount/daemon-reload. Per-stage truncation makes those omissions safe, not just cheap.
+    curl -fsSL --retry 3 "https://github.com/DopplerHQ/cli/releases/download/$${DOPPLER_VERSION}/doppler_$${DOPPLER_VERSION}_linux_${doppler_arch}.tar.gz" -o /tmp/doppler.tar.gz 2>>"$GIT_DATA_RUNCMD_DETAIL"
+    echo "$${DOPPLER_SHA256}  /tmp/doppler.tar.gz" | sha256sum -c - 2>>"$GIT_DATA_RUNCMD_DETAIL"
     tar xzf /tmp/doppler.tar.gz -C /usr/local/bin doppler
     chmod +x /usr/local/bin/doppler
     rm /tmp/doppler.tar.gz
@@ -460,12 +521,14 @@ runcmd:
   # exec'ing this heredoc — its `set -euo pipefail` ran ZERO times, luksOpen never ran, and
   # at-rest encryption was absent while every artifact claimed it present. sshd stays up, so
   # a :22 beat would call that host healthy.
-  - STAGE=doppler_run
+  - |
+    STAGE=doppler_run
+    ( : > "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
   - |
     set -a
     . /etc/default/git-data-doppler
     set +a
-    doppler run --project soleur --config ${doppler_config_name} -- bash -s <<'LUKSEOF'
+    doppler run --project soleur --config ${doppler_config_name} -- bash -s 2>>"$GIT_DATA_RUNCMD_DETAIL" <<'LUKSEOF'
     set -euo pipefail
     # (#6982, R2) HEREDOC-LOCAL STAGE + TRAP. A CHILD of `doppler run`, so the parent's
     # STAGE/on_err do not cross the exec boundary — without it a failed luksOpen and a
@@ -513,7 +576,11 @@ runcmd:
       # `set -euo pipefail` still armed, so a failing or SIGPIPE'd dmesg would abort
       # luks_err BEFORE git-data-emit and destroy the very diagnostic this block adds. The
       # hard constraint is about the MOUNT, never about the diagnostic.
-      _detail="$GIT_DATA_LUKS_DETAIL.final"
+      # (#7227) `_luks_detail`, NOT `_detail`: R3(3b)'s guard search is name-keyed, so two
+      # handlers sharing one silently satisfy each other's check. ( umask 077 ) on .final
+      # because the comment above claimed 0600 the ambient 022 umask never delivered.
+      _luks_detail="$GIT_DATA_LUKS_DETAIL.final"
+      ( umask 077; : > "$_luks_detail" ) || true
       {
         dmesg 2>/dev/null | tail -n 20 || true
         tail -n 20 /var/log/cloud-init-output.log 2>/dev/null || true
@@ -523,7 +590,7 @@ runcmd:
         # GENERIC failure ("wrong fs type, bad option, bad superblock on …", 220 raw bytes)
         # from having its head truncated away.
         grep -v 'dmesg(1) may have more information' "$GIT_DATA_LUKS_DETAIL" 2>/dev/null || true
-      } > "$_detail" 2>/dev/null || true
+      } > "$_luks_detail" 2>/dev/null || true
       # -s, NOT -r. A readable but EMPTY file yields DETAIL=[] — a verdict with no cause,
       # which IS #7204's defect, reproduced inside its own fix. And the fallback target must
       # itself be proven non-empty: the seed above is `|| true`'d, so on a read-only or full
@@ -532,10 +599,10 @@ runcmd:
       # literal-leak this stage was rewritten to eliminate. The terminal fallback is
       # therefore a self-describing LITERAL, never a path: _san of a sentence ships the
       # sentence, so a degraded diagnostic announces itself instead of impersonating one.
-      [ -s "$_detail" ] || _detail="$GIT_DATA_LUKS_DETAIL"
-      [ -s "$_detail" ] || _detail="git-data luks_open rc=$rc: detail capture unavailable (/run unwritable or empty)"
+      [ -s "$_luks_detail" ] || _luks_detail="$GIT_DATA_LUKS_DETAIL"
+      [ -s "$_luks_detail" ] || _luks_detail="git-data luks_open rc=$rc: detail capture unavailable (/run unwritable or empty)"
       /usr/local/bin/git-data-emit "git-data LUKS stage FAILED" "$STAGE" fatal \
-        "$_detail" "rc=$rc" || true
+        "$_luks_detail" "rc=$rc" || true
       exit 1
     }
     # Plain `2>>` appends below — deliberately NOT `exec 2> >(tee …)`: a process
@@ -545,9 +612,21 @@ runcmd:
     trap luks_err EXIT
     DEV="/dev/disk/by-id/scsi-0HC_Volume_${git_data_luks_volume_id}"
     [ -n "$GIT_DATA_LUKS_KEY" ] || { echo "[git-data-luks] FATAL: GIT_DATA_LUKS_KEY empty — refusing unencrypted mount" | tee -a "$GIT_DATA_LUKS_DETAIL"; exit 1; }
-    if ! cryptsetup isLuks "$DEV" 2>>"$GIT_DATA_LUKS_DETAIL"; then
-      printf '%s' "$GIT_DATA_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$DEV" 2>>"$GIT_DATA_LUKS_DETAIL"
-    fi
+    # (#7216) rc CAPTURE, NOT TRUTHINESS. `if !` reads 126/127/4 as "not LUKS" and luksFormats
+    # a store that IS LUKS. rc 1 is the ONLY "genuinely not LUKS" (2.7.0: no-header=1,
+    # absent=4, not-on-PATH=127). Stderr via SUBSTITUTION, never `2>>`: a failed redirect
+    # returns 1 WITHOUT RUNNING the probe (measured), which the 1) arm answers by formatting.
+    # `|| _rc=$?` not `; _rc=$?` — under `set -euo pipefail` the naked form aborts on rc=1.
+    # Enforced by B18, not by this comment.
+    _i=0; while [ ! -e "$DEV" ] && [ "$_i" -lt 30 ]; do sleep 1; _i=$((_i+1)); done
+    _isluks_rc=0
+    _isluks_err="$(cryptsetup isLuks "$DEV" 2>&1)" || _isluks_rc=$?
+    [ -z "$_isluks_err" ] || printf '%s\n' "$_isluks_err" >>"$GIT_DATA_LUKS_DETAIL" 2>/dev/null || true
+    case "$_isluks_rc" in
+      0) : ;;
+      1) printf '%s' "$GIT_DATA_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$DEV" 2>>"$GIT_DATA_LUKS_DETAIL" ;;
+      *) { echo "[git-data-luks] FATAL: the LUKS-status probe could not run (rc=$_isluks_rc) — refusing to write to a device whose status is unknown" | tee -a "$GIT_DATA_LUKS_DETAIL" >/dev/null; exit 1; } || exit 1 ;;
+    esac
     if [ ! -e /dev/mapper/git-data ]; then
       printf '%s' "$GIT_DATA_LUKS_KEY" | cryptsetup luksOpen --key-file - "$DEV" git-data 2>>"$GIT_DATA_LUKS_DETAIL"
     fi
@@ -587,23 +666,18 @@ runcmd:
   # mounted at /mnt/git-data-luks, and fails loud on any unmet invariant.
   - |
     STAGE=bootstrap
+    ( : > "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
     set -a
     . /etc/default/git-data-doppler
     set +a
-    # (#6982, 3.6) Hand off under a BOOTSTRAP-SPECIFIC trap so a bootstrap failure is not
-    # mislabelled under the previous stage. Same `rc` guard. `--config prd_git_data` for the
-    # same measured reason as the LUKS block — this invocation was equally broken.
-    trap - EXIT
-    bootstrap_err() {
-      rc=$?
-      trap - EXIT
-      [ "$rc" -eq 0 ] && exit 0
-      /usr/local/bin/git-data-emit "git-data bootstrap FAILED" "$STAGE" fatal \
-        /var/log/cloud-init-output.log "rc=$rc" || true
-      exit 1
-    }
-    trap bootstrap_err EXIT
-    doppler run --project soleur --config ${doppler_config_name} -- bash /usr/local/bin/git-data-bootstrap.sh
+    # (#7227) NO BOOTSTRAP-SPECIFIC TRAP. bootstrap_err was byte-identical to on_err but for a
+    # title $STAGE already supplies, and it was never disarmed, so a gc_timer failure emitted
+    # "git-data bootstrap FAILED". Its `trap - EXIT` + re-arm pair is gone with it rather than
+    # re-pointed at on_err: that pair would be a NO-OP. `trap luks_err EXIT` is inside the
+    # heredoc, so it binds the doppler CHILD — the parent's on_err was never replaced and is
+    # still armed here. Deleting the handler also removes the `_detail` name collision that
+    # defeats R3(3b)'s name-keyed guard search.
+    doppler run --project soleur --config ${doppler_config_name} -- bash /usr/local/bin/git-data-bootstrap.sh 2>>"$GIT_DATA_RUNCMD_DETAIL"
 
   # (#6982, W4) Arm the maintenance timer. MUST-TOLERATE (Phase 0.4): a timer that fails to
   # enable is a degraded steady state, not a reason to abort a boot.
@@ -622,7 +696,15 @@ runcmd:
   # before the volume exists. So the failure gets its own event instead.
   - |
     STAGE=gc_timer
+    ( : > "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
     systemctl daemon-reload || true
-    systemctl enable --now git-data-gc.timer || \
+    # (#7227) THE GUARD LIVES INSIDE THE FAILURE BRANCH. Above the `||` chain it runs BEFORE
+    # systemctl writes stderr, so on a real failure it would discard the actual error. The
+    # `{ }` is the RHS of `||`, where errexit is suspended. This also makes the emitter
+    # toks[0] of its own simple command — chained, shlex puts `||` at toks[4].
+    systemctl enable --now git-data-gc.timer 2>>"$GIT_DATA_RUNCMD_DETAIL" || {
+      _gc_detail="$GIT_DATA_RUNCMD_DETAIL"
+      [ -s "$_gc_detail" ] || _gc_detail="git-data gc timer failed to arm: no captured stderr"
       /usr/local/bin/git-data-emit "SOLEUR_GIT_DATA_GC timer failed to arm" "$STAGE" warning \
-        /var/log/cloud-init-output.log "gc_timer=unarmed" || true
+        "$_gc_detail" "gc_timer=unarmed" || true
+    }

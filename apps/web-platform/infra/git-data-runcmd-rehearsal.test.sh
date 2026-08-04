@@ -423,15 +423,21 @@ _b2_pre="$TMP/preamble.nocomment"; _b2_drv="$TMP/drive.nocomment"
 _b2_strip "$TMP/runcmd-all.sh" > "$_b2_pre"
 _b2_strip "$TMP/drive.sh"    > "$_b2_drv"
 # COUNTS, not existence. `rc=$?`, the rc guard and `trap - EXIT` each appear once per trap
-# site — on_err, luks_err, bootstrap_err — and cloud-init's own comment says so ("All THREE
-# sites; T17 pins it"). An existence check therefore cannot see ONE of them deleted, which
-# is the realistic drift: measured, removing on_err's rc guard left an existence-based B2
-# fully green because luks_err's and bootstrap_err's copies still satisfied it. The driver
-# models a single trap, so its minimum is 1 for every construct.
-# NOTE the trap-disarm minimum is 4, not 3: the three handlers each disarm, PLUS a bare
-# disarm outside any handler before bootstrap_err is defined. A floor of 3 tolerated
-# deleting one (measured) -- derive minimums from the artifact, not from the count you
-# expect the design to have.
+# site. An existence check cannot see ONE of them deleted, which is the realistic drift:
+# measured, removing on_err's rc guard left an existence-based B2 fully green because the
+# other handlers' copies still satisfied it. The driver models a single trap, so its minimum
+# is 1 for every construct.
+#
+# MINIMUMS 3/3/4 -> 2/2/2 (#7227): bootstrap_err was DELETED. It was byte-identical to on_err
+# but for a title `$STAGE` already supplies, and it was never disarmed, so a gc_timer failure
+# emitted "git-data bootstrap FAILED". Two handlers remain — on_err (parent) and luks_err
+# (the doppler child) — so `rc=$?` and the rc guard drop 3 -> 2.
+#
+# The disarm minimum drops 4 -> 2, losing TWO: bootstrap_err's own `trap - EXIT` AND the bare
+# disarm that preceded its definition. That bare disarm + re-arm pair was NOT re-pointed at
+# on_err, because it was a no-op — `trap luks_err EXIT` lives inside the heredoc and binds the
+# `doppler run` CHILD, so the parent's on_err was never replaced and needed no restoring.
+# Derive minimums from the artifact, not from the count you expect the design to have.
 while IFS='|' read -r _label _min _re; do
   [ -n "$_label" ] || continue
   _n_pre=$(grep -cE -- "$_re" "$_b2_pre" || true)
@@ -441,9 +447,9 @@ while IFS='|' read -r _label _min _re; do
 done <<'B2SPEC'
 trap on_err EXIT|1|^[[:space:]]*trap on_err EXIT[[:space:]]*$
 set -e (exactly)|1|^[[:space:]]*set -e[[:space:]]*$
-rc=$? capture|3|^[[:space:]]*rc=\$\?[[:space:]]*$
-rc guard|3|^[[:space:]]*\[ "\$rc" -eq 0 \][[:space:]]*&&[[:space:]]*exit 0[[:space:]]*$
-trap - EXIT disarm|4|^[[:space:]]*trap - EXIT[[:space:]]*$
+rc=$? capture|2|^[[:space:]]*rc=\$\?[[:space:]]*$
+rc guard|2|^[[:space:]]*\[ "\$rc" -eq 0 \][[:space:]]*&&[[:space:]]*exit 0[[:space:]]*$
+trap - EXIT disarm|2|^[[:space:]]*trap - EXIT[[:space:]]*$
 emit call|1|/usr/local/bin/git-data-emit[[:space:]]+"
 B2SPEC
 if [ -z "$_b2_missing" ]; then pass; else
@@ -1108,8 +1114,11 @@ if [ "${_r3_c:-0}" -ge 1 ]; then pass; else
 # let a comment containing `[ -r "$_detail"` satisfy the guard check while the real guard was
 # deleted — measured GUARDED on code with the literal-leak branch reopened.
 _R3B_SRC="$TMP/runcmd-all.code.sh"
-if [ -s "$_R3B_SRC" ]; then
-  _r3b_out="$(python3 - "$_R3B_SRC" <<'PY' 2>&1 || true
+# A FUNCTION, so R3(3c)/R3(3d) can run the SAME analyzer over deliberately-broken copies.
+# A verdict with no demonstrated failing direction certifies nothing — that is the defect
+# this whole family exists to correct, and it would be self-defeating to re-create it here.
+_r3b_analyze() {  # $1 = comment-stripped shell; one `site|level|isvar|guarded|arg4|msg` row per emit
+  python3 - "$1" <<'PY' 2>&1 || true
 import re, sys, shlex
 src = open(sys.argv[1]).read()
 joined = re.sub(r'\\\n\s*', ' ', src)          # fold line continuations
@@ -1155,7 +1164,9 @@ for i, l in enumerate(lines):
         guarded = "GUARDED" if gpat.search(joined, wstart, offs[i]) else "UNGUARDED"
     print("|".join([wname, level.strip('"'), isvar, guarded, arg4, msg]))
 PY
-)"
+}
+if [ -s "$_R3B_SRC" ]; then
+  _r3b_out="$(_r3b_analyze "$_R3B_SRC")"
   # (i) NON-VACUITY, COUNTED IN THE SHELL. A python `assert` inside the heredoc increments
   # neither passes nor fails, and aborts extraction in a way that surfaces as some OTHER
   # arm's failure. An empty parse must be an assertion that FAILS here, loudly.
@@ -1199,8 +1210,73 @@ PY
     fail "R3(3b)(v): an emit site passes /var/log/cloud-init-output.log as its detail source" \
          "That log is shared across every stage and is unbounded; outside \`doppler run\` the emitter's value-redactor degrades to \`cat\`. sites=[$(printf '%s' "$_r3b_lit" | tr '\n' ' ')]"
   fi
+  # ── R3(3c) — THE `LITERAL` DIRECTION. Re-point luks_err's detail at a bare path and the
+  # analyzer must say LITERAL. Without this, "every site is VAR" has never been shown to be
+  # capable of saying anything else on this input.
+  _r3c="$TMP/r3c.code.sh"
+  sed -E 's#"\$_luks_detail" "rc=\$rc"#/var/log/cloud-init-output.log "rc=$rc"#' "$_R3B_SRC" > "$_r3c"
+  if cmp -s "$_R3B_SRC" "$_r3c"; then
+    fail "R3(3c) MUTATION DID NOT LAND — luks_err's emit arg was not re-pointed" \
+         "Re-anchor against the current text; as written this control certifies nothing."
+  elif _r3b_analyze "$_r3c" | awk -F'|' '$1=="luks_err" && $3=="LITERAL"' | grep -q .; then
+    pass
+  else
+    fail "R3(3c): a bare literal in luks_err's emit was NOT reported as LITERAL" \
+         "The isvar classification has no demonstrated failing direction. got=[$(_r3b_analyze "$_r3c" | tr '\n' ' ')]"
+  fi
+
+  # ── R3(3d) — THE `UNGUARDED` DIRECTION, and the arm that proves the guard search is
+  # REGION-SCOPED. Delete luks_err's own `[ -s ]` guards only. Under the previous file-global,
+  # name-keyed search this still reported GUARDED whenever ANY earlier handler happened to
+  # guard a variable of the same name — which is exactly what widening the arm to four sites
+  # sharing the name `_detail` would have produced. It must now say UNGUARDED.
+  _r3d="$TMP/r3d.code.sh"
+  sed -E '/^[[:space:]]*\[ -s "\$_luks_detail" \]/d' "$_R3B_SRC" > "$_r3d"
+  if cmp -s "$_R3B_SRC" "$_r3d"; then
+    fail "R3(3d) MUTATION DID NOT LAND — luks_err's [ -s ] guards were not removed" \
+         "Re-anchor against the current text; as written this control certifies nothing."
+  elif _r3b_analyze "$_r3d" | awk -F'|' '$1=="luks_err" && $4=="UNGUARDED"' | grep -q .; then
+    pass
+  else
+    fail "R3(3d): deleting luks_err's own [ -s ] guard did NOT flip it to UNGUARDED" \
+         "The guard search is satisfied by something outside this handler's window — the name-keyed alias defect. got=[$(_r3b_analyze "$_r3d" | tr '\n' ' ')]"
+  fi
 else
   fail "R3(3b): skipped (concatenated runcmd not extracted)"
+fi
+
+# ── R3(2d) (#7227) — THE PARENT SEED IS ORDERED, asserted as an ORDER and not co-presence.
+#
+# The luks stage already has R3(2)/R3(2b)/R3(2c) for exactly this property; the parent shell
+# had a seed with no arm behind it at all. Unseeded, $GIT_DATA_RUNCMD_DETAIL expands EMPTY,
+# so on_err's `.final` becomes a RELATIVE path in cloud-init's cwd and the emitter falls
+# through to shipping the path string as the cause — #7204's defect, one shell up.
+if [ -s "$_R3B_SRC" ]; then
+  _r2d_seed=$(grep -n '^[[:space:]]*GIT_DATA_RUNCMD_DETAIL=' "$_R3B_SRC" | head -1 | cut -d: -f1)
+  _r2d_trap=$(grep -n '^[[:space:]]*trap on_err EXIT[[:space:]]*$' "$_R3B_SRC" | head -1 | cut -d: -f1)
+  _r2d_app=$(grep -n '2>>"\$GIT_DATA_RUNCMD_DETAIL"' "$_R3B_SRC" | head -1 | cut -d: -f1)
+  if [ -n "$_r2d_seed" ] && [ -n "$_r2d_trap" ] && [ -n "$_r2d_app" ] \
+     && [ "$_r2d_seed" -lt "$_r2d_trap" ] && [ "$_r2d_seed" -lt "$_r2d_app" ]; then
+    pass
+  else
+    fail "R3(2d): the parent detail seed does not precede BOTH 'trap on_err EXIT' and the first 2>> (seed=${_r2d_seed:-none} trap=${_r2d_trap:-none} first-append=${_r2d_app:-none})" \
+         "An unseeded handler builds '.final' as a relative path in cloud-init's cwd, and the emitter then ships the path literal as the cause."
+  fi
+  # RELOCATION MUTATION, mirroring R3(2c): move the seed BELOW the trap and the ordering
+  # check must flip. Co-presence cannot see a seed that moved.
+  _r2dm="$TMP/r2d.code.sh"
+  sed -E 's|^([[:space:]]*)GIT_DATA_RUNCMD_DETAIL=(.*)$|\1: # seed relocated by R3(2d)|' "$_R3B_SRC" > "$_r2dm"
+  _m_seed=$(grep -n '^[[:space:]]*GIT_DATA_RUNCMD_DETAIL=' "$_r2dm" | head -1 | cut -d: -f1)
+  if cmp -s "$_R3B_SRC" "$_r2dm"; then
+    fail "R3(2d) MUTATION DID NOT LAND — the seed line was not relocated"
+  elif [ -z "$_m_seed" ]; then
+    pass
+  else
+    fail "R3(2d) MUTATION: the seed survived relocation (seed=${_m_seed})" \
+         "R3(2d)'s green above certifies nothing — the ordering check has no demonstrated failing direction."
+  fi
+else
+  fail "R3(2d): skipped (concatenated runcmd not extracted)"
 fi
 
 total=$((passes + fails))

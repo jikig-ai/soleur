@@ -296,8 +296,66 @@ fatal channel into noise on day one and makes the real fatal indistinguishable. 
 **three** arming sites (top-level runcmd, the LUKS heredoc, the bootstrap re-arm) and the
 guard is mandatory at each.
 
+## Addendum — 2026-08-04: the git-data exception widens to diagnostic CAPTURE plumbing (#7227)
+
+The 2026-07-27 addendum recorded git-data as a forced exception to this ADR's decision:
+`git-data-emit` ships **inside** `user_data` because that host has no bake path. That
+exception covered the **emitter**. This addendum extends it to the **capture plumbing that
+feeds the emitter** — a scoped detail file, its per-stage truncation, and per-command stderr
+routing — all of which now also live in `user_data` on this host, for the same reason.
+
+### Why the plumbing could not stay where it was
+
+The parent `runcmd` shell runs **outside** `doppler run`, so `GIT_DATA_LUKS_KEY` is absent
+from `git-data-emit`'s environment and its value-based redactor `_devalue` degrades to `cat`.
+Every parent-shell handler was passing `/var/log/cloud-init-output.log` — a shared,
+multi-stage, unbounded log — as its detail source, and the rung-2 capture route projects
+`detail` into a **public** Actions log on a **public** repo. The fix is a detail source
+bounded by construction, which has to be seeded and truncated by the same shell that fails.
+
+### What this costs, measured
+
+`user_data` is a governed axis on this host, so the price is recorded rather than assumed.
+Measured with Terraform's own `base64gzip` (`git-data-userdata-budget.sh`), which is the
+byte-exact truth — **not** `plugins/soleur/test/cloud-init-user-data-size.test.ts`, whose
+Node-zlib model is an approximation and says so in its own header:
+
+| | stored | cap | headroom |
+| --- | --- | --- | --- |
+| before (#7204 baseline) | 25,968 B | 32,768 B | 6,800 B |
+| after (#7216 + #7227) | 28,692 B | 32,768 B | 4,076 B |
+
+Net **+2,724 stored bytes**. Comments in `cloud-init-git-data.yml` are **not** render-stripped
+(ADR-152 covers only the nine `file()`-bound payloads), so prose is charged at full weight —
+comment blocks are capped at ~6 lines here and the durable statements live in the guards
+(`B18`, `R3(3b)`) rather than in the paragraphs. Diagnostics added to
+`git-data-bootstrap.sh` are free, because that file IS render-stripped.
+
+The next diagnostics change on this host should treat 4,076 B as the working budget, and
+should prefer `git-data-bootstrap.sh` over the template wherever the code can live there.
+
+### Correction to the 2026-07-27 addendum: TWO arming sites, not three
+
+That addendum's closing section states git-data has "**three** arming sites (top-level
+runcmd, the LUKS heredoc, the bootstrap re-arm)". The bootstrap re-arm is **gone** as of
+#7227 and the count is now **two**.
+
+`bootstrap_err` was byte-identical to `on_err` but for a title `$STAGE` already supplies, so
+deriving `MSG` from `$STAGE` made it redundant. Deleting it also fixed a latent live bug —
+nothing disarmed it after the bootstrap stage, so a `gc_timer` failure emitted the title
+"git-data bootstrap FAILED" — and removed a `_detail` local-name collision that defeated the
+name-keyed guard search in `R3(3b)`. Its `trap - EXIT` + re-arm pair went with it rather than
+being re-pointed at `on_err`, because that pair was a **no-op**: `trap luks_err EXIT` sits
+inside the heredoc and binds the `doppler run` child, so the parent's `on_err` was never
+replaced in the first place.
+
+The `rc` guard requirement itself is unchanged and still mandatory at every site that exists;
+`git-data-luks.test.sh` A22 asserts the equality (`guards == arming sites`) rather than a
+fixed number, with a non-vacuity floor moved 3 → 2 alongside this change.
+
 ## References
 
+- #7216 / #7227 — the rc-branching fix and the parent-shell diagnostic path this addendum records.
 - #6969 — the dark boot this ADR responds to.
 - ADR-082 Item 5 — the terminal-block boot-emit trap this extends (its own status is unchanged).
 - ADR-145 — the `web-host-create` birth path whose first real use surfaced the gap.

@@ -1464,12 +1464,19 @@ fi
 # and printed `ok anti-vacuity floor: 28 assertions ran`, exit 0. Measured. A floor that does
 # not move with the suite only ever guards the work that predates it, and the deletion it
 # most needs to catch is the one that removes the arms someone just argued for.
+#
+# RAISED 70 -> 71 WITH THE ARM THAT MADE IT NECESSARY (#7227 item 4): arm 10's comparison
+# chain gained a FOURTH replica of the rehearsal prefix — the evidence-capture script's
+# `--host-name` constraint, which is now a consumer of the same literal and drifts the same
+# way. Folded into the existing chain rather than given its own arm plus mutation, because
+# that chain's whole property is already "every replica of one literal agrees".
+# 70 + 1 = 71. Measured: 71 passed, 0 failed.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 70 ]]; then
+if [[ "$_ran" -lt 71 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 70. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 71. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 70)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 71)\n' "$_ran"
 fi
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"

@@ -437,12 +437,20 @@ fi
 # Developer-incremented, and a FLOOR rather than an equality so a legitimately added arm does
 # not redden the suite and train the next person to bump it unread. Counts passes+fails, so a
 # genuine failure still reports as a failure rather than as an empty suite.
+#
+# RAISED 30 -> 33 WITH THE ARMS THAT MADE IT NECESSARY (#7227 item 4). ARM 6b constrains
+# --host-name to rehearsal hosts, and is three arms because the constraint has three
+# separable ways to be wrong: the production name must be REFUSED (rc 64), the legitimate
+# ${REHEARSAL_PREFIX}${GITHUB_RUN_ID} name must still be ACCEPTED (a too-tight regex would
+# break the only real call site), and a rehearsal-prefixed name carrying a quote must STILL
+# be refused (the SQL-interpolation property must survive the narrowing, not be traded for
+# it). 30 + 3 = 33. Measured: 33 passed, 0 failed.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 30 ]]; then
+if [[ "$_ran" -lt 33 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 30. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 33. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 30)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 33)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"

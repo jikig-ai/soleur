@@ -108,15 +108,34 @@ done
 [[ -z "$OUT" ]] && OUT="$(dirname "$CLOUD_INIT")/git-data-rung2-boot-evidence.env"
 
 if [[ -z "$HOST_NAME" ]]; then
-  echo "usage: git-data-rung2-evidence-capture.sh --host-name <name> --evidence-url <url> [--out <path>]" >&2
+  echo "usage: git-data-rung2-evidence-capture.sh --host-name soleur-git-data-rehearsal-<run-id> --evidence-url <url> [--out <path>]" >&2
   exit 64
 fi
 
 # THE HOST NAME IS INTERPOLATED INTO SQL, so it is validated rather than trusted. It reaches
 # the WHERE clause of every query below; a name carrying a quote would either break the query
 # or change which rows it selects, and "which rows" is the whole verdict.
-if [[ ! "$HOST_NAME" =~ ^[A-Za-z0-9._-]+$ ]]; then
-  echo "refusing: --host-name must match ^[A-Za-z0-9._-]+$ (it is interpolated into the Better Stack SQL). Got: ${HOST_NAME}" >&2
+#
+# (#7227 item 4) AND IT IS CONSTRAINED TO REHEARSAL HOSTS. The charset rule alone says nothing
+# about WHICH host: `soleur-git-data` — the production store holding every connected user's
+# source code — satisfies `^[A-Za-z0-9._-]+$` perfectly. This script's caller projects the
+# `detail` field of every matched row into a PUBLIC Actions log on a PUBLIC repo, so an
+# unconstrained reader is one flag away from exporting production boot telemetry.
+#
+# STRICTLY NARROWER, never merely different: the trailing `[A-Za-z0-9._-]+` keeps the charset
+# property (a prefix check written as a bare glob would accept
+# `soleur-git-data-rehearsal-1" OR 1=1 --`), and the only production call site passes
+# `${REHEARSAL_PREFIX}${GITHUB_RUN_ID}`, which still matches. The trailing HYPHEN in the
+# prefix is load-bearing for the same reason it is in both orphan sweeps: `soleur-git-data`
+# is a prefix of the rehearsal names, so omitting it re-admits production.
+#
+# NO OVERRIDE FLAG. Reading production boot telemetry is a different tool with a different
+# output contract, not a flag on this one — an `--allow-production` escape hatch reopens the
+# hole for exactly the caller most likely to be in a hurry. And the emitter's 180-byte bound
+# is NOT a substitute: it bounds VOLUME, not CONTENT, and it is applied on the host at emit
+# time. This script is a reader and inherits whatever shipped.
+if [[ ! "$HOST_NAME" =~ ^soleur-git-data-rehearsal-[A-Za-z0-9._-]+$ ]]; then
+  echo "refusing: --host-name must match ^soleur-git-data-rehearsal-[A-Za-z0-9._-]+$ — it is interpolated into the Better Stack SQL, AND this route projects matched rows into a public Actions log, so it may only read rehearsal hosts (never the production soleur-git-data). Got: ${HOST_NAME}" >&2
   exit 64
 fi
 

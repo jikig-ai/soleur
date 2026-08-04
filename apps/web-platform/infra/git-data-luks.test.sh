@@ -507,7 +507,12 @@ p_trap_rc_guard() {
   # And `rc=$?` must be the FIRST statement in each handler: `$?` is clobbered by any command
   # before it, so a guard placed after the emit reads the emit's status, not the failure's.
   n_first=$(grep -A1 -E '^[[:space:]]*[a-z_]+\(\) \{$' "$1" | grep -Ec '^[[:space:]]*rc=\$\?$' || true)
-  if [ "$n_trap" -ge 3 ] && [ "$n_guard" -eq "$n_trap" ] \
+  # FLOOR 3 -> 2 (#7227): bootstrap_err was deleted. It was byte-identical to on_err but for
+  # a title $STAGE already supplies, and it was never disarmed — so a gc_timer failure emitted
+  # "git-data bootstrap FAILED". Two arming sites remain: on_err (parent) and luks_err (the
+  # doppler child). The floor is non-vacuity only; the PROPERTY is the three equalities below,
+  # which are unchanged and still bind every site that exists.
+  if [ "$n_trap" -ge 2 ] && [ "$n_guard" -eq "$n_trap" ] \
      && [ "$n_bind" -eq "$n_trap" ] && [ "$n_first" -ge "$n_trap" ]; then echo 1; else echo 0; fi
 }
 
@@ -876,8 +881,11 @@ assert_mutation "A25 set-e-before-checksum" p_set_e_before_checksum "$CLOUD_INIT
   's;^([[:space:]]*)set -e$;\1set +e;'
 # Mutation: TOLERATE the checksum. Ordering alone is not the property — `set -e` before a
 # `|| true`-suffixed command aborts nothing, and this mutation survived the first battery.
+# RE-ANCHORED (#7227): the checksum line now carries `2>>"$GIT_DATA_RUNCMD_DETAIL"`, so the
+# old `$`-anchored form matched nothing and reported MUTATION DID NOT LAND — an arm that
+# certifies nothing, which is exactly what assert_mutation's landing guard exists to surface.
 assert_mutation "A25 checksum-not-tolerated" p_set_e_before_checksum "$CLOUD_INIT" \
-  's;(sha256sum -c -)$;\1 || true;'
+  's;(sha256sum -c -.*)$;\1 || true;'
 
 # A26: no bare terraform directive (AC4).
 assert_holds    "A26 no-bare-directive" p_no_bare_directive "$CLOUD_INIT"
@@ -1250,8 +1258,99 @@ p_isluks_rc_branch() {
   echo 1
 }
 assert_holds    "B18 isLuks-rc-branch" p_isluks_rc_branch "$CLOUD_INIT"
+# One arm per predicate, each anchored so the mutation actually LANDS (assert_mutation fails
+# loud on a byte-identical mutant, which is how a re-anchored predicate stops certifying).
+# (a) the truthiness form comes back. NOT a single-token s/// — the `if !` shape has to
+# replace the rc capture, so anchor on the whole `_isluks_rc=0` line.
+assert_mutation "B18 isLuks-rc-branch (revert to \`if !\`)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's/^([[:space:]]*)_isluks_rc=0$/\1if ! cryptsetup isLuks "$DEV"; then :; fi/'
+# (b) the naked capture the issue proposed — aborts under `set -euo pipefail` on rc=1.
+# `#` delimiter, not `|`: the pattern contains `||`.
+assert_mutation "B18 isLuks-rc-branch (naked rc capture)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#\|\| _isluks_rc=\$\?#; _isluks_rc=$?#'
+# (d) a SECOND arm reaches luksFormat — i.e. an already-LUKS device (rc 0) gets reformatted.
+assert_mutation "B18 isLuks-rc-branch (rc 0 also formats)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#^([[:space:]]*)0\) : ;;#\1 0) printf "%s" "$GIT_DATA_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$DEV" ;;#'
+# (e) the catch-all stops refusing. Anchored on `\*\)` so it cannot also hit the empty-key
+# guard, which is a `||`-chained brace group with no case arm.
+assert_mutation "B18 isLuks-rc-branch (catch-all no longer exits)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#^([[:space:]]*)\*\).*$#\1*) : ;;#'
+# (f) THE ONE THAT MATTERS — `2>>` back on the probe line. A failed redirect returns 1
+# WITHOUT running the command, so on an unwritable /run this forges the single rc that means
+# "format it". This arm is why the capture is a substitution and not a redirect.
+assert_mutation "B18 isLuks-rc-branch (2>> forges rc=1 on the probe)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#cryptsetup isLuks "\$DEV" 2>&1#cryptsetup isLuks "$DEV" 2>>"$GIT_DATA_LUKS_DETAIL"#'
+
+# --- B19 (#7227): Decision clause B, mechanized -------------------------------------------
+#
+# The parent-shell detail file is safe to ship unredacted because of a TWO-CLAUSE invariant,
+# and only clause A is structural. Clause A: parent commands provably do not hold
+# GIT_DATA_LUKS_KEY, so they cannot leak it. Clause B covers the two `doppler run` children,
+# which DO hold it, and is BEHAVIOURAL — it rests on three facts that a future edit could
+# silently revoke. Behavioural bounds that nothing checks are how a redactor bypass ships, so
+# each fact gets an assertion:
+#
+#   1. the passphrase is `special = false` (alphanumeric), so it carries no regex
+#      metacharacter and cannot malform the `sed` _devalue constructs from it;
+#   2. there is no `set -x` in the template or the bootstrap payload, so no command echo
+#      can put the key on a stream;
+#   3. every key-consuming cryptsetup call takes it on stdin via `--key-file -`, never argv.
+#
+# (3) overlaps A2 deliberately: A2 asserts it for the TEMPLATE's luksFormat/luksOpen, while
+# clause B's bound has to hold for the bootstrap payload's luksOpen too, which A2 never reads.
+BOOTSTRAP_SH="${DIR}/git-data-bootstrap.sh"
+[ -f "$BOOTSTRAP_SH" ] || { echo "FAIL: git-data-bootstrap.sh not found at $BOOTSTRAP_SH" >&2; exit 1; }
+
+p_luks_key_alnum() {
+  # Region-scoped to the resource block: a `special = false` on ANY other random_password
+  # would otherwise satisfy a file-global grep.
+  awk '/^resource "random_password" "git_data_luks"/{f=1} f&&/^}/{f=0; print; next} f' "$1" \
+    | grep -Eq '^[[:space:]]*special[[:space:]]*=[[:space:]]*false[[:space:]]*$' && echo 1 || echo 0
+}
+assert_holds    "B19a luks-key-alphanumeric" p_luks_key_alnum "$LUKS_TF"
+assert_mutation "B19a luks-key-alphanumeric (special re-enabled)" p_luks_key_alnum "$LUKS_TF" \
+  's/^([[:space:]]*)special([[:space:]]*)=([[:space:]]*)false$/\1special\2=\3true/'
+
+p_no_set_x() {
+  # Comment-stripped: the word appears in prose in both files.
+  if sed 's/#.*//' "$1" | grep -Eq '(^|[[:space:];])set[[:space:]]+(-[a-z]*x|-o[[:space:]]+xtrace)'; then echo 0; else echo 1; fi
+}
+assert_holds    "B19b no-set-x (template)" p_no_set_x "$CLOUD_INIT"
+assert_mutation "B19b no-set-x (template)" p_no_set_x "$CLOUD_INIT" \
+  's/^([[:space:]]*)set -euo pipefail$/\1set -euxo pipefail/'
+assert_holds    "B19c no-set-x (bootstrap payload)" p_no_set_x "$BOOTSTRAP_SH"
+assert_mutation "B19c no-set-x (bootstrap payload)" p_no_set_x "$BOOTSTRAP_SH" \
+  's/^([[:space:]]*)set -euo pipefail$/\1set -euxo pipefail/'
+
+p_bootstrap_keyfile_stdin() {
+  local n_key n_stdin
+  n_key=$(grep -cE 'cryptsetup[[:space:]]+luks(Format|Open)' "$1" || true)
+  [ "${n_key:-0}" -ge 1 ] || { echo 0; return; }
+  n_stdin=$(grep -E 'cryptsetup[[:space:]]+luks(Format|Open)' "$1" | grep -c -- '--key-file -' || true)
+  # And the key must not appear as a cryptsetup argv positional.
+  if [ "$n_stdin" -ne "$n_key" ]; then echo 0; return; fi
+  if grep -E 'cryptsetup[[:space:]]+luks(Format|Open)' "$1" | sed -E 's/.*(cryptsetup[[:space:]]+luks)/\1/' | grep -q 'GIT_DATA_LUKS_KEY'; then echo 0; return; fi
+  echo 1
+}
+assert_holds    "B19d bootstrap-key-file-stdin" p_bootstrap_keyfile_stdin "$BOOTSTRAP_SH"
+assert_mutation "B19d bootstrap-key-file-stdin (key moved to argv)" p_bootstrap_keyfile_stdin "$BOOTSTRAP_SH" \
+  's#cryptsetup luksOpen --key-file - "\$luks_dev"#cryptsetup luksOpen "$GIT_DATA_LUKS_KEY" "$luks_dev"#'
 
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
+#
+# RAISED 113 -> 127 WITH THE ARMS THAT MADE IT NECESSARY (#7216 + #7227). Itemised, because a
+# floor that does not move with the suite only ever guards the work that predates it:
+#   B18 isLuks-rc-branch        1 hold + 5 mutations = 6
+#     (revert-to-`if !`, naked rc capture, rc 0 also formats, catch-all no longer exits,
+#      and `2>>` back on the probe — the forged-rc-1 arm, which is the reason the capture
+#      is a command substitution rather than a redirect)
+#   B19a luks-key-alphanumeric  1 hold + 1 mutation  = 2
+#   B19b no-set-x (template)    1 hold + 1 mutation  = 2
+#   B19c no-set-x (bootstrap)   1 hold + 1 mutation  = 2
+#   B19d bootstrap-key-file     1 hold + 1 mutation  = 2
+#   113 + 6 + 2 + 2 + 2 + 2 = 127. Measured: 127 passed, 0 failed.
+# A22's own non-vacuity floor moved 3 -> 2 in the same change (bootstrap_err deleted); that
+# is inside the predicate, not here, and changes no assertion count.
 #
 # RAISED 107 -> 113 at review (#7204): B17 widened from 3 mutation arms to 6 (`; true`,
 # backslash-continuation and `if`-wrapper each shipped a fall-through past a 107/107 green
@@ -1279,8 +1378,8 @@ assert_holds    "B18 isLuks-rc-branch" p_isluks_rc_branch "$CLOUD_INIT"
 # redden the suite on every legitimate new arm and teach the next author to edit the guard
 # instead of trusting it.
 total=$((passes + fails))
-if [ "$total" -lt 113 ]; then
-  echo "FAIL: ran only ${total} assertions (<113) — suite did not execute fully" >&2
+if [ "$total" -lt 127 ]; then
+  echo "FAIL: ran only ${total} assertions (<127) — suite did not execute fully" >&2
   exit 1
 fi
 
