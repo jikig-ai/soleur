@@ -271,7 +271,11 @@ resource "hcloud_server" "inngest" {
     doppler_token = doppler_service_token.inngest.key
     # Single stable --sdk-url to the ACTIVE web backend's private interface (10.0.1.10).
     # The degenerate no-flap case of the route-once mechanism (ADR-100 Decision 1); migrate
-    # to a private VIP when active-active-N web lands (#6459; web-2 retired #6538). Consumed by inngest-bootstrap.sh.
+    # to a private VIP when active-active-N web lands (#6459). Pinning to .10 is still right, but
+    # NOT because there is no second host: this used to read "web-2 retired #6538", and a
+    # DIFFERENT web-2 was re-added 2026-07-24 (variables.tf:112, ADR-143). It is a weight-0 cattle
+    # standby with no probe feeder, so .10 remains the single active backend — an operating-point
+    # fact that can change, rather than an absence that cannot. Consumed by inngest-bootstrap.sh.
     sdk_url = "http://10.0.1.10:3000/api/inngest"
     # Arch DERIVED from the server type (local.inngest_arch): cax* → arm64, else amd64. The
     # bootstrap consumes INNGEST_CLI_ARCH (inngest-bootstrap.sh:37/54) and verifies the download

@@ -7,12 +7,37 @@
 #                a dedicated liveness beat every healthy run (detect + emit + alarm, NO reboot).
 #   #6548     — git-data reachability arms the EXISTING git_data_prd (git-data.tf).
 #
-# for_each = var.web_hosts: single live beat today (web-1), anti-masking preserved BY CONSTRUCTION
-# for future active-active-N (#6459) — each host gets its OWN heartbeat, so a healthy host can never
-# mask a broken sibling. No hardcoded web-2 resource (it retired 2026-07-17, #6538; a dead feeder
-# would red heartbeat-reprovision-parity.test.ts). free-tier heartbeats are unconditionally
-# creatable (only betteruptime_policy/_monitor are count-gated); email-only escalation
-# (betterstack_paid_tier stays false; paid-tier escalation is #6549 item 1).
+# for_each = var.web_hosts: PER-HOST anti-masking preserved BY CONSTRUCTION for active-active-N
+# (#6459) — each host gets its OWN heartbeat, so a healthy host can never mask a broken sibling.
+#
+# TWO HOSTS TODAY, BOTH PROBING (corrected 2026-08-04). This block used to read "single live beat
+# today (web-1)" and "No hardcoded web-2 resource (it retired 2026-07-17, #6538)". Both clauses are
+# stale, and stale in the direction that matters: variables.tf:112 records a DIFFERENT web-2
+# RE-ADDED 2026-07-24 as a fresh cattle standby (#6459, ADR-143) — not the fsn1/10.0.1.11 warm
+# standby #6538 retired — and it sits in var.web_hosts' default map (hel1, 10.0.1.11, cpx22). So
+# `for_each` already materialises web-2 instances of both heartbeats and both doppler_secrets; the
+# comment claimed an absence the code does not have.
+#
+# AND WEB-2 IS GENUINELY FED — do not infer otherwise from server.tf. An intermediate revision of
+# this comment reasoned that because terraform_data.web_zot_consumer_probe_install and
+# .private_nic_guard_install are hardcoded to web-1, web-2 had no feeder and its beats rested
+# paused. That inference is WRONG and Better Stack refutes it: `web-zot-consumer-probe.service`
+# emits from `soleur-web-2` as well as `soleur-web-platform`. The install path for a FRESH host is
+# cloud-init.yml (it enables web-zot-consumer-probe.timer at boot, :667); the web-1-only SSH
+# provisioners exist because web-1 carries ignore_changes=[user_data] and is the unrebuildable pet,
+# so they are its RE-provisioning path, not the only install path. Read the telemetry before
+# asserting which hosts run a unit — the resource that installs it on the pet is not the resource
+# that installs it on the cattle.
+#
+# The surviving half of the retired clause is the load-bearing one, and it was never a claim about
+# web-2's existence: a HARDCODED second heartbeat resource would need its own manifest entry in
+# heartbeat-reprovision-parity.test.ts, and one shipped without a feeder is exactly the #6238
+# false-absence class. for_each avoids that by construction — one block, one manifest entry, N
+# instances — which is a reason to keep for_each, not evidence that web-2 is gone.
+#
+# free-tier heartbeats are unconditionally creatable (only betteruptime_policy/_monitor are
+# count-gated); email-only escalation (betterstack_paid_tier stays false; paid-tier escalation is
+# #6549 item 1).
 
 locals {
   # The zot repository path the consumer probe HEADs (tag-INDEPENDENT `/v2/<repo>/tags/list`, so it
@@ -34,6 +59,34 @@ locals {
   # Comma (not space) because it cannot appear in an OCI repository name, so the value needs no
   # quoting in the systemd EnvironmentFile that carries it. The probe splits on it and applies
   # ALL-MUST-SERVE aggregation; see web-zot-consumer-probe.sh.
+  #
+  # WHY ONE BEAT AND NOT TWO — settled 2026-08-04; the review reading is recorded because it is
+  # the reading the next editor will also have. architecture-strategist flagged this fold as
+  # contradicting the anti-masking rule stated at §3 below ("folding would re-introduce OR-masking
+  # across two distinct failure domains"). It does not, and the distinction is the whole point of
+  # the aggregation choice:
+  #
+  #   * OR-masking is A-healthy-hides-B-broken. It needs a beat that fires when EITHER repo
+  #     serves. That is the direction that loses alarms, and it is the direction §3 names.
+  #   * This fold is AND (web-zot-consumer-probe.sh suppresses the ping unless EVERY listed repo
+  #     returns 200, and 401 exits 3 loudly). A broken bootstrap repo therefore SUPPRESSES the
+  #     beat and absence alarms. AND can only over-suppress, never under-suppress — it strictly
+  #     ADDS detection here, since before #7144 nothing verified the bootstrap repo at all.
+  #
+  # So the fold sits inside the anti-masking rule, not against it. What it genuinely costs is
+  # DISCRIMINABILITY, and that is paid for elsewhere rather than with a second heartbeat: the
+  # suppress branch names the offending repos in its journald line (Layer 3, Vector-shipped), which
+  # is the same "a verdict must name its own subject" discipline #7144's probe-target-source fix
+  # applied to inngest-inventory. A second beat would buy a marginally faster read of WHICH repo
+  # failed, at the cost of a second betteruptime_heartbeat + doppler_secret per host and a second
+  # URL in the probe's EnvironmentFile — which feeds terraform_data.web_zot_consumer_probe_install's
+  # triggers_replace (server.tf:686), i.e. it re-provisions web-1. Adding a second never-observed
+  # gate to a host whose FIRST gate has not yet met its promotion criterion is the wrong trade.
+  #
+  # KNOWN RESIDUAL: this fold CHANGED THE SUBJECT of an existing beat. `soleur-web-zot-consumer-
+  # web-1` used to attest "the web platform image is servable"; it now attests "web platform AND
+  # inngest-bootstrap are servable". A historical absence read across 2026-08-04 is ambiguous
+  # between the two, and no amount of aggregation rigour fixes that — only the journald line does.
   zot_probe_repo = join(",", [local.zot_probe_repo_web, var.inngest_bootstrap_repo])
 }
 
@@ -62,8 +115,23 @@ resource "betteruptime_heartbeat" "web_zot_consumer" {
 
 # §3 — private-NIC-guard liveness heartbeat (per host). PERMANENT and INDEPENDENT of the zot beat:
 # a SOLEUR_PRIVATE_NIC emit that never fires is indistinguishable from "guard dead", so the guard
-# pings this every healthy run to be observable-when-healthy. NOT subsumed by the zot beat (folding
-# would re-introduce OR-masking across two distinct failure domains).
+# pings this every healthy run to be observable-when-healthy. NOT subsumed by the zot beat.
+#
+# The rule, stated precisely enough to apply (sharpened 2026-08-04 — it previously read "folding
+# would re-introduce OR-masking across two distinct failure domains", which reads as a ban on ALL
+# folding and was cited that way in review against §1's ALL-MUST-SERVE repo list):
+#
+#   Never fold two failure domains into one beat under OR — a beat that fires when EITHER domain
+#   is healthy lets a healthy domain hide a broken one, which is the alarm-losing direction.
+#   Folding under AND does not lose alarms (it can only over-suppress), so §1's multi-repo
+#   ALL-MUST-SERVE list is within this rule, not an exception to it.
+#
+# What keeps THIS beat separate is therefore not the masking rule but a different property: the
+# guard must be observable WHEN HEALTHY. AND-folding it into the zot beat would make a NIC-healthy
+# run indistinguishable from a run where the guard never executed, because both look like "no
+# suppression from the NIC side" — and the whole reason this heartbeat exists is that a
+# never-firing emit and a dead guard are the same signal. Independence here buys liveness
+# evidence; the §1 fold costs only discriminability, which its journald line repays.
 resource "betteruptime_heartbeat" "web_nic_guard" {
   for_each = var.web_hosts
 

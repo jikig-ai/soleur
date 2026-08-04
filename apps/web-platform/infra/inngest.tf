@@ -241,8 +241,22 @@ resource "doppler_secret" "inngest_redis_password_prd" {
 # ever scanned at a time (op=inventory curls 127.0.0.1:8288 on the active host), so with
 # BOTH hosts capped the operating point is one-host-scanning (≤20) + peer-idle-drained
 # (≤8) ≈ 28 < 30. Pre-flip remediation: bring web-2 into the fan-out
-# (the warm-standby dispatch was DELETED with #6575 and web-2 retired 2026-07-17 — this pre-flip remediation is UNREACHABLE at the current one-host operating point) and redeploy the capped
-# image so BOTH schedulers honour open=5/idle=2. Post-flip this is moot — the cutover
+# (the warm-standby dispatch was DELETED with #6575, so this pre-flip remediation is UNREACHABLE
+# at the current operating point) and redeploy the capped image so BOTH schedulers honour
+# open=5/idle=2.
+#
+# CURRENT STATE, and why it is a CONFIG fact rather than a host-absence one (corrected
+# 2026-08-04). This block used to discharge itself with "web-2 retired 2026-07-17", which is no
+# longer true: a different web-2 was re-added 2026-07-24 (variables.tf:112, ADR-143) at the same
+# 10.0.1.11. There is still only ONE co-located scheduler, but the reason is that
+# `web_colocate_inngest` flipped to default-false on 2026-07-11 (5fbf00f0e, #6344) — web-1's unit
+# predates that flip and survived it, while web-2 was born after it and so never bootstrapped one.
+#
+# That distinction is load-bearing because the variable is GLOBAL, not per-host (server.tf:375
+# passes the same var into every web host's templatefile). Flipping it back therefore re-arms the
+# 2 × P×5 = 40 > pool_size 30 ceiling on the next fresh boot of EITHER host, and the capping work
+# above becomes live again. A comment claiming the second host is gone hides that; this one does
+# not. Post-flip the whole concern is moot — the cutover
 # STOPS both co-located inngests; the dedicated host (10.0.1.40) uses its OWN dark
 # pooler (soleur-dev), so prod-pooler inngest load goes to ~0.
 #
