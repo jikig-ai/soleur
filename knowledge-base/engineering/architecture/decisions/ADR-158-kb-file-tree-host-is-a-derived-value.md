@@ -65,6 +65,17 @@ Corollaries the implementation must preserve:
   instead — the portaled shell reads it through the REACT tree, which is exactly what
   ADR-047 Decision 2 relies on.
 
+  **Corrected 2026-08-04 (#7222).** "The provider cannot be narrowed" was true only of
+  narrowing it *spatially* (shrinking its React-tree reach), and this bullet read as though
+  the per-consumer guard were the whole answer. It was not: the same leak was live in
+  `settings-shell.tsx`, `conversations-rail.tsx` and the `ThemeToggle` prop, none of which
+  had a `host` term to guard with, and none of which this ADR's scope would ever have
+  reached. The provider's *value* is now viewport-aware at its single owner — see
+  [ADR-047](./ADR-047-nav-context-band-outside-swap.md)'s 2026-08-04 amendment for the full
+  contract. The `&& host === "rail"` guard is retained as a local invariant, not because it
+  is load-bearing (it is now redundant), and the ADR-047 rule against a consumer
+  re-deriving the viewport term is what keeps it from becoming a second authority.
+
 ## Two structural safety facts
 
 These are why gating a render on a viewport-derived value is safe *here* and must be

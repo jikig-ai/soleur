@@ -52,6 +52,18 @@ on:
       # script -- including one that relaxes the constraint keeping this reader off the
       # production host -- skips both guards that watch it.
       - "scripts/followthroughs/git-data-rung2-evidence-capture.sh"
+      # (#7203 review) inngest-bootstrap-mirror-only.test.sh asserts ~30 properties OF
+      # build-inngest-bootstrap-image.yml -- the mirror_only gating, the belt posture on both
+      # trigger paths, the bridge-outcome branch, and the behavioural degraded() contract.
+      # That workflow was not listed here, so the suite could not fire on the file it guards:
+      # a PR restoring `continue-on-error: true` under mirror_only, or re-adding the
+      # `if: steps.zot_bridge.outcome == 'success'` gate, touches no apps/*/infra/** path and
+      # would have skipped its own guard entirely. #7203 ran this job only incidentally,
+      # because it also ADDED the suite file under apps/web-platform/infra/.
+      # Same defect class as the #6454, #6178 and #7025 comments above.
+      # cutover-inngest-workflow.test.sh also reads this workflow (its BUILD_IMG variable),
+      # so the same one-line addition closes that pre-existing gap too.
+      - ".github/workflows/build-inngest-bootstrap-image.yml"
       # (#6178) cutover-inngest-workflow.test.sh asserts ~90 properties OF cutover-inngest.yml
       # -- the anchor derivation, the non-vacuity gate, the per-arm window split, the null-safe
       # bucketing, and the emitter-parity of the flip-FSM reason set. Without this path a PR that
@@ -61,6 +73,17 @@ on:
       # apps/web-platform/infra/inngest-cutover-flip.sh, needs no entry — `apps/*/infra/**`
       # already covers it, so adding a terminal reason there does run the parity guard.)
       - ".github/workflows/cutover-inngest.yml"
+      # (#6808) workspaces-luks-verify-workflow.test.sh asserts the classification contract OF
+      # workspaces-luks-verify.yml -- that all four outcome classes are producible, that the alarm
+      # step's `if:` is reachable on a failing run (a bare `failure()` would make it unreachable on
+      # exactly the runs it exists for), that the alarm and close conditions are mutually exclusive
+      # over the enum, and that the scheduled path refuses a seed. Same shape as the two comments
+      # above: without this path a PR editing ONLY that workflow skips the guard whose entire job is
+      # protecting it. This one is sharper than most -- the workflow is the ONLY automatic
+      # verification that web-1's /mnt/data is still on the LUKS mapper while #6808 keeps the
+      # heartbeat unwired, and the published privacy policy asserts that verification in the present
+      # tense. A guard born unreachable here means a false Article 32 claim decays silently.
+      - ".github/workflows/workspaces-luks-verify.yml"
       # (#3366) supabase-advisor/scan-workflow.test.sh reads all of these. The
       # guard's whole job is to catch a gate that looks present but does nothing
       # — so a guard that cannot fire when its own subjects are edited would be
@@ -729,6 +752,14 @@ jobs:
       # line in this job: an unregistered suite is zero coverage, silently green.
       - name: Run /workspaces LUKS cutover WORKFLOW gate (#6588 mode gating + CLEAN_STRAY reachability)
         run: bash apps/web-platform/infra/workspaces-luks-cutover-workflow.test.sh
+      # Guards the VERIFY workflow's classification contract (#6808). Sibling of the cutover-workflow
+      # suite above and registered for the same reason: it EXECUTES the workflow's extracted `run:`
+      # bodies over stubbed ssh/curl/tar/doppler/gh rather than grepping them, so it can prove all
+      # four outcome classes are producible and that the alarm's `if:` is reachable on a failing run.
+      # A grep-only guard here would pass vacuously -- which is the exact defect class this workflow
+      # exists to prevent on the live LUKS surface.
+      - name: Run /workspaces LUKS verify WORKFLOW gate (#6808 schedule + alarm classification)
+        run: bash apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh
 
       # REGISTRATION IS NOT ENVIRONMENT. The loopback suite below is the only workspaces-luks test
       # that touches a REAL block device (losetup + real cryptsetup luksFormat/luksOpen + real

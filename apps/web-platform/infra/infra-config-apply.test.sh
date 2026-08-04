@@ -1096,8 +1096,418 @@ test_sudoers_caller_argv_lockstep() {
     "$(grep -c . <<<"$granted_sudoers")"
 }
 
+# =============================================================================================
+# #7220 — the no-SSH fatal-error channel.
+#
+# The bug these arms exist for: `systemctl daemon-reload` ran as User=deploy with no sudoers
+# grant, `set -e` aborted AFTER 19/19 files were written, and the EXIT trap published a frame of
+# HARDCODED ZEROS. The CI gate then reported `files_total=0` — the precise opposite of what had
+# happened — with no line, no command and no rc. The handler could fail; it could not say how.
+#
+# Every arm below is proven RED against origin/main's handler by
+# `test_fatal_channel_red_against_main` at the end of this block.
+# =============================================================================================
+
+# Helper: the handler's frame, or the literal string MISSING.
+_frame_field() {  # <field>
+  jq -r --arg f "$1" '.[$f] // "MISSING"' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING"
+}
+
+# --- #7220 A1.3 + A8.2: the `exit 64` guard fires ABOVE the counters ---
+# Two defects in one shape. Before the trap hoist, START_TS / the state-file resets / the EXIT
+# trap all sat BELOW the RESTART_SETTLE_SECS guard, so `exit 64` (a) left the PREVIOUS run's
+# frame on disk — a stale GREEN certifying an apply that delivered nothing — and (b) wrote no
+# frame of its own. This arm drives a real clean apply first so there IS a stale green to serve.
+test_fatal_channel_exit64_replaces_stale_frame() {
+  echo "TEST: #7220 — exit 64 above the counters replaces the stale frame (AC7, AC13)"
+  setup
+  export_valid_env_vars
+
+  # 1. A clean apply, so a GREEN frame with exit_code=0 is on disk.
+  bash "$HANDLER" >/dev/null 2>&1 || true
+  local prior_exit; prior_exit=$(_frame_field exit_code)
+  assert_eq "precondition: a clean apply left a green frame" "0" "$prior_exit"
+
+  # 2. Now poison the guard. This exits 64 before TOTAL_COUNT/WRITTEN_COUNT exist.
+  INFRA_CONFIG_RESTART_SETTLE_SECS=abc bash "$HANDLER" >/dev/null 2>&1 || true
+
+  # The frame must be THIS run's, not the previous one's.
+  assert_eq "exit 64 publishes its own frame, not the prior green one" "64" "$(_frame_field exit_code)"
+  assert_eq "the death is attributed with the process status" "64" "$(_frame_field fatal_rc)"
+  assert_eq "reason is unhandled" "unhandled" "$(_frame_field reason)"
+
+  # AC13 — the `${VAR:-0}` defaults. Measured on bash 5.2.21: a BARE $WRITTEN_COUNT here makes
+  # an abort in this window write NO FRAME AT ALL under `set -u`, which
+  # cat-infra-config-state.sh then reports as `no_prior_apply` — "the handler never ran". The
+  # instrument would erase exactly the death it exists to report. So assert the frame parses.
+  if jq -e . "$INFRA_CONFIG_STATE" >/dev/null 2>&1; then
+    echo "  PASS: an abort above the counters still writes well-formed JSON"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: abort above the counters produced no/invalid frame — the :-0 defaults regressed"
+    FAIL=$((FAIL + 1))
+  fi
+  assert_eq "counters default to 0 rather than aborting the printf" "0" "$(_frame_field files_written)"
+
+  teardown
+}
+
+# --- #7220 A8.1: a fatal inside `$( )` still reaches the frame (AC9) ---
+# `local_sha=$(sha256sum "$tmpfile" | awk …)` is an UNGUARDED command substitution containing a
+# pipeline, inside the write loop. A failure there assigns FATAL_* in the CHILD, so a
+# variable-based handoff would leave the parent's EXIT trap publishing a frame with no
+# attribution — while the frame is the transport-independent arm of this channel. The handoff is
+# a FILE for exactly this reason.
+test_fatal_channel_subshell_attribution() {
+  echo "TEST: #7220 — a fatal inside a command substitution still reaches the frame (AC9)"
+  setup
+  export_valid_env_vars
+  # Break sha256sum only. The sanitizer path (printf|tr|tr|cut) does not use it.
+  printf '#!/bin/sh\nexit 7\n' > "$TMPDIR_ROOT/bin/sha256sum"
+  chmod +x "$TMPDIR_ROOT/bin/sha256sum"
+
+  bash "$HANDLER" >/dev/null 2>&1 || true
+
+  local fline fcmd
+  fline=$(_frame_field fatal_line)
+  fcmd=$(_frame_field fatal_cmd)
+
+  if [[ "$fline" =~ ^[0-9]+$ ]] && [[ "$fline" -gt 0 ]]; then
+    echo "  PASS: fatal_line crossed the subshell boundary (line=$fline)"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: fatal_line=$fline — the ERR->EXIT handoff did not cross the subshell"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # Non-vacuity: the command text must actually be there, else the absence assertions in the
+  # secret arm below would pass on an empty string.
+  #
+  # This assertion ALSO pins the handoff's last-writer-wins semantics, so do not "improve" the
+  # ERR trap to keep the FIRST write. Measured both ways on bash 5.2.21: the failing construct
+  # here is a PIPELINE (`local_sha=$(sha256sum … | awk …)`), and for a pipeline bash reports the
+  # LAST ELEMENT — so first-writer-wins records `awk "{print $1}"`, naming a command that
+  # SUCCEEDED, and this assertion goes RED. The outer frame is coarser but never wrong.
+  case "$fcmd" in
+    *sha256sum*) echo "  PASS: fatal_cmd names the failing command, not a succeeded pipeline element"; PASS=$((PASS + 1)) ;;
+    *) echo "  FAIL: fatal_cmd=<$fcmd> does not name sha256sum (last-writer-wins handoff regressed?)"; FAIL=$((FAIL + 1)) ;;
+  esac
+
+  # The frame stays valid JSON and carries REAL accounting, not the hardcoded zeros of #7220.
+  if jq -e . "$INFRA_CONFIG_STATE" >/dev/null 2>&1; then
+    echo "  PASS: frame remains well-formed JSON with a sanitized command"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: frame is not valid JSON — the sanitizer let a quote or backslash through"
+    FAIL=$((FAIL + 1))
+  fi
+  assert_eq "files_total is the REAL count, not the #7220 hardcoded 0" "$MANAGED_N" "$(_frame_field files_total)"
+
+  # The journald arm of the same fact, via the AC14b seam.
+  if grep -q 'SOLEUR_INFRA_CONFIG_FATAL' "$LOGGER_LOG" 2>/dev/null; then
+    echo "  PASS: SOLEUR_INFRA_CONFIG_FATAL emitted to the journald arm"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: no SOLEUR_INFRA_CONFIG_FATAL marker — the no-SSH channel is silent"
+    FAIL=$((FAIL + 1))
+  fi
+
+  teardown
+}
+
+# --- #7220 A8.3: a secret-bearing variable never leaks its VALUE (AC11) ---
+# MEASURED (bash 5.2.21 target image AND 5.3.9): $BASH_COMMAND is UNEXPANDED — it carries the
+# literal source text `--token="$SECRET"`, never the value. That, not the sanitizer, is what
+# makes this safe: the sanitizer's charset `A-Za-z0-9 ._:/=-` PRESERVES a `dp.st.…` token
+# intact, so if BASH_COMMAND ever expanded, this channel would ship credentials to Better Stack.
+# The arm therefore asserts the value is absent AND that the variable NAME is present — without
+# the second half the absence check passes vacuously on an empty fatal_cmd.
+test_fatal_channel_no_secret_leak() {
+  echo "TEST: #7220 — a failing command's secret-bearing variable leaks no VALUE (AC11)"
+  setup
+  export_valid_env_vars
+  local secret="dp.st.SUPERSECRETVALUE7220"
+  # A seam whose VALUE is a secret and whose invocation fails unhandled inside the write loop.
+  printf '#!/bin/sh\nexit 7\n' > "$TMPDIR_ROOT/bin/sha256sum"
+  chmod +x "$TMPDIR_ROOT/bin/sha256sum"
+
+  SOLEUR_SECRET_PROBE="$secret" bash "$HANDLER" >/dev/null 2>&1 || true
+
+  if grep -qF "$secret" "$INFRA_CONFIG_STATE" 2>/dev/null; then
+    echo "  FAIL: the secret VALUE reached the state frame"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: no secret value in the frame"
+    PASS=$((PASS + 1))
+  fi
+  if grep -qF "$secret" "$LOGGER_LOG" 2>/dev/null; then
+    echo "  FAIL: the secret VALUE reached the journald arm"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: no secret value in \$LOGGER_LOG"
+    PASS=$((PASS + 1))
+  fi
+  # Anti-vacuity — prove the channel was actually carrying command text at the time.
+  case "$(_frame_field fatal_cmd)" in
+    *sha256sum*) echo "  PASS: non-vacuous — fatal_cmd was populated"; PASS=$((PASS + 1)) ;;
+    *) echo "  FAIL: fatal_cmd empty — the absence assertions above were vacuous"; FAIL=$((FAIL + 1)) ;;
+  esac
+
+  # THE ABOVE IS NOT THE PROPERTY. Review caught that honestly: the handler never reads
+  # SOLEUR_SECRET_PROBE, and the failing command's source text (`local_sha=$(sha256sum …)`)
+  # names no secret-bearing variable — so the absence assertions hold by FIXTURE CONSTRUCTION,
+  # not by mechanism. They would still pass against a handler that fully expanded $BASH_COMMAND.
+  #
+  # The real safety argument is a BASH invariant: $BASH_COMMAND carries the literal SOURCE TEXT,
+  # unexpanded. That matters because the sanitizer is NOT a redactor — its charset
+  # `A-Za-z0-9 ._:/=-` preserves a `dp.st.…` token intact. So pin the invariant itself, under
+  # the same shell settings and the same trap shape the handler uses.
+  local probe_out
+  probe_out=$(bash -c '
+    set -euo pipefail; set -o errtrace
+    SECRET="dp.st.LEAKCANARY7220"
+    trap '"'"'printf "%s" "$BASH_COMMAND" > "'"$TMPDIR_ROOT"'/bc.txt"'"'"' ERR
+    /nonexistent-probe-7220 --token="$SECRET"
+  ' 2>/dev/null; cat "$TMPDIR_ROOT/bc.txt" 2>/dev/null || true)
+
+  if [[ -n "$probe_out" ]] && [[ "$probe_out" != *"dp.st.LEAKCANARY7220"* ]] && [[ "$probe_out" == *'$SECRET'* ]]; then
+    echo "  PASS: \$BASH_COMMAND is UNEXPANDED — it carries the literal \$SECRET, never the value"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: \$BASH_COMMAND expansion invariant broken — the sanitizer does NOT redact, so"
+    echo "        this channel would ship credentials to Better Stack. Captured: <$probe_out>"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # The invariant above is voided by exactly one construct class: `eval`, or sourcing generated
+  # text — both re-expand before the trap sees the command. Nothing else in the file pins this,
+  # so a future `eval` would silently convert the fatal channel into a token exfiltrator.
+  local n_eval
+  n_eval=$(grep -cE '(^|[^A-Za-z_])eval[[:space:]]' "$HANDLER" 2>/dev/null || true)
+  [[ "$n_eval" =~ ^[0-9]+$ ]] || n_eval=0
+  assert_eq "the handler contains no \`eval\` (the construct that would void non-expansion)" "0" "$n_eval"
+  # The frame must contain no raw quote or newline, which is what keeps it parseable.
+  if jq -e . "$INFRA_CONFIG_STATE" >/dev/null 2>&1; then
+    echo "  PASS: frame parses (no raw quote/backslash/newline survived the sanitizer)"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: frame does not parse"
+    FAIL=$((FAIL + 1))
+  fi
+
+  teardown
+}
+
+# --- #7220 A8.4 (P0): the instrument must not become the outage (AC10) ---
+# MEASURED on bash 5.2.21 and 5.3.9: a failing command inside an ARMED EXIT trap both fires ERR
+# and turns `exit 0` into rc=1 — and `trap - ERR` ALONE suppresses the marker but NOT the status
+# flip. Enriching this trap without capture-first + disarm + `|| true` + `exit "$rc"` would turn
+# a GREEN apply RED on the one host with no SSH runbook. This arm is that guard.
+test_fatal_channel_clean_apply_exits_zero() {
+  echo "TEST: #7220 — a clean apply still exits 0 with the enriched trap (AC10, AC14)"
+  setup
+  export_valid_env_vars
+
+  local rc=0
+  bash "$HANDLER" >/dev/null 2>&1 || rc=$?
+  assert_eq "clean apply exits 0 — the instrument did not flip the status" "0" "$rc"
+  assert_eq "frame reports exit_code 0" "0" "$(_frame_field exit_code)"
+
+  # AC14 second half: ZERO false fatal markers on a healthy run. This is the only executable
+  # mitigation for the biggest behavioural risk of this change — a channel that cries wolf on
+  # every green apply trains the reader to ignore the one that matters.
+  local n_fatal
+  n_fatal=$(grep -c 'SOLEUR_INFRA_CONFIG_FATAL' "$LOGGER_LOG" 2>/dev/null || true)
+  [[ "$n_fatal" =~ ^[0-9]+$ ]] || n_fatal=0
+  assert_eq "zero SOLEUR_INFRA_CONFIG_FATAL markers on a clean apply" "0" "$n_fatal"
+
+  # fatal_* are emitted UNCONDITIONALLY (AC12), zeroed when ERR never fired.
+  assert_eq "fatal_rc zeroed on success" "0" "$(_frame_field fatal_rc)"
+  assert_eq "fatal_line zeroed on success" "0" "$(_frame_field fatal_line)"
+
+  # No handoff residue left behind to poison the NEXT run's attribution.
+  if [[ -e "${INFRA_CONFIG_STATE}.fatal" ]]; then
+    echo "  FAIL: .fatal handoff file survived a clean apply — next run would misattribute"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: .fatal handoff cleaned up"
+    PASS=$((PASS + 1))
+  fi
+
+  teardown
+}
+
+# --- #7220: PROVE THE ARMS ABOVE ARE RED AGAINST origin/main ---
+# A regression guard that passes against the code it was written to catch is decoration. This
+# runs the pre-#7220 handler from git and asserts it FAILS the two load-bearing properties:
+# attribution (fatal_line) and real accounting (files_total). Skips loudly rather than silently
+# if the git object is unavailable (shallow clone / detached worktree), so a vacuous pass is
+# never mistaken for a proof.
+test_fatal_channel_red_against_main() {
+  echo "TEST: #7220 — the new assertions are RED against the pre-fix handler"
+  setup
+  export_valid_env_vars
+
+  local old="${TMPDIR_ROOT}/old-handler.sh"
+  if ! git -C "$SCRIPT_DIR" show "origin/main:apps/web-platform/infra/infra-config-apply.sh" > "$old" 2>/dev/null; then
+    # FAIL, not SKIP, when origin/main RESOLVES but the show fails — that is a real breakage,
+    # not an unavailable environment. A silent skip here makes the PR's only proof-of-red one
+    # `fetch-depth: 1` away from not existing, and nothing downstream consumes a skip.
+    if git -C "$SCRIPT_DIR" rev-parse --verify origin/main >/dev/null 2>&1; then
+      echo "  FAIL: origin/main resolves but the handler could not be read — mutation proof is broken, not skipped"
+      FAIL=$((FAIL + 1))
+    else
+      echo "  SKIP (loud): origin/main unavailable (shallow clone) — mutation proof NOT run"
+    fi
+    teardown
+    return 0
+  fi
+
+  printf '#!/bin/sh\nexit 7\n' > "$TMPDIR_ROOT/bin/sha256sum"
+  chmod +x "$TMPDIR_ROOT/bin/sha256sum"
+  bash "$old" >/dev/null 2>&1 || true
+
+  # The pre-fix handler wrote hardcoded zeros and carried no attribution at all.
+  local old_line old_total
+  old_line=$(_frame_field fatal_line)
+  old_total=$(_frame_field files_total)
+  assert_eq "pre-fix handler carried NO fatal_line (this is #7220)" "MISSING" "$old_line"
+  assert_eq "pre-fix handler reported the hardcoded files_total=0" "0" "$old_total"
+
+  teardown
+}
+
+# --- #7220 review: the two arms the original fixture set could not see ---
+#
+# Every fatal-channel arm above drives a DEATH, so the suite could only ever confirm the channel
+# fires — never that it stays quiet, and never that it fires when a frame was already published.
+# Both gaps were live bugs. These two arms sit on the other side of the `died` predicate.
+
+# A routine partial delivery is NOT a death. `missing_env` is the documented #4804 self-heal
+# window — the expected outcome of every FILE_MAP addition — and it exits 1 for ACCOUNTING while
+# publishing a correct frame. Before the fix this emitted `FATAL: line=0 rc=1 cmd=`, which the
+# follow-through probe hard-FAILs on, so a normal self-heal would have reported #7220 as unfixed.
+test_fatal_channel_partial_apply_is_not_a_death() {
+  echo "TEST: #7220 — a routine partial apply emits ZERO fatal markers (review finding)"
+  setup
+  export_valid_env_vars
+  unset CAT_INFRA_CONFIG_STATE_SH_B64   # the #4804 host-drift shape
+
+  local rc=0
+  bash "$HANDLER" >/dev/null 2>&1 || rc=$?
+  assert_eq "partial apply still exits 1 (accounting, not death)" "1" "$rc"
+  assert_eq "the frame keeps the REAL partial accounting" "$MANAGED_MINUS_1" "$(_frame_field files_written)"
+
+  local n_fatal
+  n_fatal=$(grep -c 'SOLEUR_INFRA_CONFIG_FATAL' "$LOGGER_LOG" 2>/dev/null || true)
+  [[ "$n_fatal" =~ ^[0-9]+$ ]] || n_fatal=0
+  assert_eq "ZERO fatal markers on a documented self-heal — the channel must not cry wolf" "0" "$n_fatal"
+  assert_eq "no fabricated attribution" "0" "$(_frame_field fatal_line)"
+
+  teardown
+}
+
+# A death AFTER the frame is published must CORRECT the frame, not leave it green. The webhook
+# self-restart is a second ungranted `sudo` running after `.final` exists; before the fix its
+# failure left `exit_code:0` on disk and `adjudicate_infra_config` PASSED — #7220's own shape
+# relocated ~200 lines later, invisible to the instrument built for it.
+test_fatal_channel_death_after_publish_corrects_the_frame() {
+  echo "TEST: #7220 — a death AFTER publish rewrites the frame instead of leaving it green"
+  setup
+  export_valid_env_vars
+  # Deny ONLY systemd-run, so delivery and reconciliation both succeed first.
+  printf '#!/bin/sh\ncase "$*" in *systemd-run*) exit 1 ;; esac\nexit 0\n' > "$TMPDIR_ROOT/bin/sudo"
+  chmod +x "$TMPDIR_ROOT/bin/sudo"
+  unset INFRA_CONFIG_TEST_MODE   # the self-restart is gated out in test mode
+
+  bash "$HANDLER" >/dev/null 2>&1 || true
+
+  # The whole point: a frame that says 0 here is the false green.
+  assert_eq "frame reports the TRUE non-zero status, not the published 0" "1" "$(_frame_field exit_code)"
+  assert_eq "the post-publish death is named as its own shape" "fatal_after_publish" "$(_frame_field reason)"
+  local fline; fline=$(_frame_field fatal_line)
+  if [[ "$fline" =~ ^[0-9]+$ ]] && [[ "$fline" -gt 0 ]]; then
+    echo "  PASS: the death is attributed to a line ($fline)"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: fatal_line=$fline — a post-publish death lost its attribution"; FAIL=$((FAIL + 1))
+  fi
+  # Correcting the frame must not discard what the run actually earned.
+  assert_eq "delivery accounting survives the rewrite" "$MANAGED_N" "$(_frame_field files_total)"
+  if [[ "$(jq '.files | length' "$INFRA_CONFIG_STATE" 2>/dev/null || echo 0)" -eq "$MANAGED_N" ]]; then
+    echo "  PASS: files[] preserved through the correction"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: files[] was discarded when the frame was corrected"; FAIL=$((FAIL + 1))
+  fi
+
+  teardown
+}
+
+# --- #7220 review: the handoff is an INPUT, so it needs a trust gate that can fail ---
+#
+# Since #7220 the `.fatal` handoff decides fatal_line, which the gate turns into `fatal_mode=1`,
+# which SUPPRESSES two genuine diagnostics. STATE_FILE defaults under /var/lock -> /run/lock,
+# mode 1777 and NOT covered by webhook.service's PrivateTmp — so any local UID can create that
+# path first. `-O` (owned by the effective UID) is what stops a planted file steering the
+# operator to a fabricated line while silencing the real ones.
+#
+# This arm exists because a mutation battery caught that dropping `-O` left the suite fully
+# GREEN. A security guard whose deletion nothing notices is not a guard.
+test_fatal_channel_handoff_requires_ownership() {
+  echo "TEST: #7220 — the .fatal handoff is ownership-gated before it is believed (review finding)"
+  setup
+
+  # STRUCTURAL: anchored on the shell test construct, which a comment cannot produce (verified
+  # unique in-file). Also pins ORDER — a trust gate below the read is not a trust gate.
+  local guard_line read_line
+  guard_line=$(grep -n -- '-O "\$FATAL_FILE"' "$HANDLER" | head -1 | cut -d: -f1)
+  read_line=$(grep -n 'IFS= read -r f_rc' "$HANDLER" | head -1 | cut -d: -f1)
+  if [[ -n "$guard_line" ]]; then
+    echo "  PASS: the handoff read is ownership-gated (line $guard_line)"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: no -O ownership gate on \$FATAL_FILE — a planted handoff would be believed"
+    FAIL=$((FAIL + 1))
+  fi
+  if [[ -n "$guard_line" && -n "$read_line" && "$guard_line" -lt "$read_line" ]]; then
+    echo "  PASS: the gate precedes the read"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: ownership gate at '$guard_line' does not precede the read at '$read_line'"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # BEHAVIOURAL, when the environment can actually express foreign ownership. Skips LOUDLY —
+  # a silent skip here would read exactly like a pass.
+  if [[ "$(id -u)" -eq 0 ]] && id -u nobody >/dev/null 2>&1; then
+    export_valid_env_vars
+    printf '#!/bin/sh\nexit 7\n' > "$TMPDIR_ROOT/bin/sha256sum"; chmod +x "$TMPDIR_ROOT/bin/sha256sum"
+    printf '1\n999999\nPLANTED_FABRICATED_COMMAND\n' > "${INFRA_CONFIG_STATE}.fatal"
+    chown nobody "${INFRA_CONFIG_STATE}.fatal" 2>/dev/null || true
+    bash "$HANDLER" >/dev/null 2>&1 || true
+    case "$(_frame_field fatal_cmd)" in
+      *PLANTED_FABRICATED_COMMAND*)
+        echo "  FAIL: a foreign-owned handoff was believed — fabricated attribution reached the frame"
+        FAIL=$((FAIL + 1)) ;;
+      *)
+        echo "  PASS: foreign-owned handoff ignored; attribution came from this process only"
+        PASS=$((PASS + 1)) ;;
+    esac
+  else
+    echo "  SKIP (loud): not root, so foreign ownership cannot be expressed here — the structural"
+    echo "               assertions above are the only coverage in this environment."
+  fi
+
+  teardown
+}
+
 # --- Run all tests ---
 echo "=== infra-config-apply.sh test suite ==="
+test_fatal_channel_handoff_requires_ownership
+test_fatal_channel_partial_apply_is_not_a_death
+test_fatal_channel_death_after_publish_corrects_the_frame
+test_fatal_channel_exit64_replaces_stale_frame
+test_fatal_channel_subshell_attribution
+test_fatal_channel_no_secret_leak
+test_fatal_channel_clean_apply_exits_zero
+test_fatal_channel_red_against_main
 test_dropin_restart_grant
 test_reconcile_stale_fires_and_disarms
 test_reconcile_inactive_short_circuits
@@ -1123,6 +1533,15 @@ test_missing_env_partial_write
 test_prod_mode_escalated_move
 test_b64_delivery_parity
 test_orphan_hook_selfcheck
+# --- #7220 review: ASSERTION-COUNT FLOOR ---------------------------------------------------
+# Measured: removing the new arm invocations from the runner took this suite 144 -> 110 passed,
+# 0 failed, exit 0. Nothing noticed. A floor makes that loud.
+APPLY_MIN_ASSERTIONS=142
+if [[ "$PASS" -lt "$APPLY_MIN_ASSERTIONS" ]]; then
+  echo "  FAIL: assertion-count floor — only $PASS assertions ran, expected >= $APPLY_MIN_ASSERTIONS"
+  FAIL=$((FAIL + 1))
+fi
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then

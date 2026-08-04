@@ -2,12 +2,19 @@
 
 // Full-screen LikeC4 workspace for KB diagram pages: the interactive diagram on
 // the LEFT, and on the RIGHT a window that toggles between the Soleur Concierge
-// (open by default, scoped to this document so it can edit the diagram) and the
-// raw .c4 code editor. Loaded via next/dynamic({ ssr: false }) from the KB page
-// — @likec4/diagram is canvas/browser-only.
+// (scoped to this document so it can edit the diagram) and the raw .c4 code
+// editor. Loaded via next/dynamic({ ssr: false }) from the KB page —
+// @likec4/diagram is canvas/browser-only.
+//
+// #7222 — that "LEFT/RIGHT" split is DESKTOP-ONLY, and so is the Concierge's
+// open-by-default (which lives in useKbLayoutState, not here). Below `md` the
+// diagram takes the whole viewport and the Concierge starts closed, opening as
+// a full-screen overlay on top of it.
 import { useContext, useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import { KbChatContent } from "@/components/chat/kb-chat-content";
+import { KbChatFullScreen } from "@/components/chat/kb-chat-fullscreen";
 import { KbChatContext } from "@/components/kb/kb-chat-context";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import {
@@ -91,6 +98,107 @@ export default function C4Workspace({
     else setLocalCollapsed(true);
   };
 
+  // #7222 — TOPOLOGY, not just a default. Desktop keeps the resizable
+  // side-by-side split. Below `md` a 190px/190px split makes both panes
+  // unusable, so the diagram Panel stands alone at full width and the revealed
+  // Concierge becomes the shared full-screen takeover (KbChatFullScreen), which
+  // covers the mobile top bar and owns its own back affordance.
+  //
+  // Safe to read real matchMedia on the first render: this component is loaded
+  // via next/dynamic({ ssr: false }), so there is no server HTML to mismatch.
+  const isDesktop = useMediaQuery("(min-width: 768px)");
+  const conciergeOpen = !conciergeCollapsed;
+
+  // ONE definition of the right-hand window, rendered into whichever host the
+  // breakpoint selects. Building it once is what keeps the two topologies from
+  // drifting — and, more importantly, keeps the Concierge to a SINGLE mount, so
+  // there is never a second ChatSurface subscribed to the same contextPath.
+  const conciergeWindow = (
+    /* `md:border-l` only — the left border separates the window from the
+       diagram COLUMN, and inside the mobile takeover there is no column beside
+       it, so the rule would read as a stray hairline. */
+    <div className="flex h-full min-h-0 flex-col bg-soleur-bg-base md:border-l md:border-soleur-border-default">
+      {/* Tab strip. Below `md` the takeover's own header owns the close
+          affordance, so this strip carries only the tabs / edit hint there —
+          two chevrons doing the same job in adjacent 56px bars reads as a bug. */}
+      <div className="flex shrink-0 items-center gap-1 border-b border-soleur-border-default bg-soleur-bg-surface-2/40 px-2 py-1.5">
+        {c4EditEnabled ? (
+          (
+            [
+              ["concierge", "Concierge"],
+              ["code", "Code"],
+            ] as const
+          ).map(([t, label]) => (
+            <button
+              key={t}
+              onClick={() => setRightTab(t)}
+              className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                rightTab === t
+                  ? "bg-soleur-bg-base text-soleur-text-primary"
+                  : "text-soleur-text-muted hover:text-soleur-text-secondary"
+              }`}
+            >
+              {label}
+            </button>
+          ))
+        ) : (
+          // Discoverability hint (AC10): the Code editor is gated OFF, so
+          // tell the user the Concierge is how diagrams are edited. A
+          // single muted line — no new component/flow. The lone "Concierge"
+          // tab is dropped (single tab = noise) but the collapse chevron stays.
+          <span className="px-1 text-xs text-soleur-text-muted">
+            To change this diagram, ask the Concierge.
+          </span>
+        )}
+        <div className="ml-auto flex items-center gap-1.5 pr-1">
+          {isDesktop && (
+          <button
+            type="button"
+            aria-label="Collapse Concierge"
+            onClick={collapseConcierge}
+            className="rounded p-1 text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-secondary"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="13 17 18 12 13 7" />
+              <polyline points="6 17 11 12 6 7" />
+            </svg>
+          </button>
+          )}
+        </div>
+      </div>
+
+      <div className="relative min-h-0 flex-1">
+        {/* Concierge stays mounted across the Concierge/Code tab toggle so
+            the thread persists; visibility is CSS-driven. */}
+        <div className={rightTab === "concierge" ? "h-full" : "hidden"}>
+          <KbChatContent
+            contextPath={contextPath}
+            onClose={collapseConcierge}
+            visible={rightTab === "concierge"}
+          />
+        </div>
+        {c4EditEnabled && rightTab === "code" && (
+          <div className="h-full">
+            {data ? (
+              <C4CodePanel
+                data={data}
+                dirPath={dirPath}
+                onSaved={async (rerendered) => {
+                  await reload();
+                  // Stale only when the server could NOT re-render; on a
+                  // successful re-render the reloaded dump is fresh.
+                  setStale(!rerendered);
+                }}
+              />
+            ) : (
+              <Spinner />
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <Group orientation="horizontal" className="h-full min-h-0 flex-1">
@@ -133,90 +241,37 @@ export default function C4Workspace({
           </div>
         </Panel>
 
-        {!conciergeCollapsed && <ResizeHandle />}
-
-        {/* RIGHT — Concierge (default) / Code toggle. Unmounted when collapsed
-            so the diagram pane takes full width. */}
-        {!conciergeCollapsed && (
-        <Panel defaultSize="38%" minSize="28%" maxSize="60%">
-          <div className="flex h-full min-h-0 flex-col border-l border-soleur-border-default">
-            <div className="flex shrink-0 items-center gap-1 border-b border-soleur-border-default bg-soleur-bg-surface-2/40 px-2 py-1.5">
-              {c4EditEnabled ? (
-                (
-                  [
-                    ["concierge", "Concierge"],
-                    ["code", "Code"],
-                  ] as const
-                ).map(([t, label]) => (
-                  <button
-                    key={t}
-                    onClick={() => setRightTab(t)}
-                    className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
-                      rightTab === t
-                        ? "bg-soleur-bg-base text-soleur-text-primary"
-                        : "text-soleur-text-muted hover:text-soleur-text-secondary"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))
-              ) : (
-                // Discoverability hint (AC10): the Code editor is gated OFF, so
-                // tell the user the Concierge is how diagrams are edited. A
-                // single muted line — no new component/flow. The lone "Concierge"
-                // tab is dropped (single tab = noise) but the collapse chevron stays.
-                <span className="px-1 text-xs text-soleur-text-muted">
-                  To change this diagram, ask the Concierge.
-                </span>
-              )}
-              <div className="ml-auto flex items-center gap-1.5 pr-1">
-                <button
-                  type="button"
-                  aria-label="Collapse Concierge"
-                  onClick={collapseConcierge}
-                  className="rounded p-1 text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-secondary"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="13 17 18 12 13 7" />
-                    <polyline points="6 17 11 12 6 7" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-
-            <div className="relative min-h-0 flex-1">
-              {/* Concierge stays mounted across the Concierge/Code tab toggle so
-                  the thread persists; visibility is CSS-driven. */}
-              <div className={rightTab === "concierge" ? "h-full" : "hidden"}>
-                <KbChatContent
-                  contextPath={contextPath}
-                  onClose={collapseConcierge}
-                  visible={rightTab === "concierge"}
-                />
-              </div>
-              {c4EditEnabled && rightTab === "code" && (
-                <div className="h-full">
-                  {data ? (
-                    <C4CodePanel
-                      data={data}
-                      dirPath={dirPath}
-                      onSaved={async (rerendered) => {
-                        await reload();
-                        // Stale only when the server could NOT re-render; on a
-                        // successful re-render the reloaded dump is fresh.
-                        setStale(!rerendered);
-                      }}
-                    />
-                  ) : (
-                    <Spinner />
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        </Panel>
+        {/* RIGHT — Concierge (default) / Code toggle, DESKTOP ONLY as a
+            resizable column. Unmounted when collapsed so the diagram pane takes
+            full width. The handle is bound to this Panel's existence: rendering
+            a splitter with nothing on its far side is what produced the dead
+            grip in the mobile screenshot. */}
+        {conciergeOpen && isDesktop && (
+          <>
+            <ResizeHandle />
+            <Panel defaultSize="38%" minSize="28%" maxSize="60%">
+              {conciergeWindow}
+            </Panel>
+          </>
         )}
       </Group>
+
+      {/* MOBILE — the SAME window, hosted by the shared takeover instead of a
+          column. Portaled to <body> at `z-50` so it covers the mobile top bar:
+          the nav drawer is also `z-50`, and leaving the hamburger tappable would
+          let the drawer stack over an open conversation with no defined winner.
+          Rendered unconditionally (not `&& conciergeOpen`) because
+          KbChatFullScreen returns null when closed and mounting it here keeps
+          the open/close focus-restore effect stable across toggles. */}
+      {!isDesktop && (
+        <KbChatFullScreen
+          open={conciergeOpen}
+          onClose={collapseConcierge}
+          contextPath={contextPath}
+        >
+          {conciergeWindow}
+        </KbChatFullScreen>
+      )}
     </div>
   );
 }
