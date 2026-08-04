@@ -302,6 +302,17 @@ def destinations(body):
                     verb = toks[0].strip('"\'(!') if toks else ''
                     # `install -d` / `mkdir` create DIRECTORIES, not delivered artifacts.
                     if verb == 'install' and re.match(r'\s*-\S*d\b', seg[len(verb):]): continue
+                    # `sudo -l` / `sudo --list` is LIST MODE: it resolves and prints what the
+                    # target user may run and never executes the command, so the paths in it
+                    # are a QUERY, not a delivery. Without this, a policy probe such as
+                    # `sudo -n -l -U deploy /usr/bin/systemctl daemon-reload` (#7220 AC4) makes
+                    # the guard report that the provisioner "writes" /usr/bin/systemctl and
+                    # demand it be delivered on the fresh-boot path — a remediation that makes
+                    # no sense for a system binary the base image already ships. `sudo` stays
+                    # OUT of READONLY_VERBS, because a bare `sudo <cmd>` genuinely can write;
+                    # only the list form is exempt.
+                    if verb == 'sudo' and re.search(r'(?<![\w-])(-\w*l|--list)(?![\w-])', seg):
+                        continue
                     for m in re.finditer(r'(>>?\s*"?)?((?<![\w$.:/])/[A-Za-z0-9._@/-]+)', seg):
                         path = m.group(2)
                         if m.group(1) or verb not in READONLY_VERBS:
