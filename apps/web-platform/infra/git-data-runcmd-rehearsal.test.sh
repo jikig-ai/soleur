@@ -1286,6 +1286,26 @@ total=$((passes + fails))
 # aspirational target. S1 emits exactly 7 on ALL THREE of its paths (healthy, mutation-did-
 # not-land, extraction-failed) so no short-circuit can satisfy the floor.
 #
+# RAISED 36 -> 44 WITH THE ARMS THAT MADE IT NECESSARY (#7227), itemised. The single old
+# R3(3b) arm is REPLACED, so the sum is 36 - 1 + 9 = 44 (measured: 44 passed, 0 failed):
+#   R3(3b)(i)   1  non-vacuity, COUNTED IN THE SHELL — a python `assert` inside the
+#                  extraction heredoc increments neither passes nor fails, and aborts in a
+#                  way that surfaces as some OTHER arm's failure
+#   R3(3b)(ii)  1  every fatal emit passes a window-guarded VARIABLE (was: the luks site only)
+#   R3(3b)(iii) 1  the arg-4 names are PAIRWISE DISTINCT — the guard search is name-keyed, so
+#                  an alias silently satisfies one site's check with another's guard
+#   R3(3b)(iv)  1  the message-literal SET, not a count: `len == 3` passes a tree where one
+#                  site was deleted and an unrelated one added
+#   R3(3b)(v)   1  no emit site AT ANY LEVEL passes /var/log/cloud-init-output.log — this is
+#                  the arm that reaches the gc_timer WARNING, whose `||` chaining put `||` at
+#                  toks[4] and made the old arg-4 check report a false clean
+#   R3(3c)      1  the LITERAL direction, demonstrated
+#   R3(3d)      1  the UNGUARDED direction, demonstrated — deleting luks_err's OWN guard must
+#                  flip it, which is what proves the search is region-scoped rather than
+#                  satisfied by a same-named variable in a different handler
+#   R3(2d)      2  the parent seed precedes both `trap on_err EXIT` and the first `2>>`,
+#                  plus its relocation mutation (in the plan this AC had no arm at all)
+#
 # RAISED 33 -> 36 at review (#7204): R3(2b) seed-precedes-TRAP (a seed between the trap and
 # the first append passed R3(2) while being strictly worse than #7204 — the handler aborts
 # on an unbound var under set -u and emits NOTHING), R3(2c) the ordering arm's first
@@ -1305,8 +1325,8 @@ total=$((passes + fails))
 # R1 emits exactly 7 on all three of ITS paths (healthy, extraction-failed,
 # precondition-missing) for the same reason S1 does. The floor must move with the suite or it
 # only ever guards the work that predates it.
-if [ "$total" -lt 36 ]; then
-  echo "FAIL: ran only ${total} assertions (<36) — harness did not execute fully" >&2
+if [ "$total" -lt 44 ]; then
+  echo "FAIL: ran only ${total} assertions (<44) — harness did not execute fully" >&2
   exit 1
 fi
 echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed (${total} assertions)"

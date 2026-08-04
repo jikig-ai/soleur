@@ -8,10 +8,10 @@ from the as-written files, not from the plan (all four floors were re-derived).
 | measurement | baseline (plan Phase 0) | final | command |
 | --- | --- | --- | --- |
 | git-data-luks | 113 passed, 0 failed | **129 passed, 0 failed** | `bash apps/web-platform/infra/git-data-luks.test.sh` |
-| git-data-runcmd-rehearsal | 36 assertions | *(see below)* | `bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh` |
+| git-data-runcmd-rehearsal | 36 assertions, 0 failed | **44 passed, 0 failed** | `bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh` |
 | evidence-capture | 30 passed, 0 failed | **33 passed, 0 failed** | `bash tests/scripts/test-git-data-rung2-evidence-capture.sh` |
 | git-data-rung2-rehearsal | 70 passed, 0 failed | **71 passed, 0 failed** | `bash apps/web-platform/infra/git-data-rung2-rehearsal.test.sh` |
-| user_data `stored` | 25,968 B (headroom 6,800) | *(final below)* | `bash apps/web-platform/infra/git-data-userdata-budget.sh` |
+| user_data `stored` | 25,968 B (headroom 6,800) | **29,664 B (headroom 3,104)** | `bash apps/web-platform/infra/git-data-userdata-budget.sh` |
 | encryption-posture | 16 stores, 3 connections, 0 unledgered, 0 failing → PASS | **unchanged** | `python3 scripts/lint-encryption-posture.py [--repo-sweep]` |
 
 ## Phase 0.4 — `isLuks` exit codes, re-taken on this branch (AC17)
@@ -74,9 +74,9 @@ emitter-relative arg4 = '/var/log/cloud-init-output.log'
 | AC2 exactly one arm reaches luksFormat; catch-all exits 1 | PASS | B18 (d)(e) + mutation arms "rc 0 also formats" / "catch-all no longer exits" |
 | AC3 naked-capture and `2>>`-on-probe are DETECTED | PASS | B18 mutation arms; `assert_mutation` fails loud if a mutation does not flip |
 | AC4 `p_isluks` reads `_luks_slice`, not the raw file | PASS | re-pointed; measured that `cryptsetup isLuks` occurs only on the code line today, so the re-point forecloses the vacuity this PR's own comment would introduce |
-| AC5 every fatal emit passes a window-guarded, pairwise-distinct variable | *(runcmd)* | R3(3b)(ii)(iii) + R3(3d) UNGUARDED control |
-| AC6 no emit site at any level passes the cloud-init log | *(runcmd)* | R3(3b)(v), emitter-relative indexing |
-| AC7 seed precedes `trap on_err EXIT` and the first `2>>` | *(runcmd)* | R3(2d) + relocation mutation |
+| AC5 every fatal emit passes a window-guarded, pairwise-distinct variable | PASS | R3(3b)(ii)(iii) + R3(3d) UNGUARDED control |
+| AC6 no emit site at any level passes the cloud-init log | PASS | R3(3b)(v), emitter-relative indexing |
+| AC7 seed precedes `trap on_err EXIT` and the first `2>>` | PASS | R3(2d) + relocation mutation |
 | AC8 capture refuses production, accepts rehearsal, still refuses a quote | PASS | 33 passed, 0 failed |
 | AC9 arm 10 includes the capture script's prefix literal | PASS | 71 passed, 0 failed |
 | AC10 `paths:` parsed as YAML contains the capture script | PASS | `present in parsed paths: True` (18 entries) |
@@ -87,7 +87,7 @@ emitter-relative arg4 = '/var/log/cloud-init-output.log'
 | AC15 clause B mechanized | PASS | B19a `special = false`, B19b/c no `set -x`, B19d `--key-file -` in the bootstrap payload |
 | AC16 each RED observed and quoted | PASS | table above |
 | AC17 rc measurement re-taken on the branch | PASS | `rc_nonluks=1` |
-| AC18 all four floors re-derived with an itemised sum | PASS | luks 113→129, capture 30→33, rung2 70→71, runcmd 36→(below) |
+| AC18 all four floors re-derived with an itemised sum | PASS | luks 113→129, capture 30→33, rung2 70→71, runcmd 36→44 |
 | AC19 ADR-147 addendum exists, records cost + headroom | PASS | also corrects that ADR's now-false "three arming sites" claim |
 
 ## Deliberate deviations from the plan
