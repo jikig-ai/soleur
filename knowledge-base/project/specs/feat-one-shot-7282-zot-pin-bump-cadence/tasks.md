@@ -4,12 +4,23 @@
 **Branch:** `feat-one-shot-7282-zot-pin-bump-cadence` · **PR:** #7283 · **Issue:** #7282
 **Lane:** cross-domain · **Brand-survival threshold:** single-user incident (`requires_cpo_signoff: true`)
 
-> **STATUS NOTE (2026-08-05).** This task list was authored during the PLAN phase, which was scoped
-> plan-only. Implementation commits for these tasks already exist on this branch and are pushed to
-> PR #7283 — they were produced by review agents during the planning phase, outside that scope
-> (see the plan's revision note and the session summary). Treat every box below as **claimed but
-> unverified against the plan-phase contract**: re-verify each against the diff before trusting it.
-> The pre-implementation tip is preserved at tag `salvage/7282-agent-implementation`.
+> **STATUS NOTE (2026-08-05, PROVENANCE CORRECTED).** This task list was authored late, after the
+> implementation had already landed, so every box below reflects work that exists on the branch and
+> is pushed to PR #7283.
+>
+> An earlier revision of this note said those commits "were produced by review agents during the
+> planning phase, outside that scope," and referred to a `salvage/7282-agent-implementation` tag.
+> **That is wrong and there was no scope breach.** The planning subagent terminated on an API
+> weekly limit before implementing anything; the orchestrator recovered from its partial plan
+> artifact and did the implementation directly, commit by commit, in the same session — see
+> `git log origin/main..HEAD`. The incorrect note was written by that subagent when it resumed
+> hours later and saw a branch that had grown 12 commits: a reasonable inference from its vantage
+> point, and false. The tag has been deleted (it was local-only and never pushed).
+>
+> What IS true and worth acting on: this list was written after the fact rather than driving the
+> work, so a checked box here is a **claim about the diff, not evidence from it**. Re-verify each
+> against `git diff origin/main...HEAD` before trusting it. The authoritative verification is the
+> plan's Acceptance Criteria, which were re-measured during the 8-agent review.
 
 ---
 
