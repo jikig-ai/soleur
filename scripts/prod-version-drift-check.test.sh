@@ -61,10 +61,17 @@ FAIL=0
 # the entire mutation battery -- the suite's own anti-vacuity mechanism -- and still exited 0.
 # A part-level floor makes that a loud "Part C shrank" instead of a silent pass, and gives a
 # better failure message than a total ever could.
-MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-117}"
+# FLOORS CATCH DELETION, NOT COLLAPSE. The `FAIL > 0` early exit precedes every floor check
+# below, so a block that degrades into a single failing assertion can never trip one. They are
+# a tripwire against a block being REMOVED, and nothing more -- do not read a green floor as
+# evidence that the assertions still mean what they meant.
+MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-149}"
 MIN_A="${DRIFT_MIN_A:-57}"
-MIN_B="${DRIFT_MIN_B:-49}"
-MIN_C="${DRIFT_MIN_C:-11}"
+# 49 -> 79 (#7304): B14 both-direction execution x3 arms + self-check, B14b, B15/B15b,
+# B16/B16b/B16c, B17/B17b.
+MIN_B="${DRIFT_MIN_B:-79}"
+# 11 -> 13 (#7304): axis11 (errexit clear) + axis12 (outcome conjunct).
+MIN_C="${DRIFT_MIN_C:-13}"
 COUNT_A=0
 COUNT_B=0
 COUNT_C=0
@@ -748,6 +755,61 @@ if runs:
     with open(os.environ.get("DRIFT_STEP_BODY_OUT", "/dev/null"), "w") as fh:
         fh.write(runs[0][1].get("run") or "")
 
+# --- B16: the issue step body, likewise for EXECUTION ---------------------------
+# The plan justifies widening the errexit fix beyond the capture on the grounds that four
+# list_rc handlers are dead code. Nothing executed them, so that claim was unpinned.
+for _s in by_id("issue"):
+    with open(os.environ.get("DRIFT_ISSUE_BODY_OUT", "/dev/null"), "w") as fh:
+        fh.write(_s.get("run") or "")
+    break
+
+# --- B14b: the simulation premise behind executing bodies under `bash -e` --------
+# Executing an extracted body under `bash -e` is faithful ONLY while this workflow declares no
+# shell: key. If one is added, the real invocation becomes
+# `bash --noprofile --norc -eo pipefail {0}` and the execution tests keep passing while
+# simulating a runner that no longer exists. Note `shell: bash` does NOT clear -e either -- this
+# counter exists to force a re-read of the harness, not to bless any particular value.
+_shell_steps = len([s for (_, s) in steps if s.get("shell")])
+_defaults = (wf.get("defaults") or {}).get("run") or {}
+if _defaults.get("shell"):
+    _shell_steps += 1
+for _j in jobs.values():
+    _jd = (_j.get("defaults") or {}).get("run") or {}
+    if _jd.get("shell"):
+        _shell_steps += 1
+emit("STEPS_WITH_SHELL_KEY", _shell_steps)
+
+# --- B15: every run: body in this workflow clears inherited errexit -------------
+def clears_errexit(body):
+    # A `set` statement whose argument list carries a +-prefixed token containing e.
+    # Matched over code() so PROSE CANNOT SATISFY IT -- the rationale comments in this
+    # workflow contain the literal set +e, and a raw-body grep would count them.
+    for ln in body.split("\n"):
+        m = re.match(r"^\s*set\s+(.*)$", ln)
+        if not m:
+            continue
+        for tok in m.group(1).split():
+            if tok.startswith("+") and "e" in tok:
+                return True
+    return False
+
+_bodies = [s for (_, s) in steps if isinstance(s.get("run"), str)]
+emit("RUN_BODY_COUNT", len(_bodies))
+emit("BODIES_WITHOUT_ERREXIT_CLEAR", len([s for s in _bodies if not clears_errexit(code(s))]))
+
+# --- B17: the empty-string coercion fail-open ----------------------------------
+# Actions == is LOOSE: differing operand types are cast to Number, an unset output is the empty
+# string, and the empty string casts to 0 -- so \x27\x27 == \x270\x27 is TRUE. A step that died
+# before writing $GITHUB_OUTPUT therefore satisfies every == \x270\x27 gate. Measured on run
+# 31054501973: the check-error FILING step (!= 0 && != 1) was skipped while its exact complement,
+# the CLOSER (== 0 || == 1), RAN. Leading with steps.check.outcome is what discriminates
+# "the step ran and measured 0" from "the step never ran".
+_gates = [norm(s.get("if", "")) for (_, s) in steps
+          if "steps.check.outputs.exit_code" in norm(s.get("if", ""))]
+emit("EXITCODE_GATE_COUNT", len(_gates))
+emit("EXITCODE_GATES_WITHOUT_OUTCOME_CONJUNCT",
+     len([g for g in _gates if "steps.check.outcome == \x27success\x27" not in g]))
+
 # --- B10: schedule + job timeout ---------------------------------------------
 on = wf.get("on", wf.get(True, {})) or {}
 sched = on.get("schedule") or []
@@ -773,6 +835,7 @@ run_part_b() {
 
   local EX="$TMP/extract.env"
   export DRIFT_STEP_BODY_OUT="$TMP/check-body.sh"
+  export DRIFT_ISSUE_BODY_OUT="$TMP/issue-body.sh"
   if ! python3 -c "$PYEXTRACT" "$WORKFLOW" "$RELEASE_WORKFLOW" > "$EX" 2>"$TMP/extract.err"; then
     fail "B0b PyYAML extraction succeeded" "rc=0" "$(cat "$TMP/extract.err")"
     return 0
@@ -1009,6 +1072,187 @@ run_part_b() {
     fail "B13 the check step body was extracted for execution" "a non-empty file" "absent"
   fi
 
+  # B14 -- THE CAPTURE REACHES ITS CONSUMERS, on every verdict class. Executed, not grepped.
+  #
+  # This is the assertion #7304 was missing. GitHub runs a run: block with no shell: key under
+  # `bash -e {0}`, so errexit is ALREADY ON, and `set -uo pipefail` only ADDS flags. The capture
+  # `out="$(...)"; rc=$?` therefore aborted the shell AT that line whenever the checker exited
+  # non-zero -- which is exactly the two verdicts that alert. Measured: 8/8 scheduled runs failed
+  # emitting zero output, while the CLEAN path passed through unaffected the entire time.
+  #
+  # That asymmetry is why this runs all three arms. A fix verified only on exit 0 is
+  # indistinguishable from no fix at all, because exit 0 already worked.
+  #
+  # Running under `bash -e` is load-bearing: a bare `bash` would make this test pass against the
+  # BROKEN body. B14b pins the premise that `bash -e` is still what the runner uses.
+  if [[ -s "$TMP/check-body.sh" ]]; then
+    # ONE invocation, shared by the self-check probe and every arm, so they cannot diverge.
+    local BASH_E=(bash -e)
+
+    # Self-check: prove THIS bash actually aborts an assignment-from-failing-substitution under
+    # errexit. If it did not, every arm below would pass for the wrong reason and B14 would be
+    # silently vacuous rather than depending on axis11 to notice.
+    local probe14
+    probe14="$("${BASH_E[@]}" -c 'set -uo pipefail; x="$(exit 1)"; echo REACHED' 2>&1 || true)"
+    assert_not_contains "B14 self-check: inherited errexit aborts the capture in this bash" \
+      "REACHED" "$probe14"
+
+    local keys14 stub_arm code14 sbx14 gho14 out14 rc14 want_verdict
+    IFS=',' read -ra keys14 <<< "${X_EXTRACTED_KEYS:-}"
+    if [[ "${#keys14[@]}" -lt 2 ]]; then
+      fail "B14 the extracted output-key set is usable for stub generation" \
+        "at least 2 keys from B12" "${X_EXTRACTED_KEYS:-<none>}"
+    else
+      for code14 in 0 1 2; do
+        case "$code14" in
+          0) want_verdict="CLEAN" ;;
+          1) want_verdict="DRIFT_SUSTAINED" ;;
+          2) want_verdict="CHECK_ERROR" ;;
+        esac
+
+        # A FRESH sandbox and a FRESH $GITHUB_OUTPUT per arm. The body APPENDS (>>), so a shared
+        # file would let the exit-1 arm's grep find exit_code=0 left behind by the exit-0 arm and
+        # pass for the wrong reason. The exact-line-count assertion catches both that
+        # contamination and a partially-written output.
+        sbx14="$TMP/b14-$code14"
+        gho14="$TMP/b14-gho-$code14"
+        rm -rf "$sbx14"; mkdir -p "$sbx14/scripts" || { fail "B14 sandbox setup (exit $code14)" "mkdir rc=0" "failed"; break; }
+        : > "$gho14"
+
+        # The stub's key set is GENERATED from the keys the workflow actually greps out (B12's
+        # X_EXTRACTED_KEYS) rather than hand-copied. A hand-written list would be a THIRD
+        # independent copy of the key contract -- checker, workflow, stub -- so a rename would
+        # turn B12 red while this stub silently rotted into testing nothing.
+        {
+          printf '%s\n' '#!/usr/bin/env bash'
+          for stub_arm in "${keys14[@]}"; do
+            [[ -z "$stub_arm" ]] && continue
+            case "$stub_arm" in
+              *VERDICT) printf 'echo "%s=%s"\n' "$stub_arm" "$want_verdict" ;;
+              # The stub marker proves the STUB produced this result -- not a stale real checker,
+              # not an empty run, not a leftover file.
+              *REASON)  printf 'echo "%s=%s"\n' "$stub_arm" "STUB_MARKER_7304" ;;
+              *)        printf 'echo "%s=stub_value"\n' "$stub_arm" ;;
+            esac
+          done
+          printf 'exit %s\n' "$code14"
+        } > "$sbx14/scripts/prod-version-drift-check.sh"
+
+        cp "$TMP/check-body.sh" "$sbx14/body.sh"
+        out14="$(cd "$sbx14" && GITHUB_OUTPUT="$gho14" "${BASH_E[@]}" ./body.sh 2>&1)"; rc14=$?
+
+        assert_eq "B14 (exit $code14) the step body itself exits 0 -- the verdict travels as DATA" \
+          "0" "$rc14"
+        assert_eq "B14 (exit $code14) \$GITHUB_OUTPUT records the checker's exit code" \
+          "exit_code=$code14" "$(grep '^exit_code=' "$gho14" || echo '<ABSENT -- the step died at the capture>')"
+        assert_eq "B14 (exit $code14) \$GITHUB_OUTPUT records the verdict" \
+          "verdict=$want_verdict" "$(grep '^verdict=' "$gho14" || echo '<ABSENT>')"
+        assert_eq "B14 (exit $code14) the stub marker reached \$GITHUB_OUTPUT" \
+          "reason=STUB_MARKER_7304" "$(grep '^reason=' "$gho14" || echo '<ABSENT>')"
+        # Exact, not >=: contamination and truncation are both caught, and the count is
+        # stub-deterministic so pinning it costs no flake.
+        assert_eq "B14 (exit $code14) \$GITHUB_OUTPUT has exactly one line per contract key plus exit_code" \
+          "$(( ${#keys14[@]} + 1 ))" "$(grep -c . "$gho14" || true)"
+        # This count's only real power is 0-vs-N: did the run-log echo loop execute AT ALL. Do
+        # not "strengthen" it into a content assertion -- B13 already owns the sanitiser's
+        # behaviour, and duplicating it here would couple two tests to one fixture.
+        assert_eq "B14 (exit $code14) every checker line reached the run log" \
+          "${#keys14[@]}" "$(printf '%s\n' "$out14" | grep -c '^drift| ' || true)"
+
+        case "$code14" in
+          1) assert_eq "B14 (exit 1) exactly one ::error:: names the stale build" \
+               "1" "$(printf '%s\n' "$out14" | grep -c '^::error::Production is serving a stale build' || true)" ;;
+          2) assert_eq "B14 (exit 2) exactly one ::error:: names the cannot-evaluate case" \
+               "1" "$(printf '%s\n' "$out14" | grep -c '^::error::Version-drift check could NOT be evaluated' || true)" ;;
+          0) assert_eq "B14 (exit 0) the quiet verdict emits NO ::error::" \
+               "0" "$(printf '%s\n' "$out14" | grep -c '^::error::' || true)" ;;
+        esac
+      done
+    fi
+  else
+    fail "B14 the check step body was extracted for execution" "a non-empty file" "absent"
+  fi
+
+  # B14b -- pin B14's OWN simulation premise.
+  #
+  # B14's fidelity claim ("bash -e is what the runner uses") holds only because this workflow
+  # declares no shell: key anywhere. Add one and the real invocation becomes
+  # `bash --noprofile --norc -eo pipefail {0}` -- at which point B14 keeps passing while
+  # simulating a runner that no longer exists. Three lines, and it is what stops this whole
+  # execution battery from rotting silently.
+  assert_eq "B14b no step declares a shell: key (so \`bash -e\` remains the faithful simulation)" \
+    "0" "${X_STEPS_WITH_SHELL_KEY:-<unextracted>}"
+
+  # B15 -- EVERY run: body in this workflow clears inherited errexit, not just the capture.
+  #
+  # Deliberately NOT subsumed by the repo-wide lint gate, and this comment is the reason: the
+  # gate anchors on a `$?` / ${PIPESTATUS[n]} read, because that read is what proves the author
+  # meant to handle failure. The notify and notify_error bodies are `jq -n` steps with no such
+  # read, so the gate can NEVER fire on them. If a future edit drops set +e from notify, B15 is
+  # the only thing in the repo that catches it. Do not delete this as "covered by the linter".
+  #
+  # Asserts the NUMERATOR, never the ratio: pinning "0 of 7" would make adding a legitimate
+  # eighth step fail for a completely misleading reason.
+  assert_eq "B15 every run: body clears inherited errexit (count lacking it)" \
+    "0" "${X_BODIES_WITHOUT_ERREXIT_CLEAR:-<unextracted>}"
+  assert_contains "B15b the body count is non-zero (a workflow with no bodies passes B15 vacuously)" \
+    "^[1-9]" "${X_RUN_BODY_COUNT:-0}"
+
+  # B16 -- the list_rc safety branch is actually REACHABLE.
+  #
+  # The stated justification for widening this fix beyond the capture is that four documented
+  # "A FAILED LOOKUP IS NOT 'NOTHING FOUND'" handlers were dead code under inherited errexit.
+  # Nothing executed them, so that claim was asserted rather than measured. This runs the issue
+  # body with `gh` stubbed to fail and requires the branch to be reached.
+  if [[ -s "$TMP/issue-body.sh" ]]; then
+    local sbx16 gho16 out16
+    sbx16="$TMP/b16"; gho16="$TMP/b16-gho"
+    rm -rf "$sbx16"; mkdir -p "$sbx16/bin"
+    : > "$gho16"
+    # Fails on `issue list` (the lookup under test) and succeeds on `label create`, so the branch
+    # is reached via the rc path rather than by breaking the step outright.
+    {
+      printf '%s\n' '#!/usr/bin/env bash'
+      printf '%s\n' 'case "$1 $2" in'
+      printf '%s\n' '  "label create") exit 0 ;;'
+      printf '%s\n' '  "issue list")   echo "gh: API rate limit exceeded" >&2; exit 1 ;;'
+      printf '%s\n' '  *)              echo "UNEXPECTED gh invocation: $*" >&2; exit 64 ;;'
+      printf '%s\n' 'esac'
+    } > "$sbx16/bin/gh"
+    chmod +x "$sbx16/bin/gh"
+    cp "$TMP/issue-body.sh" "$sbx16/body.sh"
+    out16="$(cd "$sbx16" && PATH="$sbx16/bin:$PATH" GITHUB_OUTPUT="$gho16" \
+      GH_REPO="owner/repo" DETAIL="d" MISSING_COUNT="1" PATHSPEC_DOC="p" \
+      PROD_HEALTH_URL="https://example.invalid/health" MISSING_SHAS="abc" RUN_URL="https://example.invalid/run" \
+      bash -e ./body.sh 2>&1 || true)"
+
+    assert_contains "B16 a FAILED lookup is reported, not collapsed into 'nothing found'" \
+      "^::error::Could not query existing drift issues" "$out16"
+    assert_eq "B16b the failed-lookup branch records itself rather than filing a duplicate" \
+      "first_detection=lookup_failed" "$(grep '^first_detection=' "$gho16" || echo '<ABSENT -- branch unreachable>')"
+    assert_not_contains "B16c a failed lookup must NEVER route to the create branch" \
+      "UNEXPECTED gh invocation" "$out16"
+  else
+    fail "B16 the issue step body was extracted for execution" "a non-empty file" "absent"
+  fi
+
+  # B17 -- the empty-string coercion fail-open, which set +e does NOT fix.
+  #
+  # Actions == is LOOSE: operands of differing types are both cast to Number, an unset step
+  # output is '', and '' casts to 0 -- so '' == '0' is TRUE. A step that dies before writing
+  # $GITHUB_OUTPUT therefore satisfies every == '0' gate downstream. Measured on run
+  # 31054501973: `File or update the check-error issue` (gated != '0' && != '1') was SKIPPED
+  # while its exact logical complement `Close the check-error issue ...` (gated == '0' || == '1')
+  # RAN -- i.e. on a dead tick this workflow would auto-close the issue reporting its own
+  # breakage, posting an empty verdict.
+  #
+  # This also means B4 was never testing the empty case: it asks which steps are reachable when
+  # exit_code is '0', not when the step never ran. B17 is what covers that.
+  assert_eq "B17 every exit_code gate leads with steps.check.outcome (count lacking it)" \
+    "0" "${X_EXITCODE_GATES_WITHOUT_OUTCOME_CONJUNCT:-<unextracted>}"
+  assert_contains "B17b the exit_code gate count is non-zero (else B17 passes vacuously)" \
+    "^[1-9]" "${X_EXITCODE_GATE_COUNT:-0}"
+
   # B10g -- monitor slug parity. A mismatched slug leaves the Sentry monitor permanently
   # green over a dead alarm: the worst shape available, since it looks like coverage.
   if [[ -f "$MONITORS_TF" ]]; then
@@ -1214,12 +1458,19 @@ open(p,"w").write("\n".join(ls))' "A6 oldest_epoch_from_log picks the OLDEST"
 
   # Axis 5 -- replace an alert condition with a bare !cancelled(). True on success too, so
   # this emails on every healthy tick.
+  # The pattern is deliberately tolerant of ADDITIONAL leading conjuncts. It was originally
+  # anchored on the exact string `!cancelled() && steps.check.outputs.exit_code == '1'`, and
+  # #7304 then inserted `steps.check.outcome == 'success' &&` between the two -- at which point
+  # the regex matched nothing, the mutation silently did not land, and this axis stopped being
+  # evidence about B3b. A mutator keyed on an exact expression shape is coupled to every future
+  # edit of that expression; key it on the two ENDS instead.
   mutate_and_assert_red "axis5-bare-not-cancelled" "$WF" '
 import sys,re
 p=sys.argv[1]; s=open(p).read()
-s=re.sub(r"\$\{\{ !cancelled\(\) && steps\.check\.outputs\.exit_code == .1. \}\}",
+s2,n=re.subn(r"\$\{\{ !cancelled\(\)[^}]*exit_code == .1. \}\}",
          "${{ !cancelled() }}", s, count=1)
-open(p,"w").write(s)' "B3b every alerting step carries a verdict conjunct" "A6 oldest_epoch_from_log picks the OLDEST" "B8b the checker"
+assert n == 1, "axis5 mutator did not match a drift-gated if: condition"
+open(p,"w").write(s2)' "B3b every alerting step carries a verdict conjunct"
 
   # Axis 6 -- delete the label bootstrap. gh issue create --label hard-fails on an undefined
   # label, so the verdict would reach the email channel only.
@@ -1240,11 +1491,23 @@ open(p,"w").write(s)' "B6 exactly two close steps"
   # Axis 8 -- flip the heartbeat first conjunct from the step OUTCOME to the output value.
   # A step that dies before writing its output leaves it empty; an output-only test reads
   # that as a value rather than as a death (#7138, one layer up).
+  # CODE-ONLY AND HEARTBEAT-ANCHORED, per axis 3. This mutator used to replace the first
+  # occurrence of the conjunct anywhere in the file, which worked only while the heartbeat was
+  # its ONLY occurrence. #7304 added the same conjunct to six if: gates AND documented it in
+  # prose above them, so a first-occurrence replace would now rewrite a COMMENT -- the mutation
+  # "lands" (the file differs), B7c stays green, and the axis reports SURVIVED against a
+  # perfectly correct artifact. The status expression is the one whose `${{` opens directly on
+  # the conjunct; every if: gate opens on `!cancelled()`.
   mutate_and_assert_red "axis8-heartbeat-first-conjunct" "$WF" '
 import sys
-p=sys.argv[1]; s=open(p).read()
-s=s.replace("steps.check.outcome == \x27success\x27","steps.check.outputs.exit_code != \x27\x27",1)
-open(p,"w").write(s)' "B7c heartbeat status"
+p=sys.argv[1]; ls=open(p).read().split("\n"); n=0
+for i,l in enumerate(ls):
+    if l.lstrip().startswith("#"): continue
+    if "${{ steps.check.outcome == \x27success\x27" in l:
+        ls[i]=l.replace("steps.check.outcome == \x27success\x27",
+                        "steps.check.outputs.exit_code != \x27\x27",1); n+=1; break
+assert n == 1, "axis8 mutator did not match the heartbeat status expression"
+open(p,"w").write("\n".join(ls))' "B7c heartbeat status"
 
   # Axis 9 -- shallow checkout. Puts the checker in permanent CHECK_ERROR on the COMMON path,
   # because origin/main HEAD is frequently not a path-matching commit. Code-only, per axis 3:
@@ -1266,6 +1529,45 @@ import sys,re
 p=sys.argv[1]; s=open(p).read()
 s=re.sub(r"\[\[ \"\$sha\" =~ \^\[0-9a-f\]\{40\}\$ \]\]", "true", s, count=1)
 open(p,"w").write(s)' "A11 body {}" "B2b checkout declares fetch-depth: 0"
+
+  # Axis 11 -- delete the errexit clear from the check body: the #7304 outage itself, restored.
+  #
+  # This is the control that makes B14 evidence rather than decoration. Without it, B14 could
+  # degrade into asserting that a working body works, and nothing would notice -- which is the
+  # precise shape of the original bug, where the CLEAN path passed unchanged for eight
+  # consecutive runs while the two alerting verdicts were dark.
+  #
+  # MUTATES CODE ONLY, NEVER PROSE, per axis 3 and axis 9. The rationale comment above this very
+  # statement contains the literal `set +e` (it has to -- it explains why the statement is
+  # required), so a naive s.replace("set +e", "", 1) rewrites the COMMENT: the file differs, so
+  # diff -q reports the mutation landed, the child stays GREEN, and the axis reports SURVIVED
+  # while the artifact is in fact correct. Match a whole line that IS the statement.
+  mutate_and_assert_red "axis11-drop-errexit-clear" "$WF" '
+import sys,re
+p=sys.argv[1]; ls=open(p).read().split("\n"); out=[]; n=0
+for l in ls:
+    if n==0 and not l.lstrip().startswith("#") and re.match(r"^\s*set \+e\s*$", l):
+        n+=1; continue
+    out.append(l)
+assert n == 1, "axis11 mutator did not remove a set +e STATEMENT (comment-only match?)"
+open(p,"w").write("\n".join(out))' "B14"
+
+  # Axis 12 -- strip the outcome conjunct from an exit_code gate: the empty-string coercion
+  # fail-open, re-armed. `\x27\x27 == \x270\x27` is TRUE in an Actions expression, so without
+  # this conjunct a check step that died before writing its output satisfies every == 0 gate --
+  # and the workflow auto-closes the issue reporting its own breakage. Observed on run
+  # 31054501973. Code-only for the same reason as axis 11: the conjunct is documented in prose
+  # directly above the gates it guards.
+  mutate_and_assert_red "axis12-drop-outcome-conjunct" "$WF" '
+import sys
+p=sys.argv[1]; ls=open(p).read().split("\n"); n=0
+for i,l in enumerate(ls):
+    if l.lstrip().startswith("#"): continue
+    if l.lstrip().startswith("if:") and "steps.check.outputs.exit_code" in l \
+       and "steps.check.outcome == \x27success\x27 && " in l:
+        ls[i]=l.replace("steps.check.outcome == \x27success\x27 && ","",1); n+=1; break
+assert n == 1, "axis12 mutator did not strip a conjunct from an exit_code gate"
+open(p,"w").write("\n".join(ls))' "B17"
 }
 
 # ---------------------------------------------------------------------------
@@ -1288,6 +1590,18 @@ echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"
 if [[ "$FAIL" -gt 0 ]]; then
   echo "FAILED: $FAIL assertion(s)"
   exit 1
+fi
+# The global floor is only non-slack while it EQUALS the sum of the per-part floors. That held
+# by coincidence before #7304 (117 = 57+49+11) and nothing asserted it, so raising one part's
+# floor without the global would have left the global slack by exactly the amount added -- the
+# hole this whole block exists to close. Checked only on a full run, since a subset invocation
+# legitimately overrides the parts it is not running.
+if [[ "$PARTS" == "ABC" && "$MUTATION_CHILD" == "0" ]]; then
+  _floor_sum=$(( MIN_A + MIN_B + MIN_C ))
+  if [[ "$MIN_ASSERTIONS" -ne "$_floor_sum" ]]; then
+    echo "FAILED: MIN_ASSERTIONS=$MIN_ASSERTIONS != MIN_A+MIN_B+MIN_C=$_floor_sum — the global floor is slack by the difference"
+    exit 1
+  fi
 fi
 # An assertion-count regression means a block was deleted -- "nothing failed" is not the same
 # as "everything was checked".
