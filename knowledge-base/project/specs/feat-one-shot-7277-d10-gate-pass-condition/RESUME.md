@@ -44,10 +44,31 @@ precisely because "each suite probably read a self-consistent snapshot" is reaso
 measurement.
 
 **Re-run it on the final tree, with `git status --porcelain` empty, and do not edit under it.**
-Note the sibling-worktree contention banner: a run can sit at ~1130 bytes for many minutes because
-it is QUEUED on the lock, which is not a hang — check for the banner before killing anything, and
-resolve sibling PIDs by `/proc/<pid>/cwd` rather than by pattern-matching (`pgrep -f test-all`
-matches its own command line).
+A run can sit at ~1130 bytes for many minutes because it is QUEUED on another worktree's advisory
+lock — that is not a hang. Read the contention banner before killing anything.
+
+### Process-matching cost three shells this session — use this recipe
+
+`pgrep -f test-all`, the bracket trick `pgrep -f '[t]est-all\.sh'`, and matching on
+`/proc/<pid>/cmdline` **all self-matched**, because the pattern string is itself present in the
+matching command's own command line. Each time, the shell killed itself mid-command — once taking
+an unwritten commit-message heredoc with it. What actually works:
+
+```bash
+SELF=$$; PARENT=$PPID
+for p in $(pgrep -x bash); do
+  [[ "$p" == "$SELF" || "$p" == "$PARENT" ]] && continue
+  cwd=$(readlink "/proc/$p/cwd") || continue
+  cmd=$(tr '\0' ' ' < "/proc/$p/cmdline")
+  case "$cmd" in *"pgrep"*|*"readlink"*) continue ;; esac   # skip other scanners
+  case "$cmd" in "bash scripts/test-all.sh"*) [[ "$cwd" == "$PWD" ]] && kill "$p" ;; esac
+done
+```
+
+Exclude `$$`/`$PPID`, skip anything that is itself a scanner, anchor on the INVOCATION shape rather
+than a bare substring, and confirm the sibling's PID is untouched afterwards. Also: never build a
+commit message with a heredoc in the same Bash call as a command that can kill the shell — write it
+with the Write tool first, then `git commit --file`.
 
 ---
 
