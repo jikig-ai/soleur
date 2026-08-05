@@ -574,7 +574,16 @@ if [[ -f "$hooks_dest" ]] && command -v jq >/dev/null 2>&1; then
   #
   # `jq empty` is the canonical parse check: it exits non-zero only on a syntax error, unlike
   # `jq -e .`, which also exits 1 on a valid document whose top level is `null` or `false`.
-  if ! jq empty "$hooks_dest" >/dev/null 2>&1; then
+  # SHAPE, not just SYNTAX. `jq empty` alone exits 0 on a ZERO-BYTE file (it reads no input) and
+  # on any valid non-array — and adnanh/webhook needs `[]hook.Hook`, so an object or an empty
+  # file yields the SAME "serving zero hooks" outcome as a parse error. Measured: 0-byte rc=0,
+  # `{"id":"x"}` rc=0. A truncated payload is precisely the shape a half-rendered delivery
+  # produces, so the syntax-only check let the self-wedge straight through.
+  if ! jq -e 'type == "array" and length > 0' "$hooks_dest" >/dev/null 2>&1; then
+    # Load-bearing, not bookkeeping: this is what actually suppresses the self-restart at the
+    # bottom of the script. Detecting the bad payload without suppressing activation would
+    # leave the self-wedge fully intact while the message claimed otherwise.
+    HOOKS_PARSE_OK=0
     logger -t "$LOG_TAG" "SOLEUR_INFRA_CONFIG_HOOK_UNPARSEABLE reason=hooks_json_did_not_parse" 2>/dev/null || true
     echo "ERROR: the just-delivered /etc/webhook/hooks.json does not parse as JSON — webhook would restart serving ZERO hooks and answer 404 on every path. Refusing to activate." >&2
     [[ -n "$FILES_JSON" ]] && FILES_JSON+=","
@@ -814,11 +823,29 @@ fi
 #
 # It stays LAST because it kills the process serving this request: anything sequenced after it
 # is not guaranteed to run.
+#
+# #7220 review — ONE EXCEPTION to "unconditional", and it is the self-wedge case. The paragraph
+# above is right that a partial apply must still restart (that is the #4804 self-heal). It is
+# WRONG for an unparseable hooks.json specifically, because restarting is what ACTIVATES it:
+# adnanh/webhook with -verbose does not abort on a bad hooks file, it comes up serving ZERO
+# hooks. The port then answers, so the CI verify's 000/502/503 "listener is down" branch never
+# fires and the 404 branch does, whose remediation text says "first bootstrap" — the wrong
+# diagnosis, on the only channel that can still repair a host with no SSH.
+#
+# NOT restarting is strictly safer here: the webhook keeps serving the PREVIOUS, valid
+# hooks.json, so the remediation channel survives and the next apply self-heals. This is the
+# only FAIL_COUNT contributor for which that is true, which is why it gets its own flag rather
+# than gating on FAIL_COUNT.
 if [[ -z "${INFRA_CONFIG_TEST_MODE:-}" ]]; then
-  logger -t "$LOG_TAG" "scheduling self-restart in 3s"
-  # Self-restart: schedule a delayed restart so the HTTP 202 response
-  # completes before the webhook binary is killed.
-  sudo /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook
+  if [[ "${HOOKS_PARSE_OK:-1}" != "1" ]]; then
+    logger -t "$LOG_TAG" "SOLEUR_INFRA_CONFIG_SELF_RESTART_SUPPRESSED reason=hooks_json_unparseable" 2>/dev/null || true
+    echo "REFUSING TO ACTIVATE: the delivered hooks.json does not parse, so the webhook is NOT being restarted. It keeps serving the previous, valid hook table — which is what leaves this host reachable. Fix the payload and re-apply." >&2
+  else
+    logger -t "$LOG_TAG" "scheduling self-restart in 3s"
+    # Self-restart: schedule a delayed restart so the HTTP 202 response
+    # completes before the webhook binary is killed.
+    sudo /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook
+  fi
 fi
 
 exit "$EXIT_CODE"

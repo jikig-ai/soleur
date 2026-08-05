@@ -1328,8 +1328,21 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
       # while CI stayed green. `sudo -n -l -U deploy <cmd>` resolves the REAL policy for the
       # REAL user and exits non-zero when the command is not permitted. -n so it can never
       # block on a prompt during a provisioner.
-      "sudo -n -l -U deploy /usr/bin/systemctl daemon-reload >/dev/null",
-      "sudo -n -l -U deploy /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook >/dev/null",
+      # COULD-NOT-MEASURE IS ITS OWN OUTCOME. `sudo -l` list mode is unproven on this host
+      # (Ubuntu 24.04 ships sudo-rs, which already rejects wildcards this file works around), so
+      # a flag-combination rejection and a genuine denial both exit non-zero with no output.
+      # Folding them together would abort the ONLY bootstrap bridge to an unreplaceable host on
+      # every apply, with no message. Probe list-mode availability first and say which happened.
+      "sudo -n -l -U deploy >/dev/null 2>&1 || { echo 'FATAL: sudo -l -U list mode is unavailable on this host (sudo-rs?) — the policy probe cannot run. This is NOT a denial; the grant may be fine.' >&2; exit 1; }",
+      # EXECUTE the reload as deploy rather than only listing it. This is the strongest form of
+      # the assertion — it proves the grant is EFFECTIVE, not merely present — and it is
+      # idempotent and harmless (daemon-reload re-reads unit files; it starts nothing). It also
+      # performs the reload the DropInPaths assertions below depend on, which nothing else in
+      # this provisioner does.
+      "runuser -u deploy -- sudo -n /usr/bin/systemctl daemon-reload || { echo 'FATAL: deploy cannot run systemctl daemon-reload — SYSTEMCTL_DAEMON_RELOAD landed as text but does not resolve. This is #7220 unrepaired.' >&2; exit 1; }",
+      # systemd-run cannot be safely executed here (it would schedule a real webhook restart
+      # mid-provisioner), so this one stays list-mode, behind the availability probe above.
+      "sudo -n -l -U deploy /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook >/dev/null || { echo 'FATAL: sudo policy DENIES the --collect self-restart argv to deploy — the grant and the handler call site have drifted.' >&2; exit 1; }",
       # #7220 AC-B4 — ACTIVATION, not just reload. inngest-heartbeat.service and
       # inngest-server.service carry drop-ins in FILE_MAP but appear in NEITHER RESTART_MAP nor
       # the grant set: their entire activation story IS the daemon-reload. If those units exist

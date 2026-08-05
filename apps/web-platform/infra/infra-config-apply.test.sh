@@ -59,6 +59,12 @@ setup() {
 }
 
 teardown() {
+  # #7220 review — an `export` set by one arm leaks into every later arm in the same shell, and
+  # once TMPDIR_ROOT is removed the stale path resolves to nothing (rc=127, "command not
+  # found"), which surfaces as an unrelated test failing. Unset the per-arm seam overrides here
+  # so each arm starts from the handler's own defaults. Measured: without this the prod-mode
+  # seam export broke the dangling-hook arm three tests later.
+  unset INFRA_CONFIG_SYSTEMCTL
   rm -rf "$TMPDIR_ROOT"
   unset TEST_DESTDIR INFRA_CONFIG_TEST_MODE INFRA_CONFIG_STATE
   unset INFRA_CONFIG_STAGING_DIR INFRA_CONFIG_INSTALL_HELPER
@@ -78,7 +84,7 @@ export_valid_env_vars() {
   export WEBHOOK_SERVICE_B64=$(_payload_file "[Unit]")
   export CAT_DEPLOY_STATE_SH_B64=$(_payload_file "#!/bin/bash")
   export CANARY_BUNDLE_CLAIM_CHECK_SH_B64=$(_payload_file "#!/bin/bash")
-  export HOOKS_JSON_B64=$(_payload_file '{}')
+  export HOOKS_JSON_B64=$(_payload_file '[{"id":"fixture","execute-command":"/usr/local/bin/inngest-inventory.sh"}]')
   export CAT_INFRA_CONFIG_STATE_SH_B64=$(_payload_file "#!/bin/bash")
   export INNGEST_ENUMERATE_REMINDERS_SH_B64=$(_payload_file "#!/bin/bash")
   export INNGEST_REARM_REMINDERS_SH_B64=$(_payload_file "#!/bin/bash")
@@ -513,6 +519,14 @@ test_prod_mode_escalated_move() {
   # Helper recorder: append "dest|mode|owner|<stdin-payload>" per invocation,
   # write nothing. Reading stdin proves the handler pipes the decoded payload (the
   # P1 stdin contract) rather than passing a swappable file path.
+  # #7220 review — the prod-mode arm replaces the `sudo` stub with `exec "$@"`, and the WRITE
+  # seam defaults to an ABSOLUTE `sudo /usr/bin/systemctl`, which the PATH stub cannot shadow.
+  # Since B4 moved daemon-reload out of the TEST_MODE guard onto that seam, this arm would run
+  # the REAL systemctl as non-root and abort under set -e. Point the seam at the stub — that is
+  # exactly what the seam exists for. Measured: without this the branch is 169/2 against a
+  # 148/0 baseline on main.
+  export INFRA_CONFIG_SYSTEMCTL="${TMPDIR_ROOT}/bin/systemctl"
+
   local helper_log="${TMPDIR_ROOT}/helper.log"
   export INFRA_CONFIG_INSTALL_HELPER="${TMPDIR_ROOT}/bin/infra-config-install-mock"
   printf '#!/bin/sh\nprintf "%%s|%%s|%%s|" "$1" "$2" "$3" >> "%s"\ncat >> "%s"\nprintf "\\n" >> "%s"\nexit 0\n' \
@@ -1991,7 +2005,7 @@ test_orphan_hook_selfcheck
 # --- #7220 review: ASSERTION-COUNT FLOOR ---------------------------------------------------
 # Measured: removing the new arm invocations from the runner took this suite 144 -> 110 passed,
 # 0 failed, exit 0. Nothing noticed. A floor makes that loud.
-APPLY_MIN_ASSERTIONS=142
+APPLY_MIN_ASSERTIONS=171
 if [[ "$PASS" -lt "$APPLY_MIN_ASSERTIONS" ]]; then
   echo "  FAIL: assertion-count floor — only $PASS assertions ran, expected >= $APPLY_MIN_ASSERTIONS"
   FAIL=$((FAIL + 1))

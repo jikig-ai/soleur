@@ -629,7 +629,7 @@ test_service_pin_matches_repo_unit() {
   # *.service dest without a digest must fail HERE, at authoring time, rather than silently
   # bricking that dest's delivery on a host with no SSH runbook.
   local svc_dests pins
-  svc_dests=$(awk '/^declare -rA DEST_SPEC=\(/{b=1; next} b && /^\)/{b=0} b && /^[[:space:]]*\["\/etc\/systemd\/system\/[^"]*\.service"\]/{n++} END{print n+0}' "$HELPER")
+  svc_dests=$(awk '/^declare -rA DEST_SPEC=\(/{b=1; next} b && /^\)/{b=0} b && /^[[:space:]]*\["\/etc\/systemd\/system\//&&!/\.service\.d\//{n++} END{print n+0}' "$HELPER")
   pins=$(awk '/^declare -rA SERVICE_SHA256=\(/{b=1; next} b && /^\)/{b=0} b && /^[[:space:]]*\["\//{n++} END{print n+0}' "$HELPER")
   assert_eq "every full-unit dest in DEST_SPEC carries a content pin" "$svc_dests" "$pins"
 }

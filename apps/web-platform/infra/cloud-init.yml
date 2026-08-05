@@ -255,6 +255,11 @@ write_files:
       [Unit]
       Description=Webhook deploy listener
       After=network.target
+      # #7220 AC-B2.3 — MUST stay in lockstep with webhook.service. Without this a
+      # FRESH host boots with systemd's default 5-starts-in-10s limit live, which is
+      # exactly the double-restart brick B5.3 exists to prevent, on the host class you
+      # would be reprovisioning under pressure.
+      StartLimitIntervalSec=0
 
       [Service]
       Type=simple

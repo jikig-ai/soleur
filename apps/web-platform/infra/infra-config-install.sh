@@ -247,7 +247,12 @@ fi
 # FAIL-CLOSED on an unpinned *.service dest. If a future dest is added to DEST_SPEC without a
 # companion digest, this rejects rather than waving it through — the alternative would make
 # forgetting the pin the silent default, which is the failure mode this AC exists to close.
-if [[ "$dest_canonical" == /etc/systemd/system/*.service ]]; then
+# INVERTED PREDICATE (#7220 review). Keying this on `*.service` left a hole: a future DEST_SPEC
+# entry ending .timer/.path/.socket/.target/.mount matches NEITHER this gate nor the drop-in gate
+# above, so it would install with ZERO content validation and `daemon-reload` would adopt it —
+# and a .path or .timer activates its Unit= target with no start grant at all. Anything under
+# /etc/systemd/system that is not a drop-in must carry a digest.
+if [[ "$dest_canonical" == /etc/systemd/system/* && "$dest_canonical" != /etc/systemd/system/*.service.d/*.conf ]]; then
   service_pinned="${SERVICE_SHA256[$dest_canonical]:-}"
   [[ -n "$service_pinned" ]] || reject "service_pin:no_pin_for_dest"
   # sha256sum, never diff/cmp: these payloads are read back into journald on failure, and a
