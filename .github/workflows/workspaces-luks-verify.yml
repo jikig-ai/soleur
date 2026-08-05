@@ -274,7 +274,7 @@ jobs:
           # future producer/consumer drift of exactly this kind.
           is_probe_integrity() {
             case "${1:-}" in
-              readyz_gate_regression|readyz_unparseable|readyz_unreachable|readiness_helper_unavailable|workspace_count_baseline_missing|workspace_count_unreadable|mapper_path_override_refused|doppler_unreachable)
+              readyz_gate_regression|readyz_unparseable|readyz_unreachable|readiness_helper_unavailable|workspace_count_baseline_missing|workspace_count_unreadable|mapper_path_override_refused|doppler_unreachable|heartbeat_url_absent|heartbeat_push_failed)
                 return 0 ;;
             esac
             return 1
@@ -493,6 +493,8 @@ jobs:
           # undone one layer up. `sed` reads the reason off the FAIL line the host already emitted.
           if [[ "$probe_rc" -eq 3 ]]; then
             case "$reason" in
+              heartbeat_url_absent|heartbeat_push_failed)
+                echo "::error::workspaces-luks ALERTING-PATH failure (rc=3, reason=$reason). Every at-rest assert PASSED — the volume is fine and this is NOT data loss. What failed is the probe's ability to REPORT: the Better Stack dead-probe heartbeat was not pushed, so from here on a dead probe and a healthy one look identical off-host (#6808). Do NOT run a data-recovery procedure. Fix: confirm doppler_secret.workspaces_luks_heartbeat_url is applied and that the prd_workspaces_luks boot token can still read it. Sentry: feature=workspaces-luks op=workspaces-luks-drift." ;;
               readyz_gate_regression|readyz_unparseable|readyz_unreachable|readiness_helper_unavailable|workspace_count_baseline_missing|workspace_count_unreadable|mapper_path_override_refused)
                 echo "::error::workspaces-luks PROBE-INTEGRITY failure (rc=3, reason=$reason). This run proves NOTHING about the volume — it is a routing/config/tooling fault, NOT data loss. Do NOT run a data-recovery procedure. Sentry: feature=workspaces-luks op=workspaces-luks-drift." ;;
               *)

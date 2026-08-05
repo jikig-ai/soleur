@@ -9,6 +9,18 @@ tags: [mutation-testing, vacuity, anti-vacuity, guard-design, tar, exit-status, 
 
 # My guard tested the one case that cannot happen in production
 
+> **SUPERSEDED IN PART, 2026-08-05 (#7282).** This document states that `renovate.json5`
+> enables the `dockerfile` manager and extends `default:automergeDigest` + `platformAutomerge`,
+> and its Prevention section instructs the reader to *"check `renovate.json5` for whether a bot
+> mutates it."* **Renovate has never run against this repository** — zero Renovate-authored PRs
+> in its entire history, no Dependency Dashboard issue — so the config was inert and #7282
+> deleted it. The reasoning below is sound and worth keeping; only the mechanism is wrong, and
+> it inverts rather than disappears: with nothing moving the leader, the risk is not a fast
+> automerged bot bump outrunning its followers, it is **the whole set rotting in agreement**,
+> which strengthens the case for leader-anchoring. When applying the Prevention step, ask "what
+> moves this leader, if anything?" rather than grepping a file that no longer exists.
+> See the ADR-096 "Pin freshness" amendment.
+
 ## Problem
 
 #7007 asked for a one-line perf fix: two in-image container verifiers ran `cp -r /src /build`,
@@ -146,7 +158,11 @@ anchor occurs exactly once, and treat a baseline-identical result as UN-RUN, nev
   by a green run.
 - For any guard, name the environment it runs in and enumerate which of its cases are reachable
   there. If the discriminating case is not, add a root-independent test (stub the external tool).
-- For any "keep in sync" guard, grep the named leader and check `renovate.json5` for whether a bot
+- For any "keep in sync" guard, grep the named leader and ask what MOVES it, if anything.
+  (SUPERSEDED 2026-08-05 / #7282 — see the note at the top of this file: the original wording
+  said "check `renovate.json5` for whether a bot mutates it", and that file no longer exists
+  because Renovate never ran here. "Nothing moves it" is a real answer, and the more dangerous
+  one.) The original wording, kept for the record: check `renovate.json5` for whether a bot
   mutates it.
 
 ## Session Errors

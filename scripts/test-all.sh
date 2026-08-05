@@ -454,6 +454,22 @@ if want_scripts; then
   # Explicit run_suite — scripts/*.test.sh is not auto-globbed here, and an unregistered
   # suite is the #5417 class: green CI over zero coverage.
   run_suite "scripts/prod-version-drift-check" bash scripts/prod-version-drift-check.test.sh
+  # zot-mirror failure diagnosis (#7242 / ADR-166), sourced by reusable-release.yml AND by
+  # .github/actions/cf-tunnel-registry-bridge/action.yml. Explicit run_suite — scripts/*.test.sh
+  # is not auto-globbed here. Registration is also what gives this class BLOCKING enforcement:
+  # `test-scripts` feeds the aggregate `test` job (ci.yml), which IS in the CI Required ruleset,
+  # whereas the `lint-bot-statuses` job the other repo linters live in is advisory by design.
+  run_suite "scripts/zot-mirror-diagnosis" bash scripts/zot-mirror-diagnosis.test.sh
+  # #7242: an alarm step that cannot run after an earlier failure cannot report the FIRE it
+  # exists to report. Static gate over both alarm workflows — the condition is evaluated by
+  # GitHub, so the YAML is the only artifact there is to test.
+  run_suite "scripts/alarm-issue-filing-guard" bash scripts/alarm-issue-filing-guard.test.sh
+  # #7242 / ADR-166: no operator-facing CI message may name a cause the job did not measure.
+  # Registered HERE rather than in the lint-bot-statuses job on purpose -- that job is
+  # advisory (absent from required-checks.txt and the ruleset), and this defect has already
+  # survived two non-blocking corrections. The suite invokes the lint, so a regression above
+  # the committed .highwater reds the required `test` context.
+  run_suite "scripts/lint-diagnosis-claims" bash scripts/lint-diagnosis-claims.test.sh
   # Dogfood Grok measure/bootstrap (#6545/#6546). Explicit run_suite — scripts/dogfood/
   # is not in the auto-glob; orphan suites are the #5417 class (green CI, zero coverage).
   run_suite "scripts/dogfood/grok-gpu-bootstrap" bash scripts/dogfood/grok-gpu-bootstrap.test.sh

@@ -22,7 +22,19 @@ set -uo pipefail
 # Past-tense / report outage vocabulary. NO bare `incident` (it matches the
 # threshold literal and `incidental`); word-boundaried; requires a signal that
 # something HAPPENED, since a PIR is owed for an event, not a hypothetical.
-OUTAGE_RE='(incident report|post-?incident|post-?mortem|outage|went down|was down|took down|brought down|stopped working|silently (broke|broken|failing)|regression in prod|users? (could not|were unable to)|shipped broken|ran broken|failed in prod(uction)?|broke prod(uction)?)'
+# The vocabulary is deliberately in TWO groups. The first is a USER-FACING outage
+# ("users could not", "went down"). The second is a DELIVERY outage: nothing the
+# user can see is down, but shipping is stopped — releases blocked, production
+# pinned N versions behind. That is still a production incident and still owes a
+# PIR, and none of the user-facing verbs describe it. **Why:** #7242 — every
+# `Web Platform Release` failed for four hours and production sat three releases
+# behind, and this gate returned "no incident signal" on the PR that fixed it,
+# because the report says "failed at the zot-mirror bridge" and "pinned three
+# releases behind" rather than "failed in production". The gate that exists to
+# stop an incident shipping without its learning missed a textbook one.
+# Verified additive: the new alternation matches ZERO of the nine existing
+# fixtures, so no prior verdict moves.
+OUTAGE_RE='(incident report|post-?incident|post-?mortem|outage|went down|was down|took down|brought down|stopped working|silently (broke|broken|failing)|regression in prod|users? (could not|were unable to)|shipped broken|ran broken|failed in prod(uction)?|broke prod(uction)?|releases? behind|(releases?|deploys?|deployments?) (was|were) blocked|blocked (every|all) (release|deploy))'
 PROD_RE='(prod|production|deployed|live|app\.soleur\.ai|tenant-zero|customer)'
 
 # Strip, in order:

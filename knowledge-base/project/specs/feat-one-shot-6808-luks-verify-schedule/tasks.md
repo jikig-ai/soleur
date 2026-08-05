@@ -158,7 +158,23 @@ The monitor itself needs no step here: `apply-sentry-infra.yml` applies
 `sentry_cron_monitor.workspaces_luks_verify` automatically on push to main
 (`paths: apps/web-platform/infra/sentry/**`). P.2 verifies that apply landed rather than performing it.
 
-- [ ] P.1 **Rehearse the alarm against real GitHub expression evaluation.** The committed suite
+- [x] P.1 **Rehearse the alarm against real GitHub expression evaluation.** — **DONE 2026-08-04.**
+      Run [30907963898](https://github.com/jikig-ai/soleur/actions/runs/30907963898) (dispatched
+      immediately after #7196 merged) filed issue #7260
+      `[ci/luks-verify] SELF-TEST — ignore` with labels `ci/luks-verify, luks/class-selftest`;
+      closed after verification. What the rehearsal proved, none of which a test could reach:
+      the alarm `if:` fired on a `workflow_dispatch`, which requires `inputs.alarm_selftest` to
+      arrive as a genuine **boolean** (`inputs.<name>` preserves the declared type;
+      `github.event.inputs.<name>` stringifies, and GitHub casts any non-empty string to true — so
+      under a string the literal `false` would be truthy and every failed operator dispatch would
+      file an issue); the new `luks/class-selftest` label was **created on first fire**, which
+      matters because `gh issue create` exits non-zero on a `--label` naming a label that does not
+      exist, and on that step a non-zero exit means filing nothing; and the alarm body ran to
+      completion under `set -euo pipefail` against the live `gh` API. `Page ops by email` and
+      `Sentry Crons check-in` both correctly **skipped** — the latter being the "a manual dispatch
+      must not forge liveness while the cron is dark" property, confirmed against real GitHub.
+      The original instructions are kept below for the next rehearsal.
+- [ ] ~~P.1 (original instructions, retained)~~ **Rehearse the alarm against real GitHub expression evaluation.** The committed suite
       evaluates OUR MODEL of GHA expressions; this evaluates GitHub's, and it is the only execution
       of the operator-reaching path before a genuine incident.
       ```bash

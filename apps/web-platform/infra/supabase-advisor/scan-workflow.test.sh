@@ -208,7 +208,17 @@ if [[ ! -f "$HOOK" ]]; then
 else
   # Prove the probe path is genuinely absent from main, or the content scan is
   # skipped and every assertion below is vacuous.
-  if git -C "$REPO_ROOT" cat-file -e \
+  #
+  # #7220-class: `cat-file -e origin/main:<path>` fails for TWO different reasons — the path is
+  # absent (what this check wants to prove) OR `origin/main` itself does not resolve (shallow
+  # clone, no remote, fresh worktree). Without discriminating them, the second case falls into
+  # the `pass` branch below and reports a VACUOUS PASS with no skip at all, while every
+  # assertion after it is equally vacuous. Absence must be provable before it can be proven.
+  if ! git -C "$REPO_ROOT" rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+    # Safe on a ref NAME: rev-parse's syntax-only success applies to well-formed object IDs,
+    # not to refs — an unresolvable `origin/main` genuinely fails here.
+    fail "probe path is absent from main" "origin/main does not resolve in this checkout — absence is unprovable, so this check and every assertion below it would be vacuous"
+  elif git -C "$REPO_ROOT" cat-file -e \
       "origin/main:.github/workflows/scheduled-supabase-advisor-scan-guardprobe.yml" 2>/dev/null; then
     fail "probe path is absent from main" "the probe path exists on main — the hook would early-allow and this check would be vacuous"
   else

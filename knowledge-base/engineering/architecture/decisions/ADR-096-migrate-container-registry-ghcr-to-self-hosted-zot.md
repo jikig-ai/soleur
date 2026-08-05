@@ -112,6 +112,25 @@ concluded the debt was owned. The live umbrella is **#6122** (the migration epic
 does not enumerate either restoration path as a deliverable. Treat "one registry, no
 fallback" as an **unowned constraint** until something is filed for it.
 
+**Partial ownership as of 2026-08-04 — the clause still stands.** Two trackers now exist,
+and neither closes this debt:
+
+- **#7277** — the recut's D10 gate has no valid PASS condition. Scope is the *authorization
+  condition for destroying the store*, which is narrower than restoration. Closing it makes
+  the recut fireable again; it does **not** give production a fallback.
+- **#7278** — the registry host has no in-place restart lever. Reduces how often the
+  no-fallback constraint gets exercised; does not remove it.
+
+Neither restoration path named above (a zero-touch-mintable GHCR pull credential, or a
+second mirror) is owned by either. The closest fit for the second-mirror arm is **#6126**
+(zot HA + read-replicas), raised `p3-low → p2-medium` on 2026-08-04 after a 22h crash-loop
+(#7247) blocked six releases with **both** recovery levers unavailable. It is still not a
+commitment to build one.
+
+So: "one registry, no fallback" remains an **unowned constraint**. Do not read the presence
+of #7277/#7278 as ownership — that substitution is exactly the failure this clause was
+rewritten to prevent.
+
 Stated explicitly so a future reader inherits "one registry, no fallback" as a
 **constraint we are living under**, not as a decision we made and endorsed.
 
@@ -755,3 +774,91 @@ its notify surface (ops@ email on the free tier) is weaker than a deduped, diges
 rejected outright (not version-controlled/testable; `hr-exhaust-all-automated-options-before`). See
 the `scheduled-zot-restart-loop.yml` gate-override header for the ADR-033-anchored GH-cron-vs-Inngest
 substrate rationale.
+
+## Amendment 2026-08-05 (#7282) — Pin freshness: the sole pull path needs a freshness owner
+
+The 2026-07-30 amendment made zot the **sole pull path** with no fallback. That raised the
+stakes on a property this ADR never assigned an owner to: **what keeps zot's own binary
+current?**
+
+Nothing did. The pin sat at **v2.1.2 (2025-01-17)** — 18 releases and ~18 months behind —
+because the only freshness mechanism was a prose comment in `zot-registry.tf` telling a
+human to run `crane digest`. Two upstream panic fixes on the cosign-signature path this
+deployment exercises on every release (project-zot #4204, #4213, both shipping in v2.1.19)
+were sitting unadopted.
+
+> **STATE AT MERGE — the pin is STAGED, not applied.** Past tense above describes the repo,
+> not production. `zot-registry.tf` resources are `OPERATOR_APPLIED_EXCLUSIONS`, so merging
+> this is inert by construction: **the live registry still runs v2.1.2, and both panic fixes
+> remain unadopted in production**, until the `registry-host-replace` apply fires. That apply
+> is blocked on #7277 (the recut gate has no valid PASS condition), #7278, #6929, #7280 (the
+> rendered `user_data` is over Hetzner's 32,768 B cap), and Hetzner `cx23` stock. Tracked in
+> #7287. This paragraph stays true if the apply never fires — which is the point of writing
+> it: ADR-096 is what a reader consults to learn what the registry actually runs.
+
+**Decision.** Digest-pinning stays — it is the integrity guarantee and is not in question.
+What changes is that the pin now has a **named freshness owner** and a **named enforcement
+gate**, and neither is a human remembering.
+
+| Role | Mechanism |
+|---|---|
+| Detection — "upstream moved" | Poll step on `.github/workflows/rule-audit.yml` (cron 1st + 15th) comparing the pinned version against `repos/project-zot/zot/releases/latest`; files **one** idempotent `zot-pin-drift` issue |
+| Detection — "the analysis went stale" | `MAX_AGE_DAYS=90` age gate against the committed sidecar's capture date, on the same cron |
+| Enforcement | `apps/web-platform/infra/zot-image-staleness.test.sh`, registered in `infra-validation.yml`; 12 offline assertions, blocks the PR |
+| Analysis of record | `apps/web-platform/infra/zot-image.provenance.md` — config-compat table, non-adoption decisions, version-scoped claim register, rollback target, and a `## Bump procedure` |
+
+**Both detection conditions are required, and they fail differently.** The poll catches
+"we are behind" within ~15 days but goes silent if it breaks (revoked token, API shape
+change, upstream rename) — and silence reads as health. The age gate needs no network and
+reddens off the sidecar's own recorded date, so it still fires when the poll is dead. The
+age gate alone is what #7282 already was: a fresh-looking pin 18 releases behind.
+
+**Nothing auto-writes the pin.** The cadence files an issue; a human opens the real PR,
+which is then CI-gated and CLA-checked. This is deliberate — an automated write path onto
+the sole pull path's binary is the failure mode the gate exists to prevent, not a
+convenience to add later.
+
+### `renovate.json5` was removed, and why that is not a regression
+
+The obvious mechanism — Renovate's `customManagers` — was the first draft's choice and was
+**wrong on a measurement**: Renovate has **never run against this repository**. Zero
+Renovate-authored PRs in its entire history; no Dependency Dashboard issue (which
+`config:recommended` creates at onboarding). `renovate.json5` configured a GitHub App that
+was never installed.
+
+Had that shipped, the cadence would have been **100% inert and silently so** — and the
+draft's own acceptance criterion (`npx renovate --platform=local --dry-run=lookup`) would
+have **passed**, because a local dry run proves a regex parses, not that any bot executes
+it in production. That is the "guard that tested the one case that cannot happen" shape,
+reproduced at plan level inside the plan meant to prevent it.
+
+The file was deleted rather than kept, because it was not inert-but-harmless: it made a
+repo-wide supply-chain gap read as covered. The GitHub Actions SHA pins and Dockerfile
+base-image digests it advertised managing (`helpers:pinGitHubActionDigests`,
+`docker:pinDigests`) have **never rotated**. Deleting it does not create that gap; it stops
+hiding it. It is tracked separately as a generalization follow-up.
+
+**If Renovate is ever adopted here, `default:automergeDigest` must be neutralised first.**
+Inherited from `config:recommended` via the `extends` chain, it would make the App's *first*
+production responsibility an automerged, unreviewed digest write onto the sole pull path's
+binary.
+
+### Rollback
+
+Recorded because it existed nowhere before: revert both locals to the sidecar's
+`## Previous known-good pin`, merge (inert by `OPERATOR_APPLIED_EXCLUSIONS`), re-fire
+`registry-host-replace`. **This works because cloud-init pulls zot from the PUBLIC upstream
+registry, never from our own zot** — so a dark zot does not block its own replacement. That
+bootstrap paradox is now modeled explicitly (`zotRegistry -> projectZot` in `model.c4`).
+
+Constraints on the revert — all three, because the recovery leg is a second CREATE and is
+subject to every gate the forward leg is:
+
+1. **Stock.** `stock_preflight_gate` is ABORTing today. If capacity blocked the apply for
+   weeks, a same-day revert may be un-orderable. **Firing the apply is one-way with no
+   capacity reservation**, and that must be accepted before it is fired.
+2. **The byte cap.** The rendered `user_data` is over Hetzner's hard 32,768 B cap, so the
+   revert strands the registry for the same arithmetic reason the forward leg does. This was
+   omitted from the first draft of this amendment, which named only the stock gate.
+3. **#7277.** The recut gate has no valid PASS condition, and it sits on the same path — it
+   is the blocker the plan lists first, and it was also missing here.

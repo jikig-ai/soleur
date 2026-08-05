@@ -456,6 +456,10 @@ run_case() {
 #   MON_READYZ_CODE   readyz HTTP status             (default 200)
 #   MON_READYZ_BODY   readyz body                    (default ready:true with both checks true)
 #   MON_DF_USE        df -P use% column              (default 41%)
+#   MON_HB_URL        doppler WORKSPACES_LUKS_HEARTBEAT_URL (default a .test stub URL; empty =
+#                     the secret is absent → rc=3 heartbeat_url_absent)
+#   MON_HB_PUSH_RC    heartbeat push curl rc         (default 0; non-zero on all 3 attempts =
+#                     rc=3 heartbeat_push_failed)
 # Split into mon_prepare / mon_run so a case can BUILD A FIXTURE (workspace dirs, a seeded baseline)
 # between the two. A single call that creates the case dir and immediately executes cannot express
 # the inventory cases at all — the fixture has to exist in the same dir the run will read.
@@ -513,7 +517,12 @@ STUB
 #!/usr/bin/env bash
 printf 'doppler %s\n' "$*" >> "$CALLS"
 case "$*" in
-  *WORKSPACES_LUKS_HEARTBEAT_URL*) printf '%s' "${MON_HB_URL-}" ;;
+  # #6808 — default NON-EMPTY. It defaulted to empty while an absent URL was a survivable WARN;
+  # that arm is now fatal (emit_readiness_and_die heartbeat_url_absent), so an empty default would
+  # exit 3 out of every otherwise-healthy fixture in the suite. A case that wants the absent arm
+  # sets MON_HB_URL= explicitly. `.test` TLD so a stub that ever escaped the mock PATH cannot
+  # resolve to a real endpoint.
+  *WORKSPACES_LUKS_HEARTBEAT_URL*) printf '%s' "${MON_HB_URL-https://uptime.betterstack.test/api/v1/heartbeat/stub-token}" ;;
   *WORKSPACES_LUKS_KEY*)           printf '%s' "${MON_KEY-k}" ;;
 esac
 STUB
@@ -529,6 +538,10 @@ for a in "$@"; do
   prev="$a"
 done
 case "$*" in
+  # #6808 — the heartbeat push. Matched BEFORE the catch-all so a case can drive a failing push
+  # (MON_HB_PUSH_RC=7) and reach the heartbeat_push_failed arm; the catch-all's unconditional
+  # `exit 0` below makes every push succeed and leaves that arm unreachable.
+  *betterstack.test*|*heartbeat*) exit "${MON_HB_PUSH_RC:-0}" ;;
   *readyz*)
     body="${MON_READYZ_BODY-{\"ready\":true,\"checks\":{\"workspaces_writable\":true,\"workspaces_populated\":true\}\}}"
     if [ -n "$outfile" ]; then

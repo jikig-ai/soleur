@@ -5,8 +5,15 @@
 # a scheduled `scheduled-terraform-drift` run reports `coverage: at-floor`, and the
 # `Close the coverage issue once the declared floor is met` step auto-closes the recurring
 # `token-drift-coverage` issue with no operator step. Neither is true at merge — the
-# `terraform apply` that mints DOPPLER_TOKEN_DRIFT sits behind the `web-platform-infra-apply`
-# required-reviewer gate, so the credential does not exist until a human releases it.
+# `terraform apply` that mints DOPPLER_TOKEN_DRIFT_MAP runs on the merge itself, and the
+# scan only observes it on its next scheduled run, up to 12 hours later.
+#
+# NO REVIEWER GATE IS INVOLVED. An earlier version of this header said the apply sat behind
+# a required-reviewer environment gate "until a human releases it". That gate was removed by
+# PR #4220, so both this header and the `0/*` message below were telling the operator to
+# wait for an approval that would never come. The literal gate name is deliberately not
+# repeated here: a grep asserting this file no longer claims that gate cannot distinguish
+# the claim from a note retracting it.
 #
 # The PR therefore uses `Ref #7159`, not `Closes`. This script is what actually closes it:
 # it re-checks the live world on the sweeper's cadence instead of resting on the author's
@@ -89,22 +96,33 @@ case "$COVERAGE" in
   degraded|unknown)
     # The credential either never landed (apply not released) or landed narrowed.
     # Distinguish: a 0/N ratio on a run this soon after merge is the un-applied case.
+    # `unknown` NEVER takes the pre-apply fast path. A malformed DOPPLER_TOKEN_DRIFT_MAP
+    # publishes `unknown` at 0/N — the apply HAS run, it published garbage — and the arm
+    # below would grade that TRANSIENT forever with a message asserting the apply is
+    # pending. That is the same defect as the `1/*` arm this script deleted, one label
+    # higher: a real credential fault masked as a blameless window.
+    if [[ "$COVERAGE" == "unknown" ]]; then
+      echo "FAIL: run ${RUN_ID} published coverage: unknown at ${RATIO:-?}. The detector could not parse its own credential source or its own verdict file — the apply has already run. Check the run for a \`token_drift_map_malformed\` annotation (a CREDENTIAL fault: re-run the infra apply so github_actions_secret.doppler_token_drift_map republishes) or its absence (a DETECTOR fault: check the step for a non-zero exit or a truncated emit_json write)." >&2
+      exit 1
+    fi
     if [[ "$RATIO" == 0/* ]]; then
-      echo "TRANSIENT: coverage ${COVERAGE} at ${RATIO} — reads as the credential not yet minted (the terraform apply is behind the web-platform-infra-apply reviewer gate). Retrying next sweep." >&2
+      echo "TRANSIENT: coverage ${COVERAGE} at ${RATIO} — reads as the credential not yet published. The merge-triggered terraform apply publishes DOPPLER_TOKEN_DRIFT_MAP, and the scan observes it on its next scheduled run (up to 12h). Retrying next sweep." >&2
       exit 2
     fi
-    # THE DOCUMENTED INTERIM STATE IS NOT A FAILURE. #7234: the project-scoped service
-    # account was measured unable to enumerate or read, so the scan runs on the
-    # config-scoped credential and reports 1/13 every run. Without this arm the FAIL
-    # below fires on EVERY sweep, forever, reopening the issue and telling the operator
-    # to "check the service-account membership role" -- which was measured correct. A
-    # follow-through that comments a wrong remedy twice a day is the noise channel this
-    # substrate exists to avoid.
-    if [[ "$RATIO" == 1/* ]]; then
-      echo "TRANSIENT: coverage ${COVERAGE} at ${RATIO} — the documented #7234 interim (scan on the config-scoped credential; the service account sees 0 configs by measurement). Not a regression; retrying next sweep until #7234 restores the fan-out." >&2
+    # THE `1/*` INTERIM ARM IS GONE, WITH THE INTERIM IT DESCRIBED. It graded 1/13 as
+    # TRANSIENT because the scan deliberately ran on a config-scoped credential while the
+    # project-scoped service account was unusable. Under the per-config map that state is no
+    # longer expected — and it is exactly what a collapse-to-one looks like (the step
+    # repointed at a bare DOPPLER_TOKEN, which selects the detector's single-credential
+    # mode). Keeping the arm would grade that regression TRANSIENT forever.
+    #
+    # An UNPARSEABLE ratio is TRANSIENT, not FAIL: a run that published no parseable ratio
+    # measured nothing, and "measured nothing" is not evidence of a regression.
+    if [[ ! "$RATIO" =~ ^[0-9]+/[0-9]+$ ]]; then
+      echo "TRANSIENT: coverage ${COVERAGE} with an unparseable ratio '${RATIO:-<empty>}' — this run published no measurement to grade. Retrying next sweep." >&2
       exit 2
     fi
-    echo "FAIL: run ${RUN_ID} reported coverage: ${COVERAGE} at ${RATIO:-?}. The credential landed but reaches fewer configs than the declared floor — check the service-account membership role and its environments scope." >&2
+    echo "FAIL: run ${RUN_ID} reported coverage: ${COVERAGE} at ${RATIO:-?}. The credential set reaches fewer configs than the declared floor. This is per-config now, so the run names which: read \`configs_unread\` in the linked run, then re-mint just those tokens with \`terraform apply -replace='doppler_service_token.token_drift[\"<config>\"]' -target='doppler_service_token.token_drift[\"<config>\"]' -target='github_actions_secret.doppler_token_drift_map'\` (BOTH -targets: without the first the apply plans the whole root, and without the second the republished map keeps the destroyed token). A ratio of 1/N instead means the step was repointed at a bare DOPPLER_TOKEN, which selects single-credential mode." >&2
     exit 1
     ;;
   *)

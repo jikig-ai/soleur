@@ -194,8 +194,12 @@ run_mirror() {
   COMMIT_SHA="abc123def" \
   BRIDGE_OUTCOME="$bridge_outcome" \
   MIRROR_OVERRIDE_REASON="$override_reason" \
+  GITHUB_WORKSPACE="$REPO_ROOT" \
+  TOKEN_VERDICT="${5:-unmeasured}" \
+  TOKEN_CHECKED_AT="${6:-}" \
+  TOKEN_CAUSE="${7:-unknown}" \
   PATH="$STUB_DIR:$PATH" \
-    bash "$MIRROR_BLOCK" > "$log" 2>&1
+    bash --noprofile --norc -eo pipefail "$MIRROR_BLOCK" > "$log" 2>&1
   rc=$?
   local status warn copies reason
   status=$(grep -E '^mirror_status=' "$out" | tail -1 | cut -d= -f2)
@@ -204,6 +208,18 @@ run_mirror() {
   copies=$(cat "$count" 2>/dev/null || echo 0)
   echo "$rc ${status:-<unset>} $warn ${copies:-0} ${reason:-<unset>}"
 }
+
+# `bash --noprofile --norc -eo pipefail` MATCHES WHAT ACTIONS ACTUALLY RUNS. The harness
+# previously invoked the extracted block with a bare `bash`, so `-e` and `pipefail` were OFF
+# — and this suite claims to execute the real block "verbatim". It did not: every `set -e`
+# abort inside the block was structurally invisible to it.
+#
+# That gap hid a live P0. A `grep` that matches nothing exits 1; under `pipefail` that
+# promotes to the whole pipeline; under `-e` the enclosing assignment ABORTS the step. The
+# Better Stack read added on the bridge-failure path did exactly this, so on a query that
+# returned no `zot_restarts` rows the step died BEFORE `degraded()` — no ::error::, no
+# mirror_status, no mirror_reason. That is the #6416 silent-mirror defect, and the suite
+# was green throughout because its shell flags differed from CI's.
 
 # The log / $GITHUB_OUTPUT of the LAST run_mirror call, for content assertions.
 last_log() { ls -t "$TMP"/log.* 2>/dev/null | head -1; }
@@ -338,11 +354,30 @@ run_mirror always_ok failure >/dev/null
 _t9_log="$(last_log)"
 _t9_ok=1
 grep -qF 'UNPUBLISHED DRAFT' "$_t9_log" || _t9_ok=0
-grep -qF 'check-cloudflare-token-drift.sh' "$_t9_log" || _t9_ok=0
 # The recovery verb must be the one that preserves the version. "Re-run failed jobs" keeps
 # the push event so the merge PR's semver label is re-read; a fresh dispatch defaults the
 # bump_type and can strand the draft permanently.
 grep -qF 'Re-run failed jobs' "$_t9_log" || _t9_ok=0
+# #7242. The `check-cloudflare-token-drift.sh` assertion MOVED, and the move is the point.
+#
+# Both literals above live in the shared $SAFE_TO_RERUN suffix that degraded() appends to
+# EVERY call, so asserting them here proves only that degraded() ran — they pass for any
+# arm, including a blank one. That made this test read as per-arm coverage while providing
+# none. The detector command is now arm-DEPENDENT (it must appear on stale/unverifiable/
+# unmeasured and must NOT headline `live`, because on `live` the job has already measured
+# the credential and rotation is ruled out), so pinning it to a fixed string here would
+# re-assert the very misdiagnosis this PR removes.
+#
+# Per-arm text is asserted where it can be driven directly, as function calls, in
+# scripts/zot-mirror-diagnosis.test.sh. What belongs HERE is only what this harness alone
+# can see: that the block actually reaches the shared helper and renders its OUTPUT.
+#
+# The anchor is a literal only the REAL helper emits. An earlier version of this line
+# grepped for the helper's own filename, which the block's could-not-load FALLBACK also
+# prints — so it passed identically whether the helper loaded or not. That is the
+# assert-the-definition-not-the-invocation trap, committed inside the fix for it.
+grep -qF 'NOTHING WAS MEASURED' "$_t9_log" || _t9_ok=0
+grep -qF 'could not be loaded' "$_t9_log" && _t9_ok=0
 # NEGATIVE, and the half with teeth: apply-deploy-pipeline-fix.yml must NOT be offered as a
 # way to ship past this gate. It redeploys the CURRENTLY RUNNING version (it resolves its
 # tag from web-1's /health) and hard-errors without a released semver, so an operator
@@ -350,9 +385,121 @@ grep -qF 'Re-run failed jobs' "$_t9_log" || _t9_ok=0
 # assertion previously pinned that false claim — a test protecting a lie.
 grep -qF 'apply-deploy-pipeline-fix.yml' "$_t9_log" && _t9_ok=0
 if [[ "$_t9_ok" == "1" ]]; then
-  pass "bridge message: unpublished-draft reassurance + the version-preserving re-run verb + the drift detector, and no false bypass hatch"
+  pass "bridge message: unpublished-draft reassurance + the version-preserving re-run verb + real helper output, and no false bypass hatch"
 else
-  fail "bridge message must name 'Re-run failed jobs' and check-cloudflare-token-drift.sh, and must NOT name apply-deploy-pipeline-fix.yml as a ship path"
+  fail "bridge message must name 'Re-run failed jobs', render the REAL helper output (not its could-not-load fallback), and must NOT name apply-deploy-pipeline-fix.yml as a ship path"
+fi
+
+# T17 (#7242) — the arm actually SWITCHES on the verdict the job measured.
+#
+# This is the assertion scripts/zot-mirror-diagnosis.test.sh structurally cannot make: it
+# calls the function directly, so it proves the four texts differ but says nothing about
+# whether the BLOCK routes a verdict to them.
+#
+# SCOPE, stated because the obvious reading is wrong: this harness injects TOKEN_VERDICT
+# itself, and it extracts only the step's `run:` BODY — never its `env:` block. So T17
+# covers the branching inside the body and is BLIND to the mapping that feeds it. Measured:
+# hardcoding `TOKEN_VERDICT: unmeasured` in the workflow's env: leaves T17 fully green.
+# That mapping is pinned structurally in T18 instead. Two instruments, because no single
+# one here can see both halves.
+#
+# The LIVE fixture is today's incident: the credential was verified live in-job and the
+# origin was crash-looping. Getting a rotation instruction here is the whole defect.
+echo "T17: the bridge message branches on the MEASURED verdict, end-to-end through the block"
+run_mirror always_ok failure match "" live "20:23:05Z" >/dev/null
+_t17_live="$(last_log)"
+_t17_ok=1
+grep -qF 'MEASURED LIVE' "$_t17_live" || _t17_ok=0
+grep -qF '20:23:05Z' "$_t17_live" || _t17_ok=0
+# The acute regression: on a verdict of `live`, the message must NOT tell the operator to
+# go rotate the credential this same job just proved works.
+grep -qF 'MEASURED DEAD' "$_t17_live" && _t17_ok=0
+
+run_mirror always_ok failure match "" stale "20:23:05Z" >/dev/null
+_t17_stale="$(last_log)"
+grep -qF 'MEASURED DEAD' "$_t17_stale" || _t17_ok=0
+# ...and the corrected remedy, not the FALSIFIED "set it on the prd ROOT, branches
+# inherit" clause the detector itself retracted.
+grep -qF 'do NOT inherit' "$_t17_stale" || _t17_ok=0
+grep -qF 'MEASURED LIVE' "$_t17_stale" && _t17_ok=0
+
+run_mirror always_ok failure match "" unverifiable "20:23:05Z" gate-indeterminate >/dev/null
+_t17_unver="$(last_log)"
+grep -qF 'gate-indeterminate' "$_t17_unver" || _t17_ok=0
+grep -qF 'Do NOT rotate' "$_t17_unver" || _t17_ok=0
+
+if [[ "$_t17_ok" == "1" ]]; then
+  pass "verdict reaches the message: live/stale/unverifiable each render their own arm, and live never says MEASURED DEAD"
+else
+  fail "the bridge message did not branch on TOKEN_VERDICT — the run body is not consuming the verdict"
+fi
+
+# T18 (#7242) — the WIRING that feeds T17, pinned where T17 cannot look.
+#
+# T17 proves the run body branches correctly on whatever TOKEN_VERDICT holds. It cannot
+# prove the workflow puts the right thing there, because this harness supplies that value
+# itself. So the mapping is asserted structurally against the parsed YAML.
+#
+# Three properties, and the third is the subtle one: the verdict must arrive via an `env:`
+# mapping and NOT via a `${{ }}` interpolation inside the run body. An interpolation is
+# substituted at workflow-parse time, which both bakes the value into the extracted block
+# (making per-arm testing impossible) and is the shape that silently pins every arm to one
+# value. Asserting the negative is what keeps a future "simplification" from undoing it.
+echo "T18: the verdict is WIRED from token_preflight to both consumers (structural)"
+if python3 - "$WF" "$REPO_ROOT/.github/actions/cf-tunnel-registry-bridge/action.yml" <<'PY'
+import sys, yaml, re
+wf = yaml.safe_load(open(sys.argv[1]))
+act = yaml.safe_load(open(sys.argv[2]))
+errs = []
+
+steps = [s for j in wf["jobs"].values() for s in j.get("steps", [])]
+def by_id(i):
+    m = [s for s in steps if s.get("id") == i]
+    return m[0] if m else None
+
+mirror, bridge = by_id("zot_mirror"), by_id("zot_bridge")
+if not mirror: errs.append("no step with id 'zot_mirror'")
+if not bridge: errs.append("no step with id 'zot_bridge'")
+
+# 1. The mirror step's env: must source the verdict from the preflight's output.
+if mirror:
+    v = str(mirror.get("env", {}).get("TOKEN_VERDICT", ""))
+    if "steps.token_preflight.outputs.verdict" not in v:
+        errs.append(f"zot_mirror env.TOKEN_VERDICT does not read the preflight output: {v!r}")
+    # The `|| 'unmeasured'` guard: a composite default does NOT apply to an explicitly
+    # empty string, and a skipped preflight yields exactly that.
+    if "unmeasured" not in v:
+        errs.append(f"zot_mirror env.TOKEN_VERDICT lacks the || 'unmeasured' fallback: {v!r}")
+
+# 2. The bridge step must forward the same value into the composite action.
+if bridge:
+    w = str(bridge.get("with", {}).get("token-verdict", ""))
+    if "steps.token_preflight.outputs.verdict" not in w:
+        errs.append(f"zot_bridge with.token-verdict does not read the preflight output: {w!r}")
+    if "unmeasured" not in w:
+        errs.append(f"zot_bridge with.token-verdict lacks the || 'unmeasured' fallback: {w!r}")
+
+# 3. NEGATIVE: no run: body may interpolate the preflight output directly.
+for s in steps:
+    body = s.get("run") or ""
+    if re.search(r"\$\{\{[^}]*token_preflight[^}]*\}\}", body):
+        errs.append(f"step {s.get('id') or s.get('name')!r} interpolates token_preflight inside a run: body — must be an env: mapping")
+
+# 4. The composite action must declare the input and map it into env: at both sites.
+if "token-verdict" not in act.get("inputs", {}):
+    errs.append("cf-tunnel-registry-bridge declares no token-verdict input")
+mapped = [s for s in act["runs"]["steps"]
+          if "${{ inputs.token-verdict }}" in str(s.get("env", {}).get("TOKEN_VERDICT", ""))]
+if len(mapped) < 2:
+    errs.append(f"cf-tunnel-registry-bridge maps token-verdict into env: on only {len(mapped)} step(s); both ::error:: sites need it")
+
+for e in errs: print("   " + e)
+sys.exit(1 if errs else 0)
+PY
+then
+  pass "token_preflight verdict is wired to the mirror step and the composite action via env:/with:, with the || 'unmeasured' guard, and never interpolated into a run body"
+else
+  fail "the verdict wiring is broken — see the lines above (T17 cannot catch this: it injects TOKEN_VERDICT itself)"
 fi
 
 # T11-T14 close arms the earlier battery never mutated: it mutated the branch the PR
@@ -402,6 +549,75 @@ echo "T10: override with a reason -> exit 0 but status/reason still record the f
 assert_eq "override active" "$(run_mirror always_fail success match 'zot host down, shipping the service_role remediation')" "0 degraded loud 3 copy_v"
 
 echo ""
+# T19 (#7242) — the origin-telemetry read must never be able to SILENCE the bridge failure.
+#
+# This is the case that shipped and that nothing could see. `grep` exits 1 when it matches
+# nothing; under `pipefail` that promotes to the pipeline; under `-e` the enclosing
+# assignment aborts the step. So a Better Stack query that SUCCEEDS but returns no
+# `zot_restarts=` rows killed the step between "the bridge failed" and `degraded()` — no
+# ::error::, no mirror_status, no mirror_reason. The ops email then renders "the job failed
+# before or outside the mirror step", which is false.
+#
+# A zero-row response is not exotic: it is exactly the PRODUCER-SILENT state this repo
+# alarms on, and a registry host sick enough to break the bridge is a plausible producer of
+# a dark telemetry stream.
+echo "T19: a zero-row telemetry query cannot silence degraded() on the bridge-failure path"
+cat > "$STUB_DIR/betterstack-query.sh" <<'STUB'
+#!/usr/bin/env bash
+# Succeeds, prints rows that contain NO zot_restarts field. The dangerous shape.
+echo '{"dt":"2026-08-03 20:00:00","raw":"SOLEUR_ZOT_DISK pcent=41 boot_id=abc"}'
+exit 0
+STUB
+chmod +x "$STUB_DIR/betterstack-query.sh"
+_t19_prev_path="$PATH"
+# The block calls `bash scripts/betterstack-query.sh`, a PATH-independent relative path, so
+# shadow it via a scripts/ dir on the block's CWD rather than via PATH.
+_t19_dir="$TMP/t19"; mkdir -p "$_t19_dir/scripts"
+cp "$STUB_DIR/betterstack-query.sh" "$_t19_dir/scripts/betterstack-query.sh"
+_t19_out="$TMP/t19out"; _t19_sum="$TMP/t19sum"; _t19_log="$TMP/t19log"; _t19_cnt="$TMP/t19cnt"
+: > "$_t19_out"; : > "$_t19_sum"; : > "$_t19_cnt"
+( cd "$_t19_dir" &&   MOCK_CRANE_MODE=always_ok MOCK_CRANE_COUNT="$_t19_cnt" MOCK_CRANE_DIGEST_MODE=match   GITHUB_OUTPUT="$_t19_out" GITHUB_STEP_SUMMARY="$_t19_sum"   IMAGE="ghcr.io/jikig-ai/soleur-web-platform" DIGEST="sha256:deadbeef" VERSION="1.2.3"   COMMIT_SHA="abc123def" BRIDGE_OUTCOME="failure" MIRROR_OVERRIDE_REASON=""   GITHUB_WORKSPACE="$REPO_ROOT" TOKEN_VERDICT="live" TOKEN_CHECKED_AT="20:23:05Z"   TOKEN_CAUSE="unknown" BETTERSTACK_QUERY_HOST="stub.example"   PATH="$STUB_DIR:$PATH"     bash --noprofile --norc -eo pipefail "$MIRROR_BLOCK" > "$_t19_log" 2>&1 )
+_t19_ok=1
+grep -qE '^mirror_status=degraded' "$_t19_out" || _t19_ok=0
+grep -qE '^mirror_reason=bridge' "$_t19_out" || _t19_ok=0
+grep -qF '::error::' "$_t19_log" || _t19_ok=0
+# ...and it must say it could not conclude, never invent a restart series.
+grep -qF 'no zot_restarts samples' "$_t19_log" || _t19_ok=0
+if [[ "$_t19_ok" == "1" ]]; then
+  pass "a zero-row telemetry query still reaches degraded() and reports no conclusion about zot"
+else
+  fail "the telemetry read SILENCED the bridge failure (no ::error::/mirror_status) — the #6416 shape; check for an unguarded grep/pipefail abort"
+fi
+PATH="$_t19_prev_path"
+
+# T20 (#7242, plan Test Scenario 11) — a FAILING telemetry query must say so, and must not
+# produce a claim about zot. T19 covers the query that SUCCEEDS with no rows; this covers the
+# query that fails outright, which is the other half of the fail-soft contract and the arm an
+# unavailable instrument actually takes. An instrument that cannot report must never be able
+# to author a diagnosis.
+echo "T20: a FAILING telemetry query says 'could not query' and claims nothing about zot"
+_t20_dir="$TMP/t20"; mkdir -p "$_t20_dir/scripts"
+cat > "$_t20_dir/scripts/betterstack-query.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "auth error: 401" >&2
+exit 1
+STUB
+chmod +x "$_t20_dir/scripts/betterstack-query.sh"
+_t20_out="$TMP/t20out"; _t20_log="$TMP/t20log"; _t20_cnt="$TMP/t20cnt"
+: > "$_t20_out"; : > "$_t20_cnt"
+( cd "$_t20_dir" &&   MOCK_CRANE_MODE=always_ok MOCK_CRANE_COUNT="$_t20_cnt" MOCK_CRANE_DIGEST_MODE=match   GITHUB_OUTPUT="$_t20_out" GITHUB_STEP_SUMMARY="$TMP/t20sum"   IMAGE="ghcr.io/jikig-ai/soleur-web-platform" DIGEST="sha256:deadbeef" VERSION="1.2.3"   COMMIT_SHA="abc123def" BRIDGE_OUTCOME="failure" MIRROR_OVERRIDE_REASON=""   GITHUB_WORKSPACE="$REPO_ROOT" TOKEN_VERDICT="live" TOKEN_CHECKED_AT="20:23:05Z"   TOKEN_CAUSE="unknown" BETTERSTACK_QUERY_HOST="stub.example"   PATH="$STUB_DIR:$PATH"     bash --noprofile --norc -eo pipefail "$MIRROR_BLOCK" > "$_t20_log" 2>&1 )
+_t20_ok=1
+grep -qE '^mirror_status=degraded' "$_t20_out" || _t20_ok=0
+grep -qE '^mirror_reason=bridge' "$_t20_out" || _t20_ok=0
+grep -qF 'could not query Better Stack' "$_t20_log" || _t20_ok=0
+# The failure of the instrument must not become a statement about the thing it measures.
+grep -qE 'zot_restarts [0-9]+ ->' "$_t20_log" && _t20_ok=0
+if [[ "$_t20_ok" == "1" ]]; then
+  pass "a failed query reports itself as a failed query and fabricates no restart series"
+else
+  fail "the failed-query arm did not fail soft — it either silenced degraded() or invented a zot claim"
+fi
+
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Measured: replacing every assert_eq/pass/fail CALL with `:` yields
 # "0/0 passed, 0 failed" and exit 0, and test-all.sh reads only the exit code — so a suite

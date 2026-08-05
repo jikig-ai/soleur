@@ -186,8 +186,12 @@ if body is None:
     sys.stderr.write("no step with id: token_drift, or it has no run:\n")
     raise SystemExit(2)
 lines = body.split("\n")
+# Tolerates a runner prefix (`timeout N `, `env X=Y `) before `bash`. The invocation is
+# wrapped in `timeout 300` so a rate-limited run cannot outlive the JOB timeout, which
+# would kill it before $GITHUB_OUTPUT is written; anchoring on a bare `bash ` prefix made
+# that wrapper invisible to this extractor and the whole harness FATAL'd.
 hits = [i for i, l in enumerate(lines)
-        if l.lstrip().startswith("bash scripts/check-cloudflare-token-drift.sh")]
+        if "bash scripts/check-cloudflare-token-drift.sh" in l and not l.lstrip().startswith("#")]
 if len(hits) != 1:
     sys.stderr.write("expected exactly 1 detector invocation, found %d\n" % len(hits))
     raise SystemExit(3)
@@ -869,7 +873,7 @@ if grep -q '::warning::.*could not measure its own coverage' "$STEP_STDOUT" \
    && ! grep -q '::warning::.*below its declared floor' "$STEP_STDOUT"; then
   pass "an unreadable verdict file says so, rather than reporting a narrowed credential"
 else
-  fail "coverage=unknown did not emit its own annotation — a detector that could not run is being described to the operator as a narrowed credential, whose remedy is unperformable on that path (there is nothing to widen; the identity is already project-scoped), so the state never clears"
+  fail "coverage=unknown did not emit its own annotation — a detector that could not run is being described to the operator as a narrowed credential, whose remedy is unperformable on that path (there is nothing to widen: since #7234 the credential is thirteen config-scoped tokens keyed off the committed inventory, not one project-scoped identity that could be granted more), so the state never clears"
 fi
 
 # ---------------------------------------------------------------------------
@@ -1038,6 +1042,26 @@ else
   fail "coverage_caveat was emitted by the detector and read by nothing. The operator reads the ratio in both verdict emails; the caveat is the only thing that says the DENOMINATOR in that ratio may be stale, missing or unparseable. Either it is rendered beside the ratio or it should not be emitted at all"
 fi
 
+# hcl_uncommented <file> — strip `#` line comments, keeping code. Not a full HCL lexer: it
+# does not know about `#` inside a quoted string, and it does not need to — no attribute in
+# this file carries one, and F5's regex-literal assertion below would red if one appeared.
+# Strips `#` AND `//` line comments AND `/* … */` blocks. All three are HCL comment forms,
+# and stripping only `#` left C-a defeatable: a `/* … */` block containing a commented-out
+# `config = each.key` satisfies C-a's anchored positive while the live attribute binds a
+# `local.` (not a string literal, so the negative grep never fires). Measured — that .tf
+# passes 60/60 with 13 tokens all bound to one config, which is the exact defect C-a is the
+# pre-merge gate for. Not a full HCL lexer: it does not know about `#`/`//` inside a quoted
+# string, and does not need to — no attribute in the guarded file carries one, and F5's
+# regex-literal assertion would red if one appeared.
+hcl_uncommented() {
+  # `-z` on the FIRST pass is load-bearing: a `/* … */` block spans lines, and plain `sed`
+  # is line-oriented, so a line-scoped pattern silently matches nothing and the block
+  # survives whole. Measured — the first version of this fix left the bypass passing 60/60.
+  # `-z` makes the file one record so the block pattern can span newlines.
+  sed -Ez ':a; s@/\*([^*]|\*+[^*/])*\*+/@@g; ta' "$1" \
+    | sed -E 's@(^|[[:space:]])(#|//).*$@@'
+}
+
 # ---------------------------------------------------------------------------
 # F1-F3 — THE FLOOR PIN (AC29.3). Repo-internal: no credential, no network.
 # This is the CI check that fails when the floor and the inventory drift apart.
@@ -1140,12 +1164,26 @@ echo "F4: every Doppler config the infra Terraform NAMES appears in the inventor
 # rename and any regeneration that drops a depended-on config, and it says nothing about the
 # remainder.
 INFRA_DIR="$REPO_ROOT/apps/web-platform/infra"
-mapfile -t _TF_CONFIGS < <(grep -rhoE 'config[[:space:]]*=[[:space:]]*"[a-z0-9_]+"' "$INFRA_DIR"/*.tf 2>/dev/null \
-                           | grep -oE '"[a-z0-9_]+"' | tr -d '"' | sort -u)
+# COMMENT-STRIPPED, for the same reason F5 and C-a are (cq-assert-anchor-not-bare-token).
+# This used to grep the RAW .tf files, so any `config = "<name>"` written in PROSE counted as
+# a Terraform reference — and `token-drift-read-tokens.tf`'s header documents the mis-binding
+# hazard by quoting `config = "prd"` verbatim, several times. Measured before and after this
+# change: both extractions yield the same five names today, so nothing is being loosened. What
+# it fixes is the NON-VACUITY GUARD below: with raw greps, deleting every real `config = "…"`
+# attribute in the whole directory would still leave the guard satisfied by comment prose, so
+# the one check that exists to catch a drifted extraction could be held up by a sentence.
+mapfile -t _TF_CONFIGS < <(
+  for _tf in "$INFRA_DIR"/*.tf; do
+    [[ -f "$_tf" ]] || continue
+    hcl_uncommented "$_tf"
+  done 2>/dev/null | grep -ohE 'config[[:space:]]*=[[:space:]]*"[a-z0-9_]+"' \
+                   | grep -oE '"[a-z0-9_]+"' | tr -d '"' | LC_ALL=C sort -u
+)
+unset _tf
 _f4=1
 if (( ${#_TF_CONFIGS[@]} == 0 )); then
   _f4=0
-  echo "    the extraction found NO config names in ${INFRA_DIR}/*.tf — it has drifted, and this assertion would pass vacuously"
+  echo "    the extraction found NO config names in ${INFRA_DIR}/*.tf (comments stripped) — it has drifted, and this assertion would pass vacuously"
 fi
 _inv_names=$(grep -E '^[a-z0-9_]+$' "$INVENTORY" | sort -u)
 for _c in ${_TF_CONFIGS[@]+"${_TF_CONFIGS[@]}"}; do
@@ -1157,54 +1195,312 @@ else
   fail "the committed inventory must contain every Doppler config the infra Terraform names — those are configs production depends on, so a scan that cannot reach them is exactly the fan-out blindness this detector exists for. A regenerated-and-wrong or hand-edited inventory otherwise prints a healthy ratio over names that mean nothing, and lists nonexistent configs to the operator as 'not read'"
 fi
 
+echo "F4b: the inventory's name set never SHRINKS — it is a SUPERSET of the merge base's"
+# THE ONE LAYER THAT IS NOT COUNT-FRAMED, and the gap that made it necessary.
+#
+# F2, F2b, F3 and the workflow's run-time re-assertion all bound a COUNT. Since #7234 the
+# thing that matters is a SET: these name lines ARE the `for_each` key set, so the reach of
+# the whole scan is the set, not its cardinality. A RENAME moves no count at all — swap
+# `prd_cla` for `prd_cla_v2` and F2b's equality holds, F3 holds, F5's derived list still has
+# 13 names, the run-time `>= 13` holds, and the scan reports a clean 13/13 while one config
+# goes permanently unread and a token is minted for a config that does not exist. The
+# 14->13 round trip the inventory's own header describes is the same blindness with the
+# count moving DOWN and every pinned literal moving down with it.
+#
+# WHY NOT LEAVE THIS TO THE DESTROY GUARD. Removing a name DESTROYS that config's read
+# token, and `destroy-guard-filter-web-platform.jq` does count planned deletes — but that
+# count is inside the `[ack-destroy]`-bypassable `destroy_count` sum, and #7234's own merge
+# commit carries `[ack-destroy]` (it retires the project-scoped service account). A PR
+# shaped exactly like this one therefore sails through the only layer that fires above 13.
+# That guard also has no `for_each` instance-delete fixture anywhere in its 40 tfplan
+# cases. This assertion is pre-merge, reads no credential, makes no network call, and
+# nothing in a commit message can wave it through.
+#
+# BASELINE IS THE MERGE BASE, NOT origin/main's TIP. Against the tip, every branch that has
+# not rebased past a legitimate inventory GROWTH reds for a shrink it did not make. Against
+# the merge base a stale branch compares to the tree it forked from, and CI — which builds
+# the PR's MERGE commit — compares the merged result to main. Both are the semantics wanted.
+# What this therefore does NOT catch: a stale branch that reverts a merged growth wholesale.
+# F2/F3 pin the floor side of that, and a wholesale revert is not this ratchet's job.
+#
+# Names deliberately RETIRED from the Doppler project. Empty by default: adding a name here
+# is what lets the ratchet down by exactly one config, and it is an edit to a test whose
+# only purpose is to stop that edit — the same discipline as FLOOR_MINIMUM above. A stale
+# entry (the name is gone from the baseline too) is inert rather than an error, because
+# making it an error would red main for everyone the moment the removal merged.
+INVENTORY_REMOVALS_ACK=()
+
+_f4b=1
+_INV_REL="apps/web-platform/infra/doppler-config-inventory.txt"
+_base_names=""
+_base_has_inventory=0
+if ! _merge_base=$(git -C "$REPO_ROOT" merge-base HEAD origin/main 2>/dev/null) || [[ -z "$_merge_base" ]]; then
+  _f4b=0
+  echo "    could not resolve 'git merge-base HEAD origin/main' — run 'git fetch origin main' (CI: actions/checkout needs fetch-depth: 0, which the test-scripts shard already sets). This FAILS rather than skips: a ratchet that quietly disappears when its baseline is unreachable is the shape that lets the shrink through on exactly the runner where nobody is looking"
+elif git -C "$REPO_ROOT" cat-file -e "${_merge_base}:${_INV_REL}" 2>/dev/null; then
+  _base_has_inventory=1
+  _base_names=$(git -C "$REPO_ROOT" show "${_merge_base}:${_INV_REL}" | LC_ALL=C grep -E '^[a-z0-9_]+$' | LC_ALL=C sort -u)
+else
+  echo "    the merge base has no ${_INV_REL} — the baseline set is empty, so any current set is a superset of it"
+fi
+# NON-VACUITY. A baseline blob that exists but parses to nothing means the extraction has
+# drifted (a reformatted inventory, a changed name charset), and every comparison below
+# would then pass over an empty set forever.
+if (( _base_has_inventory )) && [[ -z "$_base_names" ]]; then
+  _f4b=0
+  echo "    the baseline inventory exists at ${_merge_base} but yielded ZERO parseable names — the extraction has drifted and this ratchet would pass vacuously"
+fi
+_base_n=$(grep -c . <<<"$_base_names") || _base_n=0
+_checked=0
+_acked_n=0
+# Herestring, not `printf ... | while`: a pipe would put the loop in a SUBSHELL and every
+# counter increment below would be discarded, which is the failure mode this loop's own
+# accounting guard is written to detect.
+while IFS= read -r _bn; do
+  [[ -n "$_bn" ]] || continue
+  _acked=0
+  for _ack in ${INVENTORY_REMOVALS_ACK[@]+"${INVENTORY_REMOVALS_ACK[@]}"}; do
+    [[ "$_ack" == "$_bn" ]] && { _acked=1; break; }
+  done
+  (( _acked )) && { _acked_n=$((_acked_n + 1)); continue; }
+  _checked=$((_checked + 1))
+  # Herestring, never a pipe: `producer | grep -q` takes SIGPIPE on an early match under
+  # `pipefail`, which inverts a negative assertion into a silent pass.
+  grep -qxF "$_bn" <<<"$_inv_names" \
+    || { _f4b=0; echo "    config '${_bn}' is present in the merge base's inventory and absent from this branch's — a removal or a rename. That DESTROYS its read token and drops the config out of the scan's reach, and no count in this file moves when it is a rename"; }
+done <<<"$_base_names"
+# THE LOOP ACTUALLY RAN OVER THE BASELINE SET. Measured: deleting the comparison loop
+# outright left this file reporting 61/61 and exit 0. The anti-vacuity floor at the bottom
+# counts assertion CALLS, not assertion BODIES, so it sees a neutered control as a passing
+# one — and the non-vacuity guard above only covers a baseline that fails to PARSE, not a
+# comparison that never happens. This reconciles the two counts, so a body that stops
+# iterating is as loud as a body that finds a missing name.
+if (( _checked + _acked_n != _base_n )); then
+  _f4b=0
+  echo "    the comparison examined ${_checked} of ${_base_n} baseline names (${_acked_n} acked) — it did not run over the baseline set, so this assertion would report 'reach did not shrink' without having compared anything"
+fi
+if [[ "$_f4b" == "1" ]]; then
+  # Says what was actually established. "all N survive" is FALSE the moment one is acked,
+  # and a pass line that overstates its own scope is the defect this suite keeps finding
+  # elsewhere.
+  pass "reach did not shrink: ${_checked} of the merge base's ${_base_n} config names are still present in $(basename "$INVENTORY"), ${_acked_n} deliberately retired via INVENTORY_REMOVALS_ACK"
+else
+  fail "the committed inventory is the for_each key set, so its name set is the scan's REACH and must only ever grow. Every other layer here bounds a COUNT, and a rename moves no count: the ratio still reads 13/13 while one config is unread and one token is minted for a config that does not exist. Deliberately retiring a config means adding its name to INVENTORY_REMOVALS_ACK above — a visible edit to a test, which is the point"
+fi
+
+# ---------------------------------------------------------------------------
+# F5 + C-a — THE PER-CONFIG READ-TOKEN SHAPE (#7234).
+#
+# The credential is now 13 config-scoped `doppler_service_token`s under one `for_each`,
+# keyed off the committed inventory, published as ONE Actions secret holding a JSON map.
+# Two things about that shape are worth pinning here, and neither is reachable from the
+# workflow YAML the rest of this suite reads:
+#
+#   F5  the `for_each` list IS the inventory — not a hand-maintained copy of it. A fifth
+#       place `13` lives would be a fifth place it can drift.
+#   C-a `config = each.key`, never a string literal. This is the ONE mis-binding Terraform
+#       can actually produce: `config = "prd"` mints 13 DISTINCT tokens with correct map
+#       keys, all bound to one config. It passes every shape check, and Phase 0 measured
+#       that it would then surface at runtime as 12 access-denied reads -> `1/13 degraded`.
+#       That runtime signal is real but it costs a merge and up to 12 hours; this static
+#       assertion costs nothing and fires on the PR.
+#
+# ASSERTED OVER COMMENT-STRIPPED HCL. The .tf deliberately DOCUMENTS the literal-vs-each.key
+# hazard in prose beside the attribute, so a bare grep for `config = "` would match the
+# warning against the defect and fail a correct file (cq-assert-anchor-not-bare-token; the
+# "narrowing is not anchoring" class in #6456, four occurrences in one PR).
+# ---------------------------------------------------------------------------
+TF_READ_TOKENS="$INFRA_DIR/token-drift-read-tokens.tf"
+
+# hcl_block <file> <type> <name> — the body of one `resource "<type>" "<name>" { … }`,
+# comment-stripped. Brace-counted rather than awk-range'd so a nested block cannot end it
+# early. Prints nothing and returns 1 when the block is absent, so callers fail loudly
+# instead of asserting over an empty string.
+hcl_block() {
+  local _out
+  _out=$(hcl_uncommented "$1" | awk -v t="$2" -v n="$3" '
+    !inb && $0 ~ "resource[[:space:]]+\"" t "\"[[:space:]]+\"" n "\"" { inb=1; d=0 }
+    inb {
+      for (i=1; i<=length($0); i++) { c=substr($0,i,1); if (c=="{") d++; else if (c=="}") d-- }
+      print
+      # `seen` is set on the OPENING line unconditionally. Keying it on `d>0` meant a
+      # single-line block (`resource "x" "y" { config = each.key }`) closed to d==0 on the
+      # same line, never set `seen`, never hit the exit — so the extraction ran to EOF and
+      # bled every following resource into the block, silently inverting both C-a greps.
+      seen=1
+      if (d<=0) { exit }
+    }
+  ')
+  [[ -n "$_out" ]] || return 1
+  printf '%s\n' "$_out"
+}
+
+echo "F5: the for_each config list is DERIVED from the committed inventory, not restated"
+_f5=1
+if [[ ! -f "$TF_READ_TOKENS" ]]; then
+  _f5=0
+  echo "    $(basename "$TF_READ_TOKENS") does not exist — the per-config read-token shape (#7234) is not in place"
+else
+  _tf_src=$(hcl_uncommented "$TF_READ_TOKENS")
+  # (a) the list comes from the inventory FILE, by name.
+  grep -qF 'file("${path.module}/doppler-config-inventory.txt")' <<<"$_tf_src" \
+    || { _f5=0; echo "    the locals block does not read doppler-config-inventory.txt via file() — the config list has become a second, unpinned copy"; }
+  # (b) no normaliser. R4 measured HCL's regex and the detector's grep agreeing on raw
+  #     split("\n") lines; adding trimspace() BREAKS that agreement rather than helping.
+  if grep -qE '(trimspace|chomp)\(|[^a-z_]trim\(' <<<"$_tf_src"; then
+    _f5=0; echo "    the .tf normalises inventory lines (trimspace/trim/chomp) — that diverges it from the detector's grep, which does not"
+  fi
+  # (c) EXTRACT the accepted-name regex — do not assert it against a hardcoded copy. The
+  #     literal is pulled out so (d) can APPLY it; asserting `== "^[a-z0-9_]+$"` here and
+  #     then grepping with that same hardcoded string in (d) would compare the detector's
+  #     regex to itself and pass for every possible .tf.
+  _tf_re=$(sed -nE 's/.*can\(regex\("([^"]+)".*/\1/p' <<<"$_tf_src" | head -1)
+  [[ -n "$_tf_re" ]] \
+    || { _f5=0; echo "    the .tf's locals block contains no can(regex(\"…\")) name filter — nothing constrains which inventory lines become tokens"; }
+  # (d) THE SET-EQUALITY. The regex APPLIED is the one extracted from the .tf; the expected
+  #     set is the DETECTOR's own inventory parse. A .tf that filtered differently — a
+  #     dropped anchor, an added character class, `[A-Za-z]` — selects a different set here
+  #     and reds with the diff named.
+  #
+  #     ⚠️ THE REACH OF THIS ASSERTION IS BOUNDED BY THE CORPUS, and the comment here used
+  #     to overstate it. Measured: `^[a-z]+$` fails, but `^[a-z0-9_-]+$`, `^[a-zA-Z0-9_]+$`
+  #     and `^[a-z0-9_]*$` all select the SAME 13 names over the committed inventory and
+  #     PASS. Both sides evaluate over one 13-line corpus, so only a corpus-witnessed
+  #     divergence can ever fail. A widening that no current name exercises is invisible
+  #     here — the reason (e) forbids a literal list and the reason the detector's own
+  #     regex is extracted below rather than restated.
+  if [[ -n "$_tf_re" ]]; then
+    _tf_set=$(LC_ALL=C grep -E "$_tf_re" "$INVENTORY" | LC_ALL=C sort -u)
+    # EXTRACTED, not restated. This line used to hardcode the detector's regex, so
+    # changing the detector left BOTH suites green while the .tf and the detector diverged
+    # — violating this file's own header Rule 2 ("derived from the detector source, never
+    # restated here"). Now a change on either side reds.
+    _det_re=$(sed -nE "s/.*LC_ALL=C grep -E '(\^[^']+)' \"\\\$INVENTORY_PATH\".*/\1/p" "$DETECTOR" | head -1)
+    if [[ -z "$_det_re" ]]; then
+      _f5=0; echo "    could not extract the detector's inventory-parse regex from $(basename "$DETECTOR") — the extraction has drifted and this comparison would be vacuous"
+      _det_re='^[a-z0-9_]+$'
+    fi
+    # THE LITERALS THEMSELVES, because set-equality alone cannot pin this. Measured:
+    # widening the DETECTOR's regex to `^[a-zA-Z0-9_-]+$` while the .tf keeps
+    # `^[a-z0-9_]+$` leaves both sets identical over the committed 13 names and passes.
+    # Extracting both sides was necessary and not sufficient — the comparison is bounded by
+    # the corpus, so a widening no current name exercises is invisible to it. Comparing the
+    # PREDICATES is corpus-independent and reds on any divergence.
+    if [[ "$_tf_re" != "$_det_re" ]]; then
+      _f5=0
+      echo "    the .tf's filter and the detector's inventory parse are DIFFERENT predicates: .tf='${_tf_re}' detector='${_det_re}'. They must be the same string — a config name accepted by one and rejected by the other is either a token minted for a config the scan never counts, or a counted config with no token."
+    fi
+    _det_set=$(LC_ALL=C grep -E "$_det_re" "$INVENTORY" | LC_ALL=C sort -u)
+    _n=$(grep -c . <<<"$_tf_set") || _n=0
+    if [[ "$_tf_set" != "$_det_set" ]]; then
+      _f5=0
+      echo "    the .tf's filter '${_tf_re}' and the detector's inventory parse select DIFFERENT name sets:"
+      diff <(printf '%s\n' "$_det_set") <(printf '%s\n' "$_tf_set") | sed 's/^/      /'
+    elif (( _n < FLOOR_MINIMUM )); then
+      _f5=0; echo "    the derived list has ${_n} names, below the pinned minimum of ${FLOOR_MINIMUM} — that would mint fewer tokens than the floor demands and hold the scan at 'degraded' forever"
+    fi
+  fi
+  # (e) the list is not a hardcoded literal wearing a derivation's clothes.
+  if grep -qE 'token_drift_configs[[:space:]]*=[[:space:]]*\[[[:space:]]*"' <<<"$_tf_src"; then
+    _f5=0; echo "    local.token_drift_configs is assigned a literal list — a fifth place the number 13 lives, pinned to the inventory by nothing"
+  fi
+fi
+if [[ "$_f5" == "1" ]]; then
+  pass "local.token_drift_configs derives from the committed inventory with the detector's own name filter, and yields >= ${FLOOR_MINIMUM} names"
+else
+  fail "the per-config read tokens must be minted from the committed inventory using the detector's name filter. A restated list is a second unsynchronised pin: the inventory grows a config, the list does not, and the scan mints 13 tokens for a 14-config project while every count in the ladder still agrees with itself"
+fi
+
+echo "C-a: the token's config comes from each.key, never a string literal"
+_ca=1
+if [[ ! -f "$TF_READ_TOKENS" ]]; then
+  _ca=0
+  echo "    $(basename "$TF_READ_TOKENS") does not exist"
+else
+  _tok_block=$(hcl_block "$TF_READ_TOKENS" doppler_service_token token_drift) || _tok_block=""
+  if [[ -z "$_tok_block" ]]; then
+    _ca=0
+    echo "    no 'resource \"doppler_service_token\" \"token_drift\"' block found — the extraction has drifted and every assertion below would pass vacuously"
+  else
+    grep -qE '^[[:space:]]*config[[:space:]]*=[[:space:]]*each\.key[[:space:]]*$' <<<"$_tok_block" \
+      || { _ca=0; echo "    the token block does not set 'config = each.key'"; }
+    # WHITELIST, not blacklist. The original form rejected only a string literal, so
+    # `config = local.pinned` — 13 tokens on one config, identical blast radius — sailed
+    # through. Anything that is not literally `each.key` is rejected, whatever its syntax.
+    _cfg_binding=$(grep -oE '^[[:space:]]*config[[:space:]]*=[[:space:]]*[^[:space:]]+' <<<"$_tok_block" | head -1 | sed -E 's/.*=[[:space:]]*//')
+    if [[ -n "$_cfg_binding" && "$_cfg_binding" != "each.key" ]]; then
+      _ca=0
+      echo "    the token block binds 'config' to '${_cfg_binding}', not each.key — every instance then reads the SAME config. A string literal, a local. or a var. are all the same defect: 13 distinct tokens, 13 correct map keys, one config actually read. Phase 0 measured the runtime consequence: 12 access-denied reads and a 1/13 degraded run, a merge and up to 12 hours after this line could have been caught here"
+    fi
+    grep -qE 'for_each[[:space:]]*=[[:space:]]*toset\(local\.token_drift_configs\)' <<<"$_tok_block" \
+      || { _ca=0; echo "    for_each is not toset(local.token_drift_configs) — the instance keys and the config bindings are no longer the same set"; }
+  fi
+  # The map's key and value must come from the SAME iteration variable. A key/value skew
+  # would be an HCL bug rather than a producible defect, but the assertion is one grep and
+  # it is the line a future edit is most likely to get subtly wrong.
+  _sec_block=$(hcl_block "$TF_READ_TOKENS" github_actions_secret doppler_token_drift_map) || _sec_block=""
+  if [[ -z "$_sec_block" ]]; then
+    _ca=0; echo "    no 'resource \"github_actions_secret\" \"doppler_token_drift_map\"' block found"
+  else
+    grep -qE 'for[[:space:]]+([A-Za-z_][A-Za-z0-9_]*),[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]+in[[:space:]]+doppler_service_token\.token_drift[[:space:]]*:[[:space:]]*\1[[:space:]]*=>[[:space:]]*\2\.key' <<<"$_sec_block" \
+      || { _ca=0; echo "    the published map's key and value do not come from the same 'for' iteration variables over doppler_service_token.token_drift — a skew here hands every config someone else's credential"; }
+    grep -qE '\.api_key' <<<"$_sec_block" \
+      && { _ca=0; echo "    the map reads .api_key, which belonged to the retired doppler_service_account_token; doppler_service_token exposes .key"; }
+  fi
+fi
+if [[ "$_ca" == "1" ]]; then
+  pass "config = each.key, for_each = toset(local.token_drift_configs), and the map's key/value share one iteration variable"
+else
+  fail "the per-config tokens must bind 'config' to each.key — not a string literal, not a local., not a var. Any of them is the same mis-binding: 13 distinct tokens, 13 correct map keys, one config actually read. It passes shape validation and pairwise-distinctness, which is exactly why it needs a static gate. This assertion reads COMMENT-STRIPPED HCL (#, // and multi-line /* */), because the guarded file documents this hazard in prose beside the attribute"
+fi
+
 # ---------------------------------------------------------------------------
 # C1-C3 — the CREDENTIAL the step is wired to, and the guard on its floor.
 # ---------------------------------------------------------------------------
-echo "C1: the step's DOPPLER_TOKEN is the documented interim credential (see #7234)"
-# INTERIM STATE, PINNED DELIBERATELY. The TARGET is secrets.DOPPLER_TOKEN_DRIFT -- the
-# project-scoped service-account token. It is minted and live, and it was MEASURED to see
-# nothing at all:
+echo "C1: the step is wired to the per-config credential MAP, not a bare token"
+# WHAT THIS PINS, AND WHY IT IS AN EXACT MATCH RATHER THAN "either value". The step reads
+# DOPPLER_TOKEN_DRIFT_MAP: ONE Actions secret carrying a JSON object of per-config read
+# tokens, minted by `doppler_service_token.token_drift` under a `for_each` over the
+# committed inventory. Any THIRD value fails here, and so does a flip back to a bare
+# project-scoped credential.
 #
-#   doppler configs -p soleur --json   -> null   (0 configs)
-#   doppler secrets -p soleur -c prd   -> "Could not find requested config 'prd'"
-#
-# `workplace_permissions = []` (the least-privileged value satisfying the provider's
-# ExactlyOneOf) yields workplace_role no_access, and that denies project visibility which a
-# `viewer` project membership cannot restore on its own. Until #7234 settles whether a
-# narrower-than-all_enclave_projects permission exists, the step runs on the config-scoped
-# credential so drift detection keeps running at all -- 1 of 13, reported honestly as
-# `degraded` rather than silently as `clean`.
-#
-# This assertion is NOT relaxed to "either value": it pins the interim credential exactly,
-# so any THIRD value still fails, and flipping back to DOPPLER_TOKEN_DRIFT fails here as a
-# reminder to re-verify enumeration against the real credential first.
-WF_TOKEN=$(step_get "id:token_drift" env.DOPPLER_TOKEN) || WF_TOKEN=""
-if [[ "$WF_TOKEN" == '${{ secrets.DOPPLER_TOKEN }}' ]]; then
-  pass "DOPPLER_TOKEN: \${{ secrets.DOPPLER_TOKEN }} (interim per #7234; target is DOPPLER_TOKEN_DRIFT)"
+# THE HISTORY THIS ASSERTION EXISTS TO STOP REPEATING. #7159 wired this step to a
+# `doppler_service_account` on the INFERRED premise that a project membership can
+# enumerate and read every config. It was never probed. Measured (#7234): that credential
+# saw NOTHING — `doppler configs -p soleur --json` returned null and reading `prd`
+# returned "Could not find requested config 'prd'". If you are changing this line, the
+# thing to carry forward is not the value but the discipline: measure the credential's
+# reach against live Doppler BEFORE wiring it, not after the first scheduled run.
+WF_TOKEN_MAP=$(step_get "id:token_drift" env.DOPPLER_TOKEN_MAP) || WF_TOKEN_MAP=""
+_has_bare_token=0
+step_get "id:token_drift" env.DOPPLER_TOKEN >/dev/null 2>&1 && _has_bare_token=1
+if [[ "$WF_TOKEN_MAP" == '${{ secrets.DOPPLER_TOKEN_DRIFT_MAP }}' && "$_has_bare_token" == "0" ]]; then
+  pass "DOPPLER_TOKEN_MAP: \${{ secrets.DOPPLER_TOKEN_DRIFT_MAP }}, and no bare DOPPLER_TOKEN alongside it"
 else
-  fail "the step's DOPPLER_TOKEN is '${WF_TOKEN}' — expected the interim \${{ secrets.DOPPLER_TOKEN }} per #7234. If this is the flip BACK to DOPPLER_TOKEN_DRIFT, first re-run the enumeration probe against the real credential (mint an ephemeral service-account token, run 'doppler configs -p soleur --json', confirm 13) and update this assertion in the same change — the last time that premise went unmeasured the scan read 0 of 13"
+  fail "the step's DOPPLER_TOKEN_MAP is '${WF_TOKEN_MAP}' (bare DOPPLER_TOKEN present=${_has_bare_token}) — expected \${{ secrets.DOPPLER_TOKEN_DRIFT_MAP }} and no bare token. Setting BOTH is a hard error in the detector: they select different scan modes and there is no defensible precedence, so it refuses rather than grading a config set nobody asked for. Before wiring any different credential here, measure its reach against live Doppler first — the last two premises about this credential that went unmeasured both shipped a scan that read fewer configs than it reported"
 fi
 
-echo "C2: DOPPLER_CONFIG is absent, and the bare token appears exactly once (the one C1 pins)"
+echo "C2: DOPPLER_CONFIG is absent, no bare token reference survives, and the map is referenced exactly once"
 # Asserted over the PARSED step (comments stripped), because the step's own comment block
-# explains at length why DOPPLER_CONFIG is absent and names it four times.
+# discusses both variable names at length.
 STEP_YAML=$(step_get "id:token_drift" .) || { echo "FATAL: could not dump the token_drift step" >&2; exit 2; }
-_bare_token=$(grep -Ec 'secrets\.DOPPLER_TOKEN[[:space:]]*\}\}' <<<"$STEP_YAML")
+# OCCURRENCES, not matching LINES: `grep -Ec` counts lines and would read 1 for two
+# references sharing one. The `_MAP` suffix is what makes the bare-token count reach a
+# clean 0 — `secrets\.DOPPLER_TOKEN[[:space:]]*\}\}` cannot match
+# `secrets.DOPPLER_TOKEN_DRIFT_MAP }}` because the `_DRIFT_MAP` defeats the `\}\}` tail.
+# Reusing the old secret NAME for a map would have made this assertion unwritable.
+_bare_token=$(grep -Eo 'secrets\.DOPPLER_TOKEN[[:space:]]*\}\}' <<<"$STEP_YAML" | grep -c .) || _bare_token=0
+_map_refs=$(grep -Eo 'secrets\.DOPPLER_TOKEN_DRIFT_MAP[[:space:]]*\}\}' <<<"$STEP_YAML" | grep -c .) || _map_refs=0
 _has_cfg=0
 step_get "id:token_drift" env.DOPPLER_CONFIG >/dev/null 2>&1 && _has_cfg=1
-# DOPPLER_CONFIG must STAY absent even on the interim credential. The detector enumerates
-# and loops configs; it takes no direction from DOPPLER_CONFIG, and re-adding it would
-# restore the "this scans one named config" mental model the ladder replaced. The bare-token
-# half of this assertion is suspended while #7234 is open (C1 pins the credential instead).
-# `_bare_token` is KEPT, not dropped. It greps the WHOLE step YAML, so it catches a
-# secrets.DOPPLER_TOKEN appearing in a `with:` block or a second env key — surface C1 does
-# not see, since C1 inspects env.DOPPLER_TOKEN alone. Asserting == 1 pins "exactly the one
-# C1 pins, and no other": deleting this check would silently un-guard the extra-reference
-# case for the duration of #7234.
-if [[ "$_has_cfg" == "0" && "$_bare_token" == "1" ]]; then
-  pass "no DOPPLER_CONFIG in the step, and exactly 1 bare secrets.DOPPLER_TOKEN (the interim credential C1 pins)"
+# DOPPLER_CONFIG must STAY absent. The detector reads each config with that config's OWN
+# credential and names it explicitly on every read; a single ambient config would read as
+# "which config this scans", the wrong mental model for a fan-out — and the detector
+# unsets it anyway, so declaring it here could only mislead a reader.
+if [[ "$_has_cfg" == "0" && "$_bare_token" == "0" && "$_map_refs" == "1" ]]; then
+  pass "no DOPPLER_CONFIG, zero bare secrets.DOPPLER_TOKEN references, and exactly 1 secrets.DOPPLER_TOKEN_DRIFT_MAP"
 else
-  fail "the step declares DOPPLER_CONFIG (present=${_has_cfg}) or references the bare secrets.DOPPLER_TOKEN ${_bare_token} time(s), expected exactly 1 — the detector loops over enumerated configs, so naming one in DOPPLER_CONFIG reads as 'which config this scans', the wrong mental model for a fan-out detector; and a SECOND bare-token reference is a surface C1 does not inspect"
+  fail "the step declares DOPPLER_CONFIG (present=${_has_cfg}), references the bare secrets.DOPPLER_TOKEN ${_bare_token} time(s) (expected 0) or the credential map ${_map_refs} time(s) (expected exactly 1) — this grep sees the WHOLE step YAML, so it catches a reference in a \`with:\` block or a second env key that C1's single-field lookup cannot"
 fi
 
 echo "C3: an unset, empty or unparseable floor WRITES the outputs and THEN exits 2"
@@ -1365,6 +1661,14 @@ _rung2_floor=$(step_get "id:sweep" env.RUNG2_CONFIGS_FLOOR) || _rung2_floor=""
   || { _s4=0; echo "    the sweep step declares no integer env.RUNG2_CONFIGS_FLOOR (it is '${_rung2_floor}')"; }
 [[ "$_rung2_floor" =~ ^[0-9]+$ ]] && (( 10#$_rung2_floor >= FLOOR_MINIMUM )) \
   || { _s4=0; echo "    RUNG2_CONFIGS_FLOOR='${_rung2_floor}' is below the pinned minimum of ${FLOOR_MINIMUM}"; }
+# EQUALITY, not just `>=`. The workflow's own comment on this literal reads "KEEP IN LOCKSTEP
+# WITH `DOPPLER_CONFIGS_FLOOR` … Three literals, one number", and a one-sided `>=` pins no
+# such thing: RUNG2_CONFIGS_FLOOR could sit at 99 against a token_drift floor of 13 and every
+# assertion here would agree, reddening the scratch-config half of the twice-daily sweep
+# forever while the prose says the two numbers move together. Same one-sided-ratchet defect
+# F2b closes for DOPPLER_CONFIGS_FLOOR, in the file that documents the lockstep.
+[[ "$_rung2_floor" =~ ^[0-9]+$ ]] && [[ "$WF_FLOOR" =~ ^[0-9]+$ ]] && (( 10#$_rung2_floor == 10#$WF_FLOOR )) \
+  || { _s4=0; echo "    RUNG2_CONFIGS_FLOOR='${_rung2_floor}' != DOPPLER_CONFIGS_FLOOR='${WF_FLOOR}' — the workflow's own comment calls these one number kept in lockstep"; }
 # The comparison must READ the declared floor. A literal left in place beside a declared-and-
 # unused env var is the decorative-declaration shape H2 exists to catch on the sibling step.
 grep -qF 'RUNG2_CONFIGS_FLOOR' <<<"$SWEEP_RUN" \
@@ -1389,12 +1693,14 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # deletion of exactly the assertions under review. Raise it when adding a case; that edit
 # is the point, because it is what makes a REMOVAL visible in the diff.
 #
-# 57 is the REALIZED `PASS + FAIL` after the #7159 review batch, and the number in this
-# comment and the number in the guard below MUST be the same number. They disagreed once
+# Raised 57 -> 60 with #7234's F5 (the for_each list IS the inventory) and C-a
+# (`config = each.key`, never a literal), then 60 -> 61 with F4b (the inventory's name set
+# never shrinks). 61 is the REALIZED `PASS + FAIL`, and the number
+# in this comment and the number in the guard below MUST be the same number. They disagreed once
 # (comment 46, guard 48, run 48/48), which is a ratchet whose own prose says the notch is
 # lower than it is — a reader trusting the comment would have "raised" it downward.
-if [[ "$((PASS + FAIL))" -lt 57 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 57." >&2
+if [[ "$((PASS + FAIL))" -lt 61 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 61." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

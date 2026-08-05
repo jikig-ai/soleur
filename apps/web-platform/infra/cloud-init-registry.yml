@@ -72,8 +72,11 @@ write_files:
   # retention.delay 24h->2h so a filling store is reclaimed within ~1h, not once per 24h. gcDelay
   # stays 1h (the dangling-blob SAFETY window that protects a blob just uploaded but not yet
   # manifest-referenced during an in-flight push — shortening it risks reclaiming an in-progress
-  # layer). NO on-boot gc trigger is issued: zot v2.1.2 exposes no sanctioned on-demand gc HTTP
-  # endpoint (hr-verify-repo-capability-claim — no fabricated admin call), so the tightened
+  # layer). NO on-boot gc trigger is issued: zot v2.1.20 exposes no sanctioned on-demand gc HTTP
+  # endpoint — MEASURED 2026-08-05 (#7282) by probing the pinned image locally: /v2/_zot/gc,
+  # /v2/_catalog/gc, /_zot/gc and /v2/_zot/ext/gc all answer 404, and the release's BinaryType
+  # excludes mgmt/scrub/search entirely (hr-verify-repo-capability-claim — no fabricated admin
+  # call). Re-measure on every bump, never re-word. So the tightened
   # gcInterval is the reclamation lever; the first scheduled pass runs within ~1h of boot.
   #
   # http.compat ["docker2s2"] (#6122): zot is OCI-native and REJECTS Docker manifest
@@ -179,11 +182,77 @@ write_files:
       # default the WHOLE capture to sentinels. Adapted from container-restart-monitor.sh:118-119
       # (adds .State.Status). Loop DETECTION keys on zot_restarts delta (reliable); the exit-reason
       # fields are for CAUSE attribution (often stale when a 4/min loop is sampled mid-run).
-      INSPECT=$(docker inspect -f '{{.Id}} {{.RestartCount}} {{.State.Status}} {{.State.OOMKilled}} {{.State.ExitCode}}' zot 2>/dev/null)
+      # StartedAt joins THIS call rather than getting its own (#7247). A second `docker inspect`
+      # would break the one-inspect invariant above in a way that defeats the field's purpose: the
+      # two calls can straddle a restart and pair an exit_code from one run with an uptime from
+      # the next, and if the first succeeds while the second misses you get
+      # `exit_code=0 state_status=running zot_uptime_s=-1` — ambiguous again, which is the exact
+      # condition zot_uptime_s exists to remove.
+      # (2b1) #7282 — `.Config.Image` joins THIS call for the same one-inspect reason as
+      # StartedAt above. It is the ONLY off-host way to answer "which zot binary is production
+      # actually running", and this host has no SSH ingress at all (the tunnel's ssh. route
+      # reaches web-1, not the registry — #7278), so without it "did the bump land?" is
+      # unanswerable by any means available to this project. That matters most in the EXPECTED
+      # steady state: the pin merges but stays staged (zot-registry.tf is an
+      # OPERATOR_APPLIED_EXCLUSION), so the repo pins a newer zot v2.1.20 while the live host still
+      # runs its older one, and that divergence is the norm until
+      # the host-replace path unblocks, and today that divergence is invisible.
+      #
+      # `.Config.Image`, NOT `.RepoDigests`: RepoDigests is a field of the IMAGE object, so
+      # reading it would require a SECOND inspect against a different object — precisely what
+      # the one-inspect invariant above forbids. `.Config.Image` is on the CONTAINER and carries
+      # the reference the container was CREATED with, which since we run by digest IS the pin.
+      # It also still resolves for an exited/crash-looping container, which is when it is needed.
+      INSPECT=$(docker inspect -f '{{.Id}} {{.RestartCount}} {{.State.Status}} {{.State.OOMKilled}} {{.State.ExitCode}} {{.State.StartedAt}} {{.Config.Image}}' zot 2>/dev/null)
       if [ -n "$INSPECT" ]; then
-        read -r ID ZOT_RESTARTS STATE_STATUS OOM_KILLED EXIT_CODE <<<"$INSPECT"
+        read -r ID ZOT_RESTARTS STATE_STATUS OOM_KILLED EXIT_CODE STARTED_AT ZOT_IMAGE_REF <<<"$INSPECT"
+        # Emit the leading 12 hex of the digest, not the ~90-char reference: unambiguous
+        # against a known pin set and keeps the line bounded. `unknown` is the DEFAULT here,
+        # never a fallback — same discipline as the htpasswd block below: "cannot tell" must
+        # never be conflated with a value. A container created by TAG only (no @sha256) has no
+        # digest to report and correctly reads `unknown` rather than a fabricated one.
+        # [0-9a-f]{12}, NOT twelve dots. `.` matches `"` and `\`, and this value is
+        # interpolated into --data-raw "{\"message\":\"$LINE\"}" -- an unescaped byte makes
+        # Better Stack reject the WHOLE payload, taking the entire heartbeat dark. The
+        # ZOT_LAST_ERR block below sanitizes for exactly that reason. A character class also
+        # makes the `unknown`-is-a-default property true BY CONSTRUCTION rather than by
+        # upstream convention: junk now falls to `unknown` instead of becoming a
+        # plausible-looking 12-char "digest".
+        ZOT_IMAGE_DIGEST=$(printf '%s' "$${ZOT_IMAGE_REF:-}" | sed -n 's/.*@sha256:\([0-9a-f]\{12\}\).*/\1/p')
+        ZOT_IMAGE_DIGEST=$${ZOT_IMAGE_DIGEST:-unknown}
       else
-        ID=; ZOT_RESTARTS=-1; STATE_STATUS=unknown; OOM_KILLED=unknown; EXIT_CODE=-1
+        ID=; ZOT_RESTARTS=-1; STATE_STATUS=unknown; OOM_KILLED=unknown; EXIT_CODE=-1; STARTED_AT=
+        # Rides the SAME sentinel arm as every sibling field, so a dead container reports
+        # `unknown` by the same path rather than through an invented second fallback. This arm
+        # also covers "docker is down" and "the container was never created (image pull
+        # failed)" — all three are honestly "cannot tell", not "no digest".
+        ZOT_IMAGE_DIGEST=unknown
+      fi
+      # (2b2) #7247 — the exit_code STALENESS discriminator. `.State.ExitCode` is 0 for ANY RUNNING
+      # container; it only carries a real value while the container is stopped. A 5-minute probe
+      # against a ~14-second restart cycle therefore reads `exit_code=0 state_status=running`
+      # forever, which reads as "clean exit" and is in fact "we sampled mid-run". That is not a
+      # hypothetical misreading: it is the one this issue's own triage had to back out of.
+      # The comment at (2b) already warns these fields are "often stale when a 4/min loop is
+      # sampled mid-run" — but nothing EMITTED let a reader tell stale from real.
+      #
+      # zot_uptime_s closes that: it is the age of the CURRENT run. A value that is always a few
+      # seconds is positive proof the sample is mid-loop and that exit_code carries no information;
+      # a large value means the container is genuinely up and exit_code is trustworthy. One field
+      # turns an ambiguous 0 into a self-describing one, with no host access.
+      # STARTED_AT comes from the single inspect above. CLAMP is load-bearing: a never-started
+      # container reports StartedAt=0001-01-01T00:00:00Z, which GNU date parses to -62135596800 —
+      # yielding zot_uptime_s≈6.4e10, i.e. "up for 2000 years". That is not the -1 sentinel, it
+      # survives the consumers' non-sentinel filters, and it reads as "exit_code is trustworthy":
+      # the precise inversion of this field's purpose. Negative or absurd => -1 (unknown).
+      ZOT_UPTIME_S=-1
+      if [ -n "$STARTED_AT" ]; then
+        _started_epoch=$(date -u -d "$STARTED_AT" +%s 2>/dev/null || echo "")
+        if [ -n "$_started_epoch" ]; then
+          ZOT_UPTIME_S=$(( $(date -u +%s) - _started_epoch ))
+          # Clamp: negative (clock skew) or > 10 years (the 0001-01-01 sentinel) is not a runtime.
+          if [ "$ZOT_UPTIME_S" -lt 0 ] || [ "$ZOT_UPTIME_S" -gt 315360000 ]; then ZOT_UPTIME_S=-1; fi
+        fi
       fi
       # (2c) Container anonymous RSS — the OOM-CONFIRMATION signal (excludes reclaimable page cache,
       # unlike host used-memory). cgroup v2 memory.stat `anon` in bytes → /1048576. Path mirrors
@@ -239,7 +308,51 @@ write_files:
       # mid-sequence-sliced UTF-8 — both invalid unescaped in a JSON string, RFC 8259 §7, so an
       # unstripped tab-indented Go crash trace would make Better Stack reject the WHOLE payload in
       # the exact crash case this field targets); finally drop "/\ so it can't corrupt the JSON.
-      ZOT_LAST_ERR=$(docker logs --tail 3 zot 2>&1 | tail -c 300 | tr '\n\r\t' ' ' | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\'); [ -n "$ZOT_LAST_ERR" ] || ZOT_LAST_ERR=none
+      # (#7247) `--tail 3` was STRUCTURALLY incapable of carrying the crash line this field exists
+      # to carry. zot logs EVERY request at info (:128) and this host's own liveness probe GETs
+      # /v2/ every 5 min, so the last 3 lines are near-always routine HTTP traffic. Across a 21-hour
+      # 4.4-restarts/min loop (2026-08-03 17:08Z onward) the field carried a cause exactly zero
+      # times — every sample was an HTTP 200/401 session line or a gc/dedupe info line. The comment
+      # above already called this "the exact crash case this field targets"; the window was the bug.
+      #
+      # Scan WIDE and FILTER for cause-bearing lines instead. Falls back to the original tail-3 when
+      # nothing matches, so this is never emptier than what it replaces. `--restart unless-stopped`
+      # restarts the SAME container (RestartCount 5032 on one container id), so `docker logs`
+      # accumulates ACROSS restarts and a prior run's fatal line is still in the buffer.
+      #
+      # grep -a: the buffer may contain binary from a truncated write; without it GNU grep treats
+      # the stream as binary and prints nothing, which would silently re-create the empty-field bug.
+      # RANKED, not merely widened. A flat grep + `tail -n 3` keeps the NEWEST matches, and the
+      # broadest terms (`cannot `/`failed to `) are exactly what routine zot warn lines hit — so
+      # the current run's chatter evicts the previous run's `panic:`. Try tiers in severity order
+      # and stop at the first that hits.
+      #
+      # `--since 12m` (not `--tail N`): the container runs `--log-driver journald`, so retention is
+      # journald's and a LINE bound is the wrong bound against a variable-chattiness startup scan.
+      # A time bound spans the 5-min cadence regardless of how many restarts occurred.
+      _zlogs() { docker logs --since 12m zot 2>&1; }
+      ZOT_ERR_SRC=none
+      ZOT_ERR_RAW=$(_zlogs | grep -aE 'panic:|fatal error|\[signal SIG|runtime error' | head -n 4)
+      [ -n "$ZOT_ERR_RAW" ] && ZOT_ERR_SRC=panic
+      if [ -z "$ZOT_ERR_RAW" ]; then
+        ZOT_ERR_RAW=$(_zlogs | grep -aE '"level":"(error|fatal)"|level:(error|fatal)|level=(error|fatal)' | head -n 3)
+        [ -n "$ZOT_ERR_RAW" ] && ZOT_ERR_SRC=error
+      fi
+      if [ -z "$ZOT_ERR_RAW" ]; then
+        ZOT_ERR_RAW=$(_zlogs | grep -aiE 'cannot |failed to |unable to |could not |no such file|permission denied' | head -n 3)
+        [ -n "$ZOT_ERR_RAW" ] && ZOT_ERR_SRC=warn
+      fi
+      # Fallback must be DISTINGUISHABLE from a match. Emitting routine tail-3 under the same field
+      # name is how a downstream alarm ends up printing "gc successfully completed" as the cause of
+      # a crash loop — naming a cause nobody measured (ADR-166), which is the defect this whole
+      # change exists to remove. zot_last_err_src says which tier produced the text.
+      if [ -z "$ZOT_ERR_RAW" ]; then ZOT_ERR_RAW=$(docker logs --tail 3 zot 2>&1); ZOT_ERR_SRC=fallback; fi
+      # head -c, NOT tail -c. A Go panic puts `panic: <msg>` on the FIRST line and the frame
+      # offsets after it; tail -c keeps the offsets and discards the only part that names the
+      # cause. Measured: the 2026-08-04 15:00:02Z sample reached Better Stack carrying only
+      # `...scheduler.go:143 +0x265 created by ...poolWorker in goroutine 32` — the panic header
+      # had already been truncated away by exactly this bug.
+      ZOT_LAST_ERR=$(printf '%s' "$ZOT_ERR_RAW" | tr '\n\r\t' ' ' | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\' | head -c 300); [ -n "$ZOT_LAST_ERR" ] || { ZOT_LAST_ERR=none; ZOT_ERR_SRC=none; }
       # (2f) Boot discriminator — the immutable redeploy reuses the terraform hostname, so boot_id is
       # what cleanly separates old-host from new-host events for the automated decision rule.
       BOOT_ID=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null); [ -n "$BOOT_ID" ] || BOOT_ID=unknown
@@ -291,7 +404,7 @@ write_files:
       fi
       # zot_last_err is free-text (may contain spaces) → keep it the LAST field so it never corrupts
       # key=value parsing of the fields before it.
-      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
+      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S zot_last_err_src=$ZOT_ERR_SRC oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID zot_image_digest=$ZOT_IMAGE_DIGEST htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
       if [ -n "$TOKEN" ]; then
         # Fail-loud-but-not-wedge: retry ONCE, then breadcrumb to journald. ping_rc is carried in
@@ -496,7 +609,8 @@ write_files:
   # every later line, and the original numeric citations rotted immediately.)
   #
   # This is the ON-HOST layer deliberately: the registry resources are an
-  # OPERATOR_APPLIED_EXCLUSION (zot-registry.tf:16-22), applied by the operator's full
+  # OPERATOR_APPLIED_EXCLUSION (zot-registry.tf, the "APPLY-PATH (CTO ruling 2026-07-06,
+  # apply-path-cto-ruling.md)" header block), applied by the operator's full
   # untargeted apply, so a reboot bolted into the dispatch job would cover only the maintenance
   # path and leave the PRIMARY provisioning path uncovered.
   - path: /usr/local/bin/soleur-private-nic-guard.sh

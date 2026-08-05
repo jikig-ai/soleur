@@ -1,0 +1,9 @@
+1  # ADR-166: operator-facing CI messages naming a cause the job did not measure.
+   # RATCHETS DOWN ONLY. Do not raise this to make a build pass -- a regression above it
+   # means a new message asserts an unmeasured cause, which is the defect (#7242) that
+   # blocked three production releases. Fix the message instead.
+   #
+   # The 1 is scripts/followthroughs/zot-soak-6122.sh, a PRE-EXISTING "Most likely cause"
+   # in a soak probe, found the moment the scan was widened to scripts/. It is carried as a
+   # ratcheting baseline rather than fixed here because it is an unrelated subsystem; that
+   # is what a highwater is for. Everything this PR touches is at 0.

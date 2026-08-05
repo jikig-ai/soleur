@@ -9,7 +9,8 @@
 #                     stale immediately, per plan TR2 + SpecFlow P1.5).
 #                     Always exits 0 — the gdpr-gate hook subshell-execs this
 #                     and depends on the always-exit-0 advisory contract.
-#   cron-run-stale    Integer days since the scheduled-content-vendor-drift
+#   cron-run-stale    Integer days since the content-vendor-drift check (see the
+#                     warning at cmd_cron_run_stale: currently always 999)
 #                     workflow last succeeded (via `gh run list`). 999 on any
 #                     failure mode (no GH_TOKEN, no gh CLI, network blocked,
 #                     empty result, malformed timestamp, timeout). The
@@ -137,16 +138,28 @@ _emit_files() {
 }
 
 cmd_cron_run_stale() {
-  # Days since the scheduled-content-vendor-drift workflow last succeeded,
+  # Days since the content-vendor-drift check last succeeded (see the warning below:
+  # the job moved to Inngest and this GitHub-Actions query no longer resolves),
   # via `gh run list ... --json updatedAt`. Always exits 0 — any failure
   # mode (no token, no gh, network blocked, empty result, malformed
   # timestamp, non-zero clock skew) resolves to 999 so the caller's
   # subshell-exec contract holds. Wrap network call with `timeout 5s` to
   # bound the runtime-banner wall clock.
   #
-  # Workflow filename is hard-coded; renaming the workflow silently breaks
-  # this binding (falls through to 999 → operator-attested-mode banner).
-  # See SKILL.md "Sharp edges" for the workflow-rename mitigation.
+  # ⚠️ THIS PROBE CURRENTLY RETURNS 999 ON EVERY CALL, AND HAS SINCE THE JOB MOVED.
+  # `scheduled-content-vendor-drift.yml` NO LONGER EXISTS — the content-vendor-drift
+  # check now runs as an Inngest cron
+  # (`apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts`), which
+  # has no GitHub Actions run for `gh run list` to find. So the query below matches
+  # nothing, falls through to 999, and the caller shows the operator-attested-mode
+  # banner unconditionally.
+  #
+  # That is the FAIL-SAFE direction — 999 forces attestation rather than falsely
+  # asserting freshness — which is why this went unnoticed. It is NOT fixed here:
+  # repointing at another workflow filename cannot work when the job is not a workflow,
+  # and an Inngest-aware liveness source is a different change in a different subsystem.
+  # Tracked separately. The reference is corrected rather than left silently false so
+  # the next reader is not hunting a workflow that does not exist.
   local token raw ts cron_epoch today_epoch days
   token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
   [[ -n "$token" ]] || { echo 999; return 0; }

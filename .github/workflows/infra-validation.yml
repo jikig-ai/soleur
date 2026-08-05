@@ -45,6 +45,13 @@ on:
       - ".github/workflows/git-data-rung2-rehearsal.yml"
       - ".github/workflows/apply-web-platform-infra.yml"
       - ".github/workflows/scheduled-terraform-drift.yml"
+      # (#7227) The evidence-capture script, for the same reason as the three workflows above:
+      # git-data-rung2-rehearsal.test.sh arm 10 now compares its `--host-name` constraint
+      # against the rehearsal prefix those workflows pin, and test-git-data-rung2-evidence-
+      # capture.sh asserts its refusal behaviour. Without this path a PR that edits ONLY the
+      # script -- including one that relaxes the constraint keeping this reader off the
+      # production host -- skips both guards that watch it.
+      - "scripts/followthroughs/git-data-rung2-evidence-capture.sh"
       # (#7203 review) inngest-bootstrap-mirror-only.test.sh asserts ~30 properties OF
       # build-inngest-bootstrap-image.yml -- the mirror_only gating, the belt posture on both
       # trigger paths, the bridge-outcome branch, and the behavioural degraded() contract.
@@ -481,6 +488,22 @@ jobs:
 
       - name: Run cosign trusted-root staleness + integrity gate (#6005)
         run: bash apps/web-platform/infra/cosign-trusted-root-staleness.test.sh
+
+      # Per-PR COHERENCE half of the zot pin cadence (#7282). This workflow carries a
+      # `paths:` filter, which is exactly right here (every PR touching the pin or its
+      # sidecar is under apps/*/infra/**) and insufficient for the AGE half — a repo that
+      # goes 90 days without an infra PR would never redden. The age backstop is therefore
+      # a second, PR-cadence-independent trigger on rule-audit.yml's cron.
+      - name: Run zot image pin staleness + coherence gate (#7282)
+        run: bash apps/web-platform/infra/zot-image-staleness.test.sh
+
+      # The battery that proves the gate above can actually go RED. Registered, not orphaned:
+      # under its original `*.mutation.sh` name no gate could see it, no runner enumerated it,
+      # and no orphan reporter would have named it -- while every sibling bash mutation battery
+      # in this repo is `*-mutation.test.sh` AND registered. An unrun battery is a claim.
+      - name: Run zot image pin mutation battery (#7282)
+        run: bash apps/web-platform/infra/zot-image-staleness-mutation.test.sh
+
 
       - name: Run inngest config-refresh bundle packager guard (#6780 ADR-135 HARD-2 + fail-closed)
         run: bash apps/web-platform/infra/inngest-config-bundle-pack.test.sh
@@ -1145,6 +1168,38 @@ jobs:
       # terraform, cloud-init, docker, network, or root, so this job's environment already suffices.
       - name: Run credential-persist-to-home guard (#6633 — ProtectHome=read-only cred-write class)
         run: bash apps/web-platform/infra/credential-persist-home-guard.test.sh
+
+  # Registry user_data byte budget (#7282). Its OWN job, deliberately, for two reasons.
+  #
+  # (a) It must not live in `deploy-script-tests`: that job's registration gate refuses any
+  #     `continue-on-error:`/`if:` key, because there registration must imply execution. It
+  #     is right to refuse, and routing around it by deleting the check would be the exact
+  #     move this PR exists to argue against.
+  # (b) It cannot be a hard gate YET. The check is RED on `main` today (-2,032 B) and on this
+  #     branch (~-3.6 kB), all of it rationale prose. #7280's `local.registry_rationale_strip`
+  #     strips comments BEFORE render and brings it to ~9.4 kB. Hard-failing now would block
+  #     every infra PR on a pre-existing breach this PR did not create.
+  #
+  # So it RUNS and reports as its own visible job status rather than hiding inside a green
+  # one. The git-data host has had this gate since #6982; the registry host -- equally
+  # ForceNew, with a strictly worse failure mode (hcloud rejects the CREATE *after* the
+  # DESTROY succeeded, stranding the SOLE pull path) -- had none, which is precisely why a
+  # 2,032 B breach sat on main unnoticed. #7287 carries "flip this job to required" as a
+  # checklist item gated on #7280 merging.
+  registry-userdata-budget:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    needs: detect-changes
+    if: needs.detect-changes.outputs.directories != '[]'
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Measure rendered registry user_data against Hetzner's 32,768 B cap
+        run: bash apps/web-platform/infra/registry-userdata-budget.sh
 
   check-secrets:
     runs-on: ubuntu-24.04

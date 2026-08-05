@@ -19,6 +19,11 @@ MANAGED_MINUS_1=$((MANAGED_N - 1))
 
 PASS=0
 FAIL=0
+# Assertions a LOUD SKIP arm declared it did not run. Read only by the assertion-count floor at
+# the bottom of this file, which compares PASS + SKIPPED against the floor so that a declared
+# environmental skip and a silently-vanished guard produce DIFFERENT verdicts. Every arm that
+# prints "SKIP (loud)" must add the exact number of assertions its taken branch would have made.
+SKIPPED_ASSERTIONS=0
 
 # Single owning trap for every tempfile this suite allocates outside setup()/teardown()
 # (ADR-129 rule (c)). setup() manages TMPDIR_ROOT; arms that run without it register here.
@@ -1112,6 +1117,51 @@ test_reconcile_unchanged_content_preserves_mtime() {
 # Direction matters. This walks handler -> grant: every non-READ systemctl/systemd-run verb the
 # handler invokes must be sudo-prefixed AND granted in BOTH sudoers sources.
 #
+# WHAT `GRANTED` MEANS, and why the first version of this lint got it wrong.
+#
+# A `Cmnd_Alias` is an inert macro. On its own it grants NOTHING — it needs a User_Spec
+# (`deploy ALL=(root) NOPASSWD: <NAME>`) to become a permission. And sudo matches the FULL
+# RESOLVED ARGV, not a verb: `/usr/bin/systemctl stop webhook.service` is a different command
+# from `/usr/bin/systemctl stop inngest-server.service`, and a request for the former against a
+# grant of the latter is DENIED.
+#
+# The original lint did a substring `grep -qF "systemctl $verb"` across all Cmnd_Alias lines,
+# which discards the unit AND ignores the User_Spec. Measured consequences — every one of these
+# returned rc=0 (no violation) from a handler that sudo would refuse, producing the exact #7220
+# shape (denial -> set -e abort AFTER delivery) the lint was named for:
+#
+#   $SYSTEMCTL_PRIV stop webhook.service          matched INNGEST_STOP's `systemctl stop`
+#   $SYSTEMCTL_PRIV restart nginx.service         matched INNGEST_RESTART's `systemctl restart`
+#   $SYSTEMCTL_PRIV disable webhook.service       matched INNGEST_QUIESCE's `systemctl disable`
+#   $SYSTEMCTL_PRIV try-restart inngest-heartbeat.service
+#                                                 matched DROPIN_TRY_RESTART's `systemctl try-restart`
+#   sudo /usr/bin/systemd-run <ANY argv>          resolved to the bare word `systemd-run`,
+#                                                 dropping the argv entirely
+#
+# So this now resolves each invocation to its full argv and requires EXACT membership in the
+# granted set of BOTH provisioning paths. `_granted_argv` builds that set the way sudo does.
+#
+# Emits one resolved argv per line: comma-split, whitespace-trimmed, User_Spec-gated.
+_granted_argv() {  # <sudoers-shaped-file>
+  local file="$1" specs names n
+  # The User_Spec RHS is itself comma-separated and may name several aliases at once.
+  specs=$(grep -E '^[[:space:]]*deploy[[:space:]]+ALL=\(root\)[[:space:]]+NOPASSWD:' "$file" \
+            | sed 's/^.*NOPASSWD:[[:space:]]*//') || true
+  names=$(tr ',' '\n' <<<"$specs" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$') || true
+  while IFS= read -r n; do
+    [[ -n "$n" ]] || continue
+    if [[ "$n" =~ ^[A-Z][A-Z0-9_]*$ ]]; then
+      # An alias reference. Expand it — and note that an alias named by a User_Spec but never
+      # DEFINED expands to nothing, so it grants nothing, which is also sudo's behaviour.
+      sed -n "s/^[[:space:]]*Cmnd_Alias[[:space:]]\{1,\}${n}[[:space:]]*=[[:space:]]*//p" "$file" \
+        | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' || true
+    else
+      # A literal command sitting directly in the User_Spec (cloud-init:70 does this).
+      printf '%s\n' "$n"
+    fi
+  done <<<"$names"
+}
+
 # Emits violations on stdout, returns 1 if any. Parameterised by handler path so the SAME code
 # can be run against the pre-fix handler as the proof it would have caught the incident.
 _lint_privileged_verbs() {
@@ -1119,69 +1169,207 @@ _lint_privileged_verbs() {
   local cloud_init="${SCRIPT_DIR}/cloud-init.yml"
   local code n_found=0 violations=0
 
-  # Comments MUST be stripped. This handler's prose names `systemctl daemon-reload` seven times
-  # while the code contains it zero times; a lint that reads comments would both false-flag the
-  # documentation and (worse) report a verb as "found" that is never invoked.
-  code=$(sed 's/#.*//' "$handler")
+  # --- normalise the handler's CODE -------------------------------------------------------
+  #
+  # (1) Join backslash line-continuations first. A privileged call split across two physical
+  #     lines is invisible to a line-oriented scan, and the handler already uses continuations
+  #     (5 of them) so this is not hypothetical.
+  #
+  # (2) Strip comments ANCHORED. The previous `sed 's/#.*//'` was unanchored, which cuts at the
+  #     `#` of `$#` and `${var#prefix}` — so a line like
+  #         [ "$#" -eq 0 ] && $SYSTEMCTL_PRIV stop foo.service
+  #     lost its entire privileged call before the scan ever saw it, and the lint reported
+  #     rc=0. A comment `#` is one at start-of-line or preceded by whitespace; neither `$#`
+  #     nor `${x#y}` is. Stripping MUST still happen: this handler's prose names
+  #     `systemctl daemon-reload` seven times while its code contains it zero times, so a lint
+  #     that read comments would both false-flag the documentation and report a verb as "found"
+  #     that is never invoked.
+  code=$(sed -e ':a' -e '/\\$/{N;s/\\\n//;ba' -e '}' "$handler" | sed -E 's/(^|[[:space:]])#.*$/\1/')
+
+  # (3) The anchored strip still over-cuts a `#` that lives inside a quoted string preceded by a
+  #     space (`echo "see # note"; $SYSTEMCTL_PRIV stop foo`). That is a fail-OPEN residual, so
+  #     it is detected rather than tolerated: a stripped line whose remainder has unbalanced
+  #     quotes was cut mid-string, and the lint refuses to certify it.
+  local raw_l stripped_l
+  while IFS= read -r raw_l; do
+    [[ "$raw_l" == *"#"* ]] || continue
+    stripped_l=$(sed -E 's/(^|[[:space:]])#.*$/\1/' <<<"$raw_l")
+    [[ "$stripped_l" != "$raw_l" ]] || continue
+    local dq sq
+    dq=$(tr -cd '"' <<<"$stripped_l" | wc -c)
+    sq=$(tr -cd "'" <<<"$stripped_l" | wc -c)
+    if (( dq % 2 == 1 || sq % 2 == 1 )); then
+      echo "VIOLATION: a line of $(basename "$handler") cannot be statically parsed — the comment strip cut inside a quoted string, so any privileged call after it would be invisible: $(printf '%s' "$raw_l" | sed 's/^[[:space:]]*//' | cut -c1-80)"
+      violations=$((violations + 1))
+    fi
+  done < <(sed -e ':a' -e '/\\$/{N;s/\\\n//;ba' -e '}' "$handler")
+
+  # --- the two sanctioned seams, READ FROM THE HANDLER --------------------------------------
+  #
+  # The resolution below turns `$SYSTEMCTL_PRIV <verb> <args>` into the argv sudo will see, so it
+  # must not HARDCODE what that seam expands to — a lint that assumes the seam it is checking is
+  # asserting nothing about it. Both defaults are read out of the handler and validated.
+  local priv_default show_default priv_resolved
+  # The single quotes hold a sed SCRIPT; the ${...} inside is literal text matched in the
+  # handler's source, not an expansion.
+  # shellcheck disable=SC2016
+  priv_default=$(sed -n 's/^SYSTEMCTL_PRIV="\${INFRA_CONFIG_SYSTEMCTL:-\(.*\)}"$/\1/p' "$handler")
+  # shellcheck disable=SC2016
+  show_default=$(sed -n 's/^SYSTEMCTL_SHOW="\${INFRA_CONFIG_SYSTEMCTL_SHOW:-\(.*\)}"$/\1/p' "$handler")
+  if [[ "$priv_default" != "sudo "* ]]; then
+    echo "VIOLATION: the privileged seam SYSTEMCTL_PRIV defaults to '${priv_default:-<unparseable>}', which is not sudo-prefixed — every verb it carries would run unprivileged"
+    violations=$((violations + 1))
+  fi
+  if [[ -n "$show_default" && "$show_default" == "sudo "* ]]; then
+    echo "VIOLATION: the READ seam SYSTEMCTL_SHOW is sudo-prefixed ('$show_default') — the grants pin write verbs only, so every read would be DENIED"
+    violations=$((violations + 1))
+  fi
+  # Sudoers grants the command sudo will RUN, not the sudo call itself.
+  priv_resolved="${priv_default#sudo }"
+
+  # --- the granted sets ---------------------------------------------------------------------
+  local granted_s granted_c
+  granted_s=$(_granted_argv "$sudoers")
+  granted_c=$(_granted_argv "$cloud_init")
+  if [[ -z "$granted_s" || -z "$granted_c" ]]; then
+    echo "VIOLATION: derived an EMPTY granted set (sudoers=$(grep -c . <<<"$granted_s"), cloud-init=$(grep -c . <<<"$granted_c")) — the User_Spec/Cmnd_Alias parse is broken, so every membership test below would fail open"
+    violations=$((violations + 1))
+  fi
 
   # READ verbs need no root, and routing them through sudo would be DENIED (the grants pin
   # specific write verbs), turning every read into a failure. Explicit allowlist, not a
   # heuristic -- an unknown verb must fall through to the privileged branch, never be assumed
   # safe.
   local read_verbs=" show is-active is-enabled cat status list-units "
+  # The ONE verb whose unit argument is legitimately a variable, because RESTART_MAP drives it
+  # and `test_sudoers_caller_argv_lockstep` pins that map against DROPIN_TRY_RESTART in both
+  # directions. Any OTHER verb carrying a variable argument has nothing pinning its unit, so it
+  # is a violation here rather than a silent delegation to a lockstep that does not cover it.
+  local map_delegated_verbs=" try-restart "
 
-  local line verb prefix resolved
+  local line body verb argv resolved
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
+    # The scan reads `grep -n` output, so each record is `<lineno>:<code>`. Strip the prefix:
+    # load-bearing, because every `^`-anchored pattern below must match against the CODE, not
+    # against the digits. The NUMBER is deliberately discarded rather than reported — it indexes
+    # the continuation-joined, comment-stripped text, not the source file, so quoting it would
+    # send the reader to the wrong line. Violations cite the offending TEXT instead
+    # (cq-cite-content-anchor-not-line-number).
+    body="${line#*:}"
+
+    # VARIABLE INDIRECTION. `SC=/usr/bin/systemctl; sudo $SC stop x` cannot be resolved
+    # statically, and the previous lint simply did not match it — so it was a silent bypass.
+    # An assignment of a systemctl/systemd-run path to anything other than the two sanctioned
+    # seams is therefore itself the violation: fail closed on what cannot be read.
+    #
+    # Deliberately NOT counted into n_found: an assignment is not an invocation, and letting the
+    # two sanctioned seam definitions inflate that tally would raise the vacuity floor's input
+    # without adding a single checked call site.
+    if [[ "$body" =~ ^[[:space:]]*(local|export|declare|readonly)?[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=[^=]*(systemctl|systemd-run) ]]; then
+      local assigned="${BASH_REMATCH[2]}"
+      if [[ "$assigned" != "SYSTEMCTL_PRIV" && "$assigned" != "SYSTEMCTL_SHOW" ]]; then
+        echo "VIOLATION: a systemctl/systemd-run path is assigned to '$assigned', which makes every use of it unresolvable by this lint (use the SYSTEMCTL_PRIV / SYSTEMCTL_SHOW seams): $(printf '%s' "$body" | sed 's/^[[:space:]]*//' | cut -c1-80)"
+        violations=$((violations + 1))
+      fi
+      continue
+    fi
+
     n_found=$((n_found + 1))
-    # Resolve the invocation to (prefix, verb).
-    if [[ "$line" =~ \$SYSTEMCTL_SHOW[[:space:]]+([a-z-]+) ]]; then
-      prefix="read-seam"; verb="${BASH_REMATCH[1]}"
-    elif [[ "$line" =~ \$SYSTEMCTL_PRIV[[:space:]]+([a-z-]+) ]]; then
-      prefix="sudo"; verb="${BASH_REMATCH[1]}"
-    elif [[ "$line" =~ sudo[[:space:]]+/usr/bin/systemd-run ]]; then
-      prefix="sudo"; verb="systemd-run"
-    elif [[ "$line" =~ (^|[^-_[:alnum:]])(/usr/bin/)?systemctl[[:space:]]+([a-z-]+) ]]; then
+
+    # Resolve the invocation to its FULL argv as sudo will see it.
+    if [[ "$body" =~ \$SYSTEMCTL_SHOW[[:space:]]+([a-z][a-z-]*)(.*)$ ]]; then
+      verb="${BASH_REMATCH[1]}"
+      # A read-seam call is exempt only if the verb really is a read verb.
+      if [[ "$read_verbs" == *" $verb "* ]]; then continue; fi
+      echo "VIOLATION: the READ seam SYSTEMCTL_SHOW carries the non-read verb '$verb'; it has no sudo prefix, so this runs unprivileged and silently does nothing: $(printf '%s' "$body" | sed 's/^[[:space:]]*//' | cut -c1-80)"
+      violations=$((violations + 1))
+      continue
+    elif [[ "$body" =~ \$SYSTEMCTL_PRIV[[:space:]]+([a-z][a-z-]*)(.*)$ ]]; then
+      verb="${BASH_REMATCH[1]}"
+      argv=$(_strip_shell_tail "${BASH_REMATCH[2]}")
+      resolved="$priv_resolved $verb${argv:+ $argv}"
+    elif [[ "$body" =~ (^|[^-_[:alnum:]])sudo[[:space:]]+((/[A-Za-z0-9_./-]*)?systemd-run[[:space:]]+.*)$ ]]; then
+      # EVERY systemd-run line, with its argv intact — not a single hardcoded one, and not the
+      # bare word. The inner `/usr/bin/systemctl restart webhook` is PART of the granted argv.
+      verb="systemd-run"
+      resolved=$(_strip_shell_tail "${BASH_REMATCH[2]}")
+    elif [[ "$body" =~ (^|[^-_[:alnum:]])sudo[[:space:]]+((/[A-Za-z0-9_./-]*)?systemctl[[:space:]]+([a-z][a-z-]*).*)$ ]]; then
+      # A literal sudo'd systemctl (no seam). Granted-set membership still applies.
+      verb="${BASH_REMATCH[4]}"
+      [[ "$read_verbs" == *" $verb "* ]] && continue
+      resolved=$(_strip_shell_tail "${BASH_REMATCH[2]}")
+    elif [[ "$body" =~ (^|[^-_[:alnum:]$/])((/[A-Za-z0-9_./-]*)?systemctl[[:space:]]+([a-z][a-z-]*)) ]]; then
       # A LITERAL, UN-SEAMED, UN-SUDOED systemctl call. This is the #7220 shape.
-      prefix="bare"; verb="${BASH_REMATCH[3]}"
+      verb="${BASH_REMATCH[4]}"
+      [[ "$read_verbs" == *" $verb "* ]] && continue
+      echo "VIOLATION: privileged verb '$verb' is invoked without sudo: $(printf '%s' "$body" | sed 's/^[[:space:]]*//' | cut -c1-90)"
+      violations=$((violations + 1))
+      continue
+    elif [[ "$body" =~ (^|[^-_[:alnum:]$/])((/[A-Za-z0-9_./-]*)?systemd-run) ]]; then
+      echo "VIOLATION: systemd-run is invoked without sudo: $(printf '%s' "$body" | sed 's/^[[:space:]]*//' | cut -c1-90)"
+      violations=$((violations + 1))
+      continue
     else
       continue
     fi
 
-    # READ verbs are exempt regardless of prefix.
     [[ "$read_verbs" == *" $verb "* ]] && continue
 
-    if [[ "$prefix" != "sudo" ]]; then
-      echo "VIOLATION: privileged verb '$verb' is invoked without sudo: $(printf '%s' "$line" | sed 's/^[[:space:]]*//' | cut -c1-90)"
-      violations=$((violations + 1))
+    # A variable in the resolved argv means the exact command is not knowable here.
+    if [[ "$resolved" == *'$'* ]]; then
+      if [[ "$map_delegated_verbs" != *" $verb "* ]]; then
+        echo "VIOLATION: '$resolved' carries a variable argument for verb '$verb', and nothing pins what it expands to — sudo matches exact argv, so this is a denial waiting to happen"
+        violations=$((violations + 1))
+        continue
+      fi
+      # try-restart: the unit is pinned by RESTART_MAP <-> DROPIN_TRY_RESTART in
+      # test_sudoers_caller_argv_lockstep. Here we only require that the SEAM and VERB prefix is
+      # granted at all, so a seam change still reds.
+      local prefix_pat="$priv_resolved $verb "
+      if ! grep -qF -- "$prefix_pat" <<<"$granted_s" || ! grep -qF -- "$prefix_pat" <<<"$granted_c"; then
+        echo "VIOLATION: no grant in both sources begins '$prefix_pat' — the map-driven verb '$verb' would be denied"
+        violations=$((violations + 1))
+      fi
       continue
     fi
 
-    # Granted in BOTH sources. Matched against the Cmnd_Alias lines only, so a verb named in a
-    # sudoers COMMENT cannot satisfy the check -- the same comment-vs-code trap as above,
-    # one file over.
-    local aliases_s aliases_c
-    aliases_s=$(grep -E '^Cmnd_Alias ' "$sudoers")
-    aliases_c=$(grep -E '^[[:space:]]*Cmnd_Alias ' "$cloud_init")
-    if [[ "$verb" == "systemd-run" ]]; then resolved="systemd-run"; else resolved="systemctl $verb"; fi
-    if ! grep -qF -- "$resolved" <<<"$aliases_s"; then
+    # EXACT membership, both provisioning paths. `-x` is the whole point: a substring match is
+    # what let five denials through.
+    if ! grep -qxF -- "$resolved" <<<"$granted_s"; then
       echo "VIOLATION: '$resolved' is invoked but not granted in deploy-inngest-bootstrap.sudoers"
       violations=$((violations + 1))
     fi
-    if ! grep -qF -- "$resolved" <<<"$aliases_c"; then
+    if ! grep -qxF -- "$resolved" <<<"$granted_c"; then
       echo "VIOLATION: '$resolved' is invoked but not granted in the cloud-init mirror"
       violations=$((violations + 1))
     fi
-  done < <(grep -nE '\$SYSTEMCTL_(PRIV|SHOW)|systemd-run|(^|[^-_[:alnum:]$/])(/usr/bin/)?systemctl[[:space:]]' <<<"$code")
+  done < <(grep -nE '\$SYSTEMCTL_(PRIV|SHOW)|systemd-run|(^|[^-_[:alnum:]$/])(/[A-Za-z0-9_./-]*)?systemctl[[:space:]]|^[[:space:]]*(local|export|declare|readonly)?[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=[^=]*(systemctl|systemd-run)' <<<"$code")
 
   # VACUITY GUARD, mirroring the RESTART_MAP one. A broken extraction yields zero invocations
   # and the loop above "passes" having classified nothing -- which is the exact failure mode
   # this lint exists to prevent, reproduced inside the lint itself.
-  if [[ "$n_found" -lt 2 ]]; then
-    echo "VIOLATION: derived only $n_found systemctl invocations from $(basename "$handler") — the extraction is broken, so this lint proves nothing"
+  #
+  # RATCHETED from 2 to 4. The live handler yields exactly 4 (the SHOW read, the PRIV
+  # daemon-reload, the PRIV try-restart, the sudo'd systemd-run), so a floor of 2 tolerated an
+  # extraction that had silently lost HALF the call sites — including, in principle, the very
+  # daemon-reload this lint exists to see. A floor below the known truth is not a guard.
+  if [[ "$n_found" -lt 4 ]]; then
+    echo "VIOLATION: derived only $n_found systemctl/systemd-run invocations from $(basename "$handler") — the extraction is broken (expected >= 4), so this lint proves nothing"
     violations=$((violations + 1))
   fi
   [[ "$violations" -eq 0 ]]
+}
+
+# Trim a shell tail (redirect, list operator, terminator, closing subshell) off an extracted argv
+# so what is compared is the command, not the line. Any imprecision here fails CLOSED: the
+# comparison is exact membership, so a mis-trimmed argv reports a violation rather than passing.
+_strip_shell_tail() {  # <argv-fragment>
+  local s="$1"
+  # Cut at the first unquoted shell metacharacter run that ends a simple command.
+  s=$(sed -E 's/[[:space:]]*(\||\|\||&&|;|&|>|>>|<|\)).*$//' <<<"$s")
+  # Collapse internal whitespace runs and trim: sudoers argv are single-space separated.
+  sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]]+/ /g' <<<"$s"
 }
 
 test_handler_to_grant_lint() {
@@ -1195,18 +1383,50 @@ test_handler_to_grant_lint() {
     FAIL=$((FAIL + 1))
   fi
 
+  # The granted set must be non-trivial, asserted OUTSIDE the lint too. If `_granted_argv`
+  # regressed to emitting nothing, every membership test inside the lint would pass by
+  # vacuity and the arm above would report a clean handler forever.
+  local n_granted
+  n_granted=$(_granted_argv "${SCRIPT_DIR}/deploy-inngest-bootstrap.sudoers" | grep -c .)
+  if [[ "$n_granted" -ge 10 ]]; then
+    echo "  PASS: the User_Spec-gated granted set resolved $n_granted argv"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: the granted set resolved only $n_granted argv — the sudoers parse is broken, so the lint is vacuous"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # THE USER_SPEC IS LOAD-BEARING, asserted by construction rather than by reading the file: an
+  # alias whose User_Spec line is deleted must STOP being granted. Without this, a lint that
+  # ignored User_Specs (as the first version did) would look identical to one that honours them.
+  local spec_stripped
+  spec_stripped=$(mktemp -t sudoers-nospec.XXXXXXXX); OWNED_TMPFILES+=("$spec_stripped")
+  grep -v '^deploy ALL=(root) NOPASSWD: SYSTEMCTL_DAEMON_RELOAD$' \
+    "${SCRIPT_DIR}/deploy-inngest-bootstrap.sudoers" > "$spec_stripped"
+  if ! grep -qxF '/usr/bin/systemctl daemon-reload' <(_granted_argv "$spec_stripped"); then
+    echo "  PASS: an alias with no deploy User_Spec grants nothing"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: daemon-reload still read as granted after its User_Spec line was removed — the lint certifies a command sudo would DENY"
+    FAIL=$((FAIL + 1))
+  fi
+
   # PROVEN RED AGAINST THE PRE-FIX HANDLER. Without this the lint could be vacuous in a way no
   # green run would reveal: a check that passes against the code it was written to catch is
-  # decoration. c051005f is pinned for the same reason as the RED-against arm above -- a moving
-  # ref becomes the fixed handler at merge and silently inverts the proof.
-  local PRE_FIX_SHA="c051005f49c8f1afb7322e5ed3b31c975db29355"
+  # decoration.
+  #
+  # Shares the ONE pin declared for the fatal-channel arm below rather than carrying a second
+  # SHA of its own. Both previously named different commits — verified identical blobs (35280
+  # bytes, `local died=0` absent, one bare `systemctl daemon-reload` in code) — and two pins for
+  # one baseline is two things to keep true. The probe is `cat-file -e` on the BLOB for the
+  # reason #7271 documents at that declaration: a blobless clone has the commit and not the file.
+  #
   # Own temp, not TMPDIR_ROOT: this arm calls no setup(), so TMPDIR_ROOT is whatever the
   # previous test's teardown removed — writing into it fails with ENOENT and the RED proof
   # reports "broken" when nothing is broken. Registered with the file's owning trap (ADR-129
   # rule (c)) so a mid-arm death still reclaims it; /tmp here is a machine-global tmpfs shared
   # by parallel worktrees, so an unreclaimed leak per run is not bounded.
+  local pin="${PRE_FIX_HANDLER_SHA}:apps/web-platform/infra/infra-config-apply.sh"
   local old; old=$(mktemp -t lint-old-handler.XXXXXXXX.sh); OWNED_TMPFILES+=("$old")
-  if git -C "$SCRIPT_DIR" show "${PRE_FIX_SHA}:apps/web-platform/infra/infra-config-apply.sh" > "$old" 2>/dev/null; then
+  if git -C "$SCRIPT_DIR" show "$pin" > "$old" 2>/dev/null; then
     local old_out old_rc=0
     old_out=$(_lint_privileged_verbs "$old") || old_rc=$?
     if [[ "$old_rc" -ne 0 ]] && [[ "$old_out" == *"daemon-reload"* ]]; then
@@ -1216,11 +1436,17 @@ test_handler_to_grant_lint() {
       echo "  FAIL: the lint did NOT flag the pre-fix handler — it would not have caught #7220 (rc=$old_rc, out=${old_out:-<none>})"
       FAIL=$((FAIL + 1))
     fi
-  elif git -C "$SCRIPT_DIR" rev-parse --verify "${PRE_FIX_SHA}^{commit}" >/dev/null 2>&1; then
-    echo "  FAIL: ${PRE_FIX_SHA:0:8} resolves but could not be read — the RED proof is broken, not skipped"
+  elif git -C "$SCRIPT_DIR" cat-file -e "$pin" 2>/dev/null; then
+    echo "  FAIL: the pinned pre-fix blob resolves but could not be read — the RED proof is broken, not skipped"
+    FAIL=$((FAIL + 1))
+  elif [[ -n "${CI:-}" ]]; then
+    echo "  FAIL: pinned pre-fix blob ${PRE_FIX_HANDLER_SHA:0:9} is absent under CI, where fetch-depth: 0 should guarantee it — AC6 RED proof NOT run"
     FAIL=$((FAIL + 1))
   else
-    echo "  SKIP (loud): pinned baseline unavailable (shallow clone) — AC6 RED proof NOT run"
+    echo "  SKIP (loud): pinned pre-fix blob ${PRE_FIX_HANDLER_SHA:0:9} not in this object store (shallow/partial clone, rewritten history, or not run inside the soleur checkout) — AC6 RED proof NOT run."
+    echo "               Remedy: run from a full clone (git fetch --unshallow), or re-pin to tag web-v0.248.2."
+    # 1: the single "the lint FLAGS the pre-fix handler" assertion the taken branch would make.
+    SKIPPED_ASSERTIONS=$((SKIPPED_ASSERTIONS + 1))
   fi
 }
 
@@ -1608,8 +1834,12 @@ test_sudoers_caller_argv_lockstep() {
 # HARDCODED ZEROS. The CI gate then reported `files_total=0` — the precise opposite of what had
 # happened — with no line, no command and no rc. The handler could fail; it could not say how.
 #
-# Every arm below is proven RED against origin/main's handler by
-# `test_fatal_channel_red_against_main` at the end of this block.
+# The two load-bearing properties below — attribution (fatal_line) and real accounting
+# (files_total) — are proven RED against the PINNED pre-fix handler by
+# `test_fatal_channel_red_against_pre_fix`. Scoped deliberately: that arm drives ONE scenario
+# (poisoned sha256sum) and checks those two fields, so it does not and cannot prove the
+# quiet-channel arms (partial-apply-is-not-a-death, clean-apply-exits-zero) RED — those are
+# expected GREEN against the old handler by construction.
 # =============================================================================================
 
 # Helper: the handler's frame, or the literal string MISSING.
@@ -1841,38 +2071,76 @@ test_fatal_channel_clean_apply_exits_zero() {
   teardown
 }
 
-# --- #7220: PROVE THE ARMS ABOVE ARE RED AGAINST origin/main ---
+# --- #7220: PROVE THE ARMS ABOVE ARE RED AGAINST THE PINNED PRE-FIX HANDLER ---
 # A regression guard that passes against the code it was written to catch is decoration. This
 # runs the pre-#7220 handler from git and asserts it FAILS the two load-bearing properties:
 # attribution (fatal_line) and real accounting (files_total). Skips loudly rather than silently
-# if the git object is unavailable (shallow clone / detached worktree), so a vacuous pass is
-# never mistaken for a proof.
-test_fatal_channel_red_against_main() {
+# if the git object is unavailable, so a vacuous pass is never mistaken for a proof. (NOT
+# "detached worktree" — a linked worktree shares the common object database, so a commit present
+# in the clone is reachable regardless of HEAD state. The pin falsified that half of the old
+# note; absence now means the OBJECT is missing, not that HEAD moved.)
+#
+# NOTE for the next maintainer: this arm runs a FROZEN 2026-08-03 handler through the LIVE
+# fixture path (setup / export_valid_env_vars / _frame_field). If the frame schema changes, this
+# arm asserts against the OLD schema by design — update the expected literal, do NOT repoint the
+# SHA. A red here can mean fixture drift rather than a regression.
+#
+# The pre-fix handler, pinned to an IMMUTABLE commit — NOT `origin/main`.
+#
+# `origin/main` is the natural thing to write here and is exactly wrong: the moment the fix
+# merges, main carries the FIXED handler and these two assertions invert and fail forever. A
+# guard pinned to a moving ref consumes its own fix — that is #7220's second defect, filed after
+# PR-A merged as c2de2581e and turned this suite permanently red (144 passed, 2 failed on every
+# infra PR). A pinned SHA instead asserts that a specific historical handler failed these
+# properties, which stays true forever. Do not "helpfully" restore the branch name.
+#
+# The pinned commit below is the last to touch infra-config-apply.sh BEFORE c2de2581e. Full
+# 40-char SHA, not an abbreviation, so no future object can make it ambiguous. Verified at that
+# commit: the handler contains `fatal_line` zero times and hardcodes "files_total":0 in its
+# EXIT trap.
+#
+# REACHABILITY is what keeps this pin working, and the SHA's LENGTH does not provide it: the
+# commit is an ancestor of main AND carries tags web-v0.248.2 / v3.243.2, and deploy-script-tests
+# checks out with fetch-depth: 0 + fetch-tags: true. Do not prune those tags or narrow that
+# checkout without re-reading the skip/fail arms below.
+readonly PRE_FIX_HANDLER_SHA="701e76e6bfce84ceed91096a58d88df7da5b6932"
+
+test_fatal_channel_red_against_pre_fix() {
   echo "TEST: #7220 — the new assertions are RED against the pre-fix handler"
   setup
   export_valid_env_vars
 
-  # #7220 PR-B — the baseline is a PINNED COMMIT, never `origin/main`.
-  #
-  # This arm originally read `origin/main:…/infra-config-apply.sh`. That is a MOVING ref, and at
-  # the moment PR-A merged it started resolving to the FIXED handler — so the two assertions
-  # below ("pre-fix carried no fatal_line", "pre-fix reported files_total=0") began failing
-  # against the very fix they were written to prove. Measured on a pristine `origin/main`
-  # worktree: 144 passed, 2 failed. The suite was green on the PR-A branch and red on main the
-  # instant it landed, which is the documented golden-baseline time-bomb — a parity/RED-against
-  # baseline must be frozen, because the file it names BECOMES the new implementation at merge.
-  #
-  # c051005f is the last commit before PR-A (#7221) landed; `git show` of a SHA cannot drift.
-  local PRE_FIX_SHA="c051005f49c8f1afb7322e5ed3b31c975db29355"
   local old="${TMPDIR_ROOT}/old-handler.sh"
-  if ! git -C "$SCRIPT_DIR" show "${PRE_FIX_SHA}:apps/web-platform/infra/infra-config-apply.sh" > "$old" 2>/dev/null; then
-    # A shallow clone legitimately lacks this object, so that is a loud SKIP rather than a FAIL.
-    # But if the commit RESOLVES and the read still fails, the proof is broken, not unavailable.
-    if git -C "$SCRIPT_DIR" rev-parse --verify "${PRE_FIX_SHA}^{commit}" >/dev/null 2>&1; then
-      echo "  FAIL: ${PRE_FIX_SHA:0:8} resolves but the handler could not be read — mutation proof is broken, not skipped"
+  if ! git -C "$SCRIPT_DIR" show "${PRE_FIX_HANDLER_SHA}:apps/web-platform/infra/infra-config-apply.sh" > "$old" 2>/dev/null; then
+    # Probe the BLOB, not the commit. `cat-file -e <sha>^{commit}` is the intuitive check and is
+    # wrong here: a BLOBLESS clone (`--filter=blob:none`, a routine CI speed-up) has the commit
+    # object present while the handler's blob is unfetchable, so a commit-probe sends a
+    # legitimate environment to the hard-FAIL arm — the inverse of the bug this guard fixes.
+    # The blob is absent in exactly the environments that should SKIP and present in exactly
+    # those that should FAIL, so it is the predicate that matches the two arms.
+    #
+    # Also NOT `rev-parse --verify`: that returns 0 for any well-formed 40-hex string whose
+    # object is ABSENT (measured on git 2.53.0), which would make the skip arm dead code.
+    if git -C "$SCRIPT_DIR" cat-file -e "${PRE_FIX_HANDLER_SHA}:apps/web-platform/infra/infra-config-apply.sh" 2>/dev/null; then
+      echo "  FAIL: pinned pre-fix commit resolves but the handler could not be read — mutation proof is broken, not skipped"
+      FAIL=$((FAIL + 1))
+    elif [[ -n "${CI:-}" ]]; then
+      # Under CI the pinned commit is REACHABLE BY CONTRACT (deploy-script-tests checks out with
+      # fetch-depth: 0 + fetch-tags: true), so absence is a breakage, not an environment limit.
+      # Pinning widened this window relative to the old `origin/main` read — a remote-tracking
+      # ref resolves at ANY depth, a specific historical commit does not — so the arm that
+      # absence lands on must be the LOUD one wherever the depth is guaranteed.
+      echo "  FAIL: pinned pre-fix commit ${PRE_FIX_HANDLER_SHA:0:9} is absent under CI, where fetch-depth: 0 should guarantee it — mutation proof NOT run"
       FAIL=$((FAIL + 1))
     else
-      echo "  SKIP (loud): pinned baseline ${PRE_FIX_SHA:0:8} unavailable (shallow clone) — mutation proof NOT run"
+      # Local/offline only. Cause is deliberately NOT narrowed to "shallow clone": `cat-file -e`
+      # measures ABSENCE, and absence is equally produced by a partial/treeless clone, rewritten
+      # history that orphaned the object, a pruned tag, or running outside the soleur checkout.
+      # Naming one unmeasured cause sends the reader to fix something that was never wrong.
+      echo "  SKIP (loud): pinned pre-fix commit ${PRE_FIX_HANDLER_SHA:0:9} not in this object store (shallow/partial clone, rewritten history, or not run inside the soleur checkout) — mutation proof NOT run."
+      echo "              Remedy: run from a full clone (git fetch --unshallow), or re-pin to tag web-v0.248.2."
+      # 4: sabotage-reached, frame-published, no-fatal_line, files_total=0.
+      SKIPPED_ASSERTIONS=$((SKIPPED_ASSERTIONS + 4))
     fi
     teardown
     return 0
@@ -1887,14 +2155,31 @@ test_fatal_channel_red_against_main() {
     return 0
   fi
 
-  printf '#!/bin/sh\nexit 7\n' > "$TMPDIR_ROOT/bin/sha256sum"
+  # The sabotage is what makes this #7220's SHAPE (a delivery that got partway and then died)
+  # rather than any old abort. It must be PROVEN to have been reached: without this witness,
+  # injecting an `exit 99` immediately after the EXIT trap installs — dying before the write
+  # loop, never invoking sha256sum — leaves BOTH assertions below passing at 146/0, because the
+  # trap emits its hardcoded zeros for ANY unhandled exit. The test would then prove only "the
+  # old abort frame is uninformative", never "the old handler could not attribute a DELIVERY
+  # failure". Measured: that mutation survives the two assertions and dies on this one.
+  local sabotage_witness="$TMPDIR_ROOT/sha256sum-invoked"
+  printf '#!/bin/sh\nprintf x >> %s\nexit 7\n' "$sabotage_witness" > "$TMPDIR_ROOT/bin/sha256sum"
   chmod +x "$TMPDIR_ROOT/bin/sha256sum"
   bash "$old" >/dev/null 2>&1 || true
 
+  assert_eq "the sabotage was actually reached — the handler got INTO the delivery path" \
+    "yes" "$([[ -s "$sabotage_witness" ]] && echo yes || echo no)"
+
   # The pre-fix handler wrote hardcoded zeros and carried no attribution at all.
-  local old_line old_total
+  local old_line old_total old_reason
   old_line=$(_frame_field fatal_line)
   old_total=$(_frame_field files_total)
+  old_reason=$(_frame_field reason)
+  # `_frame_field` returns the literal MISSING both when the FIELD is absent and when the FRAME
+  # is absent, so the fatal_line assertion alone is satisfied by the empty universe — replacing
+  # `bash "$old"` with a no-op leaves it passing. Asserting a field that must EXIST is what
+  # pins that a frame was actually published.
+  assert_eq "a frame was actually published (not the empty universe)" "unhandled" "$old_reason"
   assert_eq "pre-fix handler carried NO fatal_line (this is #7220)" "MISSING" "$old_line"
   assert_eq "pre-fix handler reported the hardcoded files_total=0" "0" "$old_total"
 
@@ -2017,6 +2302,8 @@ test_fatal_channel_handoff_requires_ownership() {
   else
     echo "  SKIP (loud): not root, so foreign ownership cannot be expressed here — the structural"
     echo "               assertions above are the only coverage in this environment."
+    # 1: the behavioural "foreign-owned handoff ignored" assertion.
+    SKIPPED_ASSERTIONS=$((SKIPPED_ASSERTIONS + 1))
   fi
 
   teardown
@@ -2031,7 +2318,7 @@ test_fatal_channel_exit64_replaces_stale_frame
 test_fatal_channel_subshell_attribution
 test_fatal_channel_no_secret_leak
 test_fatal_channel_clean_apply_exits_zero
-test_fatal_channel_red_against_main
+test_fatal_channel_red_against_pre_fix
 test_dropin_restart_grant
 test_reconcile_stale_fires_and_disarms
 test_reconcile_inactive_short_circuits
@@ -2068,10 +2355,39 @@ test_orphan_hook_selfcheck
 # --- #7220 review: ASSERTION-COUNT FLOOR ---------------------------------------------------
 # Measured: removing the new arm invocations from the runner took this suite 144 -> 110 passed,
 # 0 failed, exit 0. Nothing noticed. A floor makes that loud.
-APPLY_MIN_ASSERTIONS=175
-if [[ "$PASS" -lt "$APPLY_MIN_ASSERTIONS" ]]; then
-  echo "  FAIL: assertion-count floor — only $PASS assertions ran, expected >= $APPLY_MIN_ASSERTIONS"
+#
+# RATCHET WHEN THE SUITE GROWS. This is a floor, not an equality — but a floor left behind by a
+# growing suite silently re-opens the hole it was built to close. Measured at the 144-assertion
+# era, it carried 2 assertions of slack; the pinned proof-of-red arm costs EXACTLY 2, so a
+# silently-skipping guard landed on 144 >= 142 and passed. Re-measured against the current suite
+# so the skip arm now reds instead of reading green.
+#
+# This is deliberately set to the FULL current count, i.e. zero headroom. That is what makes the
+# skip detectable, and the cost is that it must be ratcheted with every added assertion — treat a
+# floor failure on a green-looking suite as "you added assertions, update this number", not as a
+# regression.
+#
+# ZERO HEADROOM AND ENVIRONMENT-CONDITIONAL SKIPS ARE IN DIRECT CONFLICT, and resolving that by
+# lowering the floor would give back exactly the detectability above. The three LOUD skip arms in
+# this suite (the AC6 RED proof and the pre-fix mutation proof, both of which need the pinned
+# pre-fix blob; and the foreign-ownership arm, which needs root) each DECLARE their assertion
+# cost into SKIPPED_ASSERTIONS at the moment they skip. The floor is then compared against
+# PASS + SKIPPED, so a declared skip on a shallow clone or a non-root runner leaves the floor
+# satisfied while a guard that stops running WITHOUT declaring anything still reds. That is the
+# distinction the previous form could not draw: it read a legitimate loud skip and a silently
+# vanished arm as the same number.
+#
+# 180 = the FULL count, measured as PASS + SKIPPED_ASSERTIONS, which is invariant across
+# environments by construction: a non-root runner declares 1, a clone without the pinned pre-fix
+# blob declares 5 (1 for the AC6 RED proof + 4 for the fatal-channel proof), and each still totals
+# 180. Verified by forcing both skip paths on a sandbox copy — see the PR body.
+APPLY_MIN_ASSERTIONS=180
+if [[ $((PASS + SKIPPED_ASSERTIONS)) -lt "$APPLY_MIN_ASSERTIONS" ]]; then
+  echo "  FAIL: assertion-count floor — $PASS assertions ran and $SKIPPED_ASSERTIONS were declared-skipped, expected >= $APPLY_MIN_ASSERTIONS"
   FAIL=$((FAIL + 1))
+fi
+if [[ "$SKIPPED_ASSERTIONS" -gt 0 ]]; then
+  echo "  NOTE: $SKIPPED_ASSERTIONS assertion(s) were declared-skipped by loud SKIP arms — this run is weaker than a full one."
 fi
 
 echo ""
