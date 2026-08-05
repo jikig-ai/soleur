@@ -239,8 +239,44 @@ The **rehearsal** (D10 A2) runs the same engine, so the same table reads both.
 | `2` | **Source unavailable** — GHCR could not be read. | Nothing was written. Check the job's `packages: read` permission and GHCR status. **Not** proof the images were deleted: GHCR returns the same error for *absent* and *not visible to this credential*. |
 | `3` | **Sink unavailable** — the registry did not accept the write. **Retryable**, and the job already retries it: a replaced host can outrun the Cloudflare Tunnel's re-convergence. | If it exhausted its retries, confirm the registry host is serving, then re-run the job. |
 | `4` | **Verification failed** — a digest mismatched, a blob is missing, or a signature is absent. | **Do not deploy.** The store contents are not trustworthy. Re-run the job and read the per-entry lines; a repeat means the copy is landing wrong, not that it was interrupted. |
-| `5` | **Credential unusable** — absent, empty, or **rejected** by the sink. **Not** retryable. | Retrying only burns the window. Repair/rotate `ZOT_PUSH_*` in Doppler `soleur/prd`, then re-run. |
+| `5` | **Credential unusable** — absent, empty, or **rejected** by the sink. **Not** retryable. | Retrying only burns the window. **Do NOT start by rotating anything** — see "If the sink rejects the credential" immediately below. |
 | `6` | **Could not classify** — a failure shape the engine does not recognise. | Read the crane stderr in the per-entry line before acting. Do **not** assume the images are absent. Worth filing alongside the recovery: an unenumerated failure is itself a defect. |
+
+### If the sink rejects the credential (exit `5`, or a bridge `docker login` failure)
+
+**Read this before touching Doppler.** The obvious move — rotate `ZOT_PUSH_*` — is the one that can
+make this permanent. `/etc/zot/htpasswd` is baked **once, at boot**, from the Doppler tokens
+(`cloud-init-registry.yml` §2g). A rotation therefore leaves the running host authenticating
+against a value no client still presents: it converts a possibly-transient rejection into a
+guaranteed one, until the host is replaced again. Hand-editing Doppler does **not** re-bake a
+running host — and note the exit-5 message names `soleur/prd` while the host bakes from the
+isolated `soleur-registry/prd`.
+
+**This also covers a bridge failure, which is the more likely way you meet this.** The
+`cf-tunnel-registry-bridge` step runs BEFORE the restore engine and its `docker login` is the first
+thing that authenticates against the rebuilt htpasswd — so an htpasswd divergence usually surfaces
+there, as a fail-closed bridge error, not as exit 5. That error deliberately says a
+`websocket: bad handshake` does **not** by itself distinguish an edge refusal from an origin that
+is down or restarting. It is telling you the truth: do not guess. Measure.
+
+**Measure first — no SSH required.** The host reports the divergence itself:
+
+```bash
+doppler run -p soleur -c prd_terraform -- \
+  scripts/betterstack-query.sh --since 1h --grep SOLEUR_ZOT_DISK
+```
+
+Read `htpasswd_push_matches` on the most recent line:
+
+| value | what it means | what to do |
+|---|---|---|
+| `true` | The host agrees with Doppler. The rejection is **not** an htpasswd divergence. | **Do not rotate.** Treat it as an edge/availability fault: confirm the registry host is serving, then re-run the restore job (it is resumable). |
+| `false` | The bake has diverged from Doppler. | The remedy is a **re-bake, not a rotation**: dispatch `registry-host-replace`. It re-runs the registry cloud-init and **preserves the store volume**, so it costs nothing you have already restored. Then re-run the restore job. |
+| `unknown`, or no line at all | The host is not reporting. `unknown` is the DEFAULT here, deliberately — "cannot tell" is never conflated with "does not match". | **Do not rotate on an unmeasured signal.** Establish why the heartbeat is silent first. |
+
+A rotation is correct **only** as a Terraform-mediated change followed by a host replace, so that
+the new value and the bake move together. That is a deliberate operation, never a first response to
+a red job.
 
 ---
 

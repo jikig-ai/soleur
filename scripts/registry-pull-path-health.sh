@@ -115,8 +115,19 @@ usage_err() { echo "::error::registry-pull-path-health: $*" >&2; exit 1; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --rehearse-target) REHEARSE_TARGET="${2-}"; shift 2 ;;
-    --tags-out)        TAGS_OUT="${2-}";        shift 2 ;;
+    --rehearse-target|--tags-out)
+      # A VALUE-TAKING FLAG WITH NO VALUE MUST FAIL LOUDLY, NOT SPIN. `shift 2` with one argument
+      # remaining returns non-zero WITHOUT shifting, and there is no `set -e` here — so the loop
+      # re-reads the same `$1` forever. In a runner that is not a crash, it is a HANG to the job
+      # timeout, and a job timeout is a CANCELLATION: no `::error::` is emitted and no diagnosis
+      # survives. On the gate that authorises an irreversible destroy, the difference between
+      # "refused, and said why" and "cancelled after 45 minutes" is the whole operator experience.
+      [[ $# -ge 2 ]] || usage_err "$1 requires a value (none was supplied)."
+      case "$1" in
+        --rehearse-target) REHEARSE_TARGET="$2" ;;
+        --tags-out)        TAGS_OUT="$2" ;;
+      esac
+      shift 2 ;;
     --prepare)         PREPARE_ONLY=1;          shift ;;
     *) usage_err "unknown argument '$1'" ;;
   esac
@@ -226,8 +237,14 @@ classify() {
   case "$1" in
     *MANIFEST_UNKNOWN*|*"manifest unknown"*)                          echo NOTFOUND ;;
     *UNAUTHORIZED*|*DENIED*|*"authentication required"*)              echo DENIED ;;
-    *"no such host"*|*"dial tcp"*|*"connection refused"*|\
-    *"i/o timeout"*|*"TLS handshake"*)                                echo NETWORK ;;
+    # `connection reset` and the 5xx family are here because they were MISSING while the engine's
+    # copy of this classifier had them — and `connection reset by peer` is the literal stderr of
+    # release run 30988480437, the incident this gate exists to authorise recovery from. Without
+    # them that text fell to UNKNOWN, so the gate refused with "failed in a way this gate cannot
+    # classify" for a plainly-classifiable network fault. Both arms abort at A1, so the verdict
+    # was already correct; what was wrong was the sentence the operator reads at 3am.
+    *"no such host"*|*"dial tcp"*|*"connection refused"*|*"connection reset"*|\
+    *"i/o timeout"*|*"TLS handshake"*|*"502 "*|*"503 "*|*"504 "*)      echo NETWORK ;;
     *) echo UNKNOWN ;;
   esac
 }

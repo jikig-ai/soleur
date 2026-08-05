@@ -265,3 +265,94 @@ uplink) does not predict a GitHub-hosted `ubuntu-24.04` runner's, so a local num
 false precision on the two figures that feed the job budget. Carried as a named residual; the
 restore job gets its own `timeout-minutes` budget and is resumable, which is what makes an
 unmeasured duration survivable.
+
+---
+
+# Third-session probes (2026-08-05)
+
+## B4 — `soleur-inngest-config` is genuinely absent, on evidence that actually supports it
+
+The plan and both scripts claimed "not published at GHCR (measured — `crane ls` returns
+`NAME_UNKNOWN`)". **That measurement cannot support that claim.** It was uncredentialed, and it
+queried the **tags** API — neither of which the gate uses, and an uncredentialed read cannot
+separate *absent* from *not visible to this credential*. This file already documents that exact
+ambiguity two sections above, for `MANIFEST_UNKNOWN`. The conclusion happened to be right; the
+evidence was not, and a right conclusion resting on invalid evidence is the defect class this whole
+change exists to remove.
+
+Re-measured, with a positive control first — without one, a credentialed failure is
+indistinguishable from a broken credential:
+
+```
+$ crane digest ghcr.io/jikig-ai/soleur-web-platform:latest        # POSITIVE CONTROL, private repo
+rc=0  sha256:523f1aace644cc35826e7327ab3db3e5f19971555b9d888b44a28b5da72da421
+
+$ crane ls     ghcr.io/jikig-ai/soleur-inngest-config             # credentialed, tags API
+rc=1  NAME_UNKNOWN: repository name not known to registry
+
+$ crane digest ghcr.io/jikig-ai/soleur-inngest-config:latest      # credentialed, manifest API
+rc=1  MANIFEST_UNKNOWN: manifest unknown
+```
+
+Both of those are still ambiguous on their own. The decisive evidence is **credential-independent**,
+and it is about the producer rather than the registry:
+
+```
+$ doppler secrets -p soleur -c prd_terraform --only-names | grep INNGEST_CONFIG_DIGEST
+(no output — the Terraform-promoted pointer secret does not exist)
+
+$ gh run list --workflow=build-inngest-config-bundle.yml --limit 10 --json databaseId
+[]
+
+$ gh run list --workflow=apply-web-platform-infra.yml --limit 3 --json conclusion   # CONTROL
+[{"conclusion":"success",...},{"conclusion":"success",...},{"conclusion":"success",...}]
+```
+
+`build-inngest-config-bundle.yml` is `workflow_dispatch`-only, exists on `origin/main`, publishes
+`${IMAGE}:v${VERSION}` — and **has never been dispatched**. Nothing was ever pushed, so there is no
+repo to be invisible. The control run proves the query works.
+
+**Consequence, and it is the opposite of what the blocker projected:** the entry stays
+`conditional`, `FLOOR` stays **4**, and nothing is promoted to `required`.
+
+*(The org packages API — `gh api /orgs/jikig-ai/packages?package_type=container` — returned `[]`,
+but that is NOT cited as evidence: it also returns `[]` for repos known to exist, so the token
+almost certainly lacks `read:packages` or the packages are user-scoped. An empty result from an
+uninstrumented channel is indistinguishable from a real absence, which is the same mistake as the
+original `crane ls`.)*
+
+## The `last_err` defect — why only a mutation battery could find it
+
+Both scripts documented "classify on the LAST line" and implemented `tail -c 400` — the last 400
+**bytes**. `classify()` substring-matches, so its FIRST `case` arm wins over the whole capture
+regardless of line order:
+
+```
+$ printf 'Error: ...: MANIFEST_UNKNOWN: manifest unknown\nError: ...: UNAUTHORIZED: authentication required\n' > two.err
+as shipped (last 400 BYTES) -> NOTFOUND
+as documented (last LINE)   -> DENIED
+```
+
+For a **conditional** pin, `NOTFOUND` is a silent declared skip — so a credential rejection on the
+inventory that authorises destroying production's only copy could be recorded as "absent,
+skipping". Fixed with `tail -n 1` in both scripts.
+
+Note *why* no ordinary test could catch it: every real crane message is far under 400 bytes, so for
+every existing fixture a byte-tail and a line-tail return the **identical string**. The two
+implementations are indistinguishable until a fixture carries two DIFFERENT classifier tokens whose
+case arms disagree. The first attempt at that fixture failed to discriminate — it put the generic
+`HEAD request failed…` line first, which carries no classifier token at all, so it passed under
+both implementations.
+
+## The argv hang — demonstrated, not argued
+
+```
+$ bash -c 'while [[ $# -gt 0 ]]; do case "$1" in --target) T="${2-}"; shift 2 ;; *) shift ;; esac; done' _ --target
+LOOPED 6 TIMES — INFINITE
+```
+
+`shift 2` with one argument remaining returns non-zero **without shifting**, and neither script runs
+under `set -e`, so the parse loop re-reads the same `$1` forever. In a runner that is not a crash —
+it is a hang to the job timeout, and a job timeout is a **cancellation**: no `::error::`, no exit
+code, nothing in the log. Both scripts now require the value; both suites assert it with a bounded
+`timeout` where rc 124 is the failure signal.

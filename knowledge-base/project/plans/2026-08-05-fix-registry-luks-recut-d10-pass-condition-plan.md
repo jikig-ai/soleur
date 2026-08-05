@@ -127,7 +127,10 @@ script guards at its `GITHUB_ACTIONS` check, which must survive the rewrite.
 **Also user-facing, and not derivable from the paragraphs above** (added at CPO sign-off, 2026-08-05):
 
 - **The success path narrows the rollback surface.** The restore carries only the `required` pins
-  (`FLOOR = 2`) and the host→GHCR edge is dead (#7071), so a rebuilt host can pull nothing outside
+  (`FLOOR = 4` as shipped — `soleur-web-platform` at prod's `/health` version, at its `build_sha`
+  and at `latest`, plus `soleur-inngest-bootstrap` at the cloud-init pin; this section said `2`
+  until the floor was raised at review and the user-facing figure was not moved with it) and the
+  host→GHCR edge is dead (#7071), so a rebuilt host can pull nothing outside
   that set. `ci-deploy.sh` treats rollback to an older image as a supported, must-stay-functional
   path. Consequence: immediately after a recut, if the next release is bad there is no earlier image
   in zot to roll back to. Recoverable by re-running the restore engine with a wider set — but it is
@@ -142,6 +145,18 @@ script guards at its `GITHUB_ACTIONS` check, which must survive the rewrite.
 - **#7286 (inngest down, uninvestigated) intersects this window.** `soleur-inngest-bootstrap` is a
   required pin, so the window lands on the scheduled-work path. If crons and armed reminders are
   already not firing, the user-visible consequence is silently missed time-based commitments.
+- **Nothing observes production zot before it is destroyed** (added at /work, R16, as a condition of
+  the CPO re-sign-off). The gate's A5 predicate was deleted, so the first thing that ever
+  authenticates against production's registry credential plane now does so **after** the store is
+  gone. That is the right trade — A5's only distinctive abort arm fired on an htpasswd divergence
+  the recut itself repairs, so it would have blocked the recovery on a condition the recovery
+  cures — but it is a real change in what the operator can know beforehand, and it belongs in the
+  section reviewers actually read rather than only in an ADR. What replaces it is not a prediction
+  but an enumerated exit: the credential half that SURVIVES the destroy is graded pre-destroy by A4
+  (which aborts); the half that does not survive is exercised post-destroy against the host it
+  actually applies to, and every way out of that state is a dispatch rather than a repair. The
+  runbook's "If the sink rejects the credential" section is where that lands for the operator, and
+  it exists because the obvious remedy — rotate the token — is the one that makes it permanent.
 
 **Brand-survival threshold:** `single-user incident`.
 
@@ -342,9 +357,13 @@ heartbeat-transition poll and the chained real restore in Phase 3, both fail-lou
 
 `|required entries| == |digests resolved| == |validated in the rehearsal| == FLOOR`, where `FLOOR` is
 a declared constant **with a stated value and a stated derivation** — not a placeholder. Given the
-A0 pin set, `FLOOR = 2` at time of writing: `soleur-web-platform` at prod's `/health` version, and
-`soleur-inngest-bootstrap` at the `cloud-init.yml` pin. `soleur-inngest-config` is `conditional` and
-does **not** count (it does not exist at GHCR — measured). Raising `FLOOR` is the deliberate act
+A0 pin set, `FLOOR = 4` **as shipped** (this said `2` at plan time and was raised at review, when it
+was found that restoring only `v${VERSION}` leaves a rebuilt host pulling a `latest` tag that does
+not exist): `soleur-web-platform` at prod's `/health` version, at its `build_sha`, and at `latest`,
+plus `soleur-inngest-bootstrap` at the `cloud-init.yml` pin. `soleur-inngest-config` is
+`conditional` and does **not** count — it is not published at GHCR, on evidence re-measured at
+/work (its producing workflow has never been dispatched; see R16/B4, and note the original
+`crane ls` evidence for that claim was invalid). Raising `FLOOR` is the deliberate act
 that admits a new required image; an under-set floor is the vacuity hole this predicate exists to
 close, so the value must be justified in the same line it is declared.
 
@@ -1259,9 +1278,58 @@ end that state today is an operator dispatching the very pipeline measured faili
 This plan does not create the empty-store risk; it converts an unbounded, operator-dependent,
 unobservable window into a bounded, automatic, fail-loud one. Blocking on the zero-downtime
 blue-green path (#6126 / ADR-096 clause (g)) would hold the *worse* version of the same risk for a
-multi-day build while the disk fills. The plan is signable **specifically because of** A5's
-abort/degrade boundary and A4's `live` arm; without those it would be the same deadlock in new
-clothes.
+multi-day build while the disk fills.
+
+**RE-SIGNED 2026-08-05 at /work, after A5's deletion. The original closing sentence rested on A5
+and is void; it is replaced, not quietly edited.** It read: *"The plan is signable specifically
+because of A5's abort/degrade boundary and A4's `live` arm; without those it would be the same
+deadlock in new clothes."* The replacement:
+
+> The plan is signable because every predicate that holds abort authority over an irreversible
+> destroy is now **decidable at the moment it is evaluated**, and the credential residual is
+> **split at the destroy boundary so each half is graded where it is decidable**: the Cloudflare
+> Access edge survives the destroy and is graded pre-destroy by A4, which aborts on a measured dead
+> count; the htpasswd plane does not survive it, is discharged by construction (the same apply that
+> replaces the host re-bakes `/etc/zot/htpasswd` from the same unchanged Doppler value), and is
+> exercised post-destroy by the chained restore against the host it actually applies to. A5 was the
+> one predicate that failed that test — it would have held abort authority over an undecidable
+> distinction, on a property of the component the destroy replaces — and it is therefore correctly
+> gone rather than wired. What makes the residual acceptable is not that a predicate observes
+> production zot (nothing does any more) but that **every path out of the empty store is loud,
+> enumerated, and has a non-destructive remedy the operator can fire without SSH**: six exit codes
+> with one operator action each, a fail-closed bridge that names its own ambiguity rather than
+> guessing, a resumable engine, and `registry-host-replace` as a re-bake lever that preserves the
+> store.
+
+**Verdict: SIGNED OFF WITH AMENDED CONDITIONS.** Conditions 2, 3, 5, 6 and 7 stand **unchanged**
+(each re-checked against the shipped work, not assumed). Conditions 1 and 4 are amended; two are
+added. Nothing is retired.
+
+- **Condition 1 amended** — the worst-case fleet-wide apply block is the sum across **three** jobs
+  holding one workflow-level concurrency group: 45 (`registry_pull_path_gate`) + 30
+  (`registry_luks_recut`) + 60 (`registry_store_restore`) = **135 minutes**. The restore job's
+  header said "90 (30 + 60)", which was correct until the B2 split and then understated the block
+  by the gate's 45 — corrected. The "must page" half is discharged rather than dropped: no page
+  exists or can be built here, so what ships is per-exit-code `::error::` plus job failure, and the
+  runbook says plainly that the job is the signal and that silence is not health.
+- **Condition 4 amended** — the rollback-narrowing bullet said `FLOOR = 2`; shipped is **4**
+  (corrected in both sites). A **fifth** user-facing consequence was missing and is now present:
+  the gate no longer observes production zot before destroying it.
+- **Condition 8 added (blocking)** — *the exit-5 operator action must not be self-defeating.* The
+  runbook told the operator to rotate `ZOT_PUSH_*` in Doppler. But `/etc/zot/htpasswd` is baked
+  **once at boot** (`cloud-init-registry.yml` §2g), so a rotation leaves the running host
+  authenticating against a value no client presents — converting a possibly-transient rejection
+  into a guaranteed permanent one, with the store already empty. That is this plan's own defect
+  class (advice pointing away from the remedy) reappearing in the operator action ADR-169 nominates
+  as A5's replacement. Replaced with: measure `htpasswd_push_matches` from the existing
+  `SOLEUR_ZOT_DISK` heartbeat (no SSH), then re-bake via `registry-host-replace` (which preserves
+  the store) — never rotate first, and never rotate on `unknown`.
+- **Condition 9 added (blocking)** — *the bridge failure is a post-destroy arm too.* The
+  `cf-tunnel-registry-bridge` `docker login` runs BEFORE the restore engine and is the first thing
+  to authenticate against the rebuilt htpasswd, so an htpasswd divergence usually surfaces there as
+  a fail-closed bridge error rather than as exit 5. Its message deliberately says a bad handshake
+  does not distinguish an edge refusal from a restarting origin. The runbook now routes that error
+  to condition 8's measurement instead of leaving the operator to guess.
 
 *Conditions — all must hold in the shipped work or the sign-off lapses:*
 

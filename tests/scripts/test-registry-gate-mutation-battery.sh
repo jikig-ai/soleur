@@ -114,7 +114,12 @@ run_suite() { # $1 = gate|engine ; echoes nothing, returns the suite's rc
     engine) suite="${SB}/${SUITE_ENGINE}" ;;
     *) harness_die "run_suite: unknown suite '${which}'" ;;
   esac
-  bash "$suite" > "${SB}/suite.log" 2>&1
+  # BOUNDED, because some mutations here are non-terminating by design. Removing an argv
+  # value-presence guard reintroduces a `shift 2` that never shifts, so the SUT spins forever —
+  # and an unbounded battery would hang on exactly the mutation whose whole point is that a hang
+  # is the failure mode. `timeout` returns 124, which is non-zero, so a hang reads as CAUGHT.
+  # That is the correct verdict: the suite did detect the mutation, by not completing.
+  timeout 300 bash "$suite" > "${SB}/suite.log" 2>&1
 }
 
 caught=0
@@ -261,9 +266,10 @@ mutate "G11 last_err drops the line-tail and classifies over the whole byte wind
   'tail -c 400 "$1" 2>/dev/null | tail -n 1 | tr' \
   'tail -c 400 "$1" 2>/dev/null | tr'
 
-mutate "G12 workflow-command injection guard dropped from last_err" gate \
+expect_survive "G12 workflow-command injection guard dropped from last_err" gate \
   'tail -c 400 "$1" 2>/dev/null | tail -n 1 | tr '"'"'\n'"'"' '"'"' '"'"' || true; }' \
-  'tail -c 400 "$1" 2>/dev/null | tail -n 1 || true; }'
+  'tail -c 400 "$1" 2>/dev/null | tail -n 1 || true; }' \
+  'SUBSUMED BY THE LINE-TAIL, and only since this PR added it. `tail -n 1` emits exactly one line and command substitution strips the trailing newline, so the capture can no longer contain an embedded newline for `tr` to collapse — no fixture can distinguish the two implementations. The `tr` is kept as defense-in-depth rather than deleted, because it becomes load-bearing again the moment `tail -n 1` is removed, and THAT removal is caught by G11. Do not read this exemption as "the injection guard is untested": the property is tested, by the mutation one row up. If G11 is ever retired, this entry must be promoted back to mutate().'
 
 # The engine carries the identical last_err and the identical fix, so it carries the identical
 # mutations. A guard fixed in two files and mutation-tested in one is half-tested.
@@ -271,9 +277,10 @@ mutate "E21 engine last_err drops the line-tail (conditional skip swallows a cre
   'tail -c 400 "$1" 2>/dev/null | tail -n 1 | tr' \
   'tail -c 400 "$1" 2>/dev/null | tr'
 
-mutate "E22 engine workflow-command injection guard dropped from last_err" engine \
+expect_survive "E22 engine workflow-command injection guard dropped from last_err" engine \
   "tail -c 400 \"\$1\" 2>/dev/null | tail -n 1 | tr '\\n' ' ' || true" \
-  "tail -c 400 \"\$1\" 2>/dev/null | tail -n 1 || true"
+  "tail -c 400 \"\$1\" 2>/dev/null | tail -n 1 || true" \
+  'SUBSUMED BY THE LINE-TAIL — identical reasoning to G12, in the engine. The property is carried by E21, which mutates the line-tail away. Promote back to mutate() if E21 is ever retired.'
 
 mutate "G13 GITHUB_ACTIONS seam guard neutered (a seam can manufacture AUTHORIZED)" gate \
   'if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
@@ -323,6 +330,13 @@ mutate "G23 A0 APP_DOMAIN_BASE guard removed (health URL silently malformed)" ga
 
 mutate "G24 --rehearse-target no longer required to render a verdict" gate \
   '[[ -n "$REHEARSE_TARGET" ]] || usage_err ' ': # '
+
+# A missing flag VALUE must fail, not spin. `shift 2` with one argument left returns non-zero
+# without shifting and there is no `set -e`, so the parse loop re-reads the same `$1` forever. In
+# a runner that is a hang to the job timeout — a CANCELLATION, with no ::error:: and no exit code.
+mutate "G25 argv value-presence guard removed (missing flag value spins forever)" gate \
+  '[[ $# -ge 2 ]] || usage_err "$1 requires a value (none was supplied)."' \
+  ': # guard removed'
 
 echo
 
@@ -409,6 +423,10 @@ mutate "E19 non-loopback sink silently downgraded to plain HTTP" engine \
 mutate "E20 conditional-skip arm widened to required entries" engine \
   '        if [[ "$disp" == "conditional" ]]; then' \
   '        if true; then'
+
+mutate "E23 argv value-presence guard removed (missing flag value spins forever)" engine \
+  '[[ $# -ge 2 ]] || die 1 "$1 requires a value (none was supplied)."' \
+  ': # guard removed'
 
 restore_pristine
 

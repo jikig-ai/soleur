@@ -2694,11 +2694,15 @@ jobs:
   # IT DOES NOT RELEASE THE MUTEX, and an earlier revision of this comment claimed it did. The
   # `concurrency:` group is declared at WORKFLOW level, so it is held for the whole RUN — this
   # job inherits it and cannot release what a sibling job holds. Worst-case fleet-wide apply
-  # block therefore goes from 30 to 90 minutes (30 + 60). That is still far better than the
-  # 360-minute default the 30 was chosen against, but it is 3x the number that comment defends,
-  # and saying otherwise would be naming a property the change does not have. Genuinely
-  # releasing it needs a SEPARATE WORKFLOW (workflow_run), not a chained job — tracked, not
-  # done here.
+  # block therefore goes from 30 to **135 minutes: 45 (registry_pull_path_gate) + 30
+  # (registry_luks_recut) + 60 (this job)**. An earlier revision of this line said "90 (30 + 60)",
+  # which was correct until #7277 split the authorization gate into its own job and then silently
+  # understated the block by the gate's 45. A comment that half-corrects a number is worse than
+  # one that never claimed it, because it reads as already-audited — so when a job is added to
+  # this chain, this arithmetic moves with it. That is still far better than the 360-minute
+  # default the 30 was chosen against, but it is 4.5x the number that comment defends, and saying
+  # otherwise would be naming a property the change does not have. Genuinely releasing it needs a
+  # SEPARATE WORKFLOW (workflow_run), not a chained job — tracked, not done here.
   registry_store_restore:
     needs: registry_luks_recut
     # EXPLICIT, not inherited. A following job defaults to success()-of-needs, which would skip

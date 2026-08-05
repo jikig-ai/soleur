@@ -63,8 +63,10 @@
 #      copy "succeeded" and the result is not usable. NOT retryable.
 #   5  CREDENTIAL unusable — absent, empty, or REJECTED by the sink. NOT retryable: retrying an
 #      authorisation failure only wastes the window. Deliberately distinct from 3, mirroring the
-#      D10 gate's A5 boundary, where authorisation failures and availability failures are
-#      different classes with different verdicts.
+#      abort/degrade boundary the D10 gate's removed A5 predicate used: authorisation and
+#      availability failures are different classes with different verdicts. (A5 itself was
+#      deleted by architecture ruling — ADR-169 — but the boundary it drew was sound, and this
+#      engine is where it still lives, post-destroy, against the host that actually applies.)
 #   6  COULD NOT CLASSIFY — the failure matched no known shape. Loudest arm. An unclassified
 #      failure must never read as either "absent" or "fine".
 #
@@ -91,8 +93,19 @@ die() { # $1 = exit code, rest = message
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --target)    TARGET="${2-}";    shift 2 ;;
-    --tags-from) TAGS_FROM="${2-}"; shift 2 ;;
+    --target|--tags-from)
+      # A VALUE-TAKING FLAG WITH NO VALUE MUST FAIL LOUDLY, NOT SPIN. `shift 2` with one argument
+      # remaining returns non-zero WITHOUT shifting, and there is no `set -e` here — so the loop
+      # re-reads the same `$1` forever. In a runner that is a HANG to the job timeout, and a job
+      # timeout is a CANCELLATION: no `::error::`, no exit code, no diagnosis. This engine runs
+      # AFTER the destroy, so a silent cancellation there leaves an empty registry and a run whose
+      # log says nothing about why.
+      [[ $# -ge 2 ]] || die 1 "$1 requires a value (none was supplied)."
+      case "$1" in
+        --target)    TARGET="$2" ;;
+        --tags-from) TAGS_FROM="$2" ;;
+      esac
+      shift 2 ;;
     # `--rehearse` existed in the plan to select `cosign sign --tlog-upload=false`. Phase 0.3
     # resolved the signature mechanism to a copy, so nothing signs and the flag had no referent.
     # It is REJECTED rather than accepted-as-a-no-op: a caller that believed it was rehearsing
@@ -165,8 +178,14 @@ classify() {
     *BLOB_UNKNOWN*|*"blob unknown"*)                                   echo BLOBMISSING ;;
     *MANIFEST_UNKNOWN*|*"manifest unknown"*)                           echo NOTFOUND ;;
     *UNAUTHORIZED*|*DENIED*|*"authentication required"*|*"denied:"*)   echo DENIED ;;
+    # `*"EOF"*` was an UNANCHORED THREE-CHARACTER SUBSTRING. Any message containing those letters
+    # anywhere — in a repo name, a tag, a digest's hex, a vendor sentence — was reclassified as a
+    # retryable network fault, which downgrades exit 6's "loudest arm" guarantee into exit 3's
+    # "retry, it'll probably clear". Go's transport emits this error as a whole word at the END of
+    # the message, so anchor on that: `unexpected EOF` anywhere, or a message ENDING in EOF.
     *"no such host"*|*"dial tcp"*|*"connection refused"*|*"connection reset"*|\
-    *"i/o timeout"*|*"TLS handshake"*|*"EOF"*|*"502 "*|*"503 "*|*"504 "*) echo NETWORK ;;
+    *"i/o timeout"*|*"TLS handshake"*|*"unexpected EOF"*|*EOF|\
+    *"502 "*|*"503 "*|*"504 "*)                                        echo NETWORK ;;
     *) echo UNKNOWN ;;
   esac
 }

@@ -653,6 +653,21 @@ else
   fail "an unknown argument must be rejected" "$rc" "$out"
 fi
 
+# A value-taking flag with NO value must FAIL, not spin. `shift 2` with one argument remaining
+# returns non-zero WITHOUT shifting and there is no `set -e`, so the parse loop re-reads the same
+# `$1` forever. That is not a crash in a runner — it is a hang to the job timeout, and a job
+# timeout is a CANCELLATION: no `::error::`, no exit code, nothing in the log explaining why the
+# gate that authorises an irreversible destroy simply stopped. `timeout` here is the assertion:
+# if the guard is removed this row does not fail, it never returns.
+for _flag in --rehearse-target --tags-out; do
+  out="$(timeout 10 bash "$GATE" "$_flag" 2>&1)"; rc=$?
+  if [[ "$rc" -ne 0 && "$rc" -ne 124 ]] && grep -qF "requires a value" <<<"$out"; then
+    pass "argv: ${_flag} with no value => refuses immediately (never spins to a job timeout)"
+  else
+    fail "a missing flag value must refuse, not hang — rc 124 means it is still spinning" "$rc" "$out"
+  fi
+done
+
 out="$(REGISTRY_GATE_HEALTH_CMD="$W/health" REGISTRY_GATE_CRANE_CMD="$W/crane" \
        REGISTRY_GATE_RESTORE_CMD="$W/restore" REGISTRY_GATE_DRIFT_CMD="$W/drift" \
        APP_DOMAIN_BASE=soleur.ai \

@@ -587,6 +587,19 @@ fi
 
 NET_ERR='Error: Get "https://sink/v2/": dial tcp: lookup sink: no such host'
 
+# A value-taking flag with NO value must FAIL, not spin — same class as the gate's. This engine
+# runs AFTER the destroy, so a silent hang-then-cancellation there leaves an empty registry and a
+# run whose log says nothing about why. `timeout` is the assertion: without the guard this row
+# does not fail, it never returns.
+for _flag in --target --tags-from; do
+  out="$(timeout 10 bash "$ENGINE" "$_flag" 2>&1)"; rc=$?
+  if [[ "$rc" -ne 0 && "$rc" -ne 124 ]] && printf '%s' "$out" | grep -qF "requires a value"; then
+    pass "argv: ${_flag} with no value => refuses immediately (never spins to a job timeout)"
+  else
+    fail "a missing flag value must refuse, not hang — rc 124 means it is still spinning" "$rc" "$out"
+  fi
+done
+
 # last_err must return the last LINE, not the last 400 BYTES. This is the sharpest row in the
 # suite, because on the CONDITIONAL entry the two behaviours differ by a silent skip:
 # classify() substring-matches, so under a byte-tail the earlier `manifest unknown` wins over the
