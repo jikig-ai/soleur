@@ -269,7 +269,15 @@ resolve_one() { # $1 = repo, $2 = derivation, $3 = disposition
   if [[ "$3" == "conditional" && "$cls" == "NOTFOUND" ]]; then
     # A declared skip, recorded rather than silent. The floor counts only `required` entries, so
     # a conditional skip can never make this gate vacuous.
-    echo "A1 ${repo}:${tag} -> absent at GHCR (conditional, declared skip)"
+    #
+    # STILL EMITTED INTO THE MANIFEST. Dropping it here would make the restore engine's own
+    # conditional arm unreachable in the real pipeline — the engine would only ever receive
+    # `required` entries, so the branch that skips an absent conditional would be dead code that
+    # only the engine's own suite (with a hand-written manifest) exercises. It also loses a real
+    # capability: if `soleur-inngest-config` is published between this derivation and the
+    # restore, an emitted entry gets restored, while a dropped one silently would not.
+    echo "A1 ${repo}:${tag} -> absent at GHCR (conditional, declared skip — emitted for the restore to re-check)"
+    printf '{"repo":"%s","tag":"%s","disposition":"%s"}\n' "$repo" "$tag" "$3" >> "$WORK/manifest.entries"
     return 0
   fi
   case "$cls" in

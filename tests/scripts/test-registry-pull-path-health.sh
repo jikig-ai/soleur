@@ -368,6 +368,36 @@ else
   fail "the floor abort must name the missed pin, not just the count" "$rc" "$out"
 fi
 
+# ── The PREPARE→engine handoff. ─────────────────────────────────────────────────────────────
+# The manifest this gate writes is the restore engine's only input, so its shape is a contract
+# between two files that no other test spans.
+W="$(world "$TMP/w-prepare")"
+out="$(run_gate "$W" --prepare --tags-out "$TMP/pins-out.json")"; rc=$?
+if [[ "$rc" -eq 0 ]] && jq -e . "$TMP/pins-out.json" >/dev/null 2>&1; then
+  pass "PREPARE writes a manifest that parses as JSON"
+else
+  fail "the emitted manifest must be valid JSON" "$rc" "$out"
+fi
+
+n_req=$(jq -r '[.entries[] | select(.disposition == "required")] | length' "$TMP/pins-out.json" 2>/dev/null)
+n_floor=$(jq -r '.floor' "$TMP/pins-out.json" 2>/dev/null)
+if [[ "$n_req" == "$n_floor" ]]; then
+  pass "the emitted manifest's required count equals its declared floor (the engine rejects otherwise)"
+else
+  fail "manifest required=$n_req vs floor=$n_floor — the engine would reject this" "?" ""
+fi
+
+# The conditional entry must survive into the manifest EVEN THOUGH it did not resolve. Dropping
+# it makes the engine's own conditional arm unreachable in the real pipeline — the engine would
+# only ever receive `required` entries, so the branch that skips an absent conditional would be
+# dead code exercised solely by the engine's suite with a hand-written manifest.
+if jq -e '[.entries[] | select(.disposition == "conditional")] | length >= 1' "$TMP/pins-out.json" >/dev/null 2>&1; then
+  pass "an unresolved conditional pin is still EMITTED, keeping the engine's conditional arm live"
+else
+  fail "conditional pins must reach the manifest, or the engine's skip branch is dead code" "?" \
+    "$(cat "$TMP/pins-out.json")"
+fi
+
 # ── A5 — THE ABORT/DEGRADE BOUNDARY. Both directions. ───────────────────────────────────────
 # Authorisation and correctness failures abort; availability failures degrade.
 W="$(world "$TMP/w-a5-rejected")"
