@@ -489,6 +489,14 @@ jobs:
       - name: Run cosign trusted-root staleness + integrity gate (#6005)
         run: bash apps/web-platform/infra/cosign-trusted-root-staleness.test.sh
 
+      # Per-PR COHERENCE half of the zot pin cadence (#7282). This workflow carries a
+      # `paths:` filter, which is exactly right here (every PR touching the pin or its
+      # sidecar is under apps/*/infra/**) and insufficient for the AGE half — a repo that
+      # goes 90 days without an infra PR would never redden. The age backstop is therefore
+      # a second, PR-cadence-independent trigger on rule-audit.yml's cron.
+      - name: Run zot image pin staleness + coherence gate (#7282)
+        run: bash apps/web-platform/infra/zot-image-staleness.test.sh
+
       - name: Run inngest config-refresh bundle packager guard (#6780 ADR-135 HARD-2 + fail-closed)
         run: bash apps/web-platform/infra/inngest-config-bundle-pack.test.sh
 

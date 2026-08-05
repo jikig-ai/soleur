@@ -87,6 +87,129 @@ jobs:
               --body-file "$RUNNER_TEMP/model-drift-body.md"
           fi
 
+      # DETECTION half of the zot pin cadence (#7282). Enforcement is
+      # zot-image-staleness.test.sh on infra-validation.yml (per-PR). This step is the
+      # PR-cadence-independent trigger, and it carries TWO distinct conditions:
+      #   (1) offline age/coherence  — catches "the analysis went stale"
+      #   (2) live upstream poll     — catches "upstream moved and we are behind"
+      # Both are needed. (2) alone rebuilds a single point of failure: if the poll breaks
+      # (revoked token, API shape change, upstream repo rename) it goes quiet, and quiet
+      # reads as healthy. (1) needs no network and reddens off the sidecar's own recorded
+      # date, so it still fires when the poll is dead. (1) alone is what #7282 already was:
+      # a fresh-looking sidecar 18 releases behind.
+      #
+      # Advisory only — this NEVER edits the pin. It files one issue; a human opens the
+      # real, CI-gated, CLA-checked PR. Nothing auto-writes the sole pull path's binary.
+      # (There is no Renovate here: measured 2026-08-05, zero Renovate PRs in this repo's
+      # history and no Dependency Dashboard. renovate.json5 was an inert config and this
+      # PR removes it. Do not "restore" bot-managed pinning without re-verifying that.)
+      - name: Detect zot pin staleness
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          DRIFT=""
+
+          # --- (1) offline age + coherence -------------------------------------------
+          # Assignment-then-$? would ABORT here: a GitHub `run:` block defaults to
+          # `bash -eo pipefail`, so a non-zero command substitution kills the step at that
+          # line and every diagnosis below it never runs. Hence the explicit set +e/-e,
+          # matching the model-drift step above.
+          set +e
+          OUT="$(bash apps/web-platform/infra/zot-image-staleness.test.sh 2>&1)"
+          RC=$?
+          set -e
+          if [ "$RC" -eq 2 ]; then
+            echo "zot-image-staleness.test.sh reported DETECTOR FAILURE (rc=2); failing step." >&2
+            echo "$OUT" >&2
+            exit 2
+          elif [ "$RC" -ne 0 ] && [ "$RC" -ne 10 ]; then
+            echo "zot-image-staleness.test.sh exited unexpectedly (rc=$RC); failing step." >&2
+            echo "$OUT" >&2
+            exit "$RC"
+          fi
+          [ "$RC" -eq 10 ] && DRIFT="stale"
+
+          # --- (2) live upstream poll --------------------------------------------------
+          TF=apps/web-platform/infra/zot-registry.tf
+          set +e
+          PINNED="$(grep -oE 'zot-linux-amd64:v[0-9]+\.[0-9]+\.[0-9]+' "$TF" | head -1 | cut -d: -f2)"
+          LATEST="$(gh api repos/project-zot/zot/releases/latest --jq .tag_name 2>&1)"
+          API_RC=$?
+          set -e
+
+          # A failed poll is a DETECTOR FAILURE, never "up to date". An empty result read
+          # as no-drift is the silent-green shape this whole change exists to remove.
+          if [ "$API_RC" -ne 0 ] || [ -z "$LATEST" ]; then
+            echo "upstream release poll failed (rc=$API_RC): $LATEST" >&2
+            echo "Refusing to report 'fresh' from a failed probe." >&2
+            exit 1
+          fi
+          # $LATEST is third-party (upstream-controlled) text. Validate its SHAPE and never
+          # let it reach a command; it is only ever compared and written to a body file.
+          if ! printf '%s' "$LATEST" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "upstream tag_name '$LATEST' is not a plain vX.Y.Z tag; refusing to interpret." >&2
+            exit 1
+          fi
+          if [ -z "$PINNED" ]; then
+            echo "could not parse the pinned zot version from $TF; failing step." >&2
+            exit 2
+          fi
+          if [ "$PINNED" != "$LATEST" ]; then
+            DRIFT="${DRIFT:+$DRIFT+}behind"
+          fi
+
+          if [ -z "$DRIFT" ]; then
+            echo "zot pin is current ($PINNED) and the analysis is fresh."
+            exit 0
+          fi
+
+          # --- file/update ONE idempotent issue ----------------------------------------
+          # Both conditions route to the same issue so a pin that is both stale AND behind
+          # does not open duplicates.
+          gh label create zot-pin-drift --color FBCA04 \
+            --description "zot registry image pin is stale or behind upstream (#7282)" \
+            --force >/dev/null 2>&1 || true
+          {
+            echo "The pinned zot registry image needs attention (condition: \`$DRIFT\`)."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Pinned | \`$PINNED\` |"
+            echo "| Upstream latest | \`$LATEST\` |"
+            echo
+            echo "zot is the **sole pull path** (ADR-096) with no fallback, so this is a"
+            echo "supply-chain and reliability item, not cosmetic."
+            echo
+            echo "Offline gate output:"
+            echo
+            echo '```'
+            echo "$OUT"
+            echo '```'
+            echo
+            echo "Remediation — follow \`## Bump procedure\` in"
+            echo "\`apps/web-platform/infra/zot-image.provenance.md\`. It is a real procedure"
+            echo "(rotate the rollback pin, re-resolve BOTH arch digests, re-diff four upstream"
+            echo "source anchors, re-MEASURE two version-scoped claims by running the image),"
+            echo "not a version-string swap. Agent entry point:"
+            echo
+            echo '```'
+            echo "/soleur:one-shot \"refresh the zot pin provenance sidecar per apps/web-platform/infra/zot-image.provenance.md section 'Bump procedure'\""
+            echo '```'
+            echo
+            echo "_Filed automatically by rule-audit.yml zot-pin drift detection (#7282)._"
+          } > "$RUNNER_TEMP/zot-pin-drift-body.md"
+          EXISTING="$(gh issue list --label zot-pin-drift --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file "$RUNNER_TEMP/zot-pin-drift-body.md"
+            echo "Updated existing zot-pin-drift issue #$EXISTING."
+          else
+            gh issue create --label zot-pin-drift \
+              --title "zot-pin-drift: registry image pin needs attention" \
+              --body-file "$RUNNER_TEMP/zot-pin-drift-body.md"
+          fi
+
       - name: Email notification (failure)
         if: failure()
         uses: ./.github/actions/notify-ops-email
