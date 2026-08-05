@@ -51,6 +51,27 @@ where this host runs (#6460). A recut dispatched while that holds aborts at the 
 > caveat is stated here deliberately: the banner's removal must not convert a hard stop into a
 > signpost toward the unguarded path.
 
+#### And check the `user_data` budget FIRST — this one fails *after* the destroy (#7299)
+
+The stock gate above is the survivable blocker: it aborts before anything is destroyed. The
+`user_data` size cap is **not**. Hetzner rejects a server CREATE whose stored `user_data` exceeds
+**32,768 B**, and the recut's create runs *after* its destroy — so an over-cap config strands the
+sole pull path with the store already gone.
+
+Run this before dispatching. It needs no credentials and touches nothing:
+
+```bash
+bash apps/web-platform/infra/registry-userdata-budget.sh
+```
+
+`headroom` must be **≥ 0**. Measured 2026-08-05 on `main`: **36,404 B stored, −3,636 B headroom —
+OVER CAP.** While that holds the recut must not be dispatched at all; #7299 owns the fix
+(`registry_rationale_strip`, the same mechanism #7280 used for the previous 1,860 B overage).
+
+This check is deliberately **not** a D10 predicate: D10 authorizes on the *pull path* being
+re-materialisable, and a property of the host the destroy replaces cannot gate that destroy without
+violating the independence criterion (ADR-169). It is a dispatch precondition, and it lives here.
+
 ### What the gate now checks
 
 | | Predicate | On failure |
