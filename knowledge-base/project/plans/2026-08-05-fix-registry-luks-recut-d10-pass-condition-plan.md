@@ -557,14 +557,38 @@ recovery lever and in the other authorises an unrecoverable destroy.
 
 Create `scripts/registry-restore-from-ghcr.sh`.
 
-- **Contract:** `--target <registry-host:port> --tags-from <manifest.json> [--rehearse]`, reading
-  credentials from the environment. Emits a per-entry line and a machine-readable summary.
-- **`--rehearse` has exactly one defined effect and it must be stated in the header:** it selects
-  `cosign sign --tlog-upload=false` (and verification with `--insecure-ignore-tlog`) so a gate run
-  does not write to the public Rekor log. Everything else — copy, verify, exit codes — is identical.
-  Without a defined semantic the flag either does nothing (and AC14's "without `--rehearse`" is
-  vacuous) or it silently violates A2's own anti-drift guard that *"the only difference is the
-  target URL and credentials"*. A suite row asserts the two invocations differ in that flag alone.
+- **Contract:** `--target <registry-host:port> --tags-from <manifest.json>`, reading credentials
+  from the environment. Emits a per-entry line and a machine-readable summary.
+
+#### `--rehearse` re-scoped — the flag is DELETED (work-phase deviation, 2026-08-05)
+
+The plan gave `--rehearse` exactly one defined effect: select `cosign sign --tlog-upload=false`
+(verify with `--insecure-ignore-tlog`) so a gate run does not pollute the public Rekor log — and
+warned that without a defined semantic the flag is either vacuous or violates A2's anti-drift guard.
+
+**Phase 0.3 measured the signature mechanism to be `crane copy` of the `sha256-<digest>` tag, so
+nothing signs at all** (the GHCR signature is a Sigstore **bundle v0.3** bound to the image digest,
+not a simple-signing payload pinning a registry ref — see `phase-0-probe-evidence.md` §0.3). With no
+`cosign sign` in the engine, the flag's only defined effect has no referent.
+
+Two replacements were considered and **rejected on measurement**:
+
+- *Make `--rehearse` assert a loopback target, and its absence assert a non-loopback one.* **Wrong —
+  it cannot discriminate.** The real restore also targets `127.0.0.1:5000`, because CI reaches prod
+  zot through `cloudflared access tcp` on loopback by design (this plan's own Encryption Posture
+  says so). Both sides are loopback plain-HTTP; the guard would have been unfalsifiable.
+- *Keep it as a label on the summary line.* That is the "does nothing" arm the plan already rejected;
+  the emitted `target=` field already discriminates rehearsal from real in the log.
+
+**Resolution: delete the flag.** The two invocations then differ in exactly `--target` and the
+credential environment — which is *verbatim* the property A2's anti-drift guard asks for
+(*"one script, one entrypoint; the only difference is the target URL and credentials"*). This is
+simpler than the plan's design and satisfies the same invariant more directly. The suite asserts the
+workflow's rehearsal and real steps invoke the same script path and differ only in those two inputs.
+
+**AC14 is amended accordingly** (see Acceptance Criteria): "without `--rehearse`" would be
+trivially-true-and-meaningless against a script with no such flag, which is the ceremony class the
+plan's own R13 cut.
 - **Exit codes, fully enumerated** (no bare `1` for "something went wrong"):
   `0` all restored **and** verified · `2` source unavailable · `3` sink unavailable ·
   `4` verification mismatch · `5` credential unreadable · `6` could-not-classify (UNKNOWN).
@@ -1079,9 +1103,17 @@ discoverability_test:
     restore inputs. The skip's *stated reason* in the comment is rewritten (the old one cites
     `ghcr-fallback` events the new gate never reads).
 14. The real restore runs in a **separate job chained by `needs:`**, invoking
-    `scripts/registry-restore-from-ghcr.sh` without `--rehearse` and without `continue-on-error`,
-    with an explicit `if:` that covers the resume arm. `registry_luks_recut`'s
-    `timeout-minutes: 30` is unchanged and no multi-GB transfer runs inside it.
+    `scripts/registry-restore-from-ghcr.sh` without `continue-on-error`, with an explicit `if:` that
+    covers the resume arm. `registry_luks_recut`'s `timeout-minutes: 30` is unchanged and no multi-GB
+    transfer runs inside it. **Amended at work time** (see [`--rehearse` re-scoped](#--rehearse-re-scoped--the-flag-is-deleted-work-phase-deviation-2026-08-05)):
+    the original clause read "without `--rehearse`", which is trivially true against a script that
+    has no such flag. The criterion it was reaching for is the anti-drift one, so it is now: the
+    rehearsal step and the real-restore step invoke the **same script path** and differ in exactly
+    `--target` and the credential environment — asserted by a suite row.
+14b. The restore job carries an explicit `timeout-minutes`, and a restore failure or timeout is
+    fail-loud (per-exit-code `::error::` + job failure). Where the wall-clock is unmeasured
+    (Phase 0.4 residual), no artifact may state or imply a numeric bound that was never measured.
+    *(CPO sign-off condition 1.)*
 15. A4 invokes the live CF-Access credential grader (`scripts/zot-mirror-diagnosis.sh`
     `zot_mirror_verdict`), not a non-emptiness check: `grep -c 'zot_mirror_verdict\|zot-mirror-diagnosis'`
     in the gate or its workflow step is ≥ 1, and a suite row asserts `stale` → abort.

@@ -128,14 +128,66 @@ $2 = path to its --json-file output`, and `scripts/check-cloudflare-token-drift.
 only the grader yields `unmeasured` → DEGRADE, i.e. a predicate that can never abort. **A4 must
 invoke the detector, then grade** — pinned by a suite row plus a structural check.
 
-## 0.3 — signature source material — **present**
+## 0.3 — signature mechanism — **RESOLVED: COPY the signature tag. No re-signing, no `id-token: write`.**
+
+The plan left this as a fork ("Phase 0 picks one by probe"), with the copy arm carrying a warning:
+*"the simple-signing payload pins `critical.identity.docker-reference` to the GHCR ref, so
+`cosign verify` against a zot ref may reject it."* **That risk does not exist here**, and both
+halves are measured.
+
+**(a) Source material exists.**
 
 ```
 $ crane ls ghcr.io/jikig-ai/soleur-web-platform | grep '^sha256-b04096d3'
 sha256-b04096d3bfb639c60be267da11bfd831cb332d295363f7a0d8224eb303be75e5
 ```
 
-The cosign signature tag exists at GHCR, so the copy mechanism has source material.
+**(b) The payload is not simple-signing, so there is no `docker-reference` to mismatch.**
+
+```
+$ crane manifest ghcr.io/jikig-ai/soleur-web-platform:sha256-b04096d3…
+{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[
+ {"mediaType":"application/vnd.oci.image.manifest.v1+json","size":876,
+  "digest":"sha256:7f7793c2…",
+  "artifactType":"application/vnd.dev.sigstore.bundle.v0.3+json"}]}
+```
+
+`critical.identity.docker-reference` is a field of the legacy **simple-signing** payload
+(`application/vnd.dev.cosign.simplesigning.v1+json`). This is a **Sigstore bundle v0.3**, which
+binds to the image **digest**, with identity carried by the Fulcio certificate. `crane copy` is
+digest-preserving, so a copied signature verifies identically at a zot ref.
+
+**(c) The repo's verify invocation confirms it** — `ci-deploy.sh:1993-2001`:
+
+```
+cosign verify --offline ${zot_insecure:+--allow-insecure-registry} \
+  --trusted-root=/etc/cosign/trusted_root.json \
+  --certificate-identity-regexp="$COSIGN_IDENTITY_REGEXP" \
+  --certificate-oidc-issuer="$COSIGN_OIDC_ISSUER" "$repo_digest"
+```
+
+Identity is checked against the **certificate** (`--certificate-identity-regexp` +
+`--certificate-oidc-issuer`), never against a registry ref, and the target is `$repo_digest` — a
+digest ref. `--allow-insecure-registry` is already wired for exactly the zot case, so the host
+already expects to verify signatures on zot-pulled digests.
+
+The plan inferred *"that is why the release path re-signs rather than copying"*. That inference does
+not hold: the release path signs because it is the **producer** of a newly-built image, not because
+copying was tried and rejected.
+
+**Consequences, all simplifying:**
+
+- The restore **copies** `sha256-<digest>` alongside each image. Cheapest arm, and the one the plan
+  already preferred on cost.
+- The recut job needs **no `id-token: write`** — Phase 3's permission block is `packages: read` only.
+- The keyless-rehearsal Rekor-pollution concern **evaporates**: nothing signs, so no gate run writes
+  to the public transparency log, and `--tlog-upload=false` / `--insecure-ignore-tlog` are moot.
+
+**This voids `--rehearse`'s only plan-defined effect**, which was to select
+`cosign sign --tlog-upload=false`. The plan warns that a flag without a defined semantic is either
+vacuous or violates A2's anti-drift guard. Resolution — see
+`## --rehearse re-scoped` in the plan: the flag is kept with a **different, safety-bearing and
+bidirectionally-testable** semantic (a target-shape guard), not deleted and not left vacuous.
 
 ## Required pins resolve at GHCR — **verified, not assumed**
 

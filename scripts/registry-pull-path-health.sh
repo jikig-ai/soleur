@@ -1,250 +1,427 @@
 #!/usr/bin/env bash
-# D10 — PRE-DESTROY pull-path health gate for the registry-luks-recut dispatch (#6929).
+# D10 — PRE-DESTROY authorization gate for the registry-luks-recut dispatch (#6929 / #7277).
 #
-# !!! THIS GATE'S PREMISE IS RETRACTED — 2026-07-30 (#7071). READ BEFORE RELYING ON A PASS. !!!
+# WHAT AUTHORIZES A RECUT, in one sentence: a recut is authorized only when CI has just proven,
+# by executing it, that every image reference production depends on can be re-materialised into
+# an empty registry from GHCR — a source that survives the destroy.
 #
-# The paragraph below is retained as the ORIGINAL rationale. Its central assumption is now false,
-# and the consequence is that a PASS here no longer means what it says.
+# ── WHY THE PREVIOUS AUTHORIZATION CONDITION COULD NOT BE REPAIRED ──────────────────────────
+# Until 2026-07-30 this gate authorized a destroy on "GHCR covers the empty-store window", and
+# measured that with Sentry counters. Two independent failures ended that:
 #
-#   ~~WHY: the recut destroys the zot store. That is only an acceptable trade because the store
-#   is a DISPOSABLE GHCR MIRROR — pulls fall through to GHCR while it re-fills. If the GHCR
-#   fallback path is ALREADY degraded when the recut fires, that assumption is false and the
-#   dispatch would create the #6400 total-deploy-outage rather than merely tolerating an empty-
-#   store window. So: refuse to destroy the store while the very path that covers its absence is
-#   unhealthy.~~
+#   * the PREMISE was retracted (#7071). The host->GHCR edge is dead: the read PAT is revoked
+#     (401) and the minter is disabled (403 DENIED). Nothing covers the window.
+#   * the OPERAND was dark. `ghcr-fallback` is emitted in ci-deploy.sh only INSIDE the success
+#     branch of a GHCR pull, so with the credential revoked it can never fire and could never
+#     abort anything.
 #
-# WHAT CHANGED. There is no GHCR fallback to be healthy or degraded: the read PAT is revoked
-# (GET api.github.com/user -> 401) and the minter is disabled (pull-token mint -> 403 DENIED).
-# So the empty-store window is NOT covered by anything — it is a total pull outage until the next
-# CI dual-push re-fills zot. The trade this gate was written to protect no longer exists.
+# The 2026-07-30 revision responded by refusing unconditionally. That was the right call at the
+# time and the wrong thing to leave in place: it made the recut unfireable during exactly the
+# incident it exists to recover from. This rewrite does not repair the old premise — it REPLACES
+# it. The new criterion never claims the empty-store window is covered. It claims the window is
+# ENDED, by a restore that has just been executed successfully in rehearsal and is then executed
+# for real by a chained job.
 #
-# AND ONE OF ITS OWN ABORT OPERANDS IS NOW STRUCTURALLY DARK. `ghcr-fallback` is emitted at
-# ci-deploy.sh only INSIDE the success branch of `_ghcr_pull_or_recover` — i.e. only when a GHCR
-# pull SUCCEEDED. With the credential revoked that event can never fire again, so the operand
-# that most directly measured "is the fallback healthy" is permanently 0. The gate is not fully
-# vacuous — `zot-gate-degraded`, `local-cache` and the non-vacuity floor still fire — but a PASS
-# is now evidence about zot's own health only, never about cover for its absence.
+# ── THE INDEPENDENCE CRITERION ───────────────────────────────────────────────────────────────
+# A gate on an irreversible destroy may not depend on the component whose failure motivates it.
+# This gate depends on GHCR-read-from-CI, which is NOT that component: the release pipeline's
+# failing half is the PUSH into prod zot (9 consecutive `copy_v` failures), while its GHCR-read
+# half demonstrably works. If GHCR-read-from-CI is broken there is genuinely nothing to restore
+# from, and refusing is then correct rather than a deadlock.
 #
-# ADR-096 states the principle this violates, and states it about this class: "A gate that cannot
-# fail is worse than no gate, because it is read as evidence."
+# ── THE PREDICATES ───────────────────────────────────────────────────────────────────────────
+#   A0  inventory derived from production's OWN pins           ABORTING
+#   A1  source proof: every pin resolves at GHCR               ABORTING
+#   A2  rehearsed restore into a throwaway registry            POSITIVE — this IS the pass condition
+#   A3  non-vacuity floor                                      ABORTING
+#   A4  sink-credential validity at the Cloudflare Access edge ABORTING on a MEASURED dead count
+#   A5  live sink proof against prod zot                       ADVISORY-DEGRADING (see below)
 #
-# DO NOT read a PASS here as authorization to destroy the store. Re-derive the authorization
-# condition before the next recut; this file has not been re-scoped, only marked.
+# Every predicate has an explicit could-not-measure bucket that ABORTS, and each bucket is
+# evaluated BEFORE any comparison. The verdict switch has no default-pass arm. "I could not
+# check" must never read as "it is fine" on the one gate protecting an irreversible destroy.
 #
-# ZERO-TOLERANCE THRESHOLD. A healthy fleet emits ONLY `registry=zot`
-# (apps/web-platform/infra/ci-deploy.sh registry_pull_event); `ghcr-fallback` and `local-cache`
-# are both level=warning precisely because they are never expected. So ">=1 event ⇒ ABORT" has
-# no false-abort surface and is a real number, not a hand-wave like "sustained hits".
+# ── A5 IS DELIBERATELY THE INVERSE, AND THIS IS THE MOST DANGEROUS LINE IN THE FILE ─────────
+# Everywhere else here, "cannot measure" means "cannot prove safe" and aborts. In A5 the
+# UNmeasurability *is* the incident, so it degrades and proceeds.
 #
-# ── WHY SENTRY (and a CORRECTION to an earlier claim in this file) ──────────────────────────
-# This gate was originally specified against `betterstack-query.sh --grep ghcr-fallback`, and an
-# earlier revision of this header asserted that query "can never return a row" because "there is
-# no web-host table" in Better Stack.
+# ONLY AUTHORISATION AND CORRECTNESS FAILURES ABORT. AVAILABILITY FAILURES DEGRADE.
 #
-# THAT ASSERTION WAS FALSE, and the way it was reached is worth recording, because it is the
-# exact failure this gate exists to prevent — reading absence-of-signal as absence-of-channel:
+# An earlier draft put `connection reset by peer` mid-upload in the ABORT bucket. That is the
+# literal failure text of release run 30988480437 — the incident this gate exists to authorise
+# recovery from — so that draft would have aborted TODAY, for the same reason the old gate did.
+# A credential rejection, by contrast, is independent of zot's health: it means the post-destroy
+# restore cannot work no matter how healthy the rebuilt host is, which is precisely the state in
+# which a destroy is unrecoverable.
 #
-#   * `registry_pull_event` (apps/web-platform/infra/ci-deploy.sh) emits the TEXT
-#     `IMAGE_PULL_OK: registry=<r> image=<i> tag=<t>` via `logger -t ci-deploy`. The string
-#     "registry_pull_event" is the shell FUNCTION name and appears in no log line — so grepping
-#     for it returns zero for a reason that has nothing to do with ingestion.
-#   * `apps/web-platform/infra/server.tf` ships the SAME vector.toml to the WEB host, and
-#     `ci-deploy` is in Vector Source 4's SYSLOG_IDENTIFIER allowlist — so web-host journald
-#     lands in the SAME table as the inngest feed. Live-verified 2026-07-25: an
-#     `--since 720h --grep IMAGE_PULL_OK` query returns rows carrying
-#     `"SYSLOG_IDENTIFIER":"ci-deploy","host":"soleur-web-platform"`.
-#   * The `--grep ghcr-fallback` zero was therefore a TRUE zero — a healthy fleet that emitted no
-#     fallbacks in 30 days — not a structural absence.
+# Do not "fix" this asymmetry into consistency. It is pinned by test rows in both directions.
 #
-# Sentry is retained as the query source because it is where the SEVERITY lives (these events are
-# `level: "warning"` there and drive the `zot_mirror_fallback_rate` alert), and because
-# scripts/followthroughs/zot-soak-6122.sh supplies a hardened query helper for exactly these tags.
-# Positive control, live 2026-07-25: `feature:supply-chain op:image-pull registry:"zot"` returns
-# 88 events over 720h, so the tag idiom and the credential both work.
+# ── WHAT WAS REMOVED, AND WHERE EACH ROLE WENT ───────────────────────────────────────────────
+#   the three Sentry counters   -> premise retracted; the surviving question ("can the source
+#                                  still serve?") is answered directly by A1.
+#   the registry="zot" denominator -> its anti-vacuity role is LOAD-BEARING and is preserved by
+#                                  A3, which is a positive observation of the thing that matters
+#                                  and is available during a zot outage. The denominator was
+#                                  zero exactly then.
+#   the `zot_served == 0` abort -> deleted outright. It fired during the crash-loop the recut
+#                                  recovers from, so it was a second unfireable gate hiding
+#                                  behind the first. Blocking on it IS the deadlock.
 #
-# KNOWN RESIDUAL: Sentry emission from ci-deploy.sh is FAIL-OPEN (`curl … || logger`), so a Sentry
-# ingest outage drops these events silently. The journald→Vector→Better Stack path does NOT have
-# that property. The DENOMINATOR below is what makes that residual survivable: an outage that
-# suppresses the fallback counters suppresses the zot counter too, and a zero denominator ABORTS.
-#
-# FAIL-CLOSED. An unreachable API, a bad token, or an unexpected payload shape ABORTS. The gate
-# protects an irreversible destroy; "I could not check" must never read as "it is fine".
-#
-# ── THE DENOMINATOR (why zero degraded events is not, by itself, health) ────────────────────
-# `total == 0` is produced by FOUR distinct states and only one of them is health:
-#   1. the fleet deployed and zot served every pull            — healthy;
-#   2. nothing deployed in the window (a quiet weekend)        — no evidence;
-#   3. ZOT_ACTIVE=0 — the zot gate degraded, so ci-deploy skipped zot entirely and emitted
-#      NOTHING while the fleet ran 100% on GHCR                — the exact state this gate exists
-#                                                                to catch, scoring as clean;
-#   4. the web host is Sentry-dark (the emitter's env trio unset) — every event invisible.
-# So a bare "zero bad events" reading is indistinguishable from "we observed nothing at all".
-# This gate therefore requires POSITIVE EVIDENCE that the pull path was exercised at all
-# (registry=zot >= 1) before it will accept a zero. Precedent: zot-soak-6122.sh added the same
-# denominator arm for the same reason ("nothing above proves the fleet was OBSERVED at all").
+# Two structural safety properties are kept verbatim: fail-closed on any unmeasurable input, and
+# the GITHUB_ACTIONS-guarded `::add-mask::` emit (unguarded, it prints the live prd credential to
+# the operator's terminal, because the runbook tells them to run this locally).
 #
 # Usage:
-#   scripts/registry-pull-path-health.sh [--since-hours N]
+#   scripts/registry-pull-path-health.sh --rehearse-target <host:port> [--tags-out <path>]
+#   scripts/registry-pull-path-health.sh --prepare --tags-out <path>
 #
 # Env:
-#   SENTRY_AUTH_TOKEN  (required) — read scope on the org's events. In CI, from Doppler
-#                      prd_terraform (the same config the dispatch already reads).
-#   SENTRY_ORG         (default jikigai-eu)
-#   REGISTRY_PULL_HEALTH_QUERY_CMD (test seam) — invoked with the Sentry query string; must echo
-#                      an integer event count, or a non-numeric token to signal a failed query.
+#   APP_DOMAIN_BASE   (required) — the /health URL is derived from it, never hard-coded.
+#   ZOT_PUSH_USER / ZOT_PUSH_TOKEN — passed through to the rehearsal.
+#   Test seams, one per external dependency, each able to emit every classified token:
+#     REGISTRY_GATE_HEALTH_CMD   REGISTRY_GATE_CRANE_CMD   REGISTRY_GATE_RESTORE_CMD
+#     REGISTRY_GATE_DRIFT_CMD    REGISTRY_GATE_SINK_CMD
 
 set -uo pipefail
 
-SINCE_HOURS=24
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+REHEARSE_TARGET=""
+TAGS_OUT=""
+PREPARE_ONLY=0
+
+abort() { # $1 = predicate label, rest = message
+  local p="$1"; shift
+  echo "::error::registry-pull-path-health: ${p} ABORT — $*" >&2
+  echo "verdict=REFUSED predicate=${p}"
+  exit 1
+}
+usage_err() { echo "::error::registry-pull-path-health: $*" >&2; exit 1; }
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --since-hours) SINCE_HOURS="${2-}"; shift 2 ;;
-    *) echo "::error::registry-pull-path-health: unknown argument '$1'" >&2; exit 1 ;;
+    --rehearse-target) REHEARSE_TARGET="${2-}"; shift 2 ;;
+    --tags-out)        TAGS_OUT="${2-}";        shift 2 ;;
+    --prepare)         PREPARE_ONLY=1;          shift ;;
+    *) usage_err "unknown argument '$1'" ;;
   esac
 done
 
-if [[ ! "$SINCE_HOURS" =~ ^[1-9][0-9]*$ ]]; then
-  echo "::error::registry-pull-path-health: --since-hours must be a positive integer (got '${SINCE_HOURS}')." >&2
-  exit 1
-fi
+HEALTH_CMD="${REGISTRY_GATE_HEALTH_CMD:-}"
+CRANE="${REGISTRY_GATE_CRANE_CMD:-crane}"
+RESTORE="${REGISTRY_GATE_RESTORE_CMD:-${ROOT}/scripts/registry-restore-from-ghcr.sh}"
+DRIFT="${REGISTRY_GATE_DRIFT_CMD:-${ROOT}/scripts/check-cloudflare-token-drift.sh}"
+SINK_CMD="${REGISTRY_GATE_SINK_CMD:-}"
 
-ORG="${SENTRY_ORG:-jikigai-eu}"
-API="${SENTRY_API_BASE:-https://sentry.io/api/0}"
+WORK="$(mktemp -d)" || usage_err "could not create a scratch directory."
+trap 'rm -rf "$WORK"' EXIT
 
-# The watched signals. Both are level=warning in ci-deploy.sh and both mean "zot did not serve":
-#   ghcr-fallback — zot WAS attempted and the pull failed (the pull path is degraded).
-#   local-cache   — BOTH registries failed and an already-running image was reloaded. Strictly
-#                   worse than ghcr-fallback: it means the GHCR cover this recut depends on was
-#                   ITSELF unavailable.
-# Declared as an array so "declared but never counted" is unrepresentable in source, with a
-# runtime cardinality floor below so an emptied array cannot silently yield a PASS.
-declare -A WATCHED=(
-  [ghcr-fallback]='feature:supply-chain op:image-pull registry:"ghcr-fallback"'
-  [local-cache]='feature:supply-chain op:image-pull registry:"local-cache"'
-  # ZOT_ACTIVE=0 — the zot gate degraded, so ci-deploy never ATTEMPTED zot and emitted no
-  # ghcr-fallback at all while the fleet ran entirely on GHCR. Without this entry that state is
-  # invisible to the two counters above and scores as clean. It is recorded elsewhere in-tree as
-  # the highest-volume degraded signal, so omitting it would blind the gate to its likeliest
-  # real-world trigger.
-  [zot-gate-degraded]='feature:supply-chain op:image-pull registry:"zot-gate-degraded"'
+# ── A3's declared constants. ────────────────────────────────────────────────────────────────
+# FLOOR is declared here WITH its derivation, not left as a placeholder, because an under-set
+# floor is the vacuity hole A3 exists to close. Raising it is the deliberate act that admits a
+# new required image.
+#
+# FLOOR = 2:
+#   jikig-ai/soleur-web-platform        at production's own /health version   (required)
+#   jikig-ai/soleur-inngest-bootstrap   at the cloud-init.yml pin             (required)
+# soleur-inngest-config is `conditional` and does NOT count: it is not published at GHCR
+# (measured 2026-08-05 — `crane ls` returns NAME_UNKNOWN), and a gate listing it as required
+# would abort forever on a repo that does not exist, creating exactly the new deadlock this
+# rewrite exists to remove.
+readonly FLOOR=2
+
+# The pin set is a SOURCE-LEVEL declaration, so "declared but never counted" is unrepresentable
+# — the same discipline the removed signal array carried, re-pointed at an instrument that is
+# available during a zot outage. Each entry: repo|tag-derivation|disposition.
+#
+# (The removed array's name is spelled nowhere in this file on purpose: AC8 is a whole-file
+# grep for the retired Sentry operands, and a comment naming one would false-fail a correct
+# gate — the same trap AC1 documents for the retired refusal phrase.)
+#
+# This idiom transfers here precisely BECAUSE the set is declared in source. It would NOT have
+# transferred to a derive-from-`crane ls` design, where the set is computed at runtime and there
+# is no source arity to pin — applying it there would have been cargo-culting an assertion that
+# cannot hold.
+readonly REQUIRED_PINS=(
+  "jikig-ai/soleur-web-platform|health-version"
+  "jikig-ai/soleur-inngest-bootstrap|cloud-init-pin"
+)
+readonly CONDITIONAL_PINS=(
+  "jikig-ai/soleur-inngest-config|terraform-digest-pointer"
 )
 
-# The DENOMINATOR. Proves the pull path was exercised at all in the window; without it, "no bad
-# events" and "we observed nothing" are the same reading. See the header.
-DENOMINATOR_QUERY='feature:supply-chain op:image-pull registry:"zot"'
-
-if (( ${#WATCHED[@]} != 3 )); then
-  echo "::error::registry-pull-path-health: WATCHED has ${#WATCHED[@]} entries, expected 3 — refusing to report a verdict on a partial signal set." >&2
-  exit 1
+declared_required="${#REQUIRED_PINS[@]}"
+if (( declared_required != FLOOR )); then
+  abort A3 "the declared required-pin set has ${declared_required} entries but FLOOR is ${FLOOR}. Refusing to report a verdict on a pin set that does not match its own floor — a silently downgraded 'required' entry is how this gate would go green while production stayed unrestorable."
 fi
 
-if [[ -z "${REGISTRY_PULL_HEALTH_QUERY_CMD:-}" && -z "${SENTRY_AUTH_TOKEN:-}" ]]; then
-  echo "::error::registry-pull-path-health: SENTRY_AUTH_TOKEN unset — cannot verify the GHCR fallback path is healthy. Refusing to authorize a store destroy against an unverifiable pull path." >&2
-  exit 1
-fi
-# ONLY inside Actions. `::add-mask::` is a workflow COMMAND, not a shell builtin — outside a
-# runner it is an ordinary echo that PRINTS THE TOKEN to the terminal and scrollback. The runbook
-# tells the operator to run this script locally, so an unguarded mask emit would leak the live
-# prd credential onto their screen every time.
-if [[ -n "${GITHUB_ACTIONS:-}" && -n "${SENTRY_AUTH_TOKEN:-}" ]]; then
-  echo "::add-mask::${SENTRY_AUTH_TOKEN}"
-fi
-
-START=$(date -u -d "-${SINCE_HOURS} hours" +%Y-%m-%dT%H:%M:%S 2>/dev/null) || {
-  echo "::error::registry-pull-path-health: could not compute the window start." >&2; exit 1; }
-END=$(date -u +%Y-%m-%dT%H:%M:%S)
-
-# sentry_count <query> → echoes the event count, or a non-numeric token on any failure.
-sentry_count() {
-  if [[ -n "${REGISTRY_PULL_HEALTH_QUERY_CMD:-}" ]]; then
-    $REGISTRY_PULL_HEALTH_QUERY_CMD "$1"
-    return
-  fi
-  local enc url resp status body n
-  enc=$(printf '%s' "$1" | jq -sRr @uri)
-  url="${API}/organizations/${ORG}/events/?query=${enc}&start=${START}&end=${END}&per_page=100&field=title&field=timestamp"
-  resp=$(curl -sS -w '\nHTTP_STATUS:%{http_code}' \
-    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" -H "Accept: application/json" "$url" 2>/dev/null)
-  status=$(printf '%s' "$resp" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:space:]')
-  body=$(printf '%s' "$resp" | sed '$d')
-  if [[ "$status" != "200" ]]; then echo "QUERY_FAILED"; return; fi
-  # Require .data to BE an array. Taking `length` with a zero default would turn an error object
-  # (no .data → null → 0) into a COUNTED ZERO — a false-PASS on the one gate protecting an
-  # irreversible destroy. On a shape mismatch jq errors → empty → QUERY_FAILED.
-  n=$(printf '%s' "$body" | jq -r 'if (.data | type) == "array" then (.data | length) else error("no data array") end' 2>/dev/null)
-  [[ "$n" =~ ^[0-9]+$ ]] && echo "$n" || echo "QUERY_FAILED"
+# classify <last-stderr-line> — shared failure vocabulary.
+#
+# Classify on the LAST line, never on rc and never on line 1: crane exits 1 for every failure
+# class, and its first line is the same `HEAD request failed, falling back on GET: …` for
+# tag-absent, repo-absent AND DNS failure (measured 2026-08-05). rc and line 1 are buckets, not
+# diagnoses. There is no NAME_UNKNOWN arm: GHCR emits that only from the tags API, and every
+# call here is a manifest read. If one is ever added, it falls to UNKNOWN and aborts — loud, and
+# the safe direction.
+classify() {
+  case "$1" in
+    *MANIFEST_UNKNOWN*|*"manifest unknown"*)                          echo NOTFOUND ;;
+    *UNAUTHORIZED*|*DENIED*|*"authentication required"*)              echo DENIED ;;
+    *"no such host"*|*"dial tcp"*|*"connection refused"*|\
+    *"i/o timeout"*|*"TLS handshake"*)                                echo NETWORK ;;
+    *) echo UNKNOWN ;;
+  esac
 }
 
-echo "registry-pull-path-health: window ${START}..${END} (${SINCE_HOURS}h), org=${ORG}"
+# The `tr '\n' ' '` is a WORKFLOW-COMMAND INJECTION GUARD, not formatting. Registry stderr is
+# externally-influenced text interpolated into `::error::` output, and GitHub parses workflow
+# commands per LINE — a newline followed by `::add-mask::` inside it would be executed.
+last_err() { tail -c 400 "$1" 2>/dev/null | tr '\n' ' ' || true; }
 
-total=0
-declare -A COUNTS
-for k in $(printf '%s\n' "${!WATCHED[@]}" | sort); do
-  n=$(sentry_count "${WATCHED[$k]}")
-  if [[ ! "$n" =~ ^[0-9]+$ ]]; then
-    echo "::error::registry-pull-path-health: Sentry query for '${k}' failed (window ${START}..${END}). FAIL-CLOSED: the recut destroys the zot store and this gate is what proves the GHCR fallback can cover its absence. Re-run once Sentry is reachable — do NOT proceed on an unverified pull path." >&2
-    exit 1
+# ── A0 — inventory derivation, from production's OWN pins. ──────────────────────────────────
+# Zero reads of zot: reading the digest list out of zot would make this gate depend on the
+# failing component, and the live catalog is unreadable during a crash-loop.
+#
+# Derived from what production actually PINS, never by re-deriving zot's retention policy. That
+# was rejected on three measured grounds: it reimplements a policy living in
+# cloud-init-registry.yml and will drift (the first draft transcribed it wrongly, dropping the
+# `sha256-.*` signature rule); it is actively harmful, because pushing ~11 tags per repo into a
+# fresh store with hourly gc and keep-5 is the maximal-pressure case for the out-of-order
+# eviction the repo already warns about, and could evict the very tag cloud-init pins; and it
+# buys nothing, because production pins a handful of refs and those are the whole obligation.
+[[ -n "${APP_DOMAIN_BASE:-}" ]] || abort A0 "APP_DOMAIN_BASE is unset, so the /health URL cannot be derived. Hard-coding it here would make the committed-config read decorative."
+HEALTH_URL="https://app.${APP_DOMAIN_BASE}/health"
+
+if [[ -n "$HEALTH_CMD" ]]; then
+  "$HEALTH_CMD" > "$WORK/health.json" 2>"$WORK/health.err"; health_rc=$?
+else
+  # `Cache-Control: no-cache` is load-bearing: a cached edge response carrying a previous
+  # version would satisfy the membership assertion below while the actually-running build is
+  # unrestorable.
+  curl -sf --max-time 20 -H 'Cache-Control: no-cache' "$HEALTH_URL" \
+    > "$WORK/health.json" 2>"$WORK/health.err"; health_rc=$?
+fi
+(( health_rc == 0 )) || abort A0 "could not read ${HEALTH_URL} (rc=${health_rc}). This is a could-not-measure outcome, evaluated before any comparison, and it is NOT a zot-induced deadlock: /health is served by already-running containers and survives a zot outage. $(last_err "$WORK/health.err")"
+
+command -v jq >/dev/null 2>&1 || abort A0 "jq is unavailable, so /health cannot be parsed."
+
+PROD_VERSION="$(jq -r '.version // empty' "$WORK/health.json" 2>/dev/null)"
+PROD_SHA="$(jq -r '.build_sha // empty' "$WORK/health.json" 2>/dev/null)"
+[[ -n "$PROD_VERSION" ]] || abort A0 "/health returned no parseable .version field, so the restore set cannot be derived. Refusing to treat an unparseable response as an empty inventory."
+# build_sha is asserted as well as version, deliberately: a cached edge response carrying a
+# previous version would otherwise satisfy A1 while the build actually running is unrestorable.
+[[ -n "$PROD_SHA" ]] || abort A0 "/health returned .version but no .build_sha. Both are required — a cached edge response can carry a stale version with the running build unrestorable, and asserting only the version would not detect it."
+
+echo "A0 inventory: version=${PROD_VERSION} build_sha=${PROD_SHA} floor=${FLOOR}"
+
+# resolve_tag <derivation> — production's pin, read from where production declares it.
+resolve_tag() {
+  case "$1" in
+    health-version)  printf 'v%s' "$PROD_VERSION" ;;
+    cloud-init-pin)
+      # Read from the file, never hard-coded in this gate: the pin is production's, and a copy
+      # here would drift silently the first time cloud-init is bumped.
+      grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' \
+        "${REGISTRY_GATE_CLOUD_INIT:-${ROOT}/apps/web-platform/infra/cloud-init.yml}" 2>/dev/null \
+        | head -1 | sed 's/.*://' ;;
+    terraform-digest-pointer) printf 'latest' ;;
+    *) printf '' ;;
+  esac
+}
+
+# ── A1 — source proof. A2's precondition and the operator-facing classifier. ────────────────
+# Not an independent fifth leg: `crane copy` performs the same source resolution, so A1 proves
+# nothing A2 does not. Its value is narrower and still worth having — it aborts on a GHCR
+# outage BEFORE multiple GB start moving, and it produces the classified message.
+resolved=0
+: > "$WORK/manifest.entries"
+
+MISSED=""
+
+resolve_one() { # $1 = repo, $2 = derivation, $3 = disposition
+  local repo="$1" tag err cls digest
+  tag="$(resolve_tag "$2")"
+  if [[ -z "$tag" ]]; then
+    # A required pin whose tag cannot be derived from production's own configuration is RECORDED
+    # AS MISSED and left to A3's floor, rather than aborted here.
+    #
+    # That is deliberate. Aborting immediately would leave the floor check below unreachable
+    # through every input this gate accepts — and an unreachable assertion is one a future edit
+    # can delete with the whole suite still green (measured: it survived a mutation battery).
+    # Routing the one input that CAN under-fill the pin set through the floor is what makes the
+    # floor a live guard rather than decoration.
+    if [[ "$3" == "required" ]]; then
+      MISSED="${MISSED}${MISSED:+, }${repo} (tag underivable via '${2}')"
+      echo "A1 ${repo}: tag could not be derived from committed config — recorded as MISSED"
+    fi
+    return 0
   fi
-  COUNTS[$k]=$n
-  total=$(( total + n ))
-done
+  $CRANE digest "ghcr.io/${repo}:${tag}" > "$WORK/d.out" 2>"$WORK/d.err"
+  digest="$(grep -oE '^sha256:[0-9a-f]{64}$' "$WORK/d.out" 2>/dev/null | head -1 || true)"
+  if [[ -n "$digest" ]]; then
+    printf '{"repo":"%s","tag":"%s","disposition":"%s"}\n' "$repo" "$tag" "$3" >> "$WORK/manifest.entries"
+    [[ "$3" == "required" ]] && resolved=$(( resolved + 1 ))
+    echo "A1 ${repo}:${tag} -> ${digest} (${3})"
+    return 0
+  fi
+  err="$(last_err "$WORK/d.err")"
+  cls="$(classify "$err")"
+  if [[ "$3" == "conditional" && "$cls" == "NOTFOUND" ]]; then
+    # A declared skip, recorded rather than silent. The floor counts only `required` entries, so
+    # a conditional skip can never make this gate vacuous.
+    echo "A1 ${repo}:${tag} -> absent at GHCR (conditional, declared skip)"
+    return 0
+  fi
+  case "$cls" in
+    NOTFOUND) abort A1 "required source ghcr.io/${repo}:${tag} did not resolve: absent, OR NOT VISIBLE TO THIS CREDENTIAL. GHCR returns MANIFEST_UNKNOWN for both (measured), so this does NOT prove the tag was deleted — check the job's 'packages: read' permission before concluding it was. crane: ${err}" ;;
+    DENIED)   abort A1 "GHCR rejected this credential for ${repo}:${tag}. crane: ${err}" ;;
+    NETWORK)  abort A1 "GHCR was unreachable resolving ${repo}:${tag} (network/DNS). Nothing has been destroyed. crane: ${err}" ;;
+    *)        abort A1 "resolving ${repo}:${tag} failed in a way this gate cannot classify: UNKNOWN. An unclassified failure must read as neither 'absent' nor 'fine'. crane: ${err}" ;;
+  esac
+}
 
-n_zot=$(sentry_count "$DENOMINATOR_QUERY")
-if [[ ! "$n_zot" =~ ^[0-9]+$ ]]; then
-  echo "::error::registry-pull-path-health: the denominator query (registry=zot) failed (window ${START}..${END}). FAIL-CLOSED — without it, zero degraded events cannot be distinguished from zero observations." >&2
-  exit 1
+for entry in "${REQUIRED_PINS[@]}";    do resolve_one "${entry%%|*}" "${entry##*|}" required;    done
+for entry in "${CONDITIONAL_PINS[@]}"; do resolve_one "${entry%%|*}" "${entry##*|}" conditional; done
+
+# ── A3 — the non-vacuity floor, on what was actually RESOLVED. ──────────────────────────────
+if (( resolved != FLOOR )); then
+  abort A3 "resolved ${resolved} required references but FLOOR is ${FLOOR}${MISSED:+ — missed: ${MISSED}}. An inventory below its floor makes every predicate below pass while proving nothing: this is the vacuity hole the removed Sentry denominator used to cover, and it is the single most likely way this gate fails open."
 fi
 
-echo "pull_path ghcr_fallback=${COUNTS[ghcr-fallback]} local_cache=${COUNTS[local-cache]} zot_gate_degraded=${COUNTS[zot-gate-degraded]} total=${total} threshold=0 zot_served=${n_zot}"
+# Emit the pinned manifest the restore engine consumes. On the resume arm the recut has ALREADY
+# destroyed the volume, so this derivation must have run there too — which is why the calling
+# workflow puts it in an UNCONDITIONAL prepare step.
+MANIFEST="${TAGS_OUT:-$WORK/pins.json}"
+{
+  printf '{ "floor": %s, "entries": [' "$FLOOR"
+  paste -sd, "$WORK/manifest.entries"
+  printf '] }'
+} > "$MANIFEST" 2>/dev/null || abort A0 "could not write the pin manifest to ${MANIFEST}."
+echo "A3 floor satisfied: resolved=${resolved} floor=${FLOOR} manifest=${MANIFEST}"
 
-if (( n_zot == 0 )); then
-  cat >&2 <<EOF
-::error::registry-pull-path-health: ABORT — the pull path is UNOBSERVED in the last ${SINCE_HOURS}h, not proven healthy. Zero degraded events (ghcr-fallback=${COUNTS[ghcr-fallback]} local-cache=${COUNTS[local-cache]} zot-gate-degraded=${COUNTS[zot-gate-degraded]}) is only evidence when SOMETHING was served: registry=zot count is 0, so no deploy exercised the pull path at all — or the emitter is dark.
-
-Refusing to authorize an irreversible store destroy on an absence of data.
-
-EXIT: force a dual-push so the path is exercised, then re-dispatch:
-  gh workflow run web-platform-release.yml -f bump_type=patch
-(or widen the window with a longer --since-hours if you are certain the fleet has been idle.)
-EOF
-  exit 1
+if (( PREPARE_ONLY == 1 )); then
+  echo "verdict=PREPARED manifest=${MANIFEST}"
+  exit 0
 fi
 
-if (( total > 0 )); then
-  cat >&2 <<EOF
-::error::registry-pull-path-health: ABORT — ${total} degraded pull event(s) in the last ${SINCE_HOURS}h (ghcr-fallback=${COUNTS[ghcr-fallback]} local-cache=${COUNTS[local-cache]}). A healthy fleet emits ONLY registry=zot, so ANY of these means the GHCR fallback path is already degraded.
+[[ -n "$REHEARSE_TARGET" ]] || usage_err "--rehearse-target <host:port> is required to render a verdict. A2 — the rehearsed restore — IS the pass condition, so it cannot be skipped."
 
-This recut DESTROYS the zot store and depends on GHCR covering the empty-store window. Firing it now would turn a tolerable window into a total-deploy outage (#6400).
-
-EXIT: the degradation must clear first — check the zot_mirror_fallback_rate alert state, then re-fire. If the degradation IS the reason you want to recut, that is an INCIDENT path, not a recut: fix the pull path first.
-EOF
-  exit 1
-fi
-
-echo "registry-pull-path-health: zero degraded pull events in ${SINCE_HOURS}h."
-
-# FAIL CLOSED (2026-07-30, #7071). Everything above still runs — the counts are real and
-# worth printing — but a clean count no longer answers the question this gate was built to
-# answer, so it must not return 0 as though it did.
+# ── A4 — sink-credential validity, graded live at the Cloudflare Access edge. ───────────────
+# The repo already contains a live grader for exactly this credential class, and it does not
+# touch zot: scripts/zot-mirror-diagnosis.sh's `zot_mirror_verdict` verifies the registry-push CF
+# Access service token AT THE ACCESS EDGE. Its own documentation of the `live` arm is why this
+# satisfies the independence criterion BY CONSTRUCTION rather than by argument: live is
+# "where a crash-looping or otherwise unreachable origin lands". The Access edge is up whether
+# or not zot is.
 #
-# The gate authorized destroying the zot store on the strength of "GHCR covers the
-# empty-store window". That premise is retracted, and the operand that measured it
-# (`ghcr-fallback`) can no longer fire at all, so a PASS here is now a statement about
-# zot's own health that reads as authorization to destroy the only thing serving pulls.
-# ADR-096, about this exact class: "A gate that cannot fail is worse than no gate, because
-# it is read as evidence."
+# THE TRAP THIS ORDER EXISTS TO AVOID: zot_mirror_verdict makes ZERO network requests. It is
+# pure arithmetic over a JSON file the DETECTOR must produce first. Sourcing only the grader
+# returns `unmeasured`, which maps to DEGRADE — i.e. a predicate that runs, prints, and can
+# never abort. That is the dark-operand defect this whole rewrite exists to remove,
+# reintroduced inside the predicate meant to close it. So: run the detector, THEN grade.
 #
-# Emitting a PASS plus a warning was tried first and rejected: a green exit is what the
-# calling workflow branches on, and a NOTE nobody re-reads is not a gate. Reversing this is
-# one line, deliberately — destroying production's only pull path should cost an explicit
-# edit by someone who has re-derived the authorization condition, not a default-open path.
-cat >&2 <<'EOF'
-::error::registry-pull-path-health: REFUSING — this gate's premise is retracted and it has no valid PASS condition (#7071).
+# Sourcing constraint (load-bearing): zot-mirror-diagnosis.sh's header states it must NOT
+# `set -euo pipefail`, because it is sourced into steps already running under `bash -eo
+# pipefail`. Do not wrap it in a subshell that swallows the verdict.
+DRIFT_JSON="$WORK/drift.json"
+if [[ -x "$DRIFT" ]]; then
+  "$DRIFT" --json-file "$DRIFT_JSON" > "$WORK/drift.out" 2>"$WORK/drift.err"; drift_rc=$?
+else
+  drift_rc=2
+fi
 
-The recut destroys the zot store. That was acceptable only while GHCR covered the empty-store window. GHCR is no longer readable (read PAT revoked -> 401; minter disabled -> 403 DENIED), so the window is now a TOTAL pull outage until the next CI dual-push re-fills zot. Separately, this gate's most direct operand is dark: `ghcr-fallback` is emitted only inside the SUCCESS branch of a GHCR pull, so it can never fire and can never abort anything.
+if [[ -n "${REGISTRY_GATE_VERDICT_CMD:-}" ]]; then
+  # Seam for the grader itself, so the out-of-vocabulary arm below is reachable in tests. The
+  # real grader has a closed four-value vocabulary and cannot produce a fifth, which is exactly
+  # why that arm would otherwise be untestable — and an untested abort arm is indistinguishable
+  # from a missing one.
+  a4_verdict="$("$REGISTRY_GATE_VERDICT_CMD" "$drift_rc" "$DRIFT_JSON" 2>/dev/null)"
+else
+  # shellcheck source=/dev/null
+  if [[ -r "${ROOT}/scripts/zot-mirror-diagnosis.sh" ]]; then
+    . "${ROOT}/scripts/zot-mirror-diagnosis.sh"
+  fi
+  if declare -F zot_mirror_verdict >/dev/null 2>&1; then
+    a4_verdict="$(zot_mirror_verdict "$drift_rc" "$DRIFT_JSON")"
+  else
+    # Deriving it here would duplicate a classifier whose exit-code discipline is already
+    # written and reviewed; but a missing grader is a could-not-measure outcome, not a pass.
+    a4_verdict="unmeasured"
+  fi
+fi
 
-The counts printed above are real, and they describe ZOT's health. They do not describe cover for zot's absence, because there is none.
+case "$a4_verdict" in
+  live)
+    echo "A4 sink credential: live (Cloudflare Access ADMITTED these credentials; rotation ruled OUT by measurement)" ;;
+  stale)
+    abort A4 "the registry-push CF Access service token is MEASURED DEAD (json .dead > 0). This is the ONLY arm on which rotation is the remedy, and it means the post-destroy restore cannot authenticate no matter how healthy the rebuilt host is. Nothing has been destroyed." ;;
+  unverifiable|unmeasured)
+    # NOT an accusation: the detector's own cause vocabulary all carries "Do NOT rotate", and
+    # `unmeasured` explicitly "ranks nothing". Degrading here is correct; aborting would
+    # deadlock the gate on the detector's own blind spots.
+    echo "A4 sink credential: ${a4_verdict} — DEGRADED, not an accusation. a4_credential=${a4_verdict}" ;;
+  *)
+    abort A4 "the credential grader returned '${a4_verdict}', which is outside its documented four-value vocabulary. An unrecognised verdict must not be read as either health or failure." ;;
+esac
 
-TO PROCEED you must re-derive what should authorize a recut and encode it here. Candidates, none of them chosen: gate on a successful CI dual-push within N hours; pre-stage the live digests outside the destroyed volume and gate on a rehearsed restore; require a second mirror to exist; or refuse until a GHCR pull credential is restored. See this script's header and ADR-096 clause (g), which records that the restoration paths have no tracker.
-EOF
-exit 1
+# ── A2 — the rehearsed restore. THIS IS THE PASS CONDITION. ────────────────────────────────
+# It proves the restore SCRIPT is correct against a real registry HTTP API — argv, auth, ref
+# construction, digest parity, blob completeness — before anything is destroyed.
+#
+# REJECTED ALTERNATIVE, recorded because it is strictly stronger and a reviewer will ask for it:
+# rehearse against PRODUCTION zot. That would additionally prove the tunnel, the live
+# credential, the real zot version and the real accessControl, eliminating A4's residual. It is
+# rejected because it depends on the component whose failure motivates the recut — during a
+# crash-loop that rehearsal aborts exactly when the gate is needed. This plan's own independence
+# criterion, applied to itself.
+[[ -x "$RESTORE" ]] || abort A2 "the restore engine is not executable at ${RESTORE}, so the pass condition cannot be exercised."
+"$RESTORE" --target "$REHEARSE_TARGET" --tags-from "$MANIFEST" > "$WORK/restore.out" 2>&1
+restore_rc=$?
+sed 's/^/    /' "$WORK/restore.out" 2>/dev/null | tail -20
+if (( restore_rc != 0 )); then
+  case "$restore_rc" in
+    2) abort A2 "the rehearsal failed with exit 2 (source unavailable) — GHCR could not be read, so there is nothing to restore FROM. Refusing to destroy the only remaining copy." ;;
+    3) abort A2 "the rehearsal failed with exit 3 (sink unavailable) — the throwaway registry did not accept the write. This is a rehearsal-harness fault, not a production signal, but it means the pass condition was never established." ;;
+    4) abort A2 "the rehearsal failed with exit 4 (verification mismatch) — the restore produced a registry whose contents do not match GHCR, or whose blobs are incomplete. A host would fail these pulls. This is the defect the gate exists to catch." ;;
+    5) abort A2 "the rehearsal failed with exit 5 (credential unusable) — the rehearsal could not authenticate to the throwaway." ;;
+    6) abort A2 "the rehearsal failed with exit 6 (could-not-classify) — the restore engine hit a failure it could not name, so the pass condition is unproven." ;;
+    *) abort A2 "the rehearsal failed with an unenumerated exit ${restore_rc}. Every exit code of the restore engine is supposed to be enumerated; an unrecognised one is a could-not-measure outcome." ;;
+  esac
+fi
+echo "A2 rehearsal: the full required pin set was restored and blob-verified into ${REHEARSE_TARGET}"
+
+# ── A5 — live sink proof. ADVISORY-DEGRADING. Read the header before changing this. ─────────
+# The first draft of this design had NO predicate that observed prod zot at all. It answered
+# "must not depend on the failing component" by never looking at it — a different and much
+# weaker property. It would have authorised destroying a sink it had never observed, then
+# chained into that sink the exact `crane copy` write with a measured 9-of-9 failure record.
+sink_outcome="unmeasured"
+if [[ -n "$SINK_CMD" ]]; then
+  sink_outcome="$("$SINK_CMD" 2>/dev/null || echo unmeasured)"
+fi
+
+case "$sink_outcome" in
+  ok)
+    echo "A5 sink probe: WRITE SUCCEEDED against live prod zot. A4's staleness residual is now measured, not assumed. sink_probe=ok" ;;
+  credential_rejected)
+    abort A5 "prod zot is REACHABLE but REJECTED the credential (401/403/DENIED, or a CF Access admission refusal). This is an AUTHORISATION failure and it is independent of zot's health: the post-destroy restore cannot work no matter how healthy the rebuilt host is. This is exactly the state A4 could not see, and the state in which a destroy is unrecoverable." ;;
+  wrong_digest)
+    abort A5 "the probe write COMPLETED but produced the WRONG DIGEST. That is a measured correctness failure, not an availability one." ;;
+  *)
+    # EVERY other outcome — reset mid-upload, timeout, 5xx, origin unreachable, tunnel down, or
+    # unclassifiable — PROCEEDS with a named degradation. These are the MOTIVATING condition.
+    # A gate that aborts on them cannot authorise the recovery it exists to authorise.
+    echo "A5 sink probe: could not measure the live sink ('${sink_outcome}'). PROCEEDING with a named degradation — availability failures of the sink are the motivating condition for this recut, not a reason to refuse it. sink_probe=unmeasured" ;;
+esac
+
+# ── verdict ─────────────────────────────────────────────────────────────────────────────────
+# ONLY inside Actions. `::add-mask::` is a workflow COMMAND, not a shell builtin — outside a
+# runner it is an ordinary echo that PRINTS THE TOKEN to the terminal and scrollback, and the
+# runbook tells the operator to run this gate locally.
+if [[ -n "${GITHUB_ACTIONS:-}" && -n "${ZOT_PUSH_TOKEN:-}" ]]; then
+  echo "::add-mask::${ZOT_PUSH_TOKEN}"
+fi
+
+echo "verdict=AUTHORIZED floor=${FLOOR} resolved=${resolved} a4_credential=${a4_verdict} sink_probe=${sink_outcome} rehearsal=${REHEARSE_TARGET}"
+echo "registry-pull-path-health: a recut is AUTHORIZED — CI has just re-materialised production's full required pin set into an empty registry from GHCR and verified its blobs."
+exit 0
