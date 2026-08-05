@@ -1277,10 +1277,31 @@ jobs:
           if grep -q 'variable "ssh_key_path"' variables.tf 2>/dev/null; then
             VAR_ARGS+=(-var="ssh_key_path=/tmp/ci_ssh_key.pub")
           fi
+          # NARROW BRACKET around the capture only. Actions runs a run: block with no shell:
+          # key under `bash -e {0}`, so errexit is ON here even though this body sets no
+          # shell options at all — and without the clear below, a FAILING `terraform plan`
+          # aborted the shell AT this assignment. `PLAN_EXIT=$?` never ran, `exit_code` was
+          # never written, and the step ended non-zero.
+          #
+          # That fails OPEN, and the combination is what makes it dangerous. This step carries
+          # `continue-on-error: true`, so its own failure does not fail the job; the job is
+          # failed by "Fail job on plan failure" below, gated `exit_code != '0'`. Actions `==`
+          # is LOOSE and an unset output is '' which casts to 0, so `'' != '0'` is FALSE and
+          # that guard is SKIPPED on exactly the abort path — a failed production terraform
+          # plan could report green. (Measured on the sibling workflow, run 31054501973: a
+          # step gated `!= '0' && != '1'` was skipped on an empty output while its exact
+          # complement `== '0' || == '1'` RAN.)
+          #
+          # With the clear, PLAN_EXIT is captured, `exit_code` is written, and the guard
+          # evaluates a real number. Deliberately NOT adding `set -u`/`pipefail` here: those
+          # are new abort conditions on a body that has never run under them, which is a
+          # different change from repairing errexit. #7304.
+          set +e
           PLAN_OUTPUT=$(doppler run --name-transformer tf-var -- \
             terraform plan -no-color -input=false \
             "${VAR_ARGS[@]}" 2>&1)
           PLAN_EXIT=$?
+          set -e
 
           if [[ ${#PLAN_OUTPUT} -gt 60000 ]]; then
             PLAN_OUTPUT="${PLAN_OUTPUT:0:60000}

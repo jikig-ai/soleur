@@ -1180,6 +1180,13 @@ jobs:
         # the dispatch on ANY resource delete (a net-new host apply must add, never remove).
         run: |
           set -uo pipefail
+          # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
+          # bare run: block as `bash -e {0}`, so errexit is INHERITED and `set -uo pipefail`
+          # cannot clear it. Without this the step died AT the doppler line on a plan failure
+          # and both `rc=$?` and the `::error::` below were unreachable. The handler still
+          # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
+          # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
+          set +e
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -var="ssh_key_path=${CI_SSH_PUB}" \
@@ -1328,6 +1335,13 @@ jobs:
         # ABORTS unless the plan is EXACTLY the scoped recreate.
         run: |
           set -uo pipefail
+          # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
+          # bare run: block as `bash -e {0}`, so errexit is INHERITED and `set -uo pipefail`
+          # cannot clear it. Without this the step died AT the doppler line on a plan failure
+          # and both `rc=$?` and the `::error::` below were unreachable. The handler still
+          # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
+          # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
+          set +e
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -replace='hcloud_server.inngest' \
@@ -1513,6 +1527,13 @@ jobs:
         # plan JSON and ABORTS unless the plan is EXACTLY the scoped recreate.
         run: |
           set -uo pipefail
+          # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
+          # bare run: block as `bash -e {0}`, so errexit is INHERITED and `set -uo pipefail`
+          # cannot clear it. Without this the step died AT the doppler line on a plan failure
+          # and both `rc=$?` and the `::error::` below were unreachable. The handler still
+          # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
+          # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
+          set +e
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -replace='hcloud_server.registry' \
@@ -1737,6 +1758,13 @@ jobs:
         # ABORTS unless the plan is EXACTLY the scoped region migration.
         run: |
           set -uo pipefail
+          # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
+          # bare run: block as `bash -e {0}`, so errexit is INHERITED and `set -uo pipefail`
+          # cannot clear it. Without this the step died AT the doppler line on a plan failure
+          # and both `rc=$?` and the `::error::` below were unreachable. The handler still
+          # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
+          # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
+          set +e
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -target='hcloud_server.registry' \
@@ -2453,6 +2481,13 @@ jobs:
         # plaintext volume and hits the blkid FATAL. They move TOGETHER or not at all.
         run: |
           set -uo pipefail
+          # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
+          # bare run: block as `bash -e {0}`, so errexit is INHERITED and `set -uo pipefail`
+          # cannot clear it. Without this the step died AT the doppler line on a plan failure
+          # and both `rc=$?` and the `::error::` below were unreachable. The handler still
+          # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
+          # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
+          set +e
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -replace='hcloud_volume.registry' \
@@ -3062,6 +3097,13 @@ jobs:
         # reads the STRUCTURED plan JSON and ABORTS unless the plan is EXACTLY the scoped recreate.
         run: |
           set -uo pipefail
+          # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
+          # bare run: block as `bash -e {0}`, so errexit is INHERITED and `set -uo pipefail`
+          # cannot clear it. Without this the step died AT the doppler line on a plan failure
+          # and both `rc=$?` and the `::error::` below were unreachable. The handler still
+          # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
+          # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
+          set +e
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -replace='hcloud_server.git_data' \

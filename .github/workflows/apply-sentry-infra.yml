@@ -276,6 +276,12 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -uo pipefail
+          # `set +e` bracket: Actions runs a bare run: block as `bash -e {0}`, so errexit is
+          # INHERITED here and `set -uo pipefail` cannot clear it. Without this the step died
+          # AT the plan below on any plan failure, so `rc=$?` and the `::error::` were both
+          # unreachable. The handler still ends `exit $rc`, so this cannot turn a failed plan
+          # green — it restores the annotation naming why. #7304.
+          set +e
           # Read-only: no -out, so nothing here can be applied. The plan is
           # FULL-ROOT (no -target=) — that is the contract this gate exists to
           # enforce, and AC3 pins that no -target= survives in this file.
@@ -576,12 +582,20 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
           HEAD_MSG: ${{ github.event.head_commit.message }}
         run: |
-          # `-e` is intentionally omitted so we can capture terraform plan's
-          # exit code in $rc — plan exits non-zero on legitimate failures we
-          # want to surface, not abort silently. Re-enabled with `set -e`
+          # We capture terraform plan's exit code in $rc so a legitimate failure surfaces
+          # with the ::error:: below instead of aborting silently. Re-enabled with `set -e`
           # after the rc-capture window per
           # `2026-05-16-adr-amendment-required-when-reversing-and-destroy-guard-empty-string-bypass.md`.
+          #
+          # THIS COMMENT USED TO SAY "`-e` is intentionally omitted", AND THAT NEVER WORKED.
+          # GitHub invokes a bare `run:` as `bash -e {0}`; omitting -e from the `set` line
+          # cannot clear what the invocation already applied, so on a plan failure the step
+          # died AT the plan and both the `rc=$?` capture and the `::error::` branch below it
+          # were unreachable. The explicit `set +e` is what delivers the property the comment
+          # claimed — and the `set -e` the comment already promised, with no matching `set +e`
+          # anywhere above it, was the tell. Corrected under #7304.
           set -uo pipefail
+          set +e
           # FULL ROOT (#6589) — no address scoping. The plan universe is
           # `state UNION config`, which is what makes deleting a resource block
           # produce a real destroy instead of a silent no-op. The destroy is then
