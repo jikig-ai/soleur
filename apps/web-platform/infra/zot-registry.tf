@@ -43,8 +43,9 @@ locals {
   # scheme). Published as ZOT_REGISTRY_URL.
   registry_endpoint = "${local.registry_private_ip}:5000"
 
-  # zot's OWN image is third-party (upstream project-zot), DIGEST-PINNED, v2.1.2. Pulled from
+  # zot's OWN image is third-party (upstream project-zot), DIGEST-PINNED. Pulled from
   # the PUBLIC upstream registry at boot — NEVER from our own zot (bootstrap paradox, Sharp Edges).
+  # That paradox is also the rollback lever: a dark zot cannot block its own replacement.
   # Arch is DERIVED from var.registry_server_type so a single var switches the whole host: `cax*`
   # (Ampere) → arm64, anything else (`cx*`/`cpx*`) → amd64. The arch-agnosticism is real — both are
   # functionally identical for a store-and-serve registry (it never RUNS the amd64 platform images
@@ -53,11 +54,32 @@ locals {
   # probe 2026-07-26 (#6966) NEITHER has stock: the entire cx line AND the entire cax ARM line are
   # orderable in 0 of 3 EU DCs. soleur-registry is GRANDFATHERED on its cx23 — it runs fine but
   # CANNOT BE REBUILT on that type, so a registry recreate is a type decision (the orderable set is
-  # cpx*/ccx* only). Do not read this block as offering a cax11↔cx23 choice. Re-verify BOTH
-  # digests on a version bump: `crane digest ghcr.io/project-zot/zot-linux-{arm64,amd64}:vX.Y.Z`.
+  # cpx*/ccx* only). Do not read this block as offering a cax11↔cx23 choice.
+  #
+  # FRESHNESS OWNER — do NOT put a "run crane digest by hand" instruction back here. A prose
+  # instruction to a human is exactly what let this pin sit at v2.1.2 for 18 releases (#7282).
+  # The analysis of record is `zot-image.provenance.md` (config-compat table, non-adoption
+  # decisions, rollback target, and the '## Bump procedure' to follow on a version change).
+  # Detection is the upstream-poll step in .github/workflows/rule-audit.yml (1st + 15th, files
+  # ONE idempotent issue); enforcement is `zot-image-staleness.test.sh` in infra-validation.
+  # NOTHING auto-writes these two lines: the cron files an issue, a human opens the CI-gated PR.
+  # No bot manages this pin — do not describe one.
+  #
+  # THE ARCH IN EACH NAME MUST MATCH THE ARCH IN ITS VALUE. `local.zot_image` below selects on
+  # registry_arch (amd64 today), so swapping these two values DARKS THE SOLE PULL PATH.
+  # MECHANISM, MEASURED 2026-08-05: zot-linux-amd64 and zot-linux-arm64 are DISTINCT OCI
+  # REPOSITORIES and a manifest digest resolves only within its own, so the pull 404s
+  # (MANIFEST_UNKNOWN) — no wrong-arch binary is ever executed and no container is created.
+  # The host then reports `zot_image_digest=unknown state_status=unknown`, which is the
+  # signature to grep for. (An earlier version of this comment said `exec format error`;
+  # that was wrong, and it sends an operator hunting telemetry that never appears.)
+  # Staleness checks 2/4/5 are arch-keyed for this reason and must not be relaxed to a
+  # "both digests appear somewhere" form, which a swap satisfies. Note they close a swap in
+  # ONE file relative to the other; a swap applied coherently to BOTH the .tf and the sidecar
+  # is caught by the digest<->repository probe in rule-audit.yml, not here.
   registry_arch   = startswith(var.registry_server_type, "cax") ? "arm64" : "amd64"
-  zot_image_arm64 = "ghcr.io/project-zot/zot-linux-arm64@sha256:c3fc47782d98b731d5928a24182b495e28cc92f9dcf1d5317f7dbd632e10bf30"
-  zot_image_amd64 = "ghcr.io/project-zot/zot-linux-amd64@sha256:073f30d99fbdbcd8869334231c9ca45c75e535e4bdc6e28cc8a1541abe7a3f71"
+  zot_image_arm64 = "ghcr.io/project-zot/zot-linux-arm64:v2.1.20@sha256:56230c5a589eb55acc57afc34307f6ea1b2efe5cf8e0057ccca64099ba837ff6"
+  zot_image_amd64 = "ghcr.io/project-zot/zot-linux-amd64:v2.1.20@sha256:95a837a0afacf5b7edc0c92493f04beee6891989b8d2fd50a00cf65a1e6d4fd5"
 
   # zot's container memory cap, DERIVED from the host it will actually run on (ADR-062:
   # cap = host RAM − ~1024m for cron+doppler+sshd+OS). It was previously a hardcoded

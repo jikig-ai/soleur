@@ -1092,7 +1092,8 @@ _docker_login_capture() {
 # send the operator hunting an authz bug that does not exist.
 #
 # --- Per-registry measured behaviour ---------------------------------------------------------
-# zot v2.1.2 (the digest at zot-registry.tf:55), with this repo's exact accessControl, MEASURED:
+# zot v2.1.20 (local.zot_image_amd64 in zot-registry.tf), with this repo's exact accessControl,
+# MEASURED 2026-08-05 by running the pinned image locally against this config (#7282):
 #   GET /v2/ answers 200 or 401 — NEVER 403. A user with ZERO accessControl policies still gets
 #   `Login Succeeded` (200); zot enforces authz at the MANIFEST endpoint (/v2/<repo>/manifests/
 #   <tag> -> 403), which the login path never touches. Consequences, both zot-scoped:

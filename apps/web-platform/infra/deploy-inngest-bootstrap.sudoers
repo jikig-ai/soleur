@@ -27,7 +27,16 @@ deploy ALL=(root) NOPASSWD: INNGEST_BOOTSTRAP
 # #3756 — permits infra-config-apply.sh to schedule a delayed webhook restart
 # via systemd-run. The handler runs as the deploy user inside webhook.service's
 # mount namespace; systemctl restart requires root.
-Cmnd_Alias WEBHOOK_SELF_RESTART = /usr/bin/systemd-run --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook
+#
+# #7220 AC-B2.2 — `--collect` was added, and the argv here moved with it because sudo matches
+# the FULL resolved command (a drift denies rather than widens). --unit=webhook-self-restart is
+# a FIXED name, and systemd does NOT garbage-collect a transient unit that FAILED, so without
+# --collect the first failed self-restart leaves the unit lingering and every subsequent apply's
+# systemd-run dies with "unit already exists" — permanently, silently, on the only remediation
+# channel this host has. That path had never once executed in production before #7220 (it shipped
+# after the ungranted reload in the same set -e block, so it was unreachable from ~2026-05), so
+# this is a first-run hardening, not a regression fix.
+Cmnd_Alias WEBHOOK_SELF_RESTART = /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook
 deploy ALL=(root) NOPASSWD: WEBHOOK_SELF_RESTART
 
 # #4538 — permits ci-deploy.sh to restart inngest-server.service via the
@@ -123,3 +132,59 @@ deploy ALL=(root) NOPASSWD: GIT_LOCK_CHARDEVICE_SWEEP
 # alias and that map agree, so the two cannot drift apart silently.
 Cmnd_Alias DROPIN_TRY_RESTART = /usr/bin/systemctl try-restart vector.service
 deploy ALL=(root) NOPASSWD: DROPIN_TRY_RESTART
+
+# #7220 — daemon-reload. THE REPAIR: this verb has been called by infra-config-apply.sh since
+# ~2026-05 with no grant at all. It returned "Interactive authentication required" and set -e
+# aborted the handler AFTER all 19 managed files were written but BEFORE any unit was
+# reconciled, so delivery looked healthy while ACTIVATION never happened. Every managed unit
+# has been running the environment it was started with.
+#
+# SCOPE, stated plainly because it is wider than every other alias here and cannot be narrowed:
+# `daemon-reload` takes no unit argument, so exact-argv pinning buys NOTHING on the scope axis.
+# It reloads every unit file on the host. The control that bounds what it can adopt is therefore
+# NOT this line — it is the content gate in infra-config-install.sh, which pins
+# /etc/systemd/system/*.service dests to an exact digest (#7220 AC-B1) and refuses any drop-in
+# carrying User=, ExecStart=, AmbientCapabilities= or NoNewPrivileges=. That gate ships before
+# or with this grant, never after.
+#
+# It reloads unit FILES; it does not start, stop or restart anything, so on its own it cannot
+# move a unit into a new state — a separate grant is still required for that, and the only one
+# is DROPIN_TRY_RESTART above.
+#
+# ============================================================================================
+# WHAT THE `deploy` USER ALREADY IS — the canonical statement, referenced from
+# infra-config-install.sh and cloud-init.yml rather than restated there (#7220 review).
+#
+# `deploy` is ALREADY ROOT-EQUIVALENT on this host, by design and by documented decision. Read
+# every content gate in this subsystem as an INTEGRITY control on its own delivery path, never as
+# a privilege boundary — there is no privilege boundary here to breach.
+#
+# Three independent paths, all verified by reading the shipped artifacts rather than assumed:
+#
+#   1. cloud-init.yml puts `deploy` in the `docker` group, which is root-equivalent by
+#      construction (`docker run -v /:/host`). This is an ACCEPTED tradeoff, argued and recorded
+#      in knowledge-base/project/plans/2026-03-20-security-deploy-ssh-user-privilege-boundary-plan.md
+#      ("Docker group membership is effectively root-equivalent ... accepted tradeoff for this
+#      PR"), whose whole point was reducing blast radius from unrestricted root to
+#      root-equivalent-via-docker.
+#   2. The 14 `/usr/local/bin/*` dests in infra-config-install.sh's DEST_SPEC get a path, mode
+#      and owner check and NO content gate. `git-lock-chardevice-sweep.sh` is one of them AND is
+#      run as root via GIT_LOCK_CHARDEVICE_SWEEP above, so deploy can put arbitrary content into
+#      a 0755 root:root file that root then executes.
+#   3. INNGEST_BOOTSTRAP runs `/usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh` as root,
+#      and ci-deploy.sh creates and populates that directory AS deploy.
+#
+# So what the *.service digest pin actually buys is worth stating precisely, because it is real
+# and it is narrower than "security": it makes THIS delivery channel's effect on what systemd
+# ADOPTS deterministic and reviewable — a unit either matches its committed bytes or is refused.
+# That is what keeps a config-delivery bug from silently becoming a unit-definition change, and
+# it is the property #7220 needs. It buys nothing against a `deploy` that chooses to use path 1,
+# 2 or 3, and no comment in this subsystem should imply otherwise.
+#
+# The consequence for a reviewer: do NOT treat these gates as the thing standing between deploy
+# and root, and do NOT relax one on the reasoning that deploy is untrusted anyway — the gates
+# earn their place as integrity controls on a channel that must be debuggable on a host with no
+# SSH runbook, which is a different and independently sufficient justification.
+# ============================================================================================
+Cmnd_Alias SYSTEMCTL_DAEMON_RELOAD = /usr/bin/systemctl daemon-reload
+deploy ALL=(root) NOPASSWD: SYSTEMCTL_DAEMON_RELOAD

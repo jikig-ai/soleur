@@ -328,6 +328,11 @@ jobs:
           echo "deploy-pipeline-fix plan creates no hcloud_server (host_creates=0; hcloud_volume not counted since #6919/T55)."
 
       - name: Terraform apply
+        # #7220 review — the id exists so the red-gate alert below can tell "the gate ran and
+        # failed" from "the gate never ran because THIS failed". This PR adds four new ways for
+        # this step to fail (two sudo probes and two DropInPaths assertions in server.tf), and an
+        # apply failure SKIPS the gate.
+        id: terraform_apply
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -335,6 +340,14 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
+          # #7220 AC20 — record when THIS apply began, for the verify step's start_ts freshness
+          # pin. Without a reference point the verify asserts a PROXY: exit_code=0,
+          # files_written=19/19 and a populated restarts[] are all satisfiable by a frame the
+          # host published on some EARLIER apply, so the gate would prove "some apply
+          # reconciled" and not "this one did". A stale frame is exactly what a handler that
+          # dies before publishing leaves behind, which is the #7220 shape.
+          # Captured BEFORE the apply so clock skew can only make the pin stricter, never laxer.
+          echo "APPLY_START_EPOCH=$(date -u +%s)" >> "$GITHUB_ENV"
           doppler run --name-transformer tf-var -- \
             terraform apply -target=terraform_data.deploy_pipeline_fix \
             -target=terraform_data.infra_config_handler_bootstrap \
@@ -618,6 +631,29 @@ jobs:
               cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
               exit 1
             fi
+            # #7220 AC20 — FRESHNESS PIN. Everything adjudicated above is satisfiable by a
+            # frame the host published on an EARLIER apply: exit_code=0, files_written=19/19,
+            # matching per-file digests and a populated restarts[] all persist on disk. So
+            # without this the gate proves "some apply reconciled", never "THIS one did" — and
+            # a handler that dies before publishing is exactly what leaves the previous frame
+            # in place, which is the #7220 shape. Same guard as
+            # scripts/followthroughs/ac12-telemetry-positive-control-7103.sh Guard 1.
+            FRAME_START_TS=$(jq -r '.start_ts // empty' /tmp/infra-config-status-response.txt 2>/dev/null || true)
+            if [[ ! "$FRAME_START_TS" =~ ^[0-9]+$ ]]; then
+              echo "::error::infra-config frame carries no numeric start_ts ('${FRAME_START_TS:-<absent>}') — freshness cannot be established, so a stale frame cannot be distinguished from this apply's. Failing closed."
+              cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+              exit 1
+            fi
+            if [[ ! "${APPLY_START_EPOCH:-}" =~ ^[0-9]+$ ]]; then
+              echo "::error::APPLY_START_EPOCH was not recorded by the apply step — the freshness pin cannot run, and silently skipping it would restore the stale-frame blind spot. Failing closed."
+              exit 1
+            fi
+            if [[ "$FRAME_START_TS" -lt "$APPLY_START_EPOCH" ]]; then
+              echo "::error::STALE FRAME: the status endpoint reports an apply that started at ${FRAME_START_TS}, BEFORE this workflow's apply began at ${APPLY_START_EPOCH}. The handler did not publish a new frame for this run — every green value above belongs to a previous apply. This is the #7220 failure shape: delivery reported against a frame the dying handler never overwrote."
+              cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+              exit 1
+            fi
+            echo "Frame freshness OK: start_ts=${FRAME_START_TS} postdates this apply's start (${APPLY_START_EPOCH})."
             echo "Infra-config apply verified: count invariant + per-file content match (#6594 PR-B)."
           elif [[ "$HTTP_CODE" == "000" || "$HTTP_CODE" == "502" || "$HTTP_CODE" == "503" ]]; then
             # #7095 R34 — DISTINCT from the 404 branch above, and the distinction is the whole
@@ -647,18 +683,37 @@ jobs:
       # on. For a non-technical founder whose only no-SSH channel is the one that just broke,
       # that is the difference between a diagnosis and a dead end.
       #
-      # Scoped with `steps.<id>.outcome` so it fires for THIS gate specifically, not for any
-      # earlier failure in the job.
+      # WHY THE CONDITION IS `!= 'success'` AND NOT `== 'failure'` (#7220 review).
+      #
+      # `== 'failure'` scoped this to "the gate ran and reded", which silently excluded the case
+      # where the gate NEVER RAN. A step that fails before it — and this PR adds four such ways
+      # in the apply alone (two sudo probes, two DropInPaths assertions) — leaves the gate
+      # `skipped`, so the condition was false and NOTHING notified anyone: no issue, no Sentry
+      # event, just a red run. The PR whose premise is "a red gate must notify someone" was
+      # increasing the share of red runs that notify nobody.
+      #
+      # `failure() && outcome != 'success'` reads as "the job failed and the gate did not pass",
+      # which is the actual alerting condition. `failure()` is false on cancellation, so a
+      # cancelled run does not page; `!= 'success'` covers both `failure` and `skipped`.
       - name: Alert on a red infra-config gate (#7220)
-        if: failure() && steps.infra_config_gate.outcome == 'failure'
+        if: failure() && steps.infra_config_gate.outcome != 'success'
         working-directory: ${{ env.INFRA_DIR }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SENTRY_INGEST_DOMAIN: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           SENTRY_PROJECT_ID: ${{ secrets.SENTRY_PROJECT_ID }}
           SENTRY_PUBLIC_KEY: ${{ secrets.SENTRY_PUBLIC_KEY }}
-          SECCOMP_ALERT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          SECCOMP_ALERT_SHA: ${{ github.sha }}
+          # #7220 review — these were SECCOMP_ALERT_* , copied from the seccomp precedent, but
+          # infra-config-red-alert.sh reads INFRA_CONFIG_ALERT_* . Both were therefore always
+          # empty, so every alert body this step has ever filed omitted the Commit and CI run
+          # lines WHILE ITS OWN PROSE said "the CI run linked below records exactly what was
+          # tried". The helper's test sets the correct names, so it passed against a caller that
+          # did not — a check certifying a property adjacent to the one it was named for. The
+          # caller/callee lockstep in infra-config-red-alert.test.sh now pins this.
+          INFRA_CONFIG_ALERT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          INFRA_CONFIG_ALERT_SHA: ${{ github.sha }}
+          GATE_OUTCOME: ${{ steps.infra_config_gate.outcome }}
+          APPLY_OUTCOME: ${{ steps.terraform_apply.outcome }}
         run: |
           set -uo pipefail
           source "$GITHUB_WORKSPACE/scripts/infra-config-red-alert.sh"
@@ -675,6 +730,20 @@ jobs:
           # newline or control character can survive) and is used here only as a shell VALUE
           # passed as a function argument — never eval'd, never interpolated into a command.
           RESP=/tmp/infra-config-status-response.txt
+
+          # THE GATE NEVER RAN. Handled FIRST, because every branch below reads a frame the host
+          # publishes and reasons about what the gate measured — and if the gate was skipped
+          # there is no measurement to reason about. $RESP does not even exist, so falling
+          # through would land on the unreachable branch and tell the operator the delivery
+          # channel did not answer, when in truth nothing ever asked it. The distinct third mode
+          # exists so the alert says the one thing that is actually known: activation is
+          # UNKNOWN, and the named step is where to look.
+          if [[ "${GATE_OUTCOME:-}" != "failure" ]]; then
+            DIED="a step before the gate"
+            [[ "${APPLY_OUTCOME:-}" == "failure" ]] && DIED="the terraform apply (which is where this PR's sudo-grant and DropInPaths preconditions are asserted)"
+            infra_config_red_alert "The infra-config gate never ran (outcome=${GATE_OUTCOME:-unset}) because ${DIED} failed first, so NOTHING has graded whether the config activated on the host. Do not read this as a delivery failure or an activation failure — it is ungraded. Fix the failing step named in the CI run and re-run; the gate then reports the real verdict." "ungraded" || true
+            exit 0
+          fi
 
           # REACHABILITY FIRST. This step fires on ANY failure of the gate, and the gate has a
           # branch (000/502/503) whose recovery guidance is the OPPOSITE of the normal one: there,
@@ -696,6 +765,24 @@ jobs:
           [[ "$FATAL_LINE" =~ ^[0-9]+$ ]] || FATAL_LINE=0
           [[ "$FATAL_RC"   =~ ^[0-9]+$ ]] || FATAL_RC=0
 
+          # #7220 review — NAME THE SEAM IN THE OPERATOR'S LANGUAGE. fatal_cmd is captured from
+          # BASH_COMMAND, so it carries the handler's internal variable name ($SYSTEMCTL_PRIV)
+          # rather than the command that ran. "$SYSTEMCTL_PRIV daemon-reload failed" is noise to
+          # a non-technical reader and actively misleading to a technical one, who will grep for
+          # a binary by that name. Two substitutions, and they cost no test coverage: the arms
+          # that assert on fatal_cmd read the FRAME, not this rendering.
+          FATAL_CMD=${FATAL_CMD//\$SYSTEMCTL_PRIV/sudo systemctl}
+          FATAL_CMD=${FATAL_CMD//\$SYSTEMCTL_SHOW/systemctl}
+
+          # #7220 review — the frame already carries per-file verdicts, e.g.
+          # {"file":"/etc/webhook/hooks.json","reason":"hooks_json_unparseable"} , and this step
+          # already has jq and the response file. Without this the issue tells a non-technical
+          # operator to go read a CI log to find out WHICH file failed, which is the one thing
+          # the frame could have told them directly. Every reason string is sanitized at source
+          # by on_exit to A-Za-z0-9 ._:/=- , so no quote, backslash, newline or control character
+          # can survive into this body.
+          FAILED_FILES=$(jq -r '.files[]? | select(.status=="failed") | "  - " + .file + " (" + (.reason // "no reason given") + ")"' "$RESP" 2>/dev/null || true)
+
           if [[ "$FATAL_LINE" -gt 0 ]]; then
             # `line=N` is a coordinate into the DEPLOYED handler, which can lag this checkout by
             # one apply — so it is labelled as such rather than rendered as a repo coordinate.
@@ -708,6 +795,16 @@ jobs:
             WHERE="The gate failed and the host is still running a handler that predates #7220, so it cannot report where it stopped. Replacing the handler is what makes the next failure self-describing."
           else
             WHERE="The gate failed with no fatal attribution in the frame (files_written=${FILES_W} of ${FILES_T}), so the handler did not die — the failure is in what was delivered or in a unit that did not come back. The verify step in the CI run names the specific file or unit."
+          fi
+
+          # Append the per-file verdicts to whichever WHERE was chosen. Deliberately AFTER the
+          # branch: a failed file is worth naming in all three shapes, not just the no-attribution
+          # one, and the frame is the only place this detail exists.
+          # The newline is written as $'\n' rather than a literal one: this whole block is a YAML
+          # block scalar, so a continuation line has to be indented to stay inside it, and any
+          # indentation would then be embedded in the issue body.
+          if [[ -n "$FAILED_FILES" ]]; then
+            WHERE="${WHERE} The files that FAILED, with the host's own reason for each:"$'\n'"${FAILED_FILES}"
           fi
 
           # The guardrail is repeated HERE and not only in the annotation, because this issue is

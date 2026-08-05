@@ -63,7 +63,7 @@
 #
 # Every section carries a NON-VACUITY FLOOR: a parse that silently matches nothing must fail
 # loudly rather than report a clean sweep of an empty set. The SWEEP-SIZE floors (FLOOR_RESOURCES
-# 15, FLOOR_DESTS 52, FLOOR_IDENTITY 4, FLOOR_SEEDED 36) are pinned at the EXACT baseline rather
+# 15, FLOOR_DESTS 52, FLOOR_IDENTITY 5, FLOOR_SEEDED 36) are pinned at the EXACT baseline rather
 # than baseline-minus-slack: any slack is a silent-erosion window, and removing a provisioner or a
 # delivered artifact is a Phase-5-class change that should cost a deliberate edit here. The §0
 # PARSE floors keep slack on purpose -- cloud-init.yml and the bake list legitimately shrink as
@@ -75,7 +75,7 @@
 #
 # Mutation-proven by web-host-provisioner-parity-mutation.test.sh, which asserts WHICH check
 # fires for each mutation (a bare non-zero exit credits crashes as detections). Anything that
-# battery cannot reach by editing the four INPUT FILES is unproven no matter how green the run
+# battery cannot reach by editing the five INPUT FILES is unproven no matter how green the run
 # looks, which is why §5's hygiene checks carry an env-driven reachability probe (see §5).
 
 set -uo pipefail
@@ -92,7 +92,7 @@ INFRA="${SOLEUR_INFRA_DIR:-$ROOT/apps/web-platform/infra}"
 # `for f in <names>; do` line: the battery parses that shape and hard-fails on divergence,
 # because a fifth input read tolerantly (`try/except FileNotFoundError`) would otherwise let
 # the battery report a clean run over a check that never executed.
-for f in server.tf cloud-init.yml web-probe-envwrite.sh soleur-host-bootstrap.sh; do
+for f in server.tf cloud-init.yml web-probe-envwrite.sh soleur-host-bootstrap.sh webhook.service; do
   [[ -f "$INFRA/$f" ]] || { echo "FATAL: $INFRA/$f not found" >&2; exit 2; }
 done
 
@@ -260,6 +260,132 @@ READONLY_VERBS = {
 TRANSIENT = ('/tmp/', '/dev/', '/proc/', '/sys/', '/run/')
 _SEG = re.compile(r'(?:&&|\|\||[;|])')
 
+# Command prefixes that RUN another command rather than being the command. Classifying the
+# segment on the wrapper instead of the wrapped verb is a live defect in both directions:
+#
+#   * FALSE POSITIVE (this PR shipped one). `runuser -u deploy -- sudo -n /usr/bin/systemctl
+#     daemon-reload` classified as verb `runuser`, which is not in READONLY_VERBS, so every
+#     absolute path in the segment was credited as a DELIVERED artifact — and the guard then
+#     demanded that /usr/bin/systemctl, a binary the base image ships, be installed on the
+#     fresh-boot path. Measured: 12 passed / 1 failed on this branch while origin/main was 13/0.
+#   * FALSE NEGATIVE. A wrapper whose wrapped verb is a real writer must still be credited, so
+#     this resolves TO the wrapped verb rather than exempting the segment.
+#
+# Each entry maps a wrapper to the options that take a SEPARATE value argument, so the scan can
+# skip past them without swallowing the wrapped command. `--` always ends the wrapper's own
+# arguments.
+_WRAPPERS = {
+    'sudo':    {'-u', '-g', '-U', '-p', '-C', '-h', '-r', '-t', '-T'},
+    'runuser': {'-u', '-g', '-G', '-c', '--user', '--group', '--shell', '-s'},
+    'doas':    {'-u', '-C'},
+    'env':     set(),
+    'timeout': {'-s', '--signal', '-k', '--kill-after'},
+    'nice':    {'-n'},
+    'ionice':  {'-c', '-n', '-p'},
+    'stdbuf':  {'-i', '-o', '-e'},
+    'setsid':  set(),
+    'flock':   {'-w', '--wait', '-E', '--conflict-exit-code'},
+}
+
+
+def _split_wrapper(toks):
+    """Resolve (effective_verb, wrapper_chain, index_of_wrapped_command) for a tokenised segment.
+
+    The INDEX is returned rather than the wrapper's own tokens so the caller can slice
+    `toks[i:]` — reconstructing the wrapped portion by filtering token VALUES would mis-handle a
+    segment where the same token appears both inside and after the wrapper's own arguments.
+    Conservative by construction: anything it cannot confidently classify terminates the peel, so
+    the caller keeps the ORIGINAL verb and the fail-closed over-extraction behaviour is preserved.
+    """
+    chain = []
+    i = 0
+    while i < len(toks):
+        base = os.path.basename(toks[i].strip('"\'(!'))
+        if base not in _WRAPPERS:
+            break
+        val_opts = _WRAPPERS[base]
+        chain.append(base)
+        i += 1
+        while i < len(toks):
+            t = toks[i]
+            if t == '--':
+                i += 1
+                break
+            if not t.startswith('-'):
+                break
+            i += 1
+            # `-u deploy` consumes its value; `-u=deploy` and `-udeploy` do not.
+            if t in val_opts and i < len(toks):
+                i += 1
+    if i >= len(toks):
+        # Nothing but wrappers and their options (e.g. a bare `sudo -l`). No wrapped command.
+        return None, chain, i
+    return toks[i].strip('"\'(!'), chain, i
+
+
+def _unwrap_shell_c(toks):
+    """Unwrap ONE level of `bash -c '<command>'` / `sh -c "<command>"`.
+
+    `bash` and `sh` are in READONLY_VERBS deliberately — `bash /usr/local/bin/foo.sh` INVOKES a
+    script and must not credit it as a delivered artifact. But that exemption also swallowed the
+    payload of `-c`, so `sudo bash -cl "install -m0755 /tmp/x /usr/local/bin/y"` delivered a root
+    binary with no fresh-boot counterpart and left the sweep in silence. Measured: dropping
+    bash/sh from READONLY_VERBS entirely keeps the real corpus at 13/0, so the blunt fix is
+    AVAILABLE — it is rejected because it would false-fire on the first ordinary
+    `bash /usr/local/bin/x.sh` invocation anyone adds. Unwrapping `-c` is the narrow form: it
+    credits what the shell RUNS without crediting what the shell IS GIVEN TO RUN.
+
+    Returns the inner command's tokens, or None when this is not a `-c` invocation.
+    """
+    if not toks or os.path.basename(toks[0].strip('"\'(!')) not in ('bash', 'sh', 'dash', 'zsh'):
+        return None
+    i = 1
+    while i < len(toks) and toks[i].startswith('-'):
+        # A bundled run containing `c` (-c, -cl, -xc) means the NEXT token is the command string.
+        if not toks[i].startswith('--') and 'c' in toks[i][1:]:
+            inner = ' '.join(toks[i + 1:]).strip()
+            if inner[:1] in ('"', "'"):
+                inner = inner[1:]
+                q = inner[-1:] if inner[-1:] in ('"', "'") else ''
+                if q:
+                    inner = inner[:-1]
+            return inner.split() if inner else None
+        i += 1
+    return None
+
+
+def _sudo_is_list_mode(toks):
+    """True when this segment is `sudo`/`doas` in LIST mode.
+
+    Scoped to SUDO'S OWN OPTION RUN — the tokens before the first non-option argument — which is
+    the whole point. The previous form searched the ENTIRE segment for `-\\w*l`, so it exempted
+    real deliveries that merely happened to contain such a token anywhere:
+    `sudo cp -al /tmp/x /usr/local/bin/y`, `sudo rsync -al`, `sudo useradd -l`,
+    `sudo bash -cl "install …"`. Each is a genuine write that left the sweep in silence.
+    It also MISSED `/usr/bin/sudo -l` (matched on basename now) and `sudo -ln` (an option run
+    containing `l`, which the bundled form must accept).
+    """
+    if not toks:
+        return False
+    if os.path.basename(toks[0].strip('"\'(!')) not in ('sudo', 'doas'):
+        return False
+    val_opts = _WRAPPERS['sudo']
+    i = 1
+    while i < len(toks):
+        t = toks[i]
+        if t == '--' or not t.startswith('-'):
+            return False          # sudo's own options ended without a list flag
+        if t == '--list':
+            return True
+        # A BUNDLED short-option run (`-ln`, `-nl`, `-l`). Reject long options and any
+        # `--opt=value` form, which cannot bundle `l`.
+        if not t.startswith('--') and 'l' in t[1:]:
+            return True
+        i += 1
+        if t in val_opts and i < len(toks):
+            i += 1               # skip this option's separate value
+    return False
+
 def _strip_heredoc_bodies(cmd):
     """Drop `<< 'MARK' … MARK` bodies. They are FILE CONTENT (systemd units), not commands --
     an `ExecStart=/usr/local/bin/x` inside one is not this provisioner writing /usr/local/bin/x.
@@ -302,6 +428,37 @@ def destinations(body):
                     verb = toks[0].strip('"\'(!') if toks else ''
                     # `install -d` / `mkdir` create DIRECTORIES, not delivered artifacts.
                     if verb == 'install' and re.match(r'\s*-\S*d\b', seg[len(verb):]): continue
+                    # `sudo -l` / `sudo --list` is LIST MODE: it resolves and prints what the
+                    # target user may run and never executes the command, so the paths in it
+                    # are a QUERY, not a delivery. Without this, a policy probe such as
+                    # `sudo -n -l -U deploy /usr/bin/systemctl daemon-reload` (#7220 AC4) makes
+                    # the guard report that the provisioner "writes" /usr/bin/systemctl and
+                    # demand it be delivered on the fresh-boot path — a remediation that makes
+                    # no sense for a system binary the base image already ships. `sudo` stays
+                    # OUT of READONLY_VERBS, because a bare `sudo <cmd>` genuinely can write;
+                    # only the list form is exempt.
+                    if _sudo_is_list_mode(toks):
+                        continue
+                    # Classify on the WRAPPED command, not the privilege wrapper. `_split_wrapper`
+                    # returns None only when the segment is wrappers-and-options with no command,
+                    # in which case there is nothing to deliver.
+                    eff, chain, widx = _split_wrapper(toks)
+                    if chain:
+                        if eff is None:
+                            continue
+                        verb = os.path.basename(eff)
+                        # The wrapper's OWN arguments are not delivered artifacts either: a
+                        # `-u deploy` operand or a `--` separator carries no destination. Scan
+                        # only the wrapped command's tokens.
+                        toks = toks[widx:]
+                        seg = ' '.join(toks)
+                    # `bash -c '<cmd>'` (possibly behind a wrapper, hence after the peel above):
+                    # classify on <cmd>, not on the shell. One level only — a shell string that
+                    # itself spawns another `-c` is not something a static reader should chase.
+                    inner = _unwrap_shell_c(toks)
+                    if inner:
+                        verb = os.path.basename(inner[0].strip('"\'(!'))
+                        seg = ' '.join(inner)
                     for m in re.finditer(r'(>>?\s*"?)?((?<![\w$.:/])/[A-Za-z0-9._@/-]+)', seg):
                         path = m.group(2)
                         if m.group(1) or verb not in READONLY_VERBS:
@@ -517,7 +674,52 @@ for name, body in ssh_resources.items():
                "cheaper just to clear the failure; restore the body the originating change "
                "intended, on both.")
 
-FLOOR_IDENTITY = 4
+# ── §4b. webhook.service: a REPO FILE against its cloud-init write_files mirror ───────
+#
+# §4 above only reaches units server.tf writes with a HEREDOC. webhook.service is delivered to
+# web-1 by a `provisioner "file"` whose source is the committed repo file, and to a fresh host by
+# an INLINE cloud-init write_files body — so it is dual-written in two encodings with no compiler
+# behind it, exactly the class §4 exists for, and nothing compared them. Both copies carry a
+# "MUST stay in lockstep" comment and neither was enforced (#7220 review).
+#
+# THE COMPARISON IS DIRECTIVE-WISE, NOT BYTE-WISE, and that is deliberate rather than a
+# concession. Measured: the two bodies are NOT byte-identical (the cloud-init copy carries an
+# abbreviated comment, because that file is base64gzip'd into user_data against a Hetzner byte
+# cap) while all 20 DIRECTIVES match. Byte-identity here would therefore fail on a difference
+# systemd cannot observe, and the pressure to clear it would push a maintainer to re-inflate the
+# comment into the byte-capped file. What matters is what systemd reads: the directive sequence,
+# in order, including section headers.
+WEBHOOK_UNIT = "/etc/systemd/system/webhook.service"
+def _directives(text):
+    return [l.strip() for l in text.split('\n') if l.strip() and not l.strip().startswith('#')]
+
+if WEBHOOK_UNIT not in wf_bodies or wf_bodies[WEBHOOK_UNIT] is None:
+    no(f"4b: {WEBHOOK_UNIT} has no parseable cloud-init write_files `content: |` body, so the "
+       "repo unit and the fresh-boot copy cannot be compared. A fresh host would boot an "
+       "unverified webhook.service -- the only remediation channel on a host with no SSH runbook.")
+else:
+    repo_unit = _directives(read("webhook.service"))
+    mirror_unit = _directives(wf_bodies[WEBHOOK_UNIT])
+    # Non-vacuity BEFORE the comparison: two empty lists compare equal, so a broken extraction
+    # would report parity between nothing and nothing. webhook.service carries 20 directives.
+    if len(repo_unit) < 10 or len(mirror_unit) < 10:
+        no(f"4b: extracted only {len(repo_unit)} repo and {len(mirror_unit)} mirror directives "
+           "from webhook.service -- fix the extraction rather than trusting this run.")
+    else:
+        n_identity += 1
+        if repo_unit == mirror_unit:
+            ok(f"4b: {WEBHOOK_UNIT} directives identical across the repo unit and the "
+               f"cloud-init mirror ({len(repo_unit)} directives)")
+        else:
+            only_repo = [d for d in repo_unit if d not in mirror_unit]
+            only_mirror = [d for d in mirror_unit if d not in repo_unit]
+            no(f"4b: {WEBHOOK_UNIT} DRIFTED between the committed unit and the cloud-init "
+               f"mirror. Only in the repo unit: {only_repo or '(order differs only)'}. Only in "
+               f"the mirror: {only_mirror or '(order differs only)'}. web-1 and a freshly built "
+               "host would run DIFFERENT webhook units. Put the change on BOTH paths; note the "
+               "mirror is byte-capped, so keep COMMENTS short there but never a directive.")
+
+FLOOR_IDENTITY = 5
 if n_identity >= FLOOR_IDENTITY:
     ok(f"4: byte-identity checked on {n_identity} dual-written bodies (floor {FLOOR_IDENTITY})")
 else:

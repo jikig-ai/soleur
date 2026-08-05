@@ -84,6 +84,42 @@ declare -rA DEST_SPEC=(
   ["/etc/systemd/system/inngest-server.service.d/10-inngest-server-doppler-token.conf"]="644 root:root"
 )
 
+# #7220 AC-B1 — CONTENT PIN for full-unit *.service dests. THE SECURITY PRECONDITION OF THE
+# daemon-reload GRANT.
+#
+# webhook.service matches neither content gate below: not the /etc/default/* env-file grammar,
+# not the *.service.d/*.conf drop-in grammar. That was survivable only while nothing made
+# systemd ADOPT a rewritten unit — the reload grant is precisely what removes that property.
+#
+# WHY A DIGEST AND NOT A DIRECTIVE GRAMMAR. The drop-in gate forbids directives (User=,
+# ExecStart=, AmbientCapabilities=). That tool cannot work on a full unit, whose entire purpose
+# is to carry ExecStart= — a permitted-directive grammar would have to admit the escalation
+# primitive itself. Every *.service payload here is a STATIC repo file with zero interpolations,
+# so exact bytes are known ahead of time; equality is strictly tighter than any grammar and is
+# immune to the parsing asymmetries (line continuations, duplicate keys, case) a line-shaped
+# gate must reason about.
+#
+# Note the sudoers side buys NOTHING on the scope axis for this grant: `systemctl daemon-reload`
+# takes no unit argument, so exact-argv pinning cannot narrow WHICH units get adopted. This
+# table is the only control that bounds what a reload can pick up ON THIS DELIVERY PATH.
+#
+# THAT QUALIFIER IS LOAD-BEARING (#7220 review). This is an INTEGRITY control, not a privilege
+# boundary: `deploy` is already root-equivalent on this host through the docker group and through
+# two ungated chains, one of which is a /usr/local/bin dest in the very DEST_SPEC above. The
+# canonical statement of what `deploy` already is — with the three paths and the plan that
+# accepted them — lives once, in deploy-inngest-bootstrap.sudoers under
+# "WHAT THE `deploy` USER ALREADY IS". Read it before reasoning about what any gate here defends.
+# What the pin genuinely buys is that a config-delivery bug cannot silently become a
+# unit-definition change on a host with no SSH runbook.
+#
+# LOCKSTEP: the digest and the unit live in two files. A stale pin does not fail loudly — it
+# silently refuses every delivery of the CORRECT unit, bricking the only channel to a host with
+# no SSH runbook. `test_service_pin_matches_repo_unit` derives the expected value from the
+# committed unit and is what makes the split safe; update both together or that test reds.
+declare -rA SERVICE_SHA256=(
+  ["/etc/systemd/system/webhook.service"]="93a6b5b7d9c4e7d01811cd505f95fe192f3fe3e8e282ad29d5ee90c3947ce2ac"
+)
+
 # TEST_DESTDIR redirects writes to a sandbox and skips chown (no root needed),
 # exactly as infra-config-apply.sh does. Empty in prod.
 DESTDIR="${TEST_DESTDIR:-}"
@@ -176,8 +212,14 @@ fi
 # systemd merges drop-ins AFTER the unit body, so a drop-in is not a weaker write than the unit:
 # it can set User=root on vector.service (which runs User=deploy), clear-and-replace ExecStart=
 # via the empty-assignment idiom, or add AmbientCapabilities=. webhook.service does not set
-# NoNewPrivileges, so nothing downstream re-narrows what a drop-in widens — this gate is the
-# only boundary on that path, on the one host with no orderable replacement.
+# NoNewPrivileges, so nothing downstream re-narrows what a drop-in widens — this gate is the only
+# CONTENT CHECK on that path, on the one host with no orderable replacement.
+#
+# "Content check", not "boundary" (#7220 review): calling it a boundary overstates it, because
+# `deploy` is already root-equivalent by three other routes. See "WHAT THE `deploy` USER ALREADY
+# IS" in deploy-inngest-bootstrap.sudoers. The lateral-not-escalation argument below is still
+# exactly right and is the reason this grammar is acceptable — it just is not the reason the host
+# is safe from `deploy`, because it is not.
 #
 # The permitted grammar is deliberately the NARROWEST that admits the payload we actually ship:
 # blank, comment, a bare [Service] header, Environment= and EnvironmentFile=. A directive
@@ -206,6 +248,34 @@ fi
 if [[ "$dest_canonical" == /etc/systemd/system/*.service.d/*.conf ]]; then
   dropin_bad_lines="$(grep -cvE '^[[:space:]]*($|#|;|\[Service\][[:space:]]*$|Environment=|EnvironmentFile=)' "$tmp" || true)"
   [[ "$dropin_bad_lines" == "0" ]] || reject "dropin_shape:bad_lines=$dropin_bad_lines"
+fi
+
+# #7220 AC-B1 — enforce the content pin declared in SERVICE_SHA256 above.
+#
+# Ordering is load-bearing: this runs AFTER the DEST_SPEC allowlist (so `dest_canonical` is
+# already a known dest, not caller-steered) and BEFORE chmod/chown/mv (so a rejected payload
+# never reaches the destination — refuse-to-install, not install-then-fail).
+#
+# The pattern deliberately does not match drop-ins: `*.service` requires the path to END in
+# `.service`, so `<unit>.service.d/<x>.conf` falls to the gate above rather than here.
+#
+# FAIL-CLOSED on an unpinned *.service dest. If a future dest is added to DEST_SPEC without a
+# companion digest, this rejects rather than waving it through — the alternative would make
+# forgetting the pin the silent default, which is the failure mode this AC exists to close.
+# INVERTED PREDICATE (#7220 review). Keying this on `*.service` left a hole: a future DEST_SPEC
+# entry ending .timer/.path/.socket/.target/.mount matches NEITHER this gate nor the drop-in gate
+# above, so it would install with ZERO content validation and `daemon-reload` would adopt it —
+# and a .path or .timer activates its Unit= target with no start grant at all. Anything under
+# /etc/systemd/system that is not a drop-in must carry a digest.
+if [[ "$dest_canonical" == /etc/systemd/system/* && "$dest_canonical" != /etc/systemd/system/*.service.d/*.conf ]]; then
+  service_pinned="${SERVICE_SHA256[$dest_canonical]:-}"
+  [[ -n "$service_pinned" ]] || reject "service_pin:no_pin_for_dest"
+  # sha256sum, never diff/cmp: these payloads are read back into journald on failure, and a
+  # comparison that can echo its input is how a credential leaks (same reasoning as the
+  # mtime-preservation block below).
+  service_sha="$(sha256sum "$tmp" 2>/dev/null | awk '{print $1}')" || service_sha=""
+  [[ -n "$service_sha" ]] || install_fail "service_pin_digest"
+  [[ "$service_sha" == "$service_pinned" ]] || reject "service_pin:sha_mismatch"
 fi
 
 # #7103 R2 3.4 — preserve mtime on a content-identical install.
