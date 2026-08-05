@@ -601,7 +601,8 @@ write_files:
   # every later line, and the original numeric citations rotted immediately.)
   #
   # This is the ON-HOST layer deliberately: the registry resources are an
-  # OPERATOR_APPLIED_EXCLUSION (zot-registry.tf:16-22), applied by the operator's full
+  # OPERATOR_APPLIED_EXCLUSION (zot-registry.tf, the "APPLY-PATH (CTO ruling 2026-07-06,
+  # apply-path-cto-ruling.md)" header block), applied by the operator's full
   # untargeted apply, so a reboot bolted into the dispatch job would cover only the maintenance
   # path and leave the PRIMARY provisioning path uncovered.
   - path: /usr/local/bin/soleur-private-nic-guard.sh
