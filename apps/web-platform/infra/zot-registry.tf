@@ -66,10 +66,17 @@ locals {
   # No bot manages this pin — do not describe one.
   #
   # THE ARCH IN EACH NAME MUST MATCH THE ARCH IN ITS VALUE. `local.zot_image` below selects on
-  # registry_arch (amd64 today), so swapping these two values boots an arm64 binary on an amd64
-  # host → `exec format error` → zot never answers /v2/ → the SOLE PULL PATH GOES DARK.
+  # registry_arch (amd64 today), so swapping these two values DARKS THE SOLE PULL PATH.
+  # MECHANISM, MEASURED 2026-08-05: zot-linux-amd64 and zot-linux-arm64 are DISTINCT OCI
+  # REPOSITORIES and a manifest digest resolves only within its own, so the pull 404s
+  # (MANIFEST_UNKNOWN) — no wrong-arch binary is ever executed and no container is created.
+  # The host then reports `zot_image_digest=unknown state_status=unknown`, which is the
+  # signature to grep for. (An earlier version of this comment said `exec format error`;
+  # that was wrong, and it sends an operator hunting telemetry that never appears.)
   # Staleness checks 2/4/5 are arch-keyed for this reason and must not be relaxed to a
-  # "both digests appear somewhere" form, which a swap satisfies.
+  # "both digests appear somewhere" form, which a swap satisfies. Note they close a swap in
+  # ONE file relative to the other; a swap applied coherently to BOTH the .tf and the sidecar
+  # is caught by the digest<->repository probe in rule-audit.yml, not here.
   registry_arch   = startswith(var.registry_server_type, "cax") ? "arm64" : "amd64"
   zot_image_arm64 = "ghcr.io/project-zot/zot-linux-arm64:v2.1.20@sha256:56230c5a589eb55acc57afc34307f6ea1b2efe5cf8e0057ccca64099ba837ff6"
   zot_image_amd64 = "ghcr.io/project-zot/zot-linux-amd64:v2.1.20@sha256:95a837a0afacf5b7edc0c92493f04beee6891989b8d2fd50a00cf65a1e6d4fd5"
