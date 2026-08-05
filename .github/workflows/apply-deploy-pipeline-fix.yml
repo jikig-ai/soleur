@@ -88,6 +88,9 @@ on:
       - "apps/web-platform/infra/cat-inngest-verify-state.sh"
       - "apps/web-platform/infra/inngest-inventory.sh"
       - "apps/web-platform/infra/git-lock-chardevice-sweep.sh"
+      # #7286 — inngest-redis.service's Doppler-token drop-in. Without this path the auto-apply
+      # does not fire on a drop-in-only change and the fix needs a manual workflow_dispatch.
+      - "apps/web-platform/infra/10-inngest-redis-doppler-token.conf"
       # #6178 — the two web-host Inngest cutover probes are webhook-delivered AND
       # registered in server.tf's deploy_pipeline_fix triggers_replace hash, so a
       # body-only edit to either must fire this apply. Kept in sync with

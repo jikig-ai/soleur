@@ -250,6 +250,15 @@ FILE_MAP=(
   # gate) with Restart=on-failure, and inngest-bootstrap.sh restarts it on EVERY co-located
   # ci-deploy. Without this it crash-loops on the next deploy after the fix lands.
   "INNGEST_SERVER_DOPPLER_TOKEN_CONF_B64|/etc/systemd/system/inngest-server.service.d/10-inngest-server-doppler-token.conf|644|root:root"
+  # #7286 — the consumer the #7095 sweep missed, and the only one where the omission was not
+  # latent. inngest-redis.service reads ONLY the pinned /etc/default/inngest-server copy and runs
+  # `doppler run --config prd` with NO [ -n "$DOPPLER_TOKEN" ] gate, so a stale token exits it
+  # non-zero; RestartSec=5 against systemd's default StartLimitBurst never latches `failed`, so it
+  # loops forever instead of stopping. That crash-loop kept 127.0.0.1:6379 unbound and took the
+  # whole Inngest backbone down for 16h (inngest-server was healthy against Postgres and died on
+  # `dial tcp 127.0.0.1:6379: connect: connection refused`). Enforced going forward by the
+  # class-closing lockstep invariant in inngest.test.sh.
+  "INNGEST_REDIS_DOPPLER_TOKEN_CONF_B64|/etc/systemd/system/inngest-redis.service.d/10-inngest-redis-doppler-token.conf|644|root:root"
 )
 
 # TEST_DESTDIR allows tests to redirect writes to a sandbox

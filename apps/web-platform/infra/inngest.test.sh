@@ -1053,5 +1053,103 @@ assert "ci-deploy.sh --preserve-env drops DOPPLER_PROJECT (#6555)" \
   "! grep -qE 'preserve-env=.*DOPPLER_PROJECT' '$CI_DEPLOY'"
 
 echo ""
+echo "--- #7286: unconditional-doppler unit -> credential drop-in FULL lockstep (class-closing) ---"
+#
+# THE INVARIANT (#7095 stated it in prose, in 10-inngest-heartbeat-doppler-token.conf, and
+# left it unenforced; #7286 is what that cost):
+#
+#   No secret may be copied into a second host file without the copy inheriting the
+#   original's re-delivery path.
+#
+# CONCRETELY. /etc/default/inngest-server holds a token GREP-EXTRACTED out of
+# /etc/default/webhook-deploy (inngest-bootstrap.sh:586) and then PINNED forever (:567-568
+# preserves it whenever the value still matches ^DOPPLER_TOKEN=dp.), so it never self-heals.
+# A unit that reads ONLY that pinned copy and runs `doppler run` with NO
+# `[ -n "$DOPPLER_TOKEN" ]` gate has no degraded-but-alive arm: the moment the pinned token
+# stops working, ExecStart exits non-zero and Restart= loops it forever.
+#
+# That is exactly #7286. inngest-redis.service was the ONE Doppler consumer #7095's sweep did
+# not give a drop-in, and 16h of P1 followed: `doppler run --config prd` failing -> redis never
+# binds 127.0.0.1:6379 -> inngest-server dies on `dial tcp ... connection refused` every ~9s.
+#
+# WHY THE SCOPE IS "UNCONDITIONAL doppler run", NOT "reads the env file". Six infra units read
+# /etc/default/inngest-server. Four of them (container-restart-monitor, cron-egress-alarm@,
+# cron-egress-firewall, cron-egress-resolve) ALSO carry their own
+# `EnvironmentFile=-/etc/default/soleur-doppler-token` line AND gate ExecStart on
+# `[ -n "$DOPPLER_TOKEN" ]` with a non-doppler fallback branch — they already satisfy the
+# invariant in their unit body and degrade gracefully besides. Asserting on "reads the env
+# file" would flag those four and make the guard noise; asserting on the ACTUAL hazard
+# (unconditional `doppler run` + no live-credential source) selects precisely the units that
+# can crash-loop. Verified against all six unit bodies, not assumed.
+#
+# ACK LIST, with reasons — an unexplained skip is how a ratchet stops ratcheting:
+#   inngest-cutover-flip.service — DEDICATED-host unit (cloud-init-inngest.yml docker-cp +
+#     install at :465-472), not a web-1 co-located unit. Its /etc/default/inngest-server is
+#     written at cloud-init PRE-CREATE with the correctly-scoped soleur-inngest token, so it is
+#     a primary credential source, not a grep-extracted pinned copy — the defect class does not
+#     apply. push-infra-config.sh targets deploy.${APP_DOMAIN_BASE} (web-1) only, so the
+#     web-host credential never reaches that host and a drop-in there would be inert at best
+#     and wrong-project at worst.
+DROPIN_ACK_UNITS=("inngest-cutover-flip.service")
+
+lockstep_examined=0
+for unit_path in "$SCRIPT_DIR"/*.service; do
+  unit_file="$(basename "$unit_path")"
+
+  # Skip acked units.
+  ack_hit=0
+  for acked in "${DROPIN_ACK_UNITS[@]}"; do
+    [[ "$unit_file" == "$acked" ]] && ack_hit=1
+  done
+  [[ "$ack_hit" == "1" ]] && continue
+
+  # Selector (a): reads the pinned copy as a REQUIRED file (no '-' prefix).
+  grep -qE '^EnvironmentFile=/etc/default/inngest-server$' "$unit_path" || continue
+  # Selector (b): ExecStart invokes doppler DIRECTLY (not behind a token-presence test).
+  grep -qE '^ExecStart=[^ ]*/doppler run ' "$unit_path" || continue
+  # Selector (c): and has no live-credential source of its own.
+  if grep -qE '^EnvironmentFile=-?/etc/default/soleur-doppler-token$' "$unit_path"; then continue; fi
+
+  lockstep_examined=$((lockstep_examined + 1))
+
+  stem="${unit_file%.service}"                       # inngest-redis
+  conf="10-${stem}-doppler-token.conf"               # 10-inngest-redis-doppler-token.conf
+  payload_key="$(printf '%s' "$stem" | tr '-' '_')_doppler_token_conf_b64"
+  env_var="$(printf '%s' "$payload_key" | tr '[:lower:]' '[:upper:]')"
+  dest="/etc/systemd/system/${unit_file}.d/${conf}"
+
+  # Surface 1 — the drop-in file itself.
+  assert "[$unit_file] drop-in file $conf exists" \
+    "[[ -f '$SCRIPT_DIR/$conf' ]]"
+  assert "[$unit_file] $conf points at the re-deliverable credential (the '-' prefix is load-bearing)" \
+    "grep -qxF 'EnvironmentFile=-/etc/default/soleur-doppler-token' '$SCRIPT_DIR/$conf'"
+  # Surface 2 — CI payload producer.
+  assert "[$unit_file] push-infra-config.sh emits payload key $payload_key" \
+    "grep -qF '\"$payload_key\"' '$SCRIPT_DIR/push-infra-config.sh'"
+  # Surface 3 — the pass-file-to-command bridge (the surface a FILE_MAP-only reading misses).
+  assert "[$unit_file] hooks.json.tmpl bridges $payload_key -> $env_var" \
+    "grep -qF '\"$payload_key\"' '$SCRIPT_DIR/hooks.json.tmpl' && grep -qF '\"$env_var\"' '$SCRIPT_DIR/hooks.json.tmpl'"
+  # Surface 4 — handler FILE_MAP.
+  assert "[$unit_file] infra-config-apply.sh FILE_MAP carries $env_var -> $dest" \
+    "grep -qF '$env_var|$dest|644|root:root' '$SCRIPT_DIR/infra-config-apply.sh'"
+  # Surface 5 — installer DEST_SPEC allowlist.
+  assert "[$unit_file] infra-config-install.sh DEST_SPEC allowlists $dest" \
+    "grep -qF '[\"$dest\"]=' '$SCRIPT_DIR/infra-config-install.sh'"
+  # Surface 6 — server.tf triggers_replace (a body-only edit must re-fire the push).
+  assert "[$unit_file] server.tf triggers_replace hashes $conf" \
+    "grep -qF 'file(\"\${path.module}/$conf\")' '$SCRIPT_DIR/server.tf'"
+  # Surface 7 — auto-apply paths filter.
+  assert "[$unit_file] apply-deploy-pipeline-fix.yml paths filter lists $conf" \
+    "grep -qF 'apps/web-platform/infra/$conf' '$SCRIPT_DIR/../../../.github/workflows/apply-deploy-pipeline-fix.yml'"
+done
+
+# Cardinality guard. A selector typo (or a future refactor that renames the env file) would make
+# the loop body run ZERO times and this whole block would report success having asserted nothing
+# — the silent-green shape this suite exists to prevent. inngest-redis.service is the known
+# member; if it ever stops matching, that is a finding, not a pass.
+assert "lockstep invariant examined >= 1 unit (guard against a vacuous selector)" \
+  "[[ '$lockstep_examined' -ge 1 ]]"
+
+echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

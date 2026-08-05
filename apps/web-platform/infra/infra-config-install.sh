@@ -82,6 +82,8 @@ declare -rA DEST_SPEC=(
   ["/etc/systemd/system/vector.service.d/10-vector-doppler-token.conf"]="644 root:root"
   ["/etc/systemd/system/inngest-heartbeat.service.d/10-inngest-heartbeat-doppler-token.conf"]="644 root:root"
   ["/etc/systemd/system/inngest-server.service.d/10-inngest-server-doppler-token.conf"]="644 root:root"
+  # #7286 — inngest-redis.service, the unconditional-`doppler run` consumer #7095 did not cover.
+  ["/etc/systemd/system/inngest-redis.service.d/10-inngest-redis-doppler-token.conf"]="644 root:root"
 )
 
 # #7220 AC-B1 — CONTENT PIN for full-unit *.service dests. THE SECURITY PRECONDITION OF THE
