@@ -325,6 +325,47 @@ resource "doppler_secret" "zot_push_token" {
   visibility = "masked"
 }
 
+# (#7278, ADR-152 precedent) THE RATIONALE STRIP for the registry's cloud-init.
+#
+# Removes whole-line `#` comments from the render, so the repo keeps its rationale and
+# user_data does not pay for it: 34,628 B → 9,072 B against Hetzner's hard 32,768 B ForceNew cap
+# (measured with terraform's OWN base64gzip, never `gzip -9` — git-data-userdata-budget.sh:19-22
+# forbids the latter because it OVERSTATES headroom, and on a hard gate an optimistic
+# measurement is worse than none).
+# Measured over-cap BEFORE this issue added anything, which meant every registry provisioning
+# event — the `registry-luks-recut` that activates the restart lever included — failed at the
+# Hetzner API. Comments were ~55% of the payload's lines.
+#
+# WHY THIS EXPRESSION IS NOT git-data's. modules/git-data-userdata/main.tf strips with
+# `/(?m)^[ \t]*#([^!\n][^\n]*)?\n/`, which preserves `#!` and NOTHING ELSE. Ported verbatim here
+# it would delete `#cloud-config` — line 1 of this template, and the token cloud-init uses to
+# recognise a payload at all. The apply would still succeed and the host would still boot; it
+# would simply run none of this file, leaving the LUKS volume locked and zot never started. That
+# is a dark host presenting as a green apply, which is the failure mode ADR-096 exists to avoid.
+#
+# Two structural differences drive it. git-data strips the INJECTED SCRIPTS and explicitly does
+# NOT strip its cloud-init; this host has no injected scripts — every script is inline in the
+# YAML — so the template itself is what must be stripped, `#cloud-config` and all.
+#
+# THE RULE: a `#` line is rationale only when followed by a space/tab, or when bare. That
+# preserves `#cloud-config` and `#!` shebangs by construction rather than by enumeration, and
+# `#cloud-config` is verified to be the ONLY comment line in this file lacking that separator.
+# Anchored at line start, so mid-line `${var#...}` parameter expansions are untouched.
+#
+# RE2, NOT PCRE: terraform's `replace()` compiles Go regexp, which has no lookahead — hence the
+# separator-class formulation rather than the `(?!cloud-config)` an RE2-free engine would allow.
+#
+# Applied AFTER templatefile (see the `replace(...)` wrapper below), so the substituted values —
+# ids, digests, tokens, all single-line scalars — cannot be touched by a line-anchored match.
+#
+# ONE COPY. plugins/soleur/test/cloud-init-user-data-size.test.ts EXTRACTS this expression from
+# this file rather than restating it, so the model cannot measure a payload production does not
+# boot. git-data needed a dedicated parity suite to keep its two copies equal; there is nothing
+# here to keep equal.
+locals {
+  registry_rationale_strip = "/(?m)^[ \t]*#([ \t][^\n]*)?\n/"
+}
+
 # --- The registry host -----------------------------------------------------------------
 resource "hcloud_server" "registry" {
   name        = "soleur-registry"
@@ -348,7 +389,44 @@ resource "hcloud_server" "registry" {
   # (docker + one container + htpasswd gen; no bake-and-extract), but budget for it anyway
   # and verify the byte-exact size at the first `terraform plan`. Hetzner base64-decodes →
   # gzip magic → cloud-init auto-gunzips → byte-identical #cloud-config (DataSourceHetzner).
-  user_data = base64gzip(templatefile("${path.module}/cloud-init-registry.yml", {
+  #
+  # (#7278) "budget for it anyway and verify the byte-exact size at the first terraform plan"
+  # was never done, and the payload crossed the cap: 34,628 B against 32,768 B, i.e. 1,860 B over
+  # (terraform's own base64gzip). In that
+  # state EVERY registry provisioning event fails at the Hetzner API — including the
+  # `registry-luks-recut` that is the only vehicle able to deliver new host-side code here
+  # (ADR-096 makes this host cloud-init-only). The rationale strip below is what brings it back
+  # under, and plugins/soleur/test/cloud-init-user-data-size.test.ts now carries the registry arm
+  # that was missing, so the next drift fails in CI instead of at a dark host.
+  #
+  # ⚠ THIS EDIT ARMS A PENDING REPLACE, AND THE RECREATE WOULD FAIL ON STOCK IN hel1.
+  #
+  # `user_data` is ForceNew and this resource DELIBERATELY carries no
+  # `lifecycle.ignore_changes = [user_data]` (see the note ~40 lines below). Changing the render
+  # therefore shows `-/+ hcloud_server.registry` — a destroy-then-create — in any UNTARGETED
+  # plan, which is the operator's full apply and the 12h drift detector, i.e. the ONLY apply
+  # paths these resources have.
+  #
+  # The replace was ALREADY pending before this change (state ≠ over-cap render). What this
+  # change does is make the CREATE attemptable: pre-fix it would have destroyed the host and then
+  # failed at the Hetzner 32 KB error. That is an improvement only if the type is orderable.
+  #
+  # STOCK REALITY — live probe 2026-08-04, read from `.server_types.available` (never
+  # `.supported`, never the hcloud CLI location column; both report the SUPPORTED set):
+  #   nbg1-dc3   cx23 ✓  cpx22 ✓
+  #   hel1-dc2   cx23 ✗  cpx22 ✓     ← the registry lives here (registry_location = hel1)
+  #   fsn1-dc14  cx23 ✗  cpx22 ✓
+  # So `cx23` IS orderable again in nbg1-dc3 — variables.tf's "0 of 3 EU DCs" (probe 2026-07-26)
+  # is stale in that direction — but NOT in hel1, where this host runs. A recreate here still
+  # fails on stock and is a TYPE DECISION, exactly as variables.tf warns. #6508's plan-time guard
+  # does NOT catch it: `data.hcloud_server_type.registry` resolves cx23 fine because the type is
+  # SUPPORTED; it is AVAILABILITY that is zero, which is the whole distinction.
+  #
+  # CONSEQUENCE: do not run an untargeted apply against this root without re-probing stock first.
+  # Re-provisioning is the guarded `registry-host-replace` / `registry-luks-recut` dispatch path,
+  # which is destroy-guarded and scoped. This is disclosure, not a new hazard — but until #6460's
+  # DR remediation lands, "the plan shows the registry being replaced" is a STOP, not a proceed.
+  user_data = base64gzip(replace(templatefile("${path.module}/cloud-init-registry.yml", {
     # Mount the zot storage volume by its specific id (server.tf/cloud-init.yml by-id
     # pattern). Known at plan time; the attachment is a separate resource.
     registry_volume_id = hcloud_volume.registry.id
@@ -391,7 +469,7 @@ resource "hcloud_server" "registry" {
     # Single-sourced with hcloud_server_network.registry.ip (network.tf) — see the drift
     # rationale there; a drifted copy would reboot a healthy host.
     private_ip = local.registry_private_ip
-  }))
+  }), local.registry_rationale_strip, ""))
 
   # Deliberately NO lifecycle.ignore_changes=[user_data]. A FRESH host has no spurious diff,
   # and omitting it preserves a clean replace-to-reprovision path (git-data.tf rationale) —
