@@ -211,8 +211,16 @@ echo "--- #7220 B6: daemon-reload grant + DropInPaths activation assertions ---"
 # which is the property #7220 needed and did not have.
 assert "post-write asserts the daemon-reload grant landed in the file" \
   "printf '%s' \"\$BLOCK\" | grep -qE 'grep -q SYSTEMCTL_DAEMON_RELOAD /etc/sudoers.d/deploy-inngest-bootstrap'"
-assert "post-write PROBES sudo policy for daemon-reload (not just the text)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'sudo -n -l -U deploy /usr/bin/systemctl daemon-reload'"
+# EXECUTES the grant rather than listing it: proves the grant is EFFECTIVE, not merely present,
+# and performs the reload the DropInPaths assertions below depend on. Also asserts the FATAL
+# tail, because in a remote-exec inline block the `|| { ...; exit 1; }` is the only thing that
+# makes the probe a gate rather than an advisory line.
+assert "post-write EXECUTES the daemon-reload grant as deploy (not just lists it)" \
+  "printf '%s' \"\$BLOCK\" | grep -qF 'runuser -u deploy -- sudo -n /usr/bin/systemctl daemon-reload'"
+assert "the daemon-reload probe is fatal, not advisory" \
+  "printf '%s' \"\$BLOCK\" | grep -F 'runuser -u deploy -- sudo -n /usr/bin/systemctl daemon-reload' | grep -qF 'exit 1'"
+assert "list-mode availability is probed before the policy probes (could-not-measure is its own outcome)" \
+  "printf '%s' \"\$BLOCK\" | grep -qF 'sudo -n -l -U deploy >/dev/null 2>&1 ||'"
 assert "post-write probes sudo policy for the --collect self-restart argv" \
   "printf '%s' \"\$BLOCK\" | grep -qF 'sudo -n -l -U deploy /usr/bin/systemd-run --collect'"
 

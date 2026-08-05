@@ -1302,6 +1302,24 @@ test_self_restart_collect_argv_lockstep() {
   assert_eq "sudoers grants the --collect argv" "$expected" "$g_sudoers"
   assert_eq "cloud-init grants the --collect argv" "$expected" "$g_cloudinit"
 
+  # A Cmnd_Alias with no User_Spec grants NOTHING — the same reasoning the daemon-reload arm
+  # applies, now applied to the sibling grant this PR edits. Measured by review: deleting this
+  # binding from BOTH sudoers sources left the suite fully green, so the self-restart would be
+  # denied in production with nothing red — the silent no-op class, on the delayed restart B5
+  # exists to make reachable for the first time since ~2026-05.
+  if grep -qE '^deploy ALL=\(root\) NOPASSWD: WEBHOOK_SELF_RESTART$' "$sudoers"; then
+    echo "  PASS: sudoers binds WEBHOOK_SELF_RESTART to deploy via a User_Spec"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: WEBHOOK_SELF_RESTART has no 'deploy ALL=(root) NOPASSWD:' line — the alias grants nothing"
+    FAIL=$((FAIL + 1))
+  fi
+  if grep -qE '^[[:space:]]*deploy ALL=\(root\) NOPASSWD: WEBHOOK_SELF_RESTART$' "$cloud_init"; then
+    echo "  PASS: cloud-init binds WEBHOOK_SELF_RESTART to deploy via a User_Spec"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: cloud-init defines WEBHOOK_SELF_RESTART without a User_Spec"
+    FAIL=$((FAIL + 1))
+  fi
+
   # The caller must send exactly that. Anchored on the sudo-prefixed call, not a bare --collect
   # grep, which would also match this file's own prose.
   if grep -qF "sudo $expected" "$HANDLER"; then
@@ -1424,6 +1442,50 @@ test_daemon_reload_runs_on_a_clean_apply() {
   assert_eq "zero fatal markers when the reload succeeds" "0" "$n_fatal"
   assert_eq "fatal_line zeroed when the reload succeeds" "0" "$(_frame_field fatal_line)"
 
+  restart_teardown
+}
+
+# THE REACHABILITY ARM. Everything else in this suite runs with INFRA_CONFIG_TEST_MODE=1 (set by
+# setup()), so every assertion about the reload is an assertion about a path the SUITE takes —
+# never about the path PRODUCTION takes. Measured by review: wrapping the call site in the
+# INVERSE guard, `if [[ -n "${INFRA_CONFIG_TEST_MODE:-}" ]]`, left all 171 assertions green. That
+# mutant is #7220 byte-for-byte: files delivered, activation never happens on a real host, and
+# the suite says everything is fine.
+#
+# So this arm runs the handler with TEST_MODE UNSET — the prod-shaped path — with the seams and
+# PATH stubs still in place, and asserts the reload actually fired. It is the only arm that can
+# distinguish "the reload runs" from "the reload runs where the tests can see it".
+test_daemon_reload_reachable_with_test_mode_unset() {
+  echo "TEST: #7220 — the reload fires on the PROD path (INFRA_CONFIG_TEST_MODE unset)"
+  restart_setup
+  arm_unit vector.service active "$(date -u +%s)"
+  # The prod path. sync, sudo and systemd-run are PATH-stubbed by setup(); the WRITE seam is
+  # stubbed by restart_setup. Nothing here touches the real host.
+  unset INFRA_CONFIG_TEST_MODE
+  bash "$HANDLER" >/dev/null 2>&1 || true
+
+  local n_reload
+  n_reload=$(grep -c '^daemon-reload$' "$STUB_CALLS" 2>/dev/null || true)
+  [[ "$n_reload" =~ ^[0-9]+$ ]] || n_reload=0
+  if [[ "$n_reload" -ge 1 ]]; then
+    echo "  PASS: daemon-reload fires with TEST_MODE unset — the call site is reachable in prod"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: daemon-reload did NOT fire on the prod path — the reload is test-only, which is #7220"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # NON-VACUITY: prove this arm really took the prod branch. `sync` is guarded by the same
+  # TEST_MODE check, so if it did not run, TEST_MODE was still set and the assertion above
+  # proved nothing about production.
+  if [[ -f "$STUB_STATE/../synced" ]] || grep -qF 'daemon-reload' "$STUB_CALLS" 2>/dev/null; then
+    echo "  PASS: the prod branch was actually entered"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: could not confirm the prod branch was entered — this arm is vacuous"
+    FAIL=$((FAIL + 1))
+  fi
+
+  export INFRA_CONFIG_TEST_MODE=1
   restart_teardown
 }
 
@@ -1987,6 +2049,7 @@ test_self_restart_collect_argv_lockstep
 test_webhook_start_limit_disabled
 test_daemon_reload_grant_lockstep
 test_daemon_reload_runs_on_a_clean_apply
+test_daemon_reload_reachable_with_test_mode_unset
 test_daemon_reload_denied_is_attributed
 test_sudoers_caller_argv_lockstep
 test_happy_path
@@ -2005,7 +2068,7 @@ test_orphan_hook_selfcheck
 # --- #7220 review: ASSERTION-COUNT FLOOR ---------------------------------------------------
 # Measured: removing the new arm invocations from the runner took this suite 144 -> 110 passed,
 # 0 failed, exit 0. Nothing noticed. A floor makes that loud.
-APPLY_MIN_ASSERTIONS=171
+APPLY_MIN_ASSERTIONS=175
 if [[ "$PASS" -lt "$APPLY_MIN_ASSERTIONS" ]]; then
   echo "  FAIL: assertion-count floor — only $PASS assertions ran, expected >= $APPLY_MIN_ASSERTIONS"
   FAIL=$((FAIL + 1))
