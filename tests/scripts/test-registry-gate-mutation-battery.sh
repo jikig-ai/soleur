@@ -238,30 +238,42 @@ mutate "G08 a required pin silently dropped from the declared set" gate \
 ' \
   ''
 
+# Anchored on the arm ALONE, not on the arm plus the comment that follows it. The earlier form
+# included the next comment line for uniqueness and broke the moment that comment was reworded —
+# an anchor that depends on adjacent prose fails on edits that change no behaviour. Uniqueness
+# is instead enforced by py_replace, which refuses a multi-match anchor outright.
 mutate "G09 classify() default arm reads UNKNOWN as NOTFOUND (unclassified becomes absent)" gate \
-  '    *) echo UNKNOWN ;;
-  esac
-}
-
-# The `tr' \
-  '    *) echo NOTFOUND ;;
-  esac
-}
-
-# The `tr'
+  '    *) echo UNKNOWN ;;' \
+  '    *) echo NOTFOUND ;;'
 
 mutate "G10 classify() DENIED arm removed (auth failure misclassified)" gate \
   '    *UNAUTHORIZED*|*DENIED*|*"authentication required"*)              echo DENIED ;;
 ' \
   ''
 
-mutate "G11 last_err reads the FIRST bytes, not the last (classifies on line 1)" gate \
-  'last_err() { tail -c 400 "$1"' \
-  'last_err() { head -c 400 "$1"'
+# G11 is the mutation that found a live fail-open rather than a test gap: `last_err` bounded
+# BYTES while classify() and every comment claimed LAST LINE, and classify() substring-matches,
+# so its first case arm won over the whole capture. On a conditional pin that turned a credential
+# rejection into a silent "absent, skipping". The mutation now removes the line-tail that fixed
+# it — which is the drift a future editor would actually introduce, since the byte-tail LOOKS
+# sufficient and is indistinguishable on every short fixture.
+mutate "G11 last_err drops the line-tail and classifies over the whole byte window" gate \
+  'tail -c 400 "$1" 2>/dev/null | tail -n 1 | tr' \
+  'tail -c 400 "$1" 2>/dev/null | tr'
 
 mutate "G12 workflow-command injection guard dropped from last_err" gate \
-  'last_err() { tail -c 400 "$1" 2>/dev/null | tr '"'"'\n'"'"' '"'"' '"'"' || true; }' \
-  'last_err() { tail -c 400 "$1" 2>/dev/null || true; }'
+  'tail -c 400 "$1" 2>/dev/null | tail -n 1 | tr '"'"'\n'"'"' '"'"' '"'"' || true; }' \
+  'tail -c 400 "$1" 2>/dev/null | tail -n 1 || true; }'
+
+# The engine carries the identical last_err and the identical fix, so it carries the identical
+# mutations. A guard fixed in two files and mutation-tested in one is half-tested.
+mutate "E21 engine last_err drops the line-tail (conditional skip swallows a credential failure)" engine \
+  'tail -c 400 "$1" 2>/dev/null | tail -n 1 | tr' \
+  'tail -c 400 "$1" 2>/dev/null | tr'
+
+mutate "E22 engine workflow-command injection guard dropped from last_err" engine \
+  "tail -c 400 \"\$1\" 2>/dev/null | tail -n 1 | tr '\\n' ' ' || true" \
+  "tail -c 400 \"\$1\" 2>/dev/null | tail -n 1 || true"
 
 mutate "G13 GITHUB_ACTIONS seam guard neutered (a seam can manufacture AUTHORIZED)" gate \
   'if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
@@ -383,12 +395,8 @@ mutate "E16 ghcr.io accepted as the restore target (a no-op that reports success
   '  ghcr.io|ghcr.io/*|*://*) die 1 ' '  __never_matches__) die 1 '
 
 mutate "E17 classify() default arm reads UNKNOWN as NETWORK (retryable)" engine \
-  '    *) echo UNKNOWN ;;
-  esac
-}' \
-  '    *) echo NETWORK ;;
-  esac
-}'
+  '    *) echo UNKNOWN ;;' \
+  '    *) echo NETWORK ;;'
 
 mutate "E18 source-resolution failure no longer aborts on an empty digest" engine \
   '  if [[ -z "$src_digest" ]]; then' \

@@ -1862,57 +1862,54 @@ jobs:
             echo "**Run:** ${RUN_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # Selected by `-f apply_target=registry-luks-recut` (#6929, ADR-096 amendment 2026-07-24).
+  # ── D10 AUTHORIZATION GATE. A SEPARATE JOB, AND THE SEPARATION IS THE POINT (#7277). ────────
   #
-  # THE SANCTIONED VEHICLE FOR THE GUEST-SIDE-LUKS RECUT, and the removal of a live footgun.
-  # The 2026-07-24 change made hcloud_volume.registry a RAW device: cloud-init discriminates on
-  # `blkid TYPE` — "" (fresh) -> luksFormat; crypto_LUKS -> reuse; ANY OTHER TYPE -> FATAL.
-  # The live volume is still PLAINTEXT ext4, i.e. in that third arm.
+  # Everything here used to be the first half of `registry_luks_recut`. It was split out because
+  # that job's `timeout-minutes: 30` is load-bearing — it holds the fleet-wide apply mutex, and
+  # D11's 630 s poller bound is deliberately strictly below it — while the A2 rehearsal is
+  # multi-GB with an UNMEASURED wall-clock (ADR-169 residual; a workstation's transfer profile
+  # does not predict a GitHub-hosted runner's). A rehearsal that succeeds SLOWLY subtracts from
+  # the post-destroy window and pushes a timeout into `terraform apply` or D11.
   #
-  # So `registry-host-replace` MUST NOT be used for this: it PRESERVES the volume, so the
-  # replaced host boots against the still-plaintext device, refuses it, and DARKS THE REGISTRY.
-  # Forgetting the `-replace` on the volume does the same. This job performs the recut as ONE
-  # ATOMIC APPLY, `-replace`ing the volume + its attachment + the server TOGETHER, so a fresh raw
-  # volume meets the empty arm and gets luksFormatted; zot then re-fills from GHCR.
+  # WHAT THE SPLIT BUYS, precisely, because it is easy to overclaim: a FAILURE-SEMANTICS
+  # property, not a mutex property. A timeout HERE destroys nothing and leaves
+  # `store_refill_needed` unset, so the chained restore correctly skips. A timeout in the recut
+  # job is unrecoverable — it is a *cancellation*, so no `::error::` fires and the Dispatch
+  # summary that is the sole emitter of the new volume id never runs. The split moves the
+  # unmeasured term to the side where overrunning is free.
   #
-  # NO `environment:` — like all four host-replace/migrate jobs (only workspaces-luks-recut has
-  # one, because it touches sole-copy /mnt/data). An `environment:` naming an UNPROVISIONED
-  # GitHub environment silently AUTO-APPROVES (DP-11 F8), so declaring one here would add the
-  # APPEARANCE of a reviewer gate without the gate. Authorization is the menu-ack dispatch plus
-  # the typed confirm; CODEOWNERS gates this file.
+  # WHAT IT DOES NOT BUY: the `concurrency` group is WORKFLOW-level, so this releases no mutex.
+  # The worst-case fleet-wide apply block is now the SUM across this job, the recut, and the
+  # restore. Saying otherwise would name a property the change does not have — the same standard
+  # the `registry_store_restore` header holds itself to.
   #
-  # NO job-level `concurrency:` — it inherits the workflow-level
-  # `terraform-apply-web-platform-host` group, which is the verified-complete serializer for the
-  # LOCK-LESS R2 backend (`cancel-in-progress: false` also prevents a cancel mid-destroy).
-  #
-  # `timeout-minutes: 30` is load-bearing: this job holds that fleet-wide apply mutex, so
-  # GitHub's 360-minute default would let a hung poll block EVERY merge-apply for six hours.
-  # The D11 poller's own bound (150s + 480s) is strictly below it so its diagnostic wins over an
-  # opaque cancellation.
-  registry_luks_recut:
+  # This job carries NO `-target` and performs no terraform action at all. `init`/`plan` are
+  # deliberately NOT hoisted here: that would widen the plan→apply gap by the rehearsal's
+  # duration against a LOCK-LESS R2 backend, and would put state access in a job with no destroy
+  # authority.
+  registry_pull_path_gate:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'registry-luks-recut'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # STRUCTURAL, NOT MEASURED — and unlike the recut's 30, that is safe to say here. The
+    # rehearsal's duration is a named unmeasured residual, so this bound is a runaway backstop
+    # rather than a derived budget. Overrunning it destroys nothing.
+    timeout-minutes: 45
     # `packages: read` is what lets the D10 gate resolve production's pin set at GHCR. The
-    # workflow-level default is `contents: read` only, and this is not a reusable-workflow call,
-    # so nothing else grants it. No `id-token: write`: the restore COPIES cosign signatures
-    # rather than re-signing them (the GHCR signature is a Sigstore bundle bound to the image
-    # digest, so a copied signature verifies unchanged at the target — measured, #7277 Phase
-    # 0.3), and keyless signing is therefore not on this path at all.
+    # workflow-level default is `contents: read` only. No `id-token: write`: the restore COPIES
+    # cosign signatures rather than re-signing them (the GHCR signature is a Sigstore bundle
+    # bound to the image digest, so a copied signature verifies unchanged at the target —
+    # measured, #7277 Phase 0.3), so keyless signing is not on this path at all.
     permissions:
       contents: read
       packages: read
     outputs:
-      # Consumed by registry_store_restore's `if:`. See the "Mark the store as needing a refill"
-      # step for why the restore keys on this rather than on this job's overall result.
-      store_refill_needed: ${{ steps.refill_flag.outputs.needed }}
+      # SINGLE SOURCE, TWO CONSUMERS: this job's own conditional steps and the recut job's
+      # destroy-guard. Promoting it to a job output preserves that property across the split —
+      # re-probing in the recut would introduce a second reading that can disagree with the one
+      # the verdict was rendered against.
+      probe_result: ${{ steps.posture.outputs.probe_result }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-
-      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
-        with:
-          terraform_version: ${{ env.TERRAFORM_VERSION }}
-          terraform_wrapper: false
 
       - name: Install Doppler CLI
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
@@ -1922,7 +1919,9 @@ jobs:
           CONFIRM: ${{ inputs.confirm }}
           EXPECTED_VOLUME_ID: ${{ inputs.expected_registry_store_volume_id }}
         # Inputs via env:, never inline ${{ }} in run: — an inline expansion is a command
-        # injection surface. Both values are operator-typed.
+        # injection surface. Both values are operator-typed. Deliberately duplicated in the recut
+        # job as well: it costs milliseconds, and the recut must not be green-by-`needs:` on
+        # input it never validated itself.
         run: |
           set -euo pipefail
           if [[ "$CONFIRM" != "RECUT-REGISTRY-LUKS" ]]; then
@@ -1942,20 +1941,18 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           EXPECTED_VOLUME_ID: ${{ inputs.expected_registry_store_volume_id }}
-        # Hoisted AHEAD of the D10 health gate (it used to live inside the plan step) because
-        # two later gates need to know WHICH SITUATION THIS IS, and one of them deadlocks
-        # without it. Two independent questions, both answered here:
+        # Two independent questions, both answered here:
         #
         #   1. Does the PINNED volume still exist?  GET /v1/volumes/<id>
         #   2. Does ANY volume by that NAME exist?  GET /v1/volumes?name=soleur-registry-store
         #
         # Question 2 is not redundant. Question 1's input is the same operator-typed id the
         # id-pin exists to protect, and a MISTYPED id 404s exactly like a genuinely-destroyed
-        # one. In the recut arm that is harmless (the gate compares against the plan's
-        # before.id), but the RESUME arm has no before.id to compare — so without a
-        # name-scoped check a single wrong digit would manufacture the "absent" verdict that
-        # admits a bare create, orphaning the real volume (still attached, still billing)
-        # while terraform binds a fresh empty one. A name lookup cannot be forged by a typo.
+        # one. In the recut arm that is harmless (the destroy-guard compares against the plan's
+        # before.id), but the RESUME arm has no before.id to compare — so without a name-scoped
+        # check a single wrong digit would manufacture the "absent" verdict that admits a bare
+        # create, orphaning the real volume (still attached, still billing) while terraform binds
+        # a fresh empty one. A name lookup cannot be forged by a typo.
         run: |
           set -euo pipefail
           HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
@@ -2052,20 +2049,12 @@ jobs:
             --prepare --tags-out "${RUNNER_TEMP}/restore-pins.json"
           echo "manifest=${RUNNER_TEMP}/restore-pins.json" >> "$GITHUB_OUTPUT"
 
-      - name: Upload pinned restore manifest
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: registry-restore-pins
-          path: ${{ steps.prepare.outputs.manifest }}
-          if-no-files-found: error
-          retention-days: 7
-
       - name: Pre-rehearsal server-type availability probe
-        # CHEAP GATE BEFORE THE EXPENSIVE ONE. `stock_preflight_gate` runs AFTER the rehearsal
-        # and will abort BOTH journeys while the registry server type is unavailable in this
-        # host's datacenter (#6460 — cx23 was orderable in nbg1-dc3 but NOT hel1-dc2, where this
-        # host runs, on 2026-08-05). Without this probe a dispatch that cannot possibly proceed
-        # would first move multiple GB through the rehearsal. `stock_preflight_gate` itself needs
+        # CHEAP GATE BEFORE THE EXPENSIVE ONE. `stock_preflight_gate` runs in the recut job and
+        # will abort BOTH journeys while the registry server type is unavailable in this host's
+        # datacenter (#6460 — cx23 was orderable in nbg1-dc3 but NOT hel1-dc2, where this host
+        # runs, on 2026-08-05). Without this probe a dispatch that cannot possibly proceed would
+        # first move multiple GB through the rehearsal. `stock_preflight_gate` itself needs
         # tfplan.json and cannot simply be hoisted; a standalone availability probe can.
         #
         # ADVISORY, not authorising: it warns and continues, because the real gate is still
@@ -2092,7 +2081,7 @@ jobs:
             "https://api.hetzner.cloud/v1/server_types?name=${SRV_TYPE}" 2>/dev/null \
             | jq -r '[.server_types[0].prices[]?.location] | join(",")' 2>/dev/null) || AVAIL=""
           echo "server_type=${SRV_TYPE} priced_locations=${AVAIL:-<unreadable>}"
-          echo "::notice::Pre-rehearsal stock probe: ${SRV_TYPE} priced in [${AVAIL:-unreadable}]. stock_preflight_gate later in this job is the authoritative check; this probe only avoids moving GB before an abort that is already certain."
+          echo "::notice::Pre-rehearsal stock probe: ${SRV_TYPE} priced in [${AVAIL:-unreadable}]. stock_preflight_gate in the recut job is the authoritative check; this probe only avoids moving GB before an abort that is already certain."
 
       - name: Start throwaway registry for the D10 rehearsal
         # A2 rehearses the restore against a REAL registry HTTP API, pinned to the SAME zot
@@ -2140,11 +2129,21 @@ jobs:
             -v "${RUNNER_TEMP}/zot/config.json":/etc/zot/config.json:ro \
             -v "${RUNNER_TEMP}/zot/htpasswd":/etc/zot/htpasswd:ro \
             -p 127.0.0.1:5999:5000 "$ZOT_IMAGE" serve /etc/zot/config.json
+          ready=0
           for _ in $(seq 1 40); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5999/v2/ || true)
-            [[ "$code" == "401" || "$code" == "200" ]] && break
+            if [[ "$code" == "401" || "$code" == "200" ]]; then ready=1; break; fi
             sleep 1
           done
+          # The readiness loop's EXHAUSTION must be its own failure. Without this check a zot that
+          # never bound falls through to the negative control below, which then reports "the
+          # throwaway registry accepted an unauthenticated request (000)" — naming an
+          # accessControl defect for a container that never started.
+          if [[ "$ready" -ne 1 ]]; then
+            echo "::error::the throwaway registry never became ready on 127.0.0.1:5999 after 40s. This is a rehearsal-harness fault, not a production signal — but the pass condition cannot be established without it. Nothing has been destroyed."
+            docker logs d10-throwaway 2>&1 | tail -20 || true
+            exit 1
+          fi
           # Negative control: anonymous access MUST be refused, or the rehearsal proves nothing
           # about whether the restore authenticated.
           anon=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5999/v2/_catalog || true)
@@ -2179,7 +2178,7 @@ jobs:
         # read PAT is revoked (401) and the minter is disabled (403 DENIED). The new criterion
         # never claims the window is covered. It claims the window is ENDED, by a restore that
         # has just succeeded in rehearsal and is then executed for real by the chained
-        # `registry_store_restore` job below.
+        # `registry_store_restore` job.
         #
         # THE INDEPENDENCE CRITERION: a gate on an irreversible destroy may not depend on the
         # component whose failure motivates it. This gate depends on GHCR-read-from-CI, which is
@@ -2222,6 +2221,112 @@ jobs:
         if: steps.posture.outputs.probe_result == 'absent'
         run: |
           echo "::notice::D10 authorization VERDICT skipped: the pinned store volume is already absent (corroborated by a name-scoped lookup), so this is a mid-apply RESUME, not a fresh destroy — there is no destroy left to authorise. The inventory derivation ran unconditionally, so the chained restore job still has its pinned manifest. (Before #7277 this skip was justified by the gate aborting on ghcr-fallback events the recut itself produced; the rewritten gate reads no such signal, so that reason no longer applies.)"
+
+      - name: Upload pinned restore manifest
+        # DELIBERATELY AFTER THE VERDICT, and this ordering is the whole fix for a divergence
+        # that had no other observable (#7277 B5). PREPARE writes the manifest; the VERDICT step
+        # re-derives over the SAME PATH and rehearses against what it derived; the restore job
+        # downloads this artifact. Uploading between them meant the artifact captured PREPARE's
+        # inventory while the rehearsal proved VERDICT's — and a deploy landing in the window
+        # between them (it spans the stock probe, two docker pulls and up to 40s of readiness
+        # polling) makes those different sets. Both runs would be green and nothing would compare
+        # them. Uploading here makes the artifact BE the inventory that was proven.
+        #
+        # No `if:` — on the resume arm the VERDICT is skipped rather than failed, so this step
+        # still runs and uploads PREPARE's manifest, which is exactly what that arm needs.
+        # `manifest_sha256=` in the gate's verdict line is the cross-check if this is ever
+        # reordered again.
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: registry-restore-pins
+          path: ${{ steps.prepare.outputs.manifest }}
+          if-no-files-found: error
+          retention-days: 7
+
+  # Selected by `-f apply_target=registry-luks-recut` (#6929, ADR-096 amendment 2026-07-24).
+  #
+  # THE SANCTIONED VEHICLE FOR THE GUEST-SIDE-LUKS RECUT, and the removal of a live footgun.
+  # The 2026-07-24 change made hcloud_volume.registry a RAW device: cloud-init discriminates on
+  # `blkid TYPE` — "" (fresh) -> luksFormat; crypto_LUKS -> reuse; ANY OTHER TYPE -> FATAL.
+  # The live volume is still PLAINTEXT ext4, i.e. in that third arm.
+  #
+  # So `registry-host-replace` MUST NOT be used for this: it PRESERVES the volume, so the
+  # replaced host boots against the still-plaintext device, refuses it, and DARKS THE REGISTRY.
+  # Forgetting the `-replace` on the volume does the same. This job performs the recut as ONE
+  # ATOMIC APPLY, `-replace`ing the volume + its attachment + the server TOGETHER, so a fresh raw
+  # volume meets the empty arm and gets luksFormatted; zot then re-fills from GHCR.
+  #
+  # NO `environment:` — like all four host-replace/migrate jobs (only workspaces-luks-recut has
+  # one, because it touches sole-copy /mnt/data). An `environment:` naming an UNPROVISIONED
+  # GitHub environment silently AUTO-APPROVES (DP-11 F8), so declaring one here would add the
+  # APPEARANCE of a reviewer gate without the gate. Authorization is the menu-ack dispatch plus
+  # the typed confirm; CODEOWNERS gates this file.
+  #
+  # NO job-level `concurrency:` — it inherits the workflow-level
+  # `terraform-apply-web-platform-host` group, which is the verified-complete serializer for the
+  # LOCK-LESS R2 backend (`cancel-in-progress: false` also prevents a cancel mid-destroy).
+  #
+  # `timeout-minutes: 30` is load-bearing: this job holds that fleet-wide apply mutex, so
+  # GitHub's 360-minute default would let a hung poll block EVERY merge-apply for six hours.
+  # The D11 poller's own bound (150s + 480s) is strictly below it so its diagnostic wins over an
+  # opaque cancellation.
+  #
+  # THAT 30 IS ONLY A DERIVED NUMBER BECAUSE THE REHEARSAL IS NO LONGER INSIDE IT (#7277). The
+  # multi-GB A2 rehearsal used to run here, ahead of the apply, with an UNMEASURED wall-clock —
+  # so a rehearsal that succeeded slowly ate the post-destroy window and could push a timeout
+  # into `terraform apply` or D11, where a timeout is a cancellation and therefore catastrophic.
+  # It now lives in `registry_pull_path_gate`, which this job `needs:`. The clock below starts at
+  # the apply again, which is what makes the D11 derivation valid.
+  #
+  # Note honestly what did NOT change: the `concurrency` group is WORKFLOW-level, so the split
+  # released no mutex. Worst-case fleet-wide apply block is now the SUM across the gate job, this
+  # job, and `registry_store_restore`.
+  registry_luks_recut:
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'registry-luks-recut'
+    needs: registry_pull_path_gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # `contents: read` only. `packages: read` moved to `registry_pull_path_gate` with the GHCR
+    # reads that needed it — this job no longer touches a registry. No `id-token: write` either:
+    # the restore COPIES cosign signatures rather than re-signing them (the GHCR signature is a
+    # Sigstore bundle bound to the image digest, so a copied signature verifies unchanged at the
+    # target — measured, #7277 Phase 0.3), so keyless signing is not on this path at all.
+    permissions:
+      contents: read
+    outputs:
+      # Consumed by registry_store_restore's `if:`. See the "Mark the store as needing a refill"
+      # step for why the restore keys on this rather than on this job's overall result.
+      store_refill_needed: ${{ steps.refill_flag.outputs.needed }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Validate typed confirm + id-pin
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          EXPECTED_VOLUME_ID: ${{ inputs.expected_registry_store_volume_id }}
+        # Inputs via env:, never inline ${{ }} in run: — an inline expansion is a command
+        # injection surface. Both values are operator-typed.
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM" != "RECUT-REGISTRY-LUKS" ]]; then
+            echo "::error::registry-luks-recut requires confirm=RECUT-REGISTRY-LUKS (typo-guard). This DESTROYS the zot store volume. Note the workspaces recut uses a DIFFERENT literal — a token typed for that target cannot authorize this one."
+            exit 1
+          fi
+          if [[ ! "$EXPECTED_VOLUME_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::registry-luks-recut requires expected_registry_store_volume_id=<numeric Hetzner id of the zot store volume>. The gate PINS the replaced volume's before.id to this value, so a state corruption that mapped this ADDRESS onto a different physical volume cannot silently destroy it."
+            echo "::error::Read it with ONE bounded command (NOT from a drift run — that log never contains the id):"
+            echo "::error::  curl -s -H \"Authorization: Bearer \$HCLOUD_TOKEN\" 'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'"
+            exit 1
+          fi
+          echo "confirm + id-pin accepted (volume id ${EXPECTED_VOLUME_ID})."
 
       - name: Generate ephemeral SSH public key for var.ssh_key_path
         # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway key
@@ -2274,7 +2379,12 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           EXPECTED_VOLUME_ID: ${{ inputs.expected_registry_store_volume_id }}
-          POSTURE_PROBE_RESULT: ${{ steps.posture.outputs.probe_result }}
+          # From the GATE JOB, not a second probe here (#7277). Re-probing would introduce a
+          # reading that can disagree with the one the verdict was rendered against; the gate
+          # promotes it to a job output precisely to keep this single-source. The fail-closed
+          # empty check below is unchanged and still fires — an unset job output is '', which is
+          # exactly what it already tested for.
+          POSTURE_PROBE_RESULT: ${{ needs.registry_pull_path_gate.outputs.probe_result }}
         # THE THREE -replace FLAGS ARE THE POINT. Replacing the volume alone leaves the old host
         # mounting a device that no longer exists; replacing the host alone preserves the
         # plaintext volume and hits the blkid FATAL. They move TOGETHER or not at all.
@@ -2332,7 +2442,7 @@ jobs:
             echo "::error::registry-luks-recut ABORT: the recovery-posture probe produced no verdict. Fail-closed — the gate's resume arm must never be admitted on a missing probe."
             exit 1
           fi
-          echo "hetzner existence probe (from the posture step): ${PROBE_RESULT}"
+          echo "hetzner existence probe (from the registry_pull_path_gate job): ${PROBE_RESULT}"
 
           # Sourced gate — the SAME bytes tests/scripts/test-registry-luks-recut-gate.sh exercises.
           # shellcheck source=tests/scripts/lib/registry-luks-recut-gate.sh

@@ -380,10 +380,18 @@ MANIFEST="${TAGS_OUT:-$WORK/pins.json}"
   paste -sd, "$WORK/manifest.entries"
   printf '] }'
 } > "$MANIFEST" 2>/dev/null || abort A0 "could not write the pin manifest to ${MANIFEST}."
+# The manifest's own sha256, emitted on every verdict line. The restore job consumes an UPLOADED
+# artifact while this script re-derives over the same path, so "the rehearsal proved set B while
+# the restore restores set A" is a divergence with no other observable — both runs are green and
+# the sets are never compared. The workflow closes the window structurally (it uploads AFTER the
+# verdict), and this hash is what makes a future reopening detectable rather than silent.
+manifest_sha="$(sha256sum "$MANIFEST" 2>/dev/null | cut -d' ' -f1)"
+[[ -n "$manifest_sha" ]] || abort A0 "could not hash the pin manifest at ${MANIFEST}. The manifest identifies WHICH inventory was proven, so an unhashable one leaves the rehearsal and the real restore unable to be compared at all."
+
 echo "A3 floor satisfied: resolved=${resolved} floor=${FLOOR} manifest=${MANIFEST}"
 
 if (( PREPARE_ONLY == 1 )); then
-  echo "verdict=PREPARED manifest=${MANIFEST}"
+  echo "verdict=PREPARED manifest=${MANIFEST} manifest_sha256=${manifest_sha}"
   exit 0
 fi
 
@@ -495,6 +503,6 @@ if [[ -n "${GITHUB_ACTIONS:-}" && -n "${ZOT_PUSH_TOKEN:-}" ]]; then
   echo "::add-mask::${ZOT_PUSH_TOKEN}"
 fi
 
-echo "verdict=AUTHORIZED floor=${FLOOR} resolved=${resolved} a4_credential=${a4_verdict} rehearsal=${REHEARSE_TARGET}"
+echo "verdict=AUTHORIZED floor=${FLOOR} resolved=${resolved} a4_credential=${a4_verdict} rehearsal=${REHEARSE_TARGET} manifest_sha256=${manifest_sha}"
 echo "registry-pull-path-health: a recut is AUTHORIZED — CI has just re-materialised production's full required pin set into an empty registry from GHCR and verified its blobs."
 exit 0
