@@ -101,7 +101,16 @@ declare -rA DEST_SPEC=(
 #
 # Note the sudoers side buys NOTHING on the scope axis for this grant: `systemctl daemon-reload`
 # takes no unit argument, so exact-argv pinning cannot narrow WHICH units get adopted. This
-# table is the only control that bounds what a reload can pick up.
+# table is the only control that bounds what a reload can pick up ON THIS DELIVERY PATH.
+#
+# THAT QUALIFIER IS LOAD-BEARING (#7220 review). This is an INTEGRITY control, not a privilege
+# boundary: `deploy` is already root-equivalent on this host through the docker group and through
+# two ungated chains, one of which is a /usr/local/bin dest in the very DEST_SPEC above. The
+# canonical statement of what `deploy` already is — with the three paths and the plan that
+# accepted them — lives once, in deploy-inngest-bootstrap.sudoers under
+# "WHAT THE `deploy` USER ALREADY IS". Read it before reasoning about what any gate here defends.
+# What the pin genuinely buys is that a config-delivery bug cannot silently become a
+# unit-definition change on a host with no SSH runbook.
 #
 # LOCKSTEP: the digest and the unit live in two files. A stale pin does not fail loudly — it
 # silently refuses every delivery of the CORRECT unit, bricking the only channel to a host with
@@ -203,8 +212,14 @@ fi
 # systemd merges drop-ins AFTER the unit body, so a drop-in is not a weaker write than the unit:
 # it can set User=root on vector.service (which runs User=deploy), clear-and-replace ExecStart=
 # via the empty-assignment idiom, or add AmbientCapabilities=. webhook.service does not set
-# NoNewPrivileges, so nothing downstream re-narrows what a drop-in widens — this gate is the
-# only boundary on that path, on the one host with no orderable replacement.
+# NoNewPrivileges, so nothing downstream re-narrows what a drop-in widens — this gate is the only
+# CONTENT CHECK on that path, on the one host with no orderable replacement.
+#
+# "Content check", not "boundary" (#7220 review): calling it a boundary overstates it, because
+# `deploy` is already root-equivalent by three other routes. See "WHAT THE `deploy` USER ALREADY
+# IS" in deploy-inngest-bootstrap.sudoers. The lateral-not-escalation argument below is still
+# exactly right and is the reason this grammar is acceptable — it just is not the reason the host
+# is safe from `deploy`, because it is not.
 #
 # The permitted grammar is deliberately the NARROWEST that admits the payload we actually ship:
 # blank, comment, a bare [Service] header, Environment= and EnvironmentFile=. A directive

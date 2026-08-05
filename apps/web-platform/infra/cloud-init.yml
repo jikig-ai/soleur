@@ -46,6 +46,15 @@ ssh_authorized_keys:
 users:
   - default
   - name: deploy
+    # ROOT-EQUIVALENT, deliberately (#7220 review states this plainly so no future reader infers
+    # a privilege boundary that does not exist). `docker` group membership permits
+    # `docker run -v /:/host`, which is root. This was argued and ACCEPTED in
+    # knowledge-base/project/plans/2026-03-20-security-deploy-ssh-user-privilege-boundary-plan.md
+    # — the goal there was reducing blast radius from unrestricted root SSH to
+    # root-equivalent-via-docker, not eliminating it. Two further ungated chains exist; the
+    # canonical statement of all three lives once, in deploy-inngest-bootstrap.sudoers under
+    # "WHAT THE `deploy` USER ALREADY IS". Every content gate in the infra-config subsystem is
+    # therefore an INTEGRITY control on its own delivery path, never a privilege boundary.
     groups: docker
     shell: /bin/bash
     lock_passwd: true

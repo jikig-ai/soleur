@@ -899,8 +899,81 @@ s = s.replace(anchor, anchor + """
   }""", 1)
 '
 
+# ── PRIVILEGE-WRAPPER AND sudo-LIST-MODE CLASSIFICATION (#7220 review) ───────────────
+#
+# The `sudo -l` exemption and the wrapper handling had NO fixture in EITHER direction, and both
+# were wrong. Measured against the pre-fix guard, with the phantom path grepped out of the
+# output so the branch's pre-existing failure could not be mistaken for a detection:
+#
+#   * the exemption searched the WHOLE segment for `-\w*l`, so four real root deliveries were
+#     silently exempted — the old guard did not name any of them;
+#   * and the segment was classified on the WRAPPER, so
+#     `runuser -u deploy -- sudo -n /usr/bin/systemctl daemon-reload` (a probe THIS PR adds) was
+#     credited as DELIVERING /usr/bin/systemctl, demanding a fresh-boot writer for a binary the
+#     base image ships. That is the branch's real 12-passed/1-failed state against main's 13/0.
+#
+# Both directions are fixtured, because a guard that only over-fires and a guard that only
+# under-fires are equally broken and the two fixes pull against each other.
+
+# --- direction 1: QUERIES and INVOCATIONS must stay GREEN ---
+# Under the pre-fix guard each of these credited a system binary as a delivered artifact.
+expect_green "W1 (a wrapper chain around a READ verb is not a delivery)" server.tf '
+anchor = "    inline = ["
+i = s.index("resource \"terraform_data\" \"disk_monitor_install\" {")
+j = s.index(anchor, i) + len(anchor)
+s = s[:j] + "\n      \"runuser -u deploy -- sudo -n /usr/bin/systemctl is-active vector.service >/dev/null || true\"," + s[j:]
+'
+
+expect_green "W2 (sudo list mode via an absolute /usr/bin/sudo)" server.tf '
+anchor = "    inline = ["
+i = s.index("resource \"terraform_data\" \"disk_monitor_install\" {")
+j = s.index(anchor, i) + len(anchor)
+s = s[:j] + "\n      \"/usr/bin/sudo -l -U deploy /usr/bin/systemctl daemon-reload >/dev/null\"," + s[j:]
+'
+
+expect_green "W3 (sudo list mode as a BUNDLED option run, -ln)" server.tf '
+anchor = "    inline = ["
+i = s.index("resource \"terraform_data\" \"disk_monitor_install\" {")
+j = s.index(anchor, i) + len(anchor)
+s = s[:j] + "\n      \"sudo -ln -U deploy /usr/bin/systemctl daemon-reload >/dev/null\"," + s[j:]
+'
+
+# --- direction 2: REAL DELIVERIES wearing an `l` option must go RED ---
+# Each phantom path has no fresh-boot writer, so §2 must name it. Verified that the pre-fix
+# guard named NONE of them.
+expect_red "W4 (sudo cp -al is a delivery, not a list)" server.tf '/usr/local/bin/phantom-cp.sh' '
+anchor = "    inline = ["
+i = s.index("resource \"terraform_data\" \"disk_monitor_install\" {")
+j = s.index(anchor, i) + len(anchor)
+s = s[:j] + "\n      \"sudo cp -al /tmp/staged /usr/local/bin/phantom-cp.sh\"," + s[j:]
+'
+
+expect_red "W5 (sudo rsync -al is a delivery)" server.tf '/usr/local/bin/phantom-rsync.sh' '
+anchor = "    inline = ["
+i = s.index("resource \"terraform_data\" \"disk_monitor_install\" {")
+j = s.index(anchor, i) + len(anchor)
+s = s[:j] + "\n      \"sudo rsync -al /tmp/staged /usr/local/bin/phantom-rsync.sh\"," + s[j:]
+'
+
+# `bash`/`sh` stay in READONLY_VERBS so `bash /usr/local/bin/x.sh` (an INVOCATION) is not a
+# delivery; the `-c` payload is unwrapped instead. Dropping bash/sh from READONLY_VERBS outright
+# also passes the real corpus, and is rejected precisely because this distinction would be lost.
+expect_red "W6 (sudo bash -cl unwraps its -c payload)" server.tf '/usr/local/bin/phantom-shc.sh' '
+anchor = "    inline = ["
+i = s.index("resource \"terraform_data\" \"disk_monitor_install\" {")
+j = s.index(anchor, i) + len(anchor)
+s = s[:j] + "\n      \"sudo bash -cl \\\"install -m0755 /tmp/staged /usr/local/bin/phantom-shc.sh\\\"\"," + s[j:]
+'
+
+expect_red "W7 (sudo useradd -l is a delivery, not a list)" server.tf '/usr/local/bin/phantom-useradd.sh' '
+anchor = "    inline = ["
+i = s.index("resource \"terraform_data\" \"disk_monitor_install\" {")
+j = s.index(anchor, i) + len(anchor)
+s = s[:j] + "\n      \"sudo useradd -l -d /usr/local/bin/phantom-useradd.sh svcuser\"," + s[j:]
+'
+
 # ── Non-vacuity floor on the battery itself ─────────────────────────────────────────
-FLOOR=38
+FLOOR=42
 if [[ "$mutations_run" -ge "$FLOOR" ]]; then
   ok "battery ran $mutations_run landed, attributed mutations (floor $FLOOR)"
 else
