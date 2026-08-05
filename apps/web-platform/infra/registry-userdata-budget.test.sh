@@ -89,6 +89,21 @@ else
 fi
 
 # --- 6-8: fail-closed arms (mutate a sandbox, require exit 2) ----------------------------
+#
+# OWNING TRAP (ADR-129). Nothing else removes these if the script dies between allocation and
+# cleanup, and /tmp is a machine-global tmpfs shared by parallel worktrees — the count-shaped
+# leak class that nothing currently reclaims.
+#
+# sandbox() is invoked as `d=$(sandbox)`, i.e. in a SUBSHELL, so an append INSIDE it would be
+# discarded and the trap would own nothing. Its only contract is therefore stdout; the CALLER
+# appends in parent scope. This is the shape lint-trap-tempfile-ownership names as the fix.
+SANDBOXES=()
+cleanup_sandboxes() {
+  [ "${#SANDBOXES[@]}" -gt 0 ] && rm -rf "${SANDBOXES[@]}"
+  return 0
+}
+trap cleanup_sandboxes EXIT INT TERM HUP
+
 sandbox() {
   local d
   d=$(mktemp -d -t regbudget-test.XXXXXXXX) || return 1
@@ -98,6 +113,7 @@ sandbox() {
 
 # (a) strip assignment REMOVED -> unmeasurable, must exit 2 (never 0, never 1)
 d=$(sandbox) || { fail "sandbox setup" "mktemp/cp failed"; echo "$checks checks, $fails failed"; exit 2; }
+SANDBOXES+=("$d")
 grep -vE '^[[:space:]]*registry_rationale_strip[[:space:]]*=' "$d/zot-registry.tf" > "$d/tf.new" && mv "$d/tf.new" "$d/zot-registry.tf"
 if grep -qE '^[[:space:]]*registry_rationale_strip[[:space:]]*=' "$d/zot-registry.tf"; then
   fail "mutation landed (strip removed)" "assignment still present — the fail-closed arm below would be vacuous"
@@ -115,6 +131,7 @@ rm -rf "$d"
 
 # (b) strip assignment DUPLICATED -> ambiguous, must exit 2
 d=$(sandbox) || { fail "sandbox setup" "mktemp/cp failed"; echo "$checks checks, $fails failed"; exit 2; }
+SANDBOXES+=("$d")
 awk '{print} /^[[:space:]]*registry_rationale_strip[[:space:]]*=/ && !dup {print; dup=1}' \
   "$d/zot-registry.tf" > "$d/tf.new" && mv "$d/tf.new" "$d/zot-registry.tf"
 dupes=$(grep -cE '^[[:space:]]*registry_rationale_strip[[:space:]]*=' "$d/zot-registry.tf")
