@@ -112,6 +112,25 @@ concluded the debt was owned. The live umbrella is **#6122** (the migration epic
 does not enumerate either restoration path as a deliverable. Treat "one registry, no
 fallback" as an **unowned constraint** until something is filed for it.
 
+**Partial ownership as of 2026-08-04 — the clause still stands.** Two trackers now exist,
+and neither closes this debt:
+
+- **#7277** — the recut's D10 gate has no valid PASS condition. Scope is the *authorization
+  condition for destroying the store*, which is narrower than restoration. Closing it makes
+  the recut fireable again; it does **not** give production a fallback.
+- **#7278** — the registry host has no in-place restart lever. Reduces how often the
+  no-fallback constraint gets exercised; does not remove it.
+
+Neither restoration path named above (a zero-touch-mintable GHCR pull credential, or a
+second mirror) is owned by either. The closest fit for the second-mirror arm is **#6126**
+(zot HA + read-replicas), raised `p3-low → p2-medium` on 2026-08-04 after a 22h crash-loop
+(#7247) blocked six releases with **both** recovery levers unavailable. It is still not a
+commitment to build one.
+
+So: "one registry, no fallback" remains an **unowned constraint**. Do not read the presence
+of #7277/#7278 as ownership — that substitution is exactly the failure this clause was
+rewritten to prevent.
+
 Stated explicitly so a future reader inherits "one registry, no fallback" as a
 **constraint we are living under**, not as a decision we made and endorsed.
 
