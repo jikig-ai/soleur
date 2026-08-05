@@ -350,5 +350,212 @@ assert "unreachable metadata still emits parseable JSON with a host_id key" \
   "printf '%s' '$HID_NOMETA' | jq -e 'has(\"host_id\")' >/dev/null"
 
 echo ""
+echo "--- #7286: services.inngest_redis* probe fields ---"
+#
+# WHY THESE FIELDS EXIST. #7286 spent 16 hours knowing exactly one bit about the failing
+# component: it exited non-zero. inngest-redis.service's stderr was unreadable from every remote
+# surface, so the watchdog printed a hard-coded GUESS at the cause and the operator had no way to
+# adjudicate it. These fields make the unit self-report over the already-authenticated
+# /hooks/deploy-status read, with no SSH.
+#
+# ALL fixtures below are SYNTHESIZED (cq-test-fixtures-synthesized-only). The secret-shaped
+# strings are deliberately non-conforming to real token grammars so they cannot trip push
+# protection while still exercising every scrub rule.
+
+# Mock factory: a systemctl that answers is-active / show / is-enabled.
+# The `show` output deliberately returns properties in systemd's OWN canonical order rather than
+# the caller's requested order, and omits MemoryPeak entirely (systemd < 253 emits a BLANK line
+# for an unsupported property). Both are the exact conditions under which a positional `--value`
+# parse silently MISALIGNS — pinning them here is what makes the by-key parse load-bearing rather
+# than stylistic.
+create_systemctl_mock() {
+  cat > "$1/systemctl" << 'MOCK'
+#!/usr/bin/env bash
+case "$1" in
+  is-active)
+    case "$2" in
+      inngest-redis.service) echo "${MOCK_REDIS_ACTIVE:-activating}"; exit 3 ;;
+      *) echo "active"; exit 0 ;;
+    esac
+    ;;
+  show)
+    if [[ "$*" == *"DropInPaths"* ]]; then
+      echo "EnvironmentFiles=${MOCK_REDIS_ENVFILES:-/etc/default/inngest-server (ignore_errors=no)}"
+      echo "DropInPaths=${MOCK_REDIS_DROPINS:-}"
+      exit 0
+    fi
+    echo "ExecMainCode=1"
+    echo "NRestarts=${MOCK_REDIS_NRESTARTS:-11704}"
+    echo "Result=exit-code"
+    echo "ActiveEnterTimestamp="
+    echo "ExecMainStatus=1"
+    echo "ExecMainStartTimestamp=Wed 2026-08-05 22:39:35 UTC"
+    exit 0
+    ;;
+  is-enabled)
+    echo "${MOCK_DISTRO_REDIS_ENABLED:-masked}"; exit 1
+    ;;
+esac
+exit 0
+MOCK
+  chmod +x "$1/systemctl"
+}
+
+# Mock journalctl. Emits a synthesized redis crash tail carrying one instance of EVERY secret
+# class the extended scrubber must neutralize. No single quotes (the assert helper eval's its
+# condition through a single-quoted expansion).
+create_journalctl_mock() {
+  cat > "$1/journalctl" << 'MOCK'
+#!/usr/bin/env bash
+if [[ "$*" == *"--header"* ]]; then echo "File path: /var/log/journal/x/system.journal"; exit 0; fi
+if [[ "$*" == *"-k"* ]]; then exit 0; fi
+if [[ "$*" == *"inngest-redis.service"* ]]; then
+  if [[ "${MOCK_REDIS_TAIL_EMPTY:-0}" == "1" ]]; then exit 0; fi
+  echo "*** FATAL CONFIG FILE ERROR (Redis 7.0.15) ***"
+  echo "Reading the configuration file, at line 12"
+  echo ">>> requirepass hunter2synthetic"
+  echo "Bad directive or wrong number of arguments"
+  echo "connecting to redis://:hunter2synthetic@127.0.0.1:6379 failed"
+  echo "Doppler Error: Invalid Auth token dp.st.prd.SYNTHETIC_NOT_A_REAL_TOKEN"
+  echo "AUTH hunter2synthetic"
+  echo "masterauth hunter2synthetic"
+  exit 0
+fi
+exit 0
+MOCK
+  chmod +x "$1/journalctl"
+}
+
+create_redis_server_mock() {
+  mkdir -p "$1/usr/bin"
+  cat > "$1/usr/bin/redis-server" << 'MOCK'
+#!/usr/bin/env bash
+echo "Redis server v=7.0.15 sha=00000000:0 malloc=jemalloc bits=64 build=synthetic"
+MOCK
+  chmod +x "$1/usr/bin/redis-server"
+}
+
+REDIS_MOCK=$(mktemp -d)
+create_systemctl_mock "$REDIS_MOCK"
+create_journalctl_mock "$REDIS_MOCK"
+create_docker_mock "$REDIS_MOCK"
+create_redis_server_mock "$REDIS_MOCK"
+
+REDIS_OUT=$(PATH="$REDIS_MOCK:$PATH" \
+  SOLEUR_REDIS_SERVER_BIN="$REDIS_MOCK/usr/bin/redis-server" \
+  CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+
+for k in inngest_redis inngest_redis_journal_tail inngest_redis_result inngest_redis_dropin \
+         inngest_redis_credfile inngest_redis_datadir inngest_redis_binary \
+         inngest_redis_tail_status vector_config_identity; do
+  assert "services.$k is wired" \
+    "printf '%s' '$REDIS_OUT' | jq -e '.services | has(\"$k\")' >/dev/null"
+done
+
+# The three fields that distinguish "still looping" from "recently fixed". A single `is-active`
+# sample on a unit restarting every 5s is a coin flip — #7286 measured `degraded, degraded,
+# durable` from three probes 8s apart — so any AC keyed on is-active alone asserts a proxy.
+for prop in NRestarts ExecMainStartTimestamp ActiveEnterTimestamp Result ExecMainStatus; do
+  assert "inngest_redis_result carries $prop" \
+    "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -qF '$prop='"
+done
+# By-key parse, NOT positional: the mock returns properties in systemd's canonical order and
+# omits MemoryPeak. A positional read would bind NRestarts to whatever sits at that index.
+assert "inngest_redis_result binds NRestarts to its VALUE, not a positional neighbour" \
+  "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -qF 'NRestarts=11704'"
+assert "inngest_redis_result tolerates an unsupported MemoryPeak (systemd < 253) without shifting" \
+  "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -qF 'Result=exit-code'"
+
+# --- Scrub: no secret class may reach the HTTP response body -----------------
+# This is load-bearing, not hygiene. On a config-parse failure redis echoes the offending
+# argument VERBATIM, and that is the predicted tail for two of the seven #7286 hypotheses.
+# The response body is a different path from Vector's pii_scrub (which covers log SHIPPING),
+# so it needs its own coverage.
+REDIS_TAIL=$(printf '%s' "$REDIS_OUT" | jq -r '.services.inngest_redis_journal_tail')
+for secret in "hunter2synthetic" "SYNTHETIC_NOT_A_REAL_TOKEN"; do
+  assert "scrubbed from inngest_redis_journal_tail: $secret" \
+    "! printf '%s' \"\$REDIS_TAIL\" | grep -qF '$secret'"
+done
+assert "the redis tail is non-empty (scrub proves something, not nothing)" \
+  "[[ -n \"\$REDIS_TAIL\" ]]"
+# The scrubber must be the SHARED one, so hardening it hardens all six tails at once — and so a
+# future rule added for one tail cannot silently miss the others. Asserted structurally rather
+# than by call-site spelling: exactly ONE unit-journal reader exists in the file (`journalctl -k`
+# in container_restart_json is a different, kernel-ring reader and is excluded by the `-u`
+# anchor), and the redis tail is assigned from it.
+assert "exactly one unit-journal reader exists (no second scrubber was introduced)" \
+  "[[ \$(grep -c 'journalctl -u' '$TARGET') == '1' ]]"
+# AC2, anchored on the INVOCATION shape rather than on the bare word. A `grep -c journalctl`
+# also counts comment prose, a `command -v journalctl` availability guard, and the literal
+# string "no-journalctl" — so the bare-token form moves for reasons that are not new calls and
+# would force this AC to be restated on every doc edit. Three invocations: the shared unit tail,
+# journald_storage_json's --header, and container_restart_json's -k kernel ring. Adding a
+# fourth is what this pins against; #7286 added none.
+assert "no new standalone journalctl invocation was introduced (exactly 3)" \
+  "[[ \$(grep -vE '^[[:space:]]*#' '$TARGET' | grep -cE '(\\\$\\(|^[[:space:]]*|\\|[[:space:]]*)journalctl[[:space:]]+(-|--)') == '3' ]]"
+assert "the redis tail is assigned from the shared service_journal_tail" \
+  "grep -qE 'INNGEST_REDIS_JOURNAL_TAIL=\"\\\$\\(service_journal_tail' '$TARGET'"
+
+# --- inngest_redis_dropin reads systemd's LOADED view, not the filesystem ----
+# A filesystem-presence check here would be a FALSE GREEN: after delivery the file is on disk
+# whether or not daemon-reload merged it, so "fix landed and working" and "fix landed inert"
+# would be byte-identical. DropInPaths is the only form that adjudicates the credential
+# hypothesis rather than restating the push.
+assert "inngest_redis_dropin is empty when systemd has loaded no drop-in" \
+  "[[ -z \$(printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_dropin') ]]"
+REDIS_OUT_LOADED=$(PATH="$REDIS_MOCK:$PATH" \
+  MOCK_REDIS_DROPINS="/etc/systemd/system/inngest-redis.service.d/10-inngest-redis-doppler-token.conf" \
+  CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+assert "inngest_redis_dropin names the loaded drop-in by basename" \
+  "printf '%s' '$REDIS_OUT_LOADED' | jq -r '.services.inngest_redis_dropin' | grep -qF '10-inngest-redis-doppler-token.conf'"
+assert "inngest_redis_dropin emits basenames only (never drop-in CONTENT)" \
+  "! printf '%s' '$REDIS_OUT_LOADED' | jq -r '.services.inngest_redis_dropin' | grep -qF 'EnvironmentFile='"
+
+# --- tail_status disambiguates the four states service_journal_tail collapses ---
+assert "inngest_redis_tail_status is ok when the tail has content" \
+  "[[ \$(printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_tail_status') == 'ok' ]]"
+REDIS_OUT_EMPTY=$(PATH="$REDIS_MOCK:$PATH" MOCK_REDIS_TAIL_EMPTY=1 \
+  CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+assert "inngest_redis_tail_status is empty when the unit logged nothing" \
+  "[[ \$(printf '%s' '$REDIS_OUT_EMPTY' | jq -r '.services.inngest_redis_tail_status') == 'empty' ]]"
+
+# --- The probe must never be able to take the endpoint down ------------------
+# The PR that adds these fields is the same PR that deletes the runbook's last-resort host
+# login, so a probe that can 500 the one remaining diagnostic surface would be a strict
+# regression.
+#
+# The fixture removes exactly the three binaries the new fields depend on — systemctl,
+# journalctl, redis-server — while keeping the interpreter's own toolchain (jq, coreutils)
+# present. A bare empty PATH would ALSO remove jq, and the resulting 127 would say nothing
+# about this script's robustness: it would be the harness failing, not the SUT. That
+# distinction matters because the over-broad version of this fixture LOOKS stricter.
+BARE_PATH_DIR=$(mktemp -d)
+for _b in jq sed tr awk basename stat df sha256sum cut head tail date du grep cat timeout env; do
+  _p=$(command -v "$_b" 2>/dev/null || true)
+  [[ -n "$_p" ]] && ln -sf "$_p" "$BARE_PATH_DIR/$_b"
+done
+# Precondition self-check: if the loop silently linked nothing, every assertion below would pass
+# or fail for reasons unrelated to the SUT.
+assert "bare-PATH fixture linked its toolchain (guard against a vacuous fixture)" \
+  "[[ -x '$BARE_PATH_DIR/jq' ]]"
+assert "bare-PATH fixture genuinely removes systemctl/journalctl/redis-server" \
+  "[[ ! -e '$BARE_PATH_DIR/systemctl' && ! -e '$BARE_PATH_DIR/journalctl' && ! -e '$BARE_PATH_DIR/redis-server' ]]"
+
+# The interpreter is resolved BEFORE the narrowed PATH takes effect and is not part of what is
+# under test — an unfound `bash` would exit 127 and read as an SUT failure.
+BARE_BASH=$(command -v bash)
+BARE_RC=0
+BARE_OUT=$(PATH="$BARE_PATH_DIR" CI_DEPLOY_STATE="$TMP/ok.state" \
+  SOLEUR_REDIS_SERVER_BIN="$BARE_PATH_DIR/redis-server" \
+  "$BARE_BASH" "$TARGET" 2>/dev/null) || BARE_RC=$?
+assert "exits 0 with systemctl/journalctl/redis-server absent from PATH" "[[ '$BARE_RC' == '0' ]]"
+assert "still emits parseable JSON with the redis keys present" \
+  "printf '%s' \"\$BARE_OUT\" | jq -e '.services | has(\"inngest_redis\") and has(\"inngest_redis_tail_status\")' >/dev/null"
+assert "tail_status reports no-journalctl rather than a bare empty string" \
+  "[[ \$(printf '%s' \"\$BARE_OUT\" | jq -r '.services.inngest_redis_tail_status') == 'no-journalctl' ]]"
+
+rm -rf "$REDIS_MOCK" "$BARE_PATH_DIR"
+
+echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
