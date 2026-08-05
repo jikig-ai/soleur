@@ -75,6 +75,13 @@ if [[ "$frame_ok" -eq 1 ]]; then
       echo "           10 events, so grading now reads a half-written window." >&2
       exit 2
     fi
+  else
+    # #7220 review — an unparseable/absent end_ts is NOT "guard satisfied". Without it there is
+    # no reference point for freshness at all, and PASS auto-closes, so the only safe reading is
+    # that this window cannot be graded yet.
+    echo "TRANSIENT: the frame carries no parseable end_ts, so the ${MIN_ELAPSED_SECS}s freshness" >&2
+    echo "           guard cannot be enforced and a half-written window would grade as PASS." >&2
+    exit 2
   fi
 fi
 
@@ -98,9 +105,30 @@ decoded=$(printf '%s' "$raw" | jq -r '
 n_fatal=$(printf '%s' "$decoded" | grep -cF 'SOLEUR_INFRA_CONFIG_FATAL' || true)
 [[ "$n_fatal" =~ ^[0-9]+$ ]] || n_fatal=0
 
-restart_rows=$(printf '%s' "$decoded" | grep -F 'SOLEUR_INFRA_CONFIG_RESTART' | grep -F 'vector.service' || true)
-n_restart=$(printf '%s' "$restart_rows" | grep -c . || true)
+# #7220 review — TWO anchoring bugs in one line, and together they made this probe PASS on a
+# host where reconciliation was broken.
+#
+# 1. `grep -F 'SOLEUR_INFRA_CONFIG_RESTART'` is a SUBSTRING, so it also matched the sibling
+#    marker `SOLEUR_INFRA_CONFIG_RESTART_STDERR:` — a diagnostic row that carries the restart's
+#    stderr and no verdict at all. Anchored on the trailing colon, the verdict marker only.
+# 2. `grep -F 'vector.service'` matched the unit name ANYWHERE in the payload, including inside
+#    a _STDERR `detail=` blob. Anchored to the `unit=` field.
+#
+# And the counting bug the anchoring exposed: every matched row counted toward one tally, which
+# was then tested `>= 1` and reported PASS. `action=failed reason=sudo_denied` is a row — so the
+# single state this probe exists to detect (the reload is granted, the loop is reached, and the
+# RESTART is then denied) satisfied its PASS condition. PASS auto-closes the issue via
+# sweep-followthroughs.sh, so #7220 would have been closed by the evidence of its own recurrence.
+#
+# Split by the handler's own vocabulary (infra-config-apply.sh: r_action is one of
+# skipped | restarted | failed).
+verdict_rows=$(printf '%s' "$decoded" | grep -F 'SOLEUR_INFRA_CONFIG_RESTART:' | grep -F 'unit=vector.service' || true)
+ok_rows=$(printf '%s' "$verdict_rows" | grep -E 'action=(restarted|skipped)' || true)
+failed_rows=$(printf '%s' "$verdict_rows" | grep -F 'action=failed' || true)
+n_restart=$(printf '%s' "$ok_rows" | grep -c . || true)
+n_failed=$(printf '%s' "$failed_rows" | grep -c . || true)
 [[ "$n_restart" =~ ^[0-9]+$ ]] || n_restart=0
+[[ "$n_failed" =~ ^[0-9]+$ ]] || n_failed=0
 
 # A death anywhere in the window is a FAIL regardless of what else landed: PR-B's whole claim is
 # that the handler now runs to completion. Checked BEFORE the restart arm so a run that both
@@ -112,23 +140,53 @@ if [[ "$n_fatal" -gt 0 ]]; then
   exit 1
 fi
 
+# A FAILED reconciliation verdict is a FAIL, and it is checked BEFORE the success arm for the
+# same reason n_fatal is: a window holding both a success and a failure must not grade green on
+# the success alone. The reason is quoted because the remedies differ completely —
+# `sudo_denied` means the try-restart grant is missing or drifted (a sudoers/argv problem, the
+# #7220 class one level down), while `restart_did_not_advance` / `noop_not_active` mean the unit
+# itself refused to come back (an application problem on the host).
+if [[ "$n_failed" -gt 0 ]]; then
+  echo "FAIL: $n_failed SOLEUR_INFRA_CONFIG_RESTART row(s) for vector.service report action=failed —" >&2
+  echo "      the reconciliation loop was REACHED (so the daemon-reload grant works) but the restart" >&2
+  echo "      itself did not succeed, so the unit is still running its start-time environment." >&2
+  echo "      Reason(s) the host gave:" >&2
+  printf '%s' "$failed_rows" | sed -E 's/.*(reason=[A-Za-z0-9_]*).*/        \1/' | sort -u >&2
+  printf '%s' "$failed_rows" | head -3 | sed 's/^/        /' >&2
+  exit 1
+fi
+
+# #7220 review — THE FRESHNESS GUARD MUST HOLD BEFORE ANY PASS, and it lives on the frame.
+#
+# MIN_ELAPSED_SECS was enforced only inside `if [[ "$frame_ok" -eq 1 ]]` above, so when the
+# status endpoint was unreachable the PASS arm below ran with NO elapsed guard at all — grading
+# a half-written Vector window and auto-closing the issue on it. Placed here, after the fatal
+# arm, so a death is still reported loudly when the endpoint is down (that is unambiguous
+# evidence and worth surfacing) while a PASS is not available without the guard.
+if [[ "$frame_ok" -ne 1 ]]; then
+  echo "TRANSIENT: $STATUS_URL did not return parseable JSON, so the ${MIN_ELAPSED_SECS}s freshness" >&2
+  echo "           guard cannot be enforced and 'no apply in the window' cannot be told from 'an" >&2
+  echo "           apply that never reconciled'. Refusing to PASS on that — the sweeper closes the" >&2
+  echo "           issue on PASS." >&2
+  exit 2
+fi
+
 if [[ "$n_restart" -ge 1 ]]; then
-  echo "PASS: $n_restart SOLEUR_INFRA_CONFIG_RESTART row(s) for vector.service, and zero fatal rows."
+  echo "PASS: $n_restart SOLEUR_INFRA_CONFIG_RESTART row(s) for vector.service with action=restarted"
+  echo "      or action=skipped, zero action=failed rows, and zero fatal rows."
   echo "      The reconciliation loop runs AFTER the daemon-reload, so reaching it at all proves"
   echo "      the reload was granted and succeeded — a marker no pre-#7220 handler can emit."
-  printf '%s' "$restart_rows" | head -3 | sed 's/^/        /'
+  printf '%s' "$ok_rows" | head -3 | sed 's/^/        /'
   exit 0
 fi
 
 # --- zero restart rows: AMBIGUOUS. Never a PASS. ---------------------------------------------
 # Distinguish "no apply happened" from "an apply happened and reconciled nothing", because only
 # the second is a defect. The frame's own counters are the discriminator.
-if [[ "$frame_ok" -ne 1 ]]; then
-  echo "TRANSIENT: zero restart rows, and $STATUS_URL did not return parseable JSON, so 'no apply" >&2
-  echo "           in the window' and 'an apply that never reconciled' cannot be told apart." >&2
-  echo "           Refusing to PASS on that ambiguity — the sweeper closes the issue on PASS." >&2
-  exit 2
-fi
+#
+# The `frame_ok -ne 1` arm that used to sit here is GONE, not lost: it is now enforced above,
+# before the PASS arm, because down there it was guarding only the ambiguous case while the PASS
+# it also needed to guard had already been taken.
 
 _restarts_len=$(printf '%s' "$frame" | jq -r '(.restarts // []) | length' 2>/dev/null || echo 0)
 [[ "$_restarts_len" =~ ^[0-9]+$ ]] || _restarts_len=0
