@@ -161,20 +161,47 @@ type Job = { if?: string; steps?: Array<{ name?: string; run?: string }> };
 let options: string[] = [];
 let jobs: Record<string, Job> = {};
 
-/** The job that runs `option`, resolved via its `if:` guard. */
+/** The APPLYING job for `option` — the one whose gating this suite is about. */
 function jobFor(option: string): [string, Job] | undefined {
   // Fully-quoted literal so `inngest-host` cannot match `inngest-host-replace`.
   const needle = `inputs.apply_target == '${option}'`;
   const hits = Object.entries(jobs).filter(([, j]) =>
     (j.if ?? "").includes(needle),
   );
-  return hits.length === 1 ? hits[0] : undefined;
+  if (hits.length === 1) return hits[0];
+
+  // A target may legitimately be served by MORE THAN ONE job: #7277 split the D10
+  // authorization gate out of `registry_luks_recut` into a `needs:`-preceding
+  // `registry_pull_path_gate`, so both carry the same `if:` guard. The one-job-per-option
+  // assumption was an accident of the workflow's shape at the time, not the property.
+  //
+  // The property IS about the job that APPLIES. `stock_preflight_gate` reads `tfplan.json` and
+  // exists to stop a destroy that cannot be re-provisioned; a preceding gate job that carries no
+  // `-target` and runs no terraform action has nothing to gate and no plan to read. Requiring it
+  // there would force a second place that can deny a recut on live vendor state — which is
+  // exactly what the pre-rehearsal probe is deliberately ADVISORY to avoid.
+  //
+  // Resolution stays fail-closed in both directions: zero hits is unresolved (as before), and
+  // TWO APPLYING jobs for one option is also unresolved, because that is a genuinely ambiguous
+  // workflow this suite should not silently pick a winner from.
+  const applying = hits.filter(([, j]) => appliesTerraform(j));
+  return applying.length === 1 ? applying[0] : undefined;
 }
 
 /** Concatenated `run:` bodies of a job's steps. */
 function jobBody(job: Job): string {
   return (job.steps ?? []).map((s) => s.run ?? "").join("\n");
 }
+
+/**
+ * Does this job actually run terraform against real infrastructure?
+ *
+ * Measured on `run:` bodies only — the YAML parse has already discarded comments, so unlike a
+ * raw-text grep this cannot be satisfied by a header that merely DISCUSSES `terraform apply`.
+ * (That exact false positive bit the sibling assertion in terraform-target-parity.test.ts.)
+ */
+const appliesTerraform = (job: Job) =>
+  /\bterraform\s+apply\b/.test(jobBody(job)) || /-target=/.test(jobBody(job));
 
 const callsGate = (job: Job) => /\bstock_preflight_gate\s+tfplan\.json\b/.test(jobBody(job));
 // Anchored on the `source` COMMAND, never the bare filename. Every call site carries a
