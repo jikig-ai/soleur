@@ -577,6 +577,90 @@ fi
 
 # The workflow-command injection guard. Registry stderr is externally-influenced text that gets
 # interpolated into `::error::` output; GitHub parses workflow commands per LINE, so a newline
+# ── Guards a MUTATION BATTERY found this suite was certifying without testing. ──────────────
+# Each row below closes a mutation that survived. They share one shape: deleting the guard still
+# produces a NON-ZERO exit — via a later check — so a row asserting only failure cannot see it.
+# What actually differs is WHICH EXIT CODE, and here the exit code is operational policy: 3 is
+# the retryable arm the workflow re-runs on, 4 and 5 are not. A guard that collapses 3 into 4
+# converts a transient tunnel re-convergence into "the registry is NOT fully restored; do not
+# treat this run as authorising anything" — after the destroy.
+
+NET_ERR='Error: Get "https://sink/v2/": dial tcp: lookup sink: no such host'
+
+# Read-back failure must stay classified. Without the empty-digest guard the flow falls into the
+# parity comparison, where "" != "sha256:…" is a MISMATCH — reporting a corrupt restore (4) for
+# what is an unavailable sink (3).
+fx="$TMP/fx-readback-net"; calls="$TMP/calls-readback-net"; : > "$calls"
+ok_fixtures "$fx" "$TARGET"
+fixture "$fx" "${TARGET}/${WP}:v0.249.4" 1 "" "$NET_ERR"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 3 ]] && printf '%s' "$out" | grep -qF "could not read"; then
+  pass "an UNAVAILABLE sink on read-back => exit 3 (retryable), not 4 (corrupt restore)"
+else
+  fail "an unreadable read-back must classify as availability, not as a digest mismatch" "$rc" "$out"
+fi
+
+# Same class, on the signature leg. The signature copy has its own NETWORK arm precisely so a
+# tunnel blip during the signature does not read as an unsigned restore.
+fx="$TMP/fx-sigcopy-net"; calls="$TMP/calls-sigcopy-net"; : > "$calls"
+ok_fixtures "$fx" "$TARGET"
+fixture "$fx" "copy:${TARGET}/${WP}:sha256-${D1#sha256:}" 1 "" "$NET_ERR"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 3 ]] && printf '%s' "$out" | grep -qF "signature"; then
+  pass "an UNAVAILABLE sink during the signature copy => exit 3, naming the signature"
+else
+  fail "a transient failure copying the signature must be retryable, not a permanent verdict" "$rc" "$out"
+fi
+
+# A non-numeric floor must be rejected AS a manifest-shape fault. Deleting the check lets the
+# value reach an arithmetic context, where bash silently evaluates a non-numeric string as 0 —
+# so a corrupt manifest is reported as a restore that came up short.
+BADFLOOR="$TMP/pins-badfloor.json"
+sed 's/"floor": 2/"floor": "not-a-number"/' "$MANIFEST" > "$BADFLOOR" || { echo "harness: sed failed" >&2; exit 2; }
+grep -qF 'not-a-number' "$BADFLOOR" || { echo "harness: the bad-floor fixture did not take" >&2; exit 2; }
+fx="$TMP/fx-badfloor"; calls="$TMP/calls-badfloor"; : > "$calls"
+ok_fixtures "$fx" "$TARGET"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$BADFLOOR")"; rc=$?
+if [[ "$rc" -eq 1 ]] && printf '%s' "$out" | grep -qF "numeric .floor"; then
+  pass "a non-numeric manifest floor => exit 1 naming the floor (not an arithmetic 0)"
+else
+  fail "a corrupt floor must be a manifest fault, not a short restore" "$rc" "$out"
+fi
+
+# An unreadable manifest must say so. Without the readability check the failure surfaces as
+# "declares no numeric .floor" — telling the operator the inventory is malformed when in fact it
+# was never opened, which sends them to inspect a file rather than a path or a permission.
+fx="$TMP/fx-noman"; calls="$TMP/calls-noman"; : > "$calls"
+ok_fixtures "$fx" "$TARGET"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$TMP/definitely-absent.json")"; rc=$?
+if [[ "$rc" -eq 1 ]] && printf '%s' "$out" | grep -qF "not readable"; then
+  pass "an unreadable manifest => exit 1 naming READABILITY (never 'treated as empty')"
+else
+  fail "an unreadable inventory must not be diagnosed as a malformed one" "$rc" "$out"
+fi
+
+# TLS is not optional off-loopback. `--insecure` is correct for the throwaway and for the real
+# target reached through `cloudflared access tcp` on 127.0.0.1 — and is a downgrade anywhere
+# else. Nothing exercised a non-loopback target, so the discrimination was untested.
+T_REMOTE="registry.example.com:443"
+fx="$TMP/fx-remote"; calls="$TMP/calls-remote"; : > "$calls"
+ok_fixtures "$fx" "$T_REMOTE"
+out="$(run_engine "$fx" "$calls" --target "$T_REMOTE" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 0 ]] && ! grep -qF -- "--insecure" "$calls"; then
+  pass "a NON-loopback sink is addressed over TLS — no --insecure on any call"
+else
+  fail "a non-loopback sink must not be downgraded to plain HTTP" "$rc" \
+    "$(grep -nF -- '--insecure' "$calls" | head -3)"
+fi
+
+# The positive direction of the same discrimination, so "never --insecure" and "correct
+# discrimination" are not confusable.
+if grep -qF -- "--insecure" "$TMP/calls-ok"; then
+  pass "a LOOPBACK sink still gets --insecure (the flag is discriminated, not merely absent)"
+else
+  fail "the loopback sink speaks plain HTTP and needs --insecure" "?" "$(head -5 "$TMP/calls-ok")"
+fi
+
 # followed by `::add-mask::` in that stderr would execute. Collapsing newlines makes the whole
 # capture one un-parseable payload. Lifted from build-inngest-bootstrap-image.yml.
 if grep -qE "tr '\\\\n' ' '" "$ENGINE"; then

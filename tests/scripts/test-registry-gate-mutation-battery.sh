@@ -1,0 +1,374 @@
+#!/usr/bin/env bash
+# Mutation battery for the D10 authorization gate and its restore engine (#7277).
+#
+# ── WHY THIS FILE EXISTS AS A COMMITTED SUITE ───────────────────────────────────────────────
+# The two suites this battery mutates against are the only thing standing between an operator
+# and an IRREVERSIBLE destroy of production's sole image store. Both are green. Green is not the
+# question. The question is whether they would still be green if the guard they certify were
+# removed — and the first revision of this gate answered "yes" for its central claim: it had 23
+# green assertions and no row asserting the gate could PASS, so a gate rewritten to refuse
+# unconditionally kept every assertion.
+#
+# Earlier runs of this battery existed only as ad-hoc shell in a session transcript. That is the
+# defect this file fixes: an uncommitted battery proves something once and protects nothing
+# afterwards. Committed and registered, it re-proves every guard on every full-suite run.
+#
+# ── THE HARNESS CONTRACT, WHICH IS ITSELF A SAFETY BOUNDARY ─────────────────────────────────
+# A harness that fails to SET UP must ABORT (exit 2), never continue. A battery that cannot copy
+# its sandbox does not degrade into a missing result — it degrades into a CONFIDENT WRONG one,
+# reporting "the guard did not detect this" about a tree it never built. Every setup command
+# below is checked, and a setup failure exits 2 (harness fault), distinct from exit 1 (a
+# surviving mutation, i.e. a real finding).
+#
+# Three further properties, each learned from a battery that went vacuous:
+#
+#   1. THE MUTATION MUST BE PROVEN TO LAND. `py_replace` requires the anchor to be present AND
+#      UNIQUE, and the caller then asserts the sandbox differs from pristine. A sed that silently
+#      matched nothing reports the guard as "caught" while never having removed it.
+#   2. THE BASELINE MUST BE GREEN FIRST. If the unmutated sandbox is not green, every subsequent
+#      RED is attributable to the sandbox, not to the mutation, and no verdict is reportable.
+#   3. RESTORE-TO-PRISTINE BETWEEN MUTATIONS. Without it, mutation N runs against N-1's mutant
+#      and the battery measures a tree nobody designed.
+#
+# `TMPDIR` is defaulted to /var/tmp deliberately: a DIRECT invocation of this file (the inner
+# loop while editing the gate) inherits the bare machine-global /tmp tmpfs, which parallel
+# worktrees share, so a sandbox copy can fail for want of another session's disk.
+#
+# Exit codes: 0 = every mutation caught. 1 = at least one SURVIVED (a real gap). 2 = harness
+# fault, no verdict.
+export TMPDIR="${TMPDIR:-/var/tmp}"
+
+set -uo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "${DIR}/../.." && pwd)"
+
+harness_die() { printf 'harness: %s\n' "$*" >&2; exit 2; }
+
+SB="$(mktemp -d)" || harness_die "mktemp -d failed — refusing to report a verdict"
+PRISTINE="$(mktemp -d)" || harness_die "mktemp -d (pristine) failed — refusing to report a verdict"
+trap 'rm -rf "$SB" "$PRISTINE"' EXIT
+
+# ── build the sandbox ────────────────────────────────────────────────────────────────────────
+# The suites resolve their SUT as "$(dirname $0)/../../scripts/<name>", so the sandbox must
+# reproduce that relative layout rather than flattening it.
+mkdir -p "$SB/scripts" "$SB/tests/scripts" "$SB/apps/web-platform/infra" \
+  || harness_die "could not create the sandbox layout"
+
+SUT_GATE="scripts/registry-pull-path-health.sh"
+SUT_ENGINE="scripts/registry-restore-from-ghcr.sh"
+SUITE_GATE="tests/scripts/test-registry-pull-path-health.sh"
+SUITE_ENGINE="tests/scripts/test-registry-restore-from-ghcr.sh"
+
+for f in "$SUT_GATE" "$SUT_ENGINE" "$SUITE_GATE" "$SUITE_ENGINE"; do
+  [[ -r "${ROOT}/${f}" ]] || harness_die "required file is unreadable: ${ROOT}/${f}"
+  cp "${ROOT}/${f}" "${SB}/${f}" || harness_die "could not copy ${f} into the sandbox"
+done
+# Best-effort companions: the gate SOURCES these when no seam overrides them. Their absence
+# changes which arm runs, so copy them when present rather than letting the sandbox differ from
+# the real tree in a way no mutation asked for.
+for f in scripts/zot-mirror-diagnosis.sh scripts/check-cloudflare-token-drift.sh; do
+  [[ -r "${ROOT}/${f}" ]] && { cp "${ROOT}/${f}" "${SB}/${f}" || harness_die "could not copy ${f}"; }
+done
+[[ -r "${ROOT}/apps/web-platform/infra/cloud-init.yml" ]] && {
+  cp "${ROOT}/apps/web-platform/infra/cloud-init.yml" "${SB}/apps/web-platform/infra/cloud-init.yml" \
+    || harness_die "could not copy cloud-init.yml"
+}
+chmod +x "${SB}/${SUT_GATE}" "${SB}/${SUT_ENGINE}" || harness_die "could not chmod the sandboxed SUTs"
+
+cp "${SB}/${SUT_GATE}"   "${PRISTINE}/gate.sh"   || harness_die "could not snapshot the pristine gate"
+cp "${SB}/${SUT_ENGINE}" "${PRISTINE}/engine.sh" || harness_die "could not snapshot the pristine engine"
+
+# ── helpers ──────────────────────────────────────────────────────────────────────────────────
+
+# py_replace <file> <old> <new> — replace a UNIQUE anchor, or fail loudly.
+#
+# Anchor text is passed through the environment, not argv, so bash quoting cannot mangle a
+# replacement containing quotes, backslashes or `$`. Uniqueness is required because a
+# multi-match anchor makes the mutation ambiguous: the battery would not know what it changed.
+py_replace() {
+  OLD="$2" NEW="$3" python3 - "$1" <<'PY'
+import os, sys
+path = sys.argv[1]
+old, new = os.environ["OLD"], os.environ["NEW"]
+src = open(path).read()
+n = src.count(old)
+if n == 0:
+    sys.stderr.write("anchor not found\n"); sys.exit(3)
+if n != 1:
+    sys.stderr.write("anchor matched %d times, need exactly 1\n" % n); sys.exit(3)
+open(path, "w").write(src.replace(old, new, 1))
+PY
+}
+
+restore_pristine() {
+  cp "${PRISTINE}/gate.sh"   "${SB}/${SUT_GATE}"   || harness_die "could not restore the pristine gate"
+  cp "${PRISTINE}/engine.sh" "${SB}/${SUT_ENGINE}" || harness_die "could not restore the pristine engine"
+  chmod +x "${SB}/${SUT_GATE}" "${SB}/${SUT_ENGINE}" || harness_die "could not re-chmod the SUTs"
+}
+
+run_suite() { # $1 = gate|engine ; echoes nothing, returns the suite's rc
+  local which="$1" suite
+  case "$which" in
+    gate)   suite="${SB}/${SUITE_GATE}" ;;
+    engine) suite="${SB}/${SUITE_ENGINE}" ;;
+    *) harness_die "run_suite: unknown suite '${which}'" ;;
+  esac
+  bash "$suite" > "${SB}/suite.log" 2>&1
+}
+
+caught=0
+survived=0
+SURVIVORS=""
+
+# mutate <label> <gate|engine> <old> <new>
+#
+# The suite that must go RED is the one owning the mutated SUT. A mutation whose anchor is
+# missing is a HARNESS fault (the file drifted), not a survivor — reporting it as "caught" would
+# be the battery certifying a guard it never touched.
+mutate() {
+  local label="$1" which="$2" old="$3" new="$4" target rc
+  case "$which" in
+    gate)   target="${SB}/${SUT_GATE}" ;;
+    engine) target="${SB}/${SUT_ENGINE}" ;;
+    *) harness_die "mutate: unknown target '${which}'" ;;
+  esac
+
+  restore_pristine
+  if ! py_replace "$target" "$old" "$new"; then
+    harness_die "mutation '${label}': anchor did not apply cleanly against ${which}. The SUT drifted from this battery — fix the anchor before trusting any verdict below."
+  fi
+  # Prove the edit actually changed the file. `py_replace` already refuses a missing anchor;
+  # this catches the degenerate old==new case, where a mutation is a no-op and its "RED" would
+  # be measuring the pristine tree.
+  if diff -q "$target" "${PRISTINE}/$( [[ "$which" == gate ]] && echo gate.sh || echo engine.sh )" >/dev/null 2>&1; then
+    harness_die "mutation '${label}' produced a file identical to pristine — the mutation is a no-op."
+  fi
+
+  run_suite "$which"; rc=$?
+  if (( rc != 0 )); then
+    caught=$(( caught + 1 ))
+    printf '  caught    %s\n' "$label"
+  else
+    survived=$(( survived + 1 ))
+    SURVIVORS="${SURVIVORS}${SURVIVORS:+$'\n'}  SURVIVED  ${label}"
+    printf '  SURVIVED  %s\n' "$label"
+  fi
+}
+
+# ── baseline: the pristine sandbox must be green, or no verdict is reportable ────────────────
+echo "=== baseline (pristine sandbox) ==="
+restore_pristine
+if ! run_suite gate; then
+  tail -20 "${SB}/suite.log" >&2
+  harness_die "the pristine gate suite is NOT green in the sandbox. Every RED below would be attributable to the sandbox rather than to a mutation, so no verdict is reportable."
+fi
+echo "  ok   gate suite green on the pristine sandbox"
+if ! run_suite engine; then
+  tail -20 "${SB}/suite.log" >&2
+  harness_die "the pristine engine suite is NOT green in the sandbox. No verdict is reportable."
+fi
+echo "  ok   engine suite green on the pristine sandbox"
+echo
+
+# ── gate mutations ───────────────────────────────────────────────────────────────────────────
+# Each one removes or inverts a guard whose failure mode is FAIL-OPEN: the gate reports
+# AUTHORIZED while the property it names is unproven. A survivor here is a guard the suite
+# certifies but does not test.
+echo "=== gate mutations (scripts/registry-pull-path-health.sh) ==="
+
+# G01-G04 previously mutated A5's abort/degrade arms. A5 was removed by architecture ruling
+# (ADR-169), so those anchors are gone. They are replaced by a mutation of the guard that now
+# carries the most authority per line: the seam list. Note the shape — this is a PARTIAL
+# removal, which is strictly harder to catch than neutering the whole guard (G13) and is the
+# realistic drift: someone adds a seam and forgets to list it, or removes the one that matters.
+mutate "G01 seam guard silently stops covering REGISTRY_GATE_RESTORE_CMD (A2 becomes replaceable)" gate \
+  'REGISTRY_GATE_HEALTH_CMD REGISTRY_GATE_CRANE_CMD REGISTRY_GATE_RESTORE_CMD' \
+  'REGISTRY_GATE_HEALTH_CMD REGISTRY_GATE_CRANE_CMD'
+
+mutate "G05 A3 outcome floor weakened to a lower-bound (under-fill passes)" gate \
+  'if (( resolved != FLOOR )); then' \
+  'if (( resolved > FLOOR )); then'
+
+mutate "G06 A3 declared-vs-FLOOR self-consistency check deleted" gate \
+  'if (( declared_required != FLOOR )); then' \
+  'if false; then'
+
+mutate "G07 FLOOR silently downgraded to 3" gate \
+  'readonly FLOOR=4' \
+  'readonly FLOOR=3'
+
+mutate "G08 a required pin silently dropped from the declared set" gate \
+  '  "jikig-ai/soleur-web-platform|latest"
+' \
+  ''
+
+mutate "G09 classify() default arm reads UNKNOWN as NOTFOUND (unclassified becomes absent)" gate \
+  '    *) echo UNKNOWN ;;
+  esac
+}
+
+# The `tr' \
+  '    *) echo NOTFOUND ;;
+  esac
+}
+
+# The `tr'
+
+mutate "G10 classify() DENIED arm removed (auth failure misclassified)" gate \
+  '    *UNAUTHORIZED*|*DENIED*|*"authentication required"*)              echo DENIED ;;
+' \
+  ''
+
+mutate "G11 last_err reads the FIRST bytes, not the last (classifies on line 1)" gate \
+  'last_err() { tail -c 400 "$1"' \
+  'last_err() { head -c 400 "$1"'
+
+mutate "G12 workflow-command injection guard dropped from last_err" gate \
+  'last_err() { tail -c 400 "$1" 2>/dev/null | tr '"'"'\n'"'"' '"'"' '"'"' || true; }' \
+  'last_err() { tail -c 400 "$1" 2>/dev/null || true; }'
+
+mutate "G13 GITHUB_ACTIONS seam guard neutered (a seam can manufacture AUTHORIZED)" gate \
+  'if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+  for _seam in' \
+  'if false; then
+  for _seam in'
+
+mutate "G14 ::add-mask:: emitted unconditionally (prints the prd token locally)" gate \
+  'if [[ -n "${GITHUB_ACTIONS:-}" && -n "${ZOT_PUSH_TOKEN:-}" ]]; then' \
+  'if [[ -n "${ZOT_PUSH_TOKEN:-}" ]]; then'
+
+mutate "G15 A4 measured-dead credential downgraded from abort to notice" gate \
+  '  stale)
+    abort A4 ' \
+  '  stale)
+    echo '
+
+mutate "G16 A4 out-of-vocabulary verdict treated as healthy" gate \
+  '  *)
+    abort A4 "the credential grader returned' \
+  '  *)
+    echo "the credential grader returned'
+
+mutate "G17 A4 missing/non-executable detector degrades instead of aborting" gate \
+  'if [[ ! -x "$DRIFT" ]]; then' \
+  'if false; then'
+
+mutate "G18 A2 rehearsal failure ignored for every enumerated exit code" gate \
+  'if (( restore_rc != 0 )); then' \
+  'if (( restore_rc > 100 )); then'
+
+mutate "G19 A2 missing restore engine no longer aborts" gate \
+  '[[ -x "$RESTORE" ]] || abort A2 ' ': # '
+
+mutate "G20 A0 build_sha assertion removed (a stale cached /health passes)" gate \
+  '[[ -n "$PROD_SHA" ]] || abort A0 ' ': # '
+
+mutate "G21 A0 unreadable /health treated as measurable" gate \
+  '(( health_rc == 0 )) || abort A0 ' ': # '
+
+mutate "G22 A1 conditional-skip arm widened to required pins" gate \
+  'if [[ "$3" == "conditional" && "$cls" == "NOTFOUND" ]]; then' \
+  'if [[ "$cls" == "NOTFOUND" ]]; then'
+
+mutate "G23 A0 APP_DOMAIN_BASE guard removed (health URL silently malformed)" gate \
+  '[[ -n "${APP_DOMAIN_BASE:-}" ]] || abort A0 ' ': # '
+
+mutate "G24 --rehearse-target no longer required to render a verdict" gate \
+  '[[ -n "$REHEARSE_TARGET" ]] || usage_err ' ': # '
+
+echo
+
+# ── engine mutations ─────────────────────────────────────────────────────────────────────────
+echo "=== engine mutations (scripts/registry-restore-from-ghcr.sh) ==="
+
+mutate "E01 sink authentication skipped entirely (the shipped fail-open)" engine \
+  'if ! $CRANE auth login "$TARGET" -u "$ZOT_PUSH_USER" -p "$ZOT_PUSH_TOKEN" $SINK_TLS_FLAG' \
+  'if ! true "$TARGET" -u "$ZOT_PUSH_USER" -p "$ZOT_PUSH_TOKEN" $SINK_TLS_FLAG'
+
+mutate "E02 ZOT_PUSH_TOKEN emptiness check removed" engine \
+  '[[ -n "${ZOT_PUSH_TOKEN:-}" ]] || die 5 ' ': # '
+
+mutate "E03 blob-completeness verification (crane validate) removed" engine \
+  'if ! crane_capture "$WORK/val.out" "$WORK/val.err" validate $SINK_TLS_FLAG --remote "$dst"; then' \
+  'if false; then'
+
+mutate "E04 digest parity comparison inverted to always match" engine \
+  'if [[ "$src_digest" != "$dst_digest" ]]; then' \
+  'if false; then'
+
+mutate "E05 empty read-back digest accepted as verified" engine \
+  '  if [[ -z "$dst_digest" ]]; then' \
+  '  if false; then'
+
+mutate "E06 outcome floor assertion deleted (restores fewer than declared)" engine \
+  'if (( restored != FLOOR )); then' \
+  'if (( restored > FLOOR )); then'
+
+mutate "E07 zero-restore vacuity guard deleted" engine \
+  'if (( restored == 0 )); then' \
+  'if false; then'
+
+mutate "E08 distinctness guard removed (duplicates satisfy the floor)" engine \
+  'if [[ ! "$n_distinct" =~ ^[0-9]+$ ]] || (( n_distinct != n_required )); then' \
+  'if false; then'
+
+mutate "E09 zero-required-entries manifest accepted" engine \
+  'if (( n_required == 0 )); then' \
+  'if false; then'
+
+mutate "E10 manifest .floor no longer required to be numeric" engine \
+  '[[ "$FLOOR" =~ ^[0-9]+$ ]] || die 1 ' ': # '
+
+mutate "E11 signature-presence check at GHCR removed (unsigned restore arm)" engine \
+  '  if [[ -z "$(digest_of "$WORK/sigsrc.out")" ]]; then' \
+  '  if false; then'
+
+mutate "E12 signature read-back from the sink removed" engine \
+  '  if [[ -z "$(digest_of "$WORK/sigdst.out")" ]]; then' \
+  '  if false; then'
+
+mutate "E13 signature copy failure ignored" engine \
+  '  if ! crane_capture "$WORK/sigcp.out" "$WORK/sigcp.err" copy $SINK_TLS_FLAG "ghcr.io/${repo}:${sig_tag}" "${TARGET}/${repo}:${sig_tag}"; then' \
+  '  if false; then'
+
+mutate "E14 copy failure ignored entirely" engine \
+  '  if ! crane_capture "$WORK/cp.out" "$WORK/cp.err" copy $SINK_TLS_FLAG "$src" "$dst"; then' \
+  '  if false; then'
+
+mutate "E15 unreadable --tags-from manifest treated as an empty inventory" engine \
+  '[[ -r "$TAGS_FROM" ]] || die 1 ' ': # '
+
+mutate "E16 ghcr.io accepted as the restore target (a no-op that reports success)" engine \
+  '  ghcr.io|ghcr.io/*|*://*) die 1 ' '  __never_matches__) die 1 '
+
+mutate "E17 classify() default arm reads UNKNOWN as NETWORK (retryable)" engine \
+  '    *) echo UNKNOWN ;;
+  esac
+}' \
+  '    *) echo NETWORK ;;
+  esac
+}'
+
+mutate "E18 source-resolution failure no longer aborts on an empty digest" engine \
+  '  if [[ -z "$src_digest" ]]; then' \
+  '  if false; then'
+
+mutate "E19 non-loopback sink silently downgraded to plain HTTP" engine \
+  '  *) SINK_TLS_FLAG="" ;;   # a non-loopback sink must use TLS' \
+  '  *) SINK_TLS_FLAG="--insecure" ;;'
+
+mutate "E20 conditional-skip arm widened to required entries" engine \
+  '        if [[ "$disp" == "conditional" ]]; then' \
+  '        if true; then'
+
+restore_pristine
+
+echo
+echo "=== ${caught} caught, ${survived} survived ==="
+if (( survived > 0 )); then
+  printf '%s\n' "$SURVIVORS"
+  echo "A SURVIVING mutation is a guard the suites certify but do not test. Fix the suite (or the guard) before shipping." >&2
+  exit 1
+fi
+exit 0

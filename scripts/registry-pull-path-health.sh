@@ -35,26 +35,41 @@
 #   A2  rehearsed restore into a throwaway registry            POSITIVE — this IS the pass condition
 #   A3  non-vacuity floor                                      ABORTING
 #   A4  sink-credential validity at the Cloudflare Access edge ABORTING on a MEASURED dead count
-#   A5  live sink proof against prod zot                       ADVISORY-DEGRADING (see below)
 #
 # Every predicate has an explicit could-not-measure bucket that ABORTS, and each bucket is
 # evaluated BEFORE any comparison. The verdict switch has no default-pass arm. "I could not
 # check" must never read as "it is fine" on the one gate protecting an irreversible destroy.
 #
-# ── A5 IS DELIBERATELY THE INVERSE, AND THIS IS THE MOST DANGEROUS LINE IN THE FILE ─────────
-# Everywhere else here, "cannot measure" means "cannot prove safe" and aborts. In A5 the
-# UNmeasurability *is* the incident, so it degrades and proceeds.
+# ── THERE IS DELIBERATELY NO PREDICATE THAT OBSERVES PRODUCTION ZOT. READ THIS BEFORE ADDING ONE.
+# A draft of this design carried an A5: an advisory-degrading live write against prod zot, with
+# abort arms for `credential_rejected` and `wrong_digest` and a degrade arm for everything else.
+# Its abort/degrade asymmetry was SOUND, and that is exactly why it must be recorded here — a
+# future reader will re-derive the asymmetry, find it valid, and re-add the predicate. The
+# asymmetry is not what failed. A5 was removed on three independent grounds (ADR-169):
 #
-# ONLY AUTHORISATION AND CORRECTNESS FAILURES ABORT. AVAILABILITY FAILURES DEGRADE.
+#   1. THE DUAL OF THE INDEPENDENCE CRITERION. A gate on an irreversible destroy may not abort on
+#      a property of the component the destroy REPLACES. A5's only marginal abort arm is an
+#      htpasswd credential rejection — and /etc/zot/htpasswd is baked at boot from Doppler
+#      (cloud-init-registry.yml), while zot-registry.tf's `replace_triggered_by` re-bakes it from
+#      the same unchanged value in the SAME apply. So a pre-destroy rejection means the running
+#      host's bake has diverged from Doppler, and the remedy for that divergence IS a host
+#      replace — i.e. this recut. A5 would have blocked the recovery on the condition the
+#      recovery cures, which is the third instance of the defect class this rewrite removes.
+#   2. THE DISTINCTION IS UNDECIDABLE ON THIS TRANSPORT. #7242 / ADR-166 measured Cloudflare
+#      Access ADMITTING every request while zot crash-looped; cf-tunnel-registry-bridge records
+#      that a bad handshake "does NOT by itself distinguish an edge refusal from an origin that
+#      is down or restarting". Classifying the ambiguity as a rejection deadlocks the gate during
+#      the motivating incident; classifying it as availability makes the abort arm unreachable in
+#      the only scenario that matters. Both settings are wrong.
+#   3. ITS ONLY TRANSPORT IS FAIL-CLOSED. cf-tunnel-registry-bridge exits 1 on a failed listener
+#      bind and on a failed docker login — availability-shaped failures that would abort this job
+#      BEFORE this script runs, at a layer A5's degrade arm cannot reach.
 #
-# An earlier draft put `connection reset by peer` mid-upload in the ABORT bucket. That is the
-# literal failure text of release run 30988480437 — the incident this gate exists to authorise
-# recovery from — so that draft would have aborted TODAY, for the same reason the old gate did.
-# A credential rejection, by contrast, is independent of zot's health: it means the post-destroy
-# restore cannot work no matter how healthy the rebuilt host is, which is precisely the state in
-# which a destroy is unrecoverable.
-#
-# Do not "fix" this asymmetry into consistency. It is pinned by test rows in both directions.
+# What the gate gives up, stated plainly: it no longer observes prod zot before destroying it.
+# That is accepted because nothing about zot's credential or serving plane survives the destroy
+# except the Cloudflare Access edge — which A4 measures pre-destroy, and ABORTS on. The
+# non-surviving half is measured post-destroy by `registry_store_restore`, against the host it
+# actually applies to, with a non-retryable exit-5 arm that names rotation as the remedy.
 #
 # ── WHAT WAS REMOVED, AND WHERE EACH ROLE WENT ───────────────────────────────────────────────
 #   the three Sentry counters   -> premise retracted; the surviving question ("can the source
@@ -80,7 +95,7 @@
 #   ZOT_PUSH_USER / ZOT_PUSH_TOKEN — passed through to the rehearsal.
 #   Test seams, one per external dependency, each able to emit every classified token:
 #     REGISTRY_GATE_HEALTH_CMD   REGISTRY_GATE_CRANE_CMD   REGISTRY_GATE_RESTORE_CMD
-#     REGISTRY_GATE_DRIFT_CMD    REGISTRY_GATE_SINK_CMD
+#     REGISTRY_GATE_DRIFT_CMD    REGISTRY_GATE_VERDICT_CMD
 
 set -uo pipefail
 
@@ -114,7 +129,7 @@ done
 # or a stale export in the operator's shell (the runbook tells them to run this locally).
 if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
   for _seam in REGISTRY_GATE_HEALTH_CMD REGISTRY_GATE_CRANE_CMD REGISTRY_GATE_RESTORE_CMD \
-               REGISTRY_GATE_DRIFT_CMD REGISTRY_GATE_SINK_CMD REGISTRY_GATE_VERDICT_CMD \
+               REGISTRY_GATE_DRIFT_CMD REGISTRY_GATE_VERDICT_CMD \
                REGISTRY_GATE_CLOUD_INIT; do
     if [[ -n "${!_seam:-}" ]]; then
       echo "::error::registry-pull-path-health: ${_seam} is set inside GitHub Actions. Test seams replace this gate's external dependencies — including the rehearsal that IS the pass condition — so a seam set on the production path can manufacture an AUTHORIZED verdict. Refusing." >&2
@@ -127,12 +142,6 @@ HEALTH_CMD="${REGISTRY_GATE_HEALTH_CMD:-}"
 CRANE="${REGISTRY_GATE_CRANE_CMD:-crane}"
 RESTORE="${REGISTRY_GATE_RESTORE_CMD:-${ROOT}/scripts/registry-restore-from-ghcr.sh}"
 DRIFT="${REGISTRY_GATE_DRIFT_CMD:-${ROOT}/scripts/check-cloudflare-token-drift.sh}"
-# REGISTRY_SINK_PROBE_CMD is the PRODUCTION knob; REGISTRY_GATE_SINK_CMD is the test seam. They
-# are deliberately different names: the seam guard above refuses every REGISTRY_GATE_* inside a
-# runner, so wiring A5 for real through the seam would be self-contradictory — the gate would
-# abort on every dispatch. Keeping them distinct lets the workflow wire a real probe while a
-# seam set on the production path still refuses.
-SINK_CMD="${REGISTRY_GATE_SINK_CMD:-${REGISTRY_SINK_PROBE_CMD:-}}"
 
 WORK="$(mktemp -d)" || usage_err "could not create a scratch directory."
 trap 'rm -rf "$WORK"' EXIT
@@ -451,46 +460,6 @@ if (( restore_rc != 0 )); then
 fi
 echo "A2 rehearsal: the full required pin set was restored and blob-verified into ${REHEARSE_TARGET}"
 
-# ── A5 — live sink proof. ADVISORY-DEGRADING. Read the header before changing this. ─────────
-# The first draft of this design had NO predicate that observed prod zot at all. It answered
-# "must not depend on the failing component" by never looking at it — a different and much
-# weaker property. It would have authorised destroying a sink it had never observed, then
-# chained into that sink the exact `crane copy` write with a measured 9-of-9 failure record.
-# UNWIRED IS NOT "UNMEASURED". If no probe is configured, A5 never observes prod zot at all,
-# and every abort arm below is unreachable — a predicate that runs, prints, and cannot fire.
-# That is the dark-operand defect this whole rewrite exists to remove, and shipping it here
-# would be committing it inside the predicate added to prevent it. An availability failure
-# degrades; an ABSENT PROBE is a wiring fault and refuses.
-[[ -n "$SINK_CMD" ]] || abort A5 "no sink probe is configured (REGISTRY_GATE_SINK_CMD is unset), so nothing observes production zot and A5's abort arms are unreachable. Refusing rather than shipping a predicate that cannot fire — wire the probe or remove A5 deliberately."
-
-# Capture stdout and rc SEPARATELY. `$(cmd || echo unmeasured)` concatenated the probe's verdict
-# with the fallback whenever the probe exited non-zero — which is the natural implementation for
-# a failure probe — yielding "credential_rejected\nunmeasured", matching neither abort arm and
-# falling through to DEGRADE. The abort arm this file calls the most dangerous line was defeated
-# by its own error handling. Also keep stderr: discarding it threw away the diagnosis.
-sink_outcome="$("$SINK_CMD" 2>"$WORK/sink.err")"; sink_rc=$?
-sink_outcome="$(printf '%s' "$sink_outcome" | tr -d '[:space:]')"
-if [[ -z "$sink_outcome" ]]; then
-  # The probe ran and said nothing. That is an availability-shaped could-not-measure, so it
-  # degrades — but it is recorded distinctly from a probe that reported a verdict.
-  sink_outcome="unmeasured"
-  echo "A5 sink probe produced no verdict (rc=${sink_rc}): $(tail -c 200 "$WORK/sink.err" 2>/dev/null | tr '\n' ' ')"
-fi
-
-case "$sink_outcome" in
-  ok)
-    echo "A5 sink probe: WRITE SUCCEEDED against live prod zot. A4's staleness residual is now measured, not assumed. sink_probe=ok" ;;
-  credential_rejected)
-    abort A5 "prod zot is REACHABLE but REJECTED the credential (401/403/DENIED, or a CF Access admission refusal). This is an AUTHORISATION failure and it is independent of zot's health: the post-destroy restore cannot work no matter how healthy the rebuilt host is. This is exactly the state A4 could not see, and the state in which a destroy is unrecoverable." ;;
-  wrong_digest)
-    abort A5 "the probe write COMPLETED but produced the WRONG DIGEST. That is a measured correctness failure, not an availability one." ;;
-  *)
-    # EVERY other outcome — reset mid-upload, timeout, 5xx, origin unreachable, tunnel down, or
-    # unclassifiable — PROCEEDS with a named degradation. These are the MOTIVATING condition.
-    # A gate that aborts on them cannot authorise the recovery it exists to authorise.
-    echo "A5 sink probe: could not measure the live sink ('${sink_outcome}'). PROCEEDING with a named degradation — availability failures of the sink are the motivating condition for this recut, not a reason to refuse it. sink_probe=unmeasured" ;;
-esac
-
 # ── verdict ─────────────────────────────────────────────────────────────────────────────────
 # ONLY inside Actions. `::add-mask::` is a workflow COMMAND, not a shell builtin — outside a
 # runner it is an ordinary echo that PRINTS THE TOKEN to the terminal and scrollback, and the
@@ -499,6 +468,6 @@ if [[ -n "${GITHUB_ACTIONS:-}" && -n "${ZOT_PUSH_TOKEN:-}" ]]; then
   echo "::add-mask::${ZOT_PUSH_TOKEN}"
 fi
 
-echo "verdict=AUTHORIZED floor=${FLOOR} resolved=${resolved} a4_credential=${a4_verdict} sink_probe=${sink_outcome} rehearsal=${REHEARSE_TARGET}"
+echo "verdict=AUTHORIZED floor=${FLOOR} resolved=${resolved} a4_credential=${a4_verdict} rehearsal=${REHEARSE_TARGET}"
 echo "registry-pull-path-health: a recut is AUTHORIZED — CI has just re-materialised production's full required pin set into an empty registry from GHCR and verified its blobs."
 exit 0

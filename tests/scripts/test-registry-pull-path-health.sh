@@ -13,12 +13,14 @@
 #    rather than a bare non-zero rc. A gate that aborts for the wrong reason is a gate whose
 #    operator message is a lie.
 #
-# 3. A5'S ASYMMETRY, pinned in BOTH directions. This is the most dangerous line in the design:
-#    an availability failure of the sink (reset / timeout / 5xx) must DEGRADE and proceed, while
-#    an authorisation or correctness failure must ABORT. An earlier draft of the plan had
-#    `connection reset mid-upload` in the ABORT bucket — that is the literal signature of the
-#    live incident (run 30988480437), so it would have deadlocked the gate exactly when needed.
-#    Both directions are asserted so a future reader cannot "fix" it back into a deadlock.
+# 3. THE ABSENCE OF A LIVE-SINK PREDICATE, asserted as negative space. A draft carried an "A5"
+#    that wrote to production zot pre-destroy. It was removed by architecture ruling (ADR-169):
+#    its only marginal abort arm fired on an htpasswd divergence that the recut ITSELF repairs,
+#    the authorisation-vs-availability distinction is undecidable on the CF-tunnel transport
+#    (#7242 / ADR-166), and that transport is fail-closed and cannot carry the asymmetry. A
+#    deleted predicate needs a guard that it STAYS deleted, and — more importantly — that its
+#    retired knobs are INERT rather than silently re-enabling a dark operand. Both are asserted
+#    below, because "we removed it" is a claim with no test unless absence is what you assert.
 #
 # The gate protects an IRREVERSIBLE destroy of production's only image store, so every
 # could-not-measure outcome is its own aborting class, evaluated BEFORE any comparison.
@@ -85,6 +87,19 @@ case "$mode" in
   network)  echo 'Error: Get "https://ghcr.io/v2/": dial tcp: lookup ghcr.io: no such host' >&2; exit 1 ;;
   unknown)  echo "Error: a shape nobody has classified" >&2; exit 1 ;;
   malformed) echo "not-a-digest" ;;
+  # The MEASURED real shape (probe evidence 0.1/0.6): crane's FIRST stderr line is the same
+  # \`HEAD request failed, falling back on GET: …\` for tag-absent, repo-absent AND DNS failure,
+  # and only the LAST line discriminates. A classifier reading line 1 sees an unclassifiable
+  # string here; one reading the last line sees MANIFEST_UNKNOWN. That difference is the whole
+  # reason last_err takes the tail, so it needs a fixture that can tell them apart.
+  twoline)  { echo "HEAD request failed, falling back on GET: HEAD https://ghcr.io/v2/${WP}/manifests/latest: unexpected status code 404 Not Found"
+              echo "Error: GET https://ghcr.io/v2/${WP}/manifests/latest: MANIFEST_UNKNOWN: manifest unknown"; } >&2; exit 1 ;;
+  # Registry stderr is externally-influenced text interpolated into ::error:: output, and GitHub
+  # parses workflow commands PER LINE. A newline followed by a workflow command inside it would
+  # be EXECUTED by the runner. This mode carries that payload so the \`tr '\\n' ' '\` guard has
+  # something that can actually falsify it.
+  inject)   { echo "Error: GET https://ghcr.io/v2/${WP}/manifests/latest: registry said no"
+              echo "::add-mask::INJECTED-VIA-REGISTRY-STDERR"; } >&2; exit 1 ;;
 esac
 STUB
   chmod +x "$f" || { echo "harness: chmod failed" >&2; exit 2; }
@@ -123,12 +138,6 @@ STUB
   chmod +x "$1" || { echo "harness: chmod failed" >&2; exit 2; }
 }
 
-# sink_stub <file> <verdict-token> — A5's live probe against prod zot.
-sink_stub() {
-  { printf '#!/usr/bin/env bash\n'; printf 'printf "%%s" %q\n' "$2"; } > "$1"
-  chmod +x "$1" || { echo "harness: chmod failed" >&2; exit 2; }
-}
-
 OK_HEALTH="{\"status\":\"ok\",\"version\":\"${VER}\",\"build_sha\":\"${SHA}\",\"uptime\":91973}"
 
 # world <dir> — an all-good environment; individual cases override one seam each.
@@ -138,7 +147,6 @@ world() {
   crane_stub   "$d/crane"   ok
   restore_stub "$d/restore" 0
   drift_stub   "$d/drift"   0 0 3 0   # dead=0 unverifiable=0 live=3 rc=0 -> the `live` arm
-  sink_stub    "$d/sink"    "ok"
   printf '%s' "$d"
 }
 
@@ -149,7 +157,6 @@ run_gate() {
   REGISTRY_GATE_CRANE_CMD="$d/crane" \
   REGISTRY_GATE_RESTORE_CMD="$d/restore" \
   REGISTRY_GATE_DRIFT_CMD="$d/drift" \
-  REGISTRY_GATE_SINK_CMD="$d/sink" \
   APP_DOMAIN_BASE="${APP_DOMAIN_BASE-soleur.ai}" \
   ZOT_PUSH_USER="${ZOT_PUSH_USER-u}" ZOT_PUSH_TOKEN="${ZOT_PUSH_TOKEN-t}" \
   GATE_CALLS="${GATE_CALLS:-/dev/null}" \
@@ -398,82 +405,182 @@ else
     "$(cat "$TMP/pins-out.json")"
 fi
 
-# ── A5 — THE ABORT/DEGRADE BOUNDARY. Both directions. ───────────────────────────────────────
-# Authorisation and correctness failures abort; availability failures degrade.
-W="$(world "$TMP/w-a5-rejected")"
-sink_stub "$W/sink" "credential_rejected"
+# ── NO LIVE-SINK PREDICATE. Asserted as negative space, in the two ways it can regress. ─────
+# The removed "A5" wrote to production zot before authorising its destruction. Removing a
+# predicate is the one edit whose correctness NOTHING asserts by default: the suite simply gets
+# shorter and stays green. These rows make the removal a property.
+
+# (a) The verdict must carry no sink field. The runbook keyed an operator-facing row on
+#     `sink_probe=`; a verdict still emitting it would send operators looking for a predicate
+#     that no longer exists.
+W="$(world "$TMP/w-nosink-verdict")"
 out="$(run_gate "$W")"; rc=$?
-if [[ "$rc" -ne 0 ]]; then
-  pass "A5: sink credential REJECTED => ABORT (unrecoverable after a destroy)"
+if [[ "$rc" -eq 0 ]] && ! printf '%s' "$out" | grep -qF "sink_probe="; then
+  pass "no-A5: the verdict line carries no sink_probe field"
 else
-  fail "a rejected sink credential must abort" "$rc" "$out"
+  fail "the verdict must not report a sink predicate that was removed" "$rc" "$out"
 fi
 
-W="$(world "$TMP/w-a5-wrongdigest")"
-sink_stub "$W/sink" "wrong_digest"
-out="$(run_gate "$W")"; rc=$?
-if [[ "$rc" -ne 0 ]]; then
-  pass "A5: write completed with the WRONG DIGEST => ABORT (a correctness failure)"
+# (b) THE RETIRED KNOBS MUST BE INERT. This is the row that matters. A stale
+#     `REGISTRY_SINK_PROBE_CMD` in an operator's shell (the runbook tells them to run this
+#     locally) or a leftover workflow `env:` must change NOTHING. If a future edit re-introduces
+#     a sink read, this row catches it even if the re-introduction is silent — the probe below
+#     writes a sentinel file, so "was it consulted?" is observable rather than inferred.
+W="$(world "$TMP/w-nosink-inert")"
+SENTINEL="$W/sink-was-consulted"
+{ printf '#!/usr/bin/env bash\n'; printf 'touch %q\n' "$SENTINEL"; printf 'printf credential_rejected\n'; } > "$W/stale-probe"
+chmod +x "$W/stale-probe"
+out="$(REGISTRY_SINK_PROBE_CMD="$W/stale-probe" run_gate "$W")"; rc=$?
+if [[ "$rc" -eq 0 ]] && [[ ! -e "$SENTINEL" ]]; then
+  pass "no-A5: a stale REGISTRY_SINK_PROBE_CMD is INERT — never executed, verdict unchanged"
 else
-  fail "a correctness failure at the sink must abort" "$rc" "$out"
+  fail "a retired sink knob must not be consulted, and must not alter the verdict" "$rc" "$out"
 fi
 
-# The direction that matters most. `connection reset by peer` mid-upload is the literal failure
-# text of run 30988480437 — the incident this gate exists to authorise recovery from. Aborting
-# on it re-creates the deadlock.
-W="$(world "$TMP/w-a5-reset")"
-sink_stub "$W/sink" "connection_reset"
+# ── Guards a MUTATION BATTERY found this suite was certifying without testing. ──────────────
+# Every row below closes a mutation that survived tests/scripts/test-registry-gate-mutation-
+# battery.sh: the guard could be deleted or inverted and this suite stayed green. They are
+# grouped because they share one shape — each guard's failure produces a NON-ZERO exit for some
+# OTHER reason, so a row asserting only `rc != 0` cannot see the guard at all. The fix in almost
+# every case is to assert the SPECIFIC classified message, which is also what the operator reads.
+
+# The seam guard. This is the most dangerous omission of the set: REGISTRY_GATE_RESTORE_CMD
+# replaces A2 — the pass condition itself — so a seam reachable on the production path can
+# manufacture `verdict=AUTHORIZED` having proven nothing. The guard existed and nothing exercised
+# it, because every other row in this suite runs WITHOUT GITHUB_ACTIONS set.
+#
+# ONE ROW PER SEAM, deliberately. The guard's property quantifies over a SET, so a fixture that
+# sets every seam at once only proves the set is non-empty: drop any single name from the guard's
+# list and such a fixture still aborts, via one of the names that remain. A partial removal is
+# also the realistic drift (a seam is added and not listed). So each seam is set ALONE — the
+# only fixture shape in which a per-name omission is visible.
+for _seam_name in REGISTRY_GATE_HEALTH_CMD REGISTRY_GATE_CRANE_CMD REGISTRY_GATE_RESTORE_CMD \
+                  REGISTRY_GATE_DRIFT_CMD REGISTRY_GATE_VERDICT_CMD REGISTRY_GATE_CLOUD_INIT; do
+  W="$(world "$TMP/w-seam-${_seam_name}")"
+  out="$(env GITHUB_ACTIONS=true "${_seam_name}=/bin/true" APP_DOMAIN_BASE=soleur.ai \
+         ZOT_PUSH_USER=u ZOT_PUSH_TOKEN=t \
+         bash "$GATE" --rehearse-target "$THROWAWAY" 2>&1)"; rc=$?
+  if [[ "$rc" -ne 0 ]] && grep -qF "${_seam_name} is set inside GitHub Actions" <<<"$out"; then
+    pass "seam guard: ${_seam_name} alone, inside Actions => ABORT naming that seam"
+  else
+    fail "seam ${_seam_name} is not covered by the in-Actions refusal" "$rc" "$out"
+  fi
+done
+
+# ...and the guard must be scoped to the seams, not to the whole environment: outside Actions the
+# same seams are how this suite works at all. Without this second direction, "always abort when
+# GITHUB_ACTIONS is set" and "always abort" are indistinguishable.
+W="$(world "$TMP/w-seamguard-off")"
 out="$(run_gate "$W")"; rc=$?
 if [[ "$rc" -eq 0 ]]; then
-  pass "A5: connection reset mid-upload => DEGRADE AND PROCEED (the motivating incident)"
+  pass "seam guard: OUTSIDE Actions the same seams are permitted (the guard is scoped, not blanket)"
 else
-  fail "A5 MUST NOT abort on an availability failure — that is the deadlock being removed" "$rc" "$out"
+  fail "the seam guard must not fire outside a runner" "$rc" "$out"
 fi
 
-if printf '%s' "$out" | grep -qF "sink_probe=unmeasured"; then
-  pass "A5: the degradation is NAMED and logged, not silent"
-else
-  fail "a degraded A5 must record sink_probe=unmeasured" "$rc" "$out"
-fi
-
-W="$(world "$TMP/w-a5-timeout")"
-sink_stub "$W/sink" "timeout"
+# A2's engine-existence check. A non-executable engine is not a rehearsal that failed — it is a
+# rehearsal that never ran, and the distinction is the whole pass condition.
+W="$(world "$TMP/w-a2-noengine")"
+rm -f "$W/restore"
 out="$(run_gate "$W")"; rc=$?
-if [[ "$rc" -eq 0 ]]; then
-  pass "A5: sink timeout => DEGRADE AND PROCEED (availability, not authorisation)"
+if [[ "$rc" -ne 0 ]] && grep -qF "restore engine is not executable" <<<"$out"; then
+  pass "A2: a missing/non-executable restore engine => ABORT naming the engine (not a generic failure)"
 else
-  fail "a sink timeout must degrade, not abort" "$rc" "$out"
+  fail "an absent engine must abort as an unexercised pass condition" "$rc" "$out"
 fi
 
-# An unclassifiable sink outcome degrades too — A5 is the deliberate INVERSE of the fail-closed
-# rule used everywhere else in this gate, because here the unmeasurability IS the incident.
-W="$(world "$TMP/w-a5-unknown")"
-sink_stub "$W/sink" "something_new"
+# A4's detector-existence check, same class. A chmod bit is not a safety boundary; DEGRADE is
+# reserved for verdicts the detector actually produced.
+W="$(world "$TMP/w-a4-nodetector")"
+rm -f "$W/drift"
 out="$(run_gate "$W")"; rc=$?
-if [[ "$rc" -eq 0 ]]; then
-  pass "A5: an unclassifiable sink outcome => DEGRADE (A5 inverts the fail-closed rule on purpose)"
+if [[ "$rc" -ne 0 ]] && grep -qF "could-not-LOAD, not a could-not-rank" <<<"$out"; then
+  pass "A4: a missing credential detector => ABORT (could-not-LOAD is not could-not-rank)"
 else
-  fail "A5's unknown arm must degrade; elsewhere unknown aborts, and that asymmetry is the point" "$rc" "$out"
+  fail "a missing detector must abort rather than fall through to a degrade" "$rc" "$out"
 fi
 
-# A5 UNWIRED must ABORT, not degrade. An absent probe is a wiring fault, not an availability
-# failure: with no probe, nothing observes prod zot and every A5 abort arm is unreachable — the
-# dark-operand defect this rewrite exists to remove, committed inside the predicate added to
-# prevent it. Three reviewers found A5 dark in the shipped wiring; this row pins the refusal.
-W="$(world "$TMP/w-a5-unwired")"
-out="$(REGISTRY_GATE_HEALTH_CMD="$W/health" REGISTRY_GATE_CRANE_CMD="$W/crane" \
-       REGISTRY_GATE_RESTORE_CMD="$W/restore" REGISTRY_GATE_DRIFT_CMD="$W/drift" \
-       APP_DOMAIN_BASE=soleur.ai ZOT_PUSH_USER=u ZOT_PUSH_TOKEN=t \
-       bash "$GATE" --rehearse-target "$THROWAWAY" 2>&1)"; rc=$?
-if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -qF "no sink probe is configured"; then
-  pass "A5: NO probe configured => ABORT (an unwired predicate cannot fire, so it must refuse)"
+# A0's build_sha assertion, asserted BY ITS OWN MESSAGE. Deleting it still aborts — the pin set
+# then under-fills and A3's floor catches it — so a row checking only rc cannot tell the two
+# guards apart, and the mutation that removes A0's survived exactly that way.
+W="$(world "$TMP/w-a0-nosha")"
+health_stub "$W/health" "{\"status\":\"ok\",\"version\":\"${VER}\"}"
+out="$(run_gate "$W")"; rc=$?
+if [[ "$rc" -ne 0 ]] && grep -qF "A0 ABORT" <<<"$out" && grep -qF "build_sha" <<<"$out"; then
+  pass "A0: /health without build_sha => ABORT at A0 specifically (not incidentally at A3)"
 else
-  fail "an unwired A5 must refuse rather than silently degrade forever" "$rc" "$out"
+  fail "a stale cached /health must be caught by A0's own assertion" "$rc" "$out"
+fi
+
+# A0's APP_DOMAIN_BASE guard. With the health seam set, an unset domain produces no failure at
+# all — the gate simply never derives a URL and sails on. Nothing exercised this.
+W="$(world "$TMP/w-a0-nodomain")"
+out="$(APP_DOMAIN_BASE="" run_gate "$W")"; rc=$?
+if [[ "$rc" -ne 0 ]] && grep -qF "APP_DOMAIN_BASE is unset" <<<"$out"; then
+  pass "A0: APP_DOMAIN_BASE unset => ABORT (a hard-coded URL would make the committed config decorative)"
+else
+  fail "an underivable /health URL must abort, even when a health seam would answer anyway" "$rc" "$out"
+fi
+
+# classify(): the abort must name the class it measured. Both the DENIED arm and the UNKNOWN
+# default fall through to *some* abort when broken, so only the message distinguishes them — and
+# a gate that aborts for the wrong reason is a gate whose operator message is a lie.
+W="$(world "$TMP/w-cls-denied")"
+crane_stub "$W/crane" denied
+out="$(run_gate "$W")"; rc=$?
+if [[ "$rc" -ne 0 ]] && grep -qF "GHCR rejected this credential" <<<"$out"; then
+  pass "classify: UNAUTHORIZED => the DENIED message specifically (not the UNKNOWN fallback)"
+else
+  fail "an auth failure must be reported as a credential rejection, not as unclassifiable" "$rc" "$out"
+fi
+
+W="$(world "$TMP/w-cls-unknown")"
+crane_stub "$W/crane" unknown
+out="$(run_gate "$W")"; rc=$?
+if [[ "$rc" -ne 0 ]] && grep -qF "cannot classify" <<<"$out"; then
+  pass "classify: an unclassifiable failure => the UNKNOWN message (never 'absent', never 'fine')"
+else
+  fail "an unclassified failure must not be reported as a known class" "$rc" "$out"
+fi
+
+# last_err reads the LAST line. Measured: crane's first stderr line is identical across
+# tag-absent, repo-absent and DNS failure, so a classifier reading line 1 is reading a bucket.
+# This fixture's two lines classify DIFFERENTLY, which is what makes the property falsifiable.
+W="$(world "$TMP/w-lasterr")"
+crane_stub "$W/crane" twoline
+out="$(run_gate "$W")"; rc=$?
+if [[ "$rc" -ne 0 ]] && grep -qF "did not resolve: absent, OR NOT VISIBLE" <<<"$out"; then
+  pass "last_err: multi-line stderr is classified on its LAST line (line 1 is a bucket, not a diagnosis)"
+else
+  fail "classifying on the first line cannot separate a correctness failure from an availability one" "$rc" "$out"
+fi
+
+# The workflow-command injection guard. Registry stderr reaches ::error:: output verbatim, and
+# GitHub parses workflow commands per LINE — so a newline in that text is an execution surface.
+W="$(world "$TMP/w-inject")"
+crane_stub "$W/crane" inject
+out="$(run_gate "$W")"; rc=$?
+if [[ "$rc" -ne 0 ]] && ! grep -qE '^::add-mask::' <<<"$out"; then
+  pass "injection guard: a workflow command inside registry stderr never reaches its own line"
+else
+  fail "registry stderr must be newline-collapsed or the runner executes what the registry sent" "$rc" "$out"
 fi
 
 # ── Structural properties. ──────────────────────────────────────────────────────────────────
 STRIP="$TMP/gate-nocomments.sh"
 grep -vE '^[[:space:]]*#' "$GATE" > "$STRIP" || { echo "harness: could not strip comments" >&2; exit 2; }
+
+# (c) — the third leg of the no-A5 contract, deferred to here because it needs $STRIP. The
+#     source must not name the retired knobs outside commentary. Comments-stripped, so the
+#     explanatory block recording WHY there is no A5 cannot false-fail its own guard: that is
+#     the bare-token trap (cq-assert-anchor-not-bare-token), and this file is exactly the shape
+#     that trips it — a guard forbidding a literal that the same file must also document.
+if ! grep -qE 'REGISTRY_(GATE_SINK_CMD|SINK_PROBE_CMD)' "$STRIP"; then
+  pass "no-A5: the retired sink knobs appear nowhere in executable source"
+else
+  fail "the gate still reads a retired sink knob" "?" \
+    "$(grep -nE 'REGISTRY_(GATE_SINK_CMD|SINK_PROBE_CMD)' "$STRIP")"
+fi
 
 # The mask emit must be Actions-scoped: outside a runner `::add-mask::` is a plain echo that
 # prints the live prd credential to the operator's terminal, and the runbook tells them to run
@@ -543,7 +650,7 @@ fi
 
 out="$(REGISTRY_GATE_HEALTH_CMD="$W/health" REGISTRY_GATE_CRANE_CMD="$W/crane" \
        REGISTRY_GATE_RESTORE_CMD="$W/restore" REGISTRY_GATE_DRIFT_CMD="$W/drift" \
-       REGISTRY_GATE_SINK_CMD="$W/sink" APP_DOMAIN_BASE=soleur.ai \
+       APP_DOMAIN_BASE=soleur.ai \
        ZOT_PUSH_USER=u ZOT_PUSH_TOKEN=t bash "$GATE" 2>&1)"; rc=$?
 if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -qF -- "--rehearse-target"; then
   pass "--rehearse-target is required for a verdict (A2 cannot be skipped)"

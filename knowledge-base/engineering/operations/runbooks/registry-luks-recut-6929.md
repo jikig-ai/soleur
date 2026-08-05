@@ -60,12 +60,20 @@ where this host runs (#6460). A recut dispatched while that holds aborts at the 
 | **A2** | **The restore is rehearsed into a throwaway registry and blob-verified** — this is the pass condition | ABORT |
 | **A3** | Non-vacuity floor: the required set is fully resolved | ABORT |
 | **A4** | Sink credential graded live at the Cloudflare Access edge | ABORT only on a **measured** dead count |
-| **A5** | Live write probe against prod zot | **Availability failures DEGRADE and proceed**; only authorisation/correctness failures abort |
 
-A5's asymmetry is deliberate and is the single most important thing to understand before editing
-the gate: a sink that resets, times out or 5xxes is the *motivating condition* for a recut, so
-aborting on it would deadlock the recovery. A sink that **rejects the credential** is different in
-kind — it means the post-destroy restore cannot work however healthy the rebuilt host is.
+**Nothing in this gate observes production zot before destroying it, and that is deliberate.** A
+draft carried a live write probe ("A5") against prod zot. It was removed by architecture ruling
+(ADR-169) because its only distinctive abort arm — an htpasswd credential rejection — fires on a
+divergence the recut itself repairs: `/etc/zot/htpasswd` is baked at boot from Doppler, and the
+recut replaces the host, re-baking it from the same value in the same apply. A5 would have blocked
+the recovery on the condition the recovery cures, and sent you to "rotate `ZOT_PUSH_*`" when the
+remedy was the dispatch you were already running.
+
+What still covers each half: the **Cloudflare Access edge** credential survives the destroy and is
+graded pre-destroy by A4, which ABORTS on a measured dead count. The **htpasswd** credential does
+not survive the destroy, and is exercised post-destroy by `registry_store_restore` against the host
+it actually applies to — with a non-retryable exit `5` that names rotation as the remedy (see the
+restore exit-code table below).
 
 ---
 
@@ -180,8 +188,6 @@ The job prints a line of counters before it decides. Find your case here.
 | `registry-pull-path-health: A2 ABORT` | The **rehearsed restore failed**, so the pass condition was never established. The message names the restore engine's exit code. | **Nothing was destroyed.** Map the code with the restore table below — the rehearsal exercises the same engine the real restore uses. |
 | `registry-pull-path-health: A3 ABORT` | The inventory came in below its declared floor — fewer required images resolved than production depends on. | **Nothing was destroyed.** This is the anti-vacuity guard; the message names which pin was missed. Do not lower the floor to get past it. |
 | `registry-pull-path-health: A4 ABORT` | The registry-push Cloudflare Access token is **measured dead**. | **Nothing was destroyed.** This is the one arm where rotation genuinely is the remedy. Rotate the CF Access service token, then re-fire. `unverifiable`/`unmeasured` do **not** abort and are not accusations — do not rotate on those. |
-| `registry-pull-path-health: A5 ABORT` | Prod zot is reachable but **rejected the credential**, or a probe write landed the **wrong digest**. | **Nothing was destroyed.** An authorisation or correctness failure means the post-destroy restore cannot work however healthy the rebuilt host is. Fix `ZOT_PUSH_*` before re-firing. |
-| `sink_probe=unmeasured` in the verdict line | A5 could not measure the live sink (reset, timeout, 5xx, tunnel down). **This is not an error.** | Proceed. Availability failures of the sink are the *motivating condition* for a recut; aborting on them would deadlock the recovery. The degradation is logged deliberately. |
 | `volume_provisioned=0` | The plan would **keep** the volume — the exact footgun above. | Do not force it. Re-fire this dispatch (it supplies the `-replace` flags). If it repeats, the resource is missing from state — reconcile before retrying. |
 | `volume_id_mismatch=1` | The address points at a **different** volume than you authorized. | **Stop.** Do not re-fire with a different id until you know why state disagrees with reality. |
 | `luks_key_touched=1` | The encryption key is not in the isolated Doppler config yet, so Terraform wants to create it. | Run the operator's untargeted apply (the `OPERATOR_APPLIED_EXCLUSIONS` contract) so the key lands, then re-fire. |
