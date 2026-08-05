@@ -593,10 +593,59 @@ EOF
 )"
 run_case "F15 filename inside a span is neutralized, the span is not" 1 "$f"
 
+# F16 — #7286. THE FORM RUNBOOKS ACTUALLY USE, and the one this linter was blind to for its
+# entire life. Runbooks do not write "you ssh into the host"; they paste the command inside a
+# fence, and fenced content was skipped wholesale. Measured on origin/main: the inngest-server
+# runbook carried SEVEN of these and the linter returned "OK: no human-run infra steps", exit 0
+# — so the gate enforcing hr-no-ssh-fallback-in-runbooks could not fail for its primary form.
+# Note the actor/imperative pair is entirely INSIDE the fence: no prose line supports it, which
+# is exactly why the pre-#7286 scanner saw nothing.
+f="$(mkcase <<'EOF'
+# Runbook
+
+Check the service:
+```
+ssh root@<host> 'systemctl restart inngest-server.service'
+```
+EOF
+)"
+run_case "F16 a fenced host-login command FAILS (fence skip must not hide it)" 1 "$f"
+
+# F17 — SCOPE BOUND on F16, and the reason the fence exception is one regex rather than the
+# whole ruleset. The blanket skip exists to stop example code and workflow filenames tripping
+# the sentinel (#6771). A fenced line carrying a strong actor + imperative but NO host-login
+# command must still pass, or F16's fix silently re-opens that class across the corpus.
+f="$(mkcase <<'EOF'
+# Runbook
+
+Example output:
+```
+the operator runs terraform apply by hand
+```
+EOF
+)"
+run_case "F17 fenced non-ssh content still skipped (the #6771 class stays closed)" 0 "$f"
+
+# F18 — the unfenced prose form must keep working. `ssh root@` in a sentence was ALSO unmatched
+# before #7286 (the old alternation only covered `ssh into|onto|to|-i`), so this pins the
+# ACTOR_RES half of the fix independently of the fence half. If someone reverts one, exactly one
+# of F16/F18 goes red, which localizes the regression.
+# `ssh root@web-1` is the ONLY actor token on this line (no "you"/"operator"/"by hand"), and
+# `systemctl restart` supplies the imperative — so this fixture isolates the ACTOR_RES half
+# exactly. Verified against origin/main's linter: it returns exit 0 here, because the old
+# alternation `ssh(?:\s+into|\s+onto|\s+to|\s+-i)` does not match `ssh root@`.
+f="$(mkcase <<'EOF'
+# Runbook
+
+Then ssh root@web-1 'systemctl restart inngest-server.service' to bring it back.
+EOF
+)"
+run_case "F18 unfenced 'ssh user@host' prose FAILS (ACTOR_RES half)" 1 "$f"
+
 # ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=45
+MIN_CASES=48
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

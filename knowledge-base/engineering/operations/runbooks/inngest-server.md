@@ -17,6 +17,55 @@ Per ADR-030 the Inngest server runs as a single-host SQLite-backed durable trigg
 | Cron bug-fixer manual trigger | [§ Cron bug-fixer](#cron-bug-fixer) |
 | Fire any cron on demand | [§ On-demand cron trigger (HTTP)](#on-demand-cron-trigger-http--primary) |
 | Dedicated-host cutover (#6178) | [§ Dedicated-host cutover](#dedicated-host-cutover-phase-2-opexecute-gated-sequence--ref-6178) |
+| Read ANY host/unit state | [§ Reading host state without SSH](#reading-host-state-without-ssh) |
+
+## Reading host state without SSH
+
+Every unit state, journal tail and file-identity fact this runbook needs comes from **one
+authenticated GET**. This section is the single recipe; the rest of the runbook references it
+rather than repeating a host login.
+
+```
+WS=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terraform --plain)
+CID=$(doppler secrets get CF_ACCESS_CLIENT_ID -p soleur -c prd_terraform --plain)
+CSEC=$(doppler secrets get CF_ACCESS_CLIENT_SECRET -p soleur -c prd_terraform --plain)
+HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WS" | sed 's/.*= //')
+curl -fsS -H "X-Signature-256: sha256=${HMAC}" \
+  -H "CF-Access-Client-Id: ${CID}" -H "CF-Access-Client-Secret: ${CSEC}" \
+  "https://deploy.soleur.ai/hooks/deploy-status" > /tmp/ds.json
+jq -e '.host_id == "hetzner-123931471"' /tmp/ds.json   # ASSERT FIRST — see below
+jq '.services' /tmp/ds.json
+```
+
+**Assert `.host_id` BEFORE believing any field — this is not optional.** `deploy.soleur.ai` is
+a Cloudflare Tunnel hostname and Cloudflare picks a connector per edge colo, so a read can be
+answered by a *different* host than you meant. A redis-healthy answer from a peer is otherwise
+indistinguishable from a fixed host; #6425 cost 16 hours of false alarms to exactly this.
+
+Fields this runbook uses (all under `.services`):
+
+| Field | Answers |
+|---|---|
+| `inngest_server`, `inngest_redis` | unit states (see the caveat below) |
+| `inngest_journal_tail`, `inngest_redis_journal_tail`, `inngest_heartbeat_journal_tail` | the unit's own stderr, scrubbed |
+| `inngest_redis_result` | `Result`/`ExecMainStatus`/**`NRestarts`**/`ActiveEnterTimestamp` |
+| `inngest_redis_dropin` | the drop-ins systemd has actually **loaded** |
+| `inngest_redis_credfile` | credential presence + mtime + length (never the value) |
+| `inngest_redis_datadir`, `inngest_redis_binary` | data-dir ownership; redis version + distro-unit state |
+| `inngest_redis_tail_status` | `ok` / `empty` / `no-journalctl` / `unit-unknown` |
+| `vector_config_identity` | on-host `vector.toml` sha256 — is the log shipper's config current? |
+| `inngest_heartbeat_timer` | the durable heartbeat liveness signal |
+
+**A single unit-state sample is a coin flip on a crash-looping unit.** `RestartSec=5` against
+systemd's default `StartLimitBurst` means a failing unit never latches `failed` — it cycles
+`activating`/`active` forever. During #7286 three probes 8 seconds apart reported
+`degraded, degraded, durable` on a unit that was down for 16 hours. Read `NRestarts` from
+`inngest_redis_result` across two calls ≥60s apart: **stable `NRestarts` is the healthy
+signal, not `is-active`.**
+
+If the endpoint itself returns non-2xx it now returns its stderr in the body (every read hook
+carries `include-command-output-in-response-on-error`), so an error is diagnosable rather than
+an empty response.
 
 ## On-demand cron trigger (HTTP — PRIMARY)
 
@@ -79,20 +128,19 @@ After `terraform apply` against a fresh `hcloud_server.web`, the inngest-server 
 BetterStack emails `ops@jikigai.com` when the heartbeat is silent past the 30-second grace period. Triage:
 
 1. **Confirm the alert is real** — `curl https://uptime.betterstack.com/api/v2/heartbeats/460830 -H "Authorization: Bearer $(doppler secrets get BETTERSTACK_API_TOKEN -p soleur -c prd_terraform --plain)" | jq '.data.attributes.status'` should return `"paused"` (planned) or `"down"` (alert state).
-2. **Check the service:**
-   ```
-   ssh root@<host> 'systemctl status inngest-server.service inngest-heartbeat.timer'
-   ```
+2. **Check the service** — [§ Reading host state without SSH](#reading-host-state-without-ssh), then read
+   `.services.inngest_server` and `.services.inngest_heartbeat_timer`.
    - Both inactive → the bootstrap never completed. Re-fire the deploy webhook.
-   - `inngest-server` active, `inngest-heartbeat.timer` inactive → restart the timer:
-     ```
-     ssh root@<host> 'systemctl restart inngest-heartbeat.timer'
-     ```
-   - Both active → check journalctl for the heartbeat service:
-     ```
-     ssh root@<host> 'journalctl -u inngest-heartbeat.service -n 20'
-     ```
-     Typical failure: missing `INNGEST_HEARTBEAT_URL` in Doppler prd, or Doppler CLI auth on the host expired.
+   - `inngest-server` active, `inngest-heartbeat.timer` inactive → **re-fire the deploy webhook.**
+     `inngest-bootstrap.sh:889` runs `systemctl enable --now inngest-heartbeat.timer` on every
+     co-located deploy, so a deploy re-asserts the timer. There is deliberately no dedicated
+     timer-restart verb: `ci-deploy.sh` accepts `deploy|restart|quiesce|enable`, and `restart`
+     is scoped to component `inngest` (inngest-server) only. Adding a timer verb would widen the
+     root-run allowlisted surface for a case a deploy already covers.
+   - Both active → read `.services.inngest_heartbeat_journal_tail` from the *same* payload
+     (#6536 gave the unit `SyslogIdentifier=inngest-heartbeat` precisely so this tail exists).
+     Typical failure: missing `INNGEST_HEARTBEAT_URL` in Doppler prd, or Doppler CLI auth on the
+     host expired — both visible in that tail.
 3. **Confirm the URL is fresh:**
    ```
    terraform -chdir=apps/web-platform/infra output -raw inngest_heartbeat_url
@@ -176,15 +224,17 @@ orphaning the scan). Triage off-box (no SSH):
    (the `registry_empty` precondition check in the `verify)` arm of `cutover-inngest.yml`) — that is a verdict, not a transport hang, and a green op=verify
    job is a post-#6178 concern. Do NOT read a `registry_empty` halt as a pre-flight hang.
 
-### Last-resort (host login)
+### Inspecting inngest-server's connection log
 
-Only after the three no-SSH steps above fail to resolve the pressure, inspect
-inngest-server's own connection count on the host:
+Only after the three steps above fail to resolve the pressure, inspect inngest-server's own
+connection count — via [§ Reading host state without SSH](#reading-host-state-without-ssh):
+
 ```
-ssh root@<host> 'journalctl -u inngest-server.service -n 50 | grep -i "conn\|pool\|EMAXCONN"'
+jq -r '.services.inngest_journal_tail' /tmp/ds.json | tr '|' '\n' | grep -iE 'conn|pool|EMAXCONN'
 ```
-A host-level restart is the WRONG lever here (it worsens `EMAXCONNSESSION`); the
-host login is for log inspection only, not remediation.
+
+The tail is `|`-folded in the payload, hence the `tr`. A host-level restart is the WRONG lever
+here (it worsens `EMAXCONNSESSION`); this step is log inspection only, not remediation.
 
 ## External watchdog: functions-query degraded + restart `lock_contention` — #6407
 
@@ -255,10 +305,17 @@ Both `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY` are TF-generated via `random_
    ```
    doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform -chdir=apps/web-platform/infra apply -replace=doppler_secret.<KEY>
    ```
-4. Restart the application + inngest-server so they pick up the new value:
-   ```
-   ssh root@<host> 'systemctl restart soleur-web-platform inngest-server.service'
-   ```
+4. Restart the application + inngest-server so they pick up the new value — **two existing
+   no-SSH verbs, no host login:**
+   - web-platform: re-run `web-platform-release.yml`. The container is swapped, which IS the
+     restart (`ci-deploy.sh` rejects `restart web-platform` by design — "web-platform restart is
+     docker-level").
+   - inngest-server: dispatch `restart-inngest-server.yml`, which sends the `restart inngest`
+     verb (`ci-deploy.sh:2354`).
+
+   Confirm with [§ Reading host state without SSH](#reading-host-state-without-ssh): `.reason`
+   should read `success`, and `.services.inngest_server` should be `active` with
+   `.services.inngest_redis_result` showing a **stable** `NRestarts` across two reads.
 
 <!-- lint-infra-ignore end -->
 
@@ -333,10 +390,9 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    ```
    echo 'true' | doppler secrets set SOLEUR_FR5_ENABLED -p soleur -c prd --no-interactive
    ```
-4. Restart the web platform so it re-reads:
-   ```
-   ssh root@<host> 'systemctl restart soleur-web-platform'
-   ```
+4. Restart the web platform so it re-reads — re-run `web-platform-release.yml`. The container
+   swap IS the restart; `ci-deploy.sh` deliberately rejects `restart web-platform` because a
+   web-platform restart is docker-level, not systemd-level. No host login is involved.
 
 ## Unpause heartbeat
 
@@ -373,15 +429,26 @@ unset TOKEN
 
 The Inngest SQLite store at `/var/lib/inngest/main.db` grows over time with retained events. There is no built-in rotation. At alpha-internal volume (~1k events/day × ~2KB avg), the store grows ~60MB/month — benign for ~1 year, then unbounded.
 
-**Cleanup procedure** (when `du -sh /var/lib/inngest/` exceeds ~500MB OR before the host's volume usage triggers `disk-monitor.sh` alerts):
-```
-ssh root@<host> 'systemctl stop inngest-server.service && \
-  sqlite3 /var/lib/inngest/main.db "DELETE FROM events WHERE ts < datetime(\"now\",\"-30 days\"); VACUUM;" && \
-  systemctl start inngest-server.service'
-```
-Stopping inngest-server before VACUUM is required (SQLite write lock). Downtime ~5s for typical store sizes; longer for stores >1GB.
+**This procedure is SUPERSEDED on any host running the durable backend, which is every
+production host today.** Measured on web-1 (`hetzner-123931471`) while writing this:
+inngest-server logs `initialized database db=postgres` and `using external redis` on every
+start, so events live in Supabase Postgres and the queue/run-state lives in Redis —
+`/var/lib/inngest/main.db` is not the event store. `--sqlite-dir /var/lib/inngest` remains in
+argv in BOTH forms (`inngest-bootstrap.sh:799`), so the directory's continued existence is not
+evidence that it holds events. Deleting rows from it would reclaim nothing and stop nothing.
 
-**Automation deferred:** the operator runs this manually for now. If event volume increases to where monthly manual cleanup becomes a chore, file a follow-up issue to wire a weekly systemd timer alongside `inngest-heartbeat.timer`.
+**Monitoring, no SSH:** root-disk headroom is already reported by
+[§ Reading host state without SSH](#reading-host-state-without-ssh) as
+`.journald_storage.root_avail` and `.journald_storage.inngest_store_bytes`, and `disk-monitor.sh`
+pages independently on volume pressure. Read those rather than logging in to run `du`.
+
+**If a host is ever run on the SQLite form** (the #5547 fail-safe, i.e. `.reason` reads
+`success_degraded_durability`), the retention question returns and there is **no no-SSH verb for
+it today**: `ci-deploy.sh` accepts `deploy|restart|quiesce|enable` only, and adding a
+stop-VACUUM-start verb would widen the root-run allowlisted surface for a case that is currently
+hypothetical. That gap is tracked rather than papered over with a host login — see the
+follow-up issue linked from the #7286 PR. The correct response to a degraded-durability host is
+to fix the durability regression, not to prune its fallback store.
 
 ## Durable backend (Supabase Postgres + self-hosted Redis) — #5450
 

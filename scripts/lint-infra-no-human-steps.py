@@ -91,6 +91,16 @@ ACTOR_RES = tuple(
         r"\bfounder\b",                       # the founder
         # ssh into / onto / to / `ssh -i` — a human opening a remote shell.
         r"\bssh(?:\s+into|\s+onto|\s+to|\s+-i)\b",
+        # #7286 — THE FORM RUNBOOKS ACTUALLY USE, and the one this linter could not see.
+        # The prose alternation above matches "you ssh into the host" but NEVER the literal
+        # command a runbook pastes: `ssh root@<host> '...'`. Measured before this line existed:
+        # `lint-infra-no-human-steps.py knowledge-base/.../runbooks/inngest-server.md` returned
+        # "OK: no human-run infra steps", exit 0, with SEVEN `ssh root@` instructions present —
+        # including the one telling an operator to read inngest-server's journal by logging into
+        # the box, which is exactly the procedure #7286 needed and could not use.
+        # So the gate that exists to enforce hr-no-ssh-fallback-in-runbooks was, for the
+        # user@host form, incapable of failing.
+        r"\bssh\s+\S*@",
         r"\blog into\b.*?\bconsole\b",        # log into … console
         r"\bby hand\b",                       # by hand
         r"\bmanually\b",                      # manually
@@ -159,9 +169,22 @@ STRONG_ACTOR_RE = re.compile(
     r"|\byourself\b"
     r"|\byour laptop\b"
     r"|\bssh(?:\s+into|\s+onto|\s+to|\s+-i)\b"
+    # #7286 — mirrored from ACTOR_RES. `ssh user@host` is an UNAMBIGUOUS human-agency signal:
+    # nothing in this repo's automated paths shells out to a literal `ssh root@<host>` from a
+    # runbook, so unlike bare `operator`/`you` this cannot re-open the #6771 filename false
+    # positive. It must be in the STRONG set too, or a line whose only other imperative lives
+    # inside a filename gets neutralized and the ssh instruction goes silent.
+    r"|\bssh\s+\S*@"
     r"|\b(?:founder|operator|admin|maintainer|sysadmin|engineer)\s+runs?\b",
     re.IGNORECASE,
 )
+
+# #7286 — a literal remote-shell command (`ssh root@<host> '...'`). This is the ONLY signal
+# permitted to survive the fence skip in scan_text, because it is the form runbooks actually
+# use and the form this linter was structurally blind to. Kept separate from ACTOR_RES/
+# STRONG_ACTOR_RE so the fence exception can never widen by accident: adding a pattern there
+# does not add it here.
+HOST_LOGIN_RE = re.compile(r"\bssh\s+[A-Za-z0-9._%+-]*@", re.IGNORECASE)
 
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
@@ -249,6 +272,37 @@ def scan_text(text: str) -> tuple[list[int], list[str]]:
                 in_fence = False
             continue
         if in_fence:
+            # #7286 — ONE exception to the wholesale fence skip, and the reason
+            # hr-no-ssh-fallback-in-runbooks was unenforceable for its canonical form.
+            #
+            # Runbooks do not write "you ssh into the host" — they PASTE THE COMMAND, inside a
+            # fence, which is the one place this scanner never looked:
+            #
+            #     2. **Check the service:**
+            #        ```
+            #        ssh root@<host> 'systemctl status inngest-server.service'
+            #        ```
+            #
+            # Measured on origin/main before this branch: the inngest-server runbook carried
+            # SEVEN such instructions and `lint-infra-no-human-steps.py` returned
+            # "OK: no human-run infra steps", exit 0. Extending ACTOR_RES with `ssh \S*@` (done
+            # above, and still correct for prose) changed NOTHING, because the lines were never
+            # reachable. The regex was the visible half of the defect; this skip was the half
+            # that actually mattered.
+            #
+            # SCOPED DELIBERATELY NARROW. Only a literal host-login command survives the skip —
+            # not actors, not imperatives, not ignore markers. A fenced `ssh user@host` in a
+            # runbook is a PRESCRIBED STEP, never illustrative: verified by scanning the whole
+            # production corpus, where the only hits are genuine host-login instructions. The
+            # blanket skip stays for everything else, so the #6771 example-code false-positive
+            # class is untouched.
+            #
+            # Sets BOTH actor and imperative: the line is self-contained (a human opening a
+            # remote shell AND running a command), so it flags on same-line co-occurrence and
+            # does not depend on an adjacent prose line that a fence would have hidden anyway.
+            if HOST_LOGIN_RE.search(raw):
+                actor[i] = True
+                imper[i] = True
             continue
 
         # 3. Ignore-region markers (HTML-comment shape, outside fences only).
