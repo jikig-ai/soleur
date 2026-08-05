@@ -161,7 +161,13 @@ The parent asked for the remaining `user_data` headroom against Hetzner's hard 3
 | `main` today | **34,628 B** | **−1,860 B (OVER CAP)** |
 | after PR #7280 (`local.registry_rationale_strip`) | **9,072 B** | **23,696 B** |
 
-**This PR's own byte delta is ~+10 B, and it is the only delta.**
+**MEASURED 2026-08-05, superseding the estimates below.** The unstripped delta is
+**+1,272 B** (merge base 34,800 B -> branch 36,072 B; both figures re-measured with the PR's
+own `registry-userdata-budget.sh`, and the branch figure moves as rationale prose is edited —
+it read 36,404 B after the review fixes). The **stripped** delta, which is the regime the
+apply can actually occur in, is **+136 B**. The "~+10 B" estimate below was the tag alone and
+was never the whole delta; the "-1,860 B" figure quoted for `main` was superseded by the
+measured **-2,032 B**. Both are kept only as the reasoning trail — read AC7 for the numbers.
 
 - The digest strings are fixed-length (`sha256:` + 64 hex) — an amd64→amd64 swap is byte-identical.
 - Adding the version tag to the reference (`…zot-linux-amd64:v2.1.20@sha256:…`, §Deliverable 1) adds **~10 raw bytes**, and only for the *selected* arch — `local.zot_image` renders one of the two.
@@ -369,10 +375,30 @@ liveness_signal:
   configured_in: "apps/web-platform/infra/cloud-init-registry.yml (LINE= assembly, and the
                   zot-liveness-heartbeat.timer unit)"
 error_reporting:
-  destination: "Better Stack Logs (zot_last_err + zot_last_err_src, 3 ranked tiers) and
-                Sentry via the cloud-init boot fatal-emit trap (model.c4 hetzner -> sentry)"
+  destination: "Better Stack Logs ONLY, via the host's own cron POSTing directly to
+                ${betterstack_ingest_url} (source 2457081). CORRECTED after review: the first
+                draft also cited 'Sentry via the cloud-init boot fatal-emit trap'. That trap
+                is on the WEB host; `grep -ci sentry cloud-init-registry.yml` is 0. This host
+                has no Sentry emitter, no Vector agent and no SSH. Consequence, and it splits:
+                a FATAL *after* the Doppler runcmd still emits a heartbeat carrying
+                state_status=unknown / zot_image_digest=unknown / exit_code=-1, so it is
+                distinguishable from host-down; a FATAL *before* it means the cron's
+                `. /etc/default/registry-doppler` exits and there is ZERO telemetry, which is
+                byte-identical to host-down. Only heartbeat ABSENCE catches that second case."
   fail_loud: true
 failure_modes:
+  - mode: "The apply is fired while the rendered user_data is OVER Hetzner's 32,768 B cap.
+           hcloud rejects the CREATE *after* the DESTROY has already succeeded, so the
+           registry is STRANDED and the sole pull path is dark with no forward and no back
+           -- the rollback lever is a second create subject to the same cap. This is the
+           most severe mode reachable from this change and the first draft did not enumerate
+           it at all, so it named no layer."
+    detection: "bash apps/web-platform/infra/registry-userdata-budget.sh (offline, no creds);
+                now a standing job in infra-validation.yml. Measured 2026-08-05: main -2,032 B,
+                this branch ~-3.6 kB. PRE-EXISTING -- this PR inherits it, #7280's
+                registry_rationale_strip is the fix."
+    alert_route: "the job's own visible status, plus #7287 carrying the absolute check as a
+                  hard precondition ABOVE the dispatch path"
   - mode: "The pin is bumped in the repo but production still runs v2.1.2 (the EXPECTED steady
            state until B1-B3 clear). Today this is INVISIBLE: nothing in telemetry reports
            which image is running."
@@ -414,9 +440,20 @@ discoverability_test:
       --since 1h --grep SOLEUR_ZOT_DISK | grep -o 'zot_image_digest=[^ ]*' | sort -u
   expected_output: |
     1. "RESULT: N passed, 0 failed"
-    2. Pre-apply (expected until B1-B3 clear): the v2.1.2 digest 073f30d9… (amd64).
-       Post-apply: 95a837a0… . Divergence between (2) and the repo pin is the
-       staged-not-applied state, and it is now MEASURABLE rather than assumed.
+    2. THREE outcomes, and the first is the EXPECTED one today:
+       - rows present but NO `zot_image_digest=` field  -> the host is alive on an OLDER
+         user_data generation, i.e. NOT APPLIED. This is the expected pre-apply state.
+       - zero SOLEUR_ZOT_DISK rows                      -> host dark, or egress broken.
+       - `zot_image_digest=073f30d99fbd`                -> applied, running the OLD pin.
+       - `zot_image_digest=95a837a0afac`                -> applied, running the new pin.
+       CORRECTED after review: the first draft said the pre-apply query returns the v2.1.2
+       digest. It CANNOT. The field ships INSIDE user_data alongside the pin, so it does not
+       exist on a host booted from the previous generation -- it arrives WITH the replace,
+       the same event that applies the pin. Proven, not reasoned: zot_uptime_s and
+       zot_last_err_src landed on main 2026-08-04 via the identical write_files path and are
+       absent from the live rows. So this field can never make the staged-not-applied state
+       visible; what it does is identify the running binary AFTER the apply and discriminate
+       crash-loop causes. Empty is therefore not a failure, and #7287 says so.
 ```
 
 **No `ssh` verb appears in any command above** (`hr-no-ssh-fallback-in-runbooks`). The registry host has no SSH ingress at all — the tunnel's `ssh.` route reaches web-1, not the registry (#7278) — which is precisely why the `zot_image_digest` field is load-bearing rather than a nicety: without it, "is the new zot running?" is unanswerable by any means available to this project.
@@ -429,7 +466,7 @@ The registry host is a **blind execution surface**: deny-all-public firewall, no
 
 **If this lands broken, the user experiences:** the sole pull path goes dark on the next registry reprovision. `cloud-init-registry.yml`'s readiness loop never sees `/v2/` answer, the host boots without a serving zot, and **every production deploy fails at image pull** — plus any web host replaced in that window cannot boot at all. The concrete artifact is a stalled `Web Platform Release` run and a production `build_sha` frozen behind main. This is not hypothetical: #7247 is the same failure shape, measured at 22 hours and 6 blocked releases.
 
-**If this leaks, the user's workflow is exposed via:** a wrong or hostile digest on the sole pull path. Every image the fleet runs would transit a registry binary nobody verified. The mitigations are the reason `automerge: false` is the load-bearing line of the Renovate change: digest pinning + human review + the sidecar's recorded `crane digest` provenance. No user PII is touched by this change.
+**If this leaks, the user's workflow is exposed via:** a wrong or hostile digest on the sole pull path. Every image the fleet runs would transit a registry binary nobody verified. The mitigations actually in this diff are: per-arch digest pinning; the **digest<->repository probe** in the `rule-audit.yml` poll, which is the only thing that catches a swap applied coherently to both files (measured: correct pairing HTTP 200, swapped HTTP 404); the arch-keyed offline checks, which catch a swap in one file relative to the other; the sidecar's recorded `crane digest` provenance and version floor; and a human-opened, CI-gated, CLA-checked PR, because nothing here auto-writes the pin. (This sentence previously cited `automerge: false` as "the load-bearing line of the Renovate change" — first-draft residue in the one section the CPO signs. There is no Renovate change; this PR deletes that config.) No user PII is touched by this change.
 
 **Brand-survival threshold:** `single-user incident`.
 
@@ -596,7 +633,7 @@ Both are **measurements**, so both are re-measured, not re-reasoned (`hr-verify-
 - **Join the field into the EXISTING `docker inspect` call — do not add a second one.** The probe already runs one call, and the file's own comment records that as a deliberate decision: *"StartedAt joins THIS call rather than getting its own (#7247). A second `docker inspect` …"*. The existing format string is `'{{.Id}} {{.RestartCount}} {{.State.Status}} {{.State.OOMKilled}} {{.State.ExitCode}} {{.State.StartedAt}}'`; append **`{{.Config.Image}}`** and widen the `read -r` that consumes it.
   - **`.Config.Image`, not `RepoDigests`.** `RepoDigests` is a field of the *image* object, so it would require a second inspect against a different object — the thing the #7247 comment forbids. `.Config.Image` is on the *container* object and carries the exact reference the container was created with, i.e. the pin itself.
   - Keep the emitted field short: extract the digest's leading 12 hex chars (`zot_image_digest=95a837a0afac`), not the ~90-char full reference. 12 hex is unambiguous against a known pin set and keeps the line bounded.
-  - The existing failure arm already sets sentinels (`ID=; ZOT_RESTARTS=-1; STATE_STATUS=unknown; …`) when the inspect fails — add `ZOT_IMAGE_DIGEST=none` to that same arm rather than inventing a separate fallback, so a dead container reports `none` by the same path as every sibling field.
+  - The existing failure arm already sets sentinels (`ID=; ZOT_RESTARTS=-1; STATE_STATUS=unknown; …`) when the inspect fails — add `ZOT_IMAGE_DIGEST=unknown` to that same arm rather than inventing a separate fallback, so a dead container reports `unknown` by the same path as every sibling field.
 - **Field placement is load-bearing.** `zot_last_err` must stay **LAST** — the file's own comment says so, and `scripts/lib/zot-telemetry-parse.sh` strips the literal ` zot_last_err=` tail to bound its trusted region. Insert `zot_image_digest=` **before** it, next to `boot_id`.
 - Byte cost accounted in §Byte budget.
 
@@ -675,7 +712,6 @@ After the `.c4` edits, run `apps/web-platform/test/c4-code-syntax.test.ts` and `
   **This AC was drafted at ≤ 120 B before measuring and the measurement came back 136 B.** The bound is corrected to 160 B rather than the measurement being trimmed to fit, because 136 B buys the only off-host answer to "did the bump land" on a shell-less host; and the correction is recorded rather than silently applied, since a bound quietly relaxed to match its result is not a bound. Do not widen it further without the same treatment.
   **The unstripped +1,272 B is rationale prose and must NOT be traded away for bytes** (§Byte budget): #7280's `local.registry_rationale_strip` removes comments *before* measurement, so it goes to ~0 the moment #7280 lands — and until #7280 lands no host can be created at any size, because the absolute is already breached on `main` (see below).
   **The absolute is NOT dropped — it moves to where it binds.** BOTH bases exceed the 32,768 B cap unstripped (merge base −2,032 B, branch −3,304 B). **This PR does not create that breach; it inherits it**, and it independently confirms §Byte budget's claim that **#7280 is a de-facto prerequisite for the bump to ever apply**. `rendered < 32768` is therefore carried as a **hard, copy-pasteable precondition in the Phase 9 tracking issue**, above the dispatch path. Firing host-replace over-cap means hcloud rejects the create **after** the destroy succeeded — a stranded registry, which is the §Rollback one-way door reached by arithmetic.
-  **The absolute is NOT dropped — it moves to where it binds.** A delta-only AC lets this PR merge without ever asserting the apply is *possible*; on today's `main` the absolute is breached by 1,860 B. So `rendered < 32768` is carried as a **hard, copy-pasteable precondition in the Phase 9 tracking issue**, above the dispatch path. Firing host-replace over-cap means hcloud rejects the create **after** the destroy succeeded — a stranded registry, which is the §Rollback one-way-door scenario reached by arithmetic.
 - **AC8.** The two version-scoped claims name the measured version, and **zero** line-number citations into `zot-registry.tf` remain **in live code**:
   ```bash
   grep -rnE 'zot-registry\.tf:[0-9]+' apps/    # must return nothing
@@ -771,8 +807,8 @@ Stating this honestly costs nothing and is the difference between a reviewer see
 | v2.1.20 breaks on this exact config in a way source-reading missed | Phase 6 runs the pinned image locally with the repo's exact config before shipping. Post-apply, `zot_image_digest` × `zot_last_err_src` × `zot_restarts` discriminate in one event; `scheduled-zot-restart-loop.yml` already alarms on recurrence. |
 | The pin sits staged indefinitely because nobody notices it never applied | This is the failure the `zot_image_digest` field exists to make visible; before it, "is the new zot running?" was unanswerable on a shell-less host. **The `action-required` issue alone is NOT sufficient and must not be cited as if it were:** `operator-digest` is a **manually invoked skill** (no workflow runs it), so "the digest will surface it" reduces to *a human remembering to run the digest that exists to remind them* — circular. The non-circular mechanism is the `rule-audit.yml` cron, which fires on its own schedule and is where the staged-vs-applied check belongs. |
 | #7280 lands first and AC7's absolute numbers shift | AC7 asserts a **delta**, which is base-independent; the absolute is recorded for context alongside which base it was taken on. |
-| The `zot_image_digest` derivation returns empty and the field ships as a silent blank | It rides the existing `docker inspect` call and its existing sentinel arm (`ZOT_IMAGE_DIGEST=none` beside `STATE_STATUS=unknown`), so a dead container reports `none` by the same path as every sibling field. Inserted before `zot_last_err`, so a blank cannot corrupt the trusted region `zot-telemetry-parse.sh` bounds. |
-| `zot_image_digest` is read as "the bump landed" when the container never started | `.Config.Image` reports the reference the container was *created with*. On a host that booted the new pin but whose zot crash-loops, the field reports the NEW digest while `state_status`/`exit_code`/`zot_restarts` report the failure — which is the correct discrimination, not a false positive. If no container exists at all, the field is `none`, not a stale digest. |
+| The `zot_image_digest` derivation returns empty and the field ships as a silent blank | It rides the existing `docker inspect` call and its existing sentinel arm (`ZOT_IMAGE_DIGEST=unknown` beside `STATE_STATUS=unknown`), so a dead container reports `unknown` by the same path as every sibling field. Inserted before `zot_last_err`, so a blank cannot corrupt the trusted region `zot-telemetry-parse.sh` bounds. |
+| `zot_image_digest` is read as "the bump landed" when the container never started | `.Config.Image` reports the reference the container was *created with*. On a host that booted the new pin but whose zot crash-loops, the field reports the NEW digest while `state_status`/`exit_code`/`zot_restarts` report the failure — which is the correct discrimination, not a false positive. If no container exists at all, the field is `unknown`, not a stale digest. |
 | Re-measuring the `ci-deploy.sh` 401 claim reveals v2.1.20 now answers 403 | Then `authz_denied` is a live arm, not a tripwire — Phase 6 stops and files rather than shipping a false comment. This is a genuine possible outcome of #4165, not a formality. |
 
 ## Sharp Edges

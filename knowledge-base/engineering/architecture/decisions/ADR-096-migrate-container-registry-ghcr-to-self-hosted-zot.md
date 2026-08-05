@@ -768,6 +768,15 @@ human to run `crane digest`. Two upstream panic fixes on the cosign-signature pa
 deployment exercises on every release (project-zot #4204, #4213, both shipping in v2.1.19)
 were sitting unadopted.
 
+> **STATE AT MERGE — the pin is STAGED, not applied.** Past tense above describes the repo,
+> not production. `zot-registry.tf` resources are `OPERATOR_APPLIED_EXCLUSIONS`, so merging
+> this is inert by construction: **the live registry still runs v2.1.2, and both panic fixes
+> remain unadopted in production**, until the `registry-host-replace` apply fires. That apply
+> is blocked on #7277 (the recut gate has no valid PASS condition), #7278, #6929, #7280 (the
+> rendered `user_data` is over Hetzner's 32,768 B cap), and Hetzner `cx23` stock. Tracked in
+> #7287. This paragraph stays true if the apply never fires — which is the point of writing
+> it: ADR-096 is what a reader consults to learn what the registry actually runs.
+
 **Decision.** Digest-pinning stays — it is the integrity guarantee and is not in question.
 What changes is that the pin now has a **named freshness owner** and a **named enforcement
 gate**, and neither is a human remembering.
@@ -823,6 +832,14 @@ Recorded because it existed nowhere before: revert both locals to the sidecar's
 registry, never from our own zot** — so a dark zot does not block its own replacement. That
 bootstrap paradox is now modeled explicitly (`zotRegistry -> projectZot` in `model.c4`).
 
-Constraint: the revert needs a second successful host create, subject to the same
-`stock_preflight_gate` that is ABORTing today. **Firing the apply is one-way with no
-capacity reservation**, and that must be accepted before it is fired.
+Constraints on the revert — all three, because the recovery leg is a second CREATE and is
+subject to every gate the forward leg is:
+
+1. **Stock.** `stock_preflight_gate` is ABORTing today. If capacity blocked the apply for
+   weeks, a same-day revert may be un-orderable. **Firing the apply is one-way with no
+   capacity reservation**, and that must be accepted before it is fired.
+2. **The byte cap.** The rendered `user_data` is over Hetzner's hard 32,768 B cap, so the
+   revert strands the registry for the same arithmetic reason the forward leg does. This was
+   omitted from the first draft of this amendment, which named only the stock gate.
+3. **#7277.** The recut gate has no valid PASS condition, and it sits on the same path — it
+   is the blocker the plan lists first, and it was also missing here.
