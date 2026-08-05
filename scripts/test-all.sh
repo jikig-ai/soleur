@@ -554,6 +554,11 @@ if want_scripts; then
   # D10 pre-destroy pull-path health gate (#6929) — refuses to destroy the zot store while the
   # GHCR fallback that covers its absence is itself degraded. Leads with a positive control.
   run_suite "tests/scripts/registry-pull-path-health" bash tests/scripts/test-registry-pull-path-health.sh
+  # Registered explicitly, next to its D10 sibling. Nothing auto-discovers tests/scripts/: this
+  # file's *.test.sh glob cannot match the `test-*` prefix, and scripts/lint-orphan-test-suites.sh
+  # covers scripts/*.test.sh only. An unregistered suite here runs in ZERO runners and is silent
+  # and green (#3366).
+  run_suite "tests/scripts/registry-restore-from-ghcr" bash tests/scripts/test-registry-restore-from-ghcr.sh
   # D11 post-apply liveness poller (#6929) — requires a heartbeat TRANSITION, since the monitor
   # reports the dead host's residual `up` for ~90s and exposes no last_ping_at.
   run_suite "tests/scripts/registry-heartbeat-poll" bash tests/scripts/test-registry-heartbeat-poll.sh
