@@ -439,6 +439,13 @@ if want_scripts; then
   # #6297 while the key is still unminted. The suite mutation-proves that guard, so a regression
   # to structural matching must redden CI rather than silently false-close a tracker.
   run_suite "scripts/anthropic-admin-key-6297" bash scripts/followthroughs/anthropic-admin-key-6297.test.sh
+  # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
+  # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
+  # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the
+  # sibling `SOLEUR_INFRA_CONFIG_RESTART_STDERR:` diagnostic rows, toward its PASS condition. So
+  # the probe would have closed the issue on the evidence of its own recurrence. The suite pins
+  # the action-vocabulary split and the freshness guard that a PASS now requires.
+  run_suite "scripts/infra-config-activation-7220" bash scripts/followthroughs/infra-config-activation-7220.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.

@@ -31,10 +31,18 @@
 # is unset); INFRA_CONFIG_ALERT_RUN_URL / INFRA_CONFIG_ALERT_SHA (context); GH_TOKEN for `gh`.
 
 infra_config_red_alert() {
-  # $1 = one-line technical detail. $2 = "reachable" | "unreachable".
+  # $1 = one-line technical detail. $2 = "reachable" | "unreachable" | "ungraded".
   # The second argument is load-bearing and is why this is not a one-arg function: when the
   # status endpoint is DOWN (000/502/503), the gate's own recovery guidance is the opposite of
   # the reachable case, and an alert that contradicts the gate is worse than no alert.
+  #
+  # "ungraded" (#7220 review) is the third state, and it is NOT a variant of the other two — it
+  # is the case where the gate never ran at all, because a step before it failed. Both other
+  # bodies would be measurably false there: "reachable" asserts the files reached the server,
+  # and "unreachable" asserts the delivery channel did not answer and points the operator at
+  # recovery guidance printed by a verify step that never executed. Emitting either would name
+  # an unmeasured cause and send a non-technical operator to the wrong lever, which is the
+  # precise harm #7220 is about. The honest claim is that activation is UNKNOWN.
   local detail="${1:-unspecified}"
   local reach="${2:-reachable}"
   local run_url="${INFRA_CONFIG_ALERT_RUN_URL:-}"
@@ -42,6 +50,7 @@ infra_config_red_alert() {
 
   local op="infra-config-gate-red"
   [[ "$reach" == "unreachable" ]] && op="infra-config-listener-down"
+  [[ "$reach" == "ungraded" ]] && op="infra-config-gate-ungraded"
 
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload=""
@@ -72,7 +81,20 @@ infra_config_red_alert() {
     # unreachable listener is what would tell the operator not to pull the exact lever the gate
     # just told them to pull.
     local body
-    if [[ "$reach" == "unreachable" ]]; then
+    if [[ "$reach" == "ungraded" ]]; then
+      body="$(cat <<EOF
+A server configuration update failed before anything could check whether it worked.
+
+**What this means:** the update stopped at an earlier stage, so the check that confirms the server picked up the new configuration never ran. That means we do not know whether the change took effect — not that it failed. The website is a separate system and stays up, and no customer data is affected.
+
+**What happens next:** no manual server access is needed and **nothing needs re-provisioning**. The CI run linked below names the step that failed. Once that step is fixed and the update is re-run, the normal check runs again and will say plainly whether the configuration is live.
+
+**Detail:** ${detail}${sha:+
+**Commit:** \`${sha}\`}${run_url:+
+**CI run:** ${run_url}}
+EOF
+)"
+    elif [[ "$reach" == "unreachable" ]]; then
       body="$(cat <<EOF
 The server's config-delivery channel did not answer, and the automatic check just failed.
 
@@ -109,6 +131,7 @@ EOF
     gh label create priority/p1-high 2>/dev/null || true
     local title="Server config update did not finish applying — the site is up"
     [[ "$reach" == "unreachable" ]] && title="Server config channel is not responding — needs a decision"
+    [[ "$reach" == "ungraded" ]] && title="Server config update failed before it could be checked — the site is up"
     gh issue create \
       --label ci/infra-config-red --label domain/engineering --label priority/p1-high \
       --title "$title" \
@@ -118,7 +141,8 @@ EOF
   return 0
 }
 
-# Direct-exec convenience: `infra-config-red-alert.sh "<detail>" [reachable|unreachable]`.
+# Direct-exec convenience:
+# `infra-config-red-alert.sh "<detail>" [reachable|unreachable|ungraded]`.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   infra_config_red_alert "${1:-}" "${2:-reachable}"
 fi

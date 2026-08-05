@@ -46,6 +46,8 @@ ssh_authorized_keys:
 users:
   - default
   - name: deploy
+    # ROOT-EQUIVALENT deliberately: docker group == root. See "WHAT THE `deploy` USER ALREADY
+    # IS" in deploy-inngest-bootstrap.sudoers (uncapped; this file is byte-budgeted).
     groups: docker
     shell: /bin/bash
     lock_passwd: true
@@ -84,57 +86,47 @@ write_files:
       Defaults!INNGEST_BOOTSTRAP env_keep += "INNGEST_CLI_VERSION INNGEST_CLI_SHA256 VECTOR_CLI_VERSION VECTOR_CLI_SHA256"
       deploy ALL=(root) NOPASSWD: INNGEST_BOOTSTRAP
 
-      # #3756 — permits infra-config-apply.sh to schedule a delayed webhook restart
-      # via systemd-run. The handler runs as the deploy user inside webhook.service's
-      # mount namespace; systemctl restart requires root.
-      Cmnd_Alias WEBHOOK_SELF_RESTART = /usr/bin/systemd-run --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook
+      # Rationale for every grant: deploy-inngest-bootstrap.sudoers. Kept to one pointer because
+      # this file is gzip'd into user_data against the #6090 sub-cap. Issue refs for traceability.
+      # #3756 delayed webhook self-restart; #7220 added --collect (a FAILED transient unit is
+      # never GC'd, so the fixed --unit name would collide forever).
+      Cmnd_Alias WEBHOOK_SELF_RESTART = /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook
       deploy ALL=(root) NOPASSWD: WEBHOOK_SELF_RESTART
 
-      # #4538 — permits ci-deploy.sh to restart inngest-server.service via the
-      # `restart inngest _ latest` command.
+      # #4538 ci-deploy `restart inngest _ latest`.
       Cmnd_Alias INNGEST_RESTART = /usr/bin/systemctl restart inngest-server.service
       deploy ALL=(root) NOPASSWD: INNGEST_RESTART
 
-      # #5450 — permits the opt-in wiped-volume durability verify to stop THEN
-      # start inngest-server around the /var/lib/inngest wipe (can't be a restart;
-      # the wipe happens while down). Two pinned, wildcard-free aliases.
+      # #5450 wiped-volume durability verify: stop THEN start around the wipe (not a restart).
       Cmnd_Alias INNGEST_STOP = /usr/bin/systemctl stop inngest-server.service
       deploy ALL=(root) NOPASSWD: INNGEST_STOP
       Cmnd_Alias INNGEST_START = /usr/bin/systemctl start inngest-server.service
       deploy ALL=(root) NOPASSWD: INNGEST_START
 
-      # #6178 — no-SSH web-host scheduler quiesce (stop+disable) via ci-deploy.sh's
-      # `quiesce inngest _ _` handler (op=quiesce-web). Full rationale in the mirrored
-      # deploy-inngest-bootstrap.sudoers; the `stop` overlaps INNGEST_STOP intentionally,
-      # `disable` is the genuinely-new verb. Pinned, wildcard-free (sudo-rs safe).
+      # #6178 no-SSH quiesce (stop+disable); `disable` is the new verb, `stop` overlaps #5450.
       Cmnd_Alias INNGEST_QUIESCE = /usr/bin/systemctl stop inngest-server.service, /usr/bin/systemctl disable inngest-server.service
       deploy ALL=(root) NOPASSWD: INNGEST_QUIESCE
 
-      # #6178 — no-SSH reverse re-enable via ci-deploy.sh's `enable inngest _ _` handler
-      # (op=rollback only). Restores the [Install] symlink a quiesce-disable removed; the
-      # start half reuses INNGEST_START (#5450). Pinned, wildcard-free (sudo-rs safe).
+      # #6178 no-SSH reverse re-enable (rollback only); reuses INNGEST_START.
       Cmnd_Alias INNGEST_ENABLE = /usr/bin/systemctl enable inngest-server.service
       deploy ALL=(root) NOPASSWD: INNGEST_ENABLE
 
-      # #4827 — permits infra-config-apply.sh to escalate the atomic install of
-      # its managed files into root:root dest dirs the deploy user cannot write.
-      # Fixed helper path, no argument wildcards (sudo-rs safe); the helper's
-      # hardcoded dest allowlist + TOCTOU guards are the security boundary.
+      # #4827 atomic install into root:root dests; the helper's dest allowlist is the boundary.
       Cmnd_Alias INFRA_CONFIG_INSTALL = /usr/local/bin/infra-config-install
       deploy ALL=(root) NOPASSWD: INFRA_CONFIG_INSTALL
 
-      # #5934 — char-device sweep grant (full rationale in the mirrored
-      # deploy-inngest-bootstrap.sudoers; keep the two in sync). Pins the exact
-      # argv ci-deploy.sh invokes; no wildcards (sudo-rs safe).
+      # #5934 char-device sweep; pins the exact argv ci-deploy.sh invokes.
       Cmnd_Alias GIT_LOCK_CHARDEVICE_SWEEP = /usr/bin/timeout 60 /usr/local/bin/git-lock-chardevice-sweep.sh
       deploy ALL=(root) NOPASSWD: GIT_LOCK_CHARDEVICE_SWEEP
 
-      # #7103 — drop-in activation grant (full rationale in the mirrored
-      # deploy-inngest-bootstrap.sudoers; keep the two in sync). try-restart, not
-      # restart: an inactive unit stays inactive. Gated on the drop-in shape check
-      # in infra-config-install; exact argv, no wildcards (sudo-rs safe).
+      # #7103 drop-in activation. try-restart, not restart: an inactive unit stays inactive.
       Cmnd_Alias DROPIN_TRY_RESTART = /usr/bin/systemctl try-restart vector.service
       deploy ALL=(root) NOPASSWD: DROPIN_TRY_RESTART
+
+      # #7220 THE REPAIR — ran ungranted since ~2026-05: delivery looked healthy, activation
+      # never happened. Scope bounded by infra-config-install.sh's gates, not by argv.
+      Cmnd_Alias SYSTEMCTL_DAEMON_RELOAD = /usr/bin/systemctl daemon-reload
+      deploy ALL=(root) NOPASSWD: SYSTEMCTL_DAEMON_RELOAD
     owner: root:root
     permissions: '0440'
 
@@ -241,6 +233,9 @@ write_files:
       [Unit]
       Description=Webhook deploy listener
       After=network.target
+      # #7220 AC-B2.3 — lockstep with webhook.service (parity §4b asserts the directives);
+      # rationale single-sourced there.
+      StartLimitIntervalSec=0
 
       [Service]
       Type=simple
