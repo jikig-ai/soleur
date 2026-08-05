@@ -1583,7 +1583,11 @@ jobs:
           # fallback; the store volume is preserved (guarded), so re-dispatch re-creates the host.
           if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
-            echo "::error::terraform apply (registry-host-replace) failed mid-replace — registry may be DOWN; GHCR fallback covers serving; re-dispatch registry-host-replace to recover from the preserved volume"
+            # "GHCR fallback covers serving" was RETRACTED by #7071 — the host->GHCR read PAT is
+            # revoked (401) and the minter is disabled (403 DENIED), so no host pulls from GHCR
+            # at all. This PR corrected the same sentence on the recut arm and left these two
+            # twins; an unmarked twin reads as still-true.
+            echo "::error::terraform apply (registry-host-replace) failed mid-replace — registry may be DOWN. NOTHING covers serving while it is: the host->GHCR fallback is dead (#7071, read PAT revoked + minter disabled), so already-running containers keep serving and any restart cannot pull. re-dispatch registry-host-replace to recover from the preserved volume"
             exit 1
           fi
           VOL_DELETES=$(jq '[.resource_changes[]?
@@ -1804,7 +1808,8 @@ jobs:
           # the store is a GHCR mirror (re-fills), so re-dispatch re-creates the host + fresh volume.
           if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
-            echo "::error::terraform apply (registry-region-migrate) failed — registry may be DOWN; GHCR fallback covers serving; re-dispatch registry-region-migrate to retry the fresh-region create"
+            # Same #7071 retraction as above. Do not reinstate the fallback claim.
+            echo "::error::terraform apply (registry-region-migrate) failed — registry may be DOWN. NOTHING covers serving while it is: the host->GHCR fallback is dead (#7071), so already-running containers keep serving and any restart cannot pull. re-dispatch registry-region-migrate to retry the fresh-region create"
             exit 1
           fi
           SERVER_CREATES=$(jq '[.resource_changes[]?
@@ -2071,24 +2076,71 @@ jobs:
             exit 0
           fi
           printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
-          SRV_TYPE=$(grep -oE 'default[[:space:]]*=[[:space:]]*"c[a-z0-9]+"' \
-            "${GITHUB_WORKSPACE}/apps/web-platform/infra/variables.tf" | head -1 | grep -oE 'c[a-z0-9]+$') || SRV_TYPE=""
-          if [[ -z "$SRV_TYPE" ]]; then
-            echo "::warning::pre-rehearsal stock probe SKIPPED: could not derive the registry server type from variables.tf."
+          # SCOPED TO THE REGISTRY VARIABLE'S OWN BLOCK, and the value is unquoted with sed.
+          # The previous derivation was DARK — measured, not argued. It piped
+          # `grep -oE 'default…"c[a-z0-9]+"'` into `grep -oE 'c[a-z0-9]+$'`, but stage 1's match
+          # ENDS IN A QUOTE, so the `$` anchor could never match and SRV_TYPE was empty on every
+          # dispatch: the step exited 0 through its own "could not derive" arm having probed
+          # nothing, forever. And `head -1` across the whole file returns `variable "server_type"`
+          # (cx33, the WEB host), not `registry_server_type` (cx23) — so even with the anchor
+          # fixed it would have probed the wrong machine type.
+          # DERIVE BOTH VALUES BY VARIABLE NAME, block-scoped. The previous derivation was DARK,
+          # measured rather than argued: it piped `grep -oE 'default…"c[a-z0-9]+"'` into
+          # `grep -oE 'c[a-z0-9]+$'`, but stage 1's match ENDS IN A QUOTE, so the `$` anchor could
+          # never match. SRV_TYPE was empty on every dispatch and the step exited 0 through its own
+          # "could not derive" arm having probed nothing, forever — a probe that runs, prints, and
+          # cannot fire, which is the defect class this whole change exists to remove. And
+          # `head -1` across the whole file returns `variable "server_type"` (cx33, the WEB host),
+          # not `registry_server_type` (cx23), so even with the anchor repaired it would have
+          # probed the wrong machine type.
+          read_default() { # $1 = variable name
+            awk -v v="variable \"$1\"" '$0 ~ "^"v, /^}/' \
+              "${GITHUB_WORKSPACE}/apps/web-platform/infra/variables.tf" \
+              | grep -oE 'default[[:space:]]*=[[:space:]]*"[^"]+"' | head -1 | sed 's/.*"\(.*\)"/\1/'
+          }
+          SRV_TYPE=$(read_default registry_server_type) || SRV_TYPE=""
+          SRV_LOC=$(read_default registry_location) || SRV_LOC=""
+          if [[ -z "$SRV_TYPE" || -z "$SRV_LOC" ]]; then
+            echo "::warning::pre-rehearsal stock probe SKIPPED: could not derive registry_server_type/registry_location from variables.tf. stock_preflight_gate in the recut job still applies."
             exit 0
           fi
-          AVAIL=$(curl -s --max-time 15 -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
-            "https://api.hetzner.cloud/v1/server_types?name=${SRV_TYPE}" 2>/dev/null \
-            | jq -r '[.server_types[0].prices[]?.location] | join(",")' 2>/dev/null) || AVAIL=""
-          echo "server_type=${SRV_TYPE} priced_locations=${AVAIL:-<unreadable>}"
-          echo "::notice::Pre-rehearsal stock probe: ${SRV_TYPE} priced in [${AVAIL:-unreadable}]. stock_preflight_gate in the recut job is the authoritative check; this probe only avoids moving GB before an abort that is already certain."
+
+          # REUSE THE AUTHORITATIVE LIBRARY rather than hand-rolling a query. Its header records
+          # the distinction this probe previously got wrong: `.server_types.supported` is what a
+          # datacenter CAN host, `.server_types.available` is what is orderable RIGHT NOW. The old
+          # query read `.prices[].location` — the PRICED set, which still lists a datacenter whose
+          # stock is exhausted — so #6460 (cx23 orderable in nbg1-dc3 but NOT hel1-dc2, where this
+          # host runs) was invisible to it. It would have printed a reassuring location list for
+          # precisely the condition its own header cites.
+          export HCLOUD_TOKEN
+          # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+          # ADVISORY, and `set +e` is what keeps it that way. `stock_preflight` RETURNS 1 on a
+          # stock miss, and this step runs under the default `bash -eo pipefail`, so calling it
+          # bare would abort the step — converting the cheap warning into a second place that can
+          # deny a recut on live vendor state. stock_preflight_gate in the recut job stays the
+          # only authoritative check.
+          set +e
+          stock_out=$(stock_preflight "$SRV_TYPE" "$SRV_LOC" 2>&1); stock_rc=$?
+          set -e
+          if (( stock_rc == 0 )); then
+            echo "::notice::Pre-rehearsal stock probe: ${SRV_TYPE} is orderable in ${SRV_LOC} right now. Proceeding to the rehearsal."
+          else
+            # Re-emitted as a WARNING, first line only: an ::error:: here would read as a denial
+            # from a step that denies nothing.
+            echo "::warning::Pre-rehearsal stock probe: ${SRV_TYPE} is NOT currently orderable in ${SRV_LOC} — the recut will very likely abort later at stock_preflight_gate, AFTER this job has moved multiple GB through the rehearsal. $(printf '%s' "$stock_out" | head -1 | tr '\n' ' ')"
+          fi
 
       - name: Start throwaway registry for the D10 rehearsal
-        # A2 rehearses the restore against a REAL registry HTTP API, pinned to the SAME zot
-        # image production runs — read through zot-registry.tf's `local.zot_image` arch ternary,
-        # not the amd64 variable directly. It matches today only because the registry type is
-        # amd64; #6460 makes a cax* (arm64) fallback live, and a bare amd64 read would silently
-        # rehearse a different zot build.
+        # A2 rehearses the restore against a REAL registry HTTP API, pinned to the Terraform-
+        # declared zot image. BE PRECISE ABOUT WHAT THIS DOES: it reads `zot_image_amd64`
+        # directly and only ASSERTS that the arch ternary still exists. An earlier version of
+        # this comment claimed the pin was read THROUGH `local.zot_image`'s ternary; it is not,
+        # and that overstated the guard in the artifact the ADR's fail-open table cites. The
+        # behaviour is correct on an amd64 runner and the presence check is what stops the
+        # ternary being silently deleted — but if #6460 makes a cax* (arm64) fallback live, this
+        # read must become a real ternary evaluation, because a bare amd64 read would then
+        # rehearse a different zot build than production runs.
         #
         # `defaultPolicy: []` mirrors cloud-init-registry.yml. It is not cosmetic: with
         # anonymous push allowed the rehearsal would succeed WITHOUT authenticating, and a
@@ -2163,6 +2215,17 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
           REHEARSE_TARGET: 127.0.0.1:5999
+          # THE "Log in to GHCR" STEP ABOVE DOES NOT REACH THE REHEARSAL, and without these two
+          # lines the gate CANNOT PASS. That step writes ~/.docker/config.json, but the restore
+          # engine deliberately exports a PRIVATE `DOCKER_CONFIG` under its own scratch dir so the
+          # throwaway and the prod credential cannot be confused — which also makes the ambient
+          # GHCR keychain invisible to it. The engine's GHCR login is conditional on exactly these
+          # two vars, so unset they leave every source read ANONYMOUS against PRIVATE packages:
+          # 401 -> DENIED -> engine exit 2 -> A2 aborts with "GHCR could not be read", immediately
+          # after A1 printed four SUCCESSFUL GHCR digest resolutions using the ambient keychain.
+          # No suite can see this: every one of them stubs crane.
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # The rehearsal's sink credentials are the THROWAWAY's, never production's. The
           # rehearsal and the real restore differ in exactly `--target` and this credential
           # environment — the anti-drift property A2 depends on, and the reason there is no
@@ -2845,7 +2908,14 @@ jobs:
             2) echo "::error::restore FAILED exit 2 (SOURCE unavailable) — GHCR could not be read, so there is nothing to restore from. The store is EMPTY. Check the job's 'packages: read' permission and GHCR's status; this is NOT proof the images were deleted." ;;
             3) echo "::error::restore FAILED exit 3 (SINK unavailable) after ${max} attempts — the rebuilt registry did not accept the write and the tunnel did not converge within the backoff. The store is EMPTY. Verify the registry host is serving, then re-run this job." ;;
             4) echo "::error::restore FAILED exit 4 (VERIFICATION mismatch) — images were copied but a digest did not match, a blob is missing, or a signature is absent. The store contents are NOT trustworthy. Do not deploy; re-run this job and read the per-entry lines above." ;;
-            5) echo "::error::restore FAILED exit 5 (CREDENTIAL unusable) — the sink rejected the credential, or it was unreadable. Retrying will not clear this. Rotate/repair ZOT_PUSH_* in Doppler soleur/prd, then re-run this job." ;;
+            # DO NOT reinstate "rotate ZOT_PUSH_*" here. This annotation is the first thing the
+            # operator reads, and rotating is the one action that makes this PERMANENT:
+            # /etc/zot/htpasswd is baked ONCE at boot from the ISOLATED soleur-registry/prd
+            # config, so a hand-rotation of soleur/prd desyncs CI from a host that will not
+            # re-read anything until it is replaced. The runbook was corrected first and this
+            # string was left behind — which is worse than never fixing either, because the
+            # runbook is the document the annotation is supposed to route people INTO.
+            5) echo "::error::restore FAILED exit 5 (CREDENTIAL unusable) — the sink rejected the credential, or it was unreadable. Retrying will not clear this. Do NOT rotate ZOT_PUSH_* as a first response: /etc/zot/htpasswd is baked once at boot from the ISOLATED soleur-registry/prd config, so rotating converts a possibly-transient rejection into a guaranteed one until the host is replaced. MEASURE FIRST, no SSH: 'doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_ZOT_DISK', then read htpasswd_push_matches on the NEWEST boot_id. Follow the runbook section 'If the sink rejects the credential'." ;;
             6) echo "::error::restore FAILED exit 6 (COULD NOT CLASSIFY) — the engine hit a failure it could not name. Read the crane stderr in the per-entry line above before acting; do not assume the images are absent." ;;
             *) echo "::error::restore FAILED with an unenumerated exit ${rc}. Every exit code of the restore engine is supposed to be enumerated, so this is itself a defect worth filing alongside the recovery." ;;
           esac

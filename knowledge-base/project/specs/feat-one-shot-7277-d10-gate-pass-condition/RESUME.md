@@ -12,7 +12,7 @@ nothing is recalled.
 | Branch | `feat-one-shot-7277-d10-gate-pass-condition` |
 | PR | **#7290** — OPEN, **DRAFT** until the exit gate is green |
 | Suites | `test-registry-pull-path-health.sh` **59/0**, `test-registry-restore-from-ghcr.sh` **43/0** |
-| Mutation battery | committed + registered; **40+ caught, 0 unexplained survivors**, 3 documented-unreachable with reachability proofs |
+| Mutation battery | committed + registered; 45 dispatched, **0 unexplained survivors**, 2 documented-unreachable with reachability proofs + a dispatch floor |
 | `terraform-target-parity` | **103/0** (was 2 RED for the life of the branch) |
 | Net issue flow | 0 — closes #7277, files #7295 |
 
@@ -33,8 +33,12 @@ Buys a failure-semantics property (a timeout there destroys nothing); buys **no*
 and says so — worst case is now the sum across three jobs, **135 min**, not the 90 the restore
 job's header claimed after the split.
 
-**B3 — resolved BY the split**, not by the hoist it proposed. The hoist is recorded as rejected
-with its reason (widens the plan→apply gap against a lock-less R2 backend).
+**B3 — PARTIALLY addressed, and the "resolved by the split" claim is RETRACTED.** `needs:`
+serializes the jobs, so the cheap denies still run strictly AFTER the rehearsal — the split moved
+where a TIMEOUT lands, not the order. Caught at review by re-deriving the `needs:` edge; both the
+CTO ruling and the plan row had asserted otherwise. The advisory pre-rehearsal stock probe covers
+the most likely certain-abort; the rest is open. The hoist stays rejected (it widens the
+plan→apply gap against a lock-less R2 backend).
 
 **B4 — the claim was right; its evidence was not.** The cited `crane ls NAME_UNKNOWN` was
 uncredentialed and hit the tags API, so it could not separate absent from not-visible. Re-measured
@@ -54,8 +58,7 @@ and the ordering is pinned by a test.
 This is the part worth carrying forward.
 
 **The mutation battery was ad-hoc.** "15/15 and 13/13 caught" lived in a session transcript, so it
-protected nothing the next day. Committed and registered, its first run found **15 of 44 mutations
-surviving** — guards both suites certified and neither tested, including the `GITHUB_ACTIONS` seam
+protected nothing the next day. Committed and registered, its first run found **15 surviving mutations** — guards both suites certified and neither tested, including the `GITHUB_ACTIONS` seam
 guard, which is the only thing preventing `REGISTRY_GATE_RESTORE_CMD=/bin/true` from manufacturing
 `verdict=AUTHORIZED`. Every other row in the suite ran without `GITHUB_ACTIONS` set, so nothing
 ever reached it.

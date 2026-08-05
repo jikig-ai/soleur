@@ -556,7 +556,7 @@ if want_scripts; then
   run_suite "tests/scripts/registry-pull-path-health" bash tests/scripts/test-registry-pull-path-health.sh
   # The mutation battery for BOTH suites above. Registered, not ad-hoc: its previous incarnations
   # lived in a session transcript, so their "15/15 caught" protected nothing the next day — and
-  # when it was finally committed it found 15 of 44 mutations surviving, including a seam that
+  # when it was finally committed it found 15 of its mutations surviving, including a seam that
   # could replace the pass condition itself. It sandboxes its own copies of both SUTs, so it
   # neither mutates the worktree nor depends on suite ordering here (#7277).
   run_suite "tests/scripts/registry-gate-mutation-battery" bash tests/scripts/test-registry-gate-mutation-battery.sh

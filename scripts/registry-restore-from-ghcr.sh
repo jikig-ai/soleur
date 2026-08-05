@@ -139,6 +139,18 @@ FLOOR=$(jq -r '.floor // empty' "$TAGS_FROM" 2>/dev/null)
 # The floor is the non-vacuity guard. It is declared in the manifest by the PREPARE step that
 # derived the pin set, and asserted here, so a derivation that silently produced fewer required
 # entries than production actually depends on cannot report success.
+# `.entries` MUST BE AN ARRAY, and this is load-bearing rather than defensive. `n_required`
+# is an AGGREGATE read (`.entries[] | select(...)`) while the restore loop below is a
+# PER-INDEX read (`.entries[$i]`). jq's `.[]` iterates an OBJECT's values too, so an object
+# `.entries` yields n_required=1 while every indexed read errors to empty — the loop restores
+# nothing, `restored` stays 0, and with `floor: 0` the outcome check `restored != FLOOR` is
+# false. Measured: without this guard the engine prints `restored=0 … result=ok` and exits 0,
+# a vacuous restore reporting success. Two independent reads of one field must agree on its
+# shape before either is trusted.
+if ! jq -e '.entries | type == "array"' "$TAGS_FROM" >/dev/null 2>&1; then
+  die 1 "the manifest's .entries is not a JSON array. The floor is counted with an aggregate read and the restore loop uses an indexed read; on a non-array those two disagree silently and a restore that copied nothing can report success."
+fi
+
 n_required=$(jq -r '[.entries[] | select(.disposition == "required")] | length' "$TAGS_FROM" 2>/dev/null)
 [[ "$n_required" =~ ^[0-9]+$ ]] || die 1 "the manifest's .entries could not be parsed."
 if (( n_required == 0 )); then
@@ -216,7 +228,15 @@ crane_capture() {
 # identical fix; both were found by the mutation battery, because with short fixtures a byte-tail
 # and a line-tail return the same string and no ordinary test can tell them apart.
 last_err() {
-  tail -c 400 "$1" 2>/dev/null | tail -n 1 | tr '\n' ' ' || true
+  # The trailing `sed` is NOT tidiness — it is what makes the END-ANCHORED classifier arms
+  # reachable at all. `tail -n 1` keeps the line's terminating newline, `tr` rewrites it to a
+  # trailing SPACE, and `$( )` strips trailing NEWLINES but not spaces. So a capture ending
+  # "…: EOF\n" arrives as "…: EOF " and the `*EOF` arm below — an arm this PR added — never
+  # matches. Measured: with the space, a sink EOF classifies UNKNOWN and the engine exits 6
+  # (not retryable) instead of 3 (retryable), AFTER the destroy, with the store empty. The
+  # suite could not see it because every `.err` fixture is written with `printf '%s'`, i.e.
+  # without the terminating newline real crane emits.
+  tail -c 400 "$1" 2>/dev/null | tail -n 1 | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true
 }
 
 # digest_of <file> — keep only a bare sha256 token.
@@ -373,7 +393,20 @@ while (( i < n_entries )); do
   sig_tag="sha256-${src_digest#sha256:}"
   crane_capture "$WORK/sigsrc.out" "$WORK/sigsrc.err" digest "ghcr.io/${repo}:${sig_tag}"
   if [[ -z "$(digest_of "$WORK/sigsrc.out")" ]]; then
-    die 4 "no cosign signature (${sig_tag}) found at GHCR for ${repo}@${src_digest}. There is no unsigned-restore arm: a restored image whose signature is absent fails verification on the host. crane: $(last_err "$WORK/sigsrc.err")"
+    # CLASSIFY, like every other read in this file. Unclassified, this arm reported "no cosign
+    # signature found at GHCR" for ANY failure to read it — a 503, a DNS blip, a revoked
+    # credential — naming a cause it did not measure, on the path that authorises destroying
+    # production's only copy. It is also an arm where the mislabel changes the OPERATOR ACTION:
+    # exit 4 is documented NOT retryable and the restore job breaks out of its backoff on it, so a
+    # transient GHCR fault became "the signature is absent, do not deploy" and suppressed the
+    # retry that would have cleared it. Source-side faults take 2, matching the source-resolution
+    # block above; only a genuine absence stays 4.
+    err="$(last_err "$WORK/sigsrc.err")"
+    case "$(classify "$err")" in
+      NETWORK) die 2 "GHCR was unreachable reading the signature ${sig_tag} for ${repo} (network/DNS). This does NOT mean the signature is absent. crane: ${err}" ;;
+      DENIED)  die 2 "GHCR rejected this credential reading the signature ${sig_tag} for ${repo}. This does NOT mean the signature is absent — check the job's 'packages: read' permission. crane: ${err}" ;;
+      *)       die 4 "no cosign signature (${sig_tag}) found at GHCR for ${repo}@${src_digest}. There is no unsigned-restore arm: a restored image whose signature is absent fails verification on the host. crane: ${err}" ;;
+    esac
   fi
   if ! crane_capture "$WORK/sigcp.out" "$WORK/sigcp.err" copy $SINK_TLS_FLAG "ghcr.io/${repo}:${sig_tag}" "${TARGET}/${repo}:${sig_tag}"; then
     err="$(last_err "$WORK/sigcp.err")"
@@ -385,7 +418,17 @@ while (( i < n_entries )); do
   fi
   crane_capture "$WORK/sigdst.out" "$WORK/sigdst.err" digest $SINK_TLS_FLAG "${TARGET}/${repo}:${sig_tag}"
   if [[ -z "$(digest_of "$WORK/sigdst.out")" ]]; then
-    die 4 "the signature ${sig_tag} is not readable back from the sink, so ${repo}:${tag} is restored UNSIGNED. crane: $(last_err "$WORK/sigdst.err")"
+    # Classified for the same reason as the source-side read, and note the asymmetry it closes:
+    # the signature COPY sitting BETWEEN these two reads already classified NETWORK->3 and
+    # DENIED->5, while both reads bracketing it went unconditionally to 4. So a sink that became
+    # unavailable one call later reported "restored UNSIGNED" at a NON-retryable code —
+    # post-destroy — for a fault the adjacent call would have called retryable.
+    err="$(last_err "$WORK/sigdst.err")"
+    case "$(classify "$err")" in
+      NETWORK) die 3 "the sink became unavailable reading the signature ${sig_tag} back for ${repo}. This does NOT mean the image is unsigned; it is the retryable code. crane: ${err}" ;;
+      DENIED)  die 5 "the sink rejected this credential reading the signature ${sig_tag} back for ${repo}. crane: ${err}" ;;
+      *)       die 4 "the signature ${sig_tag} is not readable back from the sink, so ${repo}:${tag} is restored UNSIGNED. crane: ${err}" ;;
+    esac
   fi
 
   echo "restore_entry repo=${repo} tag=${tag} disposition=${disp} digest=${src_digest} result=restored_verified"

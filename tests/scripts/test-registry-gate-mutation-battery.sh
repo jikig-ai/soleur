@@ -184,6 +184,12 @@ expect_survive() {
   restore_pristine
   py_replace "$target" "$old" "$new" \
     || harness_die "expect_survive '${label}': anchor did not apply against ${which}."
+  # The same no-op guard mutate() carries. py_replace does not require old != new, so a
+  # degenerate entry would report `expected`, print its justification, and increment the
+  # honest-looking count while having changed nothing — an exemption that never ran.
+  if diff -q "$target" "${PRISTINE}/$( [[ "$which" == gate ]] && echo gate.sh || echo engine.sh )" >/dev/null 2>&1; then
+    harness_die "expect_survive '${label}' produced a file identical to pristine — the mutation is a no-op, so the exemption is unverified."
+  fi
   run_suite "$which"; rc=$?
   expected=$(( expected + 1 ))
   if (( rc == 0 )); then
@@ -267,9 +273,9 @@ mutate "G11 last_err drops the line-tail and classifies over the whole byte wind
   'tail -c 400 "$1" 2>/dev/null | tr'
 
 expect_survive "G12 workflow-command injection guard dropped from last_err" gate \
-  'tail -c 400 "$1" 2>/dev/null | tail -n 1 | tr '"'"'\n'"'"' '"'"' '"'"' || true; }' \
+  'tail -c 400 "$1" 2>/dev/null | tail -n 1 | tr '"'"'\n'"'"' '"'"' '"'"' | sed '"'"'s/[[:space:]]*$//'"'"' || true; }' \
   'tail -c 400 "$1" 2>/dev/null | tail -n 1 || true; }' \
-  'SUBSUMED BY THE LINE-TAIL, and only since this PR added it. `tail -n 1` emits exactly one line and command substitution strips the trailing newline, so the capture can no longer contain an embedded newline for `tr` to collapse — no fixture can distinguish the two implementations. The `tr` is kept as defense-in-depth rather than deleted, because it becomes load-bearing again the moment `tail -n 1` is removed, and THAT removal is caught by G11. Do not read this exemption as "the injection guard is untested": the property is tested, by the mutation one row up. If G11 is ever retired, this entry must be promoted back to mutate().'
+  'REDUNDANT GIVEN THE LINE-TAIL, same measured reason as its engine twin E22: with tail -n 1 the capture is one line and command substitution strips its trailing newline, so removing the tr+sed chain returns a byte-identical string. An earlier version of this justification claimed the gate and engine differed here because only the engine has an END-ANCHORED classifier arm; that is true of the classifiers and irrelevant to this mutation, and acting on it wrongly promoted E22. Kept as defence-in-depth for the removal of tail -n 1, which G11 mutates.'
 
 # The engine carries the identical last_err and the identical fix, so it carries the identical
 # mutations. A guard fixed in two files and mutation-tested in one is half-tested.
@@ -277,16 +283,29 @@ mutate "E21 engine last_err drops the line-tail (conditional skip swallows a cre
   'tail -c 400 "$1" 2>/dev/null | tail -n 1 | tr' \
   'tail -c 400 "$1" 2>/dev/null | tr'
 
+# EXEMPT, and the reasoning here was WRONG ONCE — recorded because the wrong version is the
+# intuitive one. It was briefly promoted to mutate() on the theory that the engine's
+# END-ANCHORED `*EOF` arm gives the `tr` teeth. It does not: once `last_err` ends in
+# `| tail -n 1`, the capture is a single line, and `$( )` strips its trailing newline
+# unconditionally. So `tail -n 1 | tr | sed` and a bare `tail -n 1` return BYTE-IDENTICAL
+# strings (measured), and no fixture can separate them. The promotion made the battery report a
+# survivor for a mutation that is genuinely undetectable.
+#
+# What the `tr` still buys is defence-in-depth against the REMOVAL of `tail -n 1` — and that
+# removal is exactly what E21 mutates. So the injection property is covered; it is covered by
+# E21, not here.
 expect_survive "E22 engine workflow-command injection guard dropped from last_err" engine \
-  "tail -c 400 \"\$1\" 2>/dev/null | tail -n 1 | tr '\\n' ' ' || true" \
+  "tail -c 400 \"\$1\" 2>/dev/null | tail -n 1 | tr '\\n' ' ' | sed 's/[[:space:]]*\$//' || true" \
   "tail -c 400 \"\$1\" 2>/dev/null | tail -n 1 || true" \
-  'SUBSUMED BY THE LINE-TAIL — identical reasoning to G12, in the engine. The property is carried by E21, which mutates the line-tail away. Promote back to mutate() if E21 is ever retired.'
+  'REDUNDANT GIVEN THE LINE-TAIL, measured not argued: with tail -n 1 the capture is one line and command substitution strips its trailing newline, so removing the tr+sed chain yields a byte-identical string and no fixture can distinguish the two. Kept as defence-in-depth because it becomes load-bearing the moment tail -n 1 is removed, and THAT removal is what E21 mutates. Do not promote this to mutate() again without first showing a capture where the two implementations differ.'
 
+# Anchored on the CONDITION ALONE. The previous anchor spanned this line and the `for _seam in`
+# below it, so inserting a comment between them (which a later fix did) broke the anchor and
+# hard-aborted the whole battery — a fragility this file already documents for G09/E17 and then
+# reproduced. py_replace enforces uniqueness, so the second line bought nothing.
 mutate "G13 GITHUB_ACTIONS seam guard neutered (a seam can manufacture AUTHORIZED)" gate \
-  'if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-  for _seam in' \
-  'if false; then
-  for _seam in'
+  'if [[ -n "${GITHUB_ACTIONS:-}" ]]; then' \
+  'if false; then'
 
 mutate "G14 ::add-mask:: emitted unconditionally (prints the prd token locally)" gate \
   'if [[ -n "${GITHUB_ACTIONS:-}" && -n "${ZOT_PUSH_TOKEN:-}" ]]; then' \
@@ -431,7 +450,20 @@ mutate "E23 argv value-presence guard removed (missing flag value spins forever)
 restore_pristine
 
 echo
-echo "=== ${caught} caught, ${survived} survived, ${expected} documented-unreachable ==="
+# THE BATTERY'S OWN ANTI-VACUITY FLOOR. Without it, commenting out every mutate/expect_survive
+# call yields "0 caught, 0 survived, 0 documented-unreachable" and EXIT 0 — a battery that
+# asserted nothing, reported success, and is indistinguishable in CI from a full run. This file
+# already argues that "a battery that quietly drops the mutations it cannot catch is how a
+# battery goes vacuous"; nothing enforced that on the battery itself. It is a FLOOR, not an
+# equality: the count is developer-incremented, so `-eq` would turn every added mutation into a
+# spurious failure. Derived from a green run, not from an expected number.
+dispatched=$(( caught + survived + expected ))
+if (( dispatched < 45 )); then
+  echo "harness: only ${dispatched} mutations were dispatched, floor is 45. Either mutations were removed without lowering this floor deliberately, or the dispatch itself is broken — in both cases the verdict below is not reportable." >&2
+  exit 2
+fi
+
+echo "=== ${caught} caught, ${survived} survived, ${expected} documented-unreachable (${dispatched} dispatched) ==="
 
 rc=0
 if (( survived > 0 )); then

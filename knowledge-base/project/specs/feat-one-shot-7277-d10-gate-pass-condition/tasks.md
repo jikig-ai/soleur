@@ -114,9 +114,13 @@ fixed at hand-off; these are the blockers that remained.
       630 s bound and only survives that derivation because the unmeasured multi-GB rehearsal is
       no longer inside it. Recorded honestly: the concurrency group is workflow-level, so no mutex
       was released — worst case is now the SUM across three jobs.
-- [x] B3 **Resolved BY the split, not by a hoist.** Hoisting `init`/`plan` was rejected: it widens
-      the plan→apply gap by the rehearsal's duration against a lock-less R2 backend, and puts
-      state access in a job with no destroy authority. (Review row R17.)
+- [~] B3 **PARTIALLY addressed; the "resolved by the split" claim was FALSE and is retracted.**
+      `needs:` serializes the jobs, so the cheap denies still run strictly AFTER the rehearsal —
+      the split moved where a TIMEOUT lands, not the order. Caught at review by re-deriving the
+      `needs:` edge. The advisory pre-rehearsal stock probe covers the most likely certain-abort;
+      the rest is open. Hoisting `init`/`plan` stays rejected (it widens the plan→apply gap
+      against a lock-less R2 backend and puts state access in a job with no destroy authority).
+      (Review row R17, corrected.)
 - [x] B4 **The "not published (measured)" claim: conclusion right, evidence invalid.** The cited
       `crane ls NAME_UNKNOWN` was uncredentialed and hit the tags API — it cannot separate absent
       from not-visible. Re-measured with a positive control: the producing workflow has NEVER been

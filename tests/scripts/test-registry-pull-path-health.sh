@@ -467,8 +467,24 @@ fi
 # list and such a fixture still aborts, via one of the names that remain. A partial removal is
 # also the realistic drift (a seam is added and not listed). So each seam is set ALONE — the
 # only fixture shape in which a per-name omission is visible.
-for _seam_name in REGISTRY_GATE_HEALTH_CMD REGISTRY_GATE_CRANE_CMD REGISTRY_GATE_RESTORE_CMD \
-                  REGISTRY_GATE_DRIFT_CMD REGISTRY_GATE_VERDICT_CMD REGISTRY_GATE_CLOUD_INIT; do
+# DERIVED FROM THE SCRIPTS, NOT HAND-COPIED. A restated list is a SUBSET check: a seam added
+# to either script and forgotten in the guard is invisible to a test that enumerates the same
+# names the guard does. This greps both SUTs for every REGISTRY_(GATE|RESTORE)_* name they
+# actually READ, and requires each to be refused inside Actions — so the test fails when a new
+# seam appears anywhere, which is the direction that matters.
+#
+# It covers the ENGINE's names too, deliberately: the engine carries no GITHUB_ACTIONS guard of
+# its own and A2 execs it with this environment inherited, so REGISTRY_RESTORE_CRANE_CMD is a
+# seam on the production path that only this gate can refuse. It escaped the original list
+# purely because its name says _RESTORE_ rather than _GATE_.
+mapfile -t _seams < <(
+  grep -ohE 'REGISTRY_(GATE|RESTORE)_[A-Z_]+' "$GATE" "$ROOT/scripts/registry-restore-from-ghcr.sh" \
+    | sort -u
+)
+if (( ${#_seams[@]} < 7 )); then
+  fail "seam derivation found only ${#_seams[@]} names; expected at least 7 — the extraction is broken, so every row below would pass vacuously" "?" "${_seams[*]}"
+fi
+for _seam_name in "${_seams[@]}"; do
   W="$(world "$TMP/w-seam-${_seam_name}")"
   out="$(env GITHUB_ACTIONS=true "${_seam_name}=/bin/true" APP_DOMAIN_BASE=soleur.ai \
          ZOT_PUSH_USER=u ZOT_PUSH_TOKEN=t \
@@ -476,7 +492,7 @@ for _seam_name in REGISTRY_GATE_HEALTH_CMD REGISTRY_GATE_CRANE_CMD REGISTRY_GATE
   if [[ "$rc" -ne 0 ]] && grep -qF "${_seam_name} is set inside GitHub Actions" <<<"$out"; then
     pass "seam guard: ${_seam_name} alone, inside Actions => ABORT naming that seam"
   else
-    fail "seam ${_seam_name} is not covered by the in-Actions refusal" "$rc" "$out"
+    fail "seam ${_seam_name} is read by a SUT but not covered by the in-Actions refusal" "$rc" "$out"
   fi
 done
 

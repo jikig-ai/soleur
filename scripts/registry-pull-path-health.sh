@@ -139,9 +139,17 @@ done
 # not be set at all: reachable via a workflow-level env:, a composite exporting to $GITHUB_ENV,
 # or a stale export in the operator's shell (the runbook tells them to run this locally).
 if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+  # REGISTRY_RESTORE_CRANE_CMD is in this list even though it is read by the ENGINE, not by
+  # this script. That is exactly why it belongs here: the engine carries no GITHUB_ACTIONS
+  # guard of its own, and A2 execs it with this environment inherited — so it is the strongest
+  # seam on the production path. `REGISTRY_RESTORE_CRANE_CMD=/bin/true` makes the rehearsal
+  # report `result=ok` having resolved, copied, digest-compared, blob-validated and
+  # signature-checked nothing, and this gate then prints verdict=AUTHORIZED. The naming
+  # difference (`_RESTORE_` vs `_GATE_`) is precisely what let it escape a list that reads as
+  # exhaustive.
   for _seam in REGISTRY_GATE_HEALTH_CMD REGISTRY_GATE_CRANE_CMD REGISTRY_GATE_RESTORE_CMD \
                REGISTRY_GATE_DRIFT_CMD REGISTRY_GATE_VERDICT_CMD \
-               REGISTRY_GATE_CLOUD_INIT; do
+               REGISTRY_GATE_CLOUD_INIT REGISTRY_RESTORE_CRANE_CMD; do
     if [[ -n "${!_seam:-}" ]]; then
       echo "::error::registry-pull-path-health: ${_seam} is set inside GitHub Actions. Test seams replace this gate's external dependencies — including the rehearsal that IS the pass condition — so a seam set on the production path can manufacture an AUTHORIZED verdict. Refusing." >&2
       exit 1
@@ -267,7 +275,12 @@ classify() {
 #                 parses workflow commands per LINE — a newline followed by `::add-mask::` inside
 #                 it would be EXECUTED. Kept after the line-tail because a single line can still
 #                 carry a trailing newline.
-last_err() { tail -c 400 "$1" 2>/dev/null | tail -n 1 | tr '\n' ' ' || true; }
+# The trailing `sed` mirrors the engine's. `tail -n 1` keeps the terminating newline and `tr`
+# rewrites it to a trailing SPACE, which `$( )` does not strip — that defeats any END-ANCHORED
+# classifier arm. This gate's `classify()` happens to have none today, so the strip is
+# defence-in-depth here and load-bearing in the engine; keeping the two implementations
+# identical is the point, since they are described everywhere as the same function.
+last_err() { tail -c 400 "$1" 2>/dev/null | tail -n 1 | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true; }
 
 # ── A0 — inventory derivation, from production's OWN pins. ──────────────────────────────────
 # Zero reads of zot: reading the digest list out of zot would make this gate depend on the
@@ -397,6 +410,24 @@ MANIFEST="${TAGS_OUT:-$WORK/pins.json}"
   paste -sd, "$WORK/manifest.entries"
   printf '] }'
 } > "$MANIFEST" 2>/dev/null || abort A0 "could not write the pin manifest to ${MANIFEST}."
+# READ IT BACK AND PARSE IT. The `||` above is NOT a write-success assertion. A brace group's
+# status is the status of its LAST command, so that `||` reports whatever `printf '] }'` returned;
+# only the REDIRECTION failing is caught by it. A `paste` that fails, or a short write partway
+# through it, yields `{ "floor": 4, "entries": ] }` — truncated, invalid JSON — at status 0
+# (measured).
+#
+# That gap is not academic, because of the two things that follow it: `sha256sum` hashes a
+# truncated file perfectly happily, and `--prepare` then exits 0 printing `verdict=PREPARED`. That
+# manifest is uploaded as the `registry-restore-pins` artifact and consumed POST-DESTROY by
+# `registry_store_restore`, where the engine refuses it against an already-empty store. Here,
+# before anything is destroyed, is the only cheap place to catch it.
+#
+# Assert the SHAPE, not merely that it parses, so a manifest that parses while having lost its
+# entries cannot pass either.
+if ! jq -e --argjson n "$resolved" \
+     '(.entries | type) == "array" and (.entries | length) >= $n' "$MANIFEST" >/dev/null 2>&1; then
+  abort A0 "the pin manifest at ${MANIFEST} was written but does not parse as JSON carrying its ${resolved} resolved entries. A brace-group redirect reports the status of its LAST command, so a failed or short write inside it exits 0 and leaves a TRUNCATED manifest — which --prepare would emit as verdict=PREPARED and the post-destroy restore would then refuse against an empty store."
+fi
 # The manifest's own sha256, emitted on every verdict line. The restore job consumes an UPLOADED
 # artifact while this script re-derives over the same path, so "the rehearsal proved set B while
 # the restore restores set A" is a divergence with no other observable — both runs are green and
@@ -408,6 +439,12 @@ manifest_sha="$(sha256sum "$MANIFEST" 2>/dev/null | cut -d' ' -f1)"
 echo "A3 floor satisfied: resolved=${resolved} floor=${FLOOR} manifest=${MANIFEST}"
 
 if (( PREPARE_ONLY == 1 )); then
+  # --prepare EXISTS TO HAND A MANIFEST TO ANOTHER JOB, so without --tags-out it writes into
+  # $WORK — which the EXIT trap deletes one line later. The caller would read `verdict=PREPARED`
+  # at exit 0 alongside a `manifest=` path that no longer exists, and the sole consumer of that
+  # path is the artifact upload feeding the POST-DESTROY restore. Refuse the combination rather
+  # than render a verdict about a file this script is about to delete.
+  [[ -n "$TAGS_OUT" ]] || usage_err "--prepare requires --tags-out <path>: without it the manifest is written into a scratch directory that is deleted when this script exits, so PREPARED would name a file that does not survive the call."
   echo "verdict=PREPARED manifest=${MANIFEST} manifest_sha256=${manifest_sha}"
   exit 0
 fi
@@ -447,8 +484,9 @@ fi
 # name-a-cause-you-did-not-measure defect zot-mirror-diagnosis.sh exists to prevent, and
 # reusable-release.yml already scopes this same verdict the same way.
 #
-# `timeout` because a 13-config fan-out with no bound runs inside the recut job's load-bearing
-# 30-minute mutex budget.
+# `timeout` because a 13-config fan-out with no bound runs inside a job budget. Since #7277's
+# split that is `registry_pull_path_gate`'s structural 45 minutes, not the recut's derived 30 —
+# A4 no longer runs in the recut job at all.
 timeout 300 "$DRIFT" --only REGISTRY_PUSH_ACCESS_TOKEN --json-file "$DRIFT_JSON" \
   > "$WORK/drift.out" 2>"$WORK/drift.err"; drift_rc=$?
 
@@ -466,9 +504,18 @@ else
   if declare -F zot_mirror_verdict >/dev/null 2>&1; then
     a4_verdict="$(zot_mirror_verdict "$drift_rc" "$DRIFT_JSON")"
   else
-    # Deriving it here would duplicate a classifier whose exit-code discipline is already
-    # written and reviewed; but a missing grader is a could-not-measure outcome, not a pass.
-    a4_verdict="unmeasured"
+    # A COULD-NOT-LOAD, NOT A COULD-NOT-RANK — and it must NOT be spelled `unmeasured`. That
+    # token is a value the grader PRODUCES, and the case below routes it to DEGRADE, which falls
+    # through to verdict=AUTHORIZED. Spelling a missing grader `unmeasured` therefore made
+    # "zot-mirror-diagnosis.sh was renamed, moved, lost its read bit, failed to source on a syntax
+    # error, or no longer defines this function" indistinguishable from "the grader ran and
+    # declined to rank" — and the whole of A4 fell OPEN, on the gate for an irreversible destroy.
+    # The comment that stood here even asserted fail-closed while the code fell open.
+    #
+    # This is exactly the class the DETECTOR guard forty lines above already aborts on ("a chmod
+    # bit is not a safety boundary for an irreversible destroy"). The grader is the same class and
+    # now gets the same answer. DEGRADE stays reserved for verdicts the grader actually produced.
+    a4_verdict="grader-unloadable"
   fi
 fi
 
@@ -482,6 +529,8 @@ case "$a4_verdict" in
     # `unmeasured` explicitly "ranks nothing". Degrading here is correct; aborting would
     # deadlock the gate on the detector's own blind spots.
     echo "A4 sink credential: ${a4_verdict} — DEGRADED, not an accusation. a4_credential=${a4_verdict}" ;;
+  grader-unloadable)
+    abort A4 "the credential grader could not be LOADED — ${ROOT}/scripts/zot-mirror-diagnosis.sh is unreadable, failed to source, or no longer defines zot_mirror_verdict — so the sink credential was never graded at all. That is a could-not-LOAD, not a could-not-rank: the detector ran and left its output at ${DRIFT_JSON}, but nothing interpreted it. Restore the grader; this must not read as 'degraded'." ;;
   *)
     abort A4 "the credential grader returned '${a4_verdict}', which is outside its documented four-value vocabulary. An unrecognised verdict must not be read as either health or failure." ;;
 esac
@@ -502,6 +551,7 @@ restore_rc=$?
 sed 's/^/    /' "$WORK/restore.out" 2>/dev/null | tail -20
 if (( restore_rc != 0 )); then
   case "$restore_rc" in
+    1) abort A2 "the rehearsal failed with exit 1 (INPUT/MANIFEST fault) — the engine rejected its own arguments or the pin manifest: an unreadable/unparseable manifest, a non-numeric or absent floor, zero required entries, duplicated required pairs, or a bad --target. This is a CORRECT DIAGNOSIS from the engine, not an engine defect: do not file it as one. The manifest is derived by this same job's PREPARE step, so re-run the dispatch; if it recurs, read the engine's message above — it names which shape check failed." ;;
     2) abort A2 "the rehearsal failed with exit 2 (source unavailable) — GHCR could not be read, so there is nothing to restore FROM. Refusing to destroy the only remaining copy." ;;
     3) abort A2 "the rehearsal failed with exit 3 (sink unavailable) — the throwaway registry did not accept the write. This is a rehearsal-harness fault, not a production signal, but it means the pass condition was never established." ;;
     4) abort A2 "the rehearsal failed with exit 4 (verification mismatch) — the restore produced a registry whose contents do not match GHCR, or whose blobs are incomplete. A host would fail these pulls. This is the defect the gate exists to catch." ;;
