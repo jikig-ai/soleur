@@ -124,10 +124,29 @@ Cloudflare Access service-token pair and a Doppler token. An unguarded `::add-ma
 a runner prints the live prd credential to the operator's terminal — the exact footgun the current
 script guards at its `GITHUB_ACTIONS` check, which must survive the rewrite.
 
+**Also user-facing, and not derivable from the paragraphs above** (added at CPO sign-off, 2026-08-05):
+
+- **The success path narrows the rollback surface.** The restore carries only the `required` pins
+  (`FLOOR = 2`) and the host→GHCR edge is dead (#7071), so a rebuilt host can pull nothing outside
+  that set. `ci-deploy.sh` treats rollback to an older image as a supported, must-stay-functional
+  path. Consequence: immediately after a recut, if the next release is bad there is no earlier image
+  in zot to roll back to. Recoverable by re-running the restore engine with a wider set — but it is
+  a capability that degrades on the **success** path, where nothing goes red.
+- **The window's risk is not confined to the failure path.** During it, any unrelated restart — OOM,
+  a Hetzner host event, a Docker daemon restart, a kernel update — converts a no-visible-impact
+  window into a hard outage. This appears in Downtime & Cutover but belongs here, in the section
+  reviewers actually read.
+- **The window has no stated duration.** "Bounded" is asserted throughout and quantified nowhere.
+  Phase 0.4 (the wall-clock measurement) is a named unmeasured residual, so the bound is currently
+  *structural* (a job timeout + a resumable script), not *numeric*.
+- **#7286 (inngest down, uninvestigated) intersects this window.** `soleur-inngest-bootstrap` is a
+  required pin, so the window lands on the scheduled-work path. If crons and armed reminders are
+  already not firing, the user-visible consequence is silently missed time-based commitments.
+
 **Brand-survival threshold:** `single-user incident`.
 
 CPO sign-off is required at plan time before `/work` begins, and `user-impact-reviewer` is invoked
-at review time.
+at review time. **Sign-off obtained 2026-08-05 — see [Product/UX Gate](#productux-gate).**
 
 ## Why this criterion, and not the other three
 
@@ -1130,9 +1149,15 @@ SHA-pinned. It is SHA-pinned — `reusable-release.yml` carries
 
 ## Domain Review
 
-**Domains relevant:** Engineering (CTO). Product NOT relevant — the mechanical UI-surface override
-did not fire: `## Files to Create` and `## Files to Edit` contain no `components/**/*.tsx`,
-`app/**/page.tsx`, `app/**/layout.tsx`, or any other UI-surface path. Legal, Marketing, Finance,
+**Domains relevant:** Engineering (CTO) **and Product (CPO)**. An earlier revision of this line read
+*"Product NOT relevant"* on the strength of the mechanical UI-surface override not firing. That was
+a **contradiction with this plan's own frontmatter** (`requires_cpo_signoff: true`) and it is
+corrected here: the UI-surface test is the trigger for a *UX* review, not for a
+`brand_survival_threshold: single-user incident` sign-off, which turns on user-facing blast radius
+rather than on whether a `.tsx` file is touched. The UI-surface override still does not fire —
+`## Files to Create` and `## Files to Edit` contain no `components/**/*.tsx`, `app/**/page.tsx`,
+`app/**/layout.tsx`, or any other UI-surface path — so no `.pen` wireframe is required and
+`ux-design-lead` is correctly not invoked. Legal, Marketing, Finance,
 Sales, Operations, Support: not relevant (no vendor spend change, no user-facing copy, no new
 recurring cost — the plan consumes existing Doppler secrets and existing GitHub Actions minutes).
 
@@ -1142,7 +1167,46 @@ recurring cost — the plan consumes existing Doppler secrets and existing GitHu
 
 ### Product/UX Gate
 
-Not applicable — Product domain not relevant and the mechanical override did not fire.
+**UX half:** not applicable — the mechanical UI-surface override did not fire, so no `.pen`
+wireframe is required and `ux-design-lead` is correctly not invoked.
+
+**Product half — CPO sign-off (2026-08-05): SIGNED OFF, with seven binding conditions.**
+Scope: this authorizes *shipping the gate*, **not** *firing the recut*.
+
+*Rationale (CPO).* The status quo is not the safe option — it is an unbounded empty-store exposure
+that has already begun: production frozen on the 2026-08-04 build across 9 consecutive failed
+releases, zot at `pcent=89` and climbing with ~6.5 GB headroom, and the only mechanism that would
+end that state today is an operator dispatching the very pipeline measured failing 9 of 9 times.
+This plan does not create the empty-store risk; it converts an unbounded, operator-dependent,
+unobservable window into a bounded, automatic, fail-loud one. Blocking on the zero-downtime
+blue-green path (#6126 / ADR-096 clause (g)) would hold the *worse* version of the same risk for a
+multi-day build while the disk fills. The plan is signable **specifically because of** A5's
+abort/degrade boundary and A4's `live` arm; without those it would be the same deadlock in new
+clothes.
+
+*Conditions — all must hold in the shipped work or the sign-off lapses:*
+
+1. **The window gets a number.** The restore job carries an explicit `timeout-minutes`, and restore
+   failure or timeout must page. Where Phase 0.4's wall-clock is unmeasured, say so rather than
+   implying a bound that was never measured.
+2. **Phase 0.9 is a blocker, not a degrade** — green, or a named blob-completeness fallback recorded
+   before Phase 2. Same standing for 0.2/0.3/0.4/0.7. *(0.9 resolved green at work time; 0.3 and 0.7
+   resolved; 0.2 and 0.4 carried as named residuals with their failure mode shown to be a safe
+   abort — see `phase-0-probe-evidence.md`.)*
+3. **AC4 (asserted green row) and A3's source-level `FLOOR` both ship.** A gate that cannot pass
+   repeats the defect; a gate that passes on an empty inventory is worse than the one replaced.
+4. **The four unenumerated user-facing consequences are added to `## User-Brand Impact`** and, where
+   operator-facing, to the runbook. *(Applied — see that section.)*
+5. **The recut is not dispatched by this PR**, and AC3 holds: deleting the banner must not let the
+   runbook read as fireable while `stock_preflight_gate` / `cx23`-in-`hel1-dc2` still denies it.
+6. **The `IMAGE_VERIFY_MODE=warn` dependency is declared in the ADR.** A future `warn`→`enforce`
+   flip voids this sign-off's calculus and requires re-signing.
+7. **Scope stays inside the stated boundaries.** Any expansion into ADR-096 clause (g), the second
+   mirror, or `registry-region-migrate` voids the sign-off.
+
+*Roadmap note (not scope here):* the blue-green second mirror is the right destination, not the
+right next step. Once the recut lands and the pipeline unblocks, #6126 is what removes this whole
+class of decision — it should not stay a non-commitment indefinitely.
 
 ### GDPR / Compliance Gate (Phase 2.7)
 
