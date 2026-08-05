@@ -14,6 +14,46 @@ requires_cpo_signoff: true
 > `lane:` note — no `knowledge-base/project/specs/feat-one-shot-7277-d10-gate-pass-condition/spec.md`
 > exists, so no `lane:` could be carried forward. Defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary (deepen-plan, 2026-08-05)
+
+**Halt gates:** 4.6 User-Brand Impact **pass** · 4.7 Observability **pass** (all 5 fields populated,
+no `ssh` in `discoverability_test.command`) · 4.8 PAT-shaped variables **pass** (no matches) ·
+4.9 UI wireframe **skip** (no UI surface) · 4.10 Encryption Posture **pass** (no boilerplate) ·
+4.5 Network-Outage **fired** → deep-dive section added · 4.55 Downtime & Cutover **fired** →
+zero-downtime evaluation added · 4.4 scheduled-work precedent **N/A** (no scheduled job introduced).
+
+**Verify-the-negative sweep — 12 of 12 absolute claims independently confirmed** against the
+codebase (emit-site cardinality, absence of any backup/snapshot/sync/second-mirror, the credential
+grader's network-free contract, the `crane validate` dark-launch, the crane pin-parity list,
+`IMAGE_VERIFY_MODE` fail-open, `DOPPLER_TOKEN_PRD` absence, the job budget and permissions, both
+inngest image pins, the four-pattern retention policy, `registry_region_migrate`'s five missing
+guards, and the single `github -> ghcr` edge + the `cx33`/`cx23` disagreement). No premise in this
+plan is unverified.
+
+### Key improvements from the deepen pass
+
+1. **A4 was itself a dark predicate — caught and fixed.** `zot_mirror_verdict` makes **zero** network
+   requests; it grades a JSON file the detector must produce first. Sourcing only the grader returns
+   `unmeasured` → DEGRADE, i.e. a predicate that runs, prints, and can never abort. A4 now
+   explicitly runs `check-cloudflare-token-drift.sh` first, with a suite row pinning the abort.
+2. **A4's verdict vocabulary is now mapped to the grader's own documented arms**, including the
+   sentence that makes the independence claim structural rather than argued: `live` is *"where a
+   crash-looping or otherwise unreachable origin lands."*
+3. **A2's `crane validate --remote` contribution re-scoped honestly** against the dark-launch's real
+   promotion criterion (a real run against prod, which a throwaway is not), and promoted from "free
+   bonus" to a **hard Phase-0 dependency** — if it does not work against the throwaway, A2 has no
+   blob verifier and needs a named fallback.
+4. **Network-Outage deep-dive** answers all four layers from run artifacts, and names the gap it
+   leaves: the reset is consistent with the crash-loop but does not prove causation — which is why
+   the chosen PASS condition reads nothing about zot's health.
+5. **Downtime & Cutover** evaluates the zero-downtime path (blue-green via a second registry),
+   states plainly that it *is* ADR-096 clause (g)/#6126 and therefore out of scope, and records what
+   this plan actually changes: the window goes from **unbounded** to **bounded by an automatic,
+   fail-loud restore**.
+6. **Pin-parity registration re-scoped:** the `CRANE_SHA256` check iterates a workflow-only set and
+   asserts on the assignment form, so covering a `.sh` means widening the iterated set, not
+   appending a name.
+
 ## Overview
 
 `scripts/registry-pull-path-health.sh` (the D10 pre-destroy gate on the
@@ -219,11 +259,25 @@ In the same job, **before** anything is destroyed:
    already records in writing that a manifest read proves the **manifest**, not the **blobs** — zot
    gc can evict a layer, yielding *green digest parity and `blob unknown` at the host's
    `docker pull`*. A digest-only round-trip is therefore a gate that goes green on an unusable
-   restore, the exact defect class this plan exists to remove. `crane validate --remote` is
-   already dark-launched in that file with a documented promotion criterion blocked on one unknown
-   — whether it speaks plain HTTP to a tunnelled loopback. **The throwaway is direct loopback with
-   no tunnel, so it answers that question for free** and makes A2 prove restorability rather than
-   manifest presence;
+   restore, the exact defect class this plan exists to remove.
+
+   `crane validate --remote` is already **dark-launched, non-blocking** in that file, and its
+   warning states the promotion criterion precisely: *"Either zot gc'd a layer (a pin would fail at
+   docker pull with 'blob unknown') **OR** crane validate does not speak plain-HTTP to the loopback
+   bridge the way copy/digest do. Resolve which BEFORE promoting this to a gate."*
+
+   **Scope this contribution honestly.** The dark-launch's actual promotion criterion is *"once
+   `blob_validate=ok` has been observed on ≥1 **real run** (any trigger), delete this branch and
+   restore the blocking form"* — a run of **that** workflow against **prod** zot. A throwaway in the
+   recut job is not that. What the throwaway *does* settle is the narrower disjunct: it is direct
+   plain-HTTP loopback with no `cloudflared`, so a successful validate rules out
+   "crane validate can't do plain-HTTP loopback at all", leaving only cloudflared-specific
+   behaviour. Real narrowing; **not** grounds to promote the dark-launch.
+
+   **And it is a hard Phase-0 dependency, not a bonus.** If `crane validate --remote` does not work
+   against the throwaway, A2 has no blob-completeness verifier and needs a named fallback (e.g.
+   pulling each blob by digest via the registry API and comparing lengths). Probe it in 0.4 before
+   committing A2's verification method;
 4. assert, per restored digest, that its **cosign signature tag is present** in the throwaway (see
    the signature rule in Phase 0.3 — this is not optional, see below).
 
@@ -283,13 +337,47 @@ proves:
 > `live)  … Cloudflare Access admitted these exact credentials on registry.soleur.ai. If the zot mirror still fails, the credential is ruled OUT by measurement.`
 > `stale) ::warning::The registry-push CF Access service token is MEASURED DEAD in at least one Doppler config. The zot mirror step later in this job will very likely fail with mirror_reason=bridge.`
 
-**A4 becomes: run that grader.** `live` → PASS. `stale` (measured dead) → **ABORT** — the
-post-destroy restore cannot authenticate, so the destroy is unrecoverable. Unverifiable → treat as
-A5's degrade class (log `credential=unverified`), never as PASS.
+**A4 becomes: run that grader.** Read at deepen-plan time, `scripts/zot-mirror-diagnosis.sh`
+`zot_mirror_verdict(rc, json_file)` echoes a **closed four-value vocabulary**, and its own header
+documents each arm. Map them directly:
 
-This satisfies the independence criterion exactly: the Cloudflare Access edge is up whether or not
-zot is. It is available during the crash-loop, and it grades the half the 9-run failure history
-implicates.
+| Verdict | Its documented meaning (verbatim) | A4 |
+|---|---|---|
+| `live` | *"the detector probed the credential and Cloudflare Access ADMITTED it. Rotation is ruled OUT by measurement. **This is where a crash-looping or otherwise unreachable origin lands.**"* | **PASS** |
+| `stale` | *"a MEASURED dead count (json .dead > 0). Rotation genuinely is the remedy, and **this is the only arm on which that is true**."* | **ABORT** |
+| `unverifiable` | *"a measured 'could not tell' … **NOT an accusation**: the detector's own cause vocabulary all carries 'Do NOT rotate'."* | **DEGRADE** — log, do not abort |
+| `unmeasured` | *"nothing was checked, or the verdict file could not be read/parsed, or the exit code and the counts contradict each other. **Ranks nothing.**"* | **DEGRADE** — log, do not abort |
+
+That bolded sentence on `live` is why this satisfies the independence criterion **by construction,
+not by argument**: the grader's own author already established that a crash-looping origin lands on
+`live`. The Cloudflare Access edge is up whether or not zot is.
+
+**It also already implements the exit-code discipline this task demanded, so do not re-derive it.**
+Its header records the trap verbatim: the underlying detector *"exits 1 for `DEAD_N > 0 ||
+UNVERIFIABLE_N > 0` — so mapping rc=1 to 'stale' prints 'the token is STALE, rotate it' about a
+token nothing measured. The counts come from the JSON; rc only distinguishes 'ran' from 'could not
+run at all' (exit 2)."* A missing JSON key reads as a `-1` sentinel, **never** as 0, because
+*"treating 'the file did not report this' as 'the count was zero' would manufacture `live` out of a
+file that measured nothing"*; and the final arm requires **positive evidence** rather than absence
+of bad news. Consuming this function is strictly safer than writing a new classifier.
+
+**`zot_mirror_verdict` MEASURES NOTHING BY ITSELF — A4 must run the detector first.** Verified at
+deepen-plan: the function makes **zero** network requests (its own header says *"No network, no side
+effects"*); it is pure arithmetic over a JSON file **already produced** by
+`check-cloudflare-token-drift.sh --json-file`. So A4 is two steps, and the order is load-bearing:
+
+1. run the detector, capturing **both** its exit code and its `--json-file` output;
+2. `zot_mirror_verdict "$rc" "$json_file"`.
+
+**Skipping step 1 does not fail — it returns `unmeasured`, which A4 maps to DEGRADE.** A4 would then
+be a predicate that runs, prints, and can never abort: precisely the dark-operand defect this whole
+plan exists to remove, reintroduced in the predicate meant to close it. Pin it with a suite row that
+asserts A4 aborts on a `stale` fixture **and** a structural check that the gate invokes the detector,
+not just the grader.
+
+**Sourcing constraint (load-bearing):** the file's header states it *"must NOT `set -euo pipefail`"*
+because it is sourced into steps already running under `bash -eo pipefail`. The gate must source it
+without altering that, and must not wrap it in a subshell that swallows the verdict.
 
 Read credentials via `DOPPLER_TOKEN_PRD`, **not** the `prd_terraform`-scoped `DOPPLER_TOKEN` — the
 composite bridge action documents that distinction explicitly. **`DOPPLER_TOKEN_PRD` is referenced
@@ -657,6 +745,66 @@ below rather than opted out of, because the plan does add a network dependency (
 
 Ordering discipline is satisfied: no service-layer hypothesis is advanced ahead of the L3/L7 checks.
 
+## Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+The plan body contains `connection reset by peer` and `SSH`, so the checklist fires. Layer status,
+each with an artifact rather than an assertion:
+
+| Layer | Status | Artifact |
+|---|---|---|
+| **L3 — firewall allow-list** | **Verified not implicated.** | Release run `30988480437` logs `BRIDGE_OUTCOME: success` — the CF Tunnel bridge came up and reached the origin before the failure. Packets arrive. No `hcloud firewall` change is proposed by this plan, and the recut's own network path (CF Access service token → `cloudflared` → connector → `10.0.1.30:5000`) is unchanged. |
+| **L3 — DNS / routing** | **Verified.** | `GET https://app.soleur.ai/health` resolved and returned a 200 JSON body during planning (2026-08-05). `crane digest ghcr.io/jikig-ai/soleur-web-platform:latest` resolved from the same network. |
+| **L7 — TLS / proxy** | **Verified not implicated, and instrumented.** | CI→GHCR is HTTPS with default cert verification (a digest resolved successfully). CI→zot is plain HTTP over `127.0.0.1:5000` into `cloudflared` **by design** — crane/cosign treat loopback as insecure, and the TLS leg is the Access edge. Neither is modified. A1's `NETWORK` classifier and A5's degrade bucket are this plan's own L7 instrumentation: they abort or degrade rather than guessing. |
+| **L7 — application** | **Verified — this is the fault layer.** | `Error: Patch "http://127.0.0.1:5000/v2/.../blobs/uploads/…": write: connection reset by peer` — the origin **reset an established, admitted connection mid-upload**. That is zot dying, not a packet-filter drop: a firewall block would refuse at connect, not reset mid-PATCH. Corroborated by the Go panic in `pkg/scheduler.(*Scheduler).poolWorker` with `zot_oom_kills=0`. |
+
+**Ordering discipline satisfied:** no service-layer hypothesis is advanced ahead of the L3/L7
+checks, and the L3 checks are answered from run artifacts, not from "obvious".
+
+**The gap this leaves, named:** the reset is *consistent with* a crash-looping origin but does not by
+itself prove the panic causes the reset. That is #7247's diagnosis, not this plan's — and it is
+precisely why the chosen PASS condition reads **nothing** about zot's health. The gate's correctness
+does not depend on the crash-loop's root cause being known.
+
+## Downtime & Cutover (deepen-plan Phase 4.55)
+
+**Trigger:** the plan does not itself apply Terraform, but it authorises an operation that
+power-cycles and replaces a serving resource (`-replace` of `hcloud_server.registry` +
+`hcloud_volume.registry` + its attachment) and takes production's **sole** container pull path
+offline. The gate fires on the operation the plan gates.
+
+**The offline-inducing operation and its surface.** The recut destroys the zot store volume and
+replaces the host. During the window, no host can pull any image: not a reboot, not a replacement,
+not a deploy. Already-running containers keep serving, so there is no *immediate* user-visible
+outage — but the fleet is one restart away from one, with no rollback.
+
+**Zero-downtime path — evaluated, and this is the honest answer.** A blue-green cutover exists in
+principle and is strictly better: provision a **second** registry host with an encrypted volume,
+refill it from GHCR via the same restore engine, cut the fleet's `ZOT_REGISTRY_URL` over, then
+retire the plaintext original. No window at all. **It is out of scope because it *is* ADR-096
+clause (g)'s second-mirror arm** (#6126, "still not a commitment to build one") — building it here
+would be exactly the silent scope expansion this plan's boundaries forbid, and it is a multi-day
+infrastructure build, not a gate fix.
+
+**Residual downtime accepted, with the bound stated.** The recut therefore keeps a window, but this
+plan changes its character in the way that matters:
+
+| | Before this plan | After |
+|---|---|---|
+| Window length | Unbounded — *"nothing you control ends it"*; it lasts until someone dispatches a release | Bounded by the chained restore job, which runs automatically and fails loud |
+| Ending mechanism | An operator manually dispatching `web-platform-release.yml` — a pipeline measured failing 9 consecutive times | `scripts/registry-restore-from-ghcr.sh`, rehearsed in the same run minutes earlier |
+| Observability | A page that **cannot arrive** (the dark `ghcr-fallback` operand) | Per-exit-code `::error::` on the restore job + D11's heartbeat-transition poll |
+
+**Per-stage verification and rollback.** Rollback of the destroy itself is impossible — that is the
+premise. So the plan's compensating controls are all *pre*-destroy (A0–A5, which abort before
+anything is lost) and *post*-destroy fail-loud (D11, then the restore job). The restore script is
+required to be resumable specifically so a partial pass is recoverable by re-running rather than by
+recovering state.
+
+**Sign-off.** Accepting a bounded window on a `single-user incident` surface is a CPO sign-off item,
+already required by the threshold. Scheduling remains as ADR-096 has it — fire immediately before a
+planned release — though the chained restore makes that a preference rather than the load-bearing
+mitigation it used to be.
+
 ## Architecture Decision (ADR/C4)
 
 Detection fires: this plan changes **what authorizes an irreversible destroy of production's sole
@@ -873,10 +1021,14 @@ discoverability_test:
 6. `bash tests/scripts/test-registry-restore-from-ghcr.sh` is registered in `scripts/test-all.sh`
    (grep the runner for the suite path) — `scripts/lint-orphan-test-suites.sh` covers
    `scripts/*.test.sh` only and will not catch an unregistered `tests/scripts/test-*.sh`.
-6b. The new script is registered in `apps/web-platform/infra/inngest-bootstrap-mirror-only.test.sh`'s
-   `CRANE_SHA256` pin-parity list. The repo already carries three near-identical `install_crane` /
-   `CRANE_VERSION` / `CRANE_SHA256` blocks guarded only by that grep test; this adds a fourth, and
-   an unregistered fourth copy drifts silently.
+6b. The new script's `CRANE_SHA256` is covered by the pin-parity check in
+   `apps/web-platform/infra/inngest-bootstrap-mirror-only.test.sh`. **Note the shape before
+   editing:** that check asserts on the *assignment* (`^[[:space:]]*CRANE_SHA256="<sha>"`,
+   deliberately — *"a bare whole-file match is satisfied"* otherwise) and iterates a variable named
+   `$wf`, i.e. it is currently **workflow-scoped**. Adding a `.sh` path means widening the iterated
+   set, not just appending a filename. The repo already carries three near-identical
+   `install_crane` / `CRANE_VERSION` / `CRANE_SHA256` blocks guarded only by this grep; an
+   unregistered fourth copy drifts silently.
 7. `bash scripts/test-all.sh scripts` is green. (This subsumes the "passes" half of AC4 and AC6;
    those criteria carry only their distinctive greps.)
 8. The Sentry arm is gone, asserted mechanically rather than by judgement:

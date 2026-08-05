@@ -26,8 +26,12 @@ Brand-survival threshold: `single-user incident` → CPO sign-off before `/work`
       `Cache-Control: no-cache`; plan to assert both `version` and `build_sha`.
 - [ ] 0.6 Capture A5's outcome-classification strings: credential-rejected vs availability-failure.
       Measured, never guessed — this boundary is the abort/degrade line.
-- [ ] 0.7 Read `scripts/zot-mirror-diagnosis.sh` (`zot_mirror_verdict`,
-      `zot_mirror_unverifiable_cause`) and confirm its live/stale contract for A4.
+- [ ] 0.7 A4 wiring: `zot_mirror_verdict` makes **zero** network calls — it grades a JSON file
+      `check-cloudflare-token-drift.sh --json-file` must produce first. Confirm the detector's
+      invocation, capture rc **and** the JSON, then grade. Skipping the detector yields `unmeasured`
+      → degrade, i.e. a predicate that can never abort. Do not `set -euo pipefail` when sourcing.
+- [ ] 0.9 Probe `crane validate --remote` against the throwaway. If it does not work over plain-HTTP
+      loopback, A2 has no blob-completeness verifier — pick and record a fallback before Phase 2.
 - [ ] 0.8 Re-derive the next-free ADR ordinal against freshly-fetched `origin/main` (plan-time
       value `ADR-169` is provisional).
 
