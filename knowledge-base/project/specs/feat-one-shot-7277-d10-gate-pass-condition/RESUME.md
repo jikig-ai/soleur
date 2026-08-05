@@ -1,19 +1,17 @@
 # RESUME — #7277 D10 gate PASS condition
 
-Written 2026-08-05. Every path and command below was run and confirmed to resolve before this
-file was written; none are recalled from memory.
+Updated 2026-08-05 (second session). Every command below was run; nothing is recalled.
 
 ---
 
 ## Paste this to resume
 
-> Resume #7277 from PR #7290. The plan and Phase 0 probe evidence are committed on branch
-> `feat-one-shot-7277-d10-gate-pass-condition`; implementation has not started. Read
-> `knowledge-base/project/specs/feat-one-shot-7277-d10-gate-pass-condition/RESUME.md` first —
-> it carries two measured findings that change the implementation and the safety framing this
-> work turns on. Then continue from Phase 1 of
-> `knowledge-base/project/specs/feat-one-shot-7277-d10-gate-pass-condition/tasks.md`
-> via `/soleur:work <plan-path>`, and carry it through review → QA → compound → ship.
+> Resume #7277 from PR #7290 (OPEN, **draft — do not mark ready**). Work in the existing worktree
+> `.worktrees/feat-one-shot-7277-d10-gate-pass-condition`. Read
+> `knowledge-base/project/specs/feat-one-shot-7277-d10-gate-pass-condition/RESUME.md` first — a
+> four-agent review found the gate **could not pass**, most blockers are fixed, and the remaining
+> ones are listed there with file anchors. Finish the OPEN BLOCKERS section, re-run both suites
+> plus the mutation batteries, then review → QA → compound → ship.
 
 ---
 
@@ -21,156 +19,165 @@ file was written; none are recalled from memory.
 
 | | |
 |---|---|
-| Branch | `feat-one-shot-7277-d10-gate-pass-condition` |
-| Worktree | `.worktrees/feat-one-shot-7277-d10-gate-pass-condition` |
-| PR | **#7290** (OPEN, draft) |
-| Unpushed commits | 0 — everything is on the remote |
-| Done | plan + deepen, Phase 0 partial (0.1, 0.5, 0.6, 0.8) |
-| Not started | Phases 1–5 (~29 tasks) + five Phase 0 probes needing a runner |
+| Branch | `feat-one-shot-7277-d10-gate-pass-condition` (pushed, 0 unpushed) |
+| PR | **#7290** — OPEN, **DRAFT**. Body carries `Closes #7277`. |
+| Suites | `test-registry-pull-path-health.sh` **46/0**, `test-registry-restore-from-ghcr.sh` **34/0** |
+| Mutation | 15/15 (engine) + 13/13 (gate) caught — **must be re-run**, both files changed after |
+| Exit gate | `bash scripts/test-all.sh` was still running at hand-off (101 suites, 0 failed). **Re-run it.** |
+| Net issue flow | 0 — closes #7277, files #7295 |
 
-Artifacts (all confirmed present):
-
-- Plan — `knowledge-base/project/plans/2026-08-05-fix-registry-luks-recut-d10-pass-condition-plan.md`
-- Tasks — `knowledge-base/project/specs/feat-one-shot-7277-d10-gate-pass-condition/tasks.md`
-- Probe evidence — `knowledge-base/project/specs/feat-one-shot-7277-d10-gate-pass-condition/phase-0-probe-evidence.md`
-
-Targets (all confirmed present):
-
-- The gate — `scripts/registry-pull-path-health.sh`
-- Its suite — `tests/scripts/test-registry-pull-path-health.sh`, registered at `scripts/test-all.sh:556`
-- The runbook — `knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md`
-- The dispatch — `.github/workflows/apply-web-platform-infra.yml`
-- `scripts/registry-restore-from-ghcr.sh` — **absent**, Phase 1 creates it
+Phases 0–4 are committed. Phase 5 is **not** finished.
 
 ---
 
-## Read this before writing code
+## READ THIS FIRST — the shape of the mistake
 
-### 1. This is a destroy gate. A fail-open deletes the fleet's only image store.
+The first session shipped a gate whose central claim was false. Four review agents
+(`user-impact`, `silent-failure-hunter`, `observability-coverage`, `platform-strategist`) ran
+against the pushed diff; **three independently found the same blocker**, and the pattern is worth
+carrying forward:
 
-Ask of every predicate: *what input makes this green while the thing it protects is broken?*
-Prefer a positive proof of restorability over an absence-of-error signal. A "could not measure"
-outcome is its own **aborting** class, evaluated *before* the comparison — never allowed to read
-as safe.
+> **Every suite was green, and every suite stubbed the thing that was broken.**
 
-The plan already caught one draft that failed this: a review subagent's first A5 verdict table put
-`connection reset mid-upload` in ABORT. That is the literal signature of the live incident, so it
-would have re-created the deadlock this work exists to remove.
+`ZOT_PUSH_USER`/`ZOT_PUSH_TOKEN` were validated non-empty and then never handed to crane, which
+reads only the Docker keychain. So the rehearsal pushed **anonymously** into a `defaultPolicy: []`
+sink → 401 → `DENIED` → exit 5 → A2 abort, deterministically, on every dispatch. The PR whose
+entire purpose was "give the D10 gate a PASS condition" shipped a gate that could not pass. No test
+caught it because every test injects a fake crane.
 
-### 2. The abort/degrade boundary — the single most dangerous line
-
-**Only authorisation and correctness failures abort. Availability failures — reset, timeout, 5xx —
-degrade with a named, logged degradation.**
-
-Availability failures *are* the motivating incident. A gate that aborts on them cannot authorise
-the recovery it exists to authorise.
-
-### 3. Two Phase 0 measurements that change the implementation
-
-Measured against the pinned crane `v0.20.2`:
-
-- **`NAME_UNKNOWN` does not exist on GHCR.** A missing *repository* returns
-  `MANIFEST_UNKNOWN: manifest unknown`, identical to a missing *tag*. Task 0.1 asked for it as a
-  distinct string; a classifier branching on it carries a dead arm, and no test may assert a
-  string GHCR never emits.
-- **Neither `rc` nor the first stderr line discriminates.** Tag-absent, repo-absent and DNS
-  failure all exit `1` and all emit the same first line
-  (`HEAD request failed, falling back on GET: …`). Classify on the **last** line. Anything
-  matching neither known shape is `UNKNOWN` → abort.
-
-The full table is in `phase-0-probe-evidence.md`.
-
-### 4. Why this PASS condition, on evidence
-
-Chosen: **rehearsed restore from GHCR-via-CI** (issue candidate 2). Not on the issue's say-so —
-the release pipeline's failing half is measurably the **push into prod zot**, while the
-**GHCR-read half works**: `crane digest ghcr.io/jikig-ai/soleur-web-platform:latest` returns
-`sha256:b04096d3…`, byte-identical to the digest in the failing run's own error text. The other
-three candidates all depend on the failing component, or on a mirror that does not exist, or on a
-credential that is structurally unmintable.
-
-### 5. A second blocker the issue never named
-
-Deleting the unconditional refusal is **not sufficient**. The `zot_served == 0` arm aborts during
-exactly the crash-loop the recut recovers from. The plan drops the whole Sentry arm, which also
-resolves the dark `ghcr-fallback` operand by dropping the signal.
+**The lesson to apply to the remaining work:** a stub proves the argv you chose, never the protocol
+you speak. Anything that only a real registry, a real shell mode, or a real credential can falsify
+needs a real exercise — the local throwaway-zot probe (see §0.9 in `phase-0-probe-evidence.md`) is
+the pattern; it is cheap and it is what caught the `crane digest` fail-open in the first place.
 
 ---
 
-## Scope boundaries — do not cross
+## OPEN BLOCKERS — do these before anything else
 
-- **Do NOT dispatch the recut.** No `gh workflow run apply-web-platform-infra.yml`. Firing it is a
-  separate operator-gated decision.
-- **No `terraform apply`**, targeted or otherwise. The registry host carries a standing
-  pending-REPLACE in any untargeted plan (`user_data` is ForceNew, no `ignore_changes`), and a live
-  probe on 2026-08-05 found `cx23` orderable in nbg1-dc3 but **not hel1-dc2**, where the host runs —
-  a recreate there fails on stock.
-- **ADR-096 clause (g) stays open.** It records a broader debt than #7277, which covers only the gate.
-- **`zot_last_err` widening stays with #7247**, not here.
+### B1. A5 has no real probe, and the gate now REFUSES without one
+
+**Current state is deliberately fail-closed and therefore currently unfireable in CI.**
+`scripts/registry-pull-path-health.sh` aborts A5 when no probe is configured (`no sink probe is
+configured`). That is honest — an unwired predicate cannot fire, and shipping one is the
+dark-operand defect this whole change exists to remove — but it means **the workflow must wire a
+real probe or the gate always refuses**.
+
+Wire `REGISTRY_SINK_PROBE_CMD` (the production knob; deliberately NOT a `REGISTRY_GATE_*` seam,
+because the seam guard refuses those inside Actions). The probe must emit exactly one bare token on
+stdout: `ok` | `credential_rejected` | `wrong_digest` | anything else (→ degrade).
+
+It needs the CF Tunnel bridge up in the recut job (`./.github/actions/cf-tunnel-registry-bridge`,
+already used by `registry_store_restore`), then one `crane copy` of an already-present ref — crane
+skips blobs the destination holds, so it is near-idempotent.
+
+**Alternative, if the budget cost is judged too high:** delete A5 outright and say plainly in
+ADR-169 and the plan that the destroy is authorized *without observing the sink*. That is a real
+regression (plan review R2 added A5 precisely to stop that), so it is a decision to record, not a
+silent drop. **Do not** leave A5 present-but-dark.
+
+### B2. The rehearsal probably should not run inside the mutex-holding job
+
+`platform-strategist`: `registry_luks_recut`'s `timeout-minutes: 30` is load-bearing because it
+holds the **workflow-level** apply mutex and D11's 630 s bound must sit below it. The rehearsal
+(multi-GB, wall-clock **unmeasured** — Phase 0.4) now runs *ahead of the apply* inside that budget.
+A rehearsal that succeeds *slowly* subtracts from the post-destroy window, pushing a timeout into
+`terraform apply` or D11, where it is catastrophic.
+
+Options: move the rehearsal to a `needs:`-preceding gate job (does not release the mutex, but
+restores the invariant — the recut's clock starts at the apply), or raise the 30 with the unmeasured
+term stated explicitly. **Do not leave the comment at `:1888-1891` asserting an invariant that no
+longer holds.**
+
+### B3. Cheap denies still run after the expensive proof
+
+`terraform init`/`plan`, the sourced `registry_luks_recut_gate` (`volume_id_mismatch`,
+`out_of_scope`, `luks_key_touched`), `stock_preflight_gate` and the zero-touch assert are all
+~1–2 min pre-destroy denies sitting **behind** the multi-GB rehearsal. Nothing in the rehearsal needs
+`tfplan.json`, so `init` + `plan` + the guards can be hoisted. Tradeoff to state explicitly: it
+widens the plan→apply gap by the rehearsal's duration against a lock-less R2 state.
+
+### B4. `soleur-inngest-config` — the "measured absent" claim is wrong
+
+The gate asks for tag `latest`; `build-inngest-config-bundle.yml` publishes `v${VERSION}` and the
+promoted ref is a **Terraform digest pointer** (`apps/web-platform/infra/inngest-config-digest.tf`,
+`TF_VAR_inngest_config_digest`). So the entry classifies NOTFOUND forever and is skipped by design.
+The plan's "not published at GHCR (measured — `crane ls` returns `NAME_UNKNOWN`)" used the **tags**
+API without credentials, which is exactly the ambiguity both scripts document everywhere else.
+
+Re-measure with a credentialed digest read against the promoted digest; if it resolves, promote to
+`required`, raise `FLOOR`, and **correct the claim in the plan and in ADR-169**.
+
+### B5. Manifest divergence — rehearsal and real restore can consume different inventories
+
+PREPARE writes `${RUNNER_TEMP}/restore-pins.json` and uploads it; VERDICT then re-derives over the
+**same path after the upload**; the restore job downloads the PREPARE artifact. A deploy landing in
+between (the window spans the stock probe, two docker pulls and up to 40 s of readiness polling)
+means the rehearsal proves set B while the restore restores set A, both green.
+
+Fix: upload the artifact **after** VERDICT, or have VERDICT consume PREPARE's manifest instead of
+re-deriving. Emit the manifest `sha256` in the verdict line either way.
 
 ---
 
-## Done-signal
+## Lower-severity, still open (all file-anchored in the agent reports)
 
-The runbook's own staleness check is the contract. It currently returns `1`:
+- **Exit 1 is reachable and unenumerated.** Ten `die 1` sites in the engine cover real manifest-shape
+  faults; both consumers call it "unenumerated … a defect worth filing", sending the operator to file
+  a bug about a correct diagnosis. Add a `1)` arm + a runbook row, or recode those to `6`.
+- **`classify()` diverges between the two scripts.** The gate's copy lacks `connection reset`,
+  `BLOB_UNKNOWN`, `502/503/504`. A TCP reset during A1 — the literal text of the motivating incident
+  — classifies `UNKNOWN` and deadlocks the recut.
+- **`*"EOF"*` in the NETWORK arm** is a 3-char substring match that converts unclassifiable failures
+  into retryable sink outages, downgrading exit 6's loudest-arm guarantee.
+- **`last_err` takes the last 400 *bytes*, not the last *line*,** despite the classifier's stated
+  contract of classifying on the last line.
+- **Manifest write guard tests only the last `printf`** — a brace group's status is its last command,
+  so a failing `paste`/ENOSPC yields a truncated manifest at exit 0.
+- **`shift 2` with a missing flag value spins forever** (both scripts). `--target` with no value hangs
+  to the job timeout and is *cancelled*, not failed — no `::error::`.
+- **Unguarded greps in the throwaway step** die at the assignment under `-e`, one line before the
+  `::error::` written to explain that exact input. The readiness loop's exhaustion is unchecked, so a
+  zot that never bound reports "the throwaway registry accepted an unauthenticated request (000)".
+- **Signature reads are the only unclassified reads** in the engine — a GHCR 503 reports "no cosign
+  signature found" (exit 4, non-retryable) for what is an availability fault (exit 2).
+- **No runner-disk preflight.** ~2.5 GB against ~20 GB today, but linear in `FLOOR` (now 4, was 2) and
+  doubles if arm64 lands (#6460). A full store makes zot answer 500, which classifies `UNKNOWN` → a
+  runner-local fault reported in the vocabulary of a restore-engine defect.
+- **`discoverability_test.command` in the plan does not work** — `--job` takes a numeric ID, it is
+  scoped to the wrong job, and the grep matches neither the predicate lines nor the per-entry lines.
+- **Runbook orphaned tail** — still calls the gate "the file whose refusal blocks the runbook" and
+  quotes a "DISPOSABLE GHCR MIRROR" phrase that is no longer in the rewritten header.
+- **"re-run that job" has no command** at four sites, after an irreversible destroy.
+- **#7295 is referenced nowhere in-tree**; the three out-of-diff sites still telling operators to rely
+  on `ghcr-fallback` (`scheduled-zot-restart-loop.yml`, `zot-registry-revert.md`,
+  `zot-soak-6122.sh`) carry no marker.
+
+---
+
+## What IS solid (do not re-litigate)
+
+- **Probe 0.9**, with its negative control: `crane digest` returns rc 0 PASS on a blob-evicted image;
+  `crane validate --remote` returns `BLOB_UNKNOWN`. Measured against a real throwaway zot.
+- **Phase 0.3**: the GHCR signature is a Sigstore **bundle v0.3** bound to the digest, so copying is
+  sound and the job needs no `id-token: write`.
+- **A5's abort/degrade boundary** (availability degrades, authorisation/correctness aborts), pinned
+  in both directions.
+- The green row, the distinctness guard, the seam guard, `FLOOR=4` and its derivation.
+- ADR-169, the ADR-096 amendment (clause (g) open, `unowned constraint` still 2, Status `Adopting`),
+  the runbook rewrite, the C4 edges + re-render (both C4 gates green).
+
+## Gates
 
 ```
-grep -c "no valid PASS condition" scripts/registry-pull-path-health.sh
+bash tests/scripts/test-registry-pull-path-health.sh     # 46/0
+bash tests/scripts/test-registry-restore-from-ghcr.sh    # 34/0
+bash scripts/test-all.sh                                 # RE-RUN — was mid-flight at hand-off
+actionlint .github/workflows/apply-web-platform-infra.yml
+grep -c "no valid PASS condition" scripts/registry-pull-path-health.sh   # must be 0
 ```
 
-When this work lands it must return **0**, and the ⛔ blocked-state banner at the top of
-`registry-luks-recut-6929.md` must be deleted — the banner says so itself
-(`0 = THIS BANNER IS STALE, delete it`). It is deliberately a grep, not an issue state.
+**Re-run both mutation batteries** — the engine and the gate both changed materially after the last
+run, and the batteries are what caught five of the original gaps.
 
-Also: the literal phrase must appear **nowhere** in the gate file, including historical commentary
-(task 2.3).
-
----
-
-## Gates (commands confirmed to resolve)
-
-```
-bash scripts/test-all.sh scripts        # TEST_GROUP arg is supported (test-all.sh:119)
-bash tests/scripts/test-registry-pull-path-health.sh
-```
-
-**Measured baseline 2026-08-05** (re-run, not recalled): the D10 suite is
-`EXIT=0`, **26 passed, 0 failed** on the current tree. Phase 2.1 rewrites it, so expect the count
-to change — but a fresh session that sees anything other than 26/0 *before* editing has inherited
-a regression from elsewhere, not from this work.
-
-Before merge, re-derive the ADR ordinal against freshly-fetched `origin/main` (task 5.3) —
-**ADR-169** was next-free at 2026-08-05 (168 highest, 167 absent), but ordinals have collided
-three times recently, so a branch-picked one is provisional until re-measured.
-
-PR body must say `Closes #7277`.
-
----
-
-## Live context (all OPEN as of 2026-08-05)
-
-- **#7247** — zot crash-looping. `pcent=89` and climbing, `zot_restarts=9281`, ~6.5 GB headroom.
-  **9 consecutive blocked releases**; production is up but serving the 2026-08-04 11:09 build
-  (`version 0.249.4`, `build_sha f838839e`). This is what #7277 unblocks.
-- **#7278** — the restart lever. Its activation vehicle is this recut, so it is downstream of #7277.
-- **#7286** — inngest down, opened 2026-08-05 07:17Z. **Not investigated at all.** Scheduled crons
-  and armed reminders may not be firing. Independent of the registry work; flagged so it is not
-  quietly lost.
-
-Already merged this session: **#7280** (`d0295964f`) fixed the registry `user_data` cap breach
-(34,628 B against a 32,768 B cap), which removed the *other* blocker on the recut — every
-host-creation path was failing at the Hetzner API regardless of its own gate.
-
----
-
-## Five Phase 0 probes still to run
-
-They need a runner or a throwaway registry; a workstation probe cannot establish runner capability.
-
-| # | What |
-|---|---|
-| 0.2 | `GITHUB_TOKEN` + `packages: read` can `crane ls`/`digest` the GHCR repos **from a runner** |
-| 0.3 | Signature mechanism — copy `sha256-<digest>.sig` vs re-sign keyless; does `cosign verify` check `critical.identity.docker-reference`? |
-| 0.4 | Throwaway-zot feasibility for the full pin set — per-pass wall-clock and peak runner disk |
-| 0.7 | A4 wiring — `zot_mirror_verdict` makes **zero** network calls; the detector must run first or the predicate can never abort |
-| 0.9 | `crane validate --remote` over plain-HTTP loopback; if it fails, A2 has no blob-completeness verifier and needs a recorded fallback **before Phase 2** |
+**ADR-169** was next-free at 2026-08-05 (168 highest, 167 absent). Re-derive against freshly-fetched
+`origin/main` before merge.
