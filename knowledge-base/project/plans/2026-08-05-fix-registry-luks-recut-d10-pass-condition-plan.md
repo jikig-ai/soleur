@@ -429,15 +429,30 @@ apply. Wiring it is a Phase 3 task with its own AC — without it A4 aborts on e
 would be a *new* unfireable gate.
 
 *What makes A4 green while broken?* The Access token is live but `ZOT_PUSH_TOKEN` (zot's own
-htpasswd credential, a different secret behind the same tunnel) is stale. A5's authenticated write
-is what closes that; A4 and A5 grade two different credentials on the same path and neither
-subsumes the other.
+htpasswd credential, a different secret behind the same tunnel) is stale. **Superseded at /work
+(R16):** A5's authenticated write was going to close that, and A5 was deleted. The residual is now
+split by whether the credential survives the destroy — the Access token does and A4 aborts on it;
+the htpasswd credential does not, is re-baked by the recut itself, and is exercised post-destroy by
+`registry_store_restore`'s non-retryable exit 5. See ADR-169 §"Named residuals" #1.
 
 *Health-URL derivation:* A0 must build the `/health` URL from `APP_DOMAIN_BASE` rather than
 hard-coding `https://app.soleur.ai/health`, or the `APP_DOMAIN_BASE` read is decorative and the two
 sections disagree about where "committed config" ends.
 
-### A5 — sink proof (ADVISORY-DEGRADING, never deadlocking) — the predicate the first draft missed
+### A5 — sink proof — ⛔ SUPERSEDED AT /work: NOT SHIPPED, DELETED BY ARCHITECTURE RULING
+
+> **This section is retained as a design record, not as a specification.** A5 was implemented,
+> found to be fail-closed and unwired (so the gate refused on every dispatch), routed to the
+> `soleur:engineering:cto` agent as an architectural fork, and **deleted**. Nothing described below
+> ships. The reasoning is in **review row R16** and in ADR-169 §"Why there is no live-sink
+> predicate". Read those before acting on anything in this section.
+>
+> **The abort/degrade asymmetry described below was SOUND**, and is recorded as sound — it is not
+> why A5 was removed. It was removed because its only marginal abort arm fires on an htpasswd
+> divergence the recut itself repairs, because the authorisation-vs-availability distinction is
+> undecidable on the CF-tunnel transport (#7242 / ADR-166), and because that transport is
+> fail-closed and cannot carry the asymmetry. A reader who re-derives the asymmetry, finds it
+> valid, and re-adds the predicate will have re-introduced all three.
 
 **Why this exists.** The first draft of this plan had *no predicate that observed prod zot at all*.
 It answered "must not depend on the failing component" by never looking at it — which is a different
@@ -1080,10 +1095,16 @@ discoverability_test:
    contains an asserted **green row**: `rc == 0` on the all-good fixture. Verified by a grep of the
    suite source for the green-fixture case name. *A suite with 23 green assertions and no green row
    is exactly how an unpassable gate shipped. Everything else here is secondary to this.*
-5. The suite contains a positive control for **each of the ten** abort classes enumerated in
-   Phase 2, and each asserts its specific classified message, not a bare non-zero rc. Plus a row
-   pinning A5's abort/degrade asymmetry in **both** directions: credential-rejected → abort,
-   connection-reset → degrade-and-proceed.
+5. The suite contains a positive control for **each** abort class enumerated in Phase 2, and each
+   asserts its specific classified message, not a bare non-zero rc. **Amended at /work (R16):** the
+   A5 asymmetry rows are replaced — A5 is not shipped — by a three-row negative-space contract
+   proving the predicate is *gone* rather than *dark*: the verdict carries no `sink_probe=` field;
+   a stale `REGISTRY_SINK_PROBE_CMD` is INERT (proven with a sentinel file the probe would touch if
+   it were ever executed, so "was it consulted?" is observed rather than inferred); and the retired
+   knobs appear nowhere in comments-stripped executable source. **Additionally (R18):** the seam
+   guard is asserted one row PER SEAM, each set alone — a fixture setting every seam at once only
+   proves the set is non-empty, and would stay green after any single name were dropped from the
+   guard's list.
 6. `bash tests/scripts/test-registry-restore-from-ghcr.sh` is registered in `scripts/test-all.sh`
    (grep the runner for the suite path) — `scripts/lint-orphan-test-suites.sh` covers
    `scripts/*.test.sh` only and will not catch an unregistered `tests/scripts/test-*.sh`.
@@ -1191,6 +1212,9 @@ are exactly the defect the plan exists to prevent, committed by the plan itself.
 | R13 | AC ceremony (`AC15`–`AC20` in v1): ordinal greps, "file didn't change" assertions, plan-self-validation, an AC that could not fail (*"reflects the corrected wording"*), and one that **could not pass** (it cited a `spec.md` the plan's own lane note says does not exist). | Cut or given measured expected values. 21 ACs → 19, with the green row promoted to first. |
 | R14 | A fourth unguarded copy of the `install_crane` / `CRANE_SHA256` spine. | Registered in the existing pin-parity test (AC6b). |
 | R15 | Cheap gates after expensive ones — `stock_preflight_gate` aborts *after* a multi-GB rehearsal. | Pre-rehearsal availability probe added to Phase 3. |
+| **R16** | **R2's remedy is REVERSED at /work: A5 is deleted.** R2's *finding* stands — the first draft did collapse "must not depend on the failing component" into "must not look at it". Its *remedy* does not. Routed to the `soleur:engineering:cto` agent as an architectural fork rather than decided inline, because the two options differ in what the gate CLAIMS. Three independent grounds: **(a)** A5's only marginal abort arm is an htpasswd credential rejection, and the recut re-bakes `/etc/zot/htpasswd` from the same Doppler value in the same apply (`zot-registry.tf` `replace_triggered_by`) — so A5 would block the recovery on a divergence the recovery cures, the third instance of the defect class this plan removes; **(b)** the authorisation-vs-availability call is undecidable on this transport, measured by #7242 / ADR-166 (CF Access admitted every request while zot crash-looped) — one setting deadlocks, the other is dark; **(c)** `cf-tunnel-registry-bridge` is fail-closed (exits 1 on listener bind and on docker login), so it aborts before the gate script runs, at a layer A5's degrade arm cannot reach. **R3's boundary was sound and is recorded as sound** — it is not why A5 went. | A5 deleted from the script, the suite, the runbook and ADR-169; replaced by a three-row negative-space contract (verdict carries no sink field; the retired knob is INERT, proven with a sentinel; the knobs appear nowhere in executable source). Residual re-stated: the edge half is bounded by A4 (which aborts), the htpasswd half is discharged by construction and re-measured post-destroy by the restore's exit-5 arm. |
+| **R17** | **B3 — cheap denies behind the expensive proof** (`init`/`plan`, the destroy-guard, `stock_preflight_gate`, the zero-touch assert all sat behind the multi-GB rehearsal). | **Resolved BY the R16/B2 job split, not by a hoist.** With the rehearsal moved into `registry_pull_path_gate`, those denies are no longer behind it. Hoisting `init`/`plan` into the gate job was considered and REJECTED: it would widen the plan→apply gap by the rehearsal's duration against a **lock-less R2 backend**, and put terraform state access in a job with no destroy authority. |
+| **R18** | **A mutation battery, committed for the first time, found 15 of 44 mutations surviving** — guards both suites certified and neither tested, including the `GITHUB_ACTIONS` seam guard (a seam can replace A2, the pass condition, with `/bin/true`). One survivor was a LIVE fail-open, not a test gap: `last_err` bounded the last 400 **bytes** while `classify()` and every comment claimed the last **line**, and `classify()` substring-matches, so on a conditional pin a credential rejection classified `NOTFOUND` → silent declared skip. | 16 test rows added across both suites (seam guard one row **per seam**, set alone, since a fixture setting all of them cannot see a per-name omission); `tail -n 1` added to `last_err` in both scripts; the battery registered in `scripts/test-all.sh` so it re-proves every guard on each full-suite run. |
 
 **Reviewer-roster note for the PR:** because the risk is fleet-wide and infra-shaped rather than
 per-user, add `observability-coverage-reviewer` (fail-loud on the chained restore; no-SSH runbook),

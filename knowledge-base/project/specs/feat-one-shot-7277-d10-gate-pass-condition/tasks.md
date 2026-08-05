@@ -98,6 +98,52 @@ Brand-survival threshold: `single-user incident` → CPO sign-off before `/work`
 - [x] 4.6 File the tracker for the dark `ghcr-fallback` emitter + Sentry rule (#7248 sibling class),
       including `scheduled-zot-restart-loop.yml`'s auto-filed issue bodies.
 
+## Phase 5b — Blockers closed in the second /work session
+
+The four-agent review found the gate **could not pass** (nothing authenticated crane). That was
+fixed at hand-off; these are the blockers that remained.
+
+- [x] B1 **A5 deleted.** Was fail-closed and UNWIRED, so the gate refused on every dispatch.
+      Routed to `soleur:engineering:cto` as an architectural fork rather than picked inline; the
+      ruling was DELETE, on three independent grounds (dual of the independence criterion;
+      undecidable on the CF-tunnel transport per #7242/ADR-166; the transport is fail-closed).
+      Swept from the script, both suites, the runbook, ADR-169 and the plan. **R2 is reversed, and
+      recorded as a reversal** (review row R16) — not edited to pretend it did not happen.
+- [x] B2 **Rehearsal split out of the mutex-holding job** into `registry_pull_path_gate`, which
+      `registry_luks_recut` now `needs:`. The recut's `timeout-minutes: 30` is derived from D11's
+      630 s bound and only survives that derivation because the unmeasured multi-GB rehearsal is
+      no longer inside it. Recorded honestly: the concurrency group is workflow-level, so no mutex
+      was released — worst case is now the SUM across three jobs.
+- [x] B3 **Resolved BY the split, not by a hoist.** Hoisting `init`/`plan` was rejected: it widens
+      the plan→apply gap by the rehearsal's duration against a lock-less R2 backend, and puts
+      state access in a job with no destroy authority. (Review row R17.)
+- [x] B4 **The "not published (measured)" claim: conclusion right, evidence invalid.** The cited
+      `crane ls NAME_UNKNOWN` was uncredentialed and hit the tags API — it cannot separate absent
+      from not-visible. Re-measured with a positive control: the producing workflow has NEVER been
+      dispatched and the Terraform pointer secret does not exist. So the entry stays `conditional`
+      and FLOOR stays **4** — the opposite of the promotion the blocker anticipated. Corrected in
+      THREE sites (the gate script carried the claim too, which the blocker did not name).
+- [x] B5 **Manifest divergence closed structurally.** The upload now runs AFTER the VERDICT, so the
+      artifact the restore consumes IS the inventory the rehearsal proved; `manifest_sha256=` is
+      emitted on both verdict lines as the cross-check, and the ordering is pinned by a test.
+
+### Found while doing the above (not on the blocker list)
+
+- [x] **A live fail-open in `last_err`.** It bounded the last 400 **bytes** while `classify()` and
+      every comment claimed the last **line** — and `classify()` substring-matches, so its first
+      case arm won over the whole capture. On a conditional pin that turned a credential rejection
+      into a silent declared skip. Fixed in both scripts. Only the mutation battery could find it:
+      every real crane message is under 400 bytes, so byte-tail and line-tail are indistinguishable
+      on every existing fixture.
+- [x] **A pre-existing RED.** `plugins/soleur/test/terraform-target-parity.test.ts` had been 2/103
+      failing for the life of the branch — the step-order SAFETY property for the job that destroys
+      the sole pull path — because a step rename left its needle stale. This is the concrete cost of
+      the VOID exit-gate run. Now green and strengthened to span both jobs.
+- [x] **The mutation battery is a committed, registered suite**, not ad-hoc shell in a transcript.
+      Its first committed run found **15 of 44** mutations surviving. All closed but one, which is
+      unreachable by construction and recorded through `expect_survive` with its reachability proof
+      — and which fails in BOTH directions, so the exemption cannot outlive its justification.
+
 ## Phase 5 — Exit gate
 
 - [ ] 5.1 `bash scripts/test-all.sh scripts` green.
