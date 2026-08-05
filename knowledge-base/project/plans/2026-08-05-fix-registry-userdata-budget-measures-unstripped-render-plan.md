@@ -188,34 +188,45 @@ enforcing control is instead the extractor's own fail-closed parse (Phase 1 step
 strictly stronger: it fails when the expression is missing or malformed, which a copy-comparator
 cannot do.
 
-### Phase 3 — Promote the job to a required check (the issue's Part 2, re-decided)
+### Phase 3 — Un-red the job; promotion to *required* is BLOCKED (the issue's Part 2, re-decided)
 
-Files: `.github/workflows/infra-validation.yml`, `infra/github/ruleset-ci-required.tf`
+Files: `.github/workflows/infra-validation.yml`
 
-Blast radius was assessed before committing to this:
+**[Updated 2026-08-05 — descoped during implementation. The blast-radius assessment this phase
+mandated is what descoped it; recording the finding rather than the original intent.]**
 
-- **No `infra-validation` job is currently a required check** — not even `infra-validate-required`,
-  despite the name. Live ruleset `14145388` carries 21 contexts, none from this workflow.
-- The budget job is gated `if: needs.detect-changes.outputs.directories != '[]'`, so on a
-  docs-only PR it is **skipped**. A skipped required check never reports and blocks merge
-  indefinitely. **This is the trap that must be handled, not discovered later.**
+What was found:
 
-Therefore:
+- **No `infra-validation` job is a required check** — not even `infra-validate-required`, despite
+  the name. Live ruleset `14145388` carries 21 contexts, none from this workflow.
+- A required check must report a conclusion on **every** PR. `infra-validation.yml` is
+  `paths:`-filtered, so on a docs-only PR **the workflow never triggers at all** and the context
+  never reports — GitHub then holds the PR in `Expected` indefinitely. An `if: always()` job-level
+  gate does **not** fix this: it only helps when the workflow runs. Requiring this context would
+  deadlock every non-infra PR in the repo.
+- The working pattern is `tenant-integration.yml`: **no** paths filter + `merge_group:` + an
+  always-run aggregator (`tenant-integration-required`). Adopting it here means dropping this
+  workflow's paths filter — which this workflow's own comment rejects as putting "an 8-minute
+  docker build on every docs-only PR", **already tracked as #6480**.
+
+Therefore, in this PR:
 
 1. Remove `continue-on-error: true` from the `registry-userdata-budget` job. Its stated
-   precondition ("gated on #7280 merging") is satisfied.
-2. Change the job's gate to `if: always()` and early-exit 0 inside the step when
-   `directories == '[]'` — the exact pattern `infra-validate-required` already uses
-   (`infra-validation.yml:322-337`). This makes the context always report.
-3. Add the context to `infra/github/ruleset-ci-required.tf` and let `apply-github-infra.yml`
-   apply it.
-4. Update the `#7287` pointer comment (`infra-validation.yml:1186-1187`) to record that the flip
-   happened here, and correct the surrounding rationale, which currently asserts a live breach.
+   precondition ("gated on #7280 merging") is satisfied, and the check is now correct — so it
+   fails the run for real instead of reporting a permanently-red status readers learned to skip.
+2. Register the new drift-guard suite as a step in the same job.
+3. Correct the stale rationale comment, which asserts a live breach that does not exist, and
+   record why promotion is gated on #6480 rather than declined.
+4. **Do NOT** touch `infra/github/ruleset-ci-required.tf`. Promotion is a separate work-stream
+   blocked on #6480 — filed as a follow-up rather than forced here.
 
-**Honest framing for the PR body:** this is defense-in-depth, not a hole being closed. The budget
-is already guarded by the required `test` context. The script's unique value is that it measures
-with terraform's *own* `base64gzip` (byte-exact), whereas the TS test explicitly models the size
-with node `zlib.gzipSync` and documents itself as "NOT byte-exact".
+**Why descoping is the right call and not a narrowing of the ask.** The issue's premise for
+promotion was "advisory, so it did not block the breaking merge". There was no breaking merge:
+the budget has been guarded the whole time by the **required** `test` context via
+`cloud-init-user-data-size.test.ts`, which extracts the same strip and has been green throughout.
+Promotion is defense-in-depth on an already-required guard, and buying it costs a repo-wide CI
+change with a merge-deadlock failure mode. Un-redding the check captures nearly all the value at
+none of that risk.
 
 ### Phase 4 — Run `Infra Validation` on pushes to `main` (the issue's Part 2b)
 
@@ -259,20 +270,24 @@ measurement), plus admin-bypass merges.
 6. `bash scripts/test-all.sh` is green (full suite; catches orphan infra suites).
 7. `actionlint .github/workflows/infra-validation.yml` is clean, and every edited `run:` snippet
    parses under `bash -c`.
-8. `terraform fmt -check` and `terraform validate` clean for `infra/github/`.
-9. `registry-userdata-budget` reports a **conclusion on a docs-only diff** (does not hang as a
-   skipped required check) — verified by inspecting the job's `if:` and the early-exit branch.
+8. `terraform fmt -check apps/web-platform/infra/zot-registry.tf` is clean. *(Was "clean for
+   `infra/github/`" — retargeted when Phase 3 descoped the ruleset edit; `infra/github/` is no
+   longer touched, so asserting on it would be vacuous.)*
+9. `infra/github/ruleset-ci-required.tf` is **unchanged** — the required-context set is not
+   widened in this PR (see Phase 3). Verified by the file's absence from the diff.
 10. No `continue-on-error:` remains on the `registry-userdata-budget` job.
 11. `zot-registry.tf`'s strip comment names both extractors and contains no claim that is false
     at HEAD.
+12. The new suite is discovered by the CI-registered infra runner:
+    `grep -oE 'run: bash apps/web-platform/infra/[A-Za-z0-9._-]+\.test\.sh' .github/workflows/infra-validation.yml`
+    includes `registry-userdata-budget.test.sh` (an unregistered infra suite never gates).
 
 ### Post-merge (automated)
 
-12. `apply-github-infra.yml` applies the ruleset change; `gh api repos/jikig-ai/soleur/rulesets/14145388`
-    lists `registry-userdata-budget` among required contexts. **Automation: in-workflow** — the
-    apply workflow fires on merge; `/ship` polls it. No operator step.
 13. `Infra Validation` appears in the workflow-run list for the merge commit — proving Phase 4's
-    `push:` trigger fires. Self-verified via `gh run list --commit <sha>`.
+    `push:` trigger fires and that `detect-changes` resolved a non-empty matrix on a push event
+    (an empty one would be the silent-green failure Phase 4 exists to avoid). Self-verified via
+    `gh run list --commit <sha>` + the run's `detect-changes` output. No operator step.
 
 ## Observability
 

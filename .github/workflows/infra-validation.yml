@@ -1240,7 +1240,8 @@ jobs:
   # pattern is `tenant-integration.yml`: no paths filter + `merge_group:` + an always-run
   # aggregator. Adopting it here means dropping this workflow's paths filter, which its own
   # comment above (`infra-validate-required`) rejects as "an 8-minute docker build on every
-  # docs-only PR", tracked in #6480. So promotion is gated on #6480, not on this PR.
+  # docs-only PR", tracked in #6480. So promotion is gated on #6480, not on this PR — tracked
+  # with the full unblocking recipe in #7302.
   #
   # AND IT IS DEFENSE IN DEPTH, NOT A HOLE. The budget is ALREADY guarded by the REQUIRED `test`
   # context via plugins/soleur/test/cloud-init-user-data-size.test.ts, which extracts the same
