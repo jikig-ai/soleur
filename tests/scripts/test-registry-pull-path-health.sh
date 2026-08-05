@@ -81,7 +81,16 @@ case "\$ref" in
   *${IC}*) echo "Error: GET https://ghcr.io/v2/${IC}/manifests/latest: MANIFEST_UNKNOWN: manifest unknown" >&2; exit 1 ;;
 esac
 case "$mode" in
-  ok)       case "\$ref" in *${WP}*) echo "$D1" ;; *) echo "$D2" ;; esac ;;
+  # Each declared repo answers EXPLICITLY, and anything else is a stub error (64), not a
+  # digest. The catch-all this replaces (\`*) echo "$D2"\`) meant the gate could resolve a
+  # misspelled or fabricated repo and still receive a well-formed digest — so a mutation that
+  # corrupted A1's ref construction would have been certified by the stub rather than caught.
+  # A fake that answers identically for every input cannot pin the argv the SUT must send.
+  ok)       case "\$ref" in
+              *${WP}*) echo "$D1" ;;
+              *${IB}*) echo "$D2" ;;
+              *) echo "stub: 'ok' mode was asked for an undeclared repo '\$ref'" >&2; exit 64 ;;
+            esac ;;
   notfound) echo "Error: GET https://ghcr.io/v2/${WP}/manifests/v${VER}: MANIFEST_UNKNOWN: manifest unknown" >&2; exit 1 ;;
   denied)   echo "Error: GET https://ghcr.io/token: UNAUTHORIZED: authentication required" >&2; exit 1 ;;
   network)  echo 'Error: Get "https://ghcr.io/v2/": dial tcp: lookup ghcr.io: no such host' >&2; exit 1 ;;
