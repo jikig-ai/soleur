@@ -72,8 +72,11 @@ write_files:
   # retention.delay 24h->2h so a filling store is reclaimed within ~1h, not once per 24h. gcDelay
   # stays 1h (the dangling-blob SAFETY window that protects a blob just uploaded but not yet
   # manifest-referenced during an in-flight push — shortening it risks reclaiming an in-progress
-  # layer). NO on-boot gc trigger is issued: zot v2.1.2 exposes no sanctioned on-demand gc HTTP
-  # endpoint (hr-verify-repo-capability-claim — no fabricated admin call), so the tightened
+  # layer). NO on-boot gc trigger is issued: zot v2.1.20 exposes no sanctioned on-demand gc HTTP
+  # endpoint — MEASURED 2026-08-05 (#7282) by probing the pinned image locally: /v2/_zot/gc,
+  # /v2/_catalog/gc, /_zot/gc and /v2/_zot/ext/gc all answer 404, and the release's BinaryType
+  # excludes mgmt/scrub/search entirely (hr-verify-repo-capability-claim — no fabricated admin
+  # call). Re-measure on every bump, never re-word. So the tightened
   # gcInterval is the reclamation lever; the first scheduled pass runs within ~1h of boot.
   #
   # http.compat ["docker2s2"] (#6122): zot is OCI-native and REJECTS Docker manifest
