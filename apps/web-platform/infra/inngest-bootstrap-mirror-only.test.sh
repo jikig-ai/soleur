@@ -531,7 +531,8 @@ fi
 CRANE_SHA_EXPECTED="c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b"
 for wf in .github/workflows/build-inngest-bootstrap-image.yml \
           .github/workflows/build-inngest-config-bundle.yml \
-          .github/workflows/reusable-release.yml; do
+          .github/workflows/reusable-release.yml \
+          .github/workflows/apply-web-platform-infra.yml; do
   # Anchored on the ASSIGNMENT, not a whole-file grep. A bare `grep -qF` over raw text is
   # satisfied by a comment recording the OLD pin (`# previous pin: c1434008...`) sitting
   # above a drifted assignment — the same cq-assert-anchor-not-bare-token failure this suite
