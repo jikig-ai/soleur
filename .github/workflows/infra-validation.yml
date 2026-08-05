@@ -26,6 +26,10 @@ on:
     paths:
       - "apps/*/infra/**"
       - "infra/**"
+      # The gate itself: a change to this workflow merging is exactly the "reached main without a
+      # PR run of this workflow" class the trigger exists for, and it is why the pull_request list
+      # below carries the same entry.
+      - ".github/workflows/infra-validation.yml"
   pull_request:
     paths:
       - "apps/*/infra/**"
@@ -920,6 +924,20 @@ jobs:
       - name: Run registry boot-guard + disk-observability tests (#6240/#6244)
         run: bash apps/web-platform/infra/registry-boot-guard.test.sh
 
+      # (#7299) Pins that registry-userdata-budget.sh measures the render terraform actually
+      # STORES — that the strip is extracted-and-applied, and that an absent/duplicated/malformed
+      # declaration fails CLOSED with exit 2. Without it the script could regress to measuring the
+      # unstripped render and its own budget step would still report green.
+      #
+      # Registered HERE and not in the sibling `registry-userdata-budget` job, because the
+      # infra-suite-registration gate only counts single-line `run: bash` steps in THIS job --
+      # scripts/test-all.sh reaches apps/web-platform/infra solely via run-registered-suites.sh,
+      # which derives its list from this job, so a suite registered elsewhere is uncovered both in
+      # CI and locally. This job also already provides the terraform the suite needs (it SKIPs
+      # without it, which would make it vacuous in a job that lacks it).
+      - name: Run registry user_data budget drift-guard (#7299)
+        run: bash apps/web-platform/infra/registry-userdata-budget.test.sh
+
       # #6895 registry guest-side LUKS-at-rest guard suite (mutation-tested). Registered explicitly
       # (this job runs named steps, not a glob — an unregistered infra suite gates NOTHING and fails
       # silently green, #3366/#6520).
@@ -1265,11 +1283,10 @@ jobs:
           terraform_wrapper: false
       - name: Measure rendered registry user_data against Hetzner's 32,768 B cap
         run: bash apps/web-platform/infra/registry-userdata-budget.sh
-      # Pins the measurement itself: that the strip is extracted-and-applied, and that an absent
-      # or duplicated declaration fails CLOSED. Without this, the script could regress to
-      # measuring the unstripped render again and the budget step would still report green.
-      - name: Run registry user_data budget drift-guard (#7299)
-        run: bash apps/web-platform/infra/registry-userdata-budget.test.sh
+      # The suite that pins this measurement (registry-userdata-budget.test.sh) is registered in
+      # `deploy-script-tests`, NOT here -- the infra-suite-registration gate counts only that job,
+      # and run-registered-suites.sh derives its list from it. Registering it here instead would
+      # leave it uncovered by scripts/test-all.sh.
 
   check-secrets:
     runs-on: ubuntu-24.04
