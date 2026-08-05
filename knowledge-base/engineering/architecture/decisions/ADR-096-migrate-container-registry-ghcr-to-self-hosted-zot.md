@@ -791,9 +791,17 @@ were sitting unadopted.
 > not production. `zot-registry.tf` resources are `OPERATOR_APPLIED_EXCLUSIONS`, so merging
 > this is inert by construction: **the live registry still runs v2.1.2, and both panic fixes
 > remain unadopted in production**, until the `registry-host-replace` apply fires. That apply
-> is blocked on #7277 (the recut gate has no valid PASS condition), #7278, #6929, #7280 (the
-> rendered `user_data` is over Hetzner's 32,768 B cap), and Hetzner `cx23` stock. Tracked in
-> #7287. This paragraph stays true if the apply never fires — which is the point of writing
+> is blocked on #7277 (the recut gate has no valid PASS condition), #7278, #6929, and Hetzner
+> `cx23` stock. Tracked in #7287.
+>
+> **CORRECTED 2026-08-06 (#7299): the byte cap was never a blocker and is struck from that
+> list.** It read "#7280 (the rendered `user_data` is over Hetzner's 32,768 B cap)". The
+> measurement behind that was wrong, not the payload: `registry-userdata-budget.sh` rendered
+> `templatefile(...)` without the `replace(..., local.registry_rationale_strip, "")` that
+> `zot-registry.tf` applies, so it measured 36,404 B for a payload Hetzner never receives. The
+> stored artifact is **9,408 B against the 32,768 B cap — 23,360 B of headroom**. #7280 shipped
+> the strip and closed the real breach; the reading did not move because the script was never
+> taught to apply it. This paragraph stays true if the apply never fires — which is the point of writing
 > it: ADR-096 is what a reader consults to learn what the registry actually runs.
 
 **Decision.** Digest-pinning stays — it is the integrity guarantee and is not in question.
@@ -857,8 +865,14 @@ subject to every gate the forward leg is:
 1. **Stock.** `stock_preflight_gate` is ABORTing today. If capacity blocked the apply for
    weeks, a same-day revert may be un-orderable. **Firing the apply is one-way with no
    capacity reservation**, and that must be accepted before it is fired.
-2. **The byte cap.** The rendered `user_data` is over Hetzner's hard 32,768 B cap, so the
-   revert strands the registry for the same arithmetic reason the forward leg does. This was
-   omitted from the first draft of this amendment, which named only the stock gate.
+2. **~~The byte cap.~~ RETRACTED 2026-08-06 (#7299) — this constraint does not exist.** It read
+   "the rendered `user_data` is over Hetzner's hard 32,768 B cap, so the revert strands the
+   registry for the same arithmetic reason the forward leg does." That was a phantom: the
+   budget script measured the render WITHOUT the comment strip `zot-registry.tf` applies, so it
+   reported 36,404 B for a payload no host is given. Measured on the fixed script, the stored
+   `user_data` is **9,408 B — 23,360 B under cap**. The byte cap constrains neither the forward
+   leg nor the revert. Left in place, struck rather than deleted, because this is a ROLLBACK
+   procedure: an operator reading it mid-incident would otherwise conclude a revert is
+   unavailable, which is precisely the cost a wrong measurement imposes.
 3. **#7277.** The recut gate has no valid PASS condition, and it sits on the same path — it
    is the blocker the plan lists first, and it was also missing here.

@@ -380,12 +380,20 @@ resource "doppler_secret" "zot_push_token" {
 # Applied AFTER templatefile (see the `replace(...)` wrapper below), so the substituted values —
 # ids, digests, tokens, all single-line scalars — cannot be touched by a line-anchored match.
 #
-# ONE COPY, TWO EXTRACTORS. Both consumers read this expression FROM HERE rather than restating
-# it, so neither can measure a payload production does not boot:
+# ONE COPY, TWO EXTRACTORS. Both consumers read this EXPRESSION from here rather than restating
+# it, so neither can strip differently than production:
 #   - plugins/soleur/test/cloud-init-user-data-size.test.ts (the required `test` context)
-#   - registry-userdata-budget.sh (#7282, the byte-exact terraform-native measurement)
-# git-data needed a dedicated parity suite to keep its two COPIES equal; there is nothing here to
-# keep equal, and that is a property of the extractors — not of this file.
+#   - registry-userdata-budget.sh (added by PR #7283, closing #7282; the byte-exact,
+#     terraform-native measurement)
+# git-data needed a dedicated parity suite to keep its two COPIES of the expression equal; there
+# is nothing HERE to keep equal, and that is a property of the extractors — not of this file.
+#
+# SCOPED PRECISELY, because "nothing to keep equal" is true of the expression and false of the
+# render. registry-userdata-budget.sh still hand-restates the 12-key templatefile var map and the
+# three-stage chain below (the TS test DERIVES the var map instead). A var renamed or removed
+# there is silent; a var ADDED makes templatefile fail, which is fail-closed. That residual is
+# bounded and deliberate — calling it out is the difference between a scoped claim and the
+# unfalsifiable one this block used to carry.
 #
 # (#7299) THE INVARIANT ABOVE IS FALSIFIABLE BY ANY LATER PR, AND WAS. When this comment was
 # written the test was the sole consumer and the claim was true. #7282 then added the budget
