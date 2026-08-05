@@ -134,6 +134,11 @@ bash scripts/test-all.sh scripts        # TEST_GROUP arg is supported (test-all.
 bash tests/scripts/test-registry-pull-path-health.sh
 ```
 
+**Measured baseline 2026-08-05** (re-run, not recalled): the D10 suite is
+`EXIT=0`, **26 passed, 0 failed** on the current tree. Phase 2.1 rewrites it, so expect the count
+to change — but a fresh session that sees anything other than 26/0 *before* editing has inherited
+a regression from elsewhere, not from this work.
+
 Before merge, re-derive the ADR ordinal against freshly-fetched `origin/main` (task 5.3) —
 **ADR-169** was next-free at 2026-08-05 (168 highest, 167 absent), but ordinals have collided
 three times recently, so a branch-picked one is provisional until re-measured.
