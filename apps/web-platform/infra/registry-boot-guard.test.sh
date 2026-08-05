@@ -109,7 +109,7 @@ assert "LINE=\"SOLEUR_ZOT_DISK assignment found" "[ -n \"\$LINE_ASSIGN\" ]"
 for f in pcent= fs_size_gb= block_size_gb= resize_ok= zot_restarts= ping_rc= \
          mem_total_mb= zot_anon_mb= zot_oom_kills= state_status= oom_killed= exit_code= \
          zot_uptime_s= zot_last_err_src= \
-         oom_kills_5m= zot_last_err= boot_id= htpasswd_pull_matches= htpasswd_push_matches=; do
+         oom_kills_5m= zot_last_err= boot_id= zot_image_digest= htpasswd_pull_matches= htpasswd_push_matches=; do
   assert "SOLEUR_ZOT_DISK LINE carries field ${f}" "grep -qF '${f}' <<<\"\$LINE_ASSIGN\""
 done
 # zot_last_err MUST be the LAST field. This is a SECURITY invariant, not cosmetics:

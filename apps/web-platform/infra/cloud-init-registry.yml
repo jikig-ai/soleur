@@ -194,7 +194,8 @@ write_files:
       # reaches web-1, not the registry — #7278), so without it "did the bump land?" is
       # unanswerable by any means available to this project. That matters most in the EXPECTED
       # steady state: the pin merges but stays staged (zot-registry.tf is an
-      # OPERATOR_APPLIED_EXCLUSION), so repo-says-v2.1.20 / prod-runs-v2.1.2 is the norm until
+      # OPERATOR_APPLIED_EXCLUSION), so the repo pins a newer zot v2.1.20 while the live host still
+      # runs its older one, and that divergence is the norm until
       # the host-replace path unblocks, and today that divergence is invisible.
       #
       # `.Config.Image`, NOT `.RepoDigests`: RepoDigests is a field of the IMAGE object, so
@@ -210,7 +211,14 @@ write_files:
         # never a fallback — same discipline as the htpasswd block below: "cannot tell" must
         # never be conflated with a value. A container created by TAG only (no @sha256) has no
         # digest to report and correctly reads `unknown` rather than a fabricated one.
-        ZOT_IMAGE_DIGEST=$(printf '%s' "$${ZOT_IMAGE_REF:-}" | sed -n 's/.*@sha256:\(............\).*/\1/p')
+        # [0-9a-f]{12}, NOT twelve dots. `.` matches `"` and `\`, and this value is
+        # interpolated into --data-raw "{\"message\":\"$LINE\"}" -- an unescaped byte makes
+        # Better Stack reject the WHOLE payload, taking the entire heartbeat dark. The
+        # ZOT_LAST_ERR block below sanitizes for exactly that reason. A character class also
+        # makes the `unknown`-is-a-default property true BY CONSTRUCTION rather than by
+        # upstream convention: junk now falls to `unknown` instead of becoming a
+        # plausible-looking 12-char "digest".
+        ZOT_IMAGE_DIGEST=$(printf '%s' "$${ZOT_IMAGE_REF:-}" | sed -n 's/.*@sha256:\([0-9a-f]\{12\}\).*/\1/p')
         ZOT_IMAGE_DIGEST=$${ZOT_IMAGE_DIGEST:-unknown}
       else
         ID=; ZOT_RESTARTS=-1; STATE_STATUS=unknown; OOM_KILLED=unknown; EXIT_CODE=-1; STARTED_AT=

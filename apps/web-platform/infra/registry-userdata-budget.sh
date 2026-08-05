@@ -42,7 +42,10 @@ command -v terraform >/dev/null 2>&1 || {
 
 # The amd64 branch of local.zot_image (registry_arch is amd64 for the cx23 default). Read
 # from the .tf so the measurement tracks the real pin rather than a copy that can rot.
-ZOT_IMAGE="$(grep -oE 'ghcr\.io/project-zot/zot-linux-amd64:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}' "$DIR/zot-registry.tf" | head -1)"
+# Anchored on the ASSIGNMENT, like the staleness gate -- an unanchored grep is satisfied by
+# a comment (e.g. a rollback annotation above the locals), which would measure the wrong
+# reference length. Same fact, same parse rule, everywhere.
+ZOT_IMAGE="$(grep -oE '^[[:space:]]*zot_image_amd64[[:space:]]*=[[:space:]]*"ghcr\.io/project-zot/zot-linux-amd64:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}"' "$DIR/zot-registry.tf" | grep -oE 'ghcr\.io[^"]*' | head -1)"
 [ -n "$ZOT_IMAGE" ] || {
   echo "registry-userdata-budget: could not read local.zot_image_amd64 from zot-registry.tf" >&2
   exit 2
@@ -121,4 +124,10 @@ else
   echo "  zot_image    : ${ZOT_IMAGE}"
 fi
 
-[ "$stored_bytes" -le "$cap" ]
+# -ge, matching git-data-userdata-budget.sh: at EXACTLY the cap the sibling fails and this
+# must not disagree. And say what is wrong -- in --json mode the bare test exited 1 with no
+# explanation, on the path that is live today.
+if [ "$stored_bytes" -ge "$cap" ]; then
+  echo "registry-userdata-budget: OVER CAP by $(( stored_bytes - cap )) bytes — hcloud would reject the CREATE *after* the DESTROY succeeded, stranding the sole pull path. #7280's registry_rationale_strip is the fix." >&2
+  exit 1
+fi
