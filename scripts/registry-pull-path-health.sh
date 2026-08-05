@@ -107,11 +107,32 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# SEAM GUARD. The five REGISTRY_GATE_* overrides below replace this gate's external
+# dependencies — including A2, which IS the pass condition. `REGISTRY_GATE_RESTORE_CMD=/bin/true`
+# would make the gate print verdict=AUTHORIZED having proven nothing. Inside a runner they must
+# not be set at all: reachable via a workflow-level env:, a composite exporting to $GITHUB_ENV,
+# or a stale export in the operator's shell (the runbook tells them to run this locally).
+if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+  for _seam in REGISTRY_GATE_HEALTH_CMD REGISTRY_GATE_CRANE_CMD REGISTRY_GATE_RESTORE_CMD \
+               REGISTRY_GATE_DRIFT_CMD REGISTRY_GATE_SINK_CMD REGISTRY_GATE_VERDICT_CMD \
+               REGISTRY_GATE_CLOUD_INIT; do
+    if [[ -n "${!_seam:-}" ]]; then
+      echo "::error::registry-pull-path-health: ${_seam} is set inside GitHub Actions. Test seams replace this gate's external dependencies — including the rehearsal that IS the pass condition — so a seam set on the production path can manufacture an AUTHORIZED verdict. Refusing." >&2
+      exit 1
+    fi
+  done
+fi
+
 HEALTH_CMD="${REGISTRY_GATE_HEALTH_CMD:-}"
 CRANE="${REGISTRY_GATE_CRANE_CMD:-crane}"
 RESTORE="${REGISTRY_GATE_RESTORE_CMD:-${ROOT}/scripts/registry-restore-from-ghcr.sh}"
 DRIFT="${REGISTRY_GATE_DRIFT_CMD:-${ROOT}/scripts/check-cloudflare-token-drift.sh}"
-SINK_CMD="${REGISTRY_GATE_SINK_CMD:-}"
+# REGISTRY_SINK_PROBE_CMD is the PRODUCTION knob; REGISTRY_GATE_SINK_CMD is the test seam. They
+# are deliberately different names: the seam guard above refuses every REGISTRY_GATE_* inside a
+# runner, so wiring A5 for real through the seam would be self-contradictory — the gate would
+# abort on every dispatch. Keeping them distinct lets the workflow wire a real probe while a
+# seam set on the production path still refuses.
+SINK_CMD="${REGISTRY_GATE_SINK_CMD:-${REGISTRY_SINK_PROBE_CMD:-}}"
 
 WORK="$(mktemp -d)" || usage_err "could not create a scratch directory."
 trap 'rm -rf "$WORK"' EXIT
@@ -121,14 +142,28 @@ trap 'rm -rf "$WORK"' EXIT
 # floor is the vacuity hole A3 exists to close. Raising it is the deliberate act that admits a
 # new required image.
 #
-# FLOOR = 2:
-#   jikig-ai/soleur-web-platform        at production's own /health version   (required)
-#   jikig-ai/soleur-inngest-bootstrap   at the cloud-init.yml pin             (required)
+# FLOOR = 4:
+#   jikig-ai/soleur-web-platform        at production's own /health version     (required)
+#   jikig-ai/soleur-web-platform        at production's own /health build_sha    (required)
+#   jikig-ai/soleur-web-platform        at `latest`                             (required)
+#   jikig-ai/soleur-inngest-bootstrap   at the cloud-init.yml pin               (required)
+#
+# WHY THREE web-platform TAGS AND NOT ONE. reusable-release.yml pushes THREE tags to zot per
+# release — `v${VERSION}`, `${COMMIT_SHA}` and `latest` — and `variables.tf` defaults
+# `image_name` to `…/soleur-web-platform:latest`, which cloud-init rewrites to the zot host at
+# boot. Restoring only `v${VERSION}` therefore leaves a rebuilt or newly-provisioned host
+# pulling a tag that does not exist, with the GHCR fallback dead (#7071) — a green gate, a
+# green restore, and a host that cannot boot. Caught at review; the first draft restored one tag.
+#
+# The `build_sha` tag also makes A0's build_sha assertion LOAD-BEARING rather than decorative:
+# before this, build_sha was asserted non-empty and then never compared to anything, so a cached
+# edge response carrying a stale version AND a stale build_sha passed. Now it must resolve at
+# GHCR as a tag, so a stale pair fails A1.
 # soleur-inngest-config is `conditional` and does NOT count: it is not published at GHCR
 # (measured 2026-08-05 — `crane ls` returns NAME_UNKNOWN), and a gate listing it as required
 # would abort forever on a repo that does not exist, creating exactly the new deadlock this
 # rewrite exists to remove.
-readonly FLOOR=2
+readonly FLOOR=4
 
 # The pin set is a SOURCE-LEVEL declaration, so "declared but never counted" is unrepresentable
 # — the same discipline the removed signal array carried, re-pointed at an instrument that is
@@ -144,6 +179,8 @@ readonly FLOOR=2
 # cannot hold.
 readonly REQUIRED_PINS=(
   "jikig-ai/soleur-web-platform|health-version"
+  "jikig-ai/soleur-web-platform|health-build-sha"
+  "jikig-ai/soleur-web-platform|latest"
   "jikig-ai/soleur-inngest-bootstrap|cloud-init-pin"
 )
 readonly CONDITIONAL_PINS=(
@@ -218,6 +255,8 @@ echo "A0 inventory: version=${PROD_VERSION} build_sha=${PROD_SHA} floor=${FLOOR}
 resolve_tag() {
   case "$1" in
     health-version)  printf 'v%s' "$PROD_VERSION" ;;
+    health-build-sha) printf '%s' "$PROD_SHA" ;;
+    latest)          printf 'latest' ;;
     cloud-init-pin)
       # Read from the file, never hard-coded in this gate: the pin is production's, and a copy
       # here would drift silently the first time cloud-init is bumped.
@@ -332,11 +371,25 @@ fi
 # `set -euo pipefail`, because it is sourced into steps already running under `bash -eo
 # pipefail`. Do not wrap it in a subshell that swallows the verdict.
 DRIFT_JSON="$WORK/drift.json"
-if [[ -x "$DRIFT" ]]; then
-  "$DRIFT" --json-file "$DRIFT_JSON" > "$WORK/drift.out" 2>"$WORK/drift.err"; drift_rc=$?
-else
-  drift_rc=2
+if [[ ! -x "$DRIFT" ]]; then
+  # A MISSING DETECTOR IS NOT A DEGRADED MEASUREMENT. Falling through to `unmeasured` here would
+  # make A4 unable to abort whenever the detector is renamed, moved, or loses its exec bit — a
+  # chmod bit is not a safety boundary for an irreversible destroy. A2 already aborts on a
+  # missing engine; this is the same class. DEGRADE stays reserved for verdicts the detector
+  # actually produced.
+  abort A4 "the credential detector is missing or not executable at ${DRIFT}, so the sink credential could not be graded at all. That is a could-not-LOAD, not a could-not-rank."
 fi
+# --only is load-bearing. Without it the detector scans every token-shaped key in every Doppler
+# config and `zot_mirror_verdict` reads the AGGREGATE .dead — so one stale unrelated token
+# anywhere aborts the recut with "the registry-push CF Access service token is MEASURED DEAD"
+# and tells the operator to rotate a credential nothing measured. That is exactly the
+# name-a-cause-you-did-not-measure defect zot-mirror-diagnosis.sh exists to prevent, and
+# reusable-release.yml already scopes this same verdict the same way.
+#
+# `timeout` because a 13-config fan-out with no bound runs inside the recut job's load-bearing
+# 30-minute mutex budget.
+timeout 300 "$DRIFT" --only REGISTRY_PUSH_ACCESS_TOKEN --json-file "$DRIFT_JSON" \
+  > "$WORK/drift.out" 2>"$WORK/drift.err"; drift_rc=$?
 
 if [[ -n "${REGISTRY_GATE_VERDICT_CMD:-}" ]]; then
   # Seam for the grader itself, so the out-of-vocabulary arm below is reachable in tests. The
@@ -403,9 +456,25 @@ echo "A2 rehearsal: the full required pin set was restored and blob-verified int
 # "must not depend on the failing component" by never looking at it — a different and much
 # weaker property. It would have authorised destroying a sink it had never observed, then
 # chained into that sink the exact `crane copy` write with a measured 9-of-9 failure record.
-sink_outcome="unmeasured"
-if [[ -n "$SINK_CMD" ]]; then
-  sink_outcome="$("$SINK_CMD" 2>/dev/null || echo unmeasured)"
+# UNWIRED IS NOT "UNMEASURED". If no probe is configured, A5 never observes prod zot at all,
+# and every abort arm below is unreachable — a predicate that runs, prints, and cannot fire.
+# That is the dark-operand defect this whole rewrite exists to remove, and shipping it here
+# would be committing it inside the predicate added to prevent it. An availability failure
+# degrades; an ABSENT PROBE is a wiring fault and refuses.
+[[ -n "$SINK_CMD" ]] || abort A5 "no sink probe is configured (REGISTRY_GATE_SINK_CMD is unset), so nothing observes production zot and A5's abort arms are unreachable. Refusing rather than shipping a predicate that cannot fire — wire the probe or remove A5 deliberately."
+
+# Capture stdout and rc SEPARATELY. `$(cmd || echo unmeasured)` concatenated the probe's verdict
+# with the fallback whenever the probe exited non-zero — which is the natural implementation for
+# a failure probe — yielding "credential_rejected\nunmeasured", matching neither abort arm and
+# falling through to DEGRADE. The abort arm this file calls the most dangerous line was defeated
+# by its own error handling. Also keep stderr: discarding it threw away the diagnosis.
+sink_outcome="$("$SINK_CMD" 2>"$WORK/sink.err")"; sink_rc=$?
+sink_outcome="$(printf '%s' "$sink_outcome" | tr -d '[:space:]')"
+if [[ -z "$sink_outcome" ]]; then
+  # The probe ran and said nothing. That is an availability-shaped could-not-measure, so it
+  # degrades — but it is recorded distinctly from a probe that reported a verdict.
+  sink_outcome="unmeasured"
+  echo "A5 sink probe produced no verdict (rc=${sink_rc}): $(tail -c 200 "$WORK/sink.err" 2>/dev/null | tr '\n' ' ')"
 fi
 
 case "$sink_outcome" in

@@ -1993,6 +1993,17 @@ jobs:
           echo "hetzner probe: id=${EXPECTED_VOLUME_ID} http=${PROBE_STATUS} => ${PROBE_RESULT}; name_count=${NAME_COUNT}"
           printf 'probe_result=%s\n' "$PROBE_RESULT" >> "$GITHUB_OUTPUT"
 
+      - name: Log in to GHCR
+        # BLOCKER without this. `permissions: packages: read` SCOPES secrets.GITHUB_TOKEN; it does
+        # not PRESENT it. crane resolves credentials only from the Docker keychain, so every GHCR
+        # read here would be anonymous — and these are PRIVATE packages, so A1 would abort DENIED
+        # on every dispatch, including the resume arm. The same file already documents this at the
+        # web_host_create login: "GHCR is a PRIVATE package: an anonymous inspect 401s."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
+
       - name: Install crane (pinned) for the D10 inventory + rehearsal
         # UNCONDITIONAL — see the PREPARE/VERDICT split note on the next step.
         # Keep CRANE_SHA256 in step with the other workflows carrying this spine; the parity is
@@ -2397,6 +2408,21 @@ jobs:
           echo "zero-touch assert: ${checked} protected address(es) present in this plan."
           exit "$rc"
 
+      - name: Mark the store as needing a refill
+        id: refill_flag
+        # BEFORE the apply, not after. The apply is what destroys the store, so a mid-apply
+        # failure or a failing completeness backstop leaves the store DESTROYED with the flag
+        # unset — and the chained restore then shows as `skipped`, which reads as "nothing to
+        # do" on precisely the path where the store may be gone. An earlier revision set this
+        # after the apply; caught by two reviewers independently.
+        #
+        # Firing the restore against a store that turned out NOT to be empty is a cheap no-op
+        # (crane skips blobs the destination already holds), so the asymmetry favours firing.
+        # Every gate that can legitimately deny a recut — the typed confirm, the id-pin, D10,
+        # the plan guards, stock_preflight — runs BEFORE this line, so a refusal still leaves
+        # the flag unset and correctly skips the restore.
+        run: echo "needed=true" >> "$GITHUB_OUTPUT"
+
       - name: Terraform apply (atomic recut) — completeness backstop
         working-directory: ${{ env.INFRA_DIR }}
         env:
@@ -2423,20 +2449,6 @@ jobs:
             exit 1
           fi
           echo "registry host + FRESH RAW store volume provisioned (server_creates=${SERVER_CREATES} volume_creates=${VOL_CREATES}); cloud-init luksFormats the empty device."
-
-      - name: Mark the store as needing a refill
-        id: refill_flag
-        # The chained restore job keys on THIS, not on the recut job's overall result. Gating it
-        # on `needs.<job>.result` alone would fire the restore on paths where the store was
-        # never emptied — most visibly when D10 legitimately REFUSES, where the store is intact
-        # and a restore would be a pointless multi-GB no-op against a live registry, ending in a
-        # confusing red job after an already-clear abort.
-        #
-        # Placed AFTER the apply so it only sets on a path that actually created a fresh empty
-        # volume. A mid-apply failure does not set it: the store may be destroyed, but the host
-        # may not exist yet, and the workflow's own error tells the operator to re-dispatch —
-        # which re-enters here through the resume arm and sets the flag then.
-        run: echo "needed=true" >> "$GITHUB_OUTPUT"
 
       - name: Post-apply liveness assert (D11)
         working-directory: ${{ env.INFRA_DIR }}
@@ -2492,6 +2504,7 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           OLD_VOLUME_ID: ${{ inputs.expected_registry_store_volume_id }}
+          REFILL_NEEDED: ${{ steps.refill_flag.outputs.needed }}
         # Emits the NEW volume id. Read from terraform state, NOT from tfplan.json: a
         # known-after-apply create has no .after.id in the plan. Without this line the NEXT recut
         # is blocked until someone re-reads the id from the Hetzner API.
@@ -2512,6 +2525,18 @@ jobs:
             echo "**Old store volume id (destroyed):** \`${OLD_VOLUME_ID:-n/a}\`"
             echo "**NEW store volume id:** \`${NEW_VOLUME_ID}\` — record this; any follow-up recut needs it as the id-pin."
             echo ""
+            if [[ "${REFILL_NEEDED:-}" != "true" ]]; then
+              # The recut never reached the apply — a typed-confirm failure, a D10 refusal, a
+              # plan guard, or a stock-out. NOTHING WAS DESTROYED, and saying otherwise on the
+              # operator's summary page is the single most misleading thing this step could do.
+              # An earlier revision printed the empty-store section unconditionally under
+              # `if: always()`, so a D10 refusal — the gate's whole purpose, whose own message
+              # says "Nothing has been destroyed" — rendered as "the store is EMPTY".
+              echo "### The store was NOT destroyed"
+              echo ""
+              echo "This dispatch stopped before the apply, so the existing store volume is untouched and no restore is needed or scheduled. Read the failing step above for the reason."
+              exit 0
+            fi
             echo "### The store is EMPTY — the chained restore runs next"
             echo ""
             # DELIBERATELY NOT branched here. This step runs inside registry_luks_recut, which
@@ -2553,8 +2578,17 @@ jobs:
   # without which the next recut is blocked — never runs. A partially populated registry is
   # worse than an empty one, because tag lookups then succeed for some refs and not others.
   #
-  # Splitting gives the restore its own budget, releases the mutex before the slow part, and
-  # keeps the recut job's cancellation semantics intact.
+  # Splitting gives the restore its own budget and keeps the recut job's cancellation semantics
+  # intact.
+  #
+  # IT DOES NOT RELEASE THE MUTEX, and an earlier revision of this comment claimed it did. The
+  # `concurrency:` group is declared at WORKFLOW level, so it is held for the whole RUN — this
+  # job inherits it and cannot release what a sibling job holds. Worst-case fleet-wide apply
+  # block therefore goes from 30 to 90 minutes (30 + 60). That is still far better than the
+  # 360-minute default the 30 was chosen against, but it is 3x the number that comment defends,
+  # and saying otherwise would be naming a property the change does not have. Genuinely
+  # releasing it needs a SEPARATE WORKFLOW (workflow_run), not a chained job — tracked, not
+  # done here.
   registry_store_restore:
     needs: registry_luks_recut
     # EXPLICIT, not inherited. A following job defaults to success()-of-needs, which would skip
@@ -2586,6 +2620,17 @@ jobs:
 
       - name: Install Doppler CLI
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Log in to GHCR
+        # BLOCKER without this. `permissions: packages: read` SCOPES secrets.GITHUB_TOKEN; it does
+        # not PRESENT it. crane resolves credentials only from the Docker keychain, so every GHCR
+        # read here would be anonymous — and these are PRIVATE packages, so A1 would abort DENIED
+        # on every dispatch, including the resume arm. The same file already documents this at the
+        # web_host_create login: "GHCR is a PRIVATE package: an anonymous inspect 401s."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
 
       - name: Install crane (pinned)
         run: |
@@ -2623,7 +2668,19 @@ jobs:
         # while the run reported green.
         env:
           DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
+          GH_TOKEN_FOR_ENGINE: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # `set +e` is REQUIRED and `set -uo pipefail` is NOT a substitute. A run: block with no
+          # `shell:` key executes under `bash --noprofile --norc -eo pipefail {0}` — errexit is
+          # ALREADY ON, and `set -uo pipefail` only ADDS flags. Measured: `bash -e -c 'set -uo
+          # pipefail; false; echo REACHED'` prints nothing and exits 1.
+          #
+          # Without this, the engine's non-zero exit killed the step AT the invocation: `rc=$?`
+          # never ran, the exit-3 retry never happened, and all six ::error:: arms below were
+          # DEAD CODE — on the one surface where the store is already empty. The operator got a
+          # bare "Process completed with exit code 3" while the Restore summary claimed an
+          # ::error:: had named their next action. Caught at review.
+          set +e
           set -uo pipefail
           ZOT_PUSH_USER=$(doppler secrets get ZOT_PUSH_USER -p soleur -c prd --plain) || ZOT_PUSH_USER=""
           ZOT_PUSH_TOKEN=$(doppler secrets get ZOT_PUSH_TOKEN -p soleur -c prd --plain) || ZOT_PUSH_TOKEN=""
@@ -2633,6 +2690,9 @@ jobs:
           fi
           printf '::add-mask::%s\n' "$ZOT_PUSH_TOKEN"
           export ZOT_PUSH_USER ZOT_PUSH_TOKEN
+          # Explicit, so the engine authenticates itself rather than inheriting whatever the
+          # bridge action happened to leave in the ambient keychain.
+          export GHCR_USER="${GITHUB_ACTOR}" GHCR_TOKEN="${GH_TOKEN_FOR_ENGINE}"
 
           # BOUNDED RETRY ON EXIT 3 ONLY. D11 proves the rebuilt HOST checked in; it does not
           # prove the Cloudflare Tunnel route has re-converged onto the replaced origin. That
@@ -2653,6 +2713,12 @@ jobs:
               --tags-from "${RUNNER_TEMP}/pins/restore-pins.json"
             rc=$?
             if (( rc != 3 )); then break; fi
+            if (( attempt == max )); then
+              # No sleep after the LAST attempt: it buys nothing and delays the exit-3
+              # ::error:: by two minutes while the store sits empty.
+              attempt=$(( attempt + 1 ))
+              break
+            fi
             echo "::notice::restore attempt ${attempt}/${max} hit exit 3 (sink unavailable) — the tunnel may still be re-converging onto the replaced origin. Backing off."
             sleep $(( attempt * 20 ))
             attempt=$(( attempt + 1 ))
@@ -2670,6 +2736,12 @@ jobs:
             *) echo "::error::restore FAILED with an unenumerated exit ${rc}. Every exit code of the restore engine is supposed to be enumerated, so this is itself a defect worth filing alongside the recovery." ;;
           esac
           exit "$rc"
+
+      - name: Tear down the tunnel bridge
+        if: always()
+        # cf-tunnel-registry-bridge's own description says "Setup only; caller must add an
+        # if:always() teardown." The recut job honours that for its throwaway; this job did not.
+        run: docker logout 127.0.0.1:5000 >/dev/null 2>&1 || true
 
       - name: Restore summary
         if: always()

@@ -200,6 +200,46 @@ digest_of() {
 WORK="$(mktemp -d)" || die 6 "could not create a scratch directory."
 trap 'rm -rf "$WORK"' EXIT
 
+# ── AUTHENTICATE. This is why the checks above are not decorative. ──────────────────────────
+# Until this was caught at review, ZOT_PUSH_USER/ZOT_PUSH_TOKEN were validated non-empty and
+# then NEVER USED: crane resolves credentials only through the Docker keychain
+# (~/.docker/config.json), so every copy went out ANONYMOUSLY. Against a sink with
+# `defaultPolicy: []` that is a guaranteed 401 -> DENIED -> exit 5, i.e. a gate that could
+# never pass — the exact defect this whole change exists to remove, reintroduced in the engine
+# that proves the pass condition.
+#
+# A private DOCKER_CONFIG under $WORK, not the ambient one: it is torn down with the scratch
+# dir, it cannot leak the prd credential into a shared keychain another step would inherit, and
+# it makes the rehearsal's THROWAWAY credential and the real run's PROD credential structurally
+# incapable of being confused for one another.
+export DOCKER_CONFIG="${WORK}/dockercfg"
+mkdir -p "$DOCKER_CONFIG" || die 6 "could not create a private docker config directory."
+
+# The sink is plain HTTP on loopback in BOTH modes — the throwaway listens directly, and the
+# real target is `cloudflared access tcp` on 127.0.0.1 (the TLS leg is the Cloudflare Access
+# edge). crane defaults to HTTPS for a host:port, so every call against the sink needs
+# --insecure. The stubs in the suite hid this: they never spoke a real protocol.
+SINK_TLS_FLAG="--insecure"
+case "$TARGET" in
+  127.0.0.1:*|localhost:*|"[::1]":*) ;;
+  *) SINK_TLS_FLAG="" ;;   # a non-loopback sink must use TLS
+esac
+
+if ! $CRANE auth login "$TARGET" -u "$ZOT_PUSH_USER" -p "$ZOT_PUSH_TOKEN" $SINK_TLS_FLAG \
+     >"$WORK/login.out" 2>"$WORK/login.err"; then
+  die 5 "could not authenticate to the sink ${TARGET} as '${ZOT_PUSH_USER}'. crane: $(tail -c 300 "$WORK/login.err" 2>/dev/null | tr '\n' ' ')"
+fi
+
+# GHCR is a PRIVATE package set: an anonymous read 401s. Optional here because the caller may
+# already hold a keychain entry (the release path does), but when the vars are supplied we log
+# in explicitly rather than hoping an ambient one exists.
+if [[ -n "${GHCR_USER:-}" && -n "${GHCR_TOKEN:-}" ]]; then
+  if ! $CRANE auth login ghcr.io -u "$GHCR_USER" -p "$GHCR_TOKEN" \
+       >"$WORK/ghlogin.out" 2>"$WORK/ghlogin.err"; then
+    die 2 "could not authenticate to ghcr.io as '${GHCR_USER}'. crane: $(tail -c 300 "$WORK/ghlogin.err" 2>/dev/null | tr '\n' ' ')"
+  fi
+fi
+
 restored=0
 skipped=0
 
@@ -252,7 +292,7 @@ while (( i < n_entries )); do
   # Registry-to-registry and digest-preserving, so it needs no local image and cannot be
   # satisfied by a Docker image cache. Idempotent: crane skips blobs the destination already
   # holds, which is what makes a partial pass safely re-runnable.
-  if ! crane_capture "$WORK/cp.out" "$WORK/cp.err" copy "$src" "$dst"; then
+  if ! crane_capture "$WORK/cp.out" "$WORK/cp.err" copy $SINK_TLS_FLAG "$src" "$dst"; then
     err="$(last_err "$WORK/cp.err")"
     cls="$(classify "$err")"
     case "$cls" in
@@ -266,7 +306,7 @@ while (( i < n_entries )); do
   # ── verification 1: digest parity ──────────────────────────────────────────────────────────
   # Assert it; never infer it from the copy's zero exit. An empty read counts as failure — a
   # failed capture yields "" and "" == "" would otherwise read as a match and certify nothing.
-  crane_capture "$WORK/dst.out" "$WORK/dst.err" digest "$dst"
+  crane_capture "$WORK/dst.out" "$WORK/dst.err" digest $SINK_TLS_FLAG "$dst"
   dst_digest="$(digest_of "$WORK/dst.out")"
   if [[ -z "$dst_digest" ]]; then
     err="$(last_err "$WORK/dst.err")"
@@ -285,7 +325,7 @@ while (( i < n_entries )); do
   # The digest above proves the sink holds the MANIFEST. This proves it holds the BLOBS. See the
   # measured table in the header: without this, an evicted layer yields a green restore and a
   # `blob unknown` when the host later tries to pull it.
-  if ! crane_capture "$WORK/val.out" "$WORK/val.err" validate --remote "$dst"; then
+  if ! crane_capture "$WORK/val.out" "$WORK/val.err" validate $SINK_TLS_FLAG --remote "$dst"; then
     err="$(last_err "$WORK/val.err")"
     cls="$(classify "$err")"
     case "$cls" in
@@ -305,7 +345,7 @@ while (( i < n_entries )); do
   if [[ -z "$(digest_of "$WORK/sigsrc.out")" ]]; then
     die 4 "no cosign signature (${sig_tag}) found at GHCR for ${repo}@${src_digest}. There is no unsigned-restore arm: a restored image whose signature is absent fails verification on the host. crane: $(last_err "$WORK/sigsrc.err")"
   fi
-  if ! crane_capture "$WORK/sigcp.out" "$WORK/sigcp.err" copy "ghcr.io/${repo}:${sig_tag}" "${TARGET}/${repo}:${sig_tag}"; then
+  if ! crane_capture "$WORK/sigcp.out" "$WORK/sigcp.err" copy $SINK_TLS_FLAG "ghcr.io/${repo}:${sig_tag}" "${TARGET}/${repo}:${sig_tag}"; then
     err="$(last_err "$WORK/sigcp.err")"
     case "$(classify "$err")" in
       NETWORK) die 3 "the sink was unavailable while copying the signature ${sig_tag}. crane: ${err}" ;;
@@ -313,13 +353,22 @@ while (( i < n_entries )); do
       *)       die 4 "the signature ${sig_tag} could not be copied for ${repo}. crane: ${err}" ;;
     esac
   fi
-  crane_capture "$WORK/sigdst.out" "$WORK/sigdst.err" digest "${TARGET}/${repo}:${sig_tag}"
+  crane_capture "$WORK/sigdst.out" "$WORK/sigdst.err" digest $SINK_TLS_FLAG "${TARGET}/${repo}:${sig_tag}"
   if [[ -z "$(digest_of "$WORK/sigdst.out")" ]]; then
     die 4 "the signature ${sig_tag} is not readable back from the sink, so ${repo}:${tag} is restored UNSIGNED. crane: $(last_err "$WORK/sigdst.err")"
   fi
 
   echo "restore_entry repo=${repo} tag=${tag} disposition=${disp} digest=${src_digest} result=restored_verified"
-  restored=$(( restored + 1 ))
+  # ONLY `required` entries count toward the floor, because FLOOR counts only required pins.
+  # Counting every restored entry made a CORRECT over-restore look like corruption: once a
+  # conditional pin becomes published, restoring 3 against FLOOR=2 exited 4 with "the registry
+  # is NOT fully restored — do not deploy", about a registry that was fully restored. Caught at
+  # review; the suite fixed the conditional as permanently absent, so no fixture reached it.
+  if [[ "$disp" == "required" ]]; then
+    restored=$(( restored + 1 ))
+  else
+    skipped=$(( skipped + 1 ))
+  fi
 done
 
 # ── the non-vacuity floor, asserted on what was ACTUALLY restored ────────────────────────────

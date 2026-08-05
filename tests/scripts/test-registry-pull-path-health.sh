@@ -456,6 +456,21 @@ else
   fail "A5's unknown arm must degrade; elsewhere unknown aborts, and that asymmetry is the point" "$rc" "$out"
 fi
 
+# A5 UNWIRED must ABORT, not degrade. An absent probe is a wiring fault, not an availability
+# failure: with no probe, nothing observes prod zot and every A5 abort arm is unreachable — the
+# dark-operand defect this rewrite exists to remove, committed inside the predicate added to
+# prevent it. Three reviewers found A5 dark in the shipped wiring; this row pins the refusal.
+W="$(world "$TMP/w-a5-unwired")"
+out="$(REGISTRY_GATE_HEALTH_CMD="$W/health" REGISTRY_GATE_CRANE_CMD="$W/crane" \
+       REGISTRY_GATE_RESTORE_CMD="$W/restore" REGISTRY_GATE_DRIFT_CMD="$W/drift" \
+       APP_DOMAIN_BASE=soleur.ai ZOT_PUSH_USER=u ZOT_PUSH_TOKEN=t \
+       bash "$GATE" --rehearse-target "$THROWAWAY" 2>&1)"; rc=$?
+if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -qF "no sink probe is configured"; then
+  pass "A5: NO probe configured => ABORT (an unwired predicate cannot fire, so it must refuse)"
+else
+  fail "an unwired A5 must refuse rather than silently degrade forever" "$rc" "$out"
+fi
+
 # ── Structural properties. ──────────────────────────────────────────────────────────────────
 STRIP="$TMP/gate-nocomments.sh"
 grep -vE '^[[:space:]]*#' "$GATE" > "$STRIP" || { echo "harness: could not strip comments" >&2; exit 2; }

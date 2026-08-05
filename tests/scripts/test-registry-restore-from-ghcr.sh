@@ -98,6 +98,34 @@ make_crane() {
 # argv-dispatching crane stub. FX and CALLS are injected by the harness.
 printf '%s\n' "$*" >> "$CALLS"
 sub="${1:-}"; shift || true
+# `auth login` is real behaviour now, not ceremony: the engine authenticates before its first
+# copy. It used to validate the credentials non-empty and never present them, so every push went
+# out anonymously — a guaranteed 401 against a defaultPolicy:[] sink. Fail the login when the
+# harness passes the sentinel, so the credential path has a negative control.
+if [[ "$sub" == "auth" ]]; then
+  [[ "${1:-}" == "login" ]] || { echo "stub: only 'crane auth login' is expected" >&2; exit 64; }
+  shift
+  host="${1:-}"; shift || true
+  u=""; pw=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -u) u="${2:-}"; shift 2 ;;
+      -p) pw="${2:-}"; shift 2 ;;
+      --insecure) shift ;;
+      *) shift ;;
+    esac
+  done
+  [[ -n "$host" && -n "$u" && -n "$pw" ]] || { echo "stub: 'crane auth login' needs a host, -u and -p" >&2; exit 64; }
+  [[ "$pw" == "REJECT_ME" ]] && { echo "Error: UNAUTHORIZED: authentication required" >&2; exit 1; }
+  exit 0
+fi
+# The sink is plain HTTP on loopback in both modes, so crane must be told so. Strip the flag
+# here, but assert it was PRESENT for sink-directed calls further down.
+args=(); saw_insecure=0
+for a in "$@"; do
+  if [[ "$a" == "--insecure" ]]; then saw_insecure=1; else args+=("$a"); fi
+done
+set -- "${args[@]}"
 key() { printf '%s' "$1" | tr '/:@' '___'; }
 emit() { # $1 = ref, $2 = what-kind (for the missing-fixture message)
   local k; k="$(key "$1")"
@@ -222,13 +250,13 @@ fi
 # ── The anti-fail-open assertion: blobs, not just manifests. ─────────────────────────────────
 # 0.9 measured `crane digest` returning rc=0 PASS on an image whose layer blob was evicted. An
 # engine that verified with digest alone would certify an unusable restore.
-if grep -qE '^validate --remote ' "$calls"; then
+if grep -qE '^validate .*--remote ' "$calls"; then
   pass "verification calls 'crane validate --remote' (blobs), not digest alone"
 else
   fail "the engine must verify blob completeness with crane validate --remote" "$rc" "$(cat "$calls")"
 fi
 
-n_validate=$(grep -cE '^validate --remote ' "$calls" || true)
+n_validate=$(grep -cE '^validate .*--remote ' "$calls" || true)
 if [[ "$n_validate" -eq 2 ]]; then
   pass "every required reference is blob-validated (2 of 2), not just the first"
 else
@@ -240,6 +268,37 @@ if grep -qF "sha256-${D1#sha256:}" "$calls" && grep -qF "sha256-${D2#sha256:}" "
   pass "a signature tag is copied for each restored digest"
 else
   fail "each restored digest needs its sha256-<hex> signature tag copied" "?" "$(cat "$calls")"
+fi
+
+# ── AUTHENTICATION — the check that used to be decorative. ──────────────────────────────────
+# ZOT_PUSH_USER/ZOT_PUSH_TOKEN were validated non-empty and then never presented to crane, which
+# reads only the Docker keychain. Every push therefore went out ANONYMOUSLY, which against a
+# defaultPolicy:[] sink is a guaranteed 401 -> exit 5 — a gate that could never pass. Caught by
+# three independent reviewers; no stub exercised a real auth path.
+if grep -qE '^auth login ' "$calls"; then
+  pass "the engine AUTHENTICATES to the sink before copying (the credential check is load-bearing)"
+else
+  fail "the engine must present ZOT_PUSH_* to crane, not merely check they are non-empty" "?" \
+    "$(cat "$calls")"
+fi
+
+# The sink is plain HTTP on loopback in both modes (the throwaway listens directly; the real
+# target is cloudflared on 127.0.0.1). crane defaults to HTTPS for a host:port, so every
+# sink-directed call needs --insecure. The stubs hid this by never speaking a real protocol.
+if grep -qE '^copy --insecure ' "$calls" && grep -qE '^validate --insecure ' "$calls"; then
+  pass "sink-directed calls carry --insecure (crane would otherwise attempt TLS to loopback)"
+else
+  fail "copy/validate against a loopback sink must pass --insecure" "?" "$(cat "$calls")"
+fi
+
+# A rejected login must exit 5 BEFORE any copy — an authorisation failure is not retryable.
+fx="$TMP/fx-badlogin"; calls="$TMP/calls-badlogin"; : > "$calls"
+ok_fixtures "$fx" "$TARGET"
+out="$(ZOT_PUSH_TOKEN="REJECT_ME" run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 5 ]] && ! grep -qE '^copy ' "$calls"; then
+  pass "a REJECTED sink login => exit 5 before any copy is attempted"
+else
+  fail "a rejected login must exit 5 and copy nothing" "$rc" "$out ||| $(cat "$calls")"
 fi
 
 # ── Idempotence: a second pass over an already-restored target is a clean no-op. ─────────────
