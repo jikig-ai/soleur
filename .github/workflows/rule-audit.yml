@@ -87,6 +87,175 @@ jobs:
               --body-file "$RUNNER_TEMP/model-drift-body.md"
           fi
 
+      # DETECTION half of the zot pin cadence (#7282). Enforcement is
+      # zot-image-staleness.test.sh on infra-validation.yml (per-PR). This step is the
+      # PR-cadence-independent trigger, and it carries TWO distinct conditions:
+      #   (1) offline age/coherence  — catches "the analysis went stale"
+      #   (2) live upstream poll     — catches "upstream moved and we are behind"
+      # Both are needed. (2) alone rebuilds a single point of failure: if the poll breaks
+      # (revoked token, API shape change, upstream repo rename) it goes quiet, and quiet
+      # reads as healthy. (1) needs no network and reddens off the sidecar's own recorded
+      # date, so it still fires when the poll is dead. (1) alone is what #7282 already was:
+      # a fresh-looking sidecar 18 releases behind.
+      #
+      # Advisory only — this NEVER edits the pin. It files one issue; a human opens the
+      # real, CI-gated, CLA-checked PR. Nothing auto-writes the sole pull path's binary.
+      # (There is no Renovate here: measured 2026-08-05, zero Renovate PRs in this repo's
+      # history and no Dependency Dashboard. renovate.json5 was an inert config and this
+      # PR removes it. Do not "restore" bot-managed pinning without re-verifying that.)
+      # `!cancelled()` is load-bearing, not boilerplate. A step `if:` containing no status
+      # function has `success()` implicitly ANDed in, so without this the zot poll is skipped
+      # on every run where the model-drift step above failed — two unrelated detectors sharing
+      # one workflow, where one breaking silences the other indefinitely while the workflow
+      # keeps emailing about the first. That is the exact silence-reads-as-health shape this
+      # whole change exists to remove. The failure() email below still fires for both.
+      - name: Detect zot pin staleness
+        if: ${{ !cancelled() }}
+        # 2 min: the job's timeout-minutes is SHARED with rule-audit.sh and the model-drift
+        # step, and a JOB timeout marks steps `cancelled`, not `failed` -- so `if: failure()`
+        # on the email step below would NOT fire. A hung `gh api` against a third-party
+        # endpoint would produce no signal at all, which is the silence-reads-as-health shape
+        # this step exists to remove.
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          TF=apps/web-platform/infra/zot-registry.tf
+          DRIFT=""; PROBLEMS=""
+
+          # --- (1) offline age + coherence -------------------------------------------
+          # Assignment-then-$? would ABORT here: a GitHub `run:` block defaults to
+          # `bash -eo pipefail`, so a non-zero command substitution kills the step at that
+          # line and every diagnosis below it never runs.
+          set +e
+          OUT="$(bash apps/web-platform/infra/zot-image-staleness.test.sh 2>&1)"
+          RC=$?
+          set -e
+          if [ "$RC" -eq 2 ]; then
+            echo "zot-image-staleness.test.sh reported DETECTOR FAILURE (rc=2); failing step." >&2
+            echo "$OUT" >&2
+            exit 2
+          elif [ "$RC" -ne 0 ] && [ "$RC" -ne 10 ]; then
+            echo "zot-image-staleness.test.sh exited unexpectedly (rc=$RC); failing step." >&2
+            echo "$OUT" >&2
+            exit "$RC"
+          fi
+          [ "$RC" -eq 10 ] && DRIFT="stale"
+
+          # --- (2) the pinned version -------------------------------------------------
+          # ANCHORED on the assignment, exactly as the offline gate parses it. An unanchored
+          # `grep -oE 'zot-linux-amd64:v[0-9.]+' | head -1` is satisfied by a COMMENT, and a
+          # rollback annotation above the locals ("# rolled back from ...:v2.1.30") made this
+          # step report "pin is current (v2.1.30)" while the host was pinned to v2.1.20 --
+          # fail-open, in the exact class #7282 exists to remove. Two halves of one detector
+          # must not parse the same fact by different rules.
+          set +e
+          PINNED="$(grep -oE '^[[:space:]]*zot_image_amd64[[:space:]]*=[[:space:]]*"ghcr\.io/project-zot/zot-linux-amd64:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}"' "$TF" | grep -oE ':v[0-9]+\.[0-9]+\.[0-9]+@' | tr -d ':@' | head -1)"
+          set -e
+          if [ -z "$PINNED" ]; then
+            echo "could not parse the pinned zot version from $TF (anchored on the assignment); failing step." >&2
+            exit 2
+          fi
+
+          # --- (3) live upstream poll -------------------------------------------------
+          set +e
+          LATEST="$(gh api repos/project-zot/zot/releases/latest --jq .tag_name 2>&1)"
+          API_RC=$?
+          set -e
+          if [ "$API_RC" -ne 0 ] || [ -z "$LATEST" ] || ! printf '%s' "$LATEST" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            # A dead poll must NOT discard an offline verdict we already hold. The previous
+            # shape exited here, so "poll dead AND pin stale" reported only a step failure --
+            # precisely the "one detector breaking silences the other" behaviour this step's
+            # own rationale argues against. Record it and keep going; the non-zero exit at the
+            # very end still fires the ops email.
+            PROBLEMS="${PROBLEMS}- upstream release poll FAILED (rc=$API_RC); this run cannot tell whether we are behind."$'\n'
+            LATEST="(unavailable)"
+          elif [ "$PINNED" != "$LATEST" ]; then
+            DRIFT="${DRIFT:+$DRIFT+}behind"
+          fi
+
+          # --- (4) digest <-> REPOSITORY binding (the offline gate structurally cannot) ---
+          # zot-linux-amd64 and zot-linux-arm64 are DISTINCT OCI repositories and a manifest
+          # digest resolves only within its own. So a swap applied COHERENTLY to both the .tf
+          # and the sidecar passes every offline check -- nothing in the committed file set
+          # binds a digest to an arch -- and that is the shape the bump procedure produces
+          # (one paste session, two files). Measured: correct pairing 200, swapped 404.
+          # Anonymous pull token, no secrets.
+          for A in amd64 arm64; do
+            set +e
+            D="$(grep -oE "^[[:space:]]*zot_image_${A}[[:space:]]*=[[:space:]]*\"ghcr\.io/project-zot/zot-linux-$A:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}\"" "$TF" | grep -oE 'sha256:[0-9a-f]{64}' | head -1)"
+            T="$(curl -sS --max-time 20 "https://ghcr.io/token?scope=repository:project-zot/zot-linux-$A:pull&service=ghcr.io" | jq -r .token)"
+            CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -I -H "Authorization: Bearer $T" -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' "https://ghcr.io/v2/project-zot/zot-linux-$A/manifests/$D")"
+            PROBE_RC=$?
+            set -e
+            if [ "$PROBE_RC" -ne 0 ] || [ -z "$CODE" ] || [ "$CODE" = "000" ]; then
+              PROBLEMS="${PROBLEMS}- could not verify the $A digest against its repository (network/probe failure); this run cannot rule out a swapped pin."$'\n'
+            elif [ "$CODE" = "404" ]; then
+              DRIFT="${DRIFT:+$DRIFT+}swapped"
+              PROBLEMS="${PROBLEMS}- **the $A digest does not exist in the zot-linux-$A repository (HTTP 404).** Coherent-swap signature: the pin looks internally consistent but the pull fails with MANIFEST_UNKNOWN and the sole pull path goes dark. Do NOT apply."$'\n'
+            elif [ "$CODE" != "200" ]; then
+              PROBLEMS="${PROBLEMS}- unexpected HTTP $CODE verifying the $A digest; treat as unverified."$'\n'
+            fi
+          done
+
+          if [ -z "$DRIFT" ] && [ -z "$PROBLEMS" ]; then
+            echo "zot pin is current ($PINNED), digests resolve in their own repositories, and the analysis is fresh."
+            exit 0
+          fi
+
+          # --- file/update ONE idempotent issue ----------------------------------------
+          # `action-required` is load-bearing, not decoration: it is the ONLY label the weekly
+          # operator digest reads. Without it "we are 18 releases behind" lands in a label
+          # nobody queries -- reconstructing this issue's own root cause in a new channel.
+          gh label create zot-pin-drift --color FBCA04 \
+            --description "zot registry image pin is stale, behind upstream, or unverifiable (#7282)" \
+            --force >/dev/null 2>&1 || true
+          {
+            echo "The pinned zot registry image needs attention (condition: \`${DRIFT:-probe-failure}\`)."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Pinned | \`$PINNED\` |"
+            echo "| Upstream latest | \`$LATEST\` |"
+            echo
+            if [ -n "$PROBLEMS" ]; then echo "$PROBLEMS"; echo; fi
+            echo "zot is the **sole pull path** (ADR-096) with no fallback, so this is a"
+            echo "supply-chain and reliability item, not cosmetic."
+            echo
+            echo "Offline gate output:"
+            echo
+            echo '```'
+            echo "$OUT"
+            echo '```'
+            echo
+            echo "Remediation — follow \`## Bump procedure\` in"
+            echo "\`apps/web-platform/infra/zot-image.provenance.md\`. Agent entry point:"
+            echo
+            echo '```'
+            echo "/soleur:one-shot \"refresh the zot pin provenance sidecar per apps/web-platform/infra/zot-image.provenance.md section 'Bump procedure'\""
+            echo '```'
+            echo
+            echo "_Filed automatically by rule-audit.yml zot-pin drift detection (#7282)._"
+          } > "$RUNNER_TEMP/zot-pin-drift-body.md"
+          EXISTING="$(gh issue list --label zot-pin-drift --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file "$RUNNER_TEMP/zot-pin-drift-body.md"
+            echo "Updated existing zot-pin-drift issue #$EXISTING."
+          else
+            gh issue create --label zot-pin-drift --label action-required \
+              --title "zot-pin-drift: registry image pin needs attention" \
+              --body-file "$RUNNER_TEMP/zot-pin-drift-body.md"
+          fi
+
+          # A probe that could not run is a DETECTOR failure: exit non-zero so the ops email
+          # fires. Drift alone exits 0 -- the issue is the channel for that.
+          if [ -n "$PROBLEMS" ]; then
+            echo "one or more probes could not complete; see the filed issue." >&2
+            exit 1
+          fi
+
       - name: Email notification (failure)
         if: failure()
         uses: ./.github/actions/notify-ops-email

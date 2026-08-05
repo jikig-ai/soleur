@@ -109,7 +109,7 @@ assert "LINE=\"SOLEUR_ZOT_DISK assignment found" "[ -n \"\$LINE_ASSIGN\" ]"
 for f in pcent= fs_size_gb= block_size_gb= resize_ok= zot_restarts= ping_rc= \
          mem_total_mb= zot_anon_mb= zot_oom_kills= state_status= oom_killed= exit_code= \
          zot_uptime_s= zot_last_err_src= \
-         oom_kills_5m= zot_last_err= boot_id= htpasswd_pull_matches= htpasswd_push_matches=; do
+         oom_kills_5m= zot_last_err= boot_id= zot_image_digest= htpasswd_pull_matches= htpasswd_push_matches=; do
   assert "SOLEUR_ZOT_DISK LINE carries field ${f}" "grep -qF '${f}' <<<\"\$LINE_ASSIGN\""
 done
 # zot_last_err MUST be the LAST field. This is a SECURITY invariant, not cosmetics:
@@ -148,13 +148,23 @@ assert "probe maps ONLY exit 3 to false (not every non-zero)" \
 assert "probe emits a boolean/sentinel only — never the token" \
   "! grep -qE 'printf .*ZOT_(PULL|PUSH)_TOKEN|echo .*ZOT_(PULL|PUSH)_TOKEN' <<<\"\$PROBE_BLOCK\""
 
-# The container fields are positionally coupled: `read -r ID ZOT_RESTARTS STATE_STATUS OOM_KILLED
-# EXIT_CODE` must match the `docker inspect -f` template column order, else oom_killed/exit_code
-# transpose silently (values still look plausible in telemetry). Pin the exact 5-field template.
+# The container fields are positionally coupled: the `read -r` targets must match the
+# `docker inspect -f` template column order, else oom_killed/exit_code transpose silently
+# (values still look plausible in telemetry). Pin the exact template.
+#
+# Extended 2026-08-05 (#7282) from 6 to 7 fields: `{{.Config.Image}}` -> ZOT_IMAGE_REF, which
+# feeds zot_image_digest — the only off-host way to tell which zot binary production is
+# actually running, on a host with no shell and no SSH. It JOINS this call rather than adding
+# a second inspect, per the one-inspect invariant #7247 documents.
+#
+# This guard did its job on that change: it caught the extension because the assertion is a
+# grep -qF of the WHOLE template, not a per-field check. Keep it that way — a per-field or
+# regex form would let a reordering through, which is the exact silent transposition the
+# positional coupling makes possible.
 assert "docker inspect -f template order matches the read target order" \
-  "grep -qF \"docker inspect -f '{{.Id}} {{.RestartCount}} {{.State.Status}} {{.State.OOMKilled}} {{.State.ExitCode}} {{.State.StartedAt}}' zot\" '$CI'"
+  "grep -qF \"docker inspect -f '{{.Id}} {{.RestartCount}} {{.State.Status}} {{.State.OOMKilled}} {{.State.ExitCode}} {{.State.StartedAt}} {{.Config.Image}}' zot\" '$CI'"
 assert "read targets are in the same order as the inspect template" \
-  "grep -qF 'read -r ID ZOT_RESTARTS STATE_STATUS OOM_KILLED EXIT_CODE' '$CI'"
+  "grep -qF 'read -r ID ZOT_RESTARTS STATE_STATUS OOM_KILLED EXIT_CODE STARTED_AT ZOT_IMAGE_REF' '$CI'"
 
 # The cap is DERIVED from var.registry_server_type (zot-registry.tf local.registry_memory_cap_mb),
 # not hardcoded. It was the literal 7168m with no edge to the server type, so a 4 GB host would
