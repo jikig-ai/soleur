@@ -138,6 +138,164 @@ if [[ "$rc_nosentry" -eq 0 ]] && [[ ! -s "$MOCK_CURL_FILE" ]] && has "$MOCK_GH_F
   ok "skips Sentry when its env is unset and still files the issue"
 else bad "unset Sentry env broke the GitHub surface (rc=$rc_nosentry)"; fi
 
+# --- #7220 review: THE THIRD STATE, for a gate that never ran -----------------------------
+#
+# The alert step fires on a job failure where the gate did not pass, which includes the gate
+# being SKIPPED because something before it died. Neither existing body is true there:
+# "reachable" asserts the files reached the server, "unreachable" asserts the channel did not
+# answer. Both name an unmeasured cause. What is actually known is that activation is UNGRADED.
+run_alert "the gate never ran" ungraded
+UNGRADED_GH=$(cat "$MOCK_GH_FILE"); UNGRADED_CURL=$(cat "$MOCK_CURL_FILE")
+
+if [[ "$UNGRADED_GH" != "$REACH_GH" && "$UNGRADED_GH" != "$UNREACH_GH" ]]; then
+  ok "ungraded produces output distinct from BOTH other states"
+else bad "ungraded reused another state's text — it would name a cause nothing measured"; fi
+if grep -qF 'before it could be checked' <<<"$UNGRADED_GH"; then
+  ok "ungraded title says the update was never checked"
+else bad "ungraded state did not use its own title"; fi
+# The two claims it must NOT make, because it cannot know either.
+if grep -qF 'the files themselves reached the server' <<<"$UNGRADED_GH"; then
+  bad "ungraded body asserts the files landed — nothing measured that"
+else ok "ungraded body makes no delivery claim"; fi
+if grep -qF 'did not answer' <<<"$UNGRADED_GH"; then
+  bad "ungraded body asserts the channel did not answer — nothing asked it"
+else ok "ungraded body makes no listener-down claim"; fi
+if grep -qF 'infra-config-gate-ungraded' <<<"$UNGRADED_CURL"; then
+  ok "ungraded Sentry op is distinguishable from both other ops"
+else bad "ungraded state reused another Sentry op"; fi
+
+# --- #7220 review: CALLER/CALLEE ENV LOCKSTEP ---------------------------------------------
+#
+# THE BUG THIS EXISTS FOR. The workflow's alert step exported SECCOMP_ALERT_RUN_URL /
+# SECCOMP_ALERT_SHA — copied from the seccomp precedent — while this helper reads
+# INFRA_CONFIG_ALERT_RUN_URL / INFRA_CONFIG_ALERT_SHA. Both were therefore ALWAYS empty, so
+# every alert body omitted its Commit and CI run lines while its own prose told the operator
+# that "the CI run linked below records exactly what was tried". The link was never there.
+#
+# This file's other cases could not see it: they set the CORRECT names themselves, so they
+# proved the helper READS those variables and never that the caller SETS them. A check
+# certifying a property adjacent to the one it was named for.
+WF="$HERE/../.github/workflows/apply-deploy-pipeline-fix.yml"
+if [[ -f "$WF" ]]; then
+  # Every variable the helper reads out of the environment, derived from the helper rather than
+  # listed here, so a newly-read variable is covered without editing this test.
+  helper_vars=$(grep -oE '\$\{INFRA_CONFIG_ALERT_[A-Z_]+' "$SCRIPT" | sed 's/^\${//' | sort -u)
+  n_vars=$(grep -c . <<<"$helper_vars")
+  if [[ "$n_vars" -ge 2 ]]; then
+    ok "derived $n_vars INFRA_CONFIG_ALERT_* variable(s) from the helper"
+  else bad "derived only $n_vars INFRA_CONFIG_ALERT_* variables — the extraction is broken, so the lockstep below is vacuous"; fi
+
+  # The alert step's own env block, not the whole workflow: a sibling step legitimately exports
+  # SECCOMP_ALERT_* for seccomp_unenforced_alert, and matching that would pass on the bug.
+  alert_env=$(awk '
+    /^      - name: Alert on a red infra-config gate/ { instep=1; next }
+    instep && /^      - name: / { exit }
+    instep && /^        run: \|/ { exit }
+    instep { print }
+  ' "$WF")
+  missing=""
+  while IFS= read -r v; do
+    [[ -n "$v" ]] || continue
+    grep -qE "^[[:space:]]+${v}:" <<<"$alert_env" || missing="${missing} ${v}"
+  done <<<"$helper_vars"
+  if [[ -z "$missing" ]]; then
+    ok "the alert step exports every INFRA_CONFIG_ALERT_* variable the helper reads"
+  else bad "the alert step never sets:${missing} — the issue body would omit the Commit/CI-run lines it promises"; fi
+
+  # And the inverse half: the step must not be exporting the seccomp names INSTEAD, which is the
+  # exact shape of the original defect.
+  if grep -qE '^[[:space:]]+SECCOMP_ALERT_' <<<"$alert_env"; then
+    bad "the alert step still exports SECCOMP_ALERT_* — the helper does not read those"
+  else ok "the alert step does not export the seccomp variable names"; fi
+
+  # --- #7220 review: THE STEP'S CONDITION MUST COVER A GATE THAT NEVER RAN ------------------
+  # `== 'failure'` excluded `skipped`, so a pre-gate failure notified nobody. Asserted on the
+  # condition text because the branch it guards cannot be reached to observe otherwise.
+  cond=$(awk '/^      - name: Alert on a red infra-config gate/{f=1;next} f&&/^        if: /{sub(/^        if: /,"");print;exit}' "$WF")
+  if [[ -n "$cond" ]] && grep -qF "!= 'success'" <<<"$cond"; then
+    ok "the alert fires whenever the gate did not SUCCEED, not only when it failed"
+  else bad "the alert condition is '${cond:-<unparseable>}' — a skipped gate would notify nobody"; fi
+  if grep -qF 'failure()' <<<"$cond"; then
+    ok "the alert is still scoped to a failed job (a cancelled run does not page)"
+  else bad "the alert condition lost its failure() guard"; fi
+else
+  bad "could not locate apply-deploy-pipeline-fix.yml — the caller/callee lockstep did NOT run"
+fi
+
+# --- #7220 review: THE ALERT STEP'S OWN LOGIC ---------------------------------------------
+#
+# Drives the step's real `run:` block with a stubbed emitter, so the branch selection and the
+# operator-facing rendering are both graded. Run under GitHub's own default shell flags
+# (`bash --noprofile --norc -eo pipefail`): `set -e` is ON there and NOT cleared by the block's
+# own `set -uo pipefail`, so a harness using a bare `bash` would be blind to an abort.
+if [[ -f "$WF" ]]; then
+  step_body=$(awk '
+    /^      - name: Alert on a red infra-config gate/ { instep=1 }
+    instep && /^        run: \|/ { inrun=1; next }
+    inrun && /^      - name: / { exit }
+    inrun { sub(/^          /, ""); print }
+  ' "$WF")
+  n_body=$(grep -c . <<<"$step_body")
+  if [[ "$n_body" -ge 20 ]]; then
+    ok "extracted the alert step's run block ($n_body lines)"
+  else bad "extracted only $n_body lines of the alert step — every case below would be vacuous"; fi
+
+  drive_step() {  # <gate-outcome> <apply-outcome> <frame-json-or-empty>
+    D=$(mk_sandbox)
+    # Stub the emitter: record the ARGUMENTS, which is where reach-mode and WHERE live.
+    cat > "$D/stub-helper.sh" <<'STUB'
+infra_config_red_alert() { printf 'REACH=%s\n' "${2:-}" >> "$STEP_LOG"; printf 'DETAIL=%s\n' "${1:-}" >> "$STEP_LOG"; return 0; }
+STUB
+    mkdir -p "$D/ws/scripts"
+    cp "$D/stub-helper.sh" "$D/ws/scripts/infra-config-red-alert.sh"
+    printf '%s\n' "$step_body" > "$D/step.sh"
+    : > "$D/step.log"
+    if [[ -n "$3" ]]; then printf '%s' "$3" > "$D/resp.txt"; fi
+    # The step hardcodes /tmp/infra-config-status-response.txt; point RESP at the fixture by
+    # pre-seeding that path is not safe across parallel runs, so rewrite the one assignment.
+    sed -i "s|^RESP=/tmp/infra-config-status-response.txt$|RESP=$D/resp.txt|" "$D/step.sh"
+    grep -qF "RESP=$D/resp.txt" "$D/step.sh" || { bad "could not repoint RESP — driver is broken"; return 1; }
+    STEP_LOG="$D/step.log" GITHUB_WORKSPACE="$D/ws" \
+      GATE_OUTCOME="$1" APPLY_OUTCOME="$2" \
+      bash --noprofile --norc -eo pipefail "$D/step.sh" >"$D/out.txt" 2>&1
+    STEP_RC=$?
+    STEP_OUT=$(cat "$D/step.log")
+  }
+
+  # (a) The gate never ran -> ungraded, and it must not fall through to the frame branches.
+  drive_step skipped failure ""
+  if grep -qF 'REACH=ungraded' <<<"$STEP_OUT"; then
+    ok "a skipped gate alerts in the ungraded mode"
+  else bad "a skipped gate did not alert as ungraded (rc=$STEP_RC, log=${STEP_OUT:-<empty>})"; fi
+  if grep -qF 'terraform apply' <<<"$STEP_OUT"; then
+    ok "the ungraded detail names the step that actually failed"
+  else bad "the ungraded detail does not name the failing step"; fi
+
+  # (b) The gate ran and failed on a frame with a failed FILE -> the file and reason reach the
+  #     operator, rather than "go read the CI log".
+  drive_step failure success '{"fatal_line":0,"fatal_rc":0,"fatal_cmd":"","files_written":18,"files_total":19,"files":[{"file":"/etc/webhook/hooks.json","status":"failed","reason":"hooks_json_unparseable"}],"restarts":[]}'
+  if grep -qF '/etc/webhook/hooks.json' <<<"$STEP_OUT" && grep -qF 'hooks_json_unparseable' <<<"$STEP_OUT"; then
+    ok "the failed file AND the host's reason reach the operator-facing detail"
+  else bad "the failed file/reason never reached the detail (log=${STEP_OUT:-<empty>})"; fi
+
+  # (c) Seam normalisation: fatal_cmd carries the handler's internal variable name.
+  drive_step failure success '{"fatal_line":642,"fatal_rc":1,"fatal_cmd":"$SYSTEMCTL_PRIV daemon-reload","files_written":19,"files_total":19,"files":[],"restarts":[]}'
+  if grep -qF 'sudo systemctl daemon-reload' <<<"$STEP_OUT"; then
+    ok "the seam name is rendered as the command that actually ran"
+  else bad "fatal_cmd still shows the raw seam variable (log=${STEP_OUT:-<empty>})"; fi
+  if grep -qF 'SYSTEMCTL_PRIV' <<<"$STEP_OUT"; then
+    bad "the raw \$SYSTEMCTL_PRIV seam name still leaks to the operator"
+  else ok "no raw seam variable name leaks to the operator"; fi
+fi
+
+# --- ASSERTION FLOOR ----------------------------------------------------------------------
+# Deleting a case from this file must be loud. Zero headroom, ratchet when adding cases.
+ALERT_MIN_ASSERTIONS=29
+if [[ "$PASS" -lt "$ALERT_MIN_ASSERTIONS" ]]; then
+  echo "  FAIL: assertion-count floor — only $PASS assertions ran, expected >= $ALERT_MIN_ASSERTIONS"
+  FAIL=$((FAIL + 1))
+fi
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]] || exit 1
