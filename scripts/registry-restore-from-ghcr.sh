@@ -188,8 +188,16 @@ crane_capture() {
 # below; GitHub parses workflow commands per LINE, so a newline followed by `::add-mask::` or
 # `::error::` inside registry stderr would be EXECUTED. Collapsing newlines makes the whole
 # capture a single un-parseable payload.
+#
+# `tail -n 1` is what makes this the LAST LINE rather than the last 400 BYTES, and the difference
+# is not cosmetic: classify() substring-matches, so its FIRST case arm wins over the whole capture
+# regardless of line order. A capture carrying `manifest unknown` on an earlier line and
+# `authentication required` on the last classified NOTFOUND — which, for a CONDITIONAL entry, is a
+# silent skip. A credential failure would have been recorded as "absent". The gate carries the
+# identical fix; both were found by the mutation battery, because with short fixtures a byte-tail
+# and a line-tail return the same string and no ordinary test can tell them apart.
 last_err() {
-  tail -c 400 "$1" 2>/dev/null | tr '\n' ' ' || true
+  tail -c 400 "$1" 2>/dev/null | tail -n 1 | tr '\n' ' ' || true
 }
 
 # digest_of <file> — keep only a bare sha256 token.
@@ -265,10 +273,13 @@ while (( i < n_entries )); do
     case "$cls" in
       NOTFOUND)
         if [[ "$disp" == "conditional" ]]; then
-          # A declared skip, not an abort. soleur-inngest-config is not published at GHCR
-          # (measured), and a gate that required it would abort forever on a repo that does not
-          # exist — the new deadlock this change exists to avoid. The floor counts only
-          # `required` entries, so a conditional skip can never make the restore vacuous.
+          # A declared skip, not an abort. soleur-inngest-config is not published at GHCR — the
+          # producing workflow (build-inngest-config-bundle.yml) is workflow_dispatch-only and
+          # has never been run, which is the credential-INDEPENDENT evidence; an earlier draft
+          # cited an uncredentialed `crane ls`, which cannot tell absent from not-visible. A gate
+          # that required it would abort forever on a repo that does not exist — the new deadlock
+          # this change exists to avoid. The floor counts only `required` entries, so a
+          # conditional skip can never make the restore vacuous.
           echo "restore_entry repo=${repo} tag=${tag} disposition=conditional result=skipped_absent"
           skipped=$(( skipped + 1 ))
           continue

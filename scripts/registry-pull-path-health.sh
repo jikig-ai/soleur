@@ -168,10 +168,18 @@ trap 'rm -rf "$WORK"' EXIT
 # before this, build_sha was asserted non-empty and then never compared to anything, so a cached
 # edge response carrying a stale version AND a stale build_sha passed. Now it must resolve at
 # GHCR as a tag, so a stale pair fails A1.
-# soleur-inngest-config is `conditional` and does NOT count: it is not published at GHCR
-# (measured 2026-08-05 — `crane ls` returns NAME_UNKNOWN), and a gate listing it as required
-# would abort forever on a repo that does not exist, creating exactly the new deadlock this
-# rewrite exists to remove.
+# soleur-inngest-config is `conditional` and does NOT count: it is not published at GHCR, and a
+# gate listing it as required would abort forever on a repo that does not exist, creating exactly
+# the new deadlock this rewrite exists to remove.
+#
+# THE EVIDENCE FOR THAT MATTERS, because an earlier draft cited the wrong measurement. It read
+# "`crane ls` returns NAME_UNKNOWN" — an UNCREDENTIALED read of the TAGS api, which is neither
+# the api this gate uses nor capable of distinguishing "absent" from "not visible to this
+# credential" (the exact ambiguity documented at A1's NOTFOUND message twelve lines below).
+# The load-bearing evidence is credential-independent: `build-inngest-config-bundle.yml` is
+# workflow_dispatch-only and `gh run list` reports ZERO runs, so nothing was ever pushed. The
+# Terraform-promoted pointer secret INNGEST_CONFIG_DIGEST does not exist in soleur/prd_terraform
+# either. Re-measured 2026-08-05 with a working positive control on a private sibling repo.
 readonly FLOOR=4
 
 # The pin set is a SOURCE-LEVEL declaration, so "declared but never counted" is unrepresentable
@@ -193,7 +201,12 @@ readonly REQUIRED_PINS=(
   "jikig-ai/soleur-inngest-bootstrap|cloud-init-pin"
 )
 readonly CONDITIONAL_PINS=(
-  "jikig-ai/soleur-inngest-config|terraform-digest-pointer"
+  # The derivation is `latest` and is NAMED `latest`. It was called `terraform-digest-pointer`,
+  # which claimed a read this gate has never performed — resolve_tag() returned the literal
+  # string `latest`. The pointer it named (INNGEST_CONFIG_DIGEST in soleur/prd_terraform) is
+  # unprovisioned, so the read was not merely unimplemented but impossible. A derivation name
+  # that overstates what was measured is the defect class this whole gate exists to remove.
+  "jikig-ai/soleur-inngest-config|latest"
 )
 
 declared_required="${#REQUIRED_PINS[@]}"
@@ -219,10 +232,25 @@ classify() {
   esac
 }
 
-# The `tr '\n' ' '` is a WORKFLOW-COMMAND INJECTION GUARD, not formatting. Registry stderr is
-# externally-influenced text interpolated into `::error::` output, and GitHub parses workflow
-# commands per LINE — a newline followed by `::add-mask::` inside it would be executed.
-last_err() { tail -c 400 "$1" 2>/dev/null | tr '\n' ' ' || true; }
+# Three transforms, in this order, and each is load-bearing:
+#
+#   tail -c 400   bounds the capture. An unbounded registry message is both a log-flooding and an
+#                 interpolation surface.
+#   tail -n 1     makes this the LAST LINE, which is what classify() documents and what the
+#                 measured crane shapes require. `tail -c` alone does NOT do that, and the gap was
+#                 a live fail-open: classify() substring-matches, so its FIRST case arm wins over
+#                 the whole capture regardless of line order. A stderr carrying `manifest unknown`
+#                 on one line and `authentication required` on the last therefore classified
+#                 NOTFOUND — and for a CONDITIONAL pin, NOTFOUND is a silent declared skip. So a
+#                 credential failure could be recorded as "absent, skipping". Found by the
+#                 mutation battery, which is the only thing that distinguished byte-tail from
+#                 line-tail: with short fixtures the two are identical.
+#   tr '\n' ' '   is a WORKFLOW-COMMAND INJECTION GUARD, not formatting. Registry stderr is
+#                 externally-influenced text interpolated into `::error::` output, and GitHub
+#                 parses workflow commands per LINE — a newline followed by `::add-mask::` inside
+#                 it would be EXECUTED. Kept after the line-tail because a single line can still
+#                 carry a trailing newline.
+last_err() { tail -c 400 "$1" 2>/dev/null | tail -n 1 | tr '\n' ' ' || true; }
 
 # ── A0 — inventory derivation, from production's OWN pins. ──────────────────────────────────
 # Zero reads of zot: reading the digest list out of zot would make this gate depend on the
@@ -272,7 +300,6 @@ resolve_tag() {
       grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' \
         "${REGISTRY_GATE_CLOUD_INIT:-${ROOT}/apps/web-platform/infra/cloud-init.yml}" 2>/dev/null \
         | head -1 | sed 's/.*://' ;;
-    terraform-digest-pointer) printf 'latest' ;;
     *) printf '' ;;
   esac
 }

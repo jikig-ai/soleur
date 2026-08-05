@@ -119,7 +119,10 @@ run_suite() { # $1 = gate|engine ; echoes nothing, returns the suite's rc
 
 caught=0
 survived=0
+expected=0
+unexpectedly_caught=0
 SURVIVORS=""
+MISCLASSIFIED=""
 
 # mutate <label> <gate|engine> <old> <new>
 #
@@ -153,6 +156,38 @@ mutate() {
     survived=$(( survived + 1 ))
     SURVIVORS="${SURVIVORS}${SURVIVORS:+$'\n'}  SURVIVED  ${label}"
     printf '  SURVIVED  %s\n' "$label"
+  fi
+}
+
+# expect_survive <label> <gate|engine> <old> <new> <justification>
+#
+# For a guard that is UNREACHABLE by construction, where no fixture can make the suite go red
+# because no input reaches the code. Such a guard is still worth keeping (defense-in-depth against
+# a future edit to whatever makes it unreachable), but pretending the battery catches it would be
+# a lie, and deleting the mutation would quietly shrink what the battery claims to measure.
+#
+# The justification is REQUIRED and must be a reachability argument, not a preference. If the
+# mutation is caught, that argument has been falsified and the battery fails — see the epilogue.
+expect_survive() {
+  local label="$1" which="$2" old="$3" new="$4" just="$5" target rc
+  [[ -n "$just" ]] || harness_die "expect_survive '${label}' carries no justification. An undocumented exemption is indistinguishable from a dropped mutation."
+  case "$which" in
+    gate)   target="${SB}/${SUT_GATE}" ;;
+    engine) target="${SB}/${SUT_ENGINE}" ;;
+    *) harness_die "expect_survive: unknown target '${which}'" ;;
+  esac
+  restore_pristine
+  py_replace "$target" "$old" "$new" \
+    || harness_die "expect_survive '${label}': anchor did not apply against ${which}."
+  run_suite "$which"; rc=$?
+  expected=$(( expected + 1 ))
+  if (( rc == 0 )); then
+    printf '  expected  %s\n' "$label"
+    printf '            why: %s\n' "$just"
+  else
+    unexpectedly_caught=$(( unexpectedly_caught + 1 ))
+    MISCLASSIFIED="${MISCLASSIFIED}${MISCLASSIFIED:+$'\n'}  MISCLASSIFIED  ${label} — documented unreachable, but the suite CAUGHT it"
+    printf '  MISCLASSIFIED %s (documented unreachable, but CAUGHT)\n' "$label"
   fi
 }
 
@@ -305,9 +340,14 @@ mutate "E06 outcome floor assertion deleted (restores fewer than declared)" engi
   'if (( restored != FLOOR )); then' \
   'if (( restored > FLOOR )); then'
 
-mutate "E07 zero-restore vacuity guard deleted" engine \
+# E07 was a survivor, and it is the one survivor that is NOT a test gap. It is recorded through
+# `expect_survive` rather than deleted, because a battery that quietly drops the mutations it
+# cannot catch is how a battery goes vacuous — the count must stay honest and the reasoning must
+# stay auditable and re-checkable.
+expect_survive "E07 zero-restore vacuity guard deleted" engine \
   'if (( restored == 0 )); then' \
-  'if false; then'
+  'if false; then' \
+  'UNREACHABLE BY CONSTRUCTION, proven from the engine`s own earlier guards: reaching `restored == 0` requires FLOOR == 0 (else the preceding `restored != FLOOR` fires first), and FLOOR == 0 with any required entry also fires that check, while FLOOR == 0 with NO required entry is already rejected by the `ZERO required entries` guard. So no manifest reaches it. Kept as defense-in-depth against a future edit to those earlier guards — deliberately, since this suite has just demonstrated that an unreachable assertion is one a later edit can delete with everything still green.'
 
 mutate "E08 distinctness guard removed (duplicates satisfy the floor)" engine \
   'if [[ ! "$n_distinct" =~ ^[0-9]+$ ]] || (( n_distinct != n_required )); then' \
@@ -365,10 +405,21 @@ mutate "E20 conditional-skip arm widened to required entries" engine \
 restore_pristine
 
 echo
-echo "=== ${caught} caught, ${survived} survived ==="
+echo "=== ${caught} caught, ${survived} survived, ${expected} documented-unreachable ==="
+
+rc=0
 if (( survived > 0 )); then
   printf '%s\n' "$SURVIVORS"
   echo "A SURVIVING mutation is a guard the suites certify but do not test. Fix the suite (or the guard) before shipping." >&2
-  exit 1
+  rc=1
 fi
-exit 0
+# The exemption is two-directional on purpose. A one-directional allowance rots: the guard becomes
+# reachable, someone writes the row that catches it, and the battery keeps calling it unreachable
+# forever. If an expect_survive mutation IS caught, the justification is now false and must be
+# rewritten or the entry promoted to a normal `mutate`.
+if (( unexpectedly_caught > 0 )); then
+  printf '%s\n' "$MISCLASSIFIED"
+  echo "A documented-unreachable mutation was CAUGHT — its justification is now false. Promote it to mutate() or rewrite the reasoning." >&2
+  rc=1
+fi
+exit "$rc"

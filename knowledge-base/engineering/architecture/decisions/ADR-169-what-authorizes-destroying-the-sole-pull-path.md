@@ -76,8 +76,9 @@ Cloudflare Tunnel, the live `ZOT_PUSH_*` credential, the real zot version and th
 `accessControl` — eliminating A4's admitted staleness residual. It is rejected because it
 **depends on the component whose failure motivates the recut**: during a crash-loop that
 rehearsal aborts exactly when the gate is needed. This is the independence criterion applied to
-the design itself, and it is why A5 (which *does* observe prod zot) is advisory rather than
-authorising.
+the design itself. A draft answered it with an advisory-degrading probe that *did* observe prod
+zot; that probe was subsequently removed for reasons the asymmetry could not fix — see "Why there
+is no live-sink predicate".
 
 ## The predicates, and the fail-open analysis for each
 
@@ -91,7 +92,9 @@ comparison. The verdict switch has no default-pass arm.
 | **A2** | Rehearsed restore into a throwaway registry | **POSITIVE — this is the pass condition** | Four inputs, four guards; see the table below. |
 | **A3** | Non-vacuity floor | ABORTING | An **empty inventory** is the single most likely fail-open: every loop then passes and the gate goes green having proven nothing. Guarded by a declared source-level `FLOOR` compared against both the declared pin set and what was actually resolved. |
 | **A4** | Sink credential graded live at the Cloudflare Access edge | ABORTING on a measured dead count | The grader makes **zero network calls** — it grades a JSON file the detector must write first. Grading without running the detector returns `unmeasured`, which degrades, producing a predicate that runs, prints and can never abort. Guarded by invoking the detector first, pinned by a test row plus a structural check. |
-| **A5** | Live write probe against prod zot | **ADVISORY-DEGRADING** | A write that succeeds against a zot which then panics on its next scheduled gc pass (`gcInterval: 1h`). Not closable pre-destroy; named, and it is why A5 is a floor rather than a guarantee. |
+
+There is deliberately **no A5**. A draft carried one — a live write probe against production zot,
+advisory-degrading. It was removed; see "Why there is no live-sink predicate" below.
 
 ### A2's fail-open inputs
 
@@ -118,33 +121,114 @@ in `build-inngest-bootstrap-image.yml`'s dark-launch: `crane validate --remote` 
 plain-HTTP to a loopback registry. It does not promote that dark-launch, whose own criterion is a
 real run against prod zot.
 
-## The abort/degrade boundary (A5) — the most dangerous line in the design
+## Why there is no live-sink predicate
 
-**Only authorisation and correctness failures abort. Availability failures — reset, timeout,
-5xx, unreachable, unclassifiable — degrade with a named, logged degradation.**
+A draft of this design carried an **A5**: an advisory-degrading live write against production zot,
+aborting on `credential_rejected` and `wrong_digest`, degrading on everything else. Plan review R2
+added it to close a real gap — the first draft answered "must not depend on the failing component"
+by *never looking at it*, which is a weaker property than independence. **R2's finding was correct;
+R2's remedy was not.** A5 is removed. This reverses a review decision, so it is recorded as a
+reversal rather than a cleanup.
 
-This deliberately **inverts** the fail-closed rule used everywhere else in the gate. Elsewhere
-"cannot measure" means "cannot prove safe"; in A5 the unmeasurability *is* the incident.
+**The asymmetry was sound, and that is why it must be recorded here.** Only authorisation and
+correctness failures aborting, while availability failures degrade, correctly inverts the
+fail-closed rule for a predicate whose unmeasurability *is* the incident — an earlier draft that
+put `connection reset by peer` in the ABORT bucket would have aborted on the literal failure text
+of release run `30988480437`. A future reader will re-derive that asymmetry, find it valid, and be
+tempted to re-add the predicate. **The asymmetry is not why A5 went.** It went on three
+independent grounds, any one sufficient.
 
-An earlier draft of this design put `connection reset by peer` mid-upload in the ABORT bucket.
-That is the literal failure text of release run `30988480437` — the incident this gate exists to
-authorise recovery from — so that draft would have aborted **today**, for the same reason the old
-gate did. Availability failures of the sink are the motivating condition; a gate that aborts on
-them cannot authorise the recovery it exists to authorise.
+### 1. The dual of the independence criterion
 
-A credential rejection is different in kind: it is independent of zot's health, and it means the
-post-destroy restore cannot work no matter how healthy the rebuilt host is. That is precisely the
-state in which a destroy is unrecoverable, and precisely the state A4 cannot see.
+The criterion above says a gate on an irreversible destroy may not depend on the component whose
+failure motivates it. Its **dual** is the one A5 violates:
 
-**Do not "fix" this asymmetry into consistency.** It is pinned by test rows in both directions.
+> A gate on an irreversible destroy may not **abort on a property of the component the destroy
+> replaces.**
+
+A5 graded two credentials at once. The **Cloudflare Access** half is already graded pre-destroy by
+A4, scoped `--only REGISTRY_PUSH_ACCESS_TOKEN`, aborting on a measured dead count — and that
+credential *survives* the destroy: it lives in `tunnel.tf` and is not among the recut's targets.
+A5 added nothing there.
+
+The only thing A5 added was the **htpasswd** half, `ZOT_PUSH_TOKEN` — and that is precisely the
+credential plane the recut **rebuilds**. `/etc/zot/htpasswd` is baked once at boot from the Doppler
+value (`cloud-init-registry.yml`), and `zot-registry.tf` states it verbatim: the server's
+`replace_triggered_by` "replaces the host so the htpasswd is re-baked from the new value in the
+SAME apply". The recut replaces that host while leaving the password resource untargeted, so the
+rebuilt host bakes from the same unchanged value the restore job reads.
+
+So a pre-destroy `credential_rejected` at the htpasswd layer means **the running host's bake has
+diverged from Doppler** — and the remedy for that divergence *is a host replace*, i.e. this recut.
+A5 would have aborted the recut and sent the operator to "fix `ZOT_PUSH_*` before re-firing",
+away from the only remedy, on a symptom the remedy cures.
+
+That is the same shape as the two failures this ADR already removes (the 2026-07-30 unconditional
+refusal, and the `zot_served == 0` arm): **a gate that blocks the recovery on the condition the
+recovery fixes.** A5 was the third instance, hiding inside the predicate added to prevent the class.
+
+### 2. The distinction A5 rests on is undecidable on this transport
+
+A5's whole design turns on separating an authorisation refusal from an origin outage. This repo has
+already ruled that separation impossible on exactly this transport, and paid for the ruling:
+**#7242 / ADR-166** — Cloudflare Access **admitted** every request while zot crash-looped, and the
+`websocket: bad handshake` signature sent operators to rotate a credential that had been verified
+live six minutes earlier. `cf-tunnel-registry-bridge` carries the finding in its own source: a bad
+handshake "does NOT by itself distinguish an edge refusal from an origin that is down or
+restarting."
+
+A5 would have to make that call under **abort authority**, during a crash-loop. There is no safe
+setting: classify the ambiguity as `credential_rejected` and the gate deadlocks during the
+motivating incident; classify it as availability and the abort arm is unreachable in the only
+scenario that matters, which is the dark-operand defect this whole change removes. A predicate
+whose two settings are "deadlock" and "dark" has no correct setting.
+
+### 3. Its only transport is fail-closed and cannot carry the asymmetry
+
+`cf-tunnel-registry-bridge` exits 1 on a failed listener bind and on a failed `docker login`. Both
+are availability-shaped failures during the incident, so bringing the bridge up inside the gate job
+**aborts before the gate script runs** — availability aborting, at a layer A5's degrade arm cannot
+reach. Rescuing that would need `continue-on-error` on a composite whose header calls itself
+"setup only", plus a teardown, on the pre-destroy path, to feed a classifier ground 2 shows cannot
+be written.
+
+### Corroboration that the knob was never exercised
+
+The removed code's own refusal message named `REGISTRY_GATE_SINK_CMD` while the production knob it
+documented was `REGISTRY_SINK_PROBE_CMD`. A wiring that had ever run end-to-end would have surfaced
+that mismatch. It is recorded, not repaired.
+
+### What the gate gives up, stated plainly
+
+It no longer observes production zot at all before destroying it. Accepted, because nothing about
+zot's credential or serving plane survives the destroy except the Cloudflare Access edge — htpasswd,
+`config.json`/`accessControl` and the store are all regenerated. The surviving half is measured
+pre-destroy by **A4, which aborts**. The non-surviving half is measured post-destroy by
+`registry_store_restore`, against the host it actually applies to, with a non-retryable exit-5 arm
+naming rotation as the remedy and a bounded exit-3 retry that does not conflate it with tunnel
+convergence.
+
+A5 was trying to buy a pre-destroy guarantee about a post-destroy artifact. That guarantee is not
+purchasable; A4 plus the chained restore already cover both halves at the points where each is
+decidable.
+
+**The authorization claim is unchanged by this removal.** A2 is the pass condition; A5 was
+advisory. Removing an advisory predicate removes no claim — and that invariance is the check that
+the removal is not a regression on what this gate asserts. What changes is the residual set.
 
 ## Named residuals
 
-1. **A4's credential staleness is bounded, not eliminated.** A4 grades the CF Access service
-   token; `ZOT_PUSH_TOKEN` (zot's own htpasswd credential, a different secret behind the same
-   tunnel) can be stale independently. A5's authenticated write is what closes that, and A5 is
-   advisory — so the residual survives when A5 cannot measure. A4 and A5 grade two different
-   credentials on the same path and neither subsumes the other.
+1. **A4's credential staleness is bounded, not eliminated — and the two halves are discharged
+   differently.** A4 grades the CF Access service token; `ZOT_PUSH_TOKEN` (zot's own htpasswd
+   credential, a different secret behind the same tunnel) can be stale independently. The
+   **edge** half is bounded by A4, which aborts on a measured dead count. The **htpasswd** half is
+   **discharged by construction rather than measured**: it does not survive the destroy, because
+   the recut replaces the host and `zot-registry.tf`'s `replace_triggered_by` re-bakes
+   `/etc/zot/htpasswd` from the same Doppler value in the same apply. A pre-destroy grade of it
+   would therefore be a grade of an artifact that is about to be discarded — which is why the
+   predicate that tried to do it was removed. What remains open is the *post*-destroy case, and
+   that is measured by `registry_store_restore` against the rebuilt host, with a non-retryable
+   exit 5 naming rotation.
 2. **A2 does not prove host-side pull.** ADR-096 clause (f) makes exactly this distinction: the
    rebuilt host pulls over the private NIC with `ZOT_PULL_*`, no tunnel and no CF Access —
    a different transport and a different credential from anything this gate exercises. The
@@ -210,7 +294,7 @@ investigation to the daemon, the host, or the scheduler panic in
   new blast radius, in a job that previously only provisioned. It is isolated in its own job with
   its own budget so it cannot consume the mutex-holding recut job's timeout.
 - **Rollback narrows on the success path.** The restore carries only the `required` pin set
-  (`FLOOR = 2`), and the host→GHCR edge is dead, so immediately after a recut there is no older
+  (`FLOOR = 4`), and the host→GHCR edge is dead, so immediately after a recut there is no older
   image in the store to roll back to — while `ci-deploy.sh` treats rollback to an older image as
   a supported path. Recoverable by re-running the restore with a wider set, but it is a
   capability that degrades where nothing goes red.

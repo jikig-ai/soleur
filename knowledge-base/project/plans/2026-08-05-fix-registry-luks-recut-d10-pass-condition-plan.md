@@ -184,12 +184,35 @@ pins — never by re-deriving zot's retention policy**:
 - plus `latest` per repo **only if** the boot path actually pulls it — resolved at Phase 0, not
   assumed.
 
-**`soleur-inngest-config` must be `conditional`, and this is measured, not defensive.**
-`crane ls ghcr.io/jikig-ai/soleur-inngest-config` returns
-`NAME_UNKNOWN: repository name not known to registry` (2026-08-05) — the config-bundle image is not
-published yet (`model.c4` marks that edge ADOPTING, riding the #6178 cutover). A gate that lists it
-as required would abort forever on a repo that does not exist, **creating exactly the new deadlock
-this plan exists to remove**. So: `required` entries abort on `NOTFOUND`; `conditional` entries
+**`soleur-inngest-config` must be `conditional`. The conclusion holds; the evidence originally
+given for it did not, and was replaced (2026-08-05, second session).**
+
+The original evidence was `crane ls ghcr.io/jikig-ai/soleur-inngest-config` returning
+`NAME_UNKNOWN: repository name not known to registry`. **That measurement cannot support the
+claim**, for the reason this plan documents everywhere else: an *uncredentialed* read cannot
+distinguish "absent" from "not visible to this credential", and GHCR packages are private. It was
+also taken against the **tags** API, which is not the API the gate uses. Re-measured properly:
+
+| probe | result |
+|---|---|
+| `crane digest …/soleur-web-platform:latest` (positive control, private repo, same keychain) | **rc 0**, digest returned — so the credential works |
+| `crane ls ghcr.io/jikig-ai/soleur-inngest-config` (credentialed) | rc 1 `NAME_UNKNOWN` |
+| `crane digest ghcr.io/jikig-ai/soleur-inngest-config:latest` (credentialed) | rc 1 `MANIFEST_UNKNOWN` |
+| `doppler secrets -p soleur -c prd_terraform` | `INNGEST_CONFIG_DIGEST` **does not exist** — the Terraform-promoted pointer is unprovisioned |
+| `gh run list --workflow=build-inngest-config-bundle.yml` | **`[]` — the producer has never run** (control: the same query returns runs for `apply-web-platform-infra.yml`) |
+
+The decisive evidence is the last row, and it is credential-independent: the producing workflow is
+`workflow_dispatch`-only and has never been dispatched, so nothing was ever pushed. `model.c4`
+marking that edge ADOPTING (riding the #6178 cutover) is consistent with this.
+
+**Consequence, and note it is the OPPOSITE of what the blocker anticipated:** the entry stays
+`conditional` and `FLOOR` stays **4**. It is not promoted to `required`. A gate that listed it as
+required would abort forever on a repo that does not exist, **creating exactly the new deadlock
+this plan exists to remove**.
+
+**Also corrected:** the derivation was named `terraform-digest-pointer` while `resolve_tag()`
+returns the literal tag `latest` — it never read the pointer. Since the pointer secret does not
+exist, reading it was never possible; the derivation is renamed to say what it does. So: `required` entries abort on `NOTFOUND`; `conditional` entries
 record a declared skip — and **the floor counts only `required` entries**, so a conditional skip can
 never make the gate vacuous. The disposition lives in the declaration, so "declared but never
 counted" stays unrepresentable in source — the same discipline the current script applies to

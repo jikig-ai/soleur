@@ -587,6 +587,23 @@ fi
 
 NET_ERR='Error: Get "https://sink/v2/": dial tcp: lookup sink: no such host'
 
+# last_err must return the last LINE, not the last 400 BYTES. This is the sharpest row in the
+# suite, because on the CONDITIONAL entry the two behaviours differ by a silent skip:
+# classify() substring-matches, so under a byte-tail the earlier `manifest unknown` wins over the
+# whole capture and the entry is recorded "absent, declared skip" — swallowing a credential
+# rejection on the inventory that authorises destroying production's only copy. Under a
+# line-tail the last line decides and it is DENIED, which aborts.
+fx="$TMP/fx-lastline"; calls="$TMP/calls-lastline"; : > "$calls"
+ok_fixtures "$fx" "$TARGET"
+fixture "$fx" "ghcr.io/${IC}:latest" 1 "" \
+  "$(printf 'Error: GET https://ghcr.io/v2/%s/manifests/latest: MANIFEST_UNKNOWN: manifest unknown\nError: GET https://ghcr.io/token: UNAUTHORIZED: authentication required' "$IC")"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 2 ]] && printf '%s' "$out" | grep -qF "rejected this credential"; then
+  pass "last_err: a conditional entry's auth failure ABORTS — never swallowed as a declared skip"
+else
+  fail "a byte-tail lets an earlier 'manifest unknown' outrank the real verdict and skip silently" "$rc" "$out"
+fi
+
 # Read-back failure must stay classified. Without the empty-digest guard the flow falls into the
 # parity comparison, where "" != "sha256:…" is a MISMATCH — reporting a corrupt restore (4) for
 # what is an unavailable sink (3).

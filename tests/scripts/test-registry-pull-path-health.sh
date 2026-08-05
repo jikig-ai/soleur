@@ -87,13 +87,17 @@ case "$mode" in
   network)  echo 'Error: Get "https://ghcr.io/v2/": dial tcp: lookup ghcr.io: no such host' >&2; exit 1 ;;
   unknown)  echo "Error: a shape nobody has classified" >&2; exit 1 ;;
   malformed) echo "not-a-digest" ;;
-  # The MEASURED real shape (probe evidence 0.1/0.6): crane's FIRST stderr line is the same
-  # \`HEAD request failed, falling back on GET: …\` for tag-absent, repo-absent AND DNS failure,
-  # and only the LAST line discriminates. A classifier reading line 1 sees an unclassifiable
-  # string here; one reading the last line sees MANIFEST_UNKNOWN. That difference is the whole
-  # reason last_err takes the tail, so it needs a fixture that can tell them apart.
-  twoline)  { echo "HEAD request failed, falling back on GET: HEAD https://ghcr.io/v2/${WP}/manifests/latest: unexpected status code 404 Not Found"
-              echo "Error: GET https://ghcr.io/v2/${WP}/manifests/latest: MANIFEST_UNKNOWN: manifest unknown"; } >&2; exit 1 ;;
+  # THE FIXTURE MUST DISCRIMINATE, and the obvious one does not. classify() substring-matches
+  # over whatever last_err returns, so a capture shorter than 400 bytes is IDENTICAL under a
+  # byte-tail and a line-tail — every plausible two-line crane message is short, which is exactly
+  # why this went unnoticed. The discriminating shape needs two DIFFERENT classifier tokens whose
+  # case arms disagree: \`manifest unknown\` on an earlier line, \`authentication required\` on the
+  # last. A byte-tail classifies NOTFOUND (the first case arm wins over the whole blob); a
+  # line-tail classifies DENIED, which is the truth. For a CONDITIONAL pin the difference is a
+  # silent skip versus an abort, so this fixture is the difference between reporting a credential
+  # failure and swallowing it.
+  twoline)  { echo "HEAD request failed, falling back on GET: HEAD https://ghcr.io/v2/${WP}/manifests/latest: MANIFEST_UNKNOWN: manifest unknown"
+              echo "Error: GET https://ghcr.io/token: UNAUTHORIZED: authentication required"; } >&2; exit 1 ;;
   # Registry stderr is externally-influenced text interpolated into ::error:: output, and GitHub
   # parses workflow commands PER LINE. A newline followed by a workflow command inside it would
   # be EXECUTED by the runner. This mode carries that payload so the \`tr '\\n' ' '\` guard has
@@ -543,16 +547,17 @@ else
   fail "an unclassified failure must not be reported as a known class" "$rc" "$out"
 fi
 
-# last_err reads the LAST line. Measured: crane's first stderr line is identical across
-# tag-absent, repo-absent and DNS failure, so a classifier reading line 1 is reading a bucket.
-# This fixture's two lines classify DIFFERENTLY, which is what makes the property falsifiable.
+# last_err reads the LAST LINE, not the last 400 BYTES. classify() substring-matches, so its
+# first case arm wins over the whole capture — a byte-tail therefore reports `manifest unknown`
+# for a message whose actual verdict is on the last line. For a CONDITIONAL pin NOTFOUND is a
+# declared skip, so the byte-tail could record a credential rejection as "absent, skipping".
 W="$(world "$TMP/w-lasterr")"
 crane_stub "$W/crane" twoline
 out="$(run_gate "$W")"; rc=$?
-if [[ "$rc" -ne 0 ]] && grep -qF "did not resolve: absent, OR NOT VISIBLE" <<<"$out"; then
-  pass "last_err: multi-line stderr is classified on its LAST line (line 1 is a bucket, not a diagnosis)"
+if [[ "$rc" -ne 0 ]] && grep -qF "GHCR rejected this credential" <<<"$out"; then
+  pass "last_err: the LAST LINE decides — an auth failure is not swallowed as 'absent'"
 else
-  fail "classifying on the first line cannot separate a correctness failure from an availability one" "$rc" "$out"
+  fail "a byte-tail lets an earlier line's token outrank the real verdict (NOTFOUND silently skips conditionals)" "$rc" "$out"
 fi
 
 # The workflow-command injection guard. Registry stderr reaches ::error:: output verbatim, and
