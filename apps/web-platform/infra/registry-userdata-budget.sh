@@ -3,6 +3,15 @@
 # (#7282) Render cloud-init-registry.yml exactly as zot-registry.tf does, and measure the
 # STORED user_data the way Hetzner measures it.
 #
+# (#7299) "EXACTLY AS zot-registry.tf DOES" INCLUDES THE COMMENT STRIP, AND ORIGINALLY DID NOT.
+# The .tf renders base64gzip(replace(templatefile(...), local.registry_rationale_strip, "")).
+# This script rendered templatefile(...) RAW, so it measured a payload no host is ever given:
+# 36,404 B against the 32,768 B cap — a phantom -3,636 B breach on a registry whose real stored
+# artifact is ~9.4 kB with ~23.4 kB of headroom. #7299 was filed against that reading as an
+# outage ("the registry host cannot be re-provisioned"); it could be re-provisioned the whole
+# time. A measurement tool that is wrong in the FAIL-LOUD direction still costs an incident's
+# worth of operator judgement, so the strip is now extracted from the .tf and applied here.
+#
 # WHY THIS IS A COMMITTED SCRIPT rather than a one-off command. Hetzner's user_data cap
 # (32,768 bytes) is a HARD gate on `hcloud_server.registry`, and that resource carries NO
 # `lifecycle.ignore_changes = [user_data]` by design — the replace IS the intended
@@ -51,6 +60,40 @@ ZOT_IMAGE="$(grep -oE '^[[:space:]]*zot_image_amd64[[:space:]]*=[[:space:]]*"ghc
   exit 2
 }
 
+# The comment strip, EXTRACTED from zot-registry.tf — never restated here. That file declares
+# it ONCE and both consumers (this script and plugins/soleur/test/cloud-init-user-data-size.
+# test.ts) read it from there, so the "ONE COPY" invariant the .tf asserts is enforced by
+# construction rather than by a parity comparator. git-data needs a parity suite because it
+# genuinely has two COPIES; there is nothing here to keep equal.
+#
+# The raw SOURCE TEXT is re-emitted verbatim (quotes included) into the scratch locals block,
+# so HCL's own escape handling produces a byte-identical string — \t and \n are unescaped once,
+# by terraform, exactly as they are in the real root.
+#
+# FAIL CLOSED on anything ambiguous. Exit 2 (unmeasurable), never 0 (fits) and never 1 (over):
+# an absent or duplicated declaration means we cannot know what production stores, and reading
+# that as "fits" is the precise failure #7299 was filed against, inverted.
+STRIP_DECLS="$(grep -cE '^[[:space:]]*registry_rationale_strip[[:space:]]*=' "$DIR/zot-registry.tf")"
+[ "$STRIP_DECLS" = "1" ] || {
+  echo "registry-userdata-budget: expected exactly ONE local.registry_rationale_strip assignment in zot-registry.tf, found ${STRIP_DECLS}" >&2
+  exit 2
+}
+STRIP_EXPR="$(grep -oE '^[[:space:]]*registry_rationale_strip[[:space:]]*=[[:space:]]*"[^"]*"' "$DIR/zot-registry.tf" | sed -e 's/^[^=]*=[[:space:]]*//')"
+case "$STRIP_EXPR" in
+  '"/'*'/"') ;;
+  *)
+    echo "registry-userdata-budget: local.registry_rationale_strip is not a slash-delimited terraform regex literal: ${STRIP_EXPR}" >&2
+    exit 2
+    ;;
+esac
+# Line-anchored multiline is what makes the strip safe (it cannot touch a substituted single-line
+# scalar). If that anchor ever disappears the measurement is no longer the one being reasoned
+# about, so refuse rather than measure something else.
+printf '%s' "$STRIP_EXPR" | grep -q '(?m)' || {
+  echo "registry-userdata-budget: local.registry_rationale_strip is not multiline-anchored ((?m)): ${STRIP_EXPR}" >&2
+  exit 2
+}
+
 TFDIR=$(mktemp -d -t regbudget.XXXXXXXX)
 trap 'rm -rf "$TFDIR"' EXIT
 
@@ -82,42 +125,57 @@ locals {
     betterstack_ingest_url = "https://s2457081.eu-fsn-3.betterstackdata.com/"
   }
 
+  registry_rationale_strip = ${STRIP_EXPR}
+
+  # The three-stage chain zot-registry.tf performs, in the same order. The strip runs AFTER
+  # templatefile so the substituted values above — ids, digests, tokens, all single-line
+  # scalars — cannot be touched by a line-anchored match.
   rendered = templatefile("${DIR}/cloud-init-registry.yml", local.vars)
-  stored   = base64gzip(local.rendered)
+  stripped = replace(local.rendered, local.registry_rationale_strip, "")
+  stored   = base64gzip(local.stripped)
 }
 EOF
 
 console() { printf '%s\n' "$1" | terraform -chdir="$TFDIR" console 2>>"$TFDIR/err"; }
 
-raw=$(console 'local.rendered')
+# Render the STRIPPED form — the artifact that is actually delivered — so this probe exercises
+# templatefile AND replace, and a strip that breaks the render is caught here rather than
+# silently producing a smaller "passing" number.
+stripped_out=$(console 'local.stripped')
 # A render FAILURE still prints a warning banner and "(known after apply)" on stdout, so
 # emptiness is not the tell — look for the diagnostic explicitly. Fail-closed: an
 # unmeasurable template must never read as one that fits.
-if [ -s "$TFDIR/err" ] || printf '%s' "$raw" | grep -q 'known after apply'; then
+if [ -s "$TFDIR/err" ] || printf '%s' "$stripped_out" | grep -q 'known after apply'; then
   echo "registry-userdata-budget: RENDER FAILED" >&2
   sed 's/\x1b\[[0-9;]*m//g' "$TFDIR/err" >&2
   exit 2
 fi
 
 rendered="$TFDIR/rendered.yml"
-printf '%s\n' "$raw" | sed -e '1{/^<<EOT$/d}' -e '${/^EOT$/d}' > "$rendered"
+printf '%s\n' "$stripped_out" | sed -e '1{/^<<EOT$/d}' -e '${/^EOT$/d}' > "$rendered"
 
 stored=$(console 'local.stored' | tr -d '"')
 [ -n "$stored" ] || { echo "registry-userdata-budget: base64gzip failed" >&2; exit 2; }
 
-raw_bytes=$(wc -c < "$rendered")
+# Sizes come from terraform's own length(), NOT `wc -c` on the console dump: console wraps a
+# multi-line string in <<EOT/EOT and re-escapes, so the dump is ~300 B larger than the string.
+# For an informational figure that is noise; for the two numbers a reader compares it is drift.
+raw_bytes=$(console 'length(local.rendered)')
+stripped_bytes=$(console 'length(local.stripped)')
 stored_bytes=${#stored}
 cap=32768
 headroom=$(( cap - stored_bytes ))
 
+# OUT receives the STRIPPED render — the bytes that actually reach the host and boot it.
 [ -n "$OUT" ] && cp "$rendered" "$OUT"
 
 if [ "$JSON" -eq 1 ]; then
-  printf '{"raw_bytes":%s,"stored_bytes":%s,"cap":%s,"headroom":%s,"zot_image":"%s"}\n' \
-    "$raw_bytes" "$stored_bytes" "$cap" "$headroom" "$ZOT_IMAGE"
+  printf '{"raw_bytes":%s,"stripped_bytes":%s,"stored_bytes":%s,"cap":%s,"headroom":%s,"zot_image":"%s"}\n' \
+    "$raw_bytes" "$stripped_bytes" "$stored_bytes" "$cap" "$headroom" "$ZOT_IMAGE"
 else
   echo "registry user_data budget"
   echo "  raw rendered : ${raw_bytes} B"
+  echo "  after strip  : ${stripped_bytes} B  (local.registry_rationale_strip, extracted from zot-registry.tf)"
   echo "  stored (b64gzip): ${stored_bytes} B"
   echo "  cap          : ${cap} B"
   echo "  headroom     : ${headroom} B"
@@ -128,6 +186,6 @@ fi
 # must not disagree. And say what is wrong -- in --json mode the bare test exited 1 with no
 # explanation, on the path that is live today.
 if [ "$stored_bytes" -ge "$cap" ]; then
-  echo "registry-userdata-budget: OVER CAP by $(( stored_bytes - cap )) bytes — hcloud would reject the CREATE *after* the DESTROY succeeded, stranding the sole pull path. #7280's registry_rationale_strip is the fix." >&2
+  echo "registry-userdata-budget: OVER CAP by $(( stored_bytes - cap )) bytes — hcloud would reject the CREATE *after* the DESTROY succeeded, stranding the sole pull path. The comment strip is ALREADY applied (raw ${raw_bytes} B -> ${stripped_bytes} B), so this is real payload growth, not unstripped prose: bake new host logic into the image instead of inlining it (the ADR-080/#5921 pattern)." >&2
   exit 1
 fi
