@@ -9,6 +9,23 @@
 name: Infra Validation
 
 on:
+  # (#7299) Also run on merges to main, for the infra CONTENT globs only.
+  #
+  # A PR-only gate structurally cannot catch a regression that reaches main without a PR run of
+  # this workflow: an admin/force merge, or — the realistic one — a merge-ORDER interaction where
+  # two PRs are each green alone and produce a state neither tested. That is close to what #7299
+  # looked like from the outside: the zot pin bump (#7283) moved a budget reading that no run on
+  # main ever re-evaluated.
+  #
+  # DELIBERATELY NARROWER than the pull_request path set below, which is not duplicated here. Most
+  # of those entries exist so that editing the VALIDATOR re-runs the validator's own fixtures — a
+  # PR-time concern with no post-merge analogue. Copying all ~90 lines would create a second list
+  # with no parity control, which is the exact defect class #7299 was filed about.
+  push:
+    branches: [main]
+    paths:
+      - "apps/*/infra/**"
+      - "infra/**"
   pull_request:
     paths:
       - "apps/*/infra/**"
@@ -140,6 +157,31 @@ jobs:
             DIRS=$( { find apps/*/infra -maxdepth 0 -type d 2>/dev/null ; \
                        find infra/* -maxdepth 0 -type d 2>/dev/null ; } \
                     | jq -R -s -c 'split("\n") | map(select(. != ""))')
+          elif [[ "$EVENT_NAME" == "push" ]]; then
+            # (#7299) BASE_REF is EMPTY on push events, so the PR-diff branch below would
+            # expand to the malformed `origin/...HEAD`. git resolves that to nothing, DIRS
+            # collapses to [], every gated job skips, and the run reports SUCCESS having
+            # validated nothing — a green light that is worse than no trigger at all.
+            #
+            # Squash-merge (this repo's merge mode) lands the whole change as ONE commit, so
+            # that commit's own diff IS the merged change set.
+            #
+            # Fail SAFE, not open: if HEAD has no parent (root commit, or a shallow fetch that
+            # did not reach it) validate EVERY infra root rather than emitting []. Running too
+            # much costs CI minutes; running nothing costs the guarantee.
+            if git rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null \
+               && git rev-parse --verify --quiet 'HEAD^1^{commit}' >/dev/null; then
+              DIRS=$(git diff --name-only 'HEAD^1' HEAD \
+                | { grep -E '^(apps/[^/]+/infra|infra/[^/]+)/' || true; } \
+                | sed -E 's|^(apps/[^/]+/infra)/.*|\1|; s|^(infra/[^/]+)/.*|\1|' \
+                | sort -u \
+                | jq -R -s -c 'split("\n") | map(select(. != ""))')
+            else
+              echo "::notice::HEAD has no parent commit; validating all infra roots (fail-safe)"
+              DIRS=$( { find apps/*/infra -maxdepth 0 -type d 2>/dev/null ; \
+                         find infra/* -maxdepth 0 -type d 2>/dev/null ; } \
+                      | jq -R -s -c 'split("\n") | map(select(. != ""))')
+            fi
           else
             DIRS=$(git diff --name-only "origin/${BASE_REF}...HEAD" \
               | { grep -E '^(apps/[^/]+/infra|infra/[^/]+)/' || true; } \
@@ -1175,23 +1217,45 @@ jobs:
   #     `continue-on-error:`/`if:` key, because there registration must imply execution. It
   #     is right to refuse, and routing around it by deleting the check would be the exact
   #     move this PR exists to argue against.
-  # (b) It cannot be a hard gate YET. The check is RED on `main` today (-2,032 B) and on this
-  #     branch (~-3.6 kB), all of it rationale prose. #7280's `local.registry_rationale_strip`
-  #     strips comments BEFORE render and brings it to ~9.4 kB. Hard-failing now would block
-  #     every infra PR on a pre-existing breach this PR did not create.
+  # (b) It was advisory pending a fix. The fix landed in #7299 — `continue-on-error` is GONE and
+  #     this job now fails the run for real. It is deliberately NOT a required context; see below.
   #
-  # So it RUNS and reports as its own visible job status rather than hiding inside a green
-  # one. The git-data host has had this gate since #6982; the registry host -- equally
-  # ForceNew, with a strictly worse failure mode (hcloud rejects the CREATE *after* the
-  # DESTROY succeeded, stranding the SOLE pull path) -- had none, which is precisely why a
-  # 2,032 B breach sat on main unnoticed. #7287 carries "flip this job to required" as a
-  # checklist item gated on #7280 merging.
+  # The history is worth keeping, because the reasoning was sound and the conclusion was still
+  # wrong. This comment used to read: "It cannot be a hard gate YET. The check is RED on `main`
+  # today (-2,032 B) ... #7280's `local.registry_rationale_strip` strips comments BEFORE render
+  # and brings it to ~9.4 kB." #7280 merged, the strip went live, and the reading never moved —
+  # because the SCRIPT never applied the strip the .tf applies. It measured a payload no host is
+  # ever given. The RED was the MEASUREMENT, not the payload: real stored user_data is 9,404 B
+  # with 23,364 B of headroom. #7299 was filed against that phantom as an outage ("the registry
+  # host cannot be re-provisioned"); it could be re-provisioned the whole time.
+  #
+  # A permanently-red advisory check is how that hid: it trains every reader to skip it, so
+  # nobody re-ran the reasoning when its own stated precondition was met. Shipping a knowingly-red
+  # gate needs an enforced follow-through, not a comment promising one.
+  #
+  # WHY NOT A REQUIRED CONTEXT (the #7299 issue asked; the answer is "blocked, not declined").
+  # A required check must report a conclusion on EVERY PR or the PR sits in `Expected` forever.
+  # This workflow is `paths:`-filtered, so on a docs-only PR it does not trigger at all and this
+  # job never reports — requiring it would deadlock every non-infra PR in the repo. The working
+  # pattern is `tenant-integration.yml`: no paths filter + `merge_group:` + an always-run
+  # aggregator. Adopting it here means dropping this workflow's paths filter, which its own
+  # comment above (`infra-validate-required`) rejects as "an 8-minute docker build on every
+  # docs-only PR", tracked in #6480. So promotion is gated on #6480, not on this PR.
+  #
+  # AND IT IS DEFENSE IN DEPTH, NOT A HOLE. The budget is ALREADY guarded by the REQUIRED `test`
+  # context via plugins/soleur/test/cloud-init-user-data-size.test.ts, which extracts the same
+  # strip and has been green throughout. This job's distinct value is measuring with terraform's
+  # OWN base64gzip (byte-exact), where that test models the size with node zlib and documents
+  # itself as "NOT byte-exact".
+  #
+  # The git-data host has had this gate since #6982; the registry host -- equally ForceNew, with
+  # a strictly worse failure mode (hcloud rejects the CREATE *after* the DESTROY succeeded,
+  # stranding the SOLE pull path) -- had none.
   registry-userdata-budget:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     needs: detect-changes
     if: needs.detect-changes.outputs.directories != '[]'
-    continue-on-error: true
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
@@ -1200,6 +1264,11 @@ jobs:
           terraform_wrapper: false
       - name: Measure rendered registry user_data against Hetzner's 32,768 B cap
         run: bash apps/web-platform/infra/registry-userdata-budget.sh
+      # Pins the measurement itself: that the strip is extracted-and-applied, and that an absent
+      # or duplicated declaration fails CLOSED. Without this, the script could regress to
+      # measuring the unstripped render again and the budget step would still report green.
+      - name: Run registry user_data budget drift-guard (#7299)
+        run: bash apps/web-platform/infra/registry-userdata-budget.test.sh
 
   check-secrets:
     runs-on: ubuntu-24.04
@@ -1219,7 +1288,13 @@ jobs:
 
   plan:
     needs: [detect-changes, validate, check-secrets]
+    # (#7299) PULL-REQUEST ONLY, deliberately. The new push-on-main trigger exists to re-run the
+    # cheap static gates against merged state; this job is neither cheap nor static — it reads
+    # prd_terraform credentials, runs `terraform plan` against live prod state, and writes its
+    # output back as a PR comment (a surface a push event has no equivalent of). Widening the
+    # trigger must not widen a job that touches production.
     if: |
+      github.event_name == 'pull_request' &&
       needs.detect-changes.outputs.directories != '[]' &&
       needs.check-secrets.outputs.has-doppler-token == 'true'
     runs-on: ubuntu-24.04

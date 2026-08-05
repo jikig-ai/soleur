@@ -380,10 +380,19 @@ resource "doppler_secret" "zot_push_token" {
 # Applied AFTER templatefile (see the `replace(...)` wrapper below), so the substituted values —
 # ids, digests, tokens, all single-line scalars — cannot be touched by a line-anchored match.
 #
-# ONE COPY. plugins/soleur/test/cloud-init-user-data-size.test.ts EXTRACTS this expression from
-# this file rather than restating it, so the model cannot measure a payload production does not
-# boot. git-data needed a dedicated parity suite to keep its two copies equal; there is nothing
-# here to keep equal.
+# ONE COPY, TWO EXTRACTORS. Both consumers read this expression FROM HERE rather than restating
+# it, so neither can measure a payload production does not boot:
+#   - plugins/soleur/test/cloud-init-user-data-size.test.ts (the required `test` context)
+#   - registry-userdata-budget.sh (#7282, the byte-exact terraform-native measurement)
+# git-data needed a dedicated parity suite to keep its two COPIES equal; there is nothing here to
+# keep equal, and that is a property of the extractors — not of this file.
+#
+# (#7299) THE INVARIANT ABOVE IS FALSIFIABLE BY ANY LATER PR, AND WAS. When this comment was
+# written the test was the sole consumer and the claim was true. #7282 then added the budget
+# script as a second consumer that RESTATED the render without this strip — so it measured the
+# unstripped 36,404 B against a 32,768 B cap and reported a phantom breach, which #7299 was filed
+# against as "the registry host cannot be re-provisioned". It could. A consumer that extracts is
+# safe; one that restates re-opens exactly that defect, silently, and no gate here will notice.
 locals {
   registry_rationale_strip = "/(?m)^[ \t]*#([ \t][^\n]*)?\n/"
 }
