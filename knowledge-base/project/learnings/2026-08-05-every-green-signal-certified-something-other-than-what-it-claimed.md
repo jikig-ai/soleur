@@ -89,6 +89,32 @@ The gate refuses any `REGISTRY_GATE_*` variable inside Actions, because those se
 
 The gate aborts when the *detector* is missing — *"a chmod bit is not a safety boundary for an irreversible destroy"* — and then assigned `unmeasured` when the *grader* could not be sourced. `unmeasured` is a token the grader itself produces, routed to DEGRADE, falling through to AUTHORIZED. **The comment above the line asserted fail-closed while the code fell open.**
 
+### 7. The suite certified the gate only where the gate's own guard is inert
+
+The seam guard added in defect 5 refuses when a `REGISTRY_GATE_*` seam is set **and** `GITHUB_ACTIONS`
+is. Every row in the suite drives the gate through a seam — that is how it stubs crane. Locally
+`GITHUB_ACTIONS` is unset, so the guard never fires and the suite was **60/0**. On the runner it is
+exported, so the guard fired on every seam-using row:
+
+```
+FAIL the all-good fixture MUST pass; a gate that cannot go green is unfireable
+     out=::error::… REGISTRY_GATE_HEALTH_CMD is set inside GitHub Actions … Refusing.
+```
+
+**14 rows RED in CI, 0 locally, on the same commit.** The suite's own comment stated the assumption
+out loud — *"every other row in this suite runs WITHOUT `GITHUB_ACTIONS` set"* — as a description of
+the ambient environment rather than something it establishes. A test that needs a condition must
+**supply** it (`unset GITHUB_ACTIONS` at the harness head), never inherit it; the seam-guard row was
+already correct precisely because it sets `GITHUB_ACTIONS=true` per-invocation via `env`.
+
+Note what could not have caught this. The mutation battery mutates the **SUT**, so it is blind by
+construction to a defect that lives in the coupling between the harness and its **environment** —
+and it inherited the same ambient assumption, so it failed in CI too. Neither suite was weak about
+the gate; both were silent about where they ran. The generalisation, and the reason this is the
+fourth instance of the file's thesis rather than a new one: **a green suite names the environment it
+ran in, not the environment that matters.** Verified by re-running both under `GITHUB_ACTIONS=true`
+— gate 60/0, engine 43/0, battery 42 caught / 0 survived / 45 dispatched.
+
 ## Solution: the two mechanisms worth reusing
 
 Eleven learnings already exist on "your mutation battery only covers what you mutate". The novel contribution here is **structural**, not another instance:
@@ -129,6 +155,7 @@ Ask of every check: **name the mutation that satisfies this assertion while viol
 11. **`--no-verify` on every commit** bypassed the secret-scan hook; gitleaks was run manually *after* several commits. **Prevention:** run the canonical scan before the first commit of a session that uses `--no-verify`, not after.
 12. **Over-wide `shellcheck` glob** reported SC2034 on three files outside the diff, briefly reading as my defects. **Prevention:** scope lint globs to `git diff --name-only`.
 13. **A chained `sleep 45` was blocked** by the harness. **Prevention:** use an `until`-loop in a background task to wait on a condition.
+14. **I called the exit gate clean on a local run and it was 255/257 in CI** (defect 7) — I quoted `265/265` in the PR body as the first clean run on the branch, and the two RED suites were the PR's own central artifacts. **Prevention:** for any suite that reads an ambient CI variable, run it once with that variable set before quoting a figure; `GITHUB_ACTIONS=true bash <suite>` is the whole cost.
 
 ## Related
 

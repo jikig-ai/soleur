@@ -26,6 +26,15 @@
 # could-not-measure outcome is its own aborting class, evaluated BEFORE any comparison.
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
+# Every row below except the seam-guard one drives the gate through a REGISTRY_GATE_* seam, and
+# the gate refuses outright when a seam is set while GITHUB_ACTIONS is. That is correct production
+# behaviour, so the suite must supply the non-Actions context it is actually asserting about —
+# it cannot inherit it. Locally GITHUB_ACTIONS is unset and this line is a no-op, which is exactly
+# why its absence was invisible: the suite was 60/0 locally and 14 rows RED in CI, having certified
+# the gate only in the one environment where its own seam guard is inert.
+# The seam-guard row re-sets GITHUB_ACTIONS=true per-invocation via `env`, so it is unaffected.
+unset GITHUB_ACTIONS
+
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
