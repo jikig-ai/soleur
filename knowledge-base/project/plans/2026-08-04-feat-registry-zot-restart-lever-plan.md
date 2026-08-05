@@ -528,7 +528,7 @@ service token together permit repeated `recreate-zot` calls against the sole pul
 a denial-of-release primitive. No user data traverses this surface (the store holds our
 own OCI blobs and cosign signatures); the exposure is availability, not confidentiality.
 
-**Brand-survival threshold:** `aggregate pattern`
+- **Brand-survival threshold:** `aggregate pattern`
 
 Rationale for not selecting `single-user incident`: no user or customer data is reachable
 from this surface at any point, so no single user's breach is possible through it. The
