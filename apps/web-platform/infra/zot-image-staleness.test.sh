@@ -36,6 +36,20 @@ PROV="$DIR/zot-image.provenance.md"
 # upstream releases and ~6 poll firings: a genuine stall, not routine lag.
 MAX_AGE_DAYS=90
 
+# ANTI-VACUITY FLOOR. Without this the terminal contract is `[[ "$FAIL" -eq 0 ]]`, so a gate
+# whose assertions all silently stop running prints `RESULT: 0 passed, 0 failed` and exits 0 —
+# CI green having checked NOTHING. Measured during review of this very file: neutering pass()
+# and fail() to no-ops produced exactly that.
+#
+# The accompanying mutation battery cannot catch this class by construction: every mutation it
+# applies perturbs this gate's INPUTS (the .tf, the sidecar, a follower file), so all of them
+# are observed through the assertion layer. Nothing it does removes the assertion layer itself.
+#
+# A FLOOR, not equality. `-eq` would turn every legitimately-added assertion into a spurious
+# failure, which trains people to edit the number without thinking — the opposite of a guard.
+# Raise it in lockstep when assertions are added; never lower it to make a red run green.
+MIN_ASSERTIONS=12
+
 PASS=0; FAIL=0
 pass() { PASS=$((PASS+1)); echo "  PASS: $1"; }
 fail() { FAIL=$((FAIL+1)); echo "  FAIL: $1"; }
@@ -135,8 +149,11 @@ fi
 # rather than each inventing its own.
 capture_date="$(grep -oE 'Capture date \(UTC\) \| \*\*[0-9]{4}-[0-9]{2}-[0-9]{2}\*\*' "$PROV" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1 || true)"
 if [[ -z "$capture_date" ]]; then
-  # Unparseable date is a DETECTOR failure, never a silent pass -- an unreadable date must
-  # not be indistinguishable from a fresh one.
+  # Reported as DRIFT (exit 10), not as a detector failure (exit 2), and the distinction is
+  # deliberate: an unparseable date is a defect in a COMMITTED file that a human fixes, which
+  # is exactly what the idempotent issue is for -- unlike a missing input or a dead upstream
+  # poll, which mean "I could not check". Either way it is non-zero: an unreadable date must
+  # never be indistinguishable from a fresh one.
   fail "could not parse 'Capture date (UTC) | **YYYY-MM-DD**' from $PROV"
 else
   cap_epoch="$(date -u -d "$capture_date" +%s 2>/dev/null || echo '')"
@@ -170,16 +187,23 @@ fi
 # guard, because its green is read as coverage. If a new phrasing appears, widen this shape.
 followers=("$DIR/ci-deploy.sh" "$DIR/ci-deploy.test.sh" "$DIR/cloud-init-registry.yml")
 stale_claims=""
+followers_seen=0
 for f in "${followers[@]}"; do
-  [[ -f "$f" ]] || continue
+  # A MISSING follower is a detector failure, not a clean check. Without this the loop body
+  # never runs, stale_claims stays empty, and the check reports PASS having examined nothing —
+  # "found no stale claims" and "looked at no files" would be the same output.
+  [[ -f "$f" ]] || { fail "follower file missing: $(basename "$f") -- cannot verify version-scoped claims"; continue; }
+  followers_seen=$((followers_seen+1))
   while IFS= read -r hit; do
     [[ -z "$hit" ]] && continue
     v="${hit##*zot }"; v="${v#(}"   # strip the optional opening paren
     [[ "$v" == "$tf_ver_amd64" ]] || stale_claims+="    $(basename "$f"): 'zot $v' (pinned is $tf_ver_amd64)"$'\n'
   done < <(grep -ohE 'zot \(?v[0-9]+\.[0-9]+\.[0-9]+' "$f" 2>/dev/null | sort -u || true)
 done
-if [[ -z "$stale_claims" ]]; then
-  pass "all 'zot vX.Y.Z' capability claims in ci-deploy.sh / ci-deploy.test.sh / cloud-init-registry.yml name the pinned version"
+if [[ "$followers_seen" -ne "${#followers[@]}" ]]; then
+  : # already failed above; do not also emit a misleading clean verdict
+elif [[ -z "$stale_claims" ]]; then
+  pass "all 'zot vX.Y.Z' capability claims in ci-deploy.sh / ci-deploy.test.sh / cloud-init-registry.yml name the pinned version ($followers_seen/${#followers[@]} files examined)"
 else
   fail "version-scoped claims name a version we no longer pin:"$'\n'"$stale_claims    These are MEASUREMENTS, not inferences -- re-measure by running the pinned image locally (see '## Bump procedure'), do not just re-word them"
 fi
@@ -199,6 +223,15 @@ else
 fi
 
 echo "RESULT: $PASS passed, $FAIL failed"
+
+# Did the assertions actually RUN? A silent drop to zero checks is a DETECTOR failure (2), not
+# a clean bill of health — "I asserted nothing" must never be reported as "nothing is wrong".
+TOTAL=$((PASS + FAIL))
+if (( TOTAL < MIN_ASSERTIONS )); then
+  echo "  DETECTOR-FAILURE: only $TOTAL assertion(s) ran, expected >= $MIN_ASSERTIONS -- checks were skipped or silently removed; this run proves nothing" >&2
+  exit 2
+fi
+
 # 10 = drift (actionable). Reserved distinct from 1 so the rule-audit.yml cron step can tell
 # "the pin is stale" from "the detector broke" (exit 2, above).
 [[ "$FAIL" -eq 0 ]] || exit 10

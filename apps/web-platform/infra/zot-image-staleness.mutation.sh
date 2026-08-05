@@ -71,6 +71,10 @@ m_g() { sed -i 's|\*\*2026-08-05\*\*|**2099-01-01**|' "$1/$PROV"; }
 m_h() { sed -i 's@\*\*2026-08-05\*\*@**not-a-date**@' "$1/$PROV"; }
 m_i() { sed -i 's|^## Previous known-good pin|## Removed section|' "$1/$PROV"; }
 m_j() { sed -i 's|pinned zot v2\.1\.20|pinned zot (v2.1.2)|' "$1/ci-deploy.test.sh"; }
+# k/l reach the DISPATCH layer, not the inputs. Every a-j mutation is observed THROUGH the
+# assertion helpers, so none of them can detect the helpers themselves going silent.
+m_k() { sed -i 's|^pass() {.*|pass() { :; }|; s|^fail() {.*|fail() { :; }|' "$1/$GATE"; }
+m_l() { rm -f "$1/ci-deploy.sh"; }
 
 echo "mutations (each applied to a fresh sandbox copy, each must go RED):"
 run_mutation a "one arch's digest changed"                 "check5"   m_a
@@ -83,6 +87,8 @@ run_mutation g "capture date in the FUTURE"                "check6b"  m_g
 run_mutation h "capture date unparseable garbage"          "check6c"  m_h
 run_mutation i "'Previous known-good pin' section deleted" "check8"   m_i
 run_mutation j "version-scoped claim reverted (paren form)" "check7"  m_j
+run_mutation k "ALL assertions neutered (dispatch layer)"   "floor"   m_k
+run_mutation l "a follower file removed (vacuous check 7)"   "check7"  m_l
 
 echo
 echo "RESULT: $RED/$N mutations detected, $GREENFAIL survived"

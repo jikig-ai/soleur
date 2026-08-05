@@ -103,7 +103,14 @@ jobs:
       # (There is no Renovate here: measured 2026-08-05, zero Renovate PRs in this repo's
       # history and no Dependency Dashboard. renovate.json5 was an inert config and this
       # PR removes it. Do not "restore" bot-managed pinning without re-verifying that.)
+      # `!cancelled()` is load-bearing, not boilerplate. A step `if:` containing no status
+      # function has `success()` implicitly ANDed in, so without this the zot poll is skipped
+      # on every run where the model-drift step above failed — two unrelated detectors sharing
+      # one workflow, where one breaking silences the other indefinitely while the workflow
+      # keeps emailing about the first. That is the exact silence-reads-as-health shape this
+      # whole change exists to remove. The failure() email below still fires for both.
       - name: Detect zot pin staleness
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
