@@ -19,6 +19,18 @@ MANAGED_MINUS_1=$((MANAGED_N - 1))
 
 PASS=0
 FAIL=0
+# Assertions a LOUD SKIP arm declared it did not run. Read only by the assertion-count floor at
+# the bottom of this file, which compares PASS + SKIPPED against the floor so that a declared
+# environmental skip and a silently-vanished guard produce DIFFERENT verdicts. Every arm that
+# prints "SKIP (loud)" must add the exact number of assertions its taken branch would have made.
+SKIPPED_ASSERTIONS=0
+
+# Single owning trap for every tempfile this suite allocates outside setup()/teardown()
+# (ADR-129 rule (c)). setup() manages TMPDIR_ROOT; arms that run without it register here.
+# /tmp is a machine-global tmpfs shared by parallel worktrees, so a per-run leak is unbounded.
+OWNED_TMPFILES=()
+cleanup_owned_tmpfiles() { [[ ${#OWNED_TMPFILES[@]} -gt 0 ]] && rm -f "${OWNED_TMPFILES[@]}"; return 0; }
+trap cleanup_owned_tmpfiles EXIT INT TERM
 TMPDIR_ROOT=""
 
 setup() {
@@ -52,6 +64,12 @@ setup() {
 }
 
 teardown() {
+  # #7220 review — an `export` set by one arm leaks into every later arm in the same shell, and
+  # once TMPDIR_ROOT is removed the stale path resolves to nothing (rc=127, "command not
+  # found"), which surfaces as an unrelated test failing. Unset the per-arm seam overrides here
+  # so each arm starts from the handler's own defaults. Measured: without this the prod-mode
+  # seam export broke the dangling-hook arm three tests later.
+  unset INFRA_CONFIG_SYSTEMCTL
   rm -rf "$TMPDIR_ROOT"
   unset TEST_DESTDIR INFRA_CONFIG_TEST_MODE INFRA_CONFIG_STATE
   unset INFRA_CONFIG_STAGING_DIR INFRA_CONFIG_INSTALL_HELPER
@@ -71,7 +89,7 @@ export_valid_env_vars() {
   export WEBHOOK_SERVICE_B64=$(_payload_file "[Unit]")
   export CAT_DEPLOY_STATE_SH_B64=$(_payload_file "#!/bin/bash")
   export CANARY_BUNDLE_CLAIM_CHECK_SH_B64=$(_payload_file "#!/bin/bash")
-  export HOOKS_JSON_B64=$(_payload_file '{}')
+  export HOOKS_JSON_B64=$(_payload_file '[{"id":"fixture","execute-command":"/usr/local/bin/inngest-inventory.sh"}]')
   export CAT_INFRA_CONFIG_STATE_SH_B64=$(_payload_file "#!/bin/bash")
   export INNGEST_ENUMERATE_REMINDERS_SH_B64=$(_payload_file "#!/bin/bash")
   export INNGEST_REARM_REMINDERS_SH_B64=$(_payload_file "#!/bin/bash")
@@ -506,6 +524,14 @@ test_prod_mode_escalated_move() {
   # Helper recorder: append "dest|mode|owner|<stdin-payload>" per invocation,
   # write nothing. Reading stdin proves the handler pipes the decoded payload (the
   # P1 stdin contract) rather than passing a swappable file path.
+  # #7220 review — the prod-mode arm replaces the `sudo` stub with `exec "$@"`, and the WRITE
+  # seam defaults to an ABSOLUTE `sudo /usr/bin/systemctl`, which the PATH stub cannot shadow.
+  # Since B4 moved daemon-reload out of the TEST_MODE guard onto that seam, this arm would run
+  # the REAL systemctl as non-root and abort under set -e. Point the seam at the stub — that is
+  # exactly what the seam exists for. Measured: without this the branch is 169/2 against a
+  # 148/0 baseline on main.
+  export INFRA_CONFIG_SYSTEMCTL="${TMPDIR_ROOT}/bin/systemctl"
+
   local helper_log="${TMPDIR_ROOT}/helper.log"
   export INFRA_CONFIG_INSTALL_HELPER="${TMPDIR_ROOT}/bin/infra-config-install-mock"
   printf '#!/bin/sh\nprintf "%%s|%%s|%%s|" "$1" "$2" "$3" >> "%s"\ncat >> "%s"\nprintf "\\n" >> "%s"\nexit 0\n' \
@@ -746,7 +772,36 @@ STUB
 #!/usr/bin/env bash
 # Records the FULL argv so ordering and sudoers lockstep are both checkable.
 printf '%s\n' "$*" >> "$STUB_CALLS"
-[[ "$1" == "try-restart" ]] || { echo "stub: expected 'try-restart', got '$1'" >&2; exit 64; }
+# #7220 B7 — ONE verb-dispatching stub, not a second stub binary. The WRITE seam now carries two
+# granted verbs (try-restart <unit>, daemon-reload), and sudo matches the FULL resolved argv, so
+# the stub's job is to be as intolerant as sudo is: an unexpected verb or a stray argument is
+# exit 64, never a silent success. A stub that accepted any argv would make the handler's call
+# shape unpinned — the class where switching a flag leaves a suite green.
+case "$1" in
+  daemon-reload)
+    # Exactly one word. `daemon-reload` takes no unit, so any extra argument is a DIFFERENT
+    # command than the one sudoers grants and would be denied in production.
+    [[ "$#" -eq 1 ]] || { echo "stub: daemon-reload takes no arguments, got '$*'" >&2; exit 64; }
+    # The denial arm reproduces polkit's real refusal text, which is what #7220 actually
+    # returned, so the handler's attribution is graded against the bytes it will really meet.
+    [[ -f "$STUB_STATE/daemon-reload.deny" ]] && {
+      echo "Failed to reload daemon: Interactive authentication required." >&2
+      exit 1
+    }
+    printf '1' > "$STUB_STATE/daemon-reload.ran"
+    exit 0
+    ;;
+  try-restart)
+    # ARGUMENT COUNT, same as daemon-reload above (#7220 review). This arm was a bare `: ;;`, so
+    # the stub accepted `try-restart`, `try-restart a b`, and `try-restart vector.service
+    # --no-block` identically — while SUDO matches the FULL argv and would DENY every one of
+    # those but the exact granted two-token form. A stub more permissive than the policy it
+    # stands in for cannot detect the drift that policy turns into a denial, which is the
+    # #7220 failure shape.
+    [[ "$#" -eq 2 ]] || { echo "stub: try-restart takes exactly one unit, got '$*'" >&2; exit 64; }
+    ;;
+  *) echo "stub: unexpected verb '$1'" >&2; exit 64 ;;
+esac
 unit="$2"
 # A bare `exit 1` cannot distinguish a sudo REFUSAL from a failed restart JOB, and the handler now
 # separates them because they have different owners and different remediations. Each arm therefore
@@ -852,7 +907,7 @@ test_reconcile_stale_fires_and_disarms() {
   : > "$STUB_CALLS"
   bash "$HANDLER" >/dev/null 2>&1 || true
   assert_eq "second apply skips the now-current unit" "not_stale" "$(restart_field vector.service reason)"
-  if [[ -s "$STUB_CALLS" ]]; then
+  if grep -q "^try-restart" "$STUB_CALLS"; then
     echo "  FAIL: predicate did not self-disarm — restarted again ($(tr '\n' ';' < "$STUB_CALLS"))"; FAIL=$((FAIL + 1))
   else
     echo "  PASS: predicate self-disarmed (no restart attempted on the second apply)"; PASS=$((PASS + 1))
@@ -869,7 +924,7 @@ test_reconcile_inactive_short_circuits() {
   assert_eq "inactive unit reason" "unit_inactive" "$(restart_field vector.service reason)"
   # try-restart is a deliberate no-op on an inactive unit and STILL EXITS 0, so an attempt here
   # would grade as a successful restart that never happened. Assert no attempt was made at all.
-  if [[ -s "$STUB_CALLS" ]]; then
+  if grep -q "^try-restart" "$STUB_CALLS"; then
     echo "  FAIL: attempted a restart on an inactive unit ($(tr '\n' ';' < "$STUB_CALLS"))"; FAIL=$((FAIL + 1))
   else
     echo "  PASS: no restart attempted on an inactive unit"; PASS=$((PASS + 1))
@@ -944,7 +999,7 @@ test_reconcile_timestamp_unparseable() {
   assert_eq "unparseable action" "failed"                 "$(restart_field vector.service action)"
   assert_eq "unparseable reason" "timestamp_unparseable"  "$(restart_field vector.service reason)"
   # Treating unparseable as stale would restart on every apply while reporting success.
-  if [[ -s "$STUB_CALLS" ]]; then
+  if grep -q "^try-restart" "$STUB_CALLS"; then
     echo "  FAIL: attempted a restart on an unreadable timestamp"; FAIL=$((FAIL + 1))
   else
     echo "  PASS: no restart attempted on an unreadable timestamp"; PASS=$((PASS + 1))
@@ -1048,6 +1103,740 @@ test_reconcile_unchanged_content_preserves_mtime() {
   restart_teardown
 }
 
+# --- #7220 B2/B3/B4: the daemon-reload grant, and the seam that carries it -----------------
+#
+# THIS IS THE REPAIR. Everything in PR-A was the instrument that measured this gap; this arm is
+# the property that closes it. The handler's `systemctl daemon-reload` ran as User=deploy with
+# no grant, returned "Interactive authentication required", and set -e aborted the handler AFTER
+# all 19 files were written but BEFORE unit reconciliation — so delivery was healthy and
+# ACTIVATION silently was not, since roughly 2026-05.
+#
+# The lockstep matters more here than for try-restart. Sudoers matching is EXACT, so a drift
+# between grant and caller does not widen anything — it DENIES, and a denied reload is exactly
+# the silent no-op #7220 already was. Pinning both provisioning paths and the caller together is
+# what stops this from regressing into the same invisible failure.
+# --- #7220 AC6: handler->grant lint (CLASS CLOSURE) ---------------------------------------
+#
+# The one guard that would have caught #7220 STRUCTURALLY. The existing lockstep runs
+# grant->handler (derived from RESTART_MAP) and the drift guards run source->source, so neither
+# can see a privileged verb the handler invokes that no map and no grant mentions. A bare
+# `systemctl daemon-reload` was exactly that: invisible to every check in the repo.
+#
+# Direction matters. This walks handler -> grant: every non-READ systemctl/systemd-run verb the
+# handler invokes must be sudo-prefixed AND granted in BOTH sudoers sources.
+#
+# WHAT `GRANTED` MEANS, and why the first version of this lint got it wrong.
+#
+# A `Cmnd_Alias` is an inert macro. On its own it grants NOTHING — it needs a User_Spec
+# (`deploy ALL=(root) NOPASSWD: <NAME>`) to become a permission. And sudo matches the FULL
+# RESOLVED ARGV, not a verb: `/usr/bin/systemctl stop webhook.service` is a different command
+# from `/usr/bin/systemctl stop inngest-server.service`, and a request for the former against a
+# grant of the latter is DENIED.
+#
+# The original lint did a substring `grep -qF "systemctl $verb"` across all Cmnd_Alias lines,
+# which discards the unit AND ignores the User_Spec. Measured consequences — every one of these
+# returned rc=0 (no violation) from a handler that sudo would refuse, producing the exact #7220
+# shape (denial -> set -e abort AFTER delivery) the lint was named for:
+#
+#   $SYSTEMCTL_PRIV stop webhook.service          matched INNGEST_STOP's `systemctl stop`
+#   $SYSTEMCTL_PRIV restart nginx.service         matched INNGEST_RESTART's `systemctl restart`
+#   $SYSTEMCTL_PRIV disable webhook.service       matched INNGEST_QUIESCE's `systemctl disable`
+#   $SYSTEMCTL_PRIV try-restart inngest-heartbeat.service
+#                                                 matched DROPIN_TRY_RESTART's `systemctl try-restart`
+#   sudo /usr/bin/systemd-run <ANY argv>          resolved to the bare word `systemd-run`,
+#                                                 dropping the argv entirely
+#
+# So this now resolves each invocation to its full argv and requires EXACT membership in the
+# granted set of BOTH provisioning paths. `_granted_argv` builds that set the way sudo does.
+#
+# Emits one resolved argv per line: comma-split, whitespace-trimmed, User_Spec-gated.
+_granted_argv() {  # <sudoers-shaped-file>
+  local file="$1" specs names n
+  # The User_Spec RHS is itself comma-separated and may name several aliases at once.
+  specs=$(grep -E '^[[:space:]]*deploy[[:space:]]+ALL=\(root\)[[:space:]]+NOPASSWD:' "$file" \
+            | sed 's/^.*NOPASSWD:[[:space:]]*//') || true
+  names=$(tr ',' '\n' <<<"$specs" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$') || true
+  while IFS= read -r n; do
+    [[ -n "$n" ]] || continue
+    if [[ "$n" =~ ^[A-Z][A-Z0-9_]*$ ]]; then
+      # An alias reference. Expand it — and note that an alias named by a User_Spec but never
+      # DEFINED expands to nothing, so it grants nothing, which is also sudo's behaviour.
+      sed -n "s/^[[:space:]]*Cmnd_Alias[[:space:]]\{1,\}${n}[[:space:]]*=[[:space:]]*//p" "$file" \
+        | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' || true
+    else
+      # A literal command sitting directly in the User_Spec (cloud-init:70 does this).
+      printf '%s\n' "$n"
+    fi
+  done <<<"$names"
+}
+
+# Emits violations on stdout, returns 1 if any. Parameterised by handler path so the SAME code
+# can be run against the pre-fix handler as the proof it would have caught the incident.
+_lint_privileged_verbs() {
+  local handler="$1" sudoers="${SCRIPT_DIR}/deploy-inngest-bootstrap.sudoers"
+  local cloud_init="${SCRIPT_DIR}/cloud-init.yml"
+  local code n_found=0 violations=0
+
+  # --- normalise the handler's CODE -------------------------------------------------------
+  #
+  # (1) Join backslash line-continuations first. A privileged call split across two physical
+  #     lines is invisible to a line-oriented scan, and the handler already uses continuations
+  #     (5 of them) so this is not hypothetical.
+  #
+  # (2) Strip comments ANCHORED. The previous `sed 's/#.*//'` was unanchored, which cuts at the
+  #     `#` of `$#` and `${var#prefix}` — so a line like
+  #         [ "$#" -eq 0 ] && $SYSTEMCTL_PRIV stop foo.service
+  #     lost its entire privileged call before the scan ever saw it, and the lint reported
+  #     rc=0. A comment `#` is one at start-of-line or preceded by whitespace; neither `$#`
+  #     nor `${x#y}` is. Stripping MUST still happen: this handler's prose names
+  #     `systemctl daemon-reload` seven times while its code contains it zero times, so a lint
+  #     that read comments would both false-flag the documentation and report a verb as "found"
+  #     that is never invoked.
+  code=$(sed -e ':a' -e '/\\$/{N;s/\\\n//;ba' -e '}' "$handler" | sed -E 's/(^|[[:space:]])#.*$/\1/')
+
+  # (3) The anchored strip still over-cuts a `#` that lives inside a quoted string preceded by a
+  #     space (`echo "see # note"; $SYSTEMCTL_PRIV stop foo`). That is a fail-OPEN residual, so
+  #     it is detected rather than tolerated: a stripped line whose remainder has unbalanced
+  #     quotes was cut mid-string, and the lint refuses to certify it.
+  local raw_l stripped_l
+  while IFS= read -r raw_l; do
+    [[ "$raw_l" == *"#"* ]] || continue
+    stripped_l=$(sed -E 's/(^|[[:space:]])#.*$/\1/' <<<"$raw_l")
+    [[ "$stripped_l" != "$raw_l" ]] || continue
+    local dq sq
+    dq=$(tr -cd '"' <<<"$stripped_l" | wc -c)
+    sq=$(tr -cd "'" <<<"$stripped_l" | wc -c)
+    if (( dq % 2 == 1 || sq % 2 == 1 )); then
+      echo "VIOLATION: a line of $(basename "$handler") cannot be statically parsed — the comment strip cut inside a quoted string, so any privileged call after it would be invisible: $(printf '%s' "$raw_l" | sed 's/^[[:space:]]*//' | cut -c1-80)"
+      violations=$((violations + 1))
+    fi
+  done < <(sed -e ':a' -e '/\\$/{N;s/\\\n//;ba' -e '}' "$handler")
+
+  # --- the two sanctioned seams, READ FROM THE HANDLER --------------------------------------
+  #
+  # The resolution below turns `$SYSTEMCTL_PRIV <verb> <args>` into the argv sudo will see, so it
+  # must not HARDCODE what that seam expands to — a lint that assumes the seam it is checking is
+  # asserting nothing about it. Both defaults are read out of the handler and validated.
+  local priv_default show_default priv_resolved
+  # The single quotes hold a sed SCRIPT; the ${...} inside is literal text matched in the
+  # handler's source, not an expansion.
+  # shellcheck disable=SC2016
+  priv_default=$(sed -n 's/^SYSTEMCTL_PRIV="\${INFRA_CONFIG_SYSTEMCTL:-\(.*\)}"$/\1/p' "$handler")
+  # shellcheck disable=SC2016
+  show_default=$(sed -n 's/^SYSTEMCTL_SHOW="\${INFRA_CONFIG_SYSTEMCTL_SHOW:-\(.*\)}"$/\1/p' "$handler")
+  if [[ "$priv_default" != "sudo "* ]]; then
+    echo "VIOLATION: the privileged seam SYSTEMCTL_PRIV defaults to '${priv_default:-<unparseable>}', which is not sudo-prefixed — every verb it carries would run unprivileged"
+    violations=$((violations + 1))
+  fi
+  if [[ -n "$show_default" && "$show_default" == "sudo "* ]]; then
+    echo "VIOLATION: the READ seam SYSTEMCTL_SHOW is sudo-prefixed ('$show_default') — the grants pin write verbs only, so every read would be DENIED"
+    violations=$((violations + 1))
+  fi
+  # Sudoers grants the command sudo will RUN, not the sudo call itself.
+  priv_resolved="${priv_default#sudo }"
+
+  # --- the granted sets ---------------------------------------------------------------------
+  local granted_s granted_c
+  granted_s=$(_granted_argv "$sudoers")
+  granted_c=$(_granted_argv "$cloud_init")
+  if [[ -z "$granted_s" || -z "$granted_c" ]]; then
+    echo "VIOLATION: derived an EMPTY granted set (sudoers=$(grep -c . <<<"$granted_s"), cloud-init=$(grep -c . <<<"$granted_c")) — the User_Spec/Cmnd_Alias parse is broken, so every membership test below would fail open"
+    violations=$((violations + 1))
+  fi
+
+  # READ verbs need no root, and routing them through sudo would be DENIED (the grants pin
+  # specific write verbs), turning every read into a failure. Explicit allowlist, not a
+  # heuristic -- an unknown verb must fall through to the privileged branch, never be assumed
+  # safe.
+  local read_verbs=" show is-active is-enabled cat status list-units "
+  # The ONE verb whose unit argument is legitimately a variable, because RESTART_MAP drives it
+  # and `test_sudoers_caller_argv_lockstep` pins that map against DROPIN_TRY_RESTART in both
+  # directions. Any OTHER verb carrying a variable argument has nothing pinning its unit, so it
+  # is a violation here rather than a silent delegation to a lockstep that does not cover it.
+  local map_delegated_verbs=" try-restart "
+
+  local line body verb argv resolved
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    # The scan reads `grep -n` output, so each record is `<lineno>:<code>`. Strip the prefix:
+    # load-bearing, because every `^`-anchored pattern below must match against the CODE, not
+    # against the digits. The NUMBER is deliberately discarded rather than reported — it indexes
+    # the continuation-joined, comment-stripped text, not the source file, so quoting it would
+    # send the reader to the wrong line. Violations cite the offending TEXT instead
+    # (cq-cite-content-anchor-not-line-number).
+    body="${line#*:}"
+
+    # VARIABLE INDIRECTION. `SC=/usr/bin/systemctl; sudo $SC stop x` cannot be resolved
+    # statically, and the previous lint simply did not match it — so it was a silent bypass.
+    # An assignment of a systemctl/systemd-run path to anything other than the two sanctioned
+    # seams is therefore itself the violation: fail closed on what cannot be read.
+    #
+    # Deliberately NOT counted into n_found: an assignment is not an invocation, and letting the
+    # two sanctioned seam definitions inflate that tally would raise the vacuity floor's input
+    # without adding a single checked call site.
+    if [[ "$body" =~ ^[[:space:]]*(local|export|declare|readonly)?[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=[^=]*(systemctl|systemd-run) ]]; then
+      local assigned="${BASH_REMATCH[2]}"
+      if [[ "$assigned" != "SYSTEMCTL_PRIV" && "$assigned" != "SYSTEMCTL_SHOW" ]]; then
+        echo "VIOLATION: a systemctl/systemd-run path is assigned to '$assigned', which makes every use of it unresolvable by this lint (use the SYSTEMCTL_PRIV / SYSTEMCTL_SHOW seams): $(printf '%s' "$body" | sed 's/^[[:space:]]*//' | cut -c1-80)"
+        violations=$((violations + 1))
+      fi
+      continue
+    fi
+
+    n_found=$((n_found + 1))
+
+    # Resolve the invocation to its FULL argv as sudo will see it.
+    if [[ "$body" =~ \$SYSTEMCTL_SHOW[[:space:]]+([a-z][a-z-]*)(.*)$ ]]; then
+      verb="${BASH_REMATCH[1]}"
+      # A read-seam call is exempt only if the verb really is a read verb.
+      if [[ "$read_verbs" == *" $verb "* ]]; then continue; fi
+      echo "VIOLATION: the READ seam SYSTEMCTL_SHOW carries the non-read verb '$verb'; it has no sudo prefix, so this runs unprivileged and silently does nothing: $(printf '%s' "$body" | sed 's/^[[:space:]]*//' | cut -c1-80)"
+      violations=$((violations + 1))
+      continue
+    elif [[ "$body" =~ \$SYSTEMCTL_PRIV[[:space:]]+([a-z][a-z-]*)(.*)$ ]]; then
+      verb="${BASH_REMATCH[1]}"
+      argv=$(_strip_shell_tail "${BASH_REMATCH[2]}")
+      resolved="$priv_resolved $verb${argv:+ $argv}"
+    elif [[ "$body" =~ (^|[^-_[:alnum:]])sudo[[:space:]]+((/[A-Za-z0-9_./-]*)?systemd-run[[:space:]]+.*)$ ]]; then
+      # EVERY systemd-run line, with its argv intact — not a single hardcoded one, and not the
+      # bare word. The inner `/usr/bin/systemctl restart webhook` is PART of the granted argv.
+      verb="systemd-run"
+      resolved=$(_strip_shell_tail "${BASH_REMATCH[2]}")
+    elif [[ "$body" =~ (^|[^-_[:alnum:]])sudo[[:space:]]+((/[A-Za-z0-9_./-]*)?systemctl[[:space:]]+([a-z][a-z-]*).*)$ ]]; then
+      # A literal sudo'd systemctl (no seam). Granted-set membership still applies.
+      verb="${BASH_REMATCH[4]}"
+      [[ "$read_verbs" == *" $verb "* ]] && continue
+      resolved=$(_strip_shell_tail "${BASH_REMATCH[2]}")
+    elif [[ "$body" =~ (^|[^-_[:alnum:]$/])((/[A-Za-z0-9_./-]*)?systemctl[[:space:]]+([a-z][a-z-]*)) ]]; then
+      # A LITERAL, UN-SEAMED, UN-SUDOED systemctl call. This is the #7220 shape.
+      verb="${BASH_REMATCH[4]}"
+      [[ "$read_verbs" == *" $verb "* ]] && continue
+      echo "VIOLATION: privileged verb '$verb' is invoked without sudo: $(printf '%s' "$body" | sed 's/^[[:space:]]*//' | cut -c1-90)"
+      violations=$((violations + 1))
+      continue
+    elif [[ "$body" =~ (^|[^-_[:alnum:]$/])((/[A-Za-z0-9_./-]*)?systemd-run) ]]; then
+      echo "VIOLATION: systemd-run is invoked without sudo: $(printf '%s' "$body" | sed 's/^[[:space:]]*//' | cut -c1-90)"
+      violations=$((violations + 1))
+      continue
+    else
+      continue
+    fi
+
+    [[ "$read_verbs" == *" $verb "* ]] && continue
+
+    # A variable in the resolved argv means the exact command is not knowable here.
+    if [[ "$resolved" == *'$'* ]]; then
+      if [[ "$map_delegated_verbs" != *" $verb "* ]]; then
+        echo "VIOLATION: '$resolved' carries a variable argument for verb '$verb', and nothing pins what it expands to — sudo matches exact argv, so this is a denial waiting to happen"
+        violations=$((violations + 1))
+        continue
+      fi
+      # try-restart: the unit is pinned by RESTART_MAP <-> DROPIN_TRY_RESTART in
+      # test_sudoers_caller_argv_lockstep. Here we only require that the SEAM and VERB prefix is
+      # granted at all, so a seam change still reds.
+      local prefix_pat="$priv_resolved $verb "
+      if ! grep -qF -- "$prefix_pat" <<<"$granted_s" || ! grep -qF -- "$prefix_pat" <<<"$granted_c"; then
+        echo "VIOLATION: no grant in both sources begins '$prefix_pat' — the map-driven verb '$verb' would be denied"
+        violations=$((violations + 1))
+      fi
+      continue
+    fi
+
+    # EXACT membership, both provisioning paths. `-x` is the whole point: a substring match is
+    # what let five denials through.
+    if ! grep -qxF -- "$resolved" <<<"$granted_s"; then
+      echo "VIOLATION: '$resolved' is invoked but not granted in deploy-inngest-bootstrap.sudoers"
+      violations=$((violations + 1))
+    fi
+    if ! grep -qxF -- "$resolved" <<<"$granted_c"; then
+      echo "VIOLATION: '$resolved' is invoked but not granted in the cloud-init mirror"
+      violations=$((violations + 1))
+    fi
+  done < <(grep -nE '\$SYSTEMCTL_(PRIV|SHOW)|systemd-run|(^|[^-_[:alnum:]$/])(/[A-Za-z0-9_./-]*)?systemctl[[:space:]]|^[[:space:]]*(local|export|declare|readonly)?[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=[^=]*(systemctl|systemd-run)' <<<"$code")
+
+  # VACUITY GUARD, mirroring the RESTART_MAP one. A broken extraction yields zero invocations
+  # and the loop above "passes" having classified nothing -- which is the exact failure mode
+  # this lint exists to prevent, reproduced inside the lint itself.
+  #
+  # RATCHETED from 2 to 4. The live handler yields exactly 4 (the SHOW read, the PRIV
+  # daemon-reload, the PRIV try-restart, the sudo'd systemd-run), so a floor of 2 tolerated an
+  # extraction that had silently lost HALF the call sites — including, in principle, the very
+  # daemon-reload this lint exists to see. A floor below the known truth is not a guard.
+  if [[ "$n_found" -lt 4 ]]; then
+    echo "VIOLATION: derived only $n_found systemctl/systemd-run invocations from $(basename "$handler") — the extraction is broken (expected >= 4), so this lint proves nothing"
+    violations=$((violations + 1))
+  fi
+  [[ "$violations" -eq 0 ]]
+}
+
+# Trim a shell tail (redirect, list operator, terminator, closing subshell) off an extracted argv
+# so what is compared is the command, not the line. Any imprecision here fails CLOSED: the
+# comparison is exact membership, so a mis-trimmed argv reports a violation rather than passing.
+_strip_shell_tail() {  # <argv-fragment>
+  local s="$1"
+  # Cut at the first unquoted shell metacharacter run that ends a simple command.
+  s=$(sed -E 's/[[:space:]]*(\||\|\||&&|;|&|>|>>|<|\)).*$//' <<<"$s")
+  # Collapse internal whitespace runs and trim: sudoers argv are single-space separated.
+  sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]]+/ /g' <<<"$s"
+}
+
+test_handler_to_grant_lint() {
+  echo "TEST: #7220 AC6 — every privileged verb the handler invokes is sudo'd AND granted"
+  local out rc=0
+  out=$(_lint_privileged_verbs "$HANDLER") || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    echo "  PASS: no ungranted or un-sudoed privileged verbs in the handler"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: handler->grant lint found violations:"; printf '    %s\n' "$out"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # The granted set must be non-trivial, asserted OUTSIDE the lint too. If `_granted_argv`
+  # regressed to emitting nothing, every membership test inside the lint would pass by
+  # vacuity and the arm above would report a clean handler forever.
+  local n_granted
+  n_granted=$(_granted_argv "${SCRIPT_DIR}/deploy-inngest-bootstrap.sudoers" | grep -c .)
+  if [[ "$n_granted" -ge 10 ]]; then
+    echo "  PASS: the User_Spec-gated granted set resolved $n_granted argv"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: the granted set resolved only $n_granted argv — the sudoers parse is broken, so the lint is vacuous"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # THE USER_SPEC IS LOAD-BEARING, asserted by construction rather than by reading the file: an
+  # alias whose User_Spec line is deleted must STOP being granted. Without this, a lint that
+  # ignored User_Specs (as the first version did) would look identical to one that honours them.
+  local spec_stripped
+  spec_stripped=$(mktemp -t sudoers-nospec.XXXXXXXX); OWNED_TMPFILES+=("$spec_stripped")
+  grep -v '^deploy ALL=(root) NOPASSWD: SYSTEMCTL_DAEMON_RELOAD$' \
+    "${SCRIPT_DIR}/deploy-inngest-bootstrap.sudoers" > "$spec_stripped"
+  if ! grep -qxF '/usr/bin/systemctl daemon-reload' <(_granted_argv "$spec_stripped"); then
+    echo "  PASS: an alias with no deploy User_Spec grants nothing"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: daemon-reload still read as granted after its User_Spec line was removed — the lint certifies a command sudo would DENY"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # PROVEN RED AGAINST THE PRE-FIX HANDLER. Without this the lint could be vacuous in a way no
+  # green run would reveal: a check that passes against the code it was written to catch is
+  # decoration.
+  #
+  # Shares the ONE pin declared for the fatal-channel arm below rather than carrying a second
+  # SHA of its own. Both previously named different commits — verified identical blobs (35280
+  # bytes, `local died=0` absent, one bare `systemctl daemon-reload` in code) — and two pins for
+  # one baseline is two things to keep true. The probe is `cat-file -e` on the BLOB for the
+  # reason #7271 documents at that declaration: a blobless clone has the commit and not the file.
+  #
+  # Own temp, not TMPDIR_ROOT: this arm calls no setup(), so TMPDIR_ROOT is whatever the
+  # previous test's teardown removed — writing into it fails with ENOENT and the RED proof
+  # reports "broken" when nothing is broken. Registered with the file's owning trap (ADR-129
+  # rule (c)) so a mid-arm death still reclaims it; /tmp here is a machine-global tmpfs shared
+  # by parallel worktrees, so an unreclaimed leak per run is not bounded.
+  local pin="${PRE_FIX_HANDLER_SHA}:apps/web-platform/infra/infra-config-apply.sh"
+  local old; old=$(mktemp -t lint-old-handler.XXXXXXXX.sh); OWNED_TMPFILES+=("$old")
+  if git -C "$SCRIPT_DIR" show "$pin" > "$old" 2>/dev/null; then
+    local old_out old_rc=0
+    old_out=$(_lint_privileged_verbs "$old") || old_rc=$?
+    if [[ "$old_rc" -ne 0 ]] && [[ "$old_out" == *"daemon-reload"* ]]; then
+      echo "  PASS: the lint FLAGS the pre-fix handler's ungranted daemon-reload (this is #7220)"
+      PASS=$((PASS + 1))
+    else
+      echo "  FAIL: the lint did NOT flag the pre-fix handler — it would not have caught #7220 (rc=$old_rc, out=${old_out:-<none>})"
+      FAIL=$((FAIL + 1))
+    fi
+  elif git -C "$SCRIPT_DIR" cat-file -e "$pin" 2>/dev/null; then
+    echo "  FAIL: the pinned pre-fix blob resolves but could not be read — the RED proof is broken, not skipped"
+    FAIL=$((FAIL + 1))
+  elif [[ -n "${CI:-}" ]]; then
+    echo "  FAIL: pinned pre-fix blob ${PRE_FIX_HANDLER_SHA:0:9} is absent under CI, where fetch-depth: 0 should guarantee it — AC6 RED proof NOT run"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  SKIP (loud): pinned pre-fix blob ${PRE_FIX_HANDLER_SHA:0:9} not in this object store (shallow/partial clone, rewritten history, or not run inside the soleur checkout) — AC6 RED proof NOT run."
+    echo "               Remedy: run from a full clone (git fetch --unshallow), or re-pin to tag web-v0.248.2."
+    # 1: the single "the lint FLAGS the pre-fix handler" assertion the taken branch would make.
+    SKIPPED_ASSERTIONS=$((SKIPPED_ASSERTIONS + 1))
+  fi
+}
+
+# --- #7220 B5 (AC-B2): hardening the self-restart that has NEVER run in production ---------
+#
+# fc8b8179 shipped the delayed webhook self-restart AFTER the reload in the same set -e block,
+# so it has been unreachable since ~2026-05 with zero test coverage. B2's grant makes it
+# reachable for the first time. Re-enabling a never-once-executed root-restart path on a host
+# with no orderable replacement is the single riskiest thing in this PR, hence three guards.
+
+# B5.1 -- an unparseable hooks.json must be a HARD failure, not a silent pass.
+#
+# The sweep is `jq … 2>/dev/null || true`, so a syntactically invalid hooks.json yields no
+# commands and the loop finds nothing to complain about. With the self-restart now live, webhook
+# would restart 3s later and come up serving ZERO hooks: adnanh/webhook with -verbose does not
+# abort on an unparseable hooks file. The port then ANSWERS, so the verify's 000/502/503
+# "listener is down" branch never fires -- the 404 branch does, whose remediation text points at
+# "first bootstrap". That is the wrong diagnosis, delivered on the exact channel needed to
+# repair it, on a host with no SSH runbook. Self-wedge.
+test_unparseable_hooks_json_is_a_hard_failure() {
+  echo "TEST: #7220 B5.1 — an unparseable hooks.json fails loudly instead of wedging the listener"
+  setup
+  export_valid_env_vars
+  # Valid base64, invalid JSON — the shape a truncated or half-rendered delivery produces.
+  export HOOKS_JSON_B64=$(_payload_file '{"id": "broken", ')
+
+  local rc=0
+  bash "$HANDLER" >/dev/null 2>&1 || rc=$?
+
+  if [[ "$rc" -ne 0 ]]; then
+    echo "  PASS: apply fails when hooks.json does not parse"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: apply exited 0 with an unparseable hooks.json — webhook would restart serving zero hooks"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # Named, so the operator gets the RIGHT diagnosis rather than the 404 "first bootstrap" one.
+  local reasons
+  reasons=$(jq -r '.files[]?.reason // empty' "$INFRA_CONFIG_STATE" 2>/dev/null | tr '\n' ' ' || true)
+  if [[ "$reasons" == *"hooks_json_unparseable"* ]]; then
+    echo "  PASS: the frame names hooks_json_unparseable"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: frame does not name the parse failure (reasons: ${reasons:-<none>})"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # MORE THAN ONE INVALID SHAPE (#7220 review). With a single invalid fixture the arm could not
+  # tell the real gate from a much weaker one: replacing the handler's
+  # `jq -e 'type == "array" and length > 0'` with `grep -q '"id": "broken"'` kept this suite
+  # green, because the one fixture happened to contain that literal. The handler's own comment
+  # already records that a 0-byte file and a valid non-array both yield the same
+  # "serving zero hooks" outcome as a syntax error, so those are the shapes that must be covered.
+  # Each is driven through a fresh setup so a leftover state file cannot answer for it.
+  local shape n_shapes=0
+  for shape in '{"id": "broken", ' '[{"id":"a"},' '' '{{{' '{"id":"x"}' '[]'; do
+    setup
+    export_valid_env_vars
+    export HOOKS_JSON_B64=$(_payload_file "$shape")
+    local srcc=0
+    bash "$HANDLER" >/dev/null 2>&1 || srcc=$?
+    local sreason
+    sreason=$(jq -r '.files[]?.reason // empty' "$INFRA_CONFIG_STATE" 2>/dev/null | tr '\n' ' ' || true)
+    if [[ "$srcc" -ne 0 ]] && [[ "$sreason" == *"hooks_json_unparseable"* ]]; then
+      echo "  PASS: hooks.json shape $(printf '%q' "$shape") is rejected AND named"; PASS=$((PASS + 1))
+    else
+      echo "  FAIL: hooks.json shape $(printf '%q' "$shape") slipped through (rc=$srcc, reasons=${sreason:-<none>}) — webhook would restart serving zero hooks"
+      FAIL=$((FAIL + 1))
+    fi
+    n_shapes=$((n_shapes + 1))
+  done
+  # The loop is data-driven, so a truncated list would silently shrink coverage while every
+  # remaining case passed. Pin the cardinality.
+  assert_eq "every invalid hooks.json shape in the table was exercised" "6" "$n_shapes"
+
+  # ONE VERDICT PER FILE. The write loop records hooks.json ok (the bytes landed) and this branch
+  # overrides that verdict rather than appending a second one; two entries for one path made the
+  # per-file diagnostic self-contradictory, and it is what the operator alert renders.
+  setup
+  export_valid_env_vars
+  export HOOKS_JSON_B64=$(_payload_file '{"id": "broken", ')
+  bash "$HANDLER" >/dev/null 2>&1 || true
+  local n_hooks_entries
+  n_hooks_entries=$(jq -r '[.files[]? | select(.file == "/etc/webhook/hooks.json")] | length' "$INFRA_CONFIG_STATE" 2>/dev/null || echo 0)
+  assert_eq "files[] carries exactly ONE verdict for /etc/webhook/hooks.json" "1" "$n_hooks_entries"
+  assert_eq "and that verdict is the failure, not the delivery" "failed" \
+    "$(jq -r '[.files[]? | select(.file == "/etc/webhook/hooks.json")][0].status // "MISSING"' "$INFRA_CONFIG_STATE" 2>/dev/null || echo MISSING)"
+  # The counters must still reconcile: moving the verdict has to move the accounting with it.
+  local fw ff ft
+  fw=$(_frame_field files_written); ff=$(_frame_field files_failed); ft=$(_frame_field files_total)
+  assert_eq "files_written + files_failed reconciles against files_total" "$ft" "$((fw + ff))"
+
+  # NON-VACUITY: a VALID hooks.json must not trip this. Without this arm a gate that rejected
+  # every hooks.json would satisfy the assertions above and brick delivery outright.
+  setup
+  export_valid_env_vars
+  export HOOKS_JSON_B64=$(_payload_file '[{"id":"good","execute-command":"/usr/local/bin/inngest-inventory.sh"}]')
+  bash "$HANDLER" >/dev/null 2>&1 || true
+  local ok_reasons
+  ok_reasons=$(jq -r '.files[]?.reason // empty' "$INFRA_CONFIG_STATE" 2>/dev/null | tr '\n' ' ' || true)
+  if [[ "$ok_reasons" != *"hooks_json_unparseable"* ]]; then
+    echo "  PASS: a well-formed hooks.json is not flagged"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: a VALID hooks.json was flagged unparseable — the guard rejects everything"
+    FAIL=$((FAIL + 1))
+  fi
+  teardown
+}
+
+# B5.2 -- --collect on the transient unit, in argv lockstep with BOTH sudoers copies.
+#
+# --unit=webhook-self-restart is a FIXED name. A transient unit that FAILS is not garbage
+# collected, so the next apply's systemd-run fails "unit already exists" -- permanently, and
+# silently, on the only remediation channel. --collect changes the argv, and sudo matches the
+# full resolved command, so the grant must move with it or the self-restart becomes denied.
+test_self_restart_collect_argv_lockstep() {
+  echo "TEST: #7220 B5.2 — --collect is sent AND granted in both provisioning paths"
+  local sudoers="${SCRIPT_DIR}/deploy-inngest-bootstrap.sudoers"
+  local cloud_init="${SCRIPT_DIR}/cloud-init.yml"
+  local expected="/usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook"
+
+  local g_sudoers g_cloudinit
+  g_sudoers=$(sed -n 's/^Cmnd_Alias WEBHOOK_SELF_RESTART = //p' "$sudoers" | sed 's/[[:space:]]*$//')
+  g_cloudinit=$(sed -n 's/^[[:space:]]*Cmnd_Alias WEBHOOK_SELF_RESTART = //p' "$cloud_init" | sed 's/[[:space:]]*$//')
+  assert_eq "sudoers grants the --collect argv" "$expected" "$g_sudoers"
+  assert_eq "cloud-init grants the --collect argv" "$expected" "$g_cloudinit"
+
+  # A Cmnd_Alias with no User_Spec grants NOTHING — the same reasoning the daemon-reload arm
+  # applies, now applied to the sibling grant this PR edits. Measured by review: deleting this
+  # binding from BOTH sudoers sources left the suite fully green, so the self-restart would be
+  # denied in production with nothing red — the silent no-op class, on the delayed restart B5
+  # exists to make reachable for the first time since ~2026-05.
+  if grep -qE '^deploy ALL=\(root\) NOPASSWD: WEBHOOK_SELF_RESTART$' "$sudoers"; then
+    echo "  PASS: sudoers binds WEBHOOK_SELF_RESTART to deploy via a User_Spec"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: WEBHOOK_SELF_RESTART has no 'deploy ALL=(root) NOPASSWD:' line — the alias grants nothing"
+    FAIL=$((FAIL + 1))
+  fi
+  if grep -qE '^[[:space:]]*deploy ALL=\(root\) NOPASSWD: WEBHOOK_SELF_RESTART$' "$cloud_init"; then
+    echo "  PASS: cloud-init binds WEBHOOK_SELF_RESTART to deploy via a User_Spec"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: cloud-init defines WEBHOOK_SELF_RESTART without a User_Spec"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # The caller must send exactly that. Anchored on the sudo-prefixed call, not a bare --collect
+  # grep, which would also match this file's own prose.
+  if grep -qF "sudo $expected" "$HANDLER"; then
+    echo "  PASS: the handler sends the granted --collect argv"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: handler's systemd-run argv does not match the grant — the self-restart would be DENIED"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+# B5.3 -- StartLimitIntervalSec=0.
+#
+# webhook.service sets Restart=on-failure / RestartSec=5 with no start-limit override, so
+# systemd's default StartLimitBurst=5 within StartLimitIntervalSec=10s applies.
+#
+# CORRECTED (#7220 review): this comment previously said the TWO restarts of the first post-merge
+# apply (server.tf's synchronous one, then the handler's delayed self-restart) would blow that
+# limit. Two cannot -- the burst is 5. The directive is still required; the real mechanism is a
+# genuine crash loop under Restart=on-failure reaching 5 starts inside 10s, which the two
+# deliberate restarts make more likely by consuming budget rather than by exhausting it. Blowing
+# the limit leaves webhook `failed` and needing `systemctl reset-failed` -- i.e. SSH, on the host
+# that has none.
+test_webhook_start_limit_disabled() {
+  echo "TEST: #7220 B5.3 — webhook.service disables the systemd start limit"
+  local unit="${SCRIPT_DIR}/webhook.service"
+  # Must live in [Unit]: systemd ignores StartLimitIntervalSec in [Service] on modern versions.
+  local in_unit
+  in_unit=$(awk '/^\[Unit\]/{u=1;next} /^\[/{u=0} u && /^StartLimitIntervalSec=0[[:space:]]*$/{n++} END{print n+0}' "$unit")
+  assert_eq "StartLimitIntervalSec=0 is present in the [Unit] section" "1" "$in_unit"
+}
+
+test_daemon_reload_grant_lockstep() {
+  echo "TEST: #7220 B2 — daemon-reload is granted, and the handler sends the granted argv"
+  local sudoers="${SCRIPT_DIR}/deploy-inngest-bootstrap.sudoers"
+  local cloud_init="${SCRIPT_DIR}/cloud-init.yml"
+
+  # (a) Both provisioning paths must grant it, and grant the SAME thing. cloud-init is create-time
+  # under ignore_changes=[user_data] and the sudoers file is the delivered copy; a host provisioned
+  # from one and reconciled by the other must end up with identical authority.
+  local g_sudoers g_cloudinit
+  g_sudoers=$(sed -n 's/^Cmnd_Alias SYSTEMCTL_DAEMON_RELOAD = //p' "$sudoers" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  g_cloudinit=$(sed -n 's/^[[:space:]]*Cmnd_Alias SYSTEMCTL_DAEMON_RELOAD = //p' "$cloud_init" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  # Each side is pinned against the LITERAL, not against the other. A bare cross-file equality
+  # passes vacuously when both extractions come back empty — measured on this arm's first RED
+  # run, where "" == "" reported PASS while neither file granted anything at all.
+  assert_eq "sudoers grants daemon-reload" "/usr/bin/systemctl daemon-reload" "$g_sudoers"
+  assert_eq "cloud-init mirror grants the identical argv" "/usr/bin/systemctl daemon-reload" "$g_cloudinit"
+
+  # (b) A Cmnd_Alias with no User_Spec grants NOTHING — it is a definition, not an authorisation.
+  # Asserting only the alias would pass against a file that never says `deploy ALL=(root)`.
+  if grep -qE '^deploy ALL=\(root\) NOPASSWD: SYSTEMCTL_DAEMON_RELOAD$' "$sudoers"; then
+    echo "  PASS: sudoers binds the alias to deploy via a User_Spec"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: SYSTEMCTL_DAEMON_RELOAD has no 'deploy ALL=(root) NOPASSWD:' line — the alias grants nothing"
+    FAIL=$((FAIL + 1))
+  fi
+  if grep -qE '^[[:space:]]*deploy ALL=\(root\) NOPASSWD: SYSTEMCTL_DAEMON_RELOAD$' "$cloud_init"; then
+    echo "  PASS: cloud-init binds the alias to deploy via a User_Spec"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: cloud-init mirror defines the alias without a User_Spec"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # (c) The CALLER must actually route through the seam. A bare `systemctl daemon-reload` (what
+  # shipped, and what #7220 is) would be denied no matter how the grant is written, so asserting
+  # the grant alone proves nothing about whether the reload can run.
+  # shellcheck disable=SC2016
+  local seam_default
+  seam_default=$(sed -n 's/^SYSTEMCTL_PRIV="\${INFRA_CONFIG_SYSTEMCTL:-\(.*\)}"$/\1/p' "$HANDLER")
+  assert_eq "the privileged seam defaults to a sudo-prefixed absolute systemctl" \
+    "sudo /usr/bin/systemctl" "$seam_default"
+  # Anchored on the seam variable, not on the bare verb: a bare-token grep would match the
+  # prose in this file's own header comments describing the bug.
+  if grep -qE '^[[:space:]]*\$SYSTEMCTL_PRIV daemon-reload$' "$HANDLER"; then
+    echo "  PASS: the handler invokes daemon-reload through the privileged seam"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: handler does not call daemon-reload via \$SYSTEMCTL_PRIV — this is the #7220 shape"
+    FAIL=$((FAIL + 1))
+  fi
+  # And the un-seamed form must be GONE, not merely joined by a seamed one.
+  if grep -qE '^[[:space:]]*systemctl daemon-reload$' "$HANDLER"; then
+    echo "  FAIL: a bare 'systemctl daemon-reload' survives in the handler — it would be denied"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: no bare un-seamed daemon-reload remains"; PASS=$((PASS + 1))
+  fi
+
+  # (d) What sudoers grants is what sudo RUNS, so the granted argv is the seam minus its sudo
+  # prefix. This is the join that makes (a) and (c) one property rather than two coincidences.
+  assert_eq "granted argv equals the caller's resolved argv" \
+    "${seam_default#sudo } daemon-reload" "$g_sudoers"
+}
+
+# --- #7220 B7: the reload actually runs, and its denial is attributed --------------------
+#
+# TWO ARMS, and the pair is the point. The denied arm alone would pass against a handler that
+# never calls daemon-reload at all (no call, no denial, no fatal marker — vacuously "correct"),
+# which is the shape #7220 shipped in. The success arm is what makes the denial meaningful.
+test_daemon_reload_runs_on_a_clean_apply() {
+  echo "TEST: #7220 B7 — a clean apply invokes daemon-reload through the seam, exactly once"
+  restart_setup
+  arm_unit vector.service active "$(date -u +%s)"
+  bash "$HANDLER" >/dev/null 2>&1 || true
+
+  # POSITIVE CONTROL. Counted, not just present: the handler must not reload per-file (19x on
+  # every apply is a real cost on a cx33) and must not skip it.
+  local n_reload
+  n_reload=$(grep -c '^daemon-reload$' "$STUB_CALLS" 2>/dev/null || true)
+  [[ "$n_reload" =~ ^[0-9]+$ ]] || n_reload=0
+  assert_eq "daemon-reload invoked exactly once per apply" "1" "$n_reload"
+
+  # The argv is EXACTLY the granted one. The stub exits 64 on a stray argument, so a handler
+  # sending `daemon-reload --now` would surface here rather than in production as a denial.
+  if grep -qxF 'daemon-reload' "$STUB_CALLS"; then
+    echo "  PASS: the argv sent is exactly 'daemon-reload', no extra arguments"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: daemon-reload argv is not the granted shape: $(tr '\n' ';' < "$STUB_CALLS")"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # A successful reload is NOT a fatal event — the channel must stay quiet, or it trains the
+  # reader to ignore the one time it fires (AC14).
+  local n_fatal
+  n_fatal=$(grep -c 'SOLEUR_INFRA_CONFIG_FATAL' "$LOGGER_LOG" 2>/dev/null || true)
+  [[ "$n_fatal" =~ ^[0-9]+$ ]] || n_fatal=0
+  assert_eq "zero fatal markers when the reload succeeds" "0" "$n_fatal"
+  assert_eq "fatal_line zeroed when the reload succeeds" "0" "$(_frame_field fatal_line)"
+
+  restart_teardown
+}
+
+# THE REACHABILITY ARM. Everything else in this suite runs with INFRA_CONFIG_TEST_MODE=1 (set by
+# setup()), so every assertion about the reload is an assertion about a path the SUITE takes —
+# never about the path PRODUCTION takes. Measured by review: wrapping the call site in the
+# INVERSE guard, `if [[ -n "${INFRA_CONFIG_TEST_MODE:-}" ]]`, left all 171 assertions green. That
+# mutant is #7220 byte-for-byte: files delivered, activation never happens on a real host, and
+# the suite says everything is fine.
+#
+# So this arm runs the handler with TEST_MODE UNSET — the prod-shaped path — with the seams and
+# PATH stubs still in place, and asserts the reload actually fired. It is the only arm that can
+# distinguish "the reload runs" from "the reload runs where the tests can see it".
+test_daemon_reload_reachable_with_test_mode_unset() {
+  echo "TEST: #7220 — the reload fires on the PROD path (INFRA_CONFIG_TEST_MODE unset)"
+  restart_setup
+  arm_unit vector.service active "$(date -u +%s)"
+  # The prod path. sync, sudo and systemd-run are PATH-stubbed by setup(); the WRITE seam is
+  # stubbed by restart_setup. Nothing here touches the real host.
+  unset INFRA_CONFIG_TEST_MODE
+  bash "$HANDLER" >/dev/null 2>&1 || true
+
+  local n_reload
+  n_reload=$(grep -c '^daemon-reload$' "$STUB_CALLS" 2>/dev/null || true)
+  [[ "$n_reload" =~ ^[0-9]+$ ]] || n_reload=0
+  if [[ "$n_reload" -ge 1 ]]; then
+    echo "  PASS: daemon-reload fires with TEST_MODE unset — the call site is reachable in prod"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: daemon-reload did NOT fire on the prod path — the reload is test-only, which is #7220"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # NON-VACUITY: prove this arm really took the prod branch. `sync` is guarded by the same
+  # TEST_MODE check, so if it did not run, TEST_MODE was still set and the assertion above
+  # proved nothing about production.
+  if [[ -f "$STUB_STATE/../synced" ]] || grep -qF 'daemon-reload' "$STUB_CALLS" 2>/dev/null; then
+    echo "  PASS: the prod branch was actually entered"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: could not confirm the prod branch was entered — this arm is vacuous"
+    FAIL=$((FAIL + 1))
+  fi
+
+  export INFRA_CONFIG_TEST_MODE=1
+  restart_teardown
+}
+
+test_daemon_reload_denied_is_attributed() {
+  echo "TEST: #7220 B7 — a DENIED daemon-reload is named by the fatal channel (this is #7220)"
+  restart_setup
+  arm_unit vector.service active "$(date -u +%s)"
+  # Reproduce the exact production failure: the grant is absent, so polkit refuses.
+  printf '1' > "$STUB_STATE/daemon-reload.deny"
+
+  local rc=0
+  bash "$HANDLER" >/dev/null 2>&1 || rc=$?
+
+  # It must DIE, not limp on. A reload that silently failed is what left every managed unit
+  # running its start-time environment for ~3 months.
+  if [[ "$rc" -ne 0 ]]; then
+    echo "  PASS: a denied reload fails the apply rather than passing silently"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: handler exited 0 despite a denied daemon-reload — the #7220 silent failure"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # And PR-A's channel must name it. This is the join between the two PRs: the instrument
+  # shipped in PR-A is what makes this repair's failure mode diagnosable without SSH.
+  # fatal_cmd carries $BASH_COMMAND, which is UNEXPANDED source text — that is the property
+  # keeping secrets out of the frame, and it is deliberate. A consequence of routing the reload
+  # through the seam (B4) is that the operator now reads `?SYSTEMCTL_PRIV daemon-reload` where
+  # the pre-B4 bare call produced `systemctl daemon-reload` (the `$` is sanitized to `?`).
+  #
+  # KNOWN OPERATOR-FACING WART, deliberately asserted rather than papered over: the actionable
+  # word survives, so the annotation still tells a non-technical operator WHICH step died, but
+  # the seam's variable name is noise they cannot act on. Flagged for the mandatory
+  # user-impact-reviewer pass on this PR rather than silently accepted.
+  local f_cmd
+  f_cmd=$(_frame_field fatal_cmd)
+  if [[ "$f_cmd" == *"daemon-reload"* ]]; then
+    echo "  PASS: fatal_cmd names the failing verb ($f_cmd)"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: fatal_cmd '$f_cmd' does not name daemon-reload — the operator cannot tell what died"
+    FAIL=$((FAIL + 1))
+  fi
+  local f_line
+  f_line=$(_frame_field fatal_line)
+  if [[ "$f_line" =~ ^[0-9]+$ ]] && [[ "$f_line" -gt 0 ]]; then
+    echo "  PASS: fatal_line carries a real coordinate ($f_line)"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: fatal_line is '$f_line' — attribution missing, which is #7220's original shape"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # NON-VACUITY: the files were still delivered. If this read 0 the arm would be measuring a
+  # handler that died before writing anything, not one that died at activation — a different
+  # bug wearing the same assertion.
+  local written
+  written=$(_frame_field files_written)
+  if [[ "$written" =~ ^[0-9]+$ ]] && [[ "$written" -gt 0 ]]; then
+    echo "  PASS: delivery still completed ($written files) — the failure is activation, not delivery"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: files_written='$written' — this arm is not exercising the activation failure"
+    FAIL=$((FAIL + 1))
+  fi
+
+  restart_teardown
+}
+
 test_sudoers_caller_argv_lockstep() {
   echo "TEST: lockstep — the argv the handler sends is the argv sudoers grants"
   # Sudoers matching is EXACT. A drift between the grant and the caller does not widen anything;
@@ -1065,7 +1854,7 @@ test_sudoers_caller_argv_lockstep() {
   # The single quotes below hold a sed SCRIPT; the ${...} inside is literal text being matched in
   # the handler's source, not an expansion we want performed here.
   # shellcheck disable=SC2016
-  seam_default=$(sed -n 's/^SYSTEMCTL_RESTART="\${INFRA_CONFIG_SYSTEMCTL:-\(.*\)}"$/\1/p' "$HANDLER")
+  seam_default=$(sed -n 's/^SYSTEMCTL_PRIV="\${INFRA_CONFIG_SYSTEMCTL:-\(.*\)}"$/\1/p' "$HANDLER")
   assert_eq "the restart seam defaults to a sudo-prefixed absolute systemctl" \
     "sudo /usr/bin/systemctl" "$seam_default"
 
@@ -1409,7 +2198,18 @@ test_fatal_channel_red_against_pre_fix() {
       # Naming one unmeasured cause sends the reader to fix something that was never wrong.
       echo "  SKIP (loud): pinned pre-fix commit ${PRE_FIX_HANDLER_SHA:0:9} not in this object store (shallow/partial clone, rewritten history, or not run inside the soleur checkout) — mutation proof NOT run."
       echo "              Remedy: run from a full clone (git fetch --unshallow), or re-pin to tag web-v0.248.2."
+      # 4: sabotage-reached, frame-published, no-fatal_line, files_total=0.
+      SKIPPED_ASSERTIONS=$((SKIPPED_ASSERTIONS + 4))
     fi
+    teardown
+    return 0
+  fi
+  # Guard the pin itself: if this object ever stops being the pre-fix handler (a bad rebase, a
+  # mis-typed SHA), the arm would silently prove nothing. The pre-fix handler has none of the
+  # fix's markers — assert that before trusting it as a baseline.
+  if grep -q 'local died=0' "$old"; then
+    echo "  FAIL: pinned baseline already contains the #7220 fix — it is not a pre-fix handler"
+    FAIL=$((FAIL + 1))
     teardown
     return 0
   fi
@@ -1561,6 +2361,8 @@ test_fatal_channel_handoff_requires_ownership() {
   else
     echo "  SKIP (loud): not root, so foreign ownership cannot be expressed here — the structural"
     echo "               assertions above are the only coverage in this environment."
+    # 1: the behavioural "foreign-owned handoff ignored" assertion.
+    SKIPPED_ASSERTIONS=$((SKIPPED_ASSERTIONS + 1))
   fi
 
   teardown
@@ -1587,6 +2389,14 @@ test_reconcile_timestamp_unparseable
 test_reconcile_vector_ordered_last
 test_reconcile_survives_missing_inputs
 test_reconcile_unchanged_content_preserves_mtime
+test_handler_to_grant_lint
+test_unparseable_hooks_json_is_a_hard_failure
+test_self_restart_collect_argv_lockstep
+test_webhook_start_limit_disabled
+test_daemon_reload_grant_lockstep
+test_daemon_reload_runs_on_a_clean_apply
+test_daemon_reload_reachable_with_test_mode_unset
+test_daemon_reload_denied_is_attributed
 test_sudoers_caller_argv_lockstep
 test_happy_path
 test_missing_env_var
@@ -1614,11 +2424,29 @@ test_orphan_hook_selfcheck
 # This is deliberately set to the FULL current count, i.e. zero headroom. That is what makes the
 # skip detectable, and the cost is that it must be ratcheted with every added assertion — treat a
 # floor failure on a green-looking suite as "you added assertions, update this number", not as a
-# regression. Any future environment-conditional SKIP arm must be counted here too.
-APPLY_MIN_ASSERTIONS=148
-if [[ "$PASS" -lt "$APPLY_MIN_ASSERTIONS" ]]; then
-  echo "  FAIL: assertion-count floor — only $PASS assertions ran, expected >= $APPLY_MIN_ASSERTIONS"
+# regression.
+#
+# ZERO HEADROOM AND ENVIRONMENT-CONDITIONAL SKIPS ARE IN DIRECT CONFLICT, and resolving that by
+# lowering the floor would give back exactly the detectability above. The three LOUD skip arms in
+# this suite (the AC6 RED proof and the pre-fix mutation proof, both of which need the pinned
+# pre-fix blob; and the foreign-ownership arm, which needs root) each DECLARE their assertion
+# cost into SKIPPED_ASSERTIONS at the moment they skip. The floor is then compared against
+# PASS + SKIPPED, so a declared skip on a shallow clone or a non-root runner leaves the floor
+# satisfied while a guard that stops running WITHOUT declaring anything still reds. That is the
+# distinction the previous form could not draw: it read a legitimate loud skip and a silently
+# vanished arm as the same number.
+#
+# 180 = the FULL count, measured as PASS + SKIPPED_ASSERTIONS, which is invariant across
+# environments by construction: a non-root runner declares 1, a clone without the pinned pre-fix
+# blob declares 5 (1 for the AC6 RED proof + 4 for the fatal-channel proof), and each still totals
+# 180. Verified by forcing both skip paths on a sandbox copy — see the PR body.
+APPLY_MIN_ASSERTIONS=190
+if [[ $((PASS + SKIPPED_ASSERTIONS)) -lt "$APPLY_MIN_ASSERTIONS" ]]; then
+  echo "  FAIL: assertion-count floor — $PASS assertions ran and $SKIPPED_ASSERTIONS were declared-skipped, expected >= $APPLY_MIN_ASSERTIONS"
   FAIL=$((FAIL + 1))
+fi
+if [[ "$SKIPPED_ASSERTIONS" -gt 0 ]]; then
+  echo "  NOTE: $SKIPPED_ASSERTIONS assertion(s) were declared-skipped by loud SKIP arms — this run is weaker than a full one."
 fi
 
 echo ""

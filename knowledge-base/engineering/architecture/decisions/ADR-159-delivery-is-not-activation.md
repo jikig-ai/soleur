@@ -60,6 +60,30 @@ report per-unit whether it succeeded.
 each into its status JSON (`schema_version: 2`, a `restarts` array). The CI gate adjudicates that
 array; a delivered-but-unactivated unit fails it.
 
+> **AMENDED by #7220.** As written this proposition was aspirational, not descriptive: the
+> reconciliation it promises ran *after* a `systemctl daemon-reload` that was itself ungranted and
+> therefore fatal, so on a real host the handler died at activation and the `restarts` array was
+> never reached. A per-unit verdict array is only as good as the privileged verbs it is built on.
+>
+> Proposition 1 is therefore extended: **a channel that reconciles units must also prove it HOLDS
+> the privileges reconciliation requires.** Delivery is not activation, and neither is an
+> activation step the channel is not permitted to perform. Enforcement now lives in three places —
+> the AC6 handler→grant lint (every non-READ `systemctl`/`systemd-run` verb must be sudo-prefixed
+> and granted in both sudoers sources), a `sudo -n -l -U deploy` policy probe in the bootstrap
+> provisioner (the sudoers text landing is not the same as sudo granting it), and a `DropInPaths`
+> assertion on the two drop-in-only units — the units this channel delivers drop-ins for and
+> never restarts, so the reload is the only activation step IT performs for them.
+>
+> **CORRECTION, same review.** An earlier phrasing said those two units are in "neither
+> RESTART_MAP nor the grant set" and that the reload is their *entire* activation story. Both
+> overstate it. `inngest-server` IS in the grant set
+> (`INNGEST_RESTART`/`START`/`STOP`/`QUIESCE`/`ENABLE`), and `ci-deploy.sh`'s `case inngest)` runs
+> `inngest-bootstrap.sh` as root, which performs its own `daemon-reload` and restarts both units —
+> a second, co-located reconciliation channel. The claim that survives is still damning and is the
+> one this ADR needs: activation **via the config channel** never happened, and the channel had no
+> way to know whether anything else had covered it. Unknown coverage is not proven staleness, and
+> a channel that cannot tell the difference is the defect Proposition 1 is about.
+
 Reconciliation is folded into the handler rather than exposed as a separate `restart-unit` webhook.
 The event requiring the restart *is* the delivery, so coupling them means the decision is made where
 the delivery outcome is already known. A separate remote-triggerable restart primitive on the one
@@ -141,7 +165,30 @@ sub-second `ExecStart`, so it reads `inactive` on essentially every apply: the e
 `skipped/unit_inactive` *forever*, which made the narrowing above the STEADY STATE on a correct
 host rather than the edge case it is described as — precisely the alert fatigue #7103 B3 names. The
 grant bought nothing either, because a timer-driven oneshot re-reads its drop-in on its next tick
-after the `daemon-reload` the handler already performs. Proposition 1 says a channel must reconcile
+after the `daemon-reload` the handler already performs.
+
+> **AMENDED by #7220 — the premise in the preceding sentence was FALSE when written.** The handler
+> did not "already perform" a `daemon-reload`. It invoked one, but as `User=deploy` with no sudoers
+> grant: the call returned `Interactive authentication required` and `set -e` aborted the handler
+> AFTER all 19 files were written and BEFORE any unit was reconciled. That had been true since
+> roughly 2026-05; #7146 did not break it, it moved the call above the state write and so converted
+> a silent failure into a loud one.
+>
+> The *conclusion* below survives — a timer-driven oneshot genuinely does not need a restart grant —
+> but it survived by luck, not by the argument given. `inngest-heartbeat.service` re-reads its
+> drop-in on the next tick after a reload **that was not happening**, so from #7095 until #7220 it
+> ran the revoked credential exactly as if the grant had been withheld deliberately. The reasoning
+> was sound about restart grants and wrong about the state of the world it assumed.
+>
+> The corrected general rule is stronger than the one below: **before arguing that a unit needs no
+> restart primitive because `daemon-reload` activates it, establish that the reload itself is
+> granted and observed.** An activation argument that rests on an unverified privileged verb is an
+> assumption wearing the costume of a decision. #7220 adds the grant, an AC6 handler→grant lint that
+> fails any privileged verb the handler invokes without a matching `Cmnd_Alias` in both sudoers
+> sources, and a `DropInPaths` post-write assertion on both drop-in-only units — so the premise is
+> now enforced rather than asserted.
+
+Proposition 1 says a channel must reconcile
 the units that consume its configuration; it does not say every consumer needs a restart primitive,
 and the same argument that rejects a `restart-unit` webhook rejects a standing root-restart grant
 that activates nothing. The general rule: **before granting a restart, establish that a restart is

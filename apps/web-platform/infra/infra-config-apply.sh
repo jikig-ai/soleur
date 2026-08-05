@@ -320,11 +320,17 @@ CRED_FILE="/etc/default/soleur-doppler-token"
 #           DROPIN_TRY_RESTART grant pins `try-restart` only), turning every read into a failure.
 #   WRITE — must expand to the exact argv the sudoers alias grants. sudo matches the full
 #           resolved command, so a stray flag here is a denial, not a widening.
+#
+# #7220 B3 — the WRITE seam is named SYSTEMCTL_PRIV, not SYSTEMCTL_RESTART, because it now
+# carries two verbs: `try-restart <unit>` (DROPIN_TRY_RESTART) and `daemon-reload`
+# (SYSTEMCTL_DAEMON_RELOAD). The env override keeps its original name so nothing downstream
+# has to change. Both verbs are granted separately and matched exactly by sudo; the seam is
+# only the shared prefix, never an authorisation of its own.
 # The seam exists so the predicate, the grading and the ordering all run UNGUARDED in sandbox
 # mode. Gating them behind INFRA_CONFIG_TEST_MODE instead would mean the assertions covering
 # this logic assert behaviour that never executes in the test run.
 SYSTEMCTL_SHOW="${INFRA_CONFIG_SYSTEMCTL_SHOW:-/usr/bin/systemctl}"
-SYSTEMCTL_RESTART="${INFRA_CONFIG_SYSTEMCTL:-sudo /usr/bin/systemctl}"
+SYSTEMCTL_PRIV="${INFRA_CONFIG_SYSTEMCTL:-sudo /usr/bin/systemctl}"
 
 # Seconds to wait before grading a restart by effect. try-restart returns as soon as the unit is
 # forked, so reading ActiveState immediately would grade a process that has not yet lived long
@@ -553,6 +559,55 @@ logger -t "$LOG_TAG" "complete: $WRITTEN_COUNT/$TOTAL_COUNT files written, $FAIL
 # FILE_MAP, but it exists on disk in prod so it passes the on-disk existence check.
 hooks_dest="${DESTDIR}/etc/webhook/hooks.json"
 if [[ -f "$hooks_dest" ]] && command -v jq >/dev/null 2>&1; then
+  # #7220 AC-B2.1 — PARSE FAILURE IS A HARD FAILURE, not a silent pass.
+  #
+  # The sweep below reads commands through `jq … 2>/dev/null || true`, so a syntactically
+  # invalid hooks.json yields NO commands and the loop finds nothing to complain about. That was
+  # survivable only while the webhook self-restart was unreachable. B2's grant makes it live, so
+  # the handler would now restart webhook 3s later and it would come up serving ZERO hooks —
+  # adnanh/webhook with -verbose does not abort on an unparseable hooks file.
+  #
+  # The port then ANSWERS, which is the trap: the CI verify's 000/502/503 "listener is down"
+  # branch never fires, and the 404 branch does instead, whose remediation text points the
+  # operator at "first bootstrap". Wrong diagnosis, delivered over the one channel that can
+  # still repair the host — and the host has no SSH runbook. Self-wedge.
+  #
+  # `jq empty` is the canonical parse check: it exits non-zero only on a syntax error, unlike
+  # `jq -e .`, which also exits 1 on a valid document whose top level is `null` or `false`.
+  # SHAPE, not just SYNTAX. `jq empty` alone exits 0 on a ZERO-BYTE file (it reads no input) and
+  # on any valid non-array — and adnanh/webhook needs `[]hook.Hook`, so an object or an empty
+  # file yields the SAME "serving zero hooks" outcome as a parse error. Measured: 0-byte rc=0,
+  # `{"id":"x"}` rc=0. A truncated payload is precisely the shape a half-rendered delivery
+  # produces, so the syntax-only check let the self-wedge straight through.
+  if ! jq -e 'type == "array" and length > 0' "$hooks_dest" >/dev/null 2>&1; then
+    # Load-bearing, not bookkeeping: this is what actually suppresses the self-restart at the
+    # bottom of the script. Detecting the bad payload without suppressing activation would
+    # leave the self-wedge fully intact while the message claimed otherwise.
+    HOOKS_PARSE_OK=0
+    logger -t "$LOG_TAG" "SOLEUR_INFRA_CONFIG_HOOK_UNPARSEABLE reason=hooks_json_did_not_parse" 2>/dev/null || true
+    echo "ERROR: the just-delivered /etc/webhook/hooks.json does not parse as JSON — webhook would restart serving ZERO hooks and answer 404 on every path. Refusing to activate." >&2
+    # ONE VERDICT PER FILE (#7220 review). The write loop above already recorded hooks.json as
+    # status=ok — correctly, on its own terms: the bytes landed. Appending a second object for the
+    # same path left files[] carrying BOTH, so any consumer reading per-file verdicts saw this
+    # path twice with contradictory answers, and the operator alert's failed-file list named a
+    # file the same array also called fine. Replace the earlier verdict rather than adding to it,
+    # and move the accounting with it so files_written + files_failed still reconciles against
+    # files_total.
+    _hooks_failed="{\"file\":\"/etc/webhook/hooks.json\",\"sha256\":\"\",\"status\":\"failed\",\"reason\":\"hooks_json_unparseable\"}"
+    # `|| true` inside the substitution: a no-match grep under `set -e` would abort the handler
+    # here, which is mid-delivery on the only remediation channel this host has.
+    _hooks_ok=$(printf '%s' "$FILES_JSON" \
+      | grep -oE '\{"file":"/etc/webhook/hooks\.json","sha256":"[0-9a-f]*","status":"ok"[^}]*\}' \
+      | head -1 || true)
+    if [[ -n "$_hooks_ok" ]]; then
+      FILES_JSON="${FILES_JSON//"$_hooks_ok"/$_hooks_failed}"
+      WRITTEN_COUNT=$((WRITTEN_COUNT - 1))
+    else
+      [[ -n "$FILES_JSON" ]] && FILES_JSON+=","
+      FILES_JSON+="$_hooks_failed"
+    fi
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+  else
   while IFS= read -r cmd_path; do
     [[ -n "$cmd_path" ]] || continue
     case "$cmd_path" in /usr/local/bin/*) : ;; *) continue ;; esac
@@ -578,6 +633,7 @@ if [[ -f "$hooks_dest" ]] && command -v jq >/dev/null 2>&1; then
       FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
   done < <(jq -r '.[]."execute-command" // empty' "$hooks_dest" 2>/dev/null || true)
+  fi
 fi
 
 # --- Activate what was delivered (#7103 R2 3.3/3.5/3.6/3.7) --------------------------------
@@ -586,13 +642,22 @@ fi
 # sync/daemon-reload ran afterwards; a restart decided after the frame was published could never
 # appear in it.
 #
-# sync + daemon-reload stay behind INFRA_CONFIG_TEST_MODE (they need a real host). The
-# reconciliation loop does NOT — it runs through the seams in sandbox mode so the predicate,
-# the grading and the ordering are actually exercised by the suite rather than gated out of it.
+# #7220 B4 — SPLIT. `sync` stays behind INFRA_CONFIG_TEST_MODE because it needs a real host and
+# has no seam. `daemon-reload` moves OUT and onto the WRITE seam, for two independent reasons:
+#
+#   1. It was the #7220 bug. The bare `systemctl daemon-reload` that stood here ran as
+#      User=deploy with no grant, returned "Interactive authentication required", and set -e
+#      aborted the handler after all 19 files were written but before any unit was reconciled.
+#      Routing it through SYSTEMCTL_PRIV is what makes it match the sudoers alias.
+#   2. Gated out of the suite, it was untestable by construction. A verb the tests never see is
+#      a verb whose denial the tests cannot detect — which is precisely why this shipped
+#      unnoticed for ~3 months. On the seam it executes in sandbox mode against the stub, so
+#      the reload-denied and reload-success arms exercise real code rather than asserting
+#      behaviour that never runs.
 if [[ -z "${INFRA_CONFIG_TEST_MODE:-}" ]]; then
   sync
-  systemctl daemon-reload
 fi
+$SYSTEMCTL_PRIV daemon-reload
 
 RESTARTS_JSON=""
 for restart_entry in "${RESTART_MAP[@]}"; do
@@ -657,7 +722,7 @@ for restart_entry in "${RESTART_MAP[@]}"; do
         # reported as `sudo_denied`, so the derived remediation ("repair DROPIN_TRY_RESTART") sent
         # an agent at a grant that server.tf already asserts is present, leaving no next lever
         # short of SSH.
-        r_err=$($SYSTEMCTL_RESTART try-restart "$r_unit" 2>&1 >/dev/null) || r_rc=$?
+        r_err=$($SYSTEMCTL_PRIV try-restart "$r_unit" 2>&1 >/dev/null) || r_rc=$?
         if [[ "$r_rc" -ne 0 ]]; then
           # try-restart returns non-zero when the restart JOB fails (start error, dependency
           # failure, timeout), not only when sudo refuses. Those are different defects with
@@ -776,11 +841,29 @@ fi
 #
 # It stays LAST because it kills the process serving this request: anything sequenced after it
 # is not guaranteed to run.
+#
+# #7220 review — ONE EXCEPTION to "unconditional", and it is the self-wedge case. The paragraph
+# above is right that a partial apply must still restart (that is the #4804 self-heal). It is
+# WRONG for an unparseable hooks.json specifically, because restarting is what ACTIVATES it:
+# adnanh/webhook with -verbose does not abort on a bad hooks file, it comes up serving ZERO
+# hooks. The port then answers, so the CI verify's 000/502/503 "listener is down" branch never
+# fires and the 404 branch does, whose remediation text says "first bootstrap" — the wrong
+# diagnosis, on the only channel that can still repair a host with no SSH.
+#
+# NOT restarting is strictly safer here: the webhook keeps serving the PREVIOUS, valid
+# hooks.json, so the remediation channel survives and the next apply self-heals. This is the
+# only FAIL_COUNT contributor for which that is true, which is why it gets its own flag rather
+# than gating on FAIL_COUNT.
 if [[ -z "${INFRA_CONFIG_TEST_MODE:-}" ]]; then
-  logger -t "$LOG_TAG" "scheduling self-restart in 3s"
-  # Self-restart: schedule a delayed restart so the HTTP 202 response
-  # completes before the webhook binary is killed.
-  sudo /usr/bin/systemd-run --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook
+  if [[ "${HOOKS_PARSE_OK:-1}" != "1" ]]; then
+    logger -t "$LOG_TAG" "SOLEUR_INFRA_CONFIG_SELF_RESTART_SUPPRESSED reason=hooks_json_unparseable" 2>/dev/null || true
+    echo "REFUSING TO ACTIVATE: the delivered hooks.json does not parse, so the webhook is NOT being restarted. It keeps serving the previous, valid hook table — which is what leaves this host reachable. Fix the payload and re-apply." >&2
+  else
+    logger -t "$LOG_TAG" "scheduling self-restart in 3s"
+    # Self-restart: schedule a delayed restart so the HTTP 202 response
+    # completes before the webhook binary is killed.
+    sudo /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook
+  fi
 fi
 
 exit "$EXIT_CODE"
