@@ -23,10 +23,31 @@ Updated 2026-08-05 (second session). Every command below was run; nothing is rec
 | PR | **#7290** — OPEN, **DRAFT**. Body carries `Closes #7277`. |
 | Suites | `test-registry-pull-path-health.sh` **46/0**, `test-registry-restore-from-ghcr.sh` **34/0** |
 | Mutation | 15/15 (engine) + 13/13 (gate) caught — **must be re-run**, both files changed after |
-| Exit gate | `bash scripts/test-all.sh` was still running at hand-off (101 suites, 0 failed). **Re-run it.** |
+| Exit gate | **VOID — must be re-run from scratch.** See "The exit gate result is not usable" below. |
 | Net issue flow | 0 — closes #7277, files #7295 |
 
 Phases 0–4 are committed. Phase 5 is **not** finished.
+
+---
+
+## The exit gate result is not usable — re-run it on a clean tree
+
+A `bash scripts/test-all.sh` run reached **465 suites, 0 failed** at hand-off. **Do not read that
+as a green exit gate.** It was launched at 16:52 against one tree, spent ~15 minutes queued on
+another worktree's advisory lock, and then executed while the review fixes were committed
+underneath it at **17:06:54** and **17:08:28**. Early suites read pre-fix files; later suites read
+post-fix files.
+
+That is the documented trap — an exit gate describes only the tree you launched it against, and if
+an edit cannot wait you kill the run rather than reinterpreting its output. The rule exists
+precisely because "each suite probably read a self-consistent snapshot" is reasoning, not
+measurement.
+
+**Re-run it on the final tree, with `git status --porcelain` empty, and do not edit under it.**
+Note the sibling-worktree contention banner: a run can sit at ~1130 bytes for many minutes because
+it is QUEUED on the lock, which is not a hang — check for the banner before killing anything, and
+resolve sibling PIDs by `/proc/<pid>/cwd` rather than by pattern-matching (`pgrep -f test-all`
+matches its own command line).
 
 ---
 
