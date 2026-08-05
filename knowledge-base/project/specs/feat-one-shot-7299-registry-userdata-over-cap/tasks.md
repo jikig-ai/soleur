@@ -62,6 +62,39 @@ Closes: #7299 · Branch: `feat-one-shot-7299-registry-userdata-over-cap` · PR: 
       from `infra/github/`, which Phase 3's descope leaves untouched.)
 - [x] 5.6 Assert the strip expression appears exactly once as an assignment repo-wide. (AC3)
 
+## Phase 5.5 — Review fixes (10-agent panel; all fixed inline, none filed as scope-out)
+
+- [x] 5.5.1 **P1** Assert the strip is APPLIED, not just declared. Unwiring `replace(` left the
+      gate reporting 9,408 B / exit 0 on a tree storing 36,404 B. Three agents converged;
+      ADR-152 already recorded it as measured ("Assert on the RENDER EXPRESSION").
+- [x] 5.5.2 **P1** Add a 4,000 B plausibility floor + `#cloud-config`-survives assertion. Every
+      numeric arm was a ceiling, so an over-broad strip reported MAXIMUM headroom for a payload
+      that boots a dark host.
+- [x] 5.5.3 **P1** `length()` counts graphemes, not bytes, against a byte cap; the comment
+      blaming a ~300 B delta on console re-escaping was false (that WAS the UTF-8 delta).
+- [x] 5.5.4 **P1** `terraform` absent exited 0 — the last measure-nothing-report-green path.
+      Fails closed in CI in both the script and the suite.
+- [x] 5.5.5 **P1** `detect-changes` push base `HEAD^1` → `github.event.before`: a multi-commit
+      or admin push with a docs-only tip yielded `DIRS=[]` and a green run validating nothing.
+- [x] 5.5.6 **P1** Suite rebuilt to 16 checks: adds the two missing mutation arms, the stored
+      floor, an assertion on `cap` (nothing read it), and a cross-check against the TS model's
+      extracted bounds (implements AC2). `checks < 8` → `EXPECTED_CHECKS` equality.
+- [x] 5.5.7 Over-cap message now discriminates broken-regex from payload growth.
+- [x] 5.5.8 stderr re-checked after the last console call; `raw`/`stripped` emptiness guarded.
+- [x] 5.5.9 Heartbeat stubs 24 → 64 chars so "stubs are upper bounds" is true by construction.
+- [x] 5.5.10 ADR-096: byte cap retracted as a live blocker, including in the ROLLBACK procedure.
+- [x] 5.5.11 ADR-152: byte-exact-measurement gap marked closed.
+- [x] 5.5.12 Four false comments corrected (`^`-anchor claim, #7283 timeline, run-registered-suites
+      derivation, "distinct value is byte-exact"). #7282 → PR #7283 provenance.
+- [x] 5.5.13 `notify-main-failure` job added — the push-on-main trigger had no consumer, which
+      would have reproduced this PR's own defect one layer up.
+- [x] 5.5.14 `deploy-script-tests` timeout 8 → 12, re-derived as its comment mandates (measured
+      384–501 s against a 480 s ceiling: already cancelling 14% of runs).
+- [x] 5.5.15 Plan swept — 7 sections still described the descoped Phase 3 design.
+- [x] 5.5.16 Filed #7307 (main-health-monitor dark). Corrected #7302's false #6480 dependency.
+- [x] 5.5.17 Mutation-proven with a green control: understated bytes, swapped cap, reverted strip
+      application, and neutered dispatch all now red.
+
 ## Phase 6 — Ship
 
 - [ ] 6.1 PR body states the premise correction plainly, including the precision note (stock,

@@ -1472,3 +1472,36 @@ jobs:
       - name: Fail job on plan failure
         if: steps.plan.outputs.exit_code != '0'
         run: exit 1
+
+  # (#7299) THE PUSH-ON-MAIN TRIGGER NEEDS A CONSUMER, or it reproduces the defect this PR fixes.
+  #
+  # #7299 hid for two weeks because a permanently-red advisory check trains every reader to skip
+  # it. Adding a main-branch run with nothing watching it recreates that one layer up: verified at
+  # review time, NO workflow_run watcher names `Infra Validation` (post-merge-monitor.yml watches
+  # "CI" and filters on [bot-fix] commits), there is no Slack/Discord hook, and this workflow
+  # makes zero calls to notify-ops-email — the idiom 10 other workflows use. GitHub's built-in
+  # failed-run email routes to the pushing actor, which reusable-release.yml already documents as
+  # "frequently a GitHub App identity, i.e. nobody".
+  #
+  # PUSH ONLY. On a pull_request the red check is on the PR, where the author sees it; an email
+  # there would be noise. `always()` is required because this job exists to run when its
+  # dependencies failed. `continue-on-error` so a Resend outage cannot itself red the run.
+  notify-main-failure:
+    needs: [detect-changes, validate, deploy-script-tests, registry-userdata-budget, infra-validate-required]
+    if: |
+      always() && github.event_name == 'push' &&
+      (needs.validate.result == 'failure' ||
+       needs.deploy-script-tests.result == 'failure' ||
+       needs.registry-userdata-budget.result == 'failure' ||
+       needs.infra-validate-required.result == 'failure')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Email ops on a red Infra Validation run on main
+        continue-on-error: true
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[ALERT] Infra Validation failed on main'
+          body: '<p><strong>Infra Validation failed on a push to main.</strong></p><p>Commit: <code>${{ github.sha }}</code></p><p>validate=${{ needs.validate.result }} · deploy-script-tests=${{ needs.deploy-script-tests.result }} · registry-userdata-budget=${{ needs.registry-userdata-budget.result }} · infra-validate-required=${{ needs.infra-validate-required.result }}</p><p>A red infra gate on main means the merged state was never validated by a PR run of this workflow — an admin/force merge, or two individually-green PRs whose merge order produced an untested state.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
