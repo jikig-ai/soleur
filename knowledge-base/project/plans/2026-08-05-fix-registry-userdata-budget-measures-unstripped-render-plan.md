@@ -1,0 +1,419 @@
+---
+title: "fix: registry-userdata-budget.sh measures a payload Terraform never stores"
+type: fix
+date: 2026-08-05
+branch: feat-one-shot-7299-registry-userdata-over-cap
+closes: 7299
+lane: cross-domain
+brand_survival_threshold: none
+---
+
+# fix: `registry-userdata-budget.sh` measures a payload Terraform never stores
+
+## Overview
+
+Issue #7299 reports that the registry host **cannot be re-provisioned** because its rendered
+`user_data` is 3,636 B over Hetzner's 32,768 B cap, and proposes recovering ≥3,636 B by
+extending `local.registry_rationale_strip`.
+
+**The premise is false, and the proposed fix would be work on a defect that does not exist.**
+The strip already exists, is already applied by `zot-registry.tf`, and already recovers ~27 kB.
+The real production `user_data` is **9,404 B** — 23,364 B *under* cap. The registry host can be
+re-provisioned today.
+
+The actual defect is in the *measurement*: `apps/web-platform/infra/registry-userdata-budget.sh`
+renders `templatefile(...)` **raw**, omitting the `replace(..., local.registry_rationale_strip, "")`
+that `zot-registry.tf:494` applies before `base64gzip`. The script measures a payload that is
+never stored on any host.
+
+This plan fixes the measurer, closes the divergence that allowed it, and then re-decides the
+issue's Part 2 (gate promotion) against the corrected facts.
+
+Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed).
+
+## Premise Validation
+
+Every claim in the issue body was checked against the branch (fresh from `origin/main` @ `6720f2ae0`).
+
+| Issue claim | Reality | Evidence |
+|---|---|---|
+| Registry `user_data` is 3,636 B over cap | **False for what is stored.** Stored (stripped) render is 9,404 B — **+23,364 B headroom** | measured below |
+| "The registry host cannot be re-provisioned" | **Not for this reason.** `user_data` does not block it. See the precision note below | same |
+| "hcloud would reject the CREATE after the DESTROY" | True *as a mechanism*, but not reachable — the payload fits | `zot-registry.tf:494` |
+| Fix = extend `registry_rationale_strip` to recover ≥3,636 B | **Wrong target.** The strip exists (`zot-registry.tf:388`) and already recovers 26,999 B | `zot-registry.tf:388,494` |
+| `registry-userdata-budget.sh` exits 1 | **True** — it is the *only* true claim, and it is a measurement bug | reproduced, EXIT=1 |
+| Budget check is ADVISORY, "did not block the breaking merge" | Script is advisory (`continue-on-error: true`), but **there was no breaking merge** — the correct measurer is required and was green throughout | see below |
+| `Infra Validation` has not run on `main` | True — it is `pull_request:`-only (`infra-validation.yml:12`) | verified |
+
+### Precision note — do not replace one false claim with another
+
+"The registry host can be re-provisioned" is true **with respect to `user_data`**, which is the
+claim #7299 makes and the only one this plan adjudicates. A *separate*, already-tracked constraint
+does bear on registry re-provisioning: `model.c4:182,276` records that `soleur-registry` runs on
+`cx23`, and the 2026-07-26 live stock probe found the entire `cx` and `cax` lines orderable in 0
+of 3 EU DCs — so the host "runs fine but cannot be rebuilt on its current type" (#6460). The
+registry-host-replace apply is tracked by #7287 and blocked on #7277/#7278/#6929 **plus Hetzner
+stock** — never on a `user_data` breach.
+
+That distinction matters for the incident framing in the issue: had an operator reached for
+"re-provision the registry host" during the open zot crash-loop deploy block, the budget would not
+have been what stopped them. This plan removes a false blocker from the record; it does not claim
+the replace path is unobstructed.
+
+### The measurement, both ways
+
+Rendered offline with the script's own stub variable map and terraform's own `base64gzip`:
+
+| render | raw | stored (`base64gzip`) | vs 32,768 B cap |
+|---|---|---|---|
+| unstripped — what `registry-userdata-budget.sh` measures | 74,301 B | 36,404 B | **−3,636 B** ❌ |
+| stripped — what `zot-registry.tf` actually stores | 23,832 B | **9,404 B** | **+23,364 B** ✅ |
+
+### Corroboration: a second, independent, *required* measurer is green
+
+`plugins/soleur/test/cloud-init-user-data-size.test.ts` carries a full registry arm (#7278) that
+**extracts** the strip expression from `zot-registry.tf` rather than restating it, asserts the strip
+is applied inside the `hcloud_server.registry` block, and measures the stripped render. Its own
+header comment states the strip takes the render "to ~9 KB" — matching the 9,404 B measured above.
+
+- `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts` → **38 pass, 0 fail**.
+- That test runs via `scripts/test-all.sh bun` → `bun test plugins/soleur/` (`test-all.sh:637`).
+- `test` **is** a required status check (`infra/github/ruleset-ci-required.tf:92`, live-verified
+  against ruleset `14145388`).
+
+So the registry `user_data` budget has been guarded by a **required, green, correct** check the
+whole time. Nothing broke; nothing merged through a hole.
+
+### Why the script is wrong, and why it shipped that way
+
+`registry-userdata-budget.sh` was added by #7282 and landed in `6720f2ae0`. Its header claims:
+
+> "Render `cloud-init-registry.yml` **exactly as `zot-registry.tf` does**, and measure the STORED
+> user_data the way Hetzner measures it."
+
+Both halves are false as written — `zot-registry.tf` strips, the script does not.
+
+This was not an oversight in the dark. `infra-validation.yml:1178-1180` says it explicitly:
+
+> "It cannot be a hard gate YET. The check is RED on `main` today (-2,032 B) and on this branch
+> (~-3.6 kB), all of it rationale prose. **#7280's `local.registry_rationale_strip` strips comments
+> BEFORE render and brings it to ~9.4 kB.**"
+
+The author knew the strip was the resolution and shipped the job `continue-on-error: true` pending
+#7280. **#7280 has since merged** (`d0295964f`) — the strip is live. The script was simply never
+updated to apply it, so its advisory job has been reporting a phantom breach ever since.
+
+`main` reading moved −2,032 B → −3,636 B when #7283 lengthened the pin, exactly as an unstripped
+measurement would.
+
+### The structural cause: a "ONE COPY" invariant that silently became false
+
+`zot-registry.tf:383-386` asserts:
+
+> "**ONE COPY.** `plugins/soleur/test/cloud-init-user-data-size.test.ts` EXTRACTS this expression
+> from this file rather than restating it… git-data needed a dedicated parity suite to keep its two
+> copies equal; **there is nothing here to keep equal.**"
+
+That was true when written. #7282 added a *second* consumer of the render — the shell script —
+which neither extracted the expression nor applied it. The invariant the comment relies on was
+falsified by a later PR, and no control existed to notice: the git-data host has
+`git-data-render-strip-parity.test.sh` for exactly this class; the registry host has no
+`registry-render-strip-parity.test.sh`.
+
+## Research Reconciliation — Issue vs. Codebase
+
+| Issue claim | Reality | Plan response |
+|---|---|---|
+| Recover ≥3,636 B via `registry_rationale_strip` | Strip exists and already recovers 26,999 B | **Drop.** No bytes need recovering. Fix the measurer instead |
+| "Leave meaningful headroom, not +10 B" | Real headroom is +23,364 B (71% of cap free) | Satisfied already; AC asserts a floor to keep it true |
+| Registry re-provision is blocked | It is not | Correct the record in the PR body and on the issue |
+| Promote check advisory → required | The *correct* measurer is already required | Still promote the script, as byte-exact defense-in-depth — see Phase 3 |
+| `Infra Validation` should run on `main` push | True gap, but not the cause here | Adopt — for merge-skew, not for this bug |
+
+## User-Brand Impact
+
+**If this lands broken, the user experiences:** nothing user-facing directly — but a wrong
+`registry-userdata-budget` reading is load-bearing on operator judgment during an incident. The
+issue already caused a real cost: it recommended re-provisioning be treated as unavailable during
+the open zot mirror crash-loop deploy block, which would have removed a genuinely-working recovery
+move from consideration at the worst moment.
+
+**If this leaks, the user's data/workflow/money is exposed via:** no exposure vector. The script
+renders with stub credentials into a scratch dir, touches no state, and ships to no host.
+
+**Brand-survival threshold:** `none` — a CI measurement tool with no runtime, no persistence and
+no user-reachable surface. `threshold: none, reason: the change is confined to a local CI
+measurement script, a comment correction, and CI gate wiring; no product code, no data path, and
+no host payload changes.`
+
+## Implementation Phases
+
+### Phase 1 — Make the measurer measure what Terraform stores
+
+Files: `apps/web-platform/infra/registry-userdata-budget.sh`
+
+1. Extract `registry_rationale_strip` from `zot-registry.tf` — **never restate it**. Mirror the
+   anchored-assignment parse the script already uses for `ZOT_IMAGE` and that the TS test uses for
+   this same expression. Fail closed (`exit 2`) when the expression is absent, matches more than
+   once, or is not a slash-delimited `(?m)`-anchored terraform regex literal.
+2. Emit the extracted expression into the scratch `locals` block and wrap the render:
+   `stripped = replace(local.rendered, local.registry_rationale_strip, "")`, then
+   `stored = base64gzip(local.stripped)`.
+3. Report **both** figures so a future reader can see the strip working rather than inferring it:
+   raw rendered, stripped rendered, stored, cap, headroom. Extend the `--json` object with the
+   stripped figure (additive — existing keys keep their meaning).
+4. Correct the two false header claims (lines 3-4 and 21-26) to state that the render mirrors
+   `zot-registry.tf` *including* the strip, and that the strip is extracted, not copied.
+
+Expected result: `EXIT=0`, headroom `+23,364 B`.
+
+### Phase 2 — Restore the "ONE COPY" invariant as an enforced fact
+
+Files: `apps/web-platform/infra/zot-registry.tf`
+
+The comment at `:383-386` is now false. Phase 1 makes it true again (the script extracts rather
+than restates), so the correction is to **name the second extractor** rather than to weaken the
+claim:
+
+- Update the block to name both extractors — the TS test and `registry-userdata-budget.sh` — and
+  keep the "nothing to keep equal" reasoning, which survives *because* both extract.
+- Add the one-line reason the invariant is fragile: a future consumer that *restates* the
+  expression re-opens exactly this defect.
+
+**Decision: no `registry-render-strip-parity.test.sh`.** git-data needs a parity suite because it
+genuinely has two *copies* (`modules/git-data-userdata/main.tf:49` and
+`git-data-userdata-budget.sh:52`). After Phase 1 the registry has one declaration and two
+extractors, so there is nothing to keep equal — a parity test would assert a tautology. The
+enforcing control is instead the extractor's own fail-closed parse (Phase 1 step 1), which is
+strictly stronger: it fails when the expression is missing or malformed, which a copy-comparator
+cannot do.
+
+### Phase 3 — Promote the job to a required check (the issue's Part 2, re-decided)
+
+Files: `.github/workflows/infra-validation.yml`, `infra/github/ruleset-ci-required.tf`
+
+Blast radius was assessed before committing to this:
+
+- **No `infra-validation` job is currently a required check** — not even `infra-validate-required`,
+  despite the name. Live ruleset `14145388` carries 21 contexts, none from this workflow.
+- The budget job is gated `if: needs.detect-changes.outputs.directories != '[]'`, so on a
+  docs-only PR it is **skipped**. A skipped required check never reports and blocks merge
+  indefinitely. **This is the trap that must be handled, not discovered later.**
+
+Therefore:
+
+1. Remove `continue-on-error: true` from the `registry-userdata-budget` job. Its stated
+   precondition ("gated on #7280 merging") is satisfied.
+2. Change the job's gate to `if: always()` and early-exit 0 inside the step when
+   `directories == '[]'` — the exact pattern `infra-validate-required` already uses
+   (`infra-validation.yml:322-337`). This makes the context always report.
+3. Add the context to `infra/github/ruleset-ci-required.tf` and let `apply-github-infra.yml`
+   apply it.
+4. Update the `#7287` pointer comment (`infra-validation.yml:1186-1187`) to record that the flip
+   happened here, and correct the surrounding rationale, which currently asserts a live breach.
+
+**Honest framing for the PR body:** this is defense-in-depth, not a hole being closed. The budget
+is already guarded by the required `test` context. The script's unique value is that it measures
+with terraform's *own* `base64gzip` (byte-exact), whereas the TS test explicitly models the size
+with node `zlib.gzipSync` and documents itself as "NOT byte-exact".
+
+### Phase 4 — Run `Infra Validation` on pushes to `main` (the issue's Part 2b)
+
+Files: `.github/workflows/infra-validation.yml`
+
+Adopt, with corrected reasoning. With Phase 3 in place a broken budget cannot merge through the
+PR gate, so this is **not** the fix for #7299. It is worth doing for the case the PR gate
+structurally cannot catch: two PRs each individually green whose *merge order* produces a state
+neither one tested (precisely how #7283's pin bump interacted with an already-drifting
+measurement), plus admin-bypass merges.
+
+- Add a `push:` trigger on `main` with the same `paths:` set as the existing `pull_request:` block.
+- Keep the path filter — an unfiltered `push:` puts the full infra matrix on every merge.
+- The `plan` job must stay PR-only or remain credential-gated; do not widen anything that needs
+  `prd_terraform` on a push event.
+
+### Phase 5 — Correct the record
+
+- PR body states the premise correction plainly: the registry was never un-reprovisionable.
+- `Closes #7299` — the issue is genuinely resolved, just not by the route it proposed.
+- Post a comment on #7299 recording the measured figures, so the "cannot be re-provisioned"
+  claim is not left standing in the issue history for a future operator to find during an incident.
+
+## Acceptance Criteria
+
+### Pre-merge (PR)
+
+1. `bash apps/web-platform/infra/registry-userdata-budget.sh` exits **0**, and prints headroom
+   ≥ 20,000 B. (Verified against the real script — not a re-derivation.)
+2. The script's stored-byte figure equals the TS test's registry figure within 2%; both describe
+   the same stripped render.
+3. `grep -c 'registry_rationale_strip' apps/web-platform/infra/registry-userdata-budget.sh` ≥ 1,
+   and the script contains **no** slash-delimited copy of the regex body — assert the *extraction*,
+   not the token: the expression appears exactly once in the repo as an assignment
+   (`grep -rn 'registry_rationale_strip[[:space:]]*=' apps/web-platform/infra/ | wc -l` == 1,
+   in `zot-registry.tf`).
+4. Fail-closed proof: with `registry_rationale_strip` temporarily removed from a scratch copy of
+   `zot-registry.tf`, the script exits **2** (not 0, not 1) with a named diagnostic.
+5. `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts` → 38 pass, 0 fail (unchanged —
+   this plan must not perturb the existing correct measurer).
+6. `bash scripts/test-all.sh` is green (full suite; catches orphan infra suites).
+7. `actionlint .github/workflows/infra-validation.yml` is clean, and every edited `run:` snippet
+   parses under `bash -c`.
+8. `terraform fmt -check` and `terraform validate` clean for `infra/github/`.
+9. `registry-userdata-budget` reports a **conclusion on a docs-only diff** (does not hang as a
+   skipped required check) — verified by inspecting the job's `if:` and the early-exit branch.
+10. No `continue-on-error:` remains on the `registry-userdata-budget` job.
+11. `zot-registry.tf`'s strip comment names both extractors and contains no claim that is false
+    at HEAD.
+
+### Post-merge (automated)
+
+12. `apply-github-infra.yml` applies the ruleset change; `gh api repos/jikig-ai/soleur/rulesets/14145388`
+    lists `registry-userdata-budget` among required contexts. **Automation: in-workflow** — the
+    apply workflow fires on merge; `/ship` polls it. No operator step.
+13. `Infra Validation` appears in the workflow-run list for the merge commit — proving Phase 4's
+    `push:` trigger fires. Self-verified via `gh run list --commit <sha>`.
+
+## Observability
+
+```yaml
+liveness_signal:
+  what: registry-userdata-budget job conclusion on every infra PR and every main push
+  cadence: per-PR + per-merge (post Phase 4)
+  alert_target: GitHub required-check failure blocks merge
+  configured_in: .github/workflows/infra-validation.yml + infra/github/ruleset-ci-required.tf
+error_reporting:
+  destination: GitHub Actions job log + required-check status
+  fail_loud: true — exit 2 on unmeasurable template or unextractable strip; exit 1 over cap.
+             Never exits 0 on an unmeasurable render (existing fail-closed behavior retained).
+failure_modes:
+  - mode: strip expression removed or renamed in zot-registry.tf
+    detection: script exit 2, named diagnostic
+    alert_route: required check fails, merge blocked
+  - mode: strip declared more than once (a copy reintroduced)
+    detection: extractor asserts exactly-one assignment, exit 2
+    alert_route: required check fails, merge blocked
+  - mode: render genuinely grows past cap
+    detection: script exit 1 with byte overage
+    alert_route: required check fails, merge blocked
+  - mode: budget regression merged via admin bypass or merge-skew
+    detection: Phase 4 push-on-main run
+    alert_route: failed workflow run on main
+logs:
+  where: GitHub Actions run logs
+  retention: 90 days (repo default)
+discoverability_test:
+  command: bash apps/web-platform/infra/registry-userdata-budget.sh --json
+  expected_output: '{"raw_bytes":...,"stored_bytes":9404,...,"headroom":23364,...}' with exit 0
+```
+
+No `ssh` anywhere in the verification path.
+
+## Architecture Decision (ADR/C4)
+
+**No new ADR.** The strip mechanism is already recorded (ADR-152, with the registry variant named
+at ADR-152:229). This plan makes an existing measurer honor an existing decision and promotes a CI
+gate — it neither creates nor reverses an architectural decision. A competent engineer reading the
+current ADR corpus would not be misled about the system after this ships.
+
+**No C4 impact.** Checked against all three model files
+(`knowledge-base/engineering/architecture/diagrams/{model.c4,views.c4,spec.c4}`) for the four
+mandated categories: (a) **external human actors** — none added or changed; the change is
+CI-internal with no correspondent, reviewer or recipient; (b) **external systems/vendors** — none;
+Hetzner and GHCR are already modeled and this touches neither at runtime, only a local
+measurement of a payload bound for Hetzner; (c) **containers/data stores** — none; the script
+writes to a `mktemp -d` scratch dir it deletes on trap and touches no state backend;
+(d) **actor↔surface access relationships** — none; no ownership, tenancy or sharing boundary moves.
+
+## Infrastructure (IaC)
+
+`infra/github/ruleset-ci-required.tf` gains one `required_check` block. No new resource, no new
+provider, no new secret, no new variable, no host, no service. Applied by the existing
+`apply-github-infra.yml` on merge — no operator step, no SSH, no dashboard click.
+
+## Encryption Posture
+
+**Skipped** — detection fires on the `.tf` glob, but the gate's own skip condition applies: this
+plan introduces no persistent data store and no new cross-component or network connection. The
+`zot-registry.tf` edit is comment-only; the `ruleset-ci-required.tf` edit adds a check name to an
+existing GitHub ruleset.
+
+## Domain Review
+
+**Domains relevant:** none
+
+No cross-domain implications detected — CI tooling and infrastructure-gate change. No user-facing
+surface, so the Product/UX gate does not fire (no path in Files to Edit matches the UI-surface
+term list or glob superset).
+
+## GDPR / Compliance Gate
+
+**Skipped** — no regulated-data surface. No schema, migration, auth flow, API route or `.sql` file
+is touched; no LLM/external-API processing of operator data; brand-survival threshold is `none`;
+no cron reads from `learnings/` or `specs/`; no new artifact distribution surface.
+
+## Open Code-Review Overlap
+
+**None.** Queried open `code-review`-labelled issues for each planned path
+(`registry-userdata-budget.sh`, `zot-registry.tf`, `infra-validation.yml`,
+`ruleset-ci-required.tf`) — zero matches.
+
+## Files to Edit
+
+- `apps/web-platform/infra/registry-userdata-budget.sh` — extract + apply the strip; fail-closed
+  parse; report stripped figure; correct false header claims.
+- `apps/web-platform/infra/zot-registry.tf` — comment only: name both extractors; the "ONE COPY"
+  claim becomes true again.
+- `.github/workflows/infra-validation.yml` — drop `continue-on-error`; `if: always()` + internal
+  early-exit; add `push:` on `main`; correct the stale rationale block.
+- `infra/github/ruleset-ci-required.tf` — add the `registry-userdata-budget` required context.
+
+## Files to Create
+
+None.
+
+## Risks & Mitigations
+
+| Risk | Mitigation |
+|---|---|
+| Making a skipped job required deadlocks every docs-only PR | Phase 3 step 2 — `if: always()` + internal early-exit, mirroring the `infra-validate-required` precedent in the same file. AC9 asserts it |
+| `push:` on `main` runs credential-needing jobs without `prd_terraform` | Phase 4 keeps `plan` PR-only/credential-gated; path filter retained |
+| The extractor's regex drifts from the TS test's | Both parse the same anchored assignment shape; AC3 asserts exactly one assignment repo-wide, so a second copy fails the build rather than drifting silently |
+| Stripping is unsafe (eats YAML, breaks `#cloud-config`) | Not re-litigated here — already covered by four green tests in `cloud-init-user-data-size.test.ts` ("removes ONLY comments", "preserves #cloud-config", "`#cloud-config` is the ONLY separator-less comment line"). This plan changes no strip semantics |
+| The issue reporter's concern is dismissed wrongly | The one true claim (script exits 1) is fixed; the measurement is published in the PR body and on the issue so the correction is auditable, not asserted |
+
+## Alternative Approaches Considered
+
+| Approach | Verdict |
+|---|---|
+| Extend `registry_rationale_strip` to recover 3,636 B (as the issue proposes) | **Rejected.** There are no bytes to recover; production is 71% under cap. Would have collapsed real rationale prose to fix a phantom breach |
+| Delete `registry-userdata-budget.sh` — the TS test already covers it | **Rejected.** The script's terraform-native `base64gzip` is byte-exact where the TS test explicitly is not; that is real, distinct value |
+| Add `registry-render-strip-parity.test.sh` mirroring git-data | **Rejected.** After Phase 1 there is one declaration and two extractors — nothing to keep equal. The fail-closed extractor is a strictly stronger control |
+| Leave the job advisory | **Rejected.** Its stated precondition (#7280 merging) is satisfied; leaving it advisory keeps a permanently-red status normalised, which is how this defect hid |
+
+## Test Scenarios
+
+1. Run the script on this branch → exit 0, headroom ≥ 20,000 B.
+2. Scratch-copy `zot-registry.tf` with the strip assignment deleted → script exits 2 with a named
+   diagnostic (not 0, not 1).
+3. Scratch-copy with the strip assignment duplicated → script exits 2.
+4. Full `scripts/test-all.sh` green.
+5. Inspect the budget job's rendered `if:` logic for the `directories == '[]'` path → reports a
+   conclusion rather than skipping.
+
+## Sharp Edges
+
+- A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder
+  text, or omits the threshold will fail `deepen-plan` Phase 4.6. Filled above.
+- **A budget//measurement script and the Terraform that renders the real payload are two different
+  programs.** A script header that says it renders "exactly as `<file>.tf` does" is a *claim to
+  verify*, not a contract the code enforces. Diff the render expressions before trusting any
+  size measurement — a measurement tool can be wrong in the fail-loud direction and still cost an
+  incident's worth of operator judgment.
+- **A permanently-red advisory check trains everyone to ignore it.** This job was shipped red on
+  purpose with a documented plan to fix it; when the fix landed, nobody re-ran the reasoning. When
+  shipping a knowingly-red gate, the un-redding must be an enforced follow-through, not a comment.
+- **A "ONE COPY / nothing to keep equal" invariant asserted in a comment is falsifiable by any
+  later PR.** `zot-registry.tf` correctly claimed it at the time; #7282 added a second consumer and
+  the comment silently became false. If an invariant is load-bearing enough to write down, make the
+  consumers *extract* rather than restate, so the invariant is enforced by construction.
