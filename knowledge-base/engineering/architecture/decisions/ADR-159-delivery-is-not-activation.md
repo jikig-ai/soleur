@@ -71,7 +71,18 @@ array; a delivered-but-unactivated unit fails it.
 > the AC6 handler→grant lint (every non-READ `systemctl`/`systemd-run` verb must be sudo-prefixed
 > and granted in both sudoers sources), a `sudo -n -l -U deploy` policy probe in the bootstrap
 > provisioner (the sudoers text landing is not the same as sudo granting it), and a `DropInPaths`
-> assertion on the two drop-in-only units, whose entire activation story is the reload.
+> assertion on the two drop-in-only units — the units this channel delivers drop-ins for and
+> never restarts, so the reload is the only activation step IT performs for them.
+>
+> **CORRECTION, same review.** An earlier phrasing said those two units are in "neither
+> RESTART_MAP nor the grant set" and that the reload is their *entire* activation story. Both
+> overstate it. `inngest-server` IS in the grant set
+> (`INNGEST_RESTART`/`START`/`STOP`/`QUIESCE`/`ENABLE`), and `ci-deploy.sh`'s `case inngest)` runs
+> `inngest-bootstrap.sh` as root, which performs its own `daemon-reload` and restarts both units —
+> a second, co-located reconciliation channel. The claim that survives is still damning and is the
+> one this ADR needs: activation **via the config channel** never happened, and the channel had no
+> way to know whether anything else had covered it. Unknown coverage is not proven staleness, and
+> a channel that cannot tell the difference is the defect Proposition 1 is about.
 
 Reconciliation is folded into the handler rather than exposed as a separate `restart-unit` webhook.
 The event requiring the restart *is* the delivery, so coupling them means the decision is made where

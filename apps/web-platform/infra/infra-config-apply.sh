@@ -586,8 +586,26 @@ if [[ -f "$hooks_dest" ]] && command -v jq >/dev/null 2>&1; then
     HOOKS_PARSE_OK=0
     logger -t "$LOG_TAG" "SOLEUR_INFRA_CONFIG_HOOK_UNPARSEABLE reason=hooks_json_did_not_parse" 2>/dev/null || true
     echo "ERROR: the just-delivered /etc/webhook/hooks.json does not parse as JSON — webhook would restart serving ZERO hooks and answer 404 on every path. Refusing to activate." >&2
-    [[ -n "$FILES_JSON" ]] && FILES_JSON+=","
-    FILES_JSON+="{\"file\":\"/etc/webhook/hooks.json\",\"sha256\":\"\",\"status\":\"failed\",\"reason\":\"hooks_json_unparseable\"}"
+    # ONE VERDICT PER FILE (#7220 review). The write loop above already recorded hooks.json as
+    # status=ok — correctly, on its own terms: the bytes landed. Appending a second object for the
+    # same path left files[] carrying BOTH, so any consumer reading per-file verdicts saw this
+    # path twice with contradictory answers, and the operator alert's failed-file list named a
+    # file the same array also called fine. Replace the earlier verdict rather than adding to it,
+    # and move the accounting with it so files_written + files_failed still reconciles against
+    # files_total.
+    _hooks_failed="{\"file\":\"/etc/webhook/hooks.json\",\"sha256\":\"\",\"status\":\"failed\",\"reason\":\"hooks_json_unparseable\"}"
+    # `|| true` inside the substitution: a no-match grep under `set -e` would abort the handler
+    # here, which is mid-delivery on the only remediation channel this host has.
+    _hooks_ok=$(printf '%s' "$FILES_JSON" \
+      | grep -oE '\{"file":"/etc/webhook/hooks\.json","sha256":"[0-9a-f]*","status":"ok"[^}]*\}' \
+      | head -1 || true)
+    if [[ -n "$_hooks_ok" ]]; then
+      FILES_JSON="${FILES_JSON//"$_hooks_ok"/$_hooks_failed}"
+      WRITTEN_COUNT=$((WRITTEN_COUNT - 1))
+    else
+      [[ -n "$FILES_JSON" ]] && FILES_JSON+=","
+      FILES_JSON+="$_hooks_failed"
+    fi
     FAIL_COUNT=$((FAIL_COUNT + 1))
   else
   while IFS= read -r cmd_path; do

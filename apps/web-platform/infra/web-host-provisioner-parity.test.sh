@@ -63,7 +63,7 @@
 #
 # Every section carries a NON-VACUITY FLOOR: a parse that silently matches nothing must fail
 # loudly rather than report a clean sweep of an empty set. The SWEEP-SIZE floors (FLOOR_RESOURCES
-# 15, FLOOR_DESTS 52, FLOOR_IDENTITY 4, FLOOR_SEEDED 36) are pinned at the EXACT baseline rather
+# 15, FLOOR_DESTS 52, FLOOR_IDENTITY 5, FLOOR_SEEDED 36) are pinned at the EXACT baseline rather
 # than baseline-minus-slack: any slack is a silent-erosion window, and removing a provisioner or a
 # delivered artifact is a Phase-5-class change that should cost a deliberate edit here. The §0
 # PARSE floors keep slack on purpose -- cloud-init.yml and the bake list legitimately shrink as
@@ -75,7 +75,7 @@
 #
 # Mutation-proven by web-host-provisioner-parity-mutation.test.sh, which asserts WHICH check
 # fires for each mutation (a bare non-zero exit credits crashes as detections). Anything that
-# battery cannot reach by editing the four INPUT FILES is unproven no matter how green the run
+# battery cannot reach by editing the five INPUT FILES is unproven no matter how green the run
 # looks, which is why §5's hygiene checks carry an env-driven reachability probe (see §5).
 
 set -uo pipefail
@@ -92,7 +92,7 @@ INFRA="${SOLEUR_INFRA_DIR:-$ROOT/apps/web-platform/infra}"
 # `for f in <names>; do` line: the battery parses that shape and hard-fails on divergence,
 # because a fifth input read tolerantly (`try/except FileNotFoundError`) would otherwise let
 # the battery report a clean run over a check that never executed.
-for f in server.tf cloud-init.yml web-probe-envwrite.sh soleur-host-bootstrap.sh; do
+for f in server.tf cloud-init.yml web-probe-envwrite.sh soleur-host-bootstrap.sh webhook.service; do
   [[ -f "$INFRA/$f" ]] || { echo "FATAL: $INFRA/$f not found" >&2; exit 2; }
 done
 
@@ -674,7 +674,52 @@ for name, body in ssh_resources.items():
                "cheaper just to clear the failure; restore the body the originating change "
                "intended, on both.")
 
-FLOOR_IDENTITY = 4
+# ── §4b. webhook.service: a REPO FILE against its cloud-init write_files mirror ───────
+#
+# §4 above only reaches units server.tf writes with a HEREDOC. webhook.service is delivered to
+# web-1 by a `provisioner "file"` whose source is the committed repo file, and to a fresh host by
+# an INLINE cloud-init write_files body — so it is dual-written in two encodings with no compiler
+# behind it, exactly the class §4 exists for, and nothing compared them. Both copies carry a
+# "MUST stay in lockstep" comment and neither was enforced (#7220 review).
+#
+# THE COMPARISON IS DIRECTIVE-WISE, NOT BYTE-WISE, and that is deliberate rather than a
+# concession. Measured: the two bodies are NOT byte-identical (the cloud-init copy carries an
+# abbreviated comment, because that file is base64gzip'd into user_data against a Hetzner byte
+# cap) while all 20 DIRECTIVES match. Byte-identity here would therefore fail on a difference
+# systemd cannot observe, and the pressure to clear it would push a maintainer to re-inflate the
+# comment into the byte-capped file. What matters is what systemd reads: the directive sequence,
+# in order, including section headers.
+WEBHOOK_UNIT = "/etc/systemd/system/webhook.service"
+def _directives(text):
+    return [l.strip() for l in text.split('\n') if l.strip() and not l.strip().startswith('#')]
+
+if WEBHOOK_UNIT not in wf_bodies or wf_bodies[WEBHOOK_UNIT] is None:
+    no(f"4b: {WEBHOOK_UNIT} has no parseable cloud-init write_files `content: |` body, so the "
+       "repo unit and the fresh-boot copy cannot be compared. A fresh host would boot an "
+       "unverified webhook.service -- the only remediation channel on a host with no SSH runbook.")
+else:
+    repo_unit = _directives(read("webhook.service"))
+    mirror_unit = _directives(wf_bodies[WEBHOOK_UNIT])
+    # Non-vacuity BEFORE the comparison: two empty lists compare equal, so a broken extraction
+    # would report parity between nothing and nothing. webhook.service carries 20 directives.
+    if len(repo_unit) < 10 or len(mirror_unit) < 10:
+        no(f"4b: extracted only {len(repo_unit)} repo and {len(mirror_unit)} mirror directives "
+           "from webhook.service -- fix the extraction rather than trusting this run.")
+    else:
+        n_identity += 1
+        if repo_unit == mirror_unit:
+            ok(f"4b: {WEBHOOK_UNIT} directives identical across the repo unit and the "
+               f"cloud-init mirror ({len(repo_unit)} directives)")
+        else:
+            only_repo = [d for d in repo_unit if d not in mirror_unit]
+            only_mirror = [d for d in mirror_unit if d not in repo_unit]
+            no(f"4b: {WEBHOOK_UNIT} DRIFTED between the committed unit and the cloud-init "
+               f"mirror. Only in the repo unit: {only_repo or '(order differs only)'}. Only in "
+               f"the mirror: {only_mirror or '(order differs only)'}. web-1 and a freshly built "
+               "host would run DIFFERENT webhook units. Put the change on BOTH paths; note the "
+               "mirror is byte-capped, so keep COMMENTS short there but never a directive.")
+
+FLOOR_IDENTITY = 5
 if n_identity >= FLOOR_IDENTITY:
     ok(f"4: byte-identity checked on {n_identity} dual-written bodies (floor {FLOOR_IDENTITY})")
 else:

@@ -791,7 +791,15 @@ case "$1" in
     printf '1' > "$STUB_STATE/daemon-reload.ran"
     exit 0
     ;;
-  try-restart) : ;;
+  try-restart)
+    # ARGUMENT COUNT, same as daemon-reload above (#7220 review). This arm was a bare `: ;;`, so
+    # the stub accepted `try-restart`, `try-restart a b`, and `try-restart vector.service
+    # --no-block` identically — while SUDO matches the FULL argv and would DENY every one of
+    # those but the exact granted two-token form. A stub more permissive than the policy it
+    # stands in for cannot detect the drift that policy turns into a denial, which is the
+    # #7220 failure shape.
+    [[ "$#" -eq 2 ]] || { echo "stub: try-restart takes exactly one unit, got '$*'" >&2; exit 64; }
+    ;;
   *) echo "stub: unexpected verb '$1'" >&2; exit 64 ;;
 esac
 unit="$2"
@@ -1493,6 +1501,51 @@ test_unparseable_hooks_json_is_a_hard_failure() {
     FAIL=$((FAIL + 1))
   fi
 
+  # MORE THAN ONE INVALID SHAPE (#7220 review). With a single invalid fixture the arm could not
+  # tell the real gate from a much weaker one: replacing the handler's
+  # `jq -e 'type == "array" and length > 0'` with `grep -q '"id": "broken"'` kept this suite
+  # green, because the one fixture happened to contain that literal. The handler's own comment
+  # already records that a 0-byte file and a valid non-array both yield the same
+  # "serving zero hooks" outcome as a syntax error, so those are the shapes that must be covered.
+  # Each is driven through a fresh setup so a leftover state file cannot answer for it.
+  local shape n_shapes=0
+  for shape in '{"id": "broken", ' '[{"id":"a"},' '' '{{{' '{"id":"x"}' '[]'; do
+    setup
+    export_valid_env_vars
+    export HOOKS_JSON_B64=$(_payload_file "$shape")
+    local srcc=0
+    bash "$HANDLER" >/dev/null 2>&1 || srcc=$?
+    local sreason
+    sreason=$(jq -r '.files[]?.reason // empty' "$INFRA_CONFIG_STATE" 2>/dev/null | tr '\n' ' ' || true)
+    if [[ "$srcc" -ne 0 ]] && [[ "$sreason" == *"hooks_json_unparseable"* ]]; then
+      echo "  PASS: hooks.json shape $(printf '%q' "$shape") is rejected AND named"; PASS=$((PASS + 1))
+    else
+      echo "  FAIL: hooks.json shape $(printf '%q' "$shape") slipped through (rc=$srcc, reasons=${sreason:-<none>}) — webhook would restart serving zero hooks"
+      FAIL=$((FAIL + 1))
+    fi
+    n_shapes=$((n_shapes + 1))
+  done
+  # The loop is data-driven, so a truncated list would silently shrink coverage while every
+  # remaining case passed. Pin the cardinality.
+  assert_eq "every invalid hooks.json shape in the table was exercised" "6" "$n_shapes"
+
+  # ONE VERDICT PER FILE. The write loop records hooks.json ok (the bytes landed) and this branch
+  # overrides that verdict rather than appending a second one; two entries for one path made the
+  # per-file diagnostic self-contradictory, and it is what the operator alert renders.
+  setup
+  export_valid_env_vars
+  export HOOKS_JSON_B64=$(_payload_file '{"id": "broken", ')
+  bash "$HANDLER" >/dev/null 2>&1 || true
+  local n_hooks_entries
+  n_hooks_entries=$(jq -r '[.files[]? | select(.file == "/etc/webhook/hooks.json")] | length' "$INFRA_CONFIG_STATE" 2>/dev/null || echo 0)
+  assert_eq "files[] carries exactly ONE verdict for /etc/webhook/hooks.json" "1" "$n_hooks_entries"
+  assert_eq "and that verdict is the failure, not the delivery" "failed" \
+    "$(jq -r '[.files[]? | select(.file == "/etc/webhook/hooks.json")][0].status // "MISSING"' "$INFRA_CONFIG_STATE" 2>/dev/null || echo MISSING)"
+  # The counters must still reconcile: moving the verdict has to move the accounting with it.
+  local fw ff ft
+  fw=$(_frame_field files_written); ff=$(_frame_field files_failed); ft=$(_frame_field files_total)
+  assert_eq "files_written + files_failed reconciles against files_total" "$ft" "$((fw + ff))"
+
   # NON-VACUITY: a VALID hooks.json must not trip this. Without this arm a gate that rejected
   # every hooks.json would satisfy the assertions above and brick delivery outright.
   setup
@@ -1559,9 +1612,15 @@ test_self_restart_collect_argv_lockstep() {
 # B5.3 -- StartLimitIntervalSec=0.
 #
 # webhook.service sets Restart=on-failure / RestartSec=5 with no start-limit override, so
-# systemd's default 5-in-10s applies. The first post-merge apply performs TWO restarts in quick
-# succession (server.tf's synchronous one, then the handler's). Blowing the limit leaves webhook
-# `failed` and needing `systemctl reset-failed` -- i.e. SSH, on the host that has none.
+# systemd's default StartLimitBurst=5 within StartLimitIntervalSec=10s applies.
+#
+# CORRECTED (#7220 review): this comment previously said the TWO restarts of the first post-merge
+# apply (server.tf's synchronous one, then the handler's delayed self-restart) would blow that
+# limit. Two cannot -- the burst is 5. The directive is still required; the real mechanism is a
+# genuine crash loop under Restart=on-failure reaching 5 starts inside 10s, which the two
+# deliberate restarts make more likely by consuming budget rather than by exhausting it. Blowing
+# the limit leaves webhook `failed` and needing `systemctl reset-failed` -- i.e. SSH, on the host
+# that has none.
 test_webhook_start_limit_disabled() {
   echo "TEST: #7220 B5.3 — webhook.service disables the systemd start limit"
   local unit="${SCRIPT_DIR}/webhook.service"
@@ -2381,7 +2440,7 @@ test_orphan_hook_selfcheck
 # environments by construction: a non-root runner declares 1, a clone without the pinned pre-fix
 # blob declares 5 (1 for the AC6 RED proof + 4 for the fatal-channel proof), and each still totals
 # 180. Verified by forcing both skip paths on a sandbox copy — see the PR body.
-APPLY_MIN_ASSERTIONS=180
+APPLY_MIN_ASSERTIONS=190
 if [[ $((PASS + SKIPPED_ASSERTIONS)) -lt "$APPLY_MIN_ASSERTIONS" ]]; then
   echo "  FAIL: assertion-count floor — $PASS assertions ran and $SKIPPED_ASSERTIONS were declared-skipped, expected >= $APPLY_MIN_ASSERTIONS"
   FAIL=$((FAIL + 1))

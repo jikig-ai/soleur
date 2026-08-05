@@ -63,7 +63,6 @@ run_alert() {  # <detail> <reach>
   SENTRY_INGEST_DOMAIN=sentry.example SENTRY_PROJECT_ID=1 SENTRY_PUBLIC_KEY=k \
   INFRA_CONFIG_ALERT_RUN_URL=https://example/run INFRA_CONFIG_ALERT_SHA=abc123 \
     bash "$SCRIPT" "$1" "$2" >/dev/null 2>&1
-  RC=$?
 }
 
 echo "infra-config-red-alert.test.sh"

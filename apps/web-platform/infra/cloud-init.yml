@@ -264,10 +264,13 @@ write_files:
       [Unit]
       Description=Webhook deploy listener
       After=network.target
-      # #7220 AC-B2.3 — MUST stay in lockstep with webhook.service. Without this a
-      # FRESH host boots with systemd's default 5-starts-in-10s limit live, which is
-      # exactly the double-restart brick B5.3 exists to prevent, on the host class you
-      # would be reprovisioning under pressure.
+      # #7220 AC-B2.3 — MUST stay in lockstep with webhook.service (asserted by
+      # web-host-provisioner-parity.test.sh §4). Without this a FRESH host boots with
+      # systemd's default StartLimitBurst=5 / StartLimitIntervalSec=10s live. The brick
+      # this prevents is a genuine crash loop under Restart=on-failure reaching that
+      # burst and being left `failed` — NOT the two deliberate restarts of a
+      # post-grant apply, which cannot reach 5 (corrected #7220 review; see the
+      # rationale in webhook.service itself, which is the single source for it).
       StartLimitIntervalSec=0
 
       [Service]

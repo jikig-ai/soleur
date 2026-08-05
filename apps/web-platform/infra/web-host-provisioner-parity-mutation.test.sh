@@ -73,7 +73,7 @@ GUARD="$REAL_INFRA/web-host-provisioner-parity.test.sh"
 # keep the battery correct under drift -- on any divergence the battery ABORTS. What the pair
 # buys is that adding an input is a deliberate two-file edit whose omission is loud, rather than
 # a silent widening of what the sandbox covers.
-EXPECTED_INPUTS=(server.tf cloud-init.yml web-probe-envwrite.sh soleur-host-bootstrap.sh)
+EXPECTED_INPUTS=(server.tf cloud-init.yml web-probe-envwrite.sh soleur-host-bootstrap.sh webhook.service)
 
 mapfile -t DERIVED_INPUTS < <(
   sed -n 's/^for f in \(.*\); do$/\1/p' "$GUARD" | head -1 | tr ' ' '\n' | sed '/^$/d'
@@ -690,7 +690,7 @@ s = s.replace(blk, "", 1)
 # quietly covers 3 units instead of 4, and §2 still extracts the destination from the surviving
 # `>` redirect -- so ONLY the floor can catch it.
 expect_red "M31 (§4 floor: heredoc opener reformatted out of the identity check)" server.tf \
-  "4: byte-identity checked on only 3 bodies" '
+  "4: byte-identity checked on only 4 bodies" '
 q = chr(39)
 old = "cat > /etc/systemd/system/disk-monitor.timer << " + q + "TIMEREOF" + q
 assert old in s
@@ -899,6 +899,38 @@ s = s.replace(anchor, anchor + """
   }""", 1)
 '
 
+# ── §4b: webhook.service REPO-UNIT vs CLOUD-INIT MIRROR drift (#7220 review) ──────────
+#
+# webhook.service is dual-written — a `provisioner "file"` from the committed repo file to web-1,
+# an inline cloud-init write_files body on a fresh host — and nothing compared the two, though
+# BOTH carried a "MUST stay in lockstep" comment. §4 could not reach it because §4 only pairs
+# HEREDOC-written units against write_files.
+#
+# The comparison is directive-wise: measured, the two bodies are NOT byte-identical (the mirror
+# carries an abbreviated comment because cloud-init.yml is base64gzip'd against a Hetzner
+# user_data byte cap) while all 20 directives match. So a mutation must move a DIRECTIVE; a
+# comment-only edit to the mirror is legitimate and is the green control below.
+expect_red "I1 (a directive added to the repo unit only)" webhook.service '/etc/systemd/system/webhook.service DRIFTED' '
+old = "StartLimitIntervalSec=0"
+assert old in s
+s = s.replace(old, old + "\nStartLimitBurst=99", 1)
+'
+
+expect_red "I2 (a directive DROPPED from the cloud-init mirror only)" cloud-init.yml '/etc/systemd/system/webhook.service DRIFTED' '
+old = "      After=network.target\n"
+assert old in s
+s = s.replace(old, "", 1)
+'
+
+# The green control that keeps the directive-wise choice honest: a comment-only divergence is
+# EXPECTED between these two copies and must not fire. A byte-identity implementation would fail
+# here, and the pressure to clear it would push comments back into the byte-capped file.
+expect_green "I3 (a comment-only edit to the byte-capped mirror)" cloud-init.yml '
+old = "      Description=Webhook deploy listener"
+assert old in s
+s = s.replace(old, "      # mirror-only note added by the mutation battery\n" + old, 1)
+'
+
 # ── PRIVILEGE-WRAPPER AND sudo-LIST-MODE CLASSIFICATION (#7220 review) ───────────────
 #
 # The `sudo -l` exemption and the wrapper handling had NO fixture in EITHER direction, and both
@@ -973,7 +1005,7 @@ s = s[:j] + "\n      \"sudo useradd -l -d /usr/local/bin/phantom-useradd.sh svcu
 '
 
 # ── Non-vacuity floor on the battery itself ─────────────────────────────────────────
-FLOOR=42
+FLOOR=44
 if [[ "$mutations_run" -ge "$FLOOR" ]]; then
   ok "battery ran $mutations_run landed, attributed mutations (floor $FLOOR)"
 else

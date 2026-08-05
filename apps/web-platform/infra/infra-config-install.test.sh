@@ -628,10 +628,26 @@ test_service_pin_matches_repo_unit() {
   # The honest thing to pin is the invariant the branch exists to protect: adding a second
   # *.service dest without a digest must fail HERE, at authoring time, rather than silently
   # bricking that dest's delivery on a host with no SSH runbook.
-  local svc_dests pins
-  svc_dests=$(awk '/^declare -rA DEST_SPEC=\(/{b=1; next} b && /^\)/{b=0} b && /^[[:space:]]*\["\/etc\/systemd\/system\//&&!/\.service\.d\//{n++} END{print n+0}' "$HELPER")
-  pins=$(awk '/^declare -rA SERVICE_SHA256=\(/{b=1; next} b && /^\)/{b=0} b && /^[[:space:]]*\["\//{n++} END{print n+0}' "$HELPER")
-  assert_eq "every full-unit dest in DEST_SPEC carries a content pin" "$svc_dests" "$pins"
+  # SET difference, not a count (#7220 review). Comparing CARDINALITY answers "are there as many
+  # pins as dests", which a TYPO satisfies: pinning "soleur-agnet.service" while DEST_SPEC lists
+  # "soleur-agent.service" keeps 1 == 1 and passes, and the real dest then has no pin — so its
+  # delivery is refused forever on the host with no SSH runbook, which is the exact brick the
+  # LOCKSTEP note in the helper warns about. A count cannot see a rename; only the KEYS can.
+  local svc_dests pins missing extra
+  svc_dests=$(awk '/^declare -rA DEST_SPEC=\(/{b=1; next} b && /^\)/{b=0} b && /^[[:space:]]*\["\/etc\/systemd\/system\//&&!/\.service\.d\//{print}' "$HELPER" \
+    | grep -oE '\["[^"]+"\]' | tr -d '[]"' | sort -u)
+  pins=$(awk '/^declare -rA SERVICE_SHA256=\(/{b=1; next} b && /^\)/{b=0} b && /^[[:space:]]*\["\//{print}' "$HELPER" \
+    | grep -oE '\["[^"]+"\]' | tr -d '[]"' | sort -u)
+  # Non-vacuity: both extractions must yield something, or the two set differences below are
+  # empty for the wrong reason and this assertion certifies an empty universe.
+  assert_eq "the DEST_SPEC full-unit extraction found at least one dest" "yes" \
+    "$([[ -n "$svc_dests" ]] && echo yes || echo no)"
+  assert_eq "the SERVICE_SHA256 key extraction found at least one pin" "yes" \
+    "$([[ -n "$pins" ]] && echo yes || echo no)"
+  missing=$(comm -23 <(printf '%s\n' "$svc_dests") <(printf '%s\n' "$pins") | tr '\n' ' ' | sed 's/ $//')
+  extra=$(comm -13 <(printf '%s\n' "$svc_dests") <(printf '%s\n' "$pins") | tr '\n' ' ' | sed 's/ $//')
+  assert_eq "every full-unit dest in DEST_SPEC carries a content pin (no unpinned dest)" "" "$missing"
+  assert_eq "every SERVICE_SHA256 key is a real DEST_SPEC full-unit dest (no typo'd pin)" "" "$extra"
 }
 
 echo "=== infra-config-install.sh test suite ==="
@@ -662,7 +678,12 @@ fi
 # runner's only verdict was "did anything FAIL" — never "did anything RUN". A floor converts a
 # deleted test from an invisible coverage loss into a failure. Raise it deliberately when
 # adding arms; never lower it to make a run green.
-INSTALL_MIN_ASSERTIONS="${INSTALL_MIN_ASSERTIONS:-55}"
+# HARDCODED, deliberately (#7220 review). This was `${INSTALL_MIN_ASSERTIONS:-55}`, so
+# `INSTALL_MIN_ASSERTIONS=0 bash <this file>` exited 0 with the floor disabled — a guard whose
+# whole job is to make a silently-shrinking suite loud, switchable off from the environment by
+# the same CI config that would be shrinking it. Matches APPLY_MIN_ASSERTIONS, which is a plain
+# literal for the same reason. Ratchet it here when the suite grows.
+INSTALL_MIN_ASSERTIONS=58
 if [[ "$PASS" -lt "$INSTALL_MIN_ASSERTIONS" ]]; then
   echo "FAIL: assertion floor — ran $PASS, expected >= $INSTALL_MIN_ASSERTIONS." >&2
   echo "      Arms were deleted or skipped; a green run here would be a coverage loss." >&2

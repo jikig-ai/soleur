@@ -223,16 +223,57 @@ assert "list-mode availability is probed before the policy probes (could-not-mea
   "printf '%s' \"\$BLOCK\" | grep -qF 'sudo -n -l -U deploy >/dev/null 2>&1 ||'"
 assert "post-write probes sudo policy for the --collect self-restart argv" \
   "printf '%s' \"\$BLOCK\" | grep -qF 'sudo -n -l -U deploy /usr/bin/systemd-run --collect'"
+# TAIL SWEEP (#7220 review). The daemon-reload probe above already asserted its `exit 1` tail;
+# these three did not, so mutating any of them to `|| true` left this suite fully green while the
+# probe became an advisory log line. In a remote-exec `inline` block there is no implicit errexit
+# and only the LAST command's status is consulted, so the `|| { ...; exit 1; }` tail IS the gate —
+# a probe without it cannot fail the apply no matter what sudo answers.
+assert "the self-restart argv probe is fatal, not advisory" \
+  "printf '%s' \"\$BLOCK\" | grep -F 'sudo -n -l -U deploy /usr/bin/systemd-run --collect' | grep -qF 'exit 1'"
+assert "the list-mode availability probe is fatal, not advisory" \
+  "printf '%s' \"\$BLOCK\" | grep -F 'sudo -n -l -U deploy >/dev/null 2>&1 ||' | grep -qF 'exit 1'"
+assert "the inngest-heartbeat DropInPaths assertion is fatal, not advisory" \
+  "printf '%s' \"\$BLOCK\" | grep -F 'DropInPaths inngest-heartbeat.service' | grep -qF 'exit 1'"
+assert "the inngest-server DropInPaths assertion is fatal, not advisory" \
+  "printf '%s' \"\$BLOCK\" | grep -F 'DropInPaths inngest-server.service' | grep -qF 'exit 1'"
+# And the DropInPaths probes must grep for a NON-EMPTY pattern. `grep -q ''` matches any output,
+# including the output for a unit with no drop-in at all, so the probe would hold in exactly the
+# state AC-B4 exists to detect. The real probes anchor on `doppler-token.conf`; pin that both
+# positively (the anchor is present on each) and negatively (no empty-pattern grep survives).
+assert "the inngest-heartbeat DropInPaths probe greps a real drop-in anchor" \
+  "printf '%s' \"\$BLOCK\" | grep -F 'DropInPaths inngest-heartbeat.service' | grep -qF \"grep -q 'doppler-token.conf'\""
+assert "the inngest-server DropInPaths probe greps a real drop-in anchor" \
+  "printf '%s' \"\$BLOCK\" | grep -F 'DropInPaths inngest-server.service' | grep -qF \"grep -q 'doppler-token.conf'\""
+assert "no DropInPaths probe was weakened to an empty grep pattern" \
+  "! printf '%s' \"\$BLOCK\" | grep -F DropInPaths | grep -qE \"grep -q ''\""
 
 # AC-B4 -- activation, not just reload. inngest-heartbeat and inngest-server carry drop-ins in
-# FILE_MAP but sit in NEITHER RESTART_MAP nor the grant set: their entire activation story IS
-# the daemon-reload. If those units exist on the host they have been running the pre-#7095
-# (revoked) credential ever since. Asserting DropInPaths is the difference between "we fixed
-# reload" and "we fixed what reload was for".
+# FILE_MAP and are absent from RESTART_MAP, so the reload is the only activation step THIS channel
+# performs for them. (Corrected #7220 review: they are NOT absent from the grant set --
+# inngest-server is granted -- and ci-deploy.sh's inngest arm is a second reconciliation channel.
+# The rationale is single-sourced at the AC-B4 comment in server.tf; do not restate it here.)
+# Asserting DropInPaths is the difference between "we fixed reload" and "we fixed what reload
+# was for": it proves systemd ADOPTED the drop-in this channel delivered.
 assert "post-write asserts inngest-heartbeat drop-in is LOADED (DropInPaths)" \
   "printf '%s' \"\$BLOCK\" | grep -qF 'DropInPaths inngest-heartbeat.service'"
 assert "post-write asserts inngest-server drop-in is LOADED (DropInPaths)" \
   "printf '%s' \"\$BLOCK\" | grep -qF 'DropInPaths inngest-server.service'"
+
+# ── ASSERTION-COUNT FLOOR (#7220 review) ───────────────────────────────────────────────
+# This suite had NO floor, so deleting assert calls — or an `assert` helper that silently stopped
+# incrementing — would report a clean, smaller run and exit 0. That is the same silent-shrink hole
+# the sibling suites' floors close, and it matters more here: these assertions are the only thing
+# pinning the bootstrap provisioner's sudo probes and DropInPaths tails, which are what prove the
+# #7220 grant is EFFECTIVE rather than merely present on disk.
+#
+# Zero headroom against the current count, so any deletion is loud. Ratchet when adding arms, and
+# read a floor failure on an otherwise-green run as "you added assertions, update this number".
+BOOTSTRAP_MIN_ASSERTIONS=50
+if (( TOTAL < BOOTSTRAP_MIN_ASSERTIONS )); then
+  echo "FAIL: assertion-count floor — ran $TOTAL assertions, expected >= $BOOTSTRAP_MIN_ASSERTIONS."
+  echo "      Arms were deleted or skipped; a green run here would be a coverage loss."
+  FAIL=$((FAIL + 1))
+fi
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="

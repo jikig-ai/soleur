@@ -1205,11 +1205,23 @@ resource "terraform_data" "registry_insecure_config" {
 # binary AND the sudoers alias present on-host before `sudo infra-config-install`
 # is permitted — but the handler cannot deliver either (the helper is deliberately
 # OUT of the webhook FILE_MAP, and writing the sudoers itself requires the alias).
-# Root SSH is the only non-circular bootstrap path. #4829 — deploy_pipeline_fix does
-# NOT depends_on this resource; both are listed as explicit -target=s in
-# apply-deploy-pipeline-fix.yml and apply on the same CI run. Ordering between the SSH
-# helper/sudoers delivery and the webhook push is handled by the handler's per-file
-# install_rejected self-heal (see the deploy_pipeline_fix depends_on rationale below).
+# Root SSH is the only non-circular bootstrap path.
+#
+# ORDERING (corrected #7220 review — this comment is the load-bearing safety argument for the
+# digest pin's ordering, so a stale version of it is worse than none). deploy_pipeline_fix DOES
+# `depends_on` this resource: see its depends_on at the bottom of that resource, which lists
+# terraform_data.infra_config_handler_bootstrap explicitly. The text here previously said it did
+# NOT — a leftover from #4829, before #5515 added the edge — and directly contradicted that line.
+# Both are also listed as explicit -target=s in apply-deploy-pipeline-fix.yml and apply on the
+# same CI run, so the -target list alone would not order them; the depends_on is what does.
+#
+# Why that matters for #7220: the content gate in infra-config-install.sh must be on-host BEFORE
+# the daemon-reload grant can make a rewritten unit adoptable, and the gate travels with THIS
+# resource while the grant's consumer travels with deploy_pipeline_fix. The happens-before is
+# therefore a real invariant and not a convenience. Note what it does NOT buy: it is an ordering
+# on Terraform's graph, not a wait-for-ready on the listener (see the nonce-1 race documented at
+# deploy_pipeline_fix's depends_on). Residual per-file recovery is still the handler's
+# install_rejected self-heal.
 resource "terraform_data" "infra_config_handler_bootstrap" {
   triggers_replace = sha256(join(",", [
     file("${path.module}/infra-config-apply.sh"),
@@ -1344,10 +1356,21 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
       # mid-provisioner), so this one stays list-mode, behind the availability probe above.
       "sudo -n -l -U deploy /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook >/dev/null || { echo 'FATAL: sudo policy DENIES the --collect self-restart argv to deploy — the grant and the handler call site have drifted.' >&2; exit 1; }",
       # #7220 AC-B4 — ACTIVATION, not just reload. inngest-heartbeat.service and
-      # inngest-server.service carry drop-ins in FILE_MAP but appear in NEITHER RESTART_MAP nor
-      # the grant set: their entire activation story IS the daemon-reload. If those units exist
-      # on this host they have been running the pre-#7095 (revoked) credential ever since. This
-      # is the difference between "we fixed reload" and "we fixed what reload was for".
+      # inngest-server.service carry drop-ins in FILE_MAP and are absent from RESTART_MAP, so
+      # THIS channel never restarts them; the reload is the only activation step it performs for
+      # either unit.
+      #
+      # CORRECTED (#7220 review): an earlier version of this comment said they appear in
+      # "NEITHER RESTART_MAP nor the grant set" and that the reload is their ENTIRE activation
+      # story. The first half is false — inngest-server IS granted
+      # (INNGEST_RESTART/START/STOP/QUIESCE/ENABLE) — and the second overstates what this channel
+      # can know: ci-deploy.sh's `case inngest)` runs inngest-bootstrap.sh as root, which does
+      # its own daemon-reload plus `systemctl restart inngest-server.service` and the heartbeat
+      # units. So a co-located deploy may have reconciled them incidentally on some runs. What is
+      # certain is that activation via the CONFIG channel never happened, and that this channel
+      # had no way to tell whether anything else had covered it. The DropInPaths assertion below
+      # is worth exactly that: it proves systemd has ADOPTED the drop-in this channel delivered,
+      # which is the part this channel is responsible for.
       #
       # Guarded on the unit being loaded at all: these units are not present on every host in
       # the fleet, and a missing unit is not a failed activation. `systemctl show` exits 0 for
