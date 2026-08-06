@@ -322,6 +322,21 @@ jobs:
 
           # Dedup by exact title match (deterministic; no list-search needed
           # to construct unique titles).
+          # `|| true` is load-bearing, and NOT for the usual "errexit is inherited" reason —
+          # this body sets `-euo pipefail` itself, deliberately. The point is that the normal
+          # justification for letting an abort happen ("it fails loud, the job goes red") is
+          # VACUOUS here: this step is gated `if: failure()`, so the job is ALREADY red before
+          # this line runs. An abort therefore adds no signal and destroys the only durable
+          # one — the tracking issue, plus the 7-day escalation that reads createdAt out of $N.
+          # This is the LAST step of a MONTHLY cron with no other notification path, so a red
+          # run nobody watches is precisely what the Kieran F9 escalation exists to compensate
+          # for; the alarm would go dark while the surface looked unchanged.
+          #
+          # Two live abort paths, and both correlate with the failure this step reports: a `gh`
+          # API blip or rate-limit (this step runs only when the network path is already
+          # degraded), and SIGPIPE-141 from `head -1` closing the pipe under pipefail. Empty is
+          # the correct default — the `-z "$N"` guard below files a fresh issue rather than
+          # escalating a stale one. Found while sweeping #7304's class.
           N=$(gh issue list \
             --repo "$REPO_FULL" \
             --label cla-evidence,timestamp-failure \
@@ -329,7 +344,7 @@ jobs:
             --search "\"$title\" in:title" \
             --json number,title,createdAt \
             | jq -r --arg t "$title" '.[] | select(.title == $t) | "\(.number) \(.createdAt)"' \
-            | head -1)
+            | head -1) || true
           if [[ -z "$N" ]]; then
             gh issue create \
               --repo "$REPO_FULL" \
