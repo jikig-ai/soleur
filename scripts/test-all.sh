@@ -349,6 +349,13 @@ if want_scripts; then
   # alert path that had never once delivered, because `set -u` killed it before the curl.
   run_suite "scripts/lint-workflow-step-env-refs" bash scripts/lint-workflow-step-env-refs.test.sh
   run_suite "scripts/lint-workflow-step-env-refs-live" python3 scripts/lint-workflow-step-env-refs.py
+  # ADR-170. Both halves are required: the unit suite proves the RULE is right (its fixtures are
+  # the executable spec), the live scan proves the TREE is clean. Either alone is satisfiable by
+  # a detector that has stopped detecting -- a broken linter and a clean repo emit identical
+  # output, which is why the unit suite carries a verify-the-verifier case that re-introduces
+  # the real defect into a tree copy.
+  run_suite "scripts/lint-workflow-errexit-capture" bash scripts/lint-workflow-errexit-capture.test.sh
+  run_suite "scripts/lint-workflow-errexit-capture-live" python3 scripts/lint-workflow-errexit-capture.py
   # ADR-140: Layer A encryption-posture detector (the mechanical resolver behind
   # the "encryption at rest + in transit" design-time gate). TS-1..8,15..17 +
   # the MB-1..MB-12 mutation battery (fixture-isolated, not suite-pass-count).
