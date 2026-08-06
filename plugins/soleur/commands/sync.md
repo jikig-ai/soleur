@@ -1,7 +1,7 @@
 ---
 name: sync
 description: Analyze codebase and populate knowledge-base with conventions, patterns, and technical debt
-argument-hint: "[area: conventions|architecture|testing|debt|project|rule-prune|domain-model|all]"
+argument-hint: "[area: conventions|architecture|testing|debt|project|c4|rule-prune|domain-model|all]"
 ---
 
 # Sync Codebase to Knowledge Base
@@ -17,18 +17,25 @@ Analyze an existing codebase and populate knowledge-base files with coding conve
 
 <sync_area> #$ARGUMENTS </sync_area>
 
-**Valid areas:** `conventions`, `architecture`, `testing`, `debt`, `project`, `rule-prune`, `domain-model`, `all` (default)
+**Valid areas:** `conventions`, `architecture`, `testing`, `debt`, `project`, `c4`, `rule-prune`, `domain-model`, `all` (default)
 
 **Note on `rule-prune`:** This area is excluded from `all` dispatch. It files
 GitHub issues for AGENTS.md rules with zero recorded hits; it should be run
 intentionally (weekly or monthly), not as part of every `/soleur:sync` call.
 Append `--weeks=<n>` (default 8) to override the staleness threshold.
 
-**Note on `domain-model`:** This area is excluded from `all` dispatch (like
-`rule-prune`). It drift-checks the business-rules register
-(`knowledge-base/engineering/architecture/domain-model.md`) against a repo's
-migrations/RLS/guards and optionally proposes newly-inferred rows for approval. It
-targets a specific register and should be run intentionally, not on every sync.
+**Note on `c4`:** Generates a LikeC4 diagram from the component docs the `project`
+area writes, so it runs AFTER `project` in `all` dispatch. Non-destructive: it
+emits a distinct composing file and refuses to overwrite anything it did not
+write.
+
+**Note on `domain-model`:** This area runs in `all` dispatch AND standalone, with
+**two different contracts** — see Domain Model Analysis below. Standalone, it is
+terminal: the drift report plus the per-row approval-gated write ARE the output.
+Under `all` (and in headless mode, where there is no operator to approve rows) it
+bootstraps the register if absent, drift-checks, appends candidates to the
+`## Auto-inferred (unreviewed)` section only, and feeds its row count into the
+coverage summary rather than terminating the run.
 
 ## Execution Flow
 
@@ -72,7 +79,20 @@ Based on the area specified (or `all` if none):
 
 **1.1 Parse Area Filter**
 
-If `<sync_area>` is empty or `all`, analyze all areas EXCEPT `rule-prune` AND `domain-model` (both must be invoked explicitly). Otherwise, analyze only the specified area. If the argument is `rule-prune`, skip all other phases and jump straight to Rule Prune Analysis below. If the argument is `domain-model`, skip all other phases and jump straight to Domain Model Analysis below.
+If `<sync_area>` is empty or `all`, analyze all areas EXCEPT `rule-prune` (which must be invoked explicitly). Otherwise, analyze only the specified area. If the argument is `rule-prune`, skip all other phases and jump straight to Rule Prune Analysis below.
+
+`domain-model` and `c4` both participate in `all` dispatch, and both have a
+distinct standalone contract:
+
+- **`domain-model` standalone** — skip all other phases and jump straight to
+  Domain Model Analysis; it is terminal (drift report + approval-gated write ARE
+  the output). **Under `all`** — run the non-interactive path (§Domain Model
+  Analysis, "`all`-dispatch path"), then continue into the remaining phases.
+- **`c4`** — runs after the `project` area, since it consumes the component docs
+  that area writes. Standalone it emits only the diagram artifacts.
+
+**Ordering within `all`:** `project` → `c4` → `domain-model` → coverage summary.
+The C4 producer reads component docs, so it must not run before they are written.
 
 **1.2 Codebase Analysis**
 
@@ -164,6 +184,44 @@ boxes* — which the relationship-count gate reports as **degraded**.
 - **New components**: Create new `.md` file from template
 - **Existing components**: Check if `updated` date is current; if not, offer to refresh
 - **Removed components**: Add `status: deprecated` to frontmatter (do not delete)
+
+#### C4 Analysis
+
+Runs when `<sync_area>` is `c4`, and as part of `all` **after** the `project`
+area (it consumes the component docs that area writes).
+
+```bash
+bun plugins/soleur/scripts/generate-c4-from-components.ts
+```
+
+The producer parses each component doc's `dependencies:` frontmatter (falling back
+to `**Internal**: [name](name.md)` links for docs written before that contract),
+skips `status: deprecated` docs, and writes the diagram artifacts into
+`knowledge-base/engineering/architecture/diagrams/`.
+
+**It is non-destructive by construction.** `/soleur:architecture` writes
+`spec.c4` / `model.c4` / `views.c4` cwd-relative and the agent sandbox pins
+`cwd = workspacePath` — two writers, one directory. So the producer emits a
+distinct composing file, `generated-components.c4`, stamps every file it writes
+with a `GENERATED` header, and **refuses to overwrite any file lacking that
+header**. A hand-corrected edge is never silently reverted; the refusal is
+reported as `skipped=<n>` in the marker rather than passing silently.
+
+**Report the marker, and read its `status`:**
+
+- `status=ok` — elements and relationships both non-zero.
+- `status=degraded` — **not a failure.** Either the component docs declare no
+  parseable dependencies (the diagram is a set of disconnected boxes — the docs
+  are the defect, not the run), or a hand-edited file was skipped, or the pinned
+  likec4 CLI was unreachable. Surface the reason; do not fail the sync.
+- `status=failed` (exit 1) — likec4 reported a source fault, or produced an empty
+  model. Surface the diagnostic.
+
+**Delivery precondition — state this, do not assume otherwise.** The KB viewer
+reads the diagram from the **GitHub source of truth**, not the on-disk clone
+(a clone holding un-pushed commits goes permanently stale). Headless sync commits
+locally and opens a PR, so a generated diagram is not visible in the viewer until
+that PR is **pushed and merged**.
 
 #### Rule Prune Analysis
 
