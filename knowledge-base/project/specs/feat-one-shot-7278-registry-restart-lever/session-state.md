@@ -220,3 +220,69 @@ CF-Access-gated registry ingress, plus its own monitored `SOLEUR_*` marker. This
 explicitly-unmeasured question ("is the 59 GB actually policy-kept blobs?") with zero host
 change and no #6929 exposure. `restart` / `push-config` / `reclaim` are planned but
 explicitly marked **blocked on a provisioning event** — not silently dropped.
+
+## Phase 0 — preconditions MEASURED (2026-08-06, second run)
+
+All self-pulled. No operator step. Every number below is measured, not assumed.
+
+| Task | Result |
+|---|---|
+| 0.1 ADR ordinal | max on `origin/main` is **ADR-170** → **171 CONFIRMED** (no longer provisional) |
+| 0.2 `SOLEUR_ZOT_DISK` | `pcent=100`, `fs_size_gb=59`, `zot_restarts=15640` (11:35 UTC, up from 15354 at 10:25 ⇒ ~4.8/min), `oom_kills=0`, `zot_anon_mb=36` |
+| 0.6 `APP_DOMAIN_BASE` | **ABSENT** from `soleur/prd` (`APP_DOMAIN` exists; different key). The composite already handles it — its own comment says *"APP_DOMAIN_BASE is not in prd"* and falls back to `soleur.ai`. The apply workflow's fail-closed read is the broken side. |
+| 0.7 `BETTERSTACK_LOGS_TOKEN` | **PRESENT** in `soleur/prd` ⇒ CI ingest is reachable via `secrets.DOPPLER_TOKEN_PRD`. **No `doppler_secret` mint needed; AC6 (zero Terraform) preserved.** |
+| 0.8 ingest half-probe | POST → **HTTP 202**; **POST→queryable = 17 s**. Bound: workstation egress only — does **NOT** prove GitHub-runner egress against the `eu-fsn-3` pin (H6). |
+| 0.9 `BETTERSTACK_QUERY_*` | already wired in `scheduled-followthrough-sweeper.yml` — do not re-add |
+| 0.10 highwater | `lint-diagnosis-claims.highwater` = **1**; all three linters present |
+
+### A fail-open I hit and corrected (worth keeping)
+
+`doppler secrets --only-names` renders a **box-drawing table**, so `grep -cE '^NAME$'` matches
+nothing and every key reads as ABSENT. My first 0.6/0.7 probe reported `BETTERSTACK_LOGS_TOKEN`
+missing — which would have falsely killed the entire ingest design. Use
+`--only-names --json | jq -r 'keys[]'` and assert a non-zero key count as a positive control
+before believing any absence.
+
+### 0.3 (A1) — MEASURED, and it corrects the plan in both directions
+
+Probed live over the existing `registry.soleur.ai` CF-Access ingress with **read-only pull creds**.
+
+| Probe | Result |
+|---|---|
+| `GET /v2/` | **200** — origin answers (B2's reachability verdict is satisfiable) |
+| `GET /v2/_catalog` | **200**, exactly **2 repos** (the known floor ≥2 holds) |
+| `tags/list` | `soleur-inngest-bootstrap` **4** tags; `soleur-web-platform` **25** tags |
+| `sha256-*` referrer tags in `tags/list` | **0** in both repos |
+| `GET /v2/<repo>/referrers/<digest>` | **200**, **1** referrer, `artifactType=application/vnd.dev.sigstore.bundle.v0.3+json`, **876 bytes** |
+| `sha256-<digest>.sig` tag | **404** |
+
+**Mechanism CONFIRMED, magnitude REFUTED.** Referrers are real and invisible to `tags/list`, so
+referrer coverage must stay a first-class input to `enumeration_complete` (0.3 as written). But at
+~876 B each they are **negligible** against 59 GB — the feared "~80 % undercount" does not hold, and
+the plan's "~61 tags per repo" premise is wrong (actual: 4 and 25).
+
+**Config-drift finding.** `cloud-init-registry.yml` asserts *"cosign here uses TAG-based sigs …
+not Subject-field OCI referrers"*. The measurement shows the **opposite**: the `.sig` tag 404s and a
+Subject-field referrer exists. So the keep-set's `sha256-.*`×50 rule currently protects tags that
+**do not exist**, while `deleteReferrers=false` protects the referrers that do. Not fixed here
+(that is a host config change ⇒ blocked); recorded so it is not re-derived.
+
+### Ground-truth enumeration (a prototype of the lever, run from this workstation)
+
+| Metric | Value |
+|---|---|
+| `unique_blobs` | 266 |
+| `manifest_referenced_bytes` | 15,867,729,779 (**14.78 GB**) |
+| `manifests_fetched` / `manifest_errors` | 45 / **12** |
+
+**`enumeration_complete` would be FALSE (12 errors) — so per the plan's own rule this licenses NO
+conclusion.** It is a **lower bound** from an incomplete sweep; the errors are consistent with the
+~4.8/min restart loop interrupting it, which is precisely why 1.2 mandates bounded retry.
+
+Stated honestly: ~14.78 GB referenced against ~56 GB used (59 × pcent, minus A2's ~2.95 GB ext4
+reserve) leaves **~41 GB unaccounted** — an order of magnitude above the ~3 GB error bar. Even
+crediting each of the 12 failed manifests a generous 2 GB, the total reaches only ~39 GB. This is
+**evidence against** the 2026-07-09 remedy (grow + tighten keep-set) and **for** A3's framing:
+`delta_gb` is an upper bound on unreferenced bytes, candidates being zot's dedupe cache DB and
+orphaned `.uploads/` staging. **No cause is asserted.** The lever exists to produce this number
+with `enumeration_complete=true`.
