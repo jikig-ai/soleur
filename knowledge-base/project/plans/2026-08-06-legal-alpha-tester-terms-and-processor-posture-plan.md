@@ -40,6 +40,41 @@ professional-services acts, not provisioning; they are unautomatable by their na
 omission, and are justified inline at AC12/AC13.
 -->
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-06. **Review depth:** `soleur:legal:clo` (determination),
+`soleur:legal:legal-compliance-auditor` (12 Critical / 15 High / 8 Med-Low), `soleur:operations:coo`,
+`soleur:product:cpo`, `soleur:marketing:cmo`, a strong-model advisor consult (ADR-083), and the
+escalated 5-agent plan-review panel.
+
+**Key changes the review produced — the plan shrank by roughly half:**
+
+1. **The `if processor` branch was cut entirely.** The determination proves its antecedent false, so
+   the DPA, execution register, Art. 30(2) register, signature probe and deferred issue all went with
+   it — five artifacts downstream of a branch that does not fire.
+2. **Two correctness bugs were caught in the cut material.** The follow-through probe's PASS
+   condition was **vacuous at merge** (no rows → exit 0 → tracker closes with nothing signed), and its
+   `exit 2` mitigation **does not exist** — the sweeper comments on TRANSIENT too, so a pending
+   signature would have posted ~60 public comments about a named counterparty's contract status.
+3. **The two named C4 tests never read the committed artifact**; the real gate byte-diffs a tracked
+   render the plan never regenerated. The C4 edit was cut as a duplicate edge anyway.
+4. **Tier 1 was made unconditional.** Scoping it to "testers who don't need Tier 2" left tester #1 —
+   the only one who exists — with nothing agreed, silently failing the issue's first criterion.
+5. **Fabricated clause citations fixed.** "§298" and "§112" were line numbers; the T&Cs have sections
+   1–17. A drafted instrument citing them would have cited clauses that do not exist.
+6. **Phase 0.1 is now BLOCKING** on establishing whose Anthropic key ran the 2026-08-06 session —
+   the premise the whole determination rests on, and one no repo evidence currently settles.
+
+**Gates run:** 4.5 network-outage (no trigger), 4.6 user-brand impact (PASS), 4.7 observability
+(pure-docs skip), 4.8 PAT-shaped variable (clean), 4.9 UI wireframe (no UI surface),
+4.10 encryption posture (no store), 4.55 downtime (no serving-surface change).
+
+**Citation sweep:** 6 AGENTS rule IDs all active; all `knowledge-base/` paths resolve; 7 ADRs exist;
+11 issue/PR numbers resolve — one correction: **#736 is CLOSED**, not open as `compliance-posture.md`
+claims.
+
+---
+
 **Standing constraint on every task below:** no third-party personal data in any committed file.
 The tester is `Skouer` / `https://github.com/2my8r9ry2t-wq/Skouer` — company name and repository URL
 only, never a person's name or email. Git history is permanent, so committed third-party PII is an
@@ -162,8 +197,13 @@ carry materially different user-facing legal text**; the DPD Eleventy mirror lac
 `plugins/soleur/docs/pages/legal/gdpr-policy.md:201` carries a dangling cross-reference to it; PA-30
 declares Jikigai a processor but sits in the 30(1) controller shape; `compliance-posture.md:62`'s T&C
 row is stale against `TC_VERSION = "2.4.0"`; `roadmap.md:327` marks row 4.1 "Not started" while `:81`
-says onboarding is underway. Open issue **#736** already tracks T&C blanket-statement contradictions —
-check before filing.
+says onboarding is underway.
+
+**And one more, found by the deepen-plan citation sweep:** `compliance-posture.md` records
+*"| T&C blanket statement contradictions | #736 | OPEN |"* — but **#736 is CLOSED**, and its actual
+title is *"legal: update Terms & Conditions for web platform cloud services."* The row is stale on
+both status and subject, so it cannot be relied on as prior art for the T&C contradictions this plan
+found. Treat those as **untracked** and file them fresh; add the stale row itself to the batch.
 
 ## User-Brand Impact
 

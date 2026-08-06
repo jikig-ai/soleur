@@ -30,7 +30,10 @@ a person's name or email. Committed third-party PII is an Art. 17 erasure imposs
       verbatim for the determination to cite.
 - [ ] 0.3 Re-derive the next free Art. 30 ordinal against `origin/main`
       (`grep -n "^## Processing Activity" knowledge-base/legal/article-30-register.md | tail -3`).
-- [ ] 0.4 Read open issue #736 (T&C blanket-statement contradictions) to avoid duplicating it.
+- [ ] 0.4 Note that **#736 is CLOSED** (title: *"legal: update Terms & Conditions for web platform
+      cloud services"*), while `compliance-posture.md` still records it as `OPEN` under the subject
+      "T&C blanket statement contradictions". The row is stale on both status and subject — the T&C
+      contradictions found here are **untracked**, so file them fresh rather than assuming prior art.
 - [ ] 0.5 Confirm `docs/legal/data-processing-agreement.md` still does not exist.
 - [ ] 0.6 Surface the UC-1 open decision from `decision-challenges.md`. Phase 2 is **skipped** under
       Option 1 (revoke access) and **executed** under Option 2 (retain and paper).
