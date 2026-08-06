@@ -217,6 +217,14 @@ jobs:
             # host is a PAT-exfil-via-redirect seam (mirrors postgrest-reload-schema.sh's
             # deliberate refusal of a host seam). curl 2>/dev/null keeps the
             # Authorization header out of $response; scrub_pat is the second line.
+            # NARROW BRACKET, deliberately not a body-top `set +e`. Actions runs this block
+            # under `bash -e {0}`, so errexit is inherited and `set -uo pipefail` does not
+            # clear it — which made `curl_rc` below dead code and any curl blip abort the step
+            # instead of classifying as pool_probe_unavailable (#7304). But this body is ~120
+            # lines and drives an AUTOMATED PROD RESTART off failure_mode/failure_detail, so
+            # clearing errexit for all of it would disarm far more than the capture. Scope it
+            # to the substitution and the read, then re-arm immediately.
+            set +e
             response="$(curl --silent --show-error \
               --request POST \
               --url "https://api.supabase.com/v1/projects/pigsfuxruiopinouvjwy/database/query" \
@@ -227,6 +235,7 @@ jobs:
               -w $'\n%{http_code}' \
               2>/dev/null)"
             curl_rc=$?
+            set -e
             http_code="${response##*$'\n'}"
             body="${response%$'\n'*}"
             # Truncate BEFORE sanitize (matches the probe step's head -c 400); scrub
