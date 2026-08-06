@@ -104,22 +104,28 @@ the only signal distinguishing "Soleur did this unattended" from "you finished
 this" is a 13px icon in a shared row. B needs an explicit legend sentence to work
 at all.
 
-Open design decisions carried forward to plan time:
+### Review outcome — **Variant A approved** (operator, 2026-08-06)
 
-- **Cap composition.** The cap keeps the 4 foundations visible and hides the 6
-  operational items. If the manifest is meant to make card ordering dynamic, the
-  cap should follow manifest priority instead — which changes what "top four"
-  means.
-- **Corner radius.** The Solar Forge brand guide specifies sharp 0px corners; the
-  shipped component uses `rounded-xl` / `rounded-lg`. The wireframes keep the
-  shipped radius so they read as *this* diff rather than smuggling in a radius
-  migration. Worth a separate decision.
-- **Card subtitles are rewritten**, not the raw `promptText` (which is long, and
-  empty for Vision). If the manifest carries display copy, these are the strings
-  to fill.
+The operator's approval carried a scope constraint that resolves all three of the
+designer's flagged decisions: *carry forward only what pertains to this feature;
+do not include new UX/UI changes that would be inconsistent with what is already
+present, or that change the system design.*
+
+| Designer flagged | Resolution | Rationale |
+|---|---|---|
+| Corner radius — brand guide says 0px, shipped uses `rounded-xl`/`rounded-lg` | **Keep shipped radius. Not in scope.** | A radius migration is precisely the "inconsistent with what is already present" change the constraint excludes. The wireframes already kept the shipped radius; this closes it rather than carrying it forward. |
+| Cap should follow manifest priority instead of the foundation/operational split | **Keep the existing split.** | Dynamic manifest-driven card ordering is a system-design change beyond this feature. The cap keeps the 4 foundations visible and collapses the 6 operational items, matching how the sets are already distinguished. |
+| Card subtitles rewritten rather than raw `promptText` | **Manifest carries display copy, seeded from the existing strings.** | The manifest carrying `title`/`description`/`cta` is architecturally required — without it the dashboard needs a second lookup for `OPERATIONAL_TASKS` metadata (FR1). But the seed values are the strings that ship today, not the designer's rewrites, so no copy change rides along. |
+
+Genuinely open, carried to plan time:
+
 - **Coverage arithmetic.** The designer computed 9 of 19 entries present (2
   generated artifacts + 7 component docs) with 10 business items absent. Confirm
   the denominator once the manifest entry set is fixed.
+- **Vision's empty `promptText`.** `FOUNDATION_PATHS` ships `promptText: ""` for
+  Vision because it is the first-run sentinel handled separately. Seeding the
+  manifest from existing strings inherits that empty value; confirm the sentinel
+  path still works when the copy comes from the manifest.
 
 ### The C4 feasibility correction (load-bearing)
 
