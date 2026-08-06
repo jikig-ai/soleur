@@ -728,10 +728,30 @@ if [ "$(grep -cE '.' "$CANARY_REQ" || true)" -eq 0 ]; then pass "zero requests r
 else fail "a request reached a destination that is neither the registry nor the pinned ingest" "$(head -3 "$CANARY_REQ")"; fi
 
 echo "== 1.1.9 / C1 / F6 — masking of the actually-consumed secrets =="
-if grep -qF "::add-mask::${PULL_SENTINEL}" "$OUT"; then pass "::add-mask:: emitted for ZOT_PULL_TOKEN"
-else fail "no ::add-mask:: for ZOT_PULL_TOKEN" "$(head -5 "$OUT")"; fi
-if grep -qF "::add-mask::${BS_SENTINEL}" "$OUT"; then pass "::add-mask:: emitted for BETTERSTACK_LOGS_TOKEN"
-else fail "no ::add-mask:: for BETTERSTACK_LOGS_TOKEN" "$(head -5 "$OUT")"; fi
+# ASSERTED ON THE RIGHT STREAM. These two used to require `::add-mask::<token>` in
+# $OUT — i.e. in STDOUT — which is the shape that caused the leak, not the shape
+# that prevents it: the caller redirects stdout into $MARKER_FILE and posts that
+# file into a comment on PUBLIC issue #7339, so a raw token on stdout is published.
+# The assertions certified the defect and a mutation arm made that certification
+# load-bearing.
+#
+# The mask must be EMITTED (the runner parses workflow commands from stderr too)
+# and must NOT be on stdout. Both directions are pinned, plus a whole-stream
+# sentinel sweep — the marker line was always clean; the leak was everything
+# around it, so an assertion scoped to the marker cannot see this class.
+if grep -qF "::add-mask::${PULL_SENTINEL}" "$ERR"; then pass "::add-mask:: emitted for ZOT_PULL_TOKEN (on stderr)"
+else fail "no ::add-mask:: for ZOT_PULL_TOKEN on stderr" "$(head -5 "$ERR")"; fi
+if grep -qF "::add-mask::${BS_SENTINEL}" "$ERR"; then pass "::add-mask:: emitted for BETTERSTACK_LOGS_TOKEN (on stderr)"
+else fail "no ::add-mask:: for BETTERSTACK_LOGS_TOKEN on stderr" "$(head -5 "$ERR")"; fi
+
+# THE LEAK GATE: no credential byte may appear ANYWHERE in stdout, because stdout
+# is what becomes the public issue comment.
+if grep -qF "$PULL_SENTINEL" "$OUT"; then
+  fail "ZOT_PULL_TOKEN appears in captured stdout — stdout becomes a PUBLIC issue comment" "$(grep -nF "$PULL_SENTINEL" "$OUT" | head -3)"
+else pass "no ZOT_PULL_TOKEN byte anywhere in stdout"; fi
+if grep -qF "$BS_SENTINEL" "$OUT"; then
+  fail "BETTERSTACK_LOGS_TOKEN appears in captured stdout — stdout becomes a PUBLIC issue comment" "$(grep -nF "$BS_SENTINEL" "$OUT" | head -3)"
+else pass "no BETTERSTACK_LOGS_TOKEN byte anywhere in stdout"; fi
 if grep -qF "$PULL_SENTINEL" <<<"$(marker)"; then fail "the pull token reached the marker line"; else pass "the pull token is absent from the marker"; fi
 if grep -qF "$BS_SENTINEL" <<<"$(marker)"; then fail "the ingest token reached the marker line"; else pass "the ingest token is absent from the marker"; fi
 if grep -qF "$PULL_SENTINEL" "$REQLOG" "$INGEST_BODY"; then fail "a sentinel reached a recorded request path or payload"; else pass "no sentinel in the recorded request paths or payload"; fi
@@ -900,7 +920,11 @@ echo "== 1.1.13 MUTATION — deleting the masking rule must leak the sentinels =
 if mutate_del inv-nomask '::add-mask::'; then
   dedup_fixture
   run_inv "$TMP/inv-nomask"
-  if grep -qF "::add-mask::${BS_SENTINEL}" "$OUT" || grep -qF "::add-mask::${PULL_SENTINEL}" "$OUT"; then
+  # $ERR, not $OUT. The masks moved to stderr when the leak was fixed, so grepping
+  # stdout here would pass whether or not the mutation landed — the arm would be
+  # vacuous in exactly the way it exists to disprove. A mutation arm has to read
+  # the stream the property lives on, and that stream changed.
+  if grep -qF "::add-mask::${BS_SENTINEL}" "$ERR" || grep -qF "::add-mask::${PULL_SENTINEL}" "$ERR"; then
     fail "MUTATION(mask): an ::add-mask:: survived the deletion — the masking check is vacuous"
   else
     pass "the masking mutant emits no ::add-mask:: — 1.1.9 is load-bearing"
