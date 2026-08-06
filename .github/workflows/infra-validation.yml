@@ -9,6 +9,35 @@
 name: Infra Validation
 
 on:
+  # (#7299) Also run on merges to main, for the infra CONTENT globs only.
+  #
+  # A PR-only gate structurally cannot catch a regression that reaches main without a PR run of
+  # this workflow: an admin/force merge, or — the realistic one — a merge-ORDER interaction where
+  # two PRs are each green alone and produce a state neither tested.
+  #
+  # NOT justified by #7299, despite the temptation. An earlier draft of this comment said "the
+  # zot pin bump (#7283) moved a budget reading that no run on main ever re-evaluated". That is
+  # false and was caught in review: `git cat-file -e 6720f2ae0^:apps/web-platform/infra/registry-userdata-budget.sh`
+  # fails — #7283 INTRODUCED the script and its job in the same commit, so there was no prior
+  # reading on main to move, and the job shipped `continue-on-error: true` anyway. The
+  # merge-order argument above stands on its own; #7299 is not evidence for it.
+  #
+  # DELIBERATELY NARROWER than the pull_request path set below, which is not duplicated here. Most
+  # of those entries exist so that editing the VALIDATOR re-runs the validator's own fixtures — a
+  # PR-time concern with no post-merge analogue. Copying all ~90 lines would create a second list
+  # with no parity control, which is the exact defect class #7299 was filed about.
+  push:
+    branches: [main]
+    paths:
+      - "apps/*/infra/**"
+      - "infra/**"
+      # The gate itself. What this actually buys, stated precisely: `detect-changes` maps only
+      # the two content globs to directories, so a workflow-ONLY push yields DIRS=[] and both
+      # `validate` and `registry-userdata-budget` skip. What still runs is `deploy-script-tests`
+      # (no `needs:`, no `if:`), which carries the budget drift-guard suite — so the measurement
+      # is re-run, just not via the standalone job. That is the coverage worth having here; do
+      # not read this entry as re-running the full matrix.
+      - ".github/workflows/infra-validation.yml"
   pull_request:
     paths:
       - "apps/*/infra/**"
@@ -122,6 +151,8 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
+          # Empty on pull_request; on push it is the pre-push tip (all-zeros on branch create).
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
           # Two infra-root families covered:
           #   - apps/*/infra/...      (per-app roots: web-platform, cla-evidence, ...)
@@ -140,6 +171,40 @@ jobs:
             DIRS=$( { find apps/*/infra -maxdepth 0 -type d 2>/dev/null ; \
                        find infra/* -maxdepth 0 -type d 2>/dev/null ; } \
                     | jq -R -s -c 'split("\n") | map(select(. != ""))')
+          elif [[ "$EVENT_NAME" == "push" ]]; then
+            # (#7299) BASE_REF is EMPTY on push events, so the PR-diff branch below would
+            # expand to the malformed `origin/...HEAD`. git resolves that to nothing, DIRS
+            # collapses to [], every gated job skips, and the run reports SUCCESS having
+            # validated nothing — a green light that is worse than no trigger at all.
+            #
+            # THE BASE IS `github.event.before`, NOT `HEAD^1`. GitHub evaluates the `paths:`
+            # filter across EVERY commit in a push, so a push of N>1 commits fires this workflow
+            # whenever ANY of them touches infra — but `HEAD^1` diffs only the tip. An earlier
+            # commit touching infra with a docs-only tip therefore yields [], the gated jobs
+            # skip, and the run reports success having validated nothing: the exact failure this
+            # branch exists to prevent, relocated from the empty-BASE_REF case to the
+            # multi-commit one. That matters here specifically because an admin/force merge —
+            # one of the two cases this trigger is justified by — is precisely what arrives as
+            # multiple commits rather than one squash. Precedent for the fix:
+            # web-platform-release.yml's "Changed-file trigger gate" reads github.event.before.
+            #
+            # Fail SAFE, not open: on a branch-create sentinel (all zeros), a force-push whose
+            # base is gone, or a root commit, validate EVERY infra root rather than emitting [].
+            # Running too much costs CI minutes; running nothing costs the guarantee — and no
+            # push-side job here touches a production credential (`plan` is pull_request-only),
+            # so the blast radius of over-validating is zero.
+            if [ -n "$BEFORE_SHA" ] && git rev-parse --verify --quiet "${BEFORE_SHA}^{commit}" >/dev/null; then
+              DIRS=$(git diff --name-only "$BEFORE_SHA" HEAD \
+                | { grep -E '^(apps/[^/]+/infra|infra/[^/]+)/' || true; } \
+                | sed -E 's|^(apps/[^/]+/infra)/.*|\1|; s|^(infra/[^/]+)/.*|\1|' \
+                | sort -u \
+                | jq -R -s -c 'split("\n") | map(select(. != ""))')
+            else
+              echo "::notice::push base '$BEFORE_SHA' is unresolvable; validating all infra roots (fail-safe)"
+              DIRS=$( { find apps/*/infra -maxdepth 0 -type d 2>/dev/null ; \
+                         find infra/* -maxdepth 0 -type d 2>/dev/null ; } \
+                      | jq -R -s -c 'split("\n") | map(select(. != ""))')
+            fi
           else
             DIRS=$(git diff --name-only "origin/${BASE_REF}...HEAD" \
               | { grep -E '^(apps/[^/]+/infra|infra/[^/]+)/' || true; } \
@@ -408,7 +473,22 @@ jobs:
     # wherever the clock ran out. Pull per-step durations from the API instead
     # (`gh api repos/jikig-ai/soleur/actions/runs/<id>/jobs`); see
     # knowledge-base/project/learnings/best-practices/2026-07-18-deploy-script-tests-at-budget-timeout-and-infra-pr-ci-gotchas.md
-    timeout-minutes: 8
+    #
+    # RE-DERIVED 2026-08-06 (#7299), as the block above instructs, because this PR adds a step.
+    # The 242-270 s figures recorded above are two revisions stale and the "~300 s → suspect the
+    # sleep mock" tripwire has been blown without anyone re-deriving. Measured from the API over
+    # the last 14 `Infra Validation` runs, whole-job seconds:
+    #   384 390 398 407 411 416 432 436 451 456 465 470 483* 501*   (* CANCELLED at the 480 s ceiling)
+    # So the job is ALREADY through its ceiling 2 of 14 runs (14%) before this PR. The added
+    # drift-guard step measures 0-1 s, i.e. ~0.2% — it is not the cause and does not meaningfully
+    # move the distribution, but shipping a step into a job that cancels at this rate would make
+    # the next unrelated failure look like this PR's.
+    #
+    # 8 → 12 minutes (720 s) restores ~1.4x over the observed 501 s max. Deliberately NOT larger:
+    # the ceiling's purpose is to catch a bypassed sleep mock, and a 20-minute ceiling would not.
+    # Current long poles (run 31054177230): git-data runcmd rehearsal 96 s, web-host parity
+    # mutation 47 s, ci-deploy 35 s, LUKS verify 28 s.
+    timeout-minutes: 12
     steps:
       # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so
       # the cloud-init-inngest-bootstrap drift-guard (AC6, #4675) can compare the
@@ -878,6 +958,27 @@ jobs:
       - name: Run registry boot-guard + disk-observability tests (#6240/#6244)
         run: bash apps/web-platform/infra/registry-boot-guard.test.sh
 
+      # (#7299) Pins that registry-userdata-budget.sh measures the render terraform actually
+      # STORES — that the strip is extracted-and-applied, and that an absent/duplicated/malformed
+      # declaration fails CLOSED with exit 2. Without it the script could regress to measuring the
+      # unstripped render and its own budget step would still report green.
+      #
+      # Registered HERE and not in the sibling `registry-userdata-budget` job, because
+      # .github/scripts/test/test-infra-suite-registration.sh gates on `JOB="deploy-script-tests"`
+      # and counts only single-line `run: bash` steps within it. (Precisely: run-registered-suites.sh
+      # greps the WHOLE workflow file, so a suite registered in another job would still be derived
+      # and would still run locally -- an earlier draft of this comment claimed otherwise. The
+      # job-scoping is the registration gate's rule, not the runner's.) This job also already
+      # provides the terraform the suite needs; in a job without it the suite would SKIP, which is
+      # vacuous rather than loud.
+      #
+      # timeout-minutes matches the job's attribution convention (see ci-deploy.sh tests at 3 and
+      # cloud-init-plugin-seed at 1): a bounded step names itself when the job hits its ceiling,
+      # instead of the cancellation landing on whatever was running. Measured 0-1 s; 2 is ~120x.
+      - name: Run registry user_data budget drift-guard (#7299)
+        timeout-minutes: 2
+        run: bash apps/web-platform/infra/registry-userdata-budget.test.sh
+
       # #6895 registry guest-side LUKS-at-rest guard suite (mutation-tested). Registered explicitly
       # (this job runs named steps, not a glob — an unregistered infra suite gates NOTHING and fails
       # silently green, #3366/#6520).
@@ -1171,27 +1272,68 @@ jobs:
 
   # Registry user_data byte budget (#7282). Its OWN job, deliberately, for two reasons.
   #
-  # (a) It must not live in `deploy-script-tests`: that job's registration gate refuses any
-  #     `continue-on-error:`/`if:` key, because there registration must imply execution. It
-  #     is right to refuse, and routing around it by deleting the check would be the exact
-  #     move this PR exists to argue against.
-  # (b) It cannot be a hard gate YET. The check is RED on `main` today (-2,032 B) and on this
-  #     branch (~-3.6 kB), all of it rationale prose. #7280's `local.registry_rationale_strip`
-  #     strips comments BEFORE render and brings it to ~9.4 kB. Hard-failing now would block
-  #     every infra PR on a pre-existing breach this PR did not create.
+  # (a) It USED to be barred from `deploy-script-tests`: that job's registration gate refuses any
+  #     `continue-on-error:`/`if:` key, because there registration must imply execution. That
+  #     reason DIED in #7299, which deleted the `continue-on-error`. What keeps the separate job
+  #     now is narrower and worth stating rather than inheriting: this job's name is the check
+  #     context #7302 would promote, and a promotion target has to be a check somebody can name.
+  #     The measurement itself is no longer exclusive to it — the drift-guard suite registered in
+  #     `deploy-script-tests` invokes the same script, in a job with no `if:` gate.
+  # (b) It was advisory pending a fix. The fix landed in #7299 — `continue-on-error` is GONE and
+  #     this job now fails the run for real. It is deliberately NOT a required context; see below.
   #
-  # So it RUNS and reports as its own visible job status rather than hiding inside a green
-  # one. The git-data host has had this gate since #6982; the registry host -- equally
-  # ForceNew, with a strictly worse failure mode (hcloud rejects the CREATE *after* the
-  # DESTROY succeeded, stranding the SOLE pull path) -- had none, which is precisely why a
-  # 2,032 B breach sat on main unnoticed. #7287 carries "flip this job to required" as a
-  # checklist item gated on #7280 merging.
+  # The history is worth keeping, because the reasoning was sound and the conclusion was still
+  # wrong. This comment used to read: "It cannot be a hard gate YET. The check is RED on `main`
+  # today (-2,032 B) ... #7280's `local.registry_rationale_strip` strips comments BEFORE render
+  # and brings it to ~9.4 kB." #7280 merged, the strip went live, and the reading never moved —
+  # because the SCRIPT never applied the strip the .tf applies. It measured a payload no host is
+  # ever given. The RED was the MEASUREMENT, not the payload: real stored user_data is 9,408 B
+  # with 23,360 B of headroom. #7299 was filed against that phantom as an outage ("the registry
+  # host cannot be re-provisioned"); it could be re-provisioned the whole time.
+  #
+  # A permanently-red advisory check is how that hid: it trains every reader to skip it, so
+  # nobody re-ran the reasoning when its own stated precondition was met. Shipping a knowingly-red
+  # gate needs an enforced follow-through, not a comment promising one.
+  #
+  # WHY NOT A REQUIRED CONTEXT (the #7299 issue asked). The answer is a COST/BENEFIT call, and
+  # saying so precisely matters — an earlier draft called it "blocked on #6480", which review
+  # showed is false and is the same stale-precondition trap this comment spends paragraphs
+  # indicting: it would tell the next reader to WAIT for #6480 rather than re-run the arithmetic.
+  #
+  # The mechanics: a required check must report a conclusion on EVERY PR or the PR sits in
+  # `Expected` forever. This workflow is `paths:`-filtered, so on a docs-only PR it never
+  # triggers and this job never reports. That is real, and it is why the context cannot simply be
+  # added to the ruleset as-is. But it does NOT require dropping THIS workflow's paths filter
+  # (#6480's concern, which is about the heavy matrix): this job is three steps with a 5-minute
+  # ceiling, so the tenant-integration.yml pattern — no paths filter + `merge_group:` + an
+  # always-run aggregator — is reproducible in its own small workflow at ~30-40 s per PR, and
+  # #6480 never enters it.
+  #
+  # It is not worth that today: the budget is already covered by the REQUIRED `test` context with
+  # a 12.7 kB margin between the TS budget and the real cap (see below), so a new workflow plus a
+  # ruleset apply buys precision, not safety. #7302 carries the recipe and this reasoning. Re-run
+  # the arithmetic there; do not treat it as blocked.
+  #
+  # AND IT IS DEFENSE IN DEPTH, NOT A HOLE. The budget is ALREADY guarded by the REQUIRED `test`
+  # context via plugins/soleur/test/cloud-init-user-data-size.test.ts, which extracts the same
+  # strip, asserts the strip is APPLIED at the user_data expression (a paren-balanced scan), and
+  # has been green throughout. It models the size with node zlib against a 20,000 B budget — i.e.
+  # it fires 12,768 B before the real cap, so byte-exactness is not what makes it a backstop.
+  #
+  # Note what is NOT this job's distinct value any more: an earlier draft claimed it as "measuring
+  # with terraform's OWN base64gzip, where that test models with node zlib". True before #7299,
+  # false after it — the drift-guard suite in `deploy-script-tests` runs this same script, so the
+  # byte-exact measurement happens there too, in a job with no `if:` gate. What remains distinct
+  # is the named check context (see (a) above).
+  #
+  # The git-data host has had this gate since #6982; the registry host -- equally ForceNew, with
+  # a strictly worse failure mode (hcloud rejects the CREATE *after* the DESTROY succeeded,
+  # stranding the SOLE pull path) -- had none.
   registry-userdata-budget:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     needs: detect-changes
     if: needs.detect-changes.outputs.directories != '[]'
-    continue-on-error: true
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
@@ -1200,6 +1342,10 @@ jobs:
           terraform_wrapper: false
       - name: Measure rendered registry user_data against Hetzner's 32,768 B cap
         run: bash apps/web-platform/infra/registry-userdata-budget.sh
+      # The suite that pins this measurement (registry-userdata-budget.test.sh) is registered in
+      # `deploy-script-tests`, NOT here -- the infra-suite-registration gate counts only that job,
+      # and run-registered-suites.sh derives its list from it. Registering it here instead would
+      # leave it uncovered by scripts/test-all.sh.
 
   check-secrets:
     runs-on: ubuntu-24.04
@@ -1219,7 +1365,13 @@ jobs:
 
   plan:
     needs: [detect-changes, validate, check-secrets]
+    # (#7299) PULL-REQUEST ONLY, deliberately. The new push-on-main trigger exists to re-run the
+    # cheap static gates against merged state; this job is neither cheap nor static — it reads
+    # prd_terraform credentials, runs `terraform plan` against live prod state, and writes its
+    # output back as a PR comment (a surface a push event has no equivalent of). Widening the
+    # trigger must not widen a job that touches production.
     if: |
+      github.event_name == 'pull_request' &&
       needs.detect-changes.outputs.directories != '[]' &&
       needs.check-secrets.outputs.has-doppler-token == 'true'
     runs-on: ubuntu-24.04
@@ -1320,3 +1472,36 @@ jobs:
       - name: Fail job on plan failure
         if: steps.plan.outputs.exit_code != '0'
         run: exit 1
+
+  # (#7299) THE PUSH-ON-MAIN TRIGGER NEEDS A CONSUMER, or it reproduces the defect this PR fixes.
+  #
+  # #7299 hid for two weeks because a permanently-red advisory check trains every reader to skip
+  # it. Adding a main-branch run with nothing watching it recreates that one layer up: verified at
+  # review time, NO workflow_run watcher names `Infra Validation` (post-merge-monitor.yml watches
+  # "CI" and filters on [bot-fix] commits), there is no Slack/Discord hook, and this workflow
+  # makes zero calls to notify-ops-email — the idiom 10 other workflows use. GitHub's built-in
+  # failed-run email routes to the pushing actor, which reusable-release.yml already documents as
+  # "frequently a GitHub App identity, i.e. nobody".
+  #
+  # PUSH ONLY. On a pull_request the red check is on the PR, where the author sees it; an email
+  # there would be noise. `always()` is required because this job exists to run when its
+  # dependencies failed. `continue-on-error` so a Resend outage cannot itself red the run.
+  notify-main-failure:
+    needs: [detect-changes, validate, deploy-script-tests, registry-userdata-budget, infra-validate-required]
+    if: |
+      always() && github.event_name == 'push' &&
+      (needs.validate.result == 'failure' ||
+       needs.deploy-script-tests.result == 'failure' ||
+       needs.registry-userdata-budget.result == 'failure' ||
+       needs.infra-validate-required.result == 'failure')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Email ops on a red Infra Validation run on main
+        continue-on-error: true
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[ALERT] Infra Validation failed on main'
+          body: '<p><strong>Infra Validation failed on a push to main.</strong></p><p>Commit: <code>${{ github.sha }}</code></p><p>validate=${{ needs.validate.result }} · deploy-script-tests=${{ needs.deploy-script-tests.result }} · registry-userdata-budget=${{ needs.registry-userdata-budget.result }} · infra-validate-required=${{ needs.infra-validate-required.result }}</p><p>A red infra gate on main means the merged state was never validated by a PR run of this workflow — an admin/force merge, or two individually-green PRs whose merge order produced an untested state.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
