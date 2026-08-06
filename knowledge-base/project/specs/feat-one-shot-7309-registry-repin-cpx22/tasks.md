@@ -172,6 +172,9 @@ Branch: `feat-one-shot-7309-registry-repin-cpx22` · PR #7325 (draft) · Closes 
 
 - **The apply itself.** Delivering `cpx22` to the live host is #7287's guarded dispatch, blocked
   by #7278 and #6929. `zot-registry.tf` says a plan showing a registry replace is a **STOP**.
+  This PR schedules no apply, so it **accepts no downtime and needs no maintenance window** — see
+  the plan's `## Downtime & Cutover`, which also records the zero-downtime (blue-green)
+  evaluation and hands it to #7287 / ADR-096 clause (g) / #6126 rather than closing it here.
 - **#6460** — the fleet-capacity audit (all three "grandfathered" hosts measured orderable).
 - **#7027** — the ADR-143 probe-table refresh.
 - Files whose `cx23` references are historical records or derivation fixtures: `git-data-luks.test.sh`,

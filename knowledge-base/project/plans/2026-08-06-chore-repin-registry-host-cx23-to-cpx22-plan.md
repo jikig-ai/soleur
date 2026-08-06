@@ -71,6 +71,61 @@ Do not soften it back into the issue's original framing.
 
 ---
 
+## Enhancement Summary
+
+**Deepened:** 2026-08-06 · **Reviewers:** kieran-rails-reviewer (correctness),
+code-simplicity-reviewer (YAGNI), a scoped `opus` advisor consult (ADR-083), two research
+agents, and a verify-the-negative sweep.
+
+### Key changes made at review
+
+1. **P0 — the `discoverability_test` command was spoofable.** It printed the whole `default = …`
+   line, and Check 10 substring-matches, so `default = "cx23" # was cpx22` would have PASSED on a
+   reverted default. Replaced with a comment-stripping, value-extracting form; **both arms
+   measured** against a synthesized spoof. This is the same defect precedent B already fixed in
+   `git-data-luks.test.sh`.
+2. **Q1 (replace vs in-place) is no longer measured on this PR.** The advisor showed the
+   prescribed `terraform plan` was **confounded** by the already-pending replace — it returns
+   `["delete","create"]` whatever `server_type` does, so it would have manufactured a false
+   "ForceNew confirmed" and written it into an ADR. Routed to #7287; a binding Q1-independence
+   invariant replaced the measurement.
+3. **Scope cut from 15 files to 12** and **20 ACs to 17** — three fold-ins (a `validation` block,
+   a new boot-guard assertion, an ADR-143 pointer) and six narration ACs removed. Precedent A
+   shipped the same operation in 7 files with none of them.
+4. **`## Downtime & Cutover` added** (deepen-plan Phase 4.55 halt fired on the `server_type`
+   change). It records the zero-downtime evaluation, names the blue-green blocker (the private IP
+   `10.0.1.30` is baked into ~20 consumer sites), and ties it to ADR-096 clause (g) / **#6126**
+   (OPEN: *"zot registry HA + read-replicas"*) rather than pretending to close it.
+5. **Sweep scope widened on evidence:** the re-derivation grep is now case-**insensitive**
+   (`CX23` appears in `cost-model.md` / `expenses.md` row labels), `model.c4` gained two more
+   falsified `cx33 is unorderable` clauses, and a **claim inventory** (Phase 0.8 + AC21) replaced
+   the unfalsifiable "five blocks someone noticed".
+
+### New considerations discovered
+
+- **Two of #7309's own file claims are false** and are corrected rather than inherited:
+  `stock-preflight-gate.sh` contains zero `cx23`, and the workflow's hits are at 2090/2115/2124/2142
+  (not 2085/2094) with the type derived at runtime.
+- **`cx33` and the whole "three grandfathered hosts" claim are also falsified** (both `cx33` and
+  `cx23` measured available in all three EU DCs) — corrected where this PR already edits, and
+  otherwise handed to #6460. The **`cax` line genuinely remains unavailable** and must survive.
+- **The repo contradicts itself** on whether `server_type` is `ForceNew` (ADR-096) or a
+  reboot-forcing in-place update (`variables.tf` + the destroy-guard's `reboot_updates` counter).
+  Recorded, not resolved.
+
+### Gates run
+
+Phase 4.6 (user-brand) PASS · 4.7 (observability, 5 fields) PASS · 4.8 (PAT-shaped) PASS ·
+4.9 (UI wireframe) **does not fire** — zero UI-surface paths in Files to Edit/Create ·
+4.10 (encryption posture) PASS · **4.55 (downtime) FIRED → section added** ·
+4.5 (network-outage) **does not fire** — no trigger keyword in Overview/Problem/Hypotheses, and
+`hcloud_server.registry` carries no `provisioner`/`connection` block, so there is no implicit SSH
+apply-time dependency. Phase 5's full agent fan-out was deliberately scoped to the four passes
+above: the plan is a 12-file prose sweep, and its reviewers' dominant finding was *excess*
+machinery, not insufficient review.
+
+---
+
 ## Overview
 
 `var.registry_server_type` defaults to `cx23`. This plan changes that default to `cpx22`,
@@ -507,6 +562,56 @@ has to ask.
 
 Not applicable — Hetzner Cloud has no free tier gate on server types. The only gate is live
 per-datacenter availability, which is what `stock_preflight_gate` asserts.
+
+---
+
+## Downtime & Cutover
+
+*(deepen-plan Phase 4.55 fires: the plan changes `server_type` on an `hcloud_server`.)*
+
+### The offline-inducing operation, named
+
+Delivering `cpx22` to the live host is a **power-cycle of the sole container-registry pull path**
+— the guarded `registry-host-replace` / `registry-luks-recut` `workflow_dispatch`. Whether
+`server_type` alone would be a replace or a reboot-forcing in-place resize is **Q1 and stays
+open**; the analysis below does not depend on it, because *both* take the host offline, and the
+already-pending `user_data` drift makes the carrying apply a replace either way.
+
+### This PR's downtime: ZERO — and that is verified, not assumed
+
+`zot-registry.tf` resources are `OPERATOR_APPLIED_EXCLUSIONS` and appear **nowhere** in the
+merge-path `-target=` allow-list, so the push-triggered apply never evaluates
+`hcloud_server.registry`. This PR changes a **declared** type. It schedules no apply, and
+therefore **accepts no downtime and requires no maintenance window**. AC18 verifies the merge run
+was a no-op on the registry.
+
+### Zero-downtime evaluation for the delivery (recorded here so #7287 inherits it, not so this PR performs it)
+
+The gate's default is zero-downtime-first. Evaluated honestly, the zero-downtime path for **this
+particular host** is not currently available, and the reason is structural rather than an
+oversight:
+
+| Path | Verdict |
+|---|---|
+| **Blue-green** (birth a second registry on `cpx22`, replicate the store, cut over, retire the old) | **The right shape, and blocked on a known gap.** `local.registry_private_ip = "10.0.1.30"` is baked into ~20 consumer sites — web-host `cloud-init.yml`, `docker-daemon.json.tmpl`, `server.tf`, the Cloudflare Tunnel ingress route in `tunnel.tf`, `ci-deploy.sh`, `web-zot-consumer-probe.sh`, `zot-entry-gate.sh`. A real blue-green needs either a private-IP move (itself a detach/attach on both hosts) or a coordinated repoint of every consumer. **This is not a new idea:** ADR-096 **clause (g)** already names "a second mirror" as one of its two named remedies, records that clause as still open, and notes it is owned by no issue (closest fit #6126). |
+| **Rolling / drain-then-act** | **Unavailable.** The registry is a singleton with no rotation and no second replica to drain onto. |
+| **Expand-contract** | **Not applicable** — no schema or data migration; the 60 GB store volume is preserved and re-attached by the dispatch's 6-target scope. |
+| **`terraform state mv` / state-only re-address** | **Not applicable** — the type genuinely changes on the provider side; there is no re-address that avoids touching the host. |
+| **Accept a bounded window** | What #7287 will actually do. Its runbook already mandates firing *immediately before a planned release window*, and ADR-169 governs what authorizes destroying the sole pull path at all. |
+
+**The outage, when it happens, is UNMASKED.** ADR-096 **retracted** its "the GHCR atomic fallback
+masks the brief replace outage" claim on 2026-07-30: the GHCR read PAT is revoked (401) and the
+minter is disabled (403 `GHCR_MINTER_DISABLED=true`), so the fallback is a dead code path. Any
+pull during the window fails outright. The store volume is preserved, so this is an **availability
+cost for the duration, not data loss** — but it must not be scheduled as though it were invisible.
+
+### Disposition
+
+This plan **does not close the zero-downtime gap and does not pretend to**. It records the
+evaluation, names ADR-096 clause (g) / #6126 as where the blue-green arm actually lives, and hands
+both to **#7287**, which owns the apply and the window. Folding the apply into this PR would also
+raise the brand-survival threshold from `aggregate pattern` to `single-user incident` — see
+*User-Brand Impact*.
 
 ---
 
@@ -992,7 +1097,7 @@ mitigation index; repeating it here would be a second copy of it.
 
 | Risk | Mitigation |
 |---|---|
-| **Q1 is "resolved" by a confounded single plan reading.** `hcloud_server.registry` already has a pending replace, so ONE plan shows `["delete","create"]` whatever `server_type` does — and that reading would then be written into an ADR a future one-way recreate will cite | Q1's measurement is a **differential** (Phase 0.1 baseline on `cx23` vs Phase 1.6 on `cpx22`); identical action sets ⇒ **UNKNOWN**. AC16 enforces both readings. The addendum is written Q1-independently and ADR-096's `ForceNew` clause is left untouched |
+| **Q1 is "resolved" by a confounded single plan reading.** `hcloud_server.registry` already has a pending replace, so ONE plan shows `["delete","create"]` whatever `server_type` does — and that reading would then be written into an ADR a future one-way recreate will cite **Q1 is not measured on this PR at all** — the confound is exactly why. Only a *differential* between a `cx23` plan and a `cpx22` plan would carry signal, and with the replace already pending the two are predicted identical, so the experiment returns UNKNOWN before it is run. Routed to #7287, which runs a plan anyway. AC16 enforces that nothing in the diff resolves it by implication and that ADR-096's `ForceNew` clause is left untouched |
 | **The claim sweep is unfalsifiable as designed** — a grep proves a token is gone, nothing proves a *claim* is gone, so the six grep-invisible blocks named here are only the six someone noticed | Phase 0.8 builds a numbered claim inventory by reading the affected files **whole**; AC21 gates on every row having a disposition AND a matching diff hunk |
 | The falsified premise has already propagated to files outside the edit list (other ADRs, runbooks, workflow prose) | Phase 0.9's repo-wide grep for `unorderable` / `cannot be rebuilt` / `0 of 3 EU` / `cx23`; AC23 requires the hit list be recorded and each hit folded in or scoped out |
 | The STOP-on-registry-replace guard is deleted along with the false stock premise it sits beside — removing the last guard on destroying the sole pull path | AC22 asserts the surviving phrase by content anchor, not a bare token |
