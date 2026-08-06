@@ -26,11 +26,26 @@ mock_provider "hcloud" {
   # meaningful here rather than disabling it: flip the default to a `cax*` type and
   # this file goes red, which is the correct signal.
   #
-  # zot-registry.tf reads the same data source but consumes only `.memory`, which a
-  # synthesized number satisfies harmlessly — git-data is the first assertion in this
-  # root on a mocked STRING attribute, which is why no prior test needed this.
+  # (STALE AS OF #7309 — corrected below.) This used to read: "zot-registry.tf reads
+  # the same data source but consumes only `.memory`, which a synthesized number
+  # satisfies harmlessly — git-data is the first assertion in this root on a mocked
+  # STRING attribute, which is why no prior test needed this."
+  #
+  # #7309 back-filled the ADR-068 D7 wrong-arch precondition onto hcloud_server.registry
+  # (it was the only host in this root without one, on the sole pull path). That makes
+  # zot-registry.tf the SECOND assertion on a mocked STRING attribute, so it needs the
+  # same override for the same reason — and CI proved it by failing with
+  # "Hetzner reports architecture=5xqx4f82", the misdirecting text this comment warns
+  # about, on the very run that introduced the precondition.
   override_data {
     target = data.hcloud_server_type.git_data
+    values = {
+      architecture = "x86"
+    }
+  }
+
+  override_data {
+    target = data.hcloud_server_type.registry
     values = {
       architecture = "x86"
     }
