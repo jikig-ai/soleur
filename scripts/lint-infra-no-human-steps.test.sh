@@ -672,10 +672,54 @@ EOF
 )"
 run_case "F20 ssh:// URLs and flagless ssh mentions stay clean (F19 did not over-widen)" 0 "$f"
 
+# F21 — #7286 review (CodeQL py/redos, high). F19's first fix widened HOST_LOGIN_RE with an
+# ALTERNATION whose branches overlapped (`-` was in both classes), so a token starting with `-`
+# matched either way and the engine explored exponentially many partitionings before failing.
+# Measured on `ssh ` + `-a ` * n + `x`: 12 tokens 0.001s, 14 0.005s, 16 0.019s, 18 0.076s — ~4x
+# per two tokens. That is a denial of THIS GATE: it runs in CI over repo markdown, so one
+# runbook line with a long flag list hangs the check enforcing hr-no-ssh-fallback-in-runbooks.
+#
+# A wall-clock bound is the only assertion that can distinguish linear from exponential here,
+# so this case is timing-based by necessity. The margin is deliberately enormous (2000 tokens
+# in <2s, versus the old form needing minutes at ~30) — a CI runner 1000x slower than this
+# machine still passes, while any reintroduction of the ambiguity fails by orders of magnitude.
+# `timeout 10` is load-bearing, not belt-and-braces: without it a reintroduced ReDoS makes this
+# case HANG rather than fail, and the suite is then killed by whatever outer budget CI applies —
+# a slow, unattributed job death instead of a named assertion. Verified by mutation: restoring
+# the ambiguous alternation kills an unbounded run at 120s with F21 never reporting, whereas the
+# bounded form fails in 10s naming the defect. `timeout` exits 124 on expiry.
+# `|| redos_rc=$?` is REQUIRED, not stylistic. This suite runs `set -euo pipefail`, so a bare
+# `timeout …` followed by `redos_rc=$?` ABORTS the script at the timeout — killing the run
+# before the FAIL branch below can name the defect. Measured: the mutant died at rc=124 having
+# printed nothing about F21, which reads as an unattributed suite death rather than a caught
+# regression. Same class the repo documents for `X=$(cmd); rc=$?` in Actions `run:` blocks.
+redos_start=$(date +%s)
+redos_rc=0
+timeout 10 python3 - <<'PY' || redos_rc=$?
+import importlib.util
+spec = importlib.util.spec_from_file_location("lint", "scripts/lint-infra-no-human-steps.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# No `user@` anywhere, so the regex MUST fail to match — the expensive direction. A matching
+# input would short-circuit and prove nothing.
+m.HOST_LOGIN_RE.search("ssh " + "-a " * 2000 + "x")
+PY
+redos_elapsed=$(( $(date +%s) - redos_start ))
+TOTAL=$((TOTAL + 1))
+if [[ "$redos_rc" -eq 0 && "$redos_elapsed" -lt 5 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: F21 HOST_LOGIN_RE is linear on 2000 flag tokens (${redos_elapsed}s) — no ReDoS"
+elif [[ "$redos_rc" -eq 124 ]]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: F21 HOST_LOGIN_RE did not terminate within 10s on 2000 flag tokens — catastrophic backtracking reintroduced (py/redos)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: F21 HOST_LOGIN_RE took ${redos_elapsed}s (rc=$redos_rc) on 2000 flag tokens"
+fi
+
 # ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=50
+MIN_CASES=51
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

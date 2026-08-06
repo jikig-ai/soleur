@@ -192,11 +192,30 @@ STRONG_ACTOR_RE = re.compile(
 # ACTOR_RES and STRONG_ACTOR_RE — and narrower in exactly the place (inside fences) where
 # runbooks actually paste the command.
 #
-# Non-greedy over flag/option tokens, still requiring a literal `user@` to appear, so this
-# cannot widen into matching `ssh` alone. `ssh://git@github.com` remains unmatched because a
-# literal space after `ssh` is still required.
+# Skips intervening tokens, still requiring a literal `user@`, so this cannot widen into
+# matching `ssh` alone. `ssh://git@github.com` stays unmatched because a literal space after
+# `ssh` is still required.
+#
+# THE ALTERNATION FORM WAS A ReDoS, and CodeQL (py/redos, high) caught it on the PR that
+# introduced it. The first draft was
+#   (?:-[^\s]+\s+|[A-Za-z0-9._/~$-][^\s@]*\s+)*?
+# whose two branches OVERLAP — `-` is inside the second branch's class too — so a token
+# starting with `-` matches both, and the engine explores an exponential number of
+# partitionings before failing. Measured on `ssh ` + `-a ` * n + `x`: 12 tokens 0.001s,
+# 14 0.005s, 16 0.019s, 18 0.076s — ~4x per two tokens, i.e. minutes by ~30. That is a
+# denial of the SECURITY GATE itself: this linter runs in CI over repo markdown, so one
+# runbook line with a long flag list hangs the check that enforces
+# hr-no-ssh-fallback-in-runbooks.
+#
+# The replacement is unambiguous by construction and bounded:
+#   * `[^\s@]+` and `\s+` are DISJOINT character classes, so each iteration has exactly one
+#     possible split — there is nothing to backtrack over;
+#   * `{0,10}` is a bounded quantifier, so the worst case is linear regardless. Ten
+#     intervening tokens is far beyond any real `ssh` invocation (`-i <key> -p <port>
+#     -o <opt>` is six).
+# Excluding `@` from the skipped tokens is what keeps `user@host` itself from being eaten.
 HOST_LOGIN_RE = re.compile(
-    r"\bssh\s+(?:-[^\s]+\s+|[A-Za-z0-9._/~$-][^\s@]*\s+)*?[A-Za-z0-9._%+-]+@",
+    r"\bssh\s+(?:[^\s@]+\s+){0,10}[A-Za-z0-9._%+-]+@",
     re.IGNORECASE,
 )
 
