@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# domain-model-headless-append.test.sh — the safety properties that make
+# auto-appending safe without an operator (#7332, plan Phase 2.2).
+#
+# WHY AUTO-APPEND IS SAFE HERE, AND ONLY HERE. The interactivity was never in this
+# script — `write-row` is already a non-interactive primitive. It lived in sync.md's
+# per-row AskUserQuestion gate, which headless mode auto-skips, so run 1 wrote zero
+# rows. The headless branch appends candidates directly, and that is defensible for
+# exactly one reason: `## Auto-inferred (unreviewed)` IS the staging area for
+# unreviewed content. Appending there is not auto-approving a business rule —
+# promotion to a curated `BR-*` id remains a deliberate human edit. That distinction
+# is the whole reason the section exists, and it is why this can be automated when a
+# per-row approval gate cannot.
+#
+# Because no human now reads each row before it lands, every safety property
+# write_row already had becomes load-bearing rather than advisory. Each one gets a
+# red-when-broken test here (plan AC9). All fixtures synthesized
+# (cq-test-fixtures-synthesized-only) — the "secret" below is a shape, not a value.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/test-helpers.sh"
+
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+DRIFT="$REPO_ROOT/scripts/domain-model-drift.sh"
+SYNC_MD="$REPO_ROOT/plugins/soleur/commands/sync.md"
+
+echo "=== domain-model headless append — preserved safety properties ==="
+echo ""
+
+assert_file_exists "$DRIFT" "domain-model-drift.sh exists"
+if [[ "$FAIL" -gt 0 ]]; then print_results; fi
+
+export TMPDIR="${TMPDIR:-/var/tmp}"
+WORK="$(mktemp -d -t dmappend.XXXXXXXX)" || { echo "FATAL: mktemp failed"; exit 2; }
+trap 'rm -rf "$WORK"' EXIT
+
+REPO="$WORK/repo"
+REG="$REPO/knowledge-base/engineering/architecture/domain-model.md"
+mkdir -p "$(dirname "$REG")" || { echo "FATAL: mkdir failed"; exit 2; }
+bash "$DRIFT" init --repo "$REPO" --register "$REG" >/dev/null 2>&1 \
+  || { echo "FATAL: init failed — cannot build the fixture"; exit 2; }
+
+slurp() { [[ -s "$1" ]] && cat "$1" || echo "<file-absent>"; }
+
+# Append a curated row by hand so we can prove the curated table is never touched.
+python3 - "$REG" <<'PY' || { echo "FATAL: fixture seed failed"; exit 2; }
+import sys
+p = sys.argv[1]
+s = open(p).read()
+anchor = "| ID | Rule | Statement | Source |\n|---|---|---|---|\n"
+assert anchor in s, "curated table header not found in seeded register"
+row = "| BR-TEST-1 | Curated rule | A hand-curated statement. | synthesized |\n"
+open(p, "w").write(s.replace(anchor, anchor + row, 1))
+PY
+
+curated_block() { awk '/^## Business Rules/,/^## Auto-inferred/' "$REG"; }
+CURATED_BEFORE="$(curated_block)"
+
+wr() { # wr <anchor> <statement> -> exit code
+  local rc=0
+  bash "$DRIFT" write-row --repo "$REPO" --register "$REG" \
+    --anchor "$1" --statement "$2" >/dev/null 2>&1 || rc=$?
+  echo "$rc"
+}
+
+# --- property 1: fail-closed secret-shape refusal ---------------------------
+# A synthesized token SHAPE (split across concatenation so no contiguous literal
+# exists in source — GitHub push protection scans for the real shape).
+SECRET_SHAPE="ghp_""0123456789abcdefghijABCDEFGHIJ0123"
+RC="$(wr "secret-anchor" "Statement carrying $SECRET_SHAPE inline.")"
+assert_eq "3" "$RC" "secret-shaped content is refused fail-closed (exit 3)"
+if grep -qF "$SECRET_SHAPE" "$REG"; then
+  echo "  FAIL: the secret-shaped value was written to the register"; FAIL=$((FAIL + 1))
+else
+  echo "  PASS: nothing was written when the secret scan tripped"; PASS=$((PASS + 1))
+fi
+
+# --- property 2: content-anchor dedup is a no-op ----------------------------
+RC="$(wr "dedup-anchor" "First statement.")"
+assert_eq "0" "$RC" "first write of an anchor succeeds"
+COUNT_1="$(grep -cF "dedup-anchor" "$REG" || true)"
+RC="$(wr "dedup-anchor" "Second statement, different text.")"
+assert_eq "0" "$RC" "re-proposing a known anchor exits 0 (no-op, not an error)"
+COUNT_2="$(grep -cF "dedup-anchor" "$REG" || true)"
+assert_eq "$COUNT_1" "$COUNT_2" "re-running does not duplicate the row — reruns are idempotent"
+if grep -qF "Second statement, different text." "$REG"; then
+  echo "  FAIL: dedup let a second statement through for a known anchor"; FAIL=$((FAIL + 1))
+else
+  echo "  PASS: the duplicate anchor's new statement was NOT appended"; PASS=$((PASS + 1))
+fi
+
+# --- property 3: appends land ONLY under Auto-inferred ----------------------
+RC="$(wr "placement-anchor" "Placement check statement.")"
+assert_eq "0" "$RC" "placement row writes"
+CURATED_AFTER="$(curated_block)"
+assert_eq "$CURATED_BEFORE" "$CURATED_AFTER" \
+  "the curated '## Business Rules' table is byte-identical before and after appends"
+
+# --- property 4: never mints a BR-* id --------------------------------------
+# The anchor is column 1, exactly where curated BR-NNN ids live, so a candidate
+# whose anchor starts with `BR-` must be neutralized rather than written verbatim.
+RC="$(wr "BR-FORGED-9" "Attempts to look like a curated rule.")"
+assert_eq "0" "$RC" "a BR--prefixed anchor is accepted but neutralized"
+FORGED="$(grep -cE '^\| BR-FORGED-9 ' "$REG" || true)"
+assert_eq "0" "$FORGED" "no row is minted with a literal BR-* id in column 1"
+
+# --- property 5: a forged heading cannot break out of the table -------------
+RC="$(wr "## Injected Heading" "Attempts to open a new section.")"
+INJECTED="$(grep -cE '^## Injected Heading' "$REG" || true)"
+assert_eq "0" "$INJECTED" "a '##'-prefixed anchor cannot forge a real heading"
+
+# --- property 6: a newline in a field is rejected outright ------------------
+RC="$(wr "multi
+line" "Statement.")"
+if [[ "$RC" -ne 0 ]]; then
+  echo "  PASS: a newline in the anchor is rejected"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: a newline in the anchor was accepted"; FAIL=$((FAIL + 1))
+fi
+
+# --- property 7: the register still has exactly one Auto-inferred heading ---
+# write_row's own TOCTOU guard aborts unless this is exactly 1; if any append
+# above had corrupted the structure, every later run would hard-fail.
+HN="$(grep -cE '^## Auto-inferred \(unreviewed\)' "$REG" || true)"
+assert_eq "1" "$HN" "the register still has exactly one Auto-inferred heading after all appends"
+
+# --- 2.3: the terminal-area contract is reconciled, not contradicted --------
+# grep, not assert_contains on the whole body — a failed substring assertion over
+# a 600-line file dumps the entire file into the log and buries every other result.
+if grep -qE '^##### `all`-dispatch path' "$SYNC_MD"; then
+  echo "  PASS: sync.md documents a distinct all-dispatch path for domain-model"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: sync.md has no distinct all-dispatch path section for domain-model"; FAIL=$((FAIL + 1))
+fi
+if grep -qE '^##### Standalone contract' "$SYNC_MD"; then
+  echo "  PASS: the standalone terminal contract is still stated explicitly"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: the standalone terminal contract was dropped, not reconciled"; FAIL=$((FAIL + 1))
+fi
+if grep -qE 'domain-model-drift\.sh init' "$SYNC_MD"; then
+  echo "  PASS: the all-dispatch path bootstraps the register via init"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: the all-dispatch path does not call init — it dies on a fresh repo"; FAIL=$((FAIL + 1))
+fi
+if grep -qE '^If `<sync_area>` is empty or `all`.*EXCEPT `rule-prune` AND `domain-model`' "$SYNC_MD"; then
+  echo "  FAIL: domain-model is still in the all-dispatch exclusion list (plan AC6)"; FAIL=$((FAIL + 1))
+else
+  echo "  PASS: domain-model no longer appears in the all-dispatch exclusion list (AC6)"; PASS=$((PASS + 1))
+fi
+
+print_results

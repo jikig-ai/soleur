@@ -243,9 +243,11 @@ Skip Phase 2 through Phase 4 when the area is `rule-prune` — the gh issue fili
 
 #### Domain Model Analysis
 
-Runs only when `<sync_area>` is literally `domain-model` (#5754). Drift-checks the business-rules
-register at `knowledge-base/engineering/architecture/domain-model.md` against the repo's data model
-and, with per-row operator approval, proposes newly-inferred rows. All extraction is deterministic
+Runs when `<sync_area>` is literally `domain-model` (#5754) **and** as part of `all` dispatch — with
+**two different contracts**, reconciled explicitly below so the difference does not survive as
+ambiguity. Drift-checks the business-rules register at
+`knowledge-base/engineering/architecture/domain-model.md` against the repo's data model
+and proposes newly-inferred rows. All extraction is deterministic
 (a bash analyzer); the LLM only phrases candidate statements at approval time — never in the
 drift-detection or write path. **Guarantee is bounded to structural documentation coverage, NOT
 semantic access-control correctness** — dynamic RLS, function-body logic, and un-merged `ALTER POLICY`
@@ -282,7 +284,47 @@ are disclosed as blind spots, never counted.
 3. **Report** the drift counts (stale / undocumented / blind-spots) and any rows written. No constitution /
    learnings promotion paths apply.
 
-Skip Phase 2 through Phase 4 when the area is `domain-model` — the drift report + approval-gated write ARE the output.
+##### Standalone contract (`/soleur:sync domain-model`)
+
+Skip Phase 2 through Phase 4 when the area is **explicitly** `domain-model` — the drift report +
+approval-gated write ARE the output. This contract is unchanged.
+
+##### `all`-dispatch path (and any headless run)
+
+The interactivity was never in the script — `write-row` is already a non-interactive primitive. It
+lives in the per-row `AskUserQuestion` gate above, which the Headless Execution Contract auto-skips,
+so under `all` (or headless) that gate would write **zero rows**. Take this path instead, then
+**continue into the remaining phases** rather than terminating:
+
+1. **Bootstrap the register if absent** — a fresh repo has none, and `drift` / `write-row` both die
+   on a path they cannot resolve:
+
+   ```bash
+   bash scripts/domain-model-drift.sh init --repo . \
+     --register knowledge-base/engineering/architecture/domain-model.md
+   ```
+
+   Idempotent: an existing register is a no-op exit 0, so this is safe to run unconditionally.
+
+2. **Emit the drift report** exactly as in step 1 above.
+
+3. **Append every candidate directly**, via the same `write-row` primitive — no approval gate.
+
+4. **Feed the row count into the coverage summary** (`domain_model_rows`) rather than reporting it as
+   a terminal output.
+
+**Why auto-appending is safe here, and only here.** `## Auto-inferred (unreviewed)` **is** the
+staging area for unreviewed content. Appending there is not auto-approving a business rule —
+promotion to a curated `BR-*` id remains a deliberate human edit. That distinction is the whole
+reason the section exists, and it is precisely why this can be automated when a per-row approval gate
+cannot.
+
+Because no human now reads each row before it lands, every safety property `write-row` already had
+becomes load-bearing rather than advisory, and each is pinned by a red-when-broken test in
+[`domain-model-headless-append.test.sh`](../test/domain-model-headless-append.test.sh): fail-closed
+secret-shape refusal, content-anchor dedup (re-runs are no-ops), atomic temp-then-rename write,
+appends under `## Auto-inferred (unreviewed)` only, never minting a `BR-*` id, and never touching the
+curated table.
 
 **1.3 Assign Confidence Scores**
 
