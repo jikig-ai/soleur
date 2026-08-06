@@ -138,9 +138,18 @@ ships. Generation is not gated on flag state.
 
 ## Technical Requirements
 
-**TR1 — ADR-067 preservation.** The dashboard must not regain a whole-KB
-`buildTree()` walk. Applicable manifest entries are capped (~40) with the cap
-asserted in a test.
+**TR1 — Targeted-stat preservation.** The dashboard must not regain a whole-KB
+`buildTree()` walk. `/api/dashboard/foundation-status` stats a known path set via
+`statKnownPaths` (`server/kb-reader.ts:370`), which already bounds its fan-out
+with `MAX_CONCURRENT_STAT`; applicable manifest entries are additionally capped
+(~40) with the cap asserted in a test.
+
+Provenance note: this targeted-stat design is recorded in
+`knowledge-base/project/plans/2026-07-07-perf-dashboard-load-and-conversation-list-plan.md`,
+not in an ADR. **ADR-067 is `adopt-swr-client-cache`** — it governs the SWR
+cache-key discipline the same route participates in (the route caches under its
+own key rather than `swrKeys.kbTree()`), which is a distinct constraint that also
+holds. Both must survive the rewire; do not conflate them.
 
 **TR2 — No new CLI→server write channel.** Predicate results travel as a committed
 repo artifact, not a database column.
