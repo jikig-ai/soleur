@@ -1093,6 +1093,7 @@ echo "--- #7286: unconditional-doppler unit -> credential drop-in FULL lockstep 
 DROPIN_ACK_UNITS=("inngest-cutover-flip.service")
 
 lockstep_examined=0
+LOCKSTEP_EXAMINED_UNITS=""
 for unit_path in "$SCRIPT_DIR"/*.service; do
   unit_file="$(basename "$unit_path")"
 
@@ -1111,6 +1112,7 @@ for unit_path in "$SCRIPT_DIR"/*.service; do
   if grep -qE '^EnvironmentFile=-?/etc/default/soleur-doppler-token$' "$unit_path"; then continue; fi
 
   lockstep_examined=$((lockstep_examined + 1))
+  LOCKSTEP_EXAMINED_UNITS+="$unit_file "
 
   stem="${unit_file%.service}"                       # inngest-redis
   conf="10-${stem}-doppler-token.conf"               # 10-inngest-redis-doppler-token.conf
@@ -1123,12 +1125,20 @@ for unit_path in "$SCRIPT_DIR"/*.service; do
     "[[ -f '$SCRIPT_DIR/$conf' ]]"
   assert "[$unit_file] $conf points at the re-deliverable credential (the '-' prefix is load-bearing)" \
     "grep -qxF 'EnvironmentFile=-/etc/default/soleur-doppler-token' '$SCRIPT_DIR/$conf'"
-  # Surface 2 — CI payload producer.
-  assert "[$unit_file] push-infra-config.sh emits payload key $payload_key" \
-    "grep -qF '\"$payload_key\"' '$SCRIPT_DIR/push-infra-config.sh'"
-  # Surface 3 — the pass-file-to-command bridge (the surface a FILE_MAP-only reading misses).
-  assert "[$unit_file] hooks.json.tmpl bridges $payload_key -> $env_var" \
-    "grep -qF '\"$payload_key\"' '$SCRIPT_DIR/hooks.json.tmpl' && grep -qF '\"$env_var\"' '$SCRIPT_DIR/hooks.json.tmpl'"
+  # Surface 2 — CI payload producer. Asserts PROVENANCE, not just the key: the payload line must
+  # base64 THIS unit's conf. Review's surviving mutation was pointing the redis payload key at
+  # `10-inngest-heartbeat-doppler-token.conf` — every key still present, both suites green, and
+  # the host receives the wrong file. Key-presence proves transmission happens; it does not
+  # prove WHAT is transmitted.
+  assert "[$unit_file] push-infra-config.sh emits payload key $payload_key FROM $conf" \
+    "grep -qE '\"$payload_key\":.*/$conf\"' '$SCRIPT_DIR/push-infra-config.sh'"
+  # Surface 3 — the pass-file-to-command bridge. Asserts the name->envname PAIRING on one entry,
+  # not co-presence in the file. Review's surviving mutation was swapping the envname values
+  # between the redis and inngest-server entries: all four tokens remain present, both guards
+  # pass, and each unit receives the OTHER's drop-in. That is benign only while the two confs are
+  # byte-identical — i.e. exactly the property the guard exists to survive losing.
+  assert "[$unit_file] hooks.json.tmpl PAIRS $payload_key -> $env_var on one entry" \
+    "grep -qE '\"name\": *\"$payload_key\".*\"envname\": *\"$env_var\"' '$SCRIPT_DIR/hooks.json.tmpl'"
   # Surface 4 — handler FILE_MAP.
   assert "[$unit_file] infra-config-apply.sh FILE_MAP carries $env_var -> $dest" \
     "grep -qF '$env_var|$dest|644|root:root' '$SCRIPT_DIR/infra-config-apply.sh'"
@@ -1143,12 +1153,57 @@ for unit_path in "$SCRIPT_DIR"/*.service; do
     "grep -qF 'apps/web-platform/infra/$conf' '$SCRIPT_DIR/../../../.github/workflows/apply-deploy-pipeline-fix.yml'"
 done
 
+# --- HEREDOC-AUTHORED UNITS (#7286 review, V1) -----------------------------------------------
+#
+# The loop above walks `$SCRIPT_DIR/*.service`, and that population is NOT the hazard class.
+# Measured: THREE of the units that carry `EnvironmentFile=/etc/default/inngest-server` are
+# written as heredocs inside inngest-bootstrap.sh (inngest-server, vector, inngest-heartbeat),
+# so the "class-closing" invariant closed only the subset that happens to be a checked-in file.
+# Review proved it by adding a heredoc unit with the full hazard shape and ZERO delivery wiring:
+# 190/190 green, while the identical unit as a tracked .service file goes RED with 8 failures.
+# Coverage was a function of which authoring form the next author picked — and the uncovered
+# form is the one #7286's own siblings use.
+#
+# The extractor resolves `readonly X="/etc/systemd/system/<name>.service"` + `cat > "$X" <<EOF`
+# and applies the SAME predicate, so the two populations cannot drift in what "hazard" means.
+HEREDOC_SOURCES=("$SCRIPT_DIR/inngest-bootstrap.sh")
+heredoc_examined=0
+for _src in "${HEREDOC_SOURCES[@]}"; do
+  [[ -f "$_src" ]] || continue
+  while IFS='|' read -r hu _hz _live; do
+    [[ -n "$hu" ]] || continue
+    heredoc_examined=$((heredoc_examined + 1))
+    hstem="${hu%.service}"
+    hconf="10-${hstem}-doppler-token.conf"
+    hdest="/etc/systemd/system/${hu}.d/${hconf}"
+    assert "[heredoc:$hu] drop-in $hconf exists" \
+      "[[ -f '$SCRIPT_DIR/$hconf' ]]"
+    assert "[heredoc:$hu] infra-config-apply.sh FILE_MAP carries $hdest" \
+      "grep -qF '|$hdest|644|root:root' '$SCRIPT_DIR/infra-config-apply.sh'"
+    assert "[heredoc:$hu] infra-config-install.sh DEST_SPEC allowlists $hdest" \
+      "grep -qF '[\"$hdest\"]=' '$SCRIPT_DIR/infra-config-install.sh'"
+  done < <(awk -f "$SCRIPT_DIR/heredoc-hazard-units.awk" "$_src" 2>/dev/null || true)
+done
+# Same vacuity guard as the file loop: the extractor is regex-driven over another script's
+# syntax, so a refactor there could silently empty this population. Two known members today
+# (inngest-server, vector); a drop to zero means the extractor broke, not that the hazard did.
+assert "heredoc hazard extractor examined >= 2 units (guard against a broken extractor)" \
+  "[[ '$heredoc_examined' -ge 2 ]]"
+
 # Cardinality guard. A selector typo (or a future refactor that renames the env file) would make
 # the loop body run ZERO times and this whole block would report success having asserted nothing
-# — the silent-green shape this suite exists to prevent. inngest-redis.service is the known
-# member; if it ever stops matching, that is a finding, not a pass.
+# — the silent-green shape this suite exists to prevent.
 assert "lockstep invariant examined >= 1 unit (guard against a vacuous selector)" \
   "[[ '$lockstep_examined' -ge 1 ]]"
+# IDENTITY, not just cardinality (#7286 review, V4). `>= 1` is satisfied by ANY member, so once a
+# second hazard unit is wired, acking inngest-redis.service AND deleting its drop-in goes green —
+# #7286 reintroduced verbatim with the guard still satisfied. Pin the member by name.
+assert "lockstep invariant examined inngest-redis.service specifically" \
+  "printf '%s' '$LOCKSTEP_EXAMINED_UNITS' | grep -qF 'inngest-redis.service'"
+# The ack list is the guard's only escape hatch, and prose ("an unexplained skip is how a ratchet
+# stops ratcheting") does not enforce itself. Growing it must be a deliberate, visible edit.
+assert "ack list holds exactly 1 entry (a silent second ack cannot open a hole)" \
+  "[[ \${#DROPIN_ACK_UNITS[@]} -eq 1 ]]"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="

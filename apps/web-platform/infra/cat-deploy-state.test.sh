@@ -518,6 +518,23 @@ assert "scrubber PRESERVES 'NOAUTH Authentication required' (no over-redaction)"
   "[[ \"\$NOAUTH_OUT\" == \"\$NOAUTH_LINE\" ]]"
 assert "the redis tail is non-empty (scrub proves something, not nothing)" \
   "[[ -n \"\$REDIS_TAIL\" ]]"
+
+# SIGNAL RETENTION — the absence assertions above cannot detect OVER-redaction, and `-n` does not
+# rescue them. Review's surviving mutation was appending
+#   sed -E 's/^.*(requirepass|masterauth|dp\.).*$/LINE-NUKED/gI'
+# to the pipeline: 108/108 green. Every `! grep <secret>` passes (secrets gone), `-n` passes
+# (other lines survive), and even the NOAUTH-preservation assert passes because that line carries
+# none of the three tokens — while every line carrying the actual #7286 diagnosis is destroyed.
+#
+# Over-redaction is the NATURAL failure mode of hardening a scrubber (this one was hardened twice
+# in a single review round), and this PR deletes the runbook's last-resort host login, so this
+# field is the only surface left. Bound the scrubber from BOTH sides: secrets must go, and the
+# diagnosis must stay. Substring asserts rather than an exact-tail match, so a future rule
+# addition does not force a fixture rewrite.
+for signal in "FATAL CONFIG FILE ERROR" "Bad directive or wrong number of arguments" "Doppler Error"; do
+  assert "diagnostic SURVIVES the scrubber (no over-redaction): $signal" \
+    "printf '%s' \"\$REDIS_TAIL\" | grep -qF '$signal'"
+done
 # The scrubber must be the SHARED one, so hardening it hardens all six tails at once — and so a
 # future rule added for one tail cannot silently miss the others. Asserted structurally rather
 # than by call-site spelling: exactly ONE unit-journal reader exists in the file (`journalctl -k`
@@ -546,10 +563,16 @@ assert "inngest_redis_dropin is empty when systemd has loaded no drop-in" \
 REDIS_OUT_LOADED=$(PATH="$REDIS_MOCK:$PATH" \
   MOCK_REDIS_DROPINS="/etc/systemd/system/inngest-redis.service.d/10-inngest-redis-doppler-token.conf" \
   CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
-assert "inngest_redis_dropin names the loaded drop-in by basename" \
-  "printf '%s' '$REDIS_OUT_LOADED' | jq -r '.services.inngest_redis_dropin' | grep -qF '10-inngest-redis-doppler-token.conf'"
+# EXACT basename, not substring: a full path CONTAINS its own basename, so `grep -qF <basename>`
+# is satisfied by emitting `$_p` verbatim — the "BASENAMES ONLY" contract was unpinned.
+assert "inngest_redis_dropin names the loaded drop-in by EXACT basename" \
+  "[[ \$(printf '%s' '$REDIS_OUT_LOADED' | jq -r '.services.inngest_redis_dropin') == '10-inngest-redis-doppler-token.conf' ]]"
+assert "inngest_redis_dropin emits no PATH separator (basenames only)" \
+  "! printf '%s' '$REDIS_OUT_LOADED' | jq -r '.services.inngest_redis_dropin' | grep -qF '/'"
+# The comment's stated hazard is `Environment=`, which the longer `EnvironmentFile=` literal does
+# not match — so the original negative forbade the wrong token. Forbid the shorter one.
 assert "inngest_redis_dropin emits basenames only (never drop-in CONTENT)" \
-  "! printf '%s' '$REDIS_OUT_LOADED' | jq -r '.services.inngest_redis_dropin' | grep -qF 'EnvironmentFile='"
+  "! printf '%s' '$REDIS_OUT_LOADED' | jq -r '.services.inngest_redis_dropin' | grep -qE 'Environment='"
 
 # --- tail_status disambiguates the four states service_journal_tail collapses ---
 assert "inngest_redis_tail_status is ok when the tail has content" \
@@ -610,6 +633,17 @@ REDIS_OUT_COMMENT=$(PATH="$REDIS_MOCK:$PATH" \
   CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
 assert "vector_config_identity reports redis_allowlisted=no when only a COMMENT names the tag" \
   "printf '%s' '$REDIS_OUT_COMMENT' | jq -r '.services.vector_config_identity' | grep -qF 'redis_allowlisted=no'"
+
+# The file-disclosure guard had NO assertion at all — deleting the `test -L` branch left the
+# suite fully green, because no fixture ever pointed the data dir at a symlink. The code comment
+# calls a list-then-read on an HTTP surface "a file-disclosure primitive"; the defense it
+# describes was untested.
+ln -s "$PRESENT_DIR/redis" "$PRESENT_DIR/redis-link"
+REDIS_OUT_SYMLINK=$(PATH="$REDIS_MOCK:$PATH" \
+  INNGEST_REDIS_DATA_DIR="$PRESENT_DIR/redis-link" \
+  CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+assert "datadir REFUSES a symlinked data dir (the file-disclosure guard is live)" \
+  "[[ \$(printf '%s' '$REDIS_OUT_SYMLINK' | jq -r '.services.inngest_redis_datadir') == 'refused-symlink' ]]"
 
 # binary: the absent discriminator. Was a bare ' distro_unit=' for three different causes.
 REDIS_OUT_NOBIN=$(PATH="$REDIS_MOCK:$PATH" \
