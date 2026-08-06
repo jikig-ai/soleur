@@ -83,7 +83,21 @@ def every_job_guarded():
     # one door the guard does not watch. An empty jobs map is NOT a pass.
     if not jobs:
         return False
-    return all(GUARD in str(j.get("if", "")) for j in jobs.values())
+    # CONTAINMENT IS NOT THE PROPERTY. `GUARD in cond` is satisfied by
+    #     if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    # which is #6425 verbatim — every push to main that touches this file dials the
+    # PRODUCTION registry — and it passed this assertion 52/52. The arm below only
+    # ever deleted `if:` entirely, the one form nobody would actually write.
+    #
+    # Require the condition to be EXACTLY the guard (whitespace-normalised). Any
+    # disjunction, any added clause, any weakening is a different expression and
+    # must red. A legitimate tightening (`&&`) also reds — that is correct: this
+    # guard's expression is a contract, and changing it should be deliberate.
+    for j in jobs.values():
+        cond = " ".join(str(j.get("if", "")).split())
+        if cond != GUARD:
+            return False
+    return True
 
 def dispatch_input_is_single_choice():
     inp = ((on.get("workflow_dispatch") or {}).get("inputs") or {}).get("action")
@@ -158,21 +172,35 @@ def perms():
     p = wf.get("permissions") or {}
     return p.get("contents") == "read" and p.get("issues") == "write"
 
-def comments_on_7247():
+def comments_on_7339():
     # #7278 is CLOSED by the PR that adds this lever, so it is not a valid recording target.
-    # #7247 is the OPEN action-required incident the number is evidence for.
+    # #7247 CLOSED 2026-08-06T13:18:32Z mid-review. #7339 is the dedicated OPEN
+    # follow-through whose sole directive is to receive this number.
     blob = "\n".join(str(s.get("run", "")) for j in jobs.values() for s in (j.get("steps") or []))
-    return "gh issue comment 7247" in blob
+    # Anchored at line-start on the ACTUAL command, so a `#` comment mentioning
+    # the old number cannot satisfy it. A prior form matched the bare substring
+    # anywhere in the run body, so posting to the wrong issue while leaving
+    # `# historical note: used to be gh issue comment 7247` above it passed 52/52.
+    import re as _re
+    return bool(_re.search(r"(?m)^\s*gh issue comment 7339\b", blob))
 
 def dispatch_guard_two_clause():
     # A label alone is NOT an authority boundary — applying one needs only Triage.
     if not jobs:
         return False
     for j in jobs.values():
-        cond = str(j.get("if", ""))
+        cond = " ".join(str(j.get("if", "")).split())
         if "github.event.label.name ==" not in cond:
             return False
         if "github.event.issue.user.type == 'Bot'" not in cond:
+            return False
+        # PRESENCE OF BOTH CLAUSES IS NOT CONJUNCTION. Rewriting the condition as
+        #     (github.event.label.name == '…' || github.event.issue.user.type == 'Bot')
+        # keeps both strings present and passed this assertion 52/52 — while making
+        # a Triage-level label application sufficient to dial production, which is
+        # exactly what the Bot clause exists to prevent. Require `&&` and forbid
+        # any `||`; the guard is a conjunction or it is not a boundary.
+        if "&&" not in cond or "||" in cond:
             return False
     return True
 
@@ -198,7 +226,7 @@ checks = {
     "forwards_checked_at": bridge_forwards("token-checked-at"),
     "forwards_cause": bridge_forwards("token-cause"),
     "teardown_always": has_teardown_always(),
-    "comments_7247": comments_on_7247(),
+    "comments_7339": comments_on_7339(),
     "dispatch_guard_two_clause": dispatch_guard_two_clause(),
 }
 print("yes" if checks[sys.argv[2]] else "no")
@@ -232,10 +260,10 @@ assert "every job carries a timeout-minutes cap" \
   "[[ \$(probe_wf '$WF' timeout_set) == 'yes' ]]"
 assert "concurrency group registry-zot-inventory with cancel-in-progress: false" \
   "[[ \$(probe_wf '$WF' concurrency) == 'yes' ]]"
-assert "permissions are contents:read AND issues:write (read-only cannot record on #7247)" \
+assert "permissions are contents:read AND issues:write (read-only cannot record the number)" \
   "[[ \$(probe_wf '$WF' permissions) == 'yes' ]]"
-assert "the recording target is #7247 (open), never #7278 (closed by this PR)" \
-  "[[ \$(probe_wf '$WF' comments_7247) == 'yes' ]]"
+assert "the recording target is #7339 (open tracker), not #7247 (closed 13:18:32Z) or #7278" \
+  "[[ \$(probe_wf '$WF' comments_7339) == 'yes' ]]"
 
 echo ""
 echo "--- 3.2: the bridge call forwards what the job MEASURED (ADR-166) ---"

@@ -360,7 +360,18 @@ jobs:
         run: |
           set -uo pipefail
           rc=0
-          bash scripts/zot-inventory.sh > "$MARKER_FILE" || rc=$?
+          # `doppler run --` is REQUIRED and was missing: the script reads
+          # ZOT_PULL_USER / ZOT_PULL_TOKEN / BETTERSTACK_LOGS_TOKEN from the
+          # AMBIENT environment and shells out to doppler nowhere, so a bare
+          # invocation died at its first precondition check with exit 2 on every
+          # dispatch. Setting DOPPLER_* in `env:` configures the CLI; it does not
+          # inject the secrets.
+          #
+          # All three live in `soleur/prd` — MEASURED, not inferred from
+          # zot-registry.tf (which mirrors BETTERSTACK_LOGS_TOKEN into the
+          # ISOLATED soleur-registry/prd project; reading only the .tf suggests,
+          # wrongly, that the prd root does not carry it).
+          doppler run -- bash scripts/zot-inventory.sh > "$MARKER_FILE" || rc=$?
           echo "--- emitted marker ---"
           cat "$MARKER_FILE" || true
           echo "--- enumerator exit: ${rc} ---"
@@ -473,13 +484,22 @@ jobs:
       # because #7247 is where the operator is already looking, and a 90-day Actions run log is
       # not a durable record.
       #
-      # #7247, NOT #7278. #7278 is closed by this PR, and a comment on a closed issue is a
-      # comment nobody reads. #7247 is OPEN and `action-required` — it is the live incident
-      # this number is evidence for.
+      # TARGET: #7339, not #7247 and not #7278.
+      #
+      # The original rationale here was "#7247 is OPEN and action-required". It closed at
+      # 2026-08-06T13:18:32Z, mid-review — so that rationale now selects exactly the outcome
+      # it was written to avoid (a comment on a closed issue is a comment nobody reads), and
+      # this is the failure mode ADR-171 predicted when it argued the trackers must be
+      # DEDICATED issues precisely because "#7247 is a live P1 that will close and take any
+      # tracker on it with it."
+      #
+      # #7339 is the dedicated, OPEN follow-through whose sole directive is "observe a real
+      # SOLEUR_ZOT_INVENTORY marker with enumeration_complete=true" — i.e. it exists to
+      # receive this number, and it stays open until the number arrives.
       #
       # `!cancelled()` rather than `always()`: this step MUTATES something (it writes to a
       # public issue), and a cancelled run should not leave a partial record behind.
-      - name: Record the marker + its interpretation on #7247
+      - name: Record the marker + its interpretation on #7339
         if: ${{ !cancelled() && steps.inventory.conclusion != 'skipped' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -490,9 +510,29 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
-          MARKER="(no marker file at ${MARKER_FILE} — the enumerator did not reach its emit step)"
-          if [[ -r "$MARKER_FILE" ]]; then
-            MARKER="$(cat "$MARKER_FILE")"
+          # SELECT the marker lines; never `cat` the whole stream into a public
+          # comment. Two independent reasons, both measured:
+          #
+          #  1. CREDENTIALS. The enumerator's stdout is this file. Anything it
+          #     prints — including, before this was fixed, its `::add-mask::`
+          #     lines carrying the RAW token values — would be published verbatim
+          #     on world-readable issue #7247. The masks now go to stderr, and
+          #     this grep is the second gate so a future stdout line cannot
+          #     re-open the hole.
+          #  2. REGISTRY-CONTROLLED BYTES. The stream also carries ~266 per-digest
+          #     `sha256:…:size` lines built from registry-supplied strings. A
+          #     hostile digest containing a newline and a fence terminator would
+          #     break out of the code fence and inject Markdown into a comment
+          #     posted under GITHUB_TOKEN on an issue agents read.
+          #
+          # `-s` not `-r`: the redirect CREATES the file, so `-r` is always true
+          # and the fallback below was unreachable — a precondition refusal
+          # (exit 2, message on stderr) posted an EMPTY fence with no cause onto
+          # a live P1 incident.
+          MARKER="(no marker emitted — the enumerator refused a precondition or died before its emit step; see the run log)"
+          if [[ -s "$MARKER_FILE" ]]; then
+            SELECTED="$(grep -E '^SOLEUR_ZOT_INVENTORY(_INGEST)? ' "$MARKER_FILE" || true)"
+            [[ -n "$SELECTED" ]] && MARKER="$SELECTED"
           fi
           # HEREDOC, never string-concatenation into a flag. The marker line is machine-built
           # and space-free by construction, but it is fenced anyway so a future field can never
@@ -523,13 +563,13 @@ jobs:
             echo "Run: ${RUN_URL}"
           } > "$BODY_FILE"
           rc=0
-          gh issue comment 7247 --repo "${GITHUB_REPOSITORY}" --body-file "$BODY_FILE" || rc=$?
+          gh issue comment 7339 --repo "${GITHUB_REPOSITORY}" --body-file "$BODY_FILE" || rc=$?
           if [[ "$rc" -ne 0 ]]; then
             # NON-FATAL BY DESIGN, and the reason is stated so nobody "fixes" it into a gate:
             # Better Stack is the durable home and the readback step above already gated on it.
             # Failing the run here would discard a successfully measured and successfully
             # persisted number over a comment.
-            echo "::warning::gh issue comment on #7247 exited ${rc} (comment_rc=${rc}). The marker itself is unaffected — it is in Better Stack Logs source 2457081 and printed above. Re-post by hand from this run's log if the comment matters."
+            echo "::warning::gh issue comment on #7339 exited ${rc} (comment_rc=${rc}). The marker itself is unaffected — it is in Better Stack Logs source 2457081 and printed above. Re-post by hand from this run's log if the comment matters."
           fi
 
       # Teardown, copied from the composite's documented CALLER-SIDE TEARDOWN CONTRACT. The

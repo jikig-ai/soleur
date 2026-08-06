@@ -142,8 +142,20 @@ for tool in curl jq; do
 done
 
 # C1 — mask immediately, before any use.
-printf '::add-mask::%s\n' "$ZOT_PULL_TOKEN"
-printf '::add-mask::%s\n' "$BETTERSTACK_LOGS_TOKEN"
+# STDERR, not stdout. The runner parses workflow commands from BOTH streams, but
+# the caller redirects our stdout to a file (`zot-inventory.sh > "$MARKER_FILE"`)
+# and then posts that file verbatim into a comment on PUBLIC issue #7247. On
+# stdout these two lines therefore did two wrong things at once: the runner never
+# saw them (so masking never registered during the run at all), and the raw token
+# bytes were carried into a world-readable issue body. `::add-mask::` scrubs the
+# log STREAM — it does not scrub bytes on disk and it does not touch the HTTP
+# body of a `gh` API call.
+#
+# Pinned by the "no credential sentinel anywhere in captured stdout" assertion in
+# tests/scripts/test-zot-inventory.sh — which must read the WHOLE stream, not the
+# marker line (the marker was always clean; the leak was everything around it).
+printf '::add-mask::%s\n' "$ZOT_PULL_TOKEN" >&2
+printf '::add-mask::%s\n' "$BETTERSTACK_LOGS_TOKEN" >&2
 
 # C3 — credentials live in files inside a private scratch dir, never on argv.
 umask 077
@@ -206,7 +218,33 @@ link_next() {  # $1 header-dump path
   raw="$(grep -iE '^Link:' "$1" 2>/dev/null | tail -1 | tr -d '\r')"
   [[ -z "$raw" ]] && return 0
   grep -qE 'rel="?next"?' <<<"$raw" || return 0
-  sed -E 's/^[Ll]ink:[[:space:]]*<([^>]*)>.*/\1/' <<<"$raw"
+  local nxt
+  nxt="$(sed -E 's/^[Ll]ink:[[:space:]]*<([^>]*)>.*/\1/' <<<"$raw")"
+
+  # The Link header is REGISTRY-CONTROLLED and is concatenated onto $REGISTRY_URL,
+  # so an unvalidated value is an egress escape, not a formatting bug. curl parses
+  # everything before an `@` as USERINFO, so a header of
+  #
+  #     Link: <@attacker.tld/v2/_catalog>; rel="next"
+  #
+  # yields http://127.0.0.1:5000@attacker.tld/v2/_catalog — a real off-box request
+  # from a runner holding production credentials, whose response is then parsed as
+  # a catalog and drives further requests. Measured against curl 8.18.0: the
+  # request resolved to attacker.tld, not to the loopback bridge.
+  #
+  # The canary test could not catch this: every fixture Link is a relative path, so
+  # the "reaches exactly two destinations" assertion was never exercised on the one
+  # input class able to falsify it.
+  #
+  # Accept only a ROOTED PATH — no scheme, no authority, and no `@` anywhere. A
+  # rejection is not silent: it is an incomplete enumeration, so it must reach
+  # enumeration_complete the same way an unfollowed Link does.
+  if [[ ! "$nxt" =~ ^/[A-Za-z0-9._~/?=\&%:+-]*$ ]] || [[ "$nxt" == *@* ]]; then
+    printf 'the registry returned a Link "next" target that is not a rooted path (verdict=link_rejected_non_rooted). Refusing to follow it; this sweep is incomplete.\n' >&2
+    LINK_UNFOLLOWED=$((LINK_UNFOLLOWED + 1))
+    return 0
+  fi
+  printf '%s\n' "$nxt"
 }
 
 # ---------------------------------------------------------------------------------
@@ -562,11 +600,32 @@ done
 # ---------------------------------------------------------------------------------
 # Completeness and the verdict.
 # ---------------------------------------------------------------------------------
+# `TAGS -ge 1` is load-bearing and was missing. Without it the V2 `catalog_empty`
+# failure — "a permissions artifact dressed up as a complete enumeration" — simply
+# re-enters one layer down: a credential with CATALOG scope but no per-repo read
+# gets `200 {"repositories":[…]}` then `200 {"tags":[]}` for every repo, which
+# trips no error counter and clears the repo floor. Measured on the unmutated
+# script: `repos=2 repos_enumerated=2 tags=0 manifests_fetched=0 unique_blobs=0
+# enumeration_complete=true delta_gb=59.00`, exit 0 — i.e. the lever certifies
+# "59 GB unreferenced" as a licensed conclusion, the round-trip gate passes it
+# (it keys only on run_id + enumeration_complete), and the comment publishes it.
+#
+# zot's accessControl is deny-by-default and per-repo, so this is a REACHABLE
+# production state, not a synthetic one. A store with zero tags is also a real
+# state — but it is indistinguishable from the permissions artifact at this layer,
+# and between "report incomplete on a genuinely empty store" and "publish a false
+# 59 GB finding", only the first is survivable.
 if [[ "$CATALOG_ERRORS" -eq 0 && "$TAG_LIST_ERRORS" -eq 0 && "$MANIFEST_ERRORS" -eq 0 \
-      && "$REFERRER_ERRORS" -eq 0 && "$LINK_UNFOLLOWED" -eq 0 && "$REPOS" -ge "$REPO_FLOOR" ]]; then
+      && "$REFERRER_ERRORS" -eq 0 && "$LINK_UNFOLLOWED" -eq 0 && "$REPOS" -ge "$REPO_FLOOR" \
+      && "$TAGS" -ge 1 && "$MANIFESTS_FETCHED" -ge 1 ]]; then
   ENUMERATION_COMPLETE=true
 else
   ENUMERATION_COMPLETE=false
+fi
+
+if [[ "$TAGS" -eq 0 || "$MANIFESTS_FETCHED" -eq 0 ]]; then
+  printf 'the catalog listed %s repositories but the sweep enumerated %s tags and fetched %s manifests (verdict=enumeration_yielded_nothing). This is what a catalog-scoped credential with no per-repo read looks like; no delta is claimed.\n' \
+    "$REPOS" "$TAGS" "$MANIFESTS_FETCHED" >&2
 fi
 
 if [[ "$REPOS" -lt "$REPO_FLOOR" ]]; then
