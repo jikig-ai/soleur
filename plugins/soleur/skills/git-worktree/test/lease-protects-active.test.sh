@@ -187,5 +187,19 @@ echo
 echo "=== Results ==="
 echo "PASS: $PASS"
 echo "FAIL: $FAIL"
+
+# ANTI-VACUITY FLOOR — same reasoning as session-state.test.sh. `FAIL -eq 0` is
+# a pure zero-check, so a run that asserts NOTHING exits 0. That is not
+# hypothetical here: both scenarios assert worktree SURVIVAL, which is satisfied
+# whenever cleanup-merged does nothing for any reason at all — an early `return`
+# on the fetch-prune path, a non-zero sweep aborting under `set -e`, a lock it
+# could not take. A floor cannot detect a no-op reap loop by itself, but it does
+# catch the case where the assertions were never reached.
+MIN_ASSERTIONS=3
+if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
+  echo "FAIL: only $PASS assertions ran, expected >= $MIN_ASSERTIONS — the suite did not execute what it claims to cover."
+  exit 1
+fi
+
 [[ "$FAIL" -eq 0 ]] || exit 1
 exit 0

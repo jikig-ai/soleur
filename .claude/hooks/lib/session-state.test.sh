@@ -497,6 +497,43 @@ else
   fail "T12: a corrupt duration field made a fresh lease reapable — fail-open on a destructive path"
 fi
 
+# T12b: the input the regex ACCEPTS but bash arithmetic rejects. `^[0-9]+$`
+# admits a leading zero; bash then reads it as OCTAL, where 8 and 9 are invalid
+# digits, so the arithmetic ERRORS and the window comes back empty. Measured
+# before the `10#` fix: a 0-second-old lease read INACTIVE *and* was swept in
+# the same pass. T12's `abc` cannot reach this — it is rejected by the regex.
+for T12B_DUR in 08 09 090; do
+  T12B_WT="wt-octal-${T12B_DUR}-$$"
+  cat > "$ROOT/leases/$T12B_WT.lease" <<EOF
+pid=999999
+ppid=1
+skill=one-shot
+started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+expected_duration_min=$T12B_DUR
+hostname=$HOSTNAME
+EOF
+  if ( set -euo pipefail; is_lease_active "$T12B_WT" ) 2>/dev/null; then
+    pass "T12b: a fresh lease with expected_duration_min=$T12B_DUR is ACTIVE (octal-safe)"
+  else
+    fail "T12b: expected_duration_min=$T12B_DUR made a FRESH lease reapable (octal arithmetic error)"
+  fi
+  sweep_orphan_leases
+  if [[ -f "$ROOT/leases/$T12B_WT.lease" ]]; then
+    pass "T12b: sweep preserves the expected_duration_min=$T12B_DUR lease"
+  else
+    fail "T12b: sweep DELETED a 0-second-old lease because of expected_duration_min=$T12B_DUR"
+  fi
+done
+
+# T12c: a leading zero must not silently SHRINK the window either. `0700` does
+# not error — octal 0700 is 448, so the lease would be honoured 7.5h instead of
+# the 11.7h it declares. Quiet under-protection is still under-protection.
+if [[ "$(_lease_window_seconds 0700)" == "42000" ]]; then
+  pass "T12c: expected_duration_min=0700 yields 42000s (decimal 700min), not octal 448min"
+else
+  fail "T12c: expected_duration_min=0700 yielded $(_lease_window_seconds 0700)s — octal shrank the window"
+fi
+
 # ------------------------------------------------------------------------
 # T13: an unbounded expected_duration_min must NOT create an immortal lease.
 #
@@ -550,9 +587,272 @@ else
 fi
 
 # ------------------------------------------------------------------------
+# T14: sweep_orphan_leases must return 0 on a malformed / racing lease.
+#
+# cleanup_merged_worktrees calls it BARE under `set -euo pipefail`, so a
+# non-zero return aborts every maintenance step after it — fetch-prune, the
+# whole reap loop, orphan-dir cleanup, tmp reclamation, runaway-kill. The
+# failure direction is safe (nothing is reaped) which is precisely what makes
+# it a SILENT disable. `_lease_read_field` returns 1 for a missing field and
+# for a vanished file, and a sibling releasing its lease mid-sweep is an
+# ordinary race — no corruption required.
+# ------------------------------------------------------------------------
+echo "T14: the sweep survives malformed and racing leases under set -e"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+source_helper "$ROOT"
+
+# Each fixture omits exactly one field.
+printf 'ppid=1\nskill=one-shot\nstarted_at=%s\nexpected_duration_min=240\nhostname=%s\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$HOSTNAME" > "$ROOT/leases/no-pid-$$.lease"
+printf 'pid=999999\nppid=1\nskill=one-shot\nexpected_duration_min=240\nhostname=%s\n' \
+  "$HOSTNAME" > "$ROOT/leases/no-started-$$.lease"
+printf 'pid=999999\nppid=1\nskill=one-shot\nstarted_at=%s\nhostname=%s\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$HOSTNAME" > "$ROOT/leases/no-dur-$$.lease"
+printf 'pid=999999\nppid=1\nskill=one-shot\nstarted_at=%s\nexpected_duration_min=240\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$ROOT/leases/no-host-$$.lease"
+: > "$ROOT/leases/empty-$$.lease"
+
+# `bash -c`, NOT a `( … )` subshell. Measured: the subshell form does NOT
+# reproduce the abort — it inherits this suite's already-relaxed option state and
+# the mutation (dropping `|| true`) survived it, reporting coverage that did not
+# exist. A fresh process entered with `set -euo pipefail` is the shape
+# worktree-manager.sh actually has, and it reds correctly.
+t14_rc=0
+bash -c "
+  set -euo pipefail
+  export SOLEUR_SESSION_STATE_ROOT='$ROOT'
+  # shellcheck source=/dev/null
+  source '$HELPER'
+  sweep_orphan_leases
+" >/dev/null 2>&1 || t14_rc=$?
+
+if [[ "$t14_rc" -eq 0 ]]; then
+  pass "T14: sweep returns 0 on malformed leases under set -euo pipefail"
+else
+  fail "T14: sweep returned $t14_rc — cleanup-merged would abort here, silently skipping every step after it"
+fi
+
+# ------------------------------------------------------------------------
+# T15: the release trap must NOT fire on normal process exit.
+#
+# This is the defect that made every other protection in this file dead code
+# for the path that matters. `create_worktree` acquires the lease and registers
+# the trap IN THE SAME PROCESS, and that process exits normally on success — so
+# with EXIT armed the lease was deleted before `create` returned, and
+# `is_lease_active` never got past its `[[ -f "$lease_file" ]]` guard. Measured
+# before the fix: the leases directory is EMPTY the instant create returns.
+#
+# Both directions are pinned: normal exit must PRESERVE, an abnormal signal must
+# still RELEASE (that genuinely means the holder died).
+# ------------------------------------------------------------------------
+echo "T15: the release trap fires on signals, not on normal exit"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+source_helper "$ROOT"
+
+bash -c "
+  export SOLEUR_SESSION_STATE_ROOT='$ROOT'
+  # shellcheck source=/dev/null
+  source '$HELPER'
+  acquire_lease t15-normal one-shot 240
+  _register_lease_release_trap t15-normal
+" >/dev/null 2>&1
+if [[ -f "$ROOT/leases/t15-normal.lease" ]]; then
+  pass "T15a: a lease survives the acquiring process exiting NORMALLY"
+else
+  fail "T15a: the EXIT trap deleted the lease on normal exit — every guard below the file check is dead code"
+fi
+
+bash -c "
+  export SOLEUR_SESSION_STATE_ROOT='$ROOT'
+  # shellcheck source=/dev/null
+  source '$HELPER'
+  acquire_lease t15-signal one-shot 240
+  _register_lease_release_trap t15-signal
+  kill -TERM \$\$
+  sleep 5
+" >/dev/null 2>&1
+if [[ -f "$ROOT/leases/t15-signal.lease" ]]; then
+  fail "T15b: SIGTERM left the lease behind — an abnormal exit does mean the holder died, and should release"
+else
+  pass "T15b: SIGTERM still releases the lease"
+fi
+
+# ------------------------------------------------------------------------
+# T16: the documented CLI release must actually release.
+#
+# Measured before the fix: `bash session-state.sh release_lease <wt>` — the call
+# one-shot and work both instruct at end-of-work — returned rc=0 and deleted
+# NOTHING, because a fresh process has a different `$$` and an empty
+# `_LEASE_ACQUIRED_STARTED_AT`. It reported success while leaking the lease.
+# With the trap no longer firing on normal exit, this is the ONLY clean release
+# path, so an unreachable guard here would make every lease live its full window.
+# ------------------------------------------------------------------------
+echo "T16: the documented post-exit release works"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+source_helper "$ROOT"
+
+bash -c "
+  export SOLEUR_SESSION_STATE_ROOT='$ROOT'
+  # shellcheck source=/dev/null
+  source '$HELPER'
+  acquire_lease t16-wt one-shot 240
+" >/dev/null 2>&1
+if [[ ! -f "$ROOT/leases/t16-wt.lease" ]]; then
+  fail "T16 setup: no lease to release"
+else
+  SOLEUR_SESSION_STATE_ROOT="$ROOT" bash "$HELPER" release_lease t16-wt >/dev/null 2>&1
+  if [[ -f "$ROOT/leases/t16-wt.lease" ]]; then
+    fail "T16a: the documented release_lease call is a silent no-op — leases would never be released"
+  else
+    pass "T16a: a fresh process can release a lease whose acquirer has exited"
+  fi
+fi
+
+# T16b: it must NOT release a lease held by a different, still-LIVE process.
+sleep 300 &
+T16_LIVE=$!
+cat > "$ROOT/leases/t16-live.lease" <<EOF
+pid=$T16_LIVE
+ppid=1
+skill=one-shot
+started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+expected_duration_min=240
+hostname=$HOSTNAME
+EOF
+SOLEUR_SESSION_STATE_ROOT="$ROOT" bash "$HELPER" release_lease t16-live >/dev/null 2>&1
+if [[ -f "$ROOT/leases/t16-live.lease" ]]; then
+  pass "T16b: a lease held by a different LIVE process is refused"
+else
+  fail "T16b: released another live session's lease — the ownership guard is gone"
+fi
+kill "$T16_LIVE" 2>/dev/null || true
+
+# ------------------------------------------------------------------------
+# T17: the floor and ceiling are pinned AS VALUES, not just behaviourally.
+#
+# T13 proves a 20-day-old lease is inactive, but it passes for ANY ceiling under
+# 20 days — widening 86400 to 604800 (7d) left the whole suite green. A constant
+# whose only test is a fixture far outside it is not pinned. These assert the
+# function's output directly, so changing either literal reds immediately.
+# ------------------------------------------------------------------------
+echo "T17: _lease_window_seconds pins both bounds as values"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+source_helper "$ROOT"
+
+t17() { # label, input, expected
+  local got; got=$(_lease_window_seconds "$2")
+  if [[ "$got" == "$3" ]]; then pass "T17: $1 ($2 -> $3)"; else fail "T17: $1 — expected $3, got $got"; fi
+}
+t17 "floor binds below 4h"            1        14400
+t17 "floor binds at the default"      240      14400
+t17 "declared duration passes through" 700     42000
+t17 "ceiling binds above 24h"         525600   86400
+t17 "ceiling binds on overflow"       99999999999999999999 86400
+
+# T17b: the ceiling and the sweep's mtime cap MUST be the same number. The
+# comment on the ceiling claims pinning them together is "what makes 'the 24h
+# sweep is the backstop' TRUE rather than merely claimed" — nothing verified
+# that, so the two 86400s could drift apart silently.
+T17_CEIL=$(_lease_window_seconds 525600)
+T17_MTIME=$(grep -oE '\(\( age > [0-9]+ \)\)' "$HELPER" | grep -oE '[0-9]+' | head -1)
+if [[ "$T17_CEIL" == "$T17_MTIME" ]]; then
+  pass "T17b: window ceiling ($T17_CEIL) == sweep mtime cap ($T17_MTIME) — the backstop claim holds"
+else
+  fail "T17b: ceiling $T17_CEIL != mtime cap $T17_MTIME — 'the 24h sweep is the backstop' is no longer true"
+fi
+
+# ------------------------------------------------------------------------
+# T18: worktree-manager must actually CALL the sweep inside cleanup, and must
+# fail CLOSED when the lease library is missing.
+#
+# Both were unpinned: reverting the stub to `return 1` (the pre-fix fail-open
+# that is half this branch's point) and deleting the sweep call each left every
+# suite green. Anchored on the call/return syntax, not a bare token — the
+# explanatory comments above both sites name them, so a bare grep would be
+# satisfied by the prose.
+# ------------------------------------------------------------------------
+echo "T18: the worktree-manager wiring is pinned"
+WM="$(cd "$SCRIPT_DIR/../../.." && pwd)/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+
+if [[ ! -f "$WM" ]]; then
+  fail "T18 setup: worktree-manager.sh not found at $WM"
+else
+  # The sweep call must appear INSIDE cleanup_merged_worktrees, at the start of
+  # a line (a comment line starts with '#', so this cannot match the prose).
+  if awk '/^cleanup_merged_worktrees\(\)/,/^}/' "$WM" | grep -qE '^[[:space:]]*sweep_orphan_leases'; then
+    pass "T18a: cleanup_merged_worktrees invokes sweep_orphan_leases"
+  else
+    fail "T18a: the sweep call is gone from cleanup_merged_worktrees — the 24h backstop never runs during cleanup"
+  fi
+
+  # The missing-library stub must fail CLOSED.
+  if grep -qE '^[[:space:]]*is_lease_active\(\)[[:space:]]*\{[[:space:]]*return 0;' "$WM"; then
+    pass "T18b: the missing-library stub fails CLOSED (is_lease_active returns 0)"
+  else
+    fail "T18b: the stub no longer returns 0 — with no lease library, cleanup would reap every worktree"
+  fi
+fi
+
+# ------------------------------------------------------------------------
+# T19: is_lease_active and the sweep must AGREE in the middle of the window.
+#
+# `_lease_window_seconds` was extracted so the two callers agree exactly, and
+# nothing asserted that they do: quartering ONLY the sweep's threshold survived
+# the whole suite. That mutant reproduces #7278's mechanism precisely — at ~3h a
+# lease reads ACTIVE while the sweep deletes its file, so the reap loop finds no
+# lease and destroys a live worktree.
+#
+# Every other fixture samples age ~0 or age ~30h/20d — never a value where a
+# disagreement is observable. This one sits deliberately in between.
+# ------------------------------------------------------------------------
+echo "T19: the two window consumers agree mid-window (desync guard)"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+source_helper "$ROOT"
+
+T19_WT="wt-midwindow-$$"
+cat > "$ROOT/leases/$T19_WT.lease" <<EOF
+pid=999999
+ppid=1
+skill=one-shot
+started_at=$(date -u -d '3 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+expected_duration_min=240
+hostname=$HOSTNAME
+EOF
+
+if is_lease_active "$T19_WT"; then
+  pass "T19a: a 3h-old lease inside a 4h window is ACTIVE"
+else
+  fail "T19a: a 3h-old lease read INACTIVE inside its own window"
+fi
+
+sweep_orphan_leases
+if [[ -f "$ROOT/leases/$T19_WT.lease" ]]; then
+  pass "T19b: the sweep agrees — it preserves the same 3h-old lease"
+else
+  fail "T19b: the sweep DELETED a lease is_lease_active considers active — the two consumers have desynced (#7278's mechanism)"
+fi
+
+# ------------------------------------------------------------------------
 echo
 echo "=== Results ==="
 echo "PASS: $PASS"
 echo "FAIL: $FAIL"
+
+# ANTI-VACUITY FLOOR. `[[ "$FAIL" -eq 0 ]]` alone is a pure zero-check with no
+# lower bound on PASS, so anything that stops assertions from being REACHED is
+# green by construction. Measured on a sandbox copy: replacing pass() and fail()
+# with no-ops ran every fixture, asserted nothing, printed `PASS: 0 / FAIL: 0`
+# and exited 0. A `continue`, an early `return`, a renamed helper or a setup
+# ladder silently taking a third branch all produce the same shape.
+#
+# A FLOOR, never `-eq`: equality turns every added assertion into a spurious
+# failure, which is how a floor gets deleted rather than maintained. Raise it
+# when you add assertions; the number below is the count on a green run.
+MIN_ASSERTIONS=39
+if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
+  echo "FAIL: only $PASS assertions ran, expected >= $MIN_ASSERTIONS — the suite did not execute what it claims to cover."
+  exit 1
+fi
+
 [[ "$FAIL" -eq 0 ]] || exit 1
 exit 0

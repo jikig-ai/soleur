@@ -33,6 +33,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # the file is missing and we degrade to no-op stubs so the script keeps
 # running — old worktrees lose lock/lease protection but don't crash.
 _SS_LIB="$SCRIPT_DIR/../../../../../.claude/hooks/lib/session-state.sh"
+# Read at the reap decision point so the skip REASON is mode-accurate: with the
+# stub in place every worktree reads "leased", and reporting that as an observed
+# active lease would assert something the gate cannot know.
+_SS_LIB_MISSING=false
 if [[ -f "$_SS_LIB" ]]; then
   # shellcheck source=/dev/null
   source "$_SS_LIB"
@@ -40,9 +44,14 @@ else
   # Loud one-shot warn so an operator (or CI log scrape) sees that lease
   # protection is OFF in this worktree. Silent stubs would mask the
   # 2026-04-21 regression class the lease layer was added to prevent.
+  _SS_LIB_MISSING=true
+  # stdout, not stderr: stderr is invisible under `claude --bg`, which is the
+  # mode cleanup-merged actually runs in (see the note at the reap loop).
+  echo "SOLEUR_WORKTREE_LEASE_LIB_MISSING path=$_SS_LIB reason=fail-closed-no-reap"
   echo "[warn] session-state.sh missing at $_SS_LIB — lease/lock protection disabled in this worktree." >&2
-  echo "[warn] cleanup-merged will now REFUSE to reap any worktree (fail-closed): with no lease" >&2
+  echo "[warn] cleanup-merged will REFUSE to reap any worktree (fail-closed): with no lease" >&2
   echo "[warn] library there is no way to tell a live session from an abandoned one." >&2
+  echo "[warn] Restore it with: git checkout origin/main -- .claude/hooks/lib/session-state.sh" >&2
   acquire_lock() { return 0; }
   release_lock() { return 0; }
   acquire_lease() { return 0; }
@@ -1811,7 +1820,20 @@ cleanup_merged_worktrees() {
   # safe to run here precisely because the sweep now only deletes a dead-pid
   # lease once it is PAST its own window (session-state.sh), so this cannot
   # remove protection from a live session.
-  sweep_orphan_leases
+  #
+  # GUARDED, for the reason stated ~40 lines above about the config-lock call:
+  # this runs under `set -euo pipefail` and cleanup_merged_worktrees is invoked
+  # bare, so ANY non-zero return here aborts everything after it — fetch-prune,
+  # the whole reap loop, orphan-dir cleanup, tmp reclamation, runaway-kill.
+  #
+  # The sweep returns non-zero with no corrupt file involved: `_lease_read_field`
+  # returns 1 both for a missing field and for a file that has vanished, and a
+  # sibling releasing its lease between our glob and our read is an ordinary
+  # race. This change makes that path HOT — a dead recorded pid is now the
+  # common case, so those reads run for nearly every lease on every session
+  # start. Failure direction is safe (nothing reaped), which is exactly what
+  # makes it a SILENT disable rather than a visible break.
+  sweep_orphan_leases || headless_or_stderr warn "cleanup-merged: lease sweep returned non-zero (concurrent release or truncated lease file); continuing — the reap loop re-checks each lease itself."
 
   # Determine output mode: verbose if TTY, quiet otherwise
   local verbose=false
@@ -1902,9 +1924,19 @@ cleanup_merged_worktrees() {
     fi
 
     # Skip if a sibling session holds an active lease on this worktree
-    # (PID alive, hostname matches, within expected duration).
+    # (hostname matches and within the lease window — PID liveness is NOT
+    # required; requiring it is what reaped two live worktrees on 2026-08-06).
     if [[ -n "$worktree_path" ]] && is_lease_active "$(basename "$worktree_path")"; then
-      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) $branch - active lease${NC}"
+      # Mode-accurate, and unconditional. Two reasons this is not `verbose`-gated
+      # prose: `verbose` is `[[ -t 1 ]]`, so under `claude --bg` — the mode the
+      # 2026-08-06 reaps ran in — it printed NOTHING; and when the lease library
+      # is missing the stub returns 0 for every worktree, so "active lease" would
+      # ASSERT an observation the gate had just admitted it cannot make.
+      if [[ "$_SS_LIB_MISSING" == "true" ]]; then
+        echo "SOLEUR_WORKTREE_SKIP branch=$branch reason=lease-lib-missing"
+      else
+        echo "SOLEUR_WORKTREE_SKIP branch=$branch reason=active-lease"
+      fi
       continue
     fi
 
