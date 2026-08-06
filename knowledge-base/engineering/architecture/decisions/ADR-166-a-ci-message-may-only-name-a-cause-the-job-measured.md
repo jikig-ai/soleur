@@ -90,8 +90,9 @@ Concretely:
 
 4. **Enforcement is the lint, not the prose.** An ADR whose only mitigation is "the ADR
    states the invariant" is the same unenforceable-prose failure it is trying to describe.
-   `scripts/lint-diagnosis-claims.sh` scans `.github/workflows/`, `.github/actions/` **and**
-   `scripts/` for causal-claim phrases lacking a measured basis, ratcheted by a `.highwater`
+   `scripts/lint-diagnosis-claims.sh` scans `.github/workflows/`, `.github/actions/`,
+   `scripts/` **and** `apps/web-platform/infra/` (the fourth added by #7310) for causal-claim
+   phrases lacking a measured basis, ratcheted by a `.highwater`
    baseline, and it blocks. `scripts/` is not optional: this change MOVED the canonical
    message text there, so a lint that skipped it would have enforced nothing over its own
    prose.

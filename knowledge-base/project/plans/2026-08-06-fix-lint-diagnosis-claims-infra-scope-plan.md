@@ -16,13 +16,18 @@ brand_survival_threshold: none
 
 `scripts/lint-diagnosis-claims.sh` (ADR-166 — *an operator-facing CI message may not name a
 cause the job did not measure*) does not scan `apps/web-platform/infra/`. It should. The
-directory is where `registry-userdata-budget.sh` told every operator who hit it that
+directory is where `registry-userdata-budget.sh:131` told operators that
 `#7280's registry_rationale_strip is the fix` — a causal claim the job never measured, and
-one that was **wrong**: the strip had already been applied, and the real defect was in the
-gate's own render. That claim then propagated into the recut runbook and into #7287's
-precondition (c), where it read as *"the recut must not be dispatched at all"* — an
-unmeasured cause reaching the procedure for re-provisioning the sole container-registry
-pull path.
+one that was **wrong**: #7280 had merged 6 h 22 m earlier so the strip was already applied,
+and the real defect was in the gate's own render. The claim stood on `main` ~10.5 h (#7283
+14:40Z → #7300 01:16Z) and reached the recut runbook, which is why unwinding it took two PRs
+(#7300, #7303).
+
+**Deliberately not claimed:** that any operator acted on it. #7287 was opened at 08:38Z, six
+hours *before* the message reached `main`, so it cannot have been mis-steered by it — and
+the earlier draft of this paragraph asserted exactly that, along with a sentence presented in
+quote marks that appears nowhere in #7287. Both were unmeasured causal claims, written into
+the plan for the lint that exists to stop unmeasured causal claims; review caught them.
 
 That is precisely the class ADR-166 and this lint exist to stop, and the lint could not see
 it because the directory was out of scope.
@@ -78,7 +83,11 @@ needed** and the change lands green.
 The `files walked` column is load-bearing and is why this is evidence rather than silence:
 the widening actually reaches **71 new files** (220 → 291). A zero-new-hits result from a
 walk that never entered the directory would be byte-identical to a clean one. (171 files in
-the tree match `SCAN_EXTS`; ~99 are `.test.sh` and correctly excluded.)
+the tree match `SCAN_EXTS`; exactly 100 are `.test.sh`/`.test.yml` and correctly excluded.)
+
+The shipped figure is **290**, not 291: review added `.bench.sh` to the exclusion set, which
+removes `credential-persist-home-guard.bench.sh` — a benchmark harness narrates causes and
+is not an operator-facing CI message.
 
 ### Against a fixture carrying the verbatim offending message
 
@@ -99,9 +108,15 @@ and is not — the exact failure mode named in this lint's own file header. Conf
 separately: the existing `CLAIM` regex does **not** already match the offending line, so the
 new alternative is necessary, not redundant.
 
-### Word-boundary behaviour of `\bis the (?:fix|cause)\b`
+### Word-boundary behaviour
 
-Both anchors are load-bearing. 11/11 cases behave as intended:
+These figures are for the form as originally planned, `\bis the (?:fix|cause)\b`. Review
+widened it to a closed adjective enumeration (`is|was|are|were`, optional
+`root|actual|real|only|underlying|true`, `fix|cause|culprit`, `\s+` for the gaps) after
+measuring that one intervening word defeated the original and that the wider form still
+costs **+0 hits**. Both `\b` anchors survive unchanged and every row below still holds.
+
+Both anchors are load-bearing. 10/10 cases behave as intended:
 
 | Input | Matches | Note |
 |---|---|---|
@@ -130,8 +145,9 @@ counts as a *claim*, and changes nothing about what counts as *measured*:
 
 ### Every line in the widened scope carrying the new phrase
 
-Six lines match `\bis the (fix|cause)\b`. All are exempt for principled reasons, which is
-why the census does not move:
+Six lines match `\bis the (fix|cause)\b` **on `origin/main`**. All are exempt for principled
+reasons, which is why the census does not move. (The shipped tree has more: this PR's own
+comments add further occurrences, all of them comments and so correctly skipped.)
 
 | Line | Disposition |
 |---|---|
@@ -149,17 +165,19 @@ why the census does not move:
 | Add `apps/web-platform/infra` to `DIRS`; zero new hits | Confirmed: 0 new hits, +71 files walked | Adopt as written |
 | Add the `CLAIM` alternative; zero new hits | Confirmed: 0 new hits | Adopt as written |
 | `.highwater` must not be raised | Confirmed: census stays 1 | No edit to `.highwater` |
-| **AC: `lint-diagnosis-claims.test.sh` → 11 passed** | The suite is at **11** assertions today. The issue also asks for a regression fixture so part 2 is *enforced*, not merely present — and adding one makes it **12** | **AC amended to 12.** The two halves of the issue's own AC set are mutually exclusive; the fixture is the half worth keeping, because this lint's file header argues at length that a guard never observed failing is indistinguishable from one that cannot fail. Recorded rather than silently resolved |
+| **AC: `lint-diagnosis-claims.test.sh` → 11 passed** | The suite was at **11** assertions | **AC amended — and the conflict is this plan's, not the issue's.** #7310 is internally consistent: it asks for 11/11 and never asks for a committed fixture, mentioning one only as a scratch measurement it had already run. Committing the regression assertion is a deliberate DEVIATION from its AC, taken because this lint's own header argues that a guard never observed failing is indistinguishable from one that cannot fail. An earlier draft of this row called the issue's AC set "mutually exclusive"; that was false and is corrected here — mischaracterizing the source is the wrong error to make in the table whose job is recording deviations honestly. Final count is **17** after review-driven additions |
 | `MIN_ASSERTIONS = 9  # derived from a green run (11 at time of writing)` | Stays valid at 12 (9 < 12), but the parenthetical becomes stale | Update the comment to `12`. A stale comment about measurement, inside the suite for a lint about unmeasured claims, is the defect class this PR exists to remove |
-| Issue names only `DIRS` and `CLAIM` as edits | The file's `SCOPE.` header (`:18-23`) and the `DIRS` inline comment (`:54-60`) both **enumerate the scanned directories in prose** | Both must be updated in the same edit, or the file's own documentation lies about its scope |
+| Issue names only `DIRS` and `CLAIM` as edits | The file's `SCOPE.` header and the `DIRS` inline comment both **enumerate the scanned directories in prose** | Both updated in the same edit, or the file's own documentation lies about its scope |
+| — | **The sweep above stopped at the file boundary, which review caught.** Two artifacts *outside* the lint also enumerate the three-directory scope and were left false: `ADR-166:93` (the normative document the lint enforces) and the 2026-08-03 zot-mirror post-mortem | Both corrected in this PR. The principle was right and applied too narrowly — the unit of the sweep is the **claim**, not the file |
 
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** nothing directly — this is a CI lint with no
 runtime surface. The realistic failure is indirect and is the one this PR removes: a future
 operator-facing CI message under `apps/web-platform/infra/` names an unmeasured cause, the
-operator follows it, and — as in #7247 — spends a production-recovery window on a defect that
-does not exist.
+operator follows it and spends a recovery window on a defect that does not exist — the #7242
+shape, where production sat three releases behind for four hours chasing a credential the
+same job had already verified live.
 
 **If this leaks, the user's data/workflow/money is exposed via:** no exposure vector. The
 change adds no data flow, no credential handling, and no network call; it widens a static
@@ -190,7 +208,8 @@ Add to `scripts/lint-diagnosis-claims.test.sh`, in ARM 1 (the fixtures that MUST
 
 - extend the fixture-tree `mkdir -p` to include `"$FIX/apps/web-platform/infra"`;
 - write a synthesized `registry-userdata-budget.sh` fixture carrying the verbatim historical
-  message, per `cq-test-fixtures-synthesized-only` — the surrounding script is synthesized;
+  message. (`cq-test-fixtures-synthesized-only` is secrets hygiene and does not itself
+  mandate this shape; the practice is adopted by analogy.) The surrounding script is synthesized;
   only the offending sentence is quoted, exactly as ARM 1 already does for the two historical
   offenders;
 - assert `census_of "$FIX"` is `1`, then `rm` the fixture.
@@ -256,10 +275,21 @@ Run the acceptance criteria below, then `bash scripts/test-all.sh` for the `scri
       reading the printed verdict, not `$?` (the script also exits 0 on the `--census` path
       and prints a distinct `note:` line when it sits *below* baseline).
 - [x] **AC4** `bash scripts/lint-diagnosis-claims.sh --census` printed **1**.
-- [x] **AC5** `bash scripts/lint-diagnosis-claims.test.sh` → **12 passed, 0 failed**
-      (amended from the issue's `11`; see Research Reconciliation).
-- [x] **AC6** `scripts/lint-diagnosis-claims.highwater` is **unmodified**.
-      `git diff --name-only origin/main...HEAD | grep -c highwater` → **0**.
+- [x] **AC5** `bash scripts/lint-diagnosis-claims.test.sh` → **17 passed, 0 failed**
+      (the issue's `11`, +1 for the committed regression fixture, +5 from review: hit-identity,
+      the near-miss far-side fixture, the `tests/` scope fixture, the scope-loss case, and the
+      harness self-check). `MIN_ASSERTIONS` raised 9 → 17 in lockstep.
+- [x] **AC6** The `.highwater` **baseline value** is unchanged at `1`:
+      `git show origin/main:scripts/lint-diagnosis-claims.highwater | sed 's/#.*//' | tr -d '[:space:]'`
+      and the same on the branch both yield `1`, and the file's diff is comment-only
+      (`git diff --unified=0 … | grep -E '^[+-][^+-]' | grep -vE '^[+-]\s*#'` is empty).
+
+      *Amended during review.* The original form asserted the file was untouched
+      (`grep -c highwater` → 0). Review added a comment to it resolving the
+      "ratchets down only" vs scope-widening contradiction, so the literal command now
+      returns 1. Reverting a useful fix to satisfy a proxy would be the wrong repair, and
+      so would silently relaxing the AC — what the criterion actually protects is the
+      **number**, which is asserted directly above.
 - [x] **AC7** The regression fixture is load-bearing in **both** directions, verified by
       mutation rather than inspection — each mutant applied to a working copy with the
       anchor asserted present first, then reverted and the baseline re-confirmed:
@@ -286,10 +316,11 @@ Run the acceptance criteria below, then `bash scripts/test-all.sh` for the `scri
       - The one `[contention] BANNER`-shaped grep hit was `[ok] AC4: the advisory banner
         names LOCK_CONTENDED_PROCEEDING` — an assertion *label* inside the contention suite,
         not a fired banner.
-- [x] **AC10** Follow-up filed as **#7318**, carrying the measured census delta (1 → 2), the
-      `reusable-release.yml:1289` instance, and the open question of whether that hedged
-      message is a genuine claim or a false positive. Net issue flow for this PR: closing 1
-      (#7310), filing 1 (#7318), **net 0**.
+- [x] **AC10** Follow-up filed as **#7318**, extended after review with the baseline-semantics
+      and scope-default findings plus their measured data. Net issue flow: filing **1**
+      (#7318), closing **1** (#7310) — **net 0**, contingent on `ship` writing `Closes #7310`
+      into the PR body, which is the phase that establishes it. Recorded as contingent rather
+      than done, because at review time the body was still the pipeline stub.
 
 There are no post-merge operator steps. Nothing here requires a deploy, a dispatch, or a
 dashboard.
@@ -345,9 +376,9 @@ path in `Files to Edit` matches the UI-surface term list or glob superset.
 | Risk | Mitigation |
 |---|---|
 | `is the fix` over-matches in future prose (e.g. an interrogative *"what is the cause of X"*) | Accepted by design. This lint's own header states the calibration: on this corpus false positives are cheap (a claim phrase must *also* sit on an operator line, and the `# MEASURED-BY:` escape hatch is one comment away) while the false negative is the entire point. Measured: 0 false positives across 291 files |
-| The widened walk pulls in `.test.sh` fixtures that quote causal prose | Already handled upstream: the scanner skips `*.test.sh`, `*.test.yml`, and any path containing `/test/`. ~99 of the 171 matching files in the directory are excluded on this rule |
+| The widened walk pulls in `.test.sh` fixtures that quote causal prose | Already handled upstream: the scanner skips `*.test.sh`, `*.test.yml`, and any path containing `/test/`. 100 of the 171 matching files in the directory are excluded on this rule |
 | A symlink in the new directory becomes a read primitive | Already handled: `os.path.islink` is skipped, and `os.walk` does not recurse symlinked directories. Verified: the directory contains no symlinks |
-| The `MIN_FILES` vacuity floor (40) interacts badly with the wider walk | No interaction — it is a floor, not an equality, and the walk grows from 220 to 291. Confirmed the floor still fires correctly: the probe copies tripped `walked 0 files, expected >= 40` when pointed at an empty root |
+| The `MIN_FILES` vacuity floor (40) interacts badly with the wider walk | **Corrected at review — the original entry here verified the wrong proposition.** It cited the floor firing on an *empty* root and concluded "no interaction". Empty-root is not the case that matters: the floor is over the TOTAL, so any single directory can vanish while the rest clear it. Measured — renaming the infra entry to `infras` drops all 71 files and still prints `OK — 1 unmeasured causal claims`. Fixed in this PR by a per-entry `os.path.isdir` hard-error, which is strictly stronger than any floor value, plus a `partial_root` test case (carrying a real file, so exit 2 there can only come from the missing directory and not from vacuity) |
 | Census moves under a future merge and the PR lands red | AC3 reads the printed verdict rather than `$?`, so a `note:`/`FAIL` line cannot be mistaken for `OK` |
 
 ## Test Scenarios
@@ -373,3 +404,46 @@ path in `Files to Edit` matches the UI-surface term list or glob superset.
   exit-code-vs-message trap that `registry-userdata-budget.sh` set for #7287's precondition (c).
 - **`.highwater` ratchets down only.** If a future change moves the census up, the fix is the
   message, never the baseline.
+
+## Review Outcome
+
+Five agents, report-only, pinned to `f3f419f43`; all edits applied by the orchestrator from
+that SHA. `shellcheck` clean (substituting semgrep, whose bash parser matches ~0 rules and
+would have returned a vacuous "0 findings"). Every finding below was **fixed inline** — the
+cost-of-filing gate auto-flips at ≤100 lines / ≤4 files, and `pr-introduced` findings are
+never eligible for scope-out regardless.
+
+**The headline: this PR shipped unmeasured causal claims in its own comments.** The lint's
+SCOPE header asserted the message "spent a production-recovery window"; measured, #7287 was
+opened six hours *before* that message reached `main`, so it cannot have been mis-steered by
+it. The same header claimed the directory was read by "no lint" — `lint-trap-tempfile-ownership.py`
+walks all 166 tracked `.sh` there via `git ls-files "*.sh"`. Both corrected.
+
+| # | Finding | Severity | Fix |
+|---|---|---|---|
+| 1 | A `DIRS` typo drops 71 files and still prints `OK` — `MIN_FILES` is a floor over the total and cannot see one entry vanish | **P1** | Per-entry `os.path.isdir` hard-error + a `partial_root` case carrying a real file, so its exit 2 can only come from the missing directory |
+| 2 | The plan's risk row verified the floor on an *empty* root and concluded "no interaction" — the wrong proposition | **P1** | Row rewritten with the measured partial-loss result |
+| 3 | The regression assertion pinned cardinality, not identity — relocating the fixture out of `infra/` stayed green 12/12 | P2 | New `--detail` mode + an assertion on the hit path |
+| 4 | No far-side fixture: all four boundary-loosening mutations of the new alternative survived | P2 | `nearmiss.yml` fixture; all four now red |
+| 5 | One intervening word defeated the alternative (`is the root cause`), so the *hedged* form was caught and the *confident* forms were not | P2 | Closed adjective enumeration + `\s+`; measured +0 hits. The open slot `(?:[a-z]+ )?` was measured at +2 and rejected |
+| 6 | `MIN_ASSERTIONS=9` against a 12-assertion suite — this PR's own new assertion was deletable unnoticed | P2 | Raised to the full count (17), still a `-lt` floor |
+| 7 | The count floor cannot see an always-pass `assert_eq` (`if true` → 12 passed, exit 0) | P3 | Harness self-check proving the comparator still discriminates both ways |
+| 8 | `"/test/" in path` matched **nothing** — the tree uses `tests/`, `test-fixtures/`, `fixtures/` | P3 | `/tests?/`, plus a fixture making it load-bearing (reverting it now reds) |
+| 9 | `.bench.sh` walked as operator prose | P3 | Added to the exclusion set |
+| 10 | `.terraform/` is gitignored but `os.walk` descends it — local-vs-CI divergence after `terraform init` | P3 | Pruned in-walk |
+| 11 | The ratchet windows `mv` the committed baseline with no trap coverage | P3 | `EXIT` trap restores it |
+| 12 | `ADR-166:93` and the 2026-08-03 post-mortem still enumerated the old three-directory scope | P2 | Both corrected — the sweep's unit is the claim, not the file |
+| 13 | Plan prose: `11/11` (table has 10 rows), `#7247` (should be #7242), a sentence in quote marks absent from #7287, `~99` (exactly 100), `cq-test-fixtures-synthesized-only` miscited, and the issue's AC set called "mutually exclusive" when the deviation was this plan's | P3 | All corrected above |
+
+**Second mutation battery**, over the axes the first one never touched (control green, every
+mutation diff-verified to land, sandbox copy):
+
+| Mutation | Before review | After |
+|---|---|---|
+| relocate fixture out of `infra/` | survived 12/12 | **killed** |
+| drop leading `\b` / trailing `\b` / both | survived ×3 | **killed** ×3 |
+| open the adjective slot | survived | **killed** |
+| delete the scope-loss guard | n/a (guard did not exist) | **killed** |
+| neuter `assert_eq` to always-pass | survived 12/12 | **killed** |
+| delete either new assertion | survived | **killed** by the raised floor |
+| revert `/tests?/` → `/test/` | equivalent (no observable change) | **killed** after adding the `tests/` fixture |

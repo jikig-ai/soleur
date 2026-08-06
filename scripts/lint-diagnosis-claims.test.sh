@@ -20,8 +20,18 @@ assert_eq() {
 }
 
 FIX="$(mktemp -d -t lint-diag-fix.XXXXXXXX)"
-trap 'rm -rf "$FIX"' EXIT
-mkdir -p "$FIX/.github/workflows" "$FIX/.github/actions/some-action" "$FIX/apps/web-platform/infra"
+HW="$SCRIPT_DIR/lint-diagnosis-claims.highwater"
+HW_SAVE="$(mktemp -t lint-diag-hw.XXXXXXXX)"
+cp "$HW" "$HW_SAVE"
+# The ratchet cases below move the real committed baseline out of scripts/ to prove the
+# missing-baseline and regression arms. An interrupt inside either window would otherwise
+# leave the repo's baseline deleted or overwritten with 0, so the trap restores it — a
+# guard whose own failure mode is corrupting the thing it guards is not a guard.
+trap 'rm -rf "$FIX"; [[ -f "$HW_SAVE" ]] && cp "$HW_SAVE" "$HW"; rm -f "$HW_SAVE" "$HW.bak"' EXIT
+# Every DIRS entry must exist or the scanner hard-errors (scope-loss guard), so the fixture
+# tree mirrors all four.
+mkdir -p "$FIX/.github/workflows" "$FIX/.github/actions/some-action" \
+         "$FIX/scripts" "$FIX/apps/web-platform/infra"
 
 # A permanent benign file, so the fixture tree is never EMPTY. Without it the walk finds
 # zero files after the last `rm` and the vacuity floor fires — which would make "clean tree
@@ -37,6 +47,10 @@ jobs:
 YAML
 
 census_of() { LINT_DIAGNOSIS_ROOT="$1" LINT_DIAGNOSIS_MIN_FILES=1 bash "$LINT" --census; }
+# Which file tripped, not just how many. A count-only assertion cannot distinguish "the
+# fixture I wrote to pin this scope tripped" from "some other fixture tripped", so a later
+# edit that relocates a fixture keeps the count green while deleting the property.
+hits_of() { LINT_DIAGNOSIS_ROOT="$1" LINT_DIAGNOSIS_MIN_FILES=1 bash "$LINT" --detail; }
 
 echo "=== lint-diagnosis-claims.sh ==="
 
@@ -72,12 +86,13 @@ rm "$FIX/.github/actions/some-action/action.yml"
 
 # It must trip under apps/web-platform/infra/ too — and on THIS phrasing.
 #
-# This case pins BOTH halves of #7310, which is why it is one assertion and not two. The
-# directory was out of scope, so `registry-userdata-budget.sh` told every operator who hit
-# it that "#7280's registry_rationale_strip is the fix" — a cause the job never measured,
-# and a WRONG one: the strip had already been applied and the real defect was in the gate's
-# own render. That claim propagated into the recut runbook and into #7287's precondition,
-# where it read as "the recut must not be dispatched at all".
+# This case pins BOTH halves of #7310. The directory was out of scope, so
+# `registry-userdata-budget.sh:131` told operators that "#7280's registry_rationale_strip is
+# the fix" — a cause the job never measured, and a WRONG one: #7280 had merged 6 h 22 m
+# earlier, the strip was already applied, and the real defect was in the gate's own render.
+# The claim also reached the recut runbook, which is why unwinding it took two PRs (#7300,
+# #7303). NOT claimed: that any operator acted on it — #7287 predates the message on main by
+# six hours, so it cannot have been mis-steered by it.
 #
 # Widening the scope ALONE does not catch it. Measured: with apps/web-platform/infra in
 # DIRS but no fix/cause alternative in CLAIM, this exact fixture scores 0 — the phrasing
@@ -93,6 +108,12 @@ if [[ "$stored_bytes" -gt "$cap" ]]; then
 fi
 SH
 assert_eq "an offender under apps/web-platform/infra/ trips it (the directory AND the phrasing)" "1" "$(census_of "$FIX")"
+# Identity, not cardinality. Without this the assertion above is satisfied by ANY single hit
+# anywhere in the fixture tree — verified: relocating this fixture to .github/workflows/
+# leaves the suite fully green while deleting the directory coverage it exists to pin.
+assert_eq "…and the hit is attributed to the infra path (not merely 'one hit somewhere')" \
+  "apps/web-platform/infra/registry-userdata-budget.sh:4" \
+  "$(hits_of "$FIX" | sed 's/: .*//')"
 rm "$FIX/apps/web-platform/infra/registry-userdata-budget.sh"
 
 # ── ARM 2: fixtures that MUST NOT trip ─────────────────────────────────────────────────
@@ -151,12 +172,54 @@ YAML
 assert_eq "a purely observational message does NOT trip" "0" "$(census_of "$FIX")"
 rm "$FIX/.github/workflows/observed.yml"
 
+# The FAR SIDE of the #7310 alternative. Every other ARM-2 case tests an EXONERATION path
+# (a verdict, a MEASURED-BY marker, a comment, an observation) — none tests the regex being
+# too AGGRESSIVE, so before this fixture existed all four boundary-loosening mutations
+# (drop the leading \b, drop the trailing \b, drop both, widen the closed adjective list to
+# an open slot) survived the whole suite green. The only thing that reddened them was the
+# live-repo assertion at the end, which is an accident of what the corpus happens to
+# contain today, not a designed control.
+#
+# Every line below is a valid OPERATOR_LINE, so the ONLY reason each must score 0 is the
+# CLAIM regex declining to match it.
+cat > "$FIX/.github/workflows/nearmiss.yml" <<'YAML'
+name: nearmiss
+jobs:
+  x:
+    steps:
+      - run: |
+          echo "::notice::This the fix was applied cleanly."
+          echo "::notice::Analysis the fix landed in the previous release."
+          echo "::notice::that is the fixture the gate loads for this case."
+          echo "::notice::the retry count is the fixed value we ship."
+          echo "::notice::it is the causes list, not a diagnosis."
+          echo "::notice::out-of-stock is the documented cause, per the runbook."
+YAML
+assert_eq "near-miss phrasings do NOT trip (both word boundaries + the closed adjective list)" \
+  "0" "$(census_of "$FIX")"
+rm "$FIX/.github/workflows/nearmiss.yml"
+
+# The path-based test exclusion, pinned. It was `/test/` — which matched NOTHING, because
+# the directories that exist are `tests/`, `test-fixtures/` and `fixtures/`. A guard whose
+# name implies coverage it does not have is the shape this lint exists to stop, so the rule
+# is now `/tests?/` and this fixture is what makes that load-bearing: without it, reverting
+# to the singular form is an invisible no-op.
+mkdir -p "$FIX/apps/web-platform/infra/tests"
+cat > "$FIX/apps/web-platform/infra/tests/harness.sh" <<'SH'
+#!/usr/bin/env bash
+echo "::error::the probe aborted. Most likely cause: something nobody checked."
+SH
+assert_eq "a helper under a tests/ directory is out of scope (the rule is /tests?/, not /test/)" \
+  "0" "$(census_of "$FIX")"
+rm -rf "$FIX/apps/web-platform/infra/tests"
+
 # ── The ratchet mechanics ──────────────────────────────────────────────────────────────
 # A MISSING baseline must be a hard error (exit 2), never a pass. Precedent:
 # lint-trap-tempfile-ownership.py. A ratchet whose baseline vanished would otherwise
 # certify any population at all.
-HW="$SCRIPT_DIR/lint-diagnosis-claims.highwater"
-saved="$(mktemp)"; cp "$HW" "$saved"
+# HW + HW_SAVE are set at the top of the file so the EXIT trap can restore the committed
+# baseline if either window below is interrupted.
+saved="$HW_SAVE"
 mv "$HW" "$HW.bak"
 set +e
 LINT_DIAGNOSIS_ROOT="$FIX" LINT_DIAGNOSIS_MIN_FILES=1 bash "$LINT" >/dev/null 2>&1
@@ -195,20 +258,52 @@ LINT_DIAGNOSIS_ROOT="$FIX" LINT_DIAGNOSIS_MIN_FILES=1 bash "$LINT" >/dev/null 2>
 rc_clean=$?
 set -e
 assert_eq "a tree at or below the baseline passes" "0" "$rc_clean"
-rm -f "$saved"
+# NOTE: $saved is $HW_SAVE and the EXIT trap still needs it — do not remove it here.
 
 # ANTI-VACUITY: a walk that finds nothing must be a hard error, not a clean bill. os.walk
 # on a missing tree yields nothing, so a rename or an extension typo would otherwise
 # certify silence forever — "zero offenders" and "walked zero files" must not be the same
 # answer.
+#
+# ALL FOUR scoped directories are created here, deliberately. If only one existed, the
+# scope-loss guard below would exit 2 first and this case would pass for a reason that has
+# nothing to do with vacuity — a green that proves the wrong proposition.
 empty_root="$(mktemp -d -t lint-diag-empty.XXXXXXXX)"
-mkdir -p "$empty_root/.github/workflows"
+mkdir -p "$empty_root/.github/workflows" "$empty_root/.github/actions" \
+         "$empty_root/scripts" "$empty_root/apps/web-platform/infra"
 set +e
 LINT_DIAGNOSIS_ROOT="$empty_root" bash "$LINT" >/dev/null 2>&1
 rc_vacuous=$?
 set -e
 rm -rf "$empty_root"
 assert_eq "a walk that scans no files is a hard error, not a clean pass" "2" "$rc_vacuous"
+
+# SCOPE LOSS is its own hard error, distinct from vacuity. MIN_FILES is a floor over the
+# TOTAL, so it cannot see one directory disappearing while the rest still clear it —
+# measured before this guard existed: renaming the infra entry dropped all 71 of its files
+# and the run still printed `OK — 1 unmeasured causal claims`.
+#
+# The tree carries a real file on purpose. With it empty, the run exits 2 via the vacuity
+# floor whether or not the scope guard exists — verified: deleting the guard left this case
+# green, so it was proving the wrong proposition. The file makes the walk non-vacuous, so
+# exit 2 here can ONLY come from the missing directory.
+partial_root="$(mktemp -d -t lint-diag-partial.XXXXXXXX)"
+mkdir -p "$partial_root/.github/workflows" "$partial_root/.github/actions" \
+         "$partial_root/scripts"   # apps/web-platform/infra deliberately absent
+cat > "$partial_root/.github/workflows/keeper.yml" <<'YAML'
+name: keeper
+jobs:
+  x:
+    steps:
+      - run: |
+          echo "::notice::the mirror completed and the digest matched."
+YAML
+set +e
+LINT_DIAGNOSIS_ROOT="$partial_root" LINT_DIAGNOSIS_MIN_FILES=1 bash "$LINT" >/dev/null 2>&1
+rc_scope=$?
+set -e
+rm -rf "$partial_root"
+assert_eq "a missing DIRS entry is a hard error, not a quietly smaller walk" "2" "$rc_scope"
 
 # ── The live repo ──────────────────────────────────────────────────────────────────────
 # The gate's own invocation. Kept last so a fixture failure above is not mistaken for a
@@ -219,11 +314,35 @@ rc_live=$?
 set -e
 assert_eq "the live repo is at or below its committed baseline" "0" "$rc_live"
 
+# HARNESS SELF-CHECK. The count floor below sees assertions that RAN; it cannot see
+# assert_eq always PASSING. Measured: changing its condition to `if true` leaves the suite
+# at "12 passed, 0 failed", exit 0, with every comparison disabled. So prove the comparator
+# can still both pass and fail, then subtract the two probes from the totals.
+#
+# Both probes are silenced: the mismatched one legitimately prints a "FAIL:" line, and a
+# log carrying a FAIL that is not a failure is the same defect class this lint exists to
+# stop. Only the verdict below is reported.
+_p0=$PASS; _f0=$FAIL
+assert_eq "__self-check-match" "x" "x" >/dev/null 2>&1
+assert_eq "__self-check-mismatch" "x" "y" >/dev/null 2>&1
+if [[ $((PASS - _p0)) -ne 1 || $((FAIL - _f0)) -ne 1 ]]; then
+  echo "FAIL: assert_eq is not discriminating (PASS +$((PASS - _p0)), FAIL +$((FAIL - _f0)); expected +1/+1)." >&2
+  exit 1
+fi
+PASS=$_p0; FAIL=$_f0
+echo "  PASS: the harness's own comparator still discriminates"
+PASS=$((PASS + 1))
+
 echo "=== Results: $PASS passed, $FAIL failed ==="
 
 # ANTI-VACUITY DISPATCH FLOOR — see zot-mirror-diagnosis.test.sh. Neutering assert_eq
 # yields "0 passed, 0 failed" and exit 0, and test-all.sh reads only the exit code.
-MIN_ASSERTIONS=9   # derived from a green run (12 at time of writing), with headroom
+#
+# Set to the FULL current count, not a slack value. A floor left trailing its population
+# re-opens the hole it was built to close: at 9-against-12 this suite's own newest
+# assertion could be deleted and the floor would not notice (verified — 11 passed, exit 0).
+# It stays `-lt` (a floor, never `-eq`), so ADDING assertions is free; only deletion reds.
+MIN_ASSERTIONS=17   # full count of a green run; raise in lockstep when adding assertions
 if [[ $((PASS + FAIL)) -lt "$MIN_ASSERTIONS" ]]; then
   echo "FAIL: only $((PASS + FAIL)) assertions ran, expected >= ${MIN_ASSERTIONS}." >&2
   exit 1
