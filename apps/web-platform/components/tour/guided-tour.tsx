@@ -17,7 +17,6 @@ import { GoldButton } from "@/components/ui/gold-button";
 import { TOUR_STEPS, TOUR_STEP_COUNT } from "./tour-steps";
 
 const PAD = 8; // px of breathing room around the spotlit target
-const MOBILE_MAX = 768; // < md: rail is an off-screen drawer → centered card
 
 interface Rect {
   top: number;
@@ -28,10 +27,36 @@ interface Rect {
 
 const VIEWPORT_MARGIN = 12; // min px between the card and any viewport edge
 
+/** Does this rect have area AND intersect the viewport? */
+function isOnScreen(r: {
+  width: number;
+  height: number;
+  top: number;
+  left: number;
+  right: number;
+  bottom: number;
+}): boolean {
+  return (
+    r.width > 0 &&
+    r.height > 0 &&
+    r.bottom > 0 &&
+    r.right > 0 &&
+    r.top < window.innerHeight &&
+    r.left < window.innerWidth
+  );
+}
+
 // Position the card next to the spotlit target, then clamp it fully inside the
-// viewport so it can never spill off the right or bottom edge (#tour-overflow).
-// Prefers placing to the target's right; falls back to its left when there's no
-// room; finally clamps both axes into [MARGIN, size - MARGIN].
+// viewport so it can never spill off an edge (#tour-overflow).
+//
+// Placement order is right → left → below → above → clamp. The two horizontal
+// slots come first because a desktop target (a rail tab, a toolbar button)
+// leaves room beside it, and beside is where the card obscures least.
+//
+// #7326 added the two VERTICAL fallbacks. A phone target is usually full-bleed,
+// so neither horizontal slot fits and the old code clamped — which parked the
+// card directly on top of the very control the copy was pointing at. Desktop
+// placement is unchanged: it still takes the `right` branch first.
 function anchoredCardStyle(
   rect: Rect,
   card: { w: number; h: number },
@@ -39,17 +64,35 @@ function anchoredCardStyle(
   const vw = typeof window !== "undefined" ? window.innerWidth : 1200;
   const vh = typeof window !== "undefined" ? window.innerHeight : 800;
   const M = VIEWPORT_MARGIN;
+  const base = { maxHeight: vh - 2 * M, overflowY: "auto" as const };
+
+  const clampTop = (t: number) => Math.max(M, Math.min(t, vh - card.h - M));
+  const clampLeft = (l: number) => Math.max(M, Math.min(l, vw - card.w - M));
 
   const rightOfTarget = rect.left + rect.width + PAD + M;
+  if (rightOfTarget + card.w + M <= vw) {
+    return { ...base, top: clampTop(rect.top), left: rightOfTarget };
+  }
+
   const leftOfTarget = rect.left - PAD - M - card.w;
-  // Fit to the right if the card's right edge stays on-screen, else go left.
-  let left =
-    rightOfTarget + card.w + M <= vw ? rightOfTarget : leftOfTarget;
-  left = Math.max(M, Math.min(left, vw - card.w - M));
+  if (leftOfTarget >= M) {
+    return { ...base, top: clampTop(rect.top), left: leftOfTarget };
+  }
 
-  const top = Math.max(M, Math.min(rect.top, vh - card.h - M));
+  const left = clampLeft(rect.left);
 
-  return { top, left, maxHeight: vh - 2 * M, overflowY: "auto" };
+  const belowTarget = rect.top + rect.height + PAD + M;
+  if (belowTarget + card.h + M <= vh) {
+    return { ...base, top: belowTarget, left };
+  }
+
+  const aboveTarget = rect.top - PAD - M - card.h;
+  if (aboveTarget >= M) {
+    return { ...base, top: aboveTarget, left };
+  }
+
+  // Target taller than the viewport minus the card — nothing fits cleanly.
+  return { ...base, top: clampTop(rect.top), left };
 }
 
 export function GuidedTour({
@@ -86,44 +129,52 @@ export function GuidedTour({
   targetRef.current = step?.target ?? null;
 
   // Measure the target rect (or null → centered card). Null when: no target,
-  // mobile, target absent, or target has a zero / off-screen rect.
+  // target absent, or target has a zero / off-screen rect. Returns whether it
+  // found an on-screen target, so the poll below knows when to stop.
+  //
+  // #7326 removed a blanket `innerWidth < 768 → null` here. It dated from when
+  // every step targeted a nav-rail item, which on a phone lives in a closed
+  // drawer; but ten of the steps now target in-page `action:*` anchors that are
+  // fully on screen, and the blanket rule denied those a spotlight too. The
+  // on-screen test below is the honest version of the same guard — it still
+  // rejects the drawer's off-canvas nav links, by measuring rather than by
+  // assuming.
   const measure = useCallback(() => {
     if (!step?.target || typeof window === "undefined") {
       setRect(null);
-      return;
-    }
-    if (window.innerWidth < MOBILE_MAX) {
-      setRect(null);
-      return;
+      return false;
     }
     const el = document.querySelector<HTMLElement>(
       `[data-tour-id="${step.target}"]`,
     );
     if (!el) {
       setRect(null);
-      return;
+      return false;
     }
     const r = el.getBoundingClientRect();
-    const onScreen =
-      r.width > 0 &&
-      r.height > 0 &&
-      r.bottom > 0 &&
-      r.right > 0 &&
-      r.top < window.innerHeight &&
-      r.left < window.innerWidth;
+    const onScreen = isOnScreen(r);
     setRect(
       onScreen
         ? { top: r.top, left: r.left, width: r.width, height: r.height }
         : null,
     );
+    return onScreen;
   }, [step?.target]);
 
   // Re-measure on step change + capture-phase window scroll + resize + a
   // ResizeObserver on the target. requestAnimationFrame lets the rail-expand /
   // route layout settle before the first measure. Action steps navigate to a new
   // route first, so the target may not exist on the initial measure — poll for it
-  // (up to ~2.5s) until it mounts, then attach the ResizeObserver; if it never
-  // appears, measure() has already left a centered fallback card.
+  // (up to ~2.5s), then attach the ResizeObserver; if it never appears,
+  // measure() has already left a centered fallback card.
+  //
+  // #7326: the poll now waits for the target to be ON SCREEN, not merely
+  // PRESENT. The mobile nav drawer is translated off-canvas rather than
+  // unmounted, so a nav-tab step's link is found instantly at an off-screen rect
+  // — and settling for "present" froze the fallback card in place for the whole
+  // ~200ms slide-in. A transform transition changes neither size nor scroll
+  // offset, so neither the ResizeObserver nor the scroll listener would ever
+  // have corrected it.
   useEffect(() => {
     let cancelled = false;
     let raf = 0;
@@ -136,13 +187,13 @@ export function GuidedTour({
 
     const poll = () => {
       if (cancelled) return;
-      measure();
+      const onScreen = measure();
       const targetId = step?.target;
       if (!targetId) return; // centered step (Welcome/closing) — nothing to await
       const el = document.querySelector<HTMLElement>(
         `[data-tour-id="${targetId}"]`,
       );
-      if (el) {
+      if (el && onScreen) {
         if (typeof ResizeObserver !== "undefined") {
           ro = new ResizeObserver(() => measure());
           ro.observe(el);
