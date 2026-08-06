@@ -105,4 +105,41 @@ else
   PASS=$((PASS + 1))
 fi
 
+# --- every executable producer must have a documented call site ---------------
+# #7332: write-kb-coverage.ts shipped with NO invocation anywhere. sync.md linked the
+# pure lib (unrunnable — no import.meta.main) and gave no command, so the artifact was
+# never produced and every control that depends on it — the wording rule, determinism,
+# the counts-only marker, the degraded rows — was unreachable. Five review agents found
+# it independently; nothing mechanical did.
+#
+# A producer that nothing invokes is indistinguishable from one that works.
+echo ""
+echo "=== executable producers have call sites ==="
+for prod in "$REPO_ROOT"/plugins/soleur/scripts/*.ts; do
+  [[ -f "$prod" ]] || continue
+  # Only entry points — a module without import.meta.main is a library, not a producer.
+  grep -q 'import.meta.main' "$prod" || continue
+  base="$(basename "$prod")"
+  # A call site is a `bun …/<name>` in a command/skill doc or a workflow. Its own
+  # source and its own tests do not count.
+  # `|| true` is load-bearing: grep exits 1 when it finds NOTHING, which is exactly
+  # the case this check exists to report. Under `set -euo pipefail` the bare form
+  # aborted the whole suite at this assignment — before the FAIL below could print —
+  # so a producer with no call site produced a silent non-zero exit instead of a
+  # diagnostic. Verified by mutation: removing the sync.md invocation left this guard
+  # reporting zero failures until the `|| true` was added.
+  hits="$(grep -rlE "bun[[:space:]]+[^[:space:]]*${base%.ts}\.ts" \
+            "$REPO_ROOT/plugins/soleur/commands" \
+            "$REPO_ROOT/plugins/soleur/skills" \
+            "$REPO_ROOT/.github/workflows" 2>/dev/null | wc -l || true)"
+  if [[ "$hits" -gt 0 ]]; then
+    echo "  PASS: $base is invoked from $hits documented call site(s)"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $base is an executable producer with NO documented call site"
+    echo "    add a 'bun plugins/soleur/scripts/$base' invocation to the command/skill that runs it"
+    FAIL=$((FAIL + 1))
+  fi
+done
+
 print_results
