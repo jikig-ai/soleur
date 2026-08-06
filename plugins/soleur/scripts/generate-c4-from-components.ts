@@ -22,7 +22,7 @@
 // this surface and there must not be one — see ADR-171 §Observability boundary.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -53,12 +53,49 @@ function oneLine(s: string): string {
 type WriteOutcome = "written" | "skipped-hand-edited" | "unchanged";
 
 /**
+ * Read a file, or `null` when it does not exist.
+ *
+ * ONE syscall, deliberately — `existsSync(p) ? readFileSync(p) : null` is a
+ * check-then-use race (CodeQL `js/file-system-race`, flagged high on this file).
+ * That matters more here than the generic case: the caller's whole purpose is to
+ * decide whether a file is hand-edited, so a stale answer between the check and
+ * the read is precisely the state that would let the producer clobber an operator's
+ * correction — the one outcome the guard exists to prevent.
+ */
+function readOrNull(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+}
+
+/**
+ * Create a file only if it does not already exist, atomically.
+ *
+ * `wx` is `O_CREAT|O_EXCL`, so the existence test and the create are one
+ * indivisible operation — a separate `existsSync` guard would reintroduce the
+ * same race. Used for the seed artifacts (`spec.c4`, `views.c4`, the view page),
+ * where the rule is strictly "never touch an existing one".
+ */
+function writeIfAbsent(path: string, content: string): WriteOutcome {
+  try {
+    writeFileSync(path, content, { flag: "wx" });
+    return "written";
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return "unchanged";
+    throw err;
+  }
+}
+
+/**
  * Write only if the existing file carries the GENERATED header (or is absent).
  * Returns `unchanged` when the bytes already match, so an unchanged KB produces
  * no diff — the same determinism requirement kb-coverage.md carries.
  */
 function guardedWrite(path: string, content: string): WriteOutcome {
-  const existing = existsSync(path) ? readFileSync(path, "utf8") : null;
+  const existing = readOrNull(path);
   if (!canOverwrite(existing)) return "skipped-hand-edited";
   if (existing === content) return "unchanged";
   writeFileSync(path, content);
@@ -66,15 +103,23 @@ function guardedWrite(path: string, content: string): WriteOutcome {
 }
 
 function countModel(jsonPath: string): { elements: number; relationships: number } {
-  if (!existsSync(jsonPath)) return { elements: 0, relationships: 0 };
-  return countModelJson(readFileSync(jsonPath, "utf8"));
+  const json = readOrNull(jsonPath);
+  return json === null ? { elements: 0, relationships: 0 } : countModelJson(json);
 }
 
 export function runProducer(root: string): { code: number; marker: string } {
   const componentsDir = join(root, COMPONENTS_DIR);
   const diagramsDir = join(root, DIAGRAMS_DIR);
 
-  if (!existsSync(componentsDir)) {
+  // Attempt the read and classify ENOENT, rather than probing with existsSync and
+  // reading afterwards — same check-then-use class as readOrNull above. "No
+  // component docs" is a degraded run, not an error: a repo that has not been
+  // synced yet simply has nothing to draw.
+  let docs;
+  try {
+    docs = loadComponentDir(componentsDir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     return {
       code: 0,
       marker: oneLine(
@@ -83,7 +128,6 @@ export function runProducer(root: string): { code: number; marker: string } {
     };
   }
 
-  const docs = loadComponentDir(componentsDir);
   const edges = buildEdges(docs);
 
   mkdirSync(diagramsDir, { recursive: true });
@@ -91,19 +135,14 @@ export function runProducer(root: string): { code: number; marker: string } {
   const outcomes: Record<string, WriteOutcome> = {};
   outcomes[GENERATED_MODEL] = guardedWrite(join(diagramsDir, GENERATED_MODEL), generateC4(docs, edges));
 
-  // spec.c4 / views.c4 are only seeded when ABSENT. A repo that already ran
-  // /soleur:architecture has hand-authored ones; a second `specification` block
-  // would collide, and overwriting the view set would drop the operator's views.
-  if (!existsSync(join(diagramsDir, "spec.c4"))) {
-    outcomes["spec.c4"] = guardedWrite(join(diagramsDir, "spec.c4"), generateSpecC4());
-  }
-  if (!existsSync(join(diagramsDir, "views.c4"))) {
-    outcomes["views.c4"] = guardedWrite(join(diagramsDir, "views.c4"), generateViewsC4());
-  }
-  if (!existsSync(join(diagramsDir, VIEW_PAGE))) {
-    writeFileSync(join(diagramsDir, VIEW_PAGE), generateViewPage());
-    outcomes[VIEW_PAGE] = "written";
-  }
+  // spec.c4 / views.c4 / the view page are seeded ONLY when absent. A repo that
+  // already ran /soleur:architecture has hand-authored ones; a second
+  // `specification` block would collide, and overwriting the view set would drop
+  // the operator's views. `writeIfAbsent` makes the test-and-create atomic (O_EXCL)
+  // rather than an existsSync check-then-write race.
+  outcomes["spec.c4"] = writeIfAbsent(join(diagramsDir, "spec.c4"), generateSpecC4());
+  outcomes["views.c4"] = writeIfAbsent(join(diagramsDir, "views.c4"), generateViewsC4());
+  outcomes[VIEW_PAGE] = writeIfAbsent(join(diagramsDir, VIEW_PAGE), generateViewPage());
 
   const skipped = Object.values(outcomes).filter((o) => o === "skipped-hand-edited").length;
 
