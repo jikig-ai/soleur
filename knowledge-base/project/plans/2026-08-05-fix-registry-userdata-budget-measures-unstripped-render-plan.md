@@ -141,10 +141,10 @@ move from consideration at the worst moment.
 **If this leaks, the user's data/workflow/money is exposed via:** no exposure vector. The script
 renders with stub credentials into a scratch dir, touches no state, and ships to no host.
 
-**Brand-survival threshold:** `none` — a CI measurement tool with no runtime, no persistence and
-no user-reachable surface. `threshold: none, reason: the change is confined to a local CI
-measurement script, a comment correction, and CI gate wiring; no product code, no data path, and
-no host payload changes.`
+- **Brand-survival threshold:** `none` — a CI measurement tool with no runtime, no persistence
+  and no user-reachable surface. `threshold: none, reason: the change is confined to a local CI
+  measurement script, a comment correction, and CI gate wiring; no product code, no data path, and
+  no host payload changes.`
 
 ## Implementation Phases
 
@@ -335,7 +335,11 @@ logs:
   retention: 90 days (repo default)
 discoverability_test:
   command: bash apps/web-platform/infra/registry-userdata-budget.sh --json
-  expected_output: '{"raw_bytes":...,"stored_bytes":9404,...,"headroom":23364,...}' with exit 0
+  expected_output: "cap":32768
+  # Matched as a substring of the command's stdout, so it must be a literal the JSON
+  # actually contains — not a shape template. The cap is the one figure in that output
+  # that is an invariant rather than a measurement, so it does not go stale when the
+  # payload changes (measured 2026-08-06: stored 9408 B, headroom 23360 B).
 ```
 
 No `ssh` anywhere in the verification path.
