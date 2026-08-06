@@ -144,6 +144,21 @@ Generate or update project documentation by examining:
 
 **Component Template:** Use the template from the `spec-templates` skill.
 
+**Dependency emission (load-bearing — the C4 producer parses it).** For every
+component doc, emit internal dependencies in BOTH forms:
+
+- `dependencies:` frontmatter — a YAML list of the kebab-case `component` names
+  this component uses. This is the machine-readable form.
+- the prose `- **Internal**:` line under `## Dependencies` — human context.
+
+The two must agree. Omit `dependencies:` (or write `[]`) only when the component
+genuinely uses no other component; do not write prose-only forms such as
+`**Internal**: None (agents are standalone)` and leave the frontmatter absent.
+The `c4` area below builds diagram edges from this field (falling back to
+markdown links in the prose line for docs written before this contract), and a
+corpus with no parseable dependencies renders a valid diagram of *disconnected
+boxes* — which the relationship-count gate reports as **degraded**.
+
 **Update Behavior:**
 
 - **New components**: Create new `.md` file from template
