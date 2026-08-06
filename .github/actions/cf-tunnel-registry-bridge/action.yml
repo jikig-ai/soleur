@@ -161,9 +161,18 @@ runs:
         fi
         printf '::add-mask::%s\n' "$TOKEN_ID"
         printf '::add-mask::%s\n' "$TOKEN_SECRET"
-        # APP_DOMAIN_BASE is not in prd — fall back to the canonical default exactly
-        # like the SSH bridge / caller verify steps (bare form exits non-zero under set -e).
-        APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+        # APP_DOMAIN_BASE is not in prd — this comment was already correct, while the D10 gate
+        # that authorises the destroy this leg refills asserted the opposite. It is not a Doppler
+        # secret anywhere: server.tf sets it as a host env var from var.app_domain_base, so the
+        # committed Terraform variable is the causal source.
+        #
+        # This leg runs AFTER the destroy and picks the host images are pushed TO, so the old
+        # hardcoded fallback was the write-side twin of the gate's read-side hazard: a dead read
+        # silently resolving to a literal that nothing verified. No added -z/exit guard here —
+        # the step's `set -euo pipefail` plus the script's own ::error:: already report a
+        # failure, and inventing a second abort on the post-destroy path is what would strand an
+        # empty registry.
+        APP_DOMAIN_BASE=$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")
 
         # cloudflared reads the CF Access service token from these env vars.
         export TUNNEL_SERVICE_TOKEN_ID="$TOKEN_ID"
