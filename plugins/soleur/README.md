@@ -375,3 +375,9 @@ See [GitHub Releases](https://github.com/jikig-ai/soleur/releases) for detailed 
 BSL 1.1 (Business Source License). See [LICENSE](LICENSE) for details.
 
 Source-available for all individual and internal company use. The only restriction is offering Soleur as a competing hosted service. Each version converts to Apache-2.0 after 4 years. Versions v3.0.10 and earlier remain Apache-2.0.
+
+## Terms
+
+The licence governs what you may do with the source. Separately, the [Terms and Conditions](https://soleur.ai/legal/terms-and-conditions) govern your use of Soleur and bind on **installation** — not only on signing up to the hosted platform. The [Privacy Policy](https://soleur.ai/legal/privacy-policy), [Acceptable Use Policy](https://soleur.ai/legal/acceptable-use-policy), and [Data Protection Disclosure](https://soleur.ai/legal/data-protection-disclosure) apply on the same basis.
+
+If you install only the plugin and never create a hosted account, you never pass through the platform's accept-terms flow — so this link is the notice. The Data Protection Disclosure is the one worth reading: it explains that the plugin runs locally, under your own API key, and that Jikigai is neither a controller nor a processor of the data it processes there.
