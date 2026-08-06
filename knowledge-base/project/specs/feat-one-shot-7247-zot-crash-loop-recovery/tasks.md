@@ -7,13 +7,15 @@ Branch: `feat-one-shot-7247-zot-crash-loop-recovery` · PR #7303 · Ref #7247 #7
 >
 > 1. The `registry-userdata-budget.sh` fix this branch originally carried duplicated PR #7300,
 >    which was already open for the same defect with its implementation complete and its agent
->    review pass applied. (Precisely: #7300 is an OPEN **draft** with `reviews: []` — not GitHub-
->    approved. Duplicating it was wasteful because the work was done, not because it was
->    merge-ready.) Reverted out; see the plan's DESCOPED banner for how the collision was missed.
+>    review pass applied. (Precisely: at descope time #7300 was an OPEN **draft** with `reviews: []`
+>    — not GitHub-approved. Duplicating it was wasteful because the work was done, not because it
+>    was merge-ready. It merged 2026-08-06T01:16:24Z.) Reverted out; see the plan's DESCOPED banner for how the collision was missed.
 > 2. The `lint-diagnosis-claims.sh` widening then turned out to be **coupled to #7300 merging**:
 >    once it works, it correctly flags `registry-userdata-budget.sh:131` — the message #7300
 >    deletes — taking the census to 2 against a baseline of 1 on a BLOCKING check. Split to
->    **#7310** with the measurements attached.
+>    **#7310** with the measurements attached. **#7300 has since merged (2026-08-06T01:16:24Z),
+>    so #7310's blocker is cleared and it is now actionable** — the offending message is gone
+>    from `main`, verified by grep.
 >
 > What remains is the recut runbook alone. This PR closes no issue — #7299 belongs to #7300.
 

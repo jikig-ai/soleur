@@ -17,9 +17,10 @@ brand_survival_threshold: aggregate pattern
 > 21:39Z) rewrites `registry-userdata-budget.sh` for the identical cause, and had already run its
 > agent review pass and applied the findings (commits prefixed `review:`) by the time this plan's
 > implementation was underway. To be precise, since this claim was load-bearing for the descope:
-> #7300 is still an OPEN **draft** with `reviews: []` on GitHub — it has NOT been approved. What
-> made duplicating it wasteful was that its implementation was complete and reviewed, not that it
-> was merge-ready.
+> at the time of the descope #7300 was an OPEN **draft** with `reviews: []` on GitHub — not
+> approved. What made duplicating it wasteful was that its implementation was complete and
+> reviewed, not that it was merge-ready. **It has since MERGED (2026-08-06T01:16:24Z), closing
+> #7299**, which the descope decision anticipated.
 >
 > The collision was missed because `one-shot`'s Step 0a.5 gate ran against the INVOKED issues
 > (#7247 / #7287 / #7278) and cleared them; the planning phase then correctly re-diagnosed the

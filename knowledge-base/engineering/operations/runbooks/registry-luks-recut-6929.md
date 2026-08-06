@@ -67,9 +67,10 @@ sole pull path with the store already gone.
 
 Run this before dispatching. It needs no credentials and touches nothing, but it **does need
 `terraform` on `PATH`** — it measures with terraform's own `templatefile`/`base64gzip`, which is
-the method Hetzner measures by (never `gzip -9`, which overstates headroom). Whether it renders
-the *same expression* production renders is a separate question, and until PR #7300 merges the
-answer is no — see the caution below.
+the method Hetzner measures by (never `gzip -9`, which overstates headroom), and since PR #7300
+(merged 2026-08-06) it renders the same `replace(..., local.registry_rationale_strip, "")`
+expression `hcloud_server.registry` renders. Both halves matter; see the caution below for what
+happened when only the first was true.
 
 ```bash
 bash apps/web-platform/infra/registry-userdata-budget.sh; echo "exit=$?"
@@ -81,7 +82,7 @@ an issue, because the payload changes with every `cloud-init-registry.yml` or pi
 | Exit | Meaning | Action |
 |---|---|---|
 | `0` | Under cap | Precondition clear — **provided the run actually measured**; see the SKIP trap below. |
-| `1` | Over cap | **Do not dispatch** — *unless* the run came from the pre-#7300 gate, which reports a phantom over-cap. Run the discriminator below first. |
+| `1` | Over cap | **Do not dispatch.** Read the `CAUSE:` line the gate prints — it distinguishes a broken strip regex from real payload growth, and they need different fixes. |
 | `2` | Unmeasurable, or the render failed a sanity assertion | **Do not dispatch.** Unmeasured. |
 
 `headroom` must be **> 0**, strictly. The gate fails at `stored_bytes -ge cap`, so a headroom of
@@ -93,38 +94,22 @@ exactly `0` is a FAILURE — an earlier revision of this section said `≥ 0`.
 > output, never just `$?`. If you see `SKIP`, the precondition is **UNMEASURED, not cleared** —
 > install terraform and re-run before dispatching anything destructive.
 
-> **Before you act on an over-cap verdict: is the gate measuring the right payload?** Until PR #7300
-> merges, the version on `main` renders `templatefile(...)` **bare**, while `hcloud_server.registry`
-> renders it wrapped in `replace(..., local.registry_rationale_strip, "")`. It therefore reports an
-> over-cap breach for a payload that fits comfortably. **The discriminator is not `raw` vs `stored`**
-> — that ratio is an ordinary ~2:1 gzip and looks the same either way, and `main`'s script never
-> prints the strip delta that would settle it. Check the render itself instead:
->
-> ```bash
-> grep -n 'user_data *= *base64gzip' -A2 apps/web-platform/infra/zot-registry.tf
-> grep -c 'local.registry_rationale_strip' apps/web-platform/infra/registry-userdata-budget.sh
-> ```
->
-> If `zot-registry.tf` wraps `templatefile(` in `replace(..., local.registry_rationale_strip, "")`
-> **and** the budget script never mentions that local, the script is measuring a payload terraform
-> does not produce and its over-cap verdict is the gate's defect, not yours. Once #7300 has merged,
-> the script prints an `after strip` figure and a `CAUSE:` line that makes this call for you.
->
-> **Ignore the remedy the current script prints.** Its failure line ends *"#7280's
-> `registry_rationale_strip` is the fix"* — that is the retracted claim, emitted by the very gate
-> that is wrong. `registry_rationale_strip` is already applied. Removing that sentence is part of
-> PR #7300; tracked meanwhile in #7310.
-
 > **A superseded measurement, kept as a caution.** This section used to read *"Measured 2026-08-05
 > on `main`: 36,404 B stored, −3,636 B headroom — OVER CAP"*, and told the operator that #7299 would
-> fix it by extending `registry_rationale_strip`. Both were wrong, for the reason above: the strip
-> was **already applied**, and re-measured against the real expression the same tree stores roughly
+> fix it by extending `registry_rationale_strip`. Both were wrong: the strip
+> was **already applied** — the gate was rendering `templatefile(...)` bare, so it measured a payload
+> terraform never produces. Re-measured against the real expression the same tree stores roughly
 > **9.4 kB, with ~23 kB of headroom**. Deliberately imprecise — `base64gzip` is Go's `compress/gzip`,
 > so the exact byte count is terraform-build-dependent (9,404 B and 9,408 B were both measured, on
 > different builds, during this change). A figure quoted to the byte is what this section is trying
 > to stop being.
 >
-> That is why this section now quotes a command and a verdict shape instead of a byte count: the
+> **The gate itself was fixed by PR #7300 (merged 2026-08-06).** It now extracts the strip from
+> `zot-registry.tf`, applies it, prints an `after strip` figure, and fails closed on a strip it
+> cannot parse. So the discriminator that used to be needed here is gone — the numbers above are
+> history, not a live caveat.
+>
+> That is why this section quotes a command and a verdict shape instead of a byte count: the
 > hard-coded figure is what told operators the recut "must not be dispatched at all" for days.
 
 This check is deliberately **not** a D10 predicate: D10 authorizes on the *pull path* being
