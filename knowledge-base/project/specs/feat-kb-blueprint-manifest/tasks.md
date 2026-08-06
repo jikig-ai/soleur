@@ -15,13 +15,25 @@ scope: PR 1 (CLI producers). PR 2 (manifest + dashboard) is deferred and scoped 
 - [ ] **0.1** Verify `likec4@1.50.0` is reachable from the headless agent process
       (`npx -y likec4@1.50.0 --version`). If npm is unreachable in the sandbox,
       Phase 1 render must degrade cleanly rather than error. Record the result.
-- [ ] **0.2** Verify a sync stdout line actually reaches Better Stack. Headless sync
-      runs as an Agent SDK conversation, not a journald unit, and the source is
-      `soleur-inngest-vector-prd`. Cite the ingest layer
-      (`hr-observability-layer-citation`) or route the marker elsewhere. **The
-      liveness signal is unproven until this passes.**
-- [ ] **0.3** Confirm ADR-171 is still the next free ordinal against freshly-fetched
-      `origin/main` (`ls knowledge-base/engineering/architecture/decisions/ | grep -oE '^ADR-[0-9]+' | sort -V | tail -1`).
+- [x] **0.2** Better Stack ingest path **measured and rejected for PR 1**. The path
+      exists (in-sandbox stdout → `git-lock-marker-telemetry.ts` `MARKER_RE` at `:93`
+      → pino WARN+ → vector Source 3 → `[sinks.betterstack]`) but is unreachable
+      here: `MARKER_RE` is an exact-sentinel allowlist, the hook is registered only
+      on the hosted path (`agent-runner-query-options.ts:38`), `.claude/settings.json`
+      registers no PostToolUse `Bash` matcher, and a customer's self-hosted CLI has
+      no route to Soleur infra — nor should it, absent consent. Liveness signal is
+      **layer 7 (`cli-stdout-artifact`)**. Ruled by the `cto` agent. See plan
+      §Observability and ADR-171 §Observability boundary.
+- [x] **0.3** ADR-171 confirmed free against freshly-fetched `origin/main`
+      (highest existing: ADR-170).
+- [ ] **0.4** **(blocking — do before Phase 3)** Add layer 7 to
+      `plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md`:
+      new numbered entry `cli-stdout-artifact`, added to the Step-2 accepted-substring
+      list, section heading corrected to seven, and the stale "five observability
+      layers" / "not a seventh layer" / "The six layers above are all server/host-side"
+      clauses swept. Without this no honest layer citation is expressible and the
+      reviewer agent P1s the plan. **This edit lives under `plugins/` and therefore
+      does not cross the boundary ADR-171 defines.**
 
 ## Phase 1 — C4 producer
 
@@ -102,16 +114,43 @@ scope: PR 1 (CLI producers). PR 2 (manifest + dashboard) is deferred and scoped 
       knowledge base", never "missing: privacy policy".
 - [ ] Print the same summary to stdout at end of sync.
 - [ ] Emit the `SOLEUR_KB_SYNC_PRODUCERS` marker with
-      `{c4_elements, c4_relationships, domain_model_rows, coverage_present, coverage_expected}`.
+      `{c4_elements, c4_relationships, domain_model_rows, coverage_present, coverage_expected}`
+      **twice per run**: on sync stdout AND as a literal line inside the committed
+      `knowledge-base/project/kb-coverage.md`. Identical token, identical five fields.
+      Layer 7 (`cli-stdout-artifact`) — stdout alone does not survive the session.
 - [ ] Emit `SOLEUR_KB_SYNC_ERROR` on failure — **stdout marker, not
       `reportSilentFallback`** (that lives in `apps/web-platform/server/`; nothing
-      under `plugins/` imports Sentry).
+      under `plugins/` imports Sentry) — **plus a degraded-state row in
+      `kb-coverage.md`**, so a failed run survives the session.
+- [ ] Determinism assertion covers the counts line: two consecutive runs on an
+      unchanged KB produce a byte-identical file, counts line included. (Counts are
+      a pure function of KB state, so this holds — assert it rather than assume it.)
+- [ ] **Drift guard:** a plugin-side test asserting the stdout marker and the
+      artifact's marker line carry **byte-identical field sets**. This is the
+      in-scope analogue of `git-lock-marker-telemetry.test.ts`'s sentinel pinning,
+      and it is what keeps the `discoverability_test` non-vacuous.
+- [ ] **Negative AC (consent):** assert `kb-coverage.md` and the stdout markers
+      contain no repository-identifying data beyond counts — no paths, no file names,
+      no repo URL. Keeps ADR-171 claim 3 true in code, not just prose, and forecloses
+      the consent problem if a future PR ever routes these markers anywhere.
 
 ## Phase 4 — ADR-171 + Soleur's own C4
 
 - [ ] Author `ADR-171` via `/soleur:architecture`, `status: adopting`. Record: the
       Docker-build-context fact as the reason a cross-boundary import is impossible;
       the two-writer precedence rule from 1.4; runtime-read vs build-time-import.
+- [ ] ADR-171 `## Observability boundary` — four claims (CTO ruling, Phase 0.2):
+      (1) the build-time boundary generalizes — plugin code cannot import Soleur's
+      Sentry client, logger, or any sink, by construction; (2) string coupling via
+      `MARKER_RE` is a distinct and weaker crossing than an import and was **still
+      rejected**, admissible only for sentinels with a real hosted producer, since a
+      dead allowlist entry corrupts a file read as an inventory of live channels;
+      (3) the **consent** boundary is stricter than the build boundary and is the
+      operative one — any future self-hosted telemetry must be customer-owned and
+      opt-in, never a Soleur-owned default; (4) therefore plugin-emitted observability
+      is layer 7, with the re-entry condition that `MARKER_RE` may be widened only
+      when a hosted producer actually ships, and the drift guard at
+      `git-lock-marker-telemetry.test.ts:177-212` must be extended in the same change.
 - [ ] `model.c4` — add `connectedRepoKb` (`#external` database, trust-boundary
       description in the style of `connectedRepoPlugin:320`).
 - [ ] `model.c4` — add `sync -> connectedRepoKb` (`sync` currently has **no** edge

@@ -287,14 +287,24 @@ documenting them now would be a diagram of intentions.
 
 ```yaml
 liveness_signal:
-  what: SOLEUR_KB_SYNC_PRODUCERS marker on stdout at end of every sync run,
-        carrying {c4_elements, c4_relationships, domain_model_rows, coverage_present,
-        coverage_expected}
+  what: SOLEUR_KB_SYNC_PRODUCERS line carrying {c4_elements, c4_relationships,
+        domain_model_rows, coverage_present, coverage_expected}, emitted TWICE per run —
+        (a) on sync stdout, read in-session from the tool result; (b) as a literal line
+        inside the committed knowledge-base/project/kb-coverage.md artifact.
   cadence: per sync invocation
-  alert_target: Better Stack (SOLEUR_* marker stream)
+  layer: 7 (cli-stdout-artifact) — self-hosted CLI synchronous consumer
+  alert_target: none, by design. PR 1 executes ONLY on the customer's self-hosted CLI
+        plugin; the hosted web platform is deferred
+        (knowledge-base/product/validation/2026-08-06-alpha-onboarding-motion-start.md:41).
+        A customer machine has no route to Soleur's Better Stack — that sink is fed by
+        Soleur's own prod container journald (apps/web-platform/infra/vector.toml
+        [sources.app_container_journald] -> [sinks.betterstack]) — and creating one would
+        ship private-repo metadata to a Soleur vendor with no consent mandate in this PR.
+        See ADR-171 §Observability boundary.
   configured_in: plugins/soleur/lib/kb-coverage.ts
 error_reporting:
-  destination: SOLEUR_KB_SYNC_ERROR stdout marker on the same stream
+  destination: SOLEUR_KB_SYNC_ERROR on sync stdout (layer 7), plus a degraded-state row
+        in kb-coverage.md so the failure survives the session.
   fail_loud: true
   note: NOT reportSilentFallback — that lives in apps/web-platform/server/observability.ts
         and nothing under plugins/ imports Sentry. A plugins/-side Sentry import is the
@@ -302,35 +312,47 @@ error_reporting:
 failure_modes:
   - mode: C4 renders elements but ZERO relationships (link-free component docs)
     detection: relationship-count gate in the producer (Phase 1.3)
-    alert_route: run reports degraded; c4_relationships=0 in the liveness marker
+    alert_route: layer 7 (cli-stdout-artifact) — c4_relationships=0 in the marker on both
+                 stdout and the committed artifact; run reports degraded
   - mode: likec4 emits a partial model on broken sources (exits 0)
     detection: DIAG_RE grep per regenerate-c4-model.sh:94 AND element count
-    alert_route: run reports degraded; marker carries the diagnostic
+    alert_route: layer 7 (cli-stdout-artifact) — marker carries the diagnostic; degraded
   - mode: producer refuses to overwrite a hand-edited .c4 file
     detection: missing GENERATED header
-    alert_route: skipped-with-reason in the marker; not an error
+    alert_route: layer 7 (cli-stdout-artifact) — skipped-with-reason in the marker; not an error
   - mode: headless PR push rejected by branch protection
     detection: existing headless contract §3 degraded path
-    alert_route: SOLEUR_KB_SYNC_ERROR with the rejection reason — the artifacts are
-                 committed locally and will not reach the viewer
+    alert_route: layer 7 (cli-stdout-artifact) — SOLEUR_KB_SYNC_ERROR with the rejection
+                 reason; artifacts are committed locally and will not reach the viewer
 logs:
-  where: sync stdout; Better Stack via the SOLEUR_* marker stream
-  retention: per existing Better Stack retention
+  where: sync stdout (session-scoped) + knowledge-base/project/kb-coverage.md (durable)
+  retention: the artifact is versioned in the customer's own repository — unbounded,
+        and independent of any vendor retention policy
 discoverability_test:
-  command: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep SOLEUR_KB_SYNC_PRODUCERS
-  expected_output: one line per sync run carrying the five counts
+  command: grep -n 'SOLEUR_KB_SYNC_PRODUCERS' knowledge-base/project/kb-coverage.md
+  expected_output: exactly one line carrying the five counts, matching the stdout marker
+        from the most recent sync run. No SSH, no network, no credentials.
 ```
 
-The invocation form is load-bearing: `betterstack-query.sh` does not read Doppler
-itself, a bare positional arg is treated as raw SQL, and the substring form is
-`--grep`. No SSH anywhere in the diagnostic path.
+**Resolved (Phase 0.2).** The Better Stack ingest path exists and is citable —
+in-sandbox Bash stdout → `apps/web-platform/server/git-lock-marker-telemetry.ts`
+(PostToolUse `Bash` hook, `MARKER_RE` allowlist at `:93`) → `log.error`/`log.warn`
+→ container stdout → journald → `apps/web-platform/infra/vector.toml` Source 3 →
+`[sinks.betterstack]`. It is **not reachable from PR 1**, for two independent
+reasons. (1) `MARKER_RE` is an exact-sentinel allowlist, not a prefix match, so
+`SOLEUR_KB_SYNC_PRODUCERS` is dropped at the extractor. (2) More fundamentally, the
+hook is registered only by `apps/web-platform/server/agent-runner-query-options.ts:38`
+on the hosted path; `.claude/settings.json` registers no PostToolUse `Bash` matcher
+(its matchers are `Write|Edit`, `Task`, `mcp__pencil__open_document`, `Skill`), as
+`git-lock-marker-telemetry.ts:78-82` already states — and a customer's self-hosted
+CLI has no route to Soleur infrastructure at all. Widening `MARKER_RE` was rejected:
+it would add a permanently-dead allowlist entry (the `inngest-boot-phone-home`
+anti-pattern recorded in `vector.toml`) on a surface no tester is on, and the CLI
+half would be a consent violation. The liveness signal is layer 7
+(`cli-stdout-artifact`) and is proven by the `discoverability_test` above.
 
-**Open, must resolve before Phase 1 lands:** headless sync runs as an Agent SDK
-conversation, not a journald unit, and the Better Stack source is
-`soleur-inngest-vector-prd`. Verify a sandbox stdout line actually reaches that
-source and cite the layer (`hr-observability-layer-citation`); if no path exists,
-route the marker through a surface known to be ingested. Until verified, treat the
-liveness signal as unproven.
+Ruled by the `cto` agent at Phase 0.2; rejected alternatives and the re-entry
+condition are recorded in ADR-171 §Observability boundary.
 
 ## Encryption Posture
 
@@ -458,7 +480,8 @@ where the disposition is *acknowledge*: different lines, and the rewire removes
 | `likec4` unavailable in the customer sandbox | Render failure is a clean degrade (skipped-with-reason in the marker), never a hard error. Establish availability before Phase 1 lands. |
 | Sync overwrites a tester's hand-corrected diagram | Distinct composing file + `GENERATED` header + refuse-if-absent (Phase 1.4), mirroring `domain-model`'s non-destructive contract. AC3. |
 | Generated C4 never reaches the viewer | It cannot until its PR merges — the viewer reads GitHub, sync commits locally. Stated as a precondition; AC15 verifies delivery rather than assuming it. |
-| Liveness marker may not reach Better Stack | Flagged as unproven in the Observability block; must be verified and cited before Phase 1 lands, per `hr-observability-layer-citation`. |
+| Liveness marker does not reach Better Stack | **Resolved at Phase 0.2 — it cannot, and must not.** PR 1 runs only on the customer's self-hosted CLI, which has no route to Soleur's Better Stack; building one would ship private-repo metadata to a Soleur vendor without consent. The signal is layer 7 (`cli-stdout-artifact`): the stdout marker plus the same counts written into the committed `kb-coverage.md`, so it survives the session and is greppable with no network or credentials. |
+| A layer-7 signal is stdout-only and evaporates with the session | The marker is emitted twice — stdout AND the durable artifact — and a drift-guard test asserts both carry byte-identical field sets, so the `discoverability_test` cannot go vacuous. |
 | Learning `2026-03-02-...auto-push-vs-pr` recommends direct push | **Does not apply.** `sync.md` Headless Contract §2 forbids pushing the protected default and mandates worktree→PR. The contract is more specific and wins. Recorded so it is not re-litigated. |
 
 ---
