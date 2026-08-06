@@ -1,9 +1,9 @@
 ---
 title: "Your knowledge base is now actually usable on a phone"
 type: feature-launch
-publish_date: ""
+publish_date: 2026-09-03
 channels: x, bluesky
-status: draft
+status: scheduled
 pr_reference: "#7189"
 issue_reference: "#7186"
 ---
