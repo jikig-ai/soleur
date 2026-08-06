@@ -32,14 +32,20 @@ cx23 (id=114)   nbg1-dc3 available=true   hel1-dc2 available=true   fsn1-dc14 av
 ```
 
 **`cx23` is orderable in `hel1-dc2` today.** #7309's blocking claim was true on 2026-08-04 and
-is false on 2026-08-06. The registry recreate paths (`registry-luks-recut`,
-`registry-host-replace`, `registry-region-migrate`) each gate on `stock_preflight_gate`
-reading the *planned* `server_type` out of `tfplan.json` — so that gate would **pass right
-now**, on the existing pin, with:
+is false on 2026-08-06. The registry recreate paths each gate on `stock_preflight_gate` reading
+the *planned* `server_type` out of `tfplan.json` — so **that gate** would pass right now, on the
+existing pin, with:
 
 - **no repin**
 - **no +€14.00/mo**
 - **no code change at all**
+
+> **The stock gate passing does NOT mean the recreate is fireable.** Readiness verification
+> found three further blockers that stock has nothing to do with — see § "What we should
+> actually build" #1 (B1–B3). Chief among them: **#7278 is OPEN**, and #7287 states firing while
+> it is open "should not be treated as acceptable even if everything else clears." **No dispatch
+> was fired.** The value of today's stock reading is that it removes #7309's cost question, not
+> that it authorizes a destroy.
 
 This matters urgently because **#7247 is live and escalating**: zot has been crash-looping
 since 2026-08-03 17:08 UTC and as of **2026-08-06 06:49 UTC** is now failing releases with
@@ -157,15 +163,41 @@ window is currently open.
 
 Three changes, in dependency order. Only the first is urgent.
 
-### 1. Dispatch the registry recreate now, on the existing `cx23` pin — €0
+### 1. The registry recreate is unblocked ON STOCK — but is still blocked on three other things
 
-No code change. Uses the window that is open today. Unblocks #7247. This must **not** be
-layered onto the untargeted plan: `zot-registry.tf:426-448` records that
-`hcloud_server.registry` carries no `lifecycle.ignore_changes = [user_data]` and already has a
-pending replace in state, and that a registry replace appearing in an untargeted plan is
-"a **STOP**, not a proceed." The correct vehicle is the dedicated, stock-gated
-`registry-luks-recut` / `registry-host-replace` dispatch — which is what #7287 already
-sequences — not the operator's full apply.
+**Stock is no longer the binding constraint. It was never the only one.** Readiness
+verification (run 2026-08-06, before any dispatch) found the recreate blocked independently of
+Hetzner inventory. **No dispatch was fired.**
+
+| # | Blocker | State | Why it binds |
+|---|---|---|---|
+| B1 | **#7278** — no in-place restart lever | **OPEN** | #7287 is explicit: *"there is no remedy cheaper than a full host replace. Firing while #7278 is open should not be treated as acceptable even if everything else clears."* This is a **rollback dependency**, not a prereq. |
+| B2 | Five REQUIRED pre-first-fire cold-vehicle re-verifications | **never run** | The recut "shipped with **zero live executions**". The runbook declares them REQUIRED, not advisory — including the **post-destroy real restore over the CF Tunnel**, which first executes *after* the irreversible destroy. |
+| B3 | One-way, **no capacity reservation** | structural | Rollback needs a *second* successful create through the same `stock_preflight_gate`. Given the `cx` line flaps (§ table above), a same-day revert may be un-orderable — "leaving a crash-looping registry with no forward and no back." |
+
+**Vehicle correction.** `registry-host-replace` is the WRONG tool and must not be fired: in
+today's state the new host's boot guard requires `/dev/mapper/registry` while the live volume
+is still plaintext ext4, so cloud-init FATALs and the sole pull path is gone — #7287 says this
+"darks the registry permanently." Only **`registry-luks-recut`** is valid, and it additionally
+requires a pinned `expected_registry_store_volume_id` (numeric Hetzner volume id) plus the
+`RECUT-REGISTRY-LUKS` typo-guard token.
+
+**Authorization correction — this dispatch has NO reviewer gate.**
+`apps/web-platform/infra/../.github/workflows/apply-web-platform-infra.yml:106-108` states
+`registry-luks-recut` "has **NO `environment:`** (like all four host-replace/migrate jobs); its
+authorization is the menu-ack dispatch itself (`hr-menu-option-ack-not-prod-write-auth`), and
+this token only guards a mis-dispatch." So firing it **executes immediately** — it does not
+queue for an environment approval. Any framing of this dispatch as "queues for operator
+approval" is false, and this document previously implied that. Corrected here.
+
+Whatever path is chosen, it must **not** be layered onto the untargeted plan:
+`zot-registry.tf:426-448` records that `hcloud_server.registry` carries no
+`lifecycle.ignore_changes = [user_data]` and already has a pending replace in state, and that a
+registry replace appearing in an untargeted plan is "a **STOP**, not a proceed."
+
+**The cheapest real unblock for #7247 is therefore B1 — ship #7278's in-place restart lever.**
+That is ordinary code work, it is the documented rollback safety net, and on a crash-loop it
+may resolve the incident without any destroy at all.
 
 ### 2. Make selection resilient instead of pinned — €0 recurring, one PR
 
@@ -212,6 +244,9 @@ telemetry, not in a `.tf` comment.
 | D5 | **Do not migrate provider now**; adopt the named triggers | Premium is ~€28/mo against a migration cost of 10-35 files *per host, same provider* |
 | D6 | Re-evaluate the standing `cpx22` pins on web-2 and inngest | Both were stock-forced during outages that have since reversed; ≈€28/mo, nothing re-checks it |
 | D7 | Add a scheduled stock probe with a `SOLEUR_*` marker | Removes the stale-snapshot failure mode at its source |
+| D8 | **Do not fire any registry recreate this session** | #7278 OPEN is an explicit documented veto; the five REQUIRED pre-first-fire checks have never run; the op is one-way with no capacity reservation |
+| D9 | Route #7247's unblock through **#7278 (in-place restart lever)** first | It is both the cheapest fix *and* the rollback safety net the recut depends on; on a crash-loop it may resolve the incident with no destroy at all |
+| D10 | `registry-host-replace` must **not** be fired in today's state | Boot guard needs `/dev/mapper/registry` against a still-plaintext ext4 volume → permanent dark registry (#7287, #6929) |
 
 ## Open Questions
 
@@ -247,6 +282,21 @@ telemetry, not in a `.tf` comment.
    larger. The likely cause is pattern-matching on the two prior precedents (#6966, #6178),
    both of which chose `cpx22` under conditions where the entire `cx` line was out — a
    condition that did not hold when #7309 was written.
+
+3. **This session offered the operator a dispatch option described as "queues for your GitHub
+   environment approval — it does not bypass the human gate." That was false.**
+   `registry-luks-recut` carries **no `environment:`**, so a dispatch executes immediately; the
+   workflow file says so in its own comment (`:106-108`). The operator approved on that
+   framing. The error was reading the *generic* hard-rule guidance about environment reviewer
+   gates as if it described *this* job, instead of checking the job header first. **Fix:** the
+   readiness sequence must resolve the specific job's `environment:` before the dispatch is
+   ever *described* to the operator, not merely before it is fired — the description is what
+   the authorization is given against. Caught before firing; nothing was executed.
+
+4. **#7287's own blocking table is stale in two places** (both verified this session): it calls
+   PR #7300 "an open draft" — it **merged** 2026-08-06T01:16:24Z — and its "Hetzner stock" row
+   says `cx23` is unorderable in `hel1-dc2`, which the live probe refutes. Same expiry defect as
+   Session Error 1, one issue upstream.
 
 ## Verification notes
 
