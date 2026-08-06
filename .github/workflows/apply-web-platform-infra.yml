@@ -2062,21 +2062,17 @@ jobs:
         #
         # Only the VERDICT (which authorises a destroy) is conditional. Deriving an inventory
         # authorises nothing.
-        env:
-          DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
         run: |
           set -euo pipefail
-          # APP_DOMAIN_BASE is a DOPPLER SECRET, not a GitHub Actions variable — `vars.` would
-          # resolve to an empty string and A0 would abort on every dispatch, shipping a brand-new
-          # unfireable gate of exactly the kind this change exists to remove.
+          # APP_DOMAIN_BASE is NOT a Doppler secret. It exists in no config of the soleur
+          # project (measured 2026-08-06, all 13); server.tf sets it as a host env var from
+          # var.app_domain_base, so the committed Terraform variable is the causal source.
           #
-          # No silent default. The sibling precedent in apply-deploy-pipeline-fix.yml falls back
-          # to a literal domain, which is fine for a status probe and wrong here: this value
-          # decides WHICH HOST's /health defines the restore set, so guessing it would derive an
-          # inventory for a host nobody measured. Unreadable => fail closed.
-          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE -p soleur -c prd --plain --token "$DOPPLER_TOKEN_PRD") || APP_DOMAIN_BASE=""
+          # Bare assignment then a separate export: `export X=$(cmd)` exits 0 even when cmd
+          # fails, which would silently break this fail-closed chain.
+          APP_DOMAIN_BASE=$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")
           if [[ -z "$APP_DOMAIN_BASE" ]]; then
-            echo "::error::registry-luks-recut D10 PREPARE ABORT: APP_DOMAIN_BASE is unreadable from Doppler (soleur/prd), so the /health URL that defines the restore set cannot be derived. Fail-closed — an unreadable input is not evidence."
+            echo "::error::registry-luks-recut D10 PREPARE ABORT: APP_DOMAIN_BASE could not be derived from apps/web-platform/infra/variables.tf, so the /health URL that defines the restore set is unknown. Fail-closed — an underivable input is not evidence."
             exit 1
           fi
           export APP_DOMAIN_BASE
@@ -2250,7 +2246,6 @@ jobs:
         if: steps.posture.outputs.probe_result != 'absent'
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
           REHEARSE_TARGET: 127.0.0.1:5999
           # THE "Log in to GHCR" STEP ABOVE DOES NOT REACH THE REHEARSAL, and without these two
           # lines the gate CANNOT PASS. That step writes ~/.docker/config.json, but the restore
@@ -2299,11 +2294,12 @@ jobs:
         # most needs one.
         run: |
           set -euo pipefail
-          # Same Doppler read as PREPARE, and fail-closed for the same reason: this value picks
-          # which host's /health defines the restore set.
-          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE -p soleur -c prd --plain --token "$DOPPLER_TOKEN_PRD") || APP_DOMAIN_BASE=""
+          # Same derivation as PREPARE, re-run over the same committed source rather than
+          # threaded from that step — VERDICT deliberately re-derives so it cannot inherit
+          # stale state. Bare assignment then export: `export X=$(cmd)` exits 0 on failure.
+          APP_DOMAIN_BASE=$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")
           if [[ -z "$APP_DOMAIN_BASE" ]]; then
-            echo "::error::registry-luks-recut D10 VERDICT ABORT: APP_DOMAIN_BASE is unreadable from Doppler (soleur/prd). Fail-closed — nothing has been destroyed."
+            echo "::error::registry-luks-recut D10 VERDICT ABORT: APP_DOMAIN_BASE could not be derived from apps/web-platform/infra/variables.tf. Fail-closed — nothing has been destroyed."
             exit 1
           fi
           export APP_DOMAIN_BASE
