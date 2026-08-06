@@ -457,6 +457,74 @@ else
   pass "T10a: a lease past its window is inactive"
 fi
 
+# T10b: the sweep must actually DELETE it. Nothing covered this branch before —
+# T9b covers preserve-inside-window and T5 returns at the 24h mtime cap before
+# ever reaching it, so flipping `>=` to `<` in sweep_orphan_leases left the whole
+# suite green on precisely the immortality axis this change promises to defend.
+sweep_orphan_leases
+if [[ -f "$ROOT/leases/$T10_WT.lease" ]]; then
+  fail "T10b: sweep_orphan_leases kept a dead-pid lease 30h past its window"
+else
+  pass "T10b: sweep_orphan_leases deletes a dead-pid lease past its window"
+fi
+
+# ------------------------------------------------------------------------
+# T12: a CORRUPT expected_duration_min must fail CLOSED (lease still honoured),
+# never open.
+#
+# `$(( abc * 60 ))` under `set -u` treats `abc` as an unset variable name and
+# ERRORS. is_lease_active is called from inside an `if` in worktree-manager, so
+# `set -e` is suspended and that error read as "no active lease" — a FRESH lease
+# with one corrupt field became reapable. Measured before the fix.
+# ------------------------------------------------------------------------
+echo "T12: a corrupt expected_duration_min fails closed"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+source_helper "$ROOT"
+
+T12_WT="wt-corrupt-dur-$$"
+cat > "$ROOT/leases/$T12_WT.lease" <<EOF
+pid=999999
+ppid=1
+skill=one-shot
+started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+expected_duration_min=abc
+hostname=$HOSTNAME
+EOF
+
+if ( set -euo pipefail; is_lease_active "$T12_WT" ) 2>/dev/null; then
+  pass "T12: a fresh lease with a corrupt duration is still ACTIVE (fails closed)"
+else
+  fail "T12: a corrupt duration field made a fresh lease reapable — fail-open on a destructive path"
+fi
+
+# ------------------------------------------------------------------------
+# T13: an unbounded expected_duration_min must NOT create an immortal lease.
+#
+# The field is operator-supplied via SOLEUR_EXPECTED_DURATION_MIN and validated
+# only as digits. Unclamped, a typo (240000 for 240) silently disables
+# cleanup-merged for months. Measured before the clamp: a 20-day-old lease with
+# expected_duration_min=525600 read ACTIVE.
+# ------------------------------------------------------------------------
+echo "T13: an absurd duration cannot outlive the 24h ceiling"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+source_helper "$ROOT"
+
+T13_WT="wt-immortal-$$"
+cat > "$ROOT/leases/$T13_WT.lease" <<EOF
+pid=999999
+ppid=1
+skill=one-shot
+started_at=$(date -u -d '20 days ago' +%Y-%m-%dT%H:%M:%SZ)
+expected_duration_min=525600
+hostname=$HOSTNAME
+EOF
+
+if is_lease_active "$T13_WT"; then
+  fail "T13: a 20-day-old lease with a 1-year declared duration reads ACTIVE — cleanup-merged is disabled indefinitely"
+else
+  pass "T13: the 24h ceiling bounds an absurd declared duration"
+fi
+
 # ------------------------------------------------------------------------
 # T11: a lease from ANOTHER host is not active here (unchanged invariant,
 # pinned because T9 loosens the pid check and must not loosen this one).

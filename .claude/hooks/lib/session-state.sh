@@ -254,6 +254,35 @@ release_lease() {
 }
 
 # Returns 0 (active) iff PID alive, hostname matches, and age < max(expected,4h).
+# How long a lease is honoured, in seconds, from a raw expected_duration_min
+# field. ONE definition, because is_lease_active and sweep_orphan_leases must
+# agree exactly — and when this logic was duplicated they did not:
+#
+#   * FLOOR 4h  — a short declared duration should not make a lease reapable
+#                 while the session is plainly still working.
+#   * CEILING 24h — the field is operator-supplied via SOLEUR_EXPECTED_DURATION_MIN
+#                 and validated only as "digits". Unbounded, a typo (240000 for
+#                 240) silently disables cleanup-merged for MONTHS: the lease
+#                 reads ACTIVE forever and, in the cleanup path, nothing else
+#                 reaps it. Pinning the ceiling to the same 24h as the mtime
+#                 sweep is what makes "the 24h sweep is the backstop" TRUE
+#                 rather than merely claimed. Measured before the clamp: a
+#                 20-day-old lease with expected_duration_min=525600 read ACTIVE.
+#   * NON-NUMERIC -> 240 (the documented default), never bare arithmetic. Under
+#                 `set -u`, `$(( abc * 60 ))` treats `abc` as an unset variable
+#                 name and ERRORS; is_lease_active is called from inside an `if`,
+#                 so `set -e` is suspended and that error was read as "no active
+#                 lease" — i.e. a fresh lease with one corrupt field became
+#                 REAPABLE. Fail closed on corrupt input, never open.
+_lease_window_seconds() {  # $1 raw expected_duration_min
+  local mins="${1:-}"
+  [[ "$mins" =~ ^[0-9]+$ ]] || mins=240
+  local cap=$(( mins * 60 ))
+  (( cap < 14400 )) && cap=14400
+  (( cap > 86400 )) && cap=86400
+  printf '%s\n' "$cap"
+}
+
 is_lease_active() {
   local worktree="$1"
   _session_state_disabled && return 1
@@ -294,14 +323,24 @@ is_lease_active() {
   # the correct direction to fail: a worktree kept slightly too long is
   # recoverable, a worktree reaped mid-run is not.
   #
+  # The bound is the window computed by _lease_window_seconds, which is CLAMPED
+  # to 24h. Do not restate it as "and the 24h mtime sweep backstops this" without
+  # checking: an earlier draft of this comment said exactly that and it was FALSE
+  # in the path that matters — sweep_orphan_leases was reachable only from the
+  # `create` subcommand, never from cleanup_merged_worktrees. That is now also
+  # wired (worktree-manager.sh calls the sweep at the top of cleanup), but the
+  # clamp is what makes the bound hold regardless.
+  #
   # Pinned by T9/T9b (a dead acquirer stays active + unswept inside the
   # window) and T10 (an expired lease is still inactive, so this is not an
   # immortality bug) in session-state.test.sh.
 
-  # Age cap: max(expected*60, 4h floor)
-  local floor=14400
-  local cap=$(( lease_expected * 60 ))
-  (( cap < floor )) && cap=$floor
+  # Age cap: see _lease_window_seconds. Computed there, not inline, because
+  # sweep_orphan_leases needs the IDENTICAL number and two copies already
+  # drifted once (one validated the field, one did not — the unvalidated copy
+  # fail-OPENED under `set -u`, which on this path means "reap it").
+  local cap
+  cap=$(_lease_window_seconds "$lease_expected")
 
   # Anchor started_at to the strict ISO-8601-Z format we always write
   # ourselves (date -u +%Y-%m-%dT%H:%M:%SZ). A malformed or natural-language
@@ -366,9 +405,9 @@ sweep_orphan_leases() {
         local lease_started lease_expected lease_cap started_epoch lease_age
         lease_started=$(_lease_read_field "$f" started_at)
         lease_expected=$(_lease_read_field "$f" expected_duration_min)
-        [[ "$lease_expected" =~ ^[0-9]+$ ]] || lease_expected=240
-        lease_cap=$(( lease_expected * 60 ))
-        (( lease_cap < 14400 )) && lease_cap=14400
+        # Same window as is_lease_active, from the same function — these two
+        # MUST agree, and when the arithmetic was duplicated here they did not.
+        lease_cap=$(_lease_window_seconds "$lease_expected")
         started_epoch=""
         if [[ "$lease_started" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
           started_epoch=$(date -d "$lease_started" +%s 2>/dev/null || echo "")

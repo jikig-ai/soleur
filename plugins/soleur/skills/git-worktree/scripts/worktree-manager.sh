@@ -1804,6 +1804,15 @@ cleanup_merged_worktrees() {
     headless_or_stderr warn "cleanup-merged: ensure_bare_config wedged on an unremovable git lock (see SOLEUR_GIT_LOCK_UNREMOVABLE above); continuing with remaining maintenance."
   fi
 
+  # Expire genuinely abandoned leases BEFORE the reap loop consults them.
+  # Previously the sweep ran only in the `create` subcommand, so a host that
+  # runs cleanup-merged on a schedule but creates no worktrees never executed
+  # the 24h backstop at all — leaving is_lease_active as the sole gate. It is
+  # safe to run here precisely because the sweep now only deletes a dead-pid
+  # lease once it is PAST its own window (session-state.sh), so this cannot
+  # remove protection from a live session.
+  sweep_orphan_leases
+
   # Determine output mode: verbose if TTY, quiet otherwise
   local verbose=false
   [[ -t 1 ]] && verbose=true
