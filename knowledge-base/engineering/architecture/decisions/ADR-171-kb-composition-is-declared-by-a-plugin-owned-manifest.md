@@ -1,0 +1,156 @@
+# ADR-171 — Knowledge-base composition is declared by a plugin-owned manifest, and the boundary that forces it also bounds observability
+
+- **Status:** adopting
+- **Date:** 2026-08-06
+- **Related:** #7332 (PR 1 — the producers this contract describes; PR 2 — the manifest itself)
+- **Supersedes:** nothing
+- **Issue:** #7332
+- **Enforced by:** `plugins/soleur/test/c4-from-components.test.ts` +
+  `plugins/soleur/test/kb-coverage.test.ts` (both in the `bun` shard) and
+  `plugins/soleur/test/c4-from-components.test.sh` +
+  `plugins/soleur/test/domain-model-*.test.sh` (auto-globbed into the `scripts`
+  shard by `scripts/test-all.sh`). The manifest's own parity + drift gates land
+  with PR 2 and are **not** claimed here.
+
+`status: adopting` is deliberate: PR 1 builds the producers this contract
+describes, PR 2 builds the manifest itself. Recording the contract now is what
+lets the two be designed once rather than twice.
+
+## Context
+
+Soleur tells a customer what a knowledge base should contain in four places that
+do not agree, and it produces only a fraction of it. On the measured baseline
+(`2my8r9ry2t-wq/Skouer`) the knowledge base was **23 entries, 100% under
+`project/`** — no C4 model, no domain-model register. That is exactly `/soleur:sync`'s
+declared output surface, so the gap is a missing-producer gap rather than a
+de-duplication one.
+
+The obvious fix — have the web platform and the plugin read one shared
+declaration — is not available, and the reason is structural rather than stylistic.
+
+## Decision
+
+**Knowledge-base composition is declared by a manifest the plugin owns**
+(`plugins/soleur/kb-blueprint.json`, PR 2), copied byte-identically into
+`apps/web-platform/` and consumed through a hand-authored typed module using
+`satisfies` — the existing `app/internal/github-app-init/page.tsx` +
+`infra/github-app-manifest.json` pattern, which already ships with a parity test
+and a drift-guard cron.
+
+Three facts make the alternatives unavailable.
+
+**1. A cross-boundary import is impossible, not merely unprecedented.**
+`apps/web-platform/Dockerfile:10` is `COPY . .` with build context
+`apps/web-platform` (`.github/workflows/web-platform-release.yml:88`), so
+`plugins/` is not in the build context at all. An import from `apps/web-platform/`
+into `plugins/` passes `tsc`, passes vitest, and fails only at release build —
+the worst possible place to discover it.
+
+**2. A generated TypeScript mirror cannot catch the drift it exists to catch.**
+A generated type regenerates to match a renamed field, so `tsc` goes green across
+exactly the change the mirror was introduced to detect. The copied JSON plus a
+parity test is the mechanism; a generated `.ts` is not.
+
+**3. Two writers share one directory, so generation must be non-destructive.**
+`/soleur:architecture` writes `spec.c4` / `model.c4` / `views.c4` cwd-relative
+(`plugins/soleur/skills/architecture/SKILL.md`), and the agent sandbox pins
+`cwd = workspacePath`. The producer therefore emits a **distinct composing file**
+(`generated-components.c4`), stamps every file it writes with a `GENERATED`
+header, and **refuses to overwrite any file whose first line is not that header**.
+Precedence rule: a hand edit always wins, and the refusal is reported in the run
+marker rather than passing silently.
+
+A fourth distinction is worth recording because it is easy to collapse: the
+runtime read via `getPluginPath()` (`apps/web-platform/server/plugin-path.ts:42`,
+used at `agent-runner.ts:1116`) and a build-time static JSON import solve
+different problems at different times. The Docker fact above forecloses the
+build-time direction only; it says nothing about the runtime one.
+
+## The observability boundary is a consequence of the composition boundary
+
+Ruled at #7332 Phase 0.2 after measuring the ingest path end to end.
+
+**1. The build-time fact generalizes.** The same boundary that makes a manifest
+import impossible means plugin code cannot import Soleur's Sentry client, its
+pino logger, or any sink — by construction, not as an accident of packaging.
+`plugins/`-side error reporting is therefore a stdout marker, never
+`reportSilentFallback` (which lives in `apps/web-platform/server/observability.ts`).
+
+**2. String coupling is a distinct and weaker crossing, and it was still
+rejected.** `apps/web-platform/server/git-lock-marker-telemetry.ts` reaches
+plugin-emitted sentinels through an exact-match string allowlist (`MARKER_RE`,
+`:93`), not an import — so it does **not** contradict claim 1. It is nonetheless a
+coupling: a sentinel renamed in `plugins/` silently un-mirrors unless the
+allowlist and its drift guard
+(`apps/web-platform/test/git-lock-marker-telemetry.test.ts:177-212`, which scrapes
+sentinels from only two shell scripts) are updated in lockstep. It is admissible
+**only** for sentinels emitted on the hosted surface, where a producer actually
+runs. Adding an entry for a sentinel with no hosted producer creates a dead
+allowlist line in a file that is read as an inventory of live channels — the
+failure `apps/web-platform/infra/vector.toml` names explicitly for
+`inngest-boot-phone-home`.
+
+**3. The consent boundary is stricter than the build boundary, and it is the
+operative one.** Soleur's Better Stack sink is fed by Soleur's own prod container
+journald (`vector.toml` `[sources.app_container_journald]` →
+`[sinks.betterstack]`). Code executing on a customer's self-hosted CLI has no
+route to it, and must not be given one: shipping repository-derived metadata from
+a customer machine to a Soleur vendor makes Soleur a data controller for data it
+never disclosed collecting. Any future hosted-quality telemetry for self-hosted
+runs must be **customer-owned** (a sink configured under the customer's own
+account) and opt-in — never a Soleur-owned default.
+
+**4. Therefore plugin-emitted observability is layer 7 (`cli-stdout-artifact`).**
+The synchronous stdout marker **plus** a deterministic artifact committed to the
+customer's own repository carrying the same fields, because stdout alone does not
+survive the session. Layer 7 is defined in
+`plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md`.
+
+**Re-entry condition,** recorded so it is not rediscovered: when the hosted
+headless-sync path (`triggerHeadlessSync`,
+`apps/web-platform/server/auto-sync-trigger.ts`) is serving again **and** a hosted
+producer for these markers actually ships, `MARKER_RE` may be widened for the
+hosted surface only — and the drift guard at
+`git-lock-marker-telemetry.test.ts:177-212` must be extended to cover the emitting
+file in the same change. The widening and the guard extension land together or
+not at all.
+
+## Consequences
+
+- PR 1 ships producers, a coverage summary, and a layer-7 signal. It needs none of
+  the manifest machinery, which is why the split is at the CLI/hosted line.
+- The generated model is **not visible in the KB viewer until its PR merges**: the
+  viewer reads the GitHub source of truth, not the on-disk clone
+  (`apps/web-platform/app/api/kb/c4/project/route.ts:73-81`), because a clone
+  holding un-pushed commits goes permanently stale. Headless sync commits locally
+  and opens a PR.
+- The dependency convention the C4 producer consumes is now **specified**
+  (`dependencies:` frontmatter in the component template) rather than emergent.
+  Until #7332 it existed only as a prose placeholder, and Soleur's own component
+  docs satisfied it 0 times out of 4.
+- Validation gates on the diagnostic stream **and** element count **and**
+  relationship count. The third is the one that catches the real failure: a
+  link-free corpus renders valid, non-empty, diagnostic-clean output that is a
+  diagram of disconnected boxes. Reported as `degraded`, never `failed` — the docs
+  are the defect, not the run.
+- Both-gates validation is safe only while `likec4@1.50.0` is pinned, because the
+  diagnostic wording is version-specific. That is precisely why
+  `apps/web-platform/server/c4-render.ts:193-195` refuses stderr gating for the
+  runtime save path, which cannot pin the CLI. A drift guard asserts the pin
+  against both precedents.
+
+## Alternatives considered
+
+- **Build-time import from `plugins/`** — impossible (claim 1). Fails only at
+  release build.
+- **Generated TypeScript mirror** — cannot catch its own drift (claim 2).
+- **Widening `MARKER_RE` for the sync markers** — rejected on three independent
+  grounds: it buys telemetry on a surface PR 1 ships no producer for, it creates a
+  permanently-dead allowlist entry, and on the CLI half it would be a consent
+  violation.
+- **A customer-configured sink (e.g. their own Sentry DSN)** — the correct
+  long-run answer for hosted-quality telemetry without a consent problem, since
+  the data never leaves the customer's control. Opt-in configuration and a new
+  consent surface; out of scope for #7332 and deliberately unbuilt.
+- **Replacing the canonical three `.c4` filenames** — rejected: two writers, one
+  directory (claim 3).
