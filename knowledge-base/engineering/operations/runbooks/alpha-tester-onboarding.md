@@ -158,8 +158,8 @@ someone remembering is a checkpoint that does not happen.
 
 ```bash
 gh issue create \
-  --title "checkpoint: 2-week usage review — <Company> (alpha tester #N)" \
-  --label follow-through \
+  --title "checkpoint: 2-week usage review — <Company> (alpha tester #N), due YYYY-MM-DD" \
+  --label type/chore \
   --milestone "Phase 4: Validate + Scale" \
   --body "Two-week unassisted usage checkpoint for #1442. Onboarded YYYY-MM-DD; due YYYY-MM-DD (+14d).
 
@@ -167,10 +167,18 @@ Company-level only — no personal data in this issue.
 
 Check:
 - KB growth: git log on the tester's own knowledge-base/ tree
-- Returns and agent-mix: see measurability caveat below
+- Returns and agent-mix: see the measurability caveat below
 
 Then proceed to #1443 (exit interview)."
 ```
+
+> **Do not use `--label follow-through` here.** That label routes into the automated
+> follow-through sweeper, which requires a `<!-- soleur:followthrough script=… earliest=… -->`
+> directive and an exit-code probe —
+> `.claude/hooks/follow-through-directive-gate.sh` **denies** the `gh issue create` outright
+> without one. It is also the wrong semantics: the sweeper *auto-closes* an issue when its probe
+> passes, whereas this checkpoint becomes **due** at 14 days rather than satisfied. The work here
+> is a conversation, which has no exit-code probe. Put the due date in the title instead.
 
 ### Measurability caveat — carry this with every #1442 finding
 
