@@ -23,7 +23,7 @@
 //    silently ship paths or repo URLs with them.
 
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -36,6 +36,7 @@ import {
   formatProducersMarker,
   renderCoverageMarkdown,
 } from "../lib/kb-coverage";
+import { writeCoverage } from "../scripts/write-kb-coverage";
 
 const counts = {
   c4_elements: 7,
@@ -152,6 +153,39 @@ describe("the marker — emitted twice, identical field sets", () => {
     expect(body).not.toMatch(/https?:\/\//);
     expect(body).not.toMatch(/(?:^|\s)\/(?:home|Users|var|tmp)\//);
     expect(body).not.toMatch(/git@/);
+  });
+});
+
+describe("writeCoverage — the executable wrapper", () => {
+  it("derives coverage_present/coverage_expected from the tree, not from flags", () => {
+    // The two coverage counts are the ONLY ones the wrapper computes; the three
+    // producer counts are passed in, so the marker reports what the run actually
+    // produced rather than what a second pass rediscovers.
+    const root = mkdtempSync(join(tmpdir(), "kbcov-wrap-"));
+    mkdirSync(join(root, "knowledge-base", EXPECTED_KB_PATHS[0], ".."), { recursive: true });
+    writeFileSync(join(root, "knowledge-base", EXPECTED_KB_PATHS[0]), "x");
+
+    const marker = writeCoverage(
+      root,
+      { c4_elements: 7, c4_relationships: 5, domain_model_rows: 3 },
+      [],
+    );
+    expect(marker).toContain("coverage_present=1");
+    expect(marker).toContain(`coverage_expected=${EXPECTED_KB_PATHS.length}`);
+    expect(marker).toContain("c4_relationships=5");
+  });
+
+  it("writes the artifact and its marker line matches the returned marker", () => {
+    const root = mkdtempSync(join(tmpdir(), "kbcov-wrap2-"));
+    const marker = writeCoverage(
+      root,
+      { c4_elements: 0, c4_relationships: 0, domain_model_rows: 0 },
+      ["c4: 0 relationships"],
+    );
+    const body = readFileSync(join(root, "knowledge-base", "project", "kb-coverage.md"), "utf8");
+    expect(body).toContain(marker);
+    // A degraded producer must survive the session — stdout alone does not.
+    expect(body).toContain("c4: 0 relationships");
   });
 });
 
