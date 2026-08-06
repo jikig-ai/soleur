@@ -73,7 +73,7 @@ describe("#7222 — KbChatFullScreen chrome", () => {
       </KbChatFullScreen>,
     );
 
-    fireEvent.click(screen.getByLabelText("Back to document"));
+    fireEvent.click(screen.getByRole("button", { name: "Return to file preview" }));
     expect(onClose).toHaveBeenCalledTimes(1);
 
     fireEvent.keyDown(window, { key: "Escape" });

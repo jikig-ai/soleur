@@ -14,6 +14,7 @@
 
 import { NEW_ISSUE_DIALOG_EVENT } from "@/components/workstream/new-issue-dialog-event";
 import { ROUTINE_DRAFT_TAB_EVENT } from "@/components/routines/routine-draft-tab-event";
+import { NAV_DRAWER_REVEAL_EVENT } from "@/components/dashboard/nav-drawer-reveal-event";
 
 export interface TourStep {
   /** `data-tour-id` selector value, or null for a centered (no-spotlight) card. */
@@ -28,8 +29,13 @@ export interface TourStep {
   /**
    * Window event dispatched with `{ open: true }` when this step becomes active
    * and `{ open: false }` when the tour leaves it (to a step that doesn't share
-   * the same `reveal`). Lets a step open a component-owned modal so its in-modal
-   * `target` can be spotlit (e.g. the New Issue dialog). Handled in TourProvider.
+   * the same `reveal`). Lets a step open a component-owned surface so its
+   * `target` inside that surface can be spotlit. Handled in TourProvider.
+   *
+   * Two surfaces use it: the New Issue dialog, and — since #7326 — the mobile
+   * nav drawer, which is where every `target` that is a sidebar tab lives on a
+   * phone. The drawer's listener no-ops the open at `md`+, so the seven tab
+   * steps carry it unconditionally and it costs desktop nothing.
    */
   reveal?: string;
 }
@@ -44,6 +50,7 @@ export const TOUR_STEPS: readonly TourStep[] = [
   // ── Dashboard ──────────────────────────────────────────────────────────────
   {
     target: "/dashboard",
+    reveal: NAV_DRAWER_REVEAL_EVENT,
     route: "/dashboard",
     title: "Your sidebar",
     body: "The sidebar on the left is how you move around — click any tab to switch sections. This one is your Dashboard: home base.",
@@ -70,6 +77,7 @@ export const TOUR_STEPS: readonly TourStep[] = [
   // ── Inbox ───────────────────────────────────────────────────────────────────
   {
     target: "/dashboard/inbox",
+    reveal: NAV_DRAWER_REVEAL_EVENT,
     route: "/dashboard/inbox",
     title: "Open your Inbox",
     body: "Click the Inbox tab to jump here — email and signals from the outside world, already triaged.",
@@ -84,6 +92,7 @@ export const TOUR_STEPS: readonly TourStep[] = [
   // ── Workstream ───────────────────────────────────────────────────────────────
   {
     target: "/dashboard/workstream",
+    reveal: NAV_DRAWER_REVEAL_EVENT,
     route: "/dashboard/workstream",
     title: "Open Workstream",
     body: "Click the Workstream tab to track the work in flight — everything your agents are moving forward.",
@@ -119,6 +128,7 @@ export const TOUR_STEPS: readonly TourStep[] = [
   // section's page (Workstream); the NEXT (content) step is what navigates in.
   {
     target: "/dashboard/kb",
+    reveal: NAV_DRAWER_REVEAL_EVENT,
     title: "Find the Knowledge Base",
     body: "This tab in the sidebar opens your organization's shared memory — click it to go in.",
   },
@@ -132,6 +142,7 @@ export const TOUR_STEPS: readonly TourStep[] = [
   // ── Routines ──────────────────────────────────────────────────────────────────
   {
     target: "/dashboard/routines",
+    reveal: NAV_DRAWER_REVEAL_EVENT,
     route: "/dashboard/routines",
     title: "Open Routines",
     body: "Click the Routines tab to set up recurring agent work.",
@@ -155,12 +166,14 @@ export const TOUR_STEPS: readonly TourStep[] = [
   // ── Releases + Settings (tab-only) ────────────────────────────────────────────
   {
     target: "/dashboard/releases",
+    reveal: NAV_DRAWER_REVEAL_EVENT,
     route: "/dashboard/releases",
     title: "Keep up with Releases",
     body: "Click the Releases tab for a running feed of new features and fixes in Soleur.",
   },
   {
     target: "/dashboard/settings",
+    reveal: NAV_DRAWER_REVEAL_EVENT,
     route: "/dashboard/settings",
     title: "Manage your workspace",
     body: "Click the Settings tab to handle your account, team, billing, and the services your agents connect to.",
