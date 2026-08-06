@@ -127,20 +127,43 @@ actively onboarding), short of `committed` (no agreement, no willingness-to-pay 
 `beta_contact_stage_transitions` is append-only, so the entry stage cannot be silently corrected
 afterwards and must be set deliberately.
 
-## Known gap — no agreement covers this relationship
+## Agreement gap — RESOLVED 2026-08-06, and the answer was not the one expected
 
-Tracked in **[#7331](https://github.com/jikig-ai/soleur/issues/7331)**. Two exposures:
+Was tracked as an open gap in **[#7331](https://github.com/jikig-ai/soleur/issues/7331)**. Both
+exposures are now determined:
+`knowledge-base/legal/audits/2026-08-06-alpha-tester-controller-processor-determination.md`.
 
-1. **No alpha-tester terms.** Nothing defines support expectation, data handling, confidentiality
-   of a private repository, or what happens to tester data when the alpha ends. The tester is on
-   the CLI and never passes through `accept-terms`.
-2. **Possible processor relationship.** Skouer's product database holds personal data about
-   founders and investors — third parties with no relationship to Jikigai. If Soleur agents
-   operate on that repository in earnest, Jikigai plausibly becomes an Art. 28 processor of
-   Skouer's third-party data. The beta-CRM LIA does **not** cover this: it addresses the
-   operator's notes *about* testers, not tester-owned data that Soleur processes.
+1. **No alpha-tester terms — CLOSED.** The defect was never that terms did not exist: the T&Cs bind
+   on **installing**, and §10.2 already disclaims availability and warranty. The defect was
+   **notice** — the plugin README surfaced only the BSL licence, so a CLI installer was bound by
+   terms never shown. Fixed by a Terms section in `plugins/soleur/README.md` and a terms paragraph
+   in the onboarding runbook's welcome message.
 
-Exposure (2) begins at first substantive agent run against their data, not at onboarding.
+2. **Processor relationship — CONFIRMED, but for a different reason than this record predicted, and
+   it had already happened.** The prediction was that exposure begins when agents operate on the
+   tester's *venture database*. That is not what triggered it. The **2026-08-06 guided-onboarding
+   session itself** ran on the operator's machine **under a Jikigai Anthropic key** — which makes
+   Jikigai an Art. 28 processor for the instructed limb of that run, retroactively, with no
+   instrument in place. Recorded at P-1 in `knowledge-base/legal/article-30-2-register.md`.
+
+   The sentence below — *"begins at first substantive agent run against their data, not at
+   onboarding"* — was **wrong, and wrong in the direction that mattered**: onboarding *was* the
+   run. It is left standing rather than quietly edited, because the mistake is the finding.
+
+3. **A third exposure this record did not anticipate.** Operator collaborator access to the
+   tester's private repository, read for Jikigai's own #1442 metrics, makes Jikigai a **controller**
+   under Art. 4(7) — a posture a DPA cannot cure. Recorded at PA-35 with an LIA. The operator has
+   elected to retain and paper it; the LIA recommends re-deriving the metric to non-personal
+   aggregates instead, which is free.
+
+**What the session actually touched** (reconstructed, not assumed): no venture-database records were
+processed. Working material was schema, configuration, tests and documentation. A fixtures file
+containing company-officer records was present in the tree; no evidence it was read, and a read
+cannot be excluded — see
+`knowledge-base/project/specs/feat-one-shot-7331-alpha-tester-terms-dpa/session-scope-reconstruction.md`.
+
+**Forward control:** no further Jikigai-keyed runs against tester content until an Art. 28(3)
+instrument exists — the operator uses the tester's machine and key, or does not run.
 
 ## Repeatability
 
