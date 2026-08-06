@@ -77,7 +77,7 @@ jobs:
     runs-on: ubuntu-latest
     # Budget, derived rather than guessed. The enumeration sweep is bounded by per-request
     # retries over ~2 repos / ~29 tags; the readback poll is bounded below at
-    # ZOT_INVENTORY_POLL_BUDGET_S (340 s, see the assert step). 30 minutes sits well above
+    # ZOT_ASSERT_POLL_BUDGET_S (340 s, see the assert step). 30 minutes sits well above
     # the sum and leaves headroom for a slow cloudflared install; it is a hygiene cap, not a
     # correctness requirement.
     timeout-minutes: 30
@@ -327,7 +327,8 @@ jobs:
       #                                                      reach the marker; it is the
       #                                                      JOB-LEVEL straddle check and the
       #                                                      input to the issue comment).
-      #   ZOT_INVENTORY_MARKER_FILE                        — where to drop the emitted line so
+      #   MARKER_FILE                                      — where this step captures the
+      #                                                      enumerator's STDOUT so
       #                                                      later steps can read it back.
       # ZOT_PUSH_USER / ZOT_PUSH_TOKEN are deliberately NOT set anywhere in this job. The
       # script asserts they are unset at entry and exits non-zero if either is populated —
@@ -342,8 +343,28 @@ jobs:
           BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
           BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
           BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
-          ZOT_INVENTORY_MARKER_FILE: ${{ runner.temp }}/zot-inventory-marker.txt
-        run: bash scripts/zot-inventory.sh
+          # The enumerator's OWN name for the start sample. `disk_start` also exports
+          # ZOT_DISK_RESTARTS_AT_START to $GITHUB_ENV for the straddle step below; the script
+          # reads ZOT_RESTARTS_AT_START. Both names are live on purpose — they are consumed by
+          # different readers, and collapsing them would silently starve one.
+          ZOT_RESTARTS_AT_START: ${{ steps.disk_start.outputs.restarts }}
+          MARKER_FILE: ${{ runner.temp }}/zot-inventory-marker.txt
+        # The script emits the marker line on STDOUT (diagnostics go to stderr) and POSTs it to
+        # Better Stack itself. Capture stdout so `assert_marker` and the #7247 comment can read
+        # the exact line back without re-deriving it.
+        #
+        # `rc` is captured, not inherited: the runner's implicit `bash -eo pipefail {0}` would
+        # abort this step the instant the enumerator exits non-zero, and a non-zero exit is a
+        # REPORTABLE outcome here (partial/failed both carry a marker worth reading). Aborting
+        # would throw away the very line the next steps exist to publish (AP-022).
+        run: |
+          set -uo pipefail
+          rc=0
+          bash scripts/zot-inventory.sh > "$MARKER_FILE" || rc=$?
+          echo "--- emitted marker ---"
+          cat "$MARKER_FILE" || true
+          echo "--- enumerator exit: ${rc} ---"
+          exit "$rc"
 
       # The workflow's own END sample. Deliberately AFTER the sweep and deliberately NOT the
       # marker's source: the marker is emitted inside the script above, so anything measured
@@ -431,10 +452,22 @@ jobs:
           BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
           BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
           BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
-          ZOT_INVENTORY_MARKER_FILE: ${{ runner.temp }}/zot-inventory-marker.txt
-          ZOT_INVENTORY_POLL_BUDGET_S: '340'
-          ZOT_INVENTORY_POLL_INTERVAL_S: '20'
-        run: bash scripts/zot-inventory-assert-marker.sh
+          INGEST_HTTP_CODE: ${{ steps.inventory.outputs.ingest_http_code }}
+          # The script's own seam names. 340 s is 20x the MEASURED 17 s POST->queryable floor
+          # from the Phase-0 half-probe; the interval is well under the floor so a fast landing
+          # is not rounded away.
+          ZOT_ASSERT_POLL_BUDGET_S: '340'
+          ZOT_ASSERT_POLL_INTERVAL_S: '20'
+        # --run-id is REQUIRED and must be numeric: the match is anchored on
+        # `SOLEUR_ZOT_INVENTORY run_id=<numeric>` precisely so a GitHub webhook echo of this
+        # plan's own prose cannot satisfy it. --ingest-http-code carries the emitter's observed
+        # POST status so a region-pin refusal surfaces as ingest_rejected_http_<code> rather
+        # than being misreported as a missing marker (H6 attaches THERE, not to non-observation).
+        run: |
+          set -uo pipefail
+          bash scripts/zot-inventory-assert-marker.sh \
+            --run-id "$GITHUB_RUN_ID" \
+            --ingest-http-code "${INGEST_HTTP_CODE:-}"
 
       # DURABLE HOME #2 for the number. Better Stack is the primary one; this comment exists
       # because #7247 is where the operator is already looking, and a 90-day Actions run log is
