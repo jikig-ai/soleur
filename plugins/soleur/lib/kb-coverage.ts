@@ -46,6 +46,33 @@ export const MARKER_FIELDS = [
   "coverage_expected",
 ] as const;
 
+/**
+ * ‼️ EVERY FIELD HERE IS A FUNCTION OF KB STATE, NEVER OF THE RUN.
+ *
+ * That is the invariant that makes this artifact deterministic, and the original
+ * design broke it in one place: `domain_model_rows` meant "rows appended by THIS
+ * run", which is N on a fresh register and 0 on the next sync once dedup no-ops.
+ * Since the marker is embedded in the committed file, an unchanged KB produced a
+ * guaranteed one-field diff on every second sync — AC11's byte-stability claim was
+ * false by construction, and the determinism test passed only because its fixture
+ * handed identical counts to both runs.
+ *
+ * The field now means "rows the register currently HOLDS", which is state, so
+ * determinism follows from the definition instead of from a fixture. Run-scoped
+ * facts ("appended 3 rows this run") belong on stdout, which is where run-scoped
+ * facts belong — the artifact is a snapshot, the stream is a log.
+ *
+ * Corollary for callers: derive these counts, do not pass them in. Flags that can be
+ * forgotten reconstruct the same failure — an absent `--c4-elements` silently
+ * produced `c4_elements=0`, byte-identical to the plan's headline failure mode.
+ */
+export type CoverageSources = {
+  /** Rendered model, if committed. Absent/unparseable ⇒ zeros, reported honestly. */
+  modelJson: string | null;
+  /** The domain-model register, if present. */
+  registerMarkdown: string | null;
+};
+
 export type ProducerCounts = Record<(typeof MARKER_FIELDS)[number], number>;
 
 /**
@@ -74,6 +101,66 @@ export type CoverageEntry = { path: string; present: boolean };
 /** Probe each expected path under `kbRoot`. Order is the sorted expected order. */
 export function assessCoverage(kbRoot: string): CoverageEntry[] {
   return EXPECTED_KB_PATHS.map((path) => ({ path, present: existsSync(join(kbRoot, path)) }));
+}
+
+/**
+ * Count the rows the register currently holds under `## Auto-inferred (unreviewed)`.
+ *
+ * Auto-inferred ONLY — the curated `## Business Rules` table is hand-authored and is
+ * not coverage this sync produced, so counting it would make the number move when a
+ * human edits the register rather than when sync does.
+ *
+ * Stops at the next `## ` heading so a register whose Auto-inferred section precedes
+ * the curated one does not spill into it — the same section-boundary bug that let
+ * write-row append into the curated table.
+ */
+export function countAutoInferredRows(registerMarkdown: string | null): number {
+  if (!registerMarkdown) return 0;
+  let inSection = false;
+  let rows = 0;
+  for (const line of registerMarkdown.split("\n")) {
+    if (/^## Auto-inferred \(unreviewed\)/.test(line)) {
+      inSection = true;
+      continue;
+    }
+    if (inSection && /^## /.test(line)) break;
+    if (!inSection) continue;
+    // A data row: starts with `|`, and is neither the header nor the `|---` rule.
+    if (/^\|/.test(line) && !/^\|[\s-]*-[\s-]*\|/.test(line) && !/^\|\s*Anchor\s*\|/.test(line)) {
+      rows++;
+    }
+  }
+  return rows;
+}
+
+/**
+ * Derive every marker count from KB state. See `CoverageSources` for why these are
+ * derived rather than passed in.
+ */
+export function deriveCounts(
+  entries: CoverageEntry[],
+  sources: CoverageSources,
+): ProducerCounts {
+  const model = sources.modelJson
+    ? (() => {
+        try {
+          const m = JSON.parse(sources.modelJson) as Record<string, unknown>;
+          const size = (v: unknown) =>
+            v && typeof v === "object" && !Array.isArray(v) ? Object.keys(v).length : 0;
+          return { elements: size(m.elements), relationships: size(m.relations) };
+        } catch {
+          return { elements: 0, relationships: 0 };
+        }
+      })()
+    : { elements: 0, relationships: 0 };
+
+  return {
+    c4_elements: model.elements,
+    c4_relationships: model.relationships,
+    domain_model_rows: countAutoInferredRows(sources.registerMarkdown),
+    coverage_present: entries.filter((e) => e.present).length,
+    coverage_expected: entries.length,
+  };
 }
 
 /** Collapse to one line — a marker must be greppable as a single record. */

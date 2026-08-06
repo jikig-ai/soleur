@@ -73,7 +73,13 @@ export type Edge = { from: string; to: string };
 
 export type RenderVerdict = {
   status: "ok" | "degraded" | "failed";
+  /**
+   * A BARE TOKEN, never free prose. A consumer classifies on this, and the previous
+   * form emitted a quoted sentence — so a `reason=(\S+)` regex yielded `"0`.
+   * Human-readable context belongs in `detail`.
+   */
   reason?: string;
+  detail?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -387,22 +393,42 @@ export function countModelJson(json: string): { elements: number; relationships:
  */
 export function assessRender(input: {
   diagnostics: string;
+  /** Elements in the RENDERED model (the whole diagrams dir). Validates non-degeneracy. */
   elementCount: number;
+  /** Relationships in the RENDERED model. Reported, but NOT the gate — see below. */
   relationshipCount: number;
+  /**
+   * Relationships THIS PRODUCER contributed, i.e. `buildEdges(docs).length`.
+   *
+   * ‼️ THIS is the gate, and using `relationshipCount` was the defect. `likec4
+   * export json .` renders the WHOLE diagrams directory, so on any repo that already
+   * has a hand-authored `model.c4` the count is dominated by edges the producer did
+   * not create. Measured on this repo: 4 component docs with ZERO `dependencies:`
+   * frontmatter — the producer contributed 0 relationships — and the merged render
+   * reported 135. The zero-relationship gate, which is this module's entire reason
+   * for existing, was therefore unreachable in exactly the two-writer scenario the
+   * design is built around: it could only ever fire on a fresh diagrams dir, where
+   * it is least needed.
+   *
+   * The producer already knows this number without asking likec4 — it built the edge
+   * set. The render's job is validation and artifact production, not counting.
+   */
+  generatedRelationships: number;
 }): RenderVerdict {
   if (DIAG_RE.test(input.diagnostics)) {
     const line = input.diagnostics.split("\n").find((l) => DIAG_RE.test(l)) ?? "";
-    return { status: "failed", reason: `likec4 reported a source fault: ${line.trim()}` };
+    return { status: "failed", reason: "source-fault", detail: line.trim() };
   }
   if (input.elementCount === 0) {
-    return { status: "failed", reason: "likec4 produced an empty/degenerate model" };
+    return { status: "failed", reason: "empty-model", detail: "likec4 produced an empty/degenerate model" };
   }
-  if (input.relationshipCount === 0) {
+  if (input.generatedRelationships === 0) {
     return {
       status: "degraded",
-      reason:
-        "0 relationships — component docs declare no parseable dependencies, " +
-        "so the diagram is a set of disconnected boxes",
+      reason: "no-generated-relationships",
+      detail:
+        "component docs declare no parseable dependencies, so this producer " +
+        "contributed a set of disconnected boxes",
     };
   }
   return { status: "ok" };

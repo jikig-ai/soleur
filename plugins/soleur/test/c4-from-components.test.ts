@@ -166,23 +166,46 @@ describe("buildEdges", () => {
 
 describe("assessRender — three gates", () => {
   const clean = { diagnostics: "workspace: /tmp/x\ndone\n" };
+  // Default the gate input to non-zero so each existing case keeps exercising the
+  // arm it was written for; the gate itself is pinned by its own cases below.
+  const g = (n: number) => ({ generatedRelationships: n });
 
   it("reports ok when elements and relationships are both non-zero", () => {
-    expect(assessRender({ ...clean, elementCount: 3, relationshipCount: 3 }).status).toBe("ok");
+    expect(assessRender({ ...clean, ...g(3), elementCount: 3, relationshipCount: 3 }).status).toBe("ok");
   });
 
   // PLAN AC2 — the gate that catches the real failure. This is the whole reason
   // the relationship count is a gate at all: a link-free corpus produces valid,
   // non-empty, diagnostic-clean output that is nonetheless a diagram of
   // disconnected boxes.
-  it("reports DEGRADED (not ok, not failed) when relationships are zero", () => {
-    const v = assessRender({ ...clean, elementCount: 3, relationshipCount: 0 });
+  // THE GATE, and the reason it must read the PRODUCER's edge set rather than the
+  // rendered model's. `likec4 export json .` renders the whole diagrams directory, so
+  // on any repo with a hand-authored model.c4 the rendered count is dominated by edges
+  // this producer did not create — measured on this repo: 4 docs with zero
+  // `dependencies:`, producer contributed 0, merged render reported 135. Gating on the
+  // rendered count made the module's whole reason for existing unreachable in exactly
+  // the two-writer scenario it was designed around.
+  it("reports DEGRADED when THIS PRODUCER contributed no relationships", () => {
+    const v = assessRender({ ...clean, ...g(0), elementCount: 3, relationshipCount: 0 });
     expect(v.status).toBe("degraded");
-    expect(v.reason).toMatch(/relationship/i);
+    expect(v.reason).toBe("no-generated-relationships");
+  });
+
+  it("still reports DEGRADED when the MERGED model has relationships but the producer added none", () => {
+    // The previously-unreachable case: a pre-existing hand-authored model.c4 supplies
+    // 135 relations, the producer supplies 0. Old behaviour: ok. Correct: degraded.
+    const v = assessRender({ ...clean, ...g(0), elementCount: 67, relationshipCount: 135 });
+    expect(v.status).toBe("degraded");
+    expect(v.reason).toBe("no-generated-relationships");
+  });
+
+  it("reports ok when the producer contributed edges even if the merged count is larger", () => {
+    const v = assessRender({ ...clean, ...g(3), elementCount: 67, relationshipCount: 135 });
+    expect(v.status).toBe("ok");
   });
 
   it("reports failed on an empty model", () => {
-    expect(assessRender({ ...clean, elementCount: 0, relationshipCount: 0 }).status).toBe("failed");
+    expect(assessRender({ ...clean, ...g(0), elementCount: 0, relationshipCount: 0 }).status).toBe("failed");
   });
 
   it("reports failed when the diagnostic stream carries a source fault", () => {
@@ -191,7 +214,7 @@ describe("assessRender — three gates", () => {
       "Could not resolve reference to Element named 'ghost'\n",
       "    Line 274: unexpected token\n",
     ]) {
-      expect(assessRender({ diagnostics, elementCount: 5, relationshipCount: 5 }).status).toBe(
+      expect(assessRender({ diagnostics, ...g(5), elementCount: 5, relationshipCount: 5 }).status).toBe(
         "failed",
       );
     }
@@ -202,7 +225,7 @@ describe("assessRender — three gates", () => {
     // this reason: likec4 echoes `workspace: /abs/path`, so `^Invalid ` and the
     // indented `Line N:` form cannot match a repo path mid-line.
     const diagnostics = "workspace: /home/u/Invalid Line 3: dir/repo\n";
-    expect(assessRender({ diagnostics, elementCount: 5, relationshipCount: 5 }).status).toBe("ok");
+    expect(assessRender({ diagnostics, ...g(5), elementCount: 5, relationshipCount: 5 }).status).toBe("ok");
   });
 
   it("DOES trip on `Could not resolve` anywhere on the line — faithful to the shell", () => {
@@ -212,7 +235,7 @@ describe("assessRender — three gates", () => {
     // AC5 requires mirroring the shell gate, and diverging here would make the
     // producer and the script disagree about what a source fault is.
     const diagnostics = "workspace: /home/u/Could not resolve/repo\n";
-    expect(assessRender({ diagnostics, elementCount: 5, relationshipCount: 5 }).status).toBe(
+    expect(assessRender({ diagnostics, ...g(5), elementCount: 5, relationshipCount: 5 }).status).toBe(
       "failed",
     );
   });

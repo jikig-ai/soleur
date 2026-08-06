@@ -304,6 +304,10 @@ export function runProducer(root: string): { code: number; marker: string } {
     diagnostics,
     elementCount: staged.elements,
     relationshipCount: staged.relationships,
+    // The GATE. `edges` is this producer's own contribution, computed in-process —
+    // the merged render's count is dominated by any hand-authored model.c4 and
+    // cannot answer "did MY corpus produce edges?".
+    generatedRelationships: edges.length,
   });
 
   // A refusal to overwrite is a DEGRADE, not a clean run. sync.md documents
@@ -313,7 +317,7 @@ export function runProducer(root: string): { code: number; marker: string } {
   // asserted only `skipped=1`, never the status, so that arm passed on `ok`.
   const effective =
     skipped > 0 && verdict.status === "ok"
-      ? { status: "degraded" as const, reason: "skipped-write-target" }
+      ? { status: "degraded" as const, reason: "skipped-write-target", detail: undefined }
       : verdict;
 
   // Publish only on a verdict that is not `failed`. A degraded render (0 relationships)
@@ -338,9 +342,11 @@ export function runProducer(root: string): { code: number; marker: string } {
     code: effective.status === "failed" ? 1 : 0,
     marker: oneLine(
       `SOLEUR_KB_SYNC_C4 status=${effective.status} ` +
-        (effective.reason ? `reason="${effective.reason}" ` : "") +
+        (effective.reason ? `reason=${effective.reason} ` : "") +
+        (effective.detail ? `detail="${effective.detail}" ` : "") +
         `elements=${staged.elements} relationships=${staged.relationships} ` +
-        `docs=${docs.length} skipped=${skipped} seeded=${seeded} published=${published ? 1 : 0}`,
+        `generated_components=${docs.length} generated_relationships=${edges.length} ` +
+        `skipped=${skipped} seeded=${seeded} published=${published ? 1 : 0}`,
     ),
   };
 }

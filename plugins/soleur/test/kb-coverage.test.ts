@@ -36,6 +36,7 @@ import {
   formatProducersMarker,
   renderCoverageMarkdown,
 } from "../lib/kb-coverage";
+import { countAutoInferredRows } from "../lib/kb-coverage";
 import { writeCoverage } from "../scripts/write-kb-coverage";
 
 const counts = {
@@ -156,36 +157,78 @@ describe("the marker — emitted twice, identical field sets", () => {
   });
 });
 
-describe("writeCoverage — the executable wrapper", () => {
-  it("derives coverage_present/coverage_expected from the tree, not from flags", () => {
-    // The two coverage counts are the ONLY ones the wrapper computes; the three
-    // producer counts are passed in, so the marker reports what the run actually
-    // produced rather than what a second pass rediscovers.
+describe("writeCoverage — derives every count from KB state", () => {
+  it("derives ALL five counts from the tree, taking no count flags", () => {
+    // The wrapper used to accept --c4-elements/--c4-relationships/--domain-model-rows
+    // and expected sync.md to thread them from the C4 producer's marker. An ABSENT
+    // flag became 0, which is byte-identical to the plan's headline failure mode —
+    // the exact state this artifact exists to detect, forged by forgetting a flag.
+    // There is now no flag to forget.
     const root = mkdtempSync(join(tmpdir(), "kbcov-wrap-"));
     mkdirSync(join(root, "knowledge-base", EXPECTED_KB_PATHS[0], ".."), { recursive: true });
     writeFileSync(join(root, "knowledge-base", EXPECTED_KB_PATHS[0]), "x");
 
-    const marker = writeCoverage(
-      root,
-      { c4_elements: 7, c4_relationships: 5, domain_model_rows: 3 },
-      [],
-    );
+    const marker = writeCoverage(root);
     expect(marker).toContain("coverage_present=1");
     expect(marker).toContain(`coverage_expected=${EXPECTED_KB_PATHS.length}`);
-    expect(marker).toContain("c4_relationships=5");
+    // No model.likec4.json and no register in this tree — reported honestly as 0
+    // rather than as a fabricated value.
+    expect(marker).toContain("c4_elements=0");
+    expect(marker).toContain("domain_model_rows=0");
   });
 
   it("writes the artifact and its marker line matches the returned marker", () => {
     const root = mkdtempSync(join(tmpdir(), "kbcov-wrap2-"));
-    const marker = writeCoverage(
-      root,
-      { c4_elements: 0, c4_relationships: 0, domain_model_rows: 0 },
-      ["c4: 0 relationships"],
-    );
+    const marker = writeCoverage(root, ["c4: 0 relationships"]);
     const body = readFileSync(join(root, "knowledge-base", "project", "kb-coverage.md"), "utf8");
     expect(body).toContain(marker);
-    // A degraded producer must survive the session — stdout alone does not.
     expect(body).toContain("c4: 0 relationships");
+  });
+
+  it("counts ONLY the Auto-inferred rows, never the curated table", () => {
+    // The curated table is hand-authored; counting it would make the number move
+    // when a human edits the register rather than when sync does.
+    const register = [
+      "# Register",
+      "",
+      "## Business Rules",
+      "",
+      "| ID | Rule | Statement | Source |",
+      "|---|---|---|---|",
+      "| BR-001 | a | b | c |",
+      "| BR-002 | d | e | f |",
+      "",
+      "## Auto-inferred (unreviewed)",
+      "",
+      "| Anchor | Candidate statement |",
+      "|---|---|",
+      "| x.sql > t.a | one |",
+      "",
+    ].join("\n");
+    expect(countAutoInferredRows(register)).toBe(1);
+  });
+
+  it("stops at the next heading, so a reversed-order register does not spill", () => {
+    const register = [
+      "## Auto-inferred (unreviewed)",
+      "",
+      "| Anchor | Candidate statement |",
+      "|---|---|",
+      "| x.sql > t.a | one |",
+      "",
+      "## Business Rules",
+      "",
+      "| ID | Rule |",
+      "|---|---|",
+      "| BR-001 | a |",
+      "| BR-002 | b |",
+      "",
+    ].join("\n");
+    expect(countAutoInferredRows(register)).toBe(1);
+  });
+
+  it("returns 0 for an absent register rather than throwing", () => {
+    expect(countAutoInferredRows(null)).toBe(0);
   });
 });
 

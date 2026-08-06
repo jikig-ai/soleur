@@ -225,9 +225,31 @@ that PR is **pushed and merged**.
 
 #### Coverage Summary
 
-Runs at the END of every sync (after all other areas). Writes
-`knowledge-base/project/kb-coverage.md` and prints the same summary to stdout,
-using [`plugins/soleur/lib/kb-coverage.ts`](../lib/kb-coverage.ts).
+Runs at the END of an `all` sync, after every other area. Writes
+`knowledge-base/project/kb-coverage.md` and prints the same marker to stdout:
+
+```bash
+bun plugins/soleur/scripts/write-kb-coverage.ts
+```
+
+Add one `--degraded "<reason>"` for each producer that reported `status=degraded`
+earlier in the run (the `reason=` token from its marker is the right string):
+
+```bash
+bun plugins/soleur/scripts/write-kb-coverage.ts \
+  --degraded "c4: no-generated-relationships"
+```
+
+**Do not hand-author `kb-coverage.md`, and do not pass the counts in.** Every count
+is derived from the tree by the script itself — the rendered `model.likec4.json`, the
+domain-model register, and the expected-path probe. That is deliberate: an earlier
+design took `--c4-elements`/`--c4-relationships`/`--domain-model-rows` flags, and an
+absent flag silently became `0`, which is byte-identical to the very failure state
+this artifact exists to detect. There is now no flag to forget.
+
+Standalone area invocations (`/soleur:sync c4`, `/soleur:sync domain-model`) do NOT
+write this file — its counts describe the whole knowledge base, and a partial run
+would record zeros for the areas that did not execute.
 
 **Wording is a hard constraint, not a style preference.** The report states what
 Soleur *expects* versus what is *present*. It never asserts what the business
