@@ -186,19 +186,48 @@ that **cannot work**. Three independent blockers, all verified:
 FR7's "safety properties preserved **unchanged**" is precisely the problem —
 unchanged means it requires a pre-existing register and an operator at a keyboard.
 
-**Two viable paths, operator's call:**
+**Operator decision: build it properly.** Three sub-tasks, one per blocker.
 
-- **(a) Build it properly.** Add a register-bootstrap step (seed an empty register
-  with the canonical headings) plus a headless-safe non-interactive write mode that
-  appends to `## Auto-inferred (unreviewed)` without per-row approval — preserving
-  the fail-closed secret scan, anchor dedup, atomic write, and never minting a
-  `BR-*` id. Materially larger than a dispatch change; needs its own ACs.
-- **(b) Drop from PR 1.** Ship the C4 producer as the sole new artifact. The
-  tester's KB still gains a C4 model plus the coverage summary; domain-model
-  follows once (a) is scoped on its own.
+**2.1 Register bootstrap — new `init` subcommand.** `domain-model-drift.sh init
+--register <path>` seeds a register with the canonical headings (the curated
+`## Business Rules` table plus `## Auto-inferred (unreviewed)`) when the file is
+absent. Idempotent: a no-op exit 0 when the file already exists. The subcommand
+owns this because the file-shape knowledge already lives there — `write-row`
+depends on the exact heading text to find its append target.
 
-Files (path (a) only): `scripts/domain-model-drift.sh`,
-`plugins/soleur/commands/sync.md`, plus tests.
+Do **not** relax the `realpath -e` guards at `:161` / `:240`. They are correct for
+`drift` and `write-row`, which must never operate on a path they cannot resolve.
+`init` is the one command allowed to create.
+
+**2.2 Headless write mode — auto-accept into the unreviewed section only.** The
+interactivity is not in the script (`write-row` is already a non-interactive
+primitive); it is sync.md's per-row `AskUserQuestion` at `:196-207`. Add a headless
+branch that appends every candidate directly.
+
+This is safe for one specific reason worth stating: `## Auto-inferred
+(unreviewed)` **is** the staging area for unreviewed content. Auto-appending there
+is not auto-approving a business rule — promotion to a curated `BR-*` id remains a
+deliberate human edit. The distinction is the whole point of the section's
+existence, and it is why this can be automated when a per-row approval gate cannot.
+
+Every existing safety property is preserved **unchanged** and each gets an AC:
+fail-closed secret-shape refusal, content-anchor dedup (so re-runs are no-ops),
+atomic temp-then-rename write, appends only under `## Auto-inferred (unreviewed)`,
+never mints a `BR-*` id, never touches the curated table.
+
+**2.3 Reconcile the terminal-area contract.** `sync.md:212` stays true for an
+explicit `/soleur:sync domain-model` invocation — drift report plus approval-gated
+write remain that path's output. Add a distinct `all`-dispatch path that runs
+`init` → `drift` → headless append, and feeds its row counts into the Phase 3
+coverage summary rather than terminating the run. Two paths, one script, stated
+explicitly so the contradiction does not survive as ambiguity.
+
+Skouer is PLpgSQL-heavy with `db/` and `queries/`, so this produces real rows on
+the first sync.
+
+Files: `scripts/domain-model-drift.sh`, `plugins/soleur/commands/sync.md`,
+`plugins/soleur/test/domain-model-init.test.sh` (new),
+`plugins/soleur/test/domain-model-headless-append.test.sh` (new).
 
 ## Phase 3 — Coverage summary
 
@@ -378,34 +407,46 @@ where the disposition is *acknowledge*: different lines, and the rewire removes
    `regenerate-c4-model.sh` and `c4-render.ts`.
 5. Diagnostic gating cites `regenerate-c4-model.sh:85-97`; the plan and code
    contain no instruction to mirror `c4-render.ts`'s stderr handling.
-6. `domain-model` no longer appears in sync.md's `all`-dispatch exclusion list;
-   `domain-model-drift.sh` is unmodified (`git diff --exit-code scripts/domain-model-drift.sh`).
-7. `kb-coverage.md` is byte-identical across two consecutive runs on an unchanged
+6. `domain-model` no longer appears in sync.md's `all`-dispatch exclusion list.
+7. `domain-model-drift.sh init --register <absent-path>` creates a register with
+   both canonical headings; re-running is a no-op exit 0. The `realpath -e` guards
+   at `:161` / `:240` are **unchanged** (`drift` and `write-row` still die on an
+   unresolvable path).
+8. Headless append writes rows only under `## Auto-inferred (unreviewed)`. Asserted
+   against a fixture register whose curated `## Business Rules` table is
+   byte-identical before and after.
+9. Every preserved safety property has a red-when-broken test: secret-shaped
+   content refused fail-closed; a duplicate content anchor is a no-op; the write is
+   atomic; no `BR-*` id is minted.
+10. An explicit `/soleur:sync domain-model` invocation still terminates after the
+    drift report (the `sync.md:212` contract), while the `all` path continues into
+    the coverage summary. Both asserted.
+11. `kb-coverage.md` is byte-identical across two consecutive runs on an unchanged
    KB.
-8. `kb-coverage.md` contains no line matching an anchored deficiency pattern
+12. `kb-coverage.md` contains no line matching an anchored deficiency pattern
    (`^[-*] *[Mm]issing:`) AND contains the expectation-vs-presence phrasing.
    Both assertions, generated from a fixture — presence of good phrasing is not
    absence of bad phrasing.
-9. `npx tsc --noEmit` clean from `apps/web-platform` (repo convention per
+13. `npx tsc --noEmit` clean from `apps/web-platform` (repo convention per
    `ci.yml`; `apps/web-platform/node_modules/.bin/tsc` is not installed in a
    worktree).
-10. `bash scripts/test-all.sh` green — required, not optional:
+14. `bash scripts/test-all.sh` green — required, not optional:
     `c4-model-freshness.test.sh` is an orphan suite the touched-file loop misses.
-11. `model.likec4.json` byte-identical to a fresh render of the edited `.c4`
+15. `model.likec4.json` byte-identical to a fresh render of the edited `.c4`
     sources; `views.c4` includes every element added to `model.c4`.
-12. `ADR-171-*.md` exists, `status: adopting`, ordinal free on freshly-fetched
+16. `ADR-171-*.md` exists, `status: adopting`, ordinal free on freshly-fetched
     `origin/main`.
-13. PR body carries a `## Changelog` section and a `semver:minor` label
+17. PR body carries a `## Changelog` section and a `semver:minor` label
     (`plugins/soleur/AGENTS.md` pre-commit checklist — new plugin content).
 
 ### Post-merge (operator)
 
-14. Re-sync `2my8r9ry2t-wq/Skouer`. Confirm the generated model's elements match
+18. Re-sync `2my8r9ry2t-wq/Skouer`. Confirm the generated model's elements match
     its component-doc set and its relationships match their declared dependencies.
     **Do not assert a literal count** — `ci-guards.md` has no `**Internal**` line,
     so 7 docs do not imply 7 connected elements.
     *Automation: agent-run via `gh api` against the merged PR's tree.*
-15. Confirm the generated `.c4` reached GitHub (the viewer's source of truth), not
+19. Confirm the generated `.c4` reached GitHub (the viewer's source of truth), not
     just the local clone.
     *Automation: `gh api repos/.../contents/knowledge-base/engineering/architecture/diagrams`.*
 
