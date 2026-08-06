@@ -1,175 +1,161 @@
 ---
-title: "Alpha onboarding motion — validation record + per-tester runbook"
-feature: feat-alpha-onboarding-motion
-issue: "#7329"
-lane: cross-domain
-brand_survival_threshold: single-user incident
-status: spec
+title: "KB blueprint manifest — single source of truth for knowledge-base composition"
 date: 2026-08-06
 branch: feat-alpha-onboarding-motion
-pr: 7328
-brainstorm: knowledge-base/project/brainstorms/2026-08-06-alpha-onboarding-motion-brainstorm.md
-related:
-  - knowledge-base/engineering/architecture/decisions/ADR-102-beta-crm-capture-store-per-tenant-owner-private-agent-native.md
-  - knowledge-base/legal/legitimate-interest-assessments/2026-07-07-beta-crm-lia.md
-  - knowledge-base/engineering/operations/runbooks/beta-crm-third-party-erasure.md
-  - knowledge-base/product/roadmap.md
+lane: cross-domain
+brand_survival_threshold: single-user incident
+status: draft
+brainstorm: knowledge-base/project/brainstorms/2026-08-06-kb-blueprint-manifest-brainstorm.md
 ---
 
-<!-- iac-routing-ack: plan-phase-2-8-reviewed -->
-<!--
-IaC routing gate reviewed and opted out deliberately. This change provisions no infrastructure:
-it is documentation, GitHub issue comments, and a roadmap edit (see TR4 — no migrations, no
-product code, no dependencies). The one operator-performed step it describes (the beta-CRM
-contact upsert, TR1) is not automatable by design rather than by omission: migration
-126_beta_crm.sql REVOKEs INSERT/UPDATE/DELETE from service_role and ADR-102 states no
-service-role write pipeline exists, so automating it would require adding the exact bypass the
-architecture exists to prevent. The remaining human steps describe onboarding a person, which
-has no Terraform representation.
--->
-
-# Spec — Alpha Onboarding Motion: Validation Record + Per-Tester Runbook
+# KB Blueprint Manifest
 
 ## Problem Statement
 
-Soleur is onboarding its first external alpha tester (`2my8r9ry2t-wq/Skouer`) today, with the
-operator co-located with the Skouer founder. Nothing in the repo records that active user
-onboarding has begun: `roadmap.md` still reads `Beta users: 0`, and the five Phase 4 validation
-issues (#1439–#1443) that define this exact motion have no recruit against them.
+Four separate declarations of "what a Soleur knowledge base should contain" exist
+in the codebase and none of them agree:
 
-The gap is not "there is no place to record this" — the places exist and are well-designed. The
-gap is that **the first run of a ten-times-repeating process is happening with no written
-process**, and the compliance boundaries that govern where a tester's data may be written are
-recorded in a migration comment and an LIA rather than anywhere an operator would look mid-session.
+1. `/soleur:sync`'s Output Locations table — 6 artifact types, all under `knowledge-base/project/`
+2. `apps/web-platform/lib/kb-constants.ts` `DASHBOARD_FOUNDATION_KB_PATHS` — 10 business paths
+3. `apps/web-platform/app/(dashboard)/dashboard/page.tsx` `FOUNDATION_PATHS` + `OPERATIONAL_TASKS` — the same 10, duplicated
+4. Soleur's own `knowledge-base/` — 10 domains, ~8.4k files
 
-Two failure modes follow directly:
+(1) and (2) share zero paths. Nothing produces the `engineering/` artifacts —
+C4 diagrams, domain-model register, ADRs — that constitute the bulk of Soleur's
+own knowledge base and that Soleur's agents depend on.
 
-1. **Personal data written into git.** The beta-CRM LIA §46 establishes that git-committed
-   third-party PII is an Art. 17 erasure impossibility, because git history is permanent. An
-   operator recording a tester in a knowledge-base file — the obvious place — creates an
-   un-erasable record. Nothing currently warns against it at the moment of writing.
-2. **Recruitment-mix violation discovered at tester #10.** #1439 requires ≥3 of 10 founders to
-   not be current Claude Code users. Skouer is a Claude Code user. Without tracking from tester
-   #1, the constraint is only checkable once recruitment is complete and unfixable.
+The consequence is measurable on the first alpha tester. `2my8r9ry2t-wq/Skouer`'s
+synced knowledge base contains exactly 23 entries, 100% under `project/`: a
+README, 7 component docs, a constitution, 4 architecture learnings, and 4
+tech-debt learnings. No C4 model, no domain-model register, no business domains.
+
+Adding a KB artifact type today requires a coordinated change across a markdown
+command, two TypeScript constants, and a coverage test.
 
 ## Goals
 
-- Record the pre-launch → active-onboarding transition against the **existing** Phase 4 protocol
-  (#1439–#1443, roadmap rows 4.1–4.5), not beside it.
-- Record Skouer as alpha tester #1 with zero personal data in git.
-- Produce a repeatable per-tester runbook so testers 2–10 follow a written process.
-- Encode the GDPR posture (Art. 14 for the CRM record, Art. 13 for platform account data; the
-  PII-never-in-git boundary) where an operator
-  will actually encounter it — in the runbook, at the step that would otherwise breach it.
-- Record the beta-CRM contact write as an explicitly tracked gate with a named unblock condition.
-- Track the recruitment-mix constraint from tester #1.
+- One canonical, plugin-owned manifest declaring every expected KB artifact.
+- `/soleur:sync` generates the technical artifacts that are genuinely derivable.
+- The dashboard derives its card set from the manifest instead of hardcoded lists.
+- Onboarding emits a KB coverage report naming what the manifest expects versus
+  what is present.
+- The first alpha tester's onboarding visibly improves: a C4 architecture model
+  and a domain-model register they can open.
 
 ## Non-Goals
 
-- **A tester-facing surface or alpha dashboard.** ADR-102 defers tester-visible CRM surfaces
-  because they change the transparency posture the LIA is built on. Out of scope.
-- **Fixing the Concierge / web-platform deploy issues.** They are the reason the CLI path was
-  chosen and they gate the CRM write, but repairing them is separate work.
-- **Drafting alpha-tester terms or a Jikigai↔Skouer DPA.** A real gap (see TR5) but its own
-  legal deliverable, not something to improvise inside an ops record.
-- **Backfilling #1440, #1442, #1443** with speculative content — their triggers have not fired.
-- **Building `soleur:alpha-onboard` as a skill.** Recorded as a Productize Candidate; run the
-  runbook by hand for testers 1–3 first so real friction shapes it.
+- **ADRs mined from git history.** Cut entirely; not deferred, no follow-up issue.
+  The C4 model and domain-model register cover the context need without the
+  fabrication risk.
+- **Synthesizing runbooks, checklists, or policies.** These remain declared
+  manifest entries owned by agents. Operational truth is not code-derivable and a
+  fabricated runbook is an active hazard.
+- **A `when` predicate DSL.** v1 hardcodes 3–4 predicates.
+- **Detect-and-adopt of existing project docs** (`docs/`, `.agents/`). Retained as
+  a candidate refinement, not v1 scope.
+- **Mirroring coverage-report content into Soleur-side storage.** The report stays
+  in the customer's repo; the dashboard reads counts only.
+- **Changing the dashboard's visual treatment** beyond what the wireframe review
+  selects. The rewire is primarily a data-source change.
 
 ## Functional Requirements
 
-**FR1 — Validation record.** Write
-`knowledge-base/product/validation/2026-08-06-alpha-onboarding-motion-start.md` recording: the
-motion start; Skouer as recruit #1 of 10; the repo URL; test surface (self-hosted CLI plugin);
-the protocol position (operator-driven onboarding under #1441, with the deviation from the
-#1440-before-#1441 sequence stated explicitly); and the reason the CLI path was chosen. Follows
-the precedent of `knowledge-base/product/validation/2026-07-07-agent-operated-crm-validation.md`.
+**FR1 — Blueprint manifest.** A committed manifest in the Soleur repo enumerates
+KB entries. Each entry carries an immutable `id`, `path`, `domain`, `producer`,
+`owner` (agent or skill), `tier`, an optional `when` predicate, and the
+presentation fields the dashboard needs (`title`, `description`, `cta`).
 
-**FR2 — Zero personal data in the record.** FR1's artifact, and every other git-committed file in
-this change, identify the tester **only** at company/repo level (`Skouer`,
-`https://github.com/2my8r9ry2t-wq/Skouer`). No name, email, or personal identifier. A reviewer
-must be able to verify this by reading the diff.
+**FR2 — Manifest is trusted input.** The Next.js server imports the manifest as a
+build-time module. It is never read from customer repository content.
 
-**FR3 — Per-tester onboarding runbook.** Write
-`knowledge-base/engineering/operations/runbooks/alpha-tester-onboarding.md` covering, in order:
-qualification against the recruitment mix; the alpha welcome message (FR4); where the tester
-record goes and where it must never go (FR5); seeding the protocol issues; what to observe during
-the session (#1441: which domain leader they reach for first, friction points); and the 2-week
-checkpoint (#1442) with the measurement caveat from TR2.
+**FR3 — Predicate evaluation in the CLI.** `/soleur:sync` evaluates each entry's
+`when` predicate against the connected repo and writes the results to a committed
+`blueprint-status.json` in that repo: `{generated_at, entries:[{id, applicable}]}`.
 
-**FR4 — Welcome message with the notice line.** The runbook carries a copy-pasteable alpha welcome
-message including the LIA's Art. 14 notice line: that private notes of the conversation are kept
-for follow-up on a legitimate-interest basis, retained up to 24 months, with objection and erasure
-available at `legal@jikigai.com`. Delivered as a message, not in person.
+**FR4 — Server join discards unknown ids.** The dashboard reads
+`blueprint-status.json` once and joins by `id` against the trusted manifest. Any
+id not present in the manifest is discarded.
 
-**Art. 14 governs the CRM record regardless of whether the tester signs up.** The LIA scopes it to
-data "not obtained from the data subject via a form they submitted", which is true of
-operator-authored conversation notes even for a tester who holds a platform account;
-`model.c4:22-24` models the `betaContact` actor as "An involuntary data subject (Art. 14)" and
-Art. 30 PA-30 records the same. Art. 13 governs the separate dataset of *platform account data*
-collected at signup, and is satisfied by the existing `accept-terms` privacy-policy flow. The
-runbook states both, and states that neither is delivered in person — so the notice line is
-**not** redundant for a signed-up tester.
+**FR5 — `done`-ness stays filesystem-derived.** Card completion continues to use
+`statKnownPaths` against the KB root, so a hand-authored file flips a card without
+requiring a re-sync. `blueprint-status.json` narrows which entries are in scope,
+nothing more.
 
-**FR5 — PII boundary stated at the point of breach.** The runbook step that records the tester
-states inline that named contact data goes to the beta CRM (database) **only**, citing the LIA's
-Art. 17/permanent-git-history rationale. The warning must sit at the step an operator would
-otherwise get wrong, not in a preamble.
+**FR6 — C4 producer.** `/soleur:sync` generates `spec.c4`, `model.c4`, and
+`views.c4` under `knowledge-base/engineering/architecture/diagrams/`, deriving
+the element set from the generated component docs and the relationship set from
+their `## Dependencies` → `**Internal**: [name](name.md)` links. The compiled
+`model.likec4.json` is rendered from those sources.
 
-**FR6 — Protocol issue updates.** Comment on #1439 recording Skouer as recruit #1 of 10 and its
-Claude-Code-user status against the mix constraint; comment on #1441 recording today's session,
-its operator-driven CLI shape, and the sequence deviation.
+**FR7 — Domain-model producer.** The existing opt-in `domain-model` sync area is
+promoted into the manifest as a default seed entry, gated on a `has:migrations`
+predicate. Its existing `domain-model-drift.sh write-row` safety properties are
+preserved unchanged.
 
-**FR7 — Roadmap update.** `Beta users` 0 → 1. Update the Phase 4 row to reflect that row 4.1
-recruitment is underway with the first recruit recorded.
+**FR8 — Domain stub READMEs.** Each of the 10 domains receives a README stating
+structurally what belongs there and which agent owns it. Wording is constrained to
+structural statements; normative statements are prohibited. `legal/` and
+`finance/` carry the `recommended-tools.md` disclaimer verbatim.
 
-**FR8 — Recruitment-mix tracker.** The runbook carries a running tally of Claude-Code-user vs
-non-Claude-Code-user recruits, seeded at 1 CC / 0 non-CC, with the ≥3 non-CC requirement stated
-and the check placed before recruiting tester #8 (the last point at which the constraint is still
-satisfiable).
+**FR9 — KB coverage report.** A committed report lists, per domain, which manifest
+entries have a corresponding file and which do not. It states what the manifest
+expects versus what is present and never asserts what the business lacks.
+
+**FR10 — CLI coverage output.** `/soleur:sync` prints the coverage summary at the
+end of a run, naming the skill or agent that owns each absent entry.
+
+**FR11 — Dashboard derives from the manifest.** `FOUNDATION_PATHS`,
+`OPERATIONAL_TASKS`, and `DASHBOARD_FOUNDATION_KB_PATHS` are replaced by manifest
+derivation. Per the adopted taxonomy, entries an agent can complete unattended do
+not render as actionable cards.
+
+**FR12 — C4 flag prerequisite.** `c4-visualizer` is enabled for alpha-tester roles
+via the existing `flag-set-role` / `user-set-role` tooling before C4 generation
+ships. Generation is not gated on flag state.
 
 ## Technical Requirements
 
-**TR1 — Beta-CRM write recorded as a gate, never circumvented.** Migration
-`126_beta_crm.sql:170-172` REVOKEs INSERT/UPDATE/DELETE from `PUBLIC, anon, authenticated,
-service_role`; ADR-102 states no service-role write pipeline exists by design. No part of this
-change may add one, script around it, or write to those tables out of band. The record states the
-unblock condition: the operator performs the contact upsert as the authenticated owner once the
-web platform is serving.
+**TR1 — ADR-067 preservation.** The dashboard must not regain a whole-KB
+`buildTree()` walk. Applicable manifest entries are capped (~40) with the cap
+asserted in a test.
 
-**TR2 — Usage-tracking measurability caveat.** The runbook and validation record state that
-#1442's metrics (returns, KB growth, non-engineering agent usage) have **no server-side telemetry
-on the self-hosted CLI plugin**, and that the one measurable proxy is KB growth via git history on
-the tester's own `knowledge-base/` tree (the operator holds collaborator access on Skouer). Returns
-and agent-mix are not measurable on this surface. This caveat must travel with any #1442 finding
-so CLI-era data is not compared against future platform-era data as if equivalent.
+**TR2 — No new CLI→server write channel.** Predicate results travel as a committed
+repo artifact, not a database column.
 
-**TR3 — Entry pipeline stage set deliberately.** When the CRM write unblocks, the contact enters at
-`evaluating` (0.5 in `STAGE_PROBABILITY`) — past `qualified` (recruited, actively onboarding),
-short of `committed` (no agreement, no willingness-to-pay signal). `beta_contact_stage_transitions`
-is append-only, so the entry stage cannot be silently corrected later.
+**TR3 — Coverage test rewrite.** The dashboard foundation-status test currently
+matches `kbPath: "…"` against `page.tsx` source text. It must be rewritten as
+manifest→card derivation before the rewire lands, or it will silently match
+nothing instead of failing.
 
-**TR4 — No new dependencies, migrations, or product code.** This change is documentation, issue
-comments, and a roadmap edit only.
+**TR4 — E2E seed helper.** `apps/web-platform/e2e/start-fresh-onboarding.e2e.ts`
+mocks a fixed foundation path set with `size: 1000`. It needs a manifest-driven
+seed helper so the all-complete assertion continues to trigger.
 
-**TR5 — Agreement gap filed, not silently carried.** File a follow-up issue covering (a) alpha-tester
-terms and (b) the Jikigai↔Skouer processor question: Skouer's product is a venture database holding
-personal data about founders and investors, so Soleur agents operating on that repo plausibly make
-Jikigai a processor of Skouer's third-party data — a relationship the beta-CRM LIA does not cover,
-since it addresses the operator's notes *about* testers, not tester data Soleur processes.
-`knowledge-base/legal/data-processing-agreement-template.md` and `side-letter-template.md` exist as
-starting points. The issue must be filed before agents operate on the Skouer repo in earnest.
+**TR5 — First-run sentinel preserved.** `overview/vision.md` gates the first-run
+experience. It must remain a named manifest entry and must not be diluted by
+technical entries.
+
+**TR6 — Entry ids are immutable.** Manifest `id` values follow the same
+immutability discipline as rule ids, since `blueprint-status.json` joins on them.
+
+**TR7 — C4 edge parsing.** The relationship extractor parses
+`## Dependencies` → `**Internal**: [name](name.md)` links. Verified consistent
+across 5/5 of the alpha tester's component docs. The prose `## Data Flow` line is
+human context and is not parsed in v1.
+
+**TR8 — Headless contract preserved.** Generation runs under the existing headless
+sync contract: commit locally, never push a protected default branch, treat a
+push rejection as degraded rather than failed.
 
 ## Acceptance Criteria
 
-- [ ] FR1 validation record exists and states motion start, recruit #1, surface, protocol position
-- [ ] FR2 verified: `git diff` contains no personal name, email, or personal identifier
-- [ ] FR3 runbook exists at the stated path and covers all six listed steps
-- [ ] FR4 welcome message is copy-pasteable and carries the notice line verbatim
-- [ ] FR5 PII boundary appears at the recording step, citing the LIA rationale
-- [ ] FR6 #1439 and #1441 carry the Skouer comments
-- [ ] FR7 roadmap `Beta users` reads 1
-- [ ] FR8 mix tracker seeded 1 CC / 0 non-CC with the pre-tester-#8 check
-- [ ] TR1 no write path to `beta_contacts` added anywhere in the diff
-- [ ] TR2 measurability caveat present in both runbook and validation record
-- [ ] TR5 follow-up issue filed and linked from the validation record
+1. A single manifest edit adds a KB artifact type end-to-end — sync generation,
+   dashboard card, and coverage report — with no other declaration touched.
+2. Re-syncing `2my8r9ry2t-wq/Skouer` produces a C4 model whose elements are its
+   7 components and whose relationships match their `## Dependencies` links.
+3. The tester can open the generated diagram in the KB viewer.
+4. The coverage report names absent entries without asserting the business lacks
+   anything.
+5. `/api/dashboard/foundation-status` performs no whole-tree walk.
+6. The dashboard coverage test fails, rather than silently matching nothing, if
+   card derivation breaks.
