@@ -1,11 +1,16 @@
 ---
 title: "KB blueprint manifest — single source of truth for knowledge-base composition"
 date: 2026-08-06
-branch: feat-alpha-onboarding-motion
+feature: feat-kb-blueprint-manifest
+branch: feat-kb-blueprint-manifest
+issue: "#7332"
 lane: cross-domain
 brand_survival_threshold: single-user incident
 status: draft
 brainstorm: knowledge-base/project/brainstorms/2026-08-06-kb-blueprint-manifest-brainstorm.md
+design:
+  - knowledge-base/product/design/dashboard/blueprint-cards-variant-a-two-zones.pen
+  - knowledge-base/product/design/dashboard/blueprint-cards-variant-b-enriched-chips.pen
 ---
 
 # KB Blueprint Manifest
