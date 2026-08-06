@@ -7,3 +7,18 @@
    # in a soak probe, found the moment the scan was widened to scripts/. It is carried as a
    # ratcheting baseline rather than fixed here because it is an unrelated subsystem; that
    # is what a highwater is for. Everything this PR touches is at 0.
+   #
+   # THIS IS A CENSUS OF THE SCANNED SCOPE, NOT OF THE REPO. It counts only what DIRS walks
+   # and only what OPERATOR_LINE + CLAIM detect; a known gap is tracked in #7318. "1" means
+   # one detected offender in scope, never "one unmeasured causal claim exists anywhere".
+   #
+   # SCOPE WIDENING vs "RATCHETS DOWN ONLY". Those two rules meet on exactly one operation
+   # and the file did not say which wins. They now do:
+   #   - a CODE change may only LOWER this number. No exceptions; fix the message instead.
+   #   - a SCOPE change (adding a DIRS entry) MAY set it to the newly measured value, and
+   #     must record the widening + the measured delta as provenance in this comment.
+   # Without that carve-out the next widening is unwritable — #7310 measured +0 so it never
+   # hit the wall, but adding apps/web-platform/scripts/ takes the census 1 -> 3 (measured:
+   # assert-dev-signin-eliminated.sh:104, run-migrations.sh:383) and would force the author
+   # to either break the bold rule above or fix two messages in an unrelated subsystem as a
+   # precondition of a scope change.

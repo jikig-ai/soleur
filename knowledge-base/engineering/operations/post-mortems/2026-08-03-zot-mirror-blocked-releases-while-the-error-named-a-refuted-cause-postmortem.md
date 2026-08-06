@@ -150,7 +150,8 @@ that had not rebooted.
 
 - **ADR-166** — no operator-facing message emitted by CI may name a cause the job did not
   measure. Enforced by `scripts/lint-diagnosis-claims.sh` (scanning `.github/workflows/`,
-  `.github/actions/` **and** `scripts/`), ratcheted by a `.highwater`, registered in
+  `.github/actions/`, `scripts/` **and** `apps/web-platform/infra/`, the fourth added by
+  #7310), ratcheted by a `.highwater`, registered in
   `test-all.sh` whose `scripts` shard feeds the CI Required `test` job — blocking, not advisory.
 - **`scripts/alarm-issue-filing-guard.sh`** — blocks issue-filing steps that cannot report the
   verdict they exist for. Widening it from the 2 workflows originally walked to all 71 surfaced

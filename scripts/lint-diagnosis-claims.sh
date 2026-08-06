@@ -15,12 +15,24 @@
 #   - the block references a verdict/outcome variable, or
 #   - the line carries an explicit `# MEASURED-BY: <what measured it>` marker.
 #
-# SCOPE. .github/workflows/, .github/actions/ AND scripts/. The actions directory is the reason
-# this matters: lint-workflows.sh and lint-workflow-step-env-refs.py both scan
-# `workflows/*.yml` only, which is exactly why the two offending ::error:: lines in
-# cf-tunnel-registry-bridge/action.yml went unexamined through two prior fixes. `scripts/`
-# is included because that is where this PR MOVED the canonical message text — a lint that
-# skipped it would have enforced nothing over the very prose it was built for.
+# SCOPE. .github/workflows/, .github/actions/, scripts/ AND apps/web-platform/infra/. The
+# actions directory is the reason this matters: lint-workflows.sh and
+# lint-workflow-step-env-refs.py both scan `workflows/*.yml` only, which is exactly why the
+# two offending ::error:: lines in cf-tunnel-registry-bridge/action.yml went unexamined
+# through two prior fixes. `scripts/` is included because that is where this PR MOVED the
+# canonical message text — a lint that skipped it would have enforced nothing over the very
+# prose it was built for. `apps/web-platform/infra/` was added by #7310 for the same reason
+# `.github/actions/` was: no lint read it FOR THIS RULE CLASS. (It is not unlinted —
+# lint-trap-tempfile-ownership.py walks every tracked *.sh in the repo, including these —
+# but nothing checked its operator-facing messages for unmeasured causal claims.) A message
+# there, `registry-userdata-budget.sh:131`, told operators that "#7280's
+# registry_rationale_strip is the fix" while #7280 had merged 6 h 22 m earlier and the strip
+# was already applied. It stood on main ~10.5 h (#7283 14:40Z -> #7300 01:16Z) and took two
+# PRs (#7300, #7303) to unwind, the second because the claim had propagated into the recut
+# runbook. Deliberately NOT claimed here: that any operator acted on it. #7287 was opened
+# 08:38Z, six hours BEFORE the message reached main, so it cannot have been mis-steered by
+# it — an attribution the first draft of this comment made without measuring, which is the
+# exact defect this file exists to stop.
 #
 # RATCHET. Ships with a .highwater baseline so it lands green over a pre-existing
 # population and drives that population down. Blocking upward, advisory downward — a
@@ -58,7 +70,19 @@ root = sys.argv[1]
 # `live` arm left the census at 0 and the unit suite fully green.
 # `scripts/zot-restart-loop-alarm.sh` likewise emits NIC_CAUSE strings ("serving is fine",
 # "not an outage") that reach ::error:: and issue bodies through the workflow.
-DIRS = [".github/workflows", ".github/actions", "scripts"]
+# `apps/web-platform/infra/` (#7310) holds 66 shell gates and 5 workflow fragments — 71
+# walked files, after 100 *.test.sh are excluded — and nothing checked their messages for
+# unmeasured causal claims. One of them asserted a remedy that had already been applied; see
+# the SCOPE note above for the measured timeline and for what is deliberately NOT claimed.
+# Widening cost 71 more walked files and, at the time it landed, zero new hits.
+#
+# Every entry must EXIST. os.walk on a missing directory yields nothing and returns quietly,
+# so a typo or an `apps/` restructure silently drops a whole scope while the run stays green
+# — measured: renaming this entry to `infras` loses all 71 files and still prints
+# `OK — 1 unmeasured causal claims`. MIN_FILES cannot catch that (any single directory can
+# vanish and the remainder still clears the floor), so the existence check below is the only
+# thing standing between a scope typo and a permanently vacuous gate.
+DIRS = [".github/workflows", ".github/actions", "scripts", "apps/web-platform/infra"]
 SCAN_EXTS = (".yml", ".yaml", ".sh")
 
 # Phrases that assert a CAUSE. Deliberately narrow: each one is a claim about why
@@ -72,11 +96,35 @@ SCAN_EXTS = (".yml", ".yaml", ".sh")
 # EXPLAINS this very anti-pattern. Baselining those would have parked two false positives
 # in the ratchet forever, so that the count could never reach zero and every future reader
 # would assume two real offenders remained.
+#
+# The last alternative (#7310) catches the shape that asserts a cause by PRESCRIBING ITS
+# REMEDY — "X is the fix" — which is why it matched none of the alternatives above even
+# though several of them are about causes.
+#
+# The adjective list is CLOSED on purpose. Without it, one intervening word defeats the
+# whole alternative, and the asymmetry runs the wrong way: `is the likely cause` is already
+# caught (by `likely cause`), so the HEDGED form was covered while the CONFIDENT forms
+# `is the root cause` / `is the actual cause` / `is the real cause` were not. #7242 has
+# re-drifted three times through exactly this kind of rewording. `likely` is omitted because
+# `likely cause` already covers it and a line must not be counted twice.
+#
+# An OPEN slot `(?:[a-z]+ )?` was measured and rejected: it costs +2, and both are the
+# permanent-false-positive shape described above — `out-of-stock is the documented cause`
+# (a citation of prior art on a line whose point is "do not assume") and `is the usual
+# cause` (a real offender that deserves its own fix, not a baseline entry).
+#
+# `\s+` rather than a literal space so a wrapped printf splitting `is  the` cannot evade.
+# Both word boundaries are load-bearing: the leading one stops "This the fix" / "Analysis
+# the fix" (words ending in a bare "is"; note this holds for \w-terminated words only, so
+# `token-is the fix` still matches), and the trailing one stops "is the fixture" / "is the
+# fixed value" / "is the causes". Measured: this form adds 0 hits over the live corpus.
 CLAIM = re.compile(
     r"most likely cause|likely cause|the cause is|"
     r"which is the [a-z]+(?:-[a-z]+)+ shape\b|"
     r"serving is fine|not an outage|= the EDGE|which means the|"
-    r"this means (?:a|the|that)|indicates (?:a|the|that)|caused by",
+    r"this means (?:a|the|that)|indicates (?:a|the|that)|caused by|"
+    r"\b(?:is|was|are|were)\s+the\s+(?:root |actual |real |only |underlying |true )?"
+    r"(?:fix|cause|culprit)\b",
     re.IGNORECASE)
 
 # Evidence that the claim rests on something the job computed. A verdict variable, an
@@ -104,6 +152,13 @@ MEASURED = re.compile(
 # `[a-z_][a-z0-9_]*` + a quoted argument is deliberately broad: on this corpus the FALSE
 # positives are cheap (a causal-claim phrase must also be present, and the measured-basis
 # escape hatch is one comment away) and the false NEGATIVE is the entire point of the lint.
+#
+# KNOWN GAP (#7318): that alternative is `^\s*`-anchored, so a helper call on a shell
+# CONTINUATION line still escapes — `|| degraded sign "$?" "…"`. The repo has exactly one
+# such live line (.github/workflows/reusable-release.yml:1289), and it carries the #7310
+# `is the fix` phrasing, so the alternative added there currently has zero live yield. Not
+# fixed here: un-anchoring moves the census 1 -> 2 and reds this blocking gate, and whether
+# that line is a genuine claim or a hedged conditional is its own decision.
 EVIDENCE_LINES_BEFORE = 16
 EVIDENCE_LINES_AFTER = 4
 
@@ -115,7 +170,19 @@ hits = []
 scanned_files = 0
 for d in DIRS:
     base = os.path.join(root, d)
-    for dirpath, _, files in os.walk(base):
+    # SCOPE LOSS IS A HARD ERROR, not a quiet zero. This is strictly stronger than
+    # MIN_FILES, which is a floor over the TOTAL and therefore cannot see any single
+    # directory disappearing while the others still clear it.
+    if not os.path.isdir(base):
+        print(f"error: DIRS entry {d!r} does not exist under {root} — scope lost.",
+              file=sys.stderr)
+        sys.exit(2)
+    for dirpath, dirnames, files in os.walk(base):
+        # `.terraform/` is gitignored (apps/web-platform/infra/.gitignore) but os.walk
+        # descends into it anyway, so after a local `terraform init` this gate would read
+        # vendored module sources CI never sees — inflating FILES and risking a local-only
+        # RED. Prune it in place so the walk matches the tracked tree.
+        dirnames[:] = [dn for dn in dirnames if dn != ".terraform"]
         for fn in files:
             if not fn.endswith(SCAN_EXTS):
                 continue
@@ -126,8 +193,14 @@ for d in DIRS:
             # catch them), and sibling suites quote causal prose inside assertion
             # descriptions. Scanning them would force the ratchet to carry permanent false
             # positives, so the count could never reach zero and every future reader would
-            # assume real offenders remained.
-            if fn.endswith((".test.sh", ".test.yml")) or "/test/" in path.replace(os.sep, "/"):
+            # assume real offenders remained. `.bench.sh` is the same category — a benchmark
+            # harness narrates causes and is not an operator-facing CI message.
+            #
+            # The path rule is `/tests?/` because `/test/` matched NOTHING: the newly-scoped
+            # tree uses `tests/`, `test-fixtures/` and `fixtures/`, so the singular-only form
+            # was a dead guard whose name implied coverage it did not have.
+            norm = path.replace(os.sep, "/")
+            if fn.endswith((".test.sh", ".test.yml", ".bench.sh")) or re.search(r"/tests?/", norm):
                 continue
             # os.walk does not RECURSE symlinked directories, but it does list symlinked
             # FILES, and this scanner open()s and echoes up to 120 chars of any line it
@@ -198,6 +271,14 @@ fi
 case "$MODE" in
   --census)
     echo "$live"
+    exit 0
+    ;;
+  # `rel:line: text` per hit. Exists so the suite can assert WHICH file tripped, not just
+  # how many did: a bare count cannot tell "the infra fixture tripped" from "some other
+  # fixture tripped", so a later edit relocating a fixture out of the scope it was written
+  # to pin would keep the assertion green while removing the coverage.
+  --detail)
+    echo "$detail"
     exit 0
     ;;
 esac
