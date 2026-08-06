@@ -145,10 +145,12 @@ variable "web_hosts" {
   # It used to read: THREE running hosts sit on types that can no longer be ordered —
   # web-1/soleur-web-platform (cx33), soleur-grok-dogfood (cx33) and soleur-registry (cx23).
   #
-  # Probed live 2026-08-06, `.server_types.available`, 3 samples, PER DATACENTER:
+  # Probed live 2026-08-06, `.server_types.available`, 3 samples, PER DATACENTER. The full
+  # series and its per-probe sources are SINGLE-SOURCED at zot-registry.tf, anchor
+  # "STOCK REALITY"; only the 2026-08-06 hel1-dc2 row is repeated here, because it is the row
+  # that decides the claim in this block and the block is unreadable without it:
   #   hel1-dc2    cx23 ✓   cx33 ✗   cpx22 ✓   cax11 ✗
-  #   nbg1-dc3    cx23 ✓   cx33 ✓   cpx22 ✓   cax11 ✗
-  #   fsn1-dc14   cx23 ✓   cx33 ✓   cpx22 ✓   cax11 ✗
+  #   (cx33 is ✓ in nbg1-dc3 and fsn1-dc14 — see the anchor; it buys the hel1 hosts nothing.)
   #
   # So: the cx23 leg is FALSE — cx23 is orderable in hel1-dc2 again (it was ✗ there on
   # 2026-07-26 and ✗ again on 2026-08-04). The two cx33 legs are TRUE AND UNCHANGED: web-1 and
@@ -257,9 +259,9 @@ variable "registry_server_type" {
   # uncapped condition; that is fixed). So a wrong call yields a CONTAINED container-OOM
   # (zot_memory_capped=true, zot_oom_kills>0 — both self-reported and gated) plus GHCR fallback,
   # NOT #6288's host-OOM restart-loop. Revert path if 4 GB proves wrong: re-probe first —
-  # cx33 (8 GB, ~€8.49/mo net) was ✗ in hel1-dc2 on 2026-07-26 AND on 2026-08-06, so cpx32
-  # (8 GB, ~€35.49/mo net, ✓ at every probe) is the standing option at 4.2× the price. Take
-  # cx33 only on a fresh hel1-dc2 ✓; do not read either tick out of this comment. Then
+  # the 8 GB options are cx33 (~€8.49/mo net) and cpx32 (~€35.49/mo net). DO NOT read either
+  # one's availability out of this comment — re-probe hel1-dc2 and choose then. The decision
+  # and its cost are recorded in the ADR-096 amendment (2026-08-06, #7309), not here. Then
   # re-dispatch. #6288's exact failure mode (uncapped zot on a 4 GB host)
   # is now structurally impossible.
   #
@@ -298,6 +300,17 @@ variable "registry_server_type" {
   #
   # registry_location stays hel1. This change edits a default only; it schedules no apply.
   default = "cpx22"
+
+  # PREFIX VALIDATION — ADR-068 D5, back-filled 2026-08-06 (#7309). This was the ONLY one of the
+  # four host-type vars in this root without it (git_data, inngest and grok_dogfood all carry it),
+  # which is a straight inversion of stated risk: zot-registry.tf's own comment says a wrong arch
+  # derivation "DARKS THE SOLE PULL PATH". git-data borrowed its derivation FROM this host and was
+  # then hardened with guards this host never received. A typo'd or unrecognised prefix silently
+  # derives amd64 here (the ternary's else-branch), which is a wrong-arch boot, not a plan error.
+  validation {
+    condition     = can(regex("^(cax|cpx|cx|ccx)", var.registry_server_type))
+    error_message = "registry_server_type must be a recognized Hetzner type (cax*=arm64, or cpx*/cx*/ccx*=amd64); local.registry_arch is derived from the prefix and selects between two DISTINCT zot OCI repositories."
+  }
 }
 
 variable "registry_volume_size" {

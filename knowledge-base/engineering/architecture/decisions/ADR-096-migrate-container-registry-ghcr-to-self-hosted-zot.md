@@ -462,7 +462,7 @@ list + the terraform-target-parity SSH set (condition #1 the other way).
   egress allow (5.3), retire `cron-ghcr-token-minter.ts` + `ghcr-*-credential.tf` + the
   `GHCR_MINTER_DISABLED` gate (5.4), then rotate + revoke the exposed classic PAT (5.5).
 - **Host sizing + region (factual, #6288):** `cax11`(planned, arm64)→`cx23`(live nbg1, provisioned
-  during an Ampere+cx stock outage, #6122)→**`cx33`(4 vCPU / 8 GB, `hel1`, #6288)**. The 4 GB cx23
+  during an Ampere+cx stock outage, #6122)→**`cx33`(4 vCPU / 8 GB, `hel1`, #6288)**→`cx23`(4 GB, #6497/#6463, 2026-07-16, after telemetry showed the 8 GB was never needed)→**`cpx22`(2 vCPU / 4 GB, #7309, 2026-08-06 — stock volatility; see the amendment at the end of this ADR)**. The 4 GB cx23
   restart-looped zot ~4/min OOM-ing during the boot scan of the ~35 GB store (disk-independent —
   disk sat at 58–63%, not ENOSPC). #6288 first targeted **`cx32`, which is not a real Hetzner
   type** — that phantom `registry-host-replace` destroyed the nbg1 host then failed `server type
@@ -479,7 +479,7 @@ list + the terraform-target-parity SSH set (condition #1 the other way).
   confirmation keys on the MONOTONIC `memory.events oom_kill` container-cgroup counter
   (`zot_oom_kills`, survives the 4/min point-sampling race) + `exit_code=137` + the journald
   `oom_kills_5m` backstop — not the page-cache-confounded host `mem_used` nor a point-sampled anon
-  gauge. Applied via the guarded `registry-host-replace` dispatch (server_type is `ForceNew`; the
+  gauge. Applied via the guarded `registry-host-replace` dispatch (server_type is `ForceNew` — but see the 2026-08-06 amendment: that is UNMEASURED and the repo contradicts itself on it, routed to #7287; the
   60 GB store volume is preserved + re-attached). ~~The GHCR atomic fallback masks the brief replace outage.~~
   **RETRACTED 2026-07-30 — the replace outage is now USER-VISIBLE.** There is no GHCR fallback
   to mask it: the read PAT is revoked (401) and the minter is disabled (403 DENIED). Any pull
@@ -971,6 +971,15 @@ The live series and its sources are single-sourced at `zot-registry.tf`, anchor 
 ### Cost
 
 +€14.00/mo, +€168/yr, **3.55×** on this host. Operator accepted explicitly before the change was authorized. Recorded in `knowledge-base/operations/expenses.md` as declared-vs-billing: a new `approved-not-billing` `CPX22 (registry)` row with the active `CX23 (registry)` row left at 5.93/`active`. Billing does not move until the host-replace; pre-dating that flip is the defect #6453 corrected. Product COGS shift is `+$15.12 / $223.39 = +6.77%` with no `ceil(burn / price)` boundary crossed at $49 or $48, so `cost-model.md`'s subtotals are unchanged.
+
+**The revert path is itself a cost decision, recorded here rather than only in a Terraform
+comment.** If 4 GB proves wrong, the 8 GB options are `cx33` (~€8.49/mo net) and `cpx32`
+(~€35.49/mo net). `cx33` was ✗ in `hel1-dc2` on 2026-07-26 **and** on 2026-08-06, so `cpx32` — ✓ at
+every recorded probe — is the standing option, at **6.5× the pre-repin registry cost** and larger
+than the change this amendment exists to record. That is contingent, not committed: re-probe
+`hel1-dc2` before choosing, and take `cx33` on a fresh ✓. Recorded because a registry type change
+is a cost decision, which is the whole premise of this amendment — the *next* one should not live
+only in a variable's comment.
 
 ### What this does NOT do
 

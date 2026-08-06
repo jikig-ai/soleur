@@ -471,8 +471,12 @@ resource "hcloud_server" "registry" {
   #               2026-07-26" — recorded as "0 of 3 EU DCs", which names hel1-dc2 explicitly.
   #   2026-08-04  the previous revision of THIS block; it was introduced by #7280, not #7287.
   #               NOTE apply-web-platform-infra.yml, ADR-169 and the recut runbook date the
-  #               same reading 2026-08-05. One is wrong; nothing in the repo resolves it, and
-  #               the count below does not depend on which.
+  #               same reading 2026-08-05. One is wrong; nothing in the repo resolves it.
+  #               TRIAGED, no issue filed: both dates fall between the 07-26 ✗ and the 08-06 ✓,
+  #               so every count and direction change below is invariant to which is right, and
+  #               neither date gates anything. Re-deriving it would mean reconstructing a probe
+  #               nobody recorded. If a future reading makes the interval load-bearing, resolve
+  #               it then — this note is the record that it was considered, not overlooked.
   #   2026-08-06  #7309, 3 samples, all three EU DCs.
   #
   # cx23 IS orderable in hel1-dc2 as of the newest probe. Do not restate the older "unorderable
@@ -574,6 +578,20 @@ resource "hcloud_server" "registry" {
       random_password.zot_pull,
       random_password.zot_push,
     ]
+
+    # WRONG-ARCH TRIPWIRE — ADR-068 D7, back-filled 2026-08-06 (#7309). Compares the DERIVED
+    # arch against GROUND TRUTH from the live Hetzner catalog for this same var, so a
+    # derivation that does not match the type it claims to describe wedges the PLAN instead
+    # of booting a host that 404s every pull (MANIFEST_UNKNOWN — see local.registry_arch).
+    # git-data.tf carries this and borrowed its derivation from here; this host never had it.
+    # The x86/arm <-> amd64/arm64 mapping is Hetzner's enum, mirrored from git-data.tf:381.
+    # NOTE this is strictly stronger than registry-boot-guard.test.sh's R1/R2/R3, which read
+    # a STRING IN A FILE: those cannot fire for an operator overriding the var via tfvars or
+    # -var, which is the whole reason the var exists.
+    precondition {
+      condition     = data.hcloud_server_type.registry.architecture == (local.registry_arch == "arm64" ? "arm" : "x86")
+      error_message = "registry_server_type=${var.registry_server_type} derives ${local.registry_arch}, but Hetzner reports architecture=${data.hcloud_server_type.registry.architecture}. local.zot_image would select the wrong OCI repository and every pull would 404 (MANIFEST_UNKNOWN), darking the sole pull path (ADR-169)."
+    }
 
     # `ssh_keys` is a CREATE-TIME attribute (Hetzner injects it at first boot and never
     # re-reads it), so a changed key ID is unappliable to a running host and Terraform
