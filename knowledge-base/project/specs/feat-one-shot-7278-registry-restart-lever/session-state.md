@@ -90,7 +90,45 @@ Note this also refutes the OOM framing carried by
 for the CURRENT episode: zero OOM kills across the whole window, 36 MB anon against a 3072 MB
 cap. The memory cap is working; the disk is the binding constraint.
 
-### Coherent root-cause hypothesis (NOT yet confirmed — see Open)
+### Disk diagnosis (operator-directed, 2026-08-06)
+
+**Correction — my first hypothesis below was wrong.** I proposed orphaned `blobs/uploads/`
+accumulating past zot's GC. `cloud-init-registry.yml:47` and the `#6247` precedent refute it:
+*"gc alone only reclaims DANGLING blobs"* and *"**gc cannot reclaim a blob the policy says to
+KEEP**"*. The live logs agree — GC runs hourly and reports `gc successfully completed … no
+digests left, finished`, i.e. it is working and has nothing to collect. Retained for the record;
+the paragraph below it is superseded.
+
+**The precedent is exact.** `variables.tf:249` records that this identical failure occurred at
+30 GB on 2026-07-09 (#6247): `resize_ok=true` + `pcent=100` on a fully-grown fs — *"a genuine
+capacity limit, NOT a resize regression"*. It was fixed by growing 30→60 GB **and** tightening
+the keep-set. It has now recurred at 60 GB.
+
+**Current keep-set** (`cloud-init-registry.yml:100-113`), per repo, ×2 repos:
+`latest` + `v.*`×5 + `[0-9a-f]{7,64}`×5 + `sha256-.*`×50 (sig referrers, small).
+
+> **Honest gap: I cannot confirm the 59 GB is all policy-KEPT blobs.** Rough arithmetic from
+> the recorded ~1.5–2 GB/image puts the keep-set nearer ~25 GB than 59 GB. Something may be
+> consuming space beyond it. `SOLEUR_ZOT_DISK` reports `pcent` but **no per-path breakdown**,
+> so the telemetry cannot answer it — and I will not guess at a number I have not measured.
+
+### The actual root blocker — every remediation needs host execution, and none exists
+
+| Remediation | Blocked by |
+|---|---|
+| Tighten the keep-set | lives in `/etc/zot/config.json`, written by cloud-init → needs a host write + zot restart |
+| Grow the volume again | `hcloud` resize is online, but `resize2fs` runs only in `runcmd`, which `cloud-init-registry.yml:671` states is **PER-INSTANCE and does NOT re-run on reboot** → needs a rebuild |
+| Force a GC pass | **no endpoint exists** — measured 2026-08-05: `/v2/_zot/gc`, `/v2/_catalog/gc`, `/_zot/gc`, `/v2/_zot/ext/gc` all 404, and the pinned build's `BinaryType` excludes mgmt/scrub/search |
+| Add per-path disk telemetry to diagnose further | the monitor script is itself written by cloud-init → same blocker |
+| Restart zot | the 5-min cron self-heal restarts only on a *mount* failure, not on a full disk |
+
+**Everything converges on one missing capability: there is no way to execute anything on this
+host.** That is exactly #7278. So the lever is the right work — but a **restart-only** lever
+resolves none of the rows above. To be the fix it must be able to deliver a **config change**
+and/or a **reclaim/resize** action, which is what the plan's own "must CHANGE something"
+constraint was reaching for.
+
+### Superseded hypothesis (kept for the record)
 
 #7247 reports the release path failing at `PATCH .../blobs/uploads/<uuid>` → **500**, then
 `PUT` → `DIGEST_INVALID`. On a full volume a blob upload cannot be written, so it fails
