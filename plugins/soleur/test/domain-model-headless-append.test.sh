@@ -126,6 +126,109 @@ fi
 HN="$(grep -cE '^## Auto-inferred \(unreviewed\)' "$REG" || true)"
 assert_eq "1" "$HN" "the register still has exactly one Auto-inferred heading after all appends"
 
+# --- section placement on a register `init` did NOT create ------------------
+# Every fixture above is built by `init`, which always emits `## Business Rules`
+# BEFORE `## Auto-inferred`. That ordering is what makes the naive insert correct,
+# so the suite was structurally incapable of seeing the defect below — the fixture
+# set had a direction, and only one.
+#
+# A customer's hand-authored register may order the sections either way. With
+# Auto-inferred FIRST, the original awk inserted at the first `^|---` at-or-after
+# the heading with no check that the separator belonged to that section, so the
+# candidate row landed in the CURATED table and write-row exited 0. Unattended,
+# on every headless sync.
+# THE DISCRIMINATING SHAPE. Auto-inferred must carry NO table separator of its own,
+# so that the first `^|---` at-or-after its heading belongs to the CURATED table.
+# A fixture where both sections have tables is handled identically by the broken and
+# the fixed implementation — my first attempt used that shape and the mutation
+# survived, which is the fixture-direction trap this very suite exists to document.
+ORDER_REG="$WORK/reversed-order.md"
+cat > "$ORDER_REG" <<'REVERSED'
+# Register
+
+## Auto-inferred (unreviewed)
+
+_No candidates yet._
+
+## Business Rules
+
+| ID | Rule | Statement | Source |
+|---|---|---|---|
+| BR-001 | tenancy | Users only read their own rows | mig 001 |
+REVERSED
+
+ORDER_RC=0
+bash "$DRIFT" write-row --repo "$WORK" --register "$ORDER_REG" \
+  --anchor "037_worm.sql > audit.founder_id" \
+  --statement "founder_id is anonymised on erasure." >/dev/null 2>&1 || ORDER_RC=$?
+# Refusing is the correct outcome: there is no Auto-inferred table to append to, and
+# the only other `^|---` belongs to the operator's curated rules.
+assert_eq "2" "$ORDER_RC" "curated-table trap: write-row REFUSES rather than appending"
+
+if grep -qE '^\| 037_worm' "$ORDER_REG"; then
+  echo "  FAIL: curated-table trap: the candidate row was written into the register"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: curated-table trap: no candidate row reached the file"
+  PASS=$((PASS + 1))
+fi
+assert_eq "1" "$(grep -c '^| BR-001 ' "$ORDER_REG" 2>/dev/null || echo 0)" \
+  "curated-table trap: the curated BR-001 row is untouched"
+
+# The positive counterpart — same reversed ordering, but Auto-inferred DOES have its
+# own table. The row must land there, above the curated section.
+ORDER2_REG="$WORK/reversed-order-with-table.md"
+cat > "$ORDER2_REG" <<'REVERSED2'
+# Register
+
+## Auto-inferred (unreviewed)
+
+| Anchor | Candidate statement |
+|---|---|
+
+## Business Rules
+
+| ID | Rule | Statement | Source |
+|---|---|---|---|
+| BR-001 | tenancy | Users only read their own rows | mig 001 |
+REVERSED2
+
+ORDER2_RC=0
+bash "$DRIFT" write-row --repo "$WORK" --register "$ORDER2_REG" \
+  --anchor "038_x.sql > audit.other" --statement "Other statement." >/dev/null 2>&1 || ORDER2_RC=$?
+assert_eq "0" "$ORDER2_RC" "reversed order WITH a table: write-row succeeds"
+O_AI="$(grep -n '^## Auto-inferred' "$ORDER2_REG" 2>/dev/null | head -1 | cut -d: -f1 || true)"
+O_BR="$(grep -n '^## Business Rules' "$ORDER2_REG" 2>/dev/null | head -1 | cut -d: -f1 || true)"
+O_ROW="$(grep -nF '038_x.sql' "$ORDER2_REG" 2>/dev/null | head -1 | cut -d: -f1 || true)"
+if [[ -n "$O_ROW" && -n "$O_AI" && -n "$O_BR" && "$O_ROW" -gt "$O_AI" && "$O_ROW" -lt "$O_BR" ]]; then
+  echo "  PASS: reversed order WITH a table: row lands inside Auto-inferred, above the curated table"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: reversed order WITH a table: row at ${O_ROW:-none} outside Auto-inferred (${O_AI:-?}..${O_BR:-?})"
+  FAIL=$((FAIL + 1))
+fi
+
+# --- a register with NO Auto-inferred heading must abort LOUDLY -------------
+# `hn="$(grep -c …)"` is an assignment whose status is the substitution's, and
+# `grep -c` exits 1 on zero matches — so under `set -e` this died BEFORE its own
+# `die` could print: exit 1, empty stderr, and 1 is not in write-row's documented
+# 0/2/3 contract. Every pre-existing register lacking the heading appended nothing,
+# silently, on every sync.
+NOHEAD_REG="$WORK/no-heading.md"
+printf '# Register\n\n## Business Rules\n\n| ID | Rule |\n|---|---|\n' > "$NOHEAD_REG"
+NOHEAD_ERR="$WORK/no-heading.err"
+NOHEAD_RC=0
+bash "$DRIFT" write-row --repo "$WORK" --register "$NOHEAD_REG" \
+  --anchor a --statement b >/dev/null 2>"$NOHEAD_ERR" || NOHEAD_RC=$?
+assert_eq "2" "$NOHEAD_RC" "missing Auto-inferred heading: aborts with the documented rc=2, not a bare 1"
+if [[ -s "$NOHEAD_ERR" ]] && grep -q 'Auto-inferred' "$NOHEAD_ERR"; then
+  echo "  PASS: missing Auto-inferred heading: the abort MESSAGE names the cause"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: missing Auto-inferred heading: stderr was empty or did not name the cause"
+  FAIL=$((FAIL + 1))
+fi
+
 # --- 2.3: the terminal-area contract is reconciled, not contradicted --------
 # grep, not assert_contains on the whole body — a failed substring assertion over
 # a 600-line file dumps the entire file into the log and buries every other result.
