@@ -451,8 +451,10 @@ jobs:
           # cannot clear what the invocation already applied, so on a plan failure the step
           # died AT the doppler line and both the `rc=$?` capture and the `::error::` branch
           # below it were unreachable. The explicit `set +e` bracket is what delivers the
-          # property the comment claimed. Two sibling copies of the old comment remain in
-          # apply-github-infra.yml and apply-sentry-infra.yml — audited under #7098.
+          # property the comment claimed. The two sibling copies of the old comment (in
+          # apply-github-infra.yml and apply-sentry-infra.yml) were corrected under #7304,
+          # which also shipped scripts/lint-workflow-errexit-capture.py so the class cannot
+          # recur silently. The broader `set … pipefail`-without-`-e` audit remains #7098.
           set -euo pipefail
           set +e
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
@@ -1180,6 +1182,13 @@ jobs:
         # the dispatch on ANY resource delete (a net-new host apply must add, never remove).
         run: |
           set -uo pipefail
+          # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
+          # bare run: block as `bash -e {0}`, so errexit is INHERITED and `set -uo pipefail`
+          # cannot clear it. Without this the step died AT the doppler line on a plan failure
+          # and both `rc=$?` and the `::error::` below were unreachable. The handler still
+          # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
+          # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
+          set +e
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -var="ssh_key_path=${CI_SSH_PUB}" \
@@ -1328,6 +1337,13 @@ jobs:
         # ABORTS unless the plan is EXACTLY the scoped recreate.
         run: |
           set -uo pipefail
+          # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
+          # bare run: block as `bash -e {0}`, so errexit is INHERITED and `set -uo pipefail`
+          # cannot clear it. Without this the step died AT the doppler line on a plan failure
+          # and both `rc=$?` and the `::error::` below were unreachable. The handler still
+          # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
+          # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
+          set +e
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -replace='hcloud_server.inngest' \
@@ -1513,6 +1529,13 @@ jobs:
         # plan JSON and ABORTS unless the plan is EXACTLY the scoped recreate.
         run: |
           set -uo pipefail
+          # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
+          # bare run: block as `bash -e {0}`, so errexit is INHERITED and `set -uo pipefail`
+          # cannot clear it. Without this the step died AT the doppler line on a plan failure
+          # and both `rc=$?` and the `::error::` below were unreachable. The handler still
+          # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
+          # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
+          set +e
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -replace='hcloud_server.registry' \
@@ -1583,7 +1606,11 @@ jobs:
           # fallback; the store volume is preserved (guarded), so re-dispatch re-creates the host.
           if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
-            echo "::error::terraform apply (registry-host-replace) failed mid-replace — registry may be DOWN; GHCR fallback covers serving; re-dispatch registry-host-replace to recover from the preserved volume"
+            # "GHCR fallback covers serving" was RETRACTED by #7071 — the host->GHCR read PAT is
+            # revoked (401) and the minter is disabled (403 DENIED), so no host pulls from GHCR
+            # at all. This PR corrected the same sentence on the recut arm and left these two
+            # twins; an unmarked twin reads as still-true.
+            echo "::error::terraform apply (registry-host-replace) failed mid-replace — registry may be DOWN. NOTHING covers serving while it is: the host->GHCR fallback is dead (#7071, read PAT revoked + minter disabled), so already-running containers keep serving and any restart cannot pull. re-dispatch registry-host-replace to recover from the preserved volume"
             exit 1
           fi
           VOL_DELETES=$(jq '[.resource_changes[]?
@@ -1733,6 +1760,13 @@ jobs:
         # ABORTS unless the plan is EXACTLY the scoped region migration.
         run: |
           set -uo pipefail
+          # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
+          # bare run: block as `bash -e {0}`, so errexit is INHERITED and `set -uo pipefail`
+          # cannot clear it. Without this the step died AT the doppler line on a plan failure
+          # and both `rc=$?` and the `::error::` below were unreachable. The handler still
+          # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
+          # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
+          set +e
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -target='hcloud_server.registry' \
@@ -1804,7 +1838,8 @@ jobs:
           # the store is a GHCR mirror (re-fills), so re-dispatch re-creates the host + fresh volume.
           if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
-            echo "::error::terraform apply (registry-region-migrate) failed — registry may be DOWN; GHCR fallback covers serving; re-dispatch registry-region-migrate to retry the fresh-region create"
+            # Same #7071 retraction as above. Do not reinstate the fallback claim.
+            echo "::error::terraform apply (registry-region-migrate) failed — registry may be DOWN. NOTHING covers serving while it is: the host->GHCR fallback is dead (#7071), so already-running containers keep serving and any restart cannot pull. re-dispatch registry-region-migrate to retry the fresh-region create"
             exit 1
           fi
           SERVER_CREATES=$(jq '[.resource_changes[]?
@@ -1862,44 +1897,54 @@ jobs:
             echo "**Run:** ${RUN_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # Selected by `-f apply_target=registry-luks-recut` (#6929, ADR-096 amendment 2026-07-24).
+  # ── D10 AUTHORIZATION GATE. A SEPARATE JOB, AND THE SEPARATION IS THE POINT (#7277). ────────
   #
-  # THE SANCTIONED VEHICLE FOR THE GUEST-SIDE-LUKS RECUT, and the removal of a live footgun.
-  # The 2026-07-24 change made hcloud_volume.registry a RAW device: cloud-init discriminates on
-  # `blkid TYPE` — "" (fresh) -> luksFormat; crypto_LUKS -> reuse; ANY OTHER TYPE -> FATAL.
-  # The live volume is still PLAINTEXT ext4, i.e. in that third arm.
+  # Everything here used to be the first half of `registry_luks_recut`. It was split out because
+  # that job's `timeout-minutes: 30` is load-bearing — it holds the fleet-wide apply mutex, and
+  # D11's 630 s poller bound is deliberately strictly below it — while the A2 rehearsal is
+  # multi-GB with an UNMEASURED wall-clock (ADR-169 residual; a workstation's transfer profile
+  # does not predict a GitHub-hosted runner's). A rehearsal that succeeds SLOWLY subtracts from
+  # the post-destroy window and pushes a timeout into `terraform apply` or D11.
   #
-  # So `registry-host-replace` MUST NOT be used for this: it PRESERVES the volume, so the
-  # replaced host boots against the still-plaintext device, refuses it, and DARKS THE REGISTRY.
-  # Forgetting the `-replace` on the volume does the same. This job performs the recut as ONE
-  # ATOMIC APPLY, `-replace`ing the volume + its attachment + the server TOGETHER, so a fresh raw
-  # volume meets the empty arm and gets luksFormatted; zot then re-fills from GHCR.
+  # WHAT THE SPLIT BUYS, precisely, because it is easy to overclaim: a FAILURE-SEMANTICS
+  # property, not a mutex property. A timeout HERE destroys nothing and leaves
+  # `store_refill_needed` unset, so the chained restore correctly skips. A timeout in the recut
+  # job is unrecoverable — it is a *cancellation*, so no `::error::` fires and the Dispatch
+  # summary that is the sole emitter of the new volume id never runs. The split moves the
+  # unmeasured term to the side where overrunning is free.
   #
-  # NO `environment:` — like all four host-replace/migrate jobs (only workspaces-luks-recut has
-  # one, because it touches sole-copy /mnt/data). An `environment:` naming an UNPROVISIONED
-  # GitHub environment silently AUTO-APPROVES (DP-11 F8), so declaring one here would add the
-  # APPEARANCE of a reviewer gate without the gate. Authorization is the menu-ack dispatch plus
-  # the typed confirm; CODEOWNERS gates this file.
+  # WHAT IT DOES NOT BUY: the `concurrency` group is WORKFLOW-level, so this releases no mutex.
+  # The worst-case fleet-wide apply block is now the SUM across this job, the recut, and the
+  # restore. Saying otherwise would name a property the change does not have — the same standard
+  # the `registry_store_restore` header holds itself to.
   #
-  # NO job-level `concurrency:` — it inherits the workflow-level
-  # `terraform-apply-web-platform-host` group, which is the verified-complete serializer for the
-  # LOCK-LESS R2 backend (`cancel-in-progress: false` also prevents a cancel mid-destroy).
-  #
-  # `timeout-minutes: 30` is load-bearing: this job holds that fleet-wide apply mutex, so
-  # GitHub's 360-minute default would let a hung poll block EVERY merge-apply for six hours.
-  # The D11 poller's own bound (150s + 480s) is strictly below it so its diagnostic wins over an
-  # opaque cancellation.
-  registry_luks_recut:
+  # This job carries NO `-target` and performs no terraform action at all. `init`/`plan` are
+  # deliberately NOT hoisted here: that would widen the plan→apply gap by the rehearsal's
+  # duration against a LOCK-LESS R2 backend, and would put state access in a job with no destroy
+  # authority.
+  registry_pull_path_gate:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'registry-luks-recut'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # STRUCTURAL, NOT MEASURED — and unlike the recut's 30, that is safe to say here. The
+    # rehearsal's duration is a named unmeasured residual, so this bound is a runaway backstop
+    # rather than a derived budget. Overrunning it destroys nothing.
+    timeout-minutes: 45
+    # `packages: read` is what lets the D10 gate resolve production's pin set at GHCR. The
+    # workflow-level default is `contents: read` only. No `id-token: write`: the restore COPIES
+    # cosign signatures rather than re-signing them (the GHCR signature is a Sigstore bundle
+    # bound to the image digest, so a copied signature verifies unchanged at the target —
+    # measured, #7277 Phase 0.3), so keyless signing is not on this path at all.
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      # SINGLE SOURCE, TWO CONSUMERS: this job's own conditional steps and the recut job's
+      # destroy-guard. Promoting it to a job output preserves that property across the split —
+      # re-probing in the recut would introduce a second reading that can disagree with the one
+      # the verdict was rendered against.
+      probe_result: ${{ steps.posture.outputs.probe_result }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-
-      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
-        with:
-          terraform_version: ${{ env.TERRAFORM_VERSION }}
-          terraform_wrapper: false
 
       - name: Install Doppler CLI
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
@@ -1909,7 +1954,9 @@ jobs:
           CONFIRM: ${{ inputs.confirm }}
           EXPECTED_VOLUME_ID: ${{ inputs.expected_registry_store_volume_id }}
         # Inputs via env:, never inline ${{ }} in run: — an inline expansion is a command
-        # injection surface. Both values are operator-typed.
+        # injection surface. Both values are operator-typed. Deliberately duplicated in the recut
+        # job as well: it costs milliseconds, and the recut must not be green-by-`needs:` on
+        # input it never validated itself.
         run: |
           set -euo pipefail
           if [[ "$CONFIRM" != "RECUT-REGISTRY-LUKS" ]]; then
@@ -1929,20 +1976,18 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           EXPECTED_VOLUME_ID: ${{ inputs.expected_registry_store_volume_id }}
-        # Hoisted AHEAD of the D10 health gate (it used to live inside the plan step) because
-        # two later gates need to know WHICH SITUATION THIS IS, and one of them deadlocks
-        # without it. Two independent questions, both answered here:
+        # Two independent questions, both answered here:
         #
         #   1. Does the PINNED volume still exist?  GET /v1/volumes/<id>
         #   2. Does ANY volume by that NAME exist?  GET /v1/volumes?name=soleur-registry-store
         #
         # Question 2 is not redundant. Question 1's input is the same operator-typed id the
         # id-pin exists to protect, and a MISTYPED id 404s exactly like a genuinely-destroyed
-        # one. In the recut arm that is harmless (the gate compares against the plan's
-        # before.id), but the RESUME arm has no before.id to compare — so without a
-        # name-scoped check a single wrong digit would manufacture the "absent" verdict that
-        # admits a bare create, orphaning the real volume (still attached, still billing)
-        # while terraform binds a fresh empty one. A name lookup cannot be forged by a typo.
+        # one. In the recut arm that is harmless (the destroy-guard compares against the plan's
+        # before.id), but the RESUME arm has no before.id to compare — so without a name-scoped
+        # check a single wrong digit would manufacture the "absent" verdict that admits a bare
+        # create, orphaning the real volume (still attached, still billing) while terraform binds
+        # a fresh empty one. A name lookup cannot be forged by a typo.
         run: |
           set -euo pipefail
           HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
@@ -1980,71 +2025,401 @@ jobs:
           echo "hetzner probe: id=${EXPECTED_VOLUME_ID} http=${PROBE_STATUS} => ${PROBE_RESULT}; name_count=${NAME_COUNT}"
           printf 'probe_result=%s\n' "$PROBE_RESULT" >> "$GITHUB_OUTPUT"
 
-      - name: Pre-destroy pull-path health gate (D10)
-        # SKIPPED on the resume arm — see below. This is not a convenience: running it there
-        # DEADLOCKS the only documented recovery path.
+      - name: Log in to GHCR
+        # BLOCKER without this. `permissions: packages: read` SCOPES secrets.GITHUB_TOKEN; it does
+        # not PRESENT it. crane resolves credentials only from the Docker keychain, so every GHCR
+        # read here would be anonymous — and these are PRIVATE packages, so A1 would abort DENIED
+        # on every dispatch, including the resume arm. The same file already documents this at the
+        # web_host_create login: "GHCR is a PRIVATE package: an anonymous inspect 401s."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
+
+      - name: Install crane (pinned) for the D10 inventory + rehearsal
+        # UNCONDITIONAL — see the PREPARE/VERDICT split note on the next step.
+        # Keep CRANE_SHA256 in step with the other workflows carrying this spine; the parity is
+        # enforced by apps/web-platform/infra/inngest-bootstrap-mirror-only.test.sh, which
+        # anchors on the ASSIGNMENT below rather than a whole-file match.
+        run: |
+          set -euo pipefail
+          CRANE_VERSION="v0.20.2"
+          CRANE_SHA256="c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b"
+          curl -sSL -o /tmp/crane.tgz \
+            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
+          echo "${CRANE_SHA256}  /tmp/crane.tgz" | sha256sum -c -
+          sudo tar -xzf /tmp/crane.tgz -C /usr/local/bin crane
+          rm -f /tmp/crane.tgz
+          crane version
+
+      - name: Derive restore inventory (D10 PREPARE)
+        id: prepare
+        # UNCONDITIONAL, and that is load-bearing. The resume arm
+        # (`probe_result == 'absent'`) is ALREADY DESTROYED AND EMPTY — it is the arm that most
+        # needs a restore — so if the inventory derivation lived inside the skipped verdict step
+        # below, the chained restore job would have no manifest to work from on precisely the
+        # path where it matters most.
+        #
+        # Only the VERDICT (which authorises a destroy) is conditional. Deriving an inventory
+        # authorises nothing.
+        env:
+          DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
+        run: |
+          set -euo pipefail
+          # APP_DOMAIN_BASE is a DOPPLER SECRET, not a GitHub Actions variable — `vars.` would
+          # resolve to an empty string and A0 would abort on every dispatch, shipping a brand-new
+          # unfireable gate of exactly the kind this change exists to remove.
+          #
+          # No silent default. The sibling precedent in apply-deploy-pipeline-fix.yml falls back
+          # to a literal domain, which is fine for a status probe and wrong here: this value
+          # decides WHICH HOST's /health defines the restore set, so guessing it would derive an
+          # inventory for a host nobody measured. Unreadable => fail closed.
+          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE -p soleur -c prd --plain --token "$DOPPLER_TOKEN_PRD") || APP_DOMAIN_BASE=""
+          if [[ -z "$APP_DOMAIN_BASE" ]]; then
+            echo "::error::registry-luks-recut D10 PREPARE ABORT: APP_DOMAIN_BASE is unreadable from Doppler (soleur/prd), so the /health URL that defines the restore set cannot be derived. Fail-closed — an unreadable input is not evidence."
+            exit 1
+          fi
+          export APP_DOMAIN_BASE
+          bash "${GITHUB_WORKSPACE}/scripts/registry-pull-path-health.sh" \
+            --prepare --tags-out "${RUNNER_TEMP}/restore-pins.json"
+          echo "manifest=${RUNNER_TEMP}/restore-pins.json" >> "$GITHUB_OUTPUT"
+
+      - name: Pre-rehearsal server-type availability probe
+        # CHEAP GATE BEFORE THE EXPENSIVE ONE. `stock_preflight_gate` runs in the recut job and
+        # will abort BOTH journeys while the registry server type is unavailable in this host's
+        # datacenter (#6460 — cx23 was orderable in nbg1-dc3 but NOT hel1-dc2, where this host
+        # runs, on 2026-08-05). Without this probe a dispatch that cannot possibly proceed would
+        # first move multiple GB through the rehearsal. `stock_preflight_gate` itself needs
+        # tfplan.json and cannot simply be hoisted; a standalone availability probe can.
+        #
+        # ADVISORY, not authorising: it warns and continues, because the real gate is still
+        # stock_preflight_gate. Making this abort would add a second place that can deny a recut
+        # on live vendor state.
         if: steps.posture.outputs.probe_result != 'absent'
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        # !!! PREMISE RETRACTED 2026-07-30 (#7071) — THE GATE BELOW NOW FAILS CLOSED. !!!
-        #
-        # ~~The recut destroys the store. That is only acceptable because GHCR covers the
-        # empty-store window — so refuse to destroy it while the covering path is ITSELF
-        # degraded (that would create the #6400 total-deploy outage rather than tolerate a
-        # window). Zero-tolerance: a healthy fleet emits ONLY registry=zot.~~
-        #
-        # GHCR covers nothing now: the read PAT is revoked (401) and the minter is disabled
-        # (403 DENIED). The empty-store window is a TOTAL pull outage until the next CI
-        # dual-push. And the gate's most direct operand went dark with it — `ghcr-fallback`
-        # is emitted only inside the SUCCESS branch of a GHCR pull, so it can never fire
-        # again and can never abort anything.
-        #
-        # This comment is marked here, and not only in the script, because THIS is the
-        # surface an operator reads before firing the typed-confirm dispatch. Marking the
-        # script alone left the retracted premise stated, unmarked, on the page where the
-        # decision is actually made — the same orphaned-tail defect the rest of this change
-        # exists to drain.
-        #
-        # The gate itself now exits non-zero with that explanation until a replacement
-        # authorization condition is derived (see the script header). Reversing it is one
-        # line, deliberately: destroying production's only pull path should cost an explicit
-        # edit, not a green PASS nobody re-read.
-        #
-        # WHY IT MUST NOT RUN WHEN THE STORE IS ALREADY GONE. A mid-apply failure leaves the
-        # store destroyed and the registry dark; every deploy in that window then emits
-        # `registry_pull_event registry=ghcr-fallback` — precisely what this gate counts. So on
-        # a re-fire the gate would abort on evidence THE RECUT ITSELF PRODUCED, locking the
-        # operator out of the resume arm that the workflow's own apply-failure message and the
-        # runbook both instruct them to use. The `reason=device-absent` case is worse: the
-        # runbook states it never self-heals and needs a full recut, which is this same
-        # dispatch, blocked identically.
-        #
-        # The gate's purpose is "do not DESTROY the store while its cover is degraded". Once
-        # the store is already destroyed that purpose is spent: the fleet is in the very window
-        # the gate exists to avoid entering, and the only way out is forward. Skipping is
-        # therefore the fail-SAFE direction, and it is keyed on the live Hetzner probe (not an
-        # operator flag), so it cannot be asserted into existence.
-        #
-        # Queries SENTRY, not Better Stack: registry_pull_event emits to the Sentry store API
-        # and to WEB-host journald, and Better Stack's only ingested source here is the INNGEST
-        # vector feed — so the Better Stack query this gate was originally specified as could
-        # never return a row (measured, #6929 Phase 0.2). A gate that can only be green is worse
-        # than no gate, because it is read as evidence.
         run: |
           set -euo pipefail
-          SENTRY_AUTH_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN -p soleur -c prd_terraform --plain) || SENTRY_AUTH_TOKEN=""
-          if [[ -z "$SENTRY_AUTH_TOKEN" ]]; then
-            echo "::error::registry-luks-recut D10 ABORT: cannot read SENTRY_AUTH_TOKEN from Doppler (prd_terraform) — cannot PROVE the GHCR fallback path is healthy. Fail-closed: an unreadable signal is not evidence of health."
+          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
+            echo "::warning::pre-rehearsal stock probe SKIPPED: HCLOUD_TOKEN unreadable. stock_preflight_gate still applies later."
+            exit 0
+          fi
+          printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          # SCOPED TO THE REGISTRY VARIABLE'S OWN BLOCK, and the value is unquoted with sed.
+          # The previous derivation was DARK — measured, not argued. It piped
+          # `grep -oE 'default…"c[a-z0-9]+"'` into `grep -oE 'c[a-z0-9]+$'`, but stage 1's match
+          # ENDS IN A QUOTE, so the `$` anchor could never match and SRV_TYPE was empty on every
+          # dispatch: the step exited 0 through its own "could not derive" arm having probed
+          # nothing, forever. And `head -1` across the whole file returns `variable "server_type"`
+          # (cx33, the WEB host), not `registry_server_type` (cx23) — so even with the anchor
+          # fixed it would have probed the wrong machine type.
+          # DERIVE BOTH VALUES BY VARIABLE NAME, block-scoped. The previous derivation was DARK,
+          # measured rather than argued: it piped `grep -oE 'default…"c[a-z0-9]+"'` into
+          # `grep -oE 'c[a-z0-9]+$'`, but stage 1's match ENDS IN A QUOTE, so the `$` anchor could
+          # never match. SRV_TYPE was empty on every dispatch and the step exited 0 through its own
+          # "could not derive" arm having probed nothing, forever — a probe that runs, prints, and
+          # cannot fire, which is the defect class this whole change exists to remove. And
+          # `head -1` across the whole file returns `variable "server_type"` (cx33, the WEB host),
+          # not `registry_server_type` (cx23), so even with the anchor repaired it would have
+          # probed the wrong machine type.
+          read_default() { # $1 = variable name
+            awk -v v="variable \"$1\"" '$0 ~ "^"v, /^}/' \
+              "${GITHUB_WORKSPACE}/apps/web-platform/infra/variables.tf" \
+              | grep -oE 'default[[:space:]]*=[[:space:]]*"[^"]+"' | head -1 | sed 's/.*"\(.*\)"/\1/'
+          }
+          SRV_TYPE=$(read_default registry_server_type) || SRV_TYPE=""
+          SRV_LOC=$(read_default registry_location) || SRV_LOC=""
+          if [[ -z "$SRV_TYPE" || -z "$SRV_LOC" ]]; then
+            echo "::warning::pre-rehearsal stock probe SKIPPED: could not derive registry_server_type/registry_location from variables.tf. stock_preflight_gate in the recut job still applies."
+            exit 0
+          fi
+
+          # REUSE THE AUTHORITATIVE LIBRARY rather than hand-rolling a query. Its header records
+          # the distinction this probe previously got wrong: `.server_types.supported` is what a
+          # datacenter CAN host, `.server_types.available` is what is orderable RIGHT NOW. The old
+          # query read `.prices[].location` — the PRICED set, which still lists a datacenter whose
+          # stock is exhausted — so #6460 (cx23 orderable in nbg1-dc3 but NOT hel1-dc2, where this
+          # host runs) was invisible to it. It would have printed a reassuring location list for
+          # precisely the condition its own header cites.
+          export HCLOUD_TOKEN
+          # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+          # ADVISORY, and `set +e` is what keeps it that way. `stock_preflight` RETURNS 1 on a
+          # stock miss, and this step runs under the default `bash -eo pipefail`, so calling it
+          # bare would abort the step — converting the cheap warning into a second place that can
+          # deny a recut on live vendor state. stock_preflight_gate in the recut job stays the
+          # only authoritative check.
+          set +e
+          stock_out=$(stock_preflight "$SRV_TYPE" "$SRV_LOC" 2>&1); stock_rc=$?
+          set -e
+          if (( stock_rc == 0 )); then
+            echo "::notice::Pre-rehearsal stock probe: ${SRV_TYPE} is orderable in ${SRV_LOC} right now. Proceeding to the rehearsal."
+          else
+            # Re-emitted as a WARNING, first line only: an ::error:: here would read as a denial
+            # from a step that denies nothing.
+            echo "::warning::Pre-rehearsal stock probe: ${SRV_TYPE} is NOT currently orderable in ${SRV_LOC} — the recut will very likely abort later at stock_preflight_gate, AFTER this job has moved multiple GB through the rehearsal. $(printf '%s' "$stock_out" | head -1 | tr '\n' ' ')"
+          fi
+
+      - name: Start throwaway registry for the D10 rehearsal
+        # A2 rehearses the restore against a REAL registry HTTP API, pinned to the Terraform-
+        # declared zot image. BE PRECISE ABOUT WHAT THIS DOES: it reads `zot_image_amd64`
+        # directly and only ASSERTS that the arch ternary still exists. An earlier version of
+        # this comment claimed the pin was read THROUGH `local.zot_image`'s ternary; it is not,
+        # and that overstated the guard in the artifact the ADR's fail-open table cites. The
+        # behaviour is correct on an amd64 runner and the presence check is what stops the
+        # ternary being silently deleted — but if #6460 makes a cax* (arm64) fallback live, this
+        # read must become a real ternary evaluation, because a bare amd64 read would then
+        # rehearse a different zot build than production runs.
+        #
+        # `defaultPolicy: []` mirrors cloud-init-registry.yml. It is not cosmetic: with
+        # anonymous push allowed the rehearsal would succeed WITHOUT authenticating, and a
+        # credential failure against production would stay invisible.
+        if: steps.posture.outputs.probe_result != 'absent'
+        id: throwaway
+        run: |
+          set -euo pipefail
+          ZOT_IMAGE=$(grep -oE 'zot_image_amd64[[:space:]]*=[[:space:]]*"[^"]+"' \
+            "${GITHUB_WORKSPACE}/apps/web-platform/infra/zot-registry.tf" | head -1 | sed 's/.*"\(.*\)"/\1/')
+          ARCH_TERNARY=$(grep -c 'zot_image[[:space:]]*=[[:space:]]*local.registry_arch' \
+            "${GITHUB_WORKSPACE}/apps/web-platform/infra/zot-registry.tf")
+          if [[ "$ARCH_TERNARY" -lt 1 ]]; then
+            echo "::error::zot-registry.tf no longer selects the zot image through the arch ternary; the rehearsal pin cannot be derived safely."
             exit 1
           fi
-          printf '::add-mask::%s\n' "$SENTRY_AUTH_TOKEN"
-          export SENTRY_AUTH_TOKEN
-          bash "${GITHUB_WORKSPACE}/scripts/registry-pull-path-health.sh" --since-hours 24
+          [[ -n "$ZOT_IMAGE" ]] || { echo "::error::could not read the Terraform-declared zot image pin."; exit 1; }
+          mkdir -p "${RUNNER_TEMP}/zot"
+          RU=$(openssl rand -hex 8); RP=$(openssl rand -hex 24)
+          printf '::add-mask::%s\n' "$RP"
+          docker run --rm httpd:2.4-alpine htpasswd -Bbn "$RU" "$RP" > "${RUNNER_TEMP}/zot/htpasswd"
+          cat > "${RUNNER_TEMP}/zot/config.json" <<CFG
+          {
+            "distSpecVersion": "1.1.0",
+            "storage": { "rootDirectory": "/var/lib/zot", "dedupe": true, "gc": false },
+            "http": {
+              "address": "0.0.0.0", "port": "5000", "compat": ["docker2s2"],
+              "auth": { "htpasswd": { "path": "/etc/zot/htpasswd" } },
+              "accessControl": { "repositories": { "**": {
+                "policies": [ { "users": ["${RU}"], "actions": ["read","create","update"] } ],
+                "defaultPolicy": [] } } }
+            },
+            "log": { "level": "warn" }
+          }
+          CFG
+          docker run -d --name d10-throwaway \
+            -v "${RUNNER_TEMP}/zot":/var/lib/zot \
+            -v "${RUNNER_TEMP}/zot/config.json":/etc/zot/config.json:ro \
+            -v "${RUNNER_TEMP}/zot/htpasswd":/etc/zot/htpasswd:ro \
+            -p 127.0.0.1:5999:5000 "$ZOT_IMAGE" serve /etc/zot/config.json
+          ready=0
+          for _ in $(seq 1 40); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5999/v2/ || true)
+            if [[ "$code" == "401" || "$code" == "200" ]]; then ready=1; break; fi
+            sleep 1
+          done
+          # The readiness loop's EXHAUSTION must be its own failure. Without this check a zot that
+          # never bound falls through to the negative control below, which then reports "the
+          # throwaway registry accepted an unauthenticated request (000)" — naming an
+          # accessControl defect for a container that never started.
+          if [[ "$ready" -ne 1 ]]; then
+            echo "::error::the throwaway registry never became ready on 127.0.0.1:5999 after 40s. This is a rehearsal-harness fault, not a production signal — but the pass condition cannot be established without it. Nothing has been destroyed."
+            docker logs d10-throwaway 2>&1 | tail -20 || true
+            exit 1
+          fi
+          # Negative control: anonymous access MUST be refused, or the rehearsal proves nothing
+          # about whether the restore authenticated.
+          anon=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5999/v2/_catalog || true)
+          if [[ "$anon" != "401" ]]; then
+            echo "::error::the throwaway registry accepted an unauthenticated request (${anon}); its accessControl does not mirror production and a rehearsal against it would not exercise the credential path."
+            exit 1
+          fi
+          echo "throwaway_user=${RU}" >> "$GITHUB_OUTPUT"
+          echo "throwaway_pass=${RP}" >> "$GITHUB_OUTPUT"
+          echo "throwaway registry up on 127.0.0.1:5999 (anonymous access refused: ${anon})"
 
-      - name: Note skipped pull-path gate (resume arm)
+      - name: Pre-destroy authorization gate (D10 VERDICT)
+        # SKIPPED on the resume arm — see the note step below. This is not a convenience:
+        # running it there DEADLOCKS the only documented recovery path.
+        if: steps.posture.outputs.probe_result != 'absent'
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
+          REHEARSE_TARGET: 127.0.0.1:5999
+          # THE "Log in to GHCR" STEP ABOVE DOES NOT REACH THE REHEARSAL, and without these two
+          # lines the gate CANNOT PASS. That step writes ~/.docker/config.json, but the restore
+          # engine deliberately exports a PRIVATE `DOCKER_CONFIG` under its own scratch dir so the
+          # throwaway and the prod credential cannot be confused — which also makes the ambient
+          # GHCR keychain invisible to it. The engine's GHCR login is conditional on exactly these
+          # two vars, so unset they leave every source read ANONYMOUS against PRIVATE packages:
+          # 401 -> DENIED -> engine exit 2 -> A2 aborts with "GHCR could not be read", immediately
+          # after A1 printed four SUCCESSFUL GHCR digest resolutions using the ambient keychain.
+          # No suite can see this: every one of them stubs crane.
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The rehearsal's sink credentials are the THROWAWAY's, never production's. The
+          # rehearsal and the real restore differ in exactly `--target` and this credential
+          # environment — the anti-drift property A2 depends on, and the reason there is no
+          # `--rehearse` flag to drift apart from.
+          ZOT_PUSH_USER: ${{ steps.throwaway.outputs.throwaway_user }}
+          ZOT_PUSH_TOKEN: ${{ steps.throwaway.outputs.throwaway_pass }}
+        # WHAT AUTHORIZES A RECUT (#7277). A recut is authorized only when CI has just proven,
+        # by executing it, that every image reference production depends on can be
+        # re-materialised into an EMPTY registry from GHCR — a source that survives the destroy.
+        #
+        # This REPLACES the 2026-07-30 premise rather than repairing it. That gate authorized a
+        # destroy on "GHCR covers the empty-store window", which #7071 retracted: the host->GHCR
+        # read PAT is revoked (401) and the minter is disabled (403 DENIED). The new criterion
+        # never claims the window is covered. It claims the window is ENDED, by a restore that
+        # has just succeeded in rehearsal and is then executed for real by the chained
+        # `registry_store_restore` job.
+        #
+        # THE INDEPENDENCE CRITERION: a gate on an irreversible destroy may not depend on the
+        # component whose failure motivates it. This gate depends on GHCR-read-from-CI, which is
+        # not that component — the release pipeline's failing half is the PUSH into prod zot,
+        # while its GHCR-read half demonstrably works.
+        #
+        # WHY IT STILL MUST NOT RUN WHEN THE STORE IS ALREADY GONE — and note the reason is NOT
+        # the old one. The previous justification was that the gate would abort on
+        # `ghcr-fallback` events the incomplete recut itself produced. That reason is now
+        # FALSIFIED BY THE GATE CHANGE (not by the emitter): this gate reads no Sentry signal, no
+        # zot health, and no fallback events at all. The skip remains correct for a different and
+        # simpler reason — once the volume is already destroyed there is nothing left to
+        # authorise. The verdict authorises a DESTROY; on the resume arm the destroy has already
+        # happened, and the only way out is forward.
+        #
+        # Note what does NOT skip: the PREPARE steps above are unconditional, so the resume arm
+        # still derives an inventory and still gets the chained restore. That is the arm that
+        # most needs one.
+        run: |
+          set -euo pipefail
+          # Same Doppler read as PREPARE, and fail-closed for the same reason: this value picks
+          # which host's /health defines the restore set.
+          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE -p soleur -c prd --plain --token "$DOPPLER_TOKEN_PRD") || APP_DOMAIN_BASE=""
+          if [[ -z "$APP_DOMAIN_BASE" ]]; then
+            echo "::error::registry-luks-recut D10 VERDICT ABORT: APP_DOMAIN_BASE is unreadable from Doppler (soleur/prd). Fail-closed — nothing has been destroyed."
+            exit 1
+          fi
+          export APP_DOMAIN_BASE
+          bash "${GITHUB_WORKSPACE}/scripts/registry-pull-path-health.sh" \
+            --rehearse-target "$REHEARSE_TARGET" \
+            --tags-out "${RUNNER_TEMP}/restore-pins.json"
+
+      - name: Tear down the throwaway registry
+        if: always()
+        run: |
+          docker rm -f d10-throwaway >/dev/null 2>&1 || true
+          rm -rf "${RUNNER_TEMP}/zot" || true
+
+      - name: Note skipped authorization verdict (resume arm)
         if: steps.posture.outputs.probe_result == 'absent'
         run: |
-          echo "::notice::D10 pull-path health gate SKIPPED: the pinned store volume is already absent (corroborated by a name-scoped lookup), so this is a mid-apply RESUME, not a fresh destroy. Running the gate here would abort on ghcr-fallback events the incomplete recut itself produced, blocking the only recovery path."
+          echo "::notice::D10 authorization VERDICT skipped: the pinned store volume is already absent (corroborated by a name-scoped lookup), so this is a mid-apply RESUME, not a fresh destroy — there is no destroy left to authorise. The inventory derivation ran unconditionally, so the chained restore job still has its pinned manifest. (Before #7277 this skip was justified by the gate aborting on ghcr-fallback events the recut itself produced; the rewritten gate reads no such signal, so that reason no longer applies.)"
+
+      - name: Upload pinned restore manifest
+        # DELIBERATELY AFTER THE VERDICT, and this ordering is the whole fix for a divergence
+        # that had no other observable (#7277 B5). PREPARE writes the manifest; the VERDICT step
+        # re-derives over the SAME PATH and rehearses against what it derived; the restore job
+        # downloads this artifact. Uploading between them meant the artifact captured PREPARE's
+        # inventory while the rehearsal proved VERDICT's — and a deploy landing in the window
+        # between them (it spans the stock probe, two docker pulls and up to 40s of readiness
+        # polling) makes those different sets. Both runs would be green and nothing would compare
+        # them. Uploading here makes the artifact BE the inventory that was proven.
+        #
+        # No `if:` — on the resume arm the VERDICT is skipped rather than failed, so this step
+        # still runs and uploads PREPARE's manifest, which is exactly what that arm needs.
+        # `manifest_sha256=` in the gate's verdict line is the cross-check if this is ever
+        # reordered again.
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: registry-restore-pins
+          path: ${{ steps.prepare.outputs.manifest }}
+          if-no-files-found: error
+          retention-days: 7
+
+  # Selected by `-f apply_target=registry-luks-recut` (#6929, ADR-096 amendment 2026-07-24).
+  #
+  # THE SANCTIONED VEHICLE FOR THE GUEST-SIDE-LUKS RECUT, and the removal of a live footgun.
+  # The 2026-07-24 change made hcloud_volume.registry a RAW device: cloud-init discriminates on
+  # `blkid TYPE` — "" (fresh) -> luksFormat; crypto_LUKS -> reuse; ANY OTHER TYPE -> FATAL.
+  # The live volume is still PLAINTEXT ext4, i.e. in that third arm.
+  #
+  # So `registry-host-replace` MUST NOT be used for this: it PRESERVES the volume, so the
+  # replaced host boots against the still-plaintext device, refuses it, and DARKS THE REGISTRY.
+  # Forgetting the `-replace` on the volume does the same. This job performs the recut as ONE
+  # ATOMIC APPLY, `-replace`ing the volume + its attachment + the server TOGETHER, so a fresh raw
+  # volume meets the empty arm and gets luksFormatted; zot then re-fills from GHCR.
+  #
+  # NO `environment:` — like all four host-replace/migrate jobs (only workspaces-luks-recut has
+  # one, because it touches sole-copy /mnt/data). An `environment:` naming an UNPROVISIONED
+  # GitHub environment silently AUTO-APPROVES (DP-11 F8), so declaring one here would add the
+  # APPEARANCE of a reviewer gate without the gate. Authorization is the menu-ack dispatch plus
+  # the typed confirm; CODEOWNERS gates this file.
+  #
+  # NO job-level `concurrency:` — it inherits the workflow-level
+  # `terraform-apply-web-platform-host` group, which is the verified-complete serializer for the
+  # LOCK-LESS R2 backend (`cancel-in-progress: false` also prevents a cancel mid-destroy).
+  #
+  # `timeout-minutes: 30` is load-bearing: this job holds that fleet-wide apply mutex, so
+  # GitHub's 360-minute default would let a hung poll block EVERY merge-apply for six hours.
+  # The D11 poller's own bound (150s + 480s) is strictly below it so its diagnostic wins over an
+  # opaque cancellation.
+  #
+  # THAT 30 IS ONLY A DERIVED NUMBER BECAUSE THE REHEARSAL IS NO LONGER INSIDE IT (#7277). The
+  # multi-GB A2 rehearsal used to run here, ahead of the apply, with an UNMEASURED wall-clock —
+  # so a rehearsal that succeeded slowly ate the post-destroy window and could push a timeout
+  # into `terraform apply` or D11, where a timeout is a cancellation and therefore catastrophic.
+  # It now lives in `registry_pull_path_gate`, which this job `needs:`. The clock below starts at
+  # the apply again, which is what makes the D11 derivation valid.
+  #
+  # Note honestly what did NOT change: the `concurrency` group is WORKFLOW-level, so the split
+  # released no mutex. Worst-case fleet-wide apply block is now the SUM across the gate job, this
+  # job, and `registry_store_restore`.
+  registry_luks_recut:
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'registry-luks-recut'
+    needs: registry_pull_path_gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # `contents: read` only. `packages: read` moved to `registry_pull_path_gate` with the GHCR
+    # reads that needed it — this job no longer touches a registry. No `id-token: write` either:
+    # the restore COPIES cosign signatures rather than re-signing them (the GHCR signature is a
+    # Sigstore bundle bound to the image digest, so a copied signature verifies unchanged at the
+    # target — measured, #7277 Phase 0.3), so keyless signing is not on this path at all.
+    permissions:
+      contents: read
+    outputs:
+      # Consumed by registry_store_restore's `if:`. See the "Mark the store as needing a refill"
+      # step for why the restore keys on this rather than on this job's overall result.
+      store_refill_needed: ${{ steps.refill_flag.outputs.needed }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Validate typed confirm + id-pin
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          EXPECTED_VOLUME_ID: ${{ inputs.expected_registry_store_volume_id }}
+        # Inputs via env:, never inline ${{ }} in run: — an inline expansion is a command
+        # injection surface. Both values are operator-typed.
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM" != "RECUT-REGISTRY-LUKS" ]]; then
+            echo "::error::registry-luks-recut requires confirm=RECUT-REGISTRY-LUKS (typo-guard). This DESTROYS the zot store volume. Note the workspaces recut uses a DIFFERENT literal — a token typed for that target cannot authorize this one."
+            exit 1
+          fi
+          if [[ ! "$EXPECTED_VOLUME_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::registry-luks-recut requires expected_registry_store_volume_id=<numeric Hetzner id of the zot store volume>. The gate PINS the replaced volume's before.id to this value, so a state corruption that mapped this ADDRESS onto a different physical volume cannot silently destroy it."
+            echo "::error::Read it with ONE bounded command (NOT from a drift run — that log never contains the id):"
+            echo "::error::  curl -s -H \"Authorization: Bearer \$HCLOUD_TOKEN\" 'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'"
+            exit 1
+          fi
+          echo "confirm + id-pin accepted (volume id ${EXPECTED_VOLUME_ID})."
 
       - name: Generate ephemeral SSH public key for var.ssh_key_path
         # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway key
@@ -2097,12 +2472,24 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           EXPECTED_VOLUME_ID: ${{ inputs.expected_registry_store_volume_id }}
-          POSTURE_PROBE_RESULT: ${{ steps.posture.outputs.probe_result }}
+          # From the GATE JOB, not a second probe here (#7277). Re-probing would introduce a
+          # reading that can disagree with the one the verdict was rendered against; the gate
+          # promotes it to a job output precisely to keep this single-source. The fail-closed
+          # empty check below is unchanged and still fires — an unset job output is '', which is
+          # exactly what it already tested for.
+          POSTURE_PROBE_RESULT: ${{ needs.registry_pull_path_gate.outputs.probe_result }}
         # THE THREE -replace FLAGS ARE THE POINT. Replacing the volume alone leaves the old host
         # mounting a device that no longer exists; replacing the host alone preserves the
         # plaintext volume and hits the blkid FATAL. They move TOGETHER or not at all.
         run: |
           set -uo pipefail
+          # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
+          # bare run: block as `bash -e {0}`, so errexit is INHERITED and `set -uo pipefail`
+          # cannot clear it. Without this the step died AT the doppler line on a plan failure
+          # and both `rc=$?` and the `::error::` below were unreachable. The handler still
+          # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
+          # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
+          set +e
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -replace='hcloud_volume.registry' \
@@ -2145,15 +2532,17 @@ jobs:
           #   200 => the pinned volume still EXISTS => a bare create is wrong; `terraform import`.
           #   404 (corroborated by a name-scoped lookup) => genuinely gone => resume is legitimate.
           #
-          # It is resolved EARLY rather than here because the D10 health gate also needs it: D10
-          # must not run once the store is already destroyed, or it aborts on ghcr-fallback
-          # events the incomplete recut itself produced. Single source, two consumers.
+          # It is resolved EARLY rather than here because the D10 VERDICT also needs it: the
+          # verdict authorises a DESTROY, and once the store is already destroyed there is
+          # nothing left to authorise. (Before #7277 the reason was that D10 would abort on
+          # ghcr-fallback events the incomplete recut itself produced; the rewritten gate reads
+          # no such signal.) Single source, two consumers.
           PROBE_RESULT="${POSTURE_PROBE_RESULT}"
           if [[ -z "$PROBE_RESULT" ]]; then
             echo "::error::registry-luks-recut ABORT: the recovery-posture probe produced no verdict. Fail-closed — the gate's resume arm must never be admitted on a missing probe."
             exit 1
           fi
-          echo "hetzner existence probe (from the posture step): ${PROBE_RESULT}"
+          echo "hetzner existence probe (from the registry_pull_path_gate job): ${PROBE_RESULT}"
 
           # Sourced gate — the SAME bytes tests/scripts/test-registry-luks-recut-gate.sh exercises.
           # shellcheck source=tests/scripts/lib/registry-luks-recut-gate.sh
@@ -2229,6 +2618,21 @@ jobs:
           echo "zero-touch assert: ${checked} protected address(es) present in this plan."
           exit "$rc"
 
+      - name: Mark the store as needing a refill
+        id: refill_flag
+        # BEFORE the apply, not after. The apply is what destroys the store, so a mid-apply
+        # failure or a failing completeness backstop leaves the store DESTROYED with the flag
+        # unset — and the chained restore then shows as `skipped`, which reads as "nothing to
+        # do" on precisely the path where the store may be gone. An earlier revision set this
+        # after the apply; caught by two reviewers independently.
+        #
+        # Firing the restore against a store that turned out NOT to be empty is a cheap no-op
+        # (crane skips blobs the destination already holds), so the asymmetry favours firing.
+        # Every gate that can legitimately deny a recut — the typed confirm, the id-pin, D10,
+        # the plan guards, stock_preflight — runs BEFORE this line, so a refusal still leaves
+        # the flag unset and correctly skips the restore.
+        run: echo "needed=true" >> "$GITHUB_OUTPUT"
+
       - name: Terraform apply (atomic recut) — completeness backstop
         working-directory: ${{ env.INFRA_DIR }}
         env:
@@ -2237,7 +2641,14 @@ jobs:
           set -euo pipefail
           if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
-            echo "::error::terraform apply (registry-luks-recut) failed mid-recut — the registry may be DOWN and the store may already be destroyed. GHCR fallback covers serving. RE-DISPATCH registry-luks-recut with the SAME confirm and the SAME id: the resume arm covers all three mid-apply windows and is admitted by the live Hetzner probe, so no extra flag is needed."
+            # NOTE the corrected claim. This message previously said "GHCR fallback covers
+            # serving" — the #7071-retracted premise, asserted to an operator mid-incident, on
+            # the surface where they decide what to do next. It does NOT cover serving: the
+            # host->GHCR read credential is revoked, so a destroyed store means no host can pull
+            # at all. Already-RUNNING containers keep serving; the fleet is one restart away
+            # from an outage. (Not enumerated in the plan's four stale sites — found while
+            # editing this job, and fixed here on edit-locality grounds.)
+            echo "::error::terraform apply (registry-luks-recut) failed mid-recut — the registry may be DOWN and the store may already be destroyed. Hosts CANNOT fall back to GHCR (#7071: the pull credential is revoked); already-running containers keep serving, but no host can pull until the store is refilled. RE-DISPATCH registry-luks-recut with the SAME confirm and the SAME id: the resume arm covers all three mid-apply windows, is admitted by the live Hetzner probe, and chains the restore that refills the store."
             exit 1
           fi
           # Post-apply completeness, from the SAVED plan (belt-and-suspenders to the guard).
@@ -2303,6 +2714,7 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           OLD_VOLUME_ID: ${{ inputs.expected_registry_store_volume_id }}
+          REFILL_NEEDED: ${{ steps.refill_flag.outputs.needed }}
         # Emits the NEW volume id. Read from terraform state, NOT from tfplan.json: a
         # known-after-apply create has no .after.id in the plan. Without this line the NEXT recut
         # is blocked until someone re-reads the id from the Hetzner API.
@@ -2323,19 +2735,257 @@ jobs:
             echo "**Old store volume id (destroyed):** \`${OLD_VOLUME_ID:-n/a}\`"
             echo "**NEW store volume id:** \`${NEW_VOLUME_ID}\` — record this; any follow-up recut needs it as the id-pin."
             echo ""
-            echo "### The store is EMPTY, and that PAGES"
+            if [[ "${REFILL_NEEDED:-}" != "true" ]]; then
+              # The recut never reached the apply — a typed-confirm failure, a D10 refusal, a
+              # plan guard, or a stock-out. NOTHING WAS DESTROYED, and saying otherwise on the
+              # operator's summary page is the single most misleading thing this step could do.
+              # An earlier revision printed the empty-store section unconditionally under
+              # `if: always()`, so a D10 refusal — the gate's whole purpose, whose own message
+              # says "Nothing has been destroyed" — rendered as "the store is EMPTY".
+              echo "### The store was NOT destroyed"
+              echo ""
+              echo "This dispatch stopped before the apply, so the existing store volume is untouched and no restore is needed or scheduled. Read the failing step above for the reason."
+              exit 0
+            fi
+            echo "### The store is EMPTY — the chained restore runs next"
             echo ""
-            echo "The fresh volume is luksFormatted and empty, so pulls fall through to GHCR until the next CI dual-push re-mirrors. Those fallbacks emit \`registry_pull_event registry=ghcr-fallback\` at level=warning, which is wired to the \`zot_mirror_fallback_rate\` Sentry alert — so this window PAGES, and nothing the operator controls bounds it."
+            # DELIBERATELY NOT branched here. This step runs inside registry_luks_recut, which
+            # the restore job `needs:` — so at this point the restore has not started and its
+            # outcome does not exist. Branching on it here could only ever print a guess. The
+            # outcome-dependent text is emitted by `registry_store_restore` itself, which is the
+            # only place that knows.
+            #
+            # The previous text claimed this window "PAGES" via
+            # `registry_pull_event registry=ghcr-fallback`. That page CANNOT ARRIVE: the event is
+            # emitted only inside the SUCCESS branch of a GHCR pull, and the host->GHCR
+            # credential was revoked (#7071), so the signal is permanently dark. Telling an
+            # operator to expect a page that cannot come is worse than saying nothing.
+            echo "The fresh volume is luksFormatted and empty, so no host can pull any image yet. The \`registry_store_restore\` job chained after this one re-materialises production's pinned image set from GHCR and verifies every reference's BLOBS, not just its manifest. **Read that job's summary for the outcome — this section cannot know it, because the restore has not run yet.**"
             echo ""
-            echo "Force the re-mirror now:"
+            # NOT `web-platform-release.yml -f bump_type=patch`. That pipeline was measured
+            # failing 9 consecutive times as of 2026-08-05 — its zot-push half is precisely what
+            # the recut exists to repair — so pointing the operator at it as the way to end an
+            # empty-store window is an instruction that does not work.
+            echo "If the restore job fails, re-run it: the restore engine is resumable, so a partial pass is recovered by re-running rather than by repairing state. Its per-exit-code \`::error::\` maps to one operator action each in the runbook."
             echo ""
-            echo '```'
-            echo "gh workflow run web-platform-release.yml -f bump_type=patch"
-            echo '```'
-            echo ""
-            echo "_Prefer firing this recut immediately BEFORE a planned release, so the window is bounded by a dual-push you control._"
+            echo "_This window is bounded by the chained restore rather than by the next release. Note that the restore carries only the \`required\` pin set, so immediately after a recut there is no older image in the store to roll back to; re-run the restore with a wider set if you need one._"
           } >> "$GITHUB_STEP_SUMMARY"
           exit 0
+
+  # ── the chained REAL restore (#7277) ────────────────────────────────────────────────────────
+  #
+  # THIS IS THE LOAD-BEARING HALF OF THE DESIGN. The D10 rehearsal is its pre-destroy safety
+  # net, not its equal: the rehearsal proves the restore SCRIPT is correct against a real
+  # registry HTTP API, while THIS job exercises the actual path, with the actual credentials,
+  # against the actual sink.
+  #
+  # WHY A SEPARATE JOB AND NOT ANOTHER STEP IN registry_luks_recut. That job's
+  # `timeout-minutes: 30` is explicitly load-bearing — it holds the fleet-wide apply mutex, and
+  # its own comment records that D11's 150s + 480s bound sits strictly below the timeout "so its
+  # diagnostic wins over an opaque cancellation". Adding a multi-GB restore inside that budget
+  # breaks the invariant, and a timeout is a CANCELLATION: store destroyed, restore half
+  # applied, no `::error::`, and the Dispatch summary — the only emitter of the NEW volume id,
+  # without which the next recut is blocked — never runs. A partially populated registry is
+  # worse than an empty one, because tag lookups then succeed for some refs and not others.
+  #
+  # Splitting gives the restore its own budget and keeps the recut job's cancellation semantics
+  # intact.
+  #
+  # IT DOES NOT RELEASE THE MUTEX, and an earlier revision of this comment claimed it did. The
+  # `concurrency:` group is declared at WORKFLOW level, so it is held for the whole RUN — this
+  # job inherits it and cannot release what a sibling job holds. Worst-case fleet-wide apply
+  # block therefore goes from 30 to **135 minutes: 45 (registry_pull_path_gate) + 30
+  # (registry_luks_recut) + 60 (this job)**. An earlier revision of this line said "90 (30 + 60)",
+  # which was correct until #7277 split the authorization gate into its own job and then silently
+  # understated the block by the gate's 45. A comment that half-corrects a number is worse than
+  # one that never claimed it, because it reads as already-audited — so when a job is added to
+  # this chain, this arithmetic moves with it. That is still far better than the 360-minute
+  # default the 30 was chosen against, but it is 4.5x the number that comment defends, and saying
+  # otherwise would be naming a property the change does not have. Genuinely releasing it needs a
+  # SEPARATE WORKFLOW (workflow_run), not a chained job — tracked, not done here.
+  registry_store_restore:
+    needs: registry_luks_recut
+    # EXPLICIT, not inherited. A following job defaults to success()-of-needs, which would skip
+    # the RESUME arm — and the resume arm IS the empty-store state this job exists to end. It
+    # keys on the upstream FLAG rather than on `needs.<job>.result` so it does not fire on paths
+    # where the store was never emptied (most visibly a legitimate D10 refusal, where the store
+    # is intact).
+    #
+    # `!cancelled()` rather than `always()`: on a genuine cancellation the store's state is
+    # unknown, and starting a multi-GB write into it is not obviously safe.
+    #
+    # The `== 'true'` comparison is safe against the Actions loose-equality trap: an UNSET
+    # output is null, and `null == 'true'` casts to `0 == NaN`, which is false. The failure
+    # direction is therefore "skip the restore", which is visible in the run's job list — not
+    # "run it unexpectedly".
+    if: ${{ !cancelled() && needs.registry_luks_recut.outputs.store_refill_needed == 'true' }}
+    runs-on: ubuntu-24.04
+    # Its OWN budget, deliberately larger than the recut's and unrelated to it. The wall-clock
+    # for the full pin set is a NAMED UNMEASURED RESIDUAL (Phase 0.4): a workstation's transfer
+    # profile does not predict a GitHub-hosted runner's, so no number here is a measurement.
+    # What makes an unmeasured duration survivable is that the engine is RESUMABLE — a timeout
+    # is recovered by re-running, not by repairing state.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Log in to GHCR
+        # BLOCKER without this. `permissions: packages: read` SCOPES secrets.GITHUB_TOKEN; it does
+        # not PRESENT it. crane resolves credentials only from the Docker keychain, so every GHCR
+        # read here would be anonymous — and these are PRIVATE packages, so A1 would abort DENIED
+        # on every dispatch, including the resume arm. The same file already documents this at the
+        # web_host_create login: "GHCR is a PRIVATE package: an anonymous inspect 401s."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
+
+      - name: Install crane (pinned)
+        run: |
+          set -euo pipefail
+          CRANE_VERSION="v0.20.2"
+          CRANE_SHA256="c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b"
+          curl -sSL -o /tmp/crane.tgz \
+            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
+          echo "${CRANE_SHA256}  /tmp/crane.tgz" | sha256sum -c -
+          sudo tar -xzf /tmp/crane.tgz -C /usr/local/bin crane
+          rm -f /tmp/crane.tgz
+
+      - name: Download the pinned restore manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: registry-restore-pins
+          path: ${{ runner.temp }}/pins
+
+      - name: Bring up the Cloudflare Tunnel bridge to prod zot
+        uses: ./.github/actions/cf-tunnel-registry-bridge
+        with:
+          # DOPPLER_TOKEN_PRD, NOT the generic DOPPLER_TOKEN: the bridge reads REGISTRY_PUSH_* +
+          # ZOT_PUSH_* from the `prd` ROOT config, while DOPPLER_TOKEN is scoped to the
+          # `prd_terraform` branch and cannot read it. This is also why DOPPLER_TOKEN_PRD had to
+          # be wired into this workflow at all — it was referenced zero times here before #7277,
+          # and `secrets: inherit` does not apply because this is not a reusable-workflow call.
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_PRD }}
+          # Kept in step with reusable-release.yml's invocation; both are SHA-pinned.
+          cloudflared-version: "2026.5.0"
+          cloudflared-sha256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+
+      - name: Restore production's pinned image set from GHCR
+        # NO `continue-on-error`. This is the step that ends the empty-store window; a
+        # best-effort restore whose failure does not fail the job would leave the window open
+        # while the run reported green.
+        env:
+          DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
+          GH_TOKEN_FOR_ENGINE: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # `set +e` is REQUIRED and `set -uo pipefail` is NOT a substitute. A run: block with no
+          # `shell:` key executes under `bash --noprofile --norc -eo pipefail {0}` — errexit is
+          # ALREADY ON, and `set -uo pipefail` only ADDS flags. Measured: `bash -e -c 'set -uo
+          # pipefail; false; echo REACHED'` prints nothing and exits 1.
+          #
+          # Without this, the engine's non-zero exit killed the step AT the invocation: `rc=$?`
+          # never ran, the exit-3 retry never happened, and all six ::error:: arms below were
+          # DEAD CODE — on the one surface where the store is already empty. The operator got a
+          # bare "Process completed with exit code 3" while the Restore summary claimed an
+          # ::error:: had named their next action. Caught at review.
+          set +e
+          set -uo pipefail
+          ZOT_PUSH_USER=$(doppler secrets get ZOT_PUSH_USER -p soleur -c prd --plain) || ZOT_PUSH_USER=""
+          ZOT_PUSH_TOKEN=$(doppler secrets get ZOT_PUSH_TOKEN -p soleur -c prd --plain) || ZOT_PUSH_TOKEN=""
+          if [[ -z "$ZOT_PUSH_USER" || -z "$ZOT_PUSH_TOKEN" ]]; then
+            echo "::error::registry-store-restore ABORT: the sink credentials could not be read from Doppler (soleur/prd). The store is EMPTY and this job cannot refill it. Fix the credential and re-run this job — the restore engine is resumable."
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "$ZOT_PUSH_TOKEN"
+          export ZOT_PUSH_USER ZOT_PUSH_TOKEN
+          # Explicit, so the engine authenticates itself rather than inheriting whatever the
+          # bridge action happened to leave in the ambient keychain.
+          export GHCR_USER="${GITHUB_ACTOR}" GHCR_TOKEN="${GH_TOKEN_FOR_ENGINE}"
+
+          # BOUNDED RETRY ON EXIT 3 ONLY. D11 proves the rebuilt HOST checked in; it does not
+          # prove the Cloudflare Tunnel route has re-converged onto the replaced origin. That
+          # edge is origin-relative and resolved by whichever connector replica answers, and
+          # model.c4 records a 2026-08-03 case (#7242) where Access admitted the request while
+          # the origin was not serving. So the first attempt after a host replace is EXPECTED to
+          # be able to fail on convergence timing, and a single-shot fail-loud step would report
+          # a false "restore broken".
+          #
+          # Only exit 3 retries. 2/4/5/6 are source, correctness or authorisation faults that a
+          # retry cannot clear — retrying them would only burn the window.
+          attempt=1
+          max=6
+          rc=0
+          while (( attempt <= max )); do
+            bash "${GITHUB_WORKSPACE}/scripts/registry-restore-from-ghcr.sh" \
+              --target 127.0.0.1:5000 \
+              --tags-from "${RUNNER_TEMP}/pins/restore-pins.json"
+            rc=$?
+            if (( rc != 3 )); then break; fi
+            if (( attempt == max )); then
+              # No sleep after the LAST attempt: it buys nothing and delays the exit-3
+              # ::error:: by two minutes while the store sits empty.
+              attempt=$(( attempt + 1 ))
+              break
+            fi
+            echo "::notice::restore attempt ${attempt}/${max} hit exit 3 (sink unavailable) — the tunnel may still be re-converging onto the replaced origin. Backing off."
+            sleep $(( attempt * 20 ))
+            attempt=$(( attempt + 1 ))
+          done
+
+          # One ::error:: per enumerated code, each naming the operator action. Six enumerated
+          # exit codes consumed as a single boolean would be a contract nobody can act on.
+          case "$rc" in
+            0) echo "restore: production's full required pin set is present and blob-verified in the rebuilt store." ;;
+            2) echo "::error::restore FAILED exit 2 (SOURCE unavailable) — GHCR could not be read, so there is nothing to restore from. The store is EMPTY. Check the job's 'packages: read' permission and GHCR's status; this is NOT proof the images were deleted." ;;
+            3) echo "::error::restore FAILED exit 3 (SINK unavailable) after ${max} attempts — the rebuilt registry did not accept the write and the tunnel did not converge within the backoff. The store is EMPTY. Verify the registry host is serving, then re-run this job." ;;
+            4) echo "::error::restore FAILED exit 4 (VERIFICATION mismatch) — images were copied but a digest did not match, a blob is missing, or a signature is absent. The store contents are NOT trustworthy. Do not deploy; re-run this job and read the per-entry lines above." ;;
+            # DO NOT reinstate "rotate ZOT_PUSH_*" here. This annotation is the first thing the
+            # operator reads, and rotating is the one action that makes this PERMANENT:
+            # /etc/zot/htpasswd is baked ONCE at boot from the ISOLATED soleur-registry/prd
+            # config, so a hand-rotation of soleur/prd desyncs CI from a host that will not
+            # re-read anything until it is replaced. The runbook was corrected first and this
+            # string was left behind — which is worse than never fixing either, because the
+            # runbook is the document the annotation is supposed to route people INTO.
+            5) echo "::error::restore FAILED exit 5 (CREDENTIAL unusable) — the sink rejected the credential, or it was unreadable. Retrying will not clear this. Do NOT rotate ZOT_PUSH_* as a first response: /etc/zot/htpasswd is baked once at boot from the ISOLATED soleur-registry/prd config, so rotating converts a possibly-transient rejection into a guaranteed one until the host is replaced. MEASURE FIRST, no SSH: 'doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_ZOT_DISK', then read htpasswd_push_matches on the NEWEST boot_id. Follow the runbook section 'If the sink rejects the credential'." ;;
+            6) echo "::error::restore FAILED exit 6 (COULD NOT CLASSIFY) — the engine hit a failure it could not name. Read the crane stderr in the per-entry line above before acting; do not assume the images are absent." ;;
+            *) echo "::error::restore FAILED with an unenumerated exit ${rc}. Every exit code of the restore engine is supposed to be enumerated, so this is itself a defect worth filing alongside the recovery." ;;
+          esac
+          exit "$rc"
+
+      - name: Tear down the tunnel bridge
+        if: always()
+        # cf-tunnel-registry-bridge's own description says "Setup only; caller must add an
+        # if:always() teardown." The recut job honours that for its throwaway; this job did not.
+        run: docker logout 127.0.0.1:5000 >/dev/null 2>&1 || true
+
+      - name: Restore summary
+        if: always()
+        env:
+          RESTORE_RESULT: ${{ job.status }}
+        run: |
+          {
+            echo "## registry store restore"
+            echo ""
+            # Branched on the OUTCOME, and emitted HERE rather than in the recut job's summary,
+            # because this is the only place the outcome exists — the recut job runs first.
+            case "$RESTORE_RESULT" in
+              success)
+                echo "✅ The empty-store window is **closed**. Production's pinned image set was re-materialised from GHCR and every reference was blob-verified (not merely manifest-checked)."
+                ;;
+              cancelled)
+                echo "⚠️ The restore was **cancelled**. The store may be partially populated, which is worse than empty: tag lookups will succeed for some refs and fail for others. Re-run this job — the engine is resumable and a second pass over an already-restored target is a clean no-op."
+                ;;
+              *)
+                echo "🛑 The restore **failed** and the store is empty or partial. No host can pull an image until it is refilled. The step above emitted one \`::error::\` naming the specific exit code and its operator action; the runbook's failure table carries one row per code."
+                ;;
+            esac
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Selected by `-f apply_target=git-data-host-replace` (#6242, ADR-103). git-data.tf +
   # git-data-luks.tf + network.tf resources are OPERATOR_APPLIED_EXCLUSIONS (ADR-068) —
@@ -2449,6 +3099,13 @@ jobs:
         # reads the STRUCTURED plan JSON and ABORTS unless the plan is EXACTLY the scoped recreate.
         run: |
           set -uo pipefail
+          # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
+          # bare run: block as `bash -e {0}`, so errexit is INHERITED and `set -uo pipefail`
+          # cannot clear it. Without this the step died AT the doppler line on a plan failure
+          # and both `rc=$?` and the `::error::` below were unreachable. The handler still
+          # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
+          # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
+          set +e
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -replace='hcloud_server.git_data' \

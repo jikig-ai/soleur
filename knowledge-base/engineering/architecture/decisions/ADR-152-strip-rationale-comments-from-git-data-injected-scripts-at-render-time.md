@@ -256,6 +256,14 @@ byte-exact measurement. The TS model is explicitly not that (node zlib vs Go zli
 BUDGET, never equality), so the registry has no byte-exact CI measurement today. At 9,072 B
 against 32,768 that is acceptable on margin; it is a gap, not a solved problem.
 
+> **CLOSED 2026-08-06 (#7299).** `apps/web-platform/infra/registry-userdata-budget.sh` is now
+> that byte-exact measurement for the registry, and it runs in CI. Read the paragraph above as
+> history. Note how the gap closed, because it is the cautionary half: the script shipped in
+> #7283 measuring the render WITHOUT the strip, reported a phantom 3,636 B breach, and #7299 was
+> filed against that reading as an outage. Its first fix then reproduced the defect named in the
+> paragraph below — it asserted the expression was DECLARED and not that it was APPLIED, which
+> review caught before merge. Current measurement: 9,408 B stored, 23,360 B of headroom.
+
 Extraction also does not prove the strip is APPLIED. Reading the expression out of the `.tf`
 says nothing about whether `user_data` wraps `templatefile()` in it — measured: unwiring the
 `replace()` and leaving the local orphaned kept the whole suite green while the render returned

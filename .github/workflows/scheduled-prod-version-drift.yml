@@ -94,6 +94,16 @@ jobs:
         id: check
         run: |
           set -uo pipefail
+          # `set +e` is REQUIRED; `set -uo pipefail` is NOT a substitute. Actions runs a `run:`
+          # block with no `shell:` key under `bash -e {0}` — errexit is ALREADY ON and
+          # `set -uo pipefail` only ADDS flags, it cannot clear one. Without this, the capture
+          # below aborts the shell AT that line on exactly the two verdicts that alert
+          # (1 = DRIFT_SUSTAINED, 2 = CHECK_ERROR): rc is never read, the run-log echo never
+          # runs, $GITHUB_OUTPUT is never written, and every annotation below is dead code.
+          # Measured: 8/8 scheduled runs failed emitting zero output (#7304). The quiet verdicts
+          # (0 = CLEAN / DRIFT_PENDING) passed unchanged throughout — which is why a fix
+          # verified only on the clean path proves nothing.
+          set +e
 
           strip_log_injection() {
             printf '%s' "$1" | LC_ALL=C tr -d '\000-\010\012-\037\177' \
@@ -157,6 +167,19 @@ jobs:
           health_url_safe="$(strip_log_injection "$health_url")"
           missing_shas_safe="$(strip_log_injection "$missing_shas")"
 
+          # RE-ARM before the output write, closing the bracket opened at the top of the body.
+          #
+          # Without this, the `set +e` above spans the write too, so a failed append (ENOSPC)
+          # would fall through to `exit 0` and leave outcome='success' with EMPTY outputs —
+          # re-entering the empty-string coercion fail-open through a different door, since
+          # `'' == '0'` is TRUE and the close-the-check-error-issue step would then post
+          # "the checker is evaluating again (verdict: )". That is the exact operator-facing
+          # falsehood the outcome conjunct was added to prevent, and body-wide scope weakened
+          # precisely the discrimination it depends on. Bracketing here also brings this file
+          # into line with ADR-170's own Decision wording (`set +e` … `set -e`) and with every
+          # sibling site in this PR, which all re-arm before their output write.
+          set -e
+
           {
             echo "exit_code=${rc}"
             echo "verdict=${verdict_safe}"
@@ -177,9 +200,27 @@ jobs:
           # Always succeed: the verdict is carried by the outputs above.
           exit 0
 
+      # EVERY consumer of steps.check.outputs LEADS WITH `steps.check.outcome == 'success'`, and
+      # that conjunct is load-bearing rather than defensive. Actions `==` is LOOSE: when the two
+      # operands differ in type both are cast to Number, and an UNSET step output is `''`, which
+      # casts to 0 — so `'' == '0'` is TRUE. A step that dies before writing $GITHUB_OUTPUT
+      # therefore satisfies every `== '0'` gate downstream.
+      #
+      # This is not theoretical. Measured on run 31054501973 (a dead tick under the #7304 errexit
+      # bug): `File or update the check-error issue` (gated `!= '0' && != '1'`) was SKIPPED while
+      # its exact logical complement `Close the check-error issue …` (gated `== '0' || == '1'`)
+      # RAN. The workflow was one open issue away from auto-closing the very issue reporting that
+      # the checker was broken, posting "the checker is evaluating again (verdict: )" with an
+      # empty verdict — an operator-facing message naming a recovery the job never measured
+      # (AP-021 / ADR-166).
+      #
+      # `set +e` does NOT fix this: it is a separate defect that survives the errexit repair and
+      # re-arms on any future abort (OOM, job timeout, a `set -u` trip). The outcome conjunct is
+      # what discriminates "the step ran and measured 0" from "the step never ran". The heartbeat
+      # step already led with exactly this conjunct; its six consumers did not. Pinned by B17.
       - name: File or update the drift issue
         id: issue
-        if: ${{ !cancelled() && steps.check.outputs.exit_code == '1' }}
+        if: ${{ !cancelled() && steps.check.outcome == 'success' && steps.check.outputs.exit_code == '1' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -191,6 +232,10 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
+          # See the `check` step: Actions runs this under `bash -e {0}`, so `set -uo pipefail`
+          # does NOT clear errexit. Without this the `list_rc=$?` handler below — which exists
+          # precisely so a failed lookup is not read as "nothing found" — is unreachable code.
+          set +e
 
           TITLE="[ci/prod-version-drift] Production is serving a stale build"
 
@@ -245,10 +290,16 @@ jobs:
             fi
             echo "issue_number=${EXISTING}" >> "$GITHUB_OUTPUT"
           else
-            # NEVER echo success unconditionally: this step runs `set -uo pipefail` with no -e, so
-            # an unchecked create falls through to a line asserting an issue exists when none
+            # NEVER echo success unconditionally: with the `set +e` at the top of this body, an
+            # unchecked create would fall through to a line asserting an issue exists when none
             # does — and the email downstream then tells the operator a tracking issue was
             # opened. Same guard, same reason, as scheduled-terraform-drift.yml.
+            #
+            # This comment USED TO SAY the step "runs `set -uo pipefail` with no -e". That was
+            # false: `-e` was never omitted, it is INHERITED from `bash -e {0}` and
+            # `set -uo pipefail` cannot clear it (#7304). The guard was right; its stated reason
+            # was wrong, and the errexit this branch was written to survive was in fact killing
+            # the step upstream. The `set +e` above is what makes the premise true.
             if gh issue create --repo "$GH_REPO" --title "$TITLE" --body "$BODY" \
                  --label "ci/prod-version-drift" --label "action-required" \
                  --label "observability" --label "priority/p0-critical"; then
@@ -268,7 +319,7 @@ jobs:
       # The plan lists these as two independent channels; this is what makes that true.
       - name: Email ops on first detection
         id: notify
-        if: ${{ !cancelled() && steps.check.outputs.exit_code == '1' && steps.issue.outputs.first_detection != 'false' }}
+        if: ${{ !cancelled() && steps.check.outcome == 'success' && steps.check.outputs.exit_code == '1' && steps.issue.outputs.first_detection != 'false' }}
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           DETAIL: ${{ steps.check.outputs.detail }}
@@ -276,6 +327,12 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
+          # See the `check` step: Actions runs this under `bash -e {0}`, so `set -uo pipefail`
+          # does NOT clear errexit. This body reads no `$?`, so the repo-wide lint gate can never
+          # fire on it — B15 is what keeps it clear. Concretely: a `jq -n` failure would abort the
+          # step silently, where clearing errexit lets the empty payload reach the HTTP_CODE
+          # branch that names the channel which did not deliver.
+          set +e
 
           # INLINED curl, deliberately NOT ./.github/actions/notify-ops-email. That composite
           # declares no `outputs:` block at all, so steps.notify.outputs.delivered would be
@@ -322,7 +379,7 @@ jobs:
       # reachable on a clean tick) while removing the silent class.
       - name: File or update the check-error issue
         id: issue_error
-        if: ${{ !cancelled() && steps.check.outputs.exit_code != '0' && steps.check.outputs.exit_code != '1' }}
+        if: ${{ !cancelled() && steps.check.outcome == 'success' && steps.check.outputs.exit_code != '0' && steps.check.outputs.exit_code != '1' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -332,6 +389,9 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
+          # See the `check` step: Actions runs this under `bash -e {0}`, so `set -uo pipefail`
+          # does NOT clear errexit. Without this the `list_rc=$?` handler below is unreachable.
+          set +e
 
           # A DURABLE issue for CHECK_ERROR, deliberately unlike scheduled-zot-restart-loop.yml's
           # TRANSIENT class (which files none) — and NOT because this is zot's PRODUCER-SILENT
@@ -399,7 +459,7 @@ jobs:
       # all for exactly that reason. `!= 'false'` keeps the email independent of the GitHub API.
       - name: Email ops when the check cannot evaluate
         id: notify_error
-        if: ${{ !cancelled() && steps.check.outputs.exit_code != '0' && steps.check.outputs.exit_code != '1' && steps.issue_error.outputs.first_detection != 'false' }}
+        if: ${{ !cancelled() && steps.check.outcome == 'success' && steps.check.outputs.exit_code != '0' && steps.check.outputs.exit_code != '1' && steps.issue_error.outputs.first_detection != 'false' }}
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           REASON: ${{ steps.check.outputs.reason }}
@@ -407,6 +467,10 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
+          # See the `check` step: Actions runs this under `bash -e {0}`, so `set -uo pipefail`
+          # does NOT clear errexit. This body reads no `$?`, so the repo-wide lint gate can never
+          # fire on it — B15 is what keeps it clear.
+          set +e
 
           if [[ -z "${RESEND_API_KEY:-}" ]]; then
             echo "::error::RESEND_API_KEY is not set — nobody has been emailed that the drift check is broken."
@@ -457,13 +521,16 @@ jobs:
       # Filing was already per-class (title-scoped search); only closing was label-wide. Scoping
       # the close by title too also stops a human-applied label from being auto-closed.
       - name: Close the drift issue when production is CLEAN
-        if: ${{ !cancelled() && steps.check.outputs.verdict == 'CLEAN' }}
+        if: ${{ !cancelled() && steps.check.outcome == 'success' && steps.check.outputs.verdict == 'CLEAN' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
+          # See the `check` step: Actions runs this under `bash -e {0}`, so `set -uo pipefail`
+          # does NOT clear errexit. Without this the `list_rc=$?` handler below is unreachable.
+          set +e
 
           # WITHOUT THIS STEP the "one issue per episode" property is fiction: the issue would
           # never close, the standing signal would become permanent noise, and the operator would
@@ -494,7 +561,7 @@ jobs:
           done
 
       - name: Close the check-error issue once the checker can evaluate again
-        if: ${{ !cancelled() && (steps.check.outputs.exit_code == '0' || steps.check.outputs.exit_code == '1') }}
+        if: ${{ !cancelled() && steps.check.outcome == 'success' && (steps.check.outputs.exit_code == '0' || steps.check.outputs.exit_code == '1') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -502,6 +569,9 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
+          # See the `check` step: Actions runs this under `bash -e {0}`, so `set -uo pipefail`
+          # does NOT clear errexit. Without this the `list_rc=$?` handler below is unreachable.
+          set +e
 
           # `-L 100`: `gh issue list --search` caps at 30 rows without it, and this call
           # ENUMERATES (.[].number) rather than probing existence — a truncated page would leave
@@ -557,10 +627,20 @@ jobs:
           # dedupe branch writes 'false', so a step that DIES still leaves it empty -> error.
           #
           # ALLOWLIST, not denylist. The FIRST conjunct is steps.check.OUTCOME: with `exit 0` at
-          # the end of the body and no `-e`, that is 'failure' only on a runner-level death, and
-          # it earns its place on the AFTER-write ordering — the step writes exit_code=0 and is
-          # then killed (job timeout, OOM). The before-write death #7138 describes is already
-          # covered by the allowlist, since an empty output matches no enumerated value.
+          # the end of the body AND the `set +e` at its top, that is 'failure' only on a
+          # runner-level death, and it earns its place on the AFTER-write ordering — the step
+          # writes exit_code=0 and is then killed (job timeout, OOM). The before-write death
+          # #7138 describes is already covered by the allowlist, since an empty output matches no
+          # enumerated value.
+          #
+          # This comment USED TO SAY "and no `-e`". That premise was false and it is THIS
+          # expression's stated justification, so the expression meant something other than what
+          # it claimed: `-e` is inherited from `bash -e {0}`, so before #7304's fix the check
+          # step died at its capture on every DRIFT_SUSTAINED / CHECK_ERROR tick and `outcome`
+          # read 'failure' for the ordinary alerting case — not just on runner-level death. This
+          # monitor therefore checked in `status=error` on all 8 measured runs, telling the
+          # operator "the monitor is broken" when what had been measured was drift (an AP-021
+          # violation, ADR-166). The `set +e` is what makes this conjunct mean what it says.
           status: >-
             ${{ steps.check.outcome == 'success'
                 && (steps.check.outputs.exit_code == '0'

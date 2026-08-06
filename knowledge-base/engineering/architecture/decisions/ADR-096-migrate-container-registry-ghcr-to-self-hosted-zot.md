@@ -709,8 +709,28 @@ heartbeat-**transition** liveness poll. Operator runbook:
 
 **COLD VEHICLE — mandatory pre-first-fire re-verification.** The dispatch shipped with **zero live
 executions**: no recut was scheduled when it merged, so its live-API surfaces (the two Hetzner
-probes, the Sentry pull-path query, the Better Stack heartbeat read) first meet production at the
-single highest-stakes moment — an irreversible destroy of the store. The guard *logic* is not cold
+probes, ~~the Sentry pull-path query~~, the Better Stack heartbeat read) first meet production at the
+single highest-stakes moment — an irreversible destroy of the store.
+
+> **AMENDED 2026-08-05 (#7277).** The Sentry pull-path query is struck because **that surface no
+> longer exists**: the D10 gate reads no Sentry signal at all. Leaving it listed would name a live
+> surface that is gone, and the cold-vehicle checklist would then be re-verifying nothing.
+>
+> The change does not shrink the cold surface — it **replaces and widens** it. Four new live
+> surfaces first meet production at the same high-stakes moment and are equally cold:
+>
+> 1. **GHCR-read-from-CI under `packages: read`** — never exercised from a runner. A workstation
+>    probe does not establish runner capability (different principal, different scopes). Its
+>    failure mode is a safe abort, not an unsafe pass: an insufficiently-scoped token yields
+>    `MANIFEST_UNKNOWN` → `NOTFOUND` → abort.
+> 2. **The throwaway-zot rehearsal** — starting a pinned zot in the runner, generating an
+>    htpasswd, and restoring the full pin set into it. Wall-clock and peak runner disk for the
+>    full set are **unmeasured** (Phase 0.4 residual).
+> 3. **The `/health` parse** — `version` + `build_sha` from `APP_DOMAIN_BASE`.
+> 4. **The post-destroy real restore** into a fresh prod zot over the CF Tunnel — the highest-
+>    stakes of the four, because it runs *after* the irreversible step.
+>
+> The runbook's cold-vehicle section is rewritten around these. The guard *logic* is not cold
 (≈22 synthesized gate fixtures including the exact `registry-host-replace` footgun case, a tested
 heartbeat poller, and cross-gate divergence + allow-set⇄`-target` parity tests), but the live surface
 is. **Before the first-ever fire, all five checks in the runbook's "Cold-vehicle re-verification"
@@ -721,7 +741,18 @@ immediately before a planned release so the empty-store paging window is bounded
 be shown to work, fix it and re-verify — do **not** proceed with a degraded gate. A gate that cannot
 fail is worse than no gate, because it is read as evidence.
 
-**Pull-path health gate reads SENTRY, not Better Stack (measured).** The gate was specified against
+**AMENDED 2026-08-05 (#7277) — the authorization condition below was REPLACED, not repaired.**
+ADR-169 supersedes the authorization condition this section records. In one sentence: *a recut is
+authorized only when CI has just proven, by executing it, that every image reference production
+depends on can be re-materialised into an empty registry from GHCR.* The old condition ("GHCR
+covers the empty-store window") could not be repaired because #7071 retracted its premise and its
+most direct operand went permanently dark; the new one never claims the window is covered, only
+that it is **ended** by a restore that has just succeeded in rehearsal and is then executed for
+real by a chained job. The governing rule it introduces — *a gate on an irreversible destroy may
+not depend on the component whose failure motivates it* — is in ADR-169. The paragraph immediately
+below is retained as the historical record of the superseded design.
+
+~~**Pull-path health gate reads SENTRY, not Better Stack (measured).**~~ The gate was specified against
 `betterstack-query.sh --grep ghcr-fallback`. That query can never return a row: `registry_pull_event`
 emits to the Sentry store API and to **web**-host journald, while Better Stack's only ingested source
 here is the **inngest** vector feed. Measured, not inferred — `--since 720h` greps for both
@@ -742,12 +773,33 @@ silently wiped) and **darks the registry**. Forgetting the `-replace` on the vol
 effect. The refuse is the *safe* failure (it never mounts plaintext / never certifies a false-green
 posture), but it takes zot down — the only correct first apply is the three-way recut on a fresh volume.
 
-**Escrow deliberately omitted.** Unlike `workspaces_luks` (#6649 R2 LUKS-header escrow), there is **no**
+~~**Escrow deliberately omitted.** Unlike `workspaces_luks` (#6649 R2 LUKS-header escrow), there is **no**
 header escrow and **no** dedicated at-rest monitor here: passphrase loss ⇒ recreate + re-fill from
-GHCR, so escrow buys nothing for a disposable, born-fresh store (matches `git_data_luks`). Rotation is
+GHCR, so escrow buys nothing for a disposable, born-fresh store (matches `git_data_luks`).~~ Rotation is
 therefore a volume **recut**, not a bare host replace (`random_password.registry_luks` is deliberately
 absent from the host's `replace_triggered_by`, or cloud-init would luksOpen the old-key volume with the
 new key and FATAL).
+
+> **STRUCK 2026-08-05 (#7277) — and deliberately NOT repaired.** The struck sentences rest on
+> *"passphrase loss ⇒ recreate + re-fill from GHCR"*, which is the same premise #7071 retracted and
+> which this section already marks as retracted elsewhere. It had never been marked here, so the
+> escrow-omission argument was still standing on it.
+>
+> **Why the conclusion is not repaired in this PR.** ADR-169 makes "re-fill from GHCR" a *tested
+> capability for CI* rather than a retracted premise, which looks like it repairs the argument. It
+> does not, yet: at the time of writing that capability has **never once succeeded against
+> production** — only against a throwaway registry in a runner. Rebuilding an authorising premise
+> on an untested capability is precisely the defect #7277 exists to fix, so doing it here would
+> repeat it one paragraph away from where it is named.
+>
+> The escrow-omission conclusion may therefore still be correct, but it currently stands on
+> whatever independent ground it has, not on this reasoning. **Repair is contingent on the first
+> successful real restore against production** (the chained `registry_store_restore` job). Record
+> that run here when it happens.
+>
+> Note also what the recut now costs that this paragraph did not price: the restore carries only
+> the `required` pin set, so a recut leaves no older image in the store to roll back to until a
+> wider restore is run.
 <!-- lint-infra-ignore end -->
 
 ## Alternatives Considered
@@ -791,9 +843,17 @@ were sitting unadopted.
 > not production. `zot-registry.tf` resources are `OPERATOR_APPLIED_EXCLUSIONS`, so merging
 > this is inert by construction: **the live registry still runs v2.1.2, and both panic fixes
 > remain unadopted in production**, until the `registry-host-replace` apply fires. That apply
-> is blocked on #7277 (the recut gate has no valid PASS condition), #7278, #6929, #7280 (the
-> rendered `user_data` is over Hetzner's 32,768 B cap), and Hetzner `cx23` stock. Tracked in
-> #7287. This paragraph stays true if the apply never fires — which is the point of writing
+> is blocked on #7277 (the recut gate has no valid PASS condition), #7278, #6929, and Hetzner
+> `cx23` stock. Tracked in #7287.
+>
+> **CORRECTED 2026-08-06 (#7299): the byte cap was never a blocker and is struck from that
+> list.** It read "#7280 (the rendered `user_data` is over Hetzner's 32,768 B cap)". The
+> measurement behind that was wrong, not the payload: `registry-userdata-budget.sh` rendered
+> `templatefile(...)` without the `replace(..., local.registry_rationale_strip, "")` that
+> `zot-registry.tf` applies, so it measured 36,404 B for a payload Hetzner never receives. The
+> stored artifact is **9,408 B against the 32,768 B cap — 23,360 B of headroom**. #7280 shipped
+> the strip and closed the real breach; the reading did not move because the script was never
+> taught to apply it. This paragraph stays true if the apply never fires — which is the point of writing
 > it: ADR-096 is what a reader consults to learn what the registry actually runs.
 
 **Decision.** Digest-pinning stays — it is the integrity guarantee and is not in question.
@@ -857,8 +917,14 @@ subject to every gate the forward leg is:
 1. **Stock.** `stock_preflight_gate` is ABORTing today. If capacity blocked the apply for
    weeks, a same-day revert may be un-orderable. **Firing the apply is one-way with no
    capacity reservation**, and that must be accepted before it is fired.
-2. **The byte cap.** The rendered `user_data` is over Hetzner's hard 32,768 B cap, so the
-   revert strands the registry for the same arithmetic reason the forward leg does. This was
-   omitted from the first draft of this amendment, which named only the stock gate.
+2. **~~The byte cap.~~ RETRACTED 2026-08-06 (#7299) — this constraint does not exist.** It read
+   "the rendered `user_data` is over Hetzner's hard 32,768 B cap, so the revert strands the
+   registry for the same arithmetic reason the forward leg does." That was a phantom: the
+   budget script measured the render WITHOUT the comment strip `zot-registry.tf` applies, so it
+   reported 36,404 B for a payload no host is given. Measured on the fixed script, the stored
+   `user_data` is **9,408 B — 23,360 B under cap**. The byte cap constrains neither the forward
+   leg nor the revert. Left in place, struck rather than deleted, because this is a ROLLBACK
+   procedure: an operator reading it mid-incident would otherwise conclude a revert is
+   unavailable, which is precisely the cost a wrong measurement imposes.
 3. **#7277.** The recut gate has no valid PASS condition, and it sits on the same path — it
    is the blocker the plan lists first, and it was also missing here.

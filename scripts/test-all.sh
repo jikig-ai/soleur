@@ -349,6 +349,13 @@ if want_scripts; then
   # alert path that had never once delivered, because `set -u` killed it before the curl.
   run_suite "scripts/lint-workflow-step-env-refs" bash scripts/lint-workflow-step-env-refs.test.sh
   run_suite "scripts/lint-workflow-step-env-refs-live" python3 scripts/lint-workflow-step-env-refs.py
+  # ADR-170. Both halves are required: the unit suite proves the RULE is right (its fixtures are
+  # the executable spec), the live scan proves the TREE is clean. Either alone is satisfiable by
+  # a detector that has stopped detecting -- a broken linter and a clean repo emit identical
+  # output, which is why the unit suite carries a verify-the-verifier case that re-introduces
+  # the real defect into a tree copy.
+  run_suite "scripts/lint-workflow-errexit-capture" bash scripts/lint-workflow-errexit-capture.test.sh
+  run_suite "scripts/lint-workflow-errexit-capture-live" python3 scripts/lint-workflow-errexit-capture.py
   # ADR-140: Layer A encryption-posture detector (the mechanical resolver behind
   # the "encryption at rest + in transit" design-time gate). TS-1..8,15..17 +
   # the MB-1..MB-12 mutation battery (fixture-isolated, not suite-pass-count).
@@ -558,9 +565,20 @@ if want_scripts; then
   # fresh RAW device and luksFormats it. A preserved volume is the footgun that darks the
   # registry. Its suite also asserts the two gates DISAGREE on the same fixtures.
   run_suite "tests/scripts/registry-luks-recut-gate" bash tests/scripts/test-registry-luks-recut-gate.sh
-  # D10 pre-destroy pull-path health gate (#6929) — refuses to destroy the zot store while the
-  # GHCR fallback that covers its absence is itself degraded. Leads with a positive control.
+  # D10 pre-destroy authorization gate (#6929 / #7277) — authorizes a destroy only on a restore
+  # CI has just executed into an empty registry. Leads with a positive control.
   run_suite "tests/scripts/registry-pull-path-health" bash tests/scripts/test-registry-pull-path-health.sh
+  # The mutation battery for BOTH suites above. Registered, not ad-hoc: its previous incarnations
+  # lived in a session transcript, so their "15/15 caught" protected nothing the next day — and
+  # when it was finally committed it found 15 of its mutations surviving, including a seam that
+  # could replace the pass condition itself. It sandboxes its own copies of both SUTs, so it
+  # neither mutates the worktree nor depends on suite ordering here (#7277).
+  run_suite "tests/scripts/registry-gate-mutation-battery" bash tests/scripts/test-registry-gate-mutation-battery.sh
+  # Registered explicitly, next to its D10 sibling. Nothing auto-discovers tests/scripts/: this
+  # file's *.test.sh glob cannot match the `test-*` prefix, and scripts/lint-orphan-test-suites.sh
+  # covers scripts/*.test.sh only. An unregistered suite here runs in ZERO runners and is silent
+  # and green (#3366).
+  run_suite "tests/scripts/registry-restore-from-ghcr" bash tests/scripts/test-registry-restore-from-ghcr.sh
   # D11 post-apply liveness poller (#6929) — requires a heartbeat TRANSITION, since the monitor
   # reports the dead host's residual `up` for ~90s and exposes no last_ping_at.
   run_suite "tests/scripts/registry-heartbeat-poll" bash tests/scripts/test-registry-heartbeat-poll.sh
