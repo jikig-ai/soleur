@@ -56,7 +56,7 @@ alloc_spools() {
 }
 
 die() { echo "domain-model-drift: $*" >&2; exit 2; }
-usage() { echo "usage: domain-model-drift.sh <extract|drift|write-row> [--repo <path>] [--register <path>] [--anchor <a>] [--statement <s>]" >&2; exit 2; }
+usage() { echo "usage: domain-model-drift.sh <extract|drift|write-row|init> [--repo <path>] [--register <path>] [--anchor <a>] [--statement <s>]" >&2; exit 2; }
 
 # --- arg parsing (--terminated, quoted; no flag can arrive from file content) ---
 MODE="${1:-}"; shift || true
@@ -234,6 +234,69 @@ emit_drift_report() {
 # to `## Auto-inferred (unreviewed)` via an atomic whole-file rewrite.
 # Exit: 0 = written (or deduped no-op), 2 = error/abort, 3 = secret-refuse.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# init: seed an absent register with the canonical headings
+# ---------------------------------------------------------------------------
+#
+# WHY THIS IS A SEPARATE SUBCOMMAND. `drift` and `write-row` both `realpath -e`
+# the register and die when it does not resolve. Those guards are CORRECT — they
+# must never operate on a path they cannot resolve — and they are deliberately
+# left untouched. But they also mean `/soleur:sync domain-model` is dead on a
+# fresh repo, which has no register and nothing to bootstrap it. `init` is the
+# one command allowed to CREATE.
+#
+# The file shape lives here rather than in sync.md because `write-row` depends on
+# the exact heading text and on the Auto-inferred table separator to find its
+# append target. A register with the right headings but no separator is one
+# write-row refuses to touch, so the two must be authored together.
+init_register() {
+  local reg="$REGISTER"
+  [[ -n "$reg" ]] || die "init needs --register"
+
+  # `-m` (not `-e`): the whole point is that the file may not exist yet. It still
+  # canonicalizes `..` and symlinks, so the confinement check below is not
+  # bypassable by a traversal in the argument.
+  reg="$(realpath -m -- "$reg" 2>/dev/null)" || die "--register does not canonicalize"
+  case "$reg" in "$REPO"/*) ;; *) die "--register must resolve under --repo" ;; esac
+
+  # Idempotent: an existing register is a no-op success, so `all` dispatch can
+  # call init unconditionally on every run.
+  if [[ -e "$reg" ]]; then
+    [[ -f "$reg" ]] || die "--register exists and is not a regular file"
+    return 0
+  fi
+
+  mkdir -p -- "$(dirname -- "$reg")" || die "could not create the register's parent directory"
+
+  # Atomic create, mirroring write_row's temp-then-rename discipline.
+  local tmp; tmp="$(mktemp)"; _TMPFILES+=("$tmp")
+  cat > "$tmp" <<'REGISTER_TEMPLATE'
+# Domain Model & Business Rules Register
+
+> Seeded by `/soleur:sync domain-model`. The curated `## Business Rules` table is
+> maintained by hand; the `## Auto-inferred (unreviewed)` table is machine-appended
+> and is NEVER a source of truth.
+
+## Business Rules
+
+| ID | Rule | Statement | Source |
+|---|---|---|---|
+
+## Auto-inferred (unreviewed)
+
+> Rows proposed by `/soleur:sync domain-model`. This section is **machine-appended**
+> and is NEVER a source of truth. Promote a row to a curated rule by a deliberate
+> human edit: assign a `BR-*` id, refine the statement, and keep the source anchor
+> (the anchor is the dedup key, so a promoted row is never re-proposed). Do not
+> hand-edit the table shape.
+
+| Anchor | Candidate statement |
+|---|---|
+REGISTER_TEMPLATE
+
+  mv "$tmp" "$reg" || die "could not write the register"
+}
+
 write_row() {
   [[ -n "$ANCHOR" && -n "$STATEMENT" ]] || die "write-row needs --anchor and --statement"
   local reg="$REGISTER"
@@ -293,5 +356,6 @@ case "$MODE" in
   extract)   alloc_spools; emit_extract_json "$SPOOL_FACTS" "$SPOOL_BLIND" ;;
   drift)     alloc_spools; emit_drift_report ;;
   write-row) write_row ;;
+  init)      init_register ;;
   *) usage ;;
 esac
