@@ -995,11 +995,17 @@ It also does not make the replace *safe*. The live volume is still plaintext ext
 
 ## Amendment 2026-08-06 — the cold-vehicle checklist verified logic, never its live inputs
 
-Cold-vehicle item 3 named `APP_DOMAIN_BASE` as a value to confirm in Doppler. **That secret
-exists in no config of the `soleur` project** — measured across all 13. The item could never
-have passed as written, and nothing noticed because the checklist's other items exercise gate
-*logic*, which is hermetic and stays green regardless of whether the workflow's live inputs
-resolve.
+Cold-vehicle item 3 names the `/health` parse — "`version` + `build_sha` from
+`APP_DOMAIN_BASE`". That is the right *surface*, and it passes: curling the host and parsing
+both fields works today. The defect was never in this item's wording.
+
+What the checklist never verified is the **input that addresses** that surface. The D10 gate
+resolved it by reading a Doppler secret named `APP_DOMAIN_BASE` which **exists in NO config of
+the `soleur` project** — measured across all 13 — so the gate aborted before the parse item 3
+describes could ever run. (The "confirm it in Doppler" instruction lived in the *runbook*'s
+troubleshooting row, not here; an earlier draft of this amendment attributed the runbook's
+error to this ADR.) Nothing noticed because every other checklist item exercises gate *logic*,
+which is hermetic and stays green regardless of whether the workflow's live inputs resolve.
 
 The real provenance chain runs the other way:
 
@@ -1018,7 +1024,8 @@ DOPPLER SECRET"*. Two comments in the same dispatch's chain contradicted each ot
 correct one sat in the leg that actually pushes images. The knowledge was present and unlinked —
 which is the reusable lesson here, not the secret name.
 
-Cold-vehicle item 3 is superseded by the live-input check now in the runbook: run the derivation,
+Cold-vehicle item 3 is EXTENDED — not superseded; it remains a live cold surface and the
+runbook still lists it — by the live-input check now beside it: run the derivation,
 build the `/health` URL **from its output**, and assert a `200`. A hand-typed URL tests your
 typing, not the gate's input.
 

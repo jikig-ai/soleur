@@ -323,11 +323,25 @@ component independence held perfectly: the read touched neither prod zot nor the
 pipeline's failing half. The gate was still unfireable, aborting at PREPARE before reaching the
 destroy-guard, during exactly the incident it exists to recover from.
 
-**Extension.** An input that authorizes an irreversible destroy must come from a source that is
-(a) causal rather than a derived copy, and (b) present in the same artifact CI already checks
-out. Committed configuration satisfies both; a live credential store satisfies neither, because
-its absence is indistinguishable from a permission error and a copy can silently diverge from
-what was applied.
+**Extension, scoped to ADDRESSING inputs.** Separate the two kinds of input a gate consumes:
+
+- An **addressing input** selects *what gets measured* (which host's `/health`, which registry,
+  which tag set). It must be (a) causal rather than a derived copy, and (b) resolvable from the
+  artifact CI already checks out — so its absence cannot be confused with a permission error.
+- A **measurement** is *what that thing says*. It must be live, or the gate proves nothing.
+
+This scoping is load-bearing, and an earlier draft of this amendment got it wrong by omitting
+it. Stated unqualified — "an authorizing input must be present in the checkout, and a live
+credential store satisfies neither clause" — it condemns every predicate this ADR ADOPTED: A0
+reads production `/health` over HTTP, A1 reads GHCR under a credential, A2 rehearses against a
+live throwaway registry, A4 grades the sink credential at the Cloudflare Access edge. A1 is
+additionally the live credentialed read this ADR defends as load-bearing. A future reader
+applying the unscoped form would be obliged to reject the whole design.
+
+What the D10 defect actually showed is narrower and survives the scoping: the *addressing*
+input — which host defines the restore set — was read from a credential store, and the value it
+looked for existed in no config. Component independence held perfectly throughout, and the gate
+was still unfireable. So the component criterion was necessary and not sufficient.
 
 Applied here: the base domain now derives from `apps/web-platform/infra/variables.tf` — the
 variable Terraform actually applied — honouring `TF_VAR_app_domain_base` first so the value is
