@@ -113,6 +113,23 @@ agents, and a verify-the-negative sweep.
   reboot-forcing in-place update (`variables.tf` + the destroy-guard's `reboot_updates` counter).
   Recorded, not resolved.
 
+### Verify-the-negative sweep — result recorded, not assumed
+
+Six falsifiable absolute claims were probed against the repo; **all six CONFIRM, zero
+contradictions.** (1) No `zot-registry.tf` address appears in the merge-path `-target=` lists —
+and the lookalike `terraform_data.registry_insecure_config` is declared in `server.tf`, triggering
+on `sha256(local.docker_daemon_json)`, whose only registry input is `local.registry_endpoint`
+(the private IP), with no edge to `var.registry_server_type`. (2) `registry_server_type` already
+has a default; no new `variable` block. (3) The `templatefile(...)` call passes **12** keys and
+exactly **4** trace to `var.registry_server_type` — nothing missed. (4) `stock-preflight-gate.sh`
+reads `.change.after.server_type` and hardcodes nothing. (6) No test, `.tftest.hcl`, `.jq` or CI
+gate pins the default to `cx23`. (7)/(8) The store volume is not a separate C4 element, and
+`zotRegistry` is already in both view include-lists, so `views.c4` needs no edit.
+
+Claim (5) — the live `cax` / `cx33` stock readings — is correctly **NOT-APPLICABLE** to an
+offline sweep and was **not guessed**. It was instead verified directly against the Hetzner API
+during planning (`.server_types.available`, 3 samples) and is re-probed at Phase 0.1.
+
 ### Gates run
 
 Phase 4.6 (user-brand) PASS · 4.7 (observability, 5 fields) PASS · 4.8 (PAT-shaped) PASS ·
