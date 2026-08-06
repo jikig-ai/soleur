@@ -23,9 +23,11 @@ a person's name or email. Committed third-party PII is an Art. 17 erasure imposs
 
 > **0.1 and 0.6 were BLOCKING and are now RESOLVED** — the operator answered both on 2026-08-06 and
 > the answers **invert the plan's primary branch**. They are recorded below as established fact, not
-> as open questions. The plan body's `### Phase 0 — Preconditions` section carries the same six
-> ordinals; the two files had drifted (the plan was missing 0.1 entirely and its ordinals were
-> shifted by one) and are now reconciled.
+> as open questions. The plan body's `### Phase 0 — Preconditions` section carries the same seven
+> ordinals (0.1, 0.6, 0.2–0.5, 0.7); the two files had drifted (the plan was missing 0.1 entirely and
+> its ordinals were shifted by one) and are now reconciled. **Phases 1 and 2 were reconciled in the
+> same pass** — `tasks.md` ordinals now match the plan's, so a plan-side reference like R10's
+> "Phase 2.4" resolves to the same task in both files.
 
 - [x] 0.1 **RESOLVED 2026-08-06 — the answer inverts the plan.** The 2026-08-06 guided-onboarding
       session ran on the **operator's machine** under **JIKIGAI's Anthropic API key**, against tester
@@ -50,7 +52,8 @@ a person's name or email. Committed third-party PII is an Art. 17 erasure imposs
       contradictions found here are **untracked**, so file them fresh rather than assuming prior art.
 - [ ] 0.5 Confirm `docs/legal/data-processing-agreement.md` still does not exist. *(Verified absent
       2026-08-06.)* It stays absent: restoring the Tier 2 instrument does **not** publish anything,
-      and therefore does **not** fire the #4330 chain — see the plan's `## Escalation guidance`.
+      and therefore does **not** fire the #4330 chain — see the closing paragraph of the plan's
+      `## Overview`.
 - [ ] 0.7 **NEW, and the one remaining factual gate.** Establish what the 2026-08-06 session actually
       touched: did any **personal data** enter the operator's machine or egress to Anthropic under the
       Jikigai key, or was it confined to the tester's own code and configuration? Art. 28 bites only
@@ -66,30 +69,30 @@ a person's name or email. Committed third-party PII is an Art. 17 erasure imposs
 - [ ] 1.1 Invoke `soleur:legal:clo` to author
       `knowledge-base/legal/audits/<date>-alpha-tester-controller-processor-determination.md` in the
       `2026-06-29-inngest-prd-rls-reachability-gdpr-determination.md` format.
-- [ ] 1.2 Content: three postures; the *whose machine / whose key / whose purpose* test; the four
+- [ ] 1.1a Content: three postures; the *whose machine / whose key / whose purpose* test; the four
       Posture B triggers verbatim from the plan; the Posture C finding; Phase 0.2 evidence; why the
       beta-CRM LIA does not cover this; the role-collision note (Jikigai already processes Skouer's
       own data via PA-30).
-- [ ] 1.3 Cite ADR-093, ADR-099, ADR-119, ADR-075, ADR-102. Scope every non-receipt sentence to the
+- [ ] 1.1b Cite ADR-093, ADR-099, ADR-119, ADR-075, ADR-102. Scope every non-receipt sentence to the
       CLI surface **in the sentence itself**.
-- [ ] 1.4 Retitle and rewrite that section as **"A crossing trigger HAS fired"**: the
+- [ ] 1.2 Retitle and rewrite that section as **"A crossing trigger HAS fired"**: the
       Art. 30(2)(a)–(d) limbs (now pointing at the real record from 2.5, not standing in for it), the
       record that the "before processing begins" rule was **not** met on 2026-08-06, the PA-17
       amendment obligation and its #4558 re-evaluation trigger, and the **substrate-readiness
       precondition** (ADR-119 plaintext ext4; ADR-075 bwrap-only isolation with an accepted
       undetectable residual). Keep the prospective guidance for triggers 1, 3 and 4, which have not
       fired.
-- [ ] 1.6 Carry the **scope formulation verbatim** from the plan's Overview — what DPD §2.1 still
+- [ ] 1.3 Carry the **scope formulation verbatim** from the plan's Overview — what DPD §2.1 still
       covers, what it does not, and the **limb (d)** finding. State it once, precisely; let the rest
       of the document cite it. This is the sentence most likely to be misquoted in either direction.
-- [ ] 1.7 Record the **dual-purpose analysis**: processor for the tester-instructed limb, controller
+- [ ] 1.4 Record the **dual-purpose analysis**: processor for the tester-instructed limb, controller
       for the dogfooding limb, Art. 28(10) scoped *"in respect of that processing"* — the excess, not
       the instructed part. Carry **both residual uncertainties unresolved**: (a) the two purposes were
       served by one indivisible set of operations, and a regulator could hold that inextricability
       makes it controllership for the whole run; (b) if the dogfooding observations concerned only
       workflow mechanics, that limb may barely be personal-data processing — but the operator
       *consulted* output containing it, and consultation is processing.
-- [ ] 1.8 **Correct the Art. 28(4) analysis.** The plan's prior claim ("`anthropic.md` does not
+- [ ] 1.5 **Correct the Art. 28(4) analysis.** The plan's prior claim ("`anthropic.md` does not
       discharge Art. 28(4)") was **overruled** — it conflated Jikigai's internal memo with Anthropic's
       actual DPA, which auto-incorporates via Commercial Terms §C and carries Art. 28(3) terms, DPF,
       SCCs M2+3, IDTA. **Art. 28(4) is inchoate, not breached: there is no tester contract to mirror
@@ -97,14 +100,17 @@ a person's name or email. Committed third-party PII is an Art. 17 erasure imposs
       absent instrument, and the 30-day retention now attaching to tester content. Two caveats:
       confirm the account is on **Commercial** (not Consumer) Terms, and note Art. 28(4)'s "fully
       liable" limb attaches to Jikigai regardless.
-- [ ] 1.5 Canonical marking verbatim as a blockquote, opening and closing; frontmatter
+- [ ] 1.6 Canonical marking verbatim as a blockquote, opening and closing; frontmatter
       `status: draft-requires-counsel-review`.
+- [ ] 1.7 **Write the determination whichever way the verdict falls.** It is now doing more work, not
+      less: a negative finding on any limb still has to be recorded, because the alternative is
+      re-litigating all of this at tester #3.
 
 ## Phase 2 — Close Posture C and record Posture B **(executes — UC-1 Option 2 chosen 2026-08-06)**
 
 - [ ] 2.00 **Marking applies to every artifact in this phase:** canonical marking verbatim as an
       opening and closing blockquote + frontmatter `status: draft-requires-counsel-review`, on the LIA
-      (2.1) and on the **new** `article-30-2-register.md` (2.5). PA-34/PA-35 inherit the 30(1)
+      (2.1) and on the **new** `article-30-2-register.md` (2.5). PA-34 (2.2) and PA-35 (2.3) inherit the 30(1)
       register's existing marking; the new file has none to inherit. Asserted by **AC17**.
 - [ ] 2.0 The LIA's Art. 6(1)(f) **necessity** limb must state that a less intrusive means exists and
       was considered and declined — a tester-supplied `git log --stat` buys the same single metric.
@@ -116,28 +122,28 @@ a person's name or email. Committed third-party PII is an Art. 17 erasure imposs
       shape, Jikigai as controller — the **dogfooding limb of the 2026-08-06 guided session**. Reuse
       the register's existing RCS token verbatim (`legal-doc-consistency.test.ts` asserts a single RCS
       token across four sites).
-- [ ] 2.2b Add **PA-35** — the **ongoing #1442 collaborator-access observation**. A separate activity
+- [ ] 2.3 Add **PA-35** — the **ongoing #1442 collaborator-access observation**. A separate activity
       from PA-34: continuous rather than session-bound. Collapsing the two would leave the live
       activity described by a record whose scope is a single past event.
-- [ ] 2.3 **Rewrite** `article-30-register.md` §0's in-scope predicate. It currently excludes *"the
+- [ ] 2.4 **Rewrite** `article-30-register.md` §0's in-scope predicate. It currently excludes *"the
       locally-installed Soleur Claude Code plugin … it processes no personal data **on Jikigai
       infrastructure** and Jikigai is not a controller for it"* — **both conjuncts are now false**. Do
       **not** append one more surface: that is what was done for #7100 and it left the defect in
       place. Re-key on **who determines purposes, or whose credentials effect the processing,
       regardless of host.** This is the #7100 defect's **third** occurrence.
-- [ ] 2.4 Art. 14 notice line claiming Art. 14(5)(b) disproportionate effort **in writing**. Note the
-      adjacency: same Art. 14-to-unreachable-third-parties shape as **#7120**, whose clock expired.
-      Do not create a second one silently.
+- [ ] 2.5a **Check `legal-doc-consistency.test.ts` BEFORE writing 2.5.** It loads an **explicit site
+      list** naming `article-30-register.md` by path, so the new file will not fail CI — and will not
+      be guarded either. If the 30(2) register carries an `RCS <City>` token, enrol it in that list;
+      if it carries none, record that as deliberate.
 - [ ] 2.5 Create **`knowledge-base/legal/article-30-2-register.md`** — the Art. 30(2) **processor**
       record for the instructed limb of the 2026-08-06 session. **Separate file, not a "Part B"**: the
       limb sets differ (no purposes, no data-subject categories, no retention), the 30(1) file is
       titled and scoped to controller capacity, and one file meaning two things is the ambiguity
       #7100 punished. Cross-link from §0 and from the determination. **Art. 30(5) is not relied on** —
       *"not occasional"* is read narrowly and operator-assisted onboarding is designed to repeat.
-- [ ] 2.6 **Check `legal-doc-consistency.test.ts` before writing 2.5.** It loads an **explicit site
-      list** naming `article-30-register.md` by path, so the new file will not fail CI — and will not
-      be guarded either. If the 30(2) register carries an `RCS <City>` token, enrol it in that list;
-      if it carries none, record that as deliberate.
+- [ ] 2.6 Art. 14 notice line claiming Art. 14(5)(b) disproportionate effort **in writing**. Note the
+      adjacency: same Art. 14-to-unreachable-third-parties shape as **#7120**, whose clock expired.
+      Do not create a second one silently.
 
 ## Phase 3 — Tier 1 alpha notice (all testers, including #1)
 
@@ -158,9 +164,10 @@ a person's name or email. Committed third-party PII is an Art. 17 erasure imposs
       tester granted, for a stated purpose, revocable at a word.
       **Verify before drafting:** `docs/legal/privacy-policy.md` §4.1 carries *"We do not have access
       to your files, your code, or your usage patterns."* It is scoped by its own closing sentence
-      (*"This section applies to the Plugin only"*) and by four surrounding bullets that are all about
-      what the Plugin transmits — so it is not falsified by collaborator access, which is not a Plugin
-      capability. But it is the sentence a tester will quote back. Tier 1 must not contradict it and
+      (*"This section applies to the Plugin only"*) — §4.1 has four bullets **including** that
+      sentence, and one of the other three is about local storage rather than transmission, so lean on
+      the closing-sentence scoping rather than a bullet count. It is not falsified by collaborator
+      access, which is not a Plugin capability. But it is the sentence a tester will quote back. Tier 1 must not contradict it and
       must not repeat it as though it were a promise about Jikigai's conduct generally.
 - [ ] 3.3 Content: Terms link; confidentiality owed by Jikigai over the private repo; end-of-alpha
       disposition; no fee, no obligation, stop anytime; redact third-party personal data before
@@ -237,6 +244,11 @@ a person's name or email. Committed third-party PII is an Art. 17 erasure imposs
       the Jikigai Anthropic account is on Commercial Terms** — §C does not auto-incorporate on
       Consumer ToS, and the whole Art. 28(4) analysis rests on it. **Signing the Zero-Retention
       amendment is the cheapest remediation step available** and removes the retention limb outright.
+- [ ] 5.3b **Retroactive-remediation step 4 — the internal note.** Record the dual purpose of the
+      2026-08-06 session, the egress under the Jikigai key, and the **~2026-09-05 retention expiry**
+      (2026-08-06 + Anthropic's default 30-day window), after which the Anthropic-side copy lapses. A
+      fact to write down, not a deadline to chase. Asserted by **AC9c** — this step previously mapped
+      to no task and no AC.
 - [ ] 5.4 Add roadmap row **4.12**.
 - [ ] 5.5 Update the validation record's "Known gap" to resolved.
 - [ ] 5.6 Add a Terms link to `plugins/soleur/README.md`.

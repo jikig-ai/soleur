@@ -177,16 +177,18 @@ API keys and credentials"* — is written as a description of how the product wo
 conditional carve-out, and it **was not true of that session**. The conclusion survives because it is
 premised on limbs that mostly held; limb (d) is inaccurate as an unconditional statement. That is a
 **finding**, recorded here and in the determination, **not an edit this plan makes** — amending
-`docs/legal/` is out of scope (see `## Escalation guidance` on why the #4330 chain does not fire, and
-Phase 6 for the filing).
+`docs/legal/` is out of scope (see the closing paragraph of this Overview on why the #4330 chain does
+not fire, and Phase 6 for the filing).
 
 The same narrowness runs through the sibling documents, and the determination must say so rather than
 citing them as though they settled the question: `terms-and-conditions.md` **§4.2 ("Third-Party API
 Interactions")** premises itself on *"your own API keys and accounts"*, and `privacy-policy.md` §4.1's
 *"We do not have access to your files, your code, or your usage patterns"* is scoped by its own
-closing sentence (*"This section applies to the Plugin only"*) and by four surrounding bullets all
-describing what the Plugin transmits. None of them is falsified. All of them are premised on a
-configuration the alpha departed from.
+closing sentence (*"This section applies to the Plugin only"*). §4.1 has **four bullets in total,
+including the quoted sentence** — three others, of which one concerns local storage rather than
+transmission; the closing-sentence scoping is the load-bearing part of this citation, not a bullet
+count. None of them is falsified. All of them are premised on a configuration the alpha departed
+from.
 
 **So the `if processor` branch DID fire — on 2026-08-06 — and this plan builds the part of it that
 the fired trigger requires.** Not the whole branch: the DPA-for-repo-data the issue imagined still
@@ -362,7 +364,7 @@ restoring them wholesale would repeat, in the opposite direction, exactly the er
 |---|---|---|
 | **Tier 2 bilateral instrument** (Art. 28(3)) | **RESTORED**, re-scoped | Art. 28(3) requires a written contract, and the processing it governs has already happened once and is designed to repeat for testers 2–10. But it is **not** the DPA the issue imagined (repo data at rest): it covers **operator-assisted runs only**. Drafted from scratch against the template's §7.2 and §10, not copied from it. |
 | **Art. 30(2) processor record** | **RESTORED** | The stated reason for omitting it — *"a 30(2) record documents processing carried out, and none is"* — is falsified. Processing **was** carried out. Art. 30(5)'s <250-employee derogation is not relied on: *"not occasional"* is read narrowly and operator-assisted onboarding is explicitly designed to repeat, so the derogation is unreliable — and the record costs almost nothing, so the question need not be resolved to make the call. |
-| **PA-34 — Posture C controller record** | **RESTORED** (was already Phase 2) | UC-1 Option 2. Art. 30(1) shape, Jikigai as controller. |
+| **PA-34 — dogfooding limb of the 2026-08-06 guided session** | **RESTORED** (was the Phase 2 record, now re-scoped) | Art. 30(1) shape, Jikigai as controller. Session-bound. The Posture C collaborator-access record is **PA-35**, not this one. |
 | **PA-35 — a third activity the plan did not have** | **NEW** | The CLO separated what this plan conflated: the **#1442 collaborator-access observation is ongoing and not session-bound**, so it is a distinct activity from the dogfooding limb of a single guided session. Two records, two ordinals. Reserve them consecutively at Phase 0.3. |
 | **Execution register row** (`tenant-dpa-register.md`) | **STAYS CUT** | Unchanged by the inversion. #4330 item iv forbids a row there and names the successor: `customer-dpa-register.md`, created **on counter-signature**, not pre-emptively. Posture B firing does not reopen a recorded decision about *where a row goes*. AC3 still asserts the diff is empty. |
 | **Signature / follow-through probe** | **STAYS CUT** | Every reason is untouched: `follow-through-directive-gate.sh` denies the command, the PASS condition is vacuous at merge, and `exit 2` is not silent (the sweeper comments on TRANSIENT, so ~60 public comments about a named counterparty's contract status). A dated issue with the due date in the **title** remains the mechanism. |
@@ -416,7 +418,8 @@ restoring them wholesale would repeat, in the opposite direction, exactly the er
 - **The determination has a precedent format** —
   `knowledge-base/legal/audits/2026-06-29-inngest-prd-rls-reachability-gdpr-determination.md`
   (Verdict / Reasoning / Conditions / disposition). Use `audits/`; do not invent a directory.
-- **The DPA template's clause-level defects**, if Tier 2 is ever drafted from it: §1.2 `:43` scopes
+- **The DPA template's clause-level defects.** Tier 2 **is** a deliverable of this PR (Phase 3B), so
+  these are binding drafting constraints, not contingent guidance: §1.2 `:43` scopes
   Customer Data to the Web Platform; §5.1 defines instructions as Web-Platform-UI actions;
   **§5.3 + Schedule 4's 17 TOMs describe RLS/Supabase/WORM/R2 and none describes this relationship**
   — the exact defect the repo publicly retracted in #6588 (DPD `:12`); §7.1/§7.3 route DSARs to
@@ -572,7 +575,7 @@ in the Tier 2 instrument remain the highest-value hour of counsel time in this w
   also contradicts the runbook's own design: *"It is a message, not a ceremony."*
 - **Tier 1 is unconditional — every tester, including tester #1.** Plan review caught that scoping
   Tier 1 to "testers who don't need Tier 2" leaves tester #1 with nothing agreed, failing issue AC1.
-  Tier 2, if ever drafted, is an **addition**, not a substitution.
+  Tier 2 — a deliverable of this PR — is an **addition**, not a substitution.
 - **CMO constraints on the Tier 1 copy** (route it through `soleur:marketing:copywriter`, not the
   legal generator): **≤ 90 words**; merged into the existing "One note on record-keeping" paragraph
   rather than added as a second block; **first-person singular** throughout, matching the Art. 14
@@ -1021,14 +1024,29 @@ elected Option 2 and this plan executes it (`wg-when-deferring-a-capability-crea
   by it. *(A bare-absence grep cannot distinguish a fixed predicate from a deleted one — the AC6/AC10
   defect class from the 2026-08-06 overshoot learning.)*
 - **AC6** — The runbook's Step 2 carries the Tier 1 terms inline; the recruitment tally has a `Terms`
-  column with tester #1's row filled; `grep -c 'Known gap'` and `grep -c 'in earnest'` both return
-  zero; the operating rule and the offboarding line are present. **Step headings still number 1–6** —
-  no renumber.
+  column with tester #1's row filled. **Assert the positive replacement, not substring absence:** the
+  `## Known gap` section is *replaced by* the operating rule (the machine/key/purpose one-liner, the
+  four Posture B triggers, and the 4.2b behavioural control) and the offboarding line is present — a
+  bare `grep -c 'Known gap' == 0` cannot distinguish "replaced" from "deleted", the same defect AC5c
+  and AC15 guard against. **Step headings still number 1–6** — no renumber.
 - **AC7** — The Tier 1 paste-block is ≤ 90 words, first-person, contains no occurrence of "Plugin",
   and is physically fenced from the DRAFT marking.
 - **AC8** — `git diff origin/main -- apps/web-platform/lib/email-triage/statutory-rules.ts` is
   **empty** (no catalog anchor added, so no coupling fires), and the new requester class does **not**
   describe an Art. 28(3)(e) duty.
+- **AC1c** — **The Tier 2 instrument exists as a PR artifact** (Phase 3B):
+  `knowledge-base/legal/<date>-alpha-tester-processing-annex.md` is present, scoped to
+  **operator-assisted runs only**, **names Anthropic as an authorised sub-processor**, is effective
+  **forward** with a recital acknowledging the 2026-08-06 session, and carries the canonical draft
+  marking. AC13 gates *sending* it; this AC gates its *existence*, which nothing else asserted.
+- **AC9b** — **Phase 5.3 is done:** `anthropic.md`'s fired *"Re-evaluate when"* trigger is actioned in
+  the file itself — the Zero-Retention status recorded (signed, or why still unsigned), the 30-day
+  retention consequence stated, and the **Commercial (not Consumer) Terms** confirmation captured.
+  That confirmation is the premise the whole corrected Art. 28(4) analysis rests on, so it cannot be
+  left implicit.
+- **AC9c** — **Retroactive-remediation step 4 landed:** an internal note records the dual purpose, the
+  egress, and the **~2026-09-05 retention expiry** (2026-08-06 + Anthropic's 30-day window). Steps
+  1/2/3/5 map to 0.7 / 4.2b / 3B / 5.3; step 4 previously mapped to no task and no AC.
 - **AC9** — `compliance-posture.md` has a `#7331` row; `roadmap.md` has row **4.12**; the dated issue
   from Phase 6.1 exists with its due date **in the title** and **without** the `follow-through` label.
 - **AC10** — Every `knowledge-base/` path cited in the **shipped artifacts** (not this plan) resolves:
@@ -1087,15 +1105,15 @@ elected Option 2 and this plan executes it (`wg-when-deferring-a-capability-crea
 | R4 | Amending the T&Cs forces **every existing user** to re-accept and closes live WebSocket sessions. | Tier 1 incorporates by reference. AC4 asserts `tc-version.ts` is untouched. |
 | R5 | The DRAFT banner reaches a tester inside the welcome email. | Paste-block fenced from the marking; the runbook shows the final text so the operator never copies from the legal file. AC7 checks it. |
 | R6 | **Tier 1 scoped to exclude tester #1**, leaving issue AC1 unmet — Skouer qualifies for Tier 2, so a Tier-1-only-for-others design covers nobody who exists. | Tier 1 is unconditional; Tier 2 is an addition, never a substitution. AC6 requires tester #1's tally row filled. |
-| R7 | If Tier 2 is ever drafted, copying Schedule 4's TOMs would publish Art. 32 measures describing infrastructure that does not serve this relationship — the defect the repo publicly retracted in #6588, this time inside an executed instrument. | The template's clause-level defects are enumerated in Reconciliation so the drafter starts from them. Counsel review is AC13. |
+| R7 | **Tier 2 is a deliverable of this PR (Phase 3B)**, so this risk is live, not hypothetical: copying Schedule 4's TOMs would publish Art. 32 measures describing infrastructure that does not serve this relationship — the defect the repo publicly retracted in #6588, this time inside an executed instrument. | The template's clause-level defects are enumerated in Reconciliation so the drafter starts from them. Counsel review is AC13. |
 | R8 | The PA-34 / PA-35 ordinals collide with a sibling PR. | **Two** consecutive ordinals re-derived at Phase 0.3 and anchored on the heading form, not a bare token. |
 | R9 | **A tester-facing document ships without counsel review because Tier 2 felt cheap to draft.** Sharper now: Tier 2 **is** a deliverable of this PR, so the artifact will exist, marked draft, one copy-paste away from an email. | AC13 gates **sending**, AC14 gates the activity the instrument covers, and 3B.4 requires the canonical draft marking. The Phase 3 fencing rule (paste-blocks physically separated from markings) applies to the instrument too — it is the artifact most likely to be copied wholesale. |
-| R10 | **PA-34 repeats the #7100 defect.** `article-30-register.md:32` enumerates the register's in-scope surfaces (Web Platform, docs site, `jikig-ai/soleur`, `jikig-ai/operator-digest`) and carries its own post-mortem: the list *"previously named `jikig-ai/soleur` alone, which is why a Jikigai-keyed Anthropic egress in a sibling repository fell outside every membership predicate."* Feedback artifacts arriving by operator email, Discord, or an encrypted drive fall outside all four — **and so does an operator-run, Jikigai-keyed session, because the same paragraph excludes the locally-installed plugin on an "on Jikigai infrastructure" test whose both conjuncts are now false.** | **Phase 2.4** rewrites the predicate to key on **purposes or credentials, regardless of host** — not another surface appended to the list, which is what was done for #7100 and left the defect in place. **AC5c** asserts the rewritten predicate's content. This is the defect's **third** occurrence; 6.2(b) files the corpus-wide class fix. |
-| R14 | **The withdrawn Tier 1 lead ships anyway** — *"it runs on your machine, on your key — I can't see your repo"* is warm, quotable, already drafted into two artifacts, and false in both halves for tester #1. It is exactly the sentence a copywriter agent would keep. | Withdrawn explicitly and with reasons in the CMO constraints, in Phase 3.2, and in `tasks.md` 3.2 — three places, because deleting it in one leaves it in the others. **AC15** asserts the **negation form**, not substring absence, and excludes planning artifacts from its own scope. |
-| R15 | **The #4330 SOC 2 chain is fired by misreading "we now need a DPA."** The highest-cost error available, and the inversion makes it newly reachable. | The Overview states the chain's three actual triggers verbatim and that none has fired; 3B.1 scopes the instrument to operator-assisted mode; 3B.5 forbids any register row; **AC3** asserts by diff that nothing lands under `docs/legal/` and `tenant-dpa-register.md` is untouched. |
+| R10 | **PA-34 repeats the #7100 defect.** `article-30-register.md` §0 *"In-scope surfaces"* enumerates the register's in-scope surfaces (Web Platform, docs site, `jikig-ai/soleur`, `jikig-ai/operator-digest`) and carries its own post-mortem: the list *"previously named `jikig-ai/soleur` alone, which is why a Jikigai-keyed Anthropic egress in a sibling repository fell outside every membership predicate."* Feedback artifacts arriving by operator email, Discord, or an encrypted drive fall outside all four — **and so does an operator-run, Jikigai-keyed session, because the same paragraph excludes the locally-installed plugin on an "on Jikigai infrastructure" test whose both conjuncts are now false.** | **Phase 2.4** rewrites the predicate to key on **purposes or credentials, regardless of host** — not another surface appended to the list, which is what was done for #7100 and left the defect in place. **AC5c** asserts the rewritten predicate's content. This is the defect's **third** occurrence; 6.2(b) files the corpus-wide class fix. |
 | R11 | **The ship Phase 5.5 CLO-attestation gate silently skips.** It fires on `legal_touch` AND (`sui_threshold` OR `draft_marker`), where the draft-marker grep is the literal `^\+.*\[DRAFT — pending CLO/counsel review` — which the corpus's house marking does **not** match. | This plan declares `brand_survival_threshold: single-user incident`, so `sui_threshold` carries it. Pin that deliberately at ship rather than relying on the marker arm, and confirm the gate actually fired on three brand-new legal artifacts. |
 | R12 | **Staging any `knowledge-base/**/*.md` re-runs `scripts/generate-kb-index.sh` and force-stages `INDEX.md`**, which is badly stale (`INDEX.md:4` says 3773 files against a live ~7436) — bundling thousands of lines of unrelated drift into a legal PR. | Apply the recorded remedy (`2026-06-04-kb-index-regen-bundles-stale-drift-prefer-surgical-edit.md`): edit the `## legal` section surgically and `git checkout` the rest of `INDEX.md`. |
 | R13 | `legal-doc-consistency.test.ts` loads `article-30-register.md` as an RCS-jurisdiction site and asserts `tokens.size === 1`. A PA-34 controller-identification limb naming any registry other than the existing one reds CI. | Reuse the register's existing RCS token verbatim in PA-34. |
+| R14 | **The withdrawn Tier 1 lead ships anyway** — *"it runs on your machine, on your key — I can't see your repo"* is warm, quotable, already drafted into two artifacts, and false in both halves for tester #1. It is exactly the sentence a copywriter agent would keep. | Withdrawn explicitly and with reasons in the CMO constraints, in Phase 3.2, and in `tasks.md` 3.2 — three places, because deleting it in one leaves it in the others. **AC15** asserts the **negation form**, not substring absence, and excludes planning artifacts from its own scope. |
+| R15 | **The #4330 SOC 2 chain is fired by misreading "we now need a DPA."** The highest-cost error available, and the inversion makes it newly reachable. | The Overview states the chain's three actual triggers verbatim and that none has fired; 3B.1 scopes the instrument to operator-assisted mode; 3B.5 forbids any register row; **AC3** asserts by diff that nothing lands under `docs/legal/` and `tenant-dpa-register.md` is untouched. |
 
 ## Alternative Approaches Considered
 

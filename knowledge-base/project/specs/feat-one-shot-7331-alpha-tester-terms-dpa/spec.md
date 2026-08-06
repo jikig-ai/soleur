@@ -176,18 +176,17 @@ voluntary Art. 13 submission. The two named c4 tests do not read the committed a
 Anthropic edges from the operator's own workstation, which the model treats as the founder actor. No
 new element or arrow is created by a Jikigai-keyed session — only a new record of it.)*
 
-**TR7 — A new register file is unguarded, not failing.**
-`apps/web-platform/test/legal-doc-consistency.test.ts` loads an **explicit site list** naming
-`knowledge-base/legal/article-30-register.md` by path, so `article-30-2-register.md` will not break
-CI — and will not be checked either. If it carries an `RCS <City>` token, enrol it in that list, or
-it becomes an unguarded fourth site: the drift class #4086 closed.
-
 **TR5 — Anchor on content, never line numbers.** The T&Cs have sections 1–17; "§298" and "§112" are
 line numbers and would cite clauses that do not exist.
 
 **TR6 — INDEX.md drift.** Staging any `knowledge-base/**/*.md` regenerates `INDEX.md`, which is stale
 by thousands of lines. Edit its `## legal` section surgically and `git checkout` the rest.
 
+**TR7 — A new register file is unguarded, not failing.**
+`apps/web-platform/test/legal-doc-consistency.test.ts` loads an **explicit site list** naming
+`knowledge-base/legal/article-30-register.md` by path, so `article-30-2-register.md` will not break
+CI — and will not be checked either. If it carries an `RCS <City>` token, enrol it in that list, or
+it becomes an unguarded fourth site: the drift class #4086 closed.
 ## Acceptance Criteria
 
 See the plan's `## Acceptance Criteria` (**AC1–AC16**, extended by the revision: AC1b, AC5b, AC5c,

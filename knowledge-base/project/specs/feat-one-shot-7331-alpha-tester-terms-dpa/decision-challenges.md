@@ -48,10 +48,12 @@ Phase 2 is skipped under Option 1 and executed under Option 2; nothing else is a
 The operator retains collaborator access to the tester's private repository and papers it. Posture C
 is therefore **live and ongoing**, not hypothetical.
 
-**Consequences now in force.** Plan Phase 2 **executes** — the Art. 6(1)(f) LIA, PA-34 as a
-**controller** record in the Art. 30(1) register, the amendment to that register's in-scope surface
-list, and the Art. 14 notice line. The conditional framing (*"skipped under Option 1"*) is removed
-from the plan and from `tasks.md`; the Option 1 arm of AC5 no longer has a live branch. The runbook
+**Consequences now in force.** Plan Phase 2 **executes** — the Art. 6(1)(f) LIA, **PA-35** as the
+**controller** record for this ongoing collaborator-access observation in the Art. 30(1) register
+(PA-34 is the separate, session-bound dogfooding limb), the amendment to that register's in-scope
+surface list, and the Art. 14 notice line. The Option 1 arm of AC5 no longer has a live branch. The
+*"skipped under Option 1"* framing survives only where it is quoting the original challenge or the
+pre-resolution plan state — every prescriptive use of it is gone. The runbook
 operating rule can no longer say *"do not accept collaborator access on a tester's repository"* as
 the house rule, because the house is not following it — it states the standing rule and records the
 tester #1 exception with its papering.
