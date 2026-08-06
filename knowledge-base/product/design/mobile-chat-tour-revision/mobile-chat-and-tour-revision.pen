@@ -1,0 +1,1762 @@
+{
+  "version": "2.11",
+  "children": [
+    {
+      "type": "text",
+      "id": "68yHl",
+      "x": 80,
+      "y": 40,
+      "name": "title",
+      "fill": "#1a1612",
+      "content": "#7326 — Mobile KB chat + guided tour · revision of the #7222 takeover",
+      "fontFamily": "Inter",
+      "fontSize": 34,
+      "fontWeight": "700"
+    },
+    {
+      "type": "text",
+      "id": "vwYfu",
+      "x": 80,
+      "y": 88,
+      "name": "sub",
+      "fill": "#5c5043",
+      "content": "Light theme, 390×844. Supersedes decision 2 of kb-mobile-chat/05-decisions-and-deltas.png (icon-only back).",
+      "fontFamily": "Inter",
+      "fontSize": 16,
+      "fontWeight": "normal"
+    },
+    {
+      "type": "frame",
+      "id": "1FWBQ",
+      "x": 80,
+      "y": 170,
+      "name": "A - BEFORE C4 takeover",
+      "clip": true,
+      "width": 390,
+      "height": 844,
+      "fill": "#fbf7ee",
+      "stroke": {
+        "align": "inside",
+        "thickness": 1,
+        "fill": "#d8c9a6"
+      },
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "cPagn",
+          "name": "bar 1 - takeover header",
+          "width": "fill_container",
+          "height": 56,
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#d8c9a6"
+          },
+          "gap": 8,
+          "padding": [
+            0,
+            8
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "icon_font",
+              "id": "v3YvM",
+              "width": 20,
+              "height": 20,
+              "iconFontName": "chevron-left",
+              "iconFontFamily": "lucide",
+              "fill": "#9c7a2e"
+            },
+            {
+              "type": "frame",
+              "id": "9bUXR",
+              "name": "h1t",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 1,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "2QZqp",
+                  "fill": "#6f6353",
+                  "content": "ASKING ABOUT",
+                  "fontFamily": "Inter",
+                  "fontSize": 10,
+                  "fontWeight": "600",
+                  "letterSpacing": 1
+                },
+                {
+                  "type": "text",
+                  "id": "5fXz6",
+                  "fill": "#1a1612",
+                  "content": "c4-model.md",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "cM4Rr",
+          "name": "bar 2 - C4 tab strip",
+          "width": "fill_container",
+          "height": 32,
+          "fill": "#ede4cc",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#d8c9a6"
+          },
+          "padding": [
+            0,
+            10
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "BIWoy",
+              "fill": "#6f6353",
+              "content": "To change this diagram, ask the Concierge.",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Qt2HD",
+          "name": "bar 3 - panel header",
+          "width": "fill_container",
+          "height": 38,
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#d8c9a6"
+          },
+          "padding": [
+            0,
+            12
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "AhGOX",
+              "fill": "#5c5043",
+              "content": "c4-model.md",
+              "fontFamily": "Roboto Mono",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "icon_font",
+              "id": "U9DpE",
+              "width": 16,
+              "height": 16,
+              "iconFontName": "x",
+              "iconFontFamily": "lucide",
+              "fill": "#5c5043"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "4U7S8",
+          "name": "chat body (collapses to content)",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 20,
+          "padding": [
+            28,
+            16,
+            12,
+            16
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "XQPpd",
+              "fill": "#5c5043",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Send a message to get started",
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "8cofW",
+              "name": "dbg",
+              "width": "fill_container",
+              "height": 56,
+              "cornerRadius": 8,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#d8c9a6"
+              },
+              "padding": [
+                0,
+                14
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Wa4qG",
+                  "fill": "#1a1612",
+                  "content": "Debug stream",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "sEb4i",
+                  "fill": "#6f6353",
+                  "content": "Show   Copy   not saved",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "LFiCM",
+              "name": "comp",
+              "clip": true,
+              "width": "fill_container",
+              "height": 64,
+              "fill": "#f4eedf",
+              "cornerRadius": 10,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#d8c9a6"
+              },
+              "gap": 10,
+              "padding": [
+                0,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "b9OEX",
+                  "width": 20,
+                  "height": 20,
+                  "iconFontName": "paperclip",
+                  "iconFontFamily": "lucide",
+                  "fill": "#6f6353"
+                },
+                {
+                  "type": "frame",
+                  "id": "CSDE8",
+                  "name": "ph",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "90DNA",
+                      "fill": "#6f6353",
+                      "content": "Ask about this document",
+                      "fontFamily": "Inter",
+                      "fontSize": 15,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "sIU01",
+                      "fill": "#a09079",
+                      "content": "Ctrl+Shift+L to quote sel",
+                      "fontFamily": "Inter",
+                      "fontSize": 15,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "cph6B",
+                  "width": 40,
+                  "height": 40,
+                  "fill": {
+                    "type": "gradient",
+                    "gradientType": "linear",
+                    "enabled": true,
+                    "rotation": 180,
+                    "size": {
+                      "height": 1
+                    },
+                    "colors": [
+                      {
+                        "color": "#d4b36a",
+                        "position": 0
+                      },
+                      {
+                        "color": "#b8923e",
+                        "position": 1
+                      }
+                    ]
+                  },
+                  "cornerRadius": 8
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "3q00g",
+          "name": "dead space",
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "vertical",
+          "gap": 10,
+          "padding": 16,
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "AbSzG",
+              "fill": "#b4453f",
+              "content": "— dead space —",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "c8gdg",
+              "fill": "#8a6a66",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "KbChatContent sits in a plain h-full div (display:block), so its flex-1 resolves against nothing and the column stops at content height.",
+              "lineHeight": 1.45,
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "8EsNF",
+      "x": 560,
+      "y": 170,
+      "name": "B - AFTER C4 takeover",
+      "clip": true,
+      "width": 390,
+      "height": 844,
+      "fill": "#fbf7ee",
+      "stroke": {
+        "align": "inside",
+        "thickness": 1,
+        "fill": "#d8c9a6"
+      },
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "M4MSb",
+          "name": "single header",
+          "width": "fill_container",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#d8c9a6"
+          },
+          "layout": "vertical",
+          "gap": 2,
+          "padding": [
+            6,
+            8,
+            8,
+            8
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "W5eqA",
+              "name": "back button",
+              "height": 44,
+              "cornerRadius": 8,
+              "gap": 6,
+              "padding": [
+                0,
+                8
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "XsCdK",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "chevron-left",
+                  "iconFontFamily": "lucide",
+                  "fill": "#9c7a2e"
+                },
+                {
+                  "type": "text",
+                  "id": "6WlJU",
+                  "fill": "#9c7a2e",
+                  "content": "Return to file preview",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "sNyVW",
+              "name": "ctx",
+              "width": "fill_container",
+              "gap": 6,
+              "padding": [
+                0,
+                8,
+                2,
+                8
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "gPbB6",
+                  "fill": "#6f6353",
+                  "content": "ASKING ABOUT",
+                  "fontFamily": "Inter",
+                  "fontSize": 10,
+                  "fontWeight": "600",
+                  "letterSpacing": 1
+                },
+                {
+                  "type": "text",
+                  "id": "7rOm3",
+                  "fill": "#1a1612",
+                  "content": "c4-model.md",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "0zuzF",
+          "name": "C4 edit hint",
+          "width": "fill_container",
+          "height": 30,
+          "fill": "#ede4cc",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#d8c9a6"
+          },
+          "padding": [
+            0,
+            14
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "uTyTh",
+              "fill": "#6f6353",
+              "content": "To change this diagram, ask the Concierge.",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "rCSeX",
+          "name": "messages (fills)",
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "vertical",
+          "gap": 14,
+          "padding": 20,
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "fVBN9",
+              "fill": "#5c5043",
+              "content": "Send a message to get started",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "KCsRG",
+              "name": "dbg2",
+              "width": "fill_container",
+              "height": 56,
+              "cornerRadius": 8,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#d8c9a6"
+              },
+              "padding": [
+                0,
+                14
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Y6vVZ",
+                  "fill": "#1a1612",
+                  "content": "Debug stream",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "OFdwv",
+                  "fill": "#6f6353",
+                  "content": "Show   Copy   not saved",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "EZ9pN",
+          "name": "composer dock",
+          "width": "fill_container",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#d8c9a6"
+          },
+          "layout": "vertical",
+          "padding": 12,
+          "children": [
+            {
+              "type": "frame",
+              "id": "xJ9KQ",
+              "name": "comp2",
+              "width": "fill_container",
+              "height": 52,
+              "fill": "#f4eedf",
+              "cornerRadius": 10,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#d8c9a6"
+              },
+              "gap": 10,
+              "padding": [
+                0,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "eHOrX",
+                  "width": 20,
+                  "height": 20,
+                  "iconFontName": "paperclip",
+                  "iconFontFamily": "lucide",
+                  "fill": "#6f6353"
+                },
+                {
+                  "type": "text",
+                  "id": "n5J32",
+                  "fill": "#6f6353",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Ask about this document",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "icon_font",
+                  "id": "L93vY",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "at-sign",
+                  "iconFontFamily": "lucide",
+                  "fill": "#6f6353"
+                },
+                {
+                  "type": "frame",
+                  "id": "sS4Yc",
+                  "name": "sendB",
+                  "width": 40,
+                  "height": 40,
+                  "fill": {
+                    "type": "gradient",
+                    "gradientType": "linear",
+                    "enabled": true,
+                    "rotation": 180,
+                    "size": {
+                      "height": 1
+                    },
+                    "colors": [
+                      {
+                        "color": "#d4b36a",
+                        "position": 0
+                      },
+                      {
+                        "color": "#b8923e",
+                        "position": 1
+                      }
+                    ]
+                  },
+                  "cornerRadius": 8,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "QR6b1",
+                      "width": 18,
+                      "height": 18,
+                      "iconFontName": "arrow-up",
+                      "iconFontFamily": "lucide",
+                      "fill": "#1a1612"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "dT4BK",
+      "x": 1040,
+      "y": 170,
+      "name": "C - AFTER guided tour",
+      "clip": true,
+      "width": 390,
+      "height": 844,
+      "fill": "#fbf7ee",
+      "stroke": {
+        "align": "inside",
+        "thickness": 1,
+        "fill": "#d8c9a6"
+      },
+      "layout": "none",
+      "children": [
+        {
+          "type": "frame",
+          "id": "Vv9mi",
+          "x": 0,
+          "y": 0,
+          "name": "tb",
+          "width": 390,
+          "height": 56,
+          "fill": "#f4eedf",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#d8c9a6"
+          },
+          "padding": [
+            0,
+            16
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "icon_font",
+              "id": "eeGKl",
+              "width": 22,
+              "height": 22,
+              "iconFontName": "menu",
+              "iconFontFamily": "lucide",
+              "fill": "#5c5043"
+            },
+            {
+              "type": "text",
+              "id": "3iZ9S",
+              "fill": "#1a1612",
+              "content": "Dashboard",
+              "fontFamily": "Inter",
+              "fontSize": 16,
+              "fontWeight": "600"
+            },
+            {
+              "type": "icon_font",
+              "id": "jxoZI",
+              "width": 22,
+              "height": 22,
+              "iconFontName": "circle-user",
+              "iconFontFamily": "lucide",
+              "fill": "#5c5043"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "lGhcn",
+          "x": 16,
+          "y": 74,
+          "fill": "#6f6353",
+          "content": "Your company at a glance",
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "nqiHR",
+          "x": 16,
+          "y": 102,
+          "name": "kc",
+          "width": 358,
+          "height": 84,
+          "cornerRadius": 10,
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "#d8c9a6"
+          },
+          "layout": "vertical",
+          "gap": 6,
+          "padding": 14,
+          "children": [
+            {
+              "type": "text",
+              "id": "KabV7",
+              "fill": "#9c7a2e",
+              "content": "OPEN TASKS",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 1
+            },
+            {
+              "type": "text",
+              "id": "U9m03",
+              "fill": "#1a1612",
+              "content": "12",
+              "fontFamily": "Inter",
+              "fontSize": 28,
+              "fontWeight": "700"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "3Ekts",
+          "x": 16,
+          "y": 210,
+          "name": "action:new-conversation",
+          "width": 358,
+          "height": 96,
+          "fill": "#f4eedf",
+          "cornerRadius": 10,
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "#d8c9a6"
+          },
+          "layout": "vertical",
+          "gap": 10,
+          "padding": 14,
+          "children": [
+            {
+              "type": "text",
+              "id": "whPYT",
+              "fill": "#6f6353",
+              "content": "What are you building?",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "VpoEJ",
+              "name": "tgb",
+              "width": "fill_container",
+              "justifyContent": "end",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "33LtL",
+                  "width": 82,
+                  "height": 34,
+                  "fill": {
+                    "type": "gradient",
+                    "gradientType": "linear",
+                    "enabled": true,
+                    "rotation": 180,
+                    "size": {
+                      "height": 1
+                    },
+                    "colors": [
+                      {
+                        "color": "#d4b36a",
+                        "position": 0
+                      },
+                      {
+                        "color": "#b8923e",
+                        "position": 1
+                      }
+                    ]
+                  },
+                  "cornerRadius": 8
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "rectangle",
+          "id": "TZMDc",
+          "x": 0,
+          "y": 0,
+          "fill": "#00000099",
+          "width": 390,
+          "height": 202
+        },
+        {
+          "type": "rectangle",
+          "id": "YJ36l",
+          "x": 0,
+          "y": 314,
+          "fill": "#00000099",
+          "width": 390,
+          "height": 530
+        },
+        {
+          "type": "rectangle",
+          "id": "iHA8f",
+          "x": 0,
+          "y": 202,
+          "fill": "#00000099",
+          "width": 8,
+          "height": 112
+        },
+        {
+          "type": "rectangle",
+          "id": "375WJ",
+          "x": 382,
+          "y": 202,
+          "fill": "#00000099",
+          "width": 8,
+          "height": 112
+        },
+        {
+          "type": "rectangle",
+          "cornerRadius": 8,
+          "id": "36482",
+          "x": 8,
+          "y": 202,
+          "width": 374,
+          "height": 112,
+          "stroke": {
+            "align": "inside",
+            "thickness": 2,
+            "fill": "#c9a962"
+          }
+        },
+        {
+          "type": "frame",
+          "id": "HoFq3",
+          "x": 16,
+          "y": 334,
+          "name": "tour card",
+          "width": 358,
+          "fill": "#f4eedf",
+          "cornerRadius": 12,
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "#d8c9a6"
+          },
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 20,
+          "children": [
+            {
+              "type": "frame",
+              "id": "turrS",
+              "name": "ch",
+              "width": "fill_container",
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "tTzCM",
+                  "fill": "#6f6353",
+                  "content": "3 OF 19",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 1
+                },
+                {
+                  "type": "text",
+                  "id": "4VN6g",
+                  "fill": "#6f6353",
+                  "content": "Skip",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "iFzqA",
+              "name": "pbar",
+              "width": "fill_container",
+              "height": 4,
+              "fill": "#ede4cc",
+              "cornerRadius": 2,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "r6AME",
+                  "width": 56,
+                  "height": 4,
+                  "fill": "#c9a962",
+                  "cornerRadius": 2
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "SB6JE",
+              "fill": "#1a1612",
+              "content": "Start a conversation",
+              "fontFamily": "Inter",
+              "fontSize": 16,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "LNi0K",
+              "fill": "#5c5043",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Tell your agents what you're building — type here and hit send to kick off a conversation.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "a6EFs",
+              "name": "cb",
+              "width": "fill_container",
+              "gap": 12,
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "d4GuD",
+                  "name": "bk",
+                  "height": 38,
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "#d8c9a6"
+                  },
+                  "padding": [
+                    0,
+                    18
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "5VtZy",
+                      "fill": "#5c5043",
+                      "content": "Back",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "rPCis",
+                  "name": "nx",
+                  "height": 38,
+                  "fill": {
+                    "type": "gradient",
+                    "gradientType": "linear",
+                    "enabled": true,
+                    "rotation": 180,
+                    "size": {
+                      "height": 1
+                    },
+                    "colors": [
+                      {
+                        "color": "#d4b36a",
+                        "position": 0
+                      },
+                      {
+                        "color": "#b8923e",
+                        "position": 1
+                      }
+                    ]
+                  },
+                  "cornerRadius": 8,
+                  "padding": [
+                    0,
+                    22
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "klQ1t",
+                      "fill": "#1a1612",
+                      "content": "Next",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "LLabj",
+          "x": 16,
+          "y": 600,
+          "fill": "#f4eedf",
+          "textGrowth": "fixed-width",
+          "width": 358,
+          "content": "Card is placed BELOW the spotlight — left/right anchoring cannot fit beside a\nfull-bleed phone target. Falls back to above, then clamped, then centered.",
+          "lineHeight": 1.5,
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "lnAwS",
+      "x": 1520,
+      "y": 170,
+      "name": "D - Document header before/after",
+      "width": 390,
+      "fill": "#fbf7ee",
+      "stroke": {
+        "align": "inside",
+        "thickness": 1,
+        "fill": "#d8c9a6"
+      },
+      "layout": "vertical",
+      "gap": 24,
+      "padding": [
+        16,
+        12,
+        20,
+        12
+      ],
+      "children": [
+        {
+          "type": "text",
+          "id": "ftW4j",
+          "name": "t1",
+          "fill": "#b4453f",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "BEFORE — breadcrumb never shrinks, trigger pushed off-screen",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "HfcZM",
+          "name": "b1",
+          "clip": true,
+          "width": "fill_container",
+          "height": 72,
+          "fill": "#fbf7ee",
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "#d8c9a6"
+          },
+          "gap": 8,
+          "padding": [
+            0,
+            10
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "icon_font",
+              "id": "vt6ed",
+              "name": "i1",
+              "width": 18,
+              "height": 18,
+              "iconFontName": "chevron-left",
+              "iconFontFamily": "lucide",
+              "fill": "#5c5043"
+            },
+            {
+              "type": "text",
+              "id": "B7Itv",
+              "name": "x1",
+              "fill": "#6f6353",
+              "textGrowth": "fixed-width",
+              "width": 210,
+              "content": "engineering / architecture / diagrams / c4-model.md",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "yeAOk",
+              "name": "p1",
+              "width": 200,
+              "height": 44,
+              "fill": {
+                "type": "gradient",
+                "gradientType": "linear",
+                "enabled": true,
+                "rotation": 180,
+                "size": {
+                  "height": 1
+                },
+                "colors": [
+                  {
+                    "color": "#d4b36a",
+                    "position": 0
+                  },
+                  {
+                    "color": "#b8923e",
+                    "position": 1
+                  }
+                ]
+              },
+              "cornerRadius": 8,
+              "gap": 6,
+              "padding": [
+                0,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "dMaxw",
+                  "name": "p1i",
+                  "width": 14,
+                  "height": 14,
+                  "iconFontName": "message-square",
+                  "iconFontFamily": "lucide",
+                  "fill": "#1a1612"
+                },
+                {
+                  "type": "text",
+                  "id": "WTu3Q",
+                  "name": "p1t",
+                  "fill": "#1a1612",
+                  "content": "Ask about this document",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "600"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "iqHub",
+          "name": "t2",
+          "fill": "#2f6b4f",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "AFTER — breadcrumb truncates, trigger and ⋯ never move",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "MgTPz",
+          "name": "b2",
+          "clip": true,
+          "width": "fill_container",
+          "height": 60,
+          "fill": "#fbf7ee",
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "#d8c9a6"
+          },
+          "gap": 8,
+          "padding": [
+            0,
+            10
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "rK7vf",
+              "name": "lft",
+              "clip": true,
+              "width": "fill_container",
+              "gap": 6,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "MZvgE",
+                  "name": "l1",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "chevron-left",
+                  "iconFontFamily": "lucide",
+                  "fill": "#5c5043"
+                },
+                {
+                  "type": "text",
+                  "id": "AL6OS",
+                  "name": "l2",
+                  "fill": "#6f6353",
+                  "content": "… / diagrams / c4-model.md",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "G01xn",
+              "name": "p2",
+              "height": 44,
+              "fill": {
+                "type": "gradient",
+                "gradientType": "linear",
+                "enabled": true,
+                "rotation": 180,
+                "size": {
+                  "height": 1
+                },
+                "colors": [
+                  {
+                    "color": "#d4b36a",
+                    "position": 0
+                  },
+                  {
+                    "color": "#b8923e",
+                    "position": 1
+                  }
+                ]
+              },
+              "cornerRadius": 8,
+              "gap": 6,
+              "padding": [
+                0,
+                14
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "gtVLz",
+                  "name": "p2i",
+                  "width": 14,
+                  "height": 14,
+                  "iconFontName": "message-square",
+                  "iconFontFamily": "lucide",
+                  "fill": "#1a1612"
+                },
+                {
+                  "type": "text",
+                  "id": "2KoGi",
+                  "name": "p2t",
+                  "fill": "#1a1612",
+                  "content": "Ask",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "WHJF4",
+              "name": "ov",
+              "width": 34,
+              "height": 44,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "UDdxv",
+                  "name": "ovi",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "ellipsis",
+                  "iconFontFamily": "lucide",
+                  "fill": "#5c5043"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "LaegS",
+          "name": "t3",
+          "fill": "#5c5043",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Visible label shortens to “Ask” / “Continue” below md; the accessible name stays the full “Ask about this document” / “Continue thread”. Full label returns at md+.",
+          "lineHeight": 1.5,
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "R4g0a",
+      "x": 2000,
+      "y": 170,
+      "name": "E - Decisions",
+      "width": 620,
+      "fill": "#f4eedf",
+      "cornerRadius": 12,
+      "stroke": {
+        "align": "inside",
+        "thickness": 1,
+        "fill": "#d8c9a6"
+      },
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 28,
+      "children": [
+        {
+          "type": "text",
+          "id": "CaEPZ",
+          "name": "dt",
+          "fill": "#1a1612",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Decisions that drive the implementation",
+          "fontFamily": "Inter",
+          "fontSize": 26,
+          "fontWeight": "700"
+        },
+        {
+          "type": "text",
+          "id": "TFZpQ",
+          "name": "ds",
+          "fill": "#6f6353",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Mobile only (< md / 768px). Desktop side-by-side panels and the desktop tour are untouched.",
+          "lineHeight": 1.5,
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "Mscf4",
+          "name": "k1",
+          "fill": "#9c7a2e",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "1 · THE EXIT GETS A LABEL — SUPERSEDES #7222 DECISION 2",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "700",
+          "letterSpacing": 0.6
+        },
+        {
+          "type": "text",
+          "id": "aF5yR",
+          "name": "v1",
+          "fill": "#1a1612",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "“‹ Return to file preview”, gold, min-h-44, top-left of the takeover header. #7222 shipped a bare 44×44 chevron; on a surface that covers the whole phone the only affordance out should say where it goes. aria-label matches the visible text — no more “Back to document”.",
+          "lineHeight": 1.55,
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "Kgios",
+          "name": "k2",
+          "fill": "#9c7a2e",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "2 · ONE HEADER, NOT THREE",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "700",
+          "letterSpacing": 0.6
+        },
+        {
+          "type": "text",
+          "id": "VZyCh",
+          "name": "v2",
+          "fill": "#1a1612",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "KbChatContent's own header (filename + ✕) is suppressed inside the takeover: it repeats the filename the takeover header already shows and adds a SECOND dismiss control. It stays on desktop, where it is the only close affordance. The C4 “ask the Concierge” hint stays — it is the one line that is not a duplicate.",
+          "lineHeight": 1.55,
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "igdcB",
+          "name": "k3",
+          "fill": "#9c7a2e",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "3 · THE CHAT COLUMN FILLS THE TAKEOVER",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "700",
+          "letterSpacing": 0.6
+        },
+        {
+          "type": "text",
+          "id": "ZoWkv",
+          "name": "v3",
+          "fill": "#1a1612",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "c4-workspace wraps KbChatContent in a plain h-full div, which is display:block — the child's flex-1 has no flex parent to resolve against, so the column stops at content height and leaves half a phone empty. Becomes a flex column. Same bug, same fix, on the Code tab wrapper.",
+          "lineHeight": 1.55,
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "960et",
+          "name": "k4",
+          "fill": "#9c7a2e",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "4 · THE TRIGGER SHORTENS; THE BREADCRUMB YIELDS",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "700",
+          "letterSpacing": 0.6
+        },
+        {
+          "type": "text",
+          "id": "0sxyB",
+          "name": "v4",
+          "fill": "#1a1612",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Two independent fixes, because either alone still breaks: the header's left group gets min-w-0 so KbBreadcrumb truncates instead of shoving, AND the gold pill gets shrink-0 with a short visible label (“Ask” / “Continue”) below md. Full label at md+. The accessible name never shortens.",
+          "lineHeight": 1.55,
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "XFZuQ",
+          "name": "k5",
+          "fill": "#9c7a2e",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "5 · NO KEYBOARD CHORD IN A TOUCH PLACEHOLDER",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "700",
+          "letterSpacing": 0.6
+        },
+        {
+          "type": "text",
+          "id": "VIZAd",
+          "name": "v5",
+          "fill": "#1a1612",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "“Ask about this document — Ctrl+Shift+L to quote selection” wraps past the rows=1 / min-h-36 textarea and is cut mid-glyph. Below md the chord is dropped: it names a shortcut a phone cannot press.",
+          "lineHeight": 1.55,
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "OmLXM",
+          "name": "k6",
+          "fill": "#9c7a2e",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "6 · THE TOUR SPOTLIGHT COMES BACK ON MOBILE",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "700",
+          "letterSpacing": 0.6
+        },
+        {
+          "type": "text",
+          "id": "JSyJO",
+          "name": "v6",
+          "fill": "#1a1612",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "guided-tour.tsx blanket-nulls the rect below 768px, so all 19 steps are a centred card over a flat scrim. The rule predates the action:* steps — ten of them target in-page anchors that are fully on screen on a phone. It goes; measure() already rejects absent, zero-area and off-screen targets on its own, which is exactly what the seven nav-tab steps need.",
+          "lineHeight": 1.55,
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "mWRg3",
+          "name": "k7",
+          "fill": "#9c7a2e",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "7 · NAV-TAB STEPS OPEN THE DRAWER THEY TALK ABOUT",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "700",
+          "letterSpacing": 0.6
+        },
+        {
+          "type": "text",
+          "id": "5Rldj",
+          "name": "v7",
+          "fill": "#1a1612",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "“Click the Inbox tab” points into a closed drawer. Those seven steps reuse the EXISTING `reveal` event mechanism (already used by the New Issue dialog) to open the nav drawer while the step is active and close it on the way out. The layout handler ignores the open below md only — on desktop drawerOpen would make the main content inert.",
+          "lineHeight": 1.55,
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "btEAb",
+          "name": "k8",
+          "fill": "#9c7a2e",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "8 · THE CARD GOES BELOW THE TARGET, NOT BESIDE IT",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "700",
+          "letterSpacing": 0.6
+        },
+        {
+          "type": "text",
+          "id": "cawBk",
+          "name": "v8",
+          "fill": "#1a1612",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "anchoredCardStyle only tries right-then-left. A phone target is full-bleed, so both fail and the card lands ON the thing it is pointing at. Order becomes: right, left, below, above, then clamp. Desktop keeps hitting the right branch first, so its placement does not move.",
+          "lineHeight": 1.55,
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "cp5Sm",
+          "name": "rj",
+          "width": "fill_container",
+          "fill": "#f7e6e4",
+          "cornerRadius": 10,
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "#d9a9a4"
+          },
+          "layout": "vertical",
+          "gap": 8,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "pKqtr",
+              "name": "rjt",
+              "fill": "#a03c36",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "REJECTED — A SECOND FLOATING “ASK” FAB",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "700",
+              "letterSpacing": 0.6
+            },
+            {
+              "type": "text",
+              "id": "iuEql",
+              "name": "rjb",
+              "fill": "#7a3b37",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Would dodge the header overflow without fixing it, and #7222 decision 3 already settled that ONE trigger drives both the markdown sidebar and the C4 Concierge. A FAB also floats over diagram content on the one screen where the canvas is the point. Rejected — the header group is fixed instead.",
+              "lineHeight": 1.55,
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "tsadZ",
+          "name": "ft",
+          "width": "fill_container",
+          "fill": "#ede4cc",
+          "cornerRadius": 10,
+          "layout": "vertical",
+          "gap": 8,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "8D4lE",
+              "name": "ftt",
+              "fill": "#7a5e1f",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "FILES THIS TOUCHES",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "700",
+              "letterSpacing": 0.6
+            },
+            {
+              "type": "text",
+              "id": "GJydH",
+              "name": "ftb",
+              "fill": "#5c5043",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "components/chat/kb-chat-fullscreen.tsx — labelled exit, compact context line\ncomponents/chat/kb-chat-content.tsx — suppress own header in the takeover; drop the chord below md\ncomponents/kb/c4-workspace.tsx — flex the tab-panel wrappers\ncomponents/kb/kb-content-header.tsx — min-w-0 on the left group, shrink-0 on the actions\ncomponents/kb/kb-chat-trigger.tsx — short visible label below md, full accessible name\ncomponents/kb/kb-breadcrumb.tsx — truncate\ncomponents/tour/guided-tour.tsx — drop the breakpoint kill; below/above card fallback\ncomponents/tour/tour-steps.ts + tour-provider.tsx — reveal the nav drawer on tab steps\napp/(dashboard)/layout.tsx — honour the drawer-reveal event below md only",
+              "lineHeight": 1.7,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "It0tg",
+      "x": 80,
+      "y": 1030,
+      "name": "lA",
+      "fill": "#7a5e1f",
+      "content": "A · BEFORE — three bars of chrome, chat does not fill",
+      "fontFamily": "Inter",
+      "fontSize": 15,
+      "fontWeight": "600"
+    },
+    {
+      "type": "text",
+      "id": "mwS1I",
+      "x": 560,
+      "y": 1030,
+      "name": "lB",
+      "fill": "#7a5e1f",
+      "content": "B · AFTER — one header, labelled exit, chat fills",
+      "fontFamily": "Inter",
+      "fontSize": 15,
+      "fontWeight": "600"
+    },
+    {
+      "type": "text",
+      "id": "FuOLA",
+      "x": 1040,
+      "y": 1030,
+      "name": "lC",
+      "fill": "#7a5e1f",
+      "content": "C · AFTER — tour spotlights on-screen targets",
+      "fontFamily": "Inter",
+      "fontSize": 15,
+      "fontWeight": "600"
+    }
+  ]
+}

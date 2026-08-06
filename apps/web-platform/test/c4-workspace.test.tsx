@@ -55,15 +55,18 @@ vi.mock("@/components/chat/kb-chat-content", () => ({
   KbChatContent: ({
     contextPath,
     onClose,
+    mobileTakeover,
   }: {
     contextPath: string;
     onClose: () => void;
     visible: boolean;
+    mobileTakeover?: boolean;
   }) => (
     <div
       data-kb-chat
       data-testid="kb-chat-content"
       data-context-path={contextPath}
+      data-mobile-takeover={mobileTakeover ? "true" : undefined}
     >
       <button type="button" aria-label="Close panel" onClick={onClose}>
         close
@@ -386,7 +389,7 @@ describe("#7222 — C4Workspace Concierge topology below `md`", () => {
     stubViewport(true);
     await renderC4WithHeader();
 
-    fireEvent.click(screen.getByLabelText("Back to document"));
+    fireEvent.click(screen.getByRole("button", { name: "Return to file preview" }));
     expect(screen.queryByTestId("kb-chat-fullscreen-header")).toBeNull();
     expect(screen.queryByTestId("kb-chat-content")).toBeNull();
     // The diagram is never unmounted by the takeover — it is underneath.
@@ -397,7 +400,7 @@ describe("#7222 — C4Workspace Concierge topology below `md`", () => {
     stubViewport(true);
     await renderC4WithHeader();
 
-    fireEvent.click(screen.getByLabelText("Back to document"));
+    fireEvent.click(screen.getByRole("button", { name: "Return to file preview" }));
     fireEvent.click(
       screen.getByRole("button", { name: /ask about this document/i }),
     );
@@ -415,5 +418,46 @@ describe("#7222 — C4Workspace Concierge topology below `md`", () => {
 
     // Exclusivity by state, not by paint order — the layout listens for this.
     expect(heard.length).toBeGreaterThan(0);
+  });
+});
+
+describe("#7326 — the Concierge column fills its host", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("gives the Concierge wrapper a FLEX parent, not a bare h-full block", async () => {
+    stubViewport(true);
+    await renderC4WithHeader();
+
+    // The wrapper immediately around KbChatContent. A `display:block` box gives
+    // its child no flex parent, so KbChatContent's root `flex-1` resolved
+    // against nothing and the column stopped at CONTENT height — on a phone
+    // that left roughly half the takeover empty below the composer.
+    const wrapper = document.querySelector("[data-kb-chat]")
+      ?.parentElement as HTMLElement;
+    expect(wrapper).toBeTruthy();
+    expect(wrapper.className).toContain("flex");
+    expect(wrapper.className).toContain("flex-col");
+    expect(wrapper.className).toContain("flex-1");
+    // min-h-0 so the message list scrolls instead of shoving the composer out.
+    expect(wrapper.className).toContain("min-h-0");
+    expect(wrapper.className).not.toBe("h-full");
+  });
+
+  it("keeps that wrapper a flex column on desktop too (same bug, same fix)", async () => {
+    stubViewport(false);
+    await renderC4WithHeader();
+
+    const wrapper = document.querySelector("[data-kb-chat]")
+      ?.parentElement as HTMLElement;
+    expect(wrapper.className).toContain("flex-col");
+    expect(wrapper.className).toContain("min-h-0");
+  });
+
+  it("hands the takeover host the mobileTakeover flag, and desktop none", async () => {
+    stubViewport(true);
+    await renderC4WithHeader();
+    expect(screen.getByTestId("kb-chat-content").dataset.mobileTakeover).toBe(
+      "true",
+    );
   });
 });

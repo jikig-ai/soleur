@@ -16,9 +16,32 @@ export interface KbChatContentProps {
   onClose: () => void;
   /** Whether the chat panel is visible. Controls focus and quote-handler registration. */
   visible: boolean;
+  /**
+   * True when this is hosted by `KbChatFullScreen` — the mobile takeover.
+   *
+   * ONE flag, because the two things it changes are the same fact about the
+   * host, not two coincidences (#7326):
+   *
+   *  - The takeover's own header already carries the filename AND the exit, so
+   *    rendering this component's header there duplicates both. Desktop keeps
+   *    it — inside a `Sheet` push-column it is the only close affordance.
+   *  - The composer's quote hint names a `Ctrl+Shift+L` / `⌘⇧L` chord that a
+   *    touch device cannot press, and at `rows={1}` the extra clause wrapped
+   *    past the textarea and was clipped mid-glyph.
+   *
+   * Derive nothing else from it, and do not replace it with a viewport read:
+   * the host is what matters, and `c4-workspace` builds ONE window that it
+   * hands to whichever host the breakpoint picks.
+   */
+  mobileTakeover?: boolean;
 }
 
-export function KbChatContent({ contextPath, onClose, visible }: KbChatContentProps) {
+export function KbChatContent({
+  contextPath,
+  onClose,
+  visible,
+  mobileTakeover = false,
+}: KbChatContentProps) {
   const { setMessageCount } = useKbChat();
   const { registerQuoteHandler } = useKbChatQuoteBridge();
   const [resumedBanner, setResumedBanner] = useState<{ timestamp: string } | null>(null);
@@ -154,27 +177,29 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-kb-chat>
-      <header className="flex shrink-0 items-center justify-between border-b border-soleur-border-default px-3 py-2">
-        <div className="min-w-0 flex-1 truncate">
-          <span
-            className="truncate font-mono text-xs text-soleur-text-secondary"
-            title={filename}
+      {!mobileTakeover && (
+        <header className="flex shrink-0 items-center justify-between border-b border-soleur-border-default px-3 py-2">
+          <div className="min-w-0 flex-1 truncate">
+            <span
+              className="truncate font-mono text-xs text-soleur-text-secondary"
+              title={filename}
+            >
+              {filename}
+            </span>
+          </div>
+          <button
+            type="button"
+            aria-label="Close panel"
+            onClick={onClose}
+            className="ml-2 shrink-0 rounded p-1 text-soleur-text-secondary hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
           >
-            {filename}
-          </span>
-        </div>
-        <button
-          type="button"
-          aria-label="Close panel"
-          onClick={onClose}
-          className="ml-2 shrink-0 rounded p-1 text-soleur-text-secondary hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
-      </header>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </header>
+      )}
       {resumedBanner && (
         <div className="shrink-0 border-b border-soleur-border-default bg-soleur-bg-surface-1/60 px-3 py-1.5 text-xs text-soleur-text-secondary">
           Continuing from {new Date(resumedBanner.timestamp).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })}
@@ -194,7 +219,9 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
             quoteRef,
             focusRef,
             onBeforeSend: handleBeforeSend,
-            placeholder: `Ask about this document — ${modShiftChord("L", isApple)} to quote selection`,
+            placeholder: mobileTakeover
+              ? "Ask about this document"
+              : `Ask about this document — ${modShiftChord("L", isApple)} to quote selection`,
             draftKey: `kb.chat.draft:${contextPath}`,
           }}
         />

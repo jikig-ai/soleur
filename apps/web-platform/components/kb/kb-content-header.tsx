@@ -71,8 +71,13 @@ export function KbContentHeader({
   }, [isMobile]);
 
   return (
-    <header className="flex shrink-0 items-center justify-between border-b border-soleur-border-default px-4 py-3 md:px-6">
-      <div className="flex items-center gap-2">
+    <header className="flex shrink-0 items-center justify-between gap-2 border-b border-soleur-border-default px-4 py-3 md:px-6">
+      {/* #7326 — `min-w-0` is load-bearing. Without it this group takes its
+          max-content width, `justify-between` has nothing left to distribute,
+          and a four-segment path pushes the actions clean off a 390px screen.
+          Since the gold trigger is the ONLY route back into the conversation on
+          mobile, that was a dead end, not a clipped pixel. */}
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         <Link
           href="/dashboard/kb"
           aria-label="Back to file tree"
@@ -101,7 +106,9 @@ export function KbContentHeader({
           </span>
         )}
       </div>
-      <div className="flex items-center gap-2">
+      {/* `shrink-0`: the actions are the fixed side of the header — the
+          breadcrumb yields to them, never the reverse (#7326). */}
+      <div className="flex shrink-0 items-center gap-2">
         {/* DC3 (#7186): four trailing actions do not fit a 375px phone. Below
             `md` the secondary three move behind a `⋯` — nothing is dropped
             (Download is the only way to consume a non-markdown attachment on a
