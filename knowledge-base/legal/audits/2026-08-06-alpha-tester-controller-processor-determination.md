@@ -5,11 +5,14 @@ date: 2026-08-06
 issue: 7331
 status: draft-requires-counsel-review
 controller: "SPLIT. For the instructed limb of the 2026-08-06 operator-assisted run, the alpha tester (`2my8r9ry2t-wq/Skouer`) is the controller and Jikigai SARL (France; 25 rue de Ponthieu, 75008 Paris) is an Art. 28 processor. For the dogfooding limb of that same run, and for the ongoing collaborator-access observation of the tester's private repository, Jikigai is the controller (Art. 4(7); Art. 28(10))."
-processing_activity: "Not yet registered. An Art. 30(1) record is REQUIRED for the controller limb and an Art. 30(2) record for the processor limb; neither exists at the date of this determination. Adjacent registered activity: PA-30 (owner-private beta-tester / prospect CRM), PA-22 (autonomous AI leader-prompt runtime under operator BYOK), PA-32 (community observation and republication — does NOT cover this)."
-lawful_basis: "Processor limb: no Art. 6 basis of Jikigai's own is required, but an Art. 28(3) instrument is, and it did not exist at the time of the run. Controller limb: Art. 6(1)(f) is the candidate basis and no Legitimate Interest Assessment covering it exists."
+processing_activity: "Not yet registered. An Art. 30(1) record is required for the controller limb and an Art. 30(2) record for the processor limb; neither existed when the processing occurred. BOTH ARE DELIVERED ALONGSIDE THIS DETERMINATION (PA-34 + PA-35 in the Art. 30(1) register; record P-1 in the new Art. 30(2) register) — the gap was in the timing, not in the record's continued absence. Adjacent registered activity: PA-30 (owner-private beta-tester / prospect CRM), PA-22 (autonomous AI leader-prompt runtime under operator BYOK), PA-32 (community observation and republication — does NOT cover this)."
+lawful_basis: "Processor limb: no Art. 6 basis of Jikigai's own is required, but an Art. 28(3) instrument is, and it did not exist at the time of the run. Controller limb: Art. 6(1)(f) is the candidate basis; no Legitimate Interest Assessment covered it when the processing began, and one IS DELIVERED ALONGSIDE THIS DETERMINATION at knowledge-base/legal/legitimate-interest-assessments/2026-08-06-alpha-tester-repo-observation-lia.md."
 data_subjects: "Natural persons whose personal data is present in the alpha tester's repository content — on the evidence reconstructed, principally company officers named in RNE *pouvoirs* fixture data. NOT the tester's own venture-database records, which the reconstruction shows were not processed."
 conclusion: "DUAL FINDING. PROCESSOR for the instructed limb of operator-assisted runs — Posture B, trigger 2 FIRED on 2026-08-06 with no Art. 28(3) instrument in place. CONTROLLER for the dogfooding limb and the ongoing private-repository collaborator observation — Posture C, live and ongoing. Not a notifiable Art. 4(12) breach. BLOCKED pending the conditions in §11."
 related:
+  - knowledge-base/legal/article-30-2-register.md
+  - knowledge-base/legal/legitimate-interest-assessments/2026-08-06-alpha-tester-repo-observation-lia.md
+  - knowledge-base/legal/2026-08-06-alpha-tester-processing-annex.md
   - knowledge-base/project/specs/feat-one-shot-7331-alpha-tester-terms-dpa/session-scope-reconstruction.md
   - knowledge-base/legal/data-processing-agreements/anthropic.md
   - knowledge-base/legal/legitimate-interest-assessments/2026-07-07-beta-crm-lia.md
@@ -119,9 +122,23 @@ patterns"*), and in the Controller Identification section of `knowledge-base/leg
 Three statements, in order, and the order matters:
 
 **(a) The published position remains TRUE within its scope.** Its scope is *plugin-local processing, on
-the tester's machine, under the tester's key* — Posture A. An egress scan of `plugins/soleur/` confirms
-there is no phone-home path: the plugin does not transmit content to Jikigai-operated servers. Every
-limb of the disclosure's enumeration holds for that configuration. The privacy policy's statement is
+the tester's machine, under the tester's key* — Posture A. Every limb of the disclosure's enumeration
+holds for that configuration, on the evidence recorded immediately below.
+
+> **Egress evidence (scan performed 2026-08-06; commands and results recorded rather than asserted).**
+> `grep -rhoE 'https?://[a-zA-Z0-9._-]+' plugins/soleur/ --include=*.sh --include=*.ts --include=*.js --include=*.json`
+> plus targeted probes for Jikigai-operated hosts, declared MCP servers, and unattended timers.
+> **Findings:** there is **no automatic or background telemetry** — no unattended timer, daemon or
+> exit hook transmits anything. Every network call is **explicitly operator-invoked** by running a
+> named skill. Two qualifications the earlier draft of this section omitted, and which are recorded
+> because the claim is falsifiable in one grep without them: (i) `plugins/soleur/skills/trigger-cron/scripts/trigger.sh`
+> POSTs to `https://app.soleur.ai/api/internal/trigger-cron` — a **Jikigai-operated host** — carrying a
+> cron event name, not user content, and only when the operator runs that skill; (ii)
+> `plugins/soleur/.claude-plugin/plugin.json` declares four **remote MCP servers** (Context7,
+> Cloudflare, Vercel, Stripe) which connect on plugin enable. None of these is Jikigai telemetry and
+> none carries tester repository content, but the defensible sentence is **"no automatic or background
+> telemetry; all egress is explicitly operator-invoked"** — not the flat "no phone-home path" an
+> earlier draft asserted. The privacy policy's statement is
 itself expressly scoped by its own closing sentence, *"This section applies to the Plugin only."*
 
 **(b) The published position is NARROWER than the alpha configuration.** It speaks to what the Plugin
@@ -254,8 +271,9 @@ and schema/migration discussion (553 column-type tokens, 142 `migration`/`schema
 **table and column names being designed**, not records being read.
 
 **The residual, recorded rather than argued away.** A directory listing of a fixtures directory surfaced
-the filenames `bilan_saisi_2033a.json`, `bilan_saisi_netonly.json`, `rne_pouvoirs_samples.json` and
-`ma_advisor`. RNE (*Registre National des Entreprises*) *pouvoirs* records name **company officers —
+**four filenames**, not reproduced here (the repository is public and the listing is the
+counterparty's private-repository content — see §7). Two denote filed financial statements, one
+denotes French business-register (RNE) *pouvoirs* sample data, one is an advisor-related fixture. RNE (*Registre National des Entreprises*) *pouvoirs* records name **company officers —
 natural persons**; public-register provenance does not strip personal-data character under GDPR. The
 transcript shows these as a **directory listing** with no evidence their contents were read — and it
 **cannot positively exclude** a partial read.
@@ -344,7 +362,7 @@ drafting anything: the operator either uses the tester's machine and the tester'
 does not run. It is stated as a behavioural control precisely because it is enforceable the moment this
 document is read, whereas every other condition has a lead time.
 
-**C2 — REQUIRED.** Put an **Art. 28(3) instrument** in place with `2my8r9ry2t-wq/Skouer` covering the
+**C2 — REQUIRED. DRAFTED with this determination** (`knowledge-base/legal/2026-08-06-alpha-tester-processing-annex.md`, unexecuted, counsel review pending per its §14.3). Put an **Art. 28(3) instrument** in place with `2my8r9ry2t-wq/Skouer` covering the
 (a)–(h) limbs, effective **forward**. It cannot cure 2026-08-06 and must not be drafted as though it
 does. Draft it as governing operator-assisted runs specifically, not as a generic platform DPA.
 
@@ -353,23 +371,38 @@ of identity, location (US) and transfer mechanism (DPF / SCCs M2+3 / IDTA), and 
 retention window** while `zero_retention_amendment` remains `unsigned` (§5.4). Closing Art. 28(2)
 requires the authorisation; honesty requires the retention disclosure alongside it.
 
-**C4 — REQUIRED.** Produce a **Legitimate Interest Assessment** for the §1 limb (ii) controller
+**C4 — REQUIRED. DELIVERED with this determination** (`knowledge-base/legal/legitimate-interest-assessments/2026-08-06-alpha-tester-repo-observation-lia.md`) — it remains listed because it is a standing condition, not because it is outstanding. Produce a **Legitimate Interest Assessment** for the §1 limb (ii) controller
 processing — the dogfooding observation and the ongoing private-repository collaborator access — with an
 Art. 6 basis and an **Art. 14** notice route (the data are not obtained from the data subject via a form
 they submitted). The beta-CRM LIA does not cover it (§8) and PA-32 does not cover it (§9).
 
-**C5 — REQUIRED, separate change.** Add a **scope sentence** to `docs/legal/data-protection-disclosure.md`
-distinguishing plugin-local processing from operator-assisted processing, mirroring the separation already
-applied in `docs/legal/gdpr-policy.md` between the BYOK path and the Jikigai-keyed path. **Not a
-retraction** (§4). Out of scope for this file.
+**C5 — REQUIRED, separate change. Filed as #7347.** Add a **scope sentence** to
+`docs/legal/data-protection-disclosure.md` distinguishing plugin-local processing from
+operator-assisted processing, mirroring the separation already applied in `docs/legal/gdpr-policy.md`
+between the BYOK path and the Jikigai-keyed path. **Not a retraction** (§4). Out of scope for this file.
+
+**C5 scope is WIDER than §2.1 alone — an earlier draft of this condition named only that section.**
+The sweep must also reach:
+- **`docs/legal/data-protection-disclosure.md` §4.1 "Plugin Sub-processors"**, which states there are
+  *"no Plugin-level Sub-processors to disclose under Article 28(2)"*. That is the sharpest
+  contradiction in the corpus: §5.1 of the annex asks the tester to **authorise Anthropic PBC as a
+  sub-processor** for exactly these runs, and record P-1 states Art. 28(2) is not satisfied. A scope
+  sentence aimed only at §2.1 leaves this flat denial standing.
+- **`docs/legal/privacy-policy.md` §4.2 "Data Processed Locally"**, which names *"Knowledge-base files
+  … stored in the `knowledge-base/` directory"* and *"Git artifacts: Branches, commits"* and then says
+  *"All of this data remains on your machine. We have no access to it."* — with **no scope line**,
+  unlike §4.1. PA-35 records the operator reading precisely that tree. §4.1 was the sentence this
+  determination originally analysed; §4.2 is the one that actually breaks.
+- **`docs/legal/gdpr-policy.md` §2.1**, whose *"does not … transmit … any personal data on external
+  servers"* the Jikigai-keyed egress falsifies for operator-assisted runs.
 
 **C6 — REQUIRED.** Confirm the Anthropic account used on 2026-08-06 is on **Commercial** Terms, not
 Consumer Terms (§5.3).
 
-**C7 — REQUIRED.** Action the fired re-evaluation trigger in `anthropic.md` (§5.5) and refresh its
+**C7 — REQUIRED. DONE** (`anthropic.md` §"Fired trigger — cohort onboarding, 2026-08-06"). Action the fired re-evaluation trigger in `anthropic.md` (§5.5) and refresh its
 `status_snapshot_date`.
 
-**C8 — RECOMMENDED, not gating.** Resolve the §7 residual: check `rne_pouvoirs_samples.json`'s size and
+**C8 — RECOMMENDED, not gating.** Resolve the §7 residual: against the operator's local copy, check the RNE *pouvoirs* fixture's size and
 the operator's recollection of whether fixtures were opened. It is a one-minute check. It does not gate
 C2, because the instrument is effective forward regardless — but it changes what the tester-facing
 message can honestly say.

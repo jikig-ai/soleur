@@ -56,13 +56,15 @@ being designed**, not records being read.
 
 ## 4. Residual uncertainty — recorded, not argued away
 
-A directory listing of a fixtures directory surfaced these **filenames**:
-`bilan_saisi_2033a.json`, `bilan_saisi_netonly.json`, `rne_pouvoirs_samples.json`, `ma_advisor`.
+A directory listing of a fixtures directory surfaced **four filenames**. They are deliberately
+not reproduced here — see the note at the end of this section. Two denote filed financial
+statements; **one denotes French business-register (RNE) *pouvoirs* sample data**; one is an
+advisor-related fixture.
 
-`rne_pouvoirs_samples.json` is the material one. RNE (*Registre National des Entreprises*)
+The RNE *pouvoirs* fixture is the material one. RNE (*Registre National des Entreprises*)
 *pouvoirs* records name company officers — **natural persons**. Public-register provenance does
-not remove personal-data character under GDPR. `bilan_saisi_*` are filed financial statements,
-which can carry officer names.
+not remove personal-data character under GDPR. The filed-financial-statement fixtures can carry
+officer names too.
 
 **What the transcript shows:** these names appear in a directory listing. There is no evidence in
 the transcript that any of their **contents** were read.
@@ -89,7 +91,15 @@ documentation; a sample fixture containing officer data was present in the tree.
 
 ## 6. What would settle §4
 
-The operator can resolve it directly: `rne_pouvoirs_samples.json`'s size and whether it is small
-enough to have been read whole, plus his own recollection of whether fixtures were opened during
-the walkthrough. This is a one-minute check and is **not** a blocker for this PR — the instrument
-does not depend on it.
+The operator can resolve it directly, against his own local copy: the RNE *pouvoirs* fixture's
+size and whether it is small enough to have been read whole, plus his own recollection of whether
+fixtures were opened during the walkthrough. This is a one-minute check and is **not** a blocker
+for this PR — the instrument does not depend on it.
+
+**Why the filenames are not reproduced in this repository.** `jikig-ai/soleur` is public. A
+directory listing from a counterparty's **private** repository is their content, and this PR's own
+Art. 28(3) annex (§7.5), the onboarding runbook, and the message sent to the tester all undertake
+not to publish it. Naming the files here would have broken that undertaking inside the artifacts
+that make it — and git-permanently, across forks. The shape description above carries every fact
+the determination and the registers rely on; the literals stay in the operator's local notes,
+which is where C8 resolves them.

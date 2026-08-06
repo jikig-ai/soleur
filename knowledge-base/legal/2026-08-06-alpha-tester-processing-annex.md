@@ -39,7 +39,7 @@ So this annex is drafted for the actual relationship. Two clauses are adopted fr
 
 **(C)** This annex applies **only** where Jikigai's founder ("the **Operator**") runs Soleur agents against Customer's repository content **on a Jikigai machine or under a Jikigai-held credential**, at Customer's request — for example during a guided onboarding or debugging session ("**Operator-Assisted Runs**"). In that configuration Jikigai processes Customer's personal data on Customer's behalf and is a **processor** within the meaning of Article 4(8) GDPR.
 
-**(D) Acknowledgement of the session of 6 August 2026.** An Operator-Assisted Run took place on 6 August 2026, under a Jikigai-held Anthropic API key, before any written instrument was in place. Article 28(3) requires that contract to precede the processing. It did not. **This annex takes effect forward and does not purport to cure that.** It is recorded here rather than omitted because an instrument that quietly backdated itself would be worse than the gap it papers over. The parties' assessment is that the event is **not** a personal-data breach within Article 4(12) — the disclosure was requested by Customer and no security control failed — and that no supervisory-authority notification obligation arises.
+**(D) Acknowledgement of the session of 6 August 2026.** An Operator-Assisted Run took place on 6 August 2026, under a Jikigai-held Anthropic API key, before any written instrument was in place. Article 28(3) requires that contract to precede the processing. It did not. **This annex takes effect forward and does not purport to cure that.** It is recorded here rather than omitted because an instrument that quietly backdated itself would be worse than the gap it papers over. **Jikigai's** assessment — offered for Customer's consideration, not as a joint determination — is that the event is **not** a personal-data breach within Article 4(12), because the disclosure was requested by Customer and no security control failed. **Article 33(1) places that judgment with Customer as controller, and Jikigai is the party at fault here**, so this recital does not ask Customer to co-sign it. Jikigai will supply whatever facts Customer needs to reach its own view. Jikigai's own determination records the contrary argument as "not frivolous" (`knowledge-base/legal/audits/2026-08-06-alpha-tester-controller-processor-determination.md` §10).
 
 ---
 
@@ -71,7 +71,7 @@ Jikigai shall:
 
 **(a)** process Customer's personal data **only on Customer's documented instructions**, including as to third-country transfers, unless required otherwise by Union or Member State law, in which case Jikigai shall inform Customer before processing unless that law prohibits it;
 
-**(b)** ensure that the Operator is bound by an appropriate duty of confidentiality;
+**(b)** ensure that **every person Jikigai authorises to process** Customer personal data — the Operator and any other Jikigai personnel, contractor or intern — is bound by an appropriate duty of confidentiality, as Article 28(3)(b) requires. Jikigai records that this undertaking is **not currently evidenced in writing** for anyone other than the Operator, and §14.3 puts it on the counsel list;
 
 **(c)** implement the technical and organisational measures at §7;
 
@@ -123,9 +123,9 @@ Jikigai shall:
 
 **7.3a Encryption at rest — ABSENT, and disclosed rather than claimed.** The Operator's workstation is **not** full-disk encrypted (verified 2026-08-06: the root filesystem is a plain partition with no LUKS or dm-crypt layer). Customer repository content present in the Operator's local working copy during an Operator-Assisted Run is therefore **unencrypted at rest**, and a lost or stolen workstation would expose it.
 
-An earlier draft of this annex asserted full-disk encryption as a measure. It was **false**, and it is recorded here rather than silently deleted, because an executed instrument asserting an Article 32 measure that does not exist is materially worse than one that admits the gap. Remediation is tracked separately; until it lands, Customer should weigh this in deciding whether Operator-Assisted Runs are appropriate for its content at all — which is a live reason to prefer the §5.4 route of using Customer's own machine and key.
+An earlier draft of this annex asserted full-disk encryption as a measure. It was **false**, and it is recorded here rather than silently deleted, because an executed instrument asserting an Article 32 measure that does not exist is materially worse than one that admits the gap. Remediation is **not currently tracked in an issue** — that omission is recorded here rather than papered over with a tracking claim this annex cannot substantiate. Until it lands, Customer should weigh this in deciding whether Operator-Assisted Runs are appropriate for its content at all — which is a live reason to prefer the §5.4 route of using Customer's own machine and key.
 
-**7.4 Access.** The Operator is Jikigai's sole personnel. Access to any repository access grant Customer provides is limited to the Operator and is repository-scoped rather than organisation-wide.
+**7.4 Access.** Access to any repository access grant Customer provides is limited to the Operator (Jikigai's founder) and is repository-scoped rather than organisation-wide — a collaborator invite on a personal-account repository cannot be organisation-wide. **Jikigai is not certified as a one-person organisation for this purpose:** its own records describe an internal intern relationship, and the confidentiality undertaking owed by any person other than the Operator has not been evidenced (`knowledge-base/legal/side-letter-register.md` records no executed side letter). Accordingly §4(b) is drafted to cover **every** person Jikigai authorises, not the Operator alone, and Jikigai does not represent that the Operator is its only personnel.
 
 **7.5 No republication.** Customer content shall not be published, quoted or reproduced in any Jikigai commit, issue, digest, case study or marketing material.
 
@@ -173,7 +173,7 @@ An earlier draft of this annex asserted full-disk encryption as a measure. It wa
 
 **14.1 Governing law.** French law. **14.2 Jurisdiction.** The courts of Paris, France.
 
-**14.3 Counsel review — not yet performed.** This annex has **not** been reviewed by a qualified lawyer. Before it is sent to Customer, counsel should review at minimum: **(a)** the liability position at §12, and **(b)** the confidentiality undertaking and assent mechanics for an unpaid business-to-business alpha under French law. One review covers all ten alpha testers.
+**14.3 Counsel review — not yet performed.** This annex has **not** been reviewed by a qualified lawyer. Before it is sent to Customer, counsel should review at minimum: **(a)** the liability position at §12; **(b)** the confidentiality undertaking and assent mechanics for an unpaid business-to-business alpha under French law — including the unevidenced §4(b) undertaking for non-Operator personnel noted at §7.4; **(c)** whether Recital (D)'s breach assessment may properly be stated as the *parties'* joint view when Article 33(1) is the **Customer's** duty and Jikigai is the party at fault; and **(d)** whether §7.1 read together with §5.1 converts today's absolute no-Jikigai-key control into a standing permission, and if so whether Customer wants own-key made the contractual default rather than something Customer may elect under §5.4. One review covers all ten alpha testers.
 
 ---
 

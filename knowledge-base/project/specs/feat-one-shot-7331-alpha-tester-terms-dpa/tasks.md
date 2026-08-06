@@ -273,7 +273,9 @@ a person's name or email. Committed third-party PII is an Art. 17 erasure imposs
       T&C §4.2 and `privacy-policy.md` §4.1 — each needs a scoped qualifier at next amendment;
       (b) the Art. 30 register's §0 predicate keys on infrastructure location — the corpus-wide class
       fix (audit **every** membership predicate for host-keying) is larger than this PR.
-- [x] 6.3 File the **#1442 metric re-derivation** as a deferred issue: replace repository-content
+- [x] 6.3 **Folded into #7348, not filed separately** (net-issue-flow: consolidating avoided a fourth
+      filing). #7348 carries it under "Optional, and cheaper than any of the above". If it needs its
+      own tracker once counsel reports, split it out then. Original text: file the **#1442 metric re-derivation** as a deferred issue: replace repository-content
       reading with non-personal aggregates (commit/file/directory counts), which would take PA-35 out
       of Art. 4(1) scope almost entirely. The standing de-escalation — recorded, not actioned, because
       the operator elected Option 2 (`wg-when-deferring-a-capability-create-a`).

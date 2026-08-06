@@ -146,9 +146,11 @@ exposures are now determined:
    Jikigai an Art. 28 processor for the instructed limb of that run, retroactively, with no
    instrument in place. Recorded at P-1 in `knowledge-base/legal/article-30-2-register.md`.
 
-   The sentence below — *"begins at first substantive agent run against their data, not at
-   onboarding"* — was **wrong, and wrong in the direction that mattered**: onboarding *was* the
-   run. It is left standing rather than quietly edited, because the mistake is the finding.
+   The record previously read: *"Exposure (2) begins at first substantive agent run against their
+   data, not at onboarding."* That was **wrong, and wrong in the direction that mattered** —
+   onboarding *was* the run. It is quoted here, and struck, rather than silently deleted, because
+   the mistake is the finding. (An earlier draft of this paragraph claimed the sentence was "left
+   standing below" while the same edit removed it; that claim is withdrawn.)
 
 3. **A third exposure this record did not anticipate.** Operator collaborator access to the
    tester's private repository, read for Jikigai's own #1442 metrics, makes Jikigai a **controller**

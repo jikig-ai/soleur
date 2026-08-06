@@ -76,7 +76,7 @@ didn't, or you want them erased sooner, just email legal@jikigai.com and it's do
 The terms, briefly. Using Soleur means agreeing to
 https://soleur.ai/legal/terms-and-conditions - which applies from the moment you
 install it, not just on the website. No fee or obligation. What's in your private
-repository stays confidential; I won't reuse or publish it. [If you've given me repo
+repository stays confidential; I won't publish it. [If you've given me repo
 access: I read only your knowledge-base git history, to see whether the alpha is
 working, and I'll drop it whenever you say.] When the alpha ends I revoke access,
 delete my copies, and confirm in writing. If you send logs, strip others' personal
@@ -190,6 +190,12 @@ Company-level only, per Step 3.
 ---
 
 ## Step 5 — Run the session and observe
+
+> **⛔ Before running anything, apply the hard gate.** See §"Operating rule — whose machine, whose
+> key, whose purpose?" below. In short: use the **tester's** machine and the **tester's** API key, or
+> do not run. A Jikigai-keyed run against tester content needs an Art. 28(3) instrument in place
+> first (`knowledge-base/legal/2026-08-06-alpha-tester-processing-annex.md`, currently unexecuted).
+> This gate is the reason this runbook exists in its present form — it was crossed on 2026-08-06.
 
 #1441's stated observations. Capture these in `interview_notes` (database, not git):
 
@@ -315,8 +321,10 @@ the single counsel review of the bilateral instrument — once, reusable across 
 
 ### Collaborator access on a tester's repository
 
-**Standing rule: do not accept it.** It buys one #1442 metric of three (see the measurability
-caveat above), and a tester-supplied `git log --stat` substitutes for it.
+**Standing rule: do not accept it.** It buys **independent verifiability** of one #1442 metric of
+three — not the metric itself, which a tester-supplied `git log --stat` or a commit/file/directory
+count yields without any access (see the measurability caveat above, which states this in the same
+terms; an earlier draft of this section said the access bought the metric, contradicting it).
 
 **Tester #1 is an exception, and it is papered rather than pretended away.** The operator holds
 collaborator access to Skouer's private repository and reads its `knowledge-base/` tree for #1442.

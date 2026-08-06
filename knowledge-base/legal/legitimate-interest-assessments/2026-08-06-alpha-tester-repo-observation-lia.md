@@ -9,7 +9,7 @@ status: draft-requires-counsel-review
 controller: "Jikigai SARL (France; 25 rue de Ponthieu, 75008 Paris) is the CONTROLLER for both limbs assessed here — this is not the beta-CRM pattern where the operator is controller and Jikigai processor"
 processing_activity: "Article 30(1) register PA-34 (dogfooding limb of operator-assisted runs, session-bound) and PA-35 (ongoing collaborator-access observation, live)"
 lawful_basis: "Art. 6(1)(f) GDPR — legitimate interest"
-data_subjects: "Natural persons whose personal data appears in an alpha tester's private repository — company officers named in RNE pouvoirs fixture data; git commit authors. All are involuntary third-party data subjects with no relationship to Jikigai."
+data_subjects: "Natural persons whose personal data appears in an alpha tester's private repository. TWO POPULATIONS, and the balance differs between them: (1) involuntary third parties with no relationship to Jikigai — company officers named in business-register pouvoirs fixture data, and external git commit authors; (2) the tester's own personnel, who knowingly joined the alpha and granted the access, and whose Recital 47 reasonable expectations are therefore materially different. Population (1) is the one the balancing below is hardest on."
 related:
   - knowledge-base/legal/article-30-register.md
   - knowledge-base/legal/article-30-2-register.md
@@ -110,7 +110,7 @@ The data are not obtained from the data subject, so Art. 14 applies. Direct noti
 
 **Art. 14(5)(b) disproportionate effort is claimed, and it is claimed in writing here rather than assumed.** The claim rests on: no existing contact channel; the data subjects are numerous and unenumerated; contacting them would require obtaining more personal data than the processing itself uses; and the processing is read-only with no effect on them.
 
-Art. 14(5)(b) requires compensating measures where the exemption is relied on. Those are: this LIA published in the repository; the PA-34/PA-35 register entries; and the public disclosure route below.
+Art. 14(5)(b) requires compensating measures where the exemption is relied on — the Article names *"making the information publicly available"* specifically. Those measures here are: **(1)** this LIA, and **(2)** the PA-34/PA-35 register entries — both of which are **published**, because `jikig-ai/soleur` is a public repository, which is what satisfies the Article's publicity limb. An earlier draft listed a third measure, *"the public disclosure route below"*; **no such route existed below, and the claim is withdrawn rather than left dangling** — a compensating measure that resolves to nothing is exactly the defect this document exists to avoid. **Weakness recorded, not smoothed:** Art. 14(5)(b)'s qualifier reads *"in particular for archiving purposes in the public interest, scientific or historical research purposes or statistical purposes"*. Commercial product-improvement and validation metrics are none of those. That is the first point counsel or a regulator will raise, and it is recorded here in the same register as the necessity limb's weakness rather than argued around.
 
 **Adjacency flagged, not buried:** this is the same Art.-14-to-unreachable-third-parties shape as **#7120**, whose notice clock **expired**. A second instance of the same shape must not be created silently. If counsel concludes the exemption does not hold here, it very likely does not hold there either, and both should move together.
 
