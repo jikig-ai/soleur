@@ -1053,5 +1053,158 @@ assert "ci-deploy.sh --preserve-env drops DOPPLER_PROJECT (#6555)" \
   "! grep -qE 'preserve-env=.*DOPPLER_PROJECT' '$CI_DEPLOY'"
 
 echo ""
+echo "--- #7286: unconditional-doppler unit -> credential drop-in FULL lockstep (class-closing) ---"
+#
+# THE INVARIANT (#7095 stated it in prose, in 10-inngest-heartbeat-doppler-token.conf, and
+# left it unenforced; #7286 is what that cost):
+#
+#   No secret may be copied into a second host file without the copy inheriting the
+#   original's re-delivery path.
+#
+# CONCRETELY. /etc/default/inngest-server holds a token GREP-EXTRACTED out of
+# /etc/default/webhook-deploy (inngest-bootstrap.sh:586) and then PINNED forever (:567-568
+# preserves it whenever the value still matches ^DOPPLER_TOKEN=dp.), so it never self-heals.
+# A unit that reads ONLY that pinned copy and runs `doppler run` with NO
+# `[ -n "$DOPPLER_TOKEN" ]` gate has no degraded-but-alive arm: the moment the pinned token
+# stops working, ExecStart exits non-zero and Restart= loops it forever.
+#
+# That is exactly #7286. inngest-redis.service was the ONE Doppler consumer #7095's sweep did
+# not give a drop-in, and 16h of P1 followed: `doppler run --config prd` failing -> redis never
+# binds 127.0.0.1:6379 -> inngest-server dies on `dial tcp ... connection refused` every ~9s.
+#
+# WHY THE SCOPE IS "UNCONDITIONAL doppler run", NOT "reads the env file". Six infra units read
+# /etc/default/inngest-server. Four of them (container-restart-monitor, cron-egress-alarm@,
+# cron-egress-firewall, cron-egress-resolve) ALSO carry their own
+# `EnvironmentFile=-/etc/default/soleur-doppler-token` line AND gate ExecStart on
+# `[ -n "$DOPPLER_TOKEN" ]` with a non-doppler fallback branch — they already satisfy the
+# invariant in their unit body and degrade gracefully besides. Asserting on "reads the env
+# file" would flag those four and make the guard noise; asserting on the ACTUAL hazard
+# (unconditional `doppler run` + no live-credential source) selects precisely the units that
+# can crash-loop. Verified against all six unit bodies, not assumed.
+#
+# ACK LIST, with reasons — an unexplained skip is how a ratchet stops ratcheting:
+#   inngest-cutover-flip.service — DEDICATED-host unit (cloud-init-inngest.yml docker-cp +
+#     install at :465-472), not a web-1 co-located unit. Its /etc/default/inngest-server is
+#     written at cloud-init PRE-CREATE with the correctly-scoped soleur-inngest token, so it is
+#     a primary credential source, not a grep-extracted pinned copy — the defect class does not
+#     apply. push-infra-config.sh targets deploy.${APP_DOMAIN_BASE} (web-1) only, so the
+#     web-host credential never reaches that host and a drop-in there would be inert at best
+#     and wrong-project at worst.
+DROPIN_ACK_UNITS=("inngest-cutover-flip.service")
+
+lockstep_examined=0
+LOCKSTEP_EXAMINED_UNITS=""
+for unit_path in "$SCRIPT_DIR"/*.service; do
+  unit_file="$(basename "$unit_path")"
+
+  # Skip acked units.
+  ack_hit=0
+  for acked in "${DROPIN_ACK_UNITS[@]}"; do
+    [[ "$unit_file" == "$acked" ]] && ack_hit=1
+  done
+  [[ "$ack_hit" == "1" ]] && continue
+
+  # Selector (a): reads the pinned copy as a REQUIRED file (no '-' prefix).
+  grep -qE '^EnvironmentFile=/etc/default/inngest-server$' "$unit_path" || continue
+  # Selector (b): ExecStart invokes doppler DIRECTLY (not behind a token-presence test).
+  grep -qE '^ExecStart=[^ ]*/doppler run ' "$unit_path" || continue
+  # Selector (c): and has no live-credential source of its own.
+  if grep -qE '^EnvironmentFile=-?/etc/default/soleur-doppler-token$' "$unit_path"; then continue; fi
+
+  lockstep_examined=$((lockstep_examined + 1))
+  LOCKSTEP_EXAMINED_UNITS+="$unit_file "
+
+  stem="${unit_file%.service}"                       # inngest-redis
+  conf="10-${stem}-doppler-token.conf"               # 10-inngest-redis-doppler-token.conf
+  payload_key="$(printf '%s' "$stem" | tr '-' '_')_doppler_token_conf_b64"
+  env_var="$(printf '%s' "$payload_key" | tr '[:lower:]' '[:upper:]')"
+  dest="/etc/systemd/system/${unit_file}.d/${conf}"
+
+  # Surface 1 — the drop-in file itself.
+  assert "[$unit_file] drop-in file $conf exists" \
+    "[[ -f '$SCRIPT_DIR/$conf' ]]"
+  assert "[$unit_file] $conf points at the re-deliverable credential (the '-' prefix is load-bearing)" \
+    "grep -qxF 'EnvironmentFile=-/etc/default/soleur-doppler-token' '$SCRIPT_DIR/$conf'"
+  # Surface 2 — CI payload producer. Asserts PROVENANCE, not just the key: the payload line must
+  # base64 THIS unit's conf. Review's surviving mutation was pointing the redis payload key at
+  # `10-inngest-heartbeat-doppler-token.conf` — every key still present, both suites green, and
+  # the host receives the wrong file. Key-presence proves transmission happens; it does not
+  # prove WHAT is transmitted.
+  assert "[$unit_file] push-infra-config.sh emits payload key $payload_key FROM $conf" \
+    "grep -qE '\"$payload_key\":.*/$conf\"' '$SCRIPT_DIR/push-infra-config.sh'"
+  # Surface 3 — the pass-file-to-command bridge. Asserts the name->envname PAIRING on one entry,
+  # not co-presence in the file. Review's surviving mutation was swapping the envname values
+  # between the redis and inngest-server entries: all four tokens remain present, both guards
+  # pass, and each unit receives the OTHER's drop-in. That is benign only while the two confs are
+  # byte-identical — i.e. exactly the property the guard exists to survive losing.
+  assert "[$unit_file] hooks.json.tmpl PAIRS $payload_key -> $env_var on one entry" \
+    "grep -qE '\"name\": *\"$payload_key\".*\"envname\": *\"$env_var\"' '$SCRIPT_DIR/hooks.json.tmpl'"
+  # Surface 4 — handler FILE_MAP.
+  assert "[$unit_file] infra-config-apply.sh FILE_MAP carries $env_var -> $dest" \
+    "grep -qF '$env_var|$dest|644|root:root' '$SCRIPT_DIR/infra-config-apply.sh'"
+  # Surface 5 — installer DEST_SPEC allowlist.
+  assert "[$unit_file] infra-config-install.sh DEST_SPEC allowlists $dest" \
+    "grep -qF '[\"$dest\"]=' '$SCRIPT_DIR/infra-config-install.sh'"
+  # Surface 6 — server.tf triggers_replace (a body-only edit must re-fire the push).
+  assert "[$unit_file] server.tf triggers_replace hashes $conf" \
+    "grep -qF 'file(\"\${path.module}/$conf\")' '$SCRIPT_DIR/server.tf'"
+  # Surface 7 — auto-apply paths filter.
+  assert "[$unit_file] apply-deploy-pipeline-fix.yml paths filter lists $conf" \
+    "grep -qF 'apps/web-platform/infra/$conf' '$SCRIPT_DIR/../../../.github/workflows/apply-deploy-pipeline-fix.yml'"
+done
+
+# --- HEREDOC-AUTHORED UNITS (#7286 review, V1) -----------------------------------------------
+#
+# The loop above walks `$SCRIPT_DIR/*.service`, and that population is NOT the hazard class.
+# Measured: THREE of the units that carry `EnvironmentFile=/etc/default/inngest-server` are
+# written as heredocs inside inngest-bootstrap.sh (inngest-server, vector, inngest-heartbeat),
+# so the "class-closing" invariant closed only the subset that happens to be a checked-in file.
+# Review proved it by adding a heredoc unit with the full hazard shape and ZERO delivery wiring:
+# 190/190 green, while the identical unit as a tracked .service file goes RED with 8 failures.
+# Coverage was a function of which authoring form the next author picked — and the uncovered
+# form is the one #7286's own siblings use.
+#
+# The extractor resolves `readonly X="/etc/systemd/system/<name>.service"` + `cat > "$X" <<EOF`
+# and applies the SAME predicate, so the two populations cannot drift in what "hazard" means.
+HEREDOC_SOURCES=("$SCRIPT_DIR/inngest-bootstrap.sh")
+heredoc_examined=0
+for _src in "${HEREDOC_SOURCES[@]}"; do
+  [[ -f "$_src" ]] || continue
+  while IFS='|' read -r hu _hz _live; do
+    [[ -n "$hu" ]] || continue
+    heredoc_examined=$((heredoc_examined + 1))
+    hstem="${hu%.service}"
+    hconf="10-${hstem}-doppler-token.conf"
+    hdest="/etc/systemd/system/${hu}.d/${hconf}"
+    assert "[heredoc:$hu] drop-in $hconf exists" \
+      "[[ -f '$SCRIPT_DIR/$hconf' ]]"
+    assert "[heredoc:$hu] infra-config-apply.sh FILE_MAP carries $hdest" \
+      "grep -qF '|$hdest|644|root:root' '$SCRIPT_DIR/infra-config-apply.sh'"
+    assert "[heredoc:$hu] infra-config-install.sh DEST_SPEC allowlists $hdest" \
+      "grep -qF '[\"$hdest\"]=' '$SCRIPT_DIR/infra-config-install.sh'"
+  done < <(awk -f "$SCRIPT_DIR/heredoc-hazard-units.awk" "$_src" 2>/dev/null || true)
+done
+# Same vacuity guard as the file loop: the extractor is regex-driven over another script's
+# syntax, so a refactor there could silently empty this population. Two known members today
+# (inngest-server, vector); a drop to zero means the extractor broke, not that the hazard did.
+assert "heredoc hazard extractor examined >= 2 units (guard against a broken extractor)" \
+  "[[ '$heredoc_examined' -ge 2 ]]"
+
+# Cardinality guard. A selector typo (or a future refactor that renames the env file) would make
+# the loop body run ZERO times and this whole block would report success having asserted nothing
+# — the silent-green shape this suite exists to prevent.
+assert "lockstep invariant examined >= 1 unit (guard against a vacuous selector)" \
+  "[[ '$lockstep_examined' -ge 1 ]]"
+# IDENTITY, not just cardinality (#7286 review, V4). `>= 1` is satisfied by ANY member, so once a
+# second hazard unit is wired, acking inngest-redis.service AND deleting its drop-in goes green —
+# #7286 reintroduced verbatim with the guard still satisfied. Pin the member by name.
+assert "lockstep invariant examined inngest-redis.service specifically" \
+  "printf '%s' '$LOCKSTEP_EXAMINED_UNITS' | grep -qF 'inngest-redis.service'"
+# The ack list is the guard's only escape hatch, and prose ("an unexplained skip is how a ratchet
+# stops ratcheting") does not enforce itself. Growing it must be a deliberate, visible edit.
+assert "ack list holds exactly 1 entry (a silent second ack cannot open a hole)" \
+  "[[ \${#DROPIN_ACK_UNITS[@]} -eq 1 ]]"
+
+echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

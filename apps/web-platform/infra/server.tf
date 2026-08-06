@@ -1554,6 +1554,10 @@ resource "terraform_data" "deploy_pipeline_fix" {
     file("${path.module}/10-vector-doppler-token.conf"),
     file("${path.module}/10-inngest-heartbeat-doppler-token.conf"),
     file("${path.module}/10-inngest-server-doppler-token.conf"),
+    # #7286 — inngest-redis.service's drop-in. Registered here for the same #5492 reason as its
+    # three siblings: without the hash, a body-only edit changes no TF-visible input and the push
+    # never re-fires, so the fix sits in the repo and never reaches the host.
+    file("${path.module}/10-inngest-redis-doppler-token.conf"),
   ]))
 
   # #3756 — replaced SSH provisioners (connection + file + remote-exec) with

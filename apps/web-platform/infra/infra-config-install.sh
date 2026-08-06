@@ -82,6 +82,8 @@ declare -rA DEST_SPEC=(
   ["/etc/systemd/system/vector.service.d/10-vector-doppler-token.conf"]="644 root:root"
   ["/etc/systemd/system/inngest-heartbeat.service.d/10-inngest-heartbeat-doppler-token.conf"]="644 root:root"
   ["/etc/systemd/system/inngest-server.service.d/10-inngest-server-doppler-token.conf"]="644 root:root"
+  # #7286 — inngest-redis.service, the unconditional-`doppler run` consumer #7095 did not cover.
+  ["/etc/systemd/system/inngest-redis.service.d/10-inngest-redis-doppler-token.conf"]="644 root:root"
 )
 
 # #7220 AC-B1 — CONTENT PIN for full-unit *.service dests. THE SECURITY PRECONDITION OF THE
@@ -205,9 +207,15 @@ fi
 # RESTART GRANT.
 #
 # Until now the gate above was the ONLY content validation in this helper, and it is scoped to
-# /etc/default/*. The three *.service.d/*.conf dests got none. That was survivable only because
+# /etc/default/*. The *.service.d/*.conf dests got none. That was survivable only because
 # nothing on this host root-restarted those units, so an unvalidated drop-in sat inert on disk.
 # The DROPIN_TRY_RESTART grant added alongside this removes exactly that property.
+#
+# #7286 — there were three such dests at the time of #7103 and there are four now. The count is
+# deliberately NOT restated in this comment: the gate keys on the PATH PATTERN below, not on an
+# enumerated dest list, so it covers a new drop-in the moment DEST_SPEC admits one. That is why
+# adding inngest-redis's drop-in needed no change here — and why writing the number down would
+# have made a still-correct file read as stale on the very next addition.
 #
 # systemd merges drop-ins AFTER the unit body, so a drop-in is not a weaker write than the unit:
 # it can set User=root on vector.service (which runs User=deploy), clear-and-replace ExecStart=
