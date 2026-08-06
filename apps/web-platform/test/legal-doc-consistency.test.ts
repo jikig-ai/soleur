@@ -199,6 +199,19 @@ describe("legal-doc consistency: source ↔ Eleventy mirror", () => {
             "utf-8",
           ),
       },
+      // Per #7331: the Art. 30(2) processor register names Jikigai's RCS
+      // jurisdiction in its own right (frontmatter `processor:` + record P-1
+      // limb (a)). It is enrolled here at creation rather than later, because
+      // this list is explicit -- an un-enrolled site does not fail CI, it
+      // simply goes unguarded, which is the drift class #4086 closed.
+      {
+        label: "article-30-2-register P-1(a)",
+        load: () =>
+          readFileSync(
+            resolve(REPO_ROOT, "knowledge-base/legal/article-30-2-register.md"),
+            "utf-8",
+          ),
+      },
     ];
 
     // Extract every "RCS <City>" token across all sites. Match the
