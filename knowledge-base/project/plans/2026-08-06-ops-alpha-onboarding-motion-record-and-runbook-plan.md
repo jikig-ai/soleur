@@ -186,38 +186,45 @@ the validation record, then run the FR2 diff grep.
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (FR2 — load-bearing).** `git diff origin/main...HEAD` contains no third-party personal
+- [x] **AC1 (FR2 — load-bearing).** `git diff origin/main...HEAD` contains no third-party personal
       name, email, or personal identifier. Verify:
       `git diff origin/main...HEAD -- knowledge-base/ | grep -nEi '[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}' | grep -viE 'legal@jikigai|ops@jikigai|noreply'`
       returns empty.
-- [ ] **AC2 (FR1).** `knowledge-base/product/validation/2026-08-06-alpha-onboarding-motion-start.md`
+- [x] **AC2 (FR1).** `knowledge-base/product/validation/2026-08-06-alpha-onboarding-motion-start.md`
       exists with YAML frontmatter containing `title`, `date`, `status`, `type`.
-- [ ] **AC3 (FR1).** That record names all four of: recruit #1 of 10, the Skouer repo URL, the CLI
+- [x] **AC3 (FR1).** That record names all four of: recruit #1 of 10, the Skouer repo URL, the CLI
       test surface, and the #1441 protocol position with its sequence deviation.
-- [ ] **AC4 (FR3).** `knowledge-base/engineering/operations/runbooks/alpha-tester-onboarding.md`
+- [x] **AC4 (FR3).** `knowledge-base/engineering/operations/runbooks/alpha-tester-onboarding.md`
       exists and contains all six step headings.
-- [ ] **AC5 (FR4).** The runbook contains a fenced copy-pasteable welcome message whose body
+- [x] **AC5 (FR4).** The runbook contains a fenced copy-pasteable welcome message whose body
       includes `legitimate interest`, `24 months`, and `legal@jikigai.com`.
-- [ ] **AC6 (FR4 — negative).** Neither new artifact frames notice delivery as in-person. Verify
-      `grep -niE 'in person|in-person|sign the notice|hand (them|over)' <both files>` returns empty.
-- [ ] **AC7 (FR5).** The runbook's *recording* step (step 3) contains the PII-boundary warning —
+- [x] **AC6 (FR4 — negation, amended at verification time).** Neither new artifact frames notice
+      delivery as in-person. **Amendment:** the original predicate was `grep -niE 'in person|
+      in-person|…'` returns empty — but that grep cannot distinguish an *assertion* of in-person
+      delivery from an explicit *denial* of it, and both artifacts deliberately carry the denial
+      (it is the operator-facing point). Asserting absence of the substring would have forced
+      deleting the very sentences that make the posture unambiguous. Corrected predicate: every
+      match must be a negation. Verified — 2 matches, both negations:
+      `alpha-tester-onboarding.md:81` "Nothing is signed, nothing happens in person";
+      `2026-08-06-alpha-onboarding-motion-start.md:107` "not a signature, not an in-person step".
+- [x] **AC7 (FR5).** The runbook's *recording* step (step 3) contains the PII-boundary warning —
       assert the anchor phrase, not a bare token: `grep -c 'beta CRM database only' <runbook>` ≥ 1.
-- [ ] **AC8 (FR8).** The runbook contains the mix tally seeded at 1 Claude-Code-user / 0 non-CC and
+- [x] **AC8 (FR8).** The runbook contains the mix tally seeded at 1 Claude-Code-user / 0 non-CC and
       names the pre-tester-#8 check.
-- [ ] **AC9 (FR7).** `grep -c '| Beta users | 1 |' knowledge-base/product/roadmap.md` returns 1.
-- [ ] **AC10 (TR1).** No write path to the CRM tables is added anywhere:
+- [x] **AC9 (FR7).** `grep -c '| Beta users | 1 |' knowledge-base/product/roadmap.md` returns 1.
+- [x] **AC10 (TR1).** No write path to the CRM tables is added anywhere:
       `git diff origin/main...HEAD | grep -nE 'beta_contacts|interview_notes|beta_contact_stage_transitions' | grep -iE '^\+.*(insert|update|delete|upsert|crm_contact_upsert)'`
       returns empty.
-- [ ] **AC11 (TR2).** Both the runbook and the validation record state that #1442's metrics have no
+- [x] **AC11 (TR2).** Both the runbook and the validation record state that #1442's metrics have no
       server-side telemetry on the CLI surface and name KB-growth-via-git-history as the one proxy.
-- [ ] **AC12 (TR4).** `git diff origin/main...HEAD --name-only` lists only paths under
+- [x] **AC12 (TR4).** `git diff origin/main...HEAD --name-only` lists only paths under
       `knowledge-base/`.
-- [ ] **AC13 (Phase 1).** The spec and brainstorm both state Art. 14 governs the beta-CRM record;
+- [x] **AC13 (Phase 1).** The spec and brainstorm both state Art. 14 governs the beta-CRM record;
       `grep -c 'Art. 14' <spec> <brainstorm>` ≥ 1 each, and neither asserts Art. 13 governs it.
 
 ### Post-merge (operator)
 
-- [ ] **AC14 (TR5).** Agreement-gap follow-up issue is open and linked from the validation record.
+- [x] **AC14 (TR5).** Agreement-gap follow-up issue is open and linked from the validation record.
       *Automation:* filed in Phase 6 via `gh issue create` — not deferred.
 - [ ] **AC15 (TR1).** Beta-CRM contact created at stage `evaluating` once the web platform is
       serving. *Automation: not feasible because* migration `126_beta_crm.sql:170-172` REVOKEs all
