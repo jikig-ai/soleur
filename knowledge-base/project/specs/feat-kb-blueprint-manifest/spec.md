@@ -60,8 +60,14 @@ command, two TypeScript constants, and a coverage test.
   a candidate refinement, not v1 scope.
 - **Mirroring coverage-report content into Soleur-side storage.** The report stays
   in the customer's repo; the dashboard reads counts only.
-- **Changing the dashboard's visual treatment** beyond what the wireframe review
-  selects. The rewire is primarily a data-source change.
+- **Corner-radius migration.** The Solar Forge brand guide specifies 0px corners
+  and the shipped component uses `rounded-xl`/`rounded-lg`. The approved wireframe
+  keeps the shipped radius. Reconciling them is separate work.
+- **Manifest-driven dynamic card ordering.** The visible/collapsed split follows
+  the existing foundation-vs-operational distinction, not a manifest priority
+  field. Dynamic ordering is a system-design change beyond this feature.
+- **Card copy changes.** The manifest carries display copy (FR1), but seeded from
+  the strings that ship today. No rewording rides along with the rewire.
 
 ## Functional Requirements
 
@@ -114,7 +120,19 @@ end of a run, naming the skill or agent that owns each absent entry.
 derivation. Per the adopted taxonomy, entries an agent can complete unattended do
 not render as actionable cards.
 
-**FR12 — C4 flag prerequisite.** `c4-visualizer` is enabled for alpha-tester roles
+**FR12 — Two-zone card layout (approved wireframe: Variant A).** The zone renders
+an evidence group ("Soleur built this for you") above a rule, then an
+input-request group ("Needs your input"). Evidence tiles carry a concrete metric
+and an `Open →` link styled as a read affordance, not a task. The input-request
+group shows the 4 foundations with the 6 operational items collapsed behind
+`Show 6 more`. The coverage-report entry point sits inside the evidence zone.
+Shipped corner radii, the existing foundation/operational split, and the existing
+card copy are preserved — see Non-Goals.
+
+Design source: `knowledge-base/product/design/dashboard/blueprint-cards-variant-a-two-zones.pen`
+(frames: alpha state, expanded actionable zone, coverage drill-in).
+
+**FR13 — C4 flag prerequisite.** `c4-visualizer` is enabled for alpha-tester roles
 via the existing `flag-set-role` / `user-set-role` tooling before C4 generation
 ships. Generation is not gated on flag state.
 
