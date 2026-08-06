@@ -190,10 +190,26 @@ gate, because it gets read as evidence.
    committed `variables.tf` value IS what Terraform applied; if one appears, that is the value
    production runs on and the base changes with it:
    ```bash
-   doppler secrets -p soleur -c prd_terraform --only-names | grep -c APP_DOMAIN_BASE   # expect 0
+   [[ -z "${TF_VAR_app_domain_base:-}" ]] && echo "no exported override"   # tier 1 reads the PROCESS ENV
+   doppler secrets -p soleur -c prd_terraform --only-names | grep -c APP_DOMAIN_BASE || true   # expect 0
    ```
-   Measured 2026-08-06: `0` — and `APP_DOMAIN_BASE` is absent from **all 13** configs of the
-   `soleur` project. The secret the old gate read never existed anywhere.
+   The first line is the one that matches this step's heading: the derivation's override tier
+   reads `TF_VAR_app_domain_base` from the environment, so a Doppler check alone would pass
+   while an exported override silently drove the `curl` above it. Measured 2026-08-06: no
+   export, and `APP_DOMAIN_BASE` absent from **all 13** configs. The secret the old gate read
+   never existed anywhere.
+
+   **Also assert the host variable has not drifted.** `app_domain` and `app_domain_base` are
+   INDEPENDENT Terraform variables, and `app_domain` is the one with a live lever — `APP_DOMAIN`
+   IS present in `prd_terraform` (`app.soleur.ai`), so `TF_VAR_app_domain` is injected on every
+   apply. A domain move performed the only way it can be performed today would shift production
+   while the gate kept measuring the old host:
+   ```bash
+   doppler secrets get APP_DOMAIN -p soleur -c prd_terraform --plain   # expect app.<derived base>
+   ```
+   The derivation aborts on a *committed* divergence by itself; this covers the live-override
+   half, which it deliberately cannot see (reading Doppler is what this change removed from the
+   gate).
 
 2. **Both Hetzner probes return the shape the gate parses.**
    ```bash
@@ -277,7 +293,8 @@ The job prints a line of counters before it decides. Find your case here.
 | `requires confirm=RECUT-REGISTRY-LUKS` | Typo, or you used the *workspaces* recut token. | Re-fire with the right token. Nothing happened. |
 | `requires expected_registry_store_volume_id` | The id was missing or not a plain number. | Re-run Step 1 and re-fire. Nothing happened. |
 | `registry-pull-path-health: A0 ABORT` | Could not derive the restore inventory: `/health` unreachable, unparseable, or missing `version`/`build_sha`. | **Nothing was destroyed.** This names the HTTP read, which is the only thing A0 measures. `/health` is served by already-running containers and survives a zot outage, so it is not a zot symptom — check that `app.<domain>/health` answers. Do **not** go looking for `APP_DOMAIN_BASE` in Doppler: it is not there, in any config, and was never the source. A base-domain problem surfaces as the separate `derive-app-domain-base` error below, not as A0. |
-| `::error::derive-app-domain-base: …` | The base domain could not be derived from `apps/web-platform/infra/variables.tf` — the file is missing, `variable "app_domain_base"` has no readable `default =`, or the value is malformed (a scheme, a slash, whitespace, no dot, or an `app.` prefix). | **Nothing was destroyed.** The message names the file and the variable. This is a committed-config problem, not a credential one — there is no token to rotate and no secret to set. |
+| `::error::derive-app-domain-base[D10-PREPARE]: …` or `[D10-VERDICT]` | The base domain could not be derived from `apps/web-platform/infra/variables.tf` — the file is missing, `variable "app_domain_base"` has no readable `default =`, or the value is malformed (a scheme, a slash, whitespace, no dot, or an `app.` prefix). | **Nothing was destroyed** — the bracketed phase says so. The message names the file and the variable. This is a committed-config problem, not a credential one: no token to rotate, no secret to set. |
+| `::error::derive-app-domain-base[registry-bridge]: …` | Same derivation, but from the **refill leg** (`registry_store_restore`), which runs AFTER the destroy. | **The store is already gone.** Do NOT read this as a pre-destroy abort — go to the restore-failure rows below, not the ones above. The same marker also appears in `reusable-release.yml` and the two inngest image builds, which have nothing to do with a recut. |
 | `registry-pull-path-health: A1 ABORT` | A required image could not be resolved at GHCR. The message carries the classified cause. | **Nothing was destroyed.** On `NOTFOUND`, note the wording: GHCR returns the same error for *absent* and *not visible to this credential*, so check the job's `packages: read` permission before concluding a tag was deleted. |
 | `registry-pull-path-health: A2 ABORT` | The **rehearsed restore failed**, so the pass condition was never established. The message names the restore engine's exit code. | **Nothing was destroyed.** Map the code with the restore table below — the rehearsal exercises the same engine the real restore uses. |
 | `registry-pull-path-health: A3 ABORT` | The inventory came in below its declared floor — fewer required images resolved than production depends on. | **Nothing was destroyed.** This is the anti-vacuity guard; the message names which pin was missed. Do not lower the floor to get past it. |
