@@ -12,19 +12,20 @@
 # cannot prove the workflow USES it — that is this file's job, and the absence of such a gate is
 # why the original bug survived: a `run:` body is not testable, so nothing ever executed it.
 #
+# ── WHY EVERY ASSERTION IS ANCHORED, NOT COUNTED ────────────────────────────────────────────
+# An earlier revision counted a bare path token. Review proved six mutations left it fully
+# green, including two that re-admitted the original hazard class: pointing the arm at a
+# DIFFERENT script while a comment mentioned the audited one, and replacing the fail-closed
+# abort with a silent hardcoded fallback. Both are `cq-assert-anchor-not-bare-token`. Every row
+# below now anchors on a call form or a block, never on a token that prose can produce.
+#
 # ── WHY A SEPARATE FILE ─────────────────────────────────────────────────────────────────────
 # NOT appended to tests/scripts/test-registry-pull-path-health.sh. The mutation battery sandboxes
 # that suite into a tree with no `.github/` directory, so workflow-reading rows would go RED in
-# the battery's own baseline and `harness_die` it (exit 2, no verdict) — converting a real safety
-# net into a harness fault.
+# the battery's own baseline and `harness_die` it (exit 2, no verdict).
 #
-# ── HARNESS NOTES ───────────────────────────────────────────────────────────────────────────
-# Comments are stripped before every assertion: a bare-token grep over a YAML body matches the
-# explanatory prose describing the very construct under test, which is how a drift guard goes
-# vacuously green. Assertions use herestrings rather than `producer | grep -q`, because under
-# `pipefail` an early match makes the producer take SIGPIPE (141) and a NEGATIVE assertion then
-# fails OPEN. A vacuity floor runs first — every content assertion below is meaningless if the
-# extractor returned an empty body.
+# Idiom follows its nearest neighbours (test-registry-pull-path-health.sh,
+# test-registry-restore-from-ghcr.sh): `set -uo pipefail` + `export TMPDIR` + two-space `ok`/`FAIL`.
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 set -uo pipefail
@@ -33,6 +34,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 WORKFLOW="${ROOT}/.github/workflows/apply-web-platform-infra.yml"
 DERIVE="${ROOT}/scripts/derive-app-domain-base.sh"
+BRIDGE="${ROOT}/.github/actions/cf-tunnel-registry-bridge/action.yml"
 
 passes=0
 fails=0
@@ -42,81 +44,94 @@ _report() {
 }
 
 [[ -f "$WORKFLOW" ]] || { printf 'harness: workflow not found at %s\n' "$WORKFLOW" >&2; exit 2; }
+[[ -f "$BRIDGE" ]]   || { printf 'harness: bridge action not found at %s\n' "$BRIDGE" >&2; exit 2; }
 
-# Extract a step body by its `- name:` line, up to the next `- name:` at the same indent,
-# comments stripped.
+_strip() { grep -vE '^[[:space:]]*#'; }
+
 _step_body() {
   awk -v want="$1" '
     index($0, "      - name: " want) == 1 { inb = 1; print; next }
     inb && /^      - name: / { inb = 0 }
+    inb && /^  [a-zA-Z_][a-zA-Z0-9_-]*:/ { inb = 0 }
     inb { print }
-  ' "$WORKFLOW" | grep -vE '^[[:space:]]*#'
+  ' "$WORKFLOW" | _strip
 }
 
-# Extract a whole job body (jobs sit at 2-space indent), comments stripped.
 _job_body() {
   awk -v want="$1" '
     index($0, "  " want ":") == 1 { inb = 1; print; next }
     inb && /^  [a-zA-Z_][a-zA-Z0-9_-]*:/ { inb = 0 }
     inb { print }
-  ' "$WORKFLOW" | grep -vE '^[[:space:]]*#'
+  ' "$WORKFLOW" | _strip
 }
 
 PREPARE_BODY="$(_step_body 'Derive restore inventory (D10 PREPARE)')"
 VERDICT_BODY="$(_step_body 'Pre-destroy authorization gate (D10 VERDICT)')"
 
 # ── W1: vacuity floor ───────────────────────────────────────────────────────────────────────
-# Runs FIRST. If either extractor silently returned nothing (a renamed step, a changed indent),
-# every assertion below would pass against an empty string and this gate would certify nothing.
 w1_ok=1
-[[ -n "$PREPARE_BODY" ]] || { _report "W1 PREPARE step body extracts non-empty" fail "extractor returned empty — step renamed or re-indented?"; w1_ok=0; }
-[[ -n "$VERDICT_BODY" ]] || { _report "W1 VERDICT step body extracts non-empty" fail "extractor returned empty — step renamed or re-indented?"; w1_ok=0; }
+[[ -n "$PREPARE_BODY" ]] || { _report "W1 PREPARE step body extracts non-empty" fail "extractor returned empty"; w1_ok=0; }
+[[ -n "$VERDICT_BODY" ]] || { _report "W1 VERDICT step body extracts non-empty" fail "extractor returned empty"; w1_ok=0; }
 if [[ "$w1_ok" -eq 1 ]]; then
   _report "W1 vacuity floor: both D10 step bodies extract non-empty" ok
 else
-  printf '\n=== %d passed, %d failed (vacuity floor failed — later rows are not meaningful) ===\n' "$passes" "$fails"
+  printf '\n=== %d passed, %d failed (vacuity floor failed) ===\n' "$passes" "$fails"
   exit 1
 fi
 
-# ── W2/W3/W5: shared properties, asserted as ONE loop over both bodies ──────────────────────
+# ── W2/W3/W5: shared properties, one loop over both bodies ──────────────────────────────────
 for arm in PREPARE VERDICT; do
   body="$PREPARE_BODY"
   [[ "$arm" == "VERDICT" ]] && body="$VERDICT_BODY"
 
-  # W2 — calls the shared derivation exactly once.
-  n=$(grep -cE 'scripts/derive-app-domain-base\.sh' <<<"$body")
-  if [[ "$n" -eq 1 ]]; then
-    _report "W2 ${arm} calls derive-app-domain-base.sh exactly once" ok
+  # W2+W5 collapsed into ONE anchored row. Counting the path separately from the assignment
+  # form let a substitution keep the count while changing behaviour three different ways
+  # (different script + explanatory echo; dropped ${GITHUB_WORKSPACE} making it CWD-relative;
+  # trailing comment naming the audited script). The anchor pins all of it at once, including
+  # the ${GITHUB_WORKSPACE} prefix that DELIVERS the CWD-independence the unit suite proves.
+  if grep -qE '^[[:space:]]*if ! APP_DOMAIN_BASE=\$\(DERIVE_CONTEXT=[A-Za-z0-9_-]+ bash "\$\{GITHUB_WORKSPACE\}/scripts/derive-app-domain-base\.sh"\); then$' <<<"$body"; then
+    _report "W2 ${arm} invokes the shared derivation via the exact anchored call form" ok
   else
-    _report "W2 ${arm} calls derive-app-domain-base.sh exactly once" fail "found ${n}"
+    _report "W2 ${arm} invokes the shared derivation via the exact anchored call form" fail "no anchored 'if ! APP_DOMAIN_BASE=\$(DERIVE_CONTEXT=… bash \"\${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh\")' line"
   fi
 
-  # W3 — exports the value and retains a fail-closed abort on empty.
+  n=$(grep -cE 'scripts/derive-app-domain-base\.sh' <<<"$body")
+  if [[ "$n" -eq 1 ]]; then
+    _report "W2 ${arm} references the derivation exactly once" ok
+  else
+    _report "W2 ${arm} references the derivation exactly once" fail "found ${n}"
+  fi
+
   if grep -qE '^[[:space:]]*export APP_DOMAIN_BASE[[:space:]]*$' <<<"$body"; then
     _report "W3 ${arm} exports APP_DOMAIN_BASE on its own line" ok
   else
     _report "W3 ${arm} exports APP_DOMAIN_BASE on its own line" fail "no bare 'export APP_DOMAIN_BASE' line"
   fi
-  if grep -qE '\[\[ -z "\$APP_DOMAIN_BASE" \]\]|if \[\[ -z "\$APP_DOMAIN_BASE" \]\]' <<<"$body" \
-     && grep -qE '^[[:space:]]*exit 1[[:space:]]*$' <<<"$body"; then
-    _report "W3 ${arm} retains a fail-closed abort on an empty derivation" ok
+
+  # W3 fail-closed, BLOCK-SCOPED. Two independent greps (one for the guard, one for any
+  # `exit 1`) were satisfiable by an unrelated exit elsewhere in the step — measured: replacing
+  # the abort with `APP_DOMAIN_BASE="soleur.ai"` + a ::warning:: and adding an unrelated
+  # `exit 1` left the suite 21/0 while the gate authorized a destroy against a GUESSED host.
+  # Extract the derivation-failure block and require the abort INSIDE it.
+  abort_block="$(awk '
+    /^[[:space:]]*if ! APP_DOMAIN_BASE=\$\(/ { inb = 1 }
+    inb { print }
+    inb && /^[[:space:]]*fi[[:space:]]*$/ { exit }
+  ' <<<"$body")"
+  if [[ -n "$abort_block" ]] \
+     && grep -qE '::error::.*ABORT' <<<"$abort_block" \
+     && grep -qE '^[[:space:]]*exit 1[[:space:]]*$' <<<"$abort_block"; then
+    _report "W3 ${arm} aborts INSIDE the derivation-failure block (::error::…ABORT + exit 1)" ok
   else
-    _report "W3 ${arm} retains a fail-closed abort on an empty derivation" fail "missing -z guard or exit 1"
+    _report "W3 ${arm} aborts INSIDE the derivation-failure block" fail "block empty, or missing ::error::…ABORT / exit 1 within it"
   fi
 
-  # W5 — the bare-assignment form, and the errexit that makes it propagate.
-  # `export X=$(cmd)` exits 0 even when cmd fails; that single character of difference is what
-  # turns this fail-closed chain fail-open, so it is asserted as a NEGATIVE on the export form.
   if grep -qE 'export[[:space:]]+APP_DOMAIN_BASE=\$\(' <<<"$body"; then
-    _report "W5 ${arm} uses the bare-assignment form (no export X=\$(...))" fail "found 'export APP_DOMAIN_BASE=\$(' — exit status is swallowed"
+    _report "W5 ${arm} avoids the status-swallowing export form" fail "found 'export APP_DOMAIN_BASE=\$(' — exit status is swallowed"
   else
-    _report "W5 ${arm} uses the bare-assignment form (no export X=\$(...))" ok
+    _report "W5 ${arm} avoids the status-swallowing export form" ok
   fi
-  if grep -qE '^[[:space:]]*APP_DOMAIN_BASE=\$\(bash ' <<<"$body"; then
-    _report "W5 ${arm} assigns from a bash invocation of the script" ok
-  else
-    _report "W5 ${arm} assigns from a bash invocation of the script" fail "no bare 'APP_DOMAIN_BASE=\$(bash ' assignment"
-  fi
+
   if grep -qE '^[[:space:]]*set -euo pipefail[[:space:]]*$' <<<"$body"; then
     _report "W5 ${arm} body opens under set -euo pipefail" ok
   else
@@ -124,122 +139,133 @@ for arm in PREPARE VERDICT; do
   fi
 done
 
-# ── W4: residual-zero across the RECUT CHAIN, workflow AND composite actions ────────────────
-# Scoping this to the workflow alone would leave a hole the exact shape of the bug, because the
-# recut's own restore leg runs inside a composite action.
-#
-# ALLOWLIST — deliberately enumerated and commented so each exclusion is visible rather than
-# accidental. Both entries are OUT of the recut chain and deferred to D4:
-#   * cf-tunnel-ssh-bridge/action.yml  — derives ssh.<base>; not invoked by this dispatch.
-#   * "Resolve known-good image digest off-host" — the web-host birth/replace sites. Their
-#     conversion was deliberately cut from this change (a host replace is a live possibility
-#     during this incident), so a blanket residual-zero here would false-fail on work that was
-#     scoped out on purpose.
-declare -a ALLOWED_FILES=( "cf-tunnel-ssh-bridge/action.yml" )
-declare -a ALLOWED_WORKFLOW_STEPS=( "Resolve known-good image digest off-host" )
+# ── W2b: the composite action is POSITIVELY pinned, not just forbidden a string ─────────────
+# W4 below is a negative. Reverting the bridge to a hardcoded `APP_DOMAIN_BASE="soleur.ai"`
+# satisfied every negative and left the suite green — the write-side hazard returns in a
+# different costume. This row is the positive counterpart.
+BRIDGE_BODY="$(_strip < "$BRIDGE")"
+if grep -qE '^[[:space:]]*if ! APP_DOMAIN_BASE=\$\(DERIVE_CONTEXT=[A-Za-z0-9_-]+ bash "\$\{GITHUB_WORKSPACE\}/scripts/derive-app-domain-base\.sh"\); then$' <<<"$BRIDGE_BODY"; then
+  _report "W2b cf-tunnel-registry-bridge invokes the shared derivation (anchored)" ok
+else
+  _report "W2b cf-tunnel-registry-bridge invokes the shared derivation (anchored)" fail "the recut's own refill leg does not call the derivation"
+fi
 
-# Enumerate every surviving dark read across the workflow + composite actions.
+# ── W4: residual-zero across the RECUT CHAIN, workflow AND composite actions ────────────────
+# The pattern matches `doppler` co-occurring with the variable on one comment-stripped line,
+# NOT a fixed command string. Measured: the fixed string was evaded by quoting the name, by a
+# double space, and by `doppler secrets download … | jq -r .APP_DOMAIN_BASE`.
+DARK_RE='doppler.*APP_DOMAIN_BASE'
+
+# ALLOWLIST — enumerated and commented so each exclusion is visible rather than accidental.
+# Both are OUT of the recut chain and deferred:
+#   * cf-tunnel-ssh-bridge/action.yml  — derives ssh.<base>; not invoked by this dispatch.
+#   * "Resolve known-good image digest off-host" — the web-host birth/replace sites, whose
+#     conversion was deliberately cut (a host replace is live during this incident).
+declare -a ALLOWED_FILES=( "cf-tunnel-ssh-bridge/action.yml" )
+# name:expected-count. The count is PINNED, not merely non-zero: a PARTIAL conversion (one of
+# the two sites) previously left the row green reporting "1 deferred read(s)".
+declare -a ALLOWED_WORKFLOW_STEPS=( "Resolve known-good image digest off-host:2" )
+
 violations=""
-scan_targets="$(find "${ROOT}/.github/actions" -name 'action.yml' 2>/dev/null; printf '%s\n' "$WORKFLOW")"
+scan_targets="$(find "${ROOT}/.github/actions" -name 'action.y*ml' 2>/dev/null; printf '%s\n' "$WORKFLOW")"
 scanned=0
 while IFS= read -r f; do
   [[ -n "$f" && -f "$f" ]] || continue
   scanned=$((scanned + 1))
   skip=0
-  for a in "${ALLOWED_FILES[@]}"; do
-    [[ "$f" == *"$a" ]] && skip=1
-  done
+  for a in "${ALLOWED_FILES[@]}"; do [[ "$f" == *"$a" ]] && skip=1; done
   [[ "$skip" -eq 1 ]] && continue
 
-  # Comment-stripped, so prose describing the old read cannot register as a violation.
-  hits="$(grep -vE '^[[:space:]]*#' "$f" | grep -nE 'doppler secrets get APP_DOMAIN_BASE' || true)"
-  [[ -z "$hits" ]] && continue
+  hits="$(_strip < "$f" | grep -cE "$DARK_RE" || true)"
+  [[ "$hits" -eq 0 ]] && continue
 
   if [[ "$f" == "$WORKFLOW" ]]; then
-    # Attribute each workflow hit to its owning step, and drop the allowlisted steps.
-    unattributed="$(awk -v pat='doppler secrets get APP_DOMAIN_BASE' '
+    unattributed="$(awk -v re="$DARK_RE" '
       /^      - name: / { step = substr($0, index($0, "- name: ") + 8) }
       $0 ~ /^[[:space:]]*#/ { next }
-      index($0, pat) > 0 { print NR "\t" step }
+      $0 ~ re { print NR "\t" step }
     ' "$f")"
     while IFS=$'\t' read -r lineno step; do
       [[ -n "$lineno" ]] || continue
       allowed=0
       for s in "${ALLOWED_WORKFLOW_STEPS[@]}"; do
-        [[ "$step" == *"$s"* ]] && allowed=1
+        [[ "$step" == *"${s%%:*}"* ]] && allowed=1
       done
       [[ "$allowed" -eq 1 ]] && continue
       violations+="${f}:${lineno} (step: ${step})"$'\n'
     done <<<"$unattributed"
   else
-    violations+="${f}: ${hits}"$'\n'
+    violations+="${f} (${hits} dark read(s))"$'\n'
   fi
 done <<<"$scan_targets"
 
 if [[ "$scanned" -lt 2 ]]; then
-  _report "W4 scan covered the workflow and composite actions" fail "only ${scanned} file(s) scanned — the find produced nothing"
+  _report "W4 scan covered the workflow and composite actions" fail "only ${scanned} file(s) scanned"
 else
   _report "W4 scan covered ${scanned} files (workflow + composite actions)" ok
 fi
 
 if [[ -z "$violations" ]]; then
-  _report "W4 residual-zero: no un-allowlisted 'doppler secrets get APP_DOMAIN_BASE' in the recut chain" ok
+  _report "W4 residual-zero: no un-allowlisted doppler+APP_DOMAIN_BASE read in the recut chain" ok
 else
   _report "W4 residual-zero" fail "surviving dark reads:"$'\n'"${violations}"
 fi
 
-# The allowlist must not rot into a permanent silent exemption: if a D4 conversion lands and the
-# entry stops matching anything, this row goes RED so the exclusion is deleted rather than kept.
+# Allowlist staleness — COMMENT-STRIPPED, like every other read path in this file. It was not,
+# and a conversion that left the customary explanatory comment ("replaced the old `doppler
+# secrets get APP_DOMAIN_BASE` dark read") kept the exemption alive forever off that prose.
 for a in "${ALLOWED_FILES[@]}"; do
   match="$(find "${ROOT}/.github/actions" -path "*${a}" 2>/dev/null | head -1)"
-  if [[ -n "$match" ]] && grep -qE 'doppler secrets get APP_DOMAIN_BASE' "$match"; then
+  if [[ -n "$match" ]] && [[ "$(_strip < "$match" | grep -cE "$DARK_RE" || true)" -gt 0 ]]; then
     _report "W4 allowlist entry '${a}' still describes a real deferred read" ok
   else
-    _report "W4 allowlist entry '${a}' is stale" fail "no matching dark read — remove the exemption (D4 has landed)"
+    _report "W4 allowlist entry '${a}' is stale" fail "no matching dark read in CODE — remove the exemption (D4 has landed)"
   fi
 done
-allow_step_live=0
+
 for s in "${ALLOWED_WORKFLOW_STEPS[@]}"; do
-  c=$(awk -v pat='doppler secrets get APP_DOMAIN_BASE' -v want="$s" '
+  want="${s%%:*}"; expect="${s##*:}"
+  c=$(awk -v re="$DARK_RE" -v want="$want" '
     /^      - name: / { step = substr($0, index($0, "- name: ") + 8) }
     $0 ~ /^[[:space:]]*#/ { next }
-    index($0, pat) > 0 && index(step, want) > 0 { n++ }
+    $0 ~ re && index(step, want) > 0 { n++ }
     END { print n + 0 }
   ' "$WORKFLOW")
-  if [[ "$c" -gt 0 ]]; then
-    allow_step_live=$((allow_step_live + 1))
-    _report "W4 allowlisted step '${s}' still carries ${c} deferred read(s)" ok
+  if [[ "$c" -eq "$expect" ]]; then
+    _report "W4 allowlisted step '${want}' carries exactly ${expect} deferred read(s)" ok
   else
-    _report "W4 allowlisted step '${s}' is stale" fail "no matching dark read — remove the exemption (D4 has landed)"
+    _report "W4 allowlisted step '${want}' count drifted" fail "expected ${expect}, found ${c} — a partial conversion landed; narrow or remove the exemption"
   fi
 done
 
 # ── W6: DOPPLER_TOKEN_PRD is gone from the D10 gate job ─────────────────────────────────────
-# Scoped to the job, not the file: the token is legitimately used by registry_store_restore.
 GATE_JOB="$(_job_body 'registry_pull_path_gate')"
 if [[ -z "$GATE_JOB" ]]; then
   _report "W6 registry_pull_path_gate job body extracts non-empty" fail "extractor returned empty"
 else
   _report "W6 registry_pull_path_gate job body extracts non-empty" ok
   if grep -qE 'DOPPLER_TOKEN_PRD' <<<"$GATE_JOB"; then
-    _report "W6 DOPPLER_TOKEN_PRD absent from the D10 gate job" fail "still referenced — the credential the derivation removed"
+    _report "W6 DOPPLER_TOKEN_PRD absent from the D10 gate job" fail "still referenced"
   else
     _report "W6 DOPPLER_TOKEN_PRD absent from the D10 gate job" ok
   fi
 fi
 
 # ── W7: the referenced script exists and is executable ──────────────────────────────────────
-# A wiring test pointing at a missing file must FAIL, not vacuously pass — every W2 row above
-# would still be green if the script had never been committed.
-if [[ -f "$DERIVE" ]]; then
-  _report "W7 scripts/derive-app-domain-base.sh exists" ok
-else
-  _report "W7 scripts/derive-app-domain-base.sh exists" fail "the wired script is missing"
-fi
-if [[ -x "$DERIVE" ]]; then
-  _report "W7 scripts/derive-app-domain-base.sh is executable" ok
-else
-  _report "W7 scripts/derive-app-domain-base.sh is executable" fail "not +x"
+if [[ -f "$DERIVE" ]]; then _report "W7 scripts/derive-app-domain-base.sh exists" ok
+else _report "W7 scripts/derive-app-domain-base.sh exists" fail "the wired script is missing"; fi
+if [[ -x "$DERIVE" ]]; then _report "W7 scripts/derive-app-domain-base.sh is executable" ok
+else _report "W7 scripts/derive-app-domain-base.sh is executable" fail "not +x"; fi
+
+# ── Anti-vacuity assertion floor ────────────────────────────────────────────────────────────
+# Measured: neutering `_report` to `return 0` reported "0 passed, 0 failed" and exit 0 — a
+# suite asserting nothing is byte-indistinguishable from one that passed, because `fails` is a
+# single unguarded integer. Pinned EXACTLY: a `>=` re-opens the hole on the next added row.
+EXPECTED_ASSERTIONS=22
+if [[ "$fails" -eq 0 && "$passes" -ne "$EXPECTED_ASSERTIONS" ]]; then
+  printf '  FAIL anti-vacuity: %d assertions passed, expected exactly %d — rows were added, removed, or silenced\n' \
+    "$passes" "$EXPECTED_ASSERTIONS"
+  fails=$((fails + 1))
 fi
 
 printf '\n=== %d passed, %d failed ===\n' "$passes" "$fails"
