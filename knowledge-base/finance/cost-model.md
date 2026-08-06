@@ -228,7 +228,7 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 | Hetzner CX33 (web-1, web platform) | 9.17 [expenses.md@2026-07-16] | `expenses.md` |
 | Hetzner Volume (web-1, 20 GB) | 1.24 [expenses.md@2026-07-17] | `expenses.md` (FX-basis corrected — #6602) |
 | Hetzner Primary IPv4 (web-1) | 0.54 [expenses.md@2026-07-17] | `expenses.md` (#6589 gap added — #6602) |
-| Hetzner CX23 (zot registry, hel1) | 5.93 [expenses.md@2026-07-16] | `expenses.md` |
+| Hetzner CX23 (zot registry, hel1) | 5.93 [expenses.md@2026-07-16] | `expenses.md` — **repin DECLARED, not billing.** #7309 (2026-08-06) set `var.registry_server_type` to `cpx22`, but that PR schedules no `terraform apply`, so `soleur-registry` is still a live cx23 drawing the cx23 rate and **this line is correct as it stands**. On the host-replace this becomes 21.05 (+15.12/mo): re-run the subtotals then, not before. The shift is +6.77% of Product COGS — below the 10% threshold that would force a re-derivation here, which is why the subtotals below are untouched. |
 | Hetzner Volume (registry, 60 GB) | 3.71 [expenses.md@2026-07-17] | `expenses.md` (FX-basis corrected — #6602) |
 | Hetzner Primary IPv4 (registry) | 0.54 [expenses.md@2026-07-17] | `expenses.md` (#6589 gap added — #6602) |
 | Hetzner CPX22 (inngest control plane, hel1) | 21.05 [expenses.md@2026-07-16] | `expenses.md` |

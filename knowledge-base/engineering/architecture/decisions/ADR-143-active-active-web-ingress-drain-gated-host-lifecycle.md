@@ -28,17 +28,38 @@ destroying and IaC-rebuilding a host. Three repo facts constrain the design:
 
 Read-only query of `/v1/datacenters` (available server types) + `/v1/server_types`:
 
-| Server type | Spec | Net €/mo (hel1) | Orderable in hel1 (live 2026-07-25) |
-|---|---|---|---|
-| `cx33` (Intel; web-1's current type) | 4c/8g x86 | 8.49 | **NO — out of stock (also all EU DCs)** |
-| `cax11` (ARM; git-data's type **at the time of this probe** — repinned to `cpx22` 2026-07-27, #6570) | 2c/4g arm | 5.99 | **NO — ARM unavailable in EU DCs** |
-| `cx22` (Intel) | 2c/4g x86 | ~4.59 | **NO — out of stock** |
-| `cpx32` (AMD) | 4c/8g x86 | 35.49 | YES |
-| `cpx22` (AMD) | 2c/4g x86 | 19.49 | YES |
-| **`cx23`** (Intel; *was* the registry's type) | **2c/4g x86** | **5.49** | **Availability VOLATILE — see note below** |
+> **⚠ THIS TABLE IS A DATED READING, NOT A MENU — and the "Orderable" column has since been
+> falsified in both directions.** Two corrections were applied on 2026-08-06 (#7309, closing
+> items 1–2 of #7027); read them before using any row.
+>
+> 1. **`cx22` DOES NOT EXIST.** It was listed as "out of stock" at ~€4.59. It is not in the
+>    Hetzner catalogue at all, at any price. "Out of stock" and "does not exist" are different
+>    facts with very different consequences, and this table recorded the harmless one. That
+>    distinction is exactly what destroyed the registry host in **#6288**: `var.registry_server_type`
+>    was set to `cx32` — also a phantom — and the apply DESTROYED the host before failing
+>    `server type cx32 not found` on the create. A phantom SKU sitting in a table that reads
+>    like a menu is how that happens a second time. The row is struck below, not repriced.
+> 2. **The stock column is a 2026-07-25 sample and later samples disagree.** Probed live
+>    2026-08-06 (`hel1-dc2`, `.server_types.available`): `cx23` **and** `cx33` are AVAILABLE.
+>    Both read NO here. `cx23` was also NO on 2026-08-04 (`zot-registry.tf`). Availability is
+>    not a property of a server type — it is a point-in-time reading of vendor supply that
+>    moves in both directions on a days timescale, with no `deprecation` block to warn you.
+>    **A dated ✓ is not a capacity reservation. Re-probe before every apply that CREATES a
+>    host; never cite a row of this table as current.**
 
-This confirms model.c4:182 against live data: `cx33` cannot be recreated, so a rebuilt `web-1` cannot come
-back as `cx33`. It also confirmed #6570's root-blocker framing at the time of this probe: `cax11` (ARM)
+| Server type | Spec | Net €/mo (hel1) | Orderable in hel1 — **AS SAMPLED 2026-07-25, since falsified** |
+|---|---|---|---|
+| `cx33` (Intel; web-1's current type) | 4c/8g x86 | 8.49 | NO — out of stock (also all EU DCs) · **✓ AVAILABLE again 2026-08-06** |
+| `cax11` (ARM; git-data's type **at the time of this probe** — repinned to `cpx22` 2026-07-27, #6570) | 2c/4g arm | 5.99 | **NO — ARM unavailable in EU DCs** · still NO at every probe through 2026-08-06 |
+| ~~`cx22` (Intel)~~ | ~~2c/4g x86~~ | ~~~4.59~~ | **NON-EXISTENT — not a stock state.** No such Hetzner type; see the note above and #6288 |
+| `cpx32` (AMD) | 4c/8g x86 | 35.49 | YES · still YES 2026-08-06 |
+| `cpx22` (AMD) | 2c/4g x86 | 19.49 | YES · still YES 2026-08-06 — available at every recorded probe, which is why #7309 repinned the registry to it |
+| **`cx23`** (Intel; *was* the registry's type until #7309) | **2c/4g x86** | **5.49** | NO here · NO 2026-08-04 · **✓ AVAILABLE 2026-08-06** — two direction changes in eleven days |
+
+This confirmed model.c4:182 against live data **on the sample date**: `cx33` could not be recreated then,
+so a rebuilt `web-1` could not have come back as `cx33`. As of 2026-08-06 `cx33` is orderable again — which
+does not restore the guarantee, it removes it in the other direction: web-1's rebuildability now depends on
+when you look, and that is the finding, not the tick. It also confirmed #6570's root-blocker framing at the time of this probe: `cax11` (ARM)
 is unorderable. **Superseded 2026-07-27 (#6570):** git-data is repinned to `cpx22`, so the TYPE is no
 longer the blocker; the remaining blocker is the absent birth route (#6977).
 
