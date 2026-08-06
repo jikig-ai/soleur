@@ -97,6 +97,22 @@ vi.mock("@/lib/client-observability", () => ({
   reportSilentFallback: vi.fn(),
 }));
 
+// #7326 — a marker in place of the tour overlay, so the layout's TREE SHAPE can
+// be asserted. The tour's nav-tab steps now open the drawer on purpose, and
+// `<main>` goes `inert` whenever the drawer is open; if TourProvider ever moved
+// inside that subtree, the tour card's own buttons would go dead on exactly
+// those steps — silently, since `inert` neither throws nor logs.
+vi.mock("@/components/tour/tour-provider", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/tour/tour-provider")>();
+  return {
+    ...actual,
+    TourProvider: ({ children }: { children: React.ReactNode }) => (
+      <div data-testid="tour-overlay-root">{children}</div>
+    ),
+  };
+});
+
 /**
  * Reads the value the layout publishes on `RailCollapsedProvider` from INSIDE
  * the rail slot — i.e. exactly where the Settings sub-nav and the Conversations
@@ -338,5 +354,33 @@ describe("#7326 — the guided tour reveals the nav drawer it talks about", () =
       window.dispatchEvent(new Event(CHAT_OVERLAY_OPEN_EVENT));
     });
     expect(drawerIsOpen()).toBe(false);
+  });
+});
+
+describe("#7326 — the tour overlay must stay outside the inert subtree", () => {
+  it("mounts TourProvider as a sibling of <main>, never inside it", async () => {
+    stubViewport(true);
+    await renderDashboard("/dashboard");
+
+    const main = document.querySelector("main") as HTMLElement;
+    const tourRoot = screen.getByTestId("tour-overlay-root");
+    expect(main.contains(tourRoot)).toBe(false);
+  });
+
+  it("keeps the tour reachable while a revealed drawer makes <main> inert", async () => {
+    stubViewport(true);
+    await renderDashboard("/dashboard");
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(NAV_DRAWER_REVEAL_EVENT, { detail: { open: true } }),
+      );
+    });
+
+    const main = document.querySelector("main") as HTMLElement;
+    // The drawer IS inert-ing the content pane — that part is intended.
+    expect(main.hasAttribute("inert")).toBe(true);
+    // ...and the tour is outside it, so Back/Skip/Next still work.
+    expect(main.contains(screen.getByTestId("tour-overlay-root"))).toBe(false);
   });
 });

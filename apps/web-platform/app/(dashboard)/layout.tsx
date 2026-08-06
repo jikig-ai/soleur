@@ -804,7 +804,14 @@ export default function DashboardLayout({
         placement inside the provider is positional only. Both no-op when the
         command-palette flag is off (enabled=false). feat-guided-tour: TourProvider
         wraps the launch surfaces (support panel + ? overlay) + auto-first-run; no-op
-        when the guided-tour flag is off. */}
+        when the guided-tour flag is off.
+
+        #7326 — KEEP TourProvider OUTSIDE the `<div>` that holds `<main>`. That
+        `<main>` goes `inert` whenever the drawer is open, and the tour's nav-tab
+        steps now OPEN the drawer deliberately (NAV_DRAWER_REVEAL_EVENT) so the tab
+        they describe can be spotlit. Moving the provider inside would make the
+        tour card's own Back/Skip/Next unclickable on exactly those seven steps —
+        silently, since `inert` neither throws nor logs. */}
     <TourProvider>
       <CommandPalette />
       <HelpOverlay />
