@@ -26,10 +26,13 @@ that were only established at deepen time and whose naive forms are wrong.
 - [x] 1.1 Add `set +e` immediately after `set -uo pipefail` in **all 7** `run:` bodies of
       `.github/workflows/scheduled-prod-version-drift.yml`. Full rationale comment on the `check`
       step; one-line back-reference on the other six.
-- [x] 1.2 Correct the false-premise comment at **L248** (*"this step runs `set -uo pipefail` with
-      no -e"*) — keep the guard's real rationale, fix the premise.
-- [x] 1.3 Correct the false-premise comment at **L560** (*"with `exit 0` … and no `-e`"*) — this is
-      the stated rationale for the Sentry heartbeat expression and was factually wrong.
+- [x] 1.2 Correct the false-premise comment at **L248 on `origin/main`** — the comment beginning
+      "NEVER echo success unconditionally" (*"this step runs `set -uo pipefail` with no -e"*).
+      Keep the guard's real rationale, fix the premise. (Line coordinates in this file are
+      pre-fix; they shift once the edits land, so the anchor text is the durable reference.)
+- [x] 1.3 Correct the false-premise comment at **L560 on `origin/main`** — the comment beginning
+      "ALLOWLIST, not denylist" (*"with `exit 0` … and no `-e`"*). This is the stated rationale
+      for the Sentry heartbeat expression and was factually wrong.
 
 ## Phase 1b — Disarm the empty-string coercion fail-open (SECOND defect)
 
@@ -134,7 +137,15 @@ that were only established at deepen time and whose naive forms are wrong.
 | `apply-sentry-infra.yml` | L282, L592 |
 | `apply-web-platform-infra.yml` | L1183, 1331, 1516, 1740, 2456, 3065 |
 
-### LATENT (13) — deferred to ONE tracking issue, deliberately outside the gate's rule
+### LATENT (13 SITES) — deferred to #7311, deliberately outside the gate's rule
+
+Counted as SITES: `pr-auto-close-scanner.yml:84,85,86` is three, not one. Measured split by
+the nearest preceding `set` line: **5 inherited / 8 explicit `set -euo pipefail`** — so a
+widening of ADR-170's inheritance-anchored rule reaches only 5 of them.
+
+`cla-evidence-timestamp.yml` was in this list and was FIXED INLINE instead: the deferral's
+fail-loud premise is false there (the step is gated `if: failure()`, so the job is already
+red and an abort destroys the only durable signal).
 
 Assignments from a fallible command guarded only by an emptiness check, with **no `$?` read**. An
 inherited-`-e` abort here is **fail-loud** (the job goes red and visible), the opposite direction

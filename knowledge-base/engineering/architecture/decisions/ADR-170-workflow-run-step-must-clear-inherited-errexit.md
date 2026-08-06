@@ -11,7 +11,7 @@
   [ADR-126 — cron liveness must assert the consumed artifact](ADR-126-cron-liveness-must-assert-the-consumed-artifact.md)
   (a check must assert the thing it claims about — here, that the alerting path is REACHABLE,
   not merely that the workflow is green)
-- **Related:** none
+- **Related:** #7311 (the deferred latent class this ADR's rule deliberately does not reach)
 - **Supersedes:** nothing
 - **Issue:** #7304
 - **Enforced by:** `scripts/lint-workflow-errexit-capture.py` +
@@ -65,11 +65,22 @@ diagnostic output.
 
 The 2026-07-30 plan that fixed occurrences 3–5 stated in its own text that the repo already
 carried four learnings plus five in-workflow comments on this rule and it had still recurred. It
-responded by fixing siblings by hand and appending to a learning. It built no mechanical gate.
-Six days later the class recurred on the production-staleness alarm.
+responded by fixing siblings by hand and appending to a learning. **It built no mechanical
+gate.** Six days later — `447211a1a` 2026-07-30T22:40 to `1af49f532` 2026-08-06T01:40, six days
+and two hours — the class recurred on the production-staleness alarm.
 
-Four learnings, six in-workflow comments and two hand sweeps is the complete set of
-interventions already tried, and the measured result is recurrence.
+Four learnings and two hand sweeps is the rest of what had been tried. On the comment count the
+honest answer is that it depends entirely on the pattern, so the number is published with the
+command rather than asserted: at this branch's base commit,
+
+```bash
+git grep -h -iE '#.*(inherited|invocation).*(-e|errexit)|#.*set \+e so' \
+  546294c1f -- '.github/workflows/*.yml' | wc -l   # -> 17
+```
+
+The 2026-07-30 plan's "five" and an earlier revision of this ADR's "six" are both counts of
+something narrower that neither stated. The argument does not rest on the figure — whatever the
+exact number of comments, prose was the whole intervention and the class recurred anyway.
 
 ## Decision
 
@@ -82,9 +93,16 @@ in `.github/workflows/*.yml` and `.github/actions/*/action.yml`.
 
 **The rule anchors on the `$?` / `${PIPESTATUS[n]}` READ, not on the assignment shape.** This
 wording is load-bearing and was arrived at by measurement, not by taste. The obvious rule — "a
-command-substitution assignment is a finding" — was prototyped against the real tree and found
-**2 of the 17 sites**, because 9 of them are bare commands followed by `rc=$?`. Shipping it would
-have produced a gate passing over most of its class while reading as full coverage.
+command-substitution assignment is a finding" — reaches only **8 of the 17 sites**, because the
+other **9 are bare commands** followed by `rc=$?`. Shipping it would have covered less than half
+its class while reading as full coverage.
+
+*(An earlier revision of this ADR said "2 of the 17", inherited from the plan and never
+re-derived. It is wrong, and its own explanatory clause did not close — 2 + 9 = 11, not 17. The
+split is 8 assignments / 9 bare, obtained by classifying the gate's own output on `origin/main`;
+the conclusion is unchanged, since 8/17 is still a minority and the read anchor is still what
+covers all seventeen. Recording the correction rather than quietly fixing the number, because
+this is the paragraph asking the reader to trust a measurement over their intuition.)*
 `${PIPESTATUS[n]}` is included for the same reason: two real sites, including one of the six
 occurrences justifying this gate, never touch `$?`.
 
@@ -129,7 +147,10 @@ has not been surveyed.
 
 ## Consequences
 
-- 17 sites across 7 files were corrected. Nine are `terraform plan` handlers that already ended
+- 17 sites across 7 files were corrected. An **eighth** workflow file,
+  `cla-evidence-timestamp.yml`, is also edited: it is outside AP-022's anchoring rule (no `$?`
+  read, and its body sets `-euo pipefail` itself), and is corrected here because review showed
+  the deferral's fail-loud premise is false there. Nine are `terraform plan` handlers that already ended
   `exit $rc`, so the change cannot turn a failed production plan green — it restores the
   `::error::` that names why it failed.
 - One correction is a genuine fail-open fix rather than a cosmetic one:
@@ -143,7 +164,10 @@ has not been surveyed.
 - The gate ships fail-closed at 0 with no `.highwater`. That is a deliberate trade: it is what
   forced six edits to the auto-applied prod-infra root, which would otherwise have been
   unnecessary on their own merits. The alternative was a `.highwater` of 9. A gate that ships at
-  0 with no baseline is strictly stronger, and per-file diff scoping bounds the blast radius.
+  0 with no baseline is strictly stronger, and the blast radius is bounded by the shape of the
+  edits themselves — each is a single `set +e` inside a handler that already ends `exit $rc`,
+  so a failing plan still exits non-zero and only gains the `::error::` naming why. (The gate
+  itself has no diff mode: it scans `--root` whole. Do not read this as a `--changed` flag.)
 - New workflow authors writing a capture will now get a CI failure on the PR that introduces it,
   rather than a silent dark alarm discovered by an unrelated post-merge check months later.
 
@@ -172,10 +196,17 @@ runs in this repo's CI and caught none of the six.
 
 - It does not claim that every unprotected command is a finding. The `$?` read is required; a
   body that never reads an exit status is not making this mistake.
-- It does not claim the 13 **latent** sites are safe in general. They are assignments from a
-  fallible command guarded only by an emptiness check, with no `$?` read. An inherited-`-e` abort
-  there is **fail-loud** (the job goes red and visible), which is the opposite direction from the
-  outage, so deferring them leaves no user-visible hole. Tracked for a future widening pass.
+- It does not claim the **13 latent sites** are safe in general (counted as SITES, not as
+  file-line ranges; `pr-auto-close-scanner.yml:84,85,86` is three). They are assignments from a
+  fallible command guarded only by an emptiness check, with no `$?` read.
+  **Only 5 of the 13 are inherited-errexit sites at all** — the other 8 open with an explicit
+  `set -euo pipefail`, so errexit there is deliberate authorship and a gate anchored on
+  inheritance would never match them; covering those needs a second, separately justified rule.
+  The "an abort here is fail-loud, so deferral leaves no user-visible hole" argument holds for
+  the deferred set but is **not** universal: review found one site
+  (`cla-evidence-timestamp.yml`) where it is false — the step is gated `if: failure()`, so the
+  job is already red and an abort adds no signal while destroying the only durable one. That
+  site was fixed in this PR rather than deferred. Tracked: **#7311**.
 - It does not claim `shell: bash` is wrong to write — only that it does not clear `-e`, and the
   gate fires through it.
 - It does not survey the empty-string coercion class repo-wide. That is a separate decision.
