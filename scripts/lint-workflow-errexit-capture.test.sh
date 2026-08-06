@@ -29,7 +29,7 @@ trap 'rm -rf "$TMP"' EXIT INT TERM HUP
 PASS=0
 FAIL=0
 # Anti-vacuity floor. Raise deliberately when adding fixtures.
-MIN_ASSERTIONS="${ERREXIT_LINT_MIN_ASSERTIONS:-26}"
+MIN_ASSERTIONS="${ERREXIT_LINT_MIN_ASSERTIONS:-38}"
 
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() {
@@ -49,7 +49,11 @@ fi
 # a harness that fails to SET UP must abort, never silently score the PREVIOUS fixture's
 # tree and report a verdict about the linter that it never actually measured.
 mkfix() {
-  local name="$1" root="$TMP/fx-$1"
+  # Two `local`s deliberately: within a single `local a=… b=$a`, the first assignment has not
+  # taken effect when the second is expanded (SC2318), so `root` would silently become
+  # "$TMP/fx-" for every fixture and they would all share one directory.
+  local name="$1"
+  local root="$TMP/fx-$name"
   rm -rf "$root" || { echo "FATAL: rm -rf $root failed"; exit 2; }
   mkdir -p "$root/.github/workflows" || { echo "FATAL: mkdir $root failed"; exit 2; }
   printf '%s' "$root"
@@ -264,6 +268,158 @@ runs:
       shell: bash
 YAML
 assert_fires "F8 composite action bodies are scanned and FIRE" "$r" 7
+
+# F9-F15 -- the evasion shapes found by adversarial review. Every one of these was CLEAN
+# against the first revision of the linter, and two of them (`echo "rc=$?"`) are live in the
+# scanned tree at .github/workflows/fix-constraints-stage-a.yml:85 and :139 — i.e. the gate
+# was reporting those files as scanned while structurally unable to see their captures.
+
+# F9 -- the read is inside a QUOTED string. The old anchor required the identifier to be
+# preceded by start-of-line, `[;&|]` or whitespace; a `"` is none of those.
+r="$(mkfix quoted_read)"
+cat > "$r/.github/workflows/fx.yml" <<'YAML'
+name: fx
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          set -uo pipefail
+          terraform plan -no-color
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+YAML
+assert_fires "F9 \`echo \"rc=\$?\"\` FIRES (the live fix-constraints shape)" "$r" 9
+
+# F10 -- a quoted assignment, and the braced form.
+r="$(mkfix quoted_assign)"
+cat > "$r/.github/workflows/fx.yml" <<'YAML'
+name: fx
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          set -uo pipefail
+          terraform plan -no-color
+          rc="$?"
+      - run: |
+          set -uo pipefail
+          terraform plan -no-color
+          rc=${?}
+YAML
+assert_fires "F10 \`rc=\"\$?\"\` FIRES" "$r" 9
+assert_fires "F10b \`rc=\${?}\` FIRES" "$r" 13
+
+# F11 -- a bare `$?` read with no assignment at all. The docstring's own justification for
+# anchoring on the read ("the code ITSELF proves the author expected to handle failure")
+# applies verbatim here, so excluding it was a regex artifact, not a scope decision.
+r="$(mkfix bare_read)"
+cat > "$r/.github/workflows/fx.yml" <<'YAML'
+name: fx
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          set -uo pipefail
+          terraform plan -no-color
+          if [[ $? -ne 0 ]]; then echo "::error::failed"; fi
+YAML
+assert_fires "F11 a bare \`if [[ \$? -ne 0 ]]\` read FIRES" "$r" 9
+
+# F12 -- a `set` line that also CARRIES the command. Falling through unconditionally on any
+# SET_RE match made this a one-token bypass of the whole rule.
+r="$(mkfix set_carries_cmd)"
+cat > "$r/.github/workflows/fx.yml" <<'YAML'
+name: fx
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          set -uo pipefail
+          set -x; terraform plan -no-color; rc=$?
+YAML
+assert_fires "F12 \`set -x; cmd; rc=\$?\` FIRES (a set line can carry a command)" "$r" 9
+
+# F13 -- a FALSE heredoc opener inside a string or an arithmetic shift. The old scanner
+# blanked every remaining line when no terminator followed, silently disarming the rest of
+# the body — unbounded, and reachable from any `echo` documenting heredoc usage.
+r="$(mkfix false_heredoc)"
+cat > "$r/.github/workflows/fx.yml" <<'YAML'
+name: fx
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          set -uo pipefail
+          echo "usage: send <<EOF"
+          terraform plan -no-color
+          rc=$?
+      - run: |
+          set -uo pipefail
+          mask=$(( 1 << n ))
+          terraform plan -no-color
+          rc=$?
+YAML
+assert_fires "F13 a heredoc-looking string does not blank the body" "$r" 10
+assert_fires "F13b an arithmetic \`<<\` shift does not blank the body" "$r" 15
+
+# F14 -- long-form re-arm and long-form custom shell. A matcher keyed on flag CHARACTERS
+# misses `set -o errexit` entirely, so a preceding `set +e` reads as still in effect.
+r="$(mkfix long_form)"
+cat > "$r/.github/workflows/fx.yml" <<'YAML'
+name: fx
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          set +e
+          set -o errexit
+          terraform plan -no-color
+          rc=$?
+      - shell: bash -o errexit {0}
+        run: |
+          terraform plan -no-color
+          rc=$?
+YAML
+assert_fires "F14 \`set -o errexit\` re-arms, so the later capture FIRES" "$r" 10
+assert_fires "F14b \`shell: bash -o errexit {0}\` does NOT clear -e" "$r" 14
+
+# F15 -- THE MIS-FIX. The remediation text says "clear errexit around the capture", so the
+# most likely next edit puts `set +e` between the command and the read — where it protects
+# nothing, because the command already ran armed. For a ${PIPESTATUS[n]} read it is strictly
+# worse than the original bug: `set` is a builtin, so bash resets PIPESTATUS and the read
+# yields 0 forever (the trap git-data-rung2-rehearsal.yml documents in-tree).
+r="$(mkfix clear_after_command)"
+cat > "$r/.github/workflows/fx.yml" <<'YAML'
+name: fx
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          set -uo pipefail
+          terraform plan -no-color
+          set +e
+          rc=$?
+      - run: |
+          set -uo pipefail
+          producer | tee /tmp/o.log
+          set +e
+          rc=${PIPESTATUS[0]}
+YAML
+assert_fires "F15 a clear placed AFTER the command FIRES (it protects nothing)" "$r" 9
+assert_fires "F15b same, for a \${PIPESTATUS[n]} read (set also RESETS PIPESTATUS)" "$r" 14
 
 # --- MUST NOT FIRE (each with a positive control in the same file) -----------
 # The control is what distinguishes "the linter correctly exempted this" from "the linter is

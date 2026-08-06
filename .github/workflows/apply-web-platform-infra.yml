@@ -451,8 +451,10 @@ jobs:
           # cannot clear what the invocation already applied, so on a plan failure the step
           # died AT the doppler line and both the `rc=$?` capture and the `::error::` branch
           # below it were unreachable. The explicit `set +e` bracket is what delivers the
-          # property the comment claimed. Two sibling copies of the old comment remain in
-          # apply-github-infra.yml and apply-sentry-infra.yml — audited under #7098.
+          # property the comment claimed. The two sibling copies of the old comment (in
+          # apply-github-infra.yml and apply-sentry-infra.yml) were corrected under #7304,
+          # which also shipped scripts/lint-workflow-errexit-capture.py so the class cannot
+          # recur silently. The broader `set … pipefail`-without-`-e` audit remains #7098.
           set -euo pipefail
           set +e
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \

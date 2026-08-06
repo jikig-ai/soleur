@@ -167,6 +167,19 @@ jobs:
           health_url_safe="$(strip_log_injection "$health_url")"
           missing_shas_safe="$(strip_log_injection "$missing_shas")"
 
+          # RE-ARM before the output write, closing the bracket opened at the top of the body.
+          #
+          # Without this, the `set +e` above spans the write too, so a failed append (ENOSPC)
+          # would fall through to `exit 0` and leave outcome='success' with EMPTY outputs —
+          # re-entering the empty-string coercion fail-open through a different door, since
+          # `'' == '0'` is TRUE and the close-the-check-error-issue step would then post
+          # "the checker is evaluating again (verdict: )". That is the exact operator-facing
+          # falsehood the outcome conjunct was added to prevent, and body-wide scope weakened
+          # precisely the discrimination it depends on. Bracketing here also brings this file
+          # into line with ADR-170's own Decision wording (`set +e` … `set -e`) and with every
+          # sibling site in this PR, which all re-arm before their output write.
+          set -e
+
           {
             echo "exit_code=${rc}"
             echo "verdict=${verdict_safe}"

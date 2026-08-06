@@ -322,7 +322,7 @@ jobs:
 
           # Dedup by exact title match (deterministic; no list-search needed
           # to construct unique titles).
-          # `|| true` is load-bearing, and NOT for the usual "errexit is inherited" reason —
+          # `|| list_rc=$?` is load-bearing, and NOT for the usual "errexit is inherited" reason —
           # this body sets `-euo pipefail` itself, deliberately. The point is that the normal
           # justification for letting an abort happen ("it fails loud, the job goes red") is
           # VACUOUS here: this step is gated `if: failure()`, so the job is ALREADY red before
@@ -337,6 +337,15 @@ jobs:
           # degraded), and SIGPIPE-141 from `head -1` closing the pipe under pipefail. Empty is
           # the correct default — the `-z "$N"` guard below files a fresh issue rather than
           # escalating a stale one. Found while sweeping #7304's class.
+          #
+          # BUT A FAILED LOOKUP IS NOT "NOTHING FOUND". A bare `|| true` collapses the two,
+          # and on a `gh` blip with an issue already open that routes to the create branch:
+          # a DUPLICATE issue is filed whose createdAt is now, silently RESETTING the 7-day
+          # action-required escalation clock. That clock is the only operator-reaching channel
+          # on this monthly cron, so an intermittent API failure would defer the escalation
+          # indefinitely while the surface looked unchanged. Capture rc and say so — the same
+          # guard, for the same reason, as scheduled-prod-version-drift.yml's `list_rc` arms.
+          list_rc=0
           N=$(gh issue list \
             --repo "$REPO_FULL" \
             --label cla-evidence,timestamp-failure \
@@ -344,7 +353,10 @@ jobs:
             --search "\"$title\" in:title" \
             --json number,title,createdAt \
             | jq -r --arg t "$title" '.[] | select(.title == $t) | "\(.number) \(.createdAt)"' \
-            | head -1) || true
+            | head -1) || list_rc=$?
+          if [[ "$list_rc" -ne 0 ]]; then
+            echo "::error::Could not query the CLA tracking issue (gh rc=${list_rc}); filing a fresh issue. If one was already open, its 7-day action-required escalation clock has just been reset."
+          fi
           if [[ -z "$N" ]]; then
             gh issue create \
               --repo "$REPO_FULL" \

@@ -1338,6 +1338,19 @@ jobs:
 
             </details>
 
+      # `always()` + an explicit outcome check, NOT a bare `exit_code != '0'`.
+      #
+      # `set +e` above removes ONE input to the fail-open; it does not remove the fail-open.
+      # Actions `==` is loose and an unset output is '', which casts to 0 — so `'' != '0'` is
+      # FALSE and this gate is SKIPPED on any abort of the plan step that happens before the
+      # `exit_code` write (the `openssl rand` above, ENOSPC on $GITHUB_OUTPUT, a runner kill).
+      # The producer carries `continue-on-error: true`, so such an abort does not redden the
+      # job either, and this workflow has no Sentry heartbeat — the job status IS the only
+      # channel. A failing production terraform plan would report green.
+      #
+      # A plain-expression `if:` also gets an implicit `success() &&`, which on its own would
+      # skip this step whenever the plan step is marked failed. `always()` is what keeps the
+      # guard reachable on exactly the paths it exists for. #7304 / ADR-170.
       - name: Fail job on plan failure
-        if: steps.plan.outputs.exit_code != '0'
+        if: always() && (steps.plan.outcome != 'success' || steps.plan.outputs.exit_code != '0')
         run: exit 1

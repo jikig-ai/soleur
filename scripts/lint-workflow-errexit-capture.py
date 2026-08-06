@@ -90,10 +90,26 @@ except ImportError:  # pragma: no cover - PyYAML is a CI-image guarantee
     sys.exit(2)
 
 
-# A read of an exit status into a variable. Both forms, anywhere on the logical line.
-READ_RE = re.compile(r"(?:^|[;&|]|\s)\s*[A-Za-z_][A-Za-z0-9_]*=(?:\$\?|\$\{PIPESTATUS\[[0-9]+\]\})")
-# The same, used to split a same-line `cmd; rc=$?` into command and read.
-READ_ANCHOR_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=(?:\$\?|\$\{PIPESTATUS\[[0-9]+\]\})")
+# A read of an exit status. The VALUE forms first: `$?`, `${?}`, `$PIPESTATUS`,
+# `${PIPESTATUS[n]}`, each optionally wrapped in double quotes.
+#
+# The quoting is not a detail. An earlier revision required the identifier to be preceded by
+# start-of-line, `[;&|]` or whitespace, which a `"` is none of -- so `echo "rc=$?"` was
+# invisible, and TWO LIVE SITES in the scanned tree
+# (`.github/workflows/fix-constraints-stage-a.yml:85` and `:139`) were being reported as
+# covered while the gate could not see them. A gate certifying its own blind spot as scanned
+# is the defining failure of this kind of tool.
+_STATUS = r'"?(?:\$\?|\$\{\?\}|\$\{PIPESTATUS\[[@*0-9]+\]\}|\$PIPESTATUS\b)"?'
+
+# Form A -- captured into a variable: `rc=$?`, `rc="$?"`, `rc[0]=$?`, `declare -i rc=$?`.
+READ_ANCHOR_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?=" + _STATUS)
+# Form B -- read directly by a command or a test, with no assignment at all:
+# `if [[ $? -ne 0 ]]`, `case $? in`, `echo "rc=$?" >> "$GITHUB_OUTPUT"`, `exit $?`.
+# The docstring's justification for anchoring on the read -- "it fires only where the code
+# ITSELF proves the author expected to handle a failure" -- applies verbatim to these, so
+# excluding them was an artifact of the regex rather than a principled scope decision.
+READ_BARE_RE = re.compile(r"(?:^|[;&|(\s\[])" + _STATUS)
+READ_RE = re.compile(READ_ANCHOR_RE.pattern + "|" + READ_BARE_RE.pattern)
 
 # A `set` statement. Captures the argument list so compound forms are handled by inspecting
 # tokens rather than by matching a literal string.
@@ -128,18 +144,61 @@ def drop_heredocs(lines: list[str]) -> list[str]:
     out = list(lines)
     i = 0
     while i < len(out):
-        m = HEREDOC_RE.search(out[i])
+        m = _heredoc_opener(out[i])
         if m:
-            term = m.group(2)
+            term = m
             j = i + 1
             while j < len(out) and out[j].strip() != term:
-                out[j] = ""
                 j += 1
             if j < len(out):
-                out[j] = ""
-            i = j
+                # Terminator found: blank the body AND the terminator.
+                for k in range(i + 1, j + 1):
+                    out[k] = ""
+                i = j
+            # UNTERMINATED: blank NOTHING and keep scanning.
+            #
+            # The previous behaviour blanked every remaining line, which turned any false
+            # opener into an unbounded, silent disarm of the rest of the body -- one
+            # `echo "usage: send <<EOF"` and every capture below it went invisible. Failing
+            # toward "scan it as code" is the fail-closed direction: at worst the gate reports
+            # a finding inside heredoc data, which is loud and fixable, rather than reporting
+            # clean over real code, which is not.
         i += 1
     return out
+
+
+def _heredoc_opener(line: str) -> str | None:
+    """Return the terminator word if this line opens a heredoc OUTSIDE quotes, else None.
+
+    Scanning for `<<WORD` anywhere on the line matched inside string literals (`echo "usage:
+    send <<EOF"`) and inside arithmetic (`mask=$(( 1 << n ))`), both of which are ordinary
+    lines that then disarmed the scanner. Track quote state so only a real redirection counts.
+    """
+    in_single = in_double = False
+    i = 0
+    n = len(line)
+    while i < n:
+        c = line[i]
+        if c == "\\" and not in_single:
+            i += 2
+            continue
+        if c == "'" and not in_double:
+            in_single = not in_single
+        elif c == '"' and not in_single:
+            in_double = not in_double
+        elif c == "<" and not in_single and not in_double and line.startswith("<<", i):
+            rest = line[i + 2 :]
+            if rest.startswith("<"):  # `<<<` is a herestring, not a heredoc.
+                i += 3
+                continue
+            m = re.match(r"-?\s*\\?(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1", rest)
+            if m:
+                return m.group(2)
+            # `<<` followed by an arithmetic operand (`1 << n`) is a shift, not a redirection.
+            i += 2
+            continue
+        i += 1
+    return None
 
 
 def join_continuations(lines: list[str]) -> list[tuple[int, str]]:
@@ -176,15 +235,32 @@ def clears_errexit(args: str) -> bool | None:
     exact string `set -e` misses `set -euo pipefail`, which would let a `set +e` followed by the
     house-dominant `set -euo pipefail` read as "still cleared" while errexit is in fact back on
     -- shipping an inert fix that looks correct in the diff.
+
+    `-o NAME` / `+o NAME` are consumed as PAIRS. Without that, `set -o errexit` -- a real re-arm
+    -- parses as "says nothing" and a preceding `set +e` reads as still in effect, which is the
+    same silent-cancellation hole the compound-form matching above exists to close, in its long
+    form. Symmetrically `set +o errexit` is a real clear, and treating it as silent produced a
+    false positive on correct code.
     """
     verdict = None
-    for tok in args.split():
-        if tok.startswith(("-", "+")) and not tok.startswith("--"):
-            flags = tok[1:]
-            if flags in ("o", "e") and tok.startswith("-") and flags == "o":
-                continue
-            if "e" in flags:
+    toks = args.split()
+    i = 0
+    while i < len(toks):
+        tok = toks[i]
+        if tok in ("-o", "+o") and i + 1 < len(toks):
+            if toks[i + 1] == "errexit":
                 verdict = tok.startswith("+")
+            i += 2
+            continue
+        if tok == "--":
+            # Everything after `--` is a positional parameter, not an option.
+            break
+        if tok.startswith(("-", "+")) and not tok.startswith("--"):
+            # A single-dash CHARACTER CLUSTER. `o` inside it introduces a long-option name
+            # that was handled above; here it is only a cluster member.
+            if "e" in tok[1:]:
+                verdict = tok.startswith("+")
+        i += 1
     return verdict
 
 
@@ -203,9 +279,25 @@ def shell_clears_errexit(shell: str | None) -> bool:
         return False
     if "{0}" in s or s.startswith(("bash ", "sh ")):
         # A custom invocation: it clears errexit only if no -e appears among its flags.
-        for tok in s.split():
-            if tok.startswith("-") and not tok.startswith("--") and "e" in tok[1:]:
-                return False
+        # `-o NAME` is consumed as a PAIR for the same reason as in clears_errexit: without it
+        # `bash -o errexit {0}` read as CLEARING, and a job-level `defaults.run.shell` carrying
+        # that form exempted every step in the job.
+        toks = s.split()
+        i = 0
+        while i < len(toks):
+            tok = toks[i]
+            if tok == "-o" and i + 1 < len(toks):
+                if toks[i + 1] == "errexit":
+                    return False
+                i += 2
+                continue
+            # Single-dash CHARACTER CLUSTERS only. A long option (`--noprofile`) or a word
+            # argument is not a flag cluster, so an `e` inside `-NoProfile` or `-Verbose`
+            # must not read as errexit.
+            if tok.startswith("-") and not tok.startswith("--") and len(tok) > 1:
+                if tok[1:].islower() and "e" in tok[1:]:
+                    return False
+            i += 1
         return True
     return False
 
@@ -217,19 +309,41 @@ def is_protected(cmd: str) -> bool:
         return True
     if CONTROL_PREFIX_RE.match(c):
         return True
-    # `|| true`, `|| rc=$?`, `|| VAR=...`, `|| { ... }` -- any right-hand operand at all.
-    # Measured contribution over the whole tree: ZERO additional findings, because the
-    # read-anchor already excludes these (a `|| rc=$?` line IS the read). Kept as cheap
-    # defence-in-depth; deliberately NOT claimed as load-bearing.
-    if "||" in c:
+    # `!`-negated commands are exempt from errexit by POSIX, so this is a real protection.
+    if c.startswith("!"):
         return True
-    if "&&" in c:
-        return True
+    # DELIBERATELY NOT a substring test for `||` / `&&`.
+    #
+    # The earlier form returned True whenever either operator appeared ANYWHERE in the command,
+    # and its own comment recorded the measured contribution as ZERO additional findings. That
+    # made it pure downside: it contributed nothing while making the calibration number an
+    # artifact of formatting. Measured, ELEVEN of the seventeen calibration sites went invisible
+    # under one ordinary edit -- `cd "$X" && bash checker.sh`, or a `bash -c "a && b"` where the
+    # operator sits inside a quoted argument to another program and has no bearing on the outer
+    # shell's errexit at all. It is also not even a correct approximation: under errexit
+    # `a && b` DOES abort when `b` fails, so only left operands are exempt.
+    #
+    # The real `|| rc=$?` idiom is handled precisely at the read site (see scan_body), which is
+    # where it belongs -- the protection is a property of the read's position, not of the
+    # command containing an operator somewhere.
     return False
 
 
 def scan_body(body: str, shell: str | None, defaults_shell: str | None) -> list[tuple[int, str]]:
-    """Return (line_offset_within_body, logical_line) for each finding."""
+    """Return (line_offset_within_body, logical_line) for each finding.
+
+    THE STATE THAT MATTERS IS THE ONE AT THE COMMAND, NOT AT THE READ. An earlier revision
+    evaluated errexit at the line carrying the read and skipped it whenever errexit was
+    currently clear -- which made the single most likely mis-fix invisible:
+
+        terraform plan -out=tfplan
+        set +e                       # <- "clear errexit around the capture"
+        rc=$?                        # dead code: the command already died
+
+    The remediation text literally invites that shape, so it is what gets written next. Two
+    passes: compute the state BEFORE each logical line, then judge each read against the state
+    at its own command's line.
+    """
     effective_shell = shell or defaults_shell
     if shell_clears_errexit(effective_shell):
         return []
@@ -237,61 +351,85 @@ def scan_body(body: str, shell: str | None, defaults_shell: str | None) -> list[
     lines = drop_heredocs(strip_comment_lines(body))
     logical = join_continuations(lines)
 
-    findings: list[tuple[int, str]] = []
+    # --- pass 1: errexit state before each logical line -----------------------
+    state: list[bool] = []
     errexit_on = True  # the runner's `-e`, inherited before line 1
-
-    for pos, (idx, text) in enumerate(logical):
-        # Track `set` linearly BEFORE evaluating this line, so a clear on the same logical line
-        # as a read still counts, and a re-arm above a later capture does not protect it.
+    depth = 0          # unclosed `(` -- a `set +e` inside a subshell does not survive it
+    for _idx, text in logical:
+        state.append(errexit_on)
         m = SET_RE.match(text)
         if m:
             verdict = clears_errexit(m.group(1))
-            if verdict is True:
+            # Only honour a CLEAR at the body's own nesting level. `set +e` inside `( … )` is
+            # scoped to the subshell and does not leak out, and one inside an untaken `if`
+            # branch never runs at all -- believing either disarms the gate for the whole rest
+            # of the body. Refusing the exemption is the fail-CLOSED direction.
+            if verdict is True and depth == 0:
                 errexit_on = False
             elif verdict is False:
                 errexit_on = True
-            continue
+        depth += text.count("(") - text.count(")")
+        if depth < 0:
+            depth = 0
 
-        if not errexit_on:
-            continue
-        if not READ_RE.search(text):
-            continue
-
-        anchor = READ_ANCHOR_RE.search(text)
+    # --- pass 2: judge each read against the state at ITS command -------------
+    findings: list[tuple[int, str]] = []
+    for pos, (idx, text) in enumerate(logical):
+        anchor = READ_RE.search(text)
         if not anchor:
             continue
 
-        # The command whose status is being read: whatever precedes the read on this logical
-        # line, or -- if the read stands alone -- the previous logical line.
         before = text[: anchor.start()].rstrip()
 
-        # THE READ IS THE RIGHT-HAND OPERAND -- i.e. this is the canonical `cmd || rc=$?`
-        # protection idiom, and the command cannot trip errexit at all. Test this BEFORE
-        # stripping any separator: stripping first turns `cmd ||` into `cmd |`, which then
-        # fails the `||`-in-command test and reports the SAFE idiom as a finding. Measured:
-        # that single ordering mistake produced 13 false positives across the tree, including
-        # every site in the two workflows independently verified as correctly protected.
+        # The canonical `cmd || rc=$?` protection idiom: the read is the right-hand operand,
+        # so the command cannot trip errexit at all. Tested BEFORE any separator stripping --
+        # stripping first turns `cmd ||` into `cmd |`, which then reads as unprotected.
+        # Measured: that one ordering mistake produced 18 false positives across 7 files.
         if before.endswith("||") or before.endswith("&&"):
             continue
 
-        before = re.sub(r"[;&|]\s*$", "", before).strip()
-        if before:
-            cmd = before
-            cmd_idx = idx
+        # The same idiom with the read passed as an ARGUMENT rather than assigned:
+        #   retry install_crane || degraded crane_install "$?" "…"
+        # Any `||` / `&&` to the LEFT of the read on this logical line means the read lives in
+        # the right-hand operand, so the left command's failure is already handled and errexit
+        # never fires on it. Scoped to `before` deliberately -- the earlier `is_protected`
+        # version tested the whole command string, which exempted a `bash -c "a && b"` whose
+        # operator sits inside a quoted argument to another program and has no bearing on this
+        # shell at all.
+        if "||" in before or "&&" in before:
+            continue
+
+        # Whose exit status is this? Only a real command SEPARATOR makes the text on this line
+        # the command; otherwise the read sits inside another command's arguments
+        # (`echo "rc=$?"`, `if [[ $? -ne 0 ]]`) and refers to the PREVIOUS command.
+        sep = re.search(r"(?:;|\|\||&&|\||&)\s*$", before)
+        if before and sep:
+            cmd, cmd_pos = re.sub(r"(?:;|\|\||&&|\||&)\s*$", "", before).strip(), pos
         else:
-            prev = None
+            cmd, cmd_pos = None, None
             for back in range(pos - 1, -1, -1):
                 cand = logical[back][1].strip()
-                if cand and not SET_RE.match(cand):
-                    prev = logical[back]
-                    break
-            if prev is None:
+                if not cand or SET_RE.match(cand):
+                    continue
+                cmd, cmd_pos = cand, back
+                break
+            if cmd is None:
                 continue
-            cmd, cmd_idx = prev[1], prev[0]
 
+        if not state[cmd_pos]:
+            continue  # errexit was already clear when the command ran -- genuinely protected
         if is_protected(cmd):
             continue
-        findings.append((cmd_idx, cmd.strip()))
+
+        note = ""
+        if cmd_pos != pos and any(
+            SET_RE.match(logical[b][1].strip())
+            and clears_errexit(SET_RE.match(logical[b][1].strip()).group(1)) is True
+            for b in range(cmd_pos + 1, pos)
+        ):
+            note = ("   [errexit cleared AFTER this command, not before it"
+                    " — the command already ran armed]")
+        findings.append((logical[cmd_pos][0], cmd.strip() + note))
 
     return findings
 

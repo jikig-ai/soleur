@@ -65,11 +65,11 @@ FAIL=0
 # below, so a block that degrades into a single failing assertion can never trip one. They are
 # a tripwire against a block being REMOVED, and nothing more -- do not read a green floor as
 # evidence that the assertions still mean what they meant.
-MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-149}"
+MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-151}"
 MIN_A="${DRIFT_MIN_A:-57}"
-# 49 -> 79 (#7304): B14 both-direction execution x3 arms + self-check, B14b, B15/B15b,
-# B16/B16b/B16c, B17/B17b.
-MIN_B="${DRIFT_MIN_B:-79}"
+# 49 -> 81 (#7304): B14 both-direction execution x3 arms + self-check, B14b,
+# B15/B15b/B15c, B16/B16b/B16c, B17/B17b/B17c.
+MIN_B="${DRIFT_MIN_B:-81}"
 # 11 -> 13 (#7304): axis11 (errexit clear) + axis12 (outcome conjunct).
 MIN_C="${DRIFT_MIN_C:-13}"
 COUNT_A=0
@@ -780,22 +780,61 @@ for _j in jobs.values():
 emit("STEPS_WITH_SHELL_KEY", _shell_steps)
 
 # --- B15: every run: body in this workflow clears inherited errexit -------------
-def clears_errexit(body):
-    # A `set` statement whose argument list carries a +-prefixed token containing e.
-    # Matched over code() so PROSE CANNOT SATISFY IT -- the rationale comments in this
-    # workflow contain the literal set +e, and a raw-body grep would count them.
-    for ln in body.split("\n"):
-        m = re.match(r"^\s*set\s+(.*)$", ln)
-        if not m:
+def _set_verdict(args):
+    # True = clears -e, False = re-arms it, None = says nothing. `-o NAME` / `+o NAME` are
+    # consumed as PAIRS so `set -o errexit` is seen as the re-arm it is.
+    verdict = None
+    toks = args.split()
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if t in ("-o", "+o") and i + 1 < len(toks):
+            if toks[i + 1] == "errexit":
+                verdict = t.startswith("+")
+            i += 2
             continue
-        for tok in m.group(1).split():
-            if tok.startswith("+") and "e" in tok:
-                return True
-    return False
+        if t.startswith(("-", "+")) and not t.startswith("--") and "e" in t[1:]:
+            verdict = t.startswith("+")
+        i += 1
+    return verdict
+
+def errexit_clear_position(body):
+    # Returns (clear_index, first_statement_index) over the COMMENT-STRIPPED body, or
+    # (None, ...) when nothing clears errexit.
+    #
+    # POSITION, not presence. Asserting only presence was measured vacuous: moving the
+    # `set +e` in the notify step from the top of the body to AFTER the `fi` kept the count
+    # at 0 and left the whole suite green, while errexit was armed for the entire
+    # jq/curl sequence the clear exists to protect. The plan flagged exactly this residual
+    # ("B15 asserts presence, not position") and assumed the Phase 4 linter covered it --
+    # it cannot, because that gate anchors on a `$?` read and these bodies have none.
+    clear_i = None
+    first_stmt = None
+    for i, ln in enumerate(body.split("\n")):
+        if not ln.strip():
+            continue
+        m = re.match(r"^\s*set\s+(.*)$", ln)
+        if m:
+            if clear_i is None and _set_verdict(m.group(1)) is True:
+                clear_i = i
+            continue
+        if first_stmt is None:
+            first_stmt = i
+    return clear_i, first_stmt
 
 _bodies = [s for (_, s) in steps if isinstance(s.get("run"), str)]
 emit("RUN_BODY_COUNT", len(_bodies))
-emit("BODIES_WITHOUT_ERREXIT_CLEAR", len([s for s in _bodies if not clears_errexit(code(s))]))
+
+_no_clear = 0
+_late_clear = 0
+for _s in _bodies:
+    _c, _f = errexit_clear_position(code(_s))
+    if _c is None:
+        _no_clear += 1
+    elif _f is not None and _c > _f:
+        _late_clear += 1
+emit("BODIES_WITHOUT_ERREXIT_CLEAR", _no_clear)
+emit("BODIES_WITH_LATE_ERREXIT_CLEAR", _late_clear)
 
 # --- B17: the empty-string coercion fail-open ----------------------------------
 # Actions == is LOOSE: differing operand types are cast to Number, an unset output is the empty
@@ -804,11 +843,21 @@ emit("BODIES_WITHOUT_ERREXIT_CLEAR", len([s for s in _bodies if not clears_errex
 # 31054501973: the check-error FILING step (!= 0 && != 1) was skipped while its exact complement,
 # the CLOSER (== 0 || == 1), RAN. Leading with steps.check.outcome is what discriminates
 # "the step ran and measured 0" from "the step never ran".
+# Selector is `steps.check.outputs.` -- the WHOLE consumer set, not just the exit_code ones.
+# Keying on exit_code excluded the `verdict == \x27CLEAN\x27` gate, leaving that one consumer
+# unpinned while the prose above it claimed EVERY consumer leads with the conjunct. The guard
+# was narrower than its own name. (No apostrophes in this block -- see the code() docstring.)
 _gates = [norm(s.get("if", "")) for (_, s) in steps
-          if "steps.check.outputs.exit_code" in norm(s.get("if", ""))]
+          if "steps.check.outputs." in norm(s.get("if", ""))]
 emit("EXITCODE_GATE_COUNT", len(_gates))
 emit("EXITCODE_GATES_WITHOUT_OUTCOME_CONJUNCT",
      len([g for g in _gates if "steps.check.outcome == \x27success\x27" not in g]))
+# A substring test cannot see a NEUTERED conjunct: `(steps.check.outcome == \x27success\x27
+# || true) && …` keeps the substring and is vacuous. Count gates whose conjunct sits inside a
+# disjunction, which is the cheap shape that defeats the check above.
+emit("EXITCODE_GATES_WITH_VACUOUS_CONJUNCT",
+     len([g for g in _gates
+          if re.search(r"\(\s*steps\.check\.outcome == \x27success\x27\s*\|\|", g)]))
 
 # --- B10: schedule + job timeout ---------------------------------------------
 on = wf.get("on", wf.get(True, {})) or {}
@@ -1197,6 +1246,12 @@ run_part_b() {
     "0" "${X_BODIES_WITHOUT_ERREXIT_CLEAR:-<unextracted>}"
   assert_contains "B15b the body count is non-zero (a workflow with no bodies passes B15 vacuously)" \
     "^[1-9]" "${X_RUN_BODY_COUNT:-0}"
+  # B15c -- POSITION, which B15 alone cannot see. Measured: moving the notify step's `set +e`
+  # below its `fi` kept B15's count at 0 and the whole suite green, while errexit stayed armed
+  # across the jq/curl sequence the clear exists to protect. A clear that lands after the first
+  # statement protects nothing above it.
+  assert_eq "B15c no body clears errexit AFTER its first statement (presence is not position)" \
+    "0" "${X_BODIES_WITH_LATE_ERREXIT_CLEAR:-<unextracted>}"
 
   # B16 -- the list_rc safety branch is actually REACHABLE.
   #
@@ -1248,10 +1303,18 @@ run_part_b() {
   #
   # This also means B4 was never testing the empty case: it asks which steps are reachable when
   # exit_code is '0', not when the step never ran. B17 is what covers that.
-  assert_eq "B17 every exit_code gate leads with steps.check.outcome (count lacking it)" \
+  assert_eq "B17 every steps.check.outputs consumer leads with the outcome conjunct (count lacking it)" \
     "0" "${X_EXITCODE_GATES_WITHOUT_OUTCOME_CONJUNCT:-<unextracted>}"
-  assert_contains "B17b the exit_code gate count is non-zero (else B17 passes vacuously)" \
-    "^[1-9]" "${X_EXITCODE_GATE_COUNT:-0}"
+  # The population is SIX -- the five exit_code gates plus the verdict==CLEAN gate. Pinning the
+  # exact number is what stops the selector silently narrowing again: an earlier revision keyed
+  # on `exit_code` and reported a clean 5, excluding the consumer whose conjunct was therefore
+  # unasserted while the prose claimed full coverage.
+  assert_eq "B17b all six steps.check.outputs consumers are in B17's population" \
+    "6" "${X_EXITCODE_GATE_COUNT:-0}"
+  # B17c -- a substring test cannot see a neutered conjunct. `(outcome == 'success' || true) &&`
+  # keeps the substring B17 looks for and is vacuous.
+  assert_eq "B17c no consumer's outcome conjunct is neutered inside a disjunction" \
+    "0" "${X_EXITCODE_GATES_WITH_VACUOUS_CONJUNCT:-<unextracted>}"
 
   # B10g -- monitor slug parity. A mismatched slug leaves the Sentry monitor permanently
   # green over a dead alarm: the worst shape available, since it looks like coverage.
@@ -1466,11 +1529,16 @@ open(p,"w").write("\n".join(ls))' "A6 oldest_epoch_from_log picks the OLDEST"
   # edit of that expression; key it on the two ENDS instead.
   mutate_and_assert_red "axis5-bare-not-cancelled" "$WF" '
 import sys,re
-p=sys.argv[1]; s=open(p).read()
-s2,n=re.subn(r"\$\{\{ !cancelled\(\)[^}]*exit_code == .1. \}\}",
-         "${{ !cancelled() }}", s, count=1)
-assert n == 1, "axis5 mutator did not match a drift-gated if: condition"
-open(p,"w").write(s2)' "B3b every alerting step carries a verdict conjunct"
+p=sys.argv[1]; ls=open(p).read().split("\n"); n=0
+for i,l in enumerate(ls):
+    if l.lstrip().startswith("#"): continue
+    if not l.lstrip().startswith("if:"): continue
+    l2,k=re.subn(r"\$\{\{ !cancelled\(\)[^}]*exit_code == .1. \}\}",
+                 "${{ !cancelled() }}", l, count=1)
+    if k:
+        ls[i]=l2; n+=1; break
+assert n == 1, "axis5 mutator did not match a drift-gated if: CONDITION (comment-only match?)"
+open(p,"w").write("\n".join(ls))' "B3b every alerting step carries a verdict conjunct"
 
   # Axis 6 -- delete the label bootstrap. gh issue create --label hard-fails on an undefined
   # label, so the verdict would reach the email channel only.
@@ -1550,7 +1618,7 @@ for l in ls:
         n+=1; continue
     out.append(l)
 assert n == 1, "axis11 mutator did not remove a set +e STATEMENT (comment-only match?)"
-open(p,"w").write("\n".join(out))' "B14"
+open(p,"w").write("\n".join(out))' "B14 (exit 1)"
 
   # Axis 12 -- strip the outcome conjunct from an exit_code gate: the empty-string coercion
   # fail-open, re-armed. `\x27\x27 == \x270\x27` is TRUE in an Actions expression, so without
