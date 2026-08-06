@@ -181,10 +181,33 @@ set +e
 )
 rc=$?
 set -e
+# CONTRACT CHANGED 2026-08-06 (#7278). This assertion was inverted: it used to
+# require INACTIVE for a dead pid, and that requirement is what reaped two live
+# worktrees in one afternoon.
+#
+# The fixture above kills a LONG-RUNNING acquirer, which is the only shape where
+# pid-liveness is real orphan evidence. But `is_lease_active` cannot see the
+# shape — it sees only "pid is dead", and that is ALSO what every documented CLI
+# entry point produces on the happy path, because `acquire_lease` records `pid=$$`
+# and those processes exit within milliseconds by design:
+#
+#     bash .claude/hooks/lib/session-state.sh acquire_lease <worktree>
+#     bash .../worktree-manager.sh --yes create <branch>
+#
+# One signal, two indistinguishable causes — so the old rule could not be right in
+# both. It optimised for the rare case (crash) and mis-served the common one
+# (normal CLI exit), which meant NO CLI-acquired lease was ever honoured: the file
+# existed, showed four hours remaining, and cleanup-merged removed the worktree,
+# deleted the branch local AND remote, and closed the PR anyway.
+#
+# The window is now the authority. A killed session still holds its worktree until
+# its window closes — bounded by max(expected_duration, 4h) and by the 24h mtime
+# sweep (T5) — which is the correct direction to fail: a worktree released a little
+# late is recoverable; one reaped mid-run is not.
 if [[ "$rc" == "0" ]]; then
-  fail "T4: is_lease_active returned 0 (active) for dead PID"
+  pass "T4: a killed acquirer's lease is still honoured INSIDE its window (window is the authority, not pid liveness)"
 else
-  pass "T4"
+  fail "T4: lease reads inactive purely because its pid is dead — the #7278 reaper is back"
 fi
 
 # ------------------------------------------------------------------------
@@ -338,6 +361,124 @@ if command -v script >/dev/null; then
   fi
 else
   echo "  skip: script(1) not available"
+fi
+
+# ------------------------------------------------------------------------
+# T9: a lease whose ACQUIRING PROCESS HAS EXITED is still active inside its
+# expected duration.
+#
+# This is the defect that reaped two live worktrees on 2026-08-06 (#7278).
+# `acquire_lease` records `pid=$$`. The DOCUMENTED entry points are
+# short-lived processes:
+#
+#     bash .claude/hooks/lib/session-state.sh acquire_lease <worktree>
+#     bash .../worktree-manager.sh --yes create <branch>
+#
+# so `$$` belongs to a bash that exits within milliseconds. `is_lease_active`
+# then hit `kill -0 <dead pid> || return 1` and reported INACTIVE, and
+# `sweep_orphan_leases` deleted the file outright. Every CLI-acquired lease
+# was therefore DEAD ON ARRIVAL: the file existed, carried four hours of
+# remaining duration, and protected nothing. cleanup-merged reaped the
+# worktree, deleted the branch local AND remote, and closed the PR.
+#
+# A lease is a TIME-BOXED RESERVATION. PID liveness is an optimisation that
+# lets a finished session release early — it is not the authority, and it
+# must not be able to expire a lease that is still inside its window.
+# ------------------------------------------------------------------------
+echo "T9: a lease outlives the process that acquired it (#7278 reaper)"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+source_helper "$ROOT"
+
+T9_WT="wt-dead-acquirer-$$"
+# Acquire from a SEPARATE process which then exits — the real CLI shape.
+bash -c "
+  export SOLEUR_SESSION_STATE_ROOT='$ROOT'
+  # shellcheck source=/dev/null
+  source '$HELPER'
+  acquire_lease '$T9_WT' one-shot 240
+" >/dev/null 2>&1
+t9_acq_rc=$?
+
+if [[ "$t9_acq_rc" -ne 0 ]]; then
+  fail "T9 setup: child could not acquire the lease (rc=$t9_acq_rc)"
+elif [[ ! -f "$ROOT/leases/$T9_WT.lease" ]]; then
+  fail "T9 setup: no lease file was written"
+else
+  t9_pid=$(grep '^pid=' "$ROOT/leases/$T9_WT.lease" | cut -d= -f2)
+  # PRECONDITION, asserted rather than assumed: if the recorded pid were
+  # somehow still alive this fixture would exercise the happy path and pass
+  # vacuously against the very bug it exists to pin.
+  if [[ -z "$t9_pid" ]] || kill -0 "$t9_pid" 2>/dev/null; then
+    fail "T9 precondition: recorded pid '$t9_pid' is alive or empty — fixture cannot reach the dead-pid path"
+  else
+    pass "T9 precondition: the acquiring process has exited (pid $t9_pid is dead)"
+
+    if is_lease_active "$T9_WT"; then
+      pass "T9a: a lease whose acquirer exited is ACTIVE inside its duration"
+    else
+      fail "T9a: lease reads INACTIVE inside its window — cleanup-merged would reap live work"
+    fi
+
+    # The sweep must not delete it either: worktree-manager runs
+    # sweep_orphan_leases BEFORE it consults is_lease_active, so a sweep that
+    # reaps on a dead pid alone defeats the check downstream of it.
+    sweep_orphan_leases
+    if [[ -f "$ROOT/leases/$T9_WT.lease" ]]; then
+      pass "T9b: sweep_orphan_leases preserves a dead-acquirer lease inside its window"
+    else
+      fail "T9b: sweep_orphan_leases deleted a lease that is still inside its window"
+    fi
+  fi
+fi
+
+# ------------------------------------------------------------------------
+# T10: the fix must NOT make leases immortal. A lease past its window is
+# still inactive and still sweepable, dead pid or not — otherwise a crashed
+# session would block cleanup forever, which is the opposite failure.
+# ------------------------------------------------------------------------
+echo "T10: an EXPIRED lease is still inactive (the fix is time-boxed, not immortal)"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+source_helper "$ROOT"
+
+T10_WT="wt-expired-$$"
+# started_at well beyond the 4h floor; pid 999999 is not running.
+cat > "$ROOT/leases/$T10_WT.lease" <<EOF
+pid=999999
+ppid=1
+skill=one-shot
+started_at=$(date -u -d '30 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+expected_duration_min=240
+hostname=$HOSTNAME
+EOF
+
+if is_lease_active "$T10_WT"; then
+  fail "T10a: a lease 30h past a 4h window reads ACTIVE — cleanup could never reap"
+else
+  pass "T10a: a lease past its window is inactive"
+fi
+
+# ------------------------------------------------------------------------
+# T11: a lease from ANOTHER host is not active here (unchanged invariant,
+# pinned because T9 loosens the pid check and must not loosen this one).
+# ------------------------------------------------------------------------
+echo "T11: a foreign-host lease is inactive"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+source_helper "$ROOT"
+
+T11_WT="wt-foreign-$$"
+cat > "$ROOT/leases/$T11_WT.lease" <<EOF
+pid=999999
+ppid=1
+skill=one-shot
+started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+expected_duration_min=240
+hostname=some-other-machine
+EOF
+
+if is_lease_active "$T11_WT"; then
+  fail "T11: a lease owned by another host reads ACTIVE on this one"
+else
+  pass "T11: a foreign-host lease is inactive"
 fi
 
 # ------------------------------------------------------------------------

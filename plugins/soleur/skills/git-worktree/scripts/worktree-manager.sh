@@ -41,11 +41,23 @@ else
   # protection is OFF in this worktree. Silent stubs would mask the
   # 2026-04-21 regression class the lease layer was added to prevent.
   echo "[warn] session-state.sh missing at $_SS_LIB — lease/lock protection disabled in this worktree." >&2
+  echo "[warn] cleanup-merged will now REFUSE to reap any worktree (fail-closed): with no lease" >&2
+  echo "[warn] library there is no way to tell a live session from an abandoned one." >&2
   acquire_lock() { return 0; }
   release_lock() { return 0; }
   acquire_lease() { return 0; }
   release_lease() { return 0; }
-  is_lease_active() { return 1; }
+  # FAIL CLOSED (#7278). This used to `return 1` — "no lease is active" — which
+  # told cleanup-merged that EVERY worktree was free to reap at the exact moment
+  # we had just admitted we cannot measure whether one is in use. That is a
+  # fail-open default on a destructive, unrecoverable operation (it deletes the
+  # worktree, the local branch, AND the remote branch, and closes the PR).
+  #
+  # Returning 0 inverts the default: with no lease library, every worktree reads
+  # as held and nothing is reaped. The cost is that cleanup silently stops doing
+  # anything in a legacy worktree — which the loud warnings above surface, and
+  # which is trivially recoverable by hand. The old cost was losing live work.
+  is_lease_active() { return 0; }
   sweep_orphan_leases() { return 0; }
   _register_lease_release_trap() { return 0; }
   headless_or_stderr() { echo "[$1] $2" >&2; }

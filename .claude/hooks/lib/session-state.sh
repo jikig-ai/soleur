@@ -269,7 +269,34 @@ is_lease_active() {
 
   [[ -n "$lease_pid" ]] || return 1
   [[ "$lease_host" == "$HOSTNAME" ]] || return 1
-  kill -0 "$lease_pid" 2>/dev/null || return 1
+
+  # NO `kill -0 "$lease_pid" || return 1` HERE — that line reaped two live
+  # worktrees on 2026-08-06 (#7278), and it could never have worked.
+  #
+  # `acquire_lease` records `pid=$$`, and every DOCUMENTED entry point is a
+  # short-lived process:
+  #
+  #     bash .claude/hooks/lib/session-state.sh acquire_lease <worktree>
+  #     bash .../worktree-manager.sh --yes create <branch>
+  #
+  # so `$$` is a bash that exits within milliseconds of writing the file.
+  # A pid-liveness gate therefore reported INACTIVE for every CLI-acquired
+  # lease the instant it was taken — the file existed, carried its full
+  # remaining duration, and protected nothing. cleanup-merged then removed
+  # the worktree, deleted the branch locally AND on origin, and closed the PR.
+  #
+  # A lease is a TIME-BOXED RESERVATION; the age cap below is the authority.
+  # PID liveness is only an optimisation for releasing early, and a session
+  # that finishes cleanly calls `release_lease` (which still verifies pid +
+  # hostname + started_at before releasing). The cost of this change is that
+  # a CRASHED session holds its worktree until the window closes, bounded by
+  # max(expected_duration, 4h) here and by the 24h mtime sweep below. That is
+  # the correct direction to fail: a worktree kept slightly too long is
+  # recoverable, a worktree reaped mid-run is not.
+  #
+  # Pinned by T9/T9b (a dead acquirer stays active + unswept inside the
+  # window) and T10 (an expired lease is still inactive, so this is not an
+  # immortality bug) in session-state.test.sh.
 
   # Age cap: max(expected*60, 4h floor)
   local floor=14400
@@ -325,7 +352,36 @@ sweep_orphan_leases() {
       local lease_host
       lease_host=$(_lease_read_field "$f" hostname)
       if [[ "$lease_host" == "$HOSTNAME" ]]; then
-        rm -f "$f"
+        # ...AND only once the lease is past its own window. A dead pid alone
+        # is NOT orphan evidence: `acquire_lease` records `pid=$$`, which for
+        # every documented CLI entry point belongs to a process that exits
+        # immediately (see the long note in is_lease_active). Sweeping on a
+        # dead pid alone deleted the lease file BEFORE worktree-manager
+        # consulted is_lease_active — so the downstream check found no file
+        # and the reap proceeded. That is #7278, twice, on 2026-08-06.
+        #
+        # is_lease_active is the single source of truth for "still held";
+        # the 24h mtime cap above remains the backstop for a truly abandoned
+        # file. Pinned by T9b.
+        local lease_started lease_expected lease_cap started_epoch lease_age
+        lease_started=$(_lease_read_field "$f" started_at)
+        lease_expected=$(_lease_read_field "$f" expected_duration_min)
+        [[ "$lease_expected" =~ ^[0-9]+$ ]] || lease_expected=240
+        lease_cap=$(( lease_expected * 60 ))
+        (( lease_cap < 14400 )) && lease_cap=14400
+        started_epoch=""
+        if [[ "$lease_started" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+          started_epoch=$(date -d "$lease_started" +%s 2>/dev/null || echo "")
+        fi
+        if [[ -z "$started_epoch" ]]; then
+          # Unparseable started_at: fall back to mtime, which the 24h cap
+          # above already governs. Leave it for that cap rather than guessing.
+          continue
+        fi
+        lease_age=$(( now_epoch - started_epoch ))
+        if (( lease_age >= lease_cap )); then
+          rm -f "$f"
+        fi
       fi
     fi
   done
