@@ -58,7 +58,8 @@ Two failure modes follow directly:
   (#1439–#1443, roadmap rows 4.1–4.5), not beside it.
 - Record Skouer as alpha tester #1 with zero personal data in git.
 - Produce a repeatable per-tester runbook so testers 2–10 follow a written process.
-- Encode the GDPR posture (Art. 13 vs Art. 14; the PII-never-in-git boundary) where an operator
+- Encode the GDPR posture (Art. 14 for the CRM record, Art. 13 for platform account data; the
+  PII-never-in-git boundary) where an operator
   will actually encounter it — in the runbook, at the step that would otherwise breach it.
 - Record the beta-CRM contact write as an explicitly tracked gate with a named unblock condition.
 - Track the recruitment-mix constraint from tester #1.
@@ -99,9 +100,16 @@ checkpoint (#1442) with the measurement caveat from TR2.
 **FR4 — Welcome message with the notice line.** The runbook carries a copy-pasteable alpha welcome
 message including the LIA's Art. 14 notice line: that private notes of the conversation are kept
 for follow-up on a legitimate-interest basis, retained up to 24 months, with objection and erasure
-available at `legal@jikigai.com`. Delivered as a message, not in person. For testers who sign up
-to the hosted platform, the runbook states that Art. 13 is satisfied by the existing
-`accept-terms` privacy-policy flow and the line is redundant.
+available at `legal@jikigai.com`. Delivered as a message, not in person.
+
+**Art. 14 governs the CRM record regardless of whether the tester signs up.** The LIA scopes it to
+data "not obtained from the data subject via a form they submitted", which is true of
+operator-authored conversation notes even for a tester who holds a platform account;
+`model.c4:22-24` models the `betaContact` actor as "An involuntary data subject (Art. 14)" and
+Art. 30 PA-30 records the same. Art. 13 governs the separate dataset of *platform account data*
+collected at signup, and is satisfied by the existing `accept-terms` privacy-policy flow. The
+runbook states both, and states that neither is delivered in person — so the notice line is
+**not** redundant for a signed-up tester.
 
 **FR5 — PII boundary stated at the point of breach.** The runbook step that records the tester
 states inline that named contact data goes to the beta CRM (database) **only**, citing the LIA's
