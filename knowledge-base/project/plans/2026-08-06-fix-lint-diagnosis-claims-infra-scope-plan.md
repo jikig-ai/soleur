@@ -239,9 +239,9 @@ Run the acceptance criteria below, then `bash scripts/test-all.sh` for the `scri
 
 ### Pre-merge (PR)
 
-- [ ] **AC1** `DIRS` in `scripts/lint-diagnosis-claims.sh` contains all four directories.
-      `grep -c 'apps/web-platform/infra' scripts/lint-diagnosis-claims.sh` ≥ 1.
-- [ ] **AC2** The `CLAIM` regex carries the new alternative, anchored on the regex line:
+- [x] **AC1** `DIRS` in `scripts/lint-diagnosis-claims.sh` contains all four directories.
+      `grep -c 'apps/web-platform/infra' scripts/lint-diagnosis-claims.sh` → **4** (≥ 1 ✓).
+- [x] **AC2** The `CLAIM` regex carries the new alternative, anchored on the regex line:
       `grep -cE '^\s*r"\\bis the \(\?:fix\|cause\)\\b"' scripts/lint-diagnosis-claims.sh` = 1.
 
       *Amended during /work.* The original form was `grep -cF 'is the (?:fix|cause)' … = 1`.
@@ -251,23 +251,45 @@ Run the acceptance criteria below, then `bash scripts/test-all.sh` for the `scri
       a file with the regex line **deleted** and the comment retained — it would have passed
       on a broken lint. Comment lines begin with `#`, so the `^\s*r"` anchor cannot match one
       (`cq-assert-anchor-not-bare-token`; the "narrowing is not anchoring" sharp edge).
-- [ ] **AC3** `bash scripts/lint-diagnosis-claims.sh` exits 0 and its **stdout** reads
-      `lint-diagnosis-claims: OK — 1 unmeasured causal claims (baseline 1)`. Read the
-      message, not `$?` — the script also exits 0 on the `--census` path and prints a
-      distinct `note:` line when it sits *below* baseline.
-- [ ] **AC4** `bash scripts/lint-diagnosis-claims.sh --census` prints `1`.
-- [ ] **AC5** `bash scripts/lint-diagnosis-claims.test.sh` → **12 passed, 0 failed**
+- [x] **AC3** `bash scripts/lint-diagnosis-claims.sh` exits 0 and its **stdout** reads
+      `lint-diagnosis-claims: OK — 1 unmeasured causal claims (baseline 1).` — verified by
+      reading the printed verdict, not `$?` (the script also exits 0 on the `--census` path
+      and prints a distinct `note:` line when it sits *below* baseline).
+- [x] **AC4** `bash scripts/lint-diagnosis-claims.sh --census` printed **1**.
+- [x] **AC5** `bash scripts/lint-diagnosis-claims.test.sh` → **12 passed, 0 failed**
       (amended from the issue's `11`; see Research Reconciliation).
-- [ ] **AC6** `scripts/lint-diagnosis-claims.highwater` is **unmodified**.
-      `git diff --name-only origin/main...HEAD | grep -c highwater` = 0.
-- [ ] **AC7** The regression fixture is load-bearing in **both** directions. Verified by
-      mutation, not by inspection: reverting *either* the `DIRS` entry *or* the `CLAIM`
-      alternative makes `lint-diagnosis-claims.test.sh` fail. Both arms must be exercised.
-- [ ] **AC8** The file's own scope documentation is truthful: the `SCOPE.` header names
-      `apps/web-platform/infra`.
-- [ ] **AC9** `bash scripts/test-all.sh` `scripts` shard is green.
-- [ ] **AC10** A follow-up issue exists for the `OPERATOR_LINE` anchor gap (see *Deferred*),
-      carrying the measured census delta.
+- [x] **AC6** `scripts/lint-diagnosis-claims.highwater` is **unmodified**.
+      `git diff --name-only origin/main...HEAD | grep -c highwater` → **0**.
+- [x] **AC7** The regression fixture is load-bearing in **both** directions, verified by
+      mutation rather than inspection — each mutant applied to a working copy with the
+      anchor asserted present first, then reverted and the baseline re-confirmed:
+
+      | Tree | Suite |
+      |---|---|
+      | baseline | 12 passed, 0 failed |
+      | mutant A — `DIRS` entry reverted, `CLAIM` intact | **11 passed, 1 failed** |
+      | mutant B — `CLAIM` alternative reverted, `DIRS` intact | **11 passed, 1 failed** |
+      | restored baseline | 12 passed, 0 failed |
+
+- [x] **AC8** The file's own scope documentation is truthful: the `SCOPE.` header names
+      `apps/web-platform/infra/` and says why it was added.
+- [x] **AC9** `bash scripts/test-all.sh` green: **rc=0**, `=== 267/267 suites passed ===`,
+      zero `[FAIL]` lines, and `[ok] scripts/lint-diagnosis-claims (1085ms)` in the run.
+      Read as the whole report, not just the exit code:
+
+      - **Preamble:** `siblings: 0`, `LOCK_ACQUIRED`, `/tmp` 28% used — a clean run, so the
+        green is not a contention artifact.
+      - **Coverage epilogue:** `apps/web-platform/infra/ is NOT covered above (diff does not
+        touch it)`. Correct and expected — this change *scans* that directory, it does not
+        *edit* it, so the infra runner is not the gate for this diff. Recorded rather than
+        skipped past, per the definite-article trap (#6969).
+      - The one `[contention] BANNER`-shaped grep hit was `[ok] AC4: the advisory banner
+        names LOCK_CONTENDED_PROCEEDING` — an assertion *label* inside the contention suite,
+        not a fired banner.
+- [x] **AC10** Follow-up filed as **#7318**, carrying the measured census delta (1 → 2), the
+      `reusable-release.yml:1289` instance, and the open question of whether that hedged
+      message is a genuine claim or a false positive. Net issue flow for this PR: closing 1
+      (#7310), filing 1 (#7318), **net 0**.
 
 There are no post-merge operator steps. Nothing here requires a deploy, a dispatch, or a
 dashboard.

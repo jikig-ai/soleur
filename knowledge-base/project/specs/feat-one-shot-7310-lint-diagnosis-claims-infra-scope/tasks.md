@@ -8,35 +8,39 @@ fixture is observed failing. A fixture that passes before the fix tests nothing.
 
 ## Phase 1 — RED: the regression fixture
 
-- [ ] **1.1** In `scripts/lint-diagnosis-claims.test.sh`, extend the fixture-tree setup
+- [x] **1.1** In `scripts/lint-diagnosis-claims.test.sh`, extend the fixture-tree setup
       (`mkdir -p "$FIX/.github/workflows" "$FIX/.github/actions/some-action"`) to also create
       `"$FIX/apps/web-platform/infra"`.
-- [ ] **1.2** In ARM 1 (fixtures that MUST trip), add a synthesized
+- [x] **1.2** In ARM 1 (fixtures that MUST trip), add a synthesized
       `apps/web-platform/infra/registry-userdata-budget.sh` fixture carrying the verbatim
       historical message ending `#7280's registry_rationale_strip is the fix.`
       Synthesize the surrounding script (`cq-test-fixtures-synthesized-only`); quote only the
       offending sentence, exactly as ARM 1 already does for the two historical offenders.
-- [ ] **1.3** Assert `census_of "$FIX"` is `1`, with a comment naming what the case pins:
+- [x] **1.3** Assert `census_of "$FIX"` is `1`, with a comment naming what the case pins:
       the directory (part 1) **and** the phrasing (part 2). Then `rm` the fixture.
-- [ ] **1.4** Run `bash scripts/lint-diagnosis-claims.test.sh`. It **must fail**. Record the
-      failure output — this is the proof the fixture is load-bearing.
+- [x] **1.4** RED observed: `EXIT=1`, `11 passed, 1 failed`, the new case reporting
+      `expected: 1 / actual: 0` — the directory was out of scope, exactly as predicted.
 
 ## Phase 2 — GREEN: scope
 
-- [ ] **2.1** `scripts/lint-diagnosis-claims.sh:61` — add `"apps/web-platform/infra"` to `DIRS`.
-- [ ] **2.2** Update the `SCOPE.` header prose (`:18-23`) to name the fourth directory and
+- [x] **2.1** `scripts/lint-diagnosis-claims.sh:61` — add `"apps/web-platform/infra"` to `DIRS`.
+- [x] **2.2** Update the `SCOPE.` header prose (`:18-23`) to name the fourth directory and
       why it matters: it is where the `registry_rationale_strip is the fix` message shipped,
       invisible to this lint for the same reason `.github/actions/` was invisible to
       `lint-workflows.sh`.
-- [ ] **2.3** Update the `DIRS` inline comment (`:54-60`) to match. Leaving either prose block
+- [x] **2.3** Update the `DIRS` inline comment (`:54-60`) to match. Leaving either prose block
       stale makes the file's own documentation lie about its scope.
 
 ## Phase 3 — GREEN: the CLAIM alternative
 
-- [ ] **3.1** `scripts/lint-diagnosis-claims.sh:75-80` — append the alternative
+- [x] **3.1** `scripts/lint-diagnosis-claims.sh:75-80` — append the alternative
       `\bis the (?:fix|cause)\b` to `CLAIM`. Keep both `\b` anchors; both are load-bearing
       (they block `This the fix`, `is the fixture`, `is the fixed`, `is the causes`).
-- [ ] **3.2** Run the suite. It must now be green.
+- [x] **3.2** Suite green: **12 passed, 0 failed**. Also confirmed the lint does not
+      self-flag: the new regex line is not an `OPERATOR_LINE` (the helper-call alternative
+      needs whitespace before the quote; `r"` has none) and the new comment starts with `#`,
+      which the scanner skips. `scripts/` is in scope, so this was worth measuring, not
+      assuming.
 
 ## Phase 4 — Verify
 
@@ -45,25 +49,34 @@ fixture is observed failing. A fixture that passes before the fix tests nothing.
       The original bare-literal `grep -cF` form returned 2 (the explanatory comment also
       carries the literal) and, worse, still returned 1 with the regex line deleted — it
       would have passed on a broken lint. Re-anchored on the regex construct.
-- [ ] **4.2** AC3 — `bash scripts/lint-diagnosis-claims.sh`; assert **stdout** reads
-      `lint-diagnosis-claims: OK — 1 unmeasured causal claims (baseline 1)`.
-      Do not read `$?` as the verdict.
-- [ ] **4.3** AC4 — `bash scripts/lint-diagnosis-claims.sh --census` prints `1`.
-- [ ] **4.4** AC5 — `bash scripts/lint-diagnosis-claims.test.sh` → **12 passed, 0 failed**.
-- [ ] **4.5** Update the `MIN_ASSERTIONS` parenthetical (`:201`) from
-      `(11 at time of writing)` to `12`. The floor value `9` stays.
-- [ ] **4.6** AC6 — confirm `scripts/lint-diagnosis-claims.highwater` is untouched:
-      `git diff --name-only origin/main...HEAD | grep -c highwater` = 0.
-- [ ] **4.7** AC7 — mutation test, **both arms**: revert only `DIRS` → suite fails; restore.
-      Revert only the `CLAIM` alternative → suite fails; restore.
-- [ ] **4.8** AC8 — `SCOPE.` header names `apps/web-platform/infra`.
-- [ ] **4.9** AC9 — `bash scripts/test-all.sh` `scripts` shard green.
-      Do not run `run-registered-suites.sh` concurrently (shared `TMPDIR` → false RED).
+- [x] **4.2** AC3 — stdout read `lint-diagnosis-claims: OK — 1 unmeasured causal claims
+      (baseline 1).` Verdict taken from the message, not `$?`.
+- [x] **4.3** AC4 — `--census` printed `1`.
+- [x] **4.4** AC5 — **12 passed, 0 failed**.
+- [x] **4.5** `MIN_ASSERTIONS` parenthetical updated to `12`; floor value `9` unchanged
+      (still has headroom).
+- [x] **4.6** AC6 — `git diff --name-only origin/main...HEAD | grep -c highwater` → `0`.
+- [x] **4.7** AC7 — mutation test, both arms: `DIRS`-only revert → 11/1; `CLAIM`-only revert
+      → 11/1; baseline restored → 12/0. Each mutation asserted its anchor present before
+      writing, and the restore was verified clean via `git diff --quiet`.
+- [x] **4.8** AC8 — `SCOPE.` header names `apps/web-platform/infra/`.
+- [x] **4.9** AC9 — **rc=0, `=== 267/267 suites passed ===`**, 0 `[FAIL]` lines,
+      `[ok] scripts/lint-diagnosis-claims (1085ms)`. Preamble showed `siblings: 0` +
+      `LOCK_ACQUIRED` (clean run, not a contention artifact); epilogue stated
+      `apps/web-platform/infra/ is NOT covered above (diff does not touch it)`, which is
+      correct here — the change scans that directory, it does not edit it.
+      Full `bash scripts/test-all.sh`, launched detached under
+      `setsid nohup` with `TMPDIR=/var/tmp` against a clean tree. Read the **rc file** plus
+      the terminal `=== N/M suites passed ===` marker and the coverage epilogue — not the
+      completion notification, which reports the wrapper's exit. Pre-launch contention
+      check: `/tmp` at 28%, no sibling runs, load 1.6.
 
 ## Phase 5 — Follow-up
 
-- [ ] **5.1** AC10 — file the `OPERATOR_LINE` anchor-gap issue. Body must carry the measured
-      delta (un-anchoring to `(?:^|\|\||&&|;)` moves the census 1 → 2, i.e. a red required
-      check), name `.github/workflows/reusable-release.yml:1289`, and state that the message
-      there is hedged (*"a plausible cause"*) so the first question is whether it is a genuine
-      claim or a false positive. Label `type/chore`, `domain/engineering`.
+- [x] **5.1** AC10 — filed as **#7318** (`type/chore`, `domain/engineering`, `priority/p3-low`,
+      milestone *Post-MVP / Later*). Body carries the measured delta (un-anchoring to
+      `(?:^|\|\||&&|;)` moves the census 1 → 2, i.e. a red required check), names
+      `.github/workflows/reusable-release.yml:1289`, and leads with the judgment question —
+      the message is hedged (*"a plausible cause"*, *"if Sigstore/Fulcio is down"*) and the
+      helper receives `"$?"`, so it may be a false positive rather than a defect.
+      Net issue flow: closing 1 (#7310), filing 1 (#7318), net 0.
