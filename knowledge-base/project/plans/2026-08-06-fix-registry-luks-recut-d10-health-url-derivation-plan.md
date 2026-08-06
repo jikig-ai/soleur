@@ -4,7 +4,6 @@ date: 2026-08-06
 feature: feat-one-shot-d10-health-url-derivation
 branch: feat-one-shot-d10-health-url-derivation
 worktree: .worktrees/feat-one-shot-d10-health-url-derivation/
-issue: 6929
 lane: cross-domain
 detail_level: MORE
 status: planned
