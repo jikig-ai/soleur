@@ -164,6 +164,21 @@ redeployed. **Re-evaluation trigger:** the next host-level remediation proposal,
 `/v1/datacenters` query reporting `cx33` available in web-1's location, whichever comes first;
 tracked as B7 on #7103. A hard-rule exception with no expiry is how a hard rule dies.
 
+> **Re-examined 2026-08-06 (#7309) — the trigger did NOT fire; the exception STANDS.**
+> Probed `.server_types.available`, 3 samples, per datacenter: `cx33` is **✗ in `hel1-dc2`**
+> (web-1's location, which is what this trigger keys on) and **✓ in `nbg1-dc3` and
+> `fsn1-dc14`**. So the "`available = false` in **all 6** datacenters" reading above is a
+> 2026-08-01 sample and is now **false fleet-wide** — do not cite it as current. Only the
+> `hel1-dc2` cell answers the question this exception rests on, and it is unchanged.
+>
+> **The trigger as written is also too weak, and #7309 is the evidence.** It fires on ONE
+> green probe. `cx23` in `hel1-dc2` changed direction twice across twelve days — the first
+> inside twenty-four hours — so a single ✓ is a moment, not a capacity reservation, and
+> retiring a hard-rule exception on one reading is exactly the inference #7309 exists to
+> warn against. Re-scope to a REPEATED, PER-DATACENTER sample under #6460, which must build
+> that anyway. Until then, read this trigger as "sustained availability in web-1's DC",
+> not "any query anywhere returns true".
+
 **Negative / accepted — the gate.** The bridge now depends on the detector at run time: a detector defect, or a
 Doppler enumeration failure, fails every SSH-bridged workflow. This is deliberate fail-closed
 posture — the alternative is proceeding on an unmeasured channel, which is the defect being

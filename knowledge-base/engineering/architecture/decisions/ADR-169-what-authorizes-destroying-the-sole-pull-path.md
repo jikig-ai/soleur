@@ -299,7 +299,13 @@ investigation to the daemon, the host, or the scheduler panic in
   a supported path. Recoverable by re-running the restore with a wider set, but it is a
   capability that degrades where nothing goes red.
 - Closing #7277 does **not** make the recut fireable on its own: `stock_preflight_gate` still
-  applies, and `cx23` was measured orderable in `nbg1-dc3` but **not** in `hel1-dc2` where this
+  applies, and `cx23` was measured (2026-08-05) orderable in `nbg1-dc3` but **not** in `hel1-dc2` where this
   host runs (#6460).
+  > **Superseded 2026-08-06 (#7309) — the conclusion holds, the stated reason does not.**
+  > `stock_preflight_gate` derives the type from `var.registry_server_type` at run time
+  > (`apply-web-platform-infra.yml`, `read_default`), so it now probes **`cpx22`**, not `cx23`
+  > — and `cpx22` was ✓ at every recorded probe. Stock is no longer what holds the recut. The
+  > remaining blockers are #7278 and #6929. **Probe `cpx22`**, not `cx23`, before any dispatch;
+  > and re-probe every time, because a reading from a previous dispatch authorizes nothing.
 - **ADR-096 clause (g) stays open.** This builds a *CI-mediated* restore; clause (g)'s two named
   remedies are a zero-touch-mintable GHCR pull credential and a second mirror. This is neither.

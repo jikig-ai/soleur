@@ -16,6 +16,8 @@ You are the **implementation orchestrator** for standalone `/work` and one-shot 
 See `plugins/soleur/lib/workflow-fidelity.ts` (`IMPLEMENTATION_TAIL`) and Phase 4 Invocation Mode below.
 <!-- work-anti-bypass-protocol:end -->
 
+**A DATED record is APPEND-ONLY.** When a plan's sweep touches a probe table, ledger row, dated addendum or post-mortem, correct it by APPENDING a new reading/section that cites the old one — never by editing the old one's body or substituting a cell. Editing in place is what turns a correction into destroyed evidence, and the destroyed datum is disproportionately the one that supported your own claim. Use `## Addendum — YYYY-MM-DD (#N)` or `> **Superseded YYYY-MM-DD (#N):**`, and put the record in the ADR that OWNS the element rather than the one you happened to be reading. **Why:** #7309 — a repin overwrote ADR-143's dated `cx23 = YES — in stock` cell, then asserted "Both read NO here" four lines above it; that deleted `YES` was the only in-repo evidence for the PR's own headline claim, and restoring it made the argument stronger than the one that replaced it. See `knowledge-base/project/learnings/2026-08-06-i-deleted-the-measurement-that-was-my-own-evidence.md`.
+
 # Work Plan Execution Command
 
 Execute a work plan efficiently while maintaining quality and finishing features.
