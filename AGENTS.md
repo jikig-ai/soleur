@@ -49,6 +49,7 @@ Pointer index; bodies in `AGENTS.rules.md`, injected in full by the SessionStart
 - [id: hr-monitor-not-run-in-background-for-polling]
 - [id: hr-verify-repo-capability-claim-before-assert]
 - [id: hr-pipeline-skills-never-inline-after-go-route]
+- [id: hr-match-process-cost-to-blast-radius]
 
 ## Workflow Gates
 

@@ -23,6 +23,51 @@ See `plugins/soleur/lib/workflow-fidelity.ts` (`IMPLEMENTATION_TAIL`, `ONE_SHOT_
 **Harness adapter (Steps 1–8 child skills):** Use `plugins/soleur/lib/harness.ts` — Grok Build invokes `/plan`, `/work`, `/review`, `/ship`, etc.; Claude Code uses the **Skill tool** (`soleur:plan`, `soleur:work`, …). Never substitute ad-hoc Write/Edit/Shell loops for a registered child skill.
 <!-- one-shot-anti-bypass-protocol:end -->
 
+## Token discipline (load-bearing — this pipeline is the biggest single consumer)
+
+Soleur bills its operators for these tokens. **Match process cost to blast radius**
+(`hr-match-process-cost-to-blast-radius`). The anti-bypass protocol above says which steps you
+may not SKIP; this says how to run them cheaply. They do not conflict: run every step, size
+each one to the change.
+
+**Sizing rule.** Before Step 1, state the change's executable surface in one line — files and
+added source lines, excluding docs/comments. Let that drive the run:
+
+| Executable surface | Plan | Review | Notes |
+|---|---|---|---|
+| ≤ 40 added src lines, ≤ 3 src files, no migration/lockfile/credential path | inline plan, **skip `deepen-plan`** | `small-surface` → 3 agents | escalate on a P1 or a sensitive path |
+| anything larger, or irreversible/credential-bearing | full `plan` + `deepen-plan` | full panel | |
+
+Announce the sizing and the reason. A wrong call is recoverable — escalating after a finding
+costs one extra round; a full panel by default costs one on every PR forever.
+
+**The seven cheapest habits, in impact order.** Each was measured on #7325 (~831k tokens for a
+one-string-literal change):
+
+1. **Do not restate.** Prose is review surface priced per token and it can drift between
+   copies. Write the rationale once, point at it (`work/SKILL.md` §single-source). ~300 lines
+   across 8 files was the bulk of that PR's review cost, and two copies contradicted each
+   other before any reviewer saw them.
+2. **Verify a measurement before it propagates**, at the granularity you will claim it
+   (`work/SKILL.md`). One false fact reached 4 files + 2 issue comments and an agent's top
+   finding; the re-probe that falsified it took 15 seconds.
+3. **Spawn the agent set ONCE, complete** (`review/SKILL.md`). A late gap-closer costs a whole
+   extra fix → CI → correction round.
+4. **Re-run a suite only when its inputs changed.** A green full-suite run against commit A
+   still covers commit B when B touches only docs — verify the delta with targeted suites and
+   say which commit the full run covered.
+5. **Bound every command's output.** `git grep` over a tree with generated JSON returns
+   megabytes on one "line"; use `':!*.json'`, `--name-only`, and `| cut -c1-200`. Never let a
+   776 kB tool result into context.
+6. **Delegate wide reads to a subagent** (`cm-delegate-verbose-exploration…`) — you keep the
+   conclusion, not the file dumps.
+7. **Poll with a bounded, anchored pattern.** Match `^=== N/N suites passed ===$`, not a bare
+   token that also appears in a PASS message, and never `pgrep` a pattern your own poll
+   command contains.
+
+**Report cost honestly.** If a run was disproportionate, say so and name the cause — the
+operator paid for it and cannot see the breakdown.
+
 **Step 0 (pre): Workspace readiness gate.** Before anything else, confirm a usable git repository exists — `one-shot` can be invoked directly (not only via `/soleur:go`), so it must self-guard. Run `git rev-parse --is-bare-repository 2>/dev/null || true; git rev-parse --is-inside-work-tree 2>/dev/null || true`. If **neither** prints `true`, the workspace has no git checkout (in the Soleur web / Concierge env, a connected repo still cloning in the background or a failed setup leaves a repo-less `/workspaces/<id>`). STOP immediately — do NOT run the collision checks, do NOT create a worktree, do NOT spawn the planning subagent. Reply with the honest, no-wait message: "Your workspace isn't ready yet — its repository is still being set up, or its setup didn't finish. Please try again in a moment. If this keeps happening, reconnect your repository in **Settings → Repository**." This prevents the missing-repo flail where the agent improvised dozens of exploration commands.
 
 <decision_gate>
