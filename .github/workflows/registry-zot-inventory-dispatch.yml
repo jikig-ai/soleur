@@ -1,0 +1,69 @@
+# Label-driven dispatch for the read-only zot disk-inventory lever (#7278).
+#
+# WHY THIS EXISTS. registry-zot-inventory.yml is `workflow_dispatch`-only, which makes firing
+# it an operator action in the Actions UI. Soleur operators are non-technical and
+# never-defer-operator-actions is a standing rule, so the lever needs an autonomous route: an
+# automation that has already decided the inventory is wanted applies a controlled label, and
+# this workflow turns that into a run. Same shape as inngest-watchdog-restart-dispatch.yml,
+# which is the D1-B fallback for the Inngest watchdog.
+#
+# ── THE AUTHORITY BOUNDARY (both clauses are load-bearing) ──────────────────
+# The guard requires the controlled label AND that the issue was opened by a Bot.
+#
+# THE LABEL ALONE IS NOT AN AUTHORITY BOUNDARY. Applying a label needs only Triage
+# permission, so a label-only gate would let any triager dial the production registry
+# repeatedly. Requiring `github.event.issue.user.type == 'Bot'` narrows the trigger surface to
+# issues the automation filed itself. Both operands are repo/GitHub-controlled values, not
+# free-form user input.
+#
+# ── NO UNTRUSTED CONTENT REACHES A SHELL ───────────────────────────────────
+# The trigger condition matches only the controlled label name. No issue title, body or
+# author-supplied string is interpolated into any `run:` command; the issue NUMBER travels
+# through `env:` and is a GitHub-assigned integer.
+name: Registry zot inventory — Label Dispatch
+
+on:
+  issues:
+    types: [labeled]
+  # Registration only, mirroring restart-inngest-server.yml's note: a workflow with no
+  # push/schedule trigger can take 30+ minutes to appear in the Actions UI. The job-level
+  # guard below makes this trigger a no-op — an edit to this file on main must never dispatch
+  # the lever as a side effect of the edit (#6425).
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/registry-zot-inventory-dispatch.yml'
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+
+jobs:
+  dispatch-inventory:
+    # #6425 + the authority boundary described in the header. The `github.event_name ==
+    # 'issues'` clause is what neutralises the registration push above; the label and Bot
+    # clauses are what make the label a real gate rather than a Triage-level trigger.
+    if: >-
+      github.event_name == 'issues' &&
+      github.event.label.name == 'registry-zot-inventory' &&
+      github.event.issue.user.type == 'Bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch registry-zot-inventory.yml
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          echo "Inventory label detected on issue #${ISSUE_NUMBER} (author type Bot) — dispatching registry-zot-inventory.yml"
+          # `-f action=inventory` names the lever's only allow-listed action explicitly rather
+          # than relying on the input default, so a future default change cannot silently
+          # redirect this route.
+          gh workflow run registry-zot-inventory.yml --ref main \
+            --repo "${GITHUB_REPOSITORY}" \
+            -f action=inventory
+          gh issue comment "${ISSUE_NUMBER}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --body "Dispatched \`registry-zot-inventory.yml\` (read-only disk inventory) via the label route. It measures how many of the store's bytes are manifest-referenced and posts the marker onto #7247; it changes nothing on the registry host. Watch the [Actions tab](https://github.com/${GITHUB_REPOSITORY}/actions/workflows/registry-zot-inventory.yml) for completion."
