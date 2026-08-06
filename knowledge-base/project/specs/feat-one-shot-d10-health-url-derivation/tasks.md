@@ -121,8 +121,8 @@ swallow, the byte-fragile mutation anchor, and the merge-commit kill switch.
       authorizing inputs. Amend regardless of whether it mentions Doppler sourcing; it also
       does not model the PREPARE/VERDICT split.
 - [ ] 8.3 Do **not** cite ADR-164 as the parent (category error) and do **not** mint a new ADR.
-- [ ] 8.4 Fold the shape-keyed `validation` block into `app_domain_base` (was D3; its
-      deferral rationale is falsified — see Phase 9.0).
+- [ ] 8.4 Do NOT fold the `validation` block in — D3 stays deferred with a corrected
+      rationale (see the plan's D3). The script's shape guard covers the consumption point.
 
 ## Phase 9 — Deferrals, tracker, and merge procedure
 

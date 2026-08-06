@@ -24,6 +24,45 @@ decision_challenges: knowledge-base/project/specs/feat-one-shot-d10-health-url-d
 > strictness, a sibling-conversion phase, and nine test rows — was removed. See
 > `## Review Consolidation`.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-06 · **Version:** v3
+
+**Agents used:** DHH, Kieran, code-simplicity, architecture-strategist,
+spec-flow-analyzer, CPO (plan-review panel, escalated to 5 by the single-user-incident
+threshold); CTO (domain gate); a scoped strong-model advisor consult (ADR-083); two
+Explore passes (test-surface map, runbook/learnings/ADR corpus); one Explore pass on
+reversible mitigations.
+
+### Key improvements over v1
+
+1. **Source inverted, then simplified to one source.** v1 read Doppler `APP_DOMAIN` as
+   primary; v2 inverted to committed config; v3 removed the Doppler tier entirely once
+   two reviewers showed it is a *derived copy of the same Terraform variable* and
+   therefore verifies nothing. Net dividend: `DOPPLER_TOKEN_PRD` leaves both D10 steps,
+   so the PREPARE step becomes credential-free.
+2. **Two criticals caught that change what merging does.** The workflow lists its own
+   path in `on.push.paths`, so this PR fires a production apply unless the merge commit
+   carries `[skip-web-platform-apply]`; and the recut's own restore leg runs the same
+   dark read inside a composite action where a workflow-scoped residual-zero grep cannot
+   see it.
+3. **Roughly 55–60% less new code** than v1: four artifacts, nine test rows, a flag
+   surface, and an ADR removed.
+
+### New considerations discovered
+
+- `export X=$(cmd)` **swallows** the exit status — measured, not argued. The fail-closed
+  chain lives or dies on the call-site assignment form.
+- The ADR parent is **ADR-169**, not ADR-164 — the latter's mechanism (list-scoping,
+  denominator co-narrowing) does not apply to a single-key GET.
+- A **reversible mitigation exists** (Hetzner volume grow) and is blocked by code/state
+  drift rather than physics. The recut was designed for encryption-at-rest, not disk
+  pressure.
+- The brand-survival ladder is **inverted**: declaring the higher tier drops both
+  sign-off gates. Filed as D7.
+
+---
+
 ## Overview
 
 The `registry-luks-recut` dispatch is **unfireable**. Its D10 pull-path-health gate
@@ -634,14 +673,16 @@ available: `deferred-scope-out`, `domain/engineering`, `chore`, `priority/p0-cri
 
 - `.github/workflows/apply-web-platform-infra.yml` — both D10 arms; the false comment;
   delete `DOPPLER_TOKEN_PRD` from both steps.
+- `.github/actions/cf-tunnel-registry-bridge/action.yml` — the restore leg's dark read
+  (Phase 4). In the recut's own chain, so in scope.
 - `scripts/test-all.sh` — register both new suites under `want_scripts`.
 - `knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md` — three
   corrections.
 - `knowledge-base/engineering/architecture/decisions/ADR-096-migrate-container-registry-ghcr-to-self-hosted-zot.md`
-- `knowledge-base/engineering/architecture/decisions/ADR-164-*.md` — one-sentence
-  applicability widening.
 - `knowledge-base/engineering/architecture/decisions/ADR-169-what-authorizes-destroying-the-sole-pull-path.md`
-  — **conditional**; only if it asserts the Doppler sourcing.
+  — extend the independence criterion from components to authorizing inputs.
+  **Unconditional** (it also does not model the PREPARE/VERDICT split). ADR-164 is *not*
+  edited — it is the wrong parent.
 
 ## Files to Create
 
@@ -843,12 +884,20 @@ Doppler credential. Home: `scheduled-terraform-drift.yml`, which already holds t
 files issues. The `ADR-007` convention rides along — a convention without a gate is the
 weaker half, so they ship together rather than as two issues.
 
-**D3 — *(folded into this PR)*.** v2 deferred a shape-keyed `validation` block on
-`app_domain_base` to avoid firing the `infra/*.tf` auto-apply. **That rationale is
-falsified:** the workflow lists its own path in `on.push.paths`, so this PR fires the
-apply regardless (see AC8) and the deferral buys nothing. Since this change makes the
-variable destroy-authorizing, fold the `validation` block in — keyed on **shape, not the
-pinned value** — and name the D10 gate in the variable's `description`.
+**D3 — A shape-keyed `validation` block on `app_domain_base`, still deferred — but the
+v2 rationale was wrong.** v2 deferred it "to avoid firing the `infra/*.tf` auto-apply".
+That is falsified: the workflow lists **its own path** in `on.push.paths`, so this PR
+would fire the apply regardless of any `.tf` edit. Architecture review recommended
+folding the block in on that basis.
+
+**Diverging, with reasons.** (a) This PR merges under `[skip-web-platform-apply]`
+(AC8), so a `variables.tf` change would sit unapplied until the next apply anyway —
+folding it in buys no earlier enforcement. (b) The script's own shape guard already
+rejects a malformed value **at the consumption point**, which is where it protects the
+destroy decision; the `validation` block is defense-in-depth on top of that, not the
+load-bearing check. (c) Every reviewer asked this PR to get smaller, and a `.tf` edit
+pulls the Encryption Posture gate onto a change that introduces no store.
+*Re-evaluate when:* the next deliberate apply of this root is planned.
 
 **D4 — The remaining `2>/dev/null || echo "soleur.ai"` instances.** Re-enumerated from a
 real grep rather than the plan's recollection: 2 in this workflow's web-host
