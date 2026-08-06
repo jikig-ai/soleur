@@ -35,7 +35,7 @@ Read-only query of `/v1/datacenters` (available server types) + `/v1/server_type
 | `cx22` (Intel) | 2c/4g x86 | ~4.59 | **NO — out of stock** |
 | `cpx32` (AMD) | 4c/8g x86 | 35.49 | YES |
 | `cpx22` (AMD) | 2c/4g x86 | 19.49 | YES |
-| **`cx23`** (Intel; the registry's type) | **2c/4g x86** | **5.49** | **YES — in stock (registry runs it in hel1)** |
+| **`cx23`** (Intel; *was* the registry's type) | **2c/4g x86** | **5.49** | **Availability VOLATILE — see note below** |
 
 This confirms model.c4:182 against live data: `cx33` cannot be recreated, so a rebuilt `web-1` cannot come
 back as `cx33`. It also confirmed #6570's root-blocker framing at the time of this probe: `cax11` (ARM)
@@ -223,11 +223,30 @@ requesting a raise that already existed, and retiring `soleur-grok-dogfood` to "
 irreversible `cx33` loss (cheapest orderable 8 GB replacement `cpx32`, 4.2×) for a slot already free
 six times over.
 
-**Disaster-recovery consequence, stated plainly.** Three of the four running hosts are on types that
-can no longer be ordered: web-1 (`cx33`), `soleur-grok-dogfood` (`cx33`), `soleur-registry` (`cx23`).
-They run fine, but **none can be rebuilt on its current type** — each rebuild is a type decision and
-a cost change. Nothing catches "a declared type left the orderable set" until an apply; that periodic
-audit is #6460, which also now owns recording the account limits as facts with a decay date.
+**Disaster-recovery consequence — RESTATED 2026-08-06 (#7309).** The table above and this
+paragraph both date from the 2026-07-26 probe, and the newer measurement changes what they mean, not
+just their values.
+
+It used to read: three of the four running hosts are on types that can no longer be ordered — web-1
+(`cx33`), `soleur-grok-dogfood` (`cx33`), `soleur-registry` (`cx23`). Probed live 2026-08-06
+(`hel1-dc2`, `.server_types.available`): **`cx23` and `cx33` are both AVAILABLE.** Both were
+unavailable on 2026-07-26; `cx23` was unavailable again on 2026-08-04 (`zot-registry.tf`) and
+available on 2026-08-06. Three samples, eleven days, two direction changes, no `deprecation` block on
+any of them.
+
+So the finding is not "these types are gone." It is that **availability is not a property of a server
+type** — it is a point-in-time reading of vendor supply that moves in both directions, and a dated ✓
+is not a capacity reservation. The consequence survives in a stronger form: **none of these hosts can
+be counted on to rebuild on its current type**, even when today's probe is green, so each rebuild is
+a type decision and a cost change regardless.
+
+`soleur-registry` was repinned `cx23` → `cpx22` on that basis (#7309): `cpx22` was available at all
+three probes, matches `cx23`'s 2c/4g shape exactly, and costs +€14.00/mo (operator-accepted). The two
+`cx33` hosts are unrepinned and still carry the exposure. Nothing catches "a declared type left the
+orderable set" until an apply — and nothing notices one coming back either; that periodic audit is
+#6460, which must **sample repeatedly**, because any single probe here would have certified one of
+three contradictory answers. #6460 also owns recording the account limits as facts with a decay
+date.
 
 **Not changed by this addendum:** `var.registry_server_type` keeps its unorderable default — a
 `registry_server_type` change is a host *replace* of a live registry. This addendum also left

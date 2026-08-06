@@ -299,7 +299,7 @@ investigation to the daemon, the host, or the scheduler panic in
   a supported path. Recoverable by re-running the restore with a wider set, but it is a
   capability that degrades where nothing goes red.
 - Closing #7277 does **not** make the recut fireable on its own: `stock_preflight_gate` still
-  applies, and `cx23` was measured orderable in `nbg1-dc3` but **not** in `hel1-dc2` where this
+  applies, and `cx23` was measured (2026-08-05) orderable in `nbg1-dc3` but **not** in `hel1-dc2` where this
   host runs (#6460).
 - **ADR-096 clause (g) stays open.** This builds a *CI-mediated* restore; clause (g)'s two named
   remedies are a zero-touch-mintable GHCR pull credential and a second mirror. This is neither.

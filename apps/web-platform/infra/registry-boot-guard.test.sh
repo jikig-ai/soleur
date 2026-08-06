@@ -240,6 +240,49 @@ assert "commit-sha tag keep-set lowered to 5" \
 assert "no keepTags count left at the old value 10" \
   "! grep -qE '\"mostRecentlyPushedCount\": 10\\b' '$CI'"
 
+echo "--- structural: the registry host type this cloud-init is rendered for (#7309) ---"
+# The two facts the rest of this file ASSUMES about var.registry_server_type, pinned so a repin
+# cannot silently invalidate them:
+#
+#   R1  the declared default is the type the plan/runbooks name. #7309 repinned cx23 → cpx22.
+#   R2  the default derives amd64 (zot-registry.tf local.registry_arch: `cax*` → arm64, else
+#       amd64). That derivation selects local.zot_image between two DISTINCT OCI repositories
+#       (zot-linux-amd64 / zot-linux-arm64), so an arch flip smuggled in under a type repin
+#       darks the sole pull path — the exact ADR-169 failure this host cannot absorb.
+#
+# R2 is NOT implied by R1: R1 pins today's value and dies on the next legitimate repin, while
+# R2 is the invariant that must survive one. Keeping both means a future repin has to state its
+# arch decision rather than inherit it.
+#
+# WHY THE REPIN, stated so a future reader does not have to reconstruct it: not that cx23 is
+# unorderable — it is orderable in hel1-dc2 as of the 2026-08-06 probe. It is that hel1-dc2
+# cx23 availability has flipped three times in eleven days (0-of-3 on 2026-07-26 #6966; ✗ on
+# 2026-08-04, recorded in zot-registry.tf; ✓ on 2026-08-06), and a registry host replace is a
+# one-way destroy-then-create with NO capacity reservation, where a failed revert needs a
+# SECOND successful create on a type whose stock already moved once mid-window. cpx22 is the
+# same 2 vCPU / 4 GB shape, so the 3072m ADR-062 cap and the amd64 render are unchanged.
+VARS="$SCRIPT_DIR/variables.tf"
+assert "variables.tf exists" "[[ -f '$VARS' ]]"
+# COMMENT-STRIPPED AND BLOCK-SCOPED, taking the value from the ASSIGNMENT — never `$NF`, which
+# on `default = "cpx22" # was cx23` is the COMMENT's last word. Same extraction as
+# git-data-luks.test.sh A17, which was built after exactly that defect. Block scoping matters
+# here too: a bare file-wide grep for `default = "cpx22"` is green on the UNMODIFIED tree,
+# because git_data_server_type and inngest_server_type both already default to cpx22.
+_registry_default() {
+  sed 's/[[:space:]]#.*$//' "$VARS" \
+    | awk '/^variable "registry_server_type"/{i=1}
+           i&&/^[[:space:]]*default[[:space:]]*=/{
+             sub(/^[^=]*=[[:space:]]*/, ""); gsub(/[",[:space:]]/, ""); print; exit
+           }
+           i&&/^}/{exit}'
+}
+REGISTRY_DEFAULT="$(_registry_default)"
+echo "--- extracted: registry_server_type default='${REGISTRY_DEFAULT}' ---"
+assert "R1: var.registry_server_type default is cpx22 (#7309 repin)" \
+  "[ '$REGISTRY_DEFAULT' = 'cpx22' ]"
+assert "R2: the default is not a cax* type, so local.registry_arch derives amd64" \
+  "case '$REGISTRY_DEFAULT' in cax*) false ;; *) true ;; esac"
+
 echo ""
 echo "=== registry-boot-guard.test.sh: ${PASS} passed, ${FAIL} failed ==="
 [ "$FAIL" -eq 0 ] || exit 1

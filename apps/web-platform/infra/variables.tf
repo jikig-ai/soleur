@@ -137,11 +137,24 @@ variable "web_hosts" {
   # web host can never be born on the cax ARM line regardless of stock, because cloud-init.yml
   # PINS amd64 in three places (Doppler CLI, the Docker apt `arch=amd64` line, the webhook binary).
   #
-  # DISASTER-RECOVERY GAP (2026-07-26, feeds #6460): THREE running hosts sit on types that can no
-  # longer be ordered — web-1/soleur-web-platform (cx33), soleur-grok-dogfood (cx33) and
-  # soleur-registry (cx23). They run fine, but NONE of them can be REBUILT on its current type: a
-  # rebuild of any of them is a TYPE DECISION, not a recreate. Nothing catches "a declared type
-  # left the orderable set" until an apply; that periodic audit is #6460.
+  # DISASTER-RECOVERY GAP (feeds #6460) — RESTATED 2026-08-06 (#7309), because the 2026-07-26
+  # form of this note was measured false eleven days later and the correction is the whole point.
+  #
+  # It used to read: THREE running hosts sit on types that can no longer be ordered —
+  # web-1/soleur-web-platform (cx33), soleur-grok-dogfood (cx33) and soleur-registry (cx23).
+  # Probed live 2026-08-06 (hel1-dc2, `.server_types.available`): cx23 (id 114) ✓ AND cx33
+  # (id 115) ✓. Both were ✗ on 2026-07-26 and cx23 was ✗ again on 2026-08-04 (zot-registry.tf).
+  # So the gap is NOT "these types are gone" — it is that AVAILABILITY IS NOT A PROPERTY OF THE
+  # TYPE. It flips on a days-to-hours timescale, in one direction as easily as the other, and a
+  # host is only rebuildable at the instant you look. A dated ✓ is not a capacity reservation.
+  #
+  # The rebuild-is-a-type-decision consequence therefore stands, for a stronger reason than the
+  # original: it holds even when the probe is green. soleur-registry was repinned to cpx22 on
+  # this basis (#7309, see var.registry_server_type) — cpx22 was ✓ at all three probes. The two
+  # cx33 hosts are unrepinned and still carry it. Nothing catches "a declared type left the
+  # orderable set" until an apply, and nothing re-checks a type that came BACK; that periodic
+  # audit is #6460. Whatever it ends up sampling, it must sample REPEATEDLY — a single probe
+  # would have certified any of the three contradictory answers above.
   #
   # Resize to a serving shape at the GA flip only if web-2's OWN metrics warrant (a
   # server_type change is a reboot-forcing in-place update — reboot_updates guard). It reuses
@@ -195,13 +208,15 @@ variable "git_data_volume_size" {
 
 # --- #6122 (ADR-096) — the self-hosted zot registry host ---
 variable "registry_server_type" {
-  description = "Hetzner server type for the zot registry host. HOST ARCH IS DERIVED FROM THIS (zot-registry.tf local.registry_arch): cax11 (2 vCPU ARM64/Ampere, 4GB) / cx23 (2 vCPU x86, 4GB) / cx33 (4 vCPU x86, 8GB, ~€8.49/mo net, hel1). A store-and-serve registry never RUNS the amd64 platform images it holds, so arch is functionally neutral. Recorded via ops-advisor. #6288 attempted cx23→cx32 (8 GB) for OOM headroom, but **cx32 does not exist in the Hetzner catalog** (the plan's ~€6.80 figure was for a phantom type) → the registry-host-replace apply DESTROYED the old nbg1 host then failed `server type cx32 not found`. #6288 migrated the registry nbg1→**hel1** and bumped cx23→cx33 for OOM headroom; #6497/#6463 (2026-07-16) reverted to **cx23** (4 GB, ~€5.49/mo) after live telemetry showed the 8 GB was never needed (37 MB steady) and the OOM diagnosis was never confirmed — see the block comment below. hel1 is where the rest of the fleet lives. cx23 is amd64 (does NOT start with `cax`) → local.registry_arch unchanged. The zot store is a disposable GHCR MIRROR on a separate volume — the fresh host re-fills from GHCR on the next CI dual-push (pulls fall through to GHCR meanwhile, non-release-blocking). THE CAP FOLLOWS THIS VAR — do not assume 7168m: zot's ADR-062 cgroup cap is DERIVED as `memory × 1024 − 1024` (zot-registry.tf local.registry_memory_cap_mb, read from the live Hetzner catalog), so it is 7168m on cx33 and 3072m on any 4 GB type. It was formerly a hardcoded 7168m literal with no edge to this variable, which meant changing this var to a 4 GB type left a cap that can never bind on 4096m of RAM — silently the UNCAPPED-on-cx23 condition that caused #6288. That is fixed; the host also self-reports zot_memory_capped + zot_memory_cap_mb so a gate can no longer assume the cap either."
+  description = "Hetzner server type for the zot registry host. HOST ARCH IS DERIVED FROM THIS (zot-registry.tf local.registry_arch): `cax*` (Ampere) → arm64, anything else (`cx*`/`cpx*`/`ccx*`) → amd64. A store-and-serve registry never RUNS the amd64 platform images it holds, so arch is functionally neutral — but the derivation is NOT: it selects local.zot_image between two DISTINCT OCI repositories, so an arch flip darks the sole pull path (ADR-169). Recorded via ops-advisor. HISTORY: #6288 attempted cx23→cx32 (8 GB) for OOM headroom, but **cx32 does not exist in the Hetzner catalog** (the plan's ~€6.80 figure was for a phantom type) → the registry-host-replace apply DESTROYED the old nbg1 host then failed `server type cx32 not found`. #6288 migrated the registry nbg1→**hel1** and bumped cx23→cx33 for OOM headroom; #6497/#6463 (2026-07-16) reverted to **cx23** (4 GB, ~€5.49/mo) after live telemetry showed the 8 GB was never needed (37 MB steady) and the OOM diagnosis was never confirmed. REPINNED cx23 → **cpx22** 2026-08-06 (#7309) for RECREATE SURVIVABILITY, not sizing or price — see the block comment below; cpx22 matches cx23 exactly on cores and RAM (2c/4g) and doubles local disk (40→80 GB), so nothing derived from this var moves. hel1 is where the rest of the fleet lives. cpx22 is amd64 (does NOT start with `cax`) → local.registry_arch unchanged. The zot store is a disposable GHCR MIRROR on a separate volume — the fresh host re-fills from GHCR on the next CI dual-push (pulls fall through to GHCR meanwhile, non-release-blocking). THE CAP FOLLOWS THIS VAR — do not assume 7168m: zot's ADR-062 cgroup cap is DERIVED as `memory × 1024 − 1024` (zot-registry.tf local.registry_memory_cap_mb, read from the live Hetzner catalog), so it is 7168m on an 8 GB type and 3072m on any 4 GB type. It was formerly a hardcoded 7168m literal with no edge to this variable, which meant changing this var to a 4 GB type left a cap that can never bind on 4096m of RAM — silently the UNCAPPED condition that caused #6288. That is fixed; the host also self-reports zot_memory_capped + zot_memory_cap_mb so a gate can no longer assume the cap either."
   type        = string
-  # cx23 (x86, 4 GB, 2 vCPU, ~€5.49/mo net, hel1) — the right-SIZED registry host (operator-chosen,
-  # #6497 / #6463, 2026-07-16). The DERIVED cgroup cap (zot-registry.tf local.registry_memory_cap_mb)
-  # is 3072m here. amd64 (does NOT start with `cax`) → local.registry_arch unchanged from cx33; the
-  # zot image + Doppler CLI build are unchanged. The zot store is on a SEPARATE 60 GB volume, so
-  # cx23's 40 GB local disk (OS + docker + the ~100 MB zot image) is irrelevant to store capacity.
+  # cpx22 (x86/AMD, 4 GB, 2 vCPU, ~€19.49/mo net, hel1) — SAME SHAPE as the cx23 it replaces, so
+  # this is a change of RECREATE SURVIVABILITY, not of sizing. The right-SIZING decision below
+  # (4 GB, not 8) is #6497 / #6463's and is unchanged. The DERIVED cgroup cap (zot-registry.tf
+  # local.registry_memory_cap_mb) is 3072m on both. amd64 on both (neither starts with `cax`) →
+  # local.registry_arch, local.zot_image and the Doppler CLI build are all unchanged. The zot store
+  # is on a SEPARATE 60 GB volume, so the host's local disk (OS + docker + the ~100 MB zot image)
+  # is irrelevant to store capacity either way.
   #
   # WHY 4 GB, not the prior 8 GB (cx33): the 8 GB floor was never evidence-backed. #6288 bumped
   # cx23→cx33 for "OOM headroom", but that diagnosis was never confirmed. ADR-062:47 — "no safe
@@ -216,33 +231,56 @@ variable "registry_server_type" {
   # an in-memory blob index. Projected at the current ~9.4 GB store: ~50 MB, ~1.6 % of the 3072m cap.
   #
   # RESIDUAL RISK, stated honestly: still UNMEASURED is RSS during a boot scan of a LARGE store
-  # (every sampled boot so far scanned a near-empty one). The cx23 recreate WAS to be that
-  # measurement — but it can no longer happen on cx23 (see the STOCK REALITY note below), so the
-  # large-store boot-scan RSS stays unmeasured until a recreate on an orderable type.
+  # (every sampled boot so far scanned a near-empty one). The next registry recreate is that
+  # measurement, whenever it happens; the repin below does not change what is measured, only
+  # whether the create can be counted on to succeed.
   # It is bounded and reversible: on a 4 GB host the 3072m cap now BINDS (it was a hardcoded 7168m
   # with no edge to this var until #6508 — on 4 GB that could never bind, which is #6288's real
   # uncapped condition; that is fixed). So a wrong call yields a CONTAINED container-OOM
   # (zot_memory_capped=true, zot_oom_kills>0 — both self-reported and gated) plus GHCR fallback,
-  # NOT #6288's host-OOM restart-loop. Revert path: cpx32 (8 GB, ~€35.49/mo net) — the cx33 arm of
-  # this revert path is CLOSED (see STOCK REALITY below), so cpx32 is no longer a fallback but the
-  # only orderable 8 GB option. Then re-dispatch. #6288's exact failure mode (uncapped zot on a
-  # 4 GB host) is now structurally impossible.
+  # NOT #6288's host-OOM restart-loop. Revert path if 4 GB proves wrong: cpx32 (8 GB,
+  # ~€35.49/mo net), then re-dispatch. #6288's exact failure mode (uncapped zot on a 4 GB host)
+  # is now structurally impossible.
   #
-  # STOCK REALITY (live probe 2026-07-26, #6966) — the shapes named in the description above are
-  # HISTORICAL, not a menu. `cx23` (this default) and `cx33` are both orderable in **0 of 3** EU
-  # DCs, as is the entire `cax` ARM line; the orderable set is `cpx12 cpx22 cpx32 cpx42 cpx52
-  # cpx62 ccx13 ccx23 ccx33 ccx43 ccx53 ccx63`, identical in nbg1-dc3/hel1-dc2/fsn1-dc14. Read
-  # `.server_types.available`, never `.supported`, and never the `hcloud` CLI's location column —
-  # both report the SUPPORTED set (tests/scripts/lib/stock-preflight-gate.sh, head).
-  # CONSEQUENCE: soleur-registry is GRANDFATHERED on cx23. It runs fine, but it CANNOT BE REBUILT
-  # on this type — any recreate is a TYPE DECISION and a cost change, not a like-for-like recreate.
-  # This default is deliberately NOT changed here (#6966 was scoped to unwedging web-2, and a
-  # registry_server_type change is a host REPLACE of a live registry); the DR remediation for all
-  # three grandfathered hosts belongs to #6460.
+  # WHY cpx22 AND NOT cx23 (#7309, 2026-08-06) — READ THE MEASUREMENT, NOT THE HEADLINE.
   #
-  # A nonexistent type fails at PLAN via data.hcloud_server_type.registry (#6508) instead of
-  # destroying the host first — that was #6288's cx32 disaster. registry_location stays hel1.
-  default = "cx23"
+  # It is NOT that cx23 cannot be ordered. Probed live on 2026-08-06 from
+  # `.server_types.available` for hel1-dc2, cx23 (id 114) is AVAILABLE, as is cx33 (id 115).
+  # Any statement that cx23 is unorderable in hel1 — including #7309's own title — is false as
+  # of that probe, and this comment does not repeat it.
+  #
+  # What is true is that hel1-dc2 cx23 availability has FLIPPED THREE TIMES IN ELEVEN DAYS, and
+  # every one of those three data points is recorded in this repo:
+  #
+  #   2026-07-26 (#6966, the block this replaces)   cx23 ✗   (0 of 3 EU DCs; whole cx + cax lines)
+  #   2026-08-04 (zot-registry.tf, hcloud_server)   cx23 ✗   (✓ in nbg1-dc3, ✗ in hel1-dc2)
+  #   2026-08-06 (#7309, this change)               cx23 ✓
+  #
+  # THAT SERIES is the rationale. A registry_server_type change is a host REPLACE: `user_data` is
+  # ForceNew and this resource deliberately carries no `lifecycle.ignore_changes` (zot-registry.tf),
+  # so the apply DESTROYS the host and then creates a new one. There is no capacity reservation in
+  # front of that create, and if it fails the revert is not a rollback — it is a SECOND create,
+  # against the same volatile supply, with the registry already dark. Pinning the recreate path to
+  # a type that was unavailable in this datacenter two days ago is not a bet worth taking on the
+  # sole pull path (ADR-169), whatever today's probe says. cpx22 was ✓ at all three probes.
+  #
+  # PRICE, stated plainly rather than buried: cpx22 is ~€19.49/mo net against cx23's ~€5.49 —
+  # +€14.00/mo, +€168/yr, 3.55× on this host. Operator accepted that cost explicitly before this
+  # change was authorized. Recorded in knowledge-base/operations/expenses.md as declared-vs-billing:
+  # billing does not move until the apply, and this change schedules none.
+  #
+  # Read `.server_types.available`, never `.supported`, and never the `hcloud` CLI's location
+  # column — both report the SUPPORTED set, which resolves cx23 fine and tells you nothing about
+  # whether you can buy one (tests/scripts/lib/stock-preflight-gate.sh, head). #6508's plan-time
+  # guard shares that blind spot for the same reason: `data.hcloud_server_type.registry` is a
+  # catalog lookup. It does catch a NONEXISTENT type at PLAN instead of after the destroy — that
+  # was #6288's cx32 disaster — but availability is a separate question it cannot answer.
+  #
+  # STILL UNORDERABLE, and this survives the repin: the entire `cax` ARM line (cax11 id 45 probed
+  # NOT available 2026-08-06). Do not treat cax11 as a live option anywhere in this tree.
+  #
+  # registry_location stays hel1. This change edits a default only; it schedules no apply.
+  default = "cpx22"
 }
 
 variable "registry_volume_size" {

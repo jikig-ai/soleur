@@ -843,8 +843,15 @@ were sitting unadopted.
 > not production. `zot-registry.tf` resources are `OPERATOR_APPLIED_EXCLUSIONS`, so merging
 > this is inert by construction: **the live registry still runs v2.1.2, and both panic fixes
 > remain unadopted in production**, until the `registry-host-replace` apply fires. That apply
-> is blocked on #7277 (the recut gate has no valid PASS condition), #7278, #6929, and Hetzner
-> `cx23` stock. Tracked in #7287.
+> is blocked on #7277 (the recut gate has no valid PASS condition), #7278, and #6929. Tracked
+> in #7287.
+>
+> **CORRECTED 2026-08-06 (#7309): Hetzner `cx23` stock is struck from that list too.** It was
+> listed because `cx23` measured unorderable in `hel1-dc2` on 2026-08-04. On 2026-08-06 it
+> measured orderable there — and `var.registry_server_type` was repinned to `cpx22`, which was
+> orderable at every recorded probe. Stock is no longer what gates this apply. The volatility
+> that motivated the repin is real and is documented at `variables.tf` `registry_server_type`;
+> it is a reason to pin a stable type, not a standing blocker.
 >
 > **CORRECTED 2026-08-06 (#7299): the byte cap was never a blocker and is struck from that
 > list.** It read "#7280 (the rendered `user_data` is over Hetzner's 32,768 B cap)". The
