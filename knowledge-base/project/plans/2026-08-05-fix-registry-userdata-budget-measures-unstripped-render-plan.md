@@ -347,14 +347,25 @@ at ADR-152:229). This plan makes an existing measurer honor an existing decision
 gate — it neither creates nor reverses an architectural decision. A competent engineer reading the
 current ADR corpus would not be misled about the system after this ships.
 
-**No C4 impact.** Checked against all three model files
-(`knowledge-base/engineering/architecture/diagrams/{model.c4,views.c4,spec.c4}`) for the four
-mandated categories: (a) **external human actors** — none added or changed; the change is
-CI-internal with no correspondent, reviewer or recipient; (b) **external systems/vendors** — none;
-Hetzner and GHCR are already modeled and this touches neither at runtime, only a local
-measurement of a payload bound for Hetzner; (c) **containers/data stores** — none; the script
-writes to a `mktemp -d` scratch dir it deletes on trap and touches no state backend;
-(d) **actor↔surface access relationships** — none; no ownership, tenancy or sharing boundary moves.
+**C4 impact: one edge description, on the `github -> resend` edge.**
+
+**[Corrected 2026-08-06 — this section read "No C4 impact" and was falsified by a fix added during
+review.]** The original enumeration was accurate for the plan as written: (a) **external human
+actors** — none; (b) **external systems/vendors** — none, Hetzner and GHCR already modeled and
+untouched at runtime; (c) **containers/data stores** — none, the script uses a `mktemp -d` scratch
+dir it deletes on trap; (d) **actor↔surface access relationships** — none.
+
+Then review found the new push-on-main trigger had no consumer, and the fix added a
+`notify-main-failure` job using `notify-ops-email`. That makes `infra-validation.yml` the **twelfth**
+Resend emitter under `.github/`, where `model.c4`'s `github -> resend` edge says "one of eleven".
+`plugins/soleur/test/c4-count-parity.test.sh` caught it — the derivation
+(`grep -rlE 'api[.]resend[.]com|notify-ops-email' .github/workflows/ .github/actions/`) returned 12.
+Verified mine: `git show origin/main:.github/workflows/infra-validation.yml` has zero emitter refs.
+
+Corrected the clause to "twelve", naming the new emitter and why it exists, and regenerated
+`model.likec4.json`. Worth recording as its own instance of this PR's thesis: a claim that was true
+when written, falsified by a later change, caught only because a gate derived the number instead of
+trusting the prose.
 
 ## Infrastructure (IaC)
 
