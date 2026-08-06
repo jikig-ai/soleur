@@ -15,12 +15,17 @@
 #   - the block references a verdict/outcome variable, or
 #   - the line carries an explicit `# MEASURED-BY: <what measured it>` marker.
 #
-# SCOPE. .github/workflows/, .github/actions/ AND scripts/. The actions directory is the reason
-# this matters: lint-workflows.sh and lint-workflow-step-env-refs.py both scan
-# `workflows/*.yml` only, which is exactly why the two offending ::error:: lines in
-# cf-tunnel-registry-bridge/action.yml went unexamined through two prior fixes. `scripts/`
-# is included because that is where this PR MOVED the canonical message text — a lint that
-# skipped it would have enforced nothing over the very prose it was built for.
+# SCOPE. .github/workflows/, .github/actions/, scripts/ AND apps/web-platform/infra/. The
+# actions directory is the reason this matters: lint-workflows.sh and
+# lint-workflow-step-env-refs.py both scan `workflows/*.yml` only, which is exactly why the
+# two offending ::error:: lines in cf-tunnel-registry-bridge/action.yml went unexamined
+# through two prior fixes. `scripts/` is included because that is where this PR MOVED the
+# canonical message text — a lint that skipped it would have enforced nothing over the very
+# prose it was built for. `apps/web-platform/infra/` was added by #7310 for the same reason
+# both of the others were: nobody had pointed a scanner at it, and a message there
+# ("registry_rationale_strip is the fix") named a cause the job never measured — one that
+# was wrong, and that propagated into the recut runbook and into #7287's precondition for
+# re-provisioning the sole container-registry pull path.
 #
 # RATCHET. Ships with a .highwater baseline so it lands green over a pre-existing
 # population and drives that population down. Blocking upward, advisory downward — a
@@ -58,7 +63,11 @@ root = sys.argv[1]
 # `live` arm left the census at 0 and the unit suite fully green.
 # `scripts/zot-restart-loop-alarm.sh` likewise emits NIC_CAUSE strings ("serving is fine",
 # "not an outage") that reach ::error:: and issue bodies through the workflow.
-DIRS = [".github/workflows", ".github/actions", "scripts"]
+# `apps/web-platform/infra/` is the same lesson a third time (#7310): it holds ~70 operator-
+# facing shell gates that no lint read, and one of them spent a production-recovery window
+# telling the operator that a strip which had ALREADY been applied was the remedy. Widening
+# to it costs 71 more walked files and, at the time it landed, zero new hits.
+DIRS = [".github/workflows", ".github/actions", "scripts", "apps/web-platform/infra"]
 SCAN_EXTS = (".yml", ".yaml", ".sh")
 
 # Phrases that assert a CAUSE. Deliberately narrow: each one is a claim about why
@@ -76,7 +85,14 @@ CLAIM = re.compile(
     r"most likely cause|likely cause|the cause is|"
     r"which is the [a-z]+(?:-[a-z]+)+ shape\b|"
     r"serving is fine|not an outage|= the EDGE|which means the|"
-    r"this means (?:a|the|that)|indicates (?:a|the|that)|caused by",
+#
+# `\bis the (?:fix|cause)\b` catches the shape that asserts a cause by prescribing its
+# remedy — "X is the fix" — which is why it matched none of the alternatives above even
+# though several of them are about causes. Both word boundaries are load-bearing: the
+# leading one stops "This the fix" / "Analysis the fix" (both end in a bare "is"), and the
+# trailing one stops "is the fixture" / "is the fixed value" / "is the causes".
+    r"this means (?:a|the|that)|indicates (?:a|the|that)|caused by|"
+    r"\bis the (?:fix|cause)\b",
     re.IGNORECASE)
 
 # Evidence that the claim rests on something the job computed. A verdict variable, an

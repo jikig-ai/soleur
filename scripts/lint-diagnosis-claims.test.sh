@@ -21,7 +21,7 @@ assert_eq() {
 
 FIX="$(mktemp -d -t lint-diag-fix.XXXXXXXX)"
 trap 'rm -rf "$FIX"' EXIT
-mkdir -p "$FIX/.github/workflows" "$FIX/.github/actions/some-action"
+mkdir -p "$FIX/.github/workflows" "$FIX/.github/actions/some-action" "$FIX/apps/web-platform/infra"
 
 # A permanent benign file, so the fixture tree is never EMPTY. Without it the walk finds
 # zero files after the last `rm` and the vacuity floor fires — which would make "clean tree
@@ -69,6 +69,31 @@ runs:
 YAML
 assert_eq "an offender under .github/actions/ trips it (the unlinted directory)" "1" "$(census_of "$FIX")"
 rm "$FIX/.github/actions/some-action/action.yml"
+
+# It must trip under apps/web-platform/infra/ too — and on THIS phrasing.
+#
+# This case pins BOTH halves of #7310, which is why it is one assertion and not two. The
+# directory was out of scope, so `registry-userdata-budget.sh` told every operator who hit
+# it that "#7280's registry_rationale_strip is the fix" — a cause the job never measured,
+# and a WRONG one: the strip had already been applied and the real defect was in the gate's
+# own render. That claim propagated into the recut runbook and into #7287's precondition,
+# where it read as "the recut must not be dispatched at all".
+#
+# Widening the scope ALONE does not catch it. Measured: with apps/web-platform/infra in
+# DIRS but no fix/cause alternative in CLAIM, this exact fixture scores 0 — the phrasing
+# asserts a cause by prescribing its remedy ("X is the fix") and matched none of the
+# existing alternatives. So reverting EITHER half makes this assertion fail, which is the
+# property that keeps part 2 enforced rather than merely present.
+cat > "$FIX/apps/web-platform/infra/registry-userdata-budget.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$stored_bytes" -gt "$cap" ]]; then
+  echo "registry-userdata-budget: OVER CAP by $(( stored_bytes - cap )) bytes — #7280's registry_rationale_strip is the fix."
+  exit 1
+fi
+SH
+assert_eq "an offender under apps/web-platform/infra/ trips it (the directory AND the phrasing)" "1" "$(census_of "$FIX")"
+rm "$FIX/apps/web-platform/infra/registry-userdata-budget.sh"
 
 # ── ARM 2: fixtures that MUST NOT trip ─────────────────────────────────────────────────
 # A message that BRANCHES on a measured verdict is the fixed shape. Flagging it would make
@@ -198,7 +223,7 @@ echo "=== Results: $PASS passed, $FAIL failed ==="
 
 # ANTI-VACUITY DISPATCH FLOOR — see zot-mirror-diagnosis.test.sh. Neutering assert_eq
 # yields "0 passed, 0 failed" and exit 0, and test-all.sh reads only the exit code.
-MIN_ASSERTIONS=9   # derived from a green run (11 at time of writing), with headroom
+MIN_ASSERTIONS=9   # derived from a green run (12 at time of writing), with headroom
 if [[ $((PASS + FAIL)) -lt "$MIN_ASSERTIONS" ]]; then
   echo "FAIL: only $((PASS + FAIL)) assertions ran, expected >= ${MIN_ASSERTIONS}." >&2
   exit 1
