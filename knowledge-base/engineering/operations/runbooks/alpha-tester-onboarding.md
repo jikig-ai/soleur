@@ -243,7 +243,7 @@ CLI plugin there is no server-side telemetry**, so most of it is not observable.
 
 | #1442 metric | Hosted platform | Self-hosted CLI |
 |---|---|---|
-| Knowledge-base growth | Yes | **Yes** — git history on the tester's own `knowledge-base/` tree (requires collaborator access) |
+| Knowledge-base growth | Yes | **Yes** — git history on the tester's own `knowledge-base/` tree. **Does NOT require collaborator access:** a tester-supplied `git log --stat`, or commit/file/directory counts, yields the same figure. Collaborator access buys independent verifiability, not the metric — and it is what puts Jikigai in a controller posture (PA-35). Prefer the aggregate route. |
 | Returns / session frequency | Yes | **No** |
 | Non-engineering agent usage | Yes | **No** |
 
