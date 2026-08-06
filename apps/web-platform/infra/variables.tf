@@ -116,7 +116,9 @@ variable "web_hosts" {
   # the ENTIRE cax ARM line are orderable in 0 of 3 EU DCs; the orderable set is identical in
   # nbg1-dc3/hel1-dc2/fsn1-dc14 = cpx12 cpx22 cpx32 cpx42 cpx52 cpx62 ccx13 ccx23 ccx33 ccx43
   # ccx53 ccx63. No `deprecation` block is set on any of them — Hetzner simply stopped selling them
-  # in our region. cpx22 is the cheapest ORDERABLE like-for-like (2c/4g) x86; cpx12 (1c/2g,
+  # in our region. cpx22 was the cheapest ORDERABLE like-for-like (2c/4g) x86 ON THAT 2026-07-26 PROBE (cx23,
+  # €5.49, was ✗ that day and ✓ again on 2026-08-06 — cheapest-orderable is a dated reading,
+  # not a standing fact); cpx12 (1c/2g,
   # ~€11.49) is the only cheaper orderable option and was rejected on headroom — 1.5 GB measured
   # peak on a 2 GB box is 75% with ~0 headroom, and its 1 vCPU would force a reboot-forcing resize
   # at the GA flip (i.e. a second birth cycle through the gated dispatch). Recorded as an ADR-143
@@ -137,24 +139,40 @@ variable "web_hosts" {
   # web host can never be born on the cax ARM line regardless of stock, because cloud-init.yml
   # PINS amd64 in three places (Doppler CLI, the Docker apt `arch=amd64` line, the webhook binary).
   #
-  # DISASTER-RECOVERY GAP (feeds #6460) — RESTATED 2026-08-06 (#7309), because the 2026-07-26
-  # form of this note was measured false eleven days later and the correction is the whole point.
+  # DISASTER-RECOVERY GAP (feeds #6460) — PARTIALLY RESTATED 2026-08-06 (#7309). One of its
+  # three legs was measured false; the other two STAND. Read which is which before relying on it.
   #
   # It used to read: THREE running hosts sit on types that can no longer be ordered —
   # web-1/soleur-web-platform (cx33), soleur-grok-dogfood (cx33) and soleur-registry (cx23).
-  # Probed live 2026-08-06 (hel1-dc2, `.server_types.available`): cx23 (id 114) ✓ AND cx33
-  # (id 115) ✓. Both were ✗ on 2026-07-26 and cx23 was ✗ again on 2026-08-04 (zot-registry.tf).
-  # So the gap is NOT "these types are gone" — it is that AVAILABILITY IS NOT A PROPERTY OF THE
-  # TYPE. It flips on a days-to-hours timescale, in one direction as easily as the other, and a
-  # host is only rebuildable at the instant you look. A dated ✓ is not a capacity reservation.
   #
-  # The rebuild-is-a-type-decision consequence therefore stands, for a stronger reason than the
-  # original: it holds even when the probe is green. soleur-registry was repinned to cpx22 on
-  # this basis (#7309, see var.registry_server_type) — cpx22 was ✓ at all three probes. The two
-  # cx33 hosts are unrepinned and still carry it. Nothing catches "a declared type left the
-  # orderable set" until an apply, and nothing re-checks a type that came BACK; that periodic
-  # audit is #6460. Whatever it ends up sampling, it must sample REPEATEDLY — a single probe
-  # would have certified any of the three contradictory answers above.
+  # Probed live 2026-08-06, `.server_types.available`, 3 samples, PER DATACENTER:
+  #   hel1-dc2    cx23 ✓   cx33 ✗   cpx22 ✓   cax11 ✗
+  #   nbg1-dc3    cx23 ✓   cx33 ✓   cpx22 ✓   cax11 ✗
+  #   fsn1-dc14   cx23 ✓   cx33 ✓   cpx22 ✓   cax11 ✗
+  #
+  # So: the cx23 leg is FALSE — cx23 is orderable in hel1-dc2 again (it was ✗ there on
+  # 2026-07-26 and ✗ again on 2026-08-04). The two cx33 legs are TRUE AND UNCHANGED: web-1 and
+  # soleur-grok-dogfood both run in hel1, where cx33 is NOT orderable. cx33's ✓ in nbg1-dc3 and
+  # fsn1-dc14 buys those two hosts nothing — a host cannot be rebuilt in a datacenter it does
+  # not live in without also moving region, which is a different and larger decision.
+  #
+  # THAT PER-DC SPLIT IS THE POINT, and it is the trap this note previously walked into: a
+  # catalog-wide reading is not a datacenter reading. cx33 reads "available" if you look at the
+  # fleet and "unavailable" if you look at hel1-dc2, and only the second one answers "can web-1
+  # be rebuilt". This is the same class of error as reading `.supported` for `.available`, one
+  # level down. Always project the probe onto the DC the host actually runs in.
+  #
+  # The rebuild-is-a-type-decision consequence stands for ALL THREE hosts, and for two different
+  # reasons. For the cx33 pair it is the original reason: the type is not orderable where they
+  # run. For soleur-registry it is now the stronger one: the type IS orderable today and was not
+  # two days ago, so a green probe is not a guarantee — availability is not a property of a
+  # server type, it is a point-in-time reading of vendor supply that moves in both directions,
+  # and a dated ✓ is not a capacity reservation. soleur-registry was repinned to cpx22 on that
+  # basis (#7309, see var.registry_server_type); cpx22 was ✓ at every recorded probe. The two
+  # cx33 hosts are unrepinned. Nothing catches "a declared type left the orderable set" until an
+  # apply, and nothing re-checks a type that came BACK; that periodic audit is #6460. Whatever
+  # it samples, it must sample REPEATEDLY and PER DATACENTER — a single fleet-wide probe would
+  # have certified any of the contradictory answers above.
   #
   # Resize to a serving shape at the GA flip only if web-2's OWN metrics warrant (a
   # server_type change is a reboot-forcing in-place update — reboot_updates guard). It reuses
@@ -238,43 +256,42 @@ variable "registry_server_type" {
   # with no edge to this var until #6508 — on 4 GB that could never bind, which is #6288's real
   # uncapped condition; that is fixed). So a wrong call yields a CONTAINED container-OOM
   # (zot_memory_capped=true, zot_oom_kills>0 — both self-reported and gated) plus GHCR fallback,
-  # NOT #6288's host-OOM restart-loop. Revert path if 4 GB proves wrong: cpx32 (8 GB,
-  # ~€35.49/mo net), then re-dispatch. #6288's exact failure mode (uncapped zot on a 4 GB host)
+  # NOT #6288's host-OOM restart-loop. Revert path if 4 GB proves wrong: re-probe first —
+  # cx33 (8 GB, ~€8.49/mo net) was ✗ in hel1-dc2 on 2026-07-26 AND on 2026-08-06, so cpx32
+  # (8 GB, ~€35.49/mo net, ✓ at every probe) is the standing option at 4.2× the price. Take
+  # cx33 only on a fresh hel1-dc2 ✓; do not read either tick out of this comment. Then
+  # re-dispatch. #6288's exact failure mode (uncapped zot on a 4 GB host)
   # is now structurally impossible.
   #
   # WHY cpx22 AND NOT cx23 (#7309, 2026-08-06) — READ THE MEASUREMENT, NOT THE HEADLINE.
   #
-  # It is NOT that cx23 cannot be ordered. Probed live on 2026-08-06 from
-  # `.server_types.available` for hel1-dc2, cx23 (id 114) is AVAILABLE, as is cx33 (id 115).
-  # Any statement that cx23 is unorderable in hel1 — including #7309's own title — is false as
-  # of that probe, and this comment does not repeat it.
+  # It is NOT that cx23 cannot be ordered. Probed live 2026-08-06 from `.server_types.available`,
+  # cx23 (id 114) is AVAILABLE in hel1-dc2. Any statement that cx23 is unorderable in hel1 —
+  # including #7309's own title — is false as of that probe, and this comment does not repeat it.
   #
-  # What is true is that hel1-dc2 cx23 availability has FLIPPED THREE TIMES IN ELEVEN DAYS, and
-  # every one of those three data points is recorded in this repo:
+  # What is true is that its availability in hel1 has changed direction TWICE across twelve days,
+  # once inside twenty-four hours. THE SERIES AND ITS SOURCES ARE SINGLE-SOURCED at
+  # zot-registry.tf › hcloud_server.registry, anchor "STOCK REALITY" — that copy is strictly
+  # richer (four types, per-DC) and restating it here is how the two drifted inside one PR.
   #
-  #   2026-07-26 (#6966, the block this replaces)   cx23 ✗   (0 of 3 EU DCs; whole cx + cax lines)
-  #   2026-08-04 (zot-registry.tf, hcloud_server)   cx23 ✗   (✓ in nbg1-dc3, ✗ in hel1-dc2)
-  #   2026-08-06 (#7309, this change)               cx23 ✓
+  # The consequence, which is the part that belongs on this variable: a registry_server_type
+  # change is a host REPLACE. `user_data` is ForceNew and hcloud_server.registry deliberately
+  # carries no `lifecycle.ignore_changes`, so the apply DESTROYS the host and then creates one,
+  # with no capacity reservation in front of the create. A failed create is not recoverable by
+  # rollback — the revert is a SECOND create against the same supply, with the sole pull path
+  # already dark (ADR-169). cpx22 was ✓ at every recorded probe; that is what it buys.
   #
-  # THAT SERIES is the rationale. A registry_server_type change is a host REPLACE: `user_data` is
-  # ForceNew and this resource deliberately carries no `lifecycle.ignore_changes` (zot-registry.tf),
-  # so the apply DESTROYS the host and then creates a new one. There is no capacity reservation in
-  # front of that create, and if it fails the revert is not a rollback — it is a SECOND create,
-  # against the same volatile supply, with the registry already dark. Pinning the recreate path to
-  # a type that was unavailable in this datacenter two days ago is not a bet worth taking on the
-  # sole pull path (ADR-169), whatever today's probe says. cpx22 was ✓ at all three probes.
-  #
-  # PRICE, stated plainly rather than buried: cpx22 is ~€19.49/mo net against cx23's ~€5.49 —
-  # +€14.00/mo, +€168/yr, 3.55× on this host. Operator accepted that cost explicitly before this
-  # change was authorized. Recorded in knowledge-base/operations/expenses.md as declared-vs-billing:
-  # billing does not move until the apply, and this change schedules none.
+  # PRICE: cpx22 ~€19.49/mo net against cx23's ~€5.49 — +€14.00/mo, +€168/yr, 3.55× on this host.
+  # Operator accepted that cost explicitly before this change was authorized. Recorded in
+  # knowledge-base/operations/expenses.md as declared-vs-billing: billing does not move until the
+  # host-replace, and this change schedules none.
   #
   # Read `.server_types.available`, never `.supported`, and never the `hcloud` CLI's location
-  # column — both report the SUPPORTED set, which resolves cx23 fine and tells you nothing about
-  # whether you can buy one (tests/scripts/lib/stock-preflight-gate.sh, head). #6508's plan-time
-  # guard shares that blind spot for the same reason: `data.hcloud_server_type.registry` is a
-  # catalog lookup. It does catch a NONEXISTENT type at PLAN instead of after the destroy — that
-  # was #6288's cx32 disaster — but availability is a separate question it cannot answer.
+  # column — both report the SUPPORTED set, which resolves a type you cannot buy
+  # (tests/scripts/lib/stock-preflight-gate.sh, head, is the writeup of record). #6508's
+  # plan-time guard shares that blind spot: `data.hcloud_server_type.registry` is a catalog
+  # lookup. It catches a NONEXISTENT type (#6288's cx32) before anything is destroyed, and
+  # nothing about stock.
   #
   # STILL UNORDERABLE, and this survives the repin: the entire `cax` ARM line (cax11 id 45 probed
   # NOT available 2026-08-06). Do not treat cax11 as a live option anywhere in this tree.

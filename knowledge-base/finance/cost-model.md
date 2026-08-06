@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-07-30
+last_updated: 2026-08-06
 last_reviewed: 2026-06-02
 review_cadence: monthly
 owner: cfo
@@ -228,7 +228,7 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 | Hetzner CX33 (web-1, web platform) | 9.17 [expenses.md@2026-07-16] | `expenses.md` |
 | Hetzner Volume (web-1, 20 GB) | 1.24 [expenses.md@2026-07-17] | `expenses.md` (FX-basis corrected — #6602) |
 | Hetzner Primary IPv4 (web-1) | 0.54 [expenses.md@2026-07-17] | `expenses.md` (#6589 gap added — #6602) |
-| Hetzner CX23 (zot registry, hel1) | 5.93 [expenses.md@2026-07-16] | `expenses.md` — **repin DECLARED, not billing.** #7309 (2026-08-06) set `var.registry_server_type` to `cpx22`, but that PR schedules no `terraform apply`, so `soleur-registry` is still a live cx23 drawing the cx23 rate and **this line is correct as it stands**. On the host-replace this becomes 21.05 (+15.12/mo): re-run the subtotals then, not before. The shift is +6.77% of Product COGS — below the 10% threshold that would force a re-derivation here, which is why the subtotals below are untouched. |
+| Hetzner CX23 (zot registry, hel1) | 5.93 [expenses.md@2026-07-16] | `expenses.md` — **repin DECLARED, not billing.** #7309 (2026-08-06) set `var.registry_server_type` to `cpx22`, but that PR schedules no `terraform apply`, so `soleur-registry` is still a live cx23 drawing the cx23 rate and **this line is correct as it stands**. On the host-replace this becomes 21.05 (+15.12/mo): re-run the subtotals then, not before. Sizing the deferral, with the arithmetic shown so the next reader can check it rather than trust it: `+$15.12 / $223.39 = +6.77%` of Product COGS (basis-invariant — numerator and denominator carry the same FX factor, so EUR gives the same figure), and **no** `ceil(burn / price)` boundary is crossed at either $49 or $48 — COGS `223.39 -> 238.51` keeps `ceil(./49) = ceil(./48) = 5`, all-in `643.24 -> 658.36` keeps both at 14. Both limbs of the 2026-07-17 review note's test are therefore satisfied, which is why the subtotals below are untouched. **That 10% bar is a threshold set for this change, not a rule this document defines** — the 2026-07-17 note cites a `§4.1` that does not exist in this file. |
 | Hetzner Volume (registry, 60 GB) | 3.71 [expenses.md@2026-07-17] | `expenses.md` (FX-basis corrected — #6602) |
 | Hetzner Primary IPv4 (registry) | 0.54 [expenses.md@2026-07-17] | `expenses.md` (#6589 gap added — #6602) |
 | Hetzner CPX22 (inngest control plane, hel1) | 21.05 [expenses.md@2026-07-16] | `expenses.md` |

@@ -241,48 +241,107 @@ assert "no keepTags count left at the old value 10" \
   "! grep -qE '\"mostRecentlyPushedCount\": 10\\b' '$CI'"
 
 echo "--- structural: the registry host type this cloud-init is rendered for (#7309) ---"
-# The two facts the rest of this file ASSUMES about var.registry_server_type, pinned so a repin
-# cannot silently invalidate them:
+# Two facts the rest of this file ASSUMES about var.registry_server_type.
 #
-#   R1  the declared default is the type the plan/runbooks name. #7309 repinned cx23 → cpx22.
-#   R2  the default derives amd64 (zot-registry.tf local.registry_arch: `cax*` → arm64, else
-#       amd64). That derivation selects local.zot_image between two DISTINCT OCI repositories
-#       (zot-linux-amd64 / zot-linux-arm64), so an arch flip smuggled in under a type repin
-#       darks the sole pull path — the exact ADR-169 failure this host cannot absorb.
+#   R1  the declared default is the type of record. #7309 repinned cx23 -> cpx22.
+#   R2  the default is not a `cax*` type, so zot-registry.tf's local.registry_arch derives
+#       amd64. That derivation selects local.zot_image between two DISTINCT OCI repositories,
+#       so an arch flip darks the sole pull path (ADR-169).
 #
-# R2 is NOT implied by R1: R1 pins today's value and dies on the next legitimate repin, while
-# R2 is the invariant that must survive one. Keeping both means a future repin has to state its
-# arch decision rather than inherit it.
+# WHAT R2 DOES AND DOES NOT PIN, stated honestly because the first draft of this comment got it
+# wrong. On the tree as committed R2 is IMPLIED BY R1: R1 pass => the value is exactly cpx22 =>
+# not cax* => R2 pass, so there is no input where R1 passes and R2 fails and R2 contributes no
+# gate signal today. It earns its place in exactly one future state — a repin to a `cax*` type
+# that updates R1's literal in the same edit, which turns R1 green and leaves R2 as the sole
+# red. Because that is the state R2 exists for, R2 must carry its own non-emptiness guard: once
+# R1 is retargeted, nothing else covers an extraction that returns "".
 #
-# WHY THE REPIN, stated so a future reader does not have to reconstruct it: not that cx23 is
-# unorderable — it is orderable in hel1-dc2 as of the 2026-08-06 probe. It is that hel1-dc2
-# cx23 availability has flipped three times in eleven days (0-of-3 on 2026-07-26 #6966; ✗ on
-# 2026-08-04, recorded in zot-registry.tf; ✓ on 2026-08-06), and a registry host replace is a
-# one-way destroy-then-create with NO capacity reservation, where a failed revert needs a
-# SECOND successful create on a type whose stock already moved once mid-window. cpx22 is the
-# same 2 vCPU / 4 GB shape, so the 3072m ADR-062 cap and the amd64 render are unchanged.
+# R2 pins the INPUT to the derivation, never the derivation. local.registry_arch's orientation is
+# was unasserted anywhere in this repo until R3 below — measured: inverting its ternary, and
+# deleting the local outright, both left this suite and zot-image-staleness / git-data-luks /
+# registry-luks green (86/0, 15/0, 133/0, 34/0). R3 closes that. The two SIBLING consumers of
+# the same derivation (local.doppler_sha256, and registry-userdata-budget.sh's hardcoded
+# zot_image_amd64 branch) are still uncovered — #7335.
+#
+# The repin's rationale, probe series and sources are SINGLE-SOURCED at zot-registry.tf, anchor
+# "STOCK REALITY". Do not restate them here: an earlier version of this comment did, drifted
+# from that table inside one PR, and shipped a count ("three times") the table never supported.
 VARS="$SCRIPT_DIR/variables.tf"
-assert "variables.tf exists" "[[ -f '$VARS' ]]"
-# COMMENT-STRIPPED AND BLOCK-SCOPED, taking the value from the ASSIGNMENT — never `$NF`, which
-# on `default = "cpx22" # was cx23` is the COMMENT's last word. Same extraction as
-# git-data-luks.test.sh A17, which was built after exactly that defect. Block scoping matters
-# here too: a bare file-wide grep for `default = "cpx22"` is green on the UNMODIFIED tree,
-# because git_data_server_type and inngest_server_type both already default to cpx22.
+assert "variables.tf exists (R1/R2 input)" "[[ -f '$VARS' ]]"
+# COMMENT-STRIPPED, BLOCK-SCOPED, value taken from the ASSIGNMENT — never `$NF`, which on
+# `default = "cpx22" # was cx23` is the COMMENT's last word. Same extraction as
+# git-data-luks.test.sh A17, which was built after exactly that defect. Block scoping is
+# load-bearing and measured: a bare file-wide `grep '^\s*default = "cpx22"'` returns 2 on the
+# UNMODIFIED tree (git_data_server_type and inngest_server_type both default to cpx22), so it is
+# green even with this variable's own default deleted. Takes the path as $1 rather than
+# capturing $VARS so a mutation harness can re-run it against a broken copy.
 _registry_default() {
-  sed 's/[[:space:]]#.*$//' "$VARS" \
+  sed 's/[[:space:]]#.*$//' "$1" \
     | awk '/^variable "registry_server_type"/{i=1}
            i&&/^[[:space:]]*default[[:space:]]*=/{
              sub(/^[^=]*=[[:space:]]*/, ""); gsub(/[",[:space:]]/, ""); print; exit
            }
            i&&/^}/{exit}'
 }
-REGISTRY_DEFAULT="$(_registry_default)"
+REGISTRY_DEFAULT="$(_registry_default "$VARS")"
 echo "--- extracted: registry_server_type default='${REGISTRY_DEFAULT}' ---"
+assert "R0: the extraction returned a value (guards R1/R2 against a silent parse failure)" \
+  "[ -n '$REGISTRY_DEFAULT' ]"
 assert "R1: var.registry_server_type default is cpx22 (#7309 repin)" \
   "[ '$REGISTRY_DEFAULT' = 'cpx22' ]"
 assert "R2: the default is not a cax* type, so local.registry_arch derives amd64" \
-  "case '$REGISTRY_DEFAULT' in cax*) false ;; *) true ;; esac"
+  "[ -n '$REGISTRY_DEFAULT' ] && case '$REGISTRY_DEFAULT' in cax*) false ;; *) true ;; esac"
+
+# R3: the arch DERIVATION is oriented correctly — the assertion R2 cannot make.
+#
+# `local.registry_arch = startswith(var.registry_server_type, "cax") ? "arm64" : "amd64"` selects
+# local.zot_image between two DISTINCT OCI repositories, and a manifest digest resolves only
+# within its own, so an inverted ternary 404s the pull (MANIFEST_UNKNOWN) and darks the sole pull
+# path (ADR-169). A "the local is declared" grep cannot see an inversion. Mirrors
+# git-data-luks.test.sh A16; extract the prefix and BOTH branch values, then replay the decision
+# over a synthesized type space (cq-test-fixtures-synthesized-only — this pins the DERIVATION,
+# not today's Hetzner stock).
+#
+# `ca99` PINS THE PREFIX LENGTH and is the only fixture that does. A16's history is the argument:
+# its comment once claimed four cax members stop a truncated "ca" from passing, and that was
+# measured FALSE — cax11/21/31/41 all start with "ca", so widening the prefix kept the suite
+# green. Cardinality is not discrimination. A synthesized type starting with "ca" that is NOT
+# Ampere is the single input that separates the two prefixes.
+p_registry_arch_derivation() {
+  local expr pfx tval fval pair t exp got
+  # Anchored on the ASSIGNMENT at line-start: that distinguishes a DECLARATION from a reference
+  # such as `zot_image = local.registry_arch == "arm64" ? ...` two lines below, whose `==` an
+  # unanchored `registry_arch[[:space:]]*=` would match first and read as the declaration.
+  expr="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" | grep -E '^[[:space:]]*registry_arch[[:space:]]*=' | head -1)"
+  [ -n "$expr" ] || { echo 0; return; }
+  pfx="$(printf '%s' "$expr" | grep -oE 'startswith\(var\.registry_server_type,[[:space:]]*"[a-z]+"\)' | grep -oE '"[a-z]+"' | tr -d '"')"
+  tval="$(printf '%s' "$expr" | grep -oE '\?[[:space:]]*"[a-z0-9]+"' | grep -oE '"[a-z0-9]+"' | tr -d '"')"
+  fval="$(printf '%s' "$expr" | grep -oE ':[[:space:]]*"[a-z0-9]+"' | grep -oE '"[a-z0-9]+"' | tr -d '"')"
+  # Non-vacuity: a partial extraction must fail loudly, never replay vacuously.
+  { [ -n "$pfx" ] && [ -n "$tval" ] && [ -n "$fval" ]; } || { echo 0; return; }
+  for pair in "cax11:arm64" "cax21:arm64" "cax31:arm64" "cax41:arm64" \
+              "ca99:amd64" \
+              "cpx22:amd64" "cx23:amd64" "cx33:amd64" "ccx13:amd64"; do
+    t="${pair%%:*}"; exp="${pair##*:}"
+    case "$t" in "$pfx"*) got="$tval" ;; *) got="$fval" ;; esac
+    [ "$got" = "$exp" ] || { echo 0; return; }
+  done
+  echo 1
+}
+assert "R3: local.registry_arch derivation is oriented correctly (catches an INVERTED ternary)" \
+  "[ \"\$(p_registry_arch_derivation '$SCRIPT_DIR/zot-registry.tf')\" = 1 ]"
 
 echo ""
 echo "=== registry-boot-guard.test.sh: ${PASS} passed, ${FAIL} failed ==="
+# ANTI-VACUITY FLOOR. The gate below reads FAIL only, so anything that stops assertions from
+# RUNNING passes it: neutering assert() to a no-op was measured to print "0 passed, 0 failed"
+# and exit 0, and this suite is a REQUIRED check (infra-validation.yml). Deleting a whole block
+# is the same class. A FLOOR, not equality — a new assertion must never be a spurious failure.
+# Set to the full count at the time of writing; raise it in lockstep, never lower it to pass.
+MIN_ASSERTIONS=88
+if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= ${MIN_ASSERTIONS}." >&2
+  echo "       The suite was stranded, not clean — a green exit here would assert nothing." >&2
+  exit 1
+fi
 [ "$FAIL" -eq 0 ] || exit 1

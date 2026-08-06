@@ -39,22 +39,29 @@ Read-only query of `/v1/datacenters` (available server types) + `/v1/server_type
 >    was set to `cx32` — also a phantom — and the apply DESTROYED the host before failing
 >    `server type cx32 not found` on the create. A phantom SKU sitting in a table that reads
 >    like a menu is how that happens a second time. The row is struck below, not repriced.
-> 2. **The stock column is a 2026-07-25 sample and later samples disagree.** Probed live
->    2026-08-06 (`hel1-dc2`, `.server_types.available`): `cx23` **and** `cx33` are AVAILABLE.
->    Both read NO here. `cx23` was also NO on 2026-08-04 (`zot-registry.tf`). Availability is
->    not a property of a server type — it is a point-in-time reading of vendor supply that
->    moves in both directions on a days timescale, with no `deprecation` block to warn you.
->    **A dated ✓ is not a capacity reservation. Re-probe before every apply that CREATES a
->    host; never cite a row of this table as current.**
+> 2. **The stock column is a 2026-07-25 sample, and later samples disagree — in BOTH
+>    directions.** Probed live 2026-08-06 (`.server_types.available`, 3 samples, per DC):
+>    `cx23` ✓ in all three EU DCs; `cx33` ✓ in `nbg1-dc3` and `fsn1-dc14` but **✗ in
+>    `hel1-dc2`**, which is the only one that answers a question about web-1. `cax11` ✗
+>    everywhere. So `cx33`'s NO here still holds where it matters, and `cx23`'s **YES** here
+>    has since flipped twice.
+>
+>    Read down the `cx23` row and the whole argument is there. It was in stock on 2026-07-25,
+>    orderable in **0 of 3** EU DCs the very next day (#6966), still ✗ on 2026-08-04, and ✓
+>    again on 2026-08-06 — **two direction changes across twelve days, the first of them
+>    inside twenty-four hours.** Availability is not a property of a server type. It is a
+>    point-in-time reading of vendor supply, it moves both ways, and no `deprecation` block
+>    warns you. **A dated ✓ is not a capacity reservation. Re-probe before every apply that
+>    CREATES a host; never cite a row of this table as current — including this one.**
 
-| Server type | Spec | Net €/mo (hel1) | Orderable in hel1 — **AS SAMPLED 2026-07-25, since falsified** |
+| Server type | Spec | Net €/mo (hel1) | Orderable in hel1 — **AS SAMPLED 2026-07-25**, with later readings appended |
 |---|---|---|---|
 | `cx33` (Intel; web-1's current type) | 4c/8g x86 | 8.49 | NO — out of stock (also all EU DCs) · **✓ AVAILABLE again 2026-08-06** |
-| `cax11` (ARM; git-data's type **at the time of this probe** — repinned to `cpx22` 2026-07-27, #6570) | 2c/4g arm | 5.99 | **NO — ARM unavailable in EU DCs** · still NO at every probe through 2026-08-06 |
-| ~~`cx22` (Intel)~~ | ~~2c/4g x86~~ | ~~~4.59~~ | **NON-EXISTENT — not a stock state.** No such Hetzner type; see the note above and #6288 |
+| `cax11` (ARM; git-data's type **at the time of this probe** — repinned to `cpx22` 2026-07-27, #6570) | 2c/4g arm | 5.99 | **NO — ARM unavailable in EU DCs** · still NO at every probe that sampled it, 2026-07-15 through 2026-08-06 |
+| ~~`cx22` (Intel)~~ | ~~2c/4g x86~~ | ~~≈4.59~~ | **NON-EXISTENT — not a stock state.** No such Hetzner type; see the note above and #6288 |
 | `cpx32` (AMD) | 4c/8g x86 | 35.49 | YES · still YES 2026-08-06 |
 | `cpx22` (AMD) | 2c/4g x86 | 19.49 | YES · still YES 2026-08-06 — available at every recorded probe, which is why #7309 repinned the registry to it |
-| **`cx23`** (Intel; *was* the registry's type until #7309) | **2c/4g x86** | **5.49** | NO here · NO 2026-08-04 · **✓ AVAILABLE 2026-08-06** — two direction changes in eleven days |
+| **`cx23`** (Intel; *was* the registry's type until #7309) | **2c/4g x86** | **5.49** | **YES — in stock (registry runs it in hel1)** · ✗ 2026-07-26 · ✗ 2026-08-04 · **✓ 2026-08-06** |
 
 This confirmed model.c4:182 against live data **on the sample date**: `cx33` could not be recreated then,
 so a rebuilt `web-1` could not have come back as `cx33`. As of 2026-08-06 `cx33` is orderable again — which
@@ -250,10 +257,12 @@ just their values.
 
 It used to read: three of the four running hosts are on types that can no longer be ordered — web-1
 (`cx33`), `soleur-grok-dogfood` (`cx33`), `soleur-registry` (`cx23`). Probed live 2026-08-06
-(`hel1-dc2`, `.server_types.available`): **`cx23` and `cx33` are both AVAILABLE.** Both were
-unavailable on 2026-07-26; `cx23` was unavailable again on 2026-08-04 (`zot-registry.tf`) and
-available on 2026-08-06. Three samples, eleven days, two direction changes, no `deprecation` block on
-any of them.
+(`.server_types.available`, 3 samples, per datacenter): **`cx23` is AVAILABLE in all three EU DCs.
+`cx33` is available in `nbg1-dc3` and `fsn1-dc14` but NOT in `hel1-dc2`** — which is where web-1 and
+`soleur-grok-dogfood` run, so the `cx33` half of this finding is unchanged and still true. Only the
+`cx23` half moved. Its full recorded series in `hel1`: ✓ 2026-07-15 (#6457), ✓ 2026-07-25 (the table
+above), ✗ 2026-07-26 (#6966), ✗ 2026-08-04 (#7280), ✓ 2026-08-06 (#7309) — **two direction changes
+across twelve days, the first inside twenty-four hours**, no `deprecation` block on any of them.
 
 So the finding is not "these types are gone." It is that **availability is not a property of a server
 type** — it is a point-in-time reading of vendor supply that moves in both directions, and a dated ✓
@@ -269,8 +278,11 @@ orderable set" until an apply — and nothing notices one coming back either; th
 three contradictory answers. #6460 also owns recording the account limits as facts with a decay
 date.
 
-**Not changed by this addendum:** `var.registry_server_type` keeps its unorderable default — a
-`registry_server_type` change is a host *replace* of a live registry. This addendum also left
+**Not changed by this addendum:** `var.registry_server_type` kept its `cx23` default — a
+`registry_server_type` change is a host *replace* of a live registry.
+> **Superseded 2026-08-06 (#7309):** it is now `cpx22`, and the "unorderable" characterisation was
+> measured false — `cx23` was orderable in `hel1-dc2` that day. The decision record is the
+> ADR-096 addendum; the repin's ground is the volatility series above, not unorderability. This addendum also left
 `var.git_data_server_type` on its unorderable `cax11`, and predicted that moving it would be a real
 code change rather than a var flip because git-data's cloud-init installed the **arm64** Doppler
 build.

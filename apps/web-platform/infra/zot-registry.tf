@@ -52,7 +52,7 @@ locals {
   # it holds) — but the stock claim that used to sit here is NOT. It read "this lets provisioning
   # take whichever of cax11 (ARM, €5.99) / cx23 (x86, €5.49) has Hetzner stock". THERE IS NO SUCH
   # CHOICE TO OFFER: cax11 (id 45) was probed NOT available in hel1-dc2 on 2026-08-06 (#7309), as
-  # it has been at every recorded probe since 2026-07-26 — the whole `cax` ARM line is out. This
+  # it has been at every probe that sampled it since 2026-07-15 — the whole `cax` ARM line is out. This
   # host is pinned to cpx22 (amd64) by var.registry_server_type. Do not read this block as
   # offering an ARM arm; read it as one derivation with one live branch.
   #
@@ -454,20 +454,44 @@ resource "hcloud_server" "registry" {
   #
   # STOCK REALITY — read from `.server_types.available` (never `.supported`, never the hcloud CLI
   # location column; both report the SUPPORTED set, which resolves a type you cannot buy).
-  # THREE probes, eleven days, hel1-dc2 — this host's datacenter (registry_location = hel1):
+  # FIVE probes, hel1-dc2 — this host's datacenter (registry_location = hel1).
+  # A dash means that probe did not sample that type; it is not a reading.
   #
-  #   2026-07-26 (#6966)   cx23 ✗   cx33 ✗   cax11 ✗   cpx22 ✓
-  #   2026-08-04 (#7287)   cx23 ✗   —        —         cpx22 ✓
-  #   2026-08-06 (#7309)   cx23 ✓   cx33 ✓   cax11 ✗   cpx22 ✓
+  #   2026-07-15 (#6457)    cx23 ✓   cx33 ✓   cax11 —   cpx22 ✓
+  #   2026-07-25 (ADR-143)  cx23 ✓   cx33 ✗   cax11 ✗   cpx22 ✓
+  #   2026-07-26 (#6966)    cx23 ✗   cx33 ✗   cax11 ✗   cpx22 ✓
+  #   2026-08-04 (#7280)    cx23 ✗   cx33 —   cax11 —   cpx22 ✓
+  #   2026-08-06 (#7309)    cx23 ✓   cx33 ✗   cax11 ✗   cpx22 ✓
+  #
+  # Sources, so a reader can re-derive rather than trust this table:
+  #   2026-07-15  knowledge-base/project/plans/2026-07-15-chore-hetzner-cap-headroom-plan.md,
+  #               anchor "hel1-dc2  orderable NOW:" — a /v1/datacenters availability listing.
+  #   2026-07-25  ADR-143's "Live stock probe" table — its cx23 row reads "YES — in stock".
+  #   2026-07-26  the block this replaces in variables.tf, anchor "STOCK REALITY (live probe
+  #               2026-07-26" — recorded as "0 of 3 EU DCs", which names hel1-dc2 explicitly.
+  #   2026-08-04  the previous revision of THIS block; it was introduced by #7280, not #7287.
+  #               NOTE apply-web-platform-infra.yml, ADR-169 and the recut runbook date the
+  #               same reading 2026-08-05. One is wrong; nothing in the repo resolves it, and
+  #               the count below does not depend on which.
+  #   2026-08-06  #7309, 3 samples, all three EU DCs.
   #
   # cx23 IS orderable in hel1-dc2 as of the newest probe. Do not restate the older "unorderable
-  # in hel1" line as if it were current — it was true on two of three sample days and is not the
-  # reason this host moved. The reason is the SHAPE of that column: cx23 availability flipped
-  # twice inside eleven days, in both directions, with no deprecation block and no warning. A
+  # in hel1" line as if it were current — it was true on two of four sample days and is not the
+  # reason this host moved. The reason is the SHAPE of that column: cx23 went available →
+  # unavailable → available, i.e. TWO direction changes across twelve days — and the first took
+  # ONE DAY, from "in stock" on 07-25 to orderable in 0 of 3 EU DCs on 07-26. No deprecation
+  # block, no warning. (Quote the span that matches the count: the 11-day window 07-26 → 08-06
+  # contains only ONE change.) A
   # host replace here is destroy-then-create with no capacity reservation, and a failed create
   # leaves the registry dark with the revert needing a SECOND create against the same supply.
   # cpx22 is ✓ on every row. #7309 repinned var.registry_server_type cx23 → cpx22 on exactly
-  # that basis (+€14.00/mo, operator-accepted); cax11 is the one entry that never came back.
+  # that basis (+€14.00/mo, operator-accepted); cax11 is ✗ at every probe that sampled it.
+  #
+  # NOTE THE cx33 COLUMN — it is the trap, and #7309 fell into it before catching it. cx33 is
+  # ✗ in hel1-dc2 on 2026-08-06 while ✓ in nbg1-dc3 AND fsn1-dc14 on the same samples. A
+  # fleet-wide reading therefore says "cx33 is available" and a hel1-dc2 reading says it is not,
+  # and only the second one answers a question about a host that runs in hel1. Project every
+  # probe onto the DC the host actually occupies before drawing a conclusion from it.
   #
   # #6508's plan-time guard does not close this either way: `data.hcloud_server_type.registry`
   # is a CATALOG lookup, so it resolves any SUPPORTED type regardless of availability. It catches
@@ -477,8 +501,10 @@ resource "hcloud_server" "registry" {
   # re-probing stock first. Re-provisioning is the guarded `registry-host-replace` /
   # `registry-luks-recut` dispatch path, which is destroy-guarded and scoped. This is disclosure,
   # not a new hazard — but until #6460's DR remediation lands, "the plan shows the registry being
-  # replaced" is a STOP, not a proceed. The repin improves the ODDS the create succeeds; it does
-  # not authorize one.
+  # replaced" is a STOP, not a proceed. The repin improves the odds the Hetzner CREATE
+  # call succeeds. It does NOT make the replace safe: the live volume is still plaintext ext4,
+  # so a fresh host boots into cloud-init-registry.yml's `refusing-non-luks-device` FATAL and
+  # comes up dark. That is #6929's recut. Improving the odds of one step is not authorization.
   user_data = base64gzip(replace(templatefile("${path.module}/cloud-init-registry.yml", {
     # Mount the zot storage volume by its specific id (server.tf/cloud-init.yml by-id
     # pattern). Known at plan time; the attachment is a separate resource.
