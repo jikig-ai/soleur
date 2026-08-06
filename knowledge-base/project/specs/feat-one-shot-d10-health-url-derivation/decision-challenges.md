@@ -139,3 +139,27 @@ an active incident.
 
 Flagged as a user-challenge rather than mechanical because it changes how the PR is
 merged, not just what it contains.
+
+## Work-phase challenge — AC1 and W4 contradict Phase 4's own scope cut
+
+**Classification:** Taste (user-legible) — resolved at write time, recorded rather than silently applied.
+
+**The contradiction.** AC1 requires `grep -c 'doppler secrets get APP_DOMAIN_BASE'` over the comment-stripped **workflow** to return `0`, and cites `4` as the discriminating pre-fix count. W4 likewise specifies a residual-zero over the workflow and `.github/actions/**`, naming only `cf-tunnel-ssh-bridge` as an exclusion.
+
+But Phase 4 deliberately **cuts** the web-host birth/replace conversion ("three reviewers; a host replace is a live possibility during this incident"). Those two sites live in `apply-web-platform-infra.yml`, in the step `Resolve known-good image digest off-host (freeze $PINNED)`. So AC1's `0` and W4's residual-zero are unreachable *without doing the very work Phase 4 removed for safety*.
+
+Pre-fix `4` decomposes as: 2 D10 arms (converted) + 2 web-host sites (deliberately kept).
+
+**Resolution.** Phase 4 is authoritative on intent; AC1's literal `0` is the erroneous clause. Measured post-fix:
+
+| Scope | Count |
+|---|---|
+| whole workflow, comment-stripped | **2** (was 4) |
+| `registry_pull_path_gate` job | **0** |
+| `export APP_DOMAIN_BASE=$(` anywhere | **0** |
+
+W4 is implemented against the **recut chain** with both exclusions enumerated in a commented allowlist, and the allowlist is itself asserted live — if a D4 conversion lands and an entry stops matching a real deferred read, the gate goes RED and the exemption must be deleted. That makes the exclusion visible and self-retiring rather than a permanent silent hole, which is what W4's stated purpose actually asks for.
+
+Had AC1 been implemented literally, the only ways to satisfy it were to convert the web-host sites (reintroducing the risk three reviewers removed) or to weaken the grep until it passed. Both are worse than recording the contradiction.
+
+**Follow-up:** the remaining sites are tracked in the consolidated follow-up issue, with the wiring gate's allowlist as the mechanism that forces their retirement.
