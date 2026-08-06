@@ -992,3 +992,33 @@ It also does not make the replace *safe*. The live volume is still plaintext ext
 ### Consequence for #6460
 
 `cx33` was probed the same day: **✗ in `hel1-dc2`**, ✓ in `nbg1-dc3` and `fsn1-dc14`. web-1 and `soleur-grok-dogfood` both run in `hel1`, so their DR gap is unchanged — a fleet-wide reading says "cx33 is available" and answers the wrong question. Whatever periodic audit #6460 builds must sample **repeatedly and per datacenter**; a single fleet-wide probe would have certified any of the contradictory answers in the table above.
+
+## Amendment 2026-08-06 — the cold-vehicle checklist verified logic, never its live inputs
+
+Cold-vehicle item 3 named `APP_DOMAIN_BASE` as a value to confirm in Doppler. **That secret
+exists in no config of the `soleur` project** — measured across all 13. The item could never
+have passed as written, and nothing noticed because the checklist's other items exercise gate
+*logic*, which is hermetic and stays green regardless of whether the workflow's live inputs
+resolve.
+
+The real provenance chain runs the other way:
+
+```
+apps/web-platform/infra/variables.tf : variable "app_domain_base" (default = "soleur.ai")
+  └─ server.tf : APP_DOMAIN_BASE = var.app_domain_base   ← the host env var
+  └─ tunnel.tf : registry.${var.app_domain_base}          ← the ingress the recut replaces
+```
+
+`APP_DOMAIN_BASE` is a **derived copy** of the Terraform variable, published to the host. Reading
+Doppler for it could at best have re-read a copy of the causal source; in fact it read nothing.
+
+**The repo already knew.** `.github/actions/cf-tunnel-registry-bridge/action.yml` carried the
+comment *"APP_DOMAIN_BASE is not in prd"* while the D10 step body asserted *"APP_DOMAIN_BASE is a
+DOPPLER SECRET"*. Two comments in the same dispatch's chain contradicted each other and the
+correct one sat in the leg that actually pushes images. The knowledge was present and unlinked —
+which is the reusable lesson here, not the secret name.
+
+Cold-vehicle item 3 is superseded by the live-input check now in the runbook: run the derivation,
+build the `/health` URL **from its output**, and assert a `200`. A hand-typed URL tests your
+typing, not the gate's input.
+
