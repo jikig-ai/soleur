@@ -182,7 +182,19 @@ scope: PR 1 (CLI producers). PR 2 (manifest + dashboard) is deferred and scoped 
 - [ ] PR body: `## Changelog` section + `semver:minor` label
       (`plugins/soleur/AGENTS.md` pre-commit checklist).
 
-## Phase 6 — Post-merge (operator, agent-run)
+## Phase 6 — Post-merge verification (agent-run, NOT operator)
+
+Both steps below are `gh api` reads with no human gate — they are executed by
+`/soleur:postmerge` after this PR merges, not handed to the operator and not
+pre-filed as an issue (that would be phantom backlog for work the pipeline
+already performs). They are listed here as the verification contract, not as a
+checklist for a person.
+
+**Precondition, stated rather than assumed:** step 1 needs a sync run against the
+dogfood repo *after* this merges, and step 2 can only pass once that run's PR is
+pushed and merged — the KB viewer reads the GitHub source of truth, not the
+on-disk clone. If the dogfood sync has not happened yet, these stay open rather
+than being reported green.
 
 - [ ] Re-sync `2my8r9ry2t-wq/Skouer`. Assert elements match the component-doc set
       and relationships match declared dependencies. **No literal count** —
