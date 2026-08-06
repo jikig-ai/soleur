@@ -96,47 +96,11 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
           (deleted_lines * 100 / total_lines) >= 80 AND
           zero source-code extensions are present in the diff:
      class = deletion-dominated → 2 agents (git-history-analyzer + security-sentinel)
-   Else if any changed file has a source-code extension AND the diff is NOT small-surface:
+   Else if any changed file has a source-code extension:
      class = code → 8 agents
-   Else if any changed file has a source-code extension AND the diff IS small-surface:
-     class = small-surface → 3 agents (see below)
    Else:
      class = non-code → 4 agents
    ```
-
-   **`small-surface` (proportionality axis, #7325).** Every class above keys on file KIND —
-   extension, deletion ratio, lockfile glob. None keys on SIZE or RISK, so a one-line change
-   that happens to touch a `.sh` file draws the identical 8-agent panel as a 1,000-line
-   rewrite. That is how PR #7325 spent ~831k tokens reviewing a diff whose executable delta
-   was **one string literal**.
-
-   A diff is `small-surface` when ALL hold:
-
-   ```bash
-   src_added=$(git diff --numstat origin/main...HEAD -- $(git diff --name-only origin/main...HEAD | grep -E "$SOURCE_RE") 2>/dev/null | awk '{s+=$1} END{print s+0}')
-   src_files=$(git diff --name-only origin/main...HEAD | grep -cE "$SOURCE_RE")
-   # (a) executable surface is small
-   [ "$src_added" -le 40 ] && [ "$src_files" -le 3 ]
-   # (b) AND no migration, no dependency/lockfile change, no new env var or credential path
-   ! git diff --name-only origin/main...HEAD | grep -qE 'supabase/migrations/|package(-lock)?\.json$|bun\.lock$|\.env'
-   ```
-
-   `small-surface` → **3 agents**: `security-sentinel`, `code-quality-analyst`, and ONE
-   domain agent chosen for what the diff actually touches (`git-history-analyzer` for a
-   claim/provenance change, `data-integrity-guardian` for a schema/ledger change,
-   `architecture-strategist` for an ADR/topology change). Pick it deliberately — that third
-   slot is where the unique findings come from.
-
-   **Prose volume does NOT promote a diff out of `small-surface`.** A 40-line code change
-   with 300 lines of `.md`/comment rationale is still small-surface. Reviewing prose costs
-   the same per token as reviewing code and yields far less; if the prose needs that much
-   review, the fix is to SHORTEN it (see `work/SKILL.md` §single-source), not to widen the
-   panel.
-
-   **Escalate on measured risk, never on extension.** Promote `small-surface` → `code` when
-   the diff touches an irreversible or credential-bearing surface (the canonical
-   `SENSITIVE_PATH_RE`), or when the first 3 agents surface a P1. Escalation after a finding
-   is cheap; a full panel by default is not.
 
    The "zero source-code extensions" guard on `deletion-dominated` closes a piggyback class: a 1000-line cleanup PR that adds a 50-line `.ts` file would otherwise route to 2 agents and bypass pattern-recognition / code-quality / architecture / data-integrity / performance / agent-native review on the new source file. Mirroring `lockfile-only`'s `$has_source` empty requirement keeps the savings on legitimate orphan-cleanup PRs while routing any deletion-dominated PR with new source code through the full 8-agent path.
 

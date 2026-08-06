@@ -25,44 +25,34 @@ See `plugins/soleur/lib/workflow-fidelity.ts` (`IMPLEMENTATION_TAIL`, `ONE_SHOT_
 
 ## Token discipline (load-bearing — this pipeline is the biggest single consumer)
 
-Soleur bills its operators for these tokens. **Match process cost to blast radius**
-(`hr-match-process-cost-to-blast-radius`). The anti-bypass protocol above says which steps you
-may not SKIP; this says how to run them cheaply. They do not conflict: run every step, size
-each one to the change.
+Soleur bills its operators for these tokens. **This does NOT license skipping a step.** Every
+step in the anti-bypass protocol above runs, `/deepen-plan` included — `PLAN_PIPELINE_PREFIX`
+in `workflow-fidelity.ts` is the contract and it is not negotiable here. What follows is how
+to run those steps without waste.
 
-**Sizing rule.** Before Step 1, state the change's executable surface in one line — files and
-added source lines, excluding docs/comments. Let that drive the run:
+**The measured cost driver is not the panel size — it is rework and restatement.** On PR
+#7325 the classifier was CORRECT to pick the full panel (103 added source lines across 23
+files); the cost came from three habits below, each of which multiplies.
 
-| Executable surface | Plan | Review | Notes |
-|---|---|---|---|
-| ≤ 40 added src lines, ≤ 3 src files, no migration/lockfile/credential path | inline plan, **skip `deepen-plan`** | `small-surface` → 3 agents | escalate on a P1 or a sensitive path |
-| anything larger, or irreversible/credential-bearing | full `plan` + `deepen-plan` | full panel | |
-
-Announce the sizing and the reason. A wrong call is recoverable — escalating after a finding
-costs one extra round; a full panel by default costs one on every PR forever.
-
-**The seven cheapest habits, in impact order.** Each was measured on #7325 (~831k tokens for a
-one-string-literal change):
-
-1. **Do not restate.** Prose is review surface priced per token and it can drift between
-   copies. Write the rationale once, point at it (`work/SKILL.md` §single-source). ~300 lines
-   across 8 files was the bulk of that PR's review cost, and two copies contradicted each
-   other before any reviewer saw them.
+1. **Do not restate.** Prose is review surface priced per token, and copies drift. Write the
+   rationale once at the artifact that owns the decision, then point at it with a content
+   anchor (`work/SKILL.md` §single-source). On #7325 ~300 lines across 7 files was the bulk
+   of the review surface, and two copies of one probe table CONTRADICTED each other before
+   any reviewer saw them.
 2. **Verify a measurement before it propagates**, at the granularity you will claim it
-   (`work/SKILL.md`). One false fact reached 4 files + 2 issue comments and an agent's top
-   finding; the re-probe that falsified it took 15 seconds.
+   (`work/SKILL.md`). One false fact reached 4 files, 2 issue comments, and a review agent's
+   top finding; the re-probe that falsified it took 15 seconds.
 3. **Spawn the agent set ONCE, complete** (`review/SKILL.md`). A late gap-closer costs a whole
    extra fix → CI → correction round.
 4. **Re-run a suite only when its inputs changed.** A green full-suite run against commit A
    still covers commit B when B touches only docs — verify the delta with targeted suites and
    say which commit the full run covered.
-5. **Bound every command's output.** `git grep` over a tree with generated JSON returns
-   megabytes on one "line"; use `':!*.json'`, `--name-only`, and `| cut -c1-200`. Never let a
-   776 kB tool result into context.
-6. **Delegate wide reads to a subagent** (`cm-delegate-verbose-exploration…`) — you keep the
+5. **Bound every command's output.** `git grep` over a tree containing generated JSON returns
+   megabytes on one "line": use `':!*.json'`, `--name-only`, `| cut -c1-200`.
+6. **Delegate wide reads to a subagent** (`cm-delegate-verbose-exploration…`) — keep the
    conclusion, not the file dumps.
-7. **Poll with a bounded, anchored pattern.** Match `^=== N/N suites passed ===$`, not a bare
-   token that also appears in a PASS message, and never `pgrep` a pattern your own poll
+7. **Poll with a bounded, anchored pattern.** Match `^=== N/N suites passed ===$`, never a
+   bare token that also appears in a PASS line, and never `pgrep` a pattern your own poll
    command contains.
 
 **Report cost honestly.** If a run was disproportionate, say so and name the cause — the
