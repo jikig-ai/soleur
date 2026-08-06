@@ -2070,9 +2070,8 @@ jobs:
           #
           # Bare assignment then a separate export: `export X=$(cmd)` exits 0 even when cmd
           # fails, which would silently break this fail-closed chain.
-          APP_DOMAIN_BASE=$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")
-          if [[ -z "$APP_DOMAIN_BASE" ]]; then
-            echo "::error::registry-luks-recut D10 PREPARE ABORT: APP_DOMAIN_BASE could not be derived from apps/web-platform/infra/variables.tf, so the /health URL that defines the restore set is unknown. Fail-closed — an underivable input is not evidence."
+          if ! APP_DOMAIN_BASE=$(DERIVE_CONTEXT=D10-PREPARE bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh"); then
+            echo "::error::registry-luks-recut D10 PREPARE ABORT: APP_DOMAIN_BASE could not be derived from apps/web-platform/infra/variables.tf. Fail-closed — an underivable input is not evidence."
             exit 1
           fi
           export APP_DOMAIN_BASE
@@ -2297,8 +2296,7 @@ jobs:
           # Same derivation as PREPARE, re-run over the same committed source rather than
           # threaded from that step — VERDICT deliberately re-derives so it cannot inherit
           # stale state. Bare assignment then export: `export X=$(cmd)` exits 0 on failure.
-          APP_DOMAIN_BASE=$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")
-          if [[ -z "$APP_DOMAIN_BASE" ]]; then
+          if ! APP_DOMAIN_BASE=$(DERIVE_CONTEXT=D10-VERDICT bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh"); then
             echo "::error::registry-luks-recut D10 VERDICT ABORT: APP_DOMAIN_BASE could not be derived from apps/web-platform/infra/variables.tf. Fail-closed — nothing has been destroyed."
             exit 1
           fi

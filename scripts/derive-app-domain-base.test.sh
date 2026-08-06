@@ -45,6 +45,11 @@ CASES_RUN=0
 pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; return 0; }
 fail() { fails=$((fails + 1)); printf '  FAIL %s\n' "$1"; return 0; }
 
+# The runbook instructs an operator to run this suite during an incident. An exported
+# TF_VAR_app_domain_base would silently satisfy tier 1 for every fixture and report a wall of
+# failures that are an artefact of the shell, not a defect. T13/T14 set it per-invocation.
+unset TF_VAR_app_domain_base
+
 SB="$(mktemp -d)" || { printf 'harness: mktemp -d failed\n' >&2; exit 2; }
 trap 'rm -rf "$SB"' EXIT
 
@@ -209,13 +214,135 @@ CASES_RUN=$((CASES_RUN + 1))
 [[ "$RC16" -eq 0 && -n "$OUT16" ]] && pass "T16 zero-arg invocation resolves the repo's own variables.tf" \
   || fail "T16 zero-arg invocation failed: got '$OUT16' rc=$RC16"
 
-# ── Anti-vacuity floor ──────────────────────────────────────────────────────────────────────
-# A loop or fixture source that silently produced nothing would otherwise exit 0 having
-# asserted nothing at all.
-if [[ "$CASES_RUN" -lt 16 ]]; then
-  fail "anti-vacuity: only ${CASES_RUN} script invocations ran (expected >= 16)"
+# ── T17-T20: shapes a real variables.tf can take, which previously FALSE-ABORTED ────────────
+# These are not hypothetical. `variables.tf` already carries validation blocks, and an abort
+# here re-arms the original defect — the D10 gate failing before it reaches its destroy-guard —
+# via a routine Terraform edit rather than a code change.
+mkdir -p "${SB}/t17"
+cat > "${SB}/t17/variables.tf" <<'EOF'
+variable "app_domain_base" {
+  type = string
+  validation {
+    condition     = can(regex("^[a-z]", var.app_domain_base))
+    error_message = "must be lowercase"
+  }
+  default = "soleur.ai"
+}
+EOF
+run_sut "${SB}/t17/variables.tf"
+[[ "$RC" -eq 0 && "$OUT" == "soleur.ai" ]] && pass "T17 a validation{} block BEFORE default does not abort" \
+  || fail "T17 false-abort on a nested block: rc=$RC out='$OUT'"
+
+mkdir -p "${SB}/t18"
+cat > "${SB}/t18/variables.tf" <<'EOF'
+variable "app_domain_base" {
+  default = "soleur.ai"   # the apex the app is served from
+}
+EOF
+run_sut "${SB}/t18/variables.tf"
+[[ "$RC" -eq 0 && "$OUT" == "soleur.ai" ]] && pass "T18 a trailing # comment on the default line does not abort" \
+  || fail "T18 false-abort on an inline comment: rc=$RC out='$OUT'"
+
+# The block terminator: a target variable with NO default must not inherit a later sibling's.
+# This is the fixture that makes the brace-depth tracking load-bearing — without it, deleting
+# the terminator or defeating it with indentation changes nothing observable.
+mkdir -p "${SB}/t19"
+cat > "${SB}/t19/variables.tf" <<'EOF'
+variable "app_domain_base" {
+  type = string
+}
+
+variable "unrelated_sibling" {
+  default = "leaked.example.com"
+}
+EOF
+run_sut "${SB}/t19/variables.tf"
+[[ "$RC" -ne 0 ]] && pass "T19 a default from a LATER sibling does not bleed into the target block" \
+  || fail "T19 bled a sibling's default: got '$OUT' (expected non-zero exit)"
+
+# One-line block form. Also the shape that made the divergence guard below silently no-op.
+mkdir -p "${SB}/t20"
+printf 'variable "app_domain_base" { default = "oneline.example.com" }\n' > "${SB}/t20/variables.tf"
+run_sut "${SB}/t20/variables.tf"
+[[ "$RC" -eq 0 && "$OUT" == "oneline.example.com" ]] && pass "T20 a one-line variable block parses" \
+  || fail "T20 one-line block: rc=$RC out='$OUT'"
+
+# ── T21: an unquoted HCL expression must NOT be returned verbatim ───────────────────────────
+# `default = local.base` contains a dot, so it passes every shape check and would fabricate
+# https://app.local.base/health. A legal Terraform refactor must not silently redirect the gate.
+mkdir -p "${SB}/t21"
+printf 'variable "app_domain_base" { default = local.base }\n' > "${SB}/t21/variables.tf"
+run_sut "${SB}/t21/variables.tf"
+[[ "$RC" -ne 0 ]] && pass "T21 an unquoted HCL expression is rejected, not returned verbatim" \
+  || fail "T21 returned an unquoted expression: '$OUT' — that is a fabricated hostname"
+
+# ── T22-T25: injection shapes. T22 is the sharp one ─────────────────────────────────────────
+# `x@evil.com` makes https://app.x@evil.com/health resolve to evil.com with `app.x` as
+# userinfo. The D10 gate reads that host to DEFINE the restore set, and the bridge sends the
+# production CF Access service token to it.
+assert_malformed "T22 userinfo (@) host relocation"  "x@evil.com"      t22
+assert_malformed "T23 case-varied app. prefix"       "App.soleur.ai"   t23
+assert_malformed "T24 empty label (..)"              "a..b"            t24
+assert_malformed "T25 leading hyphen"                "-soleur.ai"      t25
+
+# ── T26: the guard must not be TIGHTER than a real domain needs ─────────────────────────────
+# Every other accepted fixture draws from [a-z.] only, so a character-class tightening
+# (reject hyphen / digit / uppercase) would pass unnoticed. This is the fixture on the far side
+# of the transform.
+write_fixture "${SB}/t26" "a1-base.example.com"
+run_sut "${SB}/t26/variables.tf"
+[[ "$RC" -eq 0 && "$OUT" == "a1-base.example.com" ]] && pass "T26 a legitimate base with digits and hyphens is ACCEPTED" \
+  || fail "T26 over-rejected a valid domain: rc=$RC out='$OUT'"
+
+# ── T27-T28: the app_domain divergence guard ────────────────────────────────────────────────
+# `app_domain` is the variable that HAS a live override lever (APP_DOMAIN is present in Doppler
+# prd_terraform, so TF_VAR_app_domain is injected on every apply); `app_domain_base` has none.
+# A domain move therefore shifts production while this derivation keeps returning the old base.
+mkdir -p "${SB}/t27"
+cat > "${SB}/t27/variables.tf" <<'EOF'
+variable "app_domain_base" {
+  default = "soleur.ai"
+}
+variable "app_domain" { default = "app.example.org" }
+EOF
+run_sut "${SB}/t27/variables.tf"
+[[ "$RC" -ne 0 ]] && pass "T27 a divergent app_domain aborts (wrong-host read becomes loud)" \
+  || fail "T27 accepted a divergent app_domain: '$OUT' — the gate would measure the wrong host"
+
+mkdir -p "${SB}/t28"
+cat > "${SB}/t28/variables.tf" <<'EOF'
+variable "app_domain_base" {
+  default = "soleur.ai"
+}
+variable "app_domain" {
+  default = "app.soleur.ai"
+}
+EOF
+run_sut "${SB}/t28/variables.tf"
+[[ "$RC" -eq 0 && "$OUT" == "soleur.ai" ]] && pass "T28 a consistent app_domain passes" \
+  || fail "T28 false-abort on consistent values: rc=$RC out='$OUT'"
+
+# ── Anti-vacuity floors ─────────────────────────────────────────────────────────────────────
+# TWO floors, because they fail differently and the second is the one that was missing.
+#
+# The INVOCATION floor catches a fixture source that silently produced nothing.
+if [[ "$CASES_RUN" -lt 26 ]]; then
+  fail "anti-vacuity: only ${CASES_RUN} script invocations ran (expected >= 26)"
 else
   pass "anti-vacuity floor: ${CASES_RUN} script invocations"
+fi
+
+# The ASSERTION floor catches the dispatch layer itself going silent. Measured: neutering
+# `fail()` to `return 0` — which the `&&`/`||` idiom makes a VALID no-op — reported
+# "22 passed, 0 failed" while `validate_base` was deleted from the SUT and six malformed-shape
+# rows were suppressed. `fails` alone is a single unguarded integer, so a suite that asserts
+# nothing is byte-indistinguishable from one that passed. Pinned EXACTLY, with zero slack:
+# a `>=` here would re-open the hole every time an assertion is added.
+EXPECTED_PASSES=34
+if [[ "$fails" -eq 0 && "$passes" -ne "$EXPECTED_PASSES" ]]; then
+  printf '  FAIL anti-vacuity: %d assertions passed, expected exactly %d — assertions were added, removed, or silenced\n' \
+    "$passes" "$EXPECTED_PASSES"
+  fails=$((fails + 1))
 fi
 
 printf '\n=== %d passed, %d failed ===\n' "$passes" "$fails"
