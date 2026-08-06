@@ -72,6 +72,47 @@
 - **`pcent` climbed 96 → 99 → 100 between 20:35Z and 22:00Z and stayed at 100.** The store
   filesystem is now full — a material worsening from the 89% in the #7247 thread at 14:20Z.
 
+### Triage pointer — the lever that measures this incident (added 2026-08-06, #7278/ADR-171)
+
+The line above stops at *"the store filesystem is now full"* and nothing in this branch could say
+**what is filling it**. That is not an oversight of this spec: `SOLEUR_ZOT_DISK` reports `pcent`
+with **no per-path breakdown**, so the telemetry this triage rests on structurally cannot answer
+it, and every write-shaped remedy (tighten the keep-set, force a GC, resize) needs a host config
+change, i.e. a cloud-init re-run, i.e. a host **replace** — which is fatal while #6929 is open.
+
+**#7278 ships the read-only half of that answer.** Before proposing any further remedy on this
+issue, dispatch it and read the number:
+
+```
+gh workflow run registry-zot-inventory.yml
+```
+
+It runs from GitHub Actions only, `GET`/`HEAD` with pull-only credentials, no `docker login`, no
+host change and no Terraform. It walks the OCI API over the existing CF-Access-gated `registry.`
+ingress, emits `SOLEUR_ZOT_INVENTORY` to Better Stack, requires a readback before going green, and
+**comments the line and its interpretation onto #7247** — this issue.
+
+Three constraints on reading it, because the failure mode of this measurement is a confident wrong
+number:
+
+- Require `enumeration_complete=true`. A prototype sweep run from a workstation on 2026-08-06
+  returned 14.78 GB manifest-referenced against ~56 GB used — but with **12 manifest errors**, so
+  `enumeration_complete=false` and it licenses **no** conclusion. The errors are consistent with
+  the ~4.8/min restart loop interrupting the sweep, which is why the shipped enumerator retries.
+- `delta_gb` is an **upper bound on unreferenced bytes**, not a measurement of them. Named
+  candidates with different remedies: zot's dedupe cache DB, and orphaned `.uploads/` staging.
+  **Assert no cause from it.**
+- A `delta_gb` under ~3 GB is **not distinguishable from zero** — `pcent` is `used/(used+avail)`
+  and excludes ext4's root reserve (~2.95 GB on 59 GB).
+
+**What #7278 did NOT deliver, so it is not proposed here as available:** `restart`, `push-config`
+and `reclaim` are all **BLOCKED ON A PROVISIONING EVENT**. `reclaim` is additionally blocked
+today on its own terms — zot's deny-by-default `accessControl` grants the pull user `["read"]` and
+the push user `["read","create","update"]`, so **no user holds `delete`** (measured) and manifest
+DELETE is refused whatever the pinned build supports. And restart-as-remedy is refuted by this
+spec's own evidence: `--restart unless-stopped` has already restarted zot **15,640** times into
+the same full volume.
+
 ### Components Invoked
 - Skills: `soleur:plan`, `soleur:plan-review`, `soleur:deepen-plan`
 - Agents: `Explore` x2, scoped advisor consult, 6-agent review panel (`dhh-rails-reviewer`,

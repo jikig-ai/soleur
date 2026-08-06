@@ -142,6 +142,46 @@ restore exit-code table below).
 
 ---
 
+## Before ANY destructive step: try the read-only inventory lever FIRST
+
+**Everything below this heading destroys something. This does not.** Before the cold-vehicle
+re-verification, before Step 1 and before Step 2, dispatch the inventory lever and read its number.
+
+```
+gh workflow run registry-zot-inventory.yml
+```
+
+It runs entirely from GitHub Actions, is read-only (`GET`/`HEAD` only, pull-user credentials, no
+`docker login`), changes nothing on the host and touches no Terraform. It walks the registry's OCI
+API over the existing Cloudflare-Access-gated `registry.` ingress and emits a
+`SOLEUR_ZOT_INVENTORY` marker to Better Stack, then reads it back before the run goes green. The
+workflow comments the line and its interpretation onto #7247.
+
+**Why this comes first.** The reason an operator reaches for a recut is almost always "the store
+is full and the registry is down". This lever answers *what is actually consuming the volume* —
+the question `SOLEUR_ZOT_DISK` structurally cannot answer, because it reports `pcent` with **no
+per-path breakdown**. A recut destroys the store and rebuilds it encrypted; it does not diagnose
+anything, and firing it without the number means destroying the only copy of the evidence.
+
+**How to read the number, and what it does not license:**
+
+- Require `enumeration_complete=true`. An incomplete sweep (`manifest_errors > 0`, a failed
+  `tags/list`, an unfollowed `Link` header) produces a large `delta_gb` that is indistinguishable
+  from the finding. `enumeration_complete=false` licenses **no** conclusion — re-dispatch.
+- `delta_gb` is an **upper bound on unreferenced bytes**, not a measurement of them. Two candidates
+  with different remedies are zot's dedupe cache DB and orphaned `.uploads/` staging. The lever
+  distinguishes neither. **Assert no cause from it.**
+- A `delta_gb` under about **3 GB is not distinguishable from zero** — `pcent` excludes ext4's root
+  reserve, which is ~2.95 GB on a 59 GB filesystem.
+
+**What it cannot do.** It cannot reclaim, restart, or change host config. No zot user holds
+`delete` (measured), and every write-shaped remedy needs a cloud-init-written config change, i.e. a
+host replace — which is the #6929 fatal this runbook exists inside. So the inventory is not an
+alternative to the recut; it is the measurement you must have **before** deciding the recut is the
+right destroy. See [ADR-171](../../architecture/decisions/ADR-171-ci-side-observability-emission-and-read-only-registry-inventory.md).
+
+---
+
 ## Before the FIRST-EVER fire: cold-vehicle re-verification (REQUIRED)
 
 This dispatch shipped with **zero live executions**. Its guard *logic* is well covered by tests,
@@ -412,9 +452,17 @@ pin, and re-deriving it means going back to Step 1.
   the datacenter this host runs in. Repinning to `cpx22` is the only walkable lever past it
   (Hetzner inventory is not closable by any issue), and it carries a **+€14.00/mo** cost decision.
   This is the live blocker.
-- **#7278** — the registry host has no in-place restart lever. Usually the thing you actually
-  wanted; try it first once it exists, rather than reaching for a destroy. #7287 additionally
-  declares it a **rollback dependency**, not merely a prerequisite.
+- **#7278** — the registry host has no in-place execution lever. **Partially delivered, and read
+  the split before relying on it.** What shipped is the **read-only inventory lever**
+  (`.github/workflows/registry-zot-inventory.yml`, see
+  [Before ANY destructive step](#before-any-destructive-step-try-the-read-only-inventory-lever-first))
+  — dispatch it before any destroy. What did **not** ship, and is BLOCKED ON A PROVISIONING EVENT,
+  is every write-shaped action: `restart`, `push-config` and `reclaim`. Do not read "the lever
+  exists" as "the host is now reachable" — the earlier revision of this bullet said *"try it first
+  once it exists"* about a **restart** lever, and that lever is not what arrived. #7287 declares
+  #7278 a **rollback dependency** of this runbook, not merely a prerequisite, and vetoes the recut
+  while it is open. A restart-only lever was additionally refuted on the evidence: zot has already
+  been restarted 15,640 times into the same 100 %-full volume.
 
 **Context:**
 
@@ -437,3 +485,14 @@ pin, and re-deriving it means going back to Step 1.
 - #7247 — the 22h zot crash-loop where both this runbook and `registry-host-replace` turned out to
   be blocked, which is how the staleness above was found.
 - #6946 — accepted residual: `registry-region-migrate` accepts a similar shape with no id-pin.
+- `ADR-171` — [CI may emit to the observability warehouse, and may measure the registry's read
+  surface](../../architecture/decisions/ADR-171-ci-side-observability-emission-and-read-only-registry-inventory.md).
+  The decision behind the inventory lever above: why the registry's **read** surface is
+  instrumentable today and its **write** surface is not (no zot user holds `delete` — measured),
+  why `delta_gb` is an upper bound rather than a measurement, and why the lever is a **measurement,
+  not a gate** — it authorizes nothing, so it does not become the live-zot predicate ADR-169
+  deliberately kept out of the D10 gate.
+- `scripts/zot-inventory.sh` + `tests/scripts/test-zot-inventory.sh` — the enumerator and its
+  tests. Read the exit taxonomy here before interpreting a run: `outcome` is one of
+  `ok`/`degraded`/`partial`/`failed`, and only `enumeration_complete=true` licenses a reading of
+  `delta_gb`.
