@@ -36,7 +36,12 @@ including during the incident it exists to recover from.
 
 **#7277 was necessary but is not sufficient** (and is now closed, by PR #7290). After the D10 gate
 authorizes, the recut still runs `stock_preflight_gate`, and the registry server type must be
-orderable **in this host's datacenter**. Measured 2026-08-05: `cx23` was orderable in `nbg1-dc3`
+orderable **in this host's datacenter**, AND RE-MEASURED EVERY TIME — availability moves in both
+directions on a days timescale (`cx23` in `hel1-dc2` changed direction twice across twelve days,
+once inside 24 hours — series and sources at `zot-registry.tf`, anchor "STOCK REALITY"), so a
+reading from a previous dispatch authorizes nothing. **The type this gate probes is `cpx22` as of
+#7309 — probe THAT, not `cx23`.** Firing this dispatch is also what converts the repin from
+declared to billing: +€14.00/mo (`expenses.md`, the `CPX22 (registry)` row). Measured 2026-08-05: `cx23` was orderable in `nbg1-dc3`
 but **not** in `hel1-dc2`, where this host runs (#6460). A recut dispatched while that holds aborts
 at the stock gate.
 
@@ -407,10 +412,15 @@ pin, and re-deriving it means going back to Step 1.
 
 - ~~**#7277**~~ — the D10 gate has no valid PASS condition. **CLOSED by PR #7290**, which is this
   runbook's current merge base. It was necessary but never sufficient: the recut also runs a
-  stock-preflight gate, and the stock blocker below is the one still standing.
-- **#7309** — `var.registry_server_type` defaults to `cx23`, which is unorderable in `hel1-dc2`,
-  the datacenter this host runs in. Repinning to `cpx22` is the only walkable lever past it
-  (Hetzner inventory is not closable by any issue), and it carries a **+€14.00/mo** cost decision.
+  stock-preflight gate, and the stock blocker below has since been CLEARED by the #7309 repin.
+- **#7309** — RESOLVED 2026-08-06. `var.registry_server_type` now defaults to `cpx22`.
+  The issue's premise (`cx23` unorderable in `hel1-dc2`) was measured FALSE on 2026-08-06; what
+  justified the repin is that `cx23` availability there changed direction twice across twelve
+  days, once inside 24 hours, while `cpx22`
+  held at every probe. The original text, for the record only — none of it is current:
+  > `var.registry_server_type` defaults to `cx23`, which is unorderable in `hel1-dc2`,
+  > the datacenter this host runs in. Repinning to `cpx22` is the only walkable lever past it
+  > (Hetzner inventory is not closable by any issue), and it carries a **+€14.00/mo** cost decision.
   This is the live blocker.
 - **#7278** — the registry host has no in-place restart lever. Usually the thing you actually
   wanted; try it first once it exists, rather than reaching for a destroy. #7287 additionally

@@ -2088,7 +2088,13 @@ jobs:
         # CHEAP GATE BEFORE THE EXPENSIVE ONE. `stock_preflight_gate` runs in the recut job and
         # will abort BOTH journeys while the registry server type is unavailable in this host's
         # datacenter (#6460 — cx23 was orderable in nbg1-dc3 but NOT hel1-dc2, where this host
-        # runs, on 2026-08-05). Without this probe a dispatch that cannot possibly proceed would
+        # runs, on 2026-08-05; #7309 has since repinned the registry to cpx22, and cx23 measured
+        # ✓ in hel1-dc2 again on 2026-08-06 — the cited failure MODE is what justifies this probe,
+        # not that one type. hel1-dc2 cx23 changed direction twice across twelve days, once inside
+        # 24 hours — series and sources at zot-registry.tf, anchor "STOCK REALITY".)
+        # Whatever the pin is, this reads it from variables.tf at run time — see read_default
+        # below; nothing here hardcodes a type. Without this probe a dispatch that cannot possibly
+        # proceed would
         # first move multiple GB through the rehearsal. `stock_preflight_gate` itself needs
         # tfplan.json and cannot simply be hoisted; a standalone availability probe can.
         #
@@ -2112,7 +2118,7 @@ jobs:
           # ENDS IN A QUOTE, so the `$` anchor could never match and SRV_TYPE was empty on every
           # dispatch: the step exited 0 through its own "could not derive" arm having probed
           # nothing, forever. And `head -1` across the whole file returns `variable "server_type"`
-          # (cx33, the WEB host), not `registry_server_type` (cx23) — so even with the anchor
+          # (cx33, the WEB host), not `registry_server_type` — so even with the anchor
           # fixed it would have probed the wrong machine type.
           # DERIVE BOTH VALUES BY VARIABLE NAME, block-scoped. The previous derivation was DARK,
           # measured rather than argued: it piped `grep -oE 'default…"c[a-z0-9]+"'` into
@@ -2121,8 +2127,9 @@ jobs:
           # "could not derive" arm having probed nothing, forever — a probe that runs, prints, and
           # cannot fire, which is the defect class this whole change exists to remove. And
           # `head -1` across the whole file returns `variable "server_type"` (cx33, the WEB host),
-          # not `registry_server_type` (cx23), so even with the anchor repaired it would have
-          # probed the wrong machine type.
+          # not `registry_server_type`, so even with the anchor repaired it would have probed the
+          # wrong machine type. Neither type is named here on purpose: this derivation exists so
+          # the probe follows the pin, and a literal in the comment is the next thing to rot.
           read_default() { # $1 = variable name
             awk -v v="variable \"$1\"" '$0 ~ "^"v, /^}/' \
               "${GITHUB_WORKSPACE}/apps/web-platform/infra/variables.tf" \
@@ -2139,7 +2146,7 @@ jobs:
           # the distinction this probe previously got wrong: `.server_types.supported` is what a
           # datacenter CAN host, `.server_types.available` is what is orderable RIGHT NOW. The old
           # query read `.prices[].location` — the PRICED set, which still lists a datacenter whose
-          # stock is exhausted — so #6460 (cx23 orderable in nbg1-dc3 but NOT hel1-dc2, where this
+          # stock is exhausted — so #6460 (as measured 2026-08-05: cx23 orderable in nbg1-dc3 but NOT hel1-dc2, where this
           # host runs) was invisible to it. It would have printed a reassuring location list for
           # precisely the condition its own header cites.
           export HCLOUD_TOKEN

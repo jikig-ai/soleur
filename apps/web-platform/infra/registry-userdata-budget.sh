@@ -72,7 +72,7 @@ command -v terraform >/dev/null 2>&1 || {
   exit 0
 }
 
-# The amd64 branch of local.zot_image (registry_arch is amd64 for the cx23 default). Read
+# The amd64 branch of local.zot_image (registry_arch is amd64 for the cpx22 default). Read
 # from the .tf so the measurement tracks the real pin rather than a copy that can rot.
 # Anchored on the ASSIGNMENT, like the staleness gate -- an unanchored grep is satisfied by
 # a comment (e.g. a rollback annotation above the locals), which would measure the wrong

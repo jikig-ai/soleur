@@ -462,7 +462,7 @@ list + the terraform-target-parity SSH set (condition #1 the other way).
   egress allow (5.3), retire `cron-ghcr-token-minter.ts` + `ghcr-*-credential.tf` + the
   `GHCR_MINTER_DISABLED` gate (5.4), then rotate + revoke the exposed classic PAT (5.5).
 - **Host sizing + region (factual, #6288):** `cax11`(planned, arm64)→`cx23`(live nbg1, provisioned
-  during an Ampere+cx stock outage, #6122)→**`cx33`(4 vCPU / 8 GB, `hel1`, #6288)**. The 4 GB cx23
+  during an Ampere+cx stock outage, #6122)→**`cx33`(4 vCPU / 8 GB, `hel1`, #6288)**→`cx23`(4 GB, #6497/#6463, 2026-07-16, after telemetry showed the 8 GB was never needed)→**`cpx22`(2 vCPU / 4 GB, #7309, 2026-08-06 — stock volatility; see the amendment at the end of this ADR)**. The 4 GB cx23
   restart-looped zot ~4/min OOM-ing during the boot scan of the ~35 GB store (disk-independent —
   disk sat at 58–63%, not ENOSPC). #6288 first targeted **`cx32`, which is not a real Hetzner
   type** — that phantom `registry-host-replace` destroyed the nbg1 host then failed `server type
@@ -479,7 +479,7 @@ list + the terraform-target-parity SSH set (condition #1 the other way).
   confirmation keys on the MONOTONIC `memory.events oom_kill` container-cgroup counter
   (`zot_oom_kills`, survives the 4/min point-sampling race) + `exit_code=137` + the journald
   `oom_kills_5m` backstop — not the page-cache-confounded host `mem_used` nor a point-sampled anon
-  gauge. Applied via the guarded `registry-host-replace` dispatch (server_type is `ForceNew`; the
+  gauge. Applied via the guarded `registry-host-replace` dispatch (server_type is `ForceNew` — but see the 2026-08-06 amendment: that is UNMEASURED and the repo contradicts itself on it, routed to #7287; the
   60 GB store volume is preserved + re-attached). ~~The GHCR atomic fallback masks the brief replace outage.~~
   **RETRACTED 2026-07-30 — the replace outage is now USER-VISIBLE.** There is no GHCR fallback
   to mask it: the read PAT is revoked (401) and the minter is disabled (403 DENIED). Any pull
@@ -843,8 +843,17 @@ were sitting unadopted.
 > not production. `zot-registry.tf` resources are `OPERATOR_APPLIED_EXCLUSIONS`, so merging
 > this is inert by construction: **the live registry still runs v2.1.2, and both panic fixes
 > remain unadopted in production**, until the `registry-host-replace` apply fires. That apply
-> is blocked on #7277 (the recut gate has no valid PASS condition), #7278, #6929, and Hetzner
-> `cx23` stock. Tracked in #7287.
+> is blocked on #7278 and #6929. Tracked in #7287.
+>
+> **CORRECTED 2026-08-06 — two items struck from that list.** It read "#7277 (the recut gate has
+> no valid PASS condition), #7278, #6929, and Hetzner `cx23` stock."
+>
+> - **#7277** — closed by PR #7290 (2026-08-05); the recut gate has a PASS condition.
+> - **Hetzner `cx23` stock (#7309)** — listed because `cx23` measured unorderable in `hel1-dc2`
+>   on 2026-08-04. On 2026-08-06 it measured **orderable** there, and `var.registry_server_type`
+>   was repinned to `cpx22`, orderable at every recorded probe. Stock does not gate this apply.
+>   The volatility that motivated the repin is real (see the 2026-08-06 addendum); it is a
+>   reason to pin a stable type, not a standing blocker.
 >
 > **CORRECTED 2026-08-06 (#7299): the byte cap was never a blocker and is struck from that
 > list.** It read "#7280 (the rendered `user_data` is over Hetzner's 32,768 B cap)". The
@@ -928,3 +937,58 @@ subject to every gate the forward leg is:
    unavailable, which is precisely the cost a wrong measurement imposes.
 3. **#7277.** The recut gate has no valid PASS condition, and it sits on the same path — it
    is the blocker the plan lists first, and it was also missing here.
+
+## Amendment 2026-08-06 (#7309) — registry host repinned `cx23` → `cpx22` (stock volatility)
+
+The decision record lives here rather than in ADR-143 because **the registry is this ADR's element**, by the same rule ADR-143 states for git-data ("the decision record lives in ADR-068 … because git-data is ADR-068's element, not this ADR's"). ADR-143 carries only a supersede pointer.
+
+### Decision
+
+`var.registry_server_type` defaults to **`cpx22`** (2 vCPU AMD x86, 4 GB, ~€19.49/mo net) instead of `cx23` (~€5.49/mo net).
+
+Same 2c/4g shape, so nothing derived moves: `local.registry_arch` stays `amd64`, `local.zot_image` stays the `zot-linux-amd64` repository, and `local.registry_memory_cap_mb` stays 3072m. Verified rather than assumed — the stripped `user_data` render is byte-identical to the pre-change tree (23,677 B both sides), and the stored artifact measures 9,408 B against the 32,768 B Hetzner cap.
+
+### Ground — and what it is NOT
+
+**Not unorderability.** #7309's title says `cx23` is unorderable in `hel1-dc2`. Probed live 2026-08-06 from `.server_types.available`, it is **orderable there**. That claim is false and is not restated in this tree.
+
+The ground is the *shape* of the availability column. `cx23` in `hel1-dc2`:
+
+| probe | source | `cx23` | `cpx22` |
+|---|---|---|---|
+| 2026-07-15 | #6457 cap-headroom probe | ✓ | ✓ |
+| 2026-07-25 | ADR-143 "Live stock probe" table | ✓ | ✓ |
+| 2026-07-26 | #6966 | ✗ | ✓ |
+| 2026-08-04 | #7280 | ✗ | ✓ |
+| 2026-08-06 | #7309 | ✓ | ✓ |
+
+**Two direction changes across twelve days, the first inside twenty-four hours** — "in stock" on 07-25 to orderable in 0 of 3 EU DCs on 07-26 — with no `deprecation` block on any of them. `cpx22` held at every probe.
+
+A `registry_server_type` change is a host **replace**: `user_data` is ForceNew and `hcloud_server.registry` deliberately carries no `lifecycle.ignore_changes`, so the apply destroys the host and then creates one, with no capacity reservation in front of the create. A failed create is not recoverable by rollback — the revert is a **second** create against the same supply, with the sole pull path already dark (ADR-169). Pinning that path to a type whose availability moved twice in a fortnight is the risk this repin removes. Availability is not a property of a server type; a dated ✓ is not a capacity reservation.
+
+The live series and its sources are single-sourced at `zot-registry.tf`, anchor `STOCK REALITY`.
+
+### Cost
+
++€14.00/mo, +€168/yr, **3.55×** on this host. Operator accepted explicitly before the change was authorized. Recorded in `knowledge-base/operations/expenses.md` as declared-vs-billing: a new `approved-not-billing` `CPX22 (registry)` row with the active `CX23 (registry)` row left at 5.93/`active`. Billing does not move until the host-replace; pre-dating that flip is the defect #6453 corrected. Product COGS shift is `+$15.12 / $223.39 = +6.77%` with no `ceil(burn / price)` boundary crossed at $49 or $48, so `cost-model.md`'s subtotals are unchanged.
+
+**The revert path is itself a cost decision, recorded here rather than only in a Terraform
+comment.** If 4 GB proves wrong, the 8 GB options are `cx33` (~€8.49/mo net) and `cpx32`
+(~€35.49/mo net). `cx33` was ✗ in `hel1-dc2` on 2026-07-26 **and** on 2026-08-06, so `cpx32` — ✓ at
+every recorded probe — is the standing option, at **6.5× the pre-repin registry cost** and larger
+than the change this amendment exists to record. That is contingent, not committed: re-probe
+`hel1-dc2` before choosing, and take `cx33` on a fresh ✓. Recorded because a registry type change
+is a cost decision, which is the whole premise of this amendment — the *next* one should not live
+only in a variable's comment.
+
+### What this does NOT do
+
+**It schedules no apply.** Merging fires the per-PR `terraform apply`, but its `-target` set does not include `hcloud_server.registry` or anything depending on it, so that apply cannot reach this host. The untargeted 12h drift plan will now report the pending replace with a `server_type` diff as well as `user_data`, and never applies it. The real replace stays behind the guarded, menu-acked `registry-host-replace` / `registry-luks-recut` dispatch.
+
+It also does not make the replace *safe*. The live volume is still plaintext ext4, so a fresh host boots into `cloud-init-registry.yml`'s `refusing-non-luks-device` FATAL and comes up dark. That is #6929's recut. The repin improves the odds the Hetzner CREATE call succeeds; that is one step, not authorization.
+
+**Q1 — whether `server_type` is ForceNew or an in-place resize — is deliberately unmeasured.** The repo contradicts itself (this ADR vs `variables.tf` and the destroy-guard's `reboot_updates` counter), and a `terraform plan` would be confounded by the already-pending replace: it returns `["delete","create"]` regardless, which would have manufactured a false "ForceNew confirmed" into an ADR a future one-way recreate would cite. Routed to #7287.
+
+### Consequence for #6460
+
+`cx33` was probed the same day: **✗ in `hel1-dc2`**, ✓ in `nbg1-dc3` and `fsn1-dc14`. web-1 and `soleur-grok-dogfood` both run in `hel1`, so their DR gap is unchanged — a fleet-wide reading says "cx33 is available" and answers the wrong question. Whatever periodic audit #6460 builds must sample **repeatedly and per datacenter**; a single fleet-wide probe would have certified any of the contradictory answers in the table above.
