@@ -223,6 +223,43 @@ reads the diagram from the **GitHub source of truth**, not the on-disk clone
 locally and opens a PR, so a generated diagram is not visible in the viewer until
 that PR is **pushed and merged**.
 
+#### Coverage Summary
+
+Runs at the END of every sync (after all other areas). Writes
+`knowledge-base/project/kb-coverage.md` and prints the same summary to stdout,
+using [`plugins/soleur/lib/kb-coverage.ts`](../lib/kb-coverage.ts).
+
+**Wording is a hard constraint, not a style preference.** The report states what
+Soleur *expects* versus what is *present*. It never asserts what the business
+lacks. Write "no `privacy-policy.md` present in this knowledge base" — never
+"missing: privacy policy". This file lands in the customer's own repository,
+committed and permanently git-blamed; a deficiency framing is a durable,
+discoverable assertion that their business lacks a compliance artifact, written
+by us, about them, into a record they cannot erase.
+
+**Determinism is required.** No embedded timestamp, stable ordering — an
+unchanged KB must produce a byte-identical file, or every sync emits a one-field
+diff forever. `knowledge-base/INDEX.md` is the in-repo warning for this exact
+shape.
+
+**Emit the `SOLEUR_KB_SYNC_PRODUCERS` marker twice** — on stdout AND as a line
+inside `kb-coverage.md` — carrying `{c4_elements, c4_relationships,
+domain_model_rows, coverage_present, coverage_expected}`. This is observability
+**layer 7 (`cli-stdout-artifact`)**: on a self-hosted CLI there is no Soleur-side
+sink and there must not be one (ADR-171 §Observability boundary), so stdout alone
+would evaporate with the session and the durable artifact IS the queryable
+surface. Verify with:
+
+```bash
+grep -n 'SOLEUR_KB_SYNC_PRODUCERS' knowledge-base/project/kb-coverage.md
+```
+
+The marker carries **counts only** — no path, filename, or repo URL. On a
+producer failure emit `SOLEUR_KB_SYNC_ERROR` on stdout and record a degraded row
+in the artifact, so the failure survives the session. This is NOT
+`reportSilentFallback`: that lives in `apps/web-platform/server/observability.ts`,
+and nothing under `plugins/` imports Sentry.
+
 #### Rule Prune Analysis
 
 Runs only when `<sync_area>` is literally `rule-prune`. Surfaces AGENTS.md rules that have zero recorded hits over the threshold window as GitHub issues milestoned to "Post-MVP / Later". Does NOT edit `AGENTS.md` — a human reviews each issue and decides whether to prune.
