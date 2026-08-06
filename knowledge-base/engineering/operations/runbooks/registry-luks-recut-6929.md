@@ -34,10 +34,17 @@ including during the incident it exists to recover from.
 
 ### 🚧 The remaining blocker — this dispatch is still not necessarily fireable
 
-**#7277 was necessary but is not sufficient.** After the D10 gate authorizes, the recut still runs
-`stock_preflight_gate`, and the registry server type must be orderable **in this host's
-datacenter**. Measured 2026-08-05: `cx23` was orderable in `nbg1-dc3` but **not** in `hel1-dc2`,
-where this host runs (#6460). A recut dispatched while that holds aborts at the stock gate.
+**#7277 was necessary but is not sufficient** (and is now closed, by PR #7290). After the D10 gate
+authorizes, the recut still runs `stock_preflight_gate`, and the registry server type must be
+orderable **in this host's datacenter**. Measured 2026-08-05: `cx23` was orderable in `nbg1-dc3`
+but **not** in `hel1-dc2`, where this host runs (#6460). A recut dispatched while that holds aborts
+at the stock gate.
+
+**Re-probe rather than trusting that date.** Stock moves without notice and a revert needs a
+*second* successful create, so the reading that matters is the one taken immediately before firing.
+Read `.server_types.available` (never `.supported` — the type stays supported while availability is
+zero, which is the whole distinction); `apps/web-platform/infra/zot-registry.tf` carries the last
+recorded probe and the command shape. The durable fix is #7309.
 
 > ### ⚠️ Do NOT route around it with `registry-region-migrate`
 >
@@ -51,22 +58,74 @@ where this host runs (#6460). A recut dispatched while that holds aborts at the 
 > caveat is stated here deliberately: the banner's removal must not convert a hard stop into a
 > signpost toward the unguarded path.
 
-#### And check the `user_data` budget FIRST — this one fails *after* the destroy (#7299)
+#### And check the `user_data` budget FIRST — this one fails *after* the destroy
 
 The stock gate above is the survivable blocker: it aborts before anything is destroyed. The
 `user_data` size cap is **not**. Hetzner rejects a server CREATE whose stored `user_data` exceeds
 **32,768 B**, and the recut's create runs *after* its destroy — so an over-cap config strands the
 sole pull path with the store already gone.
 
-Run this before dispatching. It needs no credentials and touches nothing:
+Run this before dispatching. It needs no credentials and touches nothing, but it **does need
+`terraform` on `PATH`** — it measures with terraform's own `templatefile`/`base64gzip`, which is
+the method Hetzner measures by (never `gzip -9`, which overstates headroom). Whether it renders
+the *same expression* production renders is a separate question, and until PR #7300 merges the
+answer is no — see the caution below.
 
 ```bash
-bash apps/web-platform/infra/registry-userdata-budget.sh
+bash apps/web-platform/infra/registry-userdata-budget.sh; echo "exit=$?"
 ```
 
-`headroom` must be **≥ 0**. Measured 2026-08-05 on `main`: **36,404 B stored, −3,636 B headroom —
-OVER CAP.** While that holds the recut must not be dispatched at all; #7299 owns the fix
-(`registry_rationale_strip`, the same mechanism #7280 used for the previous 1,860 B overage).
+Read the **verdict**, not a remembered number. Re-run it; do not trust a figure quoted here or in
+an issue, because the payload changes with every `cloud-init-registry.yml` or pin edit.
+
+| Exit | Meaning | Action |
+|---|---|---|
+| `0` | Under cap | Precondition clear — **provided the run actually measured**; see the SKIP trap below. |
+| `1` | Over cap | **Do not dispatch** — *unless* the run came from the pre-#7300 gate, which reports a phantom over-cap. Run the discriminator below first. |
+| `2` | Unmeasurable, or the render failed a sanity assertion | **Do not dispatch.** Unmeasured. |
+
+`headroom` must be **> 0**, strictly. The gate fails at `stored_bytes -ge cap`, so a headroom of
+exactly `0` is a FAILURE — an earlier revision of this section said `≥ 0`.
+
+> **The SKIP trap — the one way this check lies to you.** With `terraform` absent the script prints
+> `SKIP — terraform not on PATH` and **exits `0`**. Exit `0` is also what "under cap" looks like, so
+> a shell without terraform produces a *clear* precondition having measured nothing at all. Read the
+> output, never just `$?`. If you see `SKIP`, the precondition is **UNMEASURED, not cleared** —
+> install terraform and re-run before dispatching anything destructive.
+
+> **Before you act on an over-cap verdict: is the gate measuring the right payload?** Until PR #7300
+> merges, the version on `main` renders `templatefile(...)` **bare**, while `hcloud_server.registry`
+> renders it wrapped in `replace(..., local.registry_rationale_strip, "")`. It therefore reports an
+> over-cap breach for a payload that fits comfortably. **The discriminator is not `raw` vs `stored`**
+> — that ratio is an ordinary ~2:1 gzip and looks the same either way, and `main`'s script never
+> prints the strip delta that would settle it. Check the render itself instead:
+>
+> ```bash
+> grep -n 'user_data *= *base64gzip' -A2 apps/web-platform/infra/zot-registry.tf
+> grep -c 'local.registry_rationale_strip' apps/web-platform/infra/registry-userdata-budget.sh
+> ```
+>
+> If `zot-registry.tf` wraps `templatefile(` in `replace(..., local.registry_rationale_strip, "")`
+> **and** the budget script never mentions that local, the script is measuring a payload terraform
+> does not produce and its over-cap verdict is the gate's defect, not yours. Once #7300 has merged,
+> the script prints an `after strip` figure and a `CAUSE:` line that makes this call for you.
+>
+> **Ignore the remedy the current script prints.** Its failure line ends *"#7280's
+> `registry_rationale_strip` is the fix"* — that is the retracted claim, emitted by the very gate
+> that is wrong. `registry_rationale_strip` is already applied. Removing that sentence is part of
+> PR #7300; tracked meanwhile in #7310.
+
+> **A superseded measurement, kept as a caution.** This section used to read *"Measured 2026-08-05
+> on `main`: 36,404 B stored, −3,636 B headroom — OVER CAP"*, and told the operator that #7299 would
+> fix it by extending `registry_rationale_strip`. Both were wrong, for the reason above: the strip
+> was **already applied**, and re-measured against the real expression the same tree stores roughly
+> **9.4 kB, with ~23 kB of headroom**. Deliberately imprecise — `base64gzip` is Go's `compress/gzip`,
+> so the exact byte count is terraform-build-dependent (9,404 B and 9,408 B were both measured, on
+> different builds, during this change). A figure quoted to the byte is what this section is trying
+> to stop being.
+>
+> That is why this section now quotes a command and a verdict shape instead of a byte count: the
+> hard-coded figure is what told operators the recut "must not be dispatched at all" for days.
 
 This check is deliberately **not** a D10 predicate: D10 authorizes on the *pull path* being
 re-materialisable, and a property of the host the destroy replaces cannot gate that destroy without
@@ -361,12 +420,16 @@ pin, and re-deriving it means going back to Step 1.
 
 **Unblocking this runbook:**
 
-- **#7277** — the D10 gate has no valid PASS condition. **Necessary to unblock this runbook, but
-  not sufficient:** the recut also runs a stock-preflight gate, and `var.registry_server_type`
-  defaults to `cx23`, which the repo's own probes record as orderable in 0 of 3 EU datacenters
-  (#6460). Expect to resolve both.
+- ~~**#7277**~~ — the D10 gate has no valid PASS condition. **CLOSED by PR #7290**, which is this
+  runbook's current merge base. It was necessary but never sufficient: the recut also runs a
+  stock-preflight gate, and the stock blocker below is the one still standing.
+- **#7309** — `var.registry_server_type` defaults to `cx23`, which is unorderable in `hel1-dc2`,
+  the datacenter this host runs in. Repinning to `cpx22` is the only walkable lever past it
+  (Hetzner inventory is not closable by any issue), and it carries a **+€14.00/mo** cost decision.
+  This is the live blocker.
 - **#7278** — the registry host has no in-place restart lever. Usually the thing you actually
-  wanted; try it first once it exists, rather than reaching for a destroy.
+  wanted; try it first once it exists, rather than reaching for a destroy. #7287 additionally
+  declares it a **rollback dependency**, not merely a prerequisite.
 
 **Context:**
 
