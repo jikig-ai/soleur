@@ -24,6 +24,7 @@ import {
   assessRender,
   buildEdges,
   canOverwrite,
+  countModelJson,
   generateC4,
   loadComponentDir,
   parseComponentDoc,
@@ -214,6 +215,47 @@ describe("assessRender — three gates", () => {
     expect(assessRender({ diagnostics, elementCount: 5, relationshipCount: 5 }).status).toBe(
       "failed",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// countModelJson — the key mapping assessRender depends on
+// ---------------------------------------------------------------------------
+
+describe("countModelJson — pinned against a REAL likec4 artifact", () => {
+  // This is the one thing no assessRender test can cover. assessRender takes
+  // plain numbers, so reading the wrong JSON key is invisible to it: the producer
+  // reported `relationships=0` for a corpus whose .c4 carried three edges,
+  // because likec4 emits `relations` and the first implementation read
+  // `relationships`. Every corpus would have reported degraded — a gate that
+  // always fires. Pin the mapping against the repo's own committed model.
+  const realModel = readFileSync(
+    join(REPO_ROOT, "knowledge-base/engineering/architecture/diagrams/model.likec4.json"),
+    "utf8",
+  );
+
+  it("reads a non-zero element AND relationship count from Soleur's own model", () => {
+    const counts = countModelJson(realModel);
+    // Deliberately not literal counts — those drift with every model edit. The
+    // claim under test is that BOTH keys resolve, which a wrong key cannot satisfy.
+    expect(counts.elements).toBeGreaterThan(0);
+    expect(counts.relationships).toBeGreaterThan(0);
+  });
+
+  it("agrees with the artifact's own top-level keys", () => {
+    const parsed = JSON.parse(realModel) as Record<string, Record<string, unknown>>;
+    expect(countModelJson(realModel)).toEqual({
+      elements: Object.keys(parsed.elements).length,
+      relationships: Object.keys(parsed.relations).length,
+    });
+  });
+
+  it("returns zeros for malformed or non-object payloads rather than throwing", () => {
+    expect(countModelJson("not json")).toEqual({ elements: 0, relationships: 0 });
+    expect(countModelJson('{"elements":null,"relations":[]}')).toEqual({
+      elements: 0,
+      relationships: 0,
+    });
   });
 });
 
