@@ -6,7 +6,7 @@ lane: cross-domain
 type: feature
 brand_survival_threshold: aggregate pattern
 requires_cpo_signoff: false
-adr: ADR-171 (PROVISIONAL — re-derive against origin/main at ship)
+adr: ADR-171 (CONFIRMED 2026-08-06 — max on origin/main is ADR-170; 169 is taken)
 supersedes: knowledge-base/project/plans/2026-08-04-feat-registry-zot-restart-lever-plan.md
 created: 2026-08-06
 ---
