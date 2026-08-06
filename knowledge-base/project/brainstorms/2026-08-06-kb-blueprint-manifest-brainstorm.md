@@ -2,8 +2,8 @@
 
 **Date:** 2026-08-06
 **Status:** Decided
-**Branch:** feat-alpha-onboarding-motion
-**PR:** #7328
+**Branch:** feat-kb-blueprint-manifest
+**Issue:** #7332
 **Lane:** cross-domain
 **Brand-survival threshold:** single-user incident
 
@@ -69,7 +69,57 @@ confirms the gap is structural rather than a sync bug.
 | Coverage report location | In-repo (customer-controlled). Do not mirror gap text into Soleur-side storage or dashboard cards beyond a count | CLO. |
 | C4 flag | **Flip `c4-visualizer` for alpha testers first**, via existing `flag-set-role` / `user-set-role` tooling. Generate unconditionally | `resolveC4FlagEnabled` resolves any `users.role != "dev"` to `"prd"`, so a tester would generate a diagram they cannot open. Gating *generation* on a *viewing* flag would leave the repo permanently poorer. |
 | Surfaces | CLI output at end of sync + dashboard cards (blueprint-driven) + committed coverage file | Operator selected all three. |
-| Visual design | See Phase 3.55 wireframes (linked below) | The dashboard rewire touches `app/(dashboard)/dashboard/page.tsx`, matching the UI-surface glob superset. |
+| Visual design | Two variants wireframed; **pending operator review** — see Visual Design below | The dashboard rewire touches `app/(dashboard)/dashboard/page.tsx`, matching the UI-surface glob superset. |
+
+## Visual Design
+
+Wireframes (Phase 3.55), both committed on this branch:
+
+- `knowledge-base/product/design/dashboard/blueprint-cards-variant-a-two-zones.pen` — 3 frames
+- `knowledge-base/product/design/dashboard/blueprint-cards-variant-b-enriched-chips.pen` — 2 frames
+
+Screenshots in `knowledge-base/product/design/dashboard/screenshots/`:
+`07-variant-a-two-zones-alpha-state.png`,
+`08-variant-a-actionable-zone-expanded-all-ten.png`,
+`09-variant-a-coverage-report-drill-in.png`,
+`10-variant-b-single-grid-enriched-chips.png`,
+`11-variant-b-chip-anatomy-mixed-state.png`.
+
+**Variant A — two zones.** "Soleur built this for you" leads with three evidence
+tiles (C4 model, domain register, 7 component docs), each carrying a concrete
+metric and an `Open →` link styled as a *read* affordance rather than a task. A
+rule separates it from "Needs your input", capped at the 4 foundations with
+`Show 6 more` collapsing the operational six. The coverage report entry point is
+a gold-edged row inside the evidence zone — placed there deliberately, since
+"what exists versus what doesn't" is a status report about Soleur's work rather
+than another chore.
+
+**Variant B — single grid.** Generated artifacts join the existing chips row with
+a gold spark; the active grid stays exactly the 10 business cards. Minimal
+structural change from what ships today.
+
+**Designer's recommendation: A.** B has a failure mode the alpha state hides —
+with zero founder-completed items there is no green chip to contrast against, so
+the only signal distinguishing "Soleur did this unattended" from "you finished
+this" is a 13px icon in a shared row. B needs an explicit legend sentence to work
+at all.
+
+Open design decisions carried forward to plan time:
+
+- **Cap composition.** The cap keeps the 4 foundations visible and hides the 6
+  operational items. If the manifest is meant to make card ordering dynamic, the
+  cap should follow manifest priority instead — which changes what "top four"
+  means.
+- **Corner radius.** The Solar Forge brand guide specifies sharp 0px corners; the
+  shipped component uses `rounded-xl` / `rounded-lg`. The wireframes keep the
+  shipped radius so they read as *this* diff rather than smuggling in a radius
+  migration. Worth a separate decision.
+- **Card subtitles are rewritten**, not the raw `promptText` (which is long, and
+  empty for Vision). If the manifest carries display copy, these are the strings
+  to fill.
+- **Coverage arithmetic.** The designer computed 9 of 19 entries present (2
+  generated artifacts + 7 component docs) with 10 business items absent. Confirm
+  the denominator once the manifest entry set is fixed.
 
 ### The C4 feasibility correction (load-bearing)
 
@@ -219,3 +269,31 @@ re-deriving it.
 3. **Operator answers landed in the wrong question slot.** The ADR decision arrived
    as a note on the stub-README question, leaving the stub fork unanswered for a
    round. Re-asked in isolation rather than inferred.
+4. **Reused a worktree that a concurrent session was actively working in.**
+   `feat-alpha-onboarding-motion` presented as safe to reuse: a single
+   `chore: initialize` commit on top of current `main`, a clean `git status`, an
+   open WIP draft PR, and a name matching this session's topic. Every one of
+   those signals was consistent with an abandoned scaffold. It was in fact a live
+   session working a *different* feature (the alpha-onboarding validation record
+   and per-tester runbook, #7329). That session hard-reset the branch mid-flight,
+   discarding this session's commit `4943757d7`, and its spec.md overwrote this
+   one at the shared `specs/feat-alpha-onboarding-motion/` path.
+
+   **What the existing `/soleur:go` guard misses.** The NAME-relative sharp edge
+   fires on a Linear ID in the input; the worktree-plan-vs-issue guard fires on a
+   `#N` in the input. This session's input carried neither, so no guard evaluated
+   a name-matching sibling worktree at all. **An empty worktree is not evidence of
+   an abandoned one** — a session that has just created its worktree and a session
+   that abandoned one are indistinguishable from commit count and working-tree
+   cleanliness. The discriminator that would have worked is cheap and was not run:
+   `gh pr view <n> --json updatedAt` on the existing draft PR, plus checking
+   whether any spec/plan artifact under that worktree's name targets a *different*
+   issue.
+
+   **Cost:** one discarded commit (recovered from reflog), one design agent that
+   had to recover its own `.pen` files from a dangling commit, and wireframes
+   committed onto the other session's branch where they do not belong.
+
+   **Rule:** never reuse a worktree whose draft PR exists but whose topic you did
+   not create. Create a sibling branch instead — the cost of an extra worktree is
+   nil next to the cost of two sessions racing on one branch.
