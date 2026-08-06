@@ -325,9 +325,18 @@ write_row() {
   esc_anchor="${esc_anchor/#BR-/BR‑}"; esc_anchor="${esc_anchor/#\#\#/\\#\\#}"
   esc_stmt="${esc_stmt/#BR-/BR‑}"; esc_stmt="${esc_stmt/#\#\#/\\#\\#}"
 
-  # TOCTOU: re-read the register NOW and locate exactly one Auto-inferred heading
+  # TOCTOU: re-read the register NOW and locate exactly one Auto-inferred heading.
+  #
+  # `hn="$(grep -c …)"` is an ASSIGNMENT whose status is the substitution's, and
+  # `grep -c` exits 1 when the count is 0 — so under `set -e` a register with NO
+  # Auto-inferred heading killed the script HERE, before the `die` below could print.
+  # Observed: exit 1 with completely empty stderr, and 1 is not in this command's
+  # documented 0/2/3 contract (it collides with drift's "drift found"). Every
+  # pre-existing register lacking the heading appended nothing, silently, forever —
+  # and #7332's headless path runs this on every sync. `|| true` keeps the informative
+  # abort reachable.
   local hn
-  hn="$(grep -cE '^## Auto-inferred \(unreviewed\)' "$reg")"
+  hn="$(grep -cE '^## Auto-inferred \(unreviewed\)' "$reg" || true)"
   [[ "$hn" -eq 1 ]] || die "register has $hn '## Auto-inferred (unreviewed)' headings (want exactly 1) — aborting"
 
   # content-anchor dedup: never re-propose an anchor already present anywhere
@@ -340,14 +349,42 @@ write_row() {
   # REPLACE it, and the matching `trap - EXIT` would CLEAR it (write_row runs in
   # the main shell, so the append is visible to the parent array).
   local tmp; tmp="$(mktemp)"; _TMPFILES+=("$tmp")
+  # `insec` must CLEAR at the next `^## ` heading.
+  #
+  # Without that clause the insert lands at the first `^|---` at-or-after the
+  # Auto-inferred heading with no check that the separator BELONGS to that section.
+  # On a register whose Auto-inferred section precedes `## Business Rules` — a legal
+  # ordering nothing forbids — the candidate row was written INTO THE CURATED TABLE
+  # and write-row exited 0. The post-write verification below could not catch it
+  # because it only asks WHETHER the row landed, never WHERE.
+  #
+  # This is unattended now: #7332's headless path appends without per-row approval,
+  # so it would corrupt a customer's hand-curated business rules on a normal sync.
+  # The existing test fixture is built by `init`, which always emits the safe
+  # ordering, so the suite was structurally blind to it.
   awk -v row="| $esc_anchor | $esc_stmt |" '
     { print }
-    /^## Auto-inferred \(unreviewed\)/ { insec = 1 }
-    insec && /^\|---/ { print row; insec = 0 }
+    /^## Auto-inferred \(unreviewed\)/ { insec = 1; next }
+    /^## / { insec = 0 }
+    insec && /^\|---/ && !done { print row; done = 1; insec = 0 }
   ' "$reg" > "$tmp"
-  # verify the row actually landed (guard against a header without a table separator)
+  # verify the row landed, AND that it landed inside the Auto-inferred section.
+  # A bare "did it appear anywhere" check is what let the curated-table write pass.
   if ! grep -qF "$esc_anchor" "$tmp"; then
     die "could not locate the Auto-inferred table separator — aborting (register unchanged)"
+  fi
+  local ai_line row_line
+  ai_line="$(grep -nE '^## Auto-inferred \(unreviewed\)' "$tmp" | head -1 | cut -d: -f1 || true)"
+  row_line="$(grep -nF "$esc_anchor" "$tmp" | head -1 | cut -d: -f1 || true)"
+  if [[ -z "$ai_line" || -z "$row_line" || "$row_line" -le "$ai_line" ]]; then
+    die "row would land outside the Auto-inferred section (row line ${row_line:-?}, heading line ${ai_line:-?}) — aborting (register unchanged)"
+  fi
+  # And that no LATER `^## ` heading precedes it — i.e. it is inside Auto-inferred's
+  # own section, not merely somewhere below the heading.
+  local next_h
+  next_h="$(awk -v s="$ai_line" 'NR>s && /^## /{print NR; exit}' "$tmp" || true)"
+  if [[ -n "$next_h" && "$row_line" -ge "$next_h" ]]; then
+    die "row would land in the section starting at line $next_h, not Auto-inferred — aborting (register unchanged)"
   fi
   mv "$tmp" "$reg"
 }
