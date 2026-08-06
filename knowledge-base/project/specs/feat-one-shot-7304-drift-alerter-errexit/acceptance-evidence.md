@@ -179,6 +179,34 @@ carries the by-site figures and the convention.
 
 Net issue flow: **closing 1 (#7304), filing 1 (#7311) → net 0.**
 
+## Shard result (AC22)
+
+`bash scripts/test-all.sh scripts` → **258/259 suites passed**, `TEST_ALL_EXIT=1`. Both new
+suites green in that run:
+
+```
+[ok] scripts/lint-workflow-errexit-capture       (9737ms)
+[ok] scripts/lint-workflow-errexit-capture-live  (3039ms)
+```
+
+The single `[FAIL]` was `scripts/cf-tunnel-liveness-gate-mutations`, and it was **my own doing,
+not a regression**. Its failing assertion is that suite's anti-contamination guard —
+*"the working tree CHANGED under scripts/ or .github/ while this battery ran — a mutation
+escaped"* — which fired because I applied the review fixes to `scripts/` and `.github/` while
+the shard ran in the background. Confirmed three ways, per the contention protocol:
+
+| run | tree | result |
+|---|---|---|
+| shard (concurrent edits + 3 sibling worktrees) | dirty | **1 failed** — the contamination guard |
+| isolated, `origin/main` | clean | **8 passed, 0 failed**, exit 0 |
+| isolated, this branch | clean (`git status --porcelain` empty) | **8 passed, 0 failed**, exit 0 |
+
+Note the suite DOES read `apply-web-platform-infra.yml`, which this PR modifies — so the first
+instinct ("my diff touches none of its inputs") was wrong and the isolated re-run, not that
+reasoning, is what settles it. The harness also reported the background task as "exit code 0"
+while the rc file said `TEST_ALL_EXIT=1`; the rc file is authoritative (the notification reads
+the trailing `echo`).
+
 ## Post-merge (automated, no operator step)
 
 AC24–AC28 are executed by the shipping agent after merge and appended here.
