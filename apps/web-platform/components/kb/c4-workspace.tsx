@@ -167,18 +167,29 @@ export default function C4Workspace({
         </div>
       </div>
 
-      <div className="relative min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1 flex-col">
         {/* Concierge stays mounted across the Concierge/Code tab toggle so
-            the thread persists; visibility is CSS-driven. */}
-        <div className={rightTab === "concierge" ? "h-full" : "hidden"}>
+            the thread persists; visibility is CSS-driven.
+            #7326 — `flex flex-col` on this wrapper, not a bare `h-full`. A
+            `display:block` box gives its child no flex parent, so
+            KbChatContent's root `flex-1` resolved against nothing and the
+            column stopped at CONTENT height: on a phone that left roughly half
+            the takeover empty below the composer. `min-h-0` on both so the
+            message list scrolls instead of pushing the composer off. */}
+        <div
+          className={
+            rightTab === "concierge" ? "flex min-h-0 flex-1 flex-col" : "hidden"
+          }
+        >
           <KbChatContent
             contextPath={contextPath}
             onClose={collapseConcierge}
             visible={rightTab === "concierge"}
+            mobileTakeover={!isDesktop}
           />
         </div>
         {c4EditEnabled && rightTab === "code" && (
-          <div className="h-full">
+          <div className="flex min-h-0 flex-1 flex-col">
             {data ? (
               <C4CodePanel
                 data={data}

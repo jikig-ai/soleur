@@ -15,6 +15,7 @@ import { useSignOut } from "@/components/auth/use-sign-out";
 import { WorkspaceContextBand } from "@/components/dashboard/workspace-context-band";
 import { BackArrowIcon } from "@/components/dashboard/nav-icons";
 import { CHAT_OVERLAY_OPEN_EVENT } from "@/components/chat/kb-chat-fullscreen";
+import { NAV_DRAWER_REVEAL_EVENT } from "@/components/dashboard/nav-drawer-reveal-event";
 import { RailSlotProvider, RailCollapsedProvider, RAIL_EXPAND_EVENT } from "@/components/dashboard/rail-slot";
 import { RailResizeHandle } from "@/components/dashboard/rail-resize-handle";
 import { useRailWidth, railMaxPx, RAIL_MIN_PX } from "@/hooks/use-rail-width";
@@ -261,8 +262,38 @@ export default function DashboardLayout({
   // They are NOT mutually exclusive: (1) co-renders with each of the others.
   // Tracked as a follow-up — the durable fix is making the closed drawer inert.
 
+  // #7326 — the guided tour's nav-tab steps ("Click the Inbox tab") point at a
+  // control that, on a phone, lives inside the closed drawer. Those steps reveal
+  // it via NAV_DRAWER_REVEAL_EVENT so the tab is on screen and can be spotlit.
+  //
+  // Read through a ref by the route-change auto-close below. Those steps ALSO
+  // carry a `route`, and TourProvider pushes it before dispatching the reveal —
+  // so without this the drawer would open and be shut again one render later by
+  // its own navigation, which is precisely the frame the tour needs it open.
+  const [navRevealed, setNavRevealed] = useState(false);
+  const navRevealedRef = useRef(false);
+  navRevealedRef.current = navRevealed;
+
+  useEffect(() => {
+    function handleNavReveal(e: Event) {
+      const open = !!(e as CustomEvent<{ open?: boolean }>).detail?.open;
+      // Honour the OPEN below `md` only — `drawerOpen` also drives `<main
+      // inert>` and the body scroll lock, neither of which is viewport-gated, so
+      // opening it on desktop would freeze the content pane. The CLOSE is
+      // honoured at every width so the flag can never strand (a viewport that
+      // crosses `md` mid-step must still be able to clear it).
+      if (open && window.matchMedia("(min-width: 768px)").matches) return;
+      setNavRevealed(open);
+      setDrawerOpen(open);
+    }
+    window.addEventListener(NAV_DRAWER_REVEAL_EVENT, handleNavReveal);
+    return () =>
+      window.removeEventListener(NAV_DRAWER_REVEAL_EVENT, handleNavReveal);
+  }, []);
+
   // Auto-close drawer on route change
   useEffect(() => {
+    if (navRevealedRef.current) return;
     setDrawerOpen(false);
   }, [pathname]);
 
@@ -304,6 +335,9 @@ export default function DashboardLayout({
   useEffect(() => {
     function handleChatOverlayOpen() {
       setDrawerOpen(false);
+      // Clear the tour's reveal too. Leaving it set would strand the flag and
+      // suppress the route-change auto-close for the rest of the session.
+      setNavRevealed(false);
     }
     window.addEventListener(CHAT_OVERLAY_OPEN_EVENT, handleChatOverlayOpen);
     return () =>
@@ -326,7 +360,10 @@ export default function DashboardLayout({
   useEffect(() => {
     const mediaQuery = window.matchMedia("(min-width: 768px)");
     const handler = () => {
-      if (mediaQuery.matches) setDrawerOpen(false);
+      if (mediaQuery.matches) {
+        setDrawerOpen(false);
+        setNavRevealed(false);
+      }
     };
     mediaQuery.addEventListener("change", handler);
     return () => mediaQuery.removeEventListener("change", handler);
