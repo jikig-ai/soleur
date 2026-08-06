@@ -2138,42 +2138,93 @@ describe("each registry dispatch job sources exactly its own gate lib", () => {
  *     information and could prevent nothing;
  *   - the liveness poll must follow the apply, since it asserts the NEW host beats.
  */
-describe("registry_luks_recut step order is a safety property", () => {
+describe("registry recut step order is a safety property", () => {
   const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
-  // Step names in declaration order, read from the job block. Anchored on the `- name:` step
-  // key at its exact indent so prose inside a `run:` body cannot be mistaken for a step.
-  const names = [
-    ...extractJobBlock(wf, "registry_luks_recut").matchAll(
-      /^ {6}- name: (.+)$/gm,
-    ),
-  ].map((m) => m[1].trim());
 
-  const idx = (needle: string) => names.findIndex((n) => n.includes(needle));
+  // Step names in declaration order for a job. Anchored on the `- name:` step key at its exact
+  // indent so prose inside a `run:` body cannot be mistaken for a step.
+  const stepsOf = (job: string) =>
+    [...extractJobBlock(wf, job).matchAll(/^ {6}- name: (.+)$/gm)].map((m) =>
+      m[1].trim(),
+    );
 
-  test("all ordered steps are present", () => {
-    // Non-vacuity floor: if the extraction found nothing, every findIndex below returns -1 and
-    // the ordering assertions would pass on an all -1 array.
-    expect(names.length).toBeGreaterThanOrEqual(6);
+  // The authorization half moved into its own job (#7277 B2), so this property now SPANS TWO
+  // JOBS. It is expressed per-job plus an explicit `needs:` edge rather than collapsed into one
+  // list, because the ordering that matters after the split is a job dependency, not a step
+  // index — a step-index assertion inside one job cannot see it at all.
+  //
+  // This suite went RED and unnoticed for the whole life of the branch: the D10 step was renamed
+  // from "Pre-destroy pull-path health gate" to "Pre-destroy authorization gate (D10 VERDICT)"
+  // and the needle was not. The non-vacuity floor caught it (findIndex returned -1), which is
+  // the only reason it failed loudly instead of passing on an all -1 array. Needles below are
+  // deliberately the SHORTEST stable substring of each step name, so a future retitling that
+  // keeps the step's meaning does not red the suite for a cosmetic reason.
+  const gateSteps = stepsOf("registry_pull_path_gate");
+  const recutSteps = stepsOf("registry_luks_recut");
+  const gIdx = (needle: string) => gateSteps.findIndex((n) => n.includes(needle));
+  const rIdx = (needle: string) => recutSteps.findIndex((n) => n.includes(needle));
+
+  test("the recut job depends on the authorization gate job", () => {
+    // The load-bearing edge. Without it the destroy can run with no verdict at all, and every
+    // step-order assertion below would still pass.
+    expect(extractJobBlock(wf, "registry_luks_recut")).toMatch(
+      /^ {4}needs: registry_pull_path_gate$/m,
+    );
+  });
+
+  test("all ordered steps are present in both jobs", () => {
+    // Non-vacuity floor: if either extraction found nothing, every findIndex returns -1 and the
+    // ordering assertions would pass on an all -1 array.
+    expect(gateSteps.length).toBeGreaterThanOrEqual(6);
+    expect(recutSteps.length).toBeGreaterThanOrEqual(5);
     for (const needle of [
       "Validate typed confirm",
-      "Pre-destroy pull-path health gate",
+      "Resolve recovery posture",
+      "D10 PREPARE",
+      "Start throwaway registry",
+      "D10 VERDICT",
+      "Upload pinned restore manifest",
+    ]) {
+      expect(gIdx(needle)).toBeGreaterThanOrEqual(0);
+    }
+    for (const needle of [
+      "Validate typed confirm",
       "destroy-guard",
       "Pre-apply zero-touch assert",
       "Terraform apply",
       "Post-apply liveness assert",
     ]) {
-      expect(idx(needle)).toBeGreaterThanOrEqual(0);
+      expect(rIdx(needle)).toBeGreaterThanOrEqual(0);
     }
   });
 
-  test("confirm < pull-path < destroy-guard < zero-touch < apply < liveness", () => {
+  test("gate job: confirm < posture < PREPARE < throwaway < VERDICT", () => {
     const order = [
-      idx("Validate typed confirm"),
-      idx("Pre-destroy pull-path health gate"),
-      idx("destroy-guard"),
-      idx("Pre-apply zero-touch assert"),
-      idx("Terraform apply"),
-      idx("Post-apply liveness assert"),
+      gIdx("Validate typed confirm"),
+      gIdx("Resolve recovery posture"),
+      gIdx("D10 PREPARE"),
+      gIdx("Start throwaway registry"),
+      gIdx("D10 VERDICT"),
+    ];
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+
+  test("gate job: the manifest is uploaded AFTER the verdict, not between PREPARE and VERDICT", () => {
+    // #7277 B5. PREPARE writes the manifest, the VERDICT step re-derives over the SAME path and
+    // rehearses against what it derived, and the restore job downloads this artifact. Uploading
+    // between them captured PREPARE's inventory while the rehearsal proved VERDICT's — a
+    // divergence with NO other observable, since both runs are green and nothing compares the
+    // two sets. Ordering is the fix, so ordering is what must be pinned.
+    expect(gIdx("Upload pinned restore manifest")).toBeGreaterThan(gIdx("D10 VERDICT"));
+  });
+
+  test("recut job: confirm < destroy-guard < zero-touch < apply < liveness", () => {
+    const order = [
+      rIdx("Validate typed confirm"),
+      rIdx("destroy-guard"),
+      rIdx("Pre-apply zero-touch assert"),
+      rIdx("Terraform apply"),
+      rIdx("Post-apply liveness assert"),
     ];
     expect(order).toEqual([...order].sort((a, b) => a - b));
   });
@@ -2181,7 +2232,26 @@ describe("registry_luks_recut step order is a safety property", () => {
   test("the zero-touch assert runs BEFORE the apply, not after", () => {
     // Pinned separately from the chain above because this is the one ordering the plan's v1 got
     // wrong, and a chain assertion would not name it if it regressed.
-    expect(idx("Pre-apply zero-touch assert")).toBeLessThan(idx("Terraform apply"));
+    expect(rIdx("Pre-apply zero-touch assert")).toBeLessThan(rIdx("Terraform apply"));
+  });
+
+  test("the gate job performs no terraform action", () => {
+    // The split is only worth anything if the gate job cannot destroy. Asserted as negative
+    // space: a gate job that acquired an apply/destroy step would silently re-create the exact
+    // coupling the split removed, and no ordering assertion would notice.
+    //
+    // MEASURED ON A COMMENTS-STRIPPED COPY. The first version of this assertion matched the
+    // PROSE `push a timeout into \`terraform apply\` or D11` in the next job's explanatory header
+    // — a false RED on a correct workflow, and the same bare-token trap
+    // (cq-assert-anchor-not-bare-token) this PR fixed twice elsewhere. A guard that forbids a
+    // literal the surrounding file must also DOCUMENT has to anchor on something a comment
+    // cannot produce.
+    const gate = extractJobBlock(wf, "registry_pull_path_gate")
+      .split("\n")
+      .filter((l) => !/^\s*#/.test(l))
+      .join("\n");
+    expect(gate).not.toMatch(/terraform\s+(apply|destroy)/);
+    expect(gate).not.toMatch(/^\s+-target=/m);
   });
 });
 

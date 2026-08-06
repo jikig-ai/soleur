@@ -531,14 +531,19 @@ fi
 CRANE_SHA_EXPECTED="c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b"
 for wf in .github/workflows/build-inngest-bootstrap-image.yml \
           .github/workflows/build-inngest-config-bundle.yml \
-          .github/workflows/reusable-release.yml; do
+          .github/workflows/reusable-release.yml \
+          .github/workflows/apply-web-platform-infra.yml; do
   # Anchored on the ASSIGNMENT, not a whole-file grep. A bare `grep -qF` over raw text is
   # satisfied by a comment recording the OLD pin (`# previous pin: c1434008...`) sitting
   # above a drifted assignment — the same cq-assert-anchor-not-bare-token failure this suite
   # was rewritten to fix, in the one leg that reads raw file text instead of `code`.
   if [[ ! -f "$wf" ]]; then
     no "crane pin parity: $wf not found"
-  elif grep -qE "^[[:space:]]*CRANE_SHA256=\"${CRANE_SHA_EXPECTED}\"" "$wf"; then
+  # EVERY assignment must match, not just one. `grep -q` is first-match-wins, so the moment a
+  # file carries TWO pins (apply-web-platform-infra.yml gained a second when #7277 split the
+  # gate job out of the recut) this degraded into a first-member guard: drift the SECOND copy —
+  # the one the POST-DESTROY restore runs — and this stayed green. Count both sides.
+  elif [[ "$(grep -cE '^[[:space:]]*CRANE_SHA256=' "$wf")" == "$(grep -cE "^[[:space:]]*CRANE_SHA256=\"${CRANE_SHA_EXPECTED}\"" "$wf")" ]]; then
     ok "crane SHA256 pin matches across workflows — $(basename "$wf")"
   else
     no "crane SHA256 pin DRIFTED in $wf (expected an assignment of $CRANE_SHA_EXPECTED)"
