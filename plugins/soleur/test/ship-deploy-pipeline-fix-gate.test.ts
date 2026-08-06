@@ -70,6 +70,10 @@ const TRIGGER_FILES = [
   "apps/web-platform/infra/10-vector-doppler-token.conf",
   "apps/web-platform/infra/10-inngest-heartbeat-doppler-token.conf",
   "apps/web-platform/infra/10-inngest-server-doppler-token.conf",
+  // #7286 — inngest-redis.service's drop-in. The unconditional-`doppler run` consumer the
+  // #7095 sweep missed; its absence from the credential re-delivery path is what crash-looped
+  // Redis for 16h and took the whole Inngest backbone down with it.
+  "apps/web-platform/infra/10-inngest-redis-doppler-token.conf",
 ];
 
 function buildTriggerRegex(files: string[]): RegExp {

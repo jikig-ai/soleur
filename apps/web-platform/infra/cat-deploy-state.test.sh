@@ -350,5 +350,347 @@ assert "unreachable metadata still emits parseable JSON with a host_id key" \
   "printf '%s' '$HID_NOMETA' | jq -e 'has(\"host_id\")' >/dev/null"
 
 echo ""
+echo "--- #7286: services.inngest_redis* probe fields ---"
+#
+# WHY THESE FIELDS EXIST. #7286 spent 16 hours knowing exactly one bit about the failing
+# component: it exited non-zero. inngest-redis.service's stderr was unreadable from every remote
+# surface, so the watchdog printed a hard-coded GUESS at the cause and the operator had no way to
+# adjudicate it. These fields make the unit self-report over the already-authenticated
+# /hooks/deploy-status read, with no SSH.
+#
+# ALL fixtures below are SYNTHESIZED (cq-test-fixtures-synthesized-only). The secret-shaped
+# strings are deliberately non-conforming to real token grammars so they cannot trip push
+# protection while still exercising every scrub rule.
+
+# Mock factory: a systemctl that answers is-active / show / is-enabled.
+# The `show` output deliberately returns properties in systemd's OWN canonical order rather than
+# the caller's requested order, and omits MemoryPeak entirely (systemd < 253 emits a BLANK line
+# for an unsupported property). Both are the exact conditions under which a positional `--value`
+# parse silently MISALIGNS — pinning them here is what makes the by-key parse load-bearing rather
+# than stylistic.
+create_systemctl_mock() {
+  cat > "$1/systemctl" << 'MOCK'
+#!/usr/bin/env bash
+case "$1" in
+  is-active)
+    case "$2" in
+      inngest-redis.service) echo "${MOCK_REDIS_ACTIVE:-activating}"; exit 3 ;;
+      *) echo "active"; exit 0 ;;
+    esac
+    ;;
+  show)
+    if [[ "$*" == *"DropInPaths"* ]]; then
+      echo "EnvironmentFiles=${MOCK_REDIS_ENVFILES:-/etc/default/inngest-server (ignore_errors=no)}"
+      echo "DropInPaths=${MOCK_REDIS_DROPINS:-}"
+      exit 0
+    fi
+    echo "LoadState=${MOCK_REDIS_LOADSTATE:-loaded}"
+    echo "ActiveState=activating"
+    echo "SyslogIdentifier=inngest-redis"
+    echo "ExecMainCode=1"
+    echo "NRestarts=${MOCK_REDIS_NRESTARTS:-11704}"
+    echo "Result=exit-code"
+    echo "ActiveEnterTimestamp="
+    echo "ExecMainStatus=1"
+    echo "ExecMainStartTimestamp=Wed 2026-08-05 22:39:35 UTC"
+    exit 0
+    ;;
+  is-enabled)
+    echo "${MOCK_DISTRO_REDIS_ENABLED:-masked}"; exit 1
+    ;;
+esac
+exit 0
+MOCK
+  chmod +x "$1/systemctl"
+}
+
+# Mock journalctl. Emits a synthesized redis crash tail carrying one instance of EVERY secret
+# class the extended scrubber must neutralize. No single quotes (the assert helper eval's its
+# condition through a single-quoted expansion).
+create_journalctl_mock() {
+  cat > "$1/journalctl" << 'MOCK'
+#!/usr/bin/env bash
+if [[ "$*" == *"--header"* ]]; then echo "File path: /var/log/journal/x/system.journal"; exit 0; fi
+if [[ "$*" == *"-k"* ]]; then exit 0; fi
+if [[ "$*" == *"inngest-redis.service"* ]]; then
+  if [[ "${MOCK_REDIS_TAIL_EMPTY:-0}" == "1" ]]; then exit 0; fi
+  echo "*** FATAL CONFIG FILE ERROR (Redis 7.0.15) ***"
+  echo "Reading the configuration file, at line 12"
+  echo ">>> requirepass hunter2synthetic"
+  echo "Bad directive or wrong number of arguments"
+  echo "connecting to redis://:hunter2synthetic@127.0.0.1:6379 failed"
+  echo "Doppler Error: Invalid Auth token dp.st.prd.SYNTHETIC_NOT_A_REAL_TOKEN"
+  echo "AUTH hunter2synthetic"
+  echo "masterauth hunter2synthetic"
+  exit 0
+fi
+exit 0
+MOCK
+  chmod +x "$1/journalctl"
+}
+
+create_redis_server_mock() {
+  mkdir -p "$1/usr/bin"
+  cat > "$1/usr/bin/redis-server" << 'MOCK'
+#!/usr/bin/env bash
+echo "Redis server v=7.0.15 sha=00000000:0 malloc=jemalloc bits=64 build=synthetic"
+MOCK
+  chmod +x "$1/usr/bin/redis-server"
+}
+
+REDIS_MOCK=$(mktemp -d)
+create_systemctl_mock "$REDIS_MOCK"
+create_journalctl_mock "$REDIS_MOCK"
+create_docker_mock "$REDIS_MOCK"
+create_redis_server_mock "$REDIS_MOCK"
+
+REDIS_OUT=$(PATH="$REDIS_MOCK:$PATH" \
+  SOLEUR_REDIS_SERVER_BIN="$REDIS_MOCK/usr/bin/redis-server" \
+  CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+
+for k in inngest_redis inngest_redis_journal_tail inngest_redis_result inngest_redis_dropin \
+         inngest_redis_credfile inngest_redis_datadir inngest_redis_binary \
+         inngest_redis_tail_status vector_config_identity; do
+  assert "services.$k is wired" \
+    "printf '%s' '$REDIS_OUT' | jq -e '.services | has(\"$k\")' >/dev/null"
+done
+
+# The three fields that distinguish "still looping" from "recently fixed". A single `is-active`
+# sample on a unit restarting every 5s is a coin flip — #7286 measured `degraded, degraded,
+# durable` from three probes 8s apart — so any AC keyed on is-active alone asserts a proxy.
+for prop in NRestarts ExecMainStartTimestamp ActiveEnterTimestamp Result ExecMainStatus; do
+  assert "inngest_redis_result carries $prop" \
+    "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -qF '$prop='"
+done
+# By-key parse, NOT positional: the mock returns properties in systemd's canonical order and
+# omits MemoryPeak. A positional read would bind NRestarts to whatever sits at that index.
+assert "inngest_redis_result binds NRestarts to its VALUE, not a positional neighbour" \
+  "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -qF 'NRestarts=11704'"
+assert "inngest_redis_result tolerates an unsupported MemoryPeak (systemd < 253) without shifting" \
+  "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -qF 'Result=exit-code'"
+
+# --- Scrub: no secret class may reach the HTTP response body -----------------
+# This is load-bearing, not hygiene. On a config-parse failure redis echoes the offending
+# argument VERBATIM, and that is the predicted tail for two of the seven #7286 hypotheses.
+# The response body is a different path from Vector's pii_scrub (which covers log SHIPPING),
+# so it needs its own coverage.
+REDIS_TAIL=$(printf '%s' "$REDIS_OUT" | jq -r '.services.inngest_redis_journal_tail')
+for secret in "hunter2synthetic" "SYNTHETIC_NOT_A_REAL_TOKEN"; do
+  assert "scrubbed from inngest_redis_journal_tail: $secret" \
+    "! printf '%s' \"\$REDIS_TAIL\" | grep -qF '$secret'"
+done
+
+# --- #7286 review: the three falsifying inputs the first-draft scrubber let through ---------
+# These are not extra coverage of the same rule; each is a DISTINCT class the first draft missed,
+# each supplied as a working bypass by review, and each verified against the real pipeline.
+#   (a) The DSN rule was redis-only, so a Postgres DSN survived verbatim — and the tail this
+#       script takes of inngest-server.service is exactly where INNGEST_POSTGRES_URI surfaces.
+#   (b) The rules were case-sensitive; redis matches directives with strcasecmp and echoes the
+#       ORIGINAL casing, so REQUIREPASS / RequirePass / REDIS:// all passed through.
+#   (c) `AUTH` was unanchored and ate `NOAUTH Authentication required` — the single most useful
+#       redis-auth diagnostic on the surface this PR exists to build.
+SCRUB_CASES=$(mktemp)
+cat > "$SCRUB_CASES" <<'CASES'
+postgres://inngest:S3cretPwABC@db.abcd.supabase.co:5432/postgres|S3cretPwABC|postgres DSN (non-redis scheme)
+REQUIREPASS Ab3xK9pQzz|Ab3xK9pQzz|uppercase REQUIREPASS
+RequirePass Ab3xK9pQzz|Ab3xK9pQzz|mixed-case RequirePass
+Masterauth Ab3xK9pQzz|Ab3xK9pQzz|mixed-case Masterauth
+dial REDIS://default:S3cretVal@127.0.0.1:6379|S3cretVal|uppercase REDIS:// scheme
+CASES
+while IFS='|' read -r line secret why; do
+  [[ -n "$line" ]] || continue
+  scrubbed=$(printf '%s\n' "$line" \
+    | sed -E 's/(requirepass|masterauth)[[:space:]]+[^[:space:]]+/\1 REDACTED/gI' \
+    | sed -E 's/(^|[^A-Za-z])(AUTH)[[:space:]]+[^[:space:]]+/\1\2 REDACTED/gI' \
+    | sed -E 's#([a-z][a-z0-9+.-]*://)[^:/@[:space:]]+:[^@/[:space:]]+@#\1REDACTED@#gI' \
+    | sed -E 's#(rediss?://):[^@[:space:]]+@#\1REDACTED@#gI')
+  assert "scrubber neutralizes: $why" \
+    "! printf '%s' \"\$scrubbed\" | grep -qF '$secret'"
+done < "$SCRUB_CASES"
+rm -f "$SCRUB_CASES"
+
+# The anti-over-redaction bound. A scrubber that eats the diagnostic is not a win: NOAUTH is the
+# message that actually names a redis auth failure, and the unanchored AUTH rule destroyed it.
+NOAUTH_LINE='NOAUTH Authentication required. connection refused'
+NOAUTH_OUT=$(printf '%s\n' "$NOAUTH_LINE" \
+  | sed -E 's/(^|[^A-Za-z])(AUTH)[[:space:]]+[^[:space:]]+/\1\2 REDACTED/gI')
+assert "scrubber PRESERVES 'NOAUTH Authentication required' (no over-redaction)" \
+  "[[ \"\$NOAUTH_OUT\" == \"\$NOAUTH_LINE\" ]]"
+assert "the redis tail is non-empty (scrub proves something, not nothing)" \
+  "[[ -n \"\$REDIS_TAIL\" ]]"
+
+# SIGNAL RETENTION — the absence assertions above cannot detect OVER-redaction, and `-n` does not
+# rescue them. Review's surviving mutation was appending
+#   sed -E 's/^.*(requirepass|masterauth|dp\.).*$/LINE-NUKED/gI'
+# to the pipeline: 108/108 green. Every `! grep <secret>` passes (secrets gone), `-n` passes
+# (other lines survive), and even the NOAUTH-preservation assert passes because that line carries
+# none of the three tokens — while every line carrying the actual #7286 diagnosis is destroyed.
+#
+# Over-redaction is the NATURAL failure mode of hardening a scrubber (this one was hardened twice
+# in a single review round), and this PR deletes the runbook's last-resort host login, so this
+# field is the only surface left. Bound the scrubber from BOTH sides: secrets must go, and the
+# diagnosis must stay. Substring asserts rather than an exact-tail match, so a future rule
+# addition does not force a fixture rewrite.
+for signal in "FATAL CONFIG FILE ERROR" "Bad directive or wrong number of arguments" "Doppler Error"; do
+  assert "diagnostic SURVIVES the scrubber (no over-redaction): $signal" \
+    "printf '%s' \"\$REDIS_TAIL\" | grep -qF '$signal'"
+done
+# The scrubber must be the SHARED one, so hardening it hardens all six tails at once — and so a
+# future rule added for one tail cannot silently miss the others. Asserted structurally rather
+# than by call-site spelling: exactly ONE unit-journal reader exists in the file (`journalctl -k`
+# in container_restart_json is a different, kernel-ring reader and is excluded by the `-u`
+# anchor), and the redis tail is assigned from it.
+assert "exactly one unit-journal reader exists (no second scrubber was introduced)" \
+  "[[ \$(grep -c 'journalctl -u' '$TARGET') == '1' ]]"
+# AC2, anchored on the INVOCATION shape rather than on the bare word. A `grep -c journalctl`
+# also counts comment prose, a `command -v journalctl` availability guard, and the literal
+# string "no-journalctl" — so the bare-token form moves for reasons that are not new calls and
+# would force this AC to be restated on every doc edit. Three invocations: the shared unit tail,
+# journald_storage_json's --header, and container_restart_json's -k kernel ring. Adding a
+# fourth is what this pins against; #7286 added none.
+assert "no new standalone journalctl invocation was introduced (exactly 3)" \
+  "[[ \$(grep -vE '^[[:space:]]*#' '$TARGET' | grep -cE '(\\\$\\(|^[[:space:]]*|\\|[[:space:]]*)journalctl[[:space:]]+(-|--)') == '3' ]]"
+assert "the redis tail is assigned from the shared service_journal_tail" \
+  "grep -qE 'INNGEST_REDIS_JOURNAL_TAIL=\"\\\$\\(service_journal_tail' '$TARGET'"
+
+# --- inngest_redis_dropin reads systemd's LOADED view, not the filesystem ----
+# A filesystem-presence check here would be a FALSE GREEN: after delivery the file is on disk
+# whether or not daemon-reload merged it, so "fix landed and working" and "fix landed inert"
+# would be byte-identical. DropInPaths is the only form that adjudicates the credential
+# hypothesis rather than restating the push.
+assert "inngest_redis_dropin is empty when systemd has loaded no drop-in" \
+  "[[ -z \$(printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_dropin') ]]"
+REDIS_OUT_LOADED=$(PATH="$REDIS_MOCK:$PATH" \
+  MOCK_REDIS_DROPINS="/etc/systemd/system/inngest-redis.service.d/10-inngest-redis-doppler-token.conf" \
+  CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+# EXACT basename, not substring: a full path CONTAINS its own basename, so `grep -qF <basename>`
+# is satisfied by emitting `$_p` verbatim — the "BASENAMES ONLY" contract was unpinned.
+assert "inngest_redis_dropin names the loaded drop-in by EXACT basename" \
+  "[[ \$(printf '%s' '$REDIS_OUT_LOADED' | jq -r '.services.inngest_redis_dropin') == '10-inngest-redis-doppler-token.conf' ]]"
+assert "inngest_redis_dropin emits no PATH separator (basenames only)" \
+  "! printf '%s' '$REDIS_OUT_LOADED' | jq -r '.services.inngest_redis_dropin' | grep -qF '/'"
+# The comment's stated hazard is `Environment=`, which the longer `EnvironmentFile=` literal does
+# not match — so the original negative forbade the wrong token. Forbid the shorter one.
+assert "inngest_redis_dropin emits basenames only (never drop-in CONTENT)" \
+  "! printf '%s' '$REDIS_OUT_LOADED' | jq -r '.services.inngest_redis_dropin' | grep -qE 'Environment='"
+
+# --- tail_status disambiguates the four states service_journal_tail collapses ---
+assert "inngest_redis_tail_status is ok when the tail has content" \
+  "[[ \$(printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_tail_status') == 'ok' ]]"
+REDIS_OUT_EMPTY=$(PATH="$REDIS_MOCK:$PATH" MOCK_REDIS_TAIL_EMPTY=1 \
+  CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+assert "inngest_redis_tail_status is empty when the unit logged nothing" \
+  "[[ \$(printf '%s' '$REDIS_OUT_EMPTY' | jq -r '.services.inngest_redis_tail_status') == 'empty' ]]"
+
+# #7286 review: the fourth branch had ZERO coverage — the mock never emitted a LoadState line, so
+# `unit-unknown` was dead in the suite. A four-branch enum with three tested branches is a
+# three-branch enum plus an assertion nobody checked.
+REDIS_OUT_UNKNOWN=$(PATH="$REDIS_MOCK:$PATH" MOCK_REDIS_LOADSTATE="not-found" \
+  CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+assert "inngest_redis_tail_status is unit-unknown when systemd reports LoadState=not-found" \
+  "[[ \$(printf '%s' '$REDIS_OUT_UNKNOWN' | jq -r '.services.inngest_redis_tail_status') == 'unit-unknown' ]]"
+
+# #7286 review: LoadState was computed for tail_status and then THROWN AWAY, and ActiveState was
+# never fetched — so a MASKED unit was invisible (is-active says inactive, DropInPaths empty,
+# tail reads empty) and the plan's "never latches failed" failure mode could not be evaluated
+# from the payload at all. SyslogIdentifier is the emitter half of the Source-4 pair.
+for prop in LoadState ActiveState SyslogIdentifier; do
+  assert "inngest_redis_result emits $prop (was fetched-and-discarded or absent)" \
+    "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -qF '$prop='"
+done
+
+# --- #7286 review: the PRESENT branches were unreachable in the entire suite -----------------
+# Review measured that credfile / datadir / vector_config_identity only ever took their `absent`
+# branch, because none of the three paths exists on a CI runner and no fixture set the env
+# seams — so every stat/df/sha256sum/grep this PR adds was UNEXECUTED by the tests. Drive them.
+PRESENT_DIR=$(mktemp -d)
+mkdir -p "$PRESENT_DIR/redis"
+printf 'DOPPLER_TOKEN=dp.st.prd.SYNTHETIC_FIXTURE\n' > "$PRESENT_DIR/token"
+printf 'sources.j.include = [\n  "inngest-redis",\n]\n' > "$PRESENT_DIR/vector.toml"
+REDIS_OUT_PRESENT=$(PATH="$REDIS_MOCK:$PATH" \
+  SOLEUR_DOPPLER_TOKEN_FILE="$PRESENT_DIR/token" \
+  INNGEST_REDIS_DATA_DIR="$PRESENT_DIR/redis" \
+  VECTOR_CONFIG_PATH="$PRESENT_DIR/vector.toml" \
+  CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+
+assert "credfile present branch reports presence + mtime + bytes" \
+  "printf '%s' '$REDIS_OUT_PRESENT' | jq -r '.services.inngest_redis_credfile' | grep -qE '^present mtime=[0-9]+ bytes=[0-9]+$'"
+# The whole point of the field: length, never value.
+assert "credfile NEVER emits the credential value" \
+  "! printf '%s' '$REDIS_OUT_PRESENT' | jq -r '.services.inngest_redis_credfile' | grep -qF 'SYNTHETIC_FIXTURE'"
+assert "datadir present branch reports owner:group mode and use%" \
+  "printf '%s' '$REDIS_OUT_PRESENT' | jq -r '.services.inngest_redis_datadir' | grep -qE '^present [^ ]+:[^ ]+ [0-7]{3,4} use='"
+# vector_config_identity's load-bearing half: does the RUNNING config allowlist the tag?
+assert "vector_config_identity answers redis_allowlisted=yes on a config carrying the entry" \
+  "printf '%s' '$REDIS_OUT_PRESENT' | jq -r '.services.vector_config_identity' | grep -qF 'redis_allowlisted=yes'"
+
+# The discriminating case: a config that only MENTIONS inngest-redis in a comment must NOT
+# report the allowlist as live. Without this the grep could be satisfied by prose — the exact
+# comment-matches-the-assertion class this PR's other guards are anchored against.
+printf '# inngest-redis is discussed here but not allowlisted\nsources.j.include = [\n  "vector",\n]\n' > "$PRESENT_DIR/vector-comment-only.toml"
+REDIS_OUT_COMMENT=$(PATH="$REDIS_MOCK:$PATH" \
+  VECTOR_CONFIG_PATH="$PRESENT_DIR/vector-comment-only.toml" \
+  CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+assert "vector_config_identity reports redis_allowlisted=no when only a COMMENT names the tag" \
+  "printf '%s' '$REDIS_OUT_COMMENT' | jq -r '.services.vector_config_identity' | grep -qF 'redis_allowlisted=no'"
+
+# The file-disclosure guard had NO assertion at all — deleting the `test -L` branch left the
+# suite fully green, because no fixture ever pointed the data dir at a symlink. The code comment
+# calls a list-then-read on an HTTP surface "a file-disclosure primitive"; the defense it
+# describes was untested.
+ln -s "$PRESENT_DIR/redis" "$PRESENT_DIR/redis-link"
+REDIS_OUT_SYMLINK=$(PATH="$REDIS_MOCK:$PATH" \
+  INNGEST_REDIS_DATA_DIR="$PRESENT_DIR/redis-link" \
+  CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+assert "datadir REFUSES a symlinked data dir (the file-disclosure guard is live)" \
+  "[[ \$(printf '%s' '$REDIS_OUT_SYMLINK' | jq -r '.services.inngest_redis_datadir') == 'refused-symlink' ]]"
+
+# binary: the absent discriminator. Was a bare ' distro_unit=' for three different causes.
+REDIS_OUT_NOBIN=$(PATH="$REDIS_MOCK:$PATH" \
+  SOLEUR_REDIS_SERVER_BIN="$PRESENT_DIR/definitely-not-here" \
+  CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+assert "inngest_redis_binary says 'absent' rather than emitting a bare distro_unit= " \
+  "printf '%s' '$REDIS_OUT_NOBIN' | jq -r '.services.inngest_redis_binary' | grep -qE '^absent '"
+
+rm -rf "$PRESENT_DIR"
+
+# --- The probe must never be able to take the endpoint down ------------------
+# The PR that adds these fields is the same PR that deletes the runbook's last-resort host
+# login, so a probe that can 500 the one remaining diagnostic surface would be a strict
+# regression.
+#
+# The fixture removes exactly the three binaries the new fields depend on — systemctl,
+# journalctl, redis-server — while keeping the interpreter's own toolchain (jq, coreutils)
+# present. A bare empty PATH would ALSO remove jq, and the resulting 127 would say nothing
+# about this script's robustness: it would be the harness failing, not the SUT. That
+# distinction matters because the over-broad version of this fixture LOOKS stricter.
+BARE_PATH_DIR=$(mktemp -d)
+for _b in jq sed tr awk basename stat df sha256sum cut head tail date du grep cat timeout env; do
+  _p=$(command -v "$_b" 2>/dev/null || true)
+  [[ -n "$_p" ]] && ln -sf "$_p" "$BARE_PATH_DIR/$_b"
+done
+# Precondition self-check: if the loop silently linked nothing, every assertion below would pass
+# or fail for reasons unrelated to the SUT.
+assert "bare-PATH fixture linked its toolchain (guard against a vacuous fixture)" \
+  "[[ -x '$BARE_PATH_DIR/jq' ]]"
+assert "bare-PATH fixture genuinely removes systemctl/journalctl/redis-server" \
+  "[[ ! -e '$BARE_PATH_DIR/systemctl' && ! -e '$BARE_PATH_DIR/journalctl' && ! -e '$BARE_PATH_DIR/redis-server' ]]"
+
+# The interpreter is resolved BEFORE the narrowed PATH takes effect and is not part of what is
+# under test — an unfound `bash` would exit 127 and read as an SUT failure.
+BARE_BASH=$(command -v bash)
+BARE_RC=0
+BARE_OUT=$(PATH="$BARE_PATH_DIR" CI_DEPLOY_STATE="$TMP/ok.state" \
+  SOLEUR_REDIS_SERVER_BIN="$BARE_PATH_DIR/redis-server" \
+  "$BARE_BASH" "$TARGET" 2>/dev/null) || BARE_RC=$?
+assert "exits 0 with systemctl/journalctl/redis-server absent from PATH" "[[ '$BARE_RC' == '0' ]]"
+assert "still emits parseable JSON with the redis keys present" \
+  "printf '%s' \"\$BARE_OUT\" | jq -e '.services | has(\"inngest_redis\") and has(\"inngest_redis_tail_status\")' >/dev/null"
+assert "tail_status reports no-journalctl rather than a bare empty string" \
+  "[[ \$(printf '%s' \"\$BARE_OUT\" | jq -r '.services.inngest_redis_tail_status') == 'no-journalctl' ]]"
+
+rm -rf "$REDIS_MOCK" "$BARE_PATH_DIR"
+
+echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

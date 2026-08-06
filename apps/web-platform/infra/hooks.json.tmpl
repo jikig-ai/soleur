@@ -99,7 +99,8 @@
       { "source": "payload", "name": "soleur_doppler_token_b64", "envname": "SOLEUR_DOPPLER_TOKEN_B64", "base64decode": true },
       { "source": "payload", "name": "vector_doppler_token_conf_b64", "envname": "VECTOR_DOPPLER_TOKEN_CONF_B64", "base64decode": true },
       { "source": "payload", "name": "inngest_heartbeat_doppler_token_conf_b64", "envname": "INNGEST_HEARTBEAT_DOPPLER_TOKEN_CONF_B64", "base64decode": true },
-      { "source": "payload", "name": "inngest_server_doppler_token_conf_b64", "envname": "INNGEST_SERVER_DOPPLER_TOKEN_CONF_B64", "base64decode": true }
+      { "source": "payload", "name": "inngest_server_doppler_token_conf_b64", "envname": "INNGEST_SERVER_DOPPLER_TOKEN_CONF_B64", "base64decode": true },
+      { "source": "payload", "name": "inngest_redis_doppler_token_conf_b64", "envname": "INNGEST_REDIS_DOPPLER_TOKEN_CONF_B64", "base64decode": true }
     ],
     "trigger-rule": {
       "match": {
@@ -117,6 +118,8 @@
     "execute-command": "/usr/local/bin/cat-deploy-state.sh",
     "command-working-directory": "/",
     "include-command-output-in-response": true,
+    "//": "#7286 — WITHOUT the on-error flag this hook answers a non-zero cat-deploy-state.sh with an EMPTY BODY, so the one surface that can diagnose the host reports nothing precisely when the host is broken. It was the only hook of six lacking it (inngest-liveness's own __comment explains the same reasoning). Added in the PR that DELETES the runbook's last-resort host login, because that is what makes an empty error body unrecoverable rather than merely inconvenient.",
+    "include-command-output-in-response-on-error": true,
     "http-methods": ["GET"],
     "trigger-rule-mismatch-http-response-code": 403,
     "trigger-rule": {
@@ -135,6 +138,8 @@
     "execute-command": "/usr/local/bin/cat-infra-config-state.sh",
     "command-working-directory": "/",
     "include-command-output-in-response": true,
+    "//": "#7286 — same class as deploy-status: a read-only status hook whose whole purpose is diagnosis answers an EMPTY BODY on a non-zero reader. Fixed alongside rather than left as a known second instance.",
+    "include-command-output-in-response-on-error": true,
     "http-methods": ["GET"],
     "trigger-rule-mismatch-http-response-code": 403,
     "trigger-rule": {
@@ -256,6 +261,8 @@
     "execute-command": "/usr/local/bin/cat-inngest-verify-state.sh",
     "command-working-directory": "/",
     "include-command-output-in-response": true,
+    "//": "#7286 — same class as deploy-status: a read-only status hook whose whole purpose is diagnosis answers an EMPTY BODY on a non-zero reader. Fixed alongside rather than left as a known second instance.",
+    "include-command-output-in-response-on-error": true,
     "http-methods": ["GET"],
     "trigger-rule-mismatch-http-response-code": 403,
     "trigger-rule": {

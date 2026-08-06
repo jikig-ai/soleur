@@ -100,9 +100,54 @@ service_journal_tail() {
     # inngest-heartbeat.service, whose curl echoes the full URL on a glob-parse error;
     # the ping script's `curl -g` stops that at the source and this stops it here.
     # Hardens BOTH the inngest tails and the existing vector tail.
+    # #7286 added the three rules below, and they are load-bearing rather than hygiene.
+    # Tailing inngest-redis.service puts a CREDENTIAL-BEARING unit's stderr into an HTTP
+    # response body for the first time: its ExecStart interpolates $INNGEST_REDIS_PASSWORD, and
+    # on a config-parse failure redis echoes the offending argument VERBATIM —
+    #   *** FATAL CONFIG FILE ERROR *** ... >>> 'requirepass <value>'
+    # — which is the PREDICTED tail for two of #7286's seven hypotheses, not a hypothetical.
+    # A Doppler auth failure (the leading hypothesis) likewise echoes a dp.* token fragment.
+    #
+    # These are added to the SHARED scrubber deliberately: it hardens all six tails this script
+    # emits, and a second scrubber would drift from this one.
+    #
+    # THE RULES ARE PORTED FROM vector.toml's pii_scrub, NOT INVENTED HERE — and the first draft
+    # of this block got that wrong in three ways that review caught with falsifying inputs:
+    #
+    #   1. The DSN rule was written redis-only (`(rediss?)://…`). vector.toml's is
+    #      SCHEME-AGNOSTIC, and the difference is live: `service_journal_tail
+    #      inngest-server.service` below tails a unit whose env carries INNGEST_POSTGRES_URI, and
+    #      a Postgres DSN (scheme, userinfo with password, Supabase host) survived the redis-only
+    #      form verbatim. vector.toml's own comment states that exact threat ("DSNs surface in
+    #      connection-failure diagnostics verbatim"). Use its form.
+    #   2. The rules were case-SENSITIVE. Redis matches config directives with strcasecmp and
+    #      echoes the ORIGINAL casing on a parse error, so `REQUIREPASS "…"`, `RequirePass …`,
+    #      `Masterauth …` and `REDIS://default:<pw>@…` all passed through unredacted. vector.toml
+    #      is case-insensitive; the `I` flag restores parity.
+    #   3. `AUTH` was unanchored, so it ate `NOAUTH Authentication required` — destroying the
+    #      single most useful redis-auth diagnostic on the surface this PR exists to build.
+    #      Anchored to a non-letter boundary so NOAUTH/XAUTH survive.
+    #
+    # So: this is a PORT of a mature scrubber, and any future rule added here should be diffed
+    # against vector.toml's rather than written fresh. The one intentional divergence is that
+    # vector.toml covers log SHIPPING and this covers the HTTP RESPONSE body — two paths, same
+    # rules.
+    #
+    # Residual, deliberately not defended: a secret containing whitespace or a literal `@` is
+    # only partially redacted (`requirepass "foo bar"` leaks `bar`). Not reachable today —
+    # inngest.tf's `random_password` is `length = 48, special = false`, i.e. alnum — but that
+    # invariant lives in another file with no cross-reference, so a hand-edited Doppler value
+    # would break it silently. Stated rather than left implicit.
+    #
+    # Line-oriented, so these MUST precede the `tr '\n' '|'` fold below.
     journalctl -u "$unit" --no-pager --output=cat -n 100 2>/dev/null \
       | sed -E 's/signkey-(prod-)?[0-9a-fA-F]{4,}/signkey-REDACTED/g' \
       | sed -E 's#(uptime\.betterstack\.com/api/v[0-9]+/heartbeat/)[A-Za-z0-9_-]{4,}#\1REDACTED#g' \
+      | sed -E 's/(requirepass|masterauth)[[:space:]]+[^[:space:]]+/\1 REDACTED/gI' \
+      | sed -E 's/(^|[^A-Za-z])(AUTH)[[:space:]]+[^[:space:]]+/\1\2 REDACTED/gI' \
+      | sed -E 's#([a-z][a-z0-9+.-]*://)[^:/@[:space:]]+:[^@/[:space:]]+@#\1REDACTED@#gI' \
+      | sed -E 's#(rediss?://):[^@[:space:]]+@#\1REDACTED@#gI' \
+      | sed -E 's/dp\.(st|sa|pt|ct)\.[A-Za-z0-9._-]+/dp.\1.REDACTED/gI' \
       | tr -d '\r' | tr '\n' '|' | tr -dc '[:print:]|' | tail -c 8000 \
       || true
   fi
@@ -369,6 +414,212 @@ seccomp_live_json() {
       seccomp_profile_loaded_matches_host: $matches}'
 }
 
+# --- #7286: make inngest-redis.service self-report -------------------------------------------
+#
+# THE GAP THIS CLOSES. On 2026-08-05 inngest-redis.service crash-looped for 16 hours and the
+# ONLY fact any remote surface could establish about it was "it exited non-zero". Its stderr was
+# unreadable off-box, so the watchdog printed a hard-coded GUESS at the cause into the incident
+# issue and the operator had no way to adjudicate it. Meanwhile the decisive evidence sat one
+# already-authenticated GET away — this endpoint simply had no field for it.
+#
+# These fields are structured so ONE payload discriminates every candidate cause at once:
+#   dropin   -> stale-credential          datadir -> missing/re-owned data dir
+#   tail     -> AOF corruption, OOM, bad directive, port already bound
+#   binary   -> package churn / unmasked distro unit
+# and `result` carries the systemd-populated fields that survive even when the process exits
+# before writing a single byte — which is why this must never ship with the tail as its only
+# new field.
+#
+# Read the property list by KEY, never positionally. `systemctl show` returns properties in
+# systemd's OWN canonical order (not the caller's), and emits a BLANK line for a property the
+# running systemd does not support (MemoryPeak needs >= 253) — so a `--value` positional parse
+# silently MISALIGNS every field after the gap. That failure is invisible: it produces
+# well-formed output with the values shifted.
+systemd_prop() {
+  local text="$1" key="$2"
+  # Here-string, not a pipe: `awk ... exit` closing a pipe early would SIGPIPE the producer,
+  # and `set -o pipefail` (line 2) would promote that 141 into this function's status.
+  awk -F= -v k="$key" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' <<<"$text" 2>/dev/null || true
+}
+
+INNGEST_REDIS_UNIT="inngest-redis.service"
+INNGEST_REDIS_STATUS="$(service_status "$INNGEST_REDIS_UNIT")"
+INNGEST_REDIS_JOURNAL_TAIL="$(service_journal_tail "$INNGEST_REDIS_UNIT")"
+
+# Restart-loop discriminators. `is-active` alone is a COIN FLIP on a unit with RestartSec=5:
+# #7286 measured three probes 8s apart reporting `degraded, degraded, durable`. NRestarts plus
+# the two timestamps are what distinguish "still looping" from "recently fixed".
+INNGEST_REDIS_RESULT=""
+INNGEST_REDIS_DROPIN=""
+INNGEST_REDIS_LOADSTATE=""
+if command -v systemctl >/dev/null 2>&1; then
+  # SyslogIdentifier is the OTHER HALF of the Source-4 pair, and without it the incident's
+  # deeper cause stays undecidable. inngest-redis.service:26 states the invariant: Vector's
+  # Source 4 matches SYSLOG_IDENTIFIER by EXACT VALUE, so "the tag and the allowlist entry only
+  # work as a pair". `vector_config_identity` below reports the allowlist half; this reports the
+  # EMITTER half. Both reach the host only via the OCI bootstrap image, so an on-host unit
+  # predating #6617c would emit under `doppler` (the ExecStart basename) and match zero sources
+  # — i.e. "redis is silent" and "redis's stderr is tagged wrong" would be indistinguishable.
+  # Free: it rides the systemctl show already being issued, and it is systemd's LOADED view
+  # (same rationale that makes DropInPaths the right form for the drop-in).
+  #
+  # LoadState + ActiveState are EMITTED, not just read. LoadState was previously computed for
+  # tail_status and thrown away, which made a MASKED unit invisible (is-active says `inactive`,
+  # DropInPaths is empty, tail reads `empty`). ActiveState is what the plan's "restart loop that
+  # never latches failed" failure mode declares it ships — so without it that mode's stated
+  # single-read predicate could not be evaluated from the payload at all.
+  _redis_show="$(systemctl show \
+    -p Result -p ExecMainStatus -p ExecMainCode -p NRestarts -p MemoryPeak \
+    -p ExecMainStartTimestamp -p ActiveEnterTimestamp -p LoadState -p ActiveState \
+    -p SyslogIdentifier \
+    "$INNGEST_REDIS_UNIT" 2>/dev/null || true)"
+  INNGEST_REDIS_LOADSTATE="$(systemd_prop "$_redis_show" LoadState)"
+  for _k in Result ExecMainStatus ExecMainCode NRestarts MemoryPeak \
+            ExecMainStartTimestamp ActiveEnterTimestamp LoadState ActiveState \
+            SyslogIdentifier; do
+    INNGEST_REDIS_RESULT+="${_k}=$(systemd_prop "$_redis_show" "$_k") "
+  done
+  INNGEST_REDIS_RESULT="${INNGEST_REDIS_RESULT% }"
+
+  # THE CREDENTIAL DISCRIMINATOR. systemd's LOADED view, NOT a filesystem check — and that
+  # distinction is the whole point of the field. After a delivery the drop-in is on disk whether
+  # or not `daemon-reload` merged it, so a `[ -f ... ]` probe would report identically for
+  # "fix landed and active" and "fix landed inert". systemd lists a path in DropInPaths only
+  # once it has actually merged it, so this field alone separates those two states.
+  # BASENAMES ONLY: never echo drop-in CONTENT — the shape gate legitimately permits
+  # `Environment=`, so dumping content would put an env VALUE in the response body.
+  _dropin_paths="$(systemd_prop "$(systemctl show -p DropInPaths "$INNGEST_REDIS_UNIT" 2>/dev/null || true)" DropInPaths)"
+  # `|| true` on basename: it exits non-zero on a leading-dash token (which it parses as a flag),
+  # and under this file's `set -euo pipefail` that would abort the WHOLE endpoint — in the PR
+  # that removes the runbook's last-resort host login. Every sibling call in this block is
+  # guarded; this one was the outlier. `${_p##*/}` would also work, but keeping basename with a
+  # guard stays closer to the surrounding style.
+  for _p in $_dropin_paths; do
+    INNGEST_REDIS_DROPIN+="$(basename -- "$_p" 2>/dev/null || true) "
+  done
+  INNGEST_REDIS_DROPIN="${INNGEST_REDIS_DROPIN% }"
+fi
+
+# Four states that service_journal_tail collapses to the same empty string. Without this, an
+# empty tail is an unreachable error path and "the unit logged nothing" is indistinguishable
+# from "this host has no journalctl".
+if ! command -v journalctl >/dev/null 2>&1; then
+  INNGEST_REDIS_TAIL_STATUS="no-journalctl"
+elif [[ "$INNGEST_REDIS_LOADSTATE" == "not-found" ]]; then
+  INNGEST_REDIS_TAIL_STATUS="unit-unknown"
+elif [[ -z "$INNGEST_REDIS_JOURNAL_TAIL" ]]; then
+  INNGEST_REDIS_TAIL_STATUS="empty"
+else
+  INNGEST_REDIS_TAIL_STATUS="ok"
+fi
+
+# Presence + mtime + BYTE LENGTH ONLY of the shared credential — never the value. Load-bearing
+# because the drop-in's `-` prefix makes it silently INERT when this file is absent, so without
+# this field "fix delivered" and "fix delivered inert" are indistinguishable.
+INNGEST_REDIS_CREDFILE=""
+_credfile="${SOLEUR_DOPPLER_TOKEN_FILE:-/etc/default/soleur-doppler-token}"
+if [[ -f "$_credfile" ]]; then
+  INNGEST_REDIS_CREDFILE="present mtime=$(stat -c '%Y' "$_credfile" 2>/dev/null || echo 0) bytes=$(stat -c '%s' "$_credfile" 2>/dev/null || echo 0)"
+else
+  INNGEST_REDIS_CREDFILE="absent"
+fi
+
+# Data-dir hypothesis.
+#
+# EVERY CALL IS UNDER `timeout`, and that is the load-bearing part rather than defensive habit.
+# /mnt/data is a NETWORK-BACKED Hetzner volume (inngest-redis.service pins RequiresMountsFor,
+# server.tf attaches it by-id). On a detached or IO-erroring volume, `[[ -d ]]`, `stat` and `df`
+# all block in UNINTERRUPTIBLE SLEEP — and `2>/dev/null || echo` catches ERRORS, not HANGS, while
+# webhook.service sets no command timeout, so the HTTP connection would simply hang. That is the
+# worst possible failure for this field: "missing or re-owned data dir" is one of the very
+# hypotheses it was added to adjudicate, so an unbounded probe disables the endpoint under
+# exactly the condition it exists to report — in the PR that deletes the SSH fallback.
+#
+# `timeout` on the `[[ -d ]]` is not expressible, so the presence test rides `timeout ... test`.
+# Missing `timeout` collapses to `unknown` rather than running unbounded.
+#
+# The symlink check is lstat on the FINAL component only, so a symlinked PARENT is not refused.
+# That is acceptable and deliberately not more: the payload is owner/group/mode plus a df
+# percentage — never file CONTENT — so this is not a disclosure primitive, and the env seam is
+# not caller-reachable (the deploy-status hook passes no arguments or environment).
+INNGEST_REDIS_DATADIR=""
+_datadir="${INNGEST_REDIS_DATA_DIR:-/mnt/data/redis}"
+if ! command -v timeout >/dev/null 2>&1; then
+  INNGEST_REDIS_DATADIR="unknown-no-timeout"
+elif timeout 3 test -L "$_datadir" 2>/dev/null; then
+  INNGEST_REDIS_DATADIR="refused-symlink"
+elif timeout 3 test -d "$_datadir" 2>/dev/null; then
+  INNGEST_REDIS_DATADIR="present $(timeout 3 stat -c '%U:%G %a' "$_datadir" 2>/dev/null || echo 'unknown') use=$(timeout 3 df -h --output=pcent "$_datadir" 2>/dev/null | tail -1 | tr -d ' ' || echo '?')"
+elif timeout 3 test -e "$_datadir" 2>/dev/null; then
+  INNGEST_REDIS_DATADIR="present-not-a-directory"
+else
+  # Distinguishes "the probe answered: absent" from "the probe could not answer" — a wedged
+  # volume must NOT read as a clean absence. `timeout` exits 124 on expiry.
+  _dd_rc=0; timeout 3 test -e "$_datadir" >/dev/null 2>&1 || _dd_rc=$?
+  if [[ "$_dd_rc" == "124" ]]; then
+    INNGEST_REDIS_DATADIR="probe-timeout"
+  else
+    INNGEST_REDIS_DATADIR="absent"
+  fi
+fi
+
+# Package-churn / port-collision hypotheses. ABSOLUTE path (matching the unit's own ExecStart),
+# never a PATH lookup, and under `timeout` so a wedged binary cannot hang the endpoint.
+# `is-enabled` exits non-zero when masked/disabled, hence the `|| true` under `set -e`.
+# The `absent` token is NOT cosmetic. Without it this field emitted a bare " distro_unit=" for
+# THREE different causes — binary absent (the package-churn hypothesis this field exists to
+# test), `timeout` absent, and `--version` failing — collapsing them into one representation on
+# the one field whose whole job is to discriminate them. Its two siblings (credfile, datadir)
+# both got explicit absent tokens; this one was the outlier.
+INNGEST_REDIS_BINARY=""
+_redis_bin="${SOLEUR_REDIS_SERVER_BIN:-/usr/bin/redis-server}"
+if ! command -v timeout >/dev/null 2>&1; then
+  INNGEST_REDIS_BINARY="unknown-no-timeout"
+elif [[ ! -x "$_redis_bin" ]]; then
+  INNGEST_REDIS_BINARY="absent"
+else
+  INNGEST_REDIS_BINARY="$(timeout 5 "$_redis_bin" --version 2>/dev/null | head -c 200 || true)"
+  [[ -n "$INNGEST_REDIS_BINARY" ]] || INNGEST_REDIS_BINARY="version-unreadable"
+fi
+if command -v systemctl >/dev/null 2>&1; then
+  INNGEST_REDIS_BINARY+=" distro_unit=$(systemctl is-enabled redis-server 2>/dev/null || true)"
+fi
+
+# Settles "is redis silent, or is the SHIPPER not carrying it?" FROM THE PAYLOAD. vector.toml is
+# baked into the OCI bootstrap image and is NOT in the infra-config FILE_MAP, so a running host's
+# config can predate the inngest-redis allowlist entry — in which case zero Better Stack rows
+# says nothing about redis.
+#
+# THE HASH ALONE CANNOT ANSWER THAT, and the first draft's comment claiming it could was wrong.
+# The on-host file is a RENDER, not a copy: vector.toml carries four @@HOST_NAME@@ sentinels and
+# three different renderers substitute them differently (soleur-host-bootstrap.sh uses
+# $(hostname), inngest-bootstrap.sh a literal, server.tf the TF-known name). So the on-host
+# sha256 NEVER equals the repo sha256 on any host, and a repo comparison degrades to "did it
+# change between two reads" — which is not the question.
+#
+# The question is a MEMBERSHIP one, so answer it directly: does the running config allowlist the
+# `inngest-redis` tag? Precedent for grepping the INSTALLED file for a marker rather than
+# hashing it is already in-repo (server.tf's probe-script assertions).
+#
+# The grep is anchored on the QUOTED ENTRY form, not the bare token: vector.toml names
+# `inngest-redis` in a comment ~14 lines above the real allowlist entry, so a bare-token grep
+# would report the allowlist as live on a config that only DISCUSSES it. Same
+# comment-matches-the-assertion class this PR's other guards are anchored against.
+#
+# The sha is kept as a cheap change-detector (two reads, same host), which is all it was ever
+# able to be.
+VECTOR_CONFIG_IDENTITY=""
+_vector_cfg="${VECTOR_CONFIG_PATH:-/etc/vector/vector.toml}"
+if [[ -f "$_vector_cfg" ]]; then
+  # `redis_allowlisted` is the field that actually adjudicates E8. Anchored on the quoted entry
+  # so the comment 14 lines above the real entry cannot satisfy it.
+  _vec_redis=no
+  grep -qF '"inngest-redis",' "$_vector_cfg" 2>/dev/null && _vec_redis=yes
+  VECTOR_CONFIG_IDENTITY="redis_allowlisted=$_vec_redis sha256=$(sha256sum "$_vector_cfg" 2>/dev/null | cut -d' ' -f1 || true) mtime=$(stat -c '%Y' "$_vector_cfg" 2>/dev/null || echo 0)"
+else
+  VECTOR_CONFIG_IDENTITY="absent"
+fi
+
 HEARTBEAT_STATUS="$(service_status inngest-heartbeat.service)"
 # #6536: the unit's OWN journal tail. `inngest_heartbeat: failed` reports THAT the unit broke
 # but never WHY — the deciding datum is its stderr, and #6536 burned 3 days (3,724 fires)
@@ -457,6 +708,15 @@ jq -nc \
   --arg sps "$SECCOMP_PROFILE_SHA256" \
   --argjson sl "$SECCOMP_LIVE" \
   --arg hid "$HOST_ID" \
+  --arg rs "$INNGEST_REDIS_STATUS" \
+  --arg rj "$INNGEST_REDIS_JOURNAL_TAIL" \
+  --arg rr "$INNGEST_REDIS_RESULT" \
+  --arg rd "$INNGEST_REDIS_DROPIN" \
+  --arg rc2 "$INNGEST_REDIS_CREDFILE" \
+  --arg rdd "$INNGEST_REDIS_DATADIR" \
+  --arg rb "$INNGEST_REDIS_BINARY" \
+  --arg rts "$INNGEST_REDIS_TAIL_STATUS" \
+  --arg vci "$VECTOR_CONFIG_IDENTITY" \
   '$base + $cr + $cd + $sl + {host_id: $hid, sandbox_canary: $sc, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
     inngest_heartbeat_journal_tail: $hbj,
@@ -466,5 +726,14 @@ jq -nc \
     vector: $vs,
     vector_journal_tail: $vj,
     inngest_journal_tail: $ij,
-    inngest_crons: $ic
+    inngest_crons: $ic,
+    inngest_redis: $rs,
+    inngest_redis_journal_tail: $rj,
+    inngest_redis_result: $rr,
+    inngest_redis_dropin: $rd,
+    inngest_redis_credfile: $rc2,
+    inngest_redis_datadir: $rdd,
+    inngest_redis_binary: $rb,
+    inngest_redis_tail_status: $rts,
+    vector_config_identity: $vci
   })}'

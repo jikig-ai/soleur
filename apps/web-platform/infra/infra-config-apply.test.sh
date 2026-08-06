@@ -107,6 +107,8 @@ export_valid_env_vars() {
   export VECTOR_DOPPLER_TOKEN_CONF_B64=$(_payload_file "[Service]")
   export INNGEST_HEARTBEAT_DOPPLER_TOKEN_CONF_B64=$(_payload_file "[Service]")
   export INNGEST_SERVER_DOPPLER_TOKEN_CONF_B64=$(_payload_file "[Service]")
+  # #7286 — inngest-redis.service's drop-in (the consumer #7095's sweep missed).
+  export INNGEST_REDIS_DOPPLER_TOKEN_CONF_B64=$(_payload_file "[Service]")
 }
 
 assert_eq() {
@@ -2440,7 +2442,69 @@ test_orphan_hook_selfcheck
 # environments by construction: a non-root runner declares 1, a clone without the pinned pre-fix
 # blob declares 5 (1 for the AC6 RED proof + 4 for the fatal-channel proof), and each still totals
 # 180. Verified by forcing both skip paths on a sandbox copy — see the PR body.
-APPLY_MIN_ASSERTIONS=190
+# --- #7286: FULL delivery-chain parity ------------------------------------------------------
+#
+# THE GAP THIS CLOSES. Before this, the only cross-file guard was infra-config-install.test.sh's
+# FILE_MAP <-> DEST_SPEC cardinality check. That pair is two links of a FIVE-link chain:
+#
+#   push-infra-config.sh payload key
+#     -> hooks.json.tmpl pass-file-to-command bridge (payload name + envname)
+#       -> infra-config-apply.sh FILE_MAP env var
+#         -> infra-config-install.sh DEST_SPEC dest
+#           -> the on-disk path
+#
+# A file registered in FILE_MAP + DEST_SPEC but missing from the payload producer or the bridge
+# is NEVER TRANSMITTED — and the old guard goes green on it, because both links it inspects are
+# present. The handler then records `missing_env` for that file while every test passes. That is
+# precisely the shape #7286's own plan fell into: its first draft named 2 of these 5 surfaces
+# and would have shipped a drop-in that reached nothing while reporting success.
+#
+# Derived from FILE_MAP itself rather than from a hand-maintained list, so the NEXT file added
+# is covered automatically — a fixture listing today's entries would need editing to stay
+# honest, and would silently not cover anything new.
+echo ""
+echo "TEST: #7286 — every FILE_MAP entry is wired across all five delivery surfaces"
+_parity_examined=0
+while IFS='|' read -r _env _dest _mode _owner; do
+  [[ -n "$_env" && -n "$_dest" ]] || continue
+  _parity_examined=$((_parity_examined + 1))
+  _key="$(printf '%s' "$_env" | tr '[:upper:]' '[:lower:]')"
+
+  if grep -qF "\"$_key\"" "$SCRIPT_DIR/push-infra-config.sh"; then
+    PASS=$((PASS + 1)); echo "  PASS: push-infra-config.sh emits payload key $_key"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: push-infra-config.sh has NO payload key $_key (file would never be transmitted)"
+  fi
+
+  if grep -qF "\"$_key\"" "$SCRIPT_DIR/hooks.json.tmpl" && grep -qF "\"$_env\"" "$SCRIPT_DIR/hooks.json.tmpl"; then
+    PASS=$((PASS + 1)); echo "  PASS: hooks.json.tmpl bridges $_key -> $_env"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: hooks.json.tmpl has NO bridge for $_key -> $_env (env var arrives empty)"
+  fi
+
+  if grep -qF "[\"$_dest\"]=" "$SCRIPT_DIR/infra-config-install.sh"; then
+    PASS=$((PASS + 1)); echo "  PASS: infra-config-install.sh DEST_SPEC allowlists $_dest"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: infra-config-install.sh DEST_SPEC does NOT allowlist $_dest (install rejects rc=3)"
+  fi
+done < <(awk '/^FILE_MAP=\(/{f=1;next} f&&/^\)/{f=0} f' "$SCRIPT_DIR/infra-config-apply.sh" \
+           | sed -n 's/^[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p')
+
+# Cardinality guard. The loop is fed by a process substitution, whose failure ESCAPES `set -e`
+# — so an awk/sed typo, or a rename of the FILE_MAP array, would run the body zero times and
+# report a clean pass having verified nothing. That is the exact silent-green shape this block
+# exists to prevent, so it must not be reproducible BY this block.
+if [[ "$_parity_examined" -ge 20 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: parity loop examined $_parity_examined FILE_MAP entries"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: parity loop examined only $_parity_examined FILE_MAP entries (expected >= 20 — extractor is broken, not the config)"
+fi
+
+# #7286 raised this from 190 to 251 (= 250 PASS + 1 declared-skip on this runner). The floor is
+# only a ratchet if it tracks the real total; leaving it at 190 after adding 61 assertions would
+# let the entire new parity block vanish without the floor noticing — which is the exact
+# "a count-framed ratchet cannot see a removal" failure the floor exists to prevent.
+APPLY_MIN_ASSERTIONS=251
 if [[ $((PASS + SKIPPED_ASSERTIONS)) -lt "$APPLY_MIN_ASSERTIONS" ]]; then
   echo "  FAIL: assertion-count floor — $PASS assertions ran and $SKIPPED_ASSERTIONS were declared-skipped, expected >= $APPLY_MIN_ASSERTIONS"
   FAIL=$((FAIL + 1))
