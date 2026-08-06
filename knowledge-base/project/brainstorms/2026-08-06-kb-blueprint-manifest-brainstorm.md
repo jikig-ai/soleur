@@ -56,7 +56,7 @@ confirms the gap is structural rather than a sync bug.
 | Decision | Choice | Rationale |
 |---|---|---|
 | Shape | Canonical blueprint manifest | Collapses four disagreeing declarations into one. Chosen over extending sync's areas (leaves the four lists) and over a separate `/soleur:onboard` skill (adds a fifth). |
-| Manifest ownership | **Plugin-owned, committed in the Soleur repo**; server imports it as a build-time module | A manifest read per-workspace from customer content would make `/api/dashboard/foundation-status` parse untrusted JSON and stat an unbounded path set — re-creating the whole-tree walk ADR-067 removed. |
+| Manifest ownership | **Plugin-owned, committed in the Soleur repo**; server imports it as a build-time module | A manifest read per-workspace from customer content would make `/api/dashboard/foundation-status` parse untrusted JSON and stat an unbounded path set — re-creating the whole-tree walk the targeted-stat design removed. |
 | Predicate results | Evaluated in the CLI at sync time; persisted to a committed `blueprint-status.json` in the customer repo | The CLI is the only place with the repo. Server does one file read, joins by `id` against the trusted manifest, and **discards any id not in the manifest**. No new DB column, so no CLI→server write channel or auth surface. |
 | `done`-ness | Keep `statKnownPaths` against the filesystem | Ground truth — a hand-written file still flips a card without a re-sync. The status artifact only narrows *which* entries are in scope. |
 | Seed scope | Generate technical artifacts where derivable **+ stub READMEs for all 10 domains + business gap list** | Operator decision, reaffirmed after the CPO's objection was presented (see Domain Assessments → Product for the recorded dissent). |
@@ -199,7 +199,7 @@ gates viewing for non-`dev` roles. That is addressed by the flag decision above.
 **Summary:** The dominant technical risk is letting customer-controlled content
 reach a server render path — a per-workspace manifest would make
 `/api/dashboard/foundation-status` parse untrusted JSON and stat an unbounded
-path set, undoing ADR-067. Resolution is two artifacts, one trusted: a
+path set, undoing the targeted-stat design. Resolution is two artifacts, one trusted: a
 plugin-owned manifest imported at build time, plus a per-repo
 `blueprint-status.json` whose ids are joined against the manifest and discarded
 if unknown. Entry schema needs an immutable `id` (rule-id discipline) plus the
@@ -303,3 +303,27 @@ re-deriving it.
    **Rule:** never reuse a worktree whose draft PR exists but whose topic you did
    not create. Create a sibling branch instead — the cost of an extra worktree is
    nil next to the cost of two sessions racing on one branch.
+5. **Mis-cited an ADR number, then laundered it through a subagent.** The
+   `foundation-status` route comment cites ADR-067 while also describing the
+   targeted-stat design. I read the two as one claim and asserted "ADR-067's
+   no-whole-tree-walk optimization" — then threaded it into the CTO's prompt as a
+   VERIFIED FACT, and the CTO repeated it back as corroboration.
+
+   **ADR-067 is `adopt-swr-client-cache`.** It governs SWR cache-key discipline,
+   `staleTimes`, and cache clearing on sign-out/workspace-switch. The route
+   participates in it (caching under its own key rather than `swrKeys.kbTree()`),
+   which is why the comment cites it — but the targeted-stat-vs-tree-walk decision
+   is recorded in
+   `knowledge-base/project/plans/2026-07-07-perf-dashboard-load-and-conversation-list-plan.md`,
+   not in an ADR at all.
+
+   The error reached four artifacts (CTO prompt, this brainstorm ×2, the spec's
+   TR1, the PR body) before plan-time Phase 0.6 caught it. Caught by
+   `ls knowledge-base/engineering/architecture/decisions/ | grep '^ADR-067'` —
+   one command, and the mechanism was in the filename.
+
+   **Rule (already codified, not followed):** brainstorm SKILL.md requires
+   verifying a cited ADR *number* → *mechanism* mapping before threading it into a
+   subagent prompt, precisely because leaders repeat the wrong citation as a given.
+   A comment that cites an ADR near a described behavior is not a claim that the
+   ADR decided that behavior. Two facts sat adjacent in one comment; I merged them.
