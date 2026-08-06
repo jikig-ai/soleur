@@ -119,7 +119,11 @@ Jikigai shall:
 
 **7.2 Confinement.** Customer content processed during an Operator-Assisted Run resides only in the Operator's local working copy and in transit to the model provider. Jikigai operates **no server-side store** of Customer repository content. Nothing is written to Jikigai's hosted platform.
 
-**7.3 Encryption.** TLS 1.2 or higher in transit to the model provider. Full-disk encryption on the Operator's workstation.
+**7.3 Encryption in transit.** TLS 1.2 or higher in transit to the model provider.
+
+**7.3a Encryption at rest — ABSENT, and disclosed rather than claimed.** The Operator's workstation is **not** full-disk encrypted (verified 2026-08-06: the root filesystem is a plain partition with no LUKS or dm-crypt layer). Customer repository content present in the Operator's local working copy during an Operator-Assisted Run is therefore **unencrypted at rest**, and a lost or stolen workstation would expose it.
+
+An earlier draft of this annex asserted full-disk encryption as a measure. It was **false**, and it is recorded here rather than silently deleted, because an executed instrument asserting an Article 32 measure that does not exist is materially worse than one that admits the gap. Remediation is tracked separately; until it lands, Customer should weigh this in deciding whether Operator-Assisted Runs are appropriate for its content at all — which is a live reason to prefer the §5.4 route of using Customer's own machine and key.
 
 **7.4 Access.** The Operator is Jikigai's sole personnel. Access to any repository access grant Customer provides is limited to the Operator and is repository-scoped rather than organisation-wide.
 
