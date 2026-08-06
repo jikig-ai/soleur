@@ -355,6 +355,30 @@ export function generateViewPage(viewId = "generatedComponents"): string {
 // ---------------------------------------------------------------------------
 
 /**
+ * Count elements and relationships in a rendered `model.likec4.json`.
+ *
+ * ‼️ The relationship key is `relations`, NOT `relationships`. Reading the wrong
+ * key returns `undefined` -> 0, which makes `assessRender` report EVERY corpus as
+ * degraded — a gate that always fires is exactly as useless as one that never
+ * does, and no unit test over `assessRender` (which takes plain numbers) can see
+ * it. `countModelJson` exists so the key mapping itself is pinned by a test
+ * against a real likec4 artifact.
+ *
+ * Non-object shapes yield 0 rather than throwing: likec4 can emit a null/array
+ * field, and a bare `Object.keys` on those would silently produce a wrong count.
+ */
+export function countModelJson(json: string): { elements: number; relationships: number } {
+  try {
+    const model = JSON.parse(json) as Record<string, unknown>;
+    const size = (v: unknown) =>
+      v && typeof v === "object" && !Array.isArray(v) ? Object.keys(v).length : 0;
+    return { elements: size(model.elements), relationships: size(model.relations) };
+  } catch {
+    return { elements: 0, relationships: 0 };
+  }
+}
+
+/**
  * The three gates. Order matters: a source fault is a hard failure regardless of
  * counts, an empty model is a failure, and only then is a zero-relationship model
  * classified — as `degraded`, never `failed`. The docs are the defect there, not
