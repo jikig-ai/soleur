@@ -37,8 +37,13 @@ passes=0
 fails=0
 CASES_RUN=0
 
-pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
-fail() { fails=$((fails + 1)); printf '  FAIL %s\n' "$1"; }
+# The explicit `return 0` is load-bearing, not decoration. Every call site below is written
+# `[[ cond ]] && pass … || fail …`, which is NOT if-then-else: if `pass` itself exited non-zero
+# the `|| fail` arm would ALSO run, double-counting one case as both a pass and a failure and
+# corrupting the very accounting this harness exists to produce. `printf` can fail (EPIPE,
+# ENOSPC), so pinning the status is what makes the idiom safe. shellcheck SC2015.
+pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; return 0; }
+fail() { fails=$((fails + 1)); printf '  FAIL %s\n' "$1"; return 0; }
 
 SB="$(mktemp -d)" || { printf 'harness: mktemp -d failed\n' >&2; exit 2; }
 trap 'rm -rf "$SB"' EXIT
