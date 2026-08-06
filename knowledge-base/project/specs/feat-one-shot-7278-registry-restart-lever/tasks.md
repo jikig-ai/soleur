@@ -339,9 +339,14 @@ Ordering is dependency-directed. Do not reorder 1 → 4.
       (a live `file()`-driven `for_each` input), `vector.toml` + ~55 other user_data/
       `triggers_replace` sources, and all three `.terraform.lock.hcl`:
       `git diff --name-only origin/main...HEAD -- '*.tf' '*.terraform.lock.hcl' 'apps/web-platform/infra/**' 'infra/**' 'apps/cla-evidence/infra/**' 'tests/scripts/lib/*gate*.sh'`
-      returns **empty**, with `apps/web-platform/infra/registry-zot-inventory-workflow-guard.test.sh`
-      as the sole explicit carve-out (verified consumed by no `templatefile()`/`file()`). Without
-      the carve-out written in, the tightened command false-FAILs. No registry recreate /
+      returns **empty**, with **TWO** explicit carve-outs (each verified consumed by no
+      `templatefile()`/`file()`):
+      `apps/web-platform/infra/registry-zot-inventory-workflow-guard.test.sh` **and**
+      `apps/web-platform/infra/restart-inngest-workflow-guard.test.sh`. The second is not
+      optional — task 5.1a **mandates** the all-jobs back-port, and that file lives under
+      `apps/web-platform/infra/**`, so a one-carve-out AC contradicts 5.1a and false-FAILs a
+      correct tree. Both are asserted Terraform-inert by the guard suite itself, behind a
+      non-empty-discovery-set positive control (a negative over an empty set passes vacuously). No registry recreate /
       `registry-host-replace` / `registry-luks-recut` fired or staged; `var.registry_server_type`
       untouched.
 - [ ] 9.4 Walk every Pre-merge AC and record evidence per AC.
