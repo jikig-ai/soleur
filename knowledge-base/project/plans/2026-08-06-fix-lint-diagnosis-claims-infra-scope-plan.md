@@ -241,8 +241,16 @@ Run the acceptance criteria below, then `bash scripts/test-all.sh` for the `scri
 
 - [ ] **AC1** `DIRS` in `scripts/lint-diagnosis-claims.sh` contains all four directories.
       `grep -c 'apps/web-platform/infra' scripts/lint-diagnosis-claims.sh` ≥ 1.
-- [ ] **AC2** The `CLAIM` regex carries the new alternative.
-      `grep -cF 'is the (?:fix|cause)' scripts/lint-diagnosis-claims.sh` = 1.
+- [ ] **AC2** The `CLAIM` regex carries the new alternative, anchored on the regex line:
+      `grep -cE '^\s*r"\\bis the \(\?:fix\|cause\)\\b"' scripts/lint-diagnosis-claims.sh` = 1.
+
+      *Amended during /work.* The original form was `grep -cF 'is the (?:fix|cause)' … = 1`.
+      Run literally against the implementation it returned **2**, because the change also
+      documents the alternative in a comment above the regex. Re-anchoring rather than
+      relaxing to `= 2` is the point: measured, the bare-literal form still returns **1** on
+      a file with the regex line **deleted** and the comment retained — it would have passed
+      on a broken lint. Comment lines begin with `#`, so the `^\s*r"` anchor cannot match one
+      (`cq-assert-anchor-not-bare-token`; the "narrowing is not anchoring" sharp edge).
 - [ ] **AC3** `bash scripts/lint-diagnosis-claims.sh` exits 0 and its **stdout** reads
       `lint-diagnosis-claims: OK — 1 unmeasured causal claims (baseline 1)`. Read the
       message, not `$?` — the script also exits 0 on the `--census` path and prints a

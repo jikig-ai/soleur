@@ -40,8 +40,11 @@ fixture is observed failing. A fixture that passes before the fix tests nothing.
 
 ## Phase 4 — Verify
 
-- [ ] **4.1** AC1/AC2 — `grep -c 'apps/web-platform/infra' scripts/lint-diagnosis-claims.sh` ≥ 1;
-      `grep -cF 'is the (?:fix|cause)' scripts/lint-diagnosis-claims.sh` = 1.
+- [x] **4.1** AC1 — `grep -c 'apps/web-platform/infra' scripts/lint-diagnosis-claims.sh` = 4 (≥ 1 ✓).
+      AC2 (amended) — `grep -cE '^\s*r"\\bis the \(\?:fix\|cause\)\\b"' scripts/lint-diagnosis-claims.sh` = 1 ✓.
+      The original bare-literal `grep -cF` form returned 2 (the explanatory comment also
+      carries the literal) and, worse, still returned 1 with the regex line deleted — it
+      would have passed on a broken lint. Re-anchored on the regex construct.
 - [ ] **4.2** AC3 — `bash scripts/lint-diagnosis-claims.sh`; assert **stdout** reads
       `lint-diagnosis-claims: OK — 1 unmeasured causal claims (baseline 1)`.
       Do not read `$?` as the verdict.
