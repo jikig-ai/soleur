@@ -184,7 +184,21 @@ STRONG_ACTOR_RE = re.compile(
 # use and the form this linter was structurally blind to. Kept separate from ACTOR_RES/
 # STRONG_ACTOR_RE so the fence exception can never widen by accident: adding a pattern there
 # does not add it here.
-HOST_LOGIN_RE = re.compile(r"\bssh\s+[A-Za-z0-9._%+-]*@", re.IGNORECASE)
+#
+# FLAG TOKENS ARE SKIPPED, and that is not cosmetic. The first draft required `user@` to follow
+# `ssh` IMMEDIATELY, so any flag defeated it — measured, `ssh root@web-1 '…'` was caught (exit 1)
+# while `ssh -i ~/.ssh/prod_key root@web-1 '…'` passed (exit 0). That made the fence exception
+# NARROWER than the prose rules it mirrors, since `ssh -i` is enumerated by name in both
+# ACTOR_RES and STRONG_ACTOR_RE — and narrower in exactly the place (inside fences) where
+# runbooks actually paste the command.
+#
+# Non-greedy over flag/option tokens, still requiring a literal `user@` to appear, so this
+# cannot widen into matching `ssh` alone. `ssh://git@github.com` remains unmatched because a
+# literal space after `ssh` is still required.
+HOST_LOGIN_RE = re.compile(
+    r"\bssh\s+(?:-[^\s]+\s+|[A-Za-z0-9._/~$-][^\s@]*\s+)*?[A-Za-z0-9._%+-]+@",
+    re.IGNORECASE,
+)
 
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")

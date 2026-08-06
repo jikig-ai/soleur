@@ -430,7 +430,25 @@ discoverability_test:
     #   | jq '{inngest_server:.services.inngest_server, inngest_redis:.services.inngest_redis,
     #          result:.services.inngest_redis_result, dropin:.services.inngest_redis_dropin,
     #          datadir:.services.inngest_redis_datadir}'
-  expected_output: 'host OK; then {"inngest_server":"active","inngest_redis":"active","result":"success 0 0 <NRestarts> <MemoryPeak> <ts> <ts>","dropin":"10-inngest-redis-doppler-token.conf","datadir":"present deploy:deploy 750 <pct>%"}'
+  # MEASURED, not described (#7286 review). The first draft wrote a POSITIONAL shape
+  # (`"success 0 0 <NRestarts> …"`) — exactly the form the implementation deliberately rejects,
+  # because systemctl returns properties in its own canonical order and blanks unsupported ones.
+  # Since this block is AC12's gate, an operator comparing against the described shape would
+  # have seen a false mismatch on a correct payload. Captured from a real run:
+  expected_output: |
+    host OK; then:
+    {
+      "inngest_redis": "activating",
+      "inngest_redis_result": "Result=exit-code ExecMainStatus=1 ExecMainCode=1 NRestarts=11704 MemoryPeak= ExecMainStartTimestamp=Wed 2026-08-05 22:39:35 UTC ActiveEnterTimestamp= LoadState=loaded ActiveState=activating SyslogIdentifier=inngest-redis",
+      "inngest_redis_dropin": "10-inngest-redis-doppler-token.conf",
+      "inngest_redis_credfile": "present mtime=<epoch> bytes=<n>",
+      "inngest_redis_datadir": "present deploy:deploy 750 use=<pct>%",
+      "inngest_redis_binary": "Redis server v=<ver> … distro_unit=masked",
+      "inngest_redis_tail_status": "ok",
+      "vector_config_identity": "redis_allowlisted=yes sha256=<64hex> mtime=<epoch>"
+    }
+    HEALTHY is: inngest_redis=active, ActiveState=active, NRestarts stable across two reads,
+    redis_allowlisted=yes, SyslogIdentifier=inngest-redis.
 ```
 
 ### Soak Follow-Through Enrollment

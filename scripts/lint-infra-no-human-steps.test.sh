@@ -642,10 +642,40 @@ EOF
 )"
 run_case "F18 unfenced 'ssh user@host' prose FAILS (ACTOR_RES half)" 1 "$f"
 
+# F19 — #7286 review. The fence exception must not be defeated by an ssh FLAG. The first draft
+# required `user@` to follow `ssh` immediately, so `ssh root@h` was caught while
+# `ssh -i <key> root@h` passed — narrower than ACTOR_RES/STRONG_ACTOR_RE, which enumerate
+# `ssh -i` by name, and narrow in exactly the place runbooks paste commands.
+f="$(mkcase <<'EOF'
+# Runbook
+
+Check the service:
+```
+ssh -i ~/.ssh/prod_key root@web-1 'systemctl restart inngest-server.service'
+```
+EOF
+)"
+run_case "F19 a fenced host-login with an ssh FLAG still FAILS (evasion closed)" 1 "$f"
+
+# F20 — the bound on F19. Widening for flags must not widen into matching bare `ssh`, and an
+# `ssh://` URL must stay clean (a literal space after `ssh` is still required). Without this,
+# F19's fix could silently start flagging every repo that documents a clone URL.
+f="$(mkcase <<'EOF'
+# Runbook
+
+Clone it:
+```
+git clone ssh://git@github.com/jikig-ai/soleur.git
+rsync -e ssh ./file host:/path
+```
+EOF
+)"
+run_case "F20 ssh:// URLs and flagless ssh mentions stay clean (F19 did not over-widen)" 0 "$f"
+
 # ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=48
+MIN_CASES=50
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

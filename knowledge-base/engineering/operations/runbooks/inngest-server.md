@@ -48,20 +48,41 @@ Fields this runbook uses (all under `.services`):
 |---|---|
 | `inngest_server`, `inngest_redis` | unit states (see the caveat below) |
 | `inngest_journal_tail`, `inngest_redis_journal_tail`, `inngest_heartbeat_journal_tail` | the unit's own stderr, scrubbed |
-| `inngest_redis_result` | `Result`/`ExecMainStatus`/**`NRestarts`**/`ActiveEnterTimestamp` |
-| `inngest_redis_dropin` | the drop-ins systemd has actually **loaded** |
-| `inngest_redis_credfile` | credential presence + mtime + length (never the value) |
-| `inngest_redis_datadir`, `inngest_redis_binary` | data-dir ownership; redis version + distro-unit state |
+| `inngest_redis_result` | `Result`/`ExecMainStatus`/**`NRestarts`**/`ActiveEnterTimestamp`/`LoadState`/`ActiveState`/**`SyslogIdentifier`** |
+| `inngest_redis_dropin` | the drop-ins systemd has actually **loaded** (basenames; empty = none merged) |
+| `inngest_redis_credfile` | credential presence + mtime + length (never the value); `absent` when missing |
+| `inngest_redis_datadir` | `present <owner:group> <mode> use=<pct>` / `absent` / `refused-symlink` / `probe-timeout` |
+| `inngest_redis_binary` | redis version + `distro_unit=`; `absent` when the binary is missing |
 | `inngest_redis_tail_status` | `ok` / `empty` / `no-journalctl` / `unit-unknown` |
-| `vector_config_identity` | on-host `vector.toml` sha256 — is the log shipper's config current? |
+| `vector_config_identity` | **`redis_allowlisted=yes\|no`** + on-host sha256/mtime |
+
+**Two fields answer the "is redis actually silent?" question as a PAIR, and both halves are
+needed.** Vector's Source 4 matches `SYSLOG_IDENTIFIER` by exact value, so the unit's tag and
+the shipper's allowlist only work together: `inngest_redis_result`'s `SyslogIdentifier=` is the
+EMITTER half, `vector_config_identity`'s `redis_allowlisted=` is the ALLOWLIST half. If either
+reads wrong, zero Better Stack rows for `inngest-redis` says nothing about redis — the rows are
+going somewhere else (a unit with no `SyslogIdentifier=` is tagged from its ExecStart basename,
+i.e. `doppler`, which matches no source).
+
+Do **not** compare `vector_config_identity`'s sha256 against the repo file. The on-host
+`vector.toml` is a render — it carries `@@HOST_NAME@@` sentinels substituted differently by
+three renderers — so the hashes never match on any host. The sha is a change-detector between
+two reads of the SAME host; `redis_allowlisted=` is the field that answers the question.
 | `inngest_heartbeat_timer` | the durable heartbeat liveness signal |
 
 **A single unit-state sample is a coin flip on a crash-looping unit.** `RestartSec=5` against
 systemd's default `StartLimitBurst` means a failing unit never latches `failed` — it cycles
 `activating`/`active` forever. During #7286 three probes 8 seconds apart reported
-`degraded, degraded, durable` on a unit that was down for 16 hours. Read `NRestarts` from
-`inngest_redis_result` across two calls ≥60s apart: **stable `NRestarts` is the healthy
-signal, not `is-active`.**
+`degraded, degraded, durable` on a unit that was down for 16 hours.
+
+**Decide from ONE read.** `inngest_redis_result` carries `ActiveEnterTimestamp`, `NRestarts` and
+`ActiveState`, and the crash-loop signature is visible in a single payload: `NRestarts > 0` AND
+`ActiveEnterTimestamp` within the last ~60s AND `ActiveState != failed` means it is still
+looping. Prefer this to a two-read `NRestarts` delta — nothing on the host persists the prior
+value between watchdog ticks, so a delta is only available to a human holding both payloads.
+
+A second read ≥60s apart is still the cleanest CONFIRMATION once you believe it is fixed:
+`NRestarts` unchanged across the two is the healthy signal, `is-active` is not.
 
 If the endpoint itself returns non-2xx it now returns its stderr in the body (every read hook
 carries `include-command-output-in-response-on-error`), so an error is diagnosable rather than
@@ -131,12 +152,15 @@ BetterStack emails `ops@jikigai.com` when the heartbeat is silent past the 30-se
 2. **Check the service** — [§ Reading host state without SSH](#reading-host-state-without-ssh), then read
    `.services.inngest_server` and `.services.inngest_heartbeat_timer`.
    - Both inactive → the bootstrap never completed. Re-fire the deploy webhook.
-   - `inngest-server` active, `inngest-heartbeat.timer` inactive → **re-fire the deploy webhook.**
-     `inngest-bootstrap.sh:889` runs `systemctl enable --now inngest-heartbeat.timer` on every
-     co-located deploy, so a deploy re-asserts the timer. There is deliberately no dedicated
-     timer-restart verb: `ci-deploy.sh` accepts `deploy|restart|quiesce|enable`, and `restart`
-     is scoped to component `inngest` (inngest-server) only. Adding a timer verb would widen the
-     root-run allowlisted surface for a case a deploy already covers.
+   - `inngest-server` active, `inngest-heartbeat.timer` inactive → **dispatch
+     `deploy-inngest-image.yml`** (i.e. a `deploy inngest`, NOT a web-platform release).
+     `inngest-bootstrap.sh:889` runs `systemctl enable --now inngest-heartbeat.timer`, and that
+     bootstrap runs only from ci-deploy.sh's `inngest)` arm — the `web-platform)` arm returns
+     before reaching it, so a web release does not re-assert the timer. There is deliberately no
+     dedicated timer-restart verb: `ci-deploy.sh` accepts `deploy|restart|quiesce|enable`, and
+     `restart` is scoped to component `inngest` (which restarts inngest-server, not the timer).
+     Adding a timer verb would widen the root-run allowlisted surface for a case a deploy
+     already covers.
    - Both active → read `.services.inngest_heartbeat_journal_tail` from the *same* payload
      (#6536 gave the unit `SyslogIdentifier=inngest-heartbeat` precisely so this tail exists).
      Typical failure: missing `INNGEST_HEARTBEAT_URL` in Doppler prd, or Doppler CLI auth on the
