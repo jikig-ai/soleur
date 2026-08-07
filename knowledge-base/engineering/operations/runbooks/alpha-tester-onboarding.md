@@ -47,9 +47,12 @@ Also decide the test surface now, because it determines what Step 6 can measure:
 
 ---
 
-## Step 2 — Send the welcome message
+## Step 2 — Send the welcome message and the terms
 
-Send this before or at the first working session. Fill in the bracketed parts.
+Send this before or at the first working session. Fill in the bracketed parts. The two
+record-keeping paragraphs are not optional garnish — they are the notice and the terms. Copy the
+block from **here**, never from a file under `knowledge-base/legal/`: those carry a DRAFT banner
+that must not reach a tester.
 
 ```text
 Hi [name],
@@ -70,6 +73,15 @@ only to me, and they're deleted after 24 months at the latest. If you'd rather I
 didn't, or you want them erased sooner, just email legal@jikigai.com and it's done
 - no explanation needed.
 
+The terms, briefly. Using Soleur means agreeing to
+https://soleur.ai/legal/terms-and-conditions - which applies from the moment you
+install it, not just on the website. No fee or obligation. What's in your private
+repository stays confidential; I won't publish it. [If you've given me repo
+access: I read only your knowledge-base git history, to see whether the alpha is
+working, and I'll drop it whenever you say.] When the alpha ends I revoke access,
+delete my copies, and confirm in writing. If you send logs, strip others' personal
+details first.
+
 [your name]
 ```
 
@@ -85,6 +97,50 @@ message.
 **If the tester signs up to the hosted platform**, they additionally receive the Art. 13 notice
 through the existing `accept-terms` privacy-policy flow. That covers their *account* data. It does
 **not** replace the paragraph above, which covers the CRM notes.
+
+**Why the terms paragraph is there.** A self-hosted CLI tester never passes through the platform's
+`accept-terms` flow, so nothing had ever shown them the Terms — while the Terms themselves bind on
+**installing**. That is the gap #7331 closed. The paragraph is the notice; asking for a one-line
+reply is the assent evidence.
+
+> **Do not reinstate the withdrawn lead.** An earlier draft opened this paragraph with *"it runs on
+> your machine, on your key — I can't see your repo."* It is warm, quotable, and **false in both
+> halves for tester #1**: the 2026-08-06 session ran on the operator's machine under a Jikigai key,
+> and the operator does hold repository access. It is exactly the sentence a copywriter would keep.
+> Do not.
+
+### Step 2b — Tester #1 only: the retroactive note
+
+Tester #1 was onboarded on 2026-08-06, **before** any of the above existed, and one guided session
+already ran under a Jikigai Anthropic key. Send this **in addition to** — not merged into — the
+welcome block, so it reads as the correction it is rather than as boilerplate.
+
+```text
+One correction I owe you from our setup session.
+
+That session ran on my machine using my own Anthropic API key rather than yours.
+Two things follow that you should know. Your content passed through my Anthropic
+account, which currently has a 30-day retention window on it - for our session that
+expires around 5 September. And while the work was what you asked for, I was also
+learning from how Soleur handled your codebase, which is my own purpose, not yours.
+
+I should have had an agreement in place with you before that session, and I didn't.
+The terms above are that agreement going forward; they don't apply backwards, and
+I'm not going to pretend otherwise.
+
+From now on I'll use your machine and your key, or I won't run it at all.
+```
+
+**What this message is and is not.** It is candour about a lawfulness-and-documentation gap. It is
+**not** a personal-data breach notification: no security control failed and the disclosure was
+requested, so no Art. 33 clock is running. Do not escalate it into one, and do not soften it into
+nothing.
+
+**What it must not claim.** Do not tell the tester "no personal data was involved." The
+reconstruction supports a narrower statement — no records from their venture database were read,
+and the working material was schema, configuration, tests and documentation — but a fixtures file
+containing officer records was present in the tree and a read of it cannot be positively excluded.
+See `knowledge-base/project/specs/feat-one-shot-7331-alpha-tester-terms-dpa/session-scope-reconstruction.md`.
 
 ---
 
@@ -134,6 +190,12 @@ Company-level only, per Step 3.
 ---
 
 ## Step 5 — Run the session and observe
+
+> **⛔ Before running anything, apply the hard gate.** See §"Operating rule — whose machine, whose
+> key, whose purpose?" below. In short: use the **tester's** machine and the **tester's** API key, or
+> do not run. A Jikigai-keyed run against tester content needs an Art. 28(3) instrument in place
+> first (`knowledge-base/legal/2026-08-06-alpha-tester-processing-annex.md`, currently unexecuted).
+> This gate is the reason this runbook exists in its present form — it was crossed on 2026-08-06.
 
 #1441's stated observations. Capture these in `interview_notes` (database, not git):
 
@@ -187,7 +249,7 @@ CLI plugin there is no server-side telemetry**, so most of it is not observable.
 
 | #1442 metric | Hosted platform | Self-hosted CLI |
 |---|---|---|
-| Knowledge-base growth | Yes | **Yes** — git history on the tester's own `knowledge-base/` tree (requires collaborator access) |
+| Knowledge-base growth | Yes | **Yes** — git history on the tester's own `knowledge-base/` tree. **Does NOT require collaborator access:** a tester-supplied `git log --stat`, or commit/file/directory counts, yields the same figure. Collaborator access buys independent verifiability, not the metric — and it is what puts Jikigai in a controller posture (PA-35). Prefer the aggregate route. |
 | Returns / session frequency | Yes | **No** |
 | Non-engineering agent usage | Yes | **No** |
 
@@ -200,9 +262,13 @@ State the surface alongside any finding.
 
 Update this table at Step 1 of every onboarding.
 
-| Tester | Company | Claude Code user? | Surface | Onboarded |
-|---|---|---|---|---|
-| #1 | Skouer | Yes | Self-hosted CLI | 2026-08-06 |
+| Tester | Company | Claude Code user? | Surface | Onboarded | Terms |
+|---|---|---|---|---|---|
+| #1 | Skouer | Yes | Self-hosted CLI | 2026-08-06 | `sent-awaiting-reply` (sent retroactively — onboarding began before the terms existed) |
+
+**`Terms` values:** `agreed` (tester replied), `sent-awaiting-reply`, or `not-required`. Update at
+Step 1. A tester at `sent-awaiting-reply` may still be worked with; a tester at blank has not been
+sent anything and that is the state this column exists to make visible.
 
 | | Claude Code users | Non-Claude-Code users |
 |---|---|---|
@@ -214,13 +280,73 @@ cannot be recovered afterwards.
 
 ---
 
-## Known gap
+## Operating rule — whose machine, whose key, whose purpose?
 
-No alpha-tester terms exist, and the controller/processor posture for tester-owned repository data
-is undetermined — tracked in [#7331](https://github.com/jikig-ai/soleur/issues/7331). Where a
-tester's own product holds third-party personal data, resolve #7331 **before** Soleur agents
-operate on their repository in earnest. Once resolved, an agreement step belongs in this runbook
-between Steps 1 and 2.
+This replaces the former "Known gap" section. The posture **was** determined on 2026-08-06:
+`knowledge-base/legal/audits/2026-08-06-alpha-tester-controller-processor-determination.md`.
+
+Apply one question before any session against a tester's content — **whose machine, whose API key,
+whose purpose?**
+
+| Posture | Condition | Jikigai's role | What you need first |
+|---|---|---|---|
+| **A** | All three the tester's | **Neither** controller nor processor | Nothing. This is the default and the safe one. |
+| **B** | Tester content reaches a Jikigai machine, credential or account | **Processor** | An Art. 28(3) instrument, **before** the run |
+| **C** | Jikigai reads tester content for **Soleur's own** purpose | **Controller** | A lawful basis + LIA + Art. 14 notice |
+
+### The four Posture B triggers
+
+1. The tester connects their repository to the **hosted platform**.
+2. **The operator runs Soleur agents against tester code or data on the operator's own machine
+   under a Jikigai Anthropic key**, at the tester's request (guided onboarding, a debugging
+   session). — **⚠ THIS FIRED on 2026-08-06 with tester #1.** The instrument it requires did not
+   exist. That is the whole reason this section exists; see the determination.
+3. The tester sends a repository copy, database dump, fixture, `.env`, or DB credential by any
+   channel.
+4. Jikigai holds any credential to a tester system (their hosting, their database, a deploy token).
+
+Triggers 1, 3 and 4 have **not** fired. Treat them as prospective.
+
+### ⛔ Hard gate — no Jikigai-keyed runs against tester content
+
+**Until an Art. 28(3) instrument is in place with that tester: use the tester's machine and the
+tester's own API key, or do not run.**
+
+This is the one control that depends on nobody drafting anything, and it is what makes deferring
+counsel spend legitimate rather than negligent. It is not advice — it is the precondition for
+running a guided session at all.
+
+If a future tester makes a Jikigai-keyed run genuinely unavoidable, **that** is the moment to buy
+the single counsel review of the bilateral instrument — once, reusable across all ten testers.
+
+### Collaborator access on a tester's repository
+
+**Standing rule: do not accept it.** It buys **independent verifiability** of one #1442 metric of
+three — not the metric itself, which a tester-supplied `git log --stat` or a commit/file/directory
+count yields without any access (see the measurability caveat above, which states this in the same
+terms; an earlier draft of this section said the access bought the metric, contradicting it).
+
+**Tester #1 is an exception, and it is papered rather than pretended away.** The operator holds
+collaborator access to Skouer's private repository and reads its `knowledge-base/` tree for #1442.
+That is Posture C — Jikigai as controller. It is recorded at **PA-35** in the Article 30 register
+and assessed in
+`knowledge-base/legal/legitimate-interest-assessments/2026-08-06-alpha-tester-repo-observation-lia.md`.
+
+The LIA's own recommendation is to **re-derive the metric to non-personal aggregates** (commit
+counts, file counts, directory growth) rather than reading repository content — same metric, out of
+Art. 4(1) scope almost entirely, costs nothing. Prefer that for testers 2–10 rather than repeating
+the exception by inertia.
+
+**Never republish observed content.** Nothing read under this access may enter a Soleur commit,
+issue, digest, case study or marketing artifact. This is the PA-32 failure mode (80 digests
+published carrying third-party handles, never deleted) and it is named here so it cannot be reached
+by inattention.
+
+### Offboarding — at end of alpha
+
+- Revoke collaborator access on every tester repository.
+- Delete local clones and retained feedback artifacts.
+- Confirm in writing to the tester within **30 days**.
 
 ## Related
 
