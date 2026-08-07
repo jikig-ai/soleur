@@ -140,7 +140,7 @@ replacing the canonical three. Every generated file carries a
 producer **refuses to overwrite a file lacking that header**. This mirrors the
 non-destructive contract Phase 2's `domain-model` already has.
 
-**1.5 Filter deprecated components.** `sync.md:151` — *"Removed components: Add
+**1.5 Filter deprecated components.** `sync.md` §Project Analysis "Removed components" — *"Removed components: Add
 `status: deprecated` to frontmatter (do not delete)"*. Without a frontmatter
 filter, the element set accretes deleted components forever and a deprecated doc's
 `## Dependencies` links create dangling edges. Skip `status: deprecated` docs.
@@ -172,14 +172,15 @@ fixture), `plugins/soleur/test/c4-from-components.test.sh`.
 "Remove `domain-model` from the `all`-dispatch exclusion list" is a one-line edit
 that **cannot work**. Three independent blockers, all verified:
 
-1. **It dies on a fresh repo.** `scripts/domain-model-drift.sh:161` (and `:240`):
+1. **It dies on a fresh repo.** `scripts/domain-model-drift.sh` — the `realpath -e`
+   guards in `drift` and `write_row`:
    `realpath -e -- "$reg" || die "--register does not resolve to an existing file"`.
    A new customer has no `knowledge-base/engineering/architecture/domain-model.md`.
    Nothing bootstraps it.
 2. **It writes nothing headless.** The write step is per-row `AskUserQuestion`-gated
-   (`sync.md:196-207`), and the Headless Contract §4 auto-skips interactive gates.
+   (`sync.md` §Domain Model Analysis, the per-row `AskUserQuestion` step), and the Headless Contract §4 auto-skips interactive gates.
    Even with a bootstrap, run 1 writes **zero rows**.
-3. **The area is terminal by construction.** `sync.md:212`: *"Skip Phase 2 through
+3. **The area is terminal by construction.** `sync.md` §Domain Model Analysis "Skip Phase 2 through Phase 4": *"Skip Phase 2 through
    Phase 4 when the area is `domain-model` — the drift report + approval-gated
    write ARE the output."* Folding it into `all` contradicts its own contract.
 
@@ -195,7 +196,7 @@ absent. Idempotent: a no-op exit 0 when the file already exists. The subcommand
 owns this because the file-shape knowledge already lives there — `write-row`
 depends on the exact heading text to find its append target.
 
-Do **not** relax the `realpath -e` guards at `:161` / `:240`. They are correct for
+Do **not** relax the `realpath -e` guards at `drift`'s and `write_row`'s `realpath -e` guards. They are correct for
 `drift` and `write-row`, which must never operate on a path they cannot resolve.
 `init` is the one command allowed to create.
 
@@ -215,7 +216,7 @@ fail-closed secret-shape refusal, content-anchor dedup (so re-runs are no-ops),
 atomic temp-then-rename write, appends only under `## Auto-inferred (unreviewed)`,
 never mints a `BR-*` id, never touches the curated table.
 
-**2.3 Reconcile the terminal-area contract.** `sync.md:212` stays true for an
+**2.3 Reconcile the terminal-area contract.** `sync.md` §Domain Model Analysis "Skip Phase 2 through Phase 4" stays true for an
 explicit `/soleur:sync domain-model` invocation — drift report plus approval-gated
 write remain that path's output. Add a distinct `all`-dispatch path that runs
 `init` → `drift` → headless append, and feeds its row counts into the Phase 3
@@ -436,7 +437,7 @@ where the disposition is *acknowledge*: different lines, and the rewire removes
 6. `domain-model` no longer appears in sync.md's `all`-dispatch exclusion list.
 7. `domain-model-drift.sh init --register <absent-path>` creates a register with
    both canonical headings; re-running is a no-op exit 0. The `realpath -e` guards
-   at `:161` / `:240` are **unchanged** (`drift` and `write-row` still die on an
+   at `drift`'s and `write_row`'s `realpath -e` guards are **unchanged** (`drift` and `write-row` still die on an
    unresolvable path).
 8. Headless append writes rows only under `## Auto-inferred (unreviewed)`. Asserted
    against a fixture register whose curated `## Business Rules` table is
@@ -445,7 +446,7 @@ where the disposition is *acknowledge*: different lines, and the rewire removes
    content refused fail-closed; a duplicate content anchor is a no-op; the write is
    atomic; no `BR-*` id is minted.
 10. An explicit `/soleur:sync domain-model` invocation still terminates after the
-    drift report (the `sync.md:212` contract), while the `all` path continues into
+    drift report (the `sync.md` §Domain Model Analysis "Skip Phase 2 through Phase 4" contract), while the `all` path continues into
     the coverage summary. Both asserted.
 11. `kb-coverage.md` is byte-identical across two consecutive runs on an unchanged
    KB.

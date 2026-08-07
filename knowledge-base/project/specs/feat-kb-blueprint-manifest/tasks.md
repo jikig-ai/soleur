@@ -51,7 +51,7 @@ scope: PR 1 (CLI producers). PR 2 (manifest + dashboard) is deferred and scoped 
 - [x] Write `plugins/soleur/test/c4-from-components.test.sh` (RED).
 - [x] Implement `plugins/soleur/lib/c4-from-components.ts`: read `dependencies:`
       frontmatter; fall back to `**Internal**: [name](name.md)` link extraction.
-- [x] Skip docs whose frontmatter carries `status: deprecated` (`sync.md:151` never
+- [x] Skip docs whose frontmatter carries `status: deprecated` (`sync.md` §Project Analysis "Removed components" never
       deletes removed components — without this the element set accretes forever
       and deprecated docs create dangling edges).
 
@@ -88,7 +88,7 @@ scope: PR 1 (CLI producers). PR 2 (manifest + dashboard) is deferred and scoped 
 - [x] Add `init --register <path>` to `scripts/domain-model-drift.sh`: seeds both
       canonical headings (`## Business Rules`, `## Auto-inferred (unreviewed)`);
       idempotent no-op exit 0 when the file exists.
-- [x] **Leave the `realpath -e` guards at `:161` and `:240` unchanged** — `drift`
+- [x] **Leave the `realpath -e` guards at `drift`'s and `write_row`'s `realpath -e` guards unchanged** — `drift`
       and `write-row` must still die on an unresolvable path. Only `init` creates.
 
 ### 2.2 Headless append
@@ -102,7 +102,7 @@ scope: PR 1 (CLI producers). PR 2 (manifest + dashboard) is deferred and scoped 
 
 ### 2.3 Reconcile the terminal-area contract
 - [x] Explicit `/soleur:sync domain-model` still terminates after the drift report
-      (`sync.md:212`).
+      (`sync.md` §Domain Model Analysis "Skip Phase 2 through Phase 4").
 - [x] New `all`-dispatch path: `init` → `drift` → headless append → feed row counts
       into the Phase 3 coverage summary. Both behaviours asserted.
 
