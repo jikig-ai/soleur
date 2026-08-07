@@ -354,6 +354,16 @@ If agent spawning is unavailable or unauthorized:
    re-run before shipping, emitted no trailer, and still left `/ship` as the next step. The
    re-run found ~60 findings, 15 P1, 3 of them merge blockers.
 
+**Decide the agent set ONCE, and spawn it complete.** Running a partial panel and then
+bolting on a "gap-closer" agent costs a second full fix-verify-CI round for findings the
+first spawn would have surfaced in parallel. On #7325 the deferred `architecture-strategist`
+returned **five P2s**, including two the other six missed entirely — so the gap-closer was
+worth running, and running it *late* is what cost an extra commit, an extra CI cycle, and an
+extra correction pass. If an agent is worth running at all, it belongs in the first spawn.
+If you catch a gap after the fact, run it — but record the cost so the next classification
+picks the right set up front, and note that the coverage trailer emitted before that agent
+ran will understate (`emit-review-trailer.sh` is idempotent; supersede by hand).
+
 **Gate 2b — did the agents that WERE spawned return?**
 
 After all parallel and conditional agents complete, check their outputs:
