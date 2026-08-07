@@ -26,8 +26,12 @@ import {
   canOverwrite,
   countModelJson,
   generateC4,
+  generateSpecC4,
+  generateViewPage,
+  generateViewsC4,
   loadComponentDir,
   parseComponentDoc,
+  toId,
 } from "../lib/c4-from-components";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
@@ -382,5 +386,75 @@ describe("drift guards", () => {
     const src = readFileSync(join(REPO_ROOT, "plugins/soleur/lib/c4-from-components.ts"), "utf8");
     expect(src).not.toMatch(/mirror\s+c4-render/i);
     expect(src).toMatch(/regenerate-c4-model\.sh/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The four exports that had ZERO test callers
+// ---------------------------------------------------------------------------
+//
+// Review found `toId`, `generateSpecC4`, `generateViewsC4` and `generateViewPage`
+// absent from the import list entirely — four pure string generators, trivially
+// testable, written without a test because they looked obvious. Two of the
+// surviving mutations were live defects rather than gaps:
+//
+//   * `toId` dropping camelCase left the suite green AND disarmed a second test —
+//     the e2e deprecated check greps for `legacyWorker`, an id `toId` produces, so
+//     changing the casing makes that guard structurally unable to fail.
+//   * `generateViewPage`'s fence naming a view `generateViewsC4` never declares
+//     renders nothing in the KB viewer — precisely what the e2e's "carries a
+//     likec4-view fence" assertion claims to prevent, while only checking that a
+//     fence exists.
+
+describe("toId — the identifier the generated .c4 depends on", () => {
+  it("camelCases across every separator kebab/snake/space", () => {
+    expect(toId("api-gateway")).toBe("apiGateway");
+    expect(toId("web_server")).toBe("webServer");
+    expect(toId("legacy worker")).toBe("legacyWorker");
+  });
+
+  it("produces a LikeC4-safe identifier from awkward input", () => {
+    // Emitted UNQUOTED as an identifier, so it must never start with a digit and
+    // must contain no separator characters.
+    expect(toId("2fa-service")).toMatch(/^[A-Za-z][A-Za-z0-9]*$/);
+    expect(toId("a.b/c:d")).toMatch(/^[A-Za-z][A-Za-z0-9]*$/);
+  });
+
+  it("never returns an empty identifier", () => {
+    expect(toId("---").length).toBeGreaterThan(0);
+    expect(toId("")).toMatch(/^[A-Za-z][A-Za-z0-9]*$/);
+  });
+});
+
+describe("the seeded artifacts", () => {
+  it("generateSpecC4 declares the `component` kind the generated model uses", () => {
+    const spec = generateSpecC4();
+    expect(spec.split("\n")[0]).toBe(GENERATED_HEADER);
+    // generateC4 emits `<id> = component "..."`; without this declaration every
+    // element is an unresolved reference and the whole render fails.
+    expect(spec).toMatch(/element\s+component\s*\{/);
+  });
+
+  it("generateViewsC4 declares the view generateViewPage's fence names", () => {
+    // THE pairing. Two independently-editable spellings of one identifier: if they
+    // desync the page renders nothing, and every existing assertion still passes
+    // because a fence is still present.
+    const views = generateViewsC4();
+    const declared = views.match(/view\s+([A-Za-z][A-Za-z0-9]*)\s*\{/);
+    expect(declared).not.toBeNull();
+
+    const page = generateViewPage();
+    const fence = page.match(/```likec4-view\n([A-Za-z][A-Za-z0-9]*)\n```/);
+    expect(fence).not.toBeNull();
+
+    expect(fence![1]).toBe(declared![1]);
+  });
+
+  it("generateViewsC4 carries the GENERATED header; the markdown page does not", () => {
+    expect(generateViewsC4().split("\n")[0]).toBe(GENERATED_HEADER);
+    // `//` is not a markdown comment — c4-model.md is protected by O_EXCL seeding
+    // instead, which is why the uniform "every file carries the header" claim was
+    // corrected at review.
+    expect(generateViewPage().split("\n")[0]).not.toBe(GENERATED_HEADER);
   });
 });
