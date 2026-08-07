@@ -346,9 +346,21 @@ export function generateC4(components: ParsedComponent[], edges: Edge[]): string
 }
 
 /**
- * Minimal `specification` block, emitted ONLY when the diagrams directory has no
- * other file declaring one. Without a `component` element kind, every generated
- * element is an unresolved reference and the whole render fails.
+ * Minimal `specification` block for the `component` element kind the generated model
+ * uses. Without it every generated element is an unresolved reference and the render
+ * fails.
+ *
+ * ‼️ The wrapper seeds this only when no file NAMED `spec.c4` exists — it does not
+ * scan the directory for an existing `specification` block. That distinction was
+ * previously stated the other way round, and the gap is reachable: a repo using the
+ * valid single-file LikeC4 layout (its `specification` inside `model.c4`) gets a
+ * SECOND `element component` declaration and the whole sync exits 1. Soleur's own
+ * diagrams dir has a discrete `spec.c4`, so dogfooding cannot surface it.
+ *
+ * Left as a filename check deliberately: scanning for a `specification` block means
+ * parsing every `.c4` in the directory, and the failure is loud (exit 1 with the
+ * likec4 diagnostic naming the duplicate) rather than silent. Recorded here so the
+ * next reader sees a known, bounded limitation instead of a false claim.
  */
 export function generateSpecC4(): string {
   return [
