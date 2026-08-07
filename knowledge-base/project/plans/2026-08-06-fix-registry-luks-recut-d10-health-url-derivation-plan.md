@@ -273,7 +273,7 @@ sourcing (a check that resolves to *no edit* and would have missed this).
 > argued to keep it under `wg-architecture-decision-is-a-plan-deliverable`. The
 > workflow gate is satisfied by an ADR *amendment*, which is one of its two named
 > outputs ("New decision → new ADR; divergence from or extension of an existing one →
-> amend that ADR"). Amending ADR-164 + ADR-096 discharges it. Recorded so the choice
+> amend that ADR"). Amending ADR-169 + ADR-096 discharges it. Recorded so the choice
 > is auditable; `deepen-plan` may reverse it. Cutting the new ADR also removes the
 > ordinal-collision surface entirely.
 
@@ -657,7 +657,7 @@ when the fix lands.
 
 ### Phase 8 — ADR work
 
-Amend **ADR-096** cold-vehicle item 3; widen **ADR-164**'s applicability by one
+Amend **ADR-096** cold-vehicle item 3; extend **ADR-169**'s independence criterion by one
 sentence; read **ADR-169** and amend only if it asserts the Doppler sourcing.
 
 ### Phase 9 — File the deferrals and fix the tracker
@@ -755,7 +755,7 @@ cold-vehicle section carries the live-input and `TF_VAR` checks, and its
 residual-blockers section names both live blockers.
 
 **AC10 — ADR-096 names the real provenance** and records that the originally-named
-secret never existed; ADR-164's applicability is widened.
+secret never existed; ADR-169's independence criterion is extended to addressing inputs.
 
 **AC11 — the Reversible Mitigation table is complete**, every row carrying a verdict and
 measured evidence.
@@ -838,7 +838,7 @@ secret.** Deferred (D1). Headroom measured at `B_ALWAYS=43776` against the 46000
 this PR ships one (W4).
 
 **A8 — Mint a new ADR for the destroy-authorizing rule.** Rejected in favour of widening
-ADR-164 — see Architecture Decision.
+ADR-169 — see Architecture Decision.
 
 ---
 

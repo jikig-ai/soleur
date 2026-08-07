@@ -163,3 +163,36 @@ W4 is implemented against the **recut chain** with both exclusions enumerated in
 Had AC1 been implemented literally, the only ways to satisfy it were to convert the web-host sites (reintroducing the risk three reviewers removed) or to weaken the grep until it passed. Both are worse than recording the contradiction.
 
 **Follow-up:** the remaining sites are tracked in the consolidated follow-up issue, with the wiring gate's allowlist as the mechanism that forces their retirement.
+
+## Work-phase challenge — AC10 named the wrong ADR, same class as AC1
+
+**Classification:** Mechanical — corrected, recorded because AC1's twin was recorded.
+
+The v3 consolidation ruled ADR-164 out as a **category error**: its mechanism is silent
+list-scoping making a denominator too small, which is not what happened here. The shipped work
+complied — it amended ADR-169 and ADR-096, and cited ADR-164 nowhere.
+
+But four earlier passages were never updated, and one of them was an acceptance criterion:
+
+| Line | Read |
+|---|---|
+| 276 | "Amending **ADR-164** + ADR-096 discharges it" |
+| 660 | Phase 8: "widen **ADR-164**'s applicability" |
+| **758** | **AC10: "ADR-164's applicability is widened"** |
+| 841 | A8: "Rejected in favour of widening **ADR-164**" |
+
+So **AC10 shipped unmet as written** — satisfying it literally would have required amending the
+ADR the same plan calls a category error. This is exactly AC1's shape (an acceptance criterion
+contradicting a decision made later in the same document), and it went unrecorded because the
+contradiction was invisible from the ACs alone: nothing in AC10 flags that ADR-164 had been
+ruled out 500 lines above it.
+
+All four corrected to ADR-169. Recorded rather than silently fixed, because "the plan
+contradicted itself in a way the ACs could not surface" is the reusable finding, not the
+four-line edit.
+
+**Residual, deliberately not fixed here:** `restore-pins.json` carries no provenance — no
+health URL, no base, no `version`/`build_sha`. `manifest_sha256` proves the set did not change
+between rehearsal and restore; it proves nothing about which host produced it, and the artifact
+is consumed post-destroy. Adding the three fields is additive but touches the restore engine's
+shape assertion, which is outside this change's scope. Tracked in the consolidated follow-up.
