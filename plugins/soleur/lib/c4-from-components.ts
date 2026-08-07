@@ -49,6 +49,52 @@ export const GENERATED_HEADER =
  */
 export const DIAG_RE = /^Invalid |Could not resolve|^\s+Line [0-9]+:/m;
 
+/** Marker sentinel for the C4 producer. */
+export const C4_MARKER = "SOLEUR_KB_SYNC_C4";
+
+/**
+ * Every numeric field the C4 marker emits, in emission order.
+ *
+ * ‼️ ALL of them appear on EVERY branch, even when the value is zero. The first
+ * version emitted a different field set per branch — `generated_*` and `published`
+ * only on the render path, `detail` only on the unavailable path, `docs` sometimes —
+ * so an agent parsing a fixed key set got missing keys with no way to tell
+ * absent-because-zero from absent-because-branch. `MARKER_FIELDS` in kb-coverage.ts
+ * already did this correctly; this is that pattern applied to the sibling producer,
+ * with a drift guard asserting both.
+ */
+export const C4_MARKER_FIELDS = [
+  "elements",
+  "relationships",
+  "generated_components",
+  "generated_relationships",
+  "skipped",
+  "seeded",
+  "published",
+] as const;
+
+export type C4MarkerCounts = Record<(typeof C4_MARKER_FIELDS)[number], number>;
+
+/**
+ * Build the C4 marker. One formatter, so no branch can omit a field.
+ *
+ * `reason` is a BARE TOKEN and `detail` carries prose — a consumer classifies on
+ * `reason=` without string-matching a sentence.
+ */
+export function formatC4Marker(
+  status: RenderVerdict["status"],
+  counts: C4MarkerCounts,
+  reason?: string,
+  detail?: string,
+): string {
+  const head =
+    `${C4_MARKER} status=${status}` +
+    (reason ? ` reason=${reason}` : "") +
+    (detail ? ` detail="${detail.replace(/"/g, "'").replace(/\s+/g, " ").trim()}"` : "");
+  const fields = C4_MARKER_FIELDS.map((f) => `${f}=${counts[f]}`).join(" ");
+  return `${head} ${fields}`;
+}
+
 export type DepSource = "frontmatter" | "links" | "none";
 
 export type ParsedComponent = {

@@ -25,7 +25,7 @@
 import { describe, expect, it } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import {
   EXPECTED_KB_PATHS,
@@ -242,5 +242,32 @@ describe("formatErrorMarker", () => {
 
   it("collapses embedded newlines in the reason rather than emitting a multi-line record", () => {
     expect(formatErrorMarker("c4", "line one\nline two")).not.toContain("\n");
+  });
+});
+
+describe("EXPECTED_KB_PATHS — entries must be paths a producer really writes", () => {
+  // The list shipped with `overview/constitution.md` while sync.md's Definition Sync
+  // reads and writes `project/constitution.md`. Nothing caught it because every test
+  // indexed the constant it was pinning (`[0]`, `[1]`, `.length`) — fully
+  // self-referential — so the artifact would have reported a permanent
+  // "no constitution present" line against a file one directory away, in every
+  // customer repo.
+  const syncMd = readFileSync(
+    join(resolve(import.meta.dir, "../../.."), "plugins/soleur/commands/sync.md"),
+    "utf8",
+  );
+
+  it("the constitution entry matches the path sync.md actually reads and writes", () => {
+    const documented = syncMd.match(/knowledge-base\/(project\/constitution\.md)/);
+    expect(documented).not.toBeNull();
+    expect(EXPECTED_KB_PATHS).toContain(documented![1]);
+  });
+
+  it("is sorted, so ordering can never follow edit history", () => {
+    expect([...EXPECTED_KB_PATHS]).toEqual([...EXPECTED_KB_PATHS].sort());
+  });
+
+  it("contains no duplicate entries", () => {
+    expect(new Set(EXPECTED_KB_PATHS).size).toBe(EXPECTED_KB_PATHS.length);
   });
 });
