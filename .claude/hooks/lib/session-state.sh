@@ -242,18 +242,87 @@ release_lease() {
   lease_pid=$(_lease_read_field "$lease_file" pid)
   lease_host=$(_lease_read_field "$lease_file" hostname)
   lease_started=$(_lease_read_field "$lease_file" started_at)
+  # Same host is a hard requirement: a shared LEASE_DIR can carry other machines'
+  # leases and this process cannot reason about their liveness at all.
+  [[ "$lease_host" == "$HOSTNAME" ]] || return 0
+  [[ -n "$lease_started" ]] || return 0
+
+  # TWO owners can release, and the second one is why this function used to do
+  # NOTHING. Measured before this change: the DOCUMENTED call —
+  #   bash .claude/hooks/lib/session-state.sh release_lease "$(basename "$PWD")"
+  # which both one-shot and work tell you to run at the end — returned rc=0 and
+  # deleted no file, because a fresh process has a different `$$` and an empty
+  # `_LEASE_ACQUIRED_STARTED_AT`, so the in-process conjunction could never
+  # match. It reported success while leaking the lease. That is not a stricter
+  # guard; it is an unreachable one.
+  #
+  #   in-process  — pid == $$ AND the started_at we recorded at acquire time.
+  #                 This is the trap path, and started_at still guards PID reuse.
+  #   post-exit   — the recorded pid is DEAD. The session that held it is gone,
+  #                 so releasing is correct and is what the CLI call needs.
+  #
+  # A lease held by a DIFFERENT, still-LIVE process on this host matches neither
+  # arm and is refused — which is the property the original guard was reaching
+  # for and is the only one worth keeping.
+  local owner=""
   if [[ "$lease_pid" == "$$" ]] \
-     && [[ "$lease_host" == "$HOSTNAME" ]] \
-     && [[ -n "$lease_started" ]] \
      && [[ -n "${_LEASE_ACQUIRED_STARTED_AT[$worktree]:-}" ]] \
      && [[ "$lease_started" == "${_LEASE_ACQUIRED_STARTED_AT[$worktree]}" ]]; then
+    owner="in-process"
+  elif [[ -n "$lease_pid" ]] && ! kill -0 "$lease_pid" 2>/dev/null; then
+    owner="post-exit"
+  fi
+
+  if [[ -n "$owner" ]]; then
     rm -f "$lease_file"
     unset "_LEASE_ACQUIRED_STARTED_AT[$worktree]"
   fi
   return 0
 }
 
-# Returns 0 (active) iff PID alive, hostname matches, and age < max(expected,4h).
+# Returns 0 (active) iff hostname matches and age is inside the window computed
+# by _lease_window_seconds (declared duration, clamped to [4h, 24h]). PID
+# liveness is deliberately NOT required — see the note in is_lease_active.
+# How long a lease is honoured, in seconds, from a raw expected_duration_min
+# field. ONE definition, because is_lease_active and sweep_orphan_leases must
+# agree exactly — and when this logic was duplicated they did not:
+#
+#   * FLOOR 4h  — a short declared duration should not make a lease reapable
+#                 while the session is plainly still working.
+#   * CEILING 24h — the field is operator-supplied via SOLEUR_EXPECTED_DURATION_MIN
+#                 and validated only as "digits". Unbounded, a typo (240000 for
+#                 240) silently disables cleanup-merged for MONTHS: the lease
+#                 reads ACTIVE forever and, in the cleanup path, nothing else
+#                 reaps it. Pinning the ceiling to the same 24h as the mtime
+#                 sweep is what makes "the 24h sweep is the backstop" TRUE
+#                 rather than merely claimed. Measured before the clamp: a
+#                 20-day-old lease with expected_duration_min=525600 read ACTIVE.
+#   * NON-NUMERIC -> 240 (the documented default), never bare arithmetic. Under
+#                 `set -u`, `$(( abc * 60 ))` treats `abc` as an unset variable
+#                 name and ERRORS; is_lease_active is called from inside an `if`,
+#                 so `set -e` is suspended and that error was read as "no active
+#                 lease" — i.e. a fresh lease with one corrupt field became
+#                 REAPABLE. Fail closed on corrupt input, never open.
+_lease_window_seconds() {  # $1 raw expected_duration_min
+  local mins="${1:-}"
+  [[ "$mins" =~ ^[0-9]+$ ]] || mins=240
+  # `10#` forces base 10. WITHOUT it this fails OPEN, which is the whole class
+  # this function exists to close: `^[0-9]+$` ACCEPTS a leading zero, bash reads
+  # a leading-zero token as OCTAL, and 8/9 are not octal digits — so `08`/`09`/
+  # `090` pass validation and then ERROR in the arithmetic. `cap` is never
+  # assigned, the function prints nothing, and both callers read an empty window:
+  # `(( age < "" ))` is false (INACTIVE -> reapable) and `(( age >= "" ))` is
+  # true (the sweep deletes it). Measured on a 0-second-old lease: INACTIVE and
+  # SWEPT in the same pass — #7278's exact signature through a different door.
+  # `0700` does not error and is worse for being quiet: octal 448 min, not 700.
+  # T12 missed this because `abc` is REJECTED by the regex; the escaping input
+  # is one the regex ACCEPTS. Pinned by T12's `090` case.
+  local cap=$(( 10#$mins * 60 ))
+  (( cap < 14400 )) && cap=14400
+  (( cap > 86400 )) && cap=86400
+  printf '%s\n' "$cap"
+}
+
 is_lease_active() {
   local worktree="$1"
   _session_state_disabled && return 1
@@ -269,12 +338,49 @@ is_lease_active() {
 
   [[ -n "$lease_pid" ]] || return 1
   [[ "$lease_host" == "$HOSTNAME" ]] || return 1
-  kill -0 "$lease_pid" 2>/dev/null || return 1
 
-  # Age cap: max(expected*60, 4h floor)
-  local floor=14400
-  local cap=$(( lease_expected * 60 ))
-  (( cap < floor )) && cap=$floor
+  # NO `kill -0 "$lease_pid" || return 1` HERE — that line reaped two live
+  # worktrees on 2026-08-06 (#7278), and it could never have worked.
+  #
+  # `acquire_lease` records `pid=$$`, and every DOCUMENTED entry point is a
+  # short-lived process:
+  #
+  #     bash .claude/hooks/lib/session-state.sh acquire_lease <worktree>
+  #     bash .../worktree-manager.sh --yes create <branch>
+  #
+  # so `$$` is a bash that exits within milliseconds of writing the file.
+  # A pid-liveness gate therefore reported INACTIVE for every CLI-acquired
+  # lease the instant it was taken — the file existed, carried its full
+  # remaining duration, and protected nothing. cleanup-merged then removed
+  # the worktree, deleted the branch locally AND on origin, and closed the PR.
+  #
+  # A lease is a TIME-BOXED RESERVATION; the age cap below is the authority.
+  # PID liveness is only an optimisation for releasing early, and a session
+  # that finishes cleanly calls `release_lease` (which still verifies pid +
+  # hostname + started_at before releasing). The cost of this change is that
+  # a CRASHED session holds its worktree until the window closes, bounded by
+  # max(expected_duration, 4h) here and by the 24h mtime sweep below. That is
+  # the correct direction to fail: a worktree kept slightly too long is
+  # recoverable, a worktree reaped mid-run is not.
+  #
+  # The bound is the window computed by _lease_window_seconds, which is CLAMPED
+  # to 24h. Do not restate it as "and the 24h mtime sweep backstops this" without
+  # checking: an earlier draft of this comment said exactly that and it was FALSE
+  # in the path that matters — sweep_orphan_leases was reachable only from the
+  # `create` subcommand, never from cleanup_merged_worktrees. That is now also
+  # wired (worktree-manager.sh calls the sweep at the top of cleanup), but the
+  # clamp is what makes the bound hold regardless.
+  #
+  # Pinned by T9/T9b (a dead acquirer stays active + unswept inside the
+  # window) and T10 (an expired lease is still inactive, so this is not an
+  # immortality bug) in session-state.test.sh.
+
+  # Age cap: see _lease_window_seconds. Computed there, not inline, because
+  # sweep_orphan_leases needs the IDENTICAL number and two copies already
+  # drifted once (one validated the field, one did not — the unvalidated copy
+  # fail-OPENED under `set -u`, which on this path means "reap it").
+  local cap
+  cap=$(_lease_window_seconds "$lease_expected")
 
   # Anchor started_at to the strict ISO-8601-Z format we always write
   # ourselves (date -u +%Y-%m-%dT%H:%M:%SZ). A malformed or natural-language
@@ -302,7 +408,9 @@ is_lease_active() {
   return 1
 }
 
-# Sweep orphan leases: PID dead OR mtime > 24h.
+# Sweep orphan leases. Deletes on: mtime > 24h, OR (pid dead AND same host AND
+# past its own window). The pid-dead arm is deliberately NOT sufficient on its
+# own — see is_lease_active for why a dead pid is not orphan evidence here.
 sweep_orphan_leases() {
   _session_state_disabled && return 0
   _session_state_init_dirs
@@ -318,14 +426,49 @@ sweep_orphan_leases() {
       rm -f "$f"
       continue
     fi
-    lease_pid=$(_lease_read_field "$f" pid)
+    lease_pid=$(_lease_read_field "$f" pid) || true
     if [[ -n "$lease_pid" ]] && ! kill -0 "$lease_pid" 2>/dev/null; then
       # Dead PID — but only sweep if same hostname (don't reap remote-host
       # leases that share the LEASE_DIR via shared filesystem).
       local lease_host
-      lease_host=$(_lease_read_field "$f" hostname)
+      lease_host=$(_lease_read_field "$f" hostname) || true
       if [[ "$lease_host" == "$HOSTNAME" ]]; then
-        rm -f "$f"
+        # ...AND only once the lease is past its own window. A dead pid alone
+        # is NOT orphan evidence: `acquire_lease` records `pid=$$`, which for
+        # every documented CLI entry point belongs to a process that exits
+        # immediately (see the long note in is_lease_active). Sweeping on a
+        # dead pid alone deleted the lease file BEFORE worktree-manager
+        # consulted is_lease_active — so the downstream check found no file
+        # and the reap proceeded. That is #7278, twice, on 2026-08-06.
+        #
+        # is_lease_active is the single source of truth for "still held";
+        # the 24h mtime cap above remains the backstop for a truly abandoned
+        # file. Pinned by T9b.
+        # `|| true` on every field read: `_lease_read_field` returns 1 for a
+        # missing field AND for a file that has vanished since the glob, and a
+        # sibling releasing its lease mid-sweep is an ordinary race, not an
+        # error. Bare assignments here abort the caller under `set -e` — and the
+        # caller is cleanup-merged, so the blast radius is every maintenance
+        # step after it. An empty value is handled below; a dead caller is not.
+        local lease_started lease_expected lease_cap started_epoch lease_age
+        lease_started=$(_lease_read_field "$f" started_at) || true
+        lease_expected=$(_lease_read_field "$f" expected_duration_min) || true
+        # Same window as is_lease_active, from the same function — these two
+        # MUST agree, and when the arithmetic was duplicated here they did not.
+        lease_cap=$(_lease_window_seconds "$lease_expected")
+        started_epoch=""
+        if [[ "$lease_started" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+          started_epoch=$(date -d "$lease_started" +%s 2>/dev/null || echo "")
+        fi
+        if [[ -z "$started_epoch" ]]; then
+          # Unparseable started_at: fall back to mtime, which the 24h cap
+          # above already governs. Leave it for that cap rather than guessing.
+          continue
+        fi
+        lease_age=$(( now_epoch - started_epoch ))
+        if (( lease_age >= lease_cap )); then
+          rm -f "$f"
+        fi
       fi
     fi
   done
@@ -336,8 +479,26 @@ sweep_orphan_leases() {
 # Multi-signal trap helper. Body is unset-variable safe via local set +u.
 _register_lease_release_trap() {
   local worktree="$1"
+  # NOT `EXIT` — that is what made the lease layer unreachable in production.
+  #
+  # `create_worktree` acquires the lease and registers this trap IN THE SAME
+  # PROCESS, and that process exits normally on success. With EXIT armed, the
+  # trap fired on that success and deleted the lease before `create` had even
+  # printed its path. Measured: the leases directory is EMPTY the instant
+  # `worktree-manager.sh --yes create` returns. So a worktree made the
+  # DOCUMENTED way (what one-shot and work both invoke) carried no lease at all,
+  # and `is_lease_active` returned at its `[[ -f "$lease_file" ]]` guard — every
+  # protection below that line was dead code for the path that matters.
+  #
+  # Normal process exit is not session end. That is this change's whole thesis,
+  # applied to the write side: the CLI process is short-lived BY DESIGN, and the
+  # session it acquired for outlives it by hours.
+  #
+  # The abnormal signals stay: those do mean the holder died, and releasing then
+  # is correct. Clean release is the caller's explicit `release_lease` (now
+  # reachable post-exit — see the owner arms there), plus the window as backstop.
   # shellcheck disable=SC2064
-  trap "_lease_release_safe '$worktree'" EXIT INT TERM HUP
+  trap "_lease_release_safe '$worktree'" INT TERM HUP
 }
 
 _lease_release_safe() {
