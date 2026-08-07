@@ -172,6 +172,45 @@ gate, because it gets read as evidence.
    previous version of this check ran the suite under `doppler run -c prd_terraform` and named a
    rotated `SENTRY_AUTH_TOKEN` as the failure mode; both stopped describing the gate at #7277.
 
+   **Also check the gate's LIVE INPUT, not only its logic.** The suites above are hermetic — they
+   would stay green against a workflow wired to a source that does not exist, which is exactly
+   what shipped. Run the derivation itself and confirm it yields a bare base domain whose
+   `/health` answers:
+   ```bash
+   bash scripts/derive-app-domain-base.sh            # expect: soleur.ai (stdout), resolution line on stderr
+   bash scripts/derive-app-domain-base.test.sh       # the derivation's own unit suite
+   bash tests/scripts/test-registry-d10-workflow-wiring.sh   # proves the workflow USES it
+   curl -s -o /dev/null -w '%{http_code}\n' "https://app.$(bash scripts/derive-app-domain-base.sh)/health"
+   ```
+   The `curl` must print `200`, and it must be built from the script's own output rather than a
+   typed domain — a hand-typed URL tests your typing, not the gate's input.
+
+   **Assert no Terraform override is in play.** The derivation honours `TF_VAR_app_domain_base`
+   ahead of the committed default, mirroring Terraform's own precedence. Absent an override the
+   committed `variables.tf` value IS what Terraform applied; if one appears, that is the value
+   production runs on and the base changes with it:
+   ```bash
+   [[ -z "${TF_VAR_app_domain_base:-}" ]] && echo "no exported override"   # tier 1 reads the PROCESS ENV
+   doppler secrets -p soleur -c prd_terraform --only-names | grep -c APP_DOMAIN_BASE || true   # expect 0
+   ```
+   The first line is the one that matches this step's heading: the derivation's override tier
+   reads `TF_VAR_app_domain_base` from the environment, so a Doppler check alone would pass
+   while an exported override silently drove the `curl` above it. Measured 2026-08-06: no
+   export, and `APP_DOMAIN_BASE` absent from **all 13** configs. The secret the old gate read
+   never existed anywhere.
+
+   **Also assert the host variable has not drifted.** `app_domain` and `app_domain_base` are
+   INDEPENDENT Terraform variables, and `app_domain` is the one with a live lever — `APP_DOMAIN`
+   IS present in `prd_terraform` (`app.soleur.ai`), so `TF_VAR_app_domain` is injected on every
+   apply. A domain move performed the only way it can be performed today would shift production
+   while the gate kept measuring the old host:
+   ```bash
+   doppler secrets get APP_DOMAIN -p soleur -c prd_terraform --plain   # expect app.<derived base>
+   ```
+   The derivation aborts on a *committed* divergence by itself; this covers the live-override
+   half, which it deliberately cannot see (reading Doppler is what this change removed from the
+   gate).
+
 2. **Both Hetzner probes return the shape the gate parses.**
    ```bash
    HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)
@@ -253,7 +292,9 @@ The job prints a line of counters before it decides. Find your case here.
 |---|---|---|
 | `requires confirm=RECUT-REGISTRY-LUKS` | Typo, or you used the *workspaces* recut token. | Re-fire with the right token. Nothing happened. |
 | `requires expected_registry_store_volume_id` | The id was missing or not a plain number. | Re-run Step 1 and re-fire. Nothing happened. |
-| `registry-pull-path-health: A0 ABORT` | Could not derive the restore inventory: `/health` unreachable, unparseable, or missing `version`/`build_sha`. | **Nothing was destroyed.** `/health` is served by already-running containers and survives a zot outage, so this is not a zot symptom — check `APP_DOMAIN_BASE` in Doppler `soleur/prd` and that `app.<domain>/health` answers. |
+| `registry-pull-path-health: A0 ABORT` | Could not derive the restore inventory: `/health` unreachable, unparseable, or missing `version`/`build_sha`. | **Nothing was destroyed.** This names the HTTP read, which is the only thing A0 measures. `/health` is served by already-running containers and survives a zot outage, so it is not a zot symptom — check that `app.<domain>/health` answers. Do **not** go looking for `APP_DOMAIN_BASE` in Doppler: it is not there, in any config, and was never the source. A base-domain problem surfaces as the separate `derive-app-domain-base` error below, not as A0. |
+| `::error::derive-app-domain-base[D10-PREPARE]: …` or `[D10-VERDICT]` | The base domain could not be derived from `apps/web-platform/infra/variables.tf` — the file is missing, `variable "app_domain_base"` has no readable `default =`, or the value is malformed (a scheme, a slash, whitespace, no dot, or an `app.` prefix). | **Nothing was destroyed** — the bracketed phase says so. The message names the file and the variable. This is a committed-config problem, not a credential one: no token to rotate, no secret to set. |
+| `::error::derive-app-domain-base[registry-bridge]: …` | Same derivation, but from the **refill leg** (`registry_store_restore`), which runs AFTER the destroy. | **The store is already gone.** Do NOT read this as a pre-destroy abort — go to the restore-failure rows below, not the ones above. The same marker also appears in `reusable-release.yml` and the two inngest image builds, which have nothing to do with a recut. |
 | `registry-pull-path-health: A1 ABORT` | A required image could not be resolved at GHCR. The message carries the classified cause. | **Nothing was destroyed.** On `NOTFOUND`, note the wording: GHCR returns the same error for *absent* and *not visible to this credential*, so check the job's `packages: read` permission before concluding a tag was deleted. |
 | `registry-pull-path-health: A2 ABORT` | The **rehearsed restore failed**, so the pass condition was never established. The message names the restore engine's exit code. | **Nothing was destroyed.** Map the code with the restore table below — the rehearsal exercises the same engine the real restore uses. |
 | `registry-pull-path-health: A3 ABORT` | The inventory came in below its declared floor — fewer required images resolved than production depends on. | **Nothing was destroyed.** This is the anti-vacuity guard; the message names which pin was missed. Do not lower the floor to get past it. |
@@ -421,7 +462,53 @@ pin, and re-deriving it means going back to Step 1.
   > `var.registry_server_type` defaults to `cx23`, which is unorderable in `hel1-dc2`,
   > the datacenter this host runs in. Repinning to `cpx22` is the only walkable lever past it
   > (Hetzner inventory is not closable by any issue), and it carries a **+€14.00/mo** cost decision.
-  This is the live blocker.
+  > This is the live blocker.
+
+  (That last sentence had lost its `>` prefix, so it read as a current claim two lines below
+  `RESOLVED` — restored into the quote rather than deleted, since the original text is a dated
+  record.)
+
+## Addendum — 2026-08-06: two further blockers, both since cleared
+
+Neither was listed above when this runbook said the stock gate was the remaining blocker. Both
+were found by verifying preconditions rather than reading them.
+
+- **The D10 gate read a secret that does not exist.** Both arms read `APP_DOMAIN_BASE` from
+  Doppler `soleur/prd` with no fallback and failed closed on empty. It is absent from **all 13**
+  configs of the `soleur` project. The dispatch therefore aborted at D10 PREPARE *before* it
+  could reach its own destroy-guard — unfireable during exactly the incident it exists to
+  recover from. Fixed by deriving the base from `apps/web-platform/infra/variables.tf`, the
+  causal source (`server.tf` sets the host env var from it).
+- **`REGISTRY_LUKS_KEY` was absent from `soleur-registry/prd`.** The #6929 LUKS resources were
+  declared in code but never applied, so the destroy-guard aborted with `luks_key_touched=2`.
+  **Cleared 2026-08-06** by a targeted apply of `doppler_secret.registry_luks_key` (2 to add, 0
+  to change, 0 to destroy — `random_password.registry_luks` came in via the dependency edge).
+  Re-planned against live state afterwards, the guard returns **PASS**:
+  `out_of_scope=0 logs_secret_destroyed=0 luks_key_touched=0 volume_id_mismatch=0
+  server_provisioned=1 volume_provisioned=1 attachment_created=1 nic_created=1 firewall_ok=1`.
+
+Store volume id at that measurement: **106286457** (`volume_id_mismatch=0` confirms the pin).
+
+### The recut is not the only instrument — do not read a fixed gate as an endorsement
+
+This dispatch was built for **encryption-at-rest**, not disk pressure. It is being reached for
+because `/var/lib/zot` is full, and that is a different problem from the one it was designed to
+solve. Two measurements bear on the choice:
+
+- The store's manifest-referenced content is **~14.78 GB** against ~56 GB used — roughly **41 GB
+  unaccounted** (measured by the read-only disk-inventory lever, PR #7343; an incomplete sweep,
+  so that is a lower bound). The retained keep-set is therefore *not* what filled the volume.
+- GC completes for `soleur-inngest-bootstrap` but **never once** for `soleur-web-platform` in a
+  6-hour window, while zot panics in `pkg/scheduler/scheduler.go`. The unaccounted bytes are
+  reclaimable garbage that GC cannot finish reclaiming.
+
+So a recut buys a clean slate and does not address why the disk filled. The reversible
+alternative — growing `var.registry_volume_size` — is blocked today by a circularity rather than
+by physics: the filesystem only grows via `resize2fs` on the next immutable redeploy, a redeploy
+replaces the host, and a replaced host meets a still-plaintext ext4 volume and hits the `blkid`
+FATAL refuse. zot's `accessControl` grants no user `delete`, so nothing can reclaim over the
+existing ingress either. Breaking that circularity is what the recut actually buys. Record the
+post-recut fill rate before concluding the incident is closed.
 - **#7278** — the registry host has no in-place restart lever. Usually the thing you actually
   wanted; try it first once it exists, rather than reaching for a destroy. #7287 additionally
   declares it a **rollback dependency**, not merely a prerequisite.

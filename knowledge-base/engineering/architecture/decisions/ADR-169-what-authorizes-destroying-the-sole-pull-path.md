@@ -309,3 +309,55 @@ investigation to the daemon, the host, or the scheduler panic in
   > and re-probe every time, because a reading from a previous dispatch authorizes nothing.
 - **ADR-096 clause (g) stays open.** This builds a *CI-mediated* restore; clause (g)'s two named
   remedies are a zero-touch-mintable GHCR pull credential and a second mirror. This is neither.
+
+## Amendment 2026-08-06 — the independence criterion extends to authorizing INPUTS
+
+The criterion as accepted governs **components**: a gate on an irreversible destroy may not
+depend on the component whose failure motivates it. That is necessary and, as shipped, not
+sufficient. It says nothing about where the gate's *inputs* come from, and a gate can satisfy it
+completely while being unable to run at all.
+
+Both D10 arms derived the `/health` URL — which decides **which host's** version set defines the
+restore inventory — from a Doppler secret that exists in no config of the `soleur` project. The
+component independence held perfectly: the read touched neither prod zot nor the release
+pipeline's failing half. The gate was still unfireable, aborting at PREPARE before reaching the
+destroy-guard, during exactly the incident it exists to recover from.
+
+**Extension, scoped to ADDRESSING inputs.** Separate the two kinds of input a gate consumes:
+
+- An **addressing input** selects *what gets measured* (which host's `/health`, which registry,
+  which tag set). It must be (a) causal rather than a derived copy, and (b) resolvable from the
+  artifact CI already checks out — so its absence cannot be confused with a permission error.
+- A **measurement** is *what that thing says*. It must be live, or the gate proves nothing.
+
+This scoping is load-bearing, and an earlier draft of this amendment got it wrong by omitting
+it. Stated unqualified — "an authorizing input must be present in the checkout, and a live
+credential store satisfies neither clause" — it condemns every predicate this ADR ADOPTED: A0
+reads production `/health` over HTTP, A1 reads GHCR under a credential, A2 rehearses against a
+live throwaway registry, A4 grades the sink credential at the Cloudflare Access edge. A1 is
+additionally the live credentialed read this ADR defends as load-bearing. A future reader
+applying the unscoped form would be obliged to reject the whole design.
+
+What the D10 defect actually showed is narrower and survives the scoping: the *addressing*
+input — which host defines the restore set — was read from a credential store, and the value it
+looked for existed in no config. Component independence held perfectly throughout, and the gate
+was still unfireable. So the component criterion was necessary and not sufficient.
+
+Applied here: the base domain now derives from `apps/web-platform/infra/variables.tf` — the
+variable Terraform actually applied — honouring `TF_VAR_app_domain_base` first so the value is
+what production runs on rather than what it would run on absent an override.
+
+**The PREPARE/VERDICT split this ADR does not model.** PREPARE is unconditional (the resume arm
+is already destroyed and most needs an inventory); VERDICT is conditional and authorizes the
+destroy. They therefore have different independence obligations, and VERDICT deliberately
+**re-derives** rather than inheriting PREPARE's value: the arm that authorizes a destroy must not
+depend on another step's state. Both now read the same committed source, so re-derivation is
+cheap and cannot disagree.
+
+**Why this was invisible.** A `run:` body is not executable by any unit suite, so the gate's 60
+green rows and its 42-mutation battery all certified logic that the workflow reached through a
+dead read. The wiring is now asserted statically
+(`tests/scripts/test-registry-d10-workflow-wiring.sh`), including a residual-zero that spans
+composite actions — scoping it to the workflow alone would leave a hole the exact shape of the
+bug, because the restore leg runs inside one.
+
