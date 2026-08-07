@@ -21,8 +21,11 @@ import {
   DIAG_RE,
   GENERATED_HEADER,
   LIKEC4_VERSION,
+  C4_MARKER,
+  C4_MARKER_FIELDS,
   assessRender,
   buildEdges,
+  formatC4Marker,
   canOverwrite,
   countModelJson,
   generateC4,
@@ -456,5 +459,43 @@ describe("the seeded artifacts", () => {
     // instead, which is why the uniform "every file carries the header" claim was
     // corrected at review.
     expect(generateViewPage().split("\n")[0]).not.toBe(GENERATED_HEADER);
+  });
+});
+
+describe("the C4 marker's field set is stable across every branch", () => {
+  // The first version emitted a different field set per branch: `generated_*` and
+  // `published` only on the render path, `detail` only on the unavailable path,
+  // `docs` sometimes. An agent parsing a fixed key set got missing keys with no way
+  // to tell absent-because-zero from absent-because-branch. kb-coverage's
+  // MARKER_FIELDS already did this correctly; this is the sibling pinned the same way.
+  const zero = Object.fromEntries(C4_MARKER_FIELDS.map((f) => [f, 0])) as Record<
+    (typeof C4_MARKER_FIELDS)[number],
+    number
+  >;
+
+  it("emits every field on a bare status with no reason", () => {
+    const m = formatC4Marker("ok", zero);
+    for (const f of C4_MARKER_FIELDS) expect(m).toContain(`${f}=`);
+    expect(m.startsWith(C4_MARKER)).toBe(true);
+  });
+
+  it("emits every field when a reason and detail are present", () => {
+    const m = formatC4Marker("degraded", zero, "render-timeout", "spawnSync ETIMEDOUT");
+    for (const f of C4_MARKER_FIELDS) expect(m).toContain(`${f}=`);
+    expect(m).toContain("reason=render-timeout");
+  });
+
+  it("keeps reason a bare token so a consumer can classify without parsing prose", () => {
+    const m = formatC4Marker("degraded", zero, "no-generated-relationships", "a b c");
+    expect(m).toMatch(/reason=[a-z0-9-]+ /);
+    // The old form emitted a quoted sentence, so `reason=(\S+)` yielded `"0`.
+    expect(m).not.toMatch(/reason="/);
+  });
+
+  it("is a single greppable line even when detail carries newlines and quotes", () => {
+    const m = formatC4Marker("failed", zero, "source-fault", 'Invalid x\nLine 3: "bad"');
+    expect(m).not.toContain("\n");
+    // An unescaped quote in detail would terminate the field early.
+    expect((m.match(/"/g) ?? []).length % 2).toBe(0);
   });
 });

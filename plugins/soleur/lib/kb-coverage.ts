@@ -78,6 +78,14 @@ export type ProducerCounts = Record<(typeof MARKER_FIELDS)[number], number>;
 /**
  * What Soleur expects a populated knowledge base to contain, KB-relative.
  *
+ * ‼️ Every entry must be a path a Soleur producer ACTUALLY writes. This shipped with
+ * `overview/constitution.md` while sync.md's Definition Sync reads and writes
+ * `project/constitution.md`, so Soleur's own knowledge base would have reported a
+ * permanent "no constitution present" line against a file one directory away — in
+ * every customer repo. Nothing caught it because every test indexed the constant it
+ * was pinning (`[0]`, `[1]`, `.length`), which is self-referential. A parity test now
+ * pins the constitution entry against sync.md.
+ *
  * PR 1 keeps this a static list. PR 2 replaces it with the blueprint manifest —
  * that substitution is the ONLY coupling between the two PRs, which is why the
  * shape here is deliberately just an ordered string list.
@@ -87,7 +95,7 @@ export type ProducerCounts = Record<(typeof MARKER_FIELDS)[number], number>;
 export const EXPECTED_KB_PATHS: readonly string[] = [
   "engineering/architecture/diagrams/model.likec4.json",
   "engineering/architecture/domain-model.md",
-  "overview/constitution.md",
+  "project/constitution.md",
   "product/prd",
   "project/README.md",
   "project/components",

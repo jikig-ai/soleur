@@ -27,11 +27,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  type C4MarkerCounts,
   LIKEC4_VERSION,
   assessRender,
   buildEdges,
   canOverwrite,
   countModelJson,
+  formatC4Marker,
   generateC4,
   generateSpecC4,
   generateViewPage,
@@ -62,6 +64,19 @@ const RENDER_MAX_BUFFER = 32 * 1024 * 1024;
 /** Collapse to one line — a marker must be greppable as a single record. */
 function oneLine(s: string): string {
   return s.replace(/\s+/g, " ").trim();
+}
+
+/** All-zero counts, so every branch emits the FULL field set. */
+function zeroCounts(): C4MarkerCounts {
+  return {
+    elements: 0,
+    relationships: 0,
+    generated_components: 0,
+    generated_relationships: 0,
+    skipped: 0,
+    seeded: 0,
+    published: 0,
+  };
 }
 
 type WriteOutcome =
@@ -184,9 +199,7 @@ export function runProducer(root: string): { code: number; marker: string } {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     return {
       code: 0,
-      marker: oneLine(
-        `SOLEUR_KB_SYNC_C4 status=degraded reason=no-component-docs elements=0 relationships=0 skipped=0 seeded=0`,
-      ),
+      marker: formatC4Marker("degraded", zeroCounts(), "no-component-docs"),
     };
   }
 
@@ -277,11 +290,19 @@ export function runProducer(root: string): { code: number; marker: string } {
     const prior = countModel(jsonPath);
     return {
       code: 0,
-      marker: oneLine(
-        `SOLEUR_KB_SYNC_C4 status=degraded reason=${reason} ` +
-          `detail="${String(run.error?.message ?? "no exit status")}" ` +
-          `elements=${prior.elements} relationships=${prior.relationships} ` +
-          `docs=${docs.length} skipped=${skipped} seeded=${seeded}`,
+      marker: formatC4Marker(
+        "degraded",
+        {
+          ...zeroCounts(),
+          elements: prior.elements,
+          relationships: prior.relationships,
+          generated_components: docs.length,
+          generated_relationships: edges.length,
+          skipped,
+          seeded,
+        },
+        reason,
+        String(run.error?.message ?? "no exit status"),
       ),
     };
   }
@@ -294,11 +315,19 @@ export function runProducer(root: string): { code: number; marker: string } {
     const prior = countModel(jsonPath);
     return {
       code: 1,
-      marker: oneLine(
-        `SOLEUR_KB_SYNC_C4 status=failed reason=likec4-nonzero-exit ` +
-          `detail="exit ${run.status}" ` +
-          `elements=${prior.elements} relationships=${prior.relationships} ` +
-          `docs=${docs.length} skipped=${skipped} seeded=${seeded}`,
+      marker: formatC4Marker(
+        "failed",
+        {
+          ...zeroCounts(),
+          elements: prior.elements,
+          relationships: prior.relationships,
+          generated_components: docs.length,
+          generated_relationships: edges.length,
+          skipped,
+          seeded,
+        },
+        "likec4-nonzero-exit",
+        `exit ${run.status}`,
       ),
     };
   }
@@ -346,13 +375,19 @@ export function runProducer(root: string): { code: number; marker: string } {
 
   return {
     code: effective.status === "failed" ? 1 : 0,
-    marker: oneLine(
-      `SOLEUR_KB_SYNC_C4 status=${effective.status} ` +
-        (effective.reason ? `reason=${effective.reason} ` : "") +
-        (effective.detail ? `detail="${effective.detail}" ` : "") +
-        `elements=${staged.elements} relationships=${staged.relationships} ` +
-        `generated_components=${docs.length} generated_relationships=${edges.length} ` +
-        `skipped=${skipped} seeded=${seeded} published=${published ? 1 : 0}`,
+    marker: formatC4Marker(
+      effective.status,
+      {
+        elements: staged.elements,
+        relationships: staged.relationships,
+        generated_components: docs.length,
+        generated_relationships: edges.length,
+        skipped,
+        seeded,
+        published: published ? 1 : 0,
+      },
+      effective.reason,
+      effective.detail,
     ),
   };
 }
