@@ -1932,10 +1932,14 @@ cleanup_merged_worktrees() {
       # 2026-08-06 reaps ran in — it printed NOTHING; and when the lease library
       # is missing the stub returns 0 for every worktree, so "active lease" would
       # ASSERT an observation the gate had just admitted it cannot make.
+      # NOT a SOLEUR_* sentinel. Skipping a leased worktree is the NORMAL, correct
+      # outcome — mirroring it to telemetry would page on the happy path. The
+      # anomalous state (no lease library, so this reads "leased" for everything)
+      # has its own sentinel, emitted once at load rather than once per branch.
       if [[ "$_SS_LIB_MISSING" == "true" ]]; then
-        echo "SOLEUR_WORKTREE_SKIP branch=$branch reason=lease-lib-missing"
+        echo "(skip) $branch - lease library missing, refusing to reap (fail-closed)"
       else
-        echo "SOLEUR_WORKTREE_SKIP branch=$branch reason=active-lease"
+        echo "(skip) $branch - active lease"
       fi
       continue
     fi
