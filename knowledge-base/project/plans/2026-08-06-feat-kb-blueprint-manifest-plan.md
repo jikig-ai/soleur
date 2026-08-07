@@ -338,14 +338,18 @@ discoverability_test:
 in-sandbox Bash stdout → `apps/web-platform/server/git-lock-marker-telemetry.ts`
 (PostToolUse `Bash` hook, `MARKER_RE` allowlist at `:93`) → `log.error`/`log.warn`
 → container stdout → journald → `apps/web-platform/infra/vector.toml` Source 3 →
-`[sinks.betterstack]`. It is **not reachable from PR 1**, for two independent
-reasons. (1) `MARKER_RE` is an exact-sentinel allowlist, not a prefix match, so
-`SOLEUR_KB_SYNC_PRODUCERS` is dropped at the extractor. (2) More fundamentally, the
-hook is registered only by `apps/web-platform/server/agent-runner-query-options.ts:38`
-on the hosted path; `.claude/settings.json` registers no PostToolUse `Bash` matcher
-(its matchers are `Write|Edit`, `Task`, `mcp__pencil__open_document`, `Skill`), as
-`git-lock-marker-telemetry.ts:78-82` already states — and a customer's self-hosted
-CLI has no route to Soleur infrastructure at all. Widening `MARKER_RE` was rejected:
+`[sinks.betterstack]`. It is **not reachable from PR 1** — but for ONE
+reason plus a consent argument, not the "two independent reasons" this plan first
+claimed. (1) `MARKER_RE` is an exact-sentinel allowlist, not a prefix match, so
+`SOLEUR_KB_SYNC_PRODUCERS` is dropped at the extractor. (2) **Corrected at review:**
+the original second reason — `.claude/settings.json` registers no PostToolUse `Bash`
+matcher — is true of the LOCAL CLI and false as a claim about this code.
+`plugins/soleur/**` is vendored into the production image and executed there;
+`agent-runner-query-options.ts` loads the plugin AND registers the `Bash` marker
+extractor in the same options object, and `auto-sync-trigger.ts` dispatches
+`/soleur:sync --headless` through it. So on the hosted surface only the regex in (1)
+separates these markers from Better Stack. Layer 7 is a property of the EXECUTION
+surface, not of where the file lives. Widening `MARKER_RE` was rejected:
 it would add a permanently-dead allowlist entry (the `inngest-boot-phone-home`
 anti-pattern recorded in `vector.toml`) on a surface no tester is on, and the CLI
 half would be a consent violation. The liveness signal is layer 7

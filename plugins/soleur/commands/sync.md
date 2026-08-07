@@ -199,13 +199,26 @@ to `**Internal**: [name](name.md)` links for docs written before that contract),
 skips `status: deprecated` docs, and writes the diagram artifacts into
 `knowledge-base/engineering/architecture/diagrams/`.
 
-**It is non-destructive by construction.** `/soleur:architecture` writes
-`spec.c4` / `model.c4` / `views.c4` cwd-relative and the agent sandbox pins
-`cwd = workspacePath` — two writers, one directory. So the producer emits a
-distinct composing file, `generated-components.c4`, stamps every file it writes
-with a `GENERATED` header, and **refuses to overwrite any file lacking that
-header**. A hand-corrected edge is never silently reverted; the refusal is
-reported as `skipped=<n>` in the marker rather than passing silently.
+**It is non-destructive by construction, via three different mechanisms.**
+`/soleur:architecture` writes `spec.c4` / `model.c4` / `views.c4` cwd-relative and
+the agent sandbox pins `cwd = workspacePath` — two writers, one directory. The
+producer never writes those three names. What protects each artifact differs, and
+the difference matters when reading the marker:
+
+| Artifact | Protection | Marker field |
+|---|---|---|
+| `generated-components.c4` | `GENERATED` header; refuses to overwrite a file whose first line is not that header | `skipped=` |
+| `spec.c4`, `views.c4`, `c4-model.md` | seeded **only when absent**, via `O_CREAT\|O_EXCL` — an existing one is never touched | `seeded=` |
+| `model.likec4.json` | rendered **off-tree** and published only when the verdict is not `failed` | `published=` |
+
+`model.likec4.json` carries no header — it is JSON, and it is a regenerable
+lockfile, so replacing it after a *successful* render is correct. What must never
+happen is replacing it after a *failed* one, which is what the off-tree render
+prevents. Any target that is a **symlink** is refused outright, for every artifact.
+
+A hand-corrected edge is never silently reverted, and each refusal is reported —
+`skipped=` for a protected file, `seeded=` for one that already existed, so the
+normal steady state is distinguishable from a refusal.
 
 **Report the marker, and read its `status`:**
 

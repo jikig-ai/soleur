@@ -55,10 +55,22 @@ parity test is the mechanism; a generated `.ts` is not.
 `/soleur:architecture` writes `spec.c4` / `model.c4` / `views.c4` cwd-relative
 (`plugins/soleur/skills/architecture/SKILL.md`), and the agent sandbox pins
 `cwd = workspacePath`. The producer therefore emits a **distinct composing file**
-(`generated-components.c4`), stamps every file it writes with a `GENERATED`
-header, and **refuses to overwrite any file whose first line is not that header**.
-Precedence rule: a hand edit always wins, and the refusal is reported in the run
-marker rather than passing silently.
+(`generated-components.c4`) and never writes the canonical three names.
+
+Precedence rule: **a hand edit always wins** — but it is enforced by three different
+mechanisms, and conflating them is how the first implementation shipped a reporting
+gap. `generated-components.c4` is header-guarded (refuses to overwrite a file whose
+first line is not the `GENERATED` header). `spec.c4` / `views.c4` / `c4-model.md` are
+seeded only when ABSENT via `O_CREAT|O_EXCL`, so an existing one is never touched —
+they carry no header, and `c4-model.md` could not (it is markdown). `model.likec4.json`
+carries none either (JSON) and is a regenerable lockfile, so it is rendered **off-tree**
+and published only when the verdict is not `failed`; replacing it after a successful
+render is correct, and replacing it after a failed one destroyed a committed artifact
+until #7332's review caught it. Any target that is a symlink is refused outright.
+
+Each refusal is reported in the run marker, and the counters distinguish a refusal
+(`skipped=`) from the normal steady state of a seed artifact already existing
+(`seeded=`) — collapsing those made every repeat sync read as degraded.
 
 A fourth distinction is worth recording because it is easy to collapse: the
 runtime read via `getPluginPath()` (`apps/web-platform/server/plugin-path.ts:42`,
@@ -91,10 +103,29 @@ failure `apps/web-platform/infra/vector.toml` names explicitly for
 `inngest-boot-phone-home`.
 
 **3. The consent boundary is stricter than the build boundary, and it is the
-operative one.** Soleur's Better Stack sink is fed by Soleur's own prod container
-journald (`vector.toml` `[sources.app_container_journald]` →
-`[sinks.betterstack]`). Code executing on a customer's self-hosted CLI has no
-route to it, and must not be given one: shipping repository-derived metadata from
+operative one.**
+
+First, a correction to how #7332 originally reasoned about this, because the
+corrected version is the load-bearing one. Phase 0.2 claimed the Better Stack path
+was unreachable for "two independent reasons": the exact-sentinel `MARKER_RE`, and
+`.claude/settings.json` registering no PostToolUse `Bash` matcher. The second reason
+is true of the LOCAL CLI and **false as a claim about this code**. `plugins/soleur/**`
+is vendored into the production image and executed there:
+`apps/web-platform/server/agent-runner-query-options.ts` loads
+`plugins: [{ type: "local", path: trustedPluginPath }]` — default
+`/app/shared/plugins/soleur` — and registers `{ matcher: "Bash", hooks:
+[createGitLockMarkerHook(…)] }` in the SAME options object, and
+`auto-sync-trigger.ts` dispatches `/soleur:sync --headless` through it. So on the
+hosted surface exactly ONE thing separates these markers from Better Stack: a regex.
+
+**Layer 7 is therefore a property of the EXECUTION surface, not of the file's
+location in the repo.** The same source file is layer 7 when a customer runs it and
+layers 1–6 when the platform does.
+
+That makes the consent argument the one doing the work. Soleur's Better Stack sink is
+fed by Soleur's own prod container journald (`vector.toml`
+`[sources.app_container_journald]` → `[sinks.betterstack]`). Code executing on a
+customer's self-hosted CLI has no route to it, and must not be given one: shipping repository-derived metadata from
 a customer machine to a Soleur vendor makes Soleur a data controller for data it
 never disclosed collecting. Any future hosted-quality telemetry for self-hosted
 runs must be **customer-owned** (a sink configured under the customer's own

@@ -235,7 +235,13 @@ export function runProducer(root: string): { code: number; marker: string } {
 
   const run = spawnSync(
     "npx",
-    ["-y", `likec4@${LIKEC4_VERSION}`, "export", "json", "-o", stagedJson, "."],
+    // `--ignore-scripts`: the version pin is a VERSION pin, not an integrity pin.
+    // `npx -y` resolves likec4's transitive dependencies by semver at run time with
+    // no lockfile, so a compromised patch release of any transitive dep would run its
+    // postinstall with the operator's privileges and cwd inside the customer's
+    // repository. likec4 needs no install scripts to export JSON, so this costs
+    // nothing and closes the largest surface the pin does not cover.
+    ["-y", "--ignore-scripts", `likec4@${LIKEC4_VERSION}`, "export", "json", "-o", stagedJson, "."],
     {
       cwd: diagramsDir,
       encoding: "utf8",
