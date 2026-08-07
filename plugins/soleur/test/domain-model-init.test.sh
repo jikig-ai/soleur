@@ -48,7 +48,10 @@ run_init() { local rc=0; bash "$DRIFT" init --repo "$REPO" --register "$1" >/dev
 # suite — `VAR="$(cat missing)"` is non-zero and `set -e` kills the whole run,
 # hiding every assertion below it. Guard the read and let the assertions decide.
 slurp() { [[ -s "$1" ]] && cat "$1" || echo "<file-absent>"; }
-count_re() { [[ -s "$1" ]] && grep -cE "$2" "$1" || echo 0; }
+# `grep -c` prints the count AND exits 1 when it is zero, so `|| echo 0` would emit a
+# SECOND zero and the capture becomes "0\n0" — an assertion comparing against "0"
+# then fails with a malformed "actual". `|| true` keeps grep's own printed zero.
+count_re() { [[ -s "$1" ]] && { grep -cE "$2" "$1" || true; } || echo 0; }
 
 # --- 2.1 bootstrap ----------------------------------------------------------
 RC="$(run_init "$REG")"
