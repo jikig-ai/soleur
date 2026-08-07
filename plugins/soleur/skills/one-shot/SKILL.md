@@ -23,6 +23,41 @@ See `plugins/soleur/lib/workflow-fidelity.ts` (`IMPLEMENTATION_TAIL`, `ONE_SHOT_
 **Harness adapter (Steps 1–8 child skills):** Use `plugins/soleur/lib/harness.ts` — Grok Build invokes `/plan`, `/work`, `/review`, `/ship`, etc.; Claude Code uses the **Skill tool** (`soleur:plan`, `soleur:work`, …). Never substitute ad-hoc Write/Edit/Shell loops for a registered child skill.
 <!-- one-shot-anti-bypass-protocol:end -->
 
+## Token discipline (load-bearing — this pipeline is the biggest single consumer)
+
+Soleur bills its operators for these tokens. **This does NOT license skipping a step.** Every
+step in the anti-bypass protocol above runs, `/deepen-plan` included — `PLAN_PIPELINE_PREFIX`
+in `workflow-fidelity.ts` is the contract and it is not negotiable here. What follows is how
+to run those steps without waste.
+
+**The measured cost driver is not the panel size — it is rework and restatement.** On PR
+#7325 the classifier was CORRECT to pick the full panel (103 added source lines across 23
+files); the cost came from three habits below, each of which multiplies.
+
+1. **Do not restate.** Prose is review surface priced per token, and copies drift. Write the
+   rationale once at the artifact that owns the decision, then point at it with a content
+   anchor (`work/SKILL.md` §single-source). On #7325 ~300 lines across 7 files was the bulk
+   of the review surface, and two copies of one probe table CONTRADICTED each other before
+   any reviewer saw them.
+2. **Verify a measurement before it propagates**, at the granularity you will claim it
+   (`work/SKILL.md`). One false fact reached 4 files, 2 issue comments, and a review agent's
+   top finding; the re-probe that falsified it took 15 seconds.
+3. **Spawn the agent set ONCE, complete** (`review/SKILL.md`). A late gap-closer costs a whole
+   extra fix → CI → correction round.
+4. **Re-run a suite only when its inputs changed.** A green full-suite run against commit A
+   still covers commit B when B touches only docs — verify the delta with targeted suites and
+   say which commit the full run covered.
+5. **Bound every command's output.** `git grep` over a tree containing generated JSON returns
+   megabytes on one "line": use `':!*.json'`, `--name-only`, `| cut -c1-200`.
+6. **Delegate wide reads to a subagent** (`cm-delegate-verbose-exploration…`) — keep the
+   conclusion, not the file dumps.
+7. **Poll with a bounded, anchored pattern.** Match `^=== N/N suites passed ===$`, never a
+   bare token that also appears in a PASS line, and never `pgrep` a pattern your own poll
+   command contains.
+
+**Report cost honestly.** If a run was disproportionate, say so and name the cause — the
+operator paid for it and cannot see the breakdown.
+
 **Step 0 (pre): Workspace readiness gate.** Before anything else, confirm a usable git repository exists — `one-shot` can be invoked directly (not only via `/soleur:go`), so it must self-guard. Run `git rev-parse --is-bare-repository 2>/dev/null || true; git rev-parse --is-inside-work-tree 2>/dev/null || true`. If **neither** prints `true`, the workspace has no git checkout (in the Soleur web / Concierge env, a connected repo still cloning in the background or a failed setup leaves a repo-less `/workspaces/<id>`). STOP immediately — do NOT run the collision checks, do NOT create a worktree, do NOT spawn the planning subagent. Reply with the honest, no-wait message: "Your workspace isn't ready yet — its repository is still being set up, or its setup didn't finish. Please try again in a moment. If this keeps happening, reconnect your repository in **Settings → Repository**." This prevents the missing-repo flail where the agent improvised dozens of exploration commands.
 
 <decision_gate>
