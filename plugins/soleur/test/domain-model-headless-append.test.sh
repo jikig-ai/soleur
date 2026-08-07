@@ -126,6 +126,49 @@ fi
 HN="$(grep -cE '^## Auto-inferred \(unreviewed\)' "$REG" || true)"
 assert_eq "1" "$HN" "the register still has exactly one Auto-inferred heading after all appends"
 
+# --- prefix-anchor dedup false positive -------------------------------------
+# `grep -qF "$ANCHOR"` matched a SUBSTRING anywhere in the file, so an anchor that is
+# a PREFIX of an existing one was silently swallowed: with `t.p10` already written, a
+# genuinely new `t.p1` deduped to a no-op and exited 0. Under the headless path that
+# drops real candidates on every sync with no diagnostic. Reproduced before the fix.
+PFX_RC=0
+bash "$DRIFT" write-row --repo "$WORK" --register "$REG" \
+  --anchor "m.sql > t.p10" --statement "ten" >/dev/null 2>&1 || PFX_RC=$?
+assert_eq "0" "$PFX_RC" "prefix dedup: the longer anchor writes"
+PFX2_RC=0
+bash "$DRIFT" write-row --repo "$WORK" --register "$REG" \
+  --anchor "m.sql > t.p1" --statement "one" >/dev/null 2>&1 || PFX2_RC=$?
+assert_eq "0" "$PFX2_RC" "prefix dedup: the shorter anchor also writes"
+assert_eq "1" "$(grep -c 'm.sql > t.p1 |' "$REG" 2>/dev/null || true)" \
+  "prefix dedup: 't.p1' is NOT swallowed by the existing 't.p10'"
+
+# A genuine duplicate must still be a no-op — the fix must not disable dedup.
+DUP_BEFORE="$(grep -c 'm.sql > t.p1 |' "$REG" 2>/dev/null || true)"
+bash "$DRIFT" write-row --repo "$WORK" --register "$REG" \
+  --anchor "m.sql > t.p1" --statement "one" >/dev/null 2>&1 || true
+assert_eq "$DUP_BEFORE" "$(grep -c 'm.sql > t.p1 |' "$REG" 2>/dev/null || true)" \
+  "prefix dedup: a TRUE duplicate is still a no-op"
+
+# --- CR is a control char the comment claimed was stripped and was not --------
+# The escaper's comment said "ALL C0 control chars (except tab, newline)", but the
+# range `\000-\010\013\014\016-\037` omitted \015 (CR). A bare CR is a line
+# terminator in CRLF-normalising viewers and in JSON log surfaces, so it could break
+# a markdown table cell out of its row.
+bash "$DRIFT" write-row --repo "$WORK" --register "$REG" \
+  --anchor "cr-anchor" --statement "$(printf 'a\rBR-999 forged')" >/dev/null 2>&1 || true
+assert_eq "0" "$(grep -c $'\r' "$REG" 2>/dev/null || true)" \
+  "CR is stripped from the written row (the comment's claim is now true)"
+# Tab must SURVIVE — it is deliberately excluded from the strip set.
+bash "$DRIFT" write-row --repo "$WORK" --register "$REG" \
+  --anchor "tab-anchor" --statement "$(printf 'a\tb')" >/dev/null 2>&1 || true
+if grep -qF "tab-anchor" "$REG"; then
+  echo "  PASS: a tab in the statement does not prevent the row landing"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: the tab-bearing row did not land"
+  FAIL=$((FAIL + 1))
+fi
+
 # --- section placement on a register `init` did NOT create ------------------
 # Every fixture above is built by `init`, which always emits `## Business Rules`
 # BEFORE `## Auto-inferred`. That ordering is what makes the naive insert correct,
@@ -172,7 +215,7 @@ else
   echo "  PASS: curated-table trap: no candidate row reached the file"
   PASS=$((PASS + 1))
 fi
-assert_eq "1" "$(grep -c '^| BR-001 ' "$ORDER_REG" 2>/dev/null || echo 0)" \
+assert_eq "1" "$(grep -c '^| BR-001 ' "$ORDER_REG" 2>/dev/null || true)" \
   "curated-table trap: the curated BR-001 row is untouched"
 
 # The positive counterpart — same reversed ordering, but Auto-inferred DOES have its

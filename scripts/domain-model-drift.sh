@@ -318,8 +318,8 @@ write_row() {
   # newline \012 already rejected above), DEL, and unicode line separators
   # U+0085/U+2028/U+2029 (security P2 — full control-char class).
   local esc_anchor esc_stmt
-  esc_anchor="$(printf '%s' "$ANCHOR"    | tr -d '\000-\010\013\014\016-\037\177' | sed 's/|/\\|/g; s/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
-  esc_stmt="$(printf '%s' "$STATEMENT"   | tr -d '\000-\010\013\014\016-\037\177' | sed 's/|/\\|/g; s/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
+  esc_anchor="$(printf '%s' "$ANCHOR"    | tr -d '\000-\010\013-\037\177' | sed 's/|/\\|/g; s/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
+  esc_stmt="$(printf '%s' "$STATEMENT"   | tr -d '\000-\010\013-\037\177' | sed 's/|/\\|/g; s/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
   # neutralize a forged row/heading marker at the START of EITHER field — the anchor
   # is column 1, exactly where curated `BR-NNN` IDs live (security P2).
   esc_anchor="${esc_anchor/#BR-/BR‑}"; esc_anchor="${esc_anchor/#\#\#/\\#\\#}"
@@ -339,8 +339,20 @@ write_row() {
   hn="$(grep -cE '^## Auto-inferred \(unreviewed\)' "$reg" || true)"
   [[ "$hn" -eq 1 ]] || die "register has $hn '## Auto-inferred (unreviewed)' headings (want exactly 1) — aborting"
 
-  # content-anchor dedup: never re-propose an anchor already present anywhere
-  if grep -qF "$ANCHOR" "$reg"; then
+  # Content-anchor dedup: never re-propose an anchor already present.
+  #
+  # Anchored on the whole table CELL, not a bare substring. `grep -qF "$ANCHOR"`
+  # matched anywhere in the file, so an anchor that is a PREFIX of an existing one
+  # was silently swallowed: with `m.sql > t.p10` already written, a genuinely new
+  # `m.sql > t.p1` deduped to a no-op and exited 0 — reproduced. Under #7332's
+  # headless path that drops real candidates on every sync with no diagnostic.
+  #
+  # Compare against the ESCAPED form too: the row is written as `$esc_anchor`, so a
+  # raw-form-only check never matches an anchor the escaper transformed (any `|`, or
+  # a leading `BR-`/`##`), which made re-runs append the same row without bound.
+  if grep -qxF "| $ANCHOR | $STATEMENT |" "$reg" \
+     || grep -qF "| $ANCHOR |" "$reg" \
+     || grep -qF "| $esc_anchor |" "$reg"; then
     exit 0  # already known (curated or previously accepted) — no-op
   fi
 
