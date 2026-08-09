@@ -325,15 +325,33 @@ jobs:
       #   ZOT_DISK_FS_SIZE_GB / ZOT_DISK_PCENT / ZOT_DISK_BOOT_ID /
       #   ZOT_DISK_RESTARTS_AT_START / ZOT_DISK_SAMPLE_AGE_S / ZOT_DISK_SAMPLE_AT
       #                                                    — the start sample, exported above.
-      #   BETTERSTACK_QUERY_*                              — so the script can take its own
-      #                                                      END sample for the marker's
-      #                                                      zot_restarts_at_end field before
-      #                                                      it emits (the emission is inside
-      #                                                      the script, so the workflow's own
-      #                                                      end sample below lands too late to
-      #                                                      reach the marker; it is the
-      #                                                      JOB-LEVEL straddle check and the
-      #                                                      input to the issue comment).
+      #   BETTERSTACK_QUERY_*                              — PASSED BUT NOT YET CONSUMED. This
+      #                                                      said the script takes its own END
+      #                                                      sample; it does not — grep it for
+      #                                                      BETTERSTACK_QUERY or
+      #                                                      betterstack-query.sh and both
+      #                                                      return zero. So ZOT_RESTARTS_AT_END
+      #                                                      is set by no production caller,
+      #                                                      zot_restarts_at_end ships `unknown`
+      #                                                      on every run, and the enumerator's
+      #                                                      restart_during_sweep arm is
+      #                                                      unreachable outside its tests. The
+      #                                                      straddle IS still detected, at job
+      #                                                      level in the end-sample step below,
+      #                                                      and reaches the issue comment — it
+      #                                                      just never reaches the DURABLE
+      #                                                      marker. Tracked in #7377, not fixed
+      #                                                      here: giving the
+      #                                                      enumerator a network call inside
+      #                                                      its emit path is not a change to
+      #                                                      make late in a review pass. The
+      #                                                      vars stay wired so the follow-up is
+      #                                                      a script change only. The emission
+      #                                                      is inside the script, so the
+      #                                                      workflow's own end sample below
+      #                                                      lands too late to reach the marker;
+      #                                                      it is the JOB-LEVEL straddle check
+      #                                                      and the input to the issue comment.
       #   MARKER_FILE                                      — where this step captures the
       #                                                      enumerator's STDOUT so
       #                                                      later steps can read it back.
