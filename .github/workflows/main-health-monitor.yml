@@ -118,6 +118,15 @@ jobs:
     #   infra  2m19s =  2.32 -> x1.5 =  3.48 -> roundup5  5 -> floor 10 -> 10
     #   job   = 35 + 10 + 5 + 10 = 60   (setup measured 52s; the 5 is the rule's allowance)
     #
+    # SUPERSEDED FOR INFRA by the JOBS=1 change (see the infra step's env). Both
+    # infra measurements above were taken at the runner's default -P 4 — which is
+    # the configuration that FLAKED — so reusing either to size a SEQUENTIAL step
+    # would repeat, in a new form, exactly the censored-data error this block
+    # opens by warning about. The infra ceiling is therefore PROVISIONAL-GENEROUS
+    # at 20 (job = 35 + 20 + 5 + 10 = 70) until a JOBS=1 dispatch measures it, at
+    # which point it is re-derived by the same rule. Stated rather than carried
+    # over silently.
+    #
     # The job ceiling must dominate the SUM of the step ceilings, not the max:
     # with two timed steps, `max + 10` lets the job token trip midway through the
     # second step, and a JOB cancel skips every remaining step regardless of
@@ -135,7 +144,7 @@ jobs:
     # and note that `gh run view --json jobs` reports steps[].conclusion, which
     # `continue-on-error: true` PINS TO success — the real verdict is the step
     # `outcome`, mirrored to the job summary by "Record step outcomes" below.
-    timeout-minutes: 60
+    timeout-minutes: 70
 
     steps:
       # fetch-depth: 0 + fetch-tags: true mirror infra-validation.yml's
@@ -224,11 +233,17 @@ jobs:
           command -v likec4
           docker info >/dev/null
 
-      # Reset once, so the two capture steps' `tee -a` cannot depend on
-      # declaration order (and a re-run on a warm runner cannot inherit stale
-      # output).
-      - name: Reset test output capture
-        run: ': > /tmp/test-output.txt'
+      # PER-STEP capture files, not one shared file. A single shared capture is
+      # actively misleading: both steps `tee -a` into it, so `tail -30` returns
+      # whichever step ran LAST. Measured on run 31331269522 — tests=failure,
+      # infra=success — the filed issue's "Failure summary" was 30 lines of the
+      # infra step's PASS output and contained no trace of the actual failure.
+      # That is the phantom-chasing shape this workflow is supposed to remove.
+      # Reset both up front so a warm runner cannot leak stale output either.
+      - name: Reset test output captures
+        run: |
+          : > /tmp/tests-output.txt
+          : > /tmp/infra-output.txt
 
       - name: Run test suite
         id: tests
@@ -238,7 +253,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
-          bash scripts/test-all.sh 2>&1 | tee -a /tmp/test-output.txt
+          bash scripts/test-all.sh 2>&1 | tee -a /tmp/tests-output.txt
           rc=${PIPESTATUS[0]}
           set -e
           exit "$rc"
@@ -250,12 +265,24 @@ jobs:
       - name: Run infra suites
         id: infra
         continue-on-error: true
-        timeout-minutes: 10 # derived; see the TIMEOUT BUDGET block above
+        timeout-minutes: 20 # PROVISIONAL for JOBS=1 — see the JOBS=1 note in the budget block
         env:
           TEST_GROUP: infra
+          # JOBS=1 (the runner's documented override) — SEQUENTIAL, deliberately.
+          # The runner defaults to min(nproc, 6), i.e. -P 4 on a 4-core hosted
+          # runner, which oversubscribes it. Measured across 6 executions of the
+          # same 92-suite set on an unchanged tree: two runs failed, naming THREE
+          # DIFFERENT suites (inngest + soleur-host-bootstrap-observability, then
+          # web-host-provisioner-parity-mutation), while -P 6 on a 16-core machine
+          # and CI's own sequential deploy-script-tests job were clean. Different
+          # failure sets on an unchanged tree is a HARNESS defect, not a suite
+          # defect. At ~33% that would file a spurious P1 every third run, which
+          # is worse than the silence this PR removes. Sequential matches the only
+          # configuration proven stable. Tracked separately for a real fix.
+          JOBS: 1
         run: |
           set +e
-          bash scripts/test-all.sh 2>&1 | tee -a /tmp/test-output.txt
+          bash scripts/test-all.sh 2>&1 | tee -a /tmp/infra-output.txt
           rc=${PIPESTATUS[0]}
           set -e
           exit "$rc"
@@ -301,16 +328,34 @@ jobs:
             exit 0
           fi
 
-          # Guard on EMPTINESS, not existence. `tee` creates and truncates the
-          # file at pipeline start, so on a timeout it is PRESENT and may be
-          # empty — `tail` then exits 0 and an existence check would hand the
-          # issue an empty code fence. `[[ ]]` as an `if` condition is exempt
-          # from errexit, so no extra guard is needed here.
-          if [[ -s /tmp/test-output.txt ]]; then
-            SUMMARY=$(tail -30 /tmp/test-output.txt)
-          else
-            SUMMARY="(no test output captured — the run was killed before the suite wrote its log)"
-          fi
+          # Excerpt ONLY the step(s) that actually failed, each labelled. Drawing
+          # from a single shared capture returns whichever step ran last, which
+          # on run 31331269522 put 30 lines of infra PASS output under a
+          # "Failure summary" heading while tests was the thing that failed.
+          #
+          # Guard each file on EMPTINESS, not existence: `tee` creates and
+          # truncates at pipeline start, so on a timeout the file is PRESENT and
+          # may be empty — `tail` then exits 0 and an existence check would hand
+          # the issue an empty code fence. `[[ ]]` as an `if` condition is exempt
+          # from errexit, so no extra guard is needed.
+          SUMMARY=""
+          HAS_FAIL_MARKER=0
+          for pair in "tests:/tmp/tests-output.txt:${TESTS_OUTCOME}" \
+                      "infra:/tmp/infra-output.txt:${INFRA_OUTCOME}"; do
+            label="${pair%%:*}"
+            rest="${pair#*:}"
+            file="${rest%%:*}"
+            outcome="${rest#*:}"
+            if [[ "$outcome" != "success" ]]; then
+              SUMMARY="${SUMMARY}--- ${label} (outcome=${outcome}) ---"$'\n'
+              if [[ -s "$file" ]]; then
+                SUMMARY="${SUMMARY}$(tail -30 "$file")"$'\n\n'
+                if grep -q '\[FAIL\]' "$file"; then HAS_FAIL_MARKER=1; fi
+              else
+                SUMMARY="${SUMMARY}(no output captured — the step was killed before it wrote its log)"$'\n\n'
+              fi
+            fi
+          done
 
           gh label create "ci/main-broken" \
             --description "Main branch CI is failing" \
@@ -321,7 +366,7 @@ jobs:
           # never completed". `tail -30` of a run killed mid-suite renders
           # in-progress noise, and labelling that "Failure summary" sends the
           # operator after a phantom.
-          if grep -q '\[FAIL\]' /tmp/test-output.txt 2>/dev/null; then
+          if [[ "$HAS_FAIL_MARKER" == "1" ]]; then
             HEADING="Failure summary"
             LEDE="The health monitor ran the suite against main and it reported failures."
           else
