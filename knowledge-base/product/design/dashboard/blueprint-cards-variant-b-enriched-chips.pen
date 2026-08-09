@@ -1,0 +1,1399 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "S6llH",
+      "x": 0,
+      "y": 0,
+      "name": "10 - Variant B - Single grid, enriched chips (alpha state)",
+      "width": 1040,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "gap": 16,
+      "padding": 32,
+      "children": [
+        {
+          "type": "frame",
+          "id": "UAee3",
+          "name": "caller-header",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 6,
+          "children": [
+            {
+              "type": "text",
+              "id": "H6JGC",
+              "name": "bha",
+              "fill": "#C9A962",
+              "content": "FOUNDATIONS",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "1X7r5",
+              "name": "bhb",
+              "fill": "#848484",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Your business fundamentals. Caller-owned wrapper — unchanged by this work.",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "YSnc7",
+          "name": "completed-chips",
+          "width": "fill_container",
+          "gap": 8,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "0saNC",
+              "name": "chip-c4",
+              "fill": "#17140C",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#4A3D22"
+              },
+              "gap": 6,
+              "padding": [
+                6,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "TOp0Q",
+                  "name": "ch1i",
+                  "width": 13,
+                  "height": 13,
+                  "iconFontName": "sparkles",
+                  "iconFontFamily": "lucide",
+                  "fill": "#C9A962"
+                },
+                {
+                  "type": "text",
+                  "id": "tsauU",
+                  "name": "ch1t",
+                  "fill": "#848484",
+                  "content": "C4 Architecture Model",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "90zqf",
+              "name": "chip-domain",
+              "fill": "#17140C",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#4A3D22"
+              },
+              "gap": 6,
+              "padding": [
+                6,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "lxqeN",
+                  "name": "ch2i",
+                  "width": 13,
+                  "height": 13,
+                  "iconFontName": "sparkles",
+                  "iconFontFamily": "lucide",
+                  "fill": "#C9A962"
+                },
+                {
+                  "type": "text",
+                  "id": "QSuCO",
+                  "name": "ch2t",
+                  "fill": "#848484",
+                  "content": "Domain Model Register",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "dHhgR",
+              "name": "chip-components",
+              "fill": "#17140C",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#4A3D22"
+              },
+              "gap": 6,
+              "padding": [
+                6,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "0dNMl",
+                  "name": "ch3i",
+                  "width": 13,
+                  "height": 13,
+                  "iconFontName": "sparkles",
+                  "iconFontFamily": "lucide",
+                  "fill": "#C9A962"
+                },
+                {
+                  "type": "text",
+                  "id": "ELVI2",
+                  "name": "ch3t",
+                  "fill": "#848484",
+                  "content": "Component Docs · 7",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "OMTeA",
+              "name": "spacer",
+              "width": "fill_container",
+              "height": 1
+            },
+            {
+              "type": "text",
+              "id": "Ogopp",
+              "name": "chlink",
+              "fill": "#C9A962",
+              "content": "9 of 19 tracked · see what is missing →",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "3YBpp",
+          "name": "legend",
+          "fill": "#6A6A6A",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "The gold spark marks work Soleur did on its own during sync. A green check marks something you finished with a leader.",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "zCL5o",
+          "name": "active-grid",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 12,
+          "children": [
+            {
+              "type": "frame",
+              "id": "RKPJV",
+              "name": "grid-row-1",
+              "width": "fill_container",
+              "gap": 12,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "vIbN9",
+                  "name": "card-vision",
+                  "width": "fill_container",
+                  "fill": "#121212",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "2pwW0",
+                      "name": "who",
+                      "width": "fill_container",
+                      "gap": 6,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "dVbqv",
+                          "name": "bci",
+                          "width": 16,
+                          "height": 16,
+                          "iconFontName": "compass",
+                          "iconFontFamily": "lucide",
+                          "fill": "#848484"
+                        },
+                        {
+                          "type": "text",
+                          "id": "DCPk9",
+                          "name": "bcw",
+                          "fill": "#6A6A6A",
+                          "content": "CPO",
+                          "fontFamily": "Inter",
+                          "fontSize": 10,
+                          "fontWeight": "600",
+                          "letterSpacing": 1
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "Yq6aF",
+                      "name": "bct",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Vision",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "0vTIf",
+                      "name": "bcs",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Where this company is going.",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "4TvXQ",
+                  "name": "card-brand",
+                  "width": "fill_container",
+                  "fill": "#121212",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "jmvKh",
+                      "name": "who",
+                      "width": "fill_container",
+                      "gap": 6,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "eSCIW",
+                          "name": "bci",
+                          "width": 16,
+                          "height": 16,
+                          "iconFontName": "megaphone",
+                          "iconFontFamily": "lucide",
+                          "fill": "#848484"
+                        },
+                        {
+                          "type": "text",
+                          "id": "l03Mk",
+                          "name": "bcw",
+                          "fill": "#6A6A6A",
+                          "content": "CMO",
+                          "fontFamily": "Inter",
+                          "fontSize": 10,
+                          "fontWeight": "600",
+                          "letterSpacing": 1
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "DiY79",
+                      "name": "bct",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Brand Identity",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "lQbno",
+                      "name": "bcs",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Positioning, voice, visual direction.",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "joIvG",
+                  "name": "card-validation",
+                  "width": "fill_container",
+                  "fill": "#121212",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "LemEz",
+                      "name": "who",
+                      "width": "fill_container",
+                      "gap": 6,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "KEaWP",
+                          "name": "bci",
+                          "width": 16,
+                          "height": 16,
+                          "iconFontName": "compass",
+                          "iconFontFamily": "lucide",
+                          "fill": "#848484"
+                        },
+                        {
+                          "type": "text",
+                          "id": "PJM6m",
+                          "name": "bcw",
+                          "fill": "#6A6A6A",
+                          "content": "CPO",
+                          "fontFamily": "Inter",
+                          "fontSize": 10,
+                          "fontWeight": "600",
+                          "letterSpacing": 1
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "yTdlf",
+                      "name": "bct",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Business Validation",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "xN2Tq",
+                      "name": "bcs",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Market, competitors, business model.",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "nrKZT",
+                  "name": "card-legal",
+                  "width": "fill_container",
+                  "fill": "#121212",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "cIL8g",
+                      "name": "who",
+                      "width": "fill_container",
+                      "gap": 6,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "R6PhG",
+                          "name": "bci",
+                          "width": 16,
+                          "height": 16,
+                          "iconFontName": "scale",
+                          "iconFontFamily": "lucide",
+                          "fill": "#848484"
+                        },
+                        {
+                          "type": "text",
+                          "id": "WW5tG",
+                          "name": "bcw",
+                          "fill": "#6A6A6A",
+                          "content": "CLO",
+                          "fontFamily": "Inter",
+                          "fontSize": 10,
+                          "fontWeight": "600",
+                          "letterSpacing": 1
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "87fa8",
+                      "name": "bct",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Legal Foundations",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "jcjjZ",
+                      "name": "bcs",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Privacy policy, terms, structure.",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "wnZOQ",
+              "name": "grid-row-2",
+              "width": "fill_container",
+              "gap": 12,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "BNuje",
+                  "name": "card-pricing",
+                  "width": "fill_container",
+                  "fill": "#121212",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "bQGq3",
+                      "name": "who",
+                      "width": "fill_container",
+                      "gap": 6,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "Pd4An",
+                          "name": "bci",
+                          "width": 16,
+                          "height": 16,
+                          "iconFontName": "megaphone",
+                          "iconFontFamily": "lucide",
+                          "fill": "#848484"
+                        },
+                        {
+                          "type": "text",
+                          "id": "DdZhS",
+                          "name": "bcw",
+                          "fill": "#6A6A6A",
+                          "content": "CMO",
+                          "fontFamily": "Inter",
+                          "fontSize": 10,
+                          "fontWeight": "600",
+                          "letterSpacing": 1
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "1qy7e",
+                      "name": "bct",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Set pricing strategy",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "UY8WE",
+                      "name": "bcs",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Tiers, value metric, positioning.",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "XASPa",
+                  "name": "card-competitive",
+                  "width": "fill_container",
+                  "fill": "#121212",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "ZO3HN",
+                      "name": "who",
+                      "width": "fill_container",
+                      "gap": 6,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "vUwNZ",
+                          "name": "bci",
+                          "width": 16,
+                          "height": 16,
+                          "iconFontName": "compass",
+                          "iconFontFamily": "lucide",
+                          "fill": "#848484"
+                        },
+                        {
+                          "type": "text",
+                          "id": "b0PUV",
+                          "name": "bcw",
+                          "fill": "#6A6A6A",
+                          "content": "CPO",
+                          "fontFamily": "Inter",
+                          "fontSize": 10,
+                          "fontWeight": "600",
+                          "letterSpacing": 1
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "DDnFa",
+                      "name": "bct",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Create competitive analysis",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "fHeNI",
+                      "name": "bcs",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Who else is in this market.",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "xawHg",
+                  "name": "card-launch",
+                  "width": "fill_container",
+                  "fill": "#121212",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "Qz0hK",
+                      "name": "who",
+                      "width": "fill_container",
+                      "gap": 6,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "dU28E",
+                          "name": "bci",
+                          "width": 16,
+                          "height": 16,
+                          "iconFontName": "megaphone",
+                          "iconFontFamily": "lucide",
+                          "fill": "#848484"
+                        },
+                        {
+                          "type": "text",
+                          "id": "hQe1K",
+                          "name": "bcw",
+                          "fill": "#6A6A6A",
+                          "content": "CMO",
+                          "fontFamily": "Inter",
+                          "fontSize": 10,
+                          "fontWeight": "600",
+                          "letterSpacing": 1
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "aqWoI",
+                      "name": "bct",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Plan marketing launch",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "0TvgS",
+                      "name": "bcs",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Channels, timeline, messaging.",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "uqO2Z",
+                  "name": "card-hiring",
+                  "width": "fill_container",
+                  "fill": "#121212",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "yr4TQ",
+                      "name": "who",
+                      "width": "fill_container",
+                      "gap": 6,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "rdcmZ",
+                          "name": "bci",
+                          "width": 16,
+                          "height": 16,
+                          "iconFontName": "users",
+                          "iconFontFamily": "lucide",
+                          "fill": "#848484"
+                        },
+                        {
+                          "type": "text",
+                          "id": "6eSw3",
+                          "name": "bcw",
+                          "fill": "#6A6A6A",
+                          "content": "COO",
+                          "fontFamily": "Inter",
+                          "fontSize": 10,
+                          "fontWeight": "600",
+                          "letterSpacing": 1
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "jZkGL",
+                      "name": "bct",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Define hiring plan",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "1XSdu",
+                      "name": "bcs",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Roles, timeline, budget.",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "trU9a",
+              "name": "grid-row-3",
+              "width": "fill_container",
+              "gap": 12,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "4os6j",
+                  "name": "card-distribution",
+                  "width": "fill_container",
+                  "fill": "#121212",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "KdwS9",
+                      "name": "who",
+                      "width": "fill_container",
+                      "gap": 6,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "AR9FF",
+                          "name": "bci",
+                          "width": 16,
+                          "height": 16,
+                          "iconFontName": "megaphone",
+                          "iconFontFamily": "lucide",
+                          "fill": "#848484"
+                        },
+                        {
+                          "type": "text",
+                          "id": "mUXZb",
+                          "name": "bcw",
+                          "fill": "#6A6A6A",
+                          "content": "CMO",
+                          "fontFamily": "Inter",
+                          "fontSize": 10,
+                          "fontWeight": "600",
+                          "letterSpacing": 1
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "9rtkB",
+                      "name": "bct",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Build distribution strategy",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "yD70A",
+                      "name": "bcs",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Channels, partnerships, growth.",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "4pZ86",
+                  "name": "card-financial",
+                  "width": "fill_container",
+                  "fill": "#121212",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "gkdkz",
+                      "name": "who",
+                      "width": "fill_container",
+                      "gap": 6,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "LBUD4",
+                          "name": "bci",
+                          "width": 16,
+                          "height": 16,
+                          "iconFontName": "trending-up",
+                          "iconFontFamily": "lucide",
+                          "fill": "#848484"
+                        },
+                        {
+                          "type": "text",
+                          "id": "SSEfy",
+                          "name": "bcw",
+                          "fill": "#6A6A6A",
+                          "content": "CFO",
+                          "fontFamily": "Inter",
+                          "fontSize": 10,
+                          "fontWeight": "600",
+                          "letterSpacing": 1
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "EAbHo",
+                      "name": "bct",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Set up financial projections",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "CXcHd",
+                      "name": "bcs",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Revenue, burn rate, runway.",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "VpFkc",
+                  "name": "spacer",
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "frame",
+                  "id": "PaGVh",
+                  "name": "spacer",
+                  "width": "fill_container",
+                  "height": 1
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "G7vFg",
+      "x": 0,
+      "y": 580,
+      "name": "11 - Variant B - Chip anatomy and later mixed state",
+      "width": 1040,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 32,
+      "children": [
+        {
+          "type": "frame",
+          "id": "DBecr",
+          "name": "hdr",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 6,
+          "children": [
+            {
+              "type": "text",
+              "id": "THvII",
+              "name": "b2ha",
+              "fill": "#C9A962",
+              "content": "CHIP ANATOMY — WHY B NEEDS A LEGEND",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "oxgo9",
+              "name": "b2hb",
+              "fill": "#848484",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "In the alpha state there are no founder-completed chips yet, so the gold spark has nothing to contrast against. Two chip kinds share one row, and the only thing separating them is a 13px icon.",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "xb1KD",
+          "name": "compare-row",
+          "width": "fill_container",
+          "gap": 16,
+          "children": [
+            {
+              "type": "frame",
+              "id": "hZGoM",
+              "name": "col-generated",
+              "width": "fill_container",
+              "fill": "#0F0F0F",
+              "cornerRadius": 10,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "layout": "vertical",
+              "gap": 8,
+              "padding": 16,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "TfXzT",
+                  "name": "sample-generated",
+                  "fill": "#17140C",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#4A3D22"
+                  },
+                  "gap": 6,
+                  "padding": [
+                    6,
+                    12
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "NR7Na",
+                      "name": "ch1i",
+                      "width": 13,
+                      "height": 13,
+                      "iconFontName": "sparkles",
+                      "iconFontFamily": "lucide",
+                      "fill": "#C9A962"
+                    },
+                    {
+                      "type": "text",
+                      "id": "vdNlo",
+                      "name": "ch1t",
+                      "fill": "#848484",
+                      "content": "C4 Architecture Model",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "VJkff",
+                  "name": "colAt",
+                  "fill": "#6A6A6A",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Gold spark — Soleur produced this on its own during sync. You were never asked for anything.",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Xh3q5",
+              "name": "col-founder",
+              "width": "fill_container",
+              "fill": "#0F0F0F",
+              "cornerRadius": 10,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "layout": "vertical",
+              "gap": 8,
+              "padding": 16,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "kzQn3",
+                  "name": "sample-founder",
+                  "fill": "#141414",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "gap": 6,
+                  "padding": [
+                    6,
+                    12
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "4Rggk",
+                      "name": "ch1i",
+                      "width": 13,
+                      "height": 13,
+                      "iconFontName": "check",
+                      "iconFontFamily": "lucide",
+                      "fill": "#22C55E"
+                    },
+                    {
+                      "type": "text",
+                      "id": "EsXr2",
+                      "name": "ch1t",
+                      "fill": "#848484",
+                      "content": "Brand Identity",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "ak9N9",
+                  "name": "colBt",
+                  "fill": "#6A6A6A",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Green check — you finished this with a leader. Click to reread what you agreed.",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "gPMKm",
+          "name": "lat",
+          "fill": "#848484",
+          "content": "LATER STATE — AFTER THE FOUNDER FINISHES TWO ITEMS",
+          "fontFamily": "Inter",
+          "fontSize": 10,
+          "fontWeight": "600",
+          "letterSpacing": 2
+        },
+        {
+          "type": "frame",
+          "id": "hhCql",
+          "name": "mixed-chips",
+          "width": "fill_container",
+          "gap": 8,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "z1N0r",
+              "name": "chip-c4",
+              "fill": "#17140C",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#4A3D22"
+              },
+              "gap": 6,
+              "padding": [
+                6,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "a92jJ",
+                  "name": "ch1i",
+                  "width": 13,
+                  "height": 13,
+                  "iconFontName": "sparkles",
+                  "iconFontFamily": "lucide",
+                  "fill": "#C9A962"
+                },
+                {
+                  "type": "text",
+                  "id": "BV2Mc",
+                  "name": "ch1t",
+                  "fill": "#848484",
+                  "content": "C4 Architecture Model",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "uVx4S",
+              "name": "chip-domain",
+              "fill": "#17140C",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#4A3D22"
+              },
+              "gap": 6,
+              "padding": [
+                6,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "RPGlb",
+                  "name": "ch1i",
+                  "width": 13,
+                  "height": 13,
+                  "iconFontName": "sparkles",
+                  "iconFontFamily": "lucide",
+                  "fill": "#C9A962"
+                },
+                {
+                  "type": "text",
+                  "id": "cGtat",
+                  "name": "ch1t",
+                  "fill": "#848484",
+                  "content": "Domain Model Register",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "D2MNf",
+              "name": "chip-components",
+              "fill": "#17140C",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#4A3D22"
+              },
+              "gap": 6,
+              "padding": [
+                6,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "TstNe",
+                  "name": "ch1i",
+                  "width": 13,
+                  "height": 13,
+                  "iconFontName": "sparkles",
+                  "iconFontFamily": "lucide",
+                  "fill": "#C9A962"
+                },
+                {
+                  "type": "text",
+                  "id": "19gaV",
+                  "name": "ch1t",
+                  "fill": "#848484",
+                  "content": "Component Docs · 7",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Q8mng",
+              "name": "chip-brand-done",
+              "fill": "#141414",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "gap": 6,
+              "padding": [
+                6,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "RSwbD",
+                  "name": "ch1i",
+                  "width": 13,
+                  "height": 13,
+                  "iconFontName": "check",
+                  "iconFontFamily": "lucide",
+                  "fill": "#22C55E"
+                },
+                {
+                  "type": "text",
+                  "id": "biG4d",
+                  "name": "ch1t",
+                  "fill": "#848484",
+                  "content": "Brand Identity",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "yzEEo",
+              "name": "chip-vision-done",
+              "fill": "#141414",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "gap": 6,
+              "padding": [
+                6,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "WvNQe",
+                  "name": "ch1i",
+                  "width": 13,
+                  "height": 13,
+                  "iconFontName": "check",
+                  "iconFontFamily": "lucide",
+                  "fill": "#22C55E"
+                },
+                {
+                  "type": "text",
+                  "id": "GsHZm",
+                  "name": "ch1t",
+                  "fill": "#848484",
+                  "content": "Vision",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "JDFnz",
+          "name": "note",
+          "fill": "#6A6A6A",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Five chips, two meanings, one row — and the grid below still holds 8 cards. This is the trade B makes for minimal structural change.",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "normal"
+        }
+      ]
+    }
+  ]
+}

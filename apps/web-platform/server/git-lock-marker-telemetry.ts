@@ -90,10 +90,19 @@ const log = createChildLogger("git-lock-marker-telemetry");
 //     refusal is the safe outcome; genuine git breakage surfaces as a wedge via the
 //     creation path's own SOLEUR_GIT_LOCK_*/SOLEUR_GIT_CONFIG_* markers.
 const MARKER_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
 
 // A wedge (vs. a benign DIAG) is any marker that indicates git operations could not
 // proceed: an unremovable/masked lock, a temp-wedge, a config-TARGET-masked give-up, an
+// MIRRORED-NOT-PAGED, deliberately: SOLEUR_WORKTREE_LEASE_LIB_MISSING. It means
+// cleanup-merged found no lease library and is therefore refusing to reap ANY
+// worktree — the fail-CLOSED direction, so nothing is destroyed and no git
+// operation is blocked. It belongs in MARKER_RE because "cleanup has silently
+// stopped doing anything" is otherwise indistinguishable from "cleanup ran and
+// found nothing to do" (#7278). It does not belong in WEDGE_RE because paging on
+// a safe degradation that fires once per load in every legacy worktree is how a
+// page becomes noise. Same category as SOLEUR_GIT_LOCK_IDENTITY_DIAG.
+//
 // ensure_bare_config give-up, a failed identity set-from-global write, a readiness-gate
 // rejection (SOLEUR_GIT_REPO_DIAG is only emitted on the not-ready path), a repo-less
 // workspace (NO_GIT_REPOSITORY), OR a failed feature push (SOLEUR_FEATURE_PUSH_FAILED →

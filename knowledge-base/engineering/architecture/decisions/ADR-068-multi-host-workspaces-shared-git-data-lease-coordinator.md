@@ -1363,8 +1363,13 @@ from one never written, and its failure mode is an OOM weeks later on the push p
 **Not upsized to `ccx13`** (+$304.56/yr, and it would consume 2 of 8 dedicated vCPUs):
 over-provisions against no measurement.
 
-**`cx23`/`cx33`/`cax11` are not candidates** — all out of stock in all three EU DCs at the
+**`cx23`/`cx33`/`cax11` were not candidates** — all out of stock in all three EU DCs at the
 live 2026-07-27 probe. A host cannot be born on a type nobody will sell.
+> **Re-probed 2026-08-06 (#7309):** `cx23` is ✓ in all three EU DCs and `cx33` is ✓ in
+> `nbg1-dc3`/`fsn1-dc14` (✗ in `hel1-dc2`); `cax11` remains ✗ everywhere. The `cpx22`
+> DECISION is unaffected — it was made on stock DURABILITY, not on a single reading, and
+> availability has since flipped in both directions. Recorded so the ✗ marks above are
+> not re-cited as current.
 
 ### The claim this addendum retires
 

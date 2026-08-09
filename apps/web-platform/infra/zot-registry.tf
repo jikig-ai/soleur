@@ -50,11 +50,11 @@ locals {
   # (Ampere) → arm64, anything else (`cx*`/`cpx*`) → amd64. The arch-agnosticism is real — both are
   # functionally identical for a store-and-serve registry (it never RUNS the amd64 platform images
   # it holds) — but the stock claim that used to sit here is NOT. It read "this lets provisioning
-  # take whichever of cax11 (ARM, €5.99) / cx23 (x86, €5.49) has Hetzner stock"; as of the live
-  # probe 2026-07-26 (#6966) NEITHER has stock: the entire cx line AND the entire cax ARM line are
-  # orderable in 0 of 3 EU DCs. soleur-registry is GRANDFATHERED on its cx23 — it runs fine but
-  # CANNOT BE REBUILT on that type, so a registry recreate is a type decision (the orderable set is
-  # cpx*/ccx* only). Do not read this block as offering a cax11↔cx23 choice.
+  # take whichever of cax11 (ARM, €5.99) / cx23 (x86, €5.49) has Hetzner stock". THERE IS NO SUCH
+  # CHOICE TO OFFER: cax11 (id 45) was probed NOT available in hel1-dc2 on 2026-08-06 (#7309), as
+  # it has been at every probe that sampled it since 2026-07-15 — the whole `cax` ARM line is out. This
+  # host is pinned to cpx22 (amd64) by var.registry_server_type. Do not read this block as
+  # offering an ARM arm; read it as one derivation with one live branch.
   #
   # FRESHNESS OWNER — do NOT put a "run crane digest by hand" instruction back here. A prose
   # instruction to a human is exactly what let this pin sit at v2.1.2 for 18 releases (#7282).
@@ -408,7 +408,7 @@ locals {
 # --- The registry host -----------------------------------------------------------------
 resource "hcloud_server" "registry" {
   name        = "soleur-registry"
-  server_type = var.registry_server_type # cax11 (arm64) / cx23 (amd64) — arch derived in locals
+  server_type = var.registry_server_type # cpx22 (amd64) — arch derived in locals, see ~line 49
   location    = var.registry_location    # independent of var.location (#6122: registry is nbg1)
   image       = "ubuntu-24.04"
   keep_disk   = true
@@ -438,7 +438,8 @@ resource "hcloud_server" "registry" {
   # under, and plugins/soleur/test/cloud-init-user-data-size.test.ts now carries the registry arm
   # that was missing, so the next drift fails in CI instead of at a dark host.
   #
-  # ⚠ THIS EDIT ARMS A PENDING REPLACE, AND THE RECREATE WOULD FAIL ON STOCK IN hel1.
+  # ⚠ THIS EDIT ARMS A PENDING REPLACE. The recreate is now ATTEMPTABLE (#7309) — it was not
+  # when this note was written. Attemptable is not scheduled: see the STOCK REALITY block below.
   #
   # `user_data` is ForceNew and this resource DELIBERATELY carries no
   # `lifecycle.ignore_changes = [user_data]` (see the note ~40 lines below). Changing the render
@@ -446,25 +447,68 @@ resource "hcloud_server" "registry" {
   # plan, which is the operator's full apply and the 12h drift detector, i.e. the ONLY apply
   # paths these resources have.
   #
-  # The replace was ALREADY pending before this change (state ≠ over-cap render). What this
-  # change does is make the CREATE attemptable: pre-fix it would have destroyed the host and then
-  # failed at the Hetzner 32 KB error. That is an improvement only if the type is orderable.
+  # The replace was ALREADY pending before this change (state ≠ over-cap render). What the
+  # rationale strip did is make the CREATE attemptable at all: pre-fix it would have destroyed the
+  # host and then failed at the Hetzner 32 KB error. That is an improvement only if the type is
+  # orderable — which is why #7309 repinned this host's type. See below.
   #
-  # STOCK REALITY — live probe 2026-08-04, read from `.server_types.available` (never
-  # `.supported`, never the hcloud CLI location column; both report the SUPPORTED set):
-  #   nbg1-dc3   cx23 ✓  cpx22 ✓
-  #   hel1-dc2   cx23 ✗  cpx22 ✓     ← the registry lives here (registry_location = hel1)
-  #   fsn1-dc14  cx23 ✗  cpx22 ✓
-  # So `cx23` IS orderable again in nbg1-dc3 — variables.tf's "0 of 3 EU DCs" (probe 2026-07-26)
-  # is stale in that direction — but NOT in hel1, where this host runs. A recreate here still
-  # fails on stock and is a TYPE DECISION, exactly as variables.tf warns. #6508's plan-time guard
-  # does NOT catch it: `data.hcloud_server_type.registry` resolves cx23 fine because the type is
-  # SUPPORTED; it is AVAILABILITY that is zero, which is the whole distinction.
+  # STOCK REALITY — read from `.server_types.available` (never `.supported`, never the hcloud CLI
+  # location column; both report the SUPPORTED set, which resolves a type you cannot buy).
+  # FIVE probes, hel1-dc2 — this host's datacenter (registry_location = hel1).
+  # A dash means that probe did not sample that type; it is not a reading.
   #
-  # CONSEQUENCE: do not run an untargeted apply against this root without re-probing stock first.
-  # Re-provisioning is the guarded `registry-host-replace` / `registry-luks-recut` dispatch path,
-  # which is destroy-guarded and scoped. This is disclosure, not a new hazard — but until #6460's
-  # DR remediation lands, "the plan shows the registry being replaced" is a STOP, not a proceed.
+  #   2026-07-15 (#6457)    cx23 ✓   cx33 ✓   cax11 —   cpx22 ✓
+  #   2026-07-25 (ADR-143)  cx23 ✓   cx33 ✗   cax11 ✗   cpx22 ✓
+  #   2026-07-26 (#6966)    cx23 ✗   cx33 ✗   cax11 ✗   cpx22 ✓
+  #   2026-08-04 (#7280)    cx23 ✗   cx33 —   cax11 —   cpx22 ✓
+  #   2026-08-06 (#7309)    cx23 ✓   cx33 ✗   cax11 ✗   cpx22 ✓
+  #
+  # Sources, so a reader can re-derive rather than trust this table:
+  #   2026-07-15  knowledge-base/project/plans/2026-07-15-chore-hetzner-cap-headroom-plan.md,
+  #               anchor "hel1-dc2  orderable NOW:" — a /v1/datacenters availability listing.
+  #   2026-07-25  ADR-143's "Live stock probe" table — its cx23 row reads "YES — in stock".
+  #   2026-07-26  the block this replaces in variables.tf, anchor "STOCK REALITY (live probe
+  #               2026-07-26" — recorded as "0 of 3 EU DCs", which names hel1-dc2 explicitly.
+  #   2026-08-04  the previous revision of THIS block; it was introduced by #7280, not #7287.
+  #               NOTE apply-web-platform-infra.yml, ADR-169 and the recut runbook date the
+  #               same reading 2026-08-05. One is wrong; nothing in the repo resolves it.
+  #               TRIAGED, no issue filed: both dates fall between the 07-26 ✗ and the 08-06 ✓,
+  #               so every count and direction change below is invariant to which is right, and
+  #               neither date gates anything. Re-deriving it would mean reconstructing a probe
+  #               nobody recorded. If a future reading makes the interval load-bearing, resolve
+  #               it then — this note is the record that it was considered, not overlooked.
+  #   2026-08-06  #7309, 3 samples, all three EU DCs.
+  #
+  # cx23 IS orderable in hel1-dc2 as of the newest probe. Do not restate the older "unorderable
+  # in hel1" line as if it were current — it was true on two of four sample days and is not the
+  # reason this host moved. The reason is the SHAPE of that column: cx23 went available →
+  # unavailable → available, i.e. TWO direction changes across twelve days — and the first took
+  # ONE DAY, from "in stock" on 07-25 to orderable in 0 of 3 EU DCs on 07-26. No deprecation
+  # block, no warning. (Quote the span that matches the count: the 11-day window 07-26 → 08-06
+  # contains only ONE change.) A
+  # host replace here is destroy-then-create with no capacity reservation, and a failed create
+  # leaves the registry dark with the revert needing a SECOND create against the same supply.
+  # cpx22 is ✓ on every row. #7309 repinned var.registry_server_type cx23 → cpx22 on exactly
+  # that basis (+€14.00/mo, operator-accepted); cax11 is ✗ at every probe that sampled it.
+  #
+  # NOTE THE cx33 COLUMN — it is the trap, and #7309 fell into it before catching it. cx33 is
+  # ✗ in hel1-dc2 on 2026-08-06 while ✓ in nbg1-dc3 AND fsn1-dc14 on the same samples. A
+  # fleet-wide reading therefore says "cx33 is available" and a hel1-dc2 reading says it is not,
+  # and only the second one answers a question about a host that runs in hel1. Project every
+  # probe onto the DC the host actually occupies before drawing a conclusion from it.
+  #
+  # #6508's plan-time guard does not close this either way: `data.hcloud_server_type.registry`
+  # is a CATALOG lookup, so it resolves any SUPPORTED type regardless of availability. It catches
+  # a nonexistent type (#6288's cx32) and nothing about stock. That is the whole distinction.
+  #
+  # CONSEQUENCE, unchanged by the repin: do not run an untargeted apply against this root without
+  # re-probing stock first. Re-provisioning is the guarded `registry-host-replace` /
+  # `registry-luks-recut` dispatch path, which is destroy-guarded and scoped. This is disclosure,
+  # not a new hazard — but until #6460's DR remediation lands, "the plan shows the registry being
+  # replaced" is a STOP, not a proceed. The repin improves the odds the Hetzner CREATE
+  # call succeeds. It does NOT make the replace safe: the live volume is still plaintext ext4,
+  # so a fresh host boots into cloud-init-registry.yml's `refusing-non-luks-device` FATAL and
+  # comes up dark. That is #6929's recut. Improving the odds of one step is not authorization.
   user_data = base64gzip(replace(templatefile("${path.module}/cloud-init-registry.yml", {
     # Mount the zot storage volume by its specific id (server.tf/cloud-init.yml by-id
     # pattern). Known at plan time; the attachment is a separate resource.
@@ -534,6 +578,20 @@ resource "hcloud_server" "registry" {
       random_password.zot_pull,
       random_password.zot_push,
     ]
+
+    # WRONG-ARCH TRIPWIRE — ADR-068 D7, back-filled 2026-08-06 (#7309). Compares the DERIVED
+    # arch against GROUND TRUTH from the live Hetzner catalog for this same var, so a
+    # derivation that does not match the type it claims to describe wedges the PLAN instead
+    # of booting a host that 404s every pull (MANIFEST_UNKNOWN — see local.registry_arch).
+    # git-data.tf carries this and borrowed its derivation from here; this host never had it.
+    # The x86/arm <-> amd64/arm64 mapping is Hetzner's enum, mirrored from git-data.tf:381.
+    # NOTE this is strictly stronger than registry-boot-guard.test.sh's R1/R2/R3, which read
+    # a STRING IN A FILE: those cannot fire for an operator overriding the var via tfvars or
+    # -var, which is the whole reason the var exists.
+    precondition {
+      condition     = data.hcloud_server_type.registry.architecture == (local.registry_arch == "arm64" ? "arm" : "x86")
+      error_message = "registry_server_type=${var.registry_server_type} derives ${local.registry_arch}, but Hetzner reports architecture=${data.hcloud_server_type.registry.architecture}. local.zot_image would select the wrong OCI repository and every pull would 404 (MANIFEST_UNKNOWN), darking the sole pull path (ADR-169)."
+    }
 
     # `ssh_keys` is a CREATE-TIME attribute (Hetzner injects it at first boot and never
     # re-reads it), so a changed key ID is unappliable to a running host and Terraform

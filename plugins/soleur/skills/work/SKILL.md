@@ -16,6 +16,31 @@ You are the **implementation orchestrator** for standalone `/work` and one-shot 
 See `plugins/soleur/lib/workflow-fidelity.ts` (`IMPLEMENTATION_TAIL`) and Phase 4 Invocation Mode below.
 <!-- work-anti-bypass-protocol:end -->
 
+**VERIFY A MEASUREMENT ONCE, BEFORE IT PROPAGATES.** When a plan's sweep will write the same
+measured fact into more than one file, verify it at the granularity you are about to CLAIM it
+— before the first write, not after the last. A false measurement does not stay where you put
+it: downstream files, issue comments, and review agents all consume it as fact and build on
+it, so the cost of correcting it scales with how far it spread, and the correction itself has
+to be swept. **Why:** #7325 — "cx33 is available in hel1-dc2" was read off a FLEET-WIDE probe
+and written into 4 files and 2 issue comments. It is false per-datacenter. Six review agents
+read it and one built its top finding on it (recommending an amendment to a hard-rule
+exception), so the error had already propagated one level past the diff before a 15-second
+re-probe falsified it. Project every measurement onto the exact scope you will assert — per
+datacenter, per host, per environment — and re-probe rather than adjudicating between two
+readings of the record.
+
+**SINGLE-SOURCE THE RATIONALE BEFORE WRITING IT, NOT AFTER REVIEW SAYS SO.** Prose is review
+surface: every restated paragraph is re-read by every agent and can drift independently. Write
+the reasoning ONCE at the artifact that owns the decision (the ADR for the element, the
+resource for the resource) and make every other site a one-line pointer anchored on content,
+not a line number. **Why:** #7325 — ~300 lines of justification prose across 8 files became
+the bulk of the review surface for a one-literal change, and two copies of the same probe
+table DIVERGED INSIDE THE SAME PR (one said "flipped twice", the other "three times") before
+any reviewer saw them. The review's own conclusion was to delete one copy. A short rationale
+plus a pointer is both cheaper to review and structurally unable to drift.
+
+**A DATED record is APPEND-ONLY.** When a plan's sweep touches a probe table, ledger row, dated addendum or post-mortem, correct it by APPENDING a new reading/section that cites the old one — never by editing the old one's body or substituting a cell. Editing in place is what turns a correction into destroyed evidence, and the destroyed datum is disproportionately the one that supported your own claim. Use `## Addendum — YYYY-MM-DD (#N)` or `> **Superseded YYYY-MM-DD (#N):**`, and put the record in the ADR that OWNS the element rather than the one you happened to be reading. **Why:** #7309 — a repin overwrote ADR-143's dated `cx23 = YES — in stock` cell, then asserted "Both read NO here" four lines above it; that deleted `YES` was the only in-repo evidence for the PR's own headline claim, and restoring it made the argument stronger than the one that replaced it. See `knowledge-base/project/learnings/2026-08-06-i-deleted-the-measurement-that-was-my-own-evidence.md`.
+
 # Work Plan Execution Command
 
 Execute a work plan efficiently while maintaining quality and finishing features.

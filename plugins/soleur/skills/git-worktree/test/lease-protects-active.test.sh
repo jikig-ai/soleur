@@ -114,9 +114,92 @@ fi
 rm -f /tmp/cleanup-out.$$
 
 kill "$HOLDER_PID" 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# SCENARIO 2 (#7278, 2026-08-06): the acquirer has EXITED.
+#
+# The scenario above holds a live `sleep 300` as the lease pid. That is the one
+# shape real usage never has — and it is why this suite was green for months
+# while the guard protected nothing.
+#
+# `acquire_lease` records `pid=$$`, and every documented entry point is a
+# short-lived process that exits within milliseconds of writing the file:
+#
+#     bash .claude/hooks/lib/session-state.sh acquire_lease <worktree>
+#     bash .../worktree-manager.sh --yes create <branch>
+#
+# So in production the lease pid is ALWAYS dead moments after acquisition.
+# `is_lease_active` gated on `kill -0`, `sweep_orphan_leases` deleted the file
+# on a dead pid, and cleanup-merged consequently reaped the worktree, deleted
+# the branch locally AND on origin, and closed the PR — twice in one afternoon,
+# mid-run, on a leased worktree with hours of duration remaining.
+#
+# A fixture that instantiates only the passing member of a set is a sample, not
+# a proof. This arm instantiates the member that actually occurs.
+# ---------------------------------------------------------------------------
+git -C "$BARE" worktree add -b feat-victim2 "$WT_PARENT/.worktrees/feat-victim2" main >/dev/null 2>&1
+WT_VICTIM2="$WT_PARENT/.worktrees/feat-victim2"
+( cd "$WT_VICTIM2"
+  echo hi2 > b.txt
+  git -c user.email=t@t -c user.name=t add b.txt
+  # Older than the 10-minute recent-commit grace, so the LEASE is the only
+  # thing that can protect it — otherwise this passes via the grace window and
+  # proves nothing about the lease.
+  GIT_COMMITTER_DATE="2025-01-01T00:00:00Z" \
+    git -c user.email=t@t -c user.name=t commit \
+      --date "2025-01-01T00:00:00Z" -m "victim2 change" >/dev/null
+)
+VICTIM2_SHA=$(git -C "$BARE" rev-parse refs/heads/feat-victim2)
+git -C "$BARE" update-ref refs/heads/main "$VICTIM2_SHA"
+
+# Acquire through the REAL entry point in a child process, then let it exit —
+# reproducing production rather than simulating it.
+bash -c "
+  export SOLEUR_SESSION_STATE_ROOT='$LEASE_ROOT'
+  # shellcheck source=/dev/null
+  source '$SS'
+  acquire_lease feat-victim2 one-shot 240
+" >/dev/null 2>&1
+
+DEAD_PID=$(grep '^pid=' "$LEASE_ROOT/leases/feat-victim2.lease" 2>/dev/null | cut -d= -f2)
+if [[ -z "$DEAD_PID" ]]; then
+  fail "scenario 2 setup: no lease file written for feat-victim2"
+elif kill -0 "$DEAD_PID" 2>/dev/null; then
+  # Asserted, not assumed: a live pid here would exercise scenario 1 again and
+  # pass vacuously against the very defect this arm exists to pin.
+  fail "scenario 2 precondition: recorded pid $DEAD_PID is still alive — cannot reach the dead-acquirer path"
+else
+  pass "scenario 2 precondition: the acquiring process has exited (pid $DEAD_PID is dead)"
+  (
+    cd "$WT_ACTOR"
+    SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT" \
+      bash "$WM" cleanup-merged >/tmp/cleanup2-out.$$ 2>&1 || true
+  )
+  if [[ -d "$WT_VICTIM2" ]]; then
+    pass "a lease whose acquirer exited STILL protects the worktree from a sibling reap"
+  else
+    fail "worktree reaped despite a valid in-window lease whose acquirer had exited — this is #7278 (output: $(cat /tmp/cleanup2-out.$$ 2>/dev/null))"
+  fi
+  rm -f /tmp/cleanup2-out.$$
+fi
+
 echo
 echo "=== Results ==="
 echo "PASS: $PASS"
 echo "FAIL: $FAIL"
+
+# ANTI-VACUITY FLOOR — same reasoning as session-state.test.sh. `FAIL -eq 0` is
+# a pure zero-check, so a run that asserts NOTHING exits 0. That is not
+# hypothetical here: both scenarios assert worktree SURVIVAL, which is satisfied
+# whenever cleanup-merged does nothing for any reason at all — an early `return`
+# on the fetch-prune path, a non-zero sweep aborting under `set -e`, a lock it
+# could not take. A floor cannot detect a no-op reap loop by itself, but it does
+# catch the case where the assertions were never reached.
+MIN_ASSERTIONS=3
+if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
+  echo "FAIL: only $PASS assertions ran, expected >= $MIN_ASSERTIONS — the suite did not execute what it claims to cover."
+  exit 1
+fi
+
 [[ "$FAIL" -eq 0 ]] || exit 1
 exit 0

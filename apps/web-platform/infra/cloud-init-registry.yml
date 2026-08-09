@@ -842,7 +842,9 @@ runcmd:
   # The tokens are NEVER baked into user_data (retrievable via the hcloud metadata API). They
   # arrive ONLY as the Doppler-injected env at boot. Arch (arm64/amd64) + its checksum are
   # terraform-interpolated from local.registry_arch (derived from registry_server_type), so the
-  # host provisions on whichever of cax11 (arm64) / cx23 (amd64) has Hetzner stock. Egress (github
+  # host provisions correctly on either arch. That is a property of the DERIVATION, not a live
+  # menu: the `cax` ARM line has been unorderable in hel1-dc2 at every probe since 2026-07-26,
+  # and the pin is cpx22/amd64 (#7309). Egress (github
   # release DL) is open — zot-registry.tf denies only PUBLIC ingress.
   - |
     DOPPLER_VERSION="3.75.3"

@@ -33,6 +33,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # the file is missing and we degrade to no-op stubs so the script keeps
 # running — old worktrees lose lock/lease protection but don't crash.
 _SS_LIB="$SCRIPT_DIR/../../../../../.claude/hooks/lib/session-state.sh"
+# Read at the reap decision point so the skip REASON is mode-accurate: with the
+# stub in place every worktree reads "leased", and reporting that as an observed
+# active lease would assert something the gate cannot know.
+_SS_LIB_MISSING=false
 if [[ -f "$_SS_LIB" ]]; then
   # shellcheck source=/dev/null
   source "$_SS_LIB"
@@ -40,12 +44,29 @@ else
   # Loud one-shot warn so an operator (or CI log scrape) sees that lease
   # protection is OFF in this worktree. Silent stubs would mask the
   # 2026-04-21 regression class the lease layer was added to prevent.
+  _SS_LIB_MISSING=true
+  # stdout, not stderr: stderr is invisible under `claude --bg`, which is the
+  # mode cleanup-merged actually runs in (see the note at the reap loop).
+  echo "SOLEUR_WORKTREE_LEASE_LIB_MISSING path=$_SS_LIB reason=fail-closed-no-reap"
   echo "[warn] session-state.sh missing at $_SS_LIB — lease/lock protection disabled in this worktree." >&2
+  echo "[warn] cleanup-merged will REFUSE to reap any worktree (fail-closed): with no lease" >&2
+  echo "[warn] library there is no way to tell a live session from an abandoned one." >&2
+  echo "[warn] Restore it with: git checkout origin/main -- .claude/hooks/lib/session-state.sh" >&2
   acquire_lock() { return 0; }
   release_lock() { return 0; }
   acquire_lease() { return 0; }
   release_lease() { return 0; }
-  is_lease_active() { return 1; }
+  # FAIL CLOSED (#7278). This used to `return 1` — "no lease is active" — which
+  # told cleanup-merged that EVERY worktree was free to reap at the exact moment
+  # we had just admitted we cannot measure whether one is in use. That is a
+  # fail-open default on a destructive, unrecoverable operation (it deletes the
+  # worktree, the local branch, AND the remote branch, and closes the PR).
+  #
+  # Returning 0 inverts the default: with no lease library, every worktree reads
+  # as held and nothing is reaped. The cost is that cleanup silently stops doing
+  # anything in a legacy worktree — which the loud warnings above surface, and
+  # which is trivially recoverable by hand. The old cost was losing live work.
+  is_lease_active() { return 0; }
   sweep_orphan_leases() { return 0; }
   _register_lease_release_trap() { return 0; }
   headless_or_stderr() { echo "[$1] $2" >&2; }
@@ -1792,6 +1813,28 @@ cleanup_merged_worktrees() {
     headless_or_stderr warn "cleanup-merged: ensure_bare_config wedged on an unremovable git lock (see SOLEUR_GIT_LOCK_UNREMOVABLE above); continuing with remaining maintenance."
   fi
 
+  # Expire genuinely abandoned leases BEFORE the reap loop consults them.
+  # Previously the sweep ran only in the `create` subcommand, so a host that
+  # runs cleanup-merged on a schedule but creates no worktrees never executed
+  # the 24h backstop at all — leaving is_lease_active as the sole gate. It is
+  # safe to run here precisely because the sweep now only deletes a dead-pid
+  # lease once it is PAST its own window (session-state.sh), so this cannot
+  # remove protection from a live session.
+  #
+  # GUARDED, for the reason stated ~40 lines above about the config-lock call:
+  # this runs under `set -euo pipefail` and cleanup_merged_worktrees is invoked
+  # bare, so ANY non-zero return here aborts everything after it — fetch-prune,
+  # the whole reap loop, orphan-dir cleanup, tmp reclamation, runaway-kill.
+  #
+  # The sweep returns non-zero with no corrupt file involved: `_lease_read_field`
+  # returns 1 both for a missing field and for a file that has vanished, and a
+  # sibling releasing its lease between our glob and our read is an ordinary
+  # race. This change makes that path HOT — a dead recorded pid is now the
+  # common case, so those reads run for nearly every lease on every session
+  # start. Failure direction is safe (nothing reaped), which is exactly what
+  # makes it a SILENT disable rather than a visible break.
+  sweep_orphan_leases || headless_or_stderr warn "cleanup-merged: lease sweep returned non-zero (concurrent release or truncated lease file); continuing — the reap loop re-checks each lease itself."
+
   # Determine output mode: verbose if TTY, quiet otherwise
   local verbose=false
   [[ -t 1 ]] && verbose=true
@@ -1881,9 +1924,23 @@ cleanup_merged_worktrees() {
     fi
 
     # Skip if a sibling session holds an active lease on this worktree
-    # (PID alive, hostname matches, within expected duration).
+    # (hostname matches and within the lease window — PID liveness is NOT
+    # required; requiring it is what reaped two live worktrees on 2026-08-06).
     if [[ -n "$worktree_path" ]] && is_lease_active "$(basename "$worktree_path")"; then
-      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) $branch - active lease${NC}"
+      # Mode-accurate, and unconditional. Two reasons this is not `verbose`-gated
+      # prose: `verbose` is `[[ -t 1 ]]`, so under `claude --bg` — the mode the
+      # 2026-08-06 reaps ran in — it printed NOTHING; and when the lease library
+      # is missing the stub returns 0 for every worktree, so "active lease" would
+      # ASSERT an observation the gate had just admitted it cannot make.
+      # NOT a SOLEUR_* sentinel. Skipping a leased worktree is the NORMAL, correct
+      # outcome — mirroring it to telemetry would page on the happy path. The
+      # anomalous state (no lease library, so this reads "leased" for everything)
+      # has its own sentinel, emitted once at load rather than once per branch.
+      if [[ "$_SS_LIB_MISSING" == "true" ]]; then
+        echo "(skip) $branch - lease library missing, refusing to reap (fail-closed)"
+      else
+        echo "(skip) $branch - active lease"
+      fi
       continue
     fi
 
