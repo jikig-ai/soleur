@@ -356,6 +356,19 @@ if want_scripts; then
   # the real defect into a tree copy.
   run_suite "scripts/lint-workflow-errexit-capture" bash scripts/lint-workflow-errexit-capture.test.sh
   run_suite "scripts/lint-workflow-errexit-capture-live" python3 scripts/lint-workflow-errexit-capture.py
+  # SIBLING gate (#7332): the same "captured a status nobody decided about" class, but in shell
+  # SCRIPTS under `set -e` rather than Actions `run:` blocks. Separate anchor, separate
+  # calibration -- the naive "a command-substitution assignment is a finding" rule found only
+  # 2 of 17 sites for workflows and is the CORRECT rule here, which is why widening the sibling
+  # would have meant each gate covering the other's blind spot badly.
+  #
+  # The live run carries a BASELINE of 216 pre-existing findings (206 abort-risk, 10
+  # double-emit). The gate blocks NEW occurrences only; the baseline may shrink and must never
+  # grow. Burn-down is tracked in the learning that ships with this gate. Registering it
+  # baseline-free would have meant either a permanently red suite or a silently narrowed rule.
+  run_suite "scripts/lint-shell-capture-exit" bash scripts/lint-shell-capture-exit.test.sh
+  run_suite "scripts/lint-shell-capture-exit-live" python3 scripts/lint-shell-capture-exit.py \
+    --baseline scripts/lint-shell-capture-exit.baseline.txt
   # ADR-140: Layer A encryption-posture detector (the mechanical resolver behind
   # the "encryption at rest + in transit" design-time gate). TS-1..8,15..17 +
   # the MB-1..MB-12 mutation battery (fixture-isolated, not suite-pass-count).
@@ -474,6 +487,10 @@ if want_scripts; then
   # `test-scripts` feeds the aggregate `test` job (ci.yml), which IS in the CI Required ruleset,
   # whereas the `lint-bot-statuses` job the other repo linters live in is advisory by design.
   run_suite "scripts/zot-mirror-diagnosis" bash scripts/zot-mirror-diagnosis.test.sh
+  # APP_DOMAIN_BASE derivation, consumed by both D10 arms of registry-luks-recut and by
+  # cf-tunnel-registry-bridge. It replaced a Doppler read of a secret that exists in no config
+  # of the soleur project. Explicit run_suite — scripts/*.test.sh is not auto-globbed here.
+  run_suite "scripts/derive-app-domain-base" bash scripts/derive-app-domain-base.test.sh
   # #7242: an alarm step that cannot run after an earlier failure cannot report the FIRE it
   # exists to report. Static gate over both alarm workflows — the condition is evaluated by
   # GitHub, so the YAML is the only artifact there is to test.
@@ -579,6 +596,16 @@ if want_scripts; then
   # covers scripts/*.test.sh only. An unregistered suite here runs in ZERO runners and is silent
   # and green (#3366).
   run_suite "tests/scripts/registry-restore-from-ghcr" bash tests/scripts/test-registry-restore-from-ghcr.sh
+  # D10 WIRING (not logic). The suites above prove the gate's logic; none of them proves the
+  # workflow USES it. That gap is exactly how the gate shipped reading a Doppler secret which
+  # exists in no config of the soleur project, aborting at PREPARE before it could reach its own
+  # destroy-guard. A `run:` body is not executable by any of them, so this asserts the wiring
+  # statically over both arms plus the composite action the restore leg runs inside.
+  # Deliberately a separate file: the mutation battery sandboxes the D10 suite into a tree with
+  # no .github/, so a workflow-reading row appended there would fail its baseline and harness_die.
+  # Registered explicitly for the same reason as its neighbours — nothing auto-discovers
+  # tests/scripts/ (#3366).
+  run_suite "tests/scripts/registry-d10-workflow-wiring" bash tests/scripts/test-registry-d10-workflow-wiring.sh
   # D11 post-apply liveness poller (#6929) — requires a heartbeat TRANSITION, since the monitor
   # reports the dead host's residual `up` for ~90s and exposes no last_ping_at.
   run_suite "tests/scripts/registry-heartbeat-poll" bash tests/scripts/test-registry-heartbeat-poll.sh

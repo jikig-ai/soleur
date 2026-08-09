@@ -34,7 +34,7 @@ views {
       platform.infra.coordinator, platform.infra.scheduler,
       platform.infra.gitDataStore, platform.infra.sessionStore, platform.infra.workspacesVolume,
       anthropic, github, cloudflare, doppler, stripe, plausible, resend, pushService, ghcr, projectZot, zotRegistry, betterstack, sentry, systemdUser,
-      connectedRepoPlugin
+      connectedRepoPlugin, connectedRepoKb
 
     style element.tag == #external {
       color muted
@@ -55,7 +55,15 @@ views {
       platform.plugin.cto, platform.plugin.cmo, platform.plugin.cpo,
       platform.plugin.archstrat, platform.plugin.evalharness,
       platform.plugin.constraintscaffold,
-      platform.engine.claude, platform.engine.hooks, platform.plugin.kb
+      platform.engine.claude, platform.engine.hooks, platform.plugin.kb,
+      // #7332: BOTH endpoints of an edge must be in a view's include list or the
+      // edge does not render. `sync -> connectedRepoKb` and
+      // `architecture -> connectedRepoKb` live here because this is the only
+      // curated view containing `sync` and `architecture`. Adding the node to
+      // `containers` alone (where neither endpoint is present) produced a
+      // disconnected box — the exact artifact ADR-171 warns about, shipped by the
+      // PR that warns about it.
+      connectedRepoKb
 
     autoLayout LeftRight
   }

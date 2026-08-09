@@ -1,7 +1,7 @@
 ---
 name: sync
 description: Analyze codebase and populate knowledge-base with conventions, patterns, and technical debt
-argument-hint: "[area: conventions|architecture|testing|debt|project|rule-prune|domain-model|all]"
+argument-hint: "[area: conventions|architecture|testing|debt|project|c4|rule-prune|domain-model|all]"
 ---
 
 # Sync Codebase to Knowledge Base
@@ -17,18 +17,25 @@ Analyze an existing codebase and populate knowledge-base files with coding conve
 
 <sync_area> #$ARGUMENTS </sync_area>
 
-**Valid areas:** `conventions`, `architecture`, `testing`, `debt`, `project`, `rule-prune`, `domain-model`, `all` (default)
+**Valid areas:** `conventions`, `architecture`, `testing`, `debt`, `project`, `c4`, `rule-prune`, `domain-model`, `all` (default)
 
 **Note on `rule-prune`:** This area is excluded from `all` dispatch. It files
 GitHub issues for AGENTS.md rules with zero recorded hits; it should be run
 intentionally (weekly or monthly), not as part of every `/soleur:sync` call.
 Append `--weeks=<n>` (default 8) to override the staleness threshold.
 
-**Note on `domain-model`:** This area is excluded from `all` dispatch (like
-`rule-prune`). It drift-checks the business-rules register
-(`knowledge-base/engineering/architecture/domain-model.md`) against a repo's
-migrations/RLS/guards and optionally proposes newly-inferred rows for approval. It
-targets a specific register and should be run intentionally, not on every sync.
+**Note on `c4`:** Generates a LikeC4 diagram from the component docs the `project`
+area writes, so it runs AFTER `project` in `all` dispatch. Non-destructive: it
+emits a distinct composing file and refuses to overwrite anything it did not
+write.
+
+**Note on `domain-model`:** This area runs in `all` dispatch AND standalone, with
+**two different contracts** — see Domain Model Analysis below. Standalone, it is
+terminal: the drift report plus the per-row approval-gated write ARE the output.
+Under `all` (and in headless mode, where there is no operator to approve rows) it
+bootstraps the register if absent, drift-checks, appends candidates to the
+`## Auto-inferred (unreviewed)` section only, and feeds its row count into the
+coverage summary rather than terminating the run.
 
 ## Execution Flow
 
@@ -72,7 +79,20 @@ Based on the area specified (or `all` if none):
 
 **1.1 Parse Area Filter**
 
-If `<sync_area>` is empty or `all`, analyze all areas EXCEPT `rule-prune` AND `domain-model` (both must be invoked explicitly). Otherwise, analyze only the specified area. If the argument is `rule-prune`, skip all other phases and jump straight to Rule Prune Analysis below. If the argument is `domain-model`, skip all other phases and jump straight to Domain Model Analysis below.
+If `<sync_area>` is empty or `all`, analyze all areas EXCEPT `rule-prune` (which must be invoked explicitly). Otherwise, analyze only the specified area. If the argument is `rule-prune`, skip all other phases and jump straight to Rule Prune Analysis below.
+
+`domain-model` and `c4` both participate in `all` dispatch, and both have a
+distinct standalone contract:
+
+- **`domain-model` standalone** — skip all other phases and jump straight to
+  Domain Model Analysis; it is terminal (drift report + approval-gated write ARE
+  the output). **Under `all`** — run the non-interactive path (§Domain Model
+  Analysis, "`all`-dispatch path"), then continue into the remaining phases.
+- **`c4`** — runs after the `project` area, since it consumes the component docs
+  that area writes. Standalone it emits only the diagram artifacts.
+
+**Ordering within `all`:** `project` → `c4` → `domain-model` → coverage summary.
+The C4 producer reads component docs, so it must not run before they are written.
 
 **1.2 Codebase Analysis**
 
@@ -144,11 +164,136 @@ Generate or update project documentation by examining:
 
 **Component Template:** Use the template from the `spec-templates` skill.
 
+**Dependency emission (load-bearing — the C4 producer parses it).** For every
+component doc, emit internal dependencies in BOTH forms:
+
+- `dependencies:` frontmatter — a YAML list of the kebab-case `component` names
+  this component uses. This is the machine-readable form.
+- the prose `- **Internal**:` line under `## Dependencies` — human context.
+
+The two must agree. Omit `dependencies:` (or write `[]`) only when the component
+genuinely uses no other component; do not write prose-only forms such as
+`**Internal**: None (agents are standalone)` and leave the frontmatter absent.
+The `c4` area below builds diagram edges from this field (falling back to
+markdown links in the prose line for docs written before this contract), and a
+corpus with no parseable dependencies renders a valid diagram of *disconnected
+boxes* — which the relationship-count gate reports as **degraded**.
+
 **Update Behavior:**
 
 - **New components**: Create new `.md` file from template
 - **Existing components**: Check if `updated` date is current; if not, offer to refresh
 - **Removed components**: Add `status: deprecated` to frontmatter (do not delete)
+
+#### C4 Analysis
+
+Runs when `<sync_area>` is `c4`, and as part of `all` **after** the `project`
+area (it consumes the component docs that area writes).
+
+```bash
+bun plugins/soleur/scripts/generate-c4-from-components.ts
+```
+
+The producer parses each component doc's `dependencies:` frontmatter (falling back
+to `**Internal**: [name](name.md)` links for docs written before that contract),
+skips `status: deprecated` docs, and writes the diagram artifacts into
+`knowledge-base/engineering/architecture/diagrams/`.
+
+**It is non-destructive by construction, via three different mechanisms.**
+`/soleur:architecture` writes `spec.c4` / `model.c4` / `views.c4` cwd-relative and
+the agent sandbox pins `cwd = workspacePath` — two writers, one directory. The
+producer never writes those three names. What protects each artifact differs, and
+the difference matters when reading the marker:
+
+| Artifact | Protection | Marker field |
+|---|---|---|
+| `generated-components.c4` | `GENERATED` header; refuses to overwrite a file whose first line is not that header | `skipped=` |
+| `spec.c4`, `views.c4`, `c4-model.md` | seeded **only when absent**, via `O_CREAT\|O_EXCL` — an existing one is never touched | `seeded=` |
+| `model.likec4.json` | rendered **off-tree** and published only when the verdict is not `failed` | `published=` |
+
+`model.likec4.json` carries no header — it is JSON, and it is a regenerable
+lockfile, so replacing it after a *successful* render is correct. What must never
+happen is replacing it after a *failed* one, which is what the off-tree render
+prevents. Any target that is a **symlink** is refused outright, for every artifact.
+
+A hand-corrected edge is never silently reverted, and each refusal is reported —
+`skipped=` for a protected file, `seeded=` for one that already existed, so the
+normal steady state is distinguishable from a refusal.
+
+**Report the marker, and read its `status`:**
+
+- `status=ok` — elements and relationships both non-zero.
+- `status=degraded` — **not a failure.** Either the component docs declare no
+  parseable dependencies (the diagram is a set of disconnected boxes — the docs
+  are the defect, not the run), or a hand-edited file was skipped, or the pinned
+  likec4 CLI was unreachable. Surface the reason; do not fail the sync.
+- `status=failed` (exit 1) — likec4 reported a source fault, or produced an empty
+  model. Surface the diagnostic.
+
+**Delivery precondition — state this, do not assume otherwise.** The KB viewer
+reads the diagram from the **GitHub source of truth**, not the on-disk clone
+(a clone holding un-pushed commits goes permanently stale). Headless sync commits
+locally and opens a PR, so a generated diagram is not visible in the viewer until
+that PR is **pushed and merged**.
+
+#### Coverage Summary
+
+Runs at the END of an `all` sync, after every other area. Writes
+`knowledge-base/project/kb-coverage.md` and prints the same marker to stdout:
+
+```bash
+bun plugins/soleur/scripts/write-kb-coverage.ts
+```
+
+Add one `--degraded "<reason>"` for each producer that reported `status=degraded`
+earlier in the run (the `reason=` token from its marker is the right string):
+
+```bash
+bun plugins/soleur/scripts/write-kb-coverage.ts \
+  --degraded "c4: no-generated-relationships"
+```
+
+**Do not hand-author `kb-coverage.md`, and do not pass the counts in.** Every count
+is derived from the tree by the script itself — the rendered `model.likec4.json`, the
+domain-model register, and the expected-path probe. That is deliberate: an earlier
+design took `--c4-elements`/`--c4-relationships`/`--domain-model-rows` flags, and an
+absent flag silently became `0`, which is byte-identical to the very failure state
+this artifact exists to detect. There is now no flag to forget.
+
+Standalone area invocations (`/soleur:sync c4`, `/soleur:sync domain-model`) do NOT
+write this file — its counts describe the whole knowledge base, and a partial run
+would record zeros for the areas that did not execute.
+
+**Wording is a hard constraint, not a style preference.** The report states what
+Soleur *expects* versus what is *present*. It never asserts what the business
+lacks. Write "no `privacy-policy.md` present in this knowledge base" — never
+"missing: privacy policy". This file lands in the customer's own repository,
+committed and permanently git-blamed; a deficiency framing is a durable,
+discoverable assertion that their business lacks a compliance artifact, written
+by us, about them, into a record they cannot erase.
+
+**Determinism is required.** No embedded timestamp, stable ordering — an
+unchanged KB must produce a byte-identical file, or every sync emits a one-field
+diff forever. `knowledge-base/INDEX.md` is the in-repo warning for this exact
+shape.
+
+**Emit the `SOLEUR_KB_SYNC_PRODUCERS` marker twice** — on stdout AND as a line
+inside `kb-coverage.md` — carrying `{c4_elements, c4_relationships,
+domain_model_rows, coverage_present, coverage_expected}`. This is observability
+**layer 7 (`cli-stdout-artifact`)**: on a self-hosted CLI there is no Soleur-side
+sink and there must not be one (ADR-171 §Observability boundary), so stdout alone
+would evaporate with the session and the durable artifact IS the queryable
+surface. Verify with:
+
+```bash
+grep -n 'SOLEUR_KB_SYNC_PRODUCERS' knowledge-base/project/kb-coverage.md
+```
+
+The marker carries **counts only** — no path, filename, or repo URL. On a
+producer failure emit `SOLEUR_KB_SYNC_ERROR` on stdout and record a degraded row
+in the artifact, so the failure survives the session. This is NOT
+`reportSilentFallback`: that lives in `apps/web-platform/server/observability.ts`,
+and nothing under `plugins/` imports Sentry.
 
 #### Rule Prune Analysis
 
@@ -170,9 +315,11 @@ Skip Phase 2 through Phase 4 when the area is `rule-prune` — the gh issue fili
 
 #### Domain Model Analysis
 
-Runs only when `<sync_area>` is literally `domain-model` (#5754). Drift-checks the business-rules
-register at `knowledge-base/engineering/architecture/domain-model.md` against the repo's data model
-and, with per-row operator approval, proposes newly-inferred rows. All extraction is deterministic
+Runs when `<sync_area>` is literally `domain-model` (#5754) **and** as part of `all` dispatch — with
+**two different contracts**, reconciled explicitly below so the difference does not survive as
+ambiguity. Drift-checks the business-rules register at
+`knowledge-base/engineering/architecture/domain-model.md` against the repo's data model
+and proposes newly-inferred rows. All extraction is deterministic
 (a bash analyzer); the LLM only phrases candidate statements at approval time — never in the
 drift-detection or write path. **Guarantee is bounded to structural documentation coverage, NOT
 semantic access-control correctness** — dynamic RLS, function-body logic, and un-merged `ALTER POLICY`
@@ -209,7 +356,47 @@ are disclosed as blind spots, never counted.
 3. **Report** the drift counts (stale / undocumented / blind-spots) and any rows written. No constitution /
    learnings promotion paths apply.
 
-Skip Phase 2 through Phase 4 when the area is `domain-model` — the drift report + approval-gated write ARE the output.
+##### Standalone contract (`/soleur:sync domain-model`)
+
+Skip Phase 2 through Phase 4 when the area is **explicitly** `domain-model` — the drift report +
+approval-gated write ARE the output. This contract is unchanged.
+
+##### `all`-dispatch path (and any headless run)
+
+The interactivity was never in the script — `write-row` is already a non-interactive primitive. It
+lives in the per-row `AskUserQuestion` gate above, which the Headless Execution Contract auto-skips,
+so under `all` (or headless) that gate would write **zero rows**. Take this path instead, then
+**continue into the remaining phases** rather than terminating:
+
+1. **Bootstrap the register if absent** — a fresh repo has none, and `drift` / `write-row` both die
+   on a path they cannot resolve:
+
+   ```bash
+   bash scripts/domain-model-drift.sh init --repo . \
+     --register knowledge-base/engineering/architecture/domain-model.md
+   ```
+
+   Idempotent: an existing register is a no-op exit 0, so this is safe to run unconditionally.
+
+2. **Emit the drift report** exactly as in step 1 above.
+
+3. **Append every candidate directly**, via the same `write-row` primitive — no approval gate.
+
+4. **Feed the row count into the coverage summary** (`domain_model_rows`) rather than reporting it as
+   a terminal output.
+
+**Why auto-appending is safe here, and only here.** `## Auto-inferred (unreviewed)` **is** the
+staging area for unreviewed content. Appending there is not auto-approving a business rule —
+promotion to a curated `BR-*` id remains a deliberate human edit. That distinction is the whole
+reason the section exists, and it is precisely why this can be automated when a per-row approval gate
+cannot.
+
+Because no human now reads each row before it lands, every safety property `write-row` already had
+becomes load-bearing rather than advisory, and each is pinned by a red-when-broken test in
+[`domain-model-headless-append.test.sh`](../test/domain-model-headless-append.test.sh): fail-closed
+secret-shape refusal, content-anchor dedup (re-runs are no-ops), atomic temp-then-rename write,
+appends under `## Auto-inferred (unreviewed)` only, never minting a `BR-*` id, and never touching the
+curated table.
 
 **1.3 Assign Confidence Scores**
 

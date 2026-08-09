@@ -248,9 +248,33 @@ runs:
         fi
         printf '::add-mask::%s\n' "$TOKEN_ID"
         printf '::add-mask::%s\n' "$TOKEN_SECRET"
-        # APP_DOMAIN_BASE is not in prd — fall back to the canonical default exactly
-        # like the SSH bridge / caller verify steps (bare form exits non-zero under set -e).
-        APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+        # APP_DOMAIN_BASE is not in prd — this comment was already correct, while the D10 gate
+        # that authorises the destroy this leg refills asserted the opposite. It is not a Doppler
+        # secret anywhere: server.tf sets it as a host env var from var.app_domain_base, so the
+        # committed Terraform variable is the causal source.
+        #
+        # This leg runs AFTER the destroy and picks the host images are pushed TO, so the old
+        # hardcoded fallback was the write-side twin of the gate's read-side hazard: a dead read
+        # silently resolving to a literal that nothing verified. No added -z/exit guard here —
+        # the step's `set -euo pipefail` plus the script's own ::error:: already report a
+        # failure, and inventing a second abort on the post-destroy path is what would strand an
+        # empty registry.
+        # GUARDED, matching the two `zot-mirror-diagnosis.sh` sources further down this same
+        # file. This action has FOUR callers — reusable-release.yml, both inngest image builds,
+        # and the recut chain — so an unguarded hard-fail here would add a new abort arm to the
+        # release pipeline during an active registry incident. That is the exact blast-radius
+        # objection that cut the web-host conversion from this change, and it applies with equal
+        # force to the leg that did ship. Degrade to the canonical base rather than blocking a
+        # release on a tree this action does not own.
+        if [[ -n "${GITHUB_WORKSPACE:-}" && -r "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh" ]]; then
+          if ! APP_DOMAIN_BASE=$(DERIVE_CONTEXT=registry-bridge bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh"); then
+            echo "::error::cf-tunnel-registry-bridge: APP_DOMAIN_BASE derivation failed. If this ran as the recut's refill leg the store is ALREADY DESTROYED — see the restore-job rows in the registry-luks-recut runbook, not the pre-destroy ones."
+            exit 1
+          fi
+        else
+          echo "::warning::cf-tunnel-registry-bridge: scripts/derive-app-domain-base.sh not present at GITHUB_WORKSPACE; falling back to the canonical base. Expected only outside a full soleur checkout."
+          APP_DOMAIN_BASE="soleur.ai"
+        fi
 
         # cloudflared reads the CF Access service token from these env vars.
         export TUNNEL_SERVICE_TOKEN_ID="$TOKEN_ID"
