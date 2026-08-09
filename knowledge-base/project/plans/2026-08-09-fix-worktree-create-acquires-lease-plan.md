@@ -29,7 +29,7 @@ recurring_cost_eur_per_month: 0.00
 
 ### Verified against real code during this pass
 
-Every AC grep was executed, not reasoned about. Current counts: `acquire_lease "$branch_name"` → **1**, `_register_lease_release_trap "$branch_name"` → **1**, bare `sweep_orphan_leases` → **1**, `MIN_ASSERTIONS=3` → **1**. Post-fix targets of 2/2/2 and `MIN_ASSERTIONS=6` are therefore correct. The stub definitions do not carry `"$branch_name"`, so they cannot inflate the counts. The Phase 3 comment anchors exist verbatim in `session-state.sh`. AC9's absence-grep pipeline isolates only the real `trap` line and returns 0 as required.
+Every AC grep was executed, not reasoned about. Current counts: `acquire_lease "$branch_name"` → **1**, `_register_lease_release_trap "$branch_name"` → **1**, bare `sweep_orphan_leases` → **1**, `MIN_ASSERTIONS=3` → **1**. Post-fix targets of 2/2/2 and `MIN_ASSERTIONS=6` were correct **as of the deepen pass**; the CONCUR gate and then the 8-agent review moved them to 4 sites behind a single extracted helper and `MIN_ASSERTIONS=15`. See both addenda — this paragraph records what was measured then, not the shipped state. The stub definitions do not carry `"$branch_name"`, so they cannot inflate the counts. The Phase 3 comment anchors exist verbatim in `session-state.sh`. AC9's absence-grep pipeline isolates only the real `trap` line and returns 0 as required.
 
 **Nothing was cut.** Both reviewers independently judged the plan already at its floor: the comment fix, the three assertions, and the 11 ACs each gate something the other two do not.
 
@@ -61,8 +61,8 @@ All premises re-verified against the working tree at `origin/main` = `0e9e07ba3`
 
 | Premise (from operator, treated as ground truth) | Verified against code | Plan response |
 | --- | --- | --- |
-| `create)` → `create_worktree()`, `feature\|feat)` → `create_for_feature()` | Confirmed. `create_worktree()` body runs `ensure_bare_config` → prompt → `heal_stale_branch` → `git worktree add` → `verify_worktree_created` → `ensure_bare_config` → `ensure_worktree_identity` → `copy_env_files` → `install_deps` → success echo. Zero lease calls. | Insert the acquire block after `install_deps`, before the success echo. |
-| `acquire_lease` called only at one site; `_register_lease_release_trap` only at one site | Confirmed — both inside `create_for_feature`, in the order `sweep_orphan_leases` → `acquire_lease … \|\| headless_or_stderr warn` → `_register_lease_release_trap`. | Copy that block verbatim (only `$branch_name` is already the right variable name in both functions). |
+| `create)` → `create_worktree()`, `feature\|feat)` → `create_for_feature()` | Confirmed. `create_worktree()` body runs `ensure_bare_config` → prompt → `heal_stale_branch` → `git worktree add` → `verify_worktree_created` → `ensure_bare_config` → `ensure_worktree_identity` → `copy_env_files` → `install_deps` → success echo. Zero lease calls. | ~~Insert the acquire block after `install_deps`, before the success echo.~~ **Superseded by the review addendum:** that placement leaves the whole `git worktree add` → `install_deps` span unleased, which is the span in which the reap was actually observed. Acquire now precedes `git worktree add`. |
+| `acquire_lease` called only at one site; `_register_lease_release_trap` only at one site | Confirmed — both inside `create_for_feature`, in the order `sweep_orphan_leases` → `acquire_lease … \|\| headless_or_stderr warn` → `_register_lease_release_trap`. | ~~Copy that block verbatim.~~ **Superseded:** extracted to `_acquire_worktree_lease` and called from four sites, after the review found the block itself needed trap-gating, artifact verification and a telemetry marker. |
 | one-shot + work both invoke `--yes create` with the lease env vars | Confirmed at `plugins/soleur/skills/one-shot/SKILL.md` (anchor `SOLEUR_SKILL_NAME=one-shot`) and `plugins/soleur/skills/work/SKILL.md` (anchor `SOLEUR_SKILL_NAME=work`). Both prose blocks assert the env "wire a lease on this worktree". | **No doc edit needed.** The docs describe the intended contract correctly; this PR makes them true. Editing them would be the wrong repair. |
 | `create_for_feature` does not delegate to `create_worktree` | Confirmed — it re-implements `git worktree add` itself. | No double-acquire risk on the `feature` path. |
 | The two candidate test homes and their floors | Confirmed: `lease-protects-active.test.sh` has `MIN_ASSERTIONS=3`; `.claude/hooks/lib/session-state.test.sh` has `MIN_ASSERTIONS=39`. | See **Test home decision** below. |
@@ -140,7 +140,7 @@ fi
 Then raise the floor:
 
 ```bash
-MIN_ASSERTIONS=6   # was 3 (#7278 scenario 3 adds 3)
+MIN_ASSERTIONS=15  # 3 -> 6 -> 9 -> 15 (#7278 scenarios 3-6; see the 2026-08-09 review addendum)
 ```
 
 Confirm RED: run the suite before Phase 2 and record that it fails at the lease-file assertion, not at the exit-0 assertion. **If it fails at exit-0 instead, the fixture is wrong, not the code** — fix the fixture before proceeding, or the Phase 2 green is vacuous.
@@ -206,21 +206,21 @@ Comment-only. In `_register_lease_release_trap`, the sentence asserting that `cr
 
 Run, in order:
 
-1. `bash plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh` — expect `PASS: 6`.
+1. `bash plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh` — expect `PASS: 15` (was `PASS: 6` when this line was written; see the review addendum).
 2. `bash plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh` — regression guard: `create` now acquires a lease inside this suite's fixture too; confirm it stays green (it should — a lease write is additive and its fixture bare repo absorbs the `soleur-session-state/` directory).
 3. `bash scripts/test-all.sh` (or the bash-suite subset) — full exit gate.
 4. The **live probe** below.
 
 ## Test home decision — `lease-protects-active.test.sh`, not `session-state.test.sh`
 
-**Chosen:** `plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh` (floor 3 → 6).
+**Chosen:** `plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh` (floor 3 → 6 at plan time; **15** as shipped).
 
 **Why:**
 
 1. **Subject-under-test match.** The defect is in `worktree-manager.sh`, a plugin script. `session-state.test.sh` tests the `session-state.sh` *library primitives* (`acquire_lease`, `is_lease_active`, `sweep_orphan_leases` in isolation). Those primitives are all correct here — the bug is that a caller never calls them. Asserting a plugin script's call-site behaviour from the hooks-library suite would put the assertion in the wrong subject's suite and make the 39-assertion floor cover something it does not describe.
 2. **The fixture already exists.** `lease-protects-active.test.sh` already stands up a bare repo, a `SOLEUR_SESSION_STATE_ROOT` override, worktrees, and a `PASS`/`FAIL` harness; `create-from-origin-main.test.sh` next door already proves the `--yes create` invocation runs green in this fixture family. Scenario 3 is an append, not a new harness.
 3. **It completes the file's own argument.** Scenario 1: a lease with a live PID protects. Scenario 2 (#7278 first half): a lease whose acquirer exited *still* protects. Scenario 3 (#7278 second half): the entry point the pipeline calls actually *writes* one. Read in order, the file now states the whole invariant instead of two thirds of it — and the header comment on scenario 2 ("a fixture that instantiates only the passing member of a set is a sample, not a proof") applies to the file itself until scenario 3 lands.
-4. **Floor raised to match.** `MIN_ASSERTIONS=3 → 6`. A floor left at the old number is the defect this repo keeps re-finding; the three new assertions are each independently load-bearing (exit code, file presence, `pid=` line defeating the no-op stubs).
+4. **Floor raised to match.** `MIN_ASSERTIONS=3 → 6` at plan time, **→ 15 as shipped**, and counting `PASS + FAIL` rather than `PASS`. A floor left at the old number is the defect this repo keeps re-finding; the three new assertions are each independently load-bearing (exit code, file presence, `pid=` line defeating the no-op stubs).
 
 **Rejected:** `.claude/hooks/lib/session-state.test.sh` (floor 39 → 42) — would work mechanically, but see (1).
 
@@ -262,7 +262,7 @@ Two traps the parent session already paid for. Do not re-pay them.
 - [ ] **AC8:** The `_register_lease_release_trap` comment in `.claude/hooks/lib/session-state.sh` no longer asserts un-conditionally that `create_worktree` acquired the lease before this PR, and names both causes of the measured-empty leases directory.
 - [ ] **AC9 (trap-fix regression guard, absence-anchored):** on the branch, the `trap "_lease_release_safe …"` line contains no `EXIT`. Verified by the absence grep in **Verification traps** §2 — explicitly **not** by `grep -c 'INT TERM HUP'`.
 - [ ] **AC10:** `bash scripts/test-all.sh` exits 0 (full exit gate).
-- [ ] **AC11:** Diff touches exactly three files. No `*.tf`, no `*.terraform.lock.hcl`, nothing under `apps/web-platform/infra/**`, `infra/**`, `apps/cla-evidence/infra/**`, and nothing registry/zot-related. Verify with `git diff --name-only origin/main...HEAD`.
+- [x] **AC11 (amended 2026-08-09):** Diff touches exactly **five** non-`knowledge-base/` files. No `*.tf`, no `*.terraform.lock.hcl`, nothing under `apps/web-platform/infra/**`, `infra/**`, `apps/cla-evidence/infra/**`, and nothing registry/zot-related. Verify with `git diff --name-only origin/main...HEAD`.
 
 ### Post-merge (operator)
 
@@ -294,7 +294,7 @@ failure_modes:
     detection: existing `session-state.sh missing at <path>` warn at source time,
                PLUS the new test's `pid=` assertion, which a stub cannot satisfy
     alert_route: test suite (CI), and the warn at runtime
-  - mode: lease written then reaped by a sibling running a PRE-fix checkout
+  - mode: lease written then reaped by a sibling running a PRE-fix checkout (HYPOTHESISED, not proven — see the addendum; the falsifying experiment is to purge the stale worktrees and see whether leases still vanish)
     detection: NOT detectable from this code path — see Follow-up issue below
     alert_route: none today; this is the gap the follow-up issue tracks
 
@@ -390,13 +390,13 @@ Recorded instead as a `/compound` learning: *shipping a fix to a shared-state pr
 - **Zero Terraform.** No `*.tf`, no `*.terraform.lock.hcl`, nothing under `apps/web-platform/infra/**`, `infra/**`, `apps/cla-evidence/infra/**`.
 - **Nothing registry/zot.** A sibling session owns PR #7343 and branch `feat-one-shot-7278-registry-restart-lever`. Do not read, plan for, or modify that work.
 - **EUR 0.00/mo recurring.** No vendor, no new service, no expense-ledger entry.
-- **Three files.** Any fourth file in the diff is scope creep and must be justified or reverted.
+- **Three CODE files.** ~~Any fourth file in the diff is scope creep~~ — superseded by the 2026-08-09 review addendum. The fence is on non-`knowledge-base/` files, and the review added two: `apps/web-platform/server/git-lock-marker-telemetry.ts` (mandatory — a drift guard fails CI unless `MARKER_RE` learns any new sentinel) and `.claude/hooks/lib/session-state.test.sh` (the twin misattribution). The substantive fences (no `*.tf`, nothing under any `infra/**`, nothing registry/zot) all still hold.
 
 ## Risks & Sharp Edges
 
 - **A green suite that proves nothing.** Scenario 3's exit-0 assertion passes under the no-op-stub path. The `pid=` assertion is what makes it real. Do not "simplify" the three assertions into one.
-- **The floor is the point.** `MIN_ASSERTIONS` must move 3 → 6 in the same commit as the new scenario. A floor left at the old number is exactly the defect this repo keeps re-finding, and it would let a future refactor silently drop scenario 3 while the suite still exits 0.
+- **The floor is the point.** `MIN_ASSERTIONS` must move in the same commit as any new scenario (3 → 6 → 9 → 15 across this PR), and it must count `PASS + FAIL`, not `PASS`. A floor left at the old number is exactly the defect this repo keeps re-finding, and it would let a future refactor silently drop scenario 3 while the suite still exits 0.
 - **This test transitively pins the predecessor fix too.** With an `EXIT` trap armed, `create_worktree` would acquire the lease and the trap would delete it as the script exits — scenario 3 would go red. That is a feature: the new assertion guards both halves. Note it in the PR body so a future reader does not "clean up" the trap and get a confusing failure in a suite named for a different scenario.
 - **Do not verify merged state from the bare repo root.** See Verification traps §1. Every confident wrong answer this session came from there.
 - **Do not use `grep -c 'INT TERM HUP'` for the trap.** See Verification traps §2. It matches the broken form too.
-- **`create_for_feature` stays untouched.** It is already correct. Resist the urge to refactor the shared block into a helper in this PR — it is six lines, the duplication is legible, and extracting it would widen a single-user-incident-threshold diff for no behavioural gain.
+- ~~**`create_for_feature` stays untouched.** It is already correct.~~ **SUPERSEDED 2026-08-09** (see the addendum and the review addendum): its early-return arm had the same hole, its lease also landed after `install_deps`, and a shared helper WAS extracted. It was not already correct. Resist the urge to refactor the shared block into a helper in this PR — it is six lines, the duplication is legible, and extracting it would widen a single-user-incident-threshold diff for no behavioural gain.
