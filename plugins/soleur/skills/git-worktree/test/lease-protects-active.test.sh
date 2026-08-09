@@ -379,6 +379,36 @@ else
 (output: $(cat "$TMP/create6.log"))"
 fi
 
+# ---------------------------------------------------------------------------
+# SCENARIO 7 (#7278): `switch|go` must lease too.
+#
+# The last entry point that took an EXISTING worktree and leased nothing. A
+# session that switches in and works for hours held no lease for any of them,
+# which is the same hole the two early-return arms had — `switch_worktree` just
+# lives in a different function, so fixing the arms did not reach it.
+#
+# Reuses scenario 3's worktree: delete the lease, switch in, assert it returns.
+# ---------------------------------------------------------------------------
+rm -f "$LEASE3"
+if [[ ! -f "$LEASE3" ]]; then
+  pass "scenario 7 fixture: lease removed before the switch"
+else
+  fail "scenario 7 fixture: lease still present after rm — the arm cannot discriminate"
+fi
+
+if ( cd "$LOCAL3" \
+     && SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT3" \
+        SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
+        bash "$WM" --yes switch feat-probe >"$TMP/switch7.log" 2>&1 ); then
+  :
+fi
+if [[ -f "$LEASE3" ]] && grep -q '^pid=' "$LEASE3"; then
+  pass "scenario 7: switch acquired a lease — entering a worktree is working in it"
+else
+  fail "scenario 7: switch wrote NO lease — a switched-into session runs unleased and reapable \
+(output: $(cat "$TMP/switch7.log"))"
+fi
+
 echo
 echo "=== Results ==="
 echo "PASS: $PASS"
@@ -391,7 +421,7 @@ echo "FAIL: $FAIL"
 # on the fetch-prune path, a non-zero sweep aborting under `set -e`, a lock it
 # could not take. A floor cannot detect a no-op reap loop by itself, but it does
 # catch the case where the assertions were never reached.
-MIN_ASSERTIONS=15  # 3 -> 6 -> 9 -> 15 (#7278 scenarios 3-6)
+MIN_ASSERTIONS=17  # 3 -> 6 -> 9 -> 15 -> 17 (#7278 scenarios 3-7)
 # Count DISPATCHES (PASS + FAIL), not wins. Counting PASS alone conflates two
 # different things: "the suite did not run" and "the suite ran and found bugs".
 # It printed "only N assertions ran — the suite did not execute what it claims

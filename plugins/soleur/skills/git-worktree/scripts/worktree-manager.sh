@@ -1612,6 +1612,26 @@ switch_worktree() {
     exit 1
   fi
 
+  # Entering a worktree IS working in it. `switch|go` was the last entry point
+  # that took an existing worktree and leased nothing — the same hole the two
+  # early-return arms had, one function over. A session that switches in and
+  # works for hours was reapable for all of them.
+  #
+  # `notrap` for the same reason as the early-return arms: switch by definition
+  # enters a worktree this process did not create, so it may be a co-tenant of a
+  # live session. Arming the release trap here would make THIS short-lived CLI
+  # release_lease's in-process owner, and a signal would delete the incumbent's
+  # protection.
+  #
+  # Keyed on the DIRECTORY name, which is what cleanup_merged_worktrees looks up
+  # (`is_lease_active "$(basename "$worktree_path")"`). For everything create or
+  # feature made, that equals the branch name.
+  #
+  # Non-fatal: switching is a navigation verb and must not fail because the lease
+  # layer is unavailable. The marker inside the helper is what makes an
+  # unprotected switch visible instead of silent.
+  _acquire_worktree_lease "$worktree_name" switch notrap || true
+
   echo -e "${GREEN}Switching to worktree: $worktree_name${NC}"
   cd "$worktree_path"
   echo -e "${BLUE}Now in: $(pwd)${NC}"
