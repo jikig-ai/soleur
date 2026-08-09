@@ -311,7 +311,21 @@ jobs:
         # `!= 'success'`, not `== 'failure'` — a job/step timeout is `cancelled`
         # and a skipped step is `skipped`; both must report. This arm and the
         # closer below are exhaustive and disjoint over the outcome domain.
-        if: ${{ !inputs.dry_run && (steps.tests.outcome != 'success' || steps.infra.outcome != 'success') }}
+        #
+        # `!cancelled()` is load-bearing and NOT decoration: GitHub implicitly
+        # ANDs `success()` into any step `if:` that contains no status-check
+        # function. Without it, this step is skipped whenever an EARLIER step
+        # failed — and the two suite steps carry `continue-on-error: true`, so
+        # the only steps that can fail the job are setup (toolchain assertion,
+        # gitleaks/likec4 install, checkout). Those are exactly the runs where
+        # the monitor knows least and must still say so; under the implicit
+        # `success()` they filed nothing, which is defect A's shape arriving
+        # through a different door. On a setup failure both outcomes are the
+        # empty string, so `!= 'success'` holds and the body renders its
+        # "Run did not complete" shape. A JOB-level timeout still cancels every
+        # remaining step regardless — that case is covered by the Sentry
+        # missed-check-in alarm, not by this step.
+        if: ${{ !cancelled() && !inputs.dry_run && (steps.tests.outcome != 'success' || steps.infra.outcome != 'success') }}
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
