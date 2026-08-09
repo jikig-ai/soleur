@@ -155,9 +155,14 @@ def bridge_forwards(field):
     return False
 
 def has_teardown_always():
+    # Anchored at line-start on the ACTUAL command, matching comments_on_7339's fix. The prior
+    # bare-substring form was satisfied by the comment DESCRIBING the teardown, so replacing the
+    # real `docker logout` with `: # was: docker logout 127.0.0.1:5000` kept the suite 52/52
+    # while the push-authenticated docker session survived to the end of the job.
+    import re as _re
     for j in jobs.values():
         for s in (j.get("steps") or []):
-            if "docker logout 127.0.0.1:5000" in str(s.get("run", "")):
+            if _re.search(r"(?m)^\s*docker logout 127\.0\.0\.1:5000\b", str(s.get("run", ""))):
                 return str(s.get("if", "")).strip() == "always()"
     return False
 
@@ -408,9 +413,18 @@ def login_gate_exact():
 def rejects_malformed():
     # The `case ... in true|false) ;; *) exit 1` normalizer, on an UNGATED step. Gating a
     # validator on the value it validates makes it unreachable for the values it rejects.
+    #
+    # Anchored on shell SYNTAX at line-start, and required to name the input it validates.
+    # The prior form tested bare containment of "true|false)" and "exit 1" anywhere in the
+    # body, so (a) the comment explaining the normalizer satisfied it — deleting the whole
+    # case statement left 52/52 — and (b) it never checked WHICH input was validated, so a
+    # normalizer pointed at some other variable passed just as well.
+    import re as _re
     for s in steps:
         body = str(s.get("run", ""))
-        if "true|false)" in body and "exit 1" in body:
+        if (_re.search(r"(?m)^\s*true\|false\)", body)
+                and _re.search(r"(?m)^\s*exit 1\b", body)
+                and _re.search(r"SKIP|skip-docker-login|skip_docker_login", body)):
             return s.get("if") is None
     return False
 
