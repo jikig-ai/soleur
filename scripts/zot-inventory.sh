@@ -111,6 +111,7 @@ REASON_ENUM=(
   catalog_empty
   catalog_undercount
   link_unfollowed
+  enumeration_yielded_nothing
   tag_list_incomplete
   manifest_incomplete
   referrer_incomplete
@@ -298,6 +299,20 @@ fetch_manifest() {  # $1 repo, $2 ref (tag or digest), $3 "1" if reached via the
   mybody="$(mktemp "$SCRATCH/mf.XXXXXX")"
   cp "$HTTP_BODY" "$mybody"
 
+  # A 2xx is not the same fact as "the body is a manifest". http_get_retry keys only on the
+  # status code, and every extraction below is `2>/dev/null` — so a body truncated mid-response
+  # (this store restarts ~4.8x/min, which is the failure mode the lever exists to survive)
+  # parses as nothing, contributes ZERO layer bytes, and increments NO counter. The sweep then
+  # reports enumeration_complete=true over a manifest whose 3 GB of layers it never saw, which
+  # inflates delta_gb toward "there is more garbage, recut the store". Fail it into the
+  # incomplete arm instead: unmeasurable is not measured-zero.
+  if ! jq -e . <"$mybody" >/dev/null 2>&1; then
+    MANIFEST_ERRORS=$((MANIFEST_ERRORS + 1))
+    printf 'manifest body did not parse as JSON despite http_code=%s: repo=%s ref=%s (verdict=manifest_incomplete)\n' \
+      "$HTTP_CODE" "$repo" "$ref" >&2
+    return 1
+  fi
+
   digest="$(grep -iE '^Docker-Content-Digest:' "$HTTP_HDR" 2>/dev/null | tail -1 | tr -d '\r' | awk '{print $2}')"
   if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
     digest="sha256:$(sha256sum <"$mybody" | awk '{print $1}')"
@@ -393,6 +408,14 @@ reason_is_known() {  # $1 candidate
 emit_and_exit() {  # $1 outcome, $2 reason
   local outcome="$1" reason="$2" exit_code
   reason_is_known "$reason" || die "internal: reason '$reason' is outside the closed vocabulary this marker pins." 2
+
+  # ok ==> enumeration_complete. Without this the two fields can disagree in the durable row,
+  # and `outcome` is the one a future reader greps. Enforced HERE rather than at each call site
+  # so a new early-return cannot reintroduce the contradiction by omission — the guarded
+  # property is "no such row can be emitted", not "these N sites remembered to check".
+  if [[ "$outcome" == "ok" && "$ENUMERATION_COMPLETE" != "true" ]]; then
+    die "internal: refusing to emit outcome=ok with enumeration_complete=${ENUMERATION_COMPLETE}. A summary field that says clean beside a completeness field that says nothing was measured is the contradiction this marker exists to make impossible." 2
+  fi
 
   local unique_blobs=0 total_bytes=0 d
   for d in "${!BLOB_SIZE[@]}"; do
@@ -638,6 +661,11 @@ fi
 if [[ "$TAGS" -eq 0 || "$MANIFESTS_FETCHED" -eq 0 ]]; then
   printf 'the catalog listed %s repositories but the sweep enumerated %s tags and fetched %s manifests (verdict=enumeration_yielded_nothing). This is what a catalog-scoped credential with no per-repo read looks like; no delta is claimed.\n' \
     "$REPOS" "$TAGS" "$MANIFESTS_FETCHED" >&2
+  # This used to print and FALL THROUGH to `emit_and_exit ok none`, so the durable row read
+  # `outcome=ok reason=none enumeration_complete=false` — a summary field saying clean beside a
+  # completeness field saying nothing was measured. The round-trip gate reds the run either way,
+  # but the row persists in the warehouse and `outcome` is what a future reader greps.
+  emit_and_exit partial enumeration_yielded_nothing
 fi
 
 if [[ "$REPOS" -lt "$REPO_FLOOR" ]]; then

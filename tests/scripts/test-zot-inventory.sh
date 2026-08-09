@@ -279,6 +279,15 @@ class H(BaseHTTPRequestHandler):
             if self._fail_now(fx, "manifest:" + key):
                 self._send(500, b'{"errors":[{"code":"UNAVAILABLE"}]}')
                 return
+            # `raw_body` sends bytes VERBATIM under a 2xx. Without it every fixture manifest is
+            # well-formed JSON, so "200 carrying an unparseable body" — what a response
+            # truncated by a zot restart looks like — had no reachable input class.
+            raw = spec.get("raw_body")
+            if raw is not None:
+                self._send(spec.get("code", 200), raw.encode(),
+                           ctype=spec.get("mediaType", "application/vnd.oci.image.manifest.v1+json"),
+                           extra={"Docker-Content-Digest": spec["digest"]})
+                return
             try:
                 payload = build_manifest(spec)
             except ValueError as exc:
@@ -634,6 +643,45 @@ expect_field unique_blobs 7 "paginated sweep sees every blob the single-page swe
 expect_field manifest_referenced_bytes 3526 "paginated byte total equals the single-page total"
 expect_field enumeration_complete true "a fully-followed paginated sweep is complete"
 
+echo "== 1.1.4f / A4d — a 200 carrying an unparseable body is an ERROR, not zero bytes =="
+# The store restarts ~4.8x/min, so a response truncated mid-body is the EXPECTED failure, and
+# it lands as a 200. Every extraction is `2>/dev/null`, so before this the manifest contributed
+# no layer bytes and incremented no counter — a silent undercount that inflates delta_gb.
+dedup_fixture
+python3 - "$FIXTURE" <<'PY'
+import json, sys
+fx = json.load(open(sys.argv[1]))
+# A prefix of a real manifest: valid JSON up to the truncation point, invalid overall.
+fx["manifests"]["R_a/t1"]["raw_body"] = '{"schemaVersion":2,"layers":[{"digest":"sha256:'
+fx["generation"] += 330
+json.dump(fx, open(sys.argv[1], "w"))
+PY
+run_inv "$INV"
+expect_field manifest_errors 1 "an unparseable 200 body counts as a manifest error"
+expect_field enumeration_complete false "an unparseable manifest makes the sweep incomplete"
+expect_field reason manifest_incomplete "an unparseable manifest reaches the reason vocabulary"
+expect_field outcome partial "an unparseable manifest is not an ok sweep"
+
+echo "== 1.1.4g / A4e — a catalog-scoped credential is partial, never ok =="
+# 200 {"repositories":[...]} then 200 {"tags":[]} for every repo: trips no error counter and
+# clears the repo floor. This used to fall through to `emit_and_exit ok none`, publishing
+# outcome=ok beside enumeration_complete=false in the durable row.
+dedup_fixture
+python3 - "$FIXTURE" <<'PY'
+import json, sys
+fx = json.load(open(sys.argv[1]))
+fx["tags"]["R_a"] = {"pages": [{"tags": [], "next": None}]}
+fx["tags"]["R_b"] = {"pages": [{"tags": [], "next": None}]}
+fx["generation"] += 340
+json.dump(fx, open(sys.argv[1], "w"))
+PY
+run_inv "$INV"
+expect_field outcome partial "a zero-tag sweep must NOT report outcome=ok"
+expect_field reason enumeration_yielded_nothing "a zero-tag sweep names itself in the vocabulary"
+expect_field enumeration_complete false "a zero-tag sweep is incomplete"
+if [ "$RC" -eq 1 ]; then pass "a zero-tag sweep exits 1 (partial), not 0"
+else fail "a zero-tag sweep exited $RC, want 1"; fi
+
 echo "== 1.1.5 / V3 — a tags/list that fails after retry =="
 dedup_fixture
 python3 - "$FIXTURE" <<'PY'
@@ -856,7 +904,7 @@ if [ "$bad_tok" -eq 0 ]; then pass "every marker token is a non-empty, space-fre
 # CLOSED enums, and the script's own reason vocabulary must equal this list — otherwise a
 # typo'd reason passes an allow-list that was hand-copied from the same typo.
 OUTCOME_ENUM='^(ok|degraded|partial|failed)$'
-REASON_LIST='none origin_unreachable catalog_unreadable catalog_empty catalog_undercount link_unfollowed tag_list_incomplete manifest_incomplete referrer_incomplete restart_during_sweep disk_sample_stale disk_sample_missing'
+REASON_LIST='none origin_unreachable catalog_unreadable catalog_empty catalog_undercount link_unfollowed enumeration_yielded_nothing tag_list_incomplete manifest_incomplete referrer_incomplete restart_during_sweep disk_sample_stale disk_sample_missing'
 if [[ "$(field outcome)" =~ $OUTCOME_ENUM ]]; then pass "outcome is inside the closed enum"; else fail "outcome outside the closed enum: $(field outcome)"; fi
 script_reasons="$(grep -vE '^[[:space:]]*#' "$INV" \
   | sed -n '/^REASON_ENUM=($/,/^)$/p' \
