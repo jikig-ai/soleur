@@ -183,6 +183,59 @@ else
   rm -f /tmp/cleanup2-out.$$
 fi
 
+# ---------------------------------------------------------------------------
+# SCENARIO 3 (#7278 second half): `create` must ACQUIRE a lease.
+#
+# Scenarios 1-2 prove a lease PROTECTS a worktree. Neither proves one is ever
+# WRITTEN by the entry point the autonomous pipeline actually calls. It was not:
+# `create_worktree` (dispatched from `create`) had zero acquire_lease calls,
+# while `create_for_feature` (dispatched from `feature|feat`) had one. one-shot
+# Step 0b and work Phase 1 both invoke `--yes create`, so every worktree the
+# pipeline made carried no lease at all — and the documented SOLEUR_SKILL_NAME /
+# SOLEUR_EXPECTED_DURATION_MIN env vars were read by nobody on that path.
+#
+# A lease layer that protects but is never acquired protects nothing. The header
+# on scenario 2 ("a fixture that instantiates only the passing member of a set is
+# a sample, not a proof") applied to this file itself until this arm landed.
+#
+# Fixture note: `create_worktree` resolves its base through `resolve_base_ref`,
+# which needs origin/<from> — so this arm needs a local bare repo WITH an origin
+# remote, not the bare-repo-only shape scenarios 1 and 2 use.
+# ---------------------------------------------------------------------------
+UP3="$TMP/up3.git"; git init --bare -b main "$UP3" >/dev/null
+S3="$TMP/s3"; git clone "$UP3" "$S3" >/dev/null 2>&1
+( cd "$S3" && git -c user.email=t@t -c user.name=t commit --allow-empty -m seed >/dev/null \
+    && git push origin main >/dev/null 2>&1 )
+rm -rf "$S3"
+LOCAL3="$TMP/local3.git"; git init --bare -b main "$LOCAL3" >/dev/null
+( cd "$LOCAL3" && git remote add origin "$UP3" && git fetch origin main:main >/dev/null 2>&1 )
+
+LEASE_ROOT3="$LOCAL3/soleur-session-state"
+(
+  cd "$LOCAL3"
+  SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT3" \
+  SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
+    bash "$WM" --yes create feat-probe >"$TMP/create3.log" 2>&1
+) && pass "scenario 3: --yes create exited 0" \
+  || fail "scenario 3: --yes create failed (output: $(cat "$TMP/create3.log"))"
+
+LEASE3="$LEASE_ROOT3/leases/feat-probe.lease"
+# Assert the FILE, never the directory: session-state.sh mkdir -p's leases/ at
+# source time regardless of whether anything is written, so a `[[ -d ]]` check
+# false-passes against the bug (measured during plan deepening).
+if [[ -f "$LEASE3" ]]; then
+  pass "scenario 3: --yes create wrote $LEASE3"
+  # The no-op stubs worktree-manager.sh installs when session-state.sh is absent
+  # return 0 and write nothing, which would satisfy an exit-0 check; a `pid=`
+  # line can only come from a real acquire_lease.
+  grep -q '^pid=' "$LEASE3" \
+    && pass "scenario 3: lease carries a pid= line (real acquire_lease, not a stub)" \
+    || fail "scenario 3: lease file exists but has no pid= line"
+else
+  fail "scenario 3: NO lease written by --yes create — this is the #7278 second half \
+(dir: $(ls -A "$LEASE_ROOT3/leases" 2>/dev/null || echo MISSING))"
+fi
+
 echo
 echo "=== Results ==="
 echo "PASS: $PASS"
@@ -195,7 +248,7 @@ echo "FAIL: $FAIL"
 # on the fetch-prune path, a non-zero sweep aborting under `set -e`, a lock it
 # could not take. A floor cannot detect a no-op reap loop by itself, but it does
 # catch the case where the assertions were never reached.
-MIN_ASSERTIONS=3
+MIN_ASSERTIONS=6   # was 3 (#7278 scenario 3 adds 3)
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FAIL: only $PASS assertions ran, expected >= $MIN_ASSERTIONS — the suite did not execute what it claims to cover."
   exit 1

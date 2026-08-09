@@ -1297,6 +1297,22 @@ create_worktree() {
   # Install dependencies
   install_deps "$worktree_path"
 
+  # Sweep stale leases lazily; cheap and idempotent.
+  sweep_orphan_leases
+
+  # Acquire a lease on this worktree so sibling cleanup-merged invocations
+  # see it as active and refuse to reap it. Same block as create_for_feature:
+  # `create` is the entry point one-shot Step 0b and work Phase 1 actually call,
+  # so without this the autonomous pipeline's worktrees carried no lease at all
+  # — and the SOLEUR_SKILL_NAME / SOLEUR_EXPECTED_DURATION_MIN env vars those
+  # SKILL.md blocks set were read by nobody on this path.
+  acquire_lease "$branch_name" "${SOLEUR_SKILL_NAME:-unknown}" "${SOLEUR_EXPECTED_DURATION_MIN:-240}" \
+    || headless_or_stderr warn "could not acquire lease for $branch_name"
+  # Multi-signal trap so an interrupted session (SIGINT/SIGTERM/SIGHUP)
+  # still releases the lease — without this the lease leaks until the
+  # 24h sweep, blocking sibling cleanup-merged unnecessarily.
+  _register_lease_release_trap "$branch_name"
+
   echo -e "${GREEN}✓ Worktree created successfully!${NC}"
   echo ""
   echo "To switch to this worktree:"
