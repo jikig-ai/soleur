@@ -89,19 +89,53 @@ jobs:
   health-check:
     runs-on: ubuntu-latest
 
-    # TIMEOUT BUDGET — PROVISIONAL (#7307 Phase 1). These three values are
-    # deliberately absurd so that a measurement dispatch is NOT right-censored.
-    # They are replaced with derived values in Phase 3; if you are reading this
-    # comment on `main`, that replacement was missed — treat it as a defect.
+    # TIMEOUT BUDGET — measured, not guessed. Re-derive; do not copy.
     #
-    # Why the #7307 band (14m49s–15m26s) cannot be reused: every run over 15m
-    # was KILLED at 15m, so the band measures the old ceiling, not the suite.
-    # It is censored data. Re-derive with:
+    # Why the #7307 band (14m49s-15m26s) is NOT the input here: every run over
+    # 15m was KILLED at 15m, so that band measures the OLD CEILING, not the
+    # suite. It is censored data — the surviving max is dragged toward the limit
+    # as true duration rises. Do not reuse it.
+    #
+    # Measured job-level (NOT run-level, which adds ~20-30s of queue+teardown),
+    # on this branch, full suite INCLUDING the infra runner:
+    #   31328156153  tests=14m15s (855s)  infra=1m54s (114s)
+    #   31329991410  tests=20m48s (1248s) infra=2m19s (139s)
+    #
+    # READ THOSE TWO CAREFULLY — they are not two samples of one thing. Run
+    # 31328156153 predates the gitleaks+likec4 install, so four suites aborted
+    # or self-skipped early and its 14m15s UNDERSTATES the suite. Only
+    # 31329991410 samples the current configuration. It is recorded as the
+    # comparison that shows what the toolchain fix cost (+6m33s of coverage that
+    # was previously absent), not as a second draw from the same distribution.
+    #
+    # Rule: roundup5(x) = 5*ceil(x/5); minutes fractional to 2dp
+    #       tests_step = max(30, roundup5(tests_max * 1.5))
+    #       infra_step = max(10, roundup5(infra_max * 1.5))
+    #       job        = tests_step + infra_step + 5 (setup) + 10 (cancel-token margin)
+    #       job must stay <= 120 or runs overlap at the 6h cadence.
+    # Worked:
+    #   tests 20m48s = 20.80 -> x1.5 = 31.20 -> roundup5 35 -> floor 30 -> 35
+    #   infra  2m19s =  2.32 -> x1.5 =  3.48 -> roundup5  5 -> floor 10 -> 10
+    #   job   = 35 + 10 + 5 + 10 = 60   (setup measured 52s; the 5 is the rule's allowance)
+    #
+    # The job ceiling must dominate the SUM of the step ceilings, not the max:
+    # with two timed steps, `max + 10` lets the job token trip midway through the
+    # second step, and a JOB cancel skips every remaining step regardless of
+    # `if:` — recreating defect A with the fix in place.
+    #
+    # The 1.5x and the floors are ARBITRARY SLACK, not a variance estimate — one
+    # valid sample cannot size a multiplier. They are affordable because the repo
+    # is public, so Actions minutes are free. Said plainly so a later reader does
+    # not go looking for a derivation that was never there.
+    #
+    # Re-derive with:
     #   gh run list --workflow=main-health-monitor.yml --limit 30 \
     #     --json databaseId,conclusion,createdAt
-    #   gh run view <id> --json jobs   # job-level, NOT run-level (run-level
-    #                                  # includes queue+teardown, ~20-30s high)
-    timeout-minutes: 140
+    #   gh run view <id> --json jobs   # job-level, NOT run-level
+    # and note that `gh run view --json jobs` reports steps[].conclusion, which
+    # `continue-on-error: true` PINS TO success — the real verdict is the step
+    # `outcome`, mirrored to the job summary by "Record step outcomes" below.
+    timeout-minutes: 60
 
     steps:
       # fetch-depth: 0 + fetch-tags: true mirror infra-validation.yml's
@@ -199,7 +233,7 @@ jobs:
       - name: Run test suite
         id: tests
         continue-on-error: true
-        timeout-minutes: 90 # PROVISIONAL — see the budget block above
+        timeout-minutes: 35 # derived; see the TIMEOUT BUDGET block above
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -216,7 +250,7 @@ jobs:
       - name: Run infra suites
         id: infra
         continue-on-error: true
-        timeout-minutes: 40 # PROVISIONAL — see the budget block above
+        timeout-minutes: 10 # derived; see the TIMEOUT BUDGET block above
         env:
           TEST_GROUP: infra
         run: |
