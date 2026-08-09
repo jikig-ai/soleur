@@ -75,11 +75,18 @@ jobs:
     # will red if a new job appears unguarded.
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    # Budget, derived rather than guessed. The enumeration sweep is bounded by per-request
-    # retries over ~2 repos / ~29 tags; the readback poll is bounded below at
-    # ZOT_ASSERT_POLL_BUDGET_S (340 s, see the assert step). 30 minutes sits well above
-    # the sum and leaves headroom for a slow cloudflared install; it is a hygiene cap, not a
-    # correctness requirement.
+    # A HYGIENE CAP, AND DELIBERATELY NOT THE BOUND THAT MATTERS. This comment used to claim
+    # "30 minutes sits well above the sum"; the sum was never computed and the claim was false.
+    # Worst case per request is RETRIES(3) x HTTP_TIMEOUT_S(30) + 2 x RETRY_SLEEP_S(2) = 94 s,
+    # and manifest errors do not abort — so ~29 tags alone could reach ~45 min, before
+    # referrers. The readback poll adds up to 17 polls x a 60 s query.
+    #
+    # Hitting this cap is a CANCELLATION, which skips the assert and the comment steps and
+    # leaves emit_and_exit unreached — no marker, no warehouse row, no issue comment, i.e.
+    # byte-identical to a run that never happened. So the real bound is the enumerator's own
+    # wall-clock deadline (ZOT_INVENTORY_DEADLINE_S), which trips `partial
+    # sweep_deadline_exceeded` and SHIPS the marker while there is still budget to ship it.
+    # This cap only backstops a hang outside that deadline's reach.
     timeout-minutes: 30
     concurrency:
       group: registry-zot-inventory
@@ -478,16 +485,25 @@ jobs:
       # the first runner-side measurement of it.
       - name: Round-trip assert — read the marker back out of Better Stack
         id: assert_marker
-        if: ${{ !cancelled() && steps.inventory.conclusion == 'success' }}
+        # `!= 'skipped'`, NOT `== 'success'`. The enumerator exits 1 precisely when the ingest
+        # POST is rejected (verdict=ingest_rejected_http_<code>), so a `== 'success'` gate skips
+        # this step on exactly the runs whose `--ingest-http-code` arm exists to classify — the
+        # step plumbed INGEST_HTTP_CODE in for a case it could never reach, and H6 ("can the
+        # runner reach the eu-fsn-3 ingest pin?") attaches THERE. Matching the comment step's
+        # gate means the assert now runs whenever the enumerator ran at all.
+        if: ${{ !cancelled() && steps.inventory.conclusion != 'skipped' }}
         env:
           BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
           BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
           BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
           INGEST_HTTP_CODE: ${{ steps.inventory.outputs.ingest_http_code }}
-          # The script's own seam names. 340 s is 20x the MEASURED 17 s POST->queryable floor
-          # from the Phase-0 half-probe; the interval is well under the floor so a fast landing
-          # is not rounded away.
-          ZOT_ASSERT_POLL_BUDGET_S: '340'
+          # DERIVED, not restated. Setting ZOT_ASSERT_POLL_BUDGET_S here pinned the product and
+          # left the script's multiple at its default 6, so every production verdict line
+          # advertised `poll_budget_s=340 poll_budget_multiple=6 measured_ingest_latency_s=17`
+          # — the field whose whole purpose is making the budget auditable reported a
+          # derivation that does not multiply out. Passing the MULTIPLE keeps 20x17=340 and
+          # makes a future re-measurement of the 17 s floor move the budget with it.
+          ZOT_ASSERT_POLL_BUDGET_MULTIPLE: '20'
           ZOT_ASSERT_POLL_INTERVAL_S: '20'
         # --run-id is REQUIRED and must be numeric: the match is anchored on
         # `SOLEUR_ZOT_INVENTORY run_id=<numeric>` precisely so a GitHub webhook echo of this

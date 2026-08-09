@@ -100,6 +100,14 @@ REPO_FLOOR="${ZOT_INVENTORY_REPO_FLOOR:-2}"
 # `SOLEUR_ZOT_DISK` lands every 5 min; 15 min allows two missed samples before the disk
 # figures stop being usable as a same-window comparison.
 DISK_SAMPLE_MAX_AGE_S="${ZOT_INVENTORY_DISK_SAMPLE_MAX_AGE_S:-900}"
+# The sweep's OWN wall-clock bound, deliberately well under the caller's job cap (30 min).
+# Worst case per request is RETRIES x HTTP_TIMEOUT_S + retry sleeps = 94 s and a manifest error
+# does not abort, so a distressed origin can push the sweep past any job cap. Hitting the JOB
+# cap is a cancellation: emit_and_exit never runs, no marker is POSTed, no comment is written —
+# a run that produced nothing is indistinguishable from one never dispatched. Tripping HERE
+# instead ships a `partial` marker that names the reason, which is the whole point of having a
+# durable record. 0 disables (tests).
+DEADLINE_S="${ZOT_INVENTORY_DEADLINE_S:-1200}"
 
 # The CLOSED reason vocabulary. Pinned as data, not prose: a `reason` outside this set would
 # both defeat the marker's allow-list and turn any interpolated error string into an
@@ -116,6 +124,7 @@ REASON_ENUM=(
   manifest_incomplete
   referrer_incomplete
   restart_during_sweep
+  sweep_deadline_exceeded
   disk_sample_stale
   disk_sample_missing
 )
@@ -627,6 +636,14 @@ for repo in $REPO_LIST; do
   [[ "$repo_ok" -eq 1 ]] && REPOS_ENUMERATED=$((REPOS_ENUMERATED + 1))
 
   for tag in $(printf '%s' "$tag_list" | grep -E '.' | sort -u || true); do
+    # Checked in the per-tag loop because manifest fetching is the long pole: 94 s worst case
+    # per request, and an error does not abort. Emitting `partial` here keeps the number we DID
+    # measure, correctly labelled incomplete, instead of losing it to a job cancellation.
+    if [[ "$DEADLINE_S" -gt 0 && "$SECONDS" -ge "$DEADLINE_S" ]]; then
+      printf 'the sweep passed its %ss wall-clock deadline after %s tags and %s manifests (verdict=sweep_deadline_exceeded). Emitting what was measured rather than losing it to the job cap.\n' \
+        "$DEADLINE_S" "$TAGS" "$MANIFESTS_FETCHED" >&2
+      emit_and_exit partial sweep_deadline_exceeded
+    fi
     TAGS=$((TAGS + 1))
     fetch_manifest "$repo" "$tag" 0
   done

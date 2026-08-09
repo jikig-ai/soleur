@@ -72,6 +72,17 @@ assert "the job set is exactly {restart} (a new job must be added to the guard d
 
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed ==="
+
+# ANTI-VACUITY FLOOR — see the sibling note in registry-zot-inventory-workflow-guard.test.sh.
+# Measured: removing all 6 assert calls left this file reporting "0/0 passed" and exiting 0.
+# A FLOOR, never an equality. Raise in lockstep when assertions are added.
+MIN_ASSERTIONS=6
+if (( PASS + FAIL < MIN_ASSERTIONS )); then
+  echo "FAIL: only $((PASS + FAIL)) assertions ran, below the floor of ${MIN_ASSERTIONS}."
+  echo "      Treat this as UN-RUN, not as a pass."
+  exit 1
+fi
+
 if (( FAIL > 0 )); then
   echo "FAIL: $FAIL test(s) failed"
   exit 1

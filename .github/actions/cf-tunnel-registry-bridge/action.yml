@@ -198,7 +198,13 @@ runs:
         set -euo pipefail
         # Idempotent: the SSH bridge may already have installed the same pinned binary.
         if ! command -v cloudflared >/dev/null 2>&1; then
-          curl -fsSL -o /tmp/cloudflared \
+          # --max-time is load-bearing on an incident-time lever, not hygiene. With no timeout a
+          # stalled releases CDN hangs this step until the caller's job cap kills the whole run
+          # — BEFORE the bridge is up, so the lever burns its entire budget and produces no
+          # marker, which is byte-identical to never having been dispatched. --retry covers the
+          # transient 5xx that made this the only unbounded curl on the critical path.
+          curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 5 \
+            -o /tmp/cloudflared \
             "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64"
           echo "${CLOUDFLARED_SHA256}  /tmp/cloudflared" | sha256sum -c -
           sudo install -m 0755 /tmp/cloudflared /usr/local/bin/cloudflared

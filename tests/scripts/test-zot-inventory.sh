@@ -682,6 +682,36 @@ expect_field enumeration_complete false "a zero-tag sweep is incomplete"
 if [ "$RC" -eq 1 ]; then pass "a zero-tag sweep exits 1 (partial), not 0"
 else fail "a zero-tag sweep exited $RC, want 1"; fi
 
+echo "== 1.1.4h / A4f — the wall-clock deadline SHIPS a marker instead of losing it =="
+# Hitting the caller's job cap is a cancellation: emit_and_exit never runs and the run produces
+# no marker, no warehouse row and no comment — indistinguishable from never being dispatched.
+# The enumerator's own deadline must trip first and emit what it measured. A failing manifest
+# burns RETRIES x RETRY_SLEEP_S of real time, which is what carries SECONDS past the deadline.
+dedup_fixture
+python3 - "$FIXTURE" <<'PY'
+import json, sys
+fx = json.load(open(sys.argv[1]))
+# R_a/t1 SUCCEEDS first (so blobs are on the books), R_a/t2 then burns the retry sleeps, and
+# the deadline trips at R_b/t1 — proving the marker carries the partial measurement rather
+# than an empty one.
+fx["fail_always"] = ["manifest:R_a/t2"]
+fx["generation"] += 350
+json.dump(fx, open(sys.argv[1], "w"))
+PY
+# DEADLINE_S=3, not 1: script startup plus the origin/catalog/tags round-trips can already put
+# SECONDS past 1, which would trip before ANY manifest was fetched and make the
+# "carries what it measured" assertion below vacuous. 3 clears setup; the ~4 s of retry sleeps
+# on R_a/t2 then carries it over.
+run_inv "$INV" ZOT_INVENTORY_DEADLINE_S=3 ZOT_INVENTORY_RETRY_SLEEP_S=2
+expect_field reason sweep_deadline_exceeded "the deadline names itself in the vocabulary"
+expect_field outcome partial "a deadline-tripped sweep is partial, never ok"
+expect_field enumeration_complete false "a deadline-tripped sweep is incomplete"
+if [ -n "$(field unique_blobs)" ] && [ "$(field unique_blobs)" -gt 0 ]; then
+  pass "the deadline SHIPS the blobs measured so far (unique_blobs=$(field unique_blobs))"
+else
+  fail "the deadline emitted no measurement at all — the marker must carry what was measured"
+fi
+
 echo "== 1.1.5 / V3 — a tags/list that fails after retry =="
 dedup_fixture
 python3 - "$FIXTURE" <<'PY'
@@ -904,7 +934,7 @@ if [ "$bad_tok" -eq 0 ]; then pass "every marker token is a non-empty, space-fre
 # CLOSED enums, and the script's own reason vocabulary must equal this list — otherwise a
 # typo'd reason passes an allow-list that was hand-copied from the same typo.
 OUTCOME_ENUM='^(ok|degraded|partial|failed)$'
-REASON_LIST='none origin_unreachable catalog_unreadable catalog_empty catalog_undercount link_unfollowed enumeration_yielded_nothing tag_list_incomplete manifest_incomplete referrer_incomplete restart_during_sweep disk_sample_stale disk_sample_missing'
+REASON_LIST='none origin_unreachable catalog_unreadable catalog_empty catalog_undercount link_unfollowed enumeration_yielded_nothing tag_list_incomplete manifest_incomplete referrer_incomplete restart_during_sweep sweep_deadline_exceeded disk_sample_stale disk_sample_missing'
 if [[ "$(field outcome)" =~ $OUTCOME_ENUM ]]; then pass "outcome is inside the closed enum"; else fail "outcome outside the closed enum: $(field outcome)"; fi
 script_reasons="$(grep -vE '^[[:space:]]*#' "$INV" \
   | sed -n '/^REASON_ENUM=($/,/^)$/p' \

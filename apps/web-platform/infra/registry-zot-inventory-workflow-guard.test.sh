@@ -560,6 +560,22 @@ assert "no .tf consumes restart-inngest-workflow-guard.test.sh (the second AC6 c
 
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed ==="
+
+# ANTI-VACUITY FLOOR. The only gate below is `FAIL > 0`, so removing the assert calls yields
+# PASS=0 FAIL=0 and exit 0 — a suite that asserts NOTHING is indistinguishable from one that
+# passed, and CI reads only the exit code. Measured: stripping 45 of the 52 assert statements
+# left this file reporting "7/7 passed" and exiting 0.
+#
+# A FLOOR, never an equality: `-eq` would turn every legitimately-added assertion into a
+# spurious failure. Raise it in lockstep when assertions are added.
+MIN_ASSERTIONS=52
+if (( PASS + FAIL < MIN_ASSERTIONS )); then
+  echo "FAIL: only $((PASS + FAIL)) assertions ran, below the floor of ${MIN_ASSERTIONS}."
+  echo "      The suite was truncated or its assert calls were removed. Nothing below this"
+  echo "      line certifies the workflow; treat this as UN-RUN, not as a pass."
+  exit 1
+fi
+
 if (( FAIL > 0 )); then
   echo "FAIL: $FAIL test(s) failed"
   exit 1
