@@ -15,11 +15,13 @@ Three files. Phase order is load-bearing (RED before GREEN).
 
 - [ ] 2.1 Append **Scenario 3** to `plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh`: stand up an upstream + local bare repo with an `origin` remote, run `--yes create feat-probe` with `SOLEUR_SESSION_STATE_ROOT` + `SOLEUR_SKILL_NAME` + `SOLEUR_EXPECTED_DURATION_MIN` set, and assert (a) exit 0, (b) `<lease-root>/leases/feat-probe.lease` exists, (c) it contains a `pid=` line.
 - [ ] 2.2 Raise `MIN_ASSERTIONS` from `3` to `6` in the same file.
-- [ ] 2.3 Run the suite. Confirm it fails at assertion (b), the lease-file check — **not** at assertion (a). If it fails at (a), the fixture is wrong; fix the fixture before Phase 3.
+- [ ] 2.3 Run the suite. Confirm it fails at assertion (b), the lease-file check — **not** at assertion (a). If it fails at (a), the fixture is wrong; fix the fixture before Phase 3. (Deepen-plan already ran this exact fixture against unfixed code and got `pass: (a)` / `FAIL: (b)` — reproduce that, do not redesign it.)
+- [ ] 2.3b Assert the lease **file**, never the leases **directory** — the directory is created at source time and is empty on the unfixed path, so `[[ -d … ]]` false-passes against the bug.
 - [ ] 2.4 Capture the failing output line for AC5 / the PR body.
 
 ## 3. GREEN — the fix
 
+- [ ] 3.0 **Disambiguate the anchor first.** `install_deps "$worktree_path"` appears TWICE in the file (once per creating function). The `create_worktree` site is the one immediately followed by the `✓ Worktree created successfully!` echo; the `create_for_feature` site is the one immediately followed by `# Sweep stale leases lazily`. Do not grep for `install_deps` alone, and do not use a line number.
 - [ ] 3.1 Insert into `create_worktree()` in `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`, after `install_deps "$worktree_path"` and before the success echo: `sweep_orphan_leases`, then `acquire_lease "$branch_name" "${SOLEUR_SKILL_NAME:-unknown}" "${SOLEUR_EXPECTED_DURATION_MIN:-240}" || headless_or_stderr warn "could not acquire lease for $branch_name"`, then `_register_lease_release_trap "$branch_name"` — with a short comment naming why (`create` is the entry point one-shot Step 0b and work Phase 1 call).
 - [ ] 3.2 Do **not** vary the form, the warn text, or the ordering from `create_for_feature`'s block.
 - [ ] 3.3 Re-run `lease-protects-active.test.sh` — expect `PASS: 6`, exit 0.

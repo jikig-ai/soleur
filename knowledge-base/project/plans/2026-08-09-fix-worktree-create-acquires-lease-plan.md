@@ -11,6 +11,28 @@ recurring_cost_eur_per_month: 0.00
 
 # fix(git-worktree): `create` never acquires a lease
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-09 — deliberately proportionate pass (small, already-diagnosed fix; no 40-agent fan-out).
+
+**Gates run:** 4.6 User-Brand Impact (pass — `single-user incident`), 4.7 Observability (pass — 5 fields present, no `ssh` in `discoverability_test.command`), 4.8 PAT-shaped variable (pass — no matches), 4.9 UI wireframe (skip — no UI surface), 4.10 Encryption Posture (skip — no persistent store, no new cross-component connection), 4.55 Downtime & Cutover (skip — no serving surface affected), 4.5 Network-Outage (skip — the sole keyword match is the line *"No SSH anywhere"*, a declaration of absence, not a connectivity symptom).
+
+**Agents:** `kieran-rails-reviewer` (correctness), `code-simplicity-reviewer` (YAGNI/scope). Both cleared the plan; three findings folded in below.
+
+### What the deepen pass changed
+
+1. **The fixture is now empirically pre-validated, not merely designed.** The proposed Scenario-3 harness was executed against the unfixed `worktree-manager.sh`: it goes RED at the lease assertion with exit-0 passing — exactly the RED that AC5 demands. `/work` inherits a working harness. See *"The fixture above is already empirically validated"* under Phase 1.
+2. **A false-pass trap was found by running it.** The leases *directory* is created at source time and is **empty** on the unfixed path, so a `[[ -d … ]]` assertion would pass against the bug. The plan now says: assert the **file**, never the directory.
+3. **The Phase 2 insertion anchor was ambiguous and is now disambiguated.** `install_deps "$worktree_path"` appears **twice** in the file (once per creating function). A grep-driven edit could patch the wrong one. The anchor is now the *following* line, per `cq-cite-content-anchor-not-line-number`.
+4. **Symbol scope pre-resolved** (raised by `code-simplicity-reviewer`): `headless_or_stderr` and the three lease functions all resolve at file scope, plus fallback stubs — so `create_worktree` needs no extra sourcing, and the stub branch is precisely why AC3's `pid=` assertion is load-bearing.
+5. **The follow-up issue's item 4 was re-severitied** (raised by `code-simplicity-reviewer`): the unleased early-return arm is a known-live gap of the *same brand-survival class* as the bug being fixed — a one-shot re-run is the second-most-common path, not an edge case. It was reading as an appendix; it now carries its own severity.
+
+### Verified against real code during this pass
+
+Every AC grep was executed, not reasoned about. Current counts: `acquire_lease "$branch_name"` → **1**, `_register_lease_release_trap "$branch_name"` → **1**, bare `sweep_orphan_leases` → **1**, `MIN_ASSERTIONS=3` → **1**. Post-fix targets of 2/2/2 and `MIN_ASSERTIONS=6` are therefore correct. The stub definitions do not carry `"$branch_name"`, so they cannot inflate the counts. The Phase 3 comment anchors exist verbatim in `session-state.sh`. AC9's absence-grep pipeline isolates only the real `trap` line and returns 0 as required.
+
+**Nothing was cut.** Both reviewers independently judged the plan already at its floor: the comment fix, the three assertions, and the 11 ACs each gate something the other two do not.
+
 ## Overview
 
 `worktree-manager.sh` has two worktree-creating entry points. Only one of them acquires a lease.
@@ -123,9 +145,28 @@ MIN_ASSERTIONS=6   # was 3 (#7278 scenario 3 adds 3)
 
 Confirm RED: run the suite before Phase 2 and record that it fails at the lease-file assertion, not at the exit-0 assertion. **If it fails at exit-0 instead, the fixture is wrong, not the code** — fix the fixture before proceeding, or the Phase 2 green is vacuous.
 
+#### The fixture above is already empirically validated — deepen-plan ran it
+
+This exact fixture was executed against the **unfixed** `worktree-manager.sh` during the deepen pass, so `/work` inherits a pre-validated harness rather than discovering its quirks:
+
+```
+  pass: (a) --yes create exited 0
+  FAIL: (b) NO lease written (leases dir: )
+worktree present: yes
+=== PASS: 1  FAIL: 1
+```
+
+Three things this establishes, each of which would otherwise cost a /work iteration:
+
+1. **It goes RED for the right reason.** Assertion (a) passes — the fixture reaches `create_worktree`'s tail. Only the lease assertion fails. This is the RED that AC5 requires.
+2. **`copy_env_files` and `install_deps` are harmless in this fixture.** The run logged `No .env files found in main repository` and produced no dependency install — there is no `package.json` in a bare fixture repo, so the 13,354-file / npm-install cost of the real repo does not apply. The suite stays fast.
+3. **The leases *directory* exists and is EMPTY on the unfixed path.** `session-state.sh` `mkdir -p`s `leases/` at source time regardless of whether anything is ever written. So an assertion of the form `[[ -d "$LEASE_ROOT3/leases" ]]` would **false-pass against the bug**. Assert the **file**, never the directory. (Same class as `cq-assert-anchor-not-bare-token`: assert the discriminator.)
+
 ### Phase 2 — GREEN: the acquire block in `create_worktree`
 
-Insert immediately after `install_deps "$worktree_path"` in `create_worktree()`, before `echo -e "${GREEN}✓ Worktree created successfully!${NC}"`. **Verbatim the same form as `create_for_feature`** — do not invent a variant, do not "improve" the warn text:
+**Disambiguate the anchor before editing.** `install_deps "$worktree_path"` appears **twice** in the file — once in `create_worktree`, once in `create_for_feature`. Do not grep for it alone. The `create_worktree` site is the one **immediately followed by** `echo -e "${GREEN}✓ Worktree created successfully!${NC}"`; the `create_for_feature` site is the one immediately followed by the `# Sweep stale leases lazily` comment (i.e. the block you are copying). Anchor on that following line, not on `install_deps` and not on a line number (`cq-cite-content-anchor-not-line-number`).
+
+Insert between `install_deps "$worktree_path"` and the success echo. **Verbatim the same form as `create_for_feature`** — do not invent a variant, do not "improve" the warn text:
 
 ```bash
   # Sweep stale leases lazily; cheap and idempotent.
@@ -143,6 +184,8 @@ Insert immediately after `install_deps "$worktree_path"` in `create_worktree()`,
 ```
 
 `$branch_name` is already the local's name in both functions — no rename, no plumbing.
+
+**Scope of the copied symbols is already verified — do not re-derive.** All four names the block uses resolve at file scope, so `create_worktree` needs no extra sourcing or plumbing: `headless_or_stderr` is defined top-level in `.claude/hooks/lib/session-state.sh` (anchor `headless_or_stderr() {`), and `worktree-manager.sh` additionally defines fallback stubs for `acquire_lease`, `sweep_orphan_leases`, `_register_lease_release_trap`, and `headless_or_stderr` in its session-state-missing branch (anchor `headless_or_stderr() { echo "[$1] $2" >&2; }`). The stub branch is exactly why AC3's `pid=` assertion exists — the stubs return 0 and write nothing.
 
 ### Phase 3 — Correct the `session-state.sh` comment
 
@@ -308,7 +351,9 @@ File one issue, titled around **"lease durability is bounded by the oldest check
 1. **Measured, this session:** fresh lease files are disappearing on this machine. The parent acquired a lease, confirmed the file on disk, and it later vanished; a sibling session's lease vanished the same way.
 2. **What it is not:** current `main`'s `is_lease_active` and `sweep_orphan_leases` are both window-gated and *cannot* reap a two-minute-old lease. So the reaper on `main` is not the culprit.
 3. **Probable cause:** a sibling session running a **pre-fix** `worktree-manager.sh` / `session-state.sh` from one of the ~10 stale worktrees on this machine — the old sweep deleted on dead-PID alone. If that holds, the lease layer is only as strong as the *oldest checkout still running `cleanup-merged`*, which is a real durability gap: shipping a fix to a shared-state protocol does not retire the old implementations that still write to that shared state.
-4. **Adjacent, same family, also not fixed here:** `create_worktree`'s early-return arm — when the worktree already exists and the caller switches to it instead — acquires no lease. `create_for_feature` has the identical hole. A one-shot **re-run** against an existing worktree therefore still ends up unleased. Left out of this PR deliberately: the fix here is *parity with `create_for_feature`*, and closing this arm in only one of the two would re-introduce the divergence this PR exists to remove. Fix both together, or neither.
+4. **Adjacent, same family, SAME SEVERITY — also not fixed here:** `create_worktree`'s early-return arm — when the worktree already exists and the caller switches to it instead — acquires no lease. `create_for_feature` has the identical hole. This is **not a lower-priority nice-to-have**: it is a known-live gap of the *same brand-survival class* as the defect this PR fixes, and the path is not exotic — a one-shot **re-run** (any retry, any resumed session) is the second-most-common path after fresh create, and every one of them ends up unleased and reapable. File it at the same severity, not as an appendix.
+
+   Left out of *this* PR deliberately, for one reason only: the fix here is *parity with `create_for_feature`*, and closing this arm in only one of the two would re-introduce the exact divergence this PR exists to remove — while closing it in both would mean editing `create_for_feature`, which the three-file scope fence (and the decision not to extract a shared helper) explicitly excludes. Fix both arms together in the follow-up, or neither.
 
 Do **not** fold any of this into this PR. It is a distinct failure mode with a distinct fix shape, and the operator's scope fence is explicit.
 
