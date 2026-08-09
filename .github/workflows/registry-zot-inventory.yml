@@ -1,9 +1,9 @@
-# Read-only zot disk-inventory lever for the registry host (#7278, ADR-171).
+# Read-only zot disk-inventory lever for the registry host (#7278, ADR-172).
 #
 # WHAT THIS IS. The registry host has no in-place execution lever of any kind: every
 # write-shaped remediation for the live disk-exhaustion incident (#7247) needs a config
 # change delivered by cloud-init, which needs a host REPLACE, which today opens
-# /dev/mapper/registry against a still-plaintext ext4 volume (#6929, OPEN). This workflow is
+# /dev/mapper/registry against a still-plaintext ext4 volume (the LUKS recut is UNFIRED — #7287). This workflow is
 # the entire set of useful work on the near side of that deadlock: it MEASURES, read-only,
 # over the already-live and already-CF-Access-gated `registry.<app_domain_base>` ingress, how
 # many of the ~59 GB the store reports are actually referenced by a manifest.
@@ -41,7 +41,7 @@
 # This workflow touches no `.tf` file, mints no Doppler secret and mints no CF Access token.
 # That is an acceptance criterion, not an incidental property: `hcloud_server.registry`
 # already carries a PENDING REPLACE in state, so any new resource with no scoped apply path
-# would have to ride an untargeted apply and carry that replace into the #6929 fatal.
+# would have to ride an untargeted apply and carry that replace into the unfired-recut fatal (#7287).
 name: Registry zot disk inventory (read-only)
 
 on:
@@ -62,7 +62,7 @@ on:
       - '.github/workflows/registry-zot-inventory.yml'
 
 # `issues: write`, not `contents: read` alone. The deliverable is a durable number, and one
-# of its two durable homes is a comment on the open incident (#7247) — a read-only permission
+# of its two durable homes is a comment on the dedicated tracker (#7339) — a read-only permission
 # set makes that requirement unimplementable, which is the defect this line fixes.
 permissions:
   contents: read
@@ -350,7 +350,7 @@ jobs:
           ZOT_RESTARTS_AT_START: ${{ steps.disk_start.outputs.restarts }}
           MARKER_FILE: ${{ runner.temp }}/zot-inventory-marker.txt
         # The script emits the marker line on STDOUT (diagnostics go to stderr) and POSTs it to
-        # Better Stack itself. Capture stdout so `assert_marker` and the #7247 comment can read
+        # Better Stack itself. Capture stdout so `assert_marker` and the #7339 comment can read
         # the exact line back without re-deriving it.
         #
         # `rc` is captured, not inherited: the runner's implicit `bash -eo pipefail {0}` would
@@ -509,7 +509,7 @@ jobs:
       # The original rationale here was "#7247 is OPEN and action-required". It closed at
       # 2026-08-06T13:18:32Z, mid-review — so that rationale now selects exactly the outcome
       # it was written to avoid (a comment on a closed issue is a comment nobody reads), and
-      # this is the failure mode ADR-171 predicted when it argued the trackers must be
+      # this is the failure mode ADR-172 predicted when it argued the trackers must be
       # DEDICATED issues precisely because "#7247 is a live P1 that will close and take any
       # tracker on it with it."
       #

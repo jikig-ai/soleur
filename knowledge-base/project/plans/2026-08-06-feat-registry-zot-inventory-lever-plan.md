@@ -6,7 +6,7 @@ lane: cross-domain
 type: feature
 brand_survival_threshold: aggregate pattern
 requires_cpo_signoff: false
-adr: ADR-171 (CONFIRMED 2026-08-06 — max on origin/main is ADR-170; 169 is taken)
+adr: ADR-172 (CONFIRMED 2026-08-06 — max on origin/main is ADR-170; 169 is taken)
 supersedes: knowledge-base/project/plans/2026-08-04-feat-registry-zot-restart-lever-plan.md
 created: 2026-08-06
 ---
@@ -53,7 +53,7 @@ H5 says the pull user's `_catalog` access is UNKNOWN. But every v1 mechanization
 verdict to a **non-2xx** response. A `/v2/_catalog` returning `200 {"repositories":[]}` — the
 plausible shape of a policy-filtered catalog — yielded `repos=0`, `manifest_errors=0`,
 **`enumeration_complete=true`**, `manifest_referenced_gb=0.0`, `delta_gb=59.0`. Every gate
-passes, the marker is observed, the follow-through PASSes, ADR-171 flips, and the recorded
+passes, the marker is observed, the follow-through PASSes, ADR-172 flips, and the recorded
 finding is AC17's large-delta branch **verbatim** — *"the consumer is not policy-kept blobs"* —
 produced by a permissions failure. This is the exact hazard §Sharp Edges names and the gate did
 not cover. **Fixed in §D2 (repo/tag floors, `catalog_empty`) and §D4.**
@@ -90,7 +90,7 @@ any triager fire it), then `gh workflow run` + `gh issue comment`. **Fixed in §
 appears in another producer's rows."* The literal `enumeration_complete=true` appears in this
 plan's own AC8, AC17 and §D6 — text that lands in the PR body, the ADR and the tracker. A
 presence-probe grepping for it matches the PR body's own text → **exit 0 → tracker closes →
-ADR-171 flips to `accepted` with zero dispatches and zero measurements.** The convention's
+ADR-172 flips to `accepted` with zero dispatches and zero measurements.** The convention's
 mandated defense (`SYSLOG_IDENTIFIER` field isolation) is **structurally unavailable** here: the
 marker is a direct CI `curl` POST, so it never passes through journald/Vector and **has no
 `SYSLOG_IDENTIFIER` at all.** v1 never noticed. **Fixed in §D5/§Follow-Through.**
@@ -272,7 +272,7 @@ purity.** `scripts/registry-pull-path-health.sh`'s header records that the bridg
 failed listener bind **and on a failed docker login**."* Given `zot_restarts` climbing ~4.8/min,
 the most likely outcome of the first dispatch *without* the skip is that **the composite aborts
 and the inventory never runs** — the lever defeated by an unrelated gate during exactly the
-condition it exists to measure. Record this in §D1 and in ADR-171 as the primary reason; the
+condition it exists to measure. Record this in §D1 and in ADR-172 as the primary reason; the
 privilege reduction (§D7, as corrected) is the secondary one.
 
 **B4 — `skip-docker-login` must fail CLOSED.** The composite gate must be exactly
@@ -382,7 +382,7 @@ for that name mirrors it into an *isolated* project; its presence in the `prd` r
 out-of-band, corroborated only by prose. Zero-Terraform survives, but this is a trap: if Phase 0
 finds it absent or rotated, the reflexive fix — adding a `doppler_secret` to `soleur/prd` — **is a
 `.tf` change and breaches AC6**. Phase 0 must record which config it read and name
-"do not mint a TF secret for this" as the fallback constraint. One clause in ADR-171.
+"do not mint a TF secret for this" as the fallback constraint. One clause in ADR-172.
 
 ### E. Observability read path
 
@@ -557,7 +557,7 @@ Two further simplicity findings **are** adopted and appear above: **B1** (cut cr
 - **I2 — AC7 asserts the emitted marker is a SINGLE line.** v1 asserted no whitespace *inside a
   value* but never that the line is unbroken; an embedded newline breaks both `key=value` parsing
   and the `LIKE`-based `--grep`.
-- **I3 — ADR-171 should note ADR-169's *"THERE IS DELIBERATELY NO PREDICATE THAT OBSERVES
+- **I3 — ADR-172 should note ADR-169's *"THERE IS DELIBERATELY NO PREDICATE THAT OBSERVES
   PRODUCTION ZOT"*** (`registry-pull-path-health.sh`) and why it does not apply: that objection is
   to undecidable classification **inside an authorization gate**; this is a measurement, and a
   measurement is not a gate. A plan that supersedes a predecessor and carries ten refutations
@@ -660,7 +660,7 @@ deliverable. Do not read the first resolution as resolving the second.
 | **R5.** "The registry Access token is named `registry_push`, so using it grants push." | **Conflates two gates.** `tunnel.tf` states it: *"is BOTH gates: this CF Access service token (network/edge) + the zot-push htpasswd (registry)."* CF Access gates the **hostname**; zot's htpasswd + `accessControl` gate the **action**. | Present the existing Access service token at the edge; authenticate to **zot** as the read-only pull user (`ZOT_PULL_USER`/`ZOT_PULL_TOKEN`). No write capability is conferred. §Decision D1. |
 | **R6.** "A naive sum of manifest layer sizes gives the bytes on disk." | **Would fabricate a number.** OCI blobs are content-addressed and shared across tags *and* repos; the keep-set is `latest` + `v.*`×5 + `[0-9a-f]{7,64}`×5 + `sha256-.*`×50 per repo, ×2 repos. A naive sum double-counts every shared base layer. | **Deduplicate by digest.** §Decision D2. This is the single arithmetic property the whole deliverable rests on. |
 | **R7.** "The enumeration will complete." | **Expected to fail intermittently.** zot is restarting ~4.8/min *right now*, and the composite's own header records the 2026-08-03 case where *"a tens-of-seconds docker login + three-tag crane copy is near-certain to straddle"* a restart. | A **partial** sweep under-reports and manufactures a large delta that *looks like the answer*. Completeness is a first-class emitted field and the primary AC is conditioned on it. §Decision D2, AC1. |
-| **R8.** "The prior plan's ADR-169 ordinal is still free." | **Taken.** `ADR-169-what-authorizes-destroying-the-sole-pull-path.md` exists on disk; max ordinal is **ADR-170**. | Next-free is **ADR-171**, PROVISIONAL. §Architecture Decision. |
+| **R8.** "The prior plan's ADR-169 ordinal is still free." | **Taken.** `ADR-169-what-authorizes-destroying-the-sole-pull-path.md` exists on disk; max ordinal is **ADR-170**. | Next-free is **ADR-172**, PROVISIONAL. §Architecture Decision. |
 | **R9.** "`crane` is available on the runner." | **Not preinstalled.** There is an established pinned-install spine at `apply-web-platform-infra.yml:2039` and `:2849` — `CRANE_VERSION="v0.20.2"`, `CRANE_SHA256="c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b"` — whose parity across sites is enforced by `apps/web-platform/infra/inngest-bootstrap-mirror-only.test.sh` **anchored on the assignment**. | Reuse the spine verbatim; Phase 0 confirms whether adding a site requires extending the parity test. §Decision D2. |
 | **R10.** "A new workflow can be dispatched from the feature branch to verify it pre-merge." | **False.** `workflow_dispatch` requires the file on the **default branch**; `gh workflow run … --ref <feature-branch>` returns `HTTP 404: workflow not found on the default branch`. | The runner-egress question cannot be settled pre-merge. Handled honestly rather than papered over. §Decision D6. |
 
@@ -866,7 +866,7 @@ passes only once a real `SOLEUR_ZOT_INVENTORY` line is observed (§Follow-Throug
   done here**, because a new `doppler_project`/`doppler_secret` is a Terraform change with no
   scoped apply path (§D8), which is the same reason §D1 rejects a new CF Access token.
   The mechanism this plan buys is **non-materialization, not non-possession.** v1's verb was
-  wrong and it was headed into ADR-171.
+  wrong and it was headed into ADR-172.
 - **The narrow claim is made self-enforcing:** `scripts/zot-inventory.sh` asserts at entry that
   `ZOT_PUSH_USER` and `ZOT_PUSH_TOKEN` are unset/empty in its environment and exits non-zero if
   either is populated. That is the "measure something the failure state cannot produce"
@@ -946,13 +946,13 @@ Stack Logs**, which two C4 anchors currently state is read-only. Per
 
 ### ADR
 
-**Create `ADR-171-ci-side-observability-emission-and-read-only-registry-inventory.md`.**
+**Create `ADR-172-ci-side-observability-emission-and-read-only-registry-inventory.md`.**
 
 Ordinal is **PROVISIONAL**: max on disk is **ADR-170** (ADR-169 is taken by
 `what-authorizes-destroying-the-sole-pull-path`), so 171 is next-free — but a sibling PR can
 claim it during the pipeline and `adr-ordinals` is not a required check. **Re-derive against
 freshly-fetched `origin/main` at ship**, and if it moves, sweep in the same edit:
-`grep -rn 'ADR-171' knowledge-base/project/{plans,specs}/feat-one-shot-7278-registry-restart-lever/`.
+`grep -rn 'ADR-172' knowledge-base/project/{plans,specs}/feat-one-shot-7278-registry-restart-lever/`.
 
 Decisions to record:
 
@@ -1391,7 +1391,7 @@ asserted by a field allow-list test.
 
 ### Phase 5 — ADR + C4
 
-- **5.1** Write `ADR-171-…` (ordinal from 0.1), status `adopting`, with all four rejected
+- **5.1** Write `ADR-172-…` (ordinal from 0.1), status `adopting`, with all four rejected
   alternatives and the ADR-096 amendment (§Architecture Decision).
 - **5.2** `model.c4` — the four edits in §Architecture Decision → C4 views.
 - **5.3** Run `apps/web-platform/test/c4-code-syntax.test.ts` + `c4-render.test.ts`.
@@ -1483,7 +1483,7 @@ asserted by a field allow-list test.
   `origin/main` is **empty**.
 - **AC11 — NIC arms intact.** `scripts/zot-restart-loop-alarm.sh`'s diff touches only the
   crash-loop arm; every `NIC_CAUSE` arm is byte-identical to `origin/main`.
-- **AC12 — ADR + C4.** `ADR-171-*.md` (ordinal re-derived at ship) exists with status
+- **AC12 — ADR + C4.** `ADR-172-*.md` (ordinal re-derived at ship) exists with status
   `adopting`; the four `model.c4` edits are present, including correcting the now-false
   *"CI polls read-only"* clause; `c4-code-syntax.test.ts` + `c4-render.test.ts` pass.
 - **AC13 — encryption ledger.** Both `connections` entries are present and
@@ -1533,7 +1533,7 @@ asserted by a field allow-list test.
   against the `eu-fsn-3` pin) or fails with `reason=marker_not_observable`, at which point the
   Sentry-mirror fallback (§D6.3) is chosen **on that evidence**. The follow-through script
   closes the loop automatically either way.
-- **AC19 — ADR flip.** `ADR-171` moves `adopting → accepted` once AC17 is satisfied.
+- **AC19 — ADR flip.** `ADR-172` moves `adopting → accepted` once AC17 is satisfied.
 
 ---
 
@@ -1546,7 +1546,7 @@ asserted by a field allow-list test.
 | `.github/workflows/registry-zot-inventory.yml` | The dispatch-only lever. |
 | `apps/web-platform/infra/registry-zot-inventory-workflow-guard.test.sh` | Parsed-YAML guard, mirroring the inngest precedent. |
 | `scripts/followthroughs/zot-inventory-marker-7278.sh` | Dispatch-gated follow-through probe. |
-| `knowledge-base/engineering/architecture/decisions/ADR-171-….md` | The decision record (ordinal PROVISIONAL). |
+| `knowledge-base/engineering/architecture/decisions/ADR-172-….md` | The decision record (ordinal PROVISIONAL). |
 
 ## Files to Edit
 

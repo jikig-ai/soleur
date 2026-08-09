@@ -72,13 +72,13 @@
 - **`pcent` climbed 96 → 99 → 100 between 20:35Z and 22:00Z and stayed at 100.** The store
   filesystem is now full — a material worsening from the 89% in the #7247 thread at 14:20Z.
 
-### Triage pointer — the lever that measures this incident (added 2026-08-06, #7278/ADR-171)
+### Triage pointer — the lever that measures this incident (added 2026-08-06, #7278/ADR-172)
 
 The line above stops at *"the store filesystem is now full"* and nothing in this branch could say
 **what is filling it**. That is not an oversight of this spec: `SOLEUR_ZOT_DISK` reports `pcent`
 with **no per-path breakdown**, so the telemetry this triage rests on structurally cannot answer
 it, and every write-shaped remedy (tighten the keep-set, force a GC, resize) needs a host config
-change, i.e. a cloud-init re-run, i.e. a host **replace** — which is fatal while #6929 is open.
+change, i.e. a cloud-init re-run, i.e. a host **replace** — which is fatal while the LUKS recut is unfired (#7287).
 
 **#7278 ships the read-only half of that answer.** Before proposing any further remedy on this
 issue, dispatch it and read the number:

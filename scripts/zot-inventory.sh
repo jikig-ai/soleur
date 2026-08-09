@@ -145,7 +145,7 @@ done
 # C1 — mask immediately, before any use.
 # STDERR, not stdout. The runner parses workflow commands from BOTH streams, but
 # the caller redirects our stdout to a file (`zot-inventory.sh > "$MARKER_FILE"`)
-# and then posts that file verbatim into a comment on PUBLIC issue #7247. On
+# and then posts that file verbatim into a comment on PUBLIC issue #7339. On
 # stdout these two lines therefore did two wrong things at once: the runner never
 # saw them (so masking never registered during the run at all), and the raw token
 # bytes were carried into a world-readable issue body. `::add-mask::` scrubs the

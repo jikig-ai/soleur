@@ -1,4 +1,4 @@
-# ADR-171 — CI may emit to the observability warehouse, and may measure the registry's read surface
+# ADR-172 — CI may emit to the observability warehouse, and may measure the registry's read surface
 
 - **Status:** adopting
 - **Date:** 2026-08-06
@@ -26,7 +26,7 @@
 The registry host has no in-place execution path. `hcloud_server.registry` is cloud-init-only
 (ADR-096), so every host-side capability — tightening zot's keep-set, re-running `resize2fs`,
 adding per-path disk telemetry, restarting the daemon under operator control — waits for a
-provisioning event. And while #6929 is open there is no safe provisioning event: a replace opens
+provisioning event. And while the LUKS recut is unfired (#7287) there is no safe provisioning event: a replace opens
 `/dev/mapper/registry` against a still-plaintext ext4 volume and takes the `refusing-non-luks-device`
 arm, which darks the sole pull path permanently. #7287 records the recut as vetoed while #7278 is
 open. That is the deadlock, and it is why #7278 asked for "a lever".
@@ -189,7 +189,7 @@ So the D10 gate keeps its no-predicate property unchanged, and this lever does n
 
 ADR-096's cloud-init-only posture for the registry host has a consequence worth stating plainly,
 because it is what this whole ADR routes around: **every host-side capability waits for a
-provisioning event, and while #6929 is open there is no safe provisioning event.** The practical
+provisioning event, and while the LUKS recut is unfired (#7287) there is no safe provisioning event.** The practical
 corollary is that the *read-only* surface is currently the only instrumentable one — so read-only
 instrumentation is not a lesser version of the work, it is the entire near side of the deadlock.
 
@@ -197,10 +197,10 @@ instrumentation is not a lesser version of the work, it is the entire near side 
 
 | Alternative | Verdict | Reason |
 |---|---|---|
-| Mint a new `registry_inventory` CF Access service token scoped to CI | **Rejected** | A new CF Access token plus its Doppler secrets have **no scoped apply path**. None of the registry dispatch targets would create them, so landing them requires an **untargeted** apply — and an untargeted plan today carries the **pending `-/+ hcloud_server.registry` REPLACE already in state** into the #6929 fatal. That reasoning applies to *any* new `.tf` resource, which is why it also rejects a new isolated Doppler config in §5. **The rationale an earlier draft gave was mechanically false and is retracted:** it claimed `-target` transitivity would pull the new token into the three registry gates and brick the recut. `-target` closes over **dependencies**, not dependents, so a CI-only token never enters those graphs. The in-repo counterexample is decisive — `cloudflare_zero_trust_access_service_token.registry_push` and its two `doppler_secret`s are **not** in `hcloud_server.registry`'s `depends_on`, which is exactly four entries. Do not re-derive the retracted version. |
+| Mint a new `registry_inventory` CF Access service token scoped to CI | **Rejected** | A new CF Access token plus its Doppler secrets have **no scoped apply path**. None of the registry dispatch targets would create them, so landing them requires an **untargeted** apply — and an untargeted plan today carries the **pending `-/+ hcloud_server.registry` REPLACE already in state** into the unfired-recut fatal (#7287). That reasoning applies to *any* new `.tf` resource, which is why it also rejects a new isolated Doppler config in §5. **The rationale an earlier draft gave was mechanically false and is retracted:** it claimed `-target` transitivity would pull the new token into the three registry gates and brick the recut. `-target` closes over **dependencies**, not dependents, so a CI-only token never enters those graphs. The in-repo counterexample is decisive — `cloudflare_zero_trust_access_service_token.registry_push` and its two `doppler_secret`s are **not** in `hcloud_server.registry`'s `depends_on`, which is exactly four entries. Do not re-derive the retracted version. |
 | Inline the `cloudflared access tcp` bridge in the new workflow | Rejected | Duplicates the SHA-pinned cloudflared install into a fifth site. The composite's own SHA-RECOMPUTE DISCIPLINE section exists because that pin drifts. |
 | Use the composite as-is and accept the push-credentialed `docker login` | Rejected | Grants a read-only lever write capability on the sole pull path, and — the stronger objection per §4 — makes the run abortable by a login failure during exactly the crash-loop it exists to measure. |
-| A **restart** lever (the superseded 2026-08-04 scope) | Rejected | Refuted by measurement: `--restart unless-stopped` has already restarted zot **15,640** times into the same 100 %-full volume. Restarting into a full disk restarts into the same wall. Its host-side delivery additionally needs a replace, which is the #6929 fatal. |
+| A **restart** lever (the superseded 2026-08-04 scope) | Rejected | Refuted by measurement: `--restart unless-stopped` has already restarted zot **15,640** times into the same 100 %-full volume. Restarting into a full disk restarts into the same wall. Its host-side delivery additionally needs a replace, which is the unfired-recut fatal (#7287). |
 | Reclaim via `DELETE /v2/<name>/manifests/<digest>` over the existing ingress | Rejected | **No zot user holds `delete`** (measured). Deny-by-default refuses it whatever the build supports. |
 | Force a GC pass over HTTP | Rejected | No endpoint exists — `/v2/_zot/gc`, `/v2/_catalog/gc`, `/_zot/gc`, `/v2/_zot/ext/gc` all 404, and the pinned build's `BinaryType` excludes mgmt/scrub/search. |
 | Print the number to the job log and skip the Better Stack round-trip | Rejected | The lever must be observable **from telemetry**, not from its own exit code. The job log is kept as an additional durable home for the figure and is **never** the pass condition. |

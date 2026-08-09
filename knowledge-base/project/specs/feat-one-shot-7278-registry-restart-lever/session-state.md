@@ -209,7 +209,7 @@ straight back into the host-execution blocker in the table above.
 
 Every WRITE-shaped remediation needs a config change on the host → needs cloud-init to
 re-run → needs a host **replace** → and a replace today opens `/dev/mapper/registry`
-against a still-plaintext ext4 volume (#6929, OPEN) → registry permanently dark. That is
+against a still-plaintext ext4 volume (the LUKS recut is UNFIRED — #7287) → registry permanently dark. That is
 why #7309's repin is coupled to this issue: a `registry_server_type` change FORCES the
 replace that is simultaneously the only delivery vehicle for a real lever and the fatal path.
 

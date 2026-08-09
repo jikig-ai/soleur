@@ -66,4 +66,4 @@ jobs:
             -f action=inventory
           gh issue comment "${ISSUE_NUMBER}" \
             --repo "${GITHUB_REPOSITORY}" \
-            --body "Dispatched \`registry-zot-inventory.yml\` (read-only disk inventory) via the label route. It measures how many of the store's bytes are manifest-referenced and posts the marker onto #7247; it changes nothing on the registry host. Watch the [Actions tab](https://github.com/${GITHUB_REPOSITORY}/actions/workflows/registry-zot-inventory.yml) for completion."
+            --body "Dispatched \`registry-zot-inventory.yml\` (read-only disk inventory) via the label route. It measures how many of the store's bytes are manifest-referenced and posts the marker onto #7339; it changes nothing on the registry host. Watch the [Actions tab](https://github.com/${GITHUB_REPOSITORY}/actions/workflows/registry-zot-inventory.yml) for completion."

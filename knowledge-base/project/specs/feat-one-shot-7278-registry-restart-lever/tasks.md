@@ -14,7 +14,7 @@ created: 2026-08-06
 > §Deepen-Plan Revisions**, which override the plan's own v1 text. The prior task list
 > (restart lever, 7 checked / 59 open) is superseded with its plan: a **restart**-only lever
 > cannot fix the live incident (15,640 restarts into a 100 %-full volume prove it), and its
-> host-side delivery needs a host replace that is fatal while #6929 is open.
+> host-side delivery needs a host replace that is fatal while the LUKS recut is unfired (#7287).
 >
 > **Already shipped, do NOT re-plan:** old Phase 0 / 0.5 (`user_data` under the Hetzner cap +
 > its size guard) landed in **merged PR #7280**.
@@ -207,7 +207,7 @@ Ordering is dependency-directed. Do not reorder 1 → 4.
       self-pull `SOLEUR_ZOT_DISK` (start) → `scripts/zot-inventory.sh` → self-pull again (end) →
       `scripts/zot-inventory-assert-marker.sh` → **`if: always()` teardown** copied from the
       composite's documented contract.
-- [ ] 3.3 **(G3)** Post the marker line + its interpretation as a comment on **#7247** (open,
+- [x] 3.3 **(G3)** Post the marker line + its interpretation as a comment on **#7339** (open,
       `action-required`). **#7278 is closed by this PR** and is not a valid target.
 - [ ] 3.4 **(G3)** `.github/workflows/registry-zot-inventory-dispatch.yml`, mirroring
       `inngest-watchdog-restart-dispatch.yml`: `on: issues: [labeled]`, `permissions: actions: write`,
@@ -267,7 +267,7 @@ Ordering is dependency-directed. Do not reorder 1 → 4.
 
 ## Phase 6 — ADR + C4
 
-- [ ] 6.1 Write `ADR-171-…` (ordinal from 0.1), status `adopting`: CI may emit `SOLEUR_*` to
+- [ ] 6.1 Write `ADR-172-…` (ordinal from 0.1), status `adopting`: CI may emit `SOLEUR_*` to
       Better Stack ingest; a CI-emitted marker is trusted only after readback; the registry's read
       surface is reachable and its write surface is not; **the corrected privilege statement**
       (non-materialization, not non-possession — the job holds a `soleur/prd`-root Doppler token);
@@ -370,4 +370,4 @@ Ordering is dependency-directed. Do not reorder 1 → 4.
 - [ ] 10.2 **(E5)** H6 answered: the marker is observed, or `ingest_rejected_http_<code>` fires
       (region-pin refusal) — at which point the Sentry-mirror fallback is chosen **on that
       evidence**.
-- [ ] 10.3 Flip `ADR-171` `adopting → accepted` once 10.1 is satisfied.
+- [ ] 10.3 Flip `ADR-172` `adopting → accepted` once 10.1 is satisfied.

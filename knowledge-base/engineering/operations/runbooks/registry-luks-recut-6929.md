@@ -160,7 +160,7 @@ It runs entirely from GitHub Actions, is read-only (`GET`/`HEAD` only, pull-user
 `docker login`), changes nothing on the host and touches no Terraform. It walks the registry's OCI
 API over the existing Cloudflare-Access-gated `registry.` ingress and emits a
 `SOLEUR_ZOT_INVENTORY` marker to Better Stack, then reads it back before the run goes green. The
-workflow comments the line and its interpretation onto #7247.
+workflow comments the line and its interpretation onto #7339 (the dedicated tracker; #7247 is the incident, which closes and would take the record with it).
 
 **Why this comes first.** The reason an operator reaches for a recut is almost always "the store
 is full and the registry is down". This lever answers *what is actually consuming the volume* —
@@ -181,9 +181,9 @@ anything, and firing it without the number means destroying the only copy of the
 
 **What it cannot do.** It cannot reclaim, restart, or change host config. No zot user holds
 `delete` (measured), and every write-shaped remedy needs a cloud-init-written config change, i.e. a
-host replace — which is the #6929 fatal this runbook exists inside. So the inventory is not an
+host replace — which is the unfired-recut fatal (#7287) this runbook exists inside. So the inventory is not an
 alternative to the recut; it is the measurement you must have **before** deciding the recut is the
-right destroy. See [ADR-171](../../architecture/decisions/ADR-171-ci-side-observability-emission-and-read-only-registry-inventory.md).
+right destroy. See [ADR-172](../../architecture/decisions/ADR-172-ci-side-observability-emission-and-read-only-registry-inventory.md).
 
 ---
 
@@ -495,8 +495,8 @@ pin, and re-deriving it means going back to Step 1.
 - #7247 — the 22h zot crash-loop where both this runbook and `registry-host-replace` turned out to
   be blocked, which is how the staleness above was found.
 - #6946 — accepted residual: `registry-region-migrate` accepts a similar shape with no id-pin.
-- `ADR-171` — [CI may emit to the observability warehouse, and may measure the registry's read
-  surface](../../architecture/decisions/ADR-171-ci-side-observability-emission-and-read-only-registry-inventory.md).
+- `ADR-172` — [CI may emit to the observability warehouse, and may measure the registry's read
+  surface](../../architecture/decisions/ADR-172-ci-side-observability-emission-and-read-only-registry-inventory.md).
   The decision behind the inventory lever above: why the registry's **read** surface is
   instrumentable today and its **write** surface is not (no zot user holds `delete` — measured),
   why `delta_gb` is an upper bound rather than a measurement, and why the lever is a **measurement,

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# #7278 / ADR-171 — post-merge soak for the read-only zot disk-inventory lever.
+# #7278 / ADR-172 — post-merge soak for the read-only zot disk-inventory lever.
 #
 # TRACKER: **#7339** (dedicated). NOT #7278 — that issue is closed by the shipping PR and the
 # sweeper lists `--state open`, whose reopen path fires only on exit 1, so a correct exit-2 probe
 # hosted there would be a permanent silent no-op. NOT #7247 either — a live P1 that will close
 # when the incident does and take the tracker with it.
 #
-# WHAT IT CLOSES. ADR-171 ships at status `adopting`. Its flip condition is a REAL dispatch
+# WHAT IT CLOSES. ADR-172 ships at status `adopting`. Its flip condition is a REAL dispatch
 # producing an OBSERVED `SOLEUR_ZOT_INVENTORY` line with `enumeration_complete=true`. That
 # cannot happen before merge (the workflow does not exist on a runner until it lands), and the
 # open sub-question it answers — H6, whether a GitHub runner's egress actually reaches
@@ -62,7 +62,7 @@
 # GitHub run id. A bare `--grep SOLEUR_ZOT_INVENTORY` would match every one of them and
 # auto-close this tracker on an echo of its own text.
 #
-# DECODE BEFORE MATCHING (BLOCKING, ADR-171 §2). `betterstack-query.sh` emits JSONEachRow whose
+# DECODE BEFORE MATCHING (BLOCKING, ADR-172 §2). `betterstack-query.sh` emits JSONEachRow whose
 # `raw` column is itself a JSON *string* — i.e. double-encoded. A grep against the raw stream
 # "silently returns nothing": a probe that can never PASS, which is indistinguishable from a
 # probe that is correctly reporting a not-yet. Both jq hops below are required.
@@ -157,8 +157,8 @@ fi
 
 # --- a marker exists; it PASSes only if the sweep was COMPLETE --------------------------------
 # An incomplete sweep is not a partial success to be rounded up. `enumeration_complete=false`
-# licenses NO conclusion at all (ADR-171): the delta it reports is indistinguishable from the
-# finding, so closing this tracker on it would flip ADR-171 to `accepted` on a number nobody may
+# licenses NO conclusion at all (ADR-172): the delta it reports is indistinguishable from the
+# finding, so closing this tracker on it would flip ADR-172 to `accepted` on a number nobody may
 # read. Not-complete is a not-yet.
 complete_hits=$(printf '%s\n' "$hits" | grep -F 'enumeration_complete=true' || true)
 n_complete=$(printf '%s\n' "$complete_hits" | grep -c . || true)
@@ -168,7 +168,7 @@ if [[ "$n_complete" -eq 0 ]]; then
   echo "TRANSIENT: ${n_hits} ${MARKER} row(s) observed in the last ${WINDOW}, but NONE carries" >&2
   echo "           enumeration_complete=true. The round trip works — ingest, region pin and" >&2
   echo "           readback are all proven by these rows, so H6 is answered YES — but an" >&2
-  echo "           incomplete sweep licenses no conclusion about delta_gb, and ADR-171's flip" >&2
+  echo "           incomplete sweep licenses no conclusion about delta_gb, and ADR-172's flip" >&2
   echo "           condition is a COMPLETE one." >&2
   echo "           Next: re-dispatch. Read manifest_errors / tag_list_errors / catalog_errors on" >&2
   echo "           the rows below — a crash-looping origin interrupting the sweep is the" >&2
@@ -183,6 +183,6 @@ echo "      This is a READBACK, not the emitter's self-report: the row was read 
 echo "      warehouse through the ClickHouse path, which the emitter's exit code cannot fake."
 echo "      It also answers H6 affirmatively — a GitHub runner's egress DOES reach the"
 echo "      eu-fsn-3 ingest pin — so the Sentry-mirror fallback is not needed."
-echo "      ADR-171 may now flip adopting -> accepted."
+echo "      ADR-172 may now flip adopting -> accepted."
 printf '%s\n' "$complete_hits" | tail -3 | sed 's/^/        /'
 exit 0

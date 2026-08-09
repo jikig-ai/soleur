@@ -466,7 +466,7 @@ if [[ "$has_137" == true || "$climb_fire" == true || "$max_oom5m" -gt 0 ]]; then
   else
     # Pure condition-B climb, no OOM signal → non-OOM crash-loop; surface the redacted log tail.
     #
-    # NEXT ACTION, not a cause (#7278/ADR-171). This arm is reached only when the OOM decode did
+    # NEXT ACTION, not a cause (#7278/ADR-172). This arm is reached only when the OOM decode did
     # NOT fire, i.e. the loop is non-OOM, and the most common non-OOM shape measured on this host
     # is a full store volume. This alarm reads `SOLEUR_ZOT_DISK`, which carries `pcent` but NO
     # per-path breakdown, so it cannot say WHAT is consuming the volume and does not claim to.
