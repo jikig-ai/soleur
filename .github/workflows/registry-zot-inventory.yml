@@ -371,7 +371,27 @@ jobs:
           # zot-registry.tf (which mirrors BETTERSTACK_LOGS_TOKEN into the
           # ISOLATED soleur-registry/prd project; reading only the .tf suggests,
           # wrongly, that the prd root does not carry it).
-          doppler run -- bash scripts/zot-inventory.sh > "$MARKER_FILE" || rc=$?
+          #
+          # `--only-secrets` is LOAD-BEARING, not hygiene. `soleur/prd` also carries
+          # ZOT_PUSH_USER / ZOT_PUSH_TOKEN (zot-registry.tf:337-348, same project and
+          # config), and a bare `doppler run --` injects the WHOLE config — so the
+          # enumerator's own D7 refusal at zot-inventory.sh:130 fired on every dispatch
+          # and the lever exited 2 without measuring anything. Measured against live
+          # Doppler: bare injects all five names; this form injects exactly these three.
+          # The two requirements — pull+logs PRESENT, push ABSENT — are unsatisfiable
+          # under whole-config injection, so scoping is the only fix that admits both.
+          #
+          # Fail-closed by construction: doppler exits non-zero if a named secret is
+          # missing (--no-exit-on-missing-only-secrets is opt-in and deliberately NOT
+          # set), so a removed pull credential aborts here rather than at a precondition.
+          # This is also what makes the ADR's NON-MATERIALIZATION claim structural: the
+          # push credential is never placed in the environment, rather than placed and
+          # then refused.
+          doppler run \
+            --only-secrets ZOT_PULL_USER \
+            --only-secrets ZOT_PULL_TOKEN \
+            --only-secrets BETTERSTACK_LOGS_TOKEN \
+            -- bash scripts/zot-inventory.sh > "$MARKER_FILE" || rc=$?
           echo "--- emitted marker ---"
           cat "$MARKER_FILE" || true
           echo "--- enumerator exit: ${rc} ---"

@@ -213,7 +213,16 @@ http_get_retry() {  # $1 url, $2 accept. Returns 0 on 2xx, 1 otherwise. Sets HTT
 # Returns the `rel="next"` target of a Link header, relative to the registry root, or empty.
 # `[^>]*` rather than a negated-newline class: `[^\n]` in a POSIX ERE excludes a backslash
 # and the letter n, which is not what it reads as.
+# Sets LINK_NEXT_PATH (empty = no next page). It does NOT print the path.
+#
+# This function mutates LINK_UNFOLLOWED, so it must run in the CALLER'S shell. Returning the
+# path on stdout forced every call site into `$(link_next …)`, a subshell, where the increment
+# below was discarded — the rejection arm was refused correctly and then counted nowhere, so a
+# truncated sweep emitted enumeration_complete=true. The MAX_PAGES arms in the callers always
+# worked because they increment in the parent, which is exactly why the suite stayed green.
+# Global-out mirrors http_get's HTTP_CODE/HTTP_BODY contract.
 link_next() {  # $1 header-dump path
+  LINK_NEXT_PATH=""
   local raw
   raw="$(grep -iE '^Link:' "$1" 2>/dev/null | tail -1 | tr -d '\r')"
   [[ -z "$raw" ]] && return 0
@@ -244,7 +253,7 @@ link_next() {  # $1 header-dump path
     LINK_UNFOLLOWED=$((LINK_UNFOLLOWED + 1))
     return 0
   fi
-  printf '%s\n' "$nxt"
+  LINK_NEXT_PATH="$nxt"
 }
 
 # ---------------------------------------------------------------------------------
@@ -263,6 +272,7 @@ TAG_LIST_ERRORS=0
 MANIFEST_ERRORS=0
 REFERRER_ERRORS=0
 LINK_UNFOLLOWED=0
+LINK_NEXT_PATH=""   # link_next's out-parameter; see its header for why it is not stdout
 
 # THE DEDUP RULE, in one place so exactly one substitution can falsify it. The key IS the
 # digest: zot deduplicates by content address, so the same digest under two tags and two
@@ -540,7 +550,8 @@ while :; do
   fi
   REPO_LIST+="$(jq -r '(.repositories // [])[]' <"$HTTP_BODY" 2>/dev/null)"$'\n'
   page=$((page + 1))
-  nxt="$(link_next "$HTTP_HDR")"
+  link_next "$HTTP_HDR"          # sets LINK_NEXT_PATH in THIS shell — never $(…), see link_next
+  nxt="$LINK_NEXT_PATH"
   [[ -z "$nxt" ]] && break
   if [[ "$page" -ge "$MAX_PAGES" ]]; then
     LINK_UNFOLLOWED=$((LINK_UNFOLLOWED + 1))
@@ -581,7 +592,8 @@ for repo in $REPO_LIST; do
     fi
     tag_list+="$(jq -r '(.tags // [])[]' <"$HTTP_BODY" 2>/dev/null)"$'\n'
     page=$((page + 1))
-    nxt="$(link_next "$HTTP_HDR")"
+    link_next "$HTTP_HDR"        # sets LINK_NEXT_PATH in THIS shell — never $(…), see link_next
+    nxt="$LINK_NEXT_PATH"
     [[ -z "$nxt" ]] && break
     if [[ "$page" -ge "$MAX_PAGES" ]]; then
       LINK_UNFOLLOWED=$((LINK_UNFOLLOWED + 1))

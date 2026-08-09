@@ -234,7 +234,13 @@ class H(BaseHTTPRequestHandler):
             pages = fx.get("catalog", [{"repositories": [], "next": None}])
             pg = pages[min(page, len(pages) - 1)]
             extra = {}
-            if pg.get("next") is not None:
+            # `link_raw` emits the Link header VERBATIM. Without it every fixture Link is a
+            # rooted path built by format string, so the non-rooted-target rejection in
+            # link_next() had no reachable input class — the exact gap the guard's own
+            # comment predicted, and the reason deleting that guard left the suite 125/0.
+            if pg.get("link_raw") is not None:
+                extra["Link"] = pg["link_raw"]
+            elif pg.get("next") is not None:
                 extra["Link"] = '</v2/_catalog?p=%d>; rel="next"' % pg["next"]
             self._send(200, json.dumps({"repositories": pg["repositories"]}).encode(), extra=extra)
             return
@@ -255,7 +261,10 @@ class H(BaseHTTPRequestHandler):
             pages = spec.get("pages", [{"tags": [], "next": None}])
             pg = pages[min(page, len(pages) - 1)]
             extra = {}
-            if pg.get("next") is not None:
+            # See the catalog handler's note on `link_raw`.
+            if pg.get("link_raw") is not None:
+                extra["Link"] = pg["link_raw"]
+            elif pg.get("next") is not None:
                 extra["Link"] = '</v2/%s/tags/list?p=%d>; rel="next"' % (repo, pg["next"])
             self._send(200, json.dumps({"name": repo, "tags": pg["tags"]}).encode(), extra=extra)
             return
@@ -577,6 +586,53 @@ expect_field reason link_unfollowed "unfollowed Link"
 # and completeness is restored. Without this, "always false" would pass the arm above.
 run_inv "$INV" ZOT_INVENTORY_MAX_PAGES=10
 expect_field enumeration_complete true "a FOLLOWED Link restores completeness"
+
+echo "== 1.1.4d / A4b — a NON-ROOTED Link target is refused AND counted =="
+# The rejection arm of link_next(). Distinct from A4 above, which exercises the MAX_PAGES
+# budget arm: that one increments in the caller's shell and always worked. This one is the
+# arm the guard was ADDED for, and it had no reachable fixture until `link_raw` existed.
+dedup_fixture
+python3 - "$FIXTURE" <<'PY'
+import json, sys
+fx = json.load(open(sys.argv[1]))
+# curl parses everything before `@` as userinfo, so this resolves OFF-BOX. It is also the
+# shape a spec-legal ABSOLUTE Link takes, which needs no attacker at all.
+fx["catalog"] = [{"repositories": ["R_a", "R_b"],
+                  "link_raw": '<@127.0.0.1:1/v2/_catalog>; rel="next"'}]
+fx["generation"] += 310
+json.dump(fx, open(sys.argv[1], "w"))
+PY
+run_inv "$INV"
+expect_field enumeration_complete false "a refused Link target is an INCOMPLETE sweep"
+expect_field reason link_unfollowed "a refused Link target must reach the reason vocabulary"
+expect_field link_unfollowed 1 "the refusal must be COUNTED, not merely printed"
+if [ "$(grep -cE '.' "$CANARY_REQ" || true)" -eq 0 ]; then
+  pass "the refused Link reached no third-party destination"
+else
+  fail "a refused Link target still produced an off-box request" "$(head -3 "$CANARY_REQ")"
+fi
+
+echo "== 1.1.4e / A4c — paginated content is FLATTENED, not first-page-only =="
+# Pins the accumulator, not the counter. The same content as the dedup fixture, split across
+# pages: correct flattening must produce byte-identical numbers to the single-page case, so
+# a first-page-only regression cannot hide behind "the Link was followed".
+dedup_fixture
+python3 - "$FIXTURE" <<'PY'
+import json, sys
+fx = json.load(open(sys.argv[1]))
+fx["catalog"] = [{"repositories": ["R_a"], "next": 1},
+                 {"repositories": ["R_b"], "next": None}]
+fx["tags"]["R_a"] = {"pages": [{"tags": ["t1"], "next": 1},
+                               {"tags": ["t2"], "next": None}]}
+fx["generation"] += 320
+json.dump(fx, open(sys.argv[1], "w"))
+PY
+run_inv "$INV"
+expect_field repos 2 "catalog page 2 contributes its repositories"
+expect_field tags 3 "tags/list page 2 contributes its tags"
+expect_field unique_blobs 7 "paginated sweep sees every blob the single-page sweep sees"
+expect_field manifest_referenced_bytes 3526 "paginated byte total equals the single-page total"
+expect_field enumeration_complete true "a fully-followed paginated sweep is complete"
 
 echo "== 1.1.5 / V3 — a tags/list that fails after retry =="
 dedup_fixture
