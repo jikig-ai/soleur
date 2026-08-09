@@ -356,6 +356,19 @@ if want_scripts; then
   # the real defect into a tree copy.
   run_suite "scripts/lint-workflow-errexit-capture" bash scripts/lint-workflow-errexit-capture.test.sh
   run_suite "scripts/lint-workflow-errexit-capture-live" python3 scripts/lint-workflow-errexit-capture.py
+  # SIBLING gate (#7332): the same "captured a status nobody decided about" class, but in shell
+  # SCRIPTS under `set -e` rather than Actions `run:` blocks. Separate anchor, separate
+  # calibration -- the naive "a command-substitution assignment is a finding" rule found only
+  # 2 of 17 sites for workflows and is the CORRECT rule here, which is why widening the sibling
+  # would have meant each gate covering the other's blind spot badly.
+  #
+  # The live run carries a BASELINE of 216 pre-existing findings (206 abort-risk, 10
+  # double-emit). The gate blocks NEW occurrences only; the baseline may shrink and must never
+  # grow. Burn-down is tracked in the learning that ships with this gate. Registering it
+  # baseline-free would have meant either a permanently red suite or a silently narrowed rule.
+  run_suite "scripts/lint-shell-capture-exit" bash scripts/lint-shell-capture-exit.test.sh
+  run_suite "scripts/lint-shell-capture-exit-live" python3 scripts/lint-shell-capture-exit.py \
+    --baseline scripts/lint-shell-capture-exit.baseline.txt
   # ADR-140: Layer A encryption-posture detector (the mechanical resolver behind
   # the "encryption at rest + in transit" design-time gate). TS-1..8,15..17 +
   # the MB-1..MB-12 mutation battery (fixture-isolated, not suite-pass-count).
