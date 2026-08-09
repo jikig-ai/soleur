@@ -253,59 +253,31 @@ jobs:
           BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
         run: |
           set -uo pipefail
+          # The query/anchor/decode/field logic now lives in scripts/zot-disk-sample.sh, under
+          # test. It used to be ~60 lines of `run:` body here and another ~50 in the end-sample
+          # step, byte-identical in places — logic in workflow YAML that no test could reach,
+          # which is the arrangement this same workflow argues against for its pass condition.
           rc=0
-          ROWS="$(bash scripts/betterstack-query.sh --no-archive --since 30m \
-            --grep SOLEUR_ZOT_DISK --limit 50)" || rc=$?
-          if [[ "$rc" -ne 0 ]]; then
-            echo "::error::SOLEUR_ZOT_DISK start-sample query exited ${rc} (query_rc=${rc}) — betterstack-query.sh could not answer, so this run has no disk baseline to compute delta_gb against. Nothing was measured; re-dispatch once the readback path answers."
-            exit 1
-          fi
-          # ENVELOPE ANCHOR, not a bare substring. betterstack-query.sh's --grep compiles to an
-          # unanchored `raw LIKE '%SOLEUR_ZOT_DISK%'` over a source EVERY host multiplexes into,
-          # and GitHub webhook payloads quoting this marker name have contaminated exactly this
-          # query before (measured 2026-07-15 on the sibling SOLEUR_PRIVATE_NIC stream: 3 rows
-          # returned, 0 of them emissions). A genuine host emission POSTs
-          # {"message":"SOLEUR_ZOT_DISK …"}, so its stored `raw` STARTS with that prefix; a
-          # Vector-shipped journald row's raw starts with {"PRIORITY":… and can never match.
-          # Rows are returned oldest-first, so `tail -n 1` is the newest.
-          NEWEST="$(printf '%s\n' "$ROWS" \
-            | { grep -F '"raw":"{\"message\":\"SOLEUR_ZOT_DISK ' || true; } | tail -n 1)"
-          if [[ -z "$NEWEST" ]]; then
-            echo "::error::The 30-minute window returned no SOLEUR_ZOT_DISK row matching the emission envelope (rows_matched=0) while the query itself succeeded (query_rc=${rc}). The host's 5-minute heartbeat is not landing, so fs_size_gb/pcent are unavailable and delta_gb cannot be computed. This is a MEASURED absence of the heartbeat, not a statement about zot itself."
-            exit 1
-          fi
-          # DECODE BEFORE MATCHING, and guard the decode. Better Stack's `raw` column is
-          # DOUBLE-encoded JSON, so a bare grep against it silently returns nothing. The
-          # `|| decode_rc=$?` is the same AP-022 requirement as above: an unguarded jq failure
-          # under the runner's `-e` would abort here and the ::error:: below would never print.
-          decode_rc=0
-          LINE="$(printf '%s\n' "$NEWEST" | jq -r '.raw | fromjson | .message')" || decode_rc=$?
-          DT="$(printf '%s\n' "$NEWEST" | jq -r '.dt')" || decode_rc=$?
-          if [[ "$decode_rc" -ne 0 || -z "$LINE" ]]; then
-            echo "::error::A SOLEUR_ZOT_DISK row matched the emission envelope but its double-encoded payload would not decode (decode_rc=${decode_rc}). No disk baseline is available, so delta_gb cannot be computed. This is a decode failure on a row that WAS returned, not an absence of the heartbeat."
-            exit 1
-          fi
-          # `zot_last_err` is the marker's LAST field and is the only one that may carry
-          # spaces, so a whitespace split reaches every field ahead of it intact.
-          field() {
-            printf '%s\n' "$LINE" | tr ' ' '\n' | awk -F= -v k="$1" '$1==k {print $2; exit}'
-          }
-          FS_SIZE_GB="$(field fs_size_gb)"
-          PCENT="$(field pcent)"
-          BOOT_ID="$(field boot_id)"
-          RESTARTS="$(field zot_restarts)"
-          SAMPLE_EPOCH=0
-          SAMPLE_EPOCH="$(date -u -d "${DT} UTC" +%s 2>/dev/null)" || SAMPLE_EPOCH=0
-          NOW_EPOCH="$(date -u +%s)"
-          AGE_S=-1
-          if [[ "$SAMPLE_EPOCH" -gt 0 ]]; then AGE_S=$(( NOW_EPOCH - SAMPLE_EPOCH )); fi
+          SAMPLE="$(bash scripts/zot-disk-sample.sh --since 30m --limit 50)" || rc=$?
+          # The START sample is FATAL to miss: without it there is no baseline to compute
+          # delta_gb against. The script reports WHAT happened; this step decides it is fatal.
+          case "$rc" in
+            0) ;;
+            2) echo "::error::SOLEUR_ZOT_DISK start-sample query could not answer (query_rc=2). This run has no disk baseline, so delta_gb cannot be computed. Nothing was measured — re-dispatch once the readback path answers."; exit 1 ;;
+            3) echo "::error::The 30-minute window returned no SOLEUR_ZOT_DISK row matching the emission envelope (rows_matched=0) while the query itself succeeded. The host's 5-minute heartbeat is not landing, so fs_size_gb/pcent are unavailable. This is a MEASURED absence of the heartbeat, not a statement about zot itself."; exit 1 ;;
+            4) echo "::error::A SOLEUR_ZOT_DISK row matched the emission envelope but its double-encoded payload would not decode. No disk baseline is available. This is a decode failure on a row that WAS returned, not an absence of the heartbeat."; exit 1 ;;
+            *) echo "::error::scripts/zot-disk-sample.sh exited ${rc}, which is outside its documented contract (0/2/3/4). Refusing to proceed on an unclassified result."; exit 1 ;;
+          esac
+          val() { printf '%s\n' "$SAMPLE" | awk -F= -v k="$1" '$1==k {print $2; exit}'; }
+          FS_SIZE_GB="$(val fs_size_gb)"; PCENT="$(val pcent)"; BOOT_ID="$(val boot_id)"
+          RESTARTS="$(val zot_restarts)"; AGE_S="$(val sample_age_s)"; DT="$(val sample_at)"
           {
-            printf 'ZOT_DISK_FS_SIZE_GB=%s\n'  "$FS_SIZE_GB"
-            printf 'ZOT_DISK_PCENT=%s\n'       "$PCENT"
-            printf 'ZOT_DISK_BOOT_ID=%s\n'     "$BOOT_ID"
+            printf 'ZOT_DISK_FS_SIZE_GB=%s\n'       "$FS_SIZE_GB"
+            printf 'ZOT_DISK_PCENT=%s\n'            "$PCENT"
+            printf 'ZOT_DISK_BOOT_ID=%s\n'          "$BOOT_ID"
             printf 'ZOT_DISK_RESTARTS_AT_START=%s\n' "$RESTARTS"
-            printf 'ZOT_DISK_SAMPLE_AGE_S=%s\n' "$AGE_S"
-            printf 'ZOT_DISK_SAMPLE_AT=%s\n'   "${DT// /T}"
+            printf 'ZOT_DISK_SAMPLE_AGE_S=%s\n'     "$AGE_S"
+            printf 'ZOT_DISK_SAMPLE_AT=%s\n'        "$DT"
           } >> "$GITHUB_ENV"
           {
             printf 'restarts=%s\n' "$RESTARTS"
@@ -313,7 +285,6 @@ jobs:
             printf 'age_s=%s\n'    "$AGE_S"
           } >> "$GITHUB_OUTPUT"
           echo "SOLEUR_ZOT_DISK start sample: fs_size_gb=${FS_SIZE_GB} pcent=${PCENT} zot_restarts=${RESTARTS} boot_id=${BOOT_ID} sample_age_s=${AGE_S} sampled_at=${DT}"
-
       # THE SWEEP. scripts/zot-inventory.sh owns ALL registry and telemetry egress and reaches
       # exactly two destinations: http://127.0.0.1:5000 (this job's bridge) and the pinned
       # Better Stack ingest URL. It reads its own credentials from Doppler (ZOT_PULL_USER /
@@ -439,44 +410,33 @@ jobs:
           BOOT_ID_AT_START: ${{ steps.disk_start.outputs.boot_id }}
         run: |
           set -uo pipefail
+          # Same extracted sampler as the start step. The difference between the two call sites
+          # is SEVERITY, not logic: a missing END sample costs only the straddle check, so every
+          # non-zero exit degrades to straddle=unknown with a warning rather than failing the job.
           rc=0
-          ROWS="$(bash scripts/betterstack-query.sh --no-archive --since 30m \
-            --grep SOLEUR_ZOT_DISK --limit 50)" || rc=$?
+          SAMPLE="$(bash scripts/zot-disk-sample.sh --since 30m --limit 50)" || rc=$?
           straddle="unknown"
           restarts_end=""
           boot_id_end=""
-          if [[ "$rc" -ne 0 ]]; then
-            echo "::warning::SOLEUR_ZOT_DISK end-sample query exited ${rc} (query_rc=${rc}), so the restart-straddle check is reported as straddle=${straddle}. The sweep's own completeness fields in the marker are unaffected by this."
-          else
-            NEWEST="$(printf '%s\n' "$ROWS" \
-              | { grep -F '"raw":"{\"message\":\"SOLEUR_ZOT_DISK ' || true; } | tail -n 1)"
-            if [[ -z "$NEWEST" ]]; then
-              echo "::warning::The 30-minute window returned no SOLEUR_ZOT_DISK row matching the emission envelope (rows_matched=0), so the restart-straddle check is reported as straddle=${straddle}."
+          case "$rc" in
+            0)
+              val() { printf '%s\n' "$SAMPLE" | awk -F= -v k="$1" '$1==k {print $2; exit}'; }
+              restarts_end="$(val zot_restarts)"
+              boot_id_end="$(val boot_id)"
+              ;;
+            2) echo "::warning::SOLEUR_ZOT_DISK end-sample query could not answer (query_rc=2), so the restart-straddle check is reported as straddle=${straddle}. The sweep's own completeness fields in the marker are unaffected." ;;
+            3) echo "::warning::The 30-minute window returned no SOLEUR_ZOT_DISK row matching the emission envelope (rows_matched=0), so the restart-straddle check is reported as straddle=${straddle}." ;;
+            4) echo "::warning::A SOLEUR_ZOT_DISK end-sample row matched the envelope but its double-encoded payload would not decode, so the restart-straddle check is reported as straddle=${straddle}." ;;
+            *) echo "::warning::scripts/zot-disk-sample.sh exited ${rc}, outside its documented contract (0/2/3/4); straddle=${straddle}." ;;
+          esac
+          # A NUMERIC-LITERAL COMPARISON NEEDS A NON-NUMERIC DISCRIMINATOR HERE, because both
+          # operands can be the empty string and `[[ "" == "" ]]` would report a clean sweep from
+          # two ABSENT readings. Require both to be non-empty first.
+          if [[ -n "$restarts_end" && -n "${RESTARTS_AT_START:-}" ]]; then
+            if [[ "$restarts_end" == "${RESTARTS_AT_START}" && "$boot_id_end" == "${BOOT_ID_AT_START:-}" ]]; then
+              straddle="no"
             else
-              # Guarded for the same AP-022 reason as the start sample: an unguarded jq failure
-              # under the runner's `-e` would abort this step, and this step is the one that
-              # decides whether the sweep straddled a restart.
-              decode_rc=0
-              LINE="$(printf '%s\n' "$NEWEST" | jq -r '.raw | fromjson | .message')" || decode_rc=$?
-              field() {
-                printf '%s\n' "$LINE" | tr ' ' '\n' | awk -F= -v k="$1" '$1==k {print $2; exit}'
-              }
-              if [[ "$decode_rc" -eq 0 && -n "$LINE" ]]; then
-                restarts_end="$(field zot_restarts)"
-                boot_id_end="$(field boot_id)"
-              else
-                echo "::warning::A SOLEUR_ZOT_DISK end-sample row matched the envelope but its double-encoded payload would not decode (decode_rc=${decode_rc}), so the restart-straddle check is reported as straddle=${straddle}."
-              fi
-              # A NUMERIC-LITERAL COMPARISON NEEDS A NON-NUMERIC DISCRIMINATOR HERE, because
-              # both operands can be the empty string and `[[ "" == "" ]]` would report a
-              # clean sweep from two absent readings. Require both to be non-empty first.
-              if [[ -n "$restarts_end" && -n "${RESTARTS_AT_START:-}" ]]; then
-                if [[ "$restarts_end" == "${RESTARTS_AT_START}" && "$boot_id_end" == "${BOOT_ID_AT_START:-}" ]]; then
-                  straddle="no"
-                else
-                  straddle="yes"
-                fi
-              fi
+              straddle="yes"
             fi
           fi
           {
@@ -489,7 +449,6 @@ jobs:
           else
             echo "SOLEUR_ZOT_DISK end sample: straddle=${straddle} zot_restarts=${restarts_end:-n/a} boot_id=${boot_id_end:-n/a}"
           fi
-
       # THE PASS CONDITION, and it lives in a script rather than in this YAML on purpose: a
       # pass condition written into workflow YAML is one no test can reach. The emitter's exit
       # code cannot fake a row in the warehouse, so the run is green only after the marker for

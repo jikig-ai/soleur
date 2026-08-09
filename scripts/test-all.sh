@@ -630,6 +630,7 @@ if want_scripts; then
   # already covers through the CI-registered infra runner.
   run_suite "tests/scripts/zot-inventory" bash tests/scripts/test-zot-inventory.sh
   run_suite "tests/scripts/zot-inventory-assert-marker" bash tests/scripts/test-zot-inventory-assert-marker.sh
+  run_suite "tests/scripts/zot-disk-sample" bash tests/scripts/test-zot-disk-sample.sh
   # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
   # workspaces-luks-cutover FIRST-PROVISION destroy-guard (#6604). Permits the +create of the
