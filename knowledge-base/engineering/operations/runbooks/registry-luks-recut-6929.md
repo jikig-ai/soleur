@@ -152,6 +152,18 @@ restore exit-code table below).
 **Everything below this heading destroys something. This does not.** Before the cold-vehicle
 re-verification, before Step 1 and before Step 2, dispatch the inventory lever and read its number.
 
+> **This lever has never executed in production.** Same discipline this runbook already applies
+> to the recut itself ("shipped with ZERO live executions") — it applies here too. At the time
+> of writing, runner egress to the pinned Better Stack ingest host is **unproven**, and #7339
+> is the open follow-through whose sole job is to observe a real marker. So the FIRST dispatch
+> is also the first test of the path.
+>
+> Read the outcome, not just the number. `outcome=partial` or `enumeration_complete=false`
+> means the sweep did not finish and `delta_gb` is a LOWER-bounded guess that runs HIGH —
+> every truncation path inflates it, which is the direction that makes destroying the store
+> look justified. A `delta_gb` under ~3 GB is not distinguishable from zero at all. If the run
+> produces no marker, that is a fact about the lever, not evidence about the store.
+
 ```
 gh workflow run registry-zot-inventory.yml
 ```
