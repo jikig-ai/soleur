@@ -216,8 +216,15 @@ LEASE_ROOT3="$LOCAL3/soleur-session-state"
   SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT3" \
   SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
     bash "$WM" --yes create feat-probe >"$TMP/create3.log" 2>&1
-) && pass "scenario 3: --yes create exited 0" \
-  || fail "scenario 3: --yes create failed (output: $(cat "$TMP/create3.log"))"
+)
+# if/else, not `&& pass || fail` (SC2015): in that form `fail` also runs when
+# `pass` itself returns non-zero, so the assertion's verdict would depend on the
+# helper's exit status rather than the subshell's. Matches scenarios 1-2.
+if [[ $? -eq 0 ]]; then
+  pass "scenario 3: --yes create exited 0"
+else
+  fail "scenario 3: --yes create failed (output: $(cat "$TMP/create3.log"))"
+fi
 
 LEASE3="$LEASE_ROOT3/leases/feat-probe.lease"
 # Assert the FILE, never the directory: session-state.sh mkdir -p's leases/ at
@@ -228,9 +235,11 @@ if [[ -f "$LEASE3" ]]; then
   # The no-op stubs worktree-manager.sh installs when session-state.sh is absent
   # return 0 and write nothing, which would satisfy an exit-0 check; a `pid=`
   # line can only come from a real acquire_lease.
-  grep -q '^pid=' "$LEASE3" \
-    && pass "scenario 3: lease carries a pid= line (real acquire_lease, not a stub)" \
-    || fail "scenario 3: lease file exists but has no pid= line"
+  if grep -q '^pid=' "$LEASE3"; then
+    pass "scenario 3: lease carries a pid= line (real acquire_lease, not a stub)"
+  else
+    fail "scenario 3: lease file exists but has no pid= line"
+  fi
 else
   fail "scenario 3: NO lease written by --yes create — this is the #7278 second half \
 (dir: $(ls -A "$LEASE_ROOT3/leases" 2>/dev/null || echo MISSING))"
@@ -255,8 +264,12 @@ rm -f "$LEASE3"
   SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT3" \
   SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
     bash "$WM" --yes create feat-probe >"$TMP/create4.log" 2>&1
-) && pass "scenario 4: --yes create on an existing worktree exited 0" \
-  || fail "scenario 4: re-entry create failed (output: $(cat "$TMP/create4.log"))"
+)
+if [[ $? -eq 0 ]]; then
+  pass "scenario 4: --yes create on an existing worktree exited 0"
+else
+  fail "scenario 4: re-entry create failed (output: $(cat "$TMP/create4.log"))"
+fi
 
 # Prove we actually took the early-return path rather than re-creating, else
 # this arm silently duplicates scenario 3 and pins nothing new.
