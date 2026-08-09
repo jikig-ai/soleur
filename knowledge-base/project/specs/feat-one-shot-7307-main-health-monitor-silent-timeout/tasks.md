@@ -26,7 +26,9 @@ sizing, and the exit-code fix precedes arming the filer.
 ## Phase 1 — Measure (before sizing, before arming the filer)
 
 - [ ] 1.1 Apply ONLY: the Phase 2 pipefail guard, the Phase 4 infra step + toolchain, and a
-      provisional absurd ceiling (tests 90 / infra 40 / job 140). Push.
+      provisional absurd ceiling — tests 90 / infra 40 / **job 150**. (Must already satisfy the
+      Phase 3.1 sum rule: 90+40+5+10 = 145, so job 140 would cancel the measurement run itself.)
+      Push.
 - [ ] 1.2 `gh workflow run main-health-monitor.yml --ref feat-one-shot-7307-main-health-monitor-silent-timeout`
 - [ ] 1.3 Record **job-level** durations via `gh run view <id> --json jobs`, split per step
       (`tests` and `infra` separately — Phase 3 sizes them independently). Repeat once for n=2.
@@ -61,9 +63,11 @@ sizing, and the exit-code fix precedes arming the filer.
 
 ## Phase 4 — Cover the infra suites
 
-- [ ] 4.1 Install the toolchain: `hashicorp/setup-terraform` (same pinned SHA as
-      `infra-validation.yml`), `sudo apt-get install -y -qq cloud-init`, plus anything else the
-      Phase 0.3 table names. (docker/python3/jq are preinstalled on the hosted runner.)
+- [ ] 4.1 Install the toolchain:
+      `hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0`
+      (the sibling's exact pin — reuse, do not re-pin) and
+      `sudo apt-get install -y -qq cloud-init`, plus anything else the Phase 0.3 table names.
+      docker/python3/jq are preinstalled on the hosted runner.
 - [ ] 4.2 Add the `Assert infra toolchain present` step (`command -v terraform && … && docker info`),
       **ordered before** the infra step. Without it, absent tools self-skip exit 0 and the runner
       prints PASS — a green over missing coverage.
@@ -116,7 +120,8 @@ sizing, and the exit-code fix precedes arming the filer.
       `bash scripts/prod-version-drift-check.test.sh` passes (B10g); both edits in one commit.
 - [ ] 7.11 AC12 — `python3 scripts/lint-workflow-errexit-capture.py` → clean, rc 0.
 - [ ] 7.12 AC13 — crontab matches `cron-main-health-monitor.ts`.
-- [ ] 7.13 AC14 — `timeout 120 actionlint .github/workflows/main-health-monitor.yml`, no new finding.
+- [ ] 7.13 AC14 — run actionlint the way `ci.yml`'s lint job does (`actionlint -color`); no new
+      finding relative to `origin/main`. There is no `timeout 120` wrapper in CI — do not invent one.
 - [ ] 7.14 AC15 — `bash scripts/test-all.sh > /tmp/out.log 2>&1; echo $?` = 0.
       **Redirect + `$?`, never a pipe.**
 - [ ] 7.15 AC16 — `git diff origin/main` contains no leftover shim.

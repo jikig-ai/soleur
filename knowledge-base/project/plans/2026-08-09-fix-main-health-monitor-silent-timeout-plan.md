@@ -16,6 +16,38 @@ requires_cpo_signoff: false
 
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-09 · **Passes:** CTO domain review, code-simplicity review, Kieran correctness review, post-edit self-audit, verify-the-negative sweep.
+
+**Gate results (deepen-plan Phases 4.5–4.10):**
+
+| Gate | Result |
+|---|---|
+| 4.5 Network-outage deep-dive | **Fired** on the substring `timeout`; dismissed layer-by-layer with reasons in `## Hypotheses` (no host/SSH/DNS/TLS in the failure path — checkout and 15 min of tests succeed in every observed run). Telemetry emitted. |
+| 4.55 Downtime & cutover | **Not triggered** — zero matches for serving-surface offline operations (no `hcloud_server`, no lock-taking DDL, no deploy/router restructure). |
+| 4.6 User-brand impact | **Pass** — section present, threshold `aggregate pattern` (valid enum). The `.tf` path matches the sensitive-path regex, but the scope-out requirement applies only at threshold `none`. |
+| 4.7 Observability | **Pass** — all five fields present with substantive values; `discoverability_test.command` contains no `ssh`. |
+| 4.8 PAT-shaped variable | **Pass** — no PAT-shaped variable, env var, or literal token. |
+| 4.9 UI-wireframe | **Not triggered** — no UI-surface path in Files to Edit/Create. |
+| 4.10 Encryption posture | **Initially FAILED** — an earlier compression pass had rewritten the section as prose, dropping every schema field. Restored to the structured form; all ten required fields now present and non-placeholder. |
+
+**Key improvements from the review passes:**
+
+1. **Two new defect classes folded in** that the issue did not name — the `| tee` exit-code masking (defect B, the lead defect) and three separate errexit/milestone traps inside the filing step itself (B2–B4).
+2. **A statistical error in this plan's own reasoning was withdrawn** — v1 derived a "~80 %/week growth" multiplier from a right-censored, successes-only series (H2).
+3. **A verification that tested the wrong failure shape was corrected** — v1 "proved" its no-output fallback against an *absent* file, but `tee` creates the file at pipeline start, so the production timeout shape is *present and empty* (Phase 2.3).
+4. **The job-ceiling formula was corrected from `max + 10` to a sum** — with two independently-timed steps, the former lets the job token trip mid-second-step and recreates the very defect being fixed.
+5. **Scope was cut twice** — a duplicate `test-all.sh` env lever and a new linter rule were both removed, and Phase 5 (infra coverage) was decided from measured data rather than left as an open question.
+
+**New considerations discovered:**
+
+- `steps.<id>.outcome` is unreadable outside `${{ }}`, so several acceptance criteria were unverifiable as written until a job-summary mirror step was added (Phase 2.7).
+- A registered infra suite whose tool is missing **passes** — the runner prints PASS for a self-skip — so the infra step needs an explicit toolchain assertion or it produces a green that is not evidence (Phase 4.2).
+- `max_runtime_minutes` is documented as decorative for single-heartbeat monitors, so the coupling v1 proposed would have been an unread invariant.
+
+---
+
 ## Overview
 
 `.github/workflows/main-health-monitor.yml` is the repo's only main-branch health backstop. Its contract is: run the full suite against `main` every 6 hours; file a P1 `ci/main-broken` issue when it goes red; close it when it goes green. **Every arm of that contract is currently broken**, and the most consequential break is not the one in the issue title.
@@ -125,7 +157,7 @@ None (plan + `tasks.md` excepted).
 
 ### Phase 1 — Measure (before choosing any ceiling, and before arming the filer)
 
-1.1 On the branch, apply *only* the Phase 2 pipefail guard, the Phase 4 infra step + toolchain, and a deliberately absurd provisional ceiling (steps 90/40, job 140). Push; `gh workflow run main-health-monitor.yml --ref feat-one-shot-7307-main-health-monitor-silent-timeout`. Record **job-level** durations (`gh run view <id> --json jobs`) — not run-level, which includes queue + teardown and overstates by ~20–30 s. Repeat once.
+1.1 On the branch, apply *only* the Phase 2 pipefail guard, the Phase 4 infra step + toolchain, and a deliberately absurd provisional ceiling — tests 90, infra 40, **job 150**. (The job value must already satisfy Phase 3.1's sum rule: 90 + 40 + 5 + 10 = 145, so 140 would violate it and could cancel the measurement run itself.) Push; `gh workflow run main-health-monitor.yml --ref feat-one-shot-7307-main-health-monitor-silent-timeout`. Record **job-level** durations (`gh run view <id> --json jobs`) — not run-level, which includes queue + teardown and overstates by ~20–30 s. Repeat once.
 
 The measurement must include the infra suites: sizing a post-fix ceiling from a pre-fix run that excluded the workload Phase 4 adds would be the same class of error as defect B.
 
@@ -250,7 +282,14 @@ The `× 1.5` and the floors are **arbitrary slack, not a variance estimate** —
 
 Do **not** subset to "only the time-rotting suites". `run-registered-suites.sh` derives its list from `infra-validation.yml` precisely so the two cannot drift; a hand-curated subset in the monitor would be a new drift surface.
 
-4.1 Install the toolchain per the Phase 0.3 table, mirroring `infra-validation.yml`: `hashicorp/setup-terraform` (pinned to the same SHA as the sibling), `sudo apt-get install -y -qq cloud-init`, plus anything else the committed table names. `python3` and `jq` are preinstalled; docker is preinstalled.
+4.1 Install the toolchain per the Phase 0.3 table, mirroring `infra-validation.yml`:
+
+```yaml
+- uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+- run: sudo apt-get install -y -qq cloud-init
+```
+
+The SHA is the sibling's exact pin, resolved live from `infra-validation.yml` on 2026-08-09 — reuse it rather than re-pinning, so the two cannot drift. `python3`, `jq`, and docker are preinstalled on the GitHub-hosted runner (verified: no workflow in this repo installs docker). Add anything else the Phase 0.3 table names.
 
 4.2 **Assert the toolchain before the suites run.** This is not optional hygiene — per H9, a suite whose tool is absent self-skips with exit 0 and the runner prints **PASS**, so without this the monitor goes green over silently-absent coverage: exactly the "looks like coverage" shape this plan exists to eliminate. Mirror `infra-validation.yml`'s `docker info` assertion and keep it **ordered before** the infra step:
 
@@ -355,7 +394,7 @@ Every criterion is verifiable pre-merge by dispatching the modified file from th
 11. **AC11 — terraform validates and slug parity holds in one commit.** `terraform validate` passes in `apps/web-platform/infra/sentry/`; `bash scripts/prod-version-drift-check.test.sh` passes (case `B10g`); the workflow step and the `.tf` resource are in the same commit.
 12. **AC12 — the errexit linter is still clean.** `python3 scripts/lint-workflow-errexit-capture.py` → `clean`, rc 0. (This is also what guards the `set -e`-above-the-read mutation, via F14/F15b.)
 13. **AC13 — the monitor's crontab matches the real dispatcher**, read from `cron-main-health-monitor.ts`.
-14. **AC14 — actionlint introduces no new finding** relative to `origin/main`.
+14. **AC14 — actionlint introduces no new finding** relative to `origin/main`. Invoke it the way CI does — `ci.yml`'s `lint` job runs `actionlint -color` over the workflow tree (there is no `timeout 120` wrapper; do not invent one).
 15. **AC15 — full suite green.** `bash scripts/test-all.sh > /tmp/out.log 2>&1; echo $?` = 0. *Redirect + `$?`, never a pipe — this plan may not reproduce the defect it is fixing.*
 16. **AC16 — every temporary shim is reverted.** `git diff origin/main` contains no fixture used only for AC1/AC3/AC4.
 
