@@ -635,12 +635,22 @@ fi
 # ------------------------------------------------------------------------
 # T15: the release trap must NOT fire on normal process exit.
 #
-# This is the defect that made every other protection in this file dead code
-# for the path that matters. `create_worktree` acquires the lease and registers
-# the trap IN THE SAME PROCESS, and that process exits normally on success — so
-# with EXIT armed the lease was deleted before `create` returned, and
-# `is_lease_active` never got past its `[[ -f "$lease_file" ]]` guard. Measured
-# before the fix: the leases directory is EMPTY the instant create returns.
+# This is ONE OF TWO defects that made every other protection in this file dead
+# code for the path that matters. A worktree-creating function acquires the
+# lease and registers the trap IN THE SAME PROCESS, and that process exits
+# normally on success — so with EXIT armed the lease was deleted before the
+# command returned, and `is_lease_active` never got past its
+# `[[ -f "$lease_file" ]]` guard. Measured before the fix: the leases directory
+# is EMPTY the instant create returns.
+#
+# That measurement had TWO independent causes and this header originally named
+# only one. The second: `create_worktree` — the function `create` dispatches to,
+# and the one the autonomous pipeline actually invokes — did not acquire a lease
+# AT ALL until #7278. An empty leases directory looks identical under both
+# causes, which is exactly how the second survived the fix for the first. This
+# arm pins the trap half only; scenarios 3-4 of
+# plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh pin the
+# acquisition half.
 #
 # Both directions are pinned: normal exit must PRESERVE, an abnormal signal must
 # still RELEASE (that genuinely means the holder died).

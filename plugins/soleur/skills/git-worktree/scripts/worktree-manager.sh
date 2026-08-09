@@ -929,6 +929,73 @@ fetch_origin_branch_base() {
   fi
 }
 
+# Acquire the session lease for a worktree, with the diagnostics a destructive
+# path requires. Used by create_worktree() and create_for_feature() at four
+# sites; extracted so the protocol (sweep -> acquire -> VERIFY -> trap) cannot
+# drift between them, and so a fix lands once instead of four times.
+#
+#   $1  branch name — this IS the lease key
+#   $2  call-site tag for telemetry: create | create-reentry | feature | feature-reentry
+#   $3  "trap"   — this process created the worktree; register the release trap
+#       "notrap" — re-entry into a worktree this process did NOT create
+#
+# Why $3 exists: the trap makes the CALLING process release_lease's in-process
+# owner. On a re-entry that is wrong — a SIGINT during re-entry would delete the
+# lease the INCUMBENT session depends on, leaving it unleased and reapable. The
+# trap belongs to the process whose exit actually ends the work.
+#
+# Returns 0 only when a lease file demonstrably exists on disk.
+_acquire_worktree_lease() {
+  local branch_name="$1" site="$2" mode="${3:-trap}"
+
+  # Guarded: _session_state_init_dirs inside the sweep is unguarded, and a full
+  # or read-only state dir would otherwise abort the caller under `set -e` —
+  # blast radius being the whole create. Mirrors the guarded sibling call in
+  # cleanup_merged_worktrees.
+  sweep_orphan_leases \
+    || headless_or_stderr warn "lease sweep failed before acquiring $branch_name"
+
+  # With no lease library the reaper fails CLOSED (is_lease_active() stub returns
+  # 0 => refuse to reap anything), so an absent lease file is not an exposure and
+  # the load-time SOLEUR_WORKTREE_LEASE_LIB_MISSING sentinel already said so.
+  # Verifying here would emit a second, misleading failure marker.
+  if [[ "$_SS_LIB_MISSING" == "true" ]]; then
+    return 0
+  fi
+
+  local acquired=true
+  acquire_lease "$branch_name" "${SOLEUR_SKILL_NAME:-unknown}" "${SOLEUR_EXPECTED_DURATION_MIN:-240}" \
+    || acquired=false
+
+  if [[ "$acquired" != "true" ]]; then
+    # Most common real cause: a branch name the lease layer cannot key on
+    # (_validate_worktree_name rejects anything outside [A-Za-z0-9._-], so any
+    # slash-bearing name lands here and runs UNLEASED).
+    echo "SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED branch=$branch_name site=$site reason=rc-nonzero"
+    headless_or_stderr warn "could not acquire lease for $branch_name — this worktree is REAPABLE"
+    return 1
+  fi
+
+  # rc=0 is NOT proof the artifact exists. Assert the FILE, because that is what
+  # is_lease_active reads. Covers a failed rename, a divergent state root, and
+  # SOLEUR_DISABLE_SESSION_STATE=1 (which returns success while writing nothing
+  # AND leaves is_lease_active returning "not active" — i.e. fail-open).
+  local lease_path=""
+  lease_path="$(_lease_file "$branch_name" 2>/dev/null || true)"
+  if [[ -z "$lease_path" || ! -f "$lease_path" ]]; then
+    echo "SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED branch=$branch_name site=$site reason=file-absent"
+    headless_or_stderr warn "acquire_lease reported success but no lease file exists for $branch_name — this worktree is REAPABLE"
+    return 1
+  fi
+
+  if [[ "$mode" == "trap" ]]; then
+    # Multi-signal trap so an interrupted session (SIGINT/SIGTERM/SIGHUP) still
+    # releases. NOT EXIT — see _register_lease_release_trap in session-state.sh.
+    _register_lease_release_trap "$branch_name"
+  fi
+  return 0
+}
+
 # Resolve the base ref to use for `git worktree add` based on whether the
 # operator passed --update-local-main. Sets globals BASE_REF and TRACK_FLAG.
 # Used by create_worktree() and create_for_feature() — both call sites need
@@ -1241,16 +1308,16 @@ create_worktree() {
       # belongs to "worked in", not to "created".
       #
       # Deliberately INSIDE the y-branch: on `n` the caller does not enter the
-      # worktree and must not lease it.
+      # worktree and must not lease it. Hoisting this above the branch would
+      # stamp a >=4h lease on a worktree nobody entered, permanently blocking
+      # cleanup for it.
       #
-      # acquire_lease is last-writer-wins with no ownership check, so a
-      # co-tenant re-acquire rewrites pid/started_at. That is intentional and
-      # fails in the safe direction: started_at only ever moves forward, so the
-      # window can lengthen but never expire early.
-      sweep_orphan_leases
-      acquire_lease "$branch_name" "${SOLEUR_SKILL_NAME:-unknown}" "${SOLEUR_EXPECTED_DURATION_MIN:-240}" \
-        || headless_or_stderr warn "could not acquire lease for $branch_name"
-      _register_lease_release_trap "$branch_name"
+      # `notrap`: this process did not create the worktree and may be a
+      # co-tenant of a live session. acquire_lease is last-writer-wins with no
+      # ownership check, so re-acquiring rewrites pid/started_at — arming the
+      # release trap here would make THIS process release_lease's in-process
+      # owner, and a SIGINT would then delete the INCUMBENT's protection.
+      _acquire_worktree_lease "$branch_name" create-reentry notrap || true
       switch_worktree "$branch_name"
     fi
     return
@@ -1286,6 +1353,23 @@ create_worktree() {
   local BASE_REF TRACK_FLAG
   resolve_base_ref "$from_branch"
 
+  # Lease BEFORE the worktree exists, not after it is furnished.
+  #
+  # The lease is keyed by BRANCH NAME and needs nothing on disk, so nothing
+  # forces it later — and everything after `git worktree add` is a reap window.
+  # A branch freshly cut from origin/main is 0 commits ahead, so it appears in
+  # `git branch --merged main`; the 10-minute recent-commit grace reads
+  # origin/main's tip (hours old); the tree is clean because node_modules and
+  # .env are gitignored. So during verify + config + identity + env copy +
+  # install_deps (a full `bun install` per workspace — minutes) EVERY reap guard
+  # falls through and only the lease can save it.
+  #
+  # Measured 2026-08-09: a `--yes create` worktree checked out all 13,354 files
+  # and was destroyed before verify_worktree_created ran. Acquiring after
+  # install_deps — which is where parity with create_for_feature originally put
+  # it — would not have prevented that. Parity of FORM is not parity of COVER.
+  _acquire_worktree_lease "$branch_name" create trap || true
+
   echo -e "${BLUE}Creating worktree from $BASE_REF...${NC}"
   # shellcheck disable=SC2086 # intentional unquoted $TRACK_FLAG: empty string must elide
   git worktree add $TRACK_FLAG -b "$branch_name" "$worktree_path" "$BASE_REF"
@@ -1313,23 +1397,11 @@ create_worktree() {
   # Install dependencies
   install_deps "$worktree_path"
 
-  # Sweep stale leases lazily; cheap and idempotent.
-  sweep_orphan_leases
-
-  # Acquire a lease on this worktree so sibling cleanup-merged invocations
-  # see it as active and refuse to reap it. Same block as create_for_feature:
-  # `create` is the entry point one-shot Step 0b and work Phase 1 actually call,
-  # so without this the autonomous pipeline's worktrees carried no lease at all
-  # — and the SOLEUR_SKILL_NAME / SOLEUR_EXPECTED_DURATION_MIN env vars those
-  # SKILL.md blocks set were read by nobody on this path.
-  acquire_lease "$branch_name" "${SOLEUR_SKILL_NAME:-unknown}" "${SOLEUR_EXPECTED_DURATION_MIN:-240}" \
-    || headless_or_stderr warn "could not acquire lease for $branch_name"
-  # Multi-signal trap so an interrupted session (SIGINT/SIGTERM/SIGHUP)
-  # still releases the lease — without this the lease leaks until the
-  # 24h sweep, blocking sibling cleanup-merged unnecessarily.
-  _register_lease_release_trap "$branch_name"
-
   echo -e "${GREEN}✓ Worktree created successfully!${NC}"
+  # Say so on `create` too. Until #7278 only create_for_feature printed this,
+  # so the operator-visible evidence read "only `feature` leases" — which was
+  # true, and was the bug.
+  echo -e "${BLUE}Worktree leased; release on session exit.${NC}"
   echo ""
   echo "To switch to this worktree:"
   echo -e "${BLUE}cd $worktree_path${NC}"
@@ -1364,12 +1436,12 @@ create_for_feature() {
     # lands here and, without this, holds no lease for its whole run. There is
     # no y/n arm on this path — reaching here always means the caller proceeds
     # with the existing worktree — so acquire unconditionally.
-    # Last-writer-wins on a co-tenant re-acquire is intentional; see the note
-    # at create_worktree's early return.
-    sweep_orphan_leases
-    acquire_lease "$branch_name" "${SOLEUR_SKILL_NAME:-unknown}" "${SOLEUR_EXPECTED_DURATION_MIN:-240}" \
-      || headless_or_stderr warn "could not acquire lease for $branch_name"
-    _register_lease_release_trap "$branch_name"
+    # `notrap` for the same reason as create_worktree's re-entry arm: this
+    # process may be a co-tenant, and arming the release trap here would let a
+    # SIGINT delete a live incumbent's lease. Before #7278 this arm registered
+    # no trap at all, so adding one would have been a NEW deletion path on a
+    # previously-safe surface.
+    _acquire_worktree_lease "$branch_name" feature-reentry notrap || true
     return 0
   fi
 
@@ -1401,6 +1473,11 @@ create_for_feature() {
     # to refs/heads/<from>, breaking bare `git push` from inside the worktree.
     track_flag="--no-track"
   fi
+
+  # Lease BEFORE the worktree exists — same reasoning as create_worktree, and
+  # the same reap window (verify + config + identity + env copy + install_deps)
+  # applies here. This placement is what parity should have meant.
+  _acquire_worktree_lease "$branch_name" feature trap || true
 
   echo -e "${BLUE}Creating worktree from $base_ref...${NC}"
   # shellcheck disable=SC2086 # intentional unquoted $track_flag: empty string must elide
@@ -1435,18 +1512,9 @@ create_for_feature() {
   # Install dependencies
   install_deps "$worktree_path"
 
-  # Sweep stale leases lazily; cheap and idempotent.
-  sweep_orphan_leases
-
-  # Acquire a lease on this worktree so sibling cleanup-merged invocations
-  # see it as active and refuse to reap it. Skill name and expected duration
-  # come from the invoking skill's env (see skills/*/SKILL.md Phase 0).
-  acquire_lease "$branch_name" "${SOLEUR_SKILL_NAME:-unknown}" "${SOLEUR_EXPECTED_DURATION_MIN:-240}" \
-    || headless_or_stderr warn "could not acquire lease for $branch_name"
-  # Multi-signal trap so an interrupted session (SIGINT/SIGTERM/SIGHUP)
-  # still releases the lease — without this the lease leaks until the
-  # 24h sweep, blocking sibling cleanup-merged unnecessarily.
-  _register_lease_release_trap "$branch_name"
+  # Lease acquisition moved ABOVE `git worktree add` (see the note there) — the
+  # window between creating the worktree and finishing install_deps was the one
+  # in which a reap was actually observed.
 
   # Push -u immediately so the branch has a remote anchor before the operator
   # writes any local commits. Per plan AC line 158, verify the remote ref

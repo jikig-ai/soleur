@@ -222,7 +222,21 @@ expected_duration_min=$expected_duration_min
 hostname=$HOSTNAME
 EOF
   # Atomic rename on same filesystem.
-  mv "$tmp" "$lease_file"
+  #
+  # CHECKED, and that is load-bearing. Every caller is the left side of an
+  # `acquire_lease ... || warn` list, which suspends errexit for the whole call,
+  # so an unchecked `mv` here meant ENOSPC / EROFS / EACCES returned SUCCESS
+  # with no lease on disk: the caller believed it was protected, the `|| warn`
+  # arm never fired, and cleanup-merged later found no file and reaped. That is
+  # a fail-open on an irreversible path (worktree + local branch + remote branch
+  # + the PR), reached without anything anywhere reporting a problem.
+  #
+  # Clean up the temp on failure too — sweep_orphan_leases globs `*.lease` and
+  # would never collect a stranded `*.lease.XXXXXX`.
+  if ! mv "$tmp" "$lease_file"; then
+    rm -f "$tmp"
+    return 1
+  fi
   _LEASE_ACQUIRED_STARTED_AT[$worktree]="$started_at"
   return 0
 }
@@ -367,7 +381,12 @@ is_lease_active() {
   # to 24h. Do not restate it as "and the 24h mtime sweep backstops this" without
   # checking: an earlier draft of this comment said exactly that and it was FALSE
   # in the path that matters — sweep_orphan_leases was reachable only from the
-  # `create` subcommand, never from cleanup_merged_worktrees. That is now also
+  # `feature|feat` subcommand (create_for_feature), never from `create` and
+  # never from cleanup_merged_worktrees. (This sentence said "the `create`
+  # subcommand" until #7278; it was wrong in the same direction as the
+  # _register_lease_release_trap comment below — both assumed `create` did
+  # lease-work it did not do. As of #7278 `create` does sweep and acquire, so
+  # the corrected statement describes the pre-#7278 world.) That is now also
   # wired (worktree-manager.sh calls the sweep at the top of cleanup), but the
   # clamp is what makes the bound hold regardless.
   #
