@@ -8,7 +8,7 @@ permalink: legal/acceptable-use-policy/
 <section class="page-hero">
   <div class="container">
     <h1>Acceptable Use Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated June 4, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated August 9, 2026</p>
   </div>
 </section>
 
@@ -20,7 +20,7 @@ permalink: legal/acceptable-use-policy/
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** June 4, 2026 -- added Section 5.7 "Autonomous command execution (Web Platform)" + a Section 2 scope clause disclosing the Web Platform agent's auto-run shell-command surface and its residual-risk admission, with the git-backed-recovery and visible-in-chat mitigations (PR #4949 / #4952); previously May 26, 2026 -- added Section 5.6 "BYOK delegation responsibilities" (PR-B #4508 / #4232); previously May 22, 2026 -- softened Section 5.5 (renamed "Workspace member attestation" → "Workspace member responsibility"): the per-pair Soleur Side Letter is no longer required; Owners may satisfy the responsibility by any sufficient means (click-through ToS reliance, existing employment/contractor/consultancy agreement, or optional Side Letter execution); the Side Letter template remains available as a belt-and-braces reference document; previously same-day added Section 5.5 "Workspace member attestation" governing the team-workspace feature gated by `FLAG_TEAM_WORKSPACE_INVITE` (PR #4289); May 21, 2026 added a "Template-authorization revocation for AUP breaches" paragraph to Section 5.4 disclosing that Soleur may revoke a per-template authorization (`template_authorizations` ledger, PR-I #4078) with revocation reason `policy_violation` where a template-bound send is determined to violate this AUP; May 18, 2026 added Section 5.4 "Automated agent actions taken on your behalf" governing per-tenant scope grants on the Web Platform (PR-G #3947); previously same-day added Section 4.7 "Special-Category and Sensitive Personal Data -- Hosted Chat Surface" + chat-attachments scope bullet (PR #3988) (previous: March 29, 2026)
+**Last Updated:** August 9, 2026 *(Scope clarification added 9 August 2026: the distinction between plugin-local and operator-assisted processing was previously implicit, which left these sections reading as statements about every configuration.)* Previous: June 4, 2026 -- added Section 5.7 "Autonomous command execution (Web Platform)" + a Section 2 scope clause disclosing the Web Platform agent's auto-run shell-command surface and its residual-risk admission, with the git-backed-recovery and visible-in-chat mitigations (PR #4949 / #4952); previously May 26, 2026 -- added Section 5.6 "BYOK delegation responsibilities" (PR-B #4508 / #4232); previously May 22, 2026 -- softened Section 5.5 (renamed "Workspace member attestation" → "Workspace member responsibility"): the per-pair Soleur Side Letter is no longer required; Owners may satisfy the responsibility by any sufficient means (click-through ToS reliance, existing employment/contractor/consultancy agreement, or optional Side Letter execution); the Side Letter template remains available as a belt-and-braces reference document; previously same-day added Section 5.5 "Workspace member attestation" governing the team-workspace feature gated by `FLAG_TEAM_WORKSPACE_INVITE` (PR #4289); May 21, 2026 added a "Template-authorization revocation for AUP breaches" paragraph to Section 5.4 disclosing that Soleur may revoke a per-template authorization (`template_authorizations` ledger, PR-I #4078) with revocation reason `policy_violation` where a template-bound send is determined to violate this AUP; May 18, 2026 added Section 5.4 "Automated agent actions taken on your behalf" governing per-tenant scope grants on the Web Platform (PR-G #3947); previously same-day added Section 4.7 "Special-Category and Sensitive Personal Data -- Hosted Chat Surface" + chat-attachments scope bullet (PR #3988) (previous: March 29, 2026)
 
 ---
 
@@ -51,6 +51,8 @@ This Policy applies to all use of the Soleur platform, including but not limited
 - The hosted Web Platform at `app.soleur.ai`, including conversational prompt input, the `chat-attachments` upload surface (image and PDF files up to 24 MB), and any artifacts persisted to user-scoped storage.
 
 The Plugin operates locally on your machine; the Web Platform operates on cloud infrastructure managed by Jikigai. You retain full control over Plugin agent actions and bear responsibility for all activities performed through the Platform -- whether locally via the Plugin or remotely via the Web Platform -- under your account or on your systems.
+
+**What this covers.** This section describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
 
 ---
 
@@ -241,6 +243,8 @@ under §4.7.
 - Maintaining appropriate backups of your data and code; and
 - Configuring appropriate access controls on your local environment.
 
+**What this covers.** This section describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
+
 **Web Platform (Cloud Execution).** The Web Platform operates on cloud infrastructure managed by Jikigai. You are solely responsible for:
 
 - Securing your account credentials for app.soleur.ai;
@@ -266,6 +270,8 @@ When using Soleur in a manner that involves personal data:
 - You must have a lawful basis for processing any personal data that Soleur agents may access or generate;
 - You must not direct Soleur agents to collect, scrape, or process personal data in violation of applicable law; and
 - You are the data controller for any personal data processed through your use of the Platform.
+
+**What this covers.** This section describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
 
 ### 5.4 Automated agent actions taken on your behalf
 
@@ -317,6 +323,8 @@ The Web Platform's hosted agent can run shell commands in your connected workspa
 ### 6.1 Monitoring
 
 The Plugin operates locally and we do not monitor Plugin usage in real time. The Web Platform operates on cloud infrastructure managed by Jikigai, which enables server-side monitoring of service usage, access patterns, and compliance with this Policy. We reserve the right to investigate reported violations of this Policy across both the Plugin and the Web Platform.
+
+**What this covers.** This section describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
 
 ### 6.2 Consequences of Violation
 
