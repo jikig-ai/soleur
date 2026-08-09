@@ -2,7 +2,8 @@
 
 - **Status:** adopting
 - **Date:** 2026-08-06
-- **Related:** #7332 (PR 1 — the producers this contract describes; PR 2 — the manifest itself)
+- **Related:** #7332 (PR 1 — the producers this contract describes; PR 2 — the manifest itself);
+  #7342 (controller/processor determination — governs claim 3, see 3a)
 - **Supersedes:** nothing
 - **Issue:** #7332
 - **Enforced by:** `plugins/soleur/test/c4-from-components.test.ts` +
@@ -125,11 +126,56 @@ layers 1–6 when the platform does.
 That makes the consent argument the one doing the work. Soleur's Better Stack sink is
 fed by Soleur's own prod container journald (`vector.toml`
 `[sources.app_container_journald]` → `[sinks.betterstack]`). Code executing on a
-customer's self-hosted CLI has no route to it, and must not be given one: shipping repository-derived metadata from
-a customer machine to a Soleur vendor makes Soleur a data controller for data it
-never disclosed collecting. Any future hosted-quality telemetry for self-hosted
-runs must be **customer-owned** (a sink configured under the customer's own
-account) and opt-in — never a Soleur-owned default.
+customer's self-hosted CLI has no route to it, and must not be given one. Any future
+hosted-quality telemetry for self-hosted runs must be **customer-owned** (a sink
+configured under the customer's own account) and opt-in — never a Soleur-owned default.
+
+**3a. Reconciled against the controller/processor determination (#7342), which
+landed on `main` after this ADR was drafted.** An earlier revision of claim 3 asserted,
+freestanding, that such shipping "makes Soleur a data controller for data it never
+disclosed collecting." That conclusion **survives** — but it is no longer this ADR's
+to assert, and its unqualified form was imprecise. The authority is
+`knowledge-base/legal/audits/2026-08-06-alpha-tester-controller-processor-determination.md`,
+whose §2 machine/key/purpose test governs:
+
+- Purpose is what selects the posture. A Soleur-owned sink serving **Soleur's** purpose
+  is **Posture C — CONTROLLER** (Art. 4(7); Art. 28(10)), requiring an LIA, an Art. 6
+  basis, and an **Art. 14** notice route. §1 limb (ii) records a live instance that is
+  this case almost verbatim: reading a tester's `knowledge-base/` git tree "to measure
+  knowledge-base growth as a **Jikigai** product metric."
+- The **credential limb is the one the original phrasing missed.** §2 enters **Posture B
+  — PROCESSOR** (Art. 28(3) instrument required *before* processing) the moment tester
+  content reaches a Jikigai machine, credential, **or account** — and it "fires without
+  anyone noticing, because no file moves." A Better Stack ingest token shipped inside
+  `plugins/soleur/**` is exactly that credential. So a Soleur-owned default sink leaves
+  **Posture A** — the only posture requiring no instrument, and the only one the
+  published documentation describes — regardless of purpose.
+
+**The refuted second reason is replaced by an independent one, so this decision is
+again carried by more than the consent argument alone.** The determination's §4 egress
+evidence rests on a claim it recorded as falsifiable in one grep over `plugins/soleur/`:
+"**no automatic or background telemetry; all egress is explicitly operator-invoked**."
+That sentence is what keeps §4(a)'s finding — "the published position remains TRUE
+within its scope" — standing for `docs/legal/data-protection-disclosure.md`,
+`gdpr-policy.md`, and `privacy-policy.md`. A Soleur-owned default telemetry sink in
+`plugins/soleur/**` would be an unattended, non-operator-invoked egress path and would
+**falsify that published claim directly**. Layer 7 therefore now protects a documented
+compliance position, not only a consent argument.
+
+**Two limits, recorded rather than glossed.** (i) The determination is
+`status: draft-requires-counsel-review` with disposition **BLOCKED** pending its §11 —
+it is founder-grade internal sign-off, not external advice, so this ADR cites it as the
+governing internal determination and not as settled law. (ii) Its C9 requires the
+determination be re-run *before* a second alpha tester is onboarded; if it is re-run and
+the postures move, claim 3a is stale and must be re-reconciled.
+
+**This ADR's own baseline is a Posture C act.** The Context section's measurement of
+`2my8r9ry2t-wq/Skouer` — "23 entries, 100% under `project/`" — is the tester's private
+repository read for a Jikigai product purpose. That is the processing recorded as
+**PA-35** in the Art. 30(1) register and assessed in
+`knowledge-base/legal/legitimate-interest-assessments/2026-08-06-alpha-tester-repo-observation-lia.md`.
+It is covered there; it is named here so the ADR does not read as though its evidence
+arrived from nowhere.
 
 **4. Therefore plugin-emitted observability is layer 7 (`cli-stdout-artifact`).**
 The synchronous stdout marker **plus** a deterministic artifact committed to the
