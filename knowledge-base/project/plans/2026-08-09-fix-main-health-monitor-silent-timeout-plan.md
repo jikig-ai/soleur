@@ -433,7 +433,44 @@ No `ssh` in the discoverability path.
 
 ## Encryption Posture
 
-No persistent store is introduced, so `at_rest` is n/a — the Sentry cron monitor is a vendor-side config object and the workflow writes only ephemeral runner-local files. `in_transit`: the one new connection is the runner's HTTPS check-in to the Sentry ingest domain (`de.sentry.io`, DE residency) via the shared `sentry-heartbeat` composite, which uses curl defaults, so **cert verification is on**; it does not authenticate Sentry to us beyond public CA trust, and a swallowed check-in degrades to the missed-check-in alarm — failing toward paging, not silence. Disclosed under the existing Art. 30 PA8 §(e) Sentry ingest entry, unchanged: the payload is a monitor slug and an ok/error status. No exception block needed — no plaintext store, no disabled verification.
+Triggered by the `.tf` file in Files to Edit. The change introduces no persistent store; the one new connection is the runner's check-in to Sentry.
+
+```yaml
+at_rest:
+  - store: none introduced by this change
+    mechanism: not-applicable — no persistent store is created. The sentry_cron_monitor is a
+               vendor-side configuration object, not a data store, and the workflow writes only
+               ephemeral runner-local files (/tmp/test-output.txt) destroyed with the runner.
+    evidence: Files to Edit contains exactly two paths — one workflow YAML and one .tf declaring
+              a sentry_cron_monitor resource. No migration, bucket, volume, table, queue or
+              cache is declared. Verified by reading both planned diffs.
+    defends_against: not-applicable — no data at rest is created, so there is no at-rest threat
+                     surface to defend.
+    does_not_defend: does not alter the posture of any EXISTING store. The GitHub Actions run
+                     log and the filed issue body both persist a tail-30 excerpt of CI output in
+                     GitHub's infrastructure under GitHub's own encryption, outside this repo's
+                     control and unchanged by this plan.
+    disclosed_as: no disclosure change — no new store, no new data category.
+    live_verification: `terraform state list | grep sentry_cron_monitor` after apply returns the
+                       new monitor and no new store resource of any kind.
+
+in_transit:
+  - connection: GitHub Actions runner -> Sentry ingest (cron monitor check-in)
+    tls: yes — HTTPS to the Sentry ingest domain (de.sentry.io, DE residency), via the shared
+         ./.github/actions/sentry-heartbeat composite.
+    cert_verification: on — the composite uses curl defaults; no -k / --insecure flag. Verified
+                       by reading the composite's action.yml before adoption (Phase 0).
+    does_not_defend: does not authenticate Sentry to us beyond public CA trust, and does not
+                     protect against a compromised or unavailable ingest endpoint swallowing
+                     check-ins. That failure degrades to the missed-check-in alarm — i.e. it
+                     fails toward paging, not toward silence.
+    disclosed_as: existing Art. 30 PA8 §(e) Sentry ingest disclosure, unchanged. The payload is
+                  a monitor slug and an ok/error status — no repo content, no user data, no new
+                  category of personal data.
+
+exception: none — no plaintext store and no disabled certificate verification, so no
+           justification / tracking_issue / expires_on block is required.
+```
 
 ---
 
