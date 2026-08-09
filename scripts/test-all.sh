@@ -474,6 +474,10 @@ if want_scripts; then
   # `test-scripts` feeds the aggregate `test` job (ci.yml), which IS in the CI Required ruleset,
   # whereas the `lint-bot-statuses` job the other repo linters live in is advisory by design.
   run_suite "scripts/zot-mirror-diagnosis" bash scripts/zot-mirror-diagnosis.test.sh
+  # APP_DOMAIN_BASE derivation, consumed by both D10 arms of registry-luks-recut and by
+  # cf-tunnel-registry-bridge. It replaced a Doppler read of a secret that exists in no config
+  # of the soleur project. Explicit run_suite — scripts/*.test.sh is not auto-globbed here.
+  run_suite "scripts/derive-app-domain-base" bash scripts/derive-app-domain-base.test.sh
   # #7242: an alarm step that cannot run after an earlier failure cannot report the FIRE it
   # exists to report. Static gate over both alarm workflows — the condition is evaluated by
   # GitHub, so the YAML is the only artifact there is to test.
@@ -579,6 +583,16 @@ if want_scripts; then
   # covers scripts/*.test.sh only. An unregistered suite here runs in ZERO runners and is silent
   # and green (#3366).
   run_suite "tests/scripts/registry-restore-from-ghcr" bash tests/scripts/test-registry-restore-from-ghcr.sh
+  # D10 WIRING (not logic). The suites above prove the gate's logic; none of them proves the
+  # workflow USES it. That gap is exactly how the gate shipped reading a Doppler secret which
+  # exists in no config of the soleur project, aborting at PREPARE before it could reach its own
+  # destroy-guard. A `run:` body is not executable by any of them, so this asserts the wiring
+  # statically over both arms plus the composite action the restore leg runs inside.
+  # Deliberately a separate file: the mutation battery sandboxes the D10 suite into a tree with
+  # no .github/, so a workflow-reading row appended there would fail its baseline and harness_die.
+  # Registered explicitly for the same reason as its neighbours — nothing auto-discovers
+  # tests/scripts/ (#3366).
+  run_suite "tests/scripts/registry-d10-workflow-wiring" bash tests/scripts/test-registry-d10-workflow-wiring.sh
   # D11 post-apply liveness poller (#6929) — requires a heartbeat TRANSITION, since the monitor
   # reports the dead host's residual `up` for ~90s and exposes no last_ping_at.
   run_suite "tests/scripts/registry-heartbeat-poll" bash tests/scripts/test-registry-heartbeat-poll.sh
