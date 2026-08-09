@@ -277,10 +277,10 @@ run_sut "${SB}/t21/variables.tf"
   || fail "T21 returned an unquoted expression: '$OUT' — that is a fabricated hostname"
 
 # ── T22-T25: injection shapes. T22 is the sharp one ─────────────────────────────────────────
-# `x@evil.com` makes https://app.x@evil.com/health resolve to evil.com with `app.x` as
+# `x@evil.example.com` makes https://app.x@evil.example.com/health resolve to evil.example.com with `app.x` as
 # userinfo. The D10 gate reads that host to DEFINE the restore set, and the bridge sends the
 # production CF Access service token to it.
-assert_malformed "T22 userinfo (@) host relocation"  "x@evil.com"      t22
+assert_malformed "T22 userinfo (@) host relocation"  "x@evil.example.com"      t22
 assert_malformed "T23 case-varied app. prefix"       "App.soleur.ai"   t23
 assert_malformed "T24 empty label (..)"              "a..b"            t24
 assert_malformed "T25 leading hyphen"                "-soleur.ai"      t25
