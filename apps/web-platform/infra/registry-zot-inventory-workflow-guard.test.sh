@@ -498,8 +498,15 @@ elif mode == "list":
 PY
 }
 
-assert "the discovered caller set is non-empty (>=4 known callers; an empty set proves nothing)" \
-  "[[ \$(callers_scan nonempty) == 'yes' ]]"
+# MEMBERSHIP, not cardinality. `>= 4` samples the set's SIZE and is satisfiable by
+# SUBSTITUTION: rewriting the bridge `uses:` out of reusable-release.yml (the release path)
+# while any other workflow gained one kept the count at 4 and passed 52/52, so a caller could
+# silently stop using the guarded bridge. The member list is the thing the assertion is about,
+# so assert the member list. A legitimate new adopter now produces a diff that NAMES the file
+# instead of a count mismatch that blames duplication.
+EXPECTED_CALLERS="apply-web-platform-infra.yml build-inngest-bootstrap-image.yml build-inngest-config-bundle.yml registry-zot-inventory.yml reusable-release.yml"
+assert "the caller set is exactly the enumerated members (an empty or substituted set proves nothing)" \
+  "[[ \"\$(callers_scan list)\" == \"\$EXPECTED_CALLERS\" ]]"
 assert "every caller either omits skip-docker-login or sets a LITERAL true/false (never a \${{ }} expression)" \
   "[[ \$(callers_scan all_literal) == 'yes' ]]"
 echo "  (discovered callers: $(callers_scan list))"

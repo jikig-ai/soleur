@@ -28,6 +28,37 @@ created: 2026-08-06
 
 Ordering is dependency-directed. Do not reorder 1 → 4.
 
+> ## RECONCILED 2026-08-09 (post-review) — read this before reading the boxes
+>
+> The boxes below were written at re-scope time and never ticked, so the file showed
+> **80 unchecked / 1 checked** while the implementation was committed and its suites green.
+> That is worse than either extreme: a reader cannot tell a task that DIVERGED from one that
+> is simply outstanding. This banner is the distinction, stated rather than inferred.
+>
+> **Deliverables verified present AND wired** (existence + consumer, checked 2026-08-09):
+> `scripts/zot-inventory.sh`, `scripts/zot-inventory-assert-marker.sh`,
+> `scripts/zot-disk-sample.sh`, both workflows, the guard suite (registered in
+> `infra-validation.yml`), ADR-172, both follow-through probes, the C4 edges, and the runbook
+> pointer. Suites green at 146/0, 43/0, 15/0, 52/52, 6/6.
+>
+> **One task had DIVERGED, not merely gone unticked:** 3.3 named #7247 as the recording target
+> while the workflow posts to #7339. Corrected in place and ticked — the text was wrong, so
+> ticking alone would have preserved the error.
+>
+> **Genuinely outstanding, and deliberately left unchecked:**
+> - 9.4 walk every pre-merge AC and record evidence per AC
+> - 9.5 state the EUR 0.00/mo recurring delta in the PR body with its reasoning
+> - 9.6 convert line-number citations to content anchors (`cq-cite-content-anchor-not-line-number`)
+> - 9.7 confirm the `iac-routing-ack` comment survived plan edits
+> - all of Phase 10 — post-merge by construction, and note 10.1 cannot be satisfied by the
+>   FIRST dispatch alone: runner egress to the pinned ingest host is unproven, which is what
+>   #7339 exists to observe.
+>
+> **The re-scope's own deferrals are NOT tracked by this file** — `restart`, `push-config` and
+> `reclaim` survive #7278 and are tracked in **#7377**, because closing this issue on its
+> original title ("the registry host has no in-place restart lever") would otherwise read as
+> closing the gap it names.
+
 ## Phase 0 — Preconditions (verify, never assume)
 
 - [ ] 0.1 Re-derive the next-free ADR ordinal against freshly-fetched `origin/main`. Plan
@@ -361,7 +392,7 @@ Ordering is dependency-directed. Do not reorder 1 → 4.
 
 - [ ] 10.1 **PRIMARY.** Dispatch the lever; require an **observed** `SOLEUR_ZOT_INVENTORY` line
       with `enumeration_complete=true` and a numeric `delta_gb`; the workflow comments it onto
-      #7247. **The deliverable is the number — assert no cause.**
+      #7339 (the dedicated tracker; #7247 is the incident and will close). **The deliverable is the number — assert no cause.**
       **(A2)** A `delta_gb` under ~3 GB is **not distinguishable from zero** (the ext4-reserve
       error bar). **(A3)** `delta_gb` is an **upper bound on unreferenced blob bytes**, not a
       measurement of them — the two named candidates are zot's dedupe cache DB and orphaned
