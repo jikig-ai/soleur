@@ -190,7 +190,14 @@ poll_once() {  # sets MARKER_ROWS / RUN_ID_ROWS / CONTROL_ROWS; returns 0 if the
   return 0
 }
 
-while [[ "$POLLS" -lt "$MAX_POLLS" ]]; do
+# A DEADLINE, not just a poll count. MAX_POLLS is precomputed from the budget and the time
+# spent INSIDE poll_once is never deducted — each poll shells to betterstack-query.sh, whose
+# curl carries --max-time 60. So a 340 s budget at a 20 s interval admits 17 polls x up to 60 s
+# of query plus 16 x 20 s of sleep = ~1340 s, roughly 4x the number this script advertises in
+# its own verdict line. The count still bounds the number of QUERIES; this bounds the wall
+# clock, so `poll_budget_s` means what it says.
+POLL_DEADLINE=$(( SECONDS + POLL_BUDGET_S ))
+while [[ "$POLLS" -lt "$MAX_POLLS" && "$SECONDS" -lt "$POLL_DEADLINE" ]]; do
   POLLS=$((POLLS + 1))
   # AP-022: errexit is never enabled in this file, so this status read is reachable.
   poll_once
@@ -199,7 +206,12 @@ while [[ "$POLLS" -lt "$MAX_POLLS" ]]; do
     TRANSPORT_OK=1
     if [[ "$MARKER_ROWS" -ge 1 ]]; then break; fi
   fi
-  if [[ "$POLLS" -lt "$MAX_POLLS" && "$POLL_INTERVAL_S" -gt 0 ]]; then sleep "$POLL_INTERVAL_S"; fi
+  # Do not sleep past the deadline: a sleep that outlives the budget turns a bounded wait into
+  # an unbounded one at the very last iteration.
+  if [[ "$POLLS" -lt "$MAX_POLLS" && "$POLL_INTERVAL_S" -gt 0 \
+        && $(( SECONDS + POLL_INTERVAL_S )) -lt "$POLL_DEADLINE" ]]; then
+    sleep "$POLL_INTERVAL_S"
+  fi
 done
 
 if [[ "$MARKER_ROWS" -ge 1 ]]; then

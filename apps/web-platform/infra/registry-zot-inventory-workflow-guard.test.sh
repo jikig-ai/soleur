@@ -195,7 +195,11 @@ def dispatch_guard_two_clause():
         return False
     for j in jobs.values():
         cond = " ".join(str(j.get("if", "")).split())
-        if "github.event.label.name ==" not in cond:
+        # The OPERAND, not just the clause shape. Testing only for
+        # `github.event.label.name ==` pinned that a label is compared and never WHICH label,
+        # so retargeting the route to a common label (`== 'bug'`) passed 52/52 — and any
+        # Bot-authored issue carrying that label would then dial the production registry.
+        if "github.event.label.name == 'registry-zot-inventory'" not in cond:
             return False
         if "github.event.issue.user.type == 'Bot'" not in cond:
             return False
