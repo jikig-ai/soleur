@@ -80,6 +80,17 @@ permissions:
 #                        (that trio IS guarded, by c4-likec4-version-pin.test.ts)
 #   TERRAFORM_VERSION -> .github/workflows/infra-validation.yml
 env:
+  # JOBS=1 applies to EVERY invocation of run-registered-suites.sh in this
+  # workflow, deliberately at workflow scope rather than on the infra step.
+  # Scoping it to that step was not enough: when the branch diff touches
+  # apps/web-platform/infra/, `TEST_GROUP=all` ALSO runs the infra runner nested
+  # inside the tests step, at the default -P — and it flaked there on run
+  # 31332793342 (91/92) while the JOBS=1 infra step was clean (92/92) in the very
+  # same job. On `main` the nested path is inert (the diff against origin/main is
+  # empty, which IS defect C), but relying on a defect's mechanism to avoid a
+  # flake is not a property worth depending on. `scripts/test-all.sh` does not
+  # read JOBS; only run-registered-suites.sh does.
+  JOBS: 1
   GITLEAKS_VERSION: "8.24.2"
   GITLEAKS_SHA256: "fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e"
   LIKEC4_VERSION: "1.50.0"
@@ -118,14 +129,22 @@ jobs:
     #   infra  2m19s =  2.32 -> x1.5 =  3.48 -> roundup5  5 -> floor 10 -> 10
     #   job   = 35 + 10 + 5 + 10 = 60   (setup measured 52s; the 5 is the rule's allowance)
     #
-    # SUPERSEDED FOR INFRA by the JOBS=1 change (see the infra step's env). Both
-    # infra measurements above were taken at the runner's default -P 4 — which is
-    # the configuration that FLAKED — so reusing either to size a SEQUENTIAL step
-    # would repeat, in a new form, exactly the censored-data error this block
-    # opens by warning about. The infra ceiling is therefore PROVISIONAL-GENEROUS
-    # at 20 (job = 35 + 20 + 5 + 10 = 70) until a JOBS=1 dispatch measures it, at
-    # which point it is re-derived by the same rule. Stated rather than carried
-    # over silently.
+    # The infra figures above were taken at the runner's default -P 4, which is
+    # the configuration that FLAKED and is no longer what this workflow uses. The
+    # binding infra measurement is the SEQUENTIAL one:
+    #   31332793342  infra=5m30s (330s) at JOBS=1, 92 passed / 0 failed
+    #   31332793342  tests=20m52s (1252s)
+    # Reusing a -P 4 number to size a sequential step would repeat, in a new form,
+    # the censored-data error this block opens by warning about.
+    # Re-worked on the sequential figures:
+    #   tests 20m52s = 20.87 -> x1.5 = 31.30 -> roundup5 35 -> floor 30 -> 35
+    #   infra  5m30s =  5.50 -> x1.5 =  8.25 -> roundup5 10 -> floor 10 -> 10
+    #   job   = 35 + 10 + 5 + 10 = 60
+    # The tests figure still INCLUDES a nested infra run, because this branch's
+    # diff touches apps/web-platform/infra/. On `main` that nested run does not
+    # happen (empty diff — defect C), so 20m52s OVERSTATES the post-merge tests
+    # step by roughly the infra step's own cost. Left deliberately unadjusted:
+    # a ceiling sized on the larger of the two shapes is the safe direction.
     #
     # The job ceiling must dominate the SUM of the step ceilings, not the max:
     # with two timed steps, `max + 10` lets the job token trip midway through the
@@ -144,7 +163,7 @@ jobs:
     # and note that `gh run view --json jobs` reports steps[].conclusion, which
     # `continue-on-error: true` PINS TO success — the real verdict is the step
     # `outcome`, mirrored to the job summary by "Record step outcomes" below.
-    timeout-minutes: 70
+    timeout-minutes: 60
 
     steps:
       # fetch-depth: 0 + fetch-tags: true mirror infra-validation.yml's
@@ -265,21 +284,9 @@ jobs:
       - name: Run infra suites
         id: infra
         continue-on-error: true
-        timeout-minutes: 20 # PROVISIONAL for JOBS=1 — see the JOBS=1 note in the budget block
+        timeout-minutes: 10 # derived; see the TIMEOUT BUDGET block above
         env:
           TEST_GROUP: infra
-          # JOBS=1 (the runner's documented override) — SEQUENTIAL, deliberately.
-          # The runner defaults to min(nproc, 6), i.e. -P 4 on a 4-core hosted
-          # runner, which oversubscribes it. Measured across 6 executions of the
-          # same 92-suite set on an unchanged tree: two runs failed, naming THREE
-          # DIFFERENT suites (inngest + soleur-host-bootstrap-observability, then
-          # web-host-provisioner-parity-mutation), while -P 6 on a 16-core machine
-          # and CI's own sequential deploy-script-tests job were clean. Different
-          # failure sets on an unchanged tree is a HARNESS defect, not a suite
-          # defect. At ~33% that would file a spurious P1 every third run, which
-          # is worse than the silence this PR removes. Sequential matches the only
-          # configuration proven stable. Tracked separately for a real fix.
-          JOBS: 1
         run: |
           set +e
           bash scripts/test-all.sh 2>&1 | tee -a /tmp/infra-output.txt
