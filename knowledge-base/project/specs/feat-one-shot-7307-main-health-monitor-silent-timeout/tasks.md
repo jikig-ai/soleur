@@ -102,8 +102,15 @@ sizing, and the exit-code fix precedes arming the filer.
 - [ ] 7.6 AC7 — `job >= tests_step + infra_step + 15` and `job <= 120`.
 - [ ] 7.7 AC8 — toolchain assertion passed; log shows `IS covered above`, no
       `SKIPPED (diff does not touch`.
-- [ ] 7.8 AC9 — `grep -c 'steps\.infra' .github/workflows/main-health-monitor.yml` is 3 (or 0 if no
-      `id: infra` step). Any other count is a reject.
+- [ ] 7.8 AC9 (**AMENDED at /work — the original expected-count was stale**) — the invariant is
+      "no PARTIAL `steps.infra` reference set", and the plan's literal `3` could not survive its
+      own Phase 2.6/2.7, which add two more legitimate sites (`Record step outcomes`, and the
+      `INFRA_OUTCOME` env passthrough for the body). A hardcoded count is also blind to a rename.
+      Assert the SET relation instead — `steps.tests` and `steps.infra` are referenced at exactly
+      the same sites, so they must appear the same number of times:
+      `[[ $(grep -c 'steps\.infra' <wf>) == $(grep -c 'steps\.tests' <wf>) ]]`, and both 0 if there
+      is no `id: infra` step. Strictly stronger than `== 3`: dropping the clause from any ONE of
+      filer / closer / heartbeat / summary / env now reds.
 - [ ] 7.9 AC10 — timeout body differs from red-suite body; both carry the `outcome` value.
 - [ ] 7.10 AC11 — `terraform validate` in `apps/web-platform/infra/sentry/`;
       `bash scripts/prod-version-drift-check.test.sh` passes (B10g); both edits in one commit.

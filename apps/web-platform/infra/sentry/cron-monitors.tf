@@ -1188,3 +1188,43 @@ resource "sentry_cron_monitor" "workspaces_luks_verify" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# Executor liveness for the main-branch health monitor (#7307).
+#
+# This monitor is a REVERSAL of a documented prior decision, so the reasoning is recorded here
+# rather than left implicit. `cron-main-health-monitor.ts` chose "Design A — no own Sentry
+# monitor", resting end-to-end liveness on this argument: "if the dispatch never reaches the
+# runner, the suite does not run and a broken `main` goes un-issued — the existing
+# operator-visible absence signal this workflow already relies on."
+#
+# #7307 is that argument's counterexample. Absence-of-an-issue is only a signal if the monitor
+# reliably PRODUCES an issue when main is broken, and it did not: a job timeout is recorded as
+# `cancelled` (never `failure`), and `| tee` under the default `bash -e {0}` shell discarded the
+# suite's exit code entirely. So "no issue appeared" was indistinguishable from "main is healthy"
+# for four months. Design A's scheduler-liveness arm is untouched and still correct — the
+# `cron-inngest-cron-watchdog` + `EXPECTED_CRON_FUNCTIONS` manifest keep the Inngest side covered.
+# What this monitor adds is the EXECUTOR side, which nothing covers today: a dropped dispatch, a
+# disabled workflow, or an unavailable runner produces no run at all, and no in-workflow or
+# in-repo mechanism can observe a run that never happened.
+#
+# crontab mirrors the Inngest cron in cron-main-health-monitor.ts (`{ cron: "0 */6 * * *" }`) —
+# read from that file, not from memory. Margin 60 per the Inngest-dispatch cohort convention
+# documented in this file's header; do NOT tighten it (the header records a false page from a
+# tighter margin on this same substrate).
+#
+# max_runtime_minutes = 15 matches the Inngest-dispatch cohort siblings and is DECORATIVE, per
+# this file's header: it applies only to two-step (in_progress -> ok/error) check-ins, and
+# main-health-monitor.yml posts a single terminal heartbeat. It is deliberately NOT coupled to
+# that workflow's job `timeout-minutes` — detection of a job-level cancel here is by MARGIN, which
+# is adequate at a 6h cadence, and a coupling comment would assert a relation nothing reads.
+resource "sentry_cron_monitor" "main_health_monitor" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "main-health-monitor"
+  schedule                = { crontab = "0 */6 * * *" }
+  checkin_margin_minutes  = 60
+  max_runtime_minutes     = 15
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
