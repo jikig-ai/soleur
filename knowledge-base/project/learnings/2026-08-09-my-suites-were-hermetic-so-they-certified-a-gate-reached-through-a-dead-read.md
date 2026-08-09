@@ -180,8 +180,8 @@ skill's forward-looking-sentence rule. Recorded as a recurrence, not a new rule.
 Six agents; **3 P1 + 7 P2, all fixed inline, zero issues filed.** More defects in my guards than
 in the fix. The three that mattered most:
 
-- **An injection class.** `validate_base` accepted `x@evil.example.com`, making
-  `https://app.x@evil.example.com/health` resolve to **evil.example.com** with `app.x` as userinfo. Not merely a
+- **An injection class.** `validate_base` accepted `x@example.com`, making
+  `https://app.x@example.com/health` resolve to **example.com** with `app.x` as userinfo. Not merely a
   wrong URL: the gate reads that host to *define the restore set*, and the bridge interpolates the
   same value into `--hostname`, where cloudflared presents the **production CF Access service
   token**. One character-class arm (`*[!a-zA-Z0-9.-]*`) closes `@`, `:`, `?`, `#`, `%`, quote,

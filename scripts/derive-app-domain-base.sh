@@ -116,7 +116,7 @@ validate_base() {
   esac
 
   # ONE arm closes every character that can relocate or reshape the URL. The sharpest is `@`:
-  # `https://app.x@evil.example.com/health` sends the request to evil.example.com with `app.x` as userinfo —
+  # `https://app.x@example.com/health` sends the request to example.com with `app.x` as userinfo —
   # and both consumers make that catastrophic rather than merely wrong. The D10 gate reads that
   # host's /health to DEFINE the restore set, and cf-tunnel-registry-bridge interpolates the
   # same value into `--hostname`, where cloudflared presents the production CF Access service
