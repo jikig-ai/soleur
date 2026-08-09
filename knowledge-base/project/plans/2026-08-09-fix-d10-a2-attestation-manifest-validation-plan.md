@@ -281,7 +281,7 @@ None.
 4. The platform-layer-blob-missing case exits **4** (not 6, not 0).
 5. The attestation-blob-absent case exits **4** — presence is verified, never skipped.
 6. `classify "…gzip: invalid header"` returns the new named class; the engine maps it to exit **4**.
-7. Single-manifest (non-index) refs take the unchanged code path: `grep` the suite for a case asserting `crane validate --remote <non-index-ref>` is still the only verification call for that shape.
+7. Single-manifest (non-index) refs take the unchanged code path, asserted against the stub's `$CALLS` log rather than by reading the suite: for the non-index case the log contains **exactly one** `validate` line for that ref and **zero** `blob` lines. (A "grep the suite for a case that asserts…" AC would be vacuous — it tests that a test exists, not that the behaviour holds.)
 8. `bash scripts/test-all.sh` green (full suite), or, if scoped, the registry-suite subset green plus a named record of which commit the last full run covered.
 9. No diff outside the five files in **Files to Edit**: `git diff --name-only origin/main...HEAD` returns exactly that set (plus the plan/spec artifacts).
 10. The recut's other gates are untouched: `git diff origin/main...HEAD -- tests/scripts/lib/registry-luks-recut-gate.sh tests/scripts/lib/stock-preflight-gate.sh .github/workflows/apply-web-platform-infra.yml` is **empty**.
