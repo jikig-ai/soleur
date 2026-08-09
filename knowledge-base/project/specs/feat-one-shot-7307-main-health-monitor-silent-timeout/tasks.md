@@ -128,7 +128,7 @@ sizing, and the exit-code fix precedes arming the filer.
 
 ## Phase 8 — Ship
 
-- [ ] 8.1 Capture the learning under `knowledge-base/project/learnings/` (directory + topic only;
+- [x] 8.1 Capture the learning under `knowledge-base/project/learnings/` (directory + topic only;
       pick the date at write time): the engine-reads-the-exit-code class, why the existing errexit
       linter correctly does not cover it, and censored-series reasoning.
 - [ ] 8.2 PR body: `Closes #7307`.
