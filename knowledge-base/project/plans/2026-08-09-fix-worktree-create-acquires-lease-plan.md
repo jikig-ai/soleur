@@ -253,9 +253,9 @@ Two traps the parent session already paid for. Do not re-pay them.
 ### Pre-merge
 
 - [ ] **AC1:** `create_worktree()` in `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` contains `sweep_orphan_leases`, `acquire_lease "$branch_name" "${SOLEUR_SKILL_NAME:-unknown}" "${SOLEUR_EXPECTED_DURATION_MIN:-240}"` with the `|| headless_or_stderr warn` arm, and `_register_lease_release_trap "$branch_name"`, in that order, placed after `install_deps` and before the success echo.
-- [ ] **AC2:** The block is byte-identical in form to `create_for_feature`'s. Verify by count, not by eye: `grep -c 'acquire_lease "\$branch_name"' <file>` returns `2` and `grep -c '_register_lease_release_trap "\$branch_name"' <file>` returns `2`.
-- [ ] **AC3:** `bash plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh` exits 0 and prints `PASS: 6`.
-- [ ] **AC4:** The suite's `MIN_ASSERTIONS` is `6`. (`grep -c '^MIN_ASSERTIONS=6' <file>` returns `1`; `grep -c '^MIN_ASSERTIONS=3' <file>` returns `0`.)
+- [x] **AC2:** The block is byte-identical in form to `create_for_feature`'s. Verify by count, not by eye: `grep -c 'acquire_lease "\$branch_name"' <file>` returns `4` and `grep -c '_register_lease_release_trap "\$branch_name"' <file>` returns `4`. **Amended 2026-08-09 (was `2`/`2`):** the `code-simplicity-reviewer` CONCUR gate DISSENTED on deferring the early-return arm and it was fixed inline, so each function now carries the block twice — once on the success path, once on its "worktree already exists" re-entry path. Four sites, not two.
+- [x] **AC3:** `bash plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh` exits 0 and prints `PASS: 9`. **Amended (was `PASS: 6`)** — scenario 4 adds the re-entry arm's three assertions.
+- [x] **AC4:** The suite's `MIN_ASSERTIONS` is `9`. (`grep -c '^MIN_ASSERTIONS=9' <file>` returns `1`; `grep -c '^MIN_ASSERTIONS=3' <file>` returns `0`.) **Amended (was `6`).**
 - [ ] **AC5 (RED-before-GREEN, recorded not re-run):** the Phase 1 run of the suite against un-fixed `worktree-manager.sh` failed at the *lease-file* assertion (scenario 3 assertion 2), not at the exit-0 assertion. Paste the failing line into the PR body.
 - [ ] **AC6:** `bash plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh` still exits 0 (no regression from the added lease write).
 - [ ] **AC7 (live probe, operator's recipe, run once):** from a scratch worktree checked out at `origin/main` (`git worktree add .worktrees/pm-probe origin/main --detach`) — *not* from the bare repo root — run `--yes create <throwaway>`, then assert a `<throwaway>.lease` file exists under `"$(cd -P "$(git rev-parse --git-common-dir)" && pwd -P)/soleur-session-state/leases"`. Clean up: remove both worktrees, delete the local and remote throwaway branch. Paste the `ls` of the leases directory into the PR body.
@@ -356,6 +356,34 @@ File one issue, titled around **"lease durability is bounded by the oldest check
    Left out of *this* PR deliberately, for one reason only: the fix here is *parity with `create_for_feature`*, and closing this arm in only one of the two would re-introduce the exact divergence this PR exists to remove — while closing it in both would mean editing `create_for_feature`, which the three-file scope fence (and the decision not to extract a shared helper) explicitly excludes. Fix both arms together in the follow-up, or neither.
 
 Do **not** fold any of this into this PR. It is a distinct failure mode with a distinct fix shape, and the operator's scope fence is explicit.
+
+### Addendum — 2026-08-09: the CONCUR gate DISSENTED, and both dispositions above are superseded
+
+The `/work` Follow-up Filing Net-Flow Gate requires `code-simplicity-reviewer` CONCUR **before** any `gh issue create` — admission control, not ratification. It was run and **dissented on both items**. The section above is left intact as the record of what was originally decided; this addendum records what was actually done and why.
+
+**Item (A), the unleased early-return arm — DISSENT: fixed inline, not filed.**
+
+Measured by the reviewer: ~42 changed lines across 3 files, **0 new files** — both early-return arms live in `worktree-manager.sh`, already the primary file of this diff. The cost-of-filing threshold is ≤100 lines AND ≤4 files, so this is not close to the line.
+
+The decisive argument was not the line count. It was that **parity with `create_for_feature` is this PR's stated thesis, and the early-return arms violate it in both functions identically** — so the finding is an *unmet goal of this PR*, not a follow-up to it. The "three-file fence" is a self-imposed diff-size heuristic meant to bound cross-subsystem blast radius; this change crosses zero new subsystems and adds zero new files, so it was not binding.
+
+Correctness was checked rather than assumed, since "re-acquiring could clobber a live sibling's lease" would have been a genuine reason to defer. It is not: `acquire_lease` is an unconditional atomic overwrite (`mktemp` + `mv`), so a co-tenant re-acquire rewrites `pid`/`started_at` and the computed window only ever gets **longer** — it can never make a worktree reapable. And `release_lease`'s post-exit arm already lets any process release a lease whose recorded pid is dead, which is true of every CLI-acquired lease within milliseconds, so co-tenant release is pre-existing and universal on this protocol, not something the re-entry arm introduces.
+
+One placement caveat was applied: in `create_worktree` the acquire sits **inside** the `if [[ "$response" == "y" ]]` branch, not before the bare `return`. On an interactive `n` the caller never enters the worktree and must not lease it. `create_for_feature`'s arm has no y/n branch, so it acquires unconditionally.
+
+Pinned by **scenario 4**, which carries a precondition assertion that the run actually took the early-return path — without it the arm would silently duplicate scenario 3 and pin nothing new. Verified RED against the pre-fix script (scenario 4's exit-0 and precondition passed; only the lease assertion failed, with an empty leases dir), then GREEN at 9/9.
+
+**Item (B), lease durability bounded by the oldest checkout — DISSENT on the artifact: no issue filed.**
+
+A GitHub issue would be unactionable-by-code. The failing component is a *deployed old implementation* on this machine (16 worktrees, each carrying its own branch-point copy of `worktree-manager.sh` and `session-state.sh`), and no change to `main` retires it. The obvious repo-side hardening — a protocol-version field the sweep respects — is ineffective against the observed cause, because the old sweep is the thing doing the deleting and will never read a field it does not know about. Filing would mint an open issue no PR could close.
+
+Recorded instead as a `/compound` learning: *shipping a fix to a shared-state protocol does not retire the old implementations that still write to that state; N stale checkouts = N old reapers.* The attribution is marked **probable, not proven** — the falsifying experiment is to purge/refresh the stale worktrees and see whether leases still vanish.
+
+**The purge itself was NOT performed.** The reviewer recommended it as a session action, but it is destructive and this machine currently has live sibling sessions — including one holding the worktree and lease for PR #7343. Deleting stale worktrees is an operator decision, not a cleanup to force mid-pipeline.
+
+**Net-issue-flow: 0 filed, 0 closed — net 0.** No `<!-- gate-override: net-issue-flow -->` is needed, and the "Net-issue-flow disposition" section above is superseded on that point. Manufacturing a `Closes #7334` / `#7112` / `#7118` link remains wrong under any circumstances: this diff fixes none of them.
+
+**Next cleanup, deliberately not done here:** the lease block now appears four times. A `_acquire_worktree_lease "$branch_name"` helper would net roughly −10 lines across the four call sites, but extracting it would change the `grep -c` shape these ACs are written against for no behavioural gain. Left for a follow-up refactor.
 
 ## Scope fences (hard)
 

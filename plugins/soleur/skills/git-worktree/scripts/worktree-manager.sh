@@ -1235,6 +1235,22 @@ create_worktree() {
       read -r response
     fi
     if [[ "$response" == "y" ]]; then
+      # Re-entry is a working session too. `--yes create` sets response=y, so
+      # this is the path a RESUMED one-shot/work run takes — and without a
+      # lease here that session is reapable for its whole duration. The lease
+      # belongs to "worked in", not to "created".
+      #
+      # Deliberately INSIDE the y-branch: on `n` the caller does not enter the
+      # worktree and must not lease it.
+      #
+      # acquire_lease is last-writer-wins with no ownership check, so a
+      # co-tenant re-acquire rewrites pid/started_at. That is intentional and
+      # fails in the safe direction: started_at only ever moves forward, so the
+      # window can lengthen but never expire early.
+      sweep_orphan_leases
+      acquire_lease "$branch_name" "${SOLEUR_SKILL_NAME:-unknown}" "${SOLEUR_EXPECTED_DURATION_MIN:-240}" \
+        || headless_or_stderr warn "could not acquire lease for $branch_name"
+      _register_lease_release_trap "$branch_name"
       switch_worktree "$branch_name"
     fi
     return
@@ -1344,6 +1360,16 @@ create_for_feature() {
   if [[ -d "$worktree_path" ]]; then
     echo -e "${YELLOW}Worktree already exists: $worktree_path${NC}"
     echo -e "${BLUE}Spec directory: $spec_dir${NC}"
+    # Same re-entry hole as create_worktree's early return: a resumed session
+    # lands here and, without this, holds no lease for its whole run. There is
+    # no y/n arm on this path — reaching here always means the caller proceeds
+    # with the existing worktree — so acquire unconditionally.
+    # Last-writer-wins on a co-tenant re-acquire is intentional; see the note
+    # at create_worktree's early return.
+    sweep_orphan_leases
+    acquire_lease "$branch_name" "${SOLEUR_SKILL_NAME:-unknown}" "${SOLEUR_EXPECTED_DURATION_MIN:-240}" \
+      || headless_or_stderr warn "could not acquire lease for $branch_name"
+    _register_lease_release_trap "$branch_name"
     return 0
   fi
 

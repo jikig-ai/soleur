@@ -236,6 +236,43 @@ else
 (dir: $(ls -A "$LEASE_ROOT3/leases" 2>/dev/null || echo MISSING))"
 fi
 
+# ---------------------------------------------------------------------------
+# SCENARIO 4 (#7278, re-entry arm): `create` on an EXISTING worktree must also
+# acquire.
+#
+# Scenario 3 covers fresh creation. But both creating functions have an early
+# return for "worktree already exists" that skips the whole tail of the
+# function — including the lease block. `--yes create` sets response=y there,
+# so a RESUMED one-shot/work run takes exactly this path and, without the fix,
+# holds no lease for its entire duration while a sibling cleanup-merged is free
+# to reap it.
+#
+# The lease belongs to "worked in", not to "created". This arm pins that.
+# ---------------------------------------------------------------------------
+rm -f "$LEASE3"
+(
+  cd "$LOCAL3"
+  SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT3" \
+  SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
+    bash "$WM" --yes create feat-probe >"$TMP/create4.log" 2>&1
+) && pass "scenario 4: --yes create on an existing worktree exited 0" \
+  || fail "scenario 4: re-entry create failed (output: $(cat "$TMP/create4.log"))"
+
+# Prove we actually took the early-return path rather than re-creating, else
+# this arm silently duplicates scenario 3 and pins nothing new.
+if grep -q 'already exists' "$TMP/create4.log"; then
+  pass "scenario 4 precondition: took the worktree-already-exists early return"
+else
+  fail "scenario 4 precondition: did NOT take the early return (output: $(cat "$TMP/create4.log"))"
+fi
+
+if [[ -f "$LEASE3" ]] && grep -q '^pid=' "$LEASE3"; then
+  pass "scenario 4: re-entry re-acquired the lease — a resumed session is protected"
+else
+  fail "scenario 4: NO lease written on re-entry — a resumed session runs unleased and reapable \
+(dir: $(ls -A "$LEASE_ROOT3/leases" 2>/dev/null || echo MISSING))"
+fi
+
 echo
 echo "=== Results ==="
 echo "PASS: $PASS"
@@ -248,7 +285,7 @@ echo "FAIL: $FAIL"
 # on the fetch-prune path, a non-zero sweep aborting under `set -e`, a lock it
 # could not take. A floor cannot detect a no-op reap loop by itself, but it does
 # catch the case where the assertions were never reached.
-MIN_ASSERTIONS=6   # was 3 (#7278 scenario 3 adds 3)
+MIN_ASSERTIONS=9   # 3 -> 6 (#7278 scenario 3) -> 9 (#7278 scenario 4, re-entry arm)
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FAIL: only $PASS assertions ran, expected >= $MIN_ASSERTIONS — the suite did not execute what it claims to cover."
   exit 1
