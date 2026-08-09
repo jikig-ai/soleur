@@ -130,3 +130,54 @@ satisfied by the error message of the path it existed to exclude.
 - A trap belongs to the process whose exit ends the work, never to a co-tenant.
 - Shared state + independently-deployed readers = protection bounded by the oldest deployed reader.
 - Before crediting a mutation battery, ask which AXES it mutates. N mutations of one shape is one mutation.
+
+## Session Errors
+
+Four recurring classes, all mine, all in a session whose subject was "a comment
+asserted behaviour the code did not have."
+
+**1. Verified a claim against a convenient SUBSET of a tool's output and reported
+the subset as the whole.** I ran `shellcheck | grep -E 'SC2015'`, saw nothing,
+and said "shellcheck clean on the new code." `SC2164` was firing on both new `cd`
+lines. The consequence was not cosmetic: the suite runs `set -uo pipefail`
+WITHOUT `-e`, so a failed `cd` lets the subshell continue and runs
+`worktree-manager.sh --yes create` against the developer's REAL repo.
+**Prevention:** grep for the ABSENCE of any finding in the changed line range,
+never for one rule id. `shellcheck -f gcc <file> | awk -F: '$2>=START && $2<=END'`
+— if that is non-empty, the claim "clean" is false whatever rule fired.
+
+**2. A process scan whose own command line matched its own predicate, killing the
+invoking shell.** `ps -eo pid,cmd | grep '[t]est-all.sh'` plus a cwd filter
+selected the scanning bash itself; the kill loop then killed it (exit 144). The
+repo already documents this for `pkill -f <pattern>`; this is the same class one
+level out — ANY scan-then-kill whose predicate can match the scanner.
+**Prevention:** never filter a kill list by pattern alone. Walk `/proc`, compute
+self + ancestry (`awk '{print $4}' /proc/<pid>/stat` to climb ppids), and skip
+those pids explicitly before killing. That form worked and spared every sibling.
+
+**3. A `cd A 2>/dev/null || cd B` fallback whose FIRST arm succeeded for the wrong
+reason.** It landed in the bare repo root — which carries a stale synced mirror of
+every tracked file — and I ran a test suite there and reported it green. It was
+green against code that did not contain my edit. The tell was on screen and I
+missed it: the bare root runs a different vitest version than the worktree.
+**Prevention:** before trusting any test result, echo `pwd` AND assert the change
+is present in the tree about to be tested (`grep -c '<the new symbol>' <file>`).
+A fallback that can silently select a decoy tree needs a positive identity check,
+not an exit code.
+
+**4. Wrote a claim about an artifact into a committed file before creating the
+artifact.** A plan addendum said a finding was "recorded instead as a `/compound`
+learning"; no such file existed. The gate was cleared by citing something that had
+not been written — the repo's own "decisions are INTENT, not accomplishment"
+class, committed inside the PR whose entire subject is a comment that asserted
+behaviour the code did not have.
+**Prevention:** when an artifact is the justification for clearing a gate, create
+it FIRST and cite it by path; a `ls <path>` before the commit is the whole check.
+
+**Meta-lesson.** All four are the same shape as the bug being fixed: an assertion
+whose evidence was adjacent to, but not identical with, the thing asserted. The
+mutation battery is what caught the equivalent in the code — four mutations
+survived fully GREEN before the review panel, including a bare-token anchor that
+emitted a FALSE PASS on the exact path it existed to exclude, because git prints
+that same string. Prose claims have no mutation battery, which is why they need
+the mechanical check written down next to them.
