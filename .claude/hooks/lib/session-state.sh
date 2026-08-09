@@ -482,13 +482,25 @@ _register_lease_release_trap() {
   # NOT `EXIT` — that is what made the lease layer unreachable in production.
   #
   # `create_worktree` acquires the lease and registers this trap IN THE SAME
-  # PROCESS, and that process exits normally on success. With EXIT armed, the
-  # trap fired on that success and deleted the lease before `create` had even
-  # printed its path. Measured: the leases directory is EMPTY the instant
-  # `worktree-manager.sh --yes create` returns. So a worktree made the
-  # DOCUMENTED way (what one-shot and work both invoke) carried no lease at all,
-  # and `is_lease_active` returned at its `[[ -f "$lease_file" ]]` guard — every
-  # protection below that line was dead code for the path that matters.
+  # PROCESS (as of #7278 — before that it did NEITHER; only `create_for_feature`
+  # acquired, and `create` is what the pipeline invokes), and that process exits
+  # normally on success. With EXIT armed, the trap fired on that success and
+  # deleted the lease before the caller had even printed its path.
+  #
+  # Measured: the leases directory is EMPTY the instant
+  # `worktree-manager.sh --yes create` returns. That measurement was real, but
+  # it had TWO independent causes and this comment originally named only one:
+  #
+  #   1. EXIT released whatever was acquired (fixed by the signal list below).
+  #   2. `create` never acquired anything in the first place (fixed separately
+  #      by adding this block to `create_worktree`).
+  #
+  # Fixing the trap alone left the pipeline path dark — the empty directory
+  # looked identical under both causes, which is exactly how cause 2 survived
+  # the fix for cause 1. So a worktree made the DOCUMENTED way (what one-shot
+  # and work both invoke) carried no lease at all, and `is_lease_active`
+  # returned at its `[[ -f "$lease_file" ]]` guard — every protection below that
+  # line was dead code for the path that matters.
   #
   # Normal process exit is not session end. That is this change's whole thesis,
   # applied to the write side: the CLI process is short-lived BY DESIGN, and the
