@@ -56,7 +56,7 @@ alloc_spools() {
 }
 
 die() { echo "domain-model-drift: $*" >&2; exit 2; }
-usage() { echo "usage: domain-model-drift.sh <extract|drift|write-row> [--repo <path>] [--register <path>] [--anchor <a>] [--statement <s>]" >&2; exit 2; }
+usage() { echo "usage: domain-model-drift.sh <extract|drift|write-row|init> [--repo <path>] [--register <path>] [--anchor <a>] [--statement <s>]" >&2; exit 2; }
 
 # --- arg parsing (--terminated, quoted; no flag can arrive from file content) ---
 MODE="${1:-}"; shift || true
@@ -234,6 +234,69 @@ emit_drift_report() {
 # to `## Auto-inferred (unreviewed)` via an atomic whole-file rewrite.
 # Exit: 0 = written (or deduped no-op), 2 = error/abort, 3 = secret-refuse.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# init: seed an absent register with the canonical headings
+# ---------------------------------------------------------------------------
+#
+# WHY THIS IS A SEPARATE SUBCOMMAND. `drift` and `write-row` both `realpath -e`
+# the register and die when it does not resolve. Those guards are CORRECT — they
+# must never operate on a path they cannot resolve — and they are deliberately
+# left untouched. But they also mean `/soleur:sync domain-model` is dead on a
+# fresh repo, which has no register and nothing to bootstrap it. `init` is the
+# one command allowed to CREATE.
+#
+# The file shape lives here rather than in sync.md because `write-row` depends on
+# the exact heading text and on the Auto-inferred table separator to find its
+# append target. A register with the right headings but no separator is one
+# write-row refuses to touch, so the two must be authored together.
+init_register() {
+  local reg="$REGISTER"
+  [[ -n "$reg" ]] || die "init needs --register"
+
+  # `-m` (not `-e`): the whole point is that the file may not exist yet. It still
+  # canonicalizes `..` and symlinks, so the confinement check below is not
+  # bypassable by a traversal in the argument.
+  reg="$(realpath -m -- "$reg" 2>/dev/null)" || die "--register does not canonicalize"
+  case "$reg" in "$REPO"/*) ;; *) die "--register must resolve under --repo" ;; esac
+
+  # Idempotent: an existing register is a no-op success, so `all` dispatch can
+  # call init unconditionally on every run.
+  if [[ -e "$reg" ]]; then
+    [[ -f "$reg" ]] || die "--register exists and is not a regular file"
+    return 0
+  fi
+
+  mkdir -p -- "$(dirname -- "$reg")" || die "could not create the register's parent directory"
+
+  # Atomic create, mirroring write_row's temp-then-rename discipline.
+  local tmp; tmp="$(mktemp)"; _TMPFILES+=("$tmp")
+  cat > "$tmp" <<'REGISTER_TEMPLATE'
+# Domain Model & Business Rules Register
+
+> Seeded by `/soleur:sync domain-model`. The curated `## Business Rules` table is
+> maintained by hand; the `## Auto-inferred (unreviewed)` table is machine-appended
+> and is NEVER a source of truth.
+
+## Business Rules
+
+| ID | Rule | Statement | Source |
+|---|---|---|---|
+
+## Auto-inferred (unreviewed)
+
+> Rows proposed by `/soleur:sync domain-model`. This section is **machine-appended**
+> and is NEVER a source of truth. Promote a row to a curated rule by a deliberate
+> human edit: assign a `BR-*` id, refine the statement, and keep the source anchor
+> (the anchor is the dedup key, so a promoted row is never re-proposed). Do not
+> hand-edit the table shape.
+
+| Anchor | Candidate statement |
+|---|---|
+REGISTER_TEMPLATE
+
+  mv "$tmp" "$reg" || die "could not write the register"
+}
+
 write_row() {
   [[ -n "$ANCHOR" && -n "$STATEMENT" ]] || die "write-row needs --anchor and --statement"
   local reg="$REGISTER"
@@ -255,20 +318,41 @@ write_row() {
   # newline \012 already rejected above), DEL, and unicode line separators
   # U+0085/U+2028/U+2029 (security P2 — full control-char class).
   local esc_anchor esc_stmt
-  esc_anchor="$(printf '%s' "$ANCHOR"    | tr -d '\000-\010\013\014\016-\037\177' | sed 's/|/\\|/g; s/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
-  esc_stmt="$(printf '%s' "$STATEMENT"   | tr -d '\000-\010\013\014\016-\037\177' | sed 's/|/\\|/g; s/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
+  esc_anchor="$(printf '%s' "$ANCHOR"    | tr -d '\000-\010\013-\037\177' | sed 's/|/\\|/g; s/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
+  esc_stmt="$(printf '%s' "$STATEMENT"   | tr -d '\000-\010\013-\037\177' | sed 's/|/\\|/g; s/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
   # neutralize a forged row/heading marker at the START of EITHER field — the anchor
   # is column 1, exactly where curated `BR-NNN` IDs live (security P2).
   esc_anchor="${esc_anchor/#BR-/BR‑}"; esc_anchor="${esc_anchor/#\#\#/\\#\\#}"
   esc_stmt="${esc_stmt/#BR-/BR‑}"; esc_stmt="${esc_stmt/#\#\#/\\#\\#}"
 
-  # TOCTOU: re-read the register NOW and locate exactly one Auto-inferred heading
+  # TOCTOU: re-read the register NOW and locate exactly one Auto-inferred heading.
+  #
+  # `hn="$(grep -c …)"` is an ASSIGNMENT whose status is the substitution's, and
+  # `grep -c` exits 1 when the count is 0 — so under `set -e` a register with NO
+  # Auto-inferred heading killed the script HERE, before the `die` below could print.
+  # Observed: exit 1 with completely empty stderr, and 1 is not in this command's
+  # documented 0/2/3 contract (it collides with drift's "drift found"). Every
+  # pre-existing register lacking the heading appended nothing, silently, forever —
+  # and #7332's headless path runs this on every sync. `|| true` keeps the informative
+  # abort reachable.
   local hn
-  hn="$(grep -cE '^## Auto-inferred \(unreviewed\)' "$reg")"
+  hn="$(grep -cE '^## Auto-inferred \(unreviewed\)' "$reg" || true)"
   [[ "$hn" -eq 1 ]] || die "register has $hn '## Auto-inferred (unreviewed)' headings (want exactly 1) — aborting"
 
-  # content-anchor dedup: never re-propose an anchor already present anywhere
-  if grep -qF "$ANCHOR" "$reg"; then
+  # Content-anchor dedup: never re-propose an anchor already present.
+  #
+  # Anchored on the whole table CELL, not a bare substring. `grep -qF "$ANCHOR"`
+  # matched anywhere in the file, so an anchor that is a PREFIX of an existing one
+  # was silently swallowed: with `m.sql > t.p10` already written, a genuinely new
+  # `m.sql > t.p1` deduped to a no-op and exited 0 — reproduced. Under #7332's
+  # headless path that drops real candidates on every sync with no diagnostic.
+  #
+  # Compare against the ESCAPED form too: the row is written as `$esc_anchor`, so a
+  # raw-form-only check never matches an anchor the escaper transformed (any `|`, or
+  # a leading `BR-`/`##`), which made re-runs append the same row without bound.
+  if grep -qxF "| $ANCHOR | $STATEMENT |" "$reg" \
+     || grep -qF "| $ANCHOR |" "$reg" \
+     || grep -qF "| $esc_anchor |" "$reg"; then
     exit 0  # already known (curated or previously accepted) — no-op
   fi
 
@@ -277,14 +361,42 @@ write_row() {
   # REPLACE it, and the matching `trap - EXIT` would CLEAR it (write_row runs in
   # the main shell, so the append is visible to the parent array).
   local tmp; tmp="$(mktemp)"; _TMPFILES+=("$tmp")
+  # `insec` must CLEAR at the next `^## ` heading.
+  #
+  # Without that clause the insert lands at the first `^|---` at-or-after the
+  # Auto-inferred heading with no check that the separator BELONGS to that section.
+  # On a register whose Auto-inferred section precedes `## Business Rules` — a legal
+  # ordering nothing forbids — the candidate row was written INTO THE CURATED TABLE
+  # and write-row exited 0. The post-write verification below could not catch it
+  # because it only asks WHETHER the row landed, never WHERE.
+  #
+  # This is unattended now: #7332's headless path appends without per-row approval,
+  # so it would corrupt a customer's hand-curated business rules on a normal sync.
+  # The existing test fixture is built by `init`, which always emits the safe
+  # ordering, so the suite was structurally blind to it.
   awk -v row="| $esc_anchor | $esc_stmt |" '
     { print }
-    /^## Auto-inferred \(unreviewed\)/ { insec = 1 }
-    insec && /^\|---/ { print row; insec = 0 }
+    /^## Auto-inferred \(unreviewed\)/ { insec = 1; next }
+    /^## / { insec = 0 }
+    insec && /^\|---/ && !done { print row; done = 1; insec = 0 }
   ' "$reg" > "$tmp"
-  # verify the row actually landed (guard against a header without a table separator)
+  # verify the row landed, AND that it landed inside the Auto-inferred section.
+  # A bare "did it appear anywhere" check is what let the curated-table write pass.
   if ! grep -qF "$esc_anchor" "$tmp"; then
     die "could not locate the Auto-inferred table separator — aborting (register unchanged)"
+  fi
+  local ai_line row_line
+  ai_line="$(grep -nE '^## Auto-inferred \(unreviewed\)' "$tmp" | head -1 | cut -d: -f1 || true)"
+  row_line="$(grep -nF "$esc_anchor" "$tmp" | head -1 | cut -d: -f1 || true)"
+  if [[ -z "$ai_line" || -z "$row_line" || "$row_line" -le "$ai_line" ]]; then
+    die "row would land outside the Auto-inferred section (row line ${row_line:-?}, heading line ${ai_line:-?}) — aborting (register unchanged)"
+  fi
+  # And that no LATER `^## ` heading precedes it — i.e. it is inside Auto-inferred's
+  # own section, not merely somewhere below the heading.
+  local next_h
+  next_h="$(awk -v s="$ai_line" 'NR>s && /^## /{print NR; exit}' "$tmp" || true)"
+  if [[ -n "$next_h" && "$row_line" -ge "$next_h" ]]; then
+    die "row would land in the section starting at line $next_h, not Auto-inferred — aborting (register unchanged)"
   fi
   mv "$tmp" "$reg"
 }
@@ -293,5 +405,6 @@ case "$MODE" in
   extract)   alloc_spools; emit_extract_json "$SPOOL_FACTS" "$SPOOL_BLIND" ;;
   drift)     alloc_spools; emit_drift_report ;;
   write-row) write_row ;;
+  init)      init_register ;;
   *) usage ;;
 esac

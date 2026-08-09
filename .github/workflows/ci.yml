@@ -667,14 +667,28 @@ jobs:
 
   test-scripts:
     runs-on: ubuntu-latest
-    # No setup-bun, no setup-node — bash + python3 + a stock node (with npm)
-    # ship on ubuntu-latest by default, and the one `node --test` entry in the
+    # No setup-node — bash + python3 + a stock node (with npm) ship on
+    # ubuntu-latest by default, and the one `node --test` entry in the
     # scripts group (scripts/md-to-mrkdwn.test.mjs) runs on the stock
     # ubuntu-latest node — no version pin needed (same bare-`node` precedent as
-    # secret-scan.yml; node --test ships in Node >=18). No `bun` in the
-    # scripts group: verified at plan time `grep -l '^bun '
-    # plugins/soleur/test/*.test.sh` returned zero matches. If a future
-    # .test.sh adds a `bun` invocation, add `setup-bun` here.
+    # secret-scan.yml; node --test ships in Node >=18).
+    #
+    # `setup-bun` IS required (#7332). This comment previously asserted "No `bun`
+    # in the scripts group", verified by `grep -l '^bun ' plugins/soleur/test/*.test.sh`.
+    # That predicate is anchored to column 1, so it could not see a `bun` call inside
+    # a function body — which is exactly the shape
+    # plugins/soleur/test/c4-from-components.test.sh:60 added
+    # (`run_producer() { bun "$PRODUCER" … }`). The guard restated the condition it
+    # protected and then silently stopped detecting it, and the suite failed with
+    # `bun: command not found` while its own render arms never executed.
+    #
+    # If you are re-deriving this: use `grep -rlE '(^|[^[:alnum:]_-])bun[[:space:]]'`
+    # rather than a line anchor.
+    #
+    # NOTE for the next author: `npx -y <pkg>@<version>` does NOT reuse the
+    # `npm install -g likec4@1.50.0` step below — verified with a control. So a suite
+    # invoking the producer pays its own `npx` resolve even though the shard already
+    # has likec4 on PATH.
     #
     # Two CLIs ARE installed for tests in this shard:
     #  - gitleaks: plugins/soleur/skills/code-to-prd/test/ (#2726) preflights
@@ -718,7 +732,15 @@ jobs:
           npm install -g likec4@1.50.0
           likec4 --version
 
-      - name: Run scripts-side tests (bash + python3)
+      # #7332 — plugins/soleur/test/c4-from-components.test.sh drives the C4 producer
+      # (a bun script) end to end. Pinned to the same SHA as test-webplat / test-bun;
+      # see the "keep pinned identically" note on the shared-action block above.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Run scripts-side tests (bash + python3 + bun)
         run: bash scripts/test-all.sh scripts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -13,9 +13,23 @@ _r() { if [[ "$2" == ok ]]; then pass=$((pass+1)); echo "[ok] $1"; else fail=$((
 # --- sync.md dispatch wiring ------------------------------------------------
 grep -qE 'argument-hint:.*domain-model' "$SYNC_MD" && _r "argument-hint lists domain-model" ok || _r "argument-hint lists domain-model" fail
 grep -qE '^\*\*Valid areas:\*\*.*`domain-model`' "$SYNC_MD" && _r "Valid areas lists domain-model" ok || _r "Valid areas lists domain-model" fail
-# excluded from `all` (mirrors rule-prune): the parse-filter must name domain-model as EXCEPT
-grep -qE 'EXCEPT.*domain-model|domain-model.*must be invoked explicitly' "$SYNC_MD" \
-  && _r "domain-model excluded from all dispatch" ok || _r "domain-model excluded from all dispatch" fail
+# #7332 INVERTED this. domain-model used to be excluded from `all` (mirroring
+# rule-prune), which made it dead on a fresh repo and dead in headless mode: the
+# per-row AskUserQuestion gate is auto-skipped there, so it wrote zero rows. It now
+# participates in `all` via a non-interactive path, while the STANDALONE invocation
+# stays terminal. Assert both halves — dropping the check entirely would leave the
+# inversion unpinned, and asserting only the new half would let the terminal
+# contract silently disappear.
+grep -qE 'EXCEPT `rule-prune` AND `domain-model`' "$SYNC_MD" \
+  && _r "domain-model no longer excluded from all dispatch (#7332)" fail \
+  || _r "domain-model no longer excluded from all dispatch (#7332)" ok
+grep -qE '^##### `all`-dispatch path' "$SYNC_MD" \
+  && _r "all-dispatch path documented" ok || _r "all-dispatch path documented" fail
+grep -qE '^##### Standalone contract' "$SYNC_MD" \
+  && _r "standalone terminal contract still stated" ok || _r "standalone terminal contract still stated" fail
+grep -qE 'scripts/domain-model-drift\.sh init' "$SYNC_MD" \
+  && _r "all-dispatch path bootstraps the register via init" ok \
+  || _r "all-dispatch path bootstraps the register via init" fail
 grep -qE '^#### Domain Model Analysis' "$SYNC_MD" && _r "Domain Model Analysis section present" ok || _r "Domain Model Analysis section present" fail
 # the section invokes the backend script in both modes
 grep -qE 'scripts/domain-model-drift\.sh drift' "$SYNC_MD" && _r "section invokes drift mode" ok || _r "section invokes drift mode" fail

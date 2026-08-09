@@ -105,6 +105,8 @@ updated: YYYY-MM-DD
 primary_location: <path/to/component/>
 related_locations:
   - <other/path>
+dependencies:
+  - <other-component-name>
 ---
 
 # <Component Name>
@@ -133,6 +135,14 @@ related_locations:
 - **Internal**: [other components it uses]
 - **External**: [third-party packages]
 
+The `dependencies:` frontmatter list is the **machine-readable** form of the
+`**Internal**` line and MUST be kept in agreement with it. The prose line is
+human context; the frontmatter field is what
+[`c4-from-components.ts`](../../lib/c4-from-components.ts) parses into diagram
+edges. Emit both. A doc that names internal dependencies only in prose yields a
+diagram of disconnected boxes — see the relationship-count gate in
+[`sync.md`](../../commands/sync.md).
+
 ## Examples
 
 [Usage examples with code]
@@ -155,6 +165,7 @@ related_locations:
 | `updated` | Yes | Date last updated (YYYY-MM-DD) |
 | `primary_location` | Yes | Main directory/file path |
 | `related_locations` | No | Additional paths if component spans directories |
+| `dependencies` | No | Kebab-case `component` names this component uses. The machine-readable form of the `**Internal**` line; parsed into C4 diagram edges. Omit (or `[]`) when the component genuinely has none |
 | `status` | No | `active`, `deprecated` (default: active) |
 
 ### Creating a component doc
