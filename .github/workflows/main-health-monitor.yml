@@ -65,6 +65,26 @@ permissions:
   contents: read
   issues: write
 
+# TOOLCHAIN PINS — this workflow runs `TEST_GROUP=all`, i.e. the suites of EVERY
+# CI shard, so its environment must be the UNION of those shards' toolchains.
+# Before #7307 it carried none of them, which is why its coverage was already
+# partly vacuous: 3 suites hard-ABORT without gitleaks and c4-model-freshness
+# self-skips without likec4 — and a self-skip reads as PASS.
+#
+# These literals are duplicated from the workflow that owns each one; nothing
+# mechanically couples them, so a bump there silently diverges here:
+#   GITLEAKS_*        -> .github/workflows/ci.yml (test-scripts shard) and
+#                        .github/workflows/secret-scan.yml (already a 2-file
+#                        manual-sync convention; this makes it 3)
+#   LIKEC4_VERSION    -> ci.yml, apps/web-platform/Dockerfile, package.json
+#                        (that trio IS guarded, by c4-likec4-version-pin.test.ts)
+#   TERRAFORM_VERSION -> .github/workflows/infra-validation.yml
+env:
+  GITLEAKS_VERSION: "8.24.2"
+  GITLEAKS_SHA256: "fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e"
+  LIKEC4_VERSION: "1.50.0"
+  TERRAFORM_VERSION: "1.10.5"
+
 jobs:
   health-check:
     runs-on: ubuntu-latest
@@ -117,13 +137,39 @@ jobs:
       # console` stdout byte-clean, which the render-parity suites depend on.
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
-          terraform_version: "1.10.5" # keep in sync with infra-validation.yml env.TERRAFORM_VERSION
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
       - name: Install cloud-init
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq cloud-init 2>&1 | tail -1
+
+      # gitleaks: three suites hard-ABORT without it rather than skipping —
+      # gitleaks-merge-commit.test.sh ("skipping it would defeat its purpose"),
+      # code-to-prd.test.sh, and .claude/hooks/git-commit-secret-scan.test.sh.
+      # Measured on run 31328156153: all three RED purely for its absence.
+      # Same pinned + checksum-verified shape as ci.yml's test-scripts shard.
+      - name: Install gitleaks (pinned, sha-verified)
+        run: |
+          set -euo pipefail
+          curl -sSLo gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
+          tar -xzf gitleaks.tgz gitleaks
+          chmod +x gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      # likec4: c4-model-freshness.test.sh renders the .c4 sources and byte-diffs
+      # the committed model.likec4.json. Without the CLI it SELF-SKIPS, and a
+      # self-skip is indistinguishable from a pass — so a stale committed artifact
+      # would sail through the very monitor meant to catch a broken main.
+      - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
+        run: |
+          set -euo pipefail
+          npm install -g "likec4@${LIKEC4_VERSION}"
+          likec4 --version
 
       # ORDERED BEFORE the infra step, and that ordering is the invariant.
       # A registered infra suite whose tool is absent self-skips with exit 0,
@@ -134,12 +180,14 @@ jobs:
       # see the PR body for the wider live-derived tool list and why widening it
       # here (beyond what CI asserts) would red the monitor for a condition CI
       # tolerates.
-      - name: Assert infra toolchain present
+      - name: Assert toolchain present
         run: |
           command -v terraform
           command -v cloud-init
           command -v python3
           command -v jq
+          command -v gitleaks
+          command -v likec4
           docker info >/dev/null
 
       # Reset once, so the two capture steps' `tee -a` cannot depend on
