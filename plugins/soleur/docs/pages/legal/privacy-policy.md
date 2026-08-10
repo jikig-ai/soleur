@@ -29,7 +29,7 @@ We are committed to protecting your privacy. This Policy explains what data is a
 
 **Soleur** is a source-available project maintained by **Jikigai**, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France. Jikigai is the data controller for the processing activities described in this Policy.
 
-**Our role is not the same in every configuration.** For the processing described in this policy Jikigai is the data controller. The one exception is an **operator-assisted session** — where you have asked us to help you run Soleur using our machine or our API key — in which we act as your processor for the work you instruct us to do, and as a controller only for our own product-learning purpose. See Section 4.2 and the Data Protection Disclosure, Section 2.1c.
+**Our role is not the same in every configuration.** For the processing described in this policy Jikigai is the data controller. One such configuration is an **operator-assisted session** — where you have asked us to help you run Soleur using our machine or our API key — in which we act as your processor for the work you instruct us to do, and as a controller only for our own product-learning purpose. Our role also differs in the configurations described in Sections 4.7, 4.10 and 4.11. See Section 4.2 and the Data Protection Disclosure, Section 2.1c.
 
 The Soleur source code is available at the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur).
 
@@ -50,7 +50,7 @@ The Soleur **Plugin** (the locally installed Claude Code extension) **does not c
 - The Plugin does not phone home, send telemetry, or transmit analytics to Jikigai-operated servers.
 - We do not have access to your files, your code, or your usage patterns.
 
-This section applies to the Plugin only. For data collected by the Soleur Web Platform (app.soleur.ai), see Section 4.7 below. For operator-assisted sessions — where you have asked us to help you run Soleur using our machine or our API key — see Section 4.2 below and the Data Protection Disclosure, Section 2.1c.
+This section applies to the Plugin only. For data collected by the Soleur Web Platform (app.soleur.ai), see Section 4.7 below. For operator-assisted sessions — where you have asked us to help you run Soleur using our machine or our API key — see Section 4.2 below and the Data Protection Disclosure, Section 2.1c. The same applies if you have given us access to one of your repositories.
 
 ### 4.2 Data Processed Locally
 
@@ -64,9 +64,22 @@ All of this data remains on your machine. We have no access to it.
 
 **Operator-assisted sessions are the exception to the sentence above.** If you ask us to help you run Soleur against your own material, and we do that using our machine or our API key, then during that session we do read the files described above — including your `knowledge-base/` directory and your git history — and their content is sent to our AI provider under **our** credentials rather than yours.
 
-When we do that on your instructions we are acting as your processor. We also look at how Soleur performed in order to improve the product, and for that narrow purpose we are acting as a controller in our own right. We only do this under a written agreement made with you **before** the session starts, and that agreement — not this policy — sets out what happens to the data.
+When we do that on your instructions we are acting as your processor. We also look at how Soleur performed in order to improve the product, and for that narrow purpose we are acting as a controller in our own right. We do not carry out operator-assisted processing without first agreeing a written agreement with you. Where such an agreement is made, it — not this policy — sets out what happens to the data.
 
-We do not do this by default. Unless you ask us for an operator-assisted session and agree that written agreement first, everything above stands exactly as written.
+**Giving us access to a repository is a second, separate exception.** If you make us a collaborator
+on one of your repositories — for example while taking part in an early-access programme — we may read
+what is in it, including your `knowledge-base/` directory and your git history, for purposes **we**
+have chosen rather than ones you have instructed: measuring how the programme is progressing, and
+learning how Soleur behaves on real work. For that reading we are a controller in our own right and
+we rely on our legitimate interests under Article 6(1)(f). This exception is not the same as the one
+above: it does not require you to ask us for anything, it involves neither our machine nor our API
+key, and it continues between sessions for as long as the access lasts. You can end it at any time by
+withdrawing the access, and you can object to the processing at any time — see Section 8.1 and GDPR
+Policy Section 3.14.
+
+Neither exception applies unless you have asked us for an operator-assisted session or granted us
+access. Absent both, the paragraphs above apply as written: the data listed above stays on your
+machine and we have no access to it.
 
 ### 4.3 Data Collected by the Docs Site
 
@@ -432,7 +445,7 @@ For users in the European Union or European Economic Area:
 
 Because the Plugin itself does not collect or process personal data, no legal basis for processing is required for Plugin usage.
 
-**What this covers.** This section describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
+**What this covers.** The paragraph above describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
 
 For the Web Platform (app.soleur.ai), the legal basis for processing account data, workspace data, and subscription data is **contract performance** (Article 6(1)(b) GDPR) -- processing is necessary to provide the Web Platform service the user signed up for. For payment processing via Stripe, the legal basis is also contract performance -- processing is necessary to fulfill the subscription agreement. For technical data processed by Cloudflare (IP addresses, request headers -- see Section 5.8), the legal basis is contract performance for authenticated users and **legitimate interest** (Article 6(1)(f) GDPR) for unauthenticated traffic.
 
@@ -454,7 +467,7 @@ For newsletter subscriptions, the legal basis for processing your email address 
 
 ## 7. Data Retention
 
-- **Plugin data:** All data created by the Plugin is stored locally on your machine. You control its retention and deletion entirely.
+- **Plugin data:** All data created by the Plugin is stored locally on your machine. You control its retention and deletion entirely. **One exception.** Where content of yours is sent to our AI provider under **our** credentials rather than yours — which happens only in an operator-assisted session you have asked for — that provider holds a copy under the terms applying to **our** account, for a period we do not set and, once the content has been sent, cannot shorten. Deleting the local files does not reach that copy. What happens to it is addressed in the written agreement made with you before any such session. Running the session under your own credentials avoids this entirely, because the provider then holds the content under your own agreement with it rather than ours.
 - **Web Platform data:** Account data (email, auth tokens) is retained while your account is active and deleted upon account deletion request. Conversation data (messages and conversation metadata) is retained while the user's account is active and deleted upon account deletion request (cascade delete via foreign key). Encrypted API keys are deleted with the associated workspace. Payment records (subscription metadata, invoices) are retained for 10 years per French tax law (Code de commerce Art. L123-22).
 - **Docs Site data:** Any data collected by GitHub Pages is retained according to GitHub's data retention policies.
 - **Repository interaction data:** Issues, pull requests, and other contributions are retained on GitHub according to its standard policies and your own account settings. Separately, where repository, Discord, or Hacker News activity has been included in a published community digest (see Section 4.4), that copy is stored in the public repository's Git history and in any forks of it. Git history is append-only, so these copies have no retention period and cannot be reliably erased by deleting the original contribution.
@@ -475,6 +488,21 @@ If you are located in the EU or EEA, you have the following rights with respect 
 - **Right to lodge a complaint** -- the right to file a complaint with your local Data Protection Authority.
 
 For the Plugin, these rights are most relevant to your interactions with GitHub (the hosting platform). If your handle or words appear in our automated **community digests** (Section 4.4), see the community-digest carve-out at the end of this section — those rights are exercised **against Jikigai**, not GitHub, and you do not need an account with us. For the Web Platform (app.soleur.ai), you may exercise these rights directly against Jikigai for account data, workspace data, conversation data, and subscription data by contacting <legal@jikigai.com>. You may request export of your conversation history (messages and metadata) in a structured, machine-readable format under the right to data portability (Article 20). Conversation-history exports reflect the persistence limitation described in Section 4.7. **Community-digest content carve-out (Articles 15, 17 and 21).** If you are a **Discord community member, a GitHub commenter or stargazer, a Hacker News poster, or an X or Bluesky user** whose handle or words appear in the automated community digests described in Section 4.4, you have rights against **Jikigai** in respect of that content, and you should contact us directly — **email <legal@jikigai.com>** — not GitHub. You do not need an account with us to do so. On a verified request Jikigai will (i) search the published corpus for your handle and tell you what it finds; (ii) remove the content from any surface we still control, such as an open GitHub issue body; and (iii) tell you plainly what remains. Two limitations are stated up front rather than discovered later: the search is **manual and carries no completeness guarantee**, and for content already committed to Git history Jikigai **cannot erase it** — deleting it in a new commit does not remove it from earlier commits, from existing clones, or from the repository's forks, and a history rewrite would neither reach forks nor reach the edit history GitHub retains for issue bodies. Your **Article 21(1) right to object** to this processing is available immediately and does not depend on the erasure limitation. We record this limitation rather than leaving it implied because the alternative is a promise we cannot keep; closing the gap is tracked publicly at issue [#7126](https://github.com/jikig-ai/soleur/issues/7126). *(Added 2026-07-31, ref #7100 — this population previously had no route stated anywhere in this policy.)*
+
+**Operator-assisted sessions and granted repository access — carve-out (Articles 14, 15, 17 and 21).**
+If your personal data appears inside a repository whose owner has given Jikigai access — because you
+are named in a file in it, or because you authored a commit in it (name, email address, timestamp) —
+then we may have read it for **our own** purposes, and you have rights against **Jikigai** in respect
+of that reading even though you have no account with us and never gave us anything. Contact
+**<legal@jikigai.com>**. We did not obtain your details from you, so Article 14 applies; we rely on the
+disproportionate-effort exemption at Article 14(5)(b) and publish the information instead — see GDPR
+Policy Section 3.14 for the full posture, including the point on which we consider that reliance
+weakest. **Your Article 21(1) right to object is available immediately** and does not depend on
+anything else in this Policy; because we keep no systematic copy of what we read, an objection is one
+we can act on by ceasing to read and deleting local copies. Two limitations are stated up front rather
+than discovered later: any search for your data across a third party's repository is **manual and
+carries no completeness guarantee**, and we are not the controller of the repository itself — its
+owner is, and rights over what it contains lie against them as well as against us.
 
 To exercise rights related to data **GitHub itself collects** as a platform (your GitHub account profile, authentication, and platform telemetry), contact GitHub directly through their privacy channels. This does **not** cover the community-digest content described immediately above, which is Jikigai's own processing and is handled by us.
 
@@ -510,7 +538,7 @@ The Soleur Plugin and Docs Site are not directed at children under the age of 16
 
 The Plugin operates locally and does not transfer data internationally.
 
-**What this covers.** This section describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
+**What this covers.** The paragraph above describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
 
 Where an operator-assisted session has taken place, the written instrument agreed before that session addresses any transfer of personal data outside the European Economic Area arising from it, and the safeguards relied on for that transfer.
 
