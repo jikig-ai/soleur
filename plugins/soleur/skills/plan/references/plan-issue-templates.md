@@ -2,6 +2,37 @@
 
 Select how comprehensive you want the issue to be, simpler is mostly better.
 
+## Plan Frontmatter (all detail levels)
+
+The frontmatter block is identical across the three templates below; only the body differs. It is
+written in **two stages**, because the plan file now exists before the research that derives most
+of its metadata (#7418, ADR-176).
+
+**Stage 1 — the skeleton, written by `plan` Phase 0.7 before the research fan-out.** Only what
+Phase 0.6 already knows:
+
+| Key | Source |
+|---|---|
+| `title:` | the issue title Phase 0.6 fetched, or the feature description on the freeform arm |
+| `date:` | today, UTC |
+| `slug:` | the kebab title, without the date prefix or `-plan` suffix |
+| `branch:` | `git branch --show-current` — this is what the recovery selector matches on |
+| `issue:` | the cited issue — **provisional**, planning may re-target it |
+
+**Stage 2 — finalization.** `issue:` and `closes:` are rewritten unconditionally and the derived
+fields are added (`type:`, `priority:`, `domain:`, `brand_survival_threshold:`,
+`requires_cpo_signoff:`). `lane:` is written separately by Save Tasks, from `spec.md` — do **not**
+pre-seed it here or in the skeleton, because the fail-closed default is `cross-domain`, which widens
+the Phase 2.5 domain fan-out.
+
+**There is no progress key, by decision.** A plan is finished when it has `## Acceptance Criteria` —
+the one heading present in all three templates below, and the last one written. Completion is
+asserted from that content, never from a dedicated cursor field, because a second progress signal
+can disagree with the file's own content and every such disagreement resolves to a fail-open arm
+(ADR-176 §Considered Options 6). Do not add one, and do not repurpose the free-text `status:` field
+for it: `status:` is a human draft-state field already carrying dozens of distinct values across the
+plan corpus, including ones that read as pipeline states.
+
 ## MINIMAL (Quick Issue)
 
 **Best for:** Simple bugs, small improvements, clear features
@@ -19,6 +50,10 @@ Select how comprehensive you want the issue to be, simpler is mostly better.
 title: [Issue Title]
 type: [feat|fix|refactor]
 date: YYYY-MM-DD
+slug: [derived-from-title]
+branch: [feat-<name>]
+issue: [N]
+closes: [N]
 ---
 
 # [Issue Title]
@@ -157,6 +192,10 @@ end
 title: [Issue Title]
 type: [feat|fix|refactor]
 date: YYYY-MM-DD
+slug: [derived-from-title]
+branch: [feat-<name>]
+issue: [N]
+closes: [N]
 ---
 
 # [Issue Title]
@@ -319,6 +358,10 @@ If the feature touches external services, include deterministic verification com
 title: [Issue Title]
 type: [feat|fix|refactor]
 date: YYYY-MM-DD
+slug: [derived-from-title]
+branch: [feat-<name>]
+issue: [N]
+closes: [N]
 ---
 
 # [Issue Title]
