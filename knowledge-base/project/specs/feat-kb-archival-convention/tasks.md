@@ -81,7 +81,7 @@ stop-the-line on the first command.
 ## Phase 5 — Regenerate INDEX.md
 
 - [x] 5.1 Run `bash scripts/generate-kb-index.sh` in the worktree; commit `INDEX.md`, `kb-tags.txt`, `kb-categories.txt` **alone**, as the final commit.
-- [ ] 5.2 Explain the diff in the PR body: accumulated staleness + the exclusion delta.
+- [x] 5.2 Explain the diff in the PR body: accumulated staleness + the exclusion delta.
 - [x] 5.3 Comment on #7401 that its remaining scope is the CI freshness gate only, naming `plugins/soleur/test/c4-model-freshness.test.sh` as the precedent.
 - [x] 5.4 Comment on #7400 that its start condition is satisfied by this PR's Phase 4 differential, decoupling it from #7401.
 
@@ -104,7 +104,7 @@ stop-the-line on the first command.
 - [x] 7.2 `git diff --name-status origin/main...HEAD -- knowledge-base/project/specs knowledge-base/project/plans` → only this feature's artifacts, zero `R`/`D`. **Three-dot** — two-dot reports main's movement as this branch's deletions.
 - [x] 7.3 `grep -rn "lists every non-archived KB file" plugins/ .openhands/` → zero.
 - [x] 7.4 Full `bash scripts/test-all.sh` green, with the suite appearing exactly **once** in the runner output (a duplicate registration would show it twice).
-- [ ] 7.5 All 12 plan ACs verified and recorded in the PR body.
+- [x] 7.5 All 12 plan ACs verified and recorded in the PR body (`## Acceptance criteria`). AC5 is recorded at its measured value — 15 mutations, not the plan's projected M1–M16 — because one projected row (`-not -type l`) was cut in plan review as semantically null.
 
 ## Out of scope — do not do
 

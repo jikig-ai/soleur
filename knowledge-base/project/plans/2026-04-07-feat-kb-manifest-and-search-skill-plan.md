@@ -6,6 +6,12 @@ date: 2026-04-07
 
 # KB Manifest (INDEX.md) and Cross-Domain Search Skill
 
+> **Superseded in part 2026-08-10 (#7399, ADR-173):** the "listing every KB file"
+> scope below was already inexact (`**/archive/` was never indexed) and is now
+> narrower still — inside `knowledge-base/project/specs/<feature>/`, INDEX.md
+> carries only `spec.md` and `tasks.md`. An empty INDEX grep is not proof a file
+> is absent. The rest of this record stands as written.
+
 ## Overview
 
 Add two components to improve knowledge base discoverability: (1) an auto-generated `knowledge-base/INDEX.md` manifest listing every KB file with a one-line description, and (2) a `soleur:kb-search` skill that greps across all KB domains. This addresses the discovery gap where agents don't know what files exist and cross-category searches fail.
