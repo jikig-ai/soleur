@@ -70,11 +70,27 @@ This skill can be re-entered after a stall. Detect that **here**, above Phase 0.
 brainstorm-ambiguity `AskUserQuestion` fires inside a Task subagent that cannot answer it, so a
 resume that reached 0.5 would hang the pipeline rather than recover it.
 
+**Selecting the plan file.** Execution order is not file order in this document: this phase runs
+*before* Phase 0.7, so the selector is defined here, at its first use, and Phase 0.7 reuses it.
+Match on frontmatter `branch:` rather than a date glob — a run that begins at 23:5x UTC and
+recovers after midnight would miss its own file under a same-day glob:
+
+```bash
+BR=$(git branch --show-current)
+# Bounded and non-recursive: plans/*.md only, so plans/archive/ is excluded by construction.
+CAND=$(grep -l -m1 "^branch: ${BR}\$" knowledge-base/project/plans/*.md 2>/dev/null)
+```
+
+Duplicate `branch:` values already exist on `main`, so this can return more than one path.
+**Tiebreak is mandatory:** highest date prefix, then newest mtime. If it returns nothing, fall back
+to the same-day glob, then to "no plan file". `one-shot` uses this same selector, so the two agree
+on which artifact is under discussion.
+
 **Reading the cursor: frontmatter-bounded, always.** This is the canonical reader for
 `pipeline_resume:`, `resume_attempts:` and `branch:` throughout this skill:
 
 ```bash
-PLAN="<the plan file selected for this branch — see Phase 0.7 step 3 for the selector>"
+PLAN="<the path the selector above resolved to>"
 
 # The leading-`---` guard is load-bearing and part of the precedent: the sed range
 # /^---$/,/^---$/ matches the FIRST `---` anywhere in the file, so a document with no leading
@@ -220,10 +236,11 @@ add a `-plan` suffix.
   `title:`; it does not re-derive the path. A `git mv` is reserved for a genuinely misleading
   slug and happens once, at finalization.
 
-**3. Select before writing.** Use the *same* selector `one-shot` uses (frontmatter `branch:` over
-`plans/*.md`, non-recursive, `plans/archive/` excluded — see `one-shot/SKILL.md`), never a freshly
-derived path. A run that begins at 23:5x UTC and resumes after midnight derives a different
-filename, and would write a second skeleton beside its own work.
+**3. Select before writing.** Reuse the selector defined at Phase 0.4 — the frontmatter `branch:`
+match with its tiebreak — never the filename freshly derived at step 2. Those two disagree exactly
+when it matters: a run that begins at 23:5x UTC and resumes after midnight derives a *different*
+filename at step 2, and would write a second skeleton beside its own work. The derived name is
+used only when the selector finds nothing.
 
 | Existing state | Action |
 |---|---|
