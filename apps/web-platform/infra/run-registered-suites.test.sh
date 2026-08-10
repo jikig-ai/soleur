@@ -80,19 +80,29 @@ else
 fi
 
 # ── T2e: the derived set vs an INDEPENDENT oracle ────────────────────────────
+# Skipped in mutation children: this asserts which suites the WORKFLOW registers, a property of
+# the repo that no mutation of the runner can change. Re-running it 7x only costs wall clock.
+if [[ -z "${SOLEUR_MUTATION_CHILD:-}" ]]; then
 # T2b's oracle is the SAME regex the runner uses, so it agrees by construction and cannot see
 # a suite the regex structurally cannot match. This oracle is deliberately more permissive
 # (`\S+` accepts subdirectories) and therefore CAN disagree.
 #
-# It disagrees today: 7 suites are registered as ordinary `run: bash …` steps in CI and are
-# NEVER run by this runner, because the derivation ERE has no `/` in its tail. That falsifies
-# the header's "a suite added to the workflow is picked up here automatically" and "runner and
-# CI cannot drift" — see #7376's follow-up.
+# It disagrees today: 8 suites are registered in CI and NEVER run by this runner. Seven are
+# `run: bash <subdir>/…` (the derivation ERE has no `/` in its tail); the eighth is registered
+# as `sudo bash …` (infra-validation.yml:912), a shape the ERE's `run: bash` anchor cannot see
+# either. That falsifies the header's "a suite added to the workflow is picked up here
+# automatically" and "runner and CI cannot drift". Tracked for remediation by #7076.
 #
-# Pinned as an ENUMERATED ratchet rather than a count: a bare "7 known gaps" comment is
-# documentation, not a guard, and the 8th arrives green. This list must SHRINK. It reds both
-# when a new subdirectory suite is registered AND when one is fixed but left listed.
+# The oracle below therefore matches BOTH invocation shapes. An earlier version anchored on
+# `run: bash` alone — i.e. it shared the SUT's own blind spot for the sudo form, so a future
+# `sudo bash` registration would have landed green while the comment claimed "reds if an 8th
+# appears". It reds when a NEW one appears in either shape.
+#
+# Pinned as an ENUMERATED ratchet rather than a count: a bare "8 known gaps" comment is
+# documentation, not a guard. This list must SHRINK — it reds both when a new underived suite
+# is registered AND when one is fixed but left listed.
 KNOWN_UNDERIVED=(
+  apps/web-platform/infra/workspaces-luks-loopback.test.sh
   apps/web-platform/infra/inngest-rls/apply-inngest-rls-dev-workflow.test.sh
   apps/web-platform/infra/inngest-rls/inngest-rls-mutation.test.sh
   apps/web-platform/infra/inngest-rls/inngest-rls.test.sh
@@ -102,19 +112,20 @@ KNOWN_UNDERIVED=(
   apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh
 )
 _perm=$(mktemp); _der=$(mktemp); _known=$(mktemp)
-grep -oE 'run: bash apps/web-platform/infra/[^ ]+\.test\.sh' "$WF" \
-  | sed 's/run: bash //' | LC_ALL=C sort -u > "$_perm"
+grep -oE '(run:|sudo) bash apps/web-platform/infra/[^ ]+\.test\.sh' "$WF" \
+  | sed -E 's/^(run:|sudo) bash //' | LC_ALL=C sort -u > "$_perm"
 printf '%s\n' "$OUT" \
   | awk '/^Derived [0-9]+ registered infra suite/{f=1;next} /^$/{f=0} f' \
   | sed -n 's|^  \(apps/web-platform/infra/.*\.test\.sh\)$|\1|p' | LC_ALL=C sort -u > "$_der"
 printf '%s\n' "${KNOWN_UNDERIVED[@]}" | LC_ALL=C sort -u > "$_known"
 _gap=$(comm -23 "$_perm" "$_der")
 if [[ "$_gap" == "$(cat "$_known")" ]]; then
-  ok "T2e: the ${#KNOWN_UNDERIVED[@]} registered-but-underived suites are exactly the known set"
+  ok "T2e: the ${#KNOWN_UNDERIVED[@]} registered-but-underived suites are exactly the known set (#7076)"
 else
-  no "T2e: the registered-but-underived set CHANGED — update KNOWN_UNDERIVED or fix the derivation"$'\n'"$(diff <(cat "$_known") <(printf '%s\n' "$_gap") | head -8)"
+  no "T2e: the registered-but-underived set CHANGED — fix the derivation (#7076), or update KNOWN_UNDERIVED"$'\n'"$(diff <(cat "$_known") <(printf '%s\n' "$_gap") | head -8)"
 fi
 rm -f "$_perm" "$_der" "$_known"
+fi
 
 if printf '%s\n' "$OUT" | grep -qE '^(PASS|RED) '; then
   no "T2c: --list executed suites (found PASS/RED lines)"
@@ -506,7 +517,10 @@ payload_starts() {
   } 2>/dev/null
 }
 
+# Same reasoning as T2e: this walks all 93 registered suites' SOURCE, which no mutation of the
+# runner alters. Skipped in mutation children.
 nonconforming=(); sentinel_emitters=()
+if [[ -z "${SOLEUR_MUTATION_CHILD:-}" ]]; then
 for f in "${CORPUS[@]}"; do
   files=("$f")
   while IFS= read -r inc; do
@@ -518,13 +532,18 @@ for f in "${CORPUS[@]}"; do
   grep -qE '^SOLEUR\| ' <<<"$lits" && sentinel_emitters+=("$f")
 done
 
-if (( ${#nonconforming[@]} == 0 )); then
+fi
+if [[ -n "${SOLEUR_MUTATION_CHILD:-}" ]]; then
+  :
+elif (( ${#nonconforming[@]} == 0 )); then
   ok "T8a: all ${#CORPUS[@]} registered suites emit a failure marker the runner's ERE can anchor on"
 else
   no "T8a: ${#nonconforming[@]} suite(s) emit no marker matching the runner's ERE — their failures would degrade to a blind tail:"$'\n'"$(printf '  %s\n' "${nonconforming[@]}")"
 fi
 
-if (( ${#sentinel_emitters[@]} == 0 )); then
+if [[ -n "${SOLEUR_MUTATION_CHILD:-}" ]]; then
+  :
+elif (( ${#sentinel_emitters[@]} == 0 )); then
   ok "T8b: no registered suite emits the \`| \` sentinel at column 0"
 else
   no "T8b: ${#sentinel_emitters[@]} suite(s) emit the \`SOLEUR| \` sentinel at column 0 — the monitor's filter would strip real output:"$'\n'"$(printf '  %s\n' "${sentinel_emitters[@]}")"
@@ -680,7 +699,10 @@ fi
 # AND its own floor together, taking the suite from 46 assertions to 38 with exit 0 and nothing
 # noticing. A FLOOR, not equality — a new assertion must not require editing this number — but
 # set to the current count so it cannot silently absorb a deletion.
-MIN_ASSERTIONS=44
+# Parent runs the full set; a mutation child legitimately skips the repo-level assertions
+# (T2e, T8a/T8b) and the matrix itself, so it carries its own lower floor. Both derived from a
+# green run, not from an expectation.
+if [[ -n "${SOLEUR_MUTATION_CHILD:-}" ]]; then MIN_ASSERTIONS=36; else MIN_ASSERTIONS=44; fi
 TOTAL=$(( pass + fail ))
 if (( TOTAL < MIN_ASSERTIONS )); then
   echo "[FAIL] anti-vacuity: only ${TOTAL} assertion(s) ran, expected >= ${MIN_ASSERTIONS}" >&2
