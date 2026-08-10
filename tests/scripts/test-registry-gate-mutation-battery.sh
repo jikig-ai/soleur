@@ -122,6 +122,53 @@ run_suite() { # $1 = gate|engine ; echoes nothing, returns the suite's rc
   timeout 300 bash "$suite" > "${SB}/suite.log" 2>&1
 }
 
+# ── PRE-FLIGHT: every anchor must resolve to exactly one match, checked BEFORE any dispatch. ──
+#
+# Without this, a stale anchor is discovered serially: the battery runs ~47 full suite invocations
+# (20+ minutes), hits the first bad anchor, and exits 2 with NO VERDICT — having told you about
+# exactly one of them. Measured three times in #7410 alone, because an engine edit that moves or
+# duplicates a line silently invalidates the anchor pointing at it, and the failure mode is
+# indistinguishable from "the battery is still running".
+#
+# This parses THIS file's own mutate/expect_survive calls, lets BASH resolve the quoting (an
+# audit that interprets `\n` itself reports a false pass on an anchor bash would pass literally —
+# also measured here), and reports EVERY bad anchor at once.
+preflight_anchors() {
+  python3 - "$0" "${PRISTINE}/engine.sh" "${PRISTINE}/gate.sh" <<'PYX' || harness_die "one or more mutation anchors do not resolve to exactly one match against the pristine SUT. Every one is listed above. The SUT drifted from this battery — fix them all before trusting any verdict. No verdict is reportable."
+import re, subprocess, sys
+battery, engine_p, gate_p = sys.argv[1], sys.argv[2], sys.argv[3]
+src = open(battery).read()
+eng, gate = open(engine_p).read(), open(gate_p).read()
+pat = re.compile(
+    r"""(?:mutate|expect_survive)\s+"([^"]+)"\s+(engine|gate)\s*\\\n(\s*\$?'(?:[^']|'\\'')*')\s*\\\n""",
+    re.M)
+rows = pat.findall(src)
+bad = 0
+for label, target, rawq in rows:
+    # Let BASH resolve the quoting. An audit that interprets escapes itself reports a false PASS
+    # on an anchor bash would pass literally -- measured in #7410, where '\n...' in single quotes
+    # is a literal backslash-n and only $'...' yields a newline.
+    r = subprocess.run(["bash", "-c", "printf %s " + rawq.strip()],
+                       capture_output=True, text=True)
+    lit = r.stdout
+    if r.returncode != 0 or lit == "":
+        # An empty literal counts at EVERY position, which reports as a huge n rather than as the
+        # quoting failure it is.
+        bad += 1
+        sys.stderr.write("ANCHOR unresolvable [%s] %s\n" % (target, label))
+        continue
+    n = (eng if target == "engine" else gate).count(lit)
+    if n != 1:
+        bad += 1
+        sys.stderr.write("ANCHOR n=%d [%s] %s\n" % (n, target, label))
+if bad:
+    sys.stderr.write("pre-flight: %d of %d anchors bad\n" % (bad, len(rows)))
+    sys.exit(1)
+print("pre-flight: %d/%d anchors resolve uniquely" % (len(rows), len(rows)))
+PYX
+}
+preflight_anchors
+
 caught=0
 survived=0
 expected=0
@@ -386,7 +433,7 @@ mutate "E02 ZOT_PUSH_TOKEN emptiness check removed" engine \
   '[[ -n "${ZOT_PUSH_TOKEN:-}" ]] || die 5 ' ': # '
 
 mutate "E03 blob-completeness verification (crane validate) removed" engine \
-  'if ! crane_capture "$WORK/val.out" "$WORK/val.err" validate $SINK_TLS_FLAG --remote "$dst"; then' \
+  'if ! crane_capture "$WORK/val.out" "$WORK/val.err" validate $SINK_TLS_FLAG --remote "${dst_repo}@${dst_digest}"; then' \
   'if false; then'
 
 mutate "E04 digest parity comparison inverted to always match" engine \
