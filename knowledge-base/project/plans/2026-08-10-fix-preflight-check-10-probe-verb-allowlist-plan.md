@@ -14,6 +14,40 @@ plan_revision: v2 (post 4-agent review — v1's authority control was falsified 
 
 Closes #7393.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-10 · **Gates run:** 4.4 (precedent-diff), 4.6, 4.7, 4.8, 4.9, 4.10 — all pass
+**Prior review:** 4-agent panel (kieran-rails-reviewer, architecture-strategist,
+code-simplicity-reviewer, spec-flow-analyzer) drove the v1 → v2 redesign
+
+### Key improvements from the deepen pass
+
+1. **`--proc /proc` degradation (new AC 5b).** The precedent-diff gate surfaced
+   `enableWeakerNestedSandbox` (#1557): `/proc` cannot be mounted in a nested user namespace.
+   A hard `--proc` would have made the fail-closed design SKIP Check 10 in **every**
+   containerized run — including the one-shot pipeline's own — while looking like correct
+   operation. The runtime now retries once without `--proc`; measured to preserve the
+   credential boundary and every probe class.
+2. **Step 10.5 aligned to the repo's existing bwrap precedent** rather than invented, with a
+   four-row side-by-side diff and an explicit rationale for each deliberate divergence
+   (deny-by-default binds; SKIP-instead-of-refuse; unrestricted egress).
+3. **Mount-ordering hazard independently corroborated.** The agent-sandbox module header
+   documents the same tmpfs-shadows-earlier-binds semantics (#5733 / PR #5848) that was hit
+   empirically during plan-time testing — two independent discoveries, so it belongs in the
+   skill text.
+4. **`fail-closed ≠ correct` Sharp Edge** generalized from finding 1.
+5. **Citation sweep.** All 4 cited AGENTS rule IDs verified active (no retired-ID collisions);
+   all 12 cited issue/PR numbers resolved live. `#7278` flipped `OPEN → CLOSED`
+   *mid-session*, which is now recorded in the premise table as a worked example of
+   `hr-before-asserting-github-issue-status`.
+
+### New considerations discovered
+
+- A gate whose failure mode is "skip" can be silently disabled by an environmental
+  incompatibility unrelated to its threat model. Enumerate those environments explicitly.
+- The strongest corroboration for a plan-time empirical finding is an unrelated part of the
+  codebase having already paid for the same lesson.
+
 ## Overview
 
 `/soleur:preflight` Check 10 parses `discoverability_test.command` out of a PR-linked plan
@@ -81,7 +115,7 @@ workstation (bubblewrap 0.11.1), same command inside the sandbox:
 | `env -i` preserves `$HOME`, so on-disk creds stay reachable | Step 10.5 is `env -i … HOME="$HOME" … bash -c "$CMD"` | **Holds** |
 | …and therefore scrubbing `$HOME` would fix it | **Measured — FALSE.** Absolute-path read returns the token (294 B) | **Falsified.** Drove the v1→v2 redesign |
 | The trigger plan (registry/zot inventory lever) | `ls` → **absent on this branch**, as the brief warned | **Correctly out of scope.** No edit, fixture, or AC depends on it |
-| #7278 (source deferral's parent) | `gh issue view 7278` → `OPEN` | Provenance only |
+| #7278 (source deferral's parent) | `gh issue view 7278` → **`CLOSED`** (`closedAt=2026-08-10T10:29:01Z`) | Provenance only. It read `OPEN` earlier in this same planning session and closed mid-session — a live reminder that issue state is a read-at-use fact, not a plan-time constant (`hr-before-asserting-github-issue-status`). Nothing in this plan depends on it |
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -158,6 +192,23 @@ regression the check exists to catch.
 **SKIP** with a named reason. It **never** falls back to unsandboxed execution. A degraded
 sandbox that silently reverts to the status quo would be worse than no sandbox, because the
 skill text would claim a boundary that is not there.
+
+**`--proc /proc` must degrade, not fail — deepen-plan precedent-diff finding.** The repo's own
+agent sandbox carries `enableWeakerNestedSandbox: true` with the comment *"Docker containers
+cannot mount /proc inside user namespaces (kernel restriction); this skips `--proc /proc` in
+bwrap"* (`apps/web-platform/server/agent-runner-sandbox-config.ts`, #1557). Preflight runs
+inside exactly such a context on the one-shot pipeline path. A hard `--proc /proc` would
+therefore fail to establish the sandbox in every containerized/nested run and — because the
+design is fail-closed — **silently SKIP Check 10 for all of them**, converting a security
+improvement into a blanket disablement of the check. That failure mode would have looked like
+the fail-closed design working correctly.
+
+The runtime therefore attempts `--proc /proc` first and, on establishment failure, retries
+**once** without it before giving up and SKIPping. Measured on this host: both forms keep the
+credential boundary intact (`/home/$USER/.doppler/.doppler.yaml` → *no such file* in both) and
+both run `curl` (200), `node`, `python3`, and `grep` — so the weaker form costs nothing the
+probe classes need. This mirrors #1557's reasoning: `/proc` is not part of what the boundary
+protects, so dropping it does not weaken the control.
 
 **What this still does not close, named so no one cites Layer 1 as closure:** the probe retains
 **network egress** (`--share-net`, required — `curl` is 142/632 probes), so an allowlisted verb
@@ -241,6 +292,28 @@ bypass". It is a **verification waiver**, not an execution bypass — the declar
 executes, so no verb reaches the sandbox. That distinction is real, but the waiver genuinely
 does span *any* verb, which is why it is described that way above and mitigated by the three
 mechanisms rather than by reordering.
+
+### Research Insights — Sandbox Precedent Diff (deepen-plan Phase 4.4)
+
+The repo is **not** new to bubblewrap. `git grep -l bwrap` returns an AppArmor profile
+(`apps/web-platform/infra/apparmor-soleur-bwrap.profile`), a userns sysctl unit
+(`bwrap-userns-sysctl.service`), a uid audit (`audit-bwrap-uid.sh`) and the agent sandbox
+config. Per the precedent-diff gate, Step 10.5 is aligned to that precedent rather than
+invented, and the three divergences are deliberate:
+
+| Dimension | Canonical agent sandbox (`agent-runner-sandbox-config.ts`) | Check 10 Step 10.5 | Rationale for the divergence |
+| --- | --- | --- | --- |
+| Base filesystem posture | `--ro-bind / /` (**whole FS readable**), then per-sibling `--tmpfs` deny | **Deny-by-default**: bind only `/usr`, `/etc`, the resolver, and the repo | The agent legitimately reads the platform tree; a discoverability probe does not. Allow-by-default would re-open the absolute-path credential read that falsified v1 |
+| Unavailable-dependency behaviour | `failIfUnavailable: true` — *"Without this flag the SDK silently runs unsandboxed… Tier 4 defense-in-depth disappears with no Sentry signal"* (#2634) | **SKIP**, never unsandboxed | Same principle, adapted: the agent path refuses to start; a preflight check has no session to refuse, so the honest terminal is SKIP with a named reason |
+| Nested-userns `/proc` | `enableWeakerNestedSandbox: true` — skips `--proc /proc` (#1557) | Attempt with `--proc`, retry once without | **Adopted from the precedent.** Without it, Check 10 would SKIP in every containerized run |
+| Network | `allowManagedDomainsOnly: true`, empty allowlist by default | `--share-net` (unrestricted) | `curl` is 142/632 probes and the endpoints are arbitrary. Recorded as open in ADR-172 `## Consequences`, not silently accepted |
+
+The precedent also **independently corroborates the mount-ordering hazard** found empirically
+here: the module header documents that the SDK's bwrap builder emits write-plane binds first
+and `--tmpfs` last, so a broad `--tmpfs` *shadows* an earlier bind — the same ordering
+semantics that made `--tmpfs /home` clobber the repo bind during plan-time testing (#5733,
+PR #5848, "verified locally with bwrap 0.11.1"). Two independent discoveries of one rule is a
+strong signal it belongs in the skill text, not only in a plan.
 
 ## Alternative Approaches Considered
 
@@ -403,6 +476,13 @@ Extend the parity test with the sub-field extractor.
 5. Fail-closed: with `bwrap` unavailable, `classifyDiscoverabilityResult` returns **SKIP** with
    a reason naming the sandbox — and the executor stub **throws if called**, proving no
    unsandboxed fallback.
+5b. Nested-userns degradation: when `--proc /proc` cannot be mounted, the runtime retries
+   **once** without it and still executes (it does **not** SKIP). Asserted two ways: the
+   Step 10.5 window contains the retry-without-`--proc` branch, and a sandbox built without
+   `--proc` still reports `curl` 200 **and** *no such file* for
+   `/home/$USER/.doppler/.doppler.yaml`. Without this, Check 10 silently SKIPs in every
+   containerized run — including the one-shot pipeline's own — which would read as the
+   fail-closed design working correctly.
 6. Inline-program rejects: `rejectReason` is non-null for each of `bash -c …`, `sh -c …`,
    `python3 -c …`, `node -e …`, `bun -e …`, `awk 'BEGIN{system("…")}'`, `sed -e '1e …'`,
    `find . -exec …`.
@@ -664,6 +744,13 @@ secret, or firewall rule. `bwrap` is an existing host binary, not provisioned in
   this repo lives under `/home`. Reversed, the tmpfs silently clobbers the repo bind and every
   probe dies with `Can't chdir` — a failure that looks like a bwrap incompatibility rather than
   an ordering bug.
+- **A fail-closed gate can fail closed for the wrong reason, and it looks identical to working.**
+  `--proc /proc` cannot be mounted inside a nested user namespace (the repo already knows this —
+  `enableWeakerNestedSandbox`, #1557). A hard `--proc` would fail sandbox establishment in every
+  containerized run, and the fail-closed design would then SKIP Check 10 everywhere — a blanket
+  disablement whose telemetry is indistinguishable from correct operation. Whenever a gate's
+  failure mode is "skip", enumerate the environments where establishment fails *for reasons
+  unrelated to the threat*, and degrade rather than skip in those.
 - **`--tmpfs /run` breaks DNS on systemd-resolved hosts.** `/etc/resolv.conf` symlinks to
   `/run/systemd/resolve/stub-resolv.conf`; tmpfs'ing `/run` removes the target and every `curl`
   probe returns rc=6 — **indistinguishable from the #4148 DNS-typo regression Check 10 exists

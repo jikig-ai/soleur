@@ -47,6 +47,12 @@ Lane: `cross-domain` · Brand-survival threshold: `single-user incident`
 - [ ] 1.2.2 `preflight/SKILL.md` Step 10.5: bwrap sandbox. **`--tmpfs /home` before the repo bind.**
       Bind `$(readlink -f /etc/resolv.conf)` after `--tmpfs /run`. Fail-closed SKIP when bwrap
       is absent/unusable — never an unsandboxed fallback.
+- [ ] 1.2.2b **`--proc /proc` degradation (deepen finding, AC 5b).** Attempt with `--proc /proc`;
+      on establishment failure retry **once** without it, and only then SKIP. Mirrors
+      `enableWeakerNestedSandbox` in `apps/web-platform/server/agent-runner-sandbox-config.ts`
+      (#1557) — `/proc` cannot be mounted in a nested userns, and without this Check 10 SKIPs in
+      every containerized run (including the one-shot pipeline's own) while looking correct.
+      Align the whole invocation to that file's precedent; read its module header first.
 - [ ] 1.2.3 Mirror in `plugins/soleur/test/lib/discoverability-test-parser.ts`; delete `CRED_REJECT_RE`.
 - [ ] 1.2.4 Step 10.6: matrix 8 → 11 rows incl. `SKIP-DECLARED`; **exactly one `**PASS**`** terminal.
 - [ ] 1.2.5 Steps 10.7/10.8 + Result block + the global headless contract (~line 19) + the Phase 2
