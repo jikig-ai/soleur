@@ -183,3 +183,58 @@ just when the control is written.
    missing from `NON_INNGEST_MONITORS`. Both were counted-artifact drift of the
    kind the repo already warns about; neither was visible to `tsc`, actionlint,
    or the touched-file test loop.
+
+## Review phase: the reasoning was sound and pinned by nothing
+
+Eleven agents produced eleven findings. The two P1s were both mine, and neither
+was a reasoning error — each was a case of reading one file and not the file next
+to it.
+
+**The marker.** The failure classifier greped `[FAIL]`. `run-registered-suites.sh`'s
+own header says, verbatim: *"a failing suite prints `RED <path>`, not `FAIL`. A
+`grep FAIL` over this runner's log returns zero hits on a failing run and reads as
+clean — measured 2026-08-04 (#7220)."* So an infra-only failure rendered "Run did
+not complete … usually a timeout" over a real `RED` line — the phantom this PR
+exists to remove, in the one path this PR adds. It could not surface in any branch
+run, because `test-all.sh` *does* emit `[FAIL]` and the branch always ran both.
+
+**The warm measurement.** Every branch run executes the 92 infra suites TWICE —
+the branch diff touches `infra/`, so `TEST_GROUP=all` fires the nested runner
+first and the standalone step then runs warm. I noticed the nested run INFLATES
+the tests figure and called leaving it "the safe direction", and did not notice it
+DEFLATES the infra figure, which is the unsafe direction. On `main` the standalone
+step is the only run: cold. Generalisation: **when the same work runs twice in one
+job, ask which of your measurements is the second one.**
+
+### The finding that mattered most was not a bug
+
+Three agents converged on it independently: a sandbox battery mutated the shipped
+workflow 28 ways and **24 survived every existing gate** — including
+`closer if: → always()`, which auto-closes the tracker while main is red, i.e.
+defect B's consequence restored. The workflow's reasoning was fine. Nothing
+executed it.
+
+Two corollaries worth carrying:
+
+- **A cited mitigation is a claim to test.** The plan asserted the `PIPESTATUS`
+  idiom was "already guarded by `lint-workflow-errexit-capture.py` F14/F15b". It is
+  not: that linter short-circuits on `if not state[cmd_pos]: continue` when errexit
+  was already clear at the command, which is exactly this idiom's shape. Measured —
+  moving `set -e` above the read (rc always 0, a silent false pass, strictly worse
+  than the original bug) leaves it reporting `clean`.
+- **A guard must pin the property, not the neighbourhood.** After the review I moved
+  `JOBS` off workflow scope (node-gyp reads it as `make -j`) and did not re-add it to
+  the steps. The monitor caught it and filed a spurious P1 — but my brand-new guard
+  suite did not, because it asserted nothing about `JOBS`. The fix is an assertion
+  that checks it *per-step*, mutation-proven. A guard that misses its own regression
+  is measuring less than it appears to.
+
+### And one claim I made twice and had to retract twice
+
+I told the operator "every infra flake was `-P 4` on a 4-core runner; `-P 6` on 16
+cores was clean", and wrote that into #7376. A later local run failed at `-P 6` on
+16 cores — under load 8.42 with a sibling suite running. The variable is
+**contention**, not the `-P` value. Both statements were made from a sample that
+happened to be consistent with them; neither was tested against a case that could
+falsify it. Tally at the end: 8 executions, 4 failed, 6 distinct suites, every
+failure on a saturated machine.
