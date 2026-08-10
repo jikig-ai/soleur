@@ -1,6 +1,6 @@
 agent-design
 agent-loop-calibration
-agent-worcat
+agent-workflow, mcp-integration
 architecture
 architecture-decisions
 best-practices

@@ -10,7 +10,7 @@
 116
 2026-02-06-parallel-plan-review-catches-overengineering.md
 2026-02-22-skill-count-propagation-locations.md
-2026-03-02-claude-code-action-token-revocatioius
+2026-03-02-claude-code-action-token-revocation-breaks-persist-step.md
 2026-03-02-github-actions-auto-push-vs-pr-for-bot-content.md
 2026-03-02-skill-handoff-blocks-pipeline-when-announcing.md
 2026-03-13-bare-repo-stale-files-and-working-tree-guards.md
@@ -20,7 +20,7 @@
 2026-03-19-docker-restart-does-not-apply-new-images
 2026-03-20
 2026-04-07
-2026-04-17-brainstorm-verify-existing-artifacts-andcat
+2026-04-17-brainstorm-verify-existing-artifacts-and-mount-sites
 2026-04-18-test-mock-factory-drift-guard-and-jsdom-layout-traps.md pattern 4 origin
 2026-04-23-verify-trigger-path-before-attributing-regression
 2026-05-05-brainstorm-capability-gaps-need-repo-grep
@@ -238,7 +238,7 @@ api-403
 api-contract
 api-errors
 api-first
-api-g
+api-hardening
 api-integration
 api-key
 api-routes
@@ -430,7 +430,6 @@ binary-verification
 bind-mount
 binding-resolution
 blanket-replace
-blast-radcat
 blast-radius
 blind-surface
 blobs-api
@@ -565,7 +564,7 @@ call-site-grep
 campaign-calendar
 canary
 canary-deploy
-candidateg
+candidate
 cannibalization
 cannot
 canonical
@@ -598,6 +597,7 @@ cc-permissions
 cc-router
 cc-soleur-go
 ccpa
+censored-data
 centralization
 cert-provisioning
 cf-tunnel
@@ -720,7 +720,6 @@ cloud-max-scheduling
 cloud-migration
 cloud-routines
 cloud-task-silence
-cloudflacat
 cloudflare
 cloudflare-access
 cloudflare-rulesets
@@ -1217,10 +1216,8 @@ draft-pr
 draft-release
 drain
 drain-pr
-dre
 drift
 drift-analyzer
-drift-cat
 drift-cron
 drift-detection
 drift-guard
@@ -1467,6 +1464,7 @@ flagsmith-fallback
 flake
 flake-class
 flake-remediation
+flaky-harness
 flaky-test
 flex
 flexbox
@@ -1692,7 +1690,6 @@ has_function_privilege
 hash
 hash-based-csp
 hash-cli
-hcat
 hcl
 hcloud
 headed
@@ -1892,7 +1889,6 @@ kb-layout
 kb-pdf
 kb-reader
 kb-routes
-kb-s-mount-sites
 kb-search
 kb-security
 kb-share
@@ -2178,7 +2174,6 @@ multimodal
 mutation-axes
 mutation-battery
 mutation-test
-mutation-testincat
 mutation-testing
 n1-validation-gate
 name
@@ -2342,6 +2337,7 @@ orphaned worktree
 orthogonal
 orthogonal-review
 otp
+outcome-vs-conclusion
 output-aware-heartbeat
 output-sanitization
 over
@@ -3269,7 +3265,7 @@ shell-init-scope
 shell-injection
 shell-limits
 shell-mock
-shell-pokflow, mcp-integration
+shell-portability
 shell-script
 shell-scripting
 shell-scripts
@@ -3326,7 +3322,7 @@ site.url
 sitemap
 size-budget
 skill
-skill tool returns error instead of ockerfile
+skill tool returns error instead of showing permission prompt for bash command in code fence
 skill-budget
 skill-creation
 skill-description
