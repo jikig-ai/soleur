@@ -111,12 +111,29 @@ new_fixture() {
   git init -q -b main "$root/seed" || { echo "FATAL: git init failed" >&2; exit 2; }
   git -C "$root/seed" config user.email "test@test.local"
   git -C "$root/seed" config user.name "Test"
+  # Disable commit/tag signing IN THE FIXTURE. The operator's global config may
+  # set `gpg.format=ssh` + `commit.gpgsign=true`, in which case every fixture
+  # commit tries to SSH-sign — and that needs a reachable ssh-agent. Any caller
+  # that scrubs the environment (preflight Check 10 runs this suite under
+  # `env -i`, which drops SSH_AUTH_SOCK) then gets `failed to write commit
+  # object` and a 16/20 split that looks like a code regression.
+  #
+  # A synthesized fixture must not inherit the operator's signing policy —
+  # `cq-test-fixtures-synthesized-only` applies to configuration, not just data.
+  git -C "$root/seed" config commit.gpgsign false
+  git -C "$root/seed" config tag.gpgsign false
   mkdir -p "$root/seed/knowledge-base/project/specs"
   touch "$root/seed/knowledge-base/.gitkeep"
   git -C "$root/seed" add . >/dev/null 2>&1
   git -C "$root/seed" commit -q -m "seed"
   git clone -q --bare "$root/seed" "$root/bare.git" \
     || { echo "FATAL: bare clone failed" >&2; exit 2; }
+  # Same on the bare repo: its worktrees share this common config, so this is
+  # what covers every commit the manager itself makes inside a created worktree.
+  git -C "$root/bare.git" config commit.gpgsign false
+  git -C "$root/bare.git" config tag.gpgsign false
+  git -C "$root/bare.git" config user.email "test@test.local"
+  git -C "$root/bare.git" config user.name "Test"
   # Mirror the real repo: a stale knowledge-base/ copy at the bare root.
   mkdir -p "$root/bare.git/knowledge-base/project/specs"
   printf '%s' "$root/bare.git"
