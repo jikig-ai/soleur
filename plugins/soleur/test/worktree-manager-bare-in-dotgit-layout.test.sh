@@ -118,14 +118,21 @@ admin_dir() { echo "$1/.git/worktrees/$2"; }
 
 # run_sourced <cwd> <code> — source worktree-manager.sh FRESH in a subshell at <cwd>
 # so init-time detection (IS_BARE / IS_IN_WORKTREE / GIT_ROOT / WORKTREE_DIR) is
-# recomputed for that fixture, then eval <code>. Sourcing output is discarded; only
-# <code>'s stdout+stderr reaches the caller.
+# recomputed for that fixture, then eval <code>.
+#
+# Source-time output is deliberately NOT discarded. The detection-time self-heal runs
+# DURING the source, so both its success marker and its failure diagnostics are emitted
+# there — redirecting the source to /dev/null would make every assertion about those
+# messages unable to fail, which is the vacuous-green shape this suite exists to prevent.
+# Assertions anchor on their own literals (`RWT_OK`, `^WTDIR=`), so the extra lines are
+# inert. A `exit` inside the sourced script terminates this subshell before <code> runs —
+# which is the behaviour Case 12 asserts.
 run_sourced() {
   local cwd="$1" code="$2"
   (
     cd "$cwd" || exit 90
     # shellcheck source=/dev/null
-    source "$SCRIPT" >/dev/null 2>&1
+    source "$SCRIPT"
     eval "$code"
   )
 }
@@ -331,7 +338,7 @@ else
 fi
 
 set +e
-C9_OUT="$(run_sourced "$C9" 'create_worktree "feat-seeded" "main" >/dev/null 2>&1; echo CREATE_RC=$?' 2>&1)"
+C9_OUT="$(run_sourced "$C9" 'YES_FLAG=true; create_worktree "feat-seeded" "main" >/dev/null 2>&1; echo CREATE_RC=$?' 2>&1)"
 set -e
 C9_SEEDED="$(admin_dir "$C9" feat-seeded)/config.worktree"
 if [[ -f "$C9_SEEDED" ]]; then
@@ -439,7 +446,7 @@ C13_WTDIR="$(run_sourced "$C13/.worktrees/feat-e" 'echo "WTDIR=$WORKTREE_DIR"' 2
 set -e
 assert_eq "$C13/.worktrees" "$C13_WTDIR" "WORKTREE_DIR resolves to <root>/.worktrees after the heal"
 set +e
-run_sourced "$C13/.worktrees/feat-e" 'create_worktree "feat-f" "main" >/dev/null 2>&1' >/dev/null 2>&1
+run_sourced "$C13/.worktrees/feat-e" 'YES_FLAG=true; create_worktree "feat-f" "main" >/dev/null 2>&1' >/dev/null 2>&1
 set -e
 if [[ -d "$C13/.worktrees/feat-f" ]]; then
   echo "  PASS: a subsequent create lands under <root>/.worktrees"; PASS=$((PASS + 1))
