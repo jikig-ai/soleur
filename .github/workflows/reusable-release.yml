@@ -733,6 +733,14 @@ jobs:
 
       # type=gha cache requires the docker-container driver (the default driver
       # cannot export gha cache) — setup-buildx provides it.
+      # Refuse to build if any credential can reach a published build channel (#7389).
+      # This runs BEFORE the build, so a violation costs no registry write: nothing is
+      # published, so there is nothing to un-publish. Historical attestations cannot be
+      # retracted, which is exactly why this gate is pre-build rather than post-build.
+      - name: Scan build channels for credentials
+        if: steps.version.outputs.next != '' && inputs.docker_image != ''
+        run: python3 scripts/lint-buildarg-secret-channels.py
+
       - name: Set up Docker Buildx
         if: steps.version.outputs.next != '' && inputs.docker_image != ''
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
@@ -744,15 +752,37 @@ jobs:
         with:
           context: ${{ inputs.docker_context }}
           push: true
+          # THERE ARE TWO DIFFERENT `mode=min`s IN THIS STEP. They are unrelated
+          # channels and neither implies the other (#7389):
+          #
+          #   * `cache-to: type=gha,mode=min` below — the LAYER CACHE. The stage-scoping
+          #     argument that follows applies to THIS and only this.
+          #   * `provenance: mode=min` further down — the published SLSA ATTESTATION.
+          #     Stage-scoping says NOTHING about it: BuildKit records the frontend
+          #     request attributes (build-args) regardless of which stage consumes them.
+          #
+          # Conflating the two is how `SENTRY_IAC_AUTH_TOKEN` ended up in cleartext in
+          # the published attestation of every release while this comment read as an
+          # all-clear. A non-public credential must not be a build-arg at all; it goes
+          # through `secrets:` (a BuildKit secret mount), which provenance does not
+          # record. `scripts/lint-buildarg-secret-channels.py` enforces that.
+          #
+          # LAYER CACHE (this is the stage-scoping claim, and it is correct):
           # mode=min is secret-safe ONLY while no non-public secret ARG is consumed
-          # in the runner/final-image stage of apps/web-platform/Dockerfile (the
-          # builder-only SENTRY_AUTH_TOKEN must stay out of the runner stage). Do NOT
+          # in the runner/final-image stage of apps/web-platform/Dockerfile. Do NOT
           # flip to mode=max, and do NOT add a non-public secret build-arg to the
           # runner stage — either would export a secret-bearing layer to the
           # repo-readable gha cache. mode=min caches only runner-stage layers, which
           # is where the heavy-install wins live (claude-code/likec4/apt/playwright).
           cache-from: type=gha,scope=web-platform-release
           cache-to: type=gha,mode=min,scope=web-platform-release
+          # PIN THE PROVENANCE MODE BY VALUE — do not rely on the action default.
+          # docker/build-push-action chooses its default from repository VISIBILITY
+          # (src/context.ts, getAttestArgs): a private repo gets mode=min, a PUBLIC repo
+          # gets mode=max, which records every build-arg. This repo is public and this
+          # key was absent, which is why the release was emitting max. Measured on
+          # BuildKit v0.31.2 and v0.32.2: min records 0 build-args, max records all.
+          provenance: mode=min
           tags: |
             ${{ inputs.docker_image }}:v${{ steps.version.outputs.next }}
             ${{ inputs.docker_image }}:${{ github.sha }}
@@ -763,12 +793,17 @@ jobs:
             NEXT_PUBLIC_SENTRY_DSN=${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
             NEXT_PUBLIC_GITHUB_APP_SLUG=${{ secrets.NEXT_PUBLIC_GITHUB_APP_SLUG }}
             NEXT_PUBLIC_VAPID_PUBLIC_KEY=${{ secrets.NEXT_PUBLIC_VAPID_PUBLIC_KEY }}
-            SENTRY_AUTH_TOKEN=${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
             SENTRY_ORG=${{ secrets.SENTRY_ORG }}
             SENTRY_PROJECT=${{ secrets.SENTRY_PROJECT }}
             BUILD_VERSION=${{ steps.version.outputs.next }}
             BUILD_SHA=${{ github.sha }}
             NEXT_PUBLIC_AGENT_COUNT=${{ steps.plugin_stats.outputs.agent_count }}
+          # The Sentry auth token travels as a BuildKit SECRET MOUNT, not a build-arg:
+          # `secrets:` values are NOT recorded in the provenance attestation, which is
+          # the whole point (#7389). The Dockerfile reads it at
+          # /run/secrets/sentry_auth_token and fails closed if it is empty.
+          secrets: |
+            sentry_auth_token=${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
 
       - name: Set docker_pushed output
         id: docker_pushed
