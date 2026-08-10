@@ -1379,11 +1379,38 @@ else
   fail "signature digest parity must be enforced" "$rc" "$out"
 fi
 
+# An empty-string digest must be reported as an empty digest, not as an absent child/blob. Both
+# of these previously named a cause the engine had already disproved by reading the declared count
+# -- and the blob one used literally the `declares no blobs` string that refused run 31392395980.
+fx="$TMP/fx-emptydigest-child"; calls="$TMP/calls-emptydigest-child"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+fx_oci_raw "$fx" "${TARGET}/${WP}@${D_OTHER}" \
+  '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"digest":""}]}'
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -qF "enumerated ZERO rows but the index declares 1" \
+   && ! printf %s "$out" | grep -qF "is an index with no children"; then
+  pass "an index child with an EMPTY digest names the empty digest, not 'no children'"
+else
+  fail "an empty child digest must not be reported as an absent child" "$rc" "$out"
+fi
+
+fx="$TMP/fx-emptydigest-blob"; calls="$TMP/calls-emptydigest-blob"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+fx_oci_raw "$fx" "${TARGET}/${WP}@${D_SIGX_CHILD}" \
+  '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":""},"layers":[{"digest":""}]}'
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -qF "enumerated ZERO rows but the manifest declares 2" \
+   && ! printf %s "$out" | grep -qF "declares no blobs"; then
+  pass "blobs with EMPTY digests name the empty digest, not 'declares no blobs' (the #7378 string)"
+else
+  fail "empty blob digests must not be reported as 'declares no blobs'" "$rc" "$out"
+fi
+
 # ── Anti-vacuity floor for THIS suite. ────────────────────────────────────────────────────────
 # Deleting the entire new assertion block left the suite green at 43/0, exit 0 — `fails -eq 0` is
 # satisfied by asserting nothing. A floor (never `-eq`, which would make every added assertion a
 # spurious failure) makes that deletion loud. Derived from a green run, ratchet upward only.
-MIN_ASSERTIONS=83
+MIN_ASSERTIONS=85
 if (( passes + fails < MIN_ASSERTIONS )); then
   printf '  FAIL harness: %d assertions ran, floor is %d — assertions were deleted or skipped\n' \
     "$((passes + fails))" "$MIN_ASSERTIONS"

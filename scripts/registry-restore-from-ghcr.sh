@@ -374,8 +374,16 @@ verify_blobs_of() {
       # Pre-loop, mirroring verification 2: `<<< ""` yields ONE blank iteration, so without this a
       # zero-child index reaches the loop and the in-loop guard has to `continue` past it — which is
       # what forced the empty-digest row to be skipped rather than named.
-      [[ -n "$children" ]] || \
-        die 4 "${what} is an index with no children, so it references nothing a host could pull."
+      # Gate on the COUNT the engine already read, not on the row stream alone. Every row is
+      # sentinelled with `// "-"`, so a blank row can only come from an explicitly-empty digest
+      # string -- and `$( )` then strips it, leaving `$children` empty. Without this gate an index
+      # declaring ONE child with `"digest": ""` was reported as "an index with no children",
+      # naming a cause the engine had just disproved by reading n_declared=1 two lines earlier.
+      if [[ -z "$children" ]]; then
+        (( n_declared == 0 )) || \
+          die 4 "${what}: its child list enumerated ZERO rows but the index declares ${n_declared}. At least one child declares an empty digest, so the enumeration is unusable and nothing was verified."
+        die 4 "${what} is an index with no children, so it references nothing this restore could verify."
+      fi
       n_children=0
       while IFS=$'\t' read -r c_digest; do
         n_children=$((n_children + 1))
@@ -416,8 +424,15 @@ verify_blobs_of() {
       if ! n_declared="$(jq -r '((if has("config") then 1 else 0 end)) + ((.layers // []) | length)' "$out" 2>"$jqerr")"; then
         die 4 "${what}: its blob count could not be read, so no completeness claim is possible. jq: $(last_err "$jqerr")"
       fi
-      [[ -n "$blobs" ]] || \
+      # Same gate, same reason -- and here the stale message was literally `declares no blobs`,
+      # the string that refused run 31392395980. A child declaring a config and a layer with empty
+      # digests produced two blank rows, `$( )` stripped them, and the engine reported the artifact
+      # as declaring nothing while n_declared said 2.
+      if [[ -z "$blobs" ]]; then
+        (( n_declared == 0 )) || \
+          die 4 "${what}: its blob list enumerated ZERO rows but the manifest declares ${n_declared}. At least one blob declares an empty digest, so the enumeration is unusable and nothing was fetched."
         die 4 "${what} declares no blobs, so its presence cannot be verified."
+      fi
       # A LAYER, not merely a blob. This is the difference between a real check and a ceremonial
       # one, and the config blob is exactly why:
       #
