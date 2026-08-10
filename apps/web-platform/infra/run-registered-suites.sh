@@ -246,12 +246,17 @@ SENTINEL_PREFIX='SOLEUR| '
 # MARKER_ERE — DERIVED FROM THE CORPUS, NEVER INTUITED, and pinned by T8a/T8c.
 # Measured 2026-08-10 over all 93 registered suites (payload-start extraction, following
 # `source`d helpers and embedded python):
-#     ^\[FAIL\]                                    10/93
-#     ^[[:space:]]*(\[FAIL\]|FAIL\b)               85/93   <- misses SETUP-FAIL:
+#     ^\[FAIL\]                                    11/93
 #     this ERE                                     93/93
-# The shapes are `[FAIL] x`, `FAIL: x`, `FAIL - x`, `  FAIL x`, and `SETUP-FAIL: x`.
-# An earlier draft also carried `^no `, which matches NOTHING — it was taken from the `no()`
-# helper's NAME rather than its output (`printf 'FAIL - %s\n'`).
+# Re-derive rather than trusting those figures — they move with the extractor, and an earlier
+# draft carried three that did not reproduce. The 11 includes web-host-provisioner-parity, whose
+# marker is `print(f"[FAIL] …")` inside an embedded python heredoc: a shell-only scan reports 10
+# and silently disagrees with the methodology stated one line above it.
+# The shapes are `[FAIL] x`, `FAIL: x`, `FAIL - x`, `  FAIL x`, and `SETUP-FAIL: x`, emitted
+# from five places: double-quoted echo/printf, SINGLE-quoted printf, an embedded python heredoc,
+# a sourced helper, and a `SETUP-FAIL:` prefix. An earlier draft also carried `^no `, which
+# matches NOTHING — it was taken from the `no()` helper's NAME rather than its output
+# (`printf 'FAIL - %s\n'`).
 MARKER_ERE='^[[:space:]]*(\[FAIL\]|[A-Z][A-Z0-9]*-FAIL|FAIL)([[:space:]:_-]|$)'
 
 # Cap per RED suite. Binds AFTER selection — capping first would reinstate the blind tail this

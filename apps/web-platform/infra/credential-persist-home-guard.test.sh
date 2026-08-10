@@ -147,8 +147,13 @@ copy_scan_tree() {
 # and expect_red's assert_mutated) call this, so the exclusion cannot drift between them — a
 # `--exclude=.terraform` deleted from ONE of two separate diff call sites was verified to ship
 # PASS/FAIL-clean while permanently disarming assert_mutated. With one call site that edit is not
-# expressible; and deleting it HERE is caught by the pin on any warm root, where $REAL_ROOT holds
-# a .terraform the sandbox deliberately does not.
+# expressible.
+#
+# NOTE (#7376): the pin below now compares FROZEN_ROOT against the sandbox, and FROZEN_ROOT is
+# itself produced by copy_scan_tree — so BOTH sides are .terraform-free and that pin no longer
+# catches a deleted `--exclude`. It used to, on a warm root. The decoy-root pin further down is
+# what covers this now, on EVERY shape including CI's cold one; do not read the pin as coverage
+# for the exclusion.
 scan_diff() { diff -rq --exclude=.terraform "$1" "$2"; }
 
 # Sandboxes were never reclaimed until the EXIT trap, so all 24 were concurrently resident.
@@ -171,8 +176,11 @@ fresh_sbx() { rm -rf "$TMPROOT"/sbx.*; mktemp -d "$TMPROOT/sbx.$1.XXXXXX"; }
 # entirely by a DIFFERENT one. That is a harness defect, and it is one of the two provable
 # causes behind #7376's "same tree, different failure sets on every run".
 #
-# Freezing the comparison side closes the race for every concurrent tree-mutator, present and
-# future, rather than chasing them one at a time. It is unconditionally correct: the property
+# Freezing the COMPARISON SIDE closes the copy/diff race for every concurrent tree-mutator,
+# present and future, rather than chasing them one at a time. Scope note: the scanner's own
+# REAL_OUT walk below still reads the live tree, so a concurrent create/delete can still
+# perturb THAT (a different mechanism, same class). The known in-repo mutator was removed in
+# this same change and T5c keeps it removed. It is unconditionally correct: the property
 # under test is "a fresh copy of the scanned tree diff-cleans against the tree it was copied
 # from", and a snapshot satisfies that definition strictly better than a moving target does.
 #
@@ -785,6 +793,16 @@ if grep -qF 'decoy-vendored.service' "$TMPROOT/decoy.scan"; then
 else
   pass "scanner walk prunes .terraform/modules/ (vendored unit not enumerated)"
 fi
+# scan_diff's own --exclude=.terraform, pinned asymmetrically (#7376). _dsrc HAS a .terraform,
+# _ddst (a copy_scan_tree copy) does not — so a clean diff proves the exclusion is applying.
+# Non-vacuous on every shape, unlike the FROZEN_ROOT pin, whose two sides now always agree.
+if scan_diff "$_dsrc" "$_ddst" >/dev/null 2>&1; then
+  pass "scan_diff excludes .terraform (asymmetric decoy: source has one, copy does not)"
+else
+  fail "scan_diff's --exclude=.terraform is not applying" \
+    "$(scan_diff "$_dsrc" "$_ddst" 2>&1 | head -3)"
+fi
+
 rm -rf "$_dsrc" "$_ddst"
 
 # The full-tree diff above is SYMMETRIC in .terraform — excluded on BOTH sides — so it passes happily
@@ -839,8 +857,9 @@ expect_red() {
     fail "$label: fresh copy not GREEN before mutation (latent FAIL — attribution unsafe)"; return 0
   fi
   "$mutate_fn" "$sbx"
-  # scan_diff's exclusion is load-bearing, not cosmetic: $sbx no longer holds .terraform, so an
-  # unexcluded diff can NEVER report the trees identical — assert_mutated would pass
+  # scan_diff's exclusion: note that since #7376 the comparison side is FROZEN_ROOT, which also
+  # holds no .terraform, so an unexcluded diff CAN report the trees identical here. The decoy
+  # pin is what asserts the exclusion now — assert_mutated would pass
   # unconditionally and every broken mutation would be misreported as a vacuous guard.
   if scan_diff "$FROZEN_ROOT" "$sbx" >/dev/null 2>&1; then
     fail "$label: mutation did not change the tree (assert_mutated failed)"; return 0

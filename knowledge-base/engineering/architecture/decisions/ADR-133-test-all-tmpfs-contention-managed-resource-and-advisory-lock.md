@@ -120,3 +120,33 @@ is itself a registered suite, and it created and deleted a fixture inside the li
 `apps/web-platform/infra/` directory while `credential-persist-home-guard.test.sh` was
 copying that directory and diffing the copy against the still-live source. Under this ADR's
 verdict alone, that class would not have been looked for.
+
+### Two departures from this ADR's decisions, recorded rather than left implicit
+
+**Decision 1's "observe-only" clause does not hold for #7376's instrument.** ADR-133 specifies
+instrumentation that "creates no files, takes no locks, deletes nothing." The per-suite capture
+in `run-registered-suites.sh` creates a directory plus two files per suite (186 files for
+today's 93) and removes that directory on a green run.
+
+That matters beyond bookkeeping: **an instrument that is not observe-only is a confound for the
+hypothesis it exists to measure.** Converting 93 suites' output from `/dev/null` to 186 file
+writes adds I/O at exactly the contended moment H2 (capacity) is about. So a post-fix green loop
+is partly an observer effect unless the baseline was run *with the instrument present*, and any
+future investigator comparing runs across that boundary is comparing two different systems.
+
+**Decision 1's "instrumentation ships ahead of every fix" ordering also does not hold.** The
+load-bearing property that rule protects is *no fix commits to an unmeasured mechanism* — both
+hypotheses this ADR recorded were refuted by measurement after being committed to in prose.
+#7376 honours the property while departing from the ordering: the two fixes it ships are provable
+**by reading** (a registered suite mutating the live tree that a sibling diffs against; an
+`exit 0` on `PASS + RED != count`), and the fix that *would* have needed measurement — the
+capacity arm — is explicitly declined. H2 (capacity) and H4 (polling deadline) remain UNKNOWN on
+the hosted runner as of #7376; the collision finding above is a partial cause, not a refutation
+of the others.
+
+**Decision 2's "managed, reaped resource" needed the producer's help.** `scripts/tmpfs-guard.sh`
+scopes to `/tmp` while this runner exports `TMPDIR=/var/tmp`, and this ADR explicitly rejected
+count-based reaping — so retained `infra-suites.*` dirs were unreapable by construction and grew
+to 414 dirs / 23 MB on the author's workstation before anyone looked. The runner now age-reaps
+its own older siblings at startup and reaps the current dir from its `EXIT` trap, mirroring the
+`meta_dir` precedent this ADR set for `skill-security-scan`.

@@ -381,6 +381,10 @@ if [[ -n "$EXCERPT_EXPR" ]]; then
     echo "| Service | Provider | Category |"
     echo "=== registered infra suites: 91 passed, 1 failed, 1 unaccounted (of 93) ==="
   } > "$_fix"
+  # `file` IS read — by the workflow expression under `eval` below, which shellcheck cannot see
+  # into. That indirection is the point: the expression is extracted from the YAML rather than
+  # re-typed, so it reads the same variable name the workflow's own loop does.
+  # shellcheck disable=SC2034
   file="$_fix"; eval "$EXCERPT_EXPR" > "$_out" 2>/dev/null || true
 
   if ! grep -q '^SOLEUR| ' "$_out"; then
