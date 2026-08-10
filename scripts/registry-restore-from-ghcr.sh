@@ -401,7 +401,16 @@ verify_blobs_of() {
       # empties — so `{"config":{"digest":"sha256:aaa"},"layers":[{"digest":""},{"digest":""}]}`
       # verified ONE of three declared blobs and reported the manifest complete. On the signature
       # path that is A2 going green with the cosign payload never fetched.
-      if ! blobs="$(jq -r '[(.config.digest // "-")] + [(.layers // [])[] | (.digest // "-")] | .[]' "$out" 2>"$jqerr")"; then
+      #
+      # The config slot is CONDITIONAL, and that word is load-bearing. An unconditional
+      # `[(.config.digest // "-")]` emits a row even when the manifest has no `config` key at all,
+      # while the count below is conditional — so a perfectly healthy config-less manifest
+      # (`{"layers":[{"digest":"sha256:aa"}]}`) produced rows `-`,`sha256:aa` against a declared
+      # count of 1, and died with "blob 1 declares no digest" about a blob the engine's own jq
+      # program had invented. That is #7379's defect exactly — a healthy artifact named as
+      # defective because the checker's enumeration was wrong — reintroduced by the commit fixing
+      # it. The stream and the count must be the same predicate.
+      if ! blobs="$(jq -r '[(if has("config") then (.config.digest // "-") else empty end)] + [(.layers // [])[] | (.digest // "-")] | .[]' "$out" 2>"$jqerr")"; then
         die 4 "${what}: its blob list could not be fully enumerated, so an unknown number of blobs were never checked. jq: $(last_err "$jqerr")"
       fi
       if ! n_declared="$(jq -r '((if has("config") then 1 else 0 end)) + ((.layers // []) | length)' "$out" 2>"$jqerr")"; then
@@ -428,7 +437,7 @@ verify_blobs_of() {
         die 4 "${what}: its layer count could not be read, so no completeness claim is possible. jq: $(last_err "$jqerr")"
       fi
       (( n_layers > 0 )) || \
-        die 4 "${what} declares a config but NO layers, so it carries no payload. Its config alone is not evidence the artifact is intact — for a cosign signature that config is the well-known empty blob every registry holds."
+        die 4 "${what} declares NO layers, so it carries no payload. A config alone is not evidence the artifact is intact — for a cosign signature that config is the well-known empty blob (sha256:44136fa3...aff8a) every registry holds by construction."
       n_blobs=0
       while IFS= read -r b; do
         n_blobs=$((n_blobs + 1))
