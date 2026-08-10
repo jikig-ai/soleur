@@ -39,10 +39,20 @@
 #                                       the most expensive step in deploy-script-tests)
 #
 # Both self-skip with exit 0 when docker is missing or unreachable. The skip is NOT visible
-# through this runner: the executor below runs each suite as `bash "{}" >/dev/null 2>&1` and
+# through this runner: the executor below captures each suite's output to a per-run log dir and
 # prints `PASS`, so a docker-less laptop reports PASS for both while neither asserts anything
 # — ~50-65s of coverage, silently absent. (An earlier version of this paragraph called it a
 # "visible SKIP", which was false in the one file where it mattered most.)
+#
+# DIAGNOSTICS ON RED (#7376). Until 2026-08-10 the executor was
+# `bash "{}" >/dev/null 2>&1` and printed only `PASS`/`RED`, so a CI failure carried no
+# diagnostic output whatsoever — characterising the parallel flake took eight executions, and
+# issue #7374 (filed by the health monitor) is 21 `PASS` lines and a count, naming no suite.
+# Each suite's stdout+stderr now goes to its own file under a per-run log dir; on RED the
+# parent prints a bounded excerpt ANCHORED ON THE SUITE'S OWN FAILURE MARKER — not a blind
+# tail, because these suites do not stop at the first failed assertion (a failure at arm 5 of
+# web-host-provisioner-parity-mutation's 43 is hundreds of lines from EOF, so a `tail` shows
+# only trailing passes and destroys the one datum worth having).
 #
 # That is deliberate for local DX, and it is why CI does NOT rely on the skip:
 # infra-validation.yml has a separate `docker info` assertion step that reds the job when the
@@ -118,8 +128,18 @@ cd "$ROOT" || exit 1
 WF="${INFRA_WF:-.github/workflows/infra-validation.yml}"
 [[ -f "$WF" ]] || { echo "FATAL: $WF not found — cannot derive the registered suite list." >&2; exit 2; }
 
+# INFRA_DIR is a TEST SEAM, sibling to INFRA_WF. The derivation regex below used to hardcode
+# the `apps/web-platform/infra/` prefix, which meant a fixture suite could only be registered
+# by physically creating an executable file IN THE LIVE INFRA DIRECTORY — while the other 92
+# suites are reading that directory. That is precisely the collision #7376 is about, so the
+# tests for this file could not be written without reproducing the bug they guard.
+INFRA_DIR="${INFRA_DIR:-apps/web-platform/infra}"
+# Escape it for the ERE below: a fixture root from `mktemp -d` carries `.` characters, which
+# an unescaped interpolation would turn into "any character".
+_DIR_ERE="$(printf '%s' "$INFRA_DIR" | sed 's/[][\.^$*+?(){}|\\/]/\\&/g')"
+
 mapfile -t SUITES < <(
-  grep -oE 'run: bash apps/web-platform/infra/[A-Za-z0-9._-]+\.test\.sh' "$WF" \
+  grep -oE "run: bash ${_DIR_ERE}/[A-Za-z0-9._-]+\.test\.sh" "$WF" \
     | sed 's/run: bash //' | sort -u
 )
 
@@ -147,12 +167,31 @@ mapfile -t SUITES < <(
 # is to run what CI runs, not to police the rest — but the merge will be blocked. Said
 # explicitly because the previous wording ("Advisory, not a failure") was written before that
 # gate existed and would now tell you registration is optional, which is the opposite of true.
+#
+# INFRA_ORPHAN_LIST is a TEST SEAM (#7376) that injects the CANDIDATE list only. The
+# cross-reference below — one `git grep` per basename across workflows/ and scripts/, which is
+# the logic worth testing — still runs for real. It exists because `git ls-files` is
+# index-bound, so the only way to hand this function a candidate it will report was to create
+# a file in the LIVE infra directory and `git add -N` it, mid-run, while the other 92 suites
+# read that same directory. See the T5 comment in run-registered-suites.test.sh.
 report_orphans() {
   local -a orphans
   mapfile -t orphans < <(
     while IFS= read -r f; do
+      [[ -n "$f" ]] || continue
       git grep -qF -- "$(basename "$f")" -- .github/workflows/ scripts/ || printf '%s\n' "$f"
-    done < <(git ls-files 'apps/web-platform/infra/**/*.test.sh' 'apps/web-platform/infra/*.test.sh' | sort -u)
+    done < <(
+      if [[ -n "${INFRA_ORPHAN_LIST:-}" ]]; then
+        sort -u "$INFRA_ORPHAN_LIST"
+      elif [[ "$INFRA_DIR" == /* ]]; then
+        # A fixture root (absolute, from `mktemp -d`) is outside the repo, so `git ls-files`
+        # exits fatal on it. Emit no candidates rather than leaking that error into the run
+        # log, where it reads as a real problem with the orphan scan.
+        :
+      else
+        git ls-files "${INFRA_DIR}/**/*.test.sh" "${INFRA_DIR}/*.test.sh" | sort -u
+      fi
+    )
   )
   (( ${#orphans[@]} > 0 )) || return 0
   echo ""
@@ -172,21 +211,157 @@ fi
 # oversubscribing turns a slow run into a flaky one.
 _NPROC=$(nproc 2>/dev/null || echo 4)
 JOBS="${JOBS:-$(( _NPROC < 6 ? _NPROC : 6 ))}"
+
+# ── The instrument (#7376) ────────────────────────────────────────────────────
+#
+# SENTINEL. Every line the parent emits AFTER xargs returns is prefixed with `| `. That is not
+# cosmetic. 10 registered suites print `[FAIL]` at column 0, and main-health-monitor.yml greps
+# `^RED |^\[FAIL\]` to build a PUBLIC issue body AND to derive its TITLE — so an unprefixed
+# dumped `[FAIL]` during a TIMEOUT would title an issue with a cause the job never measured,
+# the exact AP-021/ADR-166 defect #7371 removed. The prefix also gives the monitor a filter it
+# can apply to its unconditional `tail -30`, keeping the published excerpt byte-identical.
+# Verified: zero of the 93 registered suites emit `^| ` at column 0 (pinned by T8b).
+SENTINEL_PREFIX='| '
+
+# MARKER_ERE — DERIVED FROM THE CORPUS, NEVER INTUITED, and pinned by T8a/T8c.
+# Measured 2026-08-10 over all 93 registered suites (payload-start extraction, following
+# `source`d helpers and embedded python):
+#     ^\[FAIL\]                                    10/93
+#     ^[[:space:]]*(\[FAIL\]|FAIL\b)               85/93   <- misses SETUP-FAIL:
+#     this ERE                                     93/93
+# The shapes are `[FAIL] x`, `FAIL: x`, `FAIL - x`, `  FAIL x`, and `SETUP-FAIL: x`.
+# An earlier draft also carried `^no `, which matches NOTHING — it was taken from the `no()`
+# helper's NAME rather than its output (`printf 'FAIL - %s\n'`).
+MARKER_ERE='^[[:space:]]*(\[FAIL\]|[A-Z][A-Z0-9]*-FAIL|FAIL)([[:space:]:_-]|$)'
+
+# Cap per RED suite. Binds AFTER selection — capping first would reinstate the blind tail this
+# whole mechanism exists to avoid.
+DUMP_CAP=40
+
+# Seconds precision is sufficient: the discriminator it serves compares a suite against its
+# solo baseline (2s vs 89s across the corpus), not against itself.
+#
+# EPOCHSECONDS, not EPOCHREALTIME: it is an integer, so it sidesteps the decimal-separator
+# locale trap entirely. And NO bash-3 fallback — scripts/test-all.sh has one whose behaviour is
+# to resolve elapsed to 0 SILENTLY, which would plant a silent-wrong-value in the only field
+# that can answer "did this suite run far longer than its solo baseline?". This runner already
+# requires bash 4+ (mapfile, above), so fail loud instead.
+[[ -n "${EPOCHSECONDS:-}" ]] || {
+  echo "FATAL: bash 5.0+ required (EPOCHSECONDS is unset) — refusing to record timings as 0." >&2
+  exit 2
+}
+
 LOG="$(mktemp)"
-trap 'rm -f "$LOG"' EXIT
+# Initialise BEFORE the trap references it: `set -u` is active, so an unset var inside the
+# trap would abort the trap itself.
+SOLEUR_SUITE_LOGDIR=""
+trap 'rm -f "${LOG:-}"' EXIT
+SOLEUR_SUITE_LOGDIR="$(mktemp -d -t infra-suites.XXXXXXXX)"
+export SOLEUR_SUITE_LOGDIR
+SOLEUR_RUN_T0="$EPOCHSECONDS"; export SOLEUR_RUN_T0
 
 echo "Running ${#SUITES[@]} registered infra suite(s) with -P ${JOBS}…"
 
+# The child still emits `PASS <path>` / `RED  <path>` FIRST and in the same byte shape — every
+# downstream consumer anchors on it.
+#
+# THE INVARIANT HAS TWO CLAUSES AND BOTH ARE LOAD-BEARING: (i) the summary line stays under
+# PIPE_BUF (4096), and (ii) THE CHILDREN'S STDOUT REMAINS A PIPE. PIPE_BUF atomicity is a
+# property of pipes and does not apply to regular files at all — "tidying" `| tee "$LOG"` into
+# `> "$LOG"` while adding the per-suite file capture below is a natural-looking refactor that
+# gives all four children one shared open file description, block-buffered flushes landing
+# mid-line, and torn PASS/RED lines. scripts/generate-kb-index.sh shipped exactly that defect,
+# in this repo, the same day this change was written, and fabricated ~14 corrupted values into
+# a committed artifact that a validation gate then enforced. See
+# knowledge-base/project/learnings/2026-08-10-pipe-buf-atomicity-does-not-apply-to-the-file-i-was-redirecting-into.md
+#
+# Capture order is `>"$f" 2>&1`, NEVER `2>&1 >"$f"`. 101 emit sites across the corpus write
+# their failure marker to stderr; the inverted form sends stderr to the OLD stdout, loses every
+# marker, and leaves the selector below finding nothing while looking perfectly healthy.
 printf '%s\n' "${SUITES[@]}" \
-  | xargs -P "$JOBS" -I{} bash -c \
-      'if bash "{}" >/dev/null 2>&1; then echo "PASS {}"; else echo "RED  {}"; fi' \
+  | xargs -P "$JOBS" -I{} bash -c '
+      s="{}"; key="${s//\//_}"
+      st="$EPOCHSECONDS"
+      bash "$s" >"$SOLEUR_SUITE_LOGDIR/$key.log" 2>&1; rc=$?
+      printf "%s %s %s\n" "$rc" "$(( EPOCHSECONDS - st ))" "$(( st - SOLEUR_RUN_T0 ))" > "$SOLEUR_SUITE_LOGDIR/$key.meta"
+      if (( rc == 0 )); then echo "PASS $s"; else echo "RED  $s"; fi
+    ' \
   | tee "$LOG"
 
-RED=$(grep -c '^RED' "$LOG" || true)
-PASS=$(grep -c '^PASS' "$LOG" || true)
+# `^RED ` / `^PASS ` WITH the trailing space, matching every downstream consumer. Nothing else
+# reaches $LOG — it is fed only by the child summary lines above — but the two anchors used to
+# disagree, and a log line that merely began "RED" would have been counted.
+RED=$(grep -c '^RED ' "$LOG" || true)
+PASS=$(grep -c '^PASS ' "$LOG" || true)
+
+# ── Dump, from the PARENT, single-threaded, strictly after xargs and strictly before the
+# final summary block (so the monitor's `tail -30` still ends on the count).
+# Never from inside a child: multi-line concurrent writes are not atomic.
+dump_reds() {
+  local s key f m rc el off sel
+  # Sorted, not completion order — a nondeterministic dump order makes two runs of the same
+  # failure set incomparable, which is the whole problem this change exists to fix.
+  while IFS= read -r s; do
+    [[ -n "$s" ]] || continue
+    key="${s//\//_}"; f="$SOLEUR_SUITE_LOGDIR/$key.log"; m="$SOLEUR_SUITE_LOGDIR/$key.meta"
+    rc="?"; el="?"; off="?"
+    [[ -s "$m" ]] && read -r rc el off < "$m"
+    echo ""
+    echo "--- RED: $s (rc=${rc} elapsed=${el}s start_offset=+${off}s) ---"
+    if [[ -s "$f" ]]; then
+      sel="$(grep -E -A3 "$MARKER_ERE" "$f" 2>/dev/null || true)"
+      if [[ -n "$sel" ]]; then
+        echo "[selection: marker-anchored]"
+        printf '%s\n' "$sel" | head -n "$DUMP_CAP"
+      else
+        echo "[selection: fallback tail — no line matched the failure-marker ERE]"
+        tail -n "$DUMP_CAP" "$f"
+      fi
+    else
+      echo "[selection: none — the suite produced no output at all]"
+    fi
+  done < <(grep '^RED ' "$LOG" | sed 's/^RED  *//' | sort)
+}
+
+# ── Accounting. A child whose wrapping `bash -c` is KILLED (the OOM killer under -P 4) emits
+# NEITHER `PASS` nor `RED`. Before this assertion existed RED was then 0, the runner exited 0,
+# and the summary printed e.g. "91 passed, 0 failed (of 93)" — two numbers visibly disagreeing
+# with nothing asserting they must match. A suite could vanish and the gate went green. That is
+# a pre-existing false green, and it is the failure mode most likely to have masked evidence
+# for the capacity hypothesis all along.
+UNACCOUNTED=()
+if (( PASS + RED != ${#SUITES[@]} )); then
+  for s in "${SUITES[@]}"; do
+    grep -qE "^(PASS|RED) +$(printf '%s' "$s" | sed 's/[][\.^$*+?(){}|\\/]/\\&/g')\$" "$LOG" \
+      || UNACCOUNTED+=("$s")
+  done
+fi
+
+report_missing() {
+  echo ""
+  echo "ACCOUNTING FAILURE: ${#SUITES[@]} suites were dispatched but only $((PASS + RED)) reported."
+  echo "The following suite(s) emitted neither PASS nor RED — their wrapping shell died"
+  echo "(OOM kill, timeout, or a crash) before it could report:"
+  printf '  %s\n' "${UNACCOUNTED[@]}"
+  echo "Treat this as a FAILED run: the suites below are unmeasured, not passing."
+}
+
+{
+  dump_reds
+  (( ${#UNACCOUNTED[@]} > 0 )) && report_missing
+  if (( RED > 0 || ${#UNACCOUNTED[@]} > 0 )); then
+    echo ""
+    echo "retained per-suite log dir: ${SOLEUR_SUITE_LOGDIR}"
+    echo "(local repro only — a hosted runner is destroyed with its filesystem)"
+  fi
+} | sed "s/^/${SENTINEL_PREFIX}/"
+
+if (( RED == 0 && ${#UNACCOUNTED[@]} == 0 )); then
+  rm -rf "$SOLEUR_SUITE_LOGDIR"
+fi
 
 report_orphans
 
 echo ""
 echo "=== registered infra suites: ${PASS} passed, ${RED} failed (of ${#SUITES[@]}) ==="
-(( RED == 0 ))
+(( RED == 0 && ${#UNACCOUNTED[@]} == 0 ))
