@@ -2,6 +2,34 @@
 
 Select how comprehensive you want the issue to be, simpler is mostly better.
 
+## Plan Frontmatter (all detail levels)
+
+The frontmatter block is identical across the three templates below; only the body differs. It is
+written in **two stages**, because the plan file now exists before the research that derives most
+of its metadata (#7418, ADR-174).
+
+**Stage 1 — the skeleton, written by `plan` Phase 0.7 before the research fan-out.** Only what
+Phase 0.6 already knows:
+
+| Key | Source |
+|---|---|
+| `title:` | the issue title Phase 0.6 fetched, or the feature description on the freeform arm |
+| `date:` | today, UTC |
+| `slug:` | derived from the title |
+| `branch:` | `git branch --show-current` — this is what the recovery selector matches on |
+| `issue:` | the cited issue — **provisional**, planning may re-target it |
+| `pipeline_resume:` | the machine-owned resume cursor |
+| `resume_attempts:` | `0` |
+
+**Stage 2 — finalization.** `issue:` and `closes:` are rewritten unconditionally, the derived
+fields are added, and **`pipeline_resume:` and `resume_attempts:` are deleted.** Presence of the
+cursor is the "unfinished" boolean, so a finished plan — which is what these templates describe —
+carries neither. That is also why a merged or archived plan can never be misread as in-flight.
+
+Do **not** hand-add `pipeline_resume:` to a plan, and do not repurpose the free-text `status:`
+field for it: `status:` is a human draft-state field already carrying dozens of distinct values
+across the plan corpus, including ones that read as pipeline states.
+
 ## MINIMAL (Quick Issue)
 
 **Best for:** Simple bugs, small improvements, clear features
@@ -19,6 +47,11 @@ Select how comprehensive you want the issue to be, simpler is mostly better.
 title: [Issue Title]
 type: [feat|fix|refactor]
 date: YYYY-MM-DD
+slug: [derived-from-title]
+branch: [feat-<name>]
+issue: [N]
+closes: [N]
+lane: [single-domain|cross-domain|procedural]
 ---
 
 # [Issue Title]
@@ -149,6 +182,11 @@ end
 title: [Issue Title]
 type: [feat|fix|refactor]
 date: YYYY-MM-DD
+slug: [derived-from-title]
+branch: [feat-<name>]
+issue: [N]
+closes: [N]
+lane: [single-domain|cross-domain|procedural]
 ---
 
 # [Issue Title]
@@ -303,6 +341,11 @@ If the feature touches external services, include deterministic verification com
 title: [Issue Title]
 type: [feat|fix|refactor]
 date: YYYY-MM-DD
+slug: [derived-from-title]
+branch: [feat-<name>]
+issue: [N]
+closes: [N]
+lane: [single-domain|cross-domain|procedural]
 ---
 
 # [Issue Title]

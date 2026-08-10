@@ -40,6 +40,52 @@ Do not proceed until a valid plan file path is provided.
 First, read and parse the plan to identify each major section that can be enhanced with research.
 </thinking>
 
+**Claim the resume cursor on entry (Always).** This skill runs a per-section research fan-out and
+a full review-agent panel, so a stall here is as expensive as one in `plan`. `plan` deletes its
+own cursor at finalization; set this skill's own value on entry and remove it on exit, so an
+interrupted deepen pass is recoverable and a finished one leaves nothing behind (#7418, ADR-174):
+
+```bash
+# Frontmatter-bounded, always. The leading-`---` guard is load-bearing: the sed range matches the
+# FIRST `---` anywhere in the file, so a document with no leading frontmatter but an embedded
+# fenced YAML example would have that example mis-parsed as metadata (#4724).
+[[ -f "$PLAN" && "$(head -n 1 "$PLAN")" == "---" ]] || CURSOR=""
+CURSOR=$(sed -n '/^---$/,/^---$/{ /^pipeline_resume:/{ s/.*: *//; p; q; } }' "$PLAN")
+ATTEMPTS=$(sed -n '/^---$/,/^---$/{ /^resume_attempts:/{ s/.*: *//; p; q; } }' "$PLAN")
+```
+
+- **Cursor absent** — a normal entry. Add `pipeline_resume: deepening` and `resume_attempts: 0` to
+  the plan's frontmatter, then proceed.
+- **Cursor already `deepening`** — a resume after a stall. Increment `resume_attempts`, keep the
+  enhancements already on disk, and pick up from the first section not yet enhanced. The cap is
+  **2**; at the cap, delete the cursor, record a one-line reason in the plan body, and stop rather
+  than re-spending the panel indefinitely (`hr-autonomous-loop-skill-api-budget-disclosure`).
+- **Cursor holds any other value** — `plan` did not finish. Do not deepen a plan that is still
+  being written; return and let the caller re-invoke `plan`.
+
+**On exit, delete `pipeline_resume:` and `resume_attempts:`.** Presence is the "unfinished"
+boolean, so the finished artifact must carry neither. This applies to every terminal outcome,
+including the halt gates in §4.5–4.10 — see the halt rule below.
+
+<!-- deepen-plan-halt-clears-cursor:start -->
+**Every HALT in this skill is a terminal, correct outcome — it must delete the cursor.** The halt
+gates below (§4.5, §4.55, §4.6, §4.7, §4.8, §4.9, §4.10) are *designed refusals*: the plan is
+missing something the operator must supply, and re-running changes nothing. A halt that left the
+cursor set would be read by the caller as an interrupted run and replayed — deterministically, on
+the first attempt, with no transient failure anywhere in the loop. The recovery action for a crash
+is the worst possible action for a refusal.
+
+So on **any** HALT: delete `pipeline_resume:` and `resume_attempts:` from the frontmatter, and
+record the halt reason in the plan body so the next reader sees why the pass stopped. Then emit the
+gate's own message unchanged.
+<!-- deepen-plan-halt-clears-cursor:end -->
+
+**Scope note — the Workflow port.** `workflows/deepen-plan.workflow.js` can write its output to a
+separate `-deepened` file rather than in place. The cursor semantics above are scoped to **this
+prose path**, which mutates the plan the caller holds. If the port is used, it must clear the
+cursor on the file the caller holds — otherwise that file keeps a `deepening` cursor forever while
+the enhanced content lives somewhere else, and every future read of it resolves to Resume.
+
 **Read the plan file and extract:**
 
 - [ ] Overview/Problem Statement
