@@ -123,6 +123,17 @@ on:
       # `-target=` list that could leave a monitor declared-but-never-applied is
       # gone), so the risk moved from a dropped allow-list line to a weakened
       # gate. Editing that workflow must still be able to trip this guard.
+      # (#7278) registry-zot-inventory-workflow-guard.test.sh asserts the #6425 self-trigger
+      # guard on the inventory lever, the label+Bot authority boundary on its dispatch route,
+      # and the fail-closed `skip-docker-login` gate in the shared bridge composite. None of
+      # those three files is under apps/*/infra/**, so without these entries a PR editing ONLY
+      # one of them skips the suite whose entire job is protecting it — the same defect class
+      # the #6454, #7025 and #7203 comments above describe. The composite entry is the sharpest
+      # of the three: inverting its login gate to `== 'false'` would silently strip the push
+      # credential from all four pre-existing callers, and that file is touched by no glob here.
+      - ".github/workflows/registry-zot-inventory.yml"
+      - ".github/workflows/registry-zot-inventory-dispatch.yml"
+      - ".github/actions/cf-tunnel-registry-bridge/action.yml"
       - ".github/workflows/scheduled-supabase-advisor-scan.yml"
       - ".github/workflows/apply-sentry-infra.yml"
       - "scripts/supabase-advisor-scan.sh"
@@ -583,6 +594,29 @@ jobs:
       # in this repo is `*-mutation.test.sh` AND registered. An unrun battery is a claim.
       - name: Run zot image pin mutation battery (#7282)
         run: bash apps/web-platform/infra/zot-image-staleness-mutation.test.sh
+
+      # LOAD-BEARING registration (this job lists each infra test explicitly — no glob, so an
+      # unregistered suite is ZERO coverage, silently and greenly). (#7278) Guards three files
+      # that are NOT under apps/*/infra/**, which is why they were added to this workflow's
+      # pull_request.paths in the same change — a suite that cannot fire on an edit to its own
+      # subject gates nothing:
+      #   - registry-zot-inventory.yml            the #6425 job-level dispatch guard, over ALL
+      #                                           jobs rather than one pinned key, with a
+      #                                           mutation arm that requires the probe to go RED
+      #   - registry-zot-inventory-dispatch.yml   the label AND issue.user.type == 'Bot'
+      #                                           authority boundary (a label alone needs only
+      #                                           Triage)
+      #   - cf-tunnel-registry-bridge/action.yml  the fail-closed `!= 'true'` login gate
+      # Everything is asserted against PARSED YAML, including this very registration and the
+      # paths entries above — a grep for either would pass on a commented-out line, i.e. the
+      # suite would certify its own de-registration. Needs only python3 + pyyaml, both present
+      # on ubuntu-24.04.
+      #
+      # Nothing may sit between `run: bash` and the path (see the two invariants recorded on
+      # the #7068 block below): run-registered-suites.sh derives its execute set from a literal
+      # single-line match, and the suite asserts that form of itself.
+      - name: Run registry zot-inventory workflow guard (#7278 #6425 guard + label/Bot boundary + fail-closed skip-docker-login)
+        run: bash apps/web-platform/infra/registry-zot-inventory-workflow-guard.test.sh
 
 
       - name: Run inngest config-refresh bundle packager guard (#6780 ADR-135 HARD-2 + fail-closed)

@@ -1242,7 +1242,13 @@ SOAK_HIT=$(grep -niE "$SOAK_RE" "$COMBINED" | head -5 || true)
 If `$SOAK_HIT` is empty → **SKIP** silently (no soak-gated close criterion). If a soak signal fires, extract every tracker ref and verify enrollment:
 
 ```bash
-REFS=$(grep -oiE '(Ref|Tracks|Closes|Fixes) #[0-9]+' "$COMBINED" | grep -oE '[0-9]+' | sort -u)
+# `Ref` / `Tracks` ONLY — NOT `Closes` / `Fixes`. An issue the PR CLOSES is the work item, not
+# a soak tracker: it stops existing at merge, so demanding sweeper enrollment for it is both
+# unsatisfiable and meaningless (the sweeper skips non-OPEN issues). Including the closing
+# keywords made every PR that closes an issue AND declares a soak unshippable. **Why:** #7278 /
+# PR #7343 — the gate flagged the PR's own `Closes` target while the two genuine soak trackers
+# beside it (#7339, #7340) each carried label + directive + committed probe.
+REFS=$(grep -oiE '(Ref|Tracks) #[0-9]+' "$COMBINED" | grep -oE '[0-9]+' | sort -u)
 UNENROLLED=()
 for n in $REFS; do
   state=$(gh issue view "$n" --json state --jq .state 2>/dev/null || echo "")
