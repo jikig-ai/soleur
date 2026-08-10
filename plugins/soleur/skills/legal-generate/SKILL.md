@@ -99,7 +99,7 @@ Report: "Draft written to `<path>`. This document requires professional legal re
 - **But the mirror is NOT out of scope for the corpus.** `docs/legal/<doc>.md` is the canonical
   record; `plugins/soleur/docs/pages/legal/<doc>.md` is the surface users actually read at
   soleur.ai/legal/. Writing canonical only leaves the published site unchanged AND trips
-  `scripts/lint-legal-mirror-drift-baseline.sh`, which exits 2 on a document that exists on
+  [lint-legal-mirror-drift-baseline.sh](../../../../scripts/lint-legal-mirror-drift-baseline.sh), which exits 2 on a document that exists on
   exactly one surface. After generating, create the mirror in the same commit.
 - Five CI gates ride `docs/legal/**` (#7387). Reproduce locally before pushing:
   `bash scripts/lint-legal-scope-block-placement.sh --base origin/main` (added scope blocks:

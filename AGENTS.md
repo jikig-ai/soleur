@@ -82,7 +82,6 @@ Pointer index; bodies in `AGENTS.rules.md`, injected in full by the SessionStart
 - [id: wg-pm-class-followthrough-for-operator-dogfood]
 - [id: wg-record-recurring-vendor-expense-before-ready]
 - [id: wg-ui-feature-requires-pen-wireframe]
-- [id: wg-legal-corpus-edit-runs-both-surfaces]
 
 ## Code Quality
 

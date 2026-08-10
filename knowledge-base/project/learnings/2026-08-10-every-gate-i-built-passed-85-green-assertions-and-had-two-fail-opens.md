@@ -110,3 +110,52 @@ it?*
 - `2026-07-16-a-mutation-battery-only-covers-what-you-mutate.md`
 - `2026-08-03-my-battery-measured-one-axis-and-every-fixture-i-checked-my-work-with-was-broken.md`
 - `2026-07-21-the-guard-i-shipped-could-never-have-fired-and-my-fake-certified-it.md`
+
+## Session Errors
+
+**1. A one-line lint fix referenced a variable from the sibling gate.** Fixing shellcheck
+SC2010 in gate 2, I reached for `canon_files` — gate **1**'s array. Under `set -u` that aborted
+the gate and took its suite from 25/0 to 12 passed / 13 failed.
+**Prevention:** re-read the surrounding file before applying a "trivial" cleanup; the two gates
+were written back-to-back and share structure, which is exactly what makes cross-file variable
+names look plausible. Caught by SC2154 plus the suite's fail-closed cases — the property the
+gate exists to provide, paying out against its own author.
+
+**2. A Python edit block asserts before writing, so a partial re-apply silently drops the rest.**
+The block is atomic (good: no half-applied state), but when it raised on sub #4, subs #1–#3 were
+also discarded — and my follow-up block re-applied only some of them. The empty-normalisation
+floor vanished that way and shipped absent.
+**Prevention:** after a failed edit block, re-apply the WHOLE block, never a remembered subset.
+The gap surfaced only because the corresponding mutation row reported "did not land" rather than
+"survived" — a battery that distinguishes those two states is what made it visible.
+
+**3. `str.replace` with no match is a silent no-op.** A `tasks.md` edit targeted text that had
+already changed; the write succeeded and changed nothing.
+**Prevention:** never use bare `str.replace` for a targeted edit. Assert the occurrence count
+first (`n = s.count(old); assert n == 1`). This is the same family as #2 and the reason both
+went unnoticed for several steps.
+
+**4. A `sed` delimiter collided with the pattern's own alternation.** `s|^(docs/legal|plugins/…)|`
+terminates the pattern at the first `|` inside the group. `sed` reported `unknown option to 's'`
+and the gate exited 1 on every run.
+**Prevention:** when a pattern contains `|`, pick a delimiter that cannot appear in it (`#`, `@`).
+
+**5. I supplied a false premise to the review panel, and it propagated.** My spawn prompt told
+six agents that the shared normaliser computes `TC_DOCUMENT_SHA`, the value written into the WORM
+consent ledger and CLA Object-Lock evidence. It does not — that is `sha256sum` over the RAW file;
+the normalisers feed only the body-equivalence comparison. Two agents corrected it independently;
+had they not, the PR would have shipped an inflated blast-radius claim in its own commit message.
+**Prevention:** a review prompt is not neutral framing — every premise in it is inherited by
+every agent and comes back wearing their authority. State premises as questions ("what does this
+feed?") rather than as facts, and re-derive any premise the findings then build on.
+
+**6. `MIN_ASSERTIONS` was calibrated against the suite it replaced.** Set to 30 for a suite that
+now runs 20 assertions, so the floor failed a green suite.
+**Prevention:** derive a floor from a green run of the CURRENT suite, never from its predecessor.
+
+**7. Environment, no action.** GitHub SSH (port 22 and the `ssh.github.com:443` fallback) began
+timing out mid-session while HTTPS stayed healthy; worked around with a one-shot
+`credential.helper` for the push rather than mutating the operator's git config. Separately, ~29
+probe repositories were left under `/tmp` — mine, from interactive verification, not the suites
+(which pin `TMPDIR=/var/tmp` and leak zero). The delete guard blocks `rm -rf` on `.git`-bearing
+directories, so they are left for the tmpfs reaper.
