@@ -140,7 +140,12 @@ fi
 #
 # **Why:** #7278 / PR #7343 — flagged #7278 (the PR's own `Closes` target) while #7339 and
 # #7340, the actual soak trackers, carried label + directive + committed probe.
-REFS=$(grep -oiE '(Ref|Tracks)[[:space:]]+#[0-9]+' "$CORPUS" | grep -oE '[0-9]+' | sort -u)
+# `|| true` because ZERO refs is a NORMAL answer, not an error: a PR that declares a soak but
+# cites no tracker must reach the loop below (which then finds nothing to check) rather than
+# die here. grep exits 1 on no-match, and under `set -e` that would abort the hook mid-gate —
+# a gate that crashes is indistinguishable from one that passed. Caught by
+# scripts/lint-shell-capture-exit.py once the edit above moved this line off its baselined entry.
+REFS=$(grep -oiE '(Ref|Tracks)[[:space:]]+#[0-9]+' "$CORPUS" | grep -oE '[0-9]+' | sort -u || true)
 UNENROLLED=()
 for n in $REFS; do
   state=$(gh issue view "$n" --json state --jq .state 2>/dev/null || echo "")
