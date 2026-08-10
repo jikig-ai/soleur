@@ -167,88 +167,11 @@ After the subagent returns, **verify the subagent stayed in scope**: run `git di
 
 After the subagent returns, check for a `## Session Summary` heading in the output.
 
-<!-- plan-artifact-recovery:start -->
-#### Selecting the plan artifact (both paths)
-
-`plan` writes its file before the research fan-out and carries a `pipeline_resume:` frontmatter
-key while the run is unfinished (#7418, ADR-174). Both paths below select and assess the artifact
-the same way, so select it once, here.
-
-**Selector.** Prefer the frontmatter `branch:` match over a date glob: a run that starts at 23:5x
-UTC and recovers after midnight misses its own file under a same-day glob, and abandoned artifacts
-from earlier same-day runs match it spuriously.
-
-```bash
-BR=$(git branch --show-current)
-# Bounded and non-recursive: plans/*.md only, so plans/archive/ (hundreds of files, many with a
-# branch: key) is excluded by construction. -m1 stops at the first hit per file.
-CAND=$(grep -l -m1 "^branch: ${BR}\$" knowledge-base/project/plans/*.md 2>/dev/null)
-```
-
-**Tiebreak, mandatory.** Duplicate `branch:` values already exist on `main`, so this can return
-more than one path: take the highest date prefix, then the newest mtime. If the selector returns
-nothing, fall back to the same-day glob
-(`ls "knowledge-base/project/plans/$(date -u +%Y-%m-%d)-"*.md`), then to "no artifact".
-
-**Read the cursor frontmatter-bounded.** The leading-`---` guard is load-bearing: the sed range
-matches the FIRST `---` anywhere in the file, so a document with no leading frontmatter but an
-embedded fenced YAML example would have that example mis-parsed as metadata (#4724).
-
-```bash
-CURSOR=""
-if [[ -f "$PLAN" && "$(head -n 1 "$PLAN")" == "---" ]]; then
-  CURSOR=$(sed -n '/^---$/,/^---$/{ /^pipeline_resume:/{ s/.*: *//; p; q; } }' "$PLAN")
-fi
-```
-
-Never use a line-anchored `awk`/`grep` scan for this key: any plan that *documents* the mechanism
-contains the key in its body, and the unbounded form reads the documentation as state.
-
-**Verdict table — total, and conjunctive on both paths.** "Cursor absent ⇒ complete" is a
-*negative* assertion, and absence has causes other than completion (an interrupted write, a
-clobber, a revert). So every arm is ANDed with the positive section assertion this skill already
-used: does the file have **frontmatter + Overview + Acceptance Criteria** sections?
-
-| `pipeline_resume` | Sections present | Verdict |
-|---|---|---|
-| absent | yes | **Complete** — the plan is finished |
-| absent | no | **Undetermined** — re-run planning from scratch |
-| `deepening` | no | **Resume** — re-invoke `soleur:deepen-plan` on this file |
-| `deepening` | yes | **Undetermined** — a leaked cursor, not an in-flight one |
-| any other recognized token | no | **Resume** — re-invoke `soleur:plan` on this file |
-| any other recognized token | yes | **Undetermined** |
-| present but unrecognized | either | **Undetermined** |
-
-`deepening` is the only cursor value this skill needs to recognize by name — it selects *which*
-skill to re-invoke. Every other token is opaque here; `plan` owns its own phase vocabulary, and
-duplicating it would couple two files through nothing but a test.
-
-**The Undetermined arm runs at most once.** A full re-run is the recovery for an ambiguous
-artifact, not a retry loop. If planning comes back Undetermined a *second* time for the same
-branch, stop: do not re-invoke planning again, and file an `action-required` issue naming the plan
-path, both verdicts and the branch. A deterministic re-failure is not a transient one, and looping
-on it would multiply the operator's spend with no re-disclosure
-(`hr-autonomous-loop-skill-api-budget-disclosure`). `plan` and `deepen-plan` cap their own
-in-phase retries at 2 with a strict-advance rule before ever reaching this point, so arriving here
-twice means the artifact is unusable rather than incomplete.
-
-Record the outcome in the `## Plan Phase` block of session-state.md, on every path:
-
-```
-Recovery verdict: <resume|complete|undetermined|legacy> (cursor=<value-or-none>, attempts=<n>, selector=<branch|date-glob>)
-```
-
-Without that line a mis-resume is indistinguishable from a normal run and the operator's only
-symptom is a double-billed pipeline. `legacy` covers a plan predating this mechanism: no cursor,
-all sections present — Complete, and its free-text `status:` field is never consulted.
-<!-- plan-artifact-recovery:end -->
-
 **If present (success):**
 
 1. Extract the plan file path from `### Plan File`
-2. **Assess it with the same conjunct.** A `## Session Summary` proves the subagent *returned*, not that the plan is finished — a subagent can emit its summary over a plan whose cursor is still set. Run the verdict table above against the extracted path. On **Complete**, continue. On **Resume**, re-invoke the named skill on this file, then re-assess and continue to step 3. On **Undetermined**, re-run planning from scratch, then continue to step 3. Skipping this is what would let a stub plan reach `/work` and produce a PR against the operator's repository implementing nothing they asked for.
-3. Detect the feature branch: run `git branch --show-current`. Use the **full, exact** branch name (including workflow prefixes like `feat-one-shot-`, `feat-fix-`) — do NOT abbreviate. The plan subagent already wrote `tasks.md` to `knowledge-base/project/specs/<exact-branch-name>/`, so session-state.md must go in the same directory to avoid sibling-dir collisions.
-4. Write the parsed content to `knowledge-base/project/specs/<exact-branch-name>/session-state.md` (create if needed). The `- Status:` line below describes **this pipeline's plan phase**, not the plan document's own frontmatter — it is unrelated to the cursor, and it must agree with the verdict recorded beside it:
+2. Detect the feature branch: run `git branch --show-current`. Use the **full, exact** branch name (including workflow prefixes like `feat-one-shot-`, `feat-fix-`) — do NOT abbreviate. The plan subagent already wrote `tasks.md` to `knowledge-base/project/specs/<exact-branch-name>/`, so session-state.md must go in the same directory to avoid sibling-dir collisions.
+3. Write the parsed content to `knowledge-base/project/specs/<exact-branch-name>/session-state.md` (create if needed):
 
 ```markdown
 # Session State
@@ -256,7 +179,6 @@ all sections present — Complete, and its free-text `status:` field is never co
 ## Plan Phase
 - Plan file: <path from subagent>
 - Status: complete
-- Recovery verdict: complete (cursor=none, attempts=0, selector=branch)
 
 ### Errors
 <errors from subagent output>
@@ -268,19 +190,62 @@ all sections present — Complete, and its free-text `status:` field is never co
 <components from subagent output>
 ```
 
-5. Continue to step 3 using the extracted plan file path.
+4. Continue to step 3 using the extracted plan file path.
 
 **If absent or subagent failed (fallback):**
 
-1. **Partial-artifact recovery check.** Before re-running plan inline, select the artifact with the selector above and run the verdict table against it. This is the branch #7418 upgraded from all-or-nothing to phase granularity: the crashed subagent's research may already be on disk. See `knowledge-base/project/learnings/2026-05-15-subagent-crash-recovery-via-on-disk-artifacts.md`.
-   - **Complete** — the subagent finished planning and only the Session Summary emission failed. Load the file and continue from `/soleur:plan-review`. Note in session-state.md: `Status: recovered from partial-artifact (subagent crashed mid-Session-Summary; plan body was on disk).`
-   - **Resume** — re-invoke the skill the verdict names (`soleur:plan`, or `soleur:deepen-plan` for `deepening`) on this file. It re-runs its own cheap gates and picks up from the cursor, so the research fan-out already paid for is not re-spent. Note `Status: resumed from cursor`.
-   - **Undetermined**, or no artifact at all — fall through to step 3.
-2. Write the outcome to session-state.md: `## Plan Phase` with the matching `- Status:` line and the `Recovery verdict:` line.
-3. If the verdict was Undetermined or no artifact was found, use the **Skill tool**: `skill: soleur:plan`, args: "$ARGUMENTS" and then `skill: soleur:deepen-plan` inline (no compaction benefit, but pipeline continues).
+<!-- plan-artifact-recovery:start -->
+1. **Partial-artifact recovery check.** `plan` writes its file before the research fan-out and
+   persists `## Research Insights` as soon as that fan-out returns (#7418, ADR-175), so a crashed
+   subagent has usually left recoverable work on disk. Select this branch's plan the same way `plan`
+   does — frontmatter `branch:`, read bounded to the leading `---` block, non-recursive over
+   `plans/*.md` so `plans/archive/` is excluded by construction:
+
+   ```bash
+   BR=$(git branch --show-current)
+   PLANS_DIR="$(git rev-parse --show-toplevel)/knowledge-base/project/plans"
+   PLAN=""
+   for f in "$PLANS_DIR"/*.md; do
+     [[ -e "$f" ]] || continue
+     [[ "$(head -n 1 "$f")" == "---" ]] || continue
+     v=$(awk 'NR==1{next} /^---[[:space:]]*$/{exit}
+              /^branch:/{ sub(/^branch:[[:space:]]*/,""); gsub(/^"|"$/,""); print; exit }' "$f")
+     [[ "$v" == "$BR" ]] && PLAN="$f"
+   done
+   # Fall back to the same-day glob ONLY if the branch match found nothing.
+   [[ -n "$PLAN" ]] || PLAN=$(ls "$PLANS_DIR/$(date -u +%Y-%m-%d)-"*.md 2>/dev/null | tail -n1)
+   ```
+
+   Then branch on **one** predicate — does the file contain `## Acceptance Criteria`?
+
+   - **Present** — the subagent finished planning and only the Session Summary emission failed.
+     Load it and continue from `/soleur:plan-review`. Note in session-state.md:
+     `Status: recovered from partial-artifact (subagent crashed mid-Session-Summary; plan body was on disk).`
+   - **Absent (or no file at all)** — planning did not finish. Re-invoke `skill: soleur:plan` with
+     `args: "$ARGUMENTS"`, then `skill: soleur:deepen-plan` inline. `plan` finds its own checkpoint
+     via the same selector and continues in place, so the research already on disk is reused rather
+     than re-spent.
+
+   `## Acceptance Criteria` is the predicate because it is the one heading present in all three
+   detail-level templates and it lands last, after every expensive phase — while the skeleton writes
+   `## Overview` and nothing else, so a stub can never carry it. Do **not** add `## Overview` as a
+   conjunct: the MINIMAL template has none, so a finished minimal plan would read as incomplete.
+   See `knowledge-base/project/learnings/2026-05-15-subagent-crash-recovery-via-on-disk-artifacts.md`.
+
+2. Write the outcome to session-state.md under `## Plan Phase`, including:
+   `Plan artifact: <complete|recovered|action-required> (selector=<branch|date-glob|none>)`
+
+3. **The recovery runs at most once.** If `soleur:plan` returns and the selected artifact *still*
+   has no `## Acceptance Criteria`, do **not** re-invoke planning again: stop and file an
+   `action-required` issue naming the plan path and the branch. A deterministic re-failure is not a
+   transient one, and looping on it would multiply the operator's spend with no re-disclosure
+   (`hr-autonomous-loop-skill-api-budget-disclosure`).
+
 4. Continue to step 3.
 
-**Every arm above terminates in "continue to step 3."** No arm ends at a skill invocation — a re-invocation is a step *within* an arm, never the arm's end. Returning control after re-invoking `plan` would strand the pipeline exactly where the CONTINUATION GATES below forbid.
+**Every arm above terminates in "continue to step 3"** — except the step-3 escalation, which is
+terminal and files the issue instead. A re-invocation is a step *within* an arm, never an arm's end.
+<!-- plan-artifact-recovery:end -->
 
 **Steps 3-8: Implementation, Review, and Ship**
 

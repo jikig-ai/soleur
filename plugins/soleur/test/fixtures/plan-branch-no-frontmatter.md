@@ -6,8 +6,7 @@ range onto the first `---` it finds anywhere below and mis-parse this example as
 
 ```yaml
 ---
-pipeline_resume: research
-resume_attempts: 0
+branch: fenced-example-branch
 ---
 ```
 

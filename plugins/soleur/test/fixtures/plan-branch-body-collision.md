@@ -17,15 +17,12 @@ Any document that explains a frontmatter key will contain that key in its body.
 The two lines below sit at **column 0** and must be invisible to a
 frontmatter-bounded reader:
 
-pipeline_resume: research
 branch: fixture-body-branch
 
 They also appear inside a fenced block, which is how the original defect was
 introduced:
 
 ```yaml
-pipeline_resume: drafting
-resume_attempts: 1
 branch: fixture-fenced-branch
 ```
 
