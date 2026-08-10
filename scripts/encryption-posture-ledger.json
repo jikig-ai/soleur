@@ -385,6 +385,32 @@
         "does_not_defend": "a leaked Better Stack token",
         "disclosed_as": "not-publicly-claimed"
       }
+    },
+    {
+      "connection": "GitHub Actions runner -> Better Stack Logs INGEST (s2457081.eu-fsn-3.betterstackdata.com)",
+      "enforced_at": "scripts/zot-inventory.sh (the SOLEUR_ZOT_INVENTORY POST); URL pinned at apps/web-platform/infra/zot-registry.tf local.betterstack_logs_ingest_url",
+      "in_transit": {
+        "tls": "https / TLS 1.2+",
+        "cert_verification": "on",
+        "does_not_defend": "a leaked BETTERSTACK_LOGS_TOKEN (ingest-only: it can write log lines, it cannot read them); TLS protects the channel, not the credential. Also does not defend against a CI POST bypassing Vector's VRL PII scrub - every host emitter reaches this source through a Vector agent that redacts and a runner curl does not - mitigated by construction (the marker carries only counts, sizes, our own OCI repo names and digests) and asserted by a field allow-list test derived from the construction site.",
+        "disclosed_as": "not-publicly-claimed"
+      }
+    },
+    {
+      "connection": "GitHub Actions runner -> zot registry over the CF Tunnel (registry.<base> -> tcp://10.0.1.30:5000)",
+      "enforced_at": ".github/actions/cf-tunnel-registry-bridge/action.yml (cloudflared access tcp); apps/web-platform/infra/tunnel.tf registry ingress_rule",
+      "in_transit": {
+        "tls": "runner<->CF edge and CF edge<->origin connector: TLS 1.2+ (raw TCP over WebSocket). origin connector<->10.0.1.30:5000: PLAIN HTTP on the Hetzner private network, by design.",
+        "cert_verification": "off",
+        "does_not_defend": "a passive on-net attacker on 10.0.1.0/24 could read image bytes on the final leg; integrity comes from cosign digest-pinning, not TLS. Also does not defend a leaked CF Access service token or a leaked zot pull credential.",
+        "disclosed_as": "not-publicly-claimed",
+        "exception": {
+          "justification": "the same private-network-only exception already recorded for 'web hosts -> zot registry' - the final leg is plain HTTP inside the Hetzner private network; image bytes are our own OCI layers and integrity is cosign-digest-pinned. Folded in here rather than deferred because #7278 adds the fifth CI caller to this leg.",
+          "tracking_issue": "#6897",
+          "reevaluate_when": "the registry link gains TLS, or the store is exposed beyond the private network",
+          "expires_on": "2026-10-22"
+        }
+      }
     }
   ]
 }

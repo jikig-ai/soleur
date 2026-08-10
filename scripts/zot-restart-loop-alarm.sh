@@ -465,8 +465,17 @@ if [[ "$has_137" == true || "$climb_fire" == true || "$max_oom5m" -gt 0 ]]; then
     CAUSE="kernel OOM-killer fired in-window — oom_kills_5m=${max_oom5m}"
   else
     # Pure condition-B climb, no OOM signal → non-OOM crash-loop; surface the redacted log tail.
+    #
+    # NEXT ACTION, not a cause (#7278/ADR-172). This arm is reached only when the OOM decode did
+    # NOT fire, i.e. the loop is non-OOM, and the most common non-OOM shape measured on this host
+    # is a full store volume. This alarm reads `SOLEUR_ZOT_DISK`, which carries `pcent` but NO
+    # per-path breakdown, so it cannot say WHAT is consuming the volume and does not claim to.
+    # `registry-zot-inventory.yml` is the read-only lever that measures it; naming a remedy is not
+    # naming an unmeasured cause, so this stays within ADR-166 / lint-diagnosis-claims.sh.
+    # Deliberately scoped to THIS arm: the OOM arms above have a different failure class and a
+    # different remedy, and the NIC arms are a different stream entirely.
     last_err="$(printf '%s\n' "$MAIN" | grep -F "boot_id=$NEWEST_BOOT" | tail -1 | sed -n 's/.* zot_last_err=//p' | sed 's/"}$//')"
-    CAUSE="non-OOM crash-loop — zot_restarts climbed across >= ${CLIMB_N} consecutive events; zot_last_err tail: ${last_err:-none}"
+    CAUSE="non-OOM crash-loop — zot_restarts climbed across >= ${CLIMB_N} consecutive events; zot_last_err tail: ${last_err:-none}. NEXT (read-only, no SSH, no host change): dispatch registry-zot-inventory.yml to measure what is actually on the store volume before reaching for a destroy — this alarm's own SOLEUR_ZOT_DISK source has no per-path breakdown"
   fi
   DETAIL="newest boot_id=${NEWEST_BOOT}: 137=${has_137} climb_run=${max_run}(>=${CLIMB_N}?${climb_fire}) oom_kills_5m_peak=${max_oom5m}"
   emit_and_exit 1

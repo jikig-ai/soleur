@@ -70,8 +70,25 @@ describe("likec4 CLI / client-renderer version parity", () => {
     ).toBeTruthy();
     expect(ciMatch![1]).toBe(cliVersion);
 
+    // 5th surface (#7307): main-health-monitor.yml installs likec4 so that
+    // c4-model-freshness.test.sh actually RUNS there — without the CLI that suite
+    // self-skips, and a self-skip prints as PASS. Unregistered, a bump to the four
+    // sites above would regenerate model.likec4.json under a new schema while the
+    // monitor still rendered with the old one, and the monitor would then file a
+    // priority/p1-high issue every 6 hours against a perfectly healthy main.
+    // NB it must write the LITERAL: this regex requires a digit after `likec4@`,
+    // so a `"likec4@${LIKEC4_VERSION}"` form would be silently invisible here.
+    const monitor = readRepo(".github/workflows/main-health-monitor.yml");
+    const monitorMatch = monitor.match(/npm install -g likec4@([0-9][^\s"'`]*)/);
+    expect(
+      monitorMatch,
+      "main-health-monitor.yml must install a pinned `likec4@<version>`",
+    ).toBeTruthy();
+    expect(monitorMatch![1]).toBe(cliVersion);
+
     // No surface may regress to a floating tag.
     expect(script).not.toMatch(/likec4@latest/);
     expect(ci).not.toMatch(/likec4@latest/);
+    expect(monitor).not.toMatch(/likec4@latest/);
   });
 });

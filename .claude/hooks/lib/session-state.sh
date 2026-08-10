@@ -222,7 +222,21 @@ expected_duration_min=$expected_duration_min
 hostname=$HOSTNAME
 EOF
   # Atomic rename on same filesystem.
-  mv "$tmp" "$lease_file"
+  #
+  # CHECKED, and that is load-bearing. Every caller is the left side of an
+  # `acquire_lease ... || warn` list, which suspends errexit for the whole call,
+  # so an unchecked `mv` here meant ENOSPC / EROFS / EACCES returned SUCCESS
+  # with no lease on disk: the caller believed it was protected, the `|| warn`
+  # arm never fired, and cleanup-merged later found no file and reaped. That is
+  # a fail-open on an irreversible path (worktree + local branch + remote branch
+  # + the PR), reached without anything anywhere reporting a problem.
+  #
+  # Clean up the temp on failure too — sweep_orphan_leases globs `*.lease` and
+  # would never collect a stranded `*.lease.XXXXXX`.
+  if ! mv "$tmp" "$lease_file"; then
+    rm -f "$tmp"
+    return 1
+  fi
   _LEASE_ACQUIRED_STARTED_AT[$worktree]="$started_at"
   return 0
 }
@@ -313,7 +327,7 @@ _lease_window_seconds() {  # $1 raw expected_duration_min
   # assigned, the function prints nothing, and both callers read an empty window:
   # `(( age < "" ))` is false (INACTIVE -> reapable) and `(( age >= "" ))` is
   # true (the sweep deletes it). Measured on a 0-second-old lease: INACTIVE and
-  # SWEPT in the same pass — #7278's exact signature through a different door.
+  # SWEPT in the same pass — #5454's exact signature through a different door.
   # `0700` does not error and is worse for being quiet: octal 448 min, not 700.
   # T12 missed this because `abc` is REJECTED by the regex; the escaping input
   # is one the regex ACCEPTS. Pinned by T12's `090` case.
@@ -340,7 +354,7 @@ is_lease_active() {
   [[ "$lease_host" == "$HOSTNAME" ]] || return 1
 
   # NO `kill -0 "$lease_pid" || return 1` HERE — that line reaped two live
-  # worktrees on 2026-08-06 (#7278), and it could never have worked.
+  # worktrees on 2026-08-06 (#5454), and it could never have worked.
   #
   # `acquire_lease` records `pid=$$`, and every DOCUMENTED entry point is a
   # short-lived process:
@@ -367,7 +381,12 @@ is_lease_active() {
   # to 24h. Do not restate it as "and the 24h mtime sweep backstops this" without
   # checking: an earlier draft of this comment said exactly that and it was FALSE
   # in the path that matters — sweep_orphan_leases was reachable only from the
-  # `create` subcommand, never from cleanup_merged_worktrees. That is now also
+  # `feature|feat` subcommand (create_for_feature), never from `create` and
+  # never from cleanup_merged_worktrees. (This sentence said "the `create`
+  # subcommand" until PR #7373; it was wrong in the same direction as the
+  # _register_lease_release_trap comment below — both assumed `create` did
+  # lease-work it did not do. As of PR #7373 `create` does sweep and acquire, so
+  # the corrected statement describes the pre-#5454 world.) That is now also
   # wired (worktree-manager.sh calls the sweep at the top of cleanup), but the
   # clamp is what makes the bound hold regardless.
   #
@@ -439,7 +458,7 @@ sweep_orphan_leases() {
         # immediately (see the long note in is_lease_active). Sweeping on a
         # dead pid alone deleted the lease file BEFORE worktree-manager
         # consulted is_lease_active — so the downstream check found no file
-        # and the reap proceeded. That is #7278, twice, on 2026-08-06.
+        # and the reap proceeded. That is #5454, twice, on 2026-08-06.
         #
         # is_lease_active is the single source of truth for "still held";
         # the 24h mtime cap above remains the backstop for a truly abandoned
@@ -482,13 +501,25 @@ _register_lease_release_trap() {
   # NOT `EXIT` — that is what made the lease layer unreachable in production.
   #
   # `create_worktree` acquires the lease and registers this trap IN THE SAME
-  # PROCESS, and that process exits normally on success. With EXIT armed, the
-  # trap fired on that success and deleted the lease before `create` had even
-  # printed its path. Measured: the leases directory is EMPTY the instant
-  # `worktree-manager.sh --yes create` returns. So a worktree made the
-  # DOCUMENTED way (what one-shot and work both invoke) carried no lease at all,
-  # and `is_lease_active` returned at its `[[ -f "$lease_file" ]]` guard — every
-  # protection below that line was dead code for the path that matters.
+  # PROCESS (as of PR #7373 — before that it did NEITHER; only `create_for_feature`
+  # acquired, and `create` is what the pipeline invokes), and that process exits
+  # normally on success. With EXIT armed, the trap fired on that success and
+  # deleted the lease before the caller had even printed its path.
+  #
+  # Measured: the leases directory is EMPTY the instant
+  # `worktree-manager.sh --yes create` returns. That measurement was real, but
+  # it had TWO independent causes and this comment originally named only one:
+  #
+  #   1. EXIT released whatever was acquired (fixed by the signal list below).
+  #   2. `create` never acquired anything in the first place (fixed separately
+  #      by adding this block to `create_worktree`).
+  #
+  # Fixing the trap alone left the pipeline path dark — the empty directory
+  # looked identical under both causes, which is exactly how cause 2 survived
+  # the fix for cause 1. So a worktree made the DOCUMENTED way (what one-shot
+  # and work both invoke) carried no lease at all, and `is_lease_active`
+  # returned at its `[[ -f "$lease_file" ]]` guard — every protection below that
+  # line was dead code for the path that matters.
   #
   # Normal process exit is not session end. That is this change's whole thesis,
   # applied to the write side: the CLI process is short-lived BY DESIGN, and the
