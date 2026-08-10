@@ -464,6 +464,103 @@ else
   no "T8c: this test's marker ERE has drifted from the runner's"
 fi
 
+# ─────────────────────────────────────────────────────────────────────────────
+# T9 — MUTATION MATRIX. Every assertion above is a claim that some property holds;
+# this is the claim that those assertions could NOTICE it failing.
+#
+# Why a matrix and not "run against the pre-change runner": that is vacuous by
+# construction. The pre-change runner lacks the INFRA_DIR seam, so it derives ZERO
+# suites and exits 2 — satisfying every "no dump appeared" assertion trivially, red
+# for the wrong reason. Mutating a copy of the CURRENT runner is the only form that
+# tests what it claims to.
+#
+# Runs inside the suite, so it stays a CI gate rather than a one-off done at review.
+# ─────────────────────────────────────────────────────────────────────────────
+if [[ -z "${SOLEUR_MUTATION_CHILD:-}" ]]; then
+  MUTDIR="$TMP/mut"; mkdir -p "$MUTDIR"
+  PRISTINE="$MUTDIR/pristine.sh"; cp "$SUT" "$PRISTINE"
+
+  # mutate <id> <expected-failing-assertion> <python-mutator>
+  #
+  # Each mutant must (a) LAND — verified by diffing against the pristine copy, because a
+  # mutator whose pattern silently stopped matching produces a green child that reads exactly
+  # like a killed mutant — and (b) be killed by the NAMED assertion, not merely by some
+  # failure somewhere.
+  run_mutant() {
+    local id="$1" expect="$2" mutator="$3"
+    local m="$MUTDIR/$id.sh"
+    cp "$PRISTINE" "$m"
+    python3 -c "
+import sys
+p = sys.argv[1]
+s = open(p).read()
+$mutator
+open(p,'w').write(s)
+" "$m" || { no "T9[$id]: mutator errored"; return 0; }
+
+    if diff -q "$PRISTINE" "$m" >/dev/null 2>&1; then
+      no "T9[$id]: MUTATION DID NOT LAND — this row proves nothing (its pattern stopped matching)"
+      return 0
+    fi
+    chmod +x "$m"
+
+    local out
+    out="$(SOLEUR_MUTATION_CHILD=1 SUT="$m" timeout 180 bash "${BASH_SOURCE[0]}" 2>&1)" || true
+    if grep -qF "$expect" <<<"$out"; then
+      ok "T9[$id]: killed by \"$expect\""
+    else
+      no "T9[$id]: SURVIVED — expected \"$expect\" to fail and it did not"
+    fi
+  }
+
+  # Selection anchored on the failure marker → a blind tail. The trap this exists to catch:
+  # the RED suite fails EARLY and emits 120 passing lines after, so a tail shows only passes.
+  run_mutant anchored-to-tail "T6c: the early failing assertion is absent" \
+    "s = s.replace('sel=\"\$(grep -E -A3 \"\$MARKER_ERE\" \"\$f\" 2>/dev/null || true)\"', 'sel=\"\$(tail -n 5 \"\$f\")\"')"
+
+  # Drop the sentinel prefix → dumped [FAIL] lines reach the monitor's anchor and its title.
+  run_mutant drop-prefix "T6k:" \
+    "s = s.replace('} | sed \"s/^/\${SENTINEL_PREFIX}/\"', '}')"
+
+  # Skip the dump entirely.
+  run_mutant skip-dump "T6c: the early failing assertion is absent" \
+    "s = s.replace('  dump_reds\n', '  :\n')"
+
+  # Invert retain/reap → the evidence is deleted on exactly the runs that matter.
+  run_mutant invert-reap "T6s:" \
+    "s = s.replace('if (( RED == 0 && \${#UNACCOUNTED[@]} == 0 )); then\n  rm -rf \"\$SOLEUR_SUITE_LOGDIR\"\nfi', 'rm -rf \"\$SOLEUR_SUITE_LOGDIR\"')"
+
+  # Drop the cap → one suite with 10,000 marker lines dumps all of them.
+  run_mutant drop-cap "T6p: the cap does not bind after selection" \
+    "s = s.replace('printf \\'%s\\\\n\\' \"\$sel\" | head -n \"\$DUMP_CAP\"', 'printf \\'%s\\\\n\\' \"\$sel\"')"
+
+  # Invert the capture order → `2>&1 >"$f"` sends stderr to the OLD stdout, so the per-suite
+  # log holds only stdout and every failure marker is lost from the file the selector reads.
+  #
+  # KEYED ON T6d, NOT T6c, and the reason is worth recording because it is counter-intuitive:
+  # T6c ("the failing assertion appears in the output") does NOT discriminate here. The
+  # redirected stderr lands on the runner's INHERITED stdout — the xargs pipe — so the marker
+  # text still shows up somewhere in the output and T6c passes. What actually changes is that
+  # it arrives UNPREFIXED, by a path that bypasses the dump entirely, which is precisely the
+  # dangerous shape: an unprefixed marker reaching the monitor's `^RED |^[FAIL]` anchor and
+  # its issue TITLE. Verified 2026-08-10: the inverted runner fails T6d and passes T6c.
+  run_mutant invert-capture-order "T6d: the dumped assertion is not sentinel-prefixed" \
+    "s = s.replace('bash \"\$s\" >\"\$SOLEUR_SUITE_LOGDIR/\$key.log\" 2>&1; rc=\$?', 'bash \"\$s\" 2>&1 >\"\$SOLEUR_SUITE_LOGDIR/\$key.log\"; rc=\$?')"
+
+  # Delete the accounting assertion → the pre-existing FALSE GREEN returns.
+  run_mutant drop-accounting "T7a: FALSE GREEN" \
+    "s = s.replace('(( RED == 0 && \${#UNACCOUNTED[@]} == 0 ))\n', '(( RED == 0 ))\n')"
+
+  # Anti-vacuity floor for the matrix itself: a run_mutant that stopped dispatching would
+  # otherwise leave this whole block silently empty.
+  MATRIX_ROWS=$(grep -c '^  run_mutant ' "${BASH_SOURCE[0]}" || true)
+  if (( MATRIX_ROWS >= 7 )); then
+    ok "T9: mutation matrix ran ${MATRIX_ROWS} rows"
+  else
+    no "T9: mutation matrix has only ${MATRIX_ROWS} rows, expected >= 7"
+  fi
+fi
+
 echo ""
 echo "=== run-registered-suites: ${pass} passed, ${fail} failed ==="
 (( fail == 0 ))
