@@ -17,7 +17,8 @@ cpo_signoff: CHANGES REQUESTED (B1–B7) — addressed in this revision; re-conf
 
 <!-- iac-routing-ack: plan-phase-2-8-reviewed -->
 <!--
-  IaC-routing ack (Phase 2.8 reviewed). Rotation writes an externally-minted vendor credential via
+  IaC-routing ack (plan-SKILL Phase 2.8 reviewed — the skill's IaC-routing gate, not a phase of this
+  plan, which numbers 0-7). Rotation writes an externally-minted vendor credential via
   `doppler secrets set` / `gh secret set` rather than a `doppler_secret` Terraform resource.
   Deliberate: `doppler_secret` resources (apps/web-platform/infra/git-data-luks.tf) carry values
   Terraform GENERATES, where tfstate custody is unavoidable. These tokens are minted at Sentry, so
@@ -27,6 +28,65 @@ cpo_signoff: CHANGES REQUESTED (B1–B7) — addressed in this revision; re-conf
   `SENTRY_IAC_AUTH_TOKEN` is a GitHub repo secret by documented divergence from AP-008.
   This plan touches NO .tf file — the required-check promotion was dropped in review.
 -->
+
+## Enhancement Summary
+
+**Deepened:** 2026-08-10 · **Review panel:** 7 agents (dhh, kieran, code-simplicity,
+architecture-strategist, spec-flow-analyzer, cto, cpo) + a scoped strong-model consult.
+
+### Gates
+
+All deepen-plan halt gates **PASS**: 4.6 User-Brand Impact (present, valid threshold), 4.7
+Observability (5 fields, no empty keys, no `ssh` in the discoverability test), 4.8 PAT-shaped
+variables (none). 4.9 UI-wireframe **skips** — no UI-surface path. 4.10 Encryption Posture **skips** —
+the plan introduces no store and no `.tf` edit (every `.tf` mention is in a *rejected* Alternatives
+row).
+
+### Verify-the-negative sweep
+
+All **16** negative/absolute repo claims independently grepped: **16 CONFIRMS, 0 CONTRADICTS.**
+Including the load-bearing ones — one `build-args:` block repo-wide, one committed Dockerfile, zero
+`LABEL`/OCI-annotation/`metadata-action` usage, `CODEOWNERS` is a global `*  @deruelle` fallback with
+no `require_code_owner_review` ruleset anywhere, the merge queue is reverted, `[scanner-enforced:]`
+has no resolver in the tag linter, `deploy-docs.yml` exits 0 on Sentry auth failure, `next.config.ts`
+reads `silent: !process.env.CI`, and `ALLOWED_PATHS` is exactly the two paths claimed.
+
+### What review changed (the plan is materially different from its first draft)
+
+1. **The allowlist as first designed re-opened the class.** Verified by execution:
+   `BUILD_DEPLOY_TOKEN` and `NEXT_PUBLIC_SECRET_KEY` are *admitted* by a prefix-only allowlist. It is
+   now a **conjunction** — allowlisted AND not credential-shaped — with both names as RED cases.
+2. **Containment decoupled from the PR.** Phase 1 mints under a new name, repoints, and revokes
+   **pre-merge**, so the leaked token dies today. This dissolved a proposed PR split without changing
+   the operator's single-PR deliverable.
+3. **Identity split, not scope narrowing.** The real defect is an IaC-admin credential doing
+   source-map upload; one narrowed token cannot serve both Terraform write and release read.
+4. **The gate keys on secret-VALUE absence first**, with the positive control at the value layer — a
+   key-shaped control would decay from fail-closed into fail-**always** if BuildKit's recording shape
+   changed, blocking every release.
+5. **Two documents, two fetches, two positive controls** — `ENV`/`LABEL`/entrypoint live in the image
+   config, not the attestation; the first draft conflated them.
+6. **`required=true`, no CI branch** — the builder stage has no CI signal to branch on, and
+   `next.config.ts` already runs the Sentry plugin silent inside Docker, so an empty token would have
+   vanished without trace.
+7. **Route dropped to zero-Terraform**, and the bot green is **earned** rather than resting on an
+   unreachability argument the repo's own comments say must be re-derived per gate.
+8. **Three-valued verdict + failure-email amendment** — the existing email says "re-running is safe",
+   which is actively dangerous on a violation.
+9. **#5506 is closed**; the mint path is the API method that worked, not the Playwright recipe that
+   failed twice.
+10. **Six token consumers, not four**, plus a container-resident cron; enumeration is now by **value**,
+    with a rollback holding key and per-consumer assertions.
+11. **Measured population** replaces asserted severity: 10 operator-adjacent accounts, zero
+    arms-length external, audience of two, anonymous read empirically 403.
+12. **R0 de-editorialized.** "Documentation defect" was likely wrong — `request.args` is the frontend
+    request map and is plausibly mode-independent by design. A local A/B canary settles it; the ADR
+    records the measurement, not a cause.
+
+### Open at /work time (by design, not omission)
+
+Phase 0 carries five genuine unknowns — the A/B canary result, the extractor shape, live token scope,
+the mount contract, and the token topology. Each blocks a downstream decision and none is guessable.
 
 ## Overview
 
@@ -85,7 +145,7 @@ lands.
 | **R4.** The comment's `mode=min` reads as provenance. | It is `cache-to: type=gha,mode=min` — the layer cache. The step sets **no `provenance:` key**. | Disambiguate, and pin `provenance: mode=min` **by value** (Phase 3.3) — Phase 4's gate is fail-closed and cannot fetch an attestation that `provenance: false` would suppress. |
 | **R5.** "CI catches a bad build-arg pre-merge." | **CI never runs the Docker build.** | Two modes. Plus the scanner runs as a **pre-build step in the release job** (Phase 4.4), which closes the preventive gap for free. |
 | **R6.** "Add a semgrep / `skill-security-scan` rule." | semgrep: no CI job, `languages:` ts/js/bash/python, agent filters to source extensions. `skill-security-scan`: one markdown file, always exits 0, hook only on `.claude/skills/**`. Also verified: **gitleaks cannot detect this class** — it matches secret *values* by pattern/entropy, and `${{ secrets.X }}` is a zero-entropy reference; `.gitleaks.toml` has zero `build-arg`/`dockerfile`/`provenance` hits. Not misconfigured — structurally incapable. | All three **assessed and rejected with reasons**, not deferred. |
-| **R7 (workflow gap).** Phase 2.7's regulated-path regex would not have fired here. | Keyed on data-*handling* surfaces; blind to credential-*plumbing* surfaces that unlock them. | **File an issue against the regex in `plugins/soleur/skills/gdpr-gate/SKILL.md` and cite its number here.** A finding recorded only in an archived plan is not recorded. |
+| **R7 (workflow gap).** The plan-SKILL's Phase 2.7 regulated-path regex (the GDPR gate's trigger — not a phase of this plan) would not have fired here. | Keyed on data-*handling* surfaces; blind to credential-*plumbing* surfaces that unlock them. | **File an issue against the regex in `plugins/soleur/skills/gdpr-gate/SKILL.md` and cite its number here.** A finding recorded only in an archived plan is not recorded. |
 | **R8.** `[scanner-enforced:]` makes the rule enforced. | `scripts/lint-agents-enforcement-tags.py` defines only `HOOK_TAG_RE` and `SKILL_TAG_RE` — **`[scanner-enforced:]` targets are never resolved**, so a wrong path passes CI silently. | Keep the tag (no better one exists) but do not claim the linter verifies it, and do not call this gate "fail-soft" — it is required and blocking. |
 
 ## Open Code-Review Overlap
