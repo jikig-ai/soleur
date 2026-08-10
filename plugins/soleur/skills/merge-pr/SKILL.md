@@ -388,7 +388,7 @@ Navigate to the main repository root directory (the parent of `.worktrees/`). Ru
 bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged
 ```
 
-This detects `[gone]` branches (remote deleted after merge), removes worktrees, archives spec directories, deletes local branches, and pulls latest main so the next worktree branches from the current state.
+This detects `[gone]` branches (remote deleted after merge), removes worktrees, deletes local branches, and pulls latest main so the next worktree branches from the current state.
 
 ### 6.3 End-of-run report
 

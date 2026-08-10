@@ -37,11 +37,20 @@ probe() {
 import sys, yaml
 wf = yaml.safe_load(open(sys.argv[1])) or {}
 on = wf.get("on", wf.get(True)) or {}
-job = (wf.get("jobs") or {}).get("restart") or {}
+# (#7278 back-port) ITERATE ALL JOBS — do not index one key. This probe used to read
+# `jobs["restart"]` only, so a future second job added to this workflow would ship WITHOUT the
+# guard, pass this test green, and fire on every registration push: the #6425 class re-entering
+# through the one door the guard does not watch. An empty jobs map is NOT a pass. The paired
+# `jobs_exact` check makes adding a job a deliberate act rather than a silent one.
+jobs = wf.get("jobs") or {}
 checks = {
     "push": "push" in on,
     "dispatch": "workflow_dispatch" in on,
-    "guard": "github.event_name == 'workflow_dispatch'" in str(job.get("if", "")),
+    "guard": bool(jobs) and all(
+        "github.event_name == 'workflow_dispatch'" in str(j.get("if", ""))
+        for j in jobs.values()
+    ),
+    "jobs_exact": set(jobs) == {"restart"},
 }
 print("yes" if checks[sys.argv[2]] else "no")
 PY
@@ -54,12 +63,26 @@ assert "workflow still carries the registration push trigger (guard premise)" \
 assert "workflow still carries workflow_dispatch (the real entry point)" \
   "[[ \$(probe dispatch) == 'yes' ]]"
 
-# The guard itself. The restart job must no-op on every non-dispatch event.
-assert "restart job is gated on workflow_dispatch (never fires on the registration push)" \
+# The guard itself. EVERY job must no-op on every non-dispatch event — not just the one this
+# test used to pin by name (#7278 back-port; see the probe comment).
+assert "EVERY job is gated on workflow_dispatch (never fires on the registration push)" \
   "[[ \$(probe guard) == 'yes' ]]"
+assert "the job set is exactly {restart} (a new job must be added to the guard deliberately)" \
+  "[[ \$(probe jobs_exact) == 'yes' ]]"
 
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed ==="
+
+# ANTI-VACUITY FLOOR — see the sibling note in registry-zot-inventory-workflow-guard.test.sh.
+# Measured: removing all 6 assert calls left this file reporting "0/0 passed" and exiting 0.
+# A FLOOR, never an equality. Raise in lockstep when assertions are added.
+MIN_ASSERTIONS=6
+if (( PASS + FAIL < MIN_ASSERTIONS )); then
+  echo "FAIL: only $((PASS + FAIL)) assertions ran, below the floor of ${MIN_ASSERTIONS}."
+  echo "      Treat this as UN-RUN, not as a pass."
+  exit 1
+fi
+
 if (( FAIL > 0 )); then
   echo "FAIL: $FAIL test(s) failed"
   exit 1

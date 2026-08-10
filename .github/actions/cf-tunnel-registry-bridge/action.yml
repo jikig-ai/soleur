@@ -42,28 +42,53 @@
 #       fi
 #       [[ -f /tmp/cloudflared-registry.log ]] && tail -n 200 /tmp/cloudflared-registry.log || true
 #
+# The `docker logout` above stays UNCONDITIONAL even for a `skip-docker-login: true` caller,
+# and that is deliberate rather than an oversight (#7278). Three guards already cover the
+# never-logged-in case, so the teardown cannot redden an otherwise-green run: the block opens
+# `set +e`, stderr is sent to /dev/null, and the call carries `|| true`. A caller that skipped
+# the login therefore runs a logout that finds no stored credential and is a no-op. Copying
+# the block verbatim is still the instruction — a mode-dependent teardown would give the two
+# modes two different contracts to keep in sync, which is what this section exists to prevent.
+#
 # ── SHA-RECOMPUTE DISCIPLINE ───────────────────────────────────────────────
 # `cloudflared-sha256` MUST be computed against the REAL released binary at the pinned
 # `cloudflared-version` (curl the asset, `sha256sum` it). NEVER paste a checksum from docs or
 # AI output. Re-verify at /work time on a version bump. (Same discipline as the SSH bridge.)
 #
 # ── PREREQUISITES ──────────────────────────────────────────────────────────
-#  - The CF Access `registry_push` service token + the zot-push htpasswd creds must be in
-#    Doppler prd (root): REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET (written by the operator full
-#    apply per tunnel.tf) + ZOT_PUSH_USER/ZOT_PUSH_TOKEN + ZOT_REGISTRY_URL (written by
-#    zot-registry.tf). Both live in the `prd` root because the release DOPPLER_TOKEN is
-#    prd-scoped. All pull/decode steps fail loud if any is missing/empty.
+#  - The CF Access `registry_push` service token must be in Doppler prd (root):
+#    REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET (written by the operator full apply per
+#    tunnel.tf). Required in BOTH modes — it is what admits the runner at the CF edge.
+#  - The zot-push htpasswd creds (ZOT_PUSH_USER/ZOT_PUSH_TOKEN, written by zot-registry.tf)
+#    are required ONLY when `skip-docker-login` is left at its `'false'` default. A
+#    `skip-docker-login: 'true'` caller never reads them, so it neither needs them present
+#    nor materializes them into its runner environment (#7278).
+#  - All of the above live in the `prd` root because the release DOPPLER_TOKEN is
+#    prd-scoped. All pull/decode steps fail loud if a secret they read is missing/empty.
 #
 # ── OUTPUTS (to $GITHUB_ENV, job-scoped) ───────────────────────────────────
-#  REGISTRY_BRIDGE_PID  — the cloudflared PID (for the caller's teardown).
-#  (docker is already logged in to 127.0.0.1:5000 by this action's final step.)
+#  REGISTRY_BRIDGE_PID  — the cloudflared PID (for the caller's teardown). Set in BOTH modes.
+#
+#  DOCKER SESSION — MODE-DEPENDENT, and the difference is the whole point of the input:
+#   - `skip-docker-login` unset / `'false'` (every pre-#7278 caller): docker is logged in to
+#     127.0.0.1:5000 by this action's final step, so the caller may `docker push` / `crane`
+#     against it directly.
+#   - `skip-docker-login: 'true'`: NO docker session is established and no ZOT_PUSH_* value
+#     is ever read. The caller gets a raw TCP forward on 127.0.0.1:5000 and nothing more —
+#     it must supply its own read credential (e.g. the ZOT_PULL_* htpasswd user) per request.
+#     Note what this costs, because the loss is real and is documented at the docker-login
+#     step below: that step is the only thing in this action that DIALS THE ORIGIN. The
+#     listener probe in the bridge step is a local-listener check and cannot distinguish a
+#     working bridge from a dead one. A `skip-docker-login: 'true'` caller therefore returns
+#     success with ZERO origin proof and MUST open with its own origin-reachability check
+#     before it is entitled to interpret any later failure as an application-layer verdict.
 #
 # Composite actions cannot read the `secrets` context — every secret is an explicit input
 # referenced ONLY inside `env:` mappings (never a `run:` body or step `name:`), because action
 # inputs are NOT auto-masked. Values are add-masked per-line at decode time.
 
 name: 'CF Tunnel registry-push bridge'
-description: 'Bring up a cloudflared TCP bridge to the private-net zot registry + docker login, so a GH runner can docker push over the Cloudflare Tunnel. Setup only; caller must add an if:always() teardown.'
+description: 'Bring up a cloudflared TCP bridge to the private-net zot registry so a GH runner can reach it over the Cloudflare Tunnel, and (unless skip-docker-login is ''true'') docker login with the zot-push creds. Setup only; caller must add an if:always() teardown.'
 
 inputs:
   doppler-token:
@@ -75,15 +100,45 @@ inputs:
   cloudflared-sha256:
     description: 'SHA-256 of the cloudflared-linux-amd64 binary at cloudflared-version (recompute against the real binary — see header).'
     required: true
+  # #7278. FAIL-CLOSED BY CONSTRUCTION, and the direction of the comparison is the guard.
+  #
+  # The login step is gated on `!= 'true'`, never on `== 'false'`. Under `== 'false'` a
+  # typo, an empty string, or a caller passing `'False'` would evaluate false and SILENTLY
+  # STRIP the push credential from a push caller — a release that pushes nothing, for a
+  # reason no message would name. Under `!= 'true'` every one of those values leaves the
+  # login RUNNING, i.e. exactly the behaviour all four pre-#7278 callers have today.
+  #
+  # A malformed value is additionally REJECTED outright by the validation step below rather
+  # than being silently normalized, so `'yes'`/`'1'`/`'TRUE'` fail loud instead of quietly
+  # taking the login path a caller plainly did not intend.
+  #
+  # WHAT THIS INPUT CANNOT CATCH, stated because the mitigation lives elsewhere: GitHub
+  # Actions does NOT fail on an UNDECLARED input key, so a caller writing
+  # `skip_docker_login: true` (underscore) gets the `'false'` default, a push-credentialed
+  # job, and no error anywhere. The backstop is the consuming script's own entry assertion
+  # that ZOT_PUSH_USER/ZOT_PUSH_TOKEN are unset — a runtime check on the environment, which
+  # holds regardless of what the caller's YAML says.
+  skip-docker-login:
+    description: 'Set to the literal string ''true'' to bring up the TCP bridge WITHOUT reading ZOT_PUSH_* or establishing a docker session — for read-only callers that supply their own pull credential per request. Any other value (including the '''''' default) runs the login exactly as before; values outside {true,false} are rejected. See the OUTPUTS section in the header for what a skipping caller does NOT get, including the loss of the only origin dial.'
+    required: false
+    default: 'false'
   # #7242 / ADR-166. These three exist so this action's failure messages can branch on
   # something the CALLING JOB measured, instead of naming a cause nobody checked.
   #
-  # THREE CALLERS, and only one of them measures anything: reusable-release.yml runs a
-  # token preflight; build-inngest-config-bundle.yml and build-inngest-bootstrap-image.yml
-  # do not. `unmeasured` is therefore those two workflows' PERMANENT steady state, not an
-  # error — which is exactly why the `unmeasured` arm is written to be actionable on its
-  # own (it lists candidates unranked and carries a base case) rather than as a degraded
-  # version of a real verdict.
+  # FOUR CALLERS (corrected #7278 — this said THREE, and a stale caller count is what makes
+  # the next reasoning about the `unmeasured` arm wrong): reusable-release.yml,
+  # build-inngest-config-bundle.yml, build-inngest-bootstrap-image.yml, and the
+  # `registry_store_restore` job in apply-web-platform-infra.yml — the post-recut GHCR
+  # restore path (#7277), the step that ends the empty-store window. Only ONE of the four
+  # measures anything: reusable-release.yml runs a token preflight; the other three do not.
+  # `unmeasured` is therefore those three workflows' PERMANENT steady state, not an error —
+  # which is exactly why the `unmeasured` arm is written to be actionable on its own (it
+  # lists candidates unranked and carries a base case) rather than as a degraded version of
+  # a real verdict.
+  #
+  # A FIFTH caller landed with #7278: .github/workflows/registry-zot-inventory.yml, the
+  # read-only disk-inventory lever. It is the first caller to pass `skip-docker-login: 'true'`
+  # and it DOES run the preflight, so it forwards all three of these.
   token-verdict:
     description: 'live|stale|unverifiable|unmeasured — the calling job''s MEASURED verdict on the registry-push CF Access credential. Branches the failure message only; never gates behaviour. Callers with no token preflight leave this at `unmeasured`, which is a supported steady state, not a fault.'
     required: false
@@ -100,6 +155,32 @@ inputs:
 runs:
   using: composite
   steps:
+    # #7278. UNGATED ON PURPOSE — this step carries no `if:`, because gating a validator on
+    # the value it validates makes it unreachable for exactly the malformed values it exists
+    # to reject. It runs first so a caller-side mistake costs nothing: no Doppler read, no
+    # cloudflared install, no tunnel dial.
+    #
+    # `${SKIP:-false}` mirrors the input's own declared default, so an action consumer that
+    # somehow reaches this step with the variable unset lands on the same value the input
+    # declaration would have given it, rather than on the empty string.
+    - name: Validate skip-docker-login input
+      shell: bash
+      env:
+        SKIP: ${{ inputs.skip-docker-login }}
+      run: |
+        set -euo pipefail
+        case "${SKIP:-false}" in
+          true|false) ;;
+          *)
+            # Names only what this step MEASURED — the literal value it read — and prescribes
+            # no cause for why the caller wrote it. The two accepted spellings are printed so
+            # the correction needs no second lookup.
+            echo "::error::cf-tunnel-registry-bridge input skip-docker-login read the value '${SKIP}', which is outside the accepted set {true,false}. Refusing to proceed: the login gate tests for the literal string 'true', so every other value silently takes the docker-login path and materializes ZOT_PUSH_* into this job. Pass the literal string 'true' or 'false' (quoted in YAML), or omit the input to keep the 'false' default."
+            exit 1
+            ;;
+        esac
+        echo "skip-docker-login=${SKIP:-false} (validated against the accepted set {true,false})"
+
     # The Doppler CLI is NOT pre-installed on the release/inngest runners (only jobs that
     # explicitly install it — e.g. verify-doppler-secrets — have it). This composite's secret
     # reads below shell out to `doppler`, so install it FIRST. Omitting this was the #6122 zot
@@ -117,7 +198,13 @@ runs:
         set -euo pipefail
         # Idempotent: the SSH bridge may already have installed the same pinned binary.
         if ! command -v cloudflared >/dev/null 2>&1; then
-          curl -fsSL -o /tmp/cloudflared \
+          # --max-time is load-bearing on an incident-time lever, not hygiene. With no timeout a
+          # stalled releases CDN hangs this step until the caller's job cap kills the whole run
+          # — BEFORE the bridge is up, so the lever burns its entire budget and produces no
+          # marker, which is byte-identical to never having been dispatched. --retry covers the
+          # transient 5xx that made this the only unbounded curl on the critical path.
+          curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 5 \
+            -o /tmp/cloudflared \
             "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64"
           echo "${CLOUDFLARED_SHA256}  /tmp/cloudflared" | sha256sum -c -
           sudo install -m 0755 /tmp/cloudflared /usr/local/bin/cloudflared
@@ -233,6 +320,20 @@ runs:
         fi
 
     - name: Docker login to zot (127.0.0.1:5000, zot-push htpasswd)
+      # #7278. `!= 'true'`, NEVER `== 'false'`. This single operator is what makes the input
+      # fail CLOSED: any unexpected value — empty, typo'd, wrong case — leaves this step
+      # RUNNING, which is the pre-#7278 behaviour of all four existing callers. The inverted
+      # form would strip the push credential from a release on a typo and report nothing.
+      # The malformed-value arm is rejected outright by the validation step at the top of
+      # this action, so this gate only ever sees 'true' or 'false' in practice; the
+      # defensive direction is kept anyway because the gate must hold even if that step is
+      # ever moved or made conditional.
+      #
+      # The ZOT_PUSH_* decode is INLINE in this step's body, so this one `if:` covers both
+      # the credential read and the login — there is no second site to keep in sync — and
+      # REGISTRY_BRIDGE_PID is exported by the PRECEDING step, so skipping this one cannot
+      # strand the caller's teardown.
+      if: inputs.skip-docker-login != 'true'
       shell: bash
       env:
         DOPPLER_TOKEN: ${{ inputs.doppler-token }}

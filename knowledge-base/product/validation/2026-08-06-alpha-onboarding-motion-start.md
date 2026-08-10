@@ -36,7 +36,7 @@ than creating a parallel structure beside it.
 | | |
 |---|---|
 | **Repository** | `https://github.com/2my8r9ry2t-wq/Skouer` (private) |
-| **Product** | A venture-exploration database — startups, funding rounds, funds, founders, investors |
+| **Product** | A domain-specific reference database; the sector descriptor is held in the Article 30(2) register rather than restated here |
 | **Stack** | Postgres + PostgREST on Clever Cloud; static front-end; Python/JS tooling |
 | **Test surface** | **Self-hosted Soleur CLI plugin.** The hosted web platform is deferred until it is serving reliably again |
 | **Prior Claude Code use** | **Yes** — the repository carries `CLAUDE.md`, `.agents/`, and a `skills/` tree (geocoder, press-reader, press-review-mentions) |

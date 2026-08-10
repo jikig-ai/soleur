@@ -630,6 +630,28 @@ if want_scripts; then
   # D11 post-apply liveness poller (#6929) — requires a heartbeat TRANSITION, since the monitor
   # reports the dead host's residual `up` for ~90s and exposes no last_ping_at.
   run_suite "tests/scripts/registry-heartbeat-poll" bash tests/scripts/test-registry-heartbeat-poll.sh
+  # (#7278) The read-only zot disk-inventory lever's two suites. Registered HERE for the same
+  # reason as every line around them — nothing auto-discovers tests/scripts/, this file's
+  # *.test.sh glob cannot match the `test-*` prefix, and lint-orphan-test-suites.sh covers
+  # scripts/*.test.sh only, so an unregistered suite runs in ZERO runners while looking covered.
+  #
+  # The FIRST is the enumerator: dedup-by-digest arithmetic against hand-computed literals, index
+  # recursion, the partial/unreadable/empty-catalog verdict taxonomy, verb and egress confinement
+  # measured at the wire by a recording origin, and secret masking. The number this lever exists
+  # to produce is only as trustworthy as that arithmetic, and no other gate reads it.
+  #
+  # The SECOND is the round-trip gate, and it is separate on purpose: the pass condition was
+  # deliberately extracted OUT of workflow YAML, where no test can reach it. Its primary case is
+  # that a marker present with a DIFFERENT run_id must NOT pass, plus an arm requiring the gate to
+  # FAIL when fed an undecoded fixture (Better Stack's `raw` column is double-encoded JSON, so a
+  # bare grep silently returns nothing — a probe that can never pass, and therefore never fail).
+  #
+  # The workflow/composite-shape half of this feature is NOT here: it lives in
+  # apps/web-platform/infra/registry-zot-inventory-workflow-guard.test.sh, which this runner
+  # already covers through the CI-registered infra runner.
+  run_suite "tests/scripts/zot-inventory" bash tests/scripts/test-zot-inventory.sh
+  run_suite "tests/scripts/zot-inventory-assert-marker" bash tests/scripts/test-zot-inventory-assert-marker.sh
+  run_suite "tests/scripts/zot-disk-sample" bash tests/scripts/test-zot-disk-sample.sh
   # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
   # workspaces-luks-cutover FIRST-PROVISION destroy-guard (#6604). Permits the +create of the

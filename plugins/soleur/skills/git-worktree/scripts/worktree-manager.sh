@@ -2598,8 +2598,10 @@ Commands:
   cleanup-merged                      Clean up worktrees for merged branches
                                       (detects [gone] + merged-to-main branches,
                                       deletes stale remote branches, removes
-                                      orphan directories, archives specs,
-                                      cleans Claude tmp files, kills runaway procs)
+                                      orphan directories, cleans Claude tmp
+                                      files, kills runaway procs)
+                                      NOTE: does NOT durably archive spec dirs
+                                      — see ship/SKILL.md Phase 7 Step 4.
   cleanup-tmp                         Remove stale Claude task output files
                                       (reclaims RAM from /tmp/claude-<uid>/)
   cleanup-procs                       Kill runaway processes wasting CPU
