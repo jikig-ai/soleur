@@ -84,7 +84,7 @@ model {
       }
       kb = database "Knowledge Base" {
         technology "Markdown + YAML"
-        description "Conventions, learnings, ADRs, specs, plans, brainstorms"
+        description "Conventions, learnings, ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
       }
 
       // C4 L3 — components inside the Soleur Plugin
@@ -320,6 +320,21 @@ model {
   connectedRepoPlugin = system "Connected-Repo Plugin Copy" {
     #external
     description "The connected repo's own committed plugins/soleur/ dir, present in the user's workspace when they connect a Soleur-dogfooding repo. UNTRUSTED: its hooks/hooks.json command-hooks would run in the Node dispatch process (outside bwrap). INERT for the SDK — both real-SDK factories load plugins:[{path: getPluginPath()}] (the platform-deployed root), never this copy (ADR-093 trust boundary)."
+  }
+
+  // The customer's OWN knowledge base, inside their repo — the write target of
+  // every sync producer. #external for the same reason connectedRepoPlugin is: it
+  // is customer-owned content, not platform-controlled, and Soleur writes into it
+  // on a fire-and-forget trigger at connect time (auto-sync-trigger.ts). Two
+  // distinct writers reach this one directory (see the edges below), which is why
+  // generated files carry a GENERATED header and the producer refuses to
+  // overwrite anything lacking it (ADR-171). Durability is NOT assumed: per
+  // sync.md's Headless Contract these are local commits in an ephemeral
+  // server-side workspace until a PR merges, and the KB viewer reads the GitHub
+  // source of truth rather than this on-disk clone.
+  connectedRepoKb = database "Connected-Repo Knowledge Base" {
+    #external
+    description "The connected repo's own knowledge-base/ tree. Written by /soleur:sync producers (conventions, learnings, components, generated C4 diagrams, the domain-model register, kb-coverage.md) and by /soleur:architecture. Customer-owned: content committed here is permanent in their git history, which is why the coverage summary states Soleur's expectations rather than asserting business deficiencies (ADR-171)."
   }
 
   // ======================================================================
@@ -627,6 +642,15 @@ model {
   work -> kb "Reads plans, writes code"
   compound -> kb "Writes learnings, promotes to constitution"
   architecture -> kb "Writes ADRs and diagrams"
+  // sync had NO relationship edge at all until #7332, while every sibling skill
+  // had one — the producers were invisible in the model that documents them.
+  sync -> connectedRepoKb "Writes conventions, learnings, component docs, generated C4 (generated-components.c4 + model.likec4.json + c4-model.md), domain-model rows, and kb-coverage.md" { technology "File I/O + local git commit" }
+  // The second writer of the SAME directory. /soleur:architecture writes spec.c4 /
+  // model.c4 / views.c4 cwd-relative and the sandbox pins cwd = workspacePath, so
+  // both skills land in one diagrams dir. ADR-171's precedence rule resolves it:
+  // sync emits a distinct composing file and never overwrites a file lacking its
+  // GENERATED header, so a hand edit always wins.
+  architecture -> connectedRepoKb "Writes spec.c4 / model.c4 / views.c4 cwd-relative — same directory sync generates into (ADR-171 two-writer precedence)" { technology "File I/O" }
   compound -> evalharness "Validates classifier-skill edits before applying"
   constraintscaffold -> webapp "Generates L1 import-boundary gate (CI)"
 }
