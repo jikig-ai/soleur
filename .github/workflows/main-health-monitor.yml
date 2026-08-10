@@ -455,9 +455,18 @@ jobs:
               # Measured 2026-08-11 over a 200-match capture: under `bash -eo pipefail`,
               # `grep … | head -20 | cut` returns the EMPTY string through its own `||`
               # guard — the monitor would name no suite on precisely the run with the most
-              # to say. This step's shell is `bash -e {0}` (no `shell:` key), where pipefail
-              # is off and the `head` form still works; `-m` keeps it working if a
-              # `shell: bash` is ever added. `cut` bounds LENGTH: one 100 KB line would push
+              # to say.
+              #
+              # Whether THIS step is already in that state is DISPUTED and is deliberately
+              # not asserted here. GitHub documents a bare `run:` (no `shell:` key) as
+              # `bash -e {0}` — pipefail off — while this repo's own learning
+              # 2026-07-02-gha-run-default-shell-has-pipefail-guard-grep-substitutions.md
+              # states the default is `-eo pipefail` and records an earlier self-check that
+              # concluded otherwise as wrong. That learning's verification ran the block
+              # under `-eo pipefail`, which assumes the conclusion, so it does not settle it.
+              # `-m` is correct under BOTH, which is why it is used instead of resolving the
+              # dispute: the guard must not depend on which reading is right.
+              # `cut` bounds LENGTH: one 100 KB line would push
               # the body past GitHub's 65536-character issue limit, `gh issue create` would
               # fail, and the monitor would file NOTHING on a broken main.
               #
