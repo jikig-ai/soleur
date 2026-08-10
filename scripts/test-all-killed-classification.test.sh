@@ -223,6 +223,10 @@ elif mutation == "classifier_weird_no_default":
     m2 = re.search(r'\n    \*\)      echo "WARNING: suite_exit_class returned.*?failed \+ 1\)\) ;;', s, re.S)
     assert m2, "could not locate the *) default arm"
     s = s[:m2.start()] + s[m2.end():]
+elif mutation == "classifier_aborts":
+    m = re.search(r'^suite_exit_class\(\) \{.*?^\}', s, re.S | re.M)
+    assert m, "could not locate suite_exit_class"
+    s = s[:m.start()] + "suite_exit_class() { return 7; }" + s[m.end():]
 elif mutation != "none":
     raise AssertionError(f"unknown mutation {mutation}")
 
@@ -441,6 +445,28 @@ else
   fail "AC7/A8-control — expected the mutant to report 1/1 passed"; dump "$ARM_OUT"
 fi
 
+# --- T8c: a classifier that ABORTS is loud, not silently bucketed ---------------------------
+# The plan prescribed `status="$(suite_exit_class …)" || status="failed"`, which contradicts
+# its own T8c: an aborting classifier would land in the ordinary `failed` bucket with no
+# warning, making a BROKEN CLASSIFIER — which can mis-bucket every subsequent suite —
+# indistinguishable from one honest test failure.
+run_arm killed_only classifier_aborts || true
+if grep -qE 'WARNING: suite_exit_class .*classifier exit=7' <<<"$ARM_OUT"; then
+  pass "T8c — an aborting classifier emits a WARNING naming the classifier and its exit"
+else
+  fail "T8c — an aborting classifier was absorbed silently"; dump "$ARM_OUT"
+fi
+if [[ "$ARM_RC" == "1" ]]; then
+  pass "T8c — an aborting classifier is counted FAILED and exits 1, never passed"
+else
+  fail "T8c — exited $ARM_RC, expected 1"
+fi
+if grep -qE '^=== 0/1 suites passed ===$' <<<"$ARM_OUT"; then
+  pass "T8c — the suite is not counted as passed when the classifier aborts"
+else
+  fail "T8c — expected 0/1 passed"; dump "$ARM_OUT"
+fi
+
 # --- A9: this suite's own output cannot be mistaken for the runner's -------------------------
 # A1_OUT definitely carries a column-0 [KILLED] line. Push it through the dump helper and
 # assert nothing survives at column 0.
@@ -490,7 +516,7 @@ fi
 # TARGET, an extraction that silently produced nothing — and this file would report
 # "0 passed, 0 failed / exit 0", which reads exactly like a clean run. A FLOOR, not equality:
 # the count is developer-incremented and `-eq` turns every added assertion into a false red.
-MIN_ASSERTIONS=55
+MIN_ASSERTIONS=58
 if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= $MIN_ASSERTIONS — the suite was stranded, not clean." >&2
   exit 1

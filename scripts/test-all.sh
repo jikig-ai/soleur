@@ -234,8 +234,16 @@ run_suite() {
   # information needed to tell a terminated suite from a failed one.
   local rc=0
   "$@" || rc=$?
-  local status="failed"
-  status="$(suite_exit_class "$rc" 2>/dev/null)" || status="failed"
+  # An ABORTING classifier is its own degradation and must not be absorbed into
+  # the ordinary `failed` bucket: that would make a broken classifier — which can
+  # mis-bucket every subsequent suite — indistinguishable from one honest test
+  # failure, silently. It is routed to the same fail-closed arm as an
+  # unrecognized class so it is counted FAILED and SAID OUT LOUD.
+  local status="failed" cls_rc=0
+  status="$(suite_exit_class "$rc" 2>/dev/null)" || cls_rc=$?
+  if (( cls_rc != 0 )); then
+    status="__aborted(rc=$cls_rc)__"
+  fi
   case "$status" in
     ok)     ;;
     failed) failed=$((failed + 1)) ;;
@@ -243,7 +251,7 @@ run_suite() {
     # Fail CLOSED. Without this arm an unrecognized class increments NEITHER
     # counter, and `$((suites - failed - killed))` then counts the suite as
     # PASSED — the exact false green this change exists to prevent.
-    *)      echo "WARNING: suite_exit_class returned unrecognized class '$status' for rc=$rc; counting as FAILED." >&2
+    *)      echo "WARNING: suite_exit_class returned unrecognized class '$status' for rc=$rc (classifier exit=$cls_rc); counting as FAILED." >&2
             status="failed"; failed=$((failed + 1)) ;;
   esac
   # Integer math on EPOCHREALTIME ("seconds.microseconds") avoids a coreutils
