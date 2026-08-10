@@ -63,10 +63,11 @@ order — the ordering is the point, because layers 2 and 3 are not security con
 
 ### Layer 1 — Authority: a bubblewrap filesystem boundary
 
-`/usr` and `/etc` bound read-only; `/home`, `/root`, `/run` and `/tmp` replaced with
-tmpfs; the resolved `/etc/resolv.conf` target rebound; the repository bound **read-only**
-and made the working directory; `--unshare-all --share-net --die-with-parent
---new-session`. Measured effect (bubblewrap 0.11.1):
+`/usr` and `/etc` bound read-only; `/home`, `/root`, `/run`, `/tmp` and `/var/tmp` replaced
+with tmpfs; the resolved `/etc/resolv.conf` target rebound; the repository bound
+**read-only** and made the working directory; the git **common dir** bound read-only when
+it lies outside the repository (which it does in every worktree); `--unshare-all
+--share-net --die-with-parent --new-session`. Measured effect (bubblewrap 0.11.1):
 
 | Probe, inside the sandbox | Result |
 | --- | --- |
@@ -80,7 +81,23 @@ and made the working directory; `--unshare-all --share-net --die-with-parent
 | `dig +short soleur.ai` | resolves |
 | `grep -c . AGENTS.md` | matches the host value |
 
-Two operational properties are load-bearing and were both found empirically:
+**An execution replay, not a static verb tally, is what validated this** — and it earned
+its cost immediately by finding three defects in the sandbox itself. Every accepted
+`bash <script>` probe declared across the plan corpus was run inside and outside the
+sandbox and the verdicts diffed:
+
+| Defect the replay found | Why a verb tally could not have | Fix |
+| --- | --- | --- |
+| Git common dir unbound | In a worktree `.git` is a *file* pointing outside `$REPO_ROOT`, so every `git` probe failed `fatal: not a git repository`. `git` is allowlisted and Soleur runs in worktrees by default, so a tally would have counted it as covered. | conditional read-only bind of `git rev-parse --git-common-dir` |
+| `/var/tmp` absent | `/var` is unbound, so probes using the repo's own `TMPDIR=/var/tmp` convention died on `mktemp: No such file or directory`. | `--tmpfs /var/tmp` |
+| Probe inherited preflight's stdin | A probe reading stdin consumes the caller's input, or blocks the full 15s and misreports as a timeout. | `</dev/null` on the exec |
+
+The general lesson, which is why this is recorded in an ADR rather than only a commit
+message: **a control that changes the execution environment must be validated by executing
+in it.** Counting what a gate *admits* says nothing about whether the admitted thing still
+works.
+
+Two further operational properties are load-bearing and were both found empirically:
 
 - **`--tmpfs /home` must precede `--ro-bind "$REPO_ROOT"`.** bwrap applies mounts in
   order and this repo lives under `/home`; reversed, the tmpfs silently clobbers the repo
