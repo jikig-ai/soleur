@@ -15,6 +15,45 @@ tags: [git, worktrees, bare-repo, worktree-manager, core.bare, extensions.worktr
 > **Lane note.** No `knowledge-base/project/specs/feat-one-shot-7394-.../spec.md` exists for this
 > branch, so `lane:` could not be carried forward — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-10 · **git 2.53.0** (every behavioural fact in this plan is scoped to it)
+
+Gates run and their verdicts: **4.6** User-Brand Impact PASS · **4.7** Observability PASS (5/5 fields
+non-empty, `discoverability_test.command` ssh-free) · **4.8** PAT-shaped variables PASS (none) ·
+**4.4** precedent-diff APPLIED (atomic-write shape) · **4.9** UI-wireframe SKIP (no UI surface in
+Files-to-Edit — the three glob hits are the plan quoting the trigger list) · **4.10** Encryption
+Posture SKIP (no store, no new connection) · **4.5** Network-outage SKIP (all keyword hits are the
+plan quoting the trigger list, plus "unreachable *dead code*") · **4.55** Downtime SKIP.
+
+### Key improvements from this pass
+
+1. **[D5 — P0] Two sibling test suites assert the OLD polarity and will break.**
+   `worktree-manager-atomic-config.test.sh` Test 17 and `worktree-manager-stale-lock-diag.test.sh`
+   `:248-249` use the two writes Phase 3 deletes as their proof the lockless writer works. The plan
+   named neither (the stale-lock suite was referenced **zero** times). New Phase 7.5 re-points both.
+2. **[D2] `set -euo pipefail` turns the new guard's absent-key read into a hard crash** unless the
+   `|| true` form is used — measured, with the four in-file precedents cited.
+3. **[D3] The absent-key case is real, and a normal clone is not it** — `git init` writes
+   `bare = false` explicitly; the key is absent only where the old surgery or the issue's hand
+   workaround removed it. Both populations exist in the field.
+4. **[D4] `--type=bool` is load-bearing** — git accepts `yes`/`on`/`1` as truthy, so a raw read
+   compared against the literal `true` would silently skip a `bare = yes` repo. Mask-safety
+   re-confirmed for the `--type=bool` form specifically.
+5. **[D1] Self-grep trap fixed** — an AC asserted a marker name was absent repo-wide while this plan
+   and `tasks.md` both name it in prose.
+
+### Verification carried out (not asserted)
+
+Verify-the-negative pass re-probed all **8** load-bearing negative claims → all CONFIRM, with
+file:line citations (folded into *Plan Review Revisions*). All 4 cited AGENTS.md rule IDs are
+**active** (none retired). All 12 cited issue/PR numbers resolved live and match their claimed
+states — including `#4826`, re-confirmed as *"feat: nav-rail position resume"*, i.e. the stale
+citation the plan already flags. `ADR-173` re-derived against **freshly-fetched `origin/main`**
+(ADR-172 highest) — still free, still provisional.
+
+---
+
 ## Overview
 
 `worktree-manager.sh` refuses to run from inside a perfectly valid worktree:
@@ -539,6 +578,48 @@ config read is mask-safe (it degrades to "absent", which routes to the skip).
 
 **Do not gate on `core.repositoryformatversion`** — fact 2 above.
 
+#### Research Insights — Phase 2 (deepen-plan, measured on git 2.53.0 / bash 5)
+
+Three measured properties of the exact read this phase prescribes. All were probed against live
+fixtures; each changes the implementation.
+
+**D2 — `set -euo pipefail` kills the script on the absent-key read. The `|| true` is load-bearing.**
+`worktree-manager.sh` sets `set -euo pipefail` at `:16`. Measured, with `core.bare` genuinely
+absent (the read returns rc=1):
+
+```bash
+# FATAL — separate declaration: set -e sees the assignment's non-zero status
+local x; x=$(git config --file "$cfg" --get --type=bool core.bare)   # -> script exits 1
+
+# SURVIVES BUT LIES — `local` is a builtin whose own status masks set -e (classic bash gotcha)
+local x=$(git config --file "$cfg" --get --type=bool core.bare)      # -> x="", no error raised
+
+# CORRECT — matches the four existing precedents in this same file
+local x; x=$(git config --file "$cfg" --get --type=bool core.bare || true)
+```
+
+The first form converts a benign "key is absent" into a **hard crash of every subcommand**. Use the
+guarded form. Codebase precedent, all four in this file: `:454` (`|| _grc=$?`), `:458` (`|| true`),
+`:629` (`|| true`), `:687` (`|| echo ""`). This is the Phase 4.4 precedent-diff outcome — the
+pattern is established; do not invent a new one.
+
+**D3 — the absent-key case is NOT hypothetical, and a normal clone is NOT it.** Measured:
+`git init` writes `bare = false` **explicitly**, so a healthy non-bare clone reads `false` at
+**rc=0** and never takes the absent path. `core.bare` is genuinely absent only where something
+*removed* it — precisely (a) a repo that ran the **old** surgery, whose step 2 was
+`--unset core.bare`, and (b) a repo where the operator applied the issue's hand workaround. Both
+populations exist in the field, so the guarded read is exercised in production, not just in theory.
+
+**D4 — keep `--type=bool`; a raw read would be wrong.** Measured: with `bare = yes` in the config,
+`--get core.bare` returns the literal `yes` while `--get --type=bool core.bare` returns `true`.
+git accepts `yes`/`on`/`1`/`true` as truthy, so a guard comparing a **raw** read against the literal
+string `true` would SKIP on a repo whose config says `bare = yes` — a false negative that silently
+reproduces the bug. `--type=bool` normalizes them.
+
+Mask-safety re-confirmed **for this exact form**: with `.git/config` a symlink to `/dev/null`,
+`--get --type=bool core.bare` returns rc=1 with empty output, same as the plain form. Fact 6 holds
+for the `--type=bool` variant specifically — the one actually being shipped.
+
 ### Phase 3 — GREEN (b): reverse the surgery's polarity
 
 Replace the three-step surgery with the **pair-breaker**. Target state = row 1: `core.bare = true`
@@ -568,6 +649,13 @@ in the shared config, `extensions.worktreeConfig` **absent**.
    > fall-through documented at `:449-452` is *also* correct for `--unset-all` (present-and-multiple
    > is exactly what `--unset-all` is for, so proceeding is right). `atomic_git_config` therefore
    > joins `## Files to Edit` as a Phase 3 change, not an untouched dependency.
+   >
+   > **Precedent-diff (deepen-plan Phase 4.4).** The change is confined to the FR2 *guard condition*.
+   > It must NOT touch the established atomic-write shape below it — same-dir temp
+   > (`$dir/$base.soleur-tmp.$$`), `cp -p` to preserve mode/owner (TR2), symlink resolution so the
+   > rename preserves the link (TR3), the atomic same-dir `mv`, and the
+   > `SOLEUR_GIT_LOCK_TEMP_WEDGED` / `SOLEUR_GIT_CONFIG_TARGET_MASKED` sentinels. Widening one
+   > `[[ ]]` test is the entire diff; anything larger re-opens `#5934`.
    >
    > This also **falsifies the plan's own claim** in *Risks & Mitigations* that both shared-config
    > writes are "already routed through `atomic_git_config`'s read-first idempotence — a no-op when
@@ -743,6 +831,41 @@ classify the two `*_FAILED`/wedge-shaped ones as **wedges** and the informationa
 Amend `ADR-099` and author `ADR-173` per the *Architecture Decision* section, via
 `/soleur:architecture`.
 
+### Phase 7.5 — [D5, P0 — deepen-plan] Re-point the two sibling suites that assert the OLD polarity
+
+**This was not in the plan and it blocks the change.** Two existing suites encode
+"`ensure_bare_config` SETS `extensions.worktreeConfig`" as a **passing assertion**, and use the two
+writes Phase 3 step 1 deletes as their *observable proof* that the lockless atomic writer worked.
+Deleting those writes does not merely change an expected value — it removes the thing the
+assertions observe.
+
+| Suite | Line | Asserts today | After Phase 3 |
+|---|---|---|---|
+| `plugins/soleur/test/worktree-manager-atomic-config.test.sh` | ~`:425-428` (**Test 17**) | on a genuine bare repo, `extensions.worktreeConfig == true`; failure message reads *"bare repo lost its extensions.worktreeConfig surgery — bare-layout regression"* | **FAILS** |
+| `plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh` | `:248` | `core.repositoryformatversion == 1` *"written via lockless path"* | **FAILS** |
+| `plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh` | `:249` | `extensions.worktreeConfig == true` *"written via lockless path"* | **FAILS** |
+
+The plan referenced `worktree-manager-atomic-config.test.sh` five times but named only tests 23/24;
+**Test 17 was never mentioned**. `worktree-manager-stale-lock-diag.test.sh` was referenced **zero**
+times in the plan and zero times in `tasks.md`. Without this phase, `/work` hits three red
+assertions at Phase 8 whose failure text claims the fix is a *regression* — the most expensive
+possible way to discover it.
+
+**Prescribed resolution — invert the observable, preserve each test's actual purpose.**
+
+- **Test 17 (atomic-config)** exists to prove the bare path still runs the surgery at all. Replace
+  the assertion with the new invariant: `extensions.worktreeConfig` is **absent** AND
+  `core.bare` is **retained as `true`** in the shared config. Rewrite the PASS/FAIL strings — the
+  current FAIL text would actively mislead a future reader into "restoring" the bug.
+- **`stale-lock-diag:248-249`** exist to prove the **lockless writer** functions when `config.lock`
+  is a non-regular node. That purpose is still valid and still needs a surviving observable. Under
+  the new polarity the surviving shared-config writes are the two `--unset`s, so **seed** the
+  fixture with `extensions.worktreeConfig=true` (and/or `core.worktree`) and assert it was
+  **REMOVED** via the lockless path. Same proof, inverted direction — and it additionally exercises
+  the `--unset-all` path that task 3.0 fixes, which is exactly where the [R1] defect lives.
+- Do **not** simply delete these assertions. They are the only coverage of the lockless-writer
+  path under a wedged lock (`#5934`/`#5912`); deleting them silently drops that coverage.
+
 ### Phase 8 — Verification
 
 Run the new suite, the two sibling worktree-manager suites, and the full runner:
@@ -767,6 +890,8 @@ where `tail`'s status was misread as the suite's verdict.
 | `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` | Narrow the round-6 guard (Phase 2); reverse the surgery polarity + new markers + corrected comments (Phase 3); per-worktree `core.bare=false` seed after `git worktree add` (Phase 4); detection-time self-heal (Phase 5) |
 | `apps/web-platform/server/git-lock-marker-telemetry.ts` | Register **2** new markers in `MARKER_RE` + wedge/benign classification (wedge keys on `branch=failed`) + header inventory (Phase 6, as revised by [R6]) |
 | `apps/web-platform/test/git-lock-marker-telemetry.test.ts` | One case per new marker (Phase 6) |
+| `plugins/soleur/test/worktree-manager-atomic-config.test.sh` | **[D5]** Test 17 (~`:425-428`) asserts the OLD polarity and breaks — invert to the new invariant, rewrite its PASS/FAIL strings; plus the Test 23 comment/assertion decision from AC7a (Phase 7.5) |
+| `plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh` | **[D5]** `:248-249` assert the two deleted writes as lockless-writer proof and break — re-point onto a surviving observable (seed the extension, assert lockless REMOVAL) (Phase 7.5) |
 | `knowledge-base/engineering/architecture/decisions/ADR-099-git-surface-topology.md` | Row 3 gains the root's `.git` **directory**; new note on the fingerprint collision; guard-consequence sentence extended to row 3 (Phase 7) |
 
 ## Files to Create
@@ -864,8 +989,12 @@ fire. No new AGENTS.md rule is proposed, so the 46000-byte always-loaded budget 
    the `_FAILED` variant into `branch=ok|failed`) appears in `MARKER_RE` in
    `apps/web-platform/server/git-lock-marker-telemetry.ts` **and** has a case in
    `apps/web-platform/test/git-lock-marker-telemetry.test.ts`, including a `branch=failed` case
-   asserting it classifies as a **wedge**. `git grep -c 'SOLEUR_GIT_BARE_SELFHEAL_FAILED'` returns
-   **0** repo-wide. Both markers emit a `git_version=` field.
+   asserting it classifies as a **wedge**. `git grep -c 'SOLEUR_GIT_BARE_SELFHEAL_FAILED' -- ':!knowledge-base/project/plans' ':!knowledge-base/project/specs'`
+   returns **0**. **[D1 — deepen-plan self-grep fix]** The exclusions are load-bearing, not
+   cosmetic: this plan and its `tasks.md` both *name* the retired marker in prose (explaining why
+   it was collapsed), so a bare repo-wide grep fails on a **correct** implementation. Same carve-out
+   class as `**/archive/**` — planning artifacts are point-in-time records that must be free to cite
+   the thing they retired. Both markers emit a `git_version=` field.
 10. `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` is clean.
 11. `ADR-099` row 3's `.git` column names the root's `.git` **directory**, and the file contains an
     explicit statement that `[[ -d <root>/.git ]]` cannot discriminate row 2 from row 3's root.
@@ -874,6 +1003,14 @@ fire. No new AGENTS.md rule is proposed, so the 46000-byte always-loaded budget 
     `## Alternatives Considered` with the transition-through-row-3 rationale.
 13. Every `ADR-173` reference in this plan and in `tasks.md` matches the ordinal actually used
     (`grep -rn 'ADR-173' knowledge-base/project/{plans,specs}/feat-one-shot-7394-*/`).
+13a. **[D5]** `bash plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh` passes, and its
+    `:248-249` assertions now verify a **surviving** observable (lockless REMOVAL of the extension),
+    not the deleted `repositoryformatversion` / `worktreeConfig` writes.
+13b. **[D5]** `worktree-manager-atomic-config.test.sh` Test 17 asserts `extensions.worktreeConfig`
+    is **absent** and `core.bare` is retained on a genuine bare repo, and no test in the repo still
+    asserts the extension is SET by `ensure_bare_config`:
+    `git grep -n 'extensions.worktreeConfig' plugins/soleur/test/ | grep -v 'ABSENT\|MISS\|NOT set'`
+    returns only seed/removal lines.
 14. `bash scripts/test-all.sh` — read the `N/M` summary line; no new failures vs. the pre-change
     baseline recorded in Phase 0.
 15. PR body uses `Closes #7394` (this is a code fix that takes effect at merge, not an
@@ -1081,6 +1218,19 @@ sign-off). `ux-design-lead` and `cmo` were **not** activated: the mechanical UI-
 | — | P2 | cto | Markers lacked `git_version`; no detection for a git-native shared-config de-bare. |
 | — | P2 | cto | `## Deferrals: None` contradicted the plan's own facts 2 and 3 → one deferral filed. |
 | — | — | cpo | **SIGN-OFF: APPROVED**, no blocking conditions. Non-blocking: name the live alpha-tester exposure in `## User-Brand Impact` — applied. |
+
+**Deepen-plan verify-the-negative pass (2026-08-10).** All eight of the plan's load-bearing negative
+claims were re-probed against the tree and **CONFIRM**: the sole production setter of
+`extensions.worktreeConfig` is `worktree-manager.sh:654`; `worktree-config-seed.ts:71`,
+`ensure-workspace-repo.ts:245-252` and `workspace.test.ts:83-98` each remove or assert its absence;
+`create_draft_pr` (`:2418-2463`) never calls `ensure_bare_config`; the function has exactly five
+call sites in exactly three enclosing functions; `git-data-provision.sh`'s only git-mutating line is
+`git init --bare --quiet`; and `WORKTREE_DIR` (`:160`) is confirmed the **only** top-level consumer
+of `GIT_ROOT` (every other read is inside a function body). Two dependencies the pass surfaced that
+the plan had left implicit are now folded in: **[D5]** above, and the fact that `MARKER_RE`
+(`git-lock-marker-telemetry.ts:92-93`) currently contains **neither** new marker — so Phase 6 is a
+hard dependency of the Observability section, not a nicety. `worktree wedge:` is already in that
+alternation, so the existing give-up line is mirrored today.
 
 Verified-correct by the panel and recorded so they are not re-litigated: the `BASH_SOURCE == $0`
 guard exists (`:2649`); `scripts/test-all.sh:743` globs `plugins/soleur/test/*.test.sh`;

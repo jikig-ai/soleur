@@ -165,7 +165,9 @@ Derived from the finalized (post-plan-review) plan. `[R#]` tags map to that plan
 - [ ] 6.3 Update the file's header marker-inventory comment.
 - [ ] 6.4 Extend `apps/web-platform/test/git-lock-marker-telemetry.test.ts`: one case per marker
       plus a `branch=failed` case asserting wedge classification.
-- [ ] 6.5 `git grep -c 'SOLEUR_GIT_BARE_SELFHEAL_FAILED'` returns **0** repo-wide.
+- [ ] 6.5 `git grep -c 'SOLEUR_GIT_BARE_SELFHEAL_FAILED' -- ':!knowledge-base/project/plans' ':!knowledge-base/project/specs'`
+      returns **0**. **[D1]** The exclusions are required — this file and the plan both name the
+      retired marker in prose, so a bare repo-wide grep fails on a correct implementation.
 - [ ] 6.6 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` is clean.
 
 ## Phase 7 — Architecture records
@@ -187,6 +189,27 @@ Derived from the finalized (post-plan-review) plan. `[R#]` tags map to that plan
 - [ ] 7.6 On renumber, sweep the whole feature's artifacts:
       `grep -rn 'ADR-173' knowledge-base/project/{plans,specs}/feat-one-shot-7394-*/`.
 
+## Phase 7.5 — [D5, P0] Re-point the two sibling suites that assert the OLD polarity
+
+⚠️ Without this, three assertions go red at 8.1–8.4 with failure text claiming the fix is a regression.
+
+- [ ] 7.5.1 `plugins/soleur/test/worktree-manager-atomic-config.test.sh` **Test 17** (~`:425-428`)
+      asserts `extensions.worktreeConfig == true` on a genuine bare repo. Invert it to the new
+      invariant (extension **absent**, `core.bare` **retained as true**) and rewrite both the PASS
+      and FAIL strings — the current FAIL text (*"bare repo lost its extensions.worktreeConfig
+      surgery — bare-layout regression"*) would mislead a future reader into restoring the bug.
+- [ ] 7.5.2 `plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh` `:248-249` assert
+      `core.repositoryformatversion == 1` and `extensions.worktreeConfig == true` *"written via
+      lockless path"* — both writes are deleted by task 3.1. Their real purpose (prove the lockless
+      writer works when `config.lock` is a non-regular node) is still valid, so **re-point onto a
+      surviving observable**: seed the fixture with `extensions.worktreeConfig=true`, then assert it
+      was **REMOVED** via the lockless path. Bonus: that exercises the `--unset-all` path task 3.0
+      fixes.
+- [ ] 7.5.3 Do **NOT** delete these assertions — they are the only coverage of the lockless-writer
+      path under a wedged lock (`#5934` / `#5912`).
+- [ ] 7.5.4 Sweep: `git grep -n 'extensions.worktreeConfig' plugins/soleur/test/` — every remaining
+      hit must be a seed line or an absence assertion, never an "is SET by ensure_bare_config" claim.
+
 ## Phase 8 — Verification
 
 - [ ] 8.1 `bash plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh` — all 14 cases.
@@ -194,6 +217,7 @@ Derived from the finalized (post-plan-review) plan. `[R#]` tags map to that plan
       Tests 23/24: either add `[[ ! -e "$WS24/.git/config.worktree" ]]` to test 23, or update its
       comment to record that safety now comes from Phase 3's structural removal.
 - [ ] 8.3 `bash plugins/soleur/test/worktree-manager-bare-sync.test.sh` — green.
+- [ ] 8.3a **[D5]** `bash plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh` — green.
 - [ ] 8.4 `bash scripts/test-all.sh` — read the **`N/M` summary line**, not a piped exit code. No new
       failures vs the Phase 0.5 baseline.
 - [ ] 8.5 Walk every Acceptance Criterion in the plan (1–14 plus 7a, 8a–8i) and record the actual
@@ -202,7 +226,7 @@ Derived from the finalized (post-plan-review) plan. `[R#]` tags map to that plan
       what facts 2 and 3 leave load-bearing*. Required before the PR is marked ready.
 - [ ] 8.7 PR body uses **`Closes #7394`** (a code fix taking effect at merge, not an
       ops-remediation), includes the `## Changelog` section, and records `git --version`.
-- [ ] 8.8 Confirm `knowledge-base/project/specs/feat-one-shot-7394-.../decision-challenges.md` is
+- [ ] 8.8 Confirm `knowledge-base/project/specs/feat-one-shot-7394-worktree-manager-bare-repo-layout/decision-challenges.md` is
       committed so `/ship` Phase 6 can render it into the PR body.
 
 ---
