@@ -221,6 +221,15 @@ used: does the file have **frontmatter + Overview + Acceptance Criteria** sectio
 skill to re-invoke. Every other token is opaque here; `plan` owns its own phase vocabulary, and
 duplicating it would couple two files through nothing but a test.
 
+**The Undetermined arm runs at most once.** A full re-run is the recovery for an ambiguous
+artifact, not a retry loop. If planning comes back Undetermined a *second* time for the same
+branch, stop: do not re-invoke planning again, and file an `action-required` issue naming the plan
+path, both verdicts and the branch. A deterministic re-failure is not a transient one, and looping
+on it would multiply the operator's spend with no re-disclosure
+(`hr-autonomous-loop-skill-api-budget-disclosure`). `plan` and `deepen-plan` cap their own
+in-phase retries at 2 with a strict-advance rule before ever reaching this point, so arriving here
+twice means the artifact is unusable rather than incomplete.
+
 Record the outcome in the `## Plan Phase` block of session-state.md, on every path:
 
 ```

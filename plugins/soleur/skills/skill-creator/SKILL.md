@@ -153,7 +153,7 @@ The script:
 
 After initialization, customize or remove the generated SKILL.md and example files as needed.
 
-- Before writing a new skill description, run `bun test plugins/soleur/test/components.test.ts` to check the current word budget (1800 limit). Target 12-15 words for new skill descriptions — the budget is at 99% capacity as of 2026-04-05.
+- Before writing a new skill description, run `bun test plugins/soleur/test/components.test.ts` to check the current word budget; the cap is `SKILL_DESCRIPTION_WORD_BUDGET` in that file, which is the enforcing gate and the only authority on the number. Target 12-15 words for new skill descriptions, and assume **zero headroom until measured** — the budget has run at or near capacity for most of its life, and the cap itself has been raised several times, so any figure quoted from memory or from an older document is stale by default.
 - After creating a new skill, manually add it to `plugins/soleur/docs/_data/skills.js` in the `SKILL_CATEGORIES` map -- skills are NOT auto-discovered, and missing this step silently removes the skill from the docs site with no build error.
 - New agent files created mid-session cannot be invoked via `subagent_type` because the plugin registry is stale at session start; for live testing, use `general-purpose` agent type and embed the full instructions in the task prompt.
 
