@@ -246,40 +246,6 @@ jobs:
           docker push "$IMAGE:$TAG"
           echo "Pushed $IMAGE:$TAG"
 
-      # Keyless-sign the GHCR DIGEST. Runs on BOTH paths — the build above and the
-      # digest-preserving `mirror_only` backfill — because the whole point is to be able to
-      # sign an ALREADY-PUBLISHED digest without a rebuild. A rebuild would move the tag's
-      # digest, and cloud-init-inngest.yml pins this image by @sha256, so rebuilding to obtain
-      # a signature would invalidate the very pin the signature exists to protect.
-      #
-      # Signs the DIGEST, never the tag: `cosign sign <ref>:<tag>` resolves the tag at sign
-      # time, so a tag that moves between push and sign yields a signature over something
-      # nobody reviewed. Mirrors reusable-release.yml, which signs `${IMAGE}@${DIGEST}`.
-      - name: Install cosign (pinned)
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-      - name: Cosign-sign the GHCR digest (keyless)
-        env:
-          IMAGE: ghcr.io/jikig-ai/soleur-inngest-bootstrap
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          set -uo pipefail
-          # Resolve through a FILE, not $( ), for the reason the zot block below already gives:
-          # a retry/notice line on stdout would be captured into the variable and the digest
-          # would silently become garbage.
-          rc=0
-          crane digest "$IMAGE:$TAG" > "$RUNNER_TEMP/sign.digest" 2> "$RUNNER_TEMP/sign.err" || rc=$?
-          if [[ "$rc" -ne 0 ]]; then
-            echo "::error::could not resolve ${IMAGE}:${TAG} at GHCR to sign it (rc=${rc}): $(tr '\n' ' ' < "$RUNNER_TEMP/sign.err")" >&2
-            exit 1
-          fi
-          DIGEST=$(grep -oE '^sha256:[0-9a-f]{64}$' "$RUNNER_TEMP/sign.digest" | head -1 || true)
-          # FAIL CLOSED on an unparseable digest. Signing "$IMAGE@" or "$IMAGE@garbage" would
-          # either error confusingly or, worse, succeed against something unintended.
-          [[ -n "$DIGEST" ]] || {
-            echo "::error::${IMAGE}:${TAG} did not resolve to a sha256 digest; refusing to sign." >&2; exit 1; }
-          cosign sign --yes "${IMAGE}@${DIGEST}"
-          echo "Signed ${IMAGE}@${DIGEST}"
-
       # --- #6122 (ADR-096) Phase 2: mirror the inngest-bootstrap image to the self-hosted
       # zot registry, DIGEST-PRESERVING (#7144 finding 2).
       #
@@ -647,6 +613,49 @@ jobs:
             echo "> NIC) is unverified for this repo, and zot retention keeps only the 5 most"
             echo "> recent \`v*\` tags. See the #7203 review findings."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Keyless-sign the GHCR DIGEST. Runs on BOTH paths — the build above and the
+      # digest-preserving `mirror_only` backfill — because the whole point is to be able to
+      # sign an ALREADY-PUBLISHED digest without a rebuild. A rebuild would move the tag's
+      # digest, and cloud-init-inngest.yml pins this image by @sha256, so rebuilding to obtain
+      # a signature would invalidate the very pin the signature exists to protect.
+      #
+      # Signs the DIGEST, never the tag: `cosign sign <ref>:<tag>` resolves the tag at sign
+      # time, so a tag that moves between push and sign yields a signature over something
+      # nobody reviewed. Mirrors reusable-release.yml, which signs `${IMAGE}@${DIGEST}`.
+      - name: Install cosign (pinned)
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Cosign-sign the GHCR digest (keyless)
+        env:
+          IMAGE: ghcr.io/jikig-ai/soleur-inngest-bootstrap
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -uo pipefail
+          # crane is installed by the zot-mirror step above (SHA-pinned, retried, and shared with
+          # reusable-release.yml under a cross-workflow parity check), which is why these steps sit
+          # AFTER it rather than beside the push. Stating the dependency instead of assuming it:
+          # placed before that step, this ran `crane: command not found` on EVERY invocation,
+          # including the mirror_only backfill this change exists to enable.
+          command -v crane >/dev/null || {
+            echo "::error::crane is not on PATH — the zot-mirror step installs it and must run first, or its install degraded (see crane_verify above). Refusing to sign without a digest." >&2
+            exit 1
+          }
+          # Resolve through a FILE, not $( ), for the reason the zot block below already gives:
+          # a retry/notice line on stdout would be captured into the variable and the digest
+          # would silently become garbage.
+          rc=0
+          crane digest "$IMAGE:$TAG" > "$RUNNER_TEMP/sign.digest" 2> "$RUNNER_TEMP/sign.err" || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::could not resolve ${IMAGE}:${TAG} at GHCR to sign it (rc=${rc}): $(tr '\n' ' ' < "$RUNNER_TEMP/sign.err")" >&2
+            exit 1
+          fi
+          DIGEST=$(grep -oE '^sha256:[0-9a-f]{64}$' "$RUNNER_TEMP/sign.digest" | head -1 || true)
+          # FAIL CLOSED on an unparseable digest. Signing "$IMAGE@" or "$IMAGE@garbage" would
+          # either error confusingly or, worse, succeed against something unintended.
+          [[ -n "$DIGEST" ]] || {
+            echo "::error::${IMAGE}:${TAG} did not resolve to a sha256 digest; refusing to sign." >&2; exit 1; }
+          cosign sign --yes "${IMAGE}@${DIGEST}"
+          echo "Signed ${IMAGE}@${DIGEST}"
 
       - name: Tear down cloudflared registry bridge
         if: always()
