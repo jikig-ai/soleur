@@ -6,7 +6,9 @@ Issue: #7409 · Lane: `cross-domain` · Brand-survival threshold: `single-user i
 **Destination (decided):** `plugins/soleur/scripts/lib/session-state.sh`
 **Test destination:** `plugins/soleur/test/session-state.test.sh`
 
-> **Read the plan's Sharp Edges before starting.** Three traps have already bitten this plan once each: `is_lease_active` passes vacuously; `expected_duration_min=240` is the default at two layers so asserting it proves nothing; and Python `fnmatch` crosses `/` where bash globs do not.
+> **Read the plan's Sharp Edges before starting.** Five traps have already bitten this plan once each: `is_lease_active` passes vacuously; `expected_duration_min=240` is the default at two layers so asserting it proves nothing; Python `fnmatch` crosses `/` where bash globs do not; the `## User-Brand Impact` threshold must be a **bullet** or `/soleur:preflight` Check 6 hard-FAILs at ship time; and an AC grep must be **run against the tree**, not read — doing so is what found `lease-protects-active.test.sh:128`.
+
+> **Do not close #7409 from a move-only PR.** If the CTO's two-PR split (DC-1) is ever adopted, the first PR uses `Ref #7409`; only the PR carrying Phase 2 may use `Closes #7409`.
 
 ---
 
@@ -39,7 +41,8 @@ Issue: #7409 · Lane: `cross-domain` · Brand-survival threshold: `single-user i
 | `plugins/soleur/test/worktree-manager-safe-branch-sanitization.test.sh` | `:209` | `$SCRIPT_DIR/../scripts/lib/session-state.sh` |
 
   - [ ] Each `source` line has a paired `# shellcheck source=` directive **one line above** — repoint both, or `shellcheck -x` emits SC1091.
-- [ ] **1.5** Prose sweep: `session-state.sh:266,362` (its own CLI-usage comments — the copy-source for the SKILL.md invocations), `session-state.test.sh:2,194,374`, `session-state.sh` header (`agent-token-tee.sh:160-170`), `.claude/hooks/pre-merge-auto-close-scan.sh:102`, `.claude/hooks/prod-write-defer-gate.sh:43`, `scripts/tmpfs-guard.sh:31,804`, `git-worktree/SKILL.md:179`.
+- [ ] **1.5** Prose sweep: `session-state.sh:266,362` (its own CLI-usage comments — the copy-source for the SKILL.md invocations), `session-state.test.sh:2,194,374`, **`lease-protects-active.test.sh:128`** (CLI-usage comment — **inside AC6's grep scope**; omitting it turns AC6 red), `session-state.sh` header (`agent-token-tee.sh:160-170`), `.claude/hooks/pre-merge-auto-close-scan.sh:102`, `.claude/hooks/prod-write-defer-gate.sh:43`, `scripts/tmpfs-guard.sh:31,804`, `git-worktree/SKILL.md:179`.
+  - Self-check before claiming AC6: `git grep -lE '\.claude/hooks/lib/session-state\.sh' -- plugins/soleur/skills/` must return **nothing**. At plan time it returned 9 files — that list *is* the work list for this pattern.
 - [ ] **1.6** ⛔ **DO NOT TOUCH** — these use the bare basename `session-state.sh` with no path:
   - `plugins/soleur/skills/plan/SKILL.md:962`, `plugins/soleur/skills/review/SKILL.md:1339`
   - `.claude/hooks/pre-merge-rebase-parity.test.sh:150,157`, `pre-merge-rebase.test.sh:415`, `prod-write-defer-gate.test.sh:199,218` — these **assert** the hooks still match the wrapped form; editing them breaks the #3689 bypass gate.

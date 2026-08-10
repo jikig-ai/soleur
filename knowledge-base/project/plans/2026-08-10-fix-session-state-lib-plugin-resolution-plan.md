@@ -50,6 +50,38 @@ The real install at `~/.claude/plugins/cache/soleur/soleur/0.0.0-dev/` contains 
 
 **P2 is a one-liner, not a resolver chain.** `git-worktree/SKILL.md:173` already invokes the script as `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh …`. Post-move the library sits behind the *identical* anchor. If that anchor does not resolve, the user cannot run **any** Soleur skill — #7409 is not the bug they have. So a bespoke 4-arm chain plus an extracted resolver would invent a seventh competing pattern for an unreachable case.
 
+## Deepen-Plan Research Insights
+
+**Deepened:** 2026-08-10. Gates run: 4.4 (precedent-diff), 4.5, 4.55, 4.6, 4.7, 4.8, 4.9, 4.10. Findings below are *measurements*, not recommendations — each was produced by running the gate or the AC against the real tree.
+
+**Gate results**
+
+| Gate | Result |
+|---|---|
+| 4.4 Precedent-diff (pattern-bound behavior) | **Precedent exists and is adopted.** `$SCRIPT_DIR`-relative sourcing of a shipped plugin helper is already the canonical form: `plugins/soleur/hooks/stop-hook.sh:14` does `source "$SCRIPT_DIR/../scripts/resolve-git-root.sh"`, and `.openhands/hooks/stop-hook.sh:18-25` shows the repo-side consumer form with an `if [[ -f ]]` graceful arm. The plan's P1 resolution is the same shape — not a novel pattern. |
+| 4.5 Network-outage | **Not triggered.** No SSH/connectivity symptom; no `provisioner`/`connection` block in scope. |
+| 4.55 Downtime & cutover | **Not triggered.** No serving surface goes offline: no infra reboot/replace, no lock-taking DDL, no router/deploy restructure. |
+| 4.6 User-Brand Impact | **HALT FIRED, then fixed** — see below. |
+| 4.7 Observability | **Pass.** All 5 fields present with non-placeholder values; `discoverability_test.command` is `ssh`-free. |
+| 4.8 PAT-shaped variable | **Pass.** Zero matches across all four PAT patterns. |
+| 4.9 UI wireframe | **Not triggered.** No UI-surface path in Files to Create/Edit. |
+| 4.10 Encryption posture | **Not triggered.** No `.tf`, migration, cloud-init, docker-compose, store class, or new cross-component connection. |
+
+**Two defects found by running gates/ACs rather than reading them**
+
+1. **The plan would have FAILED `/soleur:preflight` Check 6 at ship time.** Step 6.5 extracts the threshold with `grep -E '^[[:space:]]*[-*][[:space:]]+\*\*Brand-survival threshold:\*\*'` — a **bullet-form** requirement. The first draft's non-bulleted `**Brand-survival threshold:** …` yielded an empty `THRESHOLD_LINE` and a hard FAIL. Fixed to canonical bullet form and re-verified by running Step 6.5's own regex, which now returns `PASS: threshold = single-user incident`. Generalisable: the canonical bullet is a **parser contract**, not styling.
+
+2. **AC6 would have gone red on a line the plan never listed.** Running AC6's grep against the real tree returns 9 in-scope files, including `lease-protects-active.test.sh:128` — a CLI-usage comment carrying the old path. Phase 1.5 and Files-to-Edit now list it. Generalisable: an AC that greps a scope must be **executed against the current tree at plan time**; the returned file list *is* the Files-to-Edit list for that pattern.
+
+**Citation verification (all resolved live, none from memory)**
+
+- Rule IDs cited: `cq-write-failing-tests-before`, `cq-assert-anchor-not-bare-token` — both confirmed ACTIVE in `AGENTS.md`; neither appears in `scripts/retired-rule-ids.txt`.
+- Issues/PRs: #7409 `OPEN` (unresolved, correctly targeted) · #5454 `CLOSED` · #3689 `MERGED` · #6222 `OPEN` (correctly cited as the still-open residual class) · #7278 `CLOSED`. The #5454 attribution is taken from the code itself — `worktree-manager.sh` carries an inline `FAIL CLOSED (#5454)` comment — not from recollection.
+- ADR ordinal derived from freshly-fetched `origin/main` (`ADR-174` highest), and flagged provisional.
+- GitHub labels for the deferrals (`domain/engineering`, `type/bug`) confirmed to exist.
+- AC grep scopes are `.claude/hooks/lib/` and `plugins/soleur/skills/` — neither contains `knowledge-base/`, so no AC self-matches this plan's own prose.
+- `plugins/soleur/skills/{plan,review}/SKILL.md` confirmed **not** matched by AC6's pattern (they carry the bare basename only), so the Phase 1.6 do-not-touch list cannot false-fail the AC.
+
 ## Premise Validation
 
 | Premise (from #7409) | Check | Verdict |
@@ -78,11 +110,11 @@ The real install at `~/.claude/plugins/cache/soleur/soleur/0.0.0-dev/` contains 
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** `cleanup-merged` reaping a worktree a live session is working in — working tree, local branch, remote branch deleted and the PR closed. Hours of unpushed work gone mid-run; the tell is failures reading `fatal: Unable to read current working directory`. Secondarily, `ship`/`merge-pr` exit 127 and the PR is silently never queued for auto-merge.
+- **If this lands broken, the user experiences:** `cleanup-merged` reaping a worktree a live session is working in — working tree, local branch, remote branch deleted and the PR closed. Hours of unpushed work gone mid-run; the tell is failures reading `fatal: Unable to read current working directory`. Secondarily, `ship`/`merge-pr` exit 127 and the PR is silently never queued for auto-merge.
+- **If this leaks, the user's workflow is exposed via:** not a confidentiality surface. The lease file records `pid`, `ppid`, `skill`, `started_at`, `hostname` on the user's own disk, never transmitted. No new egress, store, or third party.
+- **Brand-survival threshold:** `single-user incident` — one marketplace user losing a branch + PR to a concurrent reap is unrecoverable, and is exactly what Soleur's parallel-worktree pitch promises to prevent. `user-impact-reviewer` runs at review time.
 
-**If this leaks, the user's workflow is exposed via:** not a confidentiality surface. The lease file records `pid`, `ppid`, `skill`, `started_at`, `hostname` on the user's own disk, never transmitted. No new egress, store, or third party.
-
-**Brand-survival threshold:** `single-user incident` — one marketplace user losing a branch + PR to a concurrent reap is unrecoverable and is exactly what Soleur's parallel-worktree pitch promises to prevent. `user-impact-reviewer` runs at review time.
+> **Canonical bullet form is load-bearing, not styling.** `/soleur:preflight` Check 6 Step 6.5 extracts this with `grep -E '^[[:space:]]*[-*][[:space:]]+\*\*Brand-survival threshold:\*\*'`. A non-bulleted `**Brand-survival threshold:** …` line does **not** match, yields an empty `THRESHOLD_LINE`, and **FAILs the ship-time gate**. This plan's first draft had exactly that defect; it was caught by running the gate at deepen time rather than at ship time.
 
 ## Architecture Decision (ADR/C4)
 
@@ -231,7 +263,7 @@ One PR, and Phases 1-2 are **one commit** — a separate "pure rename" commit wa
 
 **Each `source` line has a paired `# shellcheck source=` directive one line above.** Repointing one without the other leaves shellcheck resolving a dead path.
 
-1.5 Prose sweep — stale after the move: `session-state.sh:266,362` (its **own** CLI-usage comments, which are the copy-source for the seven SKILL.md invocations), `session-state.test.sh:2,194,374`, `session-state.sh`'s header citing `.claude/hooks/agent-token-tee.sh:160-170`, `.claude/hooks/pre-merge-auto-close-scan.sh:102`, `.claude/hooks/prod-write-defer-gate.sh:43`, `scripts/tmpfs-guard.sh:31,804`, and `git-worktree/SKILL.md:179` (describes `sync_bare_files` as a `plugins/soleur/hooks/*` whitelist; it is actually a full `checkout-index -a` mirror — already stale, made more misleading by this change).
+1.5 Prose sweep — stale after the move: `session-state.sh:266,362` (its **own** CLI-usage comments, which are the copy-source for the seven SKILL.md invocations), `session-state.test.sh:2,194,374`, **`lease-protects-active.test.sh:128`** (a CLI-usage comment — inside AC6's grep scope, so leaving it turns AC6 red; found by running AC6's grep against the real tree at deepen time), `session-state.sh`'s header citing `.claude/hooks/agent-token-tee.sh:160-170`, `.claude/hooks/pre-merge-auto-close-scan.sh:102`, `.claude/hooks/prod-write-defer-gate.sh:43`, `scripts/tmpfs-guard.sh:31,804`, and `git-worktree/SKILL.md:179` (describes `sync_bare_files` as a `plugins/soleur/hooks/*` whitelist; it is actually a full `checkout-index -a` mirror — already stale, made more misleading by this change).
 
 1.6 **DO NOT TOUCH.** These use the **bare basename** `session-state.sh` with no path and need no edit; a reflexive sweep here reintroduces the #3689 hook-bypass class the first two files exist to warn about:
    - `plugins/soleur/skills/plan/SKILL.md:962`, `plugins/soleur/skills/review/SKILL.md:1339`
@@ -343,7 +375,7 @@ Settle the R8 confound: run a Soleur skill from a directory with **no** `plugins
 - `scripts/lib/test-contention.sh:47` · `scripts/tmpfs-guard.sh:31,804` *(prose)* · `scripts/lint-shell-capture-exit.baseline.txt:8,9`
 - `plugins/soleur/test/components.test.ts` — `EXEC_SURFACE_GLOBS`
 - `plugins/soleur/test/concurrent-ship.test.sh:12` · `plugins/soleur/test/worktree-manager-safe-branch-sanitization.test.sh:209`
-- `plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh` — `:14`, `:253`, + the cache-install scenario
+- `plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh` — `:14`, **`:128`**, `:253`, + the new cache-install / reaper-refusal / anchor-hop / interop scenarios
 - `knowledge-base/engineering/architecture/decisions/ADR-093-…md` — cross-reference
 - `knowledge-base/engineering/architecture/diagrams/model.c4` — `platform.plugin` + `platform.engine.hooks` descriptions, `hooks -> plugin` edge
 - `knowledge-base/engineering/architecture/diagrams/model.likec4.json` — **regenerated**, not hand-edited
