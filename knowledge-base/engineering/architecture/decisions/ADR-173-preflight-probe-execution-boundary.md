@@ -154,7 +154,7 @@ execution, and Step 10.5 runs `bash -c "$CMD"` regardless, so every probe alread
 inline program. Every shape it could reject is strictly weaker than the remedy it
 prescribes. The original revision therefore shipped rules that rejected a *spelling*, not a
 capability: measured, the inline-program rules were 50% false-positive on the real corpus
-and the repo-relative path rule fired once in 678 commands, while false-rejecting
+and the repo-relative path rule fired once across the corpus, while false-rejecting
 `bun test … -p`, `python3 … --print json` and `node … -e prod`. All three rules, and the
 path-shaped exemption, were deleted.
 
@@ -265,8 +265,8 @@ claim, a subprocess inside a pure function, and a `./`-normalisation trap.
 **Keep the denylist and extend it.** Unbounded-negative by construction. This is the
 defect, not the fix.
 
-**Exclude `bash` entirely.** Hard-blocks 78/632 corpus probes, most of them
-uncredentialed, with no workaround.
+**Exclude `bash` entirely.** Hard-blocks the 78-probe `bash <script>` corpus class,
+most of it uncredentialed, with no workaround.
 
 **A scoped read-only token minted per check.** Per-vendor minting paths, and the token
 must live somewhere readable — **reintroducing ambient auth**, which is the thing being

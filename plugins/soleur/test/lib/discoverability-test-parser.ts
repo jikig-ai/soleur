@@ -78,7 +78,7 @@ export const PROBE_VERB_ALLOWLIST = [
 // capability than anything they rejected, and Step 10.5 runs `bash -c "$CMD"`
 // regardless, so every probe already is an inline program. They rejected a
 // spelling, not a capability. Measured cost on the real corpus: 1 of the 2
-// inline rejects was a false positive, the path rule fired once in 678 commands,
+// inline rejects was a false positive, the path rule fired once across the corpus,
 // and both false-rejected legitimate probes (`bun test … -p`,
 // `python3 … --print json`, `node … -e prod`). Negative value on both sides.
 //
@@ -258,7 +258,11 @@ export function parseExpected(observabilityBlock: string): string {
 /**
  * Read the optional `credentials_required` sub-field of `discoverability_test`.
  *
- * SCOPED TO THE SUB-BLOCK, deliberately. `expected_output` is read with a flat
+ * SCOPED TO THE SUB-BLOCK, deliberately — which NARROWS the bypass class
+ * without closing it: a `credentials_required:` line sitting inside the
+ * command's own block scalar is still honoured, so a multi-line command can
+ * still waive itself. Constraining to direct children would need a YAML-aware
+ * parse the flat awk deliberately avoids. Stated rather than claimed closed. `expected_output` is read with a flat
  * whole-block scan and that is survivable, because a stray `expected_output:`
  * only changes what a probe is compared against. This field SKIPS EXECUTION
  * ENTIRELY, so the same flat read is a bypass rather than a parsing quirk:
@@ -299,7 +303,16 @@ export function parseCredentialsRequired(observabilityBlock: string): string {
     const raw = stripQuotes(m[1].trim());
     // A comment-only value, a bare block/fold indicator, or nothing at all
     // declares nothing — and a declaration that says nothing waives nothing.
-    if (raw === "" || raw.startsWith("#") || raw === ">" || raw === "|") return "";
+    // The CHOMPED indicators are included for the same reason as the bare ones:
+    // #6772 made `>-` / `|-` first-class for `command:`, so an author following
+    // that pattern reaches for them FIRST. Omitting them covered the two shapes
+    // least likely to be typed.
+    if (
+      raw === "" ||
+      raw.startsWith("#") ||
+      [">", ">-", ">+", "|", "|-", "|+"].includes(raw)
+    )
+      return "";
     return raw;
   }
   return "";

@@ -43,6 +43,16 @@
 # by nothing here.
 set -uo pipefail
 
+# LC_ALL=C is load-bearing, not hygiene. `${var%%[[:space:]]*}` consults the
+# locale's `space` class: under glibc UTF-8 that includes U+2028/U+2029 and
+# U+2000-U+200A, under C it does not. Measured on `curl<U+2028>evilarg`:
+# LC_ALL=C rejects (verb is the whole run), en_US.UTF-8 accepts (verb is `curl`).
+# The TypeScript mirror documents its regex as equivalent "in C-locale", and
+# SKILL.md reasons from "U+2028/U+2029 are NOT in [[:space:]] under LC_ALL=C" --
+# so without this line that premise is false on any normal operator host, and the
+# parity harness cannot see it because no fixture carries a separator character.
+export LC_ALL=C
+
 if [[ $# -ne 1 ]]; then
   echo "usage: probe-verb-gate.sh <command>" >&2
   exit 2

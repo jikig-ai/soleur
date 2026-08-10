@@ -1173,6 +1173,11 @@ describe("#7393 GATE — executable parity between the runtime and its TS mirror
     '"doppler" secrets get X',
     "",
     "   ",
+    // Separator characters: U+2028 is in glibc UTF-8's space class and not in
+    // C's, so the gate pins LC_ALL=C. Without a row here the divergence is
+    // invisible to this harness.
+    "curl\u2028evilarg",
+    "curl\u00a0evilarg",
   ];
 
   test("the gate and rejectReason agree on verdict and reason for every shape", () => {
@@ -1197,9 +1202,11 @@ describe("#7393 GATE — executable parity between the runtime and its TS mirror
 });
 
 describe("#7393 A — deny-by-default probe-verb allowlist", () => {
-  // The eleven verbs are derived from a measured 632-command corpus of declared
-  // probes; every entry has >= 2 uses. Deny-by-default is the point: a verb that
-  // is not here is rejected, and widening is a reviewed one-line PR.
+  // Ten verbs, each with >= 2 uses in the measured corpus. ADR-173 §Layer 2
+  // states the extraction method (642 parseable commands: top-level .md under
+  // knowledge-base/project/plans/, archive/ excluded) rather than repeating a
+  // bare number three artifacts previously disagreed on. Deny-by-default is the
+  // point: a verb not here is rejected, and widening is a reviewed one-line PR.
   const ALLOWLISTED = [
     "curl -fsS -o /dev/null -w '%{http_code}' https://app.soleur.ai/api/inngest",
     "bash scripts/lint-workflows.sh --help",
@@ -1424,7 +1431,10 @@ describe("#7393 D — credentials_required => SKIP-DECLARED", () => {
   });
 
   test("D2d a bare block/fold indicator does NOT waive the check", () => {
-    for (const ind of [">", "|"]) {
+    // Includes the CHOMPED forms: #6772 made those first-class for `command:`,
+    // so they are the likelier shape an author reaches for, and the original set
+    // covered only the two least likely.
+    for (const ind of [">", ">-", ">+", "|", "|-", "|+"]) {
       const body = [
         "## Observability",
         "",
@@ -1449,6 +1459,14 @@ describe("#7393 D — credentials_required => SKIP-DECLARED", () => {
       // the waiver instead of refusing it.
       "placeholder",
       "manual operator check",
+      // Quoted and trailing-whitespace forms. These were the bash-ONLY bypass:
+      // the runtime stripped `"` and never trimmed, so `'placeholder'` and
+      // `TODO  ` reached SKIP-DECLARED while this mirror correctly FAILed them.
+      // The suite could not see it because every fixture went through the mirror.
+      "'placeholder'",
+      '"TODO"',
+      "TODO  ",
+      "  TBD",
     ]) {
       const body = `## Observability\n\n${obs(
         "discoverability_test:",
