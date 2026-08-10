@@ -235,10 +235,24 @@ describe("drift guard: every sentinel the shell script emits is mirrored", () =>
     );
     const unique = [...new Set(sentinels)];
     expect(unique.length).toBeGreaterThan(0); // non-vacuous: the scripts DO emit sentinels
-    // Every emitted sentinel must be mirrored — except the readiness-READY status line,
-    // which is a control signal for go.md (ready path), not a forensic to log.
+    // Every emitted sentinel must be mirrored — except SUCCESS-PATH control signals,
+    // which are read locally and are not forensics to log:
+    //   - SOLEUR_GIT_REPO_READY — go.md's readiness gate reads it on the ready path.
+    //   - SOLEUR_WORKTREE_LEASE_LIB_OK (#7409) — the positive counterpart of
+    //     SOLEUR_WORKTREE_LEASE_LIB_MISSING, emitted once per worktree-manager.sh
+    //     load whenever the lease library resolves, i.e. on EVERY invocation in a
+    //     healthy tree (`list` included). It exists so that silence is not ambiguous
+    //     at the operator's terminal — the only observability layer a marketplace
+    //     install has. Mirroring the healthy path of the highest-frequency script in
+    //     the system would be pure volume, and paging on it is meaningless: it
+    //     reports that nothing is wrong. The FAILURE direction stays mirrored via
+    //     ..._LIB_MISSING, so the signal this telemetry exists for is unaffected.
+    const SUCCESS_PATH_CONTROL_SIGNALS = new Set([
+      "SOLEUR_GIT_REPO_READY",
+      "SOLEUR_WORKTREE_LEASE_LIB_OK",
+    ]);
     for (const name of unique) {
-      if (name === "SOLEUR_GIT_REPO_READY") continue;
+      if (SUCCESS_PATH_CONTROL_SIGNALS.has(name)) continue;
       const sample = `${name} file=.git/config.lock type=chardevice rdev=1:3`;
       expect(
         extractGitLockMarkers(sample).length,

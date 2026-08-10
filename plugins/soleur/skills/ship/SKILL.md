@@ -1711,9 +1711,22 @@ non-failing: `gh api "repos/<o>/<r>/actions/runs?head_sha=$(git rev-parse HEAD)"
 After confirming mergeability, queue auto-merge and let GitHub handle waiting for CI. Wrap the call in the merge-main lock so parallel sessions don't queue auto-merges in the same window:
 
 ```bash
-bash .claude/hooks/lib/session-state.sh with_lock merge-main 600 -- \
+SS_LIB="${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/lib/session-state.sh"
+if [[ -r "$SS_LIB" ]]; then
+  bash "$SS_LIB" with_lock merge-main 600 -- \
+    gh pr merge <number> --squash --auto
+  rc=$?
+else
+  # Degrade OPEN, loudly (#7409). The lock is ADVISORY — it serialises parallel
+  # sessions queueing auto-merge. Failing closed here would leave a marketplace
+  # user's PR simply never queued, which is the original bug with a nicer
+  # message. Run the command unlocked and say so.
+  echo "SOLEUR_SESSION_STATE_LIB_MISSING path=$SS_LIB reason=running-unlocked"
   gh pr merge <number> --squash --auto
-rc=$?
+  rc=$?
+fi
+# rc=99 is emitted by with_lock only; the unlocked else-branch above cannot
+# produce it, so this stays a contention signal and never a false one.
 if [[ "$rc" -eq 99 ]]; then
   echo "merge-main lock contended >600s — another session is queueing auto-merge. Retry: re-run /ship after that session completes."
   exit 1

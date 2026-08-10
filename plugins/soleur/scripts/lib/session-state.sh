@@ -7,6 +7,8 @@
 #
 # Plan: knowledge-base/project/plans/2026-05-12-feat-bg-readiness-concurrency-hardening-plan.md
 # Canonical flock idiom: .claude/hooks/agent-token-tee.sh:160-170
+# Location: ships INSIDE the plugin (ADR-175, #7409) so a marketplace install
+# resolves it; .claude/hooks/** consumers reach in from the repo side.
 
 # Guard against double-source within a single shell.
 if [[ "${_SOLEUR_SESSION_STATE_LOADED:-}" == "1" ]]; then
@@ -263,7 +265,7 @@ release_lease() {
 
   # TWO owners can release, and the second one is why this function used to do
   # NOTHING. Measured before this change: the DOCUMENTED call —
-  #   bash .claude/hooks/lib/session-state.sh release_lease "$(basename "$PWD")"
+  #   bash <plugin-root>/scripts/lib/session-state.sh release_lease "$(basename "$PWD")"
   # which both one-shot and work tell you to run at the end — returned rc=0 and
   # deleted no file, because a fresh process has a different `$$` and an empty
   # `_LEASE_ACQUIRED_STARTED_AT`, so the in-process conjunction could never
@@ -359,7 +361,7 @@ is_lease_active() {
   # `acquire_lease` records `pid=$$`, and every DOCUMENTED entry point is a
   # short-lived process:
   #
-  #     bash .claude/hooks/lib/session-state.sh acquire_lease <worktree>
+  #     bash <plugin-root>/scripts/lib/session-state.sh acquire_lease <worktree>
   #     bash .../worktree-manager.sh --yes create <branch>
   #
   # so `$$` is a bash that exits within milliseconds of writing the file.

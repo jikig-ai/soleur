@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Tests for .claude/hooks/lib/session-state.sh.
+# Tests for plugins/soleur/scripts/lib/session-state.sh.
 #
 # T1-T8 per plan 2026-05-12-feat-bg-readiness-concurrency-hardening-plan.md.
-# Run via:  bash .claude/hooks/lib/session-state.test.sh
+# Run via:  bash plugins/soleur/test/session-state.test.sh
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HELPER="$SCRIPT_DIR/session-state.sh"
+HELPER="$SCRIPT_DIR/../scripts/lib/session-state.sh"
 
 PASS=0
 FAIL=0
@@ -191,7 +191,7 @@ set -e
 # entry point produces on the happy path, because `acquire_lease` records `pid=$$`
 # and those processes exit within milliseconds by design:
 #
-#     bash .claude/hooks/lib/session-state.sh acquire_lease <worktree>
+#     bash <plugin-root>/scripts/lib/session-state.sh acquire_lease <worktree>
 #     bash .../worktree-manager.sh --yes create <branch>
 #
 # One signal, two indistinguishable causes — so the old rule could not be right in
@@ -371,7 +371,7 @@ fi
 # `acquire_lease` records `pid=$$`. The DOCUMENTED entry points are
 # short-lived processes:
 #
-#     bash .claude/hooks/lib/session-state.sh acquire_lease <worktree>
+#     bash <plugin-root>/scripts/lib/session-state.sh acquire_lease <worktree>
 #     bash .../worktree-manager.sh --yes create <branch>
 #
 # so `$$` belongs to a bash that exits within milliseconds. `is_lease_active`
@@ -782,6 +782,10 @@ fi
 # satisfied by the prose.
 # ------------------------------------------------------------------------
 echo "T18: the worktree-manager wiring is pinned"
+# `../../..` reaches the repo root from plugins/soleur/test/ — the same depth it
+# reached from the pre-#7409 home at .claude/hooks/lib/, so this line survived the
+# move by COINCIDENCE rather than by design. Stated explicitly so a future
+# relocation does not silently point it at the wrong tree.
 WM="$(cd "$SCRIPT_DIR/../../.." && pwd)/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
 
 if [[ ! -f "$WM" ]]; then

@@ -9,7 +9,7 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-SS="$REPO_ROOT/.claude/hooks/lib/session-state.sh"
+SS="$REPO_ROOT/plugins/soleur/scripts/lib/session-state.sh"
 
 PASS=0; FAIL=0
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }

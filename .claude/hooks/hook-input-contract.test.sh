@@ -363,8 +363,9 @@ MIXED_LEAK_PAYLOAD="$(jq -nc '{tool_name:"Bash", tool_input:{command:"git stash 
 EVAL_ALLOW='eval "exec ${fd}>&-" 2>/dev/null || true'
 
 a1_idiom_ban() {
-  local offenders=() f line n stripped trimmed
+  local offenders=() scanned=() f line n stripped trimmed
   while IFS= read -r f; do
+    scanned+=("$f")
     [[ "$f" == *.test.sh ]] && continue
     stripped="$(sed 's/^[[:space:]]*#.*$//' "$f")"
     while IFS= read -r line; do
@@ -374,10 +375,33 @@ a1_idiom_ban() {
       [[ "$trimmed" == "$EVAL_ALLOW" && "$f" == */lib/session-state.sh ]] && continue
       offenders+=("${f#"$REPO_ROOT/"}:$n: $trimmed")
     done < <(printf '%s\n' "$stripped" | grep -nE '(^|[^[:alnum:]_])eval([[:space:]]|$)' || true)
-  done < <(find "$REPO_ROOT/.claude/hooks" "$REPO_ROOT/.openhands/hooks" -name '*.sh' -type f 2>/dev/null | sort)
+  done < <(find "$REPO_ROOT/.claude/hooks" "$REPO_ROOT/.openhands/hooks" \
+                "$REPO_ROOT/plugins/soleur/scripts" -name '*.sh' -type f 2>/dev/null | sort)
 
-  if (( ${#offenders[@]} == 0 )); then
-    ok "A1 no eval under .claude/hooks/** or .openhands/hooks/** (2 fd-close lines allow-listed)"
+  # MEMBERSHIP ASSERTION (#7409). Extending the roots above is a one-time patch;
+  # this is the tripwire. `find` is invoked with `2>/dev/null`, so deleting a
+  # root — or relocating the file out from under one — makes this gate report
+  # `ok` while scanning strictly less. A silently-narrowed green gate is the
+  # #5454 shape exactly: the assertion keeps passing and stops meaning anything.
+  #
+  # session-state.sh is the ONLY file in the scan set that needs the allow-listed
+  # `eval` fd-close idiom, so its presence is a sound proxy for "the roots still
+  # reach the plugin". It moved to plugins/soleur/scripts/lib/ in #7409; the
+  # carve-out above is suffix-matched (*/lib/session-state.sh) and needs no edit.
+  local found_ss=false
+  for f in "${scanned[@]}"; do
+    [[ "$f" == */lib/session-state.sh ]] && { found_ss=true; break; }
+  done
+  if [[ "$found_ss" != true ]]; then
+    bad "A1 scan set contains no */lib/session-state.sh — a root was removed or the file \
+relocated, so this gate is scanning less than it claims (ADR-156, #7409)" \
+      "scanned ${#scanned[@]} file(s)"
+  elif (( ${#offenders[@]} == 0 )); then
+    # The message names the ACTUAL scan set. A green assertion naming a narrower
+    # surface than it ran is the same evidence-vs-claim gap the membership check
+    # above exists to close.
+    ok "A1 no eval under .claude/hooks/**, .openhands/hooks/** or plugins/soleur/scripts/** \
+(${#scanned[@]} files; 2 fd-close lines allow-listed)"
   else
     bad "A1 eval found in ${#offenders[@]} place(s) — hook stdin is untrusted (ADR-156)" "${offenders[@]}"
   fi

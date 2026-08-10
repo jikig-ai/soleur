@@ -24,12 +24,12 @@ set -eo pipefail
 # shellcheck source=lib/incidents.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
 
-# shellcheck source=lib/session-state.sh
+# shellcheck source=../../plugins/soleur/scripts/lib/session-state.sh
 # headless_or_stderr routes warns to a log file under $GIT_COMMON_DIR/
 # soleur-session-state/logs/$PPID.log when stderr is not a TTY and
 # CLAUDECODE is set (running under `claude --bg`). Otherwise echoes to
 # stderr as before. Tolerate missing helper for legacy worktrees.
-_SS_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/session-state.sh"
+_SS_LIB="$(dirname "${BASH_SOURCE[0]}")/../../plugins/soleur/scripts/lib/session-state.sh"
 if [[ -f "$_SS_LIB" ]]; then
   # shellcheck source=/dev/null
   source "$_SS_LIB"

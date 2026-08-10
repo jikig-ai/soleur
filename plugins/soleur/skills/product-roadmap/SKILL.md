@@ -231,7 +231,26 @@ Present an output summary listing the document path, milestones created, issues 
 
 1. Run compound (`skill: soleur:compound`) to capture any learnings from the session.
 2. Use `/ship` to commit, push, and open a PR with the roadmap and any skill/agent changes.
-3. After the PR is created, queue auto-merge under the merge-main lock: `bash .claude/hooks/lib/session-state.sh with_lock merge-main 600 -- gh pr merge <number> --squash --auto`. The `--` separator is required (terminates `with_lock`'s positional args). If the wrapper returns rc=99, the lock was contended for >600s and the merge was NOT queued — surface to the operator and retry rather than assuming success.
+3. After the PR is created, queue auto-merge under the merge-main lock. The `--` separator is required (terminates `with_lock`'s positional args).
+
+   ```bash
+   SS_LIB="${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/lib/session-state.sh"
+   if [[ -r "$SS_LIB" ]]; then
+     bash "$SS_LIB" with_lock merge-main 600 -- \
+       gh pr merge <number> --squash --auto
+     rc=$?
+   else
+     # Degrade OPEN, loudly (#7409). The lock is ADVISORY — it serialises parallel
+     # sessions queueing auto-merge. Failing closed here would leave a marketplace
+     # user's PR simply never queued, which is the original bug with a nicer
+     # message. Run the command unlocked and say so.
+     echo "SOLEUR_SESSION_STATE_LIB_MISSING path=$SS_LIB reason=running-unlocked"
+     gh pr merge <number> --squash --auto
+     rc=$?
+   fi
+   ```
+
+   If the wrapper returns rc=99, the lock was contended for >600s and the merge was NOT queued — surface to the operator and retry rather than assuming success. **rc=99 is reachable only from the locked branch**: the degrade-open branch runs `gh pr merge` bare, which has no contention semantics, so a run that emitted `reason=running-unlocked` can never report rc=99 and its merge was queued without serialisation.
 4. Poll the PR using the Monitor tool with the same state machine as `/soleur:ship` Phase 7 (state+`mergeStateStatus`, BEHIND auto-sync capped at 6, required-check failure exit, DIRTY exit). Naive `gh pr view <number> --json state` is insufficient — it heartbeats silently through BEHIND / BLOCKED-with-CI-failure / DIRTY states. Reuse the loop body from `plugins/soleur/skills/ship/SKILL.md` Phase 7. **Precondition:** must run from inside a worktree (`git rev-parse --is-inside-work-tree`) — the BEHIND auto-sync uses `git merge origin/main && git push`.
 5. Run `cleanup-merged` to remove the worktree.
 
