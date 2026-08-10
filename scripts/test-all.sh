@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# EXIT CONTRACT (#7424)
+#   0  every registered suite passed
+#   1  >= 1 suite FAILED (an assertion verdict) — failure dominates when both are present
+#   3  0 failures and >= 1 suite KILLED — UNRESOLVED, not measured, and NOT green
+#      3 is a TOP-LEVEL contract only: a nested runner returning 3 into run_suite classifies
+#      as a plain FAIL, because rc=3 is not signal-shaped. Do not adopt 3 in a nested runner
+#      without revisiting this.
+#   2  usage error (TEST_GROUP took an unsupported value) — predates the above
+#
+# Every measured consumer treats this as binary zero/non-zero (lefthook, the three ci.yml
+# shards, package.json, grok-pre-push-gate.sh, main-health-monitor.yml), so 3 is safe for all
+# of them; exiting 0 on a killed suite would silently green every one. Note that ci.yml's
+# aggregate `test` job reads `needs.<shard>.result`, whose domain is
+# {success,failure,cancelled,skipped} — so the REQUIRED context cannot carry 3. CI collapses
+# killed into failure, and the distinction survives in the shard log and the [KILLED] lines.
+
 # Default TMPDIR to /var/tmp (disk-backed) rather than /tmp.
 #
 # /tmp on this machine class is a ~4 GiB SHARED tmpfs, and parallel worktrees are this
@@ -34,7 +50,9 @@ export TC_TMPDIR="${TC_TMPDIR:-/tmp}"
 # See: knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md
 #
 # Per-suite timing: when TEST_TIMING_LOG is set to a writable path, each
-# run_suite() invocation appends "<label>\t<elapsed_ms>[\tFAIL]" to that path.
+# run_suite() invocation appends "<label>\t<elapsed_ms>[\tFAIL|\tKILLED]" to that
+# path. Field 3 carries the result class for any non-passing suite; KILLED means
+# signal-shaped and UNRESOLVED, not failed (#7424).
 # Elapsed time uses bash 5.0+ EPOCHREALTIME (microsecond precision, no
 # coreutils dependency, portable across Linux + Homebrew bash on macOS).
 # CI runs ubuntu-latest (bash 5.x). macOS default /bin/bash is 3.2 — install
@@ -139,6 +157,65 @@ want_infra()   { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "infra"   ]]; }
 # --- Run Tests Per Directory ---
 failed=0
 suites=0
+# Beside failed/suites deliberately. Under `set -u` an uninitialized `killed`
+# aborts the summary block AFTER the terminal marker but BEFORE the exit arm,
+# yielding exit 0 on a run that had failures. This line is not cosmetic.
+killed=0
+
+# Classify a suite's exit code into exactly one of: ok | failed | killed.
+#
+# `killed` means SIGNAL-SHAPED, not "was killed by <signal>". $? cannot tell a
+# signal death from a literal exit(128+N) — `bash -c 'exit 143'` also yields 143
+# — so the class is a statement about the SHAPE of the status, and the rendered
+# line says so. Naming a cause here would reintroduce, one layer up, the defect
+# this whole change exists to remove.
+#
+# All three guards are load-bearing. Measured 2026-08-10, bash 5.3.9/Linux:
+#   kill -l 0   -> "EXIT"  (rc 0)          so `rc > 128` is what excludes rc=128
+#   kill -l 32  -> ""      (rc 0)          glibc-internal SIGCANCEL
+#   kill -l 33  -> ""      (rc 0)          glibc-internal SIGSETXID
+#                                          so `-n "$name"` is what excludes 160/161
+#   kill -l 143 -> "TERM"                  it MASKS values > 64
+# `kill -l` is therefore NOT a validity oracle. Anyone "simplifying away the
+# redundant > 128 check because kill -l already bounds it" breaks the classifier.
+#
+# The numeric guard closes an INPUT-side false green: without it, `(( rc == 0 ))`
+# on "" or " " evaluates TRUE and returns `ok` — the one class that increments no
+# counter and emits no warning. Not reachable from today's run_suite (`local rc=0`
+# guarantees numeric) but reachable from the suite that certifies this function.
+suite_exit_class() {
+  local rc="${1-}" name
+  [[ "$rc" =~ ^[0-9]+$ ]] || { printf 'failed\n'; return 0; }   # fail CLOSED on a malformed rc
+  (( rc == 0 )) && { printf 'ok\n'; return 0; }
+  # `<= 192` is a legibility bound and is NOT load-bearing: the call passes
+  # `kill -l $(( rc - 128 ))`, so for every rc in 193..255 the operand is 65..127,
+  # which kill -l rejects — the `-n "$name"` guard already excludes it. Mutating
+  # this to `rc > 128` leaves every table row byte-identical, so no test pins it.
+  # It is kept to state the intended domain, not because a row proves it.
+  if (( rc > 128 && rc <= 192 )); then
+    name=$(kill -l $(( rc - 128 )) 2>/dev/null) || name=""
+    [[ -n "$name" ]] && { printf 'killed\n'; return 0; }
+  fi
+  printf 'failed\n'
+}
+
+# Declared wall-clock budgets for suites known to be long. A `case`, not a
+# `declare -A`: no initialization ordering to get right, no associative-array
+# declaration at the top of an 800-line script, and zero churn at the 131
+# run_suite call sites. Emits nothing for an undeclared label.
+#
+# A budget NEVER changes a suite's status or the runner's exit code. It exists so
+# that a nine-minute suite is a STATED FACT rather than a surprise — which is the
+# attribution half of what a reader needs when a long suite does not come back.
+_suite_budget_ms() {
+  case "$1" in
+    # PENDING MEASUREMENT — do not fill this in from the incident's 560931ms.
+    # That figure is elapsed AT THE KILL, mid-way through the engine-mutation
+    # phase: a lower bound on the clean duration, and useless as a budget.
+    # tests/scripts/registry-gate-mutation-battery) printf '<measured>\n' ;;
+    *) return 0 ;;
+  esac
+}
 
 run_suite() {
   local label="$1"; shift
@@ -152,11 +229,23 @@ run_suite() {
   fi
   local start="$EPOCHREALTIME"
   echo "--- $label ---"
-  local status="ok"
-  if ! "$@"; then
-    status="FAIL"
-    failed=$((failed + 1))
-  fi
+  # Capture the exit code rather than testing it. `if ! "$@"` is a boolean test:
+  # it discards WHICH non-zero the suite returned, which is precisely the
+  # information needed to tell a terminated suite from a failed one.
+  local rc=0
+  "$@" || rc=$?
+  local status="failed"
+  status="$(suite_exit_class "$rc" 2>/dev/null)" || status="failed"
+  case "$status" in
+    ok)     ;;
+    failed) failed=$((failed + 1)) ;;
+    killed) killed=$((killed + 1)) ;;
+    # Fail CLOSED. Without this arm an unrecognized class increments NEITHER
+    # counter, and `$((suites - failed - killed))` then counts the suite as
+    # PASSED — the exact false green this change exists to prevent.
+    *)      echo "WARNING: suite_exit_class returned unrecognized class '$status' for rc=$rc; counting as FAILED." >&2
+            status="failed"; failed=$((failed + 1)) ;;
+  esac
   # Integer math on EPOCHREALTIME ("seconds.microseconds") avoids a coreutils
   # `date +%N` dependency that macOS lacks. 10# forces base-10 parsing of the
   # microseconds substring (a leading zero would otherwise trigger octal).
@@ -178,9 +267,20 @@ run_suite() {
   if [[ -n "${TEST_TIMING_LOG:-}" && -n "$tmp_before" ]]; then
     tmp_field=$'\t'"tmp_delta=$(( $(tc_tmp_entry_count) - tmp_before ))"
   fi
+  # Advisory only: never changes status, never changes the exit code.
+  local budget_ms; budget_ms="$(_suite_budget_ms "$label")"
+  if [[ -n "$budget_ms" ]] && (( elapsed_ms > budget_ms )); then
+    echo "[budget] $label ran ${elapsed_ms}ms against its declared ${budget_ms}ms budget — expected-long suite, declared here so a long run is a stated fact rather than a surprise." >&2
+  fi
+  # `[ok]` and `[FAIL]` keep their EXACT current text. Every monitor, learning and
+  # skill anchored on `^\[FAIL\]` must keep working byte-for-byte; the new class is
+  # additive, never a re-spelling of an existing one.
   if [[ "$status" == "ok" ]]; then
     echo "[ok] $label (${elapsed_ms}ms)"
     printf '%s\t%d%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
+  elif [[ "$status" == "killed" ]]; then
+    echo "[KILLED] $label (exit=$rc, signal-shaped 128+$(( rc - 128 )) = SIG$(kill -l $(( rc - 128 )) 2>/dev/null), ${elapsed_ms}ms) — UNRESOLVED, not a failure: this runner did not measure what terminated it, and exit $rc is also what a suite calling exit($rc) reports." >&2
+    printf '%s\t%d\tKILLED%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
   else
     echo "[FAIL] $label (${elapsed_ms}ms)" >&2
     printf '%s\t%d\tFAIL%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
@@ -761,6 +861,11 @@ if want_scripts; then
   # Pins that this runner's OWN infra coverage claim matches whether it actually invoked the
   # infra runner. Registered here rather than under want_bun for the same reason as above.
   run_suite "scripts/test-all-infra-coverage-notice" bash scripts/test-all-infra-coverage-notice.test.sh
+  # Pins this runner's THREE-CLASS result taxonomy (#7424): a signal-shaped exit renders as
+  # [KILLED], stays out of the failure count, and exits 3. Registered here rather than under
+  # want_bun for the same reason as its neighbours — it shells out to python3 to build its
+  # sandbox, and `test-scripts` is the shard documented as "bash + python3".
+  run_suite "scripts/test-all-killed-classification" bash scripts/test-all-killed-classification.test.sh
   for f in plugins/soleur/test/*.test.sh plugins/soleur/skills/*/test/*.test.sh plugins/soleur/scripts/*.test.sh .claude/hooks/*.test.sh apps/cla-evidence/scripts/*.test.sh apps/web-platform/scripts/*.test.sh apps/web-platform/scripts/lib/*.test.sh scripts/lib/*.test.sh; do
     [[ -f "$f" ]] || continue
     run_suite "$f" bash "$f"
@@ -822,7 +927,18 @@ fi
 
 tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
 
-echo "=== $((suites - failed))/$suites suites passed ==="
+# BREAKDOWN FIRST, TERMINAL MARKER LAST. The ordering is load-bearing, not cosmetic.
+# Both lines are `=== ...`-shaped, and the documented lesson from #6750 is to match
+# the runner's LAST emitted line and never a per-stage line that merely looks
+# summary-shaped. Emitting the breakdown last would make a summary-shaped line that
+# is NOT the terminal marker the final one — reintroducing that exact ambiguity in
+# the one scenario (a killed run) where identifying completion correctly matters
+# most. Ordering it first keeps both contracts at zero cost: byte-identical clean
+# output, and `=== N/M suites passed ===` stays the last `===` line on every arm.
+if (( killed > 0 )); then
+  echo "=== $suites suites: $((suites - failed - killed)) passed, $failed failed, $killed killed (unresolved — coverage not obtained) ==="
+fi
+echo "=== $((suites - failed - killed))/$suites suites passed ==="
 
 # Restatement of the PREAMBLE notice (#6730/#7014, re-pointed by #7103). Since the infra
 # runner is now a REGISTERED nested suite, the thing worth restating inverted: it is no
@@ -862,4 +978,6 @@ fi
 
 if [[ "$failed" -gt 0 ]]; then
   exit 1
+elif (( killed > 0 )); then
+  exit 3
 fi
