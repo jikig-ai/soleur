@@ -47,6 +47,40 @@ const AWK_PATH = join(
   "parse-form-a.awk",
 );
 
+// Window helpers, SHARED so there is exactly one implementation.
+//
+// These were duplicated once, and the duplication is the whole lesson: a hardened
+// copy (comment-stripping + unique-anchor) was added in one describe while the
+// UNHARDENED original stayed wired to the live Step 10.5 reject. The fix guarded
+// a helper with zero call sites, the vulnerable one remained in use, and deleting
+// the `$'\n'` alternative from the real reject stayed green. One implementation
+// now, at module scope, so a future hardening cannot land on a dead copy.
+//
+// stripComments: a gate's own explanatory comment must not satisfy the gate's test.
+// uniqueIndex:  a decoy occurrence of the anchor must fail loudly, not retarget.
+const stripComments = (src: string): string =>
+  src
+    .split("\n")
+    .filter((l) => !/^\s*#/.test(l))
+    .join("\n");
+
+const uniqueIndex = (lines: string[], pred: (l: string) => boolean, label: string): number => {
+  const hits = lines.map((l, i) => (pred(l) ? i : -1)).filter((i) => i >= 0);
+  expect(hits.length, `${label}: anchor must resolve to exactly one line`).toBe(1);
+  return hits[0];
+};
+
+const makeGateWindow =
+  (lines: string[]) =>
+  (anchor: RegExp): string => {
+    const idx = uniqueIndex(
+      lines,
+      (l) => anchor.test(l) && /^if \[\[ "\$CMD/.test(l),
+      `gate ${anchor}`,
+    );
+    return stripComments(lines.slice(Math.max(0, idx - 8), idx + 4).join("\n"));
+  };
+
 const fx = (name: string) =>
   readFileSync(join(FIXTURES_DIR, name), { encoding: "utf8" });
 
@@ -1068,13 +1102,11 @@ describe("#6772 SKILL.md wiring invariants", () => {
   // Slice a WINDOW around the gate's own `if [[ ... =~` line rather than pairing
   // ``` fences (inline backticks in prose make fence pairing unreliable) or
   // grepping the whole file (proved vacuous — see above).
-  const gateWindow = (anchor: RegExp): string => {
-    const lines = skill.split("\n");
-    const idx = lines.findIndex((l) => anchor.test(l) && /^if \[\[ "\$CMD/.test(l));
-    expect(idx).toBeGreaterThan(-1); // anchor must resolve to the executable line
-    return lines.slice(Math.max(0, idx - 6), idx + 4).join("\n");
-  };
-  const verbGate = () => gateWindow(/PROBE_VERB/);
+  // Shared hardened helper (module scope). The previous LOCAL copy retained
+  // comments and used findIndex, so a decoy anchor or the gate's own explanatory
+  // comment satisfied it — and the hardened version added later landed on a
+  // helper with zero call sites while THIS one stayed wired to the live reject.
+  const gateWindow = makeGateWindow(skill.split("\n"));
   const shellGate = () => gateWindow(/shell-active|\$'\\n'/);
 
   test("Step 10.4 calls the extracted awk via git rev-parse, not CLAUDE_PLUGIN_ROOT", () => {
@@ -1609,50 +1641,13 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
   const skill = readFileSync(SKILL_PATH, { encoding: "utf8" });
   const lines = skill.split("\n");
 
-  // Windowing has TWO failure modes, and the #6772 helper only closed the first.
-  //
-  //   1. Whole-file greps are satisfied by the prose that DOCUMENTS a gate, so
-  //      deleting the real gate stays green (`cq-assert-anchor-not-bare-token`).
-  //      Slicing a window around the executable line closes that.
-  //   2. A window still CONTAINS the gate's own explanatory comments, and
-  //      `findIndex` takes the FIRST match with no uniqueness check. Both were
-  //      exploitable — measured on this suite at 113/0 green:
-  //        - move `PROBE_VERB_ALLOWLIST=` into a comment and neuter the `if`
-  //          => the runtime verb gate can never fire;
-  //        - add a decoy `BWRAP_ARGS=(…)` doc example above the real one and gut
-  //          the real array to `--bind / /` => the sandbox becomes a writable
-  //          bind of the whole host filesystem.
-  //
-  // So: strip comment lines from every window, and require the anchor to be
-  // UNIQUE. A gate's own documentation must not be able to satisfy the gate's
-  // test, and a second occurrence of the anchor must fail loudly rather than
-  // silently retarget. F5 already used the uniqueness shape for `DT_OUT=$(`;
-  // this makes it the default.
-  const stripComments = (src: string): string =>
-    src
-      .split("\n")
-      .filter((l) => !/^\s*#/.test(l))
-      .join("\n");
-
-  const uniqueIndex = (pred: (l: string) => boolean, label: string): number => {
-    const hits = lines.map((l, i) => (pred(l) ? i : -1)).filter((i) => i >= 0);
-    expect(hits.length, `${label}: anchor must resolve to exactly one line`).toBe(1);
-    return hits[0];
-  };
-
-  const gateWindow = (anchor: RegExp): string => {
-    const idx = uniqueIndex(
-      (l) => anchor.test(l) && /^if \[\[ "\$CMD/.test(l),
-      `gate ${anchor}`,
-    );
-    return stripComments(lines.slice(Math.max(0, idx - 8), idx + 4).join("\n"));
-  };
+  // Window helpers are shared at module scope (see makeGateWindow).
 
   // The sandbox flags live in ONE array so the establishment probe and the real
   // run cannot drift; anchor the window on that array rather than on the exec
   // line, which references it by name.
   const sandboxWindow = (): string => {
-    const idx = uniqueIndex((l) => /^BWRAP_ARGS=\(/.test(l), "BWRAP_ARGS=(");
+    const idx = uniqueIndex(lines, (l) => /^BWRAP_ARGS=\(/.test(l), "BWRAP_ARGS=(");
     const end = lines.findIndex((l, i) => i > idx && /^\)/.test(l));
     expect(end).toBeGreaterThan(idx);
     return stripComments(lines.slice(idx, end + 1).join("\n"));
@@ -1721,6 +1716,40 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
     // stdin either eats input the caller was still using, or blocks the full
     // 15s and misreports as a timeout.
     expect(execLine).toMatch(/<\/dev\/null/);
+  });
+
+  test("F2b AC2 — the sandbox mount set is CLOSED, not merely populated", () => {
+    // Presence assertions ask "are the good flags there?" and never "are ONLY
+    // the good flags there?" — and on a mount-flag array ADDITION is the attack.
+    // Measured, all three of these stayed 119/0 green against presence-only
+    // assertions, and each restores the operator's real $HOME (Doppler token,
+    // SSH keys, D-Bus keyring) inside the sandbox whose entire purpose is
+    // removing them:
+    //   BWRAP_ARGS+=(--bind /home /home)   appended after the array closes
+    //   GIT_BIND+=(--bind /home /home)     appended after its assignment
+    //   --bind /home /home                 added INSIDE the array
+    const check10 = skill.match(/### Check 10:[\s\S]*?(?=^### Check \d+|^## )/m);
+    expect(check10).not.toBeNull();
+    const body = stripComments(check10![0]);
+
+    // 1. Every bind in Check 10 is READ-ONLY. Enumerate what is there and
+    //    set-compare, rather than grepping for the ones we hope to find.
+    const binds = [...body.matchAll(/(^|\s)(--(?:ro-)?bind[a-z-]*)\b/g)].map((m) => m[2]);
+    expect(binds.length, "expected some binds").toBeGreaterThan(0);
+    expect(
+      [...new Set(binds)].sort(),
+      "only --ro-bind may appear; a writable --bind re-opens the credential surface",
+    ).toEqual(["--ro-bind"]);
+
+    // 2. The arrays are ASSIGNED, never appended to. `uniqueIndex` pins the
+    //    assignment; nothing stopped a later `+=`.
+    expect((body.match(/BWRAP_ARGS\+=/g) ?? []).length, "BWRAP_ARGS must never be appended to").toBe(0);
+    expect((body.match(/GIT_BIND\+=/g) ?? []).length, "GIT_BIND must never be appended to").toBe(0);
+    expect((body.match(/BWRAP_PROC\+=/g) ?? []).length, "BWRAP_PROC must never be appended to").toBe(0);
+
+    // 3. No --dev-bind / --bind-try smuggling a writable mount under another name.
+    expect(body).not.toMatch(/--dev-bind\b/);
+    expect(body).not.toMatch(/--bind-try\b/);
   });
 
   test("F3 AC2 — mount order is load-bearing: --tmpfs /home precedes the repo bind", () => {
