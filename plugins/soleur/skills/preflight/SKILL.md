@@ -827,20 +827,63 @@ byte-exactly against its TypeScript mirror by the P1/P2/P3 parity harness. The f
 inherits `expected_output`'s pre-existing limitation (two `discoverability_test`
 sub-blocks could confuse it); that is unchanged here.
 
+The read is SCOPED TO THE `discoverability_test:` SUB-BLOCK, and that scoping is
+load-bearing rather than tidiness. `expected_output` is read with a flat
+whole-block scan and survives it, because a stray `expected_output:` only changes
+what a probe is compared against. This field **skips execution entirely**, so the
+same flat read is a bypass: measured, one `credentials_required:` line under
+`liveness_signal:` — or in prose anywhere in the section — waived a perfectly
+runnable unauthenticated `curl` probe. Three further shapes declare nothing and
+are rejected rather than honoured: a `#`-comment-only value (the documented
+template ships one, so an agent copying the canonical schema produced a
+valid-looking declaration whose "scope" was the template's own comment), a bare
+`>`/`|` block indicator, and an empty value.
+
 ```bash
+# Log-injection guard, defined HERE rather than in Step 10.5. Every value echoed
+# below ($CREDS_REQ, $PROBE_VERB, $PROBE_PROG) is derived from PR-authored plan
+# text, which this check's own design treats as adversarial — and Step 10.5's
+# copy is ~250 lines further down, so these paths could not call it even in
+# principle. U+2028/U+2029 are NOT in [[:space:]] under LC_ALL=C, so they survive
+# tokenization into $PROBE_VERB and reach the operator's terminal; ESC bytes do
+# too. Same helper and same reasoning as Check 5 (which cites the precedent).
+# Step 10.5 redefines it identically; the redefinition is harmless.
+sanitize() { printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed $'s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'; }
+
+# awk walks only the indented children of `discoverability_test:` — never the
+# whole Observability block. `tolower()` rather than bash's ${var,,} because the
+# latter is bash 4.0+ and this block runs ~200 lines BEFORE the bwrap probe, so
+# on a bash 3.2 host (stock macOS) ${var,,} is a parse error long before Check 10
+# could reach its graceful SKIP.
 CREDS_REQ=$(awk '
-  /^[[:space:]]*credentials_required:/ { sub(/^[[:space:]]*credentials_required:[[:space:]]*/, ""); print; exit }
+  /^[[:space:]]*discoverability_test:/ { in_dt=1; parent=match($0, /[^ \t]/); next }
+  in_dt && /^[[:space:]]*$/ { next }
+  in_dt {
+    ind = match($0, /[^ \t]/)
+    if (ind <= parent) { exit }
+    if ($0 ~ /^[[:space:]]*credentials_required:/) {
+      sub(/^[[:space:]]*credentials_required:[[:space:]]*/, ""); print; exit
+    }
+  }
 ' "$PREFLIGHT_TMP/preflight-observability.txt")
 CREDS_REQ="${CREDS_REQ%\"}"; CREDS_REQ="${CREDS_REQ#\"}"
+# A comment-only value, a bare block/fold indicator, or an empty value declares
+# nothing. Treat all three as absent so the normal path runs.
+case "$CREDS_REQ" in
+  "#"*|">"|"|") CREDS_REQ="" ;;
+esac
 
 if [[ -n "$CREDS_REQ" ]]; then
-  # Placeholder text is a FAIL, via deepen-plan §4.7's existing placeholder
-  # machinery — a declaration that says nothing waives nothing.
-  if [[ "${CREDS_REQ,,}" =~ ^(todo|tbd|n/a|na|none|tktk|\.\.\.|\<.*\>)$ ]]; then
-    echo "FAIL: discoverability_test.credentials_required is a placeholder (\"$CREDS_REQ\"). State the credential scope and why no unauthenticated probe verifies the same property, or remove the field."
+  # Placeholder text is a FAIL. This set is a SUPERSET of deepen-plan §4.7's —
+  # they were disjoint on exactly the wrong members, so `placeholder` and
+  # `manual operator check` (the repo's canonical "says nothing" markers) were
+  # GRANTING the waiver.
+  CREDS_REQ_LC=$(printf '%s' "$CREDS_REQ" | tr '[:upper:]' '[:lower:]')
+  if [[ "$CREDS_REQ_LC" =~ ^(todo|tbd|n/a|na|none|tktk|placeholder|manual\ operator\ check|\.\.\.|\<.*\>)$ ]]; then
+    echo "FAIL: discoverability_test.credentials_required is a placeholder (\"$(sanitize "$CREDS_REQ")\"). State the credential scope and why no unauthenticated probe verifies the same property, or remove the field."
     exit 1
   fi
-  echo "SKIP-DECLARED: discoverability_test declares credentials_required — $CREDS_REQ. Check 10 did NOT execute the command: running it inside the Step 10.5 sandbox would fail for lack of credentials and prove nothing about the property under test."
+  echo "SKIP-DECLARED: discoverability_test declares credentials_required — $(sanitize "$CREDS_REQ"). Check 10 did NOT execute the command: running it inside the Step 10.5 sandbox would fail for lack of credentials and prove nothing about the property under test."
   exit 0
 fi
 ```
@@ -859,68 +902,57 @@ Note what the waiver is and is not: it is a **verification waiver**, not an exec
 bypass. The declared path never executes, so no verb reaches the sandbox. The waiver does
 genuinely span *any* verb — that is why it is counted rather than reordered.
 
-**Probe-verb allowlist** (ADR-173 Layer 2 — deny-by-default):
+**Probe-verb gate** (ADR-173 Layer 2, revised — schema validation, not a security control):
 
-The **effective verb** is the first whitespace-delimited token of the dequoted command.
-Eleven verbs are permitted, each with ≥2 uses in the measured 632-command corpus of
-declared probes. `dig` and `getent` are deliberately absent — they appear zero times, and
-deny-by-default means the first author who needs one adds it in a reviewed one-line PR.
+The gate lives in [`./scripts/probe-verb-gate.sh`](./scripts/probe-verb-gate.sh) rather than
+inline here, for the same reason [`./scripts/parse-form-a.awk`](./scripts/parse-form-a.awk)
+is a real file: a parity harness must be able to **execute the production runtime** instead
+of regex-scraping this prose. That is not hypothetical — while this gate was inlined with a
+hand-maintained TypeScript mirror, two parser asymmetries shipped green inside the very PR
+that created the mirror (a Form B command kept its markdown indentation, so the effective
+verb was `""`; a Form A block scalar kept a leading `#`, so it was `"#"`). Content pins on
+the allowlist literal cannot detect behavioural drift.
 
 ```bash
-# Match against a QUOTE-STRIPPED copy: bash resolves `"doppler"`, `\doppler` and
-# `dopp""ler` to the same binary, but the anchors below do not see through the
-# quote characters. Strip them from a COPY only — never from the string that
-# would be executed.
-CMD_DEQ="${CMD//[\"\'\\]/}"
-PROBE_VERB="${CMD_DEQ%%[[:space:]]*}"
-PROBE_VERB_ALLOWLIST=' curl bash sh grep rg jq python3 node bun printf git '
-if [[ "$CMD_DEQ" != "" && "$PROBE_VERB" != */* && "$PROBE_VERB_ALLOWLIST" != *" $PROBE_VERB "* ]]; then
-  echo "FAIL: discoverability_test.command starts with \`$PROBE_VERB\`, which is not on the probe-verb allowlist ($PROBE_VERB_ALLOWLIST). Either wrap the probe in a repo-relative script under the repository (\`bash scripts/<name>.sh …\`), or — if the probe genuinely cannot be run without credentials — declare \`credentials_required\` on the discoverability_test block so Check 10 skips it explicitly. To permit a new verb for everyone, add it to PROBE_VERB_ALLOWLIST in a reviewed PR; every entry is an authority grant."
+PROBE_GATE="$(git rev-parse --show-toplevel)/plugins/soleur/skills/preflight/scripts/probe-verb-gate.sh"
+test -r "$PROBE_GATE" || { echo "FAIL: Check 10 probe-verb gate missing at $PROBE_GATE"; exit 1; }
+if ! PROBE_REJECT="$(bash "$PROBE_GATE" "$CMD")"; then
+  echo "FAIL: $(sanitize "$PROBE_REJECT")"
   exit 1
 fi
 ```
 
-**Arg rules — an inline program defeats the allowlist in one token.**
+**What this gate is, stated honestly.** It answers *"is this an executable command, and one
+Check 10's PATH can run?"* — schema validation on the `command:` field. It is **not** a
+security control and **not** a legibility control, and the earlier revision of this section
+claimed both.
 
-```bash
-PROBE_ARGS="${CMD_DEQ#"$PROBE_VERB"}"
-case "$PROBE_VERB" in
-  bash|sh)          PROBE_INLINE_RE='(^|[[:space:]])-c([[:space:]]|$|[^-[:space:]])' ;;
-  python3|node|bun) PROBE_INLINE_RE='(^|[[:space:]])(-c|-e|-p|--eval|--print)([[:space:]=]|$|[^-[:space:]])' ;;
-  *)                PROBE_INLINE_RE='' ;;
-esac
-if [[ -n "$PROBE_INLINE_RE" && "$PROBE_ARGS" =~ $PROBE_INLINE_RE ]]; then
-  echo "FAIL: discoverability_test.command passes an inline program to \`$PROBE_VERB\` (-c/-e/-p/--eval/--print). An inline program makes the allowlisted runtime equivalent to \`bash -c\`, which defeats the verb allowlist in a single token. Move the program into a repo-relative script."
-  exit 1
-fi
-```
+It cannot be a security control, and the reason is structural rather than incidental: the
+gate's own sanctioned remedy is *"wrap it in a repo-relative script"* — i.e. `bash
+scripts/x.sh`, which is arbitrary in-sandbox code execution. Every shape it could reject is
+strictly **weaker** than the remedy it prescribes. Step 10.5 additionally runs
+`bash -c "$CMD"`, so every probe already *is* an inline program; a rule rejecting
+`python3 -c` while printing instructions to use `bash scripts/x.sh` rejects a spelling, not
+a capability. Measured on the plan corpus, the deleted arg rules were 50% false-positive
+and the deleted path rule fired once in 678 commands, while false-rejecting
+`bun test … -p`, `python3 … --print json` and `node … -e prod`.
 
-**Program-position paths must be repo-relative.** This is a **pure string rule** — no
-`git ls-files` subprocess, so the reject stays a synchronous, fixture-free predicate. The
-rule covers the first token, plus the script argument of `bash`/`sh`; it deliberately does
-NOT cover every token, because `curl … -o /dev/null` is the dominant corpus form.
+It is not a legibility control either: the full command sits in the PR diff regardless, and
+`git -c alias.…`, `bash scripts/x.sh` and `./anything` all read as innocuous while doing
+arbitrary things.
 
-```bash
-PROBE_PROG="$PROBE_VERB"
-if [[ "$PROBE_VERB" == "bash" || "$PROBE_VERB" == "sh" ]]; then
-  # `read -a` never fails here (no -d), and `${arr[@]:1}` on a 1-element array
-  # expands to nothing under `set -u` on bash >= 4.4. Use an explicit `if` rather
-  # than `[[ … ]] && continue`: the && form returns 1 on the non-flag branch,
-  # which would abort the block if it is ever run under `set -e`.
-  read -r -a PROBE_ARGV <<< "$CMD_DEQ"
-  for tok in "${PROBE_ARGV[@]:1}"; do
-    if [[ "$tok" == -* ]]; then
-      continue
-    fi
-    PROBE_PROG="$tok"
-    break
-  done
-fi
-if [[ "$PROBE_PROG" == /* || "$PROBE_PROG" == ../* || "$PROBE_PROG" == */../* || "$PROBE_PROG" == */.. ]]; then
-  echo "FAIL: discoverability_test.command runs \`$PROBE_PROG\`, which is not repo-relative. A probe's program must live inside the repository (no leading \`/\`, no \`..\` segment) so it is visible in the same PR diff as the plan that declares it."
-  exit 1
-fi
-```
+**What it measurably buys**: 34 entries in the plan corpus are prose in a `command:` field
+(*"Sentry issue search feature:…"*, *"Open Sentry → Issues → …"*). Those become a named FAIL
+at authoring time instead of an opaque `rc=127` at ship time. That value comes entirely
+from the bare verb list, which is why the arg and path rules were deleted rather than
+repaired.
+
+**The allowlist is a corpus-frequency list, not a capability list.** `sh`, `dig` and
+`getent` are absent because they have **zero** corpus uses; `awk`, `sed` and `find` are
+absent for the same reason, **not** because they are uniquely dangerous. `git` is on the
+list and is a full execution vector — `git -c alias.x='!cmd' x` runs arbitrary commands —
+and so is `bash <script>`. Both are recorded in ADR-173 as worked examples that an
+allowlist entry is an authority grant which this gate does not bound.
 
 **Every allowlist entry is an authority grant — do not describe either layer as though it
 closed the class.** Layer 1 (the Step 10.5 sandbox) bounds what a verb can *reach*, but

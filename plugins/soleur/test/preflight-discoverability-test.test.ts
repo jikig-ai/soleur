@@ -4,14 +4,12 @@ import { join } from "node:path";
 import {
   classifyDiscoverabilityResult,
   extractObservabilityBlock,
-  INLINE_PROGRAM_VERBS,
   matchExpected,
   parseCommand,
   parseCredentialsRequired,
   parseExpected,
   PROBE_VERB_ALLOWLIST,
   rejectReason,
-  RUNTIME_VERBS,
   type ExecResult,
   type Executor,
 } from "./lib/discoverability-test-parser";
@@ -27,6 +25,19 @@ const SKILL_PATH = join(
 
 // The production Form-A parser — the runtime of record. The parity harness
 // (P1/P2/P3) executes THIS file, not a regex-scrape of SKILL.md prose.
+const GATE_PATH = join(
+  import.meta.dir,
+  "..",
+  "skills",
+  "preflight",
+  "scripts",
+  "probe-verb-gate.sh",
+);
+
+// Shapes the gate deliberately does not opine on — they are rejected downstream
+// by the classifier's shell-active-token branch, not by the verb gate.
+const SUBST_LIKE = /[;&|<>`$]|\$\(/;
+
 const AWK_PATH = join(
   import.meta.dir,
   "..",
@@ -1077,20 +1088,24 @@ describe("#6772 SKILL.md wiring invariants", () => {
     expect(skill).toMatch(/refusing to fall through to Form B/);
   });
 
-  test("Step 10.4 carries the deny-by-default verb gate (#7393, ex-CPO condition C1)", () => {
-    const g = verbGate();
-    // The allowlist assignment must live inside the gate window, not merely
-    // somewhere in the file — a gate's own documentation must never be able to
-    // satisfy the gate's test (`cq-assert-anchor-not-bare-token`).
-    expect(g).toMatch(/PROBE_VERB_ALLOWLIST=/);
-    // The retired denylist alternation must be gone from the GATE. It is still
-    // legitimately named in the surrounding prose that records WHY it was
-    // retired, which is exactly why this asserts on the window.
-    expect(g).not.toMatch(/\(doppler\|gh\|aws\|supabase\|stripe/);
-    // The gate must test the DEQUOTED copy — `"doppler"` / `\doppler` /
-    // `dopp""ler` all resolve to the same binary and bypass a raw match.
-    expect(g).toMatch(/CMD_DEQ="\$\{CMD\/\//);
-    expect(g).toMatch(/\[\[ "\$CMD_DEQ" /);
+  test("Step 10.4 delegates to the extracted probe-verb gate (#7393, ex-CPO condition C1)", () => {
+    // AC1 originally required PROBE_VERB_ALLOWLIST to sit inside a Step 10.4
+    // gate WINDOW. The gate was extracted to a real file so a parity harness can
+    // execute it (see the #7393 GATE describe), so AC1 is REWORDED rather than
+    // waived: the same invariants are asserted, against the script.
+    const check10 = skill.match(/### Check 10:[\s\S]*?(?=^### Check \d+|^## )/m);
+    expect(check10).not.toBeNull();
+    // The runtime invokes the extracted gate and fails closed if it is missing.
+    expect(check10![0]).toMatch(/probe-verb-gate\.sh/);
+    expect(check10![0]).toMatch(/test -r "\$PROBE_GATE"/);
+
+    const gate = readFileSync(GATE_PATH, { encoding: "utf8" });
+    // The allowlist is assigned in the gate, not merely named in prose.
+    expect(gate).toMatch(/^PROBE_VERB_ALLOWLIST='/m);
+    // Dequoting is retained — `"doppler"` must not launder the verb.
+    expect(gate).toMatch(/CMD_DEQ="\$\{CMD\/\//);
+    // The retired denylist alternation is gone from the runtime.
+    expect(gate).not.toMatch(/\(doppler\|gh\|aws\|supabase\|stripe/);
   });
 
   test("Step 10.5 reject set includes newline", () => {
@@ -1113,6 +1128,74 @@ describe("#6772 SKILL.md wiring invariants", () => {
 // #7393 — probe-verb allowlist, sandboxed execution, declared-credentialed path
 // ---------------------------------------------------------------------------
 
+describe("#7393 GATE — executable parity between the runtime and its TS mirror", () => {
+  // The runtime of record is `probe-verb-gate.sh`; `rejectReason()` is the
+  // mirror. Content pins (set-equality on the allowlist literal) cannot detect
+  // BEHAVIOURAL drift, and demonstrably did not: two parser asymmetries — a
+  // Form B command keeping its markdown indentation, and a Form A block scalar
+  // keeping a leading `#` — both shipped green because the mirror silently
+  // trimmed and the bash did not.
+  //
+  // This is the P1/P2/P3 pattern (which executes parse-form-a.awk) applied to
+  // the gate. It asserts identical VERDICT and identical REASON, so a message
+  // reworded on one side alone also reddens.
+  const runGate = (cmd: string): { rejected: boolean; reason: string } => {
+    const p = Bun.spawnSync({ cmd: ["bash", GATE_PATH, cmd], stdout: "pipe", stderr: "pipe" });
+    const out = new TextDecoder().decode(p.stdout).trim();
+    expect(p.exitCode, `gate must exit 0 or 1 for: ${cmd}`).not.toBe(2);
+    return { rejected: p.exitCode === 1, reason: out };
+  };
+
+  // Every row is a shape the producer can actually emit. The first two are the
+  // asymmetries that motivated the extraction.
+  const PARITY_CASES: string[] = [
+    // Form B keeps markdown indentation.
+    '  curl -fsS -o /dev/null -w "%{http_code}" https://app.soleur.ai/api/inngest',
+    // Form A block scalar keeps a leading `#` comment line.
+    "# Run from the operator workstation (NO SSH)\ncurl -fsS https://app.soleur.ai/api/inngest",
+    // An allowlisted verb that is nonetheless a full execution vector — accepted
+    // deliberately, and named in ADR-173 as the worked example.
+    "git -c alias.pwn=!printf X pwn",
+    // The path-shaped bypass that used to skip the allowlist entirely.
+    "./doppler secrets get FOO --plain",
+    "./node_modules/.bin/vitest run x",
+    "gh/Sentry query for op:image-verify",
+    // Shapes the reduced gate must now ACCEPT (they were false-rejected before).
+    "bun test plugins/soleur/test/x.test.ts -p",
+    "python3 scripts/check.py --print json",
+    "node scripts/probe.mjs -e prod",
+    "bash scripts/x.sh -c foo",
+    // Ordinary accepts and rejects.
+    "curl -fsS -o /dev/null https://app.soleur.ai/api/inngest",
+    "grep -c . AGENTS.md",
+    "doppler secrets get FOO --plain",
+    "awk BEGIN{system(id)}",
+    '"doppler" secrets get X',
+    "",
+    "   ",
+  ];
+
+  test("the gate and rejectReason agree on verdict and reason for every shape", () => {
+    for (const cmd of PARITY_CASES) {
+      const gate = runGate(cmd);
+      const mirror = rejectReason(cmd);
+      // `ssh` and the shell-active reject live in the classifier, not the gate,
+      // so compare only where the gate has an opinion.
+      if (SUBST_LIKE.test(cmd) || /(^|[\s/])ssh([\s]|$)/.test(cmd)) continue;
+      expect(gate.rejected, `verdict mismatch for: ${JSON.stringify(cmd)}`).toBe(mirror !== null);
+      if (gate.rejected) {
+        expect(gate.reason, `reason mismatch for: ${JSON.stringify(cmd)}`).toBe(mirror);
+      }
+    }
+  });
+
+  test("the parity table is non-vacuous — it contains both accepts and rejects", () => {
+    const verdicts = PARITY_CASES.map((c) => rejectReason(c) !== null);
+    expect(verdicts.filter(Boolean).length, "needs reject cases").toBeGreaterThanOrEqual(5);
+    expect(verdicts.filter((v) => !v).length, "needs accept cases").toBeGreaterThanOrEqual(5);
+  });
+});
+
 describe("#7393 A — deny-by-default probe-verb allowlist", () => {
   // The eleven verbs are derived from a measured 632-command corpus of declared
   // probes; every entry has >= 2 uses. Deny-by-default is the point: a verb that
@@ -1120,7 +1203,6 @@ describe("#7393 A — deny-by-default probe-verb allowlist", () => {
   const ALLOWLISTED = [
     "curl -fsS -o /dev/null -w '%{http_code}' https://app.soleur.ai/api/inngest",
     "bash scripts/lint-workflows.sh --help",
-    "sh scripts/probe.sh",
     "grep -c . AGENTS.md",
     "rg --count PROBE_VERB_ALLOWLIST plugins/soleur/skills/preflight/SKILL.md",
     "jq -r .version package.json",
@@ -1176,30 +1258,35 @@ describe("#7393 A — deny-by-default probe-verb allowlist", () => {
   });
 });
 
-describe("#7393 B — inline-program and execution-equivalent rejects", () => {
-  test("B1 inline-program flags are rejected on every allowlisted runtime", () => {
+describe("#7393 B — retired rules stay retired", () => {
+  // The inline-program arg rules and the repo-relative program-path rule were
+  // DELETED (CTO ruling on #7393). Not because they were merely redundant:
+  // the gate's own remedy — "wrap it in a repo-relative script" => `bash
+  // scripts/x.sh` — confers strictly MORE capability than anything they
+  // rejected, and Step 10.5 runs `bash -c "$CMD"` regardless, so every probe
+  // already is an inline program. They rejected a spelling, not a capability,
+  // and measurably false-rejected legitimate probes.
+  //
+  // These assertions pin the DELETION, so a future author cannot reintroduce
+  // the rules without confronting the reasoning.
+  test("B1 inline-program flags no longer false-reject legitimate probes", () => {
     for (const cmd of [
-      "bash -c 'curl https://x'",
-      "sh -c 'curl https://x'",
-      "python3 -c 'print(1)'",
-      "node -e 'console.log(1)'",
-      "bun -e 'console.log(1)'",
-      "node --eval 'console.log(1)'",
-      "python3 -c'print(1)'",
-      "node -p '1+1'",
-      "python3 --print 1",
+      "bun test plugins/soleur/test/x.test.ts -p",
+      "python3 scripts/check.py --print json",
+      "node scripts/probe.mjs -e prod",
+      "bash scripts/x.sh -c foo",
     ]) {
-      expect(rejectReason(cmd) ?? "", cmd).toMatch(/inline program/i);
+      expect(rejectReason(cmd), `should be accepted: ${cmd}`).toBeNull();
     }
   });
 
-  test("B2 awk/sed/find are execution-equivalent to `bash -c` and are not allowlisted", () => {
-    // Measured: `awk 'BEGIN{system("...")}'` executes arbitrary commands and
-    // passes SUBST_REJECT_RE (no `;`, `&&`, `|`, `$(`). Allowlisting awk while
-    // rejecting `bash -c` would be incoherent.
+  test("B2 awk/sed/find are still rejected — by frequency, not by capability", () => {
+    // They are absent from the corpus-frequency allowlist. The old rationale
+    // ("they are `bash -c` in disguise") was retired as incoherent: `bash` and
+    // `git` are BOTH on the allowlist and both are full execution vectors.
     for (const cmd of [
-      "awk 'BEGIN{system(\"wc -c < /home/x/.doppler/.doppler.yaml\")}'",
-      "sed -e '1e wc -c /etc/passwd' AGENTS.md",
+      "awk BEGIN{system(id)}",
+      "sed -e 1e_wc AGENTS.md",
       "find . -name x -exec wc -c {} +",
     ]) {
       expect(rejectReason(cmd) ?? "", cmd).toMatch(/not on the probe-verb allowlist/i);
@@ -1207,45 +1294,46 @@ describe("#7393 B — inline-program and execution-equivalent rejects", () => {
   });
 });
 
-describe("#7393 C — program-position path rules (pure string, no subprocess)", () => {
-  test("C1 a repo-relative script path is admitted", () => {
-    expect(rejectReason("bash scripts/lint-workflows.sh --help")).toBeNull();
-    expect(rejectReason("scripts/betterstack-query.sh --since 24h")).toBeNull();
-    expect(rejectReason("./node_modules/.bin/vitest run")).toBeNull();
-  });
-
-  test("C2 absolute and parent-escaping program paths are rejected", () => {
+describe("#7393 C — no path-shaped bypass", () => {
+  // The allowlist used to be skipped entirely whenever the first token
+  // contained a `/`. That made "deny-by-default" false as printed: measured,
+  // `./doppler secrets get FOO` ACCEPTED while a bare `doppler` rejected 124
+  // times, and the pure-prose corpus entry `gh/Sentry query for …` accepted for
+  // the same reason. Removing the exemption is what makes the phrase true.
+  test("C1 a path-shaped verb is subject to the allowlist like any other", () => {
     for (const cmd of [
-      "bash /abs/x.sh",
-      "bash ../x.sh",
+      "./doppler secrets get FOO --plain",
+      "~/bin/doppler secrets get FOO",
       "/usr/local/bin/gh api user",
-      "sh /tmp/x.sh",
-      "../scripts/x.sh",
-      "bash scripts/../../x.sh",
+      "gh/Sentry query for op:image-verify",
+      "./node_modules/.bin/vitest run x",
     ]) {
-      expect(rejectReason(cmd) ?? "", cmd).toMatch(/repo-relative/i);
+      expect(rejectReason(cmd) ?? "", cmd).toMatch(/not on the probe-verb allowlist/i);
     }
   });
 
-  test("C3 a non-program-position absolute path is untouched (curl -o /dev/null)", () => {
-    // `-o /dev/null` is the dominant corpus form. The path rule applies to
-    // program-position tokens only; widening it to every token would reject
-    // 142/632 probes.
-    expect(
-      rejectReason(
-        "curl -fsS -o /dev/null -w '%{http_code}' --max-time 10 https://app.soleur.ai/api/inngest",
-      ),
-    ).toBeNull();
+  test("C2 an allowlisted verb running a repo-relative script is still accepted", () => {
+    expect(rejectReason("bash scripts/lint-workflows.sh --help")).toBeNull();
+    expect(rejectReason("python3 scripts/lint-agents-rule-budget.py")).toBeNull();
   });
 
-  test("C4 rejectReason stays a pure synchronous string -> string|null", () => {
-    // No `git ls-files` oracle: it interrogates the PR-HEAD index (the attacker's
-    // own branch) and preflight runs before merge. "Tracked" is not "reviewed".
+  test("C3 rejectReason stays a pure synchronous string -> string|null", () => {
+    // No `git ls-files` oracle: it interrogates the PR-HEAD index (the
+    // attacker's own branch) and preflight runs before merge, so "tracked" is
+    // not "reviewed".
     const out = rejectReason("bash scripts/lint-workflows.sh --help");
     expect(out === null || typeof out === "string").toBe(true);
-    // A Promise would mean a subprocess crept in.
     expect(out).not.toBeInstanceOf(Promise);
-    expect(rejectReason.constructor.name).toBe("Function");
+  });
+
+  test("C4 normalization is applied before the verb is read", () => {
+    // Form B keeps markdown indentation; a Form A block scalar can keep a
+    // leading `#`. Both used to yield a nonsense verb ("" / "#") and a FAIL
+    // whose message named remedies that could not apply.
+    expect(rejectReason("  curl -fsS https://app.soleur.ai/api/inngest")).toBeNull();
+    expect(
+      rejectReason("# a comment line\ncurl -fsS https://app.soleur.ai/api/inngest"),
+    ).toBeNull();
   });
 });
 
@@ -1284,8 +1372,84 @@ describe("#7393 D — credentials_required => SKIP-DECLARED", () => {
     expect(out.reason ?? "").toMatch(/doppler:soleur\/prd_terraform/);
   });
 
+  // Each of the three shapes below was measured to yield SKIP-DECLARED — i.e. to
+  // silently waive the entire check — before the sub-block scoping landed.
+  test("D2b a declaration outside the discoverability_test sub-block does NOT waive", async () => {
+    const body = [
+      "## Observability",
+      "",
+      "liveness_signal:",
+      "  what: the thing",
+      "  credentials_required: Grafana viewer role",
+      "",
+      "discoverability_test:",
+      "  command: grep -c . AGENTS.md",
+      '  expected_output: "110"',
+      "",
+    ].join("\n");
+    expect(parseCredentialsRequired(body)).toBe("");
+    const out = await classifyDiscoverabilityResult({
+      planPath: "plans/x.md",
+      planBody: body,
+      prBody: "",
+      runner: stubExecutor(0, "110\n"),
+    });
+    // The runnable unauthenticated probe must actually run.
+    expect(out.result).toBe("PASS");
+  });
+
+  test("D2c copying the documented template does NOT waive the check", async () => {
+    // plan-issue-templates.md ships this line verbatim. Before the fix it parsed
+    // as a valid non-placeholder declaration whose "declared scope" was the
+    // template's own explanatory comment.
+    const body = [
+      "## Observability",
+      "",
+      "discoverability_test:",
+      "  command: doppler secrets get FOO --plain",
+      '  expected_output: "x"',
+      "  credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.",
+      "",
+    ].join("\n");
+    expect(parseCredentialsRequired(body)).toBe("");
+    const out = await classifyDiscoverabilityResult({
+      planPath: "plans/x.md",
+      planBody: body,
+      prBody: "",
+      runner: throwingExecutor,
+    });
+    // Falls through to the verb gate — the correct outcome for a doppler probe.
+    expect(out.result).toBe("FAIL");
+    expect(out.reason ?? "").toMatch(/not on the probe-verb allowlist/i);
+  });
+
+  test("D2d a bare block/fold indicator does NOT waive the check", () => {
+    for (const ind of [">", "|"]) {
+      const body = [
+        "## Observability",
+        "",
+        "discoverability_test:",
+        "  command: doppler secrets get FOO",
+        `  credentials_required: ${ind}`,
+        "",
+      ].join("\n");
+      expect(parseCredentialsRequired(body), `indicator ${ind}`).toBe("");
+    }
+  });
+
   test("D3 a placeholder declaration FAILs (existing placeholder machinery)", async () => {
-    for (const placeholder of ["TBD", "TODO", "N/A", "tbd", "<fill me in>"]) {
+    for (const placeholder of [
+      "TBD",
+      "TODO",
+      "N/A",
+      "tbd",
+      "<fill me in>",
+      // The two markers the rest of the repo treats as canonical "this field
+      // says nothing" — originally absent from preflight's set, so they GRANTED
+      // the waiver instead of refusing it.
+      "placeholder",
+      "manual operator check",
+    ]) {
       const body = `## Observability\n\n${obs(
         "discoverability_test:",
         "  command: doppler secrets get FOO --plain",
@@ -1433,59 +1597,18 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
     return stripComments(lines.slice(idx, end + 1).join("\n"));
   };
 
-  // THE RUNTIME OF RECORD IS THE BASH. Every behavioural test in this file
-  // exercises the TypeScript mirror, so without this pin the two lists drift
-  // freely: measured, adding `doppler gh aws perl` to the bash allowlist — or
-  // emptying it entirely — left the whole suite green at 113/0, because
-  // `toMatch(/PROBE_VERB_ALLOWLIST=/)` pins that the variable is ASSIGNED and
-  // never what it contains.
-  //
-  // This is the same shape the file already uses to pin the `ssh` reject regex
-  // to its SKILL.md literal, and the same argument that made `parse-form-a.awk`
-  // a real file: a hand-maintained mirror of a runtime is a drift surface, so
-  // something has to compare them.
-  test("F0 the bash allowlist and the TS mirror are the same set", () => {
-    const m = skill.match(/^PROBE_VERB_ALLOWLIST='([^']*)'$/m);
-    expect(m, "SKILL.md must assign PROBE_VERB_ALLOWLIST as a single-quoted literal").not.toBeNull();
-    const fromBash = m![1].trim().split(/\s+/).filter(Boolean);
-    expect(new Set(fromBash)).toEqual(new Set(PROBE_VERB_ALLOWLIST));
-    // Cardinality too — a Set comparison hides a duplicated entry.
-    expect(fromBash.length).toBe(PROBE_VERB_ALLOWLIST.length);
-  });
-
-  // Coupled invariant: every allowlisted verb that is a general-purpose RUNTIME
-  // must carry an inline-program rule. Without this, adding `perl` to the
-  // allowlist silently admits `perl -e 'system("…")'` — arbitrary execution
-  // through the exact door the inline-program rule exists to shut. Measured:
-  // adding any of perl/ruby/env/xargs/openssl/nc/wget/make left the suite green.
-  test("F0b every allowlisted runtime verb has an inline-program rule", () => {
-    for (const verb of RUNTIME_VERBS) {
-      expect(
-        (PROBE_VERB_ALLOWLIST as readonly string[]).includes(verb),
-        `${verb} is declared a runtime but is not allowlisted`,
-      ).toBe(true);
-      expect(
-        INLINE_PROGRAM_VERBS.includes(verb),
-        `${verb} is an allowlisted runtime with no inline-program rule`,
-      ).toBe(true);
-    }
-    // And no allowlisted verb may be a runtime without being declared one.
-    expect(new Set(INLINE_PROGRAM_VERBS)).toEqual(new Set(RUNTIME_VERBS));
-  });
-
-  test("F1 AC1 — the Step 10.4 verb gate is an allowlist, not the retired denylist", () => {
-    const g = gateWindow(/PROBE_VERB/);
-    expect(g).toMatch(/PROBE_VERB_ALLOWLIST=/);
-    // The retired denylist alternation must be gone from the GATE (it is still
-    // legitimately named in the surrounding Sharp Edge prose, which is why this
-    // asserts on the window and not the file).
-    expect(g).not.toMatch(/\(doppler\|gh\|aws\|supabase\|stripe/);
-    // Dequoting is retained — `"doppler"` must not launder the verb.
-    expect(g).toMatch(/CMD_DEQ/);
-  });
-
-  test("F1b the dequote assignment survives somewhere in Check 10", () => {
-    expect(skill).toMatch(/CMD_DEQ="\$\{CMD\/\//);
+  test("F1 AC1 — Step 10.4 delegates to the extracted gate, not to inline bash", () => {
+    const check10 = skill.match(/### Check 10:[\s\S]*?(?=^### Check \d+|^## )/m);
+    expect(check10).not.toBeNull();
+    // The gate is a real file so the parity harness below can EXECUTE it. An
+    // inline copy plus a hand-maintained mirror is what let two parser
+    // asymmetries ship green inside the PR that created the mirror.
+    expect(check10![0]).toMatch(/probe-verb-gate\.sh/);
+    // The retired denylist alternation must be gone from the runtime (it is
+    // still legitimately named in the surrounding prose as history).
+    expect(readFileSync(GATE_PATH, { encoding: "utf8" })).not.toMatch(
+      /\(doppler\|gh\|aws\|supabase\|stripe/,
+    );
   });
 
   test("F2 AC2 — the sandbox carries the load-bearing binds", () => {

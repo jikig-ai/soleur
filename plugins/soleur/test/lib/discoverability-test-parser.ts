@@ -46,16 +46,20 @@ const SSH_REJECT_RE = /(^|[\t\n\r \f\v/])ssh([\t\n\r \f\v]|$)/;
 // whose body self-wraps `doppler run -c prd`), nor any future vendor CLI, nor an
 // absolute-path read of a credential file by a permitted verb.
 //
-// Each verb has >= 2 uses in the measured 632-command corpus of declared probes.
-// `dig`/`getent` are deliberately absent (zero corpus uses) — deny-by-default
-// means the first author who needs one adds it in a reviewed one-line PR.
+// This is a CORPUS-FREQUENCY list, not a capability list — each verb has >= 2
+// uses in the measured corpus (ADR-173 §Layer 2 states the count and the
+// extraction method). `sh`, `dig` and `getent` are absent on the same evidence:
+// zero uses. `awk`/`sed`/`find` are absent for the same reason, NOT because they
+// are uniquely dangerous — `git -c alias.x='!cmd' x` and `bash <script>` are
+// full execution vectors and both are on the list.
 //
-// EVERY ENTRY IS AN AUTHORITY GRANT. The allowlist bounds legibility and
-// maintenance; it is the Step 10.5 sandbox that bounds what a verb can REACH.
+// EVERY ENTRY IS AN AUTHORITY GRANT, and this gate bounds none of it. Authority
+// is bounded by Step 10.5's sandbox and by nothing here. See probe-verb-gate.sh
+// (the runtime of record) for why this layer is schema validation rather than a
+// security or legibility control.
 export const PROBE_VERB_ALLOWLIST = [
   "curl",
   "bash",
-  "sh",
   "grep",
   "rg",
   "jq",
@@ -66,45 +70,36 @@ export const PROBE_VERB_ALLOWLIST = [
   "git",
 ] as const;
 
-/**
- * Allowlisted verbs that are general-purpose RUNTIMES — i.e. verbs whose whole
- * job is to execute a program someone hands them.
- *
- * Declared separately from the allowlist so the coupling is assertable: every
- * runtime MUST carry an inline-program rule, or adding it to the allowlist
- * silently re-opens arbitrary execution. Measured on this suite: adding `perl`
- * to the allowlist alone admitted `perl -e 'system("…")'` past every gate at
- * 113/0 green, because `INLINE_PROGRAM_RE` had no `perl` key and nothing
- * asserted that it needed one.
- */
-export const RUNTIME_VERBS = ["bash", "sh", "python3", "node", "bun"] as const;
-
-// An inline program makes an allowlisted runtime equivalent to `bash -c`, which
-// defeats the allowlist in a single token. Rejecting `bash -c` while permitting
-// `python3 -c` would be incoherent, so every runtime carries the rule.
+// DELETED (ADR-173 revision, CTO ruling on #7393): the inline-program arg rules
+// (`-c`/`-e`/`-p`/`--eval`/`--print`) and the repo-relative program-path rule.
 //
-// The trailing class admits the attached-value form (`python3 -cprint(1)`) and
-// the `--eval=…` form; both survive dequoting as a single argv token.
-const INLINE_PROGRAM_RE: Record<string, RegExp> = {
-  bash: /(^|[\t\f\v ])-c([\t\f\v ]|$|[^-\t\f\v ])/,
-  sh: /(^|[\t\f\v ])-c([\t\f\v ]|$|[^-\t\f\v ])/,
-  python3: /(^|[\t\f\v ])(-c|-e|-p|--eval|--print)([\t\f\v =]|$|[^-\t\f\v ])/,
-  node: /(^|[\t\f\v ])(-c|-e|-p|--eval|--print)([\t\f\v =]|$|[^-\t\f\v ])/,
-  bun: /(^|[\t\f\v ])(-c|-e|-p|--eval|--print)([\t\f\v =]|$|[^-\t\f\v ])/,
-};
+// Both were removed because the gate's own sanctioned remedy — "wrap it in a
+// repo-relative script" => `bash scripts/x.sh` — confers strictly MORE
+// capability than anything they rejected, and Step 10.5 runs `bash -c "$CMD"`
+// regardless, so every probe already is an inline program. They rejected a
+// spelling, not a capability. Measured cost on the real corpus: 1 of the 2
+// inline rejects was a false positive, the path rule fired once in 678 commands,
+// and both false-rejected legitimate probes (`bun test … -p`,
+// `python3 … --print json`, `node … -e prod`). Negative value on both sides.
+//
+// Also deleted: the path-shaped exemption that skipped the allowlist whenever the
+// first token contained `/`. It made `./doppler secrets get FOO` accept while a
+// bare `doppler` rejected — i.e. it made "deny-by-default" false as printed.
 
-/** The keys of INLINE_PROGRAM_RE, exported so the coupling above is assertable. */
-export const INLINE_PROGRAM_VERBS = Object.keys(INLINE_PROGRAM_RE);
-
-// A program-position path must be repo-relative. Pure string rule, deliberately:
-// a `git ls-files` oracle would interrogate the PR-HEAD index — the attacker's
-// own branch — and preflight runs BEFORE merge, so "tracked" is not "reviewed".
-// Keeping it pure also keeps rejectReason() synchronous and fixture-free.
-const NON_REPO_RELATIVE_RE = /^\/|^\.\.\/|\/\.\.\/|\/\.\.$/;
-
-// Placeholder text in a declaration waives nothing — mirrors deepen-plan §4.7's
-// existing placeholder machinery rather than inventing a second gate.
-const PLACEHOLDER_RE = /^(todo|tbd|n\/a|na|none|tktk|\.\.\.|<.*>)$/i;
+// Placeholder text in a declaration waives nothing.
+//
+// This MUST be a superset of deepen-plan §4.7's set, because three artifacts
+// claim it simply reuses that machinery. It did not: the two sets were disjoint
+// on exactly the wrong members. Measured before this fix —
+// `credentials_required: placeholder` and `credentials_required: manual operator
+// check` both yielded SKIP-DECLARED, i.e. the two literal strings the rest of
+// the repo treats as the canonical "this field says nothing" markers were the
+// ones that GRANTED the waiver, on the cheapest path to a non-FAIL in the check.
+//
+// deepen-plan §4.7's set:  TODO TBD N/A placeholder "manual operator check"
+// preflight's additions:   na none tktk ... <…>
+const PLACEHOLDER_RE =
+  /^(todo|tbd|n\/a|na|none|tktk|placeholder|manual operator check|\.\.\.|<.*>)$/i;
 
 // Bash resolves `"doppler"`, `\doppler` and `dopp""ler` to the same binary, but the
 // word-boundary anchors above cannot see through the quote characters. Strip them
@@ -263,17 +258,49 @@ export function parseExpected(observabilityBlock: string): string {
 /**
  * Read the optional `credentials_required` sub-field of `discoverability_test`.
  *
- * Mirrors SKILL.md Step 10.4's flat sub-field `awk`, exactly as `expected_output`
- * already is. `parse-form-a.awk` is deliberately NOT extended — it is pinned
- * byte-exactly against this file by the P1/P2/P3 parity harness, so widening it
- * would put a schema addition through a byte-parity gate for no benefit. The flat
- * read inherits `expected_output`'s pre-existing limitation (two
- * `discoverability_test` sub-blocks could confuse it); unchanged here.
+ * SCOPED TO THE SUB-BLOCK, deliberately. `expected_output` is read with a flat
+ * whole-block scan and that is survivable, because a stray `expected_output:`
+ * only changes what a probe is compared against. This field SKIPS EXECUTION
+ * ENTIRELY, so the same flat read is a bypass rather than a parsing quirk:
+ * measured, a `credentials_required:` line sitting under `liveness_signal:`, or
+ * in prose anywhere in the `## Observability` section, waived a perfectly
+ * runnable unauthenticated `curl` probe. One line, anywhere in the section,
+ * silently disabled the check. The precedent does not transfer when the blast
+ * radii differ this much.
+ *
+ * Three further shapes are rejected rather than honoured, each measured as a
+ * silent waiver before this guard existed:
+ *
+ *   - a value that is only a `#` comment. The documented template ships
+ *     `credentials_required: # OPTIONAL. Only when ...`, so an agent copying the
+ *     canonical schema produced a valid-looking declaration whose "declared
+ *     scope" was the template's own explanatory comment.
+ *   - a bare block/folded indicator (`>` or `|`). #6772 made those first-class
+ *     for `command:`, so an author following that pattern got SKIP-DECLARED with
+ *     the justification `">"`.
+ *   - an empty value.
+ *
+ * `parse-form-a.awk` is still deliberately NOT extended — it is pinned
+ * byte-exactly against this file by the P1/P2/P3 parity harness.
  */
 export function parseCredentialsRequired(observabilityBlock: string): string {
-  for (const line of observabilityBlock.split(/\r?\n/)) {
-    const m = line.match(/^\s*credentials_required:\s*(.+)$/);
-    if (m) return stripQuotes(m[1].trim());
+  const lines = observabilityBlock.split(/\r?\n/);
+  const start = lines.findIndex((l) => /^\s*discoverability_test:/.test(l));
+  if (start === -1) return "";
+  const parentIndent = (lines[start].match(/^[ \t]*/) ?? [""])[0].length;
+
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() === "") continue;
+    const indent = (line.match(/^[ \t]*/) ?? [""])[0].length;
+    // Back to the parent's level or shallower => the sub-block ended.
+    if (indent <= parentIndent) break;
+    const m = line.match(/^\s*credentials_required:\s*(.*)$/);
+    if (!m) continue;
+    const raw = stripQuotes(m[1].trim());
+    // A comment-only value, a bare block/fold indicator, or nothing at all
+    // declares nothing — and a declaration that says nothing waives nothing.
+    if (raw === "" || raw.startsWith("#") || raw === ">" || raw === "|") return "";
+    return raw;
   }
   return "";
 }
@@ -300,30 +327,34 @@ export function tokenizeExpected(expected: string): string[] {
 }
 
 /**
- * The effective verb: the first whitespace-delimited token of the DEQUOTED
- * command. Bash resolves `"doppler"`, `\doppler` and `dopp""ler` to the same
- * binary, so quoting must not launder the verb past the allowlist.
+ * Normalize a parsed command before anything reads its verb.
+ *
+ * MIRRORS `probe-verb-gate.sh` — that script is the runtime of record and this
+ * is the mirror; if they disagree the script wins and this is the bug. The
+ * `probe-verb-gate-parity` test executes both over one fixture table precisely
+ * so a disagreement cannot ship silently again.
+ *
+ * Two producer asymmetries make this necessary, and both shipped green before
+ * the parity harness existed: Form B prints fenced lines VERBATIM (keeping
+ * markdown indentation, so the verb was `""`), and a Form A block scalar can
+ * carry a leading `#` comment line (so the verb was `"#"`). Both produced a FAIL
+ * whose message named remedies that could not apply.
  */
-export function effectiveVerb(cmd: string): string {
-  return dequote(cmd).trimStart().split(/[\t\n\r \f\v]/)[0] ?? "";
+export function normalizeCommand(cmd: string): string {
+  return cmd
+    .split(/\r?\n/)
+    .filter((l) => !/^\s*#/.test(l) && l.trim() !== "")
+    .join("\n")
+    .trim();
 }
 
 /**
- * The program-position tokens: the verb itself, plus — for `bash`/`sh` — the
- * first non-flag argument, which is the script being run.
- *
- * Deliberately NOT every token: `curl … -o /dev/null` is the dominant corpus
- * form, and a rule over all tokens would reject it.
+ * The effective verb: the first whitespace-delimited token of the NORMALIZED,
+ * DEQUOTED command. Bash resolves `"doppler"`, `\doppler` and `dopp""ler` to the
+ * same binary, so quoting must not launder the verb past the allowlist.
  */
-function programPath(cmd: string): string {
-  const verb = effectiveVerb(cmd);
-  if (verb !== "bash" && verb !== "sh") return verb;
-  const argv = dequote(cmd).trim().split(/[\t\n\r \f\v]+/);
-  for (const tok of argv.slice(1)) {
-    if (tok.startsWith("-")) continue;
-    return tok;
-  }
-  return verb;
+export function effectiveVerb(cmd: string): string {
+  return dequote(normalizeCommand(cmd)).split(/[\t\n\r \f\v]/)[0] ?? "";
 }
 
 export function rejectReason(cmd: string): string | null {
@@ -331,28 +362,28 @@ export function rejectReason(cmd: string): string | null {
     return "discoverability_test.command contains ssh (rule violation per hr-observability-as-plan-quality-gate)";
   }
 
-  // Ordered to mirror the runtime: Step 10.4's verb/arg/path gates run before
-  // Step 10.5's shell-active-token reject.
+  // Ordered to mirror the runtime: Step 10.4's verb gate runs before Step 10.5's
+  // shell-active-token reject.
   const verb = effectiveVerb(cmd);
-  const deq = dequote(cmd).trim();
 
-  if (deq !== "" && !verb.includes("/")) {
-    if (!(PROBE_VERB_ALLOWLIST as readonly string[]).includes(verb)) {
-      return `discoverability_test.command starts with \`${verb}\`, which is not on the probe-verb allowlist (${PROBE_VERB_ALLOWLIST.join(" ")}). Either wrap the probe in a repo-relative script under the repository (\`bash scripts/<name>.sh …\`), or — if the probe genuinely cannot be run without credentials — declare \`credentials_required\` on the discoverability_test block so Check 10 skips it explicitly. To permit a new verb for everyone, add it to PROBE_VERB_ALLOWLIST in a reviewed PR; every entry is an authority grant.`;
-    }
+  if (verb === "") {
+    return "discoverability_test.command is empty after normalization — no command could be parsed. See plan-issue-templates.md §Observability for the canonical schema.";
   }
 
-  const inlineRe = INLINE_PROGRAM_RE[verb];
-  if (inlineRe && inlineRe.test(deq.slice(verb.length))) {
-    return `discoverability_test.command passes an inline program to \`${verb}\` (-c/-e/-p/--eval/--print). An inline program makes the allowlisted runtime equivalent to \`bash -c\`, which defeats the verb allowlist in a single token. Move the program into a repo-relative script.`;
+  // NO path-shaped exemption: a first token containing `/` used to skip this
+  // check entirely, which admitted `./doppler secrets get FOO` and the prose
+  // entry `gh/Sentry query for …` while a bare `doppler` rejected. Removing it
+  // is what makes "deny-by-default" true as printed.
+  if (!(PROBE_VERB_ALLOWLIST as readonly string[]).includes(verb)) {
+    return `discoverability_test.command starts with \`${verb}\`, which is not on the probe-verb allowlist (${PROBE_VERB_ALLOWLIST.join(" ")}). Either wrap the probe in a repo-relative script committed in this same PR (\`bash scripts/<name>.sh …\`), or — if the probe genuinely cannot run without credentials — declare \`credentials_required\` on the discoverability_test block so Check 10 skips it explicitly. To permit a new verb for everyone, add it to PROBE_VERB_ALLOWLIST in a reviewed PR; every entry is an authority grant.`;
   }
 
-  const prog = programPath(cmd);
-  if (NON_REPO_RELATIVE_RE.test(prog)) {
-    return `discoverability_test.command runs \`${prog}\`, which is not repo-relative. A probe's program must live inside the repository (no leading \`/\`, no \`..\` segment) so it is visible in the same PR diff as the plan that declares it.`;
-  }
-
-  if (SUBST_REJECT_RE.test(cmd)) {
+  // Tested against the NORMALIZED command, and the runtime EXECUTES that same
+  // normalized string — gating one form while executing another is the
+  // laundering trap this check exists to avoid. Concretely: a leading `#`
+  // comment line is not an executable statement, so it must not trip the
+  // newline (block-chaining) reject; a genuine second statement still does.
+  if (SUBST_REJECT_RE.test(normalizeCommand(cmd))) {
     return "discoverability_test.command contains shell-active token (;, &&, ||, |, >, <, &, $var, $(, `, <(, >() — refusing to run. Plans must compose single-statement commands without chaining or substitution.";
   }
   return null;
@@ -435,7 +466,10 @@ export async function classifyDiscoverabilityResult(
   }
 
   const expected = parseExpected(block);
-  const result = await runner(cmd, timeoutMs);
+  // Execute the SAME normalized string the gate approved. Gating one form and
+  // executing another is exactly the laundering gap that lets a rejected shape
+  // reach the shell.
+  const result = await runner(normalizeCommand(cmd), timeoutMs);
 
   if (result.rc === 6) {
     return {
