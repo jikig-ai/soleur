@@ -10,86 +10,106 @@ date: 2026-08-10
 
 # Tasks — Tier 1
 
-Derived from the plan. Every count below is re-derived in 1.1, not inherited.
+Phase numbers match the plan exactly (0–6). v1's numbering was offset by one, so ACs citing
+"Phase 4" meant different things in each file.
 
-## Phase 1 — Preconditions (no writes)
+**No task asserts an absolute corpus count.** Every count decays on each KB merge and on
+this PR's own artifacts; v1 asserted `7475` and measured `7477`, tripping its own
+stop-the-line on the first command.
 
-- [ ] 1.1 Baseline: `find knowledge-base -type f -not -type l -name '*.md' -not -path '*/archive/*' -not -name 'INDEX.md' | wc -l` → expect **7475**. If it differs, re-derive every count in the plan before continuing.
-- [ ] 1.2 `grep -n 'find "\$LEARNINGS_DIR"' scripts/generate-kb-index.sh` returns exactly one line (confirms the faceting walk cannot see `project/specs/`, so only one `find` needs the change).
-- [ ] 1.3 `grep -c 'generate-kb-index' scripts/test-all.sh` returns **0** (confirms the orphan suite).
-- [ ] 1.4 Read `scripts/generate-kb-index.sh:30-45` before editing (`hr-always-read-a-file-before-editing-it`).
+## Phase 0 — Preconditions (no writes)
 
-## Phase 2 — Register the orphan suite
+- [ ] 0.1 Record `before=$(find knowledge-base -type f -name '*.md' -not -path '*/archive/*' -not -name 'INDEX.md' | wc -l)` as a **value**. Do not compare to a literal.
+- [ ] 0.2 `grep -n 'find "\$LEARNINGS_DIR"' scripts/generate-kb-index.sh` → exactly one line (the faceting walk cannot reach `project/specs/`, so only one `find` changes).
+- [ ] 0.3 Confirm the suite is **already registered**, glob-aware: `for f in plugins/soleur/test/*.test.sh; do echo "$f"; done | grep -c 'generate-kb-index'` → 1. A filename grep against `test-all.sh` returns 0 and is a false negative — glob registrations never name their files.
+- [ ] 0.4 Read `scripts/generate-kb-index.sh:15-45` before editing (`hr-always-read-a-file-before-editing-it`).
 
-- [ ] 2.1 Add `run_suite "plugins/generate-kb-index" bash plugins/soleur/test/generate-kb-index.test.sh` to `scripts/test-all.sh`, adjacent to the other `plugins/soleur/test` registrations.
-- [ ] 2.2 `bash scripts/test-all.sh` — confirm the suite now appears in output and passes against current (unchanged) behaviour.
-- [ ] 2.3 Commit this alone. It is an independent bug fix and it is what makes Phase 3's tests gate anything.
+## Phase 1 — Failing tests first
 
-## Phase 3 — Failing tests first (RED)
+- [ ] 1.1 Change `plugins/soleur/test/generate-kb-index.test.sh:12` to `GEN_SCRIPT="${GEN_SCRIPT:-$REPO_ROOT/scripts/generate-kb-index.sh}"`. Without this the Phase 3 battery cannot point at a mutant and would have to mutate the real script in the working tree.
+- [ ] 1.2 Add a `setup_kb_specs` sibling to `setup_kb` (which builds only `project/learnings/`).
+- [ ] 1.3 F1 `specs/feat-x/spec.md` → indexed
+- [ ] 1.4 F2 `specs/feat-x/session-state.md` → dropped
+- [ ] 1.5 F3 `specs/feat-x/phase0-evidence.md`, `ac-walk.md` → dropped
+- [ ] 1.6 F4 `specs/fix-y/`: `spec.md` + `tasks.md` indexed, `session-state.md` dropped
+- [ ] 1.7 F5 `specs/review-workflow-hardening/`: `spec.md` indexed **+ `session-state.md` dropped**. The sibling is load-bearing — without it F5 is indexed before and after and pins nothing (v1 attributed M7 to it wrongly).
+- [ ] 1.8 F7 `plans/feat-q/plan.md` → indexed (the nested shape that broke the reverted gate's `-maxdepth 1`)
+- [ ] 1.9 F8 `plans/2026-01-01-feat-r-plan.md` → indexed
+- [ ] 1.10 F9 `specs/archive/…/spec.md` → dropped
+- [ ] 1.11 F10 `specs/feat-x/decision-challenges.md` → dropped from index. **Index half only** — v1's disk-presence half asserted that `find` is not `rm` and no mutation could turn it red.
+- [ ] 1.12 F11 `INDEX.md` in the fixture root → never a row
+- [ ] 1.13 F12 `specs/feat-x/diagram.png` → dropped (356 `.png` + 93 `.pen` live under KB)
+- [ ] 1.14 F13 `product/specs/feat-w/session-state.md` → **indexed** (only `project/specs/` is special; no such dir exists today, which is why nothing pinned it)
+- [ ] 1.15 F14 `specs/feat-x/tasks.md` → **indexed**
+- [ ] 1.16 F15 generator with `KB_DIR="$kb/"` → byte-identical output to `KB_DIR="$kb"`
+- [ ] 1.17 Confirm **F2, F3, F4's drop-half, F5's drop-half, F10, F12** are RED against the unmodified script. F1/F7/F8/F9/F11/F13/F14 are regression guards — GREEN before and after. Record them as such; do **not** force them RED (v1 demanded all-RED, which was impossible and invited weakening fixtures until they went red).
 
-Extend `plugins/soleur/test/generate-kb-index.test.sh`. Add a `setup_kb_specs` sibling to the existing `setup_kb` (which builds only `project/learnings/`). Reuse `run_generator` and the `KB_DIR` override.
+## Phase 2 — The predicate
 
-- [ ] 3.1 F1 `specs/feat-x/spec.md` → indexed
-- [ ] 3.2 F2 `specs/feat-x/tasks.md` + `session-state.md` → dropped
-- [ ] 3.3 F3 `specs/feat-x/phase0-evidence.md` + `ac-walk.md` → dropped *(the case a denylist misses)*
-- [ ] 3.4 F4 `specs/fix-y/spec.md` indexed + `specs/fix-y/tasks.md` dropped *(prefix-independence, FR2)*
-- [ ] 3.5 F5 `specs/review-workflow-hardening/spec.md` → indexed *(bare-named dir, real shape on main)*
-- [ ] 3.6 F6 `specs/feat-z/case-studies/01-a.md` → indexed *(depth ≥3)*
-- [ ] 3.7 F7 `plans/feat-q/plan.md` → indexed *(the nested-plan shape that broke the reverted gate's `-maxdepth 1`)*
-- [ ] 3.8 F8 `plans/2026-01-01-feat-r-plan.md` → indexed (FR3)
-- [ ] 3.9 F9 `specs/archive/…/spec.md` → dropped *(pre-existing behaviour must not regress)*
-- [ ] 3.10 F10 `specs/feat-x/decision-challenges.md` → dropped from index **AND** asserted still present on disk *(mechanical proof ADR-084 §5's read path is untouched)*
-- [ ] 3.11 Confirm F1–F10 are RED against the unmodified script before writing Phase 4.
+- [ ] 2.1 `scripts/generate-kb-index.sh:20` — add `KB_DIR="${KB_DIR%/}"` after the default assignment. Fixes the new predicate **and** the pre-existing `rel="${f#"$KB_DIR/"}"` bug at `:62` that emits absolute paths on a trailing slash.
+- [ ] 2.2 `:36-41` — add `\( -not -path '*/project/specs/*' -o -name 'spec.md' -o -name 'tasks.md' \)` to the existing `find`.
+- [ ] 2.3 Patterns MUST be single-quoted and non-interpolated. Interpolating `$KB_DIR` makes the predicate form-dependent: a trailing slash silently disables the whole feature (7,477 indexed, exit 0, green suite).
+- [ ] 2.4 Add a ~10-line WHY block above the group — house style for sharp edges (`test-all.sh:378`, `lefthook.yml:262`). It is the only place a future editor will read.
+- [ ] 2.5 Update `:10` (`# Excludes archive/ directories and INDEX.md itself.`) — it is `--help` output via the `sed` at `:27` and is now incomplete.
+- [ ] 2.6 F1–F15 all GREEN. `bash -n scripts/generate-kb-index.sh` clean.
 
-## Phase 4 — The predicate (GREEN)
+## Phase 3 — Mutation battery
 
-- [ ] 4.1 Edit the `find` at `scripts/generate-kb-index.sh:36-41`, adding exactly one group:
-      `\( -not -path "$KB_DIR/project/specs/*" -o -name 'spec.md' -o -path "$KB_DIR/project/specs/*/*/*" \)`
-- [ ] 4.2 Do **not** write `specs/*/spec.md` — `find -path`'s `*` matches `/`, so it would match at any depth. Use `-name 'spec.md'`.
-- [ ] 4.3 Do **not** simplify the third arm to `specs/*/*` — F2/F3 must catch it if attempted (see M5).
-- [ ] 4.4 F1–F10 all GREEN.
-- [ ] 4.5 `bash -n scripts/generate-kb-index.sh` clean.
+`GEN_SCRIPT=<mutant> bash <suite>` against a `cp`+`sed` mutant under `mktemp -d`. Record the actual RED per row.
 
-## Phase 5 — Mutation battery
+- [ ] 3.1 M1 delete the whole group → F2, F3, F4, F5
+- [ ] 3.2 M2 delete `-o -name 'spec.md'` → F1, F4, F5
+- [ ] 3.3 M4 flip `-not -path` → `-path` → F2, F3, F7, F8
+- [ ] 3.4 M6 drop `-not -path '*/archive/*'` → F9
+- [ ] 3.5 M7 narrow arm 1 to `*/project/specs/feat-*` → F4, F5's sibling
+- [ ] 3.6 M9 drop `-not -name 'INDEX.md'` → F11
+- [ ] 3.7 M13 loosen arm 1 to `*specs/*` → F13
+- [ ] 3.8 M14 delete `-o -name 'tasks.md'` → F14
+- [ ] 3.9 M15 drop `-name '*.md'` → F12
+- [ ] 3.10 M16 delete the `KB_DIR%/` normalization → F15
+- [ ] 3.11 Do **not** add a row for `-not -type l` — `-type f` already excludes symlinks, so the mutation is semantically null and no fixture can go red.
+- [ ] 3.12 `git status --short` clean after the battery (mutants live in `mktemp -d`, never the worktree).
 
-Each mutation applied to a scratch copy MUST turn the suite RED. Record the actual failure per row — a mutation list with no recorded RED is a hope, not a battery.
+## Phase 4 — Differential real-corpus assertion
 
-- [ ] 5.1 M1 delete the whole `\( … \)` group → RED via F2, F3
-- [ ] 5.2 M2 delete `-o -name 'spec.md'` → RED via F1, F4, F5
-- [ ] 5.3 M3 delete `-o -path ".../specs/*/*/*"` → RED via F6
-- [ ] 5.4 M4 flip `-not -path ".../specs/*"` → `-path` → RED broadly
-- [ ] 5.5 M5 widen third arm to `specs/*/*` → RED via F2, F3
-- [ ] 5.6 M6 drop `-not -path '*/archive/*'` → RED via F9
-- [ ] 5.7 M7 narrow first arm to `specs/feat-*` → RED via F4, F5 *(the `archive-kb.sh` defect, reintroduced — the important one)*
+- [ ] 4.1 `cp -r knowledge-base "$tmp/kb"`; `git show HEAD:scripts/generate-kb-index.sh > "$tmp/pre.sh"`.
+- [ ] 4.2 Generate with the pre-edit script, record `project/plans` row count; generate with the edited script, record again. Counts MUST be identical.
+- [ ] 4.3 Assert the set: `sed -n 's|^- \[.*\](\(project/specs/[^)]*\))$|\1|p' "$tmp/kb/INDEX.md" | xargs -n1 basename | sort -u` prints exactly `spec.md` and `tasks.md`. Extract **link targets**, not any line containing `project/specs` — this plan's own title matches that literal.
+- [ ] 4.4 `rm -rf "$tmp"`.
 
-## Phase 6 — Real-corpus assertion
+## Phase 5 — Regenerate INDEX.md
 
-- [ ] 6.1 Run the **script** (not a re-typed predicate) against a `cp -r` copy under `mktemp -d`, so the committed `INDEX.md` is never written.
-- [ ] 6.2 Spec-dir basenames in the produced INDEX.md = `spec.md` ×321 + exactly the 7 nested files, nothing else.
-- [ ] 6.3 `grep -c 'project/plans'` unchanged vs baseline (FR3).
-- [ ] 6.4 New-predicate file count = **4960** (delta −2515 from 1.1).
-- [ ] 6.5 `rm -rf` the temp copy; `git status --short` shows no `INDEX.md`, `kb-tags.txt`, or `kb-categories.txt` (FR4, NG4).
+- [ ] 5.1 Run `bash scripts/generate-kb-index.sh` in the worktree; commit `INDEX.md`, `kb-tags.txt`, `kb-categories.txt` **alone**, as the final commit.
+- [ ] 5.2 Explain the diff in the PR body: accumulated staleness + the exclusion delta.
+- [ ] 5.3 Comment on #7401 that its remaining scope is the CI freshness gate only, naming `plugins/soleur/test/c4-model-freshness.test.sh` as the precedent.
+- [ ] 5.4 Comment on #7400 that its start condition is satisfied by this PR's Phase 4 differential, decoupling it from #7401.
 
-## Phase 7 — ADR
+## Phase 6 — ADR + consumer prose
 
-- [ ] 7.1 Re-derive the next free ADR ordinal against freshly-fetched `origin/main`. ADR-171 was highest on 2026-08-10; **the number is provisional**.
-- [ ] 7.2 Author `ADR-172-kb-index-exclusion-supersedes-per-feature-archival.md`, `status: adopting`.
-- [ ] 7.3 Cite ADR-084 §5 and `ship/SKILL.md:2361` (the repo's own record that archival sanctionedly does not run).
-- [ ] 7.4 `## Alternatives Considered` names all three losing options with the reason each lost: keep-archival-and-fix-its-holes; delete-the-convention-outright; denylist-by-basename.
-- [ ] 7.5 If the ordinal moved, sweep the plan, this file, and AC12 in the **same** edit.
+- [ ] 6.1 `git fetch origin main`, then re-derive the next free ordinal from **fetched** `origin/main`. ADR-172 is taken; expected next is ADR-173.
+- [ ] 6.2 Author `ADR-173-kb-index-exclusion-supersedes-per-feature-archival.md`, `status: adopting`.
+- [ ] 6.3 Record: ADR-084 §5 + `ship/SKILL.md:2361`; the 79%-no-`spec.md` finding; Tier 2 sequencing; Alternatives covering keep-archival, delete-outright, denylist, and `spec.md`-only.
+- [ ] 6.4 Amend `plugins/soleur/agents/engineering/research/learnings-researcher.md:15` — "INDEX.md lists every non-archived KB file with its title" is now false.
+- [ ] 6.5 Amend `.openhands/skills/learnings-researcher/SKILL.md:15` — verbatim duplicate of the same claim.
+- [ ] 6.6 Amend `plugins/soleur/skills/brainstorm/SKILL.md:232` — it reasons from one exclusion class (`/archive/`); there are now two.
+- [ ] 6.7 Add 3 lines to `plugins/soleur/skills/spec-templates/SKILL.md:73-78` stating the rule where spec dirs are created. Only discoverability fix that reaches authors.
+- [ ] 6.8 Add a superseded-in-part pointer to `plugins/soleur/skills/archive-kb/SKILL.md` (ADR-173 + #7400). NG2 covers the *script*, not the SKILL.
+- [ ] 6.9 Amend `knowledge-base/project/specs/feat-kb-archival-convention/spec.md`: rewrite G1 ("a single mechanical predicate, no per-file judgment"), replace FR1 with the allowlist, delete TR2, strike absolute counts from FR3/TR5/ACs.
+- [ ] 6.10 If the ordinal moved, sweep plan + this file + AC10 in the **same** edit.
 
-## Phase 8 — Exit gate
+## Phase 7 — Exit gate
 
-- [ ] 8.1 `git diff --stat plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` empty (NG2).
-- [ ] 8.2 `git diff --name-status origin/main -- knowledge-base/project/specs knowledge-base/project/plans` shows only this feature's own new artifacts and zero `R`/`D` lines (NG3).
-- [ ] 8.3 Full `bash scripts/test-all.sh` green.
-- [ ] 8.4 All 13 plan ACs verified and recorded.
+- [ ] 7.1 `git diff --stat plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` empty (NG2).
+- [ ] 7.2 `git diff --name-status origin/main...HEAD -- knowledge-base/project/specs knowledge-base/project/plans` → only this feature's artifacts, zero `R`/`D`. **Three-dot** — two-dot reports main's movement as this branch's deletions.
+- [ ] 7.3 `grep -rn "lists every non-archived KB file" plugins/ .openhands/` → zero.
+- [ ] 7.4 Full `bash scripts/test-all.sh` green, with the suite appearing exactly **once** in the runner output (a duplicate registration would show it twice).
+- [ ] 7.5 All 12 plan ACs verified and recorded in the PR body.
 
 ## Out of scope — do not do
 
-- No archival gate, reworked or otherwise. Any gate on the `git mv` inherits the ADR-084 §5 collision.
-- No change to `archive-kb.sh`. Its retirement is #7400's exit criterion.
-- No migration of the 3,054-artifact backlog. Under index-exclusion there is nothing to migrate.
-- No regeneration of the committed `INDEX.md` — that is #7401, a ~3,700-line diff that would swamp this ~10-line change.
-- No exclusion of merged features' `spec.md` or plans — #7400, deferred pending a reliable merged signal.
-- No change to brainstorm indexing or archival.
+- No archival gate. Any gate on the `git mv` inherits the ADR-084 §5 collision.
+- No change to `archive-kb.sh` itself — #7400's exit criterion.
+- No migration of the artifact backlog. Under index-exclusion there is nothing to migrate.
+- No exclusion of merged features' `spec.md`/`tasks.md`/plans — #7400, pending a reliable merged signal.
+- No widening of `scripts/lint-orphan-test-suites.sh`. The panel found 7 genuine orphan suites repo-wide (4 in `linear-fetch/scripts/`, including a secret-redaction gate) caused by two glob blind spots in `test-all.sh:721`. **File separately; do not expand this PR.**
+- No change to brainstorm indexing.
