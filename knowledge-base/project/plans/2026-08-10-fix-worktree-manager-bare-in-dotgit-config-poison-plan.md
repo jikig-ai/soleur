@@ -899,7 +899,7 @@ where `tail`'s status was misread as the suite's verdict.
 | File | Purpose |
 |---|---|
 | `plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh` | The 14-case regression suite (auto-globbed by `scripts/test-all.sh` — no registration needed) |
-| `knowledge-base/engineering/architecture/decisions/ADR-173-bare-repo-config-normalization-polarity.md` | The polarity decision + measurement scope + re-evaluation trigger (ordinal provisional) |
+| `knowledge-base/engineering/architecture/decisions/ADR-173-bare-config-polarity-for-linked-worktrees.md` | The polarity decision + measurement scope + re-evaluation trigger (ordinal provisional) |
 | `knowledge-base/project/specs/feat-one-shot-7394-worktree-manager-bare-repo-layout/tasks.md` | Task breakdown derived from these phases |
 
 **No SKILL.md `description:` edit is candidate**, so the 1800-word cumulative budget check does not
