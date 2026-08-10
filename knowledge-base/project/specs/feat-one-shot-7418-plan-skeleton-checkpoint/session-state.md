@@ -15,7 +15,7 @@
 - **First plan Write was blocked** by `.claude/hooks/iac-plan-write-guard.sh` because a Sharp Edge
   quoted the guard's own trigger tokens verbatim. Fixed by neutralizing the prose — *not* by taking
   the `iac-routing-ack` opt-out, which would have falsely asserted a real infra step was reviewed.
-- **ADR-173 (v1's pick) is triple-claimed** on pushed branches. Re-derived to ADR-174 (verified free).
+- **ADR-173 (v1's pick) is triple-claimed** on pushed branches. Re-derived to ADR-175 (verified free).
 - Two self-inflicted tooling errors during planning: a budget one-liner over-matched (real figure is
   2400/2400, zero headroom), and `bunx vitest` was run against `plugins/soleur` tests, which use `bun test`.
 
@@ -30,7 +30,7 @@
   nothing else for a stall *inside* the fan-out — the modal case.
 - **Resume is bounded** (attempts cap, strict advance, terminal states); a designed `deepen-plan` HALT
   deletes the cursor, so a correct refusal does not replay as a crash.
-- **Deferred rather than folded in:** the stale 1800→2400 budget figure (5 sites). Recorded in
+- **Folded into this PR (superseding the earlier deferral):** the stale 1800→2400 budget figure (5 sites). Recorded in
   `decision-challenges.md`. The plan does **not** implement the literal `<!-- planning in progress -->`
   marker the issue specified — the operator's stated direction remains the default if they want it as written.
 
