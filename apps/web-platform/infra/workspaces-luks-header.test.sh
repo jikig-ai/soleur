@@ -373,6 +373,16 @@ else
   # would fail this).
   run_s7() {
     (
+      # Blank any AMBIENT AWS credentials for the duration of this subshell (#7376).
+      #
+      # The `echo "END … kid=$AWS_ACCESS_KEY_ID …"` below is printed verbatim by the FAIL
+      # branch's diagnostic (`out=$s7_out`) — and that is precisely the path
+      # run-registered-suites.sh now captures and excerpts into a run log on a PUBLIC repo.
+      # Today the local `doppler()` stub supplies `stub-…`, so nothing real leaks; but
+      # infra-validation.yml exports genuine AWS credentials into $GITHUB_ENV in a DIFFERENT
+      # job, which puts this suite one job-move away from printing a live access key on
+      # failure. The isolation is currently incidental — this makes it explicit.
+      AWS_ACCESS_KEY_ID= AWS_SECRET_ACCESS_KEY= AWS_SESSION_TOKEN=
       doppler() { printf 'stub-%s\n' "$3"; }
       emit_drift() { echo "DRIFT:$1"; }
       die() { echo "DIE:$*"; exit 1; }

@@ -200,19 +200,19 @@ fi
 
 # Capture ORDER: `2>&1 >"$f"` would send stderr to the OLD stdout and lose every marker.
 # T6c is what detects that, but state it separately so the mutation matrix can name it.
-if printf '%s\n' "$OUT6" | grep -qE '^\| .*T6-EARLY-SENTINEL'; then
+if printf '%s\n' "$OUT6" | grep -qE '^SOLEUR\| .*T6-EARLY-SENTINEL'; then
   ok "T6d: the dumped assertion is PREFIXED with the sentinel"
 else
   no "T6d: the dumped assertion is not sentinel-prefixed — it would reach the public issue body"
 fi
 
-if printf '%s\n' "$OUT6" | grep -qE '^\| .*rc=1'; then
+if printf '%s\n' "$OUT6" | grep -qE '^SOLEUR\| .*rc=1'; then
   ok "T6e: the dump banner records the suite's exit code"
 else
   no "T6e: the dump banner has no rc"
 fi
 
-if printf '%s\n' "$OUT6" | grep -qE '^\| .*elapsed='; then
+if printf '%s\n' "$OUT6" | grep -qE '^SOLEUR\| .*elapsed='; then
   ok "T6f: the dump banner records elapsed time"
 else
   no "T6f: the dump banner has no elapsed time"
@@ -220,14 +220,14 @@ fi
 
 # start offset — without it "which neighbours overlapped the failure window" is unanswerable,
 # so H2-as-victim is not falsifiable.
-if printf '%s\n' "$OUT6" | grep -qE '^\| .*start_offset='; then
+if printf '%s\n' "$OUT6" | grep -qE '^SOLEUR\| .*start_offset='; then
   ok "T6g: the dump banner records a start offset"
 else
   no "T6g: the dump banner has no start offset"
 fi
 
 # The cap must bind AFTER selection, per suite.
-DUMPED=$(printf '%s\n' "$OUT6" | grep -cE '^\| ' || true)
+DUMPED=$(printf '%s\n' "$OUT6" | grep -cE '^SOLEUR\| ' || true)
 if (( DUMPED > 0 && DUMPED <= 60 )); then
   ok "T6h: the dump is bounded (${DUMPED} prefixed lines for 1 RED suite)"
 else
@@ -236,7 +236,7 @@ fi
 
 # The green suite must NOT be dumped.
 if printf '%s\n' "$OUT6" | grep -qF "bbb-green.test.sh" \
-   && ! printf '%s\n' "$OUT6" | grep -E '^\| ' | grep -qF "bbb-green.test.sh"; then
+   && ! printf '%s\n' "$OUT6" | grep -E '^SOLEUR\| ' | grep -qF "bbb-green.test.sh"; then
   ok "T6i: only the RED suite is dumped"
 else
   no "T6i: a PASSing suite was dumped (or the PASS line vanished)"
@@ -244,7 +244,7 @@ fi
 
 # Log dir retained on failure, and its path printed — prefixed, like everything else the
 # parent emits after xargs (an unprefixed path would reach the monitor's tail).
-if printf '%s\n' "$OUT6" | grep -qE '^\| .*(retained|log dir)'; then
+if printf '%s\n' "$OUT6" | grep -qE '^SOLEUR\| .*(retained|log dir)'; then
   ok "T6j: the retained log dir path is printed, prefixed"
 else
   no "T6j: no retained log dir path in the output"
@@ -273,12 +273,12 @@ FIXEOF
 chmod +x "$FIXDIR2"/*.test.sh
 mkfixture_wf "$FIXDIR2/wf.yml" "$FIXDIR2/aaa-nomarker.test.sh"
 OUT6M="$(INFRA_WF="$FIXDIR2/wf.yml" INFRA_DIR="$FIXDIR2" timeout 60 bash "$SUT" 2>&1)" || true
-if printf '%s\n' "$OUT6M" | grep -qE '^\| .*rc=7'; then
+if printf '%s\n' "$OUT6M" | grep -qE '^SOLEUR\| .*rc=7'; then
   ok "T6m: a non-1 exit code is recorded verbatim (rc=7)"
 else
   no "T6m: rc=7 not recorded — exit codes 137/124 would be unreadable"
 fi
-if printf '%s\n' "$OUT6M" | grep -qiE '^\| .*(selection|fallback|tail)'; then
+if printf '%s\n' "$OUT6M" | grep -qiE '^SOLEUR\| .*(selection|fallback|tail)'; then
   ok "T6n: the runner names which excerpt selection it used"
 else
   no "T6n: the runner does not say whether the excerpt was anchored or a blind tail"
@@ -294,7 +294,7 @@ FIXEOF
 chmod +x "$FIXDIR3"/*.test.sh
 mkfixture_wf "$FIXDIR3/wf.yml" "$FIXDIR3/aaa-flood.test.sh"
 OUT6P="$(INFRA_WF="$FIXDIR3/wf.yml" INFRA_DIR="$FIXDIR3" timeout 60 bash "$SUT" 2>&1)" || true
-FLOOD=$(printf '%s\n' "$OUT6P" | grep -cE '^\| ' || true)
+FLOOD=$(printf '%s\n' "$OUT6P" | grep -cE '^SOLEUR\| ' || true)
 if (( FLOOD > 0 && FLOOD <= 60 )); then
   ok "T6p: 10,000 marker lines are capped after selection (${FLOOD} prefixed lines)"
 else
@@ -329,7 +329,7 @@ fi
 # ── T6s: one log file per derived suite (filename-collision probe) ────────────
 # Keying the per-suite log on `basename` instead of the sanitised full path would
 # collide the moment two suites share a basename across subdirectories.
-if printf '%s\n' "$OUT6Q" | grep -qE '^\| .*log dir: '; then
+if printf '%s\n' "$OUT6Q" | grep -qE '^SOLEUR\| .*log dir: '; then
   LD=$(printf '%s\n' "$OUT6Q" | grep -oE 'log dir: .*' | head -1 | sed 's/^log dir: //')
   if [[ -d "$LD" ]] && (( $(find "$LD" -name '*.log' | wc -l) == 2 )); then
     ok "T6s: one log file per derived suite (no filename collision)"
@@ -353,7 +353,7 @@ rc6t=0
 OUT6T="$(INFRA_WF="$FIXDIR5/wf.yml" INFRA_DIR="$FIXDIR5" timeout 60 bash "$SUT" 2>&1)" || rc6t=$?
 if (( rc6t == 0 )); then ok "T6t: an all-green run exits 0"
 else no "T6t: an all-green run exited $rc6t"; fi
-if ! printf '%s\n' "$OUT6T" | grep -qE '^\| '; then
+if ! printf '%s\n' "$OUT6T" | grep -qE '^SOLEUR\| '; then
   ok "T6u: an all-green run emits no dump at all"
 else
   no "T6u: an all-green run emitted prefixed dump lines"
@@ -441,7 +441,7 @@ for f in "${CORPUS[@]}"; do
              | grep -oE '[A-Za-z0-9._-]+\.sh$')
   lits="$(payload_starts "${files[@]}")"
   grep -qE "$MARKER_ERE" <<<"$lits" || nonconforming+=("$f")
-  grep -qE '^\| ' <<<"$lits" && sentinel_emitters+=("$f")
+  grep -qE '^SOLEUR\| ' <<<"$lits" && sentinel_emitters+=("$f")
 done
 
 if (( ${#nonconforming[@]} == 0 )); then

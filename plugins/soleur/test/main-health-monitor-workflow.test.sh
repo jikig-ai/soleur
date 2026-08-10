@@ -245,10 +245,27 @@ else:
 
 # ---- (10) no pipeline whose status is discarded in setup steps ------------
 # defect B's shape: `cmd | tail` under bash -e (pipefail OFF) always exits 0.
+#
+# AMENDED 2026-08-10 (#7376) — deliberately, not worked around. The excerpt builder gained
+# `grep -v '^SOLEUR| ' "$file" | tail -30`, which matches all three offender conditions and
+# would otherwise red this check.
+#
+# The exemption is sound because defect B is about DISCARDING A PRODUCER'S VERDICT. This
+# producer has no verdict to discard: it is a display filter over a file whose non-emptiness
+# the enclosing `if [[ -s "$file" ]]` already established, and `grep -v`'s exit status here
+# encodes only "did every line match the filter" — which is not an error condition, it is the
+# fully-dumped case. Propagating it would make the monitor abort and file NOTHING in exactly
+# the situation it exists to report.
+#
+# Keyed on the literal filter, so this exempts THAT line and nothing else — any other
+# `| tail` still trips. Deliberately NOT spelled `grep -E -v` to slip past the substring
+# exemption above, which would have widened the blind spot instead of narrowing it.
+DISPLAY_FILTER_EXEMPT = "grep -v '^SOLEUR| '"
 offenders = [l.strip() for l in run_lines
              if re.search(r'\|\s*(tail|head)\b', l)
              and 'PIPESTATUS' not in l
-             and 'grep -E' not in l]
+             and 'grep -E' not in l
+             and DISPLAY_FILTER_EXEMPT not in l]
 if offenders:
     bad("(10) no setup pipeline silently discards its producer's exit status",
         f"offenders={offenders} -- this is defect B's exact shape")
@@ -300,6 +317,136 @@ while IFS=$'\t' read -r status msg detail; do
   [[ -n "${status:-}" ]] || continue
   if [[ "$status" == "ok" ]]; then pass "$msg"; else fail "$msg" "$detail"; fi
 done < "$RESULT_FILE"
+
+# ── (13) the dump filter's EFFECT, not its spelling (#7376) ───────────────────────────────────
+#
+# Everything above parses the YAML with a python regex and NEVER EXECUTES THE SHELL, so an
+# assertion that the literal `grep -v '^SOLEUR| '` appears would pin the filter's PRESENCE and
+# say nothing about what it does. The compliance clearance for this change depends on the
+# EFFECT: run-registered-suites.sh now prints per-suite diagnostics that must not reach a
+# public issue body. So extract the excerpt expression from the workflow and run it.
+#
+# Extracted, not re-typed. A hand-copied duplicate of the pipeline is a second source of truth
+# that drifts silently — this test would keep passing against a workflow that had stopped
+# filtering.
+# Extract ANY `grep -v '<pattern>' "$file" | tail -N` shape, not just today's sentinel. Pinning
+# the extraction to `^SOLEUR| ` would make a WIDENED filter (a bare `^| `) unextractable, and it
+# would then fail as "could not extract" — a correct verdict for the wrong reason, which reads
+# as a missing filter rather than as the over-broad one that 13c exists to catch.
+EXCERPT_EXPR="$(grep -oE "grep -v '[^']*' \"\\\$file\" \| tail -[0-9]+" "$WF" | head -1)"
+if [[ -n "$EXCERPT_EXPR" ]]; then
+  _fix="$(mktemp)"; _out="$(mktemp)"
+  {
+    echo "RED  apps/web-platform/infra/inngest.test.sh"
+    echo "PASS apps/web-platform/infra/other.test.sh"
+    echo "SOLEUR| --- RED: apps/web-platform/infra/inngest.test.sh (rc=1 elapsed=3s start_offset=+2s) ---"
+    echo "SOLEUR| [FAIL] a dumped marker that must NOT reach the public issue body"
+    echo "SOLEUR| retained per-suite log dir: /var/tmp/infra-suites.deadbeef"
+    echo "| Service | Provider | Category |"
+    echo "=== registered infra suites: 92 passed, 1 failed (of 93) ==="
+  } > "$_fix"
+  file="$_fix"; eval "$EXCERPT_EXPR" > "$_out" 2>/dev/null || true
+
+  if ! grep -q '^SOLEUR| ' "$_out"; then
+    pass "(13a) the excerpt drops every dumped diagnostic line"
+  else
+    fail "(13a) dumped diagnostic lines survive into the published excerpt" "$(grep -c '^SOLEUR| ' "$_out") line(s)"
+  fi
+
+  # WHITELIST, not an absence check. "no SOLEUR| line" is satisfied by a filter that drops
+  # EVERYTHING, which would silently gut the issue body. Assert positively that the signal
+  # the operator actually needs survived.
+  if grep -q '=== registered infra suites: 92 passed, 1 failed' "$_out" \
+     && grep -q '^RED  *apps/web-platform/infra/inngest.test.sh' "$_out"; then
+    pass "(13b) the summary count and the RED suite name survive the filter"
+  else
+    fail "(13b) the filter removed signal the issue body depends on" "$(head -5 "$_out")"
+  fi
+
+  # The tests half of the same loop: expenses-verify-by-check prints markdown tables at
+  # column 0. A bare `^| ` sentinel would have deleted them from the public excerpt; this is
+  # the assertion that keeps the sentinel distinctive.
+  if grep -q '^| Service | Provider' "$_out"; then
+    pass "(13c) a legitimate column-0 markdown table is NOT stripped"
+  else
+    fail "(13c) the filter stripped a markdown table — the sentinel is too broad"
+  fi
+  rm -f "$_fix" "$_out"
+else
+  fail "(13) could not extract the excerpt filter from the workflow" \
+    "the dump filter is missing, or its shape changed and this pin went blind"
+fi
+
+# ── (14) the redaction set actually redacts (#7376) ───────────────────────────────────────────
+#
+# This channel now carries per-suite diagnostic output into a PUBLIC issue body, so the
+# redaction pass is load-bearing rather than belt-and-braces. Asserted by EXTRACTING the sed
+# expressions from the workflow and running them — a re-typed copy would be a second source of
+# truth that drifts silently.
+#
+# Every fixture is SYNTHESIZED (cq-test-fixtures-synthesized-only) and assembled by
+# CONCATENATION, so no contiguous token-shaped literal exists in this file. A real-shaped
+# literal would trip GitHub Push Protection and block the push even though the value is fake.
+mapfile -t _SED_EXPRS < <(awk '/REDACTED=\$\(printf/,/^ *$/' "$WF" | grep -oE "^ *-e '.*'" | sed -E "s/^ *-e '//; s/'$//")
+if (( ${#_SED_EXPRS[@]} >= 12 )); then
+  _args=(); for e in "${_SED_EXPRS[@]}"; do _args+=(-e "$e"); done
+
+  _hdr='-----BEGIN'; _ftr='-----END'
+  _corpus="$(
+    printf '%s\n' \
+      "token gh""p_0123456789abcdefghij0123456789abcdef" \
+      "jwt ey""J0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk" \
+      "supa sbp_""v0_0123456789abcdef0123456789abcdef01234567" \
+      "stripe rk_""live_0123456789abcdefghij0123456789" \
+      "whsec wh""sec_0123456789abcdefghij0123456789" \
+      "doppler dp""."'scim'".0123456789abcdefghij0123456789abcdef0123" \
+      "sentry sn""trys_0123456789abcdefghij0123456789abcdef" \
+      "dsn https://0123456789abcdef0123456789abcdef@o123.ingest.sentry.io/456" \
+      "Authorization: Bea""rer abcdefghijklmnop0123456789" \
+      "${_hdr} RSA PRIVATE KEY-----" \
+      "MIIEowIBAAKCAQEAsecretbodythatmustnotsurvive0123456789" \
+      "${_ftr} RSA PRIVATE KEY-----" \
+      "keepme: this ordinary diagnostic line must survive"
+  )"
+  _red="$(printf '%s' "$_corpus" | sed -E "${_args[@]}")"
+
+  # Anchor on the SECRET-BEARING substrings, not on the word "redacted": asserting the
+  # replacement text appears would pass even if one rule silently stopped matching.
+  _leaks=()
+  grep -q '0123456789abcdefghij0123456789abcdef' <<<"$_red" && _leaks+=("gh-token")
+  grep -q 'dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk' <<<"$_red" && _leaks+=("jwt")
+  grep -q 'sbp_v0_' <<<"$_red" && _leaks+=("supabase")
+  grep -qE '(rk_live|whsec)_[A-Za-z0-9]{16,}' <<<"$_red" && _leaks+=("stripe")
+  grep -q 'scim\.0123456789' <<<"$_red" && _leaks+=("doppler-scim")
+  grep -q 'sntrys_0123' <<<"$_red" && _leaks+=("sentry-token")
+  grep -q 'o123.ingest.sentry.io' <<<"$_red" && _leaks+=("sentry-dsn")
+  grep -q 'abcdefghijklmnop0123456789' <<<"$_red" && _leaks+=("authorization")
+  grep -q 'MIIEowIBAAKCAQEAsecretbody' <<<"$_red" && _leaks+=("pem-body")
+
+  if (( ${#_leaks[@]} == 0 )); then
+    pass "(14a) every synthesized secret shape is redacted (${#_SED_EXPRS[@]} rules)"
+  else
+    fail "(14a) secret shapes SURVIVED redaction" "leaked: ${_leaks[*]}"
+  fi
+
+  # The PEM rule is a RANGE. A header-only rule is an anti-mitigation: it strips the marker
+  # that makes a leaked key recognisable and leaves the base64 body behind.
+  if ! grep -q 'MIIEowIBAAKCAQEA' <<<"$_red" && ! grep -q 'END RSA PRIVATE KEY' <<<"$_red"; then
+    pass "(14b) the PEM rule removes the whole key BLOCK, not just its header"
+  else
+    fail "(14b) the PEM body or END line survived — the rule is header-only"
+  fi
+
+  # WHITELIST: redaction that eats everything is not a pass.
+  if grep -q 'keepme: this ordinary diagnostic line must survive' <<<"$_red"; then
+    pass "(14c) ordinary diagnostic text survives redaction"
+  else
+    fail "(14c) redaction destroyed non-secret diagnostic text"
+  fi
+else
+  fail "(14) could not extract the redaction rules from the workflow" \
+    "found ${#_SED_EXPRS[@]} -e expressions, expected >= 12"
+fi
 
 # POSITIVE CONTROL. The floor below counts PASS+FAIL, so it catches a dispatch
 # layer that stops emitting entirely -- but NOT a `fail()` neutered to a no-op,

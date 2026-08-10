@@ -214,14 +214,24 @@ JOBS="${JOBS:-$(( _NPROC < 6 ? _NPROC : 6 ))}"
 
 # ── The instrument (#7376) ────────────────────────────────────────────────────
 #
-# SENTINEL. Every line the parent emits AFTER xargs returns is prefixed with `| `. That is not
-# cosmetic. 10 registered suites print `[FAIL]` at column 0, and main-health-monitor.yml greps
-# `^RED |^\[FAIL\]` to build a PUBLIC issue body AND to derive its TITLE — so an unprefixed
-# dumped `[FAIL]` during a TIMEOUT would title an issue with a cause the job never measured,
-# the exact AP-021/ADR-166 defect #7371 removed. The prefix also gives the monitor a filter it
-# can apply to its unconditional `tail -30`, keeping the published excerpt byte-identical.
-# Verified: zero of the 93 registered suites emit `^| ` at column 0 (pinned by T8b).
-SENTINEL_PREFIX='| '
+# SENTINEL. Every line the parent emits AFTER xargs returns is prefixed with `SOLEUR| `. That
+# is not cosmetic. 10 registered suites print `[FAIL]` at column 0, and main-health-monitor.yml
+# greps `^RED |^\[FAIL\]` to build a PUBLIC issue body AND to derive its TITLE — so an
+# unprefixed dumped `[FAIL]` during a TIMEOUT would title an issue with a cause the job never
+# measured, the exact AP-021/ADR-166 defect #7371 removed. The prefix also gives the monitor a
+# filter for its UNCONDITIONAL `tail -30` (it sits outside the `if [[ -n "$hits" ]]` block), so
+# the published excerpt stays byte-identical to today's.
+#
+# WHY `SOLEUR| ` AND NOT A BARE `| `. The monitor's excerpt loop covers TWO captures, and both
+# can carry this runner's output: the infra step invokes it directly, and the tests step runs
+# scripts/test-all.sh, which invokes it as a NESTED suite (that is why JOBS: 1 is pinned on
+# both steps, not one). So filtering only the infra capture would still leak dumped bytes
+# through the tests half. But a blanket `^| ` filter on the tests capture is also wrong:
+# scripts/expenses-verify-by-check.test.sh prints markdown tables at column 0
+# (`| Service | Provider | …`), and stripping those deletes an existing signal from the public
+# excerpt. A sentinel no shell output produces resolves both at once — verified zero
+# occurrences repo-wide, and zero of the 93 registered suites emit it (pinned by T8b).
+SENTINEL_PREFIX='SOLEUR| '
 
 # MARKER_ERE — DERIVED FROM THE CORPUS, NEVER INTUITED, and pinned by T8a/T8c.
 # Measured 2026-08-10 over all 93 registered suites (payload-start extraction, following
