@@ -85,6 +85,71 @@ fixture() {
   printf '%s' "${5:-}" > "$d/$k.err"
 }
 
+# ── OCI manifest fixtures (SYNTHESIZED — never captured from a production artifact). ─────────
+# Digests are hand-written and structurally valid (64 hex) but correspond to no real content.
+D_AMD64="sha256:a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a"
+D_ATT="sha256:b22b22b22b22b22b22b22b22b22b22b22b22b22b22b22b22b22b22b22b22b22b"
+D_ATT_CFG="sha256:c33c33c33c33c33c33c33c33c33c33c33c33c33c33c33c33c33c33c33c33c33c"
+D_ATT_LAYER="sha256:d44d44d44d44d44d44d44d44d44d44d44d44d44d44d44d44d44d44d44d44d44d"
+
+# fx_oci_single <dir> <ref> — a NON-index manifest. This is what `soleur-inngest-bootstrap`
+# actually is (plain `docker build` -> docker-schema2, no attestations), and it is the shape the
+# unchanged code path must keep handling with exactly one `crane validate --remote`.
+fx_oci_single() {
+  fixture "$1" "manifest:$2" 0 '{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "config": { "mediaType": "application/vnd.oci.image.config.v1+json", "digest": "'"$D_ATT_CFG"'", "size": 167 },
+  "layers": [ { "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "digest": "'"$D_AMD64"'", "size": 4096 } ]
+}'
+}
+
+# fx_oci_index <dir> <ref> — the PRODUCTION shape: a buildx OCI index carrying one real platform
+# child plus one attestation child. The attestation child is what `crane validate` tries to
+# gunzip; its layer mediaType is `application/vnd.in-toto+json`, which is never compressed.
+fx_oci_index() {
+  fixture "$1" "manifest:$2" 0 '{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.index.v1+json",
+  "manifests": [
+    {
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "digest": "'"$D_AMD64"'",
+      "size": 5070,
+      "platform": { "architecture": "amd64", "os": "linux" }
+    },
+    {
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "digest": "'"$D_ATT"'",
+      "size": 566,
+      "annotations": {
+        "vnd.docker.reference.digest": "'"$D_AMD64"'",
+        "vnd.docker.reference.type": "attestation-manifest"
+      },
+      "platform": { "architecture": "unknown", "os": "unknown" }
+    }
+  ]
+}'
+}
+
+# fx_oci_attestation <dir> <repo> — the attestation child's own manifest, read to enumerate the
+# blobs whose PRESENCE (not decompressibility) the engine must verify.
+fx_oci_attestation() {
+  fixture "$1" "manifest:$2@$D_ATT" 0 '{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "config": { "mediaType": "application/vnd.oci.image.config.v1+json", "digest": "'"$D_ATT_CFG"'", "size": 167 },
+  "layers": [
+    {
+      "mediaType": "application/vnd.in-toto+json",
+      "digest": "'"$D_ATT_LAYER"'",
+      "size": 140872,
+      "annotations": { "in-toto.io/predicate-type": "https://slsa.dev/provenance/v1" }
+    }
+  ]
+}'
+}
+
 # make_crane <path> <fixture-dir> — an argv-dispatching `crane` stub.
 #
 # It refuses (exit 64) on a call shape the engine must never emit, so the suite pins the CALL
@@ -169,6 +234,36 @@ case "$sub" in
     [[ -n "$seen_remote" && -n "$ref" ]] || { echo "stub: 'crane validate' must be --remote <ref>" >&2; exit 64; }
     emit "validate:$ref" validate
     ;;
+  manifest)
+    # Index enumeration. Keyed `manifest:<ref>` and given NO permissive default — same discipline
+    # as `validate`. A default would let an engine that skipped enumeration inherit a benign
+    # single-manifest answer and silently stop verifying attestation children.
+    ref="${1:-}"
+    [[ -n "$ref" ]] || { echo "stub: 'crane manifest' with no ref" >&2; exit 64; }
+    # A sink-directed read MUST carry --insecure (the sink is plain HTTP on loopback). The stub
+    # captures saw_insecure for every call but, before this arm, never asserted it anywhere —
+    # so the flag was unpinned in practice despite the comment above claiming otherwise.
+    # Mirror the engine's OWN rule: --insecure is required for a LOOPBACK sink (plain HTTP) and
+    # must be absent otherwise. Requiring it for every non-ghcr ref would wrongly demand it of a
+    # non-loopback sink, which the suite separately asserts must stay on TLS.
+    case "$ref" in
+      127.0.0.1:*|localhost:*|\[::1\]:*)
+        [[ "$saw_insecure" == 1 ]] || { echo "stub: loopback-sink 'crane manifest' needs --insecure" >&2; exit 64; } ;;
+    esac
+    emit "manifest:$ref" manifest
+    ;;
+  blob)
+    # Attestation-child blob presence. Must be a DIGEST ref: a tag would not pin the blob the
+    # index actually references, so a tag here is a bug in the engine, not a fixture gap.
+    ref="${1:-}"
+    [[ -n "$ref" ]] || { echo "stub: 'crane blob' with no ref" >&2; exit 64; }
+    case "$ref" in *@sha256:*) ;; *) echo "stub: 'crane blob' must take a digest ref, got '$ref'" >&2; exit 64 ;; esac
+    case "$ref" in
+      127.0.0.1:*|localhost:*|\[::1\]:*)
+        [[ "$saw_insecure" == 1 ]] || { echo "stub: loopback-sink 'crane blob' needs --insecure" >&2; exit 64; } ;;
+    esac
+    emit "blob:$ref" blob
+    ;;
   *)
     echo "stub: unexpected crane subcommand '$sub'" >&2; exit 64 ;;
 esac
@@ -197,6 +292,10 @@ ok_fixtures() {
   fixture "$fx" "copy:${t}/${IB}:v1.1.24"  0 ""
   fixture "$fx" "${t}/${WP}:v0.249.4"    0 "$D1"
   fixture "$fx" "${t}/${IB}:v1.1.24"     0 "$D2"
+  # Both refs are NON-index in the baseline world, so verification 2 keeps its pre-existing
+  # shape: one `crane validate --remote` per ref and zero `crane blob` calls.
+  fx_oci_single "$fx" "${t}/${WP}:v0.249.4"
+  fx_oci_single "$fx" "${t}/${IB}:v1.1.24"
   fixture "$fx" "validate:${t}/${WP}:v0.249.4" 0 "PASS"
   fixture "$fx" "validate:${t}/${IB}:v1.1.24"  0 "PASS"
   # signature tags (sha256-<hex>, the OCI referrers tag scheme GHCR actually uses)
@@ -707,6 +806,112 @@ if grep -qE 'grep -oE .\^sha256:\[0-9a-f\]\{64\}\$' "$ENGINE"; then
 else
   fail "digest reads must be filtered with the ^sha256:[0-9a-f]{64}$ shape" "?" \
     "$(grep -n 'sha256' "$ENGINE" | head -5)"
+fi
+
+# ── Buildx attestation manifests (#7378). ────────────────────────────────────────────────────
+# `crane validate --remote <index>` walks every child and tries to GUNZIP every layer, so an
+# attestation child (`application/vnd.in-toto+json`, never compressed) fails with
+# `gzip: invalid header`. Reproduced directly at GHCR, so it is a validator false positive and
+# not corruption. Verification 2 must therefore verify the index PER CHILD.
+
+# att_index_fixtures <fx> <target> — ok_fixtures, but the web-platform ref is a buildx INDEX.
+att_index_fixtures() {
+  local fx="$1" t="$2"
+  ok_fixtures "$fx" "$t"
+  fx_oci_index       "$fx" "${t}/${WP}:v0.249.4"
+  fx_oci_attestation "$fx" "${t}/${WP}"
+  # Drop the whole-index `validate:` fixture ok_fixtures laid down. Without this the positive
+  # control is VACUOUS: the pre-fix engine validates the index, finds a PASS fixture, and exits 0
+  # for the wrong reason. With it removed, validating the index hits the stub's no-fixture arm
+  # (exit 70) — so the rc==0 assertion below can only be satisfied by real per-child verification.
+  rm -f "$fx/$(key "validate:${t}/${WP}:v0.249.4")".rc \
+        "$fx/$(key "validate:${t}/${WP}:v0.249.4")".out \
+        "$fx/$(key "validate:${t}/${WP}:v0.249.4")".err
+  fixture "$fx" "validate:${t}/${WP}@${D_AMD64}" 0 "PASS"
+  fixture "$fx" "blob:${t}/${WP}@${D_ATT_CFG}"   0 ""
+  fixture "$fx" "blob:${t}/${WP}@${D_ATT_LAYER}" 0 ""
+}
+
+# (1) POSITIVE CONTROL — the real production shape must restore green. RED before the per-child
+# rewrite: the engine validates the whole index and the stub has no `validate:<index-ref>` arm.
+fx="$TMP/fx-att"; calls="$TMP/calls-att"; : > "$calls"
+att_index_fixtures "$fx" "$TARGET"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 0 ]]; then
+  pass "an OCI index with an in-toto attestation child restores green (the production shape)"
+else
+  fail "the buildx-attestation index must verify clean" "$rc" "$out"
+fi
+
+if grep -qE "^blob .*${D_ATT_LAYER}" "$calls"; then
+  pass "the attestation layer blob is PRESENCE-verified (crane blob), never gunzipped"
+else
+  fail "the in-toto layer must be verified via crane blob" "$rc" "$(cat "$calls")"
+fi
+
+if grep -qE "^validate .*--remote .*@${D_AMD64}( |$)" "$calls"; then
+  pass "the real platform child is still blob-validated with crane validate --remote"
+else
+  fail "platform children must keep crane validate --remote" "$rc" "$(cat "$calls")"
+fi
+
+if grep -qE "^validate .*--remote ${TARGET}/${WP}:v0\.249\.4( |$)" "$calls"; then
+  fail "the whole index must NOT be handed to crane validate (that is the false positive)" "$rc" "$(cat "$calls")"
+else
+  pass "the index itself is never handed to crane validate (the gunzip false positive is gone)"
+fi
+
+# (2) NEGATIVE CONTROL — a genuinely missing PLATFORM layer must still exit 4. Proves the
+# per-child rewrite narrowed the gunzip false positive without weakening BLOBMISSING detection.
+fx="$TMP/fx-att-blobmissing"; calls="$TMP/calls-att-blobmissing"; : > "$calls"
+att_index_fixtures "$fx" "$TARGET"
+fixture "$fx" "validate:${TARGET}/${WP}@${D_AMD64}" 1 "" \
+  "Error: fetching layer: GET http://${TARGET}/v2/${WP}/blobs/${D_AMD64}: BLOB_UNKNOWN: blob unknown to registry"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]]; then
+  pass "a missing PLATFORM layer blob still exits 4 (BLOBMISSING not weakened)"
+else
+  fail "a blob-incomplete platform child must exit 4" "$rc" "$out"
+fi
+
+# (3) An attestation child whose blob is ABSENT must FAIL. Presence is verified, not skipped —
+# this is the assertion that stops the fix from degrading into "ignore attestation children".
+fx="$TMP/fx-att-absent"; calls="$TMP/calls-att-absent"; : > "$calls"
+att_index_fixtures "$fx" "$TARGET"
+fixture "$fx" "blob:${TARGET}/${WP}@${D_ATT_LAYER}" 1 "" \
+  "Error: GET http://${TARGET}/v2/${WP}/blobs/${D_ATT_LAYER}: BLOB_UNKNOWN: blob unknown to registry"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]]; then
+  pass "an attestation child with an ABSENT blob still exits 4 (presence is verified, not skipped)"
+else
+  fail "an absent attestation blob must exit 4, never pass" "$rc" "$out"
+fi
+
+# (4) CLASSIFICATION — a residual `gzip: invalid header` on a real platform child is a genuine
+# verification failure (exit 4 "do not deploy"), never the unclassifiable exit 6 it produced
+# before. Exit 6 stays reserved for shapes the engine truly cannot name.
+fx="$TMP/fx-att-gzip"; calls="$TMP/calls-att-gzip"; : > "$calls"
+att_index_fixtures "$fx" "$TARGET"
+fixture "$fx" "validate:${TARGET}/${WP}@${D_AMD64}" 1 "" \
+  "Error: validating layers: gzip: invalid header"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]]; then
+  pass "'gzip: invalid header' on a platform child classifies to exit 4, not the opaque exit 6"
+else
+  fail "a layer-format mismatch must exit 4 (named class), not 6" "$rc" "$out"
+fi
+
+# (5) NON-INDEX behaviour is unchanged — asserted against the stub's own call log rather than by
+# reading the suite. Exactly one validate for the single-manifest ref, and zero blob calls.
+fx="$TMP/fx-nonindex"; calls="$TMP/calls-nonindex"; : > "$calls"
+ok_fixtures "$fx" "$TARGET"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+n_ib=$(grep -cE "^validate .*--remote ${TARGET}/${IB}:v1\.1\.24( |$)" "$calls" || true)
+n_blob=$(grep -cE '^blob ' "$calls" || true)
+if [[ "$rc" -eq 0 && "$n_ib" -eq 1 && "$n_blob" -eq 0 ]]; then
+  pass "a non-index ref keeps the unchanged path (1 validate, 0 blob calls)"
+else
+  fail "non-index behaviour drifted: rc=$rc validate=$n_ib blob=$n_blob" "$rc" "$(cat "$calls")"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
