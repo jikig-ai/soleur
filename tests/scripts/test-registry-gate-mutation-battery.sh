@@ -294,10 +294,26 @@ mutate "E21 engine last_err drops the line-tail (conditional skip swallows a cre
 # What the `tr` still buys is defence-in-depth against the REMOVAL of `tail -n 1` — and that
 # removal is exactly what E21 mutates. So the injection property is covered; it is covered by
 # E21, not here.
-expect_survive "E22 engine workflow-command injection guard dropped from last_err" engine \
+# PROMOTED to mutate() 2026-08-10, and NOT because the byte-identical finding was wrong — it is
+# still correct, and this row's previous justification correctly forbade promoting on BEHAVIOURAL
+# grounds. What changed is the KIND of assertion that now covers it.
+#
+# The restore suite used to assert the guard with a whole-file `grep -qE "tr '\n' ' '"` over the
+# engine. That is satisfied by the COMMENT describing the guard and by the two `crane auth login`
+# interpolations, so deleting the guard from last_err left the suite green — the assertion named
+# the token, not the thing. #7379 re-anchored it to the function body
+# (`sed -n '/^last_err() {/,/^}/p' | grep -qE …`), which makes this mutation detectable
+# STRUCTURALLY. No fixture separates the two implementations and none ever will; a source-anchored
+# assertion is the correct instrument for a guard whose output is by construction unobservable,
+# and this file's own doctrine is that a guard nothing can detect the removal of is one a later
+# edit deletes with everything still green.
+#
+# So the standing instruction still holds for behavioural promotion: do not promote on the claim
+# that a capture distinguishes them. Promote only while a source-anchored assertion exists — if
+# that assertion is ever removed or loosened, this row must go back to expect_survive.
+mutate "E22 engine workflow-command injection guard dropped from last_err" engine \
   "tail -c 400 \"\$1\" 2>/dev/null | tail -n 1 | tr '\\n' ' ' | sed 's/[[:space:]]*\$//' || true" \
-  "tail -c 400 \"\$1\" 2>/dev/null | tail -n 1 || true" \
-  'REDUNDANT GIVEN THE LINE-TAIL, measured not argued: with tail -n 1 the capture is one line and command substitution strips its trailing newline, so removing the tr+sed chain yields a byte-identical string and no fixture can distinguish the two. Kept as defence-in-depth because it becomes load-bearing the moment tail -n 1 is removed, and THAT removal is what E21 mutates. Do not promote this to mutate() again without first showing a capture where the two implementations differ.'
+  "tail -c 400 \"\$1\" 2>/dev/null | tail -n 1 || true"
 
 # Anchored on the CONDITION ALONE. The previous anchor spanned this line and the `for _seam in`
 # below it, so inserting a comment between them (which a later fix did) broke the anchor and
@@ -447,6 +463,47 @@ mutate "E23 argv value-presence guard removed (missing flag value spins forever)
   '[[ $# -ge 2 ]] || die 1 "$1 requires a value (none was supplied)."' \
   ': # guard removed'
 
+# ── verification 2 per-child blob completeness (#7378 / PR #7379). ────────────────────────────
+# These eight rows cover the guards that change made load-bearing. Without them this battery
+# dispatched 45 against a floor of 45 while certifying PRE-#7379 code only — a coverage claim
+# with a hole exactly the shape of the newest code on the script that authorizes destroying
+# production's only pull path, which is the failure mode E07's justification names.
+#
+# Each was proven RED before being written here, in a sandbox run against the restore suite this
+# battery already uses as the `engine` oracle (control green -> mutant RED -> restore green).
+
+mutate "E24 attestation detection loses the platform-arch signal" engine \
+  ' || "$c_arch" == "unknown" ' \
+  ' '
+
+mutate "E25 attestation detection loses the annotation signal" engine \
+  '"$c_type" == "attestation-manifest" || ' \
+  ''
+
+mutate "E26 index child count equality weakened (partial enumeration passes)" engine \
+  '(( n_children == n_declared )) ||' \
+  'false && (( n_children == n_declared )) ||'
+
+mutate "E27 platform-child floor removed (an attestation-only index reads as restored)" engine \
+  '(( n_platform > 0 )) ||' \
+  'false && (( n_platform > 0 )) ||'
+
+mutate "E28 nested-index child no longer fails closed (recurses into the #7378 gunzip class)" engine \
+  '*"image.index.v1+json"|*"manifest.list.v2+json")' \
+  '"__never_matches__")'
+
+mutate "E29 index child digest sentinel dropped (@tsv field collapse returns)" engine \
+  '(.digest // "-")' \
+  '(.digest // "")'
+
+mutate "E30 blob presence check removed (a manifest can outlive its layers)" engine \
+  'if ! crane_capture /dev/null "$WORK/vb.blob.err" blob $SINK_TLS_FLAG "${repo}@${b}"; then' \
+  'if false; then'
+
+mutate "E31 cosign signature payload no longer blob-verified (digest read-back only)" engine \
+  '  verify_blobs_of "${TARGET}/${repo}" "${TARGET}/${repo}:${sig_tag}" \' \
+  '  false && verify_blobs_of "${TARGET}/${repo}" "${TARGET}/${repo}:${sig_tag}" \'
+
 restore_pristine
 
 echo
@@ -458,8 +515,8 @@ echo
 # equality: the count is developer-incremented, so `-eq` would turn every added mutation into a
 # spurious failure. Derived from a green run, not from an expected number.
 dispatched=$(( caught + survived + expected ))
-if (( dispatched < 45 )); then
-  echo "harness: only ${dispatched} mutations were dispatched, floor is 45. Either mutations were removed without lowering this floor deliberately, or the dispatch itself is broken — in both cases the verdict below is not reportable." >&2
+if (( dispatched < 53 )); then
+  echo "harness: only ${dispatched} mutations were dispatched, floor is 53. Either mutations were removed without lowering this floor deliberately, or the dispatch itself is broken — in both cases the verdict below is not reportable." >&2
   exit 2
 fi
 
