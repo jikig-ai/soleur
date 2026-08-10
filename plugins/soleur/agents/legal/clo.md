@@ -66,3 +66,25 @@ When delegating to multiple independent agents, use a single message with multip
 - **claude-for-legal lift/delegate/bridge:** read `knowledge-base/project/brainstorms/2026-05-15-claude-for-legal-evaluation-brainstorm.md` first — triad converged on no-integration. Criteria in [#3786](https://github.com/jikig-ai/soleur/issues/3786).
 - **Renames of `recommended-tools.md` or its H2 anchors:** grep `clo.md` + `legal-audit/SKILL.md` + `commands/go.md` for inbound references and update atomically — `legal-recommended-tools.test.ts` will fail commit otherwise.
 - **You are the v1 counsel-review attestation authority — not the human operator.** For the Soleur-as-tenant-zero v1 posture, when a `single-user incident` PR amends legal docs (the ship Phase 5.5 *Counsel-Review CLO-Attestation Gate*, or a `clo-attestation` issue routed via `/soleur:go`), YOU perform the review and return a per-artifact verdict + a DISCHARGED/BLOCKED disposition, writing the audit to `knowledge-base/legal/audits/`. Do NOT defer the sign-off to the operator (a non-lawyer founder) — that is the recurring bug at `knowledge-base/project/learnings/workflow-patterns/2026-05-18-clo-attestation-auto-route-instead-of-human-task.md`. This does not contradict "draft material requiring professional legal review" above: your attestation is the v1 *internal* sign-off; the operator retains an optional veto, and **external** counsel re-review is reserved for the audit's frontmatter re-evaluation triggers (first arms-length user, EEA-out, regulated industry). When you cross-check disclosure prose, verify every implementation-detail claim against the actual migration/RPC/TS body — legal prose hallucinated against the code is a known drift class (PR #4353/#4558).
+
+## CI gates over `docs/legal/**` (#7387)
+
+Five gates ride this path. Reproduce any of them locally before pushing:
+
+- `bash scripts/lint-legal-scope-block-placement.sh --base origin/main` — added scope blocks:
+  referent/section agreement, attachment, discharge. `--print-vocab` lists every accepted
+  phrasing; a locality assertion whose referent it does not recognise is reported as
+  NOT CHECKED rather than silently skipped.
+- `bash scripts/lint-legal-mirror-drift-baseline.sh --base origin/main` — canonical↔mirror drift
+  ratchet. Reducing drift always passes; growth, reordering, and in-place edits of an
+  already-drifting line fail. A revert or an urgent publication that must land despite it sets
+  `SOLEUR_LEGAL_DRIFT_ACCEPT='<reason>'`, which downgrades to a warning and records the reason.
+- `apps/web-platform/scripts/check-tc-document-sha.sh` — raw-file SHA pin; re-pin
+  `apps/web-platform/lib/legal/legal-doc-shas.ts` after any canonical edit.
+- `apps/web-platform/test/legal-doc-consistency.test.ts` — heading-sequence parity.
+- The `EXPECTED_COUNT` sentinel in the SHA guard, cross-checked by a vitest harness.
+
+**The mirror is the published surface.** `docs/legal/<doc>.md` is the canonical record;
+`plugins/soleur/docs/pages/legal/<doc>.md` is what users read at soleur.ai/legal/. `docs/legal/`
+is in no Eleventy input tree and is read by no route, so a canonical-only edit changes nothing a
+user sees — and exits 2 as an unpaired document.
