@@ -8,6 +8,19 @@ description: "This skill should be used when archiving completed knowledge-base 
 Archive brainstorms, plans, and spec directories for a completed feature branch.
 The script generates timestamps internally and uses `git mv` to preserve history.
 
+> **Superseded in part (ADR-173, #7399).** Archival's only real benefit was removing
+> rows from `knowledge-base/INDEX.md`, and that is now done at index-generation time:
+> inside a spec directory only `spec.md` and `tasks.md` are indexed. Do **not** build a
+> gate that forces archival before merge — a spec directory is live working state until
+> `ship` Phase 6 reads `decision-challenges.md` from it (ADR-084 §5), and one such gate
+> has already been built and reverted for that reason.
+>
+> This script is unchanged and still works for brainstorms. Retiring its spec/plan
+> discovery paths is tracked by **#7400**; until then it is neither enforced nor removed.
+> Known discovery gaps: `derive_slug()` strips a `fix-` prefix and then probes
+> `specs/feat-${slug}`, so `fix-*` spec dirs are unreachable; plans are matched by a
+> `*<slug>*` glob, so a topic-named plan is missed and the run still reports success.
+
 ## Usage
 
 Run the archive script from the repository root. It derives the feature slug
