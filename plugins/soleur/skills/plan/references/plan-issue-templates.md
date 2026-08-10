@@ -6,7 +6,7 @@ Select how comprehensive you want the issue to be, simpler is mostly better.
 
 The frontmatter block is identical across the three templates below; only the body differs. It is
 written in **two stages**, because the plan file now exists before the research that derives most
-of its metadata (#7418, ADR-175).
+of its metadata (#7418, ADR-176).
 
 **Stage 1 — the skeleton, written by `plan` Phase 0.7 before the research fan-out.** Only what
 Phase 0.6 already knows:
@@ -29,7 +29,7 @@ the Phase 2.5 domain fan-out.
 the one heading present in all three templates below, and the last one written. Completion is
 asserted from that content, never from a dedicated cursor field, because a second progress signal
 can disagree with the file's own content and every such disagreement resolves to a fail-open arm
-(ADR-175 §Considered Options 6). Do not add one, and do not repurpose the free-text `status:` field
+(ADR-176 §Considered Options 6). Do not add one, and do not repurpose the free-text `status:` field
 for it: `status:` is a human draft-state field already carrying dozens of distinct values across the
 plan corpus, including ones that read as pipeline states.
 

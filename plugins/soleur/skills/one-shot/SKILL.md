@@ -199,7 +199,7 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 
 <!-- plan-artifact-recovery:start -->
 1. **Partial-artifact recovery check.** `plan` writes its file before the research fan-out and
-   persists `## Research Insights` as soon as that fan-out returns (#7418, ADR-175), so a crashed
+   persists `## Research Insights` as soon as that fan-out returns (#7418, ADR-176), so a crashed
    subagent has usually left recoverable work on disk. Select this branch's plan the same way `plan`
    does — frontmatter `branch:`, read bounded to the leading `---` block, non-recursive over
    `plans/*.md` so `plans/archive/` is excluded by construction:

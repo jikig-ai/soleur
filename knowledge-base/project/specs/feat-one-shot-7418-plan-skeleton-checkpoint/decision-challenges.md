@@ -36,7 +36,7 @@ a documented v1 decision.
 
 The issue scoped "a pure ordering + incremental-persistence change to the plan skill plus the
 recovery branch in one-shot". The plan adds `deepen-plan/SKILL.md`, `plan-issue-templates.md`, a
-contract test and ADR-175.
+contract test and ADR-176.
 
 Drivers: `deepen-plan` must clear the cursor or a designed HALT loops forever; the templates
 reference is the canonical frontmatter definition and would otherwise become the most-wrong of three;
@@ -67,7 +67,7 @@ could disagree with the plan file's own content, with the disagreement resolving
 Routed to the `soleur:engineering:cto` agent as an architecture fork (per this repo's rule that such
 decisions go to the CTO rather than the operator). Ruling: **ship the durability half, delete the
 cursor.** Completion is asserted from `## Acceptance Criteria` — the one heading present in all three
-detail-level templates, written last. Recorded in ADR-175.
+detail-level templates, written last. Recorded in ADR-176.
 
 **This deviates from the operator's stated direction in #7418**, which asked for a
 `<!-- planning in progress -->` marker made load-bearing in `one-shot`'s recovery. The durability
@@ -82,5 +82,5 @@ haiku-pinned agents and re-ran the eleven session-model agents in full — while
 tool calls and ~15–30k tokens on **every** happy-path run. It cost more on runs that succeed than it
 saved on runs that stall.
 
-If the operator wants the literal marker restored, that remains their call; ADR-175 §Considered
+If the operator wants the literal marker restored, that remains their call; ADR-176 §Considered
 Options 2 and 5 record why neither form survived review.

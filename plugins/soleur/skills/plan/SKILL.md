@@ -130,7 +130,7 @@ Emit a one-paragraph **Premise Validation** note (what was checked, what held, w
 
 Phase 1 dispatches the research fan-out — the most expensive stretch of this skill. Write the plan
 file **before** it runs, then persist each phase's findings as they land, so a stall costs one phase
-instead of the whole run (#7418, ADR-175).
+instead of the whole run (#7418, ADR-176).
 
 Everything this phase needs is already in hand: Phase 0.6 ran `gh issue view <N> --json state,title`
 for every cited issue, so the title — and therefore the slug — is free at this point.
@@ -212,7 +212,7 @@ finalization rewrites both unconditionally.
 
 **No progress key.** Completion is asserted from content (`## Acceptance Criteria`), never from a
 dedicated frontmatter cursor. A second progress signal can disagree with the file's own content,
-and every such disagreement resolves to a fail-open arm — see ADR-175 §Considered Options 6.
+and every such disagreement resolves to a fail-open arm — see ADR-176 §Considered Options 6.
 
 **Stub no conditional section.** The expected heading set depends on the detail level chosen at
 Step 4 — after research — and the conditional sections are gate-triggered. A placeholder for a

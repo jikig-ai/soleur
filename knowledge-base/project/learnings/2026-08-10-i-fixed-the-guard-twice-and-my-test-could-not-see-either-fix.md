@@ -4,7 +4,7 @@ date: 2026-08-10
 category: test-failures
 module: plugins/soleur/skills/plan
 related: [7418, 7419, 7420, 7421, 4724]
-related_adrs: [ADR-175]
+related_adrs: [ADR-176]
 ---
 
 # I fixed the guard twice and my test could not see either fix
@@ -70,7 +70,7 @@ Two consequences were fatal and neither was a coding error:
 
 The resolution was to delete the mechanism, not repair it: assert completion from
 `## Acceptance Criteria` — the one heading in all three detail-level templates, written last. Nine
-of twelve defects vanished with the machinery carrying them (ADR-175).
+of twelve defects vanished with the machinery carrying them (ADR-176).
 
 ## Solution
 
@@ -107,7 +107,7 @@ of twelve defects vanished with the machinery carrying them (ADR-175).
 - **ADR-144 chosen via an `origin/main`-only probe.** Recovery: re-derived over all 62 pushed refs.
   Prevention: an ordinal probe quantifies over pushed branches, not the default branch.
 - **ADR-174 collided after verification** — a sibling landed it on `main` mid-session. Recovery:
-  ADR-175. Prevention: re-run the ordinal probe immediately before merge, not once at plan time.
+  ADR-176. Prevention: re-run the ordinal probe immediately before merge, not once at plan time.
 - **Shipped an inert `||` guard.** Recovery: rewritten as `if/fi`. Prevention: a guard that assigns
   into a variable a later unconditional line overwrites is dead; mutate it out and confirm RED.
 - **Contract test asserted shape, not behavior.** Recovery: extract-and-execute the prescribed

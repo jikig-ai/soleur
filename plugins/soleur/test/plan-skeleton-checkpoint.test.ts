@@ -1,5 +1,5 @@
 /**
- * Contract test for the plan skeleton checkpoint (#7418, ADR-175).
+ * Contract test for the plan skeleton checkpoint (#7418, ADR-176).
  *
  * `soleur:plan` writes a skeleton plan file BEFORE the Phase 1 research fan-out, and persists
  * `## Research Insights` as soon as that fan-out returns. Completion is asserted from the file's
@@ -214,7 +214,7 @@ describe("plan skeleton checkpoint — the PRESCRIBED reader is executed, not ju
 
 describe("plan skeleton checkpoint — the dropped cursor stays dropped", () => {
   test("no skill reintroduces a `pipeline_resume` progress key", () => {
-    // ADR-175 drops the cursor: completion is asserted from content. A second progress signal can
+    // ADR-176 drops the cursor: completion is asserted from content. A second progress signal can
     // disagree with the file's own content, and every such disagreement resolved to a fail-open
     // arm. Re-adding one would reopen that whole class.
     const hits = execFileSync(
