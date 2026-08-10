@@ -66,6 +66,19 @@ export const PROBE_VERB_ALLOWLIST = [
   "git",
 ] as const;
 
+/**
+ * Allowlisted verbs that are general-purpose RUNTIMES — i.e. verbs whose whole
+ * job is to execute a program someone hands them.
+ *
+ * Declared separately from the allowlist so the coupling is assertable: every
+ * runtime MUST carry an inline-program rule, or adding it to the allowlist
+ * silently re-opens arbitrary execution. Measured on this suite: adding `perl`
+ * to the allowlist alone admitted `perl -e 'system("…")'` past every gate at
+ * 113/0 green, because `INLINE_PROGRAM_RE` had no `perl` key and nothing
+ * asserted that it needed one.
+ */
+export const RUNTIME_VERBS = ["bash", "sh", "python3", "node", "bun"] as const;
+
 // An inline program makes an allowlisted runtime equivalent to `bash -c`, which
 // defeats the allowlist in a single token. Rejecting `bash -c` while permitting
 // `python3 -c` would be incoherent, so every runtime carries the rule.
@@ -79,6 +92,9 @@ const INLINE_PROGRAM_RE: Record<string, RegExp> = {
   node: /(^|[\t\f\v ])(-c|-e|-p|--eval|--print)([\t\f\v =]|$|[^-\t\f\v ])/,
   bun: /(^|[\t\f\v ])(-c|-e|-p|--eval|--print)([\t\f\v =]|$|[^-\t\f\v ])/,
 };
+
+/** The keys of INLINE_PROGRAM_RE, exported so the coupling above is assertable. */
+export const INLINE_PROGRAM_VERBS = Object.keys(INLINE_PROGRAM_RE);
 
 // A program-position path must be repo-relative. Pure string rule, deliberately:
 // a `git ls-files` oracle would interrogate the PR-HEAD index — the attacker's

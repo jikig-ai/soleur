@@ -4,11 +4,14 @@ import { join } from "node:path";
 import {
   classifyDiscoverabilityResult,
   extractObservabilityBlock,
+  INLINE_PROGRAM_VERBS,
   matchExpected,
   parseCommand,
   parseCredentialsRequired,
   parseExpected,
+  PROBE_VERB_ALLOWLIST,
   rejectReason,
+  RUNTIME_VERBS,
   type ExecResult,
   type Executor,
 } from "./lib/discoverability-test-parser";
@@ -1381,26 +1384,94 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
   const skill = readFileSync(SKILL_PATH, { encoding: "utf8" });
   const lines = skill.split("\n");
 
-  // Same anchor contract as the #6772 gateWindow(): resolve on the executable
-  // column-0 `if [[ "$CMD...` line, then slice a window around it. A whole-file
-  // grep is satisfied by the prose that DOCUMENTS a gate, so deleting the real
-  // gate would stay green (`cq-assert-anchor-not-bare-token`).
+  // Windowing has TWO failure modes, and the #6772 helper only closed the first.
+  //
+  //   1. Whole-file greps are satisfied by the prose that DOCUMENTS a gate, so
+  //      deleting the real gate stays green (`cq-assert-anchor-not-bare-token`).
+  //      Slicing a window around the executable line closes that.
+  //   2. A window still CONTAINS the gate's own explanatory comments, and
+  //      `findIndex` takes the FIRST match with no uniqueness check. Both were
+  //      exploitable — measured on this suite at 113/0 green:
+  //        - move `PROBE_VERB_ALLOWLIST=` into a comment and neuter the `if`
+  //          => the runtime verb gate can never fire;
+  //        - add a decoy `BWRAP_ARGS=(…)` doc example above the real one and gut
+  //          the real array to `--bind / /` => the sandbox becomes a writable
+  //          bind of the whole host filesystem.
+  //
+  // So: strip comment lines from every window, and require the anchor to be
+  // UNIQUE. A gate's own documentation must not be able to satisfy the gate's
+  // test, and a second occurrence of the anchor must fail loudly rather than
+  // silently retarget. F5 already used the uniqueness shape for `DT_OUT=$(`;
+  // this makes it the default.
+  const stripComments = (src: string): string =>
+    src
+      .split("\n")
+      .filter((l) => !/^\s*#/.test(l))
+      .join("\n");
+
+  const uniqueIndex = (pred: (l: string) => boolean, label: string): number => {
+    const hits = lines.map((l, i) => (pred(l) ? i : -1)).filter((i) => i >= 0);
+    expect(hits.length, `${label}: anchor must resolve to exactly one line`).toBe(1);
+    return hits[0];
+  };
+
   const gateWindow = (anchor: RegExp): string => {
-    const idx = lines.findIndex((l) => anchor.test(l) && /^if \[\[ "\$CMD/.test(l));
-    expect(idx).toBeGreaterThan(-1);
-    return lines.slice(Math.max(0, idx - 6), idx + 4).join("\n");
+    const idx = uniqueIndex(
+      (l) => anchor.test(l) && /^if \[\[ "\$CMD/.test(l),
+      `gate ${anchor}`,
+    );
+    return stripComments(lines.slice(Math.max(0, idx - 8), idx + 4).join("\n"));
   };
 
   // The sandbox flags live in ONE array so the establishment probe and the real
   // run cannot drift; anchor the window on that array rather than on the exec
   // line, which references it by name.
   const sandboxWindow = (): string => {
-    const idx = lines.findIndex((l) => /^BWRAP_ARGS=\(/.test(l));
-    expect(idx).toBeGreaterThan(-1);
+    const idx = uniqueIndex((l) => /^BWRAP_ARGS=\(/.test(l), "BWRAP_ARGS=(");
     const end = lines.findIndex((l, i) => i > idx && /^\)/.test(l));
     expect(end).toBeGreaterThan(idx);
-    return lines.slice(idx, end + 1).join("\n");
+    return stripComments(lines.slice(idx, end + 1).join("\n"));
   };
+
+  // THE RUNTIME OF RECORD IS THE BASH. Every behavioural test in this file
+  // exercises the TypeScript mirror, so without this pin the two lists drift
+  // freely: measured, adding `doppler gh aws perl` to the bash allowlist — or
+  // emptying it entirely — left the whole suite green at 113/0, because
+  // `toMatch(/PROBE_VERB_ALLOWLIST=/)` pins that the variable is ASSIGNED and
+  // never what it contains.
+  //
+  // This is the same shape the file already uses to pin the `ssh` reject regex
+  // to its SKILL.md literal, and the same argument that made `parse-form-a.awk`
+  // a real file: a hand-maintained mirror of a runtime is a drift surface, so
+  // something has to compare them.
+  test("F0 the bash allowlist and the TS mirror are the same set", () => {
+    const m = skill.match(/^PROBE_VERB_ALLOWLIST='([^']*)'$/m);
+    expect(m, "SKILL.md must assign PROBE_VERB_ALLOWLIST as a single-quoted literal").not.toBeNull();
+    const fromBash = m![1].trim().split(/\s+/).filter(Boolean);
+    expect(new Set(fromBash)).toEqual(new Set(PROBE_VERB_ALLOWLIST));
+    // Cardinality too — a Set comparison hides a duplicated entry.
+    expect(fromBash.length).toBe(PROBE_VERB_ALLOWLIST.length);
+  });
+
+  // Coupled invariant: every allowlisted verb that is a general-purpose RUNTIME
+  // must carry an inline-program rule. Without this, adding `perl` to the
+  // allowlist silently admits `perl -e 'system("…")'` — arbitrary execution
+  // through the exact door the inline-program rule exists to shut. Measured:
+  // adding any of perl/ruby/env/xargs/openssl/nc/wget/make left the suite green.
+  test("F0b every allowlisted runtime verb has an inline-program rule", () => {
+    for (const verb of RUNTIME_VERBS) {
+      expect(
+        (PROBE_VERB_ALLOWLIST as readonly string[]).includes(verb),
+        `${verb} is declared a runtime but is not allowlisted`,
+      ).toBe(true);
+      expect(
+        INLINE_PROGRAM_VERBS.includes(verb),
+        `${verb} is an allowlisted runtime with no inline-program rule`,
+      ).toBe(true);
+    }
+    // And no allowlisted verb may be a runtime without being declared one.
+    expect(new Set(INLINE_PROGRAM_VERBS)).toEqual(new Set(RUNTIME_VERBS));
+  });
 
   test("F1 AC1 — the Step 10.4 verb gate is an allowlist, not the retired denylist", () => {
     const g = gateWindow(/PROBE_VERB/);
