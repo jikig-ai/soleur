@@ -255,6 +255,26 @@ if offenders:
 else:
     ok("(10) no setup pipeline silently discards its producer's exit status")
 
+# ---- (12) JOBS=1 on BOTH suite steps ---------------------------------------
+# Added after this guard FAILED to catch its own regression: the review moved
+# JOBS off workflow scope (node-gyp reads it as `make -j`) and did not re-add it
+# to the steps, so run 31367748528 ran the infra runner at -P 4, hit the harness
+# flake (#7376) and filed a spurious issue. The step-scoped form is what covers
+# BOTH invocations -- the standalone runner and the nested one inside the tests
+# step -- so assert it on each, not merely somewhere in the file.
+step_env_blocks = re.findall(
+    r'^        id: (tests|infra)\n(?:.*\n)*?^        env:\n((?:^          .*\n)+)',
+    stripped, re.M)
+jobs_ok = {sid: bool(re.search(r'^          JOBS:\s*1\s*$', env, re.M))
+           for sid, env in step_env_blocks}
+if set(jobs_ok) == {"tests", "infra"} and all(jobs_ok.values()):
+    ok("(12) JOBS: 1 is set on both the tests and infra step env blocks")
+else:
+    bad("(12) JOBS: 1 is set on both the tests and infra step env blocks",
+        f"found={jobs_ok} -- without it run-registered-suites.sh defaults to "
+        "-P min(nproc,6) = -P 4 on a hosted runner, which is the configuration "
+        "measured flaky in 3 of 7 executions (#7376) and files a spurious P1")
+
 # ---- (11) the machine-readable verdict annotation --------------------------
 # GitHub exposes no REST field for job summaries; annotations ARE retrievable via
 # gh api .../check-runs/<id>/annotations. Without this the verdict is unreadable
@@ -302,7 +322,7 @@ fi
 # having asserted nothing -- the exact "a check that cannot report is
 # indistinguishable from one that passed" class. A FLOOR, not equality: a new
 # assertion must not require editing this number.
-MIN_ASSERTIONS=13
+MIN_ASSERTIONS=14
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   echo "  [FAIL] anti-vacuity: only $TOTAL assertion(s) ran, expected >= $MIN_ASSERTIONS" >&2

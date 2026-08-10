@@ -287,6 +287,21 @@ jobs:
         timeout-minutes: 40 # derived; see the TIMEOUT BUDGET block above
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # JOBS=1 -- SEQUENTIAL, deliberately, and set on BOTH suite steps rather
+          # than at workflow scope. The runner defaults to min(nproc,6), i.e. -P 4
+          # on a 4-core hosted runner, which oversubscribes it: measured across
+          # SEVEN executions of the same 92-suite set on an unchanged tree, three
+          # failed naming four different suites, while -P 1 and -P 6-on-16-cores
+          # were clean. Different failure sets on an unchanged tree is a harness
+          # defect (#7376), and at that rate an armed monitor files a spurious P1
+          # every third run -- worse than the silence this PR removes.
+          #
+          # NOT at workflow scope: node-gyp reads JOBS as its `make -j` width, so a
+          # workflow-level value also serialises native rebuilds in `bun install`
+          # and `npm install -g`. Step scope covers both invocations that matter --
+          # the standalone runner below, and the NESTED one inside the tests step
+          # (which fires whenever the branch diff touches apps/web-platform/infra/).
+          JOBS: 1
         run: |
           set +e
           bash scripts/test-all.sh 2>&1 | tee -a /tmp/tests-output.txt
@@ -304,6 +319,8 @@ jobs:
         timeout-minutes: 15 # derived (COLD sequential); see the TIMEOUT BUDGET block
         env:
           TEST_GROUP: infra
+          # See the JOBS note on the tests step above.
+          JOBS: 1
         run: |
           set +e
           bash scripts/test-all.sh 2>&1 | tee -a /tmp/infra-output.txt
