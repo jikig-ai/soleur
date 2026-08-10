@@ -406,6 +406,59 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# TS9 — prose/predicate parity
+#
+# The allowlisted names are load-bearing in the script AND in five prose
+# surfaces. Nothing mechanically links them: add `component.md` to the
+# predicate tomorrow and every prose file becomes silently false while this
+# suite stays green. Same shape ADR-084 already drift-guards via
+# components.test.ts (DOC_REL / CONSUMERS / LINK_RE).
+#
+# The expected set is DERIVED from the script, not restated here — a restated
+# copy would be a tautology that moves with the thing it checks.
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- TS9: prose names the same files the predicate allows ---"
+
+# Extract from the predicate group only (the `-o -name '...'` arms).
+allowed=$(sed -n "/-not -path '\*\/project\/specs\/\*'/,/\\\\)/p" "$GEN_SCRIPT" \
+  | grep -oE "\-name '[^']+'" | sed "s/-name '//; s/'//" | LC_ALL=C sort -u)
+
+if [[ -z "$allowed" ]]; then
+  echo "  FAIL: TS9 could not extract the allowlist from the predicate (extraction is broken, not the prose)"
+  FAIL=$((FAIL + 1))
+elif [[ "$allowed" != "$(printf 'spec.md\ntasks.md')" ]]; then
+  echo "  FAIL: TS9 extracted an unexpected allowlist:"; printf '%s\n' "$allowed" | sed 's/^/        /'
+  echo "        If the predicate legitimately changed, update every prose surface below, then this expectation."
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: predicate allowlist extracted = spec.md, tasks.md"
+  PASS=$((PASS + 1))
+fi
+
+for doc in \
+  "$REPO_ROOT/plugins/soleur/skills/spec-templates/SKILL.md" \
+  "$REPO_ROOT/plugins/soleur/skills/brainstorm/SKILL.md" \
+  "$REPO_ROOT/plugins/soleur/agents/engineering/research/learnings-researcher.md" \
+  "$REPO_ROOT/.openhands/skills/learnings-researcher/SKILL.md" \
+  "$REPO_ROOT/knowledge-base/engineering/architecture/decisions/ADR-173-kb-index-exclusion-supersedes-per-feature-archival.md"
+do
+  label="prose parity: $(basename "$(dirname "$doc")")/$(basename "$doc")"
+  if [[ ! -f "$doc" ]]; then
+    echo "  FAIL: $label (file missing — a consumer moved or was renamed)"; FAIL=$((FAIL + 1)); continue
+  fi
+  missing=""
+  while IFS= read -r name; do
+    grep -qF -- "$name" "$doc" || missing="$missing $name"
+  done <<< "$allowed"
+  if [[ -n "$missing" ]]; then
+    echo "  FAIL: $label does not name:$missing"; FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: $label"; PASS=$((PASS + 1))
+  fi
+done
+
+# ---------------------------------------------------------------------------
 # Anti-vacuity floor.
 #
 # Without this, deleting the whole TS7 block exits 0 with "ALL TESTS PASSED" —
@@ -414,7 +467,7 @@ fi
 # failure) makes silent removal loud. Derived from a green run; raise it in
 # lockstep when assertions are added.
 # ---------------------------------------------------------------------------
-MIN_ASSERTIONS=51
+MIN_ASSERTIONS=57
 total_assertions=$((PASS + FAIL))
 if [[ "$total_assertions" -lt "$MIN_ASSERTIONS" ]]; then
   echo "  FAIL: anti-vacuity floor — ran $total_assertions assertions, expected >= $MIN_ASSERTIONS"

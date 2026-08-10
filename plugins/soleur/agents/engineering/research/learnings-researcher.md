@@ -12,10 +12,14 @@ You are an expert institutional knowledge researcher specializing in efficiently
 
 ### Step 0: Check INDEX.md for Broad Discovery
 
-Before grepping individual files, check if `knowledge-base/INDEX.md` exists. If it does, Grep it first for the task keywords — this reveals relevant files across ALL domains (not just learnings), including specs, brainstorms, plans, marketing, and operations documents that may contain relevant context. INDEX.md lists non-archived KB files with their titles, with one exception: inside `knowledge-base/project/specs/<feature>/` only `spec.md` and `tasks.md` are listed — a feature's other working files (`session-state.md`, phase-evidence notes, and other one-off names) are on disk but not in the index (ADR-173). So an empty INDEX.md grep is not evidence those files do not exist; fall back to `git ls-files` / `git grep` before concluding there is no prior art.
+Before grepping individual files, check if `knowledge-base/INDEX.md` exists. If it does, Grep it first for the task keywords — this reveals relevant files across ALL domains (not just learnings), including specs, brainstorms, plans, marketing, and operations documents that may contain relevant context. INDEX.md lists non-archived KB files with their titles, with one exception: inside `knowledge-base/project/specs/<feature>/` only `spec.md` and `tasks.md` are listed — a feature's other working files (`session-state.md`, phase-evidence notes, and other one-off names) are on disk but not in the index (ADR-173). So neither an EMPTY INDEX.md grep nor a PARTIAL one (spec.md/tasks.md match, the working files do not) is evidence about what exists. In both cases run the content sweep below before concluding there is no prior art — `git ls-files` matches paths, and these files' names are uninformative (over a thousand are literally `session-state.md`), so `git grep` is the one that reaches them.
 
 ```bash
 Grep: pattern="keyword" path=knowledge-base/INDEX.md output_mode=content -i=true
+
+# Then, ALWAYS (INDEX.md is not complete — ADR-173):
+git grep -i -l "<keyword>" -- 'knowledge-base/**'
+git ls-files 'knowledge-base/**' | grep -iE '<fn1>[-_ ]<fn2>'
 ```
 
 Note any cross-domain matches for the output. Then proceed to the detailed learnings search below.

@@ -24,7 +24,7 @@ plan_review: 6-agent panel 2026-08-10 (dhh, kieran, code-simplicity, architectur
 ## Overview
 
 `knowledge-base/INDEX.md` is a discovery surface agents grep for prior art. Regenerated
-from the current tree it enumerates **7,477 files**, of which **1,281 are per-feature
+from the current tree it enumerates **7,482 files**, of which **1,275 are per-feature
 working state** under `knowledge-base/project/specs/*/`.
 
 Change `scripts/generate-kb-index.sh` so a spec directory contributes its `spec.md` and
@@ -60,27 +60,29 @@ Operator-confirmed 2026-08-10 after the panel surfaced this: index `spec.md` + `
 
 | Mechanism | Indexed | Removed | Features losing their only row |
 |---|---|---|---|
-| Today | 7,477 | — | — |
+| Today | 7,482 | — | — |
 | `spec.md` only | 4,961 | 2,516 | **1,209** |
-| **`spec.md` + `tasks.md` (chosen)** | **6,196** | **1,281** | **264, of which 250 held only `session-state.md`** |
+| **`spec.md` + `tasks.md`, flat-scoped (chosen)** | **6,207** | **1,275** | **261, of which 250 held only `session-state.md`** |
 
 The 250 are dirs whose entire content is session scratch — no spec, no tasks. Dropping
-them is correct. The genuine residual is **14 dirs** holding a long-tail file plus
-`session-state.md`; accepted, and named here rather than buried.
+them is correct. The genuine residual is **11 dirs** holding a long-tail file plus
+`session-state.md`. Two of those are not feature dirs at all — `specs/external/`
+(vendor interface reference) and `specs/openhands-portability/` — and are named
+explicitly in ADR-173's Consequences rather than folded into the scratch count.
 
 ## Research Reconciliation — Spec vs. Codebase
 
 | Spec / v1 claim | Reality | Response |
 |---|---|---|
-| Spec FR1: denylist 3 named classes | ~90 basenames in live spec dirs, ~76 occurring exactly once | Superseded by the allowlist. Spec amended in this PR (see Files to Edit) — a spec left contradicting its plan reproduces the "no authoritative record" defect the brainstorm found |
+| Spec FR1: denylist 3 named classes | 69 distinct basenames in live spec dirs, 58 occurring exactly once (the ~90/~76 in earlier drafts came from the superseded denylist analysis and were never re-measured) | Superseded by the allowlist. Spec amended in this PR (see Files to Edit) — a spec left contradicting its plan reproduces the "no authoritative record" defect the brainstorm found |
 | Spec G1: "with no predicate and no judgment call" | The mechanism **is** a predicate | Spec amended: "a single mechanical predicate, no per-file judgment" |
 | Spec TR2: single-source constant across two `find`s | Second walk is rooted at `$LEARNINGS_DIR` (`:22`) and cannot reach `project/specs/`. Verified by reading both | Dropped as unnecessary — one edit site |
-| **v1: "the test suite is an orphan, registered nowhere"** | **FALSE.** `scripts/test-all.sh:721` registers it via a glob loop (`for f in plugins/soleur/test/*.test.sh …; do run_suite "$f" bash "$f"; done`). It is item 18 of 60, runs under `want_scripts` (true for the default `TEST_GROUP=all`), and passes 24/0 today | **v1's Phase 1 deleted.** The `grep -c 'generate-kb-index' scripts/test-all.sh` that returned 0 is a false negative by construction — glob registrations never name their files. Adding a `run_suite` line would have made the suite run **twice**. `2026-04-14-plan-prescribed-test-framework-not-available.md:41` already recorded "picked up automatically by `scripts/test-all.sh`"; v1 contradicted it without citation |
+| **v1: "the test suite is an orphan, registered nowhere"** | **FALSE.** `scripts/test-all.sh` (the `for f in plugins/soleur/test/*.test.sh` glob loop) registers it via a glob loop (`for f in plugins/soleur/test/*.test.sh …; do run_suite "$f" bash "$f"; done`). It is item 18 of 60, runs under `want_scripts` (true for the default `TEST_GROUP=all`), and passes 24/0 today | **v1's Phase 1 deleted.** The `grep -c 'generate-kb-index' scripts/test-all.sh` that returned 0 is a false negative by construction — glob registrations never name their files. Adding a `run_suite` line would have made the suite run **twice**. `2026-04-14-plan-prescribed-test-framework-not-available.md:41` already recorded "picked up automatically by `scripts/test-all.sh`"; v1 contradicted it without citation |
 | **v1: "ADR-171 is the highest on origin/main"** | **FALSE.** `ADR-172-ci-side-observability-emission-and-read-only-registry-inventory.md` merged to main today. v1's check read a stale local ref — no `git fetch` preceded it | Rebased onto `origin/main`; next free ordinal re-derived after fetch: **ADR-173** |
 | **v1 predicate interpolated `$KB_DIR` into `-path`** | **Silently no-ops on a trailing slash.** `KB_DIR=knowledge-base/` → patterns become `…//project/specs/*`, which `find` never emits, so `-not -path` is always true and the exclusion vanishes: 7,477 indexed, exit 0, green suite. The pre-existing `rel="${f#"$KB_DIR/"}"` (`:62`) breaks identically, emitting absolute paths | Non-interpolated `'*/project/specs/*'` (immune, measured identical both forms) **plus** `KB_DIR="${KB_DIR%/}"` normalization at `:20`, which also fixes the pre-existing `rel=` bug |
 | v1: `-name 'spec.md'` vs `specs/*/spec.md` is a checked trap | **Inert.** The two forms are empirically indistinguishable across the whole corpus, because arm 1 already admits everything outside `specs/`. Only a depth-1 `specs/spec.md` discriminates; zero exist | Claim and its task deleted. `-name` is kept on the honest grounds that it is simpler and depth-agnostic |
 | Nested plan `plans/feat-one-shot-reconcile-no-workspace-match/plan.md` | Verified present, only nested plan | Kept as fixture F7 |
-| ADR-084 §5 needs `decision-challenges.md` readable | `ship/SKILL.md:1458` reads it by filesystem path, not via INDEX.md | No conflict, independently confirmed by architecture-strategist |
+| ADR-084 §5 needs `decision-challenges.md` readable | `ship` Phase 6 step 2.5 reads it by filesystem path, not via INDEX.md | No conflict, independently confirmed by architecture-strategist |
 
 **Premise Validation.** #7399/#7400/#7401 open; PR #7398 open. ADR-084 read in full — it
 decides where headless decision challenges are recorded, and no rejected alternative covers
@@ -235,7 +237,7 @@ Comment on #7401 that its remaining scope is the CI freshness gate only, and nam
 (established vocabulary — 7 existing ADRs use it).
 
 Must record: the decision; the measurement; the ADR-084 §5 collision with
-`ship/SKILL.md:2361` as the repo's own record that archival sanctionedly does not run; the
+`ship/SKILL.md` (sentence beginning "The practical consequence: compound is the last point") as the repo's own record that archival sanctionedly does not run; the
 79%-no-`spec.md` finding that drove `spec.md` + `tasks.md`; Tier 2 (#7400) sequencing; and
 `## Alternatives Considered` covering keep-archival-and-fix-its-holes,
 delete-the-convention-outright, denylist-by-basename, and `spec.md`-only.
@@ -315,8 +317,13 @@ component granularity.
 - [ ] **AC6** `GEN_SCRIPT` override present, so the battery runs against mutants without touching the working tree; `git status` clean after the battery.
 - [ ] **AC7** `git diff --stat plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` empty (NG2).
 - [ ] **AC8** `git diff --name-status origin/main...HEAD -- knowledge-base/project/specs knowledge-base/project/plans` shows only this feature's own artifacts, zero `R`/`D` lines. **Three-dot** — two-dot compares tips and reports main's movement as this branch's deletions.
-- [ ] **AC9** The three prose files asserting INDEX.md completeness are amended; `grep -rn "lists every non-archived KB file" plugins/ .openhands/` returns zero.
-- [ ] **AC10** `ADR-173-*.md` exists, `status: adopting`, cites ADR-084 §5 + `ship/SKILL.md:2361`, and its Alternatives table names all four losing options. Ordinal re-verified against fetched `origin/main` at ship.
+- [ ] **AC9** Every site asserting INDEX.md completeness is amended. The literal-phrase
+      grep that was used here (`"lists every non-archived KB file"` over `plugins/ .openhands/`)
+      is the DEFECT, not the check: it cannot see the same claim phrased as
+      "excludes `**/archive/`" or "lists all KB files", and it does not look in
+      `knowledge-base/`. Sweep semantically across all three roots and classify every hit:
+      `grep -rn "0\*\* .\/archive\/. rows\|excludes .\*\*\/archive\/\|lists all KB files\|every KB file\|all KB files\|lists every non-archived" knowledge-base/ plugins/ .openhands/`
+- [ ] **AC10** `ADR-173-*.md` exists, `status: adopting`, cites ADR-084 §5 + `ship/SKILL.md` (sentence beginning "The practical consequence: compound is the last point"), and its Alternatives table names all four losing options. Ordinal re-verified against fetched `origin/main` at ship.
 - [ ] **AC11** INDEX.md, `kb-tags.txt`, `kb-categories.txt` regenerated in a final standalone commit; the generated INDEX.md matches a fresh run of the merged script.
 - [ ] **AC12** `bash -n scripts/generate-kb-index.sh` clean; full `bash scripts/test-all.sh` green, with the suite appearing exactly **once** in the runner output.
 
@@ -349,7 +356,7 @@ None. Every step is automatable in-session.
 
 6-agent panel, 2026-08-10. All findings below were independently re-verified before applying.
 
-- **R1 (P0, 4 agents)** — v1's "orphan suite" premise was false; `test-all.sh:721` registers it by glob. v1's Phase 1, AC7, and a standalone commit deleted. v1 asserted a bare token against one enumeration form **two sections after prohibiting exactly that** — the defect it opened by warning about.
+- **R1 (P0, 4 agents)** — v1's "orphan suite" premise was false; `test-all.sh`'s glob loop registers it by glob. v1's Phase 1, AC7, and a standalone commit deleted. v1 asserted a bare token against one enumeration form **two sections after prohibiting exactly that** — the defect it opened by warning about.
 - **R2 (P0, architecture-strategist)** — ADR-172 was already taken on `origin/main`; v1's ordinal came from a stale ref with no `git fetch`. Rebased; renumbered to ADR-173.
 - **R3 (P0, dhh + kieran)** — `$KB_DIR` interpolated into `-path` made the predicate form-dependent; a trailing slash silently disabled it (7,477 indexed, exit 0, green). Non-interpolated patterns + `KB_DIR%/` normalization, which also fixes the pre-existing `rel=` bug at `:62`.
 - **R4 (cto)** — 79% of spec dirs have no `spec.md`; the approved mechanism would have de-indexed ~1,209 features. Re-confirmed with the operator; mechanism changed to `spec.md` + `tasks.md`.
@@ -362,7 +369,7 @@ None. Every step is automatable in-session.
 - **R11 (spec-flow)** — the suite hardcodes `GEN_SCRIPT`, making v1's battery unexecutable as specified. Override added as a Phase 1 prerequisite.
 - **R12 (spec-flow + kieran)** — v1's task "confirm F1–F10 are RED against the unmodified script" was impossible; most fixtures are regression guards, GREEN before and after. Rewritten to name only the genuinely-RED set.
 - **R13 (dhh + code-simplicity)** — depth-≥3 arm cut; F6, M3, M5 and the slash-arithmetic block go with it.
-- **R14 (cto)** — 7 of 316 test suites are genuine orphans (not systemic), 4 of them `linear-fetch/scripts/` including a secret-redaction gate. Two glob blind spots in `test-all.sh:721`. **Filed separately — deliberately out of scope here.**
+- **R14 (cto)** — 7 of 316 test suites are genuine orphans (not systemic), 4 of them `linear-fetch/scripts/` including a secret-redaction gate. Two glob blind spots in `test-all.sh`'s glob loop. **Filed separately — deliberately out of scope here.**
 
 ## Sharp Edges
 

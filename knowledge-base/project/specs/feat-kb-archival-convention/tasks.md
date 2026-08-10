@@ -89,7 +89,7 @@ stop-the-line on the first command.
 
 - [x] 6.1 `git fetch origin main`, then re-derive the next free ordinal from **fetched** `origin/main`. ADR-172 is taken; expected next is ADR-173.
 - [x] 6.2 Author `ADR-173-kb-index-exclusion-supersedes-per-feature-archival.md`, `status: adopting`.
-- [x] 6.3 Record: ADR-084 §5 + `ship/SKILL.md:2361`; the 79%-no-`spec.md` finding; Tier 2 sequencing; Alternatives covering keep-archival, delete-outright, denylist, and `spec.md`-only.
+- [x] 6.3 Record: ADR-084 §5 + `ship/SKILL.md` (sentence beginning "The practical consequence: compound is the last point"); the 79%-no-`spec.md` finding; Tier 2 sequencing; Alternatives covering keep-archival, delete-outright, denylist, and `spec.md`-only.
 - [x] 6.4 Amend `plugins/soleur/agents/engineering/research/learnings-researcher.md:15` — "INDEX.md lists every non-archived KB file with its title" is now false.
 - [x] 6.5 Amend `.openhands/skills/learnings-researcher/SKILL.md:15` — verbatim duplicate of the same claim.
 - [x] 6.6 Amend `plugins/soleur/skills/brainstorm/SKILL.md:232` — it reasons from one exclusion class (`/archive/`); there are now two.
@@ -112,5 +112,5 @@ stop-the-line on the first command.
 - No change to `archive-kb.sh` itself — #7400's exit criterion.
 - No migration of the artifact backlog. Under index-exclusion there is nothing to migrate.
 - No exclusion of merged features' `spec.md`/`tasks.md`/plans — #7400, pending a reliable merged signal.
-- No widening of `scripts/lint-orphan-test-suites.sh`. The panel found 7 genuine orphan suites repo-wide (4 in `linear-fetch/scripts/`, including a secret-redaction gate) caused by two glob blind spots in `test-all.sh:721`. **File separately; do not expand this PR.**
+- No widening of `scripts/lint-orphan-test-suites.sh`. The panel found 7 genuine orphan suites repo-wide (4 in `linear-fetch/scripts/`, including a secret-redaction gate) caused by two glob blind spots in `test-all.sh`'s glob loop. **File separately; do not expand this PR.**
 - No change to brainstorm indexing.

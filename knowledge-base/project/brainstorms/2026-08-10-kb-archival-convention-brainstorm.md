@@ -31,7 +31,7 @@ that `git log --follow` does not, and is it worth the mechanism?**
 
 **It removes rows from `knowledge-base/INDEX.md`, the discovery surface agents read.**
 
-`scripts/generate-kb-index.sh` excludes `*/archive/*` (lines 39, 136). Archiving is
+`scripts/generate-kb-index.sh` excludes `*/archive/*` (the two `-not -path '*/archive/*'` clauses). Archiving is
 the *only* mechanism that removes an INDEX row. That matters because INDEX.md has
 live consumers:
 
@@ -49,8 +49,9 @@ directory move.** That distinction is the whole decision.
 
 ### The measurement
 
-INDEX.md **as committed on main is stale by 3,711 rows.** Regenerated from the same
-tree it is **7,507 rows**, not 3,801. Real figures:
+INDEX.md **as committed on main was stale by ~3,708 rows.** Regenerated from the same
+tree it was **7,478 rows**, not 3,770. (Earlier drafts of this document said
+3,801/7,507/3,711; re-measured 2026-08-10.) Real figures:
 
 | Slice | Rows | Share of INDEX.md |
 |---|---|---|
@@ -137,6 +138,14 @@ It dominates on every axis that produced this session:
   and plan; a two-step `git mv` cannot.
 
 ### Two tiers, because they carry different risk
+
+> **Superseded in part by ADR-173.** The Tier 1 mechanism below (a denylist of three
+> named classes; `spec.md` untouched; 2,408 rows) is NOT what shipped. 79% of live spec
+> dirs have no `spec.md`, so a `spec.md`-only allowlist would have de-indexed ~1,209
+> whole features. The shipped rule indexes `spec.md` AND `tasks.md` plus deliberate
+> subdirectories, and removes **1,275** rows. The claim below that `tasks.md` "should
+> never have been indexed" is reversed by ADR-173. Tier 2's sizing in this document is
+> stale for the same reason — see #7400.
 
 **Tier 1 — never index per-feature ephemeral working state.** No predicate, no
 judgment call: `session-state.md`, `tasks.md`, `decision-challenges.md` are
