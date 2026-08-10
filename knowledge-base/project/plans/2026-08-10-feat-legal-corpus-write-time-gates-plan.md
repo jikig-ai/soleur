@@ -45,7 +45,7 @@ stale or wrong**, and one of those materially changes the plan's framing.
 | 1 | Context files exist at the cited paths | ❌ **stale** | All three cited context files are absent from `origin/main` **and** from `origin/feat-one-shot-7347-…` (remote tip `8b871eb4b`). They live only on the **local** ref `feat-one-shot-7347-dpd-operator-assisted-scope` (tip `2dd397542`), which is 10 commits ahead of its remote. Read via `git show 2dd397542:<path>` — verified reachable from this worktree. |
 | 2 | PR #7372 is the merged motivating change | ❌ **stale** | PR #7372 is **OPEN** (`WIP:`), `mergedAt: null`. Its legal-corpus edits are **not on main**. |
 | 3 | Pre-existing drift is 56 / 58 / 63 / 18 / 2 lines | ✅ **holds, and is larger** | Measured with the real normalisers: DPD 56, privacy 58, gdpr 63, AUP 18, disclaimer 2 — **exactly as claimed** — plus three the issue omits: corporate-cla 12, individual-cla 7, cookie-policy 4. T&C is 0 (already body-equivalence-enforced). **Total 220 lines across 8 pairs.** |
-| 4 | The three gates would have caught 6–7 of the 10 P1s | ❌ **wrong** | They would have caught **3** (P1-4, P1-5, P1-9). See Research Reconciliation R1. |
+| 4 | The three gates would have caught 6–7 of the 10 P1s | ❌ **wrong** | They would have caught **4** (P1-4, P1-5 via gate 1; P1-6, P1-9 via gate 3). See R1 as corrected by R13 — the first draft said 3, having mis-filed P1-6 (a pure grep) as a judgment finding and omitted P1-8 entirely. |
 | 5 | The obligation rule shipped in `work/SKILL.md` on 2026-08-09 | ⚠️ **not on main** | The `Verify that every BINDING item LANDED` HARD GATE exists only on the unmerged 7347 branch (`work/SKILL.md:190`). Main has no such rule. |
 
 **Disposition:** none of these blocks the work. #7387 is genuinely open, the gates are genuinely
@@ -63,7 +63,7 @@ than inherited.
 
 | Claim in #7387 | Reality | Evidence |
 |---|---|---|
-| "would have caught 6–7 of the 10 P1s" | **3 of 10** — P1-4, P1-5 (gate 1), P1-9 (gate 3) | The other 7 are judgment findings: a conjunction-gated carve-out, a collapsed three-limb test, an unexecuted instrument published as standing practice, a quasi-identifier reproduced after being flagged, a false closed exception list, an intra-section contradiction, and a missing balancing test. None is a grep. |
+| "would have caught 6–7 of the 10 P1s" | **4 of 10** — P1-4, P1-5 (gate 1); P1-6, P1-9 (gate 3) | The other 7 are judgment findings: a conjunction-gated carve-out, a collapsed three-limb test, an unexecuted instrument published as standing practice, a quasi-identifier reproduced after being flagged, a false closed exception list, an intra-section contradiction, and a missing balancing test. None is a grep. |
 | Gate 1 → "Nine findings" | 2 P1s + one P2 spanning 7 sites | Counting 7 sites of one P2 as 7 findings while counting P1-4/P1-5 as 2 is a unit mismatch. |
 | "both list-splitting defects" | **three** | `review-findings.md`: "three list-splitting insertions (6 sites incl. mirrors) — Disclosure §3.1, §10.1, gdpr-policy §7.1". |
 | Gate 2 caught the §8.1 ordering defect | Gate 2 catches **zero of the 10 P1s** | `review-findings.md` §"What held": *"Mirror sync is exact: normalised drift sets are character-for-character identical at `origin/main` and at HEAD for all five pairs."* The ordering defect was introduced **later**, during CLO-ruled remediation — commit `50f589c2d`, *"a mirror-position regression I introduced"*. |
@@ -72,8 +72,9 @@ than inherited.
 regression catcher**, not a P1 catcher — and that is still the strongest argument for it, because
 it is the only one of the three that sees a defect on the *published* surface that no existing
 gate can see (`legal-doc-consistency` compares heading sequence; the SHA guard compares canonical
-hashes; neither sees a mirror-side reordering). The honest headline: **3 of 10 P1s, ~9–11 P2/P3
-sites, and one class of regression that is currently invisible.** That is worth building. The
+hashes; neither sees a mirror-side reordering). The honest headline: **4 of 10 P1s, ~9–11 P2/P3
+sites, and one class of regression that is currently invisible** — and gate 3 *detects* none of
+its share: it executes a checklist a human authored (R13). That is worth building. The
 inflated claim is not needed and must not be repeated in the PR body.
 
 ### R2 — `**Scope.**` and `**What this covers.**` do not exist on main *(load-bearing)*
@@ -121,8 +122,14 @@ paragraphs of the `- **(o)**` list item (`**Per-tenant scope grants…**`, `**Au
 
 **Plan response.** Rule (b) is scoped to **scope blocks only** — blocks matching the R2
 discriminator. Verified: that scoping yields **0 hits on main** and **6 true positives on 7347**
-(3 canonical + 3 mirror). A section-scoping statement is never list-item-scoped, so for this class
-"indented" is unconditionally wrong.
+(3 canonical + 3 mirror).
+
+> **⚠ The sentence that stood here is WITHDRAWN (CLO Amendment 5 / R3).** It read: *"A
+> section-scoping statement is never list-item-scoped, so for this class 'indented' is
+> unconditionally wrong."* The premise is true but the **class is misdefined** — the class is
+> *section-referent blocks*, not *scope blocks*. A limb-referent rider is legitimately indented, and
+> DPD §2.3's newly-opened `(a)`–`(ad)` list is exactly where one belongs. See the corrected arm (b):
+> attachment must match declared referent.
 
 ### R4 — The normalisers cannot be sourced; they must be extracted
 
@@ -711,7 +718,11 @@ advisory tier (1 row, one time), `block:` provenance (recorded, never read), and
       `grep -oE 'knowledge-base/[A-Za-z0-9/_.-]+\.md' <plan> | xargs -I{} bash -c '[[ -f "{}" ]] || echo BROKEN: {}'` → empty.
       *(The three #7372 context files are deliberately cited as `git show 2dd397542:<path>`, not as
       working-tree paths — they do not exist on main. See Premise Validation.)*
-- [ ] **AC29** PR body states the corrected attribution (3 of 10 P1s), not the issue's 6–7 claim.
+- [ ] **AC29** PR body states the corrected attribution — **4 of 10 P1s** (P1-4, P1-5 via gate 1;
+      P1-6, P1-9 via gate 3), not the issue's 6–7 claim and not this plan's own first-draft 3 — plus
+      the caveat that **gate 3 detects nothing**: it executes a checklist a human authored, so its
+      share is a property of whether a row was written, not of the gate (R13).
+      *(Not machine-checkable — this is a PR-body copy instruction, tracked on the PR checklist.)*
 
 ### Post-merge (operator)
 
