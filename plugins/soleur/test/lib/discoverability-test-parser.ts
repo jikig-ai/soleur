@@ -13,7 +13,7 @@ export type Executor = (cmd: string, timeoutMs: number) => Promise<ExecResult>;
 
 export type ClassificationResult = {
   // SKIP-DECLARED is deliberately NOT folded into SKIP: it is a verification
-  // waiver a reviewer must be able to see (ADR-172 Layer 3).
+  // waiver a reviewer must be able to see (ADR-173 Layer 3).
   result: "PASS" | "FAIL" | "SKIP" | "SKIP-DECLARED";
   reason?: string;
 };
@@ -28,7 +28,7 @@ export type ClassifyInput = {
    * Whether the Step 10.5 bwrap sandbox can be established. Defaults to true so
    * existing callers are unaffected. When false the runtime SKIPs — it never
    * falls back to unsandboxed execution, because a skill claiming a boundary
-   * that is not there is worse than one claiming none (ADR-172 Layer 1).
+   * that is not there is worse than one claiming none (ADR-173 Layer 1).
    */
   sandboxAvailable?: boolean;
 };
