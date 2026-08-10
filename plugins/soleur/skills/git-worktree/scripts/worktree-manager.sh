@@ -882,12 +882,12 @@ seed_worktree_bare_false() {
   local wt_gitdir
   wt_gitdir="$(git -C "$worktree_path" rev-parse --absolute-git-dir 2>/dev/null || true)"
   if [[ -z "$wt_gitdir" || ! -d "$wt_gitdir" ]]; then
-    echo "SOLEUR_GIT_BARE_SELFHEAL worktree=$(basename -- "$worktree_path") reason=gitdir-unresolved git_version=$(git --version 2>/dev/null | awk '{print $3}') branch=failed"
+    echo "SOLEUR_GIT_BARE_SELFHEAL worktree=$(basename -- "$worktree_path") reason=gitdir-unresolved git_version=$(git --version 2>/dev/null | awk '{print $3}') branch=seed-failed"
     headless_or_stderr warn "seed_worktree_bare_false: could not resolve the git dir for $worktree_path; skipping the core.bare=false pin."
     return 1
   fi
   if ! atomic_git_config "$wt_gitdir/config.worktree" core.bare false; then
-    echo "SOLEUR_GIT_BARE_SELFHEAL worktree=$(basename -- "$worktree_path") reason=seed-write-failed git_version=$(git --version 2>/dev/null | awk '{print $3}') branch=failed"
+    echo "SOLEUR_GIT_BARE_SELFHEAL worktree=$(basename -- "$worktree_path") reason=seed-write-failed git_version=$(git --version 2>/dev/null | awk '{print $3}') branch=seed-failed"
     headless_or_stderr warn "seed_worktree_bare_false: could not write core.bare=false into $wt_gitdir/config.worktree."
     return 1
   fi
