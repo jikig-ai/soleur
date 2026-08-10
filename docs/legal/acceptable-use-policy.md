@@ -44,8 +44,6 @@ This Policy applies to all use of the Soleur platform, including but not limited
 
 The Plugin operates locally on your machine; the Web Platform operates on cloud infrastructure managed by Jikigai. You retain full control over Plugin agent actions and bear responsibility for all activities performed through the Platform -- whether locally via the Plugin or remotely via the Web Platform -- under your account or on your systems.
 
-**What this covers.** This section describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
-
 ---
 
 ## 3. Permitted Use
@@ -237,7 +235,7 @@ under §4.7.
 - Maintaining appropriate backups of your data and code; and
 - Configuring appropriate access controls on your local environment.
 
-**What this covers.** This section describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
+**What this covers.** The paragraph above describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
 
 **Web Platform (Cloud Execution).** The Web Platform operates on cloud infrastructure managed by Jikigai. You are solely responsible for:
 
@@ -265,7 +263,7 @@ When using Soleur in a manner that involves personal data:
 - You must not direct Soleur agents to collect, scrape, or process personal data in violation of applicable law; and
 - You are the data controller for any personal data processed through your use of the Platform.
 
-**What this covers.** This section describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
+**What this covers.** The paragraph above describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
 
 ### 5.4 Automated agent actions taken on your behalf
 
@@ -318,7 +316,7 @@ The Web Platform's hosted agent can run shell commands in your connected workspa
 
 The Plugin operates locally and we do not monitor Plugin usage in real time. The Web Platform operates on cloud infrastructure managed by Jikigai, which enables server-side monitoring of service usage, access patterns, and compliance with this Policy. We reserve the right to investigate reported violations of this Policy across both the Plugin and the Web Platform.
 
-**What this covers.** This section describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
+**What this covers.** The paragraph above describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
 
 ### 6.2 Consequences of Violation
 
