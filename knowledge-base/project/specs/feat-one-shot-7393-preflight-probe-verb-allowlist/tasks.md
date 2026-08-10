@@ -16,7 +16,7 @@ Lane: `cross-domain` · Brand-survival threshold: `single-user incident`
 - [x] 0.4 Sandbox non-regression probe: `curl` → `200`, `dig +short soleur.ai` non-empty,
       `grep -c . AGENTS.md` matches the host value.
 - [x] 0.5 `readlink -f /etc/resolv.conf`; confirm binding it after `--tmpfs /run` restores DNS.
-- [ ] 0.6 Paste 0.2–0.5 output into the PR body (AC2–AC4 evidence).
+- [x] 0.6 Paste 0.2–0.5 output into the PR body (AC2–AC4 evidence).
 
 ## Phase 1 — Runtime + mirror + tests (RED → GREEN)
 
@@ -93,11 +93,11 @@ Lane: `cross-domain` · Brand-survival threshold: `single-user incident`
       content executes only inside an isolation boundary; name Stage A and preflight's sandbox).
       Do **not** weaken it to match the implementation.
 - [x] 3.5 Run `apps/web-platform/test/c4-code-syntax.test.ts` + `c4-render.test.ts`.
-- [ ] 3.6 **Execution replay** over the `bash <script>` corpus class (78 probes): run each inside
+- [x] 3.6 **Execution replay** over the `bash <script>` corpus class (78 probes): run each inside
       and outside the sandbox, diff verdicts, put the diff in the PR body, file one tracking
       issue per divergent plan. A static verb tally cannot detect this regression class.
-- [ ] 3.7 `bash scripts/test-all.sh` → exit 0.
-- [ ] 3.8 Verify `AGENTS.md` + `AGENTS.rules.md` byte-unchanged (`B_ALWAYS=44400`), and
+- [x] 3.7 `bash scripts/test-all.sh` → exit 0.
+- [x] 3.8 Verify `AGENTS.md` + `AGENTS.rules.md` byte-unchanged (`B_ALWAYS=44400`), and
       `views.c4` / `spec.c4` byte-unchanged.
 - [ ] 3.9 PR body: `Closes #7393`, Phase 0 evidence, replay diff, and the
       `decision-challenges.md` DC-1 render.
@@ -111,3 +111,25 @@ Lane: `cross-domain` · Brand-survival threshold: `single-user incident`
 3. **`AGENTS.md` / `AGENTS.rules.md` byte-unchanged** (~1600 B headroom against the ratchet).
 4. **Reviewer-agent `description:` byte-unchanged** (corpus already 347 words over target).
 5. **Assert on gate windows, never whole-file greps** (`cq-assert-anchor-not-bare-token`).
+
+---
+
+## Work-phase deviations from the plan (recorded, not silent)
+
+1. **ADR ordinal 172 -> 173.** A sibling PR merged mid-session and took 172 —
+   the collision the plan's risk table anticipated. Swept this PR's files only.
+2. **AC14 baseline anchored on parsed declarations, not `grep -c`.** The plan said
+   "expect 1 — this plan". Measured: 5 raw line-hits, all prose in the plan that
+   introduces the field, and **0** actual declarations. Baseline is 0, counted via
+   the parser.
+3. **Three sandbox defects found by the execution replay** (task 3.6) and fixed
+   here, none of which a static verb tally could have detected: unbound git common
+   dir (broke every `git` probe in a worktree), missing `/var/tmp` scratch,
+   probe inheriting preflight's stdin.
+4. **One self-inflicted suite regression** caught by task 3.7: the new DNS Sharp
+   Edge tripped skill-security-scan's `path-traversal-absolute` rule and pushed the
+   first-party REVIEW rate to 5.3% against a 5% threshold. Prose reworded; rule and
+   threshold untouched.
+5. **Task 3.6's "file one tracking issue per divergent plan" produced none** —
+   no divergence traced to a plan defect. Three traced to sandbox defects (fixed)
+   and two to probes already unsuited to a 15s no-daemon budget.
