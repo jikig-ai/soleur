@@ -619,7 +619,8 @@ synthetic set fabricates greens for two *content* gates — `gitleaks scan` AND
 `lint fixture content` — so the accidental "secret-bearing digest stalls"
 protection is relaxed and MUST name a new ceiling. The action now **earns** both
 over its own staged diff before creating the PR: a pinned real `gitleaks` run
-(v8.24.2 + SHA256, pin-parity-asserted across all 3 install sites) plus
+(v8.24.2 + SHA256, pin-parity-asserted across all 4 install sites — the 4th,
+.github/workflows/main-health-monitor.yml, added by #7307) plus
 `lint-fixture-content.mjs`; any finding fails loud (no branch pushed, no PR, no
 synthetics). Tier 1 (push-protection only) was **rejected** — it misses this
 repo's custom `.gitleaks.toml` rules + the entire `lint fixture content` PII

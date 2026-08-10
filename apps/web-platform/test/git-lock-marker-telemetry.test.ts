@@ -105,6 +105,43 @@ describe("extractGitLockMarkers", () => {
     expect(extractGitLockMarkers(MASK_SKIP)[0]?.wedged).toBe(false);
   });
 
+  // #7394 — the bare-config polarity markers. Classification is by `branch=`, not by
+  // marker name, because one name covers both a recoverable and an unrecoverable outcome.
+  test("mirrors both SOLEUR_GIT_BARE_POISON branches without paging (the run proceeded)", () => {
+    for (const branch of ["healed", "clean"]) {
+      const line = `SOLEUR_GIT_BARE_POISON git_dir=/w/.git extension=present shared_bare=true wt_override=absent git_version=2.53.0 branch=${branch}`;
+      expect(extractGitLockMarkers(line).length, `branch=${branch} must be mirrored`).toBe(1);
+      expect(
+        extractGitLockMarkers(line)[0]?.wedged,
+        `branch=${branch} is informational — normalization ran and the run continued`,
+      ).toBe(false);
+    }
+  });
+
+  test("pages SOLEUR_GIT_BARE_SELFHEAL only at branch=failed", () => {
+    const ok =
+      "SOLEUR_GIT_BARE_SELFHEAL worktree=feat-a git_dir=/w/.git/worktrees/feat-a git_version=2.53.0 branch=ok";
+    const failed =
+      "SOLEUR_GIT_BARE_SELFHEAL worktree=feat-a git_dir=/w/.git/worktrees/feat-a git_version=2.53.0 branch=failed";
+    // Recovered: the worktree is usable again, so this is a mirrored diagnostic.
+    expect(extractGitLockMarkers(ok).length).toBe(1);
+    expect(extractGitLockMarkers(ok)[0]?.wedged).toBe(false);
+    // Not recovered: git keeps reporting a valid worktree as bare, so every
+    // require_working_tree-gated subcommand refuses until a human fixes permissions.
+    expect(extractGitLockMarkers(failed).length).toBe(1);
+    expect(extractGitLockMarkers(failed)[0]?.wedged).toBe(true);
+  });
+
+  test("does NOT page the create-time seed failure (branch=seed-failed)", () => {
+    // The seed is defense-in-depth and inert while extensions.worktreeConfig is absent,
+    // so it is deliberately reported under a DISTINCT branch value. Were it to reuse
+    // `failed`, a non-fatal pin would page — the "safe degradation becomes noise" class.
+    const seed =
+      "SOLEUR_GIT_BARE_SELFHEAL worktree=feat-a reason=seed-write-failed git_version=2.53.0 branch=seed-failed";
+    expect(extractGitLockMarkers(seed).length).toBe(1);
+    expect(extractGitLockMarkers(seed)[0]?.wedged).toBe(false);
+  });
+
   test("adds SOLEUR_FEATURE_PUSH_FAILED + NO_GIT_REPOSITORY to the ingest allowlist (D1b) as wedges", () => {
     expect(extractGitLockMarkers(FEATURE_PUSH_FAILED)[0]?.wedged).toBe(true);
     expect(extractGitLockMarkers(NO_GIT_REPO)[0]?.wedged).toBe(true);

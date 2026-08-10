@@ -36,9 +36,14 @@
 # fetches the signature from the SAME registry it pulled the image from, so a restored image
 # whose signature is absent fails verification on the host (ADR-087).
 #
-# The signature is copied, not re-created. GHCR carries it as an OCI referrers tag
-# `sha256-<hex>` whose artifactType is `application/vnd.dev.sigstore.bundle.v0.3+json` — a
-# Sigstore BUNDLE, which binds to the image DIGEST. It is not the legacy simple-signing payload,
+# The signature is copied, not re-created. GHCR carries it at an OCI referrers tag `sha256-<hex>`.
+# CORRECTED 2026-08-10 (#7410), measured against soleur-web-platform:v0.249.4 — the earlier text
+# here said the TAG's artifactType is the bundle type. It is not: the tag resolves to an OCI image
+# INDEX with neither `.config` nor `.layers`, and it is the index's CHILD that carries
+# `artifactType: application/vnd.dev.sigstore.bundle.v0.3+json`. Reading that sentence as though
+# the tag were a plain manifest is what shipped a checker that fail-closed on a healthy signature
+# and refused the recut on run 31392395980. It is still a Sigstore BUNDLE binding to the image
+# DIGEST, and still not the legacy simple-signing payload,
 # so there is no `critical.identity.docker-reference` pinning the GHCR ref and nothing to
 # mismatch when the same bytes are served from zot. ci-deploy.sh:1993 corroborates: it verifies
 # `$repo_digest` with `--certificate-identity-regexp` + `--certificate-oidc-issuer` (identity
@@ -198,6 +203,29 @@ classify() {
     *"no such host"*|*"dial tcp"*|*"connection refused"*|*"connection reset"*|\
     *"i/o timeout"*|*"TLS handshake"*|*"unexpected EOF"*|*EOF|\
     *"502 "*|*"503 "*|*"504 "*)                                        echo NETWORK ;;
+    # A layer whose declared mediaType disagrees with its bytes. Deliberately classified AFTER
+    # the network and credential arms so their retry semantics (3/5) keep precedence.
+    #
+    # This used to fall to UNKNOWN -> exit 6 (could-not-classify), which is how #7378 presented:
+    # `crane validate --remote <index>` walks every child and tries to gunzip every layer, so a
+    # buildx ATTESTATION child (one `application/vnd.in-toto+json` layer, never compressed) failed
+    # here and took the whole D10 A2 predicate down with it. Verification 2 now verifies per child
+    # and never gunzips an attestation layer, which removes THAT instance.
+    #
+    # It does NOT make this arm mean "the content is corrupt". crane calls Uncompressed()
+    # unconditionally, so `gzip: invalid header` is what it emits for ANY layer that is legitimately
+    # not gzip — an uncompressed `…tar` or `…tar+zstd` platform layer produces it on perfectly
+    # intact bytes. Measured against a real registry: the identical string comes back for an intact
+    # attestation layer. So this arm names TWO causes the engine cannot tell apart, and the message
+    # must say so rather than assert corruption. Exit 4 is still right (verification is unproven
+    # either way); exit 6 stays reserved for shapes the engine genuinely cannot name.
+    # Single pattern on purpose: a `*"unexpected EOF reading gzip"*` alternative would be DEAD —
+    # the NETWORK arm's `*"unexpected EOF"*` above already matches it.
+    *"gzip: invalid header"*)                                          echo LAYERFORMAT ;;
+    # A blob that IS present but whose bytes do not hash to the digest that addressed them. crane
+    # verifies at EOF and emits this; it previously fell to UNKNOWN -> exit 6 ("the engine is
+    # confused") when it is in fact the single most definitive do-NOT-deploy signal there is.
+    *"error verifying sha256 checksum"*)                               echo CONTENTMISMATCH ;;
     *) echo UNKNOWN ;;
   esac
 }
@@ -207,9 +235,14 @@ classify() {
 # Read the digest THROUGH A FILE, never `$(crane digest …)`. A retry helper's `::notice::` lands
 # on stdout and would be captured AS the digest, manufacturing a bogus mismatch. Lifted from
 # build-inngest-bootstrap-image.yml's mirror block, which records the same three properties.
+# `</dev/null` is not decoration: verification 2 drives crane from inside `while read … <<< "$list"`
+# loops, so a subcommand that ever consumed stdin would eat the remaining children/blobs and the
+# loop would end early — verifying one member and reporting success for all of them. crane does not
+# read stdin today; pinning it here means a future version that does cannot silently truncate the
+# only enumeration that proves blob completeness.
 crane_capture() {
   local out="$1" err="$2"; shift 2
-  $CRANE "$@" >"$out" 2>"$err"
+  $CRANE "$@" >"$out" 2>"$err" </dev/null
 }
 
 # last_err <errfile> — the classification input, injection-guarded.
@@ -242,6 +275,256 @@ last_err() {
 # digest_of <file> — keep only a bare sha256 token.
 digest_of() {
   grep -oE '^sha256:[0-9a-f]{64}$' "$1" 2>/dev/null | head -1 || true
+}
+
+# ref_repo <ref> — the repository part of an image reference.
+#
+# Strip a `@sha256:…` digest first, then a trailing `:tag` — but ONLY when the colon falls after
+# the LAST `/`. The sink is `127.0.0.1:5555/jikig-ai/soleur-web-platform`, so the obvious
+# `${ref%:*}` would eat the PORT on any ref that carries no tag.
+ref_repo() {
+  local r="${1%%@*}"
+  case "${r##*/}" in
+    *:*) printf '%s' "${r%:*}" ;;
+    *)   printf '%s' "$r" ;;
+  esac
+}
+
+# manifest_kind <manifest-json-file> — the ONE answer to "what shape is this manifest?".
+#
+# Single definition on purpose, for the reason this file already gives about verify_die: duplicating
+# the case block per call site is how the arms drift. #7410's first cut proved it — it added a
+# second classifier 250 lines from this one, described it in a comment as "mirroring verification
+# 2's classification", and the two disagreed on three real inputs within the same commit:
+#
+#   bytes                  second copy   verification 2
+#   {"manifests":null}     malformed     manifest
+#   {}                     empty         manifest
+#   {"schemaVersion":2}    empty         manifest
+#
+# `has("manifests")` distinguishes an explicitly-serialised null from an absent key; the
+# `(.manifests|type) == "null"` form cannot. Both directions failed closed, so nothing was unsafe —
+# but a shape vocabulary that answers the same question two ways is the seed of the next #7378, and
+# this is the file that forbids exactly that duplication.
+#
+# Emits one of: index | manifest | malformed | empty | unparseable. Never fails; `unparseable` is
+# the jq-error case, so the caller branches on a value rather than on an rc.
+manifest_kind() {
+  jq -r '
+      if   (.manifests | type) == "array"      then "index"
+      elif has("manifests")                    then "malformed"
+      elif (has("config") or has("layers"))    then "manifest"
+      else "empty" end' "$1" 2>/dev/null || printf 'unparseable\n'
+}
+
+# verify_blobs_of <sink-repo> <manifest-ref> <what> [depth] — prove the SINK holds every blob the
+# manifest at <manifest-ref> declares (its config and every layer), walking one level of index
+# indirection.
+#
+# `depth` is the artifact-graph nesting level and MUST be threaded by every caller that is already
+# inside an index walk. #7410's first cut defaulted it at the attestation call site, which reset the
+# counter to 0 one level down and let the function walk a SECOND index level while its own comment
+# claimed one — turning a shape `origin/main` refused (`declares no blobs`, exit 4) into a PASS,
+# measured. The parameter is not a convenience; omitting it is the bug.
+#
+# Presence AND integrity, not merely presence: `crane blob` streams the whole body and
+# go-containerregistry verifies the content digest at EOF, so a blob that is present but whose
+# bytes do not hash to the digest addressing it fails here too (classify() maps that to
+# CONTENTMISMATCH -> exit 4). It never DECOMPRESSES, which is what makes it correct for layer
+# mediaTypes that are plain JSON and never gzipped — `application/vnd.in-toto+json` on a buildx
+# attestation child, and the cosign payload on a signature. Handing either of those to
+# `crane validate` is #7378.
+#
+# The body is discarded to /dev/null: only the exit code is consumed, and a provenance blob can
+# carry build-time secrets that should not be materialised on the runner's disk.
+verify_blobs_of() {
+  local repo="$1" ref="$2" what="$3" depth="${4:-0}" expect_subject="${5:-}"
+  local out="$WORK/vb.${depth}.out" err="$WORK/vb.${depth}.err" jqerr="$WORK/vb.${depth}.jqerr"
+  local blberr="$WORK/vb.${depth}.blob.err"
+  local kind blobs b n_declared n_children n_blobs n_layers c_digest children
+
+  if ! crane_capture "$out" "$err" manifest $SINK_TLS_FLAG "$ref"; then
+    verify_die "$what" "$err"
+  fi
+
+  # A cosign signature is NOT reliably a plain manifest. Measured against GHCR 2026-08-10, the
+  # referrers tag `sha256-<hex>` of soleur-web-platform:v0.249.4 resolves to an OCI image INDEX
+  # whose single child carries `artifactType: application/vnd.dev.sigstore.bundle.v0.3+json`; the
+  # index itself has neither `.config` nor `.layers`. A config+layers-only enumeration therefore
+  # finds nothing there and reports "declares no blobs" -- a fail-closed abort on a perfectly
+  # healthy signature, which is what refused the recut on run 31392395980.
+  kind="$(manifest_kind "$out")"
+
+  case "$kind" in
+    index)
+      # One level only, and `depth` is threaded by every caller inside a walk (see the header).
+      if (( depth > 0 )); then
+        die 4 "${what} is an index nested inside another index. This restore verifies one level of indirection, so a deeper nest is unverified — failing closed rather than reporting a pass it did not establish."
+      fi
+      # rc-checked, matching the identical read in verification 2. The `2>/dev/null || echo 0` this
+      # replaces was dead defensively (the arm has already proven `.manifests` is an array) and
+      # defaulted to the ONE value that satisfies the equality below when the walk also finds
+      # nothing — a fail-open direction guarded only by the ordering of two adjacent lines.
+      if ! n_declared="$(jq -r '(.manifests // []) | length' "$out" 2>"$jqerr")"; then
+        die 4 "${what}: its child count could not be read, so no completeness claim is possible. jq: $(last_err "$jqerr")"
+      fi
+      if ! children="$(jq -r '(.manifests // [])[] | [(.digest // "-")] | @tsv' "$out" 2>"$jqerr")"; then
+        die 4 "${what}: its child list could not be fully enumerated, so an unknown number of children were never checked. jq: $(last_err "$jqerr")"
+      fi
+      # Pre-loop, mirroring verification 2: `<<< ""` yields ONE blank iteration, so without this a
+      # zero-child index reaches the loop and the in-loop guard has to `continue` past it — which is
+      # what forced the empty-digest row to be skipped rather than named.
+      # Gate on the COUNT the engine already read, not on the row stream alone. Every row is
+      # sentinelled with `// "-"`, so a blank row can only come from an explicitly-empty digest
+      # string -- and `$( )` then strips it, leaving `$children` empty. Without this gate an index
+      # declaring ONE child with `"digest": ""` was reported as "an index with no children",
+      # naming a cause the engine had just disproved by reading n_declared=1 two lines earlier.
+      if [[ -z "$children" ]]; then
+        (( n_declared == 0 )) || \
+          die 4 "${what}: its child list enumerated ZERO rows but the index declares ${n_declared}. At least one child declares an empty digest, so the enumeration is unusable and nothing was verified."
+        die 4 "${what} is an index with no children, so it references nothing this restore could verify."
+      fi
+      n_children=0
+      while IFS=$'\t' read -r c_digest; do
+        n_children=$((n_children + 1))
+        # `-n` as well as `!= "-"`: jq's `//` replaces null and false, NOT "", so an explicitly
+        # empty digest string sails past the sentinel. Previously this row was `continue`d and the
+        # count guard reported "the remainder were never verified" — naming a truncation that had
+        # not happened, on the path that authorises the destroy.
+        [[ "$c_digest" != "-" && -n "$c_digest" ]] || \
+          die 4 "${what}: child ${n_children} declares no digest, so it cannot be addressed or verified."
+        verify_blobs_of "$repo" "${repo}@${c_digest}" "child ${c_digest} of ${what}" "$((depth + 1))" "$expect_subject"
+      done <<< "$children"
+      # Equality, not `> 0`: a truncated walk that checked one child of three must not read as a
+      # verified index.
+      (( n_children == n_declared )) || \
+        die 4 "${what}: enumerated ${n_children} children but the index declares ${n_declared}. The remainder were never verified."
+      ;;
+    manifest)
+      # rc, never `|| true`: jq's `.layers[]` streams, so a shape fault partway emits a TRUNCATED
+      # list that would otherwise pass the non-empty check with the remaining blobs never checked.
+      #
+      # `// "-"` on EVERY digest, and a count equality below, for a measured reason: the previous
+      # form emitted bare digests, `$( )` strips trailing newlines, and the loop `continue`d on
+      # empties — so `{"config":{"digest":"sha256:aaa"},"layers":[{"digest":""},{"digest":""}]}`
+      # verified ONE of three declared blobs and reported the manifest complete. On the signature
+      # path that is A2 going green with the cosign payload never fetched.
+      #
+      # The config slot is CONDITIONAL, and that word is load-bearing. An unconditional
+      # `[(.config.digest // "-")]` emits a row even when the manifest has no `config` key at all,
+      # while the count below is conditional — so a perfectly healthy config-less manifest
+      # (`{"layers":[{"digest":"sha256:aa"}]}`) produced rows `-`,`sha256:aa` against a declared
+      # count of 1, and died with "blob 1 declares no digest" about a blob the engine's own jq
+      # program had invented. That is #7379's defect exactly — a healthy artifact named as
+      # defective because the checker's enumeration was wrong — reintroduced by the commit fixing
+      # it. The stream and the count must be the same predicate.
+      if ! blobs="$(jq -r '[(if has("config") then (.config.digest // "-") else empty end)] + [(.layers // [])[] | (.digest // "-")] | .[]' "$out" 2>"$jqerr")"; then
+        die 4 "${what}: its blob list could not be fully enumerated, so an unknown number of blobs were never checked. jq: $(last_err "$jqerr")"
+      fi
+      if ! n_declared="$(jq -r '((if has("config") then 1 else 0 end)) + ((.layers // []) | length)' "$out" 2>"$jqerr")"; then
+        die 4 "${what}: its blob count could not be read, so no completeness claim is possible. jq: $(last_err "$jqerr")"
+      fi
+      # Same gate, same reason -- and here the stale message was literally `declares no blobs`,
+      # the string that refused run 31392395980. A child declaring a config and a layer with empty
+      # digests produced two blank rows, `$( )` stripped them, and the engine reported the artifact
+      # as declaring nothing while n_declared said 2.
+      if [[ -z "$blobs" ]]; then
+        (( n_declared == 0 )) || \
+          die 4 "${what}: its blob list enumerated ZERO rows but the manifest declares ${n_declared}. At least one blob declares an empty digest, so the enumeration is unusable and nothing was fetched."
+        die 4 "${what} declares no blobs, so its presence cannot be verified."
+      fi
+      # A LAYER, not merely a blob. This is the difference between a real check and a ceremonial
+      # one, and the config blob is exactly why:
+      #
+      #   the sigstore bundle child's config is `application/vnd.oci.empty.v1+json`, digest
+      #   sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a — the hash of
+      #   `{}`. Every registry holds it by construction; the test suite hardcodes it.
+      #
+      # So a `has("config") or has("layers")` classification let a signature child whose bundle
+      # LAYER had been evicted verify GREEN by fetching a universally-present two-byte blob. The
+      # payload `ci-deploy.sh` hands to `cosign verify` would be gone and A2 would report the
+      # restore complete — defeating the entire purpose of verifying the signature's blobs, which
+      # is the obligation this arm exists to discharge.
+      #
+      # The evicted-blob test models a layer that is unFETCHABLE. This models a layer that is
+      # ABSENT, and nothing else in the engine distinguishes them.
+      if ! n_layers="$(jq -r '(.layers // []) | length' "$out" 2>"$jqerr")"; then
+        die 4 "${what}: its layer count could not be read, so no completeness claim is possible. jq: $(last_err "$jqerr")"
+      fi
+      # SUBJECT BINDING. A sigstore bundle child names the artifact it signs in `.subject.digest`;
+      # measured on soleur-web-platform:v0.249.4 it is exactly the image index digest. Without this,
+      # a signature with entirely valid, fetchable blobs for a DIFFERENT image passes every arm
+      # above — right blobs, wrong subject.
+      #
+      # Asserted only when the key is PRESENT, and that limit is stated rather than hidden: the
+      # legacy simplesigning shape carries no `subject` and binds through the payload's
+      # `critical.image.docker-manifest-digest`, which this engine does not parse. So absence is
+      # not treated as a pass for the binding — it is treated as "this shape's binding was not
+      # checked here", which is what the code actually establishes.
+      if [[ -n "$expect_subject" ]]; then
+        local subj
+        subj="$(jq -r '.subject.digest // ""' "$out" 2>/dev/null || printf '')"
+        if [[ -n "$subj" && "$subj" != "$expect_subject" ]]; then
+          die 4 "${what}: its subject digest is ${subj}, but the artifact being restored is ${expect_subject}. This signature has valid, fetchable blobs and signs a DIFFERENT image — do NOT deploy."
+        fi
+      fi
+      (( n_layers > 0 )) || \
+        die 4 "${what} declares NO layers, so it carries no payload. A config alone is not evidence the artifact is intact — for a cosign signature that config is the well-known empty blob (sha256:44136fa3...aff8a) every registry holds by construction."
+      n_blobs=0
+      while IFS= read -r b; do
+        n_blobs=$((n_blobs + 1))
+        [[ "$b" != "-" && -n "$b" ]] || \
+          die 4 "${what}: blob ${n_blobs} declares no digest, so it cannot be addressed or verified."
+        if ! crane_capture /dev/null "$blberr" blob $SINK_TLS_FLAG "${repo}@${b}"; then
+          verify_die "the blob ${b} of ${what}" "$blberr"
+        fi
+      done <<< "$blobs"
+      (( n_blobs == n_declared )) || \
+        die 4 "${what}: verified ${n_blobs} blobs but the manifest declares ${n_declared}. The remainder were never fetched."
+      ;;
+    malformed)
+      die 4 "${what}: its manifest carries a \`manifests\` field that is not an array, so it is neither a readable index nor a plain manifest. Nothing about it was verified."
+      ;;
+    empty)
+      die 4 "${what} declares neither children nor blobs, so its presence cannot be verified."
+      ;;
+    unparseable)
+      die 4 "${what}: its manifest could not be parsed, so nothing about it was verified."
+      ;;
+    *)
+      # Reached only if manifest_kind() grows a value this case block does not know. Say exactly
+      # that, rather than asserting something about the manifest's contents that was never read.
+      die 4 "${what}: its manifest classified as an unrecognised shape (${kind}), so nothing about it was verified."
+      ;;
+  esac
+}
+
+# verify_die <what> <errfile> — the ONE classifier for every verification-2 read.
+#
+# Single definition on purpose: verification 2 now issues several kinds of read (index manifest,
+# child manifest, child validate, attestation blob) and each one must map the SAME crane failure
+# to the SAME operator action. Duplicating the case block per call site is how the arms drift.
+verify_die() {
+  local what="$1" err cls
+  err="$(last_err "$2")"
+  cls="$(classify "$err")"
+  case "$cls" in
+    NETWORK) die 3 "the sink became unavailable while verifying ${what}. crane: ${err}" ;;
+    DENIED)  die 5 "the sink rejected this credential while verifying ${what}. crane: ${err}" ;;
+    # Split on purpose. Collapsing these into one sentence produced a message that asserted "the
+    # manifest resolves and its digest matches" at the two call sites where the MANIFEST READ is
+    # what failed — naming a cause the engine had just disproved, on the path that authorises
+    # destroying production's only copy.
+    NOTFOUND)
+      die 4 "${what} did NOT resolve at the sink: the registry reports it as unknown. Blob completeness is unproven — do NOT deploy. crane: ${err}" ;;
+    BLOBMISSING)
+      die 4 "${what} is BLOB-INCOMPLETE: a blob it references is missing from the sink, so a host would fail this pull with 'blob unknown'. crane: ${err}" ;;
+    CONTENTMISMATCH)
+      die 4 "${what} is CORRUPT AT THE SINK: a blob is present but its bytes do not hash to the digest that addressed them. This is not an eviction and re-running will not fix it. Do NOT deploy. crane: ${err}" ;;
+    LAYERFORMAT)
+      die 4 "${what}: crane could not decompress a layer as gzip. This means ONE OF TWO THINGS and the engine cannot tell them apart — (a) the layer's bytes really do disagree with its declared mediaType (store corruption), or (b) the layer is legitimately not gzip (an uncompressed or zstd layer, or an attestation-shaped child this engine failed to classify), which is a VALIDATOR artifact and not a store problem. Discriminate before acting: re-run the identical check against the SOURCE, which this engine never writes to — 'crane validate --remote ghcr.io/<repo>@<child-digest>'. If GHCR fails the same way, the store is fine and this is #7378's class returning; file it. If GHCR passes, the sink copy is bad — do NOT deploy. crane: ${err}" ;;
+    *)       die 6 "verifying ${what} failed in a way this script cannot classify. crane: ${err}" ;;
+  esac
 }
 
 WORK="$(mktemp -d)" || die 6 "could not create a scratch directory."
@@ -371,20 +654,137 @@ while (( i < n_entries )); do
     die 4 "digest parity FAILED for ${repo}:${tag} — ghcr=${src_digest} sink=${dst_digest}. A cloud-init @sha256 pin on this tag would not resolve against the restored registry."
   fi
 
-  # ── verification 2: blob completeness ──────────────────────────────────────────────────────
+  # ── verification 2: blob completeness, PER CHILD ───────────────────────────────────────────
   # The digest above proves the sink holds the MANIFEST. This proves it holds the BLOBS. See the
   # measured table in the header: without this, an evicted layer yields a green restore and a
   # `blob unknown` when the host later tries to pull it.
-  if ! crane_capture "$WORK/val.out" "$WORK/val.err" validate $SINK_TLS_FLAG --remote "$dst"; then
-    err="$(last_err "$WORK/val.err")"
-    cls="$(classify "$err")"
-    case "$cls" in
-      NETWORK) die 3 "the sink became unavailable while validating ${dst}. crane: ${err}" ;;
-      DENIED)  die 5 "the sink rejected this credential while validating ${dst}. crane: ${err}" ;;
-      BLOBMISSING|NOTFOUND)
-        die 4 "${dst} is BLOB-INCOMPLETE: its manifest resolves and its digest matches, but a layer is missing, so a host would fail this pull with 'blob unknown'. crane: ${err}" ;;
-      *)       die 6 "validating ${dst} failed in a way this script cannot classify. crane: ${err}" ;;
-    esac
+  #
+  # Every read below is against the SINK, never GHCR — the property under test is "the sink holds
+  # the blobs", and a read that fell back to the source would certify the wrong registry.
+  #
+  # #7378: this used to be one `crane validate --remote "$dst"` over the whole reference. crane
+  # walks an index's children and tries to GUNZIP every layer, so a buildx ATTESTATION child —
+  # one `application/vnd.in-toto+json` layer, which is plain JSON and never compressed — failed
+  # with `gzip: invalid header`. Reproduced directly against GHCR (a registry this engine never
+  # WRITES — it does read from it, on every entry, via `crane digest` and `crane copy`), so it is
+  # a validator false positive, not corruption. It made the D10 A2 predicate structurally
+  # unpassable and the recut unfireable during a live registry outage.
+  #
+  # The fix NARROWS the check, it does not skip anything: platform children keep the full
+  # `crane validate --remote`, and attestation children have every blob they declare verified for
+  # PRESENCE via `crane blob`. An attestation child whose blob is absent still fails.
+  #
+  # Read the index BY DIGEST, not by tag. `crane manifest <tag>` does NOT verify the returned
+  # bytes (go-containerregistry: "Do nothing for tags; I give up."), whereas a digest ref makes
+  # `fetchManifest` hash the body and reject a mismatch. The whole-ref `crane validate` this
+  # replaced supplied that byte-check via `validateIndexManifest`; reading by tag would have
+  # dropped the sink index's only integrity check AND re-resolved the tag a second time, so the
+  # children verified might not belong to the manifest verification 1 just proved parity for.
+  dst_repo="$(ref_repo "$dst")"
+  if ! crane_capture "$WORK/man.out" "$WORK/man.err" manifest $SINK_TLS_FLAG "${dst_repo}@${dst_digest}"; then
+    verify_die "the manifest of ${dst}" "$WORK/man.err"
+  fi
+
+  # Fail CLOSED on anything we cannot parse. FOUR states, and the fourth is the one an earlier
+  # revision got wrong: `.manifests` PRESENT BUT NOT AN ARRAY (`{"manifests":{"a":1}}`) is neither
+  # a plain manifest nor an enumerable index, and a two-way `array ? index : manifest` test folded
+  # it into the plain-manifest branch — handing a malformed index straight back to the whole-ref
+  # `crane validate` this change exists to stop calling. Fail direction was closed (it would gunzip
+  # and abort), but that is exactly the unfireable-gate condition of #7378.
+  dst_kind="$(manifest_kind "$WORK/man.out")"
+  case "$dst_kind" in
+    index|manifest) ;;
+    malformed)
+      die 4 "the sink returned a manifest for ${dst} whose .manifests field is present but is not an array, so it is neither a plain manifest nor an enumerable index. Blob completeness is unproven — do NOT deploy." ;;
+    empty)
+      # Distinct from `unparseable`, and the distinction is the point: this body IS valid JSON and
+      # simply declares neither children nor blobs. Reporting it as a parse failure would name a
+      # cause the code did not measure, and would send the operator to the wrong runbook row.
+      #
+      # Two shapes changed arm when this site adopted manifest_kind(): `{}` and `{"schemaVersion":2}`
+      # previously classified `manifest` and were handed to the whole-ref validate. Neither is an
+      # image; dying here is the correct direction, and it is now the SAME answer verify_blobs_of
+      # gives for the same bytes.
+      die 4 "the sink returned a manifest for ${dst} that declares neither children nor blobs, so it is not an image any host could pull. Blob completeness is unproven — do NOT deploy." ;;
+    *)
+      # A NAMED condition, so NOT exit 6. Exit 6 is reserved for shapes the engine cannot name,
+      # and the runbook's exit-6 row tells the operator such a shape is a defect to file rather
+      # than a store to distrust — which is the wrong instruction for a sink serving non-JSON.
+      die 4 "the sink returned a manifest for ${dst} that could not be parsed as JSON, so blob completeness is unproven. Do NOT deploy." ;;
+  esac
+
+  if [[ "$dst_kind" == "manifest" ]]; then
+    # Single manifest (this is what soleur-inngest-bootstrap is). Unchanged behaviour.
+    # BY DIGEST, not by tag — the last read in this file still rooted at a tag, and the same
+    # defect #7410 spent twenty lines fixing on the signature. `validate.Image` compares digests
+    # computed from the bytes it fetched against that same manifest (self-consistency), never
+    # against the reference, so a tag re-resolves and what gets blob-validated need not be the
+    # manifest verification 1 just proved parity for. This is also the arm the required
+    # `soleur-inngest-bootstrap` pin takes, so it was the un-pinned read on a required entry.
+    if ! crane_capture "$WORK/val.out" "$WORK/val.err" validate $SINK_TLS_FLAG --remote "${dst_repo}@${dst_digest}"; then
+      verify_die "$dst" "$WORK/val.err"
+    fi
+  else
+    # SENTINEL every field. `@tsv` emits an EMPTY field for an absent key, tab is IFS-WHITESPACE,
+    # and bash `read` collapses runs of IFS whitespace — so `digest<TAB><TAB>unknown` (an
+    # attestation child with no annotation) parsed as type="unknown", arch="", and the
+    # `arch == "unknown"` disjunct below became unreachable exactly when it was the only signal.
+    # That handed the in-toto child to `crane validate` and reproduced #7378 verbatim. A "-"
+    # placeholder cannot appear in a real digest, mediaType, annotation or architecture, so no
+    # field is ever empty and no collapse is possible.
+    # NEVER `|| true` here. `.manifests[]` STREAMS, so a shape fault in element k emits elements
+    # 1..k-1 and then exits 5 — swallowing that rc yields a TRUNCATED child list that passes every
+    # downstream guard while children k..n are silently never verified. Capture the rc instead.
+    if ! children="$(jq -r '(.manifests // [])[] | [(.digest // "-"), (.mediaType // "-"), (.annotations["vnd.docker.reference.type"] // "-"), (.platform.architecture // "-")] | @tsv' "$WORK/man.out" 2>"$WORK/man.jqerr")"; then
+      die 4 "${dst}: the sink's index could not be fully enumerated — jq failed partway, so an unknown number of children were never seen. Blob completeness is unproven; do NOT deploy. jq: $(last_err "$WORK/man.jqerr")"
+    fi
+    if ! n_declared="$(jq -r '(.manifests // []) | length' "$WORK/man.out" 2>"$WORK/man.jqerr")"; then
+      die 4 "${dst}: could not read the sink index's child count. jq: $(last_err "$WORK/man.jqerr")"
+    fi
+    [[ -n "$children" ]] || \
+      die 4 "${dst} is an image index whose child list is empty, so no child could be verified."
+
+    n_children=0
+    n_platform=0
+    while IFS=$'\t' read -r c_digest c_mt c_type c_arch; do
+      [[ "$c_digest" != "-" && -n "$c_digest" ]] || \
+        die 4 "${dst} declares an index child with no digest, so that child cannot be addressed or verified."
+      n_children=$(( n_children + 1 ))
+      # A child that is ITSELF an index would be handed to `crane validate` below, which walks its
+      # children and gunzips their layers — #7378, one level down. buildx does not emit these
+      # today; fail closed rather than recurse into the exact defect this change removes.
+      case "$c_mt" in
+        *"image.index.v1+json"|*"manifest.list.v2+json")
+          die 4 "${dst} contains a NESTED index child ${c_digest} (${c_mt}), which this engine does not verify. Blob completeness is unproven — do NOT deploy." ;;
+      esac
+      # Detect attestation children by EITHER signal, so a change to one does not silently
+      # reclassify an attestation as a real platform image. ASSUMPTION, not a measured invariant:
+      # both signals come from the same BuildKit attestation-storage convention. The cost if it is
+      # wrong in the other direction — a genuine platform child declaring `architecture: unknown` —
+      # is that it gets blob-presence verification instead of decompression checking.
+      if [[ "$c_type" == "attestation-manifest" || "$c_arch" == "unknown" ]]; then
+        # depth 1, NOT the default: this call is already one level inside the image index's walk.
+        # Defaulting it reset the counter and let verify_blobs_of walk a SECOND index level, which
+        # turned a shape origin/main refused into a PASS (measured, #7410 review). The parent's
+        # declared mediaType is not covered by the child's content digest, so a child that declares
+        # image.manifest.v1+json and serves an index body reaches here; at depth 1 it fails closed.
+        verify_blobs_of "$dst_repo" "${dst_repo}@${c_digest}" "the attestation manifest ${c_digest} of ${dst}" 1
+      else
+        n_platform=$(( n_platform + 1 ))
+        if ! crane_capture "$WORK/val.out" "$WORK/val.err" validate $SINK_TLS_FLAG --remote "${dst_repo}@${c_digest}"; then
+          verify_die "the ${c_arch} child ${c_digest} of ${dst}" "$WORK/val.err"
+        fi
+      fi
+    done <<< "$children"
+
+    # Counting is only a non-vacuity guard if it can detect PARTIAL enumeration. `> 0` cannot:
+    # it passes when one child of five was verified. Compare against what the index DECLARES.
+    (( n_children == n_declared )) || \
+      die 4 "${dst} declares ${n_declared} index children but only ${n_children} were verified, so blob completeness is unproven."
+    # An index carrying only attestation children has no image a host could pull. Presence-only
+    # verification of provenance metadata must never read as "the pull path is restored".
+    (( n_platform > 0 )) || \
+      die 4 "${dst} is an image index with ${n_children} children and NO platform image among them, so there is nothing a host could pull."
   fi
 
   # ── verification 3: signature present in the target ────────────────────────────────────────
@@ -430,6 +830,39 @@ while (( i < n_entries )); do
       *)       die 4 "the signature ${sig_tag} is not readable back from the sink, so ${repo}:${tag} is restored UNSIGNED. crane: ${err}" ;;
     esac
   fi
+
+  # The read-back above is `crane digest` — a HEAD against the MANIFEST endpoint. It proves the
+  # signature manifest resolves; it proves nothing about the payload blob. That is the identical
+  # "a manifest can outlive its layers under zot gc+dedupe" trap this file's header documents at
+  # length for image layers, and which verification 2 now defends against per child — left
+  # undefended on the one artifact `ci-deploy.sh` fetches at deploy time to run `cosign verify`.
+  #
+  # Before this, A2 could go green over a signature whose blob was evicted, and the host would
+  # then fail cosign verify with no fallback. Tightening verification 2 without this made the
+  # gap WORSE in the reporting sense: "every child's blobs verified" is a materially stronger
+  # claim, and leaving the signature arm loose sharpens the misrepresentation it carries.
+  #
+  # PARITY FIRST, then walk from a DIGEST ref.
+  #
+  # An earlier revision read the signature at its referrers TAG and justified it in this comment
+  # with "there is no digest to pin it by". That was false: both digests are read above — GHCR's at
+  # the source read, the sink's at the read-back — and both were tested for emptiness and thrown
+  # away. So the walk was rooted at an unauthenticated tag, and content-addressing every child
+  # below it bought integrity relative to a root nobody had checked. Wrong root, wrong children,
+  # each one verified perfectly. This file already spells out why a tag read cannot self-verify
+  # (a tag carries no expected digest) and already reads the IMAGE index by digest for exactly
+  # that reason; the signature — the one artifact ci-deploy.sh feeds to cosign verify — was the
+  # arm left on the weaker read.
+  sig_src_digest="$(digest_of "$WORK/sigsrc.out")"
+  sig_dst_digest="$(digest_of "$WORK/sigdst.out")"
+  [[ "$sig_src_digest" == "$sig_dst_digest" ]] || \
+    die 4 "the signature ${sig_tag} for ${repo}:${tag} differs between GHCR (${sig_src_digest}) and the sink (${sig_dst_digest}). The sink is serving a different signature than the one GHCR published — do NOT deploy."
+
+  # Now the root is byte-verified: crane hashes the body of a digest ref and rejects a mismatch, so
+  # the children enumerated below are provably the ones GHCR's signature declares. `crane blob`
+  # never decompresses, so the cosign payload layer cannot trip the #7378 gunzip class.
+  verify_blobs_of "${TARGET}/${repo}" "${TARGET}/${repo}@${sig_dst_digest}" \
+    "the cosign signature ${sig_tag} of ${repo}:${tag}" 0 "$src_digest"
 
   echo "restore_entry repo=${repo} tag=${tag} disposition=${disp} digest=${src_digest} result=restored_verified"
   # ONLY `required` entries count toward the floor, because FLOOR counts only required pins.

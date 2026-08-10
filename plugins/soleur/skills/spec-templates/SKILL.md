@@ -72,9 +72,17 @@ Each feature gets its own directory:
 
 ```
 knowledge-base/project/specs/feat-<name>/
-  spec.md      # Requirements (FR/TR)
-  tasks.md     # Phased task checklist
+  spec.md      # Requirements (FR/TR)   — indexed in INDEX.md
+  tasks.md     # Phased task checklist  — indexed in INDEX.md
+  <anything else>                        # working state, NOT indexed
 ```
+
+Only `spec.md` and `tasks.md` are listed in `knowledge-base/INDEX.md`. Every other
+file sitting **flat** in a spec directory is treated as branch-lifetime working state
+and is on disk but unindexed (ADR-174). A file you deliberately organise into a
+**subdirectory** stays indexed — that is the escape hatch for durable content. If a file here is durable knowledge rather than scratch,
+either fold it into `spec.md` or file it under the knowledge-base domain it belongs
+to — do not rely on it being discoverable through the index.
 
 ## Usage Examples
 

@@ -82,6 +82,17 @@ const KNOWN_UNMONITORED_SLUGS = new Set([
 
 const NON_INNGEST_MONITORS = new Set([
   "scheduled-terraform-drift",
+  // #7307: GHA-fired executor (main-health-monitor.yml) posts the terminal
+  // heartbeat; cron-main-health-monitor.ts only DISPATCHES the workflow and
+  // declares no SENTRY_MONITOR_SLUG (the suite runs in the ephemeral runner, not
+  // the app process), so this monitor maps to no Inngest slug — same class as
+  // scheduled-terraform-drift. Note this monitor is a deliberate reversal of that
+  // file's documented Design-A "no own Sentry monitor" posture: Design A rested
+  // end-to-end liveness on "a broken main goes un-issued" being readable, and it
+  // was not — the executor filed zero issues in four months because a timeout is
+  // recorded `cancelled` (not `failure`) and `| tee` discarded the suite's exit
+  // code. See sentry_cron_monitor.main_health_monitor in cron-monitors.tf.
+  "main-health-monitor",
   // #6549 item 2: GHA-fired (scheduled-terraform-drift.yml → heartbeat-live-reconcile
   // job) — the source-vs-live Better Stack heartbeat reconcile. Its final
   // sentry-heartbeat step pings the check-in; there is no Inngest cron function, so

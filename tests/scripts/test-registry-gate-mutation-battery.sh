@@ -122,6 +122,53 @@ run_suite() { # $1 = gate|engine ; echoes nothing, returns the suite's rc
   timeout 300 bash "$suite" > "${SB}/suite.log" 2>&1
 }
 
+# ── PRE-FLIGHT: every anchor must resolve to exactly one match, checked BEFORE any dispatch. ──
+#
+# Without this, a stale anchor is discovered serially: the battery runs ~47 full suite invocations
+# (20+ minutes), hits the first bad anchor, and exits 2 with NO VERDICT — having told you about
+# exactly one of them. Measured three times in #7410 alone, because an engine edit that moves or
+# duplicates a line silently invalidates the anchor pointing at it, and the failure mode is
+# indistinguishable from "the battery is still running".
+#
+# This parses THIS file's own mutate/expect_survive calls, lets BASH resolve the quoting (an
+# audit that interprets `\n` itself reports a false pass on an anchor bash would pass literally —
+# also measured here), and reports EVERY bad anchor at once.
+preflight_anchors() {
+  python3 - "$0" "${PRISTINE}/engine.sh" "${PRISTINE}/gate.sh" <<'PYX' || harness_die "one or more mutation anchors do not resolve to exactly one match against the pristine SUT. Every one is listed above. The SUT drifted from this battery — fix them all before trusting any verdict. No verdict is reportable."
+import re, subprocess, sys
+battery, engine_p, gate_p = sys.argv[1], sys.argv[2], sys.argv[3]
+src = open(battery).read()
+eng, gate = open(engine_p).read(), open(gate_p).read()
+pat = re.compile(
+    r"""(?:mutate|expect_survive)\s+"([^"]+)"\s+(engine|gate)\s*\\\n(\s*\$?'(?:[^']|'\\'')*')\s*\\\n""",
+    re.M)
+rows = pat.findall(src)
+bad = 0
+for label, target, rawq in rows:
+    # Let BASH resolve the quoting. An audit that interprets escapes itself reports a false PASS
+    # on an anchor bash would pass literally -- measured in #7410, where '\n...' in single quotes
+    # is a literal backslash-n and only $'...' yields a newline.
+    r = subprocess.run(["bash", "-c", "printf %s " + rawq.strip()],
+                       capture_output=True, text=True)
+    lit = r.stdout
+    if r.returncode != 0 or lit == "":
+        # An empty literal counts at EVERY position, which reports as a huge n rather than as the
+        # quoting failure it is.
+        bad += 1
+        sys.stderr.write("ANCHOR unresolvable [%s] %s\n" % (target, label))
+        continue
+    n = (eng if target == "engine" else gate).count(lit)
+    if n != 1:
+        bad += 1
+        sys.stderr.write("ANCHOR n=%d [%s] %s\n" % (n, target, label))
+if bad:
+    sys.stderr.write("pre-flight: %d of %d anchors bad\n" % (bad, len(rows)))
+    sys.exit(1)
+print("pre-flight: %d/%d anchors resolve uniquely" % (len(rows), len(rows)))
+PYX
+}
+preflight_anchors
+
 caught=0
 survived=0
 expected=0
@@ -294,10 +341,26 @@ mutate "E21 engine last_err drops the line-tail (conditional skip swallows a cre
 # What the `tr` still buys is defence-in-depth against the REMOVAL of `tail -n 1` — and that
 # removal is exactly what E21 mutates. So the injection property is covered; it is covered by
 # E21, not here.
-expect_survive "E22 engine workflow-command injection guard dropped from last_err" engine \
+# PROMOTED to mutate() 2026-08-10, and NOT because the byte-identical finding was wrong — it is
+# still correct, and this row's previous justification correctly forbade promoting on BEHAVIOURAL
+# grounds. What changed is the KIND of assertion that now covers it.
+#
+# The restore suite used to assert the guard with a whole-file `grep -qE "tr '\n' ' '"` over the
+# engine. That is satisfied by the COMMENT describing the guard and by the two `crane auth login`
+# interpolations, so deleting the guard from last_err left the suite green — the assertion named
+# the token, not the thing. #7379 re-anchored it to the function body
+# (`sed -n '/^last_err() {/,/^}/p' | grep -qE …`), which makes this mutation detectable
+# STRUCTURALLY. No fixture separates the two implementations and none ever will; a source-anchored
+# assertion is the correct instrument for a guard whose output is by construction unobservable,
+# and this file's own doctrine is that a guard nothing can detect the removal of is one a later
+# edit deletes with everything still green.
+#
+# So the standing instruction still holds for behavioural promotion: do not promote on the claim
+# that a capture distinguishes them. Promote only while a source-anchored assertion exists — if
+# that assertion is ever removed or loosened, this row must go back to expect_survive.
+mutate "E22 engine workflow-command injection guard dropped from last_err" engine \
   "tail -c 400 \"\$1\" 2>/dev/null | tail -n 1 | tr '\\n' ' ' | sed 's/[[:space:]]*\$//' || true" \
-  "tail -c 400 \"\$1\" 2>/dev/null | tail -n 1 || true" \
-  'REDUNDANT GIVEN THE LINE-TAIL, measured not argued: with tail -n 1 the capture is one line and command substitution strips its trailing newline, so removing the tr+sed chain yields a byte-identical string and no fixture can distinguish the two. Kept as defence-in-depth because it becomes load-bearing the moment tail -n 1 is removed, and THAT removal is what E21 mutates. Do not promote this to mutate() again without first showing a capture where the two implementations differ.'
+  "tail -c 400 \"\$1\" 2>/dev/null | tail -n 1 || true"
 
 # Anchored on the CONDITION ALONE. The previous anchor spanned this line and the `for _seam in`
 # below it, so inserting a comment between them (which a later fix did) broke the anchor and
@@ -370,7 +433,7 @@ mutate "E02 ZOT_PUSH_TOKEN emptiness check removed" engine \
   '[[ -n "${ZOT_PUSH_TOKEN:-}" ]] || die 5 ' ': # '
 
 mutate "E03 blob-completeness verification (crane validate) removed" engine \
-  'if ! crane_capture "$WORK/val.out" "$WORK/val.err" validate $SINK_TLS_FLAG --remote "$dst"; then' \
+  'if ! crane_capture "$WORK/val.out" "$WORK/val.err" validate $SINK_TLS_FLAG --remote "${dst_repo}@${dst_digest}"; then' \
   'if false; then'
 
 mutate "E04 digest parity comparison inverted to always match" engine \
@@ -447,6 +510,79 @@ mutate "E23 argv value-presence guard removed (missing flag value spins forever)
   '[[ $# -ge 2 ]] || die 1 "$1 requires a value (none was supplied)."' \
   ': # guard removed'
 
+# ── verification 2 per-child blob completeness (#7378 / PR #7379). ────────────────────────────
+# These eight rows cover the guards that change made load-bearing. Without them this battery
+# dispatched 45 against a floor of 45 while certifying PRE-#7379 code only — a coverage claim
+# with a hole exactly the shape of the newest code on the script that authorizes destroying
+# production's only pull path, which is the failure mode E07's justification names.
+#
+# Each was proven RED before being written here, in a sandbox run against the restore suite this
+# battery already uses as the `engine` oracle (control green -> mutant RED -> restore green).
+
+mutate "E24 attestation detection loses the platform-arch signal" engine \
+  ' || "$c_arch" == "unknown" ' \
+  ' '
+
+mutate "E25 attestation detection loses the annotation signal" engine \
+  '"$c_type" == "attestation-manifest" || ' \
+  ''
+
+# ANCHORS BELOW CARRY THEIR INDENTATION ON PURPOSE.
+#
+# #7410 added a SECOND copy of three constructs this battery anchors on — the child-count
+# equality, the `// "-"` digest sentinel and the index classifier — inside verify_blobs_of's new
+# signature-index walk. `py_replace` requires EXACTLY ONE match and hard-fails otherwise, so the
+# harness stopped with `anchor matched 2 times` and exit 2 (no verdict) rather than silently
+# mutating whichever copy came first. That fail-closed behaviour is the only reason this was
+# visible at all: a substring anchor that resolves to the WRONG copy reports a caught mutation
+# for a guard it never touched.
+#
+# Verification 2's copies sit at 4-space indent, verify_blobs_of's at 6. The indentation is the
+# discriminator, so it is part of the anchor. If either site is ever re-indented, this battery
+# fails loudly (exit 2) rather than drifting — which is the correct direction.
+expect_survive "E26 IMAGE index child count equality weakened (partial enumeration passes)" engine \
+  $'\n    (( n_children == n_declared )) || \\' \
+  $'\n    (( n_children >= 0 )) || \\' \
+  'UNREACHABLE BY CONSTRUCTION on the index branches, and measured: the `// "-"` sentinel makes `@tsv` emit exactly one NON-EMPTY row per declared element, and `@tsv` escapes an embedded newline or tab rather than splitting on it (verified against jq for both) — so the row count and `.manifests | length` cannot disagree through any manifest a fixture can express. The guard is kept as defense-in-depth against a future edit that DECOUPLES the stream from the count, which is not hypothetical: #7410 shipped exactly that divergence in the sibling manifest branch, where an unconditional config slot emitted a row the conditional count did not include. PROMOTE THIS BACK TO `mutate` the moment the enumeration and the count stop being derived from the same array — that is the condition, not a vague 'if it becomes testable'.'
+
+mutate "E27 platform-child floor removed (an attestation-only index reads as restored)" engine \
+  '(( n_platform > 0 )) ||' \
+  'false && (( n_platform > 0 )) ||'
+
+mutate "E28 nested-index child no longer fails closed (recurses into the #7378 gunzip class)" engine \
+  '*"image.index.v1+json"|*"manifest.list.v2+json")' \
+  '"__never_matches__")'
+
+mutate "E29 IMAGE index child digest sentinel dropped (@tsv field collapse returns)" engine \
+  '[(.digest // "-"), (.mediaType // "-")' \
+  '[(.digest // ""), (.mediaType // "-")'
+
+mutate "E30 blob presence check removed (a manifest can outlive its layers)" engine \
+  'if ! crane_capture /dev/null "$blberr" blob $SINK_TLS_FLAG "${repo}@${b}"; then' \
+  'if false; then'
+
+mutate "E31 cosign signature payload no longer blob-verified (digest read-back only)" engine \
+  '  verify_blobs_of "${TARGET}/${repo}" "${TARGET}/${repo}@${sig_dst_digest}" \' \
+  '  false && verify_blobs_of "${TARGET}/${repo}" "${TARGET}/${repo}@${sig_dst_digest}" \'
+
+# ── E32-E34: the signature-index walk (the regression that refused run 31392395980). ──────────
+# E31 above proved the signature is blob-verified AT ALL. It could not see that the enumeration
+# assumed the legacy simplesigning shape, because the only signature fixture WAS that shape. The
+# rows below pin the shape handling itself, which is what actually broke.
+
+mutate "E32 signature-index detection removed (an index falls through to config+layers and reads as blobless)" engine \
+  'if   (.manifests | type) == "array"      then "index"' \
+  'if   false                              then "index"'
+
+mutate "E33 signature-index depth guard removed (a nested index recurses instead of failing closed)" engine \
+  '      if (( depth > 0 )); then' \
+  '      if false; then'
+
+expect_survive "E34 signature-index child-count equality weakened to a lower bound (a truncated walk reads as verified)" engine \
+  '      (( n_children == n_declared )) || \' \
+  '      (( n_children >= 0 )) || \' \
+  'UNREACHABLE BY CONSTRUCTION on the index branches, and measured: the `// "-"` sentinel makes `@tsv` emit exactly one NON-EMPTY row per declared element, and `@tsv` escapes an embedded newline or tab rather than splitting on it (verified against jq for both) — so the row count and `.manifests | length` cannot disagree through any manifest a fixture can express. The guard is kept as defense-in-depth against a future edit that DECOUPLES the stream from the count, which is not hypothetical: #7410 shipped exactly that divergence in the sibling manifest branch, where an unconditional config slot emitted a row the conditional count did not include. PROMOTE THIS BACK TO `mutate` the moment the enumeration and the count stop being derived from the same array — that is the condition, not a vague 'if it becomes testable'.'
+
 restore_pristine
 
 echo
@@ -458,8 +594,8 @@ echo
 # equality: the count is developer-incremented, so `-eq` would turn every added mutation into a
 # spurious failure. Derived from a green run, not from an expected number.
 dispatched=$(( caught + survived + expected ))
-if (( dispatched < 45 )); then
-  echo "harness: only ${dispatched} mutations were dispatched, floor is 45. Either mutations were removed without lowering this floor deliberately, or the dispatch itself is broken — in both cases the verdict below is not reportable." >&2
+if (( dispatched < 56 )); then
+  echo "harness: only ${dispatched} mutations were dispatched, floor is 56. Either mutations were removed without lowering this floor deliberately, or the dispatch itself is broken — in both cases the verdict below is not reportable." >&2
   exit 2
 fi
 
