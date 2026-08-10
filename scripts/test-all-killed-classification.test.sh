@@ -286,7 +286,9 @@ else
 fi
 
 # AC8b: the LAST ===-prefixed line must be the terminal marker, not the breakdown.
-last_eq=$(grep -E '^===' <<<"$A1_OUT" | tail -1)
+# `|| true`: no match is a normal answer here (it means the runner emitted no
+# ===-line at all), and the assertion below distinguishes that from a wrong one.
+last_eq=$(grep -E '^===' <<<"$A1_OUT" | tail -1 || true)
 if [[ "$last_eq" =~ ^===\ [0-9]+/[0-9]+\ suites\ passed\ ===$ ]]; then
   pass "AC8b — the last ===-prefixed line is the terminal marker, not the breakdown"
 else
