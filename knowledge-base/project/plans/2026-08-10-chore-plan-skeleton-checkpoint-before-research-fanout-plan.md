@@ -674,6 +674,28 @@ change.
 
 ## Test Scenarios
 
+> **Superseded (v3).** T1-T15 below all exercise the `pipeline_resume:` cursor, which was assessed
+> and dropped — see the banner at the top of this file. They are retained as a record of what the
+> rejected design was expected to do. The scenarios that apply to what SHIPPED are pinned
+> mechanically by `plugins/soleur/test/plan-skeleton-checkpoint.test.ts` (18 assertions, 8 mutations
+> proven RED against a green control):
+>
+> | Shipped scenario | Pinned by |
+> |---|---|
+> | Skeleton is written before any Task spawn | Phase 0.7 sits after 0.6 and before Phase 1 |
+> | Filename derived exactly once, pre-research | single `Convert title to filename` site, before Phase 1 |
+> | Research persisted, and only when whole | `## Research Insights` after 1.7 + the single-Edit rule |
+> | A finished MINIMAL plan is not re-planned | `## Overview` absent from MINIMAL; not a conjunct |
+> | Completion predicate agrees with the templates | `## Acceptance Criteria` in all three detail levels |
+> | Body `branch:` never selects a plan | body-collision fixture, executed |
+> | A `---` block in the body never re-arms the read | re-entrant-range fixture, executed |
+> | A quoted `branch:` still resolves | quoted fixture (the non-empty positive control) |
+> | No leading frontmatter reads as empty | no-frontmatter fixture (#4724) |
+> | The cursor stays dropped | drift guard over `plugins/soleur/skills/` |
+>
+> There is no browser or API surface in this change, so `/soleur:qa` has nothing executable to run.
+
+
 | # | Scenario | Expected |
 |---|---|---|
 | T1 | Fresh run, no existing file | Skeleton written before any Task spawn; cursor `research` |
