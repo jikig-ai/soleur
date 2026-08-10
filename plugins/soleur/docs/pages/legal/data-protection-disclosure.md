@@ -107,7 +107,10 @@ three is enough on its own, and more than one may be true at the same time.
 | Plugin-local — User's machine, User's credentials, User's purposes | Neither Controller nor Processor |
 | A Jikigai machine or a Jikigai-held credential, used on the User's instructions | **Processor** |
 | A Jikigai machine or a Jikigai-held credential, used for a purpose Jikigai has chosen | **Controller** |
-| The User's own machine and the User's own credentials, but a purpose Jikigai has chosen — for example Jikigai reading a repository the User has given it access to, in order to measure how a programme is progressing | **Controller** |
+| Neither a Jikigai-run session nor a Jikigai-held AI-provider credential, but a purpose Jikigai has chosen — for example Jikigai reading a repository the User has given it access to, in order to measure how a programme is progressing | **Controller** |
+
+These rows are not mutually exclusive. More than one may describe the same activity at the same
+time, and where they do, each role applies to the limb it describes.
 
 - **(a) The Processor role.** To the extent Jikigai processes the User's content on the User's
   instructions during an operator-assisted session, Jikigai acts as a Processor and the User acts as
@@ -117,12 +120,12 @@ three is enough on its own, and more than one may be true at the same time.
   own right and relies on its legitimate interests under Article 6(1)(f). The interests pursued, the
   balancing, the position on people who did not provide their data to Jikigai, and the right to object
   are set out in GDPR Policy, Section 3.14.
-- **(c) Instrument first.** Jikigai does not carry out operator-assisted processing without first
-  agreeing a written Article 28(3) instrument with the User. Where such an instrument is agreed, it —
-  not this Disclosure — addresses sub-processor authorisation, international transfers, breach
-  notification, audit rights, retention, and assistance with data-subject requests. This limb concerns
-  the Processor role in (a) only: Article 28(3) governs processing carried out on a controller's
-  instructions, and it supplies no basis for the Controller roles in (b) and (e).
+- **(c) Instrument first.** Jikigai **will not** carry out operator-assisted processing without
+  first agreeing a written Article 28(3) instrument with the User. Where such an instrument is
+  agreed, it — not this Disclosure — addresses sub-processor authorisation, international transfers,
+  breach notification, audit rights, retention, and assistance with data-subject requests. This limb
+  concerns the Processor role in (a) only: Article 28(3) governs processing carried out on a
+  controller's instructions, and it supplies no basis for the Controller roles in (b) and (e).
 - **(d) Not the default.** Operator-assisted processing never happens unless the User asks for it. A
   User may instead require that any such session run on the User's own machine under the User's own
   credentials. That removes the Article 28 Processor limb in (a) — the User's own provider
@@ -132,11 +135,11 @@ three is enough on its own, and more than one may be true at the same time.
   on, or otherwise grants Jikigai access to, a repository or other store of the User's content, and
   Jikigai reads it for a purpose Jikigai has chosen rather than one the User has instructed — for
   example to measure how an early-access programme is progressing — Jikigai is a **Controller** for
-  that reading. This case is distinct from (a) to (d): it does not depend on the User having asked for
-  a session, it involves no Jikigai machine and no Jikigai-held credential, and it continues for as
-  long as the access lasts rather than ending with a session. It is described for data subjects in
-  GDPR Policy Section 3.14 and Privacy Policy Sections 4.2 and 8.1. A User may end it at any time by
-  withdrawing the access.
+  that reading. This case is distinct from (a) to (d): it does not depend on the User having asked
+  for a session, the reading does not by itself send the User's content to an AI provider under a
+  Jikigai-held credential, and it continues for as long as the access lasts rather than ending with
+  a session. It is described for data subjects in GDPR Policy Section 3.14 and Privacy Policy
+  Sections 4.2 and 8.1. A User may end it at any time by withdrawing the access.
 
 ### 2.2 User's Responsibilities as Controller
 
@@ -230,7 +233,7 @@ The Plugin does not process Personal Data on behalf of Users (see Section 2.1). 
 
 The paragraph above describes plugin-local processing, where the User contracts directly with any AI provider under the User's own credentials, and it remains accurate for that configuration.
 
-**Operator-assisted sessions are the exception.** Where a session runs under a **Jikigai-held** credential rather than the User's own, the AI provider processing that content — **Anthropic PBC**, 548 Market Street, San Francisco, CA 94104, United States — is engaged as **Jikigai's** Sub-processor for that session rather than as the User's own provider. Because that Sub-processor is established in the United States, such a session involves a transfer of personal data outside the European Economic Area. Jikigai does not carry out operator-assisted processing without first agreeing a written instrument with the User; where such an instrument is agreed, it settles authorisation under Article 28(2), the basis relied on for that transfer, and the applicable retention position. **A copy of the safeguards relied on for the transfer is available from <legal@jikigai.com> on request.** A User who prefers to avoid this entirely may require that the session run under the User's own credentials, in which case the AI provider remains the User's own processor and Jikigai is not part of the chain.
+**Operator-assisted sessions are the exception.** Where a session runs under a **Jikigai-held** credential rather than the User's own, the AI provider processing that content — **Anthropic PBC**, 548 Market Street, San Francisco, CA 94104, United States — is engaged as **Jikigai's** Sub-processor for that session rather than as the User's own provider. Because that Sub-processor is established in the United States, such a session involves a transfer of personal data outside the European Economic Area. Jikigai **will not** carry out operator-assisted processing without first agreeing a written instrument with the User; where such an instrument is agreed, it settles authorisation under Article 28(2), the basis relied on for that transfer, and the applicable retention position. To ask what safeguards apply to that transfer, and to obtain a copy of them, write to <legal@jikigai.com>. A User who prefers to avoid this entirely may require that the session run under the User's own credentials, in which case the AI provider remains the User's own processor and Jikigai is not part of the chain.
 
 ### 4.2 Service Processors
 
@@ -425,6 +428,8 @@ Users may uninstall the Plugin at any time. Upon removal:
 - **(c)** Users are responsible for deleting or retaining Local Data according to their own data retention policies.
 
 **Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c.
+
+Limb (b) above describes Local Data, which is never transmitted to Jikigai. It does not describe content sent to an AI provider under a **Jikigai-held** credential during an operator-assisted session: that provider holds a copy under the terms applying to Jikigai's own account, for a period Jikigai does not set and cannot shorten once the content has been sent, and removing the Plugin does not reach it. Retention for such a session is addressed in the written instrument agreed with the User before it takes place.
 
 ### 10.2 Docs Site and Repository Data
 
