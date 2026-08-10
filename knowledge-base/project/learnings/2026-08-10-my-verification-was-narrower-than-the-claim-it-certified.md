@@ -6,7 +6,7 @@ problem_type: best_practice
 component: tooling
 severity: high
 tags: [verification-scope, negative-space-assertions, grep-anchoring, set-e, fixture-space, review-panel]
-related_files: plugins/soleur/test/generate-kb-index.test.sh, knowledge-base/engineering/architecture/decisions/ADR-173-kb-index-exclusion-supersedes-per-feature-archival.md
+related_files: plugins/soleur/test/generate-kb-index.test.sh, knowledge-base/engineering/architecture/decisions/ADR-174-kb-index-exclusion-supersedes-per-feature-archival.md
 ---
 
 # Every verification I wrote this session was narrower than the claim it certified
@@ -64,7 +64,7 @@ failed silently — in the commit that added it.
 
 ### 4. An absolute count asserted from inside the corpus it counts
 
-ADR-173 stated `7,481 → 6,199` while `INDEX.md` in the same commit said
+ADR-174 stated `7,481 → 6,199` while `INDEX.md` in the same commit said
 `6,200`. Both were measured correctly. The ADR is a file in the tree being
 counted, so writing the number changed it. An absolute post-count in that
 position can never be self-consistent.

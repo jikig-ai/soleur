@@ -68,7 +68,7 @@ The 250 are dirs whose entire content is session scratch — no spec, no tasks. 
 them is correct. The genuine residual is **11 dirs** holding a long-tail file plus
 `session-state.md`. Two of those are not feature dirs at all — `specs/external/`
 (vendor interface reference) and `specs/openhands-portability/` — and are named
-explicitly in ADR-173's Consequences rather than folded into the scratch count.
+explicitly in ADR-174's Consequences rather than folded into the scratch count.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -78,11 +78,22 @@ explicitly in ADR-173's Consequences rather than folded into the scratch count.
 | Spec G1: "with no predicate and no judgment call" | The mechanism **is** a predicate | Spec amended: "a single mechanical predicate, no per-file judgment" |
 | Spec TR2: single-source constant across two `find`s | Second walk is rooted at `$LEARNINGS_DIR` (`:22`) and cannot reach `project/specs/`. Verified by reading both | Dropped as unnecessary — one edit site |
 | **v1: "the test suite is an orphan, registered nowhere"** | **FALSE.** `scripts/test-all.sh` (the `for f in plugins/soleur/test/*.test.sh` glob loop) registers it via a glob loop (`for f in plugins/soleur/test/*.test.sh …; do run_suite "$f" bash "$f"; done`). It is item 18 of 60, runs under `want_scripts` (true for the default `TEST_GROUP=all`), and passes 24/0 today | **v1's Phase 1 deleted.** The `grep -c 'generate-kb-index' scripts/test-all.sh` that returned 0 is a false negative by construction — glob registrations never name their files. Adding a `run_suite` line would have made the suite run **twice**. `2026-04-14-plan-prescribed-test-framework-not-available.md:41` already recorded "picked up automatically by `scripts/test-all.sh`"; v1 contradicted it without citation |
-| **v1: "ADR-171 is the highest on origin/main"** | **FALSE.** `ADR-172-ci-side-observability-emission-and-read-only-registry-inventory.md` merged to main today. v1's check read a stale local ref — no `git fetch` preceded it | Rebased onto `origin/main`; next free ordinal re-derived after fetch: **ADR-173** |
+| **v1: "ADR-171 is the highest on origin/main"** | **FALSE.** `ADR-172-ci-side-observability-emission-and-read-only-registry-inventory.md` merged to main today. v1's check read a stale local ref — no `git fetch` preceded it | Rebased onto `origin/main`; next free ordinal re-derived after fetch: **ADR-173**. That ordinal then collided a second time at ship — see the note below |
 | **v1 predicate interpolated `$KB_DIR` into `-path`** | **Silently no-ops on a trailing slash.** `KB_DIR=knowledge-base/` → patterns become `…//project/specs/*`, which `find` never emits, so `-not -path` is always true and the exclusion vanishes: 7,477 indexed, exit 0, green suite. The pre-existing `rel="${f#"$KB_DIR/"}"` (`:62`) breaks identically, emitting absolute paths | Non-interpolated `'*/project/specs/*'` (immune, measured identical both forms) **plus** `KB_DIR="${KB_DIR%/}"` normalization at `:20`, which also fixes the pre-existing `rel=` bug |
 | v1: `-name 'spec.md'` vs `specs/*/spec.md` is a checked trap | **Inert.** The two forms are empirically indistinguishable across the whole corpus, because arm 1 already admits everything outside `specs/`. Only a depth-1 `specs/spec.md` discriminates; zero exist | Claim and its task deleted. `-name` is kept on the honest grounds that it is simpler and depth-agnostic |
 | Nested plan `plans/feat-one-shot-reconcile-no-workspace-match/plan.md` | Verified present, only nested plan | Kept as fixture F7 |
 | ADR-084 §5 needs `decision-challenges.md` readable | `ship` Phase 6 step 2.5 reads it by filesystem path, not via INDEX.md | No conflict, independently confirmed by architecture-strategist |
+
+> **Addendum — 2026-08-10 (#7399), second ordinal collision at ship.** ADR-173 was free
+> when re-derived above and was still free at the `check-adr-ordinals.sh` run immediately
+> before `gh pr ready`. It was taken minutes later by sibling PR #7407
+> (`ADR-173-bare-config-polarity-for-linked-worktrees.md`), which merged while this branch
+> was in its exit gate. The local gate could not see it: `check-adr-ordinals.sh` compares
+> within the working tree, and the collision only becomes visible **after** merging
+> `origin/main`. Renumbered to **ADR-174**, swept scoped to this branch's own diff so the
+> sibling's ADR-173 citations in `worktree-manager.sh`, `git-worktree/SKILL.md` and ADR-099
+> were untouched. Two collisions on one branch: treat a branch-picked ordinal as
+> provisional until the merge commit that ships it exists.
 
 **Premise Validation.** #7399/#7400/#7401 open; PR #7398 open. ADR-084 read in full — it
 decides where headless decision challenges are recorded, and no rejected alternative covers
@@ -231,9 +242,9 @@ generated artifact and this is the one PR where a full regeneration is legible.
 Comment on #7401 that its remaining scope is the CI freshness gate only, and name
 `plugins/soleur/test/c4-model-freshness.test.sh` as the precedent to copy.
 
-### Phase 6 — ADR-173
+### Phase 6 — ADR-174
 
-`ADR-173-kb-index-exclusion-supersedes-per-feature-archival.md`, `status: adopting`
+`ADR-174-kb-index-exclusion-supersedes-per-feature-archival.md`, `status: adopting`
 (established vocabulary — 7 existing ADRs use it).
 
 Must record: the decision; the measurement; the ADR-084 §5 collision with
@@ -254,12 +265,12 @@ re-verifies; if it moves, sweep plan + tasks + AC in one edit.
 - `.openhands/skills/learnings-researcher/SKILL.md:15` — verbatim duplicate of the same claim
 - `plugins/soleur/skills/brainstorm/SKILL.md:232` — reasons from one exclusion class (`/archive/`); there are now two
 - `plugins/soleur/skills/spec-templates/SKILL.md:73-78` — state the rule where spec dirs are created; this is the only discoverability fix that reaches authors
-- `plugins/soleur/skills/archive-kb/SKILL.md` — superseded-in-part pointer to ADR-173 + #7400, so nobody rebuilds the reverted gate. NG2 covers only the *script*
+- `plugins/soleur/skills/archive-kb/SKILL.md` — superseded-in-part pointer to ADR-174 + #7400, so nobody rebuilds the reverted gate. NG2 covers only the *script*
 - `knowledge-base/INDEX.md`, `kb-tags.txt`, `kb-categories.txt` — Phase 5 regeneration
 
 ## Files to Create
 
-- `knowledge-base/engineering/architecture/decisions/ADR-173-kb-index-exclusion-supersedes-per-feature-archival.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-174-kb-index-exclusion-supersedes-per-feature-archival.md`
 
 ## Files explicitly NOT touched
 
@@ -285,7 +296,7 @@ CPO sign-off carried forward from the brainstorm. `user-impact-reviewer` fires a
 ## Architecture Decision (ADR/C4)
 
 ### ADR
-Create **ADR-173**, `status: adopting` — Phase 6.
+Create **ADR-174**, `status: adopting` — Phase 6.
 
 ### C4 views
 **No C4 impact**, independently confirmed by architecture-strategist against all three
@@ -323,7 +334,7 @@ component granularity.
       "excludes `**/archive/`" or "lists all KB files", and it does not look in
       `knowledge-base/`. Sweep semantically across all three roots and classify every hit:
       `grep -rn "0\*\* .\/archive\/. rows\|excludes .\*\*\/archive\/\|lists all KB files\|every KB file\|all KB files\|lists every non-archived" knowledge-base/ plugins/ .openhands/`
-- [ ] **AC10** `ADR-173-*.md` exists, `status: adopting`, cites ADR-084 §5 + `ship/SKILL.md` (sentence beginning "The practical consequence: compound is the last point"), and its Alternatives table names all four losing options. Ordinal re-verified against fetched `origin/main` at ship.
+- [ ] **AC10** `ADR-174-*.md` exists, `status: adopting`, cites ADR-084 §5 + `ship/SKILL.md` (sentence beginning "The practical consequence: compound is the last point"), and its Alternatives table names all four losing options. Ordinal re-verified against fetched `origin/main` at ship.
 - [ ] **AC11** INDEX.md, `kb-tags.txt`, `kb-categories.txt` regenerated in a final standalone commit; the generated INDEX.md matches a fresh run of the merged script.
 - [ ] **AC12** `bash -n scripts/generate-kb-index.sh` clean; full `bash scripts/test-all.sh` green, with the suite appearing exactly **once** in the runner output.
 
@@ -357,7 +368,7 @@ None. Every step is automatable in-session.
 6-agent panel, 2026-08-10. All findings below were independently re-verified before applying.
 
 - **R1 (P0, 4 agents)** — v1's "orphan suite" premise was false; `test-all.sh`'s glob loop registers it by glob. v1's Phase 1, AC7, and a standalone commit deleted. v1 asserted a bare token against one enumeration form **two sections after prohibiting exactly that** — the defect it opened by warning about.
-- **R2 (P0, architecture-strategist)** — ADR-172 was already taken on `origin/main`; v1's ordinal came from a stale ref with no `git fetch`. Rebased; renumbered to ADR-173.
+- **R2 (P0, architecture-strategist)** — ADR-172 was already taken on `origin/main`; v1's ordinal came from a stale ref with no `git fetch`. Rebased; renumbered to ADR-174.
 - **R3 (P0, dhh + kieran)** — `$KB_DIR` interpolated into `-path` made the predicate form-dependent; a trailing slash silently disabled it (7,477 indexed, exit 0, green). Non-interpolated patterns + `KB_DIR%/` normalization, which also fixes the pre-existing `rel=` bug at `:62`.
 - **R4 (cto)** — 79% of spec dirs have no `spec.md`; the approved mechanism would have de-indexed ~1,209 features. Re-confirmed with the operator; mechanism changed to `spec.md` + `tasks.md`.
 - **R5 (kieran)** — 4 mutations survived v1's battery (M9, M13, M15, and the arm-2 form change); M7's F5 attribution was wrong (F5 had no sibling and could not discriminate it). F5 given a sibling; F11–F15 and M9/M13/M14/M15/M16 added.

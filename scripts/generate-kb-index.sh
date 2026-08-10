@@ -41,7 +41,7 @@ fi
 
 # Collect all eligible .md files (exclude archive/, INDEX.md, non-.md, symlinks)
 #
-# The third group implements the spec-directory allowlist (ADR-173):
+# The third group implements the spec-directory allowlist (ADR-174):
 # a spec directory contributes its spec.md and its tasks.md — the two files
 # that NAME a feature — plus anything the author deliberately organised into a
 # SUBDIRECTORY. Files sitting flat alongside spec.md/tasks.md are
@@ -50,7 +50,7 @@ fi
 #
 # An allowlist, not a denylist: filename invention is the norm here, so any
 # enumerated deny set is stale the next time someone writes a phase0-evidence.md.
-# ADR-173 holds the dated measurements; deliberately not repeated here, because
+# ADR-174 holds the dated measurements; deliberately not repeated here, because
 # a count in a comment rots and this comment is also --help output.
 #
 # The fourth arm is what keeps the rule FLAT. `-path '*/project/specs/*/*/*'`

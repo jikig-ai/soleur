@@ -7,7 +7,7 @@ participants: founder, CTO, CPO, CMO, COO
 
 # Knowledge Base Retrieval Improvement
 
-> **Superseded in part 2026-08-10 (#7399, ADR-173):** "every KB file" below was
+> **Superseded in part 2026-08-10 (#7399, ADR-174):** "every KB file" below was
 > already inexact (`**/archive/` was never indexed) and is now narrower still —
 > inside `knowledge-base/project/specs/<feature>/`, INDEX.md carries only
 > `spec.md` and `tasks.md`. An empty INDEX grep is not proof a file is absent.

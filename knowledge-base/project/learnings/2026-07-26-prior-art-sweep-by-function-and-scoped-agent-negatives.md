@@ -82,7 +82,7 @@ read"). **That is false**, and review caught it. The agent's Step 0
 
 What is actually true is narrower, and more useful:
 
-- A scoped agent's negative is bounded by **its index**, and `INDEX.md` excludes two classes — **0** `/archive/` rows AND per-feature working state under `project/specs/` (ADR-173) — so
+- A scoped agent's negative is bounded by **its index**, and `INDEX.md` excludes two classes — **0** `/archive/` rows AND per-feature working state under `project/specs/` (ADR-174) — so
   archived artifacts are genuinely outside its reach.
 - Everything else it missed, it missed for the *same reason as (1)*: the query vocabulary was the vendor's name,
   and INDEX.md files the prior art under the function's name.
@@ -116,7 +116,7 @@ When an external-product evaluation's prior-art sweep returns nothing:
 3. **Follow an ADR's frontmatter citations, and if the path 404s, search for the basename** before concluding
    the artifact is gone. Archiving rewrites paths; frontmatter is not updated.
 4. **Never restate a scoped agent's negative as a global one — and check its INDEX, not its charter.** The
-   binding limit on `learnings-researcher` is that `knowledge-base/INDEX.md` excludes `**/archive/` **and per-feature working state under `project/specs/`** (ADR-173), not that
+   binding limit on `learnings-researcher` is that `knowledge-base/INDEX.md` excludes `**/archive/` **and per-feature working state under `project/specs/`** (ADR-174), not that
    it may only read `learnings/`. So: re-run the INDEX grep yourself with function vocabulary, and treat
    archived artifacts as unproven by any INDEX-following agent.
 
@@ -185,7 +185,7 @@ Inward (repo prior art) and outward (vendor facts), it is one rule.
 3. **Scoped subagent negative reported as repo-wide — and my first explanation of *why* was also wrong.**
    `learnings-researcher` said "repository-wide"; I attributed that to a charter limited to `learnings/`.
    Review refuted it: the agent's Step 0 greps `INDEX.md` across all domains, and INDEX.md line 39 carries
-   ADR-030. The real limit is that INDEX.md holds **0** `/archive/` rows and no per-feature working state under `project/specs/` (ADR-173), plus the same vendor-vocabulary
+   ADR-030. The real limit is that INDEX.md holds **0** `/archive/` rows and no per-feature working state under `project/specs/` (ADR-174), plus the same vendor-vocabulary
    problem as #2. **Recovery:** read the agent definition and INDEX.md directly.
    **Prevention:** corrected in the Root cause and Solution sections; the prescription is now "re-run the INDEX
    grep with function vocabulary", not "check the agent's charter".

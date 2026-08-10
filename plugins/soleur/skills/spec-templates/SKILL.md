@@ -79,7 +79,7 @@ knowledge-base/project/specs/feat-<name>/
 
 Only `spec.md` and `tasks.md` are listed in `knowledge-base/INDEX.md`. Every other
 file sitting **flat** in a spec directory is treated as branch-lifetime working state
-and is on disk but unindexed (ADR-173). A file you deliberately organise into a
+and is on disk but unindexed (ADR-174). A file you deliberately organise into a
 **subdirectory** stays indexed — that is the escape hatch for durable content. If a file here is durable knowledge rather than scratch,
 either fold it into `spec.md` or file it under the knowledge-base domain it belongs
 to — do not rely on it being discoverable through the index.

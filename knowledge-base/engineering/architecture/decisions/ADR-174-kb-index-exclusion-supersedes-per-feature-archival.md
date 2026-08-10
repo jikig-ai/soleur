@@ -1,4 +1,4 @@
-# ADR-173: KB index exclusion supersedes per-feature archival
+# ADR-174: KB index exclusion supersedes per-feature archival
 
 - **Status:** Adopting — scoped to `project/specs/` only. Plans and brainstorms are untouched, so `archive-kb.sh` remains the sole de-indexing mechanism for those two classes. Flips to `accepted` when #7400 retires its spec/plan discovery paths.
 - **Date:** 2026-08-10

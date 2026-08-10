@@ -8,7 +8,7 @@ description: "This skill should be used when archiving completed knowledge-base 
 Archive brainstorms, plans, and spec directories for a completed feature branch.
 The script generates timestamps internally and uses `git mv` to preserve history.
 
-> **Superseded in part (ADR-173, #7399).** Archival's only real benefit was removing
+> **Superseded in part (ADR-174, #7399).** Archival's only real benefit was removing
 > rows from `knowledge-base/INDEX.md`, and that is now done at index-generation time:
 > inside a spec directory only `spec.md` and `tasks.md` are indexed. Do **not** build a
 > gate that forces archival before merge — a spec directory is live working state until

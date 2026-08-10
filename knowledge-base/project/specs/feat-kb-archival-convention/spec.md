@@ -10,7 +10,7 @@ branch: feat-kb-archival-convention
 pr: 7398
 brainstorm: knowledge-base/project/brainstorms/2026-08-10-kb-archival-convention-brainstorm.md
 plan: knowledge-base/project/plans/2026-08-10-fix-stop-indexing-per-feature-ephemeral-state-plan.md
-adr: knowledge-base/engineering/architecture/decisions/ADR-173-kb-index-exclusion-supersedes-per-feature-archival.md
+adr: knowledge-base/engineering/architecture/decisions/ADR-174-kb-index-exclusion-supersedes-per-feature-archival.md
 related:
   - knowledge-base/engineering/architecture/decisions/ADR-084-decision-classification-taxonomy-for-autonomous-question-surfacing.md
   - knowledge-base/project/learnings/2026-08-09-my-suites-were-hermetic-so-they-certified-a-gate-reached-through-a-dead-read.md
@@ -36,7 +36,7 @@ than knowledge: `session-state.md` is session scratch, and roughly ninety other 
 working filenames appear, about seventy-six of them exactly once.
 
 The pre-existing mechanism for removing a row was per-feature archival
-(`archive-kb.sh`), which has been decided against — see ADR-173. In short: it has no
+(`archive-kb.sh`), which has been decided against — see ADR-174. In short: it has no
 recorded purpose, it is structurally unable to reach `fix-*` spec dirs or topic-named
 plans (and reports success anyway), and its `git mv` collides with ADR-084 §5, which
 requires a spec directory to stay readable until `ship` Phase 6.

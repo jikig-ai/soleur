@@ -139,12 +139,12 @@ It dominates on every axis that produced this session:
 
 ### Two tiers, because they carry different risk
 
-> **Superseded in part by ADR-173.** The Tier 1 mechanism below (a denylist of three
+> **Superseded in part by ADR-174.** The Tier 1 mechanism below (a denylist of three
 > named classes; `spec.md` untouched; 2,408 rows) is NOT what shipped. 79% of live spec
 > dirs have no `spec.md`, so a `spec.md`-only allowlist would have de-indexed ~1,209
 > whole features. The shipped rule indexes `spec.md` AND `tasks.md` plus deliberate
 > subdirectories, and removes **1,275** rows. The claim below that `tasks.md` "should
-> never have been indexed" is reversed by ADR-173. Tier 2's sizing in this document is
+> never have been indexed" is reversed by ADR-174. Tier 2's sizing in this document is
 > stale for the same reason — see #7400.
 
 **Tier 1 — never index per-feature ephemeral working state.** No predicate, no

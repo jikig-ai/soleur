@@ -2678,6 +2678,7 @@ probe-discipline
 probe-failure-asymmetry
 probe-first
 probe-receipt
+probes
 proc-cmdline
 process
 process-env

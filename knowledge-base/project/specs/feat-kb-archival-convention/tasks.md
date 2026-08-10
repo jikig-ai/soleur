@@ -87,14 +87,14 @@ stop-the-line on the first command.
 
 ## Phase 6 — ADR + consumer prose
 
-- [x] 6.1 `git fetch origin main`, then re-derive the next free ordinal from **fetched** `origin/main`. ADR-172 is taken; expected next is ADR-173.
-- [x] 6.2 Author `ADR-173-kb-index-exclusion-supersedes-per-feature-archival.md`, `status: adopting`.
+- [x] 6.1 `git fetch origin main`, then re-derive the next free ordinal from **fetched** `origin/main`. ADR-172 was taken, so ADR-173 was authored. It collided a second time at ship — sibling PR #7407 landed its own ADR-173 while this branch was in its exit gate — so the shipped ordinal is **ADR-174**. Two collisions on one branch; the re-derivation has to happen after the merge commit exists, not before.
+- [x] 6.2 Author `ADR-174-kb-index-exclusion-supersedes-per-feature-archival.md`, `status: adopting`.
 - [x] 6.3 Record: ADR-084 §5 + `ship/SKILL.md` (sentence beginning "The practical consequence: compound is the last point"); the 79%-no-`spec.md` finding; Tier 2 sequencing; Alternatives covering keep-archival, delete-outright, denylist, and `spec.md`-only.
 - [x] 6.4 Amend `plugins/soleur/agents/engineering/research/learnings-researcher.md:15` — "INDEX.md lists every non-archived KB file with its title" is now false.
 - [x] 6.5 Amend `.openhands/skills/learnings-researcher/SKILL.md:15` — verbatim duplicate of the same claim.
 - [x] 6.6 Amend `plugins/soleur/skills/brainstorm/SKILL.md:232` — it reasons from one exclusion class (`/archive/`); there are now two.
 - [x] 6.7 Add 3 lines to `plugins/soleur/skills/spec-templates/SKILL.md:73-78` stating the rule where spec dirs are created. Only discoverability fix that reaches authors.
-- [x] 6.8 Add a superseded-in-part pointer to `plugins/soleur/skills/archive-kb/SKILL.md` (ADR-173 + #7400). NG2 covers the *script*, not the SKILL.
+- [x] 6.8 Add a superseded-in-part pointer to `plugins/soleur/skills/archive-kb/SKILL.md` (ADR-174 + #7400). NG2 covers the *script*, not the SKILL.
 - [x] 6.9 Amend `knowledge-base/project/specs/feat-kb-archival-convention/spec.md`: rewrite G1 ("a single mechanical predicate, no per-file judgment"), replace FR1 with the allowlist, delete TR2, strike absolute counts from FR3/TR5/ACs.
 - [x] 6.10 If the ordinal moved, sweep plan + this file + AC10 in the **same** edit.
 

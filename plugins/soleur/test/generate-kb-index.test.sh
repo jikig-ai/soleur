@@ -449,7 +449,7 @@ for doc in \
   "$REPO_ROOT/plugins/soleur/skills/brainstorm/SKILL.md" \
   "$REPO_ROOT/plugins/soleur/agents/engineering/research/learnings-researcher.md" \
   "$REPO_ROOT/.openhands/skills/learnings-researcher/SKILL.md" \
-  "$REPO_ROOT/knowledge-base/engineering/architecture/decisions/ADR-173-kb-index-exclusion-supersedes-per-feature-archival.md"
+  "$REPO_ROOT/knowledge-base/engineering/architecture/decisions/ADR-174-kb-index-exclusion-supersedes-per-feature-archival.md"
 do
   label="prose parity: $(basename "$(dirname "$doc")")/$(basename "$doc")"
   if [[ ! -f "$doc" ]]; then
