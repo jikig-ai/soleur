@@ -46,7 +46,10 @@ files); the cost came from three habits below, each of which multiplies.
    extra fix → CI → correction round.
 4. **Re-run a suite only when its inputs changed.** A green full-suite run against commit A
    still covers commit B when B touches only docs — verify the delta with targeted suites and
-   say which commit the full run covered.
+   say which commit the full run covered. **On RESUME, this heuristic inverts: a verification
+   claim you inherited (a handoff, a prior session's summary, `session-state.md`) is a statement
+   about a tree that may no longer exist — re-run it before relying on it.** #7397 resumed on
+   "bun shard rc=0 (2419/0)"; that shard was RED, reddened by a commit made after the claim.
 5. **Bound every command's output.** `git grep` over a tree containing generated JSON returns
    megabytes on one "line": use `':!*.json'`, `--name-only`, `| cut -c1-200`.
 6. **Delegate wide reads to a subagent** (`cm-delegate-verbose-exploration…`) — keep the
