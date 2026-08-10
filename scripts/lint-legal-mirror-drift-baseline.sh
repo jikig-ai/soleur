@@ -193,7 +193,13 @@ fi
 expected=$( { sed -nE 's/^EXPECTED_COUNT=([0-9]+)$/\1/p' \
                "$REPO_ROOT/apps/web-platform/scripts/check-tc-document-sha.sh" 2>/dev/null \
                || true; } | head -1 )
-live_pairs=$(ls "$CANONICAL_DIR"/*.md 2>/dev/null | grep -cE '.' || true)
+# Count via a nullglob array rather than `ls | grep -c`: parsing `ls` breaks on filenames
+# containing newlines (SC2010), and an empty directory would otherwise count the glob
+# pattern itself as one entry.
+shopt -s nullglob
+_canon_live=("$CANONICAL_DIR"/*.md)
+shopt -u nullglob
+live_pairs=${#_canon_live[@]}
 if [[ -n "$expected" && "$live_pairs" != "0" && "$live_pairs" != "$expected" ]]; then
   echo "::warning::${CANONICAL_DIR}/ holds ${live_pairs} docs; check-tc-document-sha.sh EXPECTED_COUNT=${expected}. Update it if intentional." >&2
 fi
