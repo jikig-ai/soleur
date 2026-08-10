@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   classifyDiscoverabilityResult,
   extractObservabilityBlock,
   matchExpected,
   parseCommand,
+  parseCredentialsRequired,
   parseExpected,
   rejectReason,
   type ExecResult,
@@ -873,14 +874,15 @@ describe("#6772 R1-R3 — reject-set coverage for the fail-open transition", () 
     expect(rejectReason(cmd) ?? "").toMatch(/shell-active|refusing/i);
   });
 
-  // R2 [both] — CPO CONDITION C1. This PR is what makes these commands
-  // executable: before the fix they parsed to the literal `>` and self-rejected
-  // at the shell-active gate. Folding joins with a SPACE and introduces no
-  // shell-active token, so the Step 10.5 reject does NOT cover them — the
-  // credentialed-CLI reject at Step 10.4 is the load-bearing control.
-  // `env -i` does not scrub the Doppler token: $HOME is preserved and the CLI
-  // reads a live dp.ct.* credential from its on-disk config under ~/.doppler/.
-  test("R2 folded doppler prd_terraform command is rejected as a credentialed CLI", () => {
+  // R2 [both] — originally CPO CONDITION C1, retargeted by #7393. This case was
+  // what the retired credentialed-CLI DENYLIST existed for: #6772 made folded
+  // scalars executable (they used to parse to the literal `>` and self-reject at
+  // the shell-active gate), and folding joins with a SPACE, so the shell-active
+  // reject covers none of that class.
+  //
+  // Under #7393 the same command is still rejected — now by the deny-by-default
+  // verb allowlist, which covers it without enumerating `doppler` at all.
+  test("R2 a folded credentialed command is rejected by the verb allowlist", () => {
     const block = obs(
       "discoverability_test:",
       "  command: >",
@@ -892,39 +894,57 @@ describe("#6772 R1-R3 — reject-set coverage for the fail-open transition", () 
     expect(cmd).toBe(
       "doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 90m --grep X",
     );
-    // The credentialed-CLI reject is the ONLY thing stopping this command.
-    // Proven without duplicating SUBST_REJECT_RE here (an inline copy would
-    // silently stop tracking the real reject set): swap the credentialed verb
-    // for an unauthenticated one and the command passes every other gate —
-    // so nothing but the verb reject covers this class.
+    // Proven non-vacuous without duplicating SUBST_REJECT_RE here (an inline
+    // copy would silently stop tracking the real reject set): swap the verb for
+    // an allowlisted one and the command passes every other gate — so nothing
+    // but the verb gate covers this class.
     expect(rejectReason(cmd.replace(/^doppler\b/, "curl"))).toBeNull();
-    expect(rejectReason(cmd) ?? "").toMatch(/credentialed CLI/i);
+    expect(rejectReason(cmd) ?? "").toMatch(/not on the probe-verb allowlist/i);
   });
 
-  test("R2b every credentialed CLI in the reject set is caught, including path-qualified", () => {
+  test("R2b the retired denylist's verbs stay rejected, and so do verbs it never named", () => {
+    // The regression guarantee: nothing the denylist caught may become
+    // reachable. The last two entries are the POINT of deny-by-default — a
+    // denylist could never have covered them.
     for (const cmd of [
       "doppler secrets get FOO --plain",
       "gh api /repos/x/y",
-      "/usr/local/bin/gh pr list",
       "aws s3 ls",
       "supabase db dump",
       "stripe events list",
+      "hcloud server list",
+      "wrangler deploy",
+      "terraform plan",
+      "flyctl status",
+      "vercel ls",
+      "some-future-vendor-cli whoami",
+      "kubectl get pods",
     ]) {
-      expect(rejectReason(cmd) ?? "").toMatch(/credentialed CLI/i);
+      expect(rejectReason(cmd) ?? "", cmd).toMatch(
+        /not on the probe-verb allowlist/i,
+      );
     }
+    // Path-qualified invocation is caught too — by the repo-relative program
+    // rule rather than by a `/` alternative in a verb alternation.
+    expect(rejectReason("/usr/local/bin/gh pr list") ?? "").toMatch(
+      /repo-relative/i,
+    );
   });
 
-  // R3 [both]: word boundaries keep legitimate probes runnable. A bare
-  // substring match would false-reject anything containing `gh` (e.g. `high`,
-  // `--flag=through`).
-  test("R3 unauthenticated probes are NOT rejected by the credentialed-CLI branch", () => {
+  // R3 [both]: legitimate probes stay runnable. Under the denylist this was
+  // about word boundaries (a bare substring match would false-reject anything
+  // containing `gh`, e.g. `--flag=through`). Under a first-token allowlist the
+  // substring class cannot arise at all — the invariant asserted is the one that
+  // still matters: these probes are not rejected.
+  test("R3 unauthenticated probes remain runnable", () => {
     for (const cmd of [
       "curl -fsS -o /dev/null --max-time 10 https://app.soleur.ai/api/health",
       "bun test plugins/soleur/test/preflight-discoverability-test.test.ts",
       "bash plugins/soleur/test/c4-model-freshness.test.sh",
+      // Would have been a substring false-reject under the retired denylist.
       "curl -fsS https://app.soleur.ai/highlights",
     ]) {
-      expect(rejectReason(cmd) ?? "").not.toMatch(/credentialed CLI/i);
+      expect(rejectReason(cmd), cmd).toBeNull();
     }
   });
 });
@@ -1040,7 +1060,7 @@ describe("#6772 SKILL.md wiring invariants", () => {
     expect(idx).toBeGreaterThan(-1); // anchor must resolve to the executable line
     return lines.slice(Math.max(0, idx - 6), idx + 4).join("\n");
   };
-  const credGate = () => gateWindow(/CMD_DEQ/);
+  const verbGate = () => gateWindow(/PROBE_VERB/);
   const shellGate = () => gateWindow(/shell-active|\$'\\n'/);
 
   test("Step 10.4 calls the extracted awk via git rev-parse, not CLAUDE_PLUGIN_ROOT", () => {
@@ -1054,16 +1074,20 @@ describe("#6772 SKILL.md wiring invariants", () => {
     expect(skill).toMatch(/refusing to fall through to Form B/);
   });
 
-  test("Step 10.4 carries the credentialed-CLI reject (CPO condition C1)", () => {
-    const g = credGate();
-    // The verb set, anchored inside the gate fence.
-    expect(g).toMatch(/\(doppler\|gh\|aws\|supabase\|stripe/);
-    // The word boundaries that keep `curl https://host/gh-pages` runnable.
-    expect(g).toMatch(/\(\^\|\[\[:space:\]\]\|\/\)/);
+  test("Step 10.4 carries the deny-by-default verb gate (#7393, ex-CPO condition C1)", () => {
+    const g = verbGate();
+    // The allowlist assignment must live inside the gate window, not merely
+    // somewhere in the file — a gate's own documentation must never be able to
+    // satisfy the gate's test (`cq-assert-anchor-not-bare-token`).
+    expect(g).toMatch(/PROBE_VERB_ALLOWLIST=/);
+    // The retired denylist alternation must be gone from the GATE. It is still
+    // legitimately named in the surrounding prose that records WHY it was
+    // retired, which is exactly why this asserts on the window.
+    expect(g).not.toMatch(/\(doppler\|gh\|aws\|supabase\|stripe/);
     // The gate must test the DEQUOTED copy — `"doppler"` / `\doppler` /
-    // `dopp""ler` all resolve to the same binary and bypassed the raw match.
+    // `dopp""ler` all resolve to the same binary and bypass a raw match.
     expect(g).toMatch(/CMD_DEQ="\$\{CMD\/\//);
-    expect(g).toMatch(/\[\[ "\$CMD_DEQ" =~ /);
+    expect(g).toMatch(/\[\[ "\$CMD_DEQ" /);
   });
 
   test("Step 10.5 reject set includes newline", () => {
@@ -1079,5 +1103,431 @@ describe("#6772 SKILL.md wiring invariants", () => {
     expect(check10![0]).toMatch(/inline/i);
     expect(check10![0]).toMatch(/block/i);
     expect(check10![0]).toMatch(/folded/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #7393 — probe-verb allowlist, sandboxed execution, declared-credentialed path
+// ---------------------------------------------------------------------------
+
+describe("#7393 A — deny-by-default probe-verb allowlist", () => {
+  // The eleven verbs are derived from a measured 632-command corpus of declared
+  // probes; every entry has >= 2 uses. Deny-by-default is the point: a verb that
+  // is not here is rejected, and widening is a reviewed one-line PR.
+  const ALLOWLISTED = [
+    "curl -fsS -o /dev/null -w '%{http_code}' https://app.soleur.ai/api/inngest",
+    "bash scripts/lint-workflows.sh --help",
+    "sh scripts/probe.sh",
+    "grep -c . AGENTS.md",
+    "rg --count PROBE_VERB_ALLOWLIST plugins/soleur/skills/preflight/SKILL.md",
+    "jq -r .version package.json",
+    "python3 scripts/lint-agents-rule-budget.py",
+    "node scripts/probe.mjs",
+    "bun test plugins/soleur/test/preflight-discoverability-test.test.ts",
+    "printf hello",
+    "git rev-parse HEAD",
+  ];
+
+  test("A1 every allowlisted verb is accepted", () => {
+    for (const cmd of ALLOWLISTED) {
+      expect(rejectReason(cmd), `expected null for: ${cmd}`).toBeNull();
+    }
+  });
+
+  test("A2 a verb outside the allowlist is rejected", () => {
+    for (const cmd of [
+      "doppler secrets get FOO --plain",
+      "gh api /repos/x/y",
+      "aws s3 ls",
+      "supabase db dump",
+      "stripe events list",
+      "psql -c 'select 1'",
+      "docker ps",
+      "systemctl status nginx",
+      "sentry-cli info",
+      // The point of deny-by-default: a vendor CLI that no denylist enumerated.
+      "flyio-next-gen status",
+    ]) {
+      expect(rejectReason(cmd) ?? "", cmd).toMatch(/not on the probe-verb allowlist/i);
+    }
+  });
+
+  test("A3 the reject reason names both remedies and the widening route", () => {
+    const reason = rejectReason("doppler secrets get FOO --plain") ?? "";
+    // Remedy 1 — wrap it in a repo-relative script.
+    expect(reason).toMatch(/repo-relative/i);
+    // Remedy 2 — declare it when the probe genuinely needs credentials.
+    expect(reason).toMatch(/credentials_required/);
+    // Remedy 3 — the allowlist is extensible by a reviewed PR, not a dead end.
+    expect(reason).toMatch(/PROBE_VERB_ALLOWLIST/);
+  });
+
+  test("A4 dequoting still applies to the verb (quotes do not launder it)", () => {
+    for (const cmd of [
+      '"doppler" secrets get X',
+      "\\doppler secrets get X",
+      'dopp""ler secrets get X',
+    ]) {
+      expect(rejectReason(cmd) ?? "", cmd).toMatch(/not on the probe-verb allowlist/i);
+    }
+  });
+});
+
+describe("#7393 B — inline-program and execution-equivalent rejects", () => {
+  test("B1 inline-program flags are rejected on every allowlisted runtime", () => {
+    for (const cmd of [
+      "bash -c 'curl https://x'",
+      "sh -c 'curl https://x'",
+      "python3 -c 'print(1)'",
+      "node -e 'console.log(1)'",
+      "bun -e 'console.log(1)'",
+      "node --eval 'console.log(1)'",
+      "python3 -c'print(1)'",
+      "node -p '1+1'",
+      "python3 --print 1",
+    ]) {
+      expect(rejectReason(cmd) ?? "", cmd).toMatch(/inline program/i);
+    }
+  });
+
+  test("B2 awk/sed/find are execution-equivalent to `bash -c` and are not allowlisted", () => {
+    // Measured: `awk 'BEGIN{system("...")}'` executes arbitrary commands and
+    // passes SUBST_REJECT_RE (no `;`, `&&`, `|`, `$(`). Allowlisting awk while
+    // rejecting `bash -c` would be incoherent.
+    for (const cmd of [
+      "awk 'BEGIN{system(\"wc -c < /home/x/.doppler/.doppler.yaml\")}'",
+      "sed -e '1e wc -c /etc/passwd' AGENTS.md",
+      "find . -name x -exec wc -c {} +",
+    ]) {
+      expect(rejectReason(cmd) ?? "", cmd).toMatch(/not on the probe-verb allowlist/i);
+    }
+  });
+});
+
+describe("#7393 C — program-position path rules (pure string, no subprocess)", () => {
+  test("C1 a repo-relative script path is admitted", () => {
+    expect(rejectReason("bash scripts/lint-workflows.sh --help")).toBeNull();
+    expect(rejectReason("scripts/betterstack-query.sh --since 24h")).toBeNull();
+    expect(rejectReason("./node_modules/.bin/vitest run")).toBeNull();
+  });
+
+  test("C2 absolute and parent-escaping program paths are rejected", () => {
+    for (const cmd of [
+      "bash /abs/x.sh",
+      "bash ../x.sh",
+      "/usr/local/bin/gh api user",
+      "sh /tmp/x.sh",
+      "../scripts/x.sh",
+      "bash scripts/../../x.sh",
+    ]) {
+      expect(rejectReason(cmd) ?? "", cmd).toMatch(/repo-relative/i);
+    }
+  });
+
+  test("C3 a non-program-position absolute path is untouched (curl -o /dev/null)", () => {
+    // `-o /dev/null` is the dominant corpus form. The path rule applies to
+    // program-position tokens only; widening it to every token would reject
+    // 142/632 probes.
+    expect(
+      rejectReason(
+        "curl -fsS -o /dev/null -w '%{http_code}' --max-time 10 https://app.soleur.ai/api/inngest",
+      ),
+    ).toBeNull();
+  });
+
+  test("C4 rejectReason stays a pure synchronous string -> string|null", () => {
+    // No `git ls-files` oracle: it interrogates the PR-HEAD index (the attacker's
+    // own branch) and preflight runs before merge. "Tracked" is not "reviewed".
+    const out = rejectReason("bash scripts/lint-workflows.sh --help");
+    expect(out === null || typeof out === "string").toBe(true);
+    // A Promise would mean a subprocess crept in.
+    expect(out).not.toBeInstanceOf(Promise);
+    expect(rejectReason.constructor.name).toBe("Function");
+  });
+});
+
+describe("#7393 D — credentials_required => SKIP-DECLARED", () => {
+  const throwingExecutor: Executor = async () => {
+    throw new Error("executor must not be called");
+  };
+
+  const declaredBlock = obs(
+    "discoverability_test:",
+    "  command: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep SOLEUR_ZOT_INVENTORY --limit 20",
+    '  expected_output: "≥1 row"',
+    '  credentials_required: "doppler:soleur/prd_terraform — Better Stack\'s query API has no unauthenticated form."',
+  );
+
+  test("D1 parseCredentialsRequired reads the sub-field", () => {
+    expect(parseCredentialsRequired(declaredBlock)).toMatch(
+      /doppler:soleur\/prd_terraform/,
+    );
+    expect(
+      parseCredentialsRequired(
+        obs("discoverability_test:", "  command: curl https://x", '  expected_output: "200"'),
+      ),
+    ).toBe("");
+  });
+
+  test("D2 a declared probe classifies SKIP-DECLARED without executing", async () => {
+    const out = await classifyDiscoverabilityResult({
+      planPath: "plans/x.md",
+      planBody: `## Observability\n\n${declaredBlock}\n`,
+      prBody: "",
+      runner: throwingExecutor,
+    });
+    expect(out.result).toBe("SKIP-DECLARED");
+    // The declared scope is surfaced verbatim — it is the reviewable artifact.
+    expect(out.reason ?? "").toMatch(/doppler:soleur\/prd_terraform/);
+  });
+
+  test("D3 a placeholder declaration FAILs (existing placeholder machinery)", async () => {
+    for (const placeholder of ["TBD", "TODO", "N/A", "tbd", "<fill me in>"]) {
+      const body = `## Observability\n\n${obs(
+        "discoverability_test:",
+        "  command: doppler secrets get FOO --plain",
+        '  expected_output: "ok"',
+        `  credentials_required: ${placeholder}`,
+      )}\n`;
+      const out = await classifyDiscoverabilityResult({
+        planPath: "plans/x.md",
+        planBody: body,
+        prBody: "",
+        runner: throwingExecutor,
+      });
+      expect(out.result, placeholder).toBe("FAIL");
+      expect(out.reason ?? "", placeholder).toMatch(/placeholder/i);
+    }
+  });
+
+  test("D4 ssh is NOT overridable by a declaration", async () => {
+    const body = `## Observability\n\n${obs(
+      "discoverability_test:",
+      "  command: ssh web-1 systemctl status inngest",
+      '  expected_output: "active"',
+      '  credentials_required: "ssh:web-1 — needs host access"',
+    )}\n`;
+    const out = await classifyDiscoverabilityResult({
+      planPath: "plans/x.md",
+      planBody: body,
+      prBody: "",
+      runner: throwingExecutor,
+    });
+    expect(out.result).toBe("FAIL");
+    expect(out.reason ?? "").toMatch(/ssh/i);
+  });
+
+  test("D5 the SKIP-DECLARED fixture classifies without executing", async () => {
+    const out = await classifyDiscoverabilityResult({
+      planPath: "plans/10.md",
+      planBody: fx("10-credentials-required-skip.md"),
+      prBody: "",
+      runner: throwingExecutor,
+    });
+    expect(out.result).toBe("SKIP-DECLARED");
+    expect(out.reason ?? "").toMatch(/prd_terraform/);
+  });
+
+  test("D6 the not-allowlisted fixture FAILs without executing", async () => {
+    const out = await classifyDiscoverabilityResult({
+      planPath: "plans/09.md",
+      planBody: fx("09-verb-not-allowlisted.md"),
+      prBody: "",
+      runner: throwingExecutor,
+    });
+    expect(out.result).toBe("FAIL");
+    expect(out.reason ?? "").toMatch(/not on the probe-verb allowlist/i);
+  });
+});
+
+describe("#7393 E — fail-closed sandbox, no unsandboxed fallback", () => {
+  const throwingExecutor: Executor = async () => {
+    throw new Error("executor must not be called");
+  };
+
+  const passBody = `## Observability\n\n${obs(
+    "discoverability_test:",
+    "  command: grep -c . AGENTS.md",
+    '  expected_output: "110"',
+  )}\n`;
+
+  test("E1 sandbox unavailable => SKIP naming the sandbox, executor never called", async () => {
+    const out = await classifyDiscoverabilityResult({
+      planPath: "plans/x.md",
+      planBody: passBody,
+      prBody: "",
+      runner: throwingExecutor,
+      sandboxAvailable: false,
+    });
+    expect(out.result).toBe("SKIP");
+    expect(out.reason ?? "").toMatch(/sandbox/i);
+    // Fail-closed, stated: a degraded sandbox must never revert to the status quo.
+    expect(out.reason ?? "").toMatch(/bwrap|bubblewrap/i);
+  });
+
+  test("E2 sandbox available => the executor IS reached (E1 is not vacuous)", async () => {
+    const out = await classifyDiscoverabilityResult({
+      planPath: "plans/x.md",
+      planBody: passBody,
+      prBody: "",
+      runner: stubExecutor(0, "110\n"),
+      sandboxAvailable: true,
+    });
+    expect(out.result).toBe("PASS");
+  });
+});
+
+describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)", () => {
+  const skill = readFileSync(SKILL_PATH, { encoding: "utf8" });
+  const lines = skill.split("\n");
+
+  // Same anchor contract as the #6772 gateWindow(): resolve on the executable
+  // column-0 `if [[ "$CMD...` line, then slice a window around it. A whole-file
+  // grep is satisfied by the prose that DOCUMENTS a gate, so deleting the real
+  // gate would stay green (`cq-assert-anchor-not-bare-token`).
+  const gateWindow = (anchor: RegExp): string => {
+    const idx = lines.findIndex((l) => anchor.test(l) && /^if \[\[ "\$CMD/.test(l));
+    expect(idx).toBeGreaterThan(-1);
+    return lines.slice(Math.max(0, idx - 6), idx + 4).join("\n");
+  };
+
+  // The sandbox flags live in ONE array so the establishment probe and the real
+  // run cannot drift; anchor the window on that array rather than on the exec
+  // line, which references it by name.
+  const sandboxWindow = (): string => {
+    const idx = lines.findIndex((l) => /^BWRAP_ARGS=\(/.test(l));
+    expect(idx).toBeGreaterThan(-1);
+    const end = lines.findIndex((l, i) => i > idx && /^\)/.test(l));
+    expect(end).toBeGreaterThan(idx);
+    return lines.slice(idx, end + 1).join("\n");
+  };
+
+  test("F1 AC1 — the Step 10.4 verb gate is an allowlist, not the retired denylist", () => {
+    const g = gateWindow(/PROBE_VERB/);
+    expect(g).toMatch(/PROBE_VERB_ALLOWLIST=/);
+    // The retired denylist alternation must be gone from the GATE (it is still
+    // legitimately named in the surrounding Sharp Edge prose, which is why this
+    // asserts on the window and not the file).
+    expect(g).not.toMatch(/\(doppler\|gh\|aws\|supabase\|stripe/);
+    // Dequoting is retained — `"doppler"` must not launder the verb.
+    expect(g).toMatch(/CMD_DEQ/);
+  });
+
+  test("F1b the dequote assignment survives somewhere in Check 10", () => {
+    expect(skill).toMatch(/CMD_DEQ="\$\{CMD\/\//);
+  });
+
+  test("F2 AC2 — the sandbox carries the load-bearing binds", () => {
+    const w = sandboxWindow();
+    expect(w).toMatch(/--ro-bind "\$REPO_ROOT" "\$REPO_ROOT"/);
+    expect(w).toMatch(/--tmpfs \/home/);
+    expect(w).toMatch(/--tmpfs \/run/);
+    expect(w).toMatch(/--unshare-all/);
+    // `--tmpfs /run` removes /run/systemd/resolve/stub-resolv.conf, which
+    // /etc/resolv.conf symlinks to; without the rebind every curl probe returns
+    // rc=6 — indistinguishable from the #4148 DNS-typo regression.
+    expect(w).toMatch(/--ro-bind "\$RESOLV" "\$RESOLV"/);
+    // The exec must consume that same array — one source of truth for the flags,
+    // so the establishment probe and the real run cannot diverge.
+    const execLine = lines.find((l) => /^DT_OUT=\$\(/.test(l)) ?? "";
+    expect(execLine).toMatch(/bwrap/);
+    expect(execLine).toMatch(/\$\{BWRAP_ARGS\[@\]\}/);
+  });
+
+  test("F3 AC2 — mount order is load-bearing: --tmpfs /home precedes the repo bind", () => {
+    const w = sandboxWindow();
+    const tmpfsHome = w.indexOf("--tmpfs /home");
+    const repoBind = w.indexOf('--ro-bind "$REPO_ROOT"');
+    expect(tmpfsHome).toBeGreaterThanOrEqual(0);
+    expect(repoBind).toBeGreaterThanOrEqual(0);
+    // Reversed, the tmpfs silently clobbers the repo bind and every probe dies
+    // with `Can't chdir` — a failure that reads as bwrap incompatibility.
+    expect(tmpfsHome).toBeLessThan(repoBind);
+  });
+
+  test("F4 AC5b — --proc /proc degrades rather than failing the sandbox", () => {
+    const check10 = skill.match(/### Check 10:[\s\S]*?(?=^### Check \d+|^## )/m);
+    expect(check10).not.toBeNull();
+    // /proc cannot be mounted in a nested user namespace (the repo already knows
+    // this: `enableWeakerNestedSandbox`, #1557). A hard --proc would SKIP Check 10
+    // in every containerized run — including the one-shot pipeline's own — while
+    // looking exactly like the fail-closed design working correctly.
+    //
+    // Assert the DEGRADATION STRUCTURE, not the presence of the token. A bare
+    // `toMatch(/BWRAP_PROC/)` survived renaming the assignment away, because the
+    // name still occurred in the `"${BWRAP_PROC[@]}"` expansions further down —
+    // the `cq-assert-anchor-not-bare-token` trap, caught by mutation.
+    const body = check10![0];
+    // 1. The strong form is attempted first.
+    expect(body).toMatch(/^BWRAP_PROC=\(--proc \/proc\)$/m);
+    // 2. On establishment failure it is emptied and retried ONCE.
+    expect(body).toMatch(/^\s*BWRAP_PROC=\(\)$/m);
+    // 3. The retry really is the sandbox minus --proc, not a second identical try.
+    expect(body).toMatch(/if ! bwrap "\$\{BWRAP_ARGS\[@\]\}" true/);
+    // 4. Only then does it give up — fail-closed, never unsandboxed.
+    expect(body).toMatch(/SKIP: Check 10 could not establish the bwrap sandbox/);
+    expect(body).toMatch(/enableWeakerNestedSandbox|nested user namespace/i);
+  });
+
+  test("F5 no unsandboxed fallback survives in Check 10", () => {
+    const check10 = skill.match(/### Check 10:[\s\S]*?(?=^### Check \d+|^## )/m);
+    expect(check10).not.toBeNull();
+    // The pre-#7393 unsandboxed exec line must be gone: an `env -i ... timeout`
+    // that is not wrapped by bwrap is exactly the fallback this design forbids.
+    const execLines = check10![0]
+      .split("\n")
+      .filter((l) => /^DT_OUT=\$\(/.test(l));
+    expect(execLines.length).toBe(1);
+    expect(execLines[0]).toMatch(/bwrap|BWRAP/);
+  });
+
+  test("F6 AC16 — exactly one PASS terminal survives the matrix growth", () => {
+    const check10 = skill.match(/### Check 10:[\s\S]*?(?=^### Check \d+|^## )/m);
+    const rows = check10![0].match(/^\|\s*\d+\s*\|/gm) ?? [];
+    expect(rows.length).toBeGreaterThanOrEqual(11);
+    const passRows =
+      check10![0].match(/^\|\s*\d+\s*\|[^\n]*\*\*PASS\*\*/gm) ?? [];
+    expect(passRows.length).toBe(1);
+    // SKIP-DECLARED is its own terminal, never folded into ordinary SKIP.
+    expect(check10![0]).toMatch(/\*\*SKIP-DECLARED\*\*/);
+  });
+
+  test("F7 AC13 — SKIP-DECLARED is visible headless and in the Phase 2 aggregate", () => {
+    // The global headless contract says "on PASS/SKIP continue silently"; a
+    // terminal that exists only to be reviewable must not be silenced by it.
+    const headless = skill.match(/On all PASS[^\n]*\n/);
+    expect(headless).not.toBeNull();
+    expect(headless![0]).toMatch(/SKIP-DECLARED/);
+  });
+
+  test("F8 the retired denylist is documented as retired, not silently deleted", () => {
+    // Keeping the retired control named (and its limitation) is what stops a
+    // future reader re-deriving it. The Sharp Edge must survive.
+    expect(skill).toMatch(/PROBE_VERB_ALLOWLIST/);
+    expect(skill).toMatch(/every allowlist entry is an authority grant/i);
+  });
+});
+
+describe("#7393 G — credentials_required corpus baseline", () => {
+  // AC14: every new adoption of the waiver must be a reviewable diff line rather
+  // than invisible drift. The anchor is a PARSED declaration inside a plan's
+  // `## Observability` block — never a bare `grep -c credentials_required:`,
+  // which counts the prose in the plan that INTRODUCED the field (measured: 5
+  // line-hits, 0 declarations) and would read as adoption that never happened.
+  const BASELINE_DECLARED_PROBES = 0;
+
+  test("G1 the number of plans declaring credentials_required equals the baseline", () => {
+    const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
+    const declaring = readdirSync(plansDir)
+      .filter((f) => f.endsWith(".md"))
+      .filter((f) => {
+        const body = readFileSync(join(plansDir, f), { encoding: "utf8" });
+        const block = extractObservabilityBlock(body);
+        return block !== "" && parseCredentialsRequired(block) !== "";
+      });
+    expect(
+      declaring.length,
+      `plans declaring credentials_required: ${JSON.stringify(declaring)} — raising this baseline is the reviewable diff line the waiver's drift control depends on`,
+    ).toBe(BASELINE_DECLARED_PROBES);
   });
 });
