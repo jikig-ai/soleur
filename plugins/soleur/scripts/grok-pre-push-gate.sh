@@ -58,8 +58,17 @@ run_step() {
   local name="$1"
   shift
   step "$name"
-  if "$@"; then
+  # Capture rc — `if "$@"` is a boolean test and discards the exit code, so a step that
+  # reports 3 (test-all.sh's EXIT CONTRACT: zero suites failed, >= 1 suite terminated with a
+  # signal-shaped status) would be re-labelled a failure. Non-zero either way: a step that was
+  # not measured is not a step that passed.
+  local rc=0
+  "$@" || rc=$?
+  if (( rc == 0 )); then
     echo "[ok] $name"
+  elif (( rc == 3 )); then
+    echo "[UNRESOLVED] $name — a suite was terminated; see the [KILLED] lines above" >&2
+    exit 3
   else
     echo "[FAIL] $name" >&2
     exit 1

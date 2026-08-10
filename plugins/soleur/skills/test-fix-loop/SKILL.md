@@ -51,7 +51,7 @@ no per-iteration approval.
 
 Record the current commit SHA as `<initial-sha>` before entering the loop. This is the rollback target if the loop terminates on failure after multiple iterations.
 
-Run the initial test suite. If all tests pass, exit with "All tests already pass. Nothing to fix."
+Run the initial test suite and **capture its exit code** (`rc`) — the verdict is `rc`, not the parsed output. Exit with "All tests already pass. Nothing to fix." only when `rc` is 0. A run that exits non-zero while parsing to zero failures is not a pass: this repo's `test-all.sh` exits 3 when zero suites failed and at least one was terminated with a signal-shaped status, rendered `[KILLED]` rather than `[FAIL]` (see its `EXIT CONTRACT` block). Handle that through the *Suite terminated* row in §2 — never by entering the loop and never by reporting success.
 
 For each iteration (up to max iterations):
 
@@ -61,13 +61,18 @@ Extract failure summaries from test output: test name and error message only (on
 
 Distinguish build/compilation errors from test failures. If the suite fails to compile, treat the entire build error as a single cluster and fix the compilation issue first.
 
+Count `^[KILLED]` lines separately from failures, and record both alongside `rc`. A terminated suite emits no assertion output, so it parses to zero failures and produces zero clusters: "non-zero `rc`, nothing parseable" is a real shape, and it is *unresolved coverage*, not an empty failure set. Never let it fall through to "all tests pass".
+
 ### 2. Check Termination Conditions
 
-Before attempting fixes, check whether to stop:
+Before attempting fixes, check whether to stop. Rows are checked top to bottom; the first match wins.
+
+**The count driving every delta row below is `failures + killed`, and a suite that is KILLED in either of the two iterations being compared is excluded from the delta rather than counted as fixed.** A failures-only count is arithmetically unsafe here: a suite that FAILED in iteration N and is KILLED in N+1 lowers it, which reads as a fabricated improvement; when the same suite completes again in N+2 the count jumps back, which reads as **Regression** and would `git reset --hard HEAD` over real fixes on the strength of a signal artifact.
 
 | Condition | Detection | Action |
 |-----------|-----------|--------|
-| All tests pass | Zero failures | Stage fixes with `git add -A`, report success |
+| Suite terminated (unresolved) | Any `^[KILLED]` line in the output, or runner `rc` 3 | Do NOT stage, do NOT report success, do NOT reset. Re-run that suite alone; if it is KILLED again, STOP and report UNRESOLVED naming the suite |
+| All tests pass | `rc` 0 (zero failures **and** zero killed) | Stage fixes with `git add -A`, report success |
 | Max iterations | iteration == limit | `git reset --hard <initial-sha>` (revert all iterations), report |
 | Regression | Failure count increased vs previous iteration | `git reset --hard HEAD` (discard uncommitted fixes), report |
 | Circular fix | Failure name set matches any prior iteration | `git reset --hard <initial-sha>` (revert all iterations), report |
@@ -97,8 +102,9 @@ Apply fixes to implementation code only. NEVER modify test files, add skip annot
 
 Re-run the full test suite after applying fixes.
 
-Evaluate the result:
-- All pass: stage all fixes with `git add -A`, report success, STOP
+Evaluate the result (same `failures + killed` count and the same row order as §2):
+- Any `^[KILLED]` line or `rc` 3: do NOT stage, do NOT report success, do NOT reset — take the *Suite terminated* row
+- All pass (`rc` 0): stage all fixes with `git add -A`, report success, STOP
 - Failures decreased: continue to next iteration (fixes stay in working tree; the next iteration's checkpoint commits them)
 - Regression: `git reset --hard HEAD` (discard uncommitted fixes, return to checkpoint), STOP
 - Circular or non-convergence: `git reset --hard <initial-sha>` (revert ALL iterations), STOP
@@ -109,7 +115,7 @@ Evaluate the result:
 
 On termination (success or failure), write a report to stdout:
 
-- **Result**: SUCCESS, REGRESSION, CIRCULAR, MAX_ITERATIONS, or NON_CONVERGENCE
+- **Result**: SUCCESS, REGRESSION, CIRCULAR, MAX_ITERATIONS, NON_CONVERGENCE, or UNRESOLVED
 - **Iterations completed**: N out of max
 - **Termination reason**: one-line explanation
 - **Iteration history**: failure count per iteration with delta

@@ -51,9 +51,15 @@ files); the cost came from three habits below, each of which multiplies.
    megabytes on one "line": use `':!*.json'`, `--name-only`, `| cut -c1-200`.
 6. **Delegate wide reads to a subagent** (`cm-delegate-verbose-exploration…`) — keep the
    conclusion, not the file dumps.
-7. **Poll with a bounded, anchored pattern.** Match `^=== N/N suites passed ===$`, never a
-   bare token that also appears in a PASS line, and never `pgrep` a pattern your own poll
-   command contains.
+7. **Poll with a bounded, anchored pattern — on the marker's SHAPE, plus the rc file.** Match
+   `^=== [0-9]+/[0-9]+ suites passed ===$` and read the rc file, never a bare token that also
+   appears in a PASS line, and never `pgrep` a pattern your own poll command contains. Polling
+   the *green* spelling `N/N` only is safe against a false green but not against a false
+   dismissal: a run with a terminated suite is `N<M`, so the poll never matches, the `Monitor`
+   runs out its clock, and `{no marker, clock timeout}` is byte-for-byte the harness-reap
+   signature that `work/SKILL.md` says to walk away from. The trichotomy: marker + rc 0 =
+   green; marker + rc 3 = a suite was terminated (UNRESOLVED — coverage not obtained, re-run
+   that suite in isolation); no marker + no rc file = harness reap, not your diff.
 
 **Report cost honestly.** If a run was disproportionate, say so and name the cause — the
 operator paid for it and cannot see the breakdown.
