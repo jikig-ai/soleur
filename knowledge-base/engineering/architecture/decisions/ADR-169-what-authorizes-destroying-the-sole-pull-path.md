@@ -427,3 +427,44 @@ had all along. This is the same hermetic-fixture gap that let the `APP_DOMAIN_BA
 Recorded here as a standing caution for the remaining cold surfaces — the **post-destroy real
 restore over the CF Tunnel** in particular, which by construction cannot be rehearsed before a
 destroy and therefore has no positive control at all.
+
+### Rejected alternative — uniform blob-presence for EVERY child
+
+Considered and not taken: drop `crane validate` entirely and verify every child the way
+attestation children are verified — read the child manifest, then `crane blob` its config and
+every layer.
+
+It is genuinely attractive. It deletes the attestation-detection branch (and with it the
+`platform.architecture: unknown` assumption below), deletes the nested-index hazard, leaves one
+code path with one failure semantics, and — measured, not estimated — roughly halves the bytes:
+`crane validate` reads each layer TWICE, once via `Compressed()` for the layer digest and again
+via `Uncompressed()` for the diffID, which on a remote layer is a second blob GET. For this
+image that is 3.86 GiB per entry against 1.93 GiB of distinct content.
+
+It was rejected because of what it drops, not what it costs. `crane validate` additionally walks
+the tar structure, checks diffID/rootfs consistency, rejects duplicate file paths, and checks
+manifest/config self-consistency. Those are real verification properties on the children a host
+actually pulls. Blob presence plus content-digest integrity is the right floor for a child no
+host ever fetches (an attestation, a signature); it is a weaker check than the one platform
+children get today, and A2 is the predicate that authorizes an irreversible destroy.
+
+Recorded here rather than filed as work: this is a decision about verification depth, and the
+next reader will re-derive the same option from the same measurement. If the empty-store window
+ever becomes the binding constraint, the cheaper lever is memoising verification 2 by
+`dst_digest` — the required pin set resolves three tags to ONE index digest, so the same content
+is currently verified three times — which costs no coverage at all.
+
+### Two narrowings this amendment does not close
+
+- **`platform.architecture: unknown` as an attestation signal** is an assumption, not a measured
+  invariant. Both it and the `vnd.docker.reference.type` annotation come from the same BuildKit
+  attestation-storage convention. The disjunction protects against either one changing; it does
+  not protect against both changing at once, which would reclassify an attestation child as a
+  platform child and reintroduce the gunzip failure through the `crane validate` arm. The
+  mutation battery carries a row per disjunct so neither can be silently dropped.
+- **The platform-child floor asserts existence, not completeness.** `n_platform > 0` proves the
+  index contains at least one image a host could pull. It does not prove the EXPECTED platforms
+  are present: an index that silently lost its arm64 child still passes. That is acceptable for
+  A2 as ADR-169 scopes it — the predicate is "the pull path can be re-materialised", not "every
+  platform is intact" — but it is a narrowing of the plain-language reading, so it is stated
+  here rather than left to be discovered.

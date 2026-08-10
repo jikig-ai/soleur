@@ -285,6 +285,39 @@ ref_repo() {
   esac
 }
 
+# verify_blobs_of <sink-repo> <manifest-ref> <what> — prove the SINK holds every blob the manifest
+# at <manifest-ref> declares (its config and every layer).
+#
+# Presence AND integrity, not merely presence: `crane blob` streams the whole body and
+# go-containerregistry verifies the content digest at EOF, so a blob that is present but whose
+# bytes do not hash to the digest addressing it fails here too (classify() maps that to
+# CONTENTMISMATCH -> exit 4). It never DECOMPRESSES, which is what makes it correct for layer
+# mediaTypes that are plain JSON and never gzipped — `application/vnd.in-toto+json` on a buildx
+# attestation child, and the cosign payload on a signature. Handing either of those to
+# `crane validate` is #7378.
+#
+# The body is discarded to /dev/null: only the exit code is consumed, and a provenance blob can
+# carry build-time secrets that should not be materialised on the runner's disk.
+verify_blobs_of() {
+  local repo="$1" ref="$2" what="$3" blobs b
+  if ! crane_capture "$WORK/vb.out" "$WORK/vb.err" manifest $SINK_TLS_FLAG "$ref"; then
+    verify_die "$what" "$WORK/vb.err"
+  fi
+  # rc, never `|| true`: jq's `.layers[]` streams, so a shape fault partway emits a TRUNCATED list
+  # that would otherwise pass the non-empty check with the remaining blobs never checked.
+  if ! blobs="$(jq -r '[(.config.digest // empty)] + [(.layers // [])[].digest] | .[]' "$WORK/vb.out" 2>"$WORK/vb.jqerr")"; then
+    die 4 "${what}: its blob list could not be fully enumerated, so an unknown number of blobs were never checked. jq: $(last_err "$WORK/vb.jqerr")"
+  fi
+  [[ -n "$blobs" ]] || \
+    die 4 "${what} declares no blobs, so its presence cannot be verified."
+  while IFS= read -r b; do
+    [[ -n "$b" ]] || continue
+    if ! crane_capture /dev/null "$WORK/vb.blob.err" blob $SINK_TLS_FLAG "${repo}@${b}"; then
+      verify_die "the blob ${b} of ${what}" "$WORK/vb.blob.err"
+    fi
+  done <<< "$blobs"
+}
+
 # verify_die <what> <errfile> — the ONE classifier for every verification-2 read.
 #
 # Single definition on purpose: verification 2 now issues several kinds of read (index manifest,
@@ -533,25 +566,7 @@ while (( i < n_entries )); do
       # wrong in the other direction — a genuine platform child declaring `architecture: unknown` —
       # is that it gets blob-presence verification instead of decompression checking.
       if [[ "$c_type" == "attestation-manifest" || "$c_arch" == "unknown" ]]; then
-        if ! crane_capture "$WORK/att.out" "$WORK/att.err" manifest $SINK_TLS_FLAG "${dst_repo}@${c_digest}"; then
-          verify_die "the attestation manifest ${c_digest} of ${dst}" "$WORK/att.err"
-        fi
-        # Same streaming-truncation hazard as the child list above: rc, never `|| true`.
-        if ! att_blobs="$(jq -r '[(.config.digest // empty)] + [(.layers // [])[].digest] | .[]' "$WORK/att.out" 2>"$WORK/att.jqerr")"; then
-          die 4 "the attestation manifest ${c_digest} of ${dst}: its blob list could not be fully enumerated, so an unknown number of blobs were never checked. jq: $(last_err "$WORK/att.jqerr")"
-        fi
-        [[ -n "$att_blobs" ]] || \
-          die 4 "the attestation manifest ${c_digest} of ${dst} declares no blobs, so its presence cannot be verified."
-        while IFS= read -r b; do
-          [[ -n "$b" ]] || continue
-          # `crane blob` fetches the bytes WITHOUT decompressing them — that is the whole point —
-          # and go-containerregistry verifies the content digest as it streams, so this is
-          # presence AND integrity. The body itself is never read: discard it rather than
-          # materialising a blob (which can carry build-time secrets) onto the runner's disk.
-          if ! crane_capture /dev/null "$WORK/blob.err" blob $SINK_TLS_FLAG "${dst_repo}@${b}"; then
-            verify_die "the attestation blob ${b} of ${dst}" "$WORK/blob.err"
-          fi
-        done <<< "$att_blobs"
+        verify_blobs_of "$dst_repo" "${dst_repo}@${c_digest}" "the attestation manifest ${c_digest} of ${dst}"
       else
         n_platform=$(( n_platform + 1 ))
         if ! crane_capture "$WORK/val.out" "$WORK/val.err" validate $SINK_TLS_FLAG --remote "${dst_repo}@${c_digest}"; then
@@ -613,6 +628,24 @@ while (( i < n_entries )); do
       *)       die 4 "the signature ${sig_tag} is not readable back from the sink, so ${repo}:${tag} is restored UNSIGNED. crane: ${err}" ;;
     esac
   fi
+
+  # The read-back above is `crane digest` — a HEAD against the MANIFEST endpoint. It proves the
+  # signature manifest resolves; it proves nothing about the payload blob. That is the identical
+  # "a manifest can outlive its layers under zot gc+dedupe" trap this file's header documents at
+  # length for image layers, and which verification 2 now defends against per child — left
+  # undefended on the one artifact `ci-deploy.sh` fetches at deploy time to run `cosign verify`.
+  #
+  # Before this, A2 could go green over a signature whose blob was evicted, and the host would
+  # then fail cosign verify with no fallback. Tightening verification 2 without this made the
+  # gap WORSE in the reporting sense: "every child's blobs verified" is a materially stronger
+  # claim, and leaving the signature arm loose sharpens the misrepresentation it carries.
+  #
+  # Read the signature manifest by its referrers TAG (`sha256-<hex>`), which is where cosign puts
+  # it — there is no digest to pin it by. That read is not byte-verified, but every blob digest it
+  # declares is content-addressed, so the blob checks below are unweakened. And `crane blob` never
+  # decompresses, so the cosign payload layer cannot trip the #7378 gunzip class.
+  verify_blobs_of "${TARGET}/${repo}" "${TARGET}/${repo}:${sig_tag}" \
+    "the cosign signature ${sig_tag} of ${repo}:${tag}"
 
   echo "restore_entry repo=${repo} tag=${tag} disposition=${disp} digest=${src_digest} result=restored_verified"
   # ONLY `required` entries count toward the floor, because FLOOR counts only required pins.

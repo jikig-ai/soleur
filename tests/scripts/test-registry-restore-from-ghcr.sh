@@ -146,6 +146,25 @@ fx_oci_index() {
 }'
 }
 
+# fx_oci_signature <dir> <sink-repo> <sig-tag> — a cosign signature manifest at its referrers tag.
+# Its layer is `application/vnd.dev.cosign.simplesigning.v1+json` — plain JSON, never gzipped,
+# exactly like the in-toto attestation layer. Handing THIS to `crane validate` would reproduce
+# #7378 on the signature path, which is why verification 3 blob-verifies instead.
+D_SIG_CFG="sha256:e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e"
+D_SIG_LAYER="sha256:f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f"
+fx_oci_signature() {
+  fixture "$1" "manifest:$2:$3" 0 '{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "config": { "mediaType": "application/vnd.oci.image.config.v1+json", "digest": "'"$D_SIG_CFG"'", "size": 233 },
+  "layers": [
+    { "mediaType": "application/vnd.dev.cosign.simplesigning.v1+json", "digest": "'"$D_SIG_LAYER"'", "size": 251 }
+  ]
+}'
+  fixture "$1" "blob:$2@$D_SIG_CFG"   0 ""
+  fixture "$1" "blob:$2@$D_SIG_LAYER" 0 ""
+}
+
 # fx_oci_raw <dir> <ref> <json> — an arbitrary sink manifest payload, for the degenerate shapes
 # (nested index child, attestation-only index, child with no digest, non-array .manifests).
 fx_oci_raw() { fixture "$1" "manifest:$2" 0 "$3"; }
@@ -328,6 +347,11 @@ ok_fixtures() {
   fixture "$fx" "copy:${t}/${IB}:sha256-${D2#sha256:}" 0 ""
   fixture "$fx" "${t}/${WP}:sha256-${D1#sha256:}"    0 "$D_OTHER"
   fixture "$fx" "${t}/${IB}:sha256-${D2#sha256:}"    0 "$D_OTHER"
+  # The signature's own manifest + payload blobs at the sink. `crane digest` above proves only
+  # that the signature MANIFEST resolves; zot gc can evict its payload blob while the manifest
+  # survives, and that blob is what ci-deploy.sh fetches to run cosign verify.
+  fx_oci_signature "$fx" "${t}/${WP}" "sha256-${D1#sha256:}"
+  fx_oci_signature "$fx" "${t}/${IB}" "sha256-${D2#sha256:}"
   # the conditional entry is genuinely absent at GHCR (measured 2026-08-05)
   fixture "$fx" "ghcr.io/${IC}:latest" 1 "" \
     "Error: GET https://ghcr.io/v2/${IC}/manifests/latest: MANIFEST_UNKNOWN: manifest unknown"
@@ -934,11 +958,29 @@ fx="$TMP/fx-nonindex"; calls="$TMP/calls-nonindex"; : > "$calls"
 ok_fixtures "$fx" "$TARGET"
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
 n_ib=$(grep -cE "^validate .*--remote ${TARGET}/${IB}:v1\.1\.24( |$)" "$calls" || true)
-n_blob=$(grep -cE '^blob ' "$calls" || true)
-if [[ "$rc" -eq 0 && "$n_ib" -eq 1 && "$n_blob" -eq 0 ]]; then
-  pass "a non-index ref keeps the unchanged path (1 validate, 0 blob calls)"
+# Blob calls are EXPECTED here — verification 3 blob-verifies each signature's payload. What must
+# NOT happen is any per-INDEX-CHILD work, so pin the attestation digests specifically rather than
+# the blob count, which would otherwise just track how many signatures the pin set has.
+n_childblob=$(grep -cE "^blob .*@(${D_ATT_CFG}|${D_ATT_LAYER}|${D_AMD64})( |$)" "$calls" || true)
+n_sigblob=$(grep -cE "^blob .*@(${D_SIG_CFG}|${D_SIG_LAYER})( |$)" "$calls" || true)
+if [[ "$rc" -eq 0 && "$n_ib" -eq 1 && "$n_childblob" -eq 0 && "$n_sigblob" -eq 4 ]]; then
+  pass "a non-index ref keeps the unchanged path (1 validate, 0 index-child blobs, 4 signature blobs)"
 else
-  fail "non-index behaviour drifted: rc=$rc validate=$n_ib blob=$n_blob" "$rc" "$(cat "$calls")"
+  fail "non-index behaviour drifted: rc=$rc validate=$n_ib childblob=$n_childblob sigblob=$n_sigblob" "$rc" "$(cat "$calls")"
+fi
+
+# The signature's payload blob is verified, not just its manifest digest. This is the gap that
+# let A2 go green over a signature no host could cosign-verify: crane digest is a HEAD against
+# the manifest endpoint, and zot gc can evict the payload while the manifest survives.
+fx="$TMP/fx-sigblob"; calls="$TMP/calls-sigblob"; : > "$calls"
+ok_fixtures "$fx" "$TARGET"
+fixture "$fx" "blob:${TARGET}/${WP}@${D_SIG_LAYER}" 1 "" \
+  "Error: GET http://${TARGET}/v2/${WP}/blobs/${D_SIG_LAYER}: BLOB_UNKNOWN: blob unknown to registry"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -qF "cosign signature"; then
+  pass "an evicted cosign PAYLOAD blob fails (exit 4), not just an absent signature manifest"
+else
+  fail "the signature payload blob must be verified, not only its manifest digest" "$rc" "$out"
 fi
 
 # ── Each attestation signal must be load-bearing ON ITS OWN (the #7378 near-recurrence). ─────
@@ -1078,7 +1120,7 @@ rr_expect "127.0.0.1:5999/jikig-ai/soleur-web-platform@${D1}"     "127.0.0.1:599
 # Deleting the entire new assertion block left the suite green at 43/0, exit 0 — `fails -eq 0` is
 # satisfied by asserting nothing. A floor (never `-eq`, which would make every added assertion a
 # spurious failure) makes that deletion loud. Derived from a green run, ratchet upward only.
-MIN_ASSERTIONS=70
+MIN_ASSERTIONS=71
 if (( passes + fails < MIN_ASSERTIONS )); then
   printf '  FAIL harness: %d assertions ran, floor is %d — assertions were deleted or skipped\n' \
     "$((passes + fails))" "$MIN_ASSERTIONS"

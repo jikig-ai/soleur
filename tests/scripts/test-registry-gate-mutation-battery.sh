@@ -463,6 +463,47 @@ mutate "E23 argv value-presence guard removed (missing flag value spins forever)
   '[[ $# -ge 2 ]] || die 1 "$1 requires a value (none was supplied)."' \
   ': # guard removed'
 
+# ── verification 2 per-child blob completeness (#7378 / PR #7379). ────────────────────────────
+# These eight rows cover the guards that change made load-bearing. Without them this battery
+# dispatched 45 against a floor of 45 while certifying PRE-#7379 code only — a coverage claim
+# with a hole exactly the shape of the newest code on the script that authorizes destroying
+# production's only pull path, which is the failure mode E07's justification names.
+#
+# Each was proven RED before being written here, in a sandbox run against the restore suite this
+# battery already uses as the `engine` oracle (control green -> mutant RED -> restore green).
+
+mutate "E24 attestation detection loses the platform-arch signal" engine \
+  ' || "$c_arch" == "unknown" ' \
+  ' '
+
+mutate "E25 attestation detection loses the annotation signal" engine \
+  '"$c_type" == "attestation-manifest" || ' \
+  ''
+
+mutate "E26 index child count equality weakened (partial enumeration passes)" engine \
+  '(( n_children == n_declared )) ||' \
+  'false && (( n_children == n_declared )) ||'
+
+mutate "E27 platform-child floor removed (an attestation-only index reads as restored)" engine \
+  '(( n_platform > 0 )) ||' \
+  'false && (( n_platform > 0 )) ||'
+
+mutate "E28 nested-index child no longer fails closed (recurses into the #7378 gunzip class)" engine \
+  '*"image.index.v1+json"|*"manifest.list.v2+json")' \
+  '"__never_matches__")'
+
+mutate "E29 index child digest sentinel dropped (@tsv field collapse returns)" engine \
+  '(.digest // "-")' \
+  '(.digest // "")'
+
+mutate "E30 blob presence check removed (a manifest can outlive its layers)" engine \
+  'if ! crane_capture /dev/null "$WORK/vb.blob.err" blob $SINK_TLS_FLAG "${repo}@${b}"; then' \
+  'if false; then'
+
+mutate "E31 cosign signature payload no longer blob-verified (digest read-back only)" engine \
+  '  verify_blobs_of "${TARGET}/${repo}" "${TARGET}/${repo}:${sig_tag}" \' \
+  '  false && verify_blobs_of "${TARGET}/${repo}" "${TARGET}/${repo}:${sig_tag}" \'
+
 restore_pristine
 
 echo
@@ -474,8 +515,8 @@ echo
 # equality: the count is developer-incremented, so `-eq` would turn every added mutation into a
 # spurious failure. Derived from a green run, not from an expected number.
 dispatched=$(( caught + survived + expected ))
-if (( dispatched < 45 )); then
-  echo "harness: only ${dispatched} mutations were dispatched, floor is 45. Either mutations were removed without lowering this floor deliberately, or the dispatch itself is broken — in both cases the verdict below is not reportable." >&2
+if (( dispatched < 53 )); then
+  echo "harness: only ${dispatched} mutations were dispatched, floor is 53. Either mutations were removed without lowering this floor deliberately, or the dispatch itself is broken — in both cases the verdict below is not reportable." >&2
   exit 2
 fi
 
