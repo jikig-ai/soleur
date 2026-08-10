@@ -2855,7 +2855,8 @@ Commands:
   create <branch-name> [from-branch]  Create new worktree (copies .env files automatically)
                                       (from-branch defaults to main)
   feature | feat <name> [from-branch] Create worktree for feature with spec directory
-                                      (creates feat-<name> branch + knowledge-base/project/specs/feat-<name>/)
+                                      (creates feat-<name> branch; the worktree dir and spec dir
+                                       use the SLUG of it — every / becomes -, identical otherwise)
   list | ls                           List all worktrees
   switch | go [name]                  Switch to worktree
   copy-env | env [name]               Copy .env files from main repo to worktree

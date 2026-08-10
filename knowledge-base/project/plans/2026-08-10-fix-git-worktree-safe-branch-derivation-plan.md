@@ -47,7 +47,7 @@ requires_cpo_signoff: true
 ### Checked and Found Sound (no change)
 
 - `copy_env_to_worktree` initially read as a gap — the reconciliation table names it while Files-to-Edit omits it. It is **not** a gap: R4 cut it deliberately (pure consumer, no refname caller, auto-detect path already `basename`s), the reconciliation row says so, and `tasks.md` 3.7 records it. Plan is self-consistent.
-- The merge-order analysis against PR #7407 is measured from `gh pr diff`, not assumed — hunks are disjoint (first ~650 lines vs. targets at 1279+).
+- ~~The merge-order analysis against PR #7407 is measured from `gh pr diff` — hunks are disjoint.~~ **FALSIFIED at review.** It was measured, and the measurement went stale within hours: #7407 grew from `+289/-75` to `+3070/-105` and now edits `MARKER_RE` in `git-lock-marker-telemetry.ts`, the exact expression this PR also edits. A measurement of a moving target is a claim with a shelf life — see §Merge-Order Dependency.
 
 ## Overview
 
@@ -181,7 +181,7 @@ Cite content anchors, not line numbers.
 
 Fixing the producer stops *new* nesting. It does **nothing** for a worktree that is *already* nested on a customer's disk — that directory stays reapable at the next session start. Because the plugin is already installed on at least one external machine, the reaper must be made safe for the state the field is in, not only the state the fix produces. Both CTO and CPO called for this to be folded in rather than deferred.
 
-Two guards in `cleanup_orphan_worktree_dirs`, both placed with the existing guard chain (symlink / bare-layout / `.git`-entry), before the `rm -rf`:
+Two guards in `cleanup_orphan_worktree_dirs`, both placed with the existing guard chain (symlink / bare-layout / `.git`-entry), before the `rm -rf`. *(Revised at review: the second guard is NOT the `$PWD` check R3 cut — it is a filesystem backstop. The registry-based descendant check is a string comparison and misses a live checkout whenever git reports the path differently: symlinked `.worktrees/`, a newline-truncated porcelain record, or a lost registry entry. All three were reproduced destroying planted work.)*:
 
 1. **Descendant guard.** If any path in `registered_paths` is a **descendant** of `$dir`, the directory is an intermediate holding a live worktree — skip it and warn. This is the direct antidote to the measured failure: `.worktrees/ci` is unregistered, but `.worktrees/ci/rule-metrics` *is* registered beneath it.
 
@@ -221,7 +221,7 @@ Run the full suite from a worktree: `bash scripts/test-all.sh`. Record the pass 
 
 - [x] **AC1** — `create ci/rule-metrics` produces `.worktrees/ci-rule-metrics`, exactly two levels below repo root, and `.worktrees/ci` does not exist. Verify: `test -d .worktrees/ci-rule-metrics && test ! -e .worktrees/ci`. **Not** `find .worktrees -maxdepth 2 -type d` — `-maxdepth` counts from the start path, so that command prints the nested `.worktrees/ci/rule-metrics` *and* every top-level directory inside a correct worktree. It discriminates nothing (plan review P1-7).
 - [x] **AC2** — The created ref is exactly `ci/rule-metrics`. Verify: `git -C .worktrees/ci-rule-metrics rev-parse --abbrev-ref HEAD` prints `ci/rule-metrics`.
-- [x] **AC3** — The lease key equals the directory basename **and** passes `_validate_worktree_name`, **for every branch name currently on origin** (measured: 29/29 slash-bearing, and all origin branches, satisfy this under `tr '/' '-'`). For any residual input where the slug is not lease-keyable, a `SOLEUR_WORKTREE_NAME_UNSAFE` sentinel is emitted. *(AC restated from the issue body, which asserted the unqualified universal — measurement shows `tr '/' '-'` does not deliver it for all valid git refnames.)*
+- [x] **AC3** — The lease key equals the directory basename **and** passes `_validate_worktree_name`, **for every branch name currently on origin** (measured: 29/29 slash-bearing, and all origin branches, satisfy this under `tr '/' '-'`). For any residual input where the slug is not lease-keyable, the existing `SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED` marker carries `reason=name-not-keyable`. *(Corrected at review: this AC named a `SOLEUR_WORKTREE_NAME_UNSAFE` sentinel, which is residue from the pre-R1 fail-closed design and exists nowhere in the repo — a checked box asserting a string no code emits.)* *(AC restated from the issue body, which asserted the unqualified universal — measurement shows `tr '/' '-'` does not deliver it for all valid git refnames.)*
 - [x] **AC4** — A slash-branch worktree with an uncommitted file survives `cleanup_orphan_worktree_dirs`, invoked from outside that worktree.
 - [x] **AC5** — **Mutation-tested with TWO independent mutants.** A single derivation-only mutant is *defeated by this same PR*: on it, `create ci/rule-metrics` nests, the reaper reaches `.worktrees/ci`, and Phase 3b's descendant guard skips it — so the worktree survives and A4 goes **green on the mutant**. Both reviewers converged on this. Required instead:
   - **M1** (pins the producer fix): revert the derivation **and** the descendant guard → A1 and A4 must both FAIL.
@@ -244,6 +244,27 @@ None. This is a pure code + docs change on an already-provisioned surface; no mi
 ## Merge-Order Dependency
 
 **PR #7407 is a live OPEN DRAFT on the same file** (`+289/-75` on `worktree-manager.sh`) and also edits `ADR-099-git-surface-topology.md`.
+
+> **SUPERSEDED 2026-08-10 (review) — re-measure before acting on anything below.** The table
+> that follows was written against #7407 at `+289/-75` and concluded the hunks were "disjoint".
+> Both halves of that are now false. Re-measured at review time, #7407 is **`+3070/-105`** and
+> its file set has grown to include **`apps/web-platform/server/git-lock-marker-telemetry.ts`
+> — specifically `MARKER_RE`**, the exact expression this PR also edits to register
+> `SOLEUR_ORPHAN_SKIP_DESCENDANT` and `SOLEUR_WORKTREE_SLUG_COLLISION` — plus
+> `git-lock-marker-telemetry.test.ts`, `ADR-099`, and hunks inside `create_worktree`
+> (`@@ -643,62 +895,137`) and `create_for_feature`, which the original analysis placed
+> entirely below line ~650.
+>
+> So a **real textual conflict is now expected**, not merely possible, and it lands on a
+> one-line regex where a botched resolution silently drops a marker from the extractor —
+> failing green, since an unregistered marker is simply never ingested. Whichever PR merges
+> second must re-run `apps/web-platform/test/git-lock-marker-telemetry.test.ts` (the drift
+> guard catches exactly this) plus the full `worktree-manager-*` suite, and must confirm the
+> union of both PRs' markers survives in `MARKER_RE` rather than one side's alternation
+> replacing the other's.
+>
+> This is a committed artifact a future reader would otherwise trust; the measurement below
+> is retained only to show what the sequencing decision was originally based on.
 
 **Sequencing decision: land #7407 first, then rebase this branch on top.** It is the older, larger, already-drafted change; rebasing this smaller diff onto it is cheaper than the reverse.
 
@@ -308,7 +329,11 @@ CPO consulted on threshold confirmation, the concrete user-facing artifact of th
 
 ## Observability
 
-The changed file is plugin code executing on a customer's self-hosted CLI — **observability layer 7** (`hr-observability-layer-citation`). There is no server-side surface, so the signal path is the marker/sentinel stream the existing worktree markers already use.
+The changed file executes on TWO surfaces, and the first draft of this block named only one.
+
+**Layer 7** — a customer's self-hosted CLI (`hr-observability-layer-citation`). Signal path: the `SOLEUR_*` stdout marker stream the sibling worktree markers already use, read by the agent from the tool result, plus the unconditional stderr summary.
+
+**Layers 1-2** — the hosted platform. `cleanup_orphan_worktree_dirs` IS reached there: `plugins/soleur/commands/go.md` Step 0 runs `cleanup-merged` verbatim as its session preamble, and that plugin is loaded by the same options object that registers the `Bash` PostToolUse hook. So the markers reach `git-lock-marker-telemetry.ts` -> pino -> Sentry. *(Corrected at review: this block originally asserted "there is no server-side surface", which is contradicted by an in-repo comment on the very extractor these markers depend on — and the block's own `alert_route: marker extractor` named the hosted mechanism while the header denied it existed.)* Hosted coverage requires the marker to be registered in `MARKER_RE`; both new markers are.
 
 ```yaml
 liveness_signal:
@@ -326,8 +351,8 @@ failure_modes:
     detection: "SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED … reason=name-not-keyable — the marker already fires; this PR adds the reason= discrimination (FR4)"
     alert_route: "marker extractor; distinguishes 'the slug transform was insufficient' from 'the lease layer is absent', which today are indistinguishable"
   - mode: "an already-nested worktree (created before this fix) is presented to the reaper"
-    detection: "skip-and-warn from the Phase 3b descendant guard, naming the registered descendant that kept it alive"
-    alert_route: "stderr + verbose summary; the absence of a SOLEUR_ORPHAN_UNREMOVABLE/removal for that path is the positive signal"
+    detection: "SOLEUR_ORPHAN_SKIP_DESCENDANT dir=… reason=holds-live-worktree (registry match) or reason=holds-checkout-on-disk (filesystem backstop)"
+    alert_route: "cli-stdout marker (layer 7) + marker extractor -> pino -> Sentry (hosted). Corrected at review: this read 'the ABSENCE of a removal is the positive signal', which is not a detection route — an absence assertion cannot distinguish 'the guard fired' from 'the reaper never ran'. The shipped code emits a positive, named marker."
   - mode: "lease layer absent entirely (plugin-cache install)"
     detection: "SOLEUR_WORKTREE_LEASE_LIB_MISSING at load (pre-existing)"
     alert_route: "tracked separately as #7409 — explicitly out of scope"
@@ -340,8 +365,8 @@ logs:
   retention: "session-scoped"
 
 discoverability_test:
-  command: "bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create ci/probe-me >/dev/null && test -d .worktrees/ci-probe-me && test ! -e .worktrees/ci && echo OK"
-  expected_output: "OK. NO ssh required. (The earlier find|grep -c form returned ~20 on a CORRECT implementation — see plan review P1-7.)"
+  command: "bash plugins/soleur/test/worktree-manager-safe-branch-sanitization.test.sh 2>&1 | tail -3"
+  expected_output: "Passed: 36 / Failed: 0 / ALL TESTS PASSED. NO ssh, no network, no credentials. Corrected at review — the previous probe was broken THREE ways: (a) it asserted a RELATIVE .worktrees/ path while WORKTREE_DIR anchors to the bare root, so it failed on a CORRECT implementation whenever run from a worktree; (b) it sent stdout to /dev/null, discarding the very SOLEUR_* marker stream it was meant to demonstrate; (c) it created a real branch, worktree and >=4h lease with no teardown, needing network and a multi-minute install. The suite exercises both new markers in synthesized fixtures and cleans up after itself."
 ```
 
 The two failure modes above are discriminated by **distinct** sentinels carrying the raw branch and the derived slug in the same event, so a single marker decides *which* of them fired — rather than a shared boolean that would leave the two hypotheses tied.
@@ -421,7 +446,7 @@ The cited evidence (`fix-6808-heartbeat-wire` ↔ `docs-redaction-fails-open`) i
 |---|---|
 | **Widen the transform to `tr -c 'A-Za-z0-9._-' '-'`** (safe-by-construction for every git refname) | **Rejected.** Three measured reasons. (1) It **manufactures collisions** — `déjà/vu` and `dêjà/vu` collapse to the same slug, so it trades a loud refusal for a silent wrong-worktree, which is the failure class FR5 exists to stop. (2) It mangles non-ASCII (`déjà/vu` → `d--j---vu`; `tr` is byte-oriented). (3) It delivers **zero** benefit on the real corpus — 0 of 29 slash-bearing branches and 0 of all origin branches need it. The residual class needs no transform change at all — measurement (R1) shows it carries no data-loss path once nesting is fixed; FR4's `reason=` field makes it visible if that ever changes. |
 | **Relax `_validate_worktree_name` to accept `/`** | Rejected. It is a shared guard for every lease consumer, and slashes in a lease *filename* would create the same nesting problem one directory over. Fix the producer, not the validator. |
-| **Harden `cleanup_orphan_worktree_dirs`** (descendant guard + `$PWD` guard) | **Adopted — Phase 3b.** Initially framed as deferrable defense-in-depth; CTO and CPO independently reframed it as **remediation**: fixing the producer does nothing for worktrees already nested on installed machines, and the plugin is live on an external tester's disk. Both guards are skip-and-warn only, so neither can delete anything that survives today. |
+| **Harden `cleanup_orphan_worktree_dirs`** (descendant guard + `$PWD` guard) | **Adopted — Phase 3b.** Initially framed as deferrable defense-in-depth; CTO and CPO independently reframed it as **remediation**: fixing the producer does nothing for worktrees already nested on installed machines, and the plugin is live on an external tester's disk. Both guards are skip-and-warn only, so neither can delete anything that survives today. **Revised at review:** the `$PWD` guard was cut (R3) and what shipped alongside the descendant guard is a filesystem backstop — see Phase 3b. |
 | **Migrate existing nested worktrees automatically** | Rejected. Any migration must `mv` or `rm` live directories — the exact operation whose miscarriage caused this issue. Phase 3b's descendant guard makes the pre-existing state *safe* instead, which achieves the goal without moving anything. Manual cleanup documented in the SKILL.md Sharp Edge. |
 | **Fail closed on a non-keyable slug** (the plan's v2 position, added at Phase 2.5) | **Rejected at plan review — see R1.** The premise that an unleased flat worktree is reapable was measured false; the abort would have regressed legal refnames like `feat(auth)/login` with no data-loss risk averted. Reduced to a `reason=` field on the marker that already fires. |
 | **Scope in #7409** (lease library unresolvable from plugin-cache installs) | Rejected — explicitly out of scope per the issue. It ships separately. Worth noting the interaction: on a plugin-cache install with no lease library, `_acquire_worktree_lease` returns early and the reaper fails **closed**, so this fix's lease-key correctness is moot there until #7409 lands. That does not change this fix's value — the *nesting* half of the defect is independent of the lease layer. |
@@ -444,7 +469,7 @@ The cited evidence (`fix-6808-heartbeat-wire` ↔ `docs-redaction-fails-open`) i
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. Fill it before requesting deepen-plan or `/work`.
-- **`tr '/' '-'` is not a sanitizer.** It fixes one character class. Six valid git branch shapes measured in this plan remain lease-invalid after it. Do not let AC3 be read as an unqualified universal — it is scoped to the measured corpus plus a **fail-closed** escape.
+- **`tr '/' '-'` is not a sanitizer.** It fixes one character class. Six valid git branch shapes measured in this plan remain lease-invalid after it. Do not let AC3 be read as an unqualified universal — it is scoped to the measured corpus plus a **reported** escape (`reason=name-not-keyable`). *(Corrected at review: this read "fail-closed escape", which R1 cut — nothing aborts; the residual class runs unleased and says so.)*
 - **Phase 3b's nesting fixture cannot be built with the fixed manager.** After the fix, `create` can no longer produce a nested layout — so A11/T13 must construct it with a direct `git worktree add`, or the test will silently assert nothing.
 - **AC4 is vacuous without AC5.** A survival test passes trivially if the fixture never reproduces the nesting. The mutation arm is the only thing that proves the suite detects the real defect.
 - **Do not `cd` into the worktree under test before invoking the reaper.** `cleanup_orphan_worktree_dirs` has no `$PWD` guard; a test that stands inside its target exercises a different path than production.
