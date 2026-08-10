@@ -127,8 +127,8 @@ Three in-repo wrappers swallow the signal shape:
 
 So an OOM kill of the vitest/node process — the single most plausible instance of the class
 this ADR is about — still surfaces as `[FAIL]`. This is a real limit, not a rounding error.
-Parity is tracked as a follow-up, deferred because `run-registered-suites.sh` is the live
-target of open #7376.
+Parity is tracked as #7429, deferred because `run-registered-suites.sh` is the live target of
+open #7376; it re-evaluates when that merges.
 
 Measured and worth recording: `env VAR=x bash -c '…'` **does** propagate, because `env` execs
 rather than forks.
