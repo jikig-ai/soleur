@@ -110,3 +110,25 @@ This dual surfacing closes the failure mode where a founder under deadline press
 - Cross-document consistency checks only run when 2+ documents are in scope
 - If a document references another document type that does not exist in the project, flag it as a CRITICAL finding
 - Do not modify the audited documents -- only report findings and suggest fixes
+
+## CI gates over `docs/legal/**` (#7387)
+
+Five gates ride this path. Reproduce any of them locally before pushing:
+
+- `bash scripts/lint-legal-scope-block-placement.sh --base origin/main` — added scope blocks:
+  referent/section agreement, attachment, discharge. `--print-vocab` lists every accepted
+  phrasing; a locality assertion whose referent it does not recognise is reported as
+  NOT CHECKED rather than silently skipped.
+- `bash scripts/lint-legal-mirror-drift-baseline.sh --base origin/main` — canonical↔mirror drift
+  ratchet. Reducing drift always passes; growth, reordering, and in-place edits of an
+  already-drifting line fail. A revert or an urgent publication that must land despite it sets
+  `SOLEUR_LEGAL_DRIFT_ACCEPT='<reason>'`, which downgrades to a warning and records the reason.
+- `apps/web-platform/scripts/check-tc-document-sha.sh` — raw-file SHA pin; re-pin
+  `apps/web-platform/lib/legal/legal-doc-shas.ts` after any canonical edit.
+- `apps/web-platform/test/legal-doc-consistency.test.ts` — heading-sequence parity.
+- The `EXPECTED_COUNT` sentinel in the SHA guard, cross-checked by a vitest harness.
+
+**The mirror is the published surface.** `docs/legal/<doc>.md` is the canonical record;
+`plugins/soleur/docs/pages/legal/<doc>.md` is what users read at soleur.ai/legal/. `docs/legal/`
+is in no Eleventy input tree and is read by no route, so a canonical-only edit changes nothing a
+user sees — and exits 2 as an unpaired document.
