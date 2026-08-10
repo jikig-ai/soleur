@@ -44,9 +44,11 @@ If the tenant has not signed: **STOP here**. Do not proceed to Step 1.
 Counsel review may be required for any tenant whose DPA negotiation
 deviates from the template.
 
-**Verify:** `test -s knowledge-base/legal/tenant-dpa-register.md && grep -c '^|' knowledge-base/legal/tenant-dpa-register.md | xargs -I{} test {} -ge 3` — file exists with at least one signed row (header row + separator row + ≥1 data row = ≥3 pipe-lines).
+**Verify:** `bash scripts/tenant-dpa-register-guard.sh assert-populated` — exits 0 only once the register holds at least one real tenant row, and exits 1 on the empty register.
 
-**Teardown (if a later step fails)**: no teardown required at Step 0 itself; the DPA remains valid. Document the aborted onboarding in `knowledge-base/legal/tenant-dpa-register.md` with status `aborted-provisioning` so the next attempt knows what state was reached.
+> The earlier form of this gate counted table lines and required at least three, reasoning "header + separator + ≥1 data row". The empty register has exactly three such lines, because the `| _(none yet)_ |` placeholder is itself one — so the gate was vacuously true on the empty set and would have kept passing until the first real tenant. Fixed under #7349; the guard now excludes the placeholder and fails closed. The assertion that the old predicate has not returned lives in `scripts/tenant-dpa-register-guard.test.sh`, which is why this note describes it rather than quoting it.
+
+**Teardown (if a later step fails)**: no teardown required at Step 0 itself; the DPA remains valid. Document the aborted onboarding in `knowledge-base/legal/tenant-dpa-register.md` with status `aborted-provisioning-at-step-N` (the canonical vocabulary in that register's Status values section — record the step number reached) so the next attempt knows what state was reached.
 
 ---
 

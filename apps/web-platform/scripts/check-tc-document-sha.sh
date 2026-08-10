@@ -259,6 +259,10 @@ fi
 SEED_SCRIPTS=(
   "apps/web-platform/scripts/seed-dev-users.sh"
   "apps/web-platform/scripts/seed-qa-user.sh"
+  # Added #7349 (A4). This script sat at 2.3.0 while canonical was 2.4.0 and was absent from
+  # this list, so nothing guarded the drift. Correct the literal BEFORE adding a script here:
+  # adding a drifted script turns a required check red.
+  "apps/web-platform/scripts/seed-live-verify-user.sh"
 )
 
 if [ -n "$CANONICAL_TC_VERSION" ]; then
