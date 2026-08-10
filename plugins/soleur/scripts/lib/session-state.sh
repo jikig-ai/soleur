@@ -210,6 +210,28 @@ acquire_lease() {
   fi
 
   local tmp
+  # Surfaced by #7409, PRE-EXISTING and deliberately left as-is. Moving this file
+  # made it a "new entrant" for lint-trap-tempfile-ownership rule (c), which is
+  # scoped to files changed vs the merge base — the pre-existing population is
+  # fenced by the high-water instead. So the finding is new; the code is not.
+  #
+  # The remedy rule (c) proposes — "add a single owning trap ... EXIT" — is
+  # ACTIVELY HARMFUL in this file specifically, for the reason recorded at
+  # `_register_lease_release_trap` below: EXIT is deliberately excluded there
+  # because `create_worktree` acquires the lease and registers its trap IN THE
+  # SAME shell that then exits normally on success, so an armed EXIT trap fired
+  # on that success and released the lease immediately. That is what made the
+  # lease layer unreachable in production. Arming one here to satisfy a linter
+  # would re-introduce it.
+  #
+  # The residual, stated honestly rather than waved away: `sweep_orphan_leases`
+  # globs `*.lease`, so a leaked `*.lease.XXXXXX` does NOT match it and nothing
+  # else reaps it. A SIGKILL (or power loss) in the window between this mktemp
+  # and the `mv` below — one `date` subshell and one heredoc write — therefore
+  # strands a single ~150-byte file in the repo's own scratch dir, permanently.
+  # Bounded and non-destructive, but not zero. INT/TERM/HUP are already covered
+  # by the multi-signal trap; only SIGKILL reaches this window.
+  # lint-trap-ownership: ok  an EXIT trap is documented-harmful here (see _register_lease_release_trap) — it would re-arm the release-on-success bug; residual is one ~150B stranded file per SIGKILL in a two-statement window
   tmp=$(mktemp "${lease_file}.XXXXXX") || return 1
 
   local started_at
