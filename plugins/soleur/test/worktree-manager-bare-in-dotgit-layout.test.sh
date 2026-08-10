@@ -193,6 +193,12 @@ assert_eq "__ABSENT__" "$(git config --file "$C2/.git/config" --get extensions.w
   "extensions.worktreeConfig ABSENT (never enabled; defensively removed)"
 assert_eq "__ABSENT__" "$(git config --file "$C2/.git/config" --get core.worktree 2>/dev/null || echo __ABSENT__)" \
   "stale core.worktree removed (this step is retained from the old behaviour)"
+if printf '%s' "$C2_OUT" | grep -qF 'SOLEUR_GIT_BARE_POISON' && printf '%s' "$C2_OUT" | grep -qF 'branch=healed'; then
+  echo "  PASS: SOLEUR_GIT_BARE_POISON … branch=healed emitted (work was done)"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: expected branch=healed when normalization actually changed something"
+  printf '%s\n' "$C2_OUT" | sed 's/^/    /'; FAIL=$((FAIL + 1))
+fi
 
 # ---------------------------------------------------------------------------------
 echo "Case 3: bare-in-.git + row-3 POISON — the pair is BROKEN, post-state matches row 1"
@@ -210,6 +216,11 @@ assert_eq "true" "$(git config --file "$C3/.git/config" --get core.bare 2>/dev/n
   "core.bare RETAINED — the bare root must keep reporting bare (fact 7)"
 C3_WT_BARE="$(git -C "$C3/.worktrees/feat-b" rev-parse --is-bare-repository 2>/dev/null || echo ERR)"
 assert_eq "false" "$C3_WT_BARE" "the linked worktree no longer reports bare"
+if printf '%s' "$C3_OUT" | grep -qF 'branch=healed'; then
+  echo "  PASS: branch=healed emitted for the poisoned fixture"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: expected branch=healed on a poisoned fixture"; FAIL=$((FAIL + 1))
+fi
 
 # ---------------------------------------------------------------------------------
 echo "Case 4: GENUINE bare (gitdir IS the root) + linked worktree — same invariant"
@@ -226,6 +237,11 @@ assert_eq "__ABSENT__" "$(git config --file "$C4/config" --get extensions.worktr
   "genuine-bare path also removes the extension (polarity is layout-independent)"
 assert_eq "false" "$(git -C "$TMP/c4/wt-a" rev-parse --is-bare-repository 2>/dev/null || echo ERR)" \
   "genuine-bare linked worktree no longer reports bare"
+if printf '%s' "$C4_OUT" | grep -qF 'branch=healed'; then
+  echo "  PASS: branch=healed emitted on the genuine-bare layout too"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: expected branch=healed on the genuine-bare fixture"; FAIL=$((FAIL + 1))
+fi
 
 # ---------------------------------------------------------------------------------
 echo "Case 5: NEGATIVE — a normal non-bare clone gets ZERO config writes (pins #6184)"
@@ -244,6 +260,14 @@ else
   echo "  FAIL: normal clone's .git/config was modified — #6184 regression"
   diff -u "$TMP/c5-config.before" "$C5/.git/config" | sed 's/^/    /' || true
   FAIL=$((FAIL + 1))
+fi
+# The guard SKIPS before the normalization block, so no POISON marker may be emitted.
+# Without this, a future change that falls through on a non-bare clone would be silent.
+if printf '%s' "$C5_OUT" | grep -qF 'SOLEUR_GIT_BARE_POISON'; then
+  echo "  FAIL: emitted a bare-config marker on a NON-bare clone (guard fell through)"
+  printf '%s\n' "$C5_OUT" | sed 's/^/    /'; FAIL=$((FAIL + 1))
+else
+  echo "  PASS: no bare-config marker on a non-bare clone (skip path held)"; PASS=$((PASS + 1))
 fi
 
 # ---------------------------------------------------------------------------------
@@ -480,6 +504,14 @@ else
 fi
 assert_eq "__ABSENT__" "$(git config --file "$C14/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
   "extension still absent (never enabled under the reversed polarity)"
+# [R-arch2] The intended behaviour on this fall-through, asserted rather than implied:
+# the run reaches the normalization block, finds nothing to do, and says so.
+if printf '%s' "$C14_OUT" | grep -qF 'branch=clean'; then
+  echo "  PASS: falls through and reports branch=clean (nothing to heal)"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: expected branch=clean on the corrupted non-bare clone"
+  printf '%s\n' "$C14_OUT" | sed 's/^/    /'; FAIL=$((FAIL + 1))
+fi
 
 echo ""
 print_results
