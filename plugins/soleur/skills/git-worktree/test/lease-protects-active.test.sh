@@ -356,20 +356,30 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# SCENARIO 6 (PR #7373): a name the lease layer cannot key on must SAY SO.
+# SCENARIO 6 (PR #7373, re-pointed by #7408): a name the lease layer cannot key
+# on must SAY SO.
 #
-# _validate_worktree_name rejects anything outside [A-Za-z0-9._-], so a
-# slash-bearing branch makes acquire_lease fail. Measured before this arm:
-# `--yes create feat/probe` exited 0, wrote ZERO leases, and emitted nothing an
-# orchestrating agent could see — #5454's exact signature, on the path this fix
-# exists to protect. The lease cannot be made to work for that shape here (the
-# key/reader mismatch is a separate design decision), so what is pinned is that
-# the failure is no longer SILENT.
+# _validate_worktree_name rejects anything outside [A-Za-z0-9._-]. Measured
+# before this arm: `--yes create feat/probe` exited 0, wrote ZERO leases, and
+# emitted nothing an orchestrating agent could see — #5454's exact signature.
+#
+# RE-POINTED by #7408. This arm used `feat/probe6`, and the premise it rested on
+# — "the lease cannot be made to work for that shape here" — is now FALSE:
+# #7408 derives the lease key through `_safe_worktree_name`, so `feat/probe6`
+# keys as `feat-probe6` and leases cleanly. Left as written, this arm asserted
+# that a FIXED bug was still broken, and it went red the moment the fix landed.
+#
+# The scenario's real subject is the RESIDUAL class: a legal git refname that is
+# still unkeyable AFTER slugification. `+` is legal in a refname (`git
+# check-ref-format` accepts `feat+probe6`) and is outside the validator's
+# character set, so it survives the transform unkeyable — which is exactly the
+# class #7408's new `reason=name-not-keyable` discriminator exists to report.
+# Asserting the reason= value here also gives that discriminator its only test.
 # ---------------------------------------------------------------------------
 if ( cd "$LOCAL3" \
      && SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT3" \
         SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
-        bash "$WM" --yes create feat/probe6 >"$TMP/create6.log" 2>&1 ); then
+        bash "$WM" --yes create feat+probe6 >"$TMP/create6.log" 2>&1 ); then
   :
 fi
 if grep -q 'SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED' "$TMP/create6.log"; then
@@ -377,6 +387,27 @@ if grep -q 'SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED' "$TMP/create6.log"; then
 else
   fail "scenario 6: unleasable name ran UNLEASED and SILENT — no marker on stdout \
 (output: $(cat "$TMP/create6.log"))"
+fi
+if grep -q 'reason=name-not-keyable' "$TMP/create6.log"; then
+  pass "scenario 6b: the marker discriminates the residual class (reason=name-not-keyable)"
+else
+  fail "scenario 6b: marker did not carry reason=name-not-keyable — the #7408 discriminator \
+is unreported for a name that survives slugification unkeyable \
+(output: $(cat "$TMP/create6.log"))"
+fi
+# A slash-bearing name, by contrast, must now lease CLEANLY — the #7408 fix.
+# Without this the arm above could be satisfied by a transform that does nothing.
+if ( cd "$LOCAL3" \
+     && SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT3" \
+        SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
+        bash "$WM" --yes create feat/probe6 >"$TMP/create6c.log" 2>&1 ); then
+  :
+fi
+if grep -q 'SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED' "$TMP/create6c.log"; then
+  fail "scenario 6c: a SLASH-bearing branch still failed to lease — #7408's fix is not in effect \
+(output: $(cat "$TMP/create6c.log"))"
+else
+  pass "scenario 6c: a slash-bearing branch leases cleanly under its slug"
 fi
 
 # ---------------------------------------------------------------------------
