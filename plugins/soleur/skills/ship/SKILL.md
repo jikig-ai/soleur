@@ -1274,30 +1274,6 @@ done
 
 **Why:** On 2026-06-29 two PRs shipped soak-gated closures in prose with no sweeper enrollment — PR #5675 (#5689 soak) and PR #5671 (#5673 AC8 `op:founder-ambiguous` soak, enrolled retroactively via PR #5724). Both declared the soak in prose, so Phase 7 Step 3.5's `⏳`-only scan never fired and the trackers were left to rot open on human memory. This gate moves soak-class follow-through enrollment from honor-system to a mechanical block-before-ready, reusing the existing follow-through substrate. See `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`.
 
-### KB-Artifact Archival Gate (mandatory)
-
-Blocks PR-ready when this branch's knowledge-base artifacts — its spec dir and its plan/brainstorm — are still at their **live** paths. After merge there is no mechanism that will collect them: `compound`'s automatic consolidation is the only thing that commits the `git mv`, and Phase 7 Step 4 documents at length why `cleanup-merged` does **not** (its archive step is scoped to legacy pre-#2815 layouts, guards on a bare-root directory that does not exist for the modern layout, runs before it updates main, and produces no commit even when it fires).
-
-That prose existed and did not prevent the failure twice. **Why:** PR #7240 shipped its spec dir unarchived on the strength of a since-corrected claim that `cleanup-merged` would collect it; PR #7373 then shipped BOTH its spec dir and its plan unarchived because its compound phases were driven by hand and the consolidation never fired. Both needed a follow-up PR. This gate is the mechanical version.
-
-**Detection.** Run the sentinel from the branch root:
-
-```bash
-bash scripts/check-kb-artifacts-archived.sh
-```
-
-Exit 0 → pass. Exit 1 → it names every live-path artifact on stderr and prints the `git mv` recipe. Exit 2 → environment error (not a work tree); treat as a skip, not a pass.
-
-The check fails **open** on any non-`feat-*`/`fix-*` branch (no per-feature artifact convention to enforce), and carves out `decision-challenges.md`, which legitimately stays live until Phase 6 step 2.5 renders it into the PR body (ADR-084). The carve-out is per-FILE: a `decision-challenges.md` sitting beside a live `tasks.md` still fails, so it cannot be used to mask a whole unarchived directory.
-
-**If it exits 1**, choose one:
-
-1. **Archive now, in THIS PR** so the move rides the merge — `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh`, or the `git mv` pair the sentinel prints. Re-run to confirm exit 0.
-2. **Let compound do it** — if compound's automatic consolidation has not run on this branch, run `skill: soleur:compound` and let the consolidation fire rather than driving its phases by hand. Driving the phases manually is exactly how #7373 lost the archival.
-3. **Deliberately keep them live** — add `<!-- gate-override: kb-archival -->` plus a one-line reason to the PR body. Legitimate when Phase 6 still needs an artifact at its live path; not a general escape hatch.
-
-**Headless mode:** abort with the sentinel's output rather than auto-overriding — whether an artifact is still needed live is a judgment about the current run.
-
 ### ADR-Ordinal Collision Gate (mandatory)
 
 Blocks PR-ready when the branch adds a NEW `ADR-NNN-*.md` whose ordinal `NNN` is already taken on `origin/main` by a DIFFERENT file. This is the collision class that turns the (non-required) `adr-ordinals` CI check RED on `main` **post-squash**: the ordinal was free when the ADR was authored at plan/brainstorm time, but a sibling PR claimed it during the pipeline. Because `adr-ordinals` is not a required merge check, the queued auto-merge fires on the green required set and the collision surfaces only after merge, on `main`.
