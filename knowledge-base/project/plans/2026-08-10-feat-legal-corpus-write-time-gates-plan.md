@@ -974,7 +974,9 @@ into the sections above; this log records what changed and why.
 
 ### Deferred / recorded, not applied
 
-- **R23 — Escape hatch for gate 1** (spec-flow P1-1). Real gap: no waiver, and the natural remedies
+- **R23 — Escape hatch for gate 1** (spec-flow P1-1). **⚠ The pragma shape below is SUPERSEDED by
+  D1** — the waiver is an out-of-band, CODEOWNERS-owned ack ledger, not an in-document comment.
+  Kept for the reasoning, which still holds. Real gap: no waiver, and the natural remedies
   (delete the block, or reword the legal section to drop a marker) are both worse than the defect.
   R1's referent respecification removes the *known* false positives, which lowers urgency — but the
   hatch is still required before Phase 2 code, because it changes the parser (it must read a
@@ -1154,14 +1156,16 @@ be diffed rather than invented:
      same hazard R9 flags for renames; their mitigation was a committed manifest as a
      git-history-free second oracle for the deletion direction. Phase 3.7 must decide explicitly
      whether gate 2 needs that second oracle or whether `EXPECTED_COUNT` already serves as one.
-- **The waiver (R23).** Four in-repo idioms exist: an inline pragma with mandatory reason
+- **The waiver (R23) — resolved in D1 as an ack ledger.** Four in-repo idioms exist: an inline
+  pragma with mandatory reason
   (`lint-trap-tempfile-ownership.py`), a hash-bound ack file with replay protection
   (`lint-rule-bodies.py` + `.claude/rule-weakening-acks.txt`), an in-file allowlist
   (`check-adr-ordinals.sh`), and a reason-plus-issue exclusion array that fails closed
   (`lint-orphan-test-suites.sh`). **The selection criterion is authority, not ergonomics:** the CLO,
-  not the engineer, must authorise a legal-scope exception — so the pragma must carry a mandatory
-  **ruling-document path**, and a pragma citing no ruling must itself be exit 1. That requirement is
-  what rules out the bare `# lint-…: ok <reason>` form.
+  not the engineer, must authorise a legal-scope exception. That rules out **every in-document
+  form**, because CODEOWNERS owns files rather than line ranges — see D1. The surviving idiom is
+  the hash-bound ack ledger (`lint-rule-bodies.py`) hybridised with `expires_on`
+  (`lint-encryption-posture.py`), owned by the CLO in CODEOWNERS.
 
 ### D3 — Residual risk the plan should not pretend it closed
 
