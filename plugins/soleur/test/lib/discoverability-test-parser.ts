@@ -14,7 +14,7 @@ export type Executor = (cmd: string, timeoutMs: number) => Promise<ExecResult>;
 export type ClassificationResult = {
   // SKIP-DECLARED is deliberately NOT folded into SKIP: it is a verification
   // waiver a reviewer must be able to see (ADR-173 Layer 3).
-  result: "PASS" | "FAIL" | "SKIP" | "SKIP-DECLARED";
+  result: "PASS" | "FAIL" | "SKIP" | "SKIP-DECLARED" | "SKIP-NOSANDBOX";
   reason?: string;
 };
 
@@ -446,9 +446,21 @@ export async function classifyDiscoverabilityResult(
         reason: `discoverability_test.credentials_required is a placeholder ("${credsRequired}"). State the credential scope and why no unauthenticated probe verifies the same property, or remove the field.`,
       };
     }
+    // INVERTED ADVISORY (ADR-173 Layer 3). Applying the verb gate to declared
+    // probes as a REJECT would re-close the door #7393 opened — the motivating
+    // case is `doppler run …`, and `doppler` is deliberately off the allowlist.
+    // A plain advisory would fire on ~100% of declarations by construction, and
+    // an always-on warning is noise. So it fires only in the case that is
+    // actually suspicious: the declared command's verb is one Check 10 COULD
+    // have executed, which means either the declaration is unnecessary or the
+    // credential dependency is hidden inside a wrapped script.
+    const declaredVerb = effectiveVerb(cmd);
+    const advisory = (PROBE_VERB_ALLOWLIST as readonly string[]).includes(declaredVerb)
+      ? ` (advisory: this command's verb \`${declaredVerb}\` is one Check 10 can execute — either the declaration is unnecessary, or the credential dependency is hidden inside a wrapped script)`
+      : "";
     return {
       result: "SKIP-DECLARED",
-      reason: `discoverability_test declares credentials_required — ${credsRequired}. Check 10 did NOT execute the command: running it inside the Step 10.5 sandbox would fail for lack of credentials and prove nothing about the property under test.`,
+      reason: `discoverability_test declares credentials_required — ${credsRequired}. Check 10 did NOT execute the command: running it inside the Step 10.5 sandbox would fail for lack of credentials and prove nothing about the property under test.${advisory}`,
     };
   }
 
@@ -458,10 +470,23 @@ export async function classifyDiscoverabilityResult(
   // Fail-closed: no unsandboxed fallback, ever. A skill that claims a boundary
   // it does not have is worse than one that claims none.
   if (!sandboxAvailable) {
+    // ITS OWN TERMINAL, never folded into ordinary SKIP.
+    //
+    // Folded, "the security gate verified nothing" was byte-identical to "the
+    // gate correctly had nothing to do" (no sensitive paths, no PR, no plan) —
+    // in the aggregate row, to /soleur:ship, and to the operator. That is the
+    // blanket-disablement-that-looks-like-correct-operation failure this ADR's
+    // own Sharp Edge names, and it shipped.
+    //
+    // The asymmetry made it plain: credentials_required waives ONE probe in ONE
+    // plan and got three mechanical counterweights on the grounds that "prose is
+    // not an enforcement mechanism"; this disables the check for EVERY plan,
+    // permanently, on that host — and had none. bwrap is Linux-only, so on macOS
+    // this is the steady state, not an exception.
     return {
-      result: "SKIP",
+      result: "SKIP-NOSANDBOX",
       reason:
-        "Check 10 executes plan-declared commands only inside a bubblewrap (bwrap) sandbox, and the sandbox could not be established on this host (bwrap absent, or unprivileged user namespaces restricted). Refusing to run the probe unsandboxed.",
+        "Check 10 executes plan-declared commands only inside a bubblewrap (bwrap) sandbox, and the sandbox could not be established on this host (bwrap absent, or unprivileged user namespaces restricted). Refusing to run the probe unsandboxed. NOTE: bubblewrap is Linux-only — on macOS Check 10 is disabled permanently, not transiently.",
     };
   }
 

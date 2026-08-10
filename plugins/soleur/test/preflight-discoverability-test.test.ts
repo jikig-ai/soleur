@@ -1495,6 +1495,44 @@ describe("#7393 D — credentials_required => SKIP-DECLARED", () => {
     expect(out.reason ?? "").toMatch(/prd_terraform/);
   });
 
+  test("D5b the advisory fires only when the declared verb IS executable", async () => {
+    // Applying the verb gate to declared probes as a REJECT would re-close the
+    // door #7393 opened (`doppler` is deliberately off the allowlist). A plain
+    // advisory would fire on ~100% of declarations. So it targets the actual
+    // abuse gradient: a declared probe whose verb Check 10 could have run.
+    const mk = (command: string) =>
+      `## Observability\n\n${obs(
+        "discoverability_test:",
+        `  command: ${command}`,
+        '  expected_output: "x"',
+        '  credentials_required: "doppler:soleur/prd_terraform — no unauthenticated form"',
+      )}\n`;
+
+    const notExecutable = await classifyDiscoverabilityResult({
+      planPath: "plans/x.md",
+      planBody: mk("doppler run -p soleur -c prd_terraform -- scripts/q.sh"),
+      prBody: "",
+      runner: throwingExecutor,
+    });
+    expect(notExecutable.result).toBe("SKIP-DECLARED");
+    expect(notExecutable.reason ?? "", "no advisory for a genuinely un-runnable verb").not.toMatch(
+      /advisory/i,
+    );
+
+    const executable = await classifyDiscoverabilityResult({
+      planPath: "plans/x.md",
+      planBody: mk("curl -fsS -o /dev/null https://app.soleur.ai/api/inngest"),
+      prBody: "",
+      runner: throwingExecutor,
+    });
+    expect(executable.result).toBe("SKIP-DECLARED");
+    expect(executable.reason ?? "", "advisory expected for an executable verb").toMatch(
+      /advisory/i,
+    );
+    // Still does not execute — the advisory is a signal, not a downgrade.
+    expect(executable.reason ?? "").toMatch(/did NOT execute/);
+  });
+
   test("D6 the not-allowlisted fixture FAILs without executing", async () => {
     const out = await classifyDiscoverabilityResult({
       planPath: "plans/09.md",
@@ -1526,10 +1564,15 @@ describe("#7393 E — fail-closed sandbox, no unsandboxed fallback", () => {
       runner: throwingExecutor,
       sandboxAvailable: false,
     });
-    expect(out.result).toBe("SKIP");
+    // Its OWN terminal — folded into ordinary SKIP, "the gate verified nothing"
+    // was indistinguishable from "the gate had nothing to do".
+    expect(out.result).toBe("SKIP-NOSANDBOX");
     expect(out.reason ?? "").toMatch(/sandbox/i);
     // Fail-closed, stated: a degraded sandbox must never revert to the status quo.
     expect(out.reason ?? "").toMatch(/bwrap|bubblewrap/i);
+    // bwrap is Linux-only, so on macOS this is permanent, not transient. The
+    // message must say so rather than implying a retryable condition.
+    expect(out.reason ?? "").toMatch(/Linux-only|macOS/i);
   });
 
   test("E2 sandbox available => the executor IS reached (E1 is not vacuous)", async () => {
@@ -1672,7 +1715,12 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
     // 3. The retry really is the sandbox minus --proc, not a second identical try.
     expect(body).toMatch(/if ! bwrap "\$\{BWRAP_ARGS\[@\]\}" true/);
     // 4. Only then does it give up — fail-closed, never unsandboxed.
-    expect(body).toMatch(/SKIP: Check 10 could not establish the bwrap sandbox/);
+    expect(body).toMatch(/SKIP-NOSANDBOX: Check 10 could not establish the bwrap sandbox/);
+    // The give-up must state MEASURED causes, not a hypothesis (AP-021): the
+    // earlier message named apparmor_restrict_unprivileged_userns without ever
+    // reading it, while 2>/dev/null discarded bwrap's own stderr.
+    expect(body).toMatch(/max_user_namespaces/);
+    expect(body).toMatch(/SOLEUR_PREFLIGHT_CHECK10_NOSANDBOX/);
     expect(body).toMatch(/enableWeakerNestedSandbox|nested user namespace/i);
   });
 
