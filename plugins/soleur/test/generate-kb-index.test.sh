@@ -9,7 +9,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
 
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-GEN_SCRIPT="$REPO_ROOT/scripts/generate-kb-index.sh"
+# Overridable so the mutation battery can point at a scratch copy of the script
+# without mutating the working tree. Default is the real script.
+GEN_SCRIPT="${GEN_SCRIPT:-$REPO_ROOT/scripts/generate-kb-index.sh}"
 FIXTURE_DIR="$SCRIPT_DIR/fixtures/kb-facets"
 
 echo "=== generate-kb-index facet extraction ==="
@@ -174,6 +176,136 @@ if ! grep -qE '^$' "$kb/kb-tags.txt"; then
   PASS=$((PASS + 1))
 else
   echo "  FAIL: kb-tags.txt contains blank lines"
+  FAIL=$((FAIL + 1))
+fi
+
+# ---------------------------------------------------------------------------
+# TS7 — spec-directory allowlist (#7399)
+#
+# A spec directory contributes spec.md and tasks.md; every other flat file in
+# it is branch-lifetime working state and is not indexed. Fixtures are derived
+# from shapes that exist in the real corpus, not from the predicate — the
+# reverted archival gate's fixtures were derived from its own implementation,
+# which is why its coverage holes clustered exactly where it was wrong.
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- TS7: spec-directory allowlist ---"
+
+# Build a synthetic KB mirroring the real layout. Every file gets a title so a
+# missing row cannot be blamed on title extraction.
+setup_kb_specs() {
+  local kb="$TMPDIR_BASE/kb-specs"
+  local p
+  for p in \
+    "project/specs/feat-x/spec.md" \
+    "project/specs/feat-x/tasks.md" \
+    "project/specs/feat-x/session-state.md" \
+    "project/specs/feat-x/decision-challenges.md" \
+    "project/specs/feat-x/phase0-evidence.md" \
+    "project/specs/feat-x/ac-walk.md" \
+    "project/specs/fix-y/spec.md" \
+    "project/specs/fix-y/tasks.md" \
+    "project/specs/fix-y/session-state.md" \
+    "project/specs/review-workflow-hardening/spec.md" \
+    "project/specs/review-workflow-hardening/session-state.md" \
+    "project/specs/archive/20260101-000000-feat-old/spec.md" \
+    "project/plans/feat-q/plan.md" \
+    "project/plans/2026-01-01-feat-r-plan.md" \
+    "product/specs/feat-w/session-state.md" \
+    "engineering/INDEX.md" \
+    "engineering/note.md" \
+  ; do
+    mkdir -p "$kb/$(dirname "$p")"
+    printf -- '---\ntitle: "fixture %s"\n---\n\nbody\n' "$p" > "$kb/$p"
+  done
+  # Non-markdown asset outside specs/: only `-name '*.md'` keeps it out.
+  mkdir -p "$kb/engineering"
+  printf 'not markdown\n' > "$kb/engineering/diagram.png"
+  echo "$kb"
+}
+
+# Assert on the LINK TARGET, not a bare path — a fixture title contains the
+# path string, so a bare grep would match the title and pass vacuously.
+assert_indexed() {
+  local kb="$1" rel="$2" label="$3"
+  if grep -qF -- "]($rel)" "$kb/INDEX.md"; then
+    echo "  PASS: $label"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $label (expected link target $rel in INDEX.md)"; FAIL=$((FAIL + 1))
+  fi
+}
+
+assert_not_indexed() {
+  local kb="$1" rel="$2" label="$3"
+  if grep -qF -- "]($rel)" "$kb/INDEX.md"; then
+    echo "  FAIL: $label (unexpected link target $rel in INDEX.md)"; FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: $label"; PASS=$((PASS + 1))
+  fi
+}
+
+kb=$(setup_kb_specs)
+run_generator "$kb"
+
+# Fixture sanity: if the generator emitted nothing, every assert_not_indexed
+# below would pass vacuously. Fail loudly instead.
+if ! grep -q '^- \[' "$kb/INDEX.md"; then
+  echo "  FAIL: fixture corpus produced no INDEX.md rows — TS7 would be vacuous"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: fixture corpus produced INDEX.md rows (non-vacuity guard)"
+  PASS=$((PASS + 1))
+fi
+
+# F1 / F14 — a spec dir contributes spec.md AND tasks.md
+assert_indexed     "$kb" "project/specs/feat-x/spec.md"  "F1: spec.md indexed"
+assert_indexed     "$kb" "project/specs/feat-x/tasks.md" "F14: tasks.md indexed"
+
+# F2 / F3 / F10 — flat working state is dropped, whatever it is named
+assert_not_indexed "$kb" "project/specs/feat-x/session-state.md"      "F2: session-state.md dropped"
+assert_not_indexed "$kb" "project/specs/feat-x/phase0-evidence.md"    "F3: phase0-evidence.md dropped (long tail)"
+assert_not_indexed "$kb" "project/specs/feat-x/ac-walk.md"            "F3: ac-walk.md dropped (long tail)"
+assert_not_indexed "$kb" "project/specs/feat-x/decision-challenges.md" "F10: decision-challenges.md dropped from index"
+
+# F10b — ADR-084 §5 reads this file from disk; the index must not affect that
+assert_file_exists "$kb/project/specs/feat-x/decision-challenges.md" "F10: decision-challenges.md still on disk"
+
+# F4 — prefix-independence: fix-* behaves exactly like feat-*
+assert_indexed     "$kb" "project/specs/fix-y/spec.md"          "F4: fix-* spec.md indexed"
+assert_indexed     "$kb" "project/specs/fix-y/tasks.md"         "F4: fix-* tasks.md indexed"
+assert_not_indexed "$kb" "project/specs/fix-y/session-state.md" "F4: fix-* session-state.md dropped"
+
+# F5 — bare-named spec dir. The dropped sibling is load-bearing: without it
+# this fixture is indexed before and after and discriminates no mutation.
+assert_indexed     "$kb" "project/specs/review-workflow-hardening/spec.md"          "F5: bare-named dir spec.md indexed"
+assert_not_indexed "$kb" "project/specs/review-workflow-hardening/session-state.md" "F5: bare-named dir session-state.md dropped"
+
+# F9 — pre-existing archive exclusion must not regress
+assert_not_indexed "$kb" "project/specs/archive/20260101-000000-feat-old/spec.md" "F9: archived spec.md still dropped"
+
+# F7 / F8 — plans are untouched, including the nested shape that broke the
+# reverted gate's -maxdepth 1
+assert_indexed "$kb" "project/plans/feat-q/plan.md"              "F7: nested plan indexed"
+assert_indexed "$kb" "project/plans/2026-01-01-feat-r-plan.md"   "F8: flat plan indexed"
+
+# F13 — only project/specs/ is special. Loosening the anchor to */specs/*
+# would drop this row.
+assert_indexed "$kb" "product/specs/feat-w/session-state.md" "F13: product/specs/ is not project/specs/"
+
+# F11 / F12 — pre-existing arms adjacent to the edit
+assert_not_indexed "$kb" "engineering/INDEX.md"   "F11: INDEX.md never indexes itself"
+assert_not_indexed "$kb" "engineering/diagram.png" "F12: non-markdown dropped"
+assert_indexed     "$kb" "engineering/note.md"     "F12: sibling markdown still indexed"
+
+# F15 — a trailing slash on KB_DIR must not change the output. Interpolating
+# $KB_DIR into the -path patterns silently disabled the whole exclusion.
+cp "$kb/INDEX.md" "$TMPDIR_BASE/index-noslash.md"
+KB_DIR="$kb/" bash "$GEN_SCRIPT" >/dev/null 2>&1
+if diff -q "$TMPDIR_BASE/index-noslash.md" "$kb/INDEX.md" >/dev/null 2>&1; then
+  echo "  PASS: F15: trailing-slash KB_DIR produces identical output"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: F15: trailing-slash KB_DIR changed the output"
   FAIL=$((FAIL + 1))
 fi
 

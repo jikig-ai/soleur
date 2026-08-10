@@ -7,7 +7,9 @@
 # (fallback: first # heading, then kebab-to-title-case filename), and
 # outputs a flat sorted markdown list grouped by top-level domain.
 #
-# Excludes archive/ directories and INDEX.md itself.
+# Excludes archive/ directories and INDEX.md itself. Inside
+# knowledge-base/project/specs/<feature>/, only spec.md and tasks.md are
+# indexed — other flat files there are per-feature working state (#7399).
 #
 # After merge conflicts on INDEX.md, regenerate:
 #   bash scripts/generate-kb-index.sh
@@ -18,6 +20,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # KB_DIR is overridable by env so tests can point at a fixture corpus.
 KB_DIR="${KB_DIR:-$REPO_ROOT/knowledge-base}"
+# Strip a trailing slash before KB_DIR is used in any prefix strip. The rel=
+# computation below does "${f#"$KB_DIR/"}", which silently fails to strip on a
+# trailing slash and emits absolute paths into every row.
+KB_DIR="${KB_DIR%/}"
 INDEX_FILE="$KB_DIR/INDEX.md"
 LEARNINGS_DIR="$KB_DIR/project/learnings"
 TAGS_FILE="$KB_DIR/kb-tags.txt"
@@ -34,10 +40,27 @@ if [[ ! -d "$KB_DIR" ]]; then
 fi
 
 # Collect all eligible .md files (exclude archive/, INDEX.md, non-.md, symlinks)
+#
+# The third group implements the spec-directory allowlist (#7399, ADR-173):
+# a spec directory contributes its spec.md and its tasks.md — the two files
+# that NAME a feature — and nothing else. Everything else flat inside one
+# (session-state.md and ~90 other one-off working filenames, ~76 of which
+# occur exactly once) is branch-lifetime scratch, and it was 1,281 of the
+# ~7,480 rows agents grep for prior art.
+#
+# An allowlist, not a denylist: filename invention is the norm here, so any
+# enumerated deny set is stale the next time someone writes a phase0-evidence.md.
+#
+# The patterns are single-quoted and NOT interpolated with $KB_DIR on purpose.
+# `-path "$KB_DIR/project/specs/*"` makes the predicate depend on the TEXTUAL
+# form of KB_DIR: a trailing slash yields a `//` no find-emitted path contains,
+# so the exclusion silently evaluates true for everything and the whole feature
+# no-ops with exit 0 and a green suite.
 mapfile -t all_files < <(
   find "$KB_DIR" -type f -not -type l -name '*.md' \
     -not -path '*/archive/*' \
     -not -name 'INDEX.md' \
+    \( -not -path '*/project/specs/*' -o -name 'spec.md' -o -name 'tasks.md' \) \
     | LC_ALL=C sort
 )
 
