@@ -1033,18 +1033,69 @@ Deepened 2026-08-10, after the five-agent panel + CLO review. All mandatory halt
 `docker-compose*.yml`. Citation sweeps clean: 3 cited AGENTS rule IDs all **active**, none retired;
 all 5 cited issue/PR numbers resolve with the states the plan claims.
 
-### D1 — The waiver pragma and Gate 2 collide, and the fix makes the gates cooperate
+### D1 — The waiver must NOT live in the legal document *(supersedes this section's first draft)*
 
-Measured, not reasoned. The shared normaliser does **not** strip HTML comments:
+My first deepen pass measured that the normaliser does not strip HTML comments, concluded the
+`<!-- legal-scope-block: ok … -->` pragma must go on **both** surfaces, and called that a happy
+result. **That conclusion was wrong**, and the precedent research shows why: it treated a
+mirror-drift problem as the whole problem. There are **three** hashes over these files, and an
+inline pragma hits all three.
+
+**Measured, all six verified in-session:**
+
+1. **The SHA pin is over the RAW file, with no normalisation at all** —
+   `check-tc-document-sha.sh:234`: `canonical_sha=$(sha256sum "$canonical_path" …)`. Proof: adding
+   one comment line to `privacy-policy.md` moves the raw SHA `cc4fee452bbf0197` →
+   `66e2029408b880db`, forcing a `LEGAL_DOC_SHAS` re-pin. There is no normalisation layer to teach.
+2. **For T&C the pin is legal evidence.** `TC_DOCUMENT_SHA` is written as `p_doc_sha` into the WORM
+   consent ledger (`app/api/accept-terms/route.ts:96`). A waiver comment would be indistinguishable,
+   in the consent record, from a substantive terms edit.
+3. **The CLA is worse.** `cla-evidence.yml:126` hashes `git show <base>:docs/legal/individual-cla.md`
+   into R2 Object-Lock evidence. A comment mutates signed-CLA evidence hashes.
+4. **Authority cannot be bound to a person by an inline pragma.** The requirement is that the *CLO*,
+   not the engineer, authorises. CODEOWNERS owns **files, not line ranges** — a pragma inside
+   `privacy-policy.md` inherits that file's ownership, so the engineer editing the clause authors
+   their own waiver. That defeats the primary requirement outright. The working precedent is
+   `.github/CODEOWNERS:56` → `/.claude/rule-weakening-acks.txt @deruelle`.
+5. **The repo has already rejected in-artifact override markers, in writing.**
+   `.claude/hooks/ship-net-issue-flow-gate.sh`: reading the marker from committed files *"would let
+   the gate find its own override marker inside committed evidence/spec files and silently
+   self-override — invisible to the acceptance criteria."*
+6. **A pragma has no content binding.** It waives the line it sits above, *whatever that line later
+   becomes* — the CLO ratifies clause X and clause Y is swapped underneath with no gate signal.
+
+**Corrected design: an out-of-band, hash-bound, CODEOWNERS-owned ack ledger** at
+`.claude/legal-scope-block-acks.txt`, leaving `docs/legal/*.md` byte-identical so all three hashes,
+the mirror drift, and the consent/CLA evidence records are untouched. Fields:
 
 ```
-normalised SHA without pragma: e06325fa09a37417
-normalised SHA with    pragma: 2122504f40723a4a   => the pragma is IN the drift set
+<doc-path>#<anchor>|<sha256-of-normalised-block>|<date>|#NNNN|<ruling-doc-path>|<expires_on>|<reason>
 ```
 
-So R23's proposed `<!-- legal-scope-block: ok … -->` waiver, added to the canonical only, would
-**increase drift and red Gate 2** — gate 1's escape hatch would trip gate 2. Worse, HTML comments
-are already asymmetric across the corpus and are therefore already part of the frozen baseline:
+Mechanics lifted from established idioms rather than invented:
+- **Content binding + replay protection** — `lint-rule-bodies.py`. The key is
+  `sha256(normalised block)`, and the ack must be **newly added in this diff**
+  (`new_acks(rid) = head_acks - base_acks`, base read via `git show <merge-base>:<ackfile>`), so
+  reverting to a previously-acked form cannot pass on a stale historical ack. These are the only
+  two properties that make an approval bind to *specific words*.
+- **Fail-closed parse** — a line short of the field count or with an empty reason is *dropped*, so a
+  malformed waiver cannot satisfy the gate; the block still fires.
+- **Anchored issue regex** `^#[0-9]+$` — `lint-encryption-posture.py`'s `TRACKING_ISSUE_RE`, not the
+  unanchored `#[0-9]+` of `lint-orphan-test-suites.sh`.
+- **`expires_on` with offline date arithmetic** + an `--today` override for hermetic tests. An
+  expired waiver becomes a **red build**, not silent permanence — the right default for a legal
+  exception.
+- **Fail CLOSED if the cited `<ruling-doc-path>` does not resolve** — a waiver may not cite a ruling
+  that does not exist.
+- **WORM header** (`NEVER edit or remove an existing line`) + the CODEOWNERS entry pointing at the
+  CLO. That entry is the line that satisfies the authority requirement; everything else is
+  bookkeeping around it.
+
+**What survives from the first draft:** the measurement that HTML comments are **5 of the 220 drift
+lines** and asymmetric across four pairs (AUP 3v2, DPD 1v0, gdpr 14v12, privacy 14v13) — a small,
+previously uncharacterised slice of what R14 says the freeze hides. And the finding that stripping
+comments in the normaliser is **not** a free cleanup: it moves the T&C body SHA
+`bae2422886453166` → `d937ff6cef13df09` and the whole baseline 220 → 215.
 
 | doc | drift | drift w/o comments | canonical `^<!--` | mirror `^<!--` |
 |---|---|---|---|---|
@@ -1055,24 +1106,11 @@ are already asymmetric across the corpus and are therefore already part of the f
 | terms-and-conditions | 0 | 0 | 2 | 2 |
 | **total** | **220** | **215** | | |
 
-**HTML comments account for 5 of the 220 drift lines (2%)** — a small but real, previously
-uncharacterised slice of what R14 says the freeze is hiding.
-
-**Two options, and the cheap one is also the correct one:**
-
-- **(A) Require the pragma on BOTH surfaces — chosen.** Drift is unchanged, the normaliser is
-  untouched, and AC14's pinned literal survives. It is also substantively right: a waiver annotating
-  a published legal statement belongs on the record *and* the published page. **Gate 2 then enforces
-  gate 1's waiver discipline for free** — a canonical-only waiver reds the mirror ratchet. The gates
-  cooperate instead of fighting.
-- **(B) Strip HTML comments in the shared normaliser — rejected.** Measured cost: the T&C
-  body-equivalence SHA moves `bae2422886453166` → `d937ff6cef13df09`, so **AC14's pinned literal
-  would have to be re-derived**, and the whole 220-line baseline shifts to 215. That is the exact
-  R28 cascade class (settle-before-Phase-1.1), taken on for a 2% cleanup with no other benefit.
-
-**Task additions:** Phase 2.0 records that the pragma is dual-surface; add an AC — *"a canonical-only
-waiver reds gate 2; the same waiver on both surfaces passes both gates."* That single AC is the
-cheapest possible proof that the two gates compose.
+**One trap the ledger does not remove.** Body-equivalence is currently armed for
+`terms-and-conditions` **only** (`BODY_EQUIVALENCE_DOCS`), so a comment in `privacy-policy.md` does
+*not* trip drift today and would start tripping it the moment the remaining eight docs are activated
+— which is exactly #7349's deferred remediation. Gate 2 closes that gap for all nine pairs, which is
+an additional argument for it.
 
 ### D2 — Precedent diff (Phase 4.4): both novel mechanisms have in-repo idioms
 

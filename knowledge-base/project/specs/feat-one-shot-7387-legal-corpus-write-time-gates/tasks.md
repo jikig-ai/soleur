@@ -33,14 +33,24 @@ Derived from [the plan](../../plans/2026-08-10-feat-legal-corpus-write-time-gate
 
 **Blocked on 2.0.** The escape hatch changes the parser, so it is not a bolt-on (R23).
 
-- [ ] 2.0 Design the waiver pragma: `<!-- legal-scope-block: ok #NNNN <ruling-path> <reason> -->`,
-      1-line lookback, mandatory issue **and** ruling citation, reasonless pragma = exit 1 (R23).
-      **Dual-surface (D1):** the normaliser does not strip HTML comments, so a canonical-only
-      waiver increases drift and reds gate 2. Require it on both surfaces — do NOT strip comments
-      in the normaliser (that moves the T&C SHA `bae2422886453166` -> `d937ff6cef13df09` and the
-      whole 220-line baseline, for a 2% cleanup).
-- [ ] 2.0b AC: a canonical-only waiver reds gate 2; the same waiver on both surfaces passes both
-      gates. This is the cheapest proof that gates 1 and 2 compose (D1).
+- [ ] 2.0 Design the waiver as an **out-of-band ack ledger**, NOT an inline pragma (D1 —
+      supersedes the earlier dual-surface plan). Create `.claude/legal-scope-block-acks.txt`:
+      `<doc-path>#<anchor>|<sha256-of-normalised-block>|<date>|#NNNN|<ruling-doc-path>|<expires_on>|<reason>`.
+      Rationale, all measured: the SHA pin is over the RAW file (`check-tc-document-sha.sh:234`), so
+      any in-document comment forces a `LEGAL_DOC_SHAS` re-pin; `TC_DOCUMENT_SHA` is written to the
+      WORM consent ledger (`accept-terms/route.ts:96`); `cla-evidence.yml:126` hashes
+      `individual-cla.md` into R2 Object-Lock evidence; and CODEOWNERS owns **files, not line
+      ranges**, so an in-document pragma is authored by the very engineer it is meant to constrain.
+- [ ] 2.0b Content binding + replay protection from `lint-rule-bodies.py`: key on
+      `sha256(normalised block)`; require the ack to be **newly added in this diff**
+      (`head_acks - base_acks`, base via `git show <merge-base>:<ackfile>`).
+- [ ] 2.0c Fail-closed parse (short/reasonless line is DROPPED, not honoured); anchored
+      `^#[0-9]+$` issue regex; `expires_on` with offline date arithmetic + `--today` test override;
+      fail CLOSED if `<ruling-doc-path>` does not resolve.
+- [ ] 2.0d `.github/CODEOWNERS` entry pointing the ack path at the CLO — **this is the line that
+      satisfies the authority requirement**; everything else is bookkeeping. Add WORM header.
+- [ ] 2.0e AC: a waiver leaves every `docs/legal/*.md` byte-identical (no `LEGAL_DOC_SHAS` re-pin,
+      no mirror edit, no consent/CLA evidence change) — the property the pragma design lacked.
 - [ ] 2.1 **RED first** — fixtures for every arm, all synthesized (`cq-test-fixtures-synthesized-only`).
 - [ ] 2.2 Added-lines extraction. Pin the hunk contract for **all four** shapes incl. count-omitted
       `@@ -2,0 +3 @@`; skip `+c,0`; key path off `+++ b/` (renames); skip `+++ /dev/null`;
