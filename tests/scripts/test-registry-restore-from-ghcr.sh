@@ -180,7 +180,8 @@ fx_oci_signature() {
 D_SIGX_CHILD="sha256:38dc44fe9378484bf59a6ee46ad89788bd66e36bf701942a78ebc2e19fbbd56e"
 D_SIGX_CFG="sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
 D_SIGX_BUNDLE="sha256:dd39b712b03ad1d2eb9e700ca6cdd9f8f28178c85c052a0aa1b2994f6313473e"
-fx_oci_signature_index() {
+fx_oci_signature_index() { # <dir> <sink-repo> <sig-tag> [subject-digest]
+  local _subj="${4:-$D1}"
   fixture "$1" "manifest:$2@$D_OTHER" 0 '{
   "schemaVersion": 2,
   "mediaType": "application/vnd.oci.image.index.v1+json",
@@ -192,6 +193,7 @@ fx_oci_signature_index() {
   "schemaVersion": 2,
   "mediaType": "application/vnd.oci.image.manifest.v1+json",
   "artifactType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+  "subject": { "mediaType": "application/vnd.oci.image.index.v1+json", "size": 856, "digest": "'"$_subj"'" },
   "config": { "mediaType": "application/vnd.oci.empty.v1+json", "digest": "'"$D_SIGX_CFG"'", "size": 2 },
   "layers": [
     { "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json", "digest": "'"$D_SIGX_BUNDLE"'", "size": 10559 }
@@ -374,8 +376,8 @@ ok_fixtures() {
   # byte-verifies it (a tag ref is not digest-checked by go-containerregistry).
   fx_oci_single "$fx" "${t}/${WP}@${D1}"
   fx_oci_single "$fx" "${t}/${IB}@${D2}"
-  fixture "$fx" "validate:${t}/${WP}:v0.249.4" 0 "PASS"
-  fixture "$fx" "validate:${t}/${IB}:v1.1.24"  0 "PASS"
+  fixture "$fx" "validate:${t}/${WP}@${D1}" 0 "PASS"
+  fixture "$fx" "validate:${t}/${IB}@${D2}"  0 "PASS"
   # signature tags (sha256-<hex>, the OCI referrers tag scheme GHCR actually uses)
   fixture "$fx" "ghcr.io/${WP}:sha256-${D1#sha256:}" 0 "$D_OTHER"
   fixture "$fx" "ghcr.io/${IB}:sha256-${D2#sha256:}" 0 "$D_OTHER"
@@ -570,7 +572,7 @@ fi
 
 fx="$TMP/fx-blob"; calls="$TMP/calls-blob"; : > "$calls"
 ok_fixtures "$fx" "$TARGET"
-fixture "$fx" "validate:${TARGET}/${WP}:v0.249.4" 1 "" \
+fixture "$fx" "validate:${TARGET}/${WP}@${D1}" 1 "" \
   "Error: validating config: GET http://${TARGET}/v2/${WP}/blobs/sha256:dead: BLOB_UNKNOWN: blob unknown to registry"
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
 if [[ "$rc" -eq 4 ]]; then
@@ -907,12 +909,12 @@ att_index_fixtures() {
   # control is VACUOUS: the pre-fix engine validates the index, finds a PASS fixture, and exits 0
   # for the wrong reason. With it removed, validating the index hits the stub's no-fixture arm
   # (exit 70) — so the rc==0 assertion below can only be satisfied by real per-child verification.
-  rm -f "$fx/$(key "validate:${t}/${WP}:v0.249.4")".rc \
-        "$fx/$(key "validate:${t}/${WP}:v0.249.4")".out \
-        "$fx/$(key "validate:${t}/${WP}:v0.249.4")".err
+  rm -f "$fx/$(key "validate:${t}/${WP}@${D1}")".rc \
+        "$fx/$(key "validate:${t}/${WP}@${D1}")".out \
+        "$fx/$(key "validate:${t}/${WP}@${D1}")".err
   # PROVE the delete landed. `rm -f` succeeds silently on a path that never existed, so if key()
   # ever drifts the positive control silently reverts to vacuous — green against a pre-fix engine.
-  [[ ! -f "$fx/$(key "validate:${t}/${WP}:v0.249.4")".rc ]] || {
+  [[ ! -f "$fx/$(key "validate:${t}/${WP}@${D1}")".rc ]] || {
     echo "harness: the positive control's rm did not land — key() drifted; the control is vacuous" >&2; exit 2; }
   fixture "$fx" "validate:${t}/${WP}@${D_AMD64}" 0 "PASS"
   fixture "$fx" "blob:${t}/${WP}@${D_ATT_CFG}"   0 ""
@@ -993,7 +995,10 @@ fi
 fx="$TMP/fx-nonindex"; calls="$TMP/calls-nonindex"; : > "$calls"
 ok_fixtures "$fx" "$TARGET"
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-n_ib=$(grep -cE "^validate .*--remote ${TARGET}/${IB}:v1\.1\.24( |$)" "$calls" || true)
+# BY DIGEST: the non-index arm now validates ${dst_repo}@${dst_digest}, not the tag, so a
+# tag-anchored counter reports 0 and the "drifted" message would blame the engine for the
+# assertion having been left behind.
+n_ib=$(grep -cE "^validate .*--remote ${TARGET}/${IB}@${D2}( |$)" "$calls" || true)
 # Blob calls are EXPECTED here — verification 3 blob-verifies each signature's payload. What must
 # NOT happen is any per-INDEX-CHILD work, so pin the attestation digests specifically rather than
 # the blob count, which would otherwise just track how many signatures the pin set has.
@@ -1161,10 +1166,16 @@ sigx_fixtures() { # <dir> <target> — ok_fixtures, but signatures in the produc
   ok_fixtures "$fx" "$t"
   # Replace the legacy plain-manifest signature with the measured index shape. `rm` so the plain
   # arm cannot answer for the index arm -- the same vacuity that let the bug ship.
-  rm -f "$fx/manifest:${t}/${WP}:sha256-${D1#sha256:}" \
-        "$fx/manifest:${t}/${IB}:sha256-${D2#sha256:}"
+  # key() maps / : @ -> _ and fixture() writes .rc/.out/.err — a raw path deletes NOTHING.
+  # Measured before this fix: 69 fixture files before the rm, 69 after.
+  local _k
+  for _k in "manifest:${t}/${WP}@${D_OTHER}" "manifest:${t}/${IB}@${D_OTHER}"; do
+    rm -f "$fx/$(key "$_k")".rc "$fx/$(key "$_k")".out "$fx/$(key "$_k")".err
+    [[ ! -f "$fx/$(key "$_k")".rc ]] || {
+      echo "harness: rm did not land for ${_k} — key() drifted; the control is vacuous" >&2; exit 2; }
+  done
   fx_oci_signature_index "$fx" "${t}/${WP}" "sha256-${D1#sha256:}"
-  fx_oci_signature_index "$fx" "${t}/${IB}" "sha256-${D2#sha256:}"
+  fx_oci_signature_index "$fx" "${t}/${IB}" "sha256-${D2#sha256:}" "$D2"
 }
 
 fx="$TMP/fx-sigx"; calls="$TMP/calls-sigx"; : > "$calls"
@@ -1293,17 +1304,28 @@ fx_sig_index_2child() { # <dir> <sink-repo> — the production shape, with a SEC
 sig2_fixtures() { # <dir> <target>
   local fx="$1" t="$2"
   ok_fixtures "$fx" "$t"
-  rm -f "$fx/manifest:${t}/${WP}@${D_OTHER}" "$fx/manifest:${t}/${IB}@${D_OTHER}"
+  local _k
+  for _k in "manifest:${t}/${WP}@${D_OTHER}" "manifest:${t}/${IB}@${D_OTHER}"; do
+    rm -f "$fx/$(key "$_k")".rc "$fx/$(key "$_k")".out "$fx/$(key "$_k")".err
+    [[ ! -f "$fx/$(key "$_k")".rc ]] || {
+      echo "harness: rm did not land for ${_k} — key() drifted; the control is vacuous" >&2; exit 2; }
+  done
   fx_sig_index_2child "$fx" "${t}/${WP}"
-  fx_oci_signature_index "$fx" "${t}/${IB}" "sha256-${D2#sha256:}"
+  fx_oci_signature_index "$fx" "${t}/${IB}" "sha256-${D2#sha256:}" "$D2"
 }
 
 # TIGHTENING control: two healthy children must PASS. A `>1 children` refusal would be #7410 again.
 fx="$TMP/fx-sig2"; calls="$TMP/calls-sig2"; : > "$calls"
 sig2_fixtures "$fx" "$TARGET"
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-if [[ "$rc" -eq 0 ]]; then
-  pass "a two-child signature index verifies and PASSES"
+# ANCHOR ON THE REPO. The bundle digests are shared with the single-child IB fixture, so a
+# repo-agnostic grep is satisfied by the IB call even when WP's child 1 was never walked —
+# which let "verify only the LAST child" survive at 83/0 until this was tightened.
+both_fetched=0
+grep -qE "^blob .*${TARGET}/${WP}@${D_SIGX_BUNDLE}\$"  "$calls" && \
+grep -qE "^blob .*${TARGET}/${WP}@${D_SIGX_BUNDLE2}\$" "$calls" && both_fetched=1
+if [[ "$rc" -eq 0 ]] && [[ "$both_fetched" -eq 1 ]]; then
+  pass "a two-child signature index verifies and PASSES, with BOTH children's blobs fetched"
 else
   fail "a healthy two-child signature index must pass" "$rc" "$out"
 fi
@@ -1332,11 +1354,36 @@ else
   fail "a layerless signature child must exit 4" "$rc" "$out"
 fi
 
+# A signature whose blobs are all valid but which signs a DIFFERENT image must not pass.
+fx="$TMP/fx-sig-subject"; calls="$TMP/calls-sig-subject"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+fx_oci_raw "$fx" "${TARGET}/${WP}@${D_SIGX_CHILD}" \
+  '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","artifactType":"application/vnd.dev.sigstore.bundle.v0.3+json","subject":{"digest":"'"$D_OTHER"'"},"config":{"mediaType":"application/vnd.oci.empty.v1+json","digest":"'"$D_SIGX_CFG"'","size":2},"layers":[{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json","digest":"'"$D_SIGX_BUNDLE"'","size":10559}]}'
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -qF "signs a DIFFERENT image"; then
+  pass "a signature with valid blobs but the WRONG subject exits 4"
+else
+  fail "a wrong-subject signature must exit 4" "$rc" "$out"
+fi
+
+# The signature digest parity guard: GHCR and the sink must serve the SAME signature. Every
+# fixture returned the same digest for both reads, so the comparison was a tautology and
+# `[[ "$sig_src_digest" == "$sig_src_digest" ]]` left the suite fully green.
+fx="$TMP/fx-sig-parity"; calls="$TMP/calls-sig-parity"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+fixture "$fx" "${TARGET}/${WP}:sha256-${D1#sha256:}" 0 "$D_SIGX_CHILD2"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -qF "differs between GHCR"; then
+  pass "a sink serving a DIFFERENT signature than GHCR exits 4 (digest parity is not a tautology)"
+else
+  fail "signature digest parity must be enforced" "$rc" "$out"
+fi
+
 # ── Anti-vacuity floor for THIS suite. ────────────────────────────────────────────────────────
 # Deleting the entire new assertion block left the suite green at 43/0, exit 0 — `fails -eq 0` is
 # satisfied by asserting nothing. A floor (never `-eq`, which would make every added assertion a
 # spurious failure) makes that deletion loud. Derived from a green run, ratchet upward only.
-MIN_ASSERTIONS=81
+MIN_ASSERTIONS=83
 if (( passes + fails < MIN_ASSERTIONS )); then
   printf '  FAIL harness: %d assertions ran, floor is %d — assertions were deleted or skipped\n' \
     "$((passes + fails))" "$MIN_ASSERTIONS"

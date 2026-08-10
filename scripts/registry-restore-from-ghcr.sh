@@ -338,7 +338,7 @@ manifest_kind() {
 # The body is discarded to /dev/null: only the exit code is consumed, and a provenance blob can
 # carry build-time secrets that should not be materialised on the runner's disk.
 verify_blobs_of() {
-  local repo="$1" ref="$2" what="$3" depth="${4:-0}"
+  local repo="$1" ref="$2" what="$3" depth="${4:-0}" expect_subject="${5:-}"
   local out="$WORK/vb.${depth}.out" err="$WORK/vb.${depth}.err" jqerr="$WORK/vb.${depth}.jqerr"
   local blberr="$WORK/vb.${depth}.blob.err"
   local kind blobs b n_declared n_children n_blobs n_layers c_digest children
@@ -385,7 +385,7 @@ verify_blobs_of() {
         # not happened, on the path that authorises the destroy.
         [[ "$c_digest" != "-" && -n "$c_digest" ]] || \
           die 4 "${what}: child ${n_children} declares no digest, so it cannot be addressed or verified."
-        verify_blobs_of "$repo" "${repo}@${c_digest}" "child ${c_digest} of ${what}" "$((depth + 1))"
+        verify_blobs_of "$repo" "${repo}@${c_digest}" "child ${c_digest} of ${what}" "$((depth + 1))" "$expect_subject"
       done <<< "$children"
       # Equality, not `> 0`: a truncated walk that checked one child of three must not read as a
       # verified index.
@@ -435,6 +435,23 @@ verify_blobs_of() {
       # ABSENT, and nothing else in the engine distinguishes them.
       if ! n_layers="$(jq -r '(.layers // []) | length' "$out" 2>"$jqerr")"; then
         die 4 "${what}: its layer count could not be read, so no completeness claim is possible. jq: $(last_err "$jqerr")"
+      fi
+      # SUBJECT BINDING. A sigstore bundle child names the artifact it signs in `.subject.digest`;
+      # measured on soleur-web-platform:v0.249.4 it is exactly the image index digest. Without this,
+      # a signature with entirely valid, fetchable blobs for a DIFFERENT image passes every arm
+      # above — right blobs, wrong subject.
+      #
+      # Asserted only when the key is PRESENT, and that limit is stated rather than hidden: the
+      # legacy simplesigning shape carries no `subject` and binds through the payload's
+      # `critical.image.docker-manifest-digest`, which this engine does not parse. So absence is
+      # not treated as a pass for the binding — it is treated as "this shape's binding was not
+      # checked here", which is what the code actually establishes.
+      if [[ -n "$expect_subject" ]]; then
+        local subj
+        subj="$(jq -r '.subject.digest // ""' "$out" 2>/dev/null || printf '')"
+        if [[ -n "$subj" && "$subj" != "$expect_subject" ]]; then
+          die 4 "${what}: its subject digest is ${subj}, but the artifact being restored is ${expect_subject}. This signature has valid, fetchable blobs and signs a DIFFERENT image — do NOT deploy."
+        fi
       fi
       (( n_layers > 0 )) || \
         die 4 "${what} declares NO layers, so it carries no payload. A config alone is not evidence the artifact is intact — for a cosign signature that config is the well-known empty blob (sha256:44136fa3...aff8a) every registry holds by construction."
@@ -683,7 +700,13 @@ while (( i < n_entries )); do
 
   if [[ "$dst_kind" == "manifest" ]]; then
     # Single manifest (this is what soleur-inngest-bootstrap is). Unchanged behaviour.
-    if ! crane_capture "$WORK/val.out" "$WORK/val.err" validate $SINK_TLS_FLAG --remote "$dst"; then
+    # BY DIGEST, not by tag — the last read in this file still rooted at a tag, and the same
+    # defect #7410 spent twenty lines fixing on the signature. `validate.Image` compares digests
+    # computed from the bytes it fetched against that same manifest (self-consistency), never
+    # against the reference, so a tag re-resolves and what gets blob-validated need not be the
+    # manifest verification 1 just proved parity for. This is also the arm the required
+    # `soleur-inngest-bootstrap` pin takes, so it was the un-pinned read on a required entry.
+    if ! crane_capture "$WORK/val.out" "$WORK/val.err" validate $SINK_TLS_FLAG --remote "${dst_repo}@${dst_digest}"; then
       verify_die "$dst" "$WORK/val.err"
     fi
   else
@@ -824,7 +847,7 @@ while (( i < n_entries )); do
   # the children enumerated below are provably the ones GHCR's signature declares. `crane blob`
   # never decompresses, so the cosign payload layer cannot trip the #7378 gunzip class.
   verify_blobs_of "${TARGET}/${repo}" "${TARGET}/${repo}@${sig_dst_digest}" \
-    "the cosign signature ${sig_tag} of ${repo}:${tag}"
+    "the cosign signature ${sig_tag} of ${repo}:${tag}" 0 "$src_digest"
 
   echo "restore_entry repo=${repo} tag=${tag} disposition=${disp} digest=${src_digest} result=restored_verified"
   # ONLY `required` entries count toward the floor, because FLOOR counts only required pins.
