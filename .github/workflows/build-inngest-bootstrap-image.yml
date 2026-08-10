@@ -49,7 +49,7 @@ concurrency:
   # matters. Both sibling signing workflows carry a concurrency block; this one did not.
   # cancel-in-progress stays FALSE: cancelling a run that has already pushed would strand an
   # unsigned digest, which is the state being prevented.
-  group: inngest-bootstrap-image-${{ inputs.ref || github.ref }}
+  group: inngest-bootstrap-image-${{ inputs.ref || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -314,6 +314,136 @@ jobs:
       # The alternative was an unsigned-allowed entry in the pin manifest. That was rejected:
       # it widens an allow-set on the gate for an irreversible destroy, and the honest fix is
       # to make the assertion TRUE rather than to carve an exception into it.
+      # crane, SHA-pinned — its OWN step, ahead of the bridge.
+      #
+      # It used to be installed only inside the zot-mirror step, and the sign step was placed after
+      # that step to reuse it. Measured, that coupled GHCR signing to the zot leg in two ways, both
+      # wrong: (a) `degraded bridge_down` returns BEFORE install_crane, so on the build path crane
+      # was absent and the sign step's guard REDDED a release whose GHCR push had succeeded —
+      # violating this file's own invariant that "a zot/bridge failure must not fail the GHCR
+      # release"; and (b) under mirror_only a bridge failure exits the mirror step non-zero, so the
+      # sign step's implicit success() SKIPPED it and the backfill produced no signature at all —
+      # in exactly the mode this signing exists for.
+      #
+      # The GHCR signature has no dependency on zot. reusable-release.yml signs the GHCR digest
+      # BEFORE it bridges, for the same reason; this now matches. The mirror step keeps its own
+      # install (idempotent, and it owns the crane_verify/crane_download degrade vocabulary).
+      - name: Install crane (pinned) for signing
+        env:
+          CRANE_VERSION: v0.20.2
+          CRANE_SHA256: c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b
+        run: |
+          set -uo pipefail
+          : "${RUNNER_TEMP:?RUNNER_TEMP must be set}"
+          command -v crane >/dev/null && { echo "crane already present"; exit 0; }
+          rc=0
+          for attempt in 1 2 3; do
+            rc=0
+            curl -fsSL -o "$RUNNER_TEMP/crane.tgz" \
+              "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" || rc=10
+            if [[ "$rc" -eq 0 ]]; then
+              echo "${CRANE_SHA256}  $RUNNER_TEMP/crane.tgz" | sha256sum -c - || rc=11
+            fi
+            # A CHECKSUM mismatch is a supply-chain signal, not a network fault: re-fetching the
+            # same pinned URL cannot clear it, so do not spend the remaining attempts on it.
+            if [[ "$rc" -eq 11 ]]; then break; fi
+            if [[ "$rc" -eq 0 ]]; then
+              sudo tar -xzf "$RUNNER_TEMP/crane.tgz" -C /usr/local/bin crane || rc=12
+            fi
+            [[ "$rc" -eq 0 ]] && break
+            sleep $(( attempt * 5 ))
+          done
+          case "$rc" in
+            0)  crane version ;;
+            11) echo "::error::crane tarball SHA256 mismatch — SUPPLY-CHAIN signal, not a network fault. A re-dispatch re-fetches the same pinned URL and cannot clear it." >&2; exit 1 ;;
+            *)  echo "::error::could not install crane (rc=${rc}) after 3 attempts; cannot resolve a digest to sign." >&2; exit 1 ;;
+          esac
+
+      # Keyless-sign the GHCR DIGEST. Runs on BOTH paths — the build above and the
+      # digest-preserving `mirror_only` backfill — because the whole point is to be able to
+      # sign an ALREADY-PUBLISHED digest without a rebuild. A rebuild would move the tag's
+      # digest, and cloud-init-inngest.yml pins this image by @sha256, so rebuilding to obtain
+      # a signature would invalidate the very pin the signature exists to protect.
+      #
+      # Signs the DIGEST, never the tag: `cosign sign <ref>:<tag>` resolves the tag at sign
+      # time, so a tag that moves between push and sign yields a signature over something
+      # nobody reviewed. Mirrors reusable-release.yml's `${IMAGE}@${DIGEST}` -- the digest half
+      # of it. It does NOT mirror the zot half: `crane copy` below carries the tag, not the
+      # `sha256-<hex>` referrer, so the zot copy stays unsigned while GHCR is signed.
+      #
+      # WHAT THIS SIGNATURE IS, AND IS NOT. State it here because the gap is not obvious and the
+      # word "signed" invites the stronger reading:
+      #
+      #   IS   -- a signature that EXISTS at the referrers tag, whose blobs resolve and hash
+      #           correctly. That is exactly what registry-restore-from-ghcr.sh's verification 3
+      #           checks, and it is the whole reason this step exists: without it D10's A2
+      #           predicate can never pass, because that engine requires a signature for every
+      #           required pin and has no unsigned arm.
+      #   IS NOT -- a provenance claim any consumer verifies. ci-deploy.sh pins
+      #           COSIGN_IDENTITY_REGEXP to `reusable-release.yml@(refs/heads/main|refs/tags/v[0-9].+)`;
+      #           this signature's Fulcio subject is this file at a `vinngest-` tag, which matches
+      #           neither the workflow name nor the tag pattern. And the inngest deploy branch does
+      #           not call verify_image_signature at all -- measured, zero occurrences.
+      #
+      # So A2's signature arm is a PRESENCE token for this image, not a verified provenance claim.
+      # Widening COSIGN_IDENTITY_REGEXP to admit this identity was deliberately NOT done here: that
+      # regexp is the containment keeping this OIDC identity from being able to forge a signature
+      # the WEB image path would accept, and loosening it to make a restore-gate token verifiable
+      # would trade a real boundary for a cosmetic one.
+      - name: Install cosign (pinned)
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # PIN THE TOOL, not just the installer. The cosign version decides the referrers TAG
+          # SHAPE, and registry-restore-from-ghcr.sh reads `sha256-<hex>`. A cosign that writes
+          # the legacy `sha256-<hex>.sig` simple-signing tag produces a signature A2 404s on --
+          # workflow green, A2 still refusing, discovered only after a full multi-GB rehearsal of
+          # the other three pins. reusable-release.yml pins the same version for the mirror-image
+          # reason ("no sign/verify version skew"); keep the two in step.
+          cosign-release: v3.1.1
+      - name: Cosign-sign the GHCR digest (keyless)
+        env:
+          IMAGE: ghcr.io/jikig-ai/soleur-inngest-bootstrap
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -uo pipefail
+          : "${RUNNER_TEMP:?RUNNER_TEMP must be set}"
+          # Resolve through a FILE, not $( ), for the reason the zot block below already gives:
+          # a retry/notice line on stdout would be captured into the variable and the digest
+          # would silently become garbage.
+          # RETRIED, like every other network call in this file. A transient GHCR blip must not
+          # hard-RED a release whose image is already pushed.
+          rc=0
+          for attempt in 1 2 3; do
+            rc=0
+            crane digest "$IMAGE:$TAG" > "$RUNNER_TEMP/sign.digest" 2> "$RUNNER_TEMP/sign.err" || rc=$?
+            [[ "$rc" -eq 0 ]] && break
+            sleep $(( attempt * 5 ))
+          done
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::could not resolve ${IMAGE}:${TAG} at GHCR to sign it (rc=${rc}): $(tr '\n' ' ' < "$RUNNER_TEMP/sign.err")" >&2
+            exit 1
+          fi
+          DIGEST=$(grep -oE '^sha256:[0-9a-f]{64}$' "$RUNNER_TEMP/sign.digest" | head -1 || true)
+          # FAIL CLOSED on an unparseable digest. Signing "$IMAGE@" or "$IMAGE@garbage" would
+          # either error confusingly or, worse, succeed against something unintended.
+          [[ -n "$DIGEST" ]] || {
+            echo "::error::${IMAGE}:${TAG} did not resolve to a sha256 digest; refusing to sign." >&2; exit 1; }
+          # Retried for the same reason, and Sigstore specifically: reusable-release.yml notes
+          # "if Sigstore/Fulcio is down, waiting and re-running is the fix."
+          rc=0
+          for attempt in 1 2 3; do
+            rc=0
+            cosign sign --yes "${IMAGE}@${DIGEST}" || rc=$?
+            [[ "$rc" -eq 0 ]] && break
+            sleep $(( attempt * 10 ))
+          done
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::cosign sign failed after 3 attempts for ${IMAGE}@${DIGEST} (rc=${rc}). The image IS pushed and unsigned; D10 A2 will refuse until this is re-run." >&2
+            exit 1
+          fi
+          echo "Signed ${IMAGE}@${DIGEST}"
+          printf 'signed %s@%s\n' "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Bridge to zot registry (CF Tunnel)
         id: zot_bridge
         # Belt ON unconditionally, and that is deliberate — it is NOT the thing that decides
@@ -631,79 +761,6 @@ jobs:
             echo "> NIC) is unverified for this repo, and zot retention keeps only the 5 most"
             echo "> recent \`v*\` tags. See the #7203 review findings."
           } >> "$GITHUB_STEP_SUMMARY"
-
-      # Keyless-sign the GHCR DIGEST. Runs on BOTH paths — the build above and the
-      # digest-preserving `mirror_only` backfill — because the whole point is to be able to
-      # sign an ALREADY-PUBLISHED digest without a rebuild. A rebuild would move the tag's
-      # digest, and cloud-init-inngest.yml pins this image by @sha256, so rebuilding to obtain
-      # a signature would invalidate the very pin the signature exists to protect.
-      #
-      # Signs the DIGEST, never the tag: `cosign sign <ref>:<tag>` resolves the tag at sign
-      # time, so a tag that moves between push and sign yields a signature over something
-      # nobody reviewed. Mirrors reusable-release.yml's `${IMAGE}@${DIGEST}` -- the digest half
-      # of it. It does NOT mirror the zot half: `crane copy` below carries the tag, not the
-      # `sha256-<hex>` referrer, so the zot copy stays unsigned while GHCR is signed.
-      #
-      # WHAT THIS SIGNATURE IS, AND IS NOT. State it here because the gap is not obvious and the
-      # word "signed" invites the stronger reading:
-      #
-      #   IS   -- a signature that EXISTS at the referrers tag, whose blobs resolve and hash
-      #           correctly. That is exactly what registry-restore-from-ghcr.sh's verification 3
-      #           checks, and it is the whole reason this step exists: without it D10's A2
-      #           predicate can never pass, because that engine requires a signature for every
-      #           required pin and has no unsigned arm.
-      #   IS NOT -- a provenance claim any consumer verifies. ci-deploy.sh pins
-      #           COSIGN_IDENTITY_REGEXP to `reusable-release.yml@(refs/heads/main|refs/tags/v[0-9].+)`;
-      #           this signature's Fulcio subject is this file at a `vinngest-` tag, which matches
-      #           neither the workflow name nor the tag pattern. And the inngest deploy branch does
-      #           not call verify_image_signature at all -- measured, zero occurrences.
-      #
-      # So A2's signature arm is a PRESENCE token for this image, not a verified provenance claim.
-      # Widening COSIGN_IDENTITY_REGEXP to admit this identity was deliberately NOT done here: that
-      # regexp is the containment keeping this OIDC identity from being able to forge a signature
-      # the WEB image path would accept, and loosening it to make a restore-gate token verifiable
-      # would trade a real boundary for a cosmetic one.
-      - name: Install cosign (pinned)
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        with:
-          # PIN THE TOOL, not just the installer. The cosign version decides the referrers TAG
-          # SHAPE, and registry-restore-from-ghcr.sh reads `sha256-<hex>`. A cosign that writes
-          # the legacy `sha256-<hex>.sig` simple-signing tag produces a signature A2 404s on --
-          # workflow green, A2 still refusing, discovered only after a full multi-GB rehearsal of
-          # the other three pins. reusable-release.yml pins the same version for the mirror-image
-          # reason ("no sign/verify version skew"); keep the two in step.
-          cosign-release: v3.1.1
-      - name: Cosign-sign the GHCR digest (keyless)
-        env:
-          IMAGE: ghcr.io/jikig-ai/soleur-inngest-bootstrap
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          set -uo pipefail
-          # crane is installed by the zot-mirror step above (SHA-pinned, retried, and shared with
-          # reusable-release.yml under a cross-workflow parity check), which is why these steps sit
-          # AFTER it rather than beside the push. Stating the dependency instead of assuming it:
-          # placed before that step, this ran `crane: command not found` on EVERY invocation,
-          # including the mirror_only backfill this change exists to enable.
-          command -v crane >/dev/null || {
-            echo "::error::crane is not on PATH — the zot-mirror step installs it and must run first, or its install degraded (see crane_verify above). Refusing to sign without a digest." >&2
-            exit 1
-          }
-          # Resolve through a FILE, not $( ), for the reason the zot block below already gives:
-          # a retry/notice line on stdout would be captured into the variable and the digest
-          # would silently become garbage.
-          rc=0
-          crane digest "$IMAGE:$TAG" > "$RUNNER_TEMP/sign.digest" 2> "$RUNNER_TEMP/sign.err" || rc=$?
-          if [[ "$rc" -ne 0 ]]; then
-            echo "::error::could not resolve ${IMAGE}:${TAG} at GHCR to sign it (rc=${rc}): $(tr '\n' ' ' < "$RUNNER_TEMP/sign.err")" >&2
-            exit 1
-          fi
-          DIGEST=$(grep -oE '^sha256:[0-9a-f]{64}$' "$RUNNER_TEMP/sign.digest" | head -1 || true)
-          # FAIL CLOSED on an unparseable digest. Signing "$IMAGE@" or "$IMAGE@garbage" would
-          # either error confusingly or, worse, succeed against something unintended.
-          [[ -n "$DIGEST" ]] || {
-            echo "::error::${IMAGE}:${TAG} did not resolve to a sha256 digest; refusing to sign." >&2; exit 1; }
-          cosign sign --yes "${IMAGE}@${DIGEST}"
-          echo "Signed ${IMAGE}@${DIGEST}"
 
       - name: Tear down cloudflared registry bridge
         if: always()

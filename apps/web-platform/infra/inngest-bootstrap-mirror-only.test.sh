@@ -289,16 +289,27 @@ if mirror:
     # These span STEPS, so they read the whole workflow text rather than one step's `run` body.
     _wf_text = open(sys.argv[1]).read()
 
-    # ORDERING. The sign step calls `crane digest`, and crane is installed inside the zot-mirror
-    # step's run block. Placed before it, the step ran `crane: command not found` on EVERY
-    # invocation -- including the mirror_only backfill the change exists to enable. This suite
-    # was 53/53 green with that bug present, and its own call-position style is exactly what
-    # would have caught it. Compares INDEX, not membership.
-    _install_at = _wf_text.find("install_crane()")
-    _sign_at    = _wf_text.find('crane digest "$IMAGE:$TAG"')
-    check("crane is installed BEFORE the sign step calls it",
-          _install_at != -1 and _sign_at != -1 and _install_at < _sign_at,
-          f"install_crane at {_install_at}, `crane digest` at {_sign_at} - sign must come after")
+    # ORDERING, re-derived. The first cut placed the sign step after the zot-mirror step to reuse
+    # the crane that step installs. Measured, that coupled GHCR signing to the zot leg twice over:
+    # `degraded bridge_down` returns BEFORE install_crane, so a bridge failure REDDED a release
+    # whose GHCR push had succeeded; and under mirror_only a bridge failure skipped signing
+    # entirely, in the one mode the signing exists for. Signing now precedes the bridge.
+    #
+    # Asserts the ORDER (sign before bridge) and, separately, that no `degraded` call site can
+    # precede the crane install the sign step depends on -- a pure index check cannot see a
+    # runtime `exit` and that is the bug class this replaces.
+    _sign_at   = _wf_text.find('crane digest "$IMAGE:$TAG"')
+    _bridge_at = _wf_text.find('name: Bridge to zot registry')
+    check("signing happens BEFORE the zot bridge (GHCR signing must not depend on the zot leg)",
+          _sign_at != -1 and _bridge_at != -1 and _sign_at < _bridge_at,
+          f"sign at {_sign_at}, bridge at {_bridge_at} - sign must come first")
+
+    _sign_step_start = _wf_text.find('name: Install crane (pinned) for signing')
+    _sign_block = _wf_text[_sign_step_start:_bridge_at] if _sign_step_start != -1 else ""
+    check("the signing path installs its own crane and calls no degraded()",
+          'curl -fsSL -o "$RUNNER_TEMP/crane.tgz"' in _sign_block
+          and 'degraded ' not in _sign_block,
+          "signing must not route through the mirror step's degrade vocabulary")
 
     # TARGET. `cosign sign <ref>:<tag>` resolves the tag at sign time, so a tag that moves
     # between push and sign signs something nobody reviewed.
