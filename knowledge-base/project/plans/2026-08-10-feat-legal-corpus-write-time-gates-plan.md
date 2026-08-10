@@ -24,14 +24,40 @@ actually execute, and mutation-prove each one.
    and (b) the block is flush-left, not list-indented.
 2. **`legal-mirror-drift-baseline`** — for each canonical↔mirror pair, assert normalised drift at
    HEAD **equals** drift at the merge base (equality, not zero).
-3. **`obligation-checklist`** — a runner that takes a typed binding-items file, runs one
-   **positive** check per item, and fails on any miss.
+3. ~~**`obligation-checklist`** — a runner that takes a typed binding-items file, runs one
+   **positive** check per item, and fails on any miss.~~ **Deferred to #7392 by operator decision —
+   see the scope decision below.**
 
 The unifying idea: the review skill's defect-class catalogue has ~80 entries, nearly all of which
 are review findings that became institutional knowledge and never became a gate. These three are
 the subset with the highest recurrence against `docs/legal/` and the lowest judgment requirement.
 
 **Closes #7387.**
+
+---
+
+## Scope decisions (operator, 2026-08-10) — applied after plan-review
+
+Both were escalated by plan-review to `decision-challenges.md` rather than applied unilaterally.
+Both have since been decided; this section is the authoritative record and supersedes any
+contradicting text below.
+
+**D-A — Gate 3 is deferred to #7392. This PR ships gates 1 and 2 only.** Three reviewers
+(code-simplicity, spec-flow-analyzer, architecture) and the CLO converged: gate 3 would land with
+no checklist instance, no producer, and no CI trigger, enforcing zero rows; and its registration AC
+greps a string that matches the *unit-suite label*, so it could pass green with zero real rows
+consumed — the #3366 shape reproduced inside the PR whose purpose is eliminating it. #7392 carries
+the full design and will be built against #7349, which gives it a live consumer and a calibration
+corpus. Every gate-3 item below (Phase 4, the input-format section, AC15–AC20, the `obligation-checklist`
+rows in *Files to Create* and *Registration*) is **out of scope for this PR** and moved to #7392.
+
+**D-B — #7349 raised to `priority/p1-high` with a remediation target of 2026-09-30.** Applied on
+the issue, with the CLO's specific measured omissions recorded there (collected-data categories; a
+named third-country recipient, **Anthropic, US**; lawful bases; a retention period; the Art. 15/20
+self-serve export route; an Art. 14 posture for involuntary third-party data subjects). Gate 2's
+script header **must cite 2026-09-30** so the freeze it institutionalises is visibly temporary
+rather than permanent — task 3.10. A knowingly-retained divergence bears on Art. 83(2)(b) and
+83(2)(c); the date is what converts it from ongoing-negligent to managed.
 
 ---
 
@@ -420,9 +446,9 @@ lint over tracked repo files.
 | `scripts/lint-legal-scope-block-placement.test.sh` | Gate 1 fixtures + mutation battery. |
 | `scripts/lint-legal-mirror-drift-baseline.sh` | Gate 2. Sources the shared lib. Exit 0/1/2. |
 | `scripts/lint-legal-mirror-drift-baseline.test.sh` | Gate 2 fixtures + mutation battery. |
-| `scripts/obligation-checklist.sh` | Gate 3 runner. Sources a bash checklist file; provides the `obligation` / `deletion` / `preserve` verbs. Usage contract lives in a ~15-line script header, **not** a separate schema doc. |
-| `scripts/obligation-checklist.test.sh` | Gate 3 fixtures + mutation battery, incl. pre-edit-must-fail validation. Ships the worked example **as an executed fixture**, so it cannot go stale. |
 | `knowledge-base/project/specs/feat-one-shot-7387-legal-corpus-write-time-gates/tasks.md` | Task breakdown. |
+
+**Not created here (D-A):** `scripts/obligation-checklist.sh` and its suite. Gate 3 moved to #7392.
 
 ## Files to Edit
 
@@ -553,23 +579,21 @@ Validation as **diagnostics, not literals to hardcode** — the gate recomputes 
 3.4 Mutation battery, incl. the **ordering** case: same content, different position, equal line
     count — the `50f589c2d` regression shape, which a naive count-only check would miss.
 
-### Phase 4 — Gate 3: obligation-checklist runner
+### Phase 4 — Gate 3: obligation-checklist runner — **DEFERRED to #7392 (D-A)**
 
-4.1 Define the schema (see below). RED first.
-4.2 Implement per-kind execution, `[C][M]` surface expansion into two executions, the advisory
-    (non-gating) tier, and `kind: procedure` as an explicit unrunnable-row escape hatch.
-4.3 Implement **pre-edit validation**: re-run every `kind: obligation` row against the merge-base
-    tree and require it to FAIL. Exempt `preserve` and `procedure`; `deletion` rows match their
-    declared `pre_count` instead.
-4.4 Mutation battery, incl. the R6 anchor-coverage case.
+Not built in this PR. The design is preserved in the input-format section below and carried in full
+on #7392, which will build it against #7349 so it lands with a live consumer and a real input.
 
 ### Phase 5 — Registration *(same commit as the code it registers)*
 
-5.1 Six `run_suite` lines in `scripts/test-all.sh`.
-5.2 Two live steps in the `tc-document-sha-guard` job in `ci.yml`.
-5.3 Run `bash scripts/lint-orphan-test-suites.sh` → must exit 0.
-5.4 `actionlint` on the edited workflow.
+5.1 Four `run_suite` lines in `scripts/test-all.sh` — live + unit for each of gates 1 and 2 — **plus**
+    a live line for `check-tc-document-sha.sh`, which never had one (R12).
+5.2 Add the two **live** gate scripts to `REQUIRED_RUNNERS` in `lint-orphan-test-suites.sh` (R10).
+5.3 **No `.github/workflows/ci.yml` edit** (R11) — the gates already ride the required `test`
+    context via `test-scripts`, which checks out at `fetch-depth: 0`.
+5.4 Run `bash scripts/lint-orphan-test-suites.sh` → must exit 0.
 5.5 **Confirm each new suite appears BY NAME in the CI run log** — the AC that #3366 is about.
+    Resolve the job by **numeric ID**, not by name (`gh run view --job` takes an ID).
 
 ### Phase 6 — Full-suite exit gate
 
@@ -577,7 +601,9 @@ Validation as **diagnostics, not literals to hardcode** — the gate recomputes 
 
 ---
 
-## Gate 3 — Input format: a sourced shell DSL, **not** YAML
+## Gate 3 — Input format: a sourced shell DSL, **not** YAML — **DEFERRED to #7392 (D-A)**
+
+> Retained as the design record. Nothing in this section is built by this PR.
 
 **A YAML schema is unimplementable here, and this was caught at plan-review.** There is no `yq` on
 the `test-scripts` job, none on PATH locally, and the repo carries an explicit precedent against
@@ -688,30 +714,25 @@ advisory tier (1 row, one time), `block:` provenance (recorded, never read), and
       symmetric). Gate 2 exits **2**, not 0, on an unpaired doc — an unpaired doc has no baseline to
       compare against and must never read as "no drift".
 
-**Gate 3**
-- [ ] **AC15** Fires on a binding item whose positive check misses; reports the row `id` next to hit/miss.
-- [ ] **AC16** Rejects a `kind: deletion` row expressed as `expect: 0` (shape rejection, not a pass).
-- [ ] **AC17** Rejects an `obligation` row that PASSES on the merge-base tree (vacuous-row detection).
-- [ ] **AC18** A `surfaces: [C, M]` row runs twice; a canonical-only edit fails.
-- [ ] **AC19** `gates: false` rows report advisory and do not affect exit code.
-- [ ] **AC20** A count row whose `anchor_covers` excludes indented instances is detected when an
-      indented instance exists (R6 / row-21 shape).
+**Gate 3 — AC15–AC20 moved to #7392 (D-A).** Not acceptance criteria for this PR.
 
 **Mutation-proving**
-- [ ] **AC21** Each of the 6 gate arms neutered independently → the registering suite reds. Mutations
-      land in a `mktemp` sandbox, never in tracked files, and each is proven to have landed
+- [ ] **AC21** Each gate-1 and gate-2 arm neutered independently → the registering suite reds.
+      Mutations land in a `mktemp` sandbox, never in tracked files, and each is proven to have landed
       (`cmp -s` against pristine) before its SURVIVED/KILLED verdict is trusted.
 
 **Registration**
-- [ ] **AC22** `bash scripts/lint-orphan-test-suites.sh` exits 0 (auto-enforces all six `run_suite` lines).
-- [ ] **AC23** All three suites appear **by name** in the CI run log:
-      `gh run view --log --job "test-scripts" | grep -c -E 'lint-legal-scope-block-placement|legal-mirror-drift-baseline|obligation-checklist'` ≥ 3.
-- [ ] **AC24** The gate-1 and gate-2 live steps appear by name in the `tc-document-sha-guard` run log.
+- [ ] **AC22** `bash scripts/lint-orphan-test-suites.sh` exits 0 (auto-enforces all five `run_suite`
+      lines: live + unit per gate, plus the `check-tc-document-sha.sh` live line).
+- [ ] **AC23** Both suites appear **by name** in the CI run log. Resolve the job by **numeric ID**
+      (`gh run view --job` takes an ID, not a name), then:
+      `gh run view --log --job <id> | grep -oE 'lint-legal-scope-block-placement|lint-legal-mirror-drift-baseline' | sort -u | wc -l` = 2.
+- [ ] **AC24** *(dropped — R11 cut the `ci.yml` edit; there are no `tc-document-sha-guard` live steps.)*
 - [ ] **AC25** Runner tooling verified: every external command the suites shell out to
       (`git`, `grep`, `awk`, `sed`, `diff`, `sha256sum`, `mktemp`) is present in the job body with no
       new install step.
 - [ ] **AC26** `bash scripts/test-all.sh scripts` green end-to-end.
-- [ ] **AC27** `actionlint` clean on `.github/workflows/ci.yml`.
+- [ ] **AC27** *(dropped — no workflow file is edited, so there is nothing for `actionlint` to lint.)*
 
 **Hygiene**
 - [ ] **AC28** Every `knowledge-base/` path cited in this plan resolves:
@@ -853,13 +874,17 @@ Queried 64 open `code-review` issues against every path in `## Files to Create` 
 
 ## Non-Goals
 
-- **Resyncing the 220 lines of pre-existing drift.** Tracked on #7349. Gate 2 asserts equality
-  precisely so this stays out of scope; a zero-assertion would be unshippable and disabled within a day.
+- **Building gate 3 (`obligation-checklist`).** Deferred to #7392 by operator decision D-A. It would
+  otherwise land with no checklist instance, no producer, and no CI trigger — enforcing zero rows,
+  with a registration check that greps a string matching its own unit-suite label. #7392 builds it
+  against #7349, which supplies a live consumer and a calibration corpus.
+- **Resyncing the 220 lines of pre-existing drift.** Tracked on #7349, now `priority/p1-high` with a
+  2026-09-30 target (D-B). Gate 2 is a subset ratchet precisely so this stays out of scope *and* is
+  never blocked by the gate; a zero-assertion would be unshippable and disabled within a day.
 - **Adjudicating whether a scope block is legally correct.** Gate 1 enforces two mechanical
   preconditions. Scope correctness is a CLO decision.
 - **Minting new required status checks.** Deliberate; see Risk 2.
-- **Generalising the gates beyond `docs/legal/` + its mirror.** Gate 3's runner is corpus-agnostic
-  by construction, but only the legal corpus is wired in this PR.
+- **Generalising the gates beyond `docs/legal/` + its mirror.** Only the legal corpus is wired here.
 - **Fixing PR #7372's 12 sites.** That is #7372's work; this PR builds the detector.
 
 ---

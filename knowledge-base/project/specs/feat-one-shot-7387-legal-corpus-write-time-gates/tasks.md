@@ -6,6 +6,11 @@ Derived from [the plan](../../plans/2026-08-10-feat-legal-corpus-write-time-gate
 
 > **CLO status: BLOCKED pending amendments.** Amendments 1–5 and 11–12 are non-waivable. Phase 2
 > must not begin until 1.6 is complete.
+>
+> **Operator scope decisions, 2026-08-10 (authoritative — see the plan's `## Scope decisions`):**
+> **D-A** gate 3 is deferred to #7392; Phase 4 is not built here. **D-B** #7349 is now
+> `priority/p1-high` with a **2026-09-30** remediation target, which task 3.10 must cite in the
+> gate-2 script header.
 
 ---
 
@@ -88,32 +93,19 @@ Derived from [the plan](../../plans/2026-08-10-feat-legal-corpus-write-time-gate
 - [ ] 3.8 Enumerate pairs from the glob, not the literal 9; cross-check `EXPECTED_COUNT`.
 - [ ] 3.9 Message: per drifting doc, both paths, direction, and a diff of the **drift sets** — not of the documents.
 - [ ] 3.10 Header states what is frozen (published mirror under-discloses; name the Anthropic-US transfer
-      and the Art. 15/20 export route) and cites #7349's date (R14, R15).
+      and the Art. 15/20 export route) and cites **#7349's 2026-09-30 remediation target** (R14, R15, D-B).
 - [ ] 3.11 Mutation battery incl. the reorder case **and** a lockstep-shift no-fire case (R6).
 
-## Phase 4 — Gate 3: obligation-checklist *(see UC-1 — operator decision pending)*
+## Phase 4 — Gate 3: obligation-checklist — **DEFERRED to #7392 (D-A)**
 
-- [ ] 4.1 **RED first.** Input is a **sourced shell DSL**, not YAML — no `yq` exists (R18).
-- [ ] 4.2 Verbs `obligation` / `deletion` / `preserve`; surface loop over `$C`/`$M`; `expect=0` refused.
-- [ ] 4.3 Survivor assertions on **line numbers**; support both real shapes (line-set exclusion **and**
-      inequality-against-a-heading) (R18).
-- [ ] 4.4 Pre-edit validation against the merge-base tree; obligations must FAIL there.
-- [ ] 4.5 Lifecycle: scope discovery to the branch spec dir; archive on merge, or the checklist reds
-      every later PR (R19).
-- [ ] 4.6 `anchor_covers` as a **measured identity** — anchored vs over-broad superset count, both
-      declared, silent inequality exits 1 on the live corpus every run (R16).
-- [ ] 4.7 Ruling-hash mismatch → **exit 1**, routed to the CLO (R27).
-- [ ] 4.8 **PASS message reads necessary-not-sufficient**; names the other two discharge conjuncts and
-      the CLO as attestation authority (R26).
-- [ ] 4.9 If shipping here: declared home, named producer skill, glob-driven CI step, absence-detection
-      predicate, and ≥1 **real committed** checklist executed (R24). Else drop the "live" line and say
-      so in Non-Goals.
-- [ ] 4.10 Mutation battery incl. the row-21 anchor-coverage shape.
+Not built in this PR. Design preserved in the plan's input-format section and carried in full on
+#7392, which builds it against #7349 so it lands with a live consumer and a real input. Non-Goals
+says so plainly.
 
 ## Phase 5 — Registration *(same commit as the code it registers)*
 
-- [ ] 5.1 `run_suite` lines: unit + live per gate, **plus** `check-tc-document-sha.sh` (R12).
-- [ ] 5.2 Add the three **live** gate scripts to `REQUIRED_RUNNERS` in `lint-orphan-test-suites.sh` (R10).
+- [ ] 5.1 `run_suite` lines: unit + live for gates 1 and 2, **plus** `check-tc-document-sha.sh` (R12).
+- [ ] 5.2 Add the two **live** gate scripts to `REQUIRED_RUNNERS` in `lint-orphan-test-suites.sh` (R10).
 - [ ] 5.3 **No `.github/workflows/ci.yml` edit** — the gates already ride required `test` (R11).
 - [ ] 5.4 `bash scripts/lint-orphan-test-suites.sh` → exit 0.
 - [ ] 5.5 Confirm each suite appears **by name** in the CI run log, via numeric job ID +
@@ -125,6 +117,7 @@ Derived from [the plan](../../plans/2026-08-10-feat-legal-corpus-write-time-gate
 - [ ] 6.2 `check-tc-document-sha.sh` green; `vitest run test/legal-doc-shas-guard.test.ts` green
       (grep the log for `FAIL`/`× ` — a background runner has reported exit 0 on a real failure).
 - [ ] 6.3 Every AC checked individually against real output — **never** bulk-toggled.
-- [ ] 6.4 PR body: corrected attribution (**4 of 10**, R13), the gate-3-detects-nothing caveat, and the
+- [ ] 6.4 PR body: corrected attribution (**4 of 10**, R13), the gate-3 deferral to #7392, and the
       #7372 interaction re-derived per R5.
-- [ ] 6.5 `decision-challenges.md` rendered into the PR body and filed as `action-required` (UC-1, UC-2).
+- [ ] 6.5 `decision-challenges.md` rendered into the PR body — both UCs are now **decided**, not open,
+      so they are reported as applied decisions rather than filed as `action-required`.

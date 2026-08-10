@@ -2,8 +2,11 @@
 
 Recorded during plan-review (headless pipeline arm). These are **User-Challenges** per
 [decision-principles.md](../../../../plugins/soleur/skills/brainstorm-techniques/references/decision-principles.md)
-(ADR-084): the operator's stated direction is the default and has been kept. `ship` renders this
-into the PR body and files it as an `action-required` issue.
+(ADR-084): the operator's stated direction is the default and was kept pending a decision.
+
+> **Both were put to the operator on 2026-08-10 and are now DECIDED and APPLIED.** They are reported
+> in the PR body as applied decisions, not filed as `action-required`. See the resolution block under
+> each challenge.
 
 ---
 
@@ -39,14 +42,17 @@ runner *with* #7349 gives it a live consumer, a real input, and a calibration co
 format will very likely turn out to be a shell script, which is where this plan's own revision R18
 already landed it.
 
-**Disposition:** kept in scope (operator's direction is the default). If it ships here, revision
-R24 lists the five things it must additionally carry — declared home, named producer, glob-driven
-CI step, absence-detection predicate, and an AC requiring ≥1 real committed checklist executed —
-otherwise the "live" `run_suite` line should be dropped rather than fabricated, and Non-Goals should
-say plainly that the runner ships without a consumer.
+**RESOLVED 2026-08-10 — split to a follow-up. Filed as #7392.**
 
-**Operator decision needed:** ship gate 3 in this PR with the R24 wiring, or split it to a follow-up
-issue tracked against #7349.
+The operator took the reviewers' recommendation. This PR ships gates 1 and 2 only. #7392 carries the
+full gate-3 design (sourced-shell-DSL input, the three verbs, pre-edit-must-fail validation, the
+`anchor_covers` measured identity, the necessary-not-sufficient PASS message, the row-21 mutation
+case) plus the five R24 wiring requirements as acceptance criteria, and will be built against #7349
+so it lands with a live consumer and a calibration corpus.
+
+Applied: plan `## Scope decisions` D-A; Phase 4 and the gate-3 input-format section marked deferred;
+AC15–AC20 moved to #7392; the `obligation-checklist` rows removed from *Files to Create* and from the
+registration count (five `run_suite` lines, not six); Non-Goals states the deferral plainly.
 
 ---
 
@@ -72,7 +78,10 @@ header so the freeze is visibly temporary; and record the specific measured omis
 in `knowledge-base/legal/compliance-posture.md` as an active item — "220 lines of drift" does not
 convey them.
 
-**Disposition:** not applied by this plan (it is a priority/scheduling decision on another issue and
-a compliance-posture write, both outside #7387's scope). Recorded here so it is not lost.
+**RESOLVED 2026-08-10 — approved and applied.**
 
-**Operator decision needed:** approve the #7349 re-prioritisation + compliance-posture entry.
+#7349 raised `priority/p2-medium` → **`priority/p1-high`**, with a **2026-09-30** remediation target
+and the CLO's specific measured omissions recorded on the issue (not "220 lines of drift", which
+conveys none of them). Gate 2's script header must cite that date — task 3.10 — so the freeze it
+institutionalises is visibly temporary. If the date moves, the header moves with it; the two are
+deliberately coupled. A matching active item goes into `knowledge-base/legal/compliance-posture.md`.
