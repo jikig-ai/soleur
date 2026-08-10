@@ -165,24 +165,68 @@ just when the control is written.
    to the operator. Corrected by reading the run log's exit codes and terminal
    markers. The plan documented this exact trap; implementing its mitigation is
    not the same as using it.
+   **Prevention:** for any assertion about a step's success, name the field that
+   carries the fact and ask whether it CAN say "no". Under `continue-on-error`,
+   `conclusion` cannot.
 2. **`pkill -f 'run-registered-suites'` matched its own command line** and killed
    the invoking shell (exit 144), silently dropping the edit that was chained
    after it. The repo documents this trap verbatim. Use a bracket class
    (`'run-registered[-]suites'`) or match on PID.
+   **Prevention:** never chain a destructive command and a file edit in one Bash
+   call — the edit is lost if the command kills the shell.
 3. **A double-quoted string inside a double-quoted C4 description** terminated it
    early; likec4 then reported `Could not resolve reference to ElementKind named
    'no'` at a line I had not edited. Regeneration is what caught it — the parity
    test alone would not have.
-4. **The verification harness went stale against its own subject** (see above).
+   **Prevention:** run `regenerate-c4-model.sh` after ANY `.c4` prose edit; the
+   parity test checks counts, not that the source still parses.
+4. **The verification harness went stale against its own subject** — I changed the
+   fallback string and the harness still grepped the old one, so its mutation
+   control "passed" by an absence that was already true of the baseline.
+   **Prevention:** a control is only a control while the thing it discriminates
+   on is still the thing under test; re-prove discrimination whenever the subject
+   moves, not only when the control is written.
 5. **Predicted that a second measurement could not change the derived ceiling**,
    on the grounds that the floors dominated. It did change it, because the
    toolchain fix altered which suites actually ran. The prediction was reasoning
    about the rule instead of measuring the input.
+   **Prevention:** when a change alters WHICH work runs, the prior measurement is
+   not a sample of the new configuration — re-measure rather than reasoning about
+   whether the derivation rule would move.
 6. **Two regressions introduced and caught only by the measurement dispatch**, not
    by review: four stale embedded counts in `model.c4`, and a new monitor name
    missing from `NON_INNGEST_MONITORS`. Both were counted-artifact drift of the
    kind the repo already warns about; neither was visible to `tsc`, actionlint,
    or the touched-file test loop.
+   **Prevention:** after adding any resource/workflow that a parity gate counts,
+   run that gate before pushing — `c4-count-parity`, `function-registry-count`.
+7. **Removed the workflow-scoped `JOBS` while fixing a review finding and never
+   re-added it to the steps**, so the infra runner reverted to `-P 4` and filed a
+   spurious P1 (#7386). The monitor caught it; my brand-new guard suite did not.
+   **Prevention:** when a review fix MOVES a setting rather than deleting it,
+   assert the destination in the same commit — and if a guard exists for that
+   file, the assertion belongs in the guard, not only in the diff.
+8. **The bare repo reported every worktree as bare**, blocking `worktree-manager.sh
+   draft-pr`. `ensure_bare_config`'s non-bare guard treats "`git_dir` is a `.git`
+   directory" as proof of a normal clone, which this bare-in-`.git` layout
+   satisfies, so its `core.bare` surgery never ran and the shared value bled into
+   every linked worktree.
+   **Prevention:** the guard should consult `core.bare` rather than the gitdir's
+   shape. Not filed — it is a different subsystem and did not recur once the
+   shared key was unset.
+9. **Read an empty log as evidence.** `gh run view --log` hit a TLS handshake
+   timeout and wrote a 155-byte error file; `grep -c` over it returned 0 and I
+   reported "0 exit codes, both steps green".
+   **Prevention:** assert the artifact is non-trivial (`wc -c`, or that the
+   expected terminal marker is present) before drawing a conclusion from a
+   grep count of zero — absence of evidence renders identically to evidence of
+   absence.
+10. **Counted my own guard's message as a failure.** `grep -c '\[FAIL\]'` over the
+    suite log matched assertion (8)'s text, which necessarily contains the
+    literal `[FAIL]`, and I reported a failure that did not exist.
+    **Prevention:** anchor progress greps on the runner's line FORMAT
+    (`^\[FAIL\] `), never a bare token — the same rule the diff applies to the
+    workflow's own marker.
 
 ## Review phase: the reasoning was sound and pinned by nothing
 
