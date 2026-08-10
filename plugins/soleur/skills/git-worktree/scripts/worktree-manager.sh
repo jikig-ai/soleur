@@ -11,9 +11,9 @@
 # DISABLED. That is the state git itself produces, and it is the state this script
 # now enforces. The extension is NOT set, so `core.bare` is NOT resolved per-worktree.
 #
-# The retired claim was: "the per-worktree config (.git/config.worktree) holds
-# core.bare=true ONLY for the bare root; linked worktrees inherit core.bare=false by
-# default." Measured on git 2.53.0, the inheritance direction is the OPPOSITE. With
+# The retired claim held that config.worktree carried core.bare=true for the bare root
+# alone, and that a linked worktree would default to core.bare=false on its own.
+# Measured on git 2.53.0, the inheritance direction is the OPPOSITE. With
 # extensions.worktreeConfig ON, a linked worktree that does not set `bare = false` in
 # its OWN config.worktree inherits `true` from the shared config and is treated as
 # BARE — and `git worktree add` writes no config.worktree at all, so every worktree
