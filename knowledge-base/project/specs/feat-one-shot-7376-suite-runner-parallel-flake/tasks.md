@@ -177,11 +177,38 @@ Use the `INFRA_WF` **and** `INFRA_DIR` seams so fixtures never touch the live in
       transfer to a hosted runner on disk-backed `/var/tmp`. Nothing else.
 - [x] 6.2 Register any new suite file in `infra-validation.yml` (else
       `.github/scripts/test/test-infra-suite-registration.sh` fails a required check).
-- [ ] 6.3 `bash scripts/test-all.sh` green (nests the runner via `test-all.sh:801`).
-- [ ] 6.4 PR body: state explicitly what was and was not established, including every hypothesis
+- [x] 6.3 `bash scripts/test-all.sh` green (nests the runner via `test-all.sh:801`).
+- [x] 6.4 PR body: state explicitly what was and was not established, including every hypothesis
       still UNKNOWN, and AC11's caveats (`taskset` bounds CPU only; observer effect; baseline
       denominator).
-- [ ] 6.5 Use `Closes #7376`. Leave `JOBS: 1` at `main-health-monitor.yml:304`/`:323` untouched.
-- [ ] 6.6 File the follow-up issue for the `JOBS=1` removal, recording that it must also (a) add a
+- [x] 6.5 Use `Closes #7376`. Leave `JOBS: 1` at `main-health-monitor.yml:304`/`:323` untouched.
+- [x] 6.6 File the follow-up issue for the `JOBS=1` removal, recording that it must also (a) add a
       non-filing `-P 4` probe job or accept local evidence, (b) remove both pins, and (c) **delete
       check (12)** from `main-health-monitor-workflow.test.sh`.
+
+
+## Review follow-through (2026-08-11)
+
+8 review agents; ~40 findings, ALL fixed inline (zero scope-outs). Net issue flow: closing
+#7376, filing #7432 → net 0.
+
+- [x] P1: accounting verdict was stripped from the public issue body; monitor then blamed a
+      timeout it never measured. `UNACCOUNTED  <path>` now goes out unprefixed as naming signal.
+- [x] P1: log dir leaked on every non-green run (414 dirs / 23 MB measured). Trap + age-reap.
+- [x] SEC: PEM range swallowed the rest of the issue body (live trigger in git-data-emit:266).
+- [x] SEC: `dp.st.<config>.` was unredacted; the new test used a shape that DID match.
+- [x] SEC: caps were lines not bytes — one 200 KB line breaks `gh issue create`.
+- [x] SEC: no AWS rule existed at all; added, and hoisted the LUKS blanking above run_s6.
+- [x] TEST: 2 of 7 matrix rows scored kills against an UNMUTATED runner (scorer matched the
+      PASSING line). Re-keyed + noop-control row added.
+- [x] TEST: fixture put its marker on line 1, so a head-selection mutant survived; and used a
+      `FAIL:` shape no anchor matches, making the excerpt invariant 1==1.
+- [x] TEST: assertion floor + ok()/no() positive control, outside the mutation-child guard.
+- [x] T2e ratchet for the 8 registered-but-underived suites (#7076), both invocation shapes.
+- [x] deploy-script-tests budget re-derived 12 → 14 min (suite 3s → 67s).
+- [x] ADR-133: recorded the observe-only and ships-ahead departures.
+
+**Not done, deliberately:** no per-suite `timeout`, so `rc=124` remains unreachable — the plan's
+observability block claimed 124 detection and that claim is corrected rather than the code
+changed (picking a timeout value is a tuning decision this PR cannot validate). H2/H4 remain
+UNKNOWN.
