@@ -57,6 +57,17 @@ All of this data remains on your machine. We have no access to it.
 
 When we do that on your instructions we are acting as your processor. We also look at how Soleur performed in order to improve the product, and for that narrow purpose we are acting as a controller in our own right. We do not run an operator-assisted session without first agreeing a written agreement with you covering it. Where one is agreed, that agreement — not this policy — sets out what happens to your data during the session: who else may process it, where it goes, how long we keep it, and how we help you answer requests from people whose data is involved. That agreement governs the work we do **on your instructions**; it is not what makes our own product-learning use lawful, which rests on our legitimate interests and is explained in GDPR Policy Section 3.14.
 
+**Giving us access to a repository is a second, separate exception.** If you make us a collaborator
+on one of your repositories — for example while taking part in an early-access programme — we may read
+what is in it, including your `knowledge-base/` directory and your git history, for purposes **we**
+have chosen rather than ones you have instructed: measuring how the programme is progressing, and
+learning how Soleur behaves on real work. For that reading we are a controller in our own right and
+we rely on our legitimate interests under Article 6(1)(f). This exception is not the same as the one
+above: it does not require you to ask us for anything, it involves neither our machine nor our API
+key, and it continues between sessions for as long as the access lasts. You can end it at any time by
+withdrawing the access, and you can object to the processing at any time — see Section 8.1 and GDPR
+Policy Section 3.14.
+
 Neither exception applies unless you have asked us for an operator-assisted session or granted us
 access. Absent both, the paragraphs above apply as written: the data listed above stays on your
 machine and we have no access to it.
