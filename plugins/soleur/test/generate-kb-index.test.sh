@@ -269,14 +269,17 @@ selftest_helpers() {
   local p1=$PASS f1=$FAIL
   assert_indexed     "$d" "absent-from-index.md"  "selftest(expect-fail): assert_indexed on missing row"
   assert_not_indexed "$d" "present/x.md"          "selftest(expect-fail): assert_not_indexed on present row"
-  local expected_pass=$((p1 - p0)) expected_fail=$((FAIL - f1))
+  local ok_pass=$((p1 - p0)) ok_fail=$((f1 - f0)) bad_fail=$((FAIL - f1))
   # Undo the two deliberate failures and score the self-test itself.
   FAIL=$f1
-  if [[ "$expected_pass" -eq 2 && "$expected_fail" -eq 2 ]]; then
+  # The correct-input pair must produce 2 passes and 0 failures; the
+  # wrong-input pair must produce 2 failures. Anything else means a helper
+  # cannot distinguish present from absent in one direction or the other.
+  if [[ "$ok_pass" -eq 2 && "$ok_fail" -eq 0 && "$bad_fail" -eq 2 ]]; then
     echo "  PASS: helper self-test (both helpers detect present AND absent)"
     PASS=$((PASS + 1))
   else
-    echo "  FAIL: helper self-test (a helper cannot fail: pass_delta=$expected_pass fail_delta=$expected_fail)"
+    echo "  FAIL: helper self-test (pass=$ok_pass expected 2, false_fail=$ok_fail expected 0, caught=$bad_fail expected 2)"
     FAIL=$((FAIL + 1))
   fi
 }
