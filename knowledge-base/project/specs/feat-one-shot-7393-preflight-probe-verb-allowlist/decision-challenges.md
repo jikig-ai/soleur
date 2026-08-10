@@ -28,3 +28,23 @@ the larger quality change, so it lands later than it strictly had to.
 
 **If the operator disagrees:** the split is cheap to execute — Layer 1 is self-contained in
 Step 10.5 and its two Sharp Edges, with no dependency on the allowlist or the schema field.
+
+### Addendum — 2026-08-10 (#7393, at `/work`): DC-1's central premise was falsified
+
+Appended rather than edited — the record above is what the challenge actually said, and
+destroying it would destroy the evidence for why the split looked attractive.
+
+DC-1 rests on "the actual security vulnerability is closed entirely by one line —
+`HOME="$HOME"` → `HOME="$(mktemp -d)"`". **That is false**, and the plan's own v1 → v2
+revision is what established it: an ephemeral `$HOME` changes where a CLI *looks*, not what
+is *readable*. Measured, an absolute-path read returns the live 294-byte Doppler token
+regardless of `$HOME`, as does a `/home/*/…` glob, as does `awk 'BEGIN{system(…)}'`.
+
+So the "ship the one-line security fix immediately" arm of the recommended split would have
+shipped **no security fix at all** — it would have shipped a control that reads as one. The
+decision to decline the split is unchanged, but the reasoning above understates it: the
+split was not merely inconvenient, its fast arm was empty.
+
+What survives from DC-1 is the cost note, and it now points the other way: the real
+security-relevant change (the bwrap boundary) is *not* one line and could not have shipped
+ahead of the rest on the timeline the challenge assumed.
