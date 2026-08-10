@@ -30,7 +30,7 @@ model {
   // token); it never runs in the privileged Stage B consumer (ADR-074).
   contributor = actor "Contributor / PR Author" {
     #external
-    description "An untrusted contributor opening a pull request. Their PR-head code is executed only by the fix-constraints Stage A producer (pull_request, contents:read, no write token) — never by the privileged Stage B consumer, which opens a data-only draft follow-up PR from the default branch (ADR-074)."
+    description "An untrusted contributor opening a pull request. Their PR-head content executes only inside an isolation boundary, never with ambient authority: the fix-constraints Stage A producer runs it under pull_request with contents:read and no write token — never the privileged Stage B consumer, which opens a data-only draft follow-up PR from the default branch (ADR-074) — and preflight Check 10, which executes a PR-declared discoverability probe on the operator's own workstation, runs it inside a bubblewrap sandbox with no credential stores bound and the repo read-only, failing closed to SKIP if that sandbox cannot be established (ADR-173)."
   }
 
   // ---- Soleur Platform (enterprise boundary) -----------------------------
