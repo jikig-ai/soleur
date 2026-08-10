@@ -40,11 +40,29 @@ on:
 permissions:
   contents: read
   packages: write
-  id-token: write # OIDC for cosign keyless signing (#7410) — see "WHY THIS IS NOW SIGNED"
+
+concurrency:
+  # push -> sign is not atomic: `docker push` and the `crane digest` that resolves what to sign are
+  # separate steps, so two overlapping runs on one tag both resolve AFTER the last push and both
+  # sign the same digest, leaving the other published digest unsigned. Since the signature's whole
+  # value is "A2 finds it at the digest cloud-init pins", the unsigned loser is the case that
+  # matters. Both sibling signing workflows carry a concurrency block; this one did not.
+  # cancel-in-progress stays FALSE: cancelling a run that has already pushed would strand an
+  # unsigned digest, which is the state being prevented.
+  group: inngest-bootstrap-image-${{ inputs.ref || github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # OIDC for cosign keyless signing (#7410). JOB-level, matching reusable-release.yml and
+      # build-inngest-config-bundle.yml, which both annotate it "least privilege" -- at workflow
+      # level any future job in this file would silently inherit an identity that can mint a
+      # Fulcio cert and sign anything the job can write.
+      id-token: write
     steps:
       # Validate the dispatch ref BEFORE checkout, from the trusted workflow
       # tree — so the guard script is never sourced from an untrusted ref's
@@ -622,9 +640,39 @@ jobs:
       #
       # Signs the DIGEST, never the tag: `cosign sign <ref>:<tag>` resolves the tag at sign
       # time, so a tag that moves between push and sign yields a signature over something
-      # nobody reviewed. Mirrors reusable-release.yml, which signs `${IMAGE}@${DIGEST}`.
+      # nobody reviewed. Mirrors reusable-release.yml's `${IMAGE}@${DIGEST}` -- the digest half
+      # of it. It does NOT mirror the zot half: `crane copy` below carries the tag, not the
+      # `sha256-<hex>` referrer, so the zot copy stays unsigned while GHCR is signed.
+      #
+      # WHAT THIS SIGNATURE IS, AND IS NOT. State it here because the gap is not obvious and the
+      # word "signed" invites the stronger reading:
+      #
+      #   IS   -- a signature that EXISTS at the referrers tag, whose blobs resolve and hash
+      #           correctly. That is exactly what registry-restore-from-ghcr.sh's verification 3
+      #           checks, and it is the whole reason this step exists: without it D10's A2
+      #           predicate can never pass, because that engine requires a signature for every
+      #           required pin and has no unsigned arm.
+      #   IS NOT -- a provenance claim any consumer verifies. ci-deploy.sh pins
+      #           COSIGN_IDENTITY_REGEXP to `reusable-release.yml@(refs/heads/main|refs/tags/v[0-9].+)`;
+      #           this signature's Fulcio subject is this file at a `vinngest-` tag, which matches
+      #           neither the workflow name nor the tag pattern. And the inngest deploy branch does
+      #           not call verify_image_signature at all -- measured, zero occurrences.
+      #
+      # So A2's signature arm is a PRESENCE token for this image, not a verified provenance claim.
+      # Widening COSIGN_IDENTITY_REGEXP to admit this identity was deliberately NOT done here: that
+      # regexp is the containment keeping this OIDC identity from being able to forge a signature
+      # the WEB image path would accept, and loosening it to make a restore-gate token verifiable
+      # would trade a real boundary for a cosmetic one.
       - name: Install cosign (pinned)
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # PIN THE TOOL, not just the installer. The cosign version decides the referrers TAG
+          # SHAPE, and registry-restore-from-ghcr.sh reads `sha256-<hex>`. A cosign that writes
+          # the legacy `sha256-<hex>.sig` simple-signing tag produces a signature A2 404s on --
+          # workflow green, A2 still refusing, discovered only after a full multi-GB rehearsal of
+          # the other three pins. reusable-release.yml pins the same version for the mirror-image
+          # reason ("no sign/verify version skew"); keep the two in step.
+          cosign-release: v3.1.1
       - name: Cosign-sign the GHCR digest (keyless)
         env:
           IMAGE: ghcr.io/jikig-ai/soleur-inngest-bootstrap

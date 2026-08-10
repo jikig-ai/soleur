@@ -284,6 +284,35 @@ if mirror:
     # advisory message string ("...backfill via ... crane, digest-preserving..."), which
     # code_of does NOT strip -- strings are not comments. Measured: a full revert kept the
     # token alive from that string and passed.
+    # ── #7410 signing: three properties, each of which shipped broken at least once. ─────────
+    #
+    # These span STEPS, so they read the whole workflow text rather than one step's `run` body.
+    _wf_text = open(sys.argv[1]).read()
+
+    # ORDERING. The sign step calls `crane digest`, and crane is installed inside the zot-mirror
+    # step's run block. Placed before it, the step ran `crane: command not found` on EVERY
+    # invocation -- including the mirror_only backfill the change exists to enable. This suite
+    # was 53/53 green with that bug present, and its own call-position style is exactly what
+    # would have caught it. Compares INDEX, not membership.
+    _install_at = _wf_text.find("install_crane()")
+    _sign_at    = _wf_text.find('crane digest "$IMAGE:$TAG"')
+    check("crane is installed BEFORE the sign step calls it",
+          _install_at != -1 and _sign_at != -1 and _install_at < _sign_at,
+          f"install_crane at {_install_at}, `crane digest` at {_sign_at} - sign must come after")
+
+    # TARGET. `cosign sign <ref>:<tag>` resolves the tag at sign time, so a tag that moves
+    # between push and sign signs something nobody reviewed.
+    check("cosign signs the DIGEST, never the tag",
+          re.search(r'^\s*cosign\s+sign\s+--yes\s+"\$\{IMAGE\}@\$\{DIGEST\}"', _wf_text, re.M) is not None
+          and re.search(r'^\s*cosign\s+sign\s+[^\n]*"\$IMAGE:\$TAG"', _wf_text, re.M) is None,
+          "expected a digest-form cosign sign and no tag-form one")
+
+    # TOOL VERSION. The cosign version decides the referrers TAG SHAPE; a cosign writing the
+    # legacy `.sig` tag yields a signature D10 A2 404s on, with this workflow green.
+    check("cosign-release is pinned",
+          re.search(r'cosign-release:\s*v\d+\.\d+\.\d+', _wf_text) is not None,
+          "sigstore/cosign-installer must pin cosign-release, not float the default")
+
     check("mirror invokes `crane copy` at call position",
           re.search(r'^\s*retry\s+crane\s+copy\s+"\$IMAGE:\$TAG"\s+"\$ZOT:\$TAG"', code, re.M) is not None,
           "expected `retry crane copy \"$IMAGE:$TAG\" \"$ZOT:$TAG\"` at line start")
@@ -568,7 +597,7 @@ echo "passed: $pass  failed: $fail"
 # most load-bearing structural checks landed exactly on a floor of 30 and still certified the
 # run. A floor catches total neutering; only a tight one catches attrition. Re-derive it when
 # adding assertions — that is the intended maintenance cost.
-MIN_ASSERTIONS=50
+MIN_ASSERTIONS=53
 if (( pass + fail < MIN_ASSERTIONS )); then
   echo "FAIL - only $((pass + fail)) assertions ran (floor $MIN_ASSERTIONS) — a green run here would be vacuous"
   exit 1
