@@ -806,6 +806,26 @@ if [[ -z "$EXPECTED" ]]; then
 fi
 ```
 
+**Normalize `$CMD` ONCE, here, before anything else reads it.**
+
+Every downstream consumer — the probe-verb gate, the shell-active reject, and the sandboxed
+exec — must see the SAME string. Gating one form while executing another is a laundering
+gap, and normalizing inside the gate alone produced exactly that: the gate judged the
+normalized command while Step 10.5 rejected the raw one on its embedded newline, so a Form A
+block scalar carrying a leading `#` comment failed the runtime even though the gate (and the
+TypeScript mirror) accepted it. The mirror's `normalizeCommand()` is this, and the parity
+harness only compares the GATE, so this divergence was invisible to it.
+
+```bash
+# Drop full-line `#` comments and blank lines, then trim. A `#` inside a quoted
+# argument is untouched — only whole comment LINES match. Verified across the
+# 642-command corpus: 6 commands change (all block scalars with leading comment
+# lines, the shape this fixes) and no quoted `#` is altered.
+CMD="$(printf '%s' "$CMD" | sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d')"
+CMD="${CMD#"${CMD%%[![:space:]]*}"}"
+CMD="${CMD%"${CMD##*[![:space:]]}"}"
+```
+
 If `$CMD` is empty after both attempts, return **FAIL** with: "Plan `<PLAN_PATH>` declares an Observability block but no `discoverability_test.command` could be parsed. See `plugins/soleur/skills/plan/references/plan-issue-templates.md` §Observability."
 
 **Reject SSH commands** (defense-in-depth):

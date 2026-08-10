@@ -1654,6 +1654,27 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
     );
   });
 
+  test("F1c the runtime normalizes $CMD ONCE, before the gate, the reject and the exec", () => {
+    // Gate/execute coherence. Normalizing inside the gate alone produced a real
+    // laundering gap: the gate judged the NORMALIZED command while Step 10.5's
+    // shell-active reject tested the RAW one, so a Form A block scalar with a
+    // leading `#` comment was accepted by the gate and rejected by the runtime on
+    // its embedded newline. The parity harness compares only the GATE, so it was
+    // structurally blind to this — hence a positional assertion here.
+    const norm = lines.findIndex((l) => /^CMD="\$\(printf '%s' "\$CMD" \| sed/.test(l));
+    const gate = lines.findIndex((l) => /^PROBE_GATE=/.test(l));
+    const reject = lines.findIndex((l) => /shell-active token; refusing to run/.test(l));
+    const exec = lines.findIndex((l) => /^DT_OUT=\$\(/.test(l));
+    expect(norm, "normalization line must exist").toBeGreaterThan(-1);
+    expect(gate, "gate invocation must exist").toBeGreaterThan(-1);
+    expect(reject, "shell-active reject must exist").toBeGreaterThan(-1);
+    expect(exec, "exec line must exist").toBeGreaterThan(-1);
+    // Every consumer must see the normalized string.
+    expect(norm, "normalize before the verb gate").toBeLessThan(gate);
+    expect(norm, "normalize before the shell-active reject").toBeLessThan(reject);
+    expect(norm, "normalize before the sandboxed exec").toBeLessThan(exec);
+  });
+
   test("F2 AC2 — the sandbox carries the load-bearing binds", () => {
     const w = sandboxWindow();
     expect(w).toMatch(/--ro-bind "\$REPO_ROOT" "\$REPO_ROOT"/);
