@@ -58,8 +58,15 @@ logs:
   retention:       # how long until lost
 
 discoverability_test:
-  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state
+  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state.
+                   # preflight Check 10 EXECUTES this inside a sandbox, so the first token must be on
+                   # PROBE_VERB_ALLOWLIST (curl bash sh grep rg jq python3 node bun printf git), must not
+                   # pass an inline program (-c/-e/-p/--eval/--print), and any program path must be
+                   # repo-relative. Wrap anything else in a repo-relative script.
   expected_output: # canonical "everything OK" output
+  credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
+                   # "<scope> — <why no unauthenticated probe verifies the same property>".
+                   # Check 10 then SKIP-DECLAREDs without executing. Placeholder text = FAIL.
 ```
 
 ## Encryption Posture
@@ -214,8 +221,15 @@ logs:
   retention:       # how long until lost
 
 discoverability_test:
-  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state
+  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state.
+                   # preflight Check 10 EXECUTES this inside a sandbox, so the first token must be on
+                   # PROBE_VERB_ALLOWLIST (curl bash sh grep rg jq python3 node bun printf git), must not
+                   # pass an inline program (-c/-e/-p/--eval/--print), and any program path must be
+                   # repo-relative. Wrap anything else in a repo-relative script.
   expected_output: # canonical "everything OK" output
+  credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
+                   # "<scope> — <why no unauthenticated probe verifies the same property>".
+                   # Check 10 then SKIP-DECLAREDs without executing. Placeholder text = FAIL.
 ```
 
 ## Encryption Posture
@@ -384,8 +398,15 @@ logs:
   retention:       # how long until lost
 
 discoverability_test:
-  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state
+  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state.
+                   # preflight Check 10 EXECUTES this inside a sandbox, so the first token must be on
+                   # PROBE_VERB_ALLOWLIST (curl bash sh grep rg jq python3 node bun printf git), must not
+                   # pass an inline program (-c/-e/-p/--eval/--print), and any program path must be
+                   # repo-relative. Wrap anything else in a repo-relative script.
   expected_output: # canonical "everything OK" output
+  credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
+                   # "<scope> — <why no unauthenticated probe verifies the same property>".
+                   # Check 10 then SKIP-DECLAREDs without executing. Placeholder text = FAIL.
 ```
 
 ## Encryption Posture
