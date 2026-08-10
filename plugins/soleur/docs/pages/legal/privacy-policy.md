@@ -72,8 +72,9 @@ what is in it, including your `knowledge-base/` directory and your git history, 
 have chosen rather than ones you have instructed: measuring how the programme is progressing, and
 learning how Soleur behaves on real work. For that reading we are a controller in our own right and
 we rely on our legitimate interests under Article 6(1)(f). This exception is not the same as the one
-above: it does not require you to ask us for anything, it involves neither our machine nor our API
-key, and it continues between sessions for as long as the access lasts. You can end it at any time by
+above: it does not require you to ask us for anything, the reading does not by itself send your
+content to our AI provider under our credentials, and it continues between sessions for as long as
+the access lasts. You can end it at any time by
 withdrawing the access, and you can object to the processing at any time — see Section 8.1 and GDPR
 Policy Section 3.14.
 
