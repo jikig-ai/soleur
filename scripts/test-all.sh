@@ -421,6 +421,27 @@ if want_scripts; then
   # Registered explicitly: scripts/*.test.sh is NOT auto-globbed by this runner.
   run_suite "scripts/rules-loader-stamp-probe" bash scripts/rules-loader-stamp-probe.test.sh
   run_suite "scripts/lint-orphan-test-suites" bash scripts/lint-orphan-test-suites.sh
+  # #7387 legal-corpus write-time gates. Each gate registers its unit suite AND a LIVE run
+  # against the working tree: the unit suite proves the gate detects a planted defect in a
+  # sandbox, the live line is the only thing that ever points it at the real corpus. The unit
+  # lines are auto-enforced by lint-orphan-test-suites.sh; the live lines are enforced via its
+  # REQUIRED_RUNNERS.
+  #
+  # check-tc-document-sha.sh is deliberately NOT registered here, and an earlier revision of
+  # this block that did register it was wrong twice over. (a) It reintroduces #5780: that
+  # script's TC_VERSION-bump bypass needs the step-scoped GITHUB_BASE_REF /
+  # MERGE_GROUP_BASE_SHA that ci.yml gives the `tc-document-sha-guard` job and NOT this one
+  # (`test-scripts` passes only GITHUB_TOKEN), so on the merge queue a legitimate stale-SHA +
+  # TC_VERSION-bump PR would go green on its own required context and red here. (b) Its stated
+  # rationale -- catching a normaliser weakening that "silently re-bases every drift
+  # measurement" -- was measured false: weakening collapse() leaves that script green, because
+  # it only detects ASYMMETRIC damage between the two normalisers. The engine pin in
+  # scripts/lib/legal-normalise.test.sh is the detector for that, and it is fixture-anchored so
+  # it cannot red on a legal edit.
+  run_suite "scripts/lint-legal-scope-block-placement-unit" bash scripts/lint-legal-scope-block-placement.test.sh
+  run_suite "scripts/lint-legal-scope-block-placement-live" bash scripts/lint-legal-scope-block-placement.sh
+  run_suite "scripts/lint-legal-mirror-drift-baseline-unit" bash scripts/lint-legal-mirror-drift-baseline.test.sh
+  run_suite "scripts/lint-legal-mirror-drift-baseline-live" bash scripts/lint-legal-mirror-drift-baseline.sh
   run_suite "scripts/cron-artifact-age" bash scripts/cron-artifact-age.test.sh
   run_suite "scripts/watch-live-verify-pass" bash scripts/watch-live-verify-pass.test.sh
   run_suite "scripts/review-reminder-liveness" bash scripts/review-reminder-liveness.test.sh

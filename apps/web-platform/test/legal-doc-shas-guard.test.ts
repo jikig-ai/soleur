@@ -16,11 +16,17 @@ import { LEGAL_DOC_SHAS } from "../lib/legal/legal-doc-shas";
 // #4289-class drift pattern: a canonical edit that ships without the paired
 // SHA-literal refresh.
 //
-// The script is invoked under a tempdir copy of just the four file trees it
-// reads (docs/legal/, plugins/soleur/docs/pages/legal/, apps/web-platform/
-// lib/legal/, apps/web-platform/scripts/) so each test case can mutate
-// freely without touching the real working tree. spawnSync is invoked with
-// an explicit args array — no shell, no string interpolation, per AC7.
+// The script is invoked under a tempdir copy of just the file trees it reads
+// (docs/legal/, plugins/soleur/docs/pages/legal/, apps/web-platform/lib/legal/,
+// apps/web-platform/scripts/, and — since #7387 — scripts/lib/, which holds the
+// shared normaliser the guard sources) so each test case can mutate freely
+// without touching the real working tree. spawnSync is invoked with an explicit
+// args array — no shell, no string interpolation, per AC7.
+//
+// The scripts/lib entry is load-bearing, not incidental: the guard resolves the
+// normaliser relative to BASH_SOURCE and hard-fails when it is absent, so
+// omitting it from the sandbox makes every case below exit 1 for a reason that
+// has nothing to do with the drift class under test.
 //
 // Each test gets its own fresh tempdir via beforeEach so cases stay
 // order-independent and safe under concurrent execution.
@@ -35,6 +41,7 @@ function makeTempCopy(): string {
     "plugins/soleur/docs/pages/legal",
     "apps/web-platform/lib/legal",
     "apps/web-platform/scripts",
+    "scripts/lib",
   ]) {
     cpSync(resolve(REPO_ROOT, sub), join(tmp, sub), { recursive: true });
   }

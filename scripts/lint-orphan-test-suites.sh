@@ -76,9 +76,17 @@ done
 # including the skip messages that print the re-run command), so a bare-path grep would
 # false-pass on the prose describing the registration it just lost -- the failure mode is
 # not hypothetical, it is the default. cq-assert-anchor-not-bare-token.
+# #7387 extends this beyond nested RUNNERS to the two legal-corpus gates' LIVE lines. The
+# glob above already forces each gate's *.test.sh to be registered, but a unit suite and a
+# live run answer different questions: the unit suite proves the gate can detect a planted
+# defect in a sandbox, the live line is the only thing that ever points the gate at the real
+# corpus. Dropping the live line leaves the unit suite green and the corpus ungated -- the
+# same "named but not run" shape this file's tombstone exists to catch, one level down.
 REQUIRED_RUNNERS=(
   "apps/web-platform/infra/run-registered-suites.sh"
   ".github/scripts/test/run-all.sh"
+  "scripts/lint-legal-scope-block-placement.sh"
+  "scripts/lint-legal-mirror-drift-baseline.sh"
 )
 for r in "${REQUIRED_RUNNERS[@]}"; do
   # Escape regex metacharacters in the path (`.` in particular) so the anchor matches the
