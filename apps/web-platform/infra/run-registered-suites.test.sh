@@ -30,7 +30,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 # Snapshot the live infra directory listing. T5c asserts it is byte-identical at the end:
-# this suite runs CONCURRENTLY with the other 92, so anything it creates or deletes here, it
+# this suite runs CONCURRENTLY with every sibling suite, so anything it creates or deletes, it
 # does while they are reading it (#7376).
 INFRA_LS_BEFORE="$(ls -A apps/web-platform/infra/ | sort)"
 
@@ -109,7 +109,7 @@ else no "T4: missing workflow exited $rc_missing, expected 2"; fi
 # `apps/web-platform/infra/` directory (#7376).
 #
 # WHY THE INJECTION SEAM EXISTS. This suite is itself registered
-# (infra-validation.yml), so it runs CONCURRENTLY with the other 92. The previous
+# (infra-validation.yml), so it runs CONCURRENTLY with every sibling suite. The previous
 # form created `zzz-run-registered-suites-fixture.test.sh` in the live infra dir,
 # `git add -N`d it and deleted it — while `credential-persist-home-guard.test.sh`
 # was copying that same directory and `diff -rq`ing the copy against the STILL-LIVE

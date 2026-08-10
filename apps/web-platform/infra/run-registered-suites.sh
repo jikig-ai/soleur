@@ -130,8 +130,8 @@ WF="${INFRA_WF:-.github/workflows/infra-validation.yml}"
 
 # INFRA_DIR is a TEST SEAM, sibling to INFRA_WF. The derivation regex below used to hardcode
 # the `apps/web-platform/infra/` prefix, which meant a fixture suite could only be registered
-# by physically creating an executable file IN THE LIVE INFRA DIRECTORY — while the other 92
-# suites are reading that directory. That is precisely the collision #7376 is about, so the
+# by physically creating an executable file IN THE LIVE INFRA DIRECTORY — while every sibling
+# suite is reading that directory. That is precisely the collision #7376 is about, so the
 # tests for this file could not be written without reproducing the bug they guard.
 INFRA_DIR="${INFRA_DIR:-apps/web-platform/infra}"
 # Escape it for the ERE below: a fixture root from `mktemp -d` carries `.` characters, which
@@ -172,7 +172,7 @@ mapfile -t SUITES < <(
 # cross-reference below — one `git grep` per basename across workflows/ and scripts/, which is
 # the logic worth testing — still runs for real. It exists because `git ls-files` is
 # index-bound, so the only way to hand this function a candidate it will report was to create
-# a file in the LIVE infra directory and `git add -N` it, mid-run, while the other 92 suites
+# a file in the LIVE infra directory and `git add -N` it, mid-run, while every sibling suite
 # read that same directory. See the T5 comment in run-registered-suites.test.sh.
 report_orphans() {
   local -a orphans
