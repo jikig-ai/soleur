@@ -153,7 +153,7 @@ fx_oci_index() {
 D_SIG_CFG="sha256:e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e"
 D_SIG_LAYER="sha256:f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f"
 fx_oci_signature() {
-  fixture "$1" "manifest:$2:$3" 0 '{
+  fixture "$1" "manifest:$2@$D_OTHER" 0 '{
   "schemaVersion": 2,
   "mediaType": "application/vnd.oci.image.manifest.v1+json",
   "config": { "mediaType": "application/vnd.oci.image.config.v1+json", "digest": "'"$D_SIG_CFG"'", "size": 233 },
@@ -181,7 +181,7 @@ D_SIGX_CHILD="sha256:38dc44fe9378484bf59a6ee46ad89788bd66e36bf701942a78ebc2e19fb
 D_SIGX_CFG="sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
 D_SIGX_BUNDLE="sha256:dd39b712b03ad1d2eb9e700ca6cdd9f8f28178c85c052a0aa1b2994f6313473e"
 fx_oci_signature_index() {
-  fixture "$1" "manifest:$2:$3" 0 '{
+  fixture "$1" "manifest:$2@$D_OTHER" 0 '{
   "schemaVersion": 2,
   "mediaType": "application/vnd.oci.image.index.v1+json",
   "manifests": [
@@ -1220,7 +1220,7 @@ fi
 # rather than reporting the pass that an empty loop would otherwise produce.
 fx="$TMP/fx-sigx-empty"; calls="$TMP/calls-sigx-empty"; : > "$calls"
 sigx_fixtures "$fx" "$TARGET"
-fx_oci_raw "$fx" "${TARGET}/${WP}:sha256-${D1#sha256:}" \
+fx_oci_raw "$fx" "${TARGET}/${WP}@${D_OTHER}" \
   '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[]}'
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
 if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -qF "no children"; then
@@ -1244,7 +1244,7 @@ fi
 # A child carrying no digest cannot be addressed; it must not be silently skipped.
 fx="$TMP/fx-sigx-nodigest"; calls="$TMP/calls-sigx-nodigest"; : > "$calls"
 sigx_fixtures "$fx" "$TARGET"
-fx_oci_raw "$fx" "${TARGET}/${WP}:sha256-${D1#sha256:}" \
+fx_oci_raw "$fx" "${TARGET}/${WP}@${D_OTHER}" \
   '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","size":876}]}'
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
 if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -qF "declares no digest"; then
@@ -1253,11 +1253,90 @@ else
   fail "a digest-less signature child must exit 4" "$rc" "$out"
 fi
 
+# ── The child-cardinality axis: n=2, because n<=1 cannot discriminate. ───────────────────────
+# Every signature fixture above has exactly ONE child, and a review pass proved that both of these
+# survive a 78/0 suite:
+#   LOOSENING  — verify only the first child; children 2..N are counted (so the equality holds) but
+#                never read. A truncated walk that reads as verified: E34's own name.
+#   TIGHTENING — refuse any index with >1 child. That reproduces #7410's exact failure mode (a
+#                fail-closed abort on a healthy production signature) one cardinality later, in a
+#                suite written to prevent precisely that.
+# Neither is reachable while 0 and 1 are the only instantiated values.
+D_SIGX_CHILD2="sha256:77aa88bb99cc00dd11ee22ff33445566778899aabbccddeeff00112233445566"
+D_SIGX_BUNDLE2="sha256:66554433221100ffeeddccbbaa998877665544332211000ffeeddccbbaa99887"
+fx_sig_index_2child() { # <dir> <sink-repo> — the production shape, with a SECOND child
+  fixture "$1" "manifest:$2@$D_OTHER" 0 '{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.index.v1+json",
+  "manifests": [
+    { "mediaType": "application/vnd.oci.image.manifest.v1+json", "size": 876, "digest": "'"$D_SIGX_CHILD"'", "artifactType": "application/vnd.dev.sigstore.bundle.v0.3+json" },
+    { "mediaType": "application/vnd.oci.image.manifest.v1+json", "size": 902, "digest": "'"$D_SIGX_CHILD2"'", "artifactType": "application/vnd.dev.sigstore.bundle.v0.3+json" }
+  ]
+}'
+  fixture "$1" "manifest:$2@$D_SIGX_CHILD" 0 '{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "config": { "mediaType": "application/vnd.oci.empty.v1+json", "digest": "'"$D_SIGX_CFG"'", "size": 2 },
+  "layers": [ { "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json", "digest": "'"$D_SIGX_BUNDLE"'", "size": 10559 } ]
+}'
+  fixture "$1" "manifest:$2@$D_SIGX_CHILD2" 0 '{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "config": { "mediaType": "application/vnd.oci.empty.v1+json", "digest": "'"$D_SIGX_CFG"'", "size": 2 },
+  "layers": [ { "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json", "digest": "'"$D_SIGX_BUNDLE2"'", "size": 9931 } ]
+}'
+  fixture "$1" "blob:$2@$D_SIGX_CFG"     0 ""
+  fixture "$1" "blob:$2@$D_SIGX_BUNDLE"  0 ""
+  fixture "$1" "blob:$2@$D_SIGX_BUNDLE2" 0 ""
+}
+
+sig2_fixtures() { # <dir> <target>
+  local fx="$1" t="$2"
+  ok_fixtures "$fx" "$t"
+  rm -f "$fx/manifest:${t}/${WP}@${D_OTHER}" "$fx/manifest:${t}/${IB}@${D_OTHER}"
+  fx_sig_index_2child "$fx" "${t}/${WP}"
+  fx_oci_signature_index "$fx" "${t}/${IB}" "sha256-${D2#sha256:}"
+}
+
+# TIGHTENING control: two healthy children must PASS. A `>1 children` refusal would be #7410 again.
+fx="$TMP/fx-sig2"; calls="$TMP/calls-sig2"; : > "$calls"
+sig2_fixtures "$fx" "$TARGET"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 0 ]]; then
+  pass "a two-child signature index verifies and PASSES"
+else
+  fail "a healthy two-child signature index must pass" "$rc" "$out"
+fi
+
+# LOOSENING control: the SECOND child's blob is evicted. Only a walk that REACHES child 2 reds.
+fx="$TMP/fx-sig2-gone"; calls="$TMP/calls-sig2-gone"; : > "$calls"
+sig2_fixtures "$fx" "$TARGET"
+fixture "$fx" "blob:${TARGET}/${WP}@${D_SIGX_BUNDLE2}" 1 "" \
+  "Error: GET http://${TARGET}/v2/${WP}/blobs/${D_SIGX_BUNDLE2}: BLOB_UNKNOWN: blob unknown to registry"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -qF "BLOB-INCOMPLETE"; then
+  pass "the SECOND child's evicted blob exits 4 (the walk does not stop at child 1)"
+else
+  fail "a walk that stops at child 1 must not read as verified" "$rc" "$out"
+fi
+
+# A child with a CONFIG but NO layers must not pass by fetching the well-known empty config blob.
+fx="$TMP/fx-sig-nolayer"; calls="$TMP/calls-sig-nolayer"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+fx_oci_raw "$fx" "${TARGET}/${WP}@${D_SIGX_CHILD}" \
+  '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.empty.v1+json","digest":"'"$D_SIGX_CFG"'","size":2},"layers":[]}'
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -qF "NO layers"; then
+  pass "a signature child with a config but no layers exits 4 (the empty config is not evidence)"
+else
+  fail "a layerless signature child must exit 4" "$rc" "$out"
+fi
+
 # ── Anti-vacuity floor for THIS suite. ────────────────────────────────────────────────────────
 # Deleting the entire new assertion block left the suite green at 43/0, exit 0 — `fails -eq 0` is
 # satisfied by asserting nothing. A floor (never `-eq`, which would make every added assertion a
 # spurious failure) makes that deletion loud. Derived from a green run, ratchet upward only.
-MIN_ASSERTIONS=78
+MIN_ASSERTIONS=81
 if (( passes + fails < MIN_ASSERTIONS )); then
   printf '  FAIL harness: %d assertions ran, floor is %d — assertions were deleted or skipped\n' \
     "$((passes + fails))" "$MIN_ASSERTIONS"

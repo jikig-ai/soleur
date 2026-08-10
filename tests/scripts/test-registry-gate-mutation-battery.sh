@@ -480,9 +480,22 @@ mutate "E25 attestation detection loses the annotation signal" engine \
   '"$c_type" == "attestation-manifest" || ' \
   ''
 
-mutate "E26 index child count equality weakened (partial enumeration passes)" engine \
-  '(( n_children == n_declared )) ||' \
-  'false && (( n_children == n_declared )) ||'
+# ANCHORS BELOW CARRY THEIR INDENTATION ON PURPOSE.
+#
+# #7410 added a SECOND copy of three constructs this battery anchors on — the child-count
+# equality, the `// "-"` digest sentinel and the index classifier — inside verify_blobs_of's new
+# signature-index walk. `py_replace` requires EXACTLY ONE match and hard-fails otherwise, so the
+# harness stopped with `anchor matched 2 times` and exit 2 (no verdict) rather than silently
+# mutating whichever copy came first. That fail-closed behaviour is the only reason this was
+# visible at all: a substring anchor that resolves to the WRONG copy reports a caught mutation
+# for a guard it never touched.
+#
+# Verification 2's copies sit at 4-space indent, verify_blobs_of's at 6. The indentation is the
+# discriminator, so it is part of the anchor. If either site is ever re-indented, this battery
+# fails loudly (exit 2) rather than drifting — which is the correct direction.
+mutate "E26 IMAGE index child count equality weakened (partial enumeration passes)" engine \
+  $'\n    (( n_children == n_declared )) || \\' \
+  $'\n    (( n_children >= 0 )) || \\'
 
 mutate "E27 platform-child floor removed (an attestation-only index reads as restored)" engine \
   '(( n_platform > 0 )) ||' \
@@ -492,17 +505,17 @@ mutate "E28 nested-index child no longer fails closed (recurses into the #7378 g
   '*"image.index.v1+json"|*"manifest.list.v2+json")' \
   '"__never_matches__")'
 
-mutate "E29 index child digest sentinel dropped (@tsv field collapse returns)" engine \
-  '(.digest // "-")' \
-  '(.digest // "")'
+mutate "E29 IMAGE index child digest sentinel dropped (@tsv field collapse returns)" engine \
+  '[(.digest // "-"), (.mediaType // "-")' \
+  '[(.digest // ""), (.mediaType // "-")'
 
 mutate "E30 blob presence check removed (a manifest can outlive its layers)" engine \
-  'if ! crane_capture /dev/null "$WORK/vb.blob.err" blob $SINK_TLS_FLAG "${repo}@${b}"; then' \
+  'if ! crane_capture /dev/null "$blberr" blob $SINK_TLS_FLAG "${repo}@${b}"; then' \
   'if false; then'
 
 mutate "E31 cosign signature payload no longer blob-verified (digest read-back only)" engine \
-  '  verify_blobs_of "${TARGET}/${repo}" "${TARGET}/${repo}:${sig_tag}" \' \
-  '  false && verify_blobs_of "${TARGET}/${repo}" "${TARGET}/${repo}:${sig_tag}" \'
+  '  verify_blobs_of "${TARGET}/${repo}" "${TARGET}/${repo}@${sig_dst_digest}" \' \
+  '  false && verify_blobs_of "${TARGET}/${repo}" "${TARGET}/${repo}@${sig_dst_digest}" \'
 
 # ── E32-E34: the signature-index walk (the regression that refused run 31392395980). ──────────
 # E31 above proved the signature is blob-verified AT ALL. It could not see that the enumeration
@@ -510,8 +523,8 @@ mutate "E31 cosign signature payload no longer blob-verified (digest read-back o
 # rows below pin the shape handling itself, which is what actually broke.
 
 mutate "E32 signature-index detection removed (an index falls through to config+layers and reads as blobless)" engine \
-  'if (.manifests | type) == "array" then "index"' \
-  'if false then "index"'
+  'if   (.manifests | type) == "array"      then "index"' \
+  'if   false                              then "index"'
 
 mutate "E33 signature-index depth guard removed (a nested index recurses instead of failing closed)" engine \
   '      if (( depth > 0 )); then' \
