@@ -722,9 +722,9 @@ secret, or firewall rule. `bwrap` is an existing host binary, not provisioned in
 | 3 | same + valid `credentials_required` | **SKIP-DECLARED**, not executed (throwing executor); scope quoted |
 | 4 | same + `credentials_required: TBD` | **FAIL** — placeholder |
 | 5 | `bash scripts/lint-workflows.sh --help` | executes in sandbox |
-| 6 | `bash -c …`, `python3 -c …`, `node -e …`, `bun -e …` | **FAIL** ×4 — inline program |
-| 7 | `awk 'BEGIN{system("…")}'`, `sed -e '1e …'`, `find . -exec … +` | **FAIL** ×3 — execution-equivalent |
-| 8 | `bash /abs/x.sh`, `bash ../x.sh`, `/usr/local/bin/gh api user` | **FAIL** ×3 |
+| 6 | `bash -c …`, `python3 -c …`, `node -e …`, `bun -e …` | ~~**FAIL** ×4 — inline program~~ → **ACCEPT** ×4. SUPERSEDED by the CTO ruling that deleted Layer 2's arg rules. Verified rc=0 ×4 against the gate. Layer 2 is schema validation, not a security control; the sandbox is what contains these |
+| 7 | `awk 'BEGIN{system("…")}'`, `sed -e '1e …'`, `find . -exec … +` | **FAIL** ×3 — verb not allowlisted (verified rc=1 ×3) |
+| 8 | `bash /abs/x.sh`, `bash ../x.sh`, `/usr/local/bin/gh api user` | **ACCEPT**, **ACCEPT**, **FAIL**. The first two are SUPERSEDED by the ruling that deleted the path rule (verified rc=0); the third still fails because the path-shaped *verb* is not allowlisted (verified rc=1) |
 | 9 | `"doppler" secrets get X` | **FAIL** — dequote applies |
 | 10 | `ssh host x` + valid declaration | **FAIL** — ssh not overridable |
 | 11 | tracked script whose body wraps `doppler run -c prd` | executes; inside the sandbox no credential store is bound, so it fails loudly. **No oracle** |
