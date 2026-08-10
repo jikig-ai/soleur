@@ -172,17 +172,31 @@ Syncs stale on-disk files from git HEAD in a bare repo. Only needed when the rep
 bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh sync-bare-files
 ```
 
-**What it syncs:**
+**What it syncs: EVERY tracked file at HEAD — there is no allowlist.**
 
-- `AGENTS.md`, `CLAUDE.md` (session-start instructions)
-- `plugins/soleur/AGENTS.md`, `plugins/soleur/CLAUDE.md`
-- `plugins/soleur/hooks/*` (plugin hooks: stop-hook, welcome-hook, hooks.json)
-- `.claude/settings.json` (permission rules)
-- `.claude/hooks/*.sh` (PreToolUse hooks)
-- `plugins/soleur/scripts/resolve-git-root.sh`
-- The `worktree-manager.sh` script itself
+The implementation builds a throwaway index from `HEAD` and runs
+`git checkout-index -a -f` against the bare root, so every path git tracks is
+materialized (which is also what lets it handle tracked *deletions*). It then
+re-applies execute bits for the scripts and hooks the plugin loader and
+SessionStart hooks exec.
 
-**Important:** Any file that Claude Code executes at runtime from the bare repo root (via `${CLAUDE_PLUGIN_ROOT}` or direct path) must be added to the sync list in `worktree-manager.sh`. Stale on-disk files cause silent regressions.
+> **Corrected 2026-08-10 (#7409).** This section previously enumerated a
+> seven-entry list (`AGENTS.md`, `plugins/soleur/hooks/*`, `.claude/hooks/*.sh`,
+> `resolve-git-root.sh`, …) and told readers that "any file Claude Code executes
+> at runtime from the bare repo root **must be added to the sync list**". Both
+> halves were wrong: the enumeration described a whitelist the code has not
+> had, and the instruction sent readers to register files in a list that does
+> not exist. Worth stating precisely rather than deleting, because the
+> difference is load-bearing — when #7409 moved the session-state lock/lease
+> library to `plugins/soleur/scripts/lib/`, a genuine whitelist would have left
+> the bare root's repointed `.claude/hooks/*` sources pointing at a file the
+> mirror never copied, and they degrade **silently** (`|| true`). The full
+> mirror is what makes that a non-event.
+
+**Still important:** run `sync-bare-files` after any merge that moves or adds a
+file executed from the bare root. The mirror is complete, but it is not
+automatic — on-disk files at a `core.bare=true` root are never updated by git
+itself, so a stale copy survives until this runs.
 
 ## Workflow Examples
 
