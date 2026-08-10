@@ -1789,16 +1789,27 @@ describe("#7393 G — credentials_required corpus baseline", () => {
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
-    const declaring = readdirSync(plansDir)
-      .filter((f) => f.endsWith(".md"))
-      .filter((f) => {
-        const body = readFileSync(join(plansDir, f), { encoding: "utf8" });
-        const block = extractObservabilityBlock(body);
-        return block !== "" && parseCredentialsRequired(block) !== "";
-      });
+    // RECURSIVE. `readdirSync` alone is non-recursive, and per-feature
+    // subdirectories are an established shape in this tree
+    // (`plans/feat-one-shot-reconcile-no-workspace-match/`, plus `archive/`),
+    // so a flat walk left the drift control with a live blind spot: a declaring
+    // plan one directory down was simply invisible to the baseline.
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory()
+          ? walk(join(dir, e.name))
+          : e.name.endsWith(".md")
+            ? [join(dir, e.name)]
+            : [],
+      );
+    const declaring = walk(plansDir).filter((f) => {
+      const body = readFileSync(f, { encoding: "utf8" });
+      const block = extractObservabilityBlock(body);
+      return block !== "" && parseCredentialsRequired(block) !== "";
+    });
     expect(
       declaring.length,
-      `plans declaring credentials_required: ${JSON.stringify(declaring)} — raising this baseline is the reviewable diff line the waiver's drift control depends on`,
+      `plans declaring credentials_required: ${JSON.stringify(declaring)}. FIRST confirm each declaration is intentional — a leftover template comment or a stray line outside the discoverability_test sub-block must be DELETED, not baselined. Only if every declaration is genuine does raising this baseline become the reviewable diff line the waiver's drift control depends on.`,
     ).toBe(BASELINE_DECLARED_PROBES);
   });
 });

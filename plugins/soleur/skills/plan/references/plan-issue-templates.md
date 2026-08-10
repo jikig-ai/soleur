@@ -60,9 +60,10 @@ logs:
 discoverability_test:
   command:         # one command an operator can run LOCALLY (no ssh) to read the observability state.
                    # preflight Check 10 EXECUTES this inside a sandbox, so the first token must be on
-                   # PROBE_VERB_ALLOWLIST (curl bash sh grep rg jq python3 node bun printf git), must not
-                   # pass an inline program (-c/-e/-p/--eval/--print), and any program path must be
-                   # repo-relative. Wrap anything else in a repo-relative script.
+                   # PROBE_VERB_ALLOWLIST (curl bash grep rg jq python3 node bun printf git) — there is
+                   # no path-shaped exemption. Wrap anything else in a repo-relative script committed
+                   # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
+                   # credential stores and the repo read-only.
   expected_output: # canonical "everything OK" output
   credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
                    # "<scope> — <why no unauthenticated probe verifies the same property>".
@@ -223,9 +224,10 @@ logs:
 discoverability_test:
   command:         # one command an operator can run LOCALLY (no ssh) to read the observability state.
                    # preflight Check 10 EXECUTES this inside a sandbox, so the first token must be on
-                   # PROBE_VERB_ALLOWLIST (curl bash sh grep rg jq python3 node bun printf git), must not
-                   # pass an inline program (-c/-e/-p/--eval/--print), and any program path must be
-                   # repo-relative. Wrap anything else in a repo-relative script.
+                   # PROBE_VERB_ALLOWLIST (curl bash grep rg jq python3 node bun printf git) — there is
+                   # no path-shaped exemption. Wrap anything else in a repo-relative script committed
+                   # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
+                   # credential stores and the repo read-only.
   expected_output: # canonical "everything OK" output
   credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
                    # "<scope> — <why no unauthenticated probe verifies the same property>".
@@ -400,9 +402,10 @@ logs:
 discoverability_test:
   command:         # one command an operator can run LOCALLY (no ssh) to read the observability state.
                    # preflight Check 10 EXECUTES this inside a sandbox, so the first token must be on
-                   # PROBE_VERB_ALLOWLIST (curl bash sh grep rg jq python3 node bun printf git), must not
-                   # pass an inline program (-c/-e/-p/--eval/--print), and any program path must be
-                   # repo-relative. Wrap anything else in a repo-relative script.
+                   # PROBE_VERB_ALLOWLIST (curl bash grep rg jq python3 node bun printf git) — there is
+                   # no path-shaped exemption. Wrap anything else in a repo-relative script committed
+                   # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
+                   # credential stores and the repo read-only.
   expected_output: # canonical "everything OK" output
   credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
                    # "<scope> — <why no unauthenticated probe verifies the same property>".
