@@ -20,6 +20,14 @@ cd "$ROOT" || exit 1
 # reporting a green mutation matrix.
 SUT="${SUT:-apps/web-platform/infra/run-registered-suites.sh}"
 [[ -x "$SUT" ]] || { echo "[FAIL] SUT=$SUT is not executable" >&2; exit 2; }
+
+# Read the cap OUT of the runner rather than hardcoding a bound. AC2 asks for exactly this
+# ("put the number in the runner and assert against it"); a hand-picked ceiling silently
+# decouples from DUMP_CAP, so raising the cap would leave the assertion passing for a reason
+# no reader could reconstruct. +6 is the banner/label/blank-line slop around one suite's excerpt.
+DUMP_CAP_SUT=$(sed -n 's/^DUMP_CAP=\([0-9][0-9]*\)$/\1/p' "$SUT")
+[[ "$DUMP_CAP_SUT" =~ ^[0-9]+$ ]] || { echo "[FAIL] could not read DUMP_CAP from $SUT" >&2; exit 2; }
+DUMP_CEIL=$(( DUMP_CAP_SUT + 6 ))
 WF=".github/workflows/infra-validation.yml"
 
 pass=0; fail=0
@@ -70,6 +78,43 @@ if [[ "$HEADER_N" == "$DERIVED" ]]; then
 else
   no "T2d: header says $HEADER_N but $DERIVED suites are listed"
 fi
+
+# ── T2e: the derived set vs an INDEPENDENT oracle ────────────────────────────
+# T2b's oracle is the SAME regex the runner uses, so it agrees by construction and cannot see
+# a suite the regex structurally cannot match. This oracle is deliberately more permissive
+# (`\S+` accepts subdirectories) and therefore CAN disagree.
+#
+# It disagrees today: 7 suites are registered as ordinary `run: bash …` steps in CI and are
+# NEVER run by this runner, because the derivation ERE has no `/` in its tail. That falsifies
+# the header's "a suite added to the workflow is picked up here automatically" and "runner and
+# CI cannot drift" — see #7376's follow-up.
+#
+# Pinned as an ENUMERATED ratchet rather than a count: a bare "7 known gaps" comment is
+# documentation, not a guard, and the 8th arrives green. This list must SHRINK. It reds both
+# when a new subdirectory suite is registered AND when one is fixed but left listed.
+KNOWN_UNDERIVED=(
+  apps/web-platform/infra/inngest-rls/apply-inngest-rls-dev-workflow.test.sh
+  apps/web-platform/infra/inngest-rls/inngest-rls-mutation.test.sh
+  apps/web-platform/infra/inngest-rls/inngest-rls.test.sh
+  apps/web-platform/infra/scripts/gen-github-egress-cidr.test.sh
+  apps/web-platform/infra/scripts/sigpipe-triage-feasibility.test.sh
+  apps/web-platform/infra/supabase-advisor/scan-workflow-mutation.test.sh
+  apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh
+)
+_perm=$(mktemp); _der=$(mktemp); _known=$(mktemp)
+grep -oE 'run: bash apps/web-platform/infra/[^ ]+\.test\.sh' "$WF" \
+  | sed 's/run: bash //' | LC_ALL=C sort -u > "$_perm"
+printf '%s\n' "$OUT" \
+  | awk '/^Derived [0-9]+ registered infra suite/{f=1;next} /^$/{f=0} f' \
+  | sed -n 's|^  \(apps/web-platform/infra/.*\.test\.sh\)$|\1|p' | LC_ALL=C sort -u > "$_der"
+printf '%s\n' "${KNOWN_UNDERIVED[@]}" | LC_ALL=C sort -u > "$_known"
+_gap=$(comm -23 "$_perm" "$_der")
+if [[ "$_gap" == "$(cat "$_known")" ]]; then
+  ok "T2e: the ${#KNOWN_UNDERIVED[@]} registered-but-underived suites are exactly the known set"
+else
+  no "T2e: the registered-but-underived set CHANGED — update KNOWN_UNDERIVED or fix the derivation"$'\n'"$(diff <(cat "$_known") <(printf '%s\n' "$_gap") | head -8)"
+fi
+rm -f "$_perm" "$_der" "$_known"
 
 if printf '%s\n' "$OUT" | grep -qE '^(PASS|RED) '; then
   no "T2c: --list executed suites (found PASS/RED lines)"
@@ -167,7 +212,15 @@ mkfixture_wf() {  # mkfixture_wf <workflow-path> <suite-path>...
 # The RED suite: marker on stderr, at column 0, EARLY — then 120 passing lines.
 cat > "$FIXDIR/aaa-red.test.sh" <<'FIXEOF'
 #!/usr/bin/env bash
-echo "FAIL: T6-EARLY-SENTINEL the assertion that actually broke" >&2
+# The marker is BRACKETED, not first. With it on line 1, `head -n 5` and marker-anchored
+# selection are indistinguishable — measured: a head-selection mutant survived the whole suite.
+# The runner's own motivating case is a failure at arm 5 of 43, i.e. far from BOTH ends.
+for i in $(seq 1 60); do echo "ok   - leading pass $i"; done
+# `[FAIL]` shape deliberately: it is what 10 of the 93 real suites print at column 0, and it is
+# the shape the monitor's `^RED |^[FAIL]` anchor matches — so T6k's count is a real measurement
+# rather than 1-by-construction. A prior `FAIL:` fixture could never trip that anchor.
+echo "[FAIL] T6-EARLY-SENTINEL the assertion that actually broke" >&2
+echo "RED  fake/decoy-not-a-real-suite.test.sh" >&2
 for i in $(seq 1 120); do echo "ok   - trailing pass $i"; done
 exit 1
 FIXEOF
@@ -180,12 +233,12 @@ chmod +x "$FIXDIR"/*.test.sh
 mkfixture_wf "$FIXDIR/wf.yml" "$FIXDIR/aaa-red.test.sh" "$FIXDIR/bbb-green.test.sh"
 
 rc6=0
-OUT6="$(INFRA_WF="$FIXDIR/wf.yml" INFRA_DIR="$FIXDIR" timeout 120 bash "$SUT" 2>&1)" || rc6=$?
+OUT6="$(INFRA_WF="$FIXDIR/wf.yml" SOLEUR_INFRA_DIR="$FIXDIR" timeout 120 bash "$SUT" 2>&1)" || rc6=$?
 
 if (( rc6 != 0 )); then ok "T6a: a RED suite makes the runner exit non-zero (rc=$rc6)"
 else no "T6a: runner exited 0 with a RED suite"; fi
 
-if printf '%s\n' "$OUT6" | grep -qE "^RED  ${FIXDIR}/aaa-red\.test\.sh$"; then
+if printf '%s\n' "$OUT6" | grep -qF "RED  ${FIXDIR}/aaa-red.test.sh"; then
   ok "T6b: the RED summary line keeps its exact byte shape (\`RED  <path>\`, two spaces)"
 else
   no "T6b: the \`RED  <path>\` summary line changed shape"
@@ -226,14 +279,9 @@ else
   no "T6g: the dump banner has no start offset"
 fi
 
-# The cap must bind AFTER selection, per suite.
-DUMPED=$(printf '%s\n' "$OUT6" | grep -cE '^SOLEUR\| ' || true)
-if (( DUMPED > 0 && DUMPED <= 60 )); then
-  ok "T6h: the dump is bounded (${DUMPED} prefixed lines for 1 RED suite)"
-else
-  no "T6h: dump is unbounded or empty (${DUMPED} prefixed lines)"
-fi
-
+# NOTE: there is deliberately no "dump is bounded" assertion here. An earlier draft asserted
+# `DUMPED <= 60` on this fixture, which emits ~10 prefixed lines — it could not fail whether the
+# cap existed or not, and the row that actually pins the cap is T6p (10,000 marker lines).
 # The green suite must NOT be dumped.
 if printf '%s\n' "$OUT6" | grep -qF "bbb-green.test.sh" \
    && ! printf '%s\n' "$OUT6" | grep -E '^SOLEUR\| ' | grep -qF "bbb-green.test.sh"; then
@@ -256,6 +304,10 @@ fi
 #
 # The ERE alternation MUST be a bare `|`. `'^(RED \|\[FAIL\])'` is a literal pipe in an ERE:
 # it matches nothing, exits 1, and passes vacuously.
+# Expected count is a LITERAL derived from the fixture, never recomputed from this output:
+# 1 genuine `RED  <path>` from the runner. The fixture's own `[FAIL]` and decoy `RED ` lines
+# are dumped, so they MUST arrive sentinel-prefixed and therefore MUST NOT match this anchor.
+# That is the whole property: 3 here means dumped bytes reached the monitor's title derivation.
 N_ANCHOR=$(printf '%s\n' "$OUT6" | grep -cE '^(RED |\[FAIL\])' || true)
 if (( N_ANCHOR == 1 )); then
   ok "T6k: excerpt invariant — exactly 1 line matches the monitor's anchor (the genuine RED)"
@@ -272,7 +324,7 @@ exit 7
 FIXEOF
 chmod +x "$FIXDIR2"/*.test.sh
 mkfixture_wf "$FIXDIR2/wf.yml" "$FIXDIR2/aaa-nomarker.test.sh"
-OUT6M="$(INFRA_WF="$FIXDIR2/wf.yml" INFRA_DIR="$FIXDIR2" timeout 60 bash "$SUT" 2>&1)" || true
+OUT6M="$(INFRA_WF="$FIXDIR2/wf.yml" SOLEUR_INFRA_DIR="$FIXDIR2" timeout 60 bash "$SUT" 2>&1)" || true
 if printf '%s\n' "$OUT6M" | grep -qE '^SOLEUR\| .*rc=7'; then
   ok "T6m: a non-1 exit code is recorded verbatim (rc=7)"
 else
@@ -293,26 +345,33 @@ exit 1
 FIXEOF
 chmod +x "$FIXDIR3"/*.test.sh
 mkfixture_wf "$FIXDIR3/wf.yml" "$FIXDIR3/aaa-flood.test.sh"
-OUT6P="$(INFRA_WF="$FIXDIR3/wf.yml" INFRA_DIR="$FIXDIR3" timeout 60 bash "$SUT" 2>&1)" || true
+OUT6P="$(INFRA_WF="$FIXDIR3/wf.yml" SOLEUR_INFRA_DIR="$FIXDIR3" timeout 60 bash "$SUT" 2>&1)" || true
 FLOOD=$(printf '%s\n' "$OUT6P" | grep -cE '^SOLEUR\| ' || true)
-if (( FLOOD > 0 && FLOOD <= 60 )); then
-  ok "T6p: 10,000 marker lines are capped after selection (${FLOOD} prefixed lines)"
+if (( FLOOD > 0 && FLOOD <= DUMP_CEIL )); then
+  ok "T6p: 10,000 marker lines are capped after selection (${FLOOD} <= ${DUMP_CEIL}, from the runner's DUMP_CAP=${DUMP_CAP_SUT})"
 else
-  no "T6p: the cap does not bind after selection (${FLOOD} prefixed lines)"
+  no "T6p: the cap does not bind after selection (${FLOOD} lines, ceiling ${DUMP_CEIL} = DUMP_CAP ${DUMP_CAP_SUT} + 6)"
 fi
 
 # ── T6q: two suites failing at once — both dumped, deterministic order ────────
 FIXDIR4="$TMP/fix6q"; mkdir -p "$FIXDIR4"
-for n in aaa bbb; do
-  cat > "$FIXDIR4/$n-red.test.sh" <<FIXEOF
+# `aaa` is deliberately the SLOWEST. With both fixtures exiting instantly, completion order
+# happens to equal alphabetical order, so dropping `| sort` from dump_reds survived the whole
+# suite. Making the alphabetically-first suite finish LAST is what makes T6r discriminate.
+cat > "$FIXDIR4/aaa-red.test.sh" <<'FIXEOF'
 #!/usr/bin/env bash
-echo "FAIL: marker-from-$n" >&2
+echo "FAIL: marker-from-aaa" >&2
+sleep 3
 exit 1
 FIXEOF
-done
+cat > "$FIXDIR4/bbb-red.test.sh" <<'FIXEOF'
+#!/usr/bin/env bash
+echo "FAIL: marker-from-bbb" >&2
+exit 1
+FIXEOF
 chmod +x "$FIXDIR4"/*.test.sh
 mkfixture_wf "$FIXDIR4/wf.yml" "$FIXDIR4/aaa-red.test.sh" "$FIXDIR4/bbb-red.test.sh"
-OUT6Q="$(INFRA_WF="$FIXDIR4/wf.yml" INFRA_DIR="$FIXDIR4" timeout 60 bash "$SUT" 2>&1)" || true
+OUT6Q="$(INFRA_WF="$FIXDIR4/wf.yml" SOLEUR_INFRA_DIR="$FIXDIR4" timeout 60 bash "$SUT" 2>&1)" || true
 if printf '%s\n' "$OUT6Q" | grep -qF "marker-from-aaa" && printf '%s\n' "$OUT6Q" | grep -qF "marker-from-bbb"; then
   ok "T6q: both concurrently-failing suites are dumped"
 else
@@ -323,7 +382,7 @@ ORDER_B=$(printf '%s\n' "$OUT6Q" | grep -nF "marker-from-bbb" | head -1 | cut -d
 if [[ -n "$ORDER_A" && -n "$ORDER_B" ]] && (( ORDER_A < ORDER_B )); then
   ok "T6r: dump order is deterministic (sorted), not completion order"
 else
-  no "T6r: dump order is not deterministic"
+  no "T6r: dump order follows COMPLETION order, not sorted order (aaa finishes last here)"
 fi
 
 # ── T6s: one log file per derived suite (filename-collision probe) ────────────
@@ -350,7 +409,7 @@ FIXEOF
 chmod +x "$FIXDIR5"/*.test.sh
 mkfixture_wf "$FIXDIR5/wf.yml" "$FIXDIR5/aaa-green.test.sh"
 rc6t=0
-OUT6T="$(INFRA_WF="$FIXDIR5/wf.yml" INFRA_DIR="$FIXDIR5" timeout 60 bash "$SUT" 2>&1)" || rc6t=$?
+OUT6T="$(INFRA_WF="$FIXDIR5/wf.yml" SOLEUR_INFRA_DIR="$FIXDIR5" timeout 60 bash "$SUT" 2>&1)" || rc6t=$?
 if (( rc6t == 0 )); then ok "T6t: an all-green run exits 0"
 else no "T6t: an all-green run exited $rc6t"; fi
 if ! printf '%s\n' "$OUT6T" | grep -qE '^SOLEUR\| '; then
@@ -358,7 +417,7 @@ if ! printf '%s\n' "$OUT6T" | grep -qE '^SOLEUR\| '; then
 else
   no "T6u: an all-green run emitted prefixed dump lines"
 fi
-if printf '%s\n' "$OUT6T" | grep -q '=== registered infra suites: 1 passed, 0 failed'; then
+if printf '%s\n' "$OUT6T" | grep -q '=== registered infra suites: 1 passed, 0 failed, 0 unaccounted (of 1) ==='; then
   ok "T6v: the summary line survives unchanged and unprefixed"
 else
   no "T6v: the summary line changed shape — the monitor's tail depends on it"
@@ -374,7 +433,11 @@ cat > "$FIXDIR6/aaa-suicide.test.sh" <<'FIXEOF'
 #!/usr/bin/env bash
 # Kill the wrapping shell the way the OOM killer would: no PASS/RED line is ever emitted.
 kill -9 $PPID 2>/dev/null
-sleep 5
+# 1s, not 5. The wrapper is dead the instant SIGKILL lands; this sleep only has to outlive it.
+# But the fixture holds the write end of the xargs pipe open while it sleeps, so `tee` blocks
+# for the full duration — and T7 runs once here plus once in each of the 7 mutation children,
+# so every second costs 8. Measured: 5s made this suite the slowest registered suite there is.
+sleep 1
 FIXEOF
 cat > "$FIXDIR6/bbb-green.test.sh" <<'FIXEOF'
 #!/usr/bin/env bash
@@ -383,7 +446,7 @@ FIXEOF
 chmod +x "$FIXDIR6"/*.test.sh
 mkfixture_wf "$FIXDIR6/wf.yml" "$FIXDIR6/aaa-suicide.test.sh" "$FIXDIR6/bbb-green.test.sh"
 rc7=0
-OUT7="$(INFRA_WF="$FIXDIR6/wf.yml" INFRA_DIR="$FIXDIR6" timeout 60 bash "$SUT" 2>&1)" || rc7=$?
+OUT7="$(INFRA_WF="$FIXDIR6/wf.yml" SOLEUR_INFRA_DIR="$FIXDIR6" timeout 60 bash "$SUT" 2>&1)" || rc7=$?
 if (( rc7 != 0 )); then
   ok "T7a: a suite that emits NEITHER PASS nor RED makes the runner exit non-zero (rc=$rc7)"
 else
@@ -421,8 +484,19 @@ fi
 # extractor: the over-match is indistinguishable from the real thing it exists to find.
 # With payload-start extraction + source-following: 93/93 markers, 0 sentinel emitters.
 MARKER_ERE='^[[:space:]]*(\[FAIL\]|[A-Z][A-Z0-9]*-FAIL|FAIL)([[:space:]:_-]|$)'
-mapfile -t CORPUS < <(bash "$SUT" --list 2>/dev/null \
+# INFRA_ORPHAN_LIST=/dev/null skips report_orphans' 93 `git grep` calls, which cost ~3.2s and
+# contribute nothing here — T5 already covers the orphan scan. Measured: 3.26s -> 0.05s, and
+# because T9 re-runs this file in 7 mutation children the saving is paid 8 times.
+mapfile -t CORPUS < <(INFRA_ORPHAN_LIST=/dev/null bash "$SUT" --list 2>/dev/null \
   | sed -n 's|^  \(apps/web-platform/infra/.*\.test\.sh\)$|\1|p')
+
+# Non-vacuity floor. Without it, a `--list` that fails or derives nothing leaves both loops
+# below empty and BOTH assertions pass — T8a would even print "all 0 registered suites
+# conform". That matters most inside T9, where each mutant child runs with SUT=<mutant>: a
+# mutation touching derivation would otherwise make T8 pass vacuously in the child.
+if (( ${#CORPUS[@]} == 0 )); then
+  no "T8: derived ZERO suites — T8a/T8b below would pass vacuously"
+fi
 
 payload_starts() {
   { grep -hoE '(echo|printf|print|print[[:space:]]*\()[[:space:]]*(-e[[:space:]]+)?f?"[^"]*"' "$@" \
@@ -453,7 +527,7 @@ fi
 if (( ${#sentinel_emitters[@]} == 0 )); then
   ok "T8b: no registered suite emits the \`| \` sentinel at column 0"
 else
-  no "T8b: ${#sentinel_emitters[@]} suite(s) emit the sentinel at column 0 — the monitor's filter would strip real output:"$'\n'"$(printf '  %s\n' "${sentinel_emitters[@]}")"
+  no "T8b: ${#sentinel_emitters[@]} suite(s) emit the \`SOLEUR| \` sentinel at column 0 — the monitor's filter would strip real output:"$'\n'"$(printf '  %s\n' "${sentinel_emitters[@]}")"
 fi
 
 # The ERE the test asserts against MUST be the one the runner uses. Otherwise T8a pins a
@@ -478,6 +552,7 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 if [[ -z "${SOLEUR_MUTATION_CHILD:-}" ]]; then
   MUTDIR="$TMP/mut"; mkdir -p "$MUTDIR"
+  MATRIX_RAN=0
   PRISTINE="$MUTDIR/pristine.sh"; cp "$SUT" "$PRISTINE"
 
   # mutate <id> <expected-failing-assertion> <python-mutator>
@@ -488,6 +563,7 @@ if [[ -z "${SOLEUR_MUTATION_CHILD:-}" ]]; then
   # failure somewhere.
   run_mutant() {
     local id="$1" expect="$2" mutator="$3"
+    MATRIX_RAN=$(( MATRIX_RAN + 1 ))
     local m="$MUTDIR/$id.sh"
     cp "$PRISTINE" "$m"
     python3 -c "
@@ -506,21 +582,37 @@ open(p,'w').write(s)
 
     local out
     out="$(SOLEUR_MUTATION_CHILD=1 SUT="$m" timeout 180 bash "${BASH_SOURCE[0]}" 2>&1)" || true
-    if grep -qF "$expect" <<<"$out"; then
-      ok "T9[$id]: killed by \"$expect\""
+    # Anchor on the `no()` prefix, not the bare id. `ok()` emits "[ok] <id>: …", so
+    # `grep -qF "T6k:"` matched the PASSING line — two rows scored "killed" against a runner
+    # that was never mutated (proven with the noop-control row below).
+    if grep -qF "[FAIL] $expect" <<<"$out"; then
+      if [[ "$id" == noop-control ]]; then
+        no "T9[$id]: a comment-only mutation reddened \"$expect\" — the matrix scores noise"
+      else
+        ok "T9[$id]: killed by \"$expect\""
+      fi
     else
-      no "T9[$id]: SURVIVED — expected \"$expect\" to fail and it did not"
+      if [[ "$id" == noop-control ]]; then
+        ok "T9[$id]: a comment-only mutation is correctly NOT scored as a kill"
+      else
+        no "T9[$id]: SURVIVED — expected \"$expect\" to fail and it did not"
+      fi
     fi
   }
 
   # Selection anchored on the failure marker → a blind tail. The trap this exists to catch:
   # the RED suite fails EARLY and emits 120 passing lines after, so a tail shows only passes.
   run_mutant anchored-to-tail "T6c: the early failing assertion is absent" \
-    "s = s.replace('sel=\"\$(grep -E -A3 \"\$MARKER_ERE\" \"\$f\" 2>/dev/null || true)\"', 'sel=\"\$(tail -n 5 \"\$f\")\"')"
+    "s = s.replace('sel=\"\$(grep -E -A3 --no-group-separator \"\$MARKER_ERE\" \"\$f\" 2>/dev/null)\"; grc=\$?', 'sel=\"\$(tail -n 5 \"\$f\")\"; grc=0')"
+
+  # Selection by position rather than by marker. `tail` was already covered; `head` was not,
+  # and it survived the whole suite while the fixture put the marker on line 1.
+  run_mutant anchored-to-head "T6c: the early failing assertion is absent" \
+    "s = s.replace('sel=\"\$(grep -E -A3 --no-group-separator \"\$MARKER_ERE\" \"\$f\" 2>/dev/null)\"; grc=\$?', 'sel=\"\$(head -n 5 \"\$f\")\"; grc=0')"
 
   # Drop the sentinel prefix → dumped [FAIL] lines reach the monitor's anchor and its title.
   run_mutant drop-prefix "T6k:" \
-    "s = s.replace('} | sed \"s/^/\${SENTINEL_PREFIX}/\"', '}')"
+    "s = s.replace('} 2>&1 | sed \"s/^/\${SENTINEL_PREFIX}/\"', '} 2>&1')"
 
   # Skip the dump entirely.
   run_mutant skip-dump "T6c: the early failing assertion is absent" \
@@ -528,7 +620,7 @@ open(p,'w').write(s)
 
   # Invert retain/reap → the evidence is deleted on exactly the runs that matter.
   run_mutant invert-reap "T6s:" \
-    "s = s.replace('if (( RED == 0 && \${#UNACCOUNTED[@]} == 0 )); then\n  rm -rf \"\$SOLEUR_SUITE_LOGDIR\"\nfi', 'rm -rf \"\$SOLEUR_SUITE_LOGDIR\"')"
+    "s = s.replace('if (( RED == 0 && \${#UNACCOUNTED[@]} == 0 )); then\n  rm -rf \"\$SOLEUR_SUITE_LOGDIR\"\nelse\n  SOLEUR_KEEP_LOGDIR=1\nfi', 'rm -rf \"\$SOLEUR_SUITE_LOGDIR\"')"
 
   # Drop the cap → one suite with 10,000 marker lines dumps all of them.
   run_mutant drop-cap "T6p: the cap does not bind after selection" \
@@ -551,14 +643,50 @@ open(p,'w').write(s)
   run_mutant drop-accounting "T7a: FALSE GREEN" \
     "s = s.replace('(( RED == 0 && \${#UNACCOUNTED[@]} == 0 ))\n', '(( RED == 0 ))\n')"
 
-  # Anti-vacuity floor for the matrix itself: a run_mutant that stopped dispatching would
-  # otherwise leave this whole block silently empty.
-  MATRIX_ROWS=$(grep -c '^  run_mutant ' "${BASH_SOURCE[0]}" || true)
-  if (( MATRIX_ROWS >= 7 )); then
-    ok "T9: mutation matrix ran ${MATRIX_ROWS} rows"
+  # POSITIVE CONTROL for the scorer. A comment-only edit changes no behaviour, so every
+  # assertion must stay green — if this row reports a kill, the matcher is matching noise and
+  # every other row's verdict is worthless.
+  run_mutant noop-control "T6c: the early failing assertion is absent" \
+    "s = s.replace('# Cap per RED suite.', '# Cap per RED suite (noop-control mutation).')"
+
+  # Anti-vacuity floor for the matrix itself. This counts rows that actually DISPATCHED
+  # (incremented inside run_mutant), not `run_mutant` lines in this file — an earlier draft
+  # grepped its own source text, which still counts 7 after gutting run_mutant's body to
+  # `return 0`, i.e. it could not detect the failure mode its own comment named.
+  MATRIX_CALLS=$(grep -c '^  run_mutant ' "${BASH_SOURCE[0]}" || true)
+  if (( MATRIX_RAN >= 7 && MATRIX_RAN == MATRIX_CALLS )); then
+    ok "T9: mutation matrix dispatched ${MATRIX_RAN} rows (all ${MATRIX_CALLS} call sites ran)"
   else
-    no "T9: mutation matrix has only ${MATRIX_ROWS} rows, expected >= 7"
+    no "T9: matrix dispatched ${MATRIX_RAN} of ${MATRIX_CALLS} call sites (expected >= 7, all run)"
   fi
+fi
+
+# POSITIVE CONTROL. The floor below counts pass+fail, so it catches a dispatch layer that stops
+# emitting — but NOT an `ok()`/`no()` neutered to a no-op, which keeps the count while making
+# the suite structurally incapable of reddening. Exercise both and prove each moved.
+_p0=$pass; _f0=$fail
+ok "positive-control probe" >/dev/null
+no "positive-control probe" 2>/dev/null
+if (( pass == _p0 + 1 && fail == _f0 + 1 )); then
+  pass=$(( _p0 + 1 )); fail=$_f0     # keep the ok, retract the deliberate failure
+  echo "[ok] positive control: ok() and no() both mutate their counters"
+else
+  echo "[FAIL] positive control: ok()/no() do not mutate their counters" >&2
+  exit 1
+fi
+
+# ANTI-VACUITY FLOOR. Deliberately OUTSIDE the SOLEUR_MUTATION_CHILD guard: with the floor
+# inside it, a stray SOLEUR_MUTATION_CHILD in the ambient environment removed the whole matrix
+# AND its own floor together, taking the suite from 46 assertions to 38 with exit 0 and nothing
+# noticing. A FLOOR, not equality — a new assertion must not require editing this number — but
+# set to the current count so it cannot silently absorb a deletion.
+MIN_ASSERTIONS=44
+TOTAL=$(( pass + fail ))
+if (( TOTAL < MIN_ASSERTIONS )); then
+  echo "[FAIL] anti-vacuity: only ${TOTAL} assertion(s) ran, expected >= ${MIN_ASSERTIONS}" >&2
+  fail=$(( fail + 1 ))
+else
+  ok "anti-vacuity: ${TOTAL} assertions ran (floor ${MIN_ASSERTIONS})"
 fi
 
 echo ""

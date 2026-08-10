@@ -128,15 +128,17 @@ cd "$ROOT" || exit 1
 WF="${INFRA_WF:-.github/workflows/infra-validation.yml}"
 [[ -f "$WF" ]] || { echo "FATAL: $WF not found — cannot derive the registered suite list." >&2; exit 2; }
 
-# INFRA_DIR is a TEST SEAM, sibling to INFRA_WF. The derivation regex below used to hardcode
+# SOLEUR_INFRA_DIR is a TEST SEAM, sibling to INFRA_WF. Namespaced because a bare
+# INFRA_DIR is already a workflow-level `env:` in apply-sentry-infra.yml and
+# apply-deploy-pipeline-fix.yml — an unrelated job's env must not reach a test seam. The derivation regex below used to hardcode
 # the `apps/web-platform/infra/` prefix, which meant a fixture suite could only be registered
 # by physically creating an executable file IN THE LIVE INFRA DIRECTORY — while every sibling
 # suite is reading that directory. That is precisely the collision #7376 is about, so the
 # tests for this file could not be written without reproducing the bug they guard.
-INFRA_DIR="${INFRA_DIR:-apps/web-platform/infra}"
+SOLEUR_INFRA_DIR="${SOLEUR_INFRA_DIR:-apps/web-platform/infra}"
 # Escape it for the ERE below: a fixture root from `mktemp -d` carries `.` characters, which
 # an unescaped interpolation would turn into "any character".
-_DIR_ERE="$(printf '%s' "$INFRA_DIR" | sed 's/[][\.^$*+?(){}|\\/]/\\&/g')"
+_DIR_ERE="$(printf '%s' "$SOLEUR_INFRA_DIR" | sed 's/[][\.^$*+?(){}|\\/]/\\&/g')"
 
 mapfile -t SUITES < <(
   grep -oE "run: bash ${_DIR_ERE}/[A-Za-z0-9._-]+\.test\.sh" "$WF" \
@@ -183,13 +185,15 @@ report_orphans() {
     done < <(
       if [[ -n "${INFRA_ORPHAN_LIST:-}" ]]; then
         sort -u "$INFRA_ORPHAN_LIST"
-      elif [[ "$INFRA_DIR" == /* ]]; then
+      elif [[ "$SOLEUR_INFRA_DIR" == /* ]]; then
         # A fixture root (absolute, from `mktemp -d`) is outside the repo, so `git ls-files`
-        # exits fatal on it. Emit no candidates rather than leaking that error into the run
-        # log, where it reads as a real problem with the orphan scan.
-        :
+        # exits fatal on it. Emit no candidates rather than leaking that error into the run log,
+        # where it reads as a real problem with the orphan scan — but SAY SO. A bare `:` here
+        # made "scan skipped" byte-indistinguishable from "no orphans found", which is the
+        # silent-degradation shape this same file goes out of its way to reject elsewhere.
+        echo "NOTE: orphan scan skipped — SOLEUR_INFRA_DIR is outside the repo working tree." >&2
       else
-        git ls-files "${INFRA_DIR}/**/*.test.sh" "${INFRA_DIR}/*.test.sh" | sort -u
+        git ls-files "${SOLEUR_INFRA_DIR}/**/*.test.sh" "${SOLEUR_INFRA_DIR}/*.test.sh" | sort -u
       fi
     )
   )
@@ -214,8 +218,14 @@ JOBS="${JOBS:-$(( _NPROC < 6 ? _NPROC : 6 ))}"
 
 # ── The instrument (#7376) ────────────────────────────────────────────────────
 #
-# SENTINEL. Every line the parent emits AFTER xargs returns is prefixed with `SOLEUR| `. That
-# is not cosmetic. 10 registered suites print `[FAIL]` at column 0, and main-health-monitor.yml
+# SENTINEL. Every DIAGNOSTIC line the parent emits after xargs is prefixed with `SOLEUR| `.
+#
+# Three things after xargs are deliberately NOT prefixed, and the distinction is load-bearing:
+# the summary count line (the monitor's `tail -30` must end on it — T6v pins this), the orphan
+# report, and the `UNACCOUNTED  <path>` verdict lines (naming signal, see below). An earlier
+# wording claimed EVERY line was prefixed, which is both false and the wrong inference to hand
+# a future maintainer — it invites "completing" the rule by prefixing the summary, which would
+# break the monitor. That is not cosmetic. 10 registered suites print `[FAIL]` at column 0, and main-health-monitor.yml
 # greps `^RED |^\[FAIL\]` to build a PUBLIC issue body AND to derive its TITLE — so an
 # unprefixed dumped `[FAIL]` during a TIMEOUT would title an issue with a cause the job never
 # measured, the exact AP-021/ADR-166 defect #7371 removed. The prefix also gives the monitor a
@@ -261,12 +271,32 @@ DUMP_CAP=40
   exit 2
 }
 
-LOG="$(mktemp)"
+LOG="$(mktemp)" || { echo "FATAL: mktemp failed for the summary log (TMPDIR=$TMPDIR)" >&2; exit 2; }
+
+# Age-reap older siblings before creating this run's dir. Retention-on-RED is deliberate, but
+# nothing else reclaims these: ADR-133's tmpfs reaper scopes to /tmp while this runner exports
+# TMPDIR=/var/tmp, and that ADR explicitly REJECTED count-based reaping — so this class is
+# unreapable by construction unless the producer cleans up after itself. It accumulates fast
+# because run-registered-suites.test.sh is itself a registered suite and drives this runner
+# ~10x per invocation with deliberate REDs (measured: 414 dirs / 23 MB on the author's box
+# before this reaper existed). Mirrors ADR-133's own `meta_dir` precedent.
+find "${TMPDIR}" -maxdepth 1 -name 'infra-suites.*' -type d -mmin +720 \
+  -exec rm -rf {} + 2>/dev/null || true
+
 # Initialise BEFORE the trap references it: `set -u` is active, so an unset var inside the
-# trap would abort the trap itself.
+# trap would abort the trap itself. The trap reaps the log dir too — the inline reap below
+# only covers a clean green exit, so a timeout, Ctrl-C or OOM would otherwise leak it even on
+# an otherwise-healthy run. SOLEUR_KEEP_LOGDIR is set on the retain path so a genuine failure
+# keeps its evidence.
 SOLEUR_SUITE_LOGDIR=""
-trap 'rm -f "${LOG:-}"' EXIT
-SOLEUR_SUITE_LOGDIR="$(mktemp -d -t infra-suites.XXXXXXXX)"
+SOLEUR_KEEP_LOGDIR=""
+trap 'rm -f "${LOG:-}"; [[ -n "${SOLEUR_KEEP_LOGDIR:-}" ]] || rm -rf "${SOLEUR_SUITE_LOGDIR:-/nonexistent}"' EXIT
+SOLEUR_SUITE_LOGDIR="$(mktemp -d -t infra-suites.XXXXXXXX)" || {
+  echo "FATAL: mktemp -d failed for the per-suite log dir (TMPDIR=$TMPDIR)." >&2
+  echo "       Refusing to run: every suite's capture would fail and the accounting" >&2
+  echo "       assertion would then blame a vanished wrapper for a disk problem." >&2
+  exit 2
+}
 export SOLEUR_SUITE_LOGDIR
 SOLEUR_RUN_T0="$EPOCHSECONDS"; export SOLEUR_RUN_T0
 
@@ -285,17 +315,24 @@ echo "Running ${#SUITES[@]} registered infra suite(s) with -P ${JOBS}…"
 # a committed artifact that a validation gate then enforced. See
 # knowledge-base/project/learnings/2026-08-10-pipe-buf-atomicity-does-not-apply-to-the-file-i-was-redirecting-into.md
 #
-# Capture order is `>"$f" 2>&1`, NEVER `2>&1 >"$f"`. 101 emit sites across the corpus write
-# their failure marker to stderr; the inverted form sends stderr to the OLD stdout, loses every
-# marker, and leaves the selector below finding nothing while looking perfectly healthy.
+# Capture order is `>"$f" 2>&1`, NEVER `2>&1 >"$f"`. Most suites write their failure marker to
+# stderr — `for f in $(…--list…); do grep -cE '(echo|printf).*(FAIL|fail).*>&2' "$f"; done`
+# sums to ~107 sites today (the exact figure moves with the predicate, which is why the command
+# is here rather than a bare number). The inverted form sends stderr to the OLD stdout, loses
+# every marker, and leaves the selector below finding nothing while looking perfectly healthy.
+#
+# The suite path is passed as `$1`, not interpolated into the script text. `xargs -I{}` does a
+# textual substitution, so `s="{}"` would make a path containing `"`/`$`/backtick executable as
+# code. The derivation regex constrains the basename today, but `$SOLEUR_INFRA_DIR` is caller-
+# supplied, and this script body grew from one line to five.
 printf '%s\n' "${SUITES[@]}" \
   | xargs -P "$JOBS" -I{} bash -c '
-      s="{}"; key="${s//\//_}"
+      s="$1"; key="${s//\//_}"
       st="$EPOCHSECONDS"
       bash "$s" >"$SOLEUR_SUITE_LOGDIR/$key.log" 2>&1; rc=$?
       printf "%s %s %s\n" "$rc" "$(( EPOCHSECONDS - st ))" "$(( st - SOLEUR_RUN_T0 ))" > "$SOLEUR_SUITE_LOGDIR/$key.meta"
       if (( rc == 0 )); then echo "PASS $s"; else echo "RED  $s"; fi
-    ' \
+    ' _ {} \
   | tee "$LOG"
 
 # `^RED ` / `^PASS ` WITH the trailing space, matching every downstream consumer. Nothing else
@@ -318,19 +355,41 @@ dump_reds() {
     [[ -s "$m" ]] && read -r rc el off < "$m"
     echo ""
     echo "--- RED: $s (rc=${rc} elapsed=${el}s start_offset=+${off}s) ---"
-    if [[ -s "$f" ]]; then
-      sel="$(grep -E -A3 "$MARKER_ERE" "$f" 2>/dev/null || true)"
-      if [[ -n "$sel" ]]; then
-        echo "[selection: marker-anchored]"
-        printf '%s\n' "$sel" | head -n "$DUMP_CAP"
-      else
-        echo "[selection: fallback tail — no line matched the failure-marker ERE]"
-        tail -n "$DUMP_CAP" "$f"
-      fi
-    else
-      echo "[selection: none — the suite produced no output at all]"
-    fi
-  done < <(grep '^RED ' "$LOG" | sed 's/^RED  *//' | sort)
+    dump_one "$f"
+  done < <(grep '^RED ' "$LOG" | sed 's/^RED  *//' | LC_ALL=C sort)
+}
+
+# Excerpt one captured log. `grep`'s rc is inspected rather than swallowed: rc 2 is an ERROR
+# (unreadable file, bad regex), and collapsing it into rc 1 would print the
+# "no line matched the failure-marker ERE" label — naming a cause the run did not measure.
+#
+# The cap is a LINE cap; `cut` adds the byte bound it does not give. One 200 KB line passes
+# `head -n 40` and `tail -30` intact, and GitHub's issue-body limit is 65,536 characters — so
+# without this a single long line makes `gh issue create` fail and the monitor files NOTHING,
+# silently losing its only job. `--no-group-separator` keeps grep's `--` markers out of the dump.
+dump_one() {
+  local f="$1" sel grc
+  # "no capture file" and "capture file is empty" are DIFFERENT facts and must not share a
+  # message. Observed 2026-08-11: the log dir was removed mid-run (an operator editing this
+  # script while a run held it open), and all 12 REDs reported "the suite produced no output at
+  # all" — a cause the runner had not measured, on a run where the suites had in fact produced
+  # plenty. Same AP-021 class the accounting block below is careful about.
+  if [[ ! -e "$f" ]]; then
+    echo "[selection: unavailable — no capture at ${f} (log dir removed mid-run, or the child never started)]"
+    return 0
+  fi
+  if [[ ! -s "$f" ]]; then
+    echo "[selection: none — the capture exists and is empty; the suite printed nothing]"
+    return 0
+  fi
+  sel="$(grep -E -A3 --no-group-separator "$MARKER_ERE" "$f" 2>/dev/null)"; grc=$?
+  case "$grc" in
+    0) echo "[selection: marker-anchored]"
+       printf '%s\n' "$sel" | head -n "$DUMP_CAP" | cut -c1-2000 ;;
+    1) echo "[selection: fallback tail — no line matched the failure-marker ERE]"
+       tail -n "$DUMP_CAP" "$f" 2>/dev/null | cut -c1-2000 ;;
+    *) echo "[selection: unavailable — grep exited ${grc} reading the capture]" ;;
+  esac
 }
 
 # ── Accounting. A child whose wrapping `bash -c` is KILLED (the OOM killer under -P 4) emits
@@ -339,39 +398,71 @@ dump_reds() {
 # with nothing asserting they must match. A suite could vanish and the gate went green. That is
 # a pre-existing false green, and it is the failure mode most likely to have masked evidence
 # for the capacity hypothesis all along.
+# `comm`, not 93 greps: it needs no per-path regex escaping (the escape idiom already exists
+# once, for the derivation ERE, and a second copy is a second thing to get wrong).
 UNACCOUNTED=()
 if (( PASS + RED != ${#SUITES[@]} )); then
-  for s in "${SUITES[@]}"; do
-    grep -qE "^(PASS|RED) +$(printf '%s' "$s" | sed 's/[][\.^$*+?(){}|\\/]/\\&/g')\$" "$LOG" \
-      || UNACCOUNTED+=("$s")
-  done
+  mapfile -t UNACCOUNTED < <(
+    comm -13 \
+      <(sed -nE 's/^(PASS|RED) +//p' "$LOG" | LC_ALL=C sort -u) \
+      <(printf '%s\n' "${SUITES[@]}" | LC_ALL=C sort -u)
+  )
 fi
 
-report_missing() {
-  echo ""
-  echo "ACCOUNTING FAILURE: ${#SUITES[@]} suites were dispatched but only $((PASS + RED)) reported."
-  echo "The following suite(s) emitted neither PASS nor RED — their wrapping shell died"
-  echo "(OOM kill, timeout, or a crash) before it could report:"
-  printf '  %s\n' "${UNACCOUNTED[@]}"
-  echo "Treat this as a FAILED run: the suites below are unmeasured, not passing."
+# NAMING SIGNAL, DELIBERATELY UNPREFIXED — this is a VERDICT, not a diagnostic.
+#
+# The distinction is the whole reason the sentinel exists, and getting it wrong is how the
+# first draft of this change broke: `ACCOUNTING FAILURE` was emitted inside the prefixed block,
+# so the monitor's `grep -v '^SOLEUR| '` stripped it from the PUBLIC issue body. And because an
+# unaccounted suite emits no `^RED ` line either, `HAS_FAIL_MARKER` stayed 0 and the monitor
+# titled the issue "health check did not complete … usually a step or job timeout" — a cause the
+# job never measured, on the exact failure mode this assertion was added to catch. That is the
+# AP-021/ADR-166 defect #7371 exists to remove, re-armed by its own fix.
+#
+# So: suite NAMES go out unprefixed, in an anchor shape the monitor greps (mirroring `RED  `).
+# The explanatory prose stays prefixed, below.
+emit_unaccounted_names() {
+  printf 'UNACCOUNTED  %s\n' "${UNACCOUNTED[@]}"
 }
 
 {
   dump_reds
-  (( ${#UNACCOUNTED[@]} > 0 )) && report_missing
+  if (( ${#UNACCOUNTED[@]} > 0 )); then
+    echo ""
+    echo "ACCOUNTING FAILURE: ${#SUITES[@]} suites were dispatched but only $((PASS + RED)) reported."
+    echo "The suite(s) named UNACCOUNTED above emitted neither PASS nor RED — their wrapping"
+    echo "shell died (OOM kill, timeout, or a crash) before it could report."
+    echo "Treat this as a FAILED run: those suites are unmeasured, not passing."
+    # Their captured output still exists and is the only evidence of what they were doing when
+    # they died — the failure mode most likely to have masked capacity evidence all along.
+    for _s in "${UNACCOUNTED[@]}"; do
+      echo ""
+      echo "--- UNACCOUNTED: $_s (no rc — the wrapper never reported) ---"
+      dump_one "${SOLEUR_SUITE_LOGDIR}/${_s//\//_}.log"
+    done
+  fi
   if (( RED > 0 || ${#UNACCOUNTED[@]} > 0 )); then
     echo ""
     echo "retained per-suite log dir: ${SOLEUR_SUITE_LOGDIR}"
     echo "(local repro only — a hosted runner is destroyed with its filesystem)"
   fi
-} | sed "s/^/${SENTINEL_PREFIX}/"
+# 2>&1 so the parent's OWN stderr is prefixed too. Without it a `tail:`/`read:` diagnostic, or
+# bash's "ignored null byte in input" warning, lands at column 0 and rides into the public issue
+# body — which would falsify the invariant this whole design rests on.
+} 2>&1 | sed "s/^/${SENTINEL_PREFIX}/"
+
+(( ${#UNACCOUNTED[@]} == 0 )) || emit_unaccounted_names
 
 if (( RED == 0 && ${#UNACCOUNTED[@]} == 0 )); then
   rm -rf "$SOLEUR_SUITE_LOGDIR"
+else
+  SOLEUR_KEEP_LOGDIR=1
 fi
 
 report_orphans
 
 echo ""
-echo "=== registered infra suites: ${PASS} passed, ${RED} failed (of ${#SUITES[@]}) ==="
+# The count line carries all THREE numbers. Reporting only passed/failed is what let
+# "91 passed, 0 failed (of 93)" read as success while two suites had vanished.
+echo "=== registered infra suites: ${PASS} passed, ${RED} failed, ${#UNACCOUNTED[@]} unaccounted (of ${#SUITES[@]}) ==="
 (( RED == 0 && ${#UNACCOUNTED[@]} == 0 ))

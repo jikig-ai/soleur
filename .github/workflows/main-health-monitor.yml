@@ -434,7 +434,7 @@ jobs:
               # over this runner's log returns zero hits on a failing run and
               # reads as clean — measured 2026-08-04 (#7220)". `[FAIL]` alone
               # matched only because scripts/test-all.sh wraps the runner.
-              hits=$(grep -E '^RED |^\[FAIL\]' "$file" | head -20) || hits=""
+              hits=$(grep -E '^RED |^UNACCOUNTED |^\[FAIL\]' "$file" | head -20) || hits=""
               if [[ -n "$hits" ]]; then
                 HAS_FAIL_MARKER=1
                 SUMMARY="${SUMMARY}${hits}"$'\n'
@@ -515,14 +515,18 @@ jobs:
           # scanner, and left the base64 body and the END line intact. `sed` is line-based,
           # so nothing spanning a newline is catchable any other way than a RANGE.
           REDACTED=$(printf '%s' "$SUMMARY" | sed -E \
-            -e '/-----BEGIN [A-Z ]*PRIVATE KEY-----/,/-----END [A-Z ]*PRIVATE KEY-----/c\<redacted-private-key-block>' \
+            -e 's/-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----/<redacted-private-key-marker>/g' \
+            -e 's/^[[:space:]]*[A-Za-z0-9+/]{40,}={0,2}[[:space:]]*$/<redacted-key-material>/' \
+            -e 's/(AKIA|ASIA|AGPA|AIDA|AROA|ANPA|ANVA)[A-Z0-9]{16}/<redacted-aws-key-id>/g' \
+            -e 's/(aws_secret_access_key|aws_session_token)[[:space:]]*[=:][[:space:]]*[A-Za-z0-9\/+=]{20,}/\1=<redacted>/gI' \
+            -e 's/X-Amz-(Signature|Security-Token|Credential)=[^&[:space:]]+/X-Amz-\1=<redacted>/g' \
             -e 's/gh[pousr]_[A-Za-z0-9]{16,}/<redacted-gh-token>/g' \
             -e 's/github_pat_[A-Za-z0-9_]{20,}/<redacted-gh-pat>/g' \
             -e 's/sk-ant-[A-Za-z0-9_-]{16,}/<redacted-anthropic-key>/g' \
             -e 's/sk_(test|live)_[A-Za-z0-9]{16,}/<redacted-stripe-key>/g' \
             -e 's/(rk_(test|live)|whsec)_[A-Za-z0-9]{16,}/<redacted-stripe-key>/g' \
             -e 's/sbp_(v0_)?[A-Za-z0-9]{16,}/<redacted-supabase-token>/g' \
-            -e 's/dp\.(pt|st|sa|ct|scim|audit)\.[A-Za-z0-9_-]{20,}/<redacted-doppler-token>/g' \
+            -e 's/dp\.(pt|st|sa|ct|scim|audit)\.[A-Za-z0-9_.-]{20,}/<redacted-doppler-token>/g' \
             -e 's/sntrys_[A-Za-z0-9_.-]{20,}/<redacted-sentry-token>/g' \
             -e 's#https://[0-9a-f]{16,}@[A-Za-z0-9.-]+/[0-9]+#<redacted-sentry-dsn>#g' \
             -e 's/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/<redacted-jwt>/g' \
@@ -546,6 +550,15 @@ jobs:
             echo '`````'
             echo "${REDACTED}"
             echo '`````'
+            echo ""
+            echo "### Where the per-suite diagnostics are"
+            echo ""
+            echo "The infra runner captures each suite's own stdout+stderr and prints a"
+            echo "marker-anchored excerpt (rc, elapsed, start offset) for every failing suite."
+            echo "Those lines are deliberately withheld from this PUBLIC body — read them in"
+            echo "the run log, no SSH required:"
+            echo ""
+            echo "    gh run view ${GITHUB_RUN_ID} --log | grep '^SOLEUR| '"
             echo ""
             echo "### Actions required"
             echo ""
@@ -572,6 +585,9 @@ jobs:
               echo '`````'
               echo "${REDACTED}"
               echo '`````'
+              echo ""
+              echo "Per-suite diagnostics are withheld from this public comment; read them"
+              echo "in the run log with: gh run view ${GITHUB_RUN_ID} --log | grep '^SOLEUR| '"
               echo ""
               echo "Run: ${RUN_URL}"
             } > /tmp/issue-comment.md

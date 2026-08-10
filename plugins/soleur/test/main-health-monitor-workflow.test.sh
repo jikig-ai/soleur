@@ -226,12 +226,25 @@ else:
 # run-registered-suites.sh's own header: "a failing suite prints `RED <path>`,
 # not `FAIL`. A `grep FAIL` over this runner's log returns zero hits on a failing
 # run and reads as clean -- measured 2026-08-04 (#7220)."
-if re.search(r"grep -E '\^RED \|\^\\\[FAIL\\\]'", stripped):
-    ok("(8) failure marker matches ^RED as well as ^[FAIL]")
+# AMENDED 2026-08-11 (#7376): the anchor was widened to include `^UNACCOUNTED `, so this now
+# asserts the two REQUIRED alternates are present rather than pinning the exact spelling.
+# An exact-string pin would have to be edited for every legitimate widening, and editing it is
+# indistinguishable from removing a required alternate. `^UNACCOUNTED ` is required for the
+# same reason `^RED ` is: a suite whose wrapper is killed emits NEITHER PASS nor RED, so
+# without it HAS_FAIL_MARKER stays 0 and the monitor titles the issue "did not complete ...
+# usually a timeout" -- a cause it never measured, on the exact failure the runner's accounting
+# assertion exists to catch.
+_anchor = re.search(r"hits=\$\(grep -E '([^']+)'", stripped)
+_alts = _anchor.group(1) if _anchor else ""
+_required = ["^RED ", "^UNACCOUNTED ", "^\\[FAIL\\]"]
+_missing = [a for a in _required if a not in _alts]
+if _anchor and not _missing:
+    ok("(8) failure-marker anchor carries ^RED , ^UNACCOUNTED and ^[FAIL]")
 else:
-    bad("(8) failure marker matches ^RED as well as ^[FAIL]",
-        "the infra runner never emits [FAIL]; matching it alone re-labels a real "
-        "infra failure as 'Run did not complete' and names a timeout that did not happen")
+    bad("(8) failure-marker anchor carries ^RED , ^UNACCOUNTED and ^[FAIL]",
+        f"missing={_missing or '<anchor not found>'} in {_alts!r} -- the infra runner never "
+        "emits [FAIL] itself; and without ^UNACCOUNTED a vanished suite sets no marker at all, "
+        "so the monitor names a timeout that did not happen")
 
 # ---- (9) closer may only retire trackers this monitor filed ---------------
 sentinel = "<!-- soleur:main-health-monitor -->"
@@ -336,19 +349,38 @@ done < "$RESULT_FILE"
 EXCERPT_EXPR="$(grep -oE "grep -v '[^']*' \"\\\$file\" \| tail -[0-9]+" "$WF" | head -1)"
 if [[ -n "$EXCERPT_EXPR" ]]; then
   _fix="$(mktemp)"; _out="$(mktemp)"
+
+  # DERIVE the sentinel from the runner instead of typing it. This is the only guard on the
+  # producer->consumer direction: a runner-side rename plus its own test update (the natural
+  # single-PR edit, both files under apps/web-platform/infra/) leaves this filter matching a
+  # prefix the runner no longer emits, and every dumped byte — including the `[FAIL]` lines 10
+  # registered suites print at column 0 — reaches the PUBLIC issue body and the monitor's
+  # title derivation. Mirrors T8c's technique for MARKER_ERE in the runner's own suite.
+  _RUNNER="$REPO_ROOT/apps/web-platform/infra/run-registered-suites.sh"
+  SP="$(sed -n "s/^SENTINEL_PREFIX='\(.*\)'$/\1/p" "$_RUNNER")"
+  if [[ -z "$SP" ]]; then
+    fail "(13) could not read SENTINEL_PREFIX from the runner" "$_RUNNER"
+    SP='SOLEUR| '
+  elif ! grep -qF "grep -v '^${SP}'" "$WF"; then
+    fail "(13d) the workflow filters '^<other>' but the runner emits '${SP}'" \
+      "a runner-side sentinel rename would publish every dumped diagnostic line"
+  else
+    pass "(13d) the workflow's filter pattern is derived from the runner's SENTINEL_PREFIX"
+  fi
+
+  # The fixture must exceed the tail window, or `tail -30` is a no-op and the ORDER of
+  # `grep -v | tail` — the entire point — goes untested. A real capture puts ~46 prefixed
+  # lines between the RED names and EOF, so the swapped order yields an EMPTY body.
   {
     echo "RED  apps/web-platform/infra/inngest.test.sh"
+    echo "UNACCOUNTED  apps/web-platform/infra/zot-liveness.test.sh"
     echo "PASS apps/web-platform/infra/other.test.sh"
-    echo "SOLEUR| --- RED: apps/web-platform/infra/inngest.test.sh (rc=1 elapsed=3s start_offset=+2s) ---"
-    echo "SOLEUR| [FAIL] a dumped marker that must NOT reach the public issue body"
-    echo "SOLEUR| retained per-suite log dir: /var/tmp/infra-suites.deadbeef"
+    printf "${SP}filler diagnostic line %s\n" $(seq 1 40)
+    echo "${SP}[FAIL] a dumped marker that must NOT reach the public issue body"
+    echo "${SP}retained per-suite log dir: /var/tmp/infra-suites.deadbeef"
     echo "| Service | Provider | Category |"
-    echo "=== registered infra suites: 92 passed, 1 failed (of 93) ==="
+    echo "=== registered infra suites: 91 passed, 1 failed, 1 unaccounted (of 93) ==="
   } > "$_fix"
-  # shellcheck disable=SC2034  # `file` IS read — by the workflow expression under eval below,
-  # which shellcheck cannot see into. That indirection is the point: the expression is
-  # extracted from the YAML rather than re-typed, so it reads the same variable name the
-  # workflow's own loop does.
   file="$_fix"; eval "$EXCERPT_EXPR" > "$_out" 2>/dev/null || true
 
   if ! grep -q '^SOLEUR| ' "$_out"; then
@@ -360,9 +392,10 @@ if [[ -n "$EXCERPT_EXPR" ]]; then
   # WHITELIST, not an absence check. "no SOLEUR| line" is satisfied by a filter that drops
   # EVERYTHING, which would silently gut the issue body. Assert positively that the signal
   # the operator actually needs survived.
-  if grep -q '=== registered infra suites: 92 passed, 1 failed' "$_out" \
-     && grep -q '^RED  *apps/web-platform/infra/inngest.test.sh' "$_out"; then
-    pass "(13b) the summary count and the RED suite name survive the filter"
+  if grep -q '=== registered infra suites: 91 passed, 1 failed, 1 unaccounted (of 93) ===' "$_out" \
+     && grep -q '^RED  *apps/web-platform/infra/inngest.test.sh' "$_out" \
+     && grep -q '^UNACCOUNTED  *apps/web-platform/infra/zot-liveness.test.sh' "$_out"; then
+    pass "(13b) the summary count, the RED name and the UNACCOUNTED name survive the filter"
   else
     fail "(13b) the filter removed signal the issue body depends on" "$(head -5 "$_out")"
   fi
@@ -473,7 +506,7 @@ fi
 # having asserted nothing -- the exact "a check that cannot report is
 # indistinguishable from one that passed" class. A FLOOR, not equality: a new
 # assertion must not require editing this number.
-MIN_ASSERTIONS=14
+MIN_ASSERTIONS=24
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   echo "  [FAIL] anti-vacuity: only $TOTAL assertion(s) ran, expected >= $MIN_ASSERTIONS" >&2
