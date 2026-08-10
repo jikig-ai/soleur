@@ -903,10 +903,17 @@ NOT cover every token, because `curl … -o /dev/null` is the dominant corpus fo
 ```bash
 PROBE_PROG="$PROBE_VERB"
 if [[ "$PROBE_VERB" == "bash" || "$PROBE_VERB" == "sh" ]]; then
+  # `read -a` never fails here (no -d), and `${arr[@]:1}` on a 1-element array
+  # expands to nothing under `set -u` on bash >= 4.4. Use an explicit `if` rather
+  # than `[[ … ]] && continue`: the && form returns 1 on the non-flag branch,
+  # which would abort the block if it is ever run under `set -e`.
   read -r -a PROBE_ARGV <<< "$CMD_DEQ"
   for tok in "${PROBE_ARGV[@]:1}"; do
-    [[ "$tok" == -* ]] && continue
-    PROBE_PROG="$tok"; break
+    if [[ "$tok" == -* ]]; then
+      continue
+    fi
+    PROBE_PROG="$tok"
+    break
   done
 fi
 if [[ "$PROBE_PROG" == /* || "$PROBE_PROG" == ../* || "$PROBE_PROG" == */../* || "$PROBE_PROG" == */.. ]]; then
