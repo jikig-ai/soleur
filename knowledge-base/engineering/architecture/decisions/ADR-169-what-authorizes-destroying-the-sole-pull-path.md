@@ -361,3 +361,69 @@ dead read. The wiring is now asserted statically
 composite actions — scoping it to the workflow alone would leave a hole the exact shape of the
 bug, because the restore leg runs inside one.
 
+
+## Amendment 2026-08-09 — A2's blob-completeness obligation is PER CHILD
+
+**The decision is unchanged.** A recut is still authorized only when CI has just proven, by
+executing it, that every image reference production depends on can be re-materialised into an
+empty registry from GHCR. What this amendment settles is a question the original text left
+implicit: *what does "blob-verified" mean for a MULTI-MANIFEST image?*
+
+### What happened
+
+The first live A2 rehearsal (2026-08-09, Actions run 31333047132) failed, and the dispatch
+aborted safely with `verdict=REFUSED predicate=A2` — nothing destroyed. The restore engine exited
+`6` (could-not-classify) on:
+
+```
+crane: Error: validating children: failed to validate image
+Manifests[1](sha256:0aa3be0e…): validating layers: gzip: invalid header
+```
+
+`registry-restore-from-ghcr.sh` verification 2 ran a single `crane validate --remote` over the
+whole reference. `ghcr.io/jikig-ai/soleur-web-platform` is a buildx OCI **index**, and its
+`manifests[1]` is an attestation manifest (`vnd.docker.reference.type=attestation-manifest`,
+`platform: unknown/unknown`) whose one layer is `application/vnd.in-toto+json` — plain JSON,
+never gzipped. `crane validate` walks index children and attempts to gunzip every layer.
+
+Validating that child digest **directly at GHCR** — a registry the recut never writes to —
+reproduced the failure identically. That is what established it as a **validator false positive**
+rather than store corruption, and it is the measurement this amendment rests on.
+
+### The refinement
+
+Blob completeness is verified **per child**, at the sink:
+
+- **Platform children** keep the full `crane validate --remote`. Unchanged.
+- **Attestation children** are verified by **blob presence** (`crane blob`, which fetches bytes
+  without decompressing them), for the config blob and every layer the child declares.
+- **Non-index references** keep the single-validate path unchanged.
+- A named `LAYERFORMAT` class maps a residual `gzip: invalid header` to exit **4** ("do not
+  deploy"), so exit 6 stays reserved for shapes the engine genuinely cannot name.
+
+This **narrows** the check; it does not skip anything. An attestation child whose blob is absent
+still fails, and the test suite carries that as an explicit negative control precisely so a later
+reader cannot mistake the narrowing for a skip.
+
+### Why this strengthens the independence criterion rather than weakening it
+
+The real restore runs the **same engine on the same code path** as the rehearsal. Without a
+pre-destroy rehearsal, the recut would have destroyed the store and only then met this failure —
+leaving production with an empty store, no pull path (the host→GHCR edge has been dead since
+2026-07-30), and an unclassified exit 6 to diagnose under outage. The gate refused for a reason
+that was *wrong about the store* but *right about the restore*: the restore genuinely could not
+complete, and A2 is the predicate that says so before anything is destroyed.
+
+That is the ADR's governing rule working as designed — *a gate on an irreversible destroy may not
+depend on the component whose failure motivates it*. A2 depends on a **throwaway** registry, not
+on prod zot, which is exactly why it could fail informatively while prod zot was unusable.
+
+### The residual this exposes
+
+A2's guard *logic* was well covered — and both suites still had **zero** occurrences of
+attestation, in-toto, or gzip. They were hermetic and stayed green against a shape production has
+had all along. This is the same hermetic-fixture gap that let the `APP_DOMAIN_BASE` read ship
+(corrected 2026-08-06): a suite that never instantiates the real input shape cannot fail on it.
+Recorded here as a standing caution for the remaining cold surfaces — the **post-destroy real
+restore over the CF Tunnel** in particular, which by construction cannot be rehearsed before a
+destroy and therefore has no positive control at all.

@@ -157,6 +157,55 @@ Hetzner API probes, one Better Stack read, **GHCR-read-from-a-runner under `pack
 query that used to be listed here no longer exists.) They would otherwise first execute at the single highest-stakes
 moment: an irreversible destroy of the store.
 
+> ### Amendment 2026-08-09 — the throwaway-zot rehearsal has now run live, and it caught something
+>
+> The paragraph above is retained as the record of the pre-first-fire state. It is no longer
+> wholly true: **one of the four cold surfaces has now executed against production.**
+>
+> A recut was dispatched on 2026-08-09 (Actions run 31333047132) after all five checks below
+> passed. It **aborted safely** — `verdict=REFUSED predicate=A2`, `registry_luks_recut` skipped,
+> **nothing destroyed**. A0 derived the inventory (`v0.249.4` / `f838839ef11119ac46f4d38ccf926472dee393a8`),
+> A1 resolved 4/4 required pins at GHCR, A3 met its floor, A4 was `unmeasured` (non-aborting).
+>
+> The **throwaway-zot rehearsal** — cold surface #2, whose wall-clock and peak runner disk ADR-169
+> recorded as unmeasured — failed on its first live run with restore exit `6`:
+>
+> ```
+> crane: Error: validating children: failed to validate image
+> Manifests[1](sha256:0aa3be0e…): validating layers: gzip: invalid header
+> ```
+>
+> The cause was **not** the store. `ghcr.io/jikig-ai/soleur-web-platform` is a buildx OCI index
+> whose `manifests[1]` is an attestation manifest (`vnd.docker.reference.type=attestation-manifest`,
+> `platform: unknown/unknown`) carrying one `application/vnd.in-toto+json` layer — plain JSON,
+> never gzipped. `crane validate` walks index children and tries to gunzip every layer. Validating
+> that child digest **directly at GHCR**, a registry the recut never touches, reproduced it
+> identically, which is what established it as a validator false positive rather than corruption.
+>
+> **Why this matters beyond the fix.** A2 is the gate's declared PASS condition, so this made the
+> dispatch structurally unfireable — during exactly the incident it exists to recover from, and for
+> the second time (the first was the `APP_DOMAIN_BASE` read corrected 2026-08-06). And the real
+> restore runs the **same engine on the same code path**: without the pre-destroy rehearsal the
+> recut would have destroyed the store and only then hit this, stranding production with an empty
+> store, no pull path (the host→GHCR edge is dead per the 2026-07-30 amendment), and an
+> unclassified exit 6. Rehearse-before-destroy is what caught it — evidence for ADR-169's
+> independence criterion, not against it.
+>
+> Fixed by verifying index blob completeness **per child** (platform children keep
+> `crane validate --remote`; attestation children are verified by blob presence via `crane blob`,
+> which never decompresses) plus a named `LAYERFORMAT` class so this shape can never again surface
+> as an unclassified exit 6. Both suites had **zero** attestation/in-toto/gzip coverage before this
+> — the same hermetic-fixture gap this document already records for the app-domain derivation.
+>
+> **What is now warm, and what is still cold.** Three of the four ADR-169 surfaces executed in
+> this run: **GHCR-read-from-a-runner under `packages: read`** (A1 resolved 4/4 required pins),
+> the **`/health` parse** (A0 derived `version` + `build_sha`), and the **throwaway-zot rehearsal**
+> (ran, failed, now fixed). Still cold, because the recut job itself was skipped: the **two Hetzner
+> API probes**, the **Better Stack heartbeat read**, and — highest-stakes of all — the
+> **post-destroy real restore over the CF Tunnel**, which by construction cannot be exercised
+> before a destroy. Re-run the five checks below before the next attempt; three surfaces having
+> executed does not retire the section.
+
 So the five checks below are **required before the first fire**, not advisory. If any fails, fix it
 and re-verify. **Do not proceed with a degraded gate** — a gate that cannot fail is worse than no
 gate, because it gets read as evidence.
@@ -349,9 +398,9 @@ The **rehearsal** (D10 A2) runs the same engine, so the same table reads both.
 | `0` | Every required reference restored **and** blob-verified, signature present. | Nothing. The window is closed. |
 | `2` | **Source unavailable** — GHCR could not be read. | Nothing was written. Check the job's `packages: read` permission and GHCR status. **Not** proof the images were deleted: GHCR returns the same error for *absent* and *not visible to this credential*. |
 | `3` | **Sink unavailable** — the registry did not accept the write. **Retryable**, and the job already retries it: a replaced host can outrun the Cloudflare Tunnel's re-convergence. | If it exhausted its retries, confirm the registry host is serving, then re-run the job. |
-| `4` | **Verification failed** — a digest mismatched, a blob is missing, or a signature is absent. | **Do not deploy.** The store contents are not trustworthy. Re-run the job and read the per-entry lines; a repeat means the copy is landing wrong, not that it was interrupted. |
+| `4` | **Verification failed** — a digest mismatched, a blob is missing (including an *attestation* child's blob), a **layer's content does not match its declared mediaType**, or a signature is absent. | **Do not deploy.** The store contents are not trustworthy. Re-run the job and read the per-entry lines; a repeat means the copy is landing wrong, not that it was interrupted. A layer-format mismatch on a real platform child is **not** the buildx-attestation false positive corrected 2026-08-09 — in-toto layers are verified by blob presence and never decompressed, so this arm now only fires on genuinely mismatched content. |
 | `5` | **Credential unusable** — absent, empty, or **rejected** by the sink. **Not** retryable. | Retrying only burns the window. **Do NOT start by rotating anything** — see "If the sink rejects the credential" immediately below. |
-| `6` | **Could not classify** — a failure shape the engine does not recognise. | Read the crane stderr in the per-entry line before acting. Do **not** assume the images are absent. Worth filing alongside the recovery: an unenumerated failure is itself a defect. |
+| `6` | **Could not classify** — a failure shape the engine does not recognise. | Read the crane stderr in the per-entry line before acting. Do **not** assume the images are absent. Worth filing alongside the recovery: an unenumerated failure is itself a defect. **This arm proved that claim on 2026-08-09**: the first live A2 rehearsal exited 6 on `gzip: invalid header`, which was a *validator* false positive over a buildx attestation manifest and not a store problem at all. It is now classified (exit 4), so a fresh exit 6 is again a genuinely unenumerated shape — treat it as a defect to file, not a store to distrust. |
 
 ### If the sink rejects the credential (exit `5`, or a bridge `docker login` failure)
 
