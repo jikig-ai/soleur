@@ -722,15 +722,20 @@ ensure_bare_config() {
   # EEXIST failure from atomic_git_config's clean-lock branch. `|| true` disarms set -e.
   sweep_stale_git_locks "$git_dir" || true
 
-  # NON-BARE GUARD (#6184 → #5934, hardened round 6). Everything BELOW is a BARE-repo
-  # accommodation: on a bare repo `git worktree add` corrupts the shared config (see
-  # header), and setting extensions.worktreeConfig=true steers those writes off it. A
-  # NORMAL working clone (the Concierge workspace layout, core.bare=false) needs NONE of
-  # it — `git worktree add` writes only to `.git/worktrees/<id>/`. Worse, enabling
-  # worktreeConfig FORCES git to read `.git/config.worktree`, which in the agent sandbox
-  # is an unreadable /dev/null char device → `fatal: … Permission denied` on EVERY git
-  # command. So: proceed with the surgery ONLY when the repo is DEFINITIVELY bare;
-  # default to SKIP.
+  # NON-BARE GUARD (#6184 → #5934, hardened round 6; polarity reversed round 7 / #7394).
+  # Everything BELOW is a BARE-repo accommodation. It used to ENABLE
+  # extensions.worktreeConfig on the theory that doing so steered `git worktree add`'s
+  # shared-config writes onto a per-worktree file; measured on git 2.53.0 that is backwards
+  # — enabling it is what makes a linked worktree fall back to core.bare=true from the
+  # shared config and report as bare (see the file header). The accommodation is now the
+  # REMOVAL of that key.
+  #
+  # A NORMAL working clone (the Concierge workspace layout, core.bare=false) still needs
+  # none of it — `git worktree add` writes only to `.git/worktrees/<id>/`. And enabling
+  # worktreeConfig FORCES git to read `.git/config.worktree`, which in the agent sandbox is
+  # an unreadable /dev/null char device → `fatal: … Permission denied` on EVERY git command.
+  # That hazard is now structurally unreachable from here, since nothing enables the key.
+  # So: proceed ONLY when the repo is DEFINITIVELY bare; default to SKIP.
   #
   # ROUND-6 root cause (#5934, operator-CONFIRMED non-bare workspace): the round-5 guard
   # trusted `git rev-parse --is-bare-repository`, but under the char-device config mask that
