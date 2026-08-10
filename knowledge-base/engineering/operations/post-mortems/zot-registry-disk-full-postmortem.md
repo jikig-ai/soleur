@@ -263,6 +263,8 @@ gc/retention tightening, and the boot-guard/secret threading all shipped in the 
 | Issue | Action | Status |
 |---|---|---|
 | #6247 | Telemetry-gated contingency: grow `var.registry_volume_size` beyond 30 GB ONLY if, post-redeploy, `SOLEUR_ZOT_DISK` shows the 30 GB fs is genuinely full of retention-KEEP blobs (`resize_ok=true`, `fs≈full`, `pcent>=85` after the tightened gc runs) — NOT if the resize simply had not applied (`resize_ok=false` / `fs_size_gb << block_size_gb`, which the #6246 fix itself resolves). `deferred-automation`; re-eval after the first post-#6246 `SOLEUR_ZOT_DISK` event is observed. | **TRIGGERED 2026-07-09** — reopened; remediated in the capacity-vs-retention recurrence PR (see below). Closes after post-dispatch `SOLEUR_ZOT_DISK` verification. |
+| #7378 | D10 predicate A2 was structurally unpassable, so the one recovery lever for the 2026-08 recurrence could not be fired (see the recurrence section below). Per-child index verification shipped in #7379. | **FIXED in #7379** — closes against the next D10 gate job's live A2 verdict, not against that merge. |
+| #7341 | The 2026-08 recurrence itself: `/var/lib/zot` at 100%, heartbeat down, zot restart-looping. Remains OPEN — the recut has not yet applied, and the post-recut fill rate is the measurement that decides whether the store filled again for the same reason. | **OPEN** — do not close on a clean-slate recut alone; upstream zot#4235 is unfixed in the pinned version, so a refill is the expected outcome to measure, not a surprise. |
 
 ## Recurrence — capacity-vs-retention (2026-07-09, #6247)
 
@@ -297,3 +299,64 @@ both the `registry_volume_size` diff AND an `hcloud_server.registry` "must be re
 locally to update state"** — an **untargeted** apply would replace the prod registry host **OUTSIDE**
 the destroy-guard. This transient drift MUST be reconciled ONLY via the `registry-host-replace`
 dispatch, **never** the drift issue's generic apply text.
+
+## Recurrence — the recovery lever was gated shut (2026-08-09/10, #7341 / #7378 / #7379)
+
+The store filled a third time (#7341: `/var/lib/zot` at 100%, `soleur-registry-disk-prd`
+heartbeat down ~2 days, zot restarting ~4×/min). This section records the **near-miss**, which
+is complete and resolved on its own terms; the recurrence's own resolution belongs to #7341 and
+is deliberately not claimed here.
+
+**The lever could not be pulled.** `registry-luks-recut` is the only dispatch that clears the
+store, and it destroys production's only registry store to do it. ADR-169 makes its D10 gate's
+predicate A2 — a rehearsed restore against a throwaway zot — the PASS condition. A2 could not
+pass. `registry-restore-from-ghcr.sh` ran `crane validate --remote` on the whole reference, and
+`ghcr.io/jikig-ai/soleur-web-platform` is a buildx OCI index whose second child is an attestation
+manifest carrying one `application/vnd.in-toto+json` layer. That layer is never gzipped; crane
+gunzips every child layer; the walk died on `gzip: invalid header`, matched no `classify()` case,
+and exited 6 — unclassified. Reproduced directly at GHCR against the child digest, so a validator
+false positive, not zot corruption and not a copy defect.
+
+**The gate held, and that is the whole story of the near-miss.** Actions run 31333047132 fired
+the recut. It aborted pre-destroy at `verdict=REFUSED predicate=A2`; `registry_luks_recut` was
+skipped and store volume `106286457` was untouched. A0/A1/A3 passed, A4 `unmeasured`
+(non-aborting). The real restore runs the same engine on the same code path, so **without the
+pre-destroy rehearsal the recut would have destroyed the store and only then hit this** — the
+store gone, the restore that was supposed to refill it dead on the first index it read.
+
+**This was one of the four surfaces ADR-169 flagged as never-executed.** It had never run live
+until this incident. The cold surface and the incident that needed it arrived together, which is
+the expected way a never-executed recovery path gets discovered.
+
+**Fix (#7379).** Verification 2 now enumerates the index's children at the sink and verifies each
+on its own terms — platform children keep `crane validate --remote`, attestation children are
+verified by fetching every blob they declare via `crane blob`, which never decompresses. Named
+`classify()` cases for `gzip: invalid header` and `error verifying sha256 checksum` map to the
+runbook's exit-4 row instead of the unclassified exit 6. The cosign signature payload is now
+blob-verified too, closing a second manifest-outlives-its-blobs gap in the same predicate.
+
+**The recut is a clean slate, not a cure.** The store showed roughly 15 GB of
+manifest-referenced content against roughly 56 GB used. zot's gc completes repeatedly for
+`soleur-inngest-bootstrap` and never for `soleur-web-platform`, panicking in
+`pkg/scheduler/scheduler.go`. That is upstream **zot#4235** (open; PR #4236 unmerged), reported
+against 2.1.18 and therefore **not fixed in the v2.1.20 pin** the recut would deploy. Expect the
+store to refill. Measure the post-recut fill rate before anyone records #7341 as closed — the
+fill rate is the evidence, and a clean disk immediately after a recut is not.
+
+### Where we got lucky (again)
+
+- The rehearsal is **pre-destroy**. Had A2 run after the destroy — or not at all — this would be
+  a data-loss post-mortem instead of a near-miss one.
+- A2 failed **closed**. An unclassified exit could plausibly have been written to fall through to
+  a warning; it refused instead.
+
+### What went wrong
+
+- A recovery predicate that had never executed against the real production artifact shape was
+  nonetheless treated as the gate's PASS condition. "Never executed" and "passing" are
+  indistinguishable until the day it runs.
+- The first cut of the fix reproduced the bug it exists to remove — tab is an IFS-*whitespace*
+  character, so an attestation child signalled only by `platform.architecture: unknown` parsed
+  with an empty field and routed back to `crane validate`. Caught by review, not by the suite,
+  because every fixture set both detection signals at once and neither disjunct was ever tested
+  alone. See `knowledge-base/project/learnings/2026-08-10-the-guard-i-wrote-to-close-7378-reopened-it-one-field-to-the-left.md`.
