@@ -1,0 +1,600 @@
+# Read-only zot disk-inventory lever for the registry host (#7278, ADR-172).
+#
+# WHAT THIS IS. The registry host has no in-place execution lever of any kind: every
+# write-shaped remediation for the live disk-exhaustion incident (#7247) needs a config
+# change delivered by cloud-init, which needs a host REPLACE, which today opens
+# /dev/mapper/registry against a still-plaintext ext4 volume (the LUKS recut is UNFIRED — #7287). This workflow is
+# the entire set of useful work on the near side of that deadlock: it MEASURES, read-only,
+# over the already-live and already-CF-Access-gated `registry.<app_domain_base>` ingress, how
+# many of the ~59 GB the store reports are actually referenced by a manifest.
+#
+# WHAT IT IS NOT. It restarts nothing, reclaims nothing and pushes no config. `restart`,
+# `push-config` and `reclaim` are documented in the plan as BLOCKED ON A PROVISIONING EVENT —
+# named, not dropped. It also asserts no CAUSE for the delta: `delta_gb` is an UPPER BOUND on
+# unreferenced blob bytes, and the two named candidates (zot's dedupe cache DB, orphaned
+# `.uploads/` staging) have completely different remedies. The deliverable is the number.
+#
+# THE NUMBER'S ERROR BAR IS LOAD-BEARING. `pcent` in SOLEUR_ZOT_DISK comes from
+# `df --output=pcent`, i.e. used/(used+avail), which EXCLUDES root-reserved blocks, while
+# `fs_size_gb` is the TOTAL. So `fs_size_gb * pcent/100` overstates used bytes by ext4's
+# ~5 % reserve — about 2.95 GB on a 59 GB filesystem. A `delta_gb` under ~3 GB is NOT
+# distinguishable from zero. `df --output=used` is not in the marker and adding it would be a
+# cloud-init change, i.e. the host-replace deadlock again.
+#
+# ── TRIGGER SHAPE (#6425) ───────────────────────────────────────────────────
+# `workflow_dispatch` is the real entry point. The `push` trigger scoped to this file exists
+# SOLELY to register the workflow in the Actions UI — a workflow_dispatch-only workflow can
+# take 30+ minutes to appear. The JOB-LEVEL `if: github.event_name == 'workflow_dispatch'`
+# is what stops that registration trigger from having a side effect: without it, editing this
+# file on main would dial the production registry as a consequence of the edit. Same idiom as
+# restart-inngest-server.yml, cutover-inngest.yml and deploy-inngest-image.yml.
+# apps/web-platform/infra/registry-zot-inventory-workflow-guard.test.sh asserts this against
+# the PARSED YAML — including the requirement that EVERY job carry the guard, so a future
+# second job cannot re-open the hole through a door the guard does not watch.
+#
+# ── THE ACTION ALLOW-LIST ───────────────────────────────────────────────────
+# Exactly one action, `inventory`, declared as a `choice` with a single value. It is never
+# interpolated into a URL or a command — it reaches a `run:` body only through `env:`, and
+# only to be echoed. There is no command grammar and no forwarded parameter.
+#
+# ── ZERO TERRAFORM (AC6) ────────────────────────────────────────────────────
+# This workflow touches no `.tf` file, mints no Doppler secret and mints no CF Access token.
+# That is an acceptance criterion, not an incidental property: `hcloud_server.registry`
+# already carries a PENDING REPLACE in state, so any new resource with no scoped apply path
+# would have to ride an untargeted apply and carry that replace into the unfired-recut fatal (#7287).
+name: Registry zot disk inventory (read-only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'The only supported action. Declared as a single-value choice so the dispatch surface cannot grow a command grammar by accident.'
+        type: choice
+        required: true
+        default: inventory
+        options:
+          - inventory
+  # Registration only — see the TRIGGER SHAPE note in the header. The job-level guard below
+  # makes this trigger a no-op.
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/registry-zot-inventory.yml'
+
+# `issues: write`, not `contents: read` alone. The deliverable is a durable number, and one
+# of its two durable homes is a comment on the dedicated tracker (#7339) — a read-only permission
+# set makes that requirement unimplementable, which is the defect this line fixes.
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  inventory:
+    # #6425 GUARD. See the TRIGGER SHAPE note in the header. Do NOT add a second job without
+    # adding this same condition to it — the guard test requires the string on EVERY job and
+    # will red if a new job appears unguarded.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # A HYGIENE CAP, AND DELIBERATELY NOT THE BOUND THAT MATTERS. This comment used to claim
+    # "30 minutes sits well above the sum"; the sum was never computed and the claim was false.
+    # Worst case per request is RETRIES(3) x HTTP_TIMEOUT_S(30) + 2 x RETRY_SLEEP_S(2) = 94 s,
+    # and manifest errors do not abort — so ~29 tags alone could reach ~45 min, before
+    # referrers. The readback poll adds up to 17 polls x a 60 s query.
+    #
+    # Hitting this cap is a CANCELLATION, which skips the assert and the comment steps and
+    # leaves emit_and_exit unreached — no marker, no warehouse row, no issue comment, i.e.
+    # byte-identical to a run that never happened. So the real bound is the enumerator's own
+    # wall-clock deadline (ZOT_INVENTORY_DEADLINE_S), which trips `partial
+    # sweep_deadline_exceeded` and SHIPS the marker while there is still budget to ship it.
+    # This cap only backstops a hang outside that deadline's reach.
+    timeout-minutes: 30
+    concurrency:
+      group: registry-zot-inventory
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # The dispatched action reaches a shell exactly once, here, through `env:` and only to be
+      # ECHOED. It is never interpolated into a URL, a path or a command anywhere in this
+      # workflow. The real enforcement is the `choice` type with a single option — GitHub
+      # rejects any other value before the run starts — and this step exists so that
+      # allow-list is VISIBLE in the run log rather than only in the YAML.
+      - name: Announce the dispatched action
+        env:
+          DISPATCH_ACTION: ${{ inputs.action }}
+        run: |
+          set -euo pipefail
+          case "${DISPATCH_ACTION:-inventory}" in
+            inventory) echo "dispatched action=${DISPATCH_ACTION:-inventory} (the only member of this lever's allow-list)" ;;
+            *)
+              echo "::error::Dispatched action read as '${DISPATCH_ACTION}', which is outside this lever's one-member allow-list {inventory}. Refusing to proceed. restart / push-config / reclaim are documented as BLOCKED ON A PROVISIONING EVENT and are deliberately not dispatchable here."
+              exit 1
+              ;;
+          esac
+
+      # STEP ORDER IS LOAD-BEARING — this must precede the preflight below.
+      #
+      # The Doppler CLI is NOT preinstalled on GitHub-hosted runners, and the bridge composite
+      # installs its OWN copy only at bridge-up, several steps later. A token preflight placed
+      # before this step fails `command -v doppler`, exits 2, and prints a specific FALSE
+      # verdict on every single run — the #6122 failure verbatim, which the bridge action's own
+      # header records. reusable-release.yml carries this same dedicated step for this reason.
+      - name: Install Doppler CLI (for the token preflight)
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      # Preflight the CF Access credential that admits this runner at the edge. FOUR-VALUED,
+      # and only ONE of the four aborts.
+      #
+      # AP-021: a verdict must never collapse "could not check" into "bad". `unverifiable` and
+      # `unmeasured` are carried FORWARD to the bridge, not treated as failure — for a lever
+      # whose whole purpose is to obtain a number during a live incident, aborting before the
+      # bridge on an ungraded credential is the wrong trade. The origin-reachability check
+      # inside scripts/zot-inventory.sh is the real gate.
+      - name: Preflight — registry-push Access token is still live
+        id: token_preflight
+        env:
+          # DOPPLER_TOKEN_PRD, not the generic DOPPLER_TOKEN. REGISTRY_PUSH_ACCESS_TOKEN_*
+          # lives in the `prd` ROOT config (tunnel.tf), while DOPPLER_TOKEN is scoped to the
+          # `prd_terraform` BRANCH and cannot read the prd root — branch configs do NOT
+          # inherit from it. A Doppler service token also reads exactly ONE config and ignores
+          # DOPPLER_CONFIG, so a mis-scoped token cannot even enumerate.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
+          DOPPLER_PROJECT: soleur
+        run: |
+          set -uo pipefail
+          # `|| rc=$?` is LOAD-BEARING (AP-022 / ADR-170). `set -uo pipefail` does NOT clear
+          # `-e`, and Actions runs a `run:` block with no `shell:` key under
+          # `bash --noprofile --norc -eo pipefail {0}` — so a BARE invocation of a script that
+          # exits non-zero aborts the step at that line, and `rc=$?`, the $GITHUB_OUTPUT write
+          # and every annotation below never execute. The step would print nothing and exit 1.
+          if [[ -n "${GITHUB_WORKSPACE:-}" && -r "${GITHUB_WORKSPACE}/scripts/zot-mirror-diagnosis.sh" ]]; then
+            # GUARDED source: an unguarded source of a missing helper under the active `-e`
+            # aborts before any annotation prints, suppressing the only report of the failure.
+            # shellcheck source=/dev/null
+            source "${GITHUB_WORKSPACE}/scripts/zot-mirror-diagnosis.sh"
+          fi
+          rc=0
+          bash scripts/check-cloudflare-token-drift.sh --only REGISTRY_PUSH_ACCESS_TOKEN \
+            --json-file "$RUNNER_TEMP/registry-push-token.json" || rc=$?
+          # Derived from the JSON counts, NOT from `rc`: the detector exits 1 for
+          # `DEAD_N > 0 OR UNVERIFIABLE_N > 0`, and UNVERIFIABLE is not STALE — it is
+          # UNMEASURED. Mapping rc=1 to "stale" would produce a confident accusation about a
+          # credential nothing graded. The ladder lives in scripts/zot-mirror-diagnosis.sh so
+          # it is unit-tested directly rather than only in CI.
+          if declare -F zot_mirror_verdict >/dev/null 2>&1; then
+            verdict="$(zot_mirror_verdict "$rc" "$RUNNER_TEMP/registry-push-token.json")"
+            cause="$(zot_mirror_unverifiable_cause "$RUNNER_TEMP/registry-push-token.json")"
+          else
+            # No helper: publish `unmeasured`, never a guess.
+            verdict="unmeasured"; cause="unknown"
+          fi
+          checked_at="$(date -u +%H:%M:%SZ)"
+          {
+            printf 'verdict=%s\n'    "$verdict"
+            printf 'checked_at=%s\n' "$checked_at"
+            printf 'cause=%s\n'      "$cause"
+          } >> "$GITHUB_OUTPUT"
+          case "$verdict" in
+            live)
+              echo "::notice::Registry-push Access service token verified live at ${checked_at} (verdict=${verdict}). Cloudflare Access admitted these exact credentials, so the credential is ruled OUT by measurement if the bridge still fails."
+              ;;
+            stale)
+              # The ONLY aborting arm. `stale` is a MEASURED dead credential in at least one
+              # Doppler config, and the bridge cannot come up without it — proceeding would
+              # spend the whole budget to arrive at a refusal this step already graded.
+              echo "::error::Registry-push CF Access service token graded verdict=${verdict} at ${checked_at} — MEASURED dead in at least one Doppler config by scripts/check-cloudflare-token-drift.sh. Aborting before the bridge: set the live REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET in EVERY config the detector names (branch configs do NOT inherit from the 'prd' root), then re-dispatch."
+              exit 1
+              ;;
+            unverifiable)
+              echo "::warning::Registry-push token could not be graded (verdict=${verdict}, cause=${cause}) at ${checked_at}. This is NOT a claim that it is stale and is NOT a reason to rotate. Carrying the verdict forward to the bridge, which will repeat it if the dial fails. Proceeding — the origin-reachability check in scripts/zot-inventory.sh is this run's gate."
+              ;;
+            *)
+              echo "::warning::Token preflight could not run to a verdict (verdict=${verdict}, detector exit ${rc}). No conclusion is drawn about the registry-push token. Carrying it forward as ${verdict} and proceeding — the origin-reachability check in scripts/zot-inventory.sh is this run's gate."
+              ;;
+          esac
+
+      # Bring up the raw TCP forward to zot, WITHOUT a docker session.
+      #
+      # `skip-docker-login: 'true'` (#7278) — the fifth caller of this composite and the first
+      # to pass it. Two reasons, in priority order:
+      #   1. FAIL-CLOSED AVOIDANCE (primary). scripts/registry-pull-path-health.sh records that
+      #      the bridge "exits 1 on a failed listener bind AND on a failed docker login". With
+      #      zot_restarts climbing ~4.8/min, the most likely outcome of NOT skipping is that the
+      #      composite aborts and the inventory never runs — the lever defeated by an unrelated
+      #      gate during exactly the condition it exists to measure.
+      #   2. PRIVILEGE (secondary, and stated precisely). Skipping means ZOT_PUSH_* is never
+      #      materialized into this job's environment and no docker session is left
+      #      authenticated to the sole pull path. It does NOT mean the job cannot reach those
+      #      values: DOPPLER_TOKEN_PRD is scoped to the whole `soleur/prd` ROOT config, and
+      #      Doppler service tokens are config-scoped, not secret-scoped. The mechanism bought
+      #      here is NON-MATERIALIZATION, not non-possession.
+      #
+      # WHAT SKIPPING COSTS, stated because scripts/zot-inventory.sh has to make up for it: the
+      # docker-login step is the only thing in the composite that DIALS THE ORIGIN. The bridge
+      # step's readiness probe is a local-listener check whose own comment says it "cannot
+      # distinguish a working bridge from a dead one". So this step now returns success with
+      # ZERO origin proof, and the enumerator opens with its own explicit `GET /v2/`
+      # reachability verdict before it is entitled to claim any application-layer reason.
+      #
+      # All three measured-verdict inputs are FORWARDED. They exist so the composite's failure
+      # messages branch on something this job measured; passing only the token would run a
+      # preflight and then report `unmeasured`, committing the ADR-166 defect the preflight
+      # exists to avoid. The `|| 'unmeasured'` guards are load-bearing and are NOT made
+      # redundant by the composite's `default:` — a composite default applies when an input is
+      # OMITTED, not when it is passed as an explicitly-empty string, which is what a skipped
+      # or aborted producer step yields.
+      - name: Bridge to zot registry (CF Tunnel, no docker login)
+        id: zot_bridge
+        uses: ./.github/actions/cf-tunnel-registry-bridge
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_PRD }}
+          cloudflared-version: "2026.5.0"
+          cloudflared-sha256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+          skip-docker-login: 'true'
+          token-verdict: ${{ steps.token_preflight.outputs.verdict || 'unmeasured' }}
+          token-checked-at: ${{ steps.token_preflight.outputs.checked_at || '' }}
+          token-cause: ${{ steps.token_preflight.outputs.cause || 'unknown' }}
+
+      # SELF-PULL, not a dashboard read (hr-no-dashboard-eyeball-pull-data-yourself). The
+      # registry host emits SOLEUR_ZOT_DISK every 5 minutes; `fs_size_gb` and `pcent` come from
+      # there, never from a human reading a graph. Taking the sample BEFORE the sweep pins the
+      # disk state the delta is computed against, and `disk_sample_age_s` travels with it so a
+      # stale sample cannot silently stale the number.
+      #
+      # `--no-archive` is correct here and is not a shortcut: the row wanted is minutes old, so
+      # the hot window (~40 min) always contains it, and betterstack-query.sh fails the WHOLE
+      # query if the archive arm errors. On a seconds-to-minutes-old row the S3 arm can only
+      # contribute failure.
+      - name: Self-pull SOLEUR_ZOT_DISK (start sample)
+        id: disk_start
+        env:
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+        run: |
+          set -uo pipefail
+          # The query/anchor/decode/field logic now lives in scripts/zot-disk-sample.sh, under
+          # test. It used to be ~60 lines of `run:` body here and another ~50 in the end-sample
+          # step, byte-identical in places — logic in workflow YAML that no test could reach,
+          # which is the arrangement this same workflow argues against for its pass condition.
+          rc=0
+          SAMPLE="$(bash scripts/zot-disk-sample.sh --since 30m --limit 50)" || rc=$?
+          # The START sample is FATAL to miss: without it there is no baseline to compute
+          # delta_gb against. The script reports WHAT happened; this step decides it is fatal.
+          case "$rc" in
+            0) ;;
+            2) echo "::error::SOLEUR_ZOT_DISK start-sample query could not answer (query_rc=2). This run has no disk baseline, so delta_gb cannot be computed. Nothing was measured — re-dispatch once the readback path answers."; exit 1 ;;
+            3) echo "::error::The 30-minute window returned no SOLEUR_ZOT_DISK row matching the emission envelope (rows_matched=0) while the query itself succeeded. The host's 5-minute heartbeat is not landing, so fs_size_gb/pcent are unavailable. This is a MEASURED absence of the heartbeat, not a statement about zot itself."; exit 1 ;;
+            4) echo "::error::A SOLEUR_ZOT_DISK row matched the emission envelope but its double-encoded payload would not decode. No disk baseline is available. This is a decode failure on a row that WAS returned, not an absence of the heartbeat."; exit 1 ;;
+            *) echo "::error::scripts/zot-disk-sample.sh exited ${rc}, which is outside its documented contract (0/2/3/4). Refusing to proceed on an unclassified result."; exit 1 ;;
+          esac
+          val() { printf '%s\n' "$SAMPLE" | awk -F= -v k="$1" '$1==k {print $2; exit}'; }
+          FS_SIZE_GB="$(val fs_size_gb)"; PCENT="$(val pcent)"; BOOT_ID="$(val boot_id)"
+          RESTARTS="$(val zot_restarts)"; AGE_S="$(val sample_age_s)"; DT="$(val sample_at)"
+          {
+            printf 'ZOT_DISK_FS_SIZE_GB=%s\n'       "$FS_SIZE_GB"
+            printf 'ZOT_DISK_PCENT=%s\n'            "$PCENT"
+            printf 'ZOT_DISK_BOOT_ID=%s\n'          "$BOOT_ID"
+            printf 'ZOT_DISK_RESTARTS_AT_START=%s\n' "$RESTARTS"
+            printf 'ZOT_DISK_SAMPLE_AGE_S=%s\n'     "$AGE_S"
+            printf 'ZOT_DISK_SAMPLE_AT=%s\n'        "$DT"
+          } >> "$GITHUB_ENV"
+          {
+            printf 'restarts=%s\n' "$RESTARTS"
+            printf 'boot_id=%s\n'  "$BOOT_ID"
+            printf 'age_s=%s\n'    "$AGE_S"
+          } >> "$GITHUB_OUTPUT"
+          echo "SOLEUR_ZOT_DISK start sample: fs_size_gb=${FS_SIZE_GB} pcent=${PCENT} zot_restarts=${RESTARTS} boot_id=${BOOT_ID} sample_age_s=${AGE_S} sampled_at=${DT}"
+      # THE SWEEP. scripts/zot-inventory.sh owns ALL registry and telemetry egress and reaches
+      # exactly two destinations: http://127.0.0.1:5000 (this job's bridge) and the pinned
+      # Better Stack ingest URL. It reads its own credentials from Doppler (ZOT_PULL_USER /
+      # ZOT_PULL_TOKEN, BETTERSTACK_LOGS_TOKEN) and `::add-mask::`s each immediately — this
+      # repository is PUBLIC and `doppler secrets get --plain` values are NOT auto-masked.
+      #
+      # ── ENV CONTRACT (the seam between this workflow and the enumerator) ──
+      #   DOPPLER_TOKEN / DOPPLER_PROJECT / DOPPLER_CONFIG  — the prd-root read credential.
+      #   ZOT_DISK_FS_SIZE_GB / ZOT_DISK_PCENT / ZOT_DISK_BOOT_ID /
+      #   ZOT_DISK_RESTARTS_AT_START / ZOT_DISK_SAMPLE_AGE_S / ZOT_DISK_SAMPLE_AT
+      #                                                    — the start sample, exported above.
+      #   BETTERSTACK_QUERY_*                              — PASSED BUT NOT YET CONSUMED. This
+      #                                                      said the script takes its own END
+      #                                                      sample; it does not — grep it for
+      #                                                      BETTERSTACK_QUERY or
+      #                                                      betterstack-query.sh and both
+      #                                                      return zero. So ZOT_RESTARTS_AT_END
+      #                                                      is set by no production caller,
+      #                                                      zot_restarts_at_end ships `unknown`
+      #                                                      on every run, and the enumerator's
+      #                                                      restart_during_sweep arm is
+      #                                                      unreachable outside its tests. The
+      #                                                      straddle IS still detected, at job
+      #                                                      level in the end-sample step below,
+      #                                                      and reaches the issue comment — it
+      #                                                      just never reaches the DURABLE
+      #                                                      marker. Tracked in #7377, not fixed
+      #                                                      here: giving the
+      #                                                      enumerator a network call inside
+      #                                                      its emit path is not a change to
+      #                                                      make late in a review pass. The
+      #                                                      vars stay wired so the follow-up is
+      #                                                      a script change only. The emission
+      #                                                      is inside the script, so the
+      #                                                      workflow's own end sample below
+      #                                                      lands too late to reach the marker;
+      #                                                      it is the JOB-LEVEL straddle check
+      #                                                      and the input to the issue comment.
+      #   MARKER_FILE                                      — where this step captures the
+      #                                                      enumerator's STDOUT so
+      #                                                      later steps can read it back.
+      # ZOT_PUSH_USER / ZOT_PUSH_TOKEN are deliberately NOT set anywhere in this job. The
+      # script asserts they are unset at entry and exits non-zero if either is populated —
+      # a runtime check on the environment, which holds even if a caller mis-keys the
+      # composite's `skip-docker-login` input (Actions does not fail on an undeclared key).
+      - name: Enumerate zot manifests and emit SOLEUR_ZOT_INVENTORY
+        id: inventory
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          # The enumerator's OWN name for the start sample. `disk_start` also exports
+          # ZOT_DISK_RESTARTS_AT_START to $GITHUB_ENV for the straddle step below; the script
+          # reads ZOT_RESTARTS_AT_START. Both names are live on purpose — they are consumed by
+          # different readers, and collapsing them would silently starve one.
+          ZOT_RESTARTS_AT_START: ${{ steps.disk_start.outputs.restarts }}
+          MARKER_FILE: ${{ runner.temp }}/zot-inventory-marker.txt
+        # The script emits the marker line on STDOUT (diagnostics go to stderr) and POSTs it to
+        # Better Stack itself. Capture stdout so `assert_marker` and the #7339 comment can read
+        # the exact line back without re-deriving it.
+        #
+        # `rc` is captured, not inherited: the runner's implicit `bash -eo pipefail {0}` would
+        # abort this step the instant the enumerator exits non-zero, and a non-zero exit is a
+        # REPORTABLE outcome here (partial/failed both carry a marker worth reading). Aborting
+        # would throw away the very line the next steps exist to publish (AP-022).
+        run: |
+          set -uo pipefail
+          rc=0
+          # `doppler run --` is REQUIRED and was missing: the script reads
+          # ZOT_PULL_USER / ZOT_PULL_TOKEN / BETTERSTACK_LOGS_TOKEN from the
+          # AMBIENT environment and shells out to doppler nowhere, so a bare
+          # invocation died at its first precondition check with exit 2 on every
+          # dispatch. Setting DOPPLER_* in `env:` configures the CLI; it does not
+          # inject the secrets.
+          #
+          # All three live in `soleur/prd` — MEASURED, not inferred from
+          # zot-registry.tf (which mirrors BETTERSTACK_LOGS_TOKEN into the
+          # ISOLATED soleur-registry/prd project; reading only the .tf suggests,
+          # wrongly, that the prd root does not carry it).
+          #
+          # `--only-secrets` is LOAD-BEARING, not hygiene. `soleur/prd` also carries
+          # ZOT_PUSH_USER / ZOT_PUSH_TOKEN (zot-registry.tf:337-348, same project and
+          # config), and a bare `doppler run --` injects the WHOLE config — so the
+          # enumerator's own D7 refusal at zot-inventory.sh:130 fired on every dispatch
+          # and the lever exited 2 without measuring anything. Measured against live
+          # Doppler: bare injects all five names; this form injects exactly these three.
+          # The two requirements — pull+logs PRESENT, push ABSENT — are unsatisfiable
+          # under whole-config injection, so scoping is the only fix that admits both.
+          #
+          # Fail-closed by construction: doppler exits non-zero if a named secret is
+          # missing (--no-exit-on-missing-only-secrets is opt-in and deliberately NOT
+          # set), so a removed pull credential aborts here rather than at a precondition.
+          # This is also what makes the ADR's NON-MATERIALIZATION claim structural: the
+          # push credential is never placed in the environment, rather than placed and
+          # then refused.
+          doppler run \
+            --only-secrets ZOT_PULL_USER \
+            --only-secrets ZOT_PULL_TOKEN \
+            --only-secrets BETTERSTACK_LOGS_TOKEN \
+            -- bash scripts/zot-inventory.sh > "$MARKER_FILE" || rc=$?
+          echo "--- emitted marker ---"
+          cat "$MARKER_FILE" || true
+          echo "--- enumerator exit: ${rc} ---"
+          exit "$rc"
+
+      # The workflow's own END sample. Deliberately AFTER the sweep and deliberately NOT the
+      # marker's source: the marker is emitted inside the script above, so anything measured
+      # here is already too late to appear in it. What this step is for is the JOB-LEVEL
+      # straddle verdict and the figure quoted in the issue comment — a sweep that straddled a
+      # zot restart enumerated two different stores, and the reader of #7247 needs to know that
+      # without opening the run log.
+      - name: Self-pull SOLEUR_ZOT_DISK (end sample) + straddle verdict
+        id: disk_end
+        if: ${{ !cancelled() && steps.inventory.conclusion != 'skipped' }}
+        env:
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          RESTARTS_AT_START: ${{ steps.disk_start.outputs.restarts }}
+          BOOT_ID_AT_START: ${{ steps.disk_start.outputs.boot_id }}
+        run: |
+          set -uo pipefail
+          # Same extracted sampler as the start step. The difference between the two call sites
+          # is SEVERITY, not logic: a missing END sample costs only the straddle check, so every
+          # non-zero exit degrades to straddle=unknown with a warning rather than failing the job.
+          rc=0
+          SAMPLE="$(bash scripts/zot-disk-sample.sh --since 30m --limit 50)" || rc=$?
+          straddle="unknown"
+          restarts_end=""
+          boot_id_end=""
+          case "$rc" in
+            0)
+              val() { printf '%s\n' "$SAMPLE" | awk -F= -v k="$1" '$1==k {print $2; exit}'; }
+              restarts_end="$(val zot_restarts)"
+              boot_id_end="$(val boot_id)"
+              ;;
+            2) echo "::warning::SOLEUR_ZOT_DISK end-sample query could not answer (query_rc=2), so the restart-straddle check is reported as straddle=${straddle}. The sweep's own completeness fields in the marker are unaffected." ;;
+            3) echo "::warning::The 30-minute window returned no SOLEUR_ZOT_DISK row matching the emission envelope (rows_matched=0), so the restart-straddle check is reported as straddle=${straddle}." ;;
+            4) echo "::warning::A SOLEUR_ZOT_DISK end-sample row matched the envelope but its double-encoded payload would not decode, so the restart-straddle check is reported as straddle=${straddle}." ;;
+            *) echo "::warning::scripts/zot-disk-sample.sh exited ${rc}, outside its documented contract (0/2/3/4); straddle=${straddle}." ;;
+          esac
+          # A NUMERIC-LITERAL COMPARISON NEEDS A NON-NUMERIC DISCRIMINATOR HERE, because both
+          # operands can be the empty string and `[[ "" == "" ]]` would report a clean sweep from
+          # two ABSENT readings. Require both to be non-empty first.
+          if [[ -n "$restarts_end" && -n "${RESTARTS_AT_START:-}" ]]; then
+            if [[ "$restarts_end" == "${RESTARTS_AT_START}" && "$boot_id_end" == "${BOOT_ID_AT_START:-}" ]]; then
+              straddle="no"
+            else
+              straddle="yes"
+            fi
+          fi
+          {
+            printf 'straddle=%s\n'     "$straddle"
+            printf 'restarts_end=%s\n' "$restarts_end"
+            printf 'boot_id_end=%s\n'  "$boot_id_end"
+          } >> "$GITHUB_OUTPUT"
+          if [[ "$straddle" == "yes" ]]; then
+            echo "::warning::zot restarted during the sweep (straddle=${straddle}: zot_restarts ${RESTARTS_AT_START:-?} -> ${restarts_end}, boot_id ${BOOT_ID_AT_START:-?} -> ${boot_id_end}). The enumeration crossed two store states; read enumeration_complete in the marker before drawing any conclusion from delta_gb."
+          else
+            echo "SOLEUR_ZOT_DISK end sample: straddle=${straddle} zot_restarts=${restarts_end:-n/a} boot_id=${boot_id_end:-n/a}"
+          fi
+      # THE PASS CONDITION, and it lives in a script rather than in this YAML on purpose: a
+      # pass condition written into workflow YAML is one no test can reach. The emitter's exit
+      # code cannot fake a row in the warehouse, so the run is green only after the marker for
+      # THIS run_id is READ BACK out of Better Stack carrying enumeration_complete=true.
+      #
+      # POLL BUDGET, stated as a multiple of a MEASURED floor rather than picked: the Phase-0
+      # half-probe measured POST -> queryable at 17 s (POST returns HTTP 202). 340 s is 20x
+      # that floor. Below the floor, non-observation is `unknown`, never a verdict.
+      # The bound on that measurement is recorded honestly: it was taken from a workstation and
+      # does NOT prove GitHub-runner egress against the eu-fsn-3 region pin (H6). This step is
+      # the first runner-side measurement of it.
+      - name: Round-trip assert — read the marker back out of Better Stack
+        id: assert_marker
+        # `!= 'skipped'`, NOT `== 'success'`. The enumerator exits 1 precisely when the ingest
+        # POST is rejected (verdict=ingest_rejected_http_<code>), so a `== 'success'` gate skips
+        # this step on exactly the runs whose `--ingest-http-code` arm exists to classify — the
+        # step plumbed INGEST_HTTP_CODE in for a case it could never reach, and H6 ("can the
+        # runner reach the eu-fsn-3 ingest pin?") attaches THERE. Matching the comment step's
+        # gate means the assert now runs whenever the enumerator ran at all.
+        if: ${{ !cancelled() && steps.inventory.conclusion != 'skipped' }}
+        env:
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          INGEST_HTTP_CODE: ${{ steps.inventory.outputs.ingest_http_code }}
+          # DERIVED, not restated. Setting ZOT_ASSERT_POLL_BUDGET_S here pinned the product and
+          # left the script's multiple at its default 6, so every production verdict line
+          # advertised `poll_budget_s=340 poll_budget_multiple=6 measured_ingest_latency_s=17`
+          # — the field whose whole purpose is making the budget auditable reported a
+          # derivation that does not multiply out. Passing the MULTIPLE keeps 20x17=340 and
+          # makes a future re-measurement of the 17 s floor move the budget with it.
+          ZOT_ASSERT_POLL_BUDGET_MULTIPLE: '20'
+          ZOT_ASSERT_POLL_INTERVAL_S: '20'
+        # --run-id is REQUIRED and must be numeric: the match is anchored on
+        # `SOLEUR_ZOT_INVENTORY run_id=<numeric>` precisely so a GitHub webhook echo of this
+        # plan's own prose cannot satisfy it. --ingest-http-code carries the emitter's observed
+        # POST status so a region-pin refusal surfaces as ingest_rejected_http_<code> rather
+        # than being misreported as a missing marker (H6 attaches THERE, not to non-observation).
+        run: |
+          set -uo pipefail
+          bash scripts/zot-inventory-assert-marker.sh \
+            --run-id "$GITHUB_RUN_ID" \
+            --ingest-http-code "${INGEST_HTTP_CODE:-}"
+
+      # DURABLE HOME #2 for the number. Better Stack is the primary one; this comment exists
+      # because #7247 is where the operator is already looking, and a 90-day Actions run log is
+      # not a durable record.
+      #
+      # TARGET: #7339, not #7247 and not #7278.
+      #
+      # The original rationale here was "#7247 is OPEN and action-required". It closed at
+      # 2026-08-06T13:18:32Z, mid-review — so that rationale now selects exactly the outcome
+      # it was written to avoid (a comment on a closed issue is a comment nobody reads), and
+      # this is the failure mode ADR-172 predicted when it argued the trackers must be
+      # DEDICATED issues precisely because "#7247 is a live P1 that will close and take any
+      # tracker on it with it."
+      #
+      # #7339 is the dedicated, OPEN follow-through whose sole directive is "observe a real
+      # SOLEUR_ZOT_INVENTORY marker with enumeration_complete=true" — i.e. it exists to
+      # receive this number, and it stays open until the number arrives.
+      #
+      # `!cancelled()` rather than `always()`: this step MUTATES something (it writes to a
+      # public issue), and a cancelled run should not leave a partial record behind.
+      - name: Record the marker + its interpretation on #7339
+        if: ${{ !cancelled() && steps.inventory.conclusion != 'skipped' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MARKER_FILE: ${{ runner.temp }}/zot-inventory-marker.txt
+          INVENTORY_OUTCOME: ${{ steps.inventory.outcome }}
+          ASSERT_OUTCOME: ${{ steps.assert_marker.outcome }}
+          STRADDLE: ${{ steps.disk_end.outputs.straddle }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          # SELECT the marker lines; never `cat` the whole stream into a public
+          # comment. Two independent reasons, both measured:
+          #
+          #  1. CREDENTIALS. The enumerator's stdout is this file. Anything it
+          #     prints — including, before this was fixed, its `::add-mask::`
+          #     lines carrying the RAW token values — would be published verbatim
+          #     on world-readable issue #7247. The masks now go to stderr, and
+          #     this grep is the second gate so a future stdout line cannot
+          #     re-open the hole.
+          #  2. REGISTRY-CONTROLLED BYTES. The stream also carries ~266 per-digest
+          #     `sha256:…:size` lines built from registry-supplied strings. A
+          #     hostile digest containing a newline and a fence terminator would
+          #     break out of the code fence and inject Markdown into a comment
+          #     posted under GITHUB_TOKEN on an issue agents read.
+          #
+          # `-s` not `-r`: the redirect CREATES the file, so `-r` is always true
+          # and the fallback below was unreachable — a precondition refusal
+          # (exit 2, message on stderr) posted an EMPTY fence with no cause onto
+          # a live P1 incident.
+          MARKER="(no marker emitted — the enumerator refused a precondition or died before its emit step; see the run log)"
+          if [[ -s "$MARKER_FILE" ]]; then
+            SELECTED="$(grep -E '^SOLEUR_ZOT_INVENTORY(_INGEST)? ' "$MARKER_FILE" || true)"
+            [[ -n "$SELECTED" ]] && MARKER="$SELECTED"
+          fi
+          # HEREDOC, never string-concatenation into a flag. The marker line is machine-built
+          # and space-free by construction, but it is fenced anyway so a future field can never
+          # break out of the comment body.
+          BODY_FILE="$RUNNER_TEMP/inventory-comment.md"
+          {
+            echo "### Read-only zot disk inventory — dispatched run"
+            echo ""
+            echo "Emitted marker (also queryable in Better Stack Logs source 2457081):"
+            echo ""
+            echo '```'
+            printf '%s\n' "$MARKER"
+            echo '```'
+            echo ""
+            echo "| Step | Outcome |"
+            echo "| --- | --- |"
+            echo "| enumerate + emit | \`${INVENTORY_OUTCOME}\` |"
+            echo "| round-trip readback | \`${ASSERT_OUTCOME:-not-run}\` |"
+            echo "| zot restarted mid-sweep | \`${STRADDLE:-unknown}\` |"
+            echo ""
+            echo "**How to read \`delta_gb\`, and what it does NOT say.**"
+            echo ""
+            echo "- \`delta_gb\` is an **upper bound on unreferenced blob bytes**, not a measurement of them. Two named candidates account for the same number with completely different remedies: zot's dedupe cache DB (\`\"dedupe\": true\`) and orphaned \`.uploads/\` staging sessions. **No cause is asserted here.**"
+            echo "- A \`delta_gb\` under **~3 GB is not distinguishable from zero** — \`pcent\` excludes ext4's ~5 % root reserve while \`fs_size_gb\` is the total, which bakes ~2.95 GB into the arithmetic on a 59 GB filesystem."
+            echo "- If \`enumeration_complete=false\`, this run licenses **no** conclusion at all. Re-dispatch."
+            echo "- If \`zot restarted mid-sweep\` is \`yes\`, the sweep crossed two store states."
+            echo ""
+            echo "Run: ${RUN_URL}"
+          } > "$BODY_FILE"
+          rc=0
+          gh issue comment 7339 --repo "${GITHUB_REPOSITORY}" --body-file "$BODY_FILE" || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            # NON-FATAL BY DESIGN, and the reason is stated so nobody "fixes" it into a gate:
+            # Better Stack is the durable home and the readback step above already gated on it.
+            # Failing the run here would discard a successfully measured and successfully
+            # persisted number over a comment.
+            echo "::warning::gh issue comment on #7339 exited ${rc} (comment_rc=${rc}). The marker itself is unaffected — it is in Better Stack Logs source 2457081 and printed above. Re-post by hand from this run's log if the comment matters."
+          fi
+
+      # Teardown, copied from the composite's documented CALLER-SIDE TEARDOWN CONTRACT. The
+      # `docker logout` stays even though this job never logged in: `set +e`, `2>/dev/null` and
+      # `|| true` between them make it a no-op on a never-logged-in runner, and the contract is
+      # explicit that the block is copied verbatim rather than made mode-dependent.
+      - name: Tear down cloudflared registry bridge
+        if: always()
+        run: |
+          set +e
+          docker logout 127.0.0.1:5000 2>/dev/null || true
+          if [[ -n "${REGISTRY_BRIDGE_PID:-}" ]]; then
+            kill "$REGISTRY_BRIDGE_PID" 2>/dev/null || true
+          fi
+          [[ -f /tmp/cloudflared-registry.log ]] && tail -n 200 /tmp/cloudflared-registry.log || true
