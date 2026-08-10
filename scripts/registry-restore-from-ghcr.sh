@@ -299,23 +299,84 @@ ref_repo() {
 # The body is discarded to /dev/null: only the exit code is consumed, and a provenance blob can
 # carry build-time secrets that should not be materialised on the runner's disk.
 verify_blobs_of() {
-  local repo="$1" ref="$2" what="$3" blobs b
-  if ! crane_capture "$WORK/vb.out" "$WORK/vb.err" manifest $SINK_TLS_FLAG "$ref"; then
-    verify_die "$what" "$WORK/vb.err"
+  local repo="$1" ref="$2" what="$3" depth="${4:-0}"
+  local out="$WORK/vb.${depth}.out" err="$WORK/vb.${depth}.err" jqerr="$WORK/vb.${depth}.jqerr"
+  local kind blobs b n_declared n_children c_digest
+
+  if ! crane_capture "$out" "$err" manifest $SINK_TLS_FLAG "$ref"; then
+    verify_die "$what" "$err"
   fi
-  # rc, never `|| true`: jq's `.layers[]` streams, so a shape fault partway emits a TRUNCATED list
-  # that would otherwise pass the non-empty check with the remaining blobs never checked.
-  if ! blobs="$(jq -r '[(.config.digest // empty)] + [(.layers // [])[].digest] | .[]' "$WORK/vb.out" 2>"$WORK/vb.jqerr")"; then
-    die 4 "${what}: its blob list could not be fully enumerated, so an unknown number of blobs were never checked. jq: $(last_err "$WORK/vb.jqerr")"
+
+  # FOUR-WAY, mirroring verification 2's classification rather than assuming a plain manifest.
+  #
+  # A cosign signature is NOT reliably a plain manifest. Measured against GHCR 2026-08-10, the
+  # referrers tag `sha256-<hex>` of soleur-web-platform:v0.249.4 resolves to an OCI image INDEX
+  # whose single child carries `artifactType: application/vnd.dev.sigstore.bundle.v0.3+json`; the
+  # index itself has neither `.config` nor `.layers`. A config+layers-only enumeration therefore
+  # finds nothing there and reports "declares no blobs" -- a fail-closed abort on a perfectly
+  # healthy signature, which is what refused the recut on run 31392395980.
+  #
+  # `.manifests` present but NOT an array is a third thing: folding it into the plain branch would
+  # report "declares no blobs" for what is actually an unparseable shape, naming the wrong cause.
+  if ! kind="$(jq -r '
+        if (.manifests | type) == "array" then "index"
+        elif has("manifests")                 then "malformed"
+        elif (has("config") or has("layers")) then "manifest"
+        else "empty" end' "$out" 2>"$jqerr")"; then
+    die 4 "${what}: its manifest could not be classified, so nothing about it was verified. jq: $(last_err "$jqerr")"
   fi
-  [[ -n "$blobs" ]] || \
-    die 4 "${what} declares no blobs, so its presence cannot be verified."
-  while IFS= read -r b; do
-    [[ -n "$b" ]] || continue
-    if ! crane_capture /dev/null "$WORK/vb.blob.err" blob $SINK_TLS_FLAG "${repo}@${b}"; then
-      verify_die "the blob ${b} of ${what}" "$WORK/vb.blob.err"
-    fi
-  done <<< "$blobs"
+
+  case "$kind" in
+    index)
+      # One level only. A signature index containing an index is a shape nothing in this repo
+      # produces, so walking it would be verifying an artifact we have never measured; refusing is
+      # the same call verification 2 makes for a nested image index.
+      if (( depth > 0 )); then
+        die 4 "${what} is an index nested inside another index. This restore verifies one level of indirection, so a deeper nest is unverified — failing closed rather than reporting a pass it did not establish."
+      fi
+      n_declared="$(jq -r '(.manifests // []) | length' "$out" 2>/dev/null || echo 0)"
+      # `// "-"` for the same reason every @tsv field in verification 2 carries a sentinel: an
+      # absent key emits an EMPTY field, and `read` with IFS-whitespace collapses it away.
+      if ! children="$(jq -r '(.manifests // [])[] | [(.digest // "-")] | @tsv' "$out" 2>"$jqerr")"; then
+        die 4 "${what}: its child list could not be fully enumerated, so an unknown number of children were never checked. jq: $(last_err "$jqerr")"
+      fi
+      n_children=0
+      while IFS=$'\t' read -r c_digest; do
+        [[ -n "$c_digest" ]] || continue
+        n_children=$((n_children + 1))
+        [[ "$c_digest" != "-" ]] || \
+          die 4 "${what}: child ${n_children} declares no digest, so it cannot be addressed or verified."
+        verify_blobs_of "$repo" "${repo}@${c_digest}" "child ${c_digest} of ${what}" $((depth + 1))
+      done <<< "$children"
+      # Equality, not `> 0`: a truncated walk that checked one child of three must not read as a
+      # verified index.
+      (( n_children == n_declared )) || \
+        die 4 "${what}: enumerated ${n_children} children but the index declares ${n_declared}. The remainder were never verified."
+      (( n_children > 0 )) || \
+        die 4 "${what} is an index with no children, so it references nothing a host could pull."
+      ;;
+    manifest)
+      # rc, never `|| true`: jq's `.layers[]` streams, so a shape fault partway emits a TRUNCATED
+      # list that would otherwise pass the non-empty check with the remaining blobs never checked.
+      if ! blobs="$(jq -r '[(.config.digest // empty)] + [(.layers // [])[].digest] | .[]' "$out" 2>"$jqerr")"; then
+        die 4 "${what}: its blob list could not be fully enumerated, so an unknown number of blobs were never checked. jq: $(last_err "$jqerr")"
+      fi
+      [[ -n "$blobs" ]] || \
+        die 4 "${what} declares no blobs, so its presence cannot be verified."
+      while IFS= read -r b; do
+        [[ -n "$b" ]] || continue
+        if ! crane_capture /dev/null "$WORK/vb.blob.err" blob $SINK_TLS_FLAG "${repo}@${b}"; then
+          verify_die "the blob ${b} of ${what}" "$WORK/vb.blob.err"
+        fi
+      done <<< "$blobs"
+      ;;
+    malformed)
+      die 4 "${what}: its manifest carries a \`manifests\` field that is not an array, so it is neither a readable index nor a plain manifest. Nothing about it was verified."
+      ;;
+    *)
+      die 4 "${what} declares neither children nor blobs, so its presence cannot be verified."
+      ;;
+  esac
 }
 
 # verify_die <what> <errfile> — the ONE classifier for every verification-2 read.

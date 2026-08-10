@@ -504,6 +504,23 @@ mutate "E31 cosign signature payload no longer blob-verified (digest read-back o
   '  verify_blobs_of "${TARGET}/${repo}" "${TARGET}/${repo}:${sig_tag}" \' \
   '  false && verify_blobs_of "${TARGET}/${repo}" "${TARGET}/${repo}:${sig_tag}" \'
 
+# ── E32-E34: the signature-index walk (the regression that refused run 31392395980). ──────────
+# E31 above proved the signature is blob-verified AT ALL. It could not see that the enumeration
+# assumed the legacy simplesigning shape, because the only signature fixture WAS that shape. The
+# rows below pin the shape handling itself, which is what actually broke.
+
+mutate "E32 signature-index detection removed (an index falls through to config+layers and reads as blobless)" engine \
+  'if (.manifests | type) == "array" then "index"' \
+  'if false then "index"'
+
+mutate "E33 signature-index depth guard removed (a nested index recurses instead of failing closed)" engine \
+  '      if (( depth > 0 )); then' \
+  '      if false; then'
+
+mutate "E34 signature-index child-count equality weakened to a lower bound (a truncated walk reads as verified)" engine \
+  '      (( n_children == n_declared )) || \' \
+  '      (( n_children >= 0 )) || \'
+
 restore_pristine
 
 echo
@@ -515,8 +532,8 @@ echo
 # equality: the count is developer-incremented, so `-eq` would turn every added mutation into a
 # spurious failure. Derived from a green run, not from an expected number.
 dispatched=$(( caught + survived + expected ))
-if (( dispatched < 53 )); then
-  echo "harness: only ${dispatched} mutations were dispatched, floor is 53. Either mutations were removed without lowering this floor deliberately, or the dispatch itself is broken — in both cases the verdict below is not reportable." >&2
+if (( dispatched < 56 )); then
+  echo "harness: only ${dispatched} mutations were dispatched, floor is 56. Either mutations were removed without lowering this floor deliberately, or the dispatch itself is broken — in both cases the verdict below is not reportable." >&2
   exit 2
 fi
 

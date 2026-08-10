@@ -165,6 +165,42 @@ fx_oci_signature() {
   fixture "$1" "blob:$2@$D_SIG_LAYER" 0 ""
 }
 
+# fx_oci_signature_index <dir> <sink-repo> <sig-tag> — THE SHAPE PRODUCTION ACTUALLY HAS.
+#
+# Measured at GHCR 2026-08-10 against soleur-web-platform:v0.249.4: the referrers tag
+# `sha256-<hex>` resolves to an OCI image INDEX (no `.config`, no `.layers`) whose single child
+# carries `artifactType: application/vnd.dev.sigstore.bundle.v0.3+json`; that child has an EMPTY
+# config (`application/vnd.oci.empty.v1+json`, the well-known
+# sha256:44136fa3…aff8a) and one bundle layer. Both child blobs fetch clean.
+#
+# fx_oci_signature above models the LEGACY simplesigning shape. Keeping both is the point: the
+# legacy fixture alone is what let a config+layers-only enumeration ship green and then fail-closed
+# on the live artifact, refusing the recut on run 31392395980. Neither fixture may be deleted in
+# favour of the other — they are different disjuncts of the same predicate.
+D_SIGX_CHILD="sha256:38dc44fe9378484bf59a6ee46ad89788bd66e36bf701942a78ebc2e19fbbd56e"
+D_SIGX_CFG="sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+D_SIGX_BUNDLE="sha256:dd39b712b03ad1d2eb9e700ca6cdd9f8f28178c85c052a0aa1b2994f6313473e"
+fx_oci_signature_index() {
+  fixture "$1" "manifest:$2:$3" 0 '{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.index.v1+json",
+  "manifests": [
+    { "mediaType": "application/vnd.oci.image.manifest.v1+json", "size": 876, "digest": "'"$D_SIGX_CHILD"'", "artifactType": "application/vnd.dev.sigstore.bundle.v0.3+json" }
+  ]
+}'
+  fixture "$1" "manifest:$2@$D_SIGX_CHILD" 0 '{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "artifactType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+  "config": { "mediaType": "application/vnd.oci.empty.v1+json", "digest": "'"$D_SIGX_CFG"'", "size": 2 },
+  "layers": [
+    { "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json", "digest": "'"$D_SIGX_BUNDLE"'", "size": 10559 }
+  ]
+}'
+  fixture "$1" "blob:$2@$D_SIGX_CFG"    0 ""
+  fixture "$1" "blob:$2@$D_SIGX_BUNDLE" 0 ""
+}
+
 # fx_oci_raw <dir> <ref> <json> — an arbitrary sink manifest payload, for the degenerate shapes
 # (nested index child, attestation-only index, child with no digest, non-array .manifests).
 fx_oci_raw() { fixture "$1" "manifest:$2" 0 "$3"; }
@@ -1116,11 +1152,112 @@ rr_expect "127.0.0.1:5999/jikig-ai/soleur-web-platform:v0.249.4" "127.0.0.1:5999
 rr_expect "127.0.0.1:5999/jikig-ai/soleur-web-platform"           "127.0.0.1:5999/jikig-ai/soleur-web-platform"
 rr_expect "127.0.0.1:5999/jikig-ai/soleur-web-platform@${D1}"     "127.0.0.1:5999/jikig-ai/soleur-web-platform"
 
+# ── The signature is an INDEX at GHCR, not a plain manifest. ─────────────────────────────────
+# This is the regression that refused the recut on run 31392395980 with "declares no blobs" on a
+# perfectly healthy signature. The suite was green because the only signature fixture modelled the
+# LEGACY simplesigning shape. Positive control on the measured shape:
+sigx_fixtures() { # <dir> <target> — ok_fixtures, but signatures in the production index shape
+  local fx="$1" t="$2"
+  ok_fixtures "$fx" "$t"
+  # Replace the legacy plain-manifest signature with the measured index shape. `rm` so the plain
+  # arm cannot answer for the index arm -- the same vacuity that let the bug ship.
+  rm -f "$fx/manifest:${t}/${WP}:sha256-${D1#sha256:}" \
+        "$fx/manifest:${t}/${IB}:sha256-${D2#sha256:}"
+  fx_oci_signature_index "$fx" "${t}/${WP}" "sha256-${D1#sha256:}"
+  fx_oci_signature_index "$fx" "${t}/${IB}" "sha256-${D2#sha256:}"
+}
+
+fx="$TMP/fx-sigx"; calls="$TMP/calls-sigx"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 0 ]]; then
+  pass "a cosign signature in the GHCR index shape (sigstore bundle child) verifies and PASSES"
+else
+  fail "the production signature index shape must pass" "$rc" "$out"
+fi
+
+# ...and the legacy plain shape must KEEP passing. Both disjuncts, each alone.
+fx="$TMP/fx-sig-legacy"; calls="$TMP/calls-sig-legacy"; : > "$calls"
+ok_fixtures "$fx" "$TARGET"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 0 ]]; then
+  pass "the legacy simplesigning signature shape still passes (no shape was traded for the other)"
+else
+  fail "the legacy plain-manifest signature shape must keep passing" "$rc" "$out"
+fi
+
+# The walk must be real, not a shape check: the bundle blob is fetched.
+fx="$TMP/fx-sigx-blob"; calls="$TMP/calls-sigx-blob"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST" >/dev/null 2>&1 || true
+# The stub logs full argv, so $SINK_TLS_FLAG sits between the verb and the ref — anchor on the
+# verb at line start and the ref anywhere after it, never on the two being adjacent.
+if grep -qE "^blob .*${TARGET}/${WP}@${D_SIGX_BUNDLE}\$" "$calls"; then
+  pass "the sigstore bundle layer blob is actually fetched (the index walk reaches the child's blobs)"
+else
+  fail "the index walk must fetch the child's bundle blob" "?" "$(cat "$calls")"
+fi
+
+# NEGATIVE: an index-shaped signature whose bundle blob is gone must still FAIL. This is the whole
+# point of blob-verifying rather than HEADing the manifest -- gc can evict the payload while the
+# manifest survives, and that payload is what ci-deploy.sh feeds to cosign verify.
+fx="$TMP/fx-sigx-gone"; calls="$TMP/calls-sigx-gone"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+fixture "$fx" "blob:${TARGET}/${WP}@${D_SIGX_BUNDLE}" 1 "" \
+  "Error: GET http://${TARGET}/v2/${WP}/blobs/${D_SIGX_BUNDLE}: BLOB_UNKNOWN: blob unknown to registry"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+# Anchored on the VERDICT, not just rc 4. The pre-fix engine also exits 4 here — with "declares no
+# blobs", i.e. the right code for the wrong reason — so an rc-only assertion passes under both
+# engines and discriminates nothing. The evicted-blob path must name BLOB-INCOMPLETE.
+if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -qF "BLOB-INCOMPLETE" \
+   && ! printf '%s' "$out" | grep -qF "declares no blobs"; then
+  pass "an index-shaped signature with an evicted bundle blob exits 4 naming BLOB-INCOMPLETE"
+else
+  fail "an evicted sigstore bundle blob must exit 4 naming BLOB-INCOMPLETE" "$rc" "$out"
+fi
+
+# A signature index declaring zero children references nothing verifiable — fail closed, and say so
+# rather than reporting the pass that an empty loop would otherwise produce.
+fx="$TMP/fx-sigx-empty"; calls="$TMP/calls-sigx-empty"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+fx_oci_raw "$fx" "${TARGET}/${WP}:sha256-${D1#sha256:}" \
+  '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[]}'
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -qF "no children"; then
+  pass "a signature index with zero children exits 4 and names the empty index"
+else
+  fail "an empty signature index must exit 4 naming the cause" "$rc" "$out"
+fi
+
+# Depth 2 fails closed rather than recursing into a shape nothing here produces.
+fx="$TMP/fx-sigx-nested"; calls="$TMP/calls-sigx-nested"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+fx_oci_raw "$fx" "${TARGET}/${WP}@${D_SIGX_CHILD}" \
+  '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"'"$D_SIGX_BUNDLE"'"}]}'
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -qF "nested inside another index"; then
+  pass "an index nested inside a signature index fails closed at depth 2"
+else
+  fail "a depth-2 nested index must fail closed" "$rc" "$out"
+fi
+
+# A child carrying no digest cannot be addressed; it must not be silently skipped.
+fx="$TMP/fx-sigx-nodigest"; calls="$TMP/calls-sigx-nodigest"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+fx_oci_raw "$fx" "${TARGET}/${WP}:sha256-${D1#sha256:}" \
+  '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","size":876}]}'
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -qF "declares no digest"; then
+  pass "a signature-index child with no digest exits 4 rather than being skipped"
+else
+  fail "a digest-less signature child must exit 4" "$rc" "$out"
+fi
+
 # ── Anti-vacuity floor for THIS suite. ────────────────────────────────────────────────────────
 # Deleting the entire new assertion block left the suite green at 43/0, exit 0 — `fails -eq 0` is
 # satisfied by asserting nothing. A floor (never `-eq`, which would make every added assertion a
 # spurious failure) makes that deletion loud. Derived from a green run, ratchet upward only.
-MIN_ASSERTIONS=71
+MIN_ASSERTIONS=78
 if (( passes + fails < MIN_ASSERTIONS )); then
   printf '  FAIL harness: %d assertions ran, floor is %d — assertions were deleted or skipped\n' \
     "$((passes + fails))" "$MIN_ASSERTIONS"
