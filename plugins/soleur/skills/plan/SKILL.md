@@ -614,14 +614,21 @@ liveness_signal:    # what / cadence / alert_target / configured_in
 error_reporting:    # destination / fail_loud
 failure_modes:      # list of {mode, detection, alert_route}
 logs:               # where / retention
-discoverability_test:  # command (NO ssh) / expected_output
+discoverability_test:
+  command:              # one command an operator can run LOCALLY (NO ssh). preflight Check 10
+                        # EXECUTES this in a sandbox, so the first token must be an allowlisted
+                        # probe verb or a repo-relative path — see the reject conditions below.
+  expected_output:      # canonical "everything OK" output
+  credentials_required: # OPTIONAL — only when the property has no unauthenticated substitute
 ```
 
 **Reject conditions** (enforced at deepen-plan Phase 4.7 — see `deepen-plan/SKILL.md`):
 
 - Section missing entirely.
 - Any required field contains the substring `TODO`, `TBD`, `placeholder`, or `manual operator check` AS THE FIELD VALUE (a fallback note in surrounding prose mentioning TBD is allowed; the canonical "field is empty" reject regex is `^\s*<field>:\s*(TODO|TBD|placeholder|manual operator check)\s*$`).
-- `discoverability_test.command` contains `ssh ` (with trailing space — distinguish "ssh " the verb from "ssh-free" in docs).
+- `discoverability_test.command` contains `ssh ` (with trailing space — distinguish "ssh " the verb from "ssh-free" in docs). A `credentials_required` declaration does **not** override this.
+- `discoverability_test.command`'s first token is not on preflight Check 10's `PROBE_VERB_ALLOWLIST` (`curl bash grep rg jq python3 node bun printf git`). There is no path-shaped exemption — a first token containing `/` is subject to the same list. Check 10 executes this command inside a sandbox; the allowlist is schema validation ("can this run at all?"), not a security control, and every entry is an authority grant the sandbox — not the list — bounds. Wrap anything else in a repo-relative script committed in the SAME PR: it runs with `PATH=/usr/local/bin:/usr/bin:/bin`, `HOME` on tmpfs, no credential stores, and the repo read-only.
+- `discoverability_test.credentials_required` is present but placeholder text. The field is **optional**; when a probe verifies a property with no unauthenticated substitute, state the credential scope and the justification (`"<scope> — <why no unauthenticated probe verifies the same property>"`) and Check 10 skips it explicitly (`SKIP-DECLARED`) instead of executing it. A declaration that says nothing waives nothing.
 
 **Skip silently** when:
 
