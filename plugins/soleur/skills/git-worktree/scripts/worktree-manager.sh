@@ -56,7 +56,7 @@ else
   release_lock() { return 0; }
   acquire_lease() { return 0; }
   release_lease() { return 0; }
-  # FAIL CLOSED (#7278). This used to `return 1` — "no lease is active" — which
+  # FAIL CLOSED (#5454). This used to `return 1` — "no lease is active" — which
   # told cleanup-merged that EVERY worktree was free to reap at the exact moment
   # we had just admitted we cannot measure whether one is in use. That is a
   # fail-open default on a destructive, unrecoverable operation (it deletes the
@@ -1398,7 +1398,7 @@ create_worktree() {
   install_deps "$worktree_path"
 
   echo -e "${GREEN}✓ Worktree created successfully!${NC}"
-  # Say so on `create` too. Until #7278 only create_for_feature printed this,
+  # Say so on `create` too. Until #5454 only create_for_feature printed this,
   # so the operator-visible evidence read "only `feature` leases" — which was
   # true, and was the bug.
   echo -e "${BLUE}Worktree leased; release on session exit.${NC}"
@@ -1438,7 +1438,7 @@ create_for_feature() {
     # with the existing worktree — so acquire unconditionally.
     # `notrap` for the same reason as create_worktree's re-entry arm: this
     # process may be a co-tenant, and arming the release trap here would let a
-    # SIGINT delete a live incumbent's lease. Before #7278 this arm registered
+    # SIGINT delete a live incumbent's lease. Before PR #7373 this arm registered
     # no trap at all, so adding one would have been a NEW deletion path on a
     # previously-safe surface.
     _acquire_worktree_lease "$branch_name" feature-reentry notrap || true

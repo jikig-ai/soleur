@@ -101,7 +101,7 @@ Append a third scenario to the existing suite. It reuses this file's fixture idi
 Shape (mirroring `create-from-origin-main.test.sh`, which already proves `bash "$WM" --yes create <name>` runs green through `copy_env_files` and `install_deps` in exactly this fixture):
 
 ```bash
-# --- SCENARIO 3 (#7278 second half): `create` must ACQUIRE a lease -----------
+# --- SCENARIO 3 (PR #7373, second half): `create` must ACQUIRE a lease -----------
 # Scenarios 1-2 prove a lease PROTECTS a worktree. This proves one gets WRITTEN
 # by the entry point the autonomous pipeline actually calls. A lease layer that
 # protects but is never acquired protects nothing.
@@ -132,7 +132,7 @@ if [[ -f "$LEASE3" ]]; then
     && pass "scenario 3: lease carries a pid= line (real acquire_lease, not a stub)" \
     || fail "scenario 3: lease file exists but has no pid= line"
 else
-  fail "scenario 3: NO lease written by --yes create — this is the #7278 second half \
+  fail "scenario 3: NO lease written by --yes create — this is the second half (PR #7373) \
 (dir: $(ls -A "$LEASE_ROOT3/leases" 2>/dev/null || echo MISSING))"
 fi
 ```
@@ -140,7 +140,7 @@ fi
 Then raise the floor:
 
 ```bash
-MIN_ASSERTIONS=15  # 3 -> 6 -> 9 -> 15 (#7278 scenarios 3-6; see the 2026-08-09 review addendum)
+MIN_ASSERTIONS=15  # 3 -> 6 -> 9 -> 15 (PR #7373 scenarios 3-6; see the 2026-08-09 review addendum)
 ```
 
 Confirm RED: run the suite before Phase 2 and record that it fails at the lease-file assertion, not at the exit-0 assertion. **If it fails at exit-0 instead, the fixture is wrong, not the code** — fix the fixture before proceeding, or the Phase 2 green is vacuous.
@@ -193,7 +193,7 @@ Comment-only. In `_register_lease_release_trap`, the sentence asserting that `cr
 
 ```
   # `create_worktree` acquires the lease and registers this trap IN THE SAME
-  # PROCESS (as of #7278 — before that it did neither, and only
+  # PROCESS (as of PR #7373 — before that it did neither, and only
   # `create_for_feature` did), and that process exits normally on success.
   # …
   # Measured: the leases directory is EMPTY the instant
@@ -219,7 +219,7 @@ Run, in order:
 
 1. **Subject-under-test match.** The defect is in `worktree-manager.sh`, a plugin script. `session-state.test.sh` tests the `session-state.sh` *library primitives* (`acquire_lease`, `is_lease_active`, `sweep_orphan_leases` in isolation). Those primitives are all correct here — the bug is that a caller never calls them. Asserting a plugin script's call-site behaviour from the hooks-library suite would put the assertion in the wrong subject's suite and make the 39-assertion floor cover something it does not describe.
 2. **The fixture already exists.** `lease-protects-active.test.sh` already stands up a bare repo, a `SOLEUR_SESSION_STATE_ROOT` override, worktrees, and a `PASS`/`FAIL` harness; `create-from-origin-main.test.sh` next door already proves the `--yes create` invocation runs green in this fixture family. Scenario 3 is an append, not a new harness.
-3. **It completes the file's own argument.** Scenario 1: a lease with a live PID protects. Scenario 2 (#7278 first half): a lease whose acquirer exited *still* protects. Scenario 3 (#7278 second half): the entry point the pipeline calls actually *writes* one. Read in order, the file now states the whole invariant instead of two thirds of it — and the header comment on scenario 2 ("a fixture that instantiates only the passing member of a set is a sample, not a proof") applies to the file itself until scenario 3 lands.
+3. **It completes the file's own argument.** Scenario 1: a lease with a live PID protects. Scenario 2 (#5454 first half): a lease whose acquirer exited *still* protects. Scenario 3 (PR #7373, second half): the entry point the pipeline calls actually *writes* one. Read in order, the file now states the whole invariant instead of two thirds of it — and the header comment on scenario 2 ("a fixture that instantiates only the passing member of a set is a sample, not a proof") applies to the file itself until scenario 3 lands.
 4. **Floor raised to match.** `MIN_ASSERTIONS=3 → 6` at plan time, **→ 15 as shipped**, and counting `PASS + FAIL` rather than `PASS`. A floor left at the old number is the defect this repo keeps re-finding; the three new assertions are each independently load-bearing (exit code, file presence, `pid=` line defeating the no-op stubs).
 
 **Rejected:** `.claude/hooks/lib/session-state.test.sh` (floor 39 → 42) — would work mechanically, but see (1).

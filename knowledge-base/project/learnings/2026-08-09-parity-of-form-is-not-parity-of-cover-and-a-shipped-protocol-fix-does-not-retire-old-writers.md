@@ -3,7 +3,7 @@ title: "Parity of form is not parity of cover — and shipping a protocol fix do
 date: 2026-08-09
 category: workflow-patterns
 tags: [worktree, lease, shared-state, review, mutation-testing, parity]
-issue: 7278
+issue: 5454
 ---
 
 # Parity of form is not parity of cover

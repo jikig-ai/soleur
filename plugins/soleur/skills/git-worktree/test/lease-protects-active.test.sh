@@ -116,7 +116,7 @@ rm -f /tmp/cleanup-out.$$
 kill "$HOLDER_PID" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# SCENARIO 2 (#7278, 2026-08-06): the acquirer has EXITED.
+# SCENARIO 2 (#5454, 2026-08-06): the acquirer has EXITED.
 #
 # The scenario above holds a live `sleep 300` as the lease pid. That is the one
 # shape real usage never has — and it is why this suite was green for months
@@ -178,13 +178,13 @@ else
   if [[ -d "$WT_VICTIM2" ]]; then
     pass "a lease whose acquirer exited STILL protects the worktree from a sibling reap"
   else
-    fail "worktree reaped despite a valid in-window lease whose acquirer had exited — this is #7278 (output: $(cat /tmp/cleanup2-out.$$ 2>/dev/null))"
+    fail "worktree reaped despite a valid in-window lease whose acquirer had exited — this is #5454 (output: $(cat /tmp/cleanup2-out.$$ 2>/dev/null))"
   fi
   rm -f /tmp/cleanup2-out.$$
 fi
 
 # ---------------------------------------------------------------------------
-# SCENARIO 3 (#7278 second half): `create` must ACQUIRE a lease.
+# SCENARIO 3 (PR #7373, second half): `create` must ACQUIRE a lease.
 #
 # Scenarios 1-2 prove a lease PROTECTS a worktree. Neither proves one is ever
 # WRITTEN by the entry point the autonomous pipeline actually calls. It was not:
@@ -240,7 +240,7 @@ if [[ -f "$LEASE3" ]]; then
     fail "scenario 3: lease file exists but has no pid= line"
   fi
   # The env vars must be READ, not merely set by this test. Half the point of
-  # #7278 is that SOLEUR_SKILL_NAME / SOLEUR_EXPECTED_DURATION_MIN were
+  # #5454 is that SOLEUR_SKILL_NAME / SOLEUR_EXPECTED_DURATION_MIN were
   # documented on this path and consumed by nobody — so asserting the file
   # exists proves the fix only halfway. Measured: replacing both reads with the
   # literals "unknown"/"240" left the suite fully GREEN without these two.
@@ -257,12 +257,12 @@ if [[ -f "$LEASE3" ]]; then
 (got: $(grep '^expected_duration_min=' "$LEASE3" 2>/dev/null || echo NONE))"
   fi
 else
-  fail "scenario 3: NO lease written by --yes create — this is the #7278 second half \
+  fail "scenario 3: NO lease written by --yes create — this is the second half (PR #7373) \
 (dir: $(ls -A "$LEASE_ROOT3/leases" 2>/dev/null || echo MISSING))"
 fi
 
 # ---------------------------------------------------------------------------
-# SCENARIO 4 (#7278, re-entry arm): `create` on an EXISTING worktree must also
+# SCENARIO 4 (PR #7373, re-entry arm): `create` on an EXISTING worktree must also
 # acquire.
 #
 # Scenario 3 covers fresh creation. But both creating functions have an early
@@ -320,7 +320,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# SCENARIO 5 (#7278): the `feature` verb's arms too — BOTH of them.
+# SCENARIO 5 (PR #7373): the `feature` verb's arms too — BOTH of them.
 #
 # Parity with create_for_feature is this fix's whole thesis, and half of it was
 # unpinned: deleting create_for_feature's early-return acquire left the suite
@@ -356,12 +356,12 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# SCENARIO 6 (#7278): a name the lease layer cannot key on must SAY SO.
+# SCENARIO 6 (PR #7373): a name the lease layer cannot key on must SAY SO.
 #
 # _validate_worktree_name rejects anything outside [A-Za-z0-9._-], so a
 # slash-bearing branch makes acquire_lease fail. Measured before this arm:
 # `--yes create feat/probe` exited 0, wrote ZERO leases, and emitted nothing an
-# orchestrating agent could see — #7278's exact signature, on the path this fix
+# orchestrating agent could see — #5454's exact signature, on the path this fix
 # exists to protect. The lease cannot be made to work for that shape here (the
 # key/reader mismatch is a separate design decision), so what is pinned is that
 # the failure is no longer SILENT.
@@ -380,7 +380,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# SCENARIO 7 (#7278): `switch|go` must lease too.
+# SCENARIO 7 (PR #7373): `switch|go` must lease too.
 #
 # The last entry point that took an EXISTING worktree and leased nothing. A
 # session that switches in and works for hours held no lease for any of them,
@@ -421,7 +421,7 @@ echo "FAIL: $FAIL"
 # on the fetch-prune path, a non-zero sweep aborting under `set -e`, a lock it
 # could not take. A floor cannot detect a no-op reap loop by itself, but it does
 # catch the case where the assertions were never reached.
-MIN_ASSERTIONS=17  # 3 -> 6 -> 9 -> 15 -> 17 (#7278 scenarios 3-7)
+MIN_ASSERTIONS=17  # 3 -> 6 -> 9 -> 15 -> 17 (PR #7373 scenarios 3-7)
 # Count DISPATCHES (PASS + FAIL), not wins. Counting PASS alone conflates two
 # different things: "the suite did not run" and "the suite ran and found bugs".
 # It printed "only N assertions ran — the suite did not execute what it claims

@@ -181,7 +181,7 @@ set +e
 )
 rc=$?
 set -e
-# CONTRACT CHANGED 2026-08-06 (#7278). This assertion was inverted: it used to
+# CONTRACT CHANGED 2026-08-06 (#5454). This assertion was inverted: it used to
 # require INACTIVE for a dead pid, and that requirement is what reaped two live
 # worktrees in one afternoon.
 #
@@ -207,7 +207,7 @@ set -e
 if [[ "$rc" == "0" ]]; then
   pass "T4: a killed acquirer's lease is still honoured INSIDE its window (window is the authority, not pid liveness)"
 else
-  fail "T4: lease reads inactive purely because its pid is dead — the #7278 reaper is back"
+  fail "T4: lease reads inactive purely because its pid is dead — the #5454 reaper is back"
 fi
 
 # ------------------------------------------------------------------------
@@ -367,7 +367,7 @@ fi
 # T9: a lease whose ACQUIRING PROCESS HAS EXITED is still active inside its
 # expected duration.
 #
-# This is the defect that reaped two live worktrees on 2026-08-06 (#7278).
+# This is the defect that reaped two live worktrees on 2026-08-06 (#5454).
 # `acquire_lease` records `pid=$$`. The DOCUMENTED entry points are
 # short-lived processes:
 #
@@ -385,7 +385,7 @@ fi
 # lets a finished session release early — it is not the authority, and it
 # must not be able to expire a lease that is still inside its window.
 # ------------------------------------------------------------------------
-echo "T9: a lease outlives the process that acquired it (#7278 reaper)"
+echo "T9: a lease outlives the process that acquired it (#5454 reaper)"
 ROOT=$(make_root); ROOTS+=("$ROOT")
 source_helper "$ROOT"
 
@@ -646,7 +646,7 @@ fi
 # That measurement had TWO independent causes and this header originally named
 # only one. The second: `create_worktree` — the function `create` dispatches to,
 # and the one the autonomous pipeline actually invokes — did not acquire a lease
-# AT ALL until #7278. An empty leases directory looks identical under both
+# AT ALL until PR #7373. An empty leases directory looks identical under both
 # causes, which is exactly how the second survived the fix for the first. This
 # arm pins the trap half only; scenarios 3-4 of
 # plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh pin the
@@ -808,7 +808,7 @@ fi
 #
 # `_lease_window_seconds` was extracted so the two callers agree exactly, and
 # nothing asserted that they do: quartering ONLY the sweep's threshold survived
-# the whole suite. That mutant reproduces #7278's mechanism precisely — at ~3h a
+# the whole suite. That mutant reproduces #5454's mechanism precisely — at ~3h a
 # lease reads ACTIVE while the sweep deletes its file, so the reap loop finds no
 # lease and destroys a live worktree.
 #
@@ -839,7 +839,7 @@ sweep_orphan_leases
 if [[ -f "$ROOT/leases/$T19_WT.lease" ]]; then
   pass "T19b: the sweep agrees — it preserves the same 3h-old lease"
 else
-  fail "T19b: the sweep DELETED a lease is_lease_active considers active — the two consumers have desynced (#7278's mechanism)"
+  fail "T19b: the sweep DELETED a lease is_lease_active considers active — the two consumers have desynced (#5454's mechanism)"
 fi
 
 # ------------------------------------------------------------------------

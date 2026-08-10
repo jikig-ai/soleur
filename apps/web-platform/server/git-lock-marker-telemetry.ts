@@ -99,7 +99,7 @@ const MARKER_RE =
 // worktree — the fail-CLOSED direction, so nothing is destroyed and no git
 // operation is blocked. It belongs in MARKER_RE because "cleanup has silently
 // stopped doing anything" is otherwise indistinguishable from "cleanup ran and
-// found nothing to do" (#7278). It does not belong in WEDGE_RE because paging on
+// found nothing to do" (#5454). It does not belong in WEDGE_RE because paging on
 // a safe degradation that fires once per load in every legacy worktree is how a
 // page becomes noise. Same category as SOLEUR_GIT_LOCK_IDENTITY_DIAG.
 //
@@ -109,7 +109,7 @@ const MARKER_RE =
 // local-only branch), OR a rejected worktree (SOLEUR_GIT_WORKTREE_VERIFY_FAILED → creation
 // aborted with exit 1). EXCLUDED (benign, mirrored-not-paged): SOLEUR_GIT_LOCK_IDENTITY_DIAG
 // (precondition) and SOLEUR_GIT_CONFIG_MASK_SKIP (non-bare-skip-under-mask → creation proceeds).
-// PAGED (#7278): SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED. It is strictly more
+// PAGED (PR #7373): SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED. It is strictly more
 // consequential than SOLEUR_FEATURE_PUSH_FAILED, which is already here — a failed
 // push leaves a local-only branch that MAY be reaped later; a failed lease leaves
 // a worktree that a sibling cleanup-merged can reap NOW, deleting the worktree,

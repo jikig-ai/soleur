@@ -327,7 +327,7 @@ _lease_window_seconds() {  # $1 raw expected_duration_min
   # assigned, the function prints nothing, and both callers read an empty window:
   # `(( age < "" ))` is false (INACTIVE -> reapable) and `(( age >= "" ))` is
   # true (the sweep deletes it). Measured on a 0-second-old lease: INACTIVE and
-  # SWEPT in the same pass — #7278's exact signature through a different door.
+  # SWEPT in the same pass — #5454's exact signature through a different door.
   # `0700` does not error and is worse for being quiet: octal 448 min, not 700.
   # T12 missed this because `abc` is REJECTED by the regex; the escaping input
   # is one the regex ACCEPTS. Pinned by T12's `090` case.
@@ -354,7 +354,7 @@ is_lease_active() {
   [[ "$lease_host" == "$HOSTNAME" ]] || return 1
 
   # NO `kill -0 "$lease_pid" || return 1` HERE — that line reaped two live
-  # worktrees on 2026-08-06 (#7278), and it could never have worked.
+  # worktrees on 2026-08-06 (#5454), and it could never have worked.
   #
   # `acquire_lease` records `pid=$$`, and every DOCUMENTED entry point is a
   # short-lived process:
@@ -383,10 +383,10 @@ is_lease_active() {
   # in the path that matters — sweep_orphan_leases was reachable only from the
   # `feature|feat` subcommand (create_for_feature), never from `create` and
   # never from cleanup_merged_worktrees. (This sentence said "the `create`
-  # subcommand" until #7278; it was wrong in the same direction as the
+  # subcommand" until PR #7373; it was wrong in the same direction as the
   # _register_lease_release_trap comment below — both assumed `create` did
-  # lease-work it did not do. As of #7278 `create` does sweep and acquire, so
-  # the corrected statement describes the pre-#7278 world.) That is now also
+  # lease-work it did not do. As of PR #7373 `create` does sweep and acquire, so
+  # the corrected statement describes the pre-#5454 world.) That is now also
   # wired (worktree-manager.sh calls the sweep at the top of cleanup), but the
   # clamp is what makes the bound hold regardless.
   #
@@ -458,7 +458,7 @@ sweep_orphan_leases() {
         # immediately (see the long note in is_lease_active). Sweeping on a
         # dead pid alone deleted the lease file BEFORE worktree-manager
         # consulted is_lease_active — so the downstream check found no file
-        # and the reap proceeded. That is #7278, twice, on 2026-08-06.
+        # and the reap proceeded. That is #5454, twice, on 2026-08-06.
         #
         # is_lease_active is the single source of truth for "still held";
         # the 24h mtime cap above remains the backstop for a truly abandoned
@@ -501,7 +501,7 @@ _register_lease_release_trap() {
   # NOT `EXIT` — that is what made the lease layer unreachable in production.
   #
   # `create_worktree` acquires the lease and registers this trap IN THE SAME
-  # PROCESS (as of #7278 — before that it did NEITHER; only `create_for_feature`
+  # PROCESS (as of PR #7373 — before that it did NEITHER; only `create_for_feature`
   # acquired, and `create` is what the pipeline invokes), and that process exits
   # normally on success. With EXIT armed, the trap fired on that success and
   # deleted the lease before the caller had even printed its path.
