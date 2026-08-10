@@ -540,9 +540,10 @@ mutate "E25 attestation detection loses the annotation signal" engine \
 # Verification 2's copies sit at 4-space indent, verify_blobs_of's at 6. The indentation is the
 # discriminator, so it is part of the anchor. If either site is ever re-indented, this battery
 # fails loudly (exit 2) rather than drifting — which is the correct direction.
-mutate "E26 IMAGE index child count equality weakened (partial enumeration passes)" engine \
+expect_survive "E26 IMAGE index child count equality weakened (partial enumeration passes)" engine \
   $'\n    (( n_children == n_declared )) || \\' \
-  $'\n    (( n_children >= 0 )) || \\'
+  $'\n    (( n_children >= 0 )) || \\' \
+  'UNREACHABLE BY CONSTRUCTION on the index branches, and measured: the `// "-"` sentinel makes `@tsv` emit exactly one NON-EMPTY row per declared element, and `@tsv` escapes an embedded newline or tab rather than splitting on it (verified against jq for both) — so the row count and `.manifests | length` cannot disagree through any manifest a fixture can express. The guard is kept as defense-in-depth against a future edit that DECOUPLES the stream from the count, which is not hypothetical: #7410 shipped exactly that divergence in the sibling manifest branch, where an unconditional config slot emitted a row the conditional count did not include. PROMOTE THIS BACK TO `mutate` the moment the enumeration and the count stop being derived from the same array — that is the condition, not a vague 'if it becomes testable'.'
 
 mutate "E27 platform-child floor removed (an attestation-only index reads as restored)" engine \
   '(( n_platform > 0 )) ||' \
@@ -577,9 +578,10 @@ mutate "E33 signature-index depth guard removed (a nested index recurses instead
   '      if (( depth > 0 )); then' \
   '      if false; then'
 
-mutate "E34 signature-index child-count equality weakened to a lower bound (a truncated walk reads as verified)" engine \
+expect_survive "E34 signature-index child-count equality weakened to a lower bound (a truncated walk reads as verified)" engine \
   '      (( n_children == n_declared )) || \' \
-  '      (( n_children >= 0 )) || \'
+  '      (( n_children >= 0 )) || \' \
+  'UNREACHABLE BY CONSTRUCTION on the index branches, and measured: the `// "-"` sentinel makes `@tsv` emit exactly one NON-EMPTY row per declared element, and `@tsv` escapes an embedded newline or tab rather than splitting on it (verified against jq for both) — so the row count and `.manifests | length` cannot disagree through any manifest a fixture can express. The guard is kept as defense-in-depth against a future edit that DECOUPLES the stream from the count, which is not hypothetical: #7410 shipped exactly that divergence in the sibling manifest branch, where an unconditional config slot emitted a row the conditional count did not include. PROMOTE THIS BACK TO `mutate` the moment the enumeration and the count stop being derived from the same array — that is the condition, not a vague 'if it becomes testable'.'
 
 restore_pristine
 
