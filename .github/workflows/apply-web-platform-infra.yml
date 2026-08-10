@@ -109,7 +109,7 @@ on:
       # Each job accepts only its OWN literal, so a token typed for one target cannot authorize
       # the other.
       confirm:
-        description: "Typo-guard for destructive/creative targets, NOT the authorization (the environment reviewer gate is). The exact token is in the runbook for the target you are firing, and in that target's job header in this file — deliberately not enumerated here, because this string accreted one clause per target and no operator reads a field label that long. Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
+        description: "Typo-guard for destructive/creative targets. NOT the authorization — and for targets with NO `environment:` key (registry-luks-recut among them) there is no reviewer gate either, so the D10 gate chain, the destroy-guard and the id-pin are the entire protection. The exact token is in the runbook for the target you are firing, and in that target's job header in this file — deliberately not enumerated here, because this string accreted one clause per target and no operator reads a field label that long. Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
         required: false
         type: string
       # For apply_target=web-host-create ONLY (#6730). The var.web_hosts key of the host to
