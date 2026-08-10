@@ -82,6 +82,29 @@ No premise was fabricated; two were stale and are corrected above.
 | R5. The three named suites are the heavy ones | **Refuted by measurement (this session).** `inngest` **2 s / 16.6 KB / rc=0**; `soleur-host-bootstrap-observability` **2 s / 9.1 KB / rc=0**; `web-host-provisioner-parity-mutation` **89 s / 7.1 KB / rc=0** | The first two are among the *cheapest* suites. Reshapes H2 from "the failing suite is heavy" to "the failing suite was a **victim** of heavy neighbours" |
 | R6. `soleur-host-bootstrap-observability` collides on shared state | **Near-refuted.** Zero `mktemp`, zero `$TMPDIR`, zero temp files, zero docker, zero terraform, zero network, zero ports, zero writes. It only *reads* six tracked files | Its possibility space is tiny, which makes it the sharpest probe in the set |
 
+## Research Insights (deepen pass, 2026-08-10)
+
+### Institutional learnings that apply
+
+| Learning | Applied as |
+|---|---|
+| `2026-08-10-pipe-buf-atomicity-does-not-apply-to-the-file-i-was-redirecting-into.md` — **same repo, same day.** `generate-kb-index.sh` used `xargs -P4 … > "$file"` under a comment asserting PIPE_BUF safety; four children shared one file description, tore lines mid-flush, and fabricated ~14 values into a committed artifact a validation gate then enforced | Phase 1 item 3's **two-clause** invariant, and a Sharp Edge. Our children are safe **only** because their stdout is `\| tee "$LOG"`. This plan adds per-suite file writes to that same runner — the highest-risk refactor available to the implementer |
+| `2026-07-26-a-green-test-run-is-only-evidence-for-what-it-actually-ran.md` (#6730) — *"nearly every defect was a property **asserted** rather than **measured**"*, in a PR whose own comments said "MEASURED, not assumed" | The whole plan's shape. Every hypothesis carries a confirmation criterion; H1 was refuted by measurement rather than argument; AC11 requires a baseline denominator rather than asserting a fix |
+| ADR-133 (`test-all.sh` tmpfs contention) — *"Instrumentation ships ahead of every fix"*, and two recorded colliding-path hypotheses **both refuted by measurement** | The probe-first ordering, and R3's insistence that ADR-133's *conclusion* is a prior rather than evidence for a different machine and mount |
+| `test-failures/2026-06-10-parallel-load-flake-two-mechanisms-and-vacuous-absence-waits.md` — one flake symptom, two unrelated mechanisms; falsify each against the error shape | Phase 4's arm-selection rules: more than one arm may fire; a reproduced failure matching no arm is a new hypothesis, not a forced fit |
+
+### Verified this pass
+
+- **Sentinel `| ` is collision-free.** No registered suite emits a line beginning with `| ` — zero
+  `echo`/`printf` sites construct one, and empirical runs of `inngest` and
+  `soleur-host-bootstrap-observability` produced 0 such lines. The sentinel can therefore be
+  stripped from the monitor's tail without eliding genuine suite output.
+- **The runner's summary path is a pipe** (`xargs … | tee "$LOG"`, `:180-183`), so the PIPE_BUF
+  argument is sound *as currently written* — and only as currently written.
+- **No in-repo precedent exists** for per-suite log capture in a parallel bash runner. The closest
+  sibling, `scripts/generate-kb-index.sh`, is the cautionary case above rather than a pattern to
+  copy. Phase 1 is therefore novel-by-necessity: state that in the header and pin it with tests.
+
 ## Hypotheses
 
 The discriminating datum — which assertion inside the failing suite went red — is discarded by
@@ -270,9 +293,16 @@ Edit `apps/web-platform/infra/run-registered-suites.sh`.
    discriminator compares against solo baselines of 2 s vs 89 s), so degrade to seconds rather
    than adding a `date +%s%N` dependency.
 3. **Summary lines unchanged.** The child still emits `PASS <path>` / `RED  <path>` **first** and
-   in the same byte shape. The invariant to preserve and to state in the header is *"the summary
-   line stays under `PIPE_BUF` (4096)"*, hence atomic under concurrent `xargs` children — not
-   "today's writes are 60 bytes".
+   in the same byte shape. The invariant has **two** clauses and both are load-bearing:
+   *(i) the summary line stays under `PIPE_BUF` (4096)*, and *(ii) **the children's stdout remains
+   a PIPE***. Today's shape satisfies (ii) — `xargs … | tee "$LOG"` — and that is the only reason
+   the atomicity holds. **PIPE_BUF atomicity is a property of pipes and does not apply to regular
+   files at all.** If the implementer "tidies" the pipeline into `xargs … > "$LOG"` while adding
+   file capture — a natural-looking refactor once you are already writing files — every child
+   inherits the same open file description, block-buffered flushes land mid-line, and the
+   `PASS`/`RED` lines tear. See Sharp Edges and
+   `knowledge-base/project/learnings/2026-08-10-pipe-buf-atomicity-does-not-apply-to-the-file-i-was-redirecting-into.md`,
+   which is that exact defect, in this repo, committed the same day as this plan.
 4. **Dump from the parent, single-threaded, strictly after `xargs` returns, and strictly BEFORE
    the final summary block.** Never from inside a child — multi-line concurrent writes are not
    atomic. Per RED suite: a banner with `rc` and elapsed, then the excerpt.
@@ -678,6 +708,17 @@ live in a 2-second suite and is deliberately absent from this table.
   not add `--list` invocations casually.
 - **A new suite file must be registered in `infra-validation.yml`** or
   `.github/scripts/test/test-infra-suite-registration.sh` fails a required, path-filter-free check.
+- **`PIPE_BUF` atomicity is a property of PIPES, not files — ask what is on the other side of the
+  `>`.** The runner's children are safe *only* because their stdout is `| tee "$LOG"`. Change that
+  to `> "$LOG"` and all four children share one open file description; `awk`/`bash` block-buffer in
+  ~4096-byte flushes whose boundaries land mid-line, and another child's flush lands in the gap.
+  `scripts/generate-kb-index.sh` shipped exactly this defect — its comment even asserted
+  *"lines are always smaller than PIPE_BUF (4 KB), so atomic writes hold … no shared append
+  target"* while redirecting to a file — and it fabricated ~14 corrupted values into a committed
+  artifact that a validation gate then enforced. Fixed the same day this plan was written
+  (`knowledge-base/project/learnings/2026-08-10-pipe-buf-atomicity-does-not-apply-to-the-file-i-was-redirecting-into.md`).
+  This plan adds per-suite file writes to a runner whose summary path is a pipe; keep the two
+  separate and do not merge them.
 - **The monitor's `tail -30` is UNCONDITIONAL.** It sits outside the `if [[ -n "$hits" ]]` block
   (`main-health-monitor.yml:436`), so anchoring dumped output away from `^RED `/`^[FAIL]` does
   **not** keep it out of the public issue body. Any change to what the runner prints must be
