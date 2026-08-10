@@ -120,7 +120,9 @@ The Phase 1.4 gate fired on the substring `timeout`. **The L3→L7 network check
 
 **If this leaks, the user's data/workflow/money is exposed via:** no new exposure vector. No new data path; the one new outbound call carries a monitor slug and an ok/error status. The failure excerpt already goes into a repo issue, unchanged in kind.
 
-**Brand-survival threshold:** `aggregate pattern`. The monitor is a *second* line of defence — PRs are gated by `ci.yml`'s required checks plus `strict_required_status_checks_policy`. A dark monitor removes a safety net rather than putting a defect in front of a user; the harm is cumulative across undetected episodes, which is the aggregate tier. No CPO sign-off; `user-impact-reviewer` not required.
+- **Brand-survival threshold:** `aggregate pattern`
+
+The monitor is a *second* line of defence — PRs are gated by `ci.yml`'s required checks plus `strict_required_status_checks_policy`. A dark monitor removes a safety net rather than putting a defect in front of a user; the harm is cumulative across undetected episodes, which is the aggregate tier. No CPO sign-off; `user-impact-reviewer` not required.
 
 ---
 
@@ -446,10 +448,19 @@ logs:
   retention: 90 days (Actions), indefinite (issue body excerpt)
 
 discoverability_test:
-  command: gh run list --workflow=main-health-monitor.yml --limit 5 --json databaseId,conclusion
-           && gh issue list --label ci/main-broken --state open
-  expected_output: recent runs conclude success or failure (NOT cancelled); an open ci/main-broken
-                   issue exists if and only if the most recent run was not success
+  command: curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 https://api.github.com/repos/jikig-ai/soleur/actions/workflows/main-health-monitor.yml/runs?per_page=1
+  expected_output: "200"
+  # Unauthenticated + pipe-free by construction: preflight Check 10 EXECUTES this
+  # command with the operator's file-backed CLI auth reachable, so it refuses any
+  # credentialed CLI (gh/doppler/aws/...) and any shell-active token. The repo is
+  # public, so the Actions API answers anonymously.
+  #
+  # What the run CONCLUSION does and does not tell you: both suite steps carry
+  # `continue-on-error: true`, so a run over a RED main still concludes `success`.
+  # The conclusion discriminates only "the run completed" from `cancelled`. The
+  # actual verdict lives in two places, neither needing SSH:
+  #   gh api repos/jikig-ai/soleur/check-runs/<job-id>/annotations   # SOLEUR_MAIN_HEALTH tests=/infra=
+  #   gh issue list --label ci/main-broken --state open              # open iff the monitor filed
 ```
 
 No `ssh` in the discoverability path.
