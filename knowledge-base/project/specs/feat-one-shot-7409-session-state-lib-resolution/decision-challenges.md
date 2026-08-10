@@ -50,6 +50,25 @@ Issue: #7409
 
 ---
 
-## Open measurement that gates two of the above
+## Open measurement that gates two of the above — SETTLED AS "STILL CONFOUNDED", AND IT GATES NOTHING
 
 **Phase 0.2** must settle whether `CLAUDE_PLUGIN_ROOT` is injected for **cache-served** plugin skills. The plan's reading (UNSET) was taken from a **repo-served** skill and is confounded — both copies are installed on the author's machine. The outcome determines Phase 3's arm count and whether Deferral 1 (the wider 21+-site `${CLAUDE_PLUGIN_ROOT:-…}` defect) is filed at all.
+
+### Verdict at /work time (2026-08-10) — recorded so the next planner does not re-litigate it
+
+**Re-measured:** `${CLAUDE_PLUGIN_ROOT:-UNSET}` in this session's Bash env → **`UNSET`**. **The confound is NOT resolved by that reading.** This one-shot run was itself repo-served (its skill preamble reads `Base directory: <repo>/plugins/soleur/skills/one-shot`), which is the exact tell the plan's Sharp Edges names. A repo-served measurement says nothing about the cache-served case, and inside this repo the repo copy wins, so the cache-served path is not reachable from here without an install-only checkout. Reporting `UNSET` as the answer would be restating the confounded measurement with more confidence, not settling it.
+
+**Deferral 1: NOT FILED.** Filing it requires the premise "UNSET for cache-served skills", which remains unmeasured — filing on a confounded reading would put a claim in the backlog that nobody verified. The residual class it belongs to is **already tracked in #6222**, so nothing is lost by not opening a second issue for an unproven member of it.
+
+**Why this genuinely gates nothing in this PR**, as the plan predicted:
+
+1. **P1 reads no environment variable at all.** `worktree-manager.sh` resolves `$SCRIPT_DIR/../../../scripts/lib/session-state.sh`. The destructive reap path's protection is correct by construction in both branches of the unmeasured question — which is *why* the resolution order was inverted away from the issue's proposed `CLAUDE_PLUGIN_ROOT`-first chain.
+2. **P2's committed artifact is byte-identical either way.** `${CLAUDE_PLUGIN_ROOT:-<anchor>}` is correct whether the variable is set or unset; that is the point of the default arm.
+3. **Verified end-to-end regardless:** the anchor hop was exercised against a real cache-only fixture from a non-Soleur cwd (scenario 10 / T3b), and emits `SOLEUR_WORKTREE_LEASE_LIB_OK`. Coverage of the hop no longer depends on knowing the answer.
+
+**Deferral 2 (`freeze-lock.sh:37` depth coupling): NOT FILED — triaged inline, and it splits into two halves that deserve different answers.**
+
+- *The depth-coupling half is not a defect.* `.claude/hooks/lib/freeze-lock.sh:38` walks `../../..`, which resolves to the repo root correctly from its own location. It contains **zero** `session-state` references, so it is not a consumer of the moved library and nothing in this change disturbs it. It would only break if `freeze-lock.sh` itself moved — a hypothetical, not a defect, and filing it would be backlog noise.
+- *The orphan-suite half was real, and is fixed inline.* `.claude/hooks/lib/freeze-lock.test.sh` (13 assertions) had never gated CI, by exactly the R6 mechanism: shell globs do not cross `/`, so `.claude/hooks/*.test.sh` never reached `lib/`. Measured against **every** `*.test.sh` under any `lib/` in the repo, it was the **only** remaining orphan — `scripts/lib/` and `apps/web-platform/scripts/lib/` are already globbed. The fix is one line in `scripts/test-all.sh`, far under the cost-of-filing threshold (≤100 lines, ≤4 files), so deferring it would have been the more expensive choice.
+
+**Net issue flow for this PR: closing 1 (#7409), filing 0 → net −1.**
