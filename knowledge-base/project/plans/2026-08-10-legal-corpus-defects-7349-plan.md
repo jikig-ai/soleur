@@ -116,9 +116,13 @@ issue. Accordingly:
   `## Current State` heading also carries a date months older than the newest fact in the file.
 - **B4 — PA-30 declares Jikigai a processor but sits in the Art. 30(1) controller register.** A
   30(1) record is scoped to controller capacity by its own preamble. `article-30-2-register.md`
-  (created by #7331/#7342) is the correct home. Re-homing has blast radius: PA-30 is referenced
-  from the DPD §2.3(ad) item, from `gdpr-policy.md` on both surfaces, and from
-  `compliance-posture.md`.
+  (created by #7331/#7342) is the correct home. **Re-homing has more blast radius than the issue
+  implies** — PA-30 is referenced from the DPD §2.3(ad) item, from `gdpr-policy.md` on both
+  surfaces, from `compliance-posture.md`, and — found this session — **from PA-32's own
+  lawful-basis reasoning inside `article-30-register.md`, where PA-30 is cited as the "decisive
+  internal precedent"** for rejecting git-committed PII as an Art. 17 impossibility, plus the
+  counsel-review question that rests on that citation. A re-home that breaks those references
+  weakens a live Art. 6(1)(f) necessity analysis, so the sweep is load-bearing, not cosmetic.
 
 #### C. Published-mirror under-disclosure
 
@@ -601,6 +605,9 @@ discoverability_test:
       the Art. 30(2) limb set, not a copied 30(1) limb set.
 - [ ] **AC13** — Every referrer to PA-30 resolves: `grep -rn "PA-30\|Processing Activity 30"` shows
       each site pointing at the new location, on **both** surfaces where the referrer is mirrored.
+      The sweep must include **PA-32's lawful-basis cell and the counsel-review question that cite
+      PA-30 as decisive internal precedent** — those citations carry an Art. 6(1)(f) necessity
+      argument and must still resolve after the re-home.
 
 #### Published-mirror agreement (C)
 
