@@ -91,7 +91,17 @@ Jikigai shall:
 
 **5.1 Authorised sub-processor.** Customer authorises **Anthropic PBC**, 548 Market Street, San Francisco, CA 94104, United States, for the purpose of large-language-model inference during Operator-Assisted Runs.
 
-**5.2 Transfer mechanism.** Anthropic is certified under the **EU-US Data Privacy Framework**; Jikigai's agreement with Anthropic additionally incorporates **Standard Contractual Clauses Modules 2 and 3** and the **UK International Data Transfer Addendum**.
+**5.2 Transfer mechanism.** Anthropic is certified under the **EU-US Data Privacy Framework**, and
+Jikigai understands its agreement with Anthropic additionally to incorporate **Standard Contractual
+Clauses Modules 2 and 3** and the **UK International Data Transfer Addendum**. **That incorporation
+operates through the Anthropic Commercial Terms, and Jikigai has not yet confirmed that the account
+it would use for Operator-Assisted Runs is on Commercial rather than Consumer Terms.** Jikigai shall
+confirm that position before any Operator-Assisted Run takes place under a Jikigai-held key, and shall
+notify Customer promptly if the position is other than as stated in this §5.2. Recorded here rather
+than presented as settled, because Jikigai's own Article 30 records
+(`knowledge-base/legal/article-30-2-register.md` P-1(c) and `article-30-register.md` PA-34(e)) carry
+this as an open condition and an instrument that a counterparty signs should not state it more firmly
+than the register that supports it.
 
 **5.3 Retention — disclosed because it is adverse.** Jikigai's Anthropic account does **not** currently carry a zero-retention amendment. Content transmitted to Anthropic under a Jikigai-held key is therefore subject to Anthropic's **default retention period of thirty (30) days**, during which **Jikigai cannot compel earlier deletion**. This directly limits what Jikigai can deliver on an erasure request (see §6.3). Jikigai shall notify Customer if this position changes.
 
