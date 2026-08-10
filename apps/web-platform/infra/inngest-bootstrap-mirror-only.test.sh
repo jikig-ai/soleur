@@ -284,6 +284,46 @@ if mirror:
     # advisory message string ("...backfill via ... crane, digest-preserving..."), which
     # code_of does NOT strip -- strings are not comments. Measured: a full revert kept the
     # token alive from that string and passed.
+    # ── #7410 signing: three properties, each of which shipped broken at least once. ─────────
+    #
+    # These span STEPS, so they read the whole workflow text rather than one step's `run` body.
+    _wf_text = open(sys.argv[1]).read()
+
+    # ORDERING, re-derived. The first cut placed the sign step after the zot-mirror step to reuse
+    # the crane that step installs. Measured, that coupled GHCR signing to the zot leg twice over:
+    # `degraded bridge_down` returns BEFORE install_crane, so a bridge failure REDDED a release
+    # whose GHCR push had succeeded; and under mirror_only a bridge failure skipped signing
+    # entirely, in the one mode the signing exists for. Signing now precedes the bridge.
+    #
+    # Asserts the ORDER (sign before bridge) and, separately, that no `degraded` call site can
+    # precede the crane install the sign step depends on -- a pure index check cannot see a
+    # runtime `exit` and that is the bug class this replaces.
+    _sign_at   = _wf_text.find('crane digest "$IMAGE:$TAG"')
+    _bridge_at = _wf_text.find('name: Bridge to zot registry')
+    check("signing happens BEFORE the zot bridge (GHCR signing must not depend on the zot leg)",
+          _sign_at != -1 and _bridge_at != -1 and _sign_at < _bridge_at,
+          f"sign at {_sign_at}, bridge at {_bridge_at} - sign must come first")
+
+    _sign_step_start = _wf_text.find('name: Install crane (pinned) for signing')
+    _sign_block = _wf_text[_sign_step_start:_bridge_at] if _sign_step_start != -1 else ""
+    check("the signing path installs its own crane and calls no degraded()",
+          'curl -fsSL -o "$RUNNER_TEMP/crane.tgz"' in _sign_block
+          and 'degraded ' not in _sign_block,
+          "signing must not route through the mirror step's degrade vocabulary")
+
+    # TARGET. `cosign sign <ref>:<tag>` resolves the tag at sign time, so a tag that moves
+    # between push and sign signs something nobody reviewed.
+    check("cosign signs the DIGEST, never the tag",
+          re.search(r'^\s*cosign\s+sign\s+--yes\s+"\$\{IMAGE\}@\$\{DIGEST\}"', _wf_text, re.M) is not None
+          and re.search(r'^\s*cosign\s+sign\s+[^\n]*"\$IMAGE:\$TAG"', _wf_text, re.M) is None,
+          "expected a digest-form cosign sign and no tag-form one")
+
+    # TOOL VERSION. The cosign version decides the referrers TAG SHAPE; a cosign writing the
+    # legacy `.sig` tag yields a signature D10 A2 404s on, with this workflow green.
+    check("cosign-release is pinned",
+          re.search(r'cosign-release:\s*v\d+\.\d+\.\d+', _wf_text) is not None,
+          "sigstore/cosign-installer must pin cosign-release, not float the default")
+
     check("mirror invokes `crane copy` at call position",
           re.search(r'^\s*retry\s+crane\s+copy\s+"\$IMAGE:\$TAG"\s+"\$ZOT:\$TAG"', code, re.M) is not None,
           "expected `retry crane copy \"$IMAGE:$TAG\" \"$ZOT:$TAG\"` at line start")
@@ -568,7 +608,7 @@ echo "passed: $pass  failed: $fail"
 # most load-bearing structural checks landed exactly on a floor of 30 and still certified the
 # run. A floor catches total neutering; only a tight one catches attrition. Re-derive it when
 # adding assertions — that is the intended maintenance cost.
-MIN_ASSERTIONS=50
+MIN_ASSERTIONS=53
 if (( pass + fail < MIN_ASSERTIONS )); then
   echo "FAIL - only $((pass + fail)) assertions ran (floor $MIN_ASSERTIONS) — a green run here would be vacuous"
   exit 1
