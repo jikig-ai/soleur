@@ -783,7 +783,10 @@ Let `C=docs/legal` and `M=plugins/soleur/docs/pages/legal`.
 | 18 | DPD §2.1c limb (e) exists — the PA-35 shape | D5-a | `grep -c '^- \*\*(e) Access granted to Jikigai, outside any session\.\*\*' $C/data-protection-disclosure.md` → `1` | [C][M] |
 | 19 | DPD §4.1 replaced — EEA transfer stated + Art. 13(1)(f) availability line + forward form | D3-a | `grep -c 'involves a transfer of personal data outside the European Economic Area' $C/data-protection-disclosure.md` → `1` **and** `grep -c 'A copy of the safeguards relied on for the transfer is available from <legal@jikigai.com> on request' $C/data-protection-disclosure.md` → `1` | [C][M] |
 | 20 | DPD §4.2 preamble opened to 2.1c | D5-c | `grep -c 'acts as Controller (see Sections 2.1b, 2.1c and 2.3)' $C/data-protection-disclosure.md` → `1` | [C][M] |
-| 21 | **DELETION (count-asserted)** — DPD §4.2 Scope block removed, all others survive | D5-c | `grep -c '^\*\*Scope\.\*\* This section describes' $C/data-protection-disclosure.md` → **exactly `8`** (was 9) **and** `grep -n '^\*\*Scope\.\*\*' $C/data-protection-disclosure.md \| cut -d: -f1` must **not** contain the §4.2 site while still containing the §2.1, §2.2 and §5.2 sites | [C][M] |
+| ~~21~~ | **SUPERSEDED 2026-08-10 by rows 21a–21c — see Adjudication A.** The original row asserted flush-left Scope blocks at exactly `8` and named a "§5.2 site" that does not exist. Both defects are recorded rather than silently rewritten. | D5-c | *(do not run — replaced)* | — |
+| 21a | **DELETION (count-asserted, indentation-blind)** — DPD §4.2 Scope block removed | D5-c | `grep -c '\*\*Scope\.\*\* This section describes' $C/data-protection-disclosure.md` → **exactly `10`** (was 11). No `^` anchor: this counts blocks at *any* indentation, so it cannot be satisfied by an indentation change. **Already passing as of 2026-08-10 — this is a REGRESSION GUARD, not a pending obligation** (the §4.2 deletion has landed; this row exists so the Adjudication-A moves cannot re-introduce a tenth block by accident). | [C][M] |
+| 21b | **P2 rendering fix (count-asserted)** — both indented Scope blocks moved flush-left | Adj. A | `grep -c '^\*\*Scope\.\*\* This section describes' $C/data-protection-disclosure.md` → **exactly `10`** (was 8) **and** `grep -c '^  \*\*Scope\.\*\* This section describes' $C/data-protection-disclosure.md` → **`0`**. The rise from 8 to 10 is the positive assertion; the `0` is its paired confirmation and is **not** sufficient alone. | [C][M] |
+| 21c | Positional — the §4.2 site is gone, the ten survivors are the right ten | D5-c / Adj. A | Section homes of the ten flush-left sites must be exactly: preamble, §2.1, §2.2, **§3.1**, §4.3, §5.1, §6.1, §7.1, §9.1, **§10.1**. No Scope block may appear between the `### 4.2 Service Processors` heading and the `**Docs Site and Newsletter Processors:**` line. | [C][M] |
 | 22 | DPD §2.3 opener opened | D5-c | `grep -c '^Soleur.s data processing activities include:$' $C/data-protection-disclosure.md` → `1` **and** `grep -c 'That list is not exhaustive. Operator-assisted processing and Jikigai-purpose access are described in Section 2.1c' $C/data-protection-disclosure.md` → `1` | [C][M] |
 | 23 | privacy §2 — exhaustive-exception claim removed, replaced with a pointer set | D5-c | `grep -c 'One such configuration is an' $C/privacy-policy.md` → `1` **and** `grep -c 'Sections 4.7, 4.10 and 4.11' $C/privacy-policy.md` → `1` **and** `grep -c 'The one exception is an' $C/privacy-policy.md` → `0` | [C][M] |
 | 24 | privacy §4.1 pointer covers granted access | D5-c | `grep -c 'The same applies if you have given us access to one of your repositories' $C/privacy-policy.md` → `1` | [C][M] |
@@ -799,6 +802,8 @@ Let `C=docs/legal` and `M=plugins/soleur/docs/pages/legal`.
 | 34 | `#7331` active row back-references the discharge without restating it | D5-d | `awk '/^## Active Compliance Items/,/^## Completed/' knowledge-base/legal/compliance-posture.md \| grep -c 'C5 discharged 2026-08-09'` → `1` | knowledge-base only |
 | 35 | Sector-descriptor paraphrase — **severable, non-blocking** (see R1/R2) | R2 | `grep -rln 'venture-exploration' --include='*.md' knowledge-base/project/ knowledge-base/product/` → **`0` files**. `article-30-2-register.md` P-1(a) and the determination's subject line are **exempt** (Art. 30(2)(a) compels controller identification). **This row does not gate PR-ready.** | knowledge-base only |
 | 36 | Mirror parity for this PR's own edits | all | For each of the five documents, the set of lines added by this PR must be byte-identical between `$C/<doc>.md` and `$M/<doc>.md`. Pre-existing drift is **out of scope** (A17/A18) — do not resync it. | [C] vs [M] |
+| 38 | privacy §4.2 — the agreement is scoped to the Processor limb only | Adj. B | `grep -c 'it is not what makes our own product-learning use lawful' $C/privacy-policy.md` → `1` **and** `grep -c 'agreeing a written agreement' $C/privacy-policy.md` → `0` (the repetition is gone) | [C][M] |
+| 39 | The attestation file cited by the C5 row **exists** | Adj. C | `test -f knowledge-base/legal/audits/2026-08-09-clo-attestation-7347-operator-assisted-scope.md` → exit 0. The C5 row cites this path; a merged row citing a non-existent document is a dangling citation in the compliance record. **This row must pass before merge, not before PR-ready.** | knowledge-base only |
 | 37 | `LEGAL_DOC_SHAS` repinned after the final prose byte | all | `apps/web-platform/lib/legal/legal-doc-shas.ts` literals match the on-disk files; `tc-document-sha-guard` exits 0; `cd apps/web-platform && ./node_modules/.bin/vitest run test/legal-doc-consistency.test.ts` is green (grep the log for `FAIL`/`× ` — a background runner has reported exit 0 with a real failure) | repo |
 
 **Do-not list for the implementer** (prohibitions, which are *supplementary* to the table above and
@@ -810,6 +815,353 @@ mechanism, a retention figure, a service level or a price term in published text
 reintroduce a closed exception list at privacy §2 or §4.2 (P1-7, D5-b); and do not bring an
 `encrypt`/`LUKS` token within ±300 characters of the two `encryption-posture-ledger.json` anchors
 (R6 — verified clear as drafted).
+
+---
+
+# Adjudications, 2026-08-10 — deviations raised at implementation
+
+## Adjudication A — the two indented Scope blocks MOVE. My row 21 was wrong.
+
+**RULING: move both flush-left. Row 21 is superseded by rows 21a–21c. The implementer was right to
+refuse to break either constraint and to escalate instead of improvising.**
+
+**Row 21 was measuring a proxy.** It greps `^\*\*Scope\.\*\*` — anchored at column 0 — so it counted
+*flush-left* Scope blocks and treated that as the count of *Scope blocks*. Two blocks are two-space
+indented and were invisible to it. The `8` was therefore an artifact of the anchor, not an intended
+ceiling, exactly as read. This is the same defect class the checklist exists to catch — asserting a
+measurable proxy instead of the quantity of interest — reproduced inside the instrument built to
+prevent it. Recorded rather than quietly rewritten, because a checklist that silently repairs itself
+teaches nothing. Row 21 is struck through in place and replaced.
+
+**The moves are required on legal-effect grounds, not typographic ones.** Under CommonMark a
+two-space-indented paragraph following a list item is a **continuation of that item**. So the block
+renders as a rider on bullet (a) in §3.1 and on bullet (b) in §10.1, and the qualification attaches to
+one bullet instead of the section. That changes *which published sentences are qualified*:
+
+- **§3.1 "Plugin Architecture (Local-Only)"** — the unqualified remainder includes limbs **(b)** and
+  **(d)**, which are precisely the limbs plan **A1** records as *separately falsified* by
+  `plugins/soleur/skills/trigger-cron/scripts/trigger.sh`. The mis-attachment therefore leaves
+  standing, unqualified, the two limbs this corpus already knows to be false. That is the worst
+  possible bullet for the scope note to miss.
+- **§10.1 "Plugin Removal"** — the unqualified remainder covers deletion and retention obligations,
+  the same subject D4 just swept. A scope note that renders on bullet (b) alone leaves the rest of a
+  termination section reading as unconditional.
+
+A scope limitation rendering on the wrong unit is a legal-effect defect. It also converts each list to
+loose, changing the layout of every sibling bullet — the visible symptom, not the reason.
+
+**No rewording accompanies the move.** "This section describes plugin-local processing" is *accurate*
+for both §3.1 (titled "Local-Only") and §10.1 (Plugin Removal), so neither is among the seven
+over-reach sites in the review's separate "This section" → "the paragraph above" P2. Move only. **Do
+not also reword these two.**
+
+**Corrected expected counts** (verified against the tree at adjudication time — canonical and mirror
+both at 10 total / 8 flush / 2 indented): total **10**, flush-left **10**, indented **0**. Row 21a is
+deliberately unanchored so the deletion assertion cannot be satisfied by an indentation change alone —
+21a and 21b must both pass, and neither substitutes for the other. The "§5.2 site" in the old row was
+wrong; the site is **§5.1 "Local Data"**. Confirmed section homes of the eight current flush-left
+blocks: preamble, §2.1, §2.2, §4.3, §5.1, §6.1, §7.1, §9.1.
+
+## Adjudication B — the authored sentence: APPROVED IN STRUCTURE, one replacement required.
+
+**RULING: keep the second-person register and the dropped Article 28(3) citation. Replace the
+paragraph to sever the Controller limb and remove the repetition.**
+
+**First, a correction to the escalation.** The hand-off was **not** dropped. The file at
+`docs/legal/privacy-policy.md` continues: *"Where such an agreement is made, it — not this policy —
+sets out what happens to the data."* The quoted excerpt stopped one sentence short. The second concern
+does not arise.
+
+**The first concern is real and is the reason this needed a ruling.** The sentence sits immediately
+after *"for that narrow purpose we are acting as a controller in our own right"*. A reader takes the
+following sentence to mean the agreement covers that controller purpose. It does not, and cannot:
+D5-a limb (c) states that Article 28(3) governs processing on a controller's instructions and
+**supplies no basis for the Controller limbs**. Left as written, the privacy policy implies to the
+User that an Article 28(3) instrument legitimises Jikigai's own product-learning use — which is the
+one thing it structurally cannot do. Dropping the "Article 28(3)" citation is **correct** for this
+surface (privacy-policy is the plain-language register and cites articles sparingly), but dropping the
+citation without replacing the limb-scoping is what left the gap.
+
+**Replace the paragraph at `docs/legal/privacy-policy.md` §4.2 beginning `When we do that on your
+instructions` in full. Mirror: YES.**
+
+```markdown
+When we do that on your instructions we are acting as your processor. We also look at how Soleur performed in order to improve the product, and for that narrow purpose we are acting as a controller in our own right. We do not run an operator-assisted session without first agreeing a written agreement with you covering it. Where one is agreed, that agreement — not this policy — sets out what happens to your data during the session: who else may process it, where it goes, how long we keep it, and how we help you answer requests from people whose data is involved. That agreement governs the work we do **on your instructions**; it is not what makes our own product-learning use lawful, which rests on our legitimate interests and is explained in GDPR Policy Section 3.14.
+```
+
+Checked as drafted: forward form with no definite article implying an in-force instrument (P1-3);
+"agreeing a written agreement" repetition removed; the hand-off preserved and expanded to name the
+*subjects addressed* rather than any term, which is what A2 permits; the Controller limb explicitly
+severed and routed to §3.14; "how long **we** keep it" rather than "how long it is kept", so no reader
+infers the agreement controls the AI provider's own window, which D4-a separately discloses at §7 as a
+period Jikigai does not set and cannot shorten. No figure, no service level, no mechanism.
+
+## Adjudication C — the attestation file is written AT the gate, not now.
+
+**RULING: write `2026-08-09-clo-attestation-7347-operator-assisted-scope.md` at ship Phase 5.5, after
+Adjudications A and B land and `LEGAL_DOC_SHAS` is repinned. Not before.**
+
+The governing precedent is this repository's own:
+`knowledge-base/project/learnings/2026-08-02-the-retraction-pr-was-itself-over-claiming-and-its-counsel-signoff-certified-a-diff-that-no-longer-existed.md`.
+An attestation certifies a **specific diff**. A and B both change published legal prose, so an
+attestation written today would certify a state that is already superseded — reproducing that learning
+exactly, in the PR that cites it.
+
+**But the C5 row already cites the path and rows 32–34 pass, so there is a live dangling citation in
+the compliance record right now.** That is not acceptable to merge, and it is not closed by a
+prohibition. New **row 39** asserts the cited file exists, gated at **merge** rather than PR-ready —
+which is the correct gate, because the attestation cannot honestly precede the final diff but must not
+follow the merge.
+
+## Noted, no action
+
+The two formatting deviations are **approved and the words are unchanged**. Emitting D3-a and D4-a
+unwrapped is correct — my line-wrapping was presentational, Markdown reflows it, and my own wrapping
+split `European Economic / Area` and the `**A copy / of the safeguards…**` clause across newlines,
+which would have made my line-based greps unsatisfiable. The implementer's unwrapped emission is
+strictly better for verification.
+
+On D4-a's preserved clause: the implementer is right and **my contract was internally inconsistent**.
+My D4-a block wrote the comma-join *"…on your machine, and you control its retention and deletion
+entirely"* (lowercase `you`), while my own row 27b greps the capitalised `You control its retention and
+deletion entirely`. Those two cannot both be satisfied. Keeping the original sentence split is the
+correct resolution — it preserves the pre-existing published sentence verbatim, which is what a
+non-retraction scoping clarification requires, and it satisfies row 27b. Two characters, but the
+resolution direction mattered: preserve the published sentence, adjust my draft.
+
+---
+
+# Adjudications round 2, 2026-08-10 — post-remediation delta review
+
+Two reviewers ran on `git diff 5b65e4a4f..HEAD`. They are reviewing text **I authored**, which until now
+had been author-reviewed only. Six of the eight findings are upheld, four of them against my own
+drafting. Recorded in that register.
+
+## A1 — UPHELD, and the site list in the escalation is short by one. FOUR sites, not three.
+
+**RULING: the tense is wrong at four sites. All four take `will not`.**
+
+The panel's P1-3 was about **tense**, and I adopted the review's *structure* — no definite article,
+"where such an instrument is agreed" — while leaving the verb in the present habitual. "Jikigai **does
+not** carry out operator-assisted processing without first agreeing…" is a claim of standing practice.
+One operator-assisted session has ever occurred and it ran with no instrument (P-1: the instrument
+"did not exist when it occurred"; annex Recital (D); Schedule A "NOT EXECUTED"). The claim is false as
+to 100% of instances. `will not` is a forward commitment, which is what determination **C1** actually
+is — a behavioural control in force — and it is the exact form the original review proposed.
+
+**The escalation named three sites. There are four.** Verified whitespace-tolerantly against the tree:
+DPD **2**, gdpr **1**, privacy **1**. The missed site is **DPD §4.1**, which came from my own **D3-a**
+block — *"Jikigai does not carry out operator-assisted processing without first agreeing a written
+instrument with the User;"*. A three-site fix leaves it standing. This is why row 16 is re-cut as a
+**count** below rather than an existence check: an existence check passes on the first site it finds.
+
+**DPD §2.1c limb (c)** — replace the first sentence:
+
+```markdown
+- **(c) Instrument first.** Jikigai **will not** carry out operator-assisted processing without first
+  agreeing a written Article 28(3) instrument with the User.
+```
+
+**DPD §4.1** — replace the corresponding clause:
+
+```markdown
+Jikigai **will not** carry out operator-assisted processing without first agreeing a written instrument with the User; where such an instrument is agreed, it settles authorisation under Article 28(2), the basis relied on for that transfer, and the applicable retention position.
+```
+
+**gdpr §2.2** — replace the corresponding clause:
+
+```markdown
+Jikigai **will not** carry out operator-assisted processing without first agreeing a written Article 28(3) instrument with the User; where such an instrument is agreed, it — not this Policy — addresses the matters listed in the Data Protection Disclosure, Section 2.1c(c).
+```
+
+**privacy §4.2** — replace the sentence (this also discharges the smaller item on row 38):
+
+```markdown
+We **will not** run an operator-assisted session for you unless we have first put in place a written agreement with you covering it.
+```
+
+**Row 16 — REPLACED by rows 16a–16d.** The old row asserted the present-tense string as its pass
+condition, so the gate encoded the defect. All counts are whitespace-tolerant (`perl -0777` with
+`s/\s+/ /g` first — the corpus is hard-wrapped and a literal multi-word grep silently misses wrapped
+occurrences, which is how the fourth site stayed hidden).
+
+| # | Assertion | Expected |
+|---|---|---|
+| 16a | DPD — `will not carry out operator-assisted processing` | exactly **2** |
+| 16b | gdpr — `will not carry out operator-assisted processing` | exactly **1** |
+| 16c | privacy — `will not run an operator-assisted session for you unless we have first put in place` | exactly **1** |
+| 16d | paired prohibition, all three files — `(does\|do) not (carry out operator-assisted processing\|run an operator-assisted session)` | **0** — insufficient alone; 16a–16c are the obligations |
+| 16e | DPD — `supplies no basis for the Controller roles` (unchanged) | **1** |
+
+## A2 — UPHELD. privacy §8.1 over-claims toward reassurance.
+
+**RULING: keep the heading, scope the erasure sentence.** Narrowing the heading to repository access
+would be the wrong repair — PA-34(c) records third parties (company officers in fixture data) affected
+by the **session** limb too, so narrowing would leave that population with no route on the one surface
+written for them. The defect is that the body reassures on PA-35(h) terms while PA-34(h) says the
+opposite: Art. 17 is "partly unimplementable … Jikigai cannot compel earlier deletion."
+
+**privacy §8.1** — replace from `**Your Article 21(1) right to object`  to the end of the paragraph:
+
+```markdown
+**Your Article 21(1) right to object is available immediately** and does not depend on anything else in this Policy. What we can do in response differs by situation, and we say so rather than leaving you to find out. Where the processing is our reading of a repository, we keep no systematic copy, so we can act on an objection by ceasing to read and deleting our local copies. Where instead your data formed part of content sent to our AI provider during an operator-assisted session, we can stop our own further use, but we **cannot** compel that provider to delete its copy earlier than its own terms provide — the limitation described in Section 7. Two further limitations are stated up front rather than discovered later: any search for your data across a third party's repository is **manual and carries no completeness guarantee**, and we are not the controller of the repository itself — its owner is, and rights over what it contains lie against them as well as against us.
+```
+
+## A3 — UPHELD. The "no Jikigai machine" claim is false and must go.
+
+**RULING: strike the machine/credential claim at all four sites; key the distinction on session and
+AI-provider credential, as proposed. Add a non-exclusivity note under the table.**
+
+PA-35(g)(4) is decisive: *"Local clones of the observed repository sit on the operator workstation,
+which is not full-disk encrypted … the exposure is standing rather than session-bound."* Jikigai
+reading a repository happens on a **Jikigai** machine. The table row asserting "the User's own machine
+and the User's own credentials" is false on its face, and it also teaches mutual exclusivity where
+determination §2 says *"The postures are not exclusive"* and §6/§9 record B and C occupied
+simultaneously. The reviewer's proposed key is correct and is adopted: the true distinguishing
+features are **no Jikigai-run session** and **no Jikigai-held AI-provider credential**. The qualifier
+"by itself" is load-bearing and must survive — PA-35(e) records that if observed content is ever fed
+to a Soleur agent under a Jikigai key, that egress falls under PA-34 and is gated by C1.
+
+**DPD §2.1c table, row 4** — replace:
+
+```markdown
+| Neither a Jikigai-run session nor a Jikigai-held AI-provider credential, but a purpose Jikigai has chosen — for example Jikigai reading a repository the User has given it access to, in order to measure how a programme is progressing | **Controller** |
+```
+
+**DPD §2.1c — new sentence immediately after the table:**
+
+```markdown
+These rows are not mutually exclusive. More than one may describe the same activity at the same time, and where they do, each role applies to the limb it describes.
+```
+
+**DPD §2.1c limb (e)** — replace the `This case is distinct` clause:
+
+```markdown
+This case is distinct from (a) to (d): it does not depend on the User having asked for a session, the reading does not by itself send the User's content to an AI provider under a Jikigai-held credential, and it continues for as long as the access lasts rather than ending with a session.
+```
+
+**gdpr §2.2** — replace the `even though no session` clause:
+
+```markdown
+Jikigai is a **controller** for that reading even though the User has not asked for a session and the reading does not by itself send content to an AI provider under a Jikigai-held key.
+```
+
+**gdpr §3.14 limb (ii)** — replace the closing clause:
+
+```markdown
+Limb (ii) does not depend on the User having asked for a session, and the reading does not by itself send the User's content to an AI provider under a Jikigai-held credential; it continues for as long as the access lasts.
+```
+
+## A4 — UPHELD, and my R6 was the tell. Publish the negative.
+
+**RULING: add the recorded absence to §3.14's safeguards, and reconcile the copy wording.**
+
+The finding is exactly right and the sharpest of the six: §3.14 publishes the necessity weakness, the
+expectations weakness and the Art. 14(5)(b) weakness, then lists four positive safeguards and omits
+the one measure the registers record as **absent**. PA-34(g)(5) names asymmetric disclosure of this
+same absence as "the #6588 class one step down". My R6 pre-cleared the encryption lint on the ground
+that *no drafted string contains an `encrypt`/`LUKS` token* — which does not clear the omission, it
+**is** the omission, stated as a clearance. Verified safe to fix: `encryption-posture-ledger.json`
+carries no `gdpr-policy` anchor, so §3.14 is outside the R5 proximity rule entirely.
+
+The "no systematic copy" / "deleting local copies" tension is real and is reconciled rather than left
+to the reader: both are from the record (PA-35(f); LIA safeguard 5) and mean different things — no
+persistent structured store, versus a transient working clone.
+
+**gdpr §3.14** — replace the `**Safeguards:**` bullet in full:
+
+```markdown
+- **Safeguards, including one recorded as absent.** Access is repository-scoped rather than
+  organisation-wide, and read-only in practice. No systematic copy of a User's content is kept — only
+  derived aggregate measurements persist, and any local working copy is transient and is deleted when
+  access ends. A no-republication rule applies to what is observed: it is not to be published, quoted
+  or reproduced in any Jikigai commit, issue, digest, case study or marketing material. Access is
+  scheduled to end when the programme ends. **One measure is recorded as absent rather than claimed:**
+  the workstation on which any local working copy sits is **not** full-disk encrypted, so that copy is
+  unencrypted at rest and a lost or stolen workstation would expose it. Because this activity is
+  continuous rather than session-bound, that exposure is standing rather than momentary. It is
+  disclosed here for the same reason the weaknesses above are — an accurate account of the safeguards
+  is worth more than a flattering one.
+```
+
+## A5 — UPHELD. Make it a route, not an assurance of the destination.
+
+**RULING: replace the availability line at all three sites.** The line asserted that safeguards exist
+and are obtainable, in the same delta that qualified annex §5.2 to record Commercial Terms as
+unconfirmed. On Consumer Terms there may be nothing to send, so the undertaking could outrun the
+position. Art. 13(1)(f) requires *the means by which to obtain a copy* — providing the means is the
+obligation, and a route discharges it without warranting the destination. A2 was not breached (no
+mechanism is named); this is a separate over-claim.
+
+**DPD §4.1, gdpr §6, and privacy §10 (A6)** — replace / add:
+
+```markdown
+To ask what safeguards apply to that transfer, and to obtain a copy of them, write to <legal@jikigai.com>.
+```
+
+## A6 — UPHELD. Site-enumeration gap in my rulings, not implementer drift. One correction.
+
+**RULING: both sweeps take their third site.** D3 named two sites and D4 named two; the corpus has
+three of each. That is my error.
+
+**Correction to the escalation:** the privacy transfer site is **§10 "International Data Transfers"**
+(heading at line 551), not §9 — §9 is "Children's Privacy". Note §10 uses the second-person
+`**What this covers.**` pointer register per A4's two-register split; the A5 sentence above is
+imperative and reads correctly in both registers, so no variant is needed.
+
+**privacy §10** — append after the existing operator-assisted transfer sentence: the A5 line above.
+
+**DPD §10.1** — append after the (now flush-left) Scope block:
+
+```markdown
+Limb (b) above describes Local Data, which is never transmitted to Jikigai. It does not describe content sent to an AI provider under a **Jikigai-held** credential during an operator-assisted session: that provider holds a copy under the terms applying to Jikigai's own account, for a period Jikigai does not set and cannot shorten once the content has been sent, and removing the Plugin does not reach it. Retention for such a session is addressed in the written instrument agreed with the User before it takes place.
+```
+
+## Smaller item 1 — row 38 was unsatisfiable against my own text. My error.
+
+**RULING: row 38 replaced. You were right to refuse to edit prose to satisfy a grep.**
+
+I asserted in Adjudication B that the "agreeing a written agreement" repetition was removed, and then
+used that exact phrase in the replacement. The claim was false about my own draft. The A1 rewrite
+(`put in place`) removes the repetition for real, which makes the row satisfiable.
+
+| # | Assertion | Expected |
+|---|---|---|
+| 38a | privacy — `unless we have first put in place a written agreement` | **1** |
+| 38b | privacy — `agreeing a written agreement` (paired prohibition) | **0** |
+| 38c | privacy — `it is not what makes our own product-learning use lawful` | **1** |
+
+## Smaller item 2 — the C5 attestation claim inverts to PENDING.
+
+**RULING: adopted.** The C5 row asserts `SIGNED-OFF … at <path>` in the past tense while the file does
+not exist and is written at the gate (Adjudication C). Row 25 is the proof that a downstream gate can
+miss, so the record must not depend on one. Replace the final clause of the C5 row:
+
+```markdown
+CLO attestation: **PENDING — to be written at ship Phase 5.5** at `knowledge-base/legal/audits/2026-08-09-clo-attestation-7347-operator-assisted-scope.md`, and this clause flipped to SIGNED-OFF in the same commit that creates it.
+```
+
+**Row 39 becomes a coherence check, not an existence check:** either the C5 row says `PENDING` **and**
+the attestation file is absent, or it says `SIGNED-OFF` **and** the file is present. The state
+`SIGNED-OFF` with the file absent must never exist in a merged commit.
+
+## Noted — one endorsement, one refusal
+
+**Refused: the DPD §3.1 clause pointing at #7375.** The substance is defensible but the form is not —
+**A7** forbids PR/issue references in published legal text, and this ruling has enforced that
+throughout. Beyond form, plan **A1** is explicit that the `trigger.sh` falsification of limbs (b)/(d)
+is a different claim class with a different cause and must **not** be fixed here. The flush-left move
+changes where a *scope limitation* attaches; it does not newly assert that (b)/(d) are true, so it
+creates no obligation to qualify them. A partial correction that neither fixes the limbs nor names why
+would be worse than the tracked status quo. **No clause. Keep it tracked.**
+
+**Endorsed: extracting rows 1–39 into `scripts/check-legal-corpus-obligations.sh` (#7387 gate 3).** A
+checklist that is read rather than run depends on a reader not skipping a row, and this round produced
+four defects in text that had passed a 39-row gate — including one row (16) that asserted the defect
+as its pass condition and one (38) that could never pass. The script must implement the
+whitespace-tolerant normalisation used above; a literal multi-word grep against this hard-wrapped
+corpus silently misses wrapped occurrences, which is precisely how the fourth A1 site stayed hidden
+from both the escalation and my own earlier counts.
 
 ---
 
