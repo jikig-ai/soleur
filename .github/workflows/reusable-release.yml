@@ -810,6 +810,39 @@ jobs:
         if: steps.docker_build.outcome == 'success'
         run: printf 'pushed=%s\n' "true" >> "$GITHUB_OUTPUT"
 
+      # Verify the JUST-PUSHED artifact actually carries no credential (#7389).
+      #
+      # The pre-build source sweep proves the build DEFINITION is clean; this proves the
+      # published RESULT is. They are different claims: the mode is resolved by the
+      # action at run time from repository visibility, so a source-clean build can still
+      # publish an attestation nobody predicted. This is the only check that reads what
+      # was actually written to the registry.
+      #
+      # Inspect the INDEX digest, never a child platform digest — a child returns
+      # `.Provenance == {}` and would read as clean. The scanner requires BOTH `.SLSA`
+      # and `.Image` to be present and non-null, so a degraded 200 fails closed rather
+      # than reporting "zero args, clean".
+      #
+      # The capture is written to the runner-local temp dir and shredded immediately:
+      # it is the one artifact in this job that would contain a live credential if the
+      # gate is about to fail.
+      - name: Verify published attestation carries no credential
+        if: steps.docker_build.outcome == 'success'
+        env:
+          IMAGE_REF: ${{ inputs.docker_image }}@${{ steps.docker_build.outputs.digest }}
+        run: |
+          set -uo pipefail
+          cap="$(mktemp -t provcap.XXXXXXXX.json)"
+          # shellcheck disable=SC2064
+          trap "shred -u '$cap' 2>/dev/null || rm -f '$cap'" EXIT
+          rc=0
+          docker buildx imagetools inspect "$IMAGE_REF" --format '{{ json . }}' > "$cap" 2>/dev/null || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::could-not-inspect: imagetools inspect failed (rc=$rc) for the pushed digest. Failing closed." >&2
+            exit 1
+          fi
+          python3 scripts/lint-buildarg-secret-channels.py --provenance "$cap"
+
       # Keyless-sign the pushed image DIGEST (#5933 Item 4). `id-token: write`
       # (job permissions above) mints the OIDC token cosign exchanges with Fulcio
       # for an ephemeral signing cert; the signature + Rekor bundle land in GHCR as
