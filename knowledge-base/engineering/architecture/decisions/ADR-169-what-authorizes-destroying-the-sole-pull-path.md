@@ -397,7 +397,15 @@ Blob completeness is verified **per child**, at the sink:
 - **Platform children** keep the full `crane validate --remote`. Unchanged.
 - **Attestation children** are verified by **blob presence** (`crane blob`, which fetches bytes
   without decompressing them), for the config blob and every layer the child declares.
-- **Non-index references** keep the single-validate path unchanged.
+- **Non-index IMAGE references** keep the single-validate path unchanged.
+- **The cosign signature** is verified by blob presence, like an attestation child — and it is
+  itself an INDEX. Measured at GHCR 2026-08-10 (`soleur-web-platform:v0.249.4`), the referrers tag
+  `sha256-<hex>` resolves to an `application/vnd.oci.image.index.v1+json` with neither `.config`
+  nor `.layers`, whose child carries `artifactType: application/vnd.dev.sigstore.bundle.v0.3+json`.
+  So the signature is neither a "non-index reference" nor a child of the image index; it is a third
+  thing, and the bullet above said the opposite until #7410. Reading it as a plain manifest is
+  exactly what shipped a checker that fail-closed on a healthy signature and refused the recut on
+  run 31392395980. The walk descends **one** level, from a digest-pinned root.
 - A named `LAYERFORMAT` class maps a residual `gzip: invalid header` to exit **4** ("do not
   deploy"), so exit 6 stays reserved for shapes the engine genuinely cannot name.
 
@@ -454,7 +462,34 @@ ever becomes the binding constraint, the cheaper lever is memoising verification
 `dst_digest` — the required pin set resolves three tags to ONE index digest, so the same content
 is currently verified three times — which costs no coverage at all.
 
-### Two narrowings this amendment does not close
+### Amendment 2026-08-10 (#7410) — the signature root, and what the walk does NOT establish
+
+Two corrections to the amendment above, both from a nine-agent review of the fix:
+
+- **The walk is rooted at a DIGEST, not the referrers tag.** The first cut read the signature at
+  its tag and justified that in a comment with "there is no digest to pin it by". That was false —
+  both the GHCR digest and the sink digest are read a few lines earlier and were discarded. A tag
+  read is not byte-verified, so content-addressing the children below it bought integrity relative
+  to a root nobody had checked. The engine now asserts GHCR/sink digest parity for the signature
+  (mirroring what verification 1 has always done for the image) and then walks from the digest ref.
+- **`depth` must be threaded by every caller already inside a walk.** Defaulting it at the
+  attestation call site reset the counter one level down, so the engine walked TWO index levels
+  while its own comment claimed one — turning a shape the previous revision refused into a PASS.
+  The nested-index refusal in verification 2 keys on the PARENT's declared `mediaType`, which no
+  registry enforces against the child's body, so `verify_blobs_of`'s own fail-closed die was the
+  body-based backstop behind it. Removing that backstop was the regression.
+
+### Three narrowings this amendment does not close
+
+- **A config alone is not evidence.** The blob walk now requires a child to declare at least one
+  LAYER. Without that, a sigstore bundle child whose payload layer had been evicted verified green
+  by fetching its config — which is `application/vnd.oci.empty.v1+json`,
+  `sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a`, the hash of `{}`, an
+  object every registry holds by construction. The narrowing that remains: the engine verifies the
+  bundle blob is PRESENT and hashes correctly. It does not parse it, so it cannot say the signature
+  is over the right subject. A2 asserts the pull path is re-materialisable, not that `cosign verify`
+  will succeed.
+
 
 - **`platform.architecture: unknown` as an attestation signal** is an assumption, not a measured
   invariant. Both it and the `vnd.docker.reference.type` annotation come from the same BuildKit
