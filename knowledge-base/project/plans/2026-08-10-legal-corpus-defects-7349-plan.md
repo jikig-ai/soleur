@@ -526,8 +526,9 @@ Sequenced last because it depends on the counterparty documents being settled.
   `disclaimer` to `BODY_EQUIVALENCE_DOCS`. This is what converts the fix into a guarantee — the
   committed note in the script has been waiting for exactly this remediation PR.
 - Refresh the gate-2 baseline so the reduced drift is frozen at the new, lower level.
-- File the successor issue for the deferred set with the measured per-doc drift table and the
-  2026-09-30 target.
+- File the successor issue for the deferred set with the measured per-doc drift table, **each
+  document's character classification** (not just its count), the note that `gdpr-policy` is
+  partially remediated here, and the 2026-09-30 target.
 - **Re-point gate 2's header and runtime output** from `#7349` to the successor issue. The gate
   asserts `#7349` and `2026-09-30` in its output and its suite pins that assertion — closing this
   issue while drift remains would leave the gate citing a closed tracker. The suite must be
@@ -801,9 +802,13 @@ discoverability_test:
       `data-protection-disclosure` and `disclaimer`.
 - [ ] **AC29** — The gate-2 baseline is refreshed and total frozen drift is **strictly lower** than
       the measured 220.
-- [ ] **AC30** — The successor issue exists, carries the measured per-doc drift table for the
-      deferred set and the 2026-09-30 target; gate 2's header and runtime output cite **it**, not
-      a closed `#7349`; and the suite assertion pinning that string is updated in the same commit.
+- [ ] **AC30** — The successor issue exists and carries (a) the measured per-doc drift table for
+      the deferred set, (b) each document's **character classification**, not just its count
+      (CPO C3 — a resync-only successor repeats the "unclassified" gap), (c) a note that
+      `gdpr-policy` is **partially** remediated here (Art. 6(1) bullets ported; ~60 structural
+      lines remain), and (d) the 2026-09-30 target. Gate 2's header and runtime output cite
+      **it**, not a closed `#7349`, and the suite assertion pinning that string is updated in the
+      same commit.
 - [ ] **AC31** — The three legal skill/agent gate-discoverability blocks (`legal-audit`,
       `legal-generate`, `clo`) describe the new `BODY_EQUIVALENCE_DOCS` state consistently.
 

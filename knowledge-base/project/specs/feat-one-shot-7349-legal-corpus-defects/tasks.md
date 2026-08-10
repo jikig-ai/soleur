@@ -162,9 +162,10 @@ Sequenced last: it depends on the counterparty documents being settled. The T&C 
 - [ ] 6.3 Add `acceptable-use-policy`, `data-protection-disclosure` and `disclaimer` to
       `BODY_EQUIVALENCE_DOCS` — **after** each reports zero drift, never before.
 - [ ] 6.4 Refresh the gate-2 baseline; assert total frozen drift is strictly below 220.
-- [ ] 6.5 File the successor issue for the deferred set (`gdpr-policy` 63, `privacy-policy` 58,
-      `corporate-cla` 12, `individual-cla` 7, `cookie-policy` 4) with the measured table and the
-      2026-09-30 target.
+- [ ] 6.5 File the successor issue for the deferred set (`gdpr-policy` **remaining ~60 after the
+      Phase 3b carve-back**, `privacy-policy` 58, `corporate-cla` 12, `individual-cla` 7,
+      `cookie-policy` 4) with the measured table, **each document's character classification**,
+      a note that `gdpr-policy` is partially remediated here, and the 2026-09-30 target.
 - [ ] 6.6 Re-point gate 2's header and runtime output from `#7349` to the successor issue, and
       update the pinned assertion in `scripts/lint-legal-mirror-drift-baseline.test.sh` **in the
       same commit**.
