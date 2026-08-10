@@ -424,8 +424,13 @@ echo ""
 echo "--- TS9: prose names the same files the predicate allows ---"
 
 # Extract from the predicate group only (the `-o -name '...'` arms).
-allowed=$(sed -n "/-not -path '\*\/project\/specs\/\*'/,/\\\\)/p" "$GEN_SCRIPT" \
-  | grep -oE "\-name '[^']+'" | sed "s/-name '//; s/'//" | LC_ALL=C sort -u)
+#
+# `|| true` is load-bearing, not defensive noise: `grep` exits 1 on no match and
+# this file runs under `set -euo pipefail`, so without it a broken extraction
+# kills the whole suite BEFORE the empty-check below can report why — the
+# fail-closed branch would be unreachable, which is the opposite of fail-closed.
+allowed=$( { sed -n "/-not -path '\*\/project\/specs\/\*'/,/\\\\)/p" "$GEN_SCRIPT" \
+  | grep -oE "\-name '[^']+'" | sed "s/-name '//; s/'//" | LC_ALL=C sort -u; } || true )
 
 if [[ -z "$allowed" ]]; then
   echo "  FAIL: TS9 could not extract the allowlist from the predicate (extraction is broken, not the prose)"
