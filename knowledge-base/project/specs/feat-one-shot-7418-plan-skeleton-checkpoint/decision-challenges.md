@@ -36,7 +36,7 @@ a documented v1 decision.
 
 The issue scoped "a pure ordering + incremental-persistence change to the plan skill plus the
 recovery branch in one-shot". The plan adds `deepen-plan/SKILL.md`, `plan-issue-templates.md`, a
-contract test and ADR-144.
+contract test and ADR-174.
 
 Drivers: `deepen-plan` must clear the cursor or a designed HALT loops forever; the templates
 reference is the canonical frontmatter definition and would otherwise become the most-wrong of three;

@@ -46,7 +46,8 @@ prose *stating* the absence, the same self-reference class as R2), 4.10 encrypti
 **Verified during the pass (not asserted):** every cited AGENTS rule ID is active and none appears in
 `scripts/retired-rule-ids.txt`; every cited issue/PR (#7418, #7349, #7416, #4133, #7247, #3625,
 #4116) resolves and #7247 matches its usage in `one-shot/SKILL.md:97`; every `knowledge-base/` path
-resolves; ADR-144 is free on `origin/main` (ADR-173 is triple-claimed); the unbounded frontmatter
+resolves; the ADR ordinal was re-derived at /work over all pushed branches (ADR-174; the plan's
+ADR-144 pick was `origin/main`-scoped and collided — see §Architecture Decision); the unbounded frontmatter
 reader returns empty against this file (the R2 regression fixture).
 
 ## Overview
@@ -96,7 +97,7 @@ Two defects compound:
 | **v1 claim: "frontmatter is parsed, so the self-reference trap dissolves"** | **FALSIFIED against this very file.** The prescribed reader (`plan/SKILL.md:1013` gsub awk) is line-anchored, not frontmatter-bounded. Run on v1 of this plan it returned `planning` — from a fenced YAML *example*, while the frontmatter had no such key. | **v2 mandates frontmatter-bounded parsing** + a body-collision fixture (D3a). |
 | v1 assumed `## Research Insights` is written by `plan` | **False.** That section is authored by `deepen-plan` (`deepen-plan/SKILL.md` §7). `plan` mentions it only as a scratch destination (`:263`). v1's checkpoint therefore bought a filename and nothing else for a stall *inside* the fan-out — the modal case. | **D2a adds a real `## Research Insights` write at Phase 1.7.** |
 | v1 claimed the committed file carries the terminal state | **False.** Save Tasks (`plan/SKILL.md:759-767`) commits *inside* `plan`, before deepen-plan; `deepen-plan` never commits (`grep -n 'git add\|git commit' deepen-plan/SKILL.md` → nothing). | D3's cursor is deleted at `plan` finalization, so the committed artifact is inert. |
-| v1 chose ADR-173 | **Triple-claimed** on pushed branches `feat-kb-archival-convention`, `feat-one-shot-7393-…`, `feat-one-shot-7394-…`. | **ADR-144** (verified free: 0 files on `origin/main`, 0 references in `knowledge-base/`). |
+| v1 chose ADR-173 | **Triple-claimed** on pushed branches `feat-kb-archival-convention`, `feat-one-shot-7393-…`, `feat-one-shot-7394-…`. | **ADR-174** — first free ordinal (ADR-001…173 all claimed, no gaps) when the probe quantifies over **all pushed branches**, not just `origin/main`. v2's ADR-144 pick used the `origin/main`-only method and collided; see §Architecture Decision. |
 
 ## Proposed Solution
 
@@ -450,7 +451,7 @@ The 6-agent panel returned 8 P0s. All are resolved; the four largest changed the
 | R5 | Resume at `finalize` skipped gates 2.7–2.11 + Phase 3; T2 contradicted ADR-032 | spec-flow, architecture | All cheap gates re-run on resume (D6) |
 | R6 | Success path used a bare presence check, leaving the stub→`/work` path open | spec-flow | Same conjunct on both paths (D4) |
 | R7 | D4 table had no out-of-enum / malformed arm | kieran, simplicity, architecture | Table made total (D4) |
-| R8 | ADR-173 triple-claimed on pushed branches | architecture | ADR-144 (verified free) |
+| R8 | ADR-173 triple-claimed on pushed branches | architecture | ADR-174 (verified free) |
 | R9 | `git add` on the plans *directory* sweeps abandoned skeletons | kieran, architecture | Exact-path add (D8) |
 | R10 | `plan-issue-templates.md` is the canonical frontmatter template and was missing | kieran | Added to Files to Edit |
 | R11 | §Managing Plan Documents ("preserve prior content") contradicts the resume rule | architecture | Reconciled in D8 |
@@ -480,11 +481,21 @@ One open `code-review` issue mentions a file this plan edits (64 open issues sca
 
 ### ADR
 
-**ADR-144 (provisional) — "Plan artifacts checkpoint before research; a plan-owned cursor key
-mediates resume."** Verified free: 0 files on `origin/main`, 0 references in `knowledge-base/`.
-ADR-173 was rejected — three pushed branches already claim it. The ordinal stays provisional until
-`/ship`'s collision gate re-verifies; if it moves, sweep this plan **and** `tasks.md` in the same
-edit (`2026-07-05-adr-renumber-must-sweep-planning-docs-and-scripts-glob-orphan.md`).
+**ADR-174 (provisional) — "Plan artifacts checkpoint before research; a plan-owned cursor key
+mediates resume."** Verified free across `origin/main` **and every pushed branch**: enumerating
+`git ls-tree -r <ref> knowledge-base/engineering/architecture/decisions/` over all 62 `origin/*` refs
+yields ADR-001…ADR-173 with **no gaps**, so ADR-174 is the first free ordinal. The ordinal stays
+provisional until `/ship`'s collision gate re-verifies; if it moves, sweep this plan **and**
+`tasks.md` in the same edit
+(`2026-07-05-adr-renumber-must-sweep-planning-docs-and-scripts-glob-orphan.md`).
+
+> **Corrected at /work (was ADR-144).** The plan's original pick was verified with an
+> `origin/main`-scoped probe ("0 files on `origin/main`, 0 references in `knowledge-base/`"), which is
+> the *same insufficient method* the plan had just caught for ADR-173 — a branch-claimed ordinal is
+> invisible to it. ADR-144 is in fact claimed by
+> `origin/feat-one-shot-6766-6774-ci-guards-cannot-fail`
+> (`ADR-144-discoverability-test-kind-and-required-suffix-invariant.md`). An ordinal probe must
+> quantify over pushed branches, not just the default branch.
 
 New ADR — a corpus sweep found none governing plan-artifact format or lifecycle. It must:
 
@@ -541,7 +552,7 @@ ADR authored in this PR, `status: accepted`. No soak gate, so no Follow-Through 
 
 - `plugins/soleur/test/plan-skeleton-checkpoint.test.ts` (+ a fixture whose **body** contains
   `pipeline_resume:` at column 0)
-- `knowledge-base/engineering/architecture/decisions/ADR-144-*.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-174-*.md`
 
 ## Implementation Phases
 
@@ -567,7 +578,7 @@ reconcile §Managing Plan Documents; narrow `git add`.
 
 D4's total table on both paths; D7 selector; arm termination; `Status:` disambiguation.
 
-### Phase 4 — `deepen-plan/SKILL.md`, templates reference, ADR-144 (GREEN)
+### Phase 4 — `deepen-plan/SKILL.md`, templates reference, ADR-174 (GREEN)
 
 Cursor entry/exit/halt semantics; frontmatter template; ADR.
 
@@ -609,7 +620,7 @@ Contract test, sibling assertions, full suite.
     `bun test plugins/soleur/test/plan-skeleton-checkpoint.test.ts` passes; the fixture assertion
     fails if the reader is reverted to an unbounded `^pipeline_resume:` scan (proven by the fixture
     itself in CI, not by a one-off manual demo).
-11. **AC11 — ADR exists and is wired.** `ADR-144-*.md` exists with `status: accepted`, an
+11. **AC11 — ADR exists and is wired.** `ADR-174-*.md` exists with `status: accepted`, an
     `amends: [ADR-015]` edge, and citations to ADR-032/121/126/089/026/151/083/132.
 12. **AC12 — Recovery verdict is recorded.** `one-shot/SKILL.md`'s `## Plan Phase` block writes a
     `Recovery verdict:` line naming the verdict, the cursor value, `resume_attempts` and the selector

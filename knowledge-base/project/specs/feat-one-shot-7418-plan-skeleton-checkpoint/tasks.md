@@ -3,7 +3,7 @@
 Plan: `knowledge-base/project/plans/2026-08-10-chore-plan-skeleton-checkpoint-before-research-fanout-plan.md` (v2)
 Branch: `feat-one-shot-7418-plan-skeleton-checkpoint`
 Lane: `cross-domain` (no `spec.md` for this branch — TR2 fail-closed)
-ADR: **ADR-144** (provisional; re-verify at ship — ADR-173 is triple-claimed on pushed branches)
+ADR: **ADR-174** (provisional; re-verify at ship — ADR-173 is triple-claimed on pushed branches)
 
 > Read the plan's §Review Revisions before starting. v2 resolves 8 P0s from a 6-agent panel; the
 > carrier key, the parsing rule, the resume bound and the gate re-run all changed from v1.
@@ -97,7 +97,7 @@ ADR: **ADR-144** (provisional; re-verify at ship — ADR-173 is triple-claimed o
       would otherwise leave the cursor on the file `one-shot` holds).
 - [ ] 4.4 `plan/references/plan-issue-templates.md`: document the skeleton frontmatter keys in all
       three templates (`:18-22`, `:148-152`, `:302-306`).
-- [ ] 4.5 Author `ADR-144-*.md`, `status: accepted`, with an `amends: [ADR-015]` edge (not a rewrite —
+- [ ] 4.5 Author `ADR-174-*.md`, `status: accepted`, with an `amends: [ADR-015]` edge (not a rewrite —
       ADR-112:122-126 rejected that shape) and citations to ADR-032/121/126/089/026/151/083/132.
       Record that CONTINUATION-GATE is un-ADR'd prose.
 
