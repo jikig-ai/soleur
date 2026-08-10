@@ -60,6 +60,10 @@ CANONICAL="$REPO_ROOT/scripts/ci-required-ruleset-canonical-required-status-chec
 ACTION_YML="$REPO_ROOT/.github/actions/bot-pr-with-synthetic-checks/action.yml"
 SECRET_SCAN_YML="$REPO_ROOT/.github/workflows/secret-scan.yml"
 CI_YML="$REPO_ROOT/.github/workflows/ci.yml"
+# 4th gitleaks install site (#7307). main-health-monitor.yml runs TEST_GROUP=all,
+# so it needs the same gitleaks three suites hard-ABORT without; an unregistered
+# copy drifts silently and makes the monitor scan with a different gitleaks than CI.
+MHM_YML="$REPO_ROOT/.github/workflows/main-health-monitor.yml"
 CLA_CANONICAL="$REPO_ROOT/scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"
 
 # CLA exclusion for the CI-parity checks, DERIVED from the CLA canonical (#6061)
@@ -246,7 +250,7 @@ echo ""
 
 # --- Test 5: gitleaks pin-parity across all three install sites -------------
 
-echo "Test 5: gitleaks version + SHA256 pin is identical across all 3 sites"
+echo "Test 5: gitleaks version + SHA256 pin is identical across all 4 sites"
 extract_version() {
   grep -oE 'GITLEAKS_VERSION["]?[[:space:]]*[:=][[:space:]]*"?[0-9]+\.[0-9]+\.[0-9]+' "$1" \
     | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
@@ -256,26 +260,29 @@ extract_sha() {
     | grep -oE '[0-9a-f]{64}' | head -1
 }
 
-for f in "$SECRET_SCAN_YML" "$CI_YML" "$ACTION_YML"; do
+for f in "$SECRET_SCAN_YML" "$CI_YML" "$ACTION_YML" "$MHM_YML"; do
   assert_file_exists "$f" "pin site exists: ${f##*/}"
 done
 
 ss_v=$(extract_version "$SECRET_SCAN_YML"); ss_s=$(extract_sha "$SECRET_SCAN_YML")
 ci_v=$(extract_version "$CI_YML");          ci_s=$(extract_sha "$CI_YML")
 ac_v=$(extract_version "$ACTION_YML");       ac_s=$(extract_sha "$ACTION_YML")
+mhm_v=$(extract_version "$MHM_YML");         mhm_s=$(extract_sha "$MHM_YML")
 
 # Non-empty guard first — a missing pin would make two empties compare equal.
-if [[ -n "$ss_v" && -n "$ss_s" && -n "$ci_v" && -n "$ci_s" && -n "$ac_v" && -n "$ac_s" ]]; then
-  echo "  PASS: (5a) all three sites declare a gitleaks version + SHA256 pin"
+if [[ -n "$ss_v" && -n "$ss_s" && -n "$ci_v" && -n "$ci_s" && -n "$ac_v" && -n "$ac_s" && -n "$mhm_v" && -n "$mhm_s" ]]; then
+  echo "  PASS: (5a) all four sites declare a gitleaks version + SHA256 pin"
   PASS=$((PASS + 1))
 else
-  echo "  FAIL: (5a) a gitleaks pin is missing — ss=[$ss_v/$ss_s] ci=[$ci_v/$ci_s] action=[$ac_v/$ac_s]"
+  echo "  FAIL: (5a) a gitleaks pin is missing — ss=[$ss_v/$ss_s] ci=[$ci_v/$ci_s] action=[$ac_v/$ac_s] mhm=[$mhm_v/$mhm_s]"
   FAIL=$((FAIL + 1))
 fi
 assert_eq "$ss_v" "$ci_v" "(5b) secret-scan.yml version == ci.yml version"
 assert_eq "$ss_v" "$ac_v" "(5c) secret-scan.yml version == action version"
 assert_eq "$ss_s" "$ci_s" "(5d) secret-scan.yml SHA256 == ci.yml SHA256"
 assert_eq "$ss_s" "$ac_s" "(5e) secret-scan.yml SHA256 == action SHA256"
+assert_eq "$ss_v" "$mhm_v" "(5f) secret-scan.yml version == main-health-monitor version"
+assert_eq "$ss_s" "$mhm_s" "(5g) secret-scan.yml SHA256 == main-health-monitor SHA256"
 echo ""
 
 # --- Test 6: parser logic-parity across all three copies --------------------

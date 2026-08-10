@@ -464,7 +464,7 @@ No `ssh` in the discoverability path.
 
 **Apply path.** Auto-applied on merge by `apply-sentry-infra.yml` (`paths:` covers `infra/sentry/**`, plan full-root). No operator step. Additive only, so the `sentry-destroy-required` / `[ack-destroy]` gate is not engaged. No downtime.
 
-**Distinctness / drift safeguards.** Slug parity is mechanically enforced in both directions (`prod-version-drift-check.test.sh` B10g; `sentry-monitors-audit.sh`), and AC11 requires both edits in one commit. `checkin_margin_minutes` follows the documented cohort convention. `max_runtime_minutes` is decorative under the single-heartbeat pattern and is set to the sibling value for schema consistency — deliberately *not* coupled to the job ceiling.
+**Distinctness / drift safeguards.** Slug parity is mechanically enforced in both directions — forward (workflow `monitor-slug:` → resource) by `apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts`, reverse (resource → registered consumer) by `function-registry-count.test.ts` test (c2). *(Corrected at review: an earlier draft cited `prod-version-drift-check.test.sh` B10g, which is scoped to `prod-version-drift.yml`'s own slug and never sees this monitor, and put `sentry-monitors-audit.sh` under `scripts/` rather than `apps/web-platform/scripts/`.)*, and AC11 requires both edits in one commit. `checkin_margin_minutes` follows the documented cohort convention. `max_runtime_minutes` is decorative under the single-heartbeat pattern and is set to the sibling value for schema consistency — deliberately *not* coupled to the job ceiling.
 
 **Vendor-tier reality check.** None applicable — eight sibling `sentry_cron_monitor` resources already apply cleanly on this org/plan.
 

@@ -1191,39 +1191,52 @@ resource "sentry_cron_monitor" "workspaces_luks_verify" {
 
 # Executor liveness for the main-branch health monitor (#7307).
 #
-# This monitor is a REVERSAL of a documented prior decision, so the reasoning is recorded here
-# rather than left implicit. `cron-main-health-monitor.ts` chose "Design A — no own Sentry
-# monitor", resting end-to-end liveness on this argument: "if the dispatch never reaches the
-# runner, the suite does not run and a broken `main` goes un-issued — the existing
-# operator-visible absence signal this workflow already relies on."
+# NOT a novel argument — the on-point precedent is `scheduled_domain_model_drift`
+# above, which took an own monitor "because weekly-cadence absence-based liveness
+# is too weak — a broken executor that files nothing would be invisible for up to
+# 7 days" (#5872). #7307 is the same argument at a 6h cadence, and it is the
+# empirical counterexample to the posture `cron-main-health-monitor.ts` recorded
+# as "Design A — no own Sentry monitor", which rested end-to-end liveness on "a
+# broken main goes un-issued" being a readable signal. It was not readable: a job
+# timeout is recorded `cancelled` (never `failure`) and `| tee` under the default
+# `bash -e {0}` shell discarded the suite's exit code, so the executor filed
+# nothing for four months. Design A's SCHEDULER arm is untouched and still correct
+# (`cron-inngest-cron-watchdog` + `EXPECTED_CRON_FUNCTIONS`); what this adds is the
+# EXECUTOR arm, which nothing covered.
 #
-# #7307 is that argument's counterexample. Absence-of-an-issue is only a signal if the monitor
-# reliably PRODUCES an issue when main is broken, and it did not: a job timeout is recorded as
-# `cancelled` (never `failure`), and `| tee` under the default `bash -e {0}` shell discarded the
-# suite's exit code entirely. So "no issue appeared" was indistinguishable from "main is healthy"
-# for four months. Design A's scheduler-liveness arm is untouched and still correct — the
-# `cron-inngest-cron-watchdog` + `EXPECTED_CRON_FUNCTIONS` manifest keep the Inngest side covered.
-# What this monitor adds is the EXECUTOR side, which nothing covers today: a dropped dispatch, a
-# disabled workflow, or an unavailable runner produces no run at all, and no in-workflow or
-# in-repo mechanism can observe a run that never happened.
+# crontab mirrors the Inngest cron in cron-main-health-monitor.ts
+# (`{ cron: "0 */6 * * *" }`) — read from that file, not from memory.
 #
-# crontab mirrors the Inngest cron in cron-main-health-monitor.ts (`{ cron: "0 */6 * * *" }`) —
-# read from that file, not from memory. Margin 60 per the Inngest-dispatch cohort convention
-# documented in this file's header; do NOT tighten it (the header records a false page from a
-# tighter margin on this same substrate).
+# checkin_margin_minutes = 90, DERIVED, not copied from the cohort. The cohort's
+# 60 belongs to jobs with `timeout-minutes` of 8-15, i.e. 45+ minutes of slack;
+# this executor's ceiling is 65, so a copied 60 would page BEFORE the job's own
+# ceiling and a legitimately slow green run would open a P1 on a healthy main.
+# The method the header's CLAUDE-EVAL passage actually documents is
+# margin = run budget + setup/teardown slack, so: 65 (job ceiling) + 25 (Inngest
+# jitter, dispatch, runner queue) = 90, still 4x under the 360-minute inter-fire
+# gap, so a genuinely dropped run pages within 90 minutes. If the workflow's
+# `timeout-minutes` moves, this moves with it.
 #
-# max_runtime_minutes = 15 matches the Inngest-dispatch cohort siblings and is DECORATIVE, per
-# this file's header: it applies only to two-step (in_progress -> ok/error) check-ins, and
-# main-health-monitor.yml posts a single terminal heartbeat. It is deliberately NOT coupled to
-# that workflow's job `timeout-minutes` — detection of a job-level cancel here is by MARGIN, which
-# is adequate at a 6h cadence, and a coupling comment would assert a relation nothing reads.
+# (An earlier revision of this comment cited "the Inngest-dispatch cohort
+# convention documented in this file's header" and a header-recorded false page
+# "on this same substrate". Both were wrong: the header documents 30 for
+# Inngest-fired monitors and the 60 convention lives in per-resource blocks, and
+# the false page it records is `scheduled-agent-native-audit` on the in-process
+# claude-eval substrate, not Inngest -> dispatch -> GHA.)
+#
+# max_runtime_minutes tracks the workflow's own `timeout-minutes: 65`, per the
+# `workspaces_luks_verify` convention immediately above. It is DECORATIVE under a
+# single terminal heartbeat (this file's header, lines on two-step check-ins) —
+# but it must not be FALSE: the previous value of 15 was exactly the ceiling this
+# PR replaced, so a reader applying the sibling convention backwards would have
+# read it as evidence the job ceiling was still 15.
 resource "sentry_cron_monitor" "main_health_monitor" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "main-health-monitor"
   schedule                = { crontab = "0 */6 * * *" }
-  checkin_margin_minutes  = 60
-  max_runtime_minutes     = 15
+  checkin_margin_minutes  = 90
+  max_runtime_minutes     = 65
   failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"

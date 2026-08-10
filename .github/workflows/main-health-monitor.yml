@@ -15,7 +15,10 @@
 #
 #   A. A job timeout is recorded by GitHub as `cancelled`, never `failure`. The
 #      filer was gated on `outcome == 'failure'`, so a timeout filed nothing.
-#      Measured 2026-08-09: 19 of the last 30 runs ended `cancelled`.
+#      Measured 2026-08-09: 19 of the last 30 runs ended `cancelled` — ~15 at the
+#      old 15m ceiling (the 15m16s-15m26s cluster), the rest manufactured by
+#      concurrency (hazard D below). Both classes filed nothing; only the first
+#      is defect A.
 #   B. `bash scripts/test-all.sh 2>&1 | tee …` under the DEFAULT `run:` shell
 #      discarded the suite's exit code. A bare `run:` is `bash -e {0}` —
 #      errexit ON, **pipefail OFF** (an explicit `shell: bash` is what gives
@@ -25,9 +28,12 @@
 #      A pipeline's status is its last stage and `tee` always exits 0, so a RED
 #      suite reported `success` — and the closer then auto-closed any
 #      human-filed ci/main-broken tracker. An active green light over a dead
-#      alarm is worse than silence. Corroboration: all three ci/main-broken
-#      issues ever filed were authored by a human; the bot has filed zero since
-#      this workflow was born on 2026-04-01 — the same commit that added `| tee`.
+#      alarm is worse than silence. Corroboration, scoped in time because THIS
+#      PR falsified the present-tense form of it: from this workflow's birth on
+#      2026-04-01 (a42b3f5f2 — the same commit that added `| tee`) until
+#      2026-08-09, all three ci/main-broken issues in existence were authored by
+#      a human and the bot filed zero. The bot's first-ever filing is #7374, by
+#      this branch's own verification dispatch.
 #   C. The infra suites were never covered here. `test-all.sh` gates its nested
 #      infra runner on a diff against `origin/main`, which on a clean checkout
 #      OF main is empty — permanently, not incidentally.
@@ -71,26 +77,27 @@ permissions:
 # partly vacuous: 3 suites hard-ABORT without gitleaks and c4-model-freshness
 # self-skips without likec4 — and a self-skip reads as PASS.
 #
-# These literals are duplicated from the workflow that owns each one; nothing
-# mechanically couples them, so a bump there silently diverges here:
-#   GITLEAKS_*        -> .github/workflows/ci.yml (test-scripts shard) and
-#                        .github/workflows/secret-scan.yml (already a 2-file
-#                        manual-sync convention; this makes it 3)
-#   LIKEC4_VERSION    -> ci.yml, apps/web-platform/Dockerfile, package.json
-#                        (that trio IS guarded, by c4-likec4-version-pin.test.ts)
-#   TERRAFORM_VERSION -> .github/workflows/infra-validation.yml
+# Two of the three literals ALREADY have a mechanical pin-parity guard, and this
+# workflow is registered with both rather than documented as an exception — an
+# earlier revision of this comment claimed "nothing mechanically couples them",
+# which was false for gitleaks and likec4 and would have sent a future bumper
+# past two guards that exist:
+#   GITLEAKS_*        -> 4 sites: ci.yml (test-scripts), secret-scan.yml,
+#                        .github/actions/bot-pr-with-synthetic-checks/action.yml,
+#                        and here. Guarded by Test 5 of
+#                        plugins/soleur/test/required-checks-canonical-parity.test.sh
+#                        (this file added to its list by #7307).
+#   LIKEC4_VERSION    -> 5 sites: Dockerfile, package.json (x2),
+#                        scripts/regenerate-c4-model.sh, ci.yml, and here.
+#                        Guarded by apps/web-platform/test/c4-likec4-version-pin.test.ts
+#                        (this file added by #7307). NB the install below writes
+#                        the literal, not "likec4@${LIKEC4_VERSION}", because that
+#                        guard's regex requires a digit after `likec4@`.
+#   TERRAFORM_VERSION -> 8 declarations across .github/workflows/, ALL "1.10.5",
+#                        with no coupling guard anywhere. Naming one of them as
+#                        "the owner" would be a misleading map, so: they are peers;
+#                        a bump must sweep all 8.
 env:
-  # JOBS=1 applies to EVERY invocation of run-registered-suites.sh in this
-  # workflow, deliberately at workflow scope rather than on the infra step.
-  # Scoping it to that step was not enough: when the branch diff touches
-  # apps/web-platform/infra/, `TEST_GROUP=all` ALSO runs the infra runner nested
-  # inside the tests step, at the default -P — and it flaked there on run
-  # 31332793342 (91/92) while the JOBS=1 infra step was clean (92/92) in the very
-  # same job. On `main` the nested path is inert (the diff against origin/main is
-  # empty, which IS defect C), but relying on a defect's mechanism to avoid a
-  # flake is not a property worth depending on. `scripts/test-all.sh` does not
-  # read JOBS; only run-registered-suites.sh does.
-  JOBS: 1
   GITLEAKS_VERSION: "8.24.2"
   GITLEAKS_SHA256: "fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e"
   LIKEC4_VERSION: "1.50.0"
@@ -102,68 +109,65 @@ jobs:
 
     # TIMEOUT BUDGET — measured, not guessed. Re-derive; do not copy.
     #
-    # Why the #7307 band (14m49s-15m26s) is NOT the input here: every run over
-    # 15m was KILLED at 15m, so that band measures the OLD CEILING, not the
-    # suite. It is censored data — the surviving max is dragged toward the limit
-    # as true duration rises. Do not reuse it.
+    # The #7307 band (14m49s-15m26s) is NOT the input: every run over 15m was
+    # KILLED at 15m, so it measures the OLD CEILING, not the suite. Censored data.
     #
-    # Measured job-level (NOT run-level, which adds ~20-30s of queue+teardown),
-    # on this branch, full suite INCLUDING the infra runner:
-    #   31328156153  tests=14m15s (855s)  infra=1m54s (114s)
-    #   31329991410  tests=20m48s (1248s) infra=2m19s (139s)
+    # WARM vs COLD is the trap here, and it bit the first derivation. Every run on
+    # this branch executes the 92 infra suites TWICE — the branch diff touches
+    # apps/web-platform/infra/, so `TEST_GROUP=all` fires the nested runner inside
+    # the tests step first, and the standalone infra step then runs against an
+    # already-warm workspace (~1.9x faster at -P 4). On `main` the nested run does
+    # NOT happen (empty diff — defect C), so the standalone step is the first and
+    # only run: COLD. The nested run therefore INFLATES the tests figure (safe to
+    # leave) and DEFLATES the infra figure (not safe), and an earlier revision of
+    # this block noticed only the first.
     #
-    # READ THOSE TWO CAREFULLY — they are not two samples of one thing. Run
-    # 31328156153 predates the gitleaks+likec4 install, so four suites aborted
-    # or self-skipped early and its 14m15s UNDERSTATES the suite. Only
-    # 31329991410 samples the current configuration. It is recorded as the
-    # comparison that shows what the toolchain fix cost (+6m33s of coverage that
-    # was previously absent), not as a second draw from the same distribution.
+    # tests — job-level (NOT run-level, which adds queue+teardown). The binding
+    # run is 31334075931, the first under the shipped workflow-scoped JOBS=1:
+    #   31334075931  tests=24m37s (1477s)  infra=5m25s (325s)   [BRANCH shape]
+    # That 1477s INCLUDES a nested infra run (~325s, also sequential) because the
+    # branch diff touches apps/web-platform/infra/. On `main` that nested run does
+    # not happen, so the `main` shape is ~1152s (19m12s) — cross-checked against
+    # pre-PR `main` runs at 855-875s plus the toolchain fix's added coverage.
+    # The ceiling is sized on the LARGER (branch) shape so both satisfy 1.5x.
+    #
+    # infra — do NOT use this branch's standalone step (warm). The cold sequential
+    # figure comes from infra-validation.yml's deploy-script-tests, which runs the
+    # SAME 92 suites sequentially on a fresh checkout, n=25 successful runs:
+    #   min 334s   p50 397s   p90 439s   max 459s   (mean 401.5s, sd 33.9s)
     #
     # Rule: roundup5(x) = 5*ceil(x/5); minutes fractional to 2dp
     #       tests_step = max(30, roundup5(tests_max * 1.5))
     #       infra_step = max(10, roundup5(infra_max * 1.5))
     #       job        = tests_step + infra_step + 5 (setup) + 10 (cancel-token margin)
-    #       job must stay <= 120 or runs overlap at the 6h cadence.
     # Worked:
-    #   tests 20m48s = 20.80 -> x1.5 = 31.20 -> roundup5 35 -> floor 30 -> 35
-    #   infra  2m19s =  2.32 -> x1.5 =  3.48 -> roundup5  5 -> floor 10 -> 10
-    #   job   = 35 + 10 + 5 + 10 = 60   (setup measured 52s; the 5 is the rule's allowance)
+    #   tests 24m37s = 24.62 -> x1.5 = 36.93 -> roundup5 40 -> floor 30 -> 40
+    #   infra  7m39s =  7.65 -> x1.5 = 11.48 -> roundup5 15 -> floor 10 -> 15
+    #   job   = 40 + 15 + 5 + 10 = 70        (setup measured 39-54s)
+    # Against the `main` shape the tests ceiling is 2.08x; against the branch
+    # shape 1.62x. Both clear the stated 1.5x, which is why 40 rather than 35 —
+    # the earlier 35 met the policy only on the `main` shape.
+    # Sanity: deploy-script-tests budgets 12 min for this same suite set, so an
+    # infra ceiling below that would trip before the workflow that OWNS the suites.
     #
-    # The infra figures above were taken at the runner's default -P 4, which is
-    # the configuration that FLAKED and is no longer what this workflow uses. The
-    # binding infra measurement is the SEQUENTIAL one:
-    #   31332793342  infra=5m30s (330s) at JOBS=1, 92 passed / 0 failed
-    #   31332793342  tests=20m52s (1252s)
-    # Reusing a -P 4 number to size a sequential step would repeat, in a new form,
-    # the censored-data error this block opens by warning about.
-    # Re-worked on the sequential figures:
-    #   tests 20m52s = 20.87 -> x1.5 = 31.30 -> roundup5 35 -> floor 30 -> 35
-    #   infra  5m30s =  5.50 -> x1.5 =  8.25 -> roundup5 10 -> floor 10 -> 10
-    #   job   = 35 + 10 + 5 + 10 = 60
-    # The tests figure still INCLUDES a nested infra run, because this branch's
-    # diff touches apps/web-platform/infra/. On `main` that nested run does not
-    # happen (empty diff — defect C), so 20m52s OVERSTATES the post-merge tests
-    # step by roughly the infra step's own cost. Left deliberately unadjusted:
-    # a ceiling sized on the larger of the two shapes is the safe direction.
+    # The job ceiling must dominate the SUM of the step ceilings, not the max: with
+    # two timed steps, `max + 10` lets the job token trip midway through the second
+    # step, and a JOB cancel skips every remaining step regardless of `if:` —
+    # recreating defect A with the fix in place.
     #
-    # The job ceiling must dominate the SUM of the step ceilings, not the max:
-    # with two timed steps, `max + 10` lets the job token trip midway through the
-    # second step, and a JOB cancel skips every remaining step regardless of
-    # `if:` — recreating defect A with the fix in place.
-    #
-    # The 1.5x and the floors are ARBITRARY SLACK, not a variance estimate — one
-    # valid sample cannot size a multiplier. They are affordable because the repo
-    # is public, so Actions minutes are free. Said plainly so a later reader does
-    # not go looking for a derivation that was never there.
+    # The 1.5x and the floors are ARBITRARY SLACK, not a variance estimate. They are
+    # affordable because the repo is PUBLIC — which also pins the runner at 4 vCPU.
+    # A private repo gets 2 vCPU, roughly doubling CPU-bound work and putting infra
+    # over its ceiling; this derivation is coupled to the public-repo runner and
+    # would need re-deriving if that ever changes.
     #
     # Re-derive with:
     #   gh run list --workflow=main-health-monitor.yml --limit 30 \
     #     --json databaseId,conclusion,createdAt
     #   gh run view <id> --json jobs   # job-level, NOT run-level
-    # and note that `gh run view --json jobs` reports steps[].conclusion, which
-    # `continue-on-error: true` PINS TO success — the real verdict is the step
-    # `outcome`, mirrored to the job summary by "Record step outcomes" below.
-    timeout-minutes: 60
+    # and note `gh run view --json jobs` reports steps[].conclusion, which
+    # `continue-on-error: true` PINS TO success — the verdict is the step `outcome`.
+    timeout-minutes: 70
 
     steps:
       # fetch-depth: 0 + fetch-tags: true mirror infra-validation.yml's
@@ -175,6 +179,15 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+
+      # ci.yml's test-webplat and test-bun shards both pin node 22 via
+      # setup-node; this job runs TEST_GROUP=all, i.e. those very groups, so
+      # without this it ran them on the runner's stock node. The "union of every
+      # shard's toolchain" claim above was false in exactly this way until #7307's
+      # review caught it — keep the SHA in lockstep with ci.yml.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
@@ -204,8 +217,12 @@ jobs:
 
       - name: Install cloud-init
         run: |
+          # No `| tail -1`. Under the default `bash -e {0}` (pipefail OFF) the
+          # pipeline's status is tail's, which is always 0 — the identical
+          # mechanism this file's header condemns as defect B. Losing one line of
+          # apt noise is cheaper than reintroducing the pattern.
           sudo apt-get update -qq
-          sudo apt-get install -y -qq cloud-init 2>&1 | tail -1
+          sudo apt-get install -y -qq cloud-init
 
       # gitleaks: three suites hard-ABORT without it rather than skipping —
       # gitleaks-merge-commit.test.sh ("skipping it would defeat its purpose"),
@@ -230,7 +247,7 @@ jobs:
       - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
         run: |
           set -euo pipefail
-          npm install -g "likec4@${LIKEC4_VERSION}"
+          npm install -g likec4@1.50.0   # literal, not ${LIKEC4_VERSION}: see TOOLCHAIN PINS
           likec4 --version
 
       # ORDERED BEFORE the infra step, and that ordering is the invariant.
@@ -267,7 +284,7 @@ jobs:
       - name: Run test suite
         id: tests
         continue-on-error: true
-        timeout-minutes: 35 # derived; see the TIMEOUT BUDGET block above
+        timeout-minutes: 40 # derived; see the TIMEOUT BUDGET block above
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -284,7 +301,7 @@ jobs:
       - name: Run infra suites
         id: infra
         continue-on-error: true
-        timeout-minutes: 10 # derived; see the TIMEOUT BUDGET block above
+        timeout-minutes: 15 # derived (COLD sequential); see the TIMEOUT BUDGET block
         env:
           TEST_GROUP: infra
         run: |
@@ -306,25 +323,29 @@ jobs:
             echo "tests=${{ steps.tests.outcome }}"
             echo "infra=${{ steps.infra.outcome }}"
           } >> "$GITHUB_STEP_SUMMARY"
+          # The summary above is human-only: GitHub exposes no REST field for job
+          # summaries, and this redirect keeps the values off stdout too. The
+          # annotation below IS retrievable without SSH via
+          #   gh api repos/{owner}/{repo}/check-runs/<job-id>/annotations
+          # and fires on every path — including a green run and a dry run, where
+          # the filer's ::error:: never happens and the verdict would otherwise be
+          # unreadable by anything but a human with a browser.
+          echo "::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH tests=${{ steps.tests.outcome }} infra=${{ steps.infra.outcome }}"
 
       - name: Create issue on failure
         # `!= 'success'`, not `== 'failure'` — a job/step timeout is `cancelled`
-        # and a skipped step is `skipped`; both must report. This arm and the
-        # closer below are exhaustive and disjoint over the outcome domain.
+        # and a skipped step is `skipped`; both must report.
         #
         # `!cancelled()` is load-bearing and NOT decoration: GitHub implicitly
         # ANDs `success()` into any step `if:` that contains no status-check
-        # function. Without it, this step is skipped whenever an EARLIER step
+        # function. Without it this step is skipped whenever an EARLIER step
         # failed — and the two suite steps carry `continue-on-error: true`, so
-        # the only steps that can fail the job are setup (toolchain assertion,
-        # gitleaks/likec4 install, checkout). Those are exactly the runs where
-        # the monitor knows least and must still say so; under the implicit
-        # `success()` they filed nothing, which is defect A's shape arriving
-        # through a different door. On a setup failure both outcomes are the
-        # empty string, so `!= 'success'` holds and the body renders its
-        # "Run did not complete" shape. A JOB-level timeout still cancels every
-        # remaining step regardless — that case is covered by the Sentry
-        # missed-check-in alarm, not by this step.
+        # the only steps that can fail the job are setup. Those are exactly the
+        # runs where the monitor knows least and must still say so.
+        #
+        # Exhaustive and disjoint with the closer over STEP outcomes WHEN THE JOB
+        # COMPLETES. A job-level cancel skips both arms regardless of `if:`; that
+        # class is covered by the Sentry missed-check-in alarm, not here.
         if: ${{ !cancelled() && !inputs.dry_run && (steps.tests.outcome != 'success' || steps.infra.outcome != 'success') }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -333,48 +354,71 @@ jobs:
           TESTS_OUTCOME: ${{ steps.tests.outcome }}
           INFRA_OUTCOME: ${{ steps.infra.outcome }}
         run: |
-          # Check for existing open issue with the same label
-          EXISTING=$(gh issue list \
-            --label "ci/main-broken" \
-            --state open \
-            --json number \
-            --jq '.[0].number // empty' 2>/dev/null || true)
+          # SENTINEL: the closer only retires trackers carrying this marker.
+          # Selecting on the label alone would let this job close a HUMAN-filed
+          # tracker about a failure class it cannot observe — #5393 (Playwright
+          # image 401) and #5372 (dev-Supabase) are both real examples that this
+          # runner would have "verified" as passing. Fixing `| tee` removed the
+          # false-green route to that outcome; it did not remove the
+          # out-of-scope-green route. This does.
+          SENTINEL='<!-- soleur:main-health-monitor -->'
 
-          if [[ -n "$EXISTING" ]]; then
-            echo "Open tracking issue already exists: #$EXISTING. Adding comment."
-            COMMENT="Main branch health check did not pass as of $(date -u +%Y-%m-%dT%H:%M:%SZ)."
-            COMMENT="${COMMENT}"$'\n\n'"tests=${TESTS_OUTCOME} infra=${INFRA_OUTCOME}"
-            COMMENT="${COMMENT}"$'\n\n'"Run: ${RUN_URL}"
-            gh issue comment "$EXISTING" --body "$COMMENT"
+          # Capture rc SEPARATELY. `2>/dev/null || true` collapses "no tracker
+          # open", "API error" and "rate-limited" into one empty string, and the
+          # filer then files a DUPLICATE on a transient failure. That is not
+          # hypothetical: #1357 was "main branch tests failing due to GitHub API
+          # rate limiting" — this query's own failure condition, on this repo.
+          rc=0
+          OPEN_JSON=$(gh issue list --label "ci/main-broken" --state open \
+            --json number,body --limit 100) || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::warning::could not list ci/main-broken issues (rc=$rc) — not filing, to avoid a duplicate"
             exit 0
           fi
 
-          # Excerpt ONLY the step(s) that actually failed, each labelled. Drawing
-          # from a single shared capture returns whichever step ran last, which
-          # on run 31331269522 put 30 lines of infra PASS output under a
-          # "Failure summary" heading while tests was the thing that failed.
+          # OLDEST first, deliberately. `gh issue list` returns created-DESC, so
+          # `.[0]` is the NEWEST; with two trackers open the older one would then
+          # never be commented on and never be closed by any transition — a
+          # permanent orphan that also keeps the label, making the file-new arm
+          # unreachable forever.
+          EXISTING=$(printf '%s' "$OPEN_JSON" \
+            | jq -r --arg s "$SENTINEL" \
+                '[.[] | select(.body | contains($s)) | .number] | sort | .[0] // empty')
+
+          # Excerpt ONLY the step(s) that failed, each labelled.
           #
-          # Guard each file on EMPTINESS, not existence: `tee` creates and
-          # truncates at pipeline start, so on a timeout the file is PRESENT and
-          # may be empty — `tail` then exits 0 and an existence check would hand
-          # the issue an empty code fence. `[[ ]]` as an `if` condition is exempt
-          # from errexit, so no extra guard is needed.
+          # Prefer the FAILURE LINES over the tail. `run-registered-suites.sh`
+          # emits one `PASS <path>` / `RED  <path>` per suite and discards each
+          # suite's own output, so with 92 suites a `tail -30` of an infra
+          # failure is 30 PASS lines and a count — the operator gets no name.
+          # Issue #7374, filed by this branch, is exactly that artifact.
           SUMMARY=""
           HAS_FAIL_MARKER=0
+          RAN_ANY=0
           for pair in "tests:/tmp/tests-output.txt:${TESTS_OUTCOME}" \
                       "infra:/tmp/infra-output.txt:${INFRA_OUTCOME}"; do
             label="${pair%%:*}"
             rest="${pair#*:}"
             file="${rest%%:*}"
             outcome="${rest#*:}"
-            if [[ "$outcome" != "success" ]]; then
-              SUMMARY="${SUMMARY}--- ${label} (outcome=${outcome}) ---"$'\n'
-              if [[ -s "$file" ]]; then
-                SUMMARY="${SUMMARY}$(tail -30 "$file")"$'\n\n'
-                if grep -q '\[FAIL\]' "$file"; then HAS_FAIL_MARKER=1; fi
-              else
-                SUMMARY="${SUMMARY}(no output captured — the step was killed before it wrote its log)"$'\n\n'
+            [[ "$outcome" == "success" ]] && continue
+            [[ -n "$outcome" ]] && RAN_ANY=1
+            SUMMARY="${SUMMARY}--- ${label} (outcome=${outcome:-<step never ran>}) ---"$'\n'
+            if [[ -s "$file" ]]; then
+              # `^RED ` FIRST. run-registered-suites.sh's own header says it:
+              # "a failing suite prints `RED <path>`, not `FAIL`. A `grep FAIL`
+              # over this runner's log returns zero hits on a failing run and
+              # reads as clean — measured 2026-08-04 (#7220)". `[FAIL]` alone
+              # matched only because scripts/test-all.sh wraps the runner.
+              hits=$(grep -E '^RED |^\[FAIL\]' "$file" | head -20) || hits=""
+              if [[ -n "$hits" ]]; then
+                HAS_FAIL_MARKER=1
+                SUMMARY="${SUMMARY}${hits}"$'\n'
+                SUMMARY="${SUMMARY}--- (tail) ---"$'\n'
               fi
+              SUMMARY="${SUMMARY}$(tail -30 "$file")"$'\n\n'
+            else
+              SUMMARY="${SUMMARY}(no capture on disk — the step did not run, or was killed before writing)"$'\n\n'
             fi
           done
 
@@ -383,31 +427,59 @@ jobs:
             --color "B60205" \
             --force 2>/dev/null || true
 
-          # Distinguish "the suite ran and reported failures" from "the run
-          # never completed". `tail -30` of a run killed mid-suite renders
-          # in-progress noise, and labelling that "Failure summary" sends the
-          # operator after a phantom.
-          if [[ "$HAS_FAIL_MARKER" == "1" ]]; then
+          # THREE shapes, not two. AP-021 (ADR-166): a CI-emitted message may only
+          # name a cause the job MEASURED. The setup-failure arm exists because
+          # `!cancelled()` deliberately routes it here, and calling it a timeout
+          # would send the operator after a phantom — the defect this file exists
+          # to remove. The TITLE is derived too: it is the string the operator
+          # sees in the issue list and in the notification email.
+          if [[ "$RAN_ANY" == "0" ]]; then
+            TITLE="CI: main-branch health check could not run"
+            HEADING="Run failed before the suites started"
+            LEDE="A setup step failed (checkout, toolchain install, or the toolchain assertion). The suites never ran, so this issue says nothing about main's health — see the run log's failed step."
+          elif [[ "$HAS_FAIL_MARKER" == "1" ]]; then
+            TITLE="CI: main branch tests failing"
             HEADING="Failure summary"
             LEDE="The health monitor ran the suite against main and it reported failures."
           else
+            TITLE="CI: main-branch health check did not complete"
             HEADING="Run did not complete"
-            LEDE="The health monitor did not finish — the suite never reported. This is usually a step or job timeout; a timeout is recorded by GitHub as \`cancelled\`, not \`failure\`."
+            LEDE="A suite step started but never reported. This is usually a step or job timeout; GitHub records a timeout as \`cancelled\`, not \`failure\`."
           fi
 
-          # Build issue body without heredoc (heredocs break YAML literal blocks)
+          # REDACT before publishing. This repo is PUBLIC, and `tee` captures the
+          # suite's raw stdout+stderr BEFORE the runner's masking pass — masking
+          # rewrites the log stream, not the file. The tests step carries
+          # GITHUB_TOKEN and the infra step runs terraform, whose error text is
+          # the likeliest carrier. Before this PR the filer never fired, so the
+          # channel was dormant; it is live now.
+          REDACTED=$(printf '%s' "$SUMMARY" | sed -E \
+            -e 's/gh[pousr]_[A-Za-z0-9]{16,}/<redacted-gh-token>/g' \
+            -e 's/github_pat_[A-Za-z0-9_]{20,}/<redacted-gh-pat>/g' \
+            -e 's/sk-ant-[A-Za-z0-9_-]{16,}/<redacted-anthropic-key>/g' \
+            -e 's/sk_(test|live)_[A-Za-z0-9]{16,}/<redacted-stripe-key>/g' \
+            -e 's/sbp_[A-Za-z0-9]{16,}/<redacted-supabase-token>/g' \
+            -e 's/dp\.(pt|st|sa|ct)\.[A-Za-z0-9_-]{20,}/<redacted-doppler-token>/g' \
+            -e 's#(postgres(ql)?|redis|amqp)://[^:@/[:space:]]+:[^@[:space:]]+@#\1://<redacted>:<redacted>@#g' \
+            -e 's/-----BEGIN [A-Z ]*PRIVATE KEY-----/<redacted-private-key>/g')
+
+          # A longer fence than any the captured output can contain, so a triple
+          # backtick in a test's own output cannot terminate the block early and
+          # corrupt the region an agent parses.
           {
             echo "## Main branch health check did not pass"
             echo ""
+            echo "${SENTINEL}"
+            echo ""
             echo "${LEDE}"
             echo ""
-            echo "Step outcomes: \`tests=${TESTS_OUTCOME}\` \`infra=${INFRA_OUTCOME}\`"
+            echo "Step outcomes: \`tests=${TESTS_OUTCOME:-<never ran>}\` \`infra=${INFRA_OUTCOME:-<never ran>}\`"
             echo ""
             echo "### ${HEADING}"
             echo ""
-            echo '```'
-            echo "${SUMMARY}"
-            echo '```'
+            echo '`````'
+            echo "${REDACTED}"
+            echo '`````'
             echo ""
             echo "### Actions required"
             echo ""
@@ -422,13 +494,34 @@ jobs:
             echo "- **Detected:** $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } > /tmp/issue-body.md
 
-          # --milestone is set AFTER creation, not as a create flag. As a flag it
-          # hard-fails the whole `gh issue create` — under errexit that kills the
-          # step BEFORE the issue exists — if the milestone is ever renamed or
-          # closed. A `::warning::` annotation keeps the fallback visible in the
-          # run rather than swallowing it with `|| true`.
+          if [[ -n "$EXISTING" ]]; then
+            echo "Open tracker already exists: #$EXISTING. Commenting."
+            {
+              echo "Main branch health check still not passing as of $(date -u +%Y-%m-%dT%H:%M:%SZ)."
+              echo ""
+              echo "Step outcomes: \`tests=${TESTS_OUTCOME:-<never ran>}\` \`infra=${INFRA_OUTCOME:-<never ran>}\`"
+              echo ""
+              echo "### ${HEADING}"
+              echo ""
+              echo '`````'
+              echo "${REDACTED}"
+              echo '`````'
+              echo ""
+              echo "Run: ${RUN_URL}"
+            } > /tmp/issue-comment.md
+            # Guarded: a locked issue or a secondary rate limit must not abort the
+            # step, matching the treatment given to `gh issue edit` below.
+            gh issue comment "$EXISTING" --body-file /tmp/issue-comment.md \
+              || echo "::warning::could not comment on #${EXISTING}"
+            echo "::error::Main branch health check did not pass (tests=${TESTS_OUTCOME:-none} infra=${INFRA_OUTCOME:-none}). Commented on #${EXISTING}."
+            exit 0
+          fi
+
+          # --milestone is set AFTER creation, not as a create flag: as a flag it
+          # hard-fails the whole create — under errexit, before the issue exists —
+          # if the milestone is renamed or closed.
           ISSUE_URL=$(gh issue create \
-            --title "CI: main branch tests failing" \
+            --title "$TITLE" \
             --body-file /tmp/issue-body.md \
             --label "ci/main-broken" \
             --label "priority/p1-high" \
@@ -439,34 +532,57 @@ jobs:
           gh issue edit "$ISSUE_URL" --milestone "Post-MVP / Later" \
             || echo "::warning::milestone 'Post-MVP / Later' not set on ${ISSUE_URL}"
 
-          echo "::error::Main branch health check did not pass (tests=${TESTS_OUTCOME} infra=${INFRA_OUTCOME}). Issue created."
+          echo "::error::Main branch health check did not pass (tests=${TESTS_OUTCOME:-none} infra=${INFRA_OUTCOME:-none}). Issue created."
 
       - name: Close issue on success
-        # Strict, and deliberately not the negation of the filer's condition
-        # written loosely: BOTH steps must have actually succeeded.
         if: ${{ !inputs.dry_run && steps.tests.outcome == 'success' && steps.infra.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          EXISTING=$(gh issue list \
-            --label "ci/main-broken" \
-            --state open \
-            --json number \
-            --jq '.[0].number // empty' 2>/dev/null || true)
+          # Close ONLY trackers this monitor filed (sentinel), and close ALL of
+          # them rather than `.[0]`. Label-only selection would retire a
+          # human-filed tracker whose failure class this runner never executed;
+          # `.[0]` on a created-DESC list would leave any older tracker as a
+          # permanent orphan.
+          SENTINEL='<!-- soleur:main-health-monitor -->'
+          rc=0
+          OPEN_JSON=$(gh issue list --label "ci/main-broken" --state open \
+            --json number,body --limit 100) || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::warning::could not list ci/main-broken issues (rc=$rc) — not closing"
+            exit 0
+          fi
 
-          if [[ -n "$EXISTING" ]]; then
+          MINE=$(printf '%s' "$OPEN_JSON" \
+            | jq -r --arg s "$SENTINEL" \
+                '[.[] | select(.body | contains($s)) | .number] | sort | .[]')
+
+          if [[ -z "$MINE" ]]; then
+            echo "No monitor-filed ci/main-broken tracker open — nothing to close."
+            exit 0
+          fi
+
+          while read -r n; do
+            [[ -n "$n" ]] || continue
             COMMENT="Main branch tests are passing again. Auto-closing."
             COMMENT="${COMMENT}"$'\n\n'"Run: ${RUN_URL}"
-            gh issue close "$EXISTING" --comment "$COMMENT"
-            echo "Closed issue #$EXISTING -- main is green again."
-          fi
+            gh issue close "$n" --comment "$COMMENT" \
+              || echo "::warning::could not close #${n}"
+            echo "Closed issue #$n -- main is green again."
+          done <<< "$MINE"
 
       # LAST step in the job, deliberately. Covers the one failure class no
       # in-workflow mechanism can see: a dropped Inngest dispatch, a disabled
       # workflow, or an unavailable runner produces NO RUN AT ALL, so only an
-      # external missed-check-in alarm can report it. Skipped on a dry run so a
-      # measurement dispatch cannot post a misleading `ok`.
+      # external missed-check-in alarm can report it.
+      #
+      # Skipped on a dry run — and the reason is NOT "it might post a misleading
+      # ok" (it cannot: the status below is computed from the real step outcomes).
+      # It is that ANY check-in satisfies the monitor's margin. A manual
+      # measurement dispatch that checked in would therefore SUPPRESS the page for
+      # a scheduled run that never happened, which is the one failure this monitor
+      # exists to catch.
       - name: Sentry check-in (final)
         if: ${{ always() && !inputs.dry_run }}
         continue-on-error: true
