@@ -365,8 +365,8 @@ logs:
   retention: "session-scoped"
 
 discoverability_test:
-  command: "bash plugins/soleur/test/worktree-manager-safe-branch-sanitization.test.sh 2>&1 | tail -3"
-  expected_output: "Passed: 36 / Failed: 0 / ALL TESTS PASSED. NO ssh, no network, no credentials. Corrected at review — the previous probe was broken THREE ways: (a) it asserted a RELATIVE .worktrees/ path while WORKTREE_DIR anchors to the bare root, so it failed on a CORRECT implementation whenever run from a worktree; (b) it sent stdout to /dev/null, discarding the very SOLEUR_* marker stream it was meant to demonstrate; (c) it created a real branch, worktree and >=4h lease with no teardown, needing network and a multi-minute install. The suite exercises both new markers in synthesized fixtures and cleans up after itself."
+  command: "bash plugins/soleur/test/worktree-manager-safe-branch-sanitization.test.sh"
+  expected_output: "ALL TESTS PASSED (36 assertions; the floor trips if any are skipped). No pipe/redirect in the command: preflight Check 10 EXECUTES it and rejects shell-active tokens, so `2>&1 | tail -3` would fail the gate on the probe rather than on the system. NO ssh, no network, no credentials. Corrected at review — the previous probe was broken THREE ways: (a) it asserted a RELATIVE .worktrees/ path while WORKTREE_DIR anchors to the bare root, so it failed on a CORRECT implementation whenever run from a worktree; (b) it sent stdout to /dev/null, discarding the very SOLEUR_* marker stream it was meant to demonstrate; (c) it created a real branch, worktree and >=4h lease with no teardown, needing network and a multi-minute install. The suite exercises both new markers in synthesized fixtures and cleans up after itself."
 ```
 
 The two failure modes above are discriminated by **distinct** sentinels carrying the raw branch and the derived slug in the same event, so a single marker decides *which* of them fired — rather than a shared boolean that would leave the two hypotheses tied.
