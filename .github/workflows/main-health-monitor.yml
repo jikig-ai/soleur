@@ -411,6 +411,10 @@ jobs:
           # Issue #7374, filed by this branch, is exactly that artifact.
           SUMMARY=""
           HAS_FAIL_MARKER=0
+          # A THIRD result class, tracked separately and never folded into the flag above.
+          # scripts/test-all.sh now distinguishes a suite that FAILED an assertion from one
+          # that was TERMINATED by a signal, and only the first is a statement about main.
+          HAS_KILLED_MARKER=0
           RAN_ANY=0
           for pair in "tests:/tmp/tests-output.txt:${TESTS_OUTCOME}" \
                       "infra:/tmp/infra-output.txt:${INFRA_OUTCOME}"; do
@@ -433,6 +437,52 @@ jobs:
                 SUMMARY="${SUMMARY}${hits}"$'\n'
                 SUMMARY="${SUMMARY}--- (tail) ---"$'\n'
               fi
+
+              # A SECOND, SEPARATE grep — deliberately not folded into the one above.
+              # scripts/test-all.sh renders a signal-terminated suite as
+              #   [KILLED] <label> (exit=<rc>, signal-shaped 128+<n> = SIG<NAME>, <ms>ms)
+              # and does NOT count it as a failure, because the runner did not measure what
+              # terminated it. Adding `^\[KILLED\]` to the `^RED |^\[FAIL\]` alternation
+              # would set HAS_FAIL_MARKER and re-label an UNRESOLVED run "main branch tests
+              # failing" — the conflation this change exists to remove.
+              #
+              # SHAPE-anchored, not prefix-anchored (cq-assert-anchor-not-bare-token): this
+              # file is arbitrary suite stdout, so a bare `^\[KILLED\]` is forgeable by any
+              # suite that happens to print the token.
+              #
+              # `grep -m 20` rather than `| head -20`. Both bound the LINE COUNT, but `head`
+              # closes the pipe the moment it has 20 lines and leaves grep on SIGPIPE (141).
+              # Measured 2026-08-11 over a 200-match capture: under `bash -eo pipefail`,
+              # `grep … | head -20 | cut` returns the EMPTY string through its own `||`
+              # guard — the monitor would name no suite on precisely the run with the most
+              # to say. This step's shell is `bash -e {0}` (no `shell:` key), where pipefail
+              # is off and the `head` form still works; `-m` keeps it working if a
+              # `shell: bash` is ever added. `cut` bounds LENGTH: one 100 KB line would push
+              # the body past GitHub's 65536-character issue limit, `gh issue create` would
+              # fail, and the monitor would file NOTHING on a broken main.
+              #
+              # The append is NOT optional. `hits` feeds both HAS_FAIL_MARKER and SUMMARY;
+              # without the same treatment here a killed-only run yields a body containing
+              # only `tail -30`, and the runner emits its contention epilogue plus up to
+              # four multi-line infra NOTE blocks after the summary — so a [KILLED] line 200
+              # suites earlier falls outside that window and the operator gets an issue
+              # titled "terminated" that names no suite.
+              killed_hits=$(grep -m 20 -E '^\[KILLED\] [^ ]+ \(exit=[0-9]+, signal-shaped 128\+[0-9]+ = SIG[A-Z0-9]+, [0-9]+ms\)' "$file" | cut -c1-500) || killed_hits=""
+              if [[ -n "$killed_hits" ]]; then
+                SUMMARY="${SUMMARY}${killed_hits}"$'\n'
+                SUMMARY="${SUMMARY}--- (tail) ---"$'\n'
+              fi
+
+              # CORROBORATED, AND ORDERED, before the flag is set. The runner emits its
+              # breakdown line exactly once and only after every suite has run, so a suite
+              # would have to forge BOTH lines, in that order, to re-title the operator's
+              # issue by printing to its own stdout.
+              killed_ln=$(grep -m 1 -nE '^\[KILLED\] [^ ]+ \(exit=[0-9]+, signal-shaped 128\+[0-9]+ = SIG[A-Z0-9]+, [0-9]+ms\)' "$file" | cut -d: -f1) || killed_ln=""
+              breakdown_ln=$(grep -m 1 -nE '^=== [0-9]+ suites: [0-9]+ passed, [0-9]+ failed, [1-9][0-9]* killed \(unresolved' "$file" | cut -d: -f1) || breakdown_ln=""
+              if [[ -n "$killed_ln" && -n "$breakdown_ln" && "$breakdown_ln" -gt "$killed_ln" ]]; then
+                HAS_KILLED_MARKER=1
+              fi
+
               SUMMARY="${SUMMARY}$(tail -30 "$file")"$'\n\n'
             else
               SUMMARY="${SUMMARY}(no capture on disk — the step did not run, or was killed before writing)"$'\n\n'
@@ -444,12 +494,25 @@ jobs:
             --color "B60205" \
             --force 2>/dev/null || true
 
-          # THREE shapes, not two. AP-021 (ADR-166): a CI-emitted message may only
+          # FOUR shapes, not three. AP-021 (ADR-166): a CI-emitted message may only
           # name a cause the job MEASURED. The setup-failure arm exists because
-          # `!cancelled()` deliberately routes it here, and calling it a timeout
+          # `!cancelled()` deliberately routes it here, and naming a cause for it
           # would send the operator after a phantom — the defect this file exists
           # to remove. The TITLE is derived too: it is the string the operator
           # sees in the issue list and in the notification email.
+          #
+          # ACTIONS is derived per arm for the same reason the TITLE is. It used to
+          # be three hardcoded echoes in the body below — "identify the commit /
+          # revert it / verify CI" — which on the terminated arm is the ONLY
+          # actionable text on a page whose own lede says no suite reported a
+          # failure. The default below is that pre-existing text, byte-unchanged;
+          # only the arm that needs different instructions overrides it.
+          ACTIONS=(
+            "1. Identify the commit that introduced the failure"
+            "2. Fix the tests or revert the breaking change"
+            "3. Verify CI passes on main before closing this issue"
+          )
+
           if [[ "$RAN_ANY" == "0" ]]; then
             TITLE="CI: main-branch health check could not run"
             HEADING="Run failed before the suites started"
@@ -458,10 +521,27 @@ jobs:
             TITLE="CI: main branch tests failing"
             HEADING="Failure summary"
             LEDE="The health monitor ran the suite against main and it reported failures."
+          elif [[ "$HAS_KILLED_MARKER" == "1" ]]; then
+            # ORDERED AFTER the failure arm so a failure dominates: a run carrying both
+            # a real [FAIL] and a [KILLED] is a failing run, and reporting it as merely
+            # "terminated" would hide the failure the operator can act on.
+            TITLE="CI: main-branch health check was terminated before it could report"
+            HEADING="Run did not complete — a suite was terminated"
+            LEDE="At least one suite exited with a signal-shaped status (128+N). The runner reports this as unresolved: it did not measure what terminated the suite, so this issue is not a statement that main is broken."
+            ACTIONS=(
+              "1. Re-run this check: \`gh workflow run main-health-monitor.yml\`"
+              "2. If the same suite is reported terminated again, file a tracking issue for it and link it here"
+              "3. Do not revert anything on this issue alone — no suite reported a failure"
+            )
           else
+            # No marker of any kind in the capture. What this run MEASURED is the step
+            # outcome and nothing else. The previous wording here named "a step or job
+            # timeout" — a cause the job did not measure, in the very file whose header
+            # condemns that pattern. It survived lint-diagnosis-claims.sh only because
+            # `usually` is absent from that gate's CLAIM regex; it was still a miss.
             TITLE="CI: main-branch health check did not complete"
             HEADING="Run did not complete"
-            LEDE="A suite step started but never reported. This is usually a step or job timeout; GitHub records a timeout as \`cancelled\`, not \`failure\`."
+            LEDE="A suite step started but never reported a result. The step outcome recorded below is all this run measured about it — read the run log's step list for what the runner did last."
           fi
 
           # REDACT before publishing. This repo is PUBLIC, and `tee` captures the
@@ -500,9 +580,7 @@ jobs:
             echo ""
             echo "### Actions required"
             echo ""
-            echo "1. Identify the commit that introduced the failure"
-            echo "2. Fix the tests or revert the breaking change"
-            echo "3. Verify CI passes on main before closing this issue"
+            printf '%s\n' "${ACTIONS[@]}"
             echo ""
             echo "### Run details"
             echo ""
@@ -515,6 +593,12 @@ jobs:
             echo "Open tracker already exists: #$EXISTING. Commenting."
             {
               echo "Main branch health check still not passing as of $(date -u +%Y-%m-%dT%H:%M:%SZ)."
+              echo ""
+              # The arm's LEDE, not just its HEADING. Without it, runs 2, 3, 4 … of a
+              # flapping killed suite each append the fixed sentence above and nothing
+              # that qualifies it — an escalating claim that main is broken, produced by
+              # a runner that measured nothing about what terminated the suite.
+              echo "${LEDE}"
               echo ""
               echo "Step outcomes: \`tests=${TESTS_OUTCOME:-<never ran>}\` \`infra=${INFRA_OUTCOME:-<never ran>}\`"
               echo ""
