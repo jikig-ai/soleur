@@ -1,4 +1,4 @@
-# ADR-173 — Execution boundary for plan-declared discoverability probes
+# ADR-175 — Execution boundary for plan-declared discoverability probes
 
 - **Status:** accepted
 - **Date:** 2026-08-10

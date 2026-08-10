@@ -190,6 +190,6 @@ not answer the others.
 
 ## Related
 
-- ADR-173 — preflight probe execution boundary
+- ADR-175 — preflight probe execution boundary
 - #7403 — probe registry, the successor design
 - #7412 — `--share-net` retains the host netns (deliberately out of scope here)

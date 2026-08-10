@@ -81,12 +81,12 @@ Lane: `cross-domain` · Brand-survival threshold: `single-user incident`
 
 ## Phase 3 — ADR, C4, verification
 
-- [x] 3.1 Write `ADR-173-preflight-probe-execution-boundary.md`. `## Alternatives Considered`
+- [x] 3.1 Write `ADR-175-preflight-probe-execution-boundary.md`. `## Alternatives Considered`
       must defeat: no-execution/ADR-074 Stage A, probe registry, ephemeral `$HOME`.
       `## Consequences` records as **open**: network egress, PR-head trust circularity, and the
       accepted AP-020 violation (cite `principles-register.md` AP-020).
 - [x] 3.2 Re-derive the ADR ordinal against freshly-fetched `origin/main`; if it moves, sweep
-      `grep -rn 'ADR-173' knowledge-base/project/{plans,specs}/` in the same edit.
+      `grep -rn 'ADR-175' knowledge-base/project/{plans,specs}/` in the same edit.
 - [x] 3.3 File the probe-registry successor tracking issue (labels: `domain/engineering`,
       `type/chore`, `priority/p3-low`).
 - [x] 3.4 `model.c4` — amend `contributor` to state the general invariant (untrusted PR-head

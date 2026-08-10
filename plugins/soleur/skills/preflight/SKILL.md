@@ -837,7 +837,7 @@ if [[ "$CMD" =~ (^|[[:space:]]|/)ssh([[:space:]]|$) ]]; then
 fi
 ```
 
-**Read `credentials_required` and honour a declared-credentialed probe** (ADR-173 Layer 3):
+**Read `credentials_required` and honour a declared-credentialed probe** (ADR-175 Layer 3):
 
 Some probes verify a property that has **no unauthenticated substitute** — a warehouse
 query API with no anonymous form, for instance. Before #7393 those had only two outcomes:
@@ -946,7 +946,7 @@ Note what the waiver is and is not: it is a **verification waiver**, not an exec
 bypass. The declared path never executes, so no verb reaches the sandbox. The waiver does
 genuinely span *any* verb — that is why it is counted rather than reordered.
 
-**Probe-verb gate** (ADR-173 Layer 2, revised — schema validation, not a security control):
+**Probe-verb gate** (ADR-175 Layer 2, revised — schema validation, not a security control):
 
 The gate lives in [`./scripts/probe-verb-gate.sh`](./scripts/probe-verb-gate.sh) rather than
 inline here, for the same reason [`./scripts/parse-form-a.awk`](./scripts/parse-form-a.awk)
@@ -995,7 +995,7 @@ repaired.
 `getent` are absent because they have **zero** corpus uses; `awk`, `sed` and `find` are
 absent for the same reason, **not** because they are uniquely dangerous. `git` is on the
 list and is a full execution vector — `git -c alias.x='!cmd' x` runs arbitrary commands —
-and so is `bash <script>`. Both are recorded in ADR-173 as worked examples that an
+and so is `bash <script>`. Both are recorded in ADR-175 as worked examples that an
 allowlist entry is an authority grant which this gate does not bound.
 
 **Every allowlist entry is an authority grant — do not describe either layer as though it
@@ -1030,7 +1030,7 @@ control into the filesystem layer (Step 10.5).**
 The block below uses a `text` fence (not `bash`) so the skill-security-scan
 calibration suite does not flag it as `shell-spawn-c-flag`. The runtime IS a
 shell-spawn — the **load-bearing** mitigation is the bubblewrap sandbox below
-(ADR-173 Layer 1); the Step 10.4 verb allowlist, the `ssh`/`$()`/backtick
+(ADR-175 Layer 1); the Step 10.4 verb allowlist, the `ssh`/`$()`/backtick
 rejects and the 15s outer timeout are defense-in-depth. The plan-file source
 is trust-on-PR-review. See [`2026-05-20-preflight-check-10-discoverability-test-execution.md`](../../../../knowledge-base/project/learnings/best-practices/2026-05-20-preflight-check-10-discoverability-test-execution.md).
 
@@ -1079,7 +1079,7 @@ if [[ "$CMD" =~ (\$\(|\`|\<\(|\>\(|\;|\&\&|\|\||\||\>|\<|\&|$'\n'|\$\{?[A-Za-z_]
   exit 1
 fi
 
-# --- Sandbox construction (ADR-173 Layer 1) -------------------------------
+# --- Sandbox construction (ADR-175 Layer 1) -------------------------------
 # The flags live in ONE array so the establishment probe below and the real run
 # cannot drift apart. MOUNT ORDER IS LOAD-BEARING: bwrap applies mounts in the
 # order given and this repo lives under /home, so `--tmpfs /home` MUST precede
@@ -1136,7 +1136,7 @@ if ! command -v bwrap >/dev/null 2>&1; then
   # Deliberately NOT in WEDGE_RE: queryable, not paged.
   echo "SOLEUR_PREFLIGHT_CHECK10_NOSANDBOX reason=bwrap-absent uname=$(uname -s)"
   case "$(uname -s)" in
-    Darwin) echo "SKIP-NOSANDBOX: Check 10 executes plan-declared commands only inside a bubblewrap (bwrap) sandbox. bubblewrap is Linux-only and has no macOS port, so Check 10 is PERMANENTLY disabled on this host — this is the steady state, not a transient condition. Refusing to run the probe unsandboxed. Tracked for a Darwin sandbox implementation; see ADR-173 Consequences." ;;
+    Darwin) echo "SKIP-NOSANDBOX: Check 10 executes plan-declared commands only inside a bubblewrap (bwrap) sandbox. bubblewrap is Linux-only and has no macOS port, so Check 10 is PERMANENTLY disabled on this host — this is the steady state, not a transient condition. Refusing to run the probe unsandboxed. Tracked for a Darwin sandbox implementation; see ADR-175 Consequences." ;;
     *)      echo "SKIP-NOSANDBOX: Check 10 executes plan-declared commands only inside a bubblewrap (bwrap) sandbox, and bwrap is not installed on this host. Refusing to run the probe unsandboxed. Install it with: sudo apt-get install -y bubblewrap   (Debian/Ubuntu) or sudo dnf install -y bubblewrap   (Fedora/RHEL)." ;;
   esac
   exit 0
@@ -1224,12 +1224,12 @@ the loopback half.
 Closing it needs `--unshare-net` plus a userspace network stack
 (`slirp4netns --disable-host-loopback` or `pasta`): `--unshare-net` alone kills all egress,
 which surfaces as `curl` rc=6 — **indistinguishable from the #4148 DNS-typo signal this
-check exists to catch**. Tracked as #7412, recorded as open in ADR-173 `## Consequences`.
+check exists to catch**. Tracked as #7412, recorded as open in ADR-175 `## Consequences`.
 
 A `127.0.0.1|localhost|::1` string reject is deliberately NOT used: it is bypassable in one
 token (`127.1`, `2130706433`, `0x7f000001`, a DNS A-record pointing at loopback, or any
 wrapped script), and adding it would let this skill claim a boundary that is not there —
-the denylist mistake ADR-173 exists to retire.
+the denylist mistake ADR-175 exists to retire.
 
 **Step 10.6: Decision matrix (14 post-parse rows, 1 PASS terminal).**
 

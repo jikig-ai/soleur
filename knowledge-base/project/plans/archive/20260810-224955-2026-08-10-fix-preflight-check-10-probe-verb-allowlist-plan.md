@@ -213,7 +213,7 @@ protects, so dropping it does not weaken the control.
 **What this still does not close, named so no one cites Layer 1 as closure:** the probe retains
 **network egress** (`--share-net`, required — `curl` is 142/632 probes), so an allowlisted verb
 can still exfiltrate *repo contents* to an arbitrary host. The repo is public, so this is
-bounded, but it is not zero. Egress filtering is out of scope and recorded in ADR-173
+bounded, but it is not zero. Egress filtering is out of scope and recorded in ADR-175
 `## Consequences` as open.
 
 ### Layer 2 — Legibility and deny-by-default maintenance
@@ -306,7 +306,7 @@ invented, and the three divergences are deliberate:
 | Base filesystem posture | `--ro-bind / /` (**whole FS readable**), then per-sibling `--tmpfs` deny | **Deny-by-default**: bind only `/usr`, `/etc`, the resolver, and the repo | The agent legitimately reads the platform tree; a discoverability probe does not. Allow-by-default would re-open the absolute-path credential read that falsified v1 |
 | Unavailable-dependency behaviour | `failIfUnavailable: true` — *"Without this flag the SDK silently runs unsandboxed… Tier 4 defense-in-depth disappears with no Sentry signal"* (#2634) | **SKIP**, never unsandboxed | Same principle, adapted: the agent path refuses to start; a preflight check has no session to refuse, so the honest terminal is SKIP with a named reason |
 | Nested-userns `/proc` | `enableWeakerNestedSandbox: true` — skips `--proc /proc` (#1557) | Attempt with `--proc`, retry once without | **Adopted from the precedent.** Without it, Check 10 would SKIP in every containerized run |
-| Network | `allowManagedDomainsOnly: true`, empty allowlist by default | `--share-net` (unrestricted) | `curl` is 142/632 probes and the endpoints are arbitrary. Recorded as open in ADR-173 `## Consequences`, not silently accepted |
+| Network | `allowManagedDomainsOnly: true`, empty allowlist by default | `--share-net` (unrestricted) | `curl` is 142/632 probes and the endpoints are arbitrary. Recorded as open in ADR-175 `## Consequences`, not silently accepted |
 
 The precedent also **independently corroborates the mount-ordering hazard** found empirically
 here: the module header documents that the SDK's bwrap builder emits write-plane binds first
@@ -320,8 +320,8 @@ strong signal it belongs in the skill text, not only in a plan.
 | Alternative | Why not |
 | --- | --- |
 | **Ephemeral `$HOME`** (the v1 design) | Measured false: absolute-path/glob reads return the live token. Retained inside the sandbox as harmless defence-in-depth |
-| **Don't execute untrusted content at all** — adopt ADR-074's Stage A pattern | The strongest option, and the reason Check 10 exists is that *static* gates produced "declared-verifiable but unverified" (#4148). Not executing returns us to that. Recorded in ADR-173 and defeated on that ground, not ignored |
-| **Probe registry** — plan names a probe *id* resolving to a script tracked on `main`, args from a typed schema | Genuinely better long-term: deletes the whole parse → dequote → verb-extract → arg-rule surface, and `main`-tracked resolution fixes the PR-head trust circularity properly. Too large for this PR. Recorded in ADR-173 `## Consequences` with a tracking issue as the successor design |
+| **Don't execute untrusted content at all** — adopt ADR-074's Stage A pattern | The strongest option, and the reason Check 10 exists is that *static* gates produced "declared-verifiable but unverified" (#4148). Not executing returns us to that. Recorded in ADR-175 and defeated on that ground, not ignored |
+| **Probe registry** — plan names a probe *id* resolving to a script tracked on `main`, args from a typed schema | Genuinely better long-term: deletes the whole parse → dequote → verb-extract → arg-rule surface, and `main`-tracked resolution fixes the PR-head trust circularity properly. Too large for this PR. Recorded in ADR-175 `## Consequences` with a tracking issue as the successor design |
 | Allowlist only, no sandbox | Falsified — `awk 'BEGIN{system()}'` and absolute-path reads defeat it |
 | Allowlist + static scan of wrapped scripts | Defeatable by `eval`/dynamic dispatch/second-level scripts. A scanner that *reads* complete while being incomplete is worse than an honest boundary |
 | Keep the denylist, extend it | Unbounded-negative by construction. This is the defect |
@@ -388,7 +388,7 @@ already is — verified — keeping the awk/TS byte-exact parity harness untouch
 
 - `plugins/soleur/test/fixtures/preflight-check-10/09-verb-not-allowlisted.md`
 - `plugins/soleur/test/fixtures/preflight-check-10/10-credentials-required-skip.md`
-- `knowledge-base/engineering/architecture/decisions/ADR-173-preflight-probe-execution-boundary.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-175-preflight-probe-execution-boundary.md`
   *(ordinal provisional — `ADR-171` is highest on `origin/main`; re-derive before merge)*
 
 Only two fixtures: the arg-rule and path-rule cases are pure `rejectReason()` string calls
@@ -447,7 +447,7 @@ Extend the parity test with the sub-field extractor.
 
 ### Phase 3 — ADR, C4, verification
 
-1. ADR-173, recording the three defeated alternatives (no-execution/Stage-A pattern, probe
+1. ADR-175, recording the three defeated alternatives (no-execution/Stage-A pattern, probe
    registry, ephemeral `$HOME`) and the open consequences (network egress; PR-head trust).
    File the probe-registry tracking issue.
 2. `model.c4` `contributor` description.
@@ -605,7 +605,7 @@ a fail-closed invariant every future probe must honour.
 
 ### ADR
 
-**ADR-173 — Execution boundary for plan-declared discoverability probes.** Decision: a probe
+**ADR-175 — Execution boundary for plan-declared discoverability probes.** Decision: a probe
 declared in a plan file executes inside a **filesystem-isolated sandbox** with no credential
 stores bound and the repo read-only; the verb allowlist is deny-by-default and **every entry is
 an authority grant**; a probe that genuinely needs credentials is **declared and skipped**,
@@ -623,11 +623,11 @@ than reachability).
 `curl`); the PR-head trust circularity is unresolved (the probe registry's `main`-tracked
 resolution is what fixes it properly); and `AP-020` (untrusted input at the agent boundary —
 "never shell-evaluate it") is still violated by construction, since Check 10 shell-evaluates
-attacker-controlled text. ADR-173 must cite AP-020 and record why the violation is accepted
+attacker-controlled text. ADR-175 must cite AP-020 and record why the violation is accepted
 within the sandbox, rather than leaving the principles register silently contradicted.
 
 Ordinal **provisional**: `ADR-171` is highest on `origin/main`. Re-derive before merge; if it
-moves, sweep `grep -rn 'ADR-173' knowledge-base/project/{plans,specs}/` in the same edit.
+moves, sweep `grep -rn 'ADR-175' knowledge-base/project/{plans,specs}/` in the same edit.
 
 ### C4 views
 
@@ -708,7 +708,7 @@ secret, or firewall rule. `bwrap` is an existing host binary, not provisioned in
 | Mount-order bug silently disables the repo bind | `--tmpfs /home` must precede `--ro-bind "$REPO_ROOT"`; this cost one debugging cycle at plan time and is called out in AC2 and Sharp Edges |
 | Allowlist too narrow, false-rejecting real probes | Derived from a measured 632-command corpus; every verb has ≥2 uses. Widening is a reviewed one-line PR — the intended maintenance loop for deny-by-default |
 | `credentials_required` becomes routine self-certification | Distinct `SKIP-DECLARED` terminal, committed corpus baseline count asserted in the suite, reviewer-checklist entry. Residual risk stated as a gradient, not a possibility |
-| Network egress still allows repo-content exfiltration | Named as open in ADR-173 `## Consequences`, not silently omitted. `--share-net` is required for the dominant probe class |
+| Network egress still allows repo-content exfiltration | Named as open in ADR-175 `## Consequences`, not silently omitted. `--share-net` is required for the dominant probe class |
 | PR-head trust circularity unresolved | Named as open; the probe registry is recorded as the successor design with a tracking issue |
 | Four duplicated schema copies drift | Parity test extended with a sub-field extractor (AC15) |
 | ADR ordinal collision with a sibling PR | Re-derived against `origin/main` before merge; renumber sweeps plan + tasks + ACs in one edit |

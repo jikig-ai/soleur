@@ -16,7 +16,7 @@
 # the verb was "#"). Content pins on the allowlist literal cannot detect
 # behavioural drift. So: one file, executed by both the runtime and the tests.
 #
-# WHAT THIS GATE IS, STATED HONESTLY (ADR-173 Layer 2, revised).
+# WHAT THIS GATE IS, STATED HONESTLY (ADR-175 Layer 2, revised).
 # It is SCHEMA VALIDATION on the `command:` field — "is this an executable
 # command, and one Check 10's PATH can run?" — NOT a security control and NOT a
 # legibility control.
@@ -38,7 +38,7 @@
 # and `find` are absent because they fall below the >=2-use threshold — not
 # because they are uniquely dangerous. `git` is present and IS a full execution
 # vector (`git -c alias.x='!cmd' x` runs arbitrary commands); so is
-# `bash <script>`. ADR-173 records both as worked examples that an allowlist
+# `bash <script>`. ADR-175 records both as worked examples that an allowlist
 # entry is an authority grant. Authority is bounded by Step 10.5's sandbox, and
 # by nothing here.
 set -uo pipefail
@@ -58,7 +58,7 @@ if [[ $# -ne 1 ]]; then
   exit 2
 fi
 
-# Ten verbs, each with >=2 uses in the measured corpus (see ADR-173 §Layer 2 for
+# Ten verbs, each with >=2 uses in the measured corpus (see ADR-175 §Layer 2 for
 # the extraction method and the count). `sh` was cut: it has ZERO uses, the same
 # evidence on which `dig` and `getent` were excluded.
 PROBE_VERB_ALLOWLIST=' curl bash grep rg jq python3 node bun printf git '

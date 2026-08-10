@@ -13,7 +13,7 @@ export type Executor = (cmd: string, timeoutMs: number) => Promise<ExecResult>;
 
 export type ClassificationResult = {
   // SKIP-DECLARED is deliberately NOT folded into SKIP: it is a verification
-  // waiver a reviewer must be able to see (ADR-173 Layer 3).
+  // waiver a reviewer must be able to see (ADR-175 Layer 3).
   result: "PASS" | "FAIL" | "SKIP" | "SKIP-DECLARED" | "SKIP-NOSANDBOX";
   reason?: string;
 };
@@ -28,7 +28,7 @@ export type ClassifyInput = {
    * Whether the Step 10.5 bwrap sandbox can be established. Defaults to true so
    * existing callers are unaffected. When false the runtime SKIPs — it never
    * falls back to unsandboxed execution, because a skill claiming a boundary
-   * that is not there is worse than one claiming none (ADR-173 Layer 1).
+   * that is not there is worse than one claiming none (ADR-175 Layer 1).
    */
   sandboxAvailable?: boolean;
 };
@@ -47,7 +47,7 @@ const SSH_REJECT_RE = /(^|[\t\n\r \f\v/])ssh([\t\n\r \f\v]|$)/;
 // absolute-path read of a credential file by a permitted verb.
 //
 // This is a CORPUS-FREQUENCY list, not a capability list — each verb has >= 2
-// uses in the measured corpus (ADR-173 §Layer 2 states the count and the
+// uses in the measured corpus (ADR-175 §Layer 2 states the count and the
 // extraction method). `sh`, `dig` and `getent` are absent on the same evidence:
 // zero uses. `awk`/`sed`/`find` are absent for the same reason, NOT because they
 // are uniquely dangerous — `git -c alias.x='!cmd' x` and `bash <script>` are
@@ -70,7 +70,7 @@ export const PROBE_VERB_ALLOWLIST = [
   "git",
 ] as const;
 
-// DELETED (ADR-173 revision, CTO ruling on #7393): the inline-program arg rules
+// DELETED (ADR-175 revision, CTO ruling on #7393): the inline-program arg rules
 // (`-c`/`-e`/`-p`/`--eval`/`--print`) and the repo-relative program-path rule.
 //
 // Both were removed because the gate's own sanctioned remedy — "wrap it in a
@@ -472,7 +472,7 @@ export async function classifyDiscoverabilityResult(
         reason: `discoverability_test.credentials_required is a placeholder ("${credsRequired}"). State the credential scope and why no unauthenticated probe verifies the same property, or remove the field.`,
       };
     }
-    // INVERTED ADVISORY (ADR-173 Layer 3). Applying the verb gate to declared
+    // INVERTED ADVISORY (ADR-175 Layer 3). Applying the verb gate to declared
     // probes as a REJECT would re-close the door #7393 opened — the motivating
     // case is `doppler run …`, and `doppler` is deliberately off the allowlist.
     // A plain advisory would fire on ~100% of declarations by construction, and

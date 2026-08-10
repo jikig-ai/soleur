@@ -1207,7 +1207,7 @@ describe("#7393 GATE — executable parity between the runtime and its TS mirror
     // Form A block scalar keeps a leading `#` comment line.
     "# Run from the operator workstation (NO SSH)\ncurl -fsS https://app.soleur.ai/api/inngest",
     // An allowlisted verb that is nonetheless a full execution vector — accepted
-    // deliberately, and named in ADR-173 as the worked example.
+    // deliberately, and named in ADR-175 as the worked example.
     "git -c alias.pwn=!printf X pwn",
     // The path-shaped bypass that used to skip the allowlist entirely.
     "./doppler secrets get FOO --plain",
@@ -1324,7 +1324,7 @@ describe("#7393 GATE — executable parity between the runtime and its TS mirror
 });
 
 describe("#7393 A — deny-by-default probe-verb allowlist", () => {
-  // Ten verbs, each with >= 2 uses in the measured corpus. ADR-173 §Layer 2
+  // Ten verbs, each with >= 2 uses in the measured corpus. ADR-175 §Layer 2
   // states the extraction method (642 parseable commands: top-level .md under
   // knowledge-base/project/plans/, archive/ excluded) rather than repeating a
   // bare number three artifacts previously disagreed on. Deny-by-default is the

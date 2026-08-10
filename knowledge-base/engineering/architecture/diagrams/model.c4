@@ -29,12 +29,12 @@ model {
   // fix-constraints Stage A recovery producer (`pull_request`, contents:read, no
   // write/secret token); it never runs in the privileged Stage B consumer
   // (ADR-074). Operator-side, preflight Check 10 executes a plan-declared probe
-  // inside a bwrap sandbox (ADR-173) — but running a checked-out PR head's tests
+  // inside a bwrap sandbox (ADR-175) — but running a checked-out PR head's tests
   // or scripts by hand is outside both boundaries. Keep this comment and the
   // description below in agreement; they disagreed once (#7393 review).
   contributor = actor "Contributor / PR Author" {
     #external
-    description "An untrusted contributor opening a pull request. In CI their PR-head code executes only under pull_request isolation (fix-constraints Stage A: contents:read, no write token) and never in the privileged Stage B consumer, which opens a data-only draft follow-up PR from the default branch (ADR-074). The one PR-head artifact preflight executes on the operator's own workstation — a plan-declared discoverability probe — runs inside a bubblewrap sandbox with no credential stores bound and the repo read-only, failing closed if that sandbox cannot be established (ADR-173); its residual reach is host-loopback and outbound network (#7412). Other operator-side execution of a checked-out PR head (running its tests, its scripts, its hooks) is covered by NEITHER boundary."
+    description "An untrusted contributor opening a pull request. In CI their PR-head code executes only under pull_request isolation (fix-constraints Stage A: contents:read, no write token) and never in the privileged Stage B consumer, which opens a data-only draft follow-up PR from the default branch (ADR-074). The one PR-head artifact preflight executes on the operator's own workstation — a plan-declared discoverability probe — runs inside a bubblewrap sandbox with no credential stores bound and the repo read-only, failing closed if that sandbox cannot be established (ADR-175); its residual reach is host-loopback and outbound network (#7412). Other operator-side execution of a checked-out PR head (running its tests, its scripts, its hooks) is covered by NEITHER boundary."
   }
 
   // ---- Soleur Platform (enterprise boundary) -----------------------------
