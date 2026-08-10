@@ -179,7 +179,7 @@ moment: an irreversible destroy of the store.
 > whose `manifests[1]` is an attestation manifest (`vnd.docker.reference.type=attestation-manifest`,
 > `platform: unknown/unknown`) carrying one `application/vnd.in-toto+json` layer — plain JSON,
 > never gzipped. `crane validate` walks index children and tries to gunzip every layer. Validating
-> that child digest **directly at GHCR**, a registry the recut never touches, reproduced it
+> that child digest **directly at GHCR**, a registry the recut never WRITES to (it does read from it, on every entry, via `crane digest` and `crane copy`), reproduced it
 > identically, which is what established it as a validator false positive rather than corruption.
 >
 > **Why this matters beyond the fix.** A2 is the gate's declared PASS condition, so this made the
@@ -197,14 +197,28 @@ moment: an irreversible destroy of the store.
 > as an unclassified exit 6. Both suites had **zero** attestation/in-toto/gzip coverage before this
 > — the same hermetic-fixture gap this document already records for the app-domain derivation.
 >
-> **What is now warm, and what is still cold.** Three of the four ADR-169 surfaces executed in
-> this run: **GHCR-read-from-a-runner under `packages: read`** (A1 resolved 4/4 required pins),
-> the **`/health` parse** (A0 derived `version` + `build_sha`), and the **throwaway-zot rehearsal**
-> (ran, failed, now fixed). Still cold, because the recut job itself was skipped: the **two Hetzner
-> API probes**, the **Better Stack heartbeat read**, and — highest-stakes of all — the
-> **post-destroy real restore over the CF Tunnel**, which by construction cannot be exercised
-> before a destroy. Re-run the five checks below before the next attempt; three surfaces having
-> executed does not retire the section.
+> **What is now warm, and what is still cold.** Corrected 2026-08-10 — an earlier revision of this
+> paragraph listed the two Hetzner probes as cold on the reasoning that "the recut job was
+> skipped". That reasoning was wrong: **both Hetzner probes live in the `registry_pull_path_gate`
+> job, not in `registry_luks_recut`**, and both reported `success` in run 31333047132's step list.
+>
+> The paragraph this amends enumerates **six** surface groups. Five of them executed:
+>
+> | Surface | State | Where it ran |
+> |---|---|---|
+> | Hetzner volume/posture probe (D4) | **executed** | gate job, step `Resolve recovery posture (D4 live existence probe)` |
+> | Hetzner server-type availability probe | **executed** | gate job, step `Pre-rehearsal server-type availability probe` |
+> | GHCR-read-from-a-runner under `packages: read` | **executed** | gate job, A1 resolved 4/4 required pins |
+> | `/health` parse | **executed** | gate job, A0 derived `version` + `build_sha` |
+> | throwaway-zot rehearsal | **executed** | gate job — and it FAILED, which is this amendment |
+> | Better Stack heartbeat read | **still cold** | recut job (skipped) |
+> | post-destroy real restore over the CF Tunnel | **still cold** | `registry_store_restore` (skipped) |
+>
+> "Executed" is not "measured": the rehearsal aborted at verification 2, so the two quantities
+> ADR-169 records as unmeasured — its wall-clock and peak runner disk — remain unmeasured. The
+> in-recut *invocation* of `stock_preflight_gate` is also still cold, even though the Hetzner API
+> surface it uses was exercised by the pre-rehearsal probe. Re-run the five checks below before
+> the next attempt; five surfaces having executed does not retire the section.
 
 So the five checks below are **required before the first fire**, not advisory. If any fails, fix it
 and re-verify. **Do not proceed with a degraded gate** — a gate that cannot fail is worse than no
@@ -398,7 +412,7 @@ The **rehearsal** (D10 A2) runs the same engine, so the same table reads both.
 | `0` | Every required reference restored **and** blob-verified, signature present. | Nothing. The window is closed. |
 | `2` | **Source unavailable** — GHCR could not be read. | Nothing was written. Check the job's `packages: read` permission and GHCR status. **Not** proof the images were deleted: GHCR returns the same error for *absent* and *not visible to this credential*. |
 | `3` | **Sink unavailable** — the registry did not accept the write. **Retryable**, and the job already retries it: a replaced host can outrun the Cloudflare Tunnel's re-convergence. | If it exhausted its retries, confirm the registry host is serving, then re-run the job. |
-| `4` | **Verification failed** — a digest mismatched, a blob is missing (including an *attestation* child's blob), a **layer's content does not match its declared mediaType**, or a signature is absent. | **Do not deploy.** The store contents are not trustworthy. Re-run the job and read the per-entry lines; a repeat means the copy is landing wrong, not that it was interrupted. A layer-format mismatch on a real platform child is **not** the buildx-attestation false positive corrected 2026-08-09 — in-toto layers are verified by blob presence and never decompressed, so this arm now only fires on genuinely mismatched content. |
+| `4` | **Verification failed** — a digest mismatched, a blob is missing (including an *attestation* child's blob), a **layer's content does not match its declared mediaType**, or a signature is absent. | **Do not deploy.** The store contents are not trustworthy. Re-run the job and read the per-entry lines; a repeat means the copy is landing wrong, not that it was interrupted. A layer-format failure names **two causes the engine cannot tell apart**: the bytes really do disagree with the declared mediaType (corruption), OR the layer is legitimately not gzip (an uncompressed/zstd layer, or a child this engine failed to classify as an attestation) — a validator artifact. The message carries the discriminating command: re-run the identical `crane validate --remote` against `ghcr.io/<repo>@<child-digest>`; if GHCR fails the same way the store is fine. Also reaches exit 4: an index whose child list is empty, a child with no digest, a **nested** index child, an index with no platform child at all, an attestation manifest declaring no blobs, a sink manifest whose `.manifests` is not an array, and a sink manifest that is not JSON. For those SHAPE failures "re-run the job" is the wrong advice — they reproduce identically; capture the per-entry line and file it. |
 | `5` | **Credential unusable** — absent, empty, or **rejected** by the sink. **Not** retryable. | Retrying only burns the window. **Do NOT start by rotating anything** — see "If the sink rejects the credential" immediately below. |
 | `6` | **Could not classify** — a failure shape the engine does not recognise. | Read the crane stderr in the per-entry line before acting. Do **not** assume the images are absent. Worth filing alongside the recovery: an unenumerated failure is itself a defect. **This arm proved that claim on 2026-08-09**: the first live A2 rehearsal exited 6 on `gzip: invalid header`, which was a *validator* false positive over a buildx attestation manifest and not a store problem at all. It is now classified (exit 4), so a fresh exit 6 is again a genuinely unenumerated shape — treat it as a defect to file, not a store to distrust. |
 

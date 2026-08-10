@@ -50,14 +50,14 @@ Coverage is preserved — this is not a skip.
 |---|---|---|
 | "Add a `manifest` call and the tests keep passing" | The crane stub's `emit()` **exits 70 on any ref without a fixture** — by design, no permissive defaults | Every case reaching verification 2 needs an OCI-manifest fixture. Measured blast radius: **4** cases set a `validate:` fixture in the restore suite, plus `ok_fixtures()`, plus the D10 suite's A2 section |
 | "The test helper for manifests already exists" | `write_manifest()` writes the **restore-pins** manifest (`floor`/`entries`), not an OCI manifest | Name new helpers `fx_oci_manifest` / `fx_oci_index` to avoid the collision |
-| "One suite covers this" | The D10 suite has its **own** `crane_stub` + `REGISTRY_GATE_CRANE_CMD`, and its A2 section drives the real engine via `REGISTRY_RESTORE_CRANE_CMD` | Both suites need fixtures |
+| "One suite covers this" | **Refuted at /work.** The D10 suite stubs the **entire engine** via `REGISTRY_GATE_RESTORE_CMD`; its `REGISTRY_RESTORE_CRANE_CMD` reference is a seam-**parity** guard, not a wiring | Only the restore suite needs fixtures; the D10 suite is unchanged and still 60/0 |
 | "Strip the tag with `${dst%:*}`" | The sink ref is `127.0.0.1:5999/jikig-ai/…:tag` — a naive strip breaks on the **port** colon when no tag is present | Repo derivation must only strip a colon that appears **after the last `/`** |
 
 ## Hypotheses
 
 Not a network/SSH class change — the network-outage checklist does not apply. The single
 hypothesis (validator false positive vs. real corruption) was **decided by measurement**, not
-reasoning: the same child digest fails validation at GHCR, which the recut never touches. No
+reasoning: the same child digest fails validation at GHCR, which the recut never WRITES to (it does read GHCR on every entry). No
 hypothesis remains open.
 
 ## Implementation Phases
@@ -149,9 +149,20 @@ restore over a **blob-incomplete** registry. The second is worse than the first:
 succeed for some refs and fail for others, so it presents as a confusing per-image outage, and
 the fleet is one container restart away from a hard outage with nothing to pull from.
 
-**If this leaks, the user's data is exposed via:** no new exposure surface. The change reads OCI
-manifests and blob bytes already held by the sink; it adds no store, no credential, no network
-egress beyond the calls the engine already makes.
+**If this leaks, the user's data is exposed via:** the change adds no store, no credential and no
+network egress beyond the calls the engine already makes — but it IS the first code path that
+fetches attestation blob bytes rather than streaming and discarding them, so "no new exposure
+surface" was too strong. Those blobs are buildx provenance, and this repo's published provenance
+currently records `SENTRY_AUTH_TOKEN` as a build-arg (tracked separately as a credential-exposure
+issue). The engine therefore discards the blob body to `/dev/null` — only the exit code and crane's
+streaming digest verification are consumed — so no blob is materialised on the runner's disk.
+
+**Residual this PR UNLOCKS but does not close:** today the gate cannot pass, so nothing can be
+destroyed. The point of this change is to make `verdict=PASS predicate=A2` reachable, and the first
+thing a PASS authorizes is an irreversible destroy. A2 proves the engine can refill a *throwaway*
+registry in the runner; the leg that restores *production* — the post-destroy restore over the
+Cloudflare Tunnel — has never executed and, by ADR-169's independence criterion, cannot be
+rehearsed before a destroy. A trustworthy A2 PASS is necessary, not sufficient.
 
 **Brand-survival threshold:** single-user incident
 
@@ -263,7 +274,7 @@ new artifact-distribution surface).
 
 - `scripts/registry-restore-from-ghcr.sh` — `classify()` new arm; verification 2 per-child rewrite; repo-derivation helper.
 - `tests/scripts/test-registry-restore-from-ghcr.sh` — `manifest`/`blob` stub arms, `fx_oci_index`/`fx_oci_manifest`, 4 new cases, 4 existing cases + `ok_fixtures()` updated.
-- `tests/scripts/test-registry-pull-path-health.sh` — A2 fixtures for the index shape.
+- ~~`tests/scripts/test-registry-pull-path-health.sh`~~ — **not edited** (task-1.10 deviation): it stubs the whole engine, so it covers the gate↔engine exit-code contract, which is unchanged.
 - `knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md` — exit-code table + cold-vehicle section.
 - `knowledge-base/engineering/architecture/decisions/ADR-169-what-authorizes-destroying-the-sole-pull-path.md` — amendment.
 
@@ -283,7 +294,7 @@ None.
 6. `classify "…gzip: invalid header"` returns the new named class; the engine maps it to exit **4**.
 7. Single-manifest (non-index) refs take the unchanged code path, asserted against the stub's `$CALLS` log rather than by reading the suite: for the non-index case the log contains **exactly one** `validate` line for that ref and **zero** `blob` lines. (A "grep the suite for a case that asserts…" AC would be vacuous — it tests that a test exists, not that the behaviour holds.)
 8. `bash scripts/test-all.sh` green (full suite), or, if scoped, the registry-suite subset green plus a named record of which commit the last full run covered.
-9. No diff outside the five files in **Files to Edit**: `git diff --name-only origin/main...HEAD` returns exactly that set (plus the plan/spec artifacts).
+9. No diff **outside** the Files-to-Edit set: `git diff --name-only origin/main...HEAD` returns a SUBSET of it plus the plan/spec artifacts. Subset, not equality — `tests/scripts/test-registry-pull-path-health.sh` is listed but deliberately untouched (task-1.10 deviation), so an equality assertion would fail on a correct implementation.
 10. The recut's other gates are untouched: `git diff origin/main...HEAD -- tests/scripts/lib/registry-luks-recut-gate.sh tests/scripts/lib/stock-preflight-gate.sh .github/workflows/apply-web-platform-infra.yml` is **empty**.
 11. Every `knowledge-base/` path cited in this plan resolves: `grep -oE 'knowledge-base/[A-Za-z0-9/_.-]+\.md' <plan> | xargs -I{} bash -c '[[ -f "{}" ]] || echo BROKEN {}'` prints nothing.
 
@@ -306,7 +317,7 @@ None.
 |---|---|
 | The fix over-corrects into skipping attestation children, silently allowing a blob-incomplete store | Test Scenario 3 is the guard: an absent attestation blob **must** still exit 4. Presence is verified, not assumed |
 | A future attestation shape is not detected and gets exit 4 spuriously, blocking a recut | Detection is an OR on `platform.architecture == "unknown"`, which is shape-stable across buildx provenance and SBOM manifests, not only on the annotation |
-| Adding a `crane manifest` call breaks existing tests via the no-fixture arm (exit 70) | Measured: 4 cases + `ok_fixtures()` + the D10 A2 section. All enumerated in Files to Edit rather than discovered at `/work` |
-| Repo derivation mangles the sink's `host:port` | Helper strips a trailing `:tag` only when the colon falls after the last `/`; covered by a unit case |
+| Adding a `crane manifest` call breaks existing tests via the no-fixture arm (exit 70) | Measured: 4 cases + `ok_fixtures()`. The D10 A2 section turned out NOT to be affected — it stubs the whole engine |
+| Repo derivation mangles the sink's `host:port` | Helper strips a trailing `:tag` only when the colon falls after the last `/`. Covered by a `ref_repo` unit table (tagged / untagged-with-port / digest) added at review time — the original "covered by a unit case" claim was false until then |
 | Extra CI wall-clock from per-child calls | Cost-neutral: today's whole-ref `crane validate` already downloads the platform layers. Per-child issues the same downloads plus one cheap manifest GET and a 140 KB attestation blob |
 | Exit 4 is non-retryable, so a mis-mapped transient becomes a hard stop | Network and credential shapes are classified **before** the `LAYERFORMAT` arm is reached, preserving the 3/5 retry semantics |

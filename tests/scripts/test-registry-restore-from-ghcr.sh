@@ -104,11 +104,29 @@ fx_oci_single() {
 }'
 }
 
-# fx_oci_index <dir> <ref> — the PRODUCTION shape: a buildx OCI index carrying one real platform
-# child plus one attestation child. The attestation child is what `crane validate` tries to
-# gunzip; its layer mediaType is `application/vnd.in-toto+json`, which is never compressed.
+# fx_oci_index <dir> <ref> [signals] — the PRODUCTION shape: a buildx OCI index carrying one real
+# platform child plus one attestation child. The attestation child is what `crane validate` tries
+# to gunzip; its layer mediaType is `application/vnd.in-toto+json`, which is never compressed.
+#
+# `signals` selects WHICH attestation marker the child carries, and it exists because a fixture
+# that sets BOTH makes each one individually dead weight — dropping either disjunct from the
+# engine left the whole suite green. Worse, the both-signals shape hid a live bug: with only
+# `arch`, jq emits `digest<TAB><TAB>unknown`, bash collapses the tab run (tab is IFS-whitespace),
+# and the arch value landed in the TYPE field — so the `arch == "unknown"` arm was unreachable
+# exactly when it was the only marker, and the in-toto child went to `crane validate`.
+#   both  (default) — annotation + platform.architecture:unknown
+#   arch            — platform ONLY, no annotations key at all
+#   annot           — annotation ONLY, no platform key at all
 fx_oci_index() {
-  fixture "$1" "manifest:$2" 0 '{
+  local d="$1" ref="$2" signals="${3:-both}" att_extra=""
+  case "$signals" in
+    both)  att_extra='"annotations": { "vnd.docker.reference.digest": "'"$D_AMD64"'", "vnd.docker.reference.type": "attestation-manifest" },
+      "platform": { "architecture": "unknown", "os": "unknown" }' ;;
+    arch)  att_extra='"platform": { "architecture": "unknown", "os": "unknown" }' ;;
+    annot) att_extra='"annotations": { "vnd.docker.reference.digest": "'"$D_AMD64"'", "vnd.docker.reference.type": "attestation-manifest" }' ;;
+    *) echo "harness: unknown fx_oci_index signals '$signals'" >&2; exit 2 ;;
+  esac
+  fixture "$d" "manifest:$ref" 0 '{
   "schemaVersion": 2,
   "mediaType": "application/vnd.oci.image.index.v1+json",
   "manifests": [
@@ -122,15 +140,15 @@ fx_oci_index() {
       "mediaType": "application/vnd.oci.image.manifest.v1+json",
       "digest": "'"$D_ATT"'",
       "size": 566,
-      "annotations": {
-        "vnd.docker.reference.digest": "'"$D_AMD64"'",
-        "vnd.docker.reference.type": "attestation-manifest"
-      },
-      "platform": { "architecture": "unknown", "os": "unknown" }
+      '"$att_extra"'
     }
   ]
 }'
 }
+
+# fx_oci_raw <dir> <ref> <json> — an arbitrary sink manifest payload, for the degenerate shapes
+# (nested index child, attestation-only index, child with no digest, non-array .manifests).
+fx_oci_raw() { fixture "$1" "manifest:$2" 0 "$3"; }
 
 # fx_oci_attestation <dir> <repo> — the attestation child's own manifest, read to enumerate the
 # blobs whose PRESENCE (not decompressibility) the engine must verify.
@@ -185,12 +203,26 @@ if [[ "$sub" == "auth" ]]; then
   exit 0
 fi
 # The sink is plain HTTP on loopback in both modes, so crane must be told so. Strip the flag
-# here, but assert it was PRESENT for sink-directed calls further down.
+# here, then assert it was PRESENT for every loopback-directed call in the prologue below.
+# (This comment used to promise an assertion "further down" that did not exist for any
+# subcommand; the prologue check is what makes it true.)
 args=(); saw_insecure=0
 for a in "$@"; do
   if [[ "$a" == "--insecure" ]]; then saw_insecure=1; else args+=("$a"); fi
 done
 set -- "${args[@]}"
+# Assert the flag ONCE, in the prologue, for EVERY subcommand — mirroring the engine's own rule
+# (loopback sink => plain HTTP => --insecure required; anything else => TLS => absent).
+# Per-arm checks were the wrong shape: with `digest`, `copy` and `validate` unasserted, dropping
+# --insecure from any single call site was satisfied by a SIBLING call site that still had it, so
+# each mutation survived 70/0 while production would attempt TLS against a plain-HTTP sink.
+for a in "$@"; do
+  case "$a" in
+    127.0.0.1:*|localhost:*|\[::1\]:*)
+      [[ "$saw_insecure" == 1 ]] || { echo "stub: loopback-sink '$sub' needs --insecure, got: $*" >&2; exit 64; }
+      break ;;
+  esac
+done
 key() { printf '%s' "$1" | tr '/:@' '___'; }
 emit() { # $1 = ref, $2 = what-kind (for the missing-fixture message)
   local k; k="$(key "$1")"
@@ -240,16 +272,9 @@ case "$sub" in
     # single-manifest answer and silently stop verifying attestation children.
     ref="${1:-}"
     [[ -n "$ref" ]] || { echo "stub: 'crane manifest' with no ref" >&2; exit 64; }
-    # A sink-directed read MUST carry --insecure (the sink is plain HTTP on loopback). The stub
-    # captures saw_insecure for every call but, before this arm, never asserted it anywhere —
-    # so the flag was unpinned in practice despite the comment above claiming otherwise.
     # Mirror the engine's OWN rule: --insecure is required for a LOOPBACK sink (plain HTTP) and
     # must be absent otherwise. Requiring it for every non-ghcr ref would wrongly demand it of a
     # non-loopback sink, which the suite separately asserts must stay on TLS.
-    case "$ref" in
-      127.0.0.1:*|localhost:*|\[::1\]:*)
-        [[ "$saw_insecure" == 1 ]] || { echo "stub: loopback-sink 'crane manifest' needs --insecure" >&2; exit 64; } ;;
-    esac
     emit "manifest:$ref" manifest
     ;;
   blob)
@@ -258,10 +283,6 @@ case "$sub" in
     ref="${1:-}"
     [[ -n "$ref" ]] || { echo "stub: 'crane blob' with no ref" >&2; exit 64; }
     case "$ref" in *@sha256:*) ;; *) echo "stub: 'crane blob' must take a digest ref, got '$ref'" >&2; exit 64 ;; esac
-    case "$ref" in
-      127.0.0.1:*|localhost:*|\[::1\]:*)
-        [[ "$saw_insecure" == 1 ]] || { echo "stub: loopback-sink 'crane blob' needs --insecure" >&2; exit 64; } ;;
-    esac
     emit "blob:$ref" blob
     ;;
   *)
@@ -294,8 +315,10 @@ ok_fixtures() {
   fixture "$fx" "${t}/${IB}:v1.1.24"     0 "$D2"
   # Both refs are NON-index in the baseline world, so verification 2 keeps its pre-existing
   # shape: one `crane validate --remote` per ref and zero `crane blob` calls.
-  fx_oci_single "$fx" "${t}/${WP}:v0.249.4"
-  fx_oci_single "$fx" "${t}/${IB}:v1.1.24"
+  # Keyed by DIGEST, not tag: the engine reads the sink manifest as `<repo>@<digest>` so crane
+  # byte-verifies it (a tag ref is not digest-checked by go-containerregistry).
+  fx_oci_single "$fx" "${t}/${WP}@${D1}"
+  fx_oci_single "$fx" "${t}/${IB}@${D2}"
   fixture "$fx" "validate:${t}/${WP}:v0.249.4" 0 "PASS"
   fixture "$fx" "validate:${t}/${IB}:v1.1.24"  0 "PASS"
   # signature tags (sha256-<hex>, the OCI referrers tag scheme GHCR actually uses)
@@ -792,7 +815,7 @@ fi
 
 # followed by `::add-mask::` in that stderr would execute. Collapsing newlines makes the whole
 # capture one un-parseable payload. Lifted from build-inngest-bootstrap-image.yml.
-if grep -qE "tr '\\\\n' ' '" "$ENGINE"; then
+if sed -n '/^last_err() {/,/^}/p' "$ENGINE" | grep -qE "tr '\\\\n' ' '"; then
   pass "registry stderr is collapsed through tr (workflow-command injection guard)"
 else
   fail "captured stderr must be newline-collapsed before interpolation" "?" \
@@ -816,9 +839,9 @@ fi
 
 # att_index_fixtures <fx> <target> — ok_fixtures, but the web-platform ref is a buildx INDEX.
 att_index_fixtures() {
-  local fx="$1" t="$2"
+  local fx="$1" t="$2" signals="${3:-both}"
   ok_fixtures "$fx" "$t"
-  fx_oci_index       "$fx" "${t}/${WP}:v0.249.4"
+  fx_oci_index       "$fx" "${t}/${WP}@${D1}" "$signals"
   fx_oci_attestation "$fx" "${t}/${WP}"
   # Drop the whole-index `validate:` fixture ok_fixtures laid down. Without this the positive
   # control is VACUOUS: the pre-fix engine validates the index, finds a PASS fixture, and exits 0
@@ -827,6 +850,10 @@ att_index_fixtures() {
   rm -f "$fx/$(key "validate:${t}/${WP}:v0.249.4")".rc \
         "$fx/$(key "validate:${t}/${WP}:v0.249.4")".out \
         "$fx/$(key "validate:${t}/${WP}:v0.249.4")".err
+  # PROVE the delete landed. `rm -f` succeeds silently on a path that never existed, so if key()
+  # ever drifts the positive control silently reverts to vacuous — green against a pre-fix engine.
+  [[ ! -f "$fx/$(key "validate:${t}/${WP}:v0.249.4")".rc ]] || {
+    echo "harness: the positive control's rm did not land — key() drifted; the control is vacuous" >&2; exit 2; }
   fixture "$fx" "validate:${t}/${WP}@${D_AMD64}" 0 "PASS"
   fixture "$fx" "blob:${t}/${WP}@${D_ATT_CFG}"   0 ""
   fixture "$fx" "blob:${t}/${WP}@${D_ATT_LAYER}" 0 ""
@@ -912,6 +939,150 @@ if [[ "$rc" -eq 0 && "$n_ib" -eq 1 && "$n_blob" -eq 0 ]]; then
   pass "a non-index ref keeps the unchanged path (1 validate, 0 blob calls)"
 else
   fail "non-index behaviour drifted: rc=$rc validate=$n_ib blob=$n_blob" "$rc" "$(cat "$calls")"
+fi
+
+# ── Each attestation signal must be load-bearing ON ITS OWN (the #7378 near-recurrence). ─────
+# With both markers set, dropping either disjunct from the engine left the suite green. Worse,
+# the arch-only shape exposed a real bug: `@tsv` emits an EMPTY annotation field, tab is
+# IFS-whitespace, bash collapses the run, and `unknown` landed in c_type with c_arch empty — so
+# the child took the PLATFORM branch, got gunzipped, and reproduced #7378 with a message denying
+# it. These two cases fail on the pre-fix engine and are the regression guard.
+for sig in arch annot; do
+  fx="$TMP/fx-att-$sig"; calls="$TMP/calls-att-$sig"; : > "$calls"
+  att_index_fixtures "$fx" "$TARGET" "$sig"
+  out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+  if [[ "$rc" -eq 0 ]] && grep -qE "^blob .*${D_ATT_LAYER}" "$calls"; then
+    pass "an attestation child marked ONLY by '$sig' is still routed to blob-presence, not gunzip"
+  else
+    fail "attestation detection must not depend on the other signal ($sig-only)" "$rc" "$out
+$(cat "$calls")"
+  fi
+  if grep -qE "^validate .*--remote .*@${D_ATT}( |$)" "$calls"; then
+    fail "the attestation child ($sig-only) was handed to crane validate — #7378 reproduced" "$rc" "$(cat "$calls")"
+  else
+    pass "the attestation child ($sig-only) is never handed to crane validate"
+  fi
+done
+
+# ── Degenerate index shapes must fail CLOSED, each with its own named verdict. ────────────────
+att_shape_case() { # <name> <index-json> <expected-rc> <expected-message-substring>
+  local name="$1" json="$2" want="$3" anchor="$4"
+  local fx="$TMP/fx-shape-$name" calls="$TMP/calls-shape-$name"; : > "$calls"
+  ok_fixtures "$fx" "$TARGET"
+  # Lay down the attestation child's manifest + blobs so a shape whose children are individually
+  # verifiable reaches the SHAPE guard under test, rather than aborting earlier on a missing
+  # fixture (which would make the case pass for the wrong reason).
+  fx_oci_attestation "$fx" "${TARGET}/${WP}"
+  fixture "$fx" "blob:${TARGET}/${WP}@${D_ATT_CFG}"   0 ""
+  fixture "$fx" "blob:${TARGET}/${WP}@${D_ATT_LAYER}" 0 ""
+  fixture "$fx" "validate:${TARGET}/${WP}@${D_AMD64}" 0 "PASS"
+  fx_oci_raw "$fx" "${TARGET}/${WP}@${D1}" "$json"
+  rm -f "$fx/$(key "validate:${TARGET}/${WP}:v0.249.4")".rc
+  local out rc
+  out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+  if [[ "$rc" -eq "$want" ]] && printf '%s' "$out" | grep -qF "$anchor"; then
+    pass "index shape '$name' => exit $want naming '$anchor'"
+  else
+    fail "index shape '$name' must exit $want naming '$anchor'" "$rc" "$out"
+  fi
+}
+
+att_shape_case nested-index '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"'"$D_AMD64"'","size":10,"platform":{"architecture":"amd64","os":"linux"}}]}' 4 "NESTED index child"
+
+att_shape_case attestation-only '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"'"$D_ATT"'","size":566,"platform":{"architecture":"unknown","os":"unknown"}}]}' 4 "NO platform image among them"
+
+att_shape_case child-without-digest '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","size":10,"platform":{"architecture":"amd64","os":"linux"}}]}' 4 "index child with no digest"
+
+att_shape_case manifests-not-array '{"schemaVersion":2,"manifests":{"a":1}}' 4 "is not an array"
+
+# ── The attestation-manifest READ (not just its blobs) must classify, at every arm. ───────────
+# Nothing exercised a FAILING `manifest:` fixture anywhere, so NETWORK->3 and DENIED->5 were
+# untested at all five new call sites. Exit 3 is the only code the restore job's backoff retries;
+# mislabelling it after the store is destroyed is the failure ADR-169's exit table exists to stop.
+att_read_case() { # <name> <stub-stderr> <expected-rc>
+  local name="$1" err="$2" want="$3"
+  local fx="$TMP/fx-read-$name" calls="$TMP/calls-read-$name"; : > "$calls"
+  att_index_fixtures "$fx" "$TARGET"
+  fixture "$fx" "manifest:${TARGET}/${WP}@${D_ATT}" 1 "" "$err"
+  local out rc
+  out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+  if [[ "$rc" -eq "$want" ]]; then
+    pass "attestation-manifest read failure '$name' => exit $want"
+  else
+    fail "attestation-manifest read '$name' must exit $want" "$rc" "$out"
+  fi
+}
+att_read_case network 'Error: Get "http://127.0.0.1:5555/v2/": dial tcp: connection refused' 3
+att_read_case denied  'Error: GET http://127.0.0.1:5555/v2/token: UNAUTHORIZED: authentication required' 5
+att_read_case absent  'Error: GET http://127.0.0.1:5555/v2/x/manifests/y: MANIFEST_UNKNOWN: manifest unknown' 4
+
+# The attestation CONFIG blob is part of the presence set, not just its layers.
+fx="$TMP/fx-att-cfg"; calls="$TMP/calls-att-cfg"; : > "$calls"
+att_index_fixtures "$fx" "$TARGET"
+fixture "$fx" "blob:${TARGET}/${WP}@${D_ATT_CFG}" 1 "" \
+  "Error: GET http://${TARGET}/v2/${WP}/blobs/${D_ATT_CFG}: BLOB_UNKNOWN: blob unknown to registry"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]]; then
+  pass "an attestation child's CONFIG blob is presence-verified too (absent => exit 4)"
+else
+  fail "an absent attestation config blob must exit 4" "$rc" "$out"
+fi
+
+# ── Operator verdicts must be DISTINGUISHABLE, not merely all-exit-4. ─────────────────────────
+# Five distinct causes collapse onto rc 4; without a message anchor a mutation swapping one class
+# for another is invisible, and they route to different runbook rows.
+verdict_case() { # <name> <stub-stderr> <expected-anchor> <forbidden-anchor>
+  local name="$1" err="$2" want="$3" nope="$4"
+  local fx="$TMP/fx-verdict-$name" calls="$TMP/calls-verdict-$name"; : > "$calls"
+  att_index_fixtures "$fx" "$TARGET"
+  fixture "$fx" "validate:${TARGET}/${WP}@${D_AMD64}" 1 "" "$err"
+  local out rc
+  out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+  if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -qF "$want" && ! printf '%s' "$out" | grep -qF "$nope"; then
+    pass "verdict '$name' names '$want' and not '$nope'"
+  else
+    fail "verdict '$name' must name '$want' and not '$nope'" "$rc" "$out"
+  fi
+}
+verdict_case layerformat 'Error: validating layers: gzip: invalid header' \
+  "could not decompress a layer as gzip" "BLOB-INCOMPLETE"
+verdict_case blobmissing 'Error: fetching layer: BLOB_UNKNOWN: blob unknown to registry' \
+  "BLOB-INCOMPLETE" "could not decompress"
+verdict_case contentmismatch 'Error: error verifying sha256 checksum after reading 1054 bytes; got "sha256:aa", want "sha256:bb"' \
+  "CORRUPT AT THE SINK" "BLOB-INCOMPLETE"
+
+# The LAYERFORMAT verdict must hand the operator the discriminating command, not a conclusion.
+fx="$TMP/fx-layerfmt-action"; calls="$TMP/calls-layerfmt-action"; : > "$calls"
+att_index_fixtures "$fx" "$TARGET"
+fixture "$fx" "validate:${TARGET}/${WP}@${D_AMD64}" 1 "" 'Error: validating layers: gzip: invalid header'
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if printf '%s' "$out" | grep -qF 'crane validate --remote ghcr.io/'; then
+  pass "the layer-format verdict names the GHCR control read that discriminates the two causes"
+else
+  fail "a layer-format verdict must give the discriminating command, not just a prohibition" "$rc" "$out"
+fi
+
+# ── ref_repo: the port-vs-tag case the helper exists for. ─────────────────────────────────────
+# The plan claimed this was 'covered by a unit case'; it was not. Every ref the engine builds
+# carries a tag, so the untagged host:port arm was never reached by any other assertion.
+rr() { ( set -euo pipefail; . /dev/stdin <<< "$(sed -n '/^ref_repo() {/,/^}/p' "$ENGINE")"; ref_repo "$1" ); }
+rr_expect() {
+  local got; got="$(rr "$1")"
+  if [[ "$got" == "$2" ]]; then pass "ref_repo('$1') => '$2'"; else fail "ref_repo('$1') must be '$2'" "?" "got '$got'"; fi
+}
+rr_expect "127.0.0.1:5999/jikig-ai/soleur-web-platform:v0.249.4" "127.0.0.1:5999/jikig-ai/soleur-web-platform"
+rr_expect "127.0.0.1:5999/jikig-ai/soleur-web-platform"           "127.0.0.1:5999/jikig-ai/soleur-web-platform"
+rr_expect "127.0.0.1:5999/jikig-ai/soleur-web-platform@${D1}"     "127.0.0.1:5999/jikig-ai/soleur-web-platform"
+
+# ── Anti-vacuity floor for THIS suite. ────────────────────────────────────────────────────────
+# Deleting the entire new assertion block left the suite green at 43/0, exit 0 — `fails -eq 0` is
+# satisfied by asserting nothing. A floor (never `-eq`, which would make every added assertion a
+# spurious failure) makes that deletion loud. Derived from a green run, ratchet upward only.
+MIN_ASSERTIONS=70
+if (( passes + fails < MIN_ASSERTIONS )); then
+  printf '  FAIL harness: %d assertions ran, floor is %d — assertions were deleted or skipped\n' \
+    "$((passes + fails))" "$MIN_ASSERTIONS"
+  fails=$(( fails + 1 ))
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"

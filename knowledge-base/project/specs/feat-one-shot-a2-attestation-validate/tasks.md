@@ -9,7 +9,7 @@ Baselines pinned 2026-08-09: restore suite **43 passed / 0 failed**, D10 suite *
 - [x] 1.1 Add a `manifest` arm to the crane stub in `tests/scripts/test-registry-restore-from-ghcr.sh`, keyed `manifest:<ref>` via the existing `emit()`. No permissive default — a missing fixture must still exit 70.
 - [x] 1.2 Add a `blob` arm, keyed `blob:<ref>`. Assert the ref carries a digest; assert `--insecure` was present for sink-directed calls.
 - [x] 1.3 Add `fx_oci_index` helper — synthesized index JSON with one amd64 child and one attestation child (`vnd.docker.reference.type=attestation-manifest`, `platform: unknown/unknown`).
-- [x] 1.4 Add `fx_oci_manifest` helper — synthesized single manifest, plus an attestation-manifest variant whose one layer is `application/vnd.in-toto+json`. Do **not** name these `write_manifest` (taken: it writes the restore-pins manifest).
+- [x] 1.4 Add `fx_oci_single` + `fx_oci_attestation` helpers (named `fx_oci_manifest` in the plan; renamed for clarity) — synthesized single manifest, plus an attestation-manifest variant whose one layer is `application/vnd.in-toto+json`. Do **not** name these `write_manifest` (taken: it writes the restore-pins manifest).
 - [x] 1.5 New case: positive control — index with in-toto attestation child restores green (red before Phase 3).
 - [x] 1.6 New case: platform-layer blob missing → exit 4.
 - [x] 1.7 New case: attestation blob absent at the sink → exit 4.
@@ -42,9 +42,9 @@ Baselines pinned 2026-08-09: restore suite **43 passed / 0 failed**, D10 suite *
 
 ## Phase 5 — Verification
 
-- [ ] 5.1 Restore suite ≥ 47 passed / 0 failed.
-- [ ] 5.2 D10 suite ≥ 60 passed / 0 failed.
-- [ ] 5.3 Revert-check: temporarily restore the whole-ref `crane validate` and confirm the positive control goes RED (proves the test is load-bearing, not vacuous).
+- [x] 5.1 Restore suite ≥ 47 passed / 0 failed.
+- [x] 5.2 D10 suite ≥ 60 passed / 0 failed.
+- [x] 5.3 Revert-check: temporarily restore the whole-ref `crane validate` and confirm the positive control goes RED (proves the test is load-bearing, not vacuous).
 - [ ] 5.4 `bash scripts/test-all.sh` green; record which commit the full run covered.
-- [ ] 5.5 Scope assertion: `git diff origin/main...HEAD -- tests/scripts/lib/registry-luks-recut-gate.sh tests/scripts/lib/stock-preflight-gate.sh .github/workflows/apply-web-platform-infra.yml` is empty.
-- [ ] 5.6 Plan citation sweep prints no BROKEN lines.
+- [x] 5.5 Scope assertion: `git diff origin/main...HEAD -- tests/scripts/lib/registry-luks-recut-gate.sh tests/scripts/lib/stock-preflight-gate.sh .github/workflows/apply-web-platform-infra.yml` is empty.
+- [x] 5.6 Plan citation sweep prints no BROKEN lines.
