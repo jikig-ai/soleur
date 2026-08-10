@@ -83,6 +83,19 @@ const log = createChildLogger("git-lock-marker-telemetry");
 //     this list, not something specific to this one. On that surface the operative consumer
 //     is the agent reading the tool result (stdout), plus the unconditional failure summary
 //     on stderr — see git-worktree/SKILL.md §Sharp Edges.
+//   - SOLEUR_WORKTREE_SLUG_COLLISION — `create` found the target directory already holding a
+//     DIFFERENT branch (#7408). Worktree directory names are the slug of the branch name, and
+//     that transform is many-to-one (`ci/foo` and `ci-foo` share a directory), so without this
+//     the run silently entered the wrong branch's worktree and never created the requested ref.
+//     NOT paged — the refusal is the safe outcome and it is already loud on stderr with a
+//     specific remedy; a correctly-refused collision is operator-actionable, not a wedge. It is
+//     mirrored so the frequency of the collision class is measurable rather than anecdotal.
+//   - SOLEUR_ORPHAN_SKIP_DESCENDANT — the orphan reaper declined to reap an unregistered
+//     directory because a REGISTERED worktree lives beneath it (#7408): the legacy nested
+//     layout a pre-fix version produced for slash-bearing branches. Same surface scope as
+//     the two markers around it. NOT paged — the skip is the SAFE outcome (it spares a
+//     directory that would otherwise be `rm -rf`'d); what it reports is disk state needing
+//     the migration runbook in git-worktree/SKILL.md §Sharp Edges, not a wedge.
 //   - SOLEUR_ORPHAN_REGISTRY_UNAVAILABLE — the orphan reaper's fail-closed refusal (#7102):
 //     `git worktree list` failed, so the registered-worktree allowlist would be EMPTY and
 //     every directory would read as unregistered. The reaper declines to run rather than
@@ -90,7 +103,7 @@ const log = createChildLogger("git-lock-marker-telemetry");
 //     refusal is the safe outcome; genuine git breakage surfaces as a wedge via the
 //     creation path's own SOLEUR_GIT_LOCK_*/SOLEUR_GIT_CONFIG_* markers.
 const MARKER_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
 
 // A wedge (vs. a benign DIAG) is any marker that indicates git operations could not
 // proceed: an unremovable/masked lock, a temp-wedge, a config-TARGET-masked give-up, an

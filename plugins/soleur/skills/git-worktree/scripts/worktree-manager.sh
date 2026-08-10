@@ -929,6 +929,33 @@ fetch_origin_branch_base() {
   fi
 }
 
+# Make an arbitrary, possibly hostile string safe to interpolate into a
+# `key=value` SOLEUR_* marker line (#7408 review).
+#
+# Extracted from cleanup_orphan_worktree_dirs's failure summary, which has
+# carried this rule — and the reasoning for it — since #7102. It was a local
+# idiom there; every later marker that interpolated user-derived text had to
+# remember to re-implement it, and the #7408 markers did not. Now there is one
+# definition, so a new emitter inherits the property instead of re-deriving it.
+#
+# Positive ALLOWLIST, never a denylist: a denylist of the characters that break
+# the line format ("\n\r\t and space) still admits \v, \f, ESC and U+2028/U+2029
+# — the last of which splits lines in JSON log viewers even though bash's own
+# `split("\n")` does not (cq-regex-unicode-separators-escape-only). Closed sets
+# are the only ones that stay closed as sinks change.
+#
+# This is not paranoia about a theoretical input: `create` takes $1 verbatim and
+# emits a lease marker BEFORE `git worktree add` ever validates it as a refname,
+# so a caller can pass an embedded newline and forge a second, wedge-shaped
+# marker line on stdout. Measured against the real script during review.
+#
+# 64-char cap matches the pre-existing call site: a marker field is a diagnostic
+# handle, not a payload.
+_sanitize_marker_field() {
+  local s="${1//[^A-Za-z0-9._-]/_}"
+  printf '%s' "${s:0:64}"
+}
+
 # Derive the on-disk worktree name from a git branch name (#7408).
 #
 # Git refnames may contain `/`; worktree DIRECTORIES may not, because this
@@ -1014,11 +1041,32 @@ _acquire_worktree_lease() {
     # NOT reapable: the reaper only deletes directories that are unregistered
     # AND `.git`-less, and this one is registered.
     local fail_reason="rc-nonzero"
-    if ! _validate_worktree_name "$branch_name" 2>/dev/null; then
+    # `declare -F` guard: _validate_worktree_name is a PRIVATE symbol in
+    # session-state.sh reached across the plugin -> .claude/hooks boundary, and
+    # the _SS_LIB_MISSING stub block does not define it. Unreachable today (the
+    # stub path returns above), but if that ordering ever inverts, an absent
+    # function yields 127 -> truthy -> EVERY failure mislabelled
+    # `name-not-keyable`. That is the exact mislabelling this split exists to
+    # remove, inverted and silent. Fail toward the generic bucket instead.
+    if declare -F _validate_worktree_name >/dev/null 2>&1 \
+      && ! _validate_worktree_name "$branch_name" 2>/dev/null; then
       fail_reason="name-not-keyable"
     fi
-    echo "SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED branch=$branch_name site=$site reason=$fail_reason"
-    headless_or_stderr warn "could not acquire lease for $branch_name — this worktree is REAPABLE"
+    # `key=`, not `branch=`: every caller passes the SLUG (the lease key), so a
+    # failure on `ci/rule-metrics` reported `branch=ci-rule-metrics` — a string
+    # that resolves to no ref, so a responder could not `git branch -D` it or
+    # `gh pr list --head` it. This marker is in WEDGE_RE, i.e. it pages; the
+    # field name has to say what the value actually is.
+    echo "SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED key=$(_sanitize_marker_field "$branch_name") site=$site reason=$fail_reason"
+    if [[ "$fail_reason" == "name-not-keyable" ]]; then
+      # Deliberately NOT "REAPABLE". The reaper deletes only directories that are
+      # unregistered AND `.git`-less; this worktree is registered, so it is
+      # unleased but not reapable. The old blanket wording contradicted the
+      # comment directly above it.
+      headless_or_stderr warn "could not key a lease on '$branch_name' (characters outside [A-Za-z0-9._-]) — it runs UNLEASED but is not reapable; a sibling cleanup-merged may still reap it once merged"
+    else
+      headless_or_stderr warn "could not acquire lease for $branch_name — this worktree is REAPABLE"
+    fi
     return 1
   fi
 
@@ -1029,7 +1077,7 @@ _acquire_worktree_lease() {
   local lease_path=""
   lease_path="$(_lease_file "$branch_name" 2>/dev/null || true)"
   if [[ -z "$lease_path" || ! -f "$lease_path" ]]; then
-    echo "SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED branch=$branch_name site=$site reason=file-absent"
+    echo "SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED key=$(_sanitize_marker_field "$branch_name") site=$site reason=file-absent"
     headless_or_stderr warn "acquire_lease reported success but no lease file exists for $branch_name — this worktree is REAPABLE"
     return 1
   fi
@@ -1344,6 +1392,32 @@ create_worktree() {
 
   # Check if worktree already exists
   if [[ -d "$worktree_path" ]]; then
+    # SLUG-COLLISION GUARD (#7408 review). The slug transform is many-to-one:
+    # `ci/foo` and `ci-foo` both resolve here. Without this, `create ci/foo` on a
+    # box that already has `.worktrees/ci-foo` (branch `ci-foo`) printed only
+    # "Worktree already exists", switched into it, returned 0 — and NEVER created
+    # refs/heads/ci/foo. Every later commit landed on the wrong branch. Measured.
+    #
+    # Scoped deliberately to the case THIS change introduced ($safe_branch differs
+    # from the requested name, i.e. slugification actually happened). When no
+    # slugification occurred, a directory-vs-branch divergence is the PRE-EXISTING
+    # condition plan R2 examined and declined to abort on — it is the resume path
+    # `one-shot`/`work` take under --yes, and a divergent worktree exists on the
+    # operator's machine today, so aborting there would break a live workflow.
+    # That case stays a warning; only the new collision refuses.
+    local existing_branch=""
+    existing_branch="$(git -C "$worktree_path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")"
+    if [[ -n "$existing_branch" && "$existing_branch" != "$branch_name" ]]; then
+      echo "SOLEUR_WORKTREE_SLUG_COLLISION dir=$(_sanitize_marker_field "$(basename "$worktree_path")") requested=$(_sanitize_marker_field "$branch_name") actual=$(_sanitize_marker_field "$existing_branch") reason=directory-holds-different-branch"
+      if [[ "$safe_branch" != "$branch_name" ]]; then
+        echo -e "${RED}Refusing: $worktree_path holds branch '$existing_branch', not '$branch_name'.${NC}" >&2
+        echo -e "${RED}'$branch_name' slugifies to '$safe_branch', which collides with an existing worktree.${NC}" >&2
+        echo -e "${RED}Creating it here would silently put you on '$existing_branch' and never create '$branch_name'.${NC}" >&2
+        echo -e "${YELLOW}Pick a non-colliding branch name, or remove $worktree_path first.${NC}" >&2
+        exit 1
+      fi
+      headless_or_stderr warn "worktree $worktree_path is on branch '$existing_branch', not '$branch_name' — entering it anyway (pre-existing divergence, see #7408 review)"
+    fi
     echo -e "${YELLOW}Worktree already exists at: $worktree_path${NC}"
     local response="n"
     if [[ "$YES_FLAG" == "true" ]]; then
@@ -1681,6 +1755,16 @@ switch_worktree() {
   safe_name="$(_safe_worktree_name "$worktree_name")"
   local worktree_path="$WORKTREE_DIR/$safe_name"
 
+  # LEGACY-NESTED FALLBACK. Slugifying is what lets `switch <branch-name>` work,
+  # but it also removed the only access path to a worktree that is ALREADY nested
+  # from a pre-fix version — and "get in and commit your work" is step 0 of the
+  # migration runbook this very PR documents. Fall back to the raw name when the
+  # slug resolves nothing and the raw form does, so the runbook stays reachable.
+  if [[ ! -d "$worktree_path" && -d "$WORKTREE_DIR/$worktree_name" ]]; then
+    worktree_path="$WORKTREE_DIR/$worktree_name"
+    headless_or_stderr warn "entering LEGACY NESTED worktree at $worktree_path — migrate it per git-worktree SKILL.md §Sharp Edges; it is invisible to list/copy-env until moved"
+  fi
+
   if [[ ! -d "$worktree_path" ]]; then
     # Echo what the OPERATOR typed, not the slug — reporting a string they did
     # not type reads as a different error than the one they made.
@@ -1736,7 +1820,16 @@ copy_env_to_worktree() {
       return 1
     fi
   else
-    worktree_path="$WORKTREE_DIR/$worktree_name"
+    # Slugified for the same reason switch_worktree is (#7408 review): this
+    # builds a path from operator-supplied input, and leaving it raw made the
+    # verb set inconsistent — `switch ci/x` resolved while `copy-env ci/x` did
+    # not, for the same worktree. It is also the traversal-relevant one: this
+    # path is a `cp` DESTINATION for the repo's real `.env`, so a raw
+    # `../../../escape` argument wrote secrets outside the repo (measured).
+    # `tr '/' '-'` neutralizes that by construction. Plan R4 cut this on the
+    # grounds that there is "no refname caller" — true of in-repo callers, and
+    # not the property that matters for a path built from operator input.
+    worktree_path="$WORKTREE_DIR/$(_safe_worktree_name "$worktree_name")"
 
     if [[ ! -d "$worktree_path" ]]; then
       echo -e "${RED}Error: Worktree not found: $worktree_name${NC}"
@@ -1857,11 +1950,30 @@ cleanup_orphan_worktree_dirs() {
     headless_or_stderr warn "cleanup_orphan_worktree_dirs: 'git worktree list' failed; skipping orphan reap (fail-closed)"
     return 0
   fi
+  local registered_count=0
   while IFS= read -r line; do
     if [[ "$line" == "worktree "* ]]; then
       registered_paths["${line#worktree }"]=1
+      registered_count=$((registered_count + 1))
     fi
   done <<<"$wt_list"
+
+  # The rc check above tests only the EXIT STATUS. A `git worktree list` that
+  # succeeds with empty or unparseable output leaves the allowlist empty, under
+  # which every directory reads as unregistered — the precise mass-reap the
+  # fail-closed branch above exists to prevent, reached through the door it does
+  # not watch. Any valid repo emits at least one `worktree ` line (the main
+  # worktree), so a zero-length parse is prima facie evidence of a broken
+  # registry, not of a repo with no worktrees.
+  #
+  # Counted during the loop rather than via `${#registered_paths[@]}`: on bash
+  # 5.3 that expansion errors with "unbound variable" under `set -u` when the
+  # associative array was declared but never assigned — i.e. exactly this case.
+  if [[ "$registered_count" -eq 0 ]]; then
+    echo "SOLEUR_ORPHAN_REGISTRY_UNAVAILABLE reason=empty-parse errno=OTHER hint=\"git worktree list succeeded but yielded no worktree records; refusing to reap — every dir would read as unregistered\""
+    headless_or_stderr warn "cleanup_orphan_worktree_dirs: worktree registry parsed empty; skipping orphan reap (fail-closed)"
+    return 0
+  fi
 
   local orphans_cleaned=0
   local -a orphans_failed=()
@@ -1921,8 +2033,40 @@ cleanup_orphan_worktree_dirs() {
         fi
       done
       if [[ -n "$_live_descendant" ]]; then
-        echo "SOLEUR_ORPHAN_SKIP_DESCENDANT dir=$dir registered=$_live_descendant reason=holds-live-worktree"
+        # Basenames only, allowlist-sanitized: `$dir` is BY CONSTRUCTION an
+        # unregistered directory — the arbitrarily-named class this function's
+        # own failure summary already sanitizes for. Any process can `mkdir` a
+        # name embedding a newline and forge a second, wedge-shaped marker line.
+        echo "SOLEUR_ORPHAN_SKIP_DESCENDANT dir=$(_sanitize_marker_field "${dir##*/}") registered=$(_sanitize_marker_field "${_live_descendant##*/}") reason=holds-live-worktree"
         headless_or_stderr warn "cleanup_orphan_worktree_dirs: $(basename "$dir") holds a registered worktree ($_live_descendant); skipping. This is a legacy nested layout — see git-worktree SKILL.md §Sharp Edges for the migration runbook."
+        continue
+      fi
+      # FILESYSTEM BACKSTOP. The guard above is a string comparison against
+      # `git worktree list` output, so it inherits the registry's CORRECTNESS as
+      # a dependency, not merely its availability. Three reachable states break
+      # that comparison while a live checkout sits on disk — all reproduced
+      # during review, each destroying planted uncommitted work:
+      #
+      #   - `.worktrees/` (or a component below it) is a SYMLINK. Git records and
+      #     reports the realpath; the glob yields the unresolved path, so no key
+      #     ever matches. Plausible operator setup: worktrees moved to a bigger
+      #     disk.
+      #   - A path containing a NEWLINE splits one porcelain record across two
+      #     lines, so the stored key is truncated and matches nothing.
+      #   - The registry entry is simply gone (`.git/worktrees/<name>/` removed by
+      #     a repair race, manual surgery, or a half-finished migration) — which
+      #     is exactly the mid-state the SKILL.md runbook can leave behind.
+      #
+      # It also covers a nested full `git clone` at depth >= 2, which the
+      # `.git`-entry test below claims to protect but only checks at depth 1.
+      #
+      # So ask the FILESYSTEM "does anything below this look like a checkout?"
+      # rather than asking the registry "did you tell me about it?". Immune to
+      # every path-form question above. Strictly non-destructive: it can only
+      # spare a directory, never delete one that survives today.
+      if compgen -G "$dir"/*/.git >/dev/null 2>&1; then
+        echo "SOLEUR_ORPHAN_SKIP_DESCENDANT dir=$(_sanitize_marker_field "${dir##*/}") registered=unknown reason=holds-checkout-on-disk"
+        headless_or_stderr warn "cleanup_orphan_worktree_dirs: $(basename "$dir") contains a checkout below it; skipping. See git-worktree SKILL.md §Sharp Edges for the migration runbook."
         continue
       fi
       # SOLEUR-GUARD-DESCENDANT-END
@@ -1999,9 +2143,9 @@ cleanup_orphan_worktree_dirs() {
       # U+2028/U+2029, the last of which splits lines in JSON log viewers even
       # though bash's own `.split("\n")` does not (cq-regex-unicode-separators).
       # Closed sets are the only ones that stay closed as sinks change.
-      local safe_name="${failed_dir##*/}"
-      safe_name="${safe_name//[^A-Za-z0-9._-]/_}"
-      failed_names+="${failed_names:+,}${safe_name:0:64}"
+      # Now routed through the shared _sanitize_marker_field so this rule has one
+      # definition rather than being an idiom each new emitter must remember.
+      failed_names+="${failed_names:+,}$(_sanitize_marker_field "${failed_dir##*/}")"
     done
     # `cleaned=` is carried here, not only in the verbose-gated success summary,
     # so the success counter is OBSERVABLE on the default verbose=false path —

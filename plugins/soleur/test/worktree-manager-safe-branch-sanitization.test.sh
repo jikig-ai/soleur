@@ -77,7 +77,20 @@ build_mutant() {
   local out="$MUT_DIR/$name.sh"
   cp "$SCRIPT" "$out" || { echo "FATAL: cp failed for $name" >&2; exit 2; }
   local fn
-  for fn in "$@"; do "$fn" "$out"; done
+  # PER-MUTATION landing assertion, not per-mutant. A single `diff -q` at the
+  # end cannot distinguish "both mutations landed" from "one of two landed" for
+  # a composite mutant like M1 — and a half-landed M1 still differs from the
+  # script, so it clears the final gate while testing something other than what
+  # its name claims.
+  for fn in "$@"; do
+    cp "$out" "$out.before" || { echo "FATAL: snapshot failed for $name/$fn" >&2; exit 2; }
+    "$fn" "$out"
+    if diff -q "$out.before" "$out" >/dev/null 2>&1; then
+      echo "FATAL: mutation '$fn' did not land in mutant '$name' (anchor drifted?)" >&2
+      exit 2
+    fi
+    rm -f "$out.before"
+  done
   # Mutation-landed assertion: a mutant byte-identical to the script is a
   # harness defect, not a passing test.
   if diff -q "$SCRIPT" "$out" >/dev/null 2>&1; then
@@ -111,17 +124,33 @@ new_fixture() {
 
 # Run the manager as a subprocess. Surfaces a non-zero exit rather than letting
 # it present as "directory missing", which would misdirect diagnosis.
+# MGR_RC carries the exit status. `|| true` alone discards the one signal that
+# distinguishes "refused" from "proceeded", which is the entire contract of the
+# collision guard — an assertion that cannot see the exit code has to fall back
+# to grepping human-readable output, and those lines are ANSI-coloured (they
+# begin with a raw ESC byte), so an anchored pattern silently never matches.
+MGR_RC=0
 run_mgr() {
   local repo="$1" log="$2"; shift 2
-  ( cd "$repo" && bash "$SCRIPT" --yes "$@" ) >"$log" 2>&1 || true
+  MGR_RC=0
+  ( cd "$repo" && bash "$SCRIPT" --yes "$@" ) >"$log" 2>&1 || MGR_RC=$?
 }
 
 # Invoke the reaper directly from a chosen script variant, from OUTSIDE the
 # worktrees (cwd = the bare root), which is where session-start runs it.
+#
+# Output is CAPTURED to $REAPER_LOG, not discarded. Discarding it made the
+# reaper's only telemetry — the SOLEUR_ORPHAN_SKIP_DESCENDANT marker, which is
+# the remediation's entire observability contract under
+# hr-observability-layer-citation — deletable with the whole suite green. It
+# also meant a must-survive arm could not distinguish "the guard spared it" from
+# "the reaper never ran at all".
+REAPER_LOG=""
 run_reaper() {
   local repo="$1" variant="${2:-$SCRIPT}"
+  REAPER_LOG="$TEST_DIR/reaper-$RANDOM$RANDOM.log"
   ( cd "$repo" && source "$variant" && cleanup_orphan_worktree_dirs true ) \
-    >/dev/null 2>&1 || true
+    >"$REAPER_LOG" 2>&1 || true
 }
 
 exists() { [[ -e "$1" ]] && echo true || echo false; }
@@ -204,6 +233,12 @@ assert_eq "true" \
   "spec dir basename matches worktree basename"
 assert_eq "false" "$(exists "$R_A5/.worktrees/feat-a")" \
   "no nested intermediate for the feature path"
+# The `feature` verb has its OWN lease call site. Without reading a5.log, that
+# site could be reverted to the raw refname and the whole suite stayed green —
+# mechanism #2 of the three in this file's header was invisible on this verb.
+assert_eq "false" \
+  "$(grep -q 'SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED' "$TEST_DIR/a5.log" && echo true || echo false)" \
+  "feature verb leases cleanly under the slug"
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -256,6 +291,12 @@ run_reaper "$R_A8"
 
 assert_eq "true" "$(exists "$R_A8/.worktrees/ci/legacy/UNCOMMITTED.txt")" \
   "already-nested worktree is skipped, not reaped"
+# Assert the MARKER, not just the survival. The marker is the remediation's only
+# telemetry (hr-observability-layer-citation); without this, deleting the echo
+# left the suite green and the operator with no signal that legacy state exists.
+assert_eq "true" \
+  "$(grep -q 'SOLEUR_ORPHAN_SKIP_DESCENDANT' "$REAPER_LOG" && echo true || echo false)" \
+  "the skip emits SOLEUR_ORPHAN_SKIP_DESCENDANT"
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -295,4 +336,171 @@ assert_eq "true" "$(exists "$R_A9/.worktrees/ci-foo")" \
   "the registered prefix-sibling is untouched"
 echo ""
 
-print_results
+# ---------------------------------------------------------------------------
+# A10 — the transform is GLOBAL, not first-slash-only.
+#       Every arm above uses a branch with exactly ONE slash, under which
+#       `tr '/' '-'` and `sed 's|/|-|'` are indistinguishable — so the realistic
+#       one-character regression (`${1//\//-}` -> `${1/\//-}`) survived the whole
+#       suite. Origin carries 8 `dependabot/*` and 2 `gh-readonly-queue/*`
+#       branches, all multi-slash: under a first-slash-only transform those
+#       still nest, still run unleased, still leave a reapable intermediate.
+# ---------------------------------------------------------------------------
+echo "A10: a MULTI-slash branch is fully flattened"
+R_A10=$(new_fixture a10)
+run_mgr "$R_A10" "$TEST_DIR/a10.log" create gh-readonly-queue/main/pr-1 main
+
+assert_eq "true" "$(exists "$R_A10/.worktrees/gh-readonly-queue-main-pr-1")" \
+  "every slash is replaced, not just the first"
+assert_eq "false" "$(exists "$R_A10/.worktrees/gh-readonly-queue-main")" \
+  "no partially-flattened intermediate"
+assert_eq "gh-readonly-queue/main/pr-1" \
+  "$(git -C "$R_A10/.worktrees/gh-readonly-queue-main-pr-1" rev-parse --abbrev-ref HEAD 2>/dev/null || echo MISSING)" \
+  "multi-slash branch name preserved verbatim"
+echo ""
+
+# ---------------------------------------------------------------------------
+# A11 — the guard is a PATH-BOUNDARY test, proven on a fixture holding BOTH
+#       shapes at once. A9 has an orphan but no nested worktree; A8 has a nested
+#       worktree but no orphan — so three strictly-broader predicates (dropping
+#       $dir entirely, matching the sibling family, matching the basename
+#       anywhere) turned the reaper into a silent no-op and survived both.
+#       Only a fixture containing both can tell "spares the right one" from
+#       "spares everything".
+# ---------------------------------------------------------------------------
+echo "A11: spares the nested worktree AND still reaps the true orphan"
+R_A11=$(new_fixture a11)
+mkdir -p "$R_A11/.worktrees"
+git -C "$R_A11" worktree add -q -b ci/legacy "$R_A11/.worktrees/ci/legacy" main 2>/dev/null || true
+echo "legacy work" > "$R_A11/.worktrees/ci/legacy/UNCOMMITTED.txt" 2>/dev/null || true
+mkdir -p "$R_A11/.worktrees/stale"
+echo "junk" > "$R_A11/.worktrees/stale/debris.txt"
+run_reaper "$R_A11"
+
+assert_eq "true" "$(exists "$R_A11/.worktrees/ci/legacy/UNCOMMITTED.txt")" \
+  "nested registered worktree survives"
+assert_eq "false" "$(exists "$R_A11/.worktrees/stale")" \
+  "a true orphan in the SAME sweep is still reaped"
+echo ""
+
+# ---------------------------------------------------------------------------
+# A12 — the FILESYSTEM backstop. The registry guard is a string comparison, so
+#       it misses a checkout whose path git reports differently (symlinked
+#       .worktrees/, newline-truncated porcelain record, lost registry entry)
+#       and any nested full clone at depth >= 2. Reproduced during review: a
+#       clone at .worktrees/scratch/mywork was rm -rf'd with its work.
+# ---------------------------------------------------------------------------
+echo "A12: an unregistered directory holding a checkout below it is spared"
+R_A12=$(new_fixture a12)
+mkdir -p "$R_A12/.worktrees"
+git clone -q "$R_A12/../seed" "$R_A12/.worktrees/scratch/mywork" 2>/dev/null || true
+echo "precious" > "$R_A12/.worktrees/scratch/mywork/PRECIOUS.txt" 2>/dev/null || true
+run_reaper "$R_A12"
+
+assert_eq "true" "$(exists "$R_A12/.worktrees/scratch/mywork/PRECIOUS.txt")" \
+  "nested clone at depth 2 survives the reaper"
+echo ""
+
+# ---------------------------------------------------------------------------
+# A13 — `switch` resolves BOTH forms, and the lease is keyed on the basename.
+#       Six changed call sites had zero arms; switch_worktree was two of them.
+# ---------------------------------------------------------------------------
+echo "A13: switch accepts the branch form and the slug form"
+R_A13=$(new_fixture a13)
+run_mgr "$R_A13" "$TEST_DIR/a13-create.log" create ci/switch-me main
+run_mgr "$R_A13" "$TEST_DIR/a13-branch.log" switch ci/switch-me
+run_mgr "$R_A13" "$TEST_DIR/a13-slug.log" switch ci-switch-me
+
+assert_eq "false" \
+  "$(grep -q 'Worktree not found' "$TEST_DIR/a13-branch.log" && echo true || echo false)" \
+  "switch resolves the BRANCH form"
+assert_eq "false" \
+  "$(grep -q 'Worktree not found' "$TEST_DIR/a13-slug.log" && echo true || echo false)" \
+  "switch resolves the SLUG form"
+echo ""
+
+# ---------------------------------------------------------------------------
+# A14 — the SLUG COLLISION guard. The transform is many-to-one, so `ci/foo` and
+#       `ci-foo` resolve to one directory. Before the guard, `create ci/foo` on
+#       a box holding `.worktrees/ci-foo` (branch `ci-foo`) printed only
+#       "already exists", switched into it, returned 0, and NEVER created
+#       refs/heads/ci/foo — every later commit landed on the wrong branch.
+#       This case is CREATED by the slug transform: pre-fix the two names
+#       produced different paths and could not collide.
+# ---------------------------------------------------------------------------
+echo "A14: a slug collision refuses instead of silently entering the wrong branch"
+R_A14=$(new_fixture a14)
+run_mgr "$R_A14" "$TEST_DIR/a14-first.log" create ci-collide main
+run_mgr "$R_A14" "$TEST_DIR/a14-second.log" create ci/collide main
+
+assert_eq "true" \
+  "$(grep -q 'SOLEUR_WORKTREE_SLUG_COLLISION' "$TEST_DIR/a14-second.log" && echo true || echo false)" \
+  "the collision emits SOLEUR_WORKTREE_SLUG_COLLISION"
+# The EXIT STATUS is the contract — it is what an orchestrating agent branches
+# on. Deliberately not a grep for "Switching to worktree": that line is ANSI
+# coloured, so an anchored pattern never matches and the assertion passes
+# whether the guard fired or not. (Measured: with the refusal removed, the
+# earlier grep-based form of this arm still reported green.)
+assert_eq "refused" \
+  "$([[ "$MGR_RC" -ne 0 ]] && echo refused || echo proceeded)" \
+  "the colliding create REFUSES (non-zero exit) instead of entering"
+assert_eq "false" \
+  "$(grep -q 'Switching to worktree' "$TEST_DIR/a14-second.log" && echo true || echo false)" \
+  "it does NOT switch into the colliding worktree"
+assert_eq "ci-collide" \
+  "$(git -C "$R_A14/.worktrees/ci-collide" rev-parse --abbrev-ref HEAD 2>/dev/null || echo MISSING)" \
+  "the incumbent worktree is left untouched"
+echo ""
+
+# ---------------------------------------------------------------------------
+# A15 — IDENTITY over a richer alphabet. A6 uses `feat-plain`, drawn from a
+#       4-character alphabet, so an over-aggressive transform (e.g. also mapping
+#       `.`) survived it. Real branches carry dots and underscores
+#       (`release/v1.2.3`, `dependabot/npm_and_yarn/next-15.0.1`).
+# ---------------------------------------------------------------------------
+echo "A15: identity preserves dots, underscores and case"
+R_A15=$(new_fixture a15)
+run_mgr "$R_A15" "$TEST_DIR/a15.log" create Release_v1.2.3-RC main
+
+assert_eq "true" "$(exists "$R_A15/.worktrees/Release_v1.2.3-RC")" \
+  "dots, underscores and uppercase pass through untouched"
+echo ""
+
+# ---------------------------------------------------------------------------
+# A16 — an EMPTY registry must fail CLOSED.
+#       The pre-existing guard tests only `git worktree list`'s EXIT STATUS. A
+#       listing that succeeds with empty or unparseable output leaves the
+#       allowlist empty, under which EVERY directory reads as unregistered —
+#       the exact mass-reap the fail-closed branch exists to prevent, reached
+#       through the one door it does not watch. Any valid repo emits at least
+#       the main worktree, so a zero-length parse is a broken registry.
+#
+#       The stub passes every other subcommand through to the real binary, so
+#       this arm perturbs exactly one call and nothing else.
+# ---------------------------------------------------------------------------
+echo "A16: an empty worktree registry refuses to reap (fail-closed)"
+R_A16=$(new_fixture a16)
+mkdir -p "$R_A16/.worktrees/would-be-reaped"
+echo "junk" > "$R_A16/.worktrees/would-be-reaped/debris.txt"
+A16_LOG="$TEST_DIR/a16.log"
+(
+  cd "$R_A16" && source "$SCRIPT"
+  git() {
+    if [[ "${1:-}" == "worktree" && "${2:-}" == "list" ]]; then return 0; fi
+    command git "$@"
+  }
+  cleanup_orphan_worktree_dirs true
+) >"$A16_LOG" 2>&1 || true
+
+assert_eq "true" "$(exists "$R_A16/.worktrees/would-be-reaped/debris.txt")" \
+  "nothing is reaped when the registry parses empty"
+assert_eq "true" \
+  "$(grep -q 'SOLEUR_ORPHAN_REGISTRY_UNAVAILABLE' "$A16_LOG" && echo true || echo false)" \
+  "the empty-parse refusal is announced, not silent"
+echo ""
+
+# The floor is the only thing separating "all assertions passed" from "no
+# assertion ran": neutering assert_eq to `return 0` previously printed
+# "Passed: 0 / Failed: 0 / ALL TESTS PASSED" and exited 0, and deleting six of
+# nine arms did the same. A FLOOR, not equality — a legitimately-added
+# assertion must not red the suite. Derived from a green run.
+print_results 36
