@@ -494,6 +494,8 @@ The automatic consolidation:
 
 If no artifacts are found for the feature slug, consolidation is skipped silently. See the `compound-capture` skill for full implementation details.
 
+**This consolidation is the ONLY durable archival mechanism — do not skip it when driving compound's phases by hand.** `cleanup-merged` does not archive the modern layout (ship/SKILL.md Phase 7 Step 4 explains why in full), so an artifact left at its live path here stays there permanently and costs a follow-up PR to collect. The failure mode is specific and easy to hit: an agent invoking `soleur:compound` and then executing the phases itself — inventory, learning, route-to-definition — gets everything except step 4, because archival is the one step that has no conversational output to prompt for it. If you ran the phases manually, run the archival explicitly (`bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh`) before handing off to `/ship`. Ship's KB-Artifact Archival Gate is the mechanical backstop; this note is the cheaper one. **Why:** PR #7373 lost both its spec dir and its plan exactly this way.
+
 ### Worktree Cleanup (Manual)
 
 **Headless mode:** If `HEADLESS_MODE=true`, skip worktree cleanup entirely (cleanup-merged handles this post-merge).

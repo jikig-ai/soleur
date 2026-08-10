@@ -342,6 +342,7 @@ if want_scripts; then
   # actually scanned; -unit asserts the linter can still fail.
   run_suite "scripts/lint-agents-enforcement-tags-live" python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.rules.md
   run_suite "scripts/lint-agents-enforcement-tags-unit" bash scripts/lint-agents-enforcement-tags.test.sh
+  run_suite "scripts/check-kb-artifacts-archived-unit" bash scripts/check-kb-artifacts-archived.test.sh
   run_suite "scripts/lint-infra-no-human-steps" bash scripts/lint-infra-no-human-steps.test.sh
   run_suite "scripts/lint-credential-path-literals" bash scripts/lint-credential-path-literals.test.sh
   # #7136: a `run:` step reading a variable declared only on ANOTHER step. Part B of this
