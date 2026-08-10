@@ -2882,7 +2882,21 @@ jobs:
         # best-effort restore whose failure does not fail the job would leave the window open
         # while the run reported green.
         env:
-          DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
+          # DOPPLER_TOKEN, not DOPPLER_TOKEN_PRD. The Doppler CLI reads `DOPPLER_TOKEN` (or
+          # `--token`); it does not know the _PRD suffix. This step declared the suffixed name,
+          # referenced it NOWHERE in its body, and called `doppler secrets get` bare -- so the CLI
+          # ran unauthenticated and returned "you must provide a token", the sink credentials came
+          # back empty, and the engine aborted exit 3 (SINK unavailable).
+          #
+          # It failed POST-DESTROY. The store was already wiped when this ran, so the one job whose
+          # entire purpose is refilling it could not read the credential it needed. The bridge step
+          # directly above sets `DOPPLER_TOKEN` correctly and succeeded, which is what made the
+          # failure look like a bridge problem in the log.
+          #
+          # This was LATENT behind the D10 gate: A2 had never once passed, so this leg had never
+          # run. Fixing A2 did not create this bug, it exposed it -- a saga only ever surfaces its
+          # FIRST broken step.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
           GH_TOKEN_FOR_ENGINE: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # `set +e` is REQUIRED and `set -uo pipefail` is NOT a substitute. A run: block with no
