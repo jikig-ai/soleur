@@ -10,6 +10,18 @@
 //                                       not be applied (reason=native-eexist|common-dir-unresolved)
 //   - SOLEUR_GIT_LOCK_IDENTITY_DIAG   — benign precondition: the set-from-global branch was taken
 //                                       (local identity absent → drift); NOT a wedge
+//   - SOLEUR_GIT_BARE_POISON          — ensure_bare_config's shared-config normalization ran
+//                                       (branch=healed broke the worktree-wedging config pair;
+//                                       branch=clean found nothing to do). Benign either way —
+//                                       a failure exits via "worktree wedge: ..." below. #7394
+//   - SOLEUR_GIT_BARE_SELFHEAL        — the detection-time recovery for a worktree git reports
+//                                       as bare (branch=ok healed it; branch=skipped could not
+//                                       measure; branch=failed could not write the worktree's
+//                                       own config.worktree → a WEDGE, because the script then
+//                                       refuses every mutating subcommand for that worktree)
+//   - SOLEUR_GIT_BARE_SEED            — the create-time core.bare=false pin on a NEW worktree
+//                                       (branch=seed-failed). Defense-in-depth and inert while
+//                                       the extension is absent, so never paged.
 //   - "worktree wedge: ..."           — ensure_bare_config gave up
 //
 // Before this hook those lines went ONLY to blind agent-sandbox stdout — not mirrored
@@ -90,7 +102,7 @@ const log = createChildLogger("git-lock-marker-telemetry");
 //     refusal is the safe outcome; genuine git breakage surfaces as a wedge via the
 //     creation path's own SOLEUR_GIT_LOCK_*/SOLEUR_GIT_CONFIG_* markers.
 const MARKER_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
 
 // A wedge (vs. a benign DIAG) is any marker that indicates git operations could not
 // proceed: an unremovable/masked lock, a temp-wedge, a config-TARGET-masked give-up, an
@@ -117,8 +129,20 @@ const MARKER_RE =
 // SOLEUR_WORKTREE_LEASE_LIB_MISSING (mirrored-not-paged: fires once per load in
 // every legacy worktree AND makes the reaper fail closed), this one fires only on
 // a genuine acquire failure and leaves the worktree exposed.
+//
+// OUTCOME-DISCRIMINATED (#7394): SOLEUR_GIT_BARE_SELFHEAL is paged ONLY at
+// `branch=failed`. That branch means the recovery could not write the worktree's own
+// config.worktree, so git keeps reporting a valid worktree as bare and the script refuses
+// every mutating subcommand from it until a human fixes the permissions. (The refusal is
+// the source-time guard in worktree-manager.sh, NOT `require_working_tree` — that has a
+// single call site and was never the mechanism.) `branch=ok`, `branch=skipped` and every
+// SOLEUR_GIT_BARE_POISON branch are informational: the run proceeded, so they are mirrored,
+// not paged. The create-time pin is a SEPARATE marker name (SOLEUR_GIT_BARE_SEED) rather
+// than a reserved branch value, so paging cannot be re-armed by a future author "tidying"
+// its branch string — the name is what keeps it out, and the drift guard derives names
+// from the script automatically.
 const WEDGE_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:UNREMOVABLE|TEMP_WEDGED)\b|SOLEUR_GIT_LOCK_IDENTITY_WEDGED\b|SOLEUR_GIT_CONFIG_TARGET_MASKED\b|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b|SOLEUR_GIT_REPO_DIAG\b|SOLEUR_FEATURE_PUSH_FAILED\b|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b|NO_GIT_REPOSITORY\b|worktree wedge:)/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:UNREMOVABLE|TEMP_WEDGED)\b|SOLEUR_GIT_LOCK_IDENTITY_WEDGED\b|SOLEUR_GIT_CONFIG_TARGET_MASKED\b|SOLEUR_GIT_BARE_SELFHEAL\b(?=[^\n]*\sbranch=failed\s*$)|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b|SOLEUR_GIT_REPO_DIAG\b|SOLEUR_FEATURE_PUSH_FAILED\b|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b|NO_GIT_REPOSITORY\b|worktree wedge:)/;
 
 // Bounds: scan at most this many lines, keep at most this many matched markers, and
 // truncate any single marker line to this many chars. A wedged run emits a handful of

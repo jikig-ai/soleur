@@ -4,14 +4,27 @@
 # Handles creating, listing, switching, and cleaning up Git worktrees
 # KISS principle: Simple, interactive, opinionated
 #
-# BARE REPO NOTE: This repo uses core.bare=true with extensions.worktreeConfig=true
-# and repositoryformatversion=1. The per-worktree config (.git/config.worktree)
-# holds core.bare=true ONLY for the bare root; linked worktrees inherit
-# core.bare=false by default. On-disk files at the bare root are never updated
-# by git -- they become stale after every merge. The IS_BARE flag (computed at
-# init) guards all working-tree-dependent operations. If this script crashes with
-# "must be run in a work tree", the on-disk copy is stale. Run from a worktree
-# instead, or use: worktree-manager.sh sync-bare
+# BARE REPO NOTE (rewritten for #7394 — the three claims here were all stale, and
+# one was inverted in a way that hid the defect for months):
+#
+# This repo uses core.bare=true in the SHARED config with extensions.worktreeConfig
+# DISABLED. That is the state git itself produces, and it is the state this script
+# now enforces. The extension is NOT set, so `core.bare` is NOT resolved per-worktree.
+#
+# The retired claim held that config.worktree carried core.bare=true for the bare root
+# alone, and that a linked worktree would default to core.bare=false on its own.
+# Measured on git 2.53.0, the inheritance direction is the OPPOSITE. With
+# extensions.worktreeConfig ON, a linked worktree that does not set `bare = false` in
+# its OWN config.worktree inherits `true` from the shared config and is treated as
+# BARE — and `git worktree add` writes no config.worktree at all, so every worktree
+# starts out in exactly that state. Believing the inverted version is why the round-6
+# guard's author saw no risk in skipping the surgery on a `.git` DIRECTORY: on this
+# repo's bare-repo-in-`.git` layout that skip made the whole function dead code.
+#
+# On-disk files at the bare root are never updated by git -- they become stale after
+# every merge. The IS_BARE flag (computed at init) guards all working-tree-dependent
+# operations. If this script crashes with "must be run in a work tree", the on-disk
+# copy is stale. Run from a worktree instead, or use: worktree-manager.sh sync-bare
 
 set -euo pipefail
 
@@ -102,13 +115,19 @@ fi
 # detectable marker + non-zero exit so the skill stops with an honest, no-wait
 # message instead. Runs before the bare/worktree branch so every subcommand
 # (create, cleanup-merged, list, …) fails the same clear way in a repo-less env.
-if [[ "$IS_IN_WORKTREE" != "true" \
-      && "$(git rev-parse --is-bare-repository 2>/dev/null)" != "true" ]]; then
+# Computed ONCE and reused (#7394). `--is-bare-repository` was previously re-shelled at
+# each of the three sites below plus the self-heal; the self-heal in particular runs on
+# every invocation of every subcommand, so the duplicate cost landed on the modal path.
+# Same for `git --version`, which four telemetry markers interpolate.
+_CWD_IS_BARE="$(git rev-parse --is-bare-repository 2>/dev/null || true)"
+GIT_VERSION="$(git --version 2>/dev/null | awk '{print $3}' || true)"
+_common_dir=""
+if [[ "$IS_IN_WORKTREE" != "true" && "$_CWD_IS_BARE" != "true" ]]; then
   echo -e "${RED}Error: No git repository in this workspace.${NC}" >&2
   echo "NO_GIT_REPOSITORY: cannot run a worktree operation — the workspace has no git checkout. If your repository is still being set up, try again in a moment; if it keeps failing, reconnect your repository." >&2
   exit 3
 fi
-if [[ "$(git rev-parse --is-bare-repository 2>/dev/null)" == "true" ]]; then
+if [[ "$_CWD_IS_BARE" == "true" ]]; then
   IS_BARE=true
   _git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null)
   if [[ "$_git_dir" == */.git ]]; then
@@ -156,8 +175,15 @@ ensure_git_root_absolute() {
     GIT_ROOT="$PWD"
   fi
 }
-ensure_git_root_absolute
-WORKTREE_DIR="$GIT_ROOT/.worktrees"
+# NOTE (#7394): the `ensure_git_root_absolute` CALL and the `WORKTREE_DIR` assignment
+# used to sit here. They now run further down, immediately after the detection-time
+# self-heal (`_selfheal_bare_worktree_override`), so they are computed ONCE against
+# HEALED state. Order is what matters, not position: on a poisoned worktree the
+# pre-heal `GIT_ROOT` resolves to `<common-dir>/worktrees/<name>`, so assigning
+# `WORKTREE_DIR` before the heal yields `<root>/.git/worktrees/<name>/.worktrees` and
+# every subsequent `create` lands inside the admin dir. The self-heal has to live
+# below because it writes through `atomic_git_config`, which is not defined until
+# later in this file — bash defines functions as execution reaches them.
 
 # Exit with error if running at the bare repo root (no working tree available).
 # Allows execution from worktrees of bare repos (IS_BARE=true but IS_IN_WORKTREE=true).
@@ -410,7 +436,14 @@ _config_target_masked() {
 # mutation without depending on <file>'s native "<file>.lock" when that lock is
 # wedged (the #5912 Concierge char-device). The targeted fix for the config.lock
 # worktree-creation wedge; composes read-first idempotence with a gated lockless
-# writer, and is the sole config-mutation entry point for ensure_bare_config below.
+# writer, and is the sole config-mutation entry point for every write below.
+#
+# Call-site classes (#7394 added the last two): the shared-config normalization in
+# ensure_bare_config; the create-time `core.bare = false` seed into a NEW worktree's
+# own `config.worktree`; and the detection-time self-heal that writes the same key
+# into an ALREADY-POISONED worktree's `config.worktree`. The latter two target a
+# per-worktree admin dir rather than the shared config, so their failure mode is a
+# single unusable worktree, never a repo-wide wedge.
 #
 #   FR2 read-first — a `key value` set whose value already matches, or an `--unset`
 #     of an already-absent key, returns 0 with NO write. Reads never acquire
@@ -445,11 +478,20 @@ atomic_git_config() {
   local file="$1"; shift
 
   # --- FR2: read-first idempotence (reads never acquire "<file>.lock") ---
-  if [[ "${1:-}" == "--unset" ]]; then
-    # Skip ONLY when the key is truly ABSENT (git config --get rc 1). A multi-valued
-    # key exits rc 2 ("multiple values") — do NOT swallow that as "absent" or the
-    # unset silently no-ops (fail-open); fall through so the writer surfaces git's
-    # loud --unset-all-required error. Reads never take the lock.
+  if [[ "${1:-}" == "--unset" || "${1:-}" == "--unset-all" ]]; then
+    # Skip ONLY when the key is truly ABSENT — `--get` rc 1. Measured on git 2.53.0, a
+    # MULTI-VALUED key exits rc 0 and prints the LAST value (not rc 2, as this comment
+    # claimed before #7394), so it falls through to the writer, which is what we want:
+    # `--unset` there exits 5 with a loud "has multiple values", and `--unset-all`
+    # succeeds. Only rc 1 means absent. Reads never take the lock.
+    #
+    # `--unset-all` shares that contract (#7394): the rc-1 absent skip is equally correct
+    # for it, and on a multi-valued key the rc-0 fall-through reaches the writer, which is
+    # exactly what `--unset-all` is for. Matching only the literal `--unset` was a latent wedge —
+    # `--unset-all` fell through to the native writer, and git exits **5** for
+    # `--unset-all` on an absent key, so the first caller to use it (the defensive
+    # extensions.worktreeConfig removal below) would have failed `create`,
+    # `create-for-feature` and `cleanup-merged` on every already-healthy repo.
     local _grc=0
     git config --file "$file" --get "${2:-}" >/dev/null 2>&1 || _grc=$?
     (( _grc == 1 )) && return 0
@@ -544,14 +586,162 @@ atomic_git_config() {
   return 0
 }
 
-# Ensure bare repo config uses per-worktree core.bare (defense-in-depth).
-# Fixes TWO broken states that git worktree add creates on bare repos:
-#   1. core.bare=true in shared config — bleeds into worktrees, breaks git commit/push
-#   2. core.bare=false + core.worktree=<path> in shared config — "do not make sense" warning
-# Both are caused by git worktree add writing to the shared config on bare repos.
-# Fix: core.bare must ONLY exist in .git/config.worktree, never in .git/config.
-# Called before AND after git worktree add (add re-corrupts the shared config).
-# Safe for parallel sessions: all operations are idempotent.
+# _selfheal_bare_worktree_override — recover THIS worktree when it is being reported as
+# bare (#7394, Phase 5).
+#
+# The create-path normalization above cannot help a worktree that ALREADY exists: the
+# operator's worktrees were created while the poisoning pair was live, so every one of
+# them is wedged until something writes `bare = false` into its own config.worktree.
+# This runs at detection time, so the CURRENT worktree becomes usable immediately rather
+# than waiting for the next session-start `cleanup-merged` (which is an AGENTS.md gate,
+# not a hook, and the learnings corpus records it being skipped).
+#
+# Fires ONLY on a two-way conjunction, so it can never touch a genuine bare root or a
+# normal clone:
+#   (1) git reports `--is-bare-repository` = true from HERE — the cheap discriminator,
+#       already computed at init, and the one a HEALTHY worktree fails;
+#   (2) this CWD's gitdir resolves under `<git-common-dir>/worktrees/` — it is a linked
+#       worktree of THIS repo, which a bare root and a normal clone are not.
+#
+# A previous revision opened with a third condition — an ancestor walk asserting `.git`
+# is a FILE containing `gitdir:`. It was deleted (#7394 review): condition (2) already
+# implies it (a gitdir under `<common>/worktrees/` IS a linked worktree, and at a bare
+# root or a normal clone toplevel `--absolute-git-dir` equals `--git-common-dir`, so the
+# prefix cannot match). Measured identical verdicts on all seven repo shapes. Removing it
+# also removed an unbounded `dirname` loop, a `$PWD`-vs-git divergence, a nearest-`.git`
+# shadowing false negative, and a planted-gitfile surface — at no loss of specificity.
+#
+# ORDER IS LOAD-BEARING: (1) is tested first because a healthy linked worktree — the modal
+# case, where every agent session lives — satisfies (2), so testing (2) first made every
+# invocation of every subcommand pay 3 `git rev-parse` subprocesses to learn nothing.
+#
+# BLAST RADIUS IS EXACTLY ONE WORKTREE. The write targets this worktree's own
+# config.worktree and the SHARED config is never touched — a shared-config write here
+# would silently re-shape every sibling worktree from a code path that runs on every
+# single invocation of this script. (The repo-wide normalization lives in
+# `ensure_bare_config`, which runs only from create/create-for-feature/cleanup-merged.)
+_selfheal_bare_worktree_override() {
+  # (1) cheap discriminator first, reusing the value the init block already computed.
+  [[ "$_CWD_IS_BARE" == "true" ]] || return 0
+
+  # (2) the gitdir must live under <git-common-dir>/worktrees/.
+  local wt_gitdir common_dir
+  wt_gitdir="$(git rev-parse --absolute-git-dir 2>/dev/null || true)"
+  common_dir="${_common_dir:-$(git rev-parse --git-common-dir 2>/dev/null || true)}"
+  if [[ -z "$wt_gitdir" || -z "$common_dir" ]]; then
+    # git could not answer, yet (1) says this repo reads as bare. That is a DEGRADED
+    # measurement, not a healthy worktree, and it is exactly the mask-degradation class
+    # this file has hardened against twice. Never silently indistinguishable from health.
+    echo "SOLEUR_GIT_BARE_SELFHEAL worktree=$(basename -- "$PWD") reason=gitdir-unresolved git_version=$GIT_VERSION branch=skipped"
+    return 0
+  fi
+  if [[ "$common_dir" != /* ]]; then
+    common_dir="$(cd "$common_dir" 2>/dev/null && pwd)" || common_dir=""
+    if [[ -z "$common_dir" ]]; then
+      echo "SOLEUR_GIT_BARE_SELFHEAL worktree=$(basename -- "$PWD") reason=commondir-unresolved git_version=$GIT_VERSION branch=skipped"
+      return 0
+    fi
+  fi
+  [[ "$wt_gitdir" == "$common_dir/worktrees/"* ]] || return 0
+
+  local wt_name target
+  wt_name="$(basename -- "$wt_gitdir")"
+  target="$wt_gitdir/config.worktree"
+
+  # A symlinked target would write THROUGH to whatever it points at — `atomic_git_config`
+  # deliberately follows symlinks (its TR3 branch resolves them so the shared config keeps
+  # its indirection). Correct there, catastrophic here: a link to `../../config` turns this
+  # per-worktree pin into a SHARED-config write, which both falsifies the blast-radius
+  # invariant above and, by setting shared `core.bare=false`, permanently disables the
+  # `ensure_bare_config` guard. Refuse rather than follow.
+  if [[ -L "$target" ]]; then
+    echo "SOLEUR_GIT_BARE_SELFHEAL worktree=$wt_name git_dir=$wt_gitdir reason=config-worktree-symlink git_version=$GIT_VERSION branch=failed"
+    echo -e "${RED}Error: this worktree's config.worktree is a symlink; refusing to write through it.${NC}" >&2
+    echo -e "${YELLOW}Could not write: $target${NC}" >&2
+    echo -e "${YELLOW}Likely causes: a stray link left by a previous tool, or a hand-edited admin directory.${NC}" >&2
+    echo -e "${YELLOW}Next step: run  ls -l '$target'  and remove the link, then re-run this command.${NC}" >&2
+    return 1
+  fi
+
+  if atomic_git_config "$target" core.bare false; then
+    # `atomic_git_config` returning 0 includes its read-first fast path (value already
+    # matched, no write). So a 0 means "the file says what we want", not "the worktree is
+    # usable" — re-PROBE before claiming recovery, or `branch=ok` names an outcome nothing
+    # measured and the operator lands in `require_working_tree`'s message anyway.
+    if [[ "$(git rev-parse --is-bare-repository 2>/dev/null || true)" == "true" ]]; then
+      echo "SOLEUR_GIT_BARE_SELFHEAL worktree=$wt_name git_dir=$wt_gitdir reason=write-ineffective git_version=$GIT_VERSION branch=failed"
+      echo -e "${RED}Error: this worktree still reports as bare after the fix was written.${NC}" >&2
+      echo -e "${YELLOW}Could not write: $target${NC}" >&2
+      echo -e "${YELLOW}Likely causes: the file was written but something else re-bares this worktree, or the repository layout is unexpected.${NC}" >&2
+      echo -e "${YELLOW}Next step: run  git -C '$PWD' config --list --show-origin | grep core.bare  to find the winning value.${NC}" >&2
+      return 1
+    fi
+    echo "SOLEUR_GIT_BARE_SELFHEAL worktree=$wt_name git_dir=$wt_gitdir git_version=$GIT_VERSION branch=ok"
+    # Re-derive the globals the poisoned state computed wrongly. GIT_ROOT was resolved from
+    # the bare branch at init and points at <common>/worktrees/<name>.
+    #
+    # NEVER DOWNGRADE a known-true IS_BARE. This used to set `IS_BARE=false` and then
+    # restore it only if a re-probe returned the literal "true" — but that probe is the one
+    # this file documents as degrading under the char-device config mask, so a degraded
+    # answer left IS_BARE=false with GIT_ROOT pointing at a real working tree. That
+    # combination selects `cleanup_merged_worktrees`' NON-bare tail, which runs
+    # `git -C "$GIT_ROOT" reset --hard HEAD` — i.e. a degraded probe could destroy the
+    # operator's uncommitted work. Upgrade-only, mirroring the init block.
+    IS_IN_WORKTREE=false
+    if [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]]; then
+      IS_IN_WORKTREE=true
+    fi
+    if [[ "$common_dir" == */.git ]]; then
+      GIT_ROOT="${common_dir%/.git}"
+    else
+      GIT_ROOT="$common_dir"
+    fi
+    if [[ "$(git -C "$common_dir" rev-parse --is-bare-repository 2>/dev/null || true)" == "true" ]]; then
+      IS_BARE=true
+    fi
+    return 0
+  fi
+
+  # [R5] Fail LOUD and ACTIONABLE. Deliberately NOT the bare "Run from an existing
+  # worktree" text: the caller IS in an existing worktree, so that message sends the
+  # operator to do the thing they already did.
+  echo "SOLEUR_GIT_BARE_SELFHEAL worktree=$wt_name git_dir=$wt_gitdir reason=config-worktree-unwritable git_version=$GIT_VERSION branch=failed"
+  echo -e "${RED}Error: this worktree is being reported as bare, and the fix could not be written.${NC}" >&2
+  echo -e "${YELLOW}Could not write: $target${NC}" >&2
+  echo -e "${YELLOW}Likely causes: no write permission on that directory, wrong ownership, a read-only mount, or the disk being full.${NC}" >&2
+  echo -e "${YELLOW}Next step: run  ls -ld '$wt_gitdir'  and make it writable by you (e.g. chmod u+w), then re-run this command.${NC}" >&2
+  return 1
+}
+if ! _selfheal_bare_worktree_override; then
+  # A wedged worktree must not silently proceed into a MUTATING subcommand. But the
+  # read-only verbs need no working tree and were usable before this fix existed —
+  # hard-exiting them would turn a partial degradation into a total one, and `help` is
+  # exactly what an operator reaches for when confused. The marker + guidance above already
+  # fired, so nothing is silent either way.
+  case "${1:-}" in
+    list|ls|help|"") : ;;
+    *) exit 1 ;;
+  esac
+fi
+# Relocated from the detection block above (#7394): both run ONCE, here, on healed state.
+ensure_git_root_absolute
+WORKTREE_DIR="$GIT_ROOT/.worktrees"
+
+# Normalize a bare repo's SHARED config so per-worktree core.bare resolution is never
+# engaged (#7394 — polarity reversed; the previous header described the opposite fix).
+#
+# What it now guarantees on a repo whose shared config has core.bare=true:
+#   1. extensions.worktreeConfig is ABSENT — this is the key that makes git resolve
+#      core.bare per-worktree, and it is the half of the pair that wedges worktrees.
+#   2. core.bare stays IN the shared config — removing it (the issue's hand workaround)
+#      makes the bare ROOT report as a normal working tree (fact 7).
+#   3. stale core.worktree is removed — orthogonal, retained from the previous behaviour.
+#
+# The old header claimed it "fixes TWO broken states … core.bare must ONLY exist in
+# .git/config.worktree". That prescription is what created the wedge; see the file header.
+# Called before AND after git worktree add. Safe for parallel sessions: every operation is
+# idempotent, and on an already-healthy repo (extension absent or explicitly false, no
+# stale core.worktree) it performs ZERO writes.
 ensure_bare_config() {
   local git_dir="$GIT_ROOT/.git"
   # Only relevant for bare repos (git dir IS the repo root)
@@ -564,14 +754,14 @@ ensure_bare_config() {
   # "/config"); or, because `--is-bare-repository` DEGRADES to a false "true" at init, the top
   # of this script recomputes GIT_ROOT from `--absolute-git-dir`/`--git-common-dir` to the
   # RELATIVE string ".git" (non-empty → git_dir collapses to ".git", which has NO slash, so the
-  # line-532 `*/.git` non-bare skip cannot match → the bare surgery misfires and wedges,
+  # config-content guard below reads a bogus path → the bare surgery misfires and wedges,
   # telemetry branch=target-masked-precheck/bare-fail). The predecessor D3 fix (merged
   # 2026-07-07) gated this fallback on `-z "$GIT_ROOT"`, so it caught only the EMPTY case and
   # MISSED the relative-".git" case. The mask-proof invariant: a corrupted GIT_ROOT is ALWAYS
   # non-absolute (empty or a relative ".git"), while a LEGITIMATE GIT_ROOT — bare or non-bare —
   # is always an absolute path. create_worktree runs from the workspace root, so recover git_dir
   # from the ABSOLUTE $PWD/.git whenever GIT_ROOT is non-absolute (a pure filesystem fact that
-  # does NOT read the masked config), so the line-532 `*/.git` skip fires for BOTH the empty and
+  # does NOT read the masked config), so the config-content guard below sees a real path for BOTH the empty and
   # the relative-".git" cases. Gating on `$GIT_ROOT != /*` (not unconditional) preserves the
   # genuine-bare path: a real bare repo carries an ABSOLUTE GIT_ROOT → fallback stays inert →
   # its surgery still runs even if the invoking CWD happens to be an unrelated non-bare checkout.
@@ -593,41 +783,103 @@ ensure_bare_config() {
   # EEXIST failure from atomic_git_config's clean-lock branch. `|| true` disarms set -e.
   sweep_stale_git_locks "$git_dir" || true
 
-  # NON-BARE GUARD (#6184 → #5934, hardened round 6). Everything BELOW is a BARE-repo
-  # accommodation: on a bare repo `git worktree add` corrupts the shared config (see
-  # header), and setting extensions.worktreeConfig=true steers those writes off it. A
-  # NORMAL working clone (the Concierge workspace layout, core.bare=false) needs NONE of
-  # it — `git worktree add` writes only to `.git/worktrees/<id>/`. Worse, enabling
-  # worktreeConfig FORCES git to read `.git/config.worktree`, which in the agent sandbox
-  # is an unreadable /dev/null char device → `fatal: … Permission denied` on EVERY git
-  # command. So: proceed with the surgery ONLY when the repo is DEFINITIVELY bare;
-  # default to SKIP.
+  # NON-BARE GUARD (#6184 → #5934, hardened round 6; polarity reversed round 7 / #7394).
+  # Everything BELOW is a BARE-repo accommodation. It used to ENABLE
+  # extensions.worktreeConfig on the theory that doing so steered `git worktree add`'s
+  # shared-config writes onto a per-worktree file; measured on git 2.53.0 that is backwards
+  # — enabling it is what makes a linked worktree fall back to core.bare=true from the
+  # shared config and report as bare (see the file header). The accommodation is now the
+  # REMOVAL of that key.
+  #
+  # A NORMAL working clone (the Concierge workspace layout, core.bare=false) still needs
+  # none of it — `git worktree add` writes only to `.git/worktrees/<id>/`. And enabling
+  # worktreeConfig FORCES git to read `.git/config.worktree`, which in the agent sandbox is
+  # an unreadable /dev/null char device → `fatal: … Permission denied` on EVERY git command.
+  # That hazard is now structurally unreachable from here, since nothing enables the key.
+  # So: proceed ONLY when the repo is DEFINITIVELY bare; default to SKIP.
   #
   # ROUND-6 root cause (#5934, operator-CONFIRMED non-bare workspace): the round-5 guard
   # trusted `git rev-parse --is-bare-repository`, but under the char-device config mask that
   # command DEGRADES — it (and `--show-toplevel`, → GIT_ROOT="") must read the masked
   # `.git/config`, and can report a false "true" — so the guard fell through to the surgery
-  # on a NON-bare clone and wedged the config write at the give-up below. Fix: detect non-bare
-  # by a PURE FILESYSTEM fact that never reads the masked config — `git_dir` is a `.git`
-  # DIRECTORY (a normal clone) — and SKIP the surgery there. Only a GENUINELY bare repo
-  # (gitdir IS the root; no `.git` subdir) consults git, and only then can the fail-loud
-  # branch fire.
-  if [[ "$git_dir" == */.git && -d "$git_dir" ]]; then
-    # Effectively NON-BARE → the bare surgery is unneeded and native `git worktree add`
-    # (writing only to .git/worktrees/<id>/, never the masked .git/config) proceeds. If the
-    # config family IS masked, emit a BENIGN diagnostic (mirrored, NOT paged) so telemetry
-    # finally shows the graceful-degrade path fired — it records branch=non-bare-skip.
+  # on a NON-bare clone and wedged the config write at the give-up below. Round 6's fix was
+  # to detect non-bare by a PURE FILESYSTEM fact that never reads the masked config —
+  # `git_dir` is a `.git` DIRECTORY — and SKIP there.
+  #
+  # ROUND-7 (#7394): that filesystem fact is not the discriminator it was taken for. There
+  # is a THIRD surface round 6 did not enumerate — a BARE repo STORED IN a `.git`
+  # subdirectory (the operator's own CLI clone, ADR-099 row 3): `<root>/.git` is a real
+  # DIRECTORY *and* `core.bare = true`. The shape test matches it, so everything below was
+  # DEAD CODE on that layout and nothing ever broke the config pair that wedges worktrees.
+  # `[[ -d <root>/.git ]]` cannot tell row 2 (normal clone) from row 3's root, because both
+  # are a `.git` directory — the distinguishing fact is the CONTENT of the config, not the
+  # SHAPE of the gitdir.
+  #
+  # So: decide on `core.bare` read out of the shared config FILE, and STILL DEFAULT TO SKIP.
+  # Reading the file directly (rather than `git rev-parse`) is what preserves the round-6
+  # mask protection: under the char-device mask this read degrades to EMPTY with a non-zero
+  # rc, which is not the literal `true` required to fall through, so a masked repo takes the
+  # SAME skip branch it took before. Every other outcome — absent, `false`, a non-zero rc —
+  # also skips. Only an unambiguous `true` proceeds to git's authoritative check below.
+  #
+  # NOT gated on `core.repositoryformatversion` (fact 2): a bare repo created before the
+  # extension era carries version 0, so requiring 1 would re-introduce a shape test that
+  # misses exactly the repos most likely to be poisoned.
+  local _shared_bare="" _shared_ext_probe="" _root_wt_bare=""
+  _shared_bare="$(git config --file "$git_dir/config" --get --type=bool core.bare 2>/dev/null || true)"
+  _shared_ext_probe="$(git config --file "$git_dir/config" --get extensions.worktreeConfig 2>/dev/null || true)"
+  _root_wt_bare="$(git config --file "$git_dir/config.worktree" --get --type=bool core.bare 2>/dev/null || true)"
+
+  # THE RETIRED-POLARITY END STATE (#7394 review). Deciding solely on `core.bare == true`
+  # would skip the exact population the PREVIOUS release created: the old code UNSET shared
+  # `core.bare` and left `extensions.worktreeConfig` on, so those repos read `core.bare`
+  # ABSENT here and would never be healed — permanently poisoned, and one ordinary
+  # `git config core.bare true` away from re-baring every worktree at once. The issue's own
+  # documented hand workaround produces the same shape. So ALSO fall through when the
+  # extension is present at all.
+  #
+  # Both probes are FILE reads, so the #5934 mask protection is preserved by construction:
+  # a masked config degrades to empty for BOTH, neither condition holds, and a masked repo
+  # takes the same SKIP it always took.
+  if [[ "$_shared_bare" != "true" && -z "$_shared_ext_probe" ]]; then
+    # Effectively NON-BARE (or unreadable) → the bare surgery is unneeded and native
+    # `git worktree add` (writing only to .git/worktrees/<id>/, never the masked .git/config)
+    # proceeds. If the config family IS masked, emit a BENIGN diagnostic (mirrored, NOT
+    # paged) so telemetry shows the graceful-degrade path fired — branch=non-bare-skip.
     if _config_target_masked "$git_dir/config" || _config_target_masked "$git_dir/config.worktree"; then
-      echo "SOLEUR_GIT_CONFIG_MASK_SKIP file=config reason=non-bare-skip branch=non-bare-skip hint=\"masked .git/config on a non-bare clone; bare surgery skipped — native worktree add writes only .git/worktrees/<id>/\""
+      # A masked read cannot say "non-bare" — it says NOTHING, so the old `reason=non-bare-skip`
+      # text asserted something this branch cannot know. Report the honest reason instead.
+      #
+      # DELIBERATELY NOT ESCALATED TO A WEDGE. Review proposed consulting
+      # `git rev-parse --is-bare-repository` here and failing loud when it says bare, so a
+      # genuinely-bare-repo-under-mask stops returning a silent 0. Implemented and REVERTED:
+      # under this exact degradation `GIT_ROOT` is the RELATIVE string `.git`, and
+      # `git -C .git rev-parse --is-bare-repository` reports **true** for ANY normal clone,
+      # because a `.git` directory looks like a bare repo from the inside. Escalating on that
+      # re-opens the #5934 D3 wedge on the Concierge workspace — the production surface —
+      # which this file has now fixed twice (Test 24 pins it). Trading a live wedge on the
+      # common surface for observability on a rare one is the wrong direction, so the
+      # ambiguity is REPORTED rather than acted on.
+      echo "SOLEUR_GIT_CONFIG_MASK_SKIP file=config reason=masked-cannot-determine branch=non-bare-skip hint=\"masked .git/config: bare-ness is unmeasurable here, so the surgery is skipped. If this repo IS bare, its shared config needs a host-side pre-seed before the bwrap mask — see #6191,#5934\""
     fi
+    # Otherwise the guard declined to act. Say so — "the normalization ran and found nothing
+    # to do" and "the guard never ran" being indistinguishable in telemetry is precisely how
+    # the round-6 guard stayed dead code for months. Mirrored, not paged.
+    echo "SOLEUR_GIT_BARE_POISON git_dir=$git_dir shared_bare=${_shared_bare:-absent} extension=${_shared_ext_probe:-absent} git_version=$GIT_VERSION branch=guard-skip"
     return 0
   fi
-  # git_dir is NOT a `.git` directory → a genuine bare repo (gitdir IS the root) or an
-  # indeterminate resolution. Consult git's authoritative check ONLY now; a non-"true"
-  # verdict (normal clone / indeterminate / wedged) still skips safely.
+  # The shared config says core.bare=true, or carries the retired polarity's extension.
+  # Either way this is a repo the normalization owns: a genuine bare repo, a
+  # bare-repo-in-`.git` root (ADR-099 row 3), or a normal clone whose config was corrupted
+  # to claim bareness (harmless — the operations below are removals of absent keys).
+  # Consult git's authoritative check; a non-"true" verdict still skips safely.
   local _bare_status
   _bare_status="$(git -C "${GIT_ROOT:-.}" rev-parse --is-bare-repository 2>/dev/null || true)"
-  if [[ "$_bare_status" != "true" ]]; then
+  if [[ "$_bare_status" != "true" && -z "$_shared_ext_probe" ]]; then
+    # The config file and git disagree, and there is no retired-polarity remnant to clean.
+    # Emit rather than return silently: a file-vs-git contradiction is the same
+    # unobservable-no-op class this whole change exists to end.
+    echo "SOLEUR_GIT_BARE_POISON git_dir=$git_dir shared_bare=${_shared_bare:-absent} git_status=${_bare_status:-unknown} git_version=$GIT_VERSION branch=bare-disagree"
     return 0
   fi
   # GENUINELY bare AND its config is masked → the shared-config write is REQUIRED (prevents
@@ -643,60 +895,135 @@ ensure_bare_config() {
   fi
 
   local shared_config="$git_dir/config"
-  local wt_config="$git_dir/config.worktree"
   local fixed=false
 
-  # Ensure prerequisites for per-worktree config. Routed through atomic_git_config so
-  # a wedged config.lock (the char-device wedge) does not block them — setting
-  # extensions.worktreeConfig here is what steers the subsequent `git worktree add`
-  # onto the per-worktree config instead of the wedged shared config.lock.
-  if ! atomic_git_config "$shared_config" core.repositoryformatversion 1 \
-     || ! atomic_git_config "$shared_config" extensions.worktreeConfig true; then
-    # Bare stdout echo (D1a) so this fatal give-up reaches the telemetry scanner even under
-    # the headless_or_stderr per-PID logfile sink that hid it from four prior fixes (#5934).
-    echo "worktree wedge: could not apply shared-config prerequisites in $git_dir (see atomic_git_config / SOLEUR_GIT_CONFIG_TARGET_MASKED / SOLEUR_GIT_LOCK_UNREMOVABLE errors above)"
-    headless_or_stderr error "worktree wedge: could not apply shared-config prerequisites in $git_dir (see atomic_git_config / SOLEUR_GIT_LOCK_UNREMOVABLE errors above)."
-    return 1
+  # REVERSED POLARITY (#7394). The old code did the opposite of all three steps below: it
+  # ENABLED extensions.worktreeConfig (plus repositoryformatversion 1) and then UNSET
+  # core.bare from the shared config, on the theory that core.bare belongs per-worktree only.
+  # Measured on git 2.53.0, that theory is inverted at both ends:
+  #
+  #   - The extension is the half that WEDGES. With it on, git resolves core.bare
+  #     per-worktree; a linked worktree that does not set `bare = false` in its OWN
+  #     config.worktree inherits `true` from the shared config and is treated as BARE.
+  #     `git worktree add` writes NO config.worktree at all (fact 4), so EVERY worktree
+  #     created after the extension is enabled starts out poisoned.
+  #   - Unsetting shared core.bare is not a safe end state either (fact 7): it makes the
+  #     bare ROOT report as a normal working tree. That is the issue's hand workaround, and
+  #     it is retired here rather than codified.
+  #
+  # So the durable state is the one git itself produces: core.bare in the shared config,
+  # extension OFF, per-worktree resolution never engaged. Both writes below are REMOVALS of
+  # a state we no longer create, which is why an already-healthy repo performs zero writes.
+  # RESTORE FIRST, then remove. On a retired-polarity repo the ROOT's own config.worktree
+  # (`bare = true`) is what keeps the bare root reporting bare while shared `core.bare` is
+  # absent — it is LOAD-BEARING there, not inert. Removing the extension first would make it
+  # stop being read and momentarily de-bare the root, which is the very "fact 7" end state
+  # this polarity exists to avoid. So put shared `core.bare` back before disarming the
+  # mechanism that is currently standing in for it.
+  if [[ "$_shared_bare" != "true" && "$_root_wt_bare" == "true" ]]; then
+    echo -e "${BLUE}Migrating retired polarity: restoring core.bare to the shared config...${NC}"
+    if ! atomic_git_config "$shared_config" core.bare true; then
+      echo "worktree wedge: could not restore core.bare in $git_dir (key=core.bare; see errors above)"
+      headless_or_stderr error "worktree wedge: could not restore core.bare in $shared_config (see errors above)."
+      return 1
+    fi
+    _shared_bare="true"
+    fixed=true
   fi
 
-  # Remove core.bare from shared config (any value — it belongs in per-worktree only)
-  if git config --file "$shared_config" core.bare &>/dev/null; then
-    echo -e "${BLUE}Fixing bare repo config: removing core.bare from shared config...${NC}"
-    if ! atomic_git_config "$shared_config" --unset core.bare; then
-      echo "worktree wedge: could not unset core.bare in $shared_config (see errors above)"
-      headless_or_stderr error "worktree wedge: could not unset core.bare in $shared_config (see errors above)."
+  local _ext_present=""
+  _ext_present="$(git config --file "$shared_config" --get --type=bool extensions.worktreeConfig 2>/dev/null || true)"
+  # `-n` alone would treat an explicit `= false` (a non-empty string) as present and rewrite
+  # the config for nothing, falsifying the zero-writes-when-healthy property. Only a literal
+  # true means the wedging half is armed.
+  if [[ "$_ext_present" == "true" ]]; then
+    echo -e "${BLUE}Fixing bare repo config: removing extensions.worktreeConfig from shared config...${NC}"
+    # --unset-all, not --unset: the key is multi-valued-capable and a plain --unset exits 5
+    # on a doubly-set key. Safe on an absent key only because of the FR2 fast path extended
+    # for this call site (see atomic_git_config) — a native --unset-all on an absent key
+    # also exits 5.
+    if ! atomic_git_config "$shared_config" --unset-all extensions.worktreeConfig; then
+      echo "worktree wedge: could not break the bare-config pair in $git_dir (key=extensions.worktreeConfig; see errors above)"
+      headless_or_stderr error "worktree wedge: could not unset extensions.worktreeConfig in $shared_config (see errors above)."
+      return 1
+    fi
+    # READ BACK. Two concurrent lockless writers each copy-edit-rename the shared config, so
+    # a writer whose copy predates the other's rename silently RESURRECTS the key it removed
+    # — and with shared `core.bare` now deliberately retained, a resurrected extension
+    # re-bares every worktree that lacks its own override. A lost update here is repo-wide,
+    # so verify rather than assume.
+    if [[ "$(git config --file "$shared_config" --get --type=bool extensions.worktreeConfig 2>/dev/null || true)" == "true" ]]; then
+      echo "worktree wedge: could not break the bare-config pair in $git_dir (key=extensions.worktreeConfig; still present after removal — concurrent lockless writer?)"
+      headless_or_stderr error "worktree wedge: extensions.worktreeConfig still present in $shared_config after removal (concurrent lockless writer?)."
       return 1
     fi
     fixed=true
   fi
 
-  # Remove stale core.worktree from shared config (leftover from worktree operations)
+  # Remove stale core.worktree from shared config (leftover from worktree operations).
+  # Retained unchanged from the previous behaviour — it is orthogonal to the polarity.
   if git config --file "$shared_config" core.worktree &>/dev/null; then
     echo -e "${BLUE}Fixing bare repo config: removing stale core.worktree from shared config...${NC}"
     if ! atomic_git_config "$shared_config" --unset core.worktree; then
-      echo "worktree wedge: could not unset core.worktree in $shared_config (see errors above)"
+      echo "worktree wedge: could not unset core.worktree in $git_dir (key=core.worktree; see errors above)"
       headless_or_stderr error "worktree wedge: could not unset core.worktree in $shared_config (see errors above)."
       return 1
     fi
     fixed=true
   fi
 
-  # Ensure per-worktree config has core.bare=true for the bare root (a SECOND wedge
-  # surface: config.worktree.lock — routed through the helper too).
-  local current_bare
-  current_bare=$(git config --file "$wt_config" core.bare 2>/dev/null || echo "")
-  if [[ "$current_bare" != "true" ]]; then
-    if ! atomic_git_config "$wt_config" core.bare true; then
-      echo "worktree wedge: could not set core.bare in $wt_config (see errors above)"
-      headless_or_stderr error "worktree wedge: could not set core.bare in $wt_config (see errors above)."
-      return 1
-    fi
-    fixed=true
-  fi
+  # core.bare is deliberately LEFT IN the shared config, and `.git/config.worktree` is
+  # deliberately left on disk untouched: with the extension absent that file is inert, and
+  # deleting it would be a destructive write with no benefit. The old fourth write block
+  # (setting core.bare=true into the bare root's own config.worktree) is REMOVED — under the
+  # reversed polarity nothing reads config.worktree, so it was permanently inert.
+
+  local _branch="clean"; [[ "$fixed" == "true" ]] && _branch="healed"
+  # Bare stdout echo (D1a) so the outcome reaches the git-lock-marker telemetry scanner —
+  # headless_or_stderr's per-PID logfile sink is invisible to it (#5934).
+  echo "SOLEUR_GIT_BARE_POISON git_dir=$git_dir extension=$([[ "$_ext_present" == "true" ]] && echo present || echo absent) shared_bare=${_shared_bare:-absent} wt_override=$([[ -f "$git_dir/config.worktree" ]] && echo present || echo absent) git_version=$GIT_VERSION branch=$_branch"
 
   if [[ "$fixed" == "true" ]]; then
-    echo -e "${GREEN}Fixed: core.bare per-worktree only, no stale core.worktree${NC}"
+    echo -e "${GREEN}Fixed: shared config keeps core.bare, per-worktree resolution disabled${NC}"
   fi
+}
+
+# seed_worktree_bare_false <worktree-path> — pin `core.bare = false` into a NEWLY
+# created worktree's OWN config.worktree (#7394, Phase 4).
+#
+# Defense in depth, not the primary fix: with extensions.worktreeConfig absent (the
+# reversed polarity above) nothing reads config.worktree, so this write is inert on a
+# healthy repo. It exists so that a worktree created here stays correct even if some
+# OTHER tool re-enables the extension later — the recorded re-evaluation trigger for
+# ADR-173 is exactly "a new setter of extensions.worktreeConfig appears in the toolchain".
+#
+# This is a CREATE, not a repair: per fact 4, `git worktree add` writes NO
+# config.worktree at all, so there is no existing-and-empty file to heal.
+#
+# The admin dir is resolved from git itself (`rev-parse --absolute-git-dir` inside the
+# new worktree), never by string-joining a guessed worktree name onto
+# `<root>/.git/worktrees/` — git derives that directory name from the worktree's BASENAME
+# with its own collision suffixing, so a guessed join silently targets the wrong
+# directory (or a nonexistent one) whenever two worktrees share a basename.
+#
+# Non-fatal by design: failing to write a defense-in-depth pin must not fail `create` on
+# a repo that is already in the durable state. Returns non-zero and emits the marker so
+# the outcome is still visible in telemetry.
+seed_worktree_bare_false() {
+  local worktree_path="$1"
+  local wt_gitdir
+  wt_gitdir="$(git -C "$worktree_path" rev-parse --absolute-git-dir 2>/dev/null || true)"
+  if [[ -z "$wt_gitdir" || ! -d "$wt_gitdir" ]]; then
+    echo "SOLEUR_GIT_BARE_SEED worktree=$(basename -- "$worktree_path") reason=gitdir-unresolved git_version=$GIT_VERSION branch=seed-failed"
+    headless_or_stderr warn "seed_worktree_bare_false: could not resolve the git dir for $worktree_path; skipping the core.bare=false pin."
+    return 1
+  fi
+  if ! atomic_git_config "$wt_gitdir/config.worktree" core.bare false; then
+    echo "SOLEUR_GIT_BARE_SEED worktree=$(basename -- "$wt_gitdir") reason=seed-write-failed git_version=$GIT_VERSION branch=seed-failed"
+    headless_or_stderr warn "seed_worktree_bare_false: could not write core.bare=false into $wt_gitdir/config.worktree."
+    return 1
+  fi
+  return 0
 }
 
 # Verify a worktree was properly created and registered.
@@ -1377,10 +1704,24 @@ create_worktree() {
   # Verify BEFORE fixing config — most honest check of worktree health
   verify_worktree_created "$worktree_path" "$branch_name" "$BASE_REF"
 
-  # git worktree add on bare repos writes core.bare=false to shared config — fix it
+  # `git worktree add` can leave the shared config carrying the pair that wedges every
+  # worktree (extensions.worktreeConfig + core.bare) — normalize it (#7394). The previous
+  # comment here described the retired polarity ("writes core.bare=false to shared config").
   if ! ensure_bare_config; then
     echo -e "${RED}Worktree created but shared-config repair is wedged on an unremovable git lock (see SOLEUR_GIT_LOCK_UNREMOVABLE above).${NC}" >&2
     exit 1
+  fi
+
+  # Defense in depth (#7394): pin core.bare=false in the NEW worktree's OWN
+  # config.worktree so it stays correct even if per-worktree resolution is re-enabled
+  # later by another tool. Inert while the extension is absent, so non-fatal by design.
+  #
+  # BARE ONLY. On a non-bare clone (the Concierge workspace, ADR-099 row 2) this would
+  # create the very `.git/worktrees/<id>/config.worktree` machinery that
+  # `apps/web-platform/server/worktree-config-seed.ts` exists to keep off that surface,
+  # where `config.worktree` is an unreadable char device.
+  if [[ "$IS_BARE" == "true" ]]; then
+    seed_worktree_bare_false "$worktree_path" || true
   fi
 
   # Respect a host-seeded owner identity; only set from --global when local is absent
@@ -1486,10 +1827,24 @@ create_for_feature() {
   # Verify BEFORE fixing config — most honest check of worktree health
   verify_worktree_created "$worktree_path" "$branch_name" "$base_ref"
 
-  # git worktree add on bare repos writes core.bare=false to shared config — fix it
+  # `git worktree add` can leave the shared config carrying the pair that wedges every
+  # worktree (extensions.worktreeConfig + core.bare) — normalize it (#7394). The previous
+  # comment here described the retired polarity ("writes core.bare=false to shared config").
   if ! ensure_bare_config; then
     echo -e "${RED}Worktree created but shared-config repair is wedged on an unremovable git lock (see SOLEUR_GIT_LOCK_UNREMOVABLE above).${NC}" >&2
     exit 1
+  fi
+
+  # Defense in depth (#7394): pin core.bare=false in the NEW worktree's OWN
+  # config.worktree so it stays correct even if per-worktree resolution is re-enabled
+  # later by another tool. Inert while the extension is absent, so non-fatal by design.
+  #
+  # BARE ONLY. On a non-bare clone (the Concierge workspace, ADR-099 row 2) this would
+  # create the very `.git/worktrees/<id>/config.worktree` machinery that
+  # `apps/web-platform/server/worktree-config-seed.ts` exists to keep off that surface,
+  # where `config.worktree` is an unreadable char device.
+  if [[ "$IS_BARE" == "true" ]]; then
+    seed_worktree_bare_false "$worktree_path" || true
   fi
 
   # Respect a host-seeded owner identity; only set from --global when local is absent
