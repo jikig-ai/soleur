@@ -212,6 +212,7 @@ setup_kb_specs() {
     "project/plans/feat-q/plan.md" \
     "project/plans/2026-01-01-feat-r-plan.md" \
     "product/specs/feat-w/session-state.md" \
+    "project/specs/feat-z/case-studies/01-durable.md" \
     "engineering/INDEX.md" \
     "engineering/note.md" \
   ; do
@@ -235,14 +236,52 @@ assert_indexed() {
   fi
 }
 
+# A drop-assertion with no existence precondition is vacuous: "correctly
+# dropped" and "never created" are the same observation, so deleting the
+# fixture that gives the assertion meaning is invisible. Deleting a KEEP
+# fixture reds; without this guard, deleting a DROP fixture does not.
 assert_not_indexed() {
   local kb="$1" rel="$2" label="$3"
+  if [[ ! -e "$kb/$rel" ]]; then
+    echo "  FAIL: $label (fixture $rel absent from corpus — assertion would be vacuous)"
+    FAIL=$((FAIL + 1)); return
+  fi
   if grep -qF -- "]($rel)" "$kb/INDEX.md"; then
     echo "  FAIL: $label (unexpected link target $rel in INDEX.md)"; FAIL=$((FAIL + 1))
   else
     echo "  PASS: $label"; PASS=$((PASS + 1))
   fi
 }
+
+# Self-test the two bespoke helpers. Both are used 18 times below and neither
+# is otherwise verified, so the whole TS7 verdict rests on two unguarded greps.
+# Neutering either to an unconditional PASS is invisible without this.
+selftest_helpers() {
+  local d="$TMPDIR_BASE/helper-selftest"
+  mkdir -p "$d/present"
+  printf -- '- [t](present/x.md)\n' > "$d/INDEX.md"
+  : > "$d/present/x.md"
+  : > "$d/absent-from-index.md"
+  local p0=$PASS f0=$FAIL
+  assert_indexed     "$d" "present/x.md"          "selftest: indexed row detected"
+  assert_not_indexed "$d" "absent-from-index.md"  "selftest: missing row detected"
+  # Both above must PASS; now prove each helper can FAIL.
+  local p1=$PASS f1=$FAIL
+  assert_indexed     "$d" "absent-from-index.md"  "selftest(expect-fail): assert_indexed on missing row"
+  assert_not_indexed "$d" "present/x.md"          "selftest(expect-fail): assert_not_indexed on present row"
+  local expected_pass=$((p1 - p0)) expected_fail=$((FAIL - f1))
+  # Undo the two deliberate failures and score the self-test itself.
+  FAIL=$f1
+  if [[ "$expected_pass" -eq 2 && "$expected_fail" -eq 2 ]]; then
+    echo "  PASS: helper self-test (both helpers detect present AND absent)"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: helper self-test (a helper cannot fail: pass_delta=$expected_pass fail_delta=$expected_fail)"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+selftest_helpers
 
 kb=$(setup_kb_specs)
 run_generator "$kb"
@@ -267,8 +306,10 @@ assert_not_indexed "$kb" "project/specs/feat-x/phase0-evidence.md"    "F3: phase
 assert_not_indexed "$kb" "project/specs/feat-x/ac-walk.md"            "F3: ac-walk.md dropped (long tail)"
 assert_not_indexed "$kb" "project/specs/feat-x/decision-challenges.md" "F10: decision-challenges.md dropped from index"
 
-# F10b — ADR-084 §5 reads this file from disk; the index must not affect that
-assert_file_exists "$kb/project/specs/feat-x/decision-challenges.md" "F10: decision-challenges.md still on disk"
+# F16 — a deliberate SUBDIRECTORY inside a spec dir is durable content, not
+# branch-lifetime scratch, and stays indexed. This is what keeps the rule FLAT;
+# without the fourth predicate arm the exclusion is depth-unbounded.
+assert_indexed "$kb" "project/specs/feat-z/case-studies/01-durable.md" "F16: nested spec-dir content indexed (rule is flat-scoped)"
 
 # F4 — prefix-independence: fix-* behaves exactly like feat-*
 assert_indexed     "$kb" "project/specs/fix-y/spec.md"          "F4: fix-* spec.md indexed"
@@ -306,6 +347,78 @@ if diff -q "$TMPDIR_BASE/index-noslash.md" "$kb/INDEX.md" >/dev/null 2>&1; then
   PASS=$((PASS + 1))
 else
   echo "  FAIL: F15: trailing-slash KB_DIR changed the output"
+  FAIL=$((FAIL + 1))
+fi
+
+# ---------------------------------------------------------------------------
+# TS8 — facet determinism UNDER CONTENTION
+#
+# TS5 already asserts "regenerates deterministically", but on a 1-3 file
+# fixture: one awk batch, far under a 4 KB stdio flush, so it can never
+# reproduce the interleaving it appears to cover. This corpus is deliberately
+# large enough to span multiple `xargs -n100` batches and several flush
+# boundaries, which is what makes re-adding `-P` to the facet walk detectable.
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- TS8: facet determinism under contention ---"
+
+kb_big="$TMPDIR_BASE/kb-contention"
+mkdir -p "$kb_big/project/learnings"
+i=0
+while [ "$i" -lt 260 ]; do
+  printf -- '---\ntitle: "contention fixture %s"\ntags: [contention-tag-%s, shared-tag, another-shared-tag]\ncategory: contention-category-%s\n---\n\nbody\n' \
+    "$i" "$i" "$((i % 7))" > "$kb_big/project/learnings/contention-$i.md"
+  i=$((i + 1))
+done
+
+KB_DIR="$kb_big" bash "$GEN_SCRIPT" >/dev/null 2>&1
+tags_a=$(cat "$kb_big/kb-tags.txt"); cats_a=$(cat "$kb_big/kb-categories.txt")
+KB_DIR="$kb_big" bash "$GEN_SCRIPT" >/dev/null 2>&1
+tags_b=$(cat "$kb_big/kb-tags.txt"); cats_b=$(cat "$kb_big/kb-categories.txt")
+
+if [[ "$tags_a" == "$tags_b" && "$cats_a" == "$cats_b" ]]; then
+  echo "  PASS: facet artifacts stable across runs on a multi-batch corpus"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: facet artifacts differ between two runs on identical input (write race)"
+  FAIL=$((FAIL + 1))
+fi
+
+# Torn lines are the race's signature: a spliced value that is not a real tag.
+# Every emitted tag must be one this fixture actually declares.
+if printf '%s\n' "$tags_a" | grep -qvE '^(contention-tag-[0-9]+|shared-tag|another-shared-tag)$'; then
+  echo "  FAIL: kb-tags.txt contains a value no fixture declares (torn line)"
+  printf '%s\n' "$tags_a" | grep -vE '^(contention-tag-[0-9]+|shared-tag|another-shared-tag)$' | head -3 | sed 's/^/        /'
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: every emitted tag is a declared value (no torn lines)"
+  PASS=$((PASS + 1))
+fi
+
+# Non-vacuity: the corpus must actually be big enough to contend.
+tag_bytes=$(printf '%s' "$tags_a" | wc -c)
+if [[ "$tag_bytes" -lt 4096 ]]; then
+  echo "  FAIL: TS8 corpus emits only ${tag_bytes}B of tags — under one flush boundary, cannot detect the race"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: TS8 corpus spans multiple flush boundaries (${tag_bytes}B of tags)"
+  PASS=$((PASS + 1))
+fi
+
+# ---------------------------------------------------------------------------
+# Anti-vacuity floor.
+#
+# Without this, deleting the whole TS7 block exits 0 with "ALL TESTS PASSED" —
+# 21 assertions vanish and nothing notices, because the only merge gate is
+# FAIL==0. A floor (never -eq, which makes every added assertion a spurious
+# failure) makes silent removal loud. Derived from a green run; raise it in
+# lockstep when assertions are added.
+# ---------------------------------------------------------------------------
+MIN_ASSERTIONS=51
+total_assertions=$((PASS + FAIL))
+if [[ "$total_assertions" -lt "$MIN_ASSERTIONS" ]]; then
+  echo "  FAIL: anti-vacuity floor — ran $total_assertions assertions, expected >= $MIN_ASSERTIONS"
+  echo "        (assertions were removed, or a block exited early without running)"
   FAIL=$((FAIL + 1))
 fi
 

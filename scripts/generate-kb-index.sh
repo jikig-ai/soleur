@@ -41,15 +41,24 @@ fi
 
 # Collect all eligible .md files (exclude archive/, INDEX.md, non-.md, symlinks)
 #
-# The third group implements the spec-directory allowlist (#7399, ADR-173):
+# The third group implements the spec-directory allowlist (ADR-173):
 # a spec directory contributes its spec.md and its tasks.md — the two files
-# that NAME a feature — and nothing else. Everything else flat inside one
-# (session-state.md and ~90 other one-off working filenames, ~76 of which
-# occur exactly once) is branch-lifetime scratch, and it was 1,281 of the
-# ~7,480 rows agents grep for prior art.
+# that NAME a feature — plus anything the author deliberately organised into a
+# SUBDIRECTORY. Files sitting flat alongside spec.md/tasks.md are
+# branch-lifetime working state (session-state.md and a long tail of one-off
+# names) and are not indexed.
 #
 # An allowlist, not a denylist: filename invention is the norm here, so any
 # enumerated deny set is stale the next time someone writes a phase0-evidence.md.
+# ADR-173 holds the dated measurements; deliberately not repeated here, because
+# a count in a comment rots and this comment is also --help output.
+#
+# The fourth arm is what keeps the rule FLAT. `-path '*/project/specs/*/*/*'`
+# needs two literal `/` after specs/, so specs/feat-x/tasks.md (one) is excluded
+# while specs/feat-x/case-studies/01-a.md (two) is kept. Without it the
+# exclusion is depth-unbounded and silently drops nested durable content —
+# vendor interface reference under specs/external/, for instance, which lives in
+# dirs that have no spec.md or tasks.md at all and would retain ZERO rows.
 #
 # The patterns are single-quoted and NOT interpolated with $KB_DIR on purpose.
 # `-path "$KB_DIR/project/specs/*"` makes the predicate depend on the TEXTUAL
@@ -60,7 +69,8 @@ mapfile -t all_files < <(
   find "$KB_DIR" -type f -not -type l -name '*.md' \
     -not -path '*/archive/*' \
     -not -name 'INDEX.md' \
-    \( -not -path '*/project/specs/*' -o -name 'spec.md' -o -name 'tasks.md' \) \
+    \( -not -path '*/project/specs/*' -o -name 'spec.md' -o -name 'tasks.md' \
+       -o -path '*/project/specs/*/*/*' \) \
     | LC_ALL=C sort
 )
 
@@ -147,17 +157,35 @@ echo "Generated $INDEX_FILE ($total files indexed)"
 #   - Empty `tags: []` emits nothing.
 #   - Files without frontmatter or without these fields are silently skipped.
 #
-# Implementation: single awk invocation per xargs batch. Parallel-safe because
-# each batch writes independent lines to its own stdout stream, which xargs
-# concatenates into the downstream pipe. Lines are always smaller than
-# PIPE_BUF (4 KB), so atomic writes hold. Deduplication happens via
-# `sort -u` after collection (TR9 — no shared append target).
+# Implementation: single awk invocation per xargs batch, run SERIALLY.
+#
+# This walk deliberately has no `-P` flag. It previously ran `-P4` with the
+# redirect below, which is a data race: the redirect is on the whole pipeline,
+# so `$facets_tmp` is a REGULAR FILE and every parallel awk child inherits the
+# same open file description on it. PIPE_BUF atomicity does not apply to
+# regular files at all, and awk block-buffers its stdout, so a 4 KB flush
+# boundary lands mid-line and another child's write splices into the gap.
+# `cut -f2` then keeps the splice and DISCARDS the real value — so a torn line
+# fabricates a tag and destroys a true one.
+#
+# That was not theoretical: it shipped `agent-worcat` (from `agent-workflow,
+# mcp-integration`), `blast-radcat`, `cloudflacat` and ~11 more into
+# kb-tags.txt/kb-categories.txt, and kb-search validates `--tag`/`--category`
+# against those files, so a torn value makes a real tag report as invalid.
+# Measured: 5 runs over one unchanged corpus produced 5 distinct outputs.
+# Serial produces 1, and it is byte-identical to the `stdbuf -oL` fix.
+#
+# Serial is not slower here (2,119 files, measured within noise of -P4), and it
+# needs no `stdbuf`, which is absent from stock macOS. Do not re-add `-P`
+# without either line-buffering the children or giving each batch its own file.
+#
+# Deduplication happens via `sort -u` after collection.
 # ---------------------------------------------------------------------------
 
 if [[ -d "$LEARNINGS_DIR" ]]; then
   find "$LEARNINGS_DIR" -type f -not -type l -name '*.md' \
     -not -path '*/archive/*' -print0 \
-    | xargs -0 -P4 -n100 awk '
+    | xargs -0 -n100 awk '
       FNR == 1 { c = 0; in_block = 0 }
 
       /^---$/ { c++; next }
