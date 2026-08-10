@@ -553,7 +553,10 @@ Sequenced last because it depends on the counterparty documents being settled.
 
 ### Legal (CLO) — BLOCKING
 
-**Status:** required before `/work` begins.
+**Status:** NOT YET OBTAINED. A CLO review was dispatched during this planning session but did
+not return before the plan was finalised, so **none of the six rulings below has been made**.
+`/work` MUST obtain them at Phase 0.7 before authoring any legal wording. Do not let this
+section's existence read as coverage — that is the exact defect class this issue exists to fix.
 
 Per `knowledge-base/project/learnings/` guidance that legal *decisions* route to the CLO and that
 the CLO returns **drafted replacement wording**, not a verdict, the following are CLO deliverables
