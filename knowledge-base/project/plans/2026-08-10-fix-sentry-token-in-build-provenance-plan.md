@@ -137,7 +137,9 @@ lands.
 
 | Claim | Reality (measured) | Plan response |
 | --- | --- | --- |
-| **R0.** Docs say build-args are excluded at `mode=min`; the issue measured them present. | Neither "docs bug" nor "version drift" is established. The most likely reading: `.buildDefinition.externalParameters.request.args` is the **frontend request attribute map** (the raw opts BuildKit received — `build-arg:*`, `label:*`, `target`, …), plausibly governed by a different rule from the build-args-in-provenance rule the docs describe, and plausibly **mode-independent by design**. The issue's "min confirmed" inference was *negative* (`buildConfig` absent), which cannot distinguish that from a wrapper artefact. | **Do not pin a causal claim in the ADR.** Phase 0.1 replaces the GHCR re-fetch with a **local A/B canary build** that settles mode-dependence directly. Whatever it shows, the fix is unchanged — secret-mount values are never recorded at any mode. |
+| **R0. SETTLED BY MEASUREMENT — the docs are right and the issue's mode inference is wrong.** Docs say build-args are excluded at `mode=min`; the issue measured them present and inferred min was in effect. | **A local A/B canary settled it** (buildx v0.34.0, BuildKit v0.31.2, built-in frontend, `--build-arg CANARY=…`): at `mode=min` the canary appears **0 times** — `externalParameters.request` carries only `compatibilityVersion, frontend, locals, root`, with **no `args` key at all**. At `mode=max` it appears once at `…request.args["build-arg:CANARY"]`. Build-args are genuinely min-excluded. Therefore the published `v0.249.4` attestation containing `request.args` means **the release build is NOT effectively emitting `mode=min`**. The issue's inference rested on `buildConfig` being absent, which does not establish min. | **Re-point Phase 0.1.** The open question is no longer "does min record args" (answered: no) but **"what mode is the release actually emitting, and why"** — `build-push-action`'s default on push, a builder-version difference, or an inherited setting. **This does not change the fix**, for two reasons: (i) secret-mount values are never recorded at any mode; (ii) relying on `mode=min` to exclude args is *precisely* the reasoning that produced the false comment this PR exists to correct — a mode setting is configuration that can drift, not a control. Pinning `mode=min` may well be sufficient today and is still not the fix. |
+| **R0b. The image-config leak is mode-independent.** | Same canary: with the arg reaching `ENV`/`LABEL`, `{{json .Image}}` showed `config.Env: ["CANARY=…"]`, `config.Labels: {"canary":"…"}`, **and** history entries `ARG CANARY=…`, `ENV CANARY=…`, `RUN \|1 CANARY=… /bin/sh -c …` — at **both** modes. | Confirms the two-document design (Phase 4.3) is necessary, and **extends it**: the gate must also scan image-config **`history`**, not just `config.Env`/`config.Labels`. A provenance-only gate is insufficient by construction. |
+| **R0c. `.Image` and `.Provenance` change shape with platform count.** | Measured against a local registry: single-platform → flat object (`.config.Env` works); multi-platform → map keyed `"linux/amd64"`, `"linux/386"` (`.config.Env` returns **null**). `alpine:3.20` (8 platforms) returns null. Also: pinning a **child manifest digest** flattens `.Image` but returns `.Provenance == {}` — the attestation is a sibling in the index, unreachable from the child digest. | Every jq path in Phase 4.3 must be platform-agnostic: `if has("config") then . else .[] end` / `if has("SLSA") then . else .[] end`. And the gate must inspect the **index** digest, never the platform digest. A naive `.config.Env` gate would return null and read as clean. |
 | **R1.** "The token 403s on a read, so it may be narrower." | Live scope `[event:read, org:read, project:admin, alerts:*, project:*]`. It **has** `event:read`; the 403 was a **`team:read`** 403. The token is **wider** than supposed, with a write limb. | Report measured scope. Correct the false comment (Phase 6). |
 | **R2.** Suggested allowlist `^NEXT_PUBLIC_\|^BUILD_`. | **A prefix allowlist alone re-opens the class.** Verified by running the plan's own regex + allowlist: `BUILD_DEPLOY_TOKEN` → *admitted*; `NEXT_PUBLIC_SECRET_KEY` → *admitted*. Both are credential-shaped and both pass. | **The allowlist is a conjunction**: a key is admissible only if it matches an allowlist entry **AND** does not match the credential-shape regex. RED cases for both names above. This is the single highest-value correction in the review. |
 | **R2b.** Credential-shape regex `TOKEN\|SECRET\|KEY\|…\|PAT\|_DSN$`. | Unanchored `PAT` matches **`PATH`** — the most common `ENV` line in Docker. `AUTH` matches `AUTHOR`/`NEXTAUTH_URL`/`OAUTH_*`; `KEY` matches `CACHE_KEY`. | Anchor to word parts: `(^\|_)(TOKEN\|SECRET\|KEY\|PASSWORD\|PASSWD\|CREDENTIALS?\|AUTH\|PAT)($\|_)\|_DSN$`, with the false-positive list as explicit GREEN test cases. |
@@ -349,15 +351,39 @@ Not applicable — no UI-surface path. **Tier: NONE.**
 
 ### Phase 0 — Measure and decide topology (no code)
 
-0.1 **Local A/B canary build** — replaces the earlier draft's GHCR re-fetch, which may not be
-executable at all (the interim GHCR read PAT is revoked per AP-016, so there is no local pull
-credential; the *release job* is fine, it logs in with `github.token`):
+0.1 **Local A/B canary build — ALREADY RUN; recorded here so /work reproduces rather than rediscovers.**
+It replaces the earlier draft's GHCR re-fetch, which may not be executable at all (the interim GHCR
+read PAT is revoked per AP-016; the *release job* is fine, it logs in with `github.token`).
+
+**A `docker-container` builder is mandatory** — on the stock `docker` driver *both* halves fail
+(`Attestation is not supported for the docker driver`, `OCI exporter is not supported for the docker
+driver`), so create one first:
 ```bash
-docker buildx build --provenance=mode=min --build-arg CANARY=<<synthetic>> --output type=oci,dest=min.tar .
+docker buildx create --driver docker-container --bootstrap --use
 docker buildx build --provenance=mode=max --build-arg CANARY=<<synthetic>> --output type=oci,dest=max.tar .
+docker buildx build --provenance=mode=min --build-arg CANARY=<<synthetic>> --output type=oci,dest=min.tar .
 ```
-Inspect both attestations. This settles mode-dependence, pins the exact field path, and needs no
-registry credential. **Print key names and value LENGTHS only.**
+**`mode=max` is the load-bearing arm.** At `mode=min` the canary is absent by design, so a min-only
+canary passes unconditionally and proves nothing.
+
+Extraction requires traversing a **nested** index — `index.json` → an inner image index → the
+attestation manifest. A recipe reading `index.json`'s manifests directly finds nothing:
+```bash
+TAR=max.tar; D=$(mktemp -d); tar -xf "$TAR" -C "$D"
+jq -r --arg d "$D" '.manifests[0].digest | sub("sha256:";"") | "\($d)/blobs/sha256/\(.)"' "$D/index.json" \
+| xargs jq -r '.manifests[] | select(.annotations["vnd.docker.reference.type"]=="attestation-manifest") | .digest' \
+| sed "s|sha256:|$D/blobs/sha256/|" \
+| xargs jq -r '.layers[] | select(.annotations["in-toto.io/predicate-type"]=="https://slsa.dev/provenance/v1") | .digest' \
+| sed "s|sha256:|$D/blobs/sha256/|" \
+| xargs jq '.predicate.buildDefinition.externalParameters.request.args'
+```
+Also assert on the **image config** (`config.Env`, `config.Labels`, and `history`) — that leak is
+mode-independent (R0b). **Print key names and value LENGTHS only.**
+
+0.1b **Determine the release's actual provenance mode (the question R0 re-pointed to).** Since min
+provably excludes args yet the published attestation has them, find out what the release emits and
+why — `build-push-action`'s push default, a builder-version difference, or an inherited setting.
+This decides whether pinning `mode=min` is even load-bearing, and it belongs in ADR-172.
 0.2 **Pin the extractor.** Recursive descent visits every nesting depth and `imagetools` wraps
 provenance per-platform, so a key appears more than once — dedupe is required, and `null` renders as
 `"null"` (`value_len=4`), which must be an explicit case rather than a silent 4:
@@ -367,10 +393,24 @@ provenance per-platform, so a key appears more than once — dedupe is required,
 ```
 The earlier draft's success condition ("recovers all 11 keys") would not have read 11.
 0.3 **Re-probe live scope** — `GET https://jikigai-eu.sentry.io/api/0/` → `.auth.scopes`.
-0.4 **Verify the mount contract.** (i) `required=true` honoured by the built-in frontend with no
-`# syntax=` directive — note `env=` genuinely needs Dockerfile v1.10+, so the **file form is
-mandatory** here; (ii) a local build with `--secret id=sentry_auth_token,src=/dev/null` succeeds.
-Record both answers **into ADR-172**, or they land nowhere durable.
+0.4 **Mount contract — ALREADY MEASURED (BuildKit v0.31.2, built-in frontend, no `# syntax=`).**
+`required` is valid and defaults to **`false`**; with it omitted and no `--secret`, the mount is
+absent entirely (`/run/secrets/` does not exist) and the build silently succeeds — which is exactly
+the silent-skip this plan must avoid, and confirms `required=true` is the right call. With
+`required=true` and no `--secret`: `failed to solve: secret X: not found`. Defaults measured:
+target `/run/secrets/<id>`, mode `0400`, owner `0:0`. **`--secret id=X,src=/dev/null` DOES satisfy
+`required=true`** (materializes a present-but-empty 0-byte file), so local builds work.
+
+**The gap this exposes:** `required=true` proves *presence*, never *non-emptiness* — an empty
+`src=/dev/null` or an empty `env=VAR` both pass. Combined with `next.config.ts`'s
+`silent: !process.env.CI`, a blank token in CI would still skip source-map upload without a word.
+**Phase 3.1 must therefore add an explicit `[ -s /run/secrets/sentry_auth_token ]` check** — that,
+not `required=true`, is what makes the failure loud.
+
+Retained for /work: confirm the same defaults on the **release runner's** BuildKit version, and
+confirm the heredoc form in 3.1 behaves there. Note `env=` genuinely needs Dockerfile frontend
+v1.10+, so the **file form is mandatory** with no `# syntax=` directive. Record the measured answers
+**into ADR-172**, or they land nowhere durable.
 0.5 **Decide token topology now, before Phase 3 commits a secret name.** Deferring this to rotation
 (as the earlier draft did) means Phase 3 merges one name and Phase 7 changes it, requiring a second
 workflow edit. Measured requirements: `apply-sentry-infra.yml` drives the Sentry Terraform provider
@@ -454,16 +494,28 @@ prefix; unparseable input; either positive control missing. GREEN: allowlisted k
 
 3.1 Delete `ARG SENTRY_AUTH_TOKEN`. Convert the build step:
 ```dockerfile
-RUN --mount=type=secret,id=sentry_auth_token,required=true \
-    SENTRY_AUTH_TOKEN="$(cat /run/secrets/sentry_auth_token)" \
-    npm run build
+RUN --mount=type=secret,id=sentry_auth_token,required=true <<'SH'
+set -eu
+# required=true proves PRESENCE, not non-emptiness: an empty src=/dev/null or an
+# empty env=VAR both satisfy it (measured, BuildKit v0.31.2). next.config.ts runs
+# the Sentry plugin with silent:!process.env.CI, and CI is unset inside a Docker
+# build, so a blank token would skip source-map upload without a word. This test
+# is what makes that loud — required=true alone does not.
+[ -s /run/secrets/sentry_auth_token ] || { echo "sentry_auth_token is empty" >&2; exit 1; }
+SENTRY_AUTH_TOKEN="$(cat /run/secrets/sentry_auth_token)" npm run build
+SH
 ```
 No `|| true`, no CI branch. **The builder stage has no CI signal to branch on** — `CI` is not set
-inside a Docker build, and `BUILD_SHA`/`BUILD_VERSION` are declared in the *runner* stage. Worse,
-`next.config.ts` reads `silent: !process.env.CI`, so the Sentry plugin already runs silent during
-every release build — an empty token would vanish without trace. `required=true` makes a plumbing
-regression fail everywhere, immediately. Local builds pass
-`--secret id=sentry_auth_token,src=/dev/null`; document that flag in the comment.
+inside a Docker build, and `BUILD_SHA`/`BUILD_VERSION` are declared in the *runner* stage.
+
+**Local builds must therefore pass a non-empty dummy, NOT `/dev/null`** — e.g.
+`--secret id=sentry_auth_token,env=SENTRY_AUTH_TOKEN` with any placeholder value, or a one-line
+file. This is a correction to the earlier draft, which prescribed `src=/dev/null`: that satisfies
+`required=true` but fails the non-emptiness test, so it would break every local build. Document the
+working flag in the stage comment.
+
+Verify at 0.4-(i) that the heredoc form and the `set -eu` interact as expected on the release
+runner's BuildKit; a single-line `&&` chain is an acceptable fallback if heredoc support is in doubt.
 3.2 **Check `RUN npm run build:server`** (a second builder-stage build invocation) — confirm it does
 not need the token, or it silently loses what the ambient `ARG` was giving it.
 3.3 Note in the comment that removing the `ARG` also removes the token from the layer **cache key**
@@ -608,9 +660,19 @@ Commands are parses or anchored greps, never text ranges — the file legitimate
 23. Token topology is as decided in 0.5: `SENTRY_RELEASE_TOKEN` scope is a **strict subset** of
     `{event:read, org:read, project:admin, alerts:*, project:*}` with `project:admin ∉` and
     `alerts:* ∉`; all Phase 1.6 consumers verified by assertion; holding key deleted.
-24. Historical-attestation deletion attempted with a **named command**, and the outcome recorded —
-    deleting a provenance attestation means deleting the `sha256-<digest>.att` referrer tag, which
-    needs `delete:packages`; if the available token lacks it, that is the recorded outcome.
+24. Historical-attestation deletion: the **`.att`-tag premise is false and must not be carried into
+    /work.** `sha256-<digest>.att` is the **cosign** convention; buildx does not use it. Verified
+    against a pushed attested image — the tag list contained no `.att` entry, and the attestation
+    lives *inside the image index* as a child manifest annotated
+    `vnd.docker.reference.type=attestation-manifest` (platform `unknown/unknown`). So there is **no
+    standalone referrer tag to delete**: removing the attestation means rebuilding and re-pushing the
+    index with `--provenance=false`, which orphans the old index as an untagged package version that
+    can then be deleted via
+    `gh api -X DELETE /orgs/{org}/packages/container/{pkg}/versions/{id}`. That endpoint needs a
+    **classic PAT with BOTH `read:packages` and `delete:packages`** — and a **GitHub App installation
+    token will not work**, both because the endpoint documents only classic-PAT scopes and because
+    GHCR does not currently accept App installation tokens at all. Record the attempt and its
+    outcome; "immutable in practice" remains an acceptable, recordable result.
 25. Art. 33(5) note committed with all elements incl. the flip conditions; PA-8 §(g) amended; Active
     Item added; **no new PA minted**; considered-and-declined disclosure recorded.
 
@@ -621,7 +683,7 @@ Commands are parses or anchored greps, never text ranges — the file legitimate
   across two documents.
 - **R2 — The gate decays into fail-always.** *Mitigation:* value-layer positive controls, not
   key-shaped ones; plus the break-glass.
-- **R3 — BuildKit image floats.** `setup-buildx-action` has no `driver-opts: image=moby/buildkit:vX`,
+- **R3 — BuildKit image floats.** Confirmed: `setup-buildx-action` has no `driver-opts: image=moby/buildkit:vX`,
   and there is no dependabot, so the one component emitting the provenance can change with no commit
   here. *Mitigation:* pin the BuildKit image in Phase 3.4 and record it in ADR-172, so a shape change
   arrives as a reviewable bump rather than a surprise release outage.
@@ -639,6 +701,20 @@ Commands are parses or anchored greps, never text ranges — the file legitimate
 
 ## Sharp Edges
 
+- **`mode=min` genuinely excludes build-args — so a min-mode canary proves nothing.** The A/B's
+  load-bearing arm is `mode=max`. And because min excludes them, the published attestation having
+  them means the release is not emitting min; find out what it *is* emitting (0.1b).
+- **The stock `docker` driver cannot do this at all** — it rejects both attestations and OCI export.
+  A `docker-container` builder is a precondition, not a detail.
+- **The OCI tarball index is nested** (`index.json` → image index → attestation manifest). A recipe
+  reading `index.json`'s manifests directly finds nothing and reads as "no attestation".
+- **`.Image`/`.Provenance` shape depends on platform count** — `.config.Env` returns `null` on a
+  multi-platform ref, which a naive gate reads as clean. Inspect the index digest, never a child
+  platform digest (the latter returns `.Provenance == {}`).
+- **`required=true` proves presence, never non-emptiness.** `src=/dev/null` and an empty `env=VAR`
+  both satisfy it. The `[ -s ]` test is the actual control.
+- **`.att` tags are cosign, not buildx.** There is no standalone attestation tag on a buildx image to
+  delete, and GHCR does not accept GitHub App installation tokens.
 - **A prefix-only allowlist re-opens the class.** `BUILD_DEPLOY_TOKEN` and `NEXT_PUBLIC_SECRET_KEY`
   both pass `^BUILD_`/`^NEXT_PUBLIC_`. The allowlist must be a conjunction with the credential-shape
   regex. Verified by execution, not inspection.

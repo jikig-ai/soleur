@@ -8,15 +8,20 @@ lengths only. Fixtures are synthesized with non-alphanumeric placeholder wrapper
 
 ## Phase 0 — Measure and decide topology (no code)
 
-- [ ] 0.1 Local A/B canary build (`--provenance=mode=min` vs `mode=max`, `--build-arg CANARY=<<synthetic>>`,
-      `--output type=oci`). Inspect both attestations. Needs no registry credential — the GHCR read
-      PAT is revoked. Record key names + value LENGTHS only.
+- [ ] 0.1 Local A/B canary — **create a `docker-container` builder first** (stock `docker` driver
+      rejects both attestations and OCI export). **`mode=max` is the load-bearing arm**; min excludes
+      build-args by design, so a min-only canary passes unconditionally. Extraction must traverse the
+      NESTED index (`index.json` -> image index -> attestation manifest). Also assert on image config
+      (`config.Env`, `config.Labels`, `history`) — that leak is mode-independent. Key names + LENGTHS only.
+- [ ] 0.1b Determine what provenance mode the RELEASE actually emits (min provably excludes args, yet
+      the published attestation has them). Record in ADR-172.
 - [ ] 0.2 Pin the extractor; dedupe with `unique_by(.key)` (recursive descent double-counts across
       nesting depths) and make the `null` → `"null"` case explicit rather than a silent `value_len=4`.
 - [ ] 0.3 Re-probe live scope: `GET https://jikigai-eu.sentry.io/api/0/` → `.auth.scopes`.
-- [ ] 0.4 Verify mount contract: `required=true` honoured with no `# syntax=` directive (the `env=`
-      form needs Dockerfile v1.10+, so the file form is mandatory); local build with
-      `--secret id=sentry_auth_token,src=/dev/null` succeeds. Record answers into ADR-172.
+- [ ] 0.4 Mount contract MEASURED: `required` defaults to false; target `/run/secrets/<id>`, mode 0400,
+      owner 0:0. `required=true` proves PRESENCE not non-emptiness (`src=/dev/null` and empty `env=`
+      both pass) -> Phase 3.1 must add `[ -s /run/secrets/... ]`. **Local builds pass a NON-EMPTY dummy,
+      not /dev/null.** Confirm on the release runner's BuildKit. Record into ADR-172.
 - [ ] 0.5 **Decide token topology before any secret name is committed.** Split:
       `SENTRY_RELEASE_TOKEN` `[project:releases, org:read]` for the release build + `deploy-docs.yml`;
       `SENTRY_IAC_AUTH_TOKEN` at measured minimum for the Terraform/audit/sweeper/cron consumers.
@@ -61,10 +66,12 @@ lengths only. Fixtures are synthesized with non-alphanumeric placeholder wrapper
       `|| true`, no CI branch (the builder stage has no CI signal; `next.config.ts` already runs the
       Sentry plugin silent because `CI` is unset in a Docker build).
 - [ ] 3.2 Check `RUN npm run build:server` does not also need the token.
-- [ ] 3.3 Comment: local-build flag `--secret …,src=/dev/null`; cache-key consequence; why the mount
+- [ ] 3.3 Comment: local-build flag uses a **NON-EMPTY dummy** (`--secret id=sentry_auth_token,env=…`),
+      NOT `src=/dev/null` — /dev/null satisfies `required=true` but fails the `[ -s ]` test and would
+      break every local build; cache-key consequence; why the mount
       not the ARG.
 - [ ] 3.4 Workflow: remove build-arg; `secrets: | sentry_auth_token=${{ secrets.SENTRY_RELEASE_TOKEN }}`;
-      pin `provenance: mode=min` **by value**; pin the BuildKit image via `driver-opts`; annotate
+      pin `provenance: mode=min` **by value**; pin the BuildKit image via `driver-opts: image=moby/buildkit:v0.32.2` (action default `buildx-stable-1` is v0.31.2); annotate
       `BUILD_SHA` as the positive control.
 - [ ] 3.5 Rewrite the false-safety comment from the 0.1 measurement (two distinct `mode=min`s;
       stage-scoping confined to the gha cache; point at the scanner).
@@ -79,8 +86,10 @@ lengths only. Fixtures are synthesized with non-alphanumeric placeholder wrapper
       expression**; assert any `push: true` build-push-action workflow invokes the gate; non-empty
       assertion per glob set).
 - [ ] 4.3 `--provenance` mode: value-scan first (exit-status only); deny-by-default over the whole
-      request-attribute map; **two fetches** (`.Provenance` and `.Image`) with **two positive
-      controls** (`build-arg:BUILD_SHA`, and `BUILD_SHA` in `.config.Env`).
+      request-attribute map; **two fetches** (`.Provenance` and `.Image`) with **two positive controls**.
+      jq MUST be platform-agnostic (`if has("config") then . else .[] end` / `if has("SLSA") ...`) —
+      `.config.Env` returns null on multi-platform refs and reads as clean. Inspect the INDEX digest,
+      never a child platform digest (returns `.Provenance == {}`). Scan image-config `history` too.
 - [ ] 4.4 Emit three-valued `verdict` (`clean` / `could-not-inspect` / `violation`).
 - [ ] 4.5 Wire the source sweep as a **pre-`docker_build`** step in the release job.
 - [ ] 4.6 Wire the attestation gate **between `docker_build` and `Install cosign`**.
