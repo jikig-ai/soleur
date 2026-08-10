@@ -49,9 +49,11 @@ interrupted deepen pass is recoverable and a finished one leaves nothing behind 
 # Frontmatter-bounded, always. The leading-`---` guard is load-bearing: the sed range matches the
 # FIRST `---` anywhere in the file, so a document with no leading frontmatter but an embedded
 # fenced YAML example would have that example mis-parsed as metadata (#4724).
-[[ -f "$PLAN" && "$(head -n 1 "$PLAN")" == "---" ]] || CURSOR=""
-CURSOR=$(sed -n '/^---$/,/^---$/{ /^pipeline_resume:/{ s/.*: *//; p; q; } }' "$PLAN")
-ATTEMPTS=$(sed -n '/^---$/,/^---$/{ /^resume_attempts:/{ s/.*: *//; p; q; } }' "$PLAN")
+CURSOR=""; ATTEMPTS=""
+if [[ -f "$PLAN" && "$(head -n 1 "$PLAN")" == "---" ]]; then
+  CURSOR=$(sed -n '/^---$/,/^---$/{ /^pipeline_resume:/{ s/.*: *//; p; q; } }' "$PLAN")
+  ATTEMPTS=$(sed -n '/^---$/,/^---$/{ /^resume_attempts:/{ s/.*: *//; p; q; } }' "$PLAN")
+fi
 ```
 
 - **Cursor absent** — a normal entry. Add `pipeline_resume: deepening` and `resume_attempts: 0` to

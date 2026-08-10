@@ -30,6 +30,10 @@ const PLAN_SKILL = resolve(SKILLS, "plan/SKILL.md");
 const ONE_SHOT_SKILL = resolve(SKILLS, "one-shot/SKILL.md");
 const DEEPEN_PLAN_SKILL = resolve(SKILLS, "deepen-plan/SKILL.md");
 const FIXTURE = resolve(import.meta.dir, "fixtures/plan-cursor-body-collision.md");
+/** Positive control: the cursor really is in the frontmatter. */
+const FIXTURE_WITH_CURSOR = resolve(import.meta.dir, "fixtures/plan-cursor-frontmatter-set.md");
+/** No leading `---` at all, but a fenced example containing one (#4724). */
+const FIXTURE_NO_FRONTMATTER = resolve(import.meta.dir, "fixtures/plan-cursor-no-frontmatter.md");
 
 const read = (p: string) => readFileSync(p, "utf8");
 
@@ -209,4 +213,63 @@ describe("plan skeleton checkpoint — frontmatter-bounded parsing (regression)"
     // range would latch onto the first `---` anywhere in the document (#4724).
     expect(boundedRead(ONE_SHOT_SKILL, "pipeline_resume")).toBe("");
   });
+});
+
+/**
+ * Grepping for the reader's SHAPE is not enough, and this suite exists because that gap shipped:
+ * the first version of these skills prescribed
+ *
+ *     [[ -f "$PLAN" && "$(head -n 1 "$PLAN")" == "---" ]] || CURSOR=""
+ *     CURSOR=$(sed -n ... "$PLAN")
+ *
+ * where the guard assigns `CURSOR=""` and the very next line unconditionally overwrites it. The
+ * guard could never change the outcome, so #4724 was reintroduced verbatim — and every
+ * shape-matching assertion above passed, because both `head -n 1` and the sed range were present.
+ *
+ * So EXECUTE the snippet the skills actually prescribe, against inputs whose correct answers
+ * differ. A drift guard has to mirror what the prescribed code does, not what it looks like.
+ */
+describe("plan skeleton checkpoint — the PRESCRIBED reader is executed, not just matched", () => {
+  /** Pull the fenced bash block that reads the cursor out of a SKILL.md. */
+  function extractReaderSnippet(skillPath: string): string {
+    const blocks = read(skillPath).match(/```bash\n([\s\S]*?)```/g) ?? [];
+    const block = blocks.find(
+      (b) => b.includes("pipeline_resume:") && b.includes("sed -n"),
+    );
+    if (!block) throw new Error(`no cursor-reader bash block found in ${skillPath}`);
+    return block
+      .replace(/^```bash\n/, "")
+      .replace(/```$/, "")
+      // The skills open the block with a placeholder assignment for the operator to fill in.
+      .replace(/^\s*PLAN=.*$/m, "");
+  }
+
+  /** Run the extracted snippet against a plan file and report what it read. */
+  function runPrescribedReader(skillPath: string, planFile: string): string {
+    const script = `set -uo pipefail\nPLAN="$1"\n${extractReaderSnippet(skillPath)}\nprintf '%s' "\${CURSOR-}"`;
+    return execFileSync("bash", ["-c", script, "bash", planFile], { encoding: "utf8" }).trim();
+  }
+
+  for (const [name, path] of [
+    ["plan", PLAN_SKILL],
+    ["one-shot", ONE_SHOT_SKILL],
+    ["deepen-plan", DEEPEN_PLAN_SKILL],
+  ] as const) {
+    describe(`${name}/SKILL.md`, () => {
+      test("reads a real frontmatter cursor (positive control — the reader works at all)", () => {
+        // Without this, every assertion below could pass against a reader that always returns "".
+        expect(runPrescribedReader(path, FIXTURE_WITH_CURSOR)).toBe("gates");
+      });
+
+      test("ignores a column-0 cursor in the BODY of a document that has frontmatter", () => {
+        expect(runPrescribedReader(path, FIXTURE)).toBe("");
+      });
+
+      test("ignores an embedded fenced cursor when the file has NO leading frontmatter (#4724)", () => {
+        // This is the case the inert guard broke: the sed range latches onto the first `---`
+        // anywhere in the file, so a doc with no frontmatter mis-parses its own example.
+        expect(runPrescribedReader(path, FIXTURE_NO_FRONTMATTER)).toBe("");
+      });
+    });
+  }
 });

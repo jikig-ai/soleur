@@ -195,8 +195,10 @@ matches the FIRST `---` anywhere in the file, so a document with no leading fron
 embedded fenced YAML example would have that example mis-parsed as metadata (#4724).
 
 ```bash
-[[ -f "$PLAN" && "$(head -n 1 "$PLAN")" == "---" ]] || CURSOR=""
-CURSOR=$(sed -n '/^---$/,/^---$/{ /^pipeline_resume:/{ s/.*: *//; p; q; } }' "$PLAN")
+CURSOR=""
+if [[ -f "$PLAN" && "$(head -n 1 "$PLAN")" == "---" ]]; then
+  CURSOR=$(sed -n '/^---$/,/^---$/{ /^pipeline_resume:/{ s/.*: *//; p; q; } }' "$PLAN")
+fi
 ```
 
 Never use a line-anchored `awk`/`grep` scan for this key: any plan that *documents* the mechanism

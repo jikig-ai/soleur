@@ -80,10 +80,11 @@ PLAN="<the plan file selected for this branch — see Phase 0.7 step 3 for the s
 # /^---$/,/^---$/ matches the FIRST `---` anywhere in the file, so a document with no leading
 # frontmatter but an embedded fenced YAML example would have that example mis-parsed as
 # metadata (#4724, .github/workflows/review-reminder.yml).
-[[ -f "$PLAN" && "$(head -n 1 "$PLAN")" == "---" ]] || CURSOR=""
-
-CURSOR=$(sed -n '/^---$/,/^---$/{ /^pipeline_resume:/{ s/.*: *//; p; q; } }' "$PLAN")
-ATTEMPTS=$(sed -n '/^---$/,/^---$/{ /^resume_attempts:/{ s/.*: *//; p; q; } }' "$PLAN")
+CURSOR=""; ATTEMPTS=""
+if [[ -f "$PLAN" && "$(head -n 1 "$PLAN")" == "---" ]]; then
+  CURSOR=$(sed -n '/^---$/,/^---$/{ /^pipeline_resume:/{ s/.*: *//; p; q; } }' "$PLAN")
+  ATTEMPTS=$(sed -n '/^---$/,/^---$/{ /^resume_attempts:/{ s/.*: *//; p; q; } }' "$PLAN")
+fi
 ```
 
 **Never** use the line-anchored `gsub` awk form (§Sharp Edges) for these keys. That form is
