@@ -123,7 +123,29 @@ if ! LC_ALL=C.UTF-8 grep -qiE "$SOAK_RE" "$CORPUS" 2>/dev/null && ! grep -qiE "$
 fi
 
 # Extract referenced trackers and verify sweeper enrollment.
-REFS=$(grep -oiE '(Ref|Tracks|Closes|Fixes)[[:space:]]+#[0-9]+' "$CORPUS" | grep -oE '[0-9]+' | sort -u)
+#
+# `Ref` / `Tracks` ONLY — deliberately NOT `Closes` / `Fixes`. An issue the PR CLOSES is the
+# work item, not a soak tracker: it stops existing at merge, so "enrol it in the sweeper" is
+# both unsatisfiable and meaningless (the sweeper skips non-OPEN issues, and the issue is OPEN
+# only until the squash lands). Including the closing keywords made every PR that closes an
+# issue AND declares a soak unshippable — the gate demanded enrollment for the one issue that
+# can never need it, while the genuine soak trackers beside it were correctly enrolled.
+#
+# The deadlock this produced is the reason it is fixed rather than overridden: documented
+# escape (c) is "add <!-- gate-override: … --> to the PR body", but adding it requires
+# `gh pr edit`, and an agent naturally chains that with `gh pr ready` — which this hook's own
+# matcher then denies as a single tool call, taking the edit down with it. So the escape is
+# reachable only by knowing to issue the edit in isolation. A gate whose documented escape is
+# that easy to miss trains its readers to reach for the env-var bypass instead.
+#
+# **Why:** #7278 / PR #7343 — flagged #7278 (the PR's own `Closes` target) while #7339 and
+# #7340, the actual soak trackers, carried label + directive + committed probe.
+# `|| true` because ZERO refs is a NORMAL answer, not an error: a PR that declares a soak but
+# cites no tracker must reach the loop below (which then finds nothing to check) rather than
+# die here. grep exits 1 on no-match, and under `set -e` that would abort the hook mid-gate —
+# a gate that crashes is indistinguishable from one that passed. Caught by
+# scripts/lint-shell-capture-exit.py once the edit above moved this line off its baselined entry.
+REFS=$(grep -oiE '(Ref|Tracks)[[:space:]]+#[0-9]+' "$CORPUS" | grep -oE '[0-9]+' | sort -u || true)
 UNENROLLED=()
 for n in $REFS; do
   state=$(gh issue view "$n" --json state --jq .state 2>/dev/null || echo "")
