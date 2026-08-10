@@ -83,6 +83,10 @@ ADR: **ADR-144** (provisional; re-verify at ship — ADR-173 is triple-claimed o
 - [ ] 3.6 Do **not** introduce "checkpoint"-as-durable-state prose into this file — `:210` already
       uses the word to mean the opposite.
 - [ ] 3.7 Confirm `one-shot` never names the tokens `research|drafting|gates|finalize`.
+- [ ] 3.8 Add the `Recovery verdict:` line to the `## Plan Phase` block of session-state.md —
+      `<resume|complete|undetermined|legacy> (cursor=<x>, attempts=<n>, selector=<branch|date-glob>)`.
+      This is the plan's `## Observability` `liveness_signal`; without it a mis-resume is invisible
+      and the only operator symptom is a double-billed run.
 
 ## Phase 4 — `deepen-plan`, templates reference, ADR
 
@@ -121,3 +125,11 @@ ADR: **ADR-144** (provisional; re-verify at ship — ADR-173 is triple-claimed o
       deletion-at-finalization; file only if 6.2 lands).
 - [ ] 6.4 Triage #4133 — its criteria appear already satisfied by
       `plugins/soleur/test/observability-schema-parity.test.ts`.
+- [ ] 6.5 **Observability gate-definition mismatch** (found during this deepen pass). `plan/SKILL.md`
+      §2.9 triggers only on code-class paths under `apps/*/server|src|infra` or `plugins/*/scripts/`,
+      so a `plugins/*/skills/**/SKILL.md`-only plan reads as "no Observability section needed".
+      `deepen-plan/SKILL.md` §4.7 Step 1 skips only when *every* path matches its pure-docs list,
+      which explicitly excludes `.md` inside `plugins/*/skills/` — so the same plan reads as
+      "section required" and HALTs. The two gates disagree on exactly the prompt-only change class.
+      This plan resolves it by supplying the section (correct under layer 7), but the definitions
+      should be reconciled so the answer does not depend on which gate runs.

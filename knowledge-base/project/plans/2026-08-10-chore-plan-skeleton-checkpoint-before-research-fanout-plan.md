@@ -23,6 +23,32 @@ plan_revision: v2
 > (different carrier key, bounded parsing, resume bounding, gate re-run) and are recorded in
 > §Review Revisions.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-10 · **Revision:** v2 (post 6-agent panel) + deepen pass
+
+**Halt gates run:** 4.5 network-outage (no trigger), 4.55 downtime/cutover (no serving surface),
+4.6 user-brand impact (**pass** — section present, threshold `aggregate pattern`, no sensitive path),
+4.7 observability (**applied** — section added, see below), 4.8 PAT-shaped (**pass** — no matches),
+4.9 UI wireframe (**pass** — 0 UI globs in Files sections; the 2 whole-file hits were this plan's own
+prose *stating* the absence, the same self-reference class as R2), 4.10 encryption posture
+(**pass** — no store or connection).
+
+**Added by the deepen pass:**
+
+1. **`## Observability` section + AC12 + task 3.8.** §4.7's skip-list does not exempt `.md` inside
+   `plugins/*/skills/`, so the gate applies. Supplying it was the right call independently: it closes
+   the debuggability gap review raised — a mis-resume was otherwise indistinguishable from a normal
+   run, with a double-billed pipeline as the operator's only symptom.
+2. **Follow-up 6.5 — a gate-definition mismatch.** `plan` §2.9 and `deepen-plan` §4.7 disagree on
+   whether a prompt-only change needs an Observability section. Recorded rather than papered over.
+
+**Verified during the pass (not asserted):** every cited AGENTS rule ID is active and none appears in
+`scripts/retired-rule-ids.txt`; every cited issue/PR (#7418, #7349, #7416, #4133, #7247, #3625,
+#4116) resolves and #7247 matches its usage in `one-shot/SKILL.md:97`; every `knowledge-base/` path
+resolves; ADR-144 is free on `origin/main` (ADR-173 is triple-claimed); the unbounded frontmatter
+reader returns empty against this file (the R2 regression fixture).
+
 ## Overview
 
 `soleur:plan` spends its most expensive stretch — a multi-agent research fan-out plus domain-leader
@@ -337,6 +363,47 @@ Rationale: a mis-resume is bounded (D5), reversible and non-disclosing. The bran
 if the resume logic is systematically wrong across runs — an aggregate pattern, not a single-user
 incident — so no per-PR CPO sign-off is added.
 
+## Observability
+
+This change ships prompt code that executes on the operator's own self-hosted CLI (observability
+layer 7), so the observable surface is the artifacts the run leaves on disk, not a server-side sink.
+The recovery verdict is deliberately recorded because a mis-resume is otherwise indistinguishable
+from a normal run — which was raised as a debuggability gap during review.
+
+```yaml
+liveness_signal:
+  what: "Recovery verdict line written to session-state.md on every plan-phase transition — `Recovery verdict: <resume|complete|undetermined|legacy> (cursor=<x>, attempts=<n>, selector=<branch|date-glob>)`"
+  cadence: "once per one-shot plan phase, plus once per resume attempt"
+  alert_target: "operator-read artifact committed with the branch; no paging surface exists for a local CLI workflow, and inventing one would be theatre"
+  configured_in: "plugins/soleur/skills/one-shot/SKILL.md — the `## Plan Phase` block that already writes session-state.md"
+
+error_reporting:
+  destination: "session-state.md (verdict + reason) and the plan body (halt/cap reason); an `action-required` GitHub issue on cap-trip"
+  fail_loud: "yes — a cap-trip deletes the cursor, records the reason, and files the issue rather than looping silently"
+
+failure_modes:
+  - mode: "resume loop — the same phase re-stalls repeatedly"
+    detection: "`resume_attempts` in plan frontmatter exceeds 1, or the cursor fails to strictly advance between attempts"
+    alert_route: "cap trips at 2 -> cursor deleted, reason written, `action-required` issue filed"
+  - mode: "stub plan advanced to /work"
+    detection: "D4's conjunctive test — cursor absent but the positive section assertion fails"
+    alert_route: "Undetermined arm -> full re-run; never advances"
+  - mode: "cursor leaked into a finished plan"
+    detection: "cursor present while the positive section assertion passes"
+    alert_route: "Undetermined arm -> full re-run (not an infinite resume)"
+  - mode: "skeleton written outside the worktree, or lost before commit"
+    detection: "selector finds no plan whose frontmatter `branch:` matches the current branch"
+    alert_route: "date-glob fallback, then the existing full re-run path"
+
+logs:
+  where: "knowledge-base/project/specs/<branch>/session-state.md, committed with the branch"
+  retention: "repo history — permanent"
+
+discoverability_test:
+  command: "grep -A6 '^## Plan Phase' knowledge-base/project/specs/$(git branch --show-current)/session-state.md"
+  expected_output: "a `Recovery verdict:` line naming one of resume|complete|undetermined|legacy, with the cursor value, attempt count and selector used"
+```
+
 ## Domain Review
 
 **Domains relevant:** Engineering
@@ -544,7 +611,11 @@ Contract test, sibling assertions, full suite.
     itself in CI, not by a one-off manual demo).
 11. **AC11 — ADR exists and is wired.** `ADR-144-*.md` exists with `status: accepted`, an
     `amends: [ADR-015]` edge, and citations to ADR-032/121/126/089/026/151/083/132.
-12. **AC12 — Full suite green.** `bash scripts/test-all.sh` passes, and
+12. **AC12 — Recovery verdict is recorded.** `one-shot/SKILL.md`'s `## Plan Phase` block writes a
+    `Recovery verdict:` line naming the verdict, the cursor value, `resume_attempts` and the selector
+    used. Without it a mis-resume is indistinguishable from a normal run, and the operator's only
+    symptom is a double-billed pipeline.
+13. **AC13 — Full suite green.** `bash scripts/test-all.sh` passes, and
     `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` passes over all
     changed docs (each gate's own invocation, not a reconstruction).
 
