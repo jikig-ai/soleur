@@ -11,6 +11,59 @@ requires_cpo_signoff: true
 
 # Legal-corpus defects — dead guards, self-contradictions, and published-mirror under-disclosure (#7349)
 
+<!-- iac-routing-ack: plan-phase-2-8-reviewed -->
+<!--
+Phase 2.8 (Infrastructure-as-Code Routing Gate) reviewed and does not apply. This plan
+provisions no infrastructure: no server, systemd unit, cron job, vendor account, DNS record,
+TLS cert, secret, firewall rule, or monitoring webhook. Every edit is a markdown document, a
+TypeScript literal, a shell gate script, or a knowledge-base record. The only "operator" steps
+named are CLO legal rulings and CPO sign-off — human judgement calls that no IaC mechanism can
+or should execute. No .tf file is touched and no apply is triggered.
+-->
+
+
+## Enhancement Summary
+
+**Deepened on:** 2026-08-10
+**Mandatory halts:** 4.6 User-Brand Impact — PASS (section present, threshold valid).
+4.7 Observability — PASS (all five fields present and non-empty; `discoverability_test.command`
+contains no `ssh`). 4.8 PAT-shaped variables — PASS (no matches). 4.9 UI wireframe — not
+triggered (no UI-surface file; `.md`/`.ts`/`.sh` only). 4.10 Encryption Posture — not triggered
+(no store, no new cross-component connection). 4.5 Network-outage — not triggered.
+2.8 IaC routing — reviewed and acked (no infrastructure).
+
+### Key improvements from review
+
+1. **CPO sign-off granted, conditional on four corrections — all folded in.**
+2. **A wrong figure withdrawn.** The plan claimed the `TC_VERSION` bump would interrupt "every
+   tester". Measured: the sole tester is on the self-hosted CLI and never traverses
+   `/accept-terms`. **Real-user blast radius is zero.** The overstated cost was itself a risk — it
+   is the kind of number later cited to justify deferring a legal fix.
+3. **"Tier 1 ⇒ bump" was wrong.** Tier 2 also bumps (PATCH), so this PR bumps regardless of how
+   the CLO grades individual items. The "time the bump separately" option never existed.
+4. **`gdpr-policy` carved back into scope (C3).** Deferring it wholly was self-contradictory — it
+   was already in `Files to Edit` for B4 and E5 — and its canonical-only Art. 6(1) lawful-basis
+   bullets are the *most severe* of the three verified under-disclosures. Deferring the worst
+   instance while fixing the lesser ones would reproduce this issue's own thesis defect at the
+   scope level. New Phase 3b ports them as a lockstep addition; the other ~60 lines stay deferred.
+5. **A notice channel with no re-notice path (M1).** The bump is the only re-notice mechanism and
+   it structurally cannot reach the one cohort that exists. New AC35 + a standing runbook step.
+6. **E9's fix already had a house rule (AC37).** The brand guide mandates *soft floors* for
+   component counts because the live site renders exact counts from the filesystem. Updating the
+   numbers would reset the drift clock and guarantee E9 recurs; soft floors make the class extinct.
+7. **A date refresh over stale counts is the thesis defect (C4).** The roadmap's `## Current State`
+   milestone counts are 293 issues adrift. Refreshing only the date makes the section *look*
+   verified. AC11 now requires syncing the counts or leaving the date alone.
+
+### New considerations discovered
+
+- Verified independently, not inherited: the DPD mirror lacks **six** §2.3 items, not one, and the
+  published surface carries **10** dangling cross-references.
+- PA-30's re-home has wider blast radius than filed — PA-32's lawful-basis cell cites it as
+  *decisive internal precedent* for an Art. 6(1)(f) necessity argument.
+- The `engineering/ops/` sweep's 8th hit is the learning file whose own subject is this exact
+  carve-out; rewriting it would destroy the example.
+
 ## Overview
 
 #7349 consolidates eleven pre-existing defects in the legal corpus, surfaced while researching
@@ -224,25 +277,31 @@ currently do not (B2). Plus A4.
 
 ## User-Brand Impact
 
-- **If this lands broken, the user experiences:** a published Data Protection Disclosure at
-  `https://soleur.ai/pages/legal/data-protection-disclosure.html` that still fails to tell them
-  their knowledge-base file metadata, team activity feed, workspace logo, delegated prompt
-  routing, and beta-CRM record are processed at all, and still points them at five section
-  letters that do not exist in the document they are reading.
-- **If this lands broken, the user experiences (2):** a Terms & Conditions capping Jikigai's
+Ordered by determinism — the first bullet is product-triggered and 100% reproducible, and is what
+carries the threshold. The rest are real but require the user to go looking.
+
+- **If this lands broken, the user experiences (C4 — the one that needs no investigation):** they
+  are sanctioned for an acceptable-use violation and the enforcement message itself sends them to
+  a 404. `trust-tier-copy.ts` renders "See the policy at `/docs/legal/acceptable-use-policy`" and
+  the web platform serves no such path. Zero investigative effort, fully deterministic, and it
+  lands at the exact moment the user is most adversarial. **One sanctioned user, one 404, one
+  incident.**
+- **If this lands broken, the user experiences (2):** a published Data Protection Disclosure at
+  `https://soleur.ai/pages/legal/data-protection-disclosure.html` that fails to tell them their
+  knowledge-base file metadata, team activity feed, workspace logo, delegated prompt routing, and
+  beta-CRM record are processed at all, and points them at five section letters that do not exist
+  in the document they are reading.
+- **If this lands broken, the user experiences (3):** a Terms & Conditions capping Jikigai's
   liability at a fixed sum while the Disclaimer they also accepted caps it at zero — two
   simultaneously-in-force instruments giving different answers to "what am I owed if this breaks".
-- **If this lands broken, the user experiences (3):** an acceptable-use enforcement message that
-  sanctions them and links to a 404 for the policy they allegedly violated.
 - **If this leaks, the user's data is exposed via:** no new exposure vector — this plan publishes
   *disclosure of processing that already happens*. The exposure being remediated is the inverse:
   processing that occurs **without** the Art. 13/14 notice that makes it lawful to occur.
 - **Brand-survival threshold:** `single-user incident`
 
-One alpha tester or Web Platform user comparing the published notice against what the product
-demonstrably does — or one raising the Disclaimer/T&C liability conflict — is a regulatory event
-that does not require an aggregate pattern to land. CPO sign-off is required at plan time;
-`user-impact-reviewer` runs at review time.
+An Art. 13/14 transparency deficiency is established by **one** data subject's Art. 15 request;
+volume changes the fine, not the finding. CPO sign-off obtained at plan time (conditional —
+see Domain Review); `user-impact-reviewer` runs at review time.
 
 ## Proposed Solution
 
@@ -324,7 +383,12 @@ both surfaces carry that text:
 - Re-derive the DPD §2.3 item sets and the dangling cross-reference set with the commands in
   Test Scenarios, and confirm they match this plan. **If any number disagrees, stop and correct
   the plan before editing** — the plan's numbers are claims, not permissions.
-- Confirm the deferred-set drift numbers so the successor issue is filed with measured values.
+- Confirm the deferred-set drift numbers **and their character** — not just the counts (CPO C3).
+  The C table marks `privacy-policy` (58) "substantive" with no character description, and the
+  CLAs and `cookie-policy` "unclassified". **If `privacy-policy` carries an under-disclosure of
+  the same class as `gdpr-policy`'s Art. 6(1) bullets, the split decision changes** — and that
+  must be known before Phase 3, not after merge. The successor issue must require classification,
+  not merely resync.
 
 #### Phase 1 — Guards that cannot fire (A1–A4)
 
@@ -353,8 +417,15 @@ defect shipped.
 - B2: replace the struck-through `#736` row with an accurate row pointing at this PR's T&C
   enumeration artifact; refresh the stale Last-Updated dates; add a version column so
   `TC_VERSION` is tracked in the posture document at all.
-- B3: correct roadmap row 4.1 to match the file's own narrative; refresh the `## Current State`
-  date.
+- B3: correct roadmap row 4.1. Verified live: `#1439` is OPEN on the Phase 4 milestone, and the
+  correct state is **"In progress — 1 of 10"** (tester #1 onboarded 2026-08-06 on the self-hosted
+  CLI; mix is 1 Claude-Code user / 0 non-CC against #1439's `≥3 of 10 non-CC` requirement).
+  **CPO C4 — do not refresh the `## Current State` date alone.** That section's milestone counts
+  are themselves stale against the live API (Phase 4: roadmap 81/200 vs live 89/206; Post-MVP:
+  roadmap 710/1283 vs live **1003/1549** — a 293-issue drift). Refreshing the date over a stale
+  count produces a section that *looks* freshly verified and is not — this issue's thesis defect,
+  committed by the PR that fixes it. **Either sync the counts or leave the date alone.** Syncing
+  is preferred and is cheap.
 - B4: re-home PA-30 to `article-30-2-register.md` with the Art. 30(2) limbs (a processor record
   has a different required limb set than a controller record — recast, do not copy). **That
   register uses a `P-N` scheme, not `PA-N`, and its highest existing record is `P-1`** (verified
@@ -376,6 +447,16 @@ The largest and highest-value phase. Bring the published DPD into agreement with
 - Restore the truncated §2.3(i) and the §2.3 roll-call entry for `(p)`.
 - Confirm zero dangling `2.3(x)` cross-references remain **on either surface**.
 - Where PA-30's re-home changed the §2.3(ad) reference, both surfaces carry the new one.
+
+#### Phase 3b — GDPR Policy lawful-basis carve-back (CPO C3)
+
+- Port the canonical-only **Art. 6(1) lawful-basis bullets** into the published `gdpr-policy`
+  mirror as a targeted **lockstep two-surface** addition — the same technique B4 uses, which
+  passes gate 2 without a full resync. This is the most severe of the three CLO-verified
+  under-disclosures and is an Art. 13(1)(c) defect of the same class this PR exists to fix.
+- Do **not** attempt the remaining ~60 `gdpr-policy` drift lines, and do **not** add the document
+  to `BODY_EQUIVALENCE_DOCS`. Both stay with the successor issue — notably the hard-wrapped
+  scope block that trips gate 1 arm (c) (see Sharp Edges).
 
 #### Phase 4 — Published-mirror under-disclosure: AUP (C1) and the 404 (C4)
 
@@ -408,9 +489,25 @@ Sequenced last because it depends on the counterparty documents being settled.
   immediately. This is the strictest document in the PR.
 - Classify the change set per `knowledge-base/legal/tc-version-bump-policy.md`. E1, E2, E4 and E8
   read as Tier 1 (liability, forum, new sub-processor disclosure, rights scope); the rest as
-  Tier 2. **Tier 1 ⇒ `TC_VERSION` bump ⇒ every existing user is forced to re-accept on next page
-  load and live WebSocket sessions are closed on the next gated message.** That is a real
-  user-facing event and is why CPO sign-off is on this plan.
+  Tier 2. **Tier 1 *and* Tier 2 both require a bump** (Tier 2 takes PATCH) — so this PR bumps
+  regardless of how the CLO grades individual items. Only Tier 3 (cosmetic) avoids a bump, and
+  these are contradictions between statements in force, not cosmetics.
+- The bump redirects web-platform principals to `/accept-terms` on next page load and closes live
+  WebSocket sessions on the next gated message. **Measured blast radius on real users: zero** —
+  the sole alpha tester is on the self-hosted CLI and never traverses that flow (CPO §2b). Do not
+  restate this cost as "interrupts every tester"; that figure is wrong and would later be cited to
+  justify deferring a legal fix.
+- **M1 — re-notice the CLI cohort (CPO C2).** The bump is the only re-notice mechanism and it
+  cannot reach the one cohort that exists. Tester #1 got the Terms as an out-of-band email
+  paragraph and has accepted no `TC_VERSION`; E1 and E2 change exactly what they were told. Reset
+  the alpha-tester roster's `Terms` column and re-send the corrected paragraph to every tester at
+  `agreed` or `sent-awaiting-reply`, and add that step to `alpha-tester-onboarding.md` so the
+  channel has a standing re-notice path.
+- **M2 — the bump metadata is user-facing copy (CPO C2).** `TC_BUMP_METADATA.substantiveChange`
+  renders verbatim into the Art. 13(3) banner on `/accept-terms`. Per the brand guide's tone
+  spectrum for non-technical founders, a string like *"liability cap and forum-selection clause
+  reconciliation"* fails on the one screen where a user is asked to consent. Write it in plain
+  outcome language.
 - Update in lockstep: `TC_VERSION`, `TC_DOCUMENT_SHA`, all four `TC_BUMP_METADATA` fields, the
   canonical Last-Updated line, the mirror, all **three** seed scripts (per A4), and the
   `compliance-posture.md` version row (per B2).
@@ -443,7 +540,8 @@ Sequenced last because it depends on the counterparty documents being settled.
 | Approach | Why not |
 |---|---|
 | **Split the T&C amendment into its own PR** | Rejected. E1, E2, E5, E8 and E9 are **cross-document**. Fixing the counterparty in this PR while the T&C waits would leave the corpus contradictory in a *new* way for the duration — moving the contradiction, not resolving it. Cross-document contradictions must resolve atomically. |
-| **Resync all nine mirror pairs (220 lines) in this PR** | Rejected as primary scope. `gdpr-policy` (63) + `privacy-policy` (58) + CLAs (19) + `cookie-policy` (4) are a **pure copy exercise orthogonal to the contradictions**, and `gdpr-policy` carries the hard-wrapped scope-block gate-1 trap. Bundling 144 more lines of legally-operative text into an already-large CLO review degrades the review that matters most. The ratchet guarantees this PR's progress is permanent, so the split costs nothing but calendar. Successor issue filed in-PR with the 2026-09-30 target. |
+| **Resync all nine mirror pairs (220 lines) in this PR** | Rejected as primary scope. `privacy-policy` (58) + CLAs (19) + `cookie-policy` (4) are a **pure copy exercise orthogonal to the contradictions**. Bundling them into an already-large CLO review degrades the scarce resource this PR depends on. The ratchet guarantees this PR's progress is permanent, so the split costs nothing but calendar. Successor issue filed in-PR with the 2026-09-30 target. |
+| **Defer `gdpr-policy` wholly** | **Rejected on CPO review (C3).** Two reasons. (a) It is *already* in scope — `Files to Edit` lists it on both surfaces for B4 (PA-30 re-home) and E5 (controller/processor carve-out), so a "total" deferral was really a partial one presented as total. (b) Its canonical-only **Art. 6(1) lawful-basis bullets** are the most severe of the three CLO-verified under-disclosures: a published GDPR policy missing the lawful-basis enumeration is the same Art. 13(1)(c) defect class this PR exists to fix, and is the first thing a regulator asks for. Shipping an under-disclosure fix that leaves the worst verified instance live until 2026-09-30 would reintroduce this issue's own thesis defect **at the scope level**. **Carve-back:** port the Art. 6(1) bullets to the published mirror as a targeted lockstep addition (the technique Phase 2/B4 already proves passes gate 2 without a full resync). **Still deferred:** the remaining ~60 structural/cosmetic drift lines, including the hard-wrapped scope block that trips gate 1 arm (c). **Do NOT** add `gdpr-policy` to `BODY_EQUIVALENCE_DOCS` — the carve-back fixes the disclosure; the ratchet waits for the full resync. |
 | **Fix the guards' predicates only, without a reachability test** | Rejected — this is precisely the #7387 failure mode. A guard verified to detect a planted defect but never verified to *reach* its input is the same artifact-that-reads-as-coverage this issue exists to eliminate. |
 | **Make the tenant runbook own a duplicate alpha-tester procedure (D1)** | Rejected in favour of a cross-link. Two copies of an offboarding procedure is the mirror-divergence defect class this PR is fixing, reintroduced in the runbooks. |
 | **Leave `#736`'s row struck through** | Rejected. A struck-through row that names no successor is still an artifact that reads as coverage. The replacement must point at something real — hence the enumeration artifact. |
@@ -476,13 +574,44 @@ and must not be authored by the implementer:
 Concerns the five gates, the guard reachability tests, the `BODY_EQUIVALENCE_DOCS` activation and
 baseline refresh, and the gate-2 header re-point with its pinned suite assertion.
 
-### Product (CPO) — sign-off required
+### Product (CPO) — sign-off GRANTED, conditional
 
-`brand_survival_threshold: single-user incident` sets `requires_cpo_signoff: true`. The specific
-product decision is Phase 5's **forced re-acceptance**: a Tier 1 `TC_VERSION` bump redirects every
-existing user to `/accept-terms` on next page load and closes live WebSocket sessions on the next
-gated message. During an alpha with a small named cohort this is a visible interruption to every
-tester. CPO owns whether that lands with this PR or is timed.
+**Status:** reviewed. `requires_cpo_signoff: true`; sign-off granted subject to four conditions,
+all folded into this plan (C1–C4 below).
+
+**Threshold:** agreed at `single-user incident`, but carried by C4 (the enforcement-message 404),
+not by the notice-comparison argument. `## User-Brand Impact` reordered accordingly.
+
+**Forced re-acceptance — SHIP WITH THIS PR.** Two corrections to the plan's original framing:
+
+1. **"Tier 1 ⇒ bump" was wrong.** `tc-version-bump-policy.md` requires a bump for **Tier 2 as
+   well** (PATCH). The plan classifies E3/E5/E6/E7/E9 as Tier 2, so even a full CLO downgrade
+   still bumps. The real choice is *fix the T&C now or later*, and cross-document atomicity
+   already settled that. There is no "time the bump separately" option.
+2. **The blast radius is zero, not "every tester."** Measured: the cohort is **one** tester, on
+   the **self-hosted CLI plugin**. `alpha-tester-onboarding.md` states a self-hosted CLI tester
+   never passes through the platform's `accept-terms` flow. The middleware redirect and
+   `recheckTcMidSession` WebSocket close reach web-platform authenticated principals only —
+   currently the founder plus seed/QA principals. **No real user is interrupted.**
+
+   Leaving an overstated cost in the plan is itself a risk: it is exactly the figure a future
+   reader would cite to justify deferring a legal fix.
+
+**The gap this surfaced (M1) — a notice channel with no re-notice path.** The `TC_VERSION` bump is
+the only re-notice mechanism, and it cannot reach the only cohort that exists. Tester #1 received
+the Terms as an out-of-band email paragraph and has never accepted any `TC_VERSION`. E1 (liability
+cap) and E2 (forum) change precisely what that tester was told, and a bump generates **no notice
+to them at all**. This is a roadmap-level coverage gap, not a detail — see AC35.
+
+**Brand constraint on E9 (from `knowledge-base/marketing/brand-guide.md`).** The guide already
+rules on this failure mode: *numbers are soft floors in prose* ("60+ agents"), because the live
+site renders exact counts from the filesystem. **Resolving E9 by updating the numbers to today's
+values resets the drift clock and guarantees E9 recurs.** Soft floors make the class extinct.
+Routed to the CLO as a named constraint on the E9 wording. (The guide's "don't call it a plugin"
+rule carries an explicit exception for legal documents where "Plugin" is a defined term, so E3's
+scope-block sweep has no brand conflict.)
+
+**Scope split — agreed, with one mandatory carve-back (C3).** See Alternatives Considered.
 
 ### Product/UX Gate
 
@@ -598,8 +727,10 @@ discoverability_test:
       names the T&C enumeration artifact by path.
 - [ ] **AC10** — `compliance-posture.md` carries a version column and its T&C row's version equals
       `TC_VERSION`; its Last-Updated values equal the corresponding documents'.
-- [ ] **AC11** — `roadmap.md` row 4.1 is consistent with the same file's narrative; no row
-      contradicts prose in the same document.
+- [ ] **AC11** — `roadmap.md` row 4.1 reads "In progress — 1 of 10" (or equivalent) and is
+      consistent with the same file's narrative; no row contradicts prose in the same document.
+      **AND** either the `## Current State` milestone counts are synced to the live API, or the
+      section's date is left untouched — never a date refresh over stale counts.
 - [ ] **AC12** — PA-30 no longer appears in `article-30-register.md`; a processor record exists in
       `article-30-2-register.md` as **`P-2`** (that register's `P-N` scheme; `P-1` is taken) with
       the Art. 30(2) limb set, not a copied 30(1) limb set.
@@ -642,6 +773,19 @@ discoverability_test:
       `compliance-posture.md` version row are mutually consistent.
 - [ ] **AC25** — The PR body states the tier classification and its reasoning, and CLO sign-off is
       recorded.
+- [ ] **AC35** *(CPO C2 / M1)* — `alpha-tester-onboarding.md` carries a standing step: when the
+      canonical T&C changes materially, the roster's `Terms` column resets and the corrected
+      paragraph is re-sent to every tester at `agreed` or `sent-awaiting-reply`. The step is
+      executed for tester #1 in this PR.
+- [ ] **AC36** *(CPO C2 / M2)* — `TC_BUMP_METADATA.substantiveChange` is legible to a
+      non-technical founder. It renders verbatim into the Art. 13(3) banner on `/accept-terms`;
+      no clause names, no jargon. AC24 checks consistency — this checks comprehensibility.
+- [ ] **AC37** *(CPO §5b)* — E9 is resolved with **soft floors** ("60+ agents"), not refreshed
+      exact counts, per the brand guide's rule that the live site renders exact counts from the
+      filesystem. An exact count in prose resets the drift clock and guarantees E9 recurs.
+- [ ] **AC38** *(CPO C3)* — The published `gdpr-policy` mirror carries the canonical Art. 6(1)
+      lawful-basis bullets, added as a lockstep two-surface edit. `gdpr-policy` is **not** added
+      to `BODY_EQUIVALENCE_DOCS` (its remaining ~60 drift lines stay with the successor issue).
 
 #### Coverage and ratchet (D)
 
@@ -738,7 +882,9 @@ grep -rn 'engineering/ops/' --include=*.md . \
 |---|---|
 | A gate fires and the fastest fix is to weaken it | AC33 reads the diff of every gate script. The operator brief is explicit: a firing gate is signal to satisfy it. |
 | Resyncing rewrites a drifting line into a third form and trips `CONTENT CHANGED` | Direction-of-authority rule: always make the two surfaces identical, never rewrite one side. |
-| The T&C bump forces re-acceptance for the whole alpha cohort mid-alpha | CPO sign-off is a plan-time gate. Timing is CPO's call, not the implementer's. |
+| ~~The T&C bump forces re-acceptance for the whole alpha cohort mid-alpha~~ **WITHDRAWN — the figure was wrong** | Measured on CPO review: the sole tester is on the self-hosted CLI and never traverses `/accept-terms`; the bump reaches the founder plus seed/QA principals only. Blast radius on real users is **zero**. The real risk is the inverse — see the next row. |
+| The bump cannot reach the only cohort that exists, so E1/E2 change what a tester was told with no notice to them | M1: reset the roster `Terms` column, re-send the corrected paragraph, and add a standing re-notice step to `alpha-tester-onboarding.md` (AC35). |
+| A stale `## Current State` date refresh makes the roadmap *look* verified over a 293-issue count drift | CPO C4: sync the milestone counts or leave the date alone. AC11 covers both. |
 | A cross-document contradiction is fixed on one side only | AC22 walks each commit for both region markers. `git log -- A B` is a union filter and is explicitly rejected. |
 | Plan numbers are wrong and propagate into legal text | Phase 0 re-derives every number before any edit and stops on disagreement. AC34 requires added claims to trace to a source. |
 | PA-30 re-home leaves a dangling referrer on the published surface | AC13 checks both surfaces, not just the canonical. |

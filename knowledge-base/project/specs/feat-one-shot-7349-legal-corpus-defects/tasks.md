@@ -19,7 +19,11 @@ frozen drift.
       mirror 23, missing `(p)(w)(x)(y)(z)(ad)`.
 - [ ] 0.4 Re-derive the dangling `2.3(x)` set per surface. Expect canonical 0; mirror `(ad)`×1,
       `(p)`×2, `(w)`×3, `(x)`×3, `(y)`×1.
-- [ ] 0.5 Re-measure per-pair drift for all nine pairs. Expect total 220.
+- [ ] 0.5 Re-measure per-pair drift for all nine pairs. Expect total 220. **Also classify the
+      CHARACTER of the deferred set, not just the counts (CPO C3)** — `privacy-policy` (58) is
+      marked "substantive" with no description; CLAs and `cookie-policy` are unclassified. If
+      `privacy-policy` carries an under-disclosure of the same class as `gdpr-policy`'s Art. 6(1)
+      bullets, the scope split changes and must change before Phase 3.
 - [ ] 0.6 **If any number disagrees with the plan, STOP and correct the plan before editing.**
       The plan's numbers are claims, not permissions.
 - [ ] 0.7 Confirm the CLO rulings (B1 SOC 2 position, PA-30 disposition, AUP §4.6 wording, T&C
@@ -57,8 +61,12 @@ frozen drift.
       T&C enumeration artifact by path.
 - [ ] 2.3 Add a version column to `compliance-posture.md`'s document inventory and populate it;
       refresh the stale Last-Updated values (T&C, AUP, Cookie Policy, Disclaimer, both CLAs).
-- [ ] 2.4 Correct `knowledge-base/product/roadmap.md` row 4.1 to match the file's own narrative;
-      refresh the `## Current State` date.
+- [ ] 2.4 Correct `knowledge-base/product/roadmap.md` row 4.1 to **"In progress — 1 of 10"**
+      (verified: #1439 OPEN, tester #1 onboarded 2026-08-06, mix 1 CC / 0 non-CC against a
+      `≥3 of 10 non-CC` requirement).
+- [ ] 2.4b **CPO C4** — either sync the `## Current State` milestone counts to the live API
+      (Phase 4: 89/206; Post-MVP: 1003/1549 — the roadmap says 710/1283, a 293-issue drift) or
+      leave the section's date untouched. Never refresh the date over stale counts.
 - [ ] 2.5 Re-home PA-30 into `knowledge-base/legal/article-30-2-register.md` as **`P-2`** with the
       Art. 30(2) limb set. Recast the limbs; do not copy the 30(1) record.
 - [ ] 2.6 Remove PA-30 from `knowledge-base/legal/article-30-register.md`.
@@ -80,6 +88,14 @@ Never rewrite a drifting line into a third form on one side.
 - [ ] 3.6 Restore the truncated §2.3(i) and the §2.3 roll-call entry for `(p)`.
 - [ ] 3.7 Re-run the dangling-cross-reference check; expect zero on **both** surfaces.
 - [ ] 3.8 Re-run gate 2; expect a strict reduction, never `CONTENT CHANGED`.
+
+## Phase 3b — GDPR Policy lawful-basis carve-back (CPO C3)
+
+- [ ] 3b.1 Port the canonical-only Art. 6(1) lawful-basis bullets into the published
+      `gdpr-policy` mirror as a **lockstep two-surface** addition (same technique as 2.7).
+- [ ] 3b.2 Do NOT attempt the remaining ~60 `gdpr-policy` drift lines, and do NOT add the document
+      to `BODY_EQUIVALENCE_DOCS`. Both belong to the successor issue — including the hard-wrapped
+      scope block that trips gate 1 arm (c).
 
 ## Phase 4 — Published AUP under-disclosure (C1), disclaimer, and the 404 (C4)
 
@@ -116,13 +132,23 @@ Sequenced last: it depends on the counterparty documents being settled. The T&C 
 - [ ] 5.9 Fix E8 (BYOK joint vs sole controller; side letter mandatory vs optional; dangling AUP
       §5.6 cross-reference) **with** the AUP.
 - [ ] 5.10 Fix E9 (component counts) across the T&C, AUP and Privacy Policy, both surfaces.
+      **Use soft floors ("60+ agents"), not refreshed exact counts** — the brand guide's rule is
+      that the live site renders exact counts from the filesystem, so an exact count in prose
+      resets the drift clock and guarantees E9 recurs.
 - [ ] 5.11 Mirror every T&C edit exactly.
 - [ ] 5.12 Apply the CLO's tier classification. If Tier 1/2: bump `TC_VERSION`, and update in
       lockstep — `TC_DOCUMENT_SHA`, all four `TC_BUMP_METADATA` fields, the canonical Last-Updated
       line, the mirror's Last-Updated line, **all three** seed scripts, and the
       `compliance-posture.md` version row.
 - [ ] 5.13 Record the tier and its reasoning in the PR body; obtain CLO sign-off (merge-gating for
-      Tier 1/2).
+      Tier 1/2). **Tier 2 also requires a bump (PATCH)** — this PR bumps regardless of grading.
+- [ ] 5.14 **M1 (CPO C2)** — reset the alpha-tester roster's `Terms` column and re-send the
+      corrected paragraph to every tester at `agreed` or `sent-awaiting-reply`; add that as a
+      standing step in `knowledge-base/engineering/operations/runbooks/alpha-tester-onboarding.md`.
+      The bump cannot reach a self-hosted CLI tester, so without this the cohort gets no notice.
+- [ ] 5.15 **M2 (CPO C2)** — write `TC_BUMP_METADATA.substantiveChange` in plain outcome language.
+      It renders verbatim into the Art. 13(3) banner on `/accept-terms`; no clause names, no
+      jargon. Consistency is AC24; comprehensibility is AC36.
 
 ## Phase 6 — Coverage, ratchet, successor tracking (D1, D2)
 
