@@ -1,4 +1,8 @@
-# feat: three write-time gates for legal-corpus edits
+# feat: write-time gates for legal-corpus edits
+
+> **Scope as shipped:** gates 1 and 2. Gate 3 (`obligation-checklist`) is deferred to #7392
+> by operator decision D-A. The title said "three" until that decision; kept accurate here
+> rather than left to imply unshipped scope.
 
 ---
 issue: 7387
@@ -183,7 +187,7 @@ changes, so no terraform apply is needed.
 | `.github/scripts/test/test-*.sh` | auto-glob in `run-all.sh` | ⚠️ glob is automatic, but `MIN_SUITES=10` must be raised, and the job is **bash-only** (no terraform/apt/python per #6454) and checks out at **depth 1** |
 | `apps/web-platform/infra/*.test.sh` | named step in `infra-validation.yml`, derived by `run-registered-suites.sh` | ✅ via `test-infra-suite-registration.sh` |
 
-**Plan response — this decides the architecture.** Put all three gates and their suites in
+**Plan response — this decides the architecture.** Put the gates and their suites in
 repo-root `scripts/`. The orphan lint makes the issue's central failure mode — *"registration is
 the part that is silently skipped"* — **structurally impossible**: a `.test.sh` with no `run_suite`
 line reds the build automatically.
@@ -421,8 +425,10 @@ logs:
   where: GitHub Actions run logs
   retention: 90 days (repo default)
 discoverability_test:
-  command: gh run view --log --job "test-scripts" | grep -E 'lint-legal-scope-block-placement|legal-mirror-drift-baseline|obligation-checklist'
-  expected_output: all three suite labels present, each followed by its PASS line
+  command: gh run view --log --job <numeric-job-id> | grep -oE 'lint-legal-scope-block-placement|lint-legal-mirror-drift-baseline' | sort -u | wc -l
+  expected_output: 2 — both shipped gate labels present. (`gh run view --job` takes a NUMERIC
+  id, not a name. The `obligation-checklist` alternate was removed with gate 3: an alternate
+  that can never match makes the check unsatisfiable as written.)
 ```
 
 No SSH anywhere. Nothing to soak; no follow-through enrollment required (no time-gated close
@@ -739,7 +745,10 @@ advisory tier (1 row, one time), `block:` provenance (recorded, never read), and
       `grep -oE 'knowledge-base/[A-Za-z0-9/_.-]+\.md' <plan> | xargs -I{} bash -c '[[ -f "{}" ]] || echo BROKEN: {}'` → empty.
       *(The three #7372 context files are deliberately cited as `git show 2dd397542:<path>`, not as
       working-tree paths — they do not exist on main. See Premise Validation.)*
-- [ ] **AC29** PR body states the corrected attribution — **4 of 10 P1s** (P1-4, P1-5 via gate 1;
+- [ ] **AC29** PR body states the attribution for SHIPPED scope — **2 of 10 P1s** (P1-4, P1-5,
+      both via gate 1). The "4 of 10" figure elsewhere in this plan counts P1-6 and P1-9, which
+      are gate 3's, and gate 3 is deferred to #7392 — publishing 4 would credit this PR with
+      coverage it does not ship. Superseded limb retained for traceability: (P1-4, P1-5 via gate 1;
       P1-6, P1-9 via gate 3), not the issue's 6–7 claim and not this plan's own first-draft 3 — plus
       the caveat that **gate 3 detects nothing**: it executes a checklist a human authored, so its
       share is a property of whether a row was written, not of the gate (R13).
