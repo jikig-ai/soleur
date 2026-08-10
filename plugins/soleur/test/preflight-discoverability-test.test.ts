@@ -1427,6 +1427,11 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
     // /etc/resolv.conf symlinks to; without the rebind every curl probe returns
     // rc=6 — indistinguishable from the #4148 DNS-typo regression.
     expect(w).toMatch(/--ro-bind "\$RESOLV" "\$RESOLV"/);
+    // In a worktree `.git` is a FILE pointing at the git common dir under the
+    // bare repo root — outside $REPO_ROOT. Without this bind every `git` probe
+    // fails `fatal: not a git repository`, and `git` is an allowlisted verb.
+    // Soleur runs in worktrees by default, so this is the common case.
+    expect(w).toMatch(/\$\{GIT_BIND\[@\]\}/);
     // The exec must consume that same array — one source of truth for the flags,
     // so the establishment probe and the real run cannot diverge.
     const execLine = lines.find((l) => /^DT_OUT=\$\(/.test(l)) ?? "";
@@ -1467,6 +1472,22 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
     // 4. Only then does it give up — fail-closed, never unsandboxed.
     expect(body).toMatch(/SKIP: Check 10 could not establish the bwrap sandbox/);
     expect(body).toMatch(/enableWeakerNestedSandbox|nested user namespace/i);
+  });
+
+  test("F4b the git common dir is bound read-only, and only when it is outside the repo", () => {
+    const check10 = skill.match(/### Check 10:[\s\S]*?(?=^### Check \d+|^## )/m);
+    const body = check10![0];
+    // Resolve it the way git itself does — `.git/` string-concatenation is wrong
+    // in a worktree, where `.git` is a file rather than a directory.
+    expect(body).toMatch(/GIT_COMMON_DIR="\$\(git rev-parse --path-format=absolute --git-common-dir\)"/);
+    // Conditional: in a NON-worktree checkout the common dir is already inside
+    // $REPO_ROOT, and binding it again is redundant.
+    expect(body).toMatch(/if \[\[ "\$GIT_COMMON_DIR" != "\$REPO_ROOT"\/\* \]\]/);
+    // READ-ONLY — a writable bind would reopen the .git/hooks/pre-commit
+    // write-back escalation that `/soleur:ship` would then execute with the
+    // operator's real $HOME.
+    expect(body).toMatch(/GIT_BIND=\(--ro-bind "\$GIT_COMMON_DIR" "\$GIT_COMMON_DIR"\)/);
+    expect(body).not.toMatch(/GIT_BIND=\(--bind "\$GIT_COMMON_DIR"/);
   });
 
   test("F5 no unsandboxed fallback survives in Check 10", () => {

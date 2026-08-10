@@ -813,7 +813,7 @@ if [[ "$CMD" =~ (^|[[:space:]]|/)ssh([[:space:]]|$) ]]; then
 fi
 ```
 
-**Read `credentials_required` and honour a declared-credentialed probe** (ADR-172 Layer 3):
+**Read `credentials_required` and honour a declared-credentialed probe** (ADR-173 Layer 3):
 
 Some probes verify a property that has **no unauthenticated substitute** — a warehouse
 query API with no anonymous form, for instance. Before #7393 those had only two outcomes:
@@ -859,7 +859,7 @@ Note what the waiver is and is not: it is a **verification waiver**, not an exec
 bypass. The declared path never executes, so no verb reaches the sandbox. The waiver does
 genuinely span *any* verb — that is why it is counted rather than reordered.
 
-**Probe-verb allowlist** (ADR-172 Layer 2 — deny-by-default):
+**Probe-verb allowlist** (ADR-173 Layer 2 — deny-by-default):
 
 The **effective verb** is the first whitespace-delimited token of the dequoted command.
 Eleven verbs are permitted, each with ≥2 uses in the measured 632-command corpus of
@@ -947,7 +947,7 @@ control into the filesystem layer (Step 10.5).**
 The block below uses a `text` fence (not `bash`) so the skill-security-scan
 calibration suite does not flag it as `shell-spawn-c-flag`. The runtime IS a
 shell-spawn — the **load-bearing** mitigation is the bubblewrap sandbox below
-(ADR-172 Layer 1); the Step 10.4 verb allowlist, the `ssh`/`$()`/backtick
+(ADR-173 Layer 1); the Step 10.4 verb allowlist, the `ssh`/`$()`/backtick
 rejects and the 15s outer timeout are defense-in-depth. The plan-file source
 is trust-on-PR-review. See [`2026-05-20-preflight-check-10-discoverability-test-execution.md`](../../../../knowledge-base/project/learnings/best-practices/2026-05-20-preflight-check-10-discoverability-test-execution.md).
 
@@ -992,7 +992,7 @@ if [[ "$CMD" =~ (\$\(|\`|\<\(|\>\(|\;|\&\&|\|\||\||\>|\<|\&|$'\n'|\$\{?[A-Za-z_]
   exit 1
 fi
 
-# --- Sandbox construction (ADR-172 Layer 1) -------------------------------
+# --- Sandbox construction (ADR-173 Layer 1) -------------------------------
 # The flags live in ONE array so the establishment probe below and the real run
 # cannot drift apart. MOUNT ORDER IS LOAD-BEARING: bwrap applies mounts in the
 # order given and this repo lives under /home, so `--tmpfs /home` MUST precede
@@ -1007,12 +1007,26 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 # resolved target, EVERY curl probe returns rc=6 — indistinguishable from the
 # #4148 DNS-typo regression this check exists to catch.
 RESOLV="$(readlink -f /etc/resolv.conf)"
+# IN A WORKTREE, `.git` IS A FILE, NOT A DIRECTORY — it points at the git common
+# dir under the bare repo root, which is OUTSIDE $REPO_ROOT. Binding only
+# $REPO_ROOT therefore breaks every `git` probe with
+# `fatal: not a git repository`, and `git` is an allowlisted verb. Soleur's whole
+# workflow runs in worktrees, so this is the common case, not the edge case. The
+# bind stays READ-ONLY, so the `.git/hooks/pre-commit` write-back escalation is
+# still closed. Found by the #7393 execution replay — a static verb tally
+# structurally could not have detected it.
+GIT_COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"
+GIT_BIND=()
+if [[ "$GIT_COMMON_DIR" != "$REPO_ROOT"/* ]]; then
+  GIT_BIND=(--ro-bind "$GIT_COMMON_DIR" "$GIT_COMMON_DIR")
+fi
 BWRAP_ARGS=(
   --ro-bind /usr /usr --ro-bind /etc /etc
   --symlink usr/bin /bin --symlink usr/lib /lib
   --symlink usr/lib64 /lib64 --symlink usr/sbin /sbin
   --tmpfs /home --tmpfs /root --tmpfs /run --tmpfs /tmp
   --ro-bind "$RESOLV" "$RESOLV"
+  "${GIT_BIND[@]}"
   --ro-bind "$REPO_ROOT" "$REPO_ROOT" --chdir "$REPO_ROOT"
   --dev /dev
   --unshare-all --share-net --die-with-parent --new-session
@@ -1071,7 +1085,7 @@ The 15-second cap is a hard ceiling. Plans typically prescribe `curl --max-time 
 **network egress** (`--share-net`), which is required — `curl` is the single most common
 probe verb in the corpus. So an allowlisted verb can still exfiltrate *repo contents* to an
 arbitrary host. This repository is public, which bounds the impact, but it is not zero.
-Egress filtering is out of scope here and is recorded as open in ADR-172 `## Consequences`.
+Egress filtering is out of scope here and is recorded as open in ADR-173 `## Consequences`.
 
 **Step 10.6: Decision matrix (11 states, 1 PASS terminal).**
 
