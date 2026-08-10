@@ -382,7 +382,12 @@ else
       # infra-validation.yml exports genuine AWS credentials into $GITHUB_ENV in a DIFFERENT
       # job, which puts this suite one job-move away from printing a live access key on
       # failure. The isolation is currently incidental — this makes it explicit.
-      AWS_ACCESS_KEY_ID= AWS_SECRET_ACCESS_KEY= AWS_SESSION_TOKEN=
+      # Blanked deliberately. Only KEY_ID is read below; the other two are blanked so a
+      # future read — or the sourced loader — cannot pick up an ambient value either.
+      # `export` rather than bare assignment so the empty value reaches child processes,
+      # and so this stays one command (a `A=; B=; C=` line is three, and a shellcheck
+      # directive above it would only cover the first).
+      export AWS_ACCESS_KEY_ID='' AWS_SECRET_ACCESS_KEY='' AWS_SESSION_TOKEN=''
       doppler() { printf 'stub-%s\n' "$3"; }
       emit_drift() { echo "DRIFT:$1"; }
       die() { echo "DIE:$*"; exit 1; }
