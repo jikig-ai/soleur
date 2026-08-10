@@ -627,7 +627,8 @@ echo "Test 24: #5934 D3 GAP — non-bare guard SKIPS when the mask leaves GIT_RO
 #   RED  (pre-fix): fallback gated on `-z GIT_ROOT` stays inert → git_dir stays ".git" → no skip
 #                   → is-bare "true" → reaches surgery → emits branch=bare-fail/target-masked, rc 1.
 #   GREEN (fixed):  `-d \$PWD/.git` fires UNCONDITIONALLY → git_dir=ABSOLUTE \$PWD/.git → line-532
-#                   skip fires → emits SOLEUR_GIT_CONFIG_MASK_SKIP branch=non-bare-skip, rc 0.
+#                   skip fires → emits SOLEUR_GIT_CONFIG_MASK_SKIP branch=non-bare-skip
+#                   (reason=masked-cannot-determine since #7394), rc 0.
 WS25=$(mktemp -d "$TMP/relroot25.XXXXXX"); git init -q -b main "$WS25" >/dev/null 2>&1
 rm -f "$WS25/.git/config"
 if mknod "$WS25/.git/config" c 1 3 2>/dev/null; then :; else ln -s /dev/null "$WS25/.git/config"; fi
@@ -643,7 +644,11 @@ else
   echo "  PASS: no bare-surgery wedge sentinel — surgery was not reached"; PASS=$((PASS + 1))
 fi
 # The distinguishing positive assertion: the non-bare skip path fired its benign marker.
-if grep -qF 'SOLEUR_GIT_CONFIG_MASK_SKIP file=config reason=non-bare-skip branch=non-bare-skip' "$TMP/ebc25.out"; then
+# reason= became `masked-cannot-determine` in #7394: under the mask the read cannot
+# establish non-bareness, so claiming `non-bare-skip` as the REASON asserted more than the
+# branch knows. The classification (`branch=non-bare-skip`) and the rc-0 outcome this test
+# exists to pin are unchanged, so anchor on those rather than on the retired reason text.
+if grep -qE 'SOLEUR_GIT_CONFIG_MASK_SKIP file=config reason=[a-z-]+ branch=non-bare-skip' "$TMP/ebc25.out"; then
   echo "  PASS: SOLEUR_GIT_CONFIG_MASK_SKIP branch=non-bare-skip emitted (non-bare skip fired)"; PASS=$((PASS + 1))
 else
   echo "  FAIL: expected the SOLEUR_GIT_CONFIG_MASK_SKIP branch=non-bare-skip marker (skip did not fire)"; FAIL=$((FAIL + 1))
