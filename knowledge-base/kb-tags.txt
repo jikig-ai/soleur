@@ -1955,6 +1955,7 @@ legal-agents
 legal-audit-trail
 legal-compliance
 legal-compliance-auditor
+legal-corpus
 legal-disclosure
 legal-docs
 legal-document-generator
