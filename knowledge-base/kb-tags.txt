@@ -1016,6 +1016,7 @@ data-integrity
 data-loss
 data-module
 data-protection-disclosure
+data-race
 data-remediation
 data-reuse
 data-validation
@@ -1641,6 +1642,7 @@ gray-matter
 greenfield-framing
 grep
 grep-acceptance-criteria
+grep-anchoring
 grep-assertion
 grep-first
 grep-flag-interpretation
@@ -2016,6 +2018,7 @@ luks
 luks-cutover
 machine-identity
 macos
+macos-portability
 magic-link
 maintenance
 malformed-response
@@ -2199,6 +2202,7 @@ negative
 negative-assertion
 negative-space
 negative-space-assertion
+negative-space-assertions
 nested-directory-skill-missing
 net-issue-flow
 network
@@ -2372,6 +2376,7 @@ parallel-session
 parallel-sessions
 parallel-tests
 parallel-tools
+parallel-write
 parameter-expansion
 paraphrase
 paraphrase-without-verification
@@ -2455,6 +2460,7 @@ pillow
 pinned-artifact
 pino
 pip
+pipe-buf
 pipefail
 pipeline
 pipeline-gotchas
