@@ -1437,6 +1437,10 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
     const execLine = lines.find((l) => /^DT_OUT=\$\(/.test(l)) ?? "";
     expect(execLine).toMatch(/bwrap/);
     expect(execLine).toMatch(/\$\{BWRAP_ARGS\[@\]\}/);
+    // Without this the probe inherits preflight's stdin: a command that reads
+    // stdin either eats input the caller was still using, or blocks the full
+    // 15s and misreports as a timeout.
+    expect(execLine).toMatch(/<\/dev\/null/);
   });
 
   test("F3 AC2 — mount order is load-bearing: --tmpfs /home precedes the repo bind", () => {

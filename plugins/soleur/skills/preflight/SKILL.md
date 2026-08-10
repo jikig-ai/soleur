@@ -1071,7 +1071,12 @@ fi
 # it is redundant-but-harmless defense-in-depth, since the on-disk stores those
 # variables point at are no longer present either. PATH is restored explicitly so
 # `curl`/`timeout` are still resolvable; HOME points at the sandbox tmpfs.
-DT_OUT=$(bwrap "${BWRAP_PROC[@]}" "${BWRAP_ARGS[@]}" /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp timeout 15s bash -c "$CMD" 2>/dev/null; printf 'RC:%d' "$?")
+#
+# `</dev/null` is load-bearing: without it the probe inherits preflight's stdin,
+# so a command that reads stdin either consumes input the caller was still using
+# or blocks for the full 15s and reports as a timeout. Measured while building
+# #7393's execution replay, whose own read-loop the probes silently ate.
+DT_OUT=$(bwrap "${BWRAP_PROC[@]}" "${BWRAP_ARGS[@]}" /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp timeout 15s bash -c "$CMD" </dev/null 2>/dev/null; printf 'RC:%d' "$?")
 DT_RC="${DT_OUT##*RC:}"
 DT_STDOUT="${DT_OUT%RC:*}"
 
