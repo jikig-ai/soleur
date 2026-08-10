@@ -64,6 +64,69 @@ Check if `knowledge-base/` directory exists. If it does:
 
 - Continue with standard planning flow
 
+### 0.4. Resume Detection (Always)
+
+This skill can be re-entered after a stall. Detect that **here**, above Phase 0.5 — 0.5's
+brainstorm-ambiguity `AskUserQuestion` fires inside a Task subagent that cannot answer it, so a
+resume that reached 0.5 would hang the pipeline rather than recover it.
+
+**Reading the cursor: frontmatter-bounded, always.** This is the canonical reader for
+`pipeline_resume:`, `resume_attempts:` and `branch:` throughout this skill:
+
+```bash
+PLAN="<the plan file selected for this branch — see Phase 0.7 step 3 for the selector>"
+
+# The leading-`---` guard is load-bearing and part of the precedent: the sed range
+# /^---$/,/^---$/ matches the FIRST `---` anywhere in the file, so a document with no leading
+# frontmatter but an embedded fenced YAML example would have that example mis-parsed as
+# metadata (#4724, .github/workflows/review-reminder.yml).
+[[ -f "$PLAN" && "$(head -n 1 "$PLAN")" == "---" ]] || CURSOR=""
+
+CURSOR=$(sed -n '/^---$/,/^---$/{ /^pipeline_resume:/{ s/.*: *//; p; q; } }' "$PLAN")
+ATTEMPTS=$(sed -n '/^---$/,/^---$/{ /^resume_attempts:/{ s/.*: *//; p; q; } }' "$PLAN")
+```
+
+**Never** use the line-anchored `gsub` awk form (§Sharp Edges) for these keys. That form is
+correct only for a key that *cannot* appear in a document body — and any plan that documents
+this mechanism contains the key in its body. Measured: run against v1 of the #7418 plan, the
+unbounded form returned a cursor value harvested from a fenced example while the frontmatter
+carried no such key. `plugins/soleur/test/plan-skeleton-checkpoint.test.ts` ships that document
+shape as a regression fixture.
+
+**If `CURSOR` is empty** — no plan file, or a finished one — this is a fresh run. Skip the rest
+of this phase and continue to 0.5.
+
+**If `CURSOR` holds a recognized token** (`research`, `drafting`, `gates`, `finalize`), this is a
+resume:
+
+1. **Skip Phase 0.5 idea refinement.** The idea was already refined; re-asking is the hang.
+2. **Re-run Phase 0.6, and gates 2.7–2.11 and Phase 3, unconditionally** — regardless of where
+   the cursor sits. ADR-032 records the rule: *"a plan recovered from disk after a subagent
+   crash carries its 'verify X before shipping' Phase-0 gates as UNVERIFIED claims — re-run the
+   empirical probes, do not inherit them as done."* These are grep/read gates costing near
+   nothing beside a fan-out, and skipping 2.7 would silently bypass
+   `hr-gdpr-gate-on-regulated-data-surfaces`. Resume skips the *expensive* work already on
+   disk, never the cheap gates that establish it is still true.
+3. **Bound the resume.** Increment `resume_attempts` on entry. The cap is **2**, and the cursor
+   must **strictly advance** between attempts — the same token twice trips the cap immediately
+   regardless of the count, because a deterministic re-stall is not a transient failure. At the
+   cap: delete `pipeline_resume`, write a one-line reason into the plan body, and let the caller
+   take its Undetermined arm once. An unbounded retry loop would multiply the operator's spend
+   with no re-disclosure, against `hr-autonomous-loop-skill-api-budget-disclosure`.
+4. **Preserve the invocation mode.** This skill's mode predicate treats a plan-file-path
+   argument as a headless signal, so a naive resume would silently strip an operator-attached
+   session of its review gates. Carry an explicit mode flag through the resume invocation rather
+   than inferring mode from the path.
+5. **Clear the cursor phase's stray content, bounded.** The phase named by the cursor is treated
+   as never-started: delete from that phase's anchor heading up to the next `^## `, and nothing
+   else. Never touch the frontmatter, never touch a section the cursor does not name, and do
+   this only while the cursor is present. (This is the deliberate exception to
+   §Managing Plan Documents' "preserve prior content" rule, which governs an operator re-running
+   `plan` on a *finished* plan.)
+
+**If `CURSOR` holds an unrecognized value**, treat it as Undetermined: do not resume, do not
+guess a phase. Delete the key and plan from scratch.
+
 ### 0.5. Idea Refinement
 
 **Check for brainstorm output first:**
@@ -125,6 +188,106 @@ For every issue, blocker, dependency, or prior-art artifact the feature descript
 4. **Proposed *mechanism* vs. the ADR corpus** (the feature names HOW to do it — a frontmatter flip, a new table, a polling cron, a config tier): grep `knowledge-base/engineering/architecture/decisions/` for the mechanism's keywords (not the cited issue number — issues don't know what an ADR decided) and read any hit's `## Decision` + `## Alternatives Considered`. A mechanism sitting in an ADR's rejected-alternatives table is not an unconsidered idea — it is an explicitly-rejected one; re-scope to "did the ADR leave a gap this still addresses?" rather than planning the rejected approach. Corollary: when the feature pins an *absolute* value (a fixed model/tier/limit), check its interaction with the *most capable* end of the range, not just the cheap end (an absolute `opus` reviewer pin is a downgrade on a Fable session). **Why:** #5087 — the issue's frontmatter-tiering approach matched the exact alternative ADR-053 rejected the day before (#5096); caught only at deepen-plan, three phases deep. See `knowledge-base/project/learnings/2026-06-11-brainstorm-grep-adr-corpus-for-proposed-mechanism-not-just-issue-refs.md`.
 
 Emit a one-paragraph **Premise Validation** note (what was checked, what held, what was stale) into the research-insights scratch so Phase 1.7 and the plan's "Research Reconciliation" section can carry it forward. If nothing is cited by reference, state "no external premises to validate" and proceed.
+
+### 0.7. Skeleton Checkpoint (Always)
+
+Phase 1 dispatches the research fan-out — the most expensive stretch of this skill. Write the
+plan file **before** it runs, then persist each phase's output as it lands, so a stall costs one
+phase instead of the whole run (#7418, ADR-174).
+
+Everything Phase 0.7 needs is already in hand: Phase 0.6 ran `gh issue view <N> --json state,title`
+for every cited issue, so the title — and therefore the slug — is free at this point.
+
+**1. Resolve the destination from the repo root, not the ambient CWD.**
+
+```bash
+PLANS_DIR="$(git rev-parse --show-toplevel)/knowledge-base/project/plans"
+```
+
+A CWD-relative path can land the skeleton in the bare repo root, where the next sync clobbers it
+(`2026-05-15-one-shot-plan-subagent-cwd-divergence.md`).
+
+**2. Convert title to filename:** add today's UTC date prefix, strip the prefix colon, kebab-case,
+add a `-plan` suffix.
+
+- Example: `feat: Add User Authentication` → `2026-01-21-feat-add-user-authentication-plan.md`
+- Keep it descriptive (3-5 words after the prefix) so plans are findable by context.
+- **Freeform arm:** Phase 0.6 only fires when refs are cited, so an invocation with no `#N` has
+  no issue title. Derive the slug from the feature description instead — this arm is real and is
+  covered by the plan's test scenarios.
+- This is the **only** filename-derivation site in this skill. Step 2 refines the frontmatter
+  `title:`; it does not re-derive the path. A `git mv` is reserved for a genuinely misleading
+  slug and happens once, at finalization.
+
+**3. Select before writing.** Use the *same* selector `one-shot` uses (frontmatter `branch:` over
+`plans/*.md`, non-recursive, `plans/archive/` excluded — see `one-shot/SKILL.md`), never a freshly
+derived path. A run that begins at 23:5x UTC and resumes after midnight derives a different
+filename, and would write a second skeleton beside its own work.
+
+| Existing state | Action |
+|---|---|
+| No file | Write the skeleton; `pipeline_resume: research`, `resume_attempts: 0` |
+| Cursor present, same `branch:` | Resume at that token (Phase 0.4). **Never re-write the skeleton** |
+| Cursor present, different `branch:` | Foreign artifact — the selector did not choose it; write a new skeleton |
+| Cursor absent (a finished plan) | **Never overwrite.** Headless: do not re-plan — return the path and let the pipeline advance (`tasks.md` already exists, so Save Tasks is skipped). Interactive: ask |
+
+**4. Write the skeleton.** Frontmatter carries only what Phase 0.6 already knows:
+
+```yaml
+title: "<from gh issue view --json title>"
+date: <UTC date>
+slug: <derived above>
+branch: <git branch --show-current>
+issue: <N>                 # provisional — planning may re-target
+pipeline_resume: research
+resume_attempts: 0
+```
+
+Then `## Overview`, and nothing else.
+
+**Deliberately absent: `lane:`, `type:`, `closes:`, `priority:`, `domain:`,
+`brand_survival_threshold:`, `requires_cpo_signoff:` and `status:`.** Every one of them is derived
+*after* research. Pre-seeding `lane:` is actively harmful — it bakes in the fail-closed
+`cross-domain` value, which *widens* the Phase 2.5 domain fan-out this checkpoint exists to
+protect. `issue:`/`closes:` are decided by planning, not by the invocation, so the skeleton's
+`issue:` is provisional and finalization rewrites both unconditionally. `status:` is a free-text
+human draft-state field already carrying dozens of values across the plan corpus; the machine
+cursor is a **separate key** for that reason.
+
+**Stub no conditional section.** The expected heading set depends on the detail level chosen at
+Step 4 — after research — and the conditional sections are gate-triggered. A placeholder for a
+section the finished plan legitimately skips trips `deepen-plan`'s halt gates. For the same
+reason, any placeholder prose must avoid the literal tokens `TODO`, `TBD`, `N/A` and
+`placeholder`.
+
+**Sanitize the Overview.** Write a restatement in this skill's own voice, never a verbatim paste
+of the issue body. `scripts/lint-infra-no-human-steps.py` scans this directory and
+`.claude/hooks/iac-plan-write-guard.sh` gates the Write itself; both reject prose that pairs a
+human-actor token with an infrastructure imperative, and an issue body frequently contains one.
+
+**Write-denial arm.** The write guard is a PreToolUse *deny* hook. On denial, retry once with a
+minimal Overview (title only). If still denied, **proceed skeleton-less** and log the reason —
+degrading to the pre-#7418 behaviour rather than aborting a run the operator is paying for. Do
+not reach for the guard's acknowledgement opt-out to force the write: it asserts a real
+infrastructure step was reviewed, which would be false here.
+
+**5. Advance the cursor only behind the content it claims.** Persist the section first, then move
+`pipeline_resume`, in a single Edit where possible. The cursor must never claim more progress than
+the file contains — that is the failure mode that advances a stub into `/work`.
+
+| `pipeline_resume` | Resumes at | Set once this has landed |
+|---|---|---|
+| `research` | Phase 1 | the skeleton write (here) |
+| `drafting` | Step 2 Issue Planning | `## Research Insights` (Phase 1.7) |
+| `gates` | Phase 2.5 | `## Open Code-Review Overlap` + `## Files to Edit` |
+| `finalize` | Step 4 | `## Domain Review` + `## User-Brand Impact` |
+| `deepening` | `deepen-plan` §1 | this skill's finalization completes |
+| *(key deleted)* | — | `deepen-plan` exit, **or** finalization on the direct path |
+
+**Presence is the boolean.** Key present ⇒ unfinished; key absent ⇒ finished. One field, one
+owner per value, and no two-field invariant that can disagree with itself. Deleting the key at
+the end is what makes a merged or archived plan inert by construction: no future reader can
+mistake it for in-flight, so the archive and worktree-cleanup paths need no changes.
 
 ## Main Tasks
 
@@ -209,6 +372,19 @@ After all research steps complete, consolidate findings:
 - Capture CLAUDE.md conventions
 - **Reconcile spec claims against codebase reality.** If the repo-research-analyst returned any "Gap callouts" or equivalent mismatches, the plan MUST include a "Research Reconciliation — Spec vs. Codebase" section (3-column table: spec claim / reality / plan response) placed between "Overview" and "Implementation Phases". This prevents the plan from inheriting spec fiction (e.g., claimed infrastructure that doesn't exist) as phase estimates. See `knowledge-base/project/learnings/best-practices/2026-04-15-plan-skill-reconcile-spec-vs-codebase.md`.
 
+**Persist the research to the plan file now — this is the write that makes the Phase 0.7
+checkpoint pay.** Write a `## Research Insights` section into the plan holding the consolidated
+findings above: the relevant file paths, the applicable institutional learnings, any external
+documentation and best practices, the related issues and PRs, the CLAUDE.md conventions, and the
+**Premise Validation** note carried forward from Phase 0.6.
+
+Everything above this line was bought with the fan-out. A checkpoint that only reserved a
+filename would still lose all of it to a stall *inside* Phase 1 — which is the modal case, and
+the shape of the incident that motivated this mechanism. `deepen-plan` later enriches this
+section; `plan` is what first puts it on disk.
+
+**Then advance the cursor** to `drafting` — section first, cursor second (Phase 0.7 step 5).
+
 **Optional validation:** Briefly summarize findings and ask if anything looks off or missing before proceeding to planning.
 
 ### 1.7.5. Code-Review Overlap Check
@@ -256,6 +432,9 @@ After the plan draft has enumerated its `## Files to Edit` and `## Files to Crea
 
 5. If no matches, still record `## Open Code-Review Overlap` with `None` so the next planner can see the check ran.
 
+6. Once `## Open Code-Review Overlap` and `## Files to Edit` are both on disk, **advance the
+   cursor** to `gates` (Phase 0.7 step 5).
+
 **Why this matters:** In the 2026-04-17 window, PR #2486 closed three scope-outs (#2467 + #2468 + #2469) because the planner noticed the overlap. PRs #2463 and #2477 grew the backlog instead because no overlap check ran. This phase makes the #2486 pattern the default, not the exception. See `knowledge-base/project/learnings/best-practices/2026-04-17-review-backlog-net-positive-filing.md`.
 
 ### 1.8. Skill Description Budget Check (Conditional)
@@ -274,11 +453,8 @@ Think like a product manager - what would make this issue clear and actionable? 
 
 **Title & Categorization:**
 
-- [ ] Draft clear, searchable issue title using conventional format (e.g., `feat: Add user authentication`, `fix: Cart total calculation`)
+- [ ] Refine the frontmatter `title:` drafted at Phase 0.7 into its final searchable form, using the conventional format (e.g., `feat: Add user authentication`, `fix: Cart total calculation`). The **filename is already fixed** — Phase 0.7 derived it before the research fan-out and this step does not re-derive it. A `git mv` is reserved for a genuinely misleading slug, at finalization only.
 - [ ] Determine issue type: enhancement, bug, refactor
-- [ ] Convert title to filename: add today's date prefix, strip prefix colon, kebab-case, add `-plan` suffix
-  - Example: `feat: Add User Authentication` → `2026-01-21-feat-add-user-authentication-plan.md`
-  - Keep it descriptive (3-5 words after prefix) so plans are findable by context
 
 **Stakeholder Analysis:**
 
@@ -443,6 +619,11 @@ If the threshold resolves to `none` AND the diff touches a sensitive path (canon
 > A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. Fill it before requesting deepen-plan or `/work`.
 
 **Why:** Triggered by #2887 — the dev/prd Doppler-config collapse shipped for months because every existing gate weighed the decision on technical and convenience axes only. The framing-time enforcement here, combined with deepen-plan Phase 4.6 (halt on missing section), preflight Check 6 (ship-time gate), and the `user-impact-reviewer` conditional agent, closes the workflow-level loop.
+
+**Step 5 — advance the cursor.** With `## Domain Review` (Phase 2.5) and `## User-Brand Impact`
+both on disk, move `pipeline_resume` to `finalize` (Phase 0.7 step 5). The gates that follow
+(2.7–2.11 and Phase 3) are cheap grep/read checks and are deliberately **not** cursor phases —
+a resume re-runs every one of them regardless of where the cursor sits.
 
 ### 2.7. GDPR / Compliance Gate
 
@@ -731,6 +912,29 @@ After writing the plan file, automatically run `/plan_review <plan_file_path>` t
 
 **Why Plan Review runs BEFORE Save Tasks:** `tasks.md` is a derivative breakdown of the plan's phases. If review prompts material changes (phase cuts, deliverable rewrites), generating `tasks.md` beforehand would immediately go stale and require regeneration. Running review first → applying changes → then deriving tasks ensures `tasks.md` reflects the final plan as a single source of truth, and the commit below covers both files in one atomic history entry.
 
+## Finalize the Plan Frontmatter (Always)
+
+The skeleton written at Phase 0.7 carried only what Phase 0.6 knew. Everything else was derived
+by the phases since, so reconcile the frontmatter now, before `tasks.md` is generated and the
+artifacts are committed:
+
+1. **Rewrite `issue:` and `closes:` unconditionally.** The skeleton's `issue:` was provisional.
+   Planning decides which issue this plan actually closes, and it routinely differs from the one
+   the operator typed — a re-scope during research is planning doing its job. Downstream readers
+   treat these two keys as authoritative.
+2. **Add the post-research fields** the skeleton deliberately omitted: `type:`, `priority:`,
+   `domain:`, `brand_survival_threshold:`, `requires_cpo_signoff:` and any detail-level fields the
+   chosen template requires. (`lane:` is written by Save Tasks below, from `spec.md`.)
+3. **Delete `pipeline_resume:` and `resume_attempts:` — last, after every other mutation.** The
+   key's presence is the "unfinished" boolean, so it must outlive every write it guards. Deleting
+   it here is what makes the committed artifact inert: a merged or archived plan carries no
+   cursor, so no future reader — `one-shot`, `archive-kb`, worktree cleanup — can mistake it for
+   in-flight, and none of them need to learn about this mechanism.
+
+If the run continues into `deepen-plan`, that skill sets its own `deepening` cursor on entry and
+removes it on exit; `plan` does not set it. On the direct path, where the operator goes straight
+to `/work`, the cursor is already gone and nothing stale ships.
+
 ## Save Tasks to Knowledge Base (if exists)
 
 **After Plan Review has applied any requested changes**, generate `tasks.md` from the finalized plan and commit all artifacts together:
@@ -761,7 +965,9 @@ Validate `LANE` against the 3-value enum (`single-domain`, `cross-domain`, `proc
    Both the plan file and tasks.md are committed together so the final plan and its task breakdown land in the same history entry:
 
    ```bash
-   git add knowledge-base/project/plans/ knowledge-base/project/specs/feat-<name>/tasks.md
+   # Exact plan path, never the plans/ directory: a directory add sweeps abandoned skeletons
+   # from earlier runs into this commit.
+   git add "$PLAN_PATH" knowledge-base/project/specs/feat-<name>/tasks.md
    git commit -m "docs: create plan and tasks for feat-<name>"
    git push
    ```
@@ -881,6 +1087,13 @@ When user selects "Create Issue", detect their project tracker from CLAUDE.md:
 
 **Update an existing plan:**
 If re-running `soleur:plan` for the same feature, read the existing plan first. Update in place rather than creating a duplicate. Preserve prior content and mark changes with `[Updated YYYY-MM-DD]`.
+
+**This rule governs a FINISHED plan — one with no `pipeline_resume` key.** A plan that still
+carries the cursor was interrupted mid-run, and the phase the cursor names is treated as
+never-started: Phase 0.4 step 5 removes that phase's stray content, bounded to the span from its
+anchor heading to the next `^## `. The two rules do not overlap, because presence of the key is
+what separates them. Preserving a half-written section across a resume is what produces a plan
+that reads complete and is not.
 
 **Archive completed plans:**
 Run `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh` from the repository root. This moves matching artifacts to `knowledge-base/project/plans/archive/` with timestamp prefixes, preserving git history. Commit with `git commit -m "plan: archive <topic>"`.
