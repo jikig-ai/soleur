@@ -24,6 +24,13 @@
 # green run, and it ratchets upward only.
 set -uo pipefail
 
+# /tmp is a machine-global RAM-backed tmpfs shared by every parallel worktree, and
+# this repo's runners already banner when it drops below their headroom floor
+# (observed at 143MB against a 1024MB floor while writing this). Default TMPDIR
+# the same way scripts/test-all.sh does, so a DIRECT invocation of this gate --
+# the documented inner loop -- does not add to that pressure.
+export TMPDIR="${TMPDIR:-/var/tmp}"
+
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
 SUITES=(
@@ -62,6 +69,15 @@ done
 # --- 2. The suites actually execute, and clear the floor --------------------
 # Reading the runner's own summary rather than trusting its exit code: a suite
 # that skipped everything exits 0 too.
+#
+# The trap OWNS the tempfile (ADR-129, enforced by
+# scripts/lint-trap-tempfile-ownership.py): without it, a die between allocation
+# and the `rm` at the end leaks the log into a /tmp that is already the
+# contended resource this repo's runners warn about. Registered BEFORE the
+# assignment so there is no window where the file exists and the trap does not.
+LOG=""
+cleanup() { [[ -n "$LOG" ]] && rm -f "$LOG"; }
+trap cleanup EXIT
 LOG="$(mktemp -t check10-integrity.XXXXXXXX.log)"
 bun test "${SUITES[@]}" >"$LOG" 2>&1
 RC=$?
@@ -99,7 +115,7 @@ else
   pass "assertion count $n_expect >= floor $MIN_ASSERTIONS"
 fi
 
-rm -f "$LOG"
+# (the EXIT trap removes $LOG)
 
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]] || exit 1
