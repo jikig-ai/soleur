@@ -58,8 +58,9 @@ compromise. One operator running `/soleur:ship` on one malicious PR suffices.
 ## Decision
 
 A probe declared in a plan file executes inside a **filesystem-isolated sandbox**, with no
-credential stores bound and the repository read-only. Three layers, in strict priority
-order — the ordering is the point, because layers 2 and 3 are not security controls.
+credential stores bound and the repository read-only. Three layers, in priority of AUTHORITY — not of evaluation, which runs
+`ssh` → declaration → verb gate → shell-active → sandbox → execute (see §Evaluation order).
+The distinction matters because layers 2 and 3 are not security controls.
 
 ### Layer 1 — Authority: a bubblewrap filesystem boundary
 
@@ -113,7 +114,10 @@ Two further operational properties are load-bearing and were both found empirica
 **Fail-closed, with no unsandboxed fallback.** If `bwrap` is absent or the sandbox cannot
 be established (the `kernel.apparmor_restrict_unprivileged_userns` drift class of
 #5000/#5004 — measured `= 1` on this host, with bwrap still functional), Check 10 returns
-**SKIP** with a named reason. This mirrors the agent sandbox's `failIfUnavailable: true`
+**SKIP-NOSANDBOX** — its own terminal, never folded into ordinary SKIP, because "the gate
+verified nothing" and "the gate had nothing to do" are different facts and only one means a
+security gate is dark. It emits a `SOLEUR_*` sentinel so it is countable across the fleet.
+This mirrors the agent sandbox's `failIfUnavailable: true`
 (#2634 — *"without this flag the SDK silently runs unsandboxed… defense-in-depth
 disappears with no Sentry signal"*), adapted: the agent path refuses to start, but a
 preflight check has no session to refuse, so the honest terminal is SKIP. A degraded
@@ -131,31 +135,51 @@ runtime attempts `--proc /proc`, retries once without it, and only then SKIPs. M
 both forms keep every credential store unreachable and both run `curl`, `node`, `python3`
 and `grep`, so the weaker form costs nothing the probe classes need.
 
-### Layer 2 — Legibility: a deny-by-default probe-verb allowlist
+### Layer 2 — Schema validation on the `command:` field
 
-`curl` · `bash` · `sh` · `grep` · `rg` · `jq` · `python3` · `node` · `bun` · `printf` ·
-`git` — eleven verbs, each with ≥2 uses in a measured 632-command corpus of declared
-probes. The effective verb is the first whitespace-delimited token of the **dequoted**
-command, so `"doppler"` / `\doppler` / `dopp""ler` cannot launder it.
+**Revised after review measured the original framing to be wrong in both directions.**
+It was described as a deny-by-default *legibility* control. It is neither deny-by-default
+(a path-shaped first token skipped the allowlist entirely, so `./doppler secrets get FOO`
+was accepted while a bare `doppler` rejected) nor a legibility control (the full command is
+in the PR diff either way, and `git -c alias.…`, `bash scripts/x.sh` and `./anything` all
+read as innocuous while doing arbitrary things).
 
-Arg rules close the inline-program equivalents: `bash`/`sh` reject `-c`;
-`python3`/`node`/`bun` reject `-c`, `-e`, `-p`, `--eval`, `--print`. `awk`, `sed` and
-`find` are **excluded from the allowlist**, measured as execution-equivalent to `bash -c`
-(`awk 'BEGIN{system("…")}'` executes arbitrary commands and passes the shell-active-token
-reject, which contains no `;`, `&&`, `|` or `$(`). Rejecting `bash -c` while permitting
-`awk` would be incoherent.
+What it is: **schema validation** — *is this an executable command, and one Check 10's
+`PATH` can run?* The gate lives in `plugins/soleur/skills/preflight/scripts/probe-verb-gate.sh`
+so a parity harness can execute the runtime of record rather than regex-scraping prose.
 
-Program-position paths must be repo-relative — no leading `/`, no `..` segment. This is a
-**pure string rule**: no `git ls-files` oracle, so the predicate stays synchronous and
-fixture-free. That is also a correctness point, not only a design preference — see
-Consequences.
+**It cannot be a security control, structurally.** Its own sanctioned remedy is "wrap it in
+a repo-relative script" — `bash scripts/x.sh` — which is arbitrary in-sandbox code
+execution, and Step 10.5 runs `bash -c "$CMD"` regardless, so every probe already *is* an
+inline program. Every shape it could reject is strictly weaker than the remedy it
+prescribes. The original revision therefore shipped rules that rejected a *spelling*, not a
+capability: measured, the inline-program rules were 50% false-positive on the real corpus
+and the repo-relative path rule fired once in 678 commands, while false-rejecting
+`bun test … -p`, `python3 … --print json` and `node … -e prod`. All three rules, and the
+path-shaped exemption, were deleted.
 
-**Every allowlist entry is an authority grant.** Layer 1 bounds what a verb can *reach*,
-but `curl` retains network egress and `bash <script>` retains arbitrary in-sandbox code
-execution. Adding a verb warrants the scrutiny of an infra change. Conversely, the
-allowlist bounds legibility and maintenance, **not** authority — it is the sandbox, not
-the verb list, that makes a script self-wrapping `doppler run -c prd` fail loudly instead
-of succeeding silently. Neither layer may be described as though it closed the class.
+**What it measurably buys**, and the only reason it survives at all: 34 corpus entries are
+prose in a `command:` field (*"Sentry issue search feature:…"*, *"Open Sentry → Issues →
+…"*). Those now fail at authoring time with a named reason instead of at ship time with an
+opaque `rc=127`. That value comes entirely from the bare verb list.
+
+**The list is corpus-frequency, not capability.** Ten verbs, each with ≥2 uses:
+
+`curl` · `bash` · `grep` · `rg` · `jq` · `python3` · `node` · `bun` · `printf` · `git`
+
+`sh`, `dig` and `getent` are absent because they have **zero** uses — and the first revision
+of this ADR asserted "each with ≥2 uses" while shipping `sh`, in the same paragraph that
+excluded `dig`/`getent` on exactly that evidence. `awk`, `sed` and `find` are absent for the
+same frequency reason, **not** because they are uniquely dangerous: `git` is on the list and
+`git -c alias.x='!cmd' x` runs arbitrary commands, as does `bash <script>`. Both are worked
+examples that an allowlist entry is an authority grant which this layer does not bound.
+
+**Corpus figure and how it was derived.** 642 parseable `discoverability_test.command`
+values, extracted by running `parseCommand()` over the first `## Observability` block of
+every top-level `.md` under `knowledge-base/project/plans/` (non-recursive; `archive/`
+excluded). Different scopings give different totals — a recursive walk including `archive/`
+gives ~678 — which is why the method is stated here rather than the bare number being
+repeated. Every count in this ADR uses that scoping.
 
 ### Layer 3 — Declaration: `credentials_required` → `SKIP-DECLARED`
 
@@ -213,6 +237,17 @@ on the record as the worked example of a control that changes *lookup* rather th
 *reachability*, because the failure was not the idea but the proxy: the evidence for it
 was real, decisive-looking, and answered the wrong question.
 
+**Run the probe in CI instead of on the operator's workstation.** The closest structural
+analogue to ADR-074: a `pull_request`-triggered job with `contents:read` and no write token
+executes the probe, so the operator's ambient auth is never in reach at all — no bwrap
+dependency, no macOS gap, no `.git/hooks` write-back vector, and the host-loopback pivot
+(#7412) disappears with the host. Not adopted here, for three costs: it removes the local
+pre-ship signal that makes Check 10 useful during `/soleur:ship` (the operator learns at
+merge time instead of before pushing), fork-PR secret scoping means a probe needing any
+credential cannot run there either, and CI latency turns a 15-second local check into a
+minutes-long round trip. Worth revisiting alongside the probe registry (#7403), which would
+make `main`-tracked resolution and CI execution natural together.
+
 **Allowlist with no sandbox.** Falsified: `awk 'BEGIN{system(…)}'` and absolute-path reads
 defeat it.
 
@@ -243,11 +278,31 @@ declared probes that already cannot run into merge blockers overnight.
 
 ## Consequences
 
-**Open — network egress remains.** `--share-net` is required (`curl` is the dominant probe
-verb, 142/632), so an allowlisted verb can still exfiltrate *repository contents* to an
-arbitrary host. The repository is public, which bounds the impact, but it is not zero.
-Egress filtering is out of scope here. The agent sandbox's `allowManagedDomainsOnly` is
-the precedent to follow if this is closed later.
+**Open — the sandbox shares the host network namespace (#7412).** `--share-net` RETAINS the
+host netns; it does not create a fresh one. Measured from inside the shipped `BWRAP_ARGS`:
+the sandbox's netns inode is identical to PID 1's, and local Supabase Kong/PostgREST
+(54321), Postgres (54322) and Studio (54323) are all reachable — a review agent
+demonstrated `HTTP 200` full-table access using the *published* local-Supabase demo
+`service_role` JWT, so no secret is needed. A plain `curl http://127.0.0.1:54321/…` passes
+all three layers.
+
+The class is **host-loopback pivot**, and it is materially worse than the outbound-egress
+case the first revision of this ADR named as the only open risk: it reaches services that
+are unauthenticated *precisely because* they are loopback-bound. The Layer 1 efficacy table
+above is true for credential stores held as FILES and false for anything reachable over
+loopback — that scope is now stated rather than implied.
+
+Outbound egress also remains (`curl` is the dominant probe verb), so repository contents —
+and, via the read-only git common-dir bind, whole history and local session state — can be
+sent to an arbitrary host. The repo is public, which bounds that half only.
+
+Closing it needs `--unshare-net` plus a userspace network stack
+(`slirp4netns --disable-host-loopback` / `pasta`): `--unshare-net` alone kills all egress,
+surfacing as `curl` rc=6, which is indistinguishable from the #4148 DNS-typo signal this
+check exists to catch. Tracked as #7412. A string-based `127.0.0.1|localhost|::1` reject is
+explicitly rejected as the fix — bypassable in one token (`127.1`, `2130706433`, a DNS
+A-record pointing at loopback, any wrapped script) and it would let the skill claim a
+boundary that is not there.
 
 **Open — the PR-head trust circularity is unresolved.** Both the plan and any script it
 invokes are unreviewed at execution time. The sandbox contains the consequences; it does
@@ -272,5 +327,12 @@ reject) instead of an opaque stdout mismatch. Corpus cleanup is tracked separate
 entries; they appear **zero** times in the measured corpus. Deny-by-default means the
 first author who needs one adds it in a reviewed one-line PR.
 
-**Accepted — Check 10 is disabled on hosts without bubblewrap.** That is the fail-closed
-posture working as designed, and it is visible: the SKIP names the sandbox.
+**Accepted — Check 10 is disabled on hosts without bubblewrap, and bubblewrap is
+Linux-only.** On macOS this is the STEADY STATE, not a rare host condition: every macOS
+operator of this plugin has Check 10 permanently off. The first revision of this ADR
+accepted it on the grounds that "it is visible: the SKIP names the sandbox" — which was
+reasoning valid for an exceptional condition applied to a whole-platform one, and the SKIP
+was silent in headless mode anyway. It now has its own terminal (`SKIP-NOSANDBOX`), a
+`SOLEUR_*` sentinel, a platform-specific message that does not prescribe an impossible
+"install bubblewrap", and an always-emit exception in the headless contract. A Darwin
+implementation (`sandbox-exec`) is unbuilt.

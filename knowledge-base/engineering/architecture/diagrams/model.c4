@@ -25,12 +25,16 @@ model {
   }
 
   // External actor — an UNTRUSTED pull-request author, distinct from the trusted
-  // `founder` Owner above. Their PR-head code executes only in the fix-constraints
-  // Stage A recovery producer (`pull_request`, contents:read, no write/secret
-  // token); it never runs in the privileged Stage B consumer (ADR-074).
+  // `founder` Owner above. In CI their PR-head code executes only in the
+  // fix-constraints Stage A recovery producer (`pull_request`, contents:read, no
+  // write/secret token); it never runs in the privileged Stage B consumer
+  // (ADR-074). Operator-side, preflight Check 10 executes a plan-declared probe
+  // inside a bwrap sandbox (ADR-173) — but running a checked-out PR head's tests
+  // or scripts by hand is outside both boundaries. Keep this comment and the
+  // description below in agreement; they disagreed once (#7393 review).
   contributor = actor "Contributor / PR Author" {
     #external
-    description "An untrusted contributor opening a pull request. Their PR-head content executes only inside an isolation boundary, never with ambient authority: the fix-constraints Stage A producer runs it under pull_request with contents:read and no write token — never the privileged Stage B consumer, which opens a data-only draft follow-up PR from the default branch (ADR-074) — and preflight Check 10, which executes a PR-declared discoverability probe on the operator's own workstation, runs it inside a bubblewrap sandbox with no credential stores bound and the repo read-only, failing closed to SKIP if that sandbox cannot be established (ADR-173)."
+    description "An untrusted contributor opening a pull request. In CI their PR-head code executes only under pull_request isolation (fix-constraints Stage A: contents:read, no write token) and never in the privileged Stage B consumer, which opens a data-only draft follow-up PR from the default branch (ADR-074). The one PR-head artifact preflight executes on the operator's own workstation — a plan-declared discoverability probe — runs inside a bubblewrap sandbox with no credential stores bound and the repo read-only, failing closed if that sandbox cannot be established (ADR-173); its residual reach is host-loopback and outbound network (#7412). Other operator-side execution of a checked-out PR head (running its tests, its scripts, its hooks) is covered by NEITHER boundary."
   }
 
   // ---- Soleur Platform (enterprise boundary) -----------------------------
