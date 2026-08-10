@@ -98,3 +98,25 @@ implicated suites' documented timeout-flake class fires.
   it replaces.
 - No product runtime surface, user data, or tenant boundary is touched; this is
   local developer tooling on the operator's own machine.
+
+## Addendum — 2026-08-10 (#7376): scope of the "capacity, not a colliding path" verdict
+
+This ADR's verdict — that the observed flakiness was **capacity**, not a colliding path —
+was measured on one specific machine and mount: a **RAM-backed 4 GiB `/tmp`** at 86% full
+with swap exhausted, on the operator's workstation, under **cross-worktree** overlap.
+
+It does **not** transfer to `apps/web-platform/infra/run-registered-suites.sh` running on a
+4-vCPU **hosted GitHub runner** against disk-backed `/var/tmp`, as a **single** run. Those
+differ on every variable the verdict rests on.
+
+The distinction is load-bearing because this ADR is the obvious thing to cite when the next
+parallel-runner flake appears, and citing it as *evidence* about a different machine would
+close the investigation on a measurement that was never taken there. Its **method** — probe
+before committing to a mechanism, and let a measurement rather than an argument settle it —
+transfers completely. Its **conclusion** is a prior, not evidence.
+
+Recorded because #7376 was, in fact, a colliding path in part: `run-registered-suites.test.sh`
+is itself a registered suite, and it created and deleted a fixture inside the live
+`apps/web-platform/infra/` directory while `credential-persist-home-guard.test.sh` was
+copying that directory and diffing the copy against the still-live source. Under this ADR's
+verdict alone, that class would not have been looked for.
