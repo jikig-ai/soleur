@@ -31,6 +31,7 @@ Soleur operates git over exactly three surfaces. Treat this table as authoritati
 - `git pull` / `git checkout` / `git stash` fail on a bare root; bare-only idioms (fetch-with-refspec, `update-ref`) are wrong on a non-bare clone. Gate on the actual detected layout, not an assumed one.
 - Identity authority is inverted: on the non-bare Concierge workspace the **local** identity is the host-seeded owner (authoritative); on the bare CLI dev repo the operator's **global** is the human. Never blanket-force one over the other (the #6184 bug).
 - A script that provably runs on **one** known layout (e.g. `git-data-provision.sh`, server-side on the bare data repo) may safely use that layout's idioms — but the single-layout assumption must be explicit, not accidental.
+- A refname is **not** a path component, and **the lease key is the resolved directory basename** — never the branch name. Git refnames may contain `/`; worktree directories may not, because `cleanup_orphan_worktree_dirs` globs exactly one level and `_validate_worktree_name` rejects `/` outright. Derive the directory name from the branch once (`_safe_worktree_name`) and key the lease on that same string, so the producer and the reaper agree by construction. Passing a raw refname where a directory name is expected nests the worktree an extra level, leaves it unleased, and makes its unregistered intermediate a `rm -rf` target (#7408).
 
 ## Alternatives Considered
 
