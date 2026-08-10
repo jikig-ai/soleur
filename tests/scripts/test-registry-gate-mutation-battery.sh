@@ -294,10 +294,26 @@ mutate "E21 engine last_err drops the line-tail (conditional skip swallows a cre
 # What the `tr` still buys is defence-in-depth against the REMOVAL of `tail -n 1` — and that
 # removal is exactly what E21 mutates. So the injection property is covered; it is covered by
 # E21, not here.
-expect_survive "E22 engine workflow-command injection guard dropped from last_err" engine \
+# PROMOTED to mutate() 2026-08-10, and NOT because the byte-identical finding was wrong — it is
+# still correct, and this row's previous justification correctly forbade promoting on BEHAVIOURAL
+# grounds. What changed is the KIND of assertion that now covers it.
+#
+# The restore suite used to assert the guard with a whole-file `grep -qE "tr '\n' ' '"` over the
+# engine. That is satisfied by the COMMENT describing the guard and by the two `crane auth login`
+# interpolations, so deleting the guard from last_err left the suite green — the assertion named
+# the token, not the thing. #7379 re-anchored it to the function body
+# (`sed -n '/^last_err() {/,/^}/p' | grep -qE …`), which makes this mutation detectable
+# STRUCTURALLY. No fixture separates the two implementations and none ever will; a source-anchored
+# assertion is the correct instrument for a guard whose output is by construction unobservable,
+# and this file's own doctrine is that a guard nothing can detect the removal of is one a later
+# edit deletes with everything still green.
+#
+# So the standing instruction still holds for behavioural promotion: do not promote on the claim
+# that a capture distinguishes them. Promote only while a source-anchored assertion exists — if
+# that assertion is ever removed or loosened, this row must go back to expect_survive.
+mutate "E22 engine workflow-command injection guard dropped from last_err" engine \
   "tail -c 400 \"\$1\" 2>/dev/null | tail -n 1 | tr '\\n' ' ' | sed 's/[[:space:]]*\$//' || true" \
-  "tail -c 400 \"\$1\" 2>/dev/null | tail -n 1 || true" \
-  'REDUNDANT GIVEN THE LINE-TAIL, measured not argued: with tail -n 1 the capture is one line and command substitution strips its trailing newline, so removing the tr+sed chain yields a byte-identical string and no fixture can distinguish the two. Kept as defence-in-depth because it becomes load-bearing the moment tail -n 1 is removed, and THAT removal is what E21 mutates. Do not promote this to mutate() again without first showing a capture where the two implementations differ.'
+  "tail -c 400 \"\$1\" 2>/dev/null | tail -n 1 || true"
 
 # Anchored on the CONDITION ALONE. The previous anchor spanned this line and the `for _seam in`
 # below it, so inserting a comment between them (which a later fix did) broke the anchor and
