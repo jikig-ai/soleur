@@ -739,6 +739,17 @@ if want_bun; then
 fi
 
 # Bash *.test.sh glob — scripts shard. (ci-deploy.test.sh runs in infra-validation.yml.)
+# .claude/hooks/lib/*.test.sh added 2026-08-10 (#7409). Shell globs do NOT cross
+# `/`, so the flat `.claude/hooks/*.test.sh` below never reached the `lib/`
+# subdirectory: every suite there had NEVER gated CI. That is how the #5454
+# vacuous-green class survived inside session-state.test.sh (34 KB, orphaned) —
+# it relocates to plugins/soleur/test/ in this change, and this glob closes the
+# hole for its remaining sibling, freeze-lock.test.sh (13 assertions, passing).
+# Measured against every *.test.sh under any lib/ in the repo: after this line,
+# zero orphans remain in that class. Do NOT check such coverage with Python
+# `fnmatch` — its `*` DOES cross `/`, so it reports these files as already
+# covered and falsifies the finding.
+#
 # .claude/hooks/*.test.sh added 2026-05-15 (#3799 prereq to #3789); covers the
 # 8 hook tests that previously only the session-rules-loader entry pulled in.
 if want_scripts; then
@@ -761,7 +772,7 @@ if want_scripts; then
   # Pins that this runner's OWN infra coverage claim matches whether it actually invoked the
   # infra runner. Registered here rather than under want_bun for the same reason as above.
   run_suite "scripts/test-all-infra-coverage-notice" bash scripts/test-all-infra-coverage-notice.test.sh
-  for f in plugins/soleur/test/*.test.sh plugins/soleur/skills/*/test/*.test.sh plugins/soleur/scripts/*.test.sh .claude/hooks/*.test.sh apps/cla-evidence/scripts/*.test.sh apps/web-platform/scripts/*.test.sh apps/web-platform/scripts/lib/*.test.sh scripts/lib/*.test.sh; do
+  for f in plugins/soleur/test/*.test.sh plugins/soleur/skills/*/test/*.test.sh plugins/soleur/scripts/*.test.sh .claude/hooks/*.test.sh .claude/hooks/lib/*.test.sh apps/cla-evidence/scripts/*.test.sh apps/web-platform/scripts/*.test.sh apps/web-platform/scripts/lib/*.test.sh scripts/lib/*.test.sh; do
     [[ -f "$f" ]] || continue
     run_suite "$f" bash "$f"
   done
