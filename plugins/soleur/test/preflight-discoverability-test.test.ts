@@ -1423,6 +1423,10 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
     expect(w).toMatch(/--tmpfs \/home/);
     expect(w).toMatch(/--tmpfs \/run/);
     expect(w).toMatch(/--unshare-all/);
+    // `/var` is not bound, so without this `/var/tmp` does not exist and every
+    // probe using this repo's own scratch convention (TMPDIR=/var/tmp) dies on
+    // `mktemp: No such file or directory`. Found by the execution replay.
+    expect(w).toMatch(/--tmpfs \/var\/tmp/);
     // `--tmpfs /run` removes /run/systemd/resolve/stub-resolv.conf, which
     // /etc/resolv.conf symlinks to; without the rebind every curl probe returns
     // rc=6 — indistinguishable from the #4148 DNS-typo regression.

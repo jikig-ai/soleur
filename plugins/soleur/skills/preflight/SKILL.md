@@ -1022,6 +1022,11 @@ RESOLV="$(readlink -f /etc/resolv.conf)"
 # bind stays READ-ONLY, so the `.git/hooks/pre-commit` write-back escalation is
 # still closed. Found by the #7393 execution replay — a static verb tally
 # structurally could not have detected it.
+# `--tmpfs /var/tmp` is a scratch dir, not a convenience: `/var` is not bound, so
+# without it `/var/tmp` does not exist inside the sandbox and every probe using
+# this repo's own documented scratch convention (`TMPDIR=/var/tmp`, per
+# scripts/test-all.sh) dies on `mktemp: No such file or directory`. bwrap creates
+# the `/var` parent implicitly, so nothing else from the host `/var` is exposed.
 GIT_COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"
 GIT_BIND=()
 if [[ "$GIT_COMMON_DIR" != "$REPO_ROOT"/* ]]; then
@@ -1031,7 +1036,7 @@ BWRAP_ARGS=(
   --ro-bind /usr /usr --ro-bind /etc /etc
   --symlink usr/bin /bin --symlink usr/lib /lib
   --symlink usr/lib64 /lib64 --symlink usr/sbin /sbin
-  --tmpfs /home --tmpfs /root --tmpfs /run --tmpfs /tmp
+  --tmpfs /home --tmpfs /root --tmpfs /run --tmpfs /tmp --tmpfs /var/tmp
   --ro-bind "$RESOLV" "$RESOLV"
   "${GIT_BIND[@]}"
   --ro-bind "$REPO_ROOT" "$REPO_ROOT" --chdir "$REPO_ROOT"
