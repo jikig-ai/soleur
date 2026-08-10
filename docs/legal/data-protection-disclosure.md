@@ -77,22 +77,57 @@ For the Web Platform:
 
 This section fulfills the commitment made in Section 8.1(a) to update this DPD with Article 28-compliant terms when cloud features are introduced.
 
-### 2.1c Operator-Assisted Processing
+### 2.1c Operator-Assisted Processing and Jikigai-Purpose Access
 
-Sections 2.1 and 2.2 describe the Plugin as the User runs it: on the User's own machine, under the User's own credentials, for the User's own purposes. In that configuration Jikigai is neither a Controller nor a Processor of the User's content, and those sections remain accurate.
+Sections 2.1 and 2.2 describe the Plugin as the User runs it: on the User's own machine, under the
+User's own credentials, for the User's own purposes. In that configuration Jikigai is neither a
+Controller nor a Processor of the User's content, and those sections remain accurate.
 
-An **operator-assisted session** is different. It is a session in which Jikigai, at the User's request, participates directly in running Soleur against the User's own material — using a Jikigai machine, a Jikigai-held credential, or both. The determining question is not whose machine executes the session but **whose credential funds it**.
+This section describes two things that fall outside that configuration. An **operator-assisted
+session** is a session in which Jikigai, at the User's request, participates directly in running
+Soleur against the User's own material — using a Jikigai machine, a Jikigai-held credential, or both.
+**Jikigai-purpose access** is any reading of a User's content by Jikigai for a purpose Jikigai has
+chosen, which can occur with no session at all.
+
+The determining question is therefore not whose machine executes the work. It is whether **any one**
+of three things is Jikigai's: the **machine**, the **credential**, or the **purpose**. Any one of the
+three is enough on its own, and more than one may be true at the same time.
 
 | Configuration | Jikigai's role |
 |---|---|
 | Plugin-local — User's machine, User's credentials, User's purposes | Neither Controller nor Processor |
-| Operator-assisted, acting on the User's instructions | **Processor** |
-| Operator-assisted, for Jikigai's own product-learning purpose | **Controller** |
+| A Jikigai machine or a Jikigai-held credential, used on the User's instructions | **Processor** |
+| A Jikigai machine or a Jikigai-held credential, used for a purpose Jikigai has chosen | **Controller** |
+| The User's own machine and the User's own credentials, but a purpose Jikigai has chosen — for example Jikigai reading a repository the User has given it access to, in order to measure how a programme is progressing | **Controller** |
 
-- **(a) The Processor role.** To the extent Jikigai processes the User's content on the User's instructions during an operator-assisted session, Jikigai acts as a Processor and the User acts as the Controller.
-- **(b) The Controller role.** Jikigai also observes how Soleur performs during such sessions in order to improve the product. For that purpose, and that purpose only, Jikigai acts as a Controller in its own right and relies on its legitimate interests under Article 6(1)(f).
-- **(c) Instrument first.** Jikigai carries out operator-assisted processing **only** under a written Article 28(3) instrument agreed with the User **before** the session begins. That instrument — not this Disclosure — governs sub-processor authorisation, international transfers, breach notification, audit rights, retention, and assistance with data-subject requests.
-- **(d) Not the default.** Operator-assisted processing never happens unless the User asks for it. A User may instead require that any such session run on the User's own machine under the User's own credentials, which removes Jikigai from the processing chain entirely.
+- **(a) The Processor role.** To the extent Jikigai processes the User's content on the User's
+  instructions during an operator-assisted session, Jikigai acts as a Processor and the User acts as
+  the Controller.
+- **(b) The Controller role.** Jikigai also observes how Soleur performs during such sessions in order
+  to improve the product. For that purpose, and that purpose only, Jikigai acts as a Controller in its
+  own right and relies on its legitimate interests under Article 6(1)(f). The interests pursued, the
+  balancing, the position on people who did not provide their data to Jikigai, and the right to object
+  are set out in GDPR Policy, Section 3.14.
+- **(c) Instrument first.** Jikigai does not carry out operator-assisted processing without first
+  agreeing a written Article 28(3) instrument with the User. Where such an instrument is agreed, it —
+  not this Disclosure — addresses sub-processor authorisation, international transfers, breach
+  notification, audit rights, retention, and assistance with data-subject requests. This limb concerns
+  the Processor role in (a) only: Article 28(3) governs processing carried out on a controller's
+  instructions, and it supplies no basis for the Controller roles in (b) and (e).
+- **(d) Not the default.** Operator-assisted processing never happens unless the User asks for it. A
+  User may instead require that any such session run on the User's own machine under the User's own
+  credentials. That removes the Article 28 Processor limb in (a) — the User's own provider
+  relationship replaces Jikigai's — but it does **not** remove the Controller limb in (b) or (e),
+  which turns on purpose rather than on whose credential is used.
+- **(e) Access granted to Jikigai, outside any session.** Where a User makes Jikigai a collaborator
+  on, or otherwise grants Jikigai access to, a repository or other store of the User's content, and
+  Jikigai reads it for a purpose Jikigai has chosen rather than one the User has instructed — for
+  example to measure how an early-access programme is progressing — Jikigai is a **Controller** for
+  that reading. This case is distinct from (a) to (d): it does not depend on the User having asked for
+  a session, it involves no Jikigai machine and no Jikigai-held credential, and it continues for as
+  long as the access lasts rather than ending with a session. It is described for data subjects in
+  GDPR Policy Section 3.14 and Privacy Policy Sections 4.2 and 8.1. A User may end it at any time by
+  withdrawing the access.
 
 ### 2.2 User's Responsibilities as Controller
 
@@ -109,7 +144,7 @@ The User is solely responsible for:
 
 ### 2.3 Limited Processing by Soleur
 
-Soleur's data processing activities are limited to:
+Soleur's data processing activities include:
 
 - **(a)** **Docs Site hosting and analytics:** The Soleur documentation website is hosted on GitHub Pages. GitHub may collect standard web server logs, including IP addresses, browser user-agent strings, and page request data. This processing is governed by [GitHub's Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement). Additionally, the Docs Site uses **Plausible Analytics** ([plausible.io](https://plausible.io)) for privacy-respecting website analytics. Plausible is cookie-free, does not store IP addresses, and collects only aggregated, anonymous data (page URLs, referrer URLs, country, device type, browser type).
 - **(b)** **GitHub repository interaction:** Users who submit issues, pull requests, or participate in discussions on the Soleur GitHub repository interact with GitHub's platform. That platform-level processing is governed by GitHub's terms and privacy policies. **Jikigai separately carries out its own processing of that same activity, for which Jikigai is the controller** — automated jobs read publicly visible repository activity (together with our Discord community and public Hacker News, X and Bluesky discussions), transmit that content to **Anthropic PBC (United States) as Jikigai's processor** under a Jikigai-held API key to generate awareness summaries, and have **republished** some of it — including contributor and stargazer usernames, Discord member handles and quoted excerpts — to the public repository and to public GitHub issues. The publication step has been assessed and **Article 6(1)(f) is not available for it as implemented**; it has not yet stopped, and the remediation is tracked at [#7119](https://github.com/jikig-ai/soleur/issues/7119). Recorded as Processing Activities **PA-31** and **PA-32** in the internal Article 30 register; described for data subjects in Privacy Policy Section 4.4 and GDPR Policy Section 3.3, with an Article 15/17/21 route at Privacy Policy Section 8.1. **[Correction, 2026-07-31 (#7100): this entry previously described repository interaction as governed by GitHub's terms alone, which omitted Jikigai's own controllership entirely.]**
@@ -158,6 +193,8 @@ Soleur's data processing activities are limited to:
 
 - **(ad)** **Owner-private beta-tester / prospect CRM (`beta_contacts` + `interview_notes` + `beta_contact_stage_transitions`, #6165, ADR-102):** A Web Platform user (the operator) records the people and teams they are in sales/product conversations with, in a **strictly owner-private** store (migration 126). Unlike (a)–(ac), here **the user is the controller and Jikigai is the processor** for the third-party personal data the user enters. **Data processed at rest** — four tables, owner-only RLS keyed on the user's `user_id`: (1) `beta_contacts` (mutable head): `name`, `company`, `role`, `source`, `stage`, `next_action`, `next_action_date`, `last_contact`, `amount` / `currency` / `amount_basis`, `expected_close_date`, timestamps; (2) `interview_notes` (append-only): verbatim dual-lens conversation `body` + `lens[]` in `{sales, product}`, `occurred_at`; (3) `beta_contact_stage_transitions` (append-only): `from_stage` / `to_stage` / `entered_at` pipeline-velocity history; (4) `beta_contact_access_log` (append-only read-accountability log, migration 127 / #6172): `user_id` + `contact_id` + `accessed_at` **metadata only** — records each operator open of a contact's detail in the read-only CRM drawer (GDPR **Article 5(2)** accountability), written **atomically** inside the `crm_get_contact_detail` SECURITY DEFINER RPC (fail-closed: no contact PII is returned unless the audit row is written; INSERT only via the RPC — no owner-write policy), **never a note body**. **Data subjects:** the beta testers / prospects — **involuntary, third-party data subjects** whose details were obtained in the course of a conversation → **Article 14 applies**; the LIA specifies the notice mechanism to the subject (contrast the (aa) Article 14(5)(b) disproportionate-effort posture — here the operator is in direct contact, so notice is feasible). **No special-category (Article 9) data is solicited** — the free-text `body` is an incidental ingress the operator is instructed to avoid populating with Article 9 data. **Agent read/write path & recipients:** the store is read and written on the operator's behalf by the platform's `cro`/`cpo` agents through `auth.uid()`-pinned SECURITY DEFINER functions; to reason over the records their content is transmitted to **Anthropic (US)** — a **Chapter V transfer** under the existing Anthropic DPA (SCCs Modules 2+3; see the Section 4.2 Anthropic row and GDPR Policy §6). Write tools are **human-gated** (the operator reviews and approves each agent write). **Legal basis:** legitimate interest (Article 6(1)(f) GDPR) — LIA at `knowledge-base/legal/legitimate-interest-assessments/2026-07-07-beta-crm-lia.md`. **Retention:** 24 months from `last_contact` (never-contacted records: from `created_at`) via an in-database `pg_cron` sweep (aligned with the 24-month PA-PII envelope). **Erasure (Article 17):** the owner's whole store is deleted by `ON DELETE CASCADE` from `public.users` on account deletion (no anonymise RPC — no statutory-retention class, ADR-102 §4); an **individual third party's** erasure request is fulfilled via the auditable service-role-only `crm_erase_contact` function (deletes a contact + CASCADEs its notes / transitions / read-accountability-log rows via the composite FK), keyed on contact identity. **TOMs (Article 32):** owner-only RLS (no cross-tenant read); RPC-only writes with an `auth.uid()` authorization pin + `SELECT … FOR UPDATE` ownership re-check (SECURITY DEFINER bypasses RLS, so the body is the gate) + no existence oracle; a RESTRICTIVE `<table>_jti_not_denied` policy (a revoked founder JWT is rejected at the PostgREST boundary); a composite FK `(contact_id, user_id)` that makes a cross-tenant child mis-stamp a DB error; PII-safe observability (the tools emit `{op, userId, code}` only and pass a **synthetic** Error so a raw Postgres error's `Failing row contains (…)` DETAIL cannot echo `name`/`company`/`body` to error-monitoring); human-gated write tools (the review gate is the mitigation for within-tenant prompt-injection over untrusted conversation content). **Automated decision-making:** none in the Article 22 sense — the records are the operator's own notes; no profiling or scoring of subjects. **Sub-processors:** Anthropic PBC (US, DPF + SCCs Modules 2+3 — agent reasoning; see the Section 4.2 row), Supabase Inc (EU — existing); **no new sub-processor**. Article 30 register entry: Processing Activity 30 (`knowledge-base/legal/article-30-register.md`). *(Draft — requires professional legal review.)*
 
+That list is not exhaustive. Operator-assisted processing and Jikigai-purpose access are described in Section 2.1c.
+
 For these activities, Jikigai acts as a Controller with respect to data it directly collects and processes (including CLA signature data and Web Platform account data). Third-party processors are engaged as described in Section 4.2.
 
 ---
@@ -196,13 +233,11 @@ The Plugin does not process Personal Data on behalf of Users (see Section 2.1). 
 
 The paragraph above describes plugin-local processing, where the User contracts directly with any AI provider under the User's own credentials, and it remains accurate for that configuration.
 
-**Operator-assisted sessions are the exception.** Where a session runs under a **Jikigai-held** credential rather than the User's own, the AI provider processing that content — **Anthropic PBC**, 548 Market Street, San Francisco, CA 94104, United States — is engaged as **Jikigai's** Sub-processor for that session rather than as the User's own provider. Authorisation under Article 28(2), the basis for any international transfer, and the applicable retention period are settled in the written instrument agreed with the User before the session begins. A User who prefers to avoid this entirely may require that the session run under the User's own credentials, in which case the AI provider remains the User's own processor and Jikigai is not part of the chain.
+**Operator-assisted sessions are the exception.** Where a session runs under a **Jikigai-held** credential rather than the User's own, the AI provider processing that content — **Anthropic PBC**, 548 Market Street, San Francisco, CA 94104, United States — is engaged as **Jikigai's** Sub-processor for that session rather than as the User's own provider. Because that Sub-processor is established in the United States, such a session involves a transfer of personal data outside the European Economic Area. Jikigai does not carry out operator-assisted processing without first agreeing a written instrument with the User; where such an instrument is agreed, it settles authorisation under Article 28(2), the basis relied on for that transfer, and the applicable retention position. **A copy of the safeguards relied on for the transfer is available from <legal@jikigai.com> on request.** A User who prefers to avoid this entirely may require that the session run under the User's own credentials, in which case the AI provider remains the User's own processor and Jikigai is not part of the chain.
 
 ### 4.2 Service Processors
 
-For processing activities where Jikigai acts as Controller (see Sections 2.1b and 2.3), the following third-party processors are engaged:
-
-**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c.
+For processing activities where Jikigai acts as Controller (see Sections 2.1b, 2.1c and 2.3), the following third-party processors are engaged:
 
 **Docs Site and Newsletter Processors:**
 
@@ -339,7 +374,7 @@ Soleur has no visibility into the User's local environment and therefore cannot 
 
 **Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c.
 
-Where an operator-assisted session has taken place, the written instrument agreed before that session addresses notification of personal-data breaches affecting that processing, and the User's audit rights in respect of it.
+Where an operator-assisted session has taken place, the written instrument agreed before that session addresses notification of personal-data breaches affecting that processing.
 
 ### 7.2 Platform Breaches
 
@@ -387,7 +422,7 @@ Given the local-only nature of the Plugin, traditional audit rights under Articl
 
 **Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c.
 
-Where an operator-assisted session has taken place, the written instrument agreed before that session addresses notification of personal-data breaches affecting that processing, and the User's audit rights in respect of it.
+Where an operator-assisted session has taken place, the written instrument agreed before that session addresses the User's audit rights in respect of that processing.
 
 ### 9.2 Web Platform Audit Rights
 
