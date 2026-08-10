@@ -15,6 +15,40 @@ requires_cpo_signoff: true
 
 > **Lane note.** `knowledge-base/project/specs/feat-one-shot-7408-worktree-safe-branch-derivation/spec.md` does not exist (this plan is the first artifact on the branch), so `lane:` could not be carried forward. Defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-10 (run inline by `one-shot`; the planning subagent reported it had substituted a five-agent panel for this skill, so the skill was re-run against `PLAN_PIPELINE_PREFIX`)
+
+**Halt gates — all pass or correctly skip:**
+
+| Gate | Result |
+|---|---|
+| 4.5 network-outage | skip — the only `ssh` hits are `NO ssh required` in `discoverability_test`; not a connectivity plan |
+| 4.55 downtime & cutover | skip — no infra reboot/replace, no lock-taking DDL, no router change |
+| 4.6 user-brand impact | **pass** — concrete body, threshold `single-user incident`, `requires_cpo_signoff: true` |
+| 4.7 observability | **pass** — 5/5 fields non-placeholder, layer 7 cited, `discoverability_test.command` SSH-free |
+| 4.8 PAT-shaped variable | **pass** — no match on any of the four shapes |
+| 4.9 UI wireframe | skip — no UI surface (`.sh`, `SKILL.md`, ADR `.md`) |
+| 4.10 encryption posture | skip — no new store or cross-component connection |
+
+**Verification checklist — resolved live, not from memory:**
+
+- All 4 cited rule IDs are **active** in `AGENTS.md`/`AGENTS.rules.md`: `cq-cite-content-anchor-not-line-number`, `cq-write-failing-tests-before`, `hr-observability-layer-citation`, `wg-ui-feature-requires-pen-wireframe`. No fabricated or retired IDs.
+- `ADR-099-git-surface-topology.md` exists (plan edits, does not create — no ordinal derivation needed).
+- Precedent suite `plugins/soleur/test/worktree-manager-sandbox-tmp-sweep.test.sh` exists.
+- All seven named functions exist at content anchors; the enumeration **independently reconfirms** that `remove_worktree` does not exist and that `copy_env_to_worktree` does.
+- No AC uses a repo-wide grep, so the self-matching-plan failure class does not apply here.
+- Bash strict-mode risk is already handled: the plan states sourcing imports `set -euo pipefail` and the preamble `exit 3`s outside a git repo, so the suite sources inside the fixture repo.
+
+### Key Improvement
+
+**AC13 was withdrawn — it was an unsatisfiable acceptance criterion aimed at the implementer.** It mandated a `$PWD` guard in `cleanup_orphan_worktree_dirs` that revision **R3 had already cut as unreachable**, and that Phase 3b ("specified and then **cut**") and `tasks.md` 3b.5 ("Not added") both record as cut. Because `tasks.md` 5.3 said "Walk AC1–AC13", `/work` would have been driven to implement a guard the plan deliberately rejected — the exact "propagate the correction in the same pass" failure this skill's checklist names, since `tasks.md` is the contract `/work` executes against. Fixed in both files.
+
+### Checked and Found Sound (no change)
+
+- `copy_env_to_worktree` initially read as a gap — the reconciliation table names it while Files-to-Edit omits it. It is **not** a gap: R4 cut it deliberately (pure consumer, no refname caller, auto-detect path already `basename`s), the reconciliation row says so, and `tasks.md` 3.7 records it. Plan is self-consistent.
+- The merge-order analysis against PR #7407 is measured from `gh pr diff`, not assumed — hunks are disjoint (first ~650 lines vs. targets at 1279+).
+
 ## Overview
 
 `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` ships in the Soleur plugin and runs on customers' machines. Its **producer** (`create_worktree`) derives the worktree directory path and the session-lease key from the **raw git branch name**, while its **consumer** (`cleanup_merged_worktrees`) assumes a **slugified** directory name — and says so in a comment:
@@ -201,7 +235,7 @@ Run the full suite from a worktree: `bash scripts/test-all.sh`. Record the pass 
 - [ ] **AC10** — PR body contains `Closes #7408`, does **not** scope in #7409, and names the untouched fourth transform copy at `plugins/soleur/skills/archive-kb/scripts/archive-kb.sh`.
 - [ ] **AC11** — **Phase 3b descendant guard.** Given a pre-existing nested layout (`.worktrees/ci/rule-metrics` registered, `.worktrees/ci` not), `cleanup_orphan_worktree_dirs` **skips** `.worktrees/ci` and both directories survive. This is the remediation arm for worktrees already on disk.
 - [ ] **AC12** — **The descendant guard does not over-trigger.** With `.worktrees/ci-foo` registered and `.worktrees/ci` a genuine unregistered orphan, the reaper still **removes** `.worktrees/ci`. A guard that skips it has used a string-prefix match instead of a path-boundary match and has silently disabled orphan reaping for every name-prefix family.
-- [ ] **AC13** — **Phase 3b `$PWD` guard.** With `$PWD` inside an unregistered orphan directory, the reaper skips it. Mutation-tested alongside AC5.
+- ~~**AC13** — **Phase 3b `$PWD` guard.**~~ **WITHDRAWN — do not implement.** This AC survived the revision that cut the guard it tests; it contradicts R3, Phase 3b ("specified and then **cut**"), and tasks.md 3b.5 ("Not added"). The guard is unreachable: the reaper deletes only directories that are both unregistered **and** `.git`-less, and a worktree you are standing in is registered. Retained struck-through rather than deleted so the numbering of AC1–AC12 stays stable across the review trail. *(Caught at deepen-plan; see R3.)*
 
 ### Post-merge (operator)
 

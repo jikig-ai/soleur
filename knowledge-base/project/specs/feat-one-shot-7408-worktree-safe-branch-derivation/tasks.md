@@ -64,7 +64,7 @@ Cite content anchors, never line numbers — #7407 shifts every line below ~650.
 
 - [ ] 5.1 `bash scripts/test-all.sh` from a worktree; record the pass count and confirm the new suite is discovered.
 - [ ] 5.2 `bash -n plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`. (No `shellcheck` job exists in `.github/workflows/` — do not gate on one.)
-- [ ] 5.3 Walk AC1–AC13.
+- [ ] 5.3 Walk AC1–AC12. (**AC13 is WITHDRAWN** — it tested the `$PWD` guard that R3 cut; see 3b.5. Do not implement it to satisfy this walk.)
 - [ ] 5.4 PR body: `Closes #7408`; name the untouched fourth transform copy at `plugins/soleur/skills/archive-kb/scripts/archive-kb.sh`; do **not** scope in #7409.
 
 ## Deferred (file as issues, do not scope in)
