@@ -35,6 +35,12 @@ Derived from [the plan](../../plans/2026-08-10-feat-legal-corpus-write-time-gate
 
 - [ ] 2.0 Design the waiver pragma: `<!-- legal-scope-block: ok #NNNN <ruling-path> <reason> -->`,
       1-line lookback, mandatory issue **and** ruling citation, reasonless pragma = exit 1 (R23).
+      **Dual-surface (D1):** the normaliser does not strip HTML comments, so a canonical-only
+      waiver increases drift and reds gate 2. Require it on both surfaces — do NOT strip comments
+      in the normaliser (that moves the T&C SHA `bae2422886453166` -> `d937ff6cef13df09` and the
+      whole 220-line baseline, for a 2% cleanup).
+- [ ] 2.0b AC: a canonical-only waiver reds gate 2; the same waiver on both surfaces passes both
+      gates. This is the cheapest proof that gates 1 and 2 compose (D1).
 - [ ] 2.1 **RED first** — fixtures for every arm, all synthesized (`cq-test-fixtures-synthesized-only`).
 - [ ] 2.2 Added-lines extraction. Pin the hunk contract for **all four** shapes incl. count-omitted
       `@@ -2,0 +3 @@`; skip `+c,0`; key path off `+++ b/` (renames); skip `+++ /dev/null`;

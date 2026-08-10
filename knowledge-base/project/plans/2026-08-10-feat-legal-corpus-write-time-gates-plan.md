@@ -1010,3 +1010,85 @@ into the sections above; this log records what changed and why.
 - **R31 — AC3 replaced** (spec-flow P1-7). With no legal-doc edits the added-line set is empty, so it
   asserted nothing. Replaced with a whole-corpus-as-added run reporting exactly the known main-branch
   scope blocks.
+
+---
+
+## Deepen-Plan Research Insights
+
+Deepened 2026-08-10, after the five-agent panel + CLO review. All mandatory halts pass
+(4.6 User-Brand Impact · 4.7 Observability · 4.8 PAT-shaped variable). 4.9 UI-wireframe and
+4.10 Encryption-posture do not trigger: the only UI-glob mention in the plan is the Domain Review's
+*negative* assertion, and no path matches `.tf` / `supabase/migrations/*.sql` / `cloud-init*.yml` /
+`docker-compose*.yml`. Citation sweeps clean: 3 cited AGENTS rule IDs all **active**, none retired;
+all 5 cited issue/PR numbers resolve with the states the plan claims.
+
+### D1 — The waiver pragma and Gate 2 collide, and the fix makes the gates cooperate
+
+Measured, not reasoned. The shared normaliser does **not** strip HTML comments:
+
+```
+normalised SHA without pragma: e06325fa09a37417
+normalised SHA with    pragma: 2122504f40723a4a   => the pragma is IN the drift set
+```
+
+So R23's proposed `<!-- legal-scope-block: ok … -->` waiver, added to the canonical only, would
+**increase drift and red Gate 2** — gate 1's escape hatch would trip gate 2. Worse, HTML comments
+are already asymmetric across the corpus and are therefore already part of the frozen baseline:
+
+| doc | drift | drift w/o comments | canonical `^<!--` | mirror `^<!--` |
+|---|---|---|---|---|
+| acceptable-use-policy | 18 | 17 | 3 | 2 |
+| data-protection-disclosure | 56 | 55 | 1 | **0** |
+| gdpr-policy | 63 | 61 | 14 | 12 |
+| privacy-policy | 58 | 57 | 14 | 13 |
+| terms-and-conditions | 0 | 0 | 2 | 2 |
+| **total** | **220** | **215** | | |
+
+**HTML comments account for 5 of the 220 drift lines (2%)** — a small but real, previously
+uncharacterised slice of what R14 says the freeze is hiding.
+
+**Two options, and the cheap one is also the correct one:**
+
+- **(A) Require the pragma on BOTH surfaces — chosen.** Drift is unchanged, the normaliser is
+  untouched, and AC14's pinned literal survives. It is also substantively right: a waiver annotating
+  a published legal statement belongs on the record *and* the published page. **Gate 2 then enforces
+  gate 1's waiver discipline for free** — a canonical-only waiver reds the mirror ratchet. The gates
+  cooperate instead of fighting.
+- **(B) Strip HTML comments in the shared normaliser — rejected.** Measured cost: the T&C
+  body-equivalence SHA moves `bae2422886453166` → `d937ff6cef13df09`, so **AC14's pinned literal
+  would have to be re-derived**, and the whole 220-line baseline shifts to 215. That is the exact
+  R28 cascade class (settle-before-Phase-1.1), taken on for a 2% cleanup with no other benefit.
+
+**Task additions:** Phase 2.0 records that the pragma is dual-surface; add an AC — *"a canonical-only
+waiver reds gate 2; the same waiver on both surfaces passes both gates."* That single AC is the
+cheapest possible proof that the two gates compose.
+
+### D2 — Precedent diff (Phase 4.4): both novel mechanisms have in-repo idioms
+
+The plan prescribes two pattern-bound behaviors with sibling precedent, so per Phase 4.4 they must
+be diffed rather than invented:
+
+- **The ratchet (R7).** Not novel — `scripts/lint-diagnosis-claims.sh` (*"the baseline ratchets DOWN
+  only"*, missing baseline → exit 2) and `scripts/lint-trap-tempfile-ownership.highwater` both
+  implement it. **The one genuine difference:** those baselines are *committed files*; gate 2's
+  baseline is *recomputed each run* from `git show <merge-base>:<path>`. That is strictly stronger —
+  there is no baseline artifact to launder, which removes the anti-laundering guard those scripts
+  need. Phase 3 should say so explicitly, because a reviewer who knows the committed-baseline idiom
+  will look for the missing guard.
+- **The waiver (R23).** Four in-repo idioms exist: an inline pragma with mandatory reason
+  (`lint-trap-tempfile-ownership.py`), a hash-bound ack file with replay protection
+  (`lint-rule-bodies.py` + `.claude/rule-weakening-acks.txt`), an in-file allowlist
+  (`check-adr-ordinals.sh`), and a reason-plus-issue exclusion array that fails closed
+  (`lint-orphan-test-suites.sh`). **The selection criterion is authority, not ergonomics:** the CLO,
+  not the engineer, must authorise a legal-scope exception — so the pragma must carry a mandatory
+  **ruling-document path**, and a pragma citing no ruling must itself be exit 1. That requirement is
+  what rules out the bare `# lint-…: ok <reason>` form.
+
+### D3 — Residual risk the plan should not pretend it closed
+
+Gate 1 cannot detect the two laundering paths named in its own spec (delete the delimiter; reword
+the section's markers). D1's dual-surface waiver and R16's measured superset close the *mechanical*
+holes, but the semantic ones stay open by construction. This is the strongest argument for R25's
+requirement that the **pass** message name what was not checked — the gate's honest claim is
+"no section-referent scope block was added into a marker-bearing section", never "the legal text is
+correct."
