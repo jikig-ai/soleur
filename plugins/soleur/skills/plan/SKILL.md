@@ -126,6 +126,111 @@ For every issue, blocker, dependency, or prior-art artifact the feature descript
 
 Emit a one-paragraph **Premise Validation** note (what was checked, what held, what was stale) into the research-insights scratch so Phase 1.7 and the plan's "Research Reconciliation" section can carry it forward. If nothing is cited by reference, state "no external premises to validate" and proceed.
 
+### 0.7. Skeleton Checkpoint (Always)
+
+Phase 1 dispatches the research fan-out — the most expensive stretch of this skill. Write the plan
+file **before** it runs, then persist each phase's findings as they land, so a stall costs one phase
+instead of the whole run (#7418, ADR-176).
+
+Everything this phase needs is already in hand: Phase 0.6 ran `gh issue view <N> --json state,title`
+for every cited issue, so the title — and therefore the slug — is free at this point.
+
+**1. Resolve the destination from the repo root, not the ambient CWD.**
+
+```bash
+PLANS_DIR="$(git rev-parse --show-toplevel)/knowledge-base/project/plans"
+BR=$(git branch --show-current)
+```
+
+A CWD-relative path can land the skeleton in the bare repo root, where the next sync clobbers it
+(`2026-05-15-one-shot-plan-subagent-cwd-divergence.md`). Use `$PLANS_DIR` everywhere below —
+including the selector — not a relative path.
+
+**2. Convert title to filename:** add today's UTC date prefix, strip the prefix colon, kebab-case,
+add a `-plan` suffix.
+
+- Example: `feat: Add User Authentication` → `2026-01-21-feat-add-user-authentication-plan.md`
+- Keep it descriptive (3-5 words after the prefix) so plans are findable by context.
+- **Freeform arm:** Phase 0.6 only fires when refs are cited, so an invocation with no `#N` has no
+  issue title. Derive the slug from the feature description instead.
+- This is the **only** filename-derivation site in this skill. Step 2 refines the frontmatter
+  `title:`; it does not re-derive the path. A `git mv` is reserved for a genuinely misleading slug,
+  at finalization only.
+
+**3. Select this branch's plan, if one already exists.** Match on the frontmatter `branch:` key —
+a run that begins at 23:5x UTC and resumes after midnight derives a *different* filename at step 2,
+so a fresh derivation would write a second file beside its own work.
+
+```bash
+# Frontmatter-bounded per candidate. A plan that DOCUMENTS this mechanism carries `branch:` in its
+# body, so a whole-file `grep -l "^branch: …"` selects on documentation — the #4724 class in the
+# sibling key. Bound the read to the leading `---` block, and tolerate a quoted value.
+PLAN=""
+for f in "$PLANS_DIR"/*.md; do                      # non-recursive: plans/archive/ excluded
+  [[ -e "$f" ]] || continue                         # no-match glob leaves the literal pattern
+  [[ "$(head -n 1 "$f")" == "---" ]] || continue    # no leading frontmatter -> not a plan
+  v=$(awk 'NR==1{next} /^---[[:space:]]*$/{exit}
+           /^branch:/{ sub(/^branch:[[:space:]]*/,""); gsub(/^"|"$/,""); print; exit }' "$f")
+  [[ "$v" == "$BR" ]] || continue
+  PLAN="$f"                                         # tiebreak: highest date prefix, then newest
+done                                                # mtime — the glob is already sorted by name
+```
+
+Duplicate `branch:` values exist on `main`, so the loop must keep scanning and apply the tiebreak
+rather than stopping at the first hit.
+
+**4. Branch on what the selected file contains.** `## Acceptance Criteria` is the completion
+predicate: it is the one heading present in all three detail-level templates, and it lands last,
+after every expensive phase. The skeleton writes `## Overview` and nothing else, so a stub can never
+carry it. (`## Overview` is **not** part of the predicate — the MINIMAL template has none.)
+
+| Existing state | Action |
+|---|---|
+| No file for this branch | Write the skeleton (step 5) |
+| File exists, **no** `## Acceptance Criteria` | An interrupted run's checkpoint. **Never re-write the skeleton.** If it already carries `## Research Insights`, skip the Phase 1 fan-out and continue from Phase 1.7's exit; otherwise continue to Phase 1 |
+| File exists **with** `## Acceptance Criteria` | A finished plan. **Never overwrite.** Headless: return the path and let the pipeline advance. Interactive: ask |
+| Selector matched nothing | Use the filename derived at step 2 |
+
+**5. Write the skeleton.** Frontmatter carries only what Phase 0.6 already knows:
+
+```yaml
+title: "<from gh issue view --json title>"
+date: <UTC date>
+slug: <the kebab title from step 2, without the date prefix or -plan suffix>
+branch: <git branch --show-current>
+issue: <N>                 # provisional — planning may re-target
+```
+
+Then `## Overview`, and nothing else.
+
+**Deliberately absent: `lane:`, `type:`, `closes:`, `priority:`, `domain:`,
+`brand_survival_threshold:` and `requires_cpo_signoff:`.** Every one is derived *after* research.
+Pre-seeding `lane:` is actively harmful — it bakes in the fail-closed `cross-domain` value, which
+*widens* the Phase 2.5 domain fan-out this checkpoint exists to protect. `issue:`/`closes:` are
+decided by planning, not by the invocation, so the skeleton's `issue:` is provisional and
+finalization rewrites both unconditionally.
+
+**No progress key.** Completion is asserted from content (`## Acceptance Criteria`), never from a
+dedicated frontmatter cursor. A second progress signal can disagree with the file's own content,
+and every such disagreement resolves to a fail-open arm — see ADR-176 §Considered Options 6.
+
+**Stub no conditional section.** The expected heading set depends on the detail level chosen at
+Step 4 — after research — and the conditional sections are gate-triggered. A placeholder for a
+section the finished plan legitimately skips trips `deepen-plan`'s halt gates. For the same reason,
+placeholder prose must avoid the literal tokens `TODO`, `TBD`, `N/A` and `placeholder`.
+
+**Sanitize the Overview.** Write a restatement in this skill's own voice, never a verbatim paste of
+the issue body. [lint-infra-no-human-steps.py](../../../../scripts/lint-infra-no-human-steps.py)
+scans this directory and `.claude/hooks/iac-plan-write-guard.sh` gates the Write itself; both reject
+prose pairing a human-actor token with an infrastructure imperative, and an issue body frequently
+contains one.
+
+**Write-denial arm.** The write guard is a PreToolUse *deny* hook. On denial, retry once with a
+minimal Overview (title only). If still denied, **proceed skeleton-less** and note the reason in the
+Session Summary — degrading to the pre-#7418 behaviour rather than aborting a run the operator is
+paying for. Do not reach for the guard's acknowledgement opt-out to force the write: it asserts a
+real infrastructure step was reviewed, which would be false here.
+
 ## Main Tasks
 
 ### 1. Local Research (Always Runs - Parallel)
@@ -209,6 +314,20 @@ After all research steps complete, consolidate findings:
 - Capture CLAUDE.md conventions
 - **Reconcile spec claims against codebase reality.** If the repo-research-analyst returned any "Gap callouts" or equivalent mismatches, the plan MUST include a "Research Reconciliation — Spec vs. Codebase" section (3-column table: spec claim / reality / plan response) placed between "Overview" and "Implementation Phases". This prevents the plan from inheriting spec fiction (e.g., claimed infrastructure that doesn't exist) as phase estimates. See `knowledge-base/project/learnings/best-practices/2026-04-15-plan-skill-reconcile-spec-vs-codebase.md`.
 
+**Persist the research to the plan file now — this is the write that makes the Phase 0.7 checkpoint
+pay.** Write a `## Research Insights` section into the plan holding the consolidated findings above:
+the relevant file paths, the applicable institutional learnings, any external documentation and best
+practices, the related issues and PRs, the CLAUDE.md conventions, and the **Premise Validation** note
+carried forward from Phase 0.6.
+
+Everything above this line was bought with the fan-out. A checkpoint that only reserved a filename
+would still lose all of it to a stall here. `deepen-plan` later enriches this section; `plan` is what
+first puts it on disk.
+
+**Write it in a SINGLE Edit at the end of consolidation, never incrementally.** Phase 0.7 step 4
+reads the section's presence as "the fan-out completed" and skips Phase 1 on that basis, so a
+half-written section would be read as a whole one.
+
 **Optional validation:** Briefly summarize findings and ask if anything looks off or missing before proceeding to planning.
 
 ### 1.7.5. Code-Review Overlap Check
@@ -264,7 +383,7 @@ After the plan draft has enumerated its `## Files to Edit` and `## Files to Crea
 
 **Step 2 re-check.** Once `## Files to Edit` is finalized in Step 2 (Issue Planning), re-run the one-liner if any candidate `description:` edit landed in the file list — including candidates the planner introduced in Step 2 that Phase 1 did not surface. The check fires on the final list, not the Phase 1 candidate set.
 
-**Headroom failure action.** If either check reports < 10 words remaining against the 1800-word cumulative cap (enforced by `plugins/soleur/test/components.test.ts`), include exact sibling-trim text (before/after) in `## Files to Edit` before proceeding. Skip silently if no SKILL.md `description:` edit is ever candidate or finalized.
+**Headroom failure action.** If either check reports < 10 words remaining against the cumulative cap — `SKILL_DESCRIPTION_WORD_BUDGET` in `plugins/soleur/test/components.test.ts`, which is the enforcing gate and the only authority on the number —, include exact sibling-trim text (before/after) in `## Files to Edit` before proceeding. Skip silently if no SKILL.md `description:` edit is ever candidate or finalized.
 
 ### 2. Issue Planning & Structure
 
@@ -276,9 +395,7 @@ Think like a product manager - what would make this issue clear and actionable? 
 
 - [ ] Draft clear, searchable issue title using conventional format (e.g., `feat: Add user authentication`, `fix: Cart total calculation`)
 - [ ] Determine issue type: enhancement, bug, refactor
-- [ ] Convert title to filename: add today's date prefix, strip prefix colon, kebab-case, add `-plan` suffix
-  - Example: `feat: Add User Authentication` → `2026-01-21-feat-add-user-authentication-plan.md`
-  - Keep it descriptive (3-5 words after prefix) so plans are findable by context
+- [ ] Refine the frontmatter `title:` drafted at Phase 0.7 into its final searchable form. The **filename is already fixed** — Phase 0.7 derived it before the research fan-out and this step does not re-derive it. A `git mv` is reserved for a genuinely misleading slug, at finalization only.
 
 **Stakeholder Analysis:**
 
@@ -768,8 +885,13 @@ Validate `LANE` against the 3-value enum (`single-domain`, `cross-domain`, `proc
    Both the plan file and tasks.md are committed together so the final plan and its task breakdown land in the same history entry:
 
    ```bash
-   git add knowledge-base/project/plans/ knowledge-base/project/specs/feat-<name>/tasks.md
-   git commit -m "docs: create plan and tasks for feat-<name>"
+   # Exact plan path, never the plans/ directory: a directory add sweeps abandoned skeletons from
+   # earlier runs into this commit. PLAN is the path Phase 0.7 resolved; the :? guard fails loudly
+   # rather than expanding to "" — `git add ""` aborts ATOMICALLY, which would silently drop
+   # tasks.md from the same command and leave both artifacts untracked.
+   : "${PLAN:?plan path unresolved — Phase 0.7 selector did not run}"
+   git add "$PLAN" "knowledge-base/project/specs/${BR}/tasks.md"
+   git commit -m "docs: create plan and tasks for ${BR}"
    git push
    ```
 
@@ -889,10 +1011,15 @@ When user selects "Create Issue", detect their project tracker from CLAUDE.md:
 **Update an existing plan:**
 If re-running `soleur:plan` for the same feature, read the existing plan first. Update in place rather than creating a duplicate. Preserve prior content and mark changes with `[Updated YYYY-MM-DD]`.
 
+This rule governs a plan that already has `## Acceptance Criteria`. A plan file lacking that section
+was interrupted mid-run; Phase 0.7 continues it in place rather than duplicating or overwriting it.
+
 **Archive completed plans:**
 Run `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh` from the repository root. This moves matching artifacts to `knowledge-base/project/plans/archive/` with timestamp prefixes, preserving git history. Commit with `git commit -m "plan: archive <topic>"`.
 
 ## Sharp Edges
+
+- **An ADR ordinal is PROVISIONAL until merge, and the probe must quantify over pushed branches — not `origin/main`.** A `git ls-tree origin/main` check answers "is this ordinal on the default branch", which is a different question from "is it claimed", and a branch-claimed ordinal is invisible to it. Enumerate across every `origin/*` ref, then **re-run the probe immediately before merge** — `main` moves under a long session. **Why:** #7418 collided twice on one branch: ADR-144 was `origin/main`-scoped and was already claimed by a pushed branch; the replacement ADR-174 was verified free across all 62 refs and then a sibling landed that exact ordinal on `main` mid-session. Neither collision was caught by a gate; both surfaced from a re-fetch. See `knowledge-base/project/learnings/2026-08-10-i-fixed-the-guard-twice-and-my-test-could-not-see-either-fix.md`.
 
 - **A plan claim of the form "X is not obtainable / not derivable / there is no source for X" is a UNIVERSAL NEGATIVE over a SET of mechanisms — enumerate the set before writing it.** Finding ONE mechanism blocked is evidence about that mechanism, never about the capability, and the highest-risk shape is a **suffix-variant sibling** (`FOO` vs `FOO_DAILY`, `_V2`, `_LEGACY`) because locating either one feels like locating *the* mechanism and stops the search. Cheapest gate: grep the DEFINING file for the family (`grep -n '<MARKER_PREFIX>' <definer>`), not the codebase for the name you already have; two hits with different suffixes is the tell. Corollary for correction plans: an AC set built only from ABSENCE assertions (`grep -c '<old>' == 0`, "the deleted filename appears nowhere") tests the new prose's SHAPE and can pass in full while the replacement claim is FALSE — add one AC asserting every claim the diff ADDS traces to a named line in a cited source. **Why:** #7086 — a plan found `SOLEUR_CLAUDE_COST_DAILY` genuinely blocked on an un-mintable admin key and generalized to "no fleet-wide figure is derivable"; the per-run `SOLEUR_CLAUDE_COST` marker 47 lines away in the same file had metered it for three weeks with a committed query, and ADR-108 recorded a figure ~29x the one the row carried. 10 ACs, 235/235 suites and a verified premise table all passed over it. See `knowledge-base/project/learnings/2026-07-30-one-blocked-mechanism-is-not-a-blocked-capability.md`.
 
@@ -973,7 +1100,7 @@ Run `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/arch
 - When a plan prescribes testing a security invariant of an LLM-mediated tool (SDK-invoked sandbox, agent-routed API call, MCP server driven by natural-language input), the test harness MUST remove the LLM from the assertion path. Natural-language prompts (`query({ prompt: "Run this command..." })`) are non-deterministic — the model may introspect, reword, refuse, or emit as text. A green suite proves model compliance, not the security invariant. Prefer: direct tool-invocation entry, captured-argv `child_process.spawn`, or any path that short-circuits the model. **Why:** #1450 plan initially scaffolded `query()`-prompt-based tier-4 bwrap assertions; plan-review caught this before any test shipped. See `knowledge-base/project/learnings/best-practices/2026-04-19-llm-sdk-security-tests-need-deterministic-invocation.md`.
 - When a plan adds a source-template drift-guard test (regex/grep over `.njk`, `.hbs`, `.html`, `.jsx`, etc.), the test's file list MUST be a directory walk over the source root — never a hardcoded file list taken from the issue body. Issue authors typically name 1-2 files; the bug class usually spans more. Prescribe `walkDir(resolve(REPO_ROOT, "<source-root>"))` plus a sanity assertion that the walk found ≥ N known templates. **Why:** #2609 plan scoped the drift-guard to `base.njk` + `blog-post.njk`; review found 9 other `.njk` files with the same bug pattern (`<script type="application/ld+json">` interpolations), widening required inline during review. See `knowledge-base/project/learnings/2026-04-19-jsonld-dump-filter-not-enough-needs-jsonLdSafe.md`.
 - When a plan prescribes HTML-escape-aware fixes inside `<script>` blocks (JSON-LD, inline config, hydration blobs), `JSON.stringify` / Nunjucks `dump` / similar JSON-serializers are necessary but not sufficient. The plan's Risks section MUST enumerate three hazard classes: (1) JSON parse failure (raw `"` / control chars), (2) HTML tag breakout (`</script>` / `</SCRIPT>` closes the outer tag), (3) JS runtime string termination (U+2028 / U+2029 in legacy runtimes). Prescribe a dedicated filter that applies all three escapes (`</` → `<\/`, `\u2028`, `\u2029`) rather than raw `dump`/`stringify`. **Why:** #2609 initial plan chose `| dump | safe` which left `</script>` breakout live for any attacker-controlled frontmatter field; review forced a `jsonLdSafe` filter inline. See the same learning file.
-- When a plan adds a new skill OR a new AGENTS.md rule, the Acceptance Criteria section MUST include the measured **current** budget headroom so the work phase knows how much room it has, not just the cap. For skills: run `bun test plugins/soleur/test/components.test.ts` at plan time and note `current/1800` words; prescribe the new description ≤ `1800 - current` words. For AGENTS.md rules: run `awk '/<rule-id>/ {print length($0)}' AGENTS.md` during drafting (not after), and verify the count with a grep of the new rule's byte length. **Why:** PR #2683 — initial skill description was 43 words over a 1799-word baseline (required trimming three sibling skills); initial AGENTS.md rule was 687 bytes over the 600-byte cap (required two trim iterations). See `knowledge-base/project/learnings/bug-fixes/2026-04-19-admin-ip-drift-misdiagnosed-as-fail2ban.md` session errors.
+- When a plan adds a new skill OR a new AGENTS.md rule, the Acceptance Criteria section MUST include the measured **current** budget headroom so the work phase knows how much room it has, not just the cap. For skills: run `bun test plugins/soleur/test/components.test.ts` at plan time, read `SKILL_DESCRIPTION_WORD_BUDGET` from that file, and note `current/<budget>` words; prescribe the new description ≤ `budget - current` words. Never carry a remembered cap into the plan — the constant has been raised several times, so a literal quoted from memory or from an older document is stale by default. For AGENTS.md rules: run `awk '/<rule-id>/ {print length($0)}' AGENTS.md` during drafting (not after), and verify the count with a grep of the new rule's byte length. **Why:** PR #2683 — initial skill description was 43 words over a 1799-word baseline (required trimming three sibling skills); initial AGENTS.md rule was 687 bytes over the 600-byte cap (required two trim iterations). See `knowledge-base/project/learnings/bug-fixes/2026-04-19-admin-ip-drift-misdiagnosed-as-fail2ban.md` session errors.
 - When a plan adds a **new** AGENTS.md rule, measure the **always-loaded** headroom by running the authority — `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md 2>&1` — against the 46000-byte critical cap, IN ADDITION to the per-rule 600-byte cap. Do NOT hand-roll `wc -c < AGENTS.md`: the thresholds are defined over **frontmatter-stripped** bytes, so a raw `wc -c` overstates `B_ALWAYS` by the frontmatter size and misreports headroom in exactly the near-cap regime where the number decides whether a rule can land. The `2>&1` is load-bearing — the WARN and REJECT verdicts print to stderr, so stdout alone is empty in the tier you are most likely to be in. `lint_union` ([lint-rule-ids.py](../../../../scripts/lint-rule-ids.py)) couples pointer↔body 1:1, so every rule body also costs an always-loaded `AGENTS.md` index pointer (~50-60 bytes). At-cap the rule **cannot land** without trimming prose elsewhere or retiring a rule; per ADR-151 there is no longer a class to demote into, and per #6794 the retirement rung needs evidence the usage telemetry cannot currently supply. If neither is justified, place the principle in the constitution / owning artifact only and drop the AGENTS pointer. **Why:** PR #5349 — main was at 22994 against the then-23000 cap; the planned `cq-minimalism-ladder-generation-bias` pointer tipped `B_ALWAYS` over and was descoped to constitution-only. See `knowledge-base/project/learnings/2026-06-15-agents-budget-at-cap-descopes-planned-rule-and-harvest-md-exclusion.md`.
 - When a plan paraphrases an issue body's file-path or site-count claims, `ls`/`Read` every path and grep every symbol the body names BEFORE writing the plan — not during deepen-plan. Paraphrase-without-verification is the single most common plan-drift class (wrong MCP file path, stale duplicate-site count, inverted test assertion). Run `rg '^function <symbol>\b' <dir>` for every distinguishing symbol in the issue body and add a §Research Reconciliation table if any divergence is found. **Why:** PR #2817 — three separate stale claims in the plan (MCP file at `lib/mcp/` vs `server/`, 4 createQueryBuilder sites vs 3, inverted test assertion shape) all caught at deepen-plan and resolved inline; moving the grep gate into Phase 1 would have caught them at the cheapest point. See `knowledge-base/project/learnings/best-practices/2026-04-22-ts-sql-normalizer-parity-when-shipping-backfill-migration.md`.
 - When a plan scopes "agent-native parity" or MCP tool parity with a UI feature, enumerate the UI hook's exported surface (`grep -E "^\s*(const|function|async function)" <hook-file>`) and map EVERY function to a tool or explicit deferral — don't trust the issue body's enumeration. Common miss: list/filter/archive/unarchive named; status-update or delete omitted. **Why:** PR #2817 plan scoped `conversations_list` + archive/unarchive but omitted `conversation_update_status` (the Command Center's most common action); agent-native-reviewer caught it at review and the tool had to be added inline. See same learning file.
