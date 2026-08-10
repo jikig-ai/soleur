@@ -335,13 +335,38 @@ verified by fetching every blob they declare via `crane blob`, which never decom
 runbook's exit-4 row instead of the unclassified exit 6. The cosign signature payload is now
 blob-verified too, closing a second manifest-outlives-its-blobs gap in the same predicate.
 
-**The recut is a clean slate, not a cure.** The store showed roughly 15 GB of
-manifest-referenced content against roughly 56 GB used. zot's gc completes repeatedly for
+**This recurrence is NOT the 2026-07-09 one, and the distinction is measured.** The
+`registry-zot-inventory` lever (#7278) completed its first licensed sweep on 2026-08-10 11:05 UTC
+(Actions run 31381962133, `enumeration_complete=true`, `verdict=answered`):
+
+```
+repos=2  tags=29  unique_blobs=307
+referenced_bytes=15867889866  referenced_gb=14.78
+fs_size_gb=59  fs_used_gb=59.00  pcent=100
+delta_gb=44.22   zot_restarts=37845
+```
+
+The 2026-07-09 recurrence was **capacity vs retention** — the keep-set legitimately exceeded the
+volume, so gc could not reclaim below it and the answer was a bigger disk plus a tighter keep-set.
+That is not this. Everything the retention policy says to KEEP is **14.78 GB against a 59 GB
+store** — capacity is now four times the keep-set. The store is full of bytes **no manifest
+references**.
+
+Read `delta_gb` for exactly what it is. It is an **upper bound** on unreferenced blob bytes and it
+**names no cause**: zot's dedupe cache DB and orphaned `blobs/uploads/` staging sessions would both
+produce this number with completely different remedies, and the sweep does not discriminate them.
+`fs_used_gb` is derived as `fs_size_gb × pcent/100`, which excludes ext4's root reserve and so
+carries a systematic overstatement of roughly 3 GB on this store — meaning a delta under ~3 GB
+would be indistinguishable from zero. 44.22 is an order of magnitude above that floor, so the
+finding survives its own error bar.
+
+**The recut is a clean slate, not a cure.** zot's gc completes repeatedly for
 `soleur-inngest-bootstrap` and never for `soleur-web-platform`, panicking in
 `pkg/scheduler/scheduler.go`. That is upstream **zot#4235** (open; PR #4236 unmerged), reported
-against 2.1.18 and therefore **not fixed in the v2.1.20 pin** the recut would deploy. Expect the
-store to refill. Measure the post-recut fill rate before anyone records #7341 as closed — the
-fill rate is the evidence, and a clean disk immediately after a recut is not.
+against 2.1.18 and therefore **not fixed in the v2.1.20 pin** the recut would deploy. A recut
+reclaims the 44 GB and leaves the mechanism that produced it in place. Expect the store to refill.
+Measure the post-recut fill rate before anyone records #7341 as closed — the fill rate is the
+evidence, and a clean disk immediately after a recut is not.
 
 ### Where we got lucky (again)
 
