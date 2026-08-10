@@ -261,9 +261,10 @@ reason, any placeholder prose must avoid the literal tokens `TODO`, `TBD`, `N/A`
 `placeholder`.
 
 **Sanitize the Overview.** Write a restatement in this skill's own voice, never a verbatim paste
-of the issue body. `scripts/lint-infra-no-human-steps.py` scans this directory and
-`.claude/hooks/iac-plan-write-guard.sh` gates the Write itself; both reject prose that pairs a
-human-actor token with an infrastructure imperative, and an issue body frequently contains one.
+of the issue body. [lint-infra-no-human-steps.py](../../../../scripts/lint-infra-no-human-steps.py)
+scans this directory and `.claude/hooks/iac-plan-write-guard.sh` gates the Write itself; both
+reject prose that pairs a human-actor token with an infrastructure imperative, and an issue body
+frequently contains one.
 
 **Write-denial arm.** The write guard is a PreToolUse *deny* hook. On denial, retry once with a
 minimal Overview (title only). If still denied, **proceed skeleton-less** and log the reason —
