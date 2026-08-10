@@ -128,9 +128,16 @@ result — a real assertion failure re-labelled `[KILLED]` and dropped from the 
 clean suite labelled `[KILLED]`. Downstream, the operator's `ci/main-broken` issue carries the wrong
 title, and an autonomous `test-fix-loop` could stage fixes and report success on an unresolved run.
 
-**If this leaks:** nothing. No secret is read, no network path opened, no store written; `[KILLED]`
-uses the stderr channel `[FAIL]` already uses, and the health monitor's existing redaction pass
-covers the issue body unchanged.
+**If this leaks:** via the `ci/main-broken` issue body in this **public** repo. Plan v2 said
+"nothing … the existing redaction pass covers the issue body unchanged" — that premise was false
+(R24), because this plan *changes what enters the body*, from `hits ∪ tail -30` to
+`hits ∪ killed_hits ∪ tail -30`. The `[KILLED]` line's own fields (static suite label, integer rc,
+`kill -l` name, integer ms) carry no secret, and the redactor does run after the append in the
+current file layout — but **neither fact is asserted anywhere**, so a later edit appending after the
+redactor would ship raw and still pass AC14. AC14 therefore gains a redaction fixture and a static
+ordering assertion. The widened `/proc` scan is same-uid only (cross-uid `readlink /proc/<pid>/cwd`
+returns EACCES → `<unreadable>`, measured), so it discloses no other user's paths; it can surface
+**same-uid cross-project** cwds, which §4.2 bounds.
 
 **Brand-survival threshold:** `aggregate pattern`.
 
@@ -154,11 +161,21 @@ Phase-6 fold-ins were cut, this threshold would have to be re-elected.
 | `lefthook.yml` (`bun-test` pre-commit) | binary non-zero | no |
 | `ci.yml` — `test-webplat` / `test-bun` / `test-scripts` | step exit = job result | no |
 | `main-health-monitor.yml` — tests + infra steps | `${PIPESTATUS[0]}`, re-raised | **yes** (R7) |
-| `plugins/soleur/scripts/grok-pre-push-gate.sh` | binary non-zero | no — but **re-emits** `[FAIL] <name>` for any non-zero step |
+| `plugins/soleur/scripts/grok-pre-push-gate.sh` | binary non-zero | no — but **re-emits** `[FAIL] <name>` for any non-zero step (folded in, §6.5) |
+| `package.json` `"test": "bash scripts/test-all.sh"` | binary non-zero | no |
 
-All are binary zero/non-zero, so exit `3` is safe for every one; exiting `0` on a killed suite would
-silently green lefthook, all three CI shards, the grok gate and the monitor. The aggregate `test`
-job reads *job results*, and `test` is the required context.
+**Eight sites, not the seven plan v2 listed** — `package.json` was missing, and it is the entry point
+the repo's own learnings tell plan authors to prefer. Measured: `npm test` and `bun run test` both
+propagate rc 3 verbatim.
+
+All eight are binary zero/non-zero, so exit `3` is safe for every one; exiting `0` on a killed suite
+would silently green lefthook, all three CI shards, the grok gate and the monitor.
+
+**Correction to plan v2 (R23):** the aggregate `test` job reads `needs.<shard>.result`, whose domain
+is `{success, failure, cancelled, skipped}` — so **the required `test` context cannot carry 3**. CI
+collapses killed→failure, and the distinction survives only in the shard log and the `[KILLED]`
+lines. Plan v2's Observability block claimed the 0/1/3 contract was "consumed by ci.yml's three shard
+jobs → the required `test` context"; that overstated what CI can resolve.
 
 **Agent-level consumers** — readers that terminate on parsed output, not exit code. These are the
 ones plan v1 missed:
@@ -232,9 +249,13 @@ liveness_signal:
   configured_in: "scripts/test-all.sh (summary block); .github/workflows/main-health-monitor.yml"
 
 error_reporting:
-  destination: "exit code (0 pass / 1 failed / 3 killed-only) consumed by ci.yml's three shard
-                jobs -> the required `test` context, by lefthook, and by grok-pre-push-gate.sh;
-                plus the ci/main-broken issue, whose body now carries the [KILLED] lines"
+  destination: "exit code (0 pass / 1 failed / 3 killed-only) consumed by lefthook, package.json,
+                grok-pre-push-gate.sh, the three ci.yml shards and both monitor steps; plus the
+                ci/main-broken issue, whose body now carries the [KILLED] lines.
+                SCOPE (corrected): exit 3 REDS the shard, but the required `test` context reads
+                needs.<shard>.result -- domain {success,failure,cancelled,skipped} -- so the
+                killed/failed distinction is recoverable from the shard log, a GitHub Actions
+                ::warning:: annotation, and $GITHUB_STEP_SUMMARY, NOT from the required context."
   fail_loud: true   # killed-only exits 3 -> non-zero -> the required check reds. No arm
                     # yields exit 0 with killed > 0; AC7 proves it by mutation, not by grep.
 
@@ -369,12 +390,26 @@ the classifier. Inlining removes the sourcing, the degradation stub, and two fil
     (`sed -n '/^suite_exit_class() {/,/^}/p'`, with an `assert count == 1` on the opening anchor),
     source it in a subshell, and table-drive:
 
-    `0, 1, 2, 124, 126, 127, 128, 129, 130, 134, 136, 137, 139, 141, 143, 159, 160, 161, 192, 193, 255`
+    `0, 1, 2, 3, 124, 126, 127, 128, 129, 130, 134, 136, 137, 139, 141, 143, 159, 160, 161, 162, 192, 193, 255`
+    plus the three malformed inputs `""`, `" "`, `abc` — **24 rows**.
 
-    **160/161 and 192 are load-bearing rows** and were absent from plan v1: 160/161 are the
-    `kill -l` empty-name case, 192 the numeric upper bound. Expected: `0 → ok`;
-    `129,130,134,136,137,139,141,143,159,192 → killed`; **everything else → `failed`**, including
-    `128` (`kill -l 0` succeeds with `EXIT`), `160`, `161`, `193`, `255`, and `124`.
+    Expected: `0 → ok`; `129,130,134,136,137,139,141,143,159,162,192 → killed`; **everything else →
+    `failed`**, including `128`, `160`, `161`, `193`, `255`, `124`, `3`, and all three malformed rows.
+
+    Five rows are individually load-bearing and each pins a specific guard — none was in plan v1:
+    - **128** pins `rc > 128` (`kill -l 0` returns `EXIT`, so without the guard this classifies
+      `killed` with signal name `EXIT`);
+    - **160/161** pin `-n "$name"` (`kill -l 32`/`33` return rc 0 with an empty name);
+    - **162** pins that the empty-name window is a *name* test, not a numeric range — without it,
+      mutating `-n "$name"` to `(( rc < 160 || rc > 161 ))` survives the whole table;
+    - **`""` / `" "` / `abc`** pin the numeric guard (R10);
+    - **3** pins the top-level-only exit contract (R12): a nested runner that adopted `exit 3` would
+      return 3 into `run_suite`, and this row is the executed assertion that it classifies `failed`.
+
+    Add a `MIN_ASSERTIONS` floor. Source the extracted function in a subshell that first sets
+    `set -euo pipefail` (so Part A exercises it under production shell options), `unset -f
+    suite_exit_class` before sourcing, assert `declare -F suite_exit_class` succeeds afterwards, and
+    `bash -n` the extracted block — otherwise a silently-empty extraction tests nothing.
 
     > `124` stays `failed` deliberately: GNU `timeout` returns it from *its own* exit, so it is an
     > attributed verdict by a named tool. Precedent: `scripts/lint-workflows.sh`'s rc `case`
@@ -391,7 +426,8 @@ the classifier. Inlining removes the sourcing, the degradation stub, and two fil
 
 ```bash
 suite_exit_class() {
-  local rc="$1" name
+  local rc="${1-}" name
+  [[ "$rc" =~ ^[0-9]+$ ]] || { printf 'failed\n'; return 0; }   # fail CLOSED on a malformed rc
   (( rc == 0 )) && { printf 'ok\n'; return 0; }
   if (( rc > 128 && rc <= 192 )); then
     name=$(kill -l $(( rc - 128 )) 2>/dev/null) || name=""
@@ -401,9 +437,21 @@ suite_exit_class() {
 }
 ```
 
-Every guard is load-bearing and was measured (R4): `rc > 128` because `kill -l 0` succeeds with
-`EXIT`; `<= 192` because `kill -l` **masks** values above 64 (`kill -l 143` → `TERM`); `-n "$name"`
-because signals 32/33 succeed with empty output. Do not "simplify away" any of the three.
+**The numeric guard is the one that closes an input-side false green** (R10, measured): without it
+`(( rc == 0 ))` on `""` or `" "` evaluates **true** and returns `ok` — the one class that increments
+no counter and emits no warning, reached from the opposite side of the `*)` arm §2.3 adds. It is not
+reachable from today's `run_suite` (`local rc=0` guarantees numeric) but it **is** reachable from
+Part A, the suite that certifies the classifier.
+
+`rc > 128` is load-bearing because `kill -l 0` succeeds with `EXIT`. `-n "$name"` is load-bearing
+because signals 32/33 succeed with **empty** output.
+
+> **`<= 192` is retained but is NOT load-bearing, and no test can pin it** (R11, measured). The call
+> passes `kill -l $(( rc - 128 ))`, so for every rc in 193..255 the operand is 65..127, which
+> `kill -l` rejects — the `-n "$name"` guard already excludes it. Mutating `rc > 128 && rc <= 192`
+> to `rc > 128` leaves all 24 table rows byte-identical. Keep it as a legibility bound with a comment
+> saying exactly this; do **not** claim a row pins it, and do not justify it by the `kill -l 143` →
+> `TERM` masking — that masking applies to `kill -l "$rc"`, which is not what is written.
 
 2.2 Initialize the counter beside the existing `failed=0` / `suites=0`:
 
@@ -454,10 +502,11 @@ both the phrase set and the optional-adjective structure (R6). The lint's scope 
 2.6 Summary and exit contract:
 
 ```bash
-echo "=== $((suites - failed - killed))/$suites suites passed ==="
+# BREAKDOWN FIRST, terminal marker LAST. The ordering is load-bearing, not cosmetic.
 if (( killed > 0 )); then
-  echo "=== $suites suites: $((suites - failed - killed)) passed, $failed failed, $killed killed (unresolved) ==="
+  echo "=== $suites suites: $((suites - failed - killed)) passed, $failed failed, $killed killed (unresolved — coverage not obtained) ==="
 fi
+echo "=== $((suites - failed - killed))/$suites suites passed ==="
 ...
 if (( failed > 0 )); then
   exit 1
@@ -466,9 +515,17 @@ elif (( killed > 0 )); then
 fi
 ```
 
-The first line keeps its byte shape (`^=== N/M suites passed ===$`) — anchored by four skills and
-~30 learnings. The breakdown line is gated on `killed > 0`, so a clean run's output is byte-identical
-to today's. Document the contract in a header block modelled on `scripts/zot-restart-loop-alarm.sh`'s
+**Why the breakdown goes first (R13).** Both lines are `=== …`-shaped. `work/SKILL.md`'s measured
+lesson from #6750 is *"match the runner's LAST emitted line, never a per-stage line that merely looks
+summary-shaped."* Emitting the breakdown last would make a summary-shaped line that is **not** the
+terminal marker the final one — reintroducing that exact ambiguity in the one scenario (a killed run)
+where an agent most needs to identify completion correctly. Ordering it first preserves both
+contracts at zero cost: byte-identical clean output **and** `=== N/M suites passed ===` remains the
+last `===` line on every arm.
+
+`killed=0` must be initialized beside `failed=0` / `suites=0` (§2.2) — under `set -u` the
+`(( killed > 0 ))` test aborts **after** the terminal marker and **before** the exit arm, yielding
+exit 0 on a run that had failures. Document the contract in a header block modelled on `scripts/zot-restart-loop-alarm.sh`'s
 `EXIT CONTRACT`:
 
 ```
@@ -505,9 +562,33 @@ to today's. Document the contract in a header block modelled on `scripts/zot-res
       the only way "byte-identical" is checkable inside the PR.
     - **A4** `[ok]` / `[FAIL]` literals unchanged.
     - **A5** mutation control: a copy whose `suite_exit_class` always returns `failed` → A1 must RED.
-    - **A7** mutation control for the exit contract: a copy with the `killed)` arm removed → the
-      killed-only run must exit **0**, and the suite must RED. This is what makes AC7 a proof
-      instead of an assertion.
+    - **A7** mutation control for the exit contract: a copy with **the `elif (( killed > 0 )); then
+      exit 3` arm deleted from the summary block** → the killed-only run exits **0**, and the suite
+      must RED.
+
+      > **Corrected (R15, measured).** Plan v2 specified this mutation as "remove the `killed)` case
+      > arm". That does not work: with `killed)` gone the class falls to the fail-closed `*)` arm,
+      > which counts it FAILED and exits **1**, not 0. The mutant is caught by the default arm, so
+      > the mutation reds for a reason the arm does not describe and AC7 proves nothing. The real
+      > false green lives in the *exit* block, so that is what must be mutated.
+    - **A8** the `*)` default arm, which plan v2 asserted only in prose: a copy whose classifier
+      prints `weird` → expect the `WARNING: … unrecognized class` line, counted FAILED, exit 1.
+      This implements T8b, which plan v2 listed in Test Scenarios with **no arm behind it**.
+    - **A8-control**: the same classifier mutation *plus* `*)` deleted → exit 0, and the suite must
+      RED. Without this pair the plan's flagship "false green a grep would never see" is pinned by
+      nothing executed.
+    - **A9** self-containment (R16): the suite's **own** stdout contains zero lines matching
+      `^\[KILLED\]`, `^\[FAIL\]`, `^\[ok\]`, or `^=== [0-9]+/[0-9]+ suites passed ===$`.
+
+      > **Why this arm exists.** `main-health-monitor.yml` runs
+      > `bash scripts/test-all.sh 2>&1 | tee -a /tmp/tests-output.txt` and then greps that file, so
+      > **any** column-0 `[KILLED]` line in it is indistinguishable from the runner's own marker.
+      > Following the precedent suite's idiom, a failing assertion in Part B dumps the captured
+      > sandbox output for diagnosis — which would re-emit `[KILLED] selfterm …` at column 0 into
+      > the very capture the monitor reads. That is self-inflicting, not adversarial: on any run
+      > where this suite reds, the operator would get an issue naming a suite called `selfterm` that
+      > does not exist. **Every dump of child-runner output must be indented**
+      > (`| sed 's/^/    /'`), and A9 pins the property against future edits.
 
     *(Plan v1's A6 — grepping the emitted line against the ADR-166 ban list — is cut. The lint
     already scans `scripts/test-all.sh`, so A6 duplicated AC10; both simplification reviewers
@@ -524,11 +605,28 @@ to today's. Document the contract in a header block modelled on `scripts/zot-res
 
 ### Phase 4 — widen the sibling probe (`SIBLING_SUITE_DETECTED`)
 
-4.1 Parameterise the scan: `tc_siblings [mode]`, `mode` defaulting to `run`. The run matcher is
-    **moved, not modified** — byte-identical predicate, same argv-position discipline, same
-    rejected-alternatives comment block. The default keeps every existing caller (including the 73
-    assertions in `scripts/test-contention.test.sh`) working unchanged; **that suite passing
-    unmodified is the regression proof that `SIBLING_RUN_DETECTED` semantics did not move** (AC5).
+4.1 **Split the enumerator from the two views — do NOT add a `mode` parameter** (R14). Plan v2
+    proposed `tc_siblings [mode]`; that signature *cannot express* what 4.3 requires. Cancellation is
+    a **cross-bucket** predicate (a suite match survives only if no *run* match is its ancestor), so
+    the run-match set must be in scope during the same walk. A mode parameter forces either two
+    `/proc` walks — two non-atomic snapshots, the exact defect 4.3 forbids — or a third `both` mode
+    that dispatches on return *shape*, which `tc_preamble` then has to re-split.
+
+```bash
+# ONE walk. Emits: class<TAB>pid<TAB>cwd<TAB>elapsed, class ∈ run|suite.
+# Ancestry/pgid cancellation happens INSIDE, where both buckets are in scope.
+_tc_scan_procs() { … }
+
+# Back-compat surface, byte-identical output. AC5 becomes STRUCTURAL, not disciplinary.
+tc_siblings()       { _tc_scan_procs | awk -F'\t' '$1=="run"   {print $2"\t"$3"\t"$4}'; }
+tc_suite_siblings() { _tc_scan_procs | awk -F'\t' '$1=="suite" {print $2"\t"$3"\t"$4}'; }
+```
+
+    The run matcher is **moved, not modified** — byte-identical predicate, same argv-position
+    discipline, same rejected-alternatives comment block. All 22 `tc_siblings` call sites in
+    `scripts/test-contention.test.sh` are zero-arg (measured), so under this shape AC5 passes because
+    the signature and output never changed — not because a moved predicate was hand-checked.
+    `tc_preamble` calls `_tc_scan_procs` **once** into a variable and derives both counts from it.
 
 4.2 The `suite` matcher, same discipline:
     - `argv[0]` basename matches `*.test.sh`, **or** matches `test-*.sh` and is **not**
@@ -634,12 +732,23 @@ TEST_TIMING_LOG=/var/tmp/7424-timing.tsv bash tests/scripts/test-registry-gate-m
     - a **second, separate** grep that sets its own flag **and appends its hits to `SUMMARY`**:
 
 ```bash
-killed_hits=$(grep -E '^\[KILLED\]' "$file" | head -20) || killed_hits=""
+# SHAPE-anchored, not prefix-anchored (cq-assert-anchor-not-bare-token): the file contains
+# arbitrary suite stdout, so `^\[KILLED\]` alone is forgeable by any suite that prints it.
+# head -20 bounds LINES; cut bounds LENGTH — a single 100 KB line would push the body past
+# GitHub's 65536-char limit, `gh issue create` would fail, and the monitor would file NOTHING
+# on a broken main (an alarm that dies exactly when it is needed).
+killed_hits=$(grep -E '^\[KILLED\] [^ ]+ \(exit=[0-9]+, signal-shaped 128\+[0-9]+ = SIG[A-Z0-9]+, [0-9]+ms\)' "$file" \
+  | head -20 | cut -c1-500) || killed_hits=""
 if [[ -n "$killed_hits" ]]; then
   HAS_KILLED_MARKER=1
   SUMMARY="${SUMMARY}${killed_hits}"$'\n'
+  SUMMARY="${SUMMARY}--- (tail) ---"$'\n'
 fi
 ```
+
+    `HAS_KILLED_MARKER=0` must be initialized beside the existing `HAS_FAIL_MARKER=0`. Corroborate
+    the flag with the runner's **breakdown line** (which the runner emits exactly once) so a suite
+    would have to forge both, in the right order, to select the fourth arm.
 
       The append is not optional. The existing `hits` variable feeds **both** `HAS_FAIL_MARKER`
       **and** `SUMMARY`, so a killed-only run would otherwise produce an issue body containing only
@@ -663,31 +772,80 @@ LEDE="At least one suite exited with a signal-shaped status (128+N). The runner 
       block states the ADR-166 rule. The lint's `CLAIM` regex has no `usually` pattern, which is why
       it survives; that makes it a genuine miss rather than an accepted exception. One line, same
       file, same defect class as the work in hand (`rf-review-finding-default-fix-inline`).
+    - **derive `ACTIONS` per arm (R17).** The `### Actions required` block is currently **hardcoded
+      across every arm**: *"1. Identify the commit that introduced the failure / 2. Fix the tests or
+      revert the breaking change / 3. Verify CI passes on main before closing this issue."* Left
+      alone, the non-technical operator gets an issue titled *"…was terminated before it could
+      report"*, a LEDE that carefully says *"this issue is not a statement that main is broken"*, and
+      then three numbered instructions telling them to find the bad commit and revert it — the only
+      actionable text on the page, and it is wrong. Killed arm:
+
+```
+1. Re-run this check: `gh workflow run main-health-monitor.yml`
+2. If the same suite is reported terminated again, file a tracking issue for it and link it here
+3. Do not revert anything on this issue alone — no suite reported a failure
+```
+
+    - **emit `${LEDE}` in the comment path too (R18).** The existing-tracker path emits only
+      `HEADING` + the redacted body under a fixed *"Main branch health check still not passing"*
+      sentence, so runs 2, 3, 4 … of a flapping killed suite each append an escalating claim that
+      main is broken, produced by a runner that measured nothing. The killed arm's LEDE is the one
+      sentence that must survive into the comment.
 
 6.2 `plugins/soleur/test/main-health-monitor-workflow.test.sh`: assertion (8) stays **unchanged**.
     Add (8b) — the workflow greps `^\[KILLED\]` into a distinct variable, appends those hits to
     `SUMMARY`, and carries a fourth title/lede arm naming no cause — with a `bad()` message
     explaining what regresses without it.
 
-6.3 `plugins/soleur/skills/work/SKILL.md` — two edits:
-    - the reap-vs-failure discriminator gains a third arm: a **suite** killed while the runner
-      survived leaves `[KILLED]` lines, a terminal marker **and** rc=3, distinguishable from both a
-      real failure and a harness reap of the runner itself;
-    - the closed banner enumeration `SIBLING_RUN_DETECTED` / `LOW_TMP_HEADROOM` gains
-      `SIBLING_SUITE_DETECTED`.
+6.3 `plugins/soleur/skills/work/SKILL.md` — **three** edits, not two (R19). Plan v2 missed §663,
+    which is where the runner's exit semantics are actually stated to agents (*"`rc` is the verdict
+    … `rc=0` answers 'did every suite it ran pass?'"*) and which carries a **second** closed banner
+    enumeration. §663 needs the third arm more than §745 does: after this PR a non-zero rc no longer
+    means "a suite failed".
+    - §663: rc third arm + banner enumeration;
+    - §745: the reap-vs-failure discriminator gains a third arm — a **suite** killed while the
+      runner survived leaves `[KILLED]` lines, a terminal marker **and** rc=3;
+    - §743: the closed `SIBLING_RUN_DETECTED` / `LOW_TMP_HEADROOM` enumeration gains the new banner.
 
-6.4 `plugins/soleur/skills/test-fix-loop/SKILL.md` — **the false-green fold-in (R8).** Its
-    termination table fires on "All tests pass | Zero failures", which a killed-only run satisfies:
-    the loop would stage fixes and report success on a run that measured nothing. Add the third
-    state — a run with `[KILLED]` lines or rc 3 is **unresolved**: do not report success, do not
-    stage, re-run the killed suite in isolation.
+    Verified and needing **no** edit: §663's prescribed grep is anchored on the emitter prefix
+    (`\[contention\] BANNER`), so `SIBLING_SUITE_DETECTED` is caught mechanically. Add `^\[KILLED\]`
+    to that alternation anyway, plus one clause on what a hit means.
 
-6.5 Recorded as **checked, no edit needed** (so the next reader does not re-derive it):
-    `one-shot/SKILL.md`'s `^=== N/N suites passed ===$` poll is safe — a killed run is `N < M`, so
-    it can never falsely match green. `git-worktree/SKILL.md`'s "a killed run and a finished run are
-    indistinguishable" sentence is about the **process table**, not runner output, and stays true.
-    `grok-pre-push-gate.sh` re-emits `[FAIL] <step-name>` for any non-zero step; that label means
-    "this step did not pass", which remains true for exit 3 — noted, not changed.
+6.4 `plugins/soleur/skills/test-fix-loop/SKILL.md` — **the false-green fold-in, and it is four call
+    sites, not one (R20).** Plan v2 edited only the termination table, which is not the dangerous one:
+    - **pre-loop gate** (*"If all tests pass, exit with 'All tests already pass. Nothing to fix.'"*)
+      is a separate path above the table with the identical defect — read rc, not "all tests pass";
+    - **parse step** — a killed-only run yields zero parsed failures, so zero clusters; the loop has
+      no defined behaviour for "non-zero exit, nothing parseable", a shape newly reachable *because
+      of this PR*;
+    - **iteration arithmetic — the sharp one.** A suite that FAILED in iteration N and is KILLED in
+      N+1 **lowers** the parsed count, so the loop reads a fabricated improvement and continues; when
+      it completes again in N+2 the count jumps back → the loop reads **Regression** → `git reset
+      --hard HEAD` and **discards real fixes on a signal artifact**. The count driving every row must
+      be `failures + killed`, and a killed suite must be excluded from the delta rather than counted
+      as fixed;
+    - a **terminating row**: any `^[KILLED]` line or rc 3 → do not stage, do not report success, do
+      not reset; re-run that suite in isolation; on a second kill, stop and report unresolved.
+
+6.5 `plugins/soleur/scripts/grok-pre-push-gate.sh` — **fold in (R21).** Plan v2 recorded this as
+    "noted, not changed" on the grounds that `[FAIL]` still means "this step did not pass". That is
+    the same reasoning the plan rejects as Alternative A1, applied to the wrapper that gates every
+    push (and that `ship` Phase 6 aborts on). Its `run_step` is R1's defect verbatim (`if "$@"`).
+    ~5 lines: capture rc, and on 3 emit `[UNRESOLVED] $name — a suite was terminated; see the
+    [KILLED] lines above` while still exiting non-zero.
+
+6.6 `plugins/soleur/skills/one-shot/SKILL.md` — **fold in (R22).** Plan v2 recorded the
+    `^=== N/N suites passed ===$` poll as safe because a killed run is `N < M` and so cannot match
+    green. True, and incomplete: the poll then **never matches**, the `Monitor` runs out its clock,
+    and the agent holds `{no marker match, harness-clock timeout}` — byte-for-byte the *reap*
+    signature, which `work/SKILL.md` tells it to treat as "not your diff" and move on. The plan
+    closes the false-green half of the discriminator and leaves the false-**dismissal** half open.
+    Poll the *shape* `^=== [0-9]+/[0-9]+ suites passed ===$` plus the rc file, and state the
+    trichotomy: marker + rc 0 = green; marker + rc 3 = KILLED; no marker + no rc = harness reap.
+
+6.7 Recorded as **checked, no edit needed**: `git-worktree/SKILL.md`'s "a killed run and a finished
+    run are indistinguishable" sentence is about the **process table**, not runner output, and stays
+    true; `review/SKILL.md` cites `SIBLING_RUN_DETECTED` only as an example of the anchor rule.
 
 ### Phase 7 — ADR + deferral
 
@@ -719,12 +877,15 @@ LEDE="At least one suite exited with a signal-shaped status (128+N). The runner 
 | Path | Change |
 | --- | --- |
 | `scripts/test-all.sh` | inline `suite_exit_class`; `killed=0` beside `failed=0`/`suites=0`; `run_suite` rc capture + 4-arm `case` incl. fail-closed default; `[KILLED]` render; `TEST_TIMING_LOG` field-3 `KILLED` + header contract comment; breakdown line; `exit 3` arm + EXIT CONTRACT block; `_suite_budget_ms` `case` + `[budget]` line; one `run_suite` registration |
-| `scripts/lib/test-contention.sh` | `tc_siblings [mode]` (run matcher moved unchanged); `suite` matcher + scope-edge comments; single-walk ancestry/pgid cancellation; `SIBLING_SUITE_DETECTED` banner |
-| `scripts/test-contention.test.sh` | parameterise `make_fake_proc`'s `argv[0]`; 8 new arms incl. T11b/T11c/T13; every existing arm passes unchanged |
-| `.github/workflows/main-health-monitor.yml` | `^\[KILLED\]` grep into its own flag **+ SUMMARY append**; fourth arm; fix the pre-existing "usually a step or job timeout" LEDE; existing `^RED \|^\[FAIL\]` grep byte-unchanged |
-| `plugins/soleur/test/main-health-monitor-workflow.test.sh` | assertion (8b); (8) unchanged |
-| `plugins/soleur/skills/work/SKILL.md` | third arm in the reap discriminator; banner enumeration gains `SIBLING_SUITE_DETECTED` |
-| `plugins/soleur/skills/test-fix-loop/SKILL.md` | third termination state — unresolved ≠ pass |
+| `scripts/lib/test-contention.sh` | `_tc_scan_procs` single-walk enumerator + thin `tc_siblings`/`tc_suite_siblings` filters (run matcher moved unchanged); `suite` matcher + scope-edge comments; ancestry/pgid cancellation inside the walk; `SIBLING_SUITE_DETECTED` banner |
+| `scripts/test-contention.test.sh` | parameterise `make_fake_proc`'s `argv[0]` **and ppid/pgrp** (today both hardcoded 0); 9 new arms incl. T11b/T11c/**T11d**/T13; raise the 40-assertion floor; every existing arm passes unchanged |
+| `.github/workflows/main-health-monitor.yml` | shape-anchored `^\[KILLED\]` grep into an initialised `HAS_KILLED_MARKER` **+ SUMMARY append + separator + length bound**; fourth arm; **per-arm `ACTIONS` block**; **`${LEDE}` in the comment path**; fix the pre-existing "usually a step or job timeout" LEDE; existing `^RED |^\[FAIL\]` grep byte-unchanged |
+| `plugins/soleur/test/main-health-monitor-workflow.test.sh` | assertion (8b) + redaction fixture + static ordering assertion; (8) unchanged |
+| `plugins/soleur/skills/work/SKILL.md` | **three** edits: §663 (rc third arm + 2nd banner enumeration + `^\[KILLED\]` in its grep), §745 (reap discriminator third arm), §743 (banner enumeration) |
+| `plugins/soleur/skills/test-fix-loop/SKILL.md` | **four** sites: pre-loop gate, parse step, iteration-delta arithmetic, terminating row |
+| `plugins/soleur/scripts/grok-pre-push-gate.sh` | `run_step` captures rc; exit 3 renders `[UNRESOLVED]`, still non-zero |
+| `plugins/soleur/skills/one-shot/SKILL.md` | poll the marker *shape* + rc file; state the green/killed/reap trichotomy |
+| `AGENTS.rules.md` | one short clause on `wg-when-a-test-runner-crashes-segfault-oom` scoping a `[KILLED]` suite in, pointing at ADR-175 for the ladder (id unchanged). **Budget-gated:** `B_ALWAYS`=44400 vs the 46000 ratchet (WARN at 44000) — keep it under ~150 bytes and re-run `lint-agents-rule-budget.py`; if it does not fit, drop the clause and carry the ladder in ADR-175 + the two skills only |
 
 ## Files to Create
 
@@ -757,49 +918,77 @@ All pre-merge. **No post-merge operator steps.**
    `bash scripts/test-all.sh`; does not fire for a whitespace-bearing `bash -c` string; a run + its
    suite child counts once (run banner only); an `env`-wrapped run + its suite child counts once;
    `<unreadable>` cwds do not cross-cancel; no siblings → neither banner.
-7. **AC7 — no false green, proved by mutation.** Arm A7: a copy with the `killed)` arm removed makes
-   the killed-only run exit 0, and the suite REDs. Arm A5: a copy whose classifier always returns
-   `failed` makes A1 RED. *(Plan v1's grep-based AC is dropped — a grep cannot establish a negative
-   existential over control flow, and the property was in fact violable by the missing `case`
-   default a grep would never see.)*
-8. **AC8 — the terminal marker's byte shape is preserved.** On `killed == 0` the tail is diffed
-   against the tail produced by running `git show origin/main:scripts/test-all.sh` through the same
-   sandbox, and the diff is empty.
-9. **AC9 — `[ok]` / `[FAIL]` literals unchanged**, asserted against the literal strings.
-10. **AC10 — the ADR-166 lint stays green.** `bash scripts/lint-diagnosis-claims.sh` exits 0 with a
+7. **AC7 — no false green, proved by executed mutation (not by grep).** Four arms, each of which
+   must RED against its mutant: **A7** deletes the `elif (( killed > 0 )); then exit 3` arm → the
+   killed-only run exits 0; **A5** forces the classifier to `failed` → A1 REDs; **A8** forces an
+   unrecognized class → WARNING + counted FAILED + exit 1; **A8-control** additionally deletes `*)`
+   → exit 0. *(Plan v2's grep-based AC is dropped: a grep cannot establish a negative existential
+   over control flow, and the property was in fact violable by a missing `case` default and by a
+   non-numeric rc — neither of which a grep sees. Plan v2's A7 was also mis-specified: removing the
+   `killed)` arm falls through to `*)` and exits 1, so it could never have shown the false green.)*
+8. **AC8 — the terminal marker's byte shape is preserved, non-vacuously.** On `killed == 0` the
+   tail (defined as `sed -n '/^=== [0-9]*\/[0-9]* suites passed ===$/,$p'`, so the nondeterministic
+   `tc_epilogue` sample is excluded) is diffed against the same tail from
+   `git show origin/main:scripts/test-all.sh` run through the same sandbox, and the diff is empty.
+   The main-side tail must be asserted **non-empty and marker-bearing before diffing** (otherwise
+   empty-vs-empty passes), and a failure to resolve `origin/main` is a hard `fail()`, never a skip.
+9. **AC8b — ordering.** On the killed arm the **last** `===`-prefixed line is
+   `^=== [0-9]+/[0-9]+ suites passed ===$`, not the breakdown line (R13).
+10. **AC9 — `[ok]` / `[FAIL]` literals unchanged**, asserted from **emitted output** on the A2/A4
+    arms (not a source grep — that is the spelling-assertion anti-pattern the precedent rejects).
+11. **AC10 — the ADR-166 lint stays green.** `bash scripts/lint-diagnosis-claims.sh` exits 0 with a
     live count ≤ the committed highwater `1`; the highwater is **not** raised. Its `DIRS` covers
     both `scripts/test-all.sh` and `.github/workflows/main-health-monitor.yml`, so this single
     command gates every new message this PR ships.
-11. **AC11 — shell-capture lint green.** `0 new findings`; the baseline file is **not** edited.
-12. **AC12 — no orphan suite.** `bash scripts/lint-orphan-test-suites.sh` prints
+12. **AC11 — shell-capture lint green.** `0 new findings`; the baseline file is **not** edited.
+13. **AC12 — no orphan suite.** `bash scripts/lint-orphan-test-suites.sh` prints
     `orphan test suites: none`; its `EXCLUSIONS` array stays empty.
-13. **AC13 — sandbox anchors survive.** `bash scripts/test-all-infra-coverage-notice.test.sh` passes,
+14. **AC13 — sandbox anchors survive.** `bash scripts/test-all-infra-coverage-notice.test.sh` passes,
     and `grep -n '^run_suite() {'` returns exactly one line whose matching close brace is the first
     subsequent column-0 `}`.
-14. **AC14 — the monitor names no unmeasured cause, and names the suite.** A `^\[KILLED\]` grep
+15. **AC14 — the monitor names no unmeasured cause, and names the suite.** A `^\[KILLED\]` grep
     exists in a variable distinct from `HAS_FAIL_MARKER`; **its hits are appended to `SUMMARY`**, so
     a killed-only fixture log yields an issue body containing the `[KILLED]` line; the existing
     `grep -E '^RED |^\[FAIL\]'` is byte-unchanged; the fourth arm's LEDE contains no banned
     construction and does not contain the word `timeout`; the pre-existing third-arm LEDE no longer
     asserts a timeout. `bash plugins/soleur/test/main-health-monitor-workflow.test.sh` passes with
     (8) unmodified and (8b) present.
-15. **AC15 — budgets are declared and measured, or explicitly deferred.** Either
+16. **AC15 — budgets are declared and measured, or explicitly deferred.** Either
     `_suite_budget_ms tests/scripts/registry-gate-mutation-battery` returns a **non-empty integer**
     and every declared value carries a comment naming the measured wall-clock, the date and the
     multiple — **or** Phase 5 is recorded as deferred to the Phase-7.2 issue with the measurement
     attempt noted. An empty `case` shipped silently satisfies neither branch. T14 proves the emitter
     independently via a fixture with a 0 ms budget.
-16. **AC16 — the ADR ships with the code.** `ADR-175-*.md` exists; its `## Decision` states the
+17. **AC16 — the ADR ships with the code.** `ADR-175-*.md` exists; its `## Decision` states the
     three-class taxonomy and the 0/1/3 contract; `## Consequences` states the wrapper-absorption
     limit and that 3 is top-level-only; `## Alternatives Considered` carries A1–A5. After any
     ship-time renumber, `grep -rn 'ADR-175'` over the plan, spec dir and ADR body returns zero stale
     hits.
-17. **AC17 — deferral tracked.** The Phase-7.2 issue exists with its re-evaluation criterion, filed
+18. **AC17 — deferral tracked.** The Phase-7.2 issue exists with its re-evaluation criterion, filed
     with labels verified present.
-18. **AC18 — full-suite exit gate.** `bash scripts/test-all.sh` on a clean tree reaches its terminal
+19. **AC18 — full-suite exit gate.** `bash scripts/test-all.sh` on a clean tree reaches its terminal
     marker with zero `[FAIL]` and zero `[KILLED]`, and fires neither `SIBLING_RUN_DETECTED` nor
     `SIBLING_SUITE_DETECTED`. *(Scoped to the two sibling banners: `LOW_TMP_HEADROOM` is a property
     of the machine, not of this change. Precondition: no sibling run in flight.)*
+
+20. **AC19 — the grok pre-push gate distinguishes 3 from 1.** `run_step` renders `[UNRESOLVED]` for
+    exit 3 and `[FAIL]` for other non-zero, and exits non-zero in both cases.
+21. **AC20 — `TEST_TIMING_LOG` field 3 is asserted.** A1 sets `TEST_TIMING_LOG` inside the sandbox
+    and asserts a `\tKILLED` record for the killed fixture. *(Plan v2 listed the edit but pinned it
+    nowhere, so it could ship wrong with nothing red.)*
+22. **AC21 — the monitor's killed body is redacted and ordered.** A fixture capture whose `[KILLED]`
+    line carries a `ghp_`-shaped token yields a body containing the redaction placeholder and **not**
+    the literal; and a static assertion pins the killed-grep line index **below** the `REDACTED=`
+    line index, so a later edit cannot append after the redactor and still pass.
+23. **AC22 — a forged marker does not select the fourth arm.** A capture whose only
+    `[KILLED]`-prefixed line is shape-invalid (e.g. `[KILLED] fake`) leaves `HAS_KILLED_MARKER`
+    unset. And the new suite's own stdout carries zero runner-marker-shaped lines (arm A9).
+24. **AC23 — the operator's killed issue is actionable.** Its body contains an `Actions required`
+    block that names a re-run command and does **not** instruct a revert; the comment path emits the
+    arm's `LEDE`.
+25. **AC24 — over-cancellation is bounded.** T11d: a run in worktree A plus an unrelated suite in
+    worktree B → B is still reported and `SIBLING_SUITE_DETECTED` fires with count 1. Without it an
+    implementation that drops every suite match whenever any run match exists passes every other arm.
 
 ---
 
@@ -825,7 +1014,14 @@ All pre-merge. **No post-merge operator steps.**
 | T11c | `<unreadable>` cwd on both a run and a suite match | no cross-cancellation |
 | T12 | `bash -c 'grep -rn x tests/scripts/test-foo.sh'` | neither banner (whitespace-token guard) |
 | T13 | No siblings | neither banner |
-| T14 | Suite exceeds a 0 ms declared budget | `[budget] …` emitted; status and exit code unchanged |
+| T14 | Suite exceeds a **1 ms** declared budget (fixture sleeps ~50 ms) | `[budget] …` emitted with an integer ≥ 40; status and exit code unchanged. **Not 0 ms:** `elapsed_ms` is integer-divided by 1000, so a trivial fixture yields 0 and `0 > 0` is false — T14 would red against a correct implementation; and a `(( b > 0 ))` "is a budget declared?" guard makes 0 indistinguishable from undeclared |
+| T14b | Huge declared budget | no `[budget]` line |
+| T14c | Undeclared label | no `[budget]` line |
+| T6c | `suite_exit_class ""` / `" "` / `abc` | `failed` — the numeric guard; without it `""` returns `ok` (measured) |
+| T7c | `suite_exit_class 162` | `killed` (`RTMIN`) — pins that the empty-name window is a *name* test, not a numeric range |
+| T4b | `suite_exit_class 3` | `failed` — a nested runner adopting the top-level contract classifies as a plain FAIL. **This row IS the top-level-only invariant** |
+| T8c | classifier returns non-zero (aborts) | WARNING emitted naming the classifier; counted FAILED — never silent |
+| T11d | Run in worktree A + unrelated suite in worktree B | B still reported; `SIBLING_SUITE_DETECTED` count 1 (over-cancellation control) |
 
 ---
 
