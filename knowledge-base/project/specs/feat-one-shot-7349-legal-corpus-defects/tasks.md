@@ -26,9 +26,17 @@ frozen drift.
       bullets, the scope split changes and must change before Phase 3.
 - [ ] 0.6 **If any number disagrees with the plan, STOP and correct the plan before editing.**
       The plan's numbers are claims, not permissions.
-- [ ] 0.7 Confirm the CLO rulings (B1 SOC 2 position, PA-30 disposition, AUP §4.6 wording, T&C
-      E1–E9 directions, tier classification) are recorded and available. Do not author legal
-      wording that the CLO owns.
+- [ ] 0.7 **The six CLO rulings are MADE and recorded in the plan's Domain Review** — SOC 2
+      position, PA-30 disposition, AUP §4.6 wording, DPD port scope, E1–E9 directions, and the
+      Tier 1 / `2.5.0` classification, each with drafted replacement wording. Read them before
+      editing; do not re-derive or re-author legal wording the CLO already settled.
+- [ ] 0.8 **Three first-draft claims are FALSE — do not "fix" them:** E2's T&C↔DPD forum conflict
+      (the DPD has no forum clause), E8's dangling AUP→T&C cross-reference (all resolve), and
+      E8's mandatory-vs-optional side letter (two distinct instruments). Confirm each measurement
+      yourself before touching those clauses.
+- [ ] 0.9 CLO **merge sign-off is NOT yet granted** — it must be written against the actual diff at
+      `knowledge-base/legal/audits/2026-08-counsel-review-7349.md`. That is a Phase 5 deliverable
+      (5.13), not a precondition.
 
 ## Phase 1 — Guards that cannot fire (A1–A4)
 
@@ -54,9 +62,14 @@ frozen drift.
 
 ## Phase 2 — Stale records and register shape (B1–B4)
 
-- [ ] 2.1 Apply the CLO's SOC 2 ruling to all four sites: the DPA template §10.3, the DPA
-      commitments table, the DPA's third reference to "the commitment in §10.3", and
-      `knowledge-base/legal/compliance-posture.md`. Verify the alpha-tester annex agrees.
+- [ ] 2.1 **The no-commitment position governs** (CLO ruling 1). The DPA template's **§10.3 stays
+      unchanged** — it is the operative clause. Replace the 90-day form at the other three sites
+      (the DPA commitments table, the DPA's "commitment in §10.3" reference, and
+      `knowledge-base/legal/compliance-posture.md`) with an evaluation-plus-12-month-status-update
+      form. The alpha-tester annex already agrees — leave it. Rationale: a summary table cannot
+      create an obligation the operative clause negates; `security-sentinel` already forced this
+      recast away from date-certain on §12.2(b) contract-formation grounds; and #4330 is CLOSED so
+      it cannot make anything live.
 - [ ] 2.2 Replace the struck-through `#736` row in `compliance-posture.md` with a row naming the
       T&C enumeration artifact by path.
 - [ ] 2.3 Add a version column to `compliance-posture.md`'s document inventory and populate it;
@@ -67,11 +80,25 @@ frozen drift.
 - [ ] 2.4b **CPO C4** — either sync the `## Current State` milestone counts to the live API
       (Phase 4: 89/206; Post-MVP: 1003/1549 — the roadmap says 710/1283, a 293-issue drift) or
       leave the section's date untouched. Never refresh the date over stale counts.
-- [ ] 2.5 Re-home PA-30 into `knowledge-base/legal/article-30-2-register.md` as **`P-2`** with the
-      Art. 30(2) limb set. Recast the limbs; do not copy the 30(1) record.
-- [ ] 2.6 Remove PA-30 from `knowledge-base/legal/article-30-register.md`.
-- [ ] 2.7 Sweep every PA-30 referrer: the DPD §2.3(ad) item, `gdpr-policy.md` on **both** surfaces
-      (lockstep, same text each side), and `compliance-posture.md`.
+- [ ] 2.5 🔴 **RE-CHARACTERISE PA-30 IN PLACE — the re-home is overruled (CLO ruling 2).** Amend
+      its role sentence in `knowledge-base/legal/article-30-register.md`: Jikigai is controller
+      today because it is the only store owner; the roles flip on the first arms-length store
+      owner, at which point an Art. 28(3) instrument is owed before processing.
+      **Do NOT move the record.** Art. 30(2) requires naming a controller other than the
+      processor; it carries no purposes/data-subject/personal-data/retention/DSAR limbs, so a
+      re-home silently drops six of PA-30's limbs and gate 2 passes it. And
+      `apps/web-platform/supabase/migrations/126_beta_crm.sql` cites PA-30 twice in a migration
+      **already applied to production** — its body cannot be edited, only superseded.
+- [ ] 2.6 Add a `P-2` **reservation stub** to `knowledge-base/legal/article-30-2-register.md`
+      §Register maintenance, recording it as reserved for the first arms-length store owner.
+- [ ] 2.7 Sweep every PA-30 referrer (the role sentence changed even though the location did not):
+      `article-30-register.md` (the record, PA-32's lawful-basis cell, Register-Maintenance item
+      9); `legitimate-interest-assessments/2026-07-07-beta-crm-lia.md` ×3 — including
+      *"full list in PA-30 §(g)"*; `.../2026-07-31-claude-eval-fleet-and-ci-lia.md` ×3;
+      `compliance-posture.md` ×3; `server/tool-tiers.ts`, `server/dsar-export-allowlist.ts`,
+      `server/dsar-export.ts`; `migrations/126_beta_crm.sql`; DPD §2.3(ad) + mirror;
+      `gdpr-policy.md` §3.13 + mirror. **Carve out** `audits/2026-07-counsel-review-6165.md` and
+      `-6172.md` — point-in-time counsel records.
 
 ## Phase 3 — Published DPD under-disclosure (C2, C3)
 
@@ -86,6 +113,17 @@ Never rewrite a drifting line into a third form on one side.
 - [ ] 3.5 Restore §5.3 to the canonical text, **including** the `/dashboard/settings/privacy`
       self-serve export route (Art. 15/20 fulfilment path).
 - [ ] 3.6 Restore the truncated §2.3(i) and the §2.3 roll-call entry for `(p)`.
+- [ ] 3.6a 🔴 **§2.3(ad) must NOT be ported verbatim.** Task 2.5 changed its controller/processor
+      characterisation. Restate the role sentence first, then publish — otherwise the notice tells
+      users the "operator" is controller of a store whose only owner is Jikigai.
+- [ ] 3.6b 🔴 **READ every scope block adjacent to an insertion point.** The DPD has a hard-wrapped
+      scope block whose referent is *"The paragraph above"*. Inserting a restored §2.3 item above
+      it silently re-points the referent at different text, and **both gates are blind** — the
+      block's own line never changes. Verify by reading, not by gate. (AC39)
+- [ ] 3.6c Re-verify each of `(p)(w)(x)(y)(z)(ad)` against the live implementation before
+      publishing — especially `(z)` workspace-logo upload and `(w)` delegated-credential routing
+      (`BYOK_DELEGATIONS_ENABLED`). A port is textually a copy but legally a first publication,
+      and AC34 does not reach it. (AC40)
 - [ ] 3.7 Re-run the dangling-cross-reference check; expect zero on **both** surfaces.
 - [ ] 3.8 Re-run gate 2; expect a strict reduction, never `CONTENT CHANGED`.
 
@@ -105,8 +143,20 @@ Never rewrite a drifting line into a third form on one side.
 - [ ] 4.2 Restore the canonical cross-reference to §4.2 rather than the mirror's paraphrase.
 - [ ] 4.3 Land the CLO's decision on the mirror-only share-link-revocation sentence and the
       canonical-only workspace-logo paragraph: each on both surfaces or neither.
-- [ ] 4.4 Reconcile the changelog abridgement.
+- [ ] 4.4 Reconcile the changelog abridgement (port the fuller canonical changelog to the mirror;
+      both substantive disclosures already survive in the section bodies, but AC19 forces
+      convergence).
+- [ ] 4.4a 🔴 **Execute E9 HERE, not in Phase 5.** The AUP mirror renders `{{ stats.agents }}`
+      through Eleventy and the canonical cannot, so the two surfaces can never reach zero
+      normalised drift while any count sits in that sentence. **E9 is a precondition of AC19, and
+      AC19 is a precondition of the Phase 6 `BODY_EQUIVALENCE_DOCS` activation.** Left in Phase 5
+      the ordering deadlocks and turns a required check red. Use soft floors (AC37).
 - [ ] 4.5 Resync `disclaimer` (2 cosmetic drift lines — one autolinked email address).
+- [ ] 4.5a 🔴 **CLO E1b/E1c** — correct `disclaimer.md` §3.2's false "provided free of charge"
+      premise (the Web Platform sells Stripe subscriptions per T&C §5) and delete §3.1's
+      unqualified **direct-damages** exclusion, leaving direct damages subject to the §3.2 cap.
+      An unqualified direct-damages exclusion against an EU consumer risks the whole limitation
+      clause under Directive 93/13 Annex 1(b). (AC41)
 - [ ] 4.6 Point `apps/web-platform/lib/messages/trust-tier-copy.ts` at the served URL. No
       `/docs/legal/` path may remain in user-facing copy.
 - [ ] 4.7 Refresh `LEGAL_DOC_SHAS` for every canonical changed in Phases 3–4.
@@ -119,29 +169,51 @@ Sequenced last: it depends on the counterparty documents being settled. The T&C 
 - [ ] 5.1 Write the enumeration artifact under `knowledge-base/legal/` recording all nine
       contradictions **and** the six ambiguities, each with both sides quoted by content anchor and
       the resolution taken. This is the durable record the `#736` row falsely appeared to be.
-- [ ] 5.2 Fix E1 (liability cap) **with** `docs/legal/disclaimer.md` in the same commit.
-- [ ] 5.3 Fix E2 (governing law / forum) **with** the DPD in the same commit.
+- [ ] 5.2 Fix E1 (liability cap) **with** `docs/legal/disclaimer.md` in the same commit. The T&C
+      governs — it is the instrument with an acceptance record; the Disclaimer has none.
+- [ ] 5.3 🔴 **E2 is half not real.** Measured: the DPD has **no** governing-law and **no** forum
+      clause; T&C §15 and `disclaimer.md` §8 both say France / Paris and **agree**. Do not "fix" a
+      forum conflict. **Fix only the surviving half:** §16.1 is a bare entire-agreement clause with
+      no order of precedence, so E1's genuine conflict has no resolution rule. Add a precedence
+      paragraph to §16.1.
 - [ ] 5.4 Fix E3 (unscoped plugin-local absolutes, T&C §§4.1/4.2/8.1) using the CLO's drafted scope
       blocks. **Gate-1 constraint:** the negative delimiter must sit on the SAME LINE as the scope
       assertion, and the declared referent must be no larger than the genuinely plugin-local text.
 - [ ] 5.5 Fix E4 (missing Anthropic + four processors in §8.1b).
-- [ ] 5.6 Fix E5 (controller-over-all-personal-data vs team-workspace carve-out) **with**
-      `gdpr-policy.md` on both surfaces in the same commit.
+- [ ] 5.6 🔴 **E5's direction was backwards.** T&C §3b.1 *agrees* with the DPD (both make the
+      Workspace Owner controller) and `compliance-posture.md` already adjudicated it as "no
+      contradiction" — editing `gdpr-policy.md` would fix the wrong document. **The real
+      contradiction is intra-T&C:** §3b.1's "**all** personal data" vs §3b.2's Arts. 15–22 rights
+      **against Jikigai** (rights that run against a controller). Narrow §3b.1 to workspace
+      content and workspace-activity records, and keep Jikigai controller of Co-Member account
+      data, subscription records, and Art. 5(2) audit logs.
 - [ ] 5.7 Fix E6 (processor status asserted in present tense) **with** the DPD.
 - [ ] 5.8 Fix E7 (share links described as processor capacity).
-- [ ] 5.9 Fix E8 (BYOK joint vs sole controller; side letter mandatory vs optional; dangling AUP
-      §5.6 cross-reference) **with** the AUP.
-- [ ] 5.10 Fix E9 (component counts) across the T&C, AUP and Privacy Policy, both surfaces.
-      **Use soft floors ("60+ agents"), not refreshed exact counts** — the brand guide's rule is
-      that the live site renders exact counts from the filesystem, so an exact count in prose
-      resets the drift clock and guarantees E9 recurs.
+- [ ] 5.9 🔴 **E8 — fix ONE limb, not three.** (a) The "dangling AUP §5.6 cross-reference" does
+      **not exist**: every T&C section referenced anywhere in the corpus resolves (measured).
+      (b) "Mandatory vs optional" is **two different instruments** — AUP §5.6 mandates the
+      *Delegation Consent Side Letter*, explicitly "distinct from the workspace co-member Side
+      Letter in Section 5.5", which §3b.4 makes optional. Both correct. **Do not touch either.**
+      (c) **REAL:** BYOK joint vs sole controllership — cured by the 5.6 redraft plus an Art. 26
+      joint-controller paragraph in §3b.1, which also cures a *substantively* dangling reference
+      (AUP §5.6 points at §3b for delegation, and §3b currently says nothing about it).
+- [ ] 5.10 Fix E9 across the T&C and Privacy Policy (the **AUP** half already landed at 4.4a as an
+      AC19 precondition). Measured today: **68** agent files, **95** skills, **9** domains vs
+      "45 / 45 / five". **Remove the counts; do not restate them.** Soft floors per AC37 — the
+      live site renders exact counts from the filesystem, so an exact count in a versioned legal
+      instrument is stale by construction and buys a Tier-2 bump every release.
 - [ ] 5.11 Mirror every T&C edit exactly.
-- [ ] 5.12 Apply the CLO's tier classification. If Tier 1/2: bump `TC_VERSION`, and update in
+- [ ] 5.12 **Tier 1 → `TC_VERSION` 2.4.0 → 2.5.0 (MINOR)** per CLO ruling 6. MAJOR is reserved for
+      changes expected to cause abandonment ("new license restriction, new jurisdiction") —
+      neither occurs, and every substantive change is neutral-to-favourable to the user. Update in
       lockstep — `TC_DOCUMENT_SHA`, all four `TC_BUMP_METADATA` fields, the canonical Last-Updated
       line, the mirror's Last-Updated line, **all three** seed scripts, and the
       `compliance-posture.md` version row.
-- [ ] 5.13 Record the tier and its reasoning in the PR body; obtain CLO sign-off (merge-gating for
-      Tier 1/2). **Tier 2 also requires a bump (PATCH)** — this PR bumps regardless of grading.
+- [ ] 5.13 Record the tier and its reasoning in the PR body. **CLO sign-off gates merge and must
+      be written against the actual diff** at `knowledge-base/legal/audits/2026-08-counsel-review-7349.md`,
+      with a per-artifact verdict and a DISCHARGED/BLOCKED disposition. Flag **E6**
+      (T&C-as-Art.-28(3)-instrument) in that audit's frontmatter as the strongest external-counsel
+      re-review candidate.
 - [ ] 5.14 **M1 (CPO C2)** — reset the alpha-tester roster's `Terms` column and re-send the
       corrected paragraph to every tester at `agreed` or `sent-awaiting-reply`; add that as a
       standing step in `knowledge-base/engineering/operations/runbooks/alpha-tester-onboarding.md`.
