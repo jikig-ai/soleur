@@ -3,6 +3,7 @@
 #
 # Phase 1 (instrumentation): headroom probes, sibling scan, named banners.
 # The Phase 3 advisory-queue arms land with the lock itself.
+# Phase 4 (#7424): the second view over the same scan — SIBLING_SUITE_DETECTED.
 #
 # AUTHORING CONSTRAINTS (from work/SKILL.md, learned the hard way in #6588):
 #   - Never `producer | grep -q` under `set -o pipefail`: an EARLY match makes
@@ -53,20 +54,36 @@ fi
 # but no inner ')' does NOT discriminate first-vs-last and lets that mutation
 # survive; the mutation battery caught exactly that gap in this fixture.
 # ---------------------------------------------------------------------------
+#
+# argv[0], ppid and pgrp are OPTIONAL trailing parameters (defaults `bash`, 0, 0 —
+# byte-identical to the pre-Phase-4 fixture for every 5-argument caller). Phase 4
+# needs all three: argv[0] because a suite is routinely exec'd directly
+# (`./scripts/foo.test.sh`), and ppid/pgrp because sibling-run children are
+# cancelled by ANCESTRY and process group, never by cwd — a fixture that leaves
+# both pinned at 0 cannot express a parent/child relationship at all, so every
+# cancellation arm would be testing an unreachable branch.
+#
+# An EMPTY cwd argument deliberately omits the `cwd` symlink, which is how the
+# real `<unreadable>` case is reproduced (readlink fails, the lib substitutes the
+# literal). Do not "fix" it by pointing the link somewhere: the whole point of
+# T11c is that two processes sharing the `<unreadable>` pseudo-path must not
+# cancel each other.
 CLK_TCK="$(getconf CLK_TCK 2>/dev/null || echo 100)"
 make_fake_proc() {
   local root="$1" pid="$2" cwd="$3" elapsed_s="$4" cmd="$5"
+  local argv0="${6:-bash}" ppid="${7:-0}" pgrp="${8:-0}"
   local uptime=100000
   local starttime=$(( (uptime - elapsed_s) * CLK_TCK ))
   mkdir -p "$root/$pid"
   printf '%s 0.00\n' "$uptime" > "$root/uptime"
   # NUL-separated argv, exactly as the kernel presents it.
-  printf 'bash\0%s\0' "$cmd" > "$root/$pid/cmdline"
+  printf '%s\0%s\0' "$argv0" "$cmd" > "$root/$pid/cmdline"
   # 19 filler fields (state .. itrealvalue), so starttime lands at field 20.
-  local filler="S" i
-  for (( i = 2; i <= 19; i++ )); do filler+=" 0"; done
+  # Overall field 4 = ppid and field 5 = pgrp, i.e. filler fields 2 and 3.
+  local filler="S $ppid $pgrp" i
+  for (( i = 4; i <= 19; i++ )); do filler+=" 0"; done
   printf '%s (te) st) %s %s 0 0\n' "$pid" "$filler" "$starttime" > "$root/$pid/stat"
-  ln -sfn "$cwd" "$root/$pid/cwd"
+  [[ -n "$cwd" ]] && ln -sfn "$cwd" "$root/$pid/cwd"
   printf 'MemAvailable:    7000000 kB\n' > "$root/meminfo"
   printf '3.96 9.72 14.60 2/2934 572235\n' > "$root/loadavg"
 }
@@ -528,11 +545,301 @@ else
   fail "the stale-holder detection regex matches nothing — the negative arm is vacuous"
 fi
 
+echo "=== Phase 4: sibling SUITE probe (SIBLING_SUITE_DETECTED) ==="
+
+# A directly-run suite in another worktree competes for the same tmpfs capacity
+# as this runner, but it is NOT a test-all.sh run, so SIBLING_RUN_DETECTED never
+# sees it. These arms cover the second view over the SAME single /proc walk.
+#
+# Every fixture below pins ppid AND pgrp explicitly. A fixture that leaves them
+# at 0 cannot distinguish "cancelled by ancestry" from "cancelled by accident",
+# because a shared pgrp of 0 would cross-cancel every synthetic process.
+
+suite_view() {  # $1 = proc root
+  tc_env env TC_PROC_ROOT="$1" bash -c "source '$LIB'; tc_suite_siblings" 2>&1 || true
+}
+run_view() {    # $1 = proc root
+  tc_env env TC_PROC_ROOT="$1" bash -c "source '$LIB'; tc_siblings" 2>&1 || true
+}
+preamble_of() { # $1 = proc root, $2 = destination file
+  tc_env env TC_PROC_ROOT="$1" TC_MIN_AVAIL_MB=0 \
+    bash -c "source '$LIB'; tc_preamble" > "$2" 2>&1 || true
+}
+
+# --- T9: a directly-run suite in another worktree IS reported ---------------
+SUITE_PROC="$TESTROOT/proc-suite"
+SUITE_WT="$TESTROOT/suite-wt"
+mkdir -p "$SUITE_WT"
+make_fake_proc "$SUITE_PROC" 811001 "$SUITE_WT" 45 "tests/scripts/test-foo.sh" bash 1 811001
+out="$(suite_view "$SUITE_PROC")"
+if [[ "$(grep -cE "^811001	${SUITE_WT}	4[45]\$" <<<"$out" || true)" -ge 1 ]]; then
+  pass "T9: tc_suite_siblings emits pid, worktree and derived elapsed for a run suite"
+else
+  fail "T9: tc_suite_siblings line shape wrong; got: $out"
+fi
+# The RUN view must stay blind to it — the two banners answer different questions.
+out="$(run_view "$SUITE_PROC")"
+if [[ -z "${out//[[:space:]]/}" ]]; then
+  pass "T9: the run view does not see a directly-run suite (views are disjoint)"
+else
+  fail "T9: tc_siblings matched an individual suite; got: $out"
+fi
+preamble_of "$SUITE_PROC" "$TESTROOT/pre-suite.txt"
+PS9="$TESTROOT/pre-suite.txt"
+if [[ "$(grep -cE '^\[contention\] suite siblings: 1 ' "$PS9" || true)" -ge 1 ]]; then
+  pass "T9: preamble reports 'suite siblings: 1'"
+else
+  fail "T9: no suite-siblings count line; got: $(cat "$PS9")"
+fi
+if [[ "$(grep -cE 'BANNER SIBLING_SUITE_DETECTED: an individual test suite is running in 1 other worktree' "$PS9" || true)" -ge 1 ]]; then
+  pass "T9: SIBLING_SUITE_DETECTED fires and names the count"
+else
+  fail "T9: no SIBLING_SUITE_DETECTED banner; got: $(cat "$PS9")"
+fi
+if [[ "$(grep -cE 'SIBLING_RUN_DETECTED' "$PS9" || true)" -eq 0 ]]; then
+  pass "T9: SIBLING_RUN_DETECTED does NOT fire for an individual suite"
+else
+  fail "T9: the run banner fired for a suite-only fixture; got: $(cat "$PS9")"
+fi
+# The banner must carry the three-way confirmation instruction, not just a name.
+if [[ "$(grep -cE 'isolated re-run, the matching CI gate, and a clean full re-run' "$PS9" || true)" -ge 1 ]]; then
+  pass "T9: the suite banner states the three-way confirmation protocol"
+else
+  fail "T9: suite banner lacks the confirmation protocol; got: $(cat "$PS9")"
+fi
+
+# --- T9b: argv[0] IS the suite (direct shebang exec) ------------------------
+EXEC_PROC="$TESTROOT/proc-suite-exec"
+mkdir -p "$TESTROOT/suite-wt-b"
+make_fake_proc "$EXEC_PROC" 812001 "$TESTROOT/suite-wt-b" 12 "--verbose" \
+  "./scripts/foo.test.sh" 1 812001
+out="$(suite_view "$EXEC_PROC")"
+if [[ "$(grep -cE '^812001	' <<<"$out" || true)" -ge 1 ]]; then
+  pass "T9b: './scripts/foo.test.sh' as argv[0] is a suite sibling (*.test.sh rule)"
+else
+  fail "T9b: direct-exec *.test.sh not matched; got: $out"
+fi
+
+# --- T10: the RUNNER itself is not an individual suite ----------------------
+# `test-all.sh` matches `test-*.sh`, so without the explicit exclusion EVERY full
+# run would also count as a suite sibling and the banner would fire on every solo
+# run — the "a banner that always fires carries no information" failure mode.
+out="$(suite_view "$FAKE_PROC")"
+if [[ -z "${out//[[:space:]]/}" ]]; then
+  pass "T10: 'bash scripts/test-all.sh' is NOT counted as an individual suite"
+else
+  fail "T10: the runner matched the suite predicate; got: $out"
+fi
+if [[ "$(grep -cE '^\[contention\] suite siblings: 0 ' "$P" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'SIBLING_SUITE_DETECTED' "$P" || true)" -eq 0 ]]; then
+  pass "T10: the run-only preamble reports 0 suite siblings and no suite banner"
+else
+  fail "T10: suite banner/count wrong on a run-only fixture; got: $(cat "$P")"
+fi
+# T10 at the PREDICATE level. MEASURED: the two arms above cannot see the
+# `test-all.sh` exclusion at all, because _tc_scan_procs tests the RUN predicate
+# first and every input that would newly match as a suite already classified as
+# a run — a mutant deleting the exclusion survives both. The exclusion is the
+# second line of defence, and pinning it here is what stops a future reordering
+# of that if/elif from turning every full run into a "suite sibling".
+out="$(tc_env bash -c "source '$LIB'; _tc_is_suite_basename scripts/test-all.sh && echo MATCH || echo NO" 2>&1 || true)"
+if [[ "$out" == "NO" ]]; then
+  pass "T10: the suite predicate itself excludes test-all.sh (banner cannot self-fire)"
+else
+  fail "T10: _tc_is_suite_basename matched the runner; got: $out"
+fi
+# POSITIVE CONTROL: the same probe MUST match a real suite name, or the arm
+# above reads "excluded" for a predicate that matches nothing at all.
+out="$(tc_env bash -c "source '$LIB'; _tc_is_suite_basename tests/scripts/test-foo.sh && echo MATCH || echo NO" 2>&1 || true)"
+if [[ "$out" == "MATCH" ]]; then
+  pass "T10 control: the same predicate DOES match a real test-*.sh suite"
+else
+  fail "T10 control: the suite predicate matches nothing — the arm above is vacuous; got: $out"
+fi
+
+# --- T12: a whitespace-bearing `bash -c` string is not an invocation --------
+WS_PROC="$TESTROOT/proc-suite-ws"
+mkdir -p "$TESTROOT/ws-wt"
+make_fake_proc "$WS_PROC" 813001 "$TESTROOT/ws-wt" 8 "x" bash 1 813001
+printf 'bash\0-c\0grep -rn x tests/scripts/test-foo.sh\0' > "$WS_PROC/813001/cmdline"
+out="$(suite_view "$WS_PROC")"
+if [[ -z "${out//[[:space:]]/}" ]]; then
+  pass "T12: a whitespace-bearing 'bash -c' string is not a suite sibling"
+else
+  fail "T12: the whitespace guard let a command STRING match; got: $out"
+fi
+# MUTATION CONTROL for T12: the same pid with a real token still matches, so the
+# arm above cannot pass by matching nothing at all.
+printf 'bash\0tests/scripts/test-foo.sh\0' > "$WS_PROC/813001/cmdline"
+out="$(suite_view "$WS_PROC")"
+if [[ "$(grep -cE '^813001	' <<<"$out" || true)" -ge 1 ]]; then
+  pass "T12 control: a real 'bash tests/scripts/test-foo.sh' still matches"
+else
+  fail "T12 control: the whitespace guard rejected a real invocation; got: $out"
+fi
+
+# --- T11: a runner and ITS OWN suite child count once -----------------------
+# The child deliberately sits in a DIFFERENT cwd (suites `cd` into a mktemp
+# sandbox), which is exactly why cancellation is by ancestry and not by a cwd
+# set-difference: the difference would fail to cancel and double-report.
+#
+# The child also carries a DIFFERENT pgrp from the runner. That is not cosmetic:
+# with a shared pgrp the pgid fallback cancels it and this arm survives a mutant
+# that deletes ancestry cancellation entirely (measured — the mutation battery
+# caught exactly that). Distinct pgrps make ancestry the ONLY mechanism that can
+# cancel here, and T11-pgid below is the arm that covers the fallback.
+T11_PROC="$TESTROOT/proc-t11"
+mkdir -p "$TESTROOT/t11-wt" "$TESTROOT/t11-sandbox"
+make_fake_proc "$T11_PROC" 814001 "$TESTROOT/t11-wt" 300 "scripts/test-all.sh" bash 1 814001
+make_fake_proc "$T11_PROC" 814002 "$TESTROOT/t11-sandbox" 20 "tests/scripts/test-foo.sh" \
+  bash 814001 814002
+preamble_of "$T11_PROC" "$TESTROOT/pre-t11.txt"
+if [[ "$(grep -cE '^\[contention\] suite siblings: 0 ' "$TESTROOT/pre-t11.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'SIBLING_SUITE_DETECTED' "$TESTROOT/pre-t11.txt" || true)" -eq 0 ]]; then
+  pass "T11: a runner's own suite child is cancelled by ancestry (counted once)"
+else
+  fail "T11: the suite child was double-reported; got: $(cat "$TESTROOT/pre-t11.txt")"
+fi
+if [[ "$(grep -cE '^\[contention\] siblings: 1 ' "$TESTROOT/pre-t11.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'SIBLING_RUN_DETECTED' "$TESTROOT/pre-t11.txt" || true)" -ge 1 ]]; then
+  pass "T11: the run banner still fires exactly once for that worktree"
+else
+  fail "T11: run banner/count wrong; got: $(cat "$TESTROOT/pre-t11.txt")"
+fi
+
+# --- T11b: ancestry reaches THROUGH a non-matching wrapper ------------------
+# `timeout N bash <suite>` puts a non-shell at argv[0], so the wrapper matches
+# NEITHER predicate, and `timeout` calls setpgid() so the suite does not even
+# share the runner's process group. Only a walk of the WHOLE ppid chain cancels
+# it; a parent-only check reports the runner's own child as a sibling worktree.
+#
+# MEASURED CORRECTION to the plan's §4.3 third bullet: `env VAR=x bash <suite>`
+# does NOT survive in argv — env EXECs, so /proc/<pid>/cmdline reads `bash
+# <suite>` for all but the first microseconds and the run predicate does match.
+# `timeout` FORKS and stays resident, so it is the shape that genuinely hides a
+# run behind a non-shell argv[0]. Verified 2026-08-11 on this host.
+T11B_PROC="$TESTROOT/proc-t11b"
+mkdir -p "$TESTROOT/t11b-wt" "$TESTROOT/t11b-sandbox"
+make_fake_proc "$T11B_PROC" 815001 "$TESTROOT/t11b-wt" 400 "scripts/test-all.sh" bash 1 815001
+make_fake_proc "$T11B_PROC" 815002 "$TESTROOT/t11b-wt" 30 "x" timeout 815001 815002
+printf 'timeout\0600\0bash\0tests/scripts/test-foo.sh\0' > "$T11B_PROC/815002/cmdline"
+make_fake_proc "$T11B_PROC" 815003 "$TESTROOT/t11b-sandbox" 29 "tests/scripts/test-foo.sh" \
+  bash 815002 815002
+preamble_of "$T11B_PROC" "$TESTROOT/pre-t11b.txt"
+if [[ "$(grep -cE '^\[contention\] suite siblings: 0 ' "$TESTROOT/pre-t11b.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'SIBLING_SUITE_DETECTED' "$TESTROOT/pre-t11b.txt" || true)" -eq 0 ]]; then
+  pass "T11b: ancestry walks past a wrapper with a non-shell argv[0] (counted once)"
+else
+  fail "T11b: wrapper-hidden run's suite child was reported; got: $(cat "$TESTROOT/pre-t11b.txt")"
+fi
+if [[ "$(grep -cE '^\[contention\] siblings: 1 ' "$TESTROOT/pre-t11b.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'SIBLING_RUN_DETECTED' "$TESTROOT/pre-t11b.txt" || true)" -ge 1 ]]; then
+  pass "T11b: the run banner fires once for the wrapped run"
+else
+  fail "T11b: run banner/count wrong under a wrapper; got: $(cat "$TESTROOT/pre-t11b.txt")"
+fi
+
+# --- T11-pgid: the process-group fallback when the ppid chain is broken -----
+# A `run_suite` child inherits the runner's pgid; if it is reparented (its parent
+# already reaped) the ppid chain no longer reaches the runner at all. Without the
+# pgrp fallback the runner's own child reads as a foreign worktree.
+T11P_PROC="$TESTROOT/proc-t11p"
+mkdir -p "$TESTROOT/t11p-wt" "$TESTROOT/t11p-sandbox"
+make_fake_proc "$T11P_PROC" 816001 "$TESTROOT/t11p-wt" 500 "scripts/test-all.sh" bash 1 816001
+make_fake_proc "$T11P_PROC" 816002 "$TESTROOT/t11p-sandbox" 15 "tests/scripts/test-foo.sh" \
+  bash 1 816001
+preamble_of "$T11P_PROC" "$TESTROOT/pre-t11p.txt"
+if [[ "$(grep -cE '^\[contention\] suite siblings: 0 ' "$TESTROOT/pre-t11p.txt" || true)" -ge 1 ]]; then
+  pass "T11-pgid: a reparented suite child sharing the runner's pgrp is cancelled"
+else
+  fail "T11-pgid: pgrp fallback did not cancel; got: $(cat "$TESTROOT/pre-t11p.txt")"
+fi
+
+# --- T11c: '<unreadable>' cwds must NOT cross-cancel ------------------------
+# tc_siblings substitutes one literal `<unreadable>` for every cwd it cannot
+# read, so a cwd set-difference would let a SINGLE unreadable run subtract EVERY
+# unreadable suite. Neither process here is related to the other.
+T11C_PROC="$TESTROOT/proc-t11c"
+make_fake_proc "$T11C_PROC" 817001 "" 600 "scripts/test-all.sh" bash 1 817001
+make_fake_proc "$T11C_PROC" 817002 "" 60 "tests/scripts/test-foo.sh" bash 1 817002
+preamble_of "$T11C_PROC" "$TESTROOT/pre-t11c.txt"
+if [[ "$(grep -cE '^\[contention\] siblings: 1 ' "$TESTROOT/pre-t11c.txt" || true)" -ge 1 ]]; then
+  pass "T11c: the unreadable-cwd run is still reported"
+else
+  fail "T11c: unreadable-cwd run lost; got: $(cat "$TESTROOT/pre-t11c.txt")"
+fi
+if [[ "$(grep -cE '^\[contention\] suite siblings: 1 ' "$TESTROOT/pre-t11c.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'SIBLING_SUITE_DETECTED' "$TESTROOT/pre-t11c.txt" || true)" -ge 1 ]]; then
+  pass "T11c: an unrelated unreadable-cwd suite is NOT cancelled by the run"
+else
+  fail "T11c: '<unreadable>' cwds cross-cancelled; got: $(cat "$TESTROOT/pre-t11c.txt")"
+fi
+
+# --- T11d: over-cancellation control (AC24) ---------------------------------
+# Without this arm an implementation that drops EVERY suite match whenever ANY
+# run match exists passes T10, T11, T11b and T11-pgid.
+T11D_PROC="$TESTROOT/proc-t11d"
+mkdir -p "$TESTROOT/t11d-wt-a" "$TESTROOT/t11d-wt-b"
+make_fake_proc "$T11D_PROC" 818001 "$TESTROOT/t11d-wt-a" 700 "scripts/test-all.sh" bash 1 818001
+make_fake_proc "$T11D_PROC" 818002 "$TESTROOT/t11d-wt-b" 70 "tests/scripts/test-foo.sh" \
+  bash 1 818002
+preamble_of "$T11D_PROC" "$TESTROOT/pre-t11d.txt"
+if [[ "$(grep -cE '^\[contention\] suite siblings: 1 ' "$TESTROOT/pre-t11d.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'SIBLING_SUITE_DETECTED' "$TESTROOT/pre-t11d.txt" || true)" -ge 1 ]]; then
+  pass "T11d: an UNRELATED suite in another worktree survives an unrelated run (AC24)"
+else
+  fail "T11d: over-cancellation dropped an unrelated suite; got: $(cat "$TESTROOT/pre-t11d.txt")"
+fi
+if [[ "$(grep -cE '^\[contention\] siblings: 1 ' "$TESTROOT/pre-t11d.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'SIBLING_RUN_DETECTED' "$TESTROOT/pre-t11d.txt" || true)" -ge 1 ]]; then
+  pass "T11d: both banners fire independently when both kinds of sibling exist"
+else
+  fail "T11d: run banner missing alongside the suite banner; got: $(cat "$TESTROOT/pre-t11d.txt")"
+fi
+
+# --- T13: no siblings of EITHER kind => neither banner ----------------------
+preamble_of "$OTHER_PROC" "$TESTROOT/pre-t13.txt"
+if [[ "$(grep -cE 'SIBLING_RUN_DETECTED|SIBLING_SUITE_DETECTED|LOW_TMP_HEADROOM' "$TESTROOT/pre-t13.txt" || true)" -eq 0 ]]; then
+  pass "T13: with no sibling of either kind, NEITHER sibling banner fires"
+else
+  fail "T13: a banner fired with no siblings; got: $(cat "$TESTROOT/pre-t13.txt")"
+fi
+
+# --- Back-compat: tc_siblings' output shape is unchanged (AC5) --------------
+# The enumerator now emits a leading class column; the run view must strip it, or
+# every one of the 22 zero-arg call sites silently shifts a field.
+out="$(run_view "$FAKE_PROC")"
+nf="$(awk -F'\t' 'NF != 3 {n++} END {print n+0}' <<<"$out" || true)"
+if [[ "$nf" == "0" ]] && [[ "$(grep -cE '^424242	' <<<"$out" || true)" -ge 1 ]]; then
+  pass "AC5: tc_siblings still emits exactly pid<TAB>cwd<TAB>elapsed (no class column)"
+else
+  fail "AC5: tc_siblings output shape changed ($nf malformed lines); got: $out"
+fi
+
+# --- Structural: ONE /proc walk per preamble --------------------------------
+# Two calls are two NON-ATOMIC snapshots, over which the cross-bucket
+# cancellation is computed on inconsistent sets. Anchored on the CALL construct
+# over comment-stripped code, never on a bare token the file also names in prose.
+pre_body="$(awk '/^tc_preamble\(\) \{/,/^\}/' "$LIB" | grep -vE '^[[:space:]]*#' || true)"
+pre_lines="$(grep -c . <<<"$pre_body" || true)"
+scan_calls="$(grep -oE '_tc_scan_procs' <<<"$pre_body" | wc -l || true)"
+view_calls="$(grep -oE '(^|[^_[:alnum:]])tc_(suite_)?siblings' <<<"$pre_body" | wc -l || true)"
+if [[ "$pre_lines" -ge 20 ]]; then
+  pass "structural probe is non-vacuous: tc_preamble body extracted ($pre_lines lines)"
+else
+  fail "tc_preamble body extraction returned $pre_lines lines — the arm below is vacuous"
+fi
+if [[ "$scan_calls" == "1" ]] && [[ "$view_calls" == "0" ]]; then
+  pass "tc_preamble derives both counts from ONE _tc_scan_procs snapshot"
+else
+  fail "tc_preamble walks /proc more than once ($scan_calls scan, $view_calls view calls)"
+fi
+
 # --- Minimum-cardinality guard ---------------------------------------------
 # A silently-empty run exits 0 with zero coverage, which reads exactly like
 # success. This is the guard for that.
-if [[ "$pass_n" -lt 40 ]]; then
-  fail "cardinality guard: only $pass_n assertions ran (expected >= 40)"
+if [[ "$pass_n" -lt 66 ]]; then
+  fail "cardinality guard: only $pass_n assertions ran (expected >= 66)"
 fi
 
 echo "=== test-contention: $pass_n passed, $fails failed ==="
