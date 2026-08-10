@@ -52,6 +52,24 @@ function topLevelKeys(blockBody: string): string[] {
     .filter((k): k is string => Boolean(k));
 }
 
+// Indented `key:` names directly under a given column-0 parent key, up to the
+// first line that returns to column 0. Comment-only continuation lines (a wrapped
+// `#` explanation under a sub-field) are skipped, so prose can be added to a
+// template block without registering as a schema field.
+function subFieldsOf(blockBody: string, parent: string): string[] {
+  const lines = blockBody.split(/\r?\n/);
+  const start = lines.findIndex((l) => l.startsWith(`${parent}:`));
+  if (start === -1) throw new Error(`parent key \`${parent}:\` not found`);
+  const out: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() === "") continue;
+    if (/^[^\s]/.test(line)) break; // back to column 0 — parent's children end here
+    const m = line.match(/^\s+([a-z_]+):/);
+    if (m) out.push(m[1]);
+  }
+  return out;
+}
+
 // Body of the first ```yaml fence appearing in `text`. `label` identifies the
 // surface/block in the throw so a real drift points at the offending source.
 // The `[^\n]*` after the language token tolerates a trailing info-string
@@ -109,6 +127,37 @@ describe("## Observability schema parity across the 4 surfaces", () => {
     expect(paren, "expected a parenthetical field list after the count").not.toBeNull();
     const names = [...paren![1].matchAll(/`([a-z_]+)`/g)].map((m) => m[1]);
     expect(asSet(names)).toEqual(asSet(CANONICAL));
+  });
+
+  // #7393 added `credentials_required` as an OPTIONAL sub-field of
+  // `discoverability_test`. `topLevelKeys()` is column-0-anchored, so a sub-field
+  // leaves every assertion above at 5 — which is exactly why it needed its own
+  // extractor: without one, a template block silently losing the sub-field would
+  // be invisible to all four surfaces.
+  test("surface 2b — discoverability_test sub-fields agree across canonical + all 3 template blocks", () => {
+    const canonicalSub = subFieldsOf(
+      firstYamlBlock(canonicalSrc.slice(markerIdx), "plan/SKILL.md §2.9 canonical block"),
+      "discoverability_test",
+    );
+    // Sanity anchor: if canonical stops declaring the sub-fields, the per-block
+    // comparison below would pass vacuously by comparing empty set to empty set.
+    expect(canonicalSub.length).toBeGreaterThanOrEqual(3);
+    expect(asSet(canonicalSub)).toEqual(
+      asSet(["command", "expected_output", "credentials_required"]),
+    );
+
+    const sections = extractAllObservabilityBlocks(read(TEMPLATES));
+    expect(sections.length).toBe(3);
+    sections.forEach((section, i) => {
+      const sub = subFieldsOf(
+        firstYamlBlock(section, `plan-issue-templates.md block #${i + 1}`),
+        "discoverability_test",
+      );
+      expect(
+        asSet(sub),
+        `template block #${i + 1} discoverability_test sub-fields must equal canonical`,
+      ).toEqual(asSet(canonicalSub));
+    });
   });
 
   test("surface 4 (AGENTS.rules.md rule) — count parity + no-SSH invariant (names intentionally absent)", () => {
