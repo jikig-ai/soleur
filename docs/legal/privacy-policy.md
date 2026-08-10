@@ -55,7 +55,7 @@ All of this data remains on your machine. We have no access to it.
 
 **Operator-assisted sessions are the exception to the sentence above.** If you ask us to help you run Soleur against your own material, and we do that using our machine or our API key, then during that session we do read the files described above — including your `knowledge-base/` directory and your git history — and their content is sent to our AI provider under **our** credentials rather than yours.
 
-When we do that on your instructions we are acting as your processor. We also look at how Soleur performed in order to improve the product, and for that narrow purpose we are acting as a controller in our own right. We do not run an operator-assisted session without first agreeing a written agreement with you covering it. Where one is agreed, that agreement — not this policy — sets out what happens to your data during the session: who else may process it, where it goes, how long we keep it, and how we help you answer requests from people whose data is involved. That agreement governs the work we do **on your instructions**; it is not what makes our own product-learning use lawful, which rests on our legitimate interests and is explained in GDPR Policy Section 3.14.
+When we do that on your instructions we are acting as your processor. We also look at how Soleur performed in order to improve the product, and for that narrow purpose we are acting as a controller in our own right. We **will not** run an operator-assisted session for you unless we have first put in place a written agreement with you covering it. Where one is agreed, that agreement — not this policy — sets out what happens to your data during the session: who else may process it, where it goes, how long we keep it, and how we help you answer requests from people whose data is involved. That agreement governs the work we do **on your instructions**; it is not what makes our own product-learning use lawful, which rests on our legitimate interests and is explained in GDPR Policy Section 3.14.
 
 **Giving us access to a repository is a second, separate exception.** If you make us a collaborator
 on one of your repositories — for example while taking part in an early-access programme — we may read
@@ -514,11 +514,16 @@ of that reading even though you have no account with us and never gave us anythi
 disproportionate-effort exemption at Article 14(5)(b) and publish the information instead — see GDPR
 Policy Section 3.14 for the full posture, including the point on which we consider that reliance
 weakest. **Your Article 21(1) right to object is available immediately** and does not depend on
-anything else in this Policy; because we keep no systematic copy of what we read, an objection is one
-we can act on by ceasing to read and deleting local copies. Two limitations are stated up front rather
-than discovered later: any search for your data across a third party's repository is **manual and
-carries no completeness guarantee**, and we are not the controller of the repository itself — its
-owner is, and rights over what it contains lie against them as well as against us.
+anything else in this Policy. What we can do in response differs by situation, and we say so rather
+than leaving you to find out. Where the processing is our reading of a repository, we keep no
+systematic copy, so we can act on an objection by ceasing to read and deleting our local copies.
+Where instead your data formed part of content sent to our AI provider during an operator-assisted
+session, we can stop our own further use, but we **cannot** compel that provider to delete its copy
+earlier than its own terms provide — the limitation described in Section 7. Two further limitations
+are stated up front rather than discovered later: any search for your data across a third party's
+repository is **manual and carries no completeness guarantee**, and we are not the controller of the
+repository itself — its owner is, and rights over what it contains lie against them as well as
+against us.
 
 To exercise rights related to data **GitHub itself collects** as a platform (your GitHub account profile, authentication, and platform telemetry), contact GitHub directly through their privacy channels. This does **not** cover the community-digest content described immediately above, which is Jikigai's own processing and is handled by us.
 
@@ -554,7 +559,7 @@ The Plugin operates locally and does not transfer data internationally.
 
 **What this covers.** The paragraph above describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
 
-Where an operator-assisted session has taken place, the written instrument agreed before that session addresses any transfer of personal data outside the European Economic Area arising from it, and the safeguards relied on for that transfer.
+Where an operator-assisted session has taken place, the written instrument agreed before that session addresses any transfer of personal data outside the European Economic Area arising from it, and the safeguards relied on for that transfer. To ask what safeguards apply to that transfer, and to obtain a copy of them, write to <legal@jikigai.com>.
 
 For the Web Platform:
 
